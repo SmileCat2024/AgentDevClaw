@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Session data (user data, should not be in repo)
+.agentdev/
+.playwright-mcp/
+*docs/
+config/
+
+# Local feature build output
+local-features/dist/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Trash
+.trash/
+
+# Test files
+test-*.json
+test-*.mjs
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# User-specific config (contains secrets)
+.agentdev/qqbot.config.json
+.agentdev/*.config.json
+
+# TypeScript cache
+*.tsbuildinfo

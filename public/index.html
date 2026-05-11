@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Debugger</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-dark.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
+  <script src="/vendor/marked/marked.min.js"></script>
+  <script src="/vendor/openclaw/dist/export-html/vendor/highlight.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html.min.js"></script>
+  <script>
+    window.hljs = window.hljs || {
+      getLanguage() { return false; },
+      highlight(code) { return { value: String(code ?? '') }; },
+      highlightAuto(code) { return { value: String(code ?? '') }; }
+    };
+  </script>
+  <script src="./src/tauri-bridge.js"></script>
+  <link rel="stylesheet" href="./styles/base.css">
+  <link rel="stylesheet" href="./styles/layout.css">
+  <link rel="stylesheet" href="./styles/components.css">
+  <link rel="stylesheet" href="./flow-editor.css">
+</head>
+<body>
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title">ProtoClaw</div>
+    </div>
+    <div class="agent-list" id="agent-list">
+      <div class="agent-group" id="prebuilt-group">
+        <div class="agent-group-header">
+          <span>预置代理</span>
+          <span class="agent-group-count" id="prebuilt-count">0</span>
+        </div>
+        <div class="agent-group-items" id="prebuilt-agent-list"></div>
+      </div>
+      <div class="agent-group" id="managed-group" style="display:none;">
+        <div class="agent-group-header">
+          <span>管理代理</span>
+          <span class="agent-group-count" id="managed-count">0</span>
+        </div>
+        <div class="agent-group-items" id="managed-agent-list"></div>
+      </div>
+      <div class="agent-group" id="child-group" style="display:none;">
+        <div class="agent-group-header">
+          <span>子代理</span>
+          <span class="agent-group-count" id="child-count">0</span>
+        </div>
+        <div class="agent-group-items" id="child-agent-list"></div>
+      </div>
+      <div class="agent-group" id="external-group" style="display:none;">
+        <div class="agent-group-header">
+          <span>外部代理</span>
+          <span class="agent-group-count" id="external-count">0</span>
+        </div>
+        <div class="agent-group-items" id="external-agent-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="main-content">
+    <header>
+      <div class="header-left">
+        <button class="toggle-btn" id="sidebar-toggle" title="Toggle Sidebar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+        <h1 id="current-agent-name">Agent Debugger</h1>
+        <div id="notification-status" class="notification-status" style="display: none;">
+          <div class="notification-indicator"></div>
+          <span class="notification-phase" id="notification-phase"></span>
+          <span class="notification-char-count" id="notification-char-count"></span>
+          <span>字符</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <button id="project-docset-toggle" class="header-docset-btn hidden" type="button"></button>
+        <span id="connection-status" class="status-badge">Ready</span>
+      </div>
+    </header>
+
+    <div id="workspace-tabs-bar" class="workspace-tabs-bar hidden"></div>
+    <div id="chat-container">
+      <div class="empty-state">Waiting for messages...</div>
+    </div>
+    <div id="project-docset-overlay" class="project-docset-overlay hidden">
+      <div id="project-docset-sheet" class="project-docset-sheet"></div>
+    </div>
+    <button id="follow-latest-btn" class="follow-latest-btn hidden" type="button"></button>
+
+    <div id="user-input-container"></div>
+  </div>
+
+  <div class="right-workspace">
+    <aside id="feature-panel" class="feature-panel">
+      <div id="feature-panel-resizer" class="feature-panel-resizer" title="Resize panel"></div>
+      <div class="feature-panel-header">
+        <div id="feature-panel-title" class="feature-panel-title">Workspace</div>
+      </div>
+      <div id="feature-panel-body" class="feature-panel-body">
+        <div class="feature-panel-empty">
+          <div>选择右侧功能按钮以展开面板。</div>
+        </div>
+      </div>
+    </aside>
+
+    <aside class="right-rail" id="right-rail">
+      <button class="rail-button" id="rail-workspace" title="Structure" data-panel="workspace">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+          <path d="M9 4v16"></path>
+        </svg>
+      </button>
+      <button class="rail-button" id="rail-monitor" title="Monitor" data-panel="monitor">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M4 19h16"></path>
+          <path d="M7 16V9"></path>
+          <path d="M12 16V5"></path>
+          <path d="M17 16v-4"></path>
+        </svg>
+      </button>
+      <button class="rail-button" id="rail-hooks" title="Features" data-panel="hooks">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M8 7a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"></path>
+          <path d="M22 7a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"></path>
+          <path d="M15 17a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"></path>
+          <path d="M8 7h8"></path>
+          <path d="M11 10v4"></path>
+        </svg>
+      </button>
+      <button class="rail-button" id="rail-inspector" title="Reverse Hooks" data-panel="inspector">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="11" cy="11" r="6"></circle>
+          <path d="m20 20-3.5-3.5"></path>
+        </svg>
+      </button>
+      <button class="rail-button" id="rail-logs" title="Logs" data-panel="logs">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M4 19h16"></path>
+          <path d="M7 15h3"></path>
+          <path d="M7 11h10"></path>
+          <path d="M7 7h7"></path>
+        </svg>
+      </button>
+      <button class="rail-button" id="rail-mcp" title="MCP" data-panel="mcp">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <rect x="3" y="5" width="18" height="14" rx="3"></rect>
+          <path d="M7 12h4"></path>
+          <path d="M13 12h4"></path>
+          <path d="M12 9v6"></path>
+        </svg>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="rail-button" id="language-toggle" title="Switch Language" type="button">EN</button>
+      <button class="rail-button" id="theme-toggle" title="切换主题" type="button">
+        <svg id="theme-toggle-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
+        </svg>
+      </button>
+      <button class="rail-button" id="settings-toggle" title="设置" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+          <circle cx="12" cy="12" r="3"></circle>
+        </svg>
+      </button>
+    </aside>
+  </div>
+
+  <div id="agent-context-menu" class="context-menu">
+    <button id="restart-agent-action" class="context-menu-item" type="button">重启 Agent</button>
+    <button id="stop-agent-action" class="context-menu-item" type="button">关闭 Agent</button>
+    <button id="delete-agent-action" class="context-menu-item danger" type="button">删除 Agent</button>
+  </div>
+
+  <div id="session-context-menu" class="context-menu">
+    <button id="open-session-action" class="context-menu-item" type="button">进入对话</button>
+    <button id="delete-session-action" class="context-menu-item danger" type="button">删除对话</button>
+  </div>
+
+  <div id="project-context-menu" class="context-menu">
+    <button id="delete-project-action" class="context-menu-item danger" type="button">删除项目</button>
+  </div>
+
+  <div id="feature-repo-context-menu" class="context-menu">
+    <button id="delete-feature-action" class="context-menu-item danger" type="button">删除 Feature</button>
+  </div>
+
+  <div id="feature-upload-dialog" class="feature-upload-dialog" style="display:none;">
+    <div class="feature-upload-overlay" onclick="window.closeFeatureUploadDialog()"></div>
+    <div class="feature-upload-window">
+      <div class="feature-upload-header">
+        <div class="feature-upload-title">上传 Feature tgz 包</div>
+        <button class="feature-upload-close" type="button" onclick="window.closeFeatureUploadDialog()">×</button>
+      </div>
+      <div class="feature-upload-body">
+        <div class="feature-upload-dropzone" id="feature-upload-dropzone">
+          <input type="file" id="feature-upload-input" accept=".tgz" style="display:none;" />
+          <div class="feature-upload-dropzone-text">
+            <div class="feature-upload-dropzone-icon">+</div>
+            <div>点击或拖拽 tgz 文件到此处上传</div>
+            <div class="feature-upload-dropzone-hint">支持 .tgz 格式的 Feature 包</div>
+          </div>
+        </div>
+        <div id="feature-upload-status" class="feature-upload-status" style="display:none;"></div>
+      </div>
+      <div class="feature-upload-footer">
+        <button class="workspace-action secondary" type="button" onclick="window.closeFeatureUploadDialog()">取消</button>
+        <button class="workspace-action" type="button" id="feature-upload-submit" disabled onclick="window.submitFeatureUpload()">上传</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./flow-editor.js"></script>
+  <script src="./src/app-core.js"></script>
+  <script src="./src/app-ui.js"></script>
+  <script src="./src/app-main.js"></script>
+</body>
+</html>

@@ -1,0 +1,244 @@
+{
+  "id": "feature-creator",
+  "kind": "agent",
+  "name": "Feature 创建者",
+  "description": "用于创建、修改和打包 AgentDev Feature 的工作台",
+  "version": "1.0.0",
+  "icon": "package",
+  "category": "development",
+  "enabled": true,
+  "features": [
+    "todo",
+    "audit",
+    "websearch",
+    "shell",
+    "feature-dev",
+    "user-input",
+    "mcp",
+    "skill",
+    "subagent"
+  ],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "首页",
+          "en": "Home"
+        }
+      },
+      {
+        "id": "chat",
+        "label": {
+          "zh": "对话",
+          "en": "Chat"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "launcher",
+          "type": "launcher-grid",
+          "directorySummary": {
+            "path": "local-features/feature-dev/skills",
+            "title": {
+              "zh": "FeatureDev Skills",
+              "en": "FeatureDev Skills"
+            },
+            "pathLabel": {
+              "zh": "加载路径",
+              "en": "Loaded Path"
+            },
+            "updatedLabel": {
+              "zh": "最近变更",
+              "en": "Last Updated"
+            },
+            "countLabel": {
+              "zh": "技能数",
+              "en": "Skills"
+            }
+          },
+          "cards": [
+            {
+              "title": {
+                "zh": "创建新 Feature",
+                "en": "Create New Feature"
+              },
+              "body": {
+                "zh": "填写这次要开发的能力、目标目录和约束，然后直接开启一轮新的开发对话。",
+                "en": "Fill in the capability, target directory, and constraints, then start a fresh development conversation."
+              },
+              "note": {
+                "zh": "",
+                "en": ""
+              },
+              "actionLabel": {
+                "zh": "开始创建",
+                "en": "Start Creating"
+              },
+              "action": {
+                "type": "show_block",
+                "target": "startup-form"
+              }
+            },
+            {
+              "title": {
+                "zh": "继续开发 Feature",
+                "en": "Continue Feature Work"
+              },
+              "body": {
+                "zh": "继续之前的 Feature 设计、实现、打包或接入会话，不需要每次重新整理上下文。",
+                "en": "Resume prior Feature design, implementation, packaging, or integration sessions without rebuilding context each time."
+              },
+              "note": {
+                "zh": "",
+                "en": ""
+              },
+              "actionLabel": {
+                "zh": "进入会话",
+                "en": "Enter Session"
+              },
+              "action": {
+                "type": "open_latest_session"
+              }
+            }
+          ]
+        },
+        {
+          "id": "session-list",
+          "type": "session-list",
+          "visibility": "home-default",
+          "title": {
+            "zh": "已创建的Feature",
+            "en": "Created Features"
+          },
+          "description": {
+            "zh": "继续打开已有 Feature 的开发会话，或者基于同一个 Feature 项目目录开启一轮新的对话。",
+            "en": "Reopen existing Feature work or start a fresh conversation for the same Feature project directory."
+          }
+        },
+        {
+          "id": "project-docset",
+          "type": "project-docset",
+          "visibility": "chat-header-only",
+          "title": {
+            "zh": "项目文档集",
+            "en": "Project Docset"
+          },
+          "description": {
+            "zh": "每个 Feature 项目都维护唯一需求表单、推进记录和资料。它们用于主动整理过程，并供后续人工复用。",
+            "en": "Each feature project keeps a single requirement form, progress logs, and materials for active documentation and later manual reuse."
+          },
+          "emptyText": {
+            "zh": "当前项目还没有初始化文档集。",
+            "en": "No project docset yet."
+          },
+          "projectDocset": {
+            "materialLimit": 6
+          }
+        },
+        {
+          "id": "startup-form",
+          "type": "form",
+          "visibility": "focus",
+          "installDefaults": {
+            "type": "feature-creator"
+          },
+          "title": {
+            "zh": "启动信息",
+            "en": "Startup Brief"
+          },
+          "description": {
+            "zh": "先记录这次要做的 Feature 目标与约束，再进入对话。",
+            "en": "Capture the Feature goal and constraints first, then move into the chat."
+          },
+          "backAction": {
+            "label": {
+              "zh": "返回历史记录",
+              "en": "Back to History"
+            },
+            "action": {
+              "type": "show_home"
+            }
+          },
+          "submitAction": {
+            "type": "create_session"
+          },
+          "fields": [
+            {
+              "name": "feature_name",
+              "label": {
+                "zh": "Feature 名称",
+                "en": "Feature Name"
+              },
+              "type": "text",
+              "placeholder": {
+                "zh": "例如 qqbot-feature、tts-feature",
+                "en": "For example qqbot-feature or tts-feature"
+              }
+            },
+            {
+              "name": "install_mode",
+              "label": {
+                "zh": "项目位置",
+                "en": "Project Location"
+              },
+              "type": "select",
+              "options": [
+                {
+                  "value": "system",
+                  "label": {
+                    "zh": "放入系统工作区",
+                    "en": "Place in System Workspace"
+                  }
+                },
+                {
+                  "value": "custom",
+                  "label": {
+                    "zh": "创建到指定路径",
+                    "en": "Create in Custom Path"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "target_dir",
+              "label": {
+                "zh": "项目父目录",
+                "en": "Project Parent Directory"
+              },
+              "type": "directory-picker",
+              "modeField": "install_mode"
+            },
+            {
+              "name": "goal",
+              "label": {
+                "zh": "目标能力",
+                "en": "Goal"
+              },
+              "type": "textarea",
+              "placeholder": {
+                "zh": "希望这个 Feature 提供什么能力",
+                "en": "What capability should this Feature provide"
+              }
+            },
+            {
+              "name": "constraints",
+              "label": {
+                "zh": "限制条件",
+                "en": "Constraints"
+              },
+              "type": "textarea",
+              "placeholder": {
+                "zh": "例如必须打包成 tgz、必须引用模板、不能改哪些模块",
+                "en": "For example: must ship as tgz, must use templates, or modules that must not change"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

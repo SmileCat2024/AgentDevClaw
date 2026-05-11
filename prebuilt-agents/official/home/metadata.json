@@ -1,0 +1,137 @@
+{
+  "id": "home",
+  "kind": "workspace",
+  "launchMode": "ui-only",
+  "name": "AgentDevClaw 首页",
+  "description": "官方工作空间导航首页",
+  "version": "1.0.0",
+  "icon": "home",
+  "category": "workspace",
+  "enabled": true,
+  "features": [],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "首页",
+          "en": "Home"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "hero",
+          "type": "hero",
+          "kicker": {
+            "zh": "官方工作空间",
+            "en": "Official Workspaces"
+          },
+          "title": {
+            "zh": "欢迎使用 AgentDevClaw",
+            "en": "Welcome to AgentDevClaw"
+          },
+          "body": {
+            "zh": "这里是 AgentDevClaw 的官方入口层。左侧预制代理列表仍然保留，但你可以在这里用更清晰的方式进入官方工作空间，从想法到 Feature 开发逐步推进。",
+            "en": "This is the official entry layer for AgentDevClaw. The left-side prebuilt list stays available, but this page gives you a clearer way to enter curated workspaces and move from an idea to a real Feature."
+          }
+        },
+        {
+          "id": "official-workspaces",
+          "type": "launcher-grid",
+          "cards": [
+            {
+              "title": {
+                "zh": "Feature 创建者",
+                "en": "Feature Creator"
+              },
+              "body": {
+                "zh": "创建新的 Feature，继续已有 Feature 的设计与开发，并围绕当前项目里的 skills 与脚手架工作流推进实现。",
+                "en": "Create new Features, continue existing Feature work, and build with the project's skills and scaffold workflow."
+              },
+              "note": {
+                "zh": "适合从需求整理、方案规划，到编码、调试、打包的完整链路。",
+                "en": "Good for the full loop from requirements and planning to coding, debugging, and packaging."
+              },
+              "actionLabel": {
+                "zh": "进入工作空间",
+                "en": "Open Workspace"
+              },
+              "action": {
+                "type": "navigate_unit",
+                "targetAgentId": "feature-creator"
+              }
+            },
+            {
+              "title": {
+                "zh": "Feature 仓库",
+                "en": "Feature Repository"
+              },
+              "body": {
+                "zh": "浏览 resources/features 里的已打包 Feature，查看版本、依赖摘要和仓库元数据，作为当前项目的交付入口。",
+                "en": "Browse packaged Features from resources/features with versions, requirements, and repository metadata."
+              },
+              "note": {
+                "zh": "优先读取包内 agentdev-feature.json，没有则回退 package.json 并标记警告。",
+                "en": "Reads agentdev-feature.json first, then falls back to package.json with warnings."
+              },
+              "actionLabel": {
+                "zh": "进入仓库",
+                "en": "Open Repository"
+              },
+              "action": {
+                "type": "navigate_unit",
+                "targetAgentId": "feature-repository"
+              }
+            },
+            {
+              "title": {
+                "zh": "Agent 工作空间",
+                "en": "Agent Workspace"
+              },
+              "body": {
+                "zh": "创建 Agent 项目、启用 Feature、调整工具权限，并进入一对一绑定的可视化编排图继续调试。",
+                "en": "Create an Agent project, enable Features, tune tool permissions, and continue in its one-to-one visual flow graph."
+              },
+              "note": {
+                "zh": "适合从 Agent 草稿、装配方案到可运行编排的一体化开发。",
+                "en": "Good for moving from an agent brief to an assembled, runnable orchestration."
+              },
+              "actionLabel": {
+                "zh": "进入工作空间",
+                "en": "Open Workspace"
+              },
+              "action": {
+                "type": "navigate_unit",
+                "targetAgentId": "flow-workspace"
+              }
+            },
+            {
+              "title": {
+                "zh": "更多官方工作空间",
+                "en": "More Official Workspaces"
+              },
+              "body": {
+                "zh": "后续可以在这里继续放项目助手或其他官方入口，让首页逐渐成为统一的工作台总览。",
+                "en": "More official entries can live here later, such as a project assistant or other curated workspaces."
+              },
+              "note": {
+                "zh": "当前先保留扩展位，不影响左侧原有预制代理列表。",
+                "en": "Reserved as an expansion slot while keeping the existing left-side prebuilt list intact."
+              },
+              "actionLabel": {
+                "zh": "即将加入",
+                "en": "Coming Soon"
+              },
+              "action": {
+                "type": "show_home"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

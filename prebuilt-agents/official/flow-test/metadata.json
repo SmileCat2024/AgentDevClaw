@@ -1,0 +1,39 @@
+{
+  "id": "flow-test",
+  "kind": "agent",
+  "name": "Flow 测试 Agent",
+  "description": "用于验证 Flow 编排层运行时的测试 Agent",
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      { "id": "home", "label": { "zh": "首页", "en": "Home" } },
+      { "id": "chat", "label": { "zh": "对话", "en": "Chat" } }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "flow-status",
+          "type": "status-grid",
+          "visibility": "always",
+          "title": { "zh": "Flow 测试 Agent", "en": "Flow Test Agent" },
+          "cards": [
+            { "id": "info", "title": { "zh": "测试说明", "en": "Test Info" }, "value": { "zh": "先点击下方\"新对话\"创建会话，再切换到\"对话\"tab测试Flow运行时", "en": "Create a session first, then switch to Chat tab to test Flow runtime" } }
+          ]
+        },
+        {
+          "id": "session-list",
+          "type": "session-list",
+          "title": { "zh": "对话记录", "en": "Conversations" },
+          "headerAction": {
+            "label": { "zh": "新对话", "en": "New Chat" },
+            "action": { "type": "create_session" }
+          },
+          "description": {
+            "zh": "点击\"新对话\"创建测试会话，然后切换到对话tab开始Flow测试",
+            "en": "Click New Chat to create a test session, then switch to Chat tab to start Flow testing"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,337 @@
+{
+  "id": "agent-creator",
+  "kind": "agent",
+  "name": "Agent 创建者",
+  "description": "以快速装配 Agent 为主入口、并支持升级到项目开发的官方工作台",
+  "version": "1.2.0",
+  "icon": "bot",
+  "category": "development",
+  "enabled": true,
+  "features": [
+    "todo",
+    "audit",
+    "websearch",
+    "shell",
+    "agent-dev",
+    "user-input",
+    "mcp",
+    "skill",
+    "subagent"
+  ],
+  "ui": {
+    "entry": "my-chatbots",
+    "tabs": [
+      {
+        "id": "my-chatbots",
+        "label": {
+          "zh": "我的 Chatbot",
+          "en": "My Chatbots"
+        }
+      },
+      {
+        "id": "assembly",
+        "label": {
+          "zh": "装配 Chatbot",
+          "en": "Assemble Chatbot"
+        }
+      },
+      {
+        "id": "project",
+        "label": {
+          "zh": "开发项目级 Agent",
+          "en": "Develop Project Agent"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "assembly-library",
+          "type": "assembly-library",
+          "visibility": "tab:my-chatbots",
+          "title": {
+            "zh": "我的 Chatbot",
+            "en": "My Chatbots"
+          },
+          "description": {
+            "zh": "统一查看已保存配置和已启动的聊天 Agent 实例，直接继续使用或回到装配台修改。",
+            "en": "View saved setups and launched chat agent instances in one place, then continue using them or return to the assembly flow."
+          }
+        },
+        {
+          "id": "assembly-workbench",
+          "type": "assembly-workbench",
+          "visibility": "tab:assembly",
+          "title": {
+            "zh": "装配 Chatbot",
+            "en": "Assemble Chatbot"
+          },
+          "description": {
+            "zh": "定义目标、选择能力并启动一个外部运行的 Chatbot 实例。",
+            "en": "Define the target, choose capabilities, and launch an externally running chatbot instance."
+          },
+          "featureRepository": {
+            "path": "resources/features"
+          },
+          "assemblySelection": {
+            "formId": "assembly-form",
+            "featureField": "selected_features",
+            "toolkitField": "recommended_toolkits"
+          }
+        },
+        {
+          "id": "project-launcher",
+          "type": "launcher-grid",
+          "visibility": "tab:project",
+          "directorySummary": {
+            "path": ".agentdev/skills",
+            "title": {
+              "zh": "项目 Skills 目录",
+              "en": "Project Skills Directory"
+            },
+            "pathLabel": {
+              "zh": "加载路径",
+              "en": "Loaded Path"
+            },
+            "updatedLabel": {
+              "zh": "最近变更",
+              "en": "Last Updated"
+            },
+            "countLabel": {
+              "zh": "技能数",
+              "en": "Skills"
+            }
+          },
+          "cards": [
+            {
+              "title": {
+                "zh": "初始化 Agent 项目",
+                "en": "Initialize Project"
+              },
+              "body": {
+                "zh": "当你确认这不是临时聊天实例，而是要长期维护的 Agent，就进入项目开发路径。",
+                "en": "Once you know this should become a long-lived agent instead of a temporary chat instance, move into the project-development path."
+              },
+              "actionLabel": {
+                "zh": "开始项目开发",
+                "en": "Start Project"
+              },
+              "action": {
+                "type": "show_block",
+                "target": "startup-form"
+              }
+            },
+            {
+              "title": {
+                "zh": "继续项目会话",
+                "en": "Continue Project Work"
+              },
+              "body": {
+                "zh": "继续之前的 Agent 项目设计、初始化和开发会话，不需要每次重新整理上下文。",
+                "en": "Resume previous Agent project design, initialization, and development sessions without rebuilding context every time."
+              },
+              "actionLabel": {
+                "zh": "查看项目",
+                "en": "View Projects"
+              },
+              "action": {
+                "type": "show_block",
+                "target": "project-sessions"
+              }
+            }
+          ]
+        },
+        {
+          "id": "project-sessions",
+          "type": "session-list",
+          "visibility": "tab:project",
+          "title": {
+            "zh": "项目开发会话",
+            "en": "Project Development Sessions"
+          },
+          "description": {
+            "zh": "继续打开已有 Agent 项目，或基于同一个项目目录开启新的开发对话。",
+            "en": "Reopen existing Agent projects or start a fresh development conversation for the same project directory."
+          }
+        },
+        {
+          "id": "project-artifacts",
+          "type": "workspace-artifacts",
+          "visibility": "tab:project",
+          "title": {
+            "zh": "项目过程记录",
+            "en": "Project Process Artifacts"
+          },
+          "description": {
+            "zh": "展示当前 Agent 项目中沉淀下来的草稿、计划、handoff 和验证记录。",
+            "en": "Shows drafts, plans, handoffs, and verification notes captured for the current Agent project."
+          },
+          "emptyText": {
+            "zh": "当前还没有项目过程记录。",
+            "en": "No project artifacts yet."
+          },
+          "workspaceArtifacts": {
+            "kinds": ["draft", "plan", "handoff", "progress", "verification"],
+            "limit": 8
+          }
+        },
+        {
+          "id": "project-docset",
+          "type": "project-docset",
+          "visibility": "chat-header-only",
+          "title": {
+            "zh": "项目文档集",
+            "en": "Project Docset"
+          },
+          "description": {
+            "zh": "展示当前 Agent 项目的需求表单、推进记录和资料。项目开发路径默认复用这套文档结构。",
+            "en": "Shows the current Agent project's requirement form, progress logs, and materials. The project-development path reuses this docset by default."
+          },
+          "emptyText": {
+            "zh": "当前项目还没有初始化文档集。",
+            "en": "No project docset yet."
+          },
+          "projectDocset": {
+            "materialLimit": 6
+          }
+        },
+        {
+          "id": "startup-form",
+          "type": "form",
+          "visibility": "focus",
+          "installDefaults": {
+            "type": "agent-creator"
+          },
+          "title": {
+            "zh": "项目启动信息",
+            "en": "Project Brief"
+          },
+          "description": {
+            "zh": "先记录这次要做的 Agent 项目目标与约束，再初始化项目目录并进入对话。",
+            "en": "Capture the Agent project goal and constraints first, then initialize the project directory and enter chat."
+          },
+          "backAction": {
+            "label": {
+              "zh": "返回项目页",
+              "en": "Back to Project"
+            },
+            "action": {
+              "type": "show_workspace_tab",
+              "tab": "project"
+            }
+          },
+          "submitAction": {
+            "type": "create_session",
+            "formId": "startup-form"
+          },
+          "fields": [
+            {
+              "name": "agent_name",
+              "label": {
+                "zh": "Agent 名称",
+                "en": "Agent Name"
+              },
+              "type": "text"
+            },
+            {
+              "name": "install_mode",
+              "label": {
+                "zh": "项目位置",
+                "en": "Project Location"
+              },
+              "type": "select",
+              "options": [
+                {
+                  "value": "system",
+                  "label": {
+                    "zh": "放入系统工作区",
+                    "en": "Place in System Workspace"
+                  }
+                },
+                {
+                  "value": "custom",
+                  "label": {
+                    "zh": "创建到指定路径",
+                    "en": "Create in Custom Path"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "target_dir",
+              "label": {
+                "zh": "项目父目录",
+                "en": "Project Parent Directory"
+              },
+              "type": "directory-picker",
+              "modeField": "install_mode"
+            },
+            {
+              "name": "goal",
+              "label": {
+                "zh": "目标能力",
+                "en": "Goal"
+              },
+              "type": "textarea"
+            },
+            {
+              "name": "target_user",
+              "label": {
+                "zh": "目标用户",
+                "en": "Target User"
+              },
+              "type": "text"
+            },
+            {
+              "name": "runtime_style",
+              "label": {
+                "zh": "运行形态",
+                "en": "Runtime Style"
+              },
+              "type": "select",
+              "options": [
+                {
+                  "value": "interactive",
+                  "label": {
+                    "zh": "交互式工作台",
+                    "en": "Interactive Workspace"
+                  }
+                },
+                {
+                  "value": "assistant",
+                  "label": {
+                    "zh": "对话助手",
+                    "en": "Chat Assistant"
+                  }
+                },
+                {
+                  "value": "automation",
+                  "label": {
+                    "zh": "自动化执行器",
+                    "en": "Automation Runner"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "planned_features",
+              "label": {
+                "zh": "计划挂载能力",
+                "en": "Planned Features"
+              },
+              "type": "textarea"
+            },
+            {
+              "name": "constraints",
+              "label": {
+                "zh": "限制条件",
+                "en": "Constraints"
+              },
+              "type": "textarea"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

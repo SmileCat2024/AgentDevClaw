@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "experimentalDecorators": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "outDir": "./dist"
+  },
+  "include": [
+    "./index.ts",
+    "./feature-dev/src/**/*.ts",
+    "./agent-dev/src/**/*.ts",
+    "./flow/src/**/*.ts",
+    "./flow/test/**/*.ts"
+  ]
+}

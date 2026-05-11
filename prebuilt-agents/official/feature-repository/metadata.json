@@ -1,0 +1,59 @@
+{
+  "id": "feature-repository",
+  "kind": "workspace",
+  "launchMode": "ui-only",
+  "name": "Feature 仓库",
+  "description": "浏览当前项目内已打包的 Feature 仓库",
+  "version": "1.0.0",
+  "icon": "archive",
+  "category": "workspace",
+  "enabled": true,
+  "features": [],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "仓库",
+          "en": "Repository"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "hero",
+          "type": "hero",
+          "kicker": {
+            "zh": "Feature Packages",
+            "en": "Feature Packages"
+          },
+          "title": {
+            "zh": "Feature 仓库",
+            "en": "Feature Repository"
+          },
+          "body": {
+            "zh": "这里展示 resources/features 里的静态打包产物。页面优先读取包内 agentdev-feature.json，没有时回退到 package.json，并明确标记为元数据缺失。",
+            "en": "This view scans resources/features. It reads agentdev-feature.json first, falls back to package.json, and flags packages with missing metadata."
+          }
+        },
+        {
+          "id": "repository",
+          "type": "feature-repository",
+          "title": {
+            "zh": "已收录的 Feature",
+            "en": "Indexed Features"
+          },
+          "description": {
+            "zh": "用于当前阶段的交付浏览页，重点展示版本、描述、requirements 摘要和元数据完整性，不做严格权限治理。",
+            "en": "Delivery-focused catalog view showing versions, descriptions, requirement summaries, and metadata completeness."
+          },
+          "featureRepository": {
+            "path": "resources/features"
+          }
+        }
+      ]
+    }
+  }
+}

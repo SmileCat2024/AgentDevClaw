@@ -1,0 +1,32 @@
+{
+  "id": "flow-workspace",
+  "kind": "agent",
+  "name": "Flow 工作空间",
+  "description": "为 Agent 编辑唯一配套编排图，并将图中的连通分量作为工作流运行",
+  "version": "1.0.0",
+  "icon": "flow",
+  "category": "development",
+  "enabled": true,
+  "features": ["user-input", "skill", "flow"],
+  "ui": {
+    "entry": "workspace",
+    "tabs": [
+      { "id": "workspace", "label": { "zh": "工作空间", "en": "Workspace" } }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "project-list",
+          "type": "project-list",
+          "visibility": "tab:workspace",
+          "featureRepository": { "path": "resources/features" },
+          "assemblySelection": {
+            "formId": "assembly-form",
+            "featureField": "selected_features",
+            "toolkitField": "recommended_toolkits"
+          }
+        }
+      ]
+    }
+  }
+}

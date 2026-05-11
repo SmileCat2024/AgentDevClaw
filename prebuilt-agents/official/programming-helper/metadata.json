@@ -1,0 +1,404 @@
+{
+  "id": "programming-helper",
+  "kind": "agent",
+  "name": "编程小助手",
+  "description": "面向真实编码任务的编程工作空间，支持理解代码、实现功能、排障和重构",
+  "version": "1.1.0",
+  "icon": "code",
+  "category": "development",
+  "enabled": true,
+  "features": [
+    "todo",
+    "audit",
+    "audio-feedback",
+    "user-input",
+    "websearch",
+    "memory",
+    "shell",
+    "mcp",
+    "skill",
+    "subagent"
+  ],
+  "ui": {
+    "entry": "workbench",
+    "tabs": [
+      {
+        "id": "workbench",
+        "label": {
+          "zh": "工作台",
+          "en": "Workbench"
+        }
+      },
+      {
+        "id": "recent",
+        "label": {
+          "zh": "最近任务",
+          "en": "Recent Tasks"
+        }
+      },
+      {
+        "id": "context",
+        "label": {
+          "zh": "项目上下文",
+          "en": "Project Context"
+        }
+      },
+      {
+        "id": "chat",
+        "label": {
+          "zh": "对话",
+          "en": "Chat"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "hero",
+          "type": "hero",
+          "visibility": "tab:workbench",
+          "kicker": {
+            "zh": "Programming Workspace",
+            "en": "Programming Workspace"
+          },
+          "title": {
+            "zh": "把一轮真实编程任务推进到底",
+            "en": "Drive a Real Coding Task End to End"
+          },
+          "body": {
+            "zh": "这里不是空白聊天入口，而是面向代码理解、功能实现、排障修复和重构优化的任务工作台。当前任务、最近会话和项目文档会持续沉淀。",
+            "en": "This is not a blank chat launcher. It is a task workspace for code understanding, implementation, debugging, and refactoring, with persistent task, session, and project context."
+          }
+        },
+        {
+          "id": "task-launchers",
+          "type": "launcher-grid",
+          "visibility": "tab:workbench",
+          "cards": [
+            {
+              "title": {
+                "zh": "理解代码",
+                "en": "Understand Code"
+              },
+              "body": {
+                "zh": "阅读陌生仓库、解释模块职责、梳理调用链，先把结构和问题看清楚。",
+                "en": "Read an unfamiliar codebase, explain module responsibilities, and trace the call flow before changing anything."
+              },
+              "note": {
+                "zh": "适合先分析再决定是否修改代码。",
+                "en": "Best when you want analysis first and code changes later."
+              },
+              "actionLabel": {
+                "zh": "开始理解任务",
+                "en": "Start Analysis"
+              },
+              "action": {
+                "type": "prime_workspace_form",
+                "formId": "startup-form",
+                "target": "startup-form",
+                "values": {
+                  "task_type": "understand",
+                  "expected_output": "先分析并给出代码理解结论"
+                }
+              }
+            },
+            {
+              "title": {
+                "zh": "实现 / 改造功能",
+                "en": "Build Or Modify"
+              },
+              "body": {
+                "zh": "推进一个小功能、改已有行为、补接口或交互，把方案落实成代码。",
+                "en": "Ship a feature, modify existing behavior, or add UI and API changes with code and validation."
+              },
+              "note": {
+                "zh": "默认推荐入口，最适合比赛展示。",
+                "en": "Recommended default entry and strongest showcase path."
+              },
+              "actionLabel": {
+                "zh": "开始实现任务",
+                "en": "Start Building"
+              },
+              "action": {
+                "type": "prime_workspace_form",
+                "formId": "startup-form",
+                "target": "startup-form",
+                "values": {
+                  "task_type": "build",
+                  "expected_output": "直接实现并完成基本验证"
+                }
+              }
+            },
+            {
+              "title": {
+                "zh": "修 Bug / 排障",
+                "en": "Debug"
+              },
+              "body": {
+                "zh": "围绕异常、报错和行为偏差做复现、定位、修复和验证。",
+                "en": "Reproduce, diagnose, fix, and verify a bug or unexpected behavior."
+              },
+              "note": {
+                "zh": "适合需要形成定位过程和验证结论的任务。",
+                "en": "Ideal when you need a traceable diagnosis and verification result."
+              },
+              "actionLabel": {
+                "zh": "开始排障任务",
+                "en": "Start Debugging"
+              },
+              "action": {
+                "type": "prime_workspace_form",
+                "formId": "startup-form",
+                "target": "startup-form",
+                "values": {
+                  "task_type": "debug",
+                  "expected_output": "复现问题、修复并说明验证结果"
+                }
+              }
+            },
+            {
+              "title": {
+                "zh": "重构 / 优化",
+                "en": "Refactor"
+              },
+              "body": {
+                "zh": "清理结构、降低耦合、提升可维护性或性能，让代码更稳更清晰。",
+                "en": "Clean up structure, reduce coupling, and improve maintainability or performance."
+              },
+              "note": {
+                "zh": "适合已有代码基础上的持续优化。",
+                "en": "Best for incremental improvement on top of existing code."
+              },
+              "actionLabel": {
+                "zh": "开始优化任务",
+                "en": "Start Refactoring"
+              },
+              "action": {
+                "type": "prime_workspace_form",
+                "formId": "startup-form",
+                "target": "startup-form",
+                "values": {
+                  "task_type": "refactor",
+                  "expected_output": "完成重构并说明收益与风险"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "startup-form",
+          "type": "form",
+          "visibility": "focus",
+          "title": {
+            "zh": "任务启动单",
+            "en": "Task Brief"
+          },
+          "description": {
+            "zh": "先把这轮编程任务的目标、目录、重点文件和期望产出写清楚，再进入对话推进。",
+            "en": "Capture the task goal, working directory, target files, and desired outcome before moving into chat."
+          },
+          "backAction": {
+            "label": {
+              "zh": "返回工作台",
+              "en": "Back to Workbench"
+            },
+            "action": {
+              "type": "show_workspace_tab",
+              "tab": "workbench"
+            }
+          },
+          "submitAction": {
+            "type": "create_session",
+            "formId": "startup-form"
+          },
+          "fields": [
+            {
+              "name": "task_type",
+              "label": {
+                "zh": "任务类型",
+                "en": "Task Type"
+              },
+              "type": "select",
+              "options": [
+                {
+                  "value": "build",
+                  "label": {
+                    "zh": "实现 / 改造功能",
+                    "en": "Build Or Modify"
+                  }
+                },
+                {
+                  "value": "understand",
+                  "label": {
+                    "zh": "理解代码",
+                    "en": "Understand Code"
+                  }
+                },
+                {
+                  "value": "debug",
+                  "label": {
+                    "zh": "修 Bug / 排障",
+                    "en": "Debug"
+                  }
+                },
+                {
+                  "value": "refactor",
+                  "label": {
+                    "zh": "重构 / 优化",
+                    "en": "Refactor"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "task_title",
+              "label": {
+                "zh": "任务标题",
+                "en": "Task Title"
+              },
+              "type": "text",
+              "placeholder": {
+                "zh": "例如：修复登录页按钮失效",
+                "en": "For example: Fix the broken login button"
+              }
+            },
+            {
+              "name": "goal",
+              "label": {
+                "zh": "任务目标",
+                "en": "Goal"
+              },
+              "type": "textarea",
+              "placeholder": {
+                "zh": "说明这次希望完成什么，当前问题是什么，最终要达到什么结果。",
+                "en": "Describe the problem, the desired result, and what success looks like."
+              }
+            },
+            {
+              "name": "workdir",
+              "label": {
+                "zh": "工作目录",
+                "en": "Working Directory"
+              },
+              "type": "directory-picker",
+              "placeholder": "D:\\code\\your-project"
+            },
+            {
+              "name": "target_files",
+              "label": {
+                "zh": "重点文件 / 模块",
+                "en": "Target Files / Modules"
+              },
+              "type": "textarea",
+              "placeholder": {
+                "zh": "可填写文件路径、目录、模块名或调用链线索，每行一项。",
+                "en": "List file paths, directories, modules, or call-chain clues, one per line."
+              }
+            },
+            {
+              "name": "expected_output",
+              "label": {
+                "zh": "期望产出",
+                "en": "Expected Output"
+              },
+              "type": "textarea",
+              "placeholder": {
+                "zh": "例如：直接改代码并验证；先分析再决定；输出修复建议和测试点。",
+                "en": "For example: implement and verify, analyze first, or provide fix options and test points."
+              }
+            },
+            {
+              "name": "constraints",
+              "label": {
+                "zh": "限制条件",
+                "en": "Constraints"
+              },
+              "type": "textarea",
+              "placeholder": {
+                "zh": "例如不能改哪些模块、要兼容什么版本、测试条件或交付边界。",
+                "en": "For example: files that must not change, compatibility requirements, or delivery constraints."
+              }
+            },
+            {
+              "name": "reference_materials",
+              "label": {
+                "zh": "参考资料",
+                "en": "Reference Materials"
+              },
+              "type": "textarea",
+              "placeholder": {
+                "zh": "可填写 issue 链接、文档路径、截图路径或补充背景。",
+                "en": "Add issue links, doc paths, screenshot paths, or supporting context."
+              }
+            }
+          ]
+        },
+        {
+          "id": "session-list",
+          "type": "session-list",
+          "visibility": "tab:recent",
+          "title": {
+            "zh": "最近任务",
+            "en": "Recent Tasks"
+          },
+          "description": {
+            "zh": "继续之前的编程任务，不需要每次重新整理目标、目录和限制条件。",
+            "en": "Resume prior coding tasks without rebuilding the task goal, directory, and constraints from scratch."
+          },
+          "headerAction": {
+            "label": {
+              "zh": "开始一个新任务",
+              "en": "Start New Task"
+            },
+            "action": {
+              "type": "show_block",
+              "target": "startup-form"
+            }
+          }
+        },
+        {
+          "id": "workspace-artifacts",
+          "type": "workspace-artifacts",
+          "visibility": "tab:context",
+          "title": {
+            "zh": "任务过程记录",
+            "en": "Task Artifacts"
+          },
+          "description": {
+            "zh": "展示当前工作目录下已沉淀的草稿、计划、阶段记录和验证结果。",
+            "en": "Shows drafts, plans, progress, and verification records captured for the current task."
+          },
+          "emptyText": {
+            "zh": "当前还没有任务记录，先创建一个任务并推进一轮对话。",
+            "en": "No task artifacts yet. Start a task and move one conversation forward first."
+          },
+          "workspaceArtifacts": {
+            "kinds": ["draft", "plan", "progress", "verification", "decision", "debug-report"],
+            "limit": 8
+          }
+        },
+        {
+          "id": "project-docset",
+          "type": "project-docset",
+          "visibility": "tab:context",
+          "title": {
+            "zh": "项目文档集",
+            "en": "Project Docset"
+          },
+          "description": {
+            "zh": "围绕当前工作目录维护需求、推进记录和资料，让后续新对话可以直接接上上下文。",
+            "en": "Keeps requirements, progress notes, and materials around the current working directory so future conversations can reuse context."
+          },
+          "emptyText": {
+            "zh": "当前目录还没有初始化文档集。先填写工作目录并保存任务。",
+            "en": "No docset has been initialized for the current directory yet. Save a task with a working directory first."
+          },
+          "projectDocset": {
+            "materialLimit": 6,
+            "conversationLimit": 6
+          }
+        }
+      ]
+    }
+  }
+}

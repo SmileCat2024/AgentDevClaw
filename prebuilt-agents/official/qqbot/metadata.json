@@ -1,0 +1,116 @@
+{
+  "id": "qqbot",
+  "kind": "agent",
+  "name": "QQBot 编程助手",
+  "description": "通过 QQ 与用户交互的编程助手",
+  "version": "1.0.0",
+  "icon": "qq",
+  "category": "chatbot",
+  "enabled": true,
+  "features": ["qqbot", "todo", "audit", "websearch", "shell", "user-input", "mcp", "skill", "subagent"],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "首页",
+          "en": "Home"
+        }
+      },
+      {
+        "id": "chat",
+        "label": {
+          "zh": "对话",
+          "en": "Chat"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "hero",
+          "type": "hero",
+          "title": {
+            "zh": "QQBot 常驻助手",
+            "en": "QQBot Resident Assistant"
+          },
+          "body": {
+            "zh": "这个 agent 更适合常驻运行。优先关注网关和持久会话状态，需要时再查看消息流。",
+            "en": "This agent works best as a resident service. Focus on gateway and persistent session state first, then inspect the message stream when needed."
+          }
+        },
+        {
+          "id": "qqbot-config",
+          "type": "config-editor",
+          "configEditor": {
+            "type": "qqbot",
+            "title": {
+              "zh": "QQ 网关配置",
+              "en": "QQ Gateway Config"
+            },
+            "description": {
+              "zh": "直接编辑当前项目里的 QQBot 配置文件。保存后会写入当前项目 .agentdev 目录。",
+              "en": "Edit the QQBot config file inside the current project. Saving writes to the project's .agentdev directory."
+            },
+            "fields": [
+              {
+                "name": "appId",
+                "type": "text",
+                "label": {
+                  "zh": "App ID",
+                  "en": "App ID"
+                }
+              },
+              {
+                "name": "clientSecret",
+                "type": "password",
+                "label": {
+                  "zh": "Client Secret",
+                  "en": "Client Secret"
+                }
+              },
+              {
+                "name": "accountId",
+                "type": "text",
+                "label": {
+                  "zh": "Account ID",
+                  "en": "Account ID"
+                }
+              },
+              {
+                "name": "markdownSupport",
+                "type": "checkbox",
+                "label": {
+                  "zh": "启用 Markdown",
+                  "en": "Enable Markdown"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "session-list",
+          "type": "session-list",
+          "title": {
+            "zh": "对话记录",
+            "en": "Conversation"
+          },
+          "headerAction": {
+            "label": {
+              "zh": "新对话",
+              "en": "New Chat"
+            },
+            "action": {
+              "type": "create_session"
+            }
+          },
+          "description": {
+            "zh": "这里列出已保存的对话记录，点击即可恢复到对应对话页。",
+            "en": "Saved conversations are listed here. Click any record to restore it in the chat view."
+          }
+        }
+      ]
+    }
+  }
+}
