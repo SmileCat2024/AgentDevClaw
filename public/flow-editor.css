@@ -1397,6 +1397,16 @@
   stroke-width: 4;
 }
 
+.flow-editor-edge.reachable {
+  stroke: rgba(74, 200, 120, 0.75);
+}
+
+.flow-editor-edge.reachable:hover,
+.flow-editor-edge.reachable.active {
+  stroke: rgba(56, 178, 100, 0.95);
+  stroke-width: 4;
+}
+
 .flow-editor-edge.preview {
   stroke: var(--flow-warm);
   stroke-dasharray: 8 7;

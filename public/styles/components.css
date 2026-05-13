@@ -127,6 +127,13 @@
   text-align: center;
 }
 
+.message-row.process-hidden,
+.reasoning-block.process-hidden,
+.tool-call-container.process-hidden,
+.message-row.assistant.process-hidden-empty {
+  display: none !important;
+}
+
 /* Tool Styles */
 .tool-call-container {
   margin-top: 12px;
@@ -2826,6 +2833,12 @@ body[data-theme="light"] .feature-project-session-item {
 .fw-setting-file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
 .fw-setting-boolean { display: inline-flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 2px; color: var(--text-primary); font-size: 12px; }
 .fw-setting-boolean input { width: 15px; height: 15px; accent-color: #6aa8ff; }
+.fw-setting-directory-list { display: grid; gap: 6px; }
+.fw-setting-dir-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+.fw-setting-dir-remove { width: 26px; height: 26px; padding: 0; border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; background: rgba(0,0,0,0.14); color: rgba(255,255,255,0.45); font-size: 14px; line-height: 1; cursor: pointer; transition: border-color .15s, color .15s; }
+.fw-setting-dir-remove:hover { border-color: rgba(252,165,165,0.5); color: #fca5a5; }
+.fw-setting-dir-add { justify-self: start; padding: 4px 10px; border: 1px dashed rgba(255,255,255,0.1); border-radius: 6px; background: transparent; color: rgba(255,255,255,0.4); font-size: 11px; cursor: pointer; transition: border-color .15s, color .15s; }
+.fw-setting-dir-add:hover { border-color: rgba(96,165,250,0.4); color: rgba(255,255,255,0.7); }
 .fw-config-pane { height: 100%; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 14px; padding: 0 6px 0 0; }
 .fw-config-hero { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
 .fw-config-hero-title { color: var(--text-primary); font-size: 14px; font-weight: 800; }

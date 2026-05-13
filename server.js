@@ -436,6 +436,8 @@ function normalizeWorkspaceState(raw = {}) {
         envConfiguredFeatures: Array.isArray(item?.envConfiguredFeatures) ? item.envConfiguredFeatures.map((value) => cleanSessionText(value)).filter(Boolean) : [],
         envStatus: cleanSessionText(item?.envStatus),
         envStatusMessage: cleanSessionText(item?.envStatusMessage),
+        modelPreset: cleanSessionText(item?.modelPreset),
+        workdir: cleanSessionText(item?.workdir),
         featureConfigs: normalizeFeatureConfigs(item?.featureConfigs),
         createdAt: cleanSessionText(item?.createdAt),
         updatedAt: cleanSessionText(item?.updatedAt),
@@ -2434,6 +2436,50 @@ async function deletePrebuiltSession(agentId, sessionId) {
   };
 }
 
+async function resolvePrebuiltSessionOwner(sessionId, preferredAgentId = '') {
+  const cleanSessionId = cleanSessionText(sessionId);
+  if (!cleanSessionId) return null;
+
+  const candidates = [];
+  const addCandidate = (agentId) => {
+    const normalized = normalizeClientAgentId(agentId);
+    if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
+  };
+
+  addCandidate(preferredAgentId);
+  addCandidate('flow-workspace');
+  addCandidate('agent-creator');
+  addCandidate('feature-creator');
+  addCandidate('programming-helper');
+  try {
+    const discovered = await discoverAgents(AGENTS_ROOT);
+    discovered.forEach((agent) => addCandidate(agent?.id));
+  } catch {}
+
+  for (const agentId of candidates) {
+    try {
+      const index = await readSessionIndex(agentId);
+      if (index.sessions.some((session) => session.id === cleanSessionId)) {
+        return agentId;
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+async function requirePrebuiltAgentForRuntime(agentId) {
+  const normalizedAgentId = normalizeClientAgentId(agentId);
+  const discovered = await discoverAgents(AGENTS_ROOT);
+  const metadata = discovered.find((item) => sanitizeSessionFragment(item.id) === normalizedAgentId);
+  if (!metadata) {
+    const error = new Error(`Unknown agent: ${agentId}`);
+    error.statusCode = 404;
+    throw error;
+  }
+  return enrichAgent(metadata);
+}
+
 async function deletePrebuiltProject(agentId, projectId) {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   if (!WORKSPACE_SESSION_AGENT_IDS.has(normalizedAgentId)) {
@@ -2987,6 +3033,14 @@ async function requireAgent(agentId) {
   return agent;
 }
 
+function normalizeClientAgentId(value, fallback = '') {
+  const text = cleanSessionText(value);
+  if (!text) return fallback;
+  const lower = text.toLowerCase();
+  if (lower === 'null' || lower === 'undefined') return fallback;
+  return sanitizeSessionFragment(text);
+}
+
 async function readViewerJson(pathname) {
   const response = await fetch(`${VIEWER_ORIGIN}${pathname}`);
   if (!response.ok) {
@@ -3110,7 +3164,7 @@ async function getConnectedAgents() {
       || connectedAgents.find((agent) => agent.source === 'prebuilt' && (agent.base_name === runtimeAgent.name || agent.name === runtimeAgent.name));
     const exposeAsSeparateAssemblyRuntime = matched
       && matched.source === 'prebuilt'
-      && sanitizeSessionFragment(matched.id) === 'agent-creator'
+      && (sanitizeSessionFragment(matched.id) === 'agent-creator' || sanitizeSessionFragment(matched.id) === 'flow-workspace')
       && cleanSessionText(matched.active_workspace_session_form_id) === 'assembly-form';
 
     if (matched && !exposeAsSeparateAssemblyRuntime) {
@@ -3135,6 +3189,11 @@ async function getConnectedAgents() {
       status: runtimeAgent.connected ? 'running' : 'stopped',
       source: exposeAsSeparateAssemblyRuntime ? 'external' : (runtimeAgent.parentAgentId ? 'child' : 'external'),
       parent_id: exposeAsSeparateAssemblyRuntime ? matched.id : (runtimeAgent.parentAgentId || null),
+      active_workspace_session_id: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_session_id || null) : null,
+      active_workspace_session_form_id: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_session_form_id || null) : null,
+      active_workspace_session_title: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_session_title || null) : null,
+      active_workspace_agent_name: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_agent_name || null) : null,
+      active_workspace_display_name: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_display_name || null) : null,
       connection_info: runtimeAgent.connectionInfo || 'viewer://127.0.0.1:2026',
       pid: runtimeAgent.pid || null,
       runtime_session_id: runtimeAgent.id,
@@ -3318,6 +3377,8 @@ async function startAssemblyRuntime(sessionId, agentId = 'agent-creator', preAct
     || 'assembled-agent';
   const assemblyWorkspace = cleanSessionText(assemblyForm.env_dir) || getAssemblyWorkspaceDir(runtimeDisplayName);
   const selectedFeatures = parseListField(assemblyForm.selected_features);
+  const customWorkdir = cleanSessionText(assemblyForm.workdir);
+  const runtimeWorkdir = customWorkdir || assemblyWorkspace;
 
   if (cleanSessionText(session.openDirectory) !== assemblyWorkspace) {
     const index = await readSessionIndex(agent.id);
@@ -3372,7 +3433,7 @@ async function startAssemblyRuntime(sessionId, agentId = 'agent-creator', preAct
       PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
       PROTOCLAW_PREBUILT_SESSION_ID: normalizedSessionId,
       PROTOCLAW_ASSEMBLY_RUNTIME: '1',
-      PROTOCLAW_ASSEMBLY_WORKSPACE: assemblyWorkspace,
+      PROTOCLAW_ASSEMBLY_WORKSPACE: runtimeWorkdir,
     }),
     windowsHide: true,
   });
@@ -3380,7 +3441,7 @@ async function startAssemblyRuntime(sessionId, agentId = 'agent-creator', preAct
   const runtime = {
     sessionId: normalizedSessionId,
     requestedName: runtimeDisplayName,
-    workspaceDir: assemblyWorkspace,
+    workspaceDir: runtimeWorkdir,
     installedPackages: selectedFeatures,
     process: child,
     startedAt: new Date().toISOString(),
@@ -3702,25 +3763,151 @@ async function writeModelConfig(config) {
   return config;
 }
 
-async function readModelPresets() {
+async function readModelPresetsFile() {
   try {
-    const data = await readJson(MODEL_PRESETS_PATH);
-    return Array.isArray(data) ? data : [];
+    return await readJson(MODEL_PRESETS_PATH);
   } catch {
-    return [];
+    return null;
   }
 }
 
-async function writeModelPresets(presets) {
+function normalizeModelPresetsData(data) {
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    return {
+      providers: Array.isArray(data.providers) ? data.providers.filter(item => item && typeof item === 'object') : [],
+      presets: Array.isArray(data.presets) ? data.presets.filter(item => item && typeof item === 'object') : [],
+    };
+  }
+  if (Array.isArray(data)) {
+    return buildStructuredModelPresets(data);
+  }
+  return { providers: [], presets: [] };
+}
+
+function flattenModelPresets(data) {
+  const normalized = normalizeModelPresetsData(data);
+  const providersByName = new Map();
+  normalized.providers.forEach((provider) => {
+    const name = cleanSessionText(provider?.name);
+    if (name) providersByName.set(name, provider);
+  });
+  return normalized.presets.map((preset, index) => {
+    const protocol = cleanSessionText(preset?.protocol || preset?.provider) || 'anthropic';
+    const providerName = cleanSessionText(preset?.providerName);
+    const provider = providerName ? providersByName.get(providerName) : null;
+    return {
+      name: cleanSessionText(preset?.name) || cleanSessionText(preset?.model) || `Preset ${index + 1}`,
+      provider: protocol,
+      providerName,
+      model: cleanSessionText(preset?.model),
+      baseUrl: cleanSessionText(provider?.endpoints?.[protocol] || preset?.baseUrl),
+      apiKey: cleanSessionText(provider?.apiKey || preset?.apiKey),
+      thinkingBudgetTokens: Number.isFinite(Number(preset?.thinkingBudgetTokens)) ? Number(preset.thinkingBudgetTokens) : null,
+      temperature: Number.isFinite(Number(preset?.temperature)) ? Number(preset.temperature) : null,
+    };
+  });
+}
+
+function makeUniqueProviderName(baseName, usedNames) {
+  const fallback = cleanSessionText(baseName) || 'Provider';
+  let candidate = fallback;
+  let counter = 2;
+  while (usedNames.has(candidate)) {
+    candidate = `${fallback} ${counter}`;
+    counter += 1;
+  }
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function buildStructuredModelPresets(flatPresets, existingData = null) {
+  const normalizedExisting = normalizeModelPresetsData(existingData);
+  const existingProvidersByName = new Map();
+  const existingProviderNameBySignature = new Map();
+  normalizedExisting.providers.forEach((provider) => {
+    const name = cleanSessionText(provider?.name);
+    if (!name) return;
+    existingProvidersByName.set(name, provider);
+    const endpoints = provider?.endpoints && typeof provider.endpoints === 'object' ? provider.endpoints : {};
+    Object.entries(endpoints).forEach(([protocol, endpoint]) => {
+      existingProviderNameBySignature.set(JSON.stringify([cleanSessionText(protocol), cleanSessionText(endpoint), cleanSessionText(provider?.apiKey)]), name);
+    });
+  });
+
+  const providers = [];
+  const presets = [];
+  const providersBySignature = new Map();
+  const usedNames = new Set();
+
+  flatPresets.forEach((rawPreset, index) => {
+    if (!rawPreset || typeof rawPreset !== 'object') return;
+    const protocol = cleanSessionText(rawPreset.provider) || 'anthropic';
+    const name = cleanSessionText(rawPreset.name) || cleanSessionText(rawPreset.model) || `Preset ${index + 1}`;
+    const model = cleanSessionText(rawPreset.model);
+    const baseUrl = cleanSessionText(rawPreset.baseUrl);
+    const apiKey = cleanSessionText(rawPreset.apiKey);
+    const signature = JSON.stringify([protocol, baseUrl, apiKey]);
+
+    let providerName = providersBySignature.get(signature);
+    if (!providerName) {
+      const requestedName = cleanSessionText(rawPreset.providerName);
+      const existingProvider = requestedName ? existingProvidersByName.get(requestedName) : null;
+      const existingSignature = existingProvider
+        ? JSON.stringify([protocol, cleanSessionText(existingProvider?.endpoints?.[protocol]), cleanSessionText(existingProvider?.apiKey)])
+        : '';
+      if (requestedName && existingSignature === signature && !usedNames.has(requestedName)) {
+        providerName = requestedName;
+        usedNames.add(providerName);
+      } else {
+        providerName = existingProviderNameBySignature.get(signature) || makeUniqueProviderName(requestedName || name, usedNames);
+        usedNames.add(providerName);
+      }
+      providersBySignature.set(signature, providerName);
+      const providerRecord = {
+        name: providerName,
+        apiKey,
+        endpoints: {},
+      };
+      if (baseUrl) providerRecord.endpoints[protocol] = baseUrl;
+      providers.push(providerRecord);
+    }
+
+    const presetRecord = {
+      name,
+      providerName,
+      protocol,
+      model,
+      thinkingBudgetTokens: Number.isFinite(Number(rawPreset.thinkingBudgetTokens)) ? Number(rawPreset.thinkingBudgetTokens) : null,
+      temperature: Number.isFinite(Number(rawPreset.temperature)) ? Number(rawPreset.temperature) : null,
+    };
+    presets.push(presetRecord);
+  });
+
+  return { providers, presets };
+}
+
+async function readModelPresets() {
+  const data = await readModelPresetsFile();
+  return normalizeModelPresetsData(data);
+}
+
+async function writeModelPresetsFile(presetsOrFile) {
   await ensureDir(path.dirname(MODEL_PRESETS_PATH));
-  await fs.writeFile(MODEL_PRESETS_PATH, JSON.stringify(presets, null, 2), 'utf8');
-  return presets;
+  await fs.writeFile(MODEL_PRESETS_PATH, JSON.stringify(presetsOrFile, null, 2), 'utf8');
+  return presetsOrFile;
+}
+
+async function writeModelPresets(flatPresets) {
+  const existingData = await readModelPresetsFile();
+  const nextData = buildStructuredModelPresets(Array.isArray(flatPresets) ? flatPresets : [], existingData);
+  await writeModelPresetsFile(nextData);
+  return flattenModelPresets(nextData);
 }
 
 app.get('/protoclaw/model_config', async (_req, res, next) => {
   try {
     const config = await readModelConfig();
-    const presets = await readModelPresets();
+    const presets = flattenModelPresets(await readModelPresets());
     res.json({ config, presets, configPath: MODEL_CONFIG_PATH });
   } catch (error) {
     next(error);
@@ -3740,7 +3927,7 @@ app.put('/protoclaw/model_config', express.json(), async (req, res, next) => {
     }
     res.json({
       config: savedConfig ?? await readModelConfig(),
-      presets: savedPresets ?? await readModelPresets(),
+      presets: savedPresets ?? flattenModelPresets(await readModelPresets()),
       configPath: MODEL_CONFIG_PATH,
       savedAt: new Date().toISOString(),
     });
@@ -3840,10 +4027,13 @@ app.post('/protoclaw/assembly_environment/create', express.json(), async (req, r
 app.post('/protoclaw/assembly_runtime/start', express.json(), async (req, res, next) => {
   const _t0 = Date.now();
   try {
-    const agentId = sanitizeSessionFragment(String(req.body?.agentId || 'agent-creator').trim());
-    const agent = await requireAgent(agentId || 'agent-creator');
     const requestedSessionId = cleanSessionText(req.body?.sessionId);
-    console.log(`[PERF] /assembly_runtime/start BEGIN agentId=${agentId} sessionId=${requestedSessionId || '(new)'}`);
+    const requestedAgentId = normalizeClientAgentId(req.body?.agentId);
+    const resolvedOwnerId = requestedSessionId
+      ? (await resolvePrebuiltSessionOwner(requestedSessionId, requestedAgentId) || requestedAgentId || 'flow-workspace')
+      : (requestedAgentId || 'flow-workspace');
+    const agent = await requirePrebuiltAgentForRuntime(resolvedOwnerId);
+    console.log(`[PERF] /assembly_runtime/start BEGIN agentId=${agent.id} sessionId=${requestedSessionId || '(new)'}`);
     const session = requestedSessionId
       ? await activatePrebuiltSession(agent.id, requestedSessionId)
       : await createPrebuiltSession(agent.id, {
@@ -4231,6 +4421,26 @@ function getFlowGraphPath(agentId, flowId) {
   return path.join(getFlowGraphsDir(agentId), `${sanitizeSessionFragment(flowId)}.json`);
 }
 
+async function readFlowGraphFile(filePath) {
+  const raw = await fs.readFile(filePath, 'utf8');
+  try {
+    return { flow: JSON.parse(raw), recovered: false };
+  } catch (error) {
+    const message = error?.message || '';
+    const trailingMatch = message.match(/position\s+(\d+)/i);
+    if (trailingMatch) {
+      const cutoff = Number(trailingMatch[1]);
+      if (Number.isFinite(cutoff) && cutoff > 0) {
+        const trimmed = raw.slice(0, cutoff).trimEnd();
+        try {
+          return { flow: JSON.parse(trimmed), recovered: true };
+        } catch {}
+      }
+    }
+    throw error;
+  }
+}
+
 app.get('/protoclaw/flow_graphs', async (req, res, next) => {
   try {
     const agentId = req.query.agentId;
@@ -4241,7 +4451,10 @@ app.get('/protoclaw/flow_graphs', async (req, res, next) => {
     const flows = [];
     for (const f of files) {
       if (f.endsWith('.json')) {
-        try { flows.push(await readJson(path.join(dir, f))); } catch {}
+        try {
+          const parsed = await readFlowGraphFile(path.join(dir, f));
+          flows.push(parsed.flow);
+        } catch {}
       }
     }
     res.json({ flows });
@@ -4254,7 +4467,7 @@ app.get('/protoclaw/flow_graph/:flowId', async (req, res, next) => {
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
     const filePath = getFlowGraphPath(agentId, req.params.flowId);
     if (!existsSync(filePath)) return res.status(404).json({ error: 'Flow not found' });
-    const flow = await readJson(filePath);
+    const { flow } = await readFlowGraphFile(filePath);
     res.json({ flow });
   } catch (error) { next(error); }
 });
@@ -4280,7 +4493,14 @@ app.put('/protoclaw/flow_graph/:flowId', express.json(), async (req, res, next) 
     if (!agentId) return res.status(400).json({ error: 'agentId is required' });
     const flowId = req.params.flowId;
     const filePath = getFlowGraphPath(agentId, flowId);
-    const existing = existsSync(filePath) ? await readJson(filePath) : {};
+    let existing = {};
+    if (existsSync(filePath)) {
+      try {
+        existing = (await readFlowGraphFile(filePath)).flow || {};
+      } catch (error) {
+        console.warn(`[flow_graph] Failed to parse existing graph ${filePath}, overwriting with incoming payload:`, error?.message || error);
+      }
+    }
     const flow = { ...existing, ...req.body?.flow, id: flowId, updatedAt: new Date().toISOString() };
     const dir = getFlowGraphsDir(agentId);
     await ensureDir(dir);
@@ -4738,6 +4958,12 @@ app.get('/protoclaw/flow_capabilities', async (req, res, next) => {
       features.push(featureSummary);
     }
 
+    let modelPresets = [];
+    try {
+      const presetData = await readModelPresets();
+      modelPresets = Array.isArray(presetData?.presets) ? presetData.presets : [];
+    } catch {}
+
     res.json({
       agentId,
       selectedFeatures,
@@ -4747,6 +4973,7 @@ app.get('/protoclaw/flow_capabilities', async (req, res, next) => {
       nodeTemplates,
       modes,
       featureManifests,
+      modelPresets,
       updatedAt: new Date().toISOString(),
     });
   } catch (error) { next(error); }

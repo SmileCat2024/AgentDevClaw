@@ -1259,6 +1259,51 @@ body[data-theme="light"] .settings-btn-secondary:hover {
   background: #e4e4e4;
 }
 
+/* ── Settings Provider Group ─────────────────────────────────────────────── */
+
+.settings-group {
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 6px;
+}
+
+.settings-group-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.settings-group-meta {
+  font-size: 12px;
+  color: var(--text-tertiary, rgba(255,255,255,0.35));
+  margin-left: auto;
+  margin-right: 4px;
+}
+
+body[data-theme="light"] .settings-group-meta {
+  color: #999;
+}
+
+.settings-back-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-back-row .feature-detail-title {
+  margin-bottom: 0;
+}
+
 .feature-detail-head {
   display: flex;
   align-items: flex-start;

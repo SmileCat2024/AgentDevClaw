@@ -967,6 +967,8 @@ function getSavedAssemblyConfigs(agent = getCurrentAgentRecord()) {
       envConfiguredFeatures: Array.isArray(item?.envConfiguredFeatures) ? item.envConfiguredFeatures.map((value) => String(value || '').trim()).filter(Boolean) : [],
       envStatus: String(item?.envStatus || '').trim(),
       envStatusMessage: String(item?.envStatusMessage || '').trim(),
+      modelPreset: String(item?.modelPreset || '').trim(),
+      workdir: String(item?.workdir || '').trim(),
       featureConfigs: normalizeFeatureConfigMap(item?.featureConfigs),
       updatedAt: String(item?.updatedAt || '').trim(),
     }))
@@ -1181,6 +1183,8 @@ window.loadSavedAssemblyConfig = async (configId) => {
       : (currentLanguage === 'zh'
         ? '已载入配置；如果这是首次启动，请先配置环境目录。'
         : 'Setup loaded. Configure the environment directory before the first launch.'),
+    model_preset: config.modelPreset || '',
+    workdir: config.workdir || '',
   });
   draft['feature-configs'] = normalizeFeatureConfigMap(config.featureConfigs);
   saveWorkspaceFormDraft(agent.id, draft);
@@ -1515,7 +1519,11 @@ window.chooseWorkspaceDirectory = async (formId, fieldName) => {
     draft[formId] = draft[formId] || {};
     draft[formId][fieldName] = selected?.path || '';
     saveWorkspaceFormDraft(agent.id, draft);
+    shouldAnimateWorkspaceSurface = false;
     renderCurrentMainView();
+    persistWorkspaceState(agent, draft).catch((error) => {
+      console.error('Failed to persist directory selection:', error);
+    });
   } catch (error) {
     window.alert(t('workspace_pick_directory_failed') + (error && error.message ? error.message : error));
   }
@@ -1736,13 +1744,164 @@ window.openAgentActions = (event, agentId) => {
   if (!agent) return;
   const mode = agent.source === 'prebuilt'
     ? 'prebuilt-runtime'
+    : (agent.source === 'external' && agent.connected !== false)
+      ? 'external-runtime'
     : (agent.connected === false ? 'delete-only' : null);
   if (!mode) return;
   openAgentContextMenu(agentId, event.clientX, event.clientY, mode);
 };
 
+function getExternalRuntimeAgent(agentId) {
+  return allAgents.find((item) => item.id === agentId) || null;
+}
+
+function isAssemblyExternalRuntime(agent) {
+  return !!(
+    agent
+    && agent.source === 'external'
+    && String(agent.active_workspace_session_form_id || '').trim() === 'assembly-form'
+    && String(agent.active_workspace_session_id || '').trim()
+  );
+}
+
+async function closeExternalRuntime(agent) {
+  if (isAssemblyExternalRuntime(agent)) {
+    const sessionId = String(agent.active_workspace_session_id || '').trim();
+    const response = await fetch('/protoclaw/assembly_runtime/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'stop assembly runtime failed'));
+    }
+    return response.json().catch(() => ({}));
+  }
+
+  const runtimeId = agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id;
+  const response = await fetch(`/api/agents/${encodeURIComponent(runtimeId)}`, { method: 'DELETE' });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || 'close external runtime failed');
+  }
+  return payload;
+}
+
+async function restartExternalRuntime(agent) {
+  if (!isAssemblyExternalRuntime(agent)) {
+    throw new Error(currentLanguage === 'zh'
+      ? '当前外部 Agent 没有可用的重启宿主。'
+      : 'This external agent does not expose a restart host.');
+  }
+
+  const sessionId = String(agent.active_workspace_session_id || '').trim();
+  const ownerAgentId = String(agent.parent_id || 'agent-creator').trim() || 'agent-creator';
+
+  await closeExternalRuntime(agent);
+
+  const response = await fetch('/protoclaw/assembly_runtime/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId: ownerAgentId, sessionId }),
+  });
+  if (!response.ok) {
+    throw new Error(await response.text().catch(() => 'restart assembly runtime failed'));
+  }
+  return response.json().catch(() => ({}));
+}
+
+async function resolveSidebarAssemblyRuntimeTarget(agent) {
+  if (!agent || agent.source !== 'external') return null;
+
+  const explicitSessionId = String(agent.active_workspace_session_id || '').trim();
+  if (String(agent.active_workspace_session_form_id || '').trim() === 'assembly-form' && explicitSessionId) {
+    return {
+      ownerAgentId: String(agent.parent_id || 'flow-workspace').trim() || 'flow-workspace',
+      sessionId: explicitSessionId,
+    };
+  }
+
+  const runtimeName = String(agent.name || '').trim();
+  if (!runtimeName) return null;
+
+  const ownerCandidates = ['flow-workspace', 'agent-creator'];
+  for (const ownerAgentId of ownerCandidates) {
+    try {
+      const response = await fetch(`/protoclaw/prebuilt_sessions?agentId=${encodeURIComponent(ownerAgentId)}`);
+      if (!response.ok) continue;
+      const data = await response.json().catch(() => null);
+      const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      const assemblyMatches = sessions.filter((session) =>
+        String(session?.formId || '').trim() === 'assembly-form'
+        && String(session?.agentName || '').trim() === runtimeName
+      );
+      if (!assemblyMatches.length) continue;
+
+      const activeSessionId = String(data?.activeSessionId || '').trim();
+      const activeMatch = assemblyMatches.find((session) => String(session?.id || '').trim() === activeSessionId);
+      const chosen = activeMatch || assemblyMatches[0];
+      const chosenId = String(chosen?.id || '').trim();
+      if (chosenId) {
+        return { ownerAgentId, sessionId: chosenId };
+      }
+    } catch (error) {
+      console.warn('Failed to resolve sidebar assembly runtime target:', ownerAgentId, error);
+    }
+  }
+
+  return null;
+}
+
+async function closeSidebarExternalRuntime(agent) {
+  const assemblyTarget = await resolveSidebarAssemblyRuntimeTarget(agent);
+  if (assemblyTarget?.sessionId) {
+    const response = await fetch('/protoclaw/assembly_runtime/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: assemblyTarget.sessionId }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'stop assembly runtime failed'));
+    }
+    return response.json().catch(() => ({}));
+  }
+
+  throw new Error(currentLanguage === 'zh'
+    ? '当前这个外部 Agent 还没有可用的关闭通道。'
+    : 'This external agent does not currently expose a supported stop channel.');
+}
+
+async function restartSidebarExternalRuntime(agent) {
+  const assemblyTarget = await resolveSidebarAssemblyRuntimeTarget(agent);
+  if (!assemblyTarget?.sessionId) {
+    throw new Error(currentLanguage === 'zh'
+      ? '当前这个外部 Agent 还没有可用的重启通道。'
+      : 'This external agent does not expose a restart host.');
+  }
+
+  await closeSidebarExternalRuntime(agent);
+  const ownerAgentId = String(assemblyTarget.ownerAgentId || agent?.parent_id || 'flow-workspace').trim() || 'flow-workspace';
+
+  const response = await fetch('/protoclaw/assembly_runtime/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId: ownerAgentId, sessionId: assemblyTarget.sessionId }),
+  });
+  if (!response.ok) {
+    throw new Error(await response.text().catch(() => 'restart assembly runtime failed'));
+  }
+  return response.json().catch(() => ({}));
+}
+
+async function refreshSidebarRuntimeAfterMutation(delayMs = 0) {
+  if (delayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  await loadAgents();
+}
+
 restartAgentAction.addEventListener('click', async () => {
-  if (!contextMenuAgentId || contextMenuAgentMode !== 'prebuilt-runtime') return;
+  if (!contextMenuAgentId || (contextMenuAgentMode !== 'prebuilt-runtime' && contextMenuAgentMode !== 'external-runtime')) return;
   const confirmed = window.confirm(t('restart_prebuilt_confirm'));
   if (!confirmed) {
     closeAgentContextMenu();
@@ -1750,15 +1909,23 @@ restartAgentAction.addEventListener('click', async () => {
   }
 
   try {
-    const agent = allAgents.find(item => item.id === contextMenuAgentId);
-    const sessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
-    const targetAgentId = contextMenuAgentId;
+    const agent = getExternalRuntimeAgent(contextMenuAgentId);
     closeAgentContextMenu();
-    const result = await invoke('restart_agent', { agentId: targetAgentId, sessionId });
-    await loadAgents();
-    const nextAgent = result?.agent || allAgents.find((item) => item.id === targetAgentId);
-    const nextRuntimeId = nextAgent?.runtime_session_id || nextAgent?.runtimeSessionId;
-    if (nextRuntimeId && currentRuntimeAgentId) {
+    let result = null;
+    if (contextMenuAgentMode === 'external-runtime') {
+      result = await restartSidebarExternalRuntime(agent);
+    } else {
+      const sessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
+      result = await invoke('restart_agent', { agentId: contextMenuAgentId, sessionId });
+    }
+    await refreshSidebarRuntimeAfterMutation(500);
+    const nextRuntimeId =
+      result?.runtime?.id
+      || result?.runtime?.viewerAgentId
+      || result?.agent?.runtime_session_id
+      || result?.agent?.runtimeSessionId
+      || null;
+    if (nextRuntimeId) {
       await window.switchAgent(nextRuntimeId);
     }
   } catch (e) {
@@ -1768,7 +1935,7 @@ restartAgentAction.addEventListener('click', async () => {
 });
 
 stopAgentAction.addEventListener('click', async () => {
-  if (!contextMenuAgentId || contextMenuAgentMode !== 'prebuilt-runtime') return;
+  if (!contextMenuAgentId || (contextMenuAgentMode !== 'prebuilt-runtime' && contextMenuAgentMode !== 'external-runtime')) return;
   const confirmed = window.confirm(t('close_prebuilt_confirm'));
   if (!confirmed) {
     closeAgentContextMenu();
@@ -1776,12 +1943,22 @@ stopAgentAction.addEventListener('click', async () => {
   }
 
   try {
-    const affectedRuntimeId = allAgents.find(item => item.id === contextMenuAgentId)?.runtime_session_id || allAgents.find(item => item.id === contextMenuAgentId)?.runtimeSessionId || null;
-    await invoke('stop_agent', { agentId: contextMenuAgentId });
+    const agent = getExternalRuntimeAgent(contextMenuAgentId);
+    const affectedRuntimeId = agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id || null;
+    if (contextMenuAgentMode === 'external-runtime') {
+      await closeSidebarExternalRuntime(agent);
+    } else {
+      await invoke('stop_agent', { agentId: contextMenuAgentId });
+    }
     closeAgentContextMenu();
-    await loadAgents();
+    await refreshSidebarRuntimeAfterMutation(500);
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-      selectWorkspaceSurface(resolveWorkspaceFallbackAgentId(allAgents.find(item => item.id === contextMenuAgentId)));
+      const fallbackTarget = contextMenuAgentMode === 'external-runtime'
+        ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
+        : resolveWorkspaceFallbackAgentId(agent);
+      if (fallbackTarget) {
+        selectWorkspaceSurface(fallbackTarget);
+      }
     }
   } catch (e) {
     closeAgentContextMenu();
@@ -2493,8 +2670,11 @@ function renderInputRequests(requests) {
 
     const card = document.createElement('div');
     card.className = 'user-input-card';
-    const actionsHtml = Array.isArray(req.actions) && req.actions.length > 0
-      ? '<div class="user-input-actions">' + req.actions.map(action =>
+    const visibleActions = Array.isArray(req.actions)
+      ? req.actions.filter(action => action && action.id !== 'rollback_to_call')
+      : [];
+    const actionsHtml = visibleActions.length > 0
+      ? '<div class="user-input-actions">' + visibleActions.map(action =>
           '<button class="user-input-action ' + escapeHtml(action.variant || 'secondary') + '" onclick="submitInputAction(\'' + req.requestId + '\', \'' + escapeHtml(action.id) + '\')">' + escapeHtml(action.label) + '</button>'
         ).join('') + '</div>'
       : '';
@@ -2803,7 +2983,7 @@ window.confirmChoiceQuestion = async function(requestId) {
 };
 
 function syncRollbackActionButtons() {
-  const allowRollback = !!getPrimaryInputRequest();
+  const allowRollback = !!getRollbackInputRequest();
   const rows = container.querySelectorAll('.message-row');
 
   rows.forEach((row, index) => {
@@ -2893,9 +3073,102 @@ function getPrimaryInputRequest() {
     : null;
 }
 
-function canRollbackMessage(msg) {
-  return !!getPrimaryInputRequest() && !!msg && msg.role === 'user';
+function requestSupportsAction(request, actionId) {
+  return Array.isArray(request?.actions)
+    && request.actions.some((action) => action && action.id === actionId);
 }
+
+function getRollbackInputRequest() {
+  if (!Array.isArray(currentInputRequests)) {
+    return null;
+  }
+  return currentInputRequests.find((request) => requestSupportsAction(request, 'rollback_to_call')) || null;
+}
+
+function canRollbackMessage(msg) {
+  return !!getRollbackInputRequest() && !!msg && msg.role === 'user';
+}
+
+function saveChatProcessVisibility() {
+  try {
+    localStorage.setItem(CHAT_PROCESS_VISIBILITY_KEY, showChatProcess ? 'true' : 'false');
+  } catch (error) {
+    console.warn('Failed to persist chat process visibility:', error);
+  }
+}
+
+function hasConversationProcessContent(messages = []) {
+  return messages.some((msg) =>
+    msg?.role === 'system'
+    || msg?.role === 'tool'
+    || (msg?.role === 'assistant' && !!msg.reasoning)
+    || (Array.isArray(msg?.toolCalls) && msg.toolCalls.length > 0)
+  );
+}
+
+function updateChatProcessToggle() {
+  if (!chatProcessToggle) return;
+  const hasProcess = hasConversationProcessContent(currentMessages) && !shouldRenderWorkspaceSurface();
+  chatProcessToggle.classList.toggle('hidden', !hasProcess);
+  if (!hasProcess) return;
+  chatProcessToggle.classList.toggle('active', showChatProcess);
+  chatProcessToggle.textContent = showChatProcess ? t('hide_process') : t('show_process');
+}
+
+function syncAssistantProcessOnlyRows(root = container) {
+  root.querySelectorAll('.message-row.assistant').forEach((row) => {
+    const content = row.querySelector('.message-content');
+    if (!content) return;
+
+    const visibleContent = Array.from(content.children).some((child) => {
+      if (child.classList.contains('markdown-body')) {
+        return String(child.textContent || '').trim().length > 0;
+      }
+      if (child.classList.contains('tool-error')) {
+        return true;
+      }
+      if (child.classList.contains('reasoning-block')) {
+        return !child.classList.contains('process-hidden');
+      }
+      if (child.classList.contains('tool-call-container')) {
+        return !child.classList.contains('process-hidden');
+      }
+      return child.offsetParent !== null;
+    });
+
+    row.classList.toggle('process-hidden-empty', !visibleContent);
+  });
+}
+
+function applyConversationProcessState(root = container) {
+  root.querySelectorAll('.message-row.system').forEach((row) => {
+    row.classList.toggle('process-hidden', !showChatProcess);
+  });
+
+  root.querySelectorAll('.reasoning-block').forEach((block) => {
+    block.classList.toggle('process-hidden', !showChatProcess);
+  });
+
+  root.querySelectorAll('.message-row.assistant .tool-call-container').forEach((block) => {
+    block.classList.toggle('process-hidden', !showChatProcess);
+  });
+
+  root.querySelectorAll('.message-row.tool').forEach((row) => {
+    const isSuccess = row.dataset.toolSuccess !== 'false';
+    row.classList.toggle('process-hidden', !showChatProcess && isSuccess);
+    row.classList.toggle('process-error', !isSuccess);
+  });
+
+  syncAssistantProcessOnlyRows(root);
+  syncCollapseStates(root);
+  updateChatProcessToggle();
+};
+
+window.toggleChatProcessVisibility = function() {
+  showChatProcess = !showChatProcess;
+  saveChatProcessVisibility();
+  applyConversationProcessState(container);
+};
 
 async function submitInputAction(requestId, actionId, payload = {}) {
   try {
@@ -2921,9 +3194,9 @@ async function submitInputAction(requestId, actionId, payload = {}) {
 }
 
 window.requestRollbackEdit = async function(messageIndex) {
-  const request = getPrimaryInputRequest();
+  const request = getRollbackInputRequest();
   if (!request) {
-    console.warn('No pending input request available for rollback action');
+    console.warn('No rollback-capable input request available');
     return;
   }
 
@@ -3125,7 +3398,7 @@ function appendNewMessages(newMessages, startIndex) {
       }
 
       html = `
-        <div class="message-row ${msg.role}">
+        <div class="message-row ${msg.role}" data-tool-success="${success ? 'true' : 'false'}">
           <div class="message-meta">
             <div class="role-badge">${msg.role}</div>
           </div>
@@ -3151,6 +3424,7 @@ function appendNewMessages(newMessages, startIndex) {
   // 对新消息应用折叠逻辑
   applyCollapseLogic(container, startIndex);
   updateRollbackActionVisibility();
+  applyConversationProcessState(container);
   updateFollowLatestButton();
   if (followLatestEnabled) {
     scheduleScrollToLatest('smooth');
@@ -3200,59 +3474,85 @@ function updateLastMessage(msg) {
     if (toolResultBody) {
       toolResultBody.innerHTML = bodyHtml;
     }
+    lastRow.dataset.toolSuccess = success ? 'true' : 'false';
     enhanceMathInElement(lastRow);
   } else {
     enhanceMathInElement(lastRow);
   }
 
   updateRollbackActionVisibility();
+  applyConversationProcessState(container);
   updateFollowLatestButton();
   if (followLatestEnabled) {
     scheduleScrollToLatest('smooth');
   }
 }
 
-// 应用折叠逻辑（只处理指定索引后的消息）
-function applyCollapseLogic(containerElement, startIndex = 0) {
+function getCollapseThresholdForRow(row) {
+  if (row.classList.contains('assistant')) {
+    return 220;
+  }
+  return 160;
+}
+
+function syncRowCollapseState(row) {
+  const el = row.querySelector('.message-content');
+  if (!el) return;
+
+  const btnBar = row.querySelector('.expand-toggle-bar');
+  if (row.classList.contains('process-hidden') || row.classList.contains('process-hidden-empty')) {
+    el.classList.remove('collapsed');
+    if (btnBar) btnBar.remove();
+    return;
+  }
+
+  const collapseThreshold = getCollapseThresholdForRow(row);
+  const isCollapsible = el.scrollHeight > collapseThreshold;
+  const isSystem = row.classList.contains('system');
+  const toolName = row.querySelector('.tool-result-header span:last-child')?.textContent || '';
+  const isReadOrEdit = toolName === 'Read' || toolName === 'Edit';
+  const shouldCollapse = isCollapsible && (isSystem || isReadOrEdit);
+
+  if (!isCollapsible) {
+    el.classList.remove('collapsed');
+    if (btnBar) btnBar.remove();
+    const toggle = row.querySelector('.collapse-toggle');
+    if (toggle) toggle.style.display = 'none';
+    return;
+  }
+
+  if (shouldCollapse) {
+    el.classList.add('collapsed');
+    const meta = row.querySelector('.message-meta .collapse-toggle svg');
+    if (meta) meta.style.transform = 'rotate(-90deg)';
+  } else {
+    el.classList.remove('collapsed');
+    const meta = row.querySelector('.message-meta .collapse-toggle svg');
+    if (meta) meta.style.transform = 'rotate(0deg)';
+  }
+
+  let nextBtnBar = btnBar;
+  if (!nextBtnBar) {
+    nextBtnBar = document.createElement('div');
+    nextBtnBar.className = 'expand-toggle-bar';
+    row.appendChild(nextBtnBar);
+  }
+
+  const isCollapsed = el.classList.contains('collapsed');
+  nextBtnBar.innerHTML = '<button class="expand-toggle-btn" onclick="toggleMessage(&quot;' + el.id + '&quot;)">' + getToggleButtonLabel(isCollapsed) + '</button>';
+}
+
+function syncCollapseStates(containerElement, startIndex = 0) {
   const rows = containerElement.querySelectorAll('.message-row');
   rows.forEach((row, idx) => {
-    if (idx < startIndex) return;  // 跳过旧消息
-
-    const el = row.querySelector('.message-content');
-    if (!el) return;
-
-    const isCollapsible = el.scrollHeight > 160;
-    const isSystem = row.classList.contains('system');
-    const toolName = row.querySelector('.tool-result-header span:last-child')?.textContent || '';
-    const isReadOrEdit = toolName === 'Read' || toolName === 'Edit';
-    const shouldCollapse = isCollapsible && (isSystem || isReadOrEdit);
-
-    if (isCollapsible) {
-       if (shouldCollapse) {
-         el.classList.add('collapsed');
-         const meta = row.querySelector('.message-meta .collapse-toggle svg');
-         if (meta) meta.style.transform = 'rotate(-90deg)';
-       } else {
-         el.classList.remove('collapsed');
-         const meta = row.querySelector('.message-meta .collapse-toggle svg');
-         if (meta) meta.style.transform = 'rotate(0deg)';
-       }
-
-       let btnBar = row.querySelector('.expand-toggle-bar');
-       if (!btnBar) {
-         btnBar = document.createElement('div');
-         btnBar.className = 'expand-toggle-bar';
-         row.appendChild(btnBar);
-       }
-
-       const isCollapsed = el.classList.contains('collapsed');
-       btnBar.innerHTML = '<button class="expand-toggle-btn" onclick="toggleMessage(&quot;' + el.id + '&quot;)">' + getToggleButtonLabel(isCollapsed) + '</button>';
-
-    } else {
-       const toggle = row.querySelector('.collapse-toggle');
-       if (toggle) toggle.style.display = 'none';
-    }
+    if (idx < startIndex) return;
+    syncRowCollapseState(row);
   });
+}
+
+// 应用折叠逻辑（只处理指定索引后的消息）
+function applyCollapseLogic(containerElement, startIndex = 0) {
+  syncCollapseStates(containerElement, startIndex);
 }
 
 function render(messages) {
@@ -3266,6 +3566,7 @@ function render(messages) {
     const role = msg.role;
     const msgId = `msg-${index}`;
     let contentHtml = '';
+    let rowAttrs = '';
     let metaHtml = `<div class="role-badge">${role}</div>`;
     if (canRollbackMessage(msg)) {
       metaHtml += `<button class="message-action" onclick="requestRollbackEdit(${index})">编辑此轮</button>`;
@@ -3383,6 +3684,7 @@ function render(messages) {
       }
 
       const { success, data } = parseToolResult(msg.content);
+      rowAttrs = ` data-tool-success="${success ? 'true' : 'false'}"`;
       const displayName = getToolDisplayName(toolName);
       const template = getToolRenderTemplate(toolName);
       
@@ -3393,6 +3695,7 @@ function render(messages) {
          bodyHtml = renderJsonHighlight(data);
       }
 
+      rowAttrs = ` data-tool-success="${success ? 'true' : 'false'}"`;
       contentHtml = `
         <div class="message-content" id="${msgId}" style="padding:0; overflow:hidden;">
           <div class="tool-result-header">
@@ -3404,7 +3707,7 @@ function render(messages) {
     }
 
     return `
-      <div class="message-row ${role}">
+      <div class="message-row ${role}"${rowAttrs}>
         <div class="message-meta">
           ${metaHtml}
         </div>
@@ -3416,47 +3719,10 @@ function render(messages) {
   container.innerHTML = html;
   enhanceMathInElement(container);
 
-  document.querySelectorAll('.message-row').forEach(row => {
-    const el = row.querySelector('.message-content');
-    if (!el) return;
-
-    const isCollapsible = el.scrollHeight > 160;
-    const isSystem = row.classList.contains('system');
-    // 检查是否是 read 或 edit 工具
-    const toolName = row.querySelector('.tool-result-header span:last-child')?.textContent || '';
-    const isReadOrEdit = toolName === 'Read' || toolName === 'Edit';
-    const shouldCollapse = isCollapsible && (isSystem || isReadOrEdit);
-
-    if (isCollapsible) {
-       if (shouldCollapse) {
-         el.classList.add('collapsed');
-         // Meta toggle rotation
-         const meta = row.querySelector('.message-meta .collapse-toggle svg');
-         if (meta) meta.style.transform = 'rotate(-90deg)';
-       } else {
-         el.classList.remove('collapsed');
-         const meta = row.querySelector('.message-meta .collapse-toggle svg');
-         if (meta) meta.style.transform = 'rotate(0deg)';
-       }
-       
-       // Inject Toggle Button
-       let btnBar = row.querySelector('.expand-toggle-bar');
-       if (!btnBar) {
-         btnBar = document.createElement('div');
-         btnBar.className = 'expand-toggle-bar';
-         row.appendChild(btnBar);
-       }
-       
-       const isCollapsed = el.classList.contains('collapsed');
-       btnBar.innerHTML = '<button class="expand-toggle-btn" onclick="toggleMessage(&quot;' + el.id + '&quot;)">' + getToggleButtonLabel(isCollapsed) + '</button>';
-       
-    } else {
-       const toggle = row.querySelector('.collapse-toggle');
-       if (toggle) toggle.style.display = 'none';
-    }
-  });
+  syncCollapseStates(container);
 
   updateRollbackActionVisibility();
+  applyConversationProcessState(container);
   updateFollowLatestButton();
   if (followLatestEnabled) {
     scheduleScrollToLatest('auto');

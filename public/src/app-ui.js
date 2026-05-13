@@ -715,6 +715,8 @@ function normalizeAssemblyDraft(rawDraft = {}) {
   nextDraft.env_status_message = typeof nextDraft.env_status_message === 'string' ? nextDraft.env_status_message : '';
   nextDraft.env_configured_features = typeof nextDraft.env_configured_features === 'string' ? nextDraft.env_configured_features : '';
   nextDraft.editing_config_id = typeof nextDraft.editing_config_id === 'string' ? nextDraft.editing_config_id : '';
+  nextDraft.model_preset = typeof nextDraft.model_preset === 'string' ? nextDraft.model_preset : '';
+  nextDraft.workdir = typeof nextDraft.workdir === 'string' ? nextDraft.workdir : '';
   return nextDraft;
 }
 
@@ -915,6 +917,8 @@ function buildAutoSavedAssemblyConfigs(agent, rawForm = {}, currentConfigs = get
       envConfiguredFeatures: normalizedConfiguredFeatures,
       envStatus: String(form.env_status || '').trim(),
       envStatusMessage: String(form.env_status_message || '').trim(),
+      modelPreset: String(form.model_preset || '').trim(),
+      workdir: String(form.workdir || '').trim(),
       featureConfigs,
       updatedAt: new Date().toISOString(),
     },
@@ -2185,6 +2189,7 @@ window.ClawFW = {
   settingsOpen: false,
   settingsData: null,
   settingsEditing: null,
+  _modelPresets: null,
 };
 
 function getFWFeatureCapabilityState() {
@@ -2413,6 +2418,7 @@ async function openSettings() {
     const resp = await fetch('/protoclaw/model_config');
     const data = await resp.json();
     window.ClawFW.settingsData = data;
+    window.ClawFW._modelPresets = Array.isArray(data?.presets) ? data.presets : [];
     renderSettingsOverlay();
   } catch (error) {
     console.error('Failed to load model config:', error);
@@ -2590,21 +2596,22 @@ function cancelSettingsEdit() {
   renderSettingsOverlay();
 }
 
-function deleteSettingsPreset(idx) {
+async function deleteSettingsPreset(idx) {
   const presets = window.ClawFW.settingsData?.presets || [];
   presets.splice(idx, 1);
   window.ClawFW.settingsData.presets = presets;
   window.ClawFW.settingsEditing = null;
-  renderSettingsOverlay();
+  await saveSettingsConfig();
 }
 
-function saveSettingsPreset(idx) {
+async function saveSettingsPreset(idx) {
   const presets = window.ClawFW.settingsData?.presets || [];
   const el = (id) => document.getElementById(id);
   const thinkingRaw = el('settings-preset-thinking')?.value?.trim();
   const tempRaw = el('settings-preset-temperature')?.value?.trim();
   const preset = {
     name: (el('settings-preset-name')?.value || '').trim(),
+    providerName: presets[idx]?.providerName || '',
     provider: (el('settings-preset-provider')?.value || 'anthropic').trim(),
     model: (el('settings-preset-model')?.value || '').trim(),
     baseUrl: (el('settings-preset-baseurl')?.value || '').trim(),
@@ -2615,7 +2622,7 @@ function saveSettingsPreset(idx) {
   presets[idx] = preset;
   window.ClawFW.settingsData.presets = presets;
   window.ClawFW.settingsEditing = null;
-  renderSettingsOverlay();
+  await saveSettingsConfig();
 }
 
 async function applySettingsPreset(idx) {
@@ -2646,6 +2653,7 @@ async function applySettingsPreset(idx) {
     const result = await resp.json();
     window.ClawFW.settingsData.config = result.config;
     window.ClawFW.settingsData.presets = result.presets;
+    window.ClawFW._modelPresets = Array.isArray(result?.presets) ? result.presets : [];
     renderSettingsOverlay();
   } catch (error) {
     console.error('Failed to save model config:', error);
@@ -2664,6 +2672,7 @@ async function saveSettingsConfig() {
     const result = await resp.json();
     window.ClawFW.settingsData.config = result.config;
     window.ClawFW.settingsData.presets = result.presets;
+    window.ClawFW._modelPresets = Array.isArray(result?.presets) ? result.presets : [];
     renderSettingsOverlay();
   } catch (error) {
     console.error('Failed to save config:', error);
@@ -3522,6 +3531,10 @@ function formatManifestDefaultValue(property) {
   if (!property || !Object.prototype.hasOwnProperty.call(property, 'default')) return currentLanguage === 'zh' ? '无默认值' : 'No default';
   const value = property.default;
   if (property.type === 'boolean') return value ? 'true' : 'false';
+  if (property.type === 'directory') {
+    if (Array.isArray(value) && value.length > 0) return value.join(', ');
+    return currentLanguage === 'zh' ? '空' : 'Empty';
+  }
   if (value === '' || value == null) return currentLanguage === 'zh' ? '空' : 'Empty';
   return String(value);
 }
@@ -3533,6 +3546,10 @@ function normalizeManifestComparableValue(type, value) {
   }
   if (type === 'boolean') {
     return value === true || value === 'true' || value === 1 || value === '1';
+  }
+  if (type === 'directory') {
+    const dirs = Array.isArray(value) ? value : [];
+    return dirs.slice().sort().join('|');
   }
   return String(value ?? '').trim();
 }
@@ -3564,6 +3581,14 @@ function coerceFeatureManifestValue(type, rawValue) {
     if (!text) return undefined;
     const parsed = Number(text);
     return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  if (type === 'directory') {
+    if (Array.isArray(rawValue)) return rawValue.filter(Boolean);
+    if (typeof rawValue === 'string') {
+      const trimmed = rawValue.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    return [];
   }
   const text = String(rawValue ?? '').trim();
   return text ? text : undefined;
@@ -3620,7 +3645,7 @@ function renderFeatureConfigControl(featureKey, field, property, currentValue) {
   const type = String(property?.type || 'string');
   const displayValue = currentValue !== undefined && currentValue !== null ? String(currentValue) : '';
   if (type === 'boolean') {
-    return '<label class="fw-setting-boolean"><input type="checkbox"' + (currentValue === true ? ' checked' : '') + ' onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'boolean\', this.checked)" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '"><span>' + escapeHtml(currentLanguage === 'zh' ? '启用此项' : 'Enabled') + '</span></label>';
+    return '<label class="fw-setting-boolean"><input type="checkbox"' + (currentValue === true || currentValue === 'true' ? ' checked' : '') + ' onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'boolean\', this.checked)" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '"><span>' + escapeHtml(currentLanguage === 'zh' ? '启用此项' : 'Enabled') + '</span></label>';
   }
   if (type === 'select') {
     const options = Array.isArray(property?.options) ? property.options : [];
@@ -3665,6 +3690,23 @@ function renderFeatureConfigControl(featureKey, field, property, currentValue) {
       '</div>',
     ].join('');
   }
+  if (type === 'directory') {
+    const dirs = Array.isArray(currentValue) ? currentValue : [];
+    const maxItems = Number(property?.maxItems) > 0 ? Number(property.maxItems) : 5;
+    let html = '<div class="fw-setting-directory-list">';
+    dirs.forEach((dir, index) => {
+      html += '<div class="fw-setting-dir-item">';
+      html += '<input class="fw-setting-input" value="' + escapeHtml(String(dir || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '目录路径' : 'Directory path') + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '" onchange="window.fwUpdateConfigDirectoryPath(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), Number(this.dataset.dirIndex), this.value)">';
+      html += '<button class="workspace-action secondary" type="button" onclick="window.fwPickFeatureConfigDirectory(this)" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '">' + escapeHtml(currentLanguage === 'zh' ? '选择目录' : 'Browse') + '</button>';
+      html += '<button class="fw-setting-dir-remove" type="button" onclick="window.fwRemoveConfigDirectory(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), Number(this.dataset.dirIndex))" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-dir-index="' + index + '">&times;</button>';
+      html += '</div>';
+    });
+    if (dirs.length < maxItems) {
+      html += '<button class="fw-setting-dir-add workspace-action" type="button" onclick="window.fwAddConfigDirectory(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName))" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '">+ ' + escapeHtml(currentLanguage === 'zh' ? '添加目录' : 'Add directory') + '</button>';
+    }
+    html += '</div>';
+    return html;
+  }
   return '<input class="fw-setting-input" type="' + (type === 'number' ? 'number' : 'text') + '" value="' + escapeHtml(displayValue) + '" placeholder="' + escapeHtml(property?.placeholder || (currentLanguage === 'zh' ? '留空则使用默认值' : 'Leave blank to use the default value')) + '"' + (type === 'number' && Number.isFinite(Number(property?.min)) ? ' min="' + escapeHtml(String(property.min)) + '"' : '') + (type === 'number' && Number.isFinite(Number(property?.max)) ? ' max="' + escapeHtml(String(property.max)) + '"' : '') + (type === 'number' && Number.isFinite(Number(property?.step)) ? ' step="' + escapeHtml(String(property.step)) + '"' : '') + ' data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'' + escapeHtml(type) + '\', this.value)">';
 }
 
@@ -3688,11 +3730,32 @@ function renderFWFeatureSettings(agent, draft, packages) {
       currentConfig: normalizeFeatureConfigEntry(currentEntry?.value || {}),
     };
   });
+
+  // Append built-in features with manifest that aren't already in selected
+  const coveredKeys = groups.map((g) => g.featureKey).filter(Boolean);
+  const isCovered = (key) => coveredKeys.some((existing) => featureConfigKeyMatches(key, existing));
+  const builtInManifests = Array.isArray(caps?.featureManifests) ? caps.featureManifests : [];
+  builtInManifests.forEach((manifest) => {
+    const featureKey = String(manifest?.featureId || manifest?.featureName || manifest?.packageName || '').trim();
+    if (!featureKey || isCovered(featureKey)) return;
+    if (getFeatureManifestPropertyEntries(manifest).length === 0) return;
+    const currentEntry = findFeatureConfigMapEntry(featureConfigMap, featureKey);
+    groups.push({
+      token: featureKey,
+      pkg: null,
+      manifest,
+      featureKey,
+      name: getFeatureManifestDisplayName(featureKey, null, manifest),
+      currentConfig: normalizeFeatureConfigEntry(currentEntry?.value || {}),
+    });
+    coveredKeys.push(featureKey);
+  });
+
   const configurableGroups = groups.filter((item) => getFeatureManifestPropertyEntries(item.manifest).length > 0);
 
   let html = '<section class="fw-settings">';
 
-  if (!selected.length) {
+  if (!configurableGroups.length && !selected.length) {
     html += '<div class="fw-settings-empty">' + escapeHtml(currentLanguage === 'zh' ? '先在右侧启用至少一个 Feature，这里才会出现对应的配置表单。' : 'Enable at least one Feature on the right to reveal its settings here.') + '</div>';
     html += '</section>';
     return html;
@@ -3720,7 +3783,7 @@ function renderFWFeatureSettings(agent, draft, packages) {
     entries.forEach(([field, property]) => {
       const currentValue = Object.prototype.hasOwnProperty.call(group.currentConfig, field)
         ? group.currentConfig[field]
-        : undefined;
+        : property.default;
       html += '<div class="fw-setting-row">';
       html += '<div class="fw-setting-label-row"><label>' + escapeHtml(property.title || field) + '</label></div>';
       html += renderFeatureConfigControl(group.featureKey, field, property, currentValue);
@@ -3818,7 +3881,107 @@ window.fwPickFeatureConfigFile = async (button) => {
   }
 };
 
+window.fwPickFeatureConfigDirectory = async (button) => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id || !(button instanceof HTMLElement)) return;
+  try {
+    const parsedFeatureKey = parseInlineDataValue(button.dataset.featureKey);
+    const parsedField = parseInlineDataValue(button.dataset.fieldName);
+    const dirIndex = Number(button.dataset.dirIndex);
+    const previousLabel = button.textContent || (currentLanguage === 'zh' ? '选择目录' : 'Browse');
+    button.disabled = true;
+    button.textContent = currentLanguage === 'zh' ? '打开中…' : 'Opening…';
+    const selected = await invoke('select_directory');
+    const chosenPath = Array.isArray(selected?.paths) ? String(selected.paths[0] || '').trim() : (typeof selected?.path === 'string' ? selected.path.trim() : '');
+    if (!chosenPath) {
+      return;
+    }
+    const current = getFeatureConfig(agent, String(parsedFeatureKey || ''));
+    const dirs = Array.isArray(current[parsedField]) ? [...current[parsedField]] : [];
+    while (dirs.length <= dirIndex) dirs.push('');
+    dirs[dirIndex] = chosenPath;
+    current[parsedField] = dirs.filter(Boolean);
+    await writeFeatureConfig(agent, String(parsedFeatureKey || ''), current);
+    shouldAnimateWorkspaceSurface = false;
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to pick feature config directory:', error);
+    window.alert((currentLanguage === 'zh' ? '选择目录失败：' : 'Failed to choose directory: ') + (error?.message || error));
+  } finally {
+    button.disabled = false;
+    button.textContent = currentLanguage === 'zh' ? '选择目录' : 'Browse';
+  }
+};
+
+window.fwAddConfigDirectory = async (featureKey, field) => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  try {
+    const current = getFeatureConfig(agent, String(featureKey || ''));
+    const dirs = Array.isArray(current[field]) ? [...current[field]] : [];
+    dirs.push('');
+    current[field] = dirs;
+    await writeFeatureConfig(agent, String(featureKey || ''), current);
+    shouldAnimateWorkspaceSurface = false;
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to add config directory:', error);
+  }
+};
+
+window.fwRemoveConfigDirectory = async (featureKey, field, index) => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  try {
+    const current = getFeatureConfig(agent, String(featureKey || ''));
+    const dirs = Array.isArray(current[field]) ? [...current[field]] : [];
+    dirs.splice(index, 1);
+    if (dirs.length > 0) {
+      current[field] = dirs;
+    } else {
+      delete current[field];
+    }
+    await writeFeatureConfig(agent, String(featureKey || ''), current);
+    shouldAnimateWorkspaceSurface = false;
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to remove config directory:', error);
+  }
+};
+
+window.fwUpdateConfigDirectoryPath = async (featureKey, field, index, value) => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  const trimmed = String(value || '').trim();
+  try {
+    const current = getFeatureConfig(agent, String(featureKey || ''));
+    const dirs = Array.isArray(current[field]) ? [...current[field]] : [];
+    while (dirs.length <= index) dirs.push('');
+    if (trimmed) {
+      dirs[index] = trimmed;
+      current[field] = dirs.filter(Boolean);
+    } else {
+      dirs.splice(index, 1);
+      if (dirs.length > 0) {
+        current[field] = dirs;
+      } else {
+        delete current[field];
+      }
+    }
+    await writeFeatureConfig(agent, String(featureKey || ''), current);
+  } catch (error) {
+    console.error('Failed to update config directory path:', error);
+  }
+};
+
 function renderFWDetail(agent, block, formId, st) {
+  if (!window.ClawFW._modelPresets) {
+    window.ClawFW._modelPresets = [];
+    fetch('/protoclaw/model_config').then(function(r) { return r.json(); }).then(function(d) {
+      window.ClawFW._modelPresets = Array.isArray(d?.presets) ? d.presets : [];
+      fwRerender();
+    }).catch(function() { window.ClawFW._modelPresets = []; });
+  }
   const draft = normalizeAssemblyDraft(getWorkspaceFormDraft(agent)?.[formId] || {});
   const name = String(draft.assembly_name || '').trim();
   const section = st.section || 'features';
@@ -3912,6 +4075,19 @@ function renderFWFeatures(agent, block, formId, draft) {
   html += '</div>';
   html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '目标' : 'Goal') + '</label>';
   html += '<textarea class="fw-textarea" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '这个 Agent 帮用户做什么？' : 'What does this Agent do?') + '" oninput="window.updateAssemblyDraftField(\'' + formId + '\',\'goal\',this.value)" onblur="window.commitAssemblyDraftField(\'' + formId + '\',\'goal\',this.value)">' + escapeHtml(draft.goal || '') + '</textarea></div>';
+  html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? 'LLM 预设' : 'LLM Preset') + '</label>';
+  const _modelPresets = Array.isArray(window.ClawFW._modelPresets) ? window.ClawFW._modelPresets : [];
+  html += '<select class="flow-editor-select" onchange="window.updateAssemblyDraftField(\'' + formId + '\',\'model_preset\',this.value);window.commitAssemblyDraftField(\'' + formId + '\',\'model_preset\',this.value)">';
+  html += '<option value="">' + escapeHtml(currentLanguage === 'zh' ? '使用全局默认模型' : 'Use global default model') + '</option>';
+  _modelPresets.forEach(function(p) {
+    html += '<option value="' + escapeHtml(p.name || '') + '"' + (draft.model_preset === p.name ? ' selected' : '') + '>' + escapeHtml(p.name + ' (' + (p.model || '—') + ')') + '</option>';
+  });
+  html += '</select></div>';
+  html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '工作目录' : 'Workdir') + '</label>';
+  html += '<div style="display:flex;gap:8px;align-items:center;">';
+  html += '<input class="fw-input" style="flex:1;" value="' + escapeHtml(draft.workdir || '') + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '留空沿用运行环境目录' : 'Use environment directory by default') + '" oninput="window.updateAssemblyDraftField(\'' + formId + '\',\'workdir\',this.value)" onblur="window.commitAssemblyDraftField(\'' + formId + '\',\'workdir\',this.value)">';
+  html += '<button class="fw-btn fw-btn-subtle" type="button" onclick="window.chooseWorkspaceDirectory(\'' + formId + '\',\'workdir\')">' + escapeHtml(currentLanguage === 'zh' ? '选择' : 'Browse') + '</button>';
+  html += '</div></div>';
   html += '<button class="fw-prompt-card" type="button" onclick="fwOpenPromptEditor()">';
   html += '<span class="fw-prompt-title">' + escapeHtml(currentLanguage === 'zh' ? '系统提示词' : 'System Prompt') + '</span>';
   html += '<span class="fw-prompt-preview">' + escapeHtml(draft.custom_system_prompt || (currentLanguage === 'zh' ? '使用自动生成的系统提示词。点击打开大编辑器。' : 'Use the generated system prompt. Click to open the large editor.')) + '</span>';
@@ -5059,6 +5235,9 @@ function renderCurrentMainView() {
       lastRenderedWorkspaceHtml = newHtml;
     }
     updateProjectDocsetChrome(agent);
+    if (typeof updateChatProcessToggle === 'function') {
+      updateChatProcessToggle();
+    }
     updateFollowLatestButton();
     requestAnimationFrame(updateAssemblySideRailPosition);
     return;
@@ -5068,12 +5247,18 @@ function renderCurrentMainView() {
   if (currentMessages.length === 0) {
     container.innerHTML = getEmptyStateHtml();
     updateProjectDocsetChrome(agent);
+    if (typeof updateChatProcessToggle === 'function') {
+      updateChatProcessToggle();
+    }
     updateFollowLatestButton();
     return;
   }
 
   render(currentMessages);
   updateProjectDocsetChrome(agent);
+  if (typeof updateChatProcessToggle === 'function') {
+    updateChatProcessToggle();
+  }
   requestAnimationFrame(updateAssemblySideRailPosition);
 }
 
@@ -6976,9 +7161,12 @@ function openAgentContextMenu(agentId, x, y, mode) {
   closeProjectContextMenu();
   contextMenuAgentId = agentId;
   contextMenuAgentMode = mode || null;
+  const showRuntimeActions = mode === 'prebuilt-runtime' || mode === 'external-runtime';
 
-  restartAgentAction.style.display = mode === 'prebuilt-runtime' ? '' : 'none';
-  stopAgentAction.style.display = mode === 'prebuilt-runtime' ? '' : 'none';
+  restartAgentAction.style.display = showRuntimeActions ? '' : 'none';
+  restartAgentAction.disabled = !showRuntimeActions;
+  stopAgentAction.style.display = showRuntimeActions ? '' : 'none';
+  stopAgentAction.disabled = !showRuntimeActions;
   deleteAgentAction.style.display = mode === 'delete-only' ? '' : 'none';
   deleteAgentAction.disabled = mode !== 'delete-only';
 

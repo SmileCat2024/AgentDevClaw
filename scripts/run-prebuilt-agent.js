@@ -126,9 +126,22 @@ const sessionId = sessionIdArg && sessionIdArg !== NO_SESSION_TOKEN
   ? sanitizeSessionFragment(sessionIdArg)
   : null;
 const INPUT_PROMPT = '请输入: ';
+const NEXT_TURN_ACTIONS = [
+  {
+    id: 'rollback_to_call',
+    label: '回滚到指定轮次',
+    kind: 'rollback',
+    variant: 'secondary',
+  },
+];
 
 let agent = null;
 let disposed = false;
+
+function getNextTurnActions() {
+  const checkpoints = Array.isArray(agent?._callCheckpoints) ? agent._callCheckpoints : [];
+  return checkpoints.length > 0 ? NEXT_TURN_ACTIONS : undefined;
+}
 
 async function disposeAgent(exitCode = 0) {
   if (disposed) return;
@@ -302,14 +315,20 @@ async function main() {
   while (true) {
     let response;
     try {
-      response = await userInput.getUserInputEvent(INPUT_PROMPT);
+      response = await userInput.getUserInputEvent(INPUT_PROMPT, undefined, getNextTurnActions());
     } catch (error) {
       console.error('[ProtoClaw Runtime] 等待用户输入失败，稍后重试:', error);
       await sleep(500);
       continue;
     }
 
-    const handled = await handleInputResponse(userInput, response);
+    let handled;
+    try {
+      handled = await handleInputResponse(userInput, response);
+    } catch (error) {
+      console.error('[ProtoClaw Runtime] 处理输入动作失败，已忽略本次请求:', error);
+      continue;
+    }
 
     if (handled.kind === 'continue') {
       continue;

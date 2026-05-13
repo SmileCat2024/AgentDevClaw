@@ -6,7 +6,7 @@
  * 2. 装配会话模式（对话）：加载用户选择的 Features + Agent 配套编排图
  */
 
-import { BasicAgent, TemplateComposer, UserInputFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, UserInputFeature, createLLM } from 'agentdev';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';
@@ -23,6 +23,7 @@ const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'wo
 const SESSION_INDEX_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'flow-workspace', 'sessions', 'index.json');
 const FLOWS_ROOT = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'flows');
 const AGENT_GRAPH_ID = 'agent-flow-graph';
+const MODEL_PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -81,6 +82,33 @@ function readFlowWorkspaceState() {
   try {
     return JSON.parse(readFileSync(WORKSPACE_STATE_PATH, 'utf8'));
   } catch {
+    return null;
+  }
+}
+
+function resolveModelPresetLLM(presetName) {
+  if (!presetName || !existsSync(MODEL_PRESETS_PATH)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(MODEL_PRESETS_PATH, 'utf8'));
+    const presets = Array.isArray(raw?.presets) ? raw.presets : [];
+    const providers = Array.isArray(raw?.providers) ? raw.providers : [];
+    const preset = presets.find((p) => p.name === presetName);
+    if (!preset) return null;
+    const provider = providers.find((p) => p.name === preset.providerName);
+    if (!provider) return null;
+    const protocol = preset.protocol || 'anthropic';
+    const baseUrl = provider.endpoints?.[protocol] || '';
+    const apiKey = provider.apiKey || '';
+    if (!baseUrl || !apiKey || !preset.model) return null;
+    return createLLM({
+      provider: protocol,
+      model: preset.model,
+      apiKey,
+      baseUrl,
+      thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
+    });
+  } catch (error) {
+    console.warn('[FlowWorkspace] Failed to resolve model preset:', error.message);
     return null;
   }
 }
@@ -263,17 +291,41 @@ async function instantiateSelectableFeature(token, config, projectFeatureConfig 
 export class FlowWorkspaceAgent extends BasicAgent {
   constructor(config = {}) {
     const resolvedProjectRoot = config.projectRoot ?? PROTOCLAW_ROOT;
-    const resolvedWorkspaceDir = config.workspaceDir ?? PROTOCLAW_ROOT;
     const assemblySessionMode = readCurrentSessionFormId() === 'assembly-form';
+
+    // 预解析 assembly 配置（在 super() 之前，用于 LLM 和 workdir）
+    let preAssemblyForm = {};
+    let preResolvedLLM = config.llm || null;
+    let preResolvedWorkspaceDir = config.workspaceDir ?? PROTOCLAW_ROOT;
+    let preSkillConfig = null;
+    if (assemblySessionMode) {
+      const ws = readFlowWorkspaceState();
+      preAssemblyForm = ws?.forms?.['assembly-form'] || {};
+      if (!preResolvedLLM && cleanValue(preAssemblyForm.model_preset)) {
+        preResolvedLLM = resolveModelPresetLLM(cleanValue(preAssemblyForm.model_preset));
+        if (preResolvedLLM) {
+          console.log(`[FlowWorkspace] Using model preset: ${preAssemblyForm.model_preset}`);
+        }
+      }
+      const customWorkdir = cleanValue(preAssemblyForm.workdir);
+      if (customWorkdir) {
+        preResolvedWorkspaceDir = customWorkdir;
+      }
+      // 读取 skill feature 配置
+      const featureConfigs = ws?.forms?.['feature-configs'] || {};
+      preSkillConfig = getFeatureConfigFromWorkspace(featureConfigs, 'skill');
+    }
 
     super({
       ...config,
+      ...(preResolvedLLM ? { llm: preResolvedLLM } : {}),
+      ...(preSkillConfig && Object.keys(preSkillConfig).length > 0 ? { skillConfig: preSkillConfig } : {}),
       projectRoot: resolvedProjectRoot,
-      workspaceDir: resolvedWorkspaceDir,
+      workspaceDir: preResolvedWorkspaceDir,
     });
 
     this._resolvedProjectRoot = resolvedProjectRoot;
-    this._resolvedWorkspaceDir = resolvedWorkspaceDir;
+    this._resolvedWorkspaceDir = preResolvedWorkspaceDir;
     this._assemblySessionMode = assemblySessionMode;
     this._assemblyFeatureTokens = [];
     this._assemblyForm = null;
@@ -286,7 +338,7 @@ export class FlowWorkspaceAgent extends BasicAgent {
     if (this._assemblySessionMode) {
       const workspaceState = readFlowWorkspaceState();
       this._workspaceState = workspaceState;
-      const assemblyForm = workspaceState?.forms?.['assembly-form'] || {};
+      const assemblyForm = preAssemblyForm || workspaceState?.forms?.['assembly-form'] || {};
       this._assemblyFeatureConfigs = workspaceState?.forms?.['feature-configs'] || {};
       this._assemblyForm = assemblyForm;
       this._assemblyFeatureTokens = parseList(assemblyForm.selected_features);
@@ -363,51 +415,6 @@ export class FlowWorkspaceAgent extends BasicAgent {
     ].filter(Boolean).join('\n\n');
   }
 
-  applyAssemblySystemPromptToContext() {
-    if (!this._assemblySessionMode || !this._assemblySystemPromptText || !this.persistentContext) return;
-
-    const resolvedText = this._resolvePromptPlaceholders(this._assemblySystemPromptText);
-
-    let replaced = false;
-    this.persistentContext.apply((messages) => {
-      const next = messages.map((message) => {
-        if (!replaced && message.role === 'system') {
-          replaced = true;
-          return { ...message, content: resolvedText };
-        }
-        return message;
-      });
-      if (!replaced && next.length > 0) {
-        next.unshift({ role: 'system', content: resolvedText, turn: this._callIndex });
-        replaced = true;
-      }
-      return next;
-    });
-  }
-
-  _resolvePromptPlaceholders(text) {
-    if (!text || !this._systemContext) return text;
-    return text.replace(/\{\{([^}]+)\}\}/g, (_, expr) => {
-      const trimmed = expr.trim();
-      const pipeIndex = trimmed.indexOf('|');
-      let path, defaultValue;
-      if (pipeIndex !== -1) {
-        path = trimmed.slice(0, pipeIndex).trim();
-        defaultValue = trimmed.slice(pipeIndex + 1).trim();
-      } else {
-        path = trimmed;
-        defaultValue = '';
-      }
-      const keys = path.split('.');
-      let value = this._systemContext;
-      for (const key of keys) {
-        if (value == null) return defaultValue;
-        value = value[key];
-      }
-      return value !== undefined && value !== null ? String(value) : defaultValue;
-    });
-  }
-
   async applyAssemblyRuntimeConfig() {
     if (!this._assemblySessionMode) return;
     await this.ensureAssemblyFeaturesMounted();
@@ -418,8 +425,6 @@ export class FlowWorkspaceAgent extends BasicAgent {
 
     // 收集所有 Feature 的 Flow 变量值并注入到系统上下文
     this._injectFlowVariablesIntoContext();
-
-    this.applyAssemblySystemPromptToContext();
 
     if (!this._assemblyRuntimeConfigApplied) {
       console.log(`[FlowWorkspace] Assembly runtime configured: ${this._assemblyFeatureTokens.length} feature(s), prompt=${promptText ? 'ready' : 'empty'}`);
@@ -446,7 +451,9 @@ export class FlowWorkspaceAgent extends BasicAgent {
     }
     const keys = Object.keys(flowVarContext);
     if (keys.length > 0) {
-      this.setSystemContext({ ...this._systemContext, ...flowVarContext });
+      const nextContext = { ...(this._systemContext || {}), ...flowVarContext };
+      this._systemContext = nextContext;
+      this.setSystemContext(nextContext);
     }
   }
 

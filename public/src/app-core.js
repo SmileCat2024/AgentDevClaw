@@ -215,6 +215,7 @@ const deleteFeatureAction = document.getElementById('delete-feature-action');
 const followLatestButton = document.getElementById('follow-latest-btn');
 const workspaceTabsBar = document.getElementById('workspace-tabs-bar');
 const projectDocsetToggle = document.getElementById('project-docset-toggle');
+const chatProcessToggle = document.getElementById('chat-process-toggle');
 const projectDocsetOverlay = document.getElementById('project-docset-overlay');
 const projectDocsetSheet = document.getElementById('project-docset-sheet');
 const railButtons = Array.from(document.querySelectorAll('.rail-button'));
@@ -223,6 +224,9 @@ const themeToggle = document.getElementById('theme-toggle');
 const settingsToggle = document.getElementById('settings-toggle');
 if (projectDocsetToggle) {
   projectDocsetToggle.addEventListener('click', () => window.toggleProjectDocsetOverlay());
+}
+if (chatProcessToggle) {
+  chatProcessToggle.addEventListener('click', () => window.toggleChatProcessVisibility());
 }
 if (projectDocsetOverlay) {
   projectDocsetOverlay.addEventListener('click', (event) => {
@@ -265,6 +269,16 @@ let currentProjectDocsetPage = 'requirement';
 let featurePanelWidth = 500;
 let currentTheme = localStorage.getItem('agentdev-theme') || 'dark';
 let currentLanguage = localStorage.getItem('agentdev-language') || 'zh';
+const CHAT_PROCESS_VISIBILITY_KEY = 'agentdev-chat-show-process';
+function loadChatProcessVisibility() {
+  try {
+    return localStorage.getItem(CHAT_PROCESS_VISIBILITY_KEY) === 'true';
+  } catch (error) {
+    console.warn('Failed to load chat process visibility:', error);
+    return false;
+  }
+}
+let showChatProcess = loadChatProcessVisibility();
 let currentHookInspector = { lifecycleOrder: [], features: [], hooks: [] };
 let currentHookInspectorSignature = '';
 let currentOverviewSnapshot = {
@@ -544,6 +558,8 @@ const I18N = {
     follow_latest_off: '回到底部',
     expand: '展开',
     collapse: '收起',
+    show_process: '显示过程',
+    hide_process: '隐藏过程',
     thinking_process: '思考过程',
     hook_kind: 'hook',
     subagent: '子代理',
@@ -768,6 +784,8 @@ const I18N = {
     follow_latest_off: 'Jump to Latest',
     expand: 'Expand',
     collapse: 'Collapse',
+    show_process: 'Show Process',
+    hide_process: 'Hide Process',
     thinking_process: 'Thinking Process',
     hook_kind: 'hook',
     subagent: 'SubAgent',
