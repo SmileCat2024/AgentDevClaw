@@ -66,6 +66,35 @@ export interface FlowEdge {
   from: string;
   to: string;
   condition?: string;
+  interaction?: FlowInteractionConfig;
+}
+
+/** 交互选项 */
+export interface FlowInteractionOption {
+  id: string;
+  label: string;
+  description?: string;
+  /** 选择此项后取消本次状态转移 */
+  blocksTransition?: boolean;
+  /** 是否允许为该选项补充自由文本 */
+  allowSupplement?: boolean;
+  /** 当 allowSupplement 为 true 时，是否要求必填 */
+  supplementRequired?: boolean;
+  supplementLabel?: string;
+  supplementPlaceholder?: string;
+}
+
+/** 边级交互配置 */
+export interface FlowInteractionConfig {
+  mode: 'model-generated' | 'preset';
+  /** model-generated 模式下，首次错误调用后返回给模型的引导文案 */
+  guidanceMessage?: string;
+  /** 决策弹窗顶部标题 */
+  prompt?: string;
+  /** 要向用户展示的说明或问题 */
+  question?: string;
+  /** 用户可选项，当前最多支持 1~4 个 */
+  options?: FlowInteractionOption[];
 }
 
 /** Flow 变量声明 */
@@ -119,6 +148,11 @@ export interface FlowStateSnapshot {
   stepsInNode: number;
   pendingTransition: boolean;
   pendingTargetNode: string | null;
+  pendingInteractionRetry?: {
+    fromNodeId: string;
+    nextNodeId: string;
+    nextNodeName: string;
+  } | null;
   callsInNode: number;
   nodeHistory: Array<{ nodeId: string; enteredAt: number; exitedAt?: number }>;
   previousToolStates: Record<string, 'enabled' | 'disabled' | 'removed'>;

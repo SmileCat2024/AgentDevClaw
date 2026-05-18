@@ -298,6 +298,7 @@ export class FlowWorkspaceAgent extends BasicAgent {
     let preResolvedLLM = config.llm || null;
     let preResolvedWorkspaceDir = config.workspaceDir ?? PROTOCLAW_ROOT;
     let preSkillConfig = null;
+    let preMcpConfig = null;
     if (assemblySessionMode) {
       const ws = readFlowWorkspaceState();
       preAssemblyForm = ws?.forms?.['assembly-form'] || {};
@@ -314,12 +315,19 @@ export class FlowWorkspaceAgent extends BasicAgent {
       // 读取 skill feature 配置
       const featureConfigs = ws?.forms?.['feature-configs'] || {};
       preSkillConfig = getFeatureConfigFromWorkspace(featureConfigs, 'skill');
+      preMcpConfig = getFeatureConfigFromWorkspace(featureConfigs, 'mcp');
     }
 
     super({
       ...config,
       ...(preResolvedLLM ? { llm: preResolvedLLM } : {}),
       ...(preSkillConfig && Object.keys(preSkillConfig).length > 0 ? { skillConfig: preSkillConfig } : {}),
+      ...((preMcpConfig && Object.keys(preMcpConfig).length > 0) ? {
+        features: {
+          ...(config.features || {}),
+          mcp: preMcpConfig,
+        },
+      } : {}),
       projectRoot: resolvedProjectRoot,
       workspaceDir: preResolvedWorkspaceDir,
     });

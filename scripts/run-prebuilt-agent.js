@@ -21,7 +21,89 @@ const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = resolve(__dirname, '..');
 const VIEWER_PORT = parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
 const NO_SESSION_TOKEN = '__protoclaw-no-session__';
+const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
+const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
 const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
+
+function cleanValue(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseHandoffContent(raw, sourceLabel) {
+  const text = cleanValue(raw);
+  if (!text) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed === 'string') {
+      return { sourceSummary: parsed, seedMessages: [] };
+    }
+    if (parsed && typeof parsed === 'object') {
+      const seedMessages = Array.isArray(parsed.seedMessages)
+        ? parsed.seedMessages
+            .map((message) => ({
+              role: cleanValue(message?.role),
+              content: cleanValue(message?.content),
+              turn: Number.isFinite(message?.turn) ? Number(message.turn) : null,
+            }))
+            .filter((message) => message.role && message.content)
+        : [];
+      const sourceSummary = cleanValue(
+        parsed.sourceSummary
+        || parsed.summaryText
+        || parsed.summary
+        || parsed.handoffSummary
+        || parsed.text,
+      );
+      if (seedMessages.length === 0 && !sourceSummary) {
+        throw new Error('missing seedMessages/sourceSummary');
+      }
+      return {
+        packageId: cleanValue(parsed.packageId || parsed.handoffId),
+        sourceSessionId: cleanValue(parsed.sourceSessionId),
+        sourceSummary,
+        seedMessages,
+        mode: cleanValue(parsed.mode),
+        policy: parsed.policy && typeof parsed.policy === 'object' ? parsed.policy : {},
+      };
+    }
+  } catch (error) {
+    if (sourceLabel === HANDOFF_PAYLOAD_ENV) {
+      return { sourceSummary: text, seedMessages: [] };
+    }
+    if (text.startsWith('{') || text.startsWith('[')) {
+      throw new Error(`解析 handoff 内容失败 (${sourceLabel}): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return { sourceSummary: text, seedMessages: [] };
+}
+
+function loadRuntimeHandoff() {
+  const payloadText = cleanValue(process.env[HANDOFF_PAYLOAD_ENV]);
+  if (payloadText) {
+    return {
+      source: HANDOFF_PAYLOAD_ENV,
+      handoff: parseHandoffContent(payloadText, HANDOFF_PAYLOAD_ENV),
+    };
+  }
+
+  const handoffPath = cleanValue(process.env[HANDOFF_PATH_ENV]);
+  if (!handoffPath) {
+    return null;
+  }
+  if (!existsSync(handoffPath)) {
+    throw new Error(`handoff 文件不存在: ${handoffPath}`);
+  }
+
+  const fileContent = readFileSync(handoffPath, 'utf8');
+  return {
+    source: handoffPath,
+    handoff: parseHandoffContent(fileContent, handoffPath),
+  };
+}
 
 function sanitizeSessionFragment(value) {
   return String(value || '')
@@ -225,6 +307,7 @@ async function handleInputResponse(userInput, response) {
 
 async function main() {
   const workspaceCwd = resolveWorkspaceCwd(agentId);
+  const runtimeHandoff = loadRuntimeHandoff();
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);
   const AgentClass = resolveAgentClass(agentModule);
@@ -238,6 +321,17 @@ async function main() {
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
   });
+
+  if (runtimeHandoff?.handoff && (runtimeHandoff.handoff.sourceSummary || runtimeHandoff.handoff.seedMessages?.length)) {
+    const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
+    if (typeof localFeatures.ContextHandoffSeedFeature !== 'function') {
+      throw new Error('local ContextHandoffSeedFeature 未构建，无法挂载 handoff seed');
+    }
+    agent.use(new localFeatures.ContextHandoffSeedFeature({
+      handoff: runtimeHandoff.handoff,
+    }));
+    console.log(`[ProtoClaw Runtime] 已挂载 context handoff seed (${runtimeHandoff.source})`);
+  }
 
   if (typeof agent.prepareRuntime === 'function') {
     await agent.prepareRuntime();

@@ -143,6 +143,15 @@ function getWorkspaceSessionById(agent = getCurrentAgentRecord(), sessionId = ''
   return getWorkspaceSessions(agent).find((session) => session.id === String(sessionId || '').trim()) || null;
 }
 
+function isCompactedResumeSession(session) {
+  return String(session?.metadata?.resumeMode || '').trim() === 'compacted';
+}
+
+function renderSessionResumeBadge(session) {
+  if (!isCompactedResumeSession(session)) return '';
+  return '<span class="workspace-history-active">' + escapeHtml(t('workspace_compacted_badge')) + '</span>';
+}
+
 function isAssemblySession(session) {
   return String(session?.formId || 'startup-form') === 'assembly-form';
 }
@@ -1218,6 +1227,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '<div class="workspace-history-main">',
                   '<div class="workspace-history-title-row">',
                   '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+                  renderSessionResumeBadge(session),
                   session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
                   '</div>',
                   '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
@@ -1315,6 +1325,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '<div class="workspace-history-main">',
                   '<div class="workspace-history-title-row">',
                   '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+                  renderSessionResumeBadge(session),
                   session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
                   '</div>',
                   '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
@@ -1387,14 +1398,20 @@ function renderWorkspaceSessionList(agent, block) {
         featureName: session.featureName || '',
         openDirectory: session.openDirectory || '',
       }));
+      const compactedResumeAction = escapeHtml(JSON.stringify({
+        type: 'compacted_resume_session',
+        sessionId: session.id,
+      }));
       const primaryTitle = isFeatureCreator
         ? getFeatureSessionDisplayName(session, agent)
         : (session.title || session.id);
+      const allowCompactedResume = !isAssemblySession(session);
       return [
         '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
         '<div class="workspace-history-main">',
         '<div class="workspace-history-title-row">',
         '<div class="workspace-history-title">' + escapeHtml(primaryTitle) + '</div>',
+        renderSessionResumeBadge(session),
         session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
         '</div>',
         '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
@@ -1407,6 +1424,9 @@ function renderWorkspaceSessionList(agent, block) {
         '</div>',
         '<div class="workspace-actions stacked">',
         '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+        (allowCompactedResume
+          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + compactedResumeAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_light_resume')) + '</button>'
+          : ''),
         (isFeatureCreator
           ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>'
           : ''),
@@ -3551,6 +3571,9 @@ function normalizeManifestComparableValue(type, value) {
     const dirs = Array.isArray(value) ? value : [];
     return dirs.slice().sort().join('|');
   }
+  if (type === 'file' && Array.isArray(value)) {
+    return value.slice().sort().join('|');
+  }
   return String(value ?? '').trim();
 }
 
@@ -3589,6 +3612,9 @@ function coerceFeatureManifestValue(type, rawValue) {
       return trimmed ? [trimmed] : [];
     }
     return [];
+  }
+  if (type === 'file' && Array.isArray(rawValue)) {
+    return rawValue.map((value) => String(value || '').trim()).filter(Boolean);
   }
   const text = String(rawValue ?? '').trim();
   return text ? text : undefined;
@@ -3683,6 +3709,23 @@ function renderFeatureConfigControl(featureKey, field, property, currentValue) {
   }
   if (type === 'file') {
     const acceptValue = escapeHtml(String(property?.accept ?? ''));
+    const files = Array.isArray(currentValue) ? currentValue : null;
+    const maxItems = Number(property?.maxItems) > 0 ? Number(property.maxItems) : 5;
+    if (files) {
+      let html = '<div class="fw-setting-directory-list">';
+      files.forEach((filePath, index) => {
+        html += '<div class="fw-setting-dir-item">';
+        html += '<input class="fw-setting-input" value="' + escapeHtml(String(filePath || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '文件路径' : 'File path') + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '" onchange="window.fwUpdateConfigFilePath(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), Number(this.dataset.fileIndex), this.value)">';
+        html += '<button class="workspace-action secondary" type="button" onclick="window.fwPickFeatureConfigFile(this)" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '" data-accept="' + acceptValue + '">' + escapeHtml(currentLanguage === 'zh' ? '选择文件' : 'Browse') + '</button>';
+        html += '<button class="fw-setting-dir-remove" type="button" onclick="window.fwRemoveConfigFile(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), Number(this.dataset.fileIndex))" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" data-file-index="' + index + '">&times;</button>';
+        html += '</div>';
+      });
+      if (files.length < maxItems) {
+        html += '<button class="fw-setting-dir-add workspace-action" type="button" onclick="window.fwAddConfigFile(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName))" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '">+ ' + escapeHtml(currentLanguage === 'zh' ? '添加文件' : 'Add file') + '</button>';
+      }
+      html += '</div>';
+      return html;
+    }
     return [
       '<div class="fw-setting-file-row">',
       '<input class="fw-setting-input" value="' + escapeHtml(displayValue) + '" placeholder="' + escapeHtml(property?.placeholder || (currentLanguage === 'zh' ? '留空则使用默认路径' : 'Leave blank to use the default path')) + '" data-feature-key="' + serializedFeatureKey + '" data-field-name="' + serializedField + '" onchange="window.fwCommitFeatureConfigValue(JSON.parse(this.dataset.featureKey), JSON.parse(this.dataset.fieldName), \'file\', this.value)">',
@@ -3858,6 +3901,7 @@ window.fwPickFeatureConfigFile = async (button) => {
     const parsedFeatureKey = parseInlineDataValue(button.dataset.featureKey);
     const parsedField = parseInlineDataValue(button.dataset.fieldName);
     const parsedAccept = parseInlineDataValue(button.dataset.accept || '');
+    const fileIndex = button.dataset.fileIndex == null ? null : Number(button.dataset.fileIndex);
     const previousLabel = button.textContent || (currentLanguage === 'zh' ? '选择文件' : 'Browse');
     button.disabled = true;
     button.textContent = currentLanguage === 'zh' ? '打开中…' : 'Opening…';
@@ -3869,7 +3913,16 @@ window.fwPickFeatureConfigFile = async (button) => {
     if (parsedAccept && !matchesFeatureConfigAccept(chosenPath, parsedAccept)) {
       throw new Error(currentLanguage === 'zh' ? '所选文件类型不符合该配置项要求，请重新选择。' : 'The selected file type is not allowed for this setting. Please choose another file.');
     }
-    await updateFeatureConfigField(agent, String(parsedFeatureKey || ''), String(parsedField || ''), chosenPath || undefined);
+    if (fileIndex != null && Number.isFinite(fileIndex)) {
+      const current = getFeatureConfig(agent, String(parsedFeatureKey || ''));
+      const files = Array.isArray(current[parsedField]) ? [...current[parsedField]] : [];
+      while (files.length <= fileIndex) files.push('');
+      files[fileIndex] = chosenPath;
+      current[parsedField] = files.filter(Boolean);
+      await writeFeatureConfig(agent, String(parsedFeatureKey || ''), current);
+    } else {
+      await updateFeatureConfigField(agent, String(parsedFeatureKey || ''), String(parsedField || ''), chosenPath || undefined);
+    }
     shouldAnimateWorkspaceSurface = false;
     renderCurrentMainView();
   } catch (error) {
@@ -3878,6 +3931,67 @@ window.fwPickFeatureConfigFile = async (button) => {
   } finally {
     button.disabled = false;
     button.textContent = currentLanguage === 'zh' ? '选择文件' : 'Browse';
+  }
+};
+
+window.fwAddConfigFile = async (featureKey, field) => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  try {
+    const current = getFeatureConfig(agent, String(featureKey || ''));
+    const files = Array.isArray(current[field]) ? [...current[field]] : [];
+    files.push('');
+    current[field] = files;
+    await writeFeatureConfig(agent, String(featureKey || ''), current);
+    shouldAnimateWorkspaceSurface = false;
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to add config file:', error);
+  }
+};
+
+window.fwRemoveConfigFile = async (featureKey, field, index) => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  try {
+    const current = getFeatureConfig(agent, String(featureKey || ''));
+    const files = Array.isArray(current[field]) ? [...current[field]] : [];
+    files.splice(index, 1);
+    if (files.length > 0) {
+      current[field] = files.filter(Boolean);
+    } else {
+      delete current[field];
+    }
+    await writeFeatureConfig(agent, String(featureKey || ''), current);
+    shouldAnimateWorkspaceSurface = false;
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to remove config file:', error);
+  }
+};
+
+window.fwUpdateConfigFilePath = async (featureKey, field, index, value) => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  const trimmed = String(value || '').trim();
+  try {
+    const current = getFeatureConfig(agent, String(featureKey || ''));
+    const files = Array.isArray(current[field]) ? [...current[field]] : [];
+    while (files.length <= index) files.push('');
+    if (trimmed) {
+      files[index] = trimmed;
+      current[field] = files.filter(Boolean);
+    } else {
+      files.splice(index, 1);
+      if (files.length > 0) {
+        current[field] = files.filter(Boolean);
+      } else {
+        delete current[field];
+      }
+    }
+    await writeFeatureConfig(agent, String(featureKey || ''), current);
+  } catch (error) {
+    console.error('Failed to update config file path:', error);
   }
 };
 
@@ -7019,6 +7133,7 @@ function applyLanguage() {
   stopAgentAction.textContent = t('close_agent_runtime');
   deleteAgentAction.textContent = t('delete_agent');
   openSessionAction.textContent = currentLanguage === 'zh' ? '进入对话' : 'Enter Chat';
+  compactedResumeSessionAction.textContent = t('workspace_light_resume');
   deleteSessionAction.textContent = t('delete_session');
   deleteProjectAction.textContent = t('delete_project');
 
@@ -7191,6 +7306,10 @@ function openSessionContextMenu(agentId, sessionId, x, y) {
   const session = getWorkspaceSessionById(agent, sessionId);
   const isAssembly = isAssemblySession(session);
   contextMenuSessionMode = isAssembly ? 'assembly' : 'default';
+  if (compactedResumeSessionAction) {
+    compactedResumeSessionAction.style.display = isAssembly ? 'none' : '';
+    compactedResumeSessionAction.disabled = isAssembly;
+  }
 
   const margin = 8;
   sessionContextMenu.classList.add('open');

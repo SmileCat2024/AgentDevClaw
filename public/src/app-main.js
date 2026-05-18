@@ -296,6 +296,39 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
   return response.json();
 }
 
+async function createCompactedResumeSession(agentId, sessionId) {
+  const exportResponse = await fetch('/protoclaw/context_handoffs/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId, sessionId }),
+  });
+  if (!exportResponse.ok) {
+    throw new Error(await exportResponse.text().catch(() => 'handoff export failed'));
+  }
+
+  const exportResult = await exportResponse.json();
+  const handoffId = String(exportResult?.handoff?.handoffId || '').trim();
+  const handoffPath = String(exportResult?.handoffPath || '').trim();
+  if (!handoffId && !handoffPath) {
+    throw new Error('handoff export returned no handoff identifier');
+  }
+
+  const resumeResponse = await fetch('/protoclaw/context_handoffs/compacted_resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      agentId,
+      handoffId: handoffId || undefined,
+      handoffPath: handoffPath || undefined,
+    }),
+  });
+  if (!resumeResponse.ok) {
+    throw new Error(await resumeResponse.text().catch(() => 'compacted resume failed'));
+  }
+
+  return resumeResponse.json();
+}
+
 window.runWorkspaceAction = async (rawAction) => {
   let action = rawAction || {};
   if (typeof rawAction === 'string') {
@@ -412,6 +445,36 @@ window.runWorkspaceAction = async (rawAction) => {
 
   if (action.type === 'launch_assembly_instance') {
     await window.launchAssemblyInstance();
+    return;
+  }
+
+  if (action.type === 'compacted_resume_session') {
+    if (!activeAgent?.id || !action.sessionId) return;
+    const confirmed = window.confirm(t('workspace_compacted_resume_confirm'));
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const result = await createCompactedResumeSession(activeAgent.id, action.sessionId);
+      if (result?.agent) {
+        applyManagedPrebuiltAgent(activeAgent.id, result.agent);
+      }
+      await loadAgents();
+      const nextRuntimeId =
+        result?.agent?.runtime_session_id
+        || result?.agent?.runtimeSessionId
+        || null;
+      if (nextRuntimeId) {
+        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
+        await window.switchAgent(nextRuntimeId);
+      } else {
+        renderCurrentMainView();
+      }
+    } catch (error) {
+      console.error('Failed to compact-resume session:', error);
+      window.alert(t('workspace_compacted_resume_failed') + (error && error.message ? error.message : error));
+    }
     return;
   }
 
@@ -1976,6 +2039,20 @@ openSessionAction.addEventListener('click', async () => {
   } else {
     await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
   }
+});
+
+compactedResumeSessionAction.addEventListener('click', async () => {
+  if (!contextMenuSessionAgentId || !contextMenuSessionId) return;
+  if (contextMenuSessionMode === 'assembly') {
+    closeSessionContextMenu();
+    return;
+  }
+  const sessionId = contextMenuSessionId;
+  closeSessionContextMenu();
+  await window.runWorkspaceAction(JSON.stringify({
+    type: 'compacted_resume_session',
+    sessionId,
+  }));
 });
 
 deleteAgentAction.addEventListener('click', async () => {

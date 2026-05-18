@@ -7,19 +7,68 @@
  * - 检测状态转换（手动 complete_node + 变量驱动自动切换）
  */
 
-import type { AgentFeature, FeatureStateSnapshot, Tool } from 'agentdev';
+import type { AgentFeature, ContextInjector, FeatureStateSnapshot, Tool } from 'agentdev';
 import { CallStart, StepStart, createTool } from 'agentdev';
 import { readFileSync, existsSync } from 'fs';
 import type {
   FlowGraph, FlowNode, FlowEdge, ExitCondition, AutoAction,
   FlowVariable, FlowFeatureConfig, FlowStateSnapshot, ReminderFrequency,
   FlowToolRule, FlowModeDefinition, FlowNodeFeatureModeChange,
-  FlowPromptRule, PromptTiming,
+  FlowPromptRule, PromptTiming, FlowInteractionConfig, FlowInteractionOption,
 } from './types.js';
 import type { FlowModeContext } from './flow-aware-feature.js';
 
 export { FlowAwareFeature } from './flow-aware-feature.js';
 export type { FlowVariable, FlowNodeTemplate, FlowPromptRule, PromptTiming } from './types.js';
+
+interface CompleteNodeRuntimeContext {
+  getFeature?<T = any>(featureName: string): T | undefined;
+}
+
+interface FlowInteractionRequestPayload {
+  prompt?: string;
+  question?: string;
+  options?: Array<{
+    id?: string;
+    label?: string;
+    description?: string;
+    blocksTransition?: boolean;
+    allowSupplement?: boolean;
+    supplementRequired?: boolean;
+    supplementLabel?: string;
+    supplementPlaceholder?: string;
+  }>;
+}
+
+interface UserInputFeatureLike {
+  requestUserChoices(
+    prompt: string,
+    questions: Array<{
+      id: string;
+      question: string;
+      options: Array<{
+        id: string;
+        label: string;
+        description?: string;
+        allowSupplement?: boolean;
+        supplementRequired?: boolean;
+        supplementLabel?: string;
+        supplementPlaceholder?: string;
+      }>;
+    }>,
+    timeout?: number,
+  ): Promise<Array<{
+    questionId: string;
+    optionId?: string;
+    supplementText?: string;
+  }>>;
+}
+
+interface PendingInteractionRetryState {
+  fromNodeId: string;
+  nextNodeId: string;
+  nextNodeName: string;
+}
 
 // ========== 硬编码测试 Flow ==========
 
@@ -71,6 +120,7 @@ export class FlowFeature implements AgentFeature {
   private stepsInNode = 0;
   private pendingTransition = false;
   private pendingTargetNode: string | null = null;
+  private pendingInteractionRetry: PendingInteractionRetryState | null = null;
   private nodeHistory: Array<{ nodeId: string; enteredAt: number; exitedAt?: number }> = [];
 
   // Call 计数
@@ -177,10 +227,14 @@ export class FlowFeature implements AgentFeature {
               type: 'string',
               description: '要进入的下一节点名称。若名称唯一，可替代 nextNodeId。',
             },
+            interactionRequest: {
+              type: 'object',
+              description: '当边配置为“模型生成决策内容”时，模型在重试 complete_node 时需要通过该字段提供用户决策标题、说明和选项。',
+            },
           },
           required: [],
         },
-        execute: async ({ result, nextNodeId, nextNodeName }) => {
+        execute: async ({ result, nextNodeId, nextNodeName, interactionRequest }, runtimeContext?: CompleteNodeRuntimeContext) => {
           if (!this.activeFlow || !this.currentNodeId) {
             return { success: false, error: '当前不在任何工作流中。' };
           }
@@ -196,9 +250,24 @@ export class FlowFeature implements AgentFeature {
           }
           const nextNode = selection.node;
           if (!nextNode) {
+            this.pendingInteractionRetry = null;
             await this.exitFlow();
             return { success: true, message: '工作流已完成。', result };
           }
+          const transitionEdge = this.getTransitionEdge(this.currentNodeId, nextNode.id);
+          if (transitionEdge?.interaction) {
+            const interactionResult = await this.handleEdgeInteraction({
+              edge: transitionEdge,
+              nextNode,
+              result,
+              interactionRequest,
+              runtimeContext,
+            });
+            if (interactionResult) {
+              return interactionResult;
+            }
+          }
+          this.pendingInteractionRetry = null;
           this.pendingTransition = true;
           this.pendingTargetNode = nextNode.id;
           return { success: true, message: `准备进入下一阶段 "${nextNode.name}"。`, result };
@@ -222,6 +291,21 @@ export class FlowFeature implements AgentFeature {
         },
       }),
     ];
+  }
+
+  getContextInjectors(): Map<string | RegExp, ContextInjector> {
+    return new Map([
+      ['complete_node', () => ({
+        getFeature: <T = any>(featureName: string): T | undefined => {
+          const agent = this.currentAgentRef;
+          if (!agent) return undefined;
+          if (typeof agent.getFeature === 'function') {
+            return agent.getFeature(featureName) as T | undefined;
+          }
+          return agent.features instanceof Map ? agent.features.get(featureName) as T | undefined : undefined;
+        },
+      })],
+    ]);
   }
 
   // ========== @CallStart ==========
@@ -316,6 +400,10 @@ export class FlowFeature implements AgentFeature {
       ctx.context.add({ role: 'system', content: parts.join('\n\n') });
       this.promptInjectedThisNode = true;
     }
+    const interactionRetryPrompt = this.buildPendingInteractionRetryPrompt();
+    if (interactionRetryPrompt) {
+      ctx.context.add({ role: 'system', content: interactionRetryPrompt });
+    }
 
     this.isFirstStepOfCall = false;
     this.stepsInNode++;
@@ -330,6 +418,7 @@ export class FlowFeature implements AgentFeature {
       stepsInNode: this.stepsInNode,
       pendingTransition: this.pendingTransition,
       pendingTargetNode: this.pendingTargetNode,
+      pendingInteractionRetry: this.pendingInteractionRetry ? { ...this.pendingInteractionRetry } : null,
       callsInNode: this.callsInNode,
       nodeHistory: this.nodeHistory.map(h => ({ ...h })),
       previousToolStates: Object.fromEntries(this.previousToolStates),
@@ -350,6 +439,7 @@ export class FlowFeature implements AgentFeature {
     this.stepsInNode = state.stepsInNode ?? 0;
     this.pendingTransition = state.pendingTransition ?? false;
     this.pendingTargetNode = state.pendingTargetNode ?? null;
+    this.pendingInteractionRetry = state.pendingInteractionRetry ?? null;
     this.callsInNode = state.callsInNode ?? 0;
     this.nodeHistory = Array.isArray(state.nodeHistory) ? state.nodeHistory : [];
     this.previousToolStates = new Map(Object.entries(state.previousToolStates || {}));
@@ -364,6 +454,7 @@ export class FlowFeature implements AgentFeature {
     this.stepsInNode = 0;
     this.pendingTransition = false;
     this.pendingTargetNode = null;
+    this.pendingInteractionRetry = null;
     this.promptInjectedThisNode = false;
     this.nodeHistory = [];
     this.callsInNode = 0;
@@ -394,6 +485,7 @@ export class FlowFeature implements AgentFeature {
     this.stepsInNode = 0;
     this.pendingTransition = false;
     this.pendingTargetNode = null;
+    this.pendingInteractionRetry = null;
     this.promptInjectedThisNode = false;
     this.callsInNode = 0;
     this.isFirstStepOfCall = false;
@@ -416,6 +508,7 @@ export class FlowFeature implements AgentFeature {
     // 切换节点
     this.currentNodeId = nodeId;
     this.stepsInNode = 0;
+    this.pendingInteractionRetry = null;
     this.promptInjectedThisNode = false;
     this.callsInNode = 0;
     this.nodeHistory.push({ nodeId, enteredAt: Date.now() });
@@ -449,6 +542,10 @@ export class FlowFeature implements AgentFeature {
   private getOutgoingEdges(fromNodeId: string): FlowEdge[] {
     if (!this.activeFlow) return [];
     return this.activeFlow.edges.filter(edge => edge.from === fromNodeId);
+  }
+
+  private getTransitionEdge(fromNodeId: string, toNodeId: string): FlowEdge | undefined {
+    return this.getOutgoingEdges(fromNodeId).find(edge => edge.to === toNodeId);
   }
 
   private getNextNodes(fromNodeId: string): FlowNode[] {
@@ -520,6 +617,196 @@ export class FlowFeature implements AgentFeature {
     }
 
     return { node: matched };
+  }
+
+  private getResolvedUserInputFeature(runtimeContext?: CompleteNodeRuntimeContext): UserInputFeatureLike | null {
+    const fromContext = runtimeContext?.getFeature?.<UserInputFeatureLike>('user-input');
+    if (fromContext?.requestUserChoices) {
+      return fromContext;
+    }
+    const fromAgent = typeof this.currentAgentRef?.getFeature === 'function'
+      ? this.currentAgentRef.getFeature('user-input')
+      : (this.currentAgentRef?.features instanceof Map ? this.currentAgentRef.features.get('user-input') : undefined);
+    return fromAgent?.requestUserChoices ? fromAgent as UserInputFeatureLike : null;
+  }
+
+  private normalizeInteractionGuidance(interaction: FlowInteractionConfig, nextNodeName: string): string {
+    const text = String(interaction.guidanceMessage || '').trim();
+    if (text) return text;
+    return [
+      `当前从本节点进入 "${nextNodeName}" 之前，需要由你先生成一组用户决策内容。`,
+      '请重新调用 complete_node，并在 interactionRequest 中补充决策标题、决策说明和 1~4 个选项。',
+      'interactionRequest.options 中每个选项都至少要有 id 和 label；如果某个选项会取消转移，请把该项 blocksTransition 设为 true。',
+      '重新调用时保持原本的 nextNodeId / nextNodeName 选择不变。',
+    ].join('\n');
+  }
+
+  private buildPendingInteractionRetryPrompt(): string {
+    if (!this.pendingInteractionRetry) return '';
+    const nextNodeName = this.pendingInteractionRetry.nextNodeName || this.pendingInteractionRetry.nextNodeId;
+    return [
+      `当前从本节点进入 "${nextNodeName}" 前，Flow 正在等待你再次调用 complete_node。`,
+      '你必须继续使用 flow feature 的 complete_node 工具，并在 interactionRequest 中补充本次用户决策的标题、说明和选项。',
+      '不要直接调用 ask_user_choice 或 ask_user_choices；这些只是底层 UI 实现，不负责本次状态转移。',
+      '重试时保持原本的 nextNodeId / nextNodeName 目标不变。',
+    ].join('\n');
+  }
+
+  private normalizeInteractionPrompt(config: { prompt?: string; question?: string }, nextNodeName: string): { prompt: string; question: string } {
+    const prompt = String(config.prompt || '').trim() || `进入 "${nextNodeName}" 前的用户决策`;
+    const question = String(config.question || '').trim() || `你希望如何处理进入 "${nextNodeName}" 这一步？`;
+    return { prompt, question };
+  }
+
+  private normalizeInteractionOptions(options: Array<FlowInteractionOption | NonNullable<FlowInteractionRequestPayload['options']>[number]> | undefined): Array<{
+    id: string;
+    label: string;
+    description?: string;
+    blocksTransition?: boolean;
+    allowSupplement?: boolean;
+    supplementRequired?: boolean;
+    supplementLabel?: string;
+    supplementPlaceholder?: string;
+  }> {
+    return (Array.isArray(options) ? options : [])
+      .map((option, index) => ({
+        id: String(option?.id || `option_${index + 1}`).trim(),
+        label: String(option?.label || '').trim(),
+        description: option?.description ? String(option.description) : undefined,
+        blocksTransition: Boolean(option?.blocksTransition),
+        allowSupplement: Boolean(option?.allowSupplement),
+        supplementRequired: Boolean(option?.supplementRequired),
+        supplementLabel: option?.supplementLabel ? String(option.supplementLabel) : undefined,
+        supplementPlaceholder: option?.supplementPlaceholder ? String(option.supplementPlaceholder) : undefined,
+      }))
+      .filter(option => option.id && option.label);
+  }
+
+  private buildInteractionSummary(
+    config: { prompt?: string; question?: string },
+    options: FlowInteractionOption[],
+    answer: {
+    optionId?: string;
+    supplementText?: string;
+    },
+    source: FlowInteractionConfig['mode'],
+  ): {
+    source: FlowInteractionConfig['mode'];
+    prompt?: string;
+    question?: string;
+    options: Array<{ id: string; label: string; description?: string; blocksTransition?: boolean }>;
+    selected: {
+      optionId?: string;
+      label?: string;
+      supplementText?: string;
+      blocksTransition: boolean;
+    };
+  } {
+    const selectedOption = options.find(option => option.id === answer.optionId);
+    return {
+      source,
+      prompt: config.prompt,
+      question: config.question,
+      options: options.map(option => ({
+        id: option.id,
+        label: option.label,
+        description: option.description,
+        blocksTransition: Boolean(option.blocksTransition),
+      })),
+      selected: {
+        optionId: answer.optionId,
+        label: selectedOption?.label,
+        supplementText: answer.supplementText,
+        blocksTransition: Boolean(selectedOption?.blocksTransition),
+      },
+    };
+  }
+
+  private async handleEdgeInteraction(params: {
+    edge: FlowEdge;
+    nextNode: FlowNode;
+    result: unknown;
+    interactionRequest?: FlowInteractionRequestPayload;
+    runtimeContext?: CompleteNodeRuntimeContext;
+  }): Promise<Record<string, unknown> | null> {
+    const interaction = params.edge.interaction;
+    if (!interaction) return null;
+
+    const source = interaction.mode;
+    const effectiveConfig = source === 'model-generated'
+      ? params.interactionRequest
+      : interaction;
+
+    if (source === 'model-generated' && !effectiveConfig) {
+      this.pendingInteractionRetry = {
+        fromNodeId: params.edge.from,
+        nextNodeId: params.nextNode.id,
+        nextNodeName: params.nextNode.name,
+      };
+      return {
+        success: false,
+        interactionRequired: true,
+        error: this.normalizeInteractionGuidance(interaction, params.nextNode.name),
+      };
+    }
+
+    const normalizedOptions = this.normalizeInteractionOptions(effectiveConfig?.options);
+    if (normalizedOptions.length === 0) {
+      if (source === 'model-generated') {
+        this.pendingInteractionRetry = {
+          fromNodeId: params.edge.from,
+          nextNodeId: params.nextNode.id,
+          nextNodeName: params.nextNode.name,
+        };
+      }
+      return {
+        success: false,
+        interactionRequired: source === 'model-generated',
+        error: source === 'model-generated'
+          ? `当前边要求模型生成决策内容，但 interactionRequest 中没有可用选项，无法进入 "${params.nextNode.name}"。`
+          : `当前边已配置预设决策内容，但没有可用选项，无法进入 "${params.nextNode.name}"。`,
+      };
+    }
+
+    const userInput = this.getResolvedUserInputFeature(params.runtimeContext);
+    if (!userInput) {
+      return {
+        success: false,
+        error: `当前边进入 "${params.nextNode.name}" 前需要用户决策，但 user-input feature 不可用。`,
+      };
+    }
+    this.pendingInteractionRetry = null;
+
+    const promptInfo = this.normalizeInteractionPrompt(effectiveConfig || interaction, params.nextNode.name);
+    const answers = await userInput.requestUserChoices(promptInfo.prompt, [{
+      id: `${params.edge.from}__${params.edge.to}__interaction`,
+      question: promptInfo.question,
+      options: normalizedOptions,
+    }]);
+    const answer = Array.isArray(answers) ? answers[0] || {} : {};
+    const interactionSummary = this.buildInteractionSummary({
+      prompt: promptInfo.prompt,
+      question: promptInfo.question,
+    }, normalizedOptions as FlowInteractionOption[], answer, source);
+
+    if (interactionSummary.selected.blocksTransition) {
+      return {
+        success: true,
+        cancelled: true,
+        message: `用户选择了阻塞项，已取消进入下一阶段 "${params.nextNode.name}"。`,
+        result: params.result,
+        interaction: interactionSummary,
+      };
+    }
+
+    this.pendingTransition = true;
+    this.pendingTargetNode = params.nextNode.id;
+    return {
+      success: true,
+      message: `已完成用户决策，准备进入下一阶段 "${params.nextNode.name}"。`,
+      result: params.result,
+      interaction: interactionSummary,
+    };
   }
 
   private getAvailableActions(): string {
@@ -973,6 +1260,7 @@ export class FlowFeature implements AgentFeature {
     if (this.toolRegistry) {
       this.applyDeclaredModeToolEffects(agent, nextModes);
       this.applyAdvancedToolOverrides(node);
+      this.applyPendingInteractionToolGuard();
     }
     this.effectiveModesByFeature = nextModes;
 
@@ -1054,6 +1342,17 @@ export class FlowFeature implements AgentFeature {
     const rules = this.getEffectiveToolRules(node);
     for (const rule of rules) {
       this.applyToolRule(rule);
+    }
+  }
+
+  private applyPendingInteractionToolGuard(): void {
+    if (!this.toolRegistry || !this.pendingInteractionRetry) return;
+    for (const toolName of ['ask_user_choice', 'ask_user_choices']) {
+      if (typeof this.toolRegistry.remove === 'function') {
+        this.toolRegistry.remove(toolName);
+      } else {
+        this.toolRegistry.disable(toolName);
+      }
     }
   }
 

@@ -1,0 +1,34 @@
+{
+  "name": "@agentdev/compact",
+  "version": "0.1.0",
+  "description": "compact feature for AgentDev",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "agentdev-feature.json"
+  ],
+  "scripts": {
+    "build": "tsup && npm run copy-assets",
+    "dev": "tsup --watch",
+    "copy-assets": "node scripts/copy-assets.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "agentdev": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.3.3",
+    "agentdev": "latest"
+  },
+  "keywords": [
+    "agentdev",
+    "feature",
+    "compact"
+  ],
+  "license": "MIT"
+}

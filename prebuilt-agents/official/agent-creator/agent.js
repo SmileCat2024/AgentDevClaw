@@ -38,6 +38,33 @@ function formatFeatureLabel(token) {
     .join(' ');
 }
 
+function normalizeFeatureToken(value) {
+  return cleanValue(value)
+    .replace(/^@agentdev\//, '')
+    .replace(/-feature$/, '');
+}
+
+function getFeatureConfigFromWorkspace(featureConfigs, token) {
+  if (!featureConfigs || typeof featureConfigs !== 'object') return {};
+  const candidates = new Set();
+  const rawToken = cleanValue(token);
+  const normalized = normalizeFeatureToken(rawToken);
+  if (rawToken) candidates.add(rawToken);
+  if (normalized) {
+    candidates.add(normalized);
+    candidates.add(`@agentdev/${normalized}`);
+    candidates.add(`@agentdev/${normalized}-feature`);
+  }
+
+  for (const key of candidates) {
+    const value = featureConfigs[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { ...value };
+    }
+  }
+  return {};
+}
+
 function readAgentCreatorWorkspaceState() {
   if (!existsSync(WORKSPACE_STATE_PATH)) {
     return null;
@@ -100,9 +127,22 @@ export class AgentCreatorAgent extends BasicAgent {
     const resolvedProjectRoot = config.projectRoot ?? PROTOCLAW_ROOT;
     const resolvedWorkspaceDir = config.workspaceDir ?? PROTOCLAW_ROOT;
     const assemblySessionMode = readCurrentSessionFormId() === 'assembly-form';
+    let preMcpConfig = null;
+
+    if (assemblySessionMode) {
+      const workspaceState = readAgentCreatorWorkspaceState();
+      const featureConfigs = workspaceState?.forms?.['feature-configs'] || {};
+      preMcpConfig = getFeatureConfigFromWorkspace(featureConfigs, 'mcp');
+    }
 
     super({
       ...config,
+      ...((preMcpConfig && Object.keys(preMcpConfig).length > 0) ? {
+        features: {
+          ...(config.features || {}),
+          mcp: preMcpConfig,
+        },
+      } : {}),
       projectRoot: resolvedProjectRoot,
       workspaceDir: resolvedWorkspaceDir,
       skillsDir: assemblySessionMode ? undefined : join(PROTOCLAW_ROOT, '.agentdev', 'skills'),

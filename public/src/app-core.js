@@ -207,6 +207,7 @@ const stopAgentAction = document.getElementById('stop-agent-action');
 const deleteAgentAction = document.getElementById('delete-agent-action');
 const sessionContextMenu = document.getElementById('session-context-menu');
 const openSessionAction = document.getElementById('open-session-action');
+const compactedResumeSessionAction = document.getElementById('compacted-resume-session-action');
 const deleteSessionAction = document.getElementById('delete-session-action');
 const projectContextMenu = document.getElementById('project-context-menu');
 const deleteProjectAction = document.getElementById('delete-project-action');
@@ -384,6 +385,11 @@ const I18N = {
     workspace_live_config: '配置状态',
     workspace_open_chat: '进入对话',
     workspace_new_chat: '新对话',
+    workspace_light_resume: '轻量继续',
+    workspace_compacted_badge: '压缩继续',
+    workspace_compacted_resume_confirm: '基于这条历史对话生成交接摘要，并在一个新会话里继续当前任务？',
+    workspace_compacted_resume_failed: '轻量继续失败: ',
+    workspace_compacted_resume_started: '已创建新的轻量继续会话。',
     qqbot_config_title: 'QQ 网关配置',
     qqbot_config_desc: '直接编辑当前项目里的 QQBot 配置文件。保存后会写入当前项目 .agentdev 目录。',
     qqbot_config_ready: '已配置',
@@ -610,6 +616,12 @@ const I18N = {
     workspace_live_session: 'Current Conversation',
     workspace_live_config: 'Config',
     workspace_open_chat: 'Open Chat',
+    workspace_new_chat: 'New Chat',
+    workspace_light_resume: 'Light Resume',
+    workspace_compacted_badge: 'Compacted',
+    workspace_compacted_resume_confirm: 'Create a handoff summary from this conversation and continue the task in a new session?',
+    workspace_compacted_resume_failed: 'Light resume failed: ',
+    workspace_compacted_resume_started: 'Created a new compacted-resume session.',
     qqbot_config_title: 'QQ Gateway Config',
     qqbot_config_desc: 'Edit the QQBot config inside this project. Saving writes to the local .agentdev directory.',
     qqbot_config_ready: 'Configured',

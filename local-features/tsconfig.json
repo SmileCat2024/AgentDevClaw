@@ -12,6 +12,8 @@
   },
   "include": [
     "./index.ts",
+    "./context-handoff-seed/src/**/*.ts",
+    "./context-handoff-seed/test/**/*.ts",
     "./feature-dev/src/**/*.ts",
     "./agent-dev/src/**/*.ts",
     "./flow/src/**/*.ts",

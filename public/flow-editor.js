@@ -35,6 +35,11 @@
       open: false,
       query: '',
     },
+    decisionOptionEditor: {
+      open: false,
+      edgeId: '',
+      optionIndex: -1,
+    },
     panels: {
       library: false,
       inspector: false,
@@ -130,6 +135,16 @@
     return state.graph?.nodes?.find(node => node.id === state.selectedNodeId) || null;
   }
 
+  function selectedEdge() {
+    return getEdgeById(state.selectedEdgeId);
+  }
+
+  function selectedDecisionOption() {
+    const edge = getEdgeById(state.decisionOptionEditor.edgeId);
+    if (!edge?.interaction?.options) return null;
+    return edge.interaction.options[state.decisionOptionEditor.optionIndex] || null;
+  }
+
   function isWorkflowHead(node) {
     return !!(node && (node.type === 'workflow-head' || node.kind === 'workflow-head'));
   }
@@ -181,6 +196,11 @@
     });
     migrateLegacyWorkflowHeads(graph);
     normalizeWorkflowMembership(graph);
+    graph.edges.forEach(edge => {
+      if (!edgeAllowsInteraction(edge, graph)) {
+        delete edge.interaction;
+      }
+    });
     return graph;
   }
 
@@ -551,12 +571,80 @@
     return `${edge.from}__${edge.to}`;
   }
 
+  function getEdgeById(id, graph = state.graph) {
+    if (!graph || !id) return null;
+    const [from, to] = String(id || '').split('__');
+    return graph.edges.find(edge => edge.from === from && edge.to === to) || null;
+  }
+
+  function createInteractionOption(index) {
+    return {
+      id: `option_${index + 1}`,
+      label: text(`选项 ${index + 1}`, `Option ${index + 1}`),
+      description: '',
+      blocksTransition: false,
+      allowSupplement: false,
+      supplementRequired: false,
+      supplementLabel: '',
+      supplementPlaceholder: '',
+    };
+  }
+
+  function edgeAllowsInteraction(edge, graph = state.graph) {
+    if (!graph || !edge) return false;
+    const from = graph.nodes?.find(node => node.id === edge.from);
+    const to = graph.nodes?.find(node => node.id === edge.to);
+    if (!from || !to) return false;
+    return !isWorkflowHead(from);
+  }
+
+  function clearDecisionOptionEditorIfNeeded(edgeIdValue) {
+    if (state.decisionOptionEditor.edgeId !== edgeIdValue) return;
+    state.decisionOptionEditor.open = false;
+    state.decisionOptionEditor.edgeId = '';
+    state.decisionOptionEditor.optionIndex = -1;
+  }
+
+  function removeEdgeInteraction(edgeIdValue, rerender = true) {
+    const edge = getEdgeById(edgeIdValue);
+    if (!edge?.interaction) return false;
+    pushUndo(cloneGraph(state.graph));
+    delete edge.interaction;
+    clearDecisionOptionEditorIfNeeded(edgeIdValue);
+    markGraphChanged({ rerender });
+    if (rerender) render();
+    return true;
+  }
+
+  function ensureEdgeInteraction(edge) {
+    if (!edge) return null;
+    if (!edgeAllowsInteraction(edge)) {
+      delete edge.interaction;
+      clearDecisionOptionEditorIfNeeded(edgeId(edge));
+      return null;
+    }
+    if (!edge.interaction || typeof edge.interaction !== 'object') {
+      edge.interaction = {
+        mode: 'preset',
+        guidanceMessage: '',
+        prompt: '',
+        question: '',
+        options: [createInteractionOption(0)],
+      };
+    }
+    if (!Array.isArray(edge.interaction.options) || !edge.interaction.options.length) {
+      edge.interaction.options = [createInteractionOption(0)];
+    }
+    return edge.interaction;
+  }
+
   function canConnect(fromId, toId) {
     const graph = state.graph;
     if (!graph || !fromId || !toId || fromId === toId) return false;
     const from = graph.nodes.find(node => node.id === fromId);
     const to = graph.nodes.find(node => node.id === toId);
     if (!from || !to || isWorkflowHead(to)) return false;
+    if (isWorkflowHead(from) && graph.edges.some(edge => edge.from === fromId && edge.to !== toId)) return false;
     const fromComponent = componentForNode(fromId);
     const toComponent = componentForNode(toId);
     if (toComponent && fromComponent?.id !== toComponent.id) return false;
@@ -743,6 +831,7 @@
       renderCanvas(),
       renderFloatingPanel('library', renderWorkflowPanel(), 'left'),
       renderToolPickerPanel(),
+      renderDecisionOptionEditorPanel(),
       renderFloatingPanel('inspector', renderInspectorPanel(), 'right'),
       renderFloatingPanel('help', renderHelpPanel(), 'center'),
       dialogWasOpen && dialogEl ? '' : renderNodePromptDialog(),
@@ -855,9 +944,18 @@
   }
 
   function renderEdgeMenu() {
-    return renderMenu(state.edgeMenu, [
-      ['window.ClawFlowEditor.deleteSelectedEdgeFromMenu()', text('删除连线', 'Delete edge')],
-    ]);
+    const edge = getEdgeById(state.edgeMenu?.edgeId);
+    const items = [];
+    if (edgeAllowsInteraction(edge)) {
+      if (edge?.interaction?.mode) {
+        items.push(['window.ClawFlowEditor.deleteSelectedEdgeInteractionFromMenu()', text('删除决策节点', 'Delete decision')]);
+      } else {
+        items.push(['window.ClawFlowEditor.addSelectedEdgeInteractionFromMenu(&quot;model-generated&quot;)', text('添加模型生成决策内容', 'Add model-generated decision')]);
+        items.push(['window.ClawFlowEditor.addSelectedEdgeInteractionFromMenu(&quot;preset&quot;)', text('添加预设决策内容', 'Add preset decision')]);
+      }
+    }
+    items.push(['window.ClawFlowEditor.deleteSelectedEdgeFromMenu()', text('删除连线', 'Delete edge')]);
+    return renderMenu(state.edgeMenu, items);
   }
 
   function renderCanvasMenu() {
@@ -914,6 +1012,10 @@
 
   function renderInspectorPanel() {
     if (!state.graph) return '<div class="flow-editor-empty">' + esc(text('编排图加载中。', 'Graph loading.')) + '</div>';
+    const edge = selectedEdge();
+    if (edge) {
+      return renderEdgeInspector(edge);
+    }
     const node = selectedNode();
     const workflow = selectedWorkflow();
     const active = isWorkflowHead(node) ? 'workflow' : (state.inspectorTab === 'workflow' ? 'workflow' : 'node');
@@ -996,6 +1098,91 @@
       '<div class="flow-editor-subtitle">' + esc(text('onEnter 函数调用', 'onEnter Function Calls')) + '</div>',
       renderOnEnterActions(node),
       '</div>',
+    ].join('');
+  }
+
+  function edgeEndpointName(nodeId) {
+    const node = state.graph?.nodes?.find(item => item.id === nodeId);
+    return node?.name || nodeId;
+  }
+
+  function interactionModeLabel(mode) {
+    if (mode === 'model-generated') return text('模型生成', 'Model-generated');
+    if (mode === 'preset') return text('预设内容', 'Preset');
+    return text('未启用', 'Off');
+  }
+
+  function decisionOutcomeLabel(option) {
+    return option?.blocksTransition
+      ? text('阻塞转移', 'Blocks transition')
+      : text('继续转移', 'Continues transition');
+  }
+
+  function renderDecisionOptionList(edge, options) {
+    const id = edgeId(edge);
+    return options.length
+      ? '<div class="flow-editor-tool-rule-list">' + options.map(function (option, index) {
+        const supplement = option.allowSupplement
+          ? (option.supplementRequired ? text('附加输入必填', 'Supplement required') : text('可附加输入', 'Supplement optional'))
+          : text('无附加输入', 'No supplement');
+        return [
+          '<div class="flow-editor-tool-rule">',
+          '<div class="flow-editor-tool-rule-main">',
+          '<div class="flow-editor-tool-name">' + esc(option.label || text('未命名选项', 'Untitled option')) + '</div>',
+          '<div class="flow-editor-tool-meta">' + esc([option.id, decisionOutcomeLabel(option), supplement].filter(Boolean).join(' · ')) + '</div>',
+          option.description ? '<div class="flow-editor-tool-meta">' + esc(option.description) + '</div>' : '',
+          '</div>',
+          '<div class="flow-editor-tool-rule-actions">',
+          '<button class="workspace-action secondary" type="button" onclick="window.ClawFlowEditor.openDecisionOptionEditor(&quot;' + esc(id) + '&quot;, ' + index + ')">' + esc(text('编辑细节', 'Edit details')) + '</button>',
+          '</div>',
+          '</div>',
+        ].join('');
+      }).join('') + '</div>'
+      : '<div class="flow-editor-empty">' + esc(text('还没有预设选项。先添加一个选项。', 'No preset options yet. Add one to start.')) + '</div>';
+  }
+
+  function renderEdgeInspector(edge) {
+    const id = edgeId(edge);
+    const supportsInteraction = edgeAllowsInteraction(edge);
+    const interaction = edge.interaction || null;
+    const mode = interaction?.mode || 'off';
+    const options = Array.isArray(interaction?.options) ? interaction.options : [];
+    return [
+      '<div class="flow-editor-panel-section">',
+      '<div class="flow-editor-subtitle">' + esc(text('用户决策', 'User Decision')) + '</div>',
+      '<div class="flow-editor-empty" style="margin-bottom:10px;">' + esc(edgeEndpointName(edge.from) + ' -> ' + edgeEndpointName(edge.to)) + '</div>',
+      supportsInteraction ? select(`edge:${id}:mode`, text('决策内容来源', 'Decision content source'), mode, [
+        ['off', text('关闭', 'Off')],
+        ['model-generated', text('模型生成决策内容', 'Model-generated decision')],
+        ['preset', text('预设决策内容', 'Preset decision')],
+      ]) : '<div class="flow-editor-empty">' + esc(text('工作流头节点到首个流程节点的连线只负责定义入口，不允许设置用户决策。', 'The edge from a workflow head to its first runtime node defines the workflow entry and cannot host a user decision.')) + '</div>',
+      !supportsInteraction ? '' : mode === 'off'
+        ? '<div class="flow-editor-empty">' + esc(text('关闭后，这条边会像普通状态转移一样直接切换。', 'When disabled, this edge behaves like a normal transition.')) + '</div>'
+        : [
+            '<div class="flow-editor-empty" style="margin-bottom:10px;">'
+              + esc(
+                interaction?.mode === 'model-generated'
+                  ? text('当前方式下，这里只负责告诉模型“如何生成这一次的用户决策内容”。首次 complete_node 会返回指导，模型第二次调用时需要自己提交题目和选项。', 'In this mode, this edge only tells the model how to generate the user decision content. The first complete_node returns guidance, and the second call must submit the prompt and options.')
+                  : text('当前方式下，题目说明和选项都由你在编排图里提前写好，运行时会直接使用。', 'In this mode, the prompt and options are all predefined here and used directly at runtime.')
+              )
+              + '</div>',
+            interaction?.mode === 'model-generated'
+              ? textarea(`edge:${id}:guidanceMessage`, text('模型重试引导文案', 'Retry guidance for model'), interaction.guidanceMessage || '')
+              : '',
+            interaction?.mode === 'preset' ? field(`edge:${id}:prompt`, text('题目标题', 'Prompt title'), interaction?.prompt || '') : '',
+            interaction?.mode === 'preset' ? textarea(`edge:${id}:question`, text('题目说明', 'Prompt body'), interaction?.question || '') : '',
+          ].join(''),
+      '</div>',
+      !supportsInteraction || mode !== 'preset' ? '' : [
+        '<div class="flow-editor-panel-section">',
+        '<div class="flow-editor-subtitle">' + esc(text('预设选项', 'Preset Options')) + '</div>',
+        '<div class="flow-editor-empty" style="margin-bottom:10px;">' + esc(text('主面板只管理题目和选项列表；每个选项的行为与附加输入设置请在子面板中编辑。', 'The main panel manages the prompt and option list; edit per-option behavior and supplement settings in the child panel.')) + '</div>',
+        renderDecisionOptionList(edge, options),
+        '<div class="flow-editor-actions compact">',
+        '<button class="workspace-action secondary" type="button" onclick="window.ClawFlowEditor.addEdgeInteractionOption(&quot;' + esc(id) + '&quot;)">' + esc(text('添加选项', 'Add option')) + '</button>',
+        '</div>',
+        '</div>',
+      ].join(''),
     ].join('');
   }
 
@@ -1174,6 +1361,43 @@
       '<input class="flow-editor-input" value="' + esc(state.toolPicker.query) + '" placeholder="' + esc(text('搜索工具或 Feature', 'Search tools or Features')) + '" oninput="window.ClawFlowEditor.setToolPickerQuery(this.value)">',
       '<div class="flow-editor-tool-library">',
       grouped.length ? grouped.map(group => renderToolFeatureGroup(node, group)).join('') : '<div class="flow-editor-empty">' + esc(text('没有匹配的工具。', 'No matching tools.')) + '</div>',
+      '</div>',
+      '</aside>',
+    ].join('');
+  }
+
+  function renderDecisionOptionEditorPanel() {
+    if (!state.decisionOptionEditor.open) return '';
+    const edge = getEdgeById(state.decisionOptionEditor.edgeId);
+    const option = selectedDecisionOption();
+    if (!edge || !option) return '';
+    const optionIndex = state.decisionOptionEditor.optionIndex;
+    const id = edgeId(edge);
+    return [
+      '<aside class="flow-editor-floating-panel flow-editor-tool-picker flow-editor-decision-option-picker">',
+      '<div class="flow-editor-floating-head">',
+      '<div><div class="flow-editor-panel-title">' + esc(text('编辑决策选项', 'Edit Decision Option')) + '</div><div class="flow-editor-tool-picker-subtitle">' + esc(edgeEndpointName(edge.from) + ' -> ' + edgeEndpointName(edge.to)) + '</div></div>',
+      '<button class="flow-editor-icon-button" type="button" onclick="window.ClawFlowEditor.closeDecisionOptionEditor()">×</button>',
+      '</div>',
+      field(`edgeOption:${id}:${optionIndex}:label`, text('选项文案', 'Option label'), option.label || ''),
+      field(`edgeOption:${id}:${optionIndex}:id`, text('选项 ID', 'Option ID'), option.id || ''),
+      textarea(`edgeOption:${id}:${optionIndex}:description`, text('选项说明', 'Description'), option.description || ''),
+      select(`edgeOption:${id}:${optionIndex}:blocksTransition`, text('选择结果', 'Decision result'), String(Boolean(option.blocksTransition)), [
+        ['false', text('继续进入目标节点', 'Continue to target node')],
+        ['true', text('阻塞本次转移', 'Block this transition')],
+      ]),
+      select(`edgeOption:${id}:${optionIndex}:allowSupplement`, text('附加输入', 'Supplement input'), String(Boolean(option.allowSupplement)), [
+        ['false', text('不需要', 'Disabled')],
+        ['true', text('允许填写', 'Enabled')],
+      ]),
+      option.allowSupplement ? select(`edgeOption:${id}:${optionIndex}:supplementRequired`, text('附加输入是否必填', 'Supplement required'), String(Boolean(option.supplementRequired)), [
+        ['false', text('可选', 'Optional')],
+        ['true', text('必填', 'Required')],
+      ]) : '',
+      option.allowSupplement ? field(`edgeOption:${id}:${optionIndex}:supplementLabel`, text('附加输入标签', 'Supplement label'), option.supplementLabel || '') : '',
+      option.allowSupplement ? field(`edgeOption:${id}:${optionIndex}:supplementPlaceholder`, text('附加输入占位提示', 'Supplement placeholder'), option.supplementPlaceholder || '') : '',
+      '<div class="flow-editor-actions compact">',
+      '<button class="flow-editor-mini-button danger" type="button" onclick="window.ClawFlowEditor.removeEdgeInteractionOption(&quot;' + esc(id) + '&quot;, ' + optionIndex + ')">' + esc(text('删除这个选项', 'Delete this option')) + '</button>',
       '</div>',
       '</aside>',
     ].join('');
@@ -1926,7 +2150,7 @@
       const endX = Number(to.position?.x || 0);
       const endY = Number(to.position?.y || 0) + NODE_H / 2;
       const edgeId = `${edge.from}__${edge.to}`;
-      return '<path class="flow-editor-edge' + (state.selectedEdgeId === edgeId ? ' active' : '') + '" data-edge-id="' + esc(edgeId) + '" data-edge-from="' + esc(edge.from) + '" data-edge-to="' + esc(edge.to) + '" d="' + esc(bezierPath(startX, startY, endX, endY)) + '" marker-end="url(#flow-arrow)" onclick="window.ClawFlowEditor.selectEdge(event, &quot;' + esc(edgeId) + '&quot;)"></path>';
+      return '<path class="flow-editor-edge' + (state.selectedEdgeId === edgeId ? ' active' : '') + '" data-edge-id="' + esc(edgeId) + '" data-edge-from="' + esc(edge.from) + '" data-edge-to="' + esc(edge.to) + '" d="' + esc(bezierPath(startX, startY, endX, endY)) + '" marker-end="url(#flow-arrow)" onclick="window.ClawFlowEditor.selectEdge(event, &quot;' + esc(edgeId) + '&quot;)" oncontextmenu="window.ClawFlowEditor.openEdgeMenu(event, &quot;' + esc(edgeId) + '&quot;)"></path>';
     }).join('');
     return [
       '<svg class="flow-editor-svg">',
@@ -1949,7 +2173,30 @@
   }
 
   function renderEdgeLabels(nodes, edges) {
-    return '';
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    return edges.map(edge => {
+      if (!edge?.interaction?.mode || !edgeAllowsInteraction(edge)) return '';
+      const from = byId.get(edge.from);
+      const to = byId.get(edge.to);
+      if (!from || !to) return '';
+      const startX = Number(from.position?.x || 0) + NODE_W;
+      const startY = Number(from.position?.y || 0) + NODE_H / 2;
+      const endX = Number(to.position?.x || 0);
+      const endY = Number(to.position?.y || 0) + NODE_H / 2;
+      const midX = Math.round((startX + endX) / 2);
+      const midY = Math.round((startY + endY) / 2);
+      const id = edgeId(edge);
+      const optionCount = Array.isArray(edge.interaction.options) ? edge.interaction.options.length : 0;
+      return [
+        '<button class="flow-editor-edge-badge' + (state.selectedEdgeId === id ? ' active' : '') + '" type="button" data-edge-badge-id="' + esc(id) + '"',
+        ' style="left:' + midX + 'px;top:' + midY + 'px"',
+        ' onclick="window.ClawFlowEditor.selectEdge(event, &quot;' + esc(id) + '&quot;)"',
+        ' oncontextmenu="window.ClawFlowEditor.openEdgeMenu(event, &quot;' + esc(id) + '&quot;)">',
+        '<span class="flow-editor-edge-badge-title">' + esc(text('决策', 'Decision')) + '</span>',
+        '<span class="flow-editor-edge-badge-meta">' + esc(interactionModeLabel(edge.interaction.mode)) + ' · ' + esc(String(optionCount)) + '</span>',
+        '</button>',
+      ].join('');
+    }).join('');
   }
 
   function renderNodeCard(node) {
@@ -2029,6 +2276,37 @@
     const parts = String(name || '').split(':');
     if (parts[0] === 'graph') {
       graph[parts[1]] = value;
+    } else if (parts[0] === 'edge') {
+      const edge = getEdgeById(parts[1], graph);
+      if (!edge) return;
+      const key = parts[2];
+      if (key === 'mode') {
+        if (!value || value === 'off') {
+          delete edge.interaction;
+          if (state.decisionOptionEditor.edgeId === parts[1]) {
+            state.decisionOptionEditor.open = false;
+            state.decisionOptionEditor.edgeId = '';
+            state.decisionOptionEditor.optionIndex = -1;
+          }
+        } else {
+          const interaction = ensureEdgeInteraction(edge);
+          interaction.mode = value;
+        }
+        rerender = true;
+      } else {
+        const interaction = ensureEdgeInteraction(edge);
+        interaction[key] = value;
+      }
+    } else if (parts[0] === 'edgeOption') {
+      const edge = getEdgeById(parts[1], graph);
+      if (!edge) return;
+      const interaction = ensureEdgeInteraction(edge);
+      const index = Number(parts[2]);
+      const key = parts[3];
+      interaction.options[index] = interaction.options[index] || createInteractionOption(index);
+      interaction.options[index][key] = ['blocksTransition', 'allowSupplement', 'supplementRequired'].includes(key)
+        ? Boolean(coerceValue(value))
+        : value;
     } else if (parts[0] === 'workflow') {
       const wid = parts[1];
       graph.workflows[wid] = graph.workflows[wid] || { id: wid };
@@ -2126,6 +2404,76 @@
       }
     }
     markGraphChanged({ rerender });
+  }
+
+  function addEdgeInteractionOption(edgeIdValue) {
+    const edge = getEdgeById(edgeIdValue);
+    if (!edge) return;
+    if (!edgeAllowsInteraction(edge)) return;
+    pushUndo(cloneGraph(state.graph));
+    const interaction = ensureEdgeInteraction(edge);
+    if (!interaction) return;
+    if (interaction.options.length >= 4) return;
+    interaction.options.push(createInteractionOption(interaction.options.length));
+    state.decisionOptionEditor = {
+      open: true,
+      edgeId: edgeIdValue,
+      optionIndex: interaction.options.length - 1,
+    };
+    markGraphChanged({ rerender: true });
+    render();
+  }
+
+  function addEdgeInteraction(edgeIdValue, mode) {
+    const edge = getEdgeById(edgeIdValue);
+    if (!edge || !edgeAllowsInteraction(edge)) return false;
+    pushUndo(cloneGraph(state.graph));
+    const interaction = ensureEdgeInteraction(edge);
+    if (!interaction) return false;
+    interaction.mode = mode === 'model-generated' ? 'model-generated' : 'preset';
+    if (!interaction.guidanceMessage) interaction.guidanceMessage = '';
+    if (!interaction.prompt) interaction.prompt = '';
+    if (!interaction.question) interaction.question = '';
+    state.selectedEdgeId = edgeIdValue;
+    state.selectedNodeId = '';
+    state.selectedWorkflowId = '';
+    state.panels.inspector = true;
+    markGraphChanged({ rerender: true });
+    render();
+    return true;
+  }
+
+  function removeEdgeInteractionOption(edgeIdValue, index) {
+    const edge = getEdgeById(edgeIdValue);
+    if (!edge?.interaction?.options) return;
+    pushUndo(cloneGraph(state.graph));
+    edge.interaction.options.splice(index, 1);
+    if (!edge.interaction.options.length) {
+      edge.interaction.options.push(createInteractionOption(0));
+    }
+    if (state.decisionOptionEditor.edgeId === edgeIdValue) {
+      state.decisionOptionEditor.open = false;
+      state.decisionOptionEditor.edgeId = '';
+      state.decisionOptionEditor.optionIndex = -1;
+    }
+    markGraphChanged({ rerender: true });
+    render();
+  }
+
+  function openDecisionOptionEditor(edgeIdValue, optionIndex) {
+    state.decisionOptionEditor = {
+      open: true,
+      edgeId: edgeIdValue,
+      optionIndex,
+    };
+    render();
+  }
+
+  function closeDecisionOptionEditor() {
+    state.decisionOptionEditor.open = false;
+    state.decisionOptionEditor.edgeId = '';
+    state.decisionOptionEditor.optionIndex = -1;
+    render();
   }
 
   function coerceValue(value) {
@@ -2535,6 +2883,13 @@
     const menu = state.connectionMenu;
     const graph = state.graph;
     if (!menu || !graph) return;
+    const fromNode = graph.nodes.find(node => node.id === menu.from);
+    if (fromNode && isWorkflowHead(fromNode) && graph.edges.some(edge => edge.from === menu.from)) {
+      window.alert(text('工作流头节点只能连向一个首个流程节点。', 'A workflow head can connect to only one first runtime node.'));
+      state.connectionMenu = null;
+      render();
+      return;
+    }
     pushUndo(cloneGraph(state.graph));
     const node = createNode({ x: Number(menu.worldX || 0), y: Number(menu.worldY || 0) - NODE_H / 2 }, '');
     graph.nodes.push(node);
@@ -2596,6 +2951,11 @@
     if (active && active.isContentEditable) return;
     if (state.promptDialog.open) return;
     if (state.selectedEdgeId) {
+      const edge = getEdgeById(state.selectedEdgeId);
+      if (edge?.interaction && edgeAllowsInteraction(edge)) {
+        removeEdgeInteraction(state.selectedEdgeId);
+        return;
+      }
       removeEdge(state.selectedEdgeId);
       return;
     }
@@ -2654,6 +3014,7 @@
     pushUndo(cloneGraph(state.graph));
     const [from, to] = String(edgeId || '').split('__');
     graph.edges = graph.edges.filter(edge => !(edge.from === from && edge.to === to));
+    clearDecisionOptionEditorIfNeeded(edgeId);
     state.selectedEdgeId = '';
     markGraphChanged();
     render();
@@ -2665,6 +3026,20 @@
       removeEdge(id);
       return;
     }
+    state.selectedEdgeId = id;
+    state.selectedNodeId = '';
+    state.selectedWorkflowId = '';
+    state.toolPicker.open = false;
+    state.edgeMenu = null;
+    state.connectionMenu = null;
+    state.canvasMenu = null;
+    state.panels.inspector = true;
+    render();
+  }
+
+  function openEdgeMenu(event, id) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
     state.selectedEdgeId = id;
     state.selectedNodeId = '';
     state.selectedWorkflowId = '';
@@ -2683,8 +3058,23 @@
 
   function deleteSelectedEdgeFromMenu() {
     if (!state.edgeMenu?.edgeId) return;
-    removeEdge(state.edgeMenu.edgeId);
+    const edgeIdValue = state.edgeMenu.edgeId;
     state.edgeMenu = null;
+    removeEdge(edgeIdValue);
+  }
+
+  function deleteSelectedEdgeInteractionFromMenu() {
+    if (!state.edgeMenu?.edgeId) return;
+    const edgeIdValue = state.edgeMenu.edgeId;
+    state.edgeMenu = null;
+    removeEdgeInteraction(edgeIdValue);
+  }
+
+  function addSelectedEdgeInteractionFromMenu(mode) {
+    if (!state.edgeMenu?.edgeId) return;
+    const edgeIdValue = state.edgeMenu.edgeId;
+    state.edgeMenu = null;
+    addEdgeInteraction(edgeIdValue, mode);
   }
 
   function startNodeDrag(event, nodeId) {
@@ -2782,7 +3172,7 @@
 
   function startCanvasPan(event) {
     if (event.button !== 0) return;
-    if (event.target?.closest?.('.flow-editor-node, .flow-editor-workflow-frame, .flow-editor-floating-panel, .flow-editor-toolbar, .flow-editor-edge, .flow-editor-zoom-controls')) return;
+    if (event.target?.closest?.('.flow-editor-node, .flow-editor-workflow-frame, .flow-editor-floating-panel, .flow-editor-toolbar, .flow-editor-edge, .flow-editor-edge-badge, .flow-editor-zoom-controls')) return;
     if (!state.graph) return;
     event.preventDefault();
     const v = viewport();
@@ -2838,6 +3228,20 @@
         Number(to.position?.y || 0) + NODE_H / 2,
       ));
     });
+    (graph.edges || []).forEach(edge => {
+      if (!edge?.interaction?.mode) return;
+      const from = byId.get(edge.from);
+      const to = byId.get(edge.to);
+      if (!from || !to) return;
+      const badge = document.querySelector('[data-edge-badge-id="' + cssEscape(edgeId(edge)) + '"]');
+      if (!badge) return;
+      const startX = Number(from.position?.x || 0) + NODE_W;
+      const startY = Number(from.position?.y || 0) + NODE_H / 2;
+      const endX = Number(to.position?.x || 0);
+      const endY = Number(to.position?.y || 0) + NODE_H / 2;
+      badge.style.left = Math.round((startX + endX) / 2) + 'px';
+      badge.style.top = Math.round((startY + endY) / 2) + 'px';
+    });
     computeComponents(graph).forEach(component => {
       const frame = component.frame || computeWorkflowFrame(component);
       const frameEl = document.querySelector('[data-flow-workflow-id="' + cssEscape(component.id) + '"]');
@@ -2873,12 +3277,15 @@
     document.querySelectorAll('.flow-editor-node.active').forEach(node => node.classList.remove('active'));
     document.querySelectorAll('.flow-editor-workflow-frame.active').forEach(frame => frame.classList.remove('active'));
     document.querySelectorAll('.flow-editor-edge.active').forEach(edge => edge.classList.remove('active'));
+    document.querySelectorAll('.flow-editor-edge-badge.active').forEach(edge => edge.classList.remove('active'));
     const selected = document.querySelector('[data-flow-node-id="' + cssEscape(state.selectedNodeId) + '"]');
     if (selected) selected.classList.add('active');
     const selectedFrame = document.querySelector('[data-flow-workflow-id="' + cssEscape(state.selectedWorkflowId) + '"]');
     if (selectedFrame) selectedFrame.classList.add('active');
     const selectedEdge = document.querySelector('[data-edge-id="' + cssEscape(state.selectedEdgeId) + '"]');
     if (selectedEdge) selectedEdge.classList.add('active');
+    const selectedBadge = document.querySelector('[data-edge-badge-id="' + cssEscape(state.selectedEdgeId) + '"]');
+    if (selectedBadge) selectedBadge.classList.add('active');
   }
 
   function cssEscape(value) {
@@ -3013,6 +3420,11 @@
           state.selectedEdgeId = '';
           markGraphChanged();
           state.selectedWorkflowId = componentForNode(targetId)?.id || '';
+        } else {
+          const fromNode = graph.nodes.find(node => node.id === state.connecting.from);
+          if (fromNode && isWorkflowHead(fromNode) && graph.edges.some(edge => edge.from === state.connecting.from)) {
+            window.alert(text('工作流头节点只能连向一个首个流程节点。', 'A workflow head can connect to only one first runtime node.'));
+          }
         }
       } else if (graph) {
         const wrap = document.getElementById('flow-editor-canvas-wrap');
@@ -3087,14 +3499,21 @@
       render();
       return;
     }
-    if (event?.target?.closest?.('.flow-editor-node, .flow-editor-workflow-frame, .flow-editor-edge, button, input, textarea, select')) return;
+    if (state.decisionOptionEditor.open && !event?.target?.closest?.('.flow-editor-decision-option-picker')) {
+      state.decisionOptionEditor.open = false;
+      state.decisionOptionEditor.edgeId = '';
+      state.decisionOptionEditor.optionIndex = -1;
+      render();
+      return;
+    }
+    if (event?.target?.closest?.('.flow-editor-node, .flow-editor-workflow-frame, .flow-editor-edge, .flow-editor-edge-badge, button, input, textarea, select')) return;
     state.connecting = null;
   }
 
   function openCanvasMenu(event) {
     const canvas = document.getElementById('flow-editor-canvas-wrap');
     if (!state.graph || !canvas) return;
-    if (event.target?.closest?.('.flow-editor-node, .flow-editor-floating-panel, .flow-editor-toolbar, .flow-editor-edge, .flow-editor-zoom-controls, .flow-editor-connection-menu')) return;
+    if (event.target?.closest?.('.flow-editor-node, .flow-editor-floating-panel, .flow-editor-toolbar, .flow-editor-edge, .flow-editor-edge-badge, .flow-editor-zoom-controls, .flow-editor-connection-menu')) return;
     event.preventDefault();
     event.stopPropagation();
     const rect = canvas.getBoundingClientRect();
@@ -3197,7 +3616,9 @@
     setEntry,
     removeEdge,
     selectEdge,
+    openEdgeMenu,
     deleteSelectedEdgeFromMenu,
+    deleteSelectedEdgeInteractionFromMenu,
     clearTransient,
     openCanvasMenu,
     startNodeDrag,
@@ -3229,6 +3650,11 @@
     deleteOnEnterAction,
     addWorkflowVariable,
     deleteWorkflowVariable,
+    addEdgeInteractionOption,
+    addSelectedEdgeInteractionFromMenu,
+    openDecisionOptionEditor,
+    closeDecisionOptionEditor,
+    removeEdgeInteractionOption,
     reloadCapabilities,
     openNodePromptEditor: function (nodeId) { openPromptEditor('node', nodeId, (ensurePromptRules(state.graph?.nodes?.find(function (n) { return n.id === nodeId; }))[0] || {}).id || ''); },
     closeNodePromptEditor: closePromptEditor,

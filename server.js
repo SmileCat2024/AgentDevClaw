@@ -9,6 +9,10 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'module';
 import { ViewerWorker } from 'agentdev';
+import {
+  exportHistoryOnlyHandoffPackage,
+  readHandoffPackage,
+} from './server/context-continuity/handoff-package.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1693,6 +1697,7 @@ async function readSessionIndex(agentId) {
           targetFiles: cleanSessionText(session.targetFiles),
           referenceMaterials: cleanSessionText(session.referenceMaterials),
           openDirectory: cleanSessionText(session.openDirectory),
+          metadata: normalizeSessionMetadata(session.metadata),
         }))
       : [];
     return {
@@ -1730,6 +1735,26 @@ function buildSessionTitle(createdAtIso) {
 
 function cleanSessionText(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeSessionMetadata(raw = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return {};
+  }
+
+  const metadata = {
+    resumeMode: cleanSessionText(raw.resumeMode),
+    sourceAgentId: cleanSessionText(raw.sourceAgentId),
+    sourceSessionId: cleanSessionText(raw.sourceSessionId),
+    handoffId: cleanSessionText(raw.handoffId),
+    handoffPath: cleanSessionText(raw.handoffPath),
+    handoffCreatedAt: cleanSessionText(raw.handoffCreatedAt),
+    handoffSummaryKind: cleanSessionText(raw.handoffSummaryKind),
+  };
+
+  return Object.fromEntries(
+    Object.entries(metadata).filter(([, value]) => value),
+  );
 }
 
 function sanitizeProjectDocsetId(value) {
@@ -2030,6 +2055,7 @@ function buildNamedSessionTitle(name, createdAtIso) {
 async function summarizePrebuiltSession(agentId, record) {
   const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
   const normalizedAgentId = sanitizeSessionFragment(agentId);
+  const metadata = normalizeSessionMetadata(record.metadata);
   const workspaceState = isWorkspaceSessionAgent(agentId)
     ? await readWorkspaceState(agentId)
     : null;
@@ -2073,6 +2099,7 @@ async function summarizePrebuiltSession(agentId, record) {
       expectedOutput,
       targetFiles,
       referenceMaterials,
+      metadata,
       formId,
       openDirectory,
       createdAt: record.createdAt || stat.birthtime.toISOString(),
@@ -2096,6 +2123,7 @@ async function summarizePrebuiltSession(agentId, record) {
       expectedOutput,
       targetFiles,
       referenceMaterials,
+      metadata,
       formId,
       openDirectory,
       createdAt: record.createdAt || new Date().toISOString(),
@@ -2122,6 +2150,7 @@ async function listPrebuiltSessions(agentId) {
 async function createPrebuiltSession(agentId, options = {}) {
   const index = await readSessionIndex(agentId);
   const normalizedAgentId = sanitizeSessionFragment(agentId);
+  const sessionMetadata = normalizeSessionMetadata(options.metadata);
   const currentState = isWorkspaceSessionAgent(agentId)
     ? await readWorkspaceState(agentId)
     : null;
@@ -2210,6 +2239,7 @@ async function createPrebuiltSession(agentId, options = {}) {
     referenceMaterials: nextReferenceMaterials,
     formId: requestedFormId,
     openDirectory: nextOpenDirectory,
+    metadata: sessionMetadata,
     createdAt,
     updatedAt: createdAt,
   };
@@ -2436,6 +2466,17 @@ async function deletePrebuiltSession(agentId, sessionId) {
   };
 }
 
+async function requirePrebuiltSessionRecord(agentId, sessionId) {
+  const index = await readSessionIndex(agentId);
+  const existing = index.sessions.find((session) => session.id === cleanSessionText(sessionId));
+  if (!existing) {
+    const error = new Error(`Unknown prebuilt session: ${sessionId}`);
+    error.statusCode = 404;
+    throw error;
+  }
+  return existing;
+}
+
 async function resolvePrebuiltSessionOwner(sessionId, preferredAgentId = '') {
   const cleanSessionId = cleanSessionText(sessionId);
   if (!cleanSessionId) return null;
@@ -2478,6 +2519,100 @@ async function requirePrebuiltAgentForRuntime(agentId) {
     throw error;
   }
   return enrichAgent(metadata);
+}
+
+async function exportContextHandoffForSession(sessionId, preferredAgentId = '', policy = {}) {
+  const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, preferredAgentId);
+  if (!ownerAgentId) {
+    const error = new Error(`Unknown prebuilt session: ${sessionId}`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const record = await requirePrebuiltSessionRecord(ownerAgentId, sessionId);
+  const summary = await summarizePrebuiltSession(ownerAgentId, record);
+  if (!summary.exists) {
+    const error = new Error(`Session snapshot not found for handoff export: ${sessionId}`);
+    error.statusCode = 409;
+    throw error;
+  }
+  const sessionPath = getPrebuiltSessionFilePath(ownerAgentId, sessionId);
+  return exportHistoryOnlyHandoffPackage({
+    userDataRoot: USER_DATA_ROOT,
+    agentId: ownerAgentId,
+    sessionId,
+    sessionPath,
+    sourceRecord: record,
+    policy,
+  });
+}
+
+async function createCompactedResumeFromHandoff({
+  preferredAgentId = '',
+  handoffId = '',
+  handoffPath = '',
+  startRuntime = true,
+}) {
+  const normalizedAgentId = normalizeClientAgentId(preferredAgentId);
+  if (!handoffPath && (!normalizedAgentId || !handoffId)) {
+    const error = new Error('agentId is required when resuming from handoffId');
+    error.statusCode = 400;
+    throw error;
+  }
+  const { handoff, handoffPath: resolvedHandoffPath } = await readHandoffPackage({
+    userDataRoot: USER_DATA_ROOT,
+    agentId: normalizedAgentId || cleanSessionText(preferredAgentId),
+    handoffId,
+    handoffPath,
+  });
+  const sourceAgentId = cleanSessionText(handoff?.sourceAgentId);
+  const sourceSessionId = cleanSessionText(handoff?.sourceSessionId);
+
+  if (!sourceAgentId || !sourceSessionId) {
+    const error = new Error('Invalid handoff package: sourceAgentId/sourceSessionId is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (normalizedAgentId && normalizedAgentId !== sanitizeSessionFragment(sourceAgentId)) {
+    const error = new Error('Phase-1 compacted resume only supports resuming within the source agent');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const agent = await requirePrebuiltAgentForRuntime(sourceAgentId);
+  await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
+  const session = await createPrebuiltSession(agent.id, {
+    sourceSessionId,
+    metadata: {
+      resumeMode: 'compacted',
+      sourceAgentId,
+      sourceSessionId,
+      handoffId: cleanSessionText(handoff?.handoffId) || cleanSessionText(handoffId),
+      handoffPath: resolvedHandoffPath,
+      handoffCreatedAt: cleanSessionText(handoff?.createdAt),
+      handoffSummaryKind: cleanSessionText(handoff?.summaryKind),
+    },
+  });
+
+  let status = null;
+  let connected = null;
+  if (startRuntime) {
+    status = await startManagedAgent(agent, session.id, {
+      extraEnv: {
+        PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath,
+      },
+    });
+    connected = await waitForManagedRuntimeReady(agent.id);
+  }
+
+  return {
+    handoff,
+    handoffPath: resolvedHandoffPath,
+    session,
+    status,
+    agent: connected,
+  };
 }
 
 async function deletePrebuiltProject(agentId, projectId) {
@@ -3110,7 +3245,7 @@ async function resolveRuntimeDisplayName(agent, selectedSessionId = null) {
 }
 
 async function getConnectedAgents() {
-  const prebuiltAgents = await getAgentsLight();
+  const prebuiltAgents = await getAgents();
   const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [], currentAgentId: null }));
   const runtimeAgents = Array.isArray(viewerData.agents) ? viewerData.agents : [];
 
@@ -3236,6 +3371,23 @@ async function waitForManagedRuntimeReady(agentId, timeoutMs = 10000) {
       const agents = await getConnectedAgents();
       const connected = agents.find((agent) => agent.id === agentId && (agent.runtime_session_id || agent.runtimeSessionId));
       if (connected) {
+        if (connected.source === 'prebuilt') {
+          const baseAgent = await requireAgent(agentId);
+          const sessionMeta = resolveActiveWorkspaceSessionMeta(baseAgent);
+          return {
+            ...connected,
+            ui: baseAgent.ui || connected.ui || null,
+            workspace: baseAgent.workspace || connected.workspace || null,
+            workspace_sessions: baseAgent.workspace_sessions || connected.workspace_sessions || { activeSessionId: null, sessions: [] },
+            workspace_data: baseAgent.workspace_data || connected.workspace_data || {},
+            workspace_state: baseAgent.workspace_state || connected.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
+            active_workspace_session_id: sessionMeta.active_workspace_session_id,
+            active_workspace_session_form_id: sessionMeta.active_workspace_session_form_id,
+            active_workspace_session_title: sessionMeta.active_workspace_session_title,
+            active_workspace_agent_name: sessionMeta.active_workspace_agent_name,
+            active_workspace_display_name: sessionMeta.active_workspace_display_name,
+          };
+        }
         return connected;
       }
     }
@@ -3265,7 +3417,7 @@ async function waitForAssemblyRuntimeReady(sessionId, timeoutMs = 10000) {
   return null;
 }
 
-async function startManagedAgent(agent, selectedSessionId = undefined) {
+async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOptions = {}) {
   const existing = getAgentRuntime(agent.id);
   const requestedSessionId = typeof selectedSessionId === 'string' && selectedSessionId
     ? sanitizeSessionFragment(selectedSessionId)
@@ -3289,14 +3441,15 @@ async function startManagedAgent(agent, selectedSessionId = undefined) {
   const child = spawn(process.execPath, [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN], {
     cwd: __dirname,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
+    env: sanitizeSpawnEnv({
       ...process.env,
       AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
       AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
       AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || '\\\\.\\pipe\\agentdev-viewer',
       PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
       PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
-    },
+      ...(runtimeOptions?.extraEnv && typeof runtimeOptions.extraEnv === 'object' ? runtimeOptions.extraEnv : {}),
+    }),
     windowsHide: true,
   });
 
@@ -3952,6 +4105,44 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
     const status = await startManagedAgent(agent, session.id);
     const connected = await waitForManagedRuntimeReady(agent.id);
     res.json({ session, status, agent: connected });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/context_handoffs/export', express.json(), async (req, res, next) => {
+  try {
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+
+    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    const result = await exportContextHandoffForSession(sessionId, preferredAgentId, req.body?.policy || {});
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (req, res, next) => {
+  try {
+    const handoffId = cleanSessionText(req.body?.handoffId);
+    const handoffPath = cleanSessionText(req.body?.handoffPath);
+    if (!handoffId && !handoffPath) {
+      res.status(400).json({ error: 'handoffId or handoffPath is required' });
+      return;
+    }
+
+    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    const result = await createCompactedResumeFromHandoff({
+      preferredAgentId,
+      handoffId,
+      handoffPath,
+      startRuntime: req.body?.startRuntime !== false,
+    });
+    res.json(result);
   } catch (error) {
     next(error);
   }
