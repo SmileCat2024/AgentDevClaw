@@ -1,0 +1,10 @@
+[compact-mirror] load agent module agent=programming-helper session=session-1779107938038-50d13d
+[compact-mirror] prepare runtime begin
+[compact-mirror] prepare runtime done
+[compact-mirror] load session begin
+[WebSearchFeature] Failed to load crawl4ai tools from "crawl4ai-official": SSE error: TypeError: fetch failed: connect ECONNREFUSED 127.0.0.1:11235, connect ECONNREFUSED ::1:11235
+[compact-mirror] load session done
+[compact-mirror] disable tools count=29
+[compact-mirror] tool schema omitted for mirror summary call
+[compact-mirror] chat begin messages=58 tools=0
+[compact-mirror] chat done

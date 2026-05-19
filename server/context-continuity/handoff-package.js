@@ -5,7 +5,7 @@ import { promises as fs } from 'fs';
 const HANDOFF_SCHEMA_VERSION = 1;
 const HANDOFF_COMPILER_VERSION = 'trim-transcript-v1';
 
-const DEFAULT_EXPORT_POLICY = {
+export const DEFAULT_EXPORT_POLICY = {
   strategy: 'trim-transcript',
   includeSystemMessages: false,
   includeUserMessages: true,
@@ -96,7 +96,7 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
 
-function normalizeExportPolicy(rawPolicy = {}) {
+export function normalizeExportPolicy(rawPolicy = {}) {
   return {
     strategy: 'trim-transcript',
     includeSystemMessages: rawPolicy?.includeSystemMessages === true,
@@ -261,7 +261,7 @@ function flushPendingToolFold(seedMessages, pendingFold, policy, stats) {
   return null;
 }
 
-function buildTrimmedSeedMessages(rawMessages, policy) {
+export function buildTrimmedSeedMessages(rawMessages, policy) {
   const retainedTurns = getRetainedTurnSet(rawMessages, policy);
   const foldedToolTurns = getFoldedToolTurnSet(rawMessages, retainedTurns, policy);
   const seedMessages = [];

@@ -15,11 +15,13 @@ import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { FileSessionStore } from 'agentdev';
 import { setTimeout as sleep } from 'timers/promises';
+import { buildClaudeCompactPrompt, stripCompactAnalysis } from '../server/context-continuity/claude-compact-prompts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = resolve(__dirname, '..');
 const VIEWER_PORT = parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
+const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:1420';
 const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
@@ -219,6 +221,7 @@ const NEXT_TURN_ACTIONS = [
 
 let agent = null;
 let disposed = false;
+let compactSummaryInFlight = false;
 
 function getNextTurnActions() {
   const checkpoints = Array.isArray(agent?._callCheckpoints) ? agent._callCheckpoints : [];
@@ -256,6 +259,186 @@ process.on('SIGTERM', () => {
   void disposeAgent(0);
 });
 
+async function postJson(pathname, payload) {
+  const response = await fetch(`${SERVER_ORIGIN}${pathname}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const bodyText = await response.text();
+  const data = bodyText ? JSON.parse(bodyText) : {};
+  if (!response.ok) {
+    const message = typeof data?.error === 'string' ? data.error : `${pathname} failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+function tuneSummaryLLM(llm) {
+  if (!llm || typeof llm !== 'object') return () => {};
+  const restore = new Map();
+  const remember = (key) => {
+    if (Object.prototype.hasOwnProperty.call(llm, key)) {
+      restore.set(key, llm[key]);
+    }
+  };
+  remember('thinkingBudgetTokens');
+  remember('maxTokens');
+  try {
+    if (Object.prototype.hasOwnProperty.call(llm, 'thinkingBudgetTokens')) {
+      llm.thinkingBudgetTokens = undefined;
+    }
+  } catch {}
+  try {
+    if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
+      const current = Number(llm.maxTokens);
+      llm.maxTokens = Number.isFinite(current) && current > 0 ? Math.min(current, 2500) : 2500;
+    }
+  } catch {}
+  return () => {
+    for (const [key, value] of restore.entries()) {
+      try { llm[key] = value; } catch {}
+    }
+  };
+}
+
+function shouldPreserveSummaryTools(agentInstance) {
+  const modelName = cleanValue(
+    agentInstance?.getSystemContext?.()?.SYSTEM_CURRENT_MODEL
+    || agentInstance?._systemContext?.SYSTEM_CURRENT_MODEL
+    || '',
+  ).toLowerCase();
+  return modelName.includes('claude');
+}
+
+async function generateInProcessSummary(extraInstructions = '') {
+  const context = typeof agent?.getContext === 'function' ? agent.getContext() : null;
+  const rawMessages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
+  if (rawMessages.length === 0) {
+    throw new Error('当前上下文为空，无法生成摘要');
+  }
+
+  const prompt = buildClaudeCompactPrompt({
+    additionalInstructions: extraInstructions,
+  });
+  const messages = rawMessages.map((message, index) => ({
+    role: message.role,
+    content: typeof message?.content === 'string' ? message.content : '',
+    turn: Number.isFinite(message?.turn) ? Number(message.turn) : index,
+    toolCallId: message?.toolCallId,
+    toolCalls: Array.isArray(message?.toolCalls) ? message.toolCalls : undefined,
+    reasoning: typeof message?.reasoning === 'string' ? message.reasoning : undefined,
+    thinkingBlocks: Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : undefined,
+  }));
+  messages.push({
+    role: 'user',
+    content: prompt,
+    turn: typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : messages.length,
+  });
+
+  const toolRegistry = typeof agent?.getTools === 'function' ? agent.getTools() : null;
+  const tools = shouldPreserveSummaryTools(agent) ? (toolRegistry?.getAll?.() || []) : [];
+  const restoreLLM = tuneSummaryLLM(agent?.llm);
+  try {
+    console.log(`[ProtoClaw Runtime] 开始进程内摘要压缩 messages=${messages.length} tools=${tools.length}`);
+    const response = await agent.llm.chat(messages, tools);
+    const rawResponse = typeof response?.content === 'string' ? response.content : '';
+    const summaryText = stripCompactAnalysis(rawResponse);
+    if (!summaryText.trim()) {
+      throw new Error('摘要模型返回了空结果');
+    }
+    if (Array.isArray(response?.toolCalls) && response.toolCalls.length > 0) {
+      throw new Error('摘要模型错误地触发了工具调用');
+    }
+    return {
+      rawResponse,
+      summaryText,
+    };
+  } finally {
+    restoreLLM();
+  }
+}
+
+async function triggerSummaryCompaction(extraInstructions = '') {
+  if (compactSummaryInFlight) {
+    console.warn('[ProtoClaw Runtime] 已有 compact summary 正在进行，本次请求已忽略。');
+    return;
+  }
+  if (!sessionId) {
+    console.warn('[ProtoClaw Runtime] 当前 runtime 未绑定 session，无法触发 compact summary。');
+    return;
+  }
+
+  compactSummaryInFlight = true;
+  try {
+    await agent.saveSession(sessionId, sessionStore);
+    console.log('[ProtoClaw Runtime] 已保存当前 session，开始进程内摘要压缩...');
+    const summaryResult = await generateInProcessSummary(extraInstructions);
+
+    const result = await postJson('/protoclaw/context_handoffs/summary_export', {
+      agentId,
+      sessionId,
+      summaryText: summaryResult.summaryText,
+      rawResponse: summaryResult.rawResponse,
+      policy: {
+        strategy: 'summarized-nine-section',
+        additionalInstructions: extraInstructions || '',
+      },
+    });
+
+    const handoffId = cleanValue(result?.handoff?.handoffId);
+    const handoffPath = cleanValue(result?.handoffPath);
+    const mode = cleanValue(result?.handoff?.mode);
+    console.log(`[ProtoClaw Runtime] Compact summary 已生成: mode=${mode || 'summarized-nine-section'} handoffId=${handoffId || '(none)'}`);
+    if (handoffPath) {
+      console.log(`[ProtoClaw Runtime] Handoff path: ${handoffPath}`);
+    }
+  } catch (error) {
+    console.error('[ProtoClaw Runtime] Compact summary 失败:', error);
+  } finally {
+    compactSummaryInFlight = false;
+  }
+}
+
+async function triggerSummaryCompactionResume(extraInstructions = '') {
+  if (compactSummaryInFlight) {
+    console.warn('[ProtoClaw Runtime] 已有 compact summary 正在进行，本次请求已忽略。');
+    return;
+  }
+  if (!sessionId) {
+    console.warn('[ProtoClaw Runtime] 当前 runtime 未绑定 session，无法触发 compact summary resume。');
+    return;
+  }
+
+  compactSummaryInFlight = true;
+  try {
+    await agent.saveSession(sessionId, sessionStore);
+    console.log('[ProtoClaw Runtime] 已保存当前 session，开始进程内摘要并创建新的 resume 会话...');
+    const summaryResult = await generateInProcessSummary(extraInstructions);
+
+    const result = await postJson('/protoclaw/context_handoffs/summary_resume', {
+      agentId,
+      sessionId,
+      summaryText: summaryResult.summaryText,
+      rawResponse: summaryResult.rawResponse,
+      policy: {
+        strategy: 'summarized-nine-section',
+        additionalInstructions: extraInstructions || '',
+      },
+    });
+
+    const nextSessionId = cleanValue(result?.session?.id);
+    console.log(`[ProtoClaw Runtime] 摘要 resume 已创建: newSession=${nextSessionId || '(none)'}`);
+  } catch (error) {
+    console.error('[ProtoClaw Runtime] compact summary resume 失败:', error);
+  } finally {
+    compactSummaryInFlight = false;
+  }
+}
+
 async function handleInputResponse(userInput, response) {
   if (!response) {
     return { kind: 'continue' };
@@ -268,6 +451,16 @@ async function handleInputResponse(userInput, response) {
     }
     if (text === '/exit') {
       return { kind: 'exit' };
+    }
+    if (text.startsWith('/compact-summary-resume')) {
+      const extraInstructions = text.slice('/compact-summary-resume'.length).trim();
+      void triggerSummaryCompactionResume(extraInstructions);
+      return { kind: 'continue' };
+    }
+    if (text.startsWith('/compact-summary')) {
+      const extraInstructions = text.slice('/compact-summary'.length).trim();
+      void triggerSummaryCompaction(extraInstructions);
+      return { kind: 'continue' };
     }
     return { kind: 'text', text };
   }
@@ -322,8 +515,18 @@ async function main() {
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
   });
 
+  const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
+
+  if (typeof localFeatures.ContextCompactionControlFeature === 'function') {
+    agent.use(new localFeatures.ContextCompactionControlFeature({
+      serverOrigin: SERVER_ORIGIN,
+      agentId,
+      sessionId,
+    }));
+    console.log('[ProtoClaw Runtime] 已挂载 context compaction control feature');
+  }
+
   if (runtimeHandoff?.handoff && (runtimeHandoff.handoff.sourceSummary || runtimeHandoff.handoff.seedMessages?.length)) {
-    const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
     if (typeof localFeatures.ContextHandoffSeedFeature !== 'function') {
       throw new Error('local ContextHandoffSeedFeature 未构建，无法挂载 handoff seed');
     }

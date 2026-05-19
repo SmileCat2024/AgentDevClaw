@@ -13,6 +13,7 @@ import {
   exportHistoryOnlyHandoffPackage,
   readHandoffPackage,
 } from './server/context-continuity/handoff-package.js';
+import { exportSummarizedHandoffPackage, writeSummarizedHandoffPackage } from './server/context-continuity/summarized-handoff.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +38,7 @@ const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'flow-test']);
 const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
 const MODEL_CONFIG_PATH = path.join(__dirname, 'config', 'default.json');
 const MODEL_PRESETS_PATH = path.join(__dirname, 'config', 'presets.json');
+const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
 
 const app = express();
 const viewerWorker = new ViewerWorker(VIEWER_PORT, false, process.env.AGENTDEV_UDS_PATH);
@@ -2537,6 +2539,19 @@ async function exportContextHandoffForSession(sessionId, preferredAgentId = '', 
     throw error;
   }
   const sessionPath = getPrebuiltSessionFilePath(ownerAgentId, sessionId);
+  const normalizedStrategy = typeof policy?.strategy === 'string' ? policy.strategy.trim() : '';
+  if (normalizedStrategy === 'summarized-nine-section') {
+    const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
+    return exportSummarizedHandoffPackage({
+      userDataRoot: USER_DATA_ROOT,
+      agentId: ownerAgentId,
+      sessionId,
+      sourceRecord: record,
+      policy,
+      agentRelativeDir: agent.relativeDir,
+      projectRoot: __dirname,
+    });
+  }
   return exportHistoryOnlyHandoffPackage({
     userDataRoot: USER_DATA_ROOT,
     agentId: ownerAgentId,
@@ -2584,16 +2599,17 @@ async function createCompactedResumeFromHandoff({
   await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
   const session = await createPrebuiltSession(agent.id, {
     sourceSessionId,
-    metadata: {
-      resumeMode: 'compacted',
-      sourceAgentId,
-      sourceSessionId,
-      handoffId: cleanSessionText(handoff?.handoffId) || cleanSessionText(handoffId),
-      handoffPath: resolvedHandoffPath,
-      handoffCreatedAt: cleanSessionText(handoff?.createdAt),
-      handoffSummaryKind: cleanSessionText(handoff?.summaryKind),
-    },
-  });
+      metadata: {
+        resumeMode: 'compacted',
+        sourceAgentId,
+        sourceSessionId,
+        handoffId: cleanSessionText(handoff?.handoffId) || cleanSessionText(handoffId),
+        handoffPath: resolvedHandoffPath,
+        handoffCreatedAt: cleanSessionText(handoff?.createdAt),
+        handoffMode: cleanSessionText(handoff?.mode),
+        handoffSummaryKind: cleanSessionText(handoff?.summaryShape),
+      },
+    });
 
   let status = null;
   let connected = null;
@@ -2613,6 +2629,83 @@ async function createCompactedResumeFromHandoff({
     status,
     agent: connected,
   };
+}
+
+async function compactAndResumeCurrentSession({
+  preferredAgentId = '',
+  sessionId = '',
+  policy = {},
+  startRuntime = true,
+}) {
+  const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy);
+  const handoffPath = cleanSessionText(exportResult?.handoffPath);
+  const handoffId = cleanSessionText(exportResult?.handoff?.handoffId);
+  return createCompactedResumeFromHandoff({
+    preferredAgentId,
+    handoffId,
+    handoffPath,
+    startRuntime,
+  });
+}
+
+async function compactAndResumeFromProvidedSummary({
+  preferredAgentId = '',
+  sessionId = '',
+  summaryText = '',
+  rawResponse = '',
+  policy = {},
+  startRuntime = true,
+}) {
+  const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, preferredAgentId);
+  if (!ownerAgentId) {
+    const error = new Error(`Unknown prebuilt session: ${sessionId}`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const record = await requirePrebuiltSessionRecord(ownerAgentId, sessionId);
+  const handoffResult = await writeSummarizedHandoffPackage({
+    userDataRoot: USER_DATA_ROOT,
+    agentId: ownerAgentId,
+    sessionId,
+    sourceRecord: record,
+    policy,
+    summaryText,
+    rawResponse,
+  });
+
+  return createCompactedResumeFromHandoff({
+    preferredAgentId: ownerAgentId,
+    handoffId: cleanSessionText(handoffResult?.handoff?.handoffId),
+    handoffPath: cleanSessionText(handoffResult?.handoffPath),
+    startRuntime,
+  });
+}
+
+async function exportProvidedSummaryHandoff({
+  preferredAgentId = '',
+  sessionId = '',
+  summaryText = '',
+  rawResponse = '',
+  policy = {},
+}) {
+  const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, preferredAgentId);
+  if (!ownerAgentId) {
+    const error = new Error(`Unknown prebuilt session: ${sessionId}`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const record = await requirePrebuiltSessionRecord(ownerAgentId, sessionId);
+  return writeSummarizedHandoffPackage({
+    userDataRoot: USER_DATA_ROOT,
+    agentId: ownerAgentId,
+    sessionId,
+    sourceRecord: record,
+    policy,
+    summaryText,
+    rawResponse,
+  });
 }
 
 async function deletePrebuiltProject(agentId, projectId) {
@@ -3446,6 +3539,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
       AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
       AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
       AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || '\\\\.\\pipe\\agentdev-viewer',
+      PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
       PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
       PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
       ...(runtimeOptions?.extraEnv && typeof runtimeOptions.extraEnv === 'object' ? runtimeOptions.extraEnv : {}),
@@ -4141,6 +4235,112 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
       handoffId,
       handoffPath,
       startRuntime: req.body?.startRuntime !== false,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async (req, res, next) => {
+  try {
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+
+    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    const detached = req.body?.detached !== false;
+    const policy = req.body?.policy || {};
+    console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached}`);
+
+    if (detached) {
+      const jobId = `compact-resume-${Date.now()}-${randomUUID().slice(0, 8)}`;
+      setTimeout(() => {
+        compactAndResumeCurrentSession({
+          preferredAgentId,
+          sessionId,
+          policy,
+          startRuntime: req.body?.startRuntime !== false,
+        }).then((result) => {
+          console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
+        }).catch((error) => {
+          console.error(`[compact_and_resume] job ${jobId} failed for session=${sessionId}:`, error);
+        });
+      }, 10);
+
+      res.json({
+        scheduled: true,
+        jobId,
+        sessionId,
+        agentId: preferredAgentId || null,
+      });
+      return;
+    }
+
+    const result = await compactAndResumeCurrentSession({
+      preferredAgentId,
+      sessionId,
+      policy,
+      startRuntime: req.body?.startRuntime !== false,
+    });
+    console.log(`[compact_and_resume] completed session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (req, res, next) => {
+  try {
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    const summaryText = typeof req.body?.summaryText === 'string' ? req.body.summaryText.trim() : '';
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+    if (!summaryText) {
+      res.status(400).json({ error: 'summaryText is required' });
+      return;
+    }
+
+    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    console.log(`[summary_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId}`);
+    const result = await compactAndResumeFromProvidedSummary({
+      preferredAgentId,
+      sessionId,
+      summaryText,
+      rawResponse: typeof req.body?.rawResponse === 'string' ? req.body.rawResponse : '',
+      policy: req.body?.policy || {},
+      startRuntime: req.body?.startRuntime !== false,
+    });
+    console.log(`[summary_resume] completed session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/context_handoffs/summary_export', express.json(), async (req, res, next) => {
+  try {
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    const summaryText = typeof req.body?.summaryText === 'string' ? req.body.summaryText.trim() : '';
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+    if (!summaryText) {
+      res.status(400).json({ error: 'summaryText is required' });
+      return;
+    }
+    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    const result = await exportProvidedSummaryHandoff({
+      preferredAgentId,
+      sessionId,
+      summaryText,
+      rawResponse: typeof req.body?.rawResponse === 'string' ? req.body.rawResponse : '',
+      policy: req.body?.policy || {},
     });
     res.json(result);
   } catch (error) {

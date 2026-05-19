@@ -1,0 +1,265 @@
+#!/usr/bin/env node
+
+import { fileURLToPath, pathToFileURL } from 'url';
+import { dirname, join, resolve } from 'path';
+import os from 'os';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { FileSessionStore } from 'agentdev';
+import { buildClaudeCompactPrompt, stripCompactAnalysis } from '../server/context-continuity/claude-compact-prompts.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROTOCLAW_ROOT = resolve(__dirname, '..');
+const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
+
+function cleanValue(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeSessionFragment(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'default';
+}
+
+function resolveAgentClass(agentModule) {
+  if (typeof agentModule.default === 'function') {
+    return agentModule.default;
+  }
+  for (const exported of Object.values(agentModule || {})) {
+    if (typeof exported === 'function') {
+      return exported;
+    }
+  }
+  return null;
+}
+
+function getSessionStoreDir(agentId) {
+  const normalizedAgentId = sanitizeSessionFragment(agentId);
+  if (WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)) {
+    return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'sessions');
+  }
+  return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'prebuilt-sessions', normalizedAgentId);
+}
+
+function resolveWorkspaceCwd(agentId) {
+  const normalizedAgentId = sanitizeSessionFragment(agentId);
+  if (!WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)) {
+    return PROTOCLAW_ROOT;
+  }
+
+  const statePath = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'state.json');
+  if (!existsSync(statePath)) {
+    return PROTOCLAW_ROOT;
+  }
+
+  try {
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    const openDirectory = typeof state?.openDirectory === 'string' ? state.openDirectory.trim() : '';
+    if (!openDirectory || !existsSync(openDirectory)) {
+      return PROTOCLAW_ROOT;
+    }
+    return openDirectory;
+  } catch {
+    return PROTOCLAW_ROOT;
+  }
+}
+
+function parseOptions(rawOptions) {
+  const defaults = {
+    maxAttempts: 3,
+    additionalInstructions: '',
+    promptOverride: '',
+  };
+  if (!rawOptions) return defaults;
+  try {
+    const parsed = JSON.parse(String(rawOptions));
+    return {
+      maxAttempts: Number.isFinite(parsed?.maxAttempts) ? Math.max(1, Math.min(5, Number(parsed.maxAttempts))) : defaults.maxAttempts,
+      additionalInstructions: cleanValue(parsed?.additionalInstructions),
+      promptOverride: cleanValue(parsed?.promptOverride),
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function logPhase(message) {
+  process.stderr.write(`[compact-mirror] ${message}\n`);
+}
+
+function tuneMirrorLLM(llm) {
+  if (!llm || typeof llm !== 'object') return;
+  try {
+    if (Object.prototype.hasOwnProperty.call(llm, 'thinkingBudgetTokens')) {
+      llm.thinkingBudgetTokens = undefined;
+    }
+  } catch {}
+  try {
+    if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
+      const current = Number(llm.maxTokens);
+      llm.maxTokens = Number.isFinite(current) && current > 0
+        ? Math.min(current, 2500)
+        : 2500;
+    }
+  } catch {}
+}
+
+function shouldPreserveToolSchema(agent) {
+  const modelName = cleanValue(
+    agent?.getSystemContext?.()?.SYSTEM_CURRENT_MODEL
+    || agent?._systemContext?.SYSTEM_CURRENT_MODEL
+    || '',
+  ).toLowerCase();
+  return modelName.includes('claude');
+}
+
+async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, prompt }) {
+  logPhase(`load agent module agent=${agentId} session=${sessionId}`);
+  const agentModule = await import(pathToFileURL(agentJsPath).href);
+  const AgentClass = resolveAgentClass(agentModule);
+  if (!AgentClass) {
+    throw new Error(`Unable to resolve Agent class from ${agentJsPath}`);
+  }
+
+  const workspaceDir = resolveWorkspaceCwd(agentId);
+  const sessionStore = new FileSessionStore(getSessionStoreDir(agentId));
+  const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
+
+  if (typeof localFeatures.ContextCompactionMirrorFeature !== 'function') {
+    throw new Error('ContextCompactionMirrorFeature is not built');
+  }
+
+  const agent = new AgentClass({
+    name: agentName,
+    projectRoot: PROTOCLAW_ROOT,
+    workspaceDir,
+    maxTurns: 1,
+  });
+
+  try {
+    logPhase('prepare runtime begin');
+    if (typeof agent.prepareRuntime === 'function') {
+      await agent.prepareRuntime();
+    }
+    logPhase('prepare runtime done');
+
+    logPhase('load session begin');
+    await agent.loadSession(sessionId, sessionStore);
+    logPhase('load session done');
+    tuneMirrorLLM(agent.llm);
+    const toolRegistry = typeof agent.getTools === 'function' ? agent.getTools() : null;
+    const toolEntries = toolRegistry?.getEntries?.() || [];
+    logPhase(`disable tools count=${toolEntries.length}`);
+    for (const entry of toolEntries) {
+      const toolName = typeof entry?.tool?.name === 'string' ? entry.tool.name : '';
+      if (!toolName) continue;
+      toolRegistry.disable(toolName);
+    }
+
+    const context = typeof agent.getContext === 'function' ? agent.getContext() : null;
+    const rawMessages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
+    const compactMessages = rawMessages.map((message, index) => ({
+      role: message.role,
+      content: typeof message?.content === 'string' ? message.content : '',
+      turn: Number.isFinite(message?.turn) ? Number(message.turn) : index,
+      toolCallId: message?.toolCallId,
+      toolCalls: Array.isArray(message?.toolCalls) ? message.toolCalls : undefined,
+      reasoning: typeof message?.reasoning === 'string' ? message.reasoning : undefined,
+      thinkingBlocks: Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : undefined,
+    }));
+    const callIndex = typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : compactMessages.length;
+    compactMessages.push({
+      role: 'user',
+      content: prompt,
+      turn: callIndex,
+    });
+
+    const compiledTools = shouldPreserveToolSchema(agent)
+      ? (toolRegistry?.getAll?.() || [])
+      : [];
+    if (compiledTools.length === 0) {
+      logPhase('tool schema omitted for mirror summary call');
+    }
+
+    logPhase(`chat begin messages=${compactMessages.length} tools=${compiledTools.length}`);
+    const response = await agent.llm.chat(
+      compactMessages,
+      compiledTools,
+    );
+    logPhase('chat done');
+
+    const usedTools = Array.isArray(response?.toolCalls) && response.toolCalls.length > 0;
+    const rawResponse = typeof response?.content === 'string' ? response.content : '';
+    const summaryText = stripCompactAnalysis(rawResponse);
+
+    return {
+      rawResponse,
+      summaryText,
+      usedTools,
+    };
+  } finally {
+    if (typeof agent.dispose === 'function') {
+      await agent.dispose().catch(() => {});
+    }
+  }
+}
+
+async function main() {
+  const [agentDir, agentId, sessionId, rawOptions, resultFilePath] = process.argv.slice(2);
+  if (!agentDir || !agentId || !sessionId) {
+    throw new Error('Usage: node scripts/run-compact-mirror.js <agent-dir> <agent-id> <session-id> [optionsJson] [resultFilePath]');
+  }
+
+  const options = parseOptions(rawOptions);
+  const agentPath = resolve(PROTOCLAW_ROOT, agentDir);
+  const agentJsPath = join(agentPath, 'agent.js');
+  const prompt = options.promptOverride || buildClaudeCompactPrompt({
+    additionalInstructions: options.additionalInstructions,
+  });
+
+  const resultPath = resultFilePath || join(mkdtempSync(join(tmpdir(), 'compact-mirror-')), 'result.json');
+
+  let lastFailure = null;
+
+  for (let attempt = 1; attempt <= options.maxAttempts; attempt += 1) {
+    try {
+      const result = await runSingleAttempt({
+        agentJsPath,
+        agentName: sanitizeSessionFragment(agentId),
+        agentId,
+        sessionId,
+        prompt,
+      });
+
+      if (result.usedTools) {
+        throw new Error('Mirror compaction attempted tool usage');
+      }
+      if (!cleanValue(result.summaryText)) {
+        throw new Error('Mirror compaction returned an empty summary');
+      }
+
+      const payload = {
+        ok: true,
+        attemptCount: attempt,
+        summaryText: result.summaryText,
+        rawResponse: result.rawResponse,
+      };
+      writeFileSync(resultPath, `${JSON.stringify(payload)}\n`, 'utf8');
+      process.exit(0);
+    } catch (error) {
+      lastFailure = error;
+    }
+  }
+
+  throw lastFailure instanceof Error ? lastFailure : new Error(String(lastFailure || 'Unknown mirror compaction failure'));
+}
+
+main().catch((error) => {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  process.stderr.write(`[compact-mirror] fatal: ${message}\n`);
+  process.exit(1);
+});

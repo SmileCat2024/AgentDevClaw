@@ -12,6 +12,9 @@
   },
   "include": [
     "./index.ts",
+    "./context-compaction-control/src/**/*.ts",
+    "./context-compaction-mirror/src/**/*.ts",
+    "./context-compaction-mirror/test/**/*.ts",
     "./context-handoff-seed/src/**/*.ts",
     "./context-handoff-seed/test/**/*.ts",
     "./feature-dev/src/**/*.ts",

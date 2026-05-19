@@ -297,29 +297,60 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
 }
 
 async function createCompactedResumeSession(agentId, sessionId) {
-  const exportResponse = await fetch('/protoclaw/context_handoffs/export', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agentId, sessionId }),
-  });
-  if (!exportResponse.ok) {
-    throw new Error(await exportResponse.text().catch(() => 'handoff export failed'));
+  const currentAgent = getCurrentAgentRecord();
+  const activeSessionId = String(currentAgent?.active_workspace_session_id || currentAgent?.workspace_sessions?.activeSessionId || '').trim();
+  const runtimeAgentId = currentRuntimeAgentId || currentAgent?.runtime_session_id || currentAgent?.runtimeSessionId || '';
+  const isLiveCurrentSession = !!runtimeAgentId
+    && String(currentAgent?.id || '').trim() === String(agentId || '').trim()
+    && activeSessionId
+    && activeSessionId === String(sessionId || '').trim();
+
+  if (isLiveCurrentSession) {
+    const inputReqRes = await fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/input-requests`);
+    const inputRequests = inputReqRes.ok ? await inputReqRes.json().catch(() => []) : [];
+    const primaryRequest = Array.isArray(inputRequests) ? inputRequests[0] : null;
+    if (!primaryRequest?.requestId) {
+      throw new Error('当前运行中的对话没有可用输入槽位，无法触发压缩续接');
+    }
+    const submitRes = await fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requestId: primaryRequest.requestId,
+        input: '/compact-summary-resume',
+        response: {
+          kind: 'text',
+          text: '/compact-summary-resume',
+        },
+      }),
+    });
+    if (!submitRes.ok) {
+      throw new Error(await submitRes.text().catch(() => 'failed to submit compact summary command'));
+    }
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await loadAgents();
+      const refreshed = allAgents.find((item) => String(item?.id || '').trim() === String(agentId || '').trim()) || null;
+      const nextSessionId = String(refreshed?.active_workspace_session_id || refreshed?.workspace_sessions?.activeSessionId || '').trim();
+      const nextRuntimeId = refreshed?.runtime_session_id || refreshed?.runtimeSessionId || null;
+      if (nextSessionId && nextSessionId !== String(sessionId || '').trim() && nextRuntimeId) {
+        await window.switchAgent(nextRuntimeId);
+        return { scheduled: true, liveRuntime: true, switched: true };
+      }
+    }
+    return { scheduled: true, liveRuntime: true, switched: false };
   }
 
-  const exportResult = await exportResponse.json();
-  const handoffId = String(exportResult?.handoff?.handoffId || '').trim();
-  const handoffPath = String(exportResult?.handoffPath || '').trim();
-  if (!handoffId && !handoffPath) {
-    throw new Error('handoff export returned no handoff identifier');
-  }
-
-  const resumeResponse = await fetch('/protoclaw/context_handoffs/compacted_resume', {
+  const resumeResponse = await fetch('/protoclaw/context_handoffs/compact_and_resume', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       agentId,
-      handoffId: handoffId || undefined,
-      handoffPath: handoffPath || undefined,
+      sessionId,
+      detached: false,
+      policy: {
+        strategy: 'summarized-nine-section',
+      },
     }),
   });
   if (!resumeResponse.ok) {
