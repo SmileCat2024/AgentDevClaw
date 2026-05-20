@@ -296,7 +296,7 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
   return response.json();
 }
 
-async function createCompactedResumeSession(agentId, sessionId) {
+async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section') {
   const currentAgent = getCurrentAgentRecord();
   const activeSessionId = String(currentAgent?.active_workspace_session_id || currentAgent?.workspace_sessions?.activeSessionId || '').trim();
   const runtimeAgentId = currentRuntimeAgentId || currentAgent?.runtime_session_id || currentAgent?.runtimeSessionId || '';
@@ -348,9 +348,7 @@ async function createCompactedResumeSession(agentId, sessionId) {
       agentId,
       sessionId,
       detached: false,
-      policy: {
-        strategy: 'summarized-nine-section',
-      },
+      policy: strategy ? { strategy } : {},
     }),
   });
   if (!resumeResponse.ok) {
@@ -500,11 +498,91 @@ window.runWorkspaceAction = async (rawAction) => {
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
         await window.switchAgent(nextRuntimeId);
       } else {
+        lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
       }
     } catch (error) {
       console.error('Failed to compact-resume session:', error);
       window.alert(t('workspace_compacted_resume_failed') + (error && error.message ? error.message : error));
+    }
+    return;
+  }
+
+  if (action.type === 'compact_session_menu') {
+    if (!activeAgent?.id || !action.sessionId) return;
+    const compactType = action.compactType || 'summary';
+    const strategy = compactType === 'summary' ? 'summarized-nine-section' : '';
+    const confirmMsg = compactType === 'summary' ? t('workspace_compact_summary_confirm') : t('workspace_compact_trim_confirm');
+    const confirmed = window.confirm(confirmMsg);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy);
+      if (result?.agent) {
+        applyManagedPrebuiltAgent(activeAgent.id, result.agent);
+      }
+      await loadAgents();
+      const nextRuntimeId =
+        result?.agent?.runtime_session_id
+        || result?.agent?.runtimeSessionId
+        || null;
+      if (nextRuntimeId) {
+        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
+        await window.switchAgent(nextRuntimeId);
+      } else {
+        lastRenderedWorkspaceHtml = '';
+        renderCurrentMainView();
+      }
+    } catch (error) {
+      console.error('Failed to compact session:', error);
+      window.alert(t('workspace_compact_failed') + (error?.message || error));
+    }
+    return;
+  }
+
+  if (action.type === 'delete_session') {
+    if (!activeAgent?.id || !action.sessionId) return;
+    const sessionTitle = action.sessionId;
+    const confirmMsg = t('workspace_session_delete_confirm').replace('{{id}}', sessionTitle);
+    const confirmed = window.confirm(confirmMsg);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const affectedRuntimeId = activeAgent?.runtime_session_id || activeAgent?.runtimeSessionId || null;
+      const deletedWasActive = action.sessionId === (activeAgent?.active_workspace_session_id || activeAgent?.workspace_sessions?.activeSessionId || null);
+      const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: activeAgent.id,
+          sessionId: action.sessionId,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text().catch(() => 'delete session failed'));
+      }
+      const result = await response.json();
+      if (result?.deleted?.sessions) {
+        updateAgentRecord(activeAgent.id, {
+          workspace_sessions: result.deleted.sessions,
+          active_workspace_session_id: result.deleted.activeSessionId || null,
+        });
+      }
+      if (result?.agent) {
+        applyManagedPrebuiltAgent(activeAgent.id, result.agent);
+      } else if (deletedWasActive) {
+        applyManagedPrebuiltAgent(activeAgent.id, null);
+      }
+      await loadAgents();
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+      window.alert((currentLanguage === 'zh' ? '删除会话失败：' : 'Failed to delete session: ') + (error?.message || error));
     }
     return;
   }
@@ -710,6 +788,7 @@ document.addEventListener('click', (event) => {
     ? event.target.closest('button[data-workspace-action]')
     : null;
   if (!actionButton) return;
+  if (actionButton.classList.contains('compact-trigger')) return;
   event.preventDefault();
   event.stopPropagation();
   if (typeof event.stopImmediatePropagation === 'function') {
@@ -1465,6 +1544,62 @@ window.fwResumeRun = async (sessionId, btn) => {
   }
 };
 
+window.phSelectDirectoryAndCreateSession = async () => {
+  const currentAgent = getCurrentAgentRecord();
+  if (!currentAgent || currentAgent.id !== 'programming-helper') {
+    console.error('Not in programming-helper workspace');
+    return;
+  }
+
+  try {
+    const result = await invoke('select_directory');
+    const chosenPath = Array.isArray(result?.paths) ? String(result.paths[0] || '').trim() : (typeof result?.path === 'string' ? result.path.trim() : '');
+    if (!chosenPath) {
+      return;
+    }
+
+    const createResult = await openPrebuiltWorkspaceSession('programming-helper', {
+      type: 'create_session',
+      openDirectory: chosenPath,
+    });
+
+    console.log('[ph] session created:', createResult?.session?.id, 'agent:', createResult?.agent?.id);
+    await loadAgents();
+    const runtimeId = createResult?.agent?.runtime_session_id || createResult?.agent?.runtimeSessionId || createResult?.agent?.id;
+    if (runtimeId) {
+      await window.switchAgent(runtimeId);
+    }
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to select directory and create session:', error);
+    window.alert((currentLanguage === 'zh' ? '选择目录或创建会话失败：' : 'Failed to select directory or create session: ') + (error?.message || error));
+    lastRenderedWorkspaceHtml = '';
+    await loadAgents();
+    renderCurrentMainView();
+  }
+};
+
+window.showCompactMenu = (event, buttonElement) => {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  const rawAction = buttonElement?.dataset?.workspaceAction;
+  let action = {};
+  try {
+    action = typeof rawAction === 'string' ? JSON.parse(rawAction) : rawAction;
+  } catch {
+    return;
+  }
+
+  if (!action.sessionId) return;
+
+  const rect = buttonElement.getBoundingClientRect();
+  openCompactMenu(action, rect.left, rect.bottom + 4);
+};
+
 window.deleteAssemblySessionRecord = async (sessionId) => {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
@@ -2086,6 +2221,20 @@ compactedResumeSessionAction.addEventListener('click', async () => {
   }));
 });
 
+compactSummaryAction.addEventListener('click', async () => {
+  if (!contextMenuCompactAction?.sessionId) return;
+  const action = { ...contextMenuCompactAction, compactType: 'summary' };
+  closeCompactMenu();
+  await window.runWorkspaceAction(action);
+});
+
+compactTrimAction.addEventListener('click', async () => {
+  if (!contextMenuCompactAction?.sessionId) return;
+  const action = { ...contextMenuCompactAction, compactType: 'trim' };
+  closeCompactMenu();
+  await window.runWorkspaceAction(action);
+});
+
 deleteAgentAction.addEventListener('click', async () => {
   if (!contextMenuAgentId || contextMenuAgentMode !== 'delete-only') return;
 
@@ -2225,8 +2374,63 @@ deleteProjectAction.addEventListener('click', () => {
       const config = getSavedAssemblyConfigs(agent).find(c => c.id === pendingProjectId);
       return config?.name || config?.id || pendingProjectId;
     }
+    if (pendingAgentId === 'programming-helper') {
+      const agent = allAgents.find(a => a.id === pendingAgentId);
+      const project = getProgrammingHelperProjects(agent).find(p => p.id === pendingProjectId);
+      return project?.name || project?.openDirectory || pendingProjectId;
+    }
     return pendingProjectId;
   })();
+
+  if (pendingAgentId === 'programming-helper') {
+    const confirmed = window.confirm(
+      currentLanguage === 'zh'
+        ? '确定要删除项目「' + projectName + '」吗？该项目下的所有对话记录将一并删除，此操作不可撤销。'
+        : 'Delete project "' + projectName + '"? All conversations under this project will also be deleted. This cannot be undone.'
+    );
+    if (!confirmed) return;
+    (async () => {
+      try {
+        const agent = allAgents.find(a => a.id === pendingAgentId);
+        const project = getProgrammingHelperProjects(agent).find(p => p.id === pendingProjectId);
+        const projectDir = project?.openDirectory || '';
+        const sessions = getWorkspaceSessions(agent);
+        const matchingSessions = sessions.filter(s => {
+          const sessionDir = String(s.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
+          const targetDir = projectDir.trim().replace(/\\/g, '/').toLowerCase();
+          return sessionDir === targetDir;
+        });
+        const activeSessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
+        const deletedWasActive = matchingSessions.some(s => s.id === activeSessionId);
+        for (const session of matchingSessions) {
+          await fetch('/protoclaw/prebuilt_sessions/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId: pendingAgentId, sessionId: session.id }),
+          }).catch(() => {});
+        }
+        if (deletedWasActive) {
+          applyManagedPrebuiltAgent(pendingAgentId, null);
+        }
+        const sessionsRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(pendingAgentId));
+        if (sessionsRes.ok) {
+          const fresh = await sessionsRes.json();
+          updateAgentRecord(pendingAgentId, {
+            workspace_sessions: fresh,
+            active_workspace_session_id: fresh?.activeSessionId || null,
+          });
+        }
+        await loadAgents();
+        lastRenderedWorkspaceHtml = '';
+        renderAgentList();
+        renderCurrentMainView();
+      } catch (error) {
+        console.error('Failed to delete programming-helper project:', error);
+        window.alert((currentLanguage === 'zh' ? '删除项目失败：' : 'Failed to delete project: ') + (error?.message || error));
+      }
+    })();
+    return;
+  }
 
   fwOpenConfirmDialog({
     title: currentLanguage === 'zh' ? '删除项目' : 'Delete Project',
@@ -2356,6 +2560,9 @@ document.addEventListener('click', (event) => {
   if (!sessionContextMenu.contains(event.target)) {
     closeSessionContextMenu();
   }
+  if (!compactContextMenu.contains(event.target)) {
+    closeCompactMenu();
+  }
   if (!projectContextMenu.contains(event.target)) {
     closeProjectContextMenu();
   }
@@ -2366,6 +2573,7 @@ document.addEventListener('click', (event) => {
 
 window.addEventListener('resize', () => {
   closeAgentContextMenu();
+  closeCompactMenu();
   closeProjectContextMenu();
   closeFeatureRepoContextMenu();
   featurePanelWidth = Math.max(400, Math.min(750, featurePanelWidth));
@@ -2377,6 +2585,7 @@ window.addEventListener('resize', () => {
 window.addEventListener('scroll', () => {
   closeAgentContextMenu();
   closeSessionContextMenu();
+  closeCompactMenu();
   closeProjectContextMenu();
   requestAnimationFrame(updateAssemblySideRailPosition);
 }, true);

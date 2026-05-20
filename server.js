@@ -2566,6 +2566,7 @@ async function createCompactedResumeFromHandoff({
   preferredAgentId = '',
   handoffId = '',
   handoffPath = '',
+  goal = '',
   startRuntime = true,
 }) {
   const normalizedAgentId = normalizeClientAgentId(preferredAgentId);
@@ -2596,9 +2597,12 @@ async function createCompactedResumeFromHandoff({
   }
 
   const agent = await requirePrebuiltAgentForRuntime(sourceAgentId);
-  await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
+  if (!handoff?.stats?.synthetic) {
+    await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
+  }
   const session = await createPrebuiltSession(agent.id, {
     sourceSessionId,
+    goal: goal || undefined,
       metadata: {
         resumeMode: 'compacted',
         sourceAgentId,
@@ -3531,6 +3535,22 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
     ? requestedSessionId
     : (existing?.selectedSessionId || agent.workspace_sessions?.activeSessionId || null);
 
+  if (resolvedSessionId && !runtimeOptions?.extraEnv?.PROTOCLAW_HANDOFF_PATH) {
+    try {
+      const idx = await readSessionIndex(agent.id);
+      const sessionRecord = idx.sessions.find(s => s.id === resolvedSessionId);
+      if (sessionRecord?.metadata?.handoffPath) {
+        runtimeOptions = {
+          ...runtimeOptions,
+          extraEnv: {
+            ...(runtimeOptions?.extraEnv || {}),
+            PROTOCLAW_HANDOFF_PATH: sessionRecord.metadata.handoffPath,
+          },
+        };
+      }
+    } catch {}
+  }
+
   if (existing?.process && existing.process.exitCode === null && !existing.stopped) {
     if (!resolvedSessionId || existing.selectedSessionId === resolvedSessionId) {
       return buildStatus(agent.id);
@@ -4246,6 +4266,7 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
       preferredAgentId,
       handoffId,
       handoffPath,
+      goal: cleanSessionText(req.body?.goal),
       startRuntime: req.body?.startRuntime !== false,
     });
     res.json(result);

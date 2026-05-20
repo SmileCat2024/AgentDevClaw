@@ -209,6 +209,9 @@ const sessionContextMenu = document.getElementById('session-context-menu');
 const openSessionAction = document.getElementById('open-session-action');
 const compactedResumeSessionAction = document.getElementById('compacted-resume-session-action');
 const deleteSessionAction = document.getElementById('delete-session-action');
+const compactContextMenu = document.getElementById('compact-context-menu');
+const compactSummaryAction = document.getElementById('compact-summary-action');
+const compactTrimAction = document.getElementById('compact-trim-action');
 const projectContextMenu = document.getElementById('project-context-menu');
 const deleteProjectAction = document.getElementById('delete-project-action');
 const featureRepoContextMenu = document.getElementById('feature-repo-context-menu');
@@ -252,6 +255,7 @@ let contextMenuAgentMode = null;
 let contextMenuSessionAgentId = null;
 let contextMenuSessionId = null;
 let contextMenuSessionMode = null;
+let contextMenuCompactAction = null;
 let contextMenuProjectAgentId = null;
 let contextMenuProjectId = null;
 let contextMenuFeatureRepoPackageId = null;
@@ -259,6 +263,7 @@ let activeFeaturePanel = null;
 let currentWorkspaceTab = null;
 let shouldAnimateWorkspaceSurface = true;
 let assemblyDraftRenderTimer = null;
+let expandedProjectIds = new Set();
 let assemblyLaunchInProgress = false;
 let assemblyControlPanelOpen = false;
 let assemblySideRailRevealTimer = null;
@@ -390,6 +395,16 @@ const I18N = {
     workspace_compacted_resume_confirm: '基于这条历史对话生成交接摘要，并在一个新会话里继续当前任务？',
     workspace_compacted_resume_failed: '轻量继续失败: ',
     workspace_compacted_resume_started: '已创建新的轻量继续会话。',
+    workspace_new_project: '新建项目',
+    workspace_select_directory_new_project: '选择目录并新建项目',
+    workspace_compact_session: '压缩会话',
+    workspace_compact_summary: '总结历史（摘要）',
+    workspace_compact_trim: '精简历史（Trim）',
+    workspace_compact_summary_confirm: '确定要总结历史并继续会话吗？',
+    workspace_compact_trim_confirm: '确定要精简历史并继续会话吗？',
+    workspace_compact_failed: '压缩会话失败：',
+    workspace_session_delete: '删除',
+    workspace_session_delete_confirm: '确定要删除会话「{{id}}」吗？此操作不可撤销。',
     qqbot_config_title: 'QQ 网关配置',
     qqbot_config_desc: '直接编辑当前项目里的 QQBot 配置文件。保存后会写入当前项目 .agentdev 目录。',
     qqbot_config_ready: '已配置',
@@ -622,6 +637,16 @@ const I18N = {
     workspace_compacted_resume_confirm: 'Create a handoff summary from this conversation and continue the task in a new session?',
     workspace_compacted_resume_failed: 'Light resume failed: ',
     workspace_compacted_resume_started: 'Created a new compacted-resume session.',
+    workspace_new_project: 'New Project',
+    workspace_select_directory_new_project: 'Select Directory & New Project',
+    workspace_compact_session: 'Compact',
+    workspace_compact_summary: 'Summarize (Summary)',
+    workspace_compact_trim: 'Trim History',
+    workspace_compact_summary_confirm: 'Summarize the history and continue?',
+    workspace_compact_trim_confirm: 'Trim the history and continue?',
+    workspace_compact_failed: 'Failed to compact session: ',
+    workspace_session_delete: 'Delete',
+    workspace_session_delete_confirm: 'Are you sure you want to delete session "{{id}}"? This action cannot be undone.',
     qqbot_config_title: 'QQ Gateway Config',
     qqbot_config_desc: 'Edit the QQBot config inside this project. Saving writes to the local .agentdev directory.',
     qqbot_config_ready: 'Configured',

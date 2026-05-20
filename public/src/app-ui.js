@@ -420,6 +420,64 @@ function getAgentProjectDisplayName(project) {
   return 'UntitledAgent';
 }
 
+function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
+  if (agent?.id !== 'programming-helper') return [];
+
+  const sessions = getWorkspaceSessions(agent);
+  const projects = new Map();
+
+  const upsertProject = (rawProject = {}) => {
+    const openDirectory = String(rawProject.openDirectory || '').trim();
+    if (!openDirectory) return null;
+
+    const id = `dir:${openDirectory.replace(/\\/g, '/').toLowerCase()}`;
+    const projectName = getPathLeaf(openDirectory);
+
+    const existing = projects.get(id);
+    const merged = existing ? {
+      ...existing,
+      updatedAt: existing.updatedAt || rawProject.updatedAt,
+      sessions: existing.sessions || [],
+    } : {
+      id,
+      type: 'directory',
+      openDirectory,
+      name: projectName,
+      sessions: [],
+      createdAt: rawProject.createdAt,
+      updatedAt: rawProject.updatedAt,
+    };
+    projects.set(id, merged);
+    return merged;
+  };
+
+  sessions.forEach((session) => {
+    const project = upsertProject({
+      openDirectory: session.openDirectory,
+      updatedAt: session.updatedAt,
+      createdAt: session.createdAt,
+    });
+    if (project) {
+      project.sessions.push(session);
+    }
+  });
+
+  return Array.from(projects.values())
+    .map((project) => ({
+      ...project,
+      sessions: project.sessions.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))),
+      conversationCount: project.sessions.length,
+      latestSessionId: project.sessions[0]?.id || null,
+      updatedAt: project.sessions[0]?.updatedAt || project.updatedAt || '',
+    }))
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+}
+
+function getProgrammingHelperProjectDisplayName(project) {
+  const directoryName = getPathLeaf(project?.openDirectory);
+  return directoryName || 'UntitledProject';
+}
+
 function hasWorkspaceSessions(agent = getCurrentAgentRecord()) {
   return getWorkspaceSessions(agent).length > 0;
 }
@@ -1382,6 +1440,109 @@ function renderWorkspaceSessionList(agent, block) {
       '<div class="workspace-section-desc">' + escapeHtml(desc) + '</div>',
       '</div>',
       headerAction,
+      '</div>',
+      bodyHtml,
+      '</section>',
+    ].join('');
+  }
+
+  if (agent?.id === 'programming-helper') {
+    const projects = getProgrammingHelperProjects(agent);
+    const emptyHtml = [
+      '<div class="workspace-history-list">',
+      '<div class="workspace-history-item"><div>' + escapeHtml(currentLanguage === 'zh' ? '暂无项目，点击下方按钮选择工作目录并开始新的对话' : 'No projects yet. Select a working directory to start.') + '</div></div>',
+      '<div class="workspace-actions">',
+      '<button class="workspace-action" type="button" onclick="window.phSelectDirectoryAndCreateSession()">' + escapeHtml(t('workspace_select_directory_new_project')) + '</button>',
+      '</div>',
+      '</div>',
+    ].join('');
+
+    const bodyHtml = projects.length > 0
+      ? '<div class="feature-project-list">' + projects.map((project) => {
+          const enterAction = escapeHtml(JSON.stringify(
+            project.latestSessionId
+              ? { type: 'open_session', sessionId: project.latestSessionId }
+              : {
+                  type: 'create_session',
+                  openDirectory: project.openDirectory || '',
+                }
+          ));
+          const newChatAction = escapeHtml(JSON.stringify({
+            type: 'create_session',
+            openDirectory: project.openDirectory || '',
+          }));
+          const sessionsHtml = project.sessions.length > 0
+            ? '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_conversation_group')) + '</div><div class="feature-project-session-list">' + project.sessions.map((session) => {
+                const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
+                const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
+                const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id, openDirectory: project.openDirectory }));
+                return [
+                  '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
+                  '<div class="workspace-history-main">',
+                  '<div class="workspace-history-title-row">',
+                  '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+                  renderSessionResumeBadge(session),
+                  '</div>',
+                  '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
+                  session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+                  '</div>',
+                  '<div class="workspace-history-side">',
+                  '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
+                  '<div class="workspace-actions stacked">',
+                  '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+                  '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
+                  '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+                  '</div>',
+                  '</div>',
+                  '</div>',
+                ].join('');
+              }).join('') + '</div></div>'
+            : '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_conversation_group')) + '</div><div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div></div>';
+
+          return [
+            '<div class="feature-project-card" data-prebuilt-project-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-project-id="' + escapeHtml(project.id) + '">',
+            '<details class="feature-project-disclosure">',
+            '<summary>',
+            '<div class="feature-project-row">',
+            '<div class="feature-project-summary">',
+            '<div class="feature-project-titlebar">',
+            '<div class="workspace-history-title">' + escapeHtml(getProgrammingHelperProjectDisplayName(project)) + '</div>',
+            '</div>',
+            '<div class="feature-project-meta-line"><span>' + escapeHtml(formatWorkspaceDate(project.updatedAt)) + '</span></div>',
+            project.openDirectory ? '<div class="workspace-history-meta">' + escapeHtml(project.openDirectory) + '</div>' : '',
+            '</div>',
+            '<div class="feature-project-side">',
+            '<div class="feature-project-head-actions">',
+            '<button class="workspace-action" type="button" data-workspace-action="' + enterAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(project.latestSessionId ? t('workspace_open_chat') : t('workspace_enter_development')) + '</button>',
+            '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>',
+            '</div>',
+            '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',
+            '</div>',
+            '</div>',
+            '</summary>',
+            '<div class="feature-project-body">',
+            sessionsHtml,
+            '</div>',
+            '</details>',
+            '</div>',
+          ].join('');
+        }).join('') + '</div>'
+      : emptyHtml;
+
+    const phHeaderActions = [
+      '<div class="workspace-actions" style="margin-top:0;flex-shrink:0;">',
+      '<button class="workspace-action" type="button" onclick="window.phSelectDirectoryAndCreateSession()">' + escapeHtml(t('workspace_new_project')) + '</button>',
+      '</div>',
+    ].join('');
+
+    return [
+      '<section class="workspace-section">',
+      '<div class="workspace-section-header">',
+      '<div>',
+      '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
+      '<div class="workspace-section-desc">' + escapeHtml(desc) + '</div>',
+      '</div>',
+      phHeaderActions,
       '</div>',
       bodyHtml,
       '</section>',
@@ -5345,8 +5506,21 @@ function renderCurrentMainView() {
         updateFollowLatestButton();
         return;
       }
+      container.querySelectorAll('details.feature-project-disclosure[open]').forEach((el) => {
+        const card = el.closest('.feature-project-card');
+        if (card?.dataset?.prebuiltProjectId) {
+          expandedProjectIds.add(card.dataset.prebuiltProjectId);
+        }
+      });
       container.innerHTML = newHtml;
       lastRenderedWorkspaceHtml = newHtml;
+      expandedProjectIds.forEach((pid) => {
+        const card = container.querySelector(`.feature-project-card[data-prebuilt-project-id="${CSS.escape(pid)}"]`);
+        if (card) {
+          const details = card.querySelector('details.feature-project-disclosure');
+          if (details) details.open = true;
+        }
+      });
     }
     updateProjectDocsetChrome(agent);
     if (typeof updateChatProcessToggle === 'function') {
@@ -7233,6 +7407,29 @@ function closeProjectContextMenu() {
 function closeFeatureRepoContextMenu() {
   featureRepoContextMenu.classList.remove('open');
   contextMenuFeatureRepoPackageId = null;
+}
+
+function closeCompactMenu() {
+  compactContextMenu.classList.remove('open');
+  contextMenuCompactAction = null;
+}
+
+function openCompactMenu(action, x, y) {
+  closeAgentContextMenu();
+  closeSessionContextMenu();
+  closeProjectContextMenu();
+  contextMenuCompactAction = action;
+
+  const margin = 8;
+  compactContextMenu.classList.add('open');
+  compactContextMenu.style.left = '0px';
+  compactContextMenu.style.top = '0px';
+
+  const rect = compactContextMenu.getBoundingClientRect();
+  const maxLeft = window.innerWidth - rect.width - margin;
+  const maxTop = window.innerHeight - rect.height - margin;
+  compactContextMenu.style.left = Math.max(margin, Math.min(x, maxLeft)) + 'px';
+  compactContextMenu.style.top = Math.max(margin, Math.min(y, maxTop)) + 'px';
 }
 
 function openFeatureRepoContextMenu(packageId, x, y) {
