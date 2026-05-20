@@ -1,4 +1,6 @@
 import { fileURLToPath } from 'url';
+import { existsSync, readFileSync } from 'fs';
+import { join, resolve, normalize, dirname } from 'path';
 import type {
   AgentFeature,
   FeatureContext,
@@ -10,6 +12,11 @@ import type { CallStartContext } from 'agentdev';
 import { CallStart } from 'agentdev';
 
 const __filename = fileURLToPath(import.meta.url);
+
+const MAX_FILE_CHARS = 8000;
+const MAX_TOTAL_FILE_CHARS = 30000;
+const MAX_SKILL_CHARS = 5000;
+const MAX_TOTAL_SKILL_CHARS = 15000;
 
 export interface ContextHandoffSeedMessage {
   role: string;
@@ -23,6 +30,9 @@ export interface ContextHandoffSeedPayload {
   sourceSummary?: string;
   mode?: string;
   seedMessages?: ContextHandoffSeedMessage[];
+  importantFiles?: string[];
+  importantSkills?: string[];
+  fileRanges?: Record<string, string>;
 }
 
 export interface ContextHandoffSeedFeatureConfig {
@@ -50,15 +60,14 @@ function normalizeSeedMessages(seedMessages: unknown): ContextHandoffSeedMessage
 
 function buildFallbackSeedMessage(handoff: ContextHandoffSeedPayload): string {
   const lines = [
-    '## Context Handoff Seed',
+    '## 上下文交接摘要',
     '',
-    'The following compacted context was exported from an earlier session so this runtime can continue the same task.',
     '以下压缩上下文来自更早的一次会话导出，用于让当前运行时继续同一个任务。',
   ];
 
   const sourceSessionId = cleanValue(handoff.sourceSessionId);
   if (sourceSessionId) {
-    lines.push('', `Source session: ${sourceSessionId}`, `来源会话：${sourceSessionId}`);
+    lines.push('', `来源会话：${sourceSessionId}`);
   }
 
   const sourceSummary = cleanValue(handoff.sourceSummary);
@@ -94,6 +103,15 @@ export class ContextHandoffSeedFeature implements AgentFeature {
       sourceSummary: cleanValue(config?.handoff?.sourceSummary),
       mode: cleanValue(config?.handoff?.mode),
       seedMessages: normalizeSeedMessages(config?.handoff?.seedMessages),
+      importantFiles: Array.isArray(config?.handoff?.importantFiles)
+        ? config.handoff.importantFiles.filter(f => typeof f === 'string')
+        : [],
+      importantSkills: Array.isArray(config?.handoff?.importantSkills)
+        ? config.handoff.importantSkills.filter(s => typeof s === 'string')
+        : [],
+      fileRanges: typeof config?.handoff?.fileRanges === 'object' && config.handoff.fileRanges !== null
+        ? config.handoff.fileRanges
+        : {},
     };
   }
 
@@ -161,5 +179,163 @@ export class ContextHandoffSeedFeature implements AgentFeature {
       seedMessageCount: seedMessages.length,
       turn: fallbackTurn,
     });
+
+    this.injectImportantContext(ctx, fallbackTurn);
+  }
+
+  private injectImportantContext(ctx: CallStartContext, turn: number): void {
+    const projectRoot = typeof (ctx.agent as any)?.projectRoot === 'string'
+      ? (ctx.agent as any).projectRoot
+      : process.cwd();
+
+    let injectionTurn = turn + 1000;
+
+    const fileBlocks = this.buildFileBlocks(projectRoot);
+    for (const block of fileBlocks) {
+      ctx.context.addSystemMessage(block, injectionTurn, this.name);
+      injectionTurn += 1;
+    }
+
+    const skillBlocks = this.buildSkillBlocks(projectRoot);
+    for (const block of skillBlocks) {
+      ctx.context.addSystemMessage(block, injectionTurn, this.name);
+      injectionTurn += 1;
+    }
+  }
+
+  private resolveFilePath(filePath: string, projectRoot: string): string {
+    if (existsSync(filePath)) return filePath;
+    const resolved = resolve(projectRoot, filePath);
+    if (existsSync(resolved)) return resolved;
+    return filePath;
+  }
+
+  private buildFileBlocks(projectRoot: string): string[] {
+    const files = this.handoff.importantFiles || [];
+    if (files.length === 0) return [];
+
+    const ranges = this.handoff.fileRanges || {};
+    const blocks: string[] = [];
+    const nameOnlyList: string[] = [];
+    let totalChars = 0;
+
+    for (const filePath of files) {
+      const resolved = this.resolveFilePath(filePath, projectRoot);
+      const content = this.tryReadFile(resolved);
+      const range = ranges[filePath];
+      const rangeLabel = range ? `（上次阅读行 ${range}）` : '';
+
+      if (content === null) {
+        nameOnlyList.push(`${filePath} ${rangeLabel}（文件未找到）`);
+        continue;
+      }
+      const budget = Math.max(0, MAX_TOTAL_FILE_CHARS - totalChars);
+      if (content.length <= budget && content.length <= MAX_FILE_CHARS) {
+        blocks.push([
+          `以下文件在此会话的前一轮中被标记为重要，内容已重新加载（行号为参考值，文件可能已变更）：`,
+          '',
+          `### ${filePath} ${rangeLabel}`,
+          content,
+        ].join('\n'));
+        totalChars += content.length;
+      } else {
+        nameOnlyList.push(`${filePath} ${rangeLabel}`);
+      }
+    }
+
+    if (nameOnlyList.length > 0) {
+      const nameBlockLines = [
+        '以下文件在此会话的前一轮中被标记为重要，但因超出显示上限或文件未找到仅保留路径（行号为参考值，文件可能已变更）：',
+        '',
+      ];
+      for (const p of nameOnlyList) nameBlockLines.push(`- ${p}`);
+      blocks.push(nameBlockLines.join('\n'));
+    }
+
+    return blocks;
+  }
+
+  private buildSkillBlocks(projectRoot: string): string[] {
+    const skills = this.handoff.importantSkills || [];
+    if (skills.length === 0) return [];
+
+    const blocks: string[] = [];
+    const nameOnlyList: string[] = [];
+    let totalChars = 0;
+
+    for (const skillName of skills) {
+      const skillDir = join(projectRoot, '.agentdev', 'skills', skillName);
+      const skillMdPath = join(skillDir, 'SKILL.md');
+      const content = this.tryReadFile(skillMdPath);
+      const basePath = normalize(skillDir);
+
+      if (content === null) {
+        nameOnlyList.push(`${skillName}（技能定义未找到，目录：${basePath}）`);
+        continue;
+      }
+
+      const parsed = this.parseSkillMd(content);
+      const header = [
+        `**技能名称**：${parsed.name || skillName}`,
+        parsed.description ? `**技能描述**：${parsed.description}` : '',
+        `**技能的基础目录路径**：\`${basePath}\``,
+        '',
+        '---',
+        '',
+        parsed.body,
+      ].filter(Boolean).join('\n');
+
+      const budget = Math.max(0, MAX_TOTAL_SKILL_CHARS - totalChars);
+      const truncated = header.length > MAX_SKILL_CHARS
+        ? header.slice(0, MAX_SKILL_CHARS) + '\n（已截断）'
+        : header;
+      if (truncated.length <= budget) {
+        blocks.push([
+          '以下技能在此会话的前一轮中被标记为重要：',
+          '',
+          `### 技能: ${skillName}`,
+          truncated,
+        ].join('\n'));
+        totalChars += truncated.length;
+      } else {
+        nameOnlyList.push(`${skillName}（目录：${basePath}）`);
+      }
+    }
+
+    if (nameOnlyList.length > 0) {
+      const nameBlockLines = [
+        '以下技能在此会话的前一轮中被标记为重要，但因超出显示上限或定义未找到仅保留名称：',
+        '',
+      ];
+      for (const s of nameOnlyList) nameBlockLines.push(`- ${s}`);
+      blocks.push(nameBlockLines.join('\n'));
+    }
+
+    return blocks;
+  }
+
+  private parseSkillMd(content: string): { name: string; description: string; body: string } {
+    const result = { name: '', description: '', body: content };
+    const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+    if (!frontmatterMatch) return result;
+    const yaml = frontmatterMatch[1];
+    const nameMatch = yaml.match(/^name:\s*["']?(.+?)["']?\s*$/m);
+    if (nameMatch) result.name = nameMatch[1].trim();
+    const descMatch = yaml.match(/^description:\s*["'](.+?)["']\s*$/m);
+    if (descMatch) result.description = descMatch[1].trim();
+    result.body = content.slice(frontmatterMatch[0].length).trim();
+    return result;
+  }
+
+  private tryReadFile(filePath: string): string | null {
+    try {
+      if (!existsSync(filePath)) return null;
+      const content = readFileSync(filePath, 'utf8');
+      return content.length > MAX_FILE_CHARS
+        ? content.slice(0, MAX_FILE_CHARS) + '\n（已截断）'
+        : content;
+    } catch {
+      return null;
+    }
   }
 }

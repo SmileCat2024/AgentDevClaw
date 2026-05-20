@@ -92,13 +92,13 @@ function buildSummarySeedMessage(summaryText) {
   return {
     role: 'system',
     content: [
-      'This session is being continued from a previous conversation that ran out of context.',
-      'The summary below covers the earlier portion of the conversation.',
+      '本次会话由之前因上下文耗尽而中断的对话继续而来。',
+      '下方摘要涵盖了前一轮对话的内容。',
       '',
-      'Summary:',
+      '摘要：',
       body,
       '',
-      'Continue from this summary without asking the user to restate the full background unless necessary.',
+      '请基于此摘要继续工作，除非确有必要，否则不要要求用户重新陈述完整背景。',
     ].join('\n'),
     turn: 0,
   };
@@ -171,6 +171,9 @@ export async function writeSummarizedHandoffPackage({
   summaryText: rawSummaryText = '',
   rawResponse = '',
   attemptCount = null,
+  importantFiles = [],
+  importantSkills = [],
+  fileRanges = {},
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
   const createdAt = new Date().toISOString();
@@ -202,6 +205,11 @@ export async function writeSummarizedHandoffPackage({
       shape: policy.summaryShape,
       rawResponse: typeof rawResponse === 'string' ? rawResponse : '',
       summaryText,
+    },
+    compactOutput: {
+      importantFiles: Array.isArray(importantFiles) ? importantFiles : [],
+      importantSkills: Array.isArray(importantSkills) ? importantSkills : [],
+      fileRanges: typeof fileRanges === 'object' && fileRanges !== null ? fileRanges : {},
     },
     seedMessages: [buildSummarySeedMessage(summaryText)],
   };
@@ -257,5 +265,8 @@ export async function exportSummarizedHandoffPackage({
     summaryText,
     rawResponse: typeof mirrorResult?.rawResponse === 'string' ? mirrorResult.rawResponse : '',
     attemptCount: mirrorResult?.attemptCount,
+    importantFiles: Array.isArray(mirrorResult?.importantFiles) ? mirrorResult.importantFiles : [],
+    importantSkills: Array.isArray(mirrorResult?.importantSkills) ? mirrorResult.importantSkills : [],
+    fileRanges: typeof mirrorResult?.fileRanges === 'object' && mirrorResult.fileRanges !== null ? mirrorResult.fileRanges : {},
   });
 }

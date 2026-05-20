@@ -1,79 +1,86 @@
-const NO_TOOLS_PREAMBLE = `CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
-- Do NOT use Read, Bash, Grep, Glob, Edit, Write, or ANY other tool.
-- You already have all the context you need in the conversation above.
-- Tool calls will be REJECTED and will waste your only turn.
-- Your entire response must be plain text: <analysis> then <summary>.`;
+const TOOL_CALL_PREAMBLE = `你有一个可用工具：record_compaction_context。
+你必须按以下两步输出：
 
-const NO_TOOLS_TRAILER = `Again: respond with plain text only.
-Do not call any tools.
-Return <analysis> followed by <summary>.`;
-
-const BASE_SUMMARY_PROMPT = `Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
-This summary should preserve the task-continuity essentials needed to continue the work without losing context.
-
-Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
-
-1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
-   - The user's explicit requests and intents
-   - Your approach to addressing the user's requests
-   - Key decisions, technical concepts and code patterns
-   - Specific details like:
-     - file names
-     - only short code excerpts when truly necessary
-     - function signatures
-     - file edits
-   - Errors that you ran into and how you fixed them
-   - Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
-2. Double-check for technical accuracy and completeness, addressing each required element thoroughly.
-3. Be concise. Prefer bullet points and short paragraphs. Do not reproduce the full transcript.
-4. Keep the final <summary> under 1800 English words (or similarly compact in Chinese).
-
-Your summary should include the following sections:
-
-1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail
-2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.
-3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Include only short excerpts when needed and explain why each file matters.
-4. Errors and fixes: List all errors that you ran into, and how you fixed them. Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
-5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
-6. User Direction Changes: Summarize the important user messages and feedback that changed direction or constraints. Do not list every message verbatim.
-7. Pending Tasks: Outline any pending tasks that you have explicitly been asked to work on.
-8. Current Work: Describe precisely what was being worked on immediately before this summary request, paying special attention to the most recent messages from both user and assistant.
-9. Optional Next Step: List the most direct next step that follows from the most recent user request and the current work state. Avoid tangents and do not quote large verbatim passages.
-
-Use exactly this output envelope:
-
+第一步 — 将九段式摘要写为纯文本（不使用工具）：
 <analysis>
-[Your thought process]
+[你的思考过程 — 可选]
 </analysis>
 
 <summary>
-1. Primary Request and Intent:
+1. 主要请求与意图：
    ...
+2. 关键技术概念：
+   ...
+3. 文件与代码段：
+   ...
+4. 错误与修复：
+   ...
+5. 问题解决过程：
+   ...
+6. 用户方向调整：
+   ...
+7. 待办事项：
+   ...
+8. 当前工作：
+   ...
+9. 可选的下一步：
+   ...
+</summary>
 
-2. Key Technical Concepts:
-   ...
+第二步 — 调用 record_compaction_context，传入 important_files 和 important_skills。
+不要把摘要文本放进工具调用参数中——摘要应写在上面的文本里。
+不要调用任何其他工具。`;
 
-3. Files and Code Sections:
-   ...
+const TOOL_CALL_TRAILER = `现在调用 record_compaction_context，传入文件路径和技能名称。
+只包含恢复工作真正需要的文件和技能。`;
 
-4. Errors and fixes:
-   ...
+const BASE_SUMMARY_PROMPT = `你的任务是为当前对话创建一份详细摘要，重点关注用户的明确请求和你之前采取的行动。
+这份摘要应保留恢复工作所需的任务连续性关键信息。
 
-5. Problem Solving:
-   ...
+按时间顺序分析对话：
 
-6. All user messages:
-   ...
+1. 识别用户的明确请求和意图
+2. 识别你的方法和关键决策
+3. 记录重要的技术概念、文件名、代码模式
+4. 记录遇到的错误及修复方式
+5. 特别注意改变了方向的用户反馈
 
-7. Pending Tasks:
-   ...
+将摘要以文本形式写在 <summary>...</summary> 标签中。
+然后调用 record_compaction_context，传入：
 
-8. Current Work:
-   ...
+- **important_files**：对继续任务至关重要的文件路径。只包含恢复工作真正需要其内容的文件。
+- **important_skills**：被实际使用过且继续工作需要用到的技能名称。
 
-9. Optional Next Step:
-   ...
-</summary>`;
+摘要控制在 1800 个英文单词以内（中文对应压缩），优先使用要点而非段落。`;
+
+export function scanFilesAndSkills(rawMessages) {
+  const files = new Set();
+  const skills = new Set();
+  const fileRanges = {};
+  for (const message of rawMessages) {
+    if (message.role !== 'assistant' || !Array.isArray(message.toolCalls)) continue;
+    for (const tc of message.toolCalls) {
+      const name = typeof tc?.name === 'string' ? tc.name : '';
+      const args = tc?.arguments && typeof tc.arguments === 'object' ? tc.arguments : {};
+      if ((name === 'read' || name === 'write' || name === 'edit') && typeof args.filePath === 'string') {
+        files.add(args.filePath);
+      }
+      if (name === 'read' && typeof args.filePath === 'string') {
+        const offset = typeof args.offset === 'number' ? args.offset : (typeof args.line === 'number' ? args.line : 0);
+        const limit = typeof args.limit === 'number' ? args.limit : 0;
+        if (offset > 0 || limit > 0) {
+          const start = Math.max(1, offset || 1);
+          const end = limit > 0 ? start + limit - 1 : start;
+          fileRanges[args.filePath] = `${start}-${end}`;
+        }
+      }
+      if (name === 'invoke_skill' && typeof args.skill === 'string') {
+        skills.add(args.skill);
+      }
+    }
+  }
+  return { files: [...files], skills: [...skills], fileRanges };
+}
 
 export function buildClaudeCompactPrompt(options = {}) {
   const extraInstructions = typeof options.additionalInstructions === 'string'
@@ -81,12 +88,12 @@ export function buildClaudeCompactPrompt(options = {}) {
     : '';
 
   return [
-    NO_TOOLS_PREAMBLE,
+    TOOL_CALL_PREAMBLE,
     '',
     BASE_SUMMARY_PROMPT,
-    extraInstructions ? `## Compact Instructions\n${extraInstructions}` : '',
+    extraInstructions ? `## 额外压缩指令\n${extraInstructions}` : '',
     '',
-    NO_TOOLS_TRAILER,
+    TOOL_CALL_TRAILER,
   ].filter(Boolean).join('\n');
 }
 

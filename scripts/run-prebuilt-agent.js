@@ -15,7 +15,7 @@ import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { FileSessionStore } from 'agentdev';
 import { setTimeout as sleep } from 'timers/promises';
-import { buildClaudeCompactPrompt, stripCompactAnalysis } from '../server/context-continuity/claude-compact-prompts.js';
+import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -69,6 +69,15 @@ function parseHandoffContent(raw, sourceLabel) {
         seedMessages,
         mode: cleanValue(parsed.mode),
         policy: parsed.policy && typeof parsed.policy === 'object' ? parsed.policy : {},
+        importantFiles: Array.isArray(parsed.compactOutput?.importantFiles)
+          ? parsed.compactOutput.importantFiles.filter(f => typeof f === 'string')
+          : [],
+        importantSkills: Array.isArray(parsed.compactOutput?.importantSkills)
+          ? parsed.compactOutput.importantSkills.filter(s => typeof s === 'string')
+          : [],
+        fileRanges: typeof parsed.compactOutput?.fileRanges === 'object' && parsed.compactOutput.fileRanges !== null
+          ? parsed.compactOutput.fileRanges
+          : {},
       };
     }
   } catch (error) {
@@ -340,22 +349,49 @@ async function generateInProcessSummary(extraInstructions = '') {
   });
 
   const toolRegistry = typeof agent?.getTools === 'function' ? agent.getTools() : null;
-  const tools = shouldPreserveSummaryTools(agent) ? (toolRegistry?.getAll?.() || []) : [];
+  const allTools = toolRegistry?.getAll?.() || [];
+  const compactTool = allTools.find(t => t.name === 'record_compaction_context');
+  let tools = shouldPreserveSummaryTools(agent) ? allTools : [];
+  if (compactTool && !tools.includes(compactTool)) {
+    tools = [compactTool];
+  }
   const restoreLLM = tuneSummaryLLM(agent?.llm);
   try {
     console.log(`[ProtoClaw Runtime] 开始进程内摘要压缩 messages=${messages.length} tools=${tools.length}`);
     const response = await agent.llm.chat(messages, tools);
     const rawResponse = typeof response?.content === 'string' ? response.content : '';
+    const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
+    if (toolCalls.some(tc => tc?.name !== 'record_compaction_context')) {
+      throw new Error('摘要模型错误地触发了工具调用');
+    }
+    const compactCall = toolCalls.find(tc => tc?.name === 'record_compaction_context');
+
     const summaryText = stripCompactAnalysis(rawResponse);
+    let importantFiles = [];
+    let importantSkills = [];
+
+    if (compactCall && compactCall.arguments) {
+      const args = typeof compactCall.arguments === 'string'
+        ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
+        : compactCall.arguments;
+      importantFiles = Array.isArray(args.important_files)
+        ? args.important_files.filter(f => typeof f === 'string')
+        : [];
+      importantSkills = Array.isArray(args.important_skills)
+        ? args.important_skills.filter(s => typeof s === 'string')
+        : [];
+    }
+
     if (!summaryText.trim()) {
       throw new Error('摘要模型返回了空结果');
     }
-    if (Array.isArray(response?.toolCalls) && response.toolCalls.length > 0) {
-      throw new Error('摘要模型错误地触发了工具调用');
-    }
+    const { fileRanges } = scanFilesAndSkills(rawMessages);
     return {
       rawResponse,
       summaryText,
+      importantFiles,
+      importantSkills,
+      fileRanges,
     };
   } finally {
     restoreLLM();
@@ -383,6 +419,9 @@ async function triggerSummaryCompaction(extraInstructions = '') {
       sessionId,
       summaryText: summaryResult.summaryText,
       rawResponse: summaryResult.rawResponse,
+      importantFiles: summaryResult.importantFiles || [],
+      importantSkills: summaryResult.importantSkills || [],
+      fileRanges: summaryResult.fileRanges || {},
       policy: {
         strategy: 'summarized-nine-section',
         additionalInstructions: extraInstructions || '',
@@ -424,6 +463,9 @@ async function triggerSummaryCompactionResume(extraInstructions = '') {
       sessionId,
       summaryText: summaryResult.summaryText,
       rawResponse: summaryResult.rawResponse,
+      importantFiles: summaryResult.importantFiles || [],
+      importantSkills: summaryResult.importantSkills || [],
+      fileRanges: summaryResult.fileRanges || {},
       policy: {
         strategy: 'summarized-nine-section',
         additionalInstructions: extraInstructions || '',
@@ -638,11 +680,13 @@ async function main() {
 
     try {
       await agent.onCall(handled.text);
-      if (sessionId) {
-        await agent.saveSession(sessionId, sessionStore);
-      }
     } catch (error) {
       console.error('[ProtoClaw Runtime] Agent 调用失败:', error);
+    }
+    if (sessionId) {
+      await agent.saveSession(sessionId, sessionStore).catch(e => {
+        console.warn('[ProtoClaw Runtime] 保存 session 失败:', e.message);
+      });
     }
   }
 

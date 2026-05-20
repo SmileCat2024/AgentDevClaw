@@ -6,7 +6,7 @@ import os from 'os';
 import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { FileSessionStore } from 'agentdev';
-import { buildClaudeCompactPrompt, stripCompactAnalysis } from '../server/context-continuity/claude-compact-prompts.js';
+import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -141,6 +141,16 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, pr
   });
 
   try {
+    // Mount Feature BEFORE prepareRuntime (same order as main agent)
+    if (typeof localFeatures.ContextCompactionControlFeature === 'function') {
+      agent.use(new localFeatures.ContextCompactionControlFeature({
+        serverOrigin: 'http://127.0.0.1:1420',
+        agentId,
+        sessionId,
+      }));
+      logPhase('ContextCompactionControlFeature mounted');
+    }
+
     logPhase('prepare runtime begin');
     if (typeof agent.prepareRuntime === 'function') {
       await agent.prepareRuntime();
@@ -150,6 +160,7 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, pr
     logPhase('load session begin');
     await agent.loadSession(sessionId, sessionStore);
     logPhase('load session done');
+
     tuneMirrorLLM(agent.llm);
     const toolRegistry = typeof agent.getTools === 'function' ? agent.getTools() : null;
     const toolEntries = toolRegistry?.getEntries?.() || [];
@@ -158,6 +169,10 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, pr
       const toolName = typeof entry?.tool?.name === 'string' ? entry.tool.name : '';
       if (!toolName) continue;
       toolRegistry.disable(toolName);
+    }
+    if (toolRegistry && typeof toolRegistry.enable === 'function') {
+      toolRegistry.enable('record_compaction_context');
+      logPhase('enabled record_compaction_context');
     }
 
     const context = typeof agent.getContext === 'function' ? agent.getContext() : null;
@@ -172,15 +187,31 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, pr
       thinkingBlocks: Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : undefined,
     }));
     const callIndex = typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : compactMessages.length;
+    const { files: refFiles, skills: refSkills, fileRanges } = scanFilesAndSkills(rawMessages);
+    const refLines = [];
+    if (refFiles.length > 0) {
+      refLines.push('## 本次会话中引用的文件');
+      for (const f of refFiles) refLines.push(`- ${f}`);
+      refLines.push('');
+    }
+    if (refSkills.length > 0) {
+      refLines.push('## 本次会话中调用的技能');
+      for (const s of refSkills) refLines.push(`- ${s}`);
+      refLines.push('');
+    }
+    const enrichedPrompt = refLines.length > 0 ? `${refLines.join('\n')}\n${prompt}` : prompt;
     compactMessages.push({
       role: 'user',
-      content: prompt,
+      content: enrichedPrompt,
       turn: callIndex,
     });
 
-    const compiledTools = shouldPreserveToolSchema(agent)
-      ? (toolRegistry?.getAll?.() || [])
-      : [];
+    const allTools = toolRegistry?.getAll?.() || [];
+    const targetTool = allTools.find(t => t.name === 'record_compaction_context');
+    let compiledTools = shouldPreserveToolSchema(agent) ? allTools : [];
+    if (targetTool && !compiledTools.includes(targetTool)) {
+      compiledTools = [targetTool];
+    }
     if (compiledTools.length === 0) {
       logPhase('tool schema omitted for mirror summary call');
     }
@@ -192,14 +223,36 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, pr
     );
     logPhase('chat done');
 
-    const usedTools = Array.isArray(response?.toolCalls) && response.toolCalls.length > 0;
     const rawResponse = typeof response?.content === 'string' ? response.content : '';
+    const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
+    const compactCall = toolCalls.find(tc => tc?.name === 'record_compaction_context');
+
     const summaryText = stripCompactAnalysis(rawResponse);
+    let importantFiles = [];
+    let importantSkills = [];
+
+    if (compactCall && compactCall.arguments) {
+      const args = typeof compactCall.arguments === 'string'
+        ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
+        : compactCall.arguments;
+      importantFiles = Array.isArray(args.important_files)
+        ? args.important_files.filter(f => typeof f === 'string')
+        : [];
+      importantSkills = Array.isArray(args.important_skills)
+        ? args.important_skills.filter(s => typeof s === 'string')
+        : [];
+      logPhase(`tool output: files=${importantFiles.length} skills=${importantSkills.length}`);
+    }
+
+    const usedTools = toolCalls.some(tc => tc?.name !== 'record_compaction_context');
 
     return {
       rawResponse,
       summaryText,
       usedTools,
+      importantFiles,
+      importantSkills,
+      fileRanges,
     };
   } finally {
     if (typeof agent.dispose === 'function') {
@@ -247,6 +300,9 @@ async function main() {
         attemptCount: attempt,
         summaryText: result.summaryText,
         rawResponse: result.rawResponse,
+        importantFiles: result.importantFiles || [],
+        importantSkills: result.importantSkills || [],
+        fileRanges: result.fileRanges || {},
       };
       writeFileSync(resultPath, `${JSON.stringify(payload)}\n`, 'utf8');
       process.exit(0);

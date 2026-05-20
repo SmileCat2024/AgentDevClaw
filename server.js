@@ -2653,6 +2653,9 @@ async function compactAndResumeFromProvidedSummary({
   sessionId = '',
   summaryText = '',
   rawResponse = '',
+  importantFiles = [],
+  importantSkills = [],
+  fileRanges = {},
   policy = {},
   startRuntime = true,
 }) {
@@ -2672,6 +2675,9 @@ async function compactAndResumeFromProvidedSummary({
     policy,
     summaryText,
     rawResponse,
+    importantFiles,
+    importantSkills,
+    fileRanges,
   });
 
   return createCompactedResumeFromHandoff({
@@ -2687,6 +2693,9 @@ async function exportProvidedSummaryHandoff({
   sessionId = '',
   summaryText = '',
   rawResponse = '',
+  importantFiles = [],
+  importantSkills = [],
+  fileRanges = {},
   policy = {},
 }) {
   const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, preferredAgentId);
@@ -2705,6 +2714,9 @@ async function exportProvidedSummaryHandoff({
     policy,
     summaryText,
     rawResponse,
+    importantFiles,
+    importantSkills,
+    fileRanges,
   });
 }
 
@@ -4312,6 +4324,9 @@ app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (re
       sessionId,
       summaryText,
       rawResponse: typeof req.body?.rawResponse === 'string' ? req.body.rawResponse : '',
+      importantFiles: Array.isArray(req.body?.importantFiles) ? req.body.importantFiles : [],
+      importantSkills: Array.isArray(req.body?.importantSkills) ? req.body.importantSkills : [],
+      fileRanges: typeof req.body?.fileRanges === 'object' && req.body.fileRanges !== null ? req.body.fileRanges : {},
       policy: req.body?.policy || {},
       startRuntime: req.body?.startRuntime !== false,
     });
@@ -4340,6 +4355,9 @@ app.post('/protoclaw/context_handoffs/summary_export', express.json(), async (re
       sessionId,
       summaryText,
       rawResponse: typeof req.body?.rawResponse === 'string' ? req.body.rawResponse : '',
+      importantFiles: Array.isArray(req.body?.importantFiles) ? req.body.importantFiles : [],
+      importantSkills: Array.isArray(req.body?.importantSkills) ? req.body.importantSkills : [],
+      fileRanges: typeof req.body?.fileRanges === 'object' && req.body.fileRanges !== null ? req.body.fileRanges : {},
       policy: req.body?.policy || {},
     });
     res.json(result);

@@ -74,9 +74,12 @@ export class ContextCompactionControlFeature implements AgentFeature {
         name: 'request_summary_compaction',
         description: 'Trigger a background summarized compaction job for the current session and return the generated handoff artifact information.',
         parameters: {
-          additionalInstructions: {
-            type: 'string',
-            description: 'Optional extra compact instructions appended to the summarization prompt.',
+          type: 'object',
+          properties: {
+            additionalInstructions: {
+              type: 'string',
+              description: 'Optional extra compact instructions appended to the summarization prompt.',
+            },
           },
         },
         execute: async (args) => {
@@ -117,9 +120,12 @@ export class ContextCompactionControlFeature implements AgentFeature {
         name: 'request_summary_compaction_resume',
         description: 'Trigger a summarized compaction job for the current session and create a new compacted resume session from it.',
         parameters: {
-          additionalInstructions: {
-            type: 'string',
-            description: 'Optional extra compact instructions appended to the summarization prompt.',
+          type: 'object',
+          properties: {
+            additionalInstructions: {
+              type: 'string',
+              description: 'Optional extra compact instructions appended to the summarization prompt.',
+            },
           },
         },
         execute: async (args) => {
@@ -151,6 +157,26 @@ export class ContextCompactionControlFeature implements AgentFeature {
             jobId: cleanValue(result?.jobId),
           };
         },
+      }, this.source),
+      createTool({
+        name: 'record_compaction_context',
+        description: 'Record important files and skills for context handoff. Call this AFTER writing the summary as text.',
+        parameters: {
+          type: 'object',
+          properties: {
+            important_files: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'File paths that are important for continuing the task.',
+            },
+            important_skills: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Skill names that were used and are important for continuing the task.',
+            },
+          },
+        },
+        execute: async () => ({ ok: true }),
       }, this.source),
     ];
   }
