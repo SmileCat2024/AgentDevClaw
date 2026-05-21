@@ -25,7 +25,9 @@
     "@agentdev/websearch-feature": "file:resources/features/agentdev-websearch-feature-0.1.0.tgz",
     "agentdev": "file:../AgentDev",
     "express": "^4.21.2",
-    "multer": "^2.1.1"
+    "marked": "^18.0.4",
+    "multer": "^2.1.1",
+    "undici": "^7.25.0"
   },
   "bin": {
     "claw": "./bin/claw.mjs"

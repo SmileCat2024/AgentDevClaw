@@ -1485,9 +1485,63 @@ body[data-theme="light"] .workspace-docset-row {
   gap: 10px;
 }
 
-.ph-sub-session-group .feature-project-subtitle {
+.ph-session-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ph-session-tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ph-session-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ph-session-tab:hover {
+  color: var(--text-primary);
+}
+
+.ph-session-tab.active {
   color: var(--accent);
-  opacity: 0.85;
+  border-bottom-color: var(--accent);
+}
+
+.ph-tab-count {
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 1px 6px;
+  line-height: 1.4;
+}
+
+.ph-session-tab.active .ph-tab-count {
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.ph-session-tab-panel {
+  display: none;
+}
+
+.ph-session-tab-panel.active {
+  display: block;
 }
 
 .feature-project-subtitle {

@@ -358,6 +358,14 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
   return resumeResponse.json();
 }
 
+window.switchPhSessionTab = (btn) => {
+  const tabGroup = btn.closest('.ph-session-tabs');
+  if (!tabGroup) return;
+  const targetTab = btn.dataset.phTab;
+  tabGroup.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === targetTab));
+  tabGroup.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === targetTab));
+};
+
 window.runWorkspaceAction = async (rawAction) => {
   let action = rawAction || {};
   if (typeof rawAction === 'string') {

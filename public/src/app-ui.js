@@ -1471,8 +1471,9 @@ function renderWorkspaceSessionList(agent, block) {
             type: 'create_session',
             openDirectory: project.openDirectory || '',
           }));
-          const mainSessions = project.sessions.filter(s => s.sessionType !== 'sub');
+          const explorationSessions = project.sessions.filter(s => s.sessionType === 'exploration');
           const subSessions = project.sessions.filter(s => s.sessionType === 'sub');
+          const hasSubs = subSessions.length > 0;
           const renderPhSessionItem = (session) => {
             const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
             const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
@@ -1499,14 +1500,18 @@ function renderWorkspaceSessionList(agent, block) {
             ].join('');
           };
           let sessionsHtml = '';
-          if (mainSessions.length > 0) {
-            sessionsHtml += '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_main_conversations')) + '</div><div class="feature-project-session-list">' + mainSessions.map(renderPhSessionItem).join('') + '</div></div>';
-          }
-          if (subSessions.length > 0) {
-            sessionsHtml += '<div class="feature-project-session-group ph-sub-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_sub_conversations')) + '</div><div class="feature-project-session-list">' + subSessions.map(renderPhSessionItem).join('') + '</div></div>';
-          }
-          if (!sessionsHtml) {
-            sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_conversation_group')) + '</div><div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div></div>';
+          if (hasSubs) {
+            const tabId = 'ph-tab-' + escapeHtml(agent.id) + '-' + escapeHtml(project.id);
+            sessionsHtml += '<div class="ph-session-tabs" data-tab-group="' + tabId + '">';
+            sessionsHtml += '<div class="ph-session-tab-bar">';
+            sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
+            sessionsHtml += '<button class="ph-session-tab" data-ph-tab="sub" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_sub_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(subSessions.length)) + '</span></button>';
+            sessionsHtml += '</div>';
+            sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(renderPhSessionItem).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+            sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="sub"><div class="feature-project-session-list">' + subSessions.map(renderPhSessionItem).join('') + '</div></div>';
+            sessionsHtml += '</div>';
+          } else {
+            sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(renderPhSessionItem).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
           }
 
           return [

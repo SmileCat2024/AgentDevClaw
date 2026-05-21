@@ -2103,6 +2103,8 @@ async function summarizePrebuiltSession(agentId, record) {
       expectedOutput,
       targetFiles,
       referenceMaterials,
+      sessionType: cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
+      status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
       metadata,
       formId,
       openDirectory,
@@ -2127,6 +2129,8 @@ async function summarizePrebuiltSession(agentId, record) {
       expectedOutput,
       targetFiles,
       referenceMaterials,
+      sessionType: cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
+      status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
       metadata,
       formId,
       openDirectory,
@@ -4362,74 +4366,236 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
   }
 });
 
+async function lockExplorationSession(agentId, sessionId, goal, response) {
+  try {
+    const index = await readSessionIndex(agentId);
+    const record = index.sessions.find(s => s.id === sessionId);
+    if (!record) return;
+    record.sessionType = 'exploration';
+    record.status = 'locked';
+    record.lockedAt = new Date().toISOString();
+    if (goal) record.goal = goal;
+    record.domains = extractDomainsFromText(response || goal || '');
+    record.updatedAt = new Date().toISOString();
+    await writeSessionIndex(agentId, { ...index });
+    console.log(`[lockExploration] Locked session=${sessionId} domains=${record.domains?.join(',') || '(none)'}`);
+  } catch (err) {
+    console.error(`[lockExploration] Failed for session=${sessionId}:`, err.message);
+  }
+}
+
+function extractDomainsFromText(text) {
+  if (!text || typeof text !== 'string') return [];
+  const techPatterns = [
+    /\b(Flow|Feature|Hook|ToolRegistry|Node|Edge|Workflow|Assembly|Session|Workspace|Runtime|Context|Prompt|Compaction|Mirror|Handoff|Seed|Inspector|Editor|Surface|Block|State|Config|Form|Agent|Message|Chunk|Template|Variable|Skill|Tool|Permission)\b/gi,
+  ];
+  const found = new Set();
+  for (const pattern of techPatterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const word = match[1];
+      if (word.length >= 3) found.add(word);
+    }
+  }
+  return [...found].slice(0, 8);
+}
+
+async function buildExplorationHandoffPayload(agentId, explorationIds, goal) {
+  const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
+
+  const summaries = [];
+  for (const expId of explorationIds) {
+    let found = false;
+    try {
+      const files = await fs.readdir(handoffsDir);
+      const match = files.find(f => f.startsWith('handoff-') && f.includes(expId) && f.endsWith('.json'));
+      if (match) {
+        const raw = await fs.readFile(path.join(handoffsDir, match), 'utf8');
+        const parsed = JSON.parse(raw);
+        summaries.push({ id: expId, summary: parsed.sourceSummary || parsed.summaryText || '' });
+        found = true;
+      }
+    } catch {}
+    if (!found) {
+      summaries.push({ id: expId, summary: `(探索记录 ${expId} 的摘要尚未生成，请先用 claw compact)` });
+    }
+  }
+
+  const combinedSummary = summaries.map(s => `## 探索记录 ${s.id}\n${s.summary}`).join('\n\n');
+  return {
+    packageId: `synthetic-exploration-${Date.now()}`,
+    sourceSessionId: explorationIds[0] || 'unknown',
+    sourceSummary: combinedSummary,
+    seedMessages: [],
+    mode: 'summary',
+    stats: { synthetic: true },
+  };
+}
+
+async function writeSyntheticHandoff(agentId, payload) {
+  const dir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
+  await fs.mkdir(dir, { recursive: true });
+  const fileName = `handoff-synthetic-${Date.now()}.json`;
+  const filePath = path.join(dir, fileName);
+  await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+  return filePath;
+}
+
 app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => {
   try {
     const handoffId = cleanSessionText(req.body?.handoffId);
     const handoffPath = cleanSessionText(req.body?.handoffPath);
     const goal = cleanSessionText(req.body?.goal);
     const timeoutMs = Number(req.body?.timeoutMs) || 300000;
+    const explorationIds = Array.isArray(req.body?.explorationIds)
+      ? req.body.explorationIds.map(id => cleanSessionText(id)).filter(Boolean)
+      : [];
 
-    if (!handoffId && !handoffPath) {
-      res.status(400).json({ error: 'handoffId or handoffPath is required' });
-      return;
-    }
     if (!goal) {
       res.status(400).json({ error: 'goal is required for one-shot spawn' });
       return;
     }
 
-    // Prevent HTTP timeout from killing the connection before agent finishes
     req.setTimeout(timeoutMs + 10000);
 
     const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    const agentId = preferredAgentId || 'programming-helper';
 
-    const { handoff, handoffPath: resolvedHandoffPath } = await readHandoffPackage({
-      userDataRoot: USER_DATA_ROOT,
-      agentId: preferredAgentId || '',
-      handoffId,
-      handoffPath,
-    });
+    const isExploration = explorationIds.length === 0 && !handoffId && !handoffPath;
+    const sessionType = isExploration ? 'exploration' : 'sub';
 
-    const sourceAgentId = cleanSessionText(handoff?.sourceAgentId);
-    const sourceSessionId = cleanSessionText(handoff?.sourceSessionId);
-    if (!sourceAgentId || !sourceSessionId) {
-      res.status(400).json({ error: 'Invalid handoff: sourceAgentId/sourceSessionId required' });
-      return;
+    let resolvedHandoffPath = null;
+    let sourceSessionId = null;
+    let handoff = null;
+
+    if (isExploration) {
+      sourceSessionId = `__protoclaw-exploration-${Date.now()}__`;
+      console.log(`[spawn_one_shot] Exploration mode: no parent context`);
+    } else {
+      if (explorationIds.length > 0) {
+        const handoffPayload = buildExplorationHandoffPayload(agentId, explorationIds, goal);
+        const syntheticPath = await writeSyntheticHandoff(agentId, handoffPayload);
+        resolvedHandoffPath = syntheticPath;
+        sourceSessionId = explorationIds[0];
+        console.log(`[spawn_one_shot] Sub-agent mode: from explorations ${explorationIds.join(',')}`);
+      } else {
+        if (!handoffId && !handoffPath) {
+          res.status(400).json({ error: 'handoffId, handoffPath, or explorationIds required' });
+          return;
+        }
+        const handoffResult = await readHandoffPackage({
+          userDataRoot: USER_DATA_ROOT,
+          agentId: agentId || '',
+          handoffId,
+          handoffPath,
+        });
+        handoff = handoffResult.handoff;
+        resolvedHandoffPath = handoffResult.handoffPath;
+        const hSourceAgentId = cleanSessionText(handoff?.sourceAgentId);
+        sourceSessionId = cleanSessionText(handoff?.sourceSessionId);
+        if (!hSourceAgentId || !sourceSessionId) {
+          res.status(400).json({ error: 'Invalid handoff: sourceAgentId/sourceSessionId required' });
+          return;
+        }
+      }
     }
 
-    const agent = await requirePrebuiltAgentForRuntime(sourceAgentId);
-    if (!handoff?.stats?.synthetic) {
+    const agent = await requirePrebuiltAgentForRuntime(agentId);
+    if (!isExploration && !handoff?.stats?.synthetic && explorationIds.length === 0) {
       await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
     }
 
     const session = await createPrebuiltSession(agent.id, {
       sourceSessionId,
       goal,
-      sessionType: 'sub',
+      sessionType,
       metadata: {
         resumeMode: 'one-shot',
-        sourceAgentId,
-        sourceSessionId,
-        handoffId: cleanSessionText(handoff?.handoffId) || cleanSessionText(handoffId),
-        handoffPath: resolvedHandoffPath,
-        handoffCreatedAt: cleanSessionText(handoff?.createdAt),
-        handoffMode: cleanSessionText(handoff?.mode),
+        ...(isExploration ? {} : {
+          handoffId: cleanSessionText(handoff?.handoffId) || cleanSessionText(handoffId),
+          handoffPath: resolvedHandoffPath,
+          handoffCreatedAt: cleanSessionText(handoff?.createdAt),
+          handoffMode: cleanSessionText(handoff?.mode),
+          sourceExplorationIds: explorationIds.length > 0 ? explorationIds : undefined,
+        }),
       },
     });
 
-    console.log(`[spawn_one_shot] Starting agent=${agent.id} session=${session.id} goal="${goal.slice(0, 80)}"`);
+    console.log(`[spawn_one_shot] Starting agent=${agent.id} session=${session.id} type=${sessionType} goal="${goal.slice(0, 80)}"`);
 
     const { exitCode, result } = await startOneShotAgent(agent, session.id, goal, {
       timeoutMs,
-      extraEnv: {
+      extraEnv: isExploration ? {} : {
         PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath,
       },
     });
 
-    console.log(`[spawn_one_shot] Completed agent=${agent.id} session=${session.id} ok=${result.ok} duration=${result.durationMs}ms`);
+    console.log(`[spawn_one_shot] Completed agent=${agent.id} session=${session.id} type=${sessionType} ok=${result.ok} duration=${result.durationMs}ms`);
+
+    if (isExploration && result.ok) {
+      await lockExplorationSession(agent.id, session.id, goal, result.response);
+    }
 
     res.json({
-      session: { id: session.id, title: session.title || null },
+      session: { id: session.id, title: session.title || null, sessionType },
+      result: {
+        ok: result.ok,
+        response: result.response,
+        error: result.error,
+        durationMs: result.durationMs,
+      },
+      exitCode,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
+  try {
+    const subSessionId = cleanSessionText(req.body?.sessionId);
+    const message = cleanSessionText(req.body?.message);
+    const timeoutMs = Number(req.body?.timeoutMs) || 300000;
+
+    if (!subSessionId || !message) {
+      res.status(400).json({ error: 'sessionId and message are required' });
+      return;
+    }
+
+    req.setTimeout(timeoutMs + 10000);
+
+    const agentId = 'programming-helper';
+    const agent = await requirePrebuiltAgentForRuntime(agentId);
+
+    const index = await readSessionIndex(agentId);
+    const record = index.sessions.find(s => s.id === subSessionId);
+    if (!record) {
+      res.status(404).json({ error: `Session ${subSessionId} not found` });
+      return;
+    }
+    if (record.sessionType === 'exploration') {
+      res.status(400).json({ error: 'Cannot resume an exploration session (it is locked)' });
+      return;
+    }
+    if (record.sessionType !== 'sub') {
+      res.status(400).json({ error: `Session ${subSessionId} is not a sub-agent session (type=${record.sessionType})` });
+      return;
+    }
+
+    record.sessionType = 'sub';
+    record.updatedAt = new Date().toISOString();
+    await writeSessionIndex(agentId, { ...index });
+
+    console.log(`[resume_sub] Resuming sub-agent session=${subSessionId} message="${message.slice(0, 80)}"`);
+
+    const { exitCode, result } = await startOneShotAgent(agent, subSessionId, message, {
+      timeoutMs,
+    });
+
+    console.log(`[resume_sub] Completed session=${subSessionId} ok=${result.ok} duration=${result.durationMs}ms`);
+
+    res.json({
+      session: { id: subSessionId },
       result: {
         ok: result.ok,
         response: result.response,
