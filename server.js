@@ -22,6 +22,7 @@ const APP_PORT = Number.parseInt(process.env.PORT || '1420', 10);
 const VIEWER_PORT = Number.parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
 const AGENTS_ROOT = path.join(__dirname, 'prebuilt-agents');
 const RUNTIME_SCRIPT = path.join(__dirname, 'scripts', 'run-prebuilt-agent.js');
+const ONE_SHOT_SCRIPT = path.join(__dirname, 'scripts', 'run-one-shot-agent.js');
 const AGENTDEV_ROOT = path.resolve(__dirname, '..', 'AgentDev');
 const AGENTDEV_CREATE_FEATURE_CLI = path.join(AGENTDEV_ROOT, 'dist', 'create-feature-cli.js');
 const VIEWER_ORIGIN = `http://127.0.0.1:${VIEWER_PORT}`;
@@ -1699,6 +1700,7 @@ async function readSessionIndex(agentId) {
           targetFiles: cleanSessionText(session.targetFiles),
           referenceMaterials: cleanSessionText(session.referenceMaterials),
           openDirectory: cleanSessionText(session.openDirectory),
+          sessionType: cleanSessionText(session.sessionType) || (session.metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
           metadata: normalizeSessionMetadata(session.metadata),
         }))
       : [];
@@ -2241,6 +2243,7 @@ async function createPrebuiltSession(agentId, options = {}) {
     referenceMaterials: nextReferenceMaterials,
     formId: requestedFormId,
     openDirectory: nextOpenDirectory,
+    sessionType: cleanSessionText(options.sessionType) || 'main',
     metadata: sessionMetadata,
     createdAt,
     updatedAt: createdAt,
@@ -3629,6 +3632,90 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
   return buildStatus(agent.id);
 }
 
+/**
+ * 启动一次性子代理（阻塞式）。
+ *
+ * 与 startManagedAgent 不同：
+ * - 使用 run-one-shot-agent.js 而非 run-prebuilt-agent.js
+ * - 不连接 ViewerWorker
+ * - 只执行一次 onCall(goal) 后退出
+ * - 返回 Promise，在进程退出时 resolve
+ */
+async function startOneShotAgent(agent, sessionId, goal, options = {}) {
+  const resolvedSessionId = sanitizeSessionFragment(sessionId);
+  const timeoutMs = options.timeoutMs || 300000;
+
+  return new Promise((resolve, reject) => {
+    let resultLine = null;
+    const stdoutChunks = [];
+
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error(`One-shot agent timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    const child = spawn(process.execPath, [
+      ONE_SHOT_SCRIPT,
+      agent.relativeDir,
+      agent.id,
+      resolvedSessionId,
+      goal,
+    ], {
+      cwd: __dirname,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: sanitizeSpawnEnv({
+        ...process.env,
+        PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
+        PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
+        PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
+        ...(options.extraEnv && typeof options.extraEnv === 'object' ? options.extraEnv : {}),
+      }),
+      windowsHide: true,
+    });
+
+    child.stdout.on('data', (chunk) => {
+      const text = String(chunk);
+      stdoutChunks.push(text);
+      const lines = text.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('ONE_SHOT_RESULT:')) {
+          resultLine = line;
+        }
+      }
+      log(agent.id, text.trim());
+    });
+
+    child.stderr.on('data', (chunk) => {
+      log(agent.id, String(chunk).trim(), 'error');
+    });
+
+    child.on('exit', (code) => {
+      clearTimeout(timeout);
+      log(agent.id, `one-shot process exited with code ${code ?? 'null'}`);
+
+      if (resultLine) {
+        try {
+          const jsonStr = resultLine.slice('ONE_SHOT_RESULT:'.length);
+          const result = JSON.parse(jsonStr);
+          resolve({ exitCode: code, result, stdout: stdoutChunks.join('') });
+        } catch (err) {
+          reject(new Error(`Failed to parse one-shot result: ${err.message}`));
+        }
+      } else {
+        reject(new Error(
+          `One-shot agent exited (code ${code}) without producing a result. ` +
+          `stdout: ${stdoutChunks.join('').slice(-500)}`,
+        ));
+      }
+    });
+
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(new Error(`One-shot agent failed to start: ${error.message}`));
+    });
+  });
+}
+
 async function startAssemblyRuntime(sessionId, agentId = 'agent-creator', preActivatedSession = null, preloadedWorkspaceState = null) {
   const _t0 = Date.now();
   console.log(`[PERF] startAssemblyRuntime BEGIN session=${sessionId} agent=${agentId} hasSession=${!!preActivatedSession} hasState=${!!preloadedWorkspaceState}`);
@@ -4270,6 +4357,87 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
       startRuntime: req.body?.startRuntime !== false,
     });
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => {
+  try {
+    const handoffId = cleanSessionText(req.body?.handoffId);
+    const handoffPath = cleanSessionText(req.body?.handoffPath);
+    const goal = cleanSessionText(req.body?.goal);
+    const timeoutMs = Number(req.body?.timeoutMs) || 300000;
+
+    if (!handoffId && !handoffPath) {
+      res.status(400).json({ error: 'handoffId or handoffPath is required' });
+      return;
+    }
+    if (!goal) {
+      res.status(400).json({ error: 'goal is required for one-shot spawn' });
+      return;
+    }
+
+    // Prevent HTTP timeout from killing the connection before agent finishes
+    req.setTimeout(timeoutMs + 10000);
+
+    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+
+    const { handoff, handoffPath: resolvedHandoffPath } = await readHandoffPackage({
+      userDataRoot: USER_DATA_ROOT,
+      agentId: preferredAgentId || '',
+      handoffId,
+      handoffPath,
+    });
+
+    const sourceAgentId = cleanSessionText(handoff?.sourceAgentId);
+    const sourceSessionId = cleanSessionText(handoff?.sourceSessionId);
+    if (!sourceAgentId || !sourceSessionId) {
+      res.status(400).json({ error: 'Invalid handoff: sourceAgentId/sourceSessionId required' });
+      return;
+    }
+
+    const agent = await requirePrebuiltAgentForRuntime(sourceAgentId);
+    if (!handoff?.stats?.synthetic) {
+      await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
+    }
+
+    const session = await createPrebuiltSession(agent.id, {
+      sourceSessionId,
+      goal,
+      sessionType: 'sub',
+      metadata: {
+        resumeMode: 'one-shot',
+        sourceAgentId,
+        sourceSessionId,
+        handoffId: cleanSessionText(handoff?.handoffId) || cleanSessionText(handoffId),
+        handoffPath: resolvedHandoffPath,
+        handoffCreatedAt: cleanSessionText(handoff?.createdAt),
+        handoffMode: cleanSessionText(handoff?.mode),
+      },
+    });
+
+    console.log(`[spawn_one_shot] Starting agent=${agent.id} session=${session.id} goal="${goal.slice(0, 80)}"`);
+
+    const { exitCode, result } = await startOneShotAgent(agent, session.id, goal, {
+      timeoutMs,
+      extraEnv: {
+        PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath,
+      },
+    });
+
+    console.log(`[spawn_one_shot] Completed agent=${agent.id} session=${session.id} ok=${result.ok} duration=${result.durationMs}ms`);
+
+    res.json({
+      session: { id: session.id, title: session.title || null },
+      result: {
+        ok: result.ok,
+        response: result.response,
+        error: result.error,
+        durationMs: result.durationMs,
+      },
+      exitCode,
+    });
   } catch (error) {
     next(error);
   }

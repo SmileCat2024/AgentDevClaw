@@ -1471,33 +1471,43 @@ function renderWorkspaceSessionList(agent, block) {
             type: 'create_session',
             openDirectory: project.openDirectory || '',
           }));
-          const sessionsHtml = project.sessions.length > 0
-            ? '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_conversation_group')) + '</div><div class="feature-project-session-list">' + project.sessions.map((session) => {
-                const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
-                const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
-                const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id, openDirectory: project.openDirectory }));
-                return [
-                  '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
-                  '<div class="workspace-history-main">',
-                  '<div class="workspace-history-title-row">',
-                  '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
-                  renderSessionResumeBadge(session),
-                  '</div>',
-                  '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
-                  session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
-                  '</div>',
-                  '<div class="workspace-history-side">',
-                  '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
-                  '<div class="workspace-actions stacked">',
-                  '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
-                  '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
-                  '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-                  '</div>',
-                  '</div>',
-                  '</div>',
-                ].join('');
-              }).join('') + '</div></div>'
-            : '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_conversation_group')) + '</div><div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div></div>';
+          const mainSessions = project.sessions.filter(s => s.sessionType !== 'sub');
+          const subSessions = project.sessions.filter(s => s.sessionType === 'sub');
+          const renderPhSessionItem = (session) => {
+            const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
+            const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
+            const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id, openDirectory: project.openDirectory }));
+            return [
+              '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(session.sessionType || 'main') + '">',
+              '<div class="workspace-history-main">',
+              '<div class="workspace-history-title-row">',
+              '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+              renderSessionResumeBadge(session),
+              '</div>',
+              '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
+              session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+              '</div>',
+              '<div class="workspace-history-side">',
+              '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
+              '<div class="workspace-actions stacked">',
+              '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+              '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
+              '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+              '</div>',
+              '</div>',
+              '</div>',
+            ].join('');
+          };
+          let sessionsHtml = '';
+          if (mainSessions.length > 0) {
+            sessionsHtml += '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_main_conversations')) + '</div><div class="feature-project-session-list">' + mainSessions.map(renderPhSessionItem).join('') + '</div></div>';
+          }
+          if (subSessions.length > 0) {
+            sessionsHtml += '<div class="feature-project-session-group ph-sub-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_sub_conversations')) + '</div><div class="feature-project-session-list">' + subSessions.map(renderPhSessionItem).join('') + '</div></div>';
+          }
+          if (!sessionsHtml) {
+            sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-subtitle">' + escapeHtml(t('workspace_conversation_group')) + '</div><div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div></div>';
+          }
 
           return [
             '<div class="feature-project-card" data-prebuilt-project-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-project-id="' + escapeHtml(project.id) + '">',

@@ -5,7 +5,7 @@
  *
  * 命令体系：
  *   claw                         状态概览
- *   claw ls [--dir <path>]       列出编程小助手的会话
+ *   claw ls [--dir <path>] [--all]  列出子对话（--all 显示全部）
  *   claw sessions                同 claw ls（别名）
  *   claw show <session>          显示会话详情
  *   claw compact <session>       对会话执行上下文压缩
@@ -13,8 +13,8 @@
  *   claw summary-show <session>  显示某会话的完整领域摘要
  *   claw seed <session...> [--mode full|summary] [--with-summary <session>] [--json]
  *                                构建子代理上下文注入种子
- *   claw spawn <session...> [--mode full|summary] [--with-summary <session>] [--goal <text>]
- *                                从指定会话的上下文启动新会话
+ *   claw spawn <session...> [--mode full|summary] [--with-summary <session>] [--goal <text>] [--blocking]
+ *                                从指定会话的上下文启动新会话（--blocking 阻塞等待结果）
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'fs';
@@ -276,7 +276,7 @@ function cmdOverview() {
 
   console.log('');
   console.log('  用法:');
-  console.log('    claw ls               列出对话记录');
+  console.log('    claw ls [--all]        列出子对话记录（--all 显示全部）');
   console.log('    claw summaries        列出领域摘要');
   console.log('    claw show <session>   查看对话详情');
   console.log('    claw seed <session>   构建上下文注入种子');
@@ -284,7 +284,7 @@ function cmdOverview() {
   console.log('    claw compact <session> 压缩对话上下文');
 }
 
-function cmdList(filterDir) {
+function cmdList(filterDir, showAll = false) {
   const state = readWorkspaceState();
   const index = readSessionIndex();
   const workspaceDir = cleanText(state.openDirectory);
@@ -294,9 +294,12 @@ function cmdList(filterDir) {
     .map(record => {
       const sessionOpenDir = cleanText(record.openDirectory)
         || (workspaceDir && !record.openDirectory ? workspaceDir : '');
-      return { ...record, resolvedOpenDir: sessionOpenDir };
+      const sessionType = cleanText(record.sessionType)
+        || (record.metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
+      return { ...record, resolvedOpenDir: sessionOpenDir, sessionType };
     })
     .filter(s => {
+      if (!showAll && s.sessionType !== 'sub') return false;
       if (!normalizedFilter) return true;
       return normalizeDir(s.resolvedOpenDir) === normalizedFilter;
     })
@@ -310,11 +313,15 @@ function cmdList(filterDir) {
 
   if (sessions.length === 0) {
     console.log('');
-    console.log(normalizedFilter ? '  该目录下暂无对话记录' : '  暂无对话记录');
+    if (showAll) {
+      console.log(normalizedFilter ? '  该目录下暂无对话记录' : '  暂无对话记录');
+    } else {
+      console.log(normalizedFilter ? '  该目录下暂无子对话记录（--all 查看全部）' : '  暂无子对话记录（--all 查看全部）');
+    }
     return;
   }
 
-  console.log(`${sessions.length} 个对话`);
+  console.log(`${sessions.length} 个${showAll ? '对话' : '子对话'}`);
   console.log('');
 
   const activeId = index.activeSessionId;
@@ -354,9 +361,12 @@ function cmdShow(sessionId) {
   const openDir = cleanText(record?.openDirectory) || cleanText(readWorkspaceState().openDirectory) || '';
   const taskTitle = cleanText(record?.taskTitle);
   const goal = cleanText(record?.goal);
+  const sessionType = cleanText(record?.sessionType)
+    || (record?.metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
 
   console.log(`会话 ${sessionId}`);
   console.log(`标题: ${title}`);
+  console.log(`类型: ${sessionType === 'sub' ? '子对话' : '主对话'}`);
   if (taskTitle && taskTitle !== title) console.log(`任务: ${taskTitle}`);
   if (goal) console.log(`目标: ${goal}`);
   if (openDir) console.log(`目录: ${openDir}`);
@@ -724,9 +734,9 @@ function buildSummarySeedMessage(entry) {
  *   4. 调 server API 创建新 session + 启动 runtime
  *   5. 新会话出现在 GUI 中，可直接交互
  */
-async function cmdSpawn(sessionIds, mode, goal, withSummarySessionId) {
+async function cmdSpawn(sessionIds, mode, goal, withSummarySessionId, blocking = false) {
   if (!sessionIds || sessionIds.length === 0) {
-    console.error('用法: claw spawn <session-id> [--mode full|summary] [--with-summary <session>] [--goal <text>]');
+    console.error('用法: claw spawn <session-id> [--mode full|summary] [--with-summary <session>] [--goal <text>] [--blocking]');
     process.exit(1);
   }
 
@@ -749,49 +759,102 @@ async function cmdSpawn(sessionIds, mode, goal, withSummarySessionId) {
     && primaryEntry.handoffPath;
 
   if (canReuseHandoff) {
-    // Single session, full mode, handoff already has real dialogue: reuse directly
     handoffPath = primaryEntry.handoffPath;
   } else {
-    // All other cases: build synthetic handoff (reads raw session for full mode)
     handoffPath = buildSyntheticHandoff(sessionIds, resolvedMode, goal, withSummarySessionId);
   }
 
   const sourceDesc = withSummarySessionId
     ? `${primarySessionId}(full) + ${withSummarySessionId}(summary)`
     : (sessionIds.length === 1 ? primarySessionId : sessionIds.length + ' 个会话');
-  console.log(`正在从 ${sourceDesc} 的上下文启动新会话...`);
 
-  try {
-    const response = await fetch(`${SERVER_URL}/protoclaw/context_handoffs/compacted_resume`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ handoffPath, goal: goal || undefined }),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      throw new Error(errorBody.error || `HTTP ${response.status}`);
+  if (blocking) {
+    // --- Blocking one-shot path ---
+    if (!goal) {
+      console.error('阻塞模式需要指定 --goal <任务目标>');
+      process.exit(1);
     }
-
-    const result = await response.json();
-    const newSession = result.session;
-
+    console.log(`正在从 ${sourceDesc} 启动阻塞式子代理...`);
+    console.log(`任务目标: ${goal}`);
+    console.log('(等待子代理完成，可能需要几分钟)...');
     console.log('');
-    console.log('新会话已创建并启动');
-    console.log(`  会话 ID: ${newSession.id}`);
-    console.log(`  标题: ${newSession.title || '(无标题)'}`);
-    if (newSession.openDirectory) {
-      console.log(`  目录: ${newSession.openDirectory}`);
+
+    try {
+      const response = await fetch(`${SERVER_URL}/protoclaw/spawn_one_shot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffPath, goal }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody.error || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      const result = data.result;
+
+      if (result.ok) {
+        console.log('子代理执行完成');
+        console.log(`  会话 ID: ${data.session.id}`);
+        console.log(`  耗时: ${(result.durationMs / 1000).toFixed(1)}s`);
+        console.log('');
+        if (result.response) {
+          console.log('--- 执行结果 ---');
+          console.log(result.response);
+          console.log('--- 结束 ---');
+        }
+      } else {
+        console.error('子代理执行失败');
+        console.error(`  会话 ID: ${data.session.id}`);
+        console.error(`  耗时: ${(result.durationMs / 1000).toFixed(1)}s`);
+        console.error(`  错误: ${result.error}`);
+        process.exit(1);
+      }
+    } catch (error) {
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        console.error('无法连接到 AgentDevClaw 服务（请先运行 npm start）');
+      } else {
+        console.error(`阻塞式执行失败: ${error.message}`);
+      }
+      process.exit(1);
     }
-    console.log('');
-    console.log('可在 AgentDevClaw 界面中继续对话');
-  } catch (error) {
-    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-      console.error('无法连接到 AgentDevClaw 服务（请先运行 npm start）');
-    } else {
-      console.error(`启动失败: ${error.message}`);
+  } else {
+    // --- Existing non-blocking path ---
+    console.log(`正在从 ${sourceDesc} 的上下文启动新会话...`);
+
+    try {
+      const response = await fetch(`${SERVER_URL}/protoclaw/context_handoffs/compacted_resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handoffPath, goal: goal || undefined }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody.error || `HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      const newSession = result.session;
+
+      console.log('');
+      console.log('新会话已创建并启动');
+      console.log(`  会话 ID: ${newSession.id}`);
+      console.log(`  标题: ${newSession.title || '(无标题)'}`);
+      if (newSession.openDirectory) {
+        console.log(`  目录: ${newSession.openDirectory}`);
+      }
+      console.log('');
+      console.log('可在 AgentDevClaw 界面中继续对话');
+    } catch (error) {
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        console.error('无法连接到 AgentDevClaw 服务（请先运行 npm start）');
+      } else {
+        console.error(`启动失败: ${error.message}`);
+      }
+      process.exit(1);
     }
-    process.exit(1);
   }
 }
 
@@ -925,6 +988,8 @@ function parseArgs(argv) {
   let jsonOutput = false;
   let withSummarySessionId = '';
   let goal = '';
+  let blocking = false;
+  let showAll = false;
   const positional = [];
 
   for (let i = 1; i < args.length; i++) {
@@ -942,18 +1007,22 @@ function parseArgs(argv) {
       i++;
     } else if (args[i] === '--json') {
       jsonOutput = true;
+    } else if (args[i] === '--blocking' || args[i] === '--wait') {
+      blocking = true;
+    } else if (args[i] === '--all' || args[i] === '-a') {
+      showAll = true;
     } else if (!args[i].startsWith('-')) {
       positional.push(args[i]);
     }
   }
 
-  return { command, filterDir, mode, jsonOutput, withSummarySessionId, goal, positional };
+  return { command, filterDir, mode, jsonOutput, withSummarySessionId, goal, blocking, showAll, positional };
 }
 
 // --- Main ---
 
 function main() {
-  const { command, filterDir, mode, jsonOutput, withSummarySessionId, goal, positional } = parseArgs(process.argv);
+  const { command, filterDir, mode, jsonOutput, withSummarySessionId, goal, blocking, showAll, positional } = parseArgs(process.argv);
 
   switch (command) {
     case '':
@@ -962,7 +1031,7 @@ function main() {
     case 'ls':
     case 'list':
     case 'sessions':
-      cmdList(resolveDir(filterDir));
+      cmdList(resolveDir(filterDir), showAll);
       break;
     case 'show':
     case 'get':
@@ -984,7 +1053,7 @@ function main() {
       break;
     case 'spawn':
     case 'resume':
-      cmdSpawn(positional, mode, goal, withSummarySessionId);
+      cmdSpawn(positional, mode, goal, withSummarySessionId, blocking);
       break;
     case 'help':
     case '--help':
@@ -993,14 +1062,14 @@ function main() {
       console.log('');
       console.log('用法:');
       console.log('  claw                         显示状态概览');
-      console.log('  claw ls [--dir <path>]       列出编程小助手的对话记录');
+      console.log('  claw ls [--dir <path>] [--all]  列出子对话记录（--all 显示全部）');
       console.log('  claw show <session-id>       查看对话详情');
       console.log('  claw compact <session-id>    压缩对话上下文');
       console.log('  claw summaries [--dir <path>] 列出可用的领域摘要');
       console.log('  claw summary-show <session>  显示某会话的完整领域摘要');
       console.log('  claw seed <session...> [--mode full|summary] [--with-summary <session>] [--json]');
       console.log('                               构建子代理上下文注入种子');
-      console.log('  claw spawn <session> [--mode full|summary] [--with-summary <session>] [--goal <text>]');
+      console.log('  claw spawn <session> [--mode full|summary] [--with-summary <session>] [--goal <text>] [--blocking]');
       console.log('                               从历史上下文启动新会话');
       break;
     default:

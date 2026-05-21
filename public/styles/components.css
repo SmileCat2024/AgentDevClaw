@@ -1485,6 +1485,11 @@ body[data-theme="light"] .workspace-docset-row {
   gap: 10px;
 }
 
+.ph-sub-session-group .feature-project-subtitle {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
 .feature-project-subtitle {
   font-size: 13px;
   line-height: 1.4;
