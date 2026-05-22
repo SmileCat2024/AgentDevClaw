@@ -44,12 +44,22 @@ function parseHandoffContent(raw, sourceLabel) {
     if (parsed && typeof parsed === 'object') {
       const seedMessages = Array.isArray(parsed.seedMessages)
         ? parsed.seedMessages
-            .map((message) => ({
-              role: cleanValue(message?.role),
-              content: cleanValue(message?.content),
-              turn: Number.isFinite(message?.turn) ? Number(message.turn) : null,
-            }))
-            .filter((message) => message.role && message.content)
+            .map((message) => {
+              const mapped = {
+                role: cleanValue(message?.role),
+                content: cleanValue(message?.content),
+                turn: Number.isFinite(message?.turn) ? Number(message.turn) : null,
+              };
+              // Preserve toolCalls and toolCallId for conversation fidelity
+              if (Array.isArray(message?.toolCalls) && message.toolCalls.length > 0) {
+                mapped.toolCalls = message.toolCalls;
+              }
+              if (message?.toolCallId) {
+                mapped.toolCallId = cleanValue(message.toolCallId);
+              }
+              return mapped;
+            })
+            .filter((message) => message.role && (message.content || message.toolCalls || message.toolCallId))
         : [];
       const sourceSummary = cleanValue(
         parsed.sourceSummary
@@ -220,7 +230,6 @@ async function main() {
   // 4. Mount handoff seed feature (same as run-prebuilt-agent.js)
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
 
-  // Skip ContextCompactionControlFeature — not needed for one-shot
   // Only mount handoff seed if handoff data exists
   if (runtimeHandoff?.handoff && (runtimeHandoff.handoff.sourceSummary || runtimeHandoff.handoff.seedMessages?.length)) {
     if (typeof localFeatures.ContextHandoffSeedFeature !== 'function') {
@@ -241,7 +250,6 @@ async function main() {
     console.log(`[OneShot] Workspace-bound agent environment => ${workspaceCwd}`);
   }
   console.log(`[OneShot] Agent 实例已创建: ${agentId}`);
-  // NO withViewer() — this is the critical difference
 
   // 6. Load or create session
   if (sessionId) {

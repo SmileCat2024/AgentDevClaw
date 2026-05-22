@@ -182,6 +182,8 @@ function findHandoffSummary(sessionId) {
       ? best.compactOutput.importantSkills : [],
     seedMessages: Array.isArray(best.seedMessages) ? best.seedMessages : [],
     stats: best.stats || {},
+    sessionTimestamp: best.sessionTimestamp || null,
+    gitMeta: best.gitMeta || null,
   };
 }
 
@@ -233,13 +235,37 @@ function cmdExplorations() {
       ? record.domains.join(', ')
       : '';
     const locked = record.status === 'locked' ? '已锁定' : '运行中';
-    const summary = hasSummary(record.id) ? '有摘要' : '无摘要';
     const date = formatDate(record.updatedAt || record.createdAt);
 
     console.log(`  ${shortId}`);
     console.log(`    ${truncate(goal, 80)}`);
+    const handoff = findHandoffSummary(record.id);
+    if (handoff?.summaryText) {
+      const files = handoff.importantFiles || [];
+      if (files.length > 0) {
+        const filePreview = files.slice(0, 4).map(f => f.split('/').pop() || f).join(', ');
+        console.log(`    探索了: ${truncate(filePreview, 100)}${files.length > 4 ? ` 等${files.length}个文件` : ''}`);
+      } else {
+        // Fallback: extract key findings from exploration summary section 2
+        const findings = handoff.summaryText.match(/(?:2\.\s*关键发现与结论|关键技术概念|核心技术)[：:]\s*\n([\s\S]*?)(?=\n\d+\.|$)/);
+        if (findings) {
+          console.log(`    ${truncate(findings[1].replace(/\n/g, ' ').trim(), 120)}`);
+        } else {
+          console.log(`    (有摘要)`);
+        }
+      }
+    } else {
+      console.log(`    (无摘要)`);
+    }
     if (domains) console.log(`    领域: ${domains}`);
-    console.log(`    ${locked} · ${summary} · ${date}`);
+    // Use sessionTimestamp from handoff if available (actual conversation time)
+    const displayDate = handoff?.sessionTimestamp
+      ? formatDate(handoff.sessionTimestamp)
+      : date;
+    const gitInfo = handoff?.gitMeta
+      ? ` · ${handoff.gitMeta.branch || '?'}@${handoff.gitMeta.commitHash || '?'}`
+      : '';
+    console.log(`    ${locked} · ${displayDate}${gitInfo}`);
     console.log('');
   }
 }
@@ -301,17 +327,36 @@ function cmdShow(sessionId) {
     if (Array.isArray(record.domains) && record.domains.length > 0) {
       console.log(`领域: ${record.domains.join(', ')}`);
     }
-    console.log(`摘要: ${hasSummary(sessionId) ? '已生成' : '未生成（claw compact 生成）'}`);
-    console.log(`创建: ${formatDate(record.createdAt)}`);
-    console.log(`更新: ${formatDate(record.updatedAt)}`);
+
+    const handoff = findHandoffSummary(sessionId);
+    console.log(`摘要: ${handoff?.summaryText ? '已生成' : '未生成（claw compact 生成）'}`);
+
+    if (handoff?.sessionTimestamp) {
+      console.log(`对话时间: ${formatDate(handoff.sessionTimestamp)}`);
+    } else {
+      console.log(`创建: ${formatDate(record.createdAt)}`);
+    }
+
+    if (handoff?.gitMeta) {
+      const gm = handoff.gitMeta;
+      console.log(`Git: ${gm.branch || '?'} @ ${gm.commitHash || '?'}${gm.isDirty ? ' (有未提交变更)' : ''} - ${truncate(gm.commitMessage || '', 60)}`);
+    }
 
     const detail = loadSessionDetail(sessionId);
     if (detail) {
       console.log(`消息: ${detail.messageCount} 条`);
     }
 
+    // Show final output (agent's actual response)
+    const finalOutput = loadFinalOutput(sessionId);
+    if (finalOutput) {
+      console.log('');
+      console.log('--- 探索结果 ---');
+      console.log(finalOutput);
+      console.log('--- 结束 ---');
+    }
+
     // Show handoff summary if available
-    const handoff = findHandoffSummary(sessionId);
     if (handoff?.summaryText) {
       console.log('');
       console.log('--- 摘要 ---');
@@ -377,7 +422,7 @@ async function cmdCompact(sessionId) {
       agentDir,
       'programming-helper',
       sessionId,
-      '{}',
+      JSON.stringify({ sessionType: 'exploration' }),
       resultPath,
     ];
 
@@ -427,6 +472,8 @@ async function cmdCompact(sessionId) {
           importantFiles: result.importantFiles || [],
           importantSkills: result.importantSkills || [],
           fileRanges: result.fileRanges || {},
+          sessionTimestamp: result.sessionTimestamp || null,
+          gitMeta: result.gitMeta || null,
         }),
       });
       if (!exportResp.ok) {
@@ -641,7 +688,7 @@ function parseArgs(argv) {
 
 // --- Main ---
 
-function main() {
+async function main() {
   const { command, mode, goal, message, blocking, positional } = parseArgs(process.argv);
 
   switch (command) {
@@ -666,13 +713,13 @@ function main() {
       break;
     case 'compact':
     case 'compress':
-      cmdCompact(positional[0] || '');
+      await cmdCompact(positional[0] || '');
       break;
     case 'spawn':
-      cmdSpawn(positional, mode, goal, blocking);
+      await cmdSpawn(positional, mode, goal, blocking);
       break;
     case 'resume':
-      cmdResume(positional[0] || '', message);
+      await cmdResume(positional[0] || '', message);
       break;
     case 'help':
     case '--help':
@@ -701,4 +748,7 @@ function main() {
   }
 }
 
-main();
+main().catch(err => {
+  console.error(err?.message || err);
+  process.exit(1);
+});

@@ -6,7 +6,6 @@ import type {
   FeatureContext,
   FeatureInitContext,
   FeatureStateSnapshot,
-  LLMResponse,
 } from 'agentdev';
 import type { CallStartContext } from 'agentdev';
 import { CallStart } from 'agentdev';
@@ -22,6 +21,8 @@ export interface ContextHandoffSeedMessage {
   role: string;
   content: string;
   turn?: number | null;
+  toolCalls?: Array<{ name: string; arguments: string; id: string }>;
+  toolCallId?: string;
 }
 
 export interface ContextHandoffSeedPayload {
@@ -47,15 +48,9 @@ function cleanValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function normalizeSeedMessages(seedMessages: unknown): ContextHandoffSeedMessage[] {
-  if (!Array.isArray(seedMessages)) return [];
-  return seedMessages
-    .map((message) => ({
-      role: cleanValue((message as any)?.role),
-      content: cleanValue((message as any)?.content),
-      turn: Number.isFinite((message as any)?.turn) ? Number((message as any).turn) : null,
-    }))
-    .filter((message) => message.role && message.content);
+function countValidSeedMessages(seedMessages: unknown): number {
+  if (!Array.isArray(seedMessages)) return 0;
+  return seedMessages.filter((m) => typeof (m as any)?.role === 'string' && (m as any).role).length;
 }
 
 function buildFallbackSeedMessage(handoff: ContextHandoffSeedPayload): string {
@@ -78,14 +73,6 @@ function buildFallbackSeedMessage(handoff: ContextHandoffSeedPayload): string {
   return lines.join('\n');
 }
 
-function replayAssistantMessage(ctx: CallStartContext, message: ContextHandoffSeedMessage, turn: number): void {
-  const response: LLMResponse = {
-    content: message.content,
-    toolCalls: [],
-  };
-  ctx.context.addAssistantMessage(response, turn);
-}
-
 export class ContextHandoffSeedFeature implements AgentFeature {
   readonly name = 'context-handoff-seed';
   readonly dependencies: string[] = [];
@@ -97,12 +84,16 @@ export class ContextHandoffSeedFeature implements AgentFeature {
   private logger?: FeatureInitContext['logger'];
 
   constructor(config: ContextHandoffSeedFeatureConfig) {
+    // Store seedMessages as raw array — no normalization, no filtering
+    const rawSeedMessages = Array.isArray(config?.handoff?.seedMessages)
+      ? config.handoff.seedMessages
+      : [];
     this.handoff = {
       packageId: cleanValue(config?.handoff?.packageId),
       sourceSessionId: cleanValue(config?.handoff?.sourceSessionId),
       sourceSummary: cleanValue(config?.handoff?.sourceSummary),
       mode: cleanValue(config?.handoff?.mode),
-      seedMessages: normalizeSeedMessages(config?.handoff?.seedMessages),
+      seedMessages: rawSeedMessages as any,
       importantFiles: Array.isArray(config?.handoff?.importantFiles)
         ? config.handoff.importantFiles.filter(f => typeof f === 'string')
         : [],
@@ -151,24 +142,27 @@ export class ContextHandoffSeedFeature implements AgentFeature {
     }
 
     const fallbackTurn = typeof (ctx.agent as any)?._callIndex === 'number' ? (ctx.agent as any)._callIndex : 0;
-    const seedMessages = Array.isArray(this.handoff.seedMessages) ? this.handoff.seedMessages : [];
+    const seedMessages: any[] = Array.isArray(this.handoff.seedMessages) ? this.handoff.seedMessages : [];
 
+    let injectionTurn = fallbackTurn;
+
+    // Inject seed messages as-is — they are raw conversation messages, no processing needed
     if (seedMessages.length > 0) {
       seedMessages.forEach((message, index) => {
-        const turn = Number.isFinite(message.turn) ? Number(message.turn) : (fallbackTurn + index);
-        if (message.role === 'user') {
-          ctx.context.addUserMessage(message.content, turn);
-          return;
-        }
-        if (message.role === 'assistant') {
-          replayAssistantMessage(ctx, message, turn);
-          return;
-        }
-        ctx.context.addSystemMessage(message.content, turn, this.name);
+        const turn = typeof message?.turn === 'number' && Number.isFinite(message.turn)
+          ? Number(message.turn)
+          : (fallbackTurn + index);
+        injectionTurn = Math.max(injectionTurn, turn + 1);
+        ctx.context.add({ ...message, turn });
       });
-    } else if (this.handoff.sourceSummary) {
-      ctx.context.addSystemMessage(buildFallbackSeedMessage(this.handoff), fallbackTurn, this.name);
-    } else {
+    }
+
+    // Always inject sourceSummary as a system message, even when seedMessages exist
+    if (this.handoff.sourceSummary) {
+      ctx.context.addSystemMessage(buildFallbackSeedMessage(this.handoff), injectionTurn, this.name);
+    }
+
+    if (seedMessages.length === 0 && !this.handoff.sourceSummary) {
       return;
     }
 
@@ -180,15 +174,15 @@ export class ContextHandoffSeedFeature implements AgentFeature {
       turn: fallbackTurn,
     });
 
-    this.injectImportantContext(ctx, fallbackTurn);
+    this.injectImportantContext(ctx, injectionTurn);
   }
 
-  private injectImportantContext(ctx: CallStartContext, turn: number): void {
+  private injectImportantContext(ctx: CallStartContext, baseTurn: number): void {
     const projectRoot = typeof (ctx.agent as any)?.projectRoot === 'string'
       ? (ctx.agent as any).projectRoot
       : process.cwd();
 
-    let injectionTurn = turn + 1000;
+    let injectionTurn = baseTurn + 1;
 
     const fileBlocks = this.buildFileBlocks(projectRoot);
     for (const block of fileBlocks) {

@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { FileSessionStore } from 'agentdev';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
+import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -73,6 +74,7 @@ function parseOptions(rawOptions) {
     maxAttempts: 3,
     additionalInstructions: '',
     promptOverride: '',
+    sessionType: '',
   };
   if (!rawOptions) return defaults;
   try {
@@ -81,6 +83,7 @@ function parseOptions(rawOptions) {
       maxAttempts: Number.isFinite(parsed?.maxAttempts) ? Math.max(1, Math.min(5, Number(parsed.maxAttempts))) : defaults.maxAttempts,
       additionalInstructions: cleanValue(parsed?.additionalInstructions),
       promptOverride: cleanValue(parsed?.promptOverride),
+      sessionType: cleanValue(parsed?.sessionType),
     };
   } catch {
     return defaults;
@@ -89,6 +92,37 @@ function parseOptions(rawOptions) {
 
 function logPhase(message) {
   process.stderr.write(`[compact-mirror] ${message}\n`);
+}
+
+function collectGitMeta(workspaceDir) {
+  try {
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: workspaceDir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    const commitHash = execSync('git rev-parse --short HEAD', { cwd: workspaceDir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    const commitMessage = execSync('git log -1 --format=%s', { cwd: workspaceDir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    const isDirty = execSync('git status --porcelain', { cwd: workspaceDir, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim().length > 0;
+    return { branch, commitHash, commitMessage, isDirty };
+  } catch {
+    return null;
+  }
+}
+
+function extractSessionTimestamp(sessionDir, sessionId) {
+  try {
+    const filePath = join(sessionDir, `${sessionId}.json`);
+    if (!existsSync(filePath)) return null;
+    const raw = JSON.parse(readFileSync(filePath, 'utf8'));
+    // savedAt may be a numeric timestamp (ms) or an ISO string
+    const savedAt = raw.savedAt;
+    if (typeof savedAt === 'number' && savedAt > 0) {
+      return new Date(savedAt).toISOString();
+    }
+    if (typeof savedAt === 'string' && savedAt) {
+      return savedAt;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function tuneMirrorLLM(llm) {
@@ -117,7 +151,7 @@ function shouldPreserveToolSchema(agent) {
   return modelName.includes('claude');
 }
 
-async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, prompt }) {
+async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, sessionType, prompt }) {
   logPhase(`load agent module agent=${agentId} session=${sessionId}`);
   const agentModule = await import(pathToFileURL(agentJsPath).href);
   const AgentClass = resolveAgentClass(agentModule);
@@ -268,11 +302,17 @@ async function main() {
   }
 
   const options = parseOptions(rawOptions);
+  const sessionType = cleanValue(options.sessionType);
   const agentPath = resolve(PROTOCLAW_ROOT, agentDir);
   const agentJsPath = join(agentPath, 'agent.js');
   const prompt = options.promptOverride || buildClaudeCompactPrompt({
     additionalInstructions: options.additionalInstructions,
+    sessionType,
   });
+
+  const workspaceDir = resolveWorkspaceCwd(agentId);
+  const gitMeta = collectGitMeta(workspaceDir);
+  const sessionTimestamp = extractSessionTimestamp(getSessionStoreDir(agentId), sessionId);
 
   const resultPath = resultFilePath || join(mkdtempSync(join(tmpdir(), 'compact-mirror-')), 'result.json');
 
@@ -285,6 +325,7 @@ async function main() {
         agentName: sanitizeSessionFragment(agentId),
         agentId,
         sessionId,
+        sessionType,
         prompt,
       });
 
@@ -303,6 +344,8 @@ async function main() {
         importantFiles: result.importantFiles || [],
         importantSkills: result.importantSkills || [],
         fileRanges: result.fileRanges || {},
+        sessionTimestamp,
+        gitMeta,
       };
       writeFileSync(resultPath, `${JSON.stringify(payload)}\n`, 'utf8');
       process.exit(0);

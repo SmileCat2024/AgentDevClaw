@@ -21,8 +21,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
+const EXPLORE_PROMPT_PATH = join(PROMPTS_DIR, 'explore.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'programming-helper', 'state.json');
+const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -48,35 +50,52 @@ function readProgrammingWorkspaceState() {
 export class ProgrammingHelperAgent extends BasicAgent {
   constructor(config = {}) {
     const workspaceDir = config.workspaceDir || process.cwd();
+    const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
 
     super({
       ...config,
       excludeMcpServers: Array.from(new Set([
         ...(config.excludeMcpServers ?? []),
-        ...DEFAULT_EXCLUDED_MCP_SERVERS,
+        ...(isExploration ? EXCLUDED_MCP_SERVERS_EXPLORE : DEFAULT_EXCLUDED_MCP_SERVERS),
       ])),
     });
 
-    this.use(new TodoFeature({
-      reminderTemplate: TODO_REMINDER_PROMPT_PATH,
-      reminderThresholdWithTasks: config.reminderThresholdWithTasks,
-      reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
-    }));
+    this._isExploration = isExploration;
 
-    this.use(new AuditFeature());
-    this.use(new AudioFeedbackFeature({
-      enabled: true,
-      volume: 0.5,
-    }));
-    this.use(new WebSearchFeature());
-    this.use(new MemoryFeature());
-    this.use(new ShellFeature({ workspaceDir }));
+    if (isExploration) {
+      this.use(new ShellFeature({ workspaceDir }));
+      this.use(new WebSearchFeature());
+      this.use(new MemoryFeature());
+    } else {
+      this.use(new TodoFeature({
+        reminderTemplate: TODO_REMINDER_PROMPT_PATH,
+        reminderThresholdWithTasks: config.reminderThresholdWithTasks,
+        reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
+      }));
 
-    this.use(new UserInputFeature());
+      this.use(new AuditFeature());
+      this.use(new AudioFeedbackFeature({
+        enabled: true,
+        volume: 0.5,
+      }));
+      this.use(new WebSearchFeature());
+      this.use(new MemoryFeature());
+      this.use(new ShellFeature({ workspaceDir }));
+
+      this.use(new UserInputFeature());
+    }
   }
 
   async onInitiate(ctx) {
     await super.onInitiate(ctx);
+
+    if (this._isExploration) {
+      const composer = new TemplateComposer()
+        .add({ file: EXPLORE_PROMPT_PATH });
+      this.setSystemPrompt(composer);
+      return;
+    }
+
     const workspaceState = readProgrammingWorkspaceState();
     const openDirectory = cleanValue(workspaceState?.openDirectory);
     const startupForm = workspaceState?.forms?.['startup-form'] || {};

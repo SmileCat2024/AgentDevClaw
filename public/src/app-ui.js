@@ -19,6 +19,7 @@ function selectWorkspaceSurface(agentId, options = {}) {
   }
   currentAgentId = agentId || null;
   currentRuntimeAgentId = null;
+  readOnlyMode = false;
   currentWorkspaceArtifactDetail = null;
   currentWorkspaceDocsetDetail = null;
   currentProjectDocsetOpen = false;
@@ -1471,18 +1472,53 @@ function renderWorkspaceSessionList(agent, block) {
             type: 'create_session',
             openDirectory: project.openDirectory || '',
           }));
+          const mainSessions = project.sessions.filter(s => s.sessionType !== 'exploration' && s.sessionType !== 'sub');
           const explorationSessions = project.sessions.filter(s => s.sessionType === 'exploration');
           const subSessions = project.sessions.filter(s => s.sessionType === 'sub');
-          const hasSubs = subSessions.length > 0;
-          const renderPhSessionItem = (session) => {
-            const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
-            const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
+          const needsTabs = explorationSessions.length > 0 || subSessions.length > 0;
+
+          const renderPhSessionItem = (session, type) => {
+            const sType = type || session.sessionType || 'main';
             const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id, openDirectory: project.openDirectory }));
+
+            let titleExtra = '';
+            if (sType === 'exploration') {
+              const badgeClass = session.hasSummary ? 'workspace-tag' : 'workspace-tag secondary';
+              const badgeText = session.hasSummary ? t('workspace_summary_generated') : t('workspace_summary_not_generated');
+              titleExtra = '<span class="' + badgeClass + '" style="margin-left:6px;font-size:11px;">' + escapeHtml(badgeText) + '</span>';
+            }
+
+            let buttonsHtml = '';
+            if (sType === 'main') {
+              const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
+              const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
+              buttonsHtml = [
+                '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+                '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
+                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+              ].join('');
+            } else if (sType === 'exploration') {
+              const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'exploration' }));
+              const summaryAction = escapeHtml(JSON.stringify({ type: session.hasSummary ? 'open_summary' : 'generate_summary', sessionId: session.id, agentId: agent.id }));
+              buttonsHtml = [
+                '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_view_record')) + '</button>',
+                '<button class="workspace-action secondary" type="button" data-workspace-action="' + summaryAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(session.hasSummary ? t('workspace_view_summary') : t('workspace_generate_summary')) + '</button>',
+                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+              ].join('');
+            } else if (sType === 'sub') {
+              const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'sub' }));
+              buttonsHtml = [
+                '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_view_record')) + '</button>',
+                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+              ].join('');
+            }
+
             return [
-              '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(session.sessionType || 'main') + '">',
+              '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '">',
               '<div class="workspace-history-main">',
               '<div class="workspace-history-title-row">',
               '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+              titleExtra,
               renderSessionResumeBadge(session),
               '</div>',
               '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
@@ -1491,27 +1527,28 @@ function renderWorkspaceSessionList(agent, block) {
               '<div class="workspace-history-side">',
               '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
               '<div class="workspace-actions stacked">',
-              '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
-              '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
-              '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+              buttonsHtml,
               '</div>',
               '</div>',
               '</div>',
             ].join('');
           };
+
           let sessionsHtml = '';
-          if (hasSubs) {
+          if (needsTabs) {
             const tabId = 'ph-tab-' + escapeHtml(agent.id) + '-' + escapeHtml(project.id);
             sessionsHtml += '<div class="ph-session-tabs" data-tab-group="' + tabId + '">';
             sessionsHtml += '<div class="ph-session-tab-bar">';
-            sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
+            sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainSessions.length)) + '</span></button>';
+            sessionsHtml += '<button class="ph-session-tab" data-ph-tab="exploration" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_exploration_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
             sessionsHtml += '<button class="ph-session-tab" data-ph-tab="sub" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_sub_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(subSessions.length)) + '</span></button>';
             sessionsHtml += '</div>';
-            sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(renderPhSessionItem).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
-            sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="sub"><div class="feature-project-session-list">' + subSessions.map(renderPhSessionItem).join('') + '</div></div>';
+            sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+            sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="exploration"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(s => renderPhSessionItem(s, 'exploration')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+            sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="sub"><div class="feature-project-session-list">' + (subSessions.length > 0 ? subSessions.map(s => renderPhSessionItem(s, 'sub')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
             sessionsHtml += '</div>';
           } else {
-            sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(renderPhSessionItem).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+            sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
           }
 
           return [
@@ -2739,7 +2776,19 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '</div>',
     '<div class="settings-field">',
     '<label>API Key</label>',
-    '<input class="settings-input" id="settings-preset-apikey" type="password" value="' + escapeHtml(preset.apiKey || '') + '" placeholder="sk-...">',
+    '<div style="position:relative;display:flex;align-items:stretch;">',
+    '<input class="settings-input" id="settings-preset-apikey" type="password" value="' + escapeHtml(preset.apiKey || '') + '" placeholder="sk-..." style="padding-right:40px;">',
+    '<button type="button" onclick="toggleApiKeyVisibility()" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);transition:color 0.2s;" onmouseover="this.style.color=\'var(--text-primary)\'" onmouseout="this.style.color=\'var(--text-secondary)\'" title="' + (isZh ? '显示/隐藏' : 'Show/Hide') + '">',
+    '<svg id="apikey-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
+    '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>',
+    '<circle cx="12" cy="12" r="3"></circle>',
+    '</svg>',
+    '<svg id="apikey-eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">',
+    '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>',
+    '<line x1="1" y1="1" x2="23" y2="23"></line>',
+    '</svg>',
+    '</button>',
+    '</div>',
     '</div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
@@ -2798,6 +2847,24 @@ async function deleteSettingsPreset(idx) {
   window.ClawFW.settingsData.presets = presets;
   window.ClawFW.settingsEditing = null;
   await saveSettingsConfig();
+}
+
+function toggleApiKeyVisibility() {
+  const input = document.getElementById('settings-preset-apikey');
+  const eyeIcon = document.getElementById('apikey-eye-icon');
+  const eyeOffIcon = document.getElementById('apikey-eye-off-icon');
+
+  if (!input) return;
+
+  if (input.type === 'password') {
+    input.type = 'text';
+    if (eyeIcon) eyeIcon.style.display = 'none';
+    if (eyeOffIcon) eyeOffIcon.style.display = 'block';
+  } else {
+    input.type = 'password';
+    if (eyeIcon) eyeIcon.style.display = 'block';
+    if (eyeOffIcon) eyeOffIcon.style.display = 'none';
+  }
 }
 
 async function saveSettingsPreset(idx) {
@@ -5459,6 +5526,7 @@ function renderWorkspaceSurface(agent = getCurrentAgentRecord()) {
   const hasAssemblyWorkbench = blocks.some((block) => block?.type === 'assembly-workbench');
   const animateClass = shouldAnimateWorkspaceSurface && !hasAssemblyWorkbench ? ' animate-in' : '';
   shouldAnimateWorkspaceSurface = false;
+
   return '<div class="workspace-surface' + animateClass + '">' + content + '</div>';
 }
 
@@ -5527,6 +5595,13 @@ function renderCurrentMainView() {
           expandedProjectIds.add(card.dataset.prebuiltProjectId);
         }
       });
+      const savedActiveTabs = {};
+      container.querySelectorAll('.ph-session-tabs[data-tab-group]').forEach((tg) => {
+        const activeBtn = tg.querySelector('.ph-session-tab.active');
+        if (activeBtn?.dataset?.phTab) {
+          savedActiveTabs[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
+        }
+      });
       container.innerHTML = newHtml;
       lastRenderedWorkspaceHtml = newHtml;
       expandedProjectIds.forEach((pid) => {
@@ -5534,6 +5609,13 @@ function renderCurrentMainView() {
         if (card) {
           const details = card.querySelector('details.feature-project-disclosure');
           if (details) details.open = true;
+        }
+      });
+      Object.entries(savedActiveTabs).forEach(([group, tab]) => {
+        const tg = container.querySelector(`.ph-session-tabs[data-tab-group="${CSS.escape(group)}"]`);
+        if (tg) {
+          tg.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === tab));
+          tg.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === tab));
         }
       });
     }
@@ -6657,6 +6739,97 @@ function closeRepositoryPackageDetails() {
 
 window.openRepositoryPackageDetails = openRepositoryPackageDetails;
 window.closeRepositoryPackageDetails = closeRepositoryPackageDetails;
+
+let summaryPopupData = null;
+
+function getOrCreateSummaryOverlay() {
+  let overlay = document.getElementById('summary-popup-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'summary-popup-overlay';
+    const mainContent = document.querySelector('.main-content');
+    if (mainContent) {
+      mainContent.appendChild(overlay);
+    } else {
+      document.body.appendChild(overlay);
+    }
+  }
+  return overlay;
+}
+
+function renderSummaryBodyContent(data) {
+  const { loading, data: summaryData, error } = data;
+  if (loading) {
+    return '<div class="feature-panel-section"><div class="workspace-form-note">' + escapeHtml(t('workspace_summary_loading')) + '</div></div>';
+  }
+  if (error) {
+    return '<div class="feature-panel-section"><div class="workspace-form-note" style="color:var(--color-danger)">' + escapeHtml(error) + '</div></div>';
+  }
+  if (!summaryData) return '';
+  let bodyContent = '';
+  const summaryText = summaryData.summaryText || t('workspace_no_summary_content');
+  bodyContent += '<div class="feature-panel-section">';
+  bodyContent += '<div class="feature-panel-section-title">' + escapeHtml(t('workspace_summary_title')) + '</div>';
+  bodyContent += '<div class="workspace-form-note" style="white-space:pre-wrap;max-height:400px;overflow-y:auto;">' + escapeHtml(summaryText) + '</div>';
+  bodyContent += '</div>';
+  if (summaryData.importantFiles && summaryData.importantFiles.length > 0) {
+    bodyContent += '<div class="feature-panel-section">';
+    bodyContent += '<div class="feature-panel-section-title">' + escapeHtml(t('workspace_important_files')) + '</div>';
+    bodyContent += '<div class="workspace-tag-list">' + summaryData.importantFiles.map(f => '<span class="workspace-tag">' + escapeHtml(f) + '</span>').join('') + '</div>';
+    bodyContent += '</div>';
+  }
+  if (summaryData.importantSkills && summaryData.importantSkills.length > 0) {
+    bodyContent += '<div class="feature-panel-section">';
+    bodyContent += '<div class="feature-panel-section-title">' + escapeHtml(t('workspace_important_skills')) + '</div>';
+    bodyContent += '<div class="workspace-tag-list">' + summaryData.importantSkills.map(s => '<span class="workspace-tag">' + escapeHtml(s) + '</span>').join('') + '</div>';
+    bodyContent += '</div>';
+  }
+  return bodyContent;
+}
+
+function updateSummaryOverlayDOM(data) {
+  const overlay = getOrCreateSummaryOverlay();
+  overlay.className = 'feature-detail-overlay';
+  overlay.onclick = function(e) { if (e.target === overlay) closeSummaryPopup(); };
+  overlay.innerHTML =
+    '<div class="feature-detail-window" style="width:min(100%,560px);max-height:min(100%,720px);">' +
+    '<div class="feature-detail-head">' +
+    '<div><div class="feature-detail-title">' + escapeHtml(t('workspace_summary_title')) + '</div></div>' +
+    '<button class="feature-detail-close" type="button" onclick="window.closeSummaryPopup()">×</button>' +
+    '</div>' +
+    renderSummaryBodyContent(data) +
+    '</div>';
+}
+
+function openSummaryPopup(agentId, sessionId) {
+  summaryPopupData = { agentId, sessionId, loading: true, data: null, error: null };
+  updateSummaryOverlayDOM(summaryPopupData);
+  fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId))
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
+        summaryPopupData.loading = false;
+        summaryPopupData.data = data;
+        updateSummaryOverlayDOM(summaryPopupData);
+      }
+    })
+    .catch(err => {
+      if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
+        summaryPopupData.loading = false;
+        summaryPopupData.error = err.message;
+        updateSummaryOverlayDOM(summaryPopupData);
+      }
+    });
+}
+
+function closeSummaryPopup() {
+  summaryPopupData = null;
+  const overlay = document.getElementById('summary-popup-overlay');
+  if (overlay) overlay.remove();
+}
+
+window.openSummaryPopup = openSummaryPopup;
+window.closeSummaryPopup = closeSummaryPopup;
 
 function setRepoSearchQuery(value) {
   repoSearchQuery = String(value || '').trim().toLowerCase();

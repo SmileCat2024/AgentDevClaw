@@ -2056,7 +2056,62 @@ function buildNamedSessionTitle(name, createdAtIso) {
   return buildFeatureSessionTitle(name, createdAtIso);
 }
 
-async function summarizePrebuiltSession(agentId, record) {
+async function checkSessionHasSummary(agentId, sessionId) {
+  const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
+  try {
+    const files = await fs.readdir(handoffsDir);
+    for (const file of files) {
+      if (!file.startsWith('handoff-') || !file.endsWith('.json')) continue;
+      try {
+        const raw = await fs.readFile(path.join(handoffsDir, file), 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed.sourceSessionId === sessionId && !parsed.stats?.synthetic) {
+          return true;
+        }
+      } catch {}
+    }
+  } catch {}
+  return false;
+}
+
+async function buildSessionSummaryMap(agentId) {
+  const map = new Set();
+  const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
+  try {
+    const files = await fs.readdir(handoffsDir);
+    for (const file of files) {
+      if (!file.startsWith('handoff-') || !file.endsWith('.json')) continue;
+      try {
+        const raw = await fs.readFile(path.join(handoffsDir, file), 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed.sourceSessionId && !parsed.stats?.synthetic) {
+          map.add(parsed.sourceSessionId);
+        }
+      } catch {}
+    }
+  } catch {}
+  return map;
+}
+
+async function findSessionSummary(agentId, sessionId) {
+  const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
+  try {
+    const files = await fs.readdir(handoffsDir);
+    for (const file of files) {
+      if (!file.startsWith('handoff-') || !file.endsWith('.json')) continue;
+      try {
+        const raw = await fs.readFile(path.join(handoffsDir, file), 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed.sourceSessionId === sessionId && !parsed.stats?.synthetic) {
+          return parsed;
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+async function summarizePrebuiltSession(agentId, record, summaryMap) {
   const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   const metadata = normalizeSessionMetadata(record.metadata);
@@ -2115,6 +2170,7 @@ async function summarizePrebuiltSession(agentId, record) {
       bytes: stat.size,
       messageCount: messages.length,
       preview: lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '',
+      hasSummary: summaryMap ? summaryMap.has(record.id) : (await checkSessionHasSummary(agentId, record.id)),
     };
   } catch {
     return {
@@ -2141,13 +2197,15 @@ async function summarizePrebuiltSession(agentId, record) {
       bytes: 0,
       messageCount: 0,
       preview: '',
+      hasSummary: false,
     };
   }
 }
 
 async function listPrebuiltSessions(agentId) {
   const index = await readSessionIndex(agentId);
-  const sessions = await Promise.all(index.sessions.map((record) => summarizePrebuiltSession(agentId, record)));
+  const summaryMap = await buildSessionSummaryMap(agentId);
+  const sessions = await Promise.all(index.sessions.map((record) => summarizePrebuiltSession(agentId, record, summaryMap)));
   sessions.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
   return {
     activeSessionId: index.activeSessionId || (sessions[0]?.id ?? null),
@@ -2708,6 +2766,8 @@ async function exportProvidedSummaryHandoff({
   importantSkills = [],
   fileRanges = {},
   policy = {},
+  sessionTimestamp = null,
+  gitMeta = null,
 }) {
   const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, preferredAgentId);
   if (!ownerAgentId) {
@@ -2728,6 +2788,8 @@ async function exportProvidedSummaryHandoff({
     importantFiles,
     importantSkills,
     fileRanges,
+    sessionTimestamp,
+    gitMeta,
   });
 }
 
@@ -3998,6 +4060,113 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
   }
 });
 
+app.get('/protoclaw/session_record', async (req, res, next) => {
+  try {
+    const agentId = req.query.agentId;
+    const sessionId = req.query.sessionId;
+    if (!agentId || !sessionId) {
+      res.status(400).json({ error: 'agentId and sessionId are required' });
+      return;
+    }
+    const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
+    const raw = await fs.readFile(sessionPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
+    res.json({
+      sessionId,
+      sessionType: parsed.sessionType || null,
+      goal: parsed.goal || null,
+      messages: messages.map(m => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/protoclaw/session_summary', async (req, res, next) => {
+  try {
+    const agentId = req.query.agentId;
+    const sessionId = req.query.sessionId;
+    if (!agentId || !sessionId) {
+      res.status(400).json({ error: 'agentId and sessionId are required' });
+      return;
+    }
+    const handoff = await findSessionSummary(agentId, sessionId);
+    if (!handoff) {
+      res.status(404).json({ error: 'No summary found for this session' });
+      return;
+    }
+    res.json({
+      sessionId,
+      summaryText: handoff.sourceSummary || handoff.summaryArtifact?.summaryText || '',
+      importantFiles: handoff.compactOutput?.importantFiles || [],
+      importantSkills: handoff.compactOutput?.importantSkills || [],
+      createdAt: handoff.createdAt || null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/session_generate_summary', express.json(), async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.body?.agentId);
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    if (!agentId || !sessionId) {
+      res.status(400).json({ error: 'agentId and sessionId are required' });
+      return;
+    }
+    const existingSummary = await findSessionSummary(agentId, sessionId);
+    if (existingSummary) {
+      res.json({ ok: true, alreadyExists: true });
+      return;
+    }
+    const agentDir = path.join('prebuilt-agents', 'official', agentId);
+    const resultPath = path.join(os.tmpdir(), `compact-mirror-${Date.now()}.json`);
+    const args = [
+      path.join(__dirname, 'scripts', 'run-compact-mirror.js'),
+      agentDir,
+      agentId,
+      sessionId,
+      '{}',
+      resultPath,
+    ];
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn('node', args, { cwd: __dirname, timeout: 120000, stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => { stdout += d; });
+      child.stderr.on('data', (d) => { stderr += d; });
+      child.on('close', (code) => {
+        if (code !== 0) reject(new Error(stderr || stdout || `compact mirror exited with code ${code}`));
+        else resolve(stdout);
+      });
+      child.on('error', reject);
+    });
+    console.log('[generate_summary] compact mirror output:', output?.slice(0, 200));
+    const result = await fs.readFile(resultPath, 'utf8').then(JSON.parse).catch(() => null);
+    if (!result?.ok || !result.summaryText) {
+      res.status(500).json({ error: 'Compact mirror did not produce a valid summary' });
+      return;
+    }
+    await exportProvidedSummaryHandoff({
+      preferredAgentId: agentId,
+      sessionId,
+      summaryText: result.summaryText,
+      rawResponse: result.rawResponse || '',
+      importantFiles: result.importantFiles || [],
+      importantSkills: result.importantSkills || [],
+    });
+    try { await fs.unlink(resultPath); } catch {}
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/protoclaw/workspace_state', async (req, res, next) => {
   try {
     if (typeof req.query.agentId !== 'string' || !req.query.agentId) {
@@ -4403,32 +4572,95 @@ function extractDomainsFromText(text) {
 async function buildExplorationHandoffPayload(agentId, explorationIds, goal) {
   const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
 
-  const summaries = [];
+  // --- Phase 1: Read handoff files for 交接班信息 (sourceSummary + importantFiles/Skills) ---
+  let handoffFiles = [];
+  try {
+    handoffFiles = (await fs.readdir(handoffsDir)).filter(f => f.startsWith('handoff-') && !f.startsWith('handoff-synthetic-') && f.endsWith('.json'));
+  } catch {}
+
+  const allImportantFiles = [];
+  const allImportantSkills = [];
+  const allFileRanges = {};
+  const summaryParts = [];
+
   for (const expId of explorationIds) {
-    let found = false;
-    try {
-      const files = await fs.readdir(handoffsDir);
-      const match = files.find(f => f.startsWith('handoff-') && f.includes(expId) && f.endsWith('.json'));
-      if (match) {
-        const raw = await fs.readFile(path.join(handoffsDir, match), 'utf8');
+    let bestParsed = null;
+    let bestCreatedAt = '';
+    for (const fname of handoffFiles) {
+      try {
+        const raw = await fs.readFile(path.join(handoffsDir, fname), 'utf8');
         const parsed = JSON.parse(raw);
-        summaries.push({ id: expId, summary: parsed.sourceSummary || parsed.summaryText || '' });
-        found = true;
+        if (parsed.sourceSessionId !== expId) continue;
+        const ca = parsed.createdAt || '';
+        if (ca > bestCreatedAt) {
+          bestParsed = parsed;
+          bestCreatedAt = ca;
+        }
+      } catch {}
+    }
+    if (bestParsed) {
+      // sourceSummary (老版摘要) is part of 交接班信息
+      const summary = bestParsed.sourceSummary || bestParsed.summaryText || '';
+      if (summary) {
+        summaryParts.push(`## 探索记录 ${expId}\n${summary}`);
       }
-    } catch {}
-    if (!found) {
-      summaries.push({ id: expId, summary: `(探索记录 ${expId} 的摘要尚未生成，请先用 claw compact)` });
+      if (Array.isArray(bestParsed.compactOutput?.importantFiles)) {
+        allImportantFiles.push(...bestParsed.compactOutput.importantFiles);
+      }
+      if (Array.isArray(bestParsed.compactOutput?.importantSkills)) {
+        allImportantSkills.push(...bestParsed.compactOutput.importantSkills);
+      }
+      if (bestParsed.compactOutput?.fileRanges && typeof bestParsed.compactOutput.fileRanges === 'object') {
+        Object.assign(allFileRanges, bestParsed.compactOutput.fileRanges);
+      }
     }
   }
 
-  const combinedSummary = summaries.map(s => `## 探索记录 ${s.id}\n${s.summary}`).join('\n\n');
+  const combinedSummary = summaryParts.join('\n\n');
+
+  // --- Phase 2: Read session files for full conversation history (全量历史) ---
+  const sessionsDir = path.join(USER_DATA_ROOT, 'workspaces', sanitizeSessionFragment(agentId || 'programming-helper'), 'sessions');
+  const allSeedMessages = [];
+
+  for (const expId of explorationIds) {
+    try {
+      const sessionPath = path.join(sessionsDir, `${expId}.json`);
+      const rawSession = await fs.readFile(sessionPath, 'utf8');
+      const sessionData = JSON.parse(rawSession);
+      const messages = sessionData?.runtime?.context?.messages;
+      if (!Array.isArray(messages)) continue;
+
+      // Include user, assistant, tool messages (skip system prompts — sub-agent has its own)
+      const conversationMessages = messages
+        .filter(m => m && m.role && m.role !== 'system' && (m.content || Array.isArray(m.toolCalls)))
+        .map(m => {
+          const msg = { role: m.role, content: typeof m.content === 'string' ? m.content : '' };
+          if (typeof m.turn === 'number') msg.turn = m.turn;
+          if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) msg.toolCalls = m.toolCalls;
+          if (m.toolCallId) msg.toolCallId = m.toolCallId;
+          return msg;
+        });
+
+      if (conversationMessages.length > 0) {
+        allSeedMessages.push(...conversationMessages);
+      }
+    } catch (err) {
+      console.warn(`[buildExplorationHandoffPayload] Failed to read session ${expId}: ${err.message}`);
+    }
+  }
+
   return {
     packageId: `synthetic-exploration-${Date.now()}`,
     sourceSessionId: explorationIds[0] || 'unknown',
     sourceSummary: combinedSummary,
-    seedMessages: [],
+    seedMessages: allSeedMessages,
     mode: 'summary',
     stats: { synthetic: true },
+    compactOutput: {
+      importantFiles: [...new Set(allImportantFiles)],
+      importantSkills: [...new Set(allImportantSkills)],
+      fileRanges: allFileRanges,
+    },
   };
 }
 
@@ -4473,7 +4705,7 @@ app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => 
       console.log(`[spawn_one_shot] Exploration mode: no parent context`);
     } else {
       if (explorationIds.length > 0) {
-        const handoffPayload = buildExplorationHandoffPayload(agentId, explorationIds, goal);
+        const handoffPayload = await buildExplorationHandoffPayload(agentId, explorationIds, goal);
         const syntheticPath = await writeSyntheticHandoff(agentId, handoffPayload);
         resolvedHandoffPath = syntheticPath;
         sourceSessionId = explorationIds[0];
@@ -4525,8 +4757,9 @@ app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => 
 
     const { exitCode, result } = await startOneShotAgent(agent, session.id, goal, {
       timeoutMs,
-      extraEnv: isExploration ? {} : {
-        PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath,
+      extraEnv: {
+        PROTOCLAW_SESSION_TYPE: 'exploration',
+        ...(resolvedHandoffPath ? { PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath } : {}),
       },
     });
 
@@ -4714,6 +4947,8 @@ app.post('/protoclaw/context_handoffs/summary_export', express.json(), async (re
       importantSkills: Array.isArray(req.body?.importantSkills) ? req.body.importantSkills : [],
       fileRanges: typeof req.body?.fileRanges === 'object' && req.body.fileRanges !== null ? req.body.fileRanges : {},
       policy: req.body?.policy || {},
+      sessionTimestamp: typeof req.body?.sessionTimestamp === 'string' ? req.body.sessionTimestamp : null,
+      gitMeta: req.body?.gitMeta && typeof req.body.gitMeta === 'object' ? req.body.gitMeta : null,
     });
     res.json(result);
   } catch (error) {

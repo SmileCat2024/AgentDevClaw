@@ -550,6 +550,65 @@ window.runWorkspaceAction = async (rawAction) => {
     return;
   }
 
+  if (action.type === 'view_session_record') {
+    if (!action.agentId || !action.sessionId) return;
+    readOnlyMode = true;
+    const agentId = action.agentId;
+    const sessionId = action.sessionId;
+    try {
+      const res = await fetch('/protoclaw/session_record?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      currentMessages = (data.messages || []).map(m => ({
+        role: m.role,
+        content: m.content,
+      }));
+      currentInputRequests = [];
+      lastRenderedInputSignature = '';
+      setPreferredUnitMode('chat', allAgents.find(a => a.id === agentId) || activeAgent);
+      renderCurrentMainView();
+    } catch (error) {
+      console.error('Failed to load session record:', error);
+      window.alert('Failed to load session record: ' + (error?.message || error));
+      readOnlyMode = false;
+    }
+    return;
+  }
+
+  if (action.type === 'open_summary') {
+    if (!action.agentId || !action.sessionId) return;
+    window.openSummaryPopup(action.agentId, action.sessionId);
+    return;
+  }
+
+  if (action.type === 'generate_summary') {
+    if (!action.agentId || !action.sessionId) return;
+    const agentId = action.agentId;
+    const sessionId = action.sessionId;
+    try {
+      window.openSummaryPopup(agentId, sessionId);
+      const res = await fetch('/protoclaw/session_generate_summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, sessionId }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const result = await res.json();
+      if (result?.ok) {
+        loadAgents().catch(() => {});
+        shouldAnimateWorkspaceSurface = false;
+        renderCurrentMainView();
+        window.openSummaryPopup(agentId, sessionId);
+      } else {
+        window.alert('Summary generation failed: ' + (result?.error || 'unknown error'));
+      }
+    } catch (error) {
+      console.error('Failed to generate summary:', error);
+      window.alert('Failed to generate summary: ' + (error?.message || error));
+    }
+    return;
+  }
+
   if (action.type === 'delete_session') {
     if (!activeAgent?.id || !action.sessionId) return;
     const sessionTitle = action.sessionId;
@@ -585,8 +644,9 @@ window.runWorkspaceAction = async (rawAction) => {
       } else if (deletedWasActive) {
         applyManagedPrebuiltAgent(activeAgent.id, null);
       }
-      await loadAgents();
-      lastRenderedWorkspaceHtml = '';
+      renderAgentList();
+      loadAgents().catch(() => {});
+      shouldAnimateWorkspaceSurface = false;
       renderCurrentMainView();
     } catch (error) {
       console.error('Failed to delete session:', error);
@@ -1959,6 +2019,7 @@ window.switchAgent = async (newAgentId) => {
 
     currentAgentId = targetAgent?.id || runtimeAgentId;
     currentRuntimeAgentId = runtimeAgentId;
+    readOnlyMode = false;
     currentWorkspaceArtifactDetail = null;
     currentWorkspaceDocsetDetail = null;
     currentProjectDocsetOpen = false;
@@ -2984,6 +3045,19 @@ function renderInputRequests(requests) {
 
   if (!chatActive) {
     container.classList.remove('choice-input-active', 'choice-collapsed');
+    return;
+  }
+
+  if (readOnlyMode) {
+    container.classList.remove('choice-input-active', 'choice-collapsed');
+    const card = document.createElement('div');
+    card.className = 'user-input-card';
+    card.innerHTML = `
+      <textarea class="user-input-textarea" rows="1" disabled
+        placeholder="${escapeHtml(t('workspace_readonly_mode'))}"
+        style="opacity:0.5;cursor:not-allowed;"></textarea>
+    `;
+    container.appendChild(card);
     return;
   }
 

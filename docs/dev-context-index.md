@@ -241,3 +241,87 @@ AI 写 Feature 时经常遗漏这一步，导致 Tool 的 execute 收到的 cont
 
 **"改了 local-features 的 TS 代码"**
 → `npm run build:local-features` → 重启产品
+
+---
+
+## 八、运行时模式
+
+### 两种模式
+
+产品当前只有**两种运行时模式**，通过 `PROTOCLAW_SESSION_TYPE` 环境变量区分：
+
+| 模式 | 环境变量值 | 功能挂载 | 使用场景 |
+|------|-----------|---------|---------|
+| **Normal mode** | (未设置或非 `exploration`) | 完整功能：Todo、Audit、AudioFeedback、WebSearch、Memory、Shell、UserInput | 主代理对话、完整工作空间 |
+| **Exploration mode** | `exploration` | 轻量级功能：Shell、WebSearch、Memory | 探索记录、子代理对话 |
+
+**关键事实**：
+- 探索记录（裸 spawn）和子代理（从探索派生）**都使用 exploration mode**
+- 探索模式是只读代理，不具备完整编辑能力（无 Todo、Audit、AudioFeedback、UserInput）
+- `PROTOCLAW_SESSION_TYPE` 在 `server.js` 的 `startOneShotAgent()` 中设置
+
+### 模式检测与功能挂载
+
+位置：`prebuilt-agents/official/programming-helper/agent.js`
+
+```js
+const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
+
+if (isExploration) {
+  // 轻量级功能：探索/子代理模式
+  this.use(new ShellFeature({ workspaceDir }));
+  this.use(new WebSearchFeature());
+  this.use(new MemoryFeature());  // CLAUDE.md 注入来源
+} else {
+  // 完整功能：主代理模式
+  this.use(new TodoFeature({ ... }));
+  this.use(new AuditFeature());
+  this.use(new AudioFeedbackFeature({ ... }));
+  this.use(new WebSearchFeature());
+  this.use(new MemoryFeature());
+  this.use(new ShellFeature({ workspaceDir }));
+  this.use(new UserInputFeature());
+}
+```
+
+### 系统提示词差异
+
+| 模式 | 系统提示词文件 | 内容 |
+|------|--------------|------|
+| Exploration mode | `.agentdev/prompts/explore.md` | 只读探索代理提示，强调搜索和分析能力 |
+| Normal mode | `.agentdev/prompts/system.md` | 完整 Claude Code Mini 提示 + skills + MCP |
+
+### 子代理上下文注入
+
+子代理从探索记录派生时，通过 `ContextHandoffSeedFeature` 注入两类上下文：
+
+1. **全量历史**（`seedMessages`）：原始探索对话的完整消息，**不做任何处理**，保留所有字段（role、content、toolCalls、toolCallId、turn）
+2. **交接班信息**：`sourceSummary`（九段式摘要）+ `importantFiles` + `importantSkills` + `fileRanges`
+
+位置：`local-features/context-handoff-seed/src/index.ts`
+
+```ts
+// 全量历史：原始直通，不做规范化处理
+seedMessages.forEach((message, index) => {
+  const turn = typeof message?.turn === 'number' ? message.turn : (fallbackTurn + index);
+  ctx.context.add({ ...message, turn });  // 保留所有原始字段
+});
+
+// 交接班摘要：始终注入，与 seedMessages 并行
+if (this.handoff.sourceSummary) {
+  ctx.context.addSystemMessage(buildFallbackSeedMessage(this.handoff), injectionTurn, this.name);
+}
+```
+
+### 关键设计原则
+
+1. **全量历史 = 对话重放**：本质上就是在老会话记录上继续，理论上不需要对老的会话内容有任何处理
+2. **CLAUDE.md 来自 MemoryFeature**：不是特殊处理，而是 MemoryFeature 在所有模式下都提供的能力
+3. **探索记录和子代理是同一模式**：字面意思上，"探索模式就是子代理的一种"
+4. **sourceSummary 与 seedMessages 并行注入**：不是互斥关系，两者都注入到子代理上下文
+
+### 相关文档
+
+- `docs/claw-cli-redesign.md` - 产品语义设计（三种实体：Exploration、Sub-agent、Summary）
+- `docs/context-compaction-structured-output-design.md` - 结构化压缩输出设计
+- `C:\Users\zty20\.claude\skills\claw-cli\SKILL.md` - 用户面向的 claw-cli 技能文档

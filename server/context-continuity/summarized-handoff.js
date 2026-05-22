@@ -174,6 +174,8 @@ export async function writeSummarizedHandoffPackage({
   importantFiles = [],
   importantSkills = [],
   fileRanges = {},
+  sessionTimestamp = null,
+  gitMeta = null,
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
   const createdAt = new Date().toISOString();
@@ -211,6 +213,13 @@ export async function writeSummarizedHandoffPackage({
       importantSkills: Array.isArray(importantSkills) ? importantSkills : [],
       fileRanges: typeof fileRanges === 'object' && fileRanges !== null ? fileRanges : {},
     },
+    sessionTimestamp: typeof sessionTimestamp === 'string' && sessionTimestamp ? sessionTimestamp : null,
+    gitMeta: gitMeta && typeof gitMeta === 'object' ? {
+      branch: cleanInlineText(gitMeta.branch),
+      commitHash: cleanInlineText(gitMeta.commitHash),
+      commitMessage: cleanInlineText(gitMeta.commitMessage),
+      isDirty: !!gitMeta.isDirty,
+    } : null,
     seedMessages: [buildSummarySeedMessage(summaryText)],
   };
 
