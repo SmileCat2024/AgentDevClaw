@@ -1482,11 +1482,6 @@ function renderWorkspaceSessionList(agent, block) {
             const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id, openDirectory: project.openDirectory }));
 
             let titleExtra = '';
-            if (sType === 'exploration') {
-              const badgeClass = session.hasSummary ? 'workspace-tag' : 'workspace-tag secondary';
-              const badgeText = session.hasSummary ? t('workspace_summary_generated') : t('workspace_summary_not_generated');
-              titleExtra = '<span class="' + badgeClass + '" style="margin-left:6px;font-size:11px;">' + escapeHtml(badgeText) + '</span>';
-            }
 
             let buttonsHtml = '';
             if (sType === 'main') {
@@ -1499,10 +1494,11 @@ function renderWorkspaceSessionList(agent, block) {
               ].join('');
             } else if (sType === 'exploration') {
               const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'exploration' }));
-              const summaryAction = escapeHtml(JSON.stringify({ type: session.hasSummary ? 'open_summary' : 'generate_summary', sessionId: session.id, agentId: agent.id }));
+              const summaryAction = escapeHtml(JSON.stringify({ type: 'open_summary', sessionId: session.id, agentId: agent.id }));
+              const summaryBtnClass = session.hasSummary ? 'workspace-action summary-exists' : 'workspace-action secondary';
               buttonsHtml = [
                 '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_view_record')) + '</button>',
-                '<button class="workspace-action secondary" type="button" data-workspace-action="' + summaryAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(session.hasSummary ? t('workspace_view_summary') : t('workspace_generate_summary')) + '</button>',
+                '<button class="' + summaryBtnClass + '" type="button" data-workspace-action="' + summaryAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(session.hasSummary ? t('workspace_view_summary') : t('workspace_generate_summary')) + '</button>',
                 '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
               ].join('');
             } else if (sType === 'sub') {
@@ -1518,11 +1514,10 @@ function renderWorkspaceSessionList(agent, block) {
               '<div class="workspace-history-main">',
               '<div class="workspace-history-title-row">',
               '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
-              titleExtra,
               renderSessionResumeBadge(session),
               '</div>',
               '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
-              session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+              sType !== 'exploration' && session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
               '</div>',
               '<div class="workspace-history-side">',
               '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
@@ -5595,11 +5590,10 @@ function renderCurrentMainView() {
           expandedProjectIds.add(card.dataset.prebuiltProjectId);
         }
       });
-      const savedActiveTabs = {};
       container.querySelectorAll('.ph-session-tabs[data-tab-group]').forEach((tg) => {
         const activeBtn = tg.querySelector('.ph-session-tab.active');
         if (activeBtn?.dataset?.phTab) {
-          savedActiveTabs[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
+          savedPhTabState[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
         }
       });
       container.innerHTML = newHtml;
@@ -5611,7 +5605,7 @@ function renderCurrentMainView() {
           if (details) details.open = true;
         }
       });
-      Object.entries(savedActiveTabs).forEach(([group, tab]) => {
+      Object.entries(savedPhTabState).forEach(([group, tab]) => {
         const tg = container.querySelector(`.ph-session-tabs[data-tab-group="${CSS.escape(group)}"]`);
         if (tg) {
           tg.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === tab));
@@ -6758,9 +6752,10 @@ function getOrCreateSummaryOverlay() {
 }
 
 function renderSummaryBodyContent(data) {
-  const { loading, data: summaryData, error } = data;
+  const { loading, generating, data: summaryData, error } = data;
   if (loading) {
-    return '<div class="feature-panel-section"><div class="workspace-form-note">' + escapeHtml(t('workspace_summary_loading')) + '</div></div>';
+    const msg = generating ? t('workspace_summary_generating') : t('workspace_summary_loading');
+    return '<div class="feature-panel-section"><div class="workspace-form-note">' + escapeHtml(msg) + '</div></div>';
   }
   if (error) {
     return '<div class="feature-panel-section"><div class="workspace-form-note" style="color:var(--color-danger)">' + escapeHtml(error) + '</div></div>';
@@ -6784,6 +6779,9 @@ function renderSummaryBodyContent(data) {
     bodyContent += '<div class="workspace-tag-list">' + summaryData.importantSkills.map(s => '<span class="workspace-tag">' + escapeHtml(s) + '</span>').join('') + '</div>';
     bodyContent += '</div>';
   }
+  bodyContent += '<div class="feature-panel-section" style="padding-top:8px;border-top:1px solid var(--border);">';
+  bodyContent += '<button class="workspace-action secondary" type="button" onclick="window.regenerateSummary()" style="font-size:12px;">' + escapeHtml(t('workspace_regenerate_summary')) + '</button>';
+  bodyContent += '</div>';
   return bodyContent;
 }
 
@@ -6802,20 +6800,45 @@ function updateSummaryOverlayDOM(data) {
 }
 
 function openSummaryPopup(agentId, sessionId) {
-  summaryPopupData = { agentId, sessionId, loading: true, data: null, error: null };
+  summaryPopupData = { agentId, sessionId, loading: true, generating: false, data: null, error: null };
   updateSummaryOverlayDOM(summaryPopupData);
   fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId))
-    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(r => {
+      if (r.status === 404) {
+        if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
+          summaryPopupData.generating = true;
+          updateSummaryOverlayDOM(summaryPopupData);
+        }
+        return fetch('/protoclaw/session_generate_summary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId, sessionId }),
+        }).then(r2 => {
+          if (!r2.ok) throw new Error('Generation failed');
+          return r2.json();
+        }).then(() => {
+          return fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
+        }).then(r3 => {
+          if (!r3.ok) throw new Error('Summary not found after generation');
+          return r3.json();
+        });
+      }
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    })
     .then(data => {
       if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
         summaryPopupData.loading = false;
+        summaryPopupData.generating = false;
         summaryPopupData.data = data;
         updateSummaryOverlayDOM(summaryPopupData);
       }
+      loadAgents().catch(() => {});
     })
     .catch(err => {
       if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
         summaryPopupData.loading = false;
+        summaryPopupData.generating = false;
         summaryPopupData.error = err.message;
         updateSummaryOverlayDOM(summaryPopupData);
       }
@@ -6830,6 +6853,40 @@ function closeSummaryPopup() {
 
 window.openSummaryPopup = openSummaryPopup;
 window.closeSummaryPopup = closeSummaryPopup;
+
+function regenerateSummary() {
+  if (!summaryPopupData) return;
+  const { agentId, sessionId } = summaryPopupData;
+  summaryPopupData = { agentId, sessionId, loading: true, generating: true, data: null, error: null };
+  updateSummaryOverlayDOM(summaryPopupData);
+  fetch('/protoclaw/session_generate_summary', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId, sessionId, force: true }),
+  })
+    .then(r => { if (!r.ok) throw new Error('Generation failed'); return r.json(); })
+    .then(() => fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId)))
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(data => {
+      if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
+        summaryPopupData.loading = false;
+        summaryPopupData.generating = false;
+        summaryPopupData.data = data;
+        updateSummaryOverlayDOM(summaryPopupData);
+      }
+      loadAgents().catch(() => {});
+    })
+    .catch(err => {
+      if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
+        summaryPopupData.loading = false;
+        summaryPopupData.generating = false;
+        summaryPopupData.error = err.message;
+        updateSummaryOverlayDOM(summaryPopupData);
+      }
+    });
+}
+
+window.regenerateSummary = regenerateSummary;
 
 function setRepoSearchQuery(value) {
   repoSearchQuery = String(value || '').trim().toLowerCase();

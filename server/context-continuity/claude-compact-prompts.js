@@ -1,37 +1,14 @@
-const TOOL_CALL_PREAMBLE = `你有一个可用工具：record_compaction_context。
-你必须按以下两步输出：
+const TOOL_CALL_PREAMBLE = `你必须调用 record_compaction_context 工具，将所有结果作为参数传入。
 
-第一步 — 将九段式摘要写为纯文本（不使用工具）：
-<analysis>
-[你的思考过程 — 可选]
-</analysis>
+参数说明：
+- session_title（必填，不能为空）：对对话主要内容的一句话概括，例如 "调试 Flow 节点工具权限逻辑"
+- summary：完整九段式摘要文本
+- important_files：恢复工作所需的文件路径列表
+- important_skills：实际使用过的技能名称列表
 
-<summary>
-1. 主要请求与意图：
-   ...
-2. 关键技术概念：
-   ...
-3. 文件与代码段：
-   ...
-4. 错误与修复：
-   ...
-5. 问题解决过程：
-   ...
-6. 用户方向调整：
-   ...
-7. 待办事项：
-   ...
-8. 当前工作：
-   ...
-9. 可选的下一步：
-   ...
-</summary>
+不要调用其他工具。`;
 
-第二步 — 调用 record_compaction_context，传入 important_files 和 important_skills。
-不要把摘要文本放进工具调用参数中——摘要应写在上面的文本里。
-不要调用任何其他工具。`;
-
-const TOOL_CALL_TRAILER = `现在调用 record_compaction_context，传入文件路径和技能名称。
+const TOOL_CALL_TRAILER = `现在调用 record_compaction_context，传入 session_title（必填）、summary、文件路径和技能名称。
 只包含恢复工作真正需要的文件和技能。`;
 
 const BASE_SUMMARY_PROMPT = `你的任务是为当前对话创建一份详细摘要，重点关注用户的明确请求和你之前采取的行动。
@@ -45,11 +22,17 @@ const BASE_SUMMARY_PROMPT = `你的任务是为当前对话创建一份详细摘
 4. 记录遇到的错误及修复方式
 5. 特别注意改变了方向的用户反馈
 
-将摘要以文本形式写在 <summary>...</summary> 标签中。
-然后调用 record_compaction_context，传入：
+摘要使用以下九段式结构：
 
-- **important_files**：对继续任务至关重要的文件路径。只包含恢复工作真正需要其内容的文件。
-- **important_skills**：被实际使用过且继续工作需要用到的技能名称。
+1. 主要请求与意图
+2. 关键技术概念
+3. 文件与代码段
+4. 错误与修复
+5. 问题解决过程
+6. 用户方向调整
+7. 待办事项
+8. 当前工作
+9. 可选的下一步
 
 摘要控制在 1800 个英文单词以内（中文对应压缩），优先使用要点而非段落。`;
 
@@ -82,42 +65,25 @@ export function scanFilesAndSkills(rawMessages) {
   return { files: [...files], skills: [...skills], fileRanges };
 }
 
-const EXPLORATION_SUMMARY_PREAMBLE = `你有一个可用工具：record_compaction_context。
-你必须按以下两步输出：
+const EXPLORATION_SUMMARY_PREAMBLE = `你必须调用 record_compaction_context 工具，将所有结果作为参数传入。
 
-第一步 — 将探索摘要写为纯文本（不使用工具）：
-<analysis>
-[你的思考过程 — 可选]
-</analysis>
+参数说明：
+- session_title（必填，不能为空）：对对话主要内容的一句话概括，例如 "探索 Flow 运行时 Hook 驱动机制"
+- summary：完整三段式探索摘要文本
+- important_files：探索中发现的重要文件路径列表
+- important_skills：探索中使用的技能名称列表
 
-<summary>
-1. 探索目标与范围：
-   ...
-2. 关键发现与结论：
-   ...
-3. 重要的代码位置与文件：
-   ...
-</summary>
-
-第二步 — 调用 record_compaction_context，传入 important_files 和 important_skills。
-不要把摘要文本放进工具调用参数中——摘要应写在上面的文本里。
-不要调用任何其他工具。`;
+不要调用其他工具。`;
 
 const EXPLORATION_SUMMARY_PROMPT = `你的任务是为一次代码探索生成一份精炼的探索摘要，帮助读者快速判断"这条探索记录跟我的当前任务相关吗"。
 
 摘要面向主代理（Main Agent），用于一览列表中的快速扫描和相关度评估，不注入子代理上下文。
 
-按以下三段输出：
+使用以下三段式结构：
 
 1. **探索目标与范围**：本次探索被派去查什么，探索了哪些模块/目录/子系统
 2. **关键发现与结论**：发现了什么，核心结论是什么，有什么值得注意的设计模式或架构特征
 3. **重要的代码位置与文件**：对后续工作最有参考价值的文件路径和代码位置
-
-将摘要以文本形式写在 <summary>...</summary> 标签中。
-然后调用 record_compaction_context，传入：
-
-- **important_files**：本次探索中实际访问过、对理解代码最有价值的文件路径
-- **important_skills**：被实际使用过且继续工作需要用到的技能名称
 
 摘要控制在 800 个英文单词以内（中文对应压缩），优先使用要点而非段落。`;
 
@@ -133,8 +99,6 @@ export function buildClaudeCompactPrompt(options = {}) {
       '',
       EXPLORATION_SUMMARY_PROMPT,
       extraInstructions ? `## 额外压缩指令\n${extraInstructions}` : '',
-      '',
-      TOOL_CALL_TRAILER,
     ].filter(Boolean).join('\n');
   }
 

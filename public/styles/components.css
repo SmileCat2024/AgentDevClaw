@@ -1571,6 +1571,18 @@ body[data-theme="light"] .workspace-docset-row {
   font-size: 12px;
 }
 
+.feature-project-session-item .workspace-action.summary-exists {
+  border-color: rgba(88, 166, 255, 0.3);
+  background: rgba(88, 166, 255, 0.1);
+  color: #9ecbff;
+}
+
+body[data-theme="light"] .feature-project-session-item .workspace-action.summary-exists {
+  border-color: rgba(30, 100, 200, 0.25);
+  background: rgba(30, 100, 200, 0.08);
+  color: #1a6dd4;
+}
+
 body[data-theme="light"] .feature-project-card {
   border-bottom-color: #e7e7e7;
 }

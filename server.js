@@ -2075,7 +2075,7 @@ async function checkSessionHasSummary(agentId, sessionId) {
 }
 
 async function buildSessionSummaryMap(agentId) {
-  const map = new Set();
+  const map = new Map();
   const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
   try {
     const files = await fs.readdir(handoffsDir);
@@ -2085,7 +2085,14 @@ async function buildSessionSummaryMap(agentId) {
         const raw = await fs.readFile(path.join(handoffsDir, file), 'utf8');
         const parsed = JSON.parse(raw);
         if (parsed.sourceSessionId && !parsed.stats?.synthetic) {
-          map.add(parsed.sourceSessionId);
+          const existing = map.get(parsed.sourceSessionId);
+          const thisCreatedAt = parsed.createdAt || '';
+          if (!existing || thisCreatedAt > (existing.createdAt || '')) {
+            map.set(parsed.sourceSessionId, {
+              sessionTitle: cleanSessionText(parsed.compactOutput?.sessionTitle),
+              createdAt: thisCreatedAt,
+            });
+          }
         }
       } catch {}
     }
@@ -2104,6 +2111,24 @@ async function findSessionSummary(agentId, sessionId) {
         const parsed = JSON.parse(raw);
         if (parsed.sourceSessionId === sessionId && !parsed.stats?.synthetic) {
           return parsed;
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+async function findSessionSummaryPath(agentId, sessionId) {
+  const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
+  try {
+    const files = await fs.readdir(handoffsDir);
+    for (const file of files) {
+      if (!file.startsWith('handoff-') || !file.endsWith('.json')) continue;
+      try {
+        const raw = await fs.readFile(path.join(handoffsDir, file), 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed.sourceSessionId === sessionId && !parsed.stats?.synthetic) {
+          return path.join(handoffsDir, file);
         }
       } catch {}
     }
@@ -2146,9 +2171,11 @@ async function summarizePrebuiltSession(agentId, record, summaryMap) {
     const parsed = JSON.parse(raw);
     const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
     const lastMessage = [...messages].reverse().find((message) => message && typeof message.content === 'string' && message.role !== 'system') || null;
+    const summaryInfo = summaryMap ? summaryMap.get(record.id) : null;
+    const compactTitle = summaryInfo?.sessionTitle || '';
     return {
       id: record.id,
-      title: record.title || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
+      title: compactTitle || record.title || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
       featureName,
       agentName,
       taskTitle,
@@ -2724,6 +2751,7 @@ async function compactAndResumeFromProvidedSummary({
   rawResponse = '',
   importantFiles = [],
   importantSkills = [],
+  sessionTitle = '',
   fileRanges = {},
   policy = {},
   startRuntime = true,
@@ -2746,6 +2774,7 @@ async function compactAndResumeFromProvidedSummary({
     rawResponse,
     importantFiles,
     importantSkills,
+    sessionTitle,
     fileRanges,
   });
 
@@ -2764,6 +2793,7 @@ async function exportProvidedSummaryHandoff({
   rawResponse = '',
   importantFiles = [],
   importantSkills = [],
+  sessionTitle = '',
   fileRanges = {},
   policy = {},
   sessionTimestamp = null,
@@ -2787,6 +2817,7 @@ async function exportProvidedSummaryHandoff({
     rawResponse,
     importantFiles,
     importantSkills,
+    sessionTitle,
     fileRanges,
     sessionTimestamp,
     gitMeta,
@@ -4102,6 +4133,7 @@ app.get('/protoclaw/session_summary', async (req, res, next) => {
     res.json({
       sessionId,
       summaryText: handoff.sourceSummary || handoff.summaryArtifact?.summaryText || '',
+      sessionTitle: handoff.compactOutput?.sessionTitle || '',
       importantFiles: handoff.compactOutput?.importantFiles || [],
       importantSkills: handoff.compactOutput?.importantSkills || [],
       createdAt: handoff.createdAt || null,
@@ -4119,19 +4151,32 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
       res.status(400).json({ error: 'agentId and sessionId are required' });
       return;
     }
+    const force = !!req.body?.force;
     const existingSummary = await findSessionSummary(agentId, sessionId);
-    if (existingSummary) {
+    if (existingSummary && !force) {
       res.json({ ok: true, alreadyExists: true });
       return;
     }
+    if (existingSummary && force) {
+      try {
+        const handoffPath = await findSessionSummaryPath(agentId, sessionId);
+        if (handoffPath) await fs.unlink(handoffPath).catch(() => {});
+      } catch {}
+    }
     const agentDir = path.join('prebuilt-agents', 'official', agentId);
     const resultPath = path.join(os.tmpdir(), `compact-mirror-${Date.now()}.json`);
+
+    // Read sessionType from session file to determine the correct prompt format
+    const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
+    const sessionRecord = await fs.readFile(sessionPath, 'utf8').then(JSON.parse).catch(() => null);
+    const sessionType = cleanSessionText(sessionRecord?.sessionType) || '';
+
     const args = [
       path.join(__dirname, 'scripts', 'run-compact-mirror.js'),
       agentDir,
       agentId,
       sessionId,
-      '{}',
+      JSON.stringify({ sessionType }),
       resultPath,
     ];
     const output = await new Promise((resolve, reject) => {
@@ -4159,6 +4204,7 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
       rawResponse: result.rawResponse || '',
       importantFiles: result.importantFiles || [],
       importantSkills: result.importantSkills || [],
+      sessionTitle: result.sessionTitle || '',
     });
     try { await fs.unlink(resultPath); } catch {}
     res.json({ ok: true });
@@ -4914,6 +4960,7 @@ app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (re
       rawResponse: typeof req.body?.rawResponse === 'string' ? req.body.rawResponse : '',
       importantFiles: Array.isArray(req.body?.importantFiles) ? req.body.importantFiles : [],
       importantSkills: Array.isArray(req.body?.importantSkills) ? req.body.importantSkills : [],
+      sessionTitle: typeof req.body?.sessionTitle === 'string' ? req.body.sessionTitle : '',
       fileRanges: typeof req.body?.fileRanges === 'object' && req.body.fileRanges !== null ? req.body.fileRanges : {},
       policy: req.body?.policy || {},
       startRuntime: req.body?.startRuntime !== false,
@@ -4945,6 +4992,7 @@ app.post('/protoclaw/context_handoffs/summary_export', express.json(), async (re
       rawResponse: typeof req.body?.rawResponse === 'string' ? req.body.rawResponse : '',
       importantFiles: Array.isArray(req.body?.importantFiles) ? req.body.importantFiles : [],
       importantSkills: Array.isArray(req.body?.importantSkills) ? req.body.importantSkills : [],
+      sessionTitle: typeof req.body?.sessionTitle === 'string' ? req.body.sessionTitle : '',
       fileRanges: typeof req.body?.fileRanges === 'object' && req.body.fileRanges !== null ? req.body.fileRanges : {},
       policy: req.body?.policy || {},
       sessionTimestamp: typeof req.body?.sessionTimestamp === 'string' ? req.body.sessionTimestamp : null,

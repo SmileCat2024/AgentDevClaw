@@ -265,6 +265,7 @@ let currentWorkspaceTab = null;
 let shouldAnimateWorkspaceSurface = true;
 let assemblyDraftRenderTimer = null;
 let expandedProjectIds = new Set();
+let savedPhTabState = {};
 let assemblyLaunchInProgress = false;
 let assemblyControlPanelOpen = false;
 let assemblySideRailRevealTimer = null;
@@ -537,8 +538,10 @@ const I18N = {
     workspace_summary_not_generated: '未生成',
     workspace_view_summary: '查看摘要',
     workspace_generate_summary: '生成摘要',
-    workspace_summary_loading: '正在生成摘要...',
+    workspace_summary_loading: '正在加载摘要...',
+    workspace_summary_generating: '正在生成摘要...',
     workspace_summary_title: '探索摘要',
+    workspace_regenerate_summary: '重新生成摘要',
     workspace_readonly_mode: '当前对话处于只读状态',
     workspace_no_summary_content: '暂无摘要内容',
     workspace_important_files: '重要文件',
@@ -794,8 +797,10 @@ const I18N = {
     workspace_summary_not_generated: 'Not Generated',
     workspace_view_summary: 'View Summary',
     workspace_generate_summary: 'Generate Summary',
-    workspace_summary_loading: 'Generating summary...',
+    workspace_summary_loading: 'Loading summary...',
+    workspace_summary_generating: 'Generating summary...',
     workspace_summary_title: 'Exploration Summary',
+    workspace_regenerate_summary: 'Regenerate Summary',
     workspace_readonly_mode: 'This conversation is in read-only mode',
     workspace_no_summary_content: 'No summary content available',
     workspace_important_files: 'Important Files',

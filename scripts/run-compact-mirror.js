@@ -167,6 +167,16 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     throw new Error('ContextCompactionMirrorFeature is not built');
   }
 
+  // Set environment variable based on session type before creating Agent
+  // This ensures the Agent uses the correct mode (exploration vs normal)
+  if (sessionType === 'exploration' || sessionType === 'sub') {
+    process.env.PROTOCLAW_SESSION_TYPE = 'exploration';
+    logPhase(`set exploration mode for sessionType=${sessionType}`);
+  } else {
+    delete process.env.PROTOCLAW_SESSION_TYPE;
+    logPhase(`set normal mode for sessionType=${sessionType || 'main'}`);
+  }
+
   const agent = new AgentClass({
     name: agentName,
     projectRoot: PROTOCLAW_ROOT,
@@ -196,6 +206,7 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     logPhase('load session done');
 
     tuneMirrorLLM(agent.llm);
+
     const toolRegistry = typeof agent.getTools === 'function' ? agent.getTools() : null;
     const toolEntries = toolRegistry?.getEntries?.() || [];
     logPhase(`disable tools count=${toolEntries.length}`);
@@ -261,22 +272,33 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
     const compactCall = toolCalls.find(tc => tc?.name === 'record_compaction_context');
 
-    const summaryText = stripCompactAnalysis(rawResponse);
-    let importantFiles = [];
-    let importantSkills = [];
-
-    if (compactCall && compactCall.arguments) {
-      const args = typeof compactCall.arguments === 'string'
-        ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
-        : compactCall.arguments;
-      importantFiles = Array.isArray(args.important_files)
-        ? args.important_files.filter(f => typeof f === 'string')
-        : [];
-      importantSkills = Array.isArray(args.important_skills)
-        ? args.important_skills.filter(s => typeof s === 'string')
-        : [];
-      logPhase(`tool output: files=${importantFiles.length} skills=${importantSkills.length}`);
+    if (!compactCall) {
+      throw new Error('record_compaction_context tool was not called — retrying');
     }
+
+    const args = typeof compactCall.arguments === 'string'
+      ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
+      : (compactCall.arguments || {});
+
+    const sessionTitle = typeof args.session_title === 'string' ? args.session_title.trim() : '';
+    if (!sessionTitle) {
+      throw new Error(`session_title is required but was empty — retrying (args keys: ${Object.keys(args).join(',')})`);
+    }
+
+    const importantFiles = Array.isArray(args.important_files)
+      ? args.important_files.filter(f => typeof f === 'string')
+      : [];
+    const importantSkills = Array.isArray(args.important_skills)
+      ? args.important_skills.filter(s => typeof s === 'string')
+      : [];
+
+    // summary: prefer tool args, fallback to text output
+    let summaryText = typeof args.summary === 'string' ? args.summary.trim() : '';
+    if (!summaryText) {
+      summaryText = stripCompactAnalysis(rawResponse);
+    }
+
+    logPhase(`tool output: title="${sessionTitle.slice(0, 60)}" files=${importantFiles.length} skills=${importantSkills.length} summary=${summaryText.length}chars`);
 
     const usedTools = toolCalls.some(tc => tc?.name !== 'record_compaction_context');
 
@@ -286,6 +308,7 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
       usedTools,
       importantFiles,
       importantSkills,
+      sessionTitle,
       fileRanges,
     };
   } finally {
@@ -343,6 +366,7 @@ async function main() {
         rawResponse: result.rawResponse,
         importantFiles: result.importantFiles || [],
         importantSkills: result.importantSkills || [],
+        sessionTitle: result.sessionTitle || '',
         fileRanges: result.fileRanges || {},
         sessionTimestamp,
         gitMeta,

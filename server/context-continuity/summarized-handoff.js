@@ -173,6 +173,7 @@ export async function writeSummarizedHandoffPackage({
   attemptCount = null,
   importantFiles = [],
   importantSkills = [],
+  sessionTitle = '',
   fileRanges = {},
   sessionTimestamp = null,
   gitMeta = null,
@@ -209,6 +210,7 @@ export async function writeSummarizedHandoffPackage({
       summaryText,
     },
     compactOutput: {
+      sessionTitle: typeof sessionTitle === 'string' ? sessionTitle.trim() : '',
       importantFiles: Array.isArray(importantFiles) ? importantFiles : [],
       importantSkills: Array.isArray(importantSkills) ? importantSkills : [],
       fileRanges: typeof fileRanges === 'object' && fileRanges !== null ? fileRanges : {},
@@ -246,6 +248,10 @@ export async function exportSummarizedHandoffPackage({
   const mirrorScriptPath = path.join(path.resolve(String(projectRoot || '').trim()), 'scripts', 'run-compact-mirror.js');
   console.log(`[summarized_handoff] mirror compaction begin agent=${agentId} session=${sessionId}`);
 
+  // Extract sessionType from sourceRecord to determine the correct prompt format
+  // exploration sessions use three-section format, other sessions use nine-section format
+  const sessionType = typeof sourceRecord.sessionType === 'string' ? sourceRecord.sessionType : '';
+
   const mirrorResult = await runMirrorCompaction(
     mirrorScriptPath,
     [
@@ -255,6 +261,7 @@ export async function exportSummarizedHandoffPackage({
       JSON.stringify({
         maxAttempts: policy.maxAttempts,
         additionalInstructions: policy.additionalInstructions,
+        sessionType,  // Pass sessionType to mirror script for prompt selection
       }),
     ],
     path.resolve(String(projectRoot || '').trim()),
@@ -276,6 +283,7 @@ export async function exportSummarizedHandoffPackage({
     attemptCount: mirrorResult?.attemptCount,
     importantFiles: Array.isArray(mirrorResult?.importantFiles) ? mirrorResult.importantFiles : [],
     importantSkills: Array.isArray(mirrorResult?.importantSkills) ? mirrorResult.importantSkills : [],
+    sessionTitle: typeof mirrorResult?.sessionTitle === 'string' ? mirrorResult.sessionTitle : '',
     fileRanges: typeof mirrorResult?.fileRanges === 'object' && mirrorResult.fileRanges !== null ? mirrorResult.fileRanges : {},
   });
 }

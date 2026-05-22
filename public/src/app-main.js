@@ -364,6 +364,9 @@ window.switchPhSessionTab = (btn) => {
   const targetTab = btn.dataset.phTab;
   tabGroup.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === targetTab));
   tabGroup.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === targetTab));
+  if (tabGroup.dataset.tabGroup) {
+    savedPhTabState[tabGroup.dataset.tabGroup] = targetTab;
+  }
 };
 
 window.runWorkspaceAction = async (rawAction) => {
@@ -583,29 +586,7 @@ window.runWorkspaceAction = async (rawAction) => {
 
   if (action.type === 'generate_summary') {
     if (!action.agentId || !action.sessionId) return;
-    const agentId = action.agentId;
-    const sessionId = action.sessionId;
-    try {
-      window.openSummaryPopup(agentId, sessionId);
-      const res = await fetch('/protoclaw/session_generate_summary', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, sessionId }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const result = await res.json();
-      if (result?.ok) {
-        loadAgents().catch(() => {});
-        shouldAnimateWorkspaceSurface = false;
-        renderCurrentMainView();
-        window.openSummaryPopup(agentId, sessionId);
-      } else {
-        window.alert('Summary generation failed: ' + (result?.error || 'unknown error'));
-      }
-    } catch (error) {
-      console.error('Failed to generate summary:', error);
-      window.alert('Failed to generate summary: ' + (error?.message || error));
-    }
+    window.openSummaryPopup(action.agentId, action.sessionId);
     return;
   }
 

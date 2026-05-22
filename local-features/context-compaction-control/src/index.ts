@@ -160,10 +160,18 @@ export class ContextCompactionControlFeature implements AgentFeature {
       }, this.source),
       createTool({
         name: 'record_compaction_context',
-        description: 'Record important files and skills for context handoff. Call this AFTER writing the summary as text.',
+        description: 'Record the summary, important files and skills for context handoff. This is the ONLY output method — put ALL content into this tool call, do not write summary as plain text.',
         parameters: {
           type: 'object',
           properties: {
+            session_title: {
+              type: 'string',
+              description: 'A one-sentence summary of what this conversation was mainly about (e.g. "Debug Flow node tool permission logic"). Must not be empty.',
+            },
+            summary: {
+              type: 'string',
+              description: 'The complete summary text. For exploration sessions: three-section format (goals, findings, important files). For regular sessions: nine-section format. Must not be empty.',
+            },
             important_files: {
               type: 'array',
               items: { type: 'string' },
@@ -175,6 +183,7 @@ export class ContextCompactionControlFeature implements AgentFeature {
               description: 'Skill names that were used and are important for continuing the task.',
             },
           },
+          required: ['session_title'],
         },
         execute: async () => ({ ok: true }),
       }, this.source),

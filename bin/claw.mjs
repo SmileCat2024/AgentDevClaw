@@ -216,8 +216,8 @@ function cmdOverview() {
   console.log('  claw resume <sub-id> --msg  续接子代理对话');
 }
 
-function cmdExplorations() {
-  const explorations = getExplorations();
+function cmdExplorations({ fileFilter = '', keyword = '', limit = 20 } = {}) {
+  let explorations = getExplorations();
 
   if (explorations.length === 0) {
     console.log('暂无探索记录');
@@ -225,10 +225,54 @@ function cmdExplorations() {
     return;
   }
 
-  console.log(`探索记录 (${explorations.length} 份)`);
+  // Apply filters
+  const hasFilter = fileFilter || keyword;
+  if (hasFilter) {
+    explorations = explorations.filter(record => {
+      // File filter: match against important files in handoff
+      if (fileFilter) {
+        const handoff = findHandoffSummary(record.id);
+        const files = handoff?.importantFiles || [];
+        if (!files.some(f => f.toLowerCase().includes(fileFilter.toLowerCase()))) {
+          return false;
+        }
+      }
+      // Keyword filter: match against goal and summary text
+      if (keyword) {
+        const kw = keyword.toLowerCase();
+        const goalMatch = (record.goal || '').toLowerCase().includes(kw);
+        if (goalMatch) return true;
+        const handoff = findHandoffSummary(record.id);
+        const summaryMatch = handoff?.summaryText?.toLowerCase().includes(kw);
+        const titleMatch = handoff?.sessionTitle?.toLowerCase().includes(kw);
+        if (summaryMatch || titleMatch) return true;
+        return false;
+      }
+      return true;
+    });
+  }
+
+  const totalCount = explorations.length;
+  const displayed = explorations.slice(0, limit);
+
+  if (displayed.length === 0) {
+    if (hasFilter) {
+      console.log(`未找到匹配的探索记录`);
+      if (fileFilter) console.log(`  文件筛选: ${fileFilter}`);
+      if (keyword) console.log(`  关键字: ${keyword}`);
+    } else {
+      console.log('暂无探索记录');
+    }
+    return;
+  }
+
+  const filterDesc = hasFilter
+    ? ` (筛选: ${fileFilter ? `文件含 "${fileFilter}"` : ''}${fileFilter && keyword ? ', ' : ''}${keyword ? `关键字 "${keyword}"` : ''})`
+    : '';
+  console.log(`探索记录 (${totalCount} 份${totalCount > displayed.length ? `, 显示最近 ${displayed.length} 条` : ''}${filterDesc})`);
   console.log('');
 
-  for (const record of explorations) {
+  for (const record of displayed) {
     const shortId = record.id.length > 30 ? `...${record.id.slice(-24)}` : record.id;
     const goal = cleanText(record.goal) || '(无目标)';
     const domains = Array.isArray(record.domains) && record.domains.length > 0
@@ -347,20 +391,21 @@ function cmdShow(sessionId) {
       console.log(`消息: ${detail.messageCount} 条`);
     }
 
-    // Show final output (agent's actual response)
-    const finalOutput = loadFinalOutput(sessionId);
-    if (finalOutput) {
-      console.log('');
-      console.log('--- 探索结果 ---');
-      console.log(finalOutput);
-      console.log('--- 结束 ---');
-    }
-
-    // Show handoff summary if available
+    // Show exploration result: prefer compact summary (migrated into tool call),
+    // fall back to raw last assistant output when no compact exists
     if (handoff?.summaryText) {
       console.log('');
-      console.log('--- 摘要 ---');
+      console.log('--- 探索结果 ---');
       console.log(handoff.summaryText);
+      console.log('--- 结束 ---');
+    } else {
+      const finalOutput = loadFinalOutput(sessionId);
+      if (finalOutput) {
+        console.log('');
+        console.log('--- 探索结果 ---');
+        console.log(finalOutput);
+        console.log('--- 结束 ---');
+      }
     }
   } else {
     // Sub-agent
@@ -422,7 +467,7 @@ async function cmdCompact(sessionId) {
       agentDir,
       'programming-helper',
       sessionId,
-      JSON.stringify({ sessionType: 'exploration' }),
+      JSON.stringify({ sessionType }),  // Use the actual sessionType from record
       resultPath,
     ];
 
@@ -445,6 +490,10 @@ async function cmdCompact(sessionId) {
 
     console.log('压缩完成');
     console.log(`  摘要长度: ${cleanText(result.summaryText).length} 字符`);
+    const sessionTitle = cleanText(result.sessionTitle);
+    if (sessionTitle) {
+      console.log(`  对话标题: ${sessionTitle}`);
+    }
     if (Array.isArray(result.importantFiles) && result.importantFiles.length > 0) {
       console.log('  重要文件:');
       for (const f of result.importantFiles) {
@@ -471,6 +520,7 @@ async function cmdCompact(sessionId) {
           rawResponse: result.rawResponse || '',
           importantFiles: result.importantFiles || [],
           importantSkills: result.importantSkills || [],
+          sessionTitle: result.sessionTitle || '',
           fileRanges: result.fileRanges || {},
           sessionTimestamp: result.sessionTimestamp || null,
           gitMeta: result.gitMeta || null,
@@ -664,6 +714,9 @@ function parseArgs(argv) {
   let goal = '';
   let message = '';
   let blocking = false;
+  let limit = 20;
+  let fileFilter = '';
+  let keyword = '';
   const positional = [];
 
   for (let i = 1; i < args.length; i++) {
@@ -676,6 +729,15 @@ function parseArgs(argv) {
     } else if (args[i] === '--msg' && args[i + 1]) {
       message = args[i + 1];
       i++;
+    } else if (args[i] === '--limit' && args[i + 1]) {
+      limit = parseInt(args[i + 1], 10) || 20;
+      i++;
+    } else if (args[i] === '--file' && args[i + 1]) {
+      fileFilter = args[i + 1];
+      i++;
+    } else if (args[i] === '--keyword' && args[i + 1]) {
+      keyword = args[i + 1];
+      i++;
     } else if (args[i] === '--blocking' || args[i] === '--wait') {
       blocking = true;
     } else if (!args[i].startsWith('-')) {
@@ -683,13 +745,13 @@ function parseArgs(argv) {
     }
   }
 
-  return { command, mode, goal, message, blocking, positional };
+  return { command, mode, goal, message, blocking, limit, fileFilter, keyword, positional };
 }
 
 // --- Main ---
 
 async function main() {
-  const { command, mode, goal, message, blocking, positional } = parseArgs(process.argv);
+  const { command, mode, goal, message, blocking, limit, fileFilter, keyword, positional } = parseArgs(process.argv);
 
   switch (command) {
     case '':
@@ -697,7 +759,7 @@ async function main() {
       break;
     case 'explorations':
     case 'exp':
-      cmdExplorations();
+      cmdExplorations({ fileFilter, keyword, limit });
       break;
     case 'subs':
     case 'sub':
@@ -735,7 +797,8 @@ async function main() {
       console.log('  claw                                   状态概览');
       console.log('  claw spawn --goal <text> [--blocking]  启动探索对话');
       console.log('  claw spawn <exp-id...> --goal <text>   从探索记录启动子代理');
-      console.log('  claw explorations                      列出探索记录');
+      console.log('  claw exp [--limit N] [--file F] [--keyword K]');
+      console.log('                                         列出探索记录（可筛选）');
       console.log('  claw subs                              列出子代理对话');
       console.log('  claw show <id>                         查看探索/子代理详情');
       console.log('  claw compact <exp-id>                  对探索记录生成摘要');

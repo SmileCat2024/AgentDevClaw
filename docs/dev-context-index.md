@@ -319,9 +319,15 @@ if (this.handoff.sourceSummary) {
 2. **CLAUDE.md 来自 MemoryFeature**：不是特殊处理，而是 MemoryFeature 在所有模式下都提供的能力
 3. **探索记录和子代理是同一模式**：字面意思上，"探索模式就是子代理的一种"
 4. **sourceSummary 与 seedMessages 并行注入**：不是互斥关系，两者都注入到子代理上下文
+5. **探索摘要 vs 交接信息**：两个不同但相关的概念
+   - **探索摘要**（Exploration Summary）：三段式，给主代理看，用于快速判断相关度
+   - **交接信息**（Handoff Context）：九段式 + 文件 + 技能，给子代理注入上下文
+   - 压缩时根据 `sessionType` 选择正确的提示词格式
 
 ### 相关文档
 
 - `docs/claw-cli-redesign.md` - 产品语义设计（三种实体：Exploration、Sub-agent、Summary）
 - `docs/context-compaction-structured-output-design.md` - 结构化压缩输出设计
+- `docs/compact-product-semantics-mismatch.md` - 压缩产品语义混淆问题分析
+- `docs/compact-agent-mode-mismatch-problem.md` - 压缩 Agent 模式匹配问题
 - `C:\Users\zty20\.claude\skills\claw-cli\SKILL.md` - 用户面向的 claw-cli 技能文档
