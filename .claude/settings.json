@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "claw-cli": {
+      "type": "http",
+      "url": "http://127.0.0.1:1420/protoclaw/claw-mcp"
+    }
+  }
+}

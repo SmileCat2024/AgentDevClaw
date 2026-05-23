@@ -17,6 +17,7 @@ function selectWorkspaceSurface(agentId, options = {}) {
       nextWorkspaceTab = fallbackWorkspaceTab;
     }
   }
+  const prevAgentId = currentAgentId;
   currentAgentId = agentId || null;
   currentRuntimeAgentId = null;
   readOnlyMode = false;
@@ -26,7 +27,8 @@ function selectWorkspaceSurface(agentId, options = {}) {
   currentProjectRequirementEdit = null;
   currentProjectDocsetPage = 'requirement';
   currentWorkspaceTab = nextWorkspaceTab;
-  shouldAnimateWorkspaceSurface = true;
+  // Only animate on agent change or first entry, not when returning from chat within the same agent.
+  shouldAnimateWorkspaceSurface = (prevAgentId !== agentId);
   setFollowLatest(true);
   resetRuntimeBackedSurfaceState();
   renderAgentList();
@@ -71,7 +73,6 @@ function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
     workspaceSurfaceModePreferences[key] = mode;
   }
   currentWorkspaceTab = mode;
-  shouldAnimateWorkspaceSurface = true;
 }
 
 function getDefaultUnitMode(agent = getCurrentAgentRecord()) {
@@ -151,6 +152,94 @@ function isCompactedResumeSession(session) {
 function renderSessionResumeBadge(session) {
   if (!isCompactedResumeSession(session)) return '';
   return '<span class="workspace-history-active">' + escapeHtml(t('workspace_compacted_badge')) + '</span>';
+}
+
+function getSessionContextLength(session, agent) {
+  const cl = session?.contextLength;
+  if (Number.isFinite(cl) && cl > 0) return cl;
+  const fallback = agent?.workspace_sessions?.contextLength;
+  if (Number.isFinite(fallback) && fallback > 0) return fallback;
+  return 128000;
+}
+
+function renderSessionTokenBar(session, agent) {
+  const used = session?.tokenUsage?.totalTokens || 0;
+  if (!used) return '';
+  const hasExplicitCL = Number.isFinite(session?.contextLength) && session.contextLength > 0
+    || Number.isFinite(agent?.workspace_sessions?.contextLength) && agent.workspace_sessions.contextLength > 0;
+  if (!hasExplicitCL && !used) return '';
+  const max = getSessionContextLength(session, agent);
+  const pct = Math.min(100, Math.round((used / max) * 100));
+  const tone = pct < 50 ? 'low' : pct < 80 ? 'mid' : 'high';
+  const modelLabel = session?.modelName ? ' · ' + session.modelName : '';
+  return '<span class="session-token-inline tone-' + tone + '">'
+    + '<span class="session-token-bar"><span class="session-token-bar-fill" style="width:' + pct + '%"></span></span>'
+    + '<span class="session-token-pct">' + pct + '%' + modelLabel + '</span>'
+    + '</span>';
+}
+
+function ensurePhModelConfigHost() {
+  let host = document.getElementById('ph-model-config-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'ph-model-config-host';
+    document.body.appendChild(host);
+  }
+  return host;
+}
+
+function renderPhModelConfigOverlay(agent, presets) {
+  const host = ensurePhModelConfigHost();
+  if (!agent) { host.innerHTML = ''; return; }
+  const isZh = currentLanguage === 'zh';
+  const current = agent.modelPresets || {};
+  const roles = [
+    { key: 'default', label: isZh ? '主代理' : 'Main Agent', desc: isZh ? '对话和编码任务' : 'Chat & coding tasks' },
+    { key: 'exploration', label: isZh ? '探索代理' : 'Explorer', desc: isZh ? '代码探索与调研' : 'Code exploration & research' },
+    { key: 'sub', label: isZh ? '子代理' : 'Sub Agent', desc: isZh ? '派生执行子任务' : 'Spawned task execution' },
+  ];
+  const rows = roles.map(function(role) {
+    const val = current[role.key] || '';
+    const opts = presets.map(function(p) {
+      const sel = (p.name === val) ? ' selected' : '';
+      return '<option value="' + escapeHtml(p.name) + '"' + sel + '>' + escapeHtml(p.name) + '</option>';
+    }).join('');
+    const currentPreset = presets.find(function(p) { return p.name === val; });
+    const infoHtml = currentPreset
+      ? '<span class="ph-mc-info">' + escapeHtml(currentPreset.model || '') + (currentPreset.contextLength ? ' · ' + Math.round(currentPreset.contextLength / 1000) + 'K ctx' : '') + '</span>'
+      : '<span class="ph-mc-info">' + (isZh ? '跟随全局默认' : 'Follows global default') + '</span>';
+    return '<div class="ph-mc-row">'
+      + '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>'
+      + '<div class="ph-mc-control">'
+      + '<select class="ph-mc-select" data-preset-role="' + role.key + '">'
+      + '<option value=""' + (!val ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
+      + opts
+      + '</select>'
+      + infoHtml
+      + '</div>'
+      + '</div>';
+  }).join('');
+
+  host.innerHTML = [
+    '<div class="feature-detail-overlay" onclick="if(event.target===this)window.phCloseModelConfig()">',
+    '<div class="feature-detail-window" style="max-width:520px;">',
+    '<div class="feature-detail-head">',
+    '<div>',
+    '<div class="feature-detail-title">' + (isZh ? '模型配置' : 'Model Config') + '</div>',
+    '<div class="feature-detail-subtitle">' + (isZh ? '为不同角色指定模型预设' : 'Assign model presets to different roles') + '</div>',
+    '</div>',
+    '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">×</button>',
+    '</div>',
+    '<div class="ph-mc-body">',
+    rows,
+    '</div>',
+    '<div class="ph-mc-footer">',
+    '<button class="settings-btn settings-btn-primary" type="button" onclick="window.phSaveModelConfig()">' + (isZh ? '保存' : 'Save') + '</button>',
+    '<button class="settings-btn settings-btn-secondary" type="button" onclick="window.phCloseModelConfig()">' + (isZh ? '取消' : 'Cancel') + '</button>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
 }
 
 function isAssemblySession(session) {
@@ -1291,6 +1380,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '</div>',
                   '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
                   session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+                  renderSessionTokenBar(session, agent),
                   '</div>',
                   '<div class="workspace-history-side">',
                   '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
@@ -1389,6 +1479,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '</div>',
                   '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
                   session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+                  renderSessionTokenBar(session, agent),
                   '</div>',
                   '<div class="workspace-history-side">',
                   '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
@@ -1518,6 +1609,7 @@ function renderWorkspaceSessionList(agent, block) {
               '</div>',
               '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
               sType !== 'exploration' && session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+              renderSessionTokenBar(session, agent),
               '</div>',
               '<div class="workspace-history-side">',
               '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
@@ -1576,21 +1668,20 @@ function renderWorkspaceSessionList(agent, block) {
         }).join('') + '</div>'
       : emptyHtml;
 
-    const phHeaderActions = [
-      '<div class="workspace-actions" style="margin-top:0;flex-shrink:0;">',
-      '<button class="workspace-action" type="button" onclick="window.phSelectDirectoryAndCreateSession()">' + escapeHtml(t('workspace_new_project')) + '</button>',
-      '</div>',
-    ].join('');
-
+    const isZh = currentLanguage === 'zh';
+    const agentName = isZh ? '编程小助手' : 'Programming Helper';
     return [
-      '<section class="workspace-section">',
-      '<div class="workspace-section-header">',
+      '<div class="ph-banner">',
       '<div>',
-      '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
-      '<div class="workspace-section-desc">' + escapeHtml(desc) + '</div>',
+      '<div class="ph-banner-title">' + escapeHtml(agentName) + '</div>',
+      '<div class="ph-banner-desc">' + escapeHtml(desc) + '</div>',
       '</div>',
-      phHeaderActions,
+      '<div class="ph-banner-actions">',
+      '<button class="ph-banner-btn secondary" type="button" onclick="window.phOpenModelConfig()">' + (isZh ? '配置模型' : 'Model Config') + '</button>',
+      '<button class="ph-banner-btn" type="button" onclick="window.phSelectDirectoryAndCreateSession()">' + escapeHtml(t('workspace_new_project')) + '</button>',
       '</div>',
+      '</div>',
+      '<section class="workspace-section">',
       bodyHtml,
       '</section>',
     ].join('');
@@ -1624,6 +1715,7 @@ function renderWorkspaceSessionList(agent, block) {
         '</div>',
         '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
         session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+        renderSessionTokenBar(session, agent),
         '</div>',
         '<div class="workspace-history-side">',
         '<div class="workspace-history-meta compact">',
@@ -2795,6 +2887,16 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<input class="settings-input" id="settings-preset-temperature" type="number" step="0.1" min="0" max="2" value="' + (preset.temperature ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '">',
     '</div>',
     '</div>',
+    '<div class="settings-row">',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? '上下文长度' : 'Context Length') + '</label>',
+    '<input class="settings-input" id="settings-preset-context-length" type="number" value="' + (preset.contextLength ?? '') + '" placeholder="200000">',
+    '</div>',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? 'Count Token 路径' : 'Count Token Path') + '</label>',
+    '<input class="settings-input" id="settings-preset-count-token-path" type="text" value="' + escapeHtml(preset.countTokenPath || '') + '" placeholder="/v1/messages/count_tokens">',
+    '</div>',
+    '</div>',
     '<div class="settings-actions">',
     '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSettingsEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
     '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSettingsPreset(' + editIdx + ')">' + (isZh ? '保存' : 'Save') + '</button>',
@@ -2867,6 +2969,8 @@ async function saveSettingsPreset(idx) {
   const el = (id) => document.getElementById(id);
   const thinkingRaw = el('settings-preset-thinking')?.value?.trim();
   const tempRaw = el('settings-preset-temperature')?.value?.trim();
+  const contextLengthRaw = el('settings-preset-context-length')?.value?.trim();
+  const countTokenPathRaw = el('settings-preset-count-token-path')?.value?.trim();
   const preset = {
     name: (el('settings-preset-name')?.value || '').trim(),
     providerName: presets[idx]?.providerName || '',
@@ -2876,6 +2980,8 @@ async function saveSettingsPreset(idx) {
     apiKey: (el('settings-preset-apikey')?.value || '').trim(),
     thinkingBudgetTokens: thinkingRaw !== '' ? parseInt(thinkingRaw, 10) || null : null,
     temperature: tempRaw !== '' ? parseFloat(tempRaw) || null : null,
+    contextLength: contextLengthRaw !== '' ? parseInt(contextLengthRaw, 10) || null : null,
+    countTokenPath: countTokenPathRaw || null,
   };
   presets[idx] = preset;
   window.ClawFW.settingsData.presets = presets;
@@ -5578,7 +5684,10 @@ function renderCurrentMainView() {
   renderInputRequests(currentInputRequests);
   if (shouldRenderWorkspaceSurface(agent)) {
     const newHtml = renderWorkspaceSurface(agent);
-    if (lastRenderedWorkspaceHtml !== newHtml) {
+    // Also force re-render if the container is not currently showing workspace content
+    // (e.g. returning from chat mode where workspace HTML was cached but DOM shows messages).
+    const containerIsWorkspace = !!container.querySelector('.workspace-surface');
+    if (lastRenderedWorkspaceHtml !== newHtml || !containerIsWorkspace) {
       if (isEditingWorkspaceForm()) {
         updateProjectDocsetChrome(agent);
         updateFollowLatestButton();
@@ -5596,8 +5705,10 @@ function renderCurrentMainView() {
           savedPhTabState[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
         }
       });
+      const savedScroll = container.scrollTop;
       container.innerHTML = newHtml;
       lastRenderedWorkspaceHtml = newHtml;
+      if (savedScroll > 0) container.scrollTop = savedScroll;
       expandedProjectIds.forEach((pid) => {
         const card = container.querySelector(`.feature-project-card[data-prebuilt-project-id="${CSS.escape(pid)}"]`);
         if (card) {
@@ -5622,7 +5733,8 @@ function renderCurrentMainView() {
     return;
   }
 
-  lastRenderedWorkspaceHtml = '';
+  // Keep lastRenderedWorkspaceHtml intact so returning from chat to workspace
+  // can skip re-render if workspace data hasn't changed.
   if (currentMessages.length === 0) {
     container.innerHTML = getEmptyStateHtml();
     updateProjectDocsetChrome(agent);
@@ -6755,33 +6867,50 @@ function renderSummaryBodyContent(data) {
   const { loading, generating, data: summaryData, error } = data;
   if (loading) {
     const msg = generating ? t('workspace_summary_generating') : t('workspace_summary_loading');
-    return '<div class="feature-panel-section"><div class="workspace-form-note">' + escapeHtml(msg) + '</div></div>';
+    return '<div class="summary-loading-state">' +
+      '<div class="summary-spinner"></div>' +
+      '<span>' + escapeHtml(msg) + '</span>' +
+      '</div>';
   }
   if (error) {
-    return '<div class="feature-panel-section"><div class="workspace-form-note" style="color:var(--color-danger)">' + escapeHtml(error) + '</div></div>';
+    return '<div class="summary-error-state">' + escapeHtml(error) + '</div>';
   }
   if (!summaryData) return '';
   let bodyContent = '';
+
+  // Session title & meta header
+  const title = summaryData.sessionTitle || '';
+  const createdAt = summaryData.createdAt ? new Date(summaryData.createdAt) : null;
+  const timeStr = createdAt ? createdAt.toLocaleString(currentLanguage === 'zh' ? 'zh-CN' : 'en-US') : '';
+  if (title || timeStr) {
+    bodyContent += '<div class="summary-header">';
+    if (title) bodyContent += '<div class="summary-title">' + escapeHtml(title) + '</div>';
+    if (timeStr) bodyContent += '<div class="summary-time">' + escapeHtml(timeStr) + '</div>';
+    bodyContent += '</div>';
+  }
+
+  // Summary body — rendered as markdown
   const summaryText = summaryData.summaryText || t('workspace_no_summary_content');
-  bodyContent += '<div class="feature-panel-section">';
-  bodyContent += '<div class="feature-panel-section-title">' + escapeHtml(t('workspace_summary_title')) + '</div>';
-  bodyContent += '<div class="workspace-form-note" style="white-space:pre-wrap;max-height:400px;overflow-y:auto;">' + escapeHtml(summaryText) + '</div>';
-  bodyContent += '</div>';
+  bodyContent += '<div class="summary-body markdown-body">' + renderMarkdown(summaryText) + '</div>';
+
+  // Important files — no icons, clean mono list
   if (summaryData.importantFiles && summaryData.importantFiles.length > 0) {
-    bodyContent += '<div class="feature-panel-section">';
-    bodyContent += '<div class="feature-panel-section-title">' + escapeHtml(t('workspace_important_files')) + '</div>';
-    bodyContent += '<div class="workspace-tag-list">' + summaryData.importantFiles.map(f => '<span class="workspace-tag">' + escapeHtml(f) + '</span>').join('') + '</div>';
+    bodyContent += '<div class="summary-section">';
+    bodyContent += '<div class="summary-section-title">' + escapeHtml(t('workspace_important_files')) + '</div>';
+    bodyContent += '<div class="summary-file-list">' + summaryData.importantFiles.map(f =>
+      '<div class="summary-file-item">' + escapeHtml(f) + '</div>'
+    ).join('') + '</div>';
     bodyContent += '</div>';
   }
+
+  // Important skills
   if (summaryData.importantSkills && summaryData.importantSkills.length > 0) {
-    bodyContent += '<div class="feature-panel-section">';
-    bodyContent += '<div class="feature-panel-section-title">' + escapeHtml(t('workspace_important_skills')) + '</div>';
-    bodyContent += '<div class="workspace-tag-list">' + summaryData.importantSkills.map(s => '<span class="workspace-tag">' + escapeHtml(s) + '</span>').join('') + '</div>';
+    bodyContent += '<div class="summary-section">';
+    bodyContent += '<div class="summary-section-title">' + escapeHtml(t('workspace_important_skills')) + '</div>';
+    bodyContent += '<div class="summary-tag-list">' + summaryData.importantSkills.map(s => '<span class="summary-tag">' + escapeHtml(s) + '</span>').join('') + '</div>';
     bodyContent += '</div>';
   }
-  bodyContent += '<div class="feature-panel-section" style="padding-top:8px;border-top:1px solid var(--border);">';
-  bodyContent += '<button class="workspace-action secondary" type="button" onclick="window.regenerateSummary()" style="font-size:12px;">' + escapeHtml(t('workspace_regenerate_summary')) + '</button>';
-  bodyContent += '</div>';
+
   return bodyContent;
 }
 
@@ -6789,14 +6918,25 @@ function updateSummaryOverlayDOM(data) {
   const overlay = getOrCreateSummaryOverlay();
   overlay.className = 'feature-detail-overlay';
   overlay.onclick = function(e) { if (e.target === overlay) closeSummaryPopup(); };
+  const hasData = data && data.data && !data.loading && !data.error;
   overlay.innerHTML =
-    '<div class="feature-detail-window" style="width:min(100%,560px);max-height:min(100%,720px);">' +
+    '<div class="feature-detail-window summary-popup-window">' +
     '<div class="feature-detail-head">' +
     '<div><div class="feature-detail-title">' + escapeHtml(t('workspace_summary_title')) + '</div></div>' +
     '<button class="feature-detail-close" type="button" onclick="window.closeSummaryPopup()">×</button>' +
     '</div>' +
+    '<div class="summary-popup-body">' +
     renderSummaryBodyContent(data) +
+    '</div>' +
+    (hasData ? '<div class="summary-popup-footer"><button class="summary-regenerate-btn" type="button" onclick="window.regenerateSummary()">' + escapeHtml(t('workspace_regenerate_summary')) + '</button></div>' : '') +
     '</div>';
+  // Post-render: enhance math in summary markdown
+  if (hasData) {
+    requestAnimationFrame(() => {
+      const md = overlay.querySelector('.summary-body.markdown-body');
+      if (md) enhanceMathInElement(md);
+    });
+  }
 }
 
 function openSummaryPopup(agentId, sessionId) {

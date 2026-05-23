@@ -7,6 +7,11 @@
   "icon": "code",
   "category": "development",
   "enabled": true,
+  "modelPresets": {
+    "default": "智谱GLM-5.1",
+    "exploration": "DeepSeek-V4-flash",
+    "sub": "DeepSeek-V4-flash"
+  },
   "features": [
     "todo",
     "audit",
@@ -25,14 +30,14 @@
       {
         "id": "sessions",
         "label": {
-          "zh": "对话",
-          "en": "Sessions"
+          "zh": "项目",
+          "en": "Projects"
         }
       },
       {
         "id": "chat",
         "label": {
-          "zh": "聊天",
+          "zh": "对话",
           "en": "Chat"
         }
       }
@@ -44,8 +49,8 @@
           "type": "session-list",
           "visibility": "tab:sessions",
           "title": {
-            "zh": "对话记录",
-            "en": "Sessions"
+            "zh": "项目记录",
+            "en": "Project Sessions"
           },
           "description": {
             "zh": "继续之前的对话，或开始一段新的编码会话。",

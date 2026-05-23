@@ -1593,6 +1593,68 @@ window.fwResumeRun = async (sessionId, btn) => {
   }
 };
 
+window.phOpenModelConfig = async () => {
+  const agent = getCurrentAgentRecord();
+  if (!agent) return;
+  let presets = window.ClawFW?._modelPresets || [];
+  if (!presets.length) {
+    try {
+      const resp = await fetch('/protoclaw/model_config');
+      const data = await resp.json();
+      presets = Array.isArray(data?.presets) ? data.presets : [];
+      if (window.ClawFW) window.ClawFW._modelPresets = presets;
+    } catch (e) {
+      console.error('Failed to load presets:', e);
+    }
+  }
+  window.phModelConfigAgentId = agent.id;
+  renderPhModelConfigOverlay(agent, presets);
+};
+
+window.phCloseModelConfig = () => {
+  const host = document.getElementById('ph-model-config-host');
+  if (host) host.innerHTML = '';
+};
+
+window.phSaveModelConfig = async () => {
+  const agentId = window.phModelConfigAgentId;
+  if (!agentId) return;
+  const selects = document.querySelectorAll('#ph-model-config-host .ph-mc-select');
+  const modelPresets = { default: null, exploration: null, sub: null };
+  selects.forEach(function(sel) {
+    const role = sel.dataset.presetRole;
+    if (role && modelPresets.hasOwnProperty(role)) {
+      modelPresets[role] = sel.value || null;
+    }
+  });
+  try {
+    const resp = await fetch('/protoclaw/agent_model_presets', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, modelPresets }),
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      const agent = getCurrentAgentRecord();
+      if (agent) agent.modelPresets = modelPresets;
+      window.phCloseModelConfig();
+      try {
+        const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(agentId));
+        if (freshRes.ok) {
+          const fresh = await freshRes.json();
+          updateAgentRecord(agentId, {
+            workspace_sessions: fresh,
+            active_workspace_session_id: fresh?.activeSessionId || null,
+          });
+        }
+      } catch (e) { /* ignore refresh error */ }
+      renderCurrentMainView();
+    }
+  } catch (e) {
+    console.error('Failed to save model preset:', e);
+  }
+};
+
 window.phSelectDirectoryAndCreateSession = async () => {
   const currentAgent = getCurrentAgentRecord();
   if (!currentAgent || currentAgent.id !== 'programming-helper') {
@@ -2832,6 +2894,26 @@ async function poll() {
 
     if (!currentRuntimeAgentId) {
       await loadAgents();
+      // Incrementally refresh workspace session data when viewing workspace surface.
+      if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
+        const wsHostAgent = allAgents.find((a) => a.id === currentAgentId && isWorkspaceHostUnit(a));
+        if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
+          window._lastWsSessionRefreshAt = Date.now();
+          try {
+            const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(wsHostAgent.id));
+            if (freshRes.ok) {
+              const freshSessions = await freshRes.json();
+              const prevSig = JSON.stringify(wsHostAgent.workspace_sessions || {});
+              const nextSig = JSON.stringify(freshSessions);
+              if (prevSig !== nextSig) {
+                wsHostAgent.workspace_sessions = freshSessions;
+                lastRenderedWorkspaceHtml = '';
+                renderCurrentMainView();
+              }
+            }
+          } catch {}
+        }
+      }
       if (activeFeaturePanel === 'logs' && logPanelScope === 'all') {
         await loadLogs();
       }
@@ -2937,6 +3019,28 @@ async function poll() {
     if (Date.now() - lastAgentListRefreshAt > 3000) {
        lastAgentListRefreshAt = Date.now();
        await loadAgents();
+    }
+
+    // Incrementally refresh workspace session data for the active workspace host.
+    // This keeps the UI in sync when sessions are created/deleted via CLI.
+    if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
+      const wsHostAgent = allAgents.find((a) => a.id === currentAgentId && isWorkspaceHostUnit(a));
+      if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
+        window._lastWsSessionRefreshAt = Date.now();
+        try {
+          const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(wsHostAgent.id));
+          if (freshRes.ok) {
+            const freshSessions = await freshRes.json();
+            const prevSig = JSON.stringify(wsHostAgent.workspace_sessions || {});
+            const nextSig = JSON.stringify(freshSessions);
+            if (prevSig !== nextSig) {
+              wsHostAgent.workspace_sessions = freshSessions;
+              lastRenderedWorkspaceHtml = '';
+              renderCurrentMainView();
+            }
+          }
+        } catch {}
+      }
     }
 
     if (activeFeaturePanel) {

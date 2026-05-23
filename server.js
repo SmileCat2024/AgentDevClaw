@@ -14,6 +14,7 @@ import {
   readHandoffPackage,
 } from './server/context-continuity/handoff-package.js';
 import { exportSummarizedHandoffPackage, writeSummarizedHandoffPackage } from './server/context-continuity/summarized-handoff.js';
+import { ClawMCPServer } from './server/claw-mcp.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +44,7 @@ const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
 
 const app = express();
 const viewerWorker = new ViewerWorker(VIEWER_PORT, false, process.env.AGENTDEV_UDS_PATH);
+const clawMcp = new ClawMCPServer();
 const managedAgents = new Map();
 const assemblyRuntimeProcesses = new Map();
 const pendingFeatureImports = new Map();
@@ -2136,7 +2138,7 @@ async function findSessionSummaryPath(agentId, sessionId) {
   return null;
 }
 
-async function summarizePrebuiltSession(agentId, record, summaryMap) {
+async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap) {
   const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   const metadata = normalizeSessionMetadata(record.metadata);
@@ -2173,6 +2175,11 @@ async function summarizePrebuiltSession(agentId, record, summaryMap) {
     const lastMessage = [...messages].reverse().find((message) => message && typeof message.content === 'string' && message.role !== 'system') || null;
     const summaryInfo = summaryMap ? summaryMap.get(record.id) : null;
     const compactTitle = summaryInfo?.sessionTitle || '';
+    const usageStats = parsed?.runtime?.usageStats;
+    const totalUsage = usageStats?.totalUsage;
+    const sType = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
+    const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
+    const sessionModelInfo = (modelInfoMap && modelInfoMap[modelRole]) || {};
     return {
       id: record.id,
       title: compactTitle || record.title || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
@@ -2198,6 +2205,13 @@ async function summarizePrebuiltSession(agentId, record, summaryMap) {
       messageCount: messages.length,
       preview: lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '',
       hasSummary: summaryMap ? summaryMap.has(record.id) : (await checkSessionHasSummary(agentId, record.id)),
+      tokenUsage: {
+        inputTokens: totalUsage?.inputTokens || 0,
+        outputTokens: totalUsage?.outputTokens || 0,
+        totalTokens: totalUsage?.totalTokens || 0,
+      },
+      contextLength: sessionModelInfo.contextLength || null,
+      modelName: sessionModelInfo.modelName || '',
     };
   } catch {
     return {
@@ -2225,6 +2239,9 @@ async function summarizePrebuiltSession(agentId, record, summaryMap) {
       messageCount: 0,
       preview: '',
       hasSummary: false,
+      tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      contextLength: null,
+      modelName: '',
     };
   }
 }
@@ -2232,12 +2249,24 @@ async function summarizePrebuiltSession(agentId, record, summaryMap) {
 async function listPrebuiltSessions(agentId) {
   const index = await readSessionIndex(agentId);
   const summaryMap = await buildSessionSummaryMap(agentId);
-  const sessions = await Promise.all(index.sessions.map((record) => summarizePrebuiltSession(agentId, record, summaryMap)));
+  const modelInfoMap = await buildSessionModelInfoMap(agentId);
+  const sessions = await Promise.all(index.sessions.map((record) => summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap)));
   sessions.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+  const defaultModelInfo = modelInfoMap.default || modelInfoMap.main || {};
   return {
     activeSessionId: index.activeSessionId || (sessions[0]?.id ?? null),
+    contextLength: defaultModelInfo.contextLength || null,
     sessions,
   };
+}
+
+async function buildSessionModelInfoMap(agentId) {
+  const roles = ['default', 'exploration', 'sub'];
+  const map = {};
+  await Promise.all(roles.map(async (role) => {
+    map[role] = await resolveSessionModelInfo(agentId, role);
+  }));
+  return map;
 }
 
 async function createPrebuiltSession(agentId, options = {}) {
@@ -3486,6 +3515,7 @@ async function getConnectedAgents() {
       message_count: 0,
       pending_input_count: null,
       created_at: null,
+      modelPresets: agent.modelPresets || null,
       connected: false,
     };
   });
@@ -3988,6 +4018,47 @@ async function proxyToViewer(req, res) {
   res.end(Buffer.from(arrayBuffer));
 }
 
+app.all('/protoclaw/claw-mcp', async (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, mcp-session-id, last-event-id');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, DELETE, OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  try {
+    await clawMcp.handleRequest(req, res);
+  } catch (error) {
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null }));
+    }
+  }
+});
+app.all('/protoclaw/claw-mcp/', async (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, mcp-session-id, last-event-id');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, DELETE, OPTIONS');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  try {
+    await clawMcp.handleRequest(req, res);
+  } catch (error) {
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null }));
+    }
+  }
+});
+
 app.get('/protoclaw/health', (_req, res) => {
   res.json({ ok: true, appPort: APP_PORT, viewerPort: VIEWER_PORT });
 });
@@ -4010,6 +4081,7 @@ app.get('/protoclaw/get_prebuilt_agents', async (_req, res, next) => {
       workspace_data: agent.workspace_data || {},
       workspace_state: agent.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
       active_workspace_session_id: agent.workspace_sessions?.activeSessionId || null,
+      modelPresets: agent.modelPresets || null,
       entry_point: agent.relativeDir,
     })));
   } catch (error) {
@@ -4333,6 +4405,61 @@ app.put('/protoclaw/qqbot_config', express.json(), async (req, res, next) => {
 
 // ── Model Config ──────────────────────────────────────────────────────────────
 
+async function resolveContextLength(agentId) {
+  const info = await resolveSessionModelInfo(agentId, 'default');
+  return info.contextLength;
+}
+
+async function resolveSessionModelInfo(agentId, sessionType) {
+  const presets = flattenModelPresets(await readModelPresets());
+  const config = await readModelConfig();
+  const defaultContextLength = 200000;
+  const role = sessionType === 'exploration' ? 'exploration' : sessionType === 'sub' ? 'sub' : 'default';
+
+  let presetName = null;
+  if (agentId) {
+    try {
+      const agentMeta = await readJson(path.join(__dirname, 'prebuilt-agents', 'official', agentId, 'metadata.json'));
+      const mp = agentMeta?.modelPresets;
+      if (mp && typeof mp === 'object') {
+        presetName = mp[role] || mp.default || null;
+      }
+    } catch {}
+  }
+
+  if (!presetName && config.defaultModel?.model) {
+    const dm = config.defaultModel;
+    presetName = presets.find(p => p.model === dm.model && p.provider === (dm.provider || 'anthropic'))?.name || null;
+  }
+
+  if (presetName) {
+    const preset = presets.find(p => p.name === presetName);
+    if (preset) {
+      const cl = Number.isFinite(preset.contextLength) && preset.contextLength > 0 ? preset.contextLength : null;
+      return {
+        contextLength: cl,
+        modelName: preset.model || preset.name,
+        presetName: preset.name,
+      };
+    }
+  }
+
+  for (const preset of presets) {
+    if (Number.isFinite(preset.contextLength) && preset.contextLength > 0) {
+      return {
+        contextLength: preset.contextLength,
+        modelName: preset.model || preset.name,
+        presetName: preset.name,
+      };
+    }
+  }
+  return {
+    contextLength: null,
+    modelName: config.defaultModel?.model || '',
+    presetName: null,
+  };
+}
+
 async function readModelConfig() {
   try {
     const data = await readJson(MODEL_CONFIG_PATH);
@@ -4389,6 +4516,8 @@ function flattenModelPresets(data) {
       apiKey: cleanSessionText(provider?.apiKey || preset?.apiKey),
       thinkingBudgetTokens: Number.isFinite(Number(preset?.thinkingBudgetTokens)) ? Number(preset.thinkingBudgetTokens) : null,
       temperature: Number.isFinite(Number(preset?.temperature)) ? Number(preset.temperature) : null,
+      contextLength: Number.isFinite(Number(preset?.contextLength)) ? Number(preset.contextLength) : null,
+      countTokenPath: cleanSessionText(preset?.countTokenPath) || null,
     };
   });
 }
@@ -4464,6 +4593,8 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       model,
       thinkingBudgetTokens: Number.isFinite(Number(rawPreset.thinkingBudgetTokens)) ? Number(rawPreset.thinkingBudgetTokens) : null,
       temperature: Number.isFinite(Number(rawPreset.temperature)) ? Number(rawPreset.temperature) : null,
+      contextLength: Number.isFinite(Number(rawPreset.contextLength)) ? Number(rawPreset.contextLength) : null,
+      countTokenPath: cleanSessionText(rawPreset.countTokenPath) || null,
     };
     presets.push(presetRecord);
   });
@@ -4804,7 +4935,8 @@ app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => 
     const { exitCode, result } = await startOneShotAgent(agent, session.id, goal, {
       timeoutMs,
       extraEnv: {
-        PROTOCLAW_SESSION_TYPE: 'exploration',
+        PROTOCLAW_SESSION_TYPE: sessionType,
+        PROTOCLAW_MODEL_PRESET_ROLE: sessionType === 'exploration' ? 'exploration' : 'sub',
         ...(resolvedHandoffPath ? { PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath } : {}),
       },
     });
@@ -4869,6 +5001,9 @@ app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
 
     const { exitCode, result } = await startOneShotAgent(agent, subSessionId, message, {
       timeoutMs,
+      extraEnv: {
+        PROTOCLAW_MODEL_PRESET_ROLE: 'sub',
+      },
     });
 
     console.log(`[resume_sub] Completed session=${subSessionId} ok=${result.ok} duration=${result.durationMs}ms`);
@@ -6023,6 +6158,26 @@ app.get('/protoclaw/flow_capabilities', async (req, res, next) => {
       modelPresets,
       updatedAt: new Date().toISOString(),
     });
+  } catch (error) { next(error); }
+});
+
+app.put('/protoclaw/agent_model_presets', express.json(), async (req, res, next) => {
+  try {
+    const { agentId, modelPresets } = req.body || {};
+    if (!agentId || typeof agentId !== 'string') {
+      return res.status(400).json({ error: 'agentId is required' });
+    }
+    if (!modelPresets || typeof modelPresets !== 'object') {
+      return res.status(400).json({ error: 'modelPresets object is required' });
+    }
+    const metaPath = path.join(__dirname, 'prebuilt-agents', 'official', agentId, 'metadata.json');
+    const meta = await readJson(metaPath);
+    if (!meta) {
+      return res.status(404).json({ error: 'Agent metadata not found' });
+    }
+    meta.modelPresets = modelPresets;
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+    res.json({ ok: true, agentId, modelPresets });
   } catch (error) { next(error); }
 });
 

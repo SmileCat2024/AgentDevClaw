@@ -19,6 +19,7 @@ import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync } from 'fs';
 import { FileSessionStore } from 'agentdev';
+import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -221,11 +222,21 @@ async function main() {
     throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
   }
 
+  const modelPresetRole = cleanValue(process.env.PROTOCLAW_MODEL_PRESET_ROLE) || 'sub';
+  const resolved = resolveAgentModelLLM(agentPath, modelPresetRole);
   const agent = new AgentClass({
     name: agentId,
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
+    ...(resolved ? { llm: resolved.llm } : {}),
   });
+  if (resolved) {
+    console.log(`[OneShot] Using model preset role="${modelPresetRole}" => ${resolved.modelName}`);
+    try {
+      const ctx = typeof agent.getSystemContext === 'function' ? agent.getSystemContext() : agent._systemContext;
+      if (ctx) ctx.SYSTEM_CURRENT_MODEL = resolved.modelName;
+    } catch {}
+  }
 
   // 4. Mount handoff seed feature (same as run-prebuilt-agent.js)
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);

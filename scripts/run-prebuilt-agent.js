@@ -16,6 +16,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { FileSessionStore } from 'agentdev';
 import { setTimeout as sleep } from 'timers/promises';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
+import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -551,11 +552,20 @@ async function main() {
     throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
   }
 
+  const resolved = resolveAgentModelLLM(agentPath, 'default');
   agent = new AgentClass({
     name: agentName,
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
+    ...(resolved ? { llm: resolved.llm } : {}),
   });
+  if (resolved) {
+    console.log(`[ProtoClaw Runtime] Using model preset from metadata.json => ${resolved.modelName}`);
+    try {
+      const ctx = typeof agent.getSystemContext === 'function' ? agent.getSystemContext() : agent._systemContext;
+      if (ctx) ctx.SYSTEM_CURRENT_MODEL = resolved.modelName;
+    } catch {}
+  }
 
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
 
