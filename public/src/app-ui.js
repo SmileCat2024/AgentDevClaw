@@ -163,7 +163,9 @@ function getSessionContextLength(session, agent) {
 }
 
 function renderSessionTokenBar(session, agent) {
-  const used = session?.tokenUsage?.totalTokens || 0;
+  // 优先使用最后一次请求的用量，如果不存在则回退到累积值
+  const lastRequest = session?.tokenUsage?.lastRequestUsage;
+  const used = (lastRequest?.totalTokens || session?.tokenUsage?.totalTokens || 0);
   if (!used) return '';
   const hasExplicitCL = Number.isFinite(session?.contextLength) && session.contextLength > 0
     || Number.isFinite(agent?.workspace_sessions?.contextLength) && agent.workspace_sessions.contextLength > 0;
@@ -172,10 +174,123 @@ function renderSessionTokenBar(session, agent) {
   const pct = Math.min(100, Math.round((used / max) * 100));
   const tone = pct < 50 ? 'low' : pct < 80 ? 'mid' : 'high';
   const modelLabel = session?.modelName ? ' · ' + session.modelName : '';
+  // 如果使用的是累积值（没有lastRequestUsage），添加标注
+  const dataSource = lastRequest ? '' : ' (累积)';
+  // 添加刷新按钮
+  const refreshBtn = '<button class="token-refresh-btn" type="button" title="刷新 Token 计数" onclick="refreshSessionTokenCount(\'' + session.id + '\', \'' + agent.id + '\', this)" aria-label="刷新 Token 计数">↻</button>';
   return '<span class="session-token-inline tone-' + tone + '">'
     + '<span class="session-token-bar"><span class="session-token-bar-fill" style="width:' + pct + '%"></span></span>'
-    + '<span class="session-token-pct">' + pct + '%' + modelLabel + '</span>'
+    + '<span class="session-token-pct">' + pct + '%' + modelLabel + dataSource + '</span>'
+    + refreshBtn
     + '</span>';
+}
+
+/**
+ * 更新聊天界面顶部的 context bar（模型名 + token 占比）。
+ * 从 currentOverviewSnapshot 取 lastRequestUsage，从当前 agent/session 取模型名和 contextLength。
+ */
+function updateChatContextBar() {
+  var bar = document.getElementById('chat-context-bar');
+  if (!bar) return;
+
+  // 跟 chat-process-toggle 同一逻辑：非聊天界面时隐藏
+  if (shouldRenderWorkspaceSurface()) {
+    bar.classList.add('hidden');
+    return;
+  }
+  bar.classList.remove('hidden');
+
+  var agent = getCurrentAgentRecord();
+  if (!agent) { bar.innerHTML = ''; return; }
+
+  // 找到当前活跃会话
+  var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+  var activeId = (agent.workspace_sessions && agent.workspace_sessions.activeSessionId)
+    || agent.active_workspace_session_id;
+  var activeSession = activeId
+    ? sessions.find(function(s) { return s.id === activeId; })
+    : (sessions[0] || null);
+
+  // 模型名
+  var modelName = activeSession ? activeSession.modelName : '';
+
+  // token 用量：优先 lastRequestUsage，回退到累积值
+  var used = 0;
+  var isLastRequest = false;
+  if (activeSession && activeSession.tokenUsage) {
+    var lr = activeSession.tokenUsage.lastRequestUsage;
+    if (lr && lr.totalTokens) {
+      used = lr.totalTokens;
+      isLastRequest = true;
+    } else {
+      used = activeSession.tokenUsage.totalTokens || 0;
+    }
+  }
+
+  // context length
+  var contextLength = getSessionContextLength(activeSession, agent);
+
+  if (!used && !modelName) { bar.innerHTML = ''; return; }
+
+  var html = '';
+  if (modelName) {
+    html += '<span class="ccb-model">' + escapeHtml(modelName) + '</span>';
+  }
+  if (used && contextLength > 0) {
+    var pct = Math.min(100, Math.round((used / contextLength) * 100));
+    var tone = pct < 50 ? 'low' : pct < 80 ? 'mid' : 'high';
+    var label = isLastRequest
+      ? pct + '%'
+      : pct + '% (\u7d2f\u79ef)';
+    html += '<span class="ccb-token tone-' + tone + '">'
+      + '<span class="ccb-bar"><span class="ccb-fill" style="width:' + pct + '%"></span></span>'
+      + '<span class="ccb-label">' + label + '</span>'
+      + '</span>';
+  }
+  bar.innerHTML = html;
+}
+
+async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
+  if (!btnElement) return;
+  
+  // 显示加载状态
+  const originalContent = btnElement.innerHTML;
+  btnElement.innerHTML = '⟳';
+  btnElement.classList.add('loading');
+  btnElement.disabled = true;
+  
+  try {
+    const response = await fetch('/protoclaw/refresh_session_token_count', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, agentId }),
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to refresh token count');
+    }
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      // 更新成功，重新加载当前视图
+      if (typeof renderCurrentMainView === 'function') {
+        renderCurrentMainView();
+      }
+    } else {
+      // 显示错误信息
+      window.alert(result.error || (currentLanguage === 'zh' ? '刷新失败' : 'Refresh failed'));
+    }
+  } catch (error) {
+    console.error('Failed to refresh token count:', error);
+    window.alert((currentLanguage === 'zh' ? '刷新 Token 计数失败: ' : 'Failed to refresh token count: ') + error.message);
+  } finally {
+    // 恢复按钮状态
+    btnElement.innerHTML = originalContent;
+    btnElement.classList.remove('loading');
+    btnElement.disabled = false;
+  }
 }
 
 function ensurePhModelConfigHost() {
@@ -5725,6 +5840,7 @@ function renderCurrentMainView() {
       });
     }
     updateProjectDocsetChrome(agent);
+    updateChatContextBar();
     if (typeof updateChatProcessToggle === 'function') {
       updateChatProcessToggle();
     }
@@ -5738,6 +5854,7 @@ function renderCurrentMainView() {
   if (currentMessages.length === 0) {
     container.innerHTML = getEmptyStateHtml();
     updateProjectDocsetChrome(agent);
+    updateChatContextBar();
     if (typeof updateChatProcessToggle === 'function') {
       updateChatProcessToggle();
     }
@@ -5746,6 +5863,7 @@ function renderCurrentMainView() {
   }
 
   render(currentMessages);
+  updateChatContextBar();
   updateProjectDocsetChrome(agent);
   if (typeof updateChatProcessToggle === 'function') {
     updateChatProcessToggle();
@@ -5864,7 +5982,7 @@ function markManualScrollIntent() {
 }
 
 function hasRecentManualScrollIntent() {
-  return Date.now() - lastManualScrollIntentAt < 500;
+  return Date.now() - lastManualScrollIntentAt < 1500;
 }
 
 function animateScrollTo(targetTop, duration = 150) {
@@ -6080,13 +6198,21 @@ function setFollowLatest(enabled, options = {}) {
   }
 }
 
+let _scrollDebounceTimer = null;
+let _scrollDebounceBehavior = 'smooth';
+
 function scheduleScrollToLatest(behavior = 'smooth') {
   pendingFollowToBottom = true;
-  requestAnimationFrame(() => {
-    if (!pendingFollowToBottom) return;
+  _scrollDebounceBehavior = behavior;
+  if (_scrollDebounceTimer != null) return;
+  _scrollDebounceTimer = setTimeout(() => {
+    _scrollDebounceTimer = null;
+    if (!pendingFollowToBottom || !followLatestEnabled) return;
     pendingFollowToBottom = false;
-    scrollToLatest(behavior);
-  });
+    const b = _scrollDebounceBehavior;
+    _scrollDebounceBehavior = 'smooth';
+    scrollToLatest(b);
+  }, 100);
 }
 
 function shortenSourcePath(value) {
@@ -6132,6 +6258,7 @@ function getEmptyOverviewSnapshot() {
       calls: [],
       totalRequests: 0,
       totalCacheHitRequests: 0,
+      lastRequestUsage: null,
     },
   };
 }
@@ -6166,6 +6293,7 @@ function normalizeOverviewSnapshot(snapshot) {
       })) : [],
       totalRequests: typeof snapshot.usageStats?.totalRequests === 'number' ? snapshot.usageStats.totalRequests : 0,
       totalCacheHitRequests: typeof snapshot.usageStats?.totalCacheHitRequests === 'number' ? snapshot.usageStats.totalCacheHitRequests : 0,
+      lastRequestUsage: snapshot.usageStats?.lastRequestUsage || null,
     },
   };
 }
@@ -8213,6 +8341,7 @@ function getToolRenderTemplate(toolName) {
 }
 
 function getToolDisplayName(toolName) {
+  if (!toolName) return 'Tool';
   return TOOL_NAMES[toolName] || toolName;
 }
 

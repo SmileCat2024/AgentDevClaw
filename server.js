@@ -2138,6 +2138,71 @@ async function findSessionSummaryPath(agentId, sessionId) {
   return null;
 }
 
+function extractToolCallLabel(name, args) {
+  if (!args || typeof args !== 'object') return null;
+  if (name === 'read' || name === 'edit' || name === 'write') {
+    const filePath = typeof args.filePath === 'string' ? args.filePath : '';
+    if (filePath) {
+      const baseName = filePath.split(/[\\/]/).pop() || filePath;
+      return `${name} ${baseName}`;
+    }
+  }
+  if (name === 'invoke_skill') {
+    const skill = typeof args.skill === 'string' ? args.skill : '';
+    if (skill) return `invoke_skill ${skill}`;
+  }
+  return null;
+}
+
+function buildSessionTrimPreview(messages) {
+  const rounds = [];
+  let currentRound = null;
+
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    const role = typeof m?.role === 'string' ? m.role : '';
+    if (role === 'user') {
+      if (currentRound) rounds.push(currentRound);
+      const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
+      currentRound = {
+        roundIndex: rounds.length,
+        turnStart: Number.isFinite(m.turn) ? m.turn : i,
+        turnEnd: Number.isFinite(m.turn) ? m.turn : i,
+        userPreview: content.slice(0, 120),
+        assistantPreview: '',
+        toolCalls: [],
+        messageCount: 1,
+      };
+    } else if (currentRound) {
+      currentRound.messageCount += 1;
+      currentRound.turnEnd = Number.isFinite(m.turn) ? m.turn : currentRound.turnEnd;
+      if (role === 'assistant') {
+        const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
+        if (content && !currentRound.assistantPreview) {
+          currentRound.assistantPreview = content.slice(0, 120);
+        }
+        const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+        for (const tc of toolCalls) {
+          const name = typeof tc?.name === 'string' ? tc.name : '';
+          if (!name) continue;
+          let args = tc.args ?? tc.arguments ?? {};
+          if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+          const label = extractToolCallLabel(name, args) || name;
+          currentRound.toolCalls.push({ name, summary: label });
+        }
+      }
+    }
+  }
+  if (currentRound) rounds.push(currentRound);
+
+  const recentCount = 2;
+  for (let i = 0; i < rounds.length; i++) {
+    rounds[i].suggestedTrim = i < rounds.length - recentCount;
+  }
+
+  return rounds;
+}
+
 async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap) {
   const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
   const normalizedAgentId = sanitizeSessionFragment(agentId);
@@ -2209,6 +2274,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         inputTokens: totalUsage?.inputTokens || 0,
         outputTokens: totalUsage?.outputTokens || 0,
         totalTokens: totalUsage?.totalTokens || 0,
+        lastRequestUsage: usageStats?.lastRequestUsage || null,
       },
       contextLength: sessionModelInfo.contextLength || null,
       modelName: sessionModelInfo.modelName || '',
@@ -4189,6 +4255,30 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
   }
 });
 
+app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
+  try {
+    const agentId = req.query.agentId;
+    const sessionId = req.query.sessionId;
+    if (!agentId || !sessionId) {
+      res.status(400).json({ error: 'agentId and sessionId are required' });
+      return;
+    }
+    const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
+    const raw = await fs.readFile(sessionPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
+    const rounds = buildSessionTrimPreview(messages);
+    res.json({
+      sessionId,
+      sessionTitle: parsed.title || '',
+      contextLength: null,
+      rounds,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/protoclaw/session_summary', async (req, res, next) => {
   try {
     const agentId = req.query.agentId;
@@ -4647,6 +4737,166 @@ app.put('/protoclaw/model_config', express.json(), async (req, res, next) => {
       configPath: MODEL_CONFIG_PATH,
       savedAt: new Date().toISOString(),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Token Count Refresh ────────────────────────────────────────────────────────
+
+app.post('/protoclaw/refresh_session_token_count', express.json(), async (req, res, next) => {
+  try {
+    const { sessionId, agentId } = req.body || {};
+    if (!sessionId || !agentId) {
+      return res.status(400).json({ success: false, error: 'Missing sessionId or agentId' });
+    }
+
+    // 读取会话索引
+    const index = await readSessionIndex(agentId);
+    const sessionRecord = index.sessions.find(s => s.id === sessionId);
+    if (!sessionRecord) {
+      return res.status(404).json({ success: false, error: 'Session not found' });
+    }
+
+    // 复用 resolveSessionModelInfo 获取模型预设信息
+    const modelInfo = await resolveSessionModelInfo(agentId, 'default');
+    const presetName = modelInfo.presetName;
+    const modelName = modelInfo.modelName;
+
+    if (!presetName || !modelName) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot determine model preset for agent ${agentId}`,
+      });
+    }
+
+    // 读取模型预设配置（含 providers 和 countTokenPath）
+    const presetsData = await readModelPresets();
+    const preset = presetsData.presets.find(p => p.name === presetName);
+
+    if (!preset) {
+      return res.status(404).json({ success: false, error: `Model preset not found: ${presetName}` });
+    }
+
+    const countTokenPath = preset.countTokenPath || '/v1/messages/count_tokens';
+
+    // 获取 provider 信息
+    const provider = presetsData.providers.find(p => p.name === preset.providerName);
+    if (!provider) {
+      return res.status(404).json({ success: false, error: `Provider not found: ${preset.providerName}` });
+    }
+
+    const baseUrl = provider.endpoints?.[preset.protocol] || '';
+    if (!baseUrl) {
+      return res.status(400).json({ success: false, error: 'Provider base URL not configured' });
+    }
+
+    // 构建 count tokens API URL
+    const countTokensUrl = baseUrl.replace(/\/+$/, '') + countTokenPath;
+
+    // 读取会话文件中的实际消息
+    const sessionPath = path.join(getPrebuiltAgentSessionDir(agentId), `${sanitizeSessionFragment(sessionId)}.json`);
+    let sessionData = {};
+    let actualMessages = [];
+    try {
+      sessionData = JSON.parse(await fs.readFile(sessionPath, 'utf8'));
+      const rawMessages = sessionData?.runtime?.context?.messages || [];
+      // count_tokens 接口只接受 user/assistant 角色
+      // system 角色的内容合并到第一条 user 消息前
+      // tool 角色映射为 user（tool_result 嵌入 user message）
+      let systemParts = [];
+      for (const m of rawMessages) {
+        if (!m || m.content == null) continue;
+        if (m.role === 'system') {
+          systemParts.push(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
+          continue;
+        }
+        let content;
+        if (typeof m.content === 'string') {
+          content = m.content;
+        } else if (Array.isArray(m.content)) {
+          content = m.content.map(b => typeof b === 'string' ? b : (b?.text || JSON.stringify(b))).join('\n');
+        } else {
+          content = JSON.stringify(m.content);
+        }
+        // prepend system text to first user message
+        let role = m.role;
+        if (role === 'tool') role = 'user';
+        if (role === 'user' && systemParts.length > 0) {
+          content = systemParts.join('\n\n') + '\n\n' + content;
+          systemParts = [];
+        }
+        actualMessages.push({ role, content });
+      }
+      // 如果只有 system 没有 user，补一条
+      if (actualMessages.length === 0 && systemParts.length > 0) {
+        actualMessages.push({ role: 'user', content: systemParts.join('\n\n') });
+      }
+    } catch {}
+
+    // 如果没有消息，无法计数
+    if (!actualMessages.length) {
+      return res.status(400).json({
+        success: false,
+        error: '会话中没有可用的消息，无法计数',
+      });
+    }
+
+    // 调用 count tokens API，使用实际消息
+    try {
+      const countRequest = {
+        model: modelName,
+        messages: actualMessages,
+      };
+
+      const response = await fetch(countTokensUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': provider.apiKey,
+        },
+        body: JSON.stringify(countRequest),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Count tokens API failed: ${response.status} ${errorText}`);
+      }
+
+      const result = await response.json();
+      const tokenCount = result.input_tokens || result.inputTokens;
+
+      if (typeof tokenCount !== 'number' || tokenCount < 0) {
+        return res.status(500).json({
+          success: false,
+          error: 'Count tokens API did not return a valid token count',
+          details: result,
+        });
+      }
+
+      // 写入路径须与 summarizePrebuiltSession 读取路径一致: runtime.usageStats.lastRequestUsage
+      if (!sessionData.runtime) sessionData.runtime = {};
+      if (!sessionData.runtime.usageStats) sessionData.runtime.usageStats = {};
+      sessionData.runtime.usageStats.lastRequestUsage = {
+        inputTokens: tokenCount,
+        outputTokens: 0,
+        totalTokens: tokenCount,
+      };
+      sessionData.modelName = modelName;
+      sessionData.updatedAt = new Date().toISOString();
+
+      await fs.writeFile(sessionPath, JSON.stringify(sessionData, null, 2));
+
+      res.json({
+        success: true,
+        tokenCount,
+      });
+    } catch (fetchError) {
+      return res.status(500).json({
+        success: false,
+        error: `Failed to call count tokens API: ${fetchError.message}`,
+      });
+    }
   } catch (error) {
     next(error);
   }

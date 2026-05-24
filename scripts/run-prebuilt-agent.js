@@ -46,12 +46,19 @@ function parseHandoffContent(raw, sourceLabel) {
     if (parsed && typeof parsed === 'object') {
       const seedMessages = Array.isArray(parsed.seedMessages)
         ? parsed.seedMessages
+            .filter((message) => {
+              if (!message || typeof message !== 'object') return false;
+              const role = typeof message.role === 'string' ? message.role.trim() : '';
+              if (!role) return false;
+              const hasContent = message.content != null && message.content !== '';
+              const hasToolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
+              return hasContent || hasToolCalls;
+            })
             .map((message) => ({
-              role: cleanValue(message?.role),
-              content: cleanValue(message?.content),
-              turn: Number.isFinite(message?.turn) ? Number(message.turn) : null,
+              ...message,
+              role: message.role.trim(),
+              turn: Number.isFinite(message.turn) ? Number(message.turn) : null,
             }))
-            .filter((message) => message.role && message.content)
         : [];
       const sourceSummary = cleanValue(
         parsed.sourceSummary
@@ -367,20 +374,27 @@ async function generateInProcessSummary(extraInstructions = '') {
     }
     const compactCall = toolCalls.find(tc => tc?.name === 'record_compaction_context');
 
-    const summaryText = stripCompactAnalysis(rawResponse);
     let importantFiles = [];
     let importantSkills = [];
+    let sessionTitle = '';
+    let summaryText = '';
 
     if (compactCall && compactCall.arguments) {
       const args = typeof compactCall.arguments === 'string'
         ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
         : compactCall.arguments;
+      summaryText = typeof args.summary === 'string' ? args.summary.trim() : '';
+      sessionTitle = typeof args.session_title === 'string' ? args.session_title.trim() : '';
       importantFiles = Array.isArray(args.important_files)
         ? args.important_files.filter(f => typeof f === 'string')
         : [];
       importantSkills = Array.isArray(args.important_skills)
         ? args.important_skills.filter(s => typeof s === 'string')
         : [];
+    }
+
+    if (!summaryText) {
+      summaryText = stripCompactAnalysis(rawResponse);
     }
 
     if (!summaryText.trim()) {
@@ -392,6 +406,7 @@ async function generateInProcessSummary(extraInstructions = '') {
       summaryText,
       importantFiles,
       importantSkills,
+      sessionTitle,
       fileRanges,
     };
   } finally {
@@ -422,6 +437,7 @@ async function triggerSummaryCompaction(extraInstructions = '') {
       rawResponse: summaryResult.rawResponse,
       importantFiles: summaryResult.importantFiles || [],
       importantSkills: summaryResult.importantSkills || [],
+      sessionTitle: summaryResult.sessionTitle || '',
       fileRanges: summaryResult.fileRanges || {},
       policy: {
         strategy: 'summarized-nine-section',
@@ -466,6 +482,7 @@ async function triggerSummaryCompactionResume(extraInstructions = '') {
       rawResponse: summaryResult.rawResponse,
       importantFiles: summaryResult.importantFiles || [],
       importantSkills: summaryResult.importantSkills || [],
+      sessionTitle: summaryResult.sessionTitle || '',
       fileRanges: summaryResult.fileRanges || {},
       policy: {
         strategy: 'summarized-nine-section',

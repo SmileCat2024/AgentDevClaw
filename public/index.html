@@ -83,6 +83,7 @@
       </div>
       <div class="header-right">
         <button id="project-docset-toggle" class="header-docset-btn hidden" type="button"></button>
+        <span id="chat-context-bar" class="chat-context-bar"></span>
         <button id="chat-process-toggle" class="header-docset-btn hidden" type="button"></button>
         <span id="connection-status" class="status-badge">Ready</span>
       </div>
@@ -198,6 +199,27 @@
 
   <div id="feature-repo-context-menu" class="context-menu">
     <button id="delete-feature-action" class="context-menu-item danger" type="button">删除 Feature</button>
+  </div>
+
+  <div id="trim-dialog" class="trim-dialog" style="display:none;">
+    <div class="trim-overlay" onclick="window.closeTrimDialog()"></div>
+    <div class="trim-panel">
+      <div class="trim-header">
+        <div class="trim-title">精简历史（Trim）</div>
+        <button class="trim-close" type="button" onclick="window.closeTrimDialog()">×</button>
+      </div>
+      <div class="trim-hint">勾选需要精简的轮次。被精简的轮次将折叠为摘要，保留工具调用的文件名和技能名。</div>
+      <div class="trim-body">
+        <div class="trim-list" id="trim-round-list"></div>
+      </div>
+      <div class="trim-footer">
+        <div class="trim-footer-info" id="trim-footer-info"></div>
+        <div class="trim-footer-actions">
+          <button class="workspace-action secondary" type="button" onclick="window.closeTrimDialog()">取消</button>
+          <button class="workspace-action" type="button" id="trim-submit" onclick="window.submitTrimCompact()">确认精简</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="feature-upload-dialog" class="feature-upload-dialog" style="display:none;">

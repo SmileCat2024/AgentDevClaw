@@ -53,23 +53,38 @@ function countValidSeedMessages(seedMessages: unknown): number {
   return seedMessages.filter((m) => typeof (m as any)?.role === 'string' && (m as any).role).length;
 }
 
-function buildFallbackSeedMessage(handoff: ContextHandoffSeedPayload): string {
+function buildTrimContextLabel(handoff: ContextHandoffSeedPayload): string {
+  const lines = [
+    '## 会话续接元信息',
+    '',
+    '当前会话是从更早的对话裁剪续接而来。上方已注入裁剪后的完整对话历史。',
+    '以下仅为该会话的任务元信息，不需要重新执行这些任务。',
+  ];
+  const sourceSessionId = cleanValue(handoff.sourceSessionId);
+  if (sourceSessionId) {
+    lines.push('', `来源会话：${sourceSessionId}`);
+  }
+  const sourceSummary = cleanValue(handoff.sourceSummary);
+  if (sourceSummary) {
+    lines.push('', sourceSummary);
+  }
+  return lines.join('\n');
+}
+
+function buildSummarySeedMessage(handoff: ContextHandoffSeedPayload): string {
   const lines = [
     '## 上下文交接摘要',
     '',
     '以下压缩上下文来自更早的一次会话导出，用于让当前运行时继续同一个任务。',
   ];
-
   const sourceSessionId = cleanValue(handoff.sourceSessionId);
   if (sourceSessionId) {
     lines.push('', `来源会话：${sourceSessionId}`);
   }
-
   const sourceSummary = cleanValue(handoff.sourceSummary);
   if (sourceSummary) {
     lines.push('', sourceSummary);
   }
-
   return lines.join('\n');
 }
 
@@ -157,9 +172,13 @@ export class ContextHandoffSeedFeature implements AgentFeature {
       });
     }
 
-    // Always inject sourceSummary as a system message, even when seedMessages exist
-    if (this.handoff.sourceSummary) {
-      ctx.context.addSystemMessage(buildFallbackSeedMessage(this.handoff), injectionTurn, this.name);
+    // Inject sourceSummary as a system message only when seedMessages is empty (legacy fallback)
+    if (this.handoff.sourceSummary && seedMessages.length === 0) {
+      const isTrim = cleanValue(this.handoff.mode).startsWith('trim');
+      const label = isTrim
+        ? buildTrimContextLabel(this.handoff)
+        : buildSummarySeedMessage(this.handoff);
+      ctx.context.addSystemMessage(label, injectionTurn, this.name);
     }
 
     if (seedMessages.length === 0 && !this.handoff.sourceSummary) {

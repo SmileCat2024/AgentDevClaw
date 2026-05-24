@@ -342,6 +342,7 @@ let suppressFollowScrollEvent = false;
 let pendingFollowToBottom = false;
 let lastManualScrollIntentAt = 0;
 let followScrollSettleToken = 0;
+let _progScrollCooldownUntil = 0;
 let prebuiltSessionSwitchInFlight = false;
 let lastRenderedInputSignature = '';
 let lastRenderedInputMode = null;

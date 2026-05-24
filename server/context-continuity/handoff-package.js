@@ -11,6 +11,7 @@ export const DEFAULT_EXPORT_POLICY = {
   includeUserMessages: true,
   includeAssistantMessages: true,
   keepRecentTurns: null,
+  fullPreserveFromTurn: null,
   assistantToolCallMode: 'fold',
   toolMessageMode: 'fold',
   toolFoldScope: 'all',
@@ -71,6 +72,11 @@ function normalizeNullableTurnCount(value) {
   return clampInteger(value, 1, 1, 2000);
 }
 
+function normalizeNullableTurnIndex(value) {
+  if (value === null || value === undefined || value === '') return null;
+  return clampInteger(value, 0, 0, 2000);
+}
+
 function normalizeEnum(value, validValues, fallback) {
   const text = cleanInlineText(value);
   return validValues.has(text) ? text : fallback;
@@ -103,6 +109,7 @@ export function normalizeExportPolicy(rawPolicy = {}) {
     includeUserMessages: rawPolicy?.includeUserMessages !== false,
     includeAssistantMessages: rawPolicy?.includeAssistantMessages !== false,
     keepRecentTurns: normalizeNullableTurnCount(rawPolicy?.keepRecentTurns),
+    fullPreserveFromTurn: normalizeNullableTurnIndex(rawPolicy?.fullPreserveFromTurn),
     assistantToolCallMode: normalizeEnum(rawPolicy?.assistantToolCallMode, VALID_TOOL_MODES, DEFAULT_EXPORT_POLICY.assistantToolCallMode),
     toolMessageMode: normalizeEnum(rawPolicy?.toolMessageMode, VALID_TOOL_MODES, DEFAULT_EXPORT_POLICY.toolMessageMode),
     toolFoldScope: normalizeEnum(rawPolicy?.toolFoldScope, VALID_TOOL_SCOPES, DEFAULT_EXPORT_POLICY.toolFoldScope),
@@ -172,10 +179,30 @@ function summarizeToolPayload(rawContent, maxChars) {
   }
 }
 
+function extractToolCallKeyInfo(name, rawArgs) {
+  let args = rawArgs;
+  if (typeof args === 'string') { try { args = JSON.parse(args); } catch { return null; } }
+  if (!args || typeof args !== 'object') return null;
+  if (name === 'read' || name === 'edit' || name === 'write') {
+    const filePath = typeof args.filePath === 'string' ? args.filePath : '';
+    if (filePath) {
+      const baseName = filePath.split(/[\\/]/).pop() || filePath;
+      return `${name}(${baseName})`;
+    }
+  }
+  if (name === 'invoke_skill') {
+    const skill = typeof args.skill === 'string' ? args.skill : '';
+    if (skill) return `invoke_skill(${skill})`;
+  }
+  return null;
+}
+
 function summarizeAssistantToolCalls(toolCalls = [], policy) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return [];
   return toolCalls.map((call) => {
     const name = cleanInlineText(call?.name) || 'tool';
+    const keyInfo = extractToolCallKeyInfo(name, call?.args ?? call?.arguments);
+    if (keyInfo) return keyInfo;
     if (!policy.foldToolCallArgs) {
       return name;
     }
@@ -191,8 +218,8 @@ function getMessageTurn(message, fallbackIndex) {
 function getRetainedTurnSet(rawMessages, policy) {
   if (!policy.keepRecentTurns) return null;
   const turns = rawMessages
-    .map((message, index) => getMessageTurn(message, index))
-    .filter(Number.isFinite);
+    .filter(message => Number.isFinite(message?.turn))
+    .map(message => Number(message.turn));
   if (turns.length === 0) return null;
   const uniqueTurns = [...new Set(turns)].sort((a, b) => a - b);
   const keptTurns = uniqueTurns.slice(-policy.keepRecentTurns);
@@ -236,22 +263,12 @@ function createSeedMessage(role, content, turn) {
 }
 
 function flushPendingToolFold(seedMessages, pendingFold, policy, stats) {
-  if (!pendingFold || (!pendingFold.toolCalls.length && !pendingFold.toolResults.length)) {
+  if (!pendingFold || pendingFold.toolCalls.length === 0) {
     return null;
   }
 
   const lines = ['[Folded tool activity]'];
-  if (pendingFold.toolCalls.length > 0) {
-    lines.push(`assistant tool calls: ${pendingFold.toolCalls.join('; ')}`);
-  }
-  if (pendingFold.toolResults.length > 0) {
-    lines.push(`tool results: ${pendingFold.toolResults.length} folded item(s)`);
-    if (policy.foldToolResultSummary) {
-      pendingFold.toolResults.forEach((item, index) => {
-        lines.push(`result ${index + 1}: ${item}`);
-      });
-    }
-  }
+  lines.push(`assistant tool calls: ${pendingFold.toolCalls.join('; ')}`);
 
   const note = createSeedMessage(policy.foldedToolNoteRole, lines.join('\n'), pendingFold.turn);
   if (note) {
@@ -264,6 +281,8 @@ function flushPendingToolFold(seedMessages, pendingFold, policy, stats) {
 export function buildTrimmedSeedMessages(rawMessages, policy) {
   const retainedTurns = getRetainedTurnSet(rawMessages, policy);
   const foldedToolTurns = getFoldedToolTurnSet(rawMessages, retainedTurns, policy);
+  const fullPreserveFrom = policy.fullPreserveFromTurn;
+  const hasPreserveBoundary = Number.isFinite(fullPreserveFrom);
   const seedMessages = [];
   const stats = {
     originalMessageCount: rawMessages.length,
@@ -309,8 +328,25 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
     }
 
     const turn = getMessageTurn(message, index);
-    const withinDialogueWindow = !retainedTurns || retainedTurns.has(turn);
+    const withinDialogueWindow = hasPreserveBoundary || !retainedTurns || retainedTurns.has(turn);
 
+    // Preserve zone: pass through original message structure (preserves toolCallId, toolCalls, etc.)
+    if (hasPreserveBoundary && turn >= fullPreserveFrom) {
+      flushIfNeeded();
+      if (role === 'tool' || shouldKeepDialogueMessage(role, policy)) {
+        seedMessages.push({ ...message, turn });
+        stats.keptSeedMessageCount += 1;
+        if (role !== 'tool') {
+          stats.keptDialogueMessageCount += 1;
+        }
+      } else {
+        stats.droppedDialogueMessageCount += 1;
+        stats.droppedMessageCount += 1;
+      }
+      return;
+    }
+
+    // Fold zone: existing logic
     if (role === 'tool') {
       if (!withinDialogueWindow) {
         stats.droppedToolMessageCount += 1;
@@ -318,7 +354,9 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
         return;
       }
 
-      const shouldHandle = shouldHandleToolActivity(turn, foldedToolTurns, policy);
+      const shouldHandle = hasPreserveBoundary
+        ? true
+        : shouldHandleToolActivity(turn, foldedToolTurns, policy);
       if (policy.toolMessageMode === 'keep' || !shouldHandle) {
         flushIfNeeded();
         const seedMessage = createSeedMessage('tool', message.content, turn);
@@ -338,12 +376,6 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       }
 
       const fold = ensurePendingFold(turn);
-      const summary = summarizeToolPayload(message.content, policy.maxFoldedToolChars);
-      if (summary && policy.foldToolResultSummary) {
-        fold.toolResults.push(summary);
-      } else {
-        fold.toolResults.push('');
-      }
       stats.foldedToolMessageCount += 1;
       stats.droppedMessageCount += 1;
       flushImmediatelyIfConfigured();
@@ -351,7 +383,9 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
     }
 
     const toolCalls = Array.isArray(message?.toolCalls) ? message.toolCalls : [];
-    const shouldHandleToolCalls = toolCalls.length > 0 && shouldHandleToolActivity(turn, foldedToolTurns, policy);
+    const shouldHandleToolCalls = toolCalls.length > 0 && (hasPreserveBoundary
+      ? true
+      : shouldHandleToolActivity(turn, foldedToolTurns, policy));
     const toolCallSummaries = summarizeAssistantToolCalls(toolCalls, policy);
 
     if (!withinDialogueWindow) {

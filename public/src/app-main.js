@@ -296,7 +296,7 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
   return response.json();
 }
 
-async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section') {
+async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null) {
   const currentAgent = getCurrentAgentRecord();
   const activeSessionId = String(currentAgent?.active_workspace_session_id || currentAgent?.workspace_sessions?.activeSessionId || '').trim();
   const runtimeAgentId = currentRuntimeAgentId || currentAgent?.runtime_session_id || currentAgent?.runtimeSessionId || '';
@@ -341,6 +341,13 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
     return { scheduled: true, liveRuntime: true, switched: false };
   }
 
+  const policy = strategy ? { strategy } : {};
+  if (keepRecentTurns != null && keepRecentTurns >= 1) {
+    policy.keepRecentTurns = keepRecentTurns;
+  }
+  if (fullPreserveFromTurn != null && fullPreserveFromTurn >= 0) {
+    policy.fullPreserveFromTurn = fullPreserveFromTurn;
+  }
   const resumeResponse = await fetch('/protoclaw/context_handoffs/compact_and_resume', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -348,7 +355,7 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
       agentId,
       sessionId,
       detached: false,
-      policy: strategy ? { strategy } : {},
+      policy,
     }),
   });
   if (!resumeResponse.ok) {
@@ -522,13 +529,20 @@ window.runWorkspaceAction = async (rawAction) => {
   if (action.type === 'compact_session_menu') {
     if (!activeAgent?.id || !action.sessionId) return;
     const compactType = action.compactType || 'summary';
-    const strategy = compactType === 'summary' ? 'summarized-nine-section' : '';
-    const confirmMsg = compactType === 'summary' ? t('workspace_compact_summary_confirm') : t('workspace_compact_trim_confirm');
+
+    if (compactType === 'trim') {
+      window.openTrimDialog(activeAgent.id, action.sessionId);
+      return;
+    }
+
+    const strategy = 'summarized-nine-section';
+    const confirmMsg = t('workspace_compact_summary_confirm');
     const confirmed = window.confirm(confirmMsg);
     if (!confirmed) {
       return;
     }
 
+    markSessionLoading(activeAgent.id, action.sessionId);
     try {
       const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy);
       if (result?.agent) {
@@ -548,6 +562,7 @@ window.runWorkspaceAction = async (rawAction) => {
       }
     } catch (error) {
       console.error('Failed to compact session:', error);
+      clearSessionLoading(activeAgent.id);
       window.alert(t('workspace_compact_failed') + (error?.message || error));
     }
     return;
@@ -599,9 +614,26 @@ window.runWorkspaceAction = async (rawAction) => {
       return;
     }
 
+    const targetAgent = allAgents.find((item) => item.id === activeAgent.id) || null;
+    const affectedRuntimeId = targetAgent?.runtime_session_id || targetAgent?.runtimeSessionId || null;
+    const deletedWasActive = action.sessionId === (targetAgent?.active_workspace_session_id || targetAgent?.workspace_sessions?.activeSessionId || null);
+    const currentSessions = getWorkspaceSessions(targetAgent);
+
+    if (deletedWasActive) {
+      applyManagedPrebuiltAgent(activeAgent.id, null);
+    }
+    const remainingSessions = currentSessions.filter((s) => s.id !== action.sessionId);
+    const nextActiveId = remainingSessions.length > 0
+      ? (targetAgent?.active_workspace_session_id === action.sessionId ? remainingSessions[0].id : targetAgent?.active_workspace_session_id)
+      : null;
+    updateAgentRecord(activeAgent.id, {
+      workspace_sessions: { sessions: remainingSessions, activeSessionId: nextActiveId },
+      active_workspace_session_id: nextActiveId,
+    });
+    shouldAnimateWorkspaceSurface = false;
+    renderCurrentMainView();
+
     try {
-      const affectedRuntimeId = activeAgent?.runtime_session_id || activeAgent?.runtimeSessionId || null;
-      const deletedWasActive = action.sessionId === (activeAgent?.active_workspace_session_id || activeAgent?.workspace_sessions?.activeSessionId || null);
       const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -622,15 +654,16 @@ window.runWorkspaceAction = async (rawAction) => {
       }
       if (result?.agent) {
         applyManagedPrebuiltAgent(activeAgent.id, result.agent);
-      } else if (deletedWasActive) {
-        applyManagedPrebuiltAgent(activeAgent.id, null);
       }
-      renderAgentList();
       loadAgents().catch(() => {});
-      shouldAnimateWorkspaceSurface = false;
-      renderCurrentMainView();
     } catch (error) {
       console.error('Failed to delete session:', error);
+      updateAgentRecord(activeAgent.id, {
+        workspace_sessions: { sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
+        active_workspace_session_id: targetAgent?.active_workspace_session_id,
+      });
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
       window.alert((currentLanguage === 'zh' ? '删除会话失败：' : 'Failed to delete session: ') + (error?.message || error));
     }
     return;
@@ -1711,6 +1744,166 @@ window.showCompactMenu = (event, buttonElement) => {
   openCompactMenu(action, rect.left, rect.bottom + 4);
 };
 
+/* ── Trim dialog state ── */
+let trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false };
+const trimDialog = document.getElementById('trim-dialog');
+const trimRoundList = document.getElementById('trim-round-list');
+const trimFooterInfo = document.getElementById('trim-footer-info');
+
+window.openTrimDialog = async (agentId, sessionId) => {
+  trimDialogState = { agentId, sessionId, rounds: [], loading: true };
+  closeCompactMenu();
+  trimDialog.style.display = '';
+  document.getElementById('trim-submit').disabled = true;
+  trimRoundList.innerHTML = '<div class="trim-loading">加载中...</div>';
+  trimFooterInfo.textContent = '';
+
+  try {
+    const res = await fetch('/protoclaw/session_trim_preview?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
+    if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
+    const data = await res.json();
+    trimDialogState.rounds = data.rounds || [];
+    trimDialogState.loading = false;
+    if (trimDialogState.rounds.length === 0) {
+      trimRoundList.innerHTML = '<div class="trim-loading">无可用轮次</div>';
+      trimFooterInfo.textContent = '';
+      return;
+    }
+    document.getElementById('trim-submit').disabled = false;
+    renderTrimRoundList();
+  } catch (err) {
+    trimRoundList.innerHTML = '<div class="trim-loading">加载失败：' + escapeHtml(err.message || err) + '</div>';
+    trimFooterInfo.textContent = '';
+  }
+};
+
+window.closeTrimDialog = () => {
+  trimDialog.style.display = 'none';
+  trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false };
+};
+
+function renderTrimRoundList() {
+  const rounds = trimDialogState.rounds;
+  if (!rounds.length) {
+    trimRoundList.innerHTML = '<div class="trim-loading">无可用轮次</div>';
+    return;
+  }
+
+  trimRoundList.innerHTML = rounds.map((r, idx) => {
+    const checked = r.suggestedTrim ? ' checked' : '';
+    const trimmedClass = r.suggestedTrim ? ' trimmed' : '';
+
+    return [
+      `<div class="trim-round-item${trimmedClass}" data-trim-index="${idx}">`,
+      `<input type="checkbox" class="trim-checkbox" data-trim-index="${idx}"${checked} />`,
+      `<div class="trim-round-content">`,
+      `<div class="trim-round-index">第 ${idx + 1} 轮${r.messageCount ? ' · ' + r.messageCount + ' 条消息' : ''}</div>`,
+      r.userPreview ? `<div class="trim-round-preview">${escapeHtml(r.userPreview)}</div>` : '',
+      `</div>`,
+      `<button class="trim-to-here-btn" type="button" data-trim-to="${idx}">精简到此处</button>`,
+      `</div>`,
+    ].join('');
+  }).join('');
+
+  updateTrimFooterInfo();
+}
+
+function handleTrimCheckboxChange(event) {
+  const cb = event.target;
+  if (!cb.classList.contains('trim-checkbox')) return;
+  const idx = parseInt(cb.dataset.trimIndex, 10);
+  const item = cb.closest('.trim-round-item');
+  if (cb.checked) {
+    item.classList.add('trimmed');
+  } else {
+    item.classList.remove('trimmed');
+  }
+  trimDialogState.rounds[idx].suggestedTrim = cb.checked;
+  updateTrimFooterInfo();
+}
+
+function handleTrimToHere(event) {
+  const btn = event.target.closest('.trim-to-here-btn');
+  if (!btn) return;
+  const targetIdx = parseInt(btn.dataset.trimTo, 10);
+  const rounds = trimDialogState.rounds;
+  for (let i = 0; i < rounds.length; i++) {
+    const shouldTrim = i <= targetIdx;
+    rounds[i].suggestedTrim = shouldTrim;
+  }
+  trimRoundList.querySelectorAll('.trim-round-item').forEach((item, idx) => {
+    const cb = item.querySelector('.trim-checkbox');
+    if (rounds[idx].suggestedTrim) {
+      item.classList.add('trimmed');
+      cb.checked = true;
+    } else {
+      item.classList.remove('trimmed');
+      cb.checked = false;
+    }
+  });
+  updateTrimFooterInfo();
+}
+
+function updateTrimFooterInfo() {
+  const rounds = trimDialogState.rounds;
+  const trimmed = rounds.filter(r => r.suggestedTrim).length;
+  const kept = rounds.length - trimmed;
+  trimFooterInfo.textContent = currentLanguage === 'zh'
+    ? `共 ${rounds.length} 轮，精简 ${trimmed} 轮，保留 ${kept} 轮`
+    : `${rounds.length} rounds, trim ${trimmed}, keep ${kept}`;
+}
+
+trimRoundList.addEventListener('change', handleTrimCheckboxChange);
+trimRoundList.addEventListener('click', handleTrimToHere);
+
+window.submitTrimCompact = async () => {
+  const { agentId, sessionId, rounds } = trimDialogState;
+  if (!agentId || !sessionId || !rounds.length) return;
+
+  const firstKeptIndex = rounds.findIndex(r => !r.suggestedTrim);
+  if (firstKeptIndex < 0) return;
+
+  const fullPreserveFromTurn = rounds[firstKeptIndex].turnStart;
+
+  window.closeTrimDialog();
+  markSessionLoading(agentId, sessionId);
+
+  try {
+    const result = await createCompactedResumeSession(agentId, sessionId, '', null, fullPreserveFromTurn);
+    if (result?.agent) {
+      applyManagedPrebuiltAgent(agentId, result.agent);
+    }
+    await loadAgents();
+    const nextRuntimeId =
+      result?.agent?.runtime_session_id
+      || result?.agent?.runtimeSessionId
+      || null;
+    if (nextRuntimeId) {
+      setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+      await window.switchAgent(nextRuntimeId);
+    } else {
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
+    }
+  } catch (error) {
+    console.error('Failed to trim compact session:', error);
+    clearSessionLoading(agentId);
+    window.alert((currentLanguage === 'zh' ? '精简失败：' : 'Trim failed: ') + (error?.message || error));
+  }
+};
+
+function markSessionLoading(agentId, sessionId) {
+  const el = document.querySelector(
+    `.workspace-history-item[data-prebuilt-session-agent-id="${CSS.escape(agentId)}"][data-prebuilt-session-id="${CSS.escape(sessionId)}"]`
+  );
+  if (el) el.classList.add('session-loading');
+}
+
+function clearSessionLoading(agentId) {
+  document.querySelectorAll(`.workspace-history-item.session-loading[data-prebuilt-session-agent-id="${CSS.escape(agentId)}"]`)
+    .forEach(el => el.classList.remove('session-loading'));
+}
+
 window.deleteAssemblySessionRecord = async (sessionId) => {
   const agent = getCurrentAgentRecord();
   if (!agent?.id) return;
@@ -2419,13 +2612,9 @@ deleteSessionAction.addEventListener('click', async () => {
     renderAgentList();
   } else if (pendingAgentId === 'flow-workspace') {
     renderAgentList();
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
-  } else {
-    renderAgentList();
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
   }
+  shouldAnimateWorkspaceSurface = false;
+  renderCurrentMainView();
 
   try {
     const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
@@ -3019,6 +3208,9 @@ async function poll() {
     if (Date.now() - lastAgentListRefreshAt > 3000) {
        lastAgentListRefreshAt = Date.now();
        await loadAgents();
+       if (typeof updateChatContextBar === 'function') {
+         updateChatContextBar();
+       }
     }
 
     // Incrementally refresh workspace session data for the active workspace host.
@@ -3542,7 +3734,7 @@ async function submitInput(requestId) {
       })
     });
     if (res.ok) {
-      setFollowLatest(true, { scroll: true, behavior: 'smooth' });
+      setFollowLatest(true);
       // 刷新输入请求列表
       poll();
     }
@@ -3608,9 +3800,6 @@ function syncAssistantProcessOnlyRows(root = container) {
       if (child.classList.contains('markdown-body')) {
         return String(child.textContent || '').trim().length > 0;
       }
-      if (child.classList.contains('tool-error')) {
-        return true;
-      }
       if (child.classList.contains('reasoning-block')) {
         return !child.classList.contains('process-hidden');
       }
@@ -3638,9 +3827,7 @@ function applyConversationProcessState(root = container) {
   });
 
   root.querySelectorAll('.message-row.tool').forEach((row) => {
-    const isSuccess = row.dataset.toolSuccess !== 'false';
-    row.classList.toggle('process-hidden', !showChatProcess && isSuccess);
-    row.classList.toggle('process-error', !isSuccess);
+    row.classList.toggle('process-hidden', !showChatProcess);
   });
 
   syncAssistantProcessOnlyRows(root);
