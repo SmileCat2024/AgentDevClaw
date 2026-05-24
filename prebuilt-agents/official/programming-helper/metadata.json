@@ -21,8 +21,7 @@
     "memory",
     "shell",
     "mcp",
-    "skill",
-    "subagent"
+    "skill"
   ],
   "ui": {
     "entry": "sessions",

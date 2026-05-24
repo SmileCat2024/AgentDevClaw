@@ -62,6 +62,12 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
     this._isExploration = isExploration;
 
+    // 移除 BasicAgent 自动挂载的 SubAgentFeature 工具
+    const tools = this.getTools();
+    tools.remove('spawn_agent');
+    tools.remove('send_to_agent');
+    tools.remove('wait');
+
     if (isExploration) {
       this.use(new ShellFeature({ workspaceDir }));
       this.use(new WebSearchFeature());

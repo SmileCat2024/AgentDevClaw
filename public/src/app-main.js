@@ -3097,7 +3097,14 @@ async function poll() {
               if (prevSig !== nextSig) {
                 wsHostAgent.workspace_sessions = freshSessions;
                 lastRenderedWorkspaceHtml = '';
-                renderCurrentMainView();
+                if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
+                  renderCurrentMainView();
+                } else {
+                  // Chat mode: only refresh context bar, avoid full re-render that resets scroll
+                  if (typeof updateChatContextBar === 'function') {
+                    updateChatContextBar();
+                  }
+                }
               }
             }
           } catch {}
@@ -3228,7 +3235,14 @@ async function poll() {
             if (prevSig !== nextSig) {
               wsHostAgent.workspace_sessions = freshSessions;
               lastRenderedWorkspaceHtml = '';
-              renderCurrentMainView();
+              if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
+                renderCurrentMainView();
+              } else {
+                // Chat mode: only refresh context bar, avoid full re-render that resets scroll
+                if (typeof updateChatContextBar === 'function') {
+                  updateChatContextBar();
+                }
+              }
             }
           }
         } catch {}
@@ -3284,9 +3298,19 @@ function updateNotificationStatus(notifData) {
     };
     phaseEl.textContent = phaseNames[data.phase] || data.phase;
     charCountEl.textContent = data.charCount.toLocaleString();
+
+    // 显示 interrupt 按钮（agent 正在运行）
+    const interruptBtn = document.querySelector('.interrupt-btn');
+    if (interruptBtn) interruptBtn.style.display = '';
   } else if (type === 'llm.complete') {
     statusEl.style.display = 'none';
     statusEl.classList.remove('active');
+
+    // 隐藏 interrupt 按钮，重置队列计数
+    const interruptBtn = document.querySelector('.interrupt-btn');
+    if (interruptBtn) interruptBtn.style.display = 'none';
+    _pendingQueuedCount = 0;
+    updateQueueIndicator();
   } else {
     statusEl.style.display = 'none';
   }
@@ -3338,48 +3362,140 @@ function renderInputRequests(requests) {
     return;
   }
 
-  for (const req of requests) {
-    if (isChoiceInputRequest(req)) {
-      renderChoiceInputRequest(container, req);
-      continue;
-    }
+  // 如果没有 pending input requests 但有运行时 agent，渲染常驻输入框
+  const hasRequests = Array.isArray(requests) && requests.length > 0;
+  const isAgentRunning = !!currentRuntimeAgentId && chatActive;
 
-    const card = document.createElement('div');
-    card.className = 'user-input-card';
-    const visibleActions = Array.isArray(req.actions)
-      ? req.actions.filter(action => action && action.id !== 'rollback_to_call')
-      : [];
-    const actionsHtml = visibleActions.length > 0
-      ? '<div class="user-input-actions">' + visibleActions.map(action =>
-          '<button class="user-input-action ' + escapeHtml(action.variant || 'secondary') + '" onclick="submitInputAction(\'' + req.requestId + '\', \'' + escapeHtml(action.id) + '\')">' + escapeHtml(action.label) + '</button>'
-        ).join('') + '</div>'
-      : '';
-    card.innerHTML = `
-      <textarea class="user-input-textarea" rows="1" id="input-${req.requestId}"
-        onkeydown="handleInputKey(event, '${req.requestId}')"
-        oninput="autoResize(this)"
-        placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
-      <div class="user-input-footer">
-        ${actionsHtml}
-      </div>
-    `;
-    container.appendChild(card);
-    
-    // Auto-focus
-    setTimeout(() => {
-      const el = document.getElementById(`input-${req.requestId}`);
-      if(el) {
-         if (typeof req.initialValue === 'string' && req.initialValue.length > 0) {
-           el.value = req.initialValue;
-         }
-         el.focus();
-         const end = el.value.length;
-         if (typeof el.setSelectionRange === 'function') {
-           el.setSelectionRange(end, end);
-         }
-         autoResize(el);
+  // 如果有 pending requests，正常渲染
+  // 如果没有 pending requests 但 agent 存在，渲染常驻输入框（队列模式）
+  if (hasRequests) {
+    for (const req of requests) {
+      if (isChoiceInputRequest(req)) {
+        renderChoiceInputRequest(container, req);
+        continue;
       }
-    }, 50);
+
+      const card = document.createElement('div');
+      card.className = 'user-input-card';
+      const visibleActions = Array.isArray(req.actions)
+        ? req.actions.filter(action => action && action.id !== 'rollback_to_call')
+        : [];
+      const actionsHtml = visibleActions.length > 0
+        ? '<div class="user-input-actions">' + visibleActions.map(action =>
+            '<button class="user-input-action ' + escapeHtml(action.variant || 'secondary') + '" onclick="submitInputAction(\'' + req.requestId + '\', \'' + escapeHtml(action.id) + '\')">' + escapeHtml(action.label) + '</button>'
+          ).join('') + '</div>'
+        : '';
+      card.innerHTML = `
+        <textarea class="user-input-textarea" rows="1" id="input-${req.requestId}"
+          onkeydown="handleInputKey(event, '${req.requestId}')"
+          oninput="autoResize(this)"
+          placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
+        <div class="user-input-footer">
+          ${actionsHtml}
+        </div>
+      `;
+      container.appendChild(card);
+      
+      // Auto-focus
+      setTimeout(() => {
+        const el = document.getElementById(`input-${req.requestId}`);
+        if(el) {
+           if (typeof req.initialValue === 'string' && req.initialValue.length > 0) {
+             el.value = req.initialValue;
+           }
+           el.focus();
+           const end = el.value.length;
+           if (typeof el.setSelectionRange === 'function') {
+             el.setSelectionRange(end, end);
+           }
+           autoResize(el);
+        }
+      }, 50);
+    }
+  } else if (isAgentRunning && !readOnlyMode) {
+    // 常驻输入框：agent 正在运行但没有 pending input request
+    renderPersistentInput(container);
+  }
+}
+
+// 渲染常驻输入框（agent 运行期间始终可见）
+let _pendingQueuedCount = 0;
+
+function renderPersistentInput(container) {
+  const card = document.createElement('div');
+  card.className = 'user-input-card persistent-input';
+  card.innerHTML = `
+    <textarea class="user-input-textarea" rows="1" id="input-persistent"
+      onkeydown="handlePersistentInputKey(event)"
+      oninput="autoResize(this)"
+      placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
+    <div class="user-input-footer">
+      <span class="queue-indicator" id="queue-indicator" style="display:none;font-size:12px;color:var(--text-muted);"></span>
+      <button class="user-input-action secondary interrupt-btn" onclick="interruptAgent()" style="display:none;">
+        ${escapeHtml(t('interrupt') || 'Interrupt')}
+      </button>
+    </div>
+  `;
+  container.appendChild(card);
+}
+
+function handlePersistentInputKey(event) {
+  if (event.key === 'Enter') {
+    if (event.ctrlKey || event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    submitQueuedInput();
+  }
+}
+
+async function submitQueuedInput() {
+  const textarea = document.getElementById('input-persistent');
+  if (!textarea) return;
+  const text = textarea.value.trim();
+  if (!text) return;
+
+  try {
+    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/queue-input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    if (res.ok) {
+      textarea.value = '';
+      autoResize(textarea);
+      _pendingQueuedCount++;
+      updateQueueIndicator();
+    }
+  } catch (e) {
+    console.error('排队输入提交失败:', e);
+  }
+}
+
+function updateQueueIndicator() {
+  const indicator = document.getElementById('queue-indicator');
+  if (indicator) {
+    if (_pendingQueuedCount > 0) {
+      indicator.style.display = 'inline';
+      indicator.textContent = `${_pendingQueuedCount} message(s) queued`;
+    } else {
+      indicator.style.display = 'none';
+    }
+  }
+}
+
+async function interruptAgent() {
+  if (!currentRuntimeAgentId) { console.log('[Interrupt] no currentRuntimeAgentId, skip'); return; }
+  console.log(`[Interrupt] sending POST /api/agents/${currentRuntimeAgentId}/interrupt`);
+  try {
+    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/interrupt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    console.log(`[Interrupt] response:`, res.status, data);
+  } catch (e) {
+    console.error('[Interrupt] request failed:', e);
   }
 }
 
@@ -4387,6 +4503,7 @@ function render(messages) {
     `;
   }).join('');
 
+  const savedScrollTop = container.scrollTop;
   container.innerHTML = html;
   enhanceMathInElement(container);
 
@@ -4397,6 +4514,8 @@ function render(messages) {
   updateFollowLatestButton();
   if (followLatestEnabled) {
     scheduleScrollToLatest('auto');
+  } else {
+    container.scrollTop = savedScrollTop;
   }
 }
 

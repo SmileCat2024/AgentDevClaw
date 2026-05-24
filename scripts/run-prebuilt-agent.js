@@ -715,6 +715,8 @@ async function main() {
         console.warn('[ProtoClaw Runtime] 保存 session 失败:', e.message);
       });
     }
+
+    // 注意：队列消息现在在 step 级别检查（react-loop 内部），不再在这里处理
   }
 
   await disposeAgent(0);

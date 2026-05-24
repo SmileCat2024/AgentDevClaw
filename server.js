@@ -3231,7 +3231,7 @@ function buildAgentWorkspaceMetadata(agentName, goal) {
     icon: 'bot',
     category: 'custom',
     enabled: true,
-    features: ['todo', 'audit', 'shell', 'websearch', 'user-input', 'mcp', 'skill', 'subagent'],
+    features: ['todo', 'audit', 'shell', 'websearch', 'user-input', 'mcp', 'skill'],
     ui: {
       entry: 'home',
       tabs: [
@@ -6444,6 +6444,27 @@ app.put('/api/agents/current', (req, res, next) => {
 });
 
 app.post('/api/agents/:agentId/input', (req, res, next) => {
+  proxyToViewer(req, res).catch(next);
+});
+
+app.post('/api/agents/:agentId/queue-input', (req, res, next) => {
+  proxyToViewer(req, res).catch(next);
+});
+
+app.get('/api/agents/:agentId/queued-inputs', (req, res, next) => {
+  proxyToViewer(req, res).catch(next);
+});
+
+app.post('/api/agents/:agentId/dequeue-input', (req, res, next) => {
+  proxyToViewer(req, res).catch(next);
+});
+
+app.post('/api/agents/:agentId/interrupt', (req, res, next) => {
+  console.log(`[Server] POST /api/agents/${req.params.agentId}/interrupt → proxying to ViewerWorker`);
+  proxyToViewer(req, res).catch(next);
+});
+
+app.get('/api/agents/:agentId/running', (req, res, next) => {
   proxyToViewer(req, res).catch(next);
 });
 
