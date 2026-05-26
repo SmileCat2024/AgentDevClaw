@@ -110,6 +110,7 @@ function isRuntimeItemActive(runtimeId) {
 function buildSyntheticRuntimeEntry(prebuiltAgent) {
   const runtimeId = prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || '';
   if (!runtimeId) return null;
+  if (prebuiltAgent.connected === false) return null;
   return {
     id: runtimeId,
     ownerId: prebuiltAgent.id,
@@ -325,8 +326,10 @@ async function loadAgents() {
       });
     }
 
-    renderAgentList();
-    renderFeaturePanel();
+    if (!suppressSidebarRerender) {
+      renderAgentList();
+      renderFeaturePanel();
+    }
 
     if (currentAgentId && !allAgents.some((agent) => agent.id === currentAgentId || getAgentRuntimeId(agent) === currentAgentId)) {
       const fallbackId = resolveWorkspaceFallbackAgentId();
@@ -2582,6 +2585,8 @@ window.openAgentActions = (event, agentId) => {
   if (!agent) return;
   const mode = agent.source === 'prebuilt'
     ? 'prebuilt-runtime'
+    : (agent.source === 'child' || agent.source === 'managed-runtime')
+      ? 'child-runtime'
     : (agent.source === 'external' && agent.connected !== false)
       ? 'external-runtime'
     : (agent.connected === false ? 'delete-only' : null);
@@ -2739,7 +2744,7 @@ async function refreshSidebarRuntimeAfterMutation(delayMs = 0) {
 }
 
 restartAgentAction.addEventListener('click', async () => {
-  if (!contextMenuAgentId || (contextMenuAgentMode !== 'prebuilt-runtime' && contextMenuAgentMode !== 'external-runtime')) return;
+  if (!contextMenuAgentId || (contextMenuAgentMode !== 'prebuilt-runtime' && contextMenuAgentMode !== 'external-runtime' && contextMenuAgentMode !== 'child-runtime')) return;
   const confirmed = window.confirm(t('restart_prebuilt_confirm'));
   if (!confirmed) {
     closeAgentContextMenu();
@@ -2748,15 +2753,26 @@ restartAgentAction.addEventListener('click', async () => {
 
   try {
     const agent = getExternalRuntimeAgent(contextMenuAgentId);
-    closeAgentContextMenu();
+    const runtimeItem = document.querySelector(`[data-agent-id="${CSS.escape(contextMenuAgentId)}"]`);
+    if (runtimeItem) {
+      runtimeItem.classList.add('restarting');
+      runtimeItem.classList.remove('active', 'disconnected');
+    }
+    suppressSidebarRerender = true;
     let result = null;
     if (contextMenuAgentMode === 'external-runtime') {
+      closeAgentContextMenu();
       result = await restartSidebarExternalRuntime(agent);
+    } else if (contextMenuAgentMode === 'child-runtime') {
+      const hostId = agent?.parent_id || contextMenuAgentId;
+      const sessionId = agent?.active_workspace_session_id || null;
+      closeAgentContextMenu();
+      result = await invoke('restart_agent', { agentId: hostId, sessionId });
     } else {
       const sessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
+      closeAgentContextMenu();
       result = await invoke('restart_agent', { agentId: contextMenuAgentId, sessionId });
     }
-    await refreshSidebarRuntimeAfterMutation(500);
     const nextRuntimeId =
       result?.runtime?.id
       || result?.runtime?.viewerAgentId
@@ -2764,16 +2780,29 @@ restartAgentAction.addEventListener('click', async () => {
       || result?.agent?.runtimeSessionId
       || null;
     if (nextRuntimeId) {
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+          const agents = await invoke('get_connected_agents');
+          const found = agents.find((a) => a.runtime_session_id === nextRuntimeId || a.id === nextRuntimeId);
+          if (found && found.connected !== false) break;
+        } catch (_) { /* ignore */ }
+      }
+    }
+    suppressSidebarRerender = false;
+    await loadAgents();
+    if (nextRuntimeId) {
       await window.switchAgent(nextRuntimeId);
     }
   } catch (e) {
+    suppressSidebarRerender = false;
     closeAgentContextMenu();
     window.alert(t('restart_failed') + (e && e.message ? e.message : e));
   }
 });
 
 stopAgentAction.addEventListener('click', async () => {
-  if (!contextMenuAgentId || (contextMenuAgentMode !== 'prebuilt-runtime' && contextMenuAgentMode !== 'external-runtime')) return;
+  if (!contextMenuAgentId || (contextMenuAgentMode !== 'prebuilt-runtime' && contextMenuAgentMode !== 'external-runtime' && contextMenuAgentMode !== 'child-runtime')) return;
   const confirmed = window.confirm(t('close_prebuilt_confirm'));
   if (!confirmed) {
     closeAgentContextMenu();
@@ -2785,6 +2814,10 @@ stopAgentAction.addEventListener('click', async () => {
     const affectedRuntimeId = agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id || null;
     if (contextMenuAgentMode === 'external-runtime') {
       await closeSidebarExternalRuntime(agent);
+    } else if (contextMenuAgentMode === 'child-runtime') {
+      const hostId = agent?.parent_id || contextMenuAgentId;
+      const sessionId = agent?.active_workspace_session_id || null;
+      await invoke('stop_agent', { agentId: hostId, sessionId });
     } else {
       await invoke('stop_agent', { agentId: contextMenuAgentId });
     }
@@ -2793,7 +2826,9 @@ stopAgentAction.addEventListener('click', async () => {
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       const fallbackTarget = contextMenuAgentMode === 'external-runtime'
         ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
-        : resolveWorkspaceFallbackAgentId(agent);
+        : contextMenuAgentMode === 'child-runtime'
+          ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
+          : resolveWorkspaceFallbackAgentId(agent);
       if (fallbackTarget) {
         selectWorkspaceSurface(fallbackTarget);
       }
@@ -3432,7 +3467,7 @@ async function poll() {
 
     const coreResponses = [msgsRes, notifRes, connectionRes, inputRes, overviewRes];
     if (coreResponses.some(res => res.status === 404)) {
-      if (prebuiltSessionSwitchInFlight) {
+      if (prebuiltSessionSwitchInFlight || suppressSidebarRerender) {
         setTimeout(poll, 300);
         return;
       }

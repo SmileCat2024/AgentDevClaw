@@ -333,7 +333,7 @@ function buildStatus(agentId, sessionId = undefined) {
     pid: running ? runtime.process.pid : null,
     startedAt: runtime.startedAt ?? null,
     exitCode: runtime.exitCode ?? null,
-    viewerAgentId: runtime.viewerAgentId ?? null,
+    viewerAgentId: running ? (runtime.viewerAgentId ?? null) : null,
     selectedSessionId: runtime.selectedSessionId ?? null,
   };
 }
@@ -3749,7 +3749,7 @@ async function getConnectedAgents() {
   const runtimeAgents = Array.isArray(viewerData.agents) ? viewerData.agents : [];
   const managedRuntimeByViewerId = new Map(
     Array.from(managedAgents.values())
-      .filter((runtime) => runtime?.viewerAgentId)
+      .filter((runtime) => runtime?.viewerAgentId && runtime.process && runtime.process.exitCode === null && !runtime.stopped)
       .map((runtime) => [String(runtime.viewerAgentId), runtime])
   );
 
@@ -3976,6 +3976,10 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
     await waitForProcessExit(existing.process);
   }
 
+  if (existing?.process && existing.process.exitCode === null && existing.stopped) {
+    await waitForProcessExit(existing.process);
+  }
+
   const runtimeDisplayName = await resolveRuntimeDisplayName(agent, resolvedSessionId);
 
   const child = spawn(process.execPath, [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN], {
@@ -4027,7 +4031,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
 
   child.on('exit', (code) => {
     const current = managedAgents.get(runtime.key);
-    if (current) {
+    if (current && current === runtime) {
       current.exitCode = code;
       current.stopped = true;
     }
@@ -5956,7 +5960,7 @@ app.post('/protoclaw/feature_repository/upload', upload.single('file'), async (r
 
 app.post('/protoclaw/stop_agent', express.json(), async (req, res, next) => {
   try {
-    const status = await stopManagedAgent(req.body.agentId);
+    const status = await stopManagedAgent(req.body.agentId, req.body.sessionId);
     res.json(status);
   } catch (error) {
     next(error);

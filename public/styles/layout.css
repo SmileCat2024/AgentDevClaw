@@ -164,6 +164,21 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   background: var(--error-color);
 }
 
+.agent-item.restarting .agent-status-dot {
+  background: var(--warning-color);
+  animation: restart-pulse 1s ease-in-out infinite;
+}
+
+.agent-item.restarting {
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+@keyframes restart-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 .agent-item.idle .agent-status-dot {
   background: var(--text-muted);
   opacity: 0.65;

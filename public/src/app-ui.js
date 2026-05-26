@@ -8075,7 +8075,7 @@ function openAgentContextMenu(agentId, x, y, mode) {
   closeProjectContextMenu();
   contextMenuAgentId = agentId;
   contextMenuAgentMode = mode || null;
-  const showRuntimeActions = mode === 'prebuilt-runtime' || mode === 'external-runtime';
+  const showRuntimeActions = mode === 'prebuilt-runtime' || mode === 'external-runtime' || mode === 'child-runtime';
 
   restartAgentAction.style.display = showRuntimeActions ? '' : 'none';
   restartAgentAction.disabled = !showRuntimeActions;

@@ -57,6 +57,7 @@ async function reloadFeatureTemplateMap() {
 const VIEWER_BASE_URL = 'http://127.0.0.1:2026';
 const PREBUILT_AGENTS = [];
 const pendingPrebuiltAgentIds = new Set();
+let suppressSidebarRerender = false;
 const nativeFetch = window.fetch.bind(window);
 const USE_SAME_ORIGIN_VIEWER_PROXY = window.location.protocol === 'http:' && window.location.port === '1420';
 
