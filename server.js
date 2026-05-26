@@ -2259,6 +2259,8 @@ function buildSessionTrimPreview(messages) {
         roundIndex: rounds.length,
         turnStart: Number.isFinite(m.turn) ? m.turn : i,
         turnEnd: Number.isFinite(m.turn) ? m.turn : i,
+        msgIndexStart: i,
+        msgIndexEnd: i,
         userPreview: content.slice(0, 120),
         assistantPreview: '',
         toolCalls: [],
@@ -2267,6 +2269,7 @@ function buildSessionTrimPreview(messages) {
     } else if (currentRound) {
       currentRound.messageCount += 1;
       currentRound.turnEnd = Number.isFinite(m.turn) ? m.turn : currentRound.turnEnd;
+      currentRound.msgIndexEnd = i;
       if (role === 'assistant') {
         const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
         if (content && !currentRound.assistantPreview) {
@@ -4505,6 +4508,111 @@ app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
       sessionTitle: parsed.title || '',
       contextLength: null,
       rounds,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.body?.agentId);
+    const sourceSessionId = cleanSessionText(req.body?.sourceSessionId);
+    const cutMsgIndexEnd = req.body?.cutMsgIndexEnd;
+
+    if (!agentId || !sourceSessionId) {
+      res.status(400).json({ error: 'agentId and sourceSessionId are required' });
+      return;
+    }
+    if (typeof cutMsgIndexEnd !== 'number' || !Number.isFinite(cutMsgIndexEnd)) {
+      res.status(400).json({ error: 'cutMsgIndexEnd must be a finite number' });
+      return;
+    }
+
+    const sourcePath = getPrebuiltSessionFilePath(agentId, sourceSessionId);
+    const sourceRaw = await fs.readFile(sourcePath, 'utf8');
+    const sourceSnapshot = JSON.parse(sourceRaw);
+    const rawMessages = Array.isArray(sourceSnapshot?.runtime?.context?.messages)
+      ? sourceSnapshot.runtime.context.messages
+      : [];
+
+    const branchMessages = rawMessages.slice(0, cutMsgIndexEnd + 1);
+
+    if (branchMessages.length === 0) {
+      res.status(400).json({ error: 'No messages to keep after branch cut' });
+      return;
+    }
+
+    const index = await readSessionIndex(agentId);
+    const sourceRecord = index.sessions.find((s) => s.id === sourceSessionId) || null;
+    const newSessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
+    const createdAt = new Date().toISOString();
+
+    const branchSnapshot = {
+      ...sourceSnapshot,
+      sessionId: newSessionId,
+      savedAt: Date.now(),
+      runtime: {
+        ...(sourceSnapshot.runtime || {}),
+        initialized: false,
+        callIndex: 0,
+        context: {
+          ...(sourceSnapshot.runtime?.context || {}),
+          messages: branchMessages,
+        },
+      },
+    };
+    delete branchSnapshot.title;
+
+    const branchSessionPath = getPrebuiltSessionFilePath(agentId, newSessionId);
+    await fs.writeFile(branchSessionPath, JSON.stringify(branchSnapshot, null, 2), 'utf8');
+
+    const sourceTitle = sourceRecord?.title || '';
+    const branchTitle = sourceTitle
+      ? `${sourceTitle}（分支）`
+      : `分支会话 · ${createdAt.replace(/[TZ]/g, ' ').trim()}`;
+
+    const branchRecord = {
+      id: newSessionId,
+      title: branchTitle,
+      featureName: sourceRecord?.featureName || '',
+      agentName: sourceRecord?.agentName || '',
+      taskTitle: sourceRecord?.taskTitle || '',
+      taskType: sourceRecord?.taskType || '',
+      goal: sourceRecord?.goal || '',
+      constraints: sourceRecord?.constraints || '',
+      expectedOutput: sourceRecord?.expectedOutput || '',
+      targetFiles: sourceRecord?.targetFiles || '',
+      referenceMaterials: sourceRecord?.referenceMaterials || '',
+      formId: sourceRecord?.formId || '',
+      openDirectory: sourceRecord?.openDirectory || '',
+      sessionType: sourceRecord?.sessionType || 'main',
+      metadata: {
+        ...(sourceRecord?.metadata || {}),
+        branchSourceSessionId: sourceSessionId,
+        branchCutMsgIndexEnd: cutMsgIndexEnd,
+      },
+      createdAt,
+      updatedAt: createdAt,
+    };
+
+    const nextIndex = {
+      activeSessionId: newSessionId,
+      sessions: [branchRecord, ...index.sessions.filter((s) => s.id !== newSessionId)],
+    };
+    await writeSessionIndex(agentId, nextIndex);
+
+    const agent = await requirePrebuiltAgentForRuntime(agentId);
+    await startManagedAgent(agent, newSessionId);
+    const connected = await waitForManagedRuntimeReady(agent.id, 10000, newSessionId);
+
+    res.json({
+      ok: true,
+      newSessionId,
+      branchTitle,
+      keptMessages: branchMessages.length,
+      totalMessages: rawMessages.length,
+      agent: connected,
     });
   } catch (error) {
     next(error);

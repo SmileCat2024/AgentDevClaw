@@ -213,6 +213,7 @@ const deleteSessionAction = document.getElementById('delete-session-action');
 const compactContextMenu = document.getElementById('compact-context-menu');
 const compactSummaryAction = document.getElementById('compact-summary-action');
 const compactTrimAction = document.getElementById('compact-trim-action');
+const compactBranchAction = document.getElementById('compact-branch-action');
 const projectContextMenu = document.getElementById('project-context-menu');
 const deleteProjectAction = document.getElementById('delete-project-action');
 const featureRepoContextMenu = document.getElementById('feature-repo-context-menu');
@@ -401,7 +402,7 @@ const I18N = {
     workspace_compacted_resume_started: '已创建新的轻量继续会话。',
     workspace_new_project: '新建项目',
     workspace_select_directory_new_project: '选择目录并新建项目',
-    workspace_compact_session: '压缩会话',
+    workspace_compact_session: '编辑',
     workspace_compact_summary: '总结历史（摘要）',
     workspace_compact_trim: '精简历史（Trim）',
     workspace_compact_summary_confirm: '确定要总结历史并继续会话吗？',
@@ -660,7 +661,7 @@ const I18N = {
     workspace_compacted_resume_started: 'Created a new compacted-resume session.',
     workspace_new_project: 'New Project',
     workspace_select_directory_new_project: 'Select Directory & New Project',
-    workspace_compact_session: 'Compact',
+    workspace_compact_session: 'Edit',
     workspace_compact_summary: 'Summarize (Summary)',
     workspace_compact_trim: 'Trim History',
     workspace_compact_summary_confirm: 'Summarize the history and continue?',

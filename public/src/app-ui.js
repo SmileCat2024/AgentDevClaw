@@ -299,7 +299,6 @@ function updateChatContextBar() {
 
 async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
   if (!btnElement) return;
-  alert('refreshSessionTokenCount v2');
   btnElement.innerHTML = '⟳';
   btnElement.classList.add('loading');
   btnElement.disabled = true;

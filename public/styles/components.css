@@ -4232,6 +4232,20 @@ body[data-theme="light"] .trim-round-item:hover {
   color: var(--text-secondary);
   font-size: 14px;
 }
+/* ── Branch dialog (extends trim styles) ── */
+.trim-round-item.branch-kept {
+  background: rgba(88, 166, 255, 0.06);
+  cursor: pointer;
+}
+.trim-round-item.branch-cut {
+  border-left: 3px solid #58a6ff;
+}
+.trim-round-item.branch-dimmed {
+  opacity: 0.35;
+}
+.trim-round-item.branch-selectable {
+  cursor: pointer;
+}
 .workspace-history-item.session-loading {
   opacity: 0.6;
   pointer-events: none;
