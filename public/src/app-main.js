@@ -218,18 +218,37 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
       : !!(agent.runtime_session_id || agent.runtimeSessionId || agent.id);
     const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
     const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
+    if (prebuilt) {
+      const childrenHtml = renderSidebarChildItems(childEntries);
+      const entryClass = ['agent-entry', hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ');
+      return `
+        <div class="${entryClass}">
+          <div
+            class="${itemClass}"
+            data-agent-id="${escapeHtml(agent.id)}"
+            data-agent-prebuilt="true"
+            data-agent-context-menu="${contextMenuEnabled ? 'true' : 'false'}"
+          >
+            <div class="agent-line">
+              <span class="agent-status-dot"></span>
+              <div class="agent-name">${escapeHtml(agent.name || agent.id)}</div>
+            </div>
+          </div>
+          ${childrenHtml}
+        </div>
+      `;
+    }
     return `
       <div
-        class="${[itemClass, hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ')}"
+        class="${itemClass}"
         data-agent-id="${escapeHtml(agent.id)}"
-        data-agent-prebuilt="${prebuilt ? 'true' : 'false'}"
+        data-agent-prebuilt="false"
         data-agent-context-menu="${contextMenuEnabled ? 'true' : 'false'}"
       >
         <div class="agent-line">
           <span class="agent-status-dot"></span>
           <div class="agent-name">${escapeHtml(agent.name || agent.id)}</div>
         </div>
-        ${prebuilt ? renderSidebarChildItems(childEntries) : ''}
       </div>
     `;
   }).join('');

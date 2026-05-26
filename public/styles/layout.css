@@ -98,12 +98,25 @@
   font-weight: 500;
 }
 
+.agent-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.agent-entry.has-active-runtime > .agent-item:not(.active) {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.active) {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
 .agent-runtime-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 4px;
-  padding-left: 14px;
+  padding-left: 18px;
 }
 
 .agent-runtime-item {
@@ -117,14 +130,6 @@
 
 .agent-runtime-item.active {
   background-color: var(--active-bg);
-}
-
-.agent-item.has-active-runtime:not(.active) {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-}
-
-body[data-theme="light"] .agent-item.has-active-runtime:not(.active) {
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 .agent-line {
