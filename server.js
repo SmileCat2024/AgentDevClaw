@@ -4923,6 +4923,37 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
   }
 });
 
+app.put('/protoclaw/prebuilt_sessions/:sessionId/title', express.json(), async (req, res, next) => {
+  try {
+    const { agentId, title } = req.body || {};
+    const sessionId = req.params.sessionId;
+
+    if (!agentId || typeof agentId !== 'string') {
+      return res.status(400).json({ error: 'agentId is required' });
+    }
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({ error: 'title is required and must be non-empty' });
+    }
+
+    const index = await readSessionIndex(agentId);
+    const sessionIndex = index.sessions.findIndex(s => s.id === sessionId);
+    if (sessionIndex === -1) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    index.sessions[sessionIndex].title = title.trim();
+    index.sessions[sessionIndex].updatedAt = new Date().toISOString();
+    await writeSessionIndex(agentId, index);
+
+    res.json({ ok: true, sessionId, title: title.trim() });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/protoclaw/context_handoffs/export', express.json(), async (req, res, next) => {
   try {
     const sessionId = cleanSessionText(req.body?.sessionId);

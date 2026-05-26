@@ -4102,3 +4102,24 @@ body[data-theme="light"] .trim-round-item:hover {
 body[data-theme="light"] .workspace-history-item.session-loading::after {
   background: rgba(255,255,255,0.6);
 }
+
+
+/* Session Title Edit Input */
+.session-title-edit-input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: inherit;
+  font-family: inherit;
+  font-weight: inherit;
+  color: var(--text-primary);
+  background: var(--panel-bg);
+  border: 2px solid var(--code-accent);
+  border-radius: 6px;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2);
+}
+
+.session-title-edit-input:focus {
+  border-color: var(--code-accent);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.3);
+}

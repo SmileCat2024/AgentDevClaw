@@ -189,6 +189,26 @@ function renderSessionTokenBar(session, agent) {
  * 更新聊天界面顶部的 context bar（模型名 + token 占比）。
  * 从 currentOverviewSnapshot 取 lastRequestUsage，从当前 agent/session 取模型名和 contextLength。
  */
+function getRuntimeAwareAgentRecord() {
+  if (typeof getCurrentRuntimeRecord === 'function') {
+    const runtimeRecord = getCurrentRuntimeRecord();
+    if (runtimeRecord) {
+      return runtimeRecord;
+    }
+  }
+  return getCurrentAgentRecord();
+}
+
+function getRuntimeAwareAgentName() {
+  const agent = getRuntimeAwareAgentRecord();
+  if (!agent) return t('active_none');
+  return agent.active_workspace_display_name
+    || agent.active_workspace_agent_name
+    || agent.active_workspace_session_title
+    || agent.name
+    || t('active_none');
+}
+
 function updateChatContextBar() {
   var bar = document.getElementById('chat-context-bar');
   if (!bar) return;
@@ -200,7 +220,7 @@ function updateChatContextBar() {
   }
   bar.classList.remove('hidden');
 
-  var agent = getCurrentAgentRecord();
+  var agent = getRuntimeAwareAgentRecord();
   if (!agent) { bar.innerHTML = ''; return; }
 
   // 找到当前活跃会话
@@ -343,6 +363,7 @@ function renderPhModelConfigOverlay(agent, presets) {
     { key: 'default', label: isZh ? '主代理' : 'Main Agent', desc: isZh ? '对话和编码任务' : 'Chat & coding tasks' },
     { key: 'exploration', label: isZh ? '探索代理' : 'Explorer', desc: isZh ? '代码探索与调研' : 'Code exploration & research' },
     { key: 'sub', label: isZh ? '子代理' : 'Sub Agent', desc: isZh ? '派生执行子任务' : 'Spawned task execution' },
+    { key: 'system', label: isZh ? '系统管理' : 'System', desc: isZh ? '系统自管理能力' : 'System self-management' },
   ];
   const rows = roles.map(function(role) {
     const val = current[role.key] || '';
@@ -983,7 +1004,6 @@ function normalizeProgrammingHelperStartupDraft(agent, rawDraft = {}) {
   const nextDraft = { ...(rawDraft || {}) };
   nextDraft.task_type = String(nextDraft.task_type || 'build').trim() || 'build';
   nextDraft.task_title = typeof nextDraft.task_title === 'string' ? nextDraft.task_title : '';
-  nextDraft.goal = typeof nextDraft.goal === 'string' ? nextDraft.goal : '';
   nextDraft.workdir = typeof nextDraft.workdir === 'string' ? nextDraft.workdir : '';
   nextDraft.target_files = typeof nextDraft.target_files === 'string' ? nextDraft.target_files : '';
   nextDraft.expected_output = typeof nextDraft.expected_output === 'string' ? nextDraft.expected_output : '';
@@ -1520,7 +1540,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
                   '<div class="workspace-history-main">',
                   '<div class="workspace-history-title-row">',
-                  '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+                  '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
                   renderSessionResumeBadge(session),
                   session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
                   '</div>',
@@ -1619,7 +1639,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
                   '<div class="workspace-history-main">',
                   '<div class="workspace-history-title-row">',
-                  '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+                  '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
                   renderSessionResumeBadge(session),
                   session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
                   '</div>',
@@ -1750,7 +1770,7 @@ function renderWorkspaceSessionList(agent, block) {
               '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '">',
               '<div class="workspace-history-main">',
               '<div class="workspace-history-title-row">',
-              '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+              '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
               renderSessionResumeBadge(session),
               '</div>',
               '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
@@ -1855,7 +1875,7 @@ function renderWorkspaceSessionList(agent, block) {
         '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
         '<div class="workspace-history-main">',
         '<div class="workspace-history-title-row">',
-        '<div class="workspace-history-title">' + escapeHtml(primaryTitle) + '</div>',
+        '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(primaryTitle) + '</div>',
         renderSessionResumeBadge(session),
         session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
         '</div>',
@@ -6607,7 +6627,7 @@ function renderLogsPanel() {
     lifecycleOptions.map((lifecycle) => '<option value="' + escapeHtml(lifecycle) + '"' + (logFilters.lifecycle === lifecycle ? ' selected' : '') + '>' + escapeHtml(lifecycle) + '</option>').join(''),
     '</select>',
     '</div>',
-    '<div class="log-summary"><span>' + String(filteredLogs.length) + ' ' + escapeHtml(t('logs_total')) + '</span><span>' + escapeHtml(logPanelScope === 'current' ? (getCurrentAgentRecord()?.name || t('active_none')) : t('logs_scope_all')) + '</span></div>',
+    '<div class="log-summary"><span>' + String(filteredLogs.length) + ' ' + escapeHtml(t('logs_total')) + '</span><span>' + escapeHtml(logPanelScope === 'current' ? getRuntimeAwareAgentName() : t('logs_scope_all')) + '</span></div>',
     '</section>',
   ].join('');
 
@@ -7331,7 +7351,7 @@ window.applySettingsPreset = applySettingsPreset;
 window.cancelSettingsEdit = cancelSettingsEdit;
 
 function renderStructurePanel() {
-  const activeAgent = getCurrentAgentRecord();
+  const activeAgent = getRuntimeAwareAgentRecord();
   const connected = activeAgent ? (activeAgent.connected !== false ? t('status_connected') : t('status_disconnected')) : t('status_no_agent');
   const totalHooks = currentHookInspector.hooks.reduce((sum, group) => sum + group.entries.length, 0);
   const decisionHooks = currentHookInspector.hooks.reduce(
@@ -7354,7 +7374,7 @@ function renderStructurePanel() {
     '<div class="hooks-hero-title">' + escapeHtml(t('structure_hero_title')) + '</div>',
     '<div class="hooks-hero-subtitle">' + escapeHtml(t('structure_subtitle')) + '</div>',
     '<div class="hooks-stats">',
-    '<div class="hooks-stat"><div class="hooks-stat-label">' + escapeHtml(t('stat_active_agent')) + '</div><div class="hooks-stat-value">' + escapeHtml(activeAgent ? activeAgent.name : t('active_none')) + '</div></div>',
+    '<div class="hooks-stat"><div class="hooks-stat-label">' + escapeHtml(t('stat_active_agent')) + '</div><div class="hooks-stat-value">' + escapeHtml(getRuntimeAwareAgentName()) + '</div></div>',
     '<div class="hooks-stat"><div class="hooks-stat-label">Hooks</div><div class="hooks-stat-value">' + String(totalHooks) + '</div></div>',
     '<div class="hooks-stat"><div class="hooks-stat-label">Decision</div><div class="hooks-stat-value">' + String(decisionHooks) + '</div></div>',
     '<div class="hooks-stat"><div class="hooks-stat-label">' + escapeHtml(t('panel_features_label')) + '</div><div class="hooks-stat-value">' + String(currentHookInspector.features.length) + '</div></div>',
@@ -7380,7 +7400,7 @@ function renderStructurePanel() {
 }
 
 function renderMonitorPanel() {
-  const activeAgent = getCurrentAgentRecord();
+  const activeAgent = getRuntimeAwareAgentRecord();
   const connected = activeAgent ? (activeAgent.connected !== false ? t('status_connected') : t('status_disconnected')) : t('status_no_agent');
   const overview = currentOverviewSnapshot || getEmptyOverviewSnapshot();
   const totalUsage = overview.usageStats?.totalUsage || {};
@@ -7400,7 +7420,7 @@ function renderMonitorPanel() {
     '<div class="hooks-hero-title">' + escapeHtml(t('overview_hero_title')) + '</div>',
     '<div class="hooks-hero-subtitle">' + escapeHtml(t('overview_subtitle')) + '</div>',
     '<div class="hooks-stats">',
-    '<div class="hooks-stat"><div class="hooks-stat-label">' + escapeHtml(t('stat_active_agent')) + '</div><div class="hooks-stat-value">' + escapeHtml(activeAgent ? activeAgent.name : t('active_none')) + '</div></div>',
+    '<div class="hooks-stat"><div class="hooks-stat-label">' + escapeHtml(t('stat_active_agent')) + '</div><div class="hooks-stat-value">' + escapeHtml(getRuntimeAwareAgentName()) + '</div></div>',
     '<div class="hooks-stat"><div class="hooks-stat-label">' + escapeHtml(t('stat_context_length')) + '</div><div class="hooks-stat-value">' + escapeHtml(contextLengthLabel) + '</div></div>',
     '<div class="hooks-stat"><div class="hooks-stat-label">' + escapeHtml(t('stat_turn_tokens')) + '</div><div class="hooks-stat-value">' + escapeHtml(latestTurnLabel) + '</div></div>',
     '<div class="hooks-stat"><div class="hooks-stat-label">' + escapeHtml(t('stat_cache_hit_rate')) + '</div><div class="hooks-stat-value">' + escapeHtml(totalBreakdown.cacheHitRate) + '</div></div>',
@@ -7860,7 +7880,9 @@ function applyLanguage() {
   renderAgentList();
   renderFeaturePanel();
 
-  if (!currentAgentId) {
+  if (typeof updateCurrentAgentChrome === 'function') {
+    updateCurrentAgentChrome();
+  } else if (!currentAgentId) {
     currentAgentTitle.textContent = t('page_title');
     statusBadge.textContent = t('status_no_agent');
   }
@@ -8396,3 +8418,72 @@ function getAgentDisplayId(agent) {
   }
   return getAgentRuntimeId(agent);
 }
+
+// ── Session Title Double-Click Edit ──────────────────────────────────────────
+
+window.handleSessionTitleDoubleClick = function(event) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const titleDiv = event.currentTarget;
+  const sessionItem = titleDiv.closest('[data-prebuilt-session-id]');
+  if (!sessionItem) return;
+
+  const sessionId = sessionItem.dataset.prebuiltSessionId;
+  const agentId = sessionItem.dataset.prebuiltSessionAgentId;
+  if (!sessionId || !agentId) return;
+
+  const currentTitle = titleDiv.textContent.trim();
+  const isSessionId = currentTitle.startsWith('session-');
+
+  titleDiv.innerHTML = '<input type="text" class="session-title-edit-input" value="' + escapeHtml(isSessionId ? '' : currentTitle) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '输入对话标题' : 'Enter session title') + '">';
+
+  const input = titleDiv.querySelector('input');
+  input.focus();
+  input.select();
+
+  let saved = false;
+  const saveTitle = async () => {
+    if (saved) return;
+    saved = true;
+    const newTitle = input.value.trim();
+    if (!newTitle || newTitle === currentTitle) {
+      titleDiv.textContent = currentTitle || sessionId;
+      return;
+    }
+    try {
+      const resp = await fetch('/protoclaw/prebuilt_sessions/' + encodeURIComponent(sessionId) + '/title', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, title: newTitle }),
+      });
+      const result = await resp.json();
+      if (result.ok) {
+        titleDiv.textContent = newTitle;
+        const agent = allAgents.find(a => a.id === agentId);
+        if (agent?.workspace_sessions?.sessions) {
+          const session = agent.workspace_sessions.sessions.find(s => s.id === sessionId);
+          if (session) session.title = newTitle;
+        }
+      } else {
+        titleDiv.textContent = currentTitle || sessionId;
+        console.error('Failed to update session title:', result.error);
+      }
+    } catch (error) {
+      titleDiv.textContent = currentTitle || sessionId;
+      console.error('Failed to update session title:', error);
+    }
+  };
+
+  input.addEventListener('blur', saveTitle);
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveTitle();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      saved = true;
+      titleDiv.textContent = currentTitle || sessionId;
+    }
+  });
+};

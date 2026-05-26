@@ -1,18 +1,206 @@
+function normalizeAgentIdentity(value) {
+  return String(value || '').trim();
+}
+
+function getCurrentHostAgentRecord() {
+  const hostId = normalizeAgentIdentity(currentAgentId);
+  if (!hostId) return null;
+  return allAgents.find((agent) => normalizeAgentIdentity(agent?.id) === hostId) || null;
+}
+
+function getCurrentRuntimeRecord() {
+  const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId);
+  if (!runtimeId) return null;
+  const runtimeRecord = allAgents.find((agent) => {
+    const agentId = normalizeAgentIdentity(agent?.id);
+    const resolvedRuntimeId = normalizeAgentIdentity(getAgentRuntimeId(agent));
+    return agentId === runtimeId || resolvedRuntimeId === runtimeId;
+  }) || null;
+  if (runtimeRecord) {
+    return runtimeRecord;
+  }
+  const hostRecord = getCurrentHostAgentRecord();
+  const hostRuntimeId = normalizeAgentIdentity(hostRecord?.runtime_session_id || hostRecord?.runtimeSessionId);
+  if (hostRecord && hostRuntimeId && hostRuntimeId === runtimeId) {
+    return hostRecord;
+  }
+  return null;
+}
+
+function getCurrentVisualAgentTitle() {
+  const runtimeRecord = getCurrentRuntimeRecord();
+  const hostRecord = getCurrentHostAgentRecord();
+  if (runtimeRecord && normalizeAgentIdentity(currentRuntimeAgentId)) {
+    return runtimeRecord.active_workspace_display_name
+      || runtimeRecord.active_workspace_agent_name
+      || runtimeRecord.active_workspace_session_title
+      || runtimeRecord.name
+      || hostRecord?.active_workspace_display_name
+      || hostRecord?.active_workspace_session_title
+      || hostRecord?.name
+      || currentRuntimeAgentId;
+  }
+  return hostRecord?.name || t('page_title');
+}
+
+function updateCurrentAgentChrome() {
+  if (!currentAgentTitle || !statusBadge) return;
+  const hasSelection = normalizeAgentIdentity(currentAgentId) || normalizeAgentIdentity(currentRuntimeAgentId);
+  if (!hasSelection) {
+    currentAgentTitle.textContent = t('page_title');
+    statusBadge.textContent = t('status_no_agent');
+    statusBadge.classList.add('disconnected');
+    return;
+  }
+  currentAgentTitle.textContent = getCurrentVisualAgentTitle();
+  if (!normalizeAgentIdentity(currentRuntimeAgentId)) {
+    statusBadge.textContent = currentLanguage === 'zh' ? '工作空间' : 'Workspace';
+    statusBadge.classList.remove('disconnected');
+    return;
+  }
+  const runtimeRecord = getCurrentRuntimeRecord();
+  const connected = runtimeRecord ? runtimeRecord.connected !== false : true;
+  statusBadge.textContent = connected ? t('status_connected') : t('status_disconnected');
+  statusBadge.classList.toggle('disconnected', !connected);
+}
+
 function isAgentActive(agent) {
-  return agent?.id === currentAgentId;
+  const agentId = normalizeAgentIdentity(agent?.id);
+  const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId);
+  const hostId = normalizeAgentIdentity(currentAgentId);
+  if (!agentId) return false;
+  if (runtimeId) {
+    if (agent?.source === 'prebuilt' && agentId === hostId) {
+      return false;
+    }
+    return agentId === runtimeId && agentId === hostId;
+  }
+  return agentId === hostId;
 }
 
 function getCurrentAgentRecord() {
-  return allAgents.find((agent) => isAgentActive(agent)) || null;
+  return getCurrentHostAgentRecord();
 }
 
 function groupConnectedAgents(agents) {
+  const prebuiltIds = new Set(
+    agents
+      .filter((agent) => agent.source === 'prebuilt')
+      .map((agent) => String(agent.id || '').trim())
+      .filter(Boolean)
+  );
+  const orphanRuntimeAgents = agents.filter((agent) => {
+    if (agent.source === 'prebuilt') return false;
+    const parentId = String(agent.parent_id || '').trim();
+    return !parentId || !prebuiltIds.has(parentId);
+  });
   return {
     prebuilt: agents.filter((agent) => agent.source === 'prebuilt'),
-    managed: agents.filter((agent) => agent.source === 'managed'),
-    child: agents.filter((agent) => agent.source === 'child'),
-    external: agents.filter((agent) => agent.source === 'external'),
+    managed: [],
+    child: [],
+    external: orphanRuntimeAgents,
   };
+}
+
+function isRuntimeItemActive(runtimeId) {
+  const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
+  return normalizedRuntimeId !== '' && normalizeAgentIdentity(currentRuntimeAgentId) === normalizedRuntimeId;
+}
+
+function buildSyntheticRuntimeEntry(prebuiltAgent) {
+  const runtimeId = prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || '';
+  if (!runtimeId) return null;
+  return {
+    id: runtimeId,
+    ownerId: prebuiltAgent.id,
+    runtimeId,
+    name: prebuiltAgent.active_workspace_display_name
+      || prebuiltAgent.active_workspace_session_title
+      || `${prebuiltAgent.name || prebuiltAgent.id} Runtime`,
+    metaLabel: prebuiltAgent.active_workspace_session_title || '常驻运行时',
+    status: prebuiltAgent.connected === false ? 'disconnected' : 'connected',
+    source: 'managed-runtime',
+    contextMenuEnabled: true,
+  };
+}
+
+function buildChildRuntimeEntry(runtimeAgent) {
+  const runtimeId = runtimeAgent.runtime_session_id || runtimeAgent.runtimeSessionId || runtimeAgent.id || '';
+  const ownerId = String(runtimeAgent.parent_id || '').trim();
+  if (!runtimeId || !ownerId) return null;
+  return {
+    id: runtimeAgent.id || runtimeId,
+    ownerId,
+    runtimeId,
+    name: runtimeAgent.active_workspace_display_name
+      || runtimeAgent.active_workspace_agent_name
+      || runtimeAgent.active_workspace_session_title
+      || runtimeAgent.name
+      || runtimeId,
+    metaLabel: runtimeAgent.active_workspace_session_title || runtimeAgent.name || '显式运行时',
+    status: runtimeAgent.connected === false ? 'disconnected' : 'connected',
+    source: runtimeAgent.source || 'external',
+    contextMenuEnabled: true,
+  };
+}
+
+function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
+  const entries = [];
+  const seenRuntimeIds = new Set();
+
+  const addEntry = (entry) => {
+    if (!entry?.runtimeId) return;
+    if (seenRuntimeIds.has(entry.runtimeId)) return;
+    seenRuntimeIds.add(entry.runtimeId);
+    entries.push(entry);
+  };
+
+  addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+
+  agents
+    .filter((agent) => agent.source !== 'prebuilt' && String(agent.parent_id || '').trim() === String(prebuiltAgent.id || '').trim())
+    .forEach((agent) => addEntry(buildChildRuntimeEntry(agent)));
+
+  return entries;
+}
+
+function renderRuntimeItems(runtimeEntries) {
+  if (!Array.isArray(runtimeEntries) || runtimeEntries.length === 0) return '';
+  const runtimeLabel = currentLanguage === 'zh' ? '运行时' : 'Runtime';
+  return `
+    <div class="agent-runtime-list">
+      ${runtimeEntries.map((entry) => {
+        const active = isRuntimeItemActive(entry.runtimeId);
+        const disconnected = entry.status === 'disconnected';
+        const itemClass = [
+          'agent-item',
+          'agent-runtime-item',
+          active ? 'active' : '',
+          disconnected ? 'disconnected' : '',
+        ].filter(Boolean).join(' ');
+        const statusLabel = disconnected ? escapeHtml(t('status_disconnected')) : escapeHtml(t('status_connected'));
+        return `
+          <div
+            class="${itemClass}"
+            data-agent-id="${escapeHtml(entry.runtimeId)}"
+            data-agent-prebuilt="false"
+            data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
+          >
+            <div class="agent-runtime-prefix">${escapeHtml(runtimeLabel)}</div>
+            <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}</div>
+            <div class="agent-meta">
+              <span class="agent-status">
+                <span class="agent-status-dot"></span>
+                <span>${statusLabel}</span>
+              </span>
+              · ${escapeHtml(entry.runtimeId)}
+              ${entry.metaLabel ? ` · ${escapeHtml(entry.metaLabel)}` : ''}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
 }
 
 function renderAgentGroup(listElement, groupElement, countElement, agents, options = {}) {
@@ -41,9 +229,11 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
     const contextMenuEnabled = prebuilt
       ? (!workspaceSurface && hasRuntime)
       : !!(agent.runtime_session_id || agent.runtimeSessionId || agent.id);
+    const runtimeEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
+    const hasActiveRuntime = prebuilt && runtimeEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
     return `
       <div
-        class="${itemClass}"
+        class="${[itemClass, hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ')}"
         data-agent-id="${escapeHtml(agent.id)}"
         data-agent-prebuilt="${prebuilt ? 'true' : 'false'}"
         data-agent-context-menu="${contextMenuEnabled ? 'true' : 'false'}"
@@ -57,6 +247,7 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
           · ${escapeHtml(getAgentDisplayId(agent))}
           ${!workspaceSurface && agent.message_count != null ? ` · ${agent.message_count} ${escapeHtml(t('feature_messages'))}` : ''}
         </div>
+        ${prebuilt ? renderRuntimeItems(runtimeEntries) : ''}
       </div>
     `;
   }).join('');
@@ -173,12 +364,15 @@ async function loadAgents() {
 function renderAgentList() {
   const groups = groupConnectedAgents(allAgents);
   renderAgentGroup(prebuiltAgentList, prebuiltGroup, prebuiltCount, groups.prebuilt, { prebuilt: true });
-  renderAgentGroup(managedAgentList, managedGroup, managedCount, groups.managed);
-  renderAgentGroup(childAgentList, childGroup, childCount, groups.child);
+  managedGroup.style.display = 'none';
+  managedCount.textContent = '0';
+  managedAgentList.innerHTML = '';
+  childGroup.style.display = 'none';
+  childCount.textContent = '0';
+  childAgentList.innerHTML = '';
   renderAgentGroup(externalAgentList, externalGroup, externalCount, groups.external);
 
-  const activeAgent = getCurrentAgentRecord();
-  currentAgentTitle.textContent = activeAgent ? activeAgent.name : t('page_title');
+  updateCurrentAgentChrome();
 }
 
 agentList.addEventListener('click', async (event) => {
@@ -2133,8 +2327,8 @@ window.saveWorkspaceForm = async (formId, rawAction) => {
   } else if (agent.id === 'programming-helper' && formId === 'startup-form') {
     const startupDraft = normalizeWorkspaceStartupDraft(agent, draft[formId] || {});
     draft[formId] = startupDraft;
-    if (!String(startupDraft.task_title || startupDraft.goal || '').trim()) {
-      window.alert('Please fill in the task title or task goal first.');
+    if (!String(startupDraft.task_title || '').trim()) {
+      window.alert(currentLanguage === 'zh' ? '请先填写任务标题。' : 'Please fill in the task title first.');
       return;
     }
     openDirectoryOverride = String(startupDraft.workdir || '').trim();
