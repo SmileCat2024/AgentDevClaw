@@ -49,12 +49,34 @@ const managedAgents = new Map();
 const assemblyRuntimeProcesses = new Map();
 const pendingFeatureImports = new Map();
 
+function getManagedRuntimeKey(agentId, sessionId = null) {
+  const normalizedAgentId = sanitizeSessionFragment(agentId);
+  const normalizedSessionId = sessionId == null ? NO_SESSION_TOKEN : sanitizeSessionFragment(sessionId);
+  return `${normalizedAgentId}::${normalizedSessionId}`;
+}
+
 function log(prefix, message, stream = 'log') {
   console[stream](`[${prefix}] ${message}`);
 }
 
-function getAgentRuntime(agentId) {
-  return managedAgents.get(agentId) ?? null;
+function listAgentRuntimes(agentId) {
+  const normalizedAgentId = sanitizeSessionFragment(agentId);
+  return Array.from(managedAgents.values()).filter((runtime) => sanitizeSessionFragment(runtime.agentId || runtime.id) === normalizedAgentId);
+}
+
+function pickPrimaryAgentRuntime(agentId) {
+  const runtimes = listAgentRuntimes(agentId);
+  if (runtimes.length === 0) return null;
+  const running = runtimes.filter((runtime) => runtime?.process && runtime.process.exitCode === null && !runtime.stopped);
+  const pool = running.length ? running : runtimes;
+  return pool.sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))[0] || null;
+}
+
+function getAgentRuntime(agentId, sessionId = undefined) {
+  if (sessionId !== undefined) {
+    return managedAgents.get(getManagedRuntimeKey(agentId, sessionId)) ?? null;
+  }
+  return pickPrimaryAgentRuntime(agentId);
 }
 
 function getAssemblyRuntime(sessionId) {
@@ -298,8 +320,8 @@ async function ensureAssemblyWorkspaceDependencies(envDir, selectedFeatures) {
   };
 }
 
-function buildStatus(agentId) {
-  const runtime = getAgentRuntime(agentId);
+function buildStatus(agentId, sessionId = undefined) {
+  const runtime = getAgentRuntime(agentId, sessionId);
   if (!runtime) {
     return { id: agentId, status: 'stopped', pid: null, startedAt: null, exitCode: null, viewerAgentId: null, selectedSessionId: null };
   }
@@ -1718,6 +1740,41 @@ async function readSessionIndex(agentId) {
   }
 }
 
+async function resolvePrebuiltSessionType(agentId, sessionId) {
+  const normalizedSessionId = cleanSessionText(sessionId);
+  if (!normalizedSessionId) return '';
+
+  try {
+    const index = await readSessionIndex(agentId);
+    const record = Array.isArray(index?.sessions)
+      ? index.sessions.find((session) => cleanSessionText(session?.id) === normalizedSessionId)
+      : null;
+    const indexedType = cleanSessionText(record?.sessionType);
+    if (indexedType) {
+      return indexedType;
+    }
+    const indexedResumeMode = cleanSessionText(record?.metadata?.resumeMode);
+    if (indexedResumeMode === 'one-shot') {
+      return 'sub';
+    }
+  } catch {}
+
+  try {
+    const sessionPath = getPrebuiltSessionFilePath(agentId, normalizedSessionId);
+    const sessionRecord = await fs.readFile(sessionPath, 'utf8').then(JSON.parse).catch(() => null);
+    const fileType = cleanSessionText(sessionRecord?.sessionType);
+    if (fileType) {
+      return fileType;
+    }
+    const fileResumeMode = cleanSessionText(sessionRecord?.metadata?.resumeMode);
+    if (fileResumeMode === 'one-shot') {
+      return 'sub';
+    }
+  } catch {}
+
+  return '';
+}
+
 async function writeSessionIndex(agentId, index) {
   const dirPath = getPrebuiltAgentSessionDir(agentId);
   const indexPath = getPrebuiltSessionIndexPath(agentId);
@@ -2100,6 +2157,40 @@ async function buildSessionSummaryMap(agentId) {
     }
   } catch {}
   return map;
+}
+
+function buildLightPrebuiltSessionRecord(agentId, record) {
+  const metadata = normalizeSessionMetadata(record?.metadata);
+  const sessionType = cleanSessionText(record?.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
+  return {
+    id: cleanSessionText(record?.id),
+    title: cleanSessionText(record?.title),
+    featureName: cleanSessionText(record?.featureName),
+    agentName: cleanSessionText(record?.agentName),
+    taskTitle: cleanSessionText(record?.taskTitle),
+    taskType: cleanSessionText(record?.taskType),
+    goal: cleanSessionText(record?.goal),
+    constraints: cleanSessionText(record?.constraints),
+    expectedOutput: cleanSessionText(record?.expectedOutput),
+    targetFiles: cleanSessionText(record?.targetFiles),
+    referenceMaterials: cleanSessionText(record?.referenceMaterials),
+    sessionType,
+    status: cleanSessionText(record?.status) || (sessionType === 'exploration' ? 'locked' : ''),
+    metadata,
+    formId: cleanSessionText(record?.formId) || 'startup-form',
+    openDirectory: cleanSessionText(record?.openDirectory),
+    createdAt: cleanSessionText(record?.createdAt) || new Date().toISOString(),
+    updatedAt: cleanSessionText(record?.updatedAt) || cleanSessionText(record?.createdAt) || new Date().toISOString(),
+    path: getPrebuiltSessionFilePath(agentId, cleanSessionText(record?.id) || ''),
+    exists: false,
+    bytes: 0,
+    messageCount: 0,
+    preview: '',
+    hasSummary: false,
+    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    contextLength: null,
+    modelName: '',
+  };
 }
 
 async function findSessionSummary(agentId, sessionId) {
@@ -2520,10 +2611,13 @@ async function createPrebuiltSession(agentId, options = {}) {
     });
   }
 
+  if (options.returnSummary === false) {
+    return buildLightPrebuiltSessionRecord(agentId, record);
+  }
   return summarizePrebuiltSession(agentId, record);
 }
 
-async function activatePrebuiltSession(agentId, sessionId) {
+async function activatePrebuiltSession(agentId, sessionId, options = {}) {
   const index = await readSessionIndex(agentId);
   const existing = index.sessions.find((session) => session.id === sessionId);
   if (!existing) {
@@ -2625,6 +2719,9 @@ async function activatePrebuiltSession(agentId, sessionId) {
     });
   }
 
+  if (options?.returnSummary === false) {
+    return buildLightPrebuiltSessionRecord(agentId, existing);
+  }
   return summarizePrebuiltSession(agentId, existing);
 }
 
@@ -2810,7 +2907,7 @@ async function createCompactedResumeFromHandoff({
         PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath,
       },
     });
-    connected = await waitForManagedRuntimeReady(agent.id);
+    connected = await waitForManagedRuntimeReady(agent.id, 10000, session.id);
   }
 
   return {
@@ -3548,13 +3645,116 @@ async function resolveRuntimeDisplayName(agent, selectedSessionId = null) {
   return fallbackName;
 }
 
+async function readWorkspaceSessionSnapshot(agentId) {
+  const index = await readSessionIndex(agentId);
+  return {
+    activeSessionId: index.activeSessionId || null,
+    sessions: [],
+  };
+}
+
+async function readActiveWorkspaceSessionMeta(agent) {
+  const workspaceSessions = await readWorkspaceSessionSnapshot(agent.id);
+  const selectedSessionId = cleanSessionText(agent?.status?.selectedSessionId || workspaceSessions.activeSessionId);
+  if (!selectedSessionId) {
+    return {
+      workspaceSessions,
+      sessionMeta: {
+        active_workspace_session_id: null,
+        active_workspace_session_form_id: null,
+        active_workspace_session_title: '',
+        active_workspace_agent_name: '',
+        active_workspace_display_name: '',
+      },
+    };
+  }
+
+  const matched = Array.isArray(workspaceSessions.sessions)
+    ? workspaceSessions.sessions.find((session) => cleanSessionText(session?.id) === selectedSessionId) || null
+    : null;
+  let title = cleanSessionText(matched?.title);
+  let agentName = cleanSessionText(matched?.agentName);
+  let formId = cleanSessionText(matched?.formId);
+
+  if (!matched) {
+    try {
+      const index = await readSessionIndex(agent.id);
+      const record = Array.isArray(index?.sessions)
+        ? index.sessions.find((session) => cleanSessionText(session?.id) === selectedSessionId) || null
+        : null;
+      title = cleanSessionText(record?.title);
+      agentName = cleanSessionText(record?.agentName);
+      formId = cleanSessionText(record?.formId);
+    } catch {}
+  }
+
+  return {
+    workspaceSessions: {
+      ...workspaceSessions,
+      activeSessionId: selectedSessionId,
+    },
+    sessionMeta: {
+      active_workspace_session_id: selectedSessionId,
+      active_workspace_session_form_id: formId || null,
+      active_workspace_session_title: title,
+      active_workspace_agent_name: agentName,
+      active_workspace_display_name: formId === 'assembly-form'
+        ? (agentName || title)
+        : '',
+    },
+  };
+}
+
+async function readWorkspaceSessionMeta(agentId, sessionId) {
+  const selectedSessionId = cleanSessionText(sessionId);
+  if (!selectedSessionId) {
+    return {
+      active_workspace_session_id: null,
+      active_workspace_session_form_id: null,
+      active_workspace_session_title: '',
+      active_workspace_agent_name: '',
+      active_workspace_display_name: '',
+    };
+  }
+
+  try {
+    const index = await readSessionIndex(agentId);
+    const record = Array.isArray(index?.sessions)
+      ? index.sessions.find((session) => cleanSessionText(session?.id) === selectedSessionId) || null
+      : null;
+    const title = cleanSessionText(record?.title);
+    const agentName = cleanSessionText(record?.agentName);
+    const formId = cleanSessionText(record?.formId);
+    return {
+      active_workspace_session_id: selectedSessionId,
+      active_workspace_session_form_id: formId || null,
+      active_workspace_session_title: title,
+      active_workspace_agent_name: agentName,
+      active_workspace_display_name: formId === 'assembly-form' ? (agentName || title) : '',
+    };
+  } catch {
+    return {
+      active_workspace_session_id: selectedSessionId,
+      active_workspace_session_form_id: null,
+      active_workspace_session_title: '',
+      active_workspace_agent_name: '',
+      active_workspace_display_name: '',
+    };
+  }
+}
+
 async function getConnectedAgents() {
-  const prebuiltAgents = await getAgents();
+  const prebuiltAgents = await getAgentsLight();
   const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [], currentAgentId: null }));
   const runtimeAgents = Array.isArray(viewerData.agents) ? viewerData.agents : [];
+  const managedRuntimeByViewerId = new Map(
+    Array.from(managedAgents.values())
+      .filter((runtime) => runtime?.viewerAgentId)
+      .map((runtime) => [String(runtime.viewerAgentId), runtime])
+  );
 
-  const connectedAgents = prebuiltAgents.map((agent) => {
-    const sessionMeta = resolveActiveWorkspaceSessionMeta(agent);
+  const connectedAgents = await Promise.all(prebuiltAgents.map(async (agent) => {
+    const { workspaceSessions, sessionMeta } = await readActiveWorkspaceSessionMeta(agent);
     return {
       id: agent.id,
       name: agent.name,
@@ -3564,9 +3764,9 @@ async function getConnectedAgents() {
       launchMode: agent.launchMode || null,
       ui: agent.ui || null,
       workspace: agent.workspace || null,
-      workspace_sessions: agent.workspace_sessions || { activeSessionId: null, sessions: [] },
-      workspace_data: agent.workspace_data || {},
-      workspace_state: agent.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
+      workspace_sessions: workspaceSessions,
+      workspace_data: {},
+      workspace_state: { forms: {}, openDirectory: '', updatedAt: null },
       active_workspace_session_id: sessionMeta.active_workspace_session_id,
       active_workspace_session_form_id: sessionMeta.active_workspace_session_form_id,
       active_workspace_session_title: sessionMeta.active_workspace_session_title,
@@ -3584,9 +3784,42 @@ async function getConnectedAgents() {
       modelPresets: agent.modelPresets || null,
       connected: false,
     };
-  });
+  }));
 
   for (const runtimeAgent of runtimeAgents) {
+    const managedRuntime = managedRuntimeByViewerId.get(String(runtimeAgent.id || '')) || null;
+    if (managedRuntime) {
+      const runtimeMeta = await readWorkspaceSessionMeta(managedRuntime.agentId, managedRuntime.selectedSessionId);
+      connectedAgents.push({
+        id: runtimeAgent.id,
+        name: runtimeMeta.active_workspace_display_name
+          || runtimeMeta.active_workspace_agent_name
+          || runtimeMeta.active_workspace_session_title
+          || runtimeAgent.name,
+        description: runtimeAgent.description || '',
+        status: runtimeAgent.connected ? 'running' : 'stopped',
+        source: 'child',
+        parent_id: managedRuntime.agentId,
+        active_workspace_session_id: runtimeMeta.active_workspace_session_id,
+        active_workspace_session_form_id: runtimeMeta.active_workspace_session_form_id,
+        active_workspace_session_title: runtimeMeta.active_workspace_session_title,
+        active_workspace_agent_name: runtimeMeta.active_workspace_agent_name,
+        active_workspace_display_name: runtimeMeta.active_workspace_display_name,
+        connection_info: runtimeAgent.connectionInfo || 'viewer://127.0.0.1:2026',
+        pid: runtimeAgent.pid || managedRuntime.process?.pid || null,
+        runtime_session_id: runtimeAgent.id,
+        message_count: runtimeAgent.messageCount ?? 0,
+        pending_input_count: await getPendingInputCount(runtimeAgent.id),
+        created_at: runtimeAgent.createdAt ?? managedRuntime.startedAt ?? null,
+        connected: runtimeAgent.connected ?? false,
+      });
+      continue;
+    }
+
+    const explicitParentHost = connectedAgents.find((agent) =>
+      agent.source === 'prebuilt'
+      && sanitizeSessionFragment(agent.id) === sanitizeSessionFragment(runtimeAgent.parentAgentId || ''));
+    const isExplicitChildRuntime = !!runtimeAgent.parentAgentId && !!explicitParentHost;
     const workspaceHostParent = connectedAgents.find((agent) =>
       agent.source === 'prebuilt'
       && sanitizeSessionFragment(agent.id) === sanitizeSessionFragment(runtimeAgent.parentAgentId || '')
@@ -3601,7 +3834,9 @@ async function getConnectedAgents() {
 
     const matched = connectedAgents.find((agent) => agent.id === runtimeAgent.id)
       || connectedAgents.find((agent) => agent.source === 'prebuilt' && agent.runtime_session_id === runtimeAgent.id)
-      || connectedAgents.find((agent) => agent.source === 'prebuilt' && (agent.base_name === runtimeAgent.name || agent.name === runtimeAgent.name));
+      || (!isExplicitChildRuntime
+        ? connectedAgents.find((agent) => agent.source === 'prebuilt' && (agent.base_name === runtimeAgent.name || agent.name === runtimeAgent.name))
+        : null);
     const exposeAsSeparateAssemblyRuntime = matched
       && matched.source === 'prebuilt'
       && (sanitizeSessionFragment(matched.id) === 'agent-creator' || sanitizeSessionFragment(matched.id) === 'flow-workspace')
@@ -3667,32 +3902,16 @@ async function waitForProcessExit(child, timeoutMs = 5000) {
   ]);
 }
 
-async function waitForManagedRuntimeReady(agentId, timeoutMs = 10000) {
+async function waitForManagedRuntimeReady(agentId, timeoutMs = 10000, sessionId = undefined) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const status = buildStatus(agentId);
-    const runtime = getAgentRuntime(agentId);
+    const status = buildStatus(agentId, sessionId);
+    const runtime = getAgentRuntime(agentId, sessionId);
     if (status.viewerAgentId && runtime?.ready) {
       const agents = await getConnectedAgents();
-      const connected = agents.find((agent) => agent.id === agentId && (agent.runtime_session_id || agent.runtimeSessionId));
+      const viewerAgentId = cleanSessionText(status.viewerAgentId);
+      const connected = agents.find((agent) => cleanSessionText(agent.id) === viewerAgentId || cleanSessionText(agent.runtime_session_id || agent.runtimeSessionId) === viewerAgentId);
       if (connected) {
-        if (connected.source === 'prebuilt') {
-          const baseAgent = await requireAgent(agentId);
-          const sessionMeta = resolveActiveWorkspaceSessionMeta(baseAgent);
-          return {
-            ...connected,
-            ui: baseAgent.ui || connected.ui || null,
-            workspace: baseAgent.workspace || connected.workspace || null,
-            workspace_sessions: baseAgent.workspace_sessions || connected.workspace_sessions || { activeSessionId: null, sessions: [] },
-            workspace_data: baseAgent.workspace_data || connected.workspace_data || {},
-            workspace_state: baseAgent.workspace_state || connected.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
-            active_workspace_session_id: sessionMeta.active_workspace_session_id,
-            active_workspace_session_form_id: sessionMeta.active_workspace_session_form_id,
-            active_workspace_session_title: sessionMeta.active_workspace_session_title,
-            active_workspace_agent_name: sessionMeta.active_workspace_agent_name,
-            active_workspace_display_name: sessionMeta.active_workspace_display_name,
-          };
-        }
         return connected;
       }
     }
@@ -3723,10 +3942,10 @@ async function waitForAssemblyRuntimeReady(sessionId, timeoutMs = 10000) {
 }
 
 async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOptions = {}) {
-  const existing = getAgentRuntime(agent.id);
   const requestedSessionId = typeof selectedSessionId === 'string' && selectedSessionId
     ? sanitizeSessionFragment(selectedSessionId)
     : (selectedSessionId === null ? null : undefined);
+  const existing = getAgentRuntime(agent.id, requestedSessionId);
   const resolvedSessionId = requestedSessionId !== undefined
     ? requestedSessionId
     : (existing?.selectedSessionId || agent.workspace_sessions?.activeSessionId || null);
@@ -3749,7 +3968,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
 
   if (existing?.process && existing.process.exitCode === null && !existing.stopped) {
     if (!resolvedSessionId || existing.selectedSessionId === resolvedSessionId) {
-      return buildStatus(agent.id);
+      return buildStatus(agent.id, resolvedSessionId);
     }
 
     existing.stopped = true;
@@ -3776,6 +3995,8 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
   });
 
   const runtime = {
+    key: getManagedRuntimeKey(agent.id, resolvedSessionId),
+    agentId: agent.id,
     id: agent.id,
     process: child,
     startedAt: new Date().toISOString(),
@@ -3786,7 +4007,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
     ready: false,
   };
 
-  managedAgents.set(agent.id, runtime);
+  managedAgents.set(runtime.key, runtime);
 
   child.stdout.on('data', (chunk) => {
     const text = String(chunk);
@@ -3805,7 +4026,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
   });
 
   child.on('exit', (code) => {
-    const current = getAgentRuntime(agent.id);
+    const current = managedAgents.get(runtime.key);
     if (current) {
       current.exitCode = code;
       current.stopped = true;
@@ -3814,7 +4035,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
   });
 
   child.on('error', (error) => {
-    const current = getAgentRuntime(agent.id);
+    const current = managedAgents.get(runtime.key);
     if (current) {
       current.exitCode = 1;
       current.stopped = true;
@@ -3822,7 +4043,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
     log(agent.id, `failed to start: ${error.message}`, 'error');
   });
 
-  return buildStatus(agent.id);
+  return buildStatus(agent.id, resolvedSessionId);
 }
 
 /**
@@ -4040,15 +4261,20 @@ async function startAssemblyRuntime(sessionId, agentId = 'agent-creator', preAct
   return runtime;
 }
 
-async function stopManagedAgent(agentId) {
-  const runtime = getAgentRuntime(agentId);
-  if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
-    return buildStatus(agentId);
+async function stopManagedAgent(agentId, sessionId = undefined) {
+  const runtimes = sessionId === undefined ? listAgentRuntimes(agentId) : [getAgentRuntime(agentId, sessionId)].filter(Boolean);
+  if (runtimes.length === 0) {
+    return buildStatus(agentId, sessionId);
   }
 
-  runtime.stopped = true;
-  runtime.process.kill('SIGTERM');
-  return buildStatus(agentId);
+  for (const runtime of runtimes) {
+    if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
+      continue;
+    }
+    runtime.stopped = true;
+    runtime.process.kill('SIGTERM');
+  }
+  return buildStatus(agentId, sessionId);
 }
 
 async function proxyToViewer(req, res) {
@@ -4209,8 +4435,9 @@ app.post('/protoclaw/start_agent', express.json(), async (req, res, next) => {
       res.json({ status: buildStatus(agent.id), agent: connected });
       return;
     }
-    const status = await startManagedAgent(agent, req.body.sessionId || null);
-    const connected = await waitForManagedRuntimeReady(agent.id);
+    const selectedSessionId = req.body.sessionId || null;
+    const status = await startManagedAgent(agent, selectedSessionId);
+    const connected = await waitForManagedRuntimeReady(agent.id, 10000, selectedSessionId);
     res.json({ status, agent: connected });
   } catch (error) {
     next(error);
@@ -4241,9 +4468,10 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
     const raw = await fs.readFile(sessionPath, 'utf8');
     const parsed = JSON.parse(raw);
     const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
+    const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
     res.json({
       sessionId,
-      sessionType: parsed.sessionType || null,
+      sessionType: sessionType || null,
       goal: parsed.goal || null,
       messages: messages.map(m => ({
         role: m.role,
@@ -4328,10 +4556,8 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
     const agentDir = path.join('prebuilt-agents', 'official', agentId);
     const resultPath = path.join(os.tmpdir(), `compact-mirror-${Date.now()}.json`);
 
-    // Read sessionType from session file to determine the correct prompt format
-    const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
-    const sessionRecord = await fs.readFile(sessionPath, 'utf8').then(JSON.parse).catch(() => null);
-    const sessionType = cleanSessionText(sessionRecord?.sessionType) || '';
+    // Resolve sessionType from the workspace session index first; session files may not carry the product-level type.
+    const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
 
     const args = [
       path.join(__dirname, 'scripts', 'run-compact-mirror.js'),
@@ -4908,6 +5134,7 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
   try {
     const agent = await requireAgent(req.body.agentId);
     const session = await createPrebuiltSession(agent.id, {
+      returnSummary: false,
       sourceSessionId: req.body.sourceSessionId,
       formId: req.body.formId,
       featureName: req.body.featureName,
@@ -4916,8 +5143,7 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       targetDir: req.body.targetDir,
     });
     const status = await startManagedAgent(agent, session.id);
-    const connected = await waitForManagedRuntimeReady(agent.id);
-    res.json({ session, status, agent: connected });
+    res.json({ session, status, agent: null });
   } catch (error) {
     next(error);
   }
@@ -5540,10 +5766,9 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
       res.status(400).json({ error: 'sessionId is required' });
       return;
     }
-    const session = await activatePrebuiltSession(agent.id, req.body.sessionId);
+    const session = await activatePrebuiltSession(agent.id, req.body.sessionId, { returnSummary: false });
     const status = await startManagedAgent(agent, session.id);
-    const connected = await waitForManagedRuntimeReady(agent.id);
-    res.json({ session, status, agent: connected });
+    res.json({ session, status, agent: null });
   } catch (error) {
     next(error);
   }
@@ -5563,16 +5788,12 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
     }
     const deleted = await deletePrebuiltSession(agent.id, req.body.sessionId);
     const runtime = getAgentRuntime(agent.id);
-    const deletedWasActive = runtime?.selectedSessionId === req.body.sessionId;
+    const deletedRuntime = getAgentRuntime(agent.id, req.body.sessionId);
+    const deletedWasActive = deletedRuntime?.selectedSessionId === req.body.sessionId;
     let connected = null;
 
-    if (runtime?.process && runtime.process.exitCode === null && !runtime.stopped && deletedWasActive) {
-      if (deleted.activeSessionId) {
-        await startManagedAgent(agent, deleted.activeSessionId);
-        connected = await waitForManagedRuntimeReady(agent.id);
-      } else {
-        await stopManagedAgent(agent.id);
-      }
+    if (deletedRuntime?.process && deletedRuntime.process.exitCode === null && !deletedRuntime.stopped && deletedWasActive) {
+      await stopManagedAgent(agent.id, req.body.sessionId);
     }
 
     res.json({
@@ -5594,17 +5815,11 @@ app.post('/protoclaw/prebuilt_project/delete', express.json(), async (req, res, 
     }
 
     const deleted = await deletePrebuiltProject(agent.id, req.body.projectId);
-    const runtime = getAgentRuntime(agent.id);
-    const deletedWasActive = deleted.deletedSessionIds.includes(runtime?.selectedSessionId);
+    const runtimesToStop = listAgentRuntimes(agent.id).filter((runtime) => deleted.deletedSessionIds.includes(runtime?.selectedSessionId));
     let connected = null;
 
-    if (runtime?.process && runtime.process.exitCode === null && !runtime.stopped && deletedWasActive) {
-      if (deleted.activeSessionId) {
-        await startManagedAgent(agent, deleted.activeSessionId);
-        connected = await waitForManagedRuntimeReady(agent.id);
-      } else {
-        await stopManagedAgent(agent.id);
-      }
+    for (const runtime of runtimesToStop) {
+      await stopManagedAgent(agent.id, runtime.selectedSessionId);
     }
 
     res.json({
@@ -5751,9 +5966,10 @@ app.post('/protoclaw/stop_agent', express.json(), async (req, res, next) => {
 app.post('/protoclaw/restart_agent', express.json(), async (req, res, next) => {
   try {
     const agent = await requireAgent(req.body.agentId);
-    await stopManagedAgent(agent.id);
-    const status = await startManagedAgent(agent, req.body.sessionId || null);
-    const connected = await waitForManagedRuntimeReady(agent.id);
+    const selectedSessionId = req.body.sessionId || null;
+    await stopManagedAgent(agent.id, selectedSessionId);
+    const status = await startManagedAgent(agent, selectedSessionId);
+    const connected = await waitForManagedRuntimeReady(agent.id, 10000, selectedSessionId);
     res.json({ status, agent: connected });
   } catch (error) {
     next(error);
