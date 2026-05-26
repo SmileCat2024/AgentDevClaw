@@ -3349,7 +3349,8 @@ body[data-theme="light"] .feature-project-session-item {
   right: 0;
   z-index: 1000;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
   pointer-events: none; /* 让空白区域不阻挡点击 */
 }
 
@@ -3467,6 +3468,79 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .user-input-action.primary {
   color: var(--text-primary);
   border-color: var(--text-primary);
+}
+
+/* ── Persistent Input Row ────────────────────────────────────────────── */
+
+.persistent-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.persistent-input-row .user-input-textarea { flex: 1; }
+
+.persistent-action-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: var(--text-secondary);
+  color: var(--bg-color);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  opacity: 0.35;
+}
+.persistent-action-btn:hover { opacity: 0.9; transform: scale(1.08); }
+.persistent-input:has(.user-input-textarea:not(:placeholder-shown)) .persistent-action-btn { opacity: 0.7; }
+
+.persistent-action-btn.is-stop {
+  background: transparent;
+  color: #d9534f;
+  border: 1.5px solid rgba(217, 83, 79, 0.5);
+  opacity: 1;
+}
+.persistent-action-btn.is-stop:hover {
+  background: rgba(217, 83, 79, 0.15);
+  border-color: rgba(217, 83, 79, 0.8);
+}
+
+/* ── Queue Bubbles (stacked above input card) ──────────────────────── */
+
+.queue-bubbles-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 80%;
+  max-width: 720px;
+  margin-bottom: 6px;
+  pointer-events: none;
+}
+
+.queue-bubble {
+  background: var(--input-card-bg);
+  border: 1px solid var(--input-card-border);
+  border-radius: 12px;
+  padding: 8px 16px;
+  font-size: 14px;
+  color: var(--text-primary);
+  max-width: 100%;
+  box-shadow: 0 2px 12px var(--shadow-strong);
+  animation: qbubble-in 0.2s ease-out;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: auto;
+  opacity: 0.8;
+}
+
+@keyframes qbubble-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to   { opacity: 0.7; transform: translateY(0) scale(1); }
 }
 
 .user-choice-card {

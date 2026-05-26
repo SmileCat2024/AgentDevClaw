@@ -3548,17 +3548,18 @@ function updateNotificationStatus(notifData) {
     phaseEl.textContent = phaseNames[data.phase] || data.phase;
     charCountEl.textContent = data.charCount.toLocaleString();
 
-    // 显示 interrupt 按钮（agent 正在运行）
-    const interruptBtn = document.querySelector('.interrupt-btn');
-    if (interruptBtn) interruptBtn.style.display = '';
+    // 切换常驻按钮为 stop 状态
+    _setActionBtnStop();
+    // 新 step 开始，agent 已在上一步结束时 dequeue 了消息，同步气泡
+    _syncQueueFromBackend();
   } else if (type === 'llm.complete') {
     statusEl.style.display = 'none';
     statusEl.classList.remove('active');
 
-    // 隐藏 interrupt 按钮，重置队列计数
-    const interruptBtn = document.querySelector('.interrupt-btn');
-    if (interruptBtn) interruptBtn.style.display = 'none';
+    // 切换常驻按钮为 send 状态，重置队列
+    _setActionBtnSend();
     _pendingQueuedCount = 0;
+    _queuedTexts = [];
     updateQueueIndicator();
   } else {
     statusEl.style.display = 'none';
@@ -3635,13 +3636,16 @@ function renderInputRequests(requests) {
           ).join('') + '</div>'
         : '';
       card.innerHTML = `
-        <textarea class="user-input-textarea" rows="1" id="input-${req.requestId}"
-          onkeydown="handleInputKey(event, '${req.requestId}')"
-          oninput="autoResize(this)"
-          placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
-        <div class="user-input-footer">
-          ${actionsHtml}
+        <div class="persistent-input-row">
+          <textarea class="user-input-textarea" rows="1" id="input-${req.requestId}"
+            onkeydown="handleInputKey(event, '${req.requestId}')"
+            oninput="autoResize(this)"
+            placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
+          <button class="persistent-action-btn" onclick="submitInput('${req.requestId}')" title="Send">
+            <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+          </button>
         </div>
+        ${actionsHtml ? `<div class="user-input-footer">${actionsHtml}</div>` : ''}
       `;
       container.appendChild(card);
       
@@ -3669,23 +3673,95 @@ function renderInputRequests(requests) {
 
 // 渲染常驻输入框（agent 运行期间始终可见）
 let _pendingQueuedCount = 0;
+let _queuedTexts = []; // 仅用于气泡展示
 
 function renderPersistentInput(container) {
+  // 先渲染队列气泡
+  _renderQueueBubbles(container);
+
   const card = document.createElement('div');
   card.className = 'user-input-card persistent-input';
   card.innerHTML = `
-    <textarea class="user-input-textarea" rows="1" id="input-persistent"
-      onkeydown="handlePersistentInputKey(event)"
-      oninput="autoResize(this)"
-      placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
-    <div class="user-input-footer">
-      <span class="queue-indicator" id="queue-indicator" style="display:none;font-size:12px;color:var(--text-muted);"></span>
-      <button class="user-input-action secondary interrupt-btn" onclick="interruptAgent()" style="display:none;">
-        ${escapeHtml(t('interrupt') || 'Interrupt')}
+    <div class="persistent-input-row">
+      <textarea class="user-input-textarea" rows="1" id="input-persistent"
+        onkeydown="handlePersistentInputKey(event)"
+        oninput="autoResize(this)"
+        placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
+      <button class="persistent-action-btn" id="persistent-action-btn" onclick="onPersistentBtnClick()">
+        <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        <svg class="icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="4" y="4" width="16" height="16" rx="3"></rect></svg>
       </button>
     </div>
   `;
   container.appendChild(card);
+}
+
+function onPersistentBtnClick() {
+  const btn = document.getElementById('persistent-action-btn');
+  if (!btn) return;
+  if (btn.classList.contains('is-stop')) {
+    interruptAgent();
+  } else {
+    submitQueuedInput();
+  }
+}
+
+function _setActionBtnStop() {
+  const btn = document.getElementById('persistent-action-btn');
+  if (!btn) return;
+  btn.classList.add('is-stop');
+  const iconSend = btn.querySelector('.icon-send');
+  const iconStop = btn.querySelector('.icon-stop');
+  if (iconSend) iconSend.style.display = 'none';
+  if (iconStop) iconStop.style.display = '';
+}
+
+function _setActionBtnSend() {
+  const btn = document.getElementById('persistent-action-btn');
+  if (!btn) return;
+  btn.classList.remove('is-stop');
+  const iconSend = btn.querySelector('.icon-send');
+  const iconStop = btn.querySelector('.icon-stop');
+  if (iconSend) iconSend.style.display = '';
+  if (iconStop) iconStop.style.display = 'none';
+}
+
+function _renderQueueBubbles(container) {
+  container.querySelectorAll('.queue-bubbles-stack').forEach(el => el.remove());
+  if (_queuedTexts.length === 0) return;
+
+  const stack = document.createElement('div');
+  stack.className = 'queue-bubbles-stack';
+  for (const txt of _queuedTexts) {
+    const b = document.createElement('div');
+    b.className = 'queue-bubble';
+    b.textContent = txt.length > 80 ? txt.substring(0, 80) + '...' : txt;
+    b.title = txt;
+    stack.appendChild(b);
+  }
+
+  const card = container.querySelector('.user-input-card');
+  if (card) container.insertBefore(stack, card);
+  else container.appendChild(stack);
+}
+
+// 查询后端真实队列余量，移除已被消费的气泡
+async function _syncQueueFromBackend() {
+  if (_queuedTexts.length === 0 || !currentRuntimeAgentId) return;
+  try {
+    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/queued-inputs`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const remaining = Array.isArray(data.inputs) ? data.inputs.length : 0;
+    // 后端是 FIFO shift，前端 _queuedTexts 也是按顺序 push，对齐移除
+    const consumed = _queuedTexts.length - remaining;
+    if (consumed > 0) {
+      _queuedTexts.splice(0, consumed);
+      updateQueueIndicator();
+    }
+  } catch (e) {
+    // 查询失败不影响主流程
+  }
 }
 
 function handlePersistentInputKey(event) {
@@ -3714,6 +3790,7 @@ async function submitQueuedInput() {
       textarea.value = '';
       autoResize(textarea);
       _pendingQueuedCount++;
+      _queuedTexts.push(text);
       updateQueueIndicator();
     }
   } catch (e) {
@@ -3722,15 +3799,8 @@ async function submitQueuedInput() {
 }
 
 function updateQueueIndicator() {
-  const indicator = document.getElementById('queue-indicator');
-  if (indicator) {
-    if (_pendingQueuedCount > 0) {
-      indicator.style.display = 'inline';
-      indicator.textContent = `${_pendingQueuedCount} message(s) queued`;
-    } else {
-      indicator.style.display = 'none';
-    }
-  }
+  const container = document.getElementById('user-input-container');
+  if (container) _renderQueueBubbles(container);
 }
 
 async function interruptAgent() {
