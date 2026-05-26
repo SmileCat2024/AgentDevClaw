@@ -8,7 +8,7 @@
   "category": "development",
   "enabled": true,
   "modelPresets": {
-    "default": "DeepSeek-V4-flash",
+    "default": "智谱GLM-5.1",
     "exploration": "DeepSeek-V4-flash",
     "sub": "DeepSeek-V4-flash"
   },

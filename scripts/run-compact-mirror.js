@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { FileSessionStore } from 'agentdev';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
+import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -162,6 +163,13 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
   const workspaceDir = resolveWorkspaceCwd(agentId);
   const sessionStore = new FileSessionStore(getSessionStoreDir(agentId));
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
+  const modelPresetRole = sessionType === 'exploration'
+    ? 'exploration'
+    : sessionType === 'sub'
+      ? 'sub'
+      : 'default';
+  const agentDir = resolve(dirname(agentJsPath));
+  const resolvedModel = resolveAgentModelLLM(agentDir, modelPresetRole);
 
   if (typeof localFeatures.ContextCompactionMirrorFeature !== 'function') {
     throw new Error('ContextCompactionMirrorFeature is not built');
@@ -181,8 +189,16 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     name: agentName,
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir,
+    ...(resolvedModel ? { llm: resolvedModel.llm } : {}),
     maxTurns: 1,
   });
+  if (resolvedModel) {
+    logPhase(`using model preset role=${modelPresetRole} model=${resolvedModel.modelName}`);
+    try {
+      const ctx = typeof agent.getSystemContext === 'function' ? agent.getSystemContext() : agent._systemContext;
+      if (ctx) ctx.SYSTEM_CURRENT_MODEL = resolvedModel.modelName;
+    } catch {}
+  }
 
   try {
     // Mount Feature BEFORE prepareRuntime (same order as main agent)
