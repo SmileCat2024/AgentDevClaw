@@ -490,7 +490,7 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
   return response.json();
 }
 
-async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null) {
+async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null, extraPolicy = null) {
   const currentAgent = getCurrentAgentRecord();
   const activeSessionId = String(currentAgent?.active_workspace_session_id || currentAgent?.workspace_sessions?.activeSessionId || '').trim();
   const runtimeAgentId = currentRuntimeAgentId || currentAgent?.runtime_session_id || currentAgent?.runtimeSessionId || '';
@@ -541,6 +541,9 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
   }
   if (fullPreserveFromTurn != null && fullPreserveFromTurn >= 0) {
     policy.fullPreserveFromTurn = fullPreserveFromTurn;
+  }
+  if (extraPolicy && typeof extraPolicy === 'object') {
+    Object.assign(policy, extraPolicy);
   }
   const resumeResponse = await fetch('/protoclaw/context_handoffs/compact_and_resume', {
     method: 'POST',
@@ -1939,13 +1942,59 @@ window.showCompactMenu = (event, buttonElement) => {
 };
 
 /* ── Trim dialog state ── */
-let trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false };
+let trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false, keepSkillInvokes: 5 };
 const trimDialog = document.getElementById('trim-dialog');
 const trimRoundList = document.getElementById('trim-round-list');
 const trimFooterInfo = document.getElementById('trim-footer-info');
+const trimKeepSkillToggle = document.getElementById('trim-keep-skill-toggle');
+const trimKeepSkillControl = document.getElementById('trim-keep-skill-control');
+const trimKeepSkillValue = document.getElementById('trim-keep-skill-value');
+const trimKeepSkillDec = document.getElementById('trim-keep-skill-dec');
+const trimKeepSkillInc = document.getElementById('trim-keep-skill-inc');
+
+const SKILL_INVOKE_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, Infinity];
+
+function getSkillStepIndex(value) {
+  const idx = SKILL_INVOKE_STEPS.indexOf(value);
+  return idx >= 0 ? idx : 4; // default 5
+}
+
+function renderSkillStepper() {
+  const enabled = trimKeepSkillToggle.checked;
+  trimKeepSkillControl.classList.toggle('disabled', !enabled);
+  const value = trimDialogState.keepSkillInvokes;
+  trimKeepSkillValue.textContent = value === Infinity ? '∞' : String(value);
+}
+
+trimKeepSkillToggle.addEventListener('change', () => {
+  if (trimKeepSkillToggle.checked) {
+    trimDialogState.keepSkillInvokes = SKILL_INVOKE_STEPS[4]; // reset to 5
+  } else {
+    trimDialogState.keepSkillInvokes = null;
+  }
+  renderSkillStepper();
+});
+
+trimKeepSkillDec.addEventListener('click', () => {
+  const cur = getSkillStepIndex(trimDialogState.keepSkillInvokes);
+  if (cur > 0) {
+    trimDialogState.keepSkillInvokes = SKILL_INVOKE_STEPS[cur - 1];
+    renderSkillStepper();
+  }
+});
+
+trimKeepSkillInc.addEventListener('click', () => {
+  const cur = getSkillStepIndex(trimDialogState.keepSkillInvokes);
+  if (cur < SKILL_INVOKE_STEPS.length - 1) {
+    trimDialogState.keepSkillInvokes = SKILL_INVOKE_STEPS[cur + 1];
+    renderSkillStepper();
+  }
+});
 
 window.openTrimDialog = async (agentId, sessionId) => {
-  trimDialogState = { agentId, sessionId, rounds: [], loading: true };
+  trimDialogState = { agentId, sessionId, rounds: [], loading: true, keepSkillInvokes: 5 };
+  trimKeepSkillToggle.checked = true;
+  renderSkillStepper();
   closeCompactMenu();
   trimDialog.style.display = '';
   document.getElementById('trim-submit').disabled = true;
@@ -1973,7 +2022,7 @@ window.openTrimDialog = async (agentId, sessionId) => {
 
 window.closeTrimDialog = () => {
   trimDialog.style.display = 'none';
-  trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false };
+  trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false, keepSkillInvokes: 5 };
 };
 
 function renderTrimRoundList() {
@@ -1991,7 +2040,7 @@ function renderTrimRoundList() {
       `<div class="trim-round-item${trimmedClass}" data-trim-index="${idx}">`,
       `<input type="checkbox" class="trim-checkbox" data-trim-index="${idx}"${checked} />`,
       `<div class="trim-round-content">`,
-      `<div class="trim-round-index">第 ${idx + 1} 轮${r.messageCount ? ' · ' + r.messageCount + ' 条消息' : ''}</div>`,
+      `<div class="trim-round-index">第 ${idx + 1} 轮${r.messageCount ? ' · ' + r.messageCount + ' 条消息' : ''}${r.toolCalls && r.toolCalls.length ? ' · <span class="trim-tool-count">' + r.toolCalls.length + ' 次调用</span>' : ''}</div>`,
       r.userPreview ? `<div class="trim-round-preview">${escapeHtml(r.userPreview)}</div>` : '',
       `</div>`,
       `<button class="trim-to-here-btn" type="button" data-trim-to="${idx}">精简到此处</button>`,
@@ -2051,19 +2100,25 @@ trimRoundList.addEventListener('change', handleTrimCheckboxChange);
 trimRoundList.addEventListener('click', handleTrimToHere);
 
 window.submitTrimCompact = async () => {
-  const { agentId, sessionId, rounds } = trimDialogState;
+  const { agentId, sessionId, rounds, keepSkillInvokes } = trimDialogState;
   if (!agentId || !sessionId || !rounds.length) return;
 
+  let fullPreserveFromTurn = null;
   const firstKeptIndex = rounds.findIndex(r => !r.suggestedTrim);
-  if (firstKeptIndex < 0) return;
+  if (firstKeptIndex >= 0) {
+    fullPreserveFromTurn = rounds[firstKeptIndex].turnStart;
+  }
 
-  const fullPreserveFromTurn = rounds[firstKeptIndex].turnStart;
+  const policy = {};
+  if (keepSkillInvokes != null && keepSkillInvokes > 0) {
+    policy.keepRecentSkillInvokes = keepSkillInvokes;
+  }
 
   window.closeTrimDialog();
   markSessionLoading(agentId, sessionId);
 
   try {
-    const result = await createCompactedResumeSession(agentId, sessionId, '', null, fullPreserveFromTurn);
+    const result = await createCompactedResumeSession(agentId, sessionId, '', null, fullPreserveFromTurn, policy);
     if (result?.agent) {
       applyManagedPrebuiltAgent(agentId, result.agent);
     }

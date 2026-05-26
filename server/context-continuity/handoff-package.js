@@ -77,6 +77,12 @@ function normalizeNullableTurnIndex(value) {
   return clampInteger(value, 0, 0, 2000);
 }
 
+function normalizeKeepRecentSkillInvokes(value) {
+  if (value === null || value === undefined || value === '' || value === false) return null;
+  if (value === Infinity || value === 'Infinity') return Infinity;
+  return clampInteger(value, null, 1, 2000);
+}
+
 function normalizeEnum(value, validValues, fallback) {
   const text = cleanInlineText(value);
   return validValues.has(text) ? text : fallback;
@@ -119,6 +125,7 @@ export function normalizeExportPolicy(rawPolicy = {}) {
     foldToolCallArgs: rawPolicy?.foldToolCallArgs === true,
     foldToolResultSummary: rawPolicy?.foldToolResultSummary === true,
     maxFoldedToolChars: clampInteger(rawPolicy?.maxFoldedToolChars, DEFAULT_EXPORT_POLICY.maxFoldedToolChars, 80, 4000),
+    keepRecentSkillInvokes: normalizeKeepRecentSkillInvokes(rawPolicy?.keepRecentSkillInvokes),
   };
 }
 
@@ -252,6 +259,24 @@ function shouldHandleToolActivity(messageTurn, foldedToolTurns, policy) {
   return foldedToolTurns.has(messageTurn);
 }
 
+function getSkillInvokeProtectedTurns(rawMessages, policy) {
+  if (!policy.keepRecentSkillInvokes) return null;
+  const skillTurns = [];
+  for (let i = rawMessages.length - 1; i >= 0; i--) {
+    const m = rawMessages[i];
+    if (m?.role !== 'assistant') continue;
+    const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+    const hasSkill = toolCalls.some(tc => tc?.name === 'invoke_skill');
+    if (!hasSkill) continue;
+    const turn = getMessageTurn(m, i);
+    if (!skillTurns.includes(turn)) {
+      skillTurns.unshift(turn);
+      if (skillTurns.length >= policy.keepRecentSkillInvokes && policy.keepRecentSkillInvokes !== Infinity) break;
+    }
+  }
+  return skillTurns.length > 0 ? new Set(skillTurns) : null;
+}
+
 function createSeedMessage(role, content, turn) {
   const text = cleanMultilineText(content);
   if (!text) return null;
@@ -281,6 +306,7 @@ function flushPendingToolFold(seedMessages, pendingFold, policy, stats) {
 export function buildTrimmedSeedMessages(rawMessages, policy) {
   const retainedTurns = getRetainedTurnSet(rawMessages, policy);
   const foldedToolTurns = getFoldedToolTurnSet(rawMessages, retainedTurns, policy);
+  const skillProtectedTurns = getSkillInvokeProtectedTurns(rawMessages, policy);
   const fullPreserveFrom = policy.fullPreserveFromTurn;
   const hasPreserveBoundary = Number.isFinite(fullPreserveFrom);
   const seedMessages = [];
@@ -332,6 +358,22 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
 
     // Preserve zone: pass through original message structure (preserves toolCallId, toolCalls, etc.)
     if (hasPreserveBoundary && turn >= fullPreserveFrom) {
+      flushIfNeeded();
+      if (role === 'tool' || shouldKeepDialogueMessage(role, policy)) {
+        seedMessages.push({ ...message, turn });
+        stats.keptSeedMessageCount += 1;
+        if (role !== 'tool') {
+          stats.keptDialogueMessageCount += 1;
+        }
+      } else {
+        stats.droppedDialogueMessageCount += 1;
+        stats.droppedMessageCount += 1;
+      }
+      return;
+    }
+
+    // Skill-protected zone: turns containing recent invoke_skill calls pass through intact
+    if (skillProtectedTurns && skillProtectedTurns.has(turn)) {
       flushIfNeeded();
       if (role === 'tool' || shouldKeepDialogueMessage(role, policy)) {
         seedMessages.push({ ...message, turn });

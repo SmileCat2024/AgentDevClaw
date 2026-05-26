@@ -209,6 +209,19 @@
         <button class="trim-close" type="button" onclick="window.closeTrimDialog()">×</button>
       </div>
       <div class="trim-hint">勾选需要精简的轮次。被精简的轮次将折叠为摘要，保留工具调用的文件名和技能名。</div>
+      <div class="trim-advanced">
+        <div class="trim-advanced-row">
+          <label class="trim-advanced-toggle">
+            <input type="checkbox" id="trim-keep-skill-toggle" checked />
+            <span>保留最近技能调用</span>
+          </label>
+          <div class="trim-advanced-control" id="trim-keep-skill-control">
+            <button type="button" class="trim-stepper-btn" id="trim-keep-skill-dec">&minus;</button>
+            <span class="trim-stepper-value" id="trim-keep-skill-value">5</span>
+            <button type="button" class="trim-stepper-btn" id="trim-keep-skill-inc">+</button>
+          </div>
+        </div>
+      </div>
       <div class="trim-body">
         <div class="trim-list" id="trim-round-list"></div>
       </div>
