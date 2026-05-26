@@ -69,15 +69,31 @@ function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
     return;
   }
   unitModePreferences[key] = mode;
-  if (mode && mode !== 'chat') {
+  if (mode && mode !== 'chat' && !isWorkspaceHostUnit(agent)) {
     workspaceSurfaceModePreferences[key] = mode;
   }
   currentWorkspaceTab = mode;
 }
 
+function getPassiveWorkspaceSurfaceMode(agent = getCurrentAgentRecord()) {
+  const ui = getCurrentUnitUi(agent);
+  const tabs = getUnitTabs(agent);
+  const nonChatTabs = tabs.filter((tab) => tab.id !== 'chat');
+  if (ui?.entry && ui.entry !== 'chat' && nonChatTabs.some((tab) => tab.id === ui.entry)) {
+    return ui.entry;
+  }
+  return nonChatTabs[0]?.id || 'home';
+}
+
 function getDefaultUnitMode(agent = getCurrentAgentRecord()) {
   const ui = getCurrentUnitUi(agent);
   if (!ui) return 'chat';
+  if (isWorkspaceHostUnit(agent)) {
+    if (readOnlyMode || currentRuntimeAgentId) {
+      return 'chat';
+    }
+    return getPassiveWorkspaceSurfaceMode(agent);
+  }
   const canEnterChat = canEnterWorkspaceChat(agent);
   const tabs = getUnitTabs(agent);
   const fallbackTab = tabs[0]?.id || 'home';
@@ -112,12 +128,19 @@ function ensureUnitMode(agent = getCurrentAgentRecord()) {
     return null;
   }
 
+  if (isWorkspaceHostUnit(agent)) {
+    currentWorkspaceTab = (readOnlyMode || currentRuntimeAgentId)
+      ? 'chat'
+      : getPassiveWorkspaceSurfaceMode(agent);
+    return currentWorkspaceTab;
+  }
+
   if (!currentWorkspaceTab) {
     currentWorkspaceTab = getDefaultUnitMode(agent);
   }
 
   if (currentWorkspaceTab === 'chat' && !canEnterWorkspaceChat(agent)) {
-    currentWorkspaceTab = 'home';
+    currentWorkspaceTab = getPassiveWorkspaceSurfaceMode(agent);
   }
 
   return currentWorkspaceTab;
@@ -1391,6 +1414,10 @@ function shouldRenderWorkspaceSurface(agent = getCurrentAgentRecord()) {
     return false;
   }
 
+  if (isWorkspaceHostUnit(agent)) {
+    return !(readOnlyMode || currentRuntimeAgentId);
+  }
+
   const mode = ensureUnitMode(agent);
   return mode && mode !== 'chat';
 }
@@ -1398,6 +1425,9 @@ function shouldRenderWorkspaceSurface(agent = getCurrentAgentRecord()) {
 function isChatSurfaceActive(agent = getCurrentAgentRecord()) {
   const ui = getCurrentUnitUi(agent);
   if (!ui) return true;
+  if (isWorkspaceHostUnit(agent)) {
+    return !!(readOnlyMode || currentRuntimeAgentId);
+  }
   return ensureUnitMode(agent) === 'chat';
 }
 
@@ -5983,6 +6013,11 @@ function resetRuntimeBackedSurfaceState() {
 
 function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
   if (!workspaceTabsBar) return;
+  if (isWorkspaceHostUnit(agent)) {
+    workspaceTabsBar.classList.add('hidden');
+    workspaceTabsBar.innerHTML = '';
+    return;
+  }
   const tabs = getUnitTabs(agent);
   if (tabs.length <= 1) {
     workspaceTabsBar.classList.add('hidden');

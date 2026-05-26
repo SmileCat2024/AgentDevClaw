@@ -149,12 +149,12 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   const seenRuntimeIds = new Set();
 
   const addEntry = (entry) => {
+    if (!entry) return;
     if (!entry?.runtimeId) return;
     if (seenRuntimeIds.has(entry.runtimeId)) return;
     seenRuntimeIds.add(entry.runtimeId);
     entries.push(entry);
   };
-
   addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
 
   agents
@@ -164,12 +164,11 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   return entries;
 }
 
-function renderRuntimeItems(runtimeEntries) {
-  if (!Array.isArray(runtimeEntries) || runtimeEntries.length === 0) return '';
-  const runtimeLabel = currentLanguage === 'zh' ? '运行时' : 'Runtime';
+function renderSidebarChildItems(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
   return `
     <div class="agent-runtime-list">
-      ${runtimeEntries.map((entry) => {
+      ${entries.map((entry) => {
         const active = isRuntimeItemActive(entry.runtimeId);
         const disconnected = entry.status === 'disconnected';
         const itemClass = [
@@ -178,7 +177,6 @@ function renderRuntimeItems(runtimeEntries) {
           active ? 'active' : '',
           disconnected ? 'disconnected' : '',
         ].filter(Boolean).join(' ');
-        const statusLabel = disconnected ? escapeHtml(t('status_disconnected')) : escapeHtml(t('status_connected'));
         return `
           <div
             class="${itemClass}"
@@ -186,15 +184,9 @@ function renderRuntimeItems(runtimeEntries) {
             data-agent-prebuilt="false"
             data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
           >
-            <div class="agent-runtime-prefix">${escapeHtml(runtimeLabel)}</div>
-            <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}</div>
-            <div class="agent-meta">
-              <span class="agent-status">
-                <span class="agent-status-dot"></span>
-                <span>${statusLabel}</span>
-              </span>
-              · ${escapeHtml(entry.runtimeId)}
-              ${entry.metaLabel ? ` · ${escapeHtml(entry.metaLabel)}` : ''}
+            <div class="agent-line">
+              <span class="agent-status-dot"></span>
+              <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}</div>
             </div>
           </div>
         `;
@@ -212,25 +204,20 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
     const connected = agent.connected !== false;
     const pending = pendingPrebuiltAgentIds.has(agent.id);
     const workspaceSurface = isWorkspaceSurfaceUnit(agent);
-    const statusLabel = pending
-      ? '启动中'
-      : workspaceSurface
-        ? '点击进入'
-      : (agent.runtime_session_id || agent.runtimeSessionId)
-        ? (connected ? escapeHtml(t('status_connected')) : escapeHtml(t('status_disconnected')))
-        : '点击启动';
+    const idle = prebuilt && !pending && !(agent.runtime_session_id || agent.runtimeSessionId);
     const itemClass = [
       'agent-item',
       active ? 'active' : '',
       connected || prebuilt ? '' : 'disconnected',
       pending ? 'pending' : '',
+      idle ? 'idle' : '',
     ].filter(Boolean).join(' ');
     const hasRuntime = !!(agent.runtime_session_id || agent.runtimeSessionId);
     const contextMenuEnabled = prebuilt
       ? (!workspaceSurface && hasRuntime)
       : !!(agent.runtime_session_id || agent.runtimeSessionId || agent.id);
-    const runtimeEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
-    const hasActiveRuntime = prebuilt && runtimeEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
+    const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
+    const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
     return `
       <div
         class="${[itemClass, hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ')}"
@@ -238,25 +225,27 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
         data-agent-prebuilt="${prebuilt ? 'true' : 'false'}"
         data-agent-context-menu="${contextMenuEnabled ? 'true' : 'false'}"
       >
-        <div class="agent-name">${escapeHtml(agent.name || agent.id)}</div>
-        <div class="agent-meta">
-          <span class="agent-status">
-            <span class="agent-status-dot"></span>
-            <span>${statusLabel}</span>
-          </span>
-          · ${escapeHtml(getAgentDisplayId(agent))}
-          ${!workspaceSurface && agent.message_count != null ? ` · ${agent.message_count} ${escapeHtml(t('feature_messages'))}` : ''}
+        <div class="agent-line">
+          <span class="agent-status-dot"></span>
+          <div class="agent-name">${escapeHtml(agent.name || agent.id)}</div>
         </div>
-        ${prebuilt ? renderRuntimeItems(runtimeEntries) : ''}
+        ${prebuilt ? renderSidebarChildItems(childEntries) : ''}
       </div>
     `;
   }).join('');
 }
 
-async function waitForPrebuiltRuntimeSession(agentId, attempts = 20) {
+async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {}) {
+  const expectedRuntimeId = normalizeAgentIdentity(options.previousRuntimeId);
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const agents = await invoke('get_connected_agents');
-    const matched = agents.find((agent) => agent.id === agentId && (agent.runtime_session_id || agent.runtimeSessionId));
+    const matched = agents.find((agent) => {
+      if (agent.id !== agentId) return false;
+      const runtimeId = normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId);
+      if (!runtimeId) return false;
+      if (expectedRuntimeId && runtimeId === expectedRuntimeId) return false;
+      return agent.connected !== false;
+    });
     if (matched) {
       allAgents = agents;
       return matched;
@@ -338,9 +327,15 @@ async function loadAgents() {
         return;
       }
       if (data.currentAgentId) {
-        const runtimeCurrent = allAgents.find((agent) => agent.id === data.currentAgentId) || null;
+        const runtimeCurrent = allAgents.find((agent) => (
+          agent.connected !== false
+          && (
+            agent.id === data.currentAgentId
+            || normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId) === normalizeAgentIdentity(data.currentAgentId)
+          )
+        )) || null;
         if (runtimeCurrent) {
-          currentAgentId = runtimeCurrent.id;
+          currentAgentId = runtimeCurrent.parent_id || runtimeCurrent.id;
           await loadAgentData(getAgentRuntimeId(runtimeCurrent));
           return;
         }
@@ -488,6 +483,29 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
     throw new Error(await response.text().catch(() => 'session operation failed'));
   }
   return response.json();
+}
+
+function applyOptimisticWorkspaceSession(agentId, session) {
+  if (!agentId || !session?.id) return null;
+  const hostAgent = allAgents.find((agent) => agent.id === agentId) || null;
+  const existingSessions = Array.isArray(hostAgent?.workspace_sessions?.sessions)
+    ? hostAgent.workspace_sessions.sessions
+    : [];
+  const nextSessions = [session, ...existingSessions.filter((item) => item?.id !== session.id)];
+  return updateAgentRecord(agentId, {
+    workspace_sessions: {
+      ...(hostAgent?.workspace_sessions || {}),
+      activeSessionId: session.id,
+      sessions: nextSessions,
+    },
+    active_workspace_session_id: session.id,
+    active_workspace_session_form_id: session.formId || null,
+    active_workspace_session_title: session.title || '',
+    active_workspace_agent_name: session.agentName || '',
+    active_workspace_display_name: session.formId === 'assembly-form'
+      ? (session.agentName || session.title || '')
+      : '',
+  });
 }
 
 async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null, extraPolicy = null) {
@@ -893,12 +911,16 @@ window.runWorkspaceAction = async (rawAction) => {
             targetDir: action.targetDir,
       };
       const runSessionOpen = async () => {
+        const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId);
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
+        const optimisticAgent = result?.session
+          ? (applyOptimisticWorkspaceSession(activeAgent.id, result.session) || activeAgent)
+          : activeAgent;
         const isAssemblyLaunch =
           activeAgent?.id === 'agent-creator'
           && action.type === 'create_session'
           && String(action.formId || '') === 'assembly-form';
-        const nextAgent = upsertConnectedAgent(result.agent) || allAgents.find((agent) => agent.id === activeAgent.id);
+        const nextAgent = result?.agent ? (upsertConnectedAgent(result.agent) || result.agent) : null;
         if (isAssemblyLaunch) {
           setPreferredUnitMode('assembly', activeAgent);
           loadAgents().catch((error) => console.error('Failed to refresh agents after assembly launch:', error));
@@ -916,7 +938,21 @@ window.runWorkspaceAction = async (rawAction) => {
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
           return;
         }
-        await loadAgents();
+        try {
+          const readyAgent = await waitForPrebuiltRuntimeSession(activeAgent.id, 30, { previousRuntimeId });
+          if (!readyAgent) return;
+          const nextRuntimeId = readyAgent.runtime_session_id || readyAgent.runtimeSessionId || readyAgent.id;
+          if (!nextRuntimeId) return;
+          if (nextRuntimeId === currentRuntimeAgentId) {
+            renderCurrentMainView();
+          } else {
+            await window.switchAgent(nextRuntimeId);
+          }
+        } catch (error) {
+          console.error('Failed while waiting for prebuilt runtime session:', error);
+        } finally {
+          loadAgents().catch((error) => console.error('Failed to refresh agents after waiting for prebuilt runtime:', error));
+        }
       };
       const targetSession = sessionAction.type === 'open_session'
         ? getWorkspaceSessionById(activeAgent, sessionAction.sessionId)
@@ -2502,7 +2538,7 @@ window.switchAgent = async (newAgentId) => {
       throw new Error(`Switch failed: ${res.status} ${res.statusText} ${errorText}`);
     }
 
-    currentAgentId = targetAgent?.id || runtimeAgentId;
+    currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
     currentRuntimeAgentId = runtimeAgentId;
     readOnlyMode = false;
     currentWorkspaceArtifactDetail = null;
@@ -2510,7 +2546,7 @@ window.switchAgent = async (newAgentId) => {
     currentProjectDocsetOpen = false;
     currentProjectRequirementEdit = null;
     currentProjectDocsetPage = 'requirement';
-    currentWorkspaceTab = getDefaultUnitMode(targetAgent || getCurrentAgentRecord());
+    currentWorkspaceTab = 'chat';
     setFollowLatest(true);
     renderAgentList();
     await loadAgentData(runtimeAgentId);
@@ -3556,11 +3592,11 @@ function updateNotificationStatus(notifData) {
     statusEl.style.display = 'none';
     statusEl.classList.remove('active');
 
-    // 切换常驻按钮为 send 状态，重置队列
+    // 切换常驻按钮为 send 状态
     _setActionBtnSend();
+    // 不在这里清空 _queuedTexts — 后端队列可能仍有消息待消费
+    // 队列显示由 _syncQueueFromBackend() 在每轮 step_start 时统一管理
     _pendingQueuedCount = 0;
-    _queuedTexts = [];
-    updateQueueIndicator();
   } else {
     statusEl.style.display = 'none';
   }
@@ -3752,7 +3788,8 @@ async function _syncQueueFromBackend() {
     const res = await fetch(`/api/agents/${currentRuntimeAgentId}/queued-inputs`);
     if (!res.ok) return;
     const data = await res.json();
-    const remaining = Array.isArray(data.inputs) ? data.inputs.length : 0;
+    const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
+    const remaining = queue.length;
     // 后端是 FIFO shift，前端 _queuedTexts 也是按顺序 push，对齐移除
     const consumed = _queuedTexts.length - remaining;
     if (consumed > 0) {
