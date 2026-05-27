@@ -1908,7 +1908,7 @@ window.phSaveModelConfig = async () => {
   const agentId = window.phModelConfigAgentId;
   if (!agentId) return;
   const selects = document.querySelectorAll('#ph-model-config-host .ph-mc-select');
-  const modelPresets = { default: null, exploration: null, sub: null };
+  const modelPresets = { default: null, exploration: null, sub: null, system: null };
   selects.forEach(function(sel) {
     const role = sel.dataset.presetRole;
     if (role && modelPresets.hasOwnProperty(role)) {

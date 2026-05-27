@@ -3889,6 +3889,61 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   to { transform: rotate(360deg); }
 }
 
+/* Session title AI generate button */
+.session-title-ai-btn {
+  background: rgba(88, 166, 255, 0.1);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  color: #58a6ff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 10px;
+  margin-left: 8px;
+  border-radius: 20px;
+  transition: all 0.2s ease;
+  opacity: 0.8;
+  vertical-align: middle;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1;
+}
+
+.session-title-ai-btn:hover {
+  opacity: 1;
+  background-color: rgba(88, 166, 255, 0.2);
+  border-color: rgba(88, 166, 255, 0.5);
+  color: #79b8ff;
+}
+
+.session-title-ai-btn:active {
+  transform: scale(0.95);
+}
+
+.session-title-ai-btn.loading {
+  opacity: 1;
+  color: #58a6ff;
+}
+
+.session-title-ai-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.session-title-ai-btn-hidden {
+  display: none !important;
+}
+
+.session-title-ai-btn-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.session-title-ai-btn-text {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+}
+
 /* ── PH Banner ── */
 .ph-banner {
   display: flex;

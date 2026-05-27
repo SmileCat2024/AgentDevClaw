@@ -177,6 +177,11 @@ function renderSessionResumeBadge(session) {
   return '<span class="workspace-history-active">' + escapeHtml(t('workspace_compacted_badge')) + '</span>';
 }
 
+function renderSessionTitleAiButton(session) {
+  var isZh = currentLanguage === 'zh';
+  return '<button class="session-title-ai-btn session-title-ai-btn-hidden" type="button" title="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '" onmousedown="if(this._setGenerating)this._setGenerating(true);" onclick="event.stopPropagation();window.generateSessionTitle(\'' + escapeHtml(session.id) + '\',this)" aria-label="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '"><span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + escapeHtml(isZh ? 'AI生成' : 'AI Generate') + '</span></button>';
+}
+
 function getSessionContextLength(session, agent) {
   const cl = session?.contextLength;
   if (Number.isFinite(cl) && cl > 0) return cl;
@@ -365,6 +370,72 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
     btnElement.disabled = false;
   }
 }
+
+window.generateSessionTitle = async function(sessionId, btnElement) {
+  if (!btnElement) return;
+  
+  var isZh = currentLanguage === 'zh';
+  var originalContent = btnElement.innerHTML;
+  btnElement.innerHTML = '<span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + (isZh ? '生成中...' : 'Generating...') + '</span>';
+  btnElement.classList.add('loading');
+  btnElement.disabled = true;
+  
+  // Set generating flag to prevent closing
+  if (btnElement._setGenerating) {
+    btnElement._setGenerating(true);
+  }
+
+  try {
+    var sessionItem = btnElement.closest('[data-prebuilt-session-agent-id]');
+    var agentId = sessionItem ? sessionItem.dataset.prebuiltSessionAgentId : '';
+    if (!agentId) throw new Error('Agent ID not found');
+
+    var response = await fetch('/protoclaw/generate_session_title', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, sessionId }),
+    });
+
+    if (!response.ok) {
+      var errorText = await response.text();
+      throw new Error(errorText || 'Failed to generate title');
+    }
+
+    var result = await response.json();
+    if (result.ok && result.title) {
+      var titleRow = btnElement.closest('.workspace-history-title-row');
+      if (titleRow) {
+        var titleEl = titleRow.querySelector('.workspace-history-title');
+        if (titleEl) titleEl.textContent = result.title;
+        // Exit edit mode: restore the input to plain text div
+        var input = titleRow.querySelector('.session-title-edit-input');
+        if (input) {
+          var titleDiv = input.closest('.workspace-history-title');
+          if (titleDiv) titleDiv.textContent = result.title;
+        }
+      }
+      var agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+      if (agent) {
+        var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+        var target = sessions.find(function(s) { return s.id === sessionId; });
+        if (target) target.title = result.title;
+      }
+    }
+  } catch (error) {
+    console.error('Failed to generate session title:', error);
+    window.alert((isZh ? '生成标题失败: ' : 'Failed to generate title: ') + (error.message || error));
+  } finally {
+    btnElement.innerHTML = originalContent;
+    btnElement.classList.remove('loading');
+    btnElement.disabled = false;
+    // Reset generating flag
+    if (btnElement._setGenerating) {
+      btnElement._setGenerating(false);
+    }
+    // Hide button after generation completes
+    btnElement.classList.add('session-title-ai-btn-hidden');
+  }
+};
 
 function ensurePhModelConfigHost() {
   let host = document.getElementById('ph-model-config-host');
@@ -1572,6 +1643,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
                   renderSessionResumeBadge(session),
                   session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
+                  renderSessionTitleAiButton(session),
                   '</div>',
                   '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
                   session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
@@ -1671,6 +1743,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
                   renderSessionResumeBadge(session),
                   session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
+                  renderSessionTitleAiButton(session),
                   '</div>',
                   '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
                   session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
@@ -1801,6 +1874,7 @@ function renderWorkspaceSessionList(agent, block) {
               '<div class="workspace-history-title-row">',
               '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
               renderSessionResumeBadge(session),
+              renderSessionTitleAiButton(session),
               '</div>',
               '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
               sType !== 'exploration' && session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
@@ -1907,6 +1981,7 @@ function renderWorkspaceSessionList(agent, block) {
         '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(primaryTitle) + '</div>',
         renderSessionResumeBadge(session),
         session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
+        renderSessionTitleAiButton(session),
         '</div>',
         '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
         session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
@@ -8470,6 +8545,13 @@ window.handleSessionTitleDoubleClick = function(event) {
   const currentTitle = titleDiv.textContent.trim();
   const isSessionId = currentTitle.startsWith('session-');
 
+  // Show AI generate button when entering edit mode
+  const titleRow = titleDiv.closest('.workspace-history-title-row');
+  const aiButton = titleRow ? titleRow.querySelector('.session-title-ai-btn') : null;
+  if (aiButton) {
+    aiButton.classList.remove('session-title-ai-btn-hidden');
+  }
+
   titleDiv.innerHTML = '<input type="text" class="session-title-edit-input" value="' + escapeHtml(isSessionId ? '' : currentTitle) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '输入对话标题' : 'Enter session title') + '">';
 
   const input = titleDiv.querySelector('input');
@@ -8477,12 +8559,18 @@ window.handleSessionTitleDoubleClick = function(event) {
   input.select();
 
   let saved = false;
+  let isGeneratingTitle = false;
+  
   const saveTitle = async () => {
-    if (saved) return;
+    if (saved || isGeneratingTitle) return;
     saved = true;
     const newTitle = input.value.trim();
     if (!newTitle || newTitle === currentTitle) {
       titleDiv.textContent = currentTitle || sessionId;
+      // Hide AI button when exiting edit mode
+      if (aiButton) {
+        aiButton.classList.add('session-title-ai-btn-hidden');
+      }
       return;
     }
     try {
@@ -8503,11 +8591,28 @@ window.handleSessionTitleDoubleClick = function(event) {
         titleDiv.textContent = currentTitle || sessionId;
         console.error('Failed to update session title:', result.error);
       }
+      // Hide AI button when exiting edit mode
+      if (aiButton) {
+        aiButton.classList.add('session-title-ai-btn-hidden');
+      }
     } catch (error) {
       titleDiv.textContent = currentTitle || sessionId;
       console.error('Failed to update session title:', error);
+      // Hide AI button when exiting edit mode
+      if (aiButton) {
+        aiButton.classList.add('session-title-ai-btn-hidden');
+      }
     }
   };
+
+  // Store the generating flag on the button for access from generateSessionTitle
+  if (aiButton) {
+    aiButton._isGeneratingTitle = false;
+    aiButton._setGenerating = function(generating) {
+      isGeneratingTitle = generating;
+      aiButton._isGeneratingTitle = generating;
+    };
+  }
 
   input.addEventListener('blur', saveTitle);
   input.addEventListener('keydown', function(e) {
@@ -8516,8 +8621,13 @@ window.handleSessionTitleDoubleClick = function(event) {
       saveTitle();
     } else if (e.key === 'Escape') {
       e.preventDefault();
+      if (isGeneratingTitle) return; // Don't close while generating
       saved = true;
       titleDiv.textContent = currentTitle || sessionId;
+      // Hide AI button when exiting edit mode
+      if (aiButton) {
+        aiButton.classList.add('session-title-ai-btn-hidden');
+      }
     }
   });
 };

@@ -1775,11 +1775,32 @@ async function resolvePrebuiltSessionType(agentId, sessionId) {
   return '';
 }
 
+const _indexLocks = new Map();
+
 async function writeSessionIndex(agentId, index) {
   const dirPath = getPrebuiltAgentSessionDir(agentId);
   const indexPath = getPrebuiltSessionIndexPath(agentId);
   await ensureDir(dirPath);
-  await fs.writeFile(indexPath, JSON.stringify(index, null, 2), 'utf8');
+  const tmpPath = indexPath + '.tmp';
+  await fs.writeFile(tmpPath, JSON.stringify(index, null, 2), 'utf8');
+  await fs.rename(tmpPath, indexPath);
+}
+
+async function updateSessionIndex(agentId, fn) {
+  const prev = _indexLocks.get(agentId) || Promise.resolve();
+  let release;
+  const next = new Promise(r => release = r);
+  _indexLocks.set(agentId, next);
+  await prev;
+  try {
+    const index = await readSessionIndex(agentId);
+    const newIndex = await fn(index);
+    await writeSessionIndex(agentId, newIndex);
+    return newIndex;
+  } finally {
+    release();
+    if (_indexLocks.get(agentId) === next) _indexLocks.delete(agentId);
+  }
 }
 
 function buildSessionTitle(createdAtIso) {
@@ -2430,7 +2451,6 @@ async function buildSessionModelInfoMap(agentId) {
 }
 
 async function createPrebuiltSession(agentId, options = {}) {
-  const index = await readSessionIndex(agentId);
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   const sessionMetadata = normalizeSessionMetadata(options.metadata);
   const currentState = isWorkspaceSessionAgent(agentId)
@@ -2440,8 +2460,9 @@ async function createPrebuiltSession(agentId, options = {}) {
   const startupForm = currentState?.forms?.['startup-form'] || {};
   const sourceForm = currentState?.forms?.[requestedFormId] || startupForm;
   const sourceSessionId = cleanSessionText(options.sourceSessionId);
+  const preIndex = await readSessionIndex(agentId);
   const sourceSession = sourceSessionId
-    ? index.sessions.find((session) => session.id === sourceSessionId) || null
+    ? preIndex.sessions.find((session) => session.id === sourceSessionId) || null
     : null;
   const createdAt = new Date().toISOString();
   const sessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
@@ -2526,11 +2547,12 @@ async function createPrebuiltSession(agentId, options = {}) {
     createdAt,
     updatedAt: createdAt,
   };
-  const nextIndex = {
-    activeSessionId: sessionId,
-    sessions: [record, ...index.sessions.filter((session) => session.id !== sessionId)],
-  };
-  await writeSessionIndex(agentId, nextIndex);
+  const nextIndex = await updateSessionIndex(agentId, (index) => {
+    return {
+      activeSessionId: sessionId,
+      sessions: [record, ...index.sessions.filter((session) => session.id !== sessionId)],
+    };
+  });
 
   if (normalizedAgentId === 'feature-creator') {
     const featureName = nextFeatureName || cleanSessionText(startupForm.feature_name);
@@ -2621,20 +2643,24 @@ async function createPrebuiltSession(agentId, options = {}) {
 }
 
 async function activatePrebuiltSession(agentId, sessionId, options = {}) {
+  await updateSessionIndex(agentId, (index) => {
+    const session = index.sessions.find((s) => s.id === sessionId);
+    if (!session) {
+      const error = new Error(`Unknown prebuilt session: ${sessionId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return { ...index, activeSessionId: sessionId };
+  });
+
   const index = await readSessionIndex(agentId);
-  const existing = index.sessions.find((session) => session.id === sessionId);
-  if (!existing) {
-    const error = new Error(`Unknown prebuilt session: ${sessionId}`);
-    error.statusCode = 404;
-    throw error;
-  }
-  await writeSessionIndex(agentId, { ...index, activeSessionId: sessionId });
+  const existing = index.sessions.find((s) => s.id === sessionId);
 
   if (sanitizeSessionFragment(agentId) === 'feature-creator') {
     const currentState = await readWorkspaceState(agentId);
     const startupForm = currentState.forms?.['startup-form'] || {};
-    const openDirectory = cleanSessionText(existing.openDirectory) || cleanSessionText(currentState.openDirectory);
-    const featureName = cleanSessionText(existing.featureName) || cleanSessionText(startupForm.feature_name);
+    const openDirectory = cleanSessionText(existing?.openDirectory) || cleanSessionText(currentState.openDirectory);
+    const featureName = cleanSessionText(existing?.featureName) || cleanSessionText(startupForm.feature_name);
     const targetDir = openDirectory ? path.dirname(openDirectory) : cleanSessionText(startupForm.target_dir);
     await writeWorkspaceState(agentId, {
       forms: {
@@ -2729,28 +2755,26 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
 }
 
 async function deletePrebuiltSession(agentId, sessionId) {
-  const index = await readSessionIndex(agentId);
-  const existing = index.sessions.find((session) => session.id === sessionId);
-  if (!existing) {
-    const error = new Error(`Unknown prebuilt session: ${sessionId}`);
-    error.statusCode = 404;
-    throw error;
-  }
+  const newIndex = await updateSessionIndex(agentId, (index) => {
+    const existing = index.sessions.find((session) => session.id === sessionId);
+    if (!existing) {
+      const error = new Error(`Unknown prebuilt session: ${sessionId}`);
+      error.statusCode = 404;
+      throw error;
+    }
 
-  const remainingSessions = index.sessions.filter((session) => session.id !== sessionId);
-  const nextActiveSessionId = index.activeSessionId === sessionId
-    ? (remainingSessions[0]?.id ?? null)
-    : index.activeSessionId;
+    const remainingSessions = index.sessions.filter((session) => session.id !== sessionId);
+    const nextActiveSessionId = index.activeSessionId === sessionId
+      ? (remainingSessions[0]?.id ?? null)
+      : index.activeSessionId;
+    return { activeSessionId: nextActiveSessionId, sessions: remainingSessions };
+  });
 
   await fs.rm(getPrebuiltSessionFilePath(agentId, sessionId), { force: true }).catch(() => {});
-  await writeSessionIndex(agentId, {
-    activeSessionId: nextActiveSessionId,
-    sessions: remainingSessions,
-  });
 
   return {
     deletedSessionId: sessionId,
-    activeSessionId: nextActiveSessionId,
+    activeSessionId: newIndex.activeSessionId,
     sessions: await listPrebuiltSessions(agentId),
   };
 }
@@ -3045,26 +3069,27 @@ async function deletePrebuiltProject(agentId, projectId) {
   projects.splice(projectIndex, 1);
   await writeWorkspaceState(agentId, { [projectsKey]: projects });
 
-  const index = await readSessionIndex(agentId);
-  const sessionsToDelete = [];
-  const remainingSessions = index.sessions.filter((session) => {
-    const sessionDir = typeof session.openDirectory === 'string' ? session.openDirectory.trim().toLowerCase().replace(/\\/g, '/') : '';
-    const sessionName = typeof (session.featureName || session.agentName) === 'string' ? (session.featureName || session.agentName).trim().toLowerCase() : '';
-    const matchesDir = projectOpenDirectory && sessionDir === projectOpenDirectory;
-    const matchesName = !projectOpenDirectory && projectFeatureName && sessionName === projectFeatureName;
-    if (matchesDir || matchesName) {
-      sessionsToDelete.push(session);
-      return false;
-    }
-    return true;
+  let sessionsToDelete = [];
+  await updateSessionIndex(agentId, (index) => {
+    sessionsToDelete = [];
+    const remainingSessions = index.sessions.filter((session) => {
+      const sessionDir = typeof session.openDirectory === 'string' ? session.openDirectory.trim().toLowerCase().replace(/\\/g, '/') : '';
+      const sessionName = typeof (session.featureName || session.agentName) === 'string' ? (session.featureName || session.agentName).trim().toLowerCase() : '';
+      const matchesDir = projectOpenDirectory && sessionDir === projectOpenDirectory;
+      const matchesName = !projectOpenDirectory && projectFeatureName && sessionName === projectFeatureName;
+      if (matchesDir || matchesName) {
+        sessionsToDelete.push(session);
+        return false;
+      }
+      return true;
+    });
+
+    const deletedWasActive = sessionsToDelete.some((s) => s.id === index.activeSessionId);
+    const nextActiveSessionId = deletedWasActive
+      ? (remainingSessions[0]?.id ?? null)
+      : index.activeSessionId;
+    return { activeSessionId: nextActiveSessionId, sessions: remainingSessions };
   });
-
-  const deletedWasActive = sessionsToDelete.some((s) => s.id === index.activeSessionId);
-  const nextActiveSessionId = deletedWasActive
-    ? (remainingSessions[0]?.id ?? null)
-    : index.activeSessionId;
-
-  await writeSessionIndex(agentId, { activeSessionId: nextActiveSessionId, sessions: remainingSessions });
 
   for (const session of sessionsToDelete) {
     await fs.rm(getPrebuiltSessionFilePath(agentId, session.id), { force: true }).catch(() => {});
@@ -4168,12 +4193,15 @@ async function startAssemblyRuntime(sessionId, agentId = 'agent-creator', preAct
   const runtimeWorkdir = customWorkdir || assemblyWorkspace;
 
   if (cleanSessionText(session.openDirectory) !== assemblyWorkspace) {
-    const index = await readSessionIndex(agent.id);
-    const sessions = index.sessions.map((item) => item.id === session.id
-      ? { ...item, openDirectory: assemblyWorkspace, updatedAt: new Date().toISOString() }
-      : item);
-    await writeSessionIndex(agent.id, { ...index, sessions });
-    session = await summarizePrebuiltSession(agent.id, sessions.find((item) => item.id === session.id) || session);
+    let updatedSession = session;
+    await updateSessionIndex(agent.id, (index) => {
+      const sessions = index.sessions.map((item) => item.id === session.id
+        ? { ...item, openDirectory: assemblyWorkspace, updatedAt: new Date().toISOString() }
+        : item);
+      updatedSession = sessions.find((item) => item.id === session.id) || session;
+      return { ...index, sessions };
+    });
+    session = await summarizePrebuiltSession(agent.id, updatedSession);
   }
 
   await ensureAssemblyWorkspaceBase(assemblyWorkspace, runtimeDisplayName);
@@ -4543,10 +4571,9 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       return;
     }
 
-    const index = await readSessionIndex(agentId);
-    const sourceRecord = index.sessions.find((s) => s.id === sourceSessionId) || null;
     const newSessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
     const createdAt = new Date().toISOString();
+    let sourceRecord = null;
 
     const branchSnapshot = {
       ...sourceSnapshot,
@@ -4596,11 +4623,13 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       updatedAt: createdAt,
     };
 
-    const nextIndex = {
-      activeSessionId: newSessionId,
-      sessions: [branchRecord, ...index.sessions.filter((s) => s.id !== newSessionId)],
-    };
-    await writeSessionIndex(agentId, nextIndex);
+    const nextIndex = await updateSessionIndex(agentId, (index) => {
+      sourceRecord = index.sessions.find((s) => s.id === sourceSessionId) || null;
+      return {
+        activeSessionId: newSessionId,
+        sessions: [branchRecord, ...index.sessions.filter((s) => s.id !== newSessionId)],
+      };
+    });
 
     const agent = await requirePrebuiltAgentForRuntime(agentId);
     await startManagedAgent(agent, newSessionId);
@@ -5276,17 +5305,101 @@ app.put('/protoclaw/prebuilt_sessions/:sessionId/title', express.json(), async (
       return res.status(400).json({ error: 'title is required and must be non-empty' });
     }
 
-    const index = await readSessionIndex(agentId);
-    const sessionIndex = index.sessions.findIndex(s => s.id === sessionId);
-    if (sessionIndex === -1) {
+    await updateSessionIndex(agentId, (index) => {
+      const sessionIndex = index.sessions.findIndex(s => s.id === sessionId);
+      if (sessionIndex === -1) {
+        throw Object.assign(new Error('Session not found'), { statusCode: 404 });
+      }
+      index.sessions[sessionIndex].title = title.trim();
+      index.sessions[sessionIndex].updatedAt = new Date().toISOString();
+      return index;
+    });
+
+    res.json({ ok: true, sessionId, title: title.trim() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/generate_session_title', express.json(), async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.body?.agentId);
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    if (!agentId || !sessionId) {
+      return res.status(400).json({ error: 'agentId and sessionId are required' });
+    }
+
+    const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, agentId);
+    if (!ownerAgentId) {
       return res.status(404).json({ error: 'Session not found' });
     }
 
-    index.sessions[sessionIndex].title = title.trim();
-    index.sessions[sessionIndex].updatedAt = new Date().toISOString();
-    await writeSessionIndex(agentId, index);
+    const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
+    const agentRelativeDir = agent.relativeDir;
+    if (!agentRelativeDir) {
+      return res.status(500).json({ error: 'Agent directory not resolved' });
+    }
 
-    res.json({ ok: true, sessionId, title: title.trim() });
+    const titleMirrorScript = path.join(__dirname, 'scripts', 'run-title-mirror.js');
+    const resultDir = path.join(os.tmpdir(), `title-mirror-${Date.now()}-${randomUUID().slice(0, 8)}`);
+    const resultPath = path.join(resultDir, 'result.json');
+    await fs.mkdir(resultDir, { recursive: true });
+
+    const child = spawn(process.execPath, [titleMirrorScript, agentRelativeDir, ownerAgentId, sessionId, '{}', resultPath], {
+      cwd: __dirname,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: { ...process.env },
+    });
+
+    let stderr = '';
+    const timeoutMs = 120000;
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+    }, timeoutMs);
+
+    child.stderr.on('data', (chunk) => {
+      const text = String(chunk);
+      stderr += text;
+      for (const line of text.split('\n')) {
+        if (line.trim()) console.log(`[title-mirror] ${line.trimEnd()}`);
+      }
+    });
+
+    await new Promise((resolve, reject) => {
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.on('exit', (code) => {
+        clearTimeout(timer);
+        if (code !== 0) {
+          reject(new Error(stderr.trim() || `run-title-mirror exited with code ${code}`));
+          return;
+        }
+        resolve();
+      });
+    });
+
+    const raw = await fs.readFile(resultPath, 'utf8');
+    const result = JSON.parse(raw.trim());
+    await fs.rm(resultDir, { recursive: true, force: true }).catch(() => {});
+
+    const title = typeof result?.title === 'string' ? result.title.trim() : '';
+    if (!title) {
+      return res.status(500).json({ error: 'Title generation returned empty result' });
+    }
+
+    await updateSessionIndex(ownerAgentId, (index) => {
+      const sessionIndex = index.sessions.findIndex(s => s.id === sessionId);
+      if (sessionIndex !== -1) {
+        index.sessions[sessionIndex].title = title;
+        index.sessions[sessionIndex].updatedAt = new Date().toISOString();
+      }
+      return index;
+    });
+
+    res.json({ ok: true, sessionId, title });
   } catch (error) {
     next(error);
   }
@@ -5333,16 +5446,17 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
 
 async function lockExplorationSession(agentId, sessionId, goal, response) {
   try {
-    const index = await readSessionIndex(agentId);
-    const record = index.sessions.find(s => s.id === sessionId);
-    if (!record) return;
-    record.sessionType = 'exploration';
-    record.status = 'locked';
-    record.lockedAt = new Date().toISOString();
-    if (goal) record.goal = goal;
-    record.domains = extractDomainsFromText(response || goal || '');
-    record.updatedAt = new Date().toISOString();
-    await writeSessionIndex(agentId, { ...index });
+    await updateSessionIndex(agentId, (index) => {
+      const record = index.sessions.find(s => s.id === sessionId);
+      if (!record) return index;
+      record.sessionType = 'exploration';
+      record.status = 'locked';
+      record.lockedAt = new Date().toISOString();
+      if (goal) record.goal = goal;
+      record.domains = extractDomainsFromText(response || goal || '');
+      record.updatedAt = new Date().toISOString();
+      return { ...index };
+    });
     console.log(`[lockExploration] Locked session=${sessionId} domains=${record.domains?.join(',') || '(none)'}`);
   } catch (err) {
     console.error(`[lockExploration] Failed for session=${sessionId}:`, err.message);
@@ -5597,24 +5711,22 @@ app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
     const agentId = 'programming-helper';
     const agent = await requirePrebuiltAgentForRuntime(agentId);
 
-    const index = await readSessionIndex(agentId);
-    const record = index.sessions.find(s => s.id === subSessionId);
-    if (!record) {
-      res.status(404).json({ error: `Session ${subSessionId} not found` });
-      return;
-    }
-    if (record.sessionType === 'exploration') {
-      res.status(400).json({ error: 'Cannot resume an exploration session (it is locked)' });
-      return;
-    }
-    if (record.sessionType !== 'sub') {
-      res.status(400).json({ error: `Session ${subSessionId} is not a sub-agent session (type=${record.sessionType})` });
-      return;
-    }
+    await updateSessionIndex(agentId, (index) => {
+      const record = index.sessions.find(s => s.id === subSessionId);
+      if (!record) {
+        throw Object.assign(new Error(`Session ${subSessionId} not found`), { statusCode: 404 });
+      }
+      if (record.sessionType === 'exploration') {
+        throw Object.assign(new Error('Cannot resume an exploration session (it is locked)'), { statusCode: 400 });
+      }
+      if (record.sessionType !== 'sub') {
+        throw Object.assign(new Error(`Session ${subSessionId} is not a sub-agent session (type=${record.sessionType})`), { statusCode: 400 });
+      }
 
-    record.sessionType = 'sub';
-    record.updatedAt = new Date().toISOString();
-    await writeSessionIndex(agentId, { ...index });
+      record.sessionType = 'sub';
+      record.updatedAt = new Date().toISOString();
+      return { ...index };
+    });
 
     console.log(`[resume_sub] Resuming sub-agent session=${subSessionId} message="${message.slice(0, 80)}"`);
 
