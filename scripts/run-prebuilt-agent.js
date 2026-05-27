@@ -251,6 +251,10 @@ async function disposeAgent(exitCode = 0) {
 
   if (agent) {
     if (sessionId) {
+      // 先禁用 step auto-save，再手动做一次最终保存
+      if (typeof agent.disableStepAutoSave === 'function') {
+        agent.disableStepAutoSave();
+      }
       try {
         await agent.saveSession(sessionId, sessionStore);
       } catch (error) {
@@ -626,7 +630,10 @@ async function main() {
   console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${agent.agentId ?? 'unknown'}`);
 
   try {
-    if (typeof agent.startQQBotGateway === 'function') {
+    if (typeof agent.startSelectedIMGateway === 'function') {
+      const channel = await agent.startSelectedIMGateway();
+      console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
+    } else if (typeof agent.startQQBotGateway === 'function') {
       await agent.startQQBotGateway();
       console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
     } else {
@@ -637,7 +644,7 @@ async function main() {
       }
     }
   } catch (error) {
-    console.error('[ProtoClaw Runtime] QQBot Gateway 启动失败，已降级为仅调试运行:', error);
+    console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
   }
 
   const userInput = agent.features?.get?.('user-input');
@@ -649,6 +656,11 @@ async function main() {
       console.log('[ProtoClaw Runtime] ✓ 已恢复会话: ' + sessionId);
     } catch {
       console.log('[ProtoClaw Runtime] 创建新会话: ' + sessionId);
+    }
+    // 启用 step 级自动保存：每个 StepFinish 后自动落盘
+    if (typeof agent.enableStepAutoSave === 'function') {
+      agent.enableStepAutoSave(sessionId, sessionStore);
+      console.log('[ProtoClaw Runtime] ✓ 已启用 step 级自动保存');
     }
   } else {
     console.log('[ProtoClaw Runtime] 当前未绑定对话会话，运行在工作空间首页模式。');

@@ -23,6 +23,7 @@
     "@agentdev/tts-feature": "file:resources/features/agentdev-tts-feature-0.1.0.tgz",
     "@agentdev/visual-feature": "file:resources/features/agentdev-visual-feature-0.1.0.tgz",
     "@agentdev/websearch-feature": "file:resources/features/agentdev-websearch-feature-0.1.0.tgz",
+    "@agentdev/weixin-bot": "file:resources/features/agentdev-weixin-bot-0.1.0.tgz",
     "agentdev": "file:../AgentDev",
     "express": "^4.21.2",
     "marked": "^18.0.4",

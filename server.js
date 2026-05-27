@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { createRequire } from 'module';
 import { ViewerWorker } from 'agentdev';
+import { WeixinApiClient } from '@agentdev/weixin-bot';
 import {
   exportHistoryOnlyHandoffPackage,
   readHandoffPackage,
@@ -32,6 +33,8 @@ const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 const PREBUILT_SESSIONS_ROOT = path.join(USER_DATA_ROOT, 'prebuilt-sessions');
 const PREBUILT_WORKSPACES_ROOT = path.join(USER_DATA_ROOT, 'workspaces');
 const PROJECT_QQBOT_CONFIG_PATH = path.join(__dirname, '.agentdev', 'qqbot.config.json');
+const PROJECT_WEIXIN_CONFIG_PATH = path.join(__dirname, '.agentdev', 'weixin-bot.config.json');
+const PROJECT_IM_WORKSPACE_CONFIG_PATH = path.join(__dirname, '.agentdev', 'im-workspace.config.json');
 const FEATURE_REPOSITORY_ROOT = path.join(__dirname, 'resources', 'features');
 const USER_FEATURE_REPOSITORY_ROOT = path.join(USER_DATA_ROOT, 'user-features');
 const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
@@ -48,6 +51,7 @@ const clawMcp = new ClawMCPServer();
 const managedAgents = new Map();
 const assemblyRuntimeProcesses = new Map();
 const pendingFeatureImports = new Map();
+const weixinBindingSessions = new Map();
 
 function getManagedRuntimeKey(agentId, sessionId = null) {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
@@ -408,6 +412,65 @@ function normalizeQQBotConfig(raw = {}) {
   return config;
 }
 
+function normalizeWeixinConfig(raw = {}) {
+  return {
+    botToken: typeof raw.botToken === 'string' ? raw.botToken.trim() : '',
+    baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl.trim() : '',
+    loginTime: Number.isFinite(raw.loginTime) ? raw.loginTime : null,
+  };
+}
+
+function normalizeIMChannelConfig(raw = {}, defaults = {}) {
+  return {
+    label: typeof raw.label === 'string' && raw.label.trim()
+      ? raw.label.trim()
+      : String(defaults.label || ''),
+    role: typeof raw.role === 'string' && raw.role.trim()
+      ? raw.role.trim()
+      : String(defaults.role || ''),
+    note: typeof raw.note === 'string' ? raw.note.trim() : String(defaults.note || ''),
+  };
+}
+
+function normalizeIMWorkspaceConfig(raw = {}) {
+  const rawChannels = raw && typeof raw.channels === 'object' && raw.channels ? raw.channels : {};
+  const channels = {};
+
+  for (const [channelId, channelValue] of Object.entries(rawChannels)) {
+    if (!channelId) continue;
+    channels[String(channelId)] = normalizeIMChannelConfig(channelValue, {});
+  }
+
+  if (!channels.qq) {
+    channels.qq = normalizeIMChannelConfig({}, {
+      label: 'QQ 当前执行者线路',
+      role: 'executor',
+      note: '',
+    });
+  }
+
+  if (!channels.weixin) {
+    channels.weixin = normalizeIMChannelConfig({}, {
+      label: '微信 接待员线路',
+      role: 'receptionist',
+      note: '',
+    });
+  }
+
+  const selectedChannel = typeof raw.selectedChannel === 'string' && raw.selectedChannel.trim()
+    ? raw.selectedChannel.trim()
+    : 'qq';
+  const receptionistSessionId = typeof raw.receptionistSessionId === 'string'
+    ? sanitizeSessionFragment(raw.receptionistSessionId)
+    : '';
+
+  return {
+    selectedChannel: channels[selectedChannel] ? selectedChannel : 'qq',
+    receptionistSessionId,
+    channels,
+  };
+}
+
 async function readProjectQQBotConfig() {
   try {
     const data = await readJson(PROJECT_QQBOT_CONFIG_PATH);
@@ -422,6 +485,187 @@ async function writeProjectQQBotConfig(rawConfig) {
   await ensureDir(path.dirname(PROJECT_QQBOT_CONFIG_PATH));
   await fs.writeFile(PROJECT_QQBOT_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
   return config;
+}
+
+async function readProjectWeixinConfig() {
+  try {
+    const data = await readJson(PROJECT_WEIXIN_CONFIG_PATH);
+    return normalizeWeixinConfig(data);
+  } catch {
+    return normalizeWeixinConfig({});
+  }
+}
+
+async function readProjectIMWorkspaceConfig() {
+  try {
+    const data = await readJson(PROJECT_IM_WORKSPACE_CONFIG_PATH);
+    return normalizeIMWorkspaceConfig(data);
+  } catch {
+    return normalizeIMWorkspaceConfig({});
+  }
+}
+
+async function writeProjectIMWorkspaceConfig(rawConfig) {
+  const config = normalizeIMWorkspaceConfig(rawConfig);
+  await ensureDir(path.dirname(PROJECT_IM_WORKSPACE_CONFIG_PATH));
+  await fs.writeFile(PROJECT_IM_WORKSPACE_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  return config;
+}
+
+function serializeWeixinBindingState(state = null) {
+  if (!state) {
+    return {
+      pending: false,
+      status: 'idle',
+      qrcodeId: '',
+      qrcodeUrl: '',
+      qrcodeDataUrl: '',
+      error: '',
+      issuedAt: null,
+      confirmedAt: null,
+      sourcePath: PROJECT_WEIXIN_CONFIG_PATH,
+    };
+  }
+
+  return {
+    pending: state.status === 'pending',
+    status: state.status || 'idle',
+    qrcodeId: state.qrcodeId || '',
+    qrcodeUrl: state.qrcodeUrl || '',
+    qrcodeDataUrl: state.qrcodeDataUrl || '',
+    error: state.error || '',
+    issuedAt: state.issuedAt || null,
+    confirmedAt: state.confirmedAt || null,
+    sourcePath: PROJECT_WEIXIN_CONFIG_PATH,
+  };
+}
+
+async function buildIMWorkspaceBundle(agentId = 'qqbot') {
+  const [workspaceConfig, qqConfig, weixinConfig, index] = await Promise.all([
+    readProjectIMWorkspaceConfig(),
+    readProjectQQBotConfig(),
+    readProjectWeixinConfig(),
+    readSessionIndex(agentId).catch(() => ({ sessions: [], activeSessionId: null })),
+  ]);
+
+  const sessions = Array.isArray(index?.sessions)
+    ? index.sessions.map((session) => ({
+        id: cleanSessionText(session?.id),
+        title: cleanSessionText(session?.title) || cleanSessionText(session?.id),
+        updatedAt: cleanSessionText(session?.updatedAt),
+      })).filter((session) => session.id)
+    : [];
+  const selectedSessionId = workspaceConfig.receptionistSessionId || cleanSessionText(index?.activeSessionId);
+  const receptionistSession = sessions.find((session) => session.id === selectedSessionId) || null;
+  const binding = serializeWeixinBindingState(weixinBindingSessions.get(agentId) || null);
+
+  return {
+    workspaceConfig: {
+      ...workspaceConfig,
+      receptionistSessionId: selectedSessionId || '',
+    },
+    qqConfig,
+    weixinConfig: {
+      configured: !!weixinConfig.botToken,
+      baseUrl: weixinConfig.baseUrl || '',
+      loginTime: weixinConfig.loginTime || null,
+      sourcePath: PROJECT_WEIXIN_CONFIG_PATH,
+    },
+    binding,
+    sessions,
+    receptionistSession,
+    qqSourcePath: PROJECT_QQBOT_CONFIG_PATH,
+    workspaceSourcePath: PROJECT_IM_WORKSPACE_CONFIG_PATH,
+  };
+}
+
+async function startWeixinBinding(agentId = 'qqbot') {
+  const client = new WeixinApiClient(PROJECT_WEIXIN_CONFIG_PATH);
+  const qrcodeResponse = await client.getBotQrcode();
+  const qrcodeUrl = WeixinApiClient.resolveQrcodeUrl(qrcodeResponse);
+  const qrcodeDataUrl = await WeixinApiClient.buildQrcodeDataUrl(qrcodeResponse, { width: 320, margin: 2 });
+  const nextState = {
+    status: 'pending',
+    qrcodeId: qrcodeResponse.qrcode,
+    qrcodeUrl,
+    qrcodeDataUrl,
+    issuedAt: new Date().toISOString(),
+    confirmedAt: null,
+    error: '',
+  };
+  weixinBindingSessions.set(agentId, nextState);
+  return serializeWeixinBindingState(nextState);
+}
+
+async function refreshWeixinBinding(agentId = 'qqbot') {
+  const current = weixinBindingSessions.get(agentId) || null;
+  const client = new WeixinApiClient(PROJECT_WEIXIN_CONFIG_PATH);
+  const persisted = normalizeWeixinConfig(client.getPersistedConfig());
+
+  if (!current || !current.qrcodeId) {
+    if (persisted.botToken) {
+      const configured = {
+        status: 'configured',
+        qrcodeId: '',
+        qrcodeUrl: '',
+        qrcodeDataUrl: '',
+        issuedAt: null,
+        confirmedAt: persisted.loginTime ? new Date(persisted.loginTime).toISOString() : null,
+        error: '',
+      };
+      weixinBindingSessions.set(agentId, configured);
+      return serializeWeixinBindingState(configured);
+    }
+    return serializeWeixinBindingState(null);
+  }
+
+  try {
+    const status = await client.getQrcodeStatus(current.qrcodeId);
+    if (status.status === 'confirmed' && status.bot_token) {
+      client.setBotToken(status.bot_token, status.baseurl);
+      const configured = {
+        ...current,
+        status: 'configured',
+        confirmedAt: new Date().toISOString(),
+        error: '',
+      };
+      weixinBindingSessions.set(agentId, configured);
+      return serializeWeixinBindingState(configured);
+    }
+
+    if (status.status === 'expired') {
+      const expired = {
+        ...current,
+        status: 'expired',
+        error: '二维码已过期，请重新生成。',
+      };
+      weixinBindingSessions.set(agentId, expired);
+      return serializeWeixinBindingState(expired);
+    }
+
+    const pending = {
+      ...current,
+      status: 'pending',
+      error: '',
+    };
+    weixinBindingSessions.set(agentId, pending);
+    return serializeWeixinBindingState(pending);
+  } catch (error) {
+    const failed = {
+      ...current,
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+    };
+    weixinBindingSessions.set(agentId, failed);
+    return serializeWeixinBindingState(failed);
+  }
+}
+
+async function clearWeixinBinding(agentId = 'qqbot') {
+  const client = new WeixinApiClient(PROJECT_WEIXIN_CONFIG_PATH);
+  client.clearToken();
+  weixinBindingSessions.delete(agentId);
+  return serializeWeixinBindingState(null);
 }
 
 function normalizeFeatureConfigs(rawConfigs) {
@@ -3916,8 +4160,29 @@ async function getConnectedAgents() {
       if (status.viewerAgentId) {
         managed.runtime_session_id = status.viewerAgentId;
       }
+    } else if (managed.source === 'prebuilt') {
+      managed.status = 'stopped';
+      managed.pid = null;
+      managed.runtime_session_id = null;
+      managed.message_count = 0;
+      managed.pending_input_count = null;
+      managed.connected = false;
+      managed.callActive = false;
     }
   }
+
+  // 查询每个 connected agent 的 call 状态（从 ViewerWorker notification）
+  await Promise.all(connectedAgents
+    .filter((agent) => agent.connected && agent.runtime_session_id)
+    .map(async (agent) => {
+      try {
+        const notif = await readViewerJson(`/api/agents/${encodeURIComponent(agent.runtime_session_id)}/notification`);
+        agent.callActive = notif?.callActive === true;
+      } catch {
+        agent.callActive = false;
+      }
+    })
+  );
 
   return connectedAgents;
 }
@@ -3972,10 +4237,14 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
   const requestedSessionId = typeof selectedSessionId === 'string' && selectedSessionId
     ? sanitizeSessionFragment(selectedSessionId)
     : (selectedSessionId === null ? null : undefined);
+  let preferredSessionId = null;
+  if (requestedSessionId === undefined && sanitizeSessionFragment(agent?.id) === 'qqbot') {
+    preferredSessionId = (await readProjectIMWorkspaceConfig().catch(() => ({ receptionistSessionId: '' })))?.receptionistSessionId || null;
+  }
   const existing = getAgentRuntime(agent.id, requestedSessionId);
   const resolvedSessionId = requestedSessionId !== undefined
     ? requestedSessionId
-    : (existing?.selectedSessionId || agent.workspace_sessions?.activeSessionId || null);
+    : (preferredSessionId || existing?.selectedSessionId || agent.workspace_sessions?.activeSessionId || null);
 
   if (resolvedSessionId && !runtimeOptions?.extraEnv?.PROTOCLAW_HANDOFF_PATH) {
     try {
@@ -4852,6 +5121,72 @@ app.put('/protoclaw/qqbot_config', express.json(), async (req, res, next) => {
       config,
       configured: !!(config.appId && config.clientSecret),
       sourcePath: PROJECT_QQBOT_CONFIG_PATH,
+      savedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/protoclaw/im_workspace_bundle', async (_req, res, next) => {
+  try {
+    const bundle = await buildIMWorkspaceBundle('qqbot');
+    res.json(bundle);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/protoclaw/im_workspace_bundle', express.json(), async (req, res, next) => {
+  try {
+    const workspaceConfig = await writeProjectIMWorkspaceConfig(req.body?.workspaceConfig || {});
+    const qqConfig = await writeProjectQQBotConfig(req.body?.qqConfig || {});
+    const bundle = await buildIMWorkspaceBundle('qqbot');
+    res.json({
+      ...bundle,
+      workspaceConfig,
+      qqConfig,
+      savedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/im_workspace_bundle/weixin_bind/start', async (_req, res, next) => {
+  try {
+    const binding = await startWeixinBinding('qqbot');
+    const bundle = await buildIMWorkspaceBundle('qqbot');
+    res.json({
+      ...bundle,
+      binding,
+      savedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/protoclaw/im_workspace_bundle/weixin_bind/status', async (_req, res, next) => {
+  try {
+    const binding = await refreshWeixinBinding('qqbot');
+    const bundle = await buildIMWorkspaceBundle('qqbot');
+    res.json({
+      ...bundle,
+      binding,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/im_workspace_bundle/weixin_logout', async (_req, res, next) => {
+  try {
+    const binding = await clearWeixinBinding('qqbot');
+    const bundle = await buildIMWorkspaceBundle('qqbot');
+    res.json({
+      ...bundle,
+      binding,
       savedAt: new Date().toISOString(),
     });
   } catch (error) {

@@ -1478,6 +1478,121 @@ async function ensureQQBotConfigLoaded(force = false) {
   return qqbotConfigRequest;
 }
 
+function normalizeIMWorkspaceBundleData(raw = {}) {
+  const workspaceConfig = raw?.workspaceConfig || {};
+  const channels = workspaceConfig?.channels && typeof workspaceConfig.channels === 'object'
+    ? workspaceConfig.channels
+    : {};
+  return {
+    workspaceConfig: {
+      selectedChannel: typeof workspaceConfig.selectedChannel === 'string' && workspaceConfig.selectedChannel
+        ? workspaceConfig.selectedChannel
+        : 'qq',
+      receptionistSessionId: typeof workspaceConfig.receptionistSessionId === 'string'
+        ? workspaceConfig.receptionistSessionId
+        : '',
+      channels: {
+        qq: {
+          label: typeof channels?.qq?.label === 'string' ? channels.qq.label : '',
+          role: typeof channels?.qq?.role === 'string' ? channels.qq.role : '',
+          note: typeof channels?.qq?.note === 'string' ? channels.qq.note : '',
+        },
+        weixin: {
+          label: typeof channels?.weixin?.label === 'string' ? channels.weixin.label : '',
+          role: typeof channels?.weixin?.role === 'string' ? channels.weixin.role : '',
+          note: typeof channels?.weixin?.note === 'string' ? channels.weixin.note : '',
+        },
+      },
+    },
+    qqConfig: normalizeQQBotConfigData(raw?.qqConfig || {}),
+    weixinConfig: {
+      configured: !!raw?.weixinConfig?.configured,
+      baseUrl: typeof raw?.weixinConfig?.baseUrl === 'string' ? raw.weixinConfig.baseUrl : '',
+      loginTime: raw?.weixinConfig?.loginTime || null,
+      sourcePath: typeof raw?.weixinConfig?.sourcePath === 'string' ? raw.weixinConfig.sourcePath : '',
+    },
+    binding: {
+      pending: !!raw?.binding?.pending,
+      status: typeof raw?.binding?.status === 'string' ? raw.binding.status : 'idle',
+      qrcodeId: typeof raw?.binding?.qrcodeId === 'string' ? raw.binding.qrcodeId : '',
+      qrcodeUrl: typeof raw?.binding?.qrcodeUrl === 'string' ? raw.binding.qrcodeUrl : '',
+      qrcodeDataUrl: typeof raw?.binding?.qrcodeDataUrl === 'string' ? raw.binding.qrcodeDataUrl : '',
+      error: typeof raw?.binding?.error === 'string' ? raw.binding.error : '',
+      issuedAt: raw?.binding?.issuedAt || null,
+      confirmedAt: raw?.binding?.confirmedAt || null,
+      sourcePath: typeof raw?.binding?.sourcePath === 'string' ? raw.binding.sourcePath : '',
+    },
+    sessions: Array.isArray(raw?.sessions) ? raw.sessions.map((session) => ({
+      id: typeof session?.id === 'string' ? session.id : '',
+      title: typeof session?.title === 'string' ? session.title : (typeof session?.id === 'string' ? session.id : ''),
+      updatedAt: session?.updatedAt || null,
+    })).filter((session) => session.id) : [],
+    receptionistSession: raw?.receptionistSession && typeof raw.receptionistSession === 'object'
+      ? {
+          id: typeof raw.receptionistSession.id === 'string' ? raw.receptionistSession.id : '',
+          title: typeof raw.receptionistSession.title === 'string' ? raw.receptionistSession.title : '',
+          updatedAt: raw.receptionistSession.updatedAt || null,
+        }
+      : null,
+    qqSourcePath: typeof raw?.qqSourcePath === 'string' ? raw.qqSourcePath : '',
+    workspaceSourcePath: typeof raw?.workspaceSourcePath === 'string' ? raw.workspaceSourcePath : '',
+    savedAt: raw?.savedAt || null,
+  };
+}
+
+function isIMWorkspaceConfigEditor(block) {
+  return block?.configEditor?.type === 'im-workspace';
+}
+
+function getIMWorkspaceDraft() {
+  return imWorkspaceState.draft || imWorkspaceState.data || normalizeIMWorkspaceBundleData();
+}
+
+async function ensureIMWorkspaceLoaded(force = false) {
+  if (imWorkspaceRequest && !force) {
+    return imWorkspaceRequest;
+  }
+
+  if (!force && imWorkspaceState.data && !imWorkspaceState.error) {
+    return imWorkspaceState.data;
+  }
+
+  imWorkspaceState.loading = true;
+  imWorkspaceState.error = '';
+  if (force) {
+    imWorkspaceState.data = null;
+    imWorkspaceState.draft = null;
+  }
+  renderCurrentMainView();
+
+  imWorkspaceRequest = fetch('/protoclaw/im_workspace_bundle')
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(await response.text().catch(() => 'Failed to load IM workspace config'));
+      }
+      return response.json();
+    })
+    .then((payload) => {
+      const bundle = normalizeIMWorkspaceBundleData(payload || {});
+      imWorkspaceState.data = bundle;
+      imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+      imWorkspaceState.savedAt = bundle.savedAt || null;
+      imWorkspaceState.error = '';
+      return bundle;
+    })
+    .catch((error) => {
+      imWorkspaceState.error = error && error.message ? error.message : String(error);
+      throw error;
+    })
+    .finally(() => {
+      imWorkspaceState.loading = false;
+      imWorkspaceRequest = null;
+      renderCurrentMainView();
+    });
+
+  return imWorkspaceRequest;
+}
+
 function shouldRenderWorkspaceSurface(agent = getCurrentAgentRecord()) {
   const ui = getCurrentUnitUi(agent);
   if (!ui) {
@@ -2114,7 +2229,7 @@ function renderWorkspaceForm(agent, block) {
   ].join('');
 }
 
-function renderQQBotConfigField(field, draft) {
+function renderQQBotConfigField(field, draft, updateHandler = 'window.updateQQBotConfigDraft') {
   const name = String(field?.name || '').trim();
   if (!name) return '';
 
@@ -2126,7 +2241,7 @@ function renderQQBotConfigField(field, draft) {
       '<label class="workspace-config-field checkbox">',
       '<span class="workspace-config-label">' + escapeHtml(label) + '</span>',
       '<span class="workspace-config-checkbox">',
-      '<input type="checkbox" ' + (value ? 'checked ' : '') + 'onchange="window.updateQQBotConfigDraft(&quot;' + escapeHtml(name) + '&quot;, this.checked)">',
+      '<input type="checkbox" ' + (value ? 'checked ' : '') + 'onchange="' + updateHandler + '(&quot;' + escapeHtml(name) + '&quot;, this.checked)">',
       '<span>' + escapeHtml(label) + '</span>',
       '</span>',
       '</label>',
@@ -2136,8 +2251,50 @@ function renderQQBotConfigField(field, draft) {
   return [
     '<label class="workspace-config-field">',
     '<span class="workspace-config-label">' + escapeHtml(label) + '</span>',
-    '<input class="workspace-config-input" type="' + escapeHtml(field.type || 'text') + '" value="' + escapeHtml(String(value ?? '')) + '" oninput="window.updateQQBotConfigDraft(&quot;' + escapeHtml(name) + '&quot;, this.value)">',
+    '<input class="workspace-config-input" type="' + escapeHtml(field.type || 'text') + '" value="' + escapeHtml(String(value ?? '')) + '" oninput="' + updateHandler + '(&quot;' + escapeHtml(name) + '&quot;, this.value)">',
     '</label>',
+  ].join('');
+}
+
+function renderIMWorkspaceTextField(label, value, onInput) {
+  return [
+    '<label class="workspace-config-field">',
+    '<span class="workspace-config-label">' + escapeHtml(label) + '</span>',
+    '<input class="workspace-config-input" type="text" value="' + escapeHtml(String(value ?? '')) + '" oninput="' + onInput + '">',
+    '</label>',
+  ].join('');
+}
+
+function renderIMWorkspaceSelectField(label, value, options, onChange) {
+  const optionsHtml = options.map((option) => {
+    const optionValue = String(option?.value ?? '');
+    const optionLabel = String(option?.label ?? optionValue);
+    const selected = String(value || '') === optionValue ? ' selected' : '';
+    return '<option value="' + escapeHtml(optionValue) + '"' + selected + '>' + escapeHtml(optionLabel) + '</option>';
+  }).join('');
+
+  return [
+    '<label class="workspace-config-field">',
+    '<span class="workspace-config-label">' + escapeHtml(label) + '</span>',
+    '<select class="workspace-form-select" onchange="' + onChange + '">',
+    optionsHtml,
+    '</select>',
+    '</label>',
+  ].join('');
+}
+
+function renderIMWorkspaceInlineSelect(value, options, onChange) {
+  const optionsHtml = options.map((option) => {
+    const optionValue = String(option?.value ?? '');
+    const optionLabel = String(option?.label ?? optionValue);
+    const selected = String(value || '') === optionValue ? ' selected' : '';
+    return '<option value="' + escapeHtml(optionValue) + '"' + selected + '>' + escapeHtml(optionLabel) + '</option>';
+  }).join('');
+
+  return [
+    '<select class="workspace-form-select im-inline-select" onchange="' + onChange + '">',
+    optionsHtml,
+    '</select>',
   ].join('');
 }
 
@@ -2165,53 +2322,108 @@ function renderFlowEditorBlock(agent, block) {
   ].join('');
 }
 
-function renderQQBotConfigEditor(block) {
+function renderIMWorkspaceConfigEditor(block) {
   const editor = block?.configEditor || {};
-  const title = localizeWorkspaceValue(editor.title, t('qqbot_config_title'));
-  const desc = localizeWorkspaceValue(editor.description, t('qqbot_config_desc'));
-  const draft = getQQBotConfigDraft();
-  const configured = !!(draft.appId && draft.clientSecret);
-  const badgeLabel = configured ? t('qqbot_config_ready') : t('qqbot_config_incomplete');
-  const badgeClass = configured ? 'ready' : 'warn';
+  const draft = getIMWorkspaceDraft();
+  const selectedChannel = draft.workspaceConfig?.selectedChannel || 'qq';
+  const qqConfigured = !!(draft.qqConfig?.appId && draft.qqConfig?.clientSecret);
+  const weixinConfigured = !!draft.weixinConfig?.configured;
+  const bindingStatus = draft.binding?.status || 'idle';
+  const receptionistOptions = [
+    { value: 'qq', label: 'QQ' },
+    { value: 'weixin', label: 'Weixin' },
+  ];
   const fields = Array.isArray(editor.fields) ? editor.fields : [];
 
-  if (!qqbotConfigState.data && !qqbotConfigState.loading && !qqbotConfigState.error) {
-    ensureQQBotConfigLoaded().catch((error) => {
-      console.error('Failed to load qqbot config:', error);
+  if (!imWorkspaceState.data && !imWorkspaceState.loading && !imWorkspaceState.error) {
+    ensureIMWorkspaceLoaded().catch((error) => {
+      console.error('Failed to load IM workspace config:', error);
     });
   }
 
-  const statusText = qqbotConfigState.error
-    ? qqbotConfigState.error
-    : qqbotConfigState.saving
-      ? t('qqbot_config_saving')
-      : qqbotConfigState.loading
-        ? t('qqbot_config_loading')
-        : qqbotConfigState.savedAt
-          ? `${t('qqbot_config_saved_at')}: ${formatWorkspaceDate(qqbotConfigState.savedAt)}`
-          : t('qqbot_config_apply_hint');
+  const statusText = imWorkspaceState.error
+    ? imWorkspaceState.error
+    : imWorkspaceState.binding
+      ? t('im_workspace_binding')
+      : imWorkspaceState.polling
+        ? t('im_workspace_polling')
+        : imWorkspaceState.saving
+          ? t('im_workspace_saving')
+          : imWorkspaceState.loading
+            ? t('im_workspace_loading')
+            : imWorkspaceState.savedAt
+              ? `${t('im_workspace_auto_saved')}: ${formatWorkspaceDate(imWorkspaceState.savedAt)}`
+              : t('im_workspace_start_hint');
+
+  const weixinBadge = weixinConfigured
+    ? t('im_workspace_bound')
+    : bindingStatus === 'pending'
+      ? t('im_workspace_pending')
+      : bindingStatus === 'expired'
+        ? t('im_workspace_expired')
+        : t('im_workspace_not_bound');
+  const qrcodeHtml = draft.binding?.qrcodeDataUrl
+    ? '<div class="im-workspace-qrcode"><img src="' + escapeHtml(draft.binding.qrcodeDataUrl) + '" alt="Weixin QR code"><div class="workspace-form-note">' + escapeHtml(t('im_workspace_weixin_qrcode_hint')) + '</div></div>'
+    : '';
+  const sessionsHtml = draft.sessions.length > 0
+    ? '<div class="workspace-history-list">' + draft.sessions.map((session) => {
+        const isActive = String(draft.workspaceConfig?.receptionistSessionId || '') === String(session.id);
+        const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
+        return [
+          '<div class="workspace-history-item' + (isActive ? ' active' : '') + '">',
+          '<div class="workspace-history-main">',
+          '<div class="workspace-history-title-row">',
+          '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
+          (isActive ? '<span class="workspace-history-active">当前</span>' : ''),
+          '</div>',
+          '<div class="workspace-history-meta">' + escapeHtml(session.updatedAt ? formatWorkspaceDate(session.updatedAt) : session.id) + '</div>',
+          '</div>',
+          '<div class="workspace-history-side">',
+          '<div class="workspace-actions stacked">',
+          '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.launchReceptionistSession(&quot;' + escapeHtml(session.id) + '&quot;)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+          '</div>',
+          '</div>',
+          '</div>',
+        ].join('');
+      }).join('') + '</div>'
+    : '<div class="workspace-form-note">' + escapeHtml(t('im_workspace_no_session')) + '</div>';
 
   return [
-    '<div class="workspace-config-panel">',
-    '<div class="workspace-config-header">',
-    '<div>',
-    '<div class="workspace-config-title">' + escapeHtml(title) + '</div>',
-    '<div class="workspace-config-desc">' + escapeHtml(desc) + '</div>',
-    '</div>',
-    '<span class="workspace-config-badge ' + badgeClass + '">' + escapeHtml(badgeLabel) + '</span>',
-    '</div>',
+    '<div class="im-workspace-channel-grid">',
+    '<section class="im-workspace-channel-card">',
+    '<div class="im-workspace-channel-head"><div class="workspace-section-title">' + escapeHtml(t('im_workspace_qq_section')) + '</div><span class="workspace-config-badge ' + (qqConfigured ? 'ready' : 'warn') + '">' + escapeHtml(qqConfigured ? t('qqbot_config_ready') : t('qqbot_config_incomplete')) + '</span></div>',
     '<div class="workspace-config-grid">',
-    fields.map((field) => renderQQBotConfigField(field, draft)).join(''),
+    fields.map((field) => renderQQBotConfigField(field, draft.qqConfig || {}, 'window.updateIMQQConfigDraft')).join(''),
     '</div>',
-    '<div class="workspace-config-meta">',
-    qqbotConfigState.sourcePath ? '<div>' + escapeHtml(t('qqbot_config_source')) + ': ' + escapeHtml(qqbotConfigState.sourcePath) + '</div>' : '',
+    '</section>',
+    '<section class="im-workspace-channel-card">',
+    '<div class="im-workspace-channel-head"><div class="workspace-section-title">' + escapeHtml(t('im_workspace_weixin_section')) + '</div><span class="workspace-config-badge ' + (weixinConfigured ? 'ready' : (bindingStatus === 'pending' ? 'warn' : 'warn')) + '">' + escapeHtml(weixinBadge) + '</span></div>',
+    '<div class="workspace-actions">',
+    '<button class="workspace-action secondary" type="button" onclick="window.startWeixinBinding()">' + escapeHtml(t('im_workspace_start_weixin_bind')) + '</button>',
+    '<button class="workspace-action secondary" type="button" onclick="window.refreshWeixinBinding()">' + escapeHtml(t('im_workspace_refresh_weixin_bind')) + '</button>',
+    '<button class="workspace-action secondary" type="button" onclick="window.logoutWeixinBinding()">' + escapeHtml(t('im_workspace_logout_weixin')) + '</button>',
     '</div>',
-    '<div class="workspace-config-actions">',
-    '<button class="workspace-action" type="button" onclick="window.saveQQBotConfig()">' + escapeHtml(t('qqbot_config_save')) + '</button>',
-    '<button class="workspace-action" type="button" onclick="window.reloadQQBotConfig()">' + escapeHtml(t('qqbot_config_reload')) + '</button>',
+    qrcodeHtml,
+    '</section>',
+    '</div>',
+    '<section class="workspace-section">',
+    '<div class="workspace-section-header">',
+    '<div>',
+    '<div class="workspace-section-title">' + escapeHtml(t('im_workspace_identity_title')) + '</div>',
+    '<div class="workspace-section-desc">' + escapeHtml(t('im_workspace_receptionist_hint')) + '</div>',
+    '</div>',
+    '<div class="workspace-actions">',
+    renderIMWorkspaceInlineSelect(
+      selectedChannel,
+      receptionistOptions,
+      'window.updateIMWorkspaceField(&quot;workspaceConfig.selectedChannel&quot;, this.value)',
+    ),
+    '<button class="workspace-action secondary" type="button" onclick="window.createReceptionistSession()">' + escapeHtml(t('im_workspace_new_chat')) + '</button>',
+    '</div>',
+    '</div>',
+    sessionsHtml,
     '<div class="workspace-config-status">' + escapeHtml(statusText) + '</div>',
-    '</div>',
-    '</div>',
+    '</section>',
   ].join('');
 }
 
@@ -2251,7 +2463,7 @@ function renderWorkspaceStatusGrid(agent, block) {
   const sessions = getWorkspaceSessions(agent);
   const summary = sessions.find((session) => session.id === (agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId)) || sessions[0] || null;
   const connected = agent ? (agent.connected !== false ? t('status_connected') : t('status_disconnected')) : t('status_no_agent');
-  const configDraft = getQQBotConfigDraft();
+  const imDraft = getIMWorkspaceDraft();
   const directorySummary = getDirectorySummaryData(agent, block);
   const canOpenChat = canEnterWorkspaceChat(agent);
   const cardsHtml = [
@@ -2268,11 +2480,15 @@ function renderWorkspaceStatusGrid(agent, block) {
             : (directorySummary.error || 'Not ready'),
         }
       : null,
-    isQQBotConfigEditor(block)
+    isIMWorkspaceConfigEditor(block)
       ? {
           label: t('workspace_live_config'),
-          value: configDraft.appId && configDraft.clientSecret ? t('qqbot_config_ready') : t('qqbot_config_incomplete'),
-          note: configDraft.accountId || t('qqbot_config_apply_hint'),
+          value: imDraft.workspaceConfig?.selectedChannel === 'weixin'
+            ? (imDraft.weixinConfig?.configured ? t('im_workspace_bound') : t('im_workspace_not_bound'))
+            : (imDraft.qqConfig?.appId && imDraft.qqConfig?.clientSecret ? t('qqbot_config_ready') : t('qqbot_config_incomplete')),
+          note: imDraft.workspaceConfig?.selectedChannel === 'weixin'
+            ? (imDraft.workspaceConfig?.channels?.weixin?.label || t('im_workspace_weixin_section'))
+            : (imDraft.workspaceConfig?.channels?.qq?.label || t('im_workspace_qq_section')),
         }
       : null,
   ].filter(Boolean).map((card) => (
@@ -2290,7 +2506,7 @@ function renderWorkspaceStatusGrid(agent, block) {
     '</div>',
     '<div class="workspace-grid">' + cardsHtml + '</div>',
     directorySummary ? renderDirectorySummaryPanel(agent, block) : '',
-    isQQBotConfigEditor(block) ? renderQQBotConfigEditor(block) : '',
+    isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : '',
     '</section>',
   ].join('');
 
@@ -5850,7 +6066,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'feature-repository') return renderFeatureRepositoryBlock(agent, block);
   if (block.type === 'workspace-artifacts') return renderWorkspaceArtifactsBlock(agent, block);
   if (block.type === 'project-docset') return renderProjectDocsetBlock(agent, block);
-  if (block.type === 'config-editor') return renderQQBotConfigEditor(block);
+  if (block.type === 'config-editor') return isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : '';
   if (block.type === 'flow-editor') return renderFlowEditorBlock(agent, block);
   return '';
 }
@@ -8478,12 +8694,6 @@ function getToolDisplayName(toolName) {
 }
 
 function getAgentRuntimeId(agent) {
-  if (isWorkspaceHostUnit(agent)) {
-    return agent.id;
-  }
-  if (agent?.source === 'prebuilt' && agent?.active_workspace_session_form_id === 'assembly-form' && (agent.runtime_session_id || agent.runtimeSessionId)) {
-    return agent.id;
-  }
   return agent.runtime_session_id || agent.runtimeSessionId || agent.id;
 }
 

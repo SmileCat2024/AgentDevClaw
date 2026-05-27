@@ -8,11 +8,12 @@
 import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from 'agentdev';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { QQBotFeature } from '@agentdev/qqbot-feature';
+import { WeixinBot } from '@agentdev/weixin-bot';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -25,6 +26,12 @@ const DEFAULT_QQBOT_CONFIG_CANDIDATES = [
   join(PROTOCLAW_ROOT, '.agentdev', 'qqbot.config.json'),
   join(PROTOCLAW_ROOT, '..', 'AgentDev', 'config', 'qqbot.config.json'),
 ];
+const DEFAULT_WEIXIN_CONFIG_CANDIDATES = [
+  join(PROTOCLAW_ROOT, '.agentdev', 'weixin-bot.config.json'),
+];
+const DEFAULT_IM_WORKSPACE_CONFIG_CANDIDATES = [
+  join(PROTOCLAW_ROOT, '.agentdev', 'im-workspace.config.json'),
+];
 
 function resolveQQBotConfigPath(explicitPath) {
   if (explicitPath) {
@@ -32,6 +39,43 @@ function resolveQQBotConfigPath(explicitPath) {
   }
 
   return DEFAULT_QQBOT_CONFIG_CANDIDATES.find(path => existsSync(path));
+}
+
+function resolveWeixinConfigPath(explicitPath) {
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  return DEFAULT_WEIXIN_CONFIG_CANDIDATES.find(path => existsSync(path)) || DEFAULT_WEIXIN_CONFIG_CANDIDATES[0];
+}
+
+function resolveIMWorkspaceConfigPath(explicitPath) {
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  return DEFAULT_IM_WORKSPACE_CONFIG_CANDIDATES.find(path => existsSync(path)) || DEFAULT_IM_WORKSPACE_CONFIG_CANDIDATES[0];
+}
+
+function readIMWorkspaceConfig(configPath) {
+  try {
+    const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+    const channels = raw && typeof raw.channels === 'object' && raw.channels ? raw.channels : {};
+    const selectedChannel = typeof raw.selectedChannel === 'string' && channels[raw.selectedChannel]
+      ? raw.selectedChannel
+      : 'qq';
+    return {
+      selectedChannel,
+      receptionistSessionId: typeof raw.receptionistSessionId === 'string' ? raw.receptionistSessionId.trim() : '',
+      channels,
+    };
+  } catch {
+    return {
+      selectedChannel: 'qq',
+      receptionistSessionId: '',
+      channels: {},
+    };
+  }
 }
 
 /**
@@ -42,6 +86,8 @@ function resolveQQBotConfigPath(explicitPath) {
  */
 export class QQBotProgrammingHelperAgent extends BasicAgent {
   qqbotFeature;
+  weixinBotFeature;
+  imWorkspaceConfigPath;
 
   constructor(config = {}) {
     super({
@@ -52,6 +98,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       ])),
     });
 
+    this.imWorkspaceConfigPath = resolveIMWorkspaceConfigPath(config.imWorkspaceConfigPath);
     this.qqbotFeature = new QQBotFeature({
       appId: config.appId,
       clientSecret: config.clientSecret,
@@ -60,6 +107,11 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       markdownSupport: config.markdownSupport,
     });
     this.use(this.qqbotFeature);
+
+    this.weixinBotFeature = new WeixinBot({
+      configPath: resolveWeixinConfigPath(config.weixinConfigPath),
+    });
+    this.use(this.weixinBotFeature);
 
     this.use(new TodoFeature({
       reminderTemplate: TODO_REMINDER_PROMPT_PATH,
@@ -77,6 +129,21 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     await this.qqbotFeature.startGateway(this);
   }
 
+  async startWeixinBotGateway() {
+    await this.weixinBotFeature.startGateway(this);
+  }
+
+  async startSelectedIMGateway() {
+    const workspaceConfig = readIMWorkspaceConfig(this.imWorkspaceConfigPath);
+    if (workspaceConfig.selectedChannel === 'weixin') {
+      await this.startWeixinBotGateway();
+      return 'weixin';
+    }
+
+    await this.startQQBotGateway();
+    return 'qq';
+  }
+
   async onInitiate(ctx) {
     await super.onInitiate(ctx);
 
@@ -84,7 +151,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     this.setSystemPrompt(new TemplateComposer()
       .add({ file: SYSTEM_PROMPT_PATH })
       .add('\n\n## 身份设定\n\n')
-      .add('你是一个专业的编程助手，擅长代码编写、调试和优化。通过 QQ 与用户交流。')
+      .add('你是一个专业的编程助手，擅长代码编写、调试和优化。你通过当前被选中的 IM 线路与用户交流。')
       .add('\n\n## 技能（Skills）\n\n')
       .add('当用户要求你执行任务时，检查是否有任何可用的技能匹配。技能提供专门的能力和领域知识。你拥有如下技能，可使用 invoke_skill 工具激活，以展开技能的详细介绍。\n')
       .add({ skills: '- **{{name}}**: {{description}}' })

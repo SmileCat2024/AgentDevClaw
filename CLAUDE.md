@@ -79,6 +79,117 @@ npm start
 - `AGENTDEV_UDS_PATH`: ViewerWorker UDS / named pipe
 - `AGENTDEV_DEBUG_TRANSPORT`: 预制 runtime 启动时使用 `viewer-worker`
 
+## 仓库边界与依赖来源
+
+这一节非常重要。后续 agent 如果不先读清这里，最容易出现“改错仓库、改了安装产物、把 feature 来源搞混”的问题。
+
+### 1. 两个仓库的角色
+
+- [D:\code\AgentDevClaw](D:/code/AgentDevClaw) 是产品壳层仓库。
+  这里负责 Web UI、预制 agent、runtime 托管、ProtoClaw 服务端、以及对外消费 `agentdev` 与若干 feature 包。
+- [D:\code\AgentDev](D:/code/AgentDev) 是 `agentdev` 框架仓库。
+  这里负责框架本体、ViewerWorker、DebugHub、核心通知系统，以及部分独立 feature 包源码。
+
+### 2. `agentdev` 本体如何接入 Claw
+
+- Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里，`agentdev` 依赖是 `file:../AgentDev`。
+- 因此 [node_modules/agentdev](/D:/code/AgentDevClaw/node_modules/agentdev) 在当前环境里是一个 `junction`，直接指向 [D:\code\AgentDev](D:/code/AgentDev)。
+- 结论：
+  任何“框架本体”改动都必须在 [D:\code\AgentDev](D:/code/AgentDev) 的源码里改。
+  不能把修复只留在 Claw 侧的 `node_modules/agentdev/dist`。
+  正确流程是：改 [D:\code\AgentDev](D:/code/AgentDev) 源码，然后在那边重建 `dist`，再让 Claw 侧消费同步后的结果。
+
+### 3. feature 的三种来源必须严格区分
+
+#### A. `AgentDev/packages/*` 中的源码 feature
+
+这类 feature 的权威编辑位置在 [D:\code\AgentDev\packages](D:/code/AgentDev/packages)。
+
+当前至少包括：
+
+- [D:\code\AgentDev\packages\qqbot-feature](D:/code/AgentDev/packages/qqbot-feature)
+- [D:\code\AgentDev\packages\weixin-bot](D:/code/AgentDev/packages/weixin-bot)
+- 以及其他框架侧维护的 feature 包
+
+规则：
+
+- 如果问题属于这些 feature 的实现本身，要在对应 `packages/*` 源码目录里改。
+- 改完后应在该源码包或框架侧完成构建，再由 Claw 消费结果。
+- 不要直接把补丁只打在 Claw 侧安装出来的 `node_modules/@agentdev/*` 上。
+
+#### B. Claw 仓库直接依赖的 tgz feature 包
+
+Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里有多项依赖来自：
+
+- [resources/features](/D:/code/AgentDevClaw/resources/features)
+
+例如：
+
+- `@agentdev/qqbot-feature`
+- `@agentdev/weixin-bot`
+- `@agentdev/audit-feature`
+- `@agentdev/websearch-feature`
+
+这些 tgz 包在 Claw 仓库里承担“可直接安装、可直接发布消费”的角色。
+
+规则：
+
+- Claw 侧可以继续依赖 tgz 包。
+- 但凡进入 Claw 仓库并被当作内建依赖使用的 feature，应该具有直接面向发布的形态。
+- 同时，这些 feature 如果属于框架侧维护资产，必须在 [D:\code\AgentDev\packages](D:/code/AgentDev/packages) 或等价源码目录中留存一份源码版本，不能只剩 tgz 和安装产物。
+
+#### C. Claw 仓库自己的本地 feature 与 feature 仓库内容
+
+这类内容不是 `agentdev` npm 依赖包本身，要和上面两类区分开。
+
+1. Claw 自带本地 feature
+
+- [local-features](/D:/code/AgentDevClaw/local-features)
+
+例如：
+
+- [local-features/flow/src/index.ts](/D:/code/AgentDevClaw/local-features/flow/src/index.ts)
+- [local-features/feature-dev/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-dev/src/index.ts)
+
+这类 feature 属于 Claw 项目自身实现，权威修改点就在 Claw 仓库。
+
+2. feature 仓库 / 用户仓库 / 导入仓库内容
+
+- [resources/features](/D:/code/AgentDevClaw/resources/features) 中的发布包集合
+- 用户工作区、导入结果、Feature Repository UI 中展示的可安装 feature
+
+这类内容更多是“被管理、被分发、被装配”的对象，不等同于当前 Claw 运行时直接维护的源码包。
+
+### 4. 预制 agent 与 feature 实现不要混为一谈
+
+例如 [prebuilt-agents/official/qqbot/agent.js](/D:/code/AgentDevClaw/prebuilt-agents/official/qqbot/agent.js)：
+
+- 它是 Claw 侧的预制 agent 定义与装配入口。
+- 它负责把 `QQBotFeature`、`WeixinBot`、`TodoFeature` 等挂到 agent 上。
+- 但它不是这些 feature 的实现源码归属地。
+
+判断规则：
+
+- 如果问题是“这个 agent 怎么组合 feature、怎么选线路、怎么启动 gateway”，看 Claw 预制 agent。
+- 如果问题是“QQ/微信 feature 本身的行为、协议、网关循环、消息处理有 bug”，看 feature 源码包。
+- 如果问题是“通知、DebugHub、ViewerWorker、Agent 生命周期、框架级 call 状态”有 bug，看 `AgentDev` 框架本体。
+
+### 5. 禁止的做法
+
+- 不要把框架修复只留在 Claw 侧的 `node_modules/agentdev/dist`。
+- 不要把 feature 修复只留在 Claw 侧的 `node_modules/@agentdev/*`。
+- 不要因为 Claw 当前能跑起来，就把安装产物误当成权威源码。
+- 不要混淆“Claw 自带本地 feature”“Claw 依赖的 tgz feature”“AgentDev/packages 下的 feature 源码”“feature 仓库里的可安装 feature”这四层。
+
+### 6. 推荐修改流程
+
+1. 先判断问题属于哪一层：
+   框架本体 / 框架侧源码 feature / Claw 本地 feature / Claw 预制 agent 装配 / Claw 消费的 tgz 包。
+2. 在权威源码位置修改。
+3. 在对应仓库完成构建或打包。
+4. 再回到 Claw 验证消费结果。
+5. 如果 Claw 侧只是消费方，避免在消费层留下无法回溯到源码的临时补丁。
+
 ## 系统总览
 
 ### 1. 服务端

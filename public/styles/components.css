@@ -2053,6 +2053,131 @@ body[data-theme="light"] .feature-project-session-item {
   line-height: 1.6;
 }
 
+.im-workspace-top-grid {
+  margin-top: 4px;
+}
+
+.im-inline-select {
+  min-width: 140px;
+  max-width: 180px;
+}
+
+.im-workspace-channel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.im-workspace-channel-card {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.im-workspace-channel-card.selected {
+  border-color: rgba(99, 145, 255, 0.45);
+  background: rgba(99, 145, 255, 0.08);
+}
+
+.im-workspace-channel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.im-workspace-qrcode {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.im-workspace-qrcode img {
+  width: min(100%, 320px);
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: #fff;
+  padding: 10px;
+}
+
+body[data-theme="light"] .im-workspace-channel-card {
+  border-color: #e2e2e2;
+  background: #fafafa;
+}
+
+body[data-theme="light"] .im-workspace-channel-card.selected {
+  border-color: #6391ff;
+  background: rgba(99, 145, 255, 0.08);
+}
+
+body[data-theme="light"] .im-workspace-qrcode img {
+  border-color: #e0e0e0;
+}
+
+.im-identity-card {
+  margin-top: 18px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.im-identity-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.im-identity-session-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.im-identity-session-item.active {
+  border-color: rgba(99, 145, 255, 0.45);
+  background: rgba(99, 145, 255, 0.1);
+}
+
+.im-identity-session-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.im-identity-session-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+body[data-theme="light"] .im-identity-card,
+body[data-theme="light"] .im-identity-session-item {
+  border-color: #e2e2e2;
+  background: #fafafa;
+}
+
+body[data-theme="light"] .im-identity-session-item.active {
+  border-color: #6391ff;
+  background: rgba(99, 145, 255, 0.08);
+}
+
+@media (max-width: 900px) {
+  .im-workspace-channel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .workspace-note-panel {
   margin-top: 16px;
   padding: 16px 20px;

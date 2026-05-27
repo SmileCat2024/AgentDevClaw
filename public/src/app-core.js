@@ -248,6 +248,8 @@ let readOnlyMode = false;
 let loadAgentsInFlight = null;
 const workspaceSurfaceModePreferences = {};
 let allAgents = [];
+// 追踪每个 agent 的 call 运行状态（实时更新，比 3s 轮询更快）
+const _agentCallActive = new Map();
 let currentMessages = [];
 let currentInputRequests = [];
 let choiceInputState = {};
@@ -317,6 +319,7 @@ let currentMcpInfo = null;
 let logPanelScope = 'current';
 let lastFeatureTemplateReloadAt = 0;
 let lastAgentListRefreshAt = 0;
+let lastCallStateRefreshAt = 0;
 let templateWarmupToken = 0;
 let qqbotConfigState = {
   data: null,
@@ -328,6 +331,18 @@ let qqbotConfigState = {
   savedAt: null,
 };
 let qqbotConfigRequest = null;
+let imWorkspaceState = {
+  data: null,
+  draft: null,
+  loading: false,
+  saving: false,
+  binding: false,
+  polling: false,
+  error: '',
+  savedAt: null,
+};
+let imWorkspaceRequest = null;
+let imWorkspaceAutoSaveTimer = null;
 let logFilters = {
   search: '',
   level: 'all',
@@ -421,6 +436,40 @@ const I18N = {
     qqbot_config_saved_at: '最近保存',
     qqbot_config_source: '配置文件',
     qqbot_config_apply_hint: '保存后会写入当前项目配置文件。若 QQ 网关已经在运行，重启后生效。',
+    im_workspace_title: '接待员身份配置',
+    im_workspace_desc: '先给接待员身份选择上下文，再决定它当前走哪条渠道。',
+    im_workspace_loading: '正在加载 IM 配置...',
+    im_workspace_saving: '正在保存 IM 配置...',
+    im_workspace_binding: '正在生成微信二维码...',
+    im_workspace_polling: '正在刷新微信绑定状态...',
+    im_workspace_save: '保存配置',
+    im_workspace_reload: '重新加载',
+    im_workspace_start_weixin_bind: '生成微信二维码',
+    im_workspace_refresh_weixin_bind: '刷新微信状态',
+    im_workspace_logout_weixin: '解绑微信',
+    im_workspace_selected_channel: '接待员当前渠道',
+    im_workspace_receptionist_session: '接待员上下文',
+    im_workspace_identity_title: '接待员',
+    im_workspace_channel_label: '线路名称',
+    im_workspace_channel_role: '职责',
+    im_workspace_channel_note: '备注',
+    im_workspace_qq_section: 'QQ 线路',
+    im_workspace_weixin_section: '微信 线路',
+    im_workspace_not_bound: '未绑定',
+    im_workspace_bound: '已绑定',
+    im_workspace_pending: '等待扫码',
+    im_workspace_expired: '二维码已过期',
+    im_workspace_start_hint: '当前只配置接待员身份，运行时只会启动它选中的那条渠道。',
+    im_workspace_source_workspace: '工作空间配置',
+    im_workspace_source_qq: 'QQ 配置',
+    im_workspace_source_weixin: '微信 配置',
+    im_workspace_weixin_qrcode_hint: '用手机微信扫描二维码完成绑定，然后点击刷新微信状态。',
+    im_workspace_no_session: '请先在下方对话记录里准备一条接待员会话。',
+    im_workspace_select_placeholder: '请选择',
+    im_workspace_saved_at: '最近保存',
+    im_workspace_new_chat: '新对话',
+    im_workspace_auto_saved: '已自动保存',
+    im_workspace_receptionist_hint: '点击任一对话后，会按当前身份配置启动接待员。',
     panel_hint: '选择右侧功能按钮以展开面板。',
     panel_structure: '结构',
     panel_monitor: '监视',
@@ -680,6 +729,40 @@ const I18N = {
     qqbot_config_saved_at: 'Last Saved',
     qqbot_config_source: 'Config File',
     qqbot_config_apply_hint: 'Saving writes to the current project config. Restart the running gateway to apply changes.',
+    im_workspace_title: 'Receptionist Identity Config',
+    im_workspace_desc: 'Assign context to the receptionist identity, then choose which channel it should use.',
+    im_workspace_loading: 'Loading IM config...',
+    im_workspace_saving: 'Saving IM config...',
+    im_workspace_binding: 'Generating Weixin QR code...',
+    im_workspace_polling: 'Refreshing Weixin status...',
+    im_workspace_save: 'Save Config',
+    im_workspace_reload: 'Reload',
+    im_workspace_start_weixin_bind: 'Generate Weixin QR',
+    im_workspace_refresh_weixin_bind: 'Refresh Weixin Status',
+    im_workspace_logout_weixin: 'Unbind Weixin',
+    im_workspace_selected_channel: 'Receptionist Channel',
+    im_workspace_receptionist_session: 'Receptionist Context',
+    im_workspace_identity_title: 'Receptionist',
+    im_workspace_channel_label: 'Line Name',
+    im_workspace_channel_role: 'Role',
+    im_workspace_channel_note: 'Note',
+    im_workspace_qq_section: 'QQ Line',
+    im_workspace_weixin_section: 'Weixin Line',
+    im_workspace_not_bound: 'Not Bound',
+    im_workspace_bound: 'Bound',
+    im_workspace_pending: 'Waiting for Scan',
+    im_workspace_expired: 'QR Expired',
+    im_workspace_start_hint: 'Only the receptionist identity is configured for now, and only its selected channel will start.',
+    im_workspace_source_workspace: 'Workspace Config',
+    im_workspace_source_qq: 'QQ Config',
+    im_workspace_source_weixin: 'Weixin Config',
+    im_workspace_weixin_qrcode_hint: 'Scan the QR code in Weixin, then refresh the binding status.',
+    im_workspace_no_session: 'Create or pick a conversation below as the receptionist context first.',
+    im_workspace_select_placeholder: 'Select',
+    im_workspace_saved_at: 'Last Saved',
+    im_workspace_new_chat: 'New Chat',
+    im_workspace_auto_saved: 'Auto-saved',
+    im_workspace_receptionist_hint: 'Click any conversation to start the receptionist with the current identity config.',
     panel_hint: 'Select a tool on the right rail to open the panel.',
     panel_structure: 'Structure',
     panel_monitor: 'Monitor',

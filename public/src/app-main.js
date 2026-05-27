@@ -165,6 +165,21 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   return entries;
 }
 
+function isRuntimeCalling(runtimeId) {
+  return normalizeAgentIdentity(runtimeId) !== '' && _agentCallActive.get(runtimeId) === true;
+}
+
+function resolveNotificationCallingState(notifData) {
+  const stateType = String(notifData?.state?.type || '').trim();
+  if (stateType === 'llm.complete' || stateType === 'call.finish') {
+    return false;
+  }
+  if (stateType === 'call.start') {
+    return true;
+  }
+  return notifData?.callActive === true;
+}
+
 function renderSidebarChildItems(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
   return `
@@ -172,11 +187,13 @@ function renderSidebarChildItems(entries) {
       ${entries.map((entry) => {
         const active = isRuntimeItemActive(entry.runtimeId);
         const disconnected = entry.status === 'disconnected';
+        const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
         const itemClass = [
           'agent-item',
           'agent-runtime-item',
           active ? 'active' : '',
           disconnected ? 'disconnected' : '',
+          calling ? 'calling' : '',
         ].filter(Boolean).join(' ');
         return `
           <div
@@ -206,12 +223,19 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
     const pending = pendingPrebuiltAgentIds.has(agent.id);
     const workspaceSurface = isWorkspaceSurfaceUnit(agent);
     const idle = prebuilt && !pending && !(agent.runtime_session_id || agent.runtimeSessionId);
+    const runtimeId = agent.runtime_session_id || agent.runtimeSessionId || agent.id;
+    const calling = !prebuilt
+      && connected
+      && !pending
+      && !idle
+      && (isRuntimeCalling(runtimeId) || agent.callActive === true);
     const itemClass = [
       'agent-item',
       active ? 'active' : '',
       connected || prebuilt ? '' : 'disconnected',
       pending ? 'pending' : '',
       idle ? 'idle' : '',
+      calling ? 'calling' : '',
     ].filter(Boolean).join(' ');
     const hasRuntime = !!(agent.runtime_session_id || agent.runtimeSessionId);
     const contextMenuEnabled = prebuilt
@@ -332,10 +356,18 @@ async function loadAgents() {
       });
     }
 
+    // 清理已断开 agent 的 call 状态
+    const activeRuntimeIds = new Set(allAgents.filter((a) => a.connected).map((a) => a.runtime_session_id || a.runtimeSessionId || a.id));
+    for (const key of _agentCallActive.keys()) {
+      if (!activeRuntimeIds.has(key)) _agentCallActive.delete(key);
+    }
+
     if (!suppressSidebarRerender) {
       renderAgentList();
       renderFeaturePanel();
     }
+
+    await refreshAgentCallStates(allAgents, { force: true });
 
     if (currentAgentId && !allAgents.some((agent) => agent.id === currentAgentId || getAgentRuntimeId(agent) === currentAgentId)) {
       const fallbackId = resolveWorkspaceFallbackAgentId();
@@ -381,6 +413,87 @@ async function loadAgents() {
       loadAgentsInFlight = null;
       console.log(`[PERF-CLIENT] loadAgents complete (${(performance.now() - _t0).toFixed(0)}ms)`);
     }
+  }
+}
+
+async function refreshAgentCallStates(agents = allAgents, options = {}) {
+  const { force = false } = options;
+  const now = Date.now();
+  if (!force && now - lastCallStateRefreshAt < 1000) {
+    return;
+  }
+  lastCallStateRefreshAt = now;
+
+  const runtimeIds = Array.from(new Set(
+    (Array.isArray(agents) ? agents : [])
+      .filter((agent) => agent?.connected)
+      .map((agent) => agent.runtime_session_id || agent.runtimeSessionId || agent.id)
+      .filter(Boolean)
+  ));
+  if (runtimeIds.length === 0) {
+    let changed = false;
+    for (const key of Array.from(_agentCallActive.keys())) {
+      _agentCallActive.delete(key);
+      changed = true;
+    }
+    if (changed) {
+      renderAgentList();
+    }
+    return;
+  }
+
+  const nextCallStates = new Map();
+  await Promise.all(runtimeIds.map(async (runtimeId) => {
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(runtimeId)}/notification`);
+      if (!res.ok) return;
+      const notifData = await res.json();
+      nextCallStates.set(runtimeId, resolveNotificationCallingState(notifData));
+    } catch (error) {
+    }
+  }));
+
+  let changed = false;
+  for (const runtimeId of runtimeIds) {
+    const isCalling = nextCallStates.get(runtimeId) === true;
+    const prevCalling = _agentCallActive.get(runtimeId) === true;
+    if (isCalling) {
+      _agentCallActive.set(runtimeId, true);
+    } else {
+      _agentCallActive.delete(runtimeId);
+    }
+    if (prevCalling !== isCalling) {
+      changed = true;
+    }
+  }
+
+  const activeRuntimeIds = new Set(runtimeIds);
+  for (const key of Array.from(_agentCallActive.keys())) {
+    if (!activeRuntimeIds.has(key)) {
+      _agentCallActive.delete(key);
+      changed = true;
+    }
+  }
+
+  for (const agent of Array.isArray(agents) ? agents : []) {
+    if (agent?.source === 'prebuilt') {
+      if (agent.callActive) {
+        agent.callActive = false;
+        changed = true;
+      }
+      continue;
+    }
+    const runtimeId = agent.runtime_session_id || agent.runtimeSessionId || agent.id;
+    if (!runtimeId) continue;
+    const nextCalling = nextCallStates.get(runtimeId) === true;
+    if (agent.callActive !== nextCalling) {
+      agent.callActive = nextCalling;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    renderAgentList();
   }
 }
 
@@ -2661,6 +2774,169 @@ window.updateQQBotConfigDraft = (fieldName, value) => {
   });
 };
 
+window.updateIMWorkspaceField = (fieldPath, value) => {
+  const draft = getIMWorkspaceDraft();
+  const nextDraft = JSON.parse(JSON.stringify(draft));
+  const segments = String(fieldPath || '').split('.').filter(Boolean);
+  let cursor = nextDraft;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const key = segments[index];
+    if (!cursor[key] || typeof cursor[key] !== 'object') {
+      cursor[key] = {};
+    }
+    cursor = cursor[key];
+  }
+  if (segments.length > 0) {
+    cursor[segments[segments.length - 1]] = value;
+  }
+  imWorkspaceState.draft = nextDraft;
+  window.scheduleIMWorkspaceAutoSave();
+  renderCurrentMainView();
+};
+
+window.updateIMQQConfigDraft = (fieldName, value) => {
+  const draft = getIMWorkspaceDraft();
+  imWorkspaceState.draft = {
+    ...draft,
+    qqConfig: normalizeQQBotConfigData({
+      ...(draft.qqConfig || {}),
+      [fieldName]: value,
+    }),
+  };
+  window.scheduleIMWorkspaceAutoSave();
+  renderCurrentMainView();
+};
+
+window.scheduleIMWorkspaceAutoSave = () => {
+  if (imWorkspaceAutoSaveTimer) {
+    clearTimeout(imWorkspaceAutoSaveTimer);
+  }
+  imWorkspaceAutoSaveTimer = setTimeout(() => {
+    window.saveIMWorkspaceConfig().catch((error) => {
+      console.error('Failed to auto-save IM workspace config:', error);
+    });
+  }, 250);
+};
+
+window.reloadIMWorkspaceConfig = async () => {
+  try {
+    await ensureIMWorkspaceLoaded(true);
+  } catch (error) {
+    console.error('Failed to reload IM workspace config:', error);
+  }
+};
+
+window.saveIMWorkspaceConfig = async () => {
+  if (imWorkspaceAutoSaveTimer) {
+    clearTimeout(imWorkspaceAutoSaveTimer);
+    imWorkspaceAutoSaveTimer = null;
+  }
+  imWorkspaceState.saving = true;
+  imWorkspaceState.error = '';
+  renderCurrentMainView();
+  try {
+    const response = await fetch('/protoclaw/im_workspace_bundle', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceConfig: getIMWorkspaceDraft().workspaceConfig,
+        qqConfig: getIMWorkspaceDraft().qqConfig,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'Failed to save IM workspace config'));
+    }
+    const payload = await response.json();
+    const bundle = normalizeIMWorkspaceBundleData(payload || {});
+    imWorkspaceState.data = bundle;
+    imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+    imWorkspaceState.savedAt = payload?.savedAt || new Date().toISOString();
+  } catch (error) {
+    imWorkspaceState.error = error && error.message ? error.message : String(error);
+    console.error('Failed to save IM workspace config:', error);
+  } finally {
+    imWorkspaceState.saving = false;
+    renderCurrentMainView();
+  }
+};
+
+window.createReceptionistSession = async () => {
+  await window.saveIMWorkspaceConfig();
+  await window.runWorkspaceAction(JSON.stringify({ type: 'create_session' }));
+};
+
+window.launchReceptionistSession = async (sessionId) => {
+  window.updateIMWorkspaceField('workspaceConfig.receptionistSessionId', sessionId);
+  await window.saveIMWorkspaceConfig();
+  await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
+};
+
+window.startWeixinBinding = async () => {
+  imWorkspaceState.binding = true;
+  imWorkspaceState.error = '';
+  renderCurrentMainView();
+  try {
+    const response = await fetch('/protoclaw/im_workspace_bundle/weixin_bind/start', { method: 'POST' });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'Failed to start Weixin binding'));
+    }
+    const payload = await response.json();
+    const bundle = normalizeIMWorkspaceBundleData(payload || {});
+    imWorkspaceState.data = bundle;
+    imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+  } catch (error) {
+    imWorkspaceState.error = error && error.message ? error.message : String(error);
+    console.error('Failed to start Weixin binding:', error);
+  } finally {
+    imWorkspaceState.binding = false;
+    renderCurrentMainView();
+  }
+};
+
+window.refreshWeixinBinding = async () => {
+  imWorkspaceState.polling = true;
+  imWorkspaceState.error = '';
+  renderCurrentMainView();
+  try {
+    const response = await fetch('/protoclaw/im_workspace_bundle/weixin_bind/status');
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'Failed to refresh Weixin binding status'));
+    }
+    const payload = await response.json();
+    const bundle = normalizeIMWorkspaceBundleData(payload || {});
+    imWorkspaceState.data = bundle;
+    imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+  } catch (error) {
+    imWorkspaceState.error = error && error.message ? error.message : String(error);
+    console.error('Failed to refresh Weixin binding status:', error);
+  } finally {
+    imWorkspaceState.polling = false;
+    renderCurrentMainView();
+  }
+};
+
+window.logoutWeixinBinding = async () => {
+  imWorkspaceState.polling = true;
+  imWorkspaceState.error = '';
+  renderCurrentMainView();
+  try {
+    const response = await fetch('/protoclaw/im_workspace_bundle/weixin_logout', { method: 'POST' });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'Failed to unbind Weixin'));
+    }
+    const payload = await response.json();
+    const bundle = normalizeIMWorkspaceBundleData(payload || {});
+    imWorkspaceState.data = bundle;
+    imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+  } catch (error) {
+    imWorkspaceState.error = error && error.message ? error.message : String(error);
+    console.error('Failed to unbind Weixin:', error);
+  } finally {
+    imWorkspaceState.polling = false;
+    renderCurrentMainView();
+  }
+};
+
 window.reloadQQBotConfig = async () => {
   try {
     await ensureQQBotConfigLoaded(true);
@@ -3599,6 +3875,7 @@ async function poll() {
 
     if (!currentRuntimeAgentId) {
       await loadAgents();
+      await refreshAgentCallStates(allAgents);
       // Incrementally refresh workspace session data when viewing workspace surface.
       if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
         const wsHostAgent = allAgents.find((a) => a.id === currentAgentId && isWorkspaceHostUnit(a));
@@ -3648,7 +3925,15 @@ async function poll() {
         setTimeout(poll, 300);
         return;
       }
-      const failedRuntimeRecord = getRuntimeRecord(currentRuntimeAgentId);
+      const failedRuntimeId = currentRuntimeAgentId;
+      const failedRuntimeRecord = getRuntimeRecord(failedRuntimeId);
+      if (failedRuntimeId) {
+        _agentCallActive.delete(failedRuntimeId);
+      }
+      if (failedRuntimeRecord) {
+        failedRuntimeRecord.callActive = false;
+        failedRuntimeRecord.connected = false;
+      }
       currentRuntimeAgentId = null;
       const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
       if (fallbackId) {
@@ -3676,6 +3961,7 @@ async function poll() {
     // 处理通知状态
     const notifData = await notifRes.json();
     updateNotificationStatus(notifData);
+    await refreshAgentCallStates(allAgents);
 
     const nextOverview = normalizeOverviewSnapshot(await overviewRes.json());
     const nextOverviewSignature = getOverviewSignature(nextOverview);
@@ -3795,6 +4081,24 @@ function updateNotificationStatus(notifData) {
   const statusEl = document.getElementById('notification-status');
   const phaseEl = document.getElementById('notification-phase');
   const charCountEl = document.getElementById('notification-char-count');
+  // `callActive` is tracked independently from the transient `state` payload.
+  // Some notification responses may only carry the call flag, so update it
+  // before any early return based on `state`.
+  if (notifData.callActive !== undefined) {
+    const runtimeId = currentRuntimeAgentId;
+    if (runtimeId) {
+      const prev = _agentCallActive.get(runtimeId);
+      const nextCalling = resolveNotificationCallingState(notifData);
+      if (nextCalling) {
+        _agentCallActive.set(runtimeId, true);
+      } else {
+        _agentCallActive.delete(runtimeId);
+      }
+      if ((prev === true) !== nextCalling) {
+        renderAgentList();
+      }
+    }
+  }
 
   if (!notifData.state) {
     statusEl.style.display = 'none';
@@ -3822,6 +4126,10 @@ function updateNotificationStatus(notifData) {
   } else if (type === 'llm.complete') {
     statusEl.style.display = 'none';
     statusEl.classList.remove('active');
+    if (currentRuntimeAgentId) {
+      _agentCallActive.delete(currentRuntimeAgentId);
+      renderAgentList();
+    }
 
     // 切换常驻按钮为 send 状态
     _setActionBtnSend();
