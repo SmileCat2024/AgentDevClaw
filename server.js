@@ -3912,7 +3912,6 @@ async function getConnectedAgents() {
     if (status.status === 'running') {
       managed.status = 'running';
       managed.pid = status.pid;
-      managed.connected = managed.connected || true;
       managed.active_workspace_session_id = status.selectedSessionId || managed.active_workspace_session_id;
       if (status.viewerAgentId) {
         managed.runtime_session_id = status.viewerAgentId;

@@ -259,16 +259,22 @@ async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {
   const expectedRuntimeId = normalizeAgentIdentity(options.previousRuntimeId);
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const agents = await invoke('get_connected_agents');
-    const matched = agents.find((agent) => {
-      if (agent.id !== agentId) return false;
-      const runtimeId = normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId);
+    const findConnectedChild = (list) => list.find((agent) => {
+      if (agent.source !== 'child' || agent.parent_id !== agentId) return false;
+      const runtimeId = normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId || agent.id);
       if (!runtimeId) return false;
       if (expectedRuntimeId && runtimeId === expectedRuntimeId) return false;
-      return agent.connected !== false;
+      return agent.connected === true;
     });
+    const matched = findConnectedChild(agents);
     if (matched) {
-      allAgents = agents;
-      return matched;
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const verify = await invoke('get_connected_agents');
+      const still = findConnectedChild(verify);
+      if (still) {
+        allAgents = verify;
+        return still;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
