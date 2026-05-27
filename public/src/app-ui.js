@@ -1519,7 +1519,7 @@ function shouldRenderBlock(block) {
 function renderActionButton(action, options = {}) {
   const label = localizeWorkspaceValue(action?.label, '');
   const encoded = escapeHtml(JSON.stringify(action?.action || {}));
-  return '<button class="workspace-action" type="button" data-workspace-action="' + encoded + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)"' + (options.disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
+  return '<button class="workspace-action" type="button" data-workspace-action="' + encoded + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (options.disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
 }
 
 function renderWorkspaceHero(agent, block) {
@@ -1581,7 +1581,7 @@ function renderWorkspaceLauncherGrid(agent, block) {
         shouldRenderNote
           ? '<div class="workspace-launch-note">' + escapeHtml(note) + '</div>'
           : '',
-        '<button class="workspace-action" type="button" data-workspace-action="' + action + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(actionLabel) + '</button>',
+        '<button class="workspace-action" type="button" data-workspace-action="' + action + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(actionLabel) + '</button>',
         '</div>',
       ].join('');
     }).join(''),
@@ -1652,7 +1652,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '<div class="workspace-history-side">',
                   '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
                   '<div class="workspace-actions stacked">',
-                  '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+                  '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
                   '</div>',
                   '</div>',
                   '</div>',
@@ -1752,7 +1752,7 @@ function renderWorkspaceSessionList(agent, block) {
                   '<div class="workspace-history-side">',
                   '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
                   '<div class="workspace-actions stacked">',
-                  '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+                  '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
                   '</div>',
                   '</div>',
                   '</div>',
@@ -1847,24 +1847,24 @@ function renderWorkspaceSessionList(agent, block) {
               const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
               const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
               buttonsHtml = [
-                '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+                '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
                 '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
-                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
               ].join('');
             } else if (sType === 'exploration') {
               const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'exploration' }));
               const summaryAction = escapeHtml(JSON.stringify({ type: 'open_summary', sessionId: session.id, agentId: agent.id }));
               const summaryBtnClass = session.hasSummary ? 'workspace-action summary-exists' : 'workspace-action secondary';
               buttonsHtml = [
-                '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_view_record')) + '</button>',
-                '<button class="' + summaryBtnClass + '" type="button" data-workspace-action="' + summaryAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(session.hasSummary ? t('workspace_view_summary') : t('workspace_generate_summary')) + '</button>',
-                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+                '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>',
+                '<button class="' + summaryBtnClass + '" type="button" data-workspace-action="' + summaryAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(session.hasSummary ? t('workspace_view_summary') : t('workspace_generate_summary')) + '</button>',
+                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
               ].join('');
             } else if (sType === 'sub') {
               const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'sub' }));
               buttonsHtml = [
-                '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_view_record')) + '</button>',
-                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+                '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>',
+                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
               ].join('');
             }
 
@@ -1993,12 +1993,12 @@ function renderWorkspaceSessionList(agent, block) {
         (session.openDirectory ? '<br>' + escapeHtml(session.openDirectory) : ''),
         '</div>',
         '<div class="workspace-actions stacked">',
-        '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+        '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
         (allowCompactedResume
-          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + compactedResumeAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_light_resume')) + '</button>'
+          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + compactedResumeAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_light_resume')) + '</button>'
           : ''),
         (isFeatureCreator
-          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>'
+          ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_new_chat')) + '</button>'
           : ''),
         '</div>',
         '</div>',
@@ -2317,7 +2317,7 @@ function renderWorkspaceStatusGrid(agent, block) {
     '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
     '<div class="workspace-section-desc">' + escapeHtml(desc) + '</div>',
     '</div>',
-    '<button class="workspace-action" type="button" data-workspace-action="{&quot;type&quot;:&quot;show_chat&quot;}" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)"' + (canOpenChat ? '' : ' disabled') + '>' + escapeHtml(t('workspace_open_chat')) + '</button>',
+    '<button class="workspace-action" type="button" data-workspace-action="{&quot;type&quot;:&quot;show_chat&quot;}" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (canOpenChat ? '' : ' disabled') + '>' + escapeHtml(t('workspace_open_chat')) + '</button>',
     '</div>',
     '<div class="workspace-grid">' + cardsHtml + '</div>',
     directorySummary ? renderDirectorySummaryPanel(agent, block) : '',
@@ -5454,7 +5454,7 @@ function renderWorkspaceArtifactsBlock(agent, block) {
           preview ? '<div class="workspace-docset-row-preview">' + escapeHtml(preview) + '</div>' : '',
           '<div class="workspace-docset-row-meta"><span>' + escapeHtml(kind) + '</span><span>' + escapeHtml(formatWorkspaceDate(item.updatedAt)) + '</span>' + (relatedDir ? '<span>' + escapeHtml(relatedDir) + '</span>' : '') + (sourceWorkspace ? '<span>' + escapeHtml(getWorkspaceLabelFromId(sourceWorkspace)) + '</span>' : '') + '</div>',
           '</div>',
-          '<div class="workspace-actions"><button class="workspace-action secondary" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">查看</button></div>',
+          '<div class="workspace-actions"><button class="workspace-action secondary" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">查看</button></div>',
           '</div>',
         ].join('');
       }).join('') + '</div></div></div>'
@@ -5466,9 +5466,9 @@ function renderWorkspaceArtifactsBlock(agent, block) {
         '<div class="workspace-docset-panel">',
         '<div class="workspace-docset-panel-head"><div class="workspace-docset-panel-title">' + escapeHtml(selectedItem.title || selectedItem.id || 'artifact') + '</div><div class="workspace-actions">',
         selectedItem?.source?.workspace
-          ? '<button class="workspace-action" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'navigate_unit', targetAgentId: String(selectedItem.source.workspace) })) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">进入来源工作空间</button>'
+          ? '<button class="workspace-action" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'navigate_unit', targetAgentId: String(selectedItem.source.workspace) })) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">进入来源工作空间</button>'
           : '',
-        '<button class="workspace-action secondary" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'close_artifact_preview', blockId: String(block?.id || '') })) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">关闭预览</button>',
+        '<button class="workspace-action secondary" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'close_artifact_preview', blockId: String(block?.id || '') })) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">关闭预览</button>',
         '</div></div>',
         '<div class="workspace-docset-panel-body">',
         '<div class="workspace-docset-chip-row"><span class="workspace-docset-chip">' + escapeHtml(getArtifactKindLabel(selectedItem.kind)) + '</span><span class="workspace-docset-chip">' + escapeHtml(formatWorkspaceDate(selectedItem.updatedAt)) + '</span>' + (selectedItem?.relatedTo?.openDirectory ? '<span class="workspace-docset-chip">' + escapeHtml(String(selectedItem.relatedTo.openDirectory)) + '</span>' : '') + '</div>',
@@ -5591,7 +5591,7 @@ function renderProjectDocsetSidebarItem(title, preview, meta, section, itemId, b
     itemId,
   }));
   return [
-    '<button class="project-docset-item' + (active ? ' active' : '') + '" type="button" data-workspace-action="' + action + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)">',
+    '<button class="project-docset-item' + (active ? ' active' : '') + '" type="button" data-workspace-action="' + action + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">',
     '<div class="project-docset-item-top">',
     '<div class="project-docset-item-title">' + escapeHtml(title) + '</div>',
     tag,
@@ -6109,7 +6109,7 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
         : (tab.id === 'home'
           ? { type: 'show_home' }
           : { type: 'show_workspace_tab', tab: tab.id }))
-    )) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction)"' + (tab.id === 'chat' && !canOpenChat ? ' disabled' : '') + '>' +
+    )) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (tab.id === 'chat' && !canOpenChat ? ' disabled' : '') + '>' +
     escapeHtml(getUnitTabLabel(tab)) +
     '</button>'
   )).join('');

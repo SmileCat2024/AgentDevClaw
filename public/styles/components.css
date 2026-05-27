@@ -856,6 +856,25 @@ body[data-theme="light"] .markdown-body blockquote {
   border-color: rgba(255,255,255,0.05);
 }
 
+.workspace-action.action-loading {
+  pointer-events: none;
+  position: relative;
+  color: transparent !important;
+}
+.workspace-action.action-loading::after {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--text-secondary);
+  border-radius: 50%;
+  animation: btn-spin 0.6s linear infinite;
+  position: absolute;
+}
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+
 .workspace-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -1431,8 +1450,7 @@ body[data-theme="light"] .workspace-docset-row {
 
 .feature-project-body {
   margin: 4px 0 0 0;
-  padding: 14px 0 4px 18px;
-  border-left: 1px solid rgba(255,255,255,0.08);
+  padding: 14px 0 4px 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1759,9 +1777,7 @@ body[data-theme="light"] .feature-project-count {
   color: var(--text-muted);
 }
 
-body[data-theme="light"] .feature-project-body {
-  border-left-color: #e3e3e3;
-}
+
 
 body[data-theme="light"] .feature-project-session-item:hover {
   background: #fafafa;
@@ -1814,7 +1830,6 @@ body[data-theme="light"] .feature-project-session-item {
 
   .feature-project-body {
     margin-left: 12px;
-    padding-left: 14px;
   }
 }
 

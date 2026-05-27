@@ -613,7 +613,7 @@ window.switchPhSessionTab = (btn) => {
   }
 };
 
-window.runWorkspaceAction = async (rawAction) => {
+window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   let action = rawAction || {};
   if (typeof rawAction === 'string') {
     try {
@@ -920,7 +920,10 @@ window.runWorkspaceAction = async (rawAction) => {
 
   if (needsManagedSession) {
     const shouldMarkLoading = action.type === 'open_session' && action.sessionId;
-    if (shouldMarkLoading) markSessionLoading(activeAgent.id, action.sessionId);
+    if (shouldMarkLoading) {
+      markSessionLoading(activeAgent.id, action.sessionId);
+      markActionLoading(triggerButton);
+    }
     try {
       prebuiltSessionSwitchInFlight = true;
       const sessionAction = action.type === 'open_session'
@@ -1126,11 +1129,12 @@ window.importProjectMaterialsByPath = async (mode = 'files') => {
 };
 
 window.runWorkspaceActionFromEvent = async (event, rawAction) => {
+  const btn = event?.target instanceof Element ? event.target.closest('button[data-workspace-action]') : null;
   if (event) {
     event.preventDefault();
     event.stopPropagation();
   }
-  await window.runWorkspaceAction(rawAction);
+  await window.runWorkspaceAction(rawAction, btn || undefined);
 };
 
 document.addEventListener('click', (event) => {
@@ -1145,7 +1149,7 @@ document.addEventListener('click', (event) => {
     event.stopImmediatePropagation();
   }
   const rawAction = actionButton.dataset?.workspaceAction || '';
-  window.runWorkspaceAction(rawAction).catch((error) => {
+  window.runWorkspaceAction(rawAction, actionButton).catch((error) => {
     console.error('Failed to handle delegated workspace action:', error);
   });
 }, true);
@@ -2357,9 +2361,15 @@ function markSessionLoading(agentId, sessionId) {
   if (el) el.classList.add('session-loading');
 }
 
+function markActionLoading(buttonEl) {
+  if (buttonEl) buttonEl.classList.add('action-loading');
+}
+
 function clearSessionLoading(agentId) {
   document.querySelectorAll(`.workspace-history-item.session-loading[data-prebuilt-session-agent-id="${CSS.escape(agentId)}"]`)
     .forEach(el => el.classList.remove('session-loading'));
+  document.querySelectorAll('.workspace-action.action-loading')
+    .forEach(el => el.classList.remove('action-loading'));
 }
 
 window.deleteAssemblySessionRecord = async (sessionId) => {
