@@ -1616,16 +1616,6 @@ function renderWorkspaceSessionList(agent, block) {
 
     const bodyHtml = projects.length > 0
       ? '<div class="feature-project-list">' + projects.map((project) => {
-          const enterAction = escapeHtml(JSON.stringify(
-            project.latestSessionId
-              ? { type: 'open_session', sessionId: project.latestSessionId }
-              : {
-                  type: 'create_session',
-                  featureName: project.featureName || '',
-                  openDirectory: project.openDirectory || '',
-                  targetDir: project.targetDir || '',
-                }
-          ));
           const newChatAction = escapeHtml(JSON.stringify({
             type: 'create_session',
             featureName: project.featureName || '',
@@ -1676,7 +1666,6 @@ function renderWorkspaceSessionList(agent, block) {
             '</div>',
             '<div class="feature-project-side">',
             '<div class="feature-project-head-actions">',
-            '<button class="workspace-action" type="button" data-workspace-action="' + enterAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(project.latestSessionId ? t('workspace_open_chat') : t('workspace_enter_development')) + '</button>',
             '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>',
             '</div>',
             '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',
@@ -1716,16 +1705,6 @@ function renderWorkspaceSessionList(agent, block) {
 
     const bodyHtml = projects.length > 0
       ? '<div class="feature-project-list">' + projects.map((project) => {
-          const enterAction = escapeHtml(JSON.stringify(
-            project.latestSessionId
-              ? { type: 'open_session', sessionId: project.latestSessionId }
-              : {
-                  type: 'create_session',
-                  agentName: project.agentName || '',
-                  openDirectory: project.openDirectory || '',
-                  targetDir: project.targetDir || '',
-                }
-          ));
           const newChatAction = escapeHtml(JSON.stringify({
             type: 'create_session',
             agentName: project.agentName || '',
@@ -1776,7 +1755,6 @@ function renderWorkspaceSessionList(agent, block) {
             '</div>',
             '<div class="feature-project-side">',
             '<div class="feature-project-head-actions">',
-            '<button class="workspace-action" type="button" data-workspace-action="' + enterAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(project.latestSessionId ? t('workspace_open_chat') : t('workspace_enter_development')) + '</button>',
             '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>',
             '</div>',
             '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',
@@ -1819,14 +1797,6 @@ function renderWorkspaceSessionList(agent, block) {
 
     const bodyHtml = projects.length > 0
       ? '<div class="feature-project-list">' + projects.map((project) => {
-          const enterAction = escapeHtml(JSON.stringify(
-            project.latestSessionId
-              ? { type: 'open_session', sessionId: project.latestSessionId }
-              : {
-                  type: 'create_session',
-                  openDirectory: project.openDirectory || '',
-                }
-          ));
           const newChatAction = escapeHtml(JSON.stringify({
             type: 'create_session',
             openDirectory: project.openDirectory || '',
@@ -1921,7 +1891,6 @@ function renderWorkspaceSessionList(agent, block) {
             '</div>',
             '<div class="feature-project-side">',
             '<div class="feature-project-head-actions">',
-            '<button class="workspace-action" type="button" data-workspace-action="' + enterAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(project.latestSessionId ? t('workspace_open_chat') : t('workspace_enter_development')) + '</button>',
             '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>',
             '</div>',
             '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',

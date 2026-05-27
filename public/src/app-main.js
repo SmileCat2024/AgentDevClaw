@@ -922,8 +922,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const shouldMarkLoading = action.type === 'open_session' && action.sessionId;
     if (shouldMarkLoading) {
       markSessionLoading(activeAgent.id, action.sessionId);
-      markActionLoading(triggerButton);
     }
+    if (triggerButton) markActionLoading(triggerButton);
     try {
       prebuiltSessionSwitchInFlight = true;
       const sessionAction = action.type === 'open_session'
@@ -1012,6 +1012,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     } finally {
       prebuiltSessionSwitchInFlight = false;
       if (shouldMarkLoading) clearSessionLoading(activeAgent.id);
+      else if (triggerButton) triggerButton.classList.remove('action-loading');
     }
   }
 
