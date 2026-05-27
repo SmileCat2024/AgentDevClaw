@@ -919,6 +919,8 @@ window.runWorkspaceAction = async (rawAction) => {
     );
 
   if (needsManagedSession) {
+    const shouldMarkLoading = action.type === 'open_session' && action.sessionId;
+    if (shouldMarkLoading) markSessionLoading(activeAgent.id, action.sessionId);
     try {
       prebuiltSessionSwitchInFlight = true;
       const sessionAction = action.type === 'open_session'
@@ -960,6 +962,16 @@ window.runWorkspaceAction = async (rawAction) => {
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
           return;
         }
+        if (result?.status?.status === 'running' && result.status.viewerAgentId) {
+          const existingRuntimeId = result.status.viewerAgentId;
+          if (existingRuntimeId === currentRuntimeAgentId) {
+            renderCurrentMainView();
+          } else {
+            await loadAgents();
+            await window.switchAgent(existingRuntimeId);
+          }
+          return;
+        }
         try {
           const readyAgent = await waitForPrebuiltRuntimeSession(activeAgent.id, 30, { previousRuntimeId });
           if (!readyAgent) return;
@@ -996,6 +1008,7 @@ window.runWorkspaceAction = async (rawAction) => {
       return;
     } finally {
       prebuiltSessionSwitchInFlight = false;
+      if (shouldMarkLoading) clearSessionLoading(activeAgent.id);
     }
   }
 

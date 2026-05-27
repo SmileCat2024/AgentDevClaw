@@ -4307,19 +4307,19 @@ body[data-theme="light"] .trim-round-item:hover {
   position: relative;
 }
 .workspace-history-item.session-loading::after {
-  content: '处理中...';
+  content: '';
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(5,7,12,0.5);
-  border-radius: 16px;
-  color: var(--text-secondary);
-  font-size: 14px;
+  border-radius: inherit;
+  background: rgba(5,7,12,0.4);
+  animation: session-pulse 1.2s ease-in-out infinite;
+}
+@keyframes session-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.7; }
 }
 body[data-theme="light"] .workspace-history-item.session-loading::after {
-  background: rgba(255,255,255,0.6);
+  background: rgba(255,255,255,0.5);
 }
 
 
