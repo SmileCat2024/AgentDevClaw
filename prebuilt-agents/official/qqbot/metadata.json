@@ -2,7 +2,7 @@
   "id": "qqbot",
   "kind": "agent",
   "name": "IM 渠道",
-  "description": "为不同身份配置 IM 渠道与上下文，当前先支持接待员身份",
+  "description": "为不同身份配置 IM 渠道与上下文，当前先支持门户代理身份",
   "version": "1.0.0",
   "icon": "qq",
   "category": "chatbot",
@@ -36,8 +36,8 @@
             "en": "IM Channels"
           },
           "body": {
-            "zh": "先维护各个 IM 渠道的绑定信息，再按身份选择上下文与渠道。当前先开放接待员身份，点击它的对话即可按当前配置启动。",
-            "en": "Maintain IM channel bindings first, then choose context and channel per identity. The receptionist identity is available for now."
+            "zh": "先维护各个 IM 渠道的绑定信息，再按身份选择上下文与渠道。当前先开放门户代理身份，点击它的对话即可按当前配置启动。",
+            "en": "Maintain IM channel bindings first, then choose context and channel per identity. The portal agent identity is available for now."
           }
         },
         {
@@ -46,12 +46,12 @@
           "configEditor": {
             "type": "im-workspace",
             "title": {
-              "zh": "接待员身份配置",
-              "en": "Receptionist Identity Config"
+              "zh": "门户代理身份配置",
+              "en": "Portal Agent Identity Config"
             },
             "description": {
-              "zh": "先给接待员身份选择上下文，再决定它当前通过哪条渠道对外工作。",
-              "en": "Assign context to the receptionist identity first, then choose which channel it should use."
+              "zh": "先给门户代理身份选择上下文，再决定它当前通过哪条渠道对外工作。",
+              "en": "Assign context to the portal agent identity first, then choose which channel it should use."
             },
             "fields": [
               {

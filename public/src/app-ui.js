@@ -503,7 +503,7 @@ function renderPhModelConfigOverlay(agent, presets) {
 }
 
 function isAssemblySession(session) {
-  return String(session?.formId || 'startup-form') === 'assembly-form';
+  return String(session?.formId || '') === 'assembly-form';
 }
 
 function isAssemblySessionRunning(agent, session) {
@@ -691,7 +691,7 @@ function getAgentCreatorProjects(agent = getCurrentAgentRecord()) {
   });
 
   sessions
-    .filter((session) => String(session?.formId || 'startup-form') !== 'assembly-form')
+    .filter((session) => String(session?.formId || '') !== 'assembly-form')
     .forEach((session) => {
     const project = upsertProject({
       agentName: session.agentName,
@@ -747,7 +747,7 @@ function getFeatureSessionDisplayName(session, agent = getCurrentAgentRecord()) 
   const directoryName = getPathLeaf(session?.openDirectory) || getPathLeaf(workspaceState?.openDirectory);
   const derivedName = toFeatureDisplayName(directoryName);
   if (derivedName) return derivedName;
-  const rawName = toFeatureDisplayName(session?.featureName || workspaceState?.forms?.['startup-form']?.feature_name);
+  const rawName = toFeatureDisplayName(session?.featureName);
   if (rawName) return rawName;
   return String(session?.id || '').trim();
 }
@@ -1090,27 +1090,12 @@ function normalizeFeatureCreatorStartupDraft(agent, rawDraft = {}) {
 }
 
 function normalizeProgrammingHelperStartupDraft(agent, rawDraft = {}) {
-  if (agent?.id !== 'programming-helper') {
-    return { ...(rawDraft || {}) };
-  }
-
-  const nextDraft = { ...(rawDraft || {}) };
-  nextDraft.task_type = String(nextDraft.task_type || 'build').trim() || 'build';
-  nextDraft.task_title = typeof nextDraft.task_title === 'string' ? nextDraft.task_title : '';
-  nextDraft.workdir = typeof nextDraft.workdir === 'string' ? nextDraft.workdir : '';
-  nextDraft.target_files = typeof nextDraft.target_files === 'string' ? nextDraft.target_files : '';
-  nextDraft.expected_output = typeof nextDraft.expected_output === 'string' ? nextDraft.expected_output : '';
-  nextDraft.constraints = typeof nextDraft.constraints === 'string' ? nextDraft.constraints : '';
-  nextDraft.reference_materials = typeof nextDraft.reference_materials === 'string' ? nextDraft.reference_materials : '';
-  return nextDraft;
+  return {};
 }
 
 function normalizeWorkspaceStartupDraft(agent, rawDraft = {}) {
   if (agent?.id === 'feature-creator' || agent?.id === 'agent-creator') {
     return normalizeFeatureCreatorStartupDraft(agent, rawDraft);
-  }
-  if (agent?.id === 'programming-helper') {
-    return normalizeProgrammingHelperStartupDraft(agent, rawDraft);
   }
   return { ...(rawDraft || {}) };
 }
@@ -1711,7 +1696,7 @@ function renderWorkspaceSessionList(agent, block) {
     : null;
   const sessions = getWorkspaceSessions(agent).filter((session) => {
     if (!allowedFormIds) return true;
-    return allowedFormIds.has(String(session?.formId || 'startup-form'));
+    return allowedFormIds.has(String(session?.formId || ''));
   });
   const isFeatureCreator = agent?.id === 'feature-creator';
   const isAgentCreator = agent?.id === 'agent-creator';
@@ -2284,17 +2269,38 @@ function renderIMWorkspaceSelectField(label, value, options, onChange) {
 }
 
 function renderIMWorkspaceInlineSelect(value, options, onChange) {
-  const optionsHtml = options.map((option) => {
+  const hasIcons = options.some((o) => o.icon);
+
+  if (!hasIcons) {
+    const optionsHtml = options.map((option) => {
+      const optionValue = String(option?.value ?? '');
+      const optionLabel = String(option?.label ?? optionValue);
+      const selected = String(value || '') === optionValue ? ' selected' : '';
+      return '<option value="' + escapeHtml(optionValue) + '"' + selected + '>' + escapeHtml(optionLabel) + '</option>';
+    }).join('');
+    return '<select class="workspace-form-select im-inline-select" onchange="' + onChange + '">' + optionsHtml + '</select>';
+  }
+
+  // Custom dropdown with icons
+  const itemsHtml = options.map((option) => {
     const optionValue = String(option?.value ?? '');
     const optionLabel = String(option?.label ?? optionValue);
-    const selected = String(value || '') === optionValue ? ' selected' : '';
-    return '<option value="' + escapeHtml(optionValue) + '"' + selected + '>' + escapeHtml(optionLabel) + '</option>';
+    const isActive = String(value || '') === optionValue;
+    return '<div class="im-dropdown-item' + (isActive ? ' active' : '') + '" data-value="' + escapeHtml(optionValue) + '" onclick="window.imSelectChannel(this, &quot;' + escapeHtml(optionValue) + '&quot;)">' + (option.icon || '') + '<span>' + escapeHtml(optionLabel) + '</span></div>';
   }).join('');
 
+  const current = options.find((o) => String(o.value) === String(value || '')) || options[0];
+  const currentLabel = String(current?.label ?? '');
+  const currentIcon = current?.icon || '';
+
   return [
-    '<select class="workspace-form-select im-inline-select" onchange="' + onChange + '">',
-    optionsHtml,
-    '</select>',
+    '<div class="im-dropdown" data-onchange="' + escapeHtml(onChange) + '">',
+    '<div class="im-dropdown-trigger" onclick="window.toggleIMDropdown(this)">',
+    currentIcon + '<span>' + escapeHtml(currentLabel) + '</span>',
+    '<svg class="im-dropdown-arrow" viewBox="0 0 12 12" fill="currentColor"><path d="M2 4l4 4 4-4"/></svg>',
+    '</div>',
+    '<div class="im-dropdown-menu">' + itemsHtml + '</div>',
+    '</div>',
   ].join('');
 }
 
@@ -2329,9 +2335,10 @@ function renderIMWorkspaceConfigEditor(block) {
   const qqConfigured = !!(draft.qqConfig?.appId && draft.qqConfig?.clientSecret);
   const weixinConfigured = !!draft.weixinConfig?.configured;
   const bindingStatus = draft.binding?.status || 'idle';
+  const hasQrCode = !!draft.binding?.qrcodeDataUrl;
   const receptionistOptions = [
-    { value: 'qq', label: 'QQ' },
-    { value: 'weixin', label: 'Weixin' },
+    { value: 'qq', label: 'QQ', icon: '<svg class="im-channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M21.395 15.035a40 40 0 0 0-.803-2.264l-1.079-2.695c.001-.032.014-.562.014-.836C19.526 4.632 17.351 0 12 0S4.474 4.632 4.474 9.241c0 .274.013.804.014.836l-1.08 2.695a39 39 0 0 0-.802 2.264c-1.021 3.283-.69 4.643-.438 4.673.54.065 2.103-2.472 2.103-2.472 0 1.469.756 3.387 2.394 4.771-.612.188-1.363.479-1.845.835-.434.32-.379.646-.301.778.343.578 5.883.369 7.482.189 1.6.18 7.14.389 7.483-.189.078-.132.132-.458-.301-.778-.483-.356-1.233-.646-1.846-.836 1.637-1.384 2.393-3.302 2.393-4.771 0 0 1.563 2.537 2.103 2.472.251-.03.581-1.39-.438-4.673"/></svg>' },
+    { value: 'weixin', label: '微信', icon: '<svg class="im-channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/></svg>' },
   ];
   const fields = Array.isArray(editor.fields) ? editor.fields : [];
 
@@ -2362,9 +2369,24 @@ function renderIMWorkspaceConfigEditor(block) {
       : bindingStatus === 'expired'
         ? t('im_workspace_expired')
         : t('im_workspace_not_bound');
-  const qrcodeHtml = draft.binding?.qrcodeDataUrl
-    ? '<div class="im-workspace-qrcode"><img src="' + escapeHtml(draft.binding.qrcodeDataUrl) + '" alt="Weixin QR code"><div class="workspace-form-note">' + escapeHtml(t('im_workspace_weixin_qrcode_hint')) + '</div></div>'
-    : '';
+
+  const weixinActionsHtml = (() => {
+    const actions = [];
+    const secondary = [];
+    if (weixinConfigured) {
+      secondary.push('<button class="workspace-action secondary" type="button" onclick="window.logoutWeixinBinding()">' + escapeHtml(t('im_workspace_logout_weixin')) + '</button>');
+    }
+    secondary.push('<button class="workspace-action secondary" type="button" onclick="window.refreshWeixinBinding()">' + escapeHtml(t('im_workspace_refresh_weixin_bind')) + '</button>');
+    actions.push('<div class="im-card-action-row"><button class="workspace-action" type="button" onclick="window.startWeixinBinding()">' + escapeHtml(t('im_workspace_start_weixin_bind')) + '</button></div>');
+    if (secondary.length) {
+      actions.push('<div class="im-card-action-row">' + secondary.join('') + '</div>');
+    }
+    if (hasQrCode) {
+      actions.push('<div class="im-workspace-qrcode-hint">' + escapeHtml(t('im_workspace_weixin_qrcode_hint')) + '</div>');
+    }
+    return actions.join('');
+  })();
+
   const sessionsHtml = draft.sessions.length > 0
     ? '<div class="workspace-history-list">' + draft.sessions.map((session) => {
         const isActive = String(draft.workspaceConfig?.receptionistSessionId || '') === String(session.id);
@@ -2390,20 +2412,21 @@ function renderIMWorkspaceConfigEditor(block) {
 
   return [
     '<div class="im-workspace-channel-grid">',
-    '<section class="im-workspace-channel-card">',
-    '<div class="im-workspace-channel-head"><div class="workspace-section-title">' + escapeHtml(t('im_workspace_qq_section')) + '</div><span class="workspace-config-badge ' + (qqConfigured ? 'ready' : 'warn') + '">' + escapeHtml(qqConfigured ? t('qqbot_config_ready') : t('qqbot_config_incomplete')) + '</span></div>',
+    '<section class="im-workspace-channel-card' + (selectedChannel === 'qq' ? ' selected' : '') + '">',
+    '<div class="im-workspace-channel-head">',
+    '<div class="im-workspace-channel-title"><svg class="im-channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M21.395 15.035a40 40 0 0 0-.803-2.264l-1.079-2.695c.001-.032.014-.562.014-.836C19.526 4.632 17.351 0 12 0S4.474 4.632 4.474 9.241c0 .274.013.804.014.836l-1.08 2.695a39 39 0 0 0-.802 2.264c-1.021 3.283-.69 4.643-.438 4.673.54.065 2.103-2.472 2.103-2.472 0 1.469.756 3.387 2.394 4.771-.612.188-1.363.479-1.845.835-.434.32-.379.646-.301.778.343.578 5.883.369 7.482.189 1.6.18 7.14.389 7.483-.189.078-.132.132-.458-.301-.778-.483-.356-1.233-.646-1.846-.836 1.637-1.384 2.393-3.302 2.393-4.771 0 0 1.563 2.537 2.103 2.472.251-.03.581-1.39-.438-4.673"/></svg>' + escapeHtml(t('im_workspace_qq_section')) + '</div>',
+    '<span class="workspace-config-badge ' + (qqConfigured ? 'ready' : 'warn') + '">' + escapeHtml(qqConfigured ? t('qqbot_config_ready') : t('qqbot_config_incomplete')) + '</span>',
+    '</div>',
     '<div class="workspace-config-grid">',
     fields.map((field) => renderQQBotConfigField(field, draft.qqConfig || {}, 'window.updateIMQQConfigDraft')).join(''),
     '</div>',
     '</section>',
-    '<section class="im-workspace-channel-card">',
-    '<div class="im-workspace-channel-head"><div class="workspace-section-title">' + escapeHtml(t('im_workspace_weixin_section')) + '</div><span class="workspace-config-badge ' + (weixinConfigured ? 'ready' : (bindingStatus === 'pending' ? 'warn' : 'warn')) + '">' + escapeHtml(weixinBadge) + '</span></div>',
-    '<div class="workspace-actions">',
-    '<button class="workspace-action secondary" type="button" onclick="window.startWeixinBinding()">' + escapeHtml(t('im_workspace_start_weixin_bind')) + '</button>',
-    '<button class="workspace-action secondary" type="button" onclick="window.refreshWeixinBinding()">' + escapeHtml(t('im_workspace_refresh_weixin_bind')) + '</button>',
-    '<button class="workspace-action secondary" type="button" onclick="window.logoutWeixinBinding()">' + escapeHtml(t('im_workspace_logout_weixin')) + '</button>',
+    '<section class="im-workspace-channel-card' + (selectedChannel === 'weixin' ? ' selected' : '') + '">',
+    '<div class="im-workspace-channel-head">',
+    '<div class="im-workspace-channel-title"><svg class="im-channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/></svg>' + escapeHtml(t('im_workspace_weixin_section')) + '</div>',
+    '<span class="workspace-config-badge ' + (weixinConfigured ? 'ready' : 'warn') + '">' + escapeHtml(weixinBadge) + '</span>',
     '</div>',
-    qrcodeHtml,
+    weixinActionsHtml,
     '</section>',
     '</div>',
     '<section class="workspace-section">',
@@ -2412,18 +2435,48 @@ function renderIMWorkspaceConfigEditor(block) {
     '<div class="workspace-section-title">' + escapeHtml(t('im_workspace_identity_title')) + '</div>',
     '<div class="workspace-section-desc">' + escapeHtml(t('im_workspace_receptionist_hint')) + '</div>',
     '</div>',
-    '<div class="workspace-actions">',
+    '<div class="im-workspace-header-actions">',
     renderIMWorkspaceInlineSelect(
       selectedChannel,
       receptionistOptions,
       'window.updateIMWorkspaceField(&quot;workspaceConfig.selectedChannel&quot;, this.value)',
     ),
-    '<button class="workspace-action secondary" type="button" onclick="window.createReceptionistSession()">' + escapeHtml(t('im_workspace_new_chat')) + '</button>',
+    '<button class="workspace-action im-new-chat-btn" type="button" onclick="window.createReceptionistSession()">' + escapeHtml(t('im_workspace_new_chat')) + '</button>',
     '</div>',
     '</div>',
     sessionsHtml,
     '<div class="workspace-config-status">' + escapeHtml(statusText) + '</div>',
     '</section>',
+    renderWeixinQrCodeDialog(),
+  ].join('');
+}
+
+function renderWeixinQrCodeDialog() {
+  if (!imWorkspaceState.weixinQrDialogOpen) return '';
+  const draft = getIMWorkspaceDraft();
+  const hasQrCode = !!draft.binding?.qrcodeDataUrl;
+  if (!hasQrCode) return '';
+  return [
+    '<div class="feature-detail-overlay" onclick="if(event.target===this)window.closeWeixinQrCodeDialog()">',
+    '<div class="feature-detail-window" style="width:min(100%,420px);">',
+    '<div class="feature-detail-head">',
+    '<div>',
+    '<div class="feature-detail-title">' + escapeHtml(t('im_workspace_weixin_qrcode_dialog_title')) + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(t('im_workspace_weixin_qrcode_dialog_desc')) + '</div>',
+    '</div>',
+    '<button class="feature-detail-close" type="button" onclick="window.closeWeixinQrCodeDialog()">×</button>',
+    '</div>',
+    '<div class="im-qrcode-dialog-body">',
+    '<div class="im-qrcode-dialog-img-wrap">',
+    '<img src="' + escapeHtml(draft.binding.qrcodeDataUrl) + '" alt="Weixin QR code">',
+    '</div>',
+    '<div class="im-qrcode-dialog-hint">' + escapeHtml(t('im_workspace_weixin_qrcode_hint')) + '</div>',
+    '<div class="workspace-actions" style="justify-content:center;">',
+    '<button class="workspace-action" type="button" onclick="window.refreshWeixinBinding()">' + escapeHtml(t('im_workspace_refresh_weixin_bind')) + '</button>',
+    '</div>',
+    '</div>',
+    '</div>',
+    '</div>',
   ].join('');
 }
 
@@ -4231,7 +4284,7 @@ function groupAssemblyRunsByProject(agent, configs, runs) {
 function renderFWList(agent, block, formId) {
   const configs = getSavedAssemblyConfigs(agent).slice(0, 20);
   const runs = getWorkspaceSessions(agent)
-    .filter(s => String(s?.formId || 'startup-form') === 'assembly-form');
+    .filter(s => String(s?.formId || '') === 'assembly-form');
 
   let html = '<div class="fw">';
   html += '<div class="fw-banner"><div>';
@@ -5099,7 +5152,7 @@ function renderFlowWorkspaceProjectHero(agent, options = {}) {
   const projectName = getAssemblyDisplayName(draft) || (currentLanguage === 'zh' ? '未命名 Agent 项目' : 'Untitled Agent Project');
   const features = parseWorkspaceListField(draft.selected_features);
   const envState = getAssemblyEnvironmentState(draft);
-  const sessions = getWorkspaceSessions(agent).filter((session) => String(session?.formId || 'startup-form') === 'assembly-form');
+  const sessions = getWorkspaceSessions(agent).filter((session) => String(session?.formId || '') === 'assembly-form');
   const runningCount = sessions.filter((session) => isAssemblySessionRunning(agent, session)).length;
   const graphBinding = name
     ? `${currentLanguage === 'zh' ? '编排图绑定' : 'Graph'}: ~/.agentdev/AgentDevClaw/flows/${name}/agent-flow-graph.json`
@@ -5133,7 +5186,7 @@ function renderAssemblyLibraryBlock(agent, block) {
   const desc = localizeWorkspaceValue(block.description, '');
   const savedConfigs = getSavedAssemblyConfigs(agent).slice(0, 12);
   const recentRuns = getWorkspaceSessions(agent)
-    .filter((session) => String(session?.formId || 'startup-form') === 'assembly-form')
+    .filter((session) => String(session?.formId || '') === 'assembly-form')
     .slice(0, 12);
   const draft = normalizeAssemblyDraft(getWorkspaceFormDraft(agent)?.['assembly-form'] || {});
   const activeSessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
@@ -5290,7 +5343,7 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     })
     .slice(0, 18);
   const recentRuns = getWorkspaceSessions(agent)
-    .filter((session) => String(session?.formId || 'startup-form') === 'assembly-form')
+    .filter((session) => String(session?.formId || '') === 'assembly-form')
     .slice(0, 6);
   const generatedPrompt = buildAssemblyGeneratedPrompt(draft, packages);
   const effectivePrompt = getAssemblyPromptValue(draft, packages);

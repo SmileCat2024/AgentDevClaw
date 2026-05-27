@@ -54,7 +54,7 @@ function updateCurrentAgentChrome() {
   }
   currentAgentTitle.textContent = getCurrentVisualAgentTitle();
   if (!normalizeAgentIdentity(currentRuntimeAgentId)) {
-    statusBadge.textContent = currentLanguage === 'zh' ? '工作空间' : 'Workspace';
+    statusBadge.textContent = currentLanguage === 'zh' ? '系统空间' : 'System';
     statusBadge.classList.remove('disconnected');
     return;
   }
@@ -83,6 +83,7 @@ function getCurrentAgentRecord() {
 }
 
 function groupConnectedAgents(agents) {
+  const TOOL_AGENT_IDS = new Set(['programming-helper']);
   const prebuiltIds = new Set(
     agents
       .filter((agent) => agent.source === 'prebuilt')
@@ -94,10 +95,10 @@ function groupConnectedAgents(agents) {
     const parentId = String(agent.parent_id || '').trim();
     return !parentId || !prebuiltIds.has(parentId);
   });
+  const allPrebuilt = agents.filter((agent) => agent.source === 'prebuilt');
   return {
-    prebuilt: agents.filter((agent) => agent.source === 'prebuilt'),
-    managed: [],
-    child: [],
+    prebuilt: allPrebuilt.filter((agent) => !TOOL_AGENT_IDS.has(String(agent.id || '').trim())),
+    tool: allPrebuilt.filter((agent) => TOOL_AGENT_IDS.has(String(agent.id || '').trim())),
     external: orphanRuntimeAgents,
   };
 }
@@ -500,12 +501,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
 function renderAgentList() {
   const groups = groupConnectedAgents(allAgents);
   renderAgentGroup(prebuiltAgentList, prebuiltGroup, prebuiltCount, groups.prebuilt, { prebuilt: true });
-  managedGroup.style.display = 'none';
-  managedCount.textContent = '0';
-  managedAgentList.innerHTML = '';
-  childGroup.style.display = 'none';
-  childCount.textContent = '0';
-  childAgentList.innerHTML = '';
+  renderAgentGroup(toolAgentList, toolGroup, toolCount, groups.tool, { prebuilt: true });
   renderAgentGroup(externalAgentList, externalGroup, externalCount, groups.external);
 
   updateCurrentAgentChrome();
@@ -789,7 +785,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   }
 
   if (action.type === 'prime_workspace_form') {
-    const formId = String(action.formId || 'startup-form');
+    const formId = String(action.formId || '');
     const values = action.values && typeof action.values === 'object' ? action.values : {};
     if (activeAgent?.id) {
       const draft = getWorkspaceFormDraft(activeAgent);
@@ -1281,7 +1277,7 @@ window.updateWorkspaceFormDraft = (formId, fieldName, value) => {
   draft[formId] = draft[formId] || {};
   draft[formId][fieldName] = value;
   const isAssemblyDraft = (agent.id === 'agent-creator' || agent.id === 'flow-workspace') && formId === 'assembly-form';
-  if ((agent.id === 'feature-creator' || agent.id === 'agent-creator' || agent.id === 'programming-helper') && formId === 'startup-form') {
+  if ((agent.id === 'feature-creator' || agent.id === 'agent-creator') && formId === 'startup-form') {
     if (fieldName === 'install_mode' && value === 'custom') {
       draft[formId].target_dir = '';
     }
@@ -1305,12 +1301,6 @@ window.updateWorkspaceFormDraft = (formId, fieldName, value) => {
       renderCurrentMainView();
     }
     return;
-  }
-  if (agent.id === 'programming-helper' && formId === 'startup-form' && fieldName === 'workdir') {
-    const directoryDisplay = document.querySelector('[data-workspace-form-display="startup-form:workdir"]');
-    if (directoryDisplay) {
-      directoryDisplay.value = draft[formId].workdir || t('workspace_directory_not_selected');
-    }
   }
   if (isAssemblyDraft && !['assembly_stage', 'preset', 'advanced_prompt_open'].includes(fieldName)) {
     scheduleAssemblyWorkbenchRender();
@@ -2718,14 +2708,6 @@ window.saveWorkspaceForm = async (formId, rawAction) => {
         return;
       }
     }
-  } else if (agent.id === 'programming-helper' && formId === 'startup-form') {
-    const startupDraft = normalizeWorkspaceStartupDraft(agent, draft[formId] || {});
-    draft[formId] = startupDraft;
-    if (!String(startupDraft.task_title || '').trim()) {
-      window.alert(currentLanguage === 'zh' ? '请先填写任务标题。' : 'Please fill in the task title first.');
-      return;
-    }
-    openDirectoryOverride = String(startupDraft.workdir || '').trim();
   } else if (agent.id === 'agent-creator' && formId === 'assembly-form') {
     const assemblyDraft = { ...(draft[formId] || {}) };
     if (!isValidAgentCreatorName(assemblyDraft.assembly_name)) {
@@ -2884,6 +2866,9 @@ window.startWeixinBinding = async () => {
     const bundle = normalizeIMWorkspaceBundleData(payload || {});
     imWorkspaceState.data = bundle;
     imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+    if (bundle.binding?.qrcodeDataUrl) {
+      imWorkspaceState.weixinQrDialogOpen = true;
+    }
   } catch (error) {
     imWorkspaceState.error = error && error.message ? error.message : String(error);
     console.error('Failed to start Weixin binding:', error);
@@ -2936,6 +2921,37 @@ window.logoutWeixinBinding = async () => {
     renderCurrentMainView();
   }
 };
+
+window.showWeixinQrCodeDialog = () => {
+  imWorkspaceState.weixinQrDialogOpen = true;
+  renderCurrentMainView();
+};
+
+window.closeWeixinQrCodeDialog = () => {
+  imWorkspaceState.weixinQrDialogOpen = false;
+  renderCurrentMainView();
+};
+
+window.toggleIMDropdown = (trigger) => {
+  const dropdown = trigger.closest('.im-dropdown');
+  if (!dropdown) return;
+  const isOpen = dropdown.classList.contains('open');
+  document.querySelectorAll('.im-dropdown.open').forEach((d) => d.classList.remove('open'));
+  if (!isOpen) dropdown.classList.add('open');
+};
+
+window.imSelectChannel = (item, value) => {
+  const dropdown = item.closest('.im-dropdown');
+  if (!dropdown) return;
+  dropdown.classList.remove('open');
+  window.updateIMWorkspaceField('workspaceConfig.selectedChannel', value);
+};
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.im-dropdown')) {
+    document.querySelectorAll('.im-dropdown.open').forEach((d) => d.classList.remove('open'));
+  }
+});
 
 window.reloadQQBotConfig = async () => {
   try {

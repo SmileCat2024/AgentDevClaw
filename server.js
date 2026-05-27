@@ -451,7 +451,7 @@ function normalizeIMWorkspaceConfig(raw = {}) {
 
   if (!channels.weixin) {
     channels.weixin = normalizeIMChannelConfig({}, {
-      label: '微信 接待员线路',
+      label: '微信',
       role: 'receptionist',
       note: '',
     });
@@ -906,43 +906,7 @@ function buildAgentCreatorDraftArtifact(state, timestamp) {
 }
 
 function buildProgrammingHelperDraftArtifact(state, timestamp) {
-  const startupForm = state?.forms?.['startup-form'] || {};
-  const payload = cleanWorkspaceArtifactPayload({
-    task_type: startupForm.task_type,
-    task_title: startupForm.task_title,
-    goal: startupForm.goal,
-    workdir: startupForm.workdir,
-    target_files: startupForm.target_files,
-    expected_output: startupForm.expected_output,
-    constraints: startupForm.constraints,
-    reference_materials: startupForm.reference_materials,
-  });
-  const openDirectory = typeof state?.openDirectory === 'string' ? state.openDirectory.trim() : '';
-  const taskTitle = typeof payload.task_title === 'string' ? payload.task_title : '';
-  const stableKey = [openDirectory, taskTitle].filter(Boolean).join('@');
-
-  if (!stableKey) {
-    return null;
-  }
-
-  return normalizeWorkspaceArtifact({
-    id: `programming-helper-draft-${stableKey}`,
-    kind: 'draft',
-    title: taskTitle || '编程任务草稿',
-    status: 'active',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    source: {
-      workspace: 'programming-helper',
-      formId: 'startup-form',
-    },
-    relatedTo: {
-      openDirectory,
-      sessionId: '',
-      parentId: '',
-    },
-    payload,
-  });
+  return null;
 }
 
 async function writeWorkspaceArtifact(agentId, rawArtifact) {
@@ -1315,7 +1279,12 @@ async function readWorkspaceState(agentId) {
   const cached = _wsCache.get(key);
   if (cached && Date.now() - cached.ts < 5000) return cached.data;
   try {
-    const data = normalizeWorkspaceState(await readJson(getPrebuiltWorkspaceStatePath(key)));
+    let data = normalizeWorkspaceState(await readJson(getPrebuiltWorkspaceStatePath(key)));
+    if (key === 'programming-helper' && data.forms && data.forms['startup-form']) {
+      delete data.forms['startup-form'];
+      writeWorkspaceState(key, data).catch(() => {});
+      _wsCache.delete(key);
+    }
     _wsCache.set(key, { data, ts: Date.now() });
     return data;
   } catch {
@@ -2380,6 +2349,23 @@ function buildNamedSessionTitle(name, createdAtIso) {
   return buildFeatureSessionTitle(name, createdAtIso);
 }
 
+async function getNextNewSessionTitle(agentId, openDirectory) {
+  const index = await readSessionIndex(agentId);
+  const normalizedDir = String(openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const newSessionPattern = /^新对话(\d+)$/;
+  let maxN = 0;
+  for (const session of (index.sessions || [])) {
+    const sessionDir = String(session?.openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    if (normalizedDir && sessionDir !== normalizedDir) continue;
+    const m = cleanSessionText(session?.title).match(newSessionPattern);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxN) maxN = n;
+    }
+  }
+  return `新对话${maxN + 1}`;
+}
+
 async function checkSessionHasSummary(agentId, sessionId) {
   const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
   try {
@@ -2442,7 +2428,7 @@ function buildLightPrebuiltSessionRecord(agentId, record) {
     sessionType,
     status: cleanSessionText(record?.status) || (sessionType === 'exploration' ? 'locked' : ''),
     metadata,
-    formId: cleanSessionText(record?.formId) || 'startup-form',
+    formId: cleanSessionText(record?.formId) || '',
     openDirectory: cleanSessionText(record?.openDirectory),
     createdAt: cleanSessionText(record?.createdAt) || new Date().toISOString(),
     updatedAt: cleanSessionText(record?.updatedAt) || cleanSessionText(record?.createdAt) || new Date().toISOString(),
@@ -2569,9 +2555,10 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
   const workspaceState = isWorkspaceSessionAgent(agentId)
     ? await readWorkspaceState(agentId)
     : null;
-  const formId = cleanSessionText(record.formId) || 'startup-form';
-  const sourceForm = workspaceState?.forms?.[formId] || workspaceState?.forms?.['startup-form'] || {};
-  const startupForm = workspaceState?.forms?.['startup-form'] || {};
+  const isProgrammingHelper = normalizedAgentId === 'programming-helper';
+  const formId = cleanSessionText(record.formId) || (isProgrammingHelper ? '' : 'startup-form');
+  const sourceForm = workspaceState?.forms?.[formId] || {};
+  const startupForm = isProgrammingHelper ? {} : (workspaceState?.forms?.['startup-form'] || {});
   const featureName = cleanSessionText(record.featureName) || cleanSessionText(sourceForm.feature_name) || cleanSessionText(startupForm.feature_name);
   const agentName = cleanSessionText(record.agentName) || cleanSessionText(sourceForm.agent_name || sourceForm.assembly_name) || cleanSessionText(startupForm.agent_name);
   const taskTitle = cleanSessionText(record.taskTitle) || cleanSessionText(sourceForm.task_title) || cleanSessionText(startupForm.task_title);
@@ -2700,8 +2687,9 @@ async function createPrebuiltSession(agentId, options = {}) {
   const currentState = isWorkspaceSessionAgent(agentId)
     ? await readWorkspaceState(agentId)
     : null;
-  const requestedFormId = cleanSessionText(options.formId) || 'startup-form';
-  const startupForm = currentState?.forms?.['startup-form'] || {};
+  const isProgrammingHelper = normalizedAgentId === 'programming-helper';
+  const requestedFormId = cleanSessionText(options.formId) || (isProgrammingHelper ? '' : 'startup-form');
+  const startupForm = isProgrammingHelper ? {} : (currentState?.forms?.['startup-form'] || {});
   const sourceForm = currentState?.forms?.[requestedFormId] || startupForm;
   const sourceSessionId = cleanSessionText(options.sourceSessionId);
   const preIndex = await readSessionIndex(agentId);
@@ -2771,10 +2759,13 @@ async function createPrebuiltSession(agentId, options = {}) {
     || cleanSessionText(startupForm.reference_materials);
   const sessionDisplayName = normalizedAgentId === 'agent-creator'
     ? nextAgentName
-    : (normalizedAgentId === 'programming-helper' ? (nextTaskTitle || nextGoal || nextOpenDirectory || '编程任务') : nextFeatureName);
+    : (normalizedAgentId === 'programming-helper' ? '' : nextFeatureName);
+  const nextTitle = isProgrammingHelper
+    ? await getNextNewSessionTitle(agentId, nextOpenDirectory)
+    : buildNamedSessionTitle(sessionDisplayName, createdAt);
   const record = {
     id: sessionId,
-    title: buildNamedSessionTitle(sessionDisplayName, createdAt),
+    title: nextTitle,
     featureName: nextFeatureName,
     agentName: nextAgentName,
     taskTitle: nextTaskTitle,
@@ -2861,21 +2852,10 @@ async function createPrebuiltSession(agentId, options = {}) {
     });
   } else if (normalizedAgentId === 'programming-helper') {
     const openDirectory = nextOpenDirectory || cleanSessionText(currentState.openDirectory);
+    const cleanedForms = { ...currentState.forms };
+    delete cleanedForms['startup-form'];
     await writeWorkspaceState(agentId, {
-      forms: {
-        ...currentState.forms,
-        'startup-form': {
-          ...(currentState.forms?.['startup-form'] || {}),
-          task_type: nextTaskType,
-          task_title: nextTaskTitle,
-          goal: nextGoal,
-          workdir: openDirectory,
-          target_files: nextTargetFiles,
-          expected_output: nextExpectedOutput,
-          constraints: nextConstraints,
-          reference_materials: nextReferenceMaterials,
-        },
-      },
+      forms: cleanedForms,
       openDirectory,
     });
   }
@@ -2973,21 +2953,10 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
   } else if (sanitizeSessionFragment(agentId) === 'programming-helper') {
     const currentState = await readWorkspaceState(agentId);
     const openDirectory = cleanSessionText(existing.openDirectory) || cleanSessionText(currentState.openDirectory);
+    const cleanedForms = { ...currentState.forms };
+    delete cleanedForms['startup-form'];
     await writeWorkspaceState(agentId, {
-      forms: {
-        ...currentState.forms,
-        'startup-form': {
-          ...(currentState.forms?.['startup-form'] || {}),
-          task_type: cleanSessionText(existing.taskType),
-          task_title: cleanSessionText(existing.taskTitle),
-          goal: cleanSessionText(existing.goal),
-          workdir: openDirectory,
-          target_files: cleanSessionText(existing.targetFiles),
-          expected_output: cleanSessionText(existing.expectedOutput),
-          constraints: cleanSessionText(existing.constraints),
-          reference_materials: cleanSessionText(existing.referenceMaterials),
-        },
-      },
+      forms: cleanedForms,
       openDirectory,
     });
   }

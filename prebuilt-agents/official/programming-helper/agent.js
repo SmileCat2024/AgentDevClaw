@@ -104,7 +104,6 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
     const workspaceState = readProgrammingWorkspaceState();
     const openDirectory = cleanValue(workspaceState?.openDirectory);
-    const startupForm = workspaceState?.forms?.['startup-form'] || {};
 
     const composer = new TemplateComposer()
       .add({ file: SYSTEM_PROMPT_PATH });
