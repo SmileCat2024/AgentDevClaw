@@ -2967,15 +2967,28 @@ window.loadDispatchPHSessions = async () => {
   }
 };
 
+window.loadDispatchPHProjects = async () => {
+  try {
+    const res = await fetch('/protoclaw/dispatch/projects?agentId=programming-helper');
+    const data = await res.json();
+    window._dispatchPHProjects = Array.isArray(data?.projects) ? data.projects : [];
+  } catch (e) {
+    console.error('Failed to load PH projects:', e);
+    window._dispatchPHProjects = [];
+  }
+};
+
 window.createDispatchSchedule = async () => {
   const secondsEl = document.getElementById('dispatch-seconds');
   const sessionEl = document.getElementById('dispatch-session');
   const messageEl = document.getElementById('dispatch-message');
+  const projectEl = document.getElementById('dispatch-project');
   if (!secondsEl || !sessionEl || !messageEl) return;
 
   const seconds = Number(secondsEl.value);
   const sessionVal = sessionEl.value;
   const message = messageEl.value.trim();
+  const projectVal = projectEl ? projectEl.value : '';
   if (!message) return;
   if (!Number.isFinite(seconds) || seconds <= 0) return;
 
@@ -2984,6 +2997,10 @@ window.createDispatchSchedule = async () => {
     message,
     secondsFromNow: seconds,
   };
+
+  if (projectVal) {
+    body.projectId = projectVal;
+  }
 
   if (sessionVal === '__exploration__') {
     body.newSessionType = 'exploration';

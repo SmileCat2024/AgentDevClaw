@@ -2498,6 +2498,7 @@ function renderDispatchConfigEditor(_block) {
     window._dispatchSchedulesLoaded = true;
     window.loadDispatchSchedules().then(() => renderCurrentMainView());
     window.loadDispatchPHSessions().then(() => renderCurrentMainView());
+    window.loadDispatchPHProjects().then(() => renderCurrentMainView());
   }
 
   const schedules = window._dispatchSchedules || [];
@@ -2561,6 +2562,15 @@ function renderDispatchConfigEditor(_block) {
     phSessions.length > 0 ? '<optgroup label="' + (isZh ? '已有会话' : 'Existing Sessions') + '">' + phSessions.map(s =>
       '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.title || s.id.slice(0, 16)) + '</option>'
     ).join('') + '</optgroup>' : '',
+    '</select>',
+    '</div>',
+    '<div class="dispatch-form-row" id="dispatch-project-row">',
+    '<label class="dispatch-label">' + (isZh ? '项目' : 'Project') + '</label>',
+    '<select id="dispatch-project" class="dispatch-select">',
+    '<option value="">' + (isZh ? '当前激活项目' : 'Current Active Project') + '</option>',
+    (window._dispatchPHProjects || []).map(p =>
+      '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.name || 'Unnamed') + '</option>'
+    ).join(''),
     '</select>',
     '</div>',
     '<div class="dispatch-form-row">',

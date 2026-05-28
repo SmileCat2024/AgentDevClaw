@@ -60,6 +60,103 @@ const dispatchQueue = new Map();           // runtimeKey → [{ id, text, schedu
 const dispatchPendingPolls = new Map();    // runtimeKey → resolveFn
 const dispatchTimers = new Map();          // scheduleId → setTimeout handle
 
+// ── Project abstraction layer ───────────────────────────────────────
+// Project adapter registry: workspaceId → adapter instance
+const projectAdapters = new Map();
+
+/**
+ * Register a project adapter for a workspace
+ */
+function registerProjectAdapter(adapter) {
+  if (adapter && adapter.workspaceId) {
+    projectAdapters.set(adapter.workspaceId, adapter);
+  }
+}
+
+/**
+ * Get project adapter for a workspace
+ */
+function getProjectAdapter(agentId) {
+  return projectAdapters.get(agentId) || null;
+}
+
+/**
+ * Programming-helper project adapter
+ * Projects are directory-based: project = openDirectory
+ */
+class ProgrammingHelperProjectAdapter {
+  constructor() {
+    this.workspaceId = 'programming-helper';
+  }
+
+  /**
+   * Extract project ID from a session record
+   */
+  extractProjectId(session) {
+    const openDirectory = session?.openDirectory;
+    if (!openDirectory) return null;
+    return `dir:${String(openDirectory).replace(/\\/g, '/').toLowerCase()}`;
+  }
+
+  /**
+   * Get current active project from workspace state
+   */
+  async getCurrentProject() {
+    try {
+      const workspaceState = await readWorkspaceState(this.workspaceId);
+      const openDirectory = workspaceState?.openDirectory;
+      if (!openDirectory) return null;
+
+      const projectId = this.extractProjectId({ openDirectory });
+      const projectName = openDirectory.split(/[\\/]/).filter(Boolean).pop() || 'UntitledProject';
+
+      return {
+        id: projectId,
+        name: projectName,
+        type: 'directory',
+        workspaceId: this.workspaceId,
+        config: { openDirectory },
+        sessionIds: [],
+        latestSessionId: null,
+        createdAt: workspaceState.updatedAt,
+        updatedAt: workspaceState.updatedAt,
+      };
+    } catch (err) {
+      console.error(`[ProjectAdapter] Failed to get current project for ${this.workspaceId}:`, err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get project config by project ID
+   */
+  getProjectConfig(projectId) {
+    if (!projectId || !projectId.startsWith('dir:')) {
+      return {};
+    }
+    const openDirectory = projectId.slice(4); // Remove 'dir:' prefix
+    return { openDirectory };
+  }
+
+  /**
+   * Activate a project (update workspace state)
+   */
+  async activateProject(projectId) {
+    const config = this.getProjectConfig(projectId);
+    if (!config.openDirectory) {
+      throw new Error(`Invalid project ID: ${projectId}`);
+    }
+
+    // Only update openDirectory, do not overwrite forms or other state
+    await writeWorkspaceState(this.workspaceId, {
+      openDirectory: config.openDirectory,
+    });
+  }
+}
+
+// Initialize: register programming-helper adapter
+registerProjectAdapter(new ProgrammingHelperProjectAdapter());
+
 function loadDispatchSchedules() {
   try {
     if (!existsSync(DISPATCH_SCHEDULES_PATH)) return;
@@ -121,24 +218,79 @@ async function fireDispatchNow(schedule) {
 
   try {
     if (isNewSession) {
-      // create a new session then start runtime
       const sessionType = s.newSessionType || 'main';
       const agent = await requirePrebuiltAgentForRuntime(agentId);
-      const session = await createPrebuiltSession(agentId, { sessionType });
+
+      // Use project adapter to get project config
+      let createOpts = { sessionType };
+      const adapter = getProjectAdapter(agentId);
+
+      if (adapter) {
+        let projectConfig = null;
+
+        if (s.projectId) {
+          // Explicitly specified project
+          projectConfig = adapter.getProjectConfig(s.projectId);
+          console.log(`[Dispatch] using specified project ${s.projectId} for ${agentId}`);
+        } else {
+          // Use current active project as fallback
+          const currentProject = await adapter.getCurrentProject();
+          if (currentProject) {
+            projectConfig = adapter.getProjectConfig(currentProject.id);
+            console.log(`[Dispatch] using current project ${currentProject.id} for ${agentId}`);
+          }
+        }
+
+        if (projectConfig && Object.keys(projectConfig).length > 0) {
+          createOpts = { ...createOpts, ...projectConfig };
+        }
+      } else {
+        // Fallback: use current workspace state (no adapter)
+        console.log(`[Dispatch] no project adapter for ${agentId}, using workspace state`);
+        try {
+          const workspaceState = await readWorkspaceState(agentId);
+          if (workspaceState?.openDirectory) {
+            createOpts.openDirectory = workspaceState.openDirectory;
+          }
+        } catch (err) {
+          console.error(`[Dispatch] failed to read workspace state for ${agentId}:`, err.message);
+        }
+      }
+
+      const session = await createPrebuiltSession(agentId, createOpts);
       sessionId = session.id;
       s.targetSessionId = sessionId;
       saveDispatchSchedules();
-      await startManagedAgent(agent, sessionId);
+      const runtimeOpts = {};
+      if (sessionType !== 'main') {
+        runtimeOpts.extraEnv = {
+          PROTOCLAW_SESSION_TYPE: sessionType,
+          PROTOCLAW_MODEL_PRESET_ROLE: sessionType === 'exploration' ? 'exploration' : 'sub',
+        };
+      }
+      await startManagedAgent(agent, sessionId, runtimeOpts);
       const connected = await waitForManagedRuntimeReady(agent.id, 15000, sessionId);
       console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} type=${sessionType} connected=${connected}`);
     } else {
-      // existing session: ensure runtime is running
+      // existing session: ensure runtime is running with correct session type and workspace state
       const runtime = getAgentRuntime(agentId, sessionId);
       if (!runtime || runtime.stopped || runtime.process?.exitCode !== null) {
         const agent = await requirePrebuiltAgentForRuntime(agentId);
-        await startManagedAgent(agent, sessionId);
+        // activate session to update state.json before starting runtime
+        await activatePrebuiltSession(agentId, sessionId);
+        const idx = await readSessionIndex(agentId);
+        const record = idx.sessions.find(r => r.id === sessionId);
+        const sessionType = record?.sessionType || 'main';
+        const runtimeOpts = {};
+        if (sessionType !== 'main') {
+          runtimeOpts.extraEnv = {
+            PROTOCLAW_SESSION_TYPE: sessionType,
+            PROTOCLAW_MODEL_PRESET_ROLE: sessionType === 'exploration' ? 'exploration' : 'sub',
+          };
+        }
+        await startManagedAgent(agent, sessionId, runtimeOpts);
         const connected = await waitForManagedRuntimeReady(agent.id, 15000, sessionId);
-        console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} connected=${connected}`);
+        console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} type=${sessionType} connected=${connected}`);
       }
     }
   } catch (err) {
@@ -4276,6 +4428,7 @@ async function getConnectedAgents() {
       agent.source === 'prebuilt'
       && sanitizeSessionFragment(agent.id) === sanitizeSessionFragment(runtimeAgent.parentAgentId || ''));
     const isExplicitChildRuntime = !!runtimeAgent.parentAgentId && !!explicitParentHost;
+
     const workspaceHostParent = connectedAgents.find((agent) =>
       agent.source === 'prebuilt'
       && sanitizeSessionFragment(agent.id) === sanitizeSessionFragment(runtimeAgent.parentAgentId || '')
@@ -4381,14 +4534,19 @@ async function waitForProcessExit(child, timeoutMs = 5000) {
 async function waitForManagedRuntimeReady(agentId, timeoutMs = 10000, sessionId = undefined) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const status = buildStatus(agentId, sessionId);
     const runtime = getAgentRuntime(agentId, sessionId);
-    if (status.viewerAgentId && runtime?.ready) {
-      const agents = await getConnectedAgents();
-      const viewerAgentId = cleanSessionText(status.viewerAgentId);
-      const connected = agents.find((agent) => cleanSessionText(agent.id) === viewerAgentId || cleanSessionText(agent.runtime_session_id || agent.runtimeSessionId) === viewerAgentId);
-      if (connected) {
-        return connected;
+    // Exploration agents run headlessly (no ViewerWorker) — just check ready flag
+    if (runtime?.sessionType === 'exploration') {
+      if (runtime.ready) return runtime;
+    } else {
+      const status = buildStatus(agentId, sessionId);
+      if (status.viewerAgentId && runtime?.ready) {
+        const agents = await getConnectedAgents();
+        const viewerAgentId = cleanSessionText(status.viewerAgentId);
+        const connected = agents.find((agent) => cleanSessionText(agent.id) === viewerAgentId || cleanSessionText(agent.runtime_session_id || agent.runtimeSessionId) === viewerAgentId);
+        if (connected) {
+          return connected;
+        }
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -4474,14 +4632,17 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
 
   const runtimeDisplayName = await resolveRuntimeDisplayName(agent, resolvedSessionId);
 
+  const isExplorationSession = runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE === 'exploration';
   const child = spawn(process.execPath, [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN], {
     cwd: __dirname,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: sanitizeSpawnEnv({
       ...process.env,
-      AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
-      AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
-      AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || '\\\\.\\pipe\\agentdev-viewer',
+      ...(isExplorationSession ? {} : {
+        AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
+        AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
+        AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || '\\\\.\\pipe\\agentdev-viewer',
+      }),
       PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
       PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
       PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
@@ -4501,6 +4662,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
     viewerAgentId: null,
     selectedSessionId: resolvedSessionId || null,
     ready: false,
+    sessionType: runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE || null,
   };
 
   managedAgents.set(runtime.key, runtime);
@@ -4851,13 +5013,77 @@ app.all('/protoclaw/claw-mcp/', async (req, res, next) => {
 });
 
 // ── Dispatch API ─────────────────────────────────────────────────
+app.get('/protoclaw/dispatch/projects', async (_req, res) => {
+  const agentId = String(_req.query.agentId || '').trim();
+  if (!agentId) return res.status(400).json({ error: 'agentId required' });
+
+  const adapter = getProjectAdapter(agentId);
+  if (!adapter) {
+    return res.json({ projects: [] });
+  }
+
+  try {
+    // Aggregate projects from workspace state + sessions
+    const currentState = await readWorkspaceState(agentId);
+    const sessionsResult = await listPrebuiltSessions(agentId);
+    const sessions = sessionsResult?.sessions || [];
+    const projectsMap = new Map();
+
+    const upsertProject = (rawProject) => {
+      const id = adapter.extractProjectId(rawProject);
+      if (!id) return null;
+      const existing = projectsMap.get(id);
+      const merged = existing || {
+        id,
+        name: rawProject.openDirectory
+          ? rawProject.openDirectory.split(/[\\/]/).filter(Boolean).pop() || 'Unnamed'
+          : 'Unnamed',
+        type: 'directory',
+        config: adapter.getProjectConfig(id),
+        sessionIds: [],
+        latestSessionId: null,
+        createdAt: rawProject.createdAt,
+        updatedAt: rawProject.updatedAt,
+      };
+      projectsMap.set(id, merged);
+      return merged;
+    };
+
+    // Add current workspace state as a project
+    if (currentState?.openDirectory) {
+      upsertProject({ openDirectory: currentState.openDirectory, updatedAt: currentState.updatedAt });
+    }
+
+    // Add projects from state-managed list
+    const stateProjects = Array.isArray(currentState?.phProjects) ? currentState.phProjects : [];
+    stateProjects.forEach(p => upsertProject(p));
+
+    // Add projects from sessions
+    (sessions || []).forEach(session => {
+      const project = upsertProject(session);
+      if (project) {
+        project.sessionIds.push(session.id);
+        if (!project.latestSessionId) {
+          project.latestSessionId = session.id;
+        }
+      }
+    });
+
+    const projects = Array.from(projectsMap.values());
+    res.json({ projects });
+  } catch (err) {
+    console.error('[Dispatch] Failed to list projects:', err.message);
+    res.status(500).json({ error: 'Failed to list projects' });
+  }
+});
+
 app.get('/protoclaw/dispatch/schedules', (_req, res) => {
   res.json({ schedules: Array.from(dispatchSchedules.values()) });
 });
 
 app.post('/protoclaw/dispatch/schedules', express.json(), async (req, res, next) => {
   try {
-    const { targetAgentId, targetSessionId, message, secondsFromNow, newSessionType } = req.body || {};
+    const { targetAgentId, targetSessionId, message, secondsFromNow, newSessionType, projectId } = req.body || {};
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'message is required' });
     }
@@ -4874,6 +5100,7 @@ app.post('/protoclaw/dispatch/schedules', express.json(), async (req, res, next)
       targetAgentId: agentId,
       targetSessionId: targetSessionId || null,
       newSessionType: newSessionType || null,
+      projectId: projectId || null,
       message,
       status: 'pending',
       createdAt: new Date().toISOString(),

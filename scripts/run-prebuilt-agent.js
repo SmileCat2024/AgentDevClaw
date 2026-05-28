@@ -27,6 +27,7 @@ const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
 const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
+const IS_EXPLORATION = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -620,31 +621,36 @@ async function main() {
   console.log(`[ProtoClaw Runtime] Host workdir => ${process.cwd()}`);
 
   console.log(`[ProtoClaw Runtime] Agent 实例已创建: ${agentName}`);
-  console.log(`[ProtoClaw Runtime] 正在连接到 ViewerWorker (端口 ${VIEWER_PORT})...`);
 
-  await agent.withViewer(agentName, VIEWER_PORT, false, {
-    projectRoot: PROTOCLAW_ROOT,
-  });
+  // Exploration agents run headlessly — no ViewerWorker, no IM gateway.
+  // ClawDispatchFeature polls via HTTP and is independent of ViewerWorker.
+  if (IS_EXPLORATION) {
+    console.log('[ProtoClaw Runtime] Exploration mode — skipping ViewerWorker connection');
+  } else {
+    console.log(`[ProtoClaw Runtime] 正在连接到 ViewerWorker (端口 ${VIEWER_PORT})...`);
+    await agent.withViewer(agentName, VIEWER_PORT, false, {
+      projectRoot: PROTOCLAW_ROOT,
+    });
+    console.log('[ProtoClaw Runtime] ✓ 已连接到 ViewerWorker');
+    console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${agent.agentId ?? 'unknown'}`);
 
-  console.log('[ProtoClaw Runtime] ✓ 已连接到 ViewerWorker');
-  console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${agent.agentId ?? 'unknown'}`);
-
-  try {
-    if (typeof agent.startSelectedIMGateway === 'function') {
-      const channel = await agent.startSelectedIMGateway();
-      console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
-    } else if (typeof agent.startQQBotGateway === 'function') {
-      await agent.startQQBotGateway();
-      console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
-    } else {
-      const qqbotFeature = agent.features?.get?.('qqbot');
-      if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
-        await qqbotFeature.startGateway(agent);
+    try {
+      if (typeof agent.startSelectedIMGateway === 'function') {
+        const channel = await agent.startSelectedIMGateway();
+        console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
+      } else if (typeof agent.startQQBotGateway === 'function') {
+        await agent.startQQBotGateway();
         console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+      } else {
+        const qqbotFeature = agent.features?.get?.('qqbot');
+        if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
+          await qqbotFeature.startGateway(agent);
+          console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+        }
       }
+    } catch (error) {
+      console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
     }
-  } catch (error) {
-    console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
   }
 
   // Start ClawDispatch loop if feature is mounted
@@ -679,14 +685,16 @@ async function main() {
 
   // `loadSession()` only restores in-memory state. Push the restored state to Viewer
   // so history is visible immediately without waiting for the next user input.
-  try {
-    const messages = typeof agent.getContext === 'function' ? agent.getContext().getAll() : [];
-    agent['pushToDebug']?.(messages);
-    agent['syncRegisteredToolsToDebug']?.();
-    agent['pushInspectorSnapshot']?.();
-    agent['pushOverviewSnapshot']?.();
-  } catch (error) {
-    console.warn('[ProtoClaw Runtime] 恢复会话后同步调试状态失败:', error);
+  if (!IS_EXPLORATION) {
+    try {
+      const messages = typeof agent.getContext === 'function' ? agent.getContext().getAll() : [];
+      agent['pushToDebug']?.(messages);
+      agent['syncRegisteredToolsToDebug']?.();
+      agent['pushInspectorSnapshot']?.();
+      agent['pushOverviewSnapshot']?.();
+    } catch (error) {
+      console.warn('[ProtoClaw Runtime] 恢复会话后同步调试状态失败:', error);
+    }
   }
 
   console.log('[ProtoClaw Runtime] READY session=' + (sessionId || 'none'));

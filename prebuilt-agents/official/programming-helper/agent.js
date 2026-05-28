@@ -69,6 +69,8 @@ export class ProgrammingHelperAgent extends BasicAgent {
     tools.remove('send_to_agent');
     tools.remove('wait');
 
+    this.use(new ClawDispatchFeature());
+
     if (isExploration) {
       this.use(new ShellFeature({ workspaceDir }));
       this.use(new WebSearchFeature());
@@ -90,7 +92,6 @@ export class ProgrammingHelperAgent extends BasicAgent {
       this.use(new ShellFeature({ workspaceDir }));
 
       this.use(new UserInputFeature());
-      this.use(new ClawDispatchFeature());
     }
   }
 
