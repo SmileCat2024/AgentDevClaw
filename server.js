@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { spawn } from 'child_process';
-import { existsSync, promises as fs } from 'fs';
+import { existsSync, readFileSync, writeFileSync, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import process from 'process';
@@ -52,6 +52,111 @@ const managedAgents = new Map();
 const assemblyRuntimeProcesses = new Map();
 const pendingFeatureImports = new Map();
 const weixinBindingSessions = new Map();
+
+// ── Dispatch system ──────────────────────────────────────────────
+const DISPATCH_SCHEDULES_PATH = path.join(USER_DATA_ROOT, 'dispatch-schedules.json');
+const dispatchSchedules = new Map();       // scheduleId → schedule object
+const dispatchQueue = new Map();           // runtimeKey → [{ id, text, scheduleId }]
+const dispatchPendingPolls = new Map();    // runtimeKey → resolveFn
+const dispatchTimers = new Map();          // scheduleId → setTimeout handle
+
+function loadDispatchSchedules() {
+  try {
+    if (!existsSync(DISPATCH_SCHEDULES_PATH)) return;
+    const raw = JSON.parse(readFileSync(DISPATCH_SCHEDULES_PATH, 'utf8'));
+    const arr = Array.isArray(raw?.schedules) ? raw.schedules : [];
+    for (const s of arr) {
+      if (s && s.id) dispatchSchedules.set(s.id, s);
+    }
+  } catch {}
+}
+
+function saveDispatchSchedules() {
+  const arr = Array.from(dispatchSchedules.values());
+  writeFileSync(DISPATCH_SCHEDULES_PATH, JSON.stringify({ schedules: arr }, null, 2), 'utf8');
+}
+
+function pushDispatchMessage(runtimeKey, text, scheduleId = null) {
+  const msg = { id: `dm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, text, scheduleId };
+  // if a poll is already waiting, deliver directly — no need to queue
+  const resolver = dispatchPendingPolls.get(runtimeKey);
+  if (resolver) {
+    dispatchPendingPolls.delete(runtimeKey);
+    resolver(msg);
+    return;
+  }
+  // otherwise queue for next poll
+  const queue = dispatchQueue.get(runtimeKey);
+  if (queue) {
+    queue.push(msg);
+  } else {
+    dispatchQueue.set(runtimeKey, [msg]);
+  }
+}
+
+function scheduleDispatchFire(schedule) {
+  const fireAt = new Date(schedule.fireAt).getTime();
+  const delay = fireAt - Date.now();
+  if (delay <= 0) {
+    fireDispatchNow(schedule);
+    return;
+  }
+  const handle = setTimeout(() => {
+    dispatchTimers.delete(schedule.id);
+    fireDispatchNow(schedule);
+  }, delay);
+  dispatchTimers.set(schedule.id, handle);
+}
+
+async function fireDispatchNow(schedule) {
+  const s = dispatchSchedules.get(schedule.id);
+  if (!s || s.status !== 'pending') return;
+  s.status = 'fired';
+  s.firedAt = new Date().toISOString();
+  saveDispatchSchedules();
+
+  const agentId = s.targetAgentId;
+  let sessionId = s.targetSessionId;
+  const isNewSession = !sessionId;
+
+  try {
+    if (isNewSession) {
+      // create a new session then start runtime
+      const sessionType = s.newSessionType || 'main';
+      const agent = await requirePrebuiltAgentForRuntime(agentId);
+      const session = await createPrebuiltSession(agentId, { sessionType });
+      sessionId = session.id;
+      s.targetSessionId = sessionId;
+      saveDispatchSchedules();
+      await startManagedAgent(agent, sessionId);
+      const connected = await waitForManagedRuntimeReady(agent.id, 15000, sessionId);
+      console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} type=${sessionType} connected=${connected}`);
+    } else {
+      // existing session: ensure runtime is running
+      const runtime = getAgentRuntime(agentId, sessionId);
+      if (!runtime || runtime.stopped || runtime.process?.exitCode !== null) {
+        const agent = await requirePrebuiltAgentForRuntime(agentId);
+        await startManagedAgent(agent, sessionId);
+        const connected = await waitForManagedRuntimeReady(agent.id, 15000, sessionId);
+        console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} connected=${connected}`);
+      }
+    }
+  } catch (err) {
+    console.error(`[Dispatch] failed to start runtime for ${agentId}/${sessionId}:`, err.message);
+  }
+
+  const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
+  pushDispatchMessage(runtimeKey, s.message, s.id);
+  console.log(`[Dispatch] fired schedule ${s.id} → ${agentId}::${sessionId}: ${s.message.slice(0, 50)}...`);
+}
+
+loadDispatchSchedules();
+// restore timers for pending schedules
+for (const s of dispatchSchedules.values()) {
+  if (s.status === 'pending' && new Date(s.fireAt).getTime() > Date.now()) {
+    scheduleDispatchFire(s);
+  }
+}
 
 function getManagedRuntimeKey(agentId, sessionId = null) {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
@@ -4744,6 +4849,96 @@ app.all('/protoclaw/claw-mcp/', async (req, res, next) => {
     }
   }
 });
+
+// ── Dispatch API ─────────────────────────────────────────────────
+app.get('/protoclaw/dispatch/schedules', (_req, res) => {
+  res.json({ schedules: Array.from(dispatchSchedules.values()) });
+});
+
+app.post('/protoclaw/dispatch/schedules', express.json(), async (req, res, next) => {
+  try {
+    const { targetAgentId, targetSessionId, message, secondsFromNow, newSessionType } = req.body || {};
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message is required' });
+    }
+    const secs = Number(secondsFromNow);
+    if (!Number.isFinite(secs) || secs <= 0) {
+      return res.status(400).json({ error: 'secondsFromNow must be a positive number' });
+    }
+    const agentId = targetAgentId || 'programming-helper';
+    const fireAt = new Date(Date.now() + secs * 1000).toISOString();
+    const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const schedule = {
+      id,
+      fireAt,
+      targetAgentId: agentId,
+      targetSessionId: targetSessionId || null,
+      newSessionType: newSessionType || null,
+      message,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      firedAt: null,
+      result: null,
+    };
+    dispatchSchedules.set(id, schedule);
+    saveDispatchSchedules();
+    scheduleDispatchFire(schedule);
+    res.json(schedule);
+  } catch (error) { next(error); }
+});
+
+app.delete('/protoclaw/dispatch/schedules/:id', (req, res) => {
+  const s = dispatchSchedules.get(req.params.id);
+  if (!s) return res.status(404).json({ error: 'not found' });
+  if (s.status === 'pending') {
+    const handle = dispatchTimers.get(s.id);
+    if (handle) { clearTimeout(handle); dispatchTimers.delete(s.id); }
+    s.status = 'cancelled';
+    saveDispatchSchedules();
+  }
+  res.json({ ok: true });
+});
+
+app.get('/protoclaw/dispatch/poll', async (req, res) => {
+  const agentId = req.query.agentId;
+  const sessionId = req.query.sessionId || null;
+  if (!agentId) return res.status(400).json({ error: 'agentId required' });
+  const timeoutMs = Math.min(Number(req.query.timeout) || 25, 30) * 1000;
+  const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
+
+  const queue = dispatchQueue.get(runtimeKey);
+  if (queue && queue.length > 0) {
+    return res.json(queue.shift());
+  }
+
+  // long-poll: wait for message or timeout
+  const timer = setTimeout(() => {
+    dispatchPendingPolls.delete(runtimeKey);
+    res.status(204).end();
+  }, timeoutMs);
+
+  dispatchPendingPolls.set(runtimeKey, (msg) => {
+    clearTimeout(timer);
+    dispatchPendingPolls.delete(runtimeKey);
+    res.json(msg);
+  });
+});
+
+app.post('/protoclaw/dispatch/respond', express.json(), (req, res) => {
+  const { scheduleId, response, error } = req.body || {};
+  if (scheduleId) {
+    const s = dispatchSchedules.get(scheduleId);
+    if (s) {
+      s.status = error ? 'failed' : 'completed';
+      s.result = error || response || '';
+      s.completedAt = new Date().toISOString();
+      saveDispatchSchedules();
+    }
+  }
+  res.json({ ok: true });
+});
+
+// ── End Dispatch API ─────────────────────────────────────────────
 
 app.get('/protoclaw/health', (_req, res) => {
   res.json({ ok: true, appPort: APP_PORT, viewerPort: VIEWER_PORT });

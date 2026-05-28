@@ -4704,3 +4704,70 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   border-color: var(--code-accent);
   box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.3);
 }
+
+/* ── Dispatch Console ─────────────────────────────────────────── */
+.dispatch-form {
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 16px 0;
+}
+.dispatch-form-row {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.dispatch-label {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.dispatch-input, .dispatch-select, .dispatch-textarea {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.dispatch-input:focus, .dispatch-select:focus, .dispatch-textarea:focus {
+  border-color: var(--code-accent);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+}
+.dispatch-input-group {
+  display: flex; align-items: center; gap: 8px;
+}
+.dispatch-input-minutes { width: 100px; }
+.dispatch-input-suffix { font-size: 13px; color: var(--text-secondary); }
+.dispatch-textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+.dispatch-select { min-width: 200px; }
+.dispatch-form-actions { padding-top: 4px; }
+
+.dispatch-table { display: flex; flex-direction: column; gap: 0; }
+.dispatch-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 80px auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-primary);
+  font-size: 13px;
+}
+.dispatch-row-history { grid-template-columns: 70px 1fr 80px 1fr; }
+.dispatch-header {
+  font-weight: 600; color: var(--text-secondary);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+  border-bottom: 2px solid var(--border-primary);
+}
+.dispatch-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dispatch-msg { white-space: normal; word-break: break-word; }
+.dispatch-time { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.dispatch-result { color: var(--text-secondary); font-size: 12px; }
+.dispatch-status-pending { color: var(--warn-color, #e5a00d); }
+.dispatch-status-fired { color: var(--code-accent); }
+.dispatch-status-completed { color: var(--success-color, #2da44e); }
+.dispatch-status-failed { color: var(--error-color, #cf222e); }
+.dispatch-status-cancelled { color: var(--text-secondary); }
+.dispatch-cancel-btn {
+  width: 24px; height: 24px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-secondary); font-size: 16px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.dispatch-cancel-btn:hover { background: var(--bg-tertiary); color: var(--error-color, #cf222e); }

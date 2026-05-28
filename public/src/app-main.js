@@ -2938,6 +2938,91 @@ window.closeWeixinQrCodeDialog = () => {
   renderCurrentMainView();
 };
 
+// ── Dispatch Console ──────────────────────────────────────────────
+window._dispatchSchedules = [];
+window._dispatchPHSessions = [];
+window._dispatchSchedulesLoaded = false;
+
+window.loadDispatchSchedules = async () => {
+  try {
+    const res = await fetch('/protoclaw/dispatch/schedules');
+    const data = await res.json();
+    window._dispatchSchedules = Array.isArray(data?.schedules) ? data.schedules : [];
+  } catch (e) {
+    console.error('Failed to load dispatch schedules:', e);
+  }
+};
+
+window.loadDispatchPHSessions = async () => {
+  try {
+    const res = await fetch('/protoclaw/prebuilt_sessions?agentId=programming-helper');
+    const data = await res.json();
+    const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+    window._dispatchPHSessions = sessions.map(s => ({
+      id: s.id,
+      title: s.title || s.taskTitle || '',
+    }));
+  } catch (e) {
+    console.error('Failed to load PH sessions:', e);
+  }
+};
+
+window.createDispatchSchedule = async () => {
+  const secondsEl = document.getElementById('dispatch-seconds');
+  const sessionEl = document.getElementById('dispatch-session');
+  const messageEl = document.getElementById('dispatch-message');
+  if (!secondsEl || !sessionEl || !messageEl) return;
+
+  const seconds = Number(secondsEl.value);
+  const sessionVal = sessionEl.value;
+  const message = messageEl.value.trim();
+  if (!message) return;
+  if (!Number.isFinite(seconds) || seconds <= 0) return;
+
+  const body = {
+    targetAgentId: 'programming-helper',
+    message,
+    secondsFromNow: seconds,
+  };
+
+  if (sessionVal === '__exploration__') {
+    body.newSessionType = 'exploration';
+    body.targetSessionId = null;
+  } else if (sessionVal) {
+    body.targetSessionId = sessionVal;
+    body.newSessionType = null;
+  }
+
+  try {
+    const res = await fetch('/protoclaw/dispatch/schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('Failed to create schedule:', err);
+      return;
+    }
+    await window.loadDispatchSchedules();
+    messageEl.value = '';
+    renderCurrentMainView();
+  } catch (e) {
+    console.error('Failed to create dispatch schedule:', e);
+  }
+};
+
+window.cancelDispatchSchedule = async (scheduleId) => {
+  try {
+    await fetch('/protoclaw/dispatch/schedules/' + encodeURIComponent(scheduleId), { method: 'DELETE' });
+    await window.loadDispatchSchedules();
+    renderCurrentMainView();
+  } catch (e) {
+    console.error('Failed to cancel schedule:', e);
+  }
+};
+// ── End Dispatch Console ──────────────────────────────────────────
+
 window.toggleIMDropdown = (trigger) => {
   const dropdown = trigger.closest('.im-dropdown');
   if (!dropdown) return;

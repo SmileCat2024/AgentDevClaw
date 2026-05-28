@@ -1,0 +1,48 @@
+{
+  "id": "dispatch-console",
+  "kind": "workspace",
+  "launchMode": "ui-only",
+  "name": "调度台",
+  "description": "向已运行的 Agent 发送定时消息，管理调度规则",
+  "version": "0.1.0",
+  "icon": "clock",
+  "category": "workspace",
+  "enabled": true,
+  "features": [],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "调度规则",
+          "en": "Schedules"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "dispatch-hero",
+          "type": "hero",
+          "kicker": {
+            "zh": "Agent 调度",
+            "en": "Agent Dispatch"
+          },
+          "title": {
+            "zh": "调度台",
+            "en": "Dispatch Console"
+          },
+          "body": {
+            "zh": "向编程小助手发送定时消息。设定时间、选择会话、写好消息，到时间自动送达。",
+            "en": "Send timed messages to the coding assistant. Set time, pick a session, write your message."
+          }
+        },
+        {
+          "id": "dispatch-schedule-form",
+          "type": "config-editor"
+        }
+      ]
+    }
+  }
+}

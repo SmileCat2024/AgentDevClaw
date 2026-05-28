@@ -2486,6 +2486,131 @@ function renderWeixinQrCodeDialog() {
   ].join('');
 }
 
+// ── Dispatch Console ──────────────────────────────────────────────
+
+function isDispatchConfigEditor(block) {
+  return getCurrentAgentRecord()?.id === 'dispatch-console' && block?.id === 'dispatch-schedule-form';
+}
+
+function renderDispatchConfigEditor(_block) {
+  // trigger async data load if empty
+  if (!window._dispatchSchedulesLoaded) {
+    window._dispatchSchedulesLoaded = true;
+    window.loadDispatchSchedules().then(() => renderCurrentMainView());
+    window.loadDispatchPHSessions().then(() => renderCurrentMainView());
+  }
+
+  const schedules = window._dispatchSchedules || [];
+  const phSessions = window._dispatchPHSessions || [];
+  const isZh = (window._lang || 'zh') === 'zh';
+
+  const pendingSchedules = schedules.filter(s => s.status === 'pending');
+  const completedSchedules = schedules.filter(s => s.status !== 'pending').slice(-10).reverse();
+
+  const pendingRows = pendingSchedules.map(s => {
+    const fireAt = new Date(s.fireAt);
+    const timeStr = fireAt.toLocaleTimeString(isZh ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' });
+    const statusClass = 'dispatch-status-' + s.status;
+    return [
+      '<div class="dispatch-row">',
+      '<div class="dispatch-cell dispatch-time">' + escapeHtml(timeStr) + '</div>',
+      '<div class="dispatch-cell dispatch-msg">' + escapeHtml(s.message.slice(0, 60)) + (s.message.length > 60 ? '...' : '') + '</div>',
+      '<div class="dispatch-cell dispatch-status ' + statusClass + '">' + escapeHtml(s.status) + '</div>',
+      '<div class="dispatch-cell dispatch-action">',
+      '<button class="dispatch-cancel-btn" type="button" onclick="window.cancelDispatchSchedule(\'' + escapeHtml(s.id) + '\')">×</button>',
+      '</div>',
+      '</div>',
+    ].join('');
+  }).join('');
+
+  const completedRows = completedSchedules.map(s => {
+    const timeStr = new Date(s.firedAt || s.fireAt).toLocaleTimeString(isZh ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' });
+    const statusClass = 'dispatch-status-' + s.status;
+    const resultText = s.result ? String(s.result).slice(0, 50) : '';
+    return [
+      '<div class="dispatch-row dispatch-row-history">',
+      '<div class="dispatch-cell dispatch-time">' + escapeHtml(timeStr) + '</div>',
+      '<div class="dispatch-cell dispatch-msg">' + escapeHtml(s.message.slice(0, 60)) + (s.message.length > 60 ? '...' : '') + '</div>',
+      '<div class="dispatch-cell dispatch-status ' + statusClass + '">' + escapeHtml(s.status) + '</div>',
+      '<div class="dispatch-cell dispatch-result">' + escapeHtml(resultText) + '</div>',
+      '</div>',
+    ].join('');
+  }).join('');
+
+  return [
+    '<section class="workspace-section">',
+    '<div class="workspace-section-header">',
+    '<div>',
+    '<div class="workspace-section-title">' + (isZh ? '新建调度' : 'New Schedule') + '</div>',
+    '<div class="workspace-section-desc">' + (isZh ? '设定几分钟后向编程小助手发送一条消息' : 'Schedule a message to the coding assistant') + '</div>',
+    '</div>',
+    '</div>',
+    '<div class="dispatch-form">',
+    '<div class="dispatch-form-row">',
+    '<label class="dispatch-label">' + (isZh ? '延迟' : 'Delay') + '</label>',
+    '<div class="dispatch-input-group">',
+    '<input type="number" id="dispatch-seconds" class="dispatch-input dispatch-input-seconds" min="1" max="86400" value="30" placeholder="30">',
+    '<span class="dispatch-input-suffix">' + (isZh ? '秒' : 'sec') + '</span>',
+    '</div>',
+    '</div>',
+    '<div class="dispatch-form-row">',
+    '<label class="dispatch-label">' + (isZh ? '会话' : 'Session') + '</label>',
+    '<select id="dispatch-session" class="dispatch-select">',
+    '<option value="">' + (isZh ? '新的主代理对话' : 'New main session') + '</option>',
+    '<option value="__exploration__">' + (isZh ? '新的探索代理对话' : 'New exploration session') + '</option>',
+    phSessions.length > 0 ? '<optgroup label="' + (isZh ? '已有会话' : 'Existing Sessions') + '">' + phSessions.map(s =>
+      '<option value="' + escapeHtml(s.id) + '">' + escapeHtml(s.title || s.id.slice(0, 16)) + '</option>'
+    ).join('') + '</optgroup>' : '',
+    '</select>',
+    '</div>',
+    '<div class="dispatch-form-row">',
+    '<label class="dispatch-label">' + (isZh ? '消息' : 'Message') + '</label>',
+    '<textarea id="dispatch-message" class="dispatch-textarea" rows="3" placeholder="' + (isZh ? '要发送给编程小助手的消息...' : 'Message to send...') + '"></textarea>',
+    '</div>',
+    '<div class="dispatch-form-actions">',
+    '<button class="workspace-action" type="button" onclick="window.createDispatchSchedule()">' + (isZh ? '创建调度' : 'Create Schedule') + '</button>',
+    '</div>',
+    '</div>',
+    '</section>',
+
+    pendingSchedules.length > 0 ? [
+      '<section class="workspace-section">',
+      '<div class="workspace-section-header">',
+      '<div class="workspace-section-title">' + (isZh ? '待执行' : 'Pending') + '</div>',
+      '</div>',
+      '<div class="dispatch-table">',
+      '<div class="dispatch-row dispatch-header">',
+      '<div class="dispatch-cell dispatch-time">' + (isZh ? '时间' : 'Time') + '</div>',
+      '<div class="dispatch-cell dispatch-msg">' + (isZh ? '消息' : 'Message') + '</div>',
+      '<div class="dispatch-cell dispatch-status">' + (isZh ? '状态' : 'Status') + '</div>',
+      '<div class="dispatch-cell dispatch-action"></div>',
+      '</div>',
+      pendingRows,
+      '</div>',
+      '</section>',
+    ].join('') : '',
+
+    completedSchedules.length > 0 ? [
+      '<section class="workspace-section">',
+      '<div class="workspace-section-header">',
+      '<div class="workspace-section-title">' + (isZh ? '历史' : 'History') + '</div>',
+      '</div>',
+      '<div class="dispatch-table">',
+      '<div class="dispatch-row dispatch-header">',
+      '<div class="dispatch-cell dispatch-time">' + (isZh ? '时间' : 'Time') + '</div>',
+      '<div class="dispatch-cell dispatch-msg">' + (isZh ? '消息' : 'Message') + '</div>',
+      '<div class="dispatch-cell dispatch-status">' + (isZh ? '状态' : 'Status') + '</div>',
+      '<div class="dispatch-cell dispatch-result">' + (isZh ? '结果' : 'Result') + '</div>',
+      '</div>',
+      completedRows,
+      '</div>',
+      '</section>',
+    ].join('') : '',
+  ].join('');
+}
+
+// ── End Dispatch Console ─────────────────────────────────────────
+
 function getDirectorySummaryData(agent, block) {
   const blockId = String(block?.id || '').trim();
   if (!blockId) return null;
@@ -6125,7 +6250,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'feature-repository') return renderFeatureRepositoryBlock(agent, block);
   if (block.type === 'workspace-artifacts') return renderWorkspaceArtifactsBlock(agent, block);
   if (block.type === 'project-docset') return renderProjectDocsetBlock(agent, block);
-  if (block.type === 'config-editor') return isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : '';
+  if (block.type === 'config-editor') return isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : '';
   if (block.type === 'flow-editor') return renderFlowEditorBlock(agent, block);
   return '';
 }
@@ -6312,6 +6437,7 @@ function updateAssemblySideRailPosition() {
 
 function resetRuntimeBackedSurfaceState() {
   currentMessages = [];
+  window._dispatchSchedulesLoaded = false;
   currentInputRequests = [];
   window.lastInputRequests = [];
   renderInputRequests([]);

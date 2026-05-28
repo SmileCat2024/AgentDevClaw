@@ -20,6 +20,7 @@
     "./feature-dev/src/**/*.ts",
     "./agent-dev/src/**/*.ts",
     "./flow/src/**/*.ts",
-    "./flow/test/**/*.ts"
+    "./flow/test/**/*.ts",
+    "./dispatch/src/**/*.ts"
   ]
 }

@@ -647,6 +647,17 @@ async function main() {
     console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
   }
 
+  // Start ClawDispatch loop if feature is mounted
+  try {
+    const dispatchFeature = agent.features?.get?.('claw-dispatch');
+    if (dispatchFeature && typeof dispatchFeature.startDispatchLoop === 'function') {
+      await dispatchFeature.startDispatchLoop(agent);
+      console.log('[ProtoClaw Runtime] ✓ 已启动 ClawDispatch loop');
+    }
+  } catch (error) {
+    console.error('[ProtoClaw Runtime] ClawDispatch 启动失败:', error);
+  }
+
   const userInput = agent.features?.get?.('user-input');
   const hasUserInput = Boolean(userInput && typeof userInput.getUserInput === 'function');
 
