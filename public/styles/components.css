@@ -1496,6 +1496,10 @@ body[data-theme="light"] .workspace-docset-row {
   line-height: 1.6;
 }
 
+.feature-project-empty-actions {
+  padding: 8px 0 0 0;
+}
+
 .feature-project-session-group {
   padding: 0;
   display: flex;

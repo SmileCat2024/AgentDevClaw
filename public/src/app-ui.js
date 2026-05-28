@@ -773,6 +773,7 @@ function getAgentProjectDisplayName(project) {
 function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
   if (agent?.id !== 'programming-helper') return [];
 
+  const workspaceState = getAgentWorkspaceState(agent);
   const sessions = getWorkspaceSessions(agent);
   const projects = new Map();
 
@@ -800,6 +801,9 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
     projects.set(id, merged);
     return merged;
   };
+
+  const stateProjects = Array.isArray(workspaceState?.phProjects) ? workspaceState.phProjects : [];
+  stateProjects.forEach((project) => upsertProject(project));
 
   sessions.forEach((session) => {
     const project = upsertProject({
@@ -1969,12 +1973,14 @@ function renderWorkspaceSessionList(agent, block) {
             sessionsHtml += '<button class="ph-session-tab" data-ph-tab="exploration" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_exploration_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
             sessionsHtml += '<button class="ph-session-tab" data-ph-tab="sub" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_sub_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(subSessions.length)) + '</span></button>';
             sessionsHtml += '</div>';
-            sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+            const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
+            sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : mainEmptyNote) + '</div></div>';
             sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="exploration"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(s => renderPhSessionItem(s, 'exploration')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
             sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="sub"><div class="feature-project-session-list">' + (subSessions.length > 0 ? subSessions.map(s => renderPhSessionItem(s, 'sub')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
             sessionsHtml += '</div>';
           } else {
-            sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+            const emptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
+            sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : emptyNote) + '</div></div>';
           }
 
           return [

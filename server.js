@@ -471,6 +471,13 @@ function normalizeIMWorkspaceConfig(raw = {}) {
   };
 }
 
+const IM_CHANNEL_DISPLAY_LABELS = { qq: 'QQ', weixin: '微信' };
+
+function getPortalAgentDisplayName(channelId) {
+  const label = IM_CHANNEL_DISPLAY_LABELS[channelId] || channelId || 'QQ';
+  return `门户代理（${label}）`;
+}
+
 async function readProjectQQBotConfig() {
   try {
     const data = await readJson(PROJECT_QQBOT_CONFIG_PATH);
@@ -743,12 +750,16 @@ function normalizeWorkspaceState(raw = {}) {
   const agentProjects = Array.isArray(raw?.agentProjects)
     ? raw.agentProjects.map((project) => normalizeWorkspaceAgentProject(project)).filter(Boolean)
     : [];
+  const phProjects = Array.isArray(raw?.phProjects)
+    ? raw.phProjects.map((p) => normalizeWorkspacePhProject(p)).filter(Boolean)
+    : [];
 
   return {
     forms,
     assemblyConfigs,
     featureProjects,
     agentProjects,
+    phProjects,
     openDirectory: typeof raw.openDirectory === 'string' ? raw.openDirectory.trim() : '',
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
   };
@@ -1091,6 +1102,18 @@ function normalizeWorkspaceAgentProject(raw = {}) {
   };
 }
 
+function normalizeWorkspacePhProject(raw = {}) {
+  if (!raw || typeof raw !== 'object') return null;
+  const openDirectory = typeof raw.openDirectory === 'string' ? raw.openDirectory.trim() : '';
+  if (!openDirectory) return null;
+  return {
+    id: 'dir:' + openDirectory.replace(/\\/g, '/').toLowerCase(),
+    openDirectory,
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : null,
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+  };
+}
+
 function buildWorkspaceFeatureProjectId(project = {}) {
   const openDirectory = typeof project.openDirectory === 'string' ? project.openDirectory.trim() : '';
   if (openDirectory) {
@@ -1189,6 +1212,37 @@ function upsertWorkspaceAgentProject(state, rawProject, timestamp) {
   };
 }
 
+function upsertWorkspacePhProject(state, rawProject, timestamp) {
+  const project = normalizeWorkspacePhProject({
+    ...(rawProject || {}),
+    updatedAt: timestamp,
+  });
+  if (!project) return state;
+  const projects = Array.isArray(state.phProjects) ? [...state.phProjects] : [];
+  const existingIndex = projects.findIndex((item) => item?.id === project.id);
+  const existing = existingIndex >= 0 ? projects[existingIndex] : null;
+  const merged = {
+    ...(existing || {}),
+    ...project,
+    createdAt: existing?.createdAt || project.createdAt || timestamp,
+    updatedAt: timestamp,
+  };
+  if (existingIndex >= 0) {
+    projects.splice(existingIndex, 1, merged);
+  } else {
+    projects.push(merged);
+  }
+  projects.sort((left, right) => String(right?.updatedAt || '').localeCompare(String(left?.updatedAt || '')));
+  return { ...state, phProjects: projects };
+}
+
+function removeWorkspacePhProject(state, projectId) {
+  const projects = Array.isArray(state.phProjects)
+    ? state.phProjects.filter((p) => p.id !== projectId)
+    : [];
+  return { ...state, phProjects: projects };
+}
+
 function syncFeatureCreatorProjects(state, timestamp) {
   const startupForm = state?.forms?.['startup-form'] || {};
   const featureName = typeof startupForm.feature_name === 'string' ? startupForm.feature_name.trim() : '';
@@ -1284,6 +1338,28 @@ async function readWorkspaceState(agentId) {
       delete data.forms['startup-form'];
       writeWorkspaceState(key, data).catch(() => {});
       _wsCache.delete(key);
+    }
+    if (key === 'programming-helper' && (!Array.isArray(data.phProjects) || data.phProjects.length === 0)) {
+      const sessionIndex = await readSessionIndex(key);
+      const directories = new Map();
+      for (const session of (sessionIndex?.sessions || [])) {
+        const dir = String(session.openDirectory || '').trim();
+        if (dir && !directories.has(dir.replace(/\\/g, '/').toLowerCase())) {
+          directories.set(dir.replace(/\\/g, '/').toLowerCase(), {
+            openDirectory: dir,
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt,
+          });
+        }
+      }
+      if (directories.size > 0) {
+        const timestamp = new Date().toISOString();
+        data.phProjects = Array.from(directories.values()).map(d =>
+          normalizeWorkspacePhProject({ ...d, createdAt: d.createdAt || timestamp, updatedAt: d.updatedAt || timestamp })
+        ).filter(Boolean);
+        writeWorkspaceState(key, data).catch(() => {});
+        _wsCache.delete(key);
+      }
     }
     _wsCache.set(key, { data, ts: Date.now() });
     return data;
@@ -3265,7 +3341,11 @@ async function deletePrebuiltProject(agentId, projectId) {
   }
 
   const state = await readWorkspaceState(agentId);
-  const projectsKey = normalizedAgentId === 'feature-creator' ? 'featureProjects' : 'agentProjects';
+  const projectsKey = normalizedAgentId === 'feature-creator'
+    ? 'featureProjects'
+    : normalizedAgentId === 'programming-helper'
+      ? 'phProjects'
+      : 'agentProjects';
   const projects = Array.isArray(state[projectsKey]) ? [...state[projectsKey]] : [];
   const projectIndex = projects.findIndex((p) => p?.id === projectId);
 
@@ -3283,6 +3363,7 @@ async function deletePrebuiltProject(agentId, projectId) {
   await writeWorkspaceState(agentId, { [projectsKey]: projects });
 
   let sessionsToDelete = [];
+  let nextActiveSessionId = null;
   await updateSessionIndex(agentId, (index) => {
     sessionsToDelete = [];
     const remainingSessions = index.sessions.filter((session) => {
@@ -3298,7 +3379,7 @@ async function deletePrebuiltProject(agentId, projectId) {
     });
 
     const deletedWasActive = sessionsToDelete.some((s) => s.id === index.activeSessionId);
-    const nextActiveSessionId = deletedWasActive
+    nextActiveSessionId = deletedWasActive
       ? (remainingSessions[0]?.id ?? null)
       : index.activeSessionId;
     return { activeSessionId: nextActiveSessionId, sessions: remainingSessions };
@@ -3868,6 +3949,13 @@ function resolveActiveWorkspaceSessionMeta(agent) {
 async function resolveRuntimeDisplayName(agent, selectedSessionId = null) {
   const fallbackName = cleanSessionText(agent?.name) || cleanSessionText(agent?.id) || 'agent';
   const requestedSessionId = cleanSessionText(selectedSessionId);
+  if (sanitizeSessionFragment(agent?.id) === 'qqbot') {
+    try {
+      const imConfig = await readProjectIMWorkspaceConfig();
+      return getPortalAgentDisplayName(imConfig.selectedChannel);
+    } catch {}
+    return getPortalAgentDisplayName('qq');
+  }
   if (!requestedSessionId) {
     return fallbackName;
   }
@@ -3898,6 +3986,13 @@ async function readActiveWorkspaceSessionMeta(agent) {
   const workspaceSessions = await readWorkspaceSessionSnapshot(agent.id);
   const selectedSessionId = cleanSessionText(agent?.status?.selectedSessionId || workspaceSessions.activeSessionId);
   if (!selectedSessionId) {
+    let noSessionDisplayName = '';
+    if (sanitizeSessionFragment(agent.id) === 'qqbot') {
+      try {
+        const imConfig = await readProjectIMWorkspaceConfig();
+        noSessionDisplayName = getPortalAgentDisplayName(imConfig.selectedChannel);
+      } catch {}
+    }
     return {
       workspaceSessions,
       sessionMeta: {
@@ -3905,7 +4000,7 @@ async function readActiveWorkspaceSessionMeta(agent) {
         active_workspace_session_form_id: null,
         active_workspace_session_title: '',
         active_workspace_agent_name: '',
-        active_workspace_display_name: '',
+        active_workspace_display_name: noSessionDisplayName,
       },
     };
   }
@@ -3929,6 +4024,16 @@ async function readActiveWorkspaceSessionMeta(agent) {
     } catch {}
   }
 
+  let displayName = formId === 'assembly-form'
+    ? (agentName || title)
+    : '';
+  if (!displayName && sanitizeSessionFragment(agent.id) === 'qqbot') {
+    try {
+      const imConfig = await readProjectIMWorkspaceConfig();
+      displayName = getPortalAgentDisplayName(imConfig.selectedChannel);
+    } catch {}
+  }
+
   return {
     workspaceSessions: {
       ...workspaceSessions,
@@ -3939,9 +4044,7 @@ async function readActiveWorkspaceSessionMeta(agent) {
       active_workspace_session_form_id: formId || null,
       active_workspace_session_title: title,
       active_workspace_agent_name: agentName,
-      active_workspace_display_name: formId === 'assembly-form'
-        ? (agentName || title)
-        : '',
+      active_workspace_display_name: displayName,
     },
   };
 }
@@ -3966,12 +4069,19 @@ async function readWorkspaceSessionMeta(agentId, sessionId) {
     const title = cleanSessionText(record?.title);
     const agentName = cleanSessionText(record?.agentName);
     const formId = cleanSessionText(record?.formId);
+    let displayName = formId === 'assembly-form' ? (agentName || title) : '';
+    if (!displayName && sanitizeSessionFragment(agentId) === 'qqbot') {
+      try {
+        const imConfig = await readProjectIMWorkspaceConfig();
+        displayName = getPortalAgentDisplayName(imConfig.selectedChannel);
+      } catch {}
+    }
     return {
       active_workspace_session_id: selectedSessionId,
       active_workspace_session_form_id: formId || null,
       active_workspace_session_title: title,
       active_workspace_agent_name: agentName,
-      active_workspace_display_name: formId === 'assembly-form' ? (agentName || title) : '',
+      active_workspace_display_name: displayName,
     };
   } catch {
     return {
@@ -4214,6 +4324,18 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
   const resolvedSessionId = requestedSessionId !== undefined
     ? requestedSessionId
     : (preferredSessionId || existing?.selectedSessionId || agent.workspace_sessions?.activeSessionId || null);
+
+  if (sanitizeSessionFragment(agent?.id) === 'qqbot') {
+    const siblings = listAgentRuntimes(agent.id).filter((rt) =>
+      rt?.process && rt.process.exitCode === null && !rt.stopped
+      && rt !== existing
+    );
+    for (const rt of siblings) {
+      rt.stopped = true;
+      rt.process.kill('SIGTERM');
+    }
+    await Promise.all(siblings.map((rt) => waitForProcessExit(rt.process)));
+  }
 
   if (resolvedSessionId && !runtimeOptions?.extraEnv?.PROTOCLAW_HANDOFF_PATH) {
     try {
@@ -5108,14 +5230,40 @@ app.get('/protoclaw/im_workspace_bundle', async (_req, res, next) => {
 
 app.put('/protoclaw/im_workspace_bundle', express.json(), async (req, res, next) => {
   try {
+    const prevConfig = await readProjectIMWorkspaceConfig();
     const workspaceConfig = await writeProjectIMWorkspaceConfig(req.body?.workspaceConfig || {});
     const qqConfig = await writeProjectQQBotConfig(req.body?.qqConfig || {});
+
+    const newChannel = workspaceConfig.selectedChannel || 'qq';
+    const channelChanged = newChannel !== (prevConfig.selectedChannel || 'qq');
+    let portalRestarted = false;
+
+    if (channelChanged) {
+      const runtimes = listAgentRuntimes('qqbot');
+      const running = runtimes.filter((rt) => rt?.process && rt.process.exitCode === null && !rt.stopped);
+      if (running.length > 0) {
+        await stopManagedAgent('qqbot');
+        for (const rt of running) {
+          await waitForProcessExit(rt.process);
+        }
+        try {
+          const agent = await requireAgent('qqbot');
+          await startManagedAgent(agent);
+          portalRestarted = true;
+          console.log(`[ProtoClaw IM] 渠道切换: ${prevConfig.selectedChannel || 'qq'} → ${newChannel}，门户代理已重启`);
+        } catch (restartErr) {
+          console.error('[ProtoClaw IM] 门户代理重启失败:', restartErr);
+        }
+      }
+    }
+
     const bundle = await buildIMWorkspaceBundle('qqbot');
     res.json({
       ...bundle,
       workspaceConfig,
       qqConfig,
       savedAt: new Date().toISOString(),
+      portalRestarted,
     });
   } catch (error) {
     next(error);
@@ -6328,6 +6476,22 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
       agent: connected,
       assemblyRuntime,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/ph_project/add', express.json(), async (req, res, next) => {
+  try {
+    const openDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
+    if (!openDirectory) {
+      return res.status(400).json({ error: 'openDirectory is required' });
+    }
+    const timestamp = new Date().toISOString();
+    const state = await readWorkspaceState('programming-helper');
+    const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
+    await writeWorkspaceState('programming-helper', nextState);
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }

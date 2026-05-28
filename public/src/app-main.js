@@ -641,7 +641,7 @@ function applyOptimisticWorkspaceSession(agentId, session) {
     active_workspace_agent_name: session.agentName || '',
     active_workspace_display_name: session.formId === 'assembly-form'
       ? (session.agentName || session.title || '')
-      : '',
+      : (hostAgent?.active_workspace_display_name || ''),
   });
 }
 
@@ -2084,24 +2084,27 @@ window.phSelectDirectoryAndCreateSession = async () => {
       return;
     }
 
-    const createResult = await openPrebuiltWorkspaceSession('programming-helper', {
-      type: 'create_session',
-      openDirectory: chosenPath,
+    const addRes = await fetch('/protoclaw/ph_project/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ openDirectory: chosenPath }),
     });
-
-    console.log('[ph] session created:', createResult?.session?.id, 'agent:', createResult?.agent?.id);
-    await loadAgents();
-    const runtimeId = createResult?.agent?.runtime_session_id || createResult?.agent?.runtimeSessionId || createResult?.agent?.id;
-    if (runtimeId) {
-      await window.switchAgent(runtimeId);
+    if (!addRes.ok) {
+      throw new Error(await addRes.text().catch(() => 'Failed to add project'));
     }
+
+    const stateRes = await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent('programming-helper'));
+    if (stateRes.ok) {
+      const nextState = await stateRes.json();
+      updateAgentWorkspaceState('programming-helper', nextState);
+    }
+
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   } catch (error) {
-    console.error('Failed to select directory and create session:', error);
-    window.alert((currentLanguage === 'zh' ? '选择目录或创建会话失败：' : 'Failed to select directory or create session: ') + (error?.message || error));
+    console.error('Failed to add project:', error);
+    window.alert((currentLanguage === 'zh' ? '添加项目失败：' : 'Failed to add project: ') + (error?.message || error));
     lastRenderedWorkspaceHtml = '';
-    await loadAgents();
     renderCurrentMainView();
   }
 };
@@ -2833,6 +2836,9 @@ window.saveIMWorkspaceConfig = async () => {
     imWorkspaceState.data = bundle;
     imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
     imWorkspaceState.savedAt = payload?.savedAt || new Date().toISOString();
+    if (payload?.portalRestarted) {
+      loadAgents().catch((e) => console.error('Failed to refresh agents after portal restart:', e));
+    }
   } catch (error) {
     imWorkspaceState.error = error && error.message ? error.message : String(error);
     console.error('Failed to save IM workspace config:', error);
@@ -3501,38 +3507,45 @@ deleteProjectAction.addEventListener('click', () => {
     (async () => {
       try {
         const agent = allAgents.find(a => a.id === pendingAgentId);
-        const project = getProgrammingHelperProjects(agent).find(p => p.id === pendingProjectId);
-        const projectDir = project?.openDirectory || '';
-        const sessions = getWorkspaceSessions(agent);
-        const matchingSessions = sessions.filter(s => {
-          const sessionDir = String(s.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
-          const targetDir = projectDir.trim().replace(/\\/g, '/').toLowerCase();
-          return sessionDir === targetDir;
-        });
+        const affectedRuntimeId = agent?.runtime_session_id || agent?.runtimeSessionId || null;
         const activeSessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
-        const deletedWasActive = matchingSessions.some(s => s.id === activeSessionId);
-        for (const session of matchingSessions) {
-          await fetch('/protoclaw/prebuilt_sessions/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agentId: pendingAgentId, sessionId: session.id }),
-          }).catch(() => {});
+        const response = await fetch('/protoclaw/prebuilt_project/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId: pendingAgentId, projectId: pendingProjectId }),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text().catch(() => 'delete project failed'));
         }
-        if (deletedWasActive) {
-          applyManagedPrebuiltAgent(pendingAgentId, null);
-        }
-        const sessionsRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(pendingAgentId));
-        if (sessionsRes.ok) {
-          const fresh = await sessionsRes.json();
+        const result = await response.json();
+        if (result?.deleted?.sessions) {
           updateAgentRecord(pendingAgentId, {
-            workspace_sessions: fresh,
-            active_workspace_session_id: fresh?.activeSessionId || null,
+            workspace_sessions: result.deleted.sessions,
+            active_workspace_session_id: result.deleted.activeSessionId || null,
           });
         }
-        await loadAgents();
+        const deletedContainedActive = result?.deleted?.deletedSessionIds?.includes(activeSessionId);
+        if (result?.agent) {
+          applyManagedPrebuiltAgent(pendingAgentId, result.agent);
+        } else if (deletedContainedActive) {
+          applyManagedPrebuiltAgent(pendingAgentId, null);
+        }
+        const stateRes = await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent(pendingAgentId));
+        if (stateRes.ok) {
+          const nextState = await stateRes.json();
+          updateAgentWorkspaceState(pendingAgentId, nextState);
+        }
         lastRenderedWorkspaceHtml = '';
         renderAgentList();
         renderCurrentMainView();
+        const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
+        if (nextRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
+          await window.switchAgent(nextRuntimeId);
+        } else if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
+          const fallbackAgent = applyManagedPrebuiltAgent(pendingAgentId, null, { uiOnlyWhenStopped: true });
+          setPreferredUnitMode('home', fallbackAgent || agent || { id: pendingAgentId, source: 'prebuilt' });
+          selectWorkspaceSurface(pendingAgentId);
+        }
       } catch (error) {
         console.error('Failed to delete programming-helper project:', error);
         window.alert((currentLanguage === 'zh' ? '删除项目失败：' : 'Failed to delete project: ') + (error?.message || error));
