@@ -2492,10 +2492,6 @@ function isDispatchConfigEditor(block) {
   return getCurrentAgentRecord()?.id === 'dispatch-console' && block?.id === 'dispatch-schedule-form';
 }
 
-const DISPATCH_WORKSPACE_ICONS = {
-  'programming-helper': '\u{1F5A5}',
-  'qqbot': '\u{1F4AC}',
-};
 const DISPATCH_WORKSPACE_IDS = ['programming-helper', 'qqbot'];
 
 function renderDispatchConfigEditor(_block) {
@@ -2517,12 +2513,15 @@ function renderDispatchConfigEditor(_block) {
 
   // Workspace cards — click to open "add task" modal for that workspace
   const agentCards = agents.map(a => {
-    const icon = DISPATCH_WORKSPACE_ICONS[a.id] || '\u{1F4CB}';
+    const iconHtml = typeof getAgentIconHtml === 'function' ? getAgentIconHtml(a.id) : '';
     return [
       '<div class="dispatch-workspace-card" onclick="window.openDispatchModalFor(\'' + escapeHtml(a.id) + '\')">',
-      '<div class="dispatch-ws-icon">' + icon + '</div>',
+      '<div class="dispatch-ws-icon">' + iconHtml + '</div>',
       '<div class="dispatch-ws-name">' + escapeHtml(a.name) + '</div>',
-      '<div class="dispatch-ws-hint">' + (isZh ? '+ 添加任务' : '+ Add task') + '</div>',
+      '<div class="dispatch-ws-hint">' + (isZh ? '点击创建指令' : 'Click to create') + '</div>',
+      '<div class="dispatch-ws-add-btn">',
+      '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+      '</div>',
       '</div>',
     ].join('');
   }).join('');
@@ -2556,7 +2555,7 @@ function renderDispatchConfigEditor(_block) {
       : timeStr;
 
     return [
-      '<div class="dispatch-row-v2">',
+      '<div class="dispatch-row-v2" onclick="window.showDispatchDetail(\'' + escapeHtml(s.id) + '\')">',
       '<div class="dispatch-row-dot ' + s.status + '"></div>',
       '<div class="dispatch-row-body">',
       '<div class="dispatch-row-msg">' + escapeHtml(s.message.slice(0, 100)) + (s.message.length > 100 ? '...' : '') + '</div>',
@@ -2569,19 +2568,20 @@ function renderDispatchConfigEditor(_block) {
       '</div>',
       '<div class="dispatch-row-time' + (isPending ? ' next' : '') + '">' + escapeHtml(timeLabel) + '</div>',
       '<div class="dispatch-row-action">',
-      showCancel ? '<button class="dispatch-cancel-btn" type="button" onclick="window.cancelDispatchSchedule(\'' + escapeHtml(s.id) + '\')">×</button>' : '',
+      showCancel ? '<button class="dispatch-cancel-btn" type="button" onclick="event.stopPropagation();window.cancelDispatchSchedule(\'' + escapeHtml(s.id) + '\')">×</button>' : '',
       '</div>',
       '</div>',
     ].join('');
   }
 
   const modalHtml = window._dispatchShowModal ? renderDispatchModal(isZh) : '';
+  const detailHtml = window._dispatchDetailId ? renderDispatchDetailModal(window._dispatchDetailId, isZh, schedules) : '';
 
   return [
     // Workspace cards as "add task" entry points
-    '<section class="workspace-section">',
+    '<section class="workspace-section dispatch-add-task-section">',
     '<div class="workspace-section-header">',
-    '<div class="workspace-section-title">' + (isZh ? '添加任务' : 'Add Task') + '</div>',
+    '<div class="workspace-section-title">' + (isZh ? '添加任务指令' : 'Add Task') + '</div>',
     '<div class="workspace-section-desc">' + (isZh ? '选择一个工作空间来添加调度任务' : 'Pick a workspace to schedule a task') + '</div>',
     '</div>',
     '<div class="dispatch-workspace-grid">', agentCards, '</div>',
@@ -2621,6 +2621,131 @@ function renderDispatchConfigEditor(_block) {
     ].join('') : '',
 
     modalHtml,
+    detailHtml,
+  ].join('');
+}
+
+function renderDispatchDetailModal(scheduleId, isZh, schedules) {
+  const s = schedules.find(x => x.id === scheduleId);
+  if (!s) return '';
+
+  const triggerLabel = s.trigger?.type === 'on-idle' ? (isZh ? '空闲触发' : 'On-idle')
+    : s.trigger?.type === 'on-ready' ? (isZh ? '就绪触发' : 'On-ready')
+    : (isZh ? '定时触发' : 'Timer');
+  const triggerIcon = s.trigger?.type === 'on-idle' ? '\u{23F3}'
+    : s.trigger?.type === 'on-ready' ? '\u{26A1}'
+    : '\u{23F0}';
+  const modeLabel = s.newSessionType === 'exploration' ? (isZh ? '新建探索' : 'New exploration')
+    : s.targetSessionId ? (s.targetSessionId === '__latest__' ? (isZh ? '最新对话' : 'Latest session') : (isZh ? '续接对话' : 'Continue'))
+    : (isZh ? '新建会话' : 'New session');
+  const statusLabel = { pending: isZh ? '已部署' : 'Armed', fired: isZh ? '已触发' : 'Triggered', completed: isZh ? '已完成' : 'Completed', failed: isZh ? '失败' : 'Failed', cancelled: isZh ? '已取消' : 'Cancelled' }[s.status] || s.status;
+  const statusIcon = { pending: '\u{23F3}', fired: '\u{26A1}', completed: '\u{2705}', failed: '\u{274C}', cancelled: '\u{1F6AB}' }[s.status] || '';
+
+  function fmtTime(iso) {
+    if (!iso) return isZh ? '—' : '—';
+    return new Date(iso).toLocaleString(isZh ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  const rows = [];
+
+  // Status
+  rows.push({ label: isZh ? '状态' : 'Status', value: statusIcon + ' ' + statusLabel, cls: 'dispatch-detail-status-' + s.status });
+
+  // Trigger
+  rows.push({ label: isZh ? '触发类型' : 'Trigger', value: triggerIcon + ' ' + triggerLabel });
+  if (s.trigger?.type === 'on-idle' && s.trigger.idleThreshold) {
+    rows.push({ label: isZh ? '空闲阈值' : 'Idle Threshold', value: s.trigger.idleThreshold + 's' });
+  }
+  if (s.trigger?.type === 'timer' || !s.trigger?.type) {
+    rows.push({ label: isZh ? '计划触发' : 'Fire at', value: fmtTime(s.fireAt) });
+  }
+
+  // Target
+  rows.push({ label: isZh ? '目标工作空间' : 'Target', value: s.targetAgentId || '—' });
+  rows.push({ label: isZh ? '模式' : 'Mode', value: modeLabel });
+  if (s.targetSessionId && s.targetSessionId !== '__latest__') {
+    rows.push({ label: isZh ? '会话' : 'Session', value: s.targetSessionId.slice(0, 20) });
+  }
+  if (s.projectId) {
+    rows.push({ label: isZh ? '项目' : 'Project', value: s.projectId });
+  }
+
+  // Loop
+  if (s.repeatInterval) {
+    rows.push({ label: isZh ? '循环间隔' : 'Repeat', value: s.repeatInterval + (isZh ? ' 秒' : ' sec') });
+    if (s.loopMaxCount) {
+      rows.push({ label: isZh ? '执行进度' : 'Progress', value: (s.loopFiredCount || 0) + ' / ' + s.loopMaxCount });
+    }
+    if (s.loopEndTime) {
+      rows.push({ label: isZh ? '截止时间' : 'End at', value: fmtTime(new Date(s.loopEndTime).toISOString()) });
+    }
+    if (s.onlyActiveSessions) {
+      rows.push({ label: '', value: isZh ? '仅对已启动的会话生效' : 'Active sessions only', cls: 'dispatch-detail-note' });
+    }
+  }
+
+  // Timeline
+  rows.push({ label: isZh ? '创建时间' : 'Created', value: fmtTime(s.createdAt) });
+  if (s.firedAt) rows.push({ label: isZh ? '最近触发' : 'Last fired', value: fmtTime(s.firedAt) });
+  if (s.completedAt) rows.push({ label: isZh ? '完成时间' : 'Completed', value: fmtTime(s.completedAt) });
+
+  // Result
+  if (s.result) {
+    const resultText = s.status === 'failed'
+      ? '\u{274C} ' + (s.result.length > 200 ? s.result.slice(0, 200) + '...' : s.result)
+      : s.result.length > 300 ? s.result.slice(0, 300) + '...' : s.result;
+    rows.push({ label: isZh ? '结果' : 'Result', value: resultText, cls: 'dispatch-detail-result' });
+  }
+  if (s.error) {
+    rows.push({ label: isZh ? '错误' : 'Error', value: s.error.slice(0, 200), cls: 'dispatch-detail-error' });
+  }
+
+  const fieldHtml = rows.map(r => {
+    if (!r.label && r.value) {
+      return '<div class="dispatch-detail-field' + (r.cls ? ' ' + r.cls : '') + '" style="grid-column:1/-1;"><span class="dispatch-detail-value">' + escapeHtml(r.value) + '</span></div>';
+    }
+    return [
+      '<div class="dispatch-detail-field">',
+      '<span class="dispatch-detail-label">' + escapeHtml(r.label) + '</span>',
+      '</div>',
+      '<div class="dispatch-detail-field' + (r.cls ? ' ' + r.cls : '') + '">',
+      '<span class="dispatch-detail-value">' + escapeHtml(r.value) + '</span>',
+      '</div>',
+    ].join('');
+  }).join('');
+
+  // Actions
+  const actions = [];
+  if (s.status === 'pending') {
+    actions.push('<button class="settings-btn settings-btn-danger" type="button" onclick="window.cancelDispatchSchedule(\'' + escapeHtml(s.id) + '\')">' + (isZh ? '取消' : 'Cancel') + '</button>');
+  }
+
+  return [
+    '<div class="feature-detail-overlay">',
+    '<div class="feature-detail-window" style="max-width:480px;gap:12px;">',
+
+    '<div class="feature-detail-head">',
+    '<div>',
+    '<div class="feature-detail-title">' + (isZh ? 'Schedule 详情' : 'Schedule Detail') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(s.id.slice(0, 24)) + '</div>',
+    '</div>',
+    '<button class="feature-detail-close" type="button" onclick="window.closeDispatchDetail()">×</button>',
+    '</div>',
+
+    // Message block
+    '<div class="dispatch-detail-message">',
+    '<div class="dispatch-detail-message-label">' + (isZh ? '消息内容' : 'Message') + '</div>',
+    '<div class="dispatch-detail-message-text">' + escapeHtml(s.message) + '</div>',
+    '</div>',
+
+    // Fields grid
+    '<div class="dispatch-detail-grid">', fieldHtml, '</div>',
+
+    // Actions
+    actions.length > 0 ? '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">' + actions.join('') + '</div>' : '',
+
+    '</div>',
+    '</div>',
   ].join('');
 }
 
@@ -6789,6 +6914,14 @@ function hasRecentManualScrollIntent() {
   return Date.now() - lastManualScrollIntentAt < 1500;
 }
 
+function beginFollowLatestCooldown(duration = 800) {
+  _progScrollCooldownUntil = Math.max(_progScrollCooldownUntil, Date.now() + Math.max(0, duration));
+}
+
+function isFollowLatestCooldownActive() {
+  return Date.now() < _progScrollCooldownUntil;
+}
+
 function animateScrollTo(targetTop, duration = 150) {
   const settleToken = ++followScrollSettleToken;
   lastManualScrollIntentAt = 0;
@@ -7007,12 +7140,22 @@ let _scrollDebounceTimer = null;
 let _scrollDebounceBehavior = 'smooth';
 
 function scheduleScrollToLatest(behavior = 'smooth') {
+  if (behavior !== 'auto' && isFollowLatestCooldownActive()) {
+    pendingFollowToBottom = false;
+    _scrollDebounceBehavior = 'smooth';
+    return;
+  }
   pendingFollowToBottom = true;
   _scrollDebounceBehavior = behavior;
   if (_scrollDebounceTimer != null) return;
   _scrollDebounceTimer = setTimeout(() => {
     _scrollDebounceTimer = null;
     if (!pendingFollowToBottom || !followLatestEnabled) return;
+    if (_scrollDebounceBehavior !== 'auto' && isFollowLatestCooldownActive()) {
+      pendingFollowToBottom = false;
+      _scrollDebounceBehavior = 'smooth';
+      return;
+    }
     pendingFollowToBottom = false;
     const b = _scrollDebounceBehavior;
     _scrollDebounceBehavior = 'smooth';

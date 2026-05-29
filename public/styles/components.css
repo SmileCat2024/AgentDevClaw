@@ -4773,11 +4773,17 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 
 /* ── Dispatch Console v2 ───────────────────────────────────────── */
 
+.dispatch-add-task-section {
+  gap: 8px;
+}
+.dispatch-add-task-section .workspace-section-header {
+  padding-bottom: 8px;
+}
 .dispatch-workspace-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
-  padding: 12px 0;
+  padding: 0;
 }
 .dispatch-workspace-card {
   position: relative;
@@ -4798,8 +4804,11 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   box-shadow: 0 0 0 3px rgba(88,166,255,0.12);
 }
 .dispatch-ws-icon {
-  font-size: 22px;
   margin-bottom: 8px;
+}
+.dispatch-ws-icon .agent-icon {
+  width: 32px;
+  height: 32px;
 }
 .dispatch-ws-name {
   font-size: 15px;
@@ -4826,6 +4835,26 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .dispatch-workspace-card:hover .dispatch-ws-hint {
   opacity: 1;
   color: var(--code-accent);
+}
+.dispatch-ws-add-btn {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--border-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.dispatch-workspace-card:hover .dispatch-ws-add-btn {
+  opacity: 1;
+  background: var(--code-accent);
+  color: #fff;
 }
 
 .dispatch-trigger-tabs {
@@ -5056,4 +5085,75 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .dispatch-row-time.next { color: var(--code-accent); }
 .dispatch-row-action {
   display: flex; align-items: center;
+}
+.dispatch-row-v2 {
+  cursor: pointer;
+  transition: background 0.15s;
+  border-radius: 6px;
+  padding: 10px 8px;
+  margin: 0 -8px;
+}
+.dispatch-row-v2:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+/* ── Dispatch Detail Modal ────────────────────────────────────── */
+.dispatch-detail-message {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.dispatch-detail-message-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.dispatch-detail-message-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.dispatch-detail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  font-size: 13px;
+}
+.dispatch-detail-field {
+  min-width: 0;
+}
+.dispatch-detail-label {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.dispatch-detail-value {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.dispatch-detail-status-pending .dispatch-detail-value { color: #e5a00d; }
+.dispatch-detail-status-fired .dispatch-detail-value { color: var(--code-accent); }
+.dispatch-detail-status-completed .dispatch-detail-value { color: #2da44e; }
+.dispatch-detail-status-failed .dispatch-detail-value { color: #cf222e; }
+.dispatch-detail-status-cancelled .dispatch-detail-value { color: var(--text-muted); }
+.dispatch-detail-note .dispatch-detail-value {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.dispatch-detail-result .dispatch-detail-value {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.dispatch-detail-error .dispatch-detail-value {
+  color: #cf222e;
+  font-size: 12px;
 }

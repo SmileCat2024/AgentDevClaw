@@ -1148,6 +1148,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   }
 
   if (action.type === 'show_chat' || action.type === 'resume_session') {
+    beginFollowLatestCooldown();
     setPreferredUnitMode('chat', activeAgent);
   } else if (action.type === 'show_home') {
     setPreferredUnitMode('home', activeAgent);
@@ -3274,11 +3275,22 @@ window.createDispatchSchedule = async () => {
 window.cancelDispatchSchedule = async (scheduleId) => {
   try {
     await fetch('/protoclaw/dispatch/schedules/' + encodeURIComponent(scheduleId), { method: 'DELETE' });
+    if (window._dispatchDetailId === scheduleId) window._dispatchDetailId = null;
     await window.loadDispatchSchedules();
     renderCurrentMainView();
   } catch (e) {
     console.error('Failed to cancel schedule:', e);
   }
+};
+
+window.showDispatchDetail = (scheduleId) => {
+  window._dispatchDetailId = scheduleId;
+  renderCurrentMainView();
+};
+
+window.closeDispatchDetail = () => {
+  window._dispatchDetailId = null;
+  renderCurrentMainView();
 };
 // ── End Dispatch Console ──────────────────────────────────────────
 
@@ -3379,6 +3391,7 @@ window.switchAgent = async (newAgentId) => {
     currentProjectRequirementEdit = null;
     currentProjectDocsetPage = 'requirement';
     currentWorkspaceTab = 'chat';
+    beginFollowLatestCooldown();
     setFollowLatest(true);
     renderAgentList();
     await loadAgentData(runtimeAgentId);
@@ -4221,7 +4234,6 @@ async function loadAgentData(agentId) {
     }
 
     renderCurrentMainView();
-    setFollowLatest(true, { scroll: true, behavior: 'auto' });
     if (activeFeaturePanel === 'logs') {
       await loadLogs(true);
     }
