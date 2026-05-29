@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
-import { FileSessionStore } from 'agentdev';
+import { DebugHub, FileSessionStore } from 'agentdev';
 import { setTimeout as sleep } from 'timers/promises';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
@@ -316,6 +316,21 @@ class CallArbiter {
     };
   }
 
+  clearQueued(reason = 'cancelled by interrupt') {
+    const removed = this._queue.splice(0, this._queue.length);
+    for (const envelope of removed) {
+      envelope.status = 'cancelled';
+      envelope.error = reason;
+      const cb = this._completionCallbacks.get(envelope.id);
+      if (cb) {
+        this._completionCallbacks.delete(envelope.id);
+        cb(envelope);
+      }
+    }
+    this._status = this._active ? 'running' : 'idle';
+    return removed.length;
+  }
+
   // -- Internal --
 
   _emit(event, envelope) {
@@ -335,6 +350,14 @@ class CallArbiter {
 
     const envelope = this._activeEnvelope;
     envelope.status = 'running';
+
+    if (envelope.source === 'queued-input' && envelope.sourceRef && this._agent?.agentId) {
+      try {
+        DebugHub.getInstance().consumeQueuedInput(this._agent.agentId, envelope.sourceRef);
+      } catch (error) {
+        console.warn('[CallArbiter] consumeQueuedInput failed:', error);
+      }
+    }
 
     console.log(`[CallArbiter] executing ${envelope.id} (source=${envelope.source})`);
     this._emit('callStarted', envelope);
@@ -882,6 +905,27 @@ async function main() {
 
   // ── CallArbiter: initialize AFTER session restore, BEFORE runtime inputs open ──
   callArbiter = new CallArbiter(agent);
+  DebugHub.getInstance().setQueuedInputHandler((targetAgentId, input) => {
+    if (!callArbiter || !agent?.agentId || targetAgentId !== agent.agentId) {
+      return;
+    }
+    callArbiter.enqueue({
+      source: 'queued-input',
+      sourceRef: input.id || '',
+      text: input.text,
+    });
+  });
+  DebugHub.getInstance().setInterruptHandler((targetAgentId, clearQueue) => {
+    if (!callArbiter || !agent?.agentId || targetAgentId !== agent.agentId) {
+      return;
+    }
+    if (clearQueue) {
+      const cleared = callArbiter.clearQueued();
+      if (cleared > 0) {
+        console.log(`[ProtoClaw Runtime] interrupt cleared ${cleared} queued envelope(s)`);
+      }
+    }
+  });
 
   callArbiter.on('callFinished', (_envelope) => {
     if (!sessionId) return;
@@ -973,12 +1017,15 @@ async function main() {
     }
 
     try {
-      callArbiter.enqueue({ source: 'viewer-input', text: handled.text });
+      const entry = callArbiter.enqueue({ source: 'viewer-input', text: handled.text });
+      await callArbiter.waitForCompletion(entry.id);
     } catch (error) {
       console.error('[ProtoClaw Runtime] CallArbiter 入队失败:', error);
     }
 
-    // 注意：队列消息现在在 step 级别检查（react-loop 内部），不再在这里处理
+    // 只有当前一轮 viewer 输入对应的调用真正结束后，
+    // 才重新挂出下一轮 input-request。
+    // 这样可以保留原本“运行中显示暂停/队列态”的前端语义。
   }
 
   await disposeAgent(0);

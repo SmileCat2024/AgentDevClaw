@@ -172,13 +172,49 @@ function isRuntimeCalling(runtimeId) {
 
 function resolveNotificationCallingState(notifData) {
   const stateType = String(notifData?.state?.type || '').trim();
-  if (stateType === 'llm.complete' || stateType === 'call.finish') {
-    return false;
-  }
   if (stateType === 'call.start') {
     return true;
   }
+  if (stateType === 'call.finish') {
+    return false;
+  }
+  if (notifData?.callActive !== undefined) {
+    return notifData.callActive === true;
+  }
+  if (stateType === 'llm.complete') {
+    return false;
+  }
   return notifData?.callActive === true;
+}
+
+function getInputSurfaceMode(requests = currentInputRequests || []) {
+  const chatActive = isChatSurfaceActive();
+  if (!chatActive) return 'hidden';
+  if (readOnlyMode) return 'readonly';
+
+  const hasRuntimeSelected = !!currentRuntimeAgentId;
+  const hasRequests = Array.isArray(requests) && requests.length > 0;
+  const hasChoiceRequest = hasRequests && requests.some(isChoiceInputRequest);
+  if (hasChoiceRequest) {
+    return 'requests';
+  }
+
+  const hasLocalQueuedInput = hasRuntimeSelected
+    && (_localQueuedInputPending || _pendingQueuedCount > 0 || _queuedTexts.length > 0);
+
+  if (hasLocalQueuedInput && hasRuntimeSelected) {
+    return 'persistent';
+  }
+  if (hasRequests) {
+    return 'requests';
+  }
+  if (hasRuntimeSelected && isRuntimeCalling(currentRuntimeAgentId)) {
+    return 'persistent';
+  }
+  if (hasRuntimeSelected) {
+    return 'persistent';
+  }
+  return 'hidden';
 }
 
 function renderSidebarChildItems(entries) {
@@ -4348,6 +4384,7 @@ async function poll() {
     const notifData = await notifRes.json();
     updateNotificationStatus(notifData);
     await refreshAgentCallStates(allAgents);
+    _syncPersistentInputUi(currentRuntimeAgentId);
 
     const nextOverview = normalizeOverviewSnapshot(await overviewRes.json());
     const nextOverviewSignature = getOverviewSignature(nextOverview);
@@ -4366,6 +4403,8 @@ async function poll() {
       window.lastInputRequests = inputRequests;
       renderInputRequests(inputRequests);
       updateRollbackActionVisibility();
+    } else if (isChatSurfaceActive()) {
+      _syncPersistentInputUi(currentRuntimeAgentId);
     }
 
     if (messages.length !== currentMessages.length) {
@@ -4467,6 +4506,7 @@ function updateNotificationStatus(notifData) {
   const statusEl = document.getElementById('notification-status');
   const phaseEl = document.getElementById('notification-phase');
   const charCountEl = document.getElementById('notification-char-count');
+  let callingStateChanged = false;
   // `callActive` is tracked independently from the transient `state` payload.
   // Some notification responses may only carry the call flag, so update it
   // before any early return based on `state`.
@@ -4480,7 +4520,25 @@ function updateNotificationStatus(notifData) {
       } else {
         _agentCallActive.delete(runtimeId);
       }
-      if ((prev === true) !== nextCalling) {
+      callingStateChanged = (prev === true) !== nextCalling;
+      if (callingStateChanged) {
+        renderAgentList();
+      }
+    }
+  }
+
+  const stateType = String(notifData?.state?.type || '').trim();
+  if (currentRuntimeAgentId && notifData.callActive === undefined) {
+    if (stateType === 'call.start') {
+      if (!isRuntimeCalling(currentRuntimeAgentId)) {
+        _agentCallActive.set(currentRuntimeAgentId, true);
+        callingStateChanged = true;
+        renderAgentList();
+      }
+    } else if (stateType === 'call.finish') {
+      if (isRuntimeCalling(currentRuntimeAgentId)) {
+        _agentCallActive.delete(currentRuntimeAgentId);
+        callingStateChanged = true;
         renderAgentList();
       }
     }
@@ -4488,10 +4546,29 @@ function updateNotificationStatus(notifData) {
 
   if (!notifData.state) {
     statusEl.style.display = 'none';
+    _syncPersistentActionButton();
     return;
   }
 
   const { type, data } = notifData.state;
+
+  if (type === 'call.start') {
+    statusEl.style.display = 'none';
+    _syncPersistentActionButton();
+    return;
+  }
+
+  if (type === 'call.finish') {
+    statusEl.style.display = 'none';
+    statusEl.classList.remove('active');
+    if (currentRuntimeAgentId) {
+      _agentCallActive.delete(currentRuntimeAgentId);
+      renderAgentList();
+    }
+    _syncPersistentActionButton();
+    _syncPersistentInputUi();
+    return;
+  }
 
   if (type === 'llm.char_count') {
     statusEl.style.display = 'flex';
@@ -4505,43 +4582,55 @@ function updateNotificationStatus(notifData) {
     phaseEl.textContent = phaseNames[data.phase] || data.phase;
     charCountEl.textContent = data.charCount.toLocaleString();
 
-    // 切换常驻按钮为 stop 状态
-    _setActionBtnStop();
+    // 新语义下改为根据 runtime 调用状态同步按钮
+    _syncPersistentActionButton();
     // 新 step 开始，agent 已在上一步结束时 dequeue 了消息，同步气泡
     _syncQueueFromBackend();
   } else if (type === 'llm.complete') {
     statusEl.style.display = 'none';
     statusEl.classList.remove('active');
-    if (currentRuntimeAgentId) {
-      _agentCallActive.delete(currentRuntimeAgentId);
-      renderAgentList();
-    }
-
-    // 切换常驻按钮为 send 状态
-    _setActionBtnSend();
+    _syncPersistentActionButton();
     // 不在这里清空 _queuedTexts — 后端队列可能仍有消息待消费
     // 队列显示由 _syncQueueFromBackend() 在每轮 step_start 时统一管理
     _pendingQueuedCount = 0;
+    _syncPersistentInputUi();
   } else {
     statusEl.style.display = 'none';
+  }
+
+  if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
+    lastRenderedInputSignature = '';
+    renderInputRequests(currentInputRequests || []);
   }
 }
 
 // 渲染输入请求
+function getInputRenderSignature(requests, renderMode) {
+  const runtimeId = currentRuntimeAgentId || 'none';
+  if (renderMode === 'persistent') {
+    return `persistent|${runtimeId}|${readOnlyMode ? 'ro' : 'rw'}`;
+  }
+  if (renderMode === 'requests') {
+    return `requests|${runtimeId}|${JSON.stringify(requests || [])}`;
+  }
+  return `${renderMode}|${runtimeId}`;
+}
+
 function renderInputRequests(requests) {
   const container = document.getElementById('user-input-container');
   if (!container) return;
   currentInputRequests = requests;
   const chatActive = isChatSurfaceActive();
-  const signature = `${currentRuntimeAgentId || 'none'}|${JSON.stringify(requests || [])}`;
+  const renderMode = getInputSurfaceMode(requests);
+  const signature = getInputRenderSignature(requests, renderMode);
   const hasChoiceRequest = Array.isArray(requests) && requests.some(isChoiceInputRequest);
 
-  if (signature === lastRenderedInputSignature && chatActive === lastRenderedInputMode) {
+  if (signature === lastRenderedInputSignature && renderMode === lastRenderedInputMode) {
     return;
   }
 
   lastRenderedInputSignature = signature;
-  lastRenderedInputMode = chatActive;
+  lastRenderedInputMode = renderMode;
 
   // 清空现有内容
   container.innerHTML = '';
@@ -4555,12 +4644,12 @@ function renderInputRequests(requests) {
       }
     : null;
 
-  if (!chatActive) {
+  if (!chatActive || renderMode === 'hidden') {
     container.classList.remove('choice-input-active', 'choice-collapsed');
     return;
   }
 
-  if (readOnlyMode) {
+  if (renderMode === 'readonly') {
     container.classList.remove('choice-input-active', 'choice-collapsed');
     const card = document.createElement('div');
     card.className = 'user-input-card';
@@ -4573,13 +4662,14 @@ function renderInputRequests(requests) {
     return;
   }
 
-  // 如果没有 pending input requests 但有运行时 agent，渲染常驻输入框
+  // 常驻输入框的显示条件一直是“当前正在查看某个 runtime 聊天面板”，
+  // 而不是“runtime 此刻一定处于执行中”。
   const hasRequests = Array.isArray(requests) && requests.length > 0;
-  const isAgentRunning = !!currentRuntimeAgentId && chatActive;
+  const hasRuntimeSelected = !!currentRuntimeAgentId && chatActive;
 
   // 如果有 pending requests，正常渲染
-  // 如果没有 pending requests 但 agent 存在，渲染常驻输入框（队列模式）
-  if (hasRequests) {
+  // 如果没有 pending requests 但当前有 runtime 聊天上下文，渲染常驻输入框（队列模式）
+  if (renderMode === 'requests' && hasRequests) {
     for (const req of requests) {
       if (isChoiceInputRequest(req)) {
         renderChoiceInputRequest(container, req);
@@ -4626,8 +4716,8 @@ function renderInputRequests(requests) {
         }
       }, 50);
     }
-  } else if (isAgentRunning && !readOnlyMode) {
-    // 常驻输入框：agent 正在运行但没有 pending input request
+  } else if (renderMode === 'persistent' && hasRuntimeSelected && !readOnlyMode) {
+    // 常驻输入框：当前正在查看 runtime 聊天，但没有 pending input request
     renderPersistentInput(container);
   }
 }
@@ -4635,6 +4725,9 @@ function renderInputRequests(requests) {
 // 渲染常驻输入框（agent 运行期间始终可见）
 let _pendingQueuedCount = 0;
 let _queuedTexts = []; // 仅用于气泡展示
+let _persistentUiSyncInFlight = false;
+let _localQueuedInputPending = false;
+let _lastQueueBubbleSignature = '';
 
 function renderPersistentInput(container) {
   // 先渲染队列气泡
@@ -4655,6 +4748,7 @@ function renderPersistentInput(container) {
     </div>
   `;
   container.appendChild(card);
+  _syncPersistentInputUi();
 }
 
 function onPersistentBtnClick() {
@@ -4687,7 +4781,25 @@ function _setActionBtnSend() {
   if (iconStop) iconStop.style.display = 'none';
 }
 
+function _syncPersistentActionButton() {
+  if (currentRuntimeAgentId && isRuntimeCalling(currentRuntimeAgentId)) {
+    _setActionBtnStop();
+  } else {
+    _setActionBtnSend();
+  }
+}
+
 function _renderQueueBubbles(container) {
+  const signature = JSON.stringify(_queuedTexts);
+  const existingStack = container.querySelector('.queue-bubbles-stack');
+  if (signature === _lastQueueBubbleSignature && (
+    (_queuedTexts.length === 0 && !existingStack)
+    || (_queuedTexts.length > 0 && existingStack)
+  )) {
+    return;
+  }
+  _lastQueueBubbleSignature = signature;
+
   container.querySelectorAll('.queue-bubbles-stack').forEach(el => el.remove());
   if (_queuedTexts.length === 0) return;
 
@@ -4708,22 +4820,7 @@ function _renderQueueBubbles(container) {
 
 // 查询后端真实队列余量，移除已被消费的气泡
 async function _syncQueueFromBackend() {
-  if (_queuedTexts.length === 0 || !currentRuntimeAgentId) return;
-  try {
-    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/queued-inputs`);
-    if (!res.ok) return;
-    const data = await res.json();
-    const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
-    const remaining = queue.length;
-    // 后端是 FIFO shift，前端 _queuedTexts 也是按顺序 push，对齐移除
-    const consumed = _queuedTexts.length - remaining;
-    if (consumed > 0) {
-      _queuedTexts.splice(0, consumed);
-      updateQueueIndicator();
-    }
-  } catch (e) {
-    // 查询失败不影响主流程
-  }
+  await _syncPersistentInputUi();
 }
 
 function handlePersistentInputKey(event) {
@@ -4751,9 +4848,15 @@ async function submitQueuedInput() {
     if (res.ok) {
       textarea.value = '';
       autoResize(textarea);
+      _localQueuedInputPending = true;
       _pendingQueuedCount++;
       _queuedTexts.push(text);
       updateQueueIndicator();
+      const nextMode = getInputSurfaceMode(currentInputRequests || []);
+      if (nextMode !== lastRenderedInputMode) {
+        lastRenderedInputSignature = '';
+        renderInputRequests(currentInputRequests || []);
+      }
     }
   } catch (e) {
     console.error('排队输入提交失败:', e);
@@ -4763,6 +4866,51 @@ async function submitQueuedInput() {
 function updateQueueIndicator() {
   const container = document.getElementById('user-input-container');
   if (container) _renderQueueBubbles(container);
+}
+
+async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
+  if (_persistentUiSyncInFlight) return;
+  _persistentUiSyncInFlight = true;
+  const prevMode = getInputSurfaceMode(currentInputRequests || []);
+  const prevQueueSignature = JSON.stringify(_queuedTexts);
+  try {
+    if (!runtimeId) {
+      _queuedTexts = [];
+      _pendingQueuedCount = 0;
+      updateQueueIndicator();
+      _syncPersistentActionButton();
+      return;
+    }
+
+    const expectedRuntimeId = runtimeId;
+    _syncPersistentActionButton();
+
+    const res = await fetch(`/api/agents/${expectedRuntimeId}/queued-inputs`);
+    if (!res.ok || expectedRuntimeId !== currentRuntimeAgentId) return;
+    const data = await res.json();
+    const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
+    const viewerQueueTexts = queue
+      .map((item) => typeof item?.text === 'string' ? item.text.trim() : '')
+      .filter(Boolean);
+
+    _queuedTexts = viewerQueueTexts.slice();
+    _pendingQueuedCount = _queuedTexts.length;
+    if (_queuedTexts.length === 0 && !isRuntimeCalling(expectedRuntimeId)) {
+      _localQueuedInputPending = false;
+    }
+    if (JSON.stringify(_queuedTexts) !== prevQueueSignature) {
+      updateQueueIndicator();
+    }
+  } catch (e) {
+    // ignore transient queue sync failures
+  } finally {
+    _persistentUiSyncInFlight = false;
+  }
+  const nextMode = getInputSurfaceMode(currentInputRequests || []);
+  if (nextMode !== prevMode) {
+    lastRenderedInputSignature = '';
+    renderInputRequests(currentInputRequests || []);
+  }
 }
 
 async function interruptAgent() {
@@ -4775,6 +4923,13 @@ async function interruptAgent() {
     });
     const data = await res.json();
     console.log(`[Interrupt] response:`, res.status, data);
+    _localQueuedInputPending = false;
+    _pendingQueuedCount = 0;
+    _queuedTexts = [];
+    _lastQueueBubbleSignature = '';
+    updateQueueIndicator();
+    lastRenderedInputSignature = '';
+    renderInputRequests(currentInputRequests || []);
   } catch (e) {
     console.error('[Interrupt] request failed:', e);
   }
