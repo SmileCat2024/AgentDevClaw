@@ -16,6 +16,19 @@ import {
 } from './server/context-continuity/handoff-package.js';
 import { exportSummarizedHandoffPackage, writeSummarizedHandoffPackage } from './server/context-continuity/summarized-handoff.js';
 import { ClawMCPServer } from './server/claw-mcp.js';
+import {
+  createCallEnvelope,
+  enqueueRuntimeEnvelope,
+  refreshRuntimeExecutionState,
+  getRuntimeInboxSnapshot,
+  getRuntimeExecutionState,
+  listRuntimeExecutionStates,
+  findEnvelopeById,
+  findEnvelopesBySourceRef,
+  updateEnvelopeStatus,
+  EnvelopeSource,
+  EnvelopeStatus,
+} from './server/runtime-call-envelope.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,6 +74,8 @@ const dispatchPendingPolls = new Map();    // runtimeKey → resolveFn
 const dispatchTimers = new Map();          // scheduleId → setTimeout handle
 const dispatchRuntimeActivity = new Map(); // runtimeKey → { lastActiveAt, status: 'idle'|'active' }
 const dispatchIdleCheckers = new Map();    // scheduleId → setInterval handle (for on-idle triggers)
+
+const DISPATCH_FIRED_TIMEOUT_MS = 5 * 60 * 1000; // fired schedule 超时阈值：5 分钟
 
 // ── Project abstraction layer ───────────────────────────────────────
 // Project adapter registry: workspaceId → adapter instance
@@ -436,8 +451,35 @@ async function fireSingleTarget(s, target) {
   }
 
   const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
+
+  // 回写解析后的真实目标到 schedule（兼容旧记录，无需回写时跳过）
+  if (!s.targets) {
+    s.resolvedTargetSessionId = sessionId;
+    s.resolvedRuntimeKey = runtimeKey;
+  }
+  s.awaitingResponseSince = Date.now();
+  saveDispatchSchedules();
+
   pushDispatchMessage(runtimeKey, s.message, s.id);
-  console.log(`[Dispatch] fired → ${agentId}::${sessionId}: ${s.message.slice(0, 50)}...`);
+
+  // ── CallEnvelope compatibility bridge ──
+  // Create and enqueue an envelope alongside the legacy dispatch message.
+  // The envelopeId is written back to the schedule so future arbiter code
+  // can correlate schedule → envelope.
+  const envelope = createCallEnvelope({
+    runtimeKey,
+    agentId,
+    sessionId: sessionId || '',
+    source: EnvelopeSource.DISPATCH,
+    sourceRef: s.id,
+    text: s.message,
+  });
+  enqueueRuntimeEnvelope(envelope);
+  refreshRuntimeExecutionState(runtimeKey);
+  s.envelopeId = envelope.id;
+  saveDispatchSchedules();
+
+  console.log(`[Dispatch] fired → ${agentId}::${sessionId} (runtimeKey=${runtimeKey}, envelope=${envelope.id}): ${s.message.slice(0, 50)}...`);
 }
 
 async function fireDispatchNow(schedule) {
@@ -445,7 +487,31 @@ async function fireDispatchNow(schedule) {
   if (!s || s.status !== 'pending') return;
   s.status = 'fired';
   s.firedAt = new Date().toISOString();
+  s.awaitingResponseSince = Date.now();
   saveDispatchSchedules();
+
+  // 启动 fired 超时看门狗
+  const watchdogKey = `__watchdog_${s.id}`;
+  const watchdog = setTimeout(() => {
+    const current = dispatchSchedules.get(s.id);
+    if (current && current.status === 'fired') {
+      current.status = 'failed';
+      current.result = current.result || '(dispatch response timed out)';
+      current.lastError = 'runtime did not respond before timeout';
+      current.completedAt = new Date().toISOString();
+      if (current.envelopeId) {
+        updateEnvelopeStatus(current.envelopeId, {
+          status: EnvelopeStatus.FAILED,
+          error: current.lastError,
+          result: current.result,
+        });
+        if (current.resolvedRuntimeKey) refreshRuntimeExecutionState(current.resolvedRuntimeKey);
+      }
+      saveDispatchSchedules();
+      console.warn(`[Dispatch] watchdog: schedule ${s.id} timed out, marking failed`);
+    }
+  }, DISPATCH_FIRED_TIMEOUT_MS);
+  dispatchTimers.set(watchdogKey, watchdog);
 
   // Phase 4: multi-target support
   if (Array.isArray(s.targets) && s.targets.length > 0) {
@@ -461,16 +527,113 @@ async function fireDispatchNow(schedule) {
 }
 
 loadDispatchSchedules();
-// restore timers and event triggers for pending schedules
-for (const s of dispatchSchedules.values()) {
-  if (s.status === 'pending') {
+restoreDispatchSchedulesOnBoot();
+
+/**
+ * 统一启动恢复 sweep：对所有 schedule 按状态和触发类型做恢复处理。
+ * 覆盖场景：pending timer（未来/过期）、pending on-idle、pending on-ready、
+ * fired（刚触发/已超时）。
+ */
+function restoreDispatchSchedulesOnBoot() {
+  let restoredTimers = 0, restoredIdle = 0, restoredReady = 0;
+  let expiredTimersFired = 0, firedTimeouts = 0;
+
+  for (const s of dispatchSchedules.values()) {
     const triggerType = s.trigger?.type || 'timer';
-    if (triggerType === 'timer' && new Date(s.fireAt).getTime() > Date.now()) {
-      scheduleDispatchFire(s);
+
+    // ── fired：检查是否超时 ──
+    if (s.status === 'fired') {
+      const since = s.awaitingResponseSince || (s.firedAt ? new Date(s.firedAt).getTime() : 0);
+      const elapsed = since ? (Date.now() - since) : DISPATCH_FIRED_TIMEOUT_MS + 1;
+      if (elapsed >= DISPATCH_FIRED_TIMEOUT_MS) {
+        s.status = 'failed';
+        s.result = s.result || '(dispatch response timed out after server restart)';
+        s.lastError = 'runtime did not respond before timeout';
+        s.completedAt = new Date().toISOString();
+        if (s.envelopeId) {
+          updateEnvelopeStatus(s.envelopeId, {
+            status: EnvelopeStatus.FAILED,
+            error: s.lastError,
+            result: s.result,
+          });
+          if (s.resolvedRuntimeKey) refreshRuntimeExecutionState(s.resolvedRuntimeKey);
+        }
+        firedTimeouts++;
+        console.warn(`[Dispatch] recovery: schedule ${s.id} fired too long (${Math.round(elapsed / 1000)}s), marking failed`);
+      } else {
+        // 刚触发不久，仍然在等待响应，保留 fired 状态但启动超时看门狗
+        const remaining = DISPATCH_FIRED_TIMEOUT_MS - elapsed;
+        const watchdog = setTimeout(() => {
+          const current = dispatchSchedules.get(s.id);
+          if (current && current.status === 'fired') {
+            current.status = 'failed';
+            current.result = current.result || '(dispatch response timed out)';
+            current.lastError = 'runtime did not respond before timeout';
+            current.completedAt = new Date().toISOString();
+            if (current.envelopeId) {
+              updateEnvelopeStatus(current.envelopeId, {
+                status: EnvelopeStatus.FAILED,
+                error: current.lastError,
+                result: current.result,
+              });
+              if (current.resolvedRuntimeKey) refreshRuntimeExecutionState(current.resolvedRuntimeKey);
+            }
+            saveDispatchSchedules();
+            console.warn(`[Dispatch] watchdog: schedule ${s.id} timed out, marking failed`);
+          }
+        }, remaining);
+        // 不存到 dispatchTimers，因为这是超时看门狗不是定时 fire
+        dispatchTimers.set(`__watchdog_${s.id}`, watchdog);
+      }
+      continue;
+    }
+
+    // ── 以下只处理 pending ──
+    if (s.status !== 'pending') continue;
+
+    if (triggerType === 'timer') {
+      const fireAt = new Date(s.fireAt).getTime();
+      if (fireAt > Date.now()) {
+        // 未来 timer：正常恢复
+        scheduleDispatchFire(s);
+        restoredTimers++;
+      } else {
+        // 过期 timer：立即 fire（当前系统语义更偏向"错过也应执行"的续接任务）
+        console.log(`[Dispatch] recovery: expired timer ${s.id} (fireAt=${s.fireAt}), firing now`);
+        fireDispatchNow(s);
+        expiredTimersFired++;
+      }
     } else if (triggerType === 'on-idle') {
       scheduleDispatchFire(s);
+      restoredIdle++;
+    } else if (triggerType === 'on-ready') {
+      // 恢复到监听体系：emitDispatchReadyEvent 会在 runtime 启动时被调用，
+      // 但如果当前已有 runtime 处于 ready 状态，也需要立即检查一次
+      restoredReady++;
     }
-    // on-ready triggers fire on next runtime ready event, no need to restore
+  }
+
+  // 对 on-ready schedule 做即时匹配：如果目标 runtime 已经在运行，立即触发
+  for (const s of dispatchSchedules.values()) {
+    if (s.status !== 'pending' || s.trigger?.type !== 'on-ready') continue;
+    const agentId = s.targetAgentId;
+    // 检查该 agent 是否有活跃 runtime
+    const runtimes = listAgentRuntimes(agentId);
+    for (const rt of runtimes) {
+      if (!rt.stopped && rt.process?.exitCode === null) {
+        const sessionId = rt.sessionId || null;
+        // 检查是否匹配 targetSessionId
+        if (s.targetSessionId && s.targetSessionId !== '__latest__' && s.targetSessionId !== sessionId) continue;
+        // runtime 正在运行，触发 ready 事件
+        emitDispatchReadyEvent(agentId, sessionId);
+        break;
+      }
+    }
+  }
+
+  if (restoredTimers + restoredIdle + restoredReady + expiredTimersFired + firedTimeouts > 0) {
+    saveDispatchSchedules();
+    console.log(`[Dispatch] recovery sweep: ${restoredTimers} timers, ${restoredIdle} idle, ${restoredReady} ready restored; ${expiredTimersFired} expired timers fired; ${firedTimeouts} fired timed out`);
   }
 }
 
@@ -5306,9 +5469,20 @@ app.delete('/protoclaw/dispatch/schedules/:id', (req, res) => {
     s.status = 'cancelled';
     saveDispatchSchedules();
   } else if (s.status === 'fired') {
+    // 清除看门狗定时器
+    const watchdogKey = `__watchdog_${s.id}`;
+    const watchdog = dispatchTimers.get(watchdogKey);
+    if (watchdog) { clearTimeout(watchdog); dispatchTimers.delete(watchdogKey); }
     // Stuck in fired — runtime likely crashed or never responded
     s.status = 'cancelled';
     s.result = '(cancelled while firing)';
+    if (s.envelopeId) {
+      updateEnvelopeStatus(s.envelopeId, {
+        status: EnvelopeStatus.CANCELLED,
+        result: s.result,
+      });
+      if (s.resolvedRuntimeKey) refreshRuntimeExecutionState(s.resolvedRuntimeKey);
+    }
     saveDispatchSchedules();
   }
   res.json({ ok: true });
@@ -5344,9 +5518,24 @@ app.post('/protoclaw/dispatch/respond', express.json(), (req, res) => {
   if (scheduleId) {
     const s = dispatchSchedules.get(scheduleId);
     if (s) {
+      // 清除看门狗定时器（如果存在）
+      const watchdogKey = `__watchdog_${scheduleId}`;
+      const watchdog = dispatchTimers.get(watchdogKey);
+      if (watchdog) { clearTimeout(watchdog); dispatchTimers.delete(watchdogKey); }
+
       // Update activity tracking for the target runtime
-      const runtimeKey = getManagedRuntimeKey(s.targetAgentId, s.targetSessionId);
+      // 优先使用 fire 阶段解析后的真实目标，避免 __latest__ 导致 key 错位
+      const resolvedSessionId = s.resolvedTargetSessionId || s.targetSessionId;
+      const runtimeKey = s.resolvedRuntimeKey || getManagedRuntimeKey(s.targetAgentId, resolvedSessionId);
       dispatchRuntimeActivity.set(runtimeKey, { lastActiveAt: Date.now(), status: 'active' });
+      if (s.envelopeId) {
+        updateEnvelopeStatus(s.envelopeId, {
+          status: error ? EnvelopeStatus.FAILED : EnvelopeStatus.COMPLETED,
+          error: error || null,
+          result: error || response || '',
+        });
+        refreshRuntimeExecutionState(runtimeKey);
+      }
 
       // Check if this is a repeating schedule (Phase 2: repeatInterval)
       if (!error && s.repeatInterval && s.repeatInterval > 0) {
@@ -5360,7 +5549,12 @@ app.post('/protoclaw/dispatch/respond', express.json(), (req, res) => {
           s.completedAt = new Date().toISOString();
           saveDispatchSchedules();
         } else {
-          // Re-arm: calculate next fire time
+          // Re-arm: only on-ready needs to become a timer after the first fire.
+          // on-idle already has dedicated checker logic and should remain on-idle.
+          if (s.trigger?.type === 'on-ready' && !s.trigger.originalType) {
+            s.trigger.originalType = s.trigger.type;
+            s.trigger.type = 'timer';
+          }
           s.status = 'pending';
           s.fireAt = new Date(Date.now() + s.repeatInterval * 1000).toISOString();
           s.firedAt = new Date().toISOString();
@@ -5389,6 +5583,44 @@ app.post('/protoclaw/dispatch/agent_status', express.json(), (req, res) => {
 });
 
 // ── End Dispatch API ─────────────────────────────────────────────
+
+// ── Runtime Inbox observation API (read-only) ──────────────────
+
+app.get('/protoclaw/runtime/inbox', (req, res) => {
+  const agentId = req.query.agentId;
+  const sessionId = req.query.sessionId || null;
+  if (!agentId) return res.status(400).json({ error: 'agentId required' });
+  const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
+  res.json(getRuntimeInboxSnapshot(runtimeKey));
+});
+
+app.get('/protoclaw/runtime/execution_state', (req, res) => {
+  const agentId = req.query.agentId;
+  const sessionId = req.query.sessionId || null;
+  if (!agentId) return res.status(400).json({ error: 'agentId required' });
+  const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
+  res.json(getRuntimeExecutionState(runtimeKey));
+});
+
+app.get('/protoclaw/runtime/execution_states', (_req, res) => {
+  res.json({ states: listRuntimeExecutionStates() });
+});
+
+app.get('/protoclaw/runtime/envelope', (req, res) => {
+  const envelopeId = req.query.envelopeId;
+  if (!envelopeId) return res.status(400).json({ error: 'envelopeId required' });
+  const envelope = findEnvelopeById(envelopeId);
+  if (!envelope) return res.status(404).json({ error: 'envelope not found' });
+  res.json(envelope);
+});
+
+app.get('/protoclaw/runtime/envelopes_by_source', (req, res) => {
+  const sourceRef = req.query.sourceRef;
+  if (!sourceRef) return res.status(400).json({ error: 'sourceRef required' });
+  res.json({ envelopes: findEnvelopesBySourceRef(sourceRef) });
+});
+
+// ── End Runtime Inbox observation API ───────────────────────────
 
 app.get('/protoclaw/health', (_req, res) => {
   res.json({ ok: true, appPort: APP_PORT, viewerPort: VIEWER_PORT });

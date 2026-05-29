@@ -241,6 +241,219 @@ let agent = null;
 let disposed = false;
 let compactSummaryInFlight = false;
 
+// ── CallArbiter: single entry point for agent.onCall() ────────────
+//
+// Guarantees that only one onCall() is active at a time per runtime.
+// All sources (user input, dispatch, IM) must enqueue envelopes here
+// instead of calling agent.onCall() directly.
+
+class CallArbiter {
+  constructor(agentInstance) {
+    this._agent = agentInstance;
+    this._queue = [];
+    this._active = false;
+    this._activeEnvelope = null;
+    this._status = 'idle'; // idle | queued | running
+    this._listeners = { callStarted: [], callFinished: [] };
+    // Completion trackers: envelopeId → resolve callback
+    this._completionCallbacks = new Map();
+  }
+
+  /**
+   * Enqueue a call envelope and kick the processing loop.
+   *
+   * @param {{ id?: string, source: string, sourceRef?: string, text: string }} envelope
+   * @returns {object} The envelope with assigned id and status
+   */
+  enqueue(envelope) {
+    const entry = {
+      id: envelope.id || `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      source: envelope.source || 'unknown',
+      sourceRef: envelope.sourceRef || '',
+      text: envelope.text,
+      status: 'queued',
+      createdAt: Date.now(),
+      result: null,
+      error: null,
+    };
+    this._queue.push(entry);
+    this._status = 'queued';
+    console.log(`[CallArbiter] enqueued ${entry.id} (source=${entry.source}, queue=${this._queue.length})`);
+    this._kick();
+    return entry;
+  }
+
+  /**
+   * Register a lifecycle event listener.
+   * @param {'callStarted'|'callFinished'} event
+   * @param {function} fn
+   */
+  on(event, fn) {
+    if (this._listeners[event]) {
+      this._listeners[event].push(fn);
+    }
+  }
+
+  /**
+   * Wait for a specific envelope to complete (status = completed or failed).
+   * Returns a promise that resolves with the finished envelope.
+   *
+   * @param {string} envelopeId
+   * @returns {Promise<object>}
+   */
+  waitForCompletion(envelopeId) {
+    return new Promise((resolve) => {
+      this._completionCallbacks.set(envelopeId, resolve);
+    });
+  }
+
+  /** Get current arbiter status */
+  getStatus() {
+    return {
+      status: this._status,
+      queueLength: this._queue.length,
+      activeEnvelopeId: this._activeEnvelope?.id || null,
+    };
+  }
+
+  // -- Internal --
+
+  _emit(event, envelope) {
+    for (const fn of this._listeners[event] || []) {
+      try { fn(envelope); } catch (err) {
+        console.error(`[CallArbiter] ${event} listener error:`, err);
+      }
+    }
+  }
+
+  _kick() {
+    if (this._active || this._queue.length === 0) return;
+    // Dequeue and run
+    this._active = true;
+    this._activeEnvelope = this._queue.shift();
+    this._status = 'running';
+
+    const envelope = this._activeEnvelope;
+    envelope.status = 'running';
+
+    console.log(`[CallArbiter] executing ${envelope.id} (source=${envelope.source})`);
+    this._emit('callStarted', envelope);
+
+    // Run asynchronously so enqueue() returns immediately
+    Promise.resolve()
+      .then(() => this._agent.onCall(envelope.text))
+      .then((result) => {
+        envelope.status = 'completed';
+        envelope.result = typeof result === 'string' ? result : '';
+      })
+      .catch((err) => {
+        envelope.status = 'failed';
+        envelope.error = err instanceof Error ? err.message : String(err);
+        console.error(`[CallArbiter] onCall failed for ${envelope.id}:`, err);
+      })
+      .finally(() => {
+        this._active = false;
+        this._status = this._queue.length > 0 ? 'queued' : 'idle';
+        console.log(`[CallArbiter] finished ${envelope.id} (status=${envelope.status}, remaining=${this._queue.length})`);
+        this._emit('callFinished', envelope);
+        // Resolve any waitForCompletion() promises for this envelope
+        const cb = this._completionCallbacks.get(envelope.id);
+        if (cb) {
+          this._completionCallbacks.delete(envelope.id);
+          cb(envelope);
+        }
+        this._activeEnvelope = null;
+        // Continue draining the queue
+        this._kick();
+      });
+  }
+}
+
+let callArbiter = null;
+
+// ── IM result delivery via callfinish ──────────────────────────────
+//
+// When a call completes via the arbiter, this dispatcher decides whether
+// the result should be mirrored to the active IM channel.
+//
+// Rules:
+//  - IM-originated calls (source=qq|weixin): the Feature's own gateway
+//    adapter already handles the reply — do NOT double-send.
+//  - Non-IM-originated calls (dispatch, viewer-input, system):
+//    deliver result to IM if the runtime has an active IM channel
+//    and at least one prior IM peer is known.
+
+const IM_REPLY_POLICY = {
+  /** IM sources that already handle their own reply — skip callfinish delivery */
+  IM_SOURCES: new Set(['qq', 'weixin']),
+  /** Maximum character length for IM result delivery before truncation */
+  MAX_IM_RESULT_LENGTH: 1500,
+  /** Maximum length for error messages sent to IM */
+  MAX_IM_ERROR_LENGTH: 500,
+};
+
+/**
+ * Truncate text for IM delivery, adding an ellipsis indicator.
+ */
+function truncateForIM(text, maxLength) {
+  if (!text) return '';
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + '\n...(结果已截断，完整内容请查看调试面板)';
+}
+
+/**
+ * Dispatch a completed call envelope's result to IM.
+ * Called from the callFinished listener.
+ *
+ * @param {object} envelope - The finished envelope from CallArbiter
+ */
+async function dispatchIMCallFinish(envelope) {
+  if (!agent || typeof agent.sendIMMessage !== 'function') {
+    return;
+  }
+
+  // Skip IM-originated calls — the Feature adapter handles its own reply.
+  if (IM_REPLY_POLICY.IM_SOURCES.has(envelope.source)) {
+    return;
+  }
+
+  const channel = typeof agent.getActiveIMChannel === 'function'
+    ? agent.getActiveIMChannel()
+    : null;
+
+  if (!channel) {
+    return;
+  }
+
+  // Determine result text
+  let resultText = '';
+
+  if (envelope.status === 'failed') {
+    const errorText = envelope.error || '未知错误';
+    resultText = `⚠ 调用失败: ${truncateForIM(errorText, IM_REPLY_POLICY.MAX_IM_ERROR_LENGTH)}`;
+  } else if (envelope.status === 'completed') {
+    const raw = envelope.result || '';
+    if (!raw) {
+      // Successful but empty result — skip IM notification for success with no content
+      return;
+    }
+    resultText = truncateForIM(raw, IM_REPLY_POLICY.MAX_IM_RESULT_LENGTH);
+  } else {
+    return;
+  }
+
+  try {
+    const delivered = await agent.sendIMMessage(resultText);
+    if (delivered) {
+      console.log(`[IM-CallFinish] delivered result to ${channel} (source=${envelope.source}, status=${envelope.status})`);
+    } else {
+      console.warn(`[IM-CallFinish] skipped result delivery to ${channel} (source=${envelope.source})`);
+    }
+  } catch (err) {
+    console.error('[IM-CallFinish] failed to deliver result to IM:', err);
+  }
+}
+
 function getNextTurnActions() {
   const checkpoints = Array.isArray(agent?._callCheckpoints) ? agent._callCheckpoints : [];
   return checkpoints.length > 0 ? NEXT_TURN_ACTIONS : undefined;
@@ -633,39 +846,7 @@ async function main() {
     });
     console.log('[ProtoClaw Runtime] ✓ 已连接到 ViewerWorker');
     console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${agent.agentId ?? 'unknown'}`);
-
-    try {
-      if (typeof agent.startSelectedIMGateway === 'function') {
-        const channel = await agent.startSelectedIMGateway();
-        console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
-      } else if (typeof agent.startQQBotGateway === 'function') {
-        await agent.startQQBotGateway();
-        console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
-      } else {
-        const qqbotFeature = agent.features?.get?.('qqbot');
-        if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
-          await qqbotFeature.startGateway(agent);
-          console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
-        }
-      }
-    } catch (error) {
-      console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
-    }
   }
-
-  // Start ClawDispatch loop if feature is mounted
-  try {
-    const dispatchFeature = agent.features?.get?.('claw-dispatch');
-    if (dispatchFeature && typeof dispatchFeature.startDispatchLoop === 'function') {
-      await dispatchFeature.startDispatchLoop(agent);
-      console.log('[ProtoClaw Runtime] ✓ 已启动 ClawDispatch loop');
-    }
-  } catch (error) {
-    console.error('[ProtoClaw Runtime] ClawDispatch 启动失败:', error);
-  }
-
-  const userInput = agent.features?.get?.('user-input');
-  const hasUserInput = Boolean(userInput && typeof userInput.getUserInput === 'function');
 
   if (sessionId) {
     try {
@@ -698,6 +879,61 @@ async function main() {
   }
 
   console.log('[ProtoClaw Runtime] READY session=' + (sessionId || 'none'));
+
+  // ── CallArbiter: initialize AFTER session restore, BEFORE runtime inputs open ──
+  callArbiter = new CallArbiter(agent);
+
+  callArbiter.on('callFinished', (_envelope) => {
+    if (!sessionId) return;
+    agent.saveSession(sessionId, sessionStore).catch(e => {
+      console.warn('[ProtoClaw Runtime] 保存 session 失败:', e.message);
+    });
+  });
+
+  callArbiter.on('callFinished', (envelope) => {
+    dispatchIMCallFinish(envelope).catch(err => {
+      console.error('[ProtoClaw Runtime] IM callfinish delivery error:', err);
+    });
+  });
+
+  if (typeof agent.setCallArbiter === 'function') {
+    agent.setCallArbiter(callArbiter);
+  }
+
+  console.log('[ProtoClaw Runtime] ✓ CallArbiter 已初始化');
+
+  if (!IS_EXPLORATION) {
+    try {
+      if (typeof agent.startSelectedIMGateway === 'function') {
+        const channel = await agent.startSelectedIMGateway();
+        console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
+      } else if (typeof agent.startQQBotGateway === 'function') {
+        await agent.startQQBotGateway();
+        console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+      } else {
+        const qqbotFeature = agent.features?.get?.('qqbot');
+        if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
+          await qqbotFeature.startGateway(agent);
+          console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+        }
+      }
+    } catch (error) {
+      console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
+    }
+  }
+
+  try {
+    const dispatchFeature = agent.features?.get?.('claw-dispatch');
+    if (dispatchFeature && typeof dispatchFeature.startDispatchLoop === 'function') {
+      await dispatchFeature.startDispatchLoop(agent, callArbiter);
+      console.log('[ProtoClaw Runtime] ✓ 已启动 ClawDispatch loop (via arbiter)');
+    }
+  } catch (error) {
+    console.error('[ProtoClaw Runtime] ClawDispatch 启动失败:', error);
+  }
+
+  const userInput = agent.features?.get?.('user-input');
+  const hasUserInput = Boolean(userInput && typeof userInput.getUserInput === 'function');
 
   if (!hasUserInput) {
     console.log('');
@@ -737,14 +973,9 @@ async function main() {
     }
 
     try {
-      await agent.onCall(handled.text);
+      callArbiter.enqueue({ source: 'viewer-input', text: handled.text });
     } catch (error) {
-      console.error('[ProtoClaw Runtime] Agent 调用失败:', error);
-    }
-    if (sessionId) {
-      await agent.saveSession(sessionId, sessionStore).catch(e => {
-        console.warn('[ProtoClaw Runtime] 保存 session 失败:', e.message);
-      });
+      console.error('[ProtoClaw Runtime] CallArbiter 入队失败:', error);
     }
 
     // 注意：队列消息现在在 step 级别检查（react-loop 内部），不再在这里处理

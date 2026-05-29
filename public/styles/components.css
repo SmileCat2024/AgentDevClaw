@@ -4779,6 +4779,16 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .dispatch-add-task-section .workspace-section-header {
   padding-bottom: 8px;
 }
+.dispatch-loading-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 12px 0;
+  animation: dispatch-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dispatch-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 .dispatch-workspace-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

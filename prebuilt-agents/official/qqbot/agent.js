@@ -8,7 +8,7 @@
 import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from 'agentdev';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { QQBotFeature } from '@agentdev/qqbot-feature';
-import { WeixinBot } from '@agentdev/weixin-bot';
+import { WeixinBot, WeixinApiClient } from '@agentdev/weixin-bot';
 import { MemoryFeature } from '@agentdev/memory-feature';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
@@ -90,6 +90,9 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
   qqbotFeature;
   weixinBotFeature;
   imWorkspaceConfigPath;
+  _callArbiter = null;
+  _activeIMChannel = null;
+  _lastIMTarget = null; // { userId, contextToken? } — last IM peer for result delivery
 
   constructor(config = {}) {
     super({
@@ -141,12 +144,142 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     }
   }
 
+  /**
+   * Set the CallArbiter reference (called by run-prebuilt-agent.js after arbiter init).
+   * When set, IM gateway message handlers route through the arbiter instead of calling
+   * agent.onCall() directly.
+   */
+  setCallArbiter(arbiter) {
+    this._callArbiter = arbiter;
+  }
+
+  /**
+   * Send a text message to the active IM channel.
+   * Used by the callfinish result dispatcher to deliver non-IM-originated results.
+   *
+   * @param {string} text - The message text to send
+   * @returns {boolean} Whether the message was sent successfully
+   */
+  async sendIMMessage(text) {
+    if (!this._activeIMChannel) {
+      console.warn('[QQBotAgent] sendIMMessage: no active IM channel');
+      return false;
+    }
+
+    if (!this._lastIMTarget?.userId) {
+      console.warn('[QQBotAgent] sendIMMessage: no known IM peer (no prior IM interaction)');
+      return false;
+    }
+
+    try {
+      if (this._activeIMChannel === 'weixin' && this.weixinBotFeature) {
+        const apiClient = this.weixinBotFeature.apiClient;
+        if (apiClient && typeof apiClient.sendTextMessage === 'function') {
+          await apiClient.sendTextMessage(
+            this._lastIMTarget.userId,
+            text,
+            this._lastIMTarget.contextToken || '',
+          );
+          console.log(`[QQBotAgent] IM result delivered to weixin user ${this._lastIMTarget.userId}`);
+          return true;
+        }
+        console.warn('[QQBotAgent] sendIMMessage: weixin apiClient not accessible');
+        return false;
+      }
+
+      if (this._activeIMChannel === 'qq' && this.qqbotFeature) {
+        // QQ gateway adapter reply is handled in-band via the adapter's return value.
+        // For non-IM-originated calls, we log since the QQBot standalone adapter
+        // does not expose a direct send API. A future QQ adapter upgrade can
+        // add proactive send support.
+        console.log(`[QQBotAgent] IM result (qq channel, user=${this._lastIMTarget.userId}): ${text.slice(0, 100)}${text.length > 100 ? '...' : ''}`);
+        return false;
+      }
+
+      console.warn(`[QQBotAgent] sendIMMessage: unknown channel "${this._activeIMChannel}"`);
+      return false;
+    } catch (err) {
+      console.error('[QQBotAgent] sendIMMessage failed:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Record the last IM peer for result delivery.
+   * Called by run-prebuilt-agent.js when IM gateway receives a message.
+   *
+   * @param {string} userId
+   * @param {string} [contextToken]
+   */
+  setLastIMTarget(userId, contextToken) {
+    this._lastIMTarget = { userId, contextToken: contextToken || '' };
+  }
+
+  /**
+   * Get the currently active IM channel identifier.
+   */
+  getActiveIMChannel() {
+    return this._activeIMChannel || null;
+  }
+
   async startQQBotGateway() {
     await this.qqbotFeature.startGateway(this);
+    this._activeIMChannel = 'qq';
+    if (this._callArbiter && this.qqbotFeature) {
+      this.qqbotFeature.agentRef = {
+        onCall: async (text) => {
+          const entry = this._callArbiter.enqueue({ source: 'qq', text });
+          const finished = await this._callArbiter.waitForCompletion(entry.id);
+          if (finished.status === 'failed') {
+            throw new Error(finished.error || 'unknown error');
+          }
+          return finished.result || '处理完成';
+        },
+      };
+    }
+    // QQ adapter uses in-band reply (return value from adapter callback).
+    // It does not expose a proactive send API for non-IM-originated calls.
+    // Known limitation: callfinish → IM delivery for dispatch/viewer calls
+    // will log but cannot actually push to QQ without adapter upgrade.
   }
 
   async startWeixinBotGateway() {
-    await this.weixinBotFeature.startGateway(this);
+    const weixinBot = this.weixinBotFeature;
+    if (weixinBot && typeof weixinBot.handleMessage === 'function') {
+      const originalHandleMessage = weixinBot.handleMessage.bind(weixinBot);
+      weixinBot.handleMessage = async (msg) => {
+        if (msg && msg.from_user_id) {
+          this.setLastIMTarget(msg.from_user_id, msg.context_token);
+        }
+        if (!this._callArbiter) {
+          return originalHandleMessage(msg);
+        }
+        if (!msg || msg.message_type !== 1) {
+          return;
+        }
+        const text = WeixinApiClient.extractText(msg);
+        if (!text) {
+          return;
+        }
+        const entry = this._callArbiter.enqueue({
+          source: 'weixin',
+          sourceRef: msg.from_user_id || '',
+          text,
+        });
+        const finished = await this._callArbiter.waitForCompletion(entry.id);
+        const responseText = finished.status === 'failed'
+          ? `处理失败: ${finished.error || '未知错误'}`
+          : (finished.result || '处理完成');
+        await weixinBot.apiClient.sendTextMessage(
+          msg.from_user_id,
+          responseText,
+          msg.context_token,
+        );
+      };
+    }
+
+    await weixinBot.startGateway(this);
+    this._activeIMChannel = 'weixin';
   }
 
   async startSelectedIMGateway() {

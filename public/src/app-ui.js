@@ -2497,34 +2497,46 @@ const DISPATCH_WORKSPACE_IDS = ['programming-helper', 'qqbot'];
 function renderDispatchConfigEditor(_block) {
   if (!window._dispatchSchedulesLoaded) {
     window._dispatchSchedulesLoaded = true;
+    window._dispatchAgentsLoaded = false;
     Promise.all([
       window.loadDispatchAgents(),
       window.loadDispatchSchedules(),
-    ]).then(() => renderCurrentMainView());
+    ]).then(() => {
+      window._dispatchAgentsLoaded = true;
+      renderCurrentMainView();
+    });
   }
 
   const agents = (window._dispatchAgents || []).filter(a => DISPATCH_WORKSPACE_IDS.includes(a.id));
   const schedules = window._dispatchSchedules || [];
   const isZh = (window._lang || 'zh') === 'zh';
+  const loading = !window._dispatchAgentsLoaded;
 
   const pendingSchedules = schedules.filter(s => s.status === 'pending');
   const firedSchedules = schedules.filter(s => s.status === 'fired');
   const doneSchedules = schedules.filter(s => ['completed', 'failed', 'cancelled'].includes(s.status)).slice(-20).reverse();
 
   // Workspace cards — click to open "add task" modal for that workspace
-  const agentCards = agents.map(a => {
-    const iconHtml = typeof getAgentIconHtml === 'function' ? getAgentIconHtml(a.id) : '';
-    return [
-      '<div class="dispatch-workspace-card" onclick="window.openDispatchModalFor(\'' + escapeHtml(a.id) + '\')">',
-      '<div class="dispatch-ws-icon">' + iconHtml + '</div>',
-      '<div class="dispatch-ws-name">' + escapeHtml(a.name) + '</div>',
-      '<div class="dispatch-ws-hint">' + (isZh ? '点击创建指令' : 'Click to create') + '</div>',
-      '<div class="dispatch-ws-add-btn">',
-      '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
-      '</div>',
-      '</div>',
-    ].join('');
-  }).join('');
+  let agentCards;
+  if (loading) {
+    agentCards = '<div class="dispatch-loading-hint">' + (isZh ? '加载中...' : 'Loading...') + '</div>';
+  } else if (agents.length === 0) {
+    agentCards = '<div class="dispatch-loading-hint">' + (isZh ? '暂无可用工作空间' : 'No workspaces available') + '</div>';
+  } else {
+    agentCards = agents.map(a => {
+      const iconHtml = typeof getAgentIconHtml === 'function' ? getAgentIconHtml(a.id) : '';
+      return [
+        '<div class="dispatch-workspace-card" onclick="window.openDispatchModalFor(\'' + escapeHtml(a.id) + '\')">',
+        '<div class="dispatch-ws-icon">' + iconHtml + '</div>',
+        '<div class="dispatch-ws-name">' + escapeHtml(a.name) + '</div>',
+        '<div class="dispatch-ws-hint">' + (isZh ? '点击创建指令' : 'Click to create') + '</div>',
+        '<div class="dispatch-ws-add-btn">',
+        '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+        '</div>',
+        '</div>',
+      ].join('');
+    }).join('');
+  }
 
   // ── Tab state ──
   const activeTab = window._dispatchListTab || 'pending';
@@ -2588,21 +2600,21 @@ function renderDispatchConfigEditor(_block) {
     '</section>',
 
     // Schedule list with tabs
-    schedules.length > 0 ? [
-      '<section class="workspace-section">',
+    '<section class="workspace-section">',
 
-      '<div class="dispatch-list-tabs">',
-      '<button class="dispatch-list-tab' + (activeTab === 'pending' ? ' active' : '') + '" type="button" onclick="window._dispatchListTab=\'pending\';renderCurrentMainView()">',
-      (isZh ? '计划' : 'Planned'), '<span class="tab-count">' + pendingSchedules.length + '</span>',
-      '</button>',
-      '<button class="dispatch-list-tab' + (activeTab === 'fired' ? ' active' : '') + '" type="button" onclick="window._dispatchListTab=\'fired\';renderCurrentMainView()">',
-      (isZh ? '执行中' : 'Running'), '<span class="tab-count">' + firedSchedules.length + '</span>',
-      '</button>',
-      '<button class="dispatch-list-tab' + (activeTab === 'done' ? ' active' : '') + '" type="button" onclick="window._dispatchListTab=\'done\';renderCurrentMainView()">',
-      (isZh ? '已完成' : 'Done'), '<span class="tab-count">' + doneSchedules.length + '</span>',
-      '</button>',
-      '</div>',
+    '<div class="dispatch-list-tabs">',
+    '<button class="dispatch-list-tab' + (activeTab === 'pending' ? ' active' : '') + '" type="button" onclick="window._dispatchListTab=\'pending\';renderCurrentMainView()">',
+    (isZh ? '计划' : 'Planned'), '<span class="tab-count">' + pendingSchedules.length + '</span>',
+    '</button>',
+    '<button class="dispatch-list-tab' + (activeTab === 'fired' ? ' active' : '') + '" type="button" onclick="window._dispatchListTab=\'fired\';renderCurrentMainView()">',
+    (isZh ? '执行中' : 'Running'), '<span class="tab-count">' + firedSchedules.length + '</span>',
+    '</button>',
+    '<button class="dispatch-list-tab' + (activeTab === 'done' ? ' active' : '') + '" type="button" onclick="window._dispatchListTab=\'done\';renderCurrentMainView()">',
+    (isZh ? '已完成' : 'Done'), '<span class="tab-count">' + doneSchedules.length + '</span>',
+    '</button>',
+    '</div>',
 
+    loading ? '<div class="dispatch-loading-hint">' + (isZh ? '加载中...' : 'Loading...') + '</div>' : [
       activeTab === 'pending' && pendingSchedules.length > 0
         ? pendingSchedules.map(s => renderScheduleRow(s, 'pending')).join('')
         : '',
@@ -2616,9 +2628,9 @@ function renderDispatchConfigEditor(_block) {
       activeTab === 'pending' && pendingSchedules.length === 0 ? '<div style="font-size:13px;color:var(--text-muted);padding:16px 0;">' + (isZh ? '暂无计划中的调度' : 'No planned schedules') + '</div>' : '',
       activeTab === 'fired' && firedSchedules.length === 0 ? '<div style="font-size:13px;color:var(--text-muted);padding:16px 0;">' + (isZh ? '暂无执行中的调度' : 'No running schedules') + '</div>' : '',
       activeTab === 'done' && doneSchedules.length === 0 ? '<div style="font-size:13px;color:var(--text-muted);padding:16px 0;">' + (isZh ? '暂无已完成记录' : 'No completed records') + '</div>' : '',
+    ].join(''),
 
-      '</section>',
-    ].join('') : '',
+    '</section>',
 
     modalHtml,
     detailHtml,

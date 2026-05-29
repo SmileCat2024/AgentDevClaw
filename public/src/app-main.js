@@ -2964,6 +2964,7 @@ window._dispatchSelectedAgent = null;
 window._dispatchTriggerType = 'timer';
 window._dispatchMode = 'continue';
 window._dispatchSchedulesLoaded = false;
+window._dispatchAgentsLoaded = false;
 window._dispatchListTab = 'pending';
 
 window.loadDispatchSchedules = async () => {
