@@ -29,6 +29,9 @@ export class ClawDispatchFeature implements AgentFeature {
     if (this.started) return;
     this.agentRef = agent;
     this.started = true;
+    // Report initial idle status so on-idle triggers can fire immediately
+    const serverOrigin = process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
+    await this.reportStatus(serverOrigin, 'idle');
     this.runLoop().catch((err) => {
       if (!this.abortController.signal.aborted) {
         console.error('[ClawDispatch] loop crashed:', err);
@@ -82,6 +85,9 @@ export class ClawDispatchFeature implements AgentFeature {
       }).catch((err) => {
         console.error('[ClawDispatch] failed to post response:', err);
       });
+
+      // Report idle status for event-driven triggers (Phase 3)
+      await this.reportStatus(serverOrigin, 'idle');
     } catch (err) {
       console.error('[ClawDispatch] onCall error:', err);
       await fetch(`${serverOrigin}/protoclaw/dispatch/respond`, {
@@ -94,6 +100,17 @@ export class ClawDispatchFeature implements AgentFeature {
         }),
       }).catch(() => {});
     }
+  }
+
+  private async reportStatus(serverOrigin: string, status: string): Promise<void> {
+    const agentId = process.env.PROTOCLAW_PREBUILT_AGENT_ID || '';
+    const sessionId = process.env.PROTOCLAW_PREBUILT_SESSION_ID || '';
+    if (!agentId) return;
+    await fetch(`${serverOrigin}/protoclaw/dispatch/agent_status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, sessionId: sessionId || null, status }),
+    }).catch(() => {});
   }
 
   private sleep(ms: number): Promise<void> {

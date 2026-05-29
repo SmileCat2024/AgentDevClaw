@@ -59,6 +59,8 @@ const dispatchSchedules = new Map();       // scheduleId → schedule object
 const dispatchQueue = new Map();           // runtimeKey → [{ id, text, scheduleId }]
 const dispatchPendingPolls = new Map();    // runtimeKey → resolveFn
 const dispatchTimers = new Map();          // scheduleId → setTimeout handle
+const dispatchRuntimeActivity = new Map(); // runtimeKey → { lastActiveAt, status: 'idle'|'active' }
+const dispatchIdleCheckers = new Map();    // scheduleId → setInterval handle (for on-idle triggers)
 
 // ── Project abstraction layer ───────────────────────────────────────
 // Project adapter registry: workspaceId → adapter instance
@@ -157,6 +159,53 @@ class ProgrammingHelperProjectAdapter {
 // Initialize: register programming-helper adapter
 registerProjectAdapter(new ProgrammingHelperProjectAdapter());
 
+class QqbotProjectAdapter {
+  constructor() {
+    this.workspaceId = 'qqbot';
+  }
+
+  extractProjectId(session) {
+    // 门户代理作为一个整体项目，没有子项目区分
+    return 'qqbot';
+  }
+
+  async getCurrentProject() {
+    try {
+      const config = await readProjectIMWorkspaceConfig();
+      return {
+        id: 'qqbot',
+        name: '门户代理',
+        type: 'im-portal',
+        workspaceId: this.workspaceId,
+        config: { selectedChannel: config.selectedChannel || 'qq' },
+        sessionIds: [],
+        latestSessionId: config.receptionistSessionId || null,
+        createdAt: null,
+        updatedAt: null,
+      };
+    } catch (err) {
+      console.error(`[ProjectAdapter] Failed to get current project for ${this.workspaceId}:`, err.message);
+      return null;
+    }
+  }
+
+  getProjectConfig(projectId) {
+    if (projectId !== 'qqbot') return {};
+    return { selectedChannel: 'qq' };
+  }
+
+  async activateProject(projectId) {
+    // 门户代理只有一个项目，无需切换
+  }
+
+  async listProjects() {
+    const current = await this.getCurrentProject();
+    return current ? [current] : [];
+  }
+}
+
+registerProjectAdapter(new QqbotProjectAdapter());
+
 function loadDispatchSchedules() {
   try {
     if (!existsSync(DISPATCH_SCHEDULES_PATH)) return;
@@ -192,60 +241,152 @@ function pushDispatchMessage(runtimeKey, text, scheduleId = null) {
 }
 
 function scheduleDispatchFire(schedule) {
-  const fireAt = new Date(schedule.fireAt).getTime();
-  const delay = fireAt - Date.now();
-  if (delay <= 0) {
-    fireDispatchNow(schedule);
-    return;
+  const triggerType = schedule.trigger?.type || 'timer';
+
+  if (triggerType === 'timer') {
+    const fireAt = new Date(schedule.fireAt).getTime();
+    const delay = fireAt - Date.now();
+    if (delay <= 0) {
+      fireDispatchNow(schedule);
+      return;
+    }
+    const handle = setTimeout(() => {
+      dispatchTimers.delete(schedule.id);
+      fireDispatchNow(schedule);
+    }, delay);
+    dispatchTimers.set(schedule.id, handle);
+  } else if (triggerType === 'on-idle') {
+    // Start periodic check for idle trigger
+    const threshold = (schedule.trigger.idleThreshold || 300) * 1000;
+    const minInterval = (schedule.repeatInterval || 0) * 1000; // minimum time between consecutive fires
+    const interval = Math.max(Math.floor(threshold / 3), 5000);
+    const earliestNext = minInterval > 0 ? (schedule._lastFiredAt || 0) + minInterval : 0;
+    const handle = setInterval(() => {
+      if (schedule.status !== 'pending') {
+        clearInterval(handle);
+        dispatchIdleCheckers.delete(schedule.id);
+        return;
+      }
+      // Enforce minimum trigger interval (cooldown)
+      if (earliestNext > 0 && Date.now() < earliestNext) return;
+      // For __latest__ or null targetSessionId, check all runtimes of the agent
+      let isIdle = false;
+      if (!schedule.targetSessionId || schedule.targetSessionId === '__latest__') {
+        const prefix = sanitizeSessionFragment(schedule.targetAgentId) + '::';
+        for (const [key, activity] of dispatchRuntimeActivity) {
+          if (!key.startsWith(prefix)) continue;
+          if (activity.status !== 'idle') continue;
+          const idleMs = Date.now() - (activity.lastActiveAt || 0);
+          if (idleMs >= threshold) { isIdle = true; break; }
+        }
+      } else {
+        const runtimeKey = getManagedRuntimeKey(schedule.targetAgentId, schedule.targetSessionId);
+        const activity = dispatchRuntimeActivity.get(runtimeKey);
+        if (activity && activity.status === 'idle') {
+          const idleMs = Date.now() - (activity.lastActiveAt || 0);
+          if (idleMs >= threshold) isIdle = true;
+        }
+      }
+      if (isIdle) {
+        clearInterval(handle);
+        dispatchIdleCheckers.delete(schedule.id);
+        fireDispatchNow(schedule);
+      }
+    }, interval);
+    dispatchIdleCheckers.set(schedule.id, handle);
   }
-  const handle = setTimeout(() => {
-    dispatchTimers.delete(schedule.id);
-    fireDispatchNow(schedule);
-  }, delay);
-  dispatchTimers.set(schedule.id, handle);
+  // 'on-ready' is handled by emitDispatchReadyEvent() below
 }
 
-async function fireDispatchNow(schedule) {
-  const s = dispatchSchedules.get(schedule.id);
-  if (!s || s.status !== 'pending') return;
-  s.status = 'fired';
-  s.firedAt = new Date().toISOString();
-  saveDispatchSchedules();
+function emitDispatchReadyEvent(agentId, sessionId) {
+  for (const s of dispatchSchedules.values()) {
+    if (s.status !== 'pending') continue;
+    if (s.trigger?.type !== 'on-ready') continue;
+    // Match by agentId (schedule may target the workspace or a specific session)
+    if (s.targetAgentId !== agentId) continue;
+    if (s.targetSessionId && s.targetSessionId !== sessionId) continue;
+    fireDispatchNow(s);
+  }
+}
 
-  const agentId = s.targetAgentId;
-  let sessionId = s.targetSessionId;
+function cancelEventTrigger(scheduleId) {
+  const handle = dispatchIdleCheckers.get(scheduleId);
+  if (handle) {
+    clearInterval(handle);
+    dispatchIdleCheckers.delete(scheduleId);
+  }
+}
+
+async function fireSingleTarget(s, target) {
+  const agentId = target.agentId || s.targetAgentId;
+  let sessionId = target.sessionId || s.targetSessionId;
+  const sessionType = target.newSessionType || s.newSessionType || 'main';
+
+  // ── Resolve __latest__ session ──
+  if (sessionId === '__latest__') {
+    try {
+      const sessionsResult = await listPrebuiltSessions(agentId);
+      const allSessions = sessionsResult?.sessions || [];
+      // Filter: main only for programming-helper, all for others
+      const filtered = agentId === 'programming-helper'
+        ? allSessions.filter(ss => ss.sessionType !== 'exploration')
+        : allSessions;
+      // Further filter by project if specified
+      const projId = s.projectId;
+      const byProject = projId
+        ? filtered.filter(ss => {
+            const adapter = getProjectAdapter(agentId);
+            return adapter ? adapter.extractProjectId(ss) === projId : true;
+          })
+        : filtered;
+      const latest = byProject[0]; // already sorted by updatedAt desc
+      if (latest) {
+        sessionId = latest.id;
+        console.log(`[Dispatch] __latest__ resolved to ${sessionId} for ${agentId}`);
+      } else {
+        console.warn(`[Dispatch] __latest__ found no sessions for ${agentId}, skipping`);
+        return;
+      }
+    } catch (err) {
+      console.error(`[Dispatch] __latest__ resolution failed for ${agentId}:`, err.message);
+      return;
+    }
+  }
+
+  // ── onlyActiveSessions check ──
+  if (s.onlyActiveSessions && sessionId) {
+    const runtime = getAgentRuntime(agentId, sessionId);
+    if (!runtime || runtime.stopped || runtime.process?.exitCode !== null) {
+      console.log(`[Dispatch] onlyActiveSessions: session ${sessionId} not running, skipping`);
+      return;
+    }
+  }
+
   const isNewSession = !sessionId;
 
   try {
     if (isNewSession) {
-      const sessionType = s.newSessionType || 'main';
       const agent = await requirePrebuiltAgentForRuntime(agentId);
-
-      // Use project adapter to get project config
       let createOpts = { sessionType };
       const adapter = getProjectAdapter(agentId);
+      const projectId = target.projectId || s.projectId;
 
       if (adapter) {
         let projectConfig = null;
-
-        if (s.projectId) {
-          // Explicitly specified project
-          projectConfig = adapter.getProjectConfig(s.projectId);
-          console.log(`[Dispatch] using specified project ${s.projectId} for ${agentId}`);
+        if (projectId) {
+          projectConfig = adapter.getProjectConfig(projectId);
+          console.log(`[Dispatch] using specified project ${projectId} for ${agentId}`);
         } else {
-          // Use current active project as fallback
           const currentProject = await adapter.getCurrentProject();
           if (currentProject) {
             projectConfig = adapter.getProjectConfig(currentProject.id);
             console.log(`[Dispatch] using current project ${currentProject.id} for ${agentId}`);
           }
         }
-
         if (projectConfig && Object.keys(projectConfig).length > 0) {
           createOpts = { ...createOpts, ...projectConfig };
         }
       } else {
-        // Fallback: use current workspace state (no adapter)
         console.log(`[Dispatch] no project adapter for ${agentId}, using workspace state`);
         try {
           const workspaceState = await readWorkspaceState(agentId);
@@ -259,8 +400,7 @@ async function fireDispatchNow(schedule) {
 
       const session = await createPrebuiltSession(agentId, createOpts);
       sessionId = session.id;
-      s.targetSessionId = sessionId;
-      saveDispatchSchedules();
+      if (!s.targets) { s.targetSessionId = sessionId; saveDispatchSchedules(); }
       const runtimeOpts = {};
       if (sessionType !== 'main') {
         runtimeOpts.extraEnv = {
@@ -272,25 +412,23 @@ async function fireDispatchNow(schedule) {
       const connected = await waitForManagedRuntimeReady(agent.id, 15000, sessionId);
       console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} type=${sessionType} connected=${connected}`);
     } else {
-      // existing session: ensure runtime is running with correct session type and workspace state
       const runtime = getAgentRuntime(agentId, sessionId);
       if (!runtime || runtime.stopped || runtime.process?.exitCode !== null) {
         const agent = await requirePrebuiltAgentForRuntime(agentId);
-        // activate session to update state.json before starting runtime
         await activatePrebuiltSession(agentId, sessionId);
         const idx = await readSessionIndex(agentId);
         const record = idx.sessions.find(r => r.id === sessionId);
-        const sessionType = record?.sessionType || 'main';
+        const resolvedType = record?.sessionType || sessionType;
         const runtimeOpts = {};
-        if (sessionType !== 'main') {
+        if (resolvedType !== 'main') {
           runtimeOpts.extraEnv = {
-            PROTOCLAW_SESSION_TYPE: sessionType,
-            PROTOCLAW_MODEL_PRESET_ROLE: sessionType === 'exploration' ? 'exploration' : 'sub',
+            PROTOCLAW_SESSION_TYPE: resolvedType,
+            PROTOCLAW_MODEL_PRESET_ROLE: resolvedType === 'exploration' ? 'exploration' : 'sub',
           };
         }
         await startManagedAgent(agent, sessionId, runtimeOpts);
         const connected = await waitForManagedRuntimeReady(agent.id, 15000, sessionId);
-        console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} type=${sessionType} connected=${connected}`);
+        console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} type=${resolvedType} connected=${connected}`);
       }
     }
   } catch (err) {
@@ -299,14 +437,40 @@ async function fireDispatchNow(schedule) {
 
   const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
   pushDispatchMessage(runtimeKey, s.message, s.id);
-  console.log(`[Dispatch] fired schedule ${s.id} → ${agentId}::${sessionId}: ${s.message.slice(0, 50)}...`);
+  console.log(`[Dispatch] fired → ${agentId}::${sessionId}: ${s.message.slice(0, 50)}...`);
+}
+
+async function fireDispatchNow(schedule) {
+  const s = dispatchSchedules.get(schedule.id);
+  if (!s || s.status !== 'pending') return;
+  s.status = 'fired';
+  s.firedAt = new Date().toISOString();
+  saveDispatchSchedules();
+
+  // Phase 4: multi-target support
+  if (Array.isArray(s.targets) && s.targets.length > 0) {
+    await Promise.allSettled(s.targets.map(target => fireSingleTarget(s, target)));
+  } else {
+    await fireSingleTarget(s, {
+      agentId: s.targetAgentId,
+      sessionId: s.targetSessionId,
+      newSessionType: s.newSessionType,
+      projectId: s.projectId,
+    });
+  }
 }
 
 loadDispatchSchedules();
-// restore timers for pending schedules
+// restore timers and event triggers for pending schedules
 for (const s of dispatchSchedules.values()) {
-  if (s.status === 'pending' && new Date(s.fireAt).getTime() > Date.now()) {
-    scheduleDispatchFire(s);
+  if (s.status === 'pending') {
+    const triggerType = s.trigger?.type || 'timer';
+    if (triggerType === 'timer' && new Date(s.fireAt).getTime() > Date.now()) {
+      scheduleDispatchFire(s);
+    } else if (triggerType === 'on-idle') {
+      scheduleDispatchFire(s);
+    }
+    // on-ready triggers fire on next runtime ready event, no need to restore
   }
 }
 
@@ -4675,6 +4839,8 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
     }
     if (text.includes('[ProtoClaw Runtime] READY session=')) {
       runtime.ready = true;
+      // Emit on-ready event for event-driven dispatch schedules
+      emitDispatchReadyEvent(agent.id, resolvedSessionId || null);
     }
     log(agent.id, text.trim());
   });
@@ -5083,16 +5249,25 @@ app.get('/protoclaw/dispatch/schedules', (_req, res) => {
 
 app.post('/protoclaw/dispatch/schedules', express.json(), async (req, res, next) => {
   try {
-    const { targetAgentId, targetSessionId, message, secondsFromNow, newSessionType, projectId } = req.body || {};
+    const body = req.body || {};
+    const { targetAgentId, targetSessionId, message, secondsFromNow, newSessionType, projectId, trigger, targets, repeatInterval, loopMaxCount, loopEndTime, onlyActiveSessions } = body;
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'message is required' });
     }
-    const secs = Number(secondsFromNow);
-    if (!Number.isFinite(secs) || secs <= 0) {
-      return res.status(400).json({ error: 'secondsFromNow must be a positive number' });
+
+    const triggerType = trigger?.type || 'timer';
+    // timer triggers require secondsFromNow
+    if (triggerType === 'timer') {
+      const secs = Number(secondsFromNow);
+      if (!Number.isFinite(secs) || secs <= 0) {
+        return res.status(400).json({ error: 'secondsFromNow must be a positive number for timer triggers' });
+      }
     }
+
     const agentId = targetAgentId || 'programming-helper';
-    const fireAt = new Date(Date.now() + secs * 1000).toISOString();
+    const fireAt = triggerType === 'timer'
+      ? new Date(Date.now() + Number(secondsFromNow) * 1000).toISOString()
+      : new Date().toISOString(); // event triggers use now as reference
     const id = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const schedule = {
       id,
@@ -5101,6 +5276,13 @@ app.post('/protoclaw/dispatch/schedules', express.json(), async (req, res, next)
       targetSessionId: targetSessionId || null,
       newSessionType: newSessionType || null,
       projectId: projectId || null,
+      trigger: triggerType !== 'timer' ? { type: triggerType, idleThreshold: trigger?.idleThreshold || 300 } : null,
+      targets: Array.isArray(targets) && targets.length > 0 ? targets : null,
+      repeatInterval: Number(repeatInterval) > 0 ? Number(repeatInterval) : null,
+      loopMaxCount: Number(loopMaxCount) > 0 ? Number(loopMaxCount) : null,
+      loopEndTime: Number(loopEndTime) > 0 ? Number(loopEndTime) : null,
+      loopFiredCount: 0,
+      onlyActiveSessions: !!onlyActiveSessions,
       message,
       status: 'pending',
       createdAt: new Date().toISOString(),
@@ -5120,7 +5302,13 @@ app.delete('/protoclaw/dispatch/schedules/:id', (req, res) => {
   if (s.status === 'pending') {
     const handle = dispatchTimers.get(s.id);
     if (handle) { clearTimeout(handle); dispatchTimers.delete(s.id); }
+    cancelEventTrigger(s.id);
     s.status = 'cancelled';
+    saveDispatchSchedules();
+  } else if (s.status === 'fired') {
+    // Stuck in fired — runtime likely crashed or never responded
+    s.status = 'cancelled';
+    s.result = '(cancelled while firing)';
     saveDispatchSchedules();
   }
   res.json({ ok: true });
@@ -5156,12 +5344,47 @@ app.post('/protoclaw/dispatch/respond', express.json(), (req, res) => {
   if (scheduleId) {
     const s = dispatchSchedules.get(scheduleId);
     if (s) {
-      s.status = error ? 'failed' : 'completed';
-      s.result = error || response || '';
-      s.completedAt = new Date().toISOString();
-      saveDispatchSchedules();
+      // Update activity tracking for the target runtime
+      const runtimeKey = getManagedRuntimeKey(s.targetAgentId, s.targetSessionId);
+      dispatchRuntimeActivity.set(runtimeKey, { lastActiveAt: Date.now(), status: 'active' });
+
+      // Check if this is a repeating schedule (Phase 2: repeatInterval)
+      if (!error && s.repeatInterval && s.repeatInterval > 0) {
+        s.loopFiredCount = (s.loopFiredCount || 0) + 1;
+        // Check loop termination conditions
+        const maxReached = s.loopMaxCount && s.loopFiredCount >= s.loopMaxCount;
+        const timeReached = s.loopEndTime && Date.now() >= s.loopEndTime;
+        if (maxReached || timeReached) {
+          s.status = 'completed';
+          s.result = (maxReached ? 'Reached max count' : 'Reached end time') + (response ? ': ' + response : '');
+          s.completedAt = new Date().toISOString();
+          saveDispatchSchedules();
+        } else {
+          // Re-arm: calculate next fire time
+          s.status = 'pending';
+          s.fireAt = new Date(Date.now() + s.repeatInterval * 1000).toISOString();
+          s.firedAt = new Date().toISOString();
+          s._lastFiredAt = Date.now(); // track for on-idle cooldown
+          s.result = response || '';
+          saveDispatchSchedules();
+          scheduleDispatchFire(s);
+        }
+      } else {
+        s.status = error ? 'failed' : 'completed';
+        s.result = error || response || '';
+        s.completedAt = new Date().toISOString();
+        saveDispatchSchedules();
+      }
     }
   }
+  res.json({ ok: true });
+});
+
+app.post('/protoclaw/dispatch/agent_status', express.json(), (req, res) => {
+  const { agentId, sessionId, status } = req.body || {};
+  if (!agentId) return res.status(400).json({ error: 'agentId required' });
+  const runtimeKey = getManagedRuntimeKey(agentId, sessionId || null);
+  dispatchRuntimeActivity.set(runtimeKey, { lastActiveAt: Date.now(), status: status || 'idle' });
   res.json({ ok: true });
 });
 

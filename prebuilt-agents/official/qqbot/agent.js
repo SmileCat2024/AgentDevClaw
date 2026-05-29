@@ -9,11 +9,13 @@ import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from 'age
 import { AuditFeature } from '@agentdev/audit-feature';
 import { QQBotFeature } from '@agentdev/qqbot-feature';
 import { WeixinBot } from '@agentdev/weixin-bot';
+import { MemoryFeature } from '@agentdev/memory-feature';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
+import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -98,31 +100,45 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       ])),
     });
 
+    const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
     this.imWorkspaceConfigPath = resolveIMWorkspaceConfigPath(config.imWorkspaceConfigPath);
-    this.qqbotFeature = new QQBotFeature({
-      appId: config.appId,
-      clientSecret: config.clientSecret,
-      configPath: resolveQQBotConfigPath(config.qqbotConfigPath),
-      accountId: config.accountId,
-      markdownSupport: config.markdownSupport,
-    });
-    this.use(this.qqbotFeature);
 
-    this.weixinBotFeature = new WeixinBot({
-      configPath: resolveWeixinConfigPath(config.weixinConfigPath),
-    });
-    this.use(this.weixinBotFeature);
+    // ClawDispatchFeature 始终挂载，主模式与探索模式都需要接收调度消息
+    this.use(new ClawDispatchFeature());
 
-    this.use(new TodoFeature({
-      reminderTemplate: TODO_REMINDER_PROMPT_PATH,
-      reminderThresholdWithTasks: config.reminderThresholdWithTasks,
-      reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
-    }));
+    if (isExploration) {
+      // 探索模式：跳过 IM gateway、Todo、Audit、UserInput
+      // 仅保留 Shell、WebSearch、Memory 等自主执行能力
+      this.use(new WebSearchFeature());
+      this.use(new ShellFeature());
+      if (MemoryFeature) this.use(new MemoryFeature());
+    } else {
+      // 主模式：完整 IM 门户代理能力
+      this.qqbotFeature = new QQBotFeature({
+        appId: config.appId,
+        clientSecret: config.clientSecret,
+        configPath: resolveQQBotConfigPath(config.qqbotConfigPath),
+        accountId: config.accountId,
+        markdownSupport: config.markdownSupport,
+      });
+      this.use(this.qqbotFeature);
 
-    this.use(new AuditFeature());
-    this.use(new WebSearchFeature());
-    this.use(new ShellFeature());
-    this.use(new UserInputFeature());
+      this.weixinBotFeature = new WeixinBot({
+        configPath: resolveWeixinConfigPath(config.weixinConfigPath),
+      });
+      this.use(this.weixinBotFeature);
+
+      this.use(new TodoFeature({
+        reminderTemplate: TODO_REMINDER_PROMPT_PATH,
+        reminderThresholdWithTasks: config.reminderThresholdWithTasks,
+        reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
+      }));
+
+      this.use(new AuditFeature());
+      this.use(new WebSearchFeature());
+      this.use(new ShellFeature());
+      this.use(new UserInputFeature());
+    }
   }
 
   async startQQBotGateway() {
@@ -147,7 +163,19 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
   async onInitiate(ctx) {
     await super.onInitiate(ctx);
 
-    // 配置专门的编程助手提示词
+    const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
+    if (isExploration) {
+      this.setSystemPrompt(new TemplateComposer()
+        .add({ file: SYSTEM_PROMPT_PATH })
+        .add('\n\n## 身份设定\n\n')
+        .add('你是一个自主探索代理，被调度系统触发执行任务。请自主完成任务，不需要与用户对话。')
+        .add('\n\n## WebSearch 能力\n\n')
+        .add('你可以使用 `web_fetch` 获取网页原始内容。')
+      );
+      return;
+    }
+
+    // 主模式：完整的编程助手提示词
     this.setSystemPrompt(new TemplateComposer()
       .add({ file: SYSTEM_PROMPT_PATH })
       .add('\n\n## 身份设定\n\n')

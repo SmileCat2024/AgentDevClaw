@@ -214,6 +214,22 @@ function renderSidebarChildItems(entries) {
   `;
 }
 
+const AGENT_ICONS = {
+  'home': 'home.svg',
+  'flow-workspace': 'flow-workspace.svg',
+  'feature-repository': 'feature-repository.svg',
+  'feature-creator': 'feature-creator.svg',
+  'qqbot': 'qqbot.svg',
+  'dispatch-console': 'dispatch-console.svg',
+  'programming-helper': 'programming-helper.svg',
+};
+
+function getAgentIconHtml(agentId) {
+  const iconFile = AGENT_ICONS[agentId];
+  if (!iconFile) return '<span class="agent-status-dot"></span>';
+  return `<img class="agent-icon" src="images/agent-icons/${iconFile}" alt="" draggable="false" />`;
+}
+
 function renderAgentGroup(listElement, groupElement, countElement, agents, options = {}) {
   const { prebuilt = false } = options;
   groupElement.style.display = agents.length ? '' : 'none';
@@ -256,7 +272,7 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
             data-agent-context-menu="${contextMenuEnabled ? 'true' : 'false'}"
           >
             <div class="agent-line">
-              <span class="agent-status-dot"></span>
+              ${getAgentIconHtml(agent.id)}
               <div class="agent-name">${escapeHtml(agent.name || agent.id)}</div>
             </div>
           </div>
@@ -2940,8 +2956,14 @@ window.closeWeixinQrCodeDialog = () => {
 
 // ── Dispatch Console ──────────────────────────────────────────────
 window._dispatchSchedules = [];
-window._dispatchPHSessions = [];
+window._dispatchAgents = [];
+window._dispatchSessions = [];
+window._dispatchProjects = [];
+window._dispatchSelectedAgent = null;
+window._dispatchTriggerType = 'timer';
+window._dispatchMode = 'continue';
 window._dispatchSchedulesLoaded = false;
+window._dispatchListTab = 'pending';
 
 window.loadDispatchSchedules = async () => {
   try {
@@ -2953,63 +2975,279 @@ window.loadDispatchSchedules = async () => {
   }
 };
 
-window.loadDispatchPHSessions = async () => {
+window.loadDispatchAgents = async () => {
   try {
-    const res = await fetch('/protoclaw/prebuilt_sessions?agentId=programming-helper');
-    const data = await res.json();
-    const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
-    window._dispatchPHSessions = sessions.map(s => ({
+    const res = await fetch('/protoclaw/get_prebuilt_agents');
+    const agents = await res.json();
+    const list = Array.isArray(agents) ? agents : [];
+    window._dispatchAgents = list.map(a => ({
+      id: a.id,
+      name: a.name || a.id,
+      description: a.description || '',
+      icon: a.icon || 'terminal',
+      sessions: a.workspace_sessions?.sessions || [],
+      activeSessionId: a.workspace_sessions?.activeSessionId || null,
+    }));
+    if (!window._dispatchSelectedAgent && window._dispatchAgents.length > 0) {
+      window._dispatchSelectedAgent = window._dispatchAgents[0].id;
+    }
+  } catch (e) {
+    console.error('Failed to load dispatch agents:', e);
+    window._dispatchAgents = [];
+  }
+};
+
+window.selectDispatchAgent = (agentId) => {
+  window._dispatchSelectedAgent = agentId;
+};
+
+window.openDispatchModalFor = async (agentId) => {
+  window._dispatchModalAgent = agentId;
+  window._dispatchSelectedAgent = agentId;
+  window._dispatchShowModal = true;
+  window._dispatchTriggerType = 'timer';
+  window._dispatchMode = 'continue';
+  // Render modal immediately (shows loading state), then load data in background
+  window._dispatchSessions = [];
+  window._dispatchProjects = [];
+  renderCurrentMainView();
+  // Defer data loading so modal opens instantly
+  const [sessRes, projRes] = await Promise.all([
+    fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(agentId)).then(r => r.json()).catch(() => ({ sessions: [] })),
+    fetch('/protoclaw/dispatch/projects?agentId=' + encodeURIComponent(agentId)).then(r => r.json()).catch(() => ({ projects: [] })),
+  ]);
+  const sessions = Array.isArray(sessRes?.sessions) ? sessRes.sessions : [];
+  window._dispatchSessions = sessions.map(s => {
+    const openDir = s.openDirectory || '';
+    const projectId = openDir ? 'dir:' + openDir.replace(/\\/g, '/').toLowerCase() : '';
+    return {
       id: s.id,
       title: s.title || s.taskTitle || '',
-    }));
-  } catch (e) {
-    console.error('Failed to load PH sessions:', e);
+      sessionType: s.sessionType || 'main',
+      projectId,
+    };
+  });
+  const projects = Array.isArray(projRes?.projects) ? projRes.projects : [];
+  window._dispatchProjects = projects;
+  // Only re-render if modal is still open
+  if (window._dispatchShowModal) {
+    renderCurrentMainView();
   }
+};
+
+window.openDispatchModal = async () => {
+  const agentId = window._dispatchSelectedAgent;
+  if (!agentId) return;
+  window._dispatchModalAgent = agentId;
+  window._dispatchShowModal = true;
+  renderCurrentMainView();
+};
+
+window.closeDispatchModal = () => {
+  window._dispatchShowModal = false;
+  window._dispatchModalAgent = null;
+  renderCurrentMainView();
+};
+
+window.loadDispatchSessionsForAgent = async (agentId) => {
+  try {
+    const res = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(agentId));
+    const data = await res.json();
+    const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+    window._dispatchSessions = sessions.map(s => {
+      const openDir = s.openDirectory || '';
+      const projectId = openDir ? 'dir:' + openDir.replace(/\\/g, '/').toLowerCase() : '';
+      return {
+        id: s.id,
+        title: s.title || s.taskTitle || '',
+        sessionType: s.sessionType || 'main',
+        projectId,
+      };
+    });
+  } catch (e) {
+    console.error('Failed to load sessions:', e);
+    window._dispatchSessions = [];
+  }
+};
+
+window.loadDispatchProjectsForAgent = async (agentId) => {
+  try {
+    const res = await fetch('/protoclaw/dispatch/projects?agentId=' + encodeURIComponent(agentId));
+    const data = await res.json();
+    window._dispatchProjects = Array.isArray(data?.projects) ? data.projects : [];
+  } catch (e) {
+    console.error('Failed to load projects:', e);
+    window._dispatchProjects = [];
+  }
+};
+
+window.onDispatchProjectChange = () => {
+  const el = document.getElementById('dispatch-project');
+  if (el) window._dispatchContinueProject = el.value;
+  renderCurrentMainView();
+};
+
+window.selectDispatchEndPreset = (el, seconds) => {
+  const target = new Date(Date.now() + seconds * 1000);
+  const hidden = document.getElementById('dispatch-loop-end-ts');
+  if (hidden) hidden.value = target.getTime();
+  document.querySelectorAll('.dispatch-end-preset').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  const yEl = document.getElementById('dispatch-end-year');
+  const mEl = document.getElementById('dispatch-end-month');
+  const dEl = document.getElementById('dispatch-end-day');
+  const hEl = document.getElementById('dispatch-end-hour');
+  const minEl = document.getElementById('dispatch-end-min');
+  if (yEl) yEl.value = target.getFullYear();
+  if (mEl) mEl.value = target.getMonth() + 1;
+  if (dEl) dEl.value = target.getDate();
+  if (hEl) hEl.value = target.getHours();
+  if (minEl) minEl.value = target.getMinutes();
+};
+
+window.updateDispatchEndTime = () => {
+  const yEl = document.getElementById('dispatch-end-year');
+  const mEl = document.getElementById('dispatch-end-month');
+  const dEl = document.getElementById('dispatch-end-day');
+  const hEl = document.getElementById('dispatch-end-hour');
+  const minEl = document.getElementById('dispatch-end-min');
+  const year = Math.max(2024, parseInt(yEl?.value || '2026', 10) || 2026);
+  const month = Math.max(1, Math.min(12, parseInt(mEl?.value || '1', 10) || 1));
+  const day = Math.max(1, Math.min(31, parseInt(dEl?.value || '1', 10) || 1));
+  const hour = Math.max(0, Math.min(23, parseInt(hEl?.value || '0', 10) || 0));
+  const minute = Math.max(0, Math.min(59, parseInt(minEl?.value || '0', 10) || 0));
+  const target = new Date(year, month - 1, day, hour, minute, 0, 0);
+  const hidden = document.getElementById('dispatch-loop-end-ts');
+  if (hidden) hidden.value = target.getTime();
+  document.querySelectorAll('.dispatch-end-preset').forEach(e => e.classList.remove('active'));
+};
+
+window.selectDispatchTrigger = (type) => {
+  window._dispatchTriggerType = type;
+  renderCurrentMainView();
+};
+
+window.selectDispatchMode = (mode) => {
+  window._dispatchMode = mode;
+  const TRIGGER_AVAIL = {
+    'continue':        ['timer', 'on-idle'],
+    'new-main':        ['timer', 'on-ready'],
+    'new-exploration': ['timer', 'on-ready'],
+  };
+  const available = TRIGGER_AVAIL[mode] || ['timer'];
+  if (!available.includes(window._dispatchTriggerType)) {
+    window._dispatchTriggerType = available[0];
+  }
+  renderCurrentMainView();
+};
+
+window.loadDispatchPHSessions = async () => {
+  const agentId = window._dispatchSelectedAgent || 'programming-helper';
+  return window.loadDispatchSessionsForAgent(agentId);
 };
 
 window.loadDispatchPHProjects = async () => {
-  try {
-    const res = await fetch('/protoclaw/dispatch/projects?agentId=programming-helper');
-    const data = await res.json();
-    window._dispatchPHProjects = Array.isArray(data?.projects) ? data.projects : [];
-  } catch (e) {
-    console.error('Failed to load PH projects:', e);
-    window._dispatchPHProjects = [];
-  }
+  const agentId = window._dispatchSelectedAgent || 'programming-helper';
+  return window.loadDispatchProjectsForAgent(agentId);
 };
 
 window.createDispatchSchedule = async () => {
-  const secondsEl = document.getElementById('dispatch-seconds');
-  const sessionEl = document.getElementById('dispatch-session');
   const messageEl = document.getElementById('dispatch-message');
+  const sessionEl = document.getElementById('dispatch-session');
   const projectEl = document.getElementById('dispatch-project');
-  if (!secondsEl || !sessionEl || !messageEl) return;
+  const secondsEl = document.getElementById('dispatch-seconds');
+  const idleEl = document.getElementById('dispatch-idle-threshold');
+  const loopEnableEl = document.getElementById('dispatch-loop-enable');
+  const repeatEl = document.getElementById('dispatch-repeat');
+  const loopMaxEl = document.getElementById('dispatch-loop-max');
+  const loopEndTsEl = document.getElementById('dispatch-loop-end-ts');
+  const loopActiveOnlyEl = document.getElementById('dispatch-loop-active-only');
 
-  const seconds = Number(secondsEl.value);
-  const sessionVal = sessionEl.value;
+  if (!messageEl) { console.warn('[Dispatch] messageEl not found'); return; }
   const message = messageEl.value.trim();
-  const projectVal = projectEl ? projectEl.value : '';
-  if (!message) return;
-  if (!Number.isFinite(seconds) || seconds <= 0) return;
+  if (!message) {
+    alert(currentLanguage === 'zh' ? '请输入要发送的消息' : 'Please enter a message');
+    return;
+  }
+
+  const agentId = window._dispatchSelectedAgent || 'programming-helper';
+  const triggerType = window._dispatchTriggerType || 'timer';
+  const mode = window._dispatchMode || 'continue';
 
   const body = {
-    targetAgentId: 'programming-helper',
+    targetAgentId: agentId,
     message,
-    secondsFromNow: seconds,
   };
 
-  if (projectVal) {
-    body.projectId = projectVal;
+  // ── Trigger config ──
+  if (triggerType === 'timer') {
+    const seconds = secondsEl ? Number(secondsEl.value) : 30;
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    body.secondsFromNow = seconds;
+    body.trigger = { type: 'timer' };
+  } else if (triggerType === 'on-idle') {
+    const threshold = idleEl ? Number(idleEl.value) : 300;
+    body.trigger = { type: 'on-idle', idleThreshold: threshold > 0 ? threshold : 300 };
+  } else if (triggerType === 'on-ready') {
+    body.trigger = { type: 'on-ready' };
   }
 
-  if (sessionVal === '__exploration__') {
+  // ── Loop config (timer + on-idle) ──
+  const loopEnabled = loopEnableEl ? loopEnableEl.checked : false;
+  if (loopEnabled && (triggerType === 'timer' || triggerType === 'on-idle')) {
+    // For timer: repeatInterval is the loop interval; for on-idle: need to read the interval field
+    let repeatVal = 0;
+    if (triggerType === 'timer') {
+      // timer loop interval defaults to the same as delay
+      repeatVal = secondsEl ? Number(secondsEl.value) : 30;
+    } else {
+      // on-idle loop interval
+      repeatVal = repeatEl ? Number(repeatEl.value) : 300;
+    }
+    if (Number.isFinite(repeatVal) && repeatVal > 0) {
+      body.repeatInterval = repeatVal;
+    }
+    // Max count
+    const maxCount = loopMaxEl ? Number(loopMaxEl.value) : 0;
+    if (Number.isFinite(maxCount) && maxCount > 0) {
+      body.loopMaxCount = maxCount;
+    }
+    // End time (absolute timestamp)
+    const endTs = loopEndTsEl ? Number(loopEndTsEl.value) : 0;
+    if (Number.isFinite(endTs) && endTs > Date.now()) {
+      body.loopEndTime = endTs;
+    }
+    // Only active sessions
+    const activeOnly = loopActiveOnlyEl ? loopActiveOnlyEl.checked : false;
+    if (activeOnly) {
+      body.onlyActiveSessions = true;
+    }
+  }
+
+  // ── Mode-specific target config ──
+  if (mode === 'continue') {
+    const sessionVal = sessionEl ? sessionEl.value : '';
+    if (sessionVal === '__latest__') {
+      body.targetSessionId = '__latest__';
+      // Also pass project context so server can resolve latest within project
+      const projectVal = projectEl ? projectEl.value : '';
+      if (projectVal) body.projectId = projectVal;
+    } else if (sessionVal) {
+      body.targetSessionId = sessionVal;
+    }
+  } else if (mode === 'new-exploration') {
     body.newSessionType = 'exploration';
     body.targetSessionId = null;
-  } else if (sessionVal) {
-    body.targetSessionId = sessionVal;
+    const projectVal = projectEl ? projectEl.value : '';
+    if (projectVal) body.projectId = projectVal;
+  } else if (mode === 'new-main') {
     body.newSessionType = null;
+    body.targetSessionId = null;
+    const projectVal = projectEl ? projectEl.value : '';
+    if (projectVal) body.projectId = projectVal;
   }
 
+  console.log('[Dispatch] creating schedule:', JSON.stringify(body, null, 2));
   try {
     const res = await fetch('/protoclaw/dispatch/schedules', {
       method: 'POST',
@@ -3018,14 +3256,18 @@ window.createDispatchSchedule = async () => {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      console.error('Failed to create schedule:', err);
+      console.error('Failed to create schedule:', err, 'body was:', body);
+      alert('创建失败: ' + (err.error || res.status));
       return;
     }
     await window.loadDispatchSchedules();
     messageEl.value = '';
+    window._dispatchShowModal = false;
+    window._dispatchModalAgent = null;
     renderCurrentMainView();
   } catch (e) {
-    console.error('Failed to create dispatch schedule:', e);
+    console.error('Failed to create dispatch schedule:', e, 'body was:', body);
+    alert('创建失败: ' + e.message);
   }
 };
 

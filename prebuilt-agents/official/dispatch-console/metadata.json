@@ -2,9 +2,9 @@
   "id": "dispatch-console",
   "kind": "workspace",
   "launchMode": "ui-only",
-  "name": "调度台",
-  "description": "向已运行的 Agent 发送定时消息，管理调度规则",
-  "version": "0.1.0",
+  "name": "Schedule 调度台",
+  "description": "管理工作空间的调度规则，支持定时、事件驱动等多种触发方式",
+  "version": "0.2.0",
   "icon": "clock",
   "category": "workspace",
   "enabled": true,
@@ -26,16 +26,16 @@
           "id": "dispatch-hero",
           "type": "hero",
           "kicker": {
-            "zh": "Agent 调度",
-            "en": "Agent Dispatch"
+            "zh": "Schedule",
+            "en": "Schedule"
           },
           "title": {
             "zh": "调度台",
-            "en": "Dispatch Console"
+            "en": "Schedule Console"
           },
           "body": {
-            "zh": "向编程小助手发送定时消息。设定时间、选择会话、写好消息，到时间自动送达。",
-            "en": "Send timed messages to the coding assistant. Set time, pick a session, write your message."
+            "zh": "管理工作空间的调度规则。支持定时调度、空闲触发、就绪触发，以及循环执行。",
+            "en": "Manage schedule rules for workspaces. Supports timer, on-idle, on-ready triggers and repeating execution."
           }
         },
         {
