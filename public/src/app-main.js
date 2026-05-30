@@ -2901,18 +2901,28 @@ window.saveIMWorkspaceConfig = async () => {
   }
 };
 
+window._creatingReceptionistSession = false;
+
 window.createReceptionistSession = async (triggerButton) => {
-  await window.saveIMWorkspaceConfig();
-  const agent = getCurrentAgentRecord();
-  await window.runWorkspaceAction(JSON.stringify({ type: 'create_session' }), triggerButton);
-  // Update receptionistSessionId to the newly created session
-  if (agent?.id) {
-    const updated = allAgents.find(a => a.id === agent.id);
-    const newActiveId = updated?.active_workspace_session_id || updated?.workspace_sessions?.activeSessionId;
-    if (newActiveId) {
-      window.updateIMWorkspaceField('workspaceConfig.receptionistSessionId', newActiveId);
-      window.saveIMWorkspaceConfig().catch(() => {});
+  window._creatingReceptionistSession = true;
+  if (triggerButton) markActionLoading(triggerButton);
+  try {
+    await window.saveIMWorkspaceConfig();
+    const agent = getCurrentAgentRecord();
+    await window.runWorkspaceAction(JSON.stringify({ type: 'create_session' }), triggerButton);
+    // Update receptionistSessionId to the newly created session
+    if (agent?.id) {
+      const updated = allAgents.find(a => a.id === agent.id);
+      const newActiveId = updated?.active_workspace_session_id || updated?.workspace_sessions?.activeSessionId;
+      if (newActiveId) {
+        window.updateIMWorkspaceField('workspaceConfig.receptionistSessionId', newActiveId);
+        window.saveIMWorkspaceConfig().catch(() => {});
+      }
     }
+  } finally {
+    window._creatingReceptionistSession = false;
+    const btn = document.querySelector('.im-new-chat-btn');
+    if (btn) btn.classList.remove('action-loading');
   }
 };
 
@@ -3012,7 +3022,8 @@ window.startWeixinBinding = async () => {
     imWorkspaceState.data = bundle;
     imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
     if (bundle.binding?.qrcodeDataUrl) {
-      imWorkspaceState.weixinQrDialogOpen = true;
+      window._imChannelDetailId = 'weixin';
+      if (!window._imChannelConfigOpen) window._imChannelConfigOpen = true;
     }
   } catch (error) {
     imWorkspaceState.error = error && error.message ? error.message : String(error);
@@ -3074,6 +3085,32 @@ window.showWeixinQrCodeDialog = () => {
 
 window.closeWeixinQrCodeDialog = () => {
   imWorkspaceState.weixinQrDialogOpen = false;
+  renderCurrentMainView();
+};
+
+// ── IM Channel Config Dialog ──────────────────────────────────────
+window._imChannelConfigOpen = false;
+window._imChannelDetailId = null;
+
+window.openIMChannelConfig = () => {
+  window._imChannelConfigOpen = true;
+  window._imChannelDetailId = null;
+  renderCurrentMainView();
+};
+
+window.closeIMChannelConfig = () => {
+  window._imChannelConfigOpen = false;
+  window._imChannelDetailId = null;
+  renderCurrentMainView();
+};
+
+window.openIMChannelDetail = (channelId) => {
+  window._imChannelDetailId = channelId;
+  renderCurrentMainView();
+};
+
+window.closeIMChannelDetail = () => {
+  window._imChannelDetailId = null;
   renderCurrentMainView();
 };
 
@@ -3430,6 +3467,18 @@ window.imSelectChannel = (item, value) => {
   if (!dropdown) return;
   dropdown.classList.remove('open');
   window.updateIMWorkspaceField('workspaceConfig.selectedChannel', value);
+};
+
+window.imSelectLine = (item, type, lineId) => {
+  const dropdown = item.closest('.im-dropdown');
+  if (!dropdown) return;
+  dropdown.classList.remove('open');
+  const value = item.dataset.value;
+  if (type === 'carrier') {
+    window.handleLineCarrierChange(lineId, value);
+  } else if (type === 'session') {
+    window.handleLineSessionChange(lineId, value);
+  }
 };
 
 document.addEventListener('click', (e) => {

@@ -540,6 +540,15 @@ body[data-theme="light"] .markdown-body blockquote {
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 12px 32px rgba(0, 0, 0, 0.3);
 }
 
+.workspace-hero.has-actions {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.workspace-hero-main { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.workspace-hero-actions { flex-shrink: 0; }
+
 .workspace-hero.home-shell {
   position: relative;
   min-height: 280px;
@@ -2261,32 +2270,38 @@ body[data-theme="light"] .im-new-chat-btn {
 .im-dropdown-trigger {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(0,0,0,0.2);
-  border-radius: 10px;
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 13px;
-  white-space: nowrap;
-  transition: border-color 0.2s, background 0.2s;
+  gap: 8px;
+  font-size: 13px; padding: 8px 10px; width: 100%;
+  border: 1px solid rgba(220, 230, 246, 0.18); border-radius: 10px;
+  background: rgba(2, 5, 11, 0.78); color: var(--text-primary, #e0e6f0);
+  cursor: pointer; font-family: inherit;
+  transition: border-color 0.15s;
 }
 
 .im-dropdown-trigger:hover {
-  border-color: rgba(99,145,255,0.4);
-  background: rgba(99,145,255,0.08);
+  border-color: rgba(220, 230, 246, 0.3);
+}
+
+.im-dropdown-trigger:focus, .im-dropdown-trigger:focus-visible {
+  border-color: rgba(99, 145, 255, 0.5);
+  outline: none;
 }
 
 .im-dropdown-trigger .im-channel-icon {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
+}
+
+.im-dropdown-trigger span {
+  flex: 1;
+  text-align: left;
 }
 
 .im-dropdown-arrow {
   width: 12px;
   height: 12px;
-  margin-left: 4px;
+  margin-left: auto;
   opacity: 0.5;
   transition: transform 0.2s;
 }
@@ -2300,19 +2315,13 @@ body[data-theme="light"] .im-new-chat-btn {
   top: calc(100% + 6px);
   left: 0;
   min-width: 100%;
-  background: #1e2235;
-  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(2, 5, 11, 0.96);
+  border: 1px solid rgba(220, 230, 246, 0.18);
   border-radius: 10px;
   padding: 4px;
   display: none;
   z-index: 100;
   box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-}
-
-body[data-theme="light"] .im-dropdown-menu {
-  background: #fff;
-  border-color: rgba(0,0,0,0.1);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
 }
 
 .im-dropdown.open .im-dropdown-menu {
@@ -4442,6 +4451,25 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ph-mc-info { font-size: 11px; color: var(--text-secondary); }
 .ph-mc-footer { display: flex; gap: 8px; justify-content: flex-end; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); }
 
+/* ── IM Channel Config Dialog ── */
+.im-ch-row { cursor: pointer; transition: border-color 0.15s, background 0.15s; justify-content: space-between; }
+.im-channel-config-btn { height: 42px !important; padding: 0 24px !important; font-size: 15px !important; border-radius: 12px !important; }
+.im-ch-row:hover { border-color: rgba(255,255,255,0.16); background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03)); }
+.im-ch-info { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.im-ch-icon-wrap {
+  width: 36px; height: 36px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-primary); font-size: 20px;
+}
+.im-ch-icon { width: 22px; height: 22px; }
+.im-ch-text { min-width: 0; }
+.im-ch-name { font-size: 14px; font-weight: 600; }
+.im-ch-desc { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.im-qrcode-inline { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.06); margin-top: 8px; }
+.im-qrcode-inline-img { width: 200px; height: 200px; border-radius: 12px; overflow: hidden; background: #fff; display: flex; align-items: center; justify-content: center; }
+.im-qrcode-inline-img img { width: 100%; height: 100%; object-fit: contain; }
+.im-qrcode-inline-hint { font-size: 12px; color: var(--text-secondary); text-align: center; }
+
 /* ── Chat Context Bar ── */
 .chat-context-bar {
   display: flex;
@@ -5250,6 +5278,25 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   color: #cf222e;
   font-size: 12px;
 }
+/* ── IM Dual Layout ──────────────────────────────────────────── */
+.im-dual-layout {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+.im-portal-card { flex: 0 0 280px; }
+.im-portal-body { display: flex; flex-direction: column; gap: 12px; }
+.im-portal-field { display: flex; flex-direction: column; gap: 4px; }
+.im-portal-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+.im-portal-card .im-new-chat-btn { width: 100%; }
+.im-line-connection-section { flex: 1; min-width: 0; }
+
+@media (max-width: 700px) {
+  .im-dual-layout { flex-direction: column; }
+  .im-portal-card { flex: 1 1 auto; }
+  .im-line-connection-section { flex: 1 1 auto; }
+}
+
 /* ── IM Line Connection ─────────────────────────────────────── */
 .im-line-grid {
   display: flex;
@@ -5257,10 +5304,7 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   gap: 16px;
 }
 .im-line-row {
-  background: var(--panel-bg);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 12px;
-  padding: 16px;
+  padding: 4px 0;
 }
 .im-line-row-header {
   display: flex;
@@ -5278,9 +5322,13 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   gap: 10px;
   align-items: center;
 }
-.im-line-row-controls .workspace-config-select {
+.im-line-row-controls .im-dropdown {
   flex: 1;
   min-width: 0;
+}
+.im-dropdown-disabled {
+  opacity: 0.45;
+  pointer-events: none;
 }
 .im-binding-status {
   font-size: 11px;
@@ -5298,12 +5346,6 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .im-binding-status.unbound {
   background: rgba(100, 116, 139, 0.15);
   color: #64748b;
-}
-.im-line-carrier {
-  max-width: 140px;
-}
-.im-line-session {
-  flex: 1;
 }
 .im-line-session[disabled] {
   opacity: 0.5;
