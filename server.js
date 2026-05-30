@@ -75,6 +75,7 @@ const dispatchTimers = new Map();          // scheduleId → setTimeout handle
 const dispatchRuntimeActivity = new Map(); // runtimeKey → { lastActiveAt, status: 'idle'|'active' }
 const dispatchIdleCheckers = new Map();    // scheduleId → setInterval handle (for on-idle triggers)
 
+
 const DISPATCH_FIRED_TIMEOUT_MS = 5 * 60 * 1000; // fired schedule 超时阈值：5 分钟
 
 // ── Project abstraction layer ───────────────────────────────────────
@@ -153,6 +154,11 @@ class ProgrammingHelperProjectAdapter {
     }
     const openDirectory = projectId.slice(4); // Remove 'dir:' prefix
     return { openDirectory };
+  }
+
+  async listProjects() {
+    const current = await this.getCurrentProject();
+    return current ? [current] : [];
   }
 
   /**
@@ -1016,6 +1022,24 @@ function normalizeIMChannelConfig(raw = {}, defaults = {}) {
   };
 }
 
+function normalizeBoundSession(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const agentId = typeof raw.agentId === 'string' ? raw.agentId.trim() : '';
+  const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId.trim() : '';
+  if (!agentId || !sessionId) return null;
+  return { agentId, sessionId };
+}
+
+function normalizeIMLine(raw, index) {
+  if (!raw || typeof raw !== 'object') raw = {};
+  return {
+    id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `line${index + 1}`,
+    label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : `通道 ${index + 1}`,
+    carrier: typeof raw.carrier === 'string' ? raw.carrier.trim() : '',
+    boundSession: normalizeBoundSession(raw.boundSession),
+  };
+}
+
 function normalizeIMWorkspaceConfig(raw = {}) {
   const rawChannels = raw && typeof raw.channels === 'object' && raw.channels ? raw.channels : {};
   const channels = {};
@@ -1027,8 +1051,7 @@ function normalizeIMWorkspaceConfig(raw = {}) {
 
   if (!channels.qq) {
     channels.qq = normalizeIMChannelConfig({}, {
-      label: 'QQ 当前执行者线路',
-      role: 'executor',
+      label: 'QQ',
       note: '',
     });
   }
@@ -1036,7 +1059,6 @@ function normalizeIMWorkspaceConfig(raw = {}) {
   if (!channels.weixin) {
     channels.weixin = normalizeIMChannelConfig({}, {
       label: '微信',
-      role: 'receptionist',
       note: '',
     });
   }
@@ -1048,10 +1070,16 @@ function normalizeIMWorkspaceConfig(raw = {}) {
     ? sanitizeSessionFragment(raw.receptionistSessionId)
     : '';
 
+  const rawLines = Array.isArray(raw.lines) ? raw.lines : [];
+  const lines = rawLines.length > 0
+    ? rawLines.map((l, i) => normalizeIMLine(l, i))
+    : [normalizeIMLine({}, 0), normalizeIMLine({}, 1)];
+
   return {
     selectedChannel: channels[selectedChannel] ? selectedChannel : 'qq',
     receptionistSessionId,
     channels,
+    lines,
   };
 }
 
@@ -1132,11 +1160,12 @@ function serializeWeixinBindingState(state = null) {
 }
 
 async function buildIMWorkspaceBundle(agentId = 'qqbot') {
-  const [workspaceConfig, qqConfig, weixinConfig, index] = await Promise.all([
+  const [workspaceConfig, qqConfig, weixinConfig, index, phIndex] = await Promise.all([
     readProjectIMWorkspaceConfig(),
     readProjectQQBotConfig(),
     readProjectWeixinConfig(),
     readSessionIndex(agentId).catch(() => ({ sessions: [], activeSessionId: null })),
+    readSessionIndex('programming-helper').catch(() => ({ sessions: [], activeSessionId: null })),
   ]);
 
   const sessions = Array.isArray(index?.sessions)
@@ -1167,7 +1196,29 @@ async function buildIMWorkspaceBundle(agentId = 'qqbot') {
     receptionistSession,
     qqSourcePath: PROJECT_QQBOT_CONFIG_PATH,
     workspaceSourcePath: PROJECT_IM_WORKSPACE_CONFIG_PATH,
+    connectableSessions: buildConnectableSessions(phIndex),
   };
+}
+
+function buildConnectableSessions(phIndex) {
+  if (!phIndex?.sessions) return [];
+  const liveKeys = new Set(
+    listAgentRuntimes('programming-helper')
+      .filter(rt => rt?.process && rt.process.exitCode === null && !rt.stopped)
+      .map(rt => getManagedRuntimeKey('programming-helper', rt.selectedSessionId))
+  );
+  return phIndex.sessions
+    .filter(s => s.sessionType === 'main')
+    .filter(s => {
+      const key = getManagedRuntimeKey('programming-helper', s.id);
+      return liveKeys.has(key);
+    })
+    .map(s => ({
+      id: s.id,
+      title: s.title || s.id,
+      updatedAt: s.updatedAt || null,
+    }))
+    .filter(s => s.id);
 }
 
 async function startWeixinBinding(agentId = 'qqbot') {
@@ -4962,7 +5013,7 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
   const isExplorationSession = runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE === 'exploration';
   const child = spawn(process.execPath, [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN], {
     cwd: __dirname,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: sanitizeSpawnEnv({
       ...process.env,
       ...(isExplorationSession ? {} : {
@@ -6187,6 +6238,286 @@ app.post('/protoclaw/im_workspace_bundle/weixin_logout', async (_req, res, next)
     next(error);
   }
 });
+
+// ── IM Line Transfer ─────────────────────────────────────────────────────
+//
+// A "line" (通道) binds to a carrier (渠道: qq/weixin) and optionally to
+// a target agent session.  The portal agent (receptionist) has its own
+// carrier binding via `selectedChannel`; these endpoints manage the
+// additional logical lines.
+
+function findLine(config, lineId) {
+  return (config.lines || []).find(l => l.id === lineId) || null;
+}
+
+/**
+ * Send an IPC message to a running managed session's child process.
+ * Used for dynamic carrier feature mounting without restart.
+ */
+function sendIPCtoSession(targetAgentId, targetSessionId, message) {
+  const runtime = getAgentRuntime(targetAgentId, targetSessionId);
+  if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
+    console.warn(`[ProtoClaw IPC] Target ${targetAgentId}::${targetSessionId} not running`);
+    return false;
+  }
+  try {
+    runtime.process.send(message);
+    console.log(`[ProtoClaw IPC] Sent to ${targetAgentId}::${targetSessionId}:`, JSON.stringify(message));
+    return true;
+  } catch (err) {
+    console.error(`[ProtoClaw IPC] Failed to send to ${targetAgentId}::${targetSessionId}:`, err);
+    return false;
+  }
+}
+
+// ── IM Line Binding ────────────────────────────────────────────────────
+//
+// When a line is connected to a session, that session's runtime mounts the
+// carrier feature directly. The binding query endpoint lets run-prebuilt-agent.js
+// discover at startup whether it should mount a carrier feature.
+
+app.get('/protoclaw/im_line_binding', async (req, res) => {
+  const { agentId: qAgentId, sessionId: qSessionId } = req.query || {};
+  if (!qAgentId || !qSessionId) {
+    return res.json({ carrier: null });
+  }
+  try {
+    const config = await readProjectIMWorkspaceConfig();
+    const match = (config.lines || []).find(
+      l => l.carrier && l.boundSession && l.boundSession.agentId === qAgentId && l.boundSession.sessionId === qSessionId
+    );
+    res.json(match ? { carrier: match.carrier, lineId: match.id } : { carrier: null });
+  } catch {
+    res.json({ carrier: null });
+  }
+});
+
+app.post('/protoclaw/im_line_transfer', express.json(), async (req, res, next) => {
+  try {
+    const { lineId, carrier, agentId, sessionId } = req.body || {};
+    if (!lineId) {
+      return res.status(400).json({ error: 'lineId is required' });
+    }
+
+    const config = await readProjectIMWorkspaceConfig();
+    const line = findLine(config, lineId);
+    if (!line) {
+      return res.status(400).json({ error: `Unknown line: ${lineId}` });
+    }
+
+    // If clearing the line (no carrier)
+    if (!carrier) {
+      line.carrier = '';
+      line.boundSession = null;
+      await writeProjectIMWorkspaceConfig(config);
+      const bundle = await buildIMWorkspaceBundle('qqbot');
+      return res.json({ success: true, bundle });
+    }
+
+    // If binding to a session, validate runtime
+    if (agentId && sessionId) {
+      const runtime = getAgentRuntime(agentId, sessionId);
+      if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
+        return res.status(409).json({ error: 'Target runtime is not running' });
+      }
+    }
+
+    // Save previous binding so we can unmount from the OLD session
+    const prevBinding = line.boundSession ? { ...line.boundSession } : null;
+
+    if (agentId && sessionId) {
+      line.carrier = carrier;
+      line.boundSession = { agentId, sessionId };
+    } else {
+      line.carrier = carrier;
+      line.boundSession = null;
+    }
+
+    await writeProjectIMWorkspaceConfig(config);
+
+    // Unmount from the OLD session (if different from new)
+    if (prevBinding?.agentId && prevBinding?.sessionId) {
+      const isSameSession = (agentId && sessionId
+        && prevBinding.agentId === agentId && prevBinding.sessionId === sessionId);
+      if (!isSameSession) {
+        sendIPCtoSession(prevBinding.agentId, prevBinding.sessionId, { type: 'unmount-im-carrier' });
+      }
+    }
+
+    // Dynamically mount carrier on the TARGET session via IPC (no restart)
+    if (agentId && sessionId) {
+      try {
+        sendIPCtoSession(agentId, sessionId, { type: 'mount-im-carrier', carrier });
+      } catch (ipcErr) {
+        console.error('[ProtoClaw IM] IPC mount failed:', ipcErr);
+      }
+    }
+
+    const bundle = await buildIMWorkspaceBundle('qqbot');
+    res.json({ success: true, bundle });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/im_line_disconnect', express.json(), async (req, res, next) => {
+  try {
+    const { lineId } = req.body || {};
+    if (!lineId) {
+      return res.status(400).json({ error: 'lineId is required' });
+    }
+
+    const config = await readProjectIMWorkspaceConfig();
+    const line = findLine(config, lineId);
+    if (!line) {
+      return res.status(400).json({ error: `Unknown line: ${lineId}` });
+    }
+
+    // Remember the previous binding so we can notify that session
+    const prevBinding = line.boundSession || null;
+    line.carrier = '';
+    line.boundSession = null;
+    await writeProjectIMWorkspaceConfig(config);
+
+    // Notify the previously bound session to unmount its carrier via IPC
+    if (prevBinding?.agentId && prevBinding?.sessionId) {
+      try {
+        sendIPCtoSession(prevBinding.agentId, prevBinding.sessionId, { type: 'unmount-im-carrier' });
+      } catch (ipcErr) {
+        console.error('[ProtoClaw IM] IPC unmount failed:', ipcErr);
+      }
+    }
+
+    const bundle = await buildIMWorkspaceBundle('qqbot');
+    res.json({ success: true, bundle });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── IM Routable Targets ────────────────────────────────────────────────────
+//
+// Aggregated view for the operator feature: workspaces → projects → running
+// sessions, plus current line bindings.
+
+app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
+  try {
+    const [agents, imConfig] = await Promise.all([
+      getAgentsLight(),
+      readProjectIMWorkspaceConfig(),
+    ]);
+
+    // Build workspace → project → session tree
+    const workspaces = [];
+    for (const agent of agents) {
+      const adapter = getProjectAdapter(agent.id);
+      if (!adapter) continue;
+
+      let projects;
+      try {
+        projects = await adapter.listProjects();
+      } catch {
+        projects = [];
+      }
+      if (!projects || projects.length === 0) continue;
+
+      // Enrich each project with running sessions
+      const runtimes = listAgentRuntimes(agent.id);
+      const liveSessionKeys = new Set(
+        runtimes
+          .filter(rt => rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId)
+          .map(rt => getManagedRuntimeKey(agent.id, rt.selectedSessionId))
+      );
+
+      // Also get session titles from the session index
+      let sessionIndex;
+      try {
+        sessionIndex = await readSessionIndex(agent.id);
+      } catch {
+        sessionIndex = { sessions: [] };
+      }
+      const sessionTitleMap = new Map(
+        (sessionIndex.sessions || []).map(s => [s.id, s.title || s.id])
+      );
+
+      for (const project of projects) {
+        const projectSessionIds = project.sessionIds || [];
+        const projectSessions = [];
+
+        if (projectSessionIds.length > 0) {
+          for (const sid of projectSessionIds) {
+            const key = getManagedRuntimeKey(agent.id, sid);
+            if (liveSessionKeys.has(key)) {
+              projectSessions.push({
+                id: sid,
+                title: sessionTitleMap.get(sid) || sid,
+                running: true,
+              });
+            }
+          }
+        } else {
+          // When project has no explicit sessionIds, associate all live runtimes
+          for (const rt of runtimes) {
+            if (rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId) {
+              projectSessions.push({
+                id: rt.selectedSessionId,
+                title: sessionTitleMap.get(rt.selectedSessionId) || rt.selectedSessionId,
+                running: true,
+              });
+            }
+          }
+        }
+        project.runningSessions = projectSessions;
+      }
+
+      workspaces.push({
+        agentId: agent.id,
+        name: agent.name || agent.id,
+        icon: agent.icon || null,
+        projects,
+      });
+    }
+
+    const activeWorkspaces = workspaces;
+
+    // Build current lines snapshot
+    const lines = (imConfig.lines || []).map(l => {
+      const bound = l.boundSession;
+      let sessionTitle = null;
+      if (bound?.agentId && bound?.sessionId) {
+        try {
+          const idx = readSessionIndexSync(bound.agentId);
+          const match = (idx?.sessions || []).find(s => s.id === bound.sessionId);
+          sessionTitle = match?.title || bound.sessionId;
+        } catch {
+          sessionTitle = bound.sessionId;
+        }
+      }
+      return {
+        id: l.id,
+        name: l.name || l.id,
+        carrier: l.carrier || null,
+        boundSession: bound ? { agentId: bound.agentId, sessionId: bound.sessionId, sessionTitle } : null,
+      };
+    });
+
+    res.json({ workspaces: activeWorkspaces, lines });
+  } catch (error) {
+    next(error);
+  }
+});
+
+function readSessionIndexSync(agentId) {
+  const sessionDir = isWorkspaceSessionAgent(agentId)
+    ? path.join(PREBUILT_WORKSPACES_ROOT, agentId, 'sessions')
+    : path.join(PREBUILT_SESSIONS_ROOT, agentId);
+  const indexPath = path.join(sessionDir, 'index.json');
+  try {
+    return JSON.parse(readFileSync(indexPath, 'utf8'));
+  } catch {
+    return { sessions: [] };
+  }
+}
 
 // ── Model Config ──────────────────────────────────────────────────────────────
 

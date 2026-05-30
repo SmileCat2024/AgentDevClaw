@@ -477,6 +477,150 @@ async function dispatchIMCallFinish(envelope) {
   }
 }
 
+// ── IM Transfer: Dynamic feature injection/removal ──────────────────
+//
+// Manages dynamic IM feature injection into the current runtime.
+// Triggered by IPC messages from server.js when a channel is transferred
+// to or disconnected from this runtime's session.
+
+// ── IM Line Carrier Mount ──────────────────────────────────────────
+//
+// When a line is bound to this session, the carrier feature (QQBotFeature
+// or WeixinBot) is dynamically mounted on THIS agent. The gateway receives
+// IM messages and routes them through the CallArbiter for serialization.
+//
+// Carrier features do NOT use agentdev hooks or tools — they only provide
+// a gateway that calls agentRef.onCall(text). This makes dynamic mounting
+// safe even after the agent is already running.
+
+let _mountedCarrierFeature = null; // tracks currently mounted carrier name
+
+/**
+ * Dynamically mount a carrier feature on this running agent.
+ * Works because carrier features only provide a gateway (no hooks/tools).
+ */
+async function mountCarrierFeature(carrier) {
+  if (!agent || IS_EXPLORATION) return;
+
+  if (_mountedCarrierFeature === carrier) {
+    console.log(`[IM-Line] Carrier "${carrier}" already mounted, skipping`);
+    return;
+  }
+
+  try {
+    console.log(`[IM-Line] Mounting carrier="${carrier}" dynamically...`);
+
+    if (carrier === 'qq') {
+      const { QQBotFeature } = await import('@agentdev/qqbot-feature');
+      const cfgResp = await fetch(`${SERVER_ORIGIN}/protoclaw/qqbot_config`);
+      const qqCfg = cfgResp.ok ? await cfgResp.json() : {};
+      const feature = new QQBotFeature({
+        appId: qqCfg?.appId || '',
+        clientSecret: qqCfg?.clientSecret || '',
+        configPath: qqCfg?.configPath || '',
+        accountId: qqCfg?.accountId || '',
+        markdownSupport: qqCfg?.markdownSupport ?? true,
+      });
+      agent.use(feature);
+      await feature.startGateway(agent);
+      // Route IM messages through CallArbiter for serialization
+      if (callArbiter) {
+        feature.agentRef = {
+          onCall: async (text) => {
+            const entry = callArbiter.enqueue({ source: 'im-line-qq', text });
+            const finished = await callArbiter.waitForCompletion(entry.id);
+            if (finished.status === 'failed') {
+              throw new Error(finished.error || 'unknown error');
+            }
+            return finished.result || '处理完成';
+          },
+        };
+      }
+      _mountedCarrierFeature = 'qq';
+      console.log('[IM-Line] ✓ QQBot dynamically mounted + gateway started');
+    } else if (carrier === 'weixin') {
+      const { WeixinBot } = await import('@agentdev/weixin-bot');
+      const feature = new WeixinBot({
+        configPath: process.env.PROTOCLAW_WEIXIN_CONFIG_PATH || '',
+      });
+      agent.use(feature);
+      await feature.startGateway(agent);
+      // Override handleMessage to route through CallArbiter
+      if (callArbiter && typeof feature.handleMessage === 'function') {
+        const origHandle = feature.handleMessage.bind(feature);
+        const { WeixinApiClient } = await import('@agentdev/weixin-bot');
+        feature.handleMessage = async (msg) => {
+          if (!msg || msg.message_type !== 1) return;
+          const text = WeixinApiClient.extractText(msg);
+          if (!text) return;
+          const entry = callArbiter.enqueue({
+            source: 'im-line-weixin',
+            sourceRef: msg.from_user_id || '',
+            text,
+          });
+          const finished = await callArbiter.waitForCompletion(entry.id);
+          const resp = finished.status === 'failed'
+            ? `处理失败: ${finished.error || '未知错误'}`
+            : (finished.result || '处理完成');
+          await feature.apiClient.sendTextMessage(msg.from_user_id, resp, msg.context_token);
+        };
+      }
+      _mountedCarrierFeature = 'weixin';
+      console.log('[IM-Line] ✓ WeixinBot dynamically mounted + gateway started');
+    }
+  } catch (err) {
+    console.error(`[IM-Line] Failed to mount carrier "${carrier}":`, err);
+  }
+}
+
+/**
+ * Check at startup if this session is bound to an IM line.
+ */
+async function mountIMLineCarrierIfBound() {
+  if (!sessionId || IS_EXPLORATION) return;
+
+  try {
+    const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_line_binding?agentId=${agentId}&sessionId=${sessionId}`);
+    if (!resp.ok) return;
+    const binding = await resp.json();
+    if (!binding?.carrier) return;
+    console.log(`[IM-Line] Startup binding found: carrier="${binding.carrier}"`);
+    await mountCarrierFeature(binding.carrier);
+  } catch (err) {
+    console.error('[IM-Line] Failed to check startup binding:', err);
+  }
+}
+
+// Handle IPC messages from server for dynamic carrier mounting
+process.on('message', (msg) => {
+  if (!msg || typeof msg !== 'object') return;
+
+  if (msg.type === 'mount-im-carrier' && msg.carrier) {
+    console.log(`[IM-Line] IPC received: mount carrier "${msg.carrier}"`);
+    mountCarrierFeature(msg.carrier).catch(err => {
+      console.error('[IM-Line] Dynamic mount failed:', err);
+    });
+  } else if (msg.type === 'unmount-im-carrier') {
+    console.log('[IM-Line] IPC received: unmount carrier');
+    if (!_mountedCarrierFeature) return;
+    const carrier = _mountedCarrierFeature;
+    try {
+      const featureName = carrier === 'qq' ? 'qqbot' : 'weixin-bot';
+      const feature = agent.features?.get?.(featureName);
+      if (feature && typeof feature.onDestroy === 'function') {
+        feature.onDestroy({ agent }).catch(err => {
+          console.warn(`[IM-Line] onDestroy error for ${featureName}:`, err.message);
+        });
+      }
+      agent.features?.delete?.(featureName);
+      _mountedCarrierFeature = null;
+      console.log(`[IM-Line] ✓ Carrier "${carrier}" unmounted and gateway stopped`);
+    } catch (err) {
+      console.error(`[IM-Line] Unmount error for "${carrier}":`, err);
+    }
+  }
+});
+
 function getNextTurnActions() {
   const checkpoints = Array.isArray(agent?._callCheckpoints) ? agent._callCheckpoints : [];
   return checkpoints.length > 0 ? NEXT_TURN_ACTIONS : undefined;
@@ -964,7 +1108,11 @@ async function main() {
     } catch (error) {
       console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
     }
+
   }
+
+  // If this session is bound to an IM line, mount the carrier feature + gateway
+  await mountIMLineCarrierIfBound();
 
   try {
     const dispatchFeature = agent.features?.get?.('claw-dispatch');

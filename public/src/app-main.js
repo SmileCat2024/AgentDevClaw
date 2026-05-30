@@ -2901,15 +2901,101 @@ window.saveIMWorkspaceConfig = async () => {
   }
 };
 
-window.createReceptionistSession = async () => {
+window.createReceptionistSession = async (triggerButton) => {
   await window.saveIMWorkspaceConfig();
-  await window.runWorkspaceAction(JSON.stringify({ type: 'create_session' }));
+  const agent = getCurrentAgentRecord();
+  await window.runWorkspaceAction(JSON.stringify({ type: 'create_session' }), triggerButton);
+  // Update receptionistSessionId to the newly created session
+  if (agent?.id) {
+    const updated = allAgents.find(a => a.id === agent.id);
+    const newActiveId = updated?.active_workspace_session_id || updated?.workspace_sessions?.activeSessionId;
+    if (newActiveId) {
+      window.updateIMWorkspaceField('workspaceConfig.receptionistSessionId', newActiveId);
+      window.saveIMWorkspaceConfig().catch(() => {});
+    }
+  }
 };
 
-window.launchReceptionistSession = async (sessionId) => {
+window.handleLineCarrierChange = async (lineId, carrier) => {
+  if (!lineId) return;
+
+  imWorkspaceState.saving = true;
+  renderCurrentMainView();
+  try {
+    const response = await fetch('/protoclaw/im_line_transfer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lineId, carrier: carrier || '' }),
+    });
+    if (!response.ok) throw new Error(await response.text().catch(() => 'Line update failed'));
+    const payload = await response.json();
+    if (payload.bundle) {
+      const bundle = normalizeIMWorkspaceBundleData(payload.bundle);
+      imWorkspaceState.data = bundle;
+      imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+    }
+  } catch (error) {
+    console.error('Failed to update line carrier:', error);
+    imWorkspaceState.error = error && error.message ? error.message : String(error);
+  } finally {
+    imWorkspaceState.saving = false;
+    renderCurrentMainView();
+  }
+};
+
+window.handleLineSessionChange = async (lineId, sessionId) => {
+  if (!lineId) return;
+
+  const draft = getIMWorkspaceDraft();
+  const line = (draft.workspaceConfig?.lines || []).find(l => l.id === lineId);
+  const carrier = line?.carrier || '';
+  if (!carrier) return;
+
+  imWorkspaceState.saving = true;
+  renderCurrentMainView();
+  try {
+    if (!sessionId) {
+      // Disconnect session from line
+      const response = await fetch('/protoclaw/im_line_disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lineId }),
+      });
+      if (!response.ok) throw new Error(await response.text().catch(() => 'Disconnect failed'));
+      const payload = await response.json();
+      if (payload.bundle) {
+        const bundle = normalizeIMWorkspaceBundleData(payload.bundle);
+        imWorkspaceState.data = bundle;
+        imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+      }
+    } else {
+      // Transfer line to session
+      const response = await fetch('/protoclaw/im_line_transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lineId, carrier, agentId: 'programming-helper', sessionId }),
+      });
+      if (!response.ok) throw new Error(await response.text().catch(() => 'Transfer failed'));
+      const payload = await response.json();
+      if (payload.bundle) {
+        const bundle = normalizeIMWorkspaceBundleData(payload.bundle);
+        imWorkspaceState.data = bundle;
+        imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+      }
+    }
+  } catch (error) {
+    console.error('Failed to update line session:', error);
+    imWorkspaceState.error = error && error.message ? error.message : String(error);
+  } finally {
+    imWorkspaceState.saving = false;
+    renderCurrentMainView();
+  }
+};
+
+window.launchReceptionistSession = async (sessionId, triggerButton) => {
   window.updateIMWorkspaceField('workspaceConfig.receptionistSessionId', sessionId);
   await window.saveIMWorkspaceConfig();
-  await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
+  await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }), triggerButton);
 };
 
 window.startWeixinBinding = async () => {

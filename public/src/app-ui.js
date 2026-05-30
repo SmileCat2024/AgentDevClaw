@@ -1483,15 +1483,26 @@ function normalizeIMWorkspaceBundleData(raw = {}) {
       channels: {
         qq: {
           label: typeof channels?.qq?.label === 'string' ? channels.qq.label : '',
-          role: typeof channels?.qq?.role === 'string' ? channels.qq.role : '',
           note: typeof channels?.qq?.note === 'string' ? channels.qq.note : '',
         },
         weixin: {
           label: typeof channels?.weixin?.label === 'string' ? channels.weixin.label : '',
-          role: typeof channels?.weixin?.role === 'string' ? channels.weixin.role : '',
           note: typeof channels?.weixin?.note === 'string' ? channels.weixin.note : '',
         },
       },
+      lines: Array.isArray(workspaceConfig.lines)
+        ? workspaceConfig.lines.map(l => ({
+            id: typeof l?.id === 'string' ? l.id : '',
+            label: typeof l?.label === 'string' ? l.label : '',
+            carrier: typeof l?.carrier === 'string' ? l.carrier : '',
+            boundSession: l?.boundSession && typeof l.boundSession === 'object'
+              ? { agentId: String(l.boundSession.agentId || ''), sessionId: String(l.boundSession.sessionId || '') }
+              : null,
+          }))
+        : [
+            { id: 'line1', label: '通道 1', carrier: '', boundSession: null },
+            { id: 'line2', label: '通道 2', carrier: '', boundSession: null },
+          ],
     },
     qqConfig: normalizeQQBotConfigData(raw?.qqConfig || {}),
     weixinConfig: {
@@ -1523,6 +1534,13 @@ function normalizeIMWorkspaceBundleData(raw = {}) {
           updatedAt: raw.receptionistSession.updatedAt || null,
         }
       : null,
+    connectableSessions: Array.isArray(raw?.connectableSessions)
+      ? raw.connectableSessions.map(s => ({
+          id: typeof s?.id === 'string' ? s.id : '',
+          title: typeof s?.title === 'string' ? s.title : '',
+          updatedAt: s?.updatedAt || null,
+        })).filter(s => s.id)
+      : [],
     qqSourcePath: typeof raw?.qqSourcePath === 'string' ? raw.qqSourcePath : '',
     workspaceSourcePath: typeof raw?.workspaceSourcePath === 'string' ? raw.workspaceSourcePath : '',
     savedAt: raw?.savedAt || null,
@@ -2334,6 +2352,75 @@ function renderFlowEditorBlock(agent, block) {
   ].join('');
 }
 
+function renderLineConnectionSection(draft) {
+  const lines = draft.workspaceConfig?.lines || [];
+  const sessions = draft.connectableSessions || [];
+  const portalCarrier = draft.workspaceConfig?.selectedChannel || 'qq';
+
+  function renderLineRow(line) {
+    const carrierOptions = [
+      '<option value="">-- 未使用 --</option>',
+      { value: 'qq', label: 'QQ' },
+      { value: 'weixin', label: '微信' },
+    ].filter(o => typeof o === 'string' || o.value !== portalCarrier)
+      .map(o => {
+        if (typeof o === 'string') return o;
+        const selected = line.carrier === o.value ? ' selected' : '';
+        return '<option value="' + o.value + '"' + selected + '>' + o.label + '</option>';
+      })
+      .join('');
+
+    const hasCarrier = !!line.carrier;
+
+    const sessionOptions = hasCarrier
+      ? [
+          '<option value="">-- 未连接对话 --</option>',
+          ...sessions.map(s => {
+            const selected = line.boundSession && line.boundSession.sessionId === s.id ? ' selected' : '';
+            return '<option value="' + escapeHtml(s.id) + '"' + selected + '>' + escapeHtml(s.title || s.id) + '</option>';
+          }),
+        ].join('')
+      : '<option value="">请先选择渠道</option>';
+
+    const statusHtml = line.boundSession
+      ? '<span class="im-binding-status bound">已连接</span>'
+      : hasCarrier
+        ? '<span class="im-binding-status idle">已绑定渠道</span>'
+        : '<span class="im-binding-status unbound">未使用</span>';
+
+    return [
+      '<div class="im-line-row">',
+      '<div class="im-line-row-header">',
+      '<span class="im-line-label">' + escapeHtml(line.label || line.id) + '</span>',
+      statusHtml,
+      '</div>',
+      '<div class="im-line-row-controls">',
+      '<select class="workspace-config-select im-line-carrier" onchange="window.handleLineCarrierChange(\'' + escapeHtml(line.id) + '\', this.value)">',
+      carrierOptions,
+      '</select>',
+      '<select class="workspace-config-select im-line-session" ' + (!hasCarrier ? 'disabled' : '') + ' onchange="window.handleLineSessionChange(\'' + escapeHtml(line.id) + '\', this.value)">',
+      sessionOptions,
+      '</select>',
+      '</div>',
+      '</div>',
+    ].join('');
+  }
+
+  return [
+    '<section class="workspace-section im-line-connection-section">',
+    '<div class="workspace-section-header">',
+    '<div>',
+    '<div class="workspace-section-title">通道配置</div>',
+    '<div class="workspace-section-desc">每个通道绑定一个 IM 渠道，并可连接到编程小助手的活跃对话。</div>',
+    '</div>',
+    '</div>',
+    '<div class="im-line-grid">',
+    ...lines.map(l => renderLineRow(l)),
+    '</div>',
+    '</section>',
+  ].join('');
+}
+
 function renderIMWorkspaceConfigEditor(block) {
   const editor = block?.configEditor || {};
   const draft = getIMWorkspaceDraft();
@@ -2393,12 +2480,14 @@ function renderIMWorkspaceConfigEditor(block) {
     return actions.join('');
   })();
 
+  const activeAgent = getCurrentAgentRecord();
   const sessionsHtml = draft.sessions.length > 0
     ? '<div class="workspace-history-list">' + draft.sessions.map((session) => {
         const isActive = String(draft.workspaceConfig?.receptionistSessionId || '') === String(session.id);
         const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
+        const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id }));
         return [
-          '<div class="workspace-history-item' + (isActive ? ' active' : '') + '">',
+          '<div class="workspace-history-item' + (isActive ? ' active' : '') + '" data-prebuilt-session-agent-id="' + escapeHtml(activeAgent?.id || '') + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
           '<div class="workspace-history-main">',
           '<div class="workspace-history-title-row">',
           '<div class="workspace-history-title">' + escapeHtml(session.title || session.id) + '</div>',
@@ -2408,7 +2497,8 @@ function renderIMWorkspaceConfigEditor(block) {
           '</div>',
           '<div class="workspace-history-side">',
           '<div class="workspace-actions stacked">',
-          '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.launchReceptionistSession(&quot;' + escapeHtml(session.id) + '&quot;)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+          '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.launchReceptionistSession(&quot;' + escapeHtml(session.id) + '&quot;, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
           '</div>',
           '</div>',
           '</div>',
@@ -2423,6 +2513,7 @@ function renderIMWorkspaceConfigEditor(block) {
     '<div class="im-workspace-channel-title"><svg class="im-channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M21.395 15.035a40 40 0 0 0-.803-2.264l-1.079-2.695c.001-.032.014-.562.014-.836C19.526 4.632 17.351 0 12 0S4.474 4.632 4.474 9.241c0 .274.013.804.014.836l-1.08 2.695a39 39 0 0 0-.802 2.264c-1.021 3.283-.69 4.643-.438 4.673.54.065 2.103-2.472 2.103-2.472 0 1.469.756 3.387 2.394 4.771-.612.188-1.363.479-1.845.835-.434.32-.379.646-.301.778.343.578 5.883.369 7.482.189 1.6.18 7.14.389 7.483-.189.078-.132.132-.458-.301-.778-.483-.356-1.233-.646-1.846-.836 1.637-1.384 2.393-3.302 2.393-4.771 0 0 1.563 2.537 2.103 2.472.251-.03.581-1.39-.438-4.673"/></svg>' + escapeHtml(t('im_workspace_qq_section')) + '</div>',
     '<span class="workspace-config-badge ' + (qqConfigured ? 'ready' : 'warn') + '">' + escapeHtml(qqConfigured ? t('qqbot_config_ready') : t('qqbot_config_incomplete')) + '</span>',
     '</div>',
+    '<div class="im-workspace-channel-desc">' + escapeHtml(t('qqbot_config_hint') || '配置 QQ 机器人账号信息以启用消息接收') + '</div>',
     '<div class="workspace-config-grid">',
     fields.map((field) => renderQQBotConfigField(field, draft.qqConfig || {}, 'window.updateIMQQConfigDraft')).join(''),
     '</div>',
@@ -2432,9 +2523,11 @@ function renderIMWorkspaceConfigEditor(block) {
     '<div class="im-workspace-channel-title"><svg class="im-channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/></svg>' + escapeHtml(t('im_workspace_weixin_section')) + '</div>',
     '<span class="workspace-config-badge ' + (weixinConfigured ? 'ready' : 'warn') + '">' + escapeHtml(weixinBadge) + '</span>',
     '</div>',
+    '<div class="im-workspace-channel-desc">' + escapeHtml(t('im_workspace_weixin_hint') || '扫描二维码或手动配置微信账号绑定') + '</div>',
     weixinActionsHtml,
     '</section>',
     '</div>',
+    renderLineConnectionSection(draft),
     '<section class="workspace-section">',
     '<div class="workspace-section-header">',
     '<div>',
@@ -2447,7 +2540,7 @@ function renderIMWorkspaceConfigEditor(block) {
       receptionistOptions,
       'window.updateIMWorkspaceField(&quot;workspaceConfig.selectedChannel&quot;, this.value)',
     ),
-    '<button class="workspace-action im-new-chat-btn" type="button" onclick="window.createReceptionistSession()">' + escapeHtml(t('im_workspace_new_chat')) + '</button>',
+    '<button class="workspace-action im-new-chat-btn" type="button" onclick="window.createReceptionistSession(this)">' + escapeHtml(t('im_workspace_new_chat')) + '</button>',
     '</div>',
     '</div>',
     sessionsHtml,

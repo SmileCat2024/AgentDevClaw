@@ -2015,6 +2015,50 @@ body[data-theme="light"] .feature-project-session-item {
   background: rgba(0,0,0,0.3);
 }
 
+.workspace-config-select {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0,0,0,0.2);
+  color: var(--text-primary);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font: inherit;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 34px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(50% - 1px),
+    calc(100% - 12px) calc(50% - 1px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+.workspace-config-select:focus {
+  outline: none;
+  border-color: rgba(88, 166, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+  background: rgba(0,0,0,0.3);
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(88, 166, 255, 0.7) 50%),
+    linear-gradient(135deg, rgba(88, 166, 255, 0.7) 50%, transparent 50%);
+}
+
+.workspace-config-select option {
+  background: var(--panel-bg);
+  color: var(--text-primary);
+}
+
+.workspace-config-select option:checked,
+.workspace-config-select option:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
 .workspace-config-checkbox {
   display: inline-flex;
   align-items: center;
@@ -2073,15 +2117,22 @@ body[data-theme="light"] .feature-project-session-item {
 }
 
 .im-workspace-channel-card {
-  border: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.02);
   border-radius: 16px;
   padding: 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+  border: 1.5px solid var(--border-primary);
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+
+.im-workspace-channel-card:hover {
+  border-color: rgba(88,166,255,0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
 }
 
 .im-workspace-channel-card.selected {
-  border-color: rgba(99, 145, 255, 0.45);
-  background: rgba(99, 145, 255, 0.08);
+  border-color: var(--code-accent);
+  box-shadow: 0 0 0 3px rgba(88,166,255,0.12);
 }
 
 .im-workspace-channel-head {
@@ -2089,7 +2140,20 @@ body[data-theme="light"] .feature-project-session-item {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+}
+
+.im-workspace-channel-desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.im-workspace-channel-card.selected .im-workspace-channel-desc {
+  color: var(--text-muted);
 }
 
 .im-workspace-channel-title {
@@ -2326,12 +2390,17 @@ body[data-theme="light"] .im-dropdown-menu {
 
 body[data-theme="light"] .im-workspace-channel-card {
   border-color: #e2e2e2;
-  background: #fafafa;
+  background: linear-gradient(180deg, rgba(0,0,0,0.015), rgba(0,0,0,0.005));
+}
+
+body[data-theme="light"] .im-workspace-channel-card:hover {
+  border-color: rgba(88,166,255,0.4);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.06);
 }
 
 body[data-theme="light"] .im-workspace-channel-card.selected {
   border-color: #6391ff;
-  background: rgba(99, 145, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(88,166,255,0.1);
 }
 
 body[data-theme="light"] .im-workspace-qrcode img,
@@ -2361,16 +2430,24 @@ body[data-theme="light"] .im-qrcode-dialog-img-wrap img {
   gap: 12px;
   text-align: left;
   border: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.03);
+  background: rgba(255,255,255,0.02);
   border-radius: 12px;
   padding: 12px 14px;
   cursor: pointer;
   color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+
+.im-identity-session-item:hover {
+  border-color: rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.04);
+  transform: translateY(-1px);
 }
 
 .im-identity-session-item.active {
-  border-color: rgba(99, 145, 255, 0.45);
-  background: rgba(99, 145, 255, 0.1);
+  border-color: rgba(88, 166, 255, 0.4);
+  background: rgba(255,255,255,0.04);
+  box-shadow: 0 0 0 3px rgba(88,166,255,0.1);
 }
 
 .im-identity-session-title {
@@ -2386,12 +2463,18 @@ body[data-theme="light"] .im-qrcode-dialog-img-wrap img {
 body[data-theme="light"] .im-identity-card,
 body[data-theme="light"] .im-identity-session-item {
   border-color: #e2e2e2;
-  background: #fafafa;
+  background: rgba(0,0,0,0.02);
+}
+
+body[data-theme="light"] .im-identity-session-item:hover {
+  border-color: rgba(0,0,0,0.12);
+  background: rgba(0,0,0,0.04);
 }
 
 body[data-theme="light"] .im-identity-session-item.active {
   border-color: #6391ff;
-  background: rgba(99, 145, 255, 0.08);
+  background: rgba(0,0,0,0.03);
+  box-shadow: 0 0 0 3px rgba(99,145,255,0.08);
 }
 
 @media (max-width: 900px) {
@@ -5166,4 +5249,63 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .dispatch-detail-error .dispatch-detail-value {
   color: #cf222e;
   font-size: 12px;
+}
+/* ── IM Line Connection ─────────────────────────────────────── */
+.im-line-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.im-line-row {
+  background: var(--panel-bg);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 16px;
+}
+.im-line-row-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.im-line-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.im-line-row-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.im-line-row-controls .workspace-config-select {
+  flex: 1;
+  min-width: 0;
+}
+.im-binding-status {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.im-binding-status.bound {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+.im-binding-status.idle {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+.im-binding-status.unbound {
+  background: rgba(100, 116, 139, 0.15);
+  color: #64748b;
+}
+.im-line-carrier {
+  max-width: 140px;
+}
+.im-line-session {
+  flex: 1;
+}
+.im-line-session[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

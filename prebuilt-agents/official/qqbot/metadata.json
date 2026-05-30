@@ -7,7 +7,7 @@
   "icon": "qq",
   "category": "chatbot",
   "enabled": true,
-  "features": ["qqbot", "weixin-bot", "todo", "audit", "websearch", "shell", "user-input", "mcp", "skill", "subagent"],
+  "features": ["qqbot", "weixin-bot", "todo", "websearch", "shell", "im-operator", "mcp", "skill"],
   "ui": {
     "entry": "home",
     "tabs": [
