@@ -706,7 +706,8 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
     && activeSessionId
     && activeSessionId === String(sessionId || '').trim();
 
-  if (isLiveCurrentSession) {
+  // Only use live-runtime shortcut for summary; trim (empty strategy) goes server-side
+  if (isLiveCurrentSession && strategy) {
     const inputReqRes = await fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/input-requests`);
     const inputRequests = inputReqRes.ok ? await inputReqRes.json().catch(() => []) : [];
     const primaryRequest = Array.isArray(inputRequests) ? inputRequests[0] : null;
@@ -1034,8 +1035,27 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       workspace_sessions: { sessions: remainingSessions, activeSessionId: nextActiveId },
       active_workspace_session_id: nextActiveId,
     });
-    shouldAnimateWorkspaceSurface = false;
-    renderCurrentMainView();
+
+    // Precise DOM removal for IM workspace sessions — avoid full re-render
+    const imDraft = getIMWorkspaceDraft ? getIMWorkspaceDraft() : null;
+    const isIMSession = Array.isArray(imDraft?.sessions);
+    if (isIMSession) {
+      const idx = imDraft.sessions.findIndex((s) => s.id === action.sessionId);
+      if (idx !== -1) imDraft.sessions.splice(idx, 1);
+      if (String(imDraft.workspaceConfig?.receptionistSessionId) === String(action.sessionId)) {
+        imDraft.workspaceConfig.receptionistSessionId = '';
+      }
+      const el = document.querySelector('[data-prebuilt-session-id="' + CSS.escape(action.sessionId) + '"]');
+      if (el) {
+        el.style.transition = 'opacity 0.2s, transform 0.2s';
+        el.style.opacity = '0';
+        el.style.transform = 'translateX(-10px)';
+        setTimeout(() => el.remove(), 200);
+      }
+    } else {
+      shouldAnimateWorkspaceSurface = false;
+      renderCurrentMainView();
+    }
 
     try {
       const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
@@ -1059,13 +1079,22 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (result?.agent) {
         applyManagedPrebuiltAgent(activeAgent.id, result.agent);
       }
-      loadAgents().catch(() => {});
+      // Refresh IM workspace draft in background — no re-render needed if DOM already updated
+      if (isIMSession) {
+        ensureIMWorkspaceLoaded(true).catch(() => {});
+      } else {
+        loadAgents().catch(() => {});
+      }
     } catch (error) {
       console.error('Failed to delete session:', error);
       updateAgentRecord(activeAgent.id, {
         workspace_sessions: { sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
         active_workspace_session_id: targetAgent?.active_workspace_session_id,
       });
+      // Restore IM draft and re-render on failure
+      if (isIMSession) {
+        ensureIMWorkspaceLoaded(true).catch(() => {});
+      }
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
       window.alert((currentLanguage === 'zh' ? '删除会话失败：' : 'Failed to delete session: ') + (error?.message || error));

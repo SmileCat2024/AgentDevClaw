@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { FileSessionStore } from 'agentdev';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+import { buildTrimmedSeedMessages, normalizeExportPolicy } from '../server/context-continuity/handoff-package.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -157,16 +158,19 @@ async function runTitleGeneration({ agentJsPath, agentName, agentId, sessionId }
     const rawMessages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
     logPhase(`raw messages count=${rawMessages.length}`);
 
-    // Same as compact mirror: map raw messages preserving structure
-    const compactMessages = rawMessages.map((message, index) => ({
-      role: message.role,
-      content: typeof message?.content === 'string' ? message.content : '',
-      turn: Number.isFinite(message?.turn) ? Number(message.turn) : index,
-      toolCallId: message?.toolCallId,
-      toolCalls: Array.isArray(message?.toolCalls) ? message.toolCalls : undefined,
-    }));
+    // Run the same trim pipeline used by compact/trim operations
+    // to fold tool activity and produce clean text-only context
+    const trimPolicy = normalizeExportPolicy({
+      includeSystemMessages: true,
+      assistantToolCallMode: 'fold',
+      toolMessageMode: 'fold',
+      toolFoldScope: 'all',
+    });
+    const { seedMessages, stats } = buildTrimmedSeedMessages(rawMessages, trimPolicy);
+    logPhase(`trim stats: original=${stats.originalMessageCount} kept=${stats.keptSeedMessageCount} folded_notes=${stats.foldedToolNoteCount}`);
 
-    const callIndex = typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : compactMessages.length;
+    const compactMessages = seedMessages;
+    const callIndex = compactMessages.length;
 
     compactMessages.push({
       role: 'user',
