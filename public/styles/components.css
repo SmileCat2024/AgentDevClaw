@@ -5289,6 +5289,12 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .im-portal-field { display: flex; flex-direction: column; gap: 4px; }
 .im-portal-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
 .im-portal-card .im-new-chat-btn { width: 100%; }
+.im-portal-card .im-portal-autostart {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0;
+}
 .im-line-connection-section { flex: 1; min-width: 0; }
 
 @media (max-width: 700px) {
@@ -5325,6 +5331,12 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 .im-line-row-controls .im-dropdown {
   flex: 1;
   min-width: 0;
+}
+.im-line-row-controls .im-line-carrier {
+  flex: 0 0 140px;
+}
+.im-line-row-controls .im-line-session {
+  flex: 1;
 }
 .im-dropdown-disabled {
   opacity: 0.45;

@@ -491,6 +491,54 @@ async function fireSingleTarget(s, target) {
 async function fireDispatchNow(schedule) {
   const s = dispatchSchedules.get(schedule.id);
   if (!s || s.status !== 'pending') return;
+
+  // ── start_agent action: just start the runtime, no message/envelope/watchdog ──
+  const actionType = s.action?.type || 'send_message';
+  const isOnBoot = s.trigger?.type === 'on-boot';
+
+  if (actionType === 'start_agent') {
+    const targetList = Array.isArray(s.targets) && s.targets.length > 0
+      ? s.targets
+      : [{ agentId: s.targetAgentId, sessionId: s.targetSessionId }];
+
+    for (const target of targetList) {
+      const agentId = target.agentId || s.targetAgentId;
+      let sessionId = target.sessionId || s.targetSessionId;
+      try {
+        const agent = await requirePrebuiltAgentForRuntime(agentId);
+        // Resolve __latest__ to the actual latest session from the session index
+        if (!sessionId || sessionId === '__latest__') {
+          const idx = await readSessionIndex(agentId);
+          if (idx.activeSessionId) {
+            sessionId = idx.activeSessionId;
+          } else if (idx.sessions.length > 0) {
+            sessionId = idx.sessions[idx.sessions.length - 1].id;
+          }
+        }
+        if (sessionId) {
+          await activatePrebuiltSession(agentId, sessionId);
+        }
+        await startManagedAgent(agent, sessionId || undefined);
+        const connected = await waitForManagedRuntimeReady(agent.id, 15000, sessionId || undefined);
+        console.log(`[Dispatch] start_agent: ${agentId} session=${sessionId || '(auto)'} connected=${!!connected}`);
+        if (isOnBoot) {
+          emitDispatchReadyEvent(agent.id, sessionId);
+        }
+      } catch (err) {
+        console.error(`[Dispatch] start_agent failed for ${agentId}:`, err.message);
+      }
+    }
+
+    // on-boot stays pending (persistent); other triggers mark completed
+    if (!isOnBoot) {
+      s.status = 'completed';
+      s.completedAt = new Date().toISOString();
+      saveDispatchSchedules();
+    }
+    return;
+  }
+
+  // ── send_message action: existing logic ──
   s.status = 'fired';
   s.firedAt = new Date().toISOString();
   s.awaitingResponseSince = Date.now();
@@ -543,6 +591,7 @@ restoreDispatchSchedulesOnBoot();
 function restoreDispatchSchedulesOnBoot() {
   let restoredTimers = 0, restoredIdle = 0, restoredReady = 0;
   let expiredTimersFired = 0, firedTimeouts = 0;
+  let restoredBoot = 0;
 
   for (const s of dispatchSchedules.values()) {
     const triggerType = s.trigger?.type || 'timer';
@@ -616,6 +665,9 @@ function restoreDispatchSchedulesOnBoot() {
       // 恢复到监听体系：emitDispatchReadyEvent 会在 runtime 启动时被调用，
       // 但如果当前已有 runtime 处于 ready 状态，也需要立即检查一次
       restoredReady++;
+    } else if (triggerType === 'on-boot') {
+      // on-boot schedules are fired by fireBootSchedules() after server is fully ready
+      restoredBoot++;
     }
   }
 
@@ -637,9 +689,17 @@ function restoreDispatchSchedulesOnBoot() {
     }
   }
 
-  if (restoredTimers + restoredIdle + restoredReady + expiredTimersFired + firedTimeouts > 0) {
+  if (restoredTimers + restoredIdle + restoredReady + restoredBoot + expiredTimersFired + firedTimeouts > 0) {
     saveDispatchSchedules();
-    console.log(`[Dispatch] recovery sweep: ${restoredTimers} timers, ${restoredIdle} idle, ${restoredReady} ready restored; ${expiredTimersFired} expired timers fired; ${firedTimeouts} fired timed out`);
+    console.log(`[Dispatch] recovery sweep: ${restoredTimers} timers, ${restoredIdle} idle, ${restoredReady} ready, ${restoredBoot} boot restored; ${expiredTimersFired} expired timers fired; ${firedTimeouts} fired timed out`);
+  }
+}
+
+async function fireBootSchedules() {
+  for (const s of dispatchSchedules.values()) {
+    if (s.status !== 'pending' || s.trigger?.type !== 'on-boot') continue;
+    console.log(`[Dispatch] on-boot: ${s.action?.type || 'send_message'} → ${s.targetAgentId}`);
+    await fireDispatchNow(s);
   }
 }
 
@@ -1160,13 +1220,27 @@ function serializeWeixinBindingState(state = null) {
 }
 
 async function buildIMWorkspaceBundle(agentId = 'qqbot') {
-  const [workspaceConfig, qqConfig, weixinConfig, index, phIndex] = await Promise.all([
-    readProjectIMWorkspaceConfig(),
+  let workspaceConfig = await readProjectIMWorkspaceConfig();
+  const [qqConfig, weixinConfig, index, phIndex] = await Promise.all([
     readProjectQQBotConfig(),
     readProjectWeixinConfig(),
     readSessionIndex(agentId).catch(() => ({ sessions: [], activeSessionId: null })),
     readSessionIndex('programming-helper').catch(() => ({ sessions: [], activeSessionId: null })),
   ]);
+
+  // Prune stale line bindings whose target runtime is no longer alive
+  let pruned = false;
+  for (const line of (workspaceConfig.lines || [])) {
+    if (!line.boundSession?.agentId || !line.boundSession?.sessionId) continue;
+    const rt = getAgentRuntime(line.boundSession.agentId, line.boundSession.sessionId);
+    if (!rt?.process || rt.process.exitCode !== null || rt.stopped) {
+      line.boundSession = null;
+      pruned = true;
+    }
+  }
+  if (pruned) {
+    workspaceConfig = await writeProjectIMWorkspaceConfig(workspaceConfig);
+  }
 
   const sessions = Array.isArray(index?.sessions)
     ? index.sessions.map((session) => ({
@@ -5476,13 +5550,16 @@ app.get('/protoclaw/dispatch/schedules', (_req, res) => {
 app.post('/protoclaw/dispatch/schedules', express.json(), async (req, res, next) => {
   try {
     const body = req.body || {};
-    const { targetAgentId, targetSessionId, message, secondsFromNow, newSessionType, projectId, trigger, targets, repeatInterval, loopMaxCount, loopEndTime, onlyActiveSessions } = body;
-    if (!message || typeof message !== 'string') {
+    const { targetAgentId, targetSessionId, message, secondsFromNow, newSessionType, projectId, trigger, targets, repeatInterval, loopMaxCount, loopEndTime, onlyActiveSessions, action } = body;
+    const actionType = action?.type || 'send_message';
+
+    // start_agent tasks don't require a message
+    if (actionType !== 'start_agent' && (!message || typeof message !== 'string')) {
       return res.status(400).json({ error: 'message is required' });
     }
 
     const triggerType = trigger?.type || 'timer';
-    // timer triggers require secondsFromNow
+    // timer triggers require secondsFromNow; on-boot does not
     if (triggerType === 'timer') {
       const secs = Number(secondsFromNow);
       if (!Number.isFinite(secs) || secs <= 0) {
@@ -5503,13 +5580,14 @@ app.post('/protoclaw/dispatch/schedules', express.json(), async (req, res, next)
       newSessionType: newSessionType || null,
       projectId: projectId || null,
       trigger: triggerType !== 'timer' ? { type: triggerType, idleThreshold: trigger?.idleThreshold || 300 } : null,
+      action: actionType !== 'send_message' ? { type: actionType } : null,
       targets: Array.isArray(targets) && targets.length > 0 ? targets : null,
       repeatInterval: Number(repeatInterval) > 0 ? Number(repeatInterval) : null,
       loopMaxCount: Number(loopMaxCount) > 0 ? Number(loopMaxCount) : null,
       loopEndTime: Number(loopEndTime) > 0 ? Number(loopEndTime) : null,
       loopFiredCount: 0,
       onlyActiveSessions: !!onlyActiveSessions,
-      message,
+      message: message || '',
       status: 'pending',
       createdAt: new Date().toISOString(),
       firedAt: null,
@@ -5517,7 +5595,10 @@ app.post('/protoclaw/dispatch/schedules', express.json(), async (req, res, next)
     };
     dispatchSchedules.set(id, schedule);
     saveDispatchSchedules();
-    scheduleDispatchFire(schedule);
+    // on-boot schedules are fired by fireBootSchedules() on server ready, not here
+    if (triggerType !== 'on-boot') {
+      scheduleDispatchFire(schedule);
+    }
     res.json(schedule);
   } catch (error) { next(error); }
 });
@@ -5581,6 +5662,10 @@ app.post('/protoclaw/dispatch/respond', express.json(), (req, res) => {
   if (scheduleId) {
     const s = dispatchSchedules.get(scheduleId);
     if (s) {
+      // start_agent schedules don't expect responses; just acknowledge
+      if ((s.action?.type || 'send_message') === 'start_agent') {
+        return res.json({ ok: true });
+      }
       // 清除看门狗定时器（如果存在）
       const watchdogKey = `__watchdog_${scheduleId}`;
       const watchdog = dispatchTimers.get(watchdogKey);
@@ -6178,6 +6263,21 @@ app.put('/protoclaw/im_workspace_bundle', express.json(), async (req, res, next)
     const channelChanged = newChannel !== (prevConfig.selectedChannel || 'qq');
     let portalRestarted = false;
 
+    // Enforce three-way exclusivity: if portal's new channel conflicts with a line, clear that line
+    if (channelChanged && newChannel) {
+      let conflicted = false;
+      for (const line of (workspaceConfig.lines || [])) {
+        if (line.carrier === newChannel) {
+          line.carrier = '';
+          line.boundSession = null;
+          conflicted = true;
+        }
+      }
+      if (conflicted) {
+        await writeProjectIMWorkspaceConfig(workspaceConfig);
+      }
+    }
+
     if (channelChanged) {
       const runtimes = listAgentRuntimes('qqbot');
       const running = runtimes.filter((rt) => rt?.process && rt.process.exitCode === null && !rt.stopped);
@@ -6298,6 +6398,13 @@ app.get('/protoclaw/im_line_binding', async (req, res) => {
     const match = (config.lines || []).find(
       l => l.carrier && l.boundSession && l.boundSession.agentId === qAgentId && l.boundSession.sessionId === qSessionId
     );
+    if (match) {
+      const rt = getAgentRuntime(qAgentId, qSessionId);
+      if (!rt?.process || rt.process.exitCode !== null || rt.stopped) {
+        res.json({ carrier: null });
+        return;
+      }
+    }
     res.json(match ? { carrier: match.carrier, lineId: match.id } : { carrier: null });
   } catch {
     res.json({ carrier: null });
@@ -6345,6 +6452,20 @@ app.post('/protoclaw/im_line_transfer', express.json(), async (req, res, next) =
       line.boundSession = null;
     }
 
+    // Enforce three-way exclusivity: clear conflicting entities
+    for (const otherLine of (config.lines || [])) {
+      if (otherLine.id !== lineId && otherLine.carrier === carrier) {
+        otherLine.carrier = '';
+        otherLine.boundSession = null;
+      }
+    }
+    if (config.selectedChannel === carrier) {
+      const available = ['qq', 'weixin'].find(c =>
+        c !== carrier && !(config.lines || []).some(l => l.carrier === c)
+      );
+      config.selectedChannel = available || '';
+    }
+
     await writeProjectIMWorkspaceConfig(config);
 
     // Unmount from the OLD session (if different from new)
@@ -6387,7 +6508,6 @@ app.post('/protoclaw/im_line_disconnect', express.json(), async (req, res, next)
 
     // Remember the previous binding so we can notify that session
     const prevBinding = line.boundSession || null;
-    line.carrier = '';
     line.boundSession = null;
     await writeProjectIMWorkspaceConfig(config);
 
@@ -8664,6 +8784,7 @@ async function main() {
   app.listen(APP_PORT, () => {
     log('server', `product ui: http://127.0.0.1:${APP_PORT}`);
     log('server', `viewer worker: ${VIEWER_ORIGIN}`);
+    fireBootSchedules();
   });
 }
 

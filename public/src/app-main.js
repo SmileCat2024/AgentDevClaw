@@ -3510,6 +3510,41 @@ window.imSelectLine = (item, type, lineId) => {
   }
 };
 
+window.togglePortalAgentAutostart = async (enabled, existingScheduleId) => {
+  try {
+    if (enabled && !existingScheduleId) {
+      const res = await fetch('/protoclaw/dispatch/schedules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetAgentId: 'qqbot',
+          targetSessionId: '__latest__',
+          trigger: { type: 'on-boot' },
+          action: { type: 'start_agent' },
+          message: '',
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+    } else if (!enabled && existingScheduleId) {
+      const res = await fetch('/protoclaw/dispatch/schedules/' + encodeURIComponent(existingScheduleId), {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error(await res.text());
+    }
+    await window.loadDispatchSchedules();
+    var cb = document.querySelector('.im-portal-autostart input[type=checkbox]');
+    if (cb) {
+      var updated = (window._dispatchSchedules || []).filter(function(sc) {
+        return sc.trigger?.type === 'on-boot' && sc.action?.type === 'start_agent'
+          && sc.targetAgentId === 'qqbot' && sc.status === 'pending';
+      });
+      cb.dataset.autostartScheduleId = updated[0]?.id || '';
+    }
+  } catch (err) {
+    console.error('Failed to toggle autostart:', err);
+  }
+};
+
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.im-dropdown')) {
     document.querySelectorAll('.im-dropdown.open').forEach((d) => d.classList.remove('open'));
