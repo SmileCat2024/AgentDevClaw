@@ -116,6 +116,7 @@ function buildSyntheticRuntimeEntry(prebuiltAgent) {
     id: runtimeId,
     ownerId: prebuiltAgent.id,
     runtimeId,
+    sessionId: prebuiltAgent.active_workspace_session_id || '',
     name: prebuiltAgent.active_workspace_display_name
       || prebuiltAgent.active_workspace_session_title
       || `${prebuiltAgent.name || prebuiltAgent.id} Runtime`,
@@ -134,6 +135,7 @@ function buildChildRuntimeEntry(runtimeAgent) {
     id: runtimeAgent.id || runtimeId,
     ownerId,
     runtimeId,
+    sessionId: runtimeAgent.active_workspace_session_id || '',
     name: runtimeAgent.active_workspace_display_name
       || runtimeAgent.active_workspace_agent_name
       || runtimeAgent.active_workspace_session_title
@@ -238,6 +240,7 @@ function renderSidebarChildItems(entries) {
             data-agent-id="${escapeHtml(entry.runtimeId)}"
             data-agent-prebuilt="false"
             data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
+            data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
           >
             <div class="agent-line">
               <span class="agent-status-dot"></span>
@@ -578,6 +581,27 @@ agentList.addEventListener('contextmenu', (event) => {
   const item = event.target.closest('.agent-item');
   if (!item) return;
   if (item.dataset.agentContextMenu !== 'true') return;
+
+  // ── Generic ctx-menu: check for data-ctx-* on runtime items ──
+  const ctxEl = item.closest('[data-ctx-role]');
+  if (ctxEl) {
+    const role = ctxEl.dataset.ctxRole;
+    const ns = ctxEl.dataset.ctxNs;
+    const id = ctxEl.dataset.ctxId;
+    const variant = ctxEl.dataset.ctxVariant || 'default';
+    const items = getCtxMenuItems(role, ns, variant, id);
+    if (items.length > 0) {
+      event.preventDefault();
+      window.closeCtxMenu();
+      closeAgentContextMenu();
+      closeSessionContextMenu();
+      closeCompactMenu();
+      closeProjectContextMenu();
+      const sessionId = ctxEl.dataset.ctxSessionId || '';
+      window.showCtxMenu(event.clientX, event.clientY, items, { role, ns, id, variant, sessionId });
+      return;
+    }
+  }
 
   const agentId = item.dataset.agentId;
   if (!agentId) return;
@@ -2190,6 +2214,84 @@ window.phSelectDirectoryAndCreateSession = async () => {
     renderCurrentMainView();
   }
 };
+
+/* ══════════════════════════════════════
+   Generic ctx-menu: declaration table + dispatcher
+   ══════════════════════════════════════ */
+
+function getCtxMenuItems(role, ns, variant, id) {
+  if (role === 'runtime' && ns === 'programming-helper') {
+    return [
+      { label: currentLanguage === 'zh' ? '总结历史（摘要）' : 'Summary', action: 'summary' },
+      { label: currentLanguage === 'zh' ? '精简历史（Trim）' : 'Trim', action: 'trim' },
+      { label: currentLanguage === 'zh' ? '创建分支' : 'Branch', action: 'branch' },
+      { type: 'separator' },
+      { label: currentLanguage === 'zh' ? '重启 Agent' : 'Restart Agent', action: 'restart' },
+      { label: currentLanguage === 'zh' ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
+    ];
+  }
+  if (role === 'session' && ns === 'programming-helper') {
+    return [
+      { label: currentLanguage === 'zh' ? '删除对话' : 'Delete', action: 'delete-session', danger: true },
+    ];
+  }
+  return [];
+}
+
+function dispatchCtxAction(action, target) {
+  if (!action || !target) return;
+  const { ns, id, sessionId } = target;
+
+  switch (action) {
+    case 'activate':
+      window.switchAgent(id);
+      break;
+
+    case 'summary':
+      if (ns && sessionId) {
+        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', sessionId, compactType: 'summary' }));
+      }
+      break;
+
+    case 'trim':
+      if (ns && sessionId) {
+        window.openTrimDialog(ns, sessionId);
+      }
+      break;
+
+    case 'branch':
+      if (ns && sessionId) {
+        window.openBranchDialog(ns, sessionId);
+      }
+      break;
+
+    case 'restart':
+      window.closeCtxMenu();
+      contextMenuAgentId = id;
+      contextMenuAgentMode = (variant === 'managed-runtime') ? 'prebuilt-runtime'
+        : (variant === 'child') ? 'child-runtime'
+        : 'external-runtime';
+      restartAgentAction.click();
+      break;
+
+    case 'stop':
+      window.closeCtxMenu();
+      contextMenuAgentId = id;
+      contextMenuAgentMode = (variant === 'managed-runtime') ? 'prebuilt-runtime'
+        : (variant === 'child') ? 'child-runtime'
+        : 'external-runtime';
+      stopAgentAction.click();
+      break;
+
+    case 'delete-session':
+      window.closeCtxMenu();
+      window.runWorkspaceAction(JSON.stringify({ type: 'delete_session', sessionId: id }));
+      break;
+
+    default:
+      console.warn('Unknown ctx-menu action:', action, target);
+  }
+}
 
 window.showCompactMenu = (event, buttonElement) => {
   if (event) {
@@ -4269,6 +4371,21 @@ deleteFeatureAction.addEventListener('click', async () => {
 });
 
 document.addEventListener('click', (event) => {
+  // ── Generic ctx-menu action handling ──
+  const ctxBtn = event.target.closest('#ctx-menu button.ctx-menu-item[data-ctx-action]');
+  if (ctxBtn && ctxMenu.classList.contains('open')) {
+    const action = ctxBtn.dataset.ctxAction;
+    if (action && window._ctxTarget) {
+      dispatchCtxAction(action, window._ctxTarget);
+    }
+    window.closeCtxMenu();
+    return;
+  }
+  // Close ctx-menu on outside click
+  if (!ctxMenu.contains(event.target)) {
+    window.closeCtxMenu();
+  }
+
   if (!agentContextMenu.contains(event.target)) {
     closeAgentContextMenu();
   }
@@ -4287,6 +4404,7 @@ document.addEventListener('click', (event) => {
 });
 
 window.addEventListener('resize', () => {
+  window.closeCtxMenu();
   closeAgentContextMenu();
   closeCompactMenu();
   closeProjectContextMenu();
@@ -4305,8 +4423,29 @@ window.addEventListener('scroll', () => {
   requestAnimationFrame(updateAssemblySideRailPosition);
 }, true);
 container.addEventListener('wheel', markManualScrollIntent, { passive: true });
+container.addEventListener('wheel', () => window.closeCtxMenu(), { passive: true });
 container.addEventListener('touchstart', markManualScrollIntent, { passive: true });
 container.addEventListener('contextmenu', (event) => {
+  // ── Generic ctx-menu for workspace sessions ──
+  const ctxEl = event.target.closest('[data-ctx-role]');
+  if (ctxEl) {
+    const role = ctxEl.dataset.ctxRole;
+    const ns = ctxEl.dataset.ctxNs;
+    const id = ctxEl.dataset.ctxId;
+    const variant = ctxEl.dataset.ctxVariant || 'default';
+    const items = getCtxMenuItems(role, ns, variant, id);
+    if (items.length > 0) {
+      event.preventDefault();
+      window.closeCtxMenu();
+      closeAgentContextMenu();
+      closeSessionContextMenu();
+      closeCompactMenu();
+      closeProjectContextMenu();
+      window.showCtxMenu(event.clientX, event.clientY, items, { role, ns, id, variant });
+      return;
+    }
+  }
+
   const featureRepoItem = event.target.closest('.workspace-repo-card[data-feature-repo-package-id]');
   if (featureRepoItem) {
     event.preventDefault();

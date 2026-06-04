@@ -215,6 +215,7 @@ const projectContextMenu = document.getElementById('project-context-menu');
 const deleteProjectAction = document.getElementById('delete-project-action');
 const featureRepoContextMenu = document.getElementById('feature-repo-context-menu');
 const deleteFeatureAction = document.getElementById('delete-feature-action');
+const ctxMenu = document.getElementById('ctx-menu');
 const followLatestButton = document.getElementById('follow-latest-btn');
 const workspaceTabsBar = document.getElementById('workspace-tabs-bar');
 const projectDocsetToggle = document.getElementById('project-docset-toggle');

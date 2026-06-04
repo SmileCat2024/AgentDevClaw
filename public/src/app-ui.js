@@ -1972,7 +1972,7 @@ function renderWorkspaceSessionList(agent, block) {
             }
 
             return [
-              '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '">',
+              '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '">',
               '<div class="workspace-history-main">',
               '<div class="workspace-history-title-row">',
               '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
@@ -9658,3 +9658,59 @@ window.handleSessionTitleDoubleClick = function(event) {
     }
   });
 };
+
+/* ══════════════════════════════════════
+   Generic ctx-menu system
+   ══════════════════════════════════════ */
+
+let _ctxTarget = null;
+
+function escapeHtmlCtx(s) {
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+function renderCtxItems(items) {
+  return items.map((item, i) => {
+    if (item.type === 'separator') return '<div class="ctx-menu-sep"></div>';
+    if (item.submenu) {
+      return '<button class="ctx-menu-item has-submenu" type="button">'
+        + escapeHtmlCtx(item.label)
+        + '<span class="ctx-menu-arrow">›</span>'
+        + '<div class="ctx-sub">' + renderCtxItems(item.submenu) + '</div>'
+        + '</button>';
+    }
+    const cls = ['ctx-menu-item'];
+    if (item.danger) cls.push('danger');
+    if (item.disabled) cls.push('disabled');
+    return '<button class="' + cls.join(' ') + '" type="button" data-ctx-action="' + escapeHtmlCtx(item.action) + '">'
+      + escapeHtmlCtx(item.label)
+      + '</button>';
+  }).join('');
+}
+
+function showCtxMenu(x, y, items, target) {
+  _ctxTarget = target;
+  window._ctxTarget = target;
+  ctxMenu.innerHTML = renderCtxItems(items);
+  ctxMenu.classList.add('open');
+  ctxMenu.style.left = '0px';
+  ctxMenu.style.top = '0px';
+  const rect = ctxMenu.getBoundingClientRect();
+  const margin = 8;
+  const maxLeft = window.innerWidth - rect.width - margin;
+  const maxTop = window.innerHeight - rect.height - margin;
+  ctxMenu.style.left = Math.max(margin, Math.min(x, maxLeft)) + 'px';
+  ctxMenu.style.top = Math.max(margin, Math.min(y, maxTop)) + 'px';
+}
+
+function closeCtxMenu() {
+  ctxMenu.classList.remove('open');
+  ctxMenu.innerHTML = '';
+  _ctxTarget = null;
+  window._ctxTarget = null;
+}
+
+window.showCtxMenu = showCtxMenu;
+window.closeCtxMenu = closeCtxMenu;

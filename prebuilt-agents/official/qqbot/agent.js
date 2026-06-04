@@ -95,7 +95,7 @@ class IMOperatorFeature {
       {
         name: 'im_overview',
         description: '查看所有 IM 线路的当前状态。返回每条线路的载体（QQ/微信）和绑定会话信息。',
-        inputSchema: {
+        parameters: {
           type: 'object',
           properties: {},
           required: [],
@@ -129,7 +129,7 @@ class IMOperatorFeature {
       {
         name: 'im_browse',
         description: '列出所有可连接的工作空间会话。返回每个工作空间下的项目和在线会话，包含 im_connect_line 所需的 agentId 和 sessionId。',
-        inputSchema: {
+        parameters: {
           type: 'object',
           properties: {},
           required: [],
@@ -165,7 +165,7 @@ class IMOperatorFeature {
       {
         name: 'im_connect_line',
         description: '将指定线路连接到目标会话。连接后该线路的 IM 消息将由目标会话处理。先用 im_overview 获取 lineId，用 im_browse 获取 agentId 和 sessionId。',
-        inputSchema: {
+        parameters: {
           type: 'object',
           properties: {
             lineId: { type: 'string', description: '线路 ID，来自 im_overview 返回的 lines[].id（如 line1、line2）' },
@@ -205,7 +205,7 @@ class IMOperatorFeature {
       {
         name: 'im_disconnect_line',
         description: '断开指定线路的当前连接。',
-        inputSchema: {
+        parameters: {
           type: 'object',
           properties: {
             lineId: { type: 'string', description: '线路 ID' },
