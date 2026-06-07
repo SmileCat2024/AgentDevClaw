@@ -173,6 +173,9 @@ function isRuntimeCalling(runtimeId) {
 }
 
 function resolveNotificationCallingState(notifData) {
+  if (notifData?.runtime && notifData.runtime.callActive !== undefined) {
+    return notifData.runtime.callActive === true;
+  }
   const stateType = String(notifData?.state?.type || '').trim();
   if (stateType === 'call.start') {
     return true;
@@ -187,6 +190,397 @@ function resolveNotificationCallingState(notifData) {
     return false;
   }
   return notifData?.callActive === true;
+}
+
+function normalizeNotificationRuntimeSnapshot(runtime) {
+  return {
+    stage: typeof runtime?.stage === 'string' ? runtime.stage : 'idle',
+    callActive: runtime?.callActive === true,
+    charCount: typeof runtime?.charCount === 'number' ? runtime.charCount : 0,
+    thinkingChars: typeof runtime?.thinkingChars === 'number' ? runtime.thinkingChars : 0,
+    contentChars: typeof runtime?.contentChars === 'number' ? runtime.contentChars : 0,
+    toolCallCount: typeof runtime?.toolCallCount === 'number' ? runtime.toolCallCount : 0,
+    activeToolNames: Array.isArray(runtime?.activeToolNames) ? runtime.activeToolNames.map((item) => String(item || '')).filter(Boolean) : [],
+    activeToolCount: typeof runtime?.activeToolCount === 'number' ? runtime.activeToolCount : 0,
+    callStartedAt: typeof runtime?.callStartedAt === 'number' ? runtime.callStartedAt : 0,
+    stageStartedAt: typeof runtime?.stageStartedAt === 'number' ? runtime.stageStartedAt : 0,
+    retryAttempt: typeof runtime?.retryAttempt === 'number' ? runtime.retryAttempt : undefined,
+    maxRetries: typeof runtime?.maxRetries === 'number' ? runtime.maxRetries : undefined,
+    nextRetryDelayMs: typeof runtime?.nextRetryDelayMs === 'number' ? runtime.nextRetryDelayMs : undefined,
+    updatedAt: typeof runtime?.updatedAt === 'number' ? runtime.updatedAt : 0,
+    lastErrorType: typeof runtime?.lastErrorType === 'string' ? runtime.lastErrorType : null,
+    lastErrorMessage: typeof runtime?.lastErrorMessage === 'string' ? runtime.lastErrorMessage : null,
+  };
+}
+
+function getRuntimeStageLabel(runtime) {
+  switch (runtime.stage) {
+    case 'llm_thinking':
+      return t('phase_thinking');
+    case 'llm_content':
+      return t('phase_content');
+    case 'llm_tool_call_building':
+      return t('phase_tool_calling');
+    case 'tool_executing':
+      return t('phase_tool_executing');
+    case 'retry_waiting':
+      return t('phase_retry_waiting');
+    case 'retry_requesting':
+      return t('phase_retry_requesting');
+    case 'awaiting_runtime':
+      return t('phase_processing');
+    case 'completed':
+      return t('phase_completed');
+    case 'failed':
+      return t('phase_failed');
+    default:
+      return runtime.callActive ? t('phase_processing') : '';
+  }
+}
+
+function getCompactRuntimeLabel(runtime, isConnected = true) {
+  if (!isConnected) {
+    return t('runtime_status_disconnected');
+  }
+  if (runtime.stage === 'llm_thinking') {
+    return runtime.thinkingChars > 0
+      ? `${currentLanguage === 'zh' ? '思考' : 'Thinking'} ${formatRuntimeCompactNumber(runtime.thinkingChars)} ${t('runtime_unit_chars')}`
+      : (currentLanguage === 'zh' ? '思考中' : 'Thinking');
+  }
+  if (runtime.stage === 'llm_content') {
+    const outputCount = runtime.contentChars || runtime.charCount;
+    return outputCount > 0
+      ? `${currentLanguage === 'zh' ? '生成' : 'Generating'} ${formatRuntimeCompactNumber(outputCount)} ${t('runtime_unit_chars')}`
+      : (currentLanguage === 'zh' ? '生成中' : 'Generating');
+  }
+  if (runtime.stage === 'llm_tool_call_building') {
+    return currentLanguage === 'zh' ? '准备工具' : 'Preparing Tools';
+  }
+  if (runtime.stage === 'tool_executing') {
+    const toolSummary = summarizeRuntimeToolNames(runtime.activeToolNames);
+    return toolSummary
+      ? `${currentLanguage === 'zh' ? '执行工具' : 'Running Tools'} · ${toolSummary}`
+      : (currentLanguage === 'zh' ? '执行工具' : 'Running Tools');
+  }
+  if (runtime.stage === 'retry_waiting') {
+    return currentLanguage === 'zh' ? '重试等待' : 'Retry Waiting';
+  }
+  if (runtime.stage === 'retry_requesting') {
+    return currentLanguage === 'zh' ? '重新请求' : 'Retrying';
+  }
+  if (runtime.stage === 'failed') {
+    return currentLanguage === 'zh' ? '请求失败' : 'Failed';
+  }
+  if (runtime.stage === 'completed') {
+    return currentLanguage === 'zh' ? '已完成' : 'Done';
+  }
+  if (runtime.callActive) {
+    if (runtime.toolCallCount > 0 || runtime.activeToolCount > 0) {
+      if (runtime.activeToolCount > 0) {
+        const toolSummary = summarizeRuntimeToolNames(runtime.activeToolNames);
+        return toolSummary
+          ? `${currentLanguage === 'zh' ? '执行工具' : 'Running Tools'} · ${toolSummary}`
+          : (currentLanguage === 'zh' ? '执行工具' : 'Running Tools');
+      }
+      return currentLanguage === 'zh' ? '等待工具结果' : 'Waiting for Tools';
+    }
+    return t('runtime_status_waiting_model');
+  }
+  return '';
+}
+
+function formatRuntimeCompactNumber(value) {
+  if (!Number.isFinite(value)) return '0';
+  return Number(value).toLocaleString();
+}
+
+function formatRuntimeDuration(ms) {
+  const safeMs = Math.max(0, Number(ms) || 0);
+  const totalSeconds = Math.floor(safeMs / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return `${minutes}m ${seconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return `${hours}h ${restMinutes}m`;
+}
+
+function summarizeRuntimeToolNames(toolNames) {
+  const normalized = Array.isArray(toolNames)
+    ? toolNames.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (normalized.length <= 2) {
+    return normalized.join(', ');
+  }
+  const visible = normalized.slice(0, 2).join(', ');
+  const remaining = normalized.length - 2;
+  return currentLanguage === 'zh'
+    ? `${visible} +${remaining}个`
+    : `${visible} +${remaining}`;
+}
+
+function getPendingToolCallsFromMessages(messages = currentMessages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return [];
+  }
+  const completedToolCallIds = new Set(
+    messages
+      .filter((msg) => msg?.role === 'tool' && msg?.toolCallId)
+      .map((msg) => String(msg.toolCallId))
+  );
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const msg = messages[index];
+    if (!Array.isArray(msg?.toolCalls) || msg.toolCalls.length === 0) {
+      continue;
+    }
+    const pendingCalls = msg.toolCalls.filter((call) => !completedToolCallIds.has(String(call?.id || '')));
+    if (pendingCalls.length > 0) {
+      return pendingCalls;
+    }
+  }
+  return [];
+}
+
+function getDerivedStageFromState(stateType = '', stateData = null, currentStage = 'idle') {
+  if (stateType === 'call.start') return 'awaiting_runtime';
+  if (stateType === 'call.finish') return 'completed';
+  if (stateType === 'tool.start') return 'tool_executing';
+  if (stateType === 'tool.complete') return currentStage === 'tool_executing' ? 'awaiting_runtime' : currentStage;
+  if (stateType === 'llm.char_count') {
+    const phase = String(stateData?.phase || '').trim();
+    if (phase === 'thinking') return 'llm_thinking';
+    if (phase === 'content') return 'llm_content';
+    if (phase === 'tool_calling') return 'llm_tool_call_building';
+  }
+  if (stateType === 'llm.complete') {
+    return currentStage === 'tool_executing' ? 'tool_executing' : 'awaiting_runtime';
+  }
+  return currentStage;
+}
+
+function getNotificationActionSource(notifData) {
+  const state = notifData?.state && typeof notifData.state === 'object' ? notifData.state : null;
+  const event = notifData?.event && typeof notifData.event === 'object' ? notifData.event : null;
+  if (event && (!state || (Number(event.timestamp) || 0) >= (Number(state.timestamp) || 0))) {
+    return event;
+  }
+  return state;
+}
+
+function getEffectiveRuntimeSnapshot(notifData) {
+  const runtime = normalizeNotificationRuntimeSnapshot(notifData?.runtime);
+  const nextCalling = resolveNotificationCallingState(notifData);
+  const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId) || 'none';
+  const actionSource = getNotificationActionSource(notifData);
+  const stateType = String(actionSource?.type || '').trim();
+  const stateData = actionSource?.data && typeof actionSource.data === 'object'
+    ? actionSource.data
+    : null;
+  const remembered = _runtimeStatusMemory.get(runtimeId) || null;
+
+  if (nextCalling) {
+    runtime.callActive = true;
+  }
+
+  if (stateType === 'llm.char_count' && stateData) {
+    if (typeof stateData.charCount === 'number') {
+      runtime.charCount = stateData.charCount;
+    }
+    if (typeof stateData.toolCallCount === 'number') {
+      runtime.toolCallCount = stateData.toolCallCount;
+    }
+    const phase = String(stateData.phase || '').trim();
+    if (phase === 'thinking' && typeof stateData.charCount === 'number') {
+      runtime.thinkingChars = stateData.charCount;
+    }
+    if (phase === 'content' && typeof stateData.charCount === 'number') {
+      runtime.contentChars = stateData.charCount;
+    }
+  }
+
+  const derivedStage = getDerivedStageFromState(stateType, stateData, runtime.stage);
+  const runtimeAlreadyExpressive = runtime.stage !== 'idle'
+    && runtime.stage !== 'completed'
+    && runtime.stage !== 'failed';
+  const shouldUseDerivedStage = !runtimeAlreadyExpressive
+    || runtime.stage === 'awaiting_runtime'
+    || runtime.updatedAt <= 0;
+  if (shouldUseDerivedStage && derivedStage && derivedStage !== 'idle') {
+    runtime.stage = derivedStage;
+  }
+
+  if (runtime.callActive && (runtime.stage === 'idle' || runtime.stage === 'completed' || runtime.stage === 'failed')) {
+    runtime.stage = 'awaiting_runtime';
+  }
+
+  const pendingToolCalls = getPendingToolCallsFromMessages();
+  if (runtime.callActive && pendingToolCalls.length > 0) {
+    runtime.toolCallCount = Math.max(runtime.toolCallCount || 0, pendingToolCalls.length);
+    if (!Array.isArray(runtime.activeToolNames) || runtime.activeToolNames.length === 0) {
+      runtime.activeToolNames = pendingToolCalls
+        .map((call) => String(call?.name || '').trim())
+        .filter(Boolean);
+      runtime.activeToolCount = runtime.activeToolNames.length;
+    }
+    if (runtime.stage === 'awaiting_runtime' || runtime.stage === 'idle') {
+      runtime.stage = runtime.activeToolCount > 0 ? 'tool_executing' : 'awaiting_runtime';
+    }
+  }
+
+  const rememberedHadToolPhase = remembered
+    && (remembered.stage === 'tool_executing'
+      || remembered.stage === 'llm_tool_call_building'
+      || remembered.toolCallCount > 0);
+  const currentHasToolSignals = runtime.toolCallCount > 0
+    || runtime.activeToolCount > 0
+    || runtime.stage === 'tool_executing'
+    || runtime.stage === 'llm_tool_call_building';
+  if (runtime.callActive
+    && runtime.stage === 'awaiting_runtime'
+    && (currentHasToolSignals || rememberedHadToolPhase)) {
+    runtime.stage = runtime.activeToolCount > 0 ? 'tool_executing' : 'awaiting_runtime';
+  }
+
+  if (remembered && runtime.callStartedAt <= 0 && remembered.callStartedAt > 0) {
+    runtime.callStartedAt = remembered.callStartedAt;
+  }
+  if (runtime.callActive && runtime.callStartedAt <= 0) {
+    runtime.callStartedAt = remembered?.callStartedAt || runtime.updatedAt || Date.now();
+  }
+
+  if (remembered && runtime.stageStartedAt <= 0 && remembered.stage === runtime.stage && remembered.stageStartedAt > 0) {
+    runtime.stageStartedAt = remembered.stageStartedAt;
+  }
+  if (runtime.stageStartedAt <= 0) {
+    runtime.stageStartedAt = remembered?.stage === runtime.stage
+      ? (remembered.stageStartedAt || runtime.updatedAt || Date.now())
+      : (runtime.updatedAt || Date.now());
+  }
+
+  if (!runtime.callActive && stateType === 'call.finish') {
+    runtime.stage = runtime.stage === 'failed' ? 'failed' : 'completed';
+  }
+
+  if (runtime.callActive) {
+    _runtimeStatusMemory.set(runtimeId, {
+      callStartedAt: runtime.callStartedAt,
+      stage: runtime.stage,
+      stageStartedAt: runtime.stageStartedAt,
+      toolCallCount: runtime.toolCallCount,
+    });
+  } else if (runtime.stage === 'completed' || runtime.stage === 'failed') {
+    _runtimeStatusMemory.set(runtimeId, {
+      callStartedAt: runtime.callStartedAt || remembered?.callStartedAt || Date.now(),
+      stage: runtime.stage,
+      stageStartedAt: runtime.stageStartedAt || remembered?.stageStartedAt || Date.now(),
+      toolCallCount: runtime.toolCallCount,
+    });
+  } else {
+    _runtimeStatusMemory.delete(runtimeId);
+  }
+  return runtime;
+}
+
+function getRuntimeSummary(runtime, isConnected = true) {
+  if (!isConnected) {
+    return t('runtime_status_disconnected');
+  }
+  if (runtime.stage === 'llm_thinking') {
+    return t('runtime_status_thinking_active');
+  }
+  if (runtime.stage === 'llm_content') {
+    return t('runtime_status_streaming_active');
+  }
+  if (runtime.stage === 'llm_tool_call_building') {
+    return t('runtime_status_building_tools');
+  }
+  if (runtime.stage === 'tool_executing') {
+    const toolSummary = summarizeRuntimeToolNames(runtime.activeToolNames);
+    return toolSummary
+      ? `${t('runtime_status_executing_tools')} · ${toolSummary}`
+      : t('runtime_status_executing_tools');
+  }
+  if (runtime.stage === 'retry_waiting') {
+    return t('runtime_status_retry_waiting');
+  }
+  if (runtime.stage === 'retry_requesting') {
+    return t('runtime_status_retry_requesting');
+  }
+  if (runtime.stage === 'failed') {
+    return runtime.lastErrorMessage || t('runtime_status_failed');
+  }
+  if (runtime.stage === 'completed') {
+    return t('runtime_status_completed');
+  }
+  if (runtime.callActive) {
+    if ((runtime.toolCallCount > 0 || runtime.activeToolCount > 0) && runtime.activeToolCount === 0) {
+      return t('runtime_status_waiting_tool_results');
+    }
+    if (runtime.charCount === 0 && runtime.contentChars === 0 && runtime.thinkingChars === 0) {
+      return t('runtime_status_waiting_model');
+    }
+    const freshnessMs = runtime.updatedAt > 0 ? Math.max(0, Date.now() - runtime.updatedAt) : 0;
+    if (freshnessMs >= 8000) {
+      return t('runtime_status_stale');
+    }
+    return t('runtime_status_processing');
+  }
+  return '';
+}
+
+function getRuntimeTimerLabel(runtime) {
+  const now = Date.now();
+  if (runtime.stageStartedAt > 0) {
+    return formatRuntimeDuration(now - runtime.stageStartedAt);
+  }
+  return '0s';
+}
+
+function renderRuntimeTimer(runtime, isConnected = true) {
+  const toneClass = !isConnected || runtime.stage === 'failed' ? 'alert' : '';
+  return `<span class="notification-metric ${toneClass}"><span class="notification-metric-value">${escapeHtml(getRuntimeTimerLabel(runtime))}</span></span>`;
+}
+
+function refreshNotificationTimerDisplay() {
+  const statusEl = document.getElementById('notification-status');
+  const metricsEl = document.getElementById('notification-metrics');
+  if (!statusEl || !metricsEl) return;
+  if (statusEl.style.display === 'none') return;
+  if (!_lastRenderedNotificationRuntime) return;
+  metricsEl.innerHTML = renderRuntimeTimer(_lastRenderedNotificationRuntime, currentRuntimeConnected);
+}
+
+function ensureNotificationClockTimer() {
+  if (_notificationClockTimer) return;
+  _notificationClockTimer = window.setInterval(() => {
+    refreshNotificationTimerDisplay();
+  }, 200);
+}
+
+function getRuntimeStageClass(runtime) {
+  return `stage-${String(runtime?.stage || 'idle').replace(/[^a-z0-9_-]/gi, '-')}`;
+}
+
+function shouldShowRuntimeStatus(runtime, stateType = '') {
+  if (runtime.callActive && runtime.stage !== 'idle') {
+    return true;
+  }
+  const settledRecently = runtime.updatedAt > 0 && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' ? 8000 : 1800);
+  return ((runtime.stage === 'completed' || runtime.stage === 'failed') && settledRecently)
+    || stateType === 'llm.char_count'
+    || stateType === 'llm.complete';
+}
+
+function shouldStatusUseQueueSync(runtime) {
+  return runtime.stage === 'llm_thinking'
+    || runtime.stage === 'llm_content'
+    || runtime.stage === 'llm_tool_call_building';
 }
 
 function getInputSurfaceMode(requests = currentInputRequests || []) {
@@ -262,6 +656,12 @@ const AGENT_ICONS = {
   'dispatch-console': 'dispatch-console.svg',
   'programming-helper': 'programming-helper.svg',
 };
+
+let currentRuntimeConnected = true;
+let lastNotificationStatusPayload = null;
+const _runtimeStatusMemory = new Map();
+let _lastRenderedNotificationRuntime = null;
+let _notificationClockTimer = null;
 
 function getAgentIconHtml(agentId) {
   const iconFile = AGENT_ICONS[agentId];
@@ -1206,6 +1606,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           setPreferredUnitMode('chat', nextAgent);
           const nextRuntimeId = nextAgent.runtime_session_id || nextAgent.runtimeSessionId || nextAgent.id;
           if (nextRuntimeId === currentRuntimeAgentId) {
+            beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
             await window.switchAgent(nextRuntimeId);
@@ -1216,6 +1617,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         if (result?.status?.status === 'running' && result.status.viewerAgentId) {
           const existingRuntimeId = result.status.viewerAgentId;
           if (existingRuntimeId === currentRuntimeAgentId) {
+            beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
             await loadAgents();
@@ -1229,6 +1631,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           const nextRuntimeId = readyAgent.runtime_session_id || readyAgent.runtimeSessionId || readyAgent.id;
           if (!nextRuntimeId) return;
           if (nextRuntimeId === currentRuntimeAgentId) {
+            beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
             await window.switchAgent(nextRuntimeId);
@@ -1266,6 +1669,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 
   if (action.type === 'show_chat' || action.type === 'resume_session') {
     beginFollowLatestCooldown();
+    beginFollowLatestEntryWindow();
     setPreferredUnitMode('chat', activeAgent);
   } else if (action.type === 'show_home') {
     setPreferredUnitMode('home', activeAgent);
@@ -2204,7 +2608,7 @@ window.phSaveModelConfig = async () => {
   }
 };
 
-window.phSelectDirectoryAndCreateSession = async () => {
+window.phOpenProject = async () => {
   const currentAgent = getCurrentAgentRecord();
   if (!currentAgent || currentAgent.id !== 'programming-helper') {
     console.error('Not in programming-helper workspace');
@@ -2218,30 +2622,78 @@ window.phSelectDirectoryAndCreateSession = async () => {
       return;
     }
 
-    const addRes = await fetch('/protoclaw/ph_project/add', {
+    // Open project: add + set as active in one call
+    const openRes = await fetch('/protoclaw/ph_project/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ openDirectory: chosenPath }),
     });
-    if (!addRes.ok) {
-      throw new Error(await addRes.text().catch(() => 'Failed to add project'));
+    if (!openRes.ok) {
+      throw new Error(await openRes.text().catch(() => 'Failed to open project'));
     }
 
-    const stateRes = await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent('programming-helper'));
-    if (stateRes.ok) {
-      const nextState = await stateRes.json();
-      updateAgentWorkspaceState('programming-helper', nextState);
-    }
+    const openResult = await openRes.json();
+    // Use returned state directly — no extra fetch
+    const freshState = openResult.state || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent('programming-helper'))).json();
+    updateAgentWorkspaceState('programming-helper', freshState);
 
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   } catch (error) {
-    console.error('Failed to add project:', error);
-    window.alert((currentLanguage === 'zh' ? '添加项目失败：' : 'Failed to add project: ') + (error?.message || error));
+    console.error('Failed to open project:', error);
+    window.alert((currentLanguage === 'zh' ? '打开项目失败：' : 'Failed to open project: ') + (error?.message || error));
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   }
 };
+
+window.phSwitchProject = async (projectId) => {
+  const currentAgent = getCurrentAgentRecord();
+  if (!currentAgent || currentAgent.id !== 'programming-helper') {
+    return;
+  }
+
+  try {
+    const switchRes = await fetch('/protoclaw/ph_project/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId }),
+    });
+    if (!switchRes.ok) {
+      throw new Error(await switchRes.text().catch(() => 'Failed to switch project'));
+    }
+
+    const switchResult = await switchRes.json();
+    // Use returned state directly — no extra fetch
+    const freshState = switchResult.state || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent('programming-helper'))).json();
+    updateAgentWorkspaceState('programming-helper', freshState);
+
+    // Close dropdown
+    const dropdown = document.querySelector('.ph-project-dropdown');
+    if (dropdown) dropdown.classList.remove('open');
+
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to switch project:', error);
+    window.alert((currentLanguage === 'zh' ? '切换项目失败：' : 'Failed to switch project: ') + (error?.message || error));
+  }
+};
+
+window.phToggleProjectDropdown = (event) => {
+  event.stopPropagation();
+  const dropdown = document.querySelector('.ph-project-dropdown');
+  if (!dropdown) return;
+  dropdown.classList.toggle('open');
+};
+
+// Close dropdown on outside click
+document.addEventListener('click', (e) => {
+  const dropdown = document.querySelector('.ph-project-dropdown');
+  if (dropdown && !dropdown.contains(e.target)) {
+    dropdown.classList.remove('open');
+  }
+});
 
 /* ══════════════════════════════════════
    Generic ctx-menu: declaration table + dispatcher
@@ -2669,6 +3121,7 @@ window.switchAgent = async (newAgentId) => {
     currentProjectDocsetPage = 'requirement';
     currentWorkspaceTab = 'chat';
     beginFollowLatestCooldown();
+    beginFollowLatestEntryWindow();
     setFollowLatest(true);
     renderAgentList();
     await loadAgentData(runtimeAgentId);
@@ -3361,9 +3814,14 @@ window.addEventListener('scroll', () => {
   closeProjectContextMenu();
   requestAnimationFrame(updateAssemblySideRailPosition);
 }, true);
-container.addEventListener('wheel', markManualScrollIntent, { passive: true });
+container.addEventListener('wheel', () => registerManualScrollIntent({ interrupt: true }), { passive: true });
 container.addEventListener('wheel', () => window.closeCtxMenu(), { passive: true });
-container.addEventListener('touchstart', markManualScrollIntent, { passive: true });
+container.addEventListener('touchmove', () => registerManualScrollIntent({ interrupt: true }), { passive: true });
+container.addEventListener('pointerdown', (event) => {
+  if (event.pointerType === 'mouse' || event.pointerType === 'touch' || event.pointerType === 'pen') {
+    registerManualScrollIntent({ interrupt: true });
+  }
+}, { passive: true });
 container.addEventListener('contextmenu', (event) => {
   // ── Generic ctx-menu for workspace sessions ──
   const ctxEl = event.target.closest('[data-ctx-role]');
@@ -3418,7 +3876,7 @@ container.addEventListener('contextmenu', (event) => {
 });
 container.addEventListener('keydown', (event) => {
   if (['ArrowUp', 'PageUp', 'Home', ' '].includes(event.key)) {
-    markManualScrollIntent();
+    registerManualScrollIntent({ interrupt: true });
   }
 });
 container.addEventListener('scroll', () => {
@@ -3432,6 +3890,8 @@ container.addEventListener('scroll', () => {
 followLatestButton.addEventListener('click', () => {
   setFollowLatest(true, { scroll: true, behavior: 'smooth' });
 });
+
+ensureNotificationClockTimer();
 
 async function loadLogs(forceRender = false) {
   try {
@@ -3492,6 +3952,8 @@ async function loadMcpInfo(forceRender = false) {
 async function loadAgentData(agentId) {
   if (isUiOnlyAgentId(agentId)) {
     currentRuntimeAgentId = null;
+    currentRuntimeConnected = true;
+    updateNotificationStatus(null);
     resetRuntimeBackedSurfaceState();
     renderCurrentMainView();
     renderFeaturePanel();
@@ -3548,6 +4010,7 @@ async function loadAgentData(agentId) {
     }
 
     renderCurrentMainView();
+    await refreshCurrentRuntimeStatus(agentId);
     if (activeFeaturePanel === 'logs') {
       await loadLogs(true);
     }
@@ -3556,6 +4019,46 @@ async function loadAgentData(agentId) {
     warmTemplatesInBackground(collectTemplateNames(tools), agentId);
   } catch (e) {
     console.error('Failed to load agent data:', e);
+  }
+}
+
+async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
+  const expectedRuntimeId = normalizeAgentIdentity(runtimeId);
+  if (!expectedRuntimeId) return null;
+
+  try {
+    const [notifRes, connectionRes] = await Promise.all([
+      fetch(`/api/agents/${expectedRuntimeId}/notification`),
+      fetch(`/api/agents/${expectedRuntimeId}/connection`),
+    ]);
+
+    if (normalizeAgentIdentity(currentRuntimeAgentId) !== expectedRuntimeId) {
+      return null;
+    }
+    if (!notifRes.ok || !connectionRes.ok) {
+      return null;
+    }
+
+    const [notifData, connectionData] = await Promise.all([
+      notifRes.json(),
+      connectionRes.json(),
+    ]);
+
+    if (normalizeAgentIdentity(currentRuntimeAgentId) !== expectedRuntimeId) {
+      return null;
+    }
+
+    currentRuntimeConnected = connectionData?.connected !== false;
+    const runtimeRecord = getRuntimeRecord(expectedRuntimeId);
+    if (runtimeRecord) {
+      runtimeRecord.connected = currentRuntimeConnected;
+    }
+    setConnectionStatus(currentRuntimeConnected);
+    updateNotificationStatus(notifData);
+    return { notifData, connectionData };
+  } catch (error) {
+    console.warn('Failed to refresh runtime status:', error);
+    return null;
   }
 }
 
@@ -3573,6 +4076,8 @@ async function poll() {
     }
 
     if (!currentRuntimeAgentId) {
+      currentRuntimeConnected = true;
+      updateNotificationStatus(null);
       await loadAgents();
       await refreshAgentCallStates(allAgents);
       // Incrementally refresh workspace session data when viewing workspace surface.
@@ -3609,16 +4114,16 @@ async function poll() {
       return;
     }
 
-    // 并行请求消息、通知和输入请求
-    const [msgsRes, notifRes, connectionRes, inputRes, overviewRes] = await Promise.all([
+    // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住
+    const statusTask = refreshCurrentRuntimeStatus(currentRuntimeAgentId);
+
+    const [msgsRes, inputRes, overviewRes] = await Promise.all([
       fetch(`/api/agents/${currentRuntimeAgentId}/messages`),
-      fetch(`/api/agents/${currentRuntimeAgentId}/notification`),
-      fetch(`/api/agents/${currentRuntimeAgentId}/connection`),
       fetch(`/api/agents/${currentRuntimeAgentId}/input-requests`),
       fetch(`/api/agents/${currentRuntimeAgentId}/overview`),
     ]);
 
-    const coreResponses = [msgsRes, notifRes, connectionRes, inputRes, overviewRes];
+    const coreResponses = [msgsRes, inputRes, overviewRes];
     if (coreResponses.some(res => res.status === 404)) {
       if (prebuiltSessionSwitchInFlight || suppressSidebarRerender) {
         setTimeout(poll, 300);
@@ -3651,15 +4156,10 @@ async function poll() {
       return;
     }
 
-    const connectionData = await connectionRes.json();
-    setConnectionStatus(!!connectionData.connected);
-
     const data = await msgsRes.json();
     const messages = data.messages || [];
 
-    // 处理通知状态
-    const notifData = await notifRes.json();
-    updateNotificationStatus(notifData);
+    await statusTask;
     await refreshAgentCallStates(allAgents);
     _syncPersistentInputUi(currentRuntimeAgentId);
 
@@ -3780,18 +4280,23 @@ async function poll() {
 
 // 通知状态更新
 function updateNotificationStatus(notifData) {
+  const payload = (notifData && typeof notifData === 'object') ? notifData : {};
   const statusEl = document.getElementById('notification-status');
   const phaseEl = document.getElementById('notification-phase');
-  const charCountEl = document.getElementById('notification-char-count');
+  const summaryEl = document.getElementById('notification-summary');
+  const metricsEl = document.getElementById('notification-metrics');
+  lastNotificationStatusPayload = payload;
+  const runtime = getEffectiveRuntimeSnapshot(payload);
   let callingStateChanged = false;
+  const actionSource = getNotificationActionSource(payload);
   // `callActive` is tracked independently from the transient `state` payload.
   // Some notification responses may only carry the call flag, so update it
   // before any early return based on `state`.
-  if (notifData.callActive !== undefined) {
+  if (payload.callActive !== undefined) {
     const runtimeId = currentRuntimeAgentId;
     if (runtimeId) {
       const prev = _agentCallActive.get(runtimeId);
-      const nextCalling = resolveNotificationCallingState(notifData);
+      const nextCalling = resolveNotificationCallingState(payload);
       if (nextCalling) {
         _agentCallActive.set(runtimeId, true);
       } else {
@@ -3804,8 +4309,9 @@ function updateNotificationStatus(notifData) {
     }
   }
 
-  const stateType = String(notifData?.state?.type || '').trim();
-  if (currentRuntimeAgentId && notifData.callActive === undefined) {
+  const stateType = String(actionSource?.type || '').trim();
+  const shouldShowStatus = !currentRuntimeConnected || shouldShowRuntimeStatus(runtime, stateType);
+  if (currentRuntimeAgentId && payload.callActive === undefined) {
     if (stateType === 'call.start') {
       if (!isRuntimeCalling(currentRuntimeAgentId)) {
         _agentCallActive.set(currentRuntimeAgentId, true);
@@ -3821,35 +4327,71 @@ function updateNotificationStatus(notifData) {
     }
   }
 
-  if (!notifData.state) {
+  if (shouldShowStatus) {
+    statusEl.style.display = 'flex';
+    statusEl.className = `notification-status active ${getRuntimeStageClass(runtime)}${currentRuntimeConnected ? '' : ' is-disconnected'}`;
+    phaseEl.textContent = getCompactRuntimeLabel(runtime, currentRuntimeConnected);
+    summaryEl.textContent = '';
+    _lastRenderedNotificationRuntime = { ...runtime };
+    metricsEl.innerHTML = renderRuntimeTimer(runtime, currentRuntimeConnected);
+    _syncPersistentActionButton();
+    if (shouldStatusUseQueueSync(runtime)) {
+      _syncQueueFromBackend();
+    }
+    if (!payload.state) {
+      if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
+        lastRenderedInputSignature = '';
+        renderInputRequests(currentInputRequests || []);
+      }
+      return;
+    }
+  } else if (!payload.state) {
     statusEl.style.display = 'none';
+    statusEl.className = 'notification-status';
+    phaseEl.textContent = '';
+    summaryEl.textContent = '';
+    metricsEl.innerHTML = '';
+    _lastRenderedNotificationRuntime = null;
     _syncPersistentActionButton();
     return;
   }
 
-  const { type, data } = notifData.state;
+  const { type, data } = actionSource || {};
+
+  if (!type) {
+    if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
+      lastRenderedInputSignature = '';
+      renderInputRequests(currentInputRequests || []);
+    }
+    return;
+  }
 
   if (type === 'call.start') {
-    statusEl.style.display = 'none';
     _syncPersistentActionButton();
     return;
   }
 
   if (type === 'call.finish') {
-    statusEl.style.display = 'none';
-    statusEl.classList.remove('active');
     if (currentRuntimeAgentId) {
       _agentCallActive.delete(currentRuntimeAgentId);
       renderAgentList();
     }
     _syncPersistentActionButton();
     _syncPersistentInputUi();
+    if (!shouldShowRuntimeStatus(runtime, type)) {
+      statusEl.style.display = 'none';
+      statusEl.className = 'notification-status';
+      phaseEl.textContent = '';
+      summaryEl.textContent = '';
+      metricsEl.innerHTML = '';
+      _lastRenderedNotificationRuntime = null;
+    }
     return;
   }
 
-  if (type === 'llm.char_count') {
+  if (!runtime.callActive && type === 'llm.char_count') {
     statusEl.style.display = 'flex';
-    statusEl.classList.add('active');
+    statusEl.className = 'notification-status active';
 
     const phaseNames = {
       'thinking': t('phase_thinking'),
@@ -3857,22 +4399,33 @@ function updateNotificationStatus(notifData) {
       'tool_calling': t('phase_tool_calling')
     };
     phaseEl.textContent = phaseNames[data.phase] || data.phase;
-    charCountEl.textContent = data.charCount.toLocaleString();
+    summaryEl.textContent = '';
+    _lastRenderedNotificationRuntime = { ...runtime };
+    metricsEl.innerHTML = renderRuntimeTimer(runtime, currentRuntimeConnected);
 
     // 新语义下改为根据 runtime 调用状态同步按钮
     _syncPersistentActionButton();
     // 新 step 开始，agent 已在上一步结束时 dequeue 了消息，同步气泡
     _syncQueueFromBackend();
-  } else if (type === 'llm.complete') {
+  } else if (!runtime.callActive && type === 'llm.complete') {
     statusEl.style.display = 'none';
-    statusEl.classList.remove('active');
+    statusEl.className = 'notification-status';
+    phaseEl.textContent = '';
+    summaryEl.textContent = '';
+    metricsEl.innerHTML = '';
+    _lastRenderedNotificationRuntime = null;
     _syncPersistentActionButton();
     // 不在这里清空 _queuedTexts — 后端队列可能仍有消息待消费
     // 队列显示由 _syncQueueFromBackend() 在每轮 step_start 时统一管理
     _pendingQueuedCount = 0;
     _syncPersistentInputUi();
-  } else {
+  } else if (!runtime.callActive) {
     statusEl.style.display = 'none';
+    statusEl.className = 'notification-status';
+    phaseEl.textContent = '';
+    summaryEl.textContent = '';
+    metricsEl.innerHTML = '';
+    _lastRenderedNotificationRuntime = null;
   }
 
   if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
@@ -4125,6 +4678,7 @@ async function submitQueuedInput() {
     if (res.ok) {
       textarea.value = '';
       autoResize(textarea);
+      requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       _localQueuedInputPending = true;
       _pendingQueuedCount++;
       _queuedTexts.push(text);
@@ -4563,7 +5117,7 @@ async function submitInput(requestId) {
       })
     });
     if (res.ok) {
-      setFollowLatest(true);
+      requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       // 刷新输入请求列表
       poll();
     }
@@ -4686,6 +5240,7 @@ async function submitInputAction(requestId, actionId, payload = {}) {
       }),
     });
     if (res.ok) {
+      requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       poll();
     }
   } catch (e) {
@@ -4854,6 +5409,7 @@ function renderMessage(msg, index) {
 
 // 追加新消息（保持现有 DOM 状态）
 function appendNewMessages(newMessages, startIndex) {
+  const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   // 移除空状态
   const emptyState = container.querySelector('.empty-state');
   if (emptyState) emptyState.remove();
@@ -4926,13 +5482,12 @@ function appendNewMessages(newMessages, startIndex) {
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
   updateFollowLatestButton();
-  if (followLatestEnabled) {
-    scheduleScrollToLatest('auto');
-  }
+  queueChatScrollSettlement({ reason: 'append', shouldFollow: shouldFollowAfterMutation });
 }
 
 // 更新最后一条消息
 function updateLastMessage(msg) {
+  const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   const lastIndex = currentMessages.length - 1;
   const lastRow = container.querySelectorAll('.message-row')[lastIndex];
   if (!lastRow) {
@@ -4983,9 +5538,7 @@ function updateLastMessage(msg) {
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
   updateFollowLatestButton();
-  if (followLatestEnabled) {
-    scheduleScrollToLatest('auto');
-  }
+  queueChatScrollSettlement({ reason: 'patch-last', shouldFollow: shouldFollowAfterMutation });
 }
 
 function getCollapseThresholdForRow(row) {
@@ -5057,11 +5610,13 @@ function applyCollapseLogic(containerElement, startIndex = 0) {
 
 function render(messages) {
   if (messages.length === 0) {
+    cancelChatScrollSettlement();
     container.innerHTML = getEmptyStateHtml();
     updateFollowLatestButton();
     return;
   }
 
+  const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   const html = messages.map((msg, index) => {
     const role = msg.role;
     const msgId = `msg-${index}`;
@@ -5225,11 +5780,11 @@ function render(messages) {
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
   updateFollowLatestButton();
-  if (followLatestEnabled) {
-    scheduleScrollToLatest('auto');
-  } else {
-    container.scrollTop = savedScrollTop;
-  }
+  queueChatScrollSettlement({
+    reason: 'render-full',
+    shouldFollow: shouldFollowAfterMutation,
+    preserveTop: shouldFollowAfterMutation ? null : savedScrollTop,
+  });
 }
 
 window.toggleMessage = function(id) {

@@ -7821,6 +7821,44 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
   }
 });
 
+app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) => {
+  try {
+    const openDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
+    if (!openDirectory) {
+      return res.status(400).json({ error: 'openDirectory is required' });
+    }
+    const timestamp = new Date().toISOString();
+    const state = await readWorkspaceState('programming-helper');
+    // Add to phProjects if not already there
+    const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
+    // Set as active project
+    nextState.openDirectory = openDirectory;
+    await writeWorkspaceState('programming-helper', nextState);
+    res.json({ ok: true, state: nextState });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/ph_project/switch', express.json(), async (req, res, next) => {
+  try {
+    const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+    if (!projectId || !projectId.startsWith('dir:')) {
+      return res.status(400).json({ error: 'Valid projectId (dir:...) is required' });
+    }
+    const openDirectory = projectId.slice(4);
+    const timestamp = new Date().toISOString();
+    const state = await readWorkspaceState('programming-helper');
+    // Ensure the project exists in phProjects
+    const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
+    nextState.openDirectory = openDirectory;
+    await writeWorkspaceState('programming-helper', nextState);
+    res.json({ ok: true, state: nextState });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/protoclaw/ph_project/add', express.json(), async (req, res, next) => {
   try {
     const openDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';

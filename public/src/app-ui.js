@@ -1742,131 +1742,60 @@ function renderWorkspaceSessionList(agent, block) {
 
   if (agent?.id === 'programming-helper') {
     const projects = getProgrammingHelperProjects(agent);
-    const emptyHtml = [
-      '<div class="workspace-history-list">',
-      '<div class="workspace-history-item"><div>' + escapeHtml(currentLanguage === 'zh' ? '暂无项目，点击下方按钮选择工作目录并开始新的对话' : 'No projects yet. Select a working directory to start.') + '</div></div>',
-      '<div class="workspace-actions">',
-      '<button class="workspace-action" type="button" onclick="window.phSelectDirectoryAndCreateSession()">' + escapeHtml(t('workspace_select_directory_new_project')) + '</button>',
-      '</div>',
-      '</div>',
-    ].join('');
-
-    const bodyHtml = projects.length > 0
-      ? '<div class="feature-project-list">' + projects.map((project) => {
-          const newChatAction = escapeHtml(JSON.stringify({
-            type: 'create_session',
-            openDirectory: project.openDirectory || '',
-          }));
-          const mainSessions = project.sessions.filter(s => s.sessionType !== 'exploration' && s.sessionType !== 'sub');
-          const explorationSessions = project.sessions.filter(s => s.sessionType === 'exploration');
-          const subSessions = project.sessions.filter(s => s.sessionType === 'sub');
-          const needsTabs = explorationSessions.length > 0 || subSessions.length > 0;
-
-          const renderPhSessionItem = (session, type) => {
-            const sType = type || session.sessionType || 'main';
-            const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id, openDirectory: project.openDirectory }));
-
-            let titleExtra = '';
-
-            let buttonsHtml = '';
-            if (sType === 'main') {
-              const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
-              const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
-              buttonsHtml = [
-                '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
-                '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
-                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-              ].join('');
-            } else if (sType === 'exploration') {
-              const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'exploration' }));
-              const summaryAction = escapeHtml(JSON.stringify({ type: 'open_summary', sessionId: session.id, agentId: agent.id }));
-              const summaryBtnClass = session.hasSummary ? 'workspace-action summary-exists' : 'workspace-action secondary';
-              buttonsHtml = [
-                '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>',
-                '<button class="' + summaryBtnClass + '" type="button" data-workspace-action="' + summaryAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(session.hasSummary ? t('workspace_view_summary') : t('workspace_generate_summary')) + '</button>',
-                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-              ].join('');
-            } else if (sType === 'sub') {
-              const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'sub' }));
-              buttonsHtml = [
-                '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>',
-                '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-              ].join('');
-            }
-
-            return [
-              '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '">',
-              '<div class="workspace-history-main">',
-              '<div class="workspace-history-title-row">',
-              '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
-              renderSessionResumeBadge(session),
-              renderSessionTitleAiButton(session),
-              '</div>',
-              '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
-              sType !== 'exploration' && session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
-              renderSessionTokenBar(session, agent),
-              '</div>',
-              '<div class="workspace-history-side">',
-              '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
-              '<div class="workspace-actions stacked">',
-              buttonsHtml,
-              '</div>',
-              '</div>',
-              '</div>',
-            ].join('');
-          };
-
-          let sessionsHtml = '';
-          if (needsTabs) {
-            const tabId = 'ph-tab-' + escapeHtml(agent.id) + '-' + escapeHtml(project.id);
-            sessionsHtml += '<div class="ph-session-tabs" data-tab-group="' + tabId + '">';
-            sessionsHtml += '<div class="ph-session-tab-bar">';
-            sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainSessions.length)) + '</span></button>';
-            sessionsHtml += '<button class="ph-session-tab" data-ph-tab="exploration" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_exploration_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
-            sessionsHtml += '<button class="ph-session-tab" data-ph-tab="sub" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_sub_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(subSessions.length)) + '</span></button>';
-            sessionsHtml += '</div>';
-            const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
-            sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : mainEmptyNote) + '</div></div>';
-            sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="exploration"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(s => renderPhSessionItem(s, 'exploration')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
-            sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="sub"><div class="feature-project-session-list">' + (subSessions.length > 0 ? subSessions.map(s => renderPhSessionItem(s, 'sub')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
-            sessionsHtml += '</div>';
-          } else {
-            const emptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
-            sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : emptyNote) + '</div></div>';
-          }
-
-          return [
-            '<div class="feature-project-card" data-prebuilt-project-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-project-id="' + escapeHtml(project.id) + '">',
-            '<details class="feature-project-disclosure">',
-            '<summary>',
-            '<div class="feature-project-row">',
-            '<div class="feature-project-summary">',
-            '<div class="feature-project-titlebar">',
-            '<div class="workspace-history-title">' + escapeHtml(getProgrammingHelperProjectDisplayName(project)) + '</div>',
-            '</div>',
-            '<div class="feature-project-meta-line"><span>' + escapeHtml(formatWorkspaceDate(project.updatedAt)) + '</span></div>',
-            project.openDirectory ? '<div class="workspace-history-meta">' + escapeHtml(project.openDirectory) + '</div>' : '',
-            '</div>',
-            '<div class="feature-project-side">',
-            '<div class="feature-project-head-actions">',
-            '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>',
-            '</div>',
-            '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',
-            '</div>',
-            '</div>',
-            '</summary>',
-            '<div class="feature-project-body">',
-            sessionsHtml,
-            '</div>',
-            '</details>',
-            '</div>',
-          ].join('');
-        }).join('') + '</div>'
-      : emptyHtml;
-
+    const wsState = getAgentWorkspaceState(agent);
+    const currentOpenDir = String(wsState?.openDirectory || '').trim();
     const isZh = currentLanguage === 'zh';
     const agentName = isZh ? '编程小助手' : 'Programming Helper';
-    return [
+
+    // Determine current project
+    const currentProject = currentOpenDir
+      ? projects.find(p => p.openDirectory === currentOpenDir) || null
+      : (projects.length > 0 ? projects[0] : null);
+
+    // Project header avatar
+    const headerAvatar = currentProject
+      ? escapeHtml((getProgrammingHelperProjectDisplayName(currentProject) || '?')[0].toUpperCase())
+      : '?';
+    const headerName = currentProject
+      ? escapeHtml(getProgrammingHelperProjectDisplayName(currentProject))
+      : (isZh ? '未打开项目' : 'No Project');
+
+    // Dropdown items for recent projects
+    const dropdownItems = projects.map((p) => {
+      const pName = getProgrammingHelperProjectDisplayName(p);
+      const pAvatar = escapeHtml((pName || '?')[0].toUpperCase());
+      const isActive = p.openDirectory === (currentProject?.openDirectory || '');
+      return [
+        '<div class="ph-project-dropdown-item' + (isActive ? ' active' : '') + '" data-project-id="' + escapeHtml(p.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(p.id) + '\')">',
+        '<div class="ph-project-dropdown-avatar">' + pAvatar + '</div>',
+        '<div class="ph-project-dropdown-info">',
+        '<div class="ph-project-dropdown-name">' + escapeHtml(pName) + '</div>',
+        '<div class="ph-project-dropdown-path">' + escapeHtml(p.openDirectory) + '</div>',
+        '</div>',
+        '</div>',
+      ].join('');
+    }).join('');
+
+    const dropdownHtml = projects.length > 1
+      ? '<div class="ph-project-dropdown">' +
+        '<div class="ph-project-dropdown-trigger" onclick="window.phToggleProjectDropdown(event)">' +
+        '<div class="ph-project-header-avatar">' + headerAvatar + '</div>' +
+        '<div class="ph-project-header-info">' +
+        '<div class="ph-project-header-name">' + headerName + '</div>' +
+        '</div>' +
+        '<svg class="ph-project-dropdown-arrow" width="12" height="12" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' +
+        '</div>' +
+        '<div class="ph-project-dropdown-menu">' + dropdownItems + '</div>' +
+        '</div>'
+      : '<div class="ph-project-header-static">' +
+        '<div class="ph-project-header-avatar">' + headerAvatar + '</div>' +
+        '<div class="ph-project-header-info">' +
+        '<div class="ph-project-header-name">' + headerName + '</div>' +
+        '</div>' +
+        '</div>';
+
+    // Banner (restored) + project bar
+    const bannerHtml = [
       '<div class="ph-banner">',
       '<div>',
       '<div class="ph-banner-title">' + escapeHtml(agentName) + '</div>',
@@ -1874,11 +1803,120 @@ function renderWorkspaceSessionList(agent, block) {
       '</div>',
       '<div class="ph-banner-actions">',
       '<button class="ph-banner-btn secondary" type="button" onclick="window.phOpenModelConfig()">' + (isZh ? '配置模型' : 'Model Config') + '</button>',
-      '<button class="ph-banner-btn" type="button" onclick="window.phSelectDirectoryAndCreateSession()">' + escapeHtml(t('workspace_new_project')) + '</button>',
+      '<button class="ph-banner-btn" type="button" onclick="window.phOpenProject()">' + (isZh ? '打开项目' : 'Open Project') + '</button>',
       '</div>',
       '</div>',
+    ].join('');
+
+    const headerBar = [
+      '<div class="ph-project-bar">',
+      '<div class="ph-project-bar-left">',
+      dropdownHtml,
+      '</div>',
+      '<div class="ph-project-bar-right">',
+      (currentProject ? '<div class="ph-project-bar-path">' + escapeHtml(currentProject.openDirectory) + '</div>' : ''),
+      '</div>',
+      '</div>',
+    ].join('');
+
+    // No project state
+    if (!currentProject) {
+      return [
+        bannerHtml,
+        '<section class="workspace-section">',
+        '<div class="ph-welcome">',
+        '<div class="ph-welcome-icon">&#128193;</div>',
+        '<div class="ph-welcome-title">' + (isZh ? '打开一个项目开始编程' : 'Open a project to start coding') + '</div>',
+        '<div class="ph-welcome-desc">' + (isZh ? '选择一个本地文件夹作为工作目录，编程小助手将在该项目中协助你。' : 'Select a local folder as your workspace. The assistant will help you code within the project.') + '</div>',
+        '</div>',
+        '</section>',
+      ].join('');
+    }
+
+    // Project is active - show its sessions with tabs
+    const mainSessions = currentProject.sessions.filter(s => s.sessionType !== 'exploration' && s.sessionType !== 'sub');
+    const explorationSessions = currentProject.sessions.filter(s => s.sessionType === 'exploration');
+    const subSessions = currentProject.sessions.filter(s => s.sessionType === 'sub');
+    const needsTabs = explorationSessions.length > 0 || subSessions.length > 0;
+    const newChatAction = escapeHtml(JSON.stringify({
+      type: 'create_session',
+      openDirectory: currentProject.openDirectory || '',
+    }));
+
+    const renderPhSessionItem = (session, type) => {
+      const sType = type || session.sessionType || 'main';
+      const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id, openDirectory: currentProject.openDirectory }));
+      let buttonsHtml = '';
+      if (sType === 'main') {
+        const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
+        const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
+        buttonsHtml = [
+          '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+          '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
+          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+        ].join('');
+      } else if (sType === 'exploration') {
+        const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'exploration' }));
+        const summaryAction = escapeHtml(JSON.stringify({ type: 'open_summary', sessionId: session.id, agentId: agent.id }));
+        const summaryBtnClass = session.hasSummary ? 'workspace-action summary-exists' : 'workspace-action secondary';
+        buttonsHtml = [
+          '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>',
+          '<button class="' + summaryBtnClass + '" type="button" data-workspace-action="' + summaryAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(session.hasSummary ? t('workspace_view_summary') : t('workspace_generate_summary')) + '</button>',
+          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+        ].join('');
+      } else if (sType === 'sub') {
+        const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'sub' }));
+        buttonsHtml = [
+          '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>',
+          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
+        ].join('');
+      }
+      return [
+        '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '">',
+        '<div class="workspace-history-main">',
+        '<div class="workspace-history-title-row">',
+        '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(isZh ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
+        renderSessionResumeBadge(session),
+        renderSessionTitleAiButton(session),
+        '</div>',
+        '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + '</div>',
+        sType !== 'exploration' && session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+        renderSessionTokenBar(session, agent),
+        '</div>',
+        '<div class="workspace-history-side">',
+        '<div class="workspace-history-meta compact">' + escapeHtml(t('workspace_history_messages')) + ': ' + escapeHtml(String(session.messageCount ?? 0)) + '</div>',
+        '<div class="workspace-actions stacked">',
+        buttonsHtml,
+        '</div>',
+        '</div>',
+        '</div>',
+      ].join('');
+    };
+
+    let sessionsHtml = '';
+    if (needsTabs) {
+      const tabId = 'ph-tab-' + escapeHtml(agent.id) + '-' + escapeHtml(currentProject.id);
+      const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
+      sessionsHtml += '<div class="ph-session-tabs" data-tab-group="' + tabId + '">';
+      sessionsHtml += '<div class="ph-session-tab-bar">';
+      sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainSessions.length)) + '</span></button>';
+      sessionsHtml += '<button class="ph-session-tab" data-ph-tab="exploration" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_exploration_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
+      sessionsHtml += '<button class="ph-session-tab" data-ph-tab="sub" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_sub_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(subSessions.length)) + '</span></button>';
+      sessionsHtml += '</div>';
+      sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : mainEmptyNote) + '</div></div>';
+      sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="exploration"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(s => renderPhSessionItem(s, 'exploration')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+      sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="sub"><div class="feature-project-session-list">' + (subSessions.length > 0 ? subSessions.map(s => renderPhSessionItem(s, 'sub')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+      sessionsHtml += '</div>';
+    } else {
+      const emptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
+      sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : emptyNote) + '</div></div>';
+    }
+
+    return [
+      bannerHtml,
+      headerBar,
       '<section class="workspace-section">',
-      bodyHtml,
+      sessionsHtml,
       '</section>',
     ].join('');
   }
@@ -5817,6 +5855,7 @@ function renderCurrentMainView() {
   renderWorkspaceTabs(agent);
   renderInputRequests(currentInputRequests);
   if (shouldRenderWorkspaceSurface(agent)) {
+    cancelChatScrollSettlement();
     const newHtml = renderWorkspaceSurface(agent);
     // Also force re-render if the container is not currently showing workspace content
     // (e.g. returning from chat mode where workspace HTML was cached but DOM shows messages).
@@ -5871,6 +5910,7 @@ function renderCurrentMainView() {
   // Keep lastRenderedWorkspaceHtml intact so returning from chat to workspace
   // can skip re-render if workspace data hasn't changed.
   if (currentMessages.length === 0) {
+    cancelChatScrollSettlement();
     container.innerHTML = getEmptyStateHtml();
     updateProjectDocsetChrome(agent);
     updateChatContextBar();
@@ -6006,6 +6046,34 @@ function markManualScrollIntent() {
   lastManualScrollIntentAt = Date.now();
 }
 
+function interruptFollowLatest(reason = 'manual') {
+  followScrollSettleToken += 1;
+  suppressFollowScrollEvent = false;
+  pendingFollowToBottom = false;
+  _scrollDebounceBehavior = 'smooth';
+  if (_scrollDebounceTimer != null) {
+    clearTimeout(_scrollDebounceTimer);
+    _scrollDebounceTimer = null;
+  }
+  if (_followLatestSettleTimer != null) {
+    clearTimeout(_followLatestSettleTimer);
+    _followLatestSettleTimer = null;
+  }
+  cancelChatScrollSettlement();
+  if (reason === 'manual' && followLatestEnabled) {
+    followLatestEnabled = false;
+    updateFollowLatestButton();
+  }
+}
+
+function registerManualScrollIntent(options = {}) {
+  const { interrupt = false } = options;
+  markManualScrollIntent();
+  if (interrupt && followLatestEnabled) {
+    interruptFollowLatest('manual');
+  }
+}
+
 function hasRecentManualScrollIntent() {
   return Date.now() - lastManualScrollIntentAt < 1500;
 }
@@ -6016,6 +6084,88 @@ function beginFollowLatestCooldown(duration = 800) {
 
 function isFollowLatestCooldownActive() {
   return Date.now() < _progScrollCooldownUntil;
+}
+
+function beginFollowLatestEntryWindow(duration = 1200) {
+  followLatestEntryUntil = Math.max(followLatestEntryUntil || 0, Date.now() + Math.max(0, duration));
+}
+
+function isFollowLatestEntryWindowActive() {
+  return Date.now() < (followLatestEntryUntil || 0);
+}
+
+function cancelChatScrollSettlement() {
+  chatScrollSettlementToken += 1;
+  if (chatScrollSettlementRaf) {
+    cancelAnimationFrame(chatScrollSettlementRaf);
+    chatScrollSettlementRaf = 0;
+  }
+  if (chatScrollSettlementTimer != null) {
+    clearTimeout(chatScrollSettlementTimer);
+    chatScrollSettlementTimer = null;
+  }
+  chatScrollSettlementContext = null;
+}
+
+function queueChatScrollSettlement(options = {}) {
+  const context = {
+    reason: options.reason || 'unknown',
+    preserveTop: Number.isFinite(options.preserveTop) ? options.preserveTop : null,
+    shouldFollow: options.shouldFollow === true,
+    stableFrames: 0,
+    lastHeight: -1,
+    lastCount: -1,
+  };
+  chatScrollSettlementContext = context;
+  const token = ++chatScrollSettlementToken;
+  if (chatScrollSettlementRaf) {
+    cancelAnimationFrame(chatScrollSettlementRaf);
+    chatScrollSettlementRaf = 0;
+  }
+  if (chatScrollSettlementTimer != null) {
+    clearTimeout(chatScrollSettlementTimer);
+    chatScrollSettlementTimer = null;
+  }
+
+  const settle = () => {
+    if (token !== chatScrollSettlementToken) return;
+    chatScrollSettlementRaf = 0;
+    const activeContext = chatScrollSettlementContext;
+    if (!activeContext) return;
+    if (shouldRenderWorkspaceSurface()) {
+      cancelChatScrollSettlement();
+      return;
+    }
+    const nextHeight = container.scrollHeight;
+    const nextCount = container.querySelectorAll('.message-row').length;
+    if (nextHeight === activeContext.lastHeight && nextCount === activeContext.lastCount) {
+      activeContext.stableFrames += 1;
+    } else {
+      activeContext.stableFrames = 0;
+      activeContext.lastHeight = nextHeight;
+      activeContext.lastCount = nextCount;
+    }
+    if (activeContext.stableFrames >= 2) {
+      const shouldFollowNow = activeContext.shouldFollow && followLatestEnabled && isChatSurfaceActive();
+      chatScrollSettlementContext = null;
+      if (shouldFollowNow) {
+        scrollToLatest('auto');
+        scheduleFollowLatestSettlePass();
+      } else if (activeContext.preserveTop != null) {
+        suppressFollowScrollEvent = true;
+        container.scrollTop = activeContext.preserveTop;
+        suppressFollowScrollEvent = false;
+      }
+      return;
+    }
+    chatScrollSettlementRaf = requestAnimationFrame(settle);
+  };
+
+  chatScrollSettlementTimer = setTimeout(() => {
+    if (token !== chatScrollSettlementToken) return;
+    chatScrollSettlementTimer = null;
+    chatScrollSettlementRaf = requestAnimationFrame(settle);
+  }, 0);
 }
 
 function animateScrollTo(targetTop, duration = 150) {
@@ -6227,13 +6377,14 @@ function setFollowLatest(enabled, options = {}) {
   }
   updateFollowLatestButton();
   if (enabled && scroll && isChatSurfaceActive()) {
-    scrollToLatest(behavior);
+    requestFollowLatest({ behavior, scroll: true });
   }
 }
 
 let _scrollDebounceTimer = null;
 let _scrollDebounceBehavior = 'smooth';
 let _followLatestSettleTimer = null;
+let _followRequestVersion = 0;
 
 function scheduleFollowLatestSettlePass() {
   if (_followLatestSettleTimer != null) {
@@ -6255,7 +6406,54 @@ function scheduleFollowLatestSettlePass() {
   }, 48);
 }
 
+function requestFollowLatest(options = {}) {
+  const {
+    forceEnable = false,
+    behavior = 'auto',
+    immediate = false,
+    scroll = true,
+  } = options;
+
+  if (forceEnable) {
+    followLatestEnabled = true;
+    lastManualScrollIntentAt = 0;
+    updateFollowLatestButton();
+  }
+
+  if (!scroll || !isChatSurfaceActive() || !followLatestEnabled) {
+    return;
+  }
+
+  const entryWindowActive = isFollowLatestEntryWindowActive();
+  const nextBehavior = entryWindowActive ? 'auto' : behavior;
+  const nextImmediate = immediate || entryWindowActive;
+
+  _followRequestVersion += 1;
+  pendingFollowToBottom = true;
+  if (nextBehavior === 'smooth' && _scrollDebounceBehavior !== 'auto') {
+    _scrollDebounceBehavior = 'smooth';
+  } else {
+    _scrollDebounceBehavior = nextBehavior;
+  }
+  if (nextImmediate && _scrollDebounceBehavior === 'auto') {
+    if (_scrollDebounceTimer != null) {
+      clearTimeout(_scrollDebounceTimer);
+      _scrollDebounceTimer = null;
+    }
+    scrollToLatest('auto');
+    pendingFollowToBottom = false;
+    scheduleFollowLatestSettlePass();
+    return;
+  }
+  scheduleScrollToLatestWithVersion(_scrollDebounceBehavior, _followRequestVersion);
+}
+
 function scheduleScrollToLatest(behavior = 'smooth') {
+  _followRequestVersion += 1;
+  return scheduleScrollToLatestWithVersion(behavior, _followRequestVersion);
+}
+
+function scheduleScrollToLatestWithVersion(behavior = 'smooth', requestVersion = 0) {
   if (behavior !== 'auto' && isFollowLatestCooldownActive()) {
     pendingFollowToBottom = false;
     _scrollDebounceBehavior = 'smooth';
@@ -6267,6 +6465,10 @@ function scheduleScrollToLatest(behavior = 'smooth') {
   _scrollDebounceTimer = setTimeout(() => {
     _scrollDebounceTimer = null;
     if (!pendingFollowToBottom || !followLatestEnabled) return;
+    if (requestVersion > 0 && requestVersion < _followRequestVersion) {
+      scheduleScrollToLatestWithVersion(_scrollDebounceBehavior, _followRequestVersion);
+      return;
+    }
     if (_scrollDebounceBehavior !== 'auto' && isFollowLatestCooldownActive()) {
       pendingFollowToBottom = false;
       _scrollDebounceBehavior = 'smooth';
@@ -6327,6 +6529,42 @@ function getEmptyOverviewSnapshot() {
       totalCacheHitRequests: 0,
       lastRequestUsage: null,
     },
+    runtime: {
+      stage: 'idle',
+      callActive: false,
+      charCount: 0,
+      thinkingChars: 0,
+      contentChars: 0,
+      toolCallCount: 0,
+      activeToolNames: [],
+      activeToolCount: 0,
+      callStartedAt: 0,
+      stageStartedAt: 0,
+      updatedAt: 0,
+      lastErrorType: null,
+      lastErrorMessage: null,
+    },
+  };
+}
+
+function normalizeRuntimeSnapshot(snapshot) {
+  return {
+    stage: typeof snapshot?.stage === 'string' ? snapshot.stage : 'idle',
+    callActive: snapshot?.callActive === true,
+    charCount: typeof snapshot?.charCount === 'number' ? snapshot.charCount : 0,
+    thinkingChars: typeof snapshot?.thinkingChars === 'number' ? snapshot.thinkingChars : 0,
+    contentChars: typeof snapshot?.contentChars === 'number' ? snapshot.contentChars : 0,
+    toolCallCount: typeof snapshot?.toolCallCount === 'number' ? snapshot.toolCallCount : 0,
+    activeToolNames: Array.isArray(snapshot?.activeToolNames) ? snapshot.activeToolNames.map((item) => String(item || '')).filter(Boolean) : [],
+    activeToolCount: typeof snapshot?.activeToolCount === 'number' ? snapshot.activeToolCount : 0,
+    callStartedAt: typeof snapshot?.callStartedAt === 'number' ? snapshot.callStartedAt : 0,
+    stageStartedAt: typeof snapshot?.stageStartedAt === 'number' ? snapshot.stageStartedAt : 0,
+    retryAttempt: typeof snapshot?.retryAttempt === 'number' ? snapshot.retryAttempt : undefined,
+    maxRetries: typeof snapshot?.maxRetries === 'number' ? snapshot.maxRetries : undefined,
+    nextRetryDelayMs: typeof snapshot?.nextRetryDelayMs === 'number' ? snapshot.nextRetryDelayMs : undefined,
+    updatedAt: typeof snapshot?.updatedAt === 'number' ? snapshot.updatedAt : 0,
+    lastErrorType: typeof snapshot?.lastErrorType === 'string' ? snapshot.lastErrorType : null,
+    lastErrorMessage: typeof snapshot?.lastErrorMessage === 'string' ? snapshot.lastErrorMessage : null,
   };
 }
 
@@ -6362,6 +6600,7 @@ function normalizeOverviewSnapshot(snapshot) {
       totalCacheHitRequests: typeof snapshot.usageStats?.totalCacheHitRequests === 'number' ? snapshot.usageStats.totalCacheHitRequests : 0,
       lastRequestUsage: snapshot.usageStats?.lastRequestUsage || null,
     },
+    runtime: normalizeRuntimeSnapshot(snapshot.runtime),
   };
 }
 
@@ -7862,7 +8101,6 @@ function applyLanguage() {
 
   const sidebarToggleEl = document.getElementById('sidebar-toggle');
   const panelResizerEl = document.getElementById('feature-panel-resizer');
-  const notificationCharLabel = document.querySelector('.notification-char-count')?.nextElementSibling;
   const workspaceButton = document.getElementById('rail-workspace');
   const monitorButton = document.getElementById('rail-monitor');
   const hooksButton = document.getElementById('rail-hooks');
@@ -7872,13 +8110,16 @@ function applyLanguage() {
 
   if (sidebarToggleEl) sidebarToggleEl.title = t('sidebar_toggle');
   if (panelResizerEl) panelResizerEl.title = t('resize_panel');
-  if (notificationCharLabel) notificationCharLabel.textContent = t('chars');
   if (workspaceButton) workspaceButton.title = t('structure_tooltip');
   if (monitorButton) monitorButton.title = t('monitor_tooltip');
   if (hooksButton) hooksButton.title = t('features_tooltip');
   if (inspectorButton) inspectorButton.title = t('reverse_hooks_tooltip');
   if (logsButton) logsButton.title = t('logs_tooltip');
   if (mcpButton) mcpButton.title = t('mcp_tooltip');
+
+  if (typeof updateNotificationStatus === 'function' && typeof lastNotificationStatusPayload !== 'undefined' && lastNotificationStatusPayload) {
+    updateNotificationStatus(lastNotificationStatusPayload);
+  }
 
   languageToggle.title = t('language_toggle');
   languageToggle.textContent = t('language_toggle_short');
