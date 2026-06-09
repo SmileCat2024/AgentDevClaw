@@ -810,6 +810,11 @@ async function loadAgents() {
             workspace_sessions: prev.workspace_sessions,
             workspace_state: prev.workspace_state,
           } : {}),
+          // 当新数据的 workspace_sessions.sessions 为空但旧数据有值时，保留旧 sessions 避免闪空
+          ...(!loadedAgentDetailIds.has(agent.id) && prev?.workspace_sessions?.sessions?.length > 0
+            && !(agent.workspace_sessions?.sessions?.length > 0) ? {
+              workspace_sessions: prev.workspace_sessions,
+            } : {}),
         };
       });
     }
@@ -3254,6 +3259,8 @@ window.switchAgent = async (newAgentId) => {
     currentProjectRequirementEdit = null;
     currentProjectDocsetPage = 'requirement';
     currentWorkspaceTab = 'chat';
+    // 立即清除旧 overview，避免切换期间残留上个 runtime 的数据
+    setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
     beginFollowLatestCooldown();
     beginFollowLatestEntryWindow();
     setFollowLatest(true);
@@ -4197,6 +4204,61 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
   }
 }
 
+// ── Auto session title generation ──────────────────────────────────────────
+function tryAutoTitleGeneration(messages) {
+  if (!currentRuntimeAgentId || !currentAgentId) return;
+
+  // Need at least one assistant message (first round complete)
+  const hasAssistantMsg = messages.some(function(m) {
+    return m && m.role === 'assistant' && typeof m.content === 'string' && m.content.trim();
+  });
+  if (!hasAssistantMsg) return;
+
+  // Resolve session info from current agent record
+  const agent = getCurrentAgentRecord();
+  if (!agent) return;
+  const sessionId = String(agent.active_workspace_session_id || agent.workspace_sessions?.activeSessionId || '').trim();
+  if (!sessionId) return;
+
+  // Only auto-generate for default "新对话N" titles
+  const currentTitle = String(agent.active_workspace_session_title || '').trim();
+  if (!/^新对话\d+$/.test(currentTitle)) return;
+
+  // Only trigger once per session
+  if (_autoTitleTriggered.has(sessionId)) return;
+  _autoTitleTriggered.add(sessionId);
+
+  // Fire and forget — don't block the poll loop
+  autoGenerateSessionTitle(agent.id, sessionId);
+}
+
+async function autoGenerateSessionTitle(agentId, sessionId) {
+  try {
+    var response = await fetch('/protoclaw/generate_session_title', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: agentId, sessionId: sessionId }),
+    });
+    if (!response.ok) {
+      console.warn('[AutoTitle] generation failed:', response.status);
+      return;
+    }
+    var result = await response.json();
+    if (result.ok && result.title) {
+      // Update local data
+      var agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+      if (agent) {
+        var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+        var target = sessions.find(function(s) { return s.id === sessionId; });
+        if (target) target.title = result.title;
+      }
+      console.log('[AutoTitle] title set:', result.title);
+    }
+  } catch (error) {
+    console.warn('[AutoTitle] error:', error.message || error);
+  }
+}
+
 async function poll() {
   try {
     if (prebuiltSessionSwitchInFlight) {
@@ -4297,6 +4359,11 @@ async function poll() {
     await statusTask;
     await refreshAgentCallStates(allAgents);
     _syncPersistentInputUi(currentRuntimeAgentId);
+
+    // ── Auto-generate session title when first response completes ──
+    if (currentRuntimeAgentId && !isRuntimeCalling(currentRuntimeAgentId)) {
+      tryAutoTitleGeneration(currentMessages);
+    }
 
     const nextOverview = normalizeOverviewSnapshot(await overviewRes.json());
     const nextOverviewSignature = getOverviewSignature(nextOverview);

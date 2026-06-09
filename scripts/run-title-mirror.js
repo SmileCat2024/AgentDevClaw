@@ -186,10 +186,8 @@ async function runTitleGeneration({ agentDir, agentId, sessionId }) {
       return { title: cleanTitle, source: 'model' };
     }
 
-    const fallbackTitle = buildHeuristicTitle(rawMessages);
-    logPhase(`raw response keys=${Object.keys(response || {}).join(',')} content=${JSON.stringify(response?.content)?.slice(0, 200)} reasoning=${JSON.stringify(response?.reasoning)?.slice(0, 120)}`);
-    logPhase(`fallback title="${fallbackTitle}"`);
-    return { title: fallbackTitle, source: 'fallback' };
+    logPhase(`model returned empty title, raw response keys=${Object.keys(response || {}).join(',')} content=${JSON.stringify(response?.content)?.slice(0, 200)} reasoning=${JSON.stringify(response?.reasoning)?.slice(0, 120)}`);
+    throw new Error('Model returned empty title after sanitization — will retry');
   } finally {
     if (typeof agent.dispose === 'function') {
       await agent.dispose().catch(() => {});
@@ -216,6 +214,7 @@ async function main() {
   const resultPath = resultFilePath || join(mkdtempSync(join(tmpdir(), 'title-mirror-')), 'result.json');
 
   let lastFailure = null;
+  let rawMessagesRef = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -233,13 +232,52 @@ async function main() {
         ok: true,
         attemptCount: attempt,
         title: result.title,
+        source: result.source || 'model',
       };
       writeFileSync(resultPath, `${JSON.stringify(payload)}\n`, 'utf8');
       process.exit(0);
     } catch (error) {
       lastFailure = error;
+      // Capture rawMessages for heuristic fallback if available on the error
+      if (error?.rawMessages && Array.isArray(error.rawMessages)) {
+        rawMessagesRef = error.rawMessages;
+      }
       logPhase(`attempt ${attempt}/${maxAttempts} failed: ${error?.message || error}`);
     }
+  }
+
+  // All retries exhausted — use heuristic fallback as last resort
+  logPhase(`all ${maxAttempts} attempts failed, using heuristic fallback`);
+  try {
+    // Re-restore session to get raw messages for heuristic
+    const resolvedModel = resolveAgentModelLLM(agentPath, 'system');
+    const workspaceDir = resolveWorkspaceCwd(agentId, PROTOCLAW_ROOT);
+    const fallbackAgent = createTextOnlyMirrorAgent({
+      llm: resolvedModel.llm,
+      modelName: resolvedModel.modelName,
+      name: `${sanitizeSessionFragment(agentId)}-title-mirror-fallback`,
+      projectRoot: PROTOCLAW_ROOT,
+      workspaceDir,
+      systemPrompt: '备用标题生成',
+    });
+    await loadMirrorSession(fallbackAgent, agentId, sessionId);
+    const fbRawMessages = typeof fallbackAgent.getContext === 'function' ? fallbackAgent.getContext().getAll() : [];
+    if (typeof fallbackAgent.dispose === 'function') await fallbackAgent.dispose().catch(() => {});
+
+    const fallbackTitle = buildHeuristicTitle(fbRawMessages);
+    logPhase(`heuristic fallback title="${fallbackTitle}"`);
+    if (cleanValue(fallbackTitle)) {
+      const payload = {
+        ok: true,
+        attemptCount: maxAttempts,
+        title: fallbackTitle,
+        source: 'fallback',
+      };
+      writeFileSync(resultPath, `${JSON.stringify(payload)}\n`, 'utf8');
+      process.exit(0);
+    }
+  } catch (fbError) {
+    logPhase(`heuristic fallback also failed: ${fbError?.message || fbError}`);
   }
 
   throw lastFailure instanceof Error ? lastFailure : new Error(String(lastFailure || 'Unknown title mirror failure'));

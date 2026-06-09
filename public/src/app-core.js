@@ -254,6 +254,7 @@ let currentInputRequests = [];
 let choiceInputState = {};
 let toolRenderConfigs = {};
 let TOOL_NAMES = {};
+const _autoTitleTriggered = new Set();
 let contextMenuAgentId = null;
 let contextMenuAgentMode = null;
 let contextMenuSessionAgentId = null;

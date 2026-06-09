@@ -777,6 +777,57 @@ IM 线路管理相关：
   - 完整拆分计划：[docs/plans/2026-06-04-frontend-split-plan.md](/D:/code/AgentDevClaw/docs/plans/2026-06-04-frontend-split-plan.md)
   - 包含：功能域划分（11域）、耦合地图、分 3 Phase 拆分顺序、风险缓解策略
 
+## 测试体系
+
+### 命令
+
+```bash
+npm test              # 运行全部测试（core + features）
+npm run test:core     # 只跑 test/*.test.js（无需构建）
+npm run test:features # 只跑 local-features 的 smoke test（需要先构建 dist）
+```
+
+### 测试文件结构
+
+```
+test/                                          ← 服务端核心逻辑测试
+  call-arbiter.test.js                         ← CallArbiter 调用仲裁（序列化、队列、事件）
+  runtime-call-envelope.test.js                ← 运行时信封（创建、入队、出队、状态查询）
+  session-model-meta.test.js                   ← 会话模型元数据（持久化优先级、回退逻辑、sessionType 映射）
+
+local-features/                                ← 本地 Feature 功能测试
+  flow/test/flow-feature.test.ts               ← FlowFeature（节点转换、prompt 注入、分支边）
+  context-compaction-mirror/test/smoke.test.ts ← ContextCompactionMirror（工具禁用、状态）
+```
+
+### 两种测试格式
+
+1. **`test/*.test.js`** — 使用 `node:test` 的 `describe/it/assert` 格式，由 `node --test` 驱动，输出 TAP 协议。**新增服务端逻辑测试放这里。**
+
+2. **`local-features/*/test/*.test.ts`** — 自执行 `main().catch(...)` 格式，用 `process.exitCode = 1` 标记失败，输出 `[PASS]`/`[FAIL]`。编译后产物在 `local-features/dist/*/test/`。**新增 feature 功能测试放对应 feature 的 `test/` 目录下。**
+
+### 何时跑测试
+
+- 修改 `server.js`、`server/` 目录、`scripts/` 目录中的逻辑后 → `npm run test:core`
+- 修改 `local-features/` 下的 TS 源码后 → 先 `npm run build:local-features`，再 `npm run test:features`
+- 提交前、合并前 → `npm test` 确保全绿
+
+### 新增测试的约定
+
+- 服务端纯逻辑（server.js 中的决策函数、工具函数）→ 新建 `test/xxx.test.js`，用 `node:test` 格式
+- local-feature 功能 → 新建 `local-features/<name>/test/xxx.test.ts`，用自执行 `main()` 格式
+- local-feature 测试需要在 `local-features/tsconfig.json` 的 `include` 中添加路径才能被编译
+- local-feature 测试的产物路径需加入 `package.json` 的 `test:features` 脚本
+- 前端 JS 目前无自动化测试（需要浏览器环境）
+
+### 重要注意事项
+
+- local-features 测试依赖编译产物，必须先 `npm run build:local-features`
+- `test:features` 脚本中的每个测试用 `&&` 链接，任何一个失败会终止后续测试并返回非零 exit code
+- 测试代码中 inline 复刻的 server.js 逻辑（如 `session-model-meta.test.js` 中的 `resolveSessionModel`）需要在 server.js 对应逻辑变更时同步更新
+
+---
+
 ## 开发时的建议心智
 
 进入实际开发前，优先先回答这 6 个问题：

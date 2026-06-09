@@ -3396,7 +3396,15 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
     const totalUsage = usageStats?.totalUsage;
     const sType = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
     const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
-    const sessionModelInfo = (modelInfoMap && modelInfoMap[modelRole]) || {};
+    const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole]) || {};
+    // 优先使用 index record 中持久化的模型信息（session 创建时写入），回退到全局配置推算
+    const persistedModelName = cleanSessionText(record.modelName);
+    const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
+      ? record.contextLength : null;
+    const sessionModelInfo = {
+      modelName: persistedModelName || fallbackModelInfo.modelName || '',
+      contextLength: persistedCL || fallbackModelInfo.contextLength || null,
+    };
     return {
       id: record.id,
       title: compactTitle || record.title || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
@@ -3462,6 +3470,44 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       modelName: '',
     };
   }
+}
+
+async function cleanupEmptySessions(agentId) {
+  const index = await readSessionIndex(agentId);
+  const toDelete = [];
+  for (const record of index.sessions) {
+    // Only target default "新对话N" titled sessions
+    if (!/^新对话\d+$/.test(cleanSessionText(record.title))) continue;
+    const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
+    try {
+      const raw = await fs.readFile(sessionPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
+      // Empty session: no messages at all (never had user input)
+      if (messages.length === 0) {
+        toDelete.push(record.id);
+      }
+    } catch {
+      // Session file missing or corrupt — also clean up
+      toDelete.push(record.id);
+    }
+  }
+
+  if (toDelete.length === 0) return 0;
+
+  let nextActiveId = index.activeSessionId;
+  const remaining = index.sessions.filter((s) => !toDelete.includes(s.id));
+  if (toDelete.includes(nextActiveId)) {
+    nextActiveId = remaining[0]?.id ?? null;
+  }
+  await writeSessionIndex(agentId, { activeSessionId: nextActiveId, sessions: remaining });
+
+  for (const id of toDelete) {
+    await fs.rm(getPrebuiltSessionFilePath(agentId, id), { force: true }).catch(() => {});
+  }
+
+  console.log(`[sessions] cleaned up ${toDelete.length} empty session(s) for ${agentId}: ${toDelete.join(', ')}`);
+  return toDelete.length;
 }
 
 async function listPrebuiltSessions(agentId) {
@@ -3569,6 +3615,11 @@ async function createPrebuiltSession(agentId, options = {}) {
   const nextTitle = isProgrammingHelper
     ? await getNextNewSessionTitle(agentId, nextOpenDirectory)
     : buildNamedSessionTitle(sessionDisplayName, createdAt);
+  // 解析当前模型配置，持久化到 session index record
+  const sessionType = cleanSessionText(options.sessionType) || 'main';
+  const modelRole = sessionType === 'exploration' ? 'exploration' : sessionType === 'sub' ? 'sub' : 'default';
+  const currentModelInfo = await resolveSessionModelInfo(agentId, modelRole);
+
   const record = {
     id: sessionId,
     title: nextTitle,
@@ -3583,8 +3634,10 @@ async function createPrebuiltSession(agentId, options = {}) {
     referenceMaterials: nextReferenceMaterials,
     formId: requestedFormId,
     openDirectory: nextOpenDirectory,
-    sessionType: cleanSessionText(options.sessionType) || 'main',
+    sessionType,
     metadata: sessionMetadata,
+    modelName: currentModelInfo.modelName || '',
+    contextLength: currentModelInfo.contextLength || null,
     createdAt,
     updatedAt: createdAt,
   };
@@ -5890,7 +5943,14 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
       res.status(400).json({ error: 'agentId is required' });
       return;
     }
-    res.json(await listPrebuiltSessions(req.query.agentId));
+    const agentId = req.query.agentId;
+    // Auto-cleanup empty sessions for workspace agents (e.g. programming-helper)
+    if (isWorkspaceSessionAgent(agentId)) {
+      await cleanupEmptySessions(agentId).catch((err) => {
+        console.warn(`[sessions] cleanup failed for ${agentId}:`, err.message);
+      });
+    }
+    res.json(await listPrebuiltSessions(agentId));
   } catch (error) {
     next(error);
   }

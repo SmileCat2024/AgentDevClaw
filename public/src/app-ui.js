@@ -298,17 +298,28 @@ function updateChatContextBar() {
     ? sessions.find(function(s) { return s.id === activeId; })
     : (sessions[0] || null);
 
-  // 模型名
+  // 模型名：从 session 元数据取（已在创建时持久化）
   var modelName = activeSession ? activeSession.modelName : '';
 
-  // token 用量：runtime 存活时优先从 currentOverviewSnapshot 取实时数据
+  // token 用量：优先从 session 持久化数据取，仅在 runtime 确实绑定当前 session 时才用 overview 实时数据
   var used = 0;
   var isLastRequest = false;
-  var liveUsage = currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.lastRequestUsage;
-  if (liveUsage && liveUsage.totalTokens) {
-    used = liveUsage.totalTokens;
-    isLastRequest = true;
-  } else if (activeSession && activeSession.tokenUsage) {
+  var runtimeRecord = typeof getCurrentRuntimeRecord === 'function' ? getCurrentRuntimeRecord() : null;
+  var runtimeSessionId = runtimeRecord
+    ? (runtimeRecord.active_workspace_session_id || runtimeRecord.runtime_session_id || runtimeRecord.runtimeSessionId)
+    : null;
+  var runtimeBoundToSession = runtimeRecord && activeId && (
+    runtimeSessionId === activeId
+    || (runtimeRecord.parent_id && runtimeRecord.parent_id === (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord()?.id : null))
+  );
+  if (runtimeBoundToSession) {
+    var liveUsage = currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.lastRequestUsage;
+    if (liveUsage && liveUsage.totalTokens) {
+      used = liveUsage.totalTokens;
+      isLastRequest = true;
+    }
+  }
+  if (!used && activeSession && activeSession.tokenUsage) {
     var lr = activeSession.tokenUsage.lastRequestUsage;
     if (lr && lr.totalTokens) {
       used = lr.totalTokens;
