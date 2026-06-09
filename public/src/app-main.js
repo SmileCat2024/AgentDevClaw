@@ -621,12 +621,14 @@ function renderSidebarChildItems(entries) {
         const active = isRuntimeItemActive(entry.runtimeId);
         const disconnected = entry.status === 'disconnected';
         const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
+        const restarting = restartingRuntimeIds.has(entry.runtimeId);
         const itemClass = [
           'agent-item',
           'agent-runtime-item',
           active ? 'active' : '',
           disconnected ? 'disconnected' : '',
           calling ? 'calling' : '',
+          restarting ? 'restarting' : '',
         ].filter(Boolean).join(' ');
         return `
           <div
@@ -960,6 +962,7 @@ function getAgentListRenderSignature() {
     currentAgentId: normalizeAgentIdentity(currentAgentId),
     currentRuntimeAgentId: normalizeAgentIdentity(currentRuntimeAgentId),
     pending: Array.from(pendingPrebuiltAgentIds || []).sort(),
+    restarting: Array.from(restartingRuntimeIds || []).sort(),
     agents: (Array.isArray(allAgents) ? allAgents : []).map((agent) => ({
       id: normalizeAgentIdentity(agent?.id),
       runtimeId: normalizeAgentIdentity(getAgentRuntimeId(agent)),
@@ -1089,9 +1092,8 @@ window.handlePrebuiltAgentClick = async (agentId) => {
     pendingPrebuiltAgentIds.delete(agentId);
     renderAgentList();
     const nextRuntimeId = startedAgent.runtime_session_id || startedAgent.runtimeSessionId || startedAgent.id;
-    await window.switchAgent(nextRuntimeId);
     setPreferredUnitMode('home', allAgents.find((agent) => agent.id === agentId && agent.source === 'prebuilt') || startedAgent);
-    renderCurrentMainView();
+    await requestSwitch(nextRuntimeId, 'prebuilt-start');
   } catch (e) {
     pendingPrebuiltAgentIds.delete(agentId);
     renderAgentList();
@@ -1188,7 +1190,7 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
       const nextSessionId = String(refreshed?.active_workspace_session_id || refreshed?.workspace_sessions?.activeSessionId || '').trim();
       const nextRuntimeId = refreshed?.runtime_session_id || refreshed?.runtimeSessionId || null;
       if (nextSessionId && nextSessionId !== String(sessionId || '').trim() && nextRuntimeId) {
-        await window.switchAgent(nextRuntimeId);
+        await requestSwitch(nextRuntimeId, 'compact-resume-live');
         return { scheduled: true, liveRuntime: true, switched: true };
       }
     }
@@ -1371,7 +1373,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         || null;
       if (nextRuntimeId) {
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
-        await window.switchAgent(nextRuntimeId);
+        await requestSwitch(nextRuntimeId, 'compact-resume');
       } else {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
@@ -1412,7 +1414,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         || null;
       if (nextRuntimeId) {
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
-        await window.switchAgent(nextRuntimeId);
+        await requestSwitch(nextRuntimeId, 'compact-summary');
       } else {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
@@ -1609,7 +1611,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
-            await window.switchAgent(nextRuntimeId);
+            await requestSwitch(nextRuntimeId, 'session-open');
           }
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
           return;
@@ -1621,7 +1623,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             renderCurrentMainView();
           } else {
             await loadAgents();
-            await window.switchAgent(existingRuntimeId);
+            await requestSwitch(existingRuntimeId, 'session-open-existing');
           }
           return;
         }
@@ -1634,7 +1636,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
-            await window.switchAgent(nextRuntimeId);
+            await requestSwitch(nextRuntimeId, 'session-open-wait');
           }
         } catch (error) {
           console.error('Failed while waiting for prebuilt runtime session:', error);
@@ -2479,7 +2481,7 @@ window.launchSavedAssemblyRun = async (sessionId) => {
       const liveRuntimeId = liveRuntime?.runtime_session_id || liveRuntime?.runtimeSessionId || liveRuntime?.id || currentAgent?.runtime_session_id || currentAgent?.runtimeSessionId || null;
       if (liveRuntimeId) {
         console.log(`[PERF-CLIENT] launchSavedAssemblyRun already running, switching (${(performance.now() - _t0).toFixed(0)}ms)`);
-        await window.switchAgent(liveRuntimeId);
+        await requestSwitch(liveRuntimeId, 'assembly-resume');
         return;
       }
     }
@@ -2499,7 +2501,7 @@ window.launchSavedAssemblyRun = async (sessionId) => {
       console.log(`[PERF-CLIENT] launchSavedAssemblyRun loadAgents done (${(performance.now() - _t0).toFixed(0)}ms)`);
       const nextRuntimeId = payload?.runtime?.id || payload?.runtime?.viewerAgentId || null;
       if (nextRuntimeId) {
-        await window.switchAgent(nextRuntimeId);
+        await requestSwitch(nextRuntimeId, 'assembly-launch');
         console.log(`[PERF-CLIENT] launchSavedAssemblyRun switchAgent done (${(performance.now() - _t0).toFixed(0)}ms)`);
         return;
       }
@@ -2695,6 +2697,19 @@ document.addEventListener('click', (e) => {
   }
 });
 
+window.phOpenInExplorer = async (dirPath) => {
+  if (!dirPath) return;
+  try {
+    await fetch('/protoclaw/ph_project/open_in_explorer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: dirPath }),
+    });
+  } catch (e) {
+    console.error('Failed to open in explorer:', e);
+  }
+};
+
 /* ══════════════════════════════════════
    Generic ctx-menu: declaration table + dispatcher
    ══════════════════════════════════════ */
@@ -2718,9 +2733,97 @@ function getCtxMenuItems(role, ns, variant, id) {
   return [];
 }
 
+async function ctxRestartAgent(target) {
+  const { ns, id, sessionId, variant } = target;
+  const confirmed = window.confirm(t('restart_prebuilt_confirm'));
+  if (!confirmed) return;
+
+  try {
+    // serverAgentId: prebuilt agent ID for invoke('restart_agent')
+    // domId: runtime ID matching data-agent-id in sidebar DOM
+    const serverAgentId = (variant === 'managed-runtime') ? ns : id;
+    const domId = id;
+    const agent = getExternalRuntimeAgent(serverAgentId);
+
+    // Track the restarting state in a Set so that any sidebar re-render
+    // (e.g. from switching agents during restart) preserves the yellow dot.
+    restartingRuntimeIds.add(domId);
+    suppressSidebarRerender = true;
+    renderAgentList();
+
+    let result = null;
+    if (variant === 'external') {
+      result = await restartSidebarExternalRuntime(agent);
+    } else if (variant === 'child') {
+      const hostId = agent?.parent_id || serverAgentId;
+      const sId = agent?.active_workspace_session_id || null;
+      result = await invoke('restart_agent', { agentId: hostId, sessionId: sId });
+    } else {
+      // managed-runtime / prebuilt
+      const sId = sessionId || agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
+      result = await invoke('restart_agent', { agentId: serverAgentId, sessionId: sId });
+    }
+
+    // Server already waits for runtime readiness (up to 10s), so the
+    // returned result contains the connected agent. No extra polling needed.
+    const nextRuntimeId =
+      result?.runtime?.id
+      || result?.runtime?.viewerAgentId
+      || result?.agent?.runtime_session_id
+      || result?.agent?.runtimeSessionId
+      || null;
+
+    restartingRuntimeIds.delete(domId);
+    suppressSidebarRerender = false;
+    await loadAgents();
+    if (nextRuntimeId) {
+      await requestSwitch(nextRuntimeId, 'ctx-restart');
+    }
+  } catch (e) {
+    restartingRuntimeIds.delete(id);
+    suppressSidebarRerender = false;
+    renderAgentList();
+    window.alert(t('restart_failed') + (e && e.message ? e.message : e));
+  }
+}
+
+async function ctxStopAgent(target) {
+  const { ns, id, sessionId, variant } = target;
+  const confirmed = window.confirm(t('close_prebuilt_confirm'));
+  if (!confirmed) return;
+
+  try {
+    const serverAgentId = (variant === 'managed-runtime') ? ns : id;
+    const agent = getExternalRuntimeAgent(serverAgentId);
+    const affectedRuntimeId = id || agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id || null;
+    if (variant === 'external') {
+      await closeSidebarExternalRuntime(agent);
+    } else if (variant === 'child') {
+      const hostId = agent?.parent_id || serverAgentId;
+      const sId = agent?.active_workspace_session_id || null;
+      await invoke('stop_agent', { agentId: hostId, sessionId: sId });
+    } else {
+      // managed-runtime / prebuilt: pass sessionId to stop only the targeted runtime
+      const sId = sessionId || agent?.active_workspace_session_id || null;
+      await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
+    }
+    await refreshSidebarRuntimeAfterMutation(500);
+    if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
+      const fallbackTarget = (variant === 'external' || variant === 'child')
+        ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
+        : resolveWorkspaceFallbackAgentId(agent);
+      if (fallbackTarget) {
+        selectWorkspaceSurface(fallbackTarget);
+      }
+    }
+  } catch (e) {
+    window.alert(t('close_failed') + (e && e.message ? e.message : e));
+  }
+}
+
 function dispatchCtxAction(action, target) {
   if (!action || !target) return;
-  const { ns, id, sessionId } = target;
+  const { ns, id, sessionId, variant } = target;
 
   switch (action) {
     case 'activate':
@@ -2747,20 +2850,12 @@ function dispatchCtxAction(action, target) {
 
     case 'restart':
       window.closeCtxMenu();
-      contextMenuAgentId = id;
-      contextMenuAgentMode = (variant === 'managed-runtime') ? 'prebuilt-runtime'
-        : (variant === 'child') ? 'child-runtime'
-        : 'external-runtime';
-      restartAgentAction.click();
+      ctxRestartAgent(target);
       break;
 
     case 'stop':
       window.closeCtxMenu();
-      contextMenuAgentId = id;
-      contextMenuAgentMode = (variant === 'managed-runtime') ? 'prebuilt-runtime'
-        : (variant === 'child') ? 'child-runtime'
-        : 'external-runtime';
-      stopAgentAction.click();
+      ctxStopAgent(target);
       break;
 
     case 'delete-session':
@@ -2858,7 +2953,7 @@ window.deleteAssemblySessionRecord = async (sessionId) => {
 
     const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
     if (nextRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-      await window.switchAgent(nextRuntimeId);
+      await requestSwitch(nextRuntimeId, 'session-delete');
     } else if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       selectWorkspaceSurface(agent.id, { skipFeaturePanel: true });
     }
@@ -3079,8 +3174,47 @@ window.resetWorkspaceForm = async (formId) => {
   renderCurrentMainView();
 };
 
+/**
+ * Flush the pending switch slot: if the serial still matches, execute the
+ * actual switchAgent call and clear the slot.  Only the most recent
+ * requestSwitch() call wins; stale flushes are silently discarded.
+ */
+function flushPendingSwitch(serial, resolve) {
+  if (!pendingSwitchTarget || pendingSwitchTarget.serial !== serial) {
+    resolve({ switched: false, reason: 'superseded' });
+    return;
+  }
+  const runtimeId = pendingSwitchTarget.runtimeId;
+  pendingSwitchTarget = null;
+  window.switchAgent(runtimeId).then(
+    () => resolve({ switched: true }),
+    (e) => resolve({ switched: false, reason: e?.message }),
+  );
+}
+
+/**
+ * Request a deferred agent switch.  The call-site is an async operation
+ * that has just completed (B-class).  The target is written to the
+ * "pending switch slot"; only the most recent caller's serial wins.
+ *
+ * Returns a Promise so callers can still `await` it; resolves with
+ * { switched: true } or { switched: false, reason }.
+ *
+ * @param {string} runtimeId  The runtime agent id to switch to.
+ * @param {string} source     A short label for debugging (e.g. 'launch', 'restart').
+ */
+function requestSwitch(runtimeId, source) {
+  pendingSwitchSerial += 1;
+  const serial = pendingSwitchSerial;
+  pendingSwitchTarget = { runtimeId, serial, source };
+  return new Promise((resolve) => {
+    setTimeout(() => flushPendingSwitch(serial, resolve), 0);
+  });
+}
 
 window.switchAgent = async (newAgentId) => {
+  // A-class (direct) calls cancel any pending deferred switch.
+  pendingSwitchTarget = null;
   closeAgentContextMenu();
   const targetAgent = findAgentByIdentity(newAgentId);
   const requestedRuntimeOfWorkspaceHost = !!(
@@ -3345,7 +3479,7 @@ restartAgentAction.addEventListener('click', async () => {
     suppressSidebarRerender = false;
     await loadAgents();
     if (nextRuntimeId) {
-      await window.switchAgent(nextRuntimeId);
+      await requestSwitch(nextRuntimeId, 'restart-handler');
     }
   } catch (e) {
     suppressSidebarRerender = false;
@@ -3543,12 +3677,13 @@ deleteSessionAction.addEventListener('click', async () => {
 
     const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
     if (nextRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-      await window.switchAgent(nextRuntimeId);
+      await requestSwitch(nextRuntimeId, 'stop-handler');
     } else if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       const fallbackAgent = applyManagedPrebuiltAgent(pendingAgentId, null, { uiOnlyWhenStopped: true });
       setPreferredUnitMode('home', fallbackAgent || targetAgent || { id: pendingAgentId, source: 'prebuilt' });
       selectWorkspaceSurface(pendingAgentId);
     }
+
 
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
@@ -3627,7 +3762,7 @@ deleteProjectAction.addEventListener('click', () => {
         renderCurrentMainView();
         const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
         if (nextRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-          await window.switchAgent(nextRuntimeId);
+          await requestSwitch(nextRuntimeId, 'stop-handler');
         } else if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
           const fallbackAgent = applyManagedPrebuiltAgent(pendingAgentId, null, { uiOnlyWhenStopped: true });
           setPreferredUnitMode('home', fallbackAgent || agent || { id: pendingAgentId, source: 'prebuilt' });
@@ -3721,7 +3856,7 @@ deleteProjectAction.addEventListener('click', () => {
 
         const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
         if (nextRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-          await window.switchAgent(nextRuntimeId);
+          await requestSwitch(nextRuntimeId, 'stop-handler');
         } else if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
           const fallbackAgent = applyManagedPrebuiltAgent(pendingAgentId, null, { uiOnlyWhenStopped: true });
           setPreferredUnitMode('home', fallbackAgent || targetAgent || { id: pendingAgentId, source: 'prebuilt' });
@@ -3819,7 +3954,7 @@ container.addEventListener('wheel', () => window.closeCtxMenu(), { passive: true
 container.addEventListener('touchmove', () => registerManualScrollIntent({ interrupt: true }), { passive: true });
 container.addEventListener('pointerdown', (event) => {
   if (event.pointerType === 'mouse' || event.pointerType === 'touch' || event.pointerType === 'pen') {
-    registerManualScrollIntent({ interrupt: true });
+    registerManualScrollIntent();
   }
 }, { passive: true });
 container.addEventListener('contextmenu', (event) => {
@@ -4447,8 +4582,9 @@ function getInputRenderSignature(requests, renderMode) {
 }
 
 function renderInputRequests(requests) {
-  const container = document.getElementById('user-input-container');
-  if (!container) return;
+  const inputContainer = document.getElementById('user-input-container');
+  if (!inputContainer) return;
+  const chatViewportTopBefore = container.scrollTop;
   currentInputRequests = requests;
   const chatActive = isChatSurfaceActive();
   const renderMode = getInputSurfaceMode(requests);
@@ -4463,24 +4599,33 @@ function renderInputRequests(requests) {
   lastRenderedInputMode = renderMode;
 
   // 清空现有内容
-  container.innerHTML = '';
-  container.classList.toggle('choice-input-active', hasChoiceRequest);
-  container.classList.remove('choice-collapsed');
-  container.onclick = hasChoiceRequest
-    ? function(event) {
-        if (event.target === container) {
-          collapsePrimaryChoiceRequest();
+  runWithSuppressedChatViewportObservers(() => {
+    inputContainer.innerHTML = '';
+    inputContainer.classList.toggle('choice-input-active', hasChoiceRequest);
+    inputContainer.classList.remove('choice-collapsed');
+    inputContainer.onclick = hasChoiceRequest
+      ? function(event) {
+          if (event.target === inputContainer) {
+            collapsePrimaryChoiceRequest();
+          }
         }
-      }
-    : null;
+      : null;
+  });
 
   if (!chatActive || renderMode === 'hidden') {
-    container.classList.remove('choice-input-active', 'choice-collapsed');
+    inputContainer.classList.remove('choice-input-active', 'choice-collapsed');
+    notifyChatViewportMutation({
+      reason: 'input-render',
+      shouldFollow: followLatestEnabled && chatActive,
+      preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+      forceSnap: followLatestEnabled,
+      allowChase: false,
+    });
     return;
   }
 
   if (renderMode === 'readonly') {
-    container.classList.remove('choice-input-active', 'choice-collapsed');
+    inputContainer.classList.remove('choice-input-active', 'choice-collapsed');
     const card = document.createElement('div');
     card.className = 'user-input-card';
     card.innerHTML = `
@@ -4488,7 +4633,16 @@ function renderInputRequests(requests) {
         placeholder="${escapeHtml(t('workspace_readonly_mode'))}"
         style="opacity:0.5;cursor:not-allowed;"></textarea>
     `;
-    container.appendChild(card);
+    runWithSuppressedChatViewportObservers(() => {
+      inputContainer.appendChild(card);
+    });
+    notifyChatViewportMutation({
+      reason: 'input-render',
+      shouldFollow: followLatestEnabled && chatActive,
+      preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+      forceSnap: followLatestEnabled,
+      allowChase: false,
+    });
     return;
   }
 
@@ -4502,7 +4656,7 @@ function renderInputRequests(requests) {
   if (renderMode === 'requests' && hasRequests) {
     for (const req of requests) {
       if (isChoiceInputRequest(req)) {
-        renderChoiceInputRequest(container, req);
+        renderChoiceInputRequest(inputContainer, req);
         continue;
       }
 
@@ -4528,7 +4682,9 @@ function renderInputRequests(requests) {
         </div>
         ${actionsHtml ? `<div class="user-input-footer">${actionsHtml}</div>` : ''}
       `;
-      container.appendChild(card);
+      runWithSuppressedChatViewportObservers(() => {
+        inputContainer.appendChild(card);
+      });
       
       // Auto-focus
       setTimeout(() => {
@@ -4548,8 +4704,16 @@ function renderInputRequests(requests) {
     }
   } else if (renderMode === 'persistent' && hasRuntimeSelected && !readOnlyMode) {
     // 常驻输入框：当前正在查看 runtime 聊天，但没有 pending input request
-    renderPersistentInput(container);
+    renderPersistentInput(inputContainer);
   }
+
+  notifyChatViewportMutation({
+    reason: 'input-render',
+    shouldFollow: followLatestEnabled && chatActive,
+    preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+    forceSnap: followLatestEnabled,
+    allowChase: false,
+  });
 }
 
 // 渲染常驻输入框（agent 运行期间始终可见）
@@ -5219,9 +5383,17 @@ function applyConversationProcessState(root = container) {
 };
 
 window.toggleChatProcessVisibility = function() {
+  const chatViewportTopBefore = container.scrollTop;
   showChatProcess = !showChatProcess;
   saveChatProcessVisibility();
   applyConversationProcessState(container);
+  notifyChatViewportMutation({
+    reason: 'process-toggle',
+    shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+    preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+    forceSnap: true,
+    allowChase: false,
+  });
 };
 
 async function submitInputAction(requestId, actionId, payload = {}) {
@@ -5412,7 +5584,9 @@ function appendNewMessages(newMessages, startIndex) {
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   // 移除空状态
   const emptyState = container.querySelector('.empty-state');
-  if (emptyState) emptyState.remove();
+  runWithSuppressedChatViewportObservers(() => {
+    if (emptyState) emptyState.remove();
+  });
 
   // 获取当前消息数量
   const currentCount = container.querySelectorAll('.message-row').length;
@@ -5470,11 +5644,13 @@ function appendNewMessages(newMessages, startIndex) {
     }
 
     // 追加到容器
-    container.insertAdjacentHTML('beforeend', html);
-    const appendedRow = container.lastElementChild;
-    if (appendedRow) {
-      enhanceMathInElement(appendedRow);
-    }
+    runWithSuppressedChatViewportObservers(() => {
+      container.insertAdjacentHTML('beforeend', html);
+      const appendedRow = container.lastElementChild;
+      if (appendedRow) {
+        enhanceMathInElement(appendedRow);
+      }
+    });
   });
 
   // 对新消息应用折叠逻辑
@@ -5482,7 +5658,13 @@ function appendNewMessages(newMessages, startIndex) {
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
   updateFollowLatestButton();
-  queueChatScrollSettlement({ reason: 'append', shouldFollow: shouldFollowAfterMutation });
+  notifyChatViewportMutation({
+    reason: 'append',
+    shouldFollow: shouldFollowAfterMutation,
+    allowChase: false,
+    preferSmooth: false,
+    forceSnap: false,
+  });
 }
 
 // 更新最后一条消息
@@ -5527,7 +5709,9 @@ function updateLastMessage(msg) {
 
     const toolResultBody = lastRow.querySelector('.tool-result-body');
     if (toolResultBody) {
-      toolResultBody.innerHTML = bodyHtml;
+      runWithSuppressedChatViewportObservers(() => {
+        toolResultBody.innerHTML = bodyHtml;
+      });
     }
     lastRow.dataset.toolSuccess = success ? 'true' : 'false';
     enhanceMathInElement(lastRow);
@@ -5538,7 +5722,13 @@ function updateLastMessage(msg) {
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
   updateFollowLatestButton();
-  queueChatScrollSettlement({ reason: 'patch-last', shouldFollow: shouldFollowAfterMutation });
+  notifyChatViewportMutation({
+    reason: 'patch-last',
+    shouldFollow: shouldFollowAfterMutation,
+    allowChase: false,
+    preferSmooth: false,
+    forceSnap: false,
+  });
 }
 
 function getCollapseThresholdForRow(row) {
@@ -5772,24 +5962,29 @@ function render(messages) {
   }).join('');
 
   const savedScrollTop = container.scrollTop;
-  container.innerHTML = html;
-  enhanceMathInElement(container);
+  runWithSuppressedChatViewportObservers(() => {
+    container.innerHTML = html;
+    enhanceMathInElement(container);
+  }, 220);
 
   syncCollapseStates(container);
 
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
   updateFollowLatestButton();
-  queueChatScrollSettlement({
+  notifyChatViewportMutation({
     reason: 'render-full',
     shouldFollow: shouldFollowAfterMutation,
     preserveTop: shouldFollowAfterMutation ? null : savedScrollTop,
+    forceSnap: shouldFollowAfterMutation,
+    allowChase: false,
   });
 }
 
 window.toggleMessage = function(id) {
   const el = document.getElementById(id);
   if (el) {
+    const chatViewportTopBefore = container.scrollTop;
     el.classList.toggle('collapsed');
     const row = el.closest('.message-row');
     const isCollapsed = el.classList.contains('collapsed');
@@ -5806,13 +6001,31 @@ window.toggleMessage = function(id) {
     if (btn) {
       btn.innerHTML = getToggleButtonLabel(isCollapsed);
     }
+
+    notifyChatViewportMutation({
+      reason: 'message-toggle',
+      shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+      preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+      forceSnap: false,
+      allowChase: false,
+      preferSmooth: false,
+    });
   }
 };
 
 window.toggleReasoning = function(id) {
   const el = document.getElementById(id);
   if (el) {
+    const chatViewportTopBefore = container.scrollTop;
     el.classList.toggle('expanded');
+    notifyChatViewportMutation({
+      reason: 'reasoning-toggle',
+      shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+      preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+      forceSnap: false,
+      allowChase: false,
+      preferSmooth: false,
+    });
   }
 };
 

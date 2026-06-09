@@ -2070,6 +2070,15 @@ async function readWorkspaceState(agentId) {
         _wsCache.delete(key);
       }
     }
+    // Auto-set openDirectory to most recently used project if empty
+    if (key === 'programming-helper' && !data.openDirectory && Array.isArray(data.phProjects) && data.phProjects.length > 0) {
+      const sorted = [...data.phProjects].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+      data.openDirectory = sorted[0].openDirectory || '';
+      if (data.openDirectory) {
+        writeWorkspaceState(key, data).catch(() => {});
+        _wsCache.delete(key);
+      }
+    }
     _wsCache.set(key, { data, ts: Date.now() });
     return data;
   } catch {
@@ -4165,6 +4174,8 @@ function runCommand(command, args, options = {}) {
 async function selectEmptyDirectory() {
   const selectedPath = await runInteractiveSelectionScript([
     'Add-Type -AssemblyName System.Windows.Forms',
+    '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; WindowState = \'Minimized\'; ShowInTaskbar = $false }',
+    '$owner.Show()',
     '$dialog = New-Object System.Windows.Forms.OpenFileDialog',
     '$dialog.Title = "选择一个空文件夹"',
     '$dialog.Filter = "文件夹|*.folder"',
@@ -4172,9 +4183,11 @@ async function selectEmptyDirectory() {
     '$dialog.CheckPathExists = $true',
     '$dialog.ValidateNames = $false',
     '$dialog.FileName = "选择此文件夹.folder"',
-    'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {',
+    'if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {',
+    '  $owner.Close()',
     '  [IO.File]::WriteAllText("__OUT__", (Split-Path $dialog.FileName -Parent), [Text.Encoding]::UTF8)',
     '} else {',
+    '  $owner.Close()',
     '  [IO.File]::WriteAllText("__OUT__", "CANCELLED", [Text.Encoding]::UTF8)',
     '}',
   ]);
@@ -4188,15 +4201,19 @@ async function selectEmptyDirectory() {
 async function selectFiles() {
   const stdout = await runInteractiveSelectionScript([
     'Add-Type -AssemblyName System.Windows.Forms',
+    '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; WindowState = \'Minimized\'; ShowInTaskbar = $false }',
+    '$owner.Show()',
     '$dialog = New-Object System.Windows.Forms.OpenFileDialog',
     '$dialog.Title = "选择资料文件"',
     '$dialog.Multiselect = $true',
     '$dialog.CheckFileExists = $true',
     '$dialog.CheckPathExists = $true',
     '$dialog.Filter = "所有文件|*.*"',
-    'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {',
+    'if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {',
+    '  $owner.Close()',
     '  [IO.File]::WriteAllLines("__OUT__", $dialog.FileNames, [Text.Encoding]::UTF8)',
     '} else {',
+    '  $owner.Close()',
     '  [IO.File]::WriteAllText("__OUT__", "CANCELLED", [Text.Encoding]::UTF8)',
     '}',
   ]);
@@ -4207,6 +4224,8 @@ async function selectFiles() {
 async function selectDirectory() {
   const selectedPath = await runInteractiveSelectionScript([
     'Add-Type -AssemblyName System.Windows.Forms',
+    '$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; WindowState = \'Minimized\'; ShowInTaskbar = $false }',
+    '$owner.Show()',
     '$dialog = New-Object System.Windows.Forms.OpenFileDialog',
     '$dialog.Title = "选择资料文件夹"',
     '$dialog.Filter = "文件夹|*.folder"',
@@ -4214,9 +4233,11 @@ async function selectDirectory() {
     '$dialog.CheckPathExists = $true',
     '$dialog.ValidateNames = $false',
     '$dialog.FileName = "选择此文件夹.folder"',
-    'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {',
+    'if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {',
+    '  $owner.Close()',
     '  [IO.File]::WriteAllText("__OUT__", (Split-Path $dialog.FileName -Parent), [Text.Encoding]::UTF8)',
     '} else {',
+    '  $owner.Close()',
     '  [IO.File]::WriteAllText("__OUT__", "CANCELLED", [Text.Encoding]::UTF8)',
     '}',
   ]);
@@ -7869,6 +7890,28 @@ app.post('/protoclaw/ph_project/add', express.json(), async (req, res, next) => 
     const state = await readWorkspaceState('programming-helper');
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
     await writeWorkspaceState('programming-helper', nextState);
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/ph_project/open_in_explorer', express.json(), async (req, res, next) => {
+  try {
+    const dirPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
+    if (!dirPath) {
+      return res.status(400).json({ error: 'path is required' });
+    }
+    const { existsSync } = await import('fs');
+    if (!existsSync(dirPath)) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+    if (process.platform === 'win32') {
+      spawn('cmd.exe', ['/c', 'start', '""', dirPath], { stdio: 'ignore', detached: true }).unref();
+    } else {
+      const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+      spawn(cmd, [dirPath], { stdio: 'ignore', detached: true }).unref();
+    }
     res.json({ ok: true });
   } catch (error) {
     next(error);

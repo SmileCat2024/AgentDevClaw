@@ -3092,7 +3092,8 @@ body[data-theme="light"] .project-docset-detail-empty {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
+  overflow-anchor: none;
 }
 
 .follow-latest-btn {

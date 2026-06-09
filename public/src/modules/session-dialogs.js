@@ -202,7 +202,7 @@ window.submitTrimCompact = async () => {
       || null;
     if (nextRuntimeId) {
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
-      await window.switchAgent(nextRuntimeId);
+      await requestSwitch(nextRuntimeId, 'trim');
     } else {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
@@ -340,7 +340,7 @@ window.submitBranch = async () => {
       || null;
     if (nextRuntimeId) {
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
-      await window.switchAgent(nextRuntimeId);
+      await requestSwitch(nextRuntimeId, 'branch');
     } else {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();

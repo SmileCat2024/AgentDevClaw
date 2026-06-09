@@ -173,8 +173,7 @@ function isCompactedResumeSession(session) {
 }
 
 function renderSessionResumeBadge(session) {
-  if (!isCompactedResumeSession(session)) return '';
-  return '<span class="workspace-history-active">' + escapeHtml(t('workspace_compacted_badge')) + '</span>';
+  return '';
 }
 
 function renderSessionTitleAiButton(session) {
@@ -256,16 +255,40 @@ function getRuntimeAwareAgentName() {
 function updateChatContextBar() {
   var bar = document.getElementById('chat-context-bar');
   if (!bar) return;
+  var prevHtml = bar.innerHTML;
+  var wasHidden = bar.classList.contains('hidden');
 
   // 跟 chat-process-toggle 同一逻辑：非聊天界面时隐藏
   if (shouldRenderWorkspaceSurface()) {
     bar.classList.add('hidden');
+    if (!wasHidden && typeof notifyChatViewportMutation === 'function') {
+      notifyChatViewportMutation({
+        reason: 'context-bar',
+        shouldFollow: false,
+        preserveTop: container.scrollTop,
+        forceSnap: false,
+        allowChase: false,
+      });
+    }
     return;
   }
   bar.classList.remove('hidden');
 
   var agent = getRuntimeAwareAgentRecord();
-  if (!agent) { bar.innerHTML = ''; return; }
+  if (!agent) {
+    bar.innerHTML = '';
+    if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
+        notifyChatViewportMutation({
+          reason: 'context-bar',
+          shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+          preserveTop: followLatestEnabled ? null : container.scrollTop,
+          forceSnap: false,
+          allowChase: false,
+          preferSmooth: false,
+        });
+    }
+    return;
+  }
 
   // 找到当前活跃会话
   var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
@@ -298,7 +321,20 @@ function updateChatContextBar() {
   // context length
   var contextLength = getSessionContextLength(activeSession, agent);
 
-  if (!used && !modelName) { bar.innerHTML = ''; return; }
+  if (!used && !modelName) {
+    bar.innerHTML = '';
+    if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
+        notifyChatViewportMutation({
+          reason: 'context-bar',
+          shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+          preserveTop: followLatestEnabled ? null : container.scrollTop,
+          forceSnap: false,
+          allowChase: false,
+          preferSmooth: false,
+        });
+    }
+    return;
+  }
 
   var html = '';
   if (modelName) {
@@ -316,6 +352,16 @@ function updateChatContextBar() {
       + '</span>';
   }
   bar.innerHTML = html;
+  if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
+    notifyChatViewportMutation({
+      reason: 'context-bar',
+      shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+      preserveTop: followLatestEnabled ? null : container.scrollTop,
+      forceSnap: false,
+      allowChase: false,
+      preferSmooth: false,
+    });
+  }
 }
 
 async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
@@ -1814,7 +1860,8 @@ function renderWorkspaceSessionList(agent, block) {
       dropdownHtml,
       '</div>',
       '<div class="ph-project-bar-right">',
-      (currentProject ? '<div class="ph-project-bar-path">' + escapeHtml(currentProject.openDirectory) + '</div>' : ''),
+      (currentProject ? '<div class="ph-project-bar-path" title="' + escapeHtml(isZh ? '点击在文件管理器中打开' : 'Click to open in file explorer') + '" data-path="' + escapeHtml(currentProject.openDirectory) + '" onclick="window.phOpenInExplorer(this.dataset.path)">' + escapeHtml(currentProject.openDirectory) + '</div>' : ''),
+      (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'create_session', openDirectory: currentProject.openDirectory || '' })) + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
       '</div>',
       '</div>',
     ].join('');
@@ -5852,6 +5899,7 @@ function isEditingWorkspaceForm() {
 
 function renderCurrentMainView() {
   const agent = getCurrentAgentRecord();
+  ensureChatViewportObservers();
   renderWorkspaceTabs(agent);
   renderInputRequests(currentInputRequests);
   if (shouldRenderWorkspaceSurface(agent)) {
@@ -5878,10 +5926,19 @@ function renderCurrentMainView() {
           savedPhTabState[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
         }
       });
-      const savedScroll = container.scrollTop;
-      container.innerHTML = newHtml;
+      // Instantly jump to top — temporarily disable smooth scroll so there's no animation
+      const prevScrollBehavior = container.style.scrollBehavior;
+      runWithSuppressedChatViewportObservers(() => {
+        container.style.scrollBehavior = 'auto';
+        container.style.visibility = 'hidden';
+        container.scrollTop = 0;
+        container.innerHTML = newHtml;
+      }, 220);
       lastRenderedWorkspaceHtml = newHtml;
-      if (savedScroll > 0) container.scrollTop = savedScroll;
+      requestAnimationFrame(() => {
+        container.style.visibility = '';
+        container.style.scrollBehavior = prevScrollBehavior;
+      });
       expandedProjectIds.forEach((pid) => {
         const card = container.querySelector(`.feature-project-card[data-prebuilt-project-id="${CSS.escape(pid)}"]`);
         if (card) {
@@ -5911,7 +5968,9 @@ function renderCurrentMainView() {
   // can skip re-render if workspace data hasn't changed.
   if (currentMessages.length === 0) {
     cancelChatScrollSettlement();
-    container.innerHTML = getEmptyStateHtml();
+    runWithSuppressedChatViewportObservers(() => {
+      container.innerHTML = getEmptyStateHtml();
+    }, 180);
     updateProjectDocsetChrome(agent);
     updateChatContextBar();
     if (typeof updateChatProcessToggle === 'function') {
@@ -6046,20 +6105,158 @@ function markManualScrollIntent() {
   lastManualScrollIntentAt = Date.now();
 }
 
-function interruptFollowLatest(reason = 'manual') {
-  followScrollSettleToken += 1;
+function getChatViewportMetrics() {
+  return {
+    top: container.scrollTop,
+    height: container.scrollHeight,
+    clientHeight: container.clientHeight,
+    rowCount: container.querySelectorAll('.message-row').length,
+  };
+}
+
+function getChatViewportBottomTop(metrics = getChatViewportMetrics()) {
+  return Math.max(0, metrics.height - metrics.clientHeight);
+}
+
+function setChatViewportTop(nextTop) {
+  suppressFollowScrollEvent = true;
+  container.scrollTop = Math.max(0, nextTop);
   suppressFollowScrollEvent = false;
-  pendingFollowToBottom = false;
-  _scrollDebounceBehavior = 'smooth';
-  if (_scrollDebounceTimer != null) {
-    clearTimeout(_scrollDebounceTimer);
-    _scrollDebounceTimer = null;
+}
+
+function lockChatViewportToBottomNow() {
+  cancelFollowLatestAnimation();
+  setChatViewportTop(getChatViewportBottomTop());
+  chatViewportFollowTransition = 'locked';
+}
+
+function suppressChatViewportObservers(quietMs = 160) {
+  chatViewportObserverSuppressDepth += 1;
+  chatViewportObserverQuietUntil = Math.max(chatViewportObserverQuietUntil || 0, Date.now() + Math.max(0, quietMs));
+}
+
+function resumeChatViewportObservers() {
+  chatViewportObserverSuppressDepth = Math.max(0, (chatViewportObserverSuppressDepth || 0) - 1);
+}
+
+function shouldIgnoreChatViewportObserverEvent() {
+  return chatViewportObserverSuppressDepth > 0 || Date.now() < (chatViewportObserverQuietUntil || 0);
+}
+
+function runWithSuppressedChatViewportObservers(work, quietMs = 160) {
+  suppressChatViewportObservers(quietMs);
+  try {
+    return work();
+  } finally {
+    resumeChatViewportObservers();
   }
-  if (_followLatestSettleTimer != null) {
-    clearTimeout(_followLatestSettleTimer);
-    _followLatestSettleTimer = null;
+}
+
+function cancelFollowLatestAnimation() {
+  chatViewportFollowToken += 1;
+  if (chatViewportFollowRaf) {
+    cancelAnimationFrame(chatViewportFollowRaf);
+    chatViewportFollowRaf = 0;
   }
+}
+
+function startFollowLatestAnimation() {
+  if (chatViewportFollowRaf || !followLatestEnabled || !isChatSurfaceActive()) {
+    return;
+  }
+
+  const token = ++chatViewportFollowToken;
+  const step = () => {
+    if (token !== chatViewportFollowToken) {
+      return;
+    }
+    chatViewportFollowRaf = 0;
+    if (!followLatestEnabled || !isChatSurfaceActive() || shouldRenderWorkspaceSurface()) {
+      return;
+    }
+
+    const metrics = getChatViewportMetrics();
+    const targetTop = getChatViewportBottomTop(metrics);
+    const delta = targetTop - metrics.top;
+    const pendingContext = chatViewportSettlementContext;
+    const hasRecentMutation = pendingContext
+      ? (Date.now() - pendingContext.lastMutationAt) < 180
+      : false;
+    const distance = Math.abs(delta);
+
+    if (distance <= 1) {
+      setChatViewportTop(targetTop);
+      if (!hasRecentMutation) {
+        return;
+      }
+      chatViewportFollowRaf = requestAnimationFrame(step);
+      return;
+    }
+
+    if (distance <= 64 || isNearBottom()) {
+      setChatViewportTop(targetTop);
+    } else if (isFollowLatestEntryWindowActive() || distance > 360) {
+      setChatViewportTop(targetTop);
+    } else {
+      const stepSize = Math.max(14, Math.min(84, distance * 0.35));
+      setChatViewportTop(metrics.top + Math.sign(delta) * stepSize);
+    }
+
+    chatViewportFollowRaf = requestAnimationFrame(step);
+  };
+
+  chatViewportFollowRaf = requestAnimationFrame(step);
+}
+
+function ensureChatViewportObservers() {
+  if (chatViewportObserversReady) return;
+
+  if (typeof MutationObserver === 'function') {
+    chatViewportMutationObserver = new MutationObserver(() => {
+      if (shouldIgnoreChatViewportObserverEvent() || shouldRenderWorkspaceSurface()) return;
+      notifyChatViewportMutation({
+        reason: 'dom-observer',
+        shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+        preserveTop: followLatestEnabled ? null : container.scrollTop,
+        forceSnap: isFollowLatestEntryWindowActive(),
+        allowChase: false,
+        preferSmooth: false,
+      });
+    });
+    chatViewportMutationObserver.observe(container, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  }
+
+  if (typeof ResizeObserver === 'function') {
+    chatViewportResizeObserver = new ResizeObserver(() => {
+      if (shouldIgnoreChatViewportObserverEvent() || shouldRenderWorkspaceSurface()) return;
+      notifyChatViewportMutation({
+        reason: 'resize-observer',
+        shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+        preserveTop: followLatestEnabled ? null : container.scrollTop,
+        forceSnap: isFollowLatestEntryWindowActive(),
+        allowChase: false,
+        preferSmooth: false,
+      });
+    });
+    chatViewportResizeObserver.observe(container);
+    const inputContainer = document.getElementById('user-input-container');
+    if (inputContainer) {
+      chatViewportResizeObserver.observe(inputContainer);
+    }
+  }
+
+  chatViewportObserversReady = true;
+}
+
+function interruptFollowLatest(reason = 'manual') {
+  cancelFollowLatestAnimation();
+  suppressFollowScrollEvent = false;
   cancelChatScrollSettlement();
+  chatViewportFollowTransition = 'locked';
   if (reason === 'manual' && followLatestEnabled) {
     followLatestEnabled = false;
     updateFollowLatestButton();
@@ -6095,113 +6292,142 @@ function isFollowLatestEntryWindowActive() {
 }
 
 function cancelChatScrollSettlement() {
-  chatScrollSettlementToken += 1;
-  if (chatScrollSettlementRaf) {
-    cancelAnimationFrame(chatScrollSettlementRaf);
-    chatScrollSettlementRaf = 0;
+  chatViewportSettlementToken += 1;
+  if (chatViewportSettlementRaf) {
+    cancelAnimationFrame(chatViewportSettlementRaf);
+    chatViewportSettlementRaf = 0;
   }
-  if (chatScrollSettlementTimer != null) {
-    clearTimeout(chatScrollSettlementTimer);
-    chatScrollSettlementTimer = null;
+  if (chatViewportSettlementTimer != null) {
+    clearTimeout(chatViewportSettlementTimer);
+    chatViewportSettlementTimer = null;
   }
-  chatScrollSettlementContext = null;
+  chatViewportSettlementContext = null;
 }
 
-function queueChatScrollSettlement(options = {}) {
-  const context = {
-    reason: options.reason || 'unknown',
-    preserveTop: Number.isFinite(options.preserveTop) ? options.preserveTop : null,
-    shouldFollow: options.shouldFollow === true,
-    stableFrames: 0,
-    lastHeight: -1,
-    lastCount: -1,
-  };
-  chatScrollSettlementContext = context;
-  const token = ++chatScrollSettlementToken;
-  if (chatScrollSettlementRaf) {
-    cancelAnimationFrame(chatScrollSettlementRaf);
-    chatScrollSettlementRaf = 0;
-  }
-  if (chatScrollSettlementTimer != null) {
-    clearTimeout(chatScrollSettlementTimer);
-    chatScrollSettlementTimer = null;
-  }
+function notifyChatViewportMutation(options = {}) {
+  ensureChatViewportObservers();
 
-  const settle = () => {
-    if (token !== chatScrollSettlementToken) return;
-    chatScrollSettlementRaf = 0;
-    const activeContext = chatScrollSettlementContext;
-    if (!activeContext) return;
-    if (shouldRenderWorkspaceSurface()) {
-      cancelChatScrollSettlement();
-      return;
-    }
-    const nextHeight = container.scrollHeight;
-    const nextCount = container.querySelectorAll('.message-row').length;
-    if (nextHeight === activeContext.lastHeight && nextCount === activeContext.lastCount) {
-      activeContext.stableFrames += 1;
-    } else {
-      activeContext.stableFrames = 0;
-      activeContext.lastHeight = nextHeight;
-      activeContext.lastCount = nextCount;
-    }
-    if (activeContext.stableFrames >= 2) {
-      const shouldFollowNow = activeContext.shouldFollow && followLatestEnabled && isChatSurfaceActive();
-      chatScrollSettlementContext = null;
-      if (shouldFollowNow) {
-        scrollToLatest('auto');
-        scheduleFollowLatestSettlePass();
-      } else if (activeContext.preserveTop != null) {
-        suppressFollowScrollEvent = true;
-        container.scrollTop = activeContext.preserveTop;
-        suppressFollowScrollEvent = false;
-      }
-      return;
-    }
-    chatScrollSettlementRaf = requestAnimationFrame(settle);
-  };
-
-  chatScrollSettlementTimer = setTimeout(() => {
-    if (token !== chatScrollSettlementToken) return;
-    chatScrollSettlementTimer = null;
-    chatScrollSettlementRaf = requestAnimationFrame(settle);
-  }, 0);
-}
-
-function animateScrollTo(targetTop, duration = 150) {
-  const settleToken = ++followScrollSettleToken;
-  lastManualScrollIntentAt = 0;
-  suppressFollowScrollEvent = true;
-
-  const startTop = container.scrollTop;
-  const delta = targetTop - startTop;
-  if (Math.abs(delta) < 1 || duration <= 0) {
-    container.scrollTop = targetTop;
-    suppressFollowScrollEvent = false;
+  if (shouldRenderWorkspaceSurface()) {
+    cancelChatScrollSettlement();
+    cancelFollowLatestAnimation();
     return;
   }
 
-  const startAt = performance.now();
-  const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
-
-  const step = (now) => {
-    if (settleToken !== followScrollSettleToken) {
-      return;
-    }
-
-    const progress = Math.min(1, (now - startAt) / duration);
-    container.scrollTop = startTop + delta * easeOutCubic(progress);
-
-    if (progress < 1) {
-      requestAnimationFrame(step);
-      return;
-    }
-
-    container.scrollTop = targetTop;
-    suppressFollowScrollEvent = false;
+  const context = chatViewportSettlementContext || {
+    reasons: new Set(),
+    shouldFollow: false,
+    preserveTop: null,
+    forceSnap: false,
+    allowChase: false,
+    preferSmooth: false,
+    startedAt: Date.now(),
+    lastMutationAt: Date.now(),
+    stableFrames: 0,
+    lastMetricsKey: '',
   };
 
-  requestAnimationFrame(step);
+  const reason = String(options.reason || 'unknown');
+  if (options.quietObservers !== false && reason !== 'dom-observer' && reason !== 'resize-observer') {
+    chatViewportObserverQuietUntil = Math.max(chatViewportObserverQuietUntil || 0, Date.now() + 180);
+  }
+  context.reasons.add(reason);
+  context.lastMutationAt = Date.now();
+  context.shouldFollow = context.shouldFollow || options.shouldFollow === true;
+  context.forceSnap = context.forceSnap || options.forceSnap === true;
+  context.allowChase = context.allowChase || options.allowChase === true;
+  context.preferSmooth = context.preferSmooth || options.preferSmooth === true;
+
+  if (!context.shouldFollow && Number.isFinite(options.preserveTop)) {
+    context.preserveTop = options.preserveTop;
+  }
+
+  chatViewportSettlementContext = context;
+
+  const shouldLockBottomImmediately =
+    context.shouldFollow
+    && followLatestEnabled
+    && isChatSurfaceActive()
+    && !context.preferSmooth
+    && !shouldRenderWorkspaceSurface();
+  if (shouldLockBottomImmediately) {
+    lockChatViewportToBottomNow();
+  }
+
+  const token = ++chatViewportSettlementToken;
+  if (chatViewportSettlementTimer != null) {
+    clearTimeout(chatViewportSettlementTimer);
+  }
+  if (chatViewportSettlementRaf) {
+    cancelAnimationFrame(chatViewportSettlementRaf);
+    chatViewportSettlementRaf = 0;
+  }
+
+  const settle = () => {
+    if (token !== chatViewportSettlementToken) return;
+    chatViewportSettlementRaf = 0;
+    const activeContext = chatViewportSettlementContext;
+    if (!activeContext) return;
+    if (shouldRenderWorkspaceSurface()) {
+      cancelChatScrollSettlement();
+      cancelFollowLatestAnimation();
+      return;
+    }
+
+    const metrics = getChatViewportMetrics();
+    const metricsKey = `${metrics.height}|${metrics.clientHeight}|${metrics.rowCount}`;
+    if (metricsKey === activeContext.lastMetricsKey) {
+      activeContext.stableFrames += 1;
+    } else {
+      activeContext.stableFrames = 0;
+      activeContext.lastMetricsKey = metricsKey;
+    }
+
+    const timedOut = (Date.now() - activeContext.startedAt) > 280;
+    const stableEnough = activeContext.stableFrames >= 2;
+    if (!stableEnough && !timedOut) {
+      chatViewportSettlementRaf = requestAnimationFrame(settle);
+      return;
+    }
+
+    chatViewportSettlementContext = null;
+
+    if (activeContext.shouldFollow && followLatestEnabled && isChatSurfaceActive()) {
+      const targetTop = getChatViewportBottomTop(metrics);
+      const delta = targetTop - metrics.top;
+      const distance = Math.abs(delta);
+      const shouldAnimateExplicitFollow =
+        activeContext.preferSmooth
+        && chatViewportFollowTransition === 'smooth'
+        && !isFollowLatestEntryWindowActive();
+      const shouldSnapNow =
+        !shouldAnimateExplicitFollow
+        || activeContext.forceSnap
+        || isFollowLatestEntryWindowActive()
+        || distance <= 64
+        || distance > 240
+        || activeContext.reasons.has('render-full')
+        || activeContext.reasons.has('process-toggle')
+        || activeContext.reasons.has('input-render');
+
+      if (shouldSnapNow) {
+        lockChatViewportToBottomNow();
+      } else if (shouldAnimateExplicitFollow && distance > 1) {
+        startFollowLatestAnimation();
+      }
+      return;
+    }
+
+    if (activeContext.preserveTop != null) {
+      cancelFollowLatestAnimation();
+      setChatViewportTop(activeContext.preserveTop);
+    }
+  };
+
+  chatViewportSettlementTimer = setTimeout(() => {
+    if (token !== chatViewportSettlementToken) return;
+    chatViewportSettlementTimer = null;
+    chatViewportSettlementRaf = requestAnimationFrame(settle);
+  }, 0);
 }
 
 function captureAssemblyFieldFocus() {
@@ -6356,17 +6582,18 @@ window.toggleAssemblyStage = (formId, stageKey) => {
 };
 
 function scrollToLatest(behavior = 'smooth') {
-  const targetTop = container.scrollHeight;
+  const targetTop = getChatViewportBottomTop();
   if (behavior === 'auto') {
-    followScrollSettleToken += 1;
+    cancelFollowLatestAnimation();
     lastManualScrollIntentAt = 0;
-    suppressFollowScrollEvent = true;
-    container.scrollTop = targetTop;
-    suppressFollowScrollEvent = false;
+    setChatViewportTop(targetTop);
+    chatViewportFollowTransition = 'locked';
     return;
   }
 
-  animateScrollTo(targetTop, 70);
+  lastManualScrollIntentAt = 0;
+  chatViewportFollowTransition = 'smooth';
+  startFollowLatestAnimation();
 }
 
 function setFollowLatest(enabled, options = {}) {
@@ -6374,36 +6601,25 @@ function setFollowLatest(enabled, options = {}) {
   followLatestEnabled = enabled;
   if (enabled) {
     lastManualScrollIntentAt = 0;
+    chatViewportFollowTransition = behavior === 'smooth' ? 'smooth' : 'locked';
   }
   updateFollowLatestButton();
   if (enabled && scroll && isChatSurfaceActive()) {
     requestFollowLatest({ behavior, scroll: true });
+  } else if (!enabled) {
+    interruptFollowLatest('programmatic');
   }
 }
 
-let _scrollDebounceTimer = null;
-let _scrollDebounceBehavior = 'smooth';
-let _followLatestSettleTimer = null;
-let _followRequestVersion = 0;
-
 function scheduleFollowLatestSettlePass() {
-  if (_followLatestSettleTimer != null) {
-    clearTimeout(_followLatestSettleTimer);
-  }
-  _followLatestSettleTimer = setTimeout(() => {
-    _followLatestSettleTimer = null;
-    if (!followLatestEnabled || !isChatSurfaceActive()) return;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (!followLatestEnabled || !isChatSurfaceActive()) return;
-        followScrollSettleToken += 1;
-        lastManualScrollIntentAt = 0;
-        suppressFollowScrollEvent = true;
-        container.scrollTop = container.scrollHeight;
-        suppressFollowScrollEvent = false;
-      });
-    });
-  }, 48);
+  if (!followLatestEnabled || !isChatSurfaceActive()) return;
+  notifyChatViewportMutation({
+    reason: 'settle-pass',
+    shouldFollow: true,
+    forceSnap: true,
+    allowChase: false,
+    preferSmooth: false,
+  });
 }
 
 function requestFollowLatest(options = {}) {
@@ -6425,63 +6641,24 @@ function requestFollowLatest(options = {}) {
   }
 
   const entryWindowActive = isFollowLatestEntryWindowActive();
-  const nextBehavior = entryWindowActive ? 'auto' : behavior;
-  const nextImmediate = immediate || entryWindowActive;
-
-  _followRequestVersion += 1;
-  pendingFollowToBottom = true;
-  if (nextBehavior === 'smooth' && _scrollDebounceBehavior !== 'auto') {
-    _scrollDebounceBehavior = 'smooth';
-  } else {
-    _scrollDebounceBehavior = nextBehavior;
-  }
-  if (nextImmediate && _scrollDebounceBehavior === 'auto') {
-    if (_scrollDebounceTimer != null) {
-      clearTimeout(_scrollDebounceTimer);
-      _scrollDebounceTimer = null;
-    }
-    scrollToLatest('auto');
-    pendingFollowToBottom = false;
-    scheduleFollowLatestSettlePass();
-    return;
-  }
-  scheduleScrollToLatestWithVersion(_scrollDebounceBehavior, _followRequestVersion);
+  const smoothAllowed = behavior === 'smooth' && !entryWindowActive && !immediate;
+  chatViewportFollowTransition = smoothAllowed ? 'smooth' : 'locked';
+  notifyChatViewportMutation({
+    reason: 'explicit-follow',
+    shouldFollow: true,
+    forceSnap: !smoothAllowed,
+    allowChase: smoothAllowed,
+    preferSmooth: smoothAllowed,
+  });
 }
 
 function scheduleScrollToLatest(behavior = 'smooth') {
-  _followRequestVersion += 1;
-  return scheduleScrollToLatestWithVersion(behavior, _followRequestVersion);
+  requestFollowLatest({ behavior, scroll: true });
 }
 
 function scheduleScrollToLatestWithVersion(behavior = 'smooth', requestVersion = 0) {
-  if (behavior !== 'auto' && isFollowLatestCooldownActive()) {
-    pendingFollowToBottom = false;
-    _scrollDebounceBehavior = 'smooth';
-    return;
-  }
-  pendingFollowToBottom = true;
-  _scrollDebounceBehavior = behavior;
-  if (_scrollDebounceTimer != null) return;
-  _scrollDebounceTimer = setTimeout(() => {
-    _scrollDebounceTimer = null;
-    if (!pendingFollowToBottom || !followLatestEnabled) return;
-    if (requestVersion > 0 && requestVersion < _followRequestVersion) {
-      scheduleScrollToLatestWithVersion(_scrollDebounceBehavior, _followRequestVersion);
-      return;
-    }
-    if (_scrollDebounceBehavior !== 'auto' && isFollowLatestCooldownActive()) {
-      pendingFollowToBottom = false;
-      _scrollDebounceBehavior = 'smooth';
-      return;
-    }
-    pendingFollowToBottom = false;
-    const b = _scrollDebounceBehavior;
-    _scrollDebounceBehavior = 'smooth';
-    scrollToLatest(b);
-    if (b === 'auto') {
-      scheduleFollowLatestSettlePass();
-    }
-  }, 100);
+  void requestVersion;
+  requestFollowLatest({ behavior, scroll: true });
 }
 
 function shortenSourcePath(value) {
