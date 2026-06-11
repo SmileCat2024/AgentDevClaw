@@ -1895,7 +1895,7 @@ function renderWorkspaceSessionList(agent, block) {
     const mainSessions = currentProject.sessions.filter(s => s.sessionType !== 'exploration' && s.sessionType !== 'sub');
     const explorationSessions = currentProject.sessions.filter(s => s.sessionType === 'exploration');
     const subSessions = currentProject.sessions.filter(s => s.sessionType === 'sub');
-    const needsTabs = explorationSessions.length > 0 || subSessions.length > 0;
+    const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
     const newChatAction = escapeHtml(JSON.stringify({
       type: 'create_session',
       openDirectory: currentProject.openDirectory || '',
@@ -5842,6 +5842,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'workspace-artifacts') return renderWorkspaceArtifactsBlock(agent, block);
   if (block.type === 'project-docset') return renderProjectDocsetBlock(agent, block);
   if (block.type === 'config-editor') return isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : '';
+  if (block.type === 'system-feature-config') return isSystemFeatureConfigBlock(block) ? renderSystemFeatureConfigBlock(block) : '';
   if (block.type === 'flow-editor') return renderFlowEditorBlock(agent, block);
   return '';
 }

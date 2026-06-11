@@ -5,6 +5,9 @@
  * 1. selectEmptySessions — identifies sessions eligible for cleanup
  * 2. resolvePostCleanupState — computes updated index after removal
  *
+ * Cleanup runs once at server startup only, never during normal operation.
+ * This prevents new-but-not-yet-used sessions from being deleted mid-run.
+ *
  * These mirror the actual code paths in server.js.
  * When the server code changes, these tests should be updated accordingly.
  */

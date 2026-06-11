@@ -5,7 +5,7 @@
  * 基于 ProtoClaw 当前内置的 npm agentdev 兼容层运行
  */
 
-import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature, LspFeature } from 'agentdev';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';
@@ -25,10 +25,41 @@ const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const EXPLORE_PROMPT_PATH = join(PROMPTS_DIR, 'explore.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'programming-helper', 'state.json');
+const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
 const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function readSystemFeatureConfig() {
+  if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
+  try {
+    const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function extractLspServerConfig(systemConfig) {
+  const lspSection = systemConfig?.lsp;
+  if (!lspSection || typeof lspSection !== 'object') return {};
+  const result = {};
+  for (const [serverId, entry] of Object.entries(lspSection)) {
+    if (entry && typeof entry === 'object') {
+      const serverConfig = {};
+      if (typeof entry.mode === 'string') serverConfig.mode = entry.mode;
+      if (typeof entry.runtime === 'string') serverConfig.runtime = entry.runtime;
+      if (typeof entry.binary === 'string' && entry.binary.trim()) serverConfig.binary = entry.binary.trim();
+      if (typeof entry.package === 'string' && entry.package.trim()) serverConfig.package = entry.package.trim();
+      if (typeof entry.uvPackage === 'string' && entry.uvPackage.trim()) serverConfig.uvPackage = entry.uvPackage.trim();
+      if (typeof entry.args === 'string' && entry.args.trim()) serverConfig.args = entry.args.trim().split(/\s+/);
+      if (Object.keys(serverConfig).length) result[serverId] = serverConfig;
+    }
+  }
+  return result;
 }
 
 function readProgrammingWorkspaceState() {
@@ -74,7 +105,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
     if (isExploration) {
       this.use(new ShellFeature({ workspaceDir }));
       this.use(new WebSearchFeature());
-      this.use(new MemoryFeature());
+      this.use(new MemoryFeature({ workspaceDir }));
     } else {
       this.use(new TodoFeature({
         reminderTemplate: TODO_REMINDER_PROMPT_PATH,
@@ -88,8 +119,14 @@ export class ProgrammingHelperAgent extends BasicAgent {
         volume: 0.5,
       }));
       this.use(new WebSearchFeature());
-      this.use(new MemoryFeature());
+      this.use(new MemoryFeature({ workspaceDir }));
       this.use(new ShellFeature({ workspaceDir }));
+      const systemConfig = readSystemFeatureConfig();
+      this.use(new LspFeature({
+        workdir: workspaceDir,
+        runtimes: systemConfig.runtimes || {},
+        servers: extractLspServerConfig(systemConfig),
+      }));
 
       this.use(new UserInputFeature());
     }

@@ -1,0 +1,33 @@
+{
+  "id": "feature-setup",
+  "kind": "workspace",
+  "launchMode": "ui-only",
+  "name": "Runtime 配置",
+  "sortOrder": 20,
+  "description": "管理系统级功能配置，如语言服务器路径、音频设置等",
+  "version": "0.1.0",
+  "icon": "settings",
+  "category": "system",
+  "enabled": true,
+  "features": [],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "Runtime 配置",
+          "en": "Runtime Config"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "feature-setup-config",
+          "type": "system-feature-config"
+        }
+      ]
+    }
+  }
+}

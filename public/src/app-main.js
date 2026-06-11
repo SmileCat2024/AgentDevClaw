@@ -657,6 +657,7 @@ const AGENT_ICONS = {
   'qqbot': 'qqbot.svg',
   'dispatch-console': 'dispatch-console.svg',
   'programming-helper': 'programming-helper.svg',
+  'feature-setup': 'feature-setup.svg',
 };
 
 let currentRuntimeConnected = true;

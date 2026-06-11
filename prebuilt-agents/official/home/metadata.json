@@ -3,6 +3,7 @@
   "kind": "workspace",
   "launchMode": "ui-only",
   "name": "AgentDevClaw 首页",
+  "sortOrder": 10,
   "description": "官方工作空间导航首页",
   "version": "1.0.0",
   "icon": "home",

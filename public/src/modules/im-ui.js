@@ -197,10 +197,12 @@ async function ensureIMWorkspaceLoaded(force = false) {
       imWorkspaceState.savedAt = bundle.savedAt || null;
       imWorkspaceState.error = '';
       var schedPromise = Promise.resolve();
-      if (typeof window.refreshDispatchConsoleData === 'function') {
-        schedPromise = window.refreshDispatchConsoleData({ force: !window._dispatchSchedulesLoaded }).catch(() => {});
-      } else if (!window._dispatchSchedulesLoaded && typeof window.loadDispatchSchedules === 'function') {
-        schedPromise = window.loadDispatchSchedules().then(() => { window._dispatchSchedulesLoaded = true; }).catch(() => {});
+      if (!window._dispatchSchedulesLoaded && typeof window.loadDispatchSchedules === 'function') {
+        // Await the actual fetch - loadDispatchSchedules resolves only after data is loaded
+        schedPromise = window.loadDispatchSchedules().catch(() => {});
+      } else if (typeof window.refreshDispatchConsoleData === 'function') {
+        // Already loaded; fire-and-forget staleness refresh with render:true
+        window.refreshDispatchConsoleData({ force: false, render: true }).catch(() => {});
       }
       return schedPromise.then(() => bundle);
     })
@@ -488,7 +490,7 @@ function renderIMWorkspaceConfigEditor(block) {
   const isZh = currentLanguage === 'zh';
 
   if (typeof window.refreshDispatchConsoleData === 'function') {
-    window.refreshDispatchConsoleData().catch(() => {});
+    window.refreshDispatchConsoleData({ render: true }).catch(() => {});
   }
 
   var autostartSchedules = (window._dispatchSchedules || []).filter(function(sc) {

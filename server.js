@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { spawn } from 'child_process';
-import { existsSync, readFileSync, writeFileSync, promises as fs } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import process from 'process';
@@ -4652,7 +4652,14 @@ async function discoverAgents(rootDir, currentDir = rootDir) {
     }
   }
 
-  return results.sort((left, right) => (left.name || left.id).localeCompare(right.name || right.id, 'zh-CN'));
+  return results.sort((left, right) => {
+    const leftOrder = typeof left.sortOrder === 'number' ? left.sortOrder : null;
+    const rightOrder = typeof right.sortOrder === 'number' ? right.sortOrder : null;
+    if (leftOrder !== null && rightOrder !== null) return leftOrder - rightOrder;
+    if (leftOrder !== null) return -1;
+    if (rightOrder !== null) return 1;
+    return (left.name || left.id).localeCompare(right.name || right.id, 'zh-CN');
+  });
 }
 
 async function getAgentsLight() {
@@ -5806,6 +5813,79 @@ app.post('/protoclaw/dispatch/agent_status', express.json(), (req, res) => {
 
 // ── End Dispatch API ─────────────────────────────────────────────
 
+// ── System Feature Config API ────────────────────────────────────
+
+const SYSTEM_FEATURE_CONFIG_PATH = path.join(USER_DATA_ROOT, 'feature-setup.json');
+
+function readSystemFeatureConfigFile() {
+  try {
+    if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
+    const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSystemFeatureConfigFile(config) {
+  const dir = path.dirname(SYSTEM_FEATURE_CONFIG_PATH);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(SYSTEM_FEATURE_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+}
+
+app.get('/protoclaw/system_feature_config', (_req, res) => {
+  res.json(readSystemFeatureConfigFile());
+});
+
+app.put('/protoclaw/system_feature_config', express.json(), (req, res) => {
+  const config = req.body;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    return res.status(400).json({ error: 'Config must be a non-null object' });
+  }
+  writeSystemFeatureConfigFile(config);
+  res.json({ ok: true });
+});
+
+app.get('/protoclaw/system_feature_manifests', async (_req, res) => {
+  try {
+    const seen = new Set();
+    const features = [];
+
+    const importPaths = ['agentdev'];
+    for (const importPath of importPaths) {
+      try {
+        const mod = await import(importPath);
+        const featureClasses = Object.entries(mod).filter(
+          ([, val]) => typeof val === 'function' && /Feature$/.test(val.name || '')
+        );
+        for (const [, FeatureClass] of featureClasses) {
+          try {
+            const instance = new FeatureClass();
+            const fname = instance.name || FeatureClass.name;
+            if (seen.has(fname)) continue;
+            if (typeof instance.getFeatureManifest === 'function') {
+              const manifest = instance.getFeatureManifest();
+              if (manifest?.settings?.properties) {
+                seen.add(fname);
+                features.push({ featureName: fname, manifest });
+              }
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    res.json({ features });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── End System Feature Config API ────────────────────────────────
+
 // ── Runtime Inbox observation API (read-only) ──────────────────
 
 app.get('/protoclaw/runtime/inbox', (req, res) => {
@@ -5943,14 +6023,7 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
       res.status(400).json({ error: 'agentId is required' });
       return;
     }
-    const agentId = req.query.agentId;
-    // Auto-cleanup empty sessions for workspace agents (e.g. programming-helper)
-    if (isWorkspaceSessionAgent(agentId)) {
-      await cleanupEmptySessions(agentId).catch((err) => {
-        console.warn(`[sessions] cleanup failed for ${agentId}:`, err.message);
-      });
-    }
-    res.json(await listPrebuiltSessions(agentId));
+    res.json(await listPrebuiltSessions(req.query.agentId));
   } catch (error) {
     next(error);
   }
@@ -8922,6 +8995,17 @@ process.on('SIGTERM', () => void shutdown(0));
 
 async function main() {
   await viewerWorker.start();
+
+  // One-time cleanup of stale empty sessions from previous runs.
+  // Only runs at startup — never during normal operation.
+  for (const agentId of WORKSPACE_SESSION_AGENT_IDS) {
+    try {
+      await cleanupEmptySessions(agentId);
+    } catch (err) {
+      console.warn(`[sessions] startup cleanup failed for ${agentId}:`, err.message);
+    }
+  }
+
   app.listen(APP_PORT, () => {
     log('server', `product ui: http://127.0.0.1:${APP_PORT}`);
     log('server', `viewer worker: ${VIEWER_ORIGIN}`);
