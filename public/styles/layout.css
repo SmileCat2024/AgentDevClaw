@@ -1157,6 +1157,65 @@ body[data-theme="light"] .feature-detail-window {
 
 /* ── Settings Overlay ──────────────────────────────────────────────────────── */
 
+.settings-tab-bar {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 12px;
+  margin-bottom: 4px;
+}
+
+body[data-theme="light"] .settings-tab-bar {
+  background: rgba(0,0,0,0.05);
+}
+
+.settings-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.settings-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.06);
+}
+
+body[data-theme="light"] .settings-tab:hover {
+  background: rgba(0,0,0,0.04);
+}
+
+.settings-tab.active {
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.1);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+}
+
+body[data-theme="light"] .settings-tab.active {
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.settings-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
 .settings-section {
   display: flex;
   flex-direction: column;

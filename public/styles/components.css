@@ -4079,6 +4079,39 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .persistent-action-btn.is-stop:hover {
   background: rgba(217, 83, 79, 0.15);
   border-color: rgba(217, 83, 79, 0.8);
+ }
+
+/* ── Voice Input Button ────────────────────────────────────────────── */
+
+.voice-input-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  opacity: 0.5;
+}
+.voice-input-btn:hover {
+  opacity: 1;
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+.voice-input-btn.recording {
+  opacity: 1;
+  color: #d9534f;
+  background: rgba(217, 83, 79, 0.12);
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 83, 79, 0.3); }
+  50% { box-shadow: 0 0 0 6px rgba(217, 83, 79, 0); }
 }
 
 /* ── Queue Bubbles (stacked above input card) ──────────────────────── */

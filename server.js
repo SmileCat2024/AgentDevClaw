@@ -7054,6 +7054,202 @@ app.put('/protoclaw/model_config', express.json(), async (req, res, next) => {
   }
 });
 
+// ── Speech Model Config & ASR Proxy ────────────────────────────────────────
+
+const DEFAULT_SPEECH_MODEL = {
+  baseUrl: '',
+  apiKey: '',
+  model: 'mimo-v2.5-asr',
+  language: 'auto',
+};
+
+function normalizeSpeechModel(raw) {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_SPEECH_MODEL };
+  return {
+    baseUrl: cleanSessionText(raw.baseUrl) || '',
+    apiKey: cleanSessionText(raw.apiKey) || '',
+    model: cleanSessionText(raw.model) || DEFAULT_SPEECH_MODEL.model,
+    language: cleanSessionText(raw.language) || DEFAULT_SPEECH_MODEL.language,
+  };
+}
+
+async function readSpeechModelConfig() {
+  const config = await readModelConfig();
+  return normalizeSpeechModel(config.speechModel);
+}
+
+async function writeSpeechModelConfig(speechModel) {
+  const config = await readModelConfig();
+  config.speechModel = normalizeSpeechModel(speechModel);
+  await writeModelConfig(config);
+  return config.speechModel;
+}
+
+app.get('/protoclaw/speech_model_config', async (_req, res, next) => {
+  try {
+    const speechModel = await readSpeechModelConfig();
+    res.json({ speechModel });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/protoclaw/speech_model_config', express.json(), async (req, res, next) => {
+  try {
+    const { speechModel } = req.body || {};
+    if (!speechModel || typeof speechModel !== 'object') {
+      return res.status(400).json({ error: 'speechModel object is required' });
+    }
+    const saved = await writeSpeechModelConfig(speechModel);
+    res.json({ speechModel: saved, savedAt: new Date().toISOString() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Encode raw PCM samples as a WAV buffer (16kHz, 16-bit, mono).
+ * Pure JS — no ffmpeg dependency. Ported from MiMo-Code voice.ts.
+ */
+function encodeWav(samples) {
+  const sampleRate = 16000;
+  // If Buffer, treat it as raw PCM16 bytes; otherwise treat as Int16Array of samples
+  const isBuf = Buffer.isBuffer(samples);
+  const dataSize = isBuf ? samples.length : (samples.length * 2);
+  const buffer = Buffer.alloc(44 + dataSize);
+  // RIFF header
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write('WAVE', 8);
+  // fmt chunk
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16);           // chunk size
+  buffer.writeUInt16LE(1, 20);            // PCM format
+  buffer.writeUInt16LE(1, 22);            // mono
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28); // byte rate
+  buffer.writeUInt16LE(2, 32);            // block align
+  buffer.writeUInt16LE(16, 34);           // bits per sample
+  // data chunk
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  if (isBuf) {
+    samples.copy(buffer, 44);
+  } else {
+    const int16 = new Int16Array(buffer.buffer, buffer.byteOffset + 44, samples.length);
+    int16.set(samples);
+  }
+  return buffer;
+}
+
+/**
+ * Convert audio buffer to 16kHz mono PCM16 WAV via ffmpeg.
+ * Returns null if ffmpeg is not available or conversion fails.
+ */
+function convertAudioToWav(inputBuffer) {
+  return new Promise((resolve) => {
+    const ffmpegArgs = ['-i', 'pipe:0', '-f', 'wav', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', 'pipe:1'];
+    const child = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const chunks = [];
+
+    child.stdout.on('data', (chunk) => chunks.push(chunk));
+    child.stderr.resume(); // drain stderr to prevent blocking
+
+    child.on('error', () => resolve(null));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        resolve(null);
+      } else {
+        resolve(Buffer.concat(chunks));
+      }
+    });
+
+    child.stdin.write(inputBuffer);
+    child.stdin.end();
+  });
+}
+
+app.post('/protoclaw/speech_to_text', express.raw({ type: '*/*', limit: '20mb' }), async (req, res, next) => {
+  try {
+    const speechConfig = await readSpeechModelConfig();
+    if (!speechConfig.apiKey || !speechConfig.baseUrl) {
+      return res.status(400).json({ error: 'Speech model not configured. Set baseUrl and apiKey in Speech settings.' });
+    }
+
+    let audioBuffer = req.body;
+    if (!audioBuffer || audioBuffer.length === 0) {
+      return res.status(400).json({ error: 'No audio data received' });
+    }
+
+    // Detect MIME type from original content-type
+    const contentType = req.headers['content-type'] || 'audio/wav';
+    const isWebm = contentType.includes('webm');
+    const isMp3 = contentType.includes('mp3') || contentType.includes('mpeg');
+    const isWav = contentType.includes('wav') || (!isWebm && !isMp3);
+
+    // Convert to WAV if needed: try ffmpeg first, fall back to raw PCM assumption
+    if (!isWav) {
+      const converted = await convertAudioToWav(audioBuffer);
+      if (converted) {
+        audioBuffer = converted;
+      } else {
+        console.warn('[ASR Proxy] ffmpeg conversion failed, attempting raw PCM encode');
+        // As last resort, treat raw bytes as PCM16 samples and wrap with WAV header
+        const pcmSamples = new Int16Array(audioBuffer.buffer, audioBuffer.byteOffset, audioBuffer.byteLength / 2);
+        audioBuffer = encodeWav(pcmSamples);
+      }
+    }
+
+    const audioBase64 = audioBuffer.toString('base64');
+    const dataUri = `data:audio/wav;base64,${audioBase64}`;
+
+    const asrUrl = speechConfig.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+
+    // Non-streaming request — ported from MiMo-Code transcribeAudio pattern
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+
+    const asrResp = await fetch(asrUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${speechConfig.apiKey}`,
+        'api-key': speechConfig.apiKey,
+      },
+      body: JSON.stringify({
+        model: speechConfig.model,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_audio',
+                input_audio: { data: dataUri },
+              },
+            ],
+          },
+        ],
+        asr_options: { language: speechConfig.language || 'auto' },
+      }),
+      signal: controller.signal,
+    }).catch(() => null);
+
+    clearTimeout(timeout);
+
+    if (!asrResp || !asrResp.ok) {
+      const status = asrResp ? asrResp.status : 502;
+      const errText = asrResp ? await asrResp.text().catch(() => '') : 'network error';
+      return res.status(status).json({ error: `ASR request failed: ${status}`, detail: errText });
+    }
+
+    const data = await asrResp.json();
+    const text = data?.choices?.[0]?.message?.content?.trim() || '';
+    res.json({ text });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Token Count Refresh ────────────────────────────────────────────────────────
 
 app.post('/protoclaw/refresh_session_token_count', express.json(), async (req, res, next) => {

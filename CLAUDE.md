@@ -12,6 +12,10 @@
 4. [docs/flow-feature-mode-dual-surface-design-plan.md](/D:/code/AgentDevClaw/docs/flow-feature-mode-dual-surface-design-plan.md)
 5. [docs/dev-context-index.md](/D:/code/AgentDevClaw/docs/dev-context-index.md)
 
+如果涉及前端 UI 渲染、workspace 切换、数据加载时序等问题，额外必读：
+
+- [docs/frontend-rendering-patterns.md](/D:/code/AgentDevClaw/docs/frontend-rendering-patterns.md) — 前端渲染机制、去重策略、常见陷阱与自检清单
+
 如果任务直接涉及实现，优先再看这些真实入口：
 
 - 服务端入口：[server.js](/D:/code/AgentDevClaw/server.js)

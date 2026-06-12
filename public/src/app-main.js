@@ -4744,6 +4744,9 @@ function renderInputRequests(requests) {
             onkeydown="handleInputKey(event, '${req.requestId}')"
             oninput="autoResize(this)"
             placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
+          <button class="voice-input-btn" data-target="input-${req.requestId}" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
+            <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+          </button>
           <button class="persistent-action-btn" onclick="submitInput('${req.requestId}')" title="Send">
             <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
           </button>
@@ -4803,6 +4806,9 @@ function renderPersistentInput(container) {
         onkeydown="handlePersistentInputKey(event)"
         oninput="autoResize(this)"
         placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
+      <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
+        <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+      </button>
       <button class="persistent-action-btn" id="persistent-action-btn" onclick="onPersistentBtnClick()">
         <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
         <svg class="icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="4" y="4" width="16" height="16" rx="3"></rect></svg>
@@ -5595,7 +5601,7 @@ function renderMessage(msg, index) {
             </div>
           </div>
       `;
-    } else if (msg.content && msg.content.startsWith('[Error:')) {
+    } else if (msg.content && (msg.content.startsWith('[Error:') || msg.content.startsWith('[API Error:'))) {
       // 错误消息使用红色样式
       innerContent += `<div class="tool-error">${escapeHtml(msg.content)}</div>`;
     } else {
@@ -6096,6 +6102,133 @@ window.toggleReasoning = function(id) {
     });
   }
 };
+
+// ── Voice Input / ASR ──────────────────────────────────────────────────────
+
+let _voiceRecording = false;
+let _voiceMediaRecorder = null;
+let _voiceAudioChunks = [];
+let _voiceTargetBtn = null;
+
+async function toggleVoiceRecording(btn) {
+  if (_voiceRecording) {
+    stopVoiceRecording();
+  } else {
+    await startVoiceRecording(btn);
+  }
+}
+
+async function startVoiceRecording(btn) {
+  // Check speech config
+  let speechConfig = window.ClawFW?._speechModelConfig;
+  if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
+    try {
+      const resp = await fetch('/protoclaw/speech_model_config');
+      const data = await resp.json();
+      speechConfig = data?.speechModel;
+      if (window.ClawFW) window.ClawFW._speechModelConfig = speechConfig;
+    } catch (e) { /* ignore */ }
+  }
+  if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
+    alert(currentLanguage === 'zh' ? '语音模型未配置，请在设置中配置 ASR 模型' : 'Speech model not configured. Please configure it in Settings.');
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    _voiceTargetBtn = btn;
+    _voiceAudioChunks = [];
+
+    // Determine best supported MIME type
+    const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
+    let selectedMime = '';
+    for (const mt of mimeTypes) {
+      if (!mt || MediaRecorder.isTypeSupported(mt)) {
+        selectedMime = mt;
+        break;
+      }
+    }
+
+    const options = selectedMime ? { mimeType: selectedMime } : {};
+    _voiceMediaRecorder = new MediaRecorder(stream, options);
+
+    _voiceMediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        _voiceAudioChunks.push(e.data);
+      }
+    };
+
+    _voiceMediaRecorder.onstop = async () => {
+      // Stop all tracks
+      stream.getTracks().forEach(t => t.stop());
+      btn.classList.remove('recording');
+      _voiceRecording = false;
+
+      if (_voiceAudioChunks.length === 0) return;
+
+      const mimeType = _voiceMediaRecorder.mimeType || 'audio/webm';
+      const blob = new Blob(_voiceAudioChunks, { type: mimeType });
+      _voiceAudioChunks = [];
+
+      await sendAudioToASR(blob, btn);
+    };
+
+    _voiceMediaRecorder.start(1000); // collect chunks every 1s
+    _voiceRecording = true;
+    btn.classList.add('recording');
+  } catch (err) {
+    console.error('[VoiceInput] Failed to start recording:', err);
+    alert(currentLanguage === 'zh' ? '无法访问麦克风：' + err.message : 'Cannot access microphone: ' + err.message);
+  }
+}
+
+function stopVoiceRecording() {
+  if (_voiceMediaRecorder && _voiceMediaRecorder.state === 'recording') {
+    _voiceMediaRecorder.stop();
+  }
+}
+
+async function sendAudioToASR(blob, btn) {
+  const targetId = btn.dataset.target;
+  const textarea = document.getElementById(targetId);
+  if (!textarea) return;
+
+  try {
+    const resp = await fetch('/protoclaw/speech_to_text', {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'audio/webm' },
+      body: blob,
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: 'Unknown error' }));
+      console.error('[VoiceInput] ASR error:', err);
+      alert(err.error || 'ASR request failed');
+      return;
+    }
+
+    // Non-streaming JSON response
+    const data = await resp.json();
+    const text = data?.text || '';
+    if (text) {
+      insertTextAtCursor(textarea, text);
+      autoResize(textarea);
+    }
+
+  } catch (err) {
+    console.error('[VoiceInput] ASR request failed:', err);
+    alert(currentLanguage === 'zh' ? '语音识别失败：' + err.message : 'ASR failed: ' + err.message);
+  }
+}
+
+function insertTextAtCursor(textarea, text) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const value = textarea.value;
+  textarea.value = value.slice(0, start) + text + value.slice(end);
+  const newPos = start + text.length;
+  textarea.setSelectionRange(newPos, newPos);
+}
 
 applyTheme(currentTheme);
 applyLanguage();

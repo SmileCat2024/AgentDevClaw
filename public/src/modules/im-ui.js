@@ -489,8 +489,12 @@ function renderIMWorkspaceConfigEditor(block) {
 
   const isZh = currentLanguage === 'zh';
 
+  // Fire a background staleness refresh (no render:true — the checkbox uses
+  // whatever data is already available and never blocks on this fetch).
   if (typeof window.refreshDispatchConsoleData === 'function') {
-    window.refreshDispatchConsoleData({ render: true }).catch(() => {});
+    window.refreshDispatchConsoleData({ force: false, render: false }).then(function(changed) {
+      if (changed) { renderCurrentMainView(); }
+    }).catch(function() {});
   }
 
   var autostartSchedules = (window._dispatchSchedules || []).filter(function(sc) {
@@ -500,15 +504,13 @@ function renderIMWorkspaceConfigEditor(block) {
       && sc.status === 'pending';
   });
   var autostartChecked = autostartSchedules.length > 0;
-  var autostartBusy = !!window._dispatchSchedulesRefreshPromise;
   var autostartCheckboxHtml = '<label class="workspace-config-field checkbox im-portal-autostart">'
     + '<span class="workspace-config-label">' + (isZh ? 'Claw 启动时自启' : 'Auto-start with Claw') + '</span>'
     + '<span class="workspace-config-checkbox">'
     + '<input type="checkbox" ' + (autostartChecked ? 'checked ' : '')
-    + (autostartBusy ? 'disabled ' : '')
     + 'data-autostart-schedule-id="' + (autostartSchedules[0]?.id || '') + '" '
     + 'onchange="window.togglePortalAgentAutostart(this.checked, this.dataset.autostartScheduleId)">'
-    + '<span>' + (autostartBusy ? (isZh ? '同步中...' : 'Syncing...') : (isZh ? '自启' : 'Auto-start')) + '</span>'
+    + '<span>' + (isZh ? '自启' : 'Auto-start') + '</span>'
     + '</span></label>';
 
   return [

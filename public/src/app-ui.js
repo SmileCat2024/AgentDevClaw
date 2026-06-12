@@ -2963,12 +2963,20 @@ async function openSettings() {
   window.ClawFW.settingsOpen = true;
   window.ClawFW.settingsEditing = null;
   window.ClawFW.settingsData = null;
+  window.ClawFW._speechModelConfig = null;
   renderSettingsOverlay();
   try {
-    const resp = await fetch('/protoclaw/model_config');
-    const data = await resp.json();
+    const [modelResp, speechResp] = await Promise.all([
+      fetch('/protoclaw/model_config'),
+      fetch('/protoclaw/speech_model_config'),
+    ]);
+    const data = await modelResp.json();
     window.ClawFW.settingsData = data;
     window.ClawFW._modelPresets = Array.isArray(data?.presets) ? data.presets : [];
+    try {
+      const speechData = await speechResp.json();
+      window.ClawFW._speechModelConfig = speechData?.speechModel || null;
+    } catch (e) { /* speech config may not exist yet */ }
     renderSettingsOverlay();
   } catch (error) {
     console.error('Failed to load model config:', error);
@@ -2979,6 +2987,7 @@ function closeSettings() {
   window.ClawFW.settingsOpen = false;
   window.ClawFW.settingsEditing = null;
   window.ClawFW.settingsData = null;
+  window.ClawFW._speechModelEditing = false;
   const host = document.getElementById('settings-overlay-host');
   if (host) host.innerHTML = '';
 }
@@ -2996,6 +3005,7 @@ function renderSettingsOverlay() {
   const ag = config.agent || {};
   const editing = window.ClawFW.settingsEditing;
   const isZh = currentLanguage === 'zh';
+  const activeTab = window.ClawFW.settingsTab || 'text';
 
   const presetCards = presets.length
     ? presets.map((p, idx) => {
@@ -3020,49 +3030,177 @@ function renderSettingsOverlay() {
       }).join('')
     : '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:13px;">' + (isZh ? '暂无预设，点击下方按钮添加' : 'No presets yet. Click the button below to add one') + '</div>';
 
+  // ── Tab bar ──
+  const tabText = activeTab === 'text';
+  const tabBar = [
+    '<div class="settings-tab-bar">',
+    '<button class="settings-tab' + (tabText ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'text\')">',
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>',
+    (isZh ? '文本模型' : 'Text Model'),
+    '</button>',
+    '<button class="settings-tab' + (!tabText ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'speech\')">',
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
+    (isZh ? '语音模型' : 'Speech Model'),
+    '</button>',
+    '</div>',
+  ].join('');
+
+  // ── Tab content ──
+  let tabContent = '';
+
+  if (tabText) {
+    // Text model tab
+    tabContent = [
+      /* Presets Section (hidden when editing) */
+      editing === null ? [
+        '<div class="settings-section">',
+        '<div class="settings-section-title">' + (isZh ? '预设列表' : 'Presets') + '</div>',
+        '<div class="settings-presets-list">' + presetCards + '</div>',
+        '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;" onclick="addSettingsPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button>',
+        '</div>',
+      ].join('') : '',
+
+      /* Edit Form (inline) */
+      editing !== null ? renderSettingsEditForm(editing, presets, isZh) : '',
+
+      /* Current Config Display (hidden when editing) */
+      !editing ? [
+        '<div class="settings-section">',
+        '<div class="settings-section-title">' + (isZh ? '当前激活配置' : 'Active Configuration') + '</div>',
+        '<div style="padding:14px;border-radius:12px;border:1px solid rgba(99,145,255,0.25);background:rgba(99,145,255,0.05);">',
+        '<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;">',
+        '<span style="color:var(--text-secondary);font-weight:500;">Provider</span><span style="color:var(--text-primary);">' + escapeHtml(dm.provider || '—') + '</span>',
+        '<span style="color:var(--text-secondary);font-weight:500;">Model</span><span style="color:var(--text-primary);">' + escapeHtml(dm.model || '—') + '</span>',
+        dm.baseUrl ? '<span style="color:var(--text-secondary);font-weight:500;">Base URL</span><span style="color:var(--text-primary);word-break:break-all;">' + escapeHtml(dm.baseUrl) + '</span>' : '',
+        '<span style="color:var(--text-secondary);font-weight:500;">API Key</span><span style="color:var(--text-primary);">' + (dm.apiKey ? dm.apiKey.slice(0, 8) + '••••' : '—') + '</span>',
+        dm.thinkingBudgetTokens != null ? '<span style="color:var(--text-secondary);font-weight:500;">Thinking Tokens</span><span style="color:var(--text-primary);">' + dm.thinkingBudgetTokens + '</span>' : '',
+        '</div>',
+        '</div>',
+        '</div>',
+      ].join('') : '',
+    ].join('');
+  } else {
+    // Speech model tab
+    tabContent = renderSpeechModelSection(isZh);
+  }
+
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window" style="width:min(100%,560px);max-height:min(100%,720px);">',
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '模型设置' : 'Model Settings') + '</div>',
-    '<div class="feature-detail-subtitle">' + (isZh ? '管理 LLM 预设并切换当前使用的模型' : 'Manage LLM presets and switch the active model') + '</div>',
+    '<div class="feature-detail-subtitle">' + (isZh ? '管理模型预设与配置' : 'Manage model presets and configurations') + '</div>',
     '</div>',
     '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeSettings()">×</button>',
     '</div>',
 
-    /* ── Presets Section (hidden when editing) ── */
-    editing === null ? [
-    '<div class="settings-section">',
-    '<div class="settings-section-title">' + (isZh ? '预设列表' : 'Presets') + '</div>',
-    '<div class="settings-presets-list">' + presetCards + '</div>',
-    '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;" onclick="addSettingsPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button>',
+    tabBar,
+    '<div class="settings-tab-content">',
+    tabContent,
     '</div>',
-    ].join('') : '',
-
-    /* ── Edit Form (inline) ── */
-    editing !== null ? renderSettingsEditForm(editing, presets, isZh) : '',
-
-    /* ── Current Config Display (hidden when editing) ── */
-    !editing ? [
-      '<div class="settings-section">',
-      '<div class="settings-section-title">' + (isZh ? '当前激活配置' : 'Active Configuration') + '</div>',
-      '<div style="padding:14px;border-radius:12px;border:1px solid rgba(99,145,255,0.25);background:rgba(99,145,255,0.05);">',
-      '<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;">',
-      '<span style="color:var(--text-secondary);font-weight:500;">Provider</span><span style="color:var(--text-primary);">' + escapeHtml(dm.provider || '—') + '</span>',
-      '<span style="color:var(--text-secondary);font-weight:500;">Model</span><span style="color:var(--text-primary);">' + escapeHtml(dm.model || '—') + '</span>',
-      dm.baseUrl ? '<span style="color:var(--text-secondary);font-weight:500;">Base URL</span><span style="color:var(--text-primary);word-break:break-all;">' + escapeHtml(dm.baseUrl) + '</span>' : '',
-      '<span style="color:var(--text-secondary);font-weight:500;">API Key</span><span style="color:var(--text-primary);">' + (dm.apiKey ? dm.apiKey.slice(0, 8) + '••••' : '—') + '</span>',
-      dm.thinkingBudgetTokens != null ? '<span style="color:var(--text-secondary);font-weight:500;">Thinking Tokens</span><span style="color:var(--text-primary);">' + dm.thinkingBudgetTokens + '</span>' : '',
-      '</div>',
-      '</div>',
-      '</div>',
-    ].join('') : '',
 
     '</div>',
     '</div>',
   ].join('');
 }
+
+window.switchSettingsTab = function(tab) {
+  window.ClawFW.settingsTab = tab;
+  renderSettingsOverlay();
+};
+
+function renderSpeechModelSection(isZh) {
+  const sc = window.ClawFW._speechModelConfig || {};
+  const isEditing = window.ClawFW._speechModelEditing === true;
+  if (!isEditing) {
+    const configured = !!(sc.baseUrl && sc.apiKey);
+    return [
+      '<div class="settings-section">',
+      '<div class="settings-section-title" style="display:flex;align-items:center;gap:8px;">',
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
+      (isZh ? '语音模型 (ASR)' : 'Speech Model (ASR)'),
+      '</div>',
+      configured ? [
+        '<div style="padding:14px;border-radius:12px;border:1px solid rgba(99,145,255,0.25);background:rgba(99,145,255,0.05);">',
+        '<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;">',
+        '<span style="color:var(--text-secondary);font-weight:500;">Base URL</span><span style="color:var(--text-primary);word-break:break-all;">' + escapeHtml(sc.baseUrl) + '</span>',
+        '<span style="color:var(--text-secondary);font-weight:500;">Model</span><span style="color:var(--text-primary);">' + escapeHtml(sc.model || '—') + '</span>',
+        '<span style="color:var(--text-secondary);font-weight:500;">API Key</span><span style="color:var(--text-primary);">' + (sc.apiKey ? sc.apiKey.slice(0, 8) + '••••' : '—') + '</span>',
+        '<span style="color:var(--text-secondary);font-weight:500;">' + (isZh ? '语言' : 'Language') + '</span><span style="color:var(--text-primary);">' + escapeHtml(sc.language || 'auto') + '</span>',
+        '</div>',
+        '</div>',
+      ].join('') : '<div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:13px;">' + (isZh ? '尚未配置语音模型' : 'Speech model not configured') + '</div>',
+      '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:8px;" onclick="editSpeechModelConfig()">' + (configured ? (isZh ? '编辑配置' : 'Edit Config') : (isZh ? '配置语音模型' : 'Configure')) + '</button>',
+      '</div>',
+    ].join('');
+  }
+  // Editing form
+  return [
+    '<div class="settings-section">',
+    '<div class="settings-section-title">' + (isZh ? '语音模型配置' : 'Speech Model Config') + '</div>',
+    '<div class="settings-field">',
+    '<label>Base URL</label>',
+    '<input class="settings-input" id="speech-baseurl" type="text" value="' + escapeHtml(sc.baseUrl || '') + '" placeholder="https://api.xiaomimimo.com/v1">',
+    '</div>',
+    '<div class="settings-field">',
+    '<label>API Key</label>',
+    '<input class="settings-input" id="speech-apikey" type="password" value="' + escapeHtml(sc.apiKey || '') + '" placeholder="sk-...">',
+    '</div>',
+    '<div class="settings-row">',
+    '<div class="settings-field">',
+    '<label>Model</label>',
+    '<input class="settings-input" id="speech-model" type="text" value="' + escapeHtml(sc.model || 'mimo-v2.5-asr') + '" placeholder="mimo-v2.5-asr">',
+    '</div>',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? '语言' : 'Language') + '</label>',
+    '<select class="settings-input" id="speech-language">',
+    '<option value="auto"' + ((sc.language || 'auto') === 'auto' ? ' selected' : '') + '>' + (isZh ? '自动检测' : 'Auto Detect') + '</option>',
+    '<option value="zh"' + (sc.language === 'zh' ? ' selected' : '') + '>' + (isZh ? '中文' : 'Chinese') + '</option>',
+    '<option value="en"' + (sc.language === 'en' ? ' selected' : '') + '>' + (isZh ? '英文' : 'English') + '</option>',
+    '</select>',
+    '</div>',
+    '</div>',
+    '<div class="settings-actions">',
+    '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSpeechModelEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
+    '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSpeechModelConfig()">' + (isZh ? '保存' : 'Save') + '</button>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
+window.editSpeechModelConfig = function() {
+  window.ClawFW._speechModelEditing = true;
+  renderSettingsOverlay();
+};
+
+window.cancelSpeechModelEdit = function() {
+  window.ClawFW._speechModelEditing = false;
+  renderSettingsOverlay();
+};
+
+window.saveSpeechModelConfig = async function() {
+  const el = (id) => document.getElementById(id);
+  const speechModel = {
+    baseUrl: (el('speech-baseurl')?.value || '').trim(),
+    apiKey: (el('speech-apikey')?.value || '').trim(),
+    model: (el('speech-model')?.value || '').trim() || 'mimo-v2.5-asr',
+    language: el('speech-language')?.value || 'auto',
+  };
+  try {
+    const resp = await fetch('/protoclaw/speech_model_config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speechModel }),
+    });
+    const result = await resp.json();
+    window.ClawFW._speechModelConfig = result.speechModel;
+    window.ClawFW._speechModelEditing = false;
+    renderSettingsOverlay();
+  } catch (error) {
+    console.error('Failed to save speech model config:', error);
+  }
+};
 
 function renderSettingsEditForm(editIdx, presets, isZh) {
   const preset = presets[editIdx] || {};
@@ -6043,7 +6181,6 @@ function updateAssemblySideRailPosition() {
 
 function resetRuntimeBackedSurfaceState() {
   currentMessages = [];
-  window._dispatchSchedulesLoaded = false;
   currentInputRequests = [];
   window.lastInputRequests = [];
   renderInputRequests([]);

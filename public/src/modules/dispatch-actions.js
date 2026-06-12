@@ -121,6 +121,8 @@ window.refreshDispatchConsoleData = async (options = {}) => {
   const schedulesStale = force || !window._dispatchSchedulesLoaded || (now - (window._dispatchSchedulesUpdatedAt || 0) > 1500);
   const agentsStale = force || !window._dispatchAgentsLoaded || (now - (window._dispatchAgentsUpdatedAt || 0) > 10000);
   if (!schedulesStale && !agentsStale) {
+    // Data is fresh — but still honor render request (e.g. checkbox state depends on promise lifecycle)
+    if (render) { renderCurrentMainView(); }
     return false;
   }
 
@@ -133,7 +135,7 @@ window.refreshDispatchConsoleData = async (options = {}) => {
   window._dispatchAgentsLoaded = true;
   const changed = prevScheduleSig !== (window._dispatchSchedulesSignature || '')
     || prevAgentSig !== (window._dispatchAgentsSignature || '');
-  if (changed && render) {
+  if (render) {
     renderCurrentMainView();
   }
   return changed;
