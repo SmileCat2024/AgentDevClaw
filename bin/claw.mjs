@@ -1,813 +1,382 @@
 #!/usr/bin/env node
 
 /**
- * claw - AgentDevClaw 子代理调度 CLI（面向 agent）
+ * claw - AgentDevClaw workspace CLI (thin shell)
  *
- * 三种实体：
- *   Exploration（探索记录）— 裸 spawn 产生，完成后锁定，不可变
- *   Sub-agent（子代理对话）— 从探索记录派生，可 resume
- *   Summary（摘要）— 探索记录的附属品，由 compact 生成
- *
- * 命令体系：
- *   claw                                   状态概览
- *   claw spawn --goal <text>               启动探索对话（裸，无父上下文）
- *   claw spawn <exp-id...> --goal <text>   从探索记录启动子代理
- *   claw explorations                      列出探索记录（领域概览卡片）
- *   claw subs                              列出子代理对话（目标、状态、领域）
- *   claw show <id>                         查看探索记录内容或子代理最终输出
- *   claw compact <exploration-id>          对探索记录生成摘要
- *   claw resume <sub-id> --msg <text>      在子代理对话上追加指令
+ * Routes all commands through claw-core provider registry.
+ * Legacy commands (exp, subs, show, spawn, compact, resume)
+ * are aliases for the default workspace operations.
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'fs';
-import { join, resolve } from 'path';
-import os from 'os';
-import { execFileSync } from 'child_process';
-
-const SERVER_URL = process.env.PROTOCLAW_SERVER_URL || 'http://127.0.0.1:1420';
-
-const USER_DATA_ROOT = join(os.homedir(), '.agentdev', 'AgentDevClaw');
-const WORKSPACES_ROOT = join(USER_DATA_ROOT, 'workspaces');
-const PROGRAMMING_HELPER_DIR = join(WORKSPACES_ROOT, 'programming-helper');
-const SESSIONS_DIR = join(PROGRAMMING_HELPER_DIR, 'sessions');
-const HANDOFFS_DIR = join(USER_DATA_ROOT, 'context-handoffs', 'programming-helper');
-
-// --- Helpers ---
-
-function cleanText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function readJson(filePath) {
-  if (!existsSync(filePath)) return null;
-  try {
-    return JSON.parse(readFileSync(filePath, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function formatDate(isoString) {
-  if (!isoString) return '';
-  try {
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return isoString;
-    return d.toLocaleDateString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return isoString;
-  }
-}
-
-function truncate(text, maxLen = 120) {
-  if (!text || text.length <= maxLen) return text || '';
-  return text.slice(0, maxLen - 1) + '…';
-}
-
-// --- Data readers ---
-
-function readWorkspaceState() {
-  return readJson(join(PROGRAMMING_HELPER_DIR, 'state.json')) || { forms: {}, openDirectory: '' };
-}
-
-function readSessionIndex() {
-  const index = readJson(join(SESSIONS_DIR, 'index.json'));
-  if (!index) return { activeSessionId: null, sessions: [] };
-  const sessions = Array.isArray(index.sessions)
-    ? index.sessions.filter(s => s && s.id && s.id !== 'legacy')
-    : [];
-  return { activeSessionId: index.activeSessionId, sessions };
-}
-
-function getExplorations() {
-  const index = readSessionIndex();
-  return index.sessions.filter(s => {
-    const st = cleanText(s.sessionType);
-    if (st === 'exploration') return true;
-    // Legacy: clean one-shot sessions
-    if (st === 'sub' && s.metadata?.clean === true) return true;
-    if (st === 'sub' && s.metadata?.sourceSessionId?.startsWith('__protoclaw-clean-')) return true;
-    return false;
-  });
-}
-
-function getSubs() {
-  const index = readSessionIndex();
-  return index.sessions.filter(s => {
-    const st = cleanText(s.sessionType);
-    if (st === 'sub' && s.metadata?.clean === true) return false;
-    if (st === 'sub' && s.metadata?.sourceSessionId?.startsWith('__protoclaw-clean-')) return false;
-    if (st === 'sub' && s.metadata?.resumeMode === 'one-shot') return true;
-    return false;
-  });
-}
-
-function loadSessionDetail(sessionId) {
-  const filePath = join(SESSIONS_DIR, `${sessionId}.json`);
-  if (!existsSync(filePath)) return null;
-  const raw = readJson(filePath);
-  if (!raw) return null;
-
-  const messages = Array.isArray(raw?.runtime?.context?.messages)
-    ? raw.runtime.context.messages
-    : [];
-  const lastMessage = [...messages].reverse().find(
-    m => m && typeof m.content === 'string' && m.role !== 'system'
-  );
-
-  return {
-    id: sessionId,
-    savedAt: raw.savedAt,
-    messageCount: messages.length,
-    lastMessage: lastMessage?.content
-      ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 200)
-      : '',
-    messages,
-  };
-}
-
-function loadFinalOutput(sessionId) {
-  const detail = loadSessionDetail(sessionId);
-  if (!detail) return null;
-  const messages = detail.messages;
-  const lastAssistant = [...messages].reverse().find(
-    m => m && m.role === 'assistant' && typeof m.content === 'string'
-  );
-  return lastAssistant?.content || null;
-}
-
-function findHandoffSummary(sessionId) {
-  if (!sessionId) return null;
-  if (!existsSync(HANDOFFS_DIR)) return null;
-
-  let files;
-  try {
-    files = readdirSync(HANDOFFS_DIR)
-      .filter(name => name.startsWith('handoff-') && name.endsWith('.json'))
-      .map(name => join(HANDOFFS_DIR, name))
-      .filter(filePath => statSync(filePath).isFile());
-  } catch {
-    return null;
-  }
-
-  let best = null;
-  let bestPath = '';
-  for (const filePath of files) {
-    const handoff = readJson(filePath);
-    if (!handoff || handoff.sourceSessionId !== sessionId) continue;
-    const createdAt = handoff.createdAt || '';
-    if (!best || createdAt > (best.createdAt || '')) {
-      best = handoff;
-      bestPath = filePath;
-    }
-  }
-
-  if (!best) return null;
-
-  return {
-    sessionId,
-    handoffId: best.handoffId || '',
-    handoffPath: bestPath,
-    handoffCreatedAt: best.createdAt || '',
-    mode: best.mode || '',
-    summaryText: cleanText(best.sourceSummary),
-    importantFiles: Array.isArray(best.compactOutput?.importantFiles)
-      ? best.compactOutput.importantFiles : [],
-    importantSkills: Array.isArray(best.compactOutput?.importantSkills)
-      ? best.compactOutput.importantSkills : [],
-    seedMessages: Array.isArray(best.seedMessages) ? best.seedMessages : [],
-    stats: best.stats || {},
-    sessionTimestamp: best.sessionTimestamp || null,
-    gitMeta: best.gitMeta || null,
-  };
-}
-
-function hasSummary(sessionId) {
-  return findHandoffSummary(sessionId) !== null;
-}
-
-// --- Commands ---
-
-function cmdOverview() {
-  const state = readWorkspaceState();
-  const explorations = getExplorations();
-  const subs = getSubs();
-  const openDir = cleanText(state.openDirectory);
-
-  console.log('AgentDevClaw  子代理调度工具');
-  console.log('');
-
-  if (openDir) {
-    console.log(`  工作目录: ${openDir}`);
-  }
-
-  console.log(`  探索记录: ${explorations.length} 份`);
-  console.log(`  子代理对话: ${subs.length} 个`);
-  console.log('');
-  console.log('  claw explorations          列出探索记录');
-  console.log('  claw subs                  列出子代理对话');
-  console.log('  claw spawn --goal <text>    启动探索对话');
-  console.log('  claw compact <exp-id>       对探索记录生成摘要');
-  console.log('  claw resume <sub-id> --msg  续接子代理对话');
-}
-
-function cmdExplorations({ fileFilter = '', keyword = '', limit = 20 } = {}) {
-  let explorations = getExplorations();
-
-  if (explorations.length === 0) {
-    console.log('暂无探索记录');
-    console.log('使用 claw spawn --goal "探索XX" 启动探索');
-    return;
-  }
-
-  // Apply filters
-  const hasFilter = fileFilter || keyword;
-  if (hasFilter) {
-    explorations = explorations.filter(record => {
-      // File filter: match against important files in handoff
-      if (fileFilter) {
-        const handoff = findHandoffSummary(record.id);
-        const files = handoff?.importantFiles || [];
-        if (!files.some(f => f.toLowerCase().includes(fileFilter.toLowerCase()))) {
-          return false;
-        }
-      }
-      // Keyword filter: match against goal and summary text
-      if (keyword) {
-        const kw = keyword.toLowerCase();
-        const goalMatch = (record.goal || '').toLowerCase().includes(kw);
-        if (goalMatch) return true;
-        const handoff = findHandoffSummary(record.id);
-        const summaryMatch = handoff?.summaryText?.toLowerCase().includes(kw);
-        const titleMatch = handoff?.sessionTitle?.toLowerCase().includes(kw);
-        if (summaryMatch || titleMatch) return true;
-        return false;
-      }
-      return true;
-    });
-  }
-
-  const totalCount = explorations.length;
-  const displayed = explorations.slice(0, limit);
-
-  if (displayed.length === 0) {
-    if (hasFilter) {
-      console.log(`未找到匹配的探索记录`);
-      if (fileFilter) console.log(`  文件筛选: ${fileFilter}`);
-      if (keyword) console.log(`  关键字: ${keyword}`);
-    } else {
-      console.log('暂无探索记录');
-    }
-    return;
-  }
-
-  const filterDesc = hasFilter
-    ? ` (筛选: ${fileFilter ? `文件含 "${fileFilter}"` : ''}${fileFilter && keyword ? ', ' : ''}${keyword ? `关键字 "${keyword}"` : ''})`
-    : '';
-  console.log(`探索记录 (${totalCount} 份${totalCount > displayed.length ? `, 显示最近 ${displayed.length} 条` : ''}${filterDesc})`);
-  console.log('');
-
-  for (const record of displayed) {
-    const shortId = record.id.length > 30 ? `...${record.id.slice(-24)}` : record.id;
-    const goal = cleanText(record.goal) || '(无目标)';
-    const domains = Array.isArray(record.domains) && record.domains.length > 0
-      ? record.domains.join(', ')
-      : '';
-    const locked = record.status === 'locked' ? '已锁定' : '运行中';
-    const date = formatDate(record.updatedAt || record.createdAt);
-
-    console.log(`  ${shortId}`);
-    console.log(`    ${truncate(goal, 80)}`);
-    const handoff = findHandoffSummary(record.id);
-    if (handoff?.summaryText) {
-      const files = handoff.importantFiles || [];
-      if (files.length > 0) {
-        const filePreview = files.slice(0, 4).map(f => f.split('/').pop() || f).join(', ');
-        console.log(`    探索了: ${truncate(filePreview, 100)}${files.length > 4 ? ` 等${files.length}个文件` : ''}`);
-      } else {
-        // Fallback: extract key findings from exploration summary section 2
-        const findings = handoff.summaryText.match(/(?:2\.\s*关键发现与结论|关键技术概念|核心技术)[：:]\s*\n([\s\S]*?)(?=\n\d+\.|$)/);
-        if (findings) {
-          console.log(`    ${truncate(findings[1].replace(/\n/g, ' ').trim(), 120)}`);
-        } else {
-          console.log(`    (有摘要)`);
-        }
-      }
-    } else {
-      console.log(`    (无摘要)`);
-    }
-    if (domains) console.log(`    领域: ${domains}`);
-    // Use sessionTimestamp from handoff if available (actual conversation time)
-    const displayDate = handoff?.sessionTimestamp
-      ? formatDate(handoff.sessionTimestamp)
-      : date;
-    const gitInfo = handoff?.gitMeta
-      ? ` · ${handoff.gitMeta.branch || '?'}@${handoff.gitMeta.commitHash || '?'}`
-      : '';
-    console.log(`    ${locked} · ${displayDate}${gitInfo}`);
-    console.log('');
-  }
-}
-
-function cmdSubs() {
-  const subs = getSubs();
-
-  if (subs.length === 0) {
-    console.log('暂无子代理对话');
-    console.log('使用 claw spawn <exp-id> --goal "任务目标" 启动子代理');
-    return;
-  }
-
-  console.log(`子代理对话 (${subs.length} 个)`);
-  console.log('');
-
-  for (const record of subs) {
-    const shortId = record.id.length > 30 ? `...${record.id.slice(-24)}` : record.id;
-    const goal = cleanText(record.goal) || '(无目标)';
-    const domains = Array.isArray(record.domains) && record.domains.length > 0
-      ? record.domains.join(', ')
-      : '';
-    const sourceExplorations = Array.isArray(record.metadata?.sourceExplorationIds)
-      ? record.metadata.sourceExplorationIds.join(', ')
-      : '';
-    const date = formatDate(record.updatedAt || record.createdAt);
-
-    console.log(`  ${shortId}`);
-    console.log(`    ${truncate(goal, 80)}`);
-    if (domains) console.log(`    领域: ${domains}`);
-    if (sourceExplorations) console.log(`    来源: ${sourceExplorations}`);
-    console.log(`    ${date}`);
-    console.log('');
-  }
-}
-
-function cmdShow(sessionId) {
-  if (!sessionId) {
-    console.error('用法: claw show <exploration-id | sub-id>');
-    process.exit(1);
-  }
-
-  const index = readSessionIndex();
-  const record = index.sessions.find(s => s.id === sessionId);
-
-  if (!record) {
-    console.error(`未找到会话: ${sessionId}`);
-    process.exit(1);
-  }
-
-  const sessionType = cleanText(record.sessionType);
-  const isExploration = sessionType === 'exploration' || record.metadata?.clean === true;
-  const goal = cleanText(record.goal) || '(无目标)';
-
-  if (isExploration) {
-    console.log(`探索记录 · ${sessionId}`);
-    console.log(`目标: ${goal}`);
-    console.log(`状态: ${record.status === 'locked' ? '已锁定' : '运行中'}`);
-    if (Array.isArray(record.domains) && record.domains.length > 0) {
-      console.log(`领域: ${record.domains.join(', ')}`);
-    }
-
-    const handoff = findHandoffSummary(sessionId);
-    console.log(`摘要: ${handoff?.summaryText ? '已生成' : '未生成（claw compact 生成）'}`);
-
-    if (handoff?.sessionTimestamp) {
-      console.log(`对话时间: ${formatDate(handoff.sessionTimestamp)}`);
-    } else {
-      console.log(`创建: ${formatDate(record.createdAt)}`);
-    }
-
-    if (handoff?.gitMeta) {
-      const gm = handoff.gitMeta;
-      console.log(`Git: ${gm.branch || '?'} @ ${gm.commitHash || '?'}${gm.isDirty ? ' (有未提交变更)' : ''} - ${truncate(gm.commitMessage || '', 60)}`);
-    }
-
-    const detail = loadSessionDetail(sessionId);
-    if (detail) {
-      console.log(`消息: ${detail.messageCount} 条`);
-    }
-
-    // Show exploration result: prefer compact summary (migrated into tool call),
-    // fall back to raw last assistant output when no compact exists
-    if (handoff?.summaryText) {
-      console.log('');
-      console.log('--- 探索结果 ---');
-      console.log(handoff.summaryText);
-      console.log('--- 结束 ---');
-    } else {
-      const finalOutput = loadFinalOutput(sessionId);
-      if (finalOutput) {
-        console.log('');
-        console.log('--- 探索结果 ---');
-        console.log(finalOutput);
-        console.log('--- 结束 ---');
-      }
-    }
-  } else {
-    // Sub-agent
-    console.log(`子代理对话 · ${sessionId}`);
-    console.log(`目标: ${goal}`);
-    if (Array.isArray(record.metadata?.sourceExplorationIds)) {
-      console.log(`来源探索: ${record.metadata.sourceExplorationIds.join(', ')}`);
-    }
-    if (Array.isArray(record.domains) && record.domains.length > 0) {
-      console.log(`领域: ${record.domains.join(', ')}`);
-    }
-    console.log(`创建: ${formatDate(record.createdAt)}`);
-    console.log(`更新: ${formatDate(record.updatedAt)}`);
-
-    const detail = loadSessionDetail(sessionId);
-    if (detail) {
-      console.log(`消息: ${detail.messageCount} 条`);
-    }
-
-    // Show final output
-    const finalOutput = loadFinalOutput(sessionId);
-    if (finalOutput) {
-      console.log('');
-      console.log('--- 最终输出 ---');
-      console.log(finalOutput);
-      console.log('--- 结束 ---');
-    }
-  }
-}
-
-async function cmdCompact(sessionId) {
-  if (!sessionId) {
-    console.error('用法: claw compact <exploration-id>');
-    process.exit(1);
-  }
-
-  const index = readSessionIndex();
-  const record = index.sessions.find(s => s.id === sessionId);
-  if (!record) {
-    console.error(`未找到会话: ${sessionId}`);
-    process.exit(1);
-  }
-
-  const sessionType = cleanText(record.sessionType);
-  if (sessionType !== 'exploration' && record.metadata?.clean !== true) {
-    console.error(`只能对探索记录执行 compact（当前类型: ${sessionType}）`);
-    process.exit(1);
-  }
-
-  console.log(`正在压缩探索记录 ${sessionId} ...`);
-
-  const agentDir = 'prebuilt-agents/official/programming-helper';
-  const projectRoot = resolve(join(import.meta.dirname ?? '.', '..'));
-
-  try {
-    const resultPath = join(os.tmpdir(), `compact-mirror-${Date.now()}.json`);
-    const args = [
-      join(projectRoot, 'scripts', 'run-compact-mirror.js'),
-      agentDir,
-      'programming-helper',
-      sessionId,
-      JSON.stringify({ sessionType }),  // Use the actual sessionType from record
-      resultPath,
-    ];
-
-    const output = execFileSync('node', args, {
-      cwd: projectRoot,
-      timeout: 120000,
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    if (output) {
-      process.stderr.write(output);
-    }
-
-    const result = readJson(resultPath);
-    if (!result?.ok) {
-      console.error('压缩失败: 未生成有效结果');
-      process.exit(1);
-    }
-
-    console.log('压缩完成');
-    console.log(`  摘要长度: ${cleanText(result.summaryText).length} 字符`);
-    const sessionTitle = cleanText(result.sessionTitle);
-    if (sessionTitle) {
-      console.log(`  对话标题: ${sessionTitle}`);
-    }
-    if (Array.isArray(result.importantFiles) && result.importantFiles.length > 0) {
-      console.log('  重要文件:');
-      for (const f of result.importantFiles) {
-        console.log(`    - ${f}`);
-      }
-    }
-    if (Array.isArray(result.importantSkills) && result.importantSkills.length > 0) {
-      console.log('  涉及技能:');
-      for (const s of result.importantSkills) {
-        console.log(`    - ${s}`);
-      }
-    }
-    console.log('');
-
-    // Persist handoff via server API
-    console.log('正在保存摘要...');
-    try {
-      const exportResp = await fetch(`${SERVER_URL}/protoclaw/context_handoffs/summary_export`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          summaryText: result.summaryText,
-          rawResponse: result.rawResponse || '',
-          importantFiles: result.importantFiles || [],
-          importantSkills: result.importantSkills || [],
-          sessionTitle: result.sessionTitle || '',
-          fileRanges: result.fileRanges || {},
-          sessionTimestamp: result.sessionTimestamp || null,
-          gitMeta: result.gitMeta || null,
-        }),
-      });
-      if (!exportResp.ok) {
-        const errBody = await exportResp.text();
-        console.error(`  摘要保存失败: ${exportResp.status} ${errBody}`);
-        process.exit(1);
-      }
-      const exportResult = await exportResp.json();
-      if (exportResult.handoffPath) {
-        console.log(`  摘要已保存: ${exportResult.handoffPath}`);
-      }
-    } catch (exportErr) {
-      console.error(`  摘要保存失败: ${exportErr.message}`);
-      process.exit(1);
-    }
-
-    console.log('');
-    console.log('摘要:');
-    console.log(result.summaryText);
-  } catch (error) {
-    console.error('压缩失败:', error.message || error);
-    process.exit(1);
-  }
-}
-
-async function cmdSpawn(positional, mode, goal, blocking) {
-  const isExploration = positional.length === 0;
-
-  if (!goal) {
-    if (isExploration) {
-      console.error('用法: claw spawn --goal "探索目标" [--blocking]');
-    } else {
-      console.error('用法: claw spawn <exploration-id...> --goal "任务目标" [--blocking]');
-    }
-    process.exit(1);
-  }
-
-  if (isExploration) {
-    // --- Exploration spawn ---
-    console.log(`正在启动探索对话...`);
-    console.log(`目标: ${goal}`);
-    if (blocking) {
-      console.log('(等待探索完成，可能需要几分钟)...');
-      console.log('');
-    }
-  } else {
-    // --- Sub-agent spawn ---
-    // Validate that all positional args are exploration IDs
-    const index = readSessionIndex();
-    for (const expId of positional) {
-      const record = index.sessions.find(s => s.id === expId);
-      if (!record) {
-        console.error(`未找到探索记录: ${expId}`);
-        process.exit(1);
-      }
-    }
-    console.log(`正在从 ${positional.length} 个探索记录启动子代理...`);
-    console.log(`目标: ${goal}`);
-    if (blocking) {
-      console.log('(等待子代理完成，可能需要几分钟)...');
-      console.log('');
-    }
-  }
-
-  try {
-    const requestBody = {
-      goal,
-      explorationIds: isExploration ? [] : positional,
-    };
-
-    const response = await fetch(`${SERVER_URL}/protoclaw/spawn_one_shot`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      throw new Error(errorBody.error || `HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    const result = data.result;
-    const sessionType = data.session?.sessionType || (isExploration ? 'exploration' : 'sub');
-
-    if (result.ok) {
-      if (isExploration) {
-        console.log('探索完成');
-      } else {
-        console.log('子代理执行完成');
-      }
-      console.log(`  会话 ID: ${data.session.id}`);
-      console.log(`  类型: ${sessionType}`);
-      console.log(`  耗时: ${(result.durationMs / 1000).toFixed(1)}s`);
-      console.log('');
-      if (result.response) {
-        console.log('--- 执行结果 ---');
-        console.log(result.response);
-        console.log('--- 结束 ---');
-      }
-    } else {
-      console.error(`${isExploration ? '探索' : '子代理'}执行失败`);
-      console.error(`  会话 ID: ${data.session.id}`);
-      console.error(`  耗时: ${(result.durationMs / 1000).toFixed(1)}s`);
-      console.error(`  错误: ${result.error}`);
-      process.exit(1);
-    }
-  } catch (error) {
-    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-      console.error('无法连接到 AgentDevClaw 服务（请先运行 npm start）');
-    } else {
-      console.error(`执行失败: ${error.message}`);
-    }
-    process.exit(1);
-  }
-}
-
-async function cmdResume(sessionId, message) {
-  if (!sessionId || !message) {
-    console.error('用法: claw resume <sub-id> --msg "追加指令"');
-    process.exit(1);
-  }
-
-  // Validate it's a sub-agent session
-  const index = readSessionIndex();
-  const record = index.sessions.find(s => s.id === sessionId);
-  if (!record) {
-    console.error(`未找到会话: ${sessionId}`);
-    process.exit(1);
-  }
-  const sessionType = cleanText(record.sessionType);
-  if (sessionType === 'exploration' || record.metadata?.clean === true) {
-    console.error('探索记录已锁定，无法 resume（只能 resume 子代理对话）');
-    process.exit(1);
-  }
-
-  console.log(`正在续接子代理 ${sessionId} ...`);
-  console.log(`追加指令: ${message}`);
-  console.log('(等待子代理完成，可能需要几分钟)...');
-  console.log('');
-
-  try {
-    const response = await fetch(`${SERVER_URL}/protoclaw/resume_sub`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, message }),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      throw new Error(errorBody.error || `HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    const result = data.result;
-
-    if (result.ok) {
-      console.log('子代理续接完成');
-      console.log(`  耗时: ${(result.durationMs / 1000).toFixed(1)}s`);
-      console.log('');
-      if (result.response) {
-        console.log('--- 执行结果 ---');
-        console.log(result.response);
-        console.log('--- 结束 ---');
-      }
-    } else {
-      console.error('子代理续接失败');
-      console.error(`  耗时: ${(result.durationMs / 1000).toFixed(1)}s`);
-      console.error(`  错误: ${result.error}`);
-      process.exit(1);
-    }
-  } catch (error) {
-    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-      console.error('无法连接到 AgentDevClaw 服务（请先运行 npm start）');
-    } else {
-      console.error(`续接失败: ${error.message}`);
-    }
-    process.exit(1);
-  }
-}
-
-// --- Arg parsing ---
-
-function parseArgs(argv) {
-  const args = argv.slice(2);
-  const command = args[0] || '';
-  let mode = '';
-  let goal = '';
-  let message = '';
-  let blocking = false;
-  let limit = 20;
-  let fileFilter = '';
-  let keyword = '';
-  const positional = [];
-
-  for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--mode' && args[i + 1]) {
-      mode = args[i + 1];
-      i++;
-    } else if (args[i] === '--goal' && args[i + 1]) {
-      goal = args[i + 1];
-      i++;
-    } else if (args[i] === '--msg' && args[i + 1]) {
-      message = args[i + 1];
-      i++;
-    } else if (args[i] === '--limit' && args[i + 1]) {
-      limit = parseInt(args[i + 1], 10) || 20;
-      i++;
-    } else if (args[i] === '--file' && args[i + 1]) {
-      fileFilter = args[i + 1];
-      i++;
-    } else if (args[i] === '--keyword' && args[i + 1]) {
-      keyword = args[i + 1];
-      i++;
-    } else if (args[i] === '--blocking' || args[i] === '--wait') {
-      blocking = true;
-    } else if (!args[i].startsWith('-')) {
-      positional.push(args[i]);
-    }
-  }
-
-  return { command, mode, goal, message, blocking, limit, fileFilter, keyword, positional };
-}
-
-// --- Main ---
+import {
+  loadProviders, listProviders, getProvider, getDefaultWorkspaceId,
+  dispatch, cleanText, truncate, formatDate,
+} from '../server/claw-core.mjs';
+
+// ── Legacy command → operation name mapping ─────────────────────
+
+const LEGACY_ALIASES = {
+  'exp': 'explorations',
+  'explorations': 'explorations',
+  'subs': 'subs',
+  'sub': 'subs',
+  'show': 'show',
+  'get': 'show',
+  'spawn': 'spawn',
+  'compact': 'compact',
+  'compress': 'compact',
+  'resume': 'resume',
+};
+
+// ── Main ────────────────────────────────────────────────────────
 
 async function main() {
-  const { command, mode, goal, message, blocking, limit, fileFilter, keyword, positional } = parseArgs(process.argv);
+  await loadProviders();
 
-  switch (command) {
-    case '':
-      cmdOverview();
-      break;
-    case 'explorations':
-    case 'exp':
-      cmdExplorations({ fileFilter, keyword, limit });
-      break;
-    case 'subs':
-    case 'sub':
-      if (positional.length > 0) {
-        cmdShow(positional[0]);
-      } else {
-        cmdSubs();
+  const args = process.argv.slice(2);
+  const command = args[0] || '';
+  const defaultWs = getDefaultWorkspaceId();
+
+  if (command === '') {
+    await cmdOverview(defaultWs);
+    return;
+  }
+
+  if (command === 'help' || command === '--help' || command === '-h') {
+    printHelp();
+    return;
+  }
+
+  if (command === 'ws') {
+    await handleWs(args.slice(1));
+    return;
+  }
+
+  if (LEGACY_ALIASES[command]) {
+    await handleLegacy(defaultWs, LEGACY_ALIASES[command], args.slice(1));
+    return;
+  }
+
+  console.error(`Unknown command: ${command}`);
+  console.error('Run claw help for usage');
+  process.exit(1);
+}
+
+// ── Help ────────────────────────────────────────────────────────
+
+function printHelp() {
+  const providers = listProviders();
+  console.log('claw - AgentDevClaw workspace CLI');
+  console.log('');
+  console.log('Workspaces:');
+  for (const p of providers) {
+    console.log(`  ${p.id}   ${p.name} - ${p.description}`);
+  }
+  console.log('');
+  console.log('Commands:');
+  console.log('  claw                                   Overview');
+  console.log('  claw ws                                List all workspaces');
+  console.log('  claw ws <id> [command] [args]          Workspace operation');
+  console.log('  claw ws <id> help                      Workspace operations list');
+  console.log('');
+  console.log('Legacy aliases (default workspace):');
+  console.log('  claw exp [--limit N] [--file F] [--keyword K]');
+  console.log('  claw subs');
+  console.log('  claw show <id>');
+  console.log('  claw spawn --goal "..." [--blocking]');
+  console.log('  claw spawn <exp-id>... --goal "..."');
+  console.log('  claw compact <exp-id>');
+  console.log('  claw resume <sub-id> --msg "..."');
+}
+
+// ── Overview ────────────────────────────────────────────────────
+
+async function cmdOverview(defaultWs) {
+  if (!defaultWs) {
+    console.log('No workspace providers registered.');
+    return;
+  }
+  const { ok, result } = await dispatch(defaultWs, 'overview');
+  console.log('AgentDevClaw  workspace CLI');
+  console.log('');
+  if (ok) {
+    console.log(`  Workspace: ${defaultWs}`);
+    console.log(`  Directory: ${result.workingDirectory}`);
+    console.log(`  Explorations: ${result.explorationCount}`);
+    console.log(`  Sub-agents: ${result.subAgentCount}`);
+  }
+  console.log('');
+  console.log('  claw ws                List all workspaces');
+  console.log('  claw exp               List explorations');
+  console.log('  claw spawn --goal ...  Spawn exploration');
+  console.log('  claw compact <id>      Compact exploration');
+  console.log('  claw resume <id> --msg Resume sub-agent');
+}
+
+// ── ws command ──────────────────────────────────────────────────
+
+async function handleWs(args) {
+  if (args.length === 0) {
+    const providers = listProviders();
+    console.log(`Workspaces (${providers.length}):`);
+    console.log('');
+    for (const p of providers) {
+      console.log(`  ${p.id}   ${p.name}`);
+      console.log(`    ${truncate(p.description, 100)}`);
+      console.log(`    operations: ${p.operations.map(op => op.name).join(', ')}`);
+      console.log('');
+    }
+    return;
+  }
+
+  const wsId = args[0];
+  const provider = getProvider(wsId);
+  if (!provider) {
+    console.error(`Unknown workspace: ${wsId}`);
+    console.error('Available: ' + listProviders().map(p => p.id).join(', '));
+    process.exit(1);
+  }
+
+  const subCommand = args[1] || 'overview';
+
+  if (subCommand === 'help') {
+    console.log(`${provider.name} (${provider.id})`);
+    console.log(provider.description);
+    console.log('');
+    console.log('Operations:');
+    for (const op of provider.operations) {
+      const paramStr = (op.params || []).map(p =>
+        p.required ? `--${p.name} <required>` : `[--${p.name}]`
+      ).join(' ');
+      console.log(`  claw ws ${wsId} ${op.name}${paramStr ? ' ' + paramStr : ''}`);
+      console.log(`    ${op.description}`);
+    }
+    return;
+  }
+
+  const operation = provider.operations.find(op => op.name === subCommand);
+  if (!operation) {
+    console.error(`Unknown operation: ${subCommand}`);
+    console.error('Available: ' + provider.operations.map(op => op.name).join(', '));
+    process.exit(1);
+  }
+
+  const params = parseOpParams(operation, args.slice(2));
+  const { ok, result, error } = await dispatch(wsId, subCommand, params);
+
+  if (!ok) {
+    console.error('Error: ' + error);
+    process.exit(1);
+  }
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ── Legacy command handlers ─────────────────────────────────────
+
+async function handleLegacy(wsId, opName, args) {
+  const params = parseLegacyArgs(opName, args);
+  const { ok, result, error } = await dispatch(wsId, opName, params);
+
+  if (!ok) {
+    console.error('Error: ' + error);
+    process.exit(1);
+  }
+
+  formatLegacyOutput(opName, result, params);
+}
+
+function parseOpParams(operation, args) {
+  const params = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith('--') && args[i + 1]) {
+      params[args[i].slice(2)] = args[i + 1];
+      i++;
+    } else if (!args[i].startsWith('-') && operation.params && operation.params.length > 0) {
+      params[operation.params[0].name] = args[i];
+    }
+  }
+  return params;
+}
+
+function parseLegacyArgs(opName, args) {
+  const params = {};
+  const positional = [];
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--goal' && args[i + 1]) { params.goal = args[i + 1]; i++; }
+    else if (args[i] === '--msg' && args[i + 1]) { params.message = args[i + 1]; i++; }
+    else if (args[i] === '--limit' && args[i + 1]) { params.limit = parseInt(args[i + 1], 10) || 20; i++; }
+    else if (args[i] === '--file' && args[i + 1]) { params.file = args[i + 1]; i++; }
+    else if (args[i] === '--keyword' && args[i + 1]) { params.keyword = args[i + 1]; i++; }
+    else if (args[i] === '--blocking' || args[i] === '--wait') { params.blocking = true; }
+    else if (!args[i].startsWith('-')) { positional.push(args[i]); }
+  }
+
+  if (opName === 'show' || opName === 'compact') {
+    if (positional.length > 0) params.sessionId = positional[0];
+  } else if (opName === 'spawn') {
+    if (positional.length > 0) params.from = positional.join(',');
+  } else if (opName === 'resume') {
+    if (positional.length > 0) params.sessionId = positional[0];
+  }
+
+  return params;
+}
+
+function formatLegacyOutput(opName, result, params) {
+  // Provider-level error (result has error but no ok/records/type)
+  if (result && result.error && result.ok === undefined && !result.records && !result.type) {
+    console.error('Error: ' + result.error);
+    process.exit(1);
+  }
+
+  switch (opName) {
+    case 'explorations': {
+      const records = result.records || [];
+      if (records.length === 0) {
+        console.log(params.file || params.keyword ? 'No matching explorations found' : 'No explorations yet');
+        console.log('Use claw spawn --goal "..." to start');
+        return;
       }
-      break;
-    case 'show':
-    case 'get':
-      cmdShow(positional[0] || '');
-      break;
-    case 'compact':
-    case 'compress':
-      await cmdCompact(positional[0] || '');
-      break;
-    case 'spawn':
-      await cmdSpawn(positional, mode, goal, blocking);
-      break;
-    case 'resume':
-      await cmdResume(positional[0] || '', message);
-      break;
-    case 'help':
-    case '--help':
-    case '-h':
-      console.log('claw - AgentDevClaw 子代理调度 CLI');
+      const filterDesc = params.file || params.keyword
+        ? ' (filter: ' + (params.file ? 'file="' + params.file + '"' : '') +
+          (params.file && params.keyword ? ', ' : '') +
+          (params.keyword ? 'keyword="' + params.keyword + '"' : '') + ')'
+        : '';
+      console.log(`Explorations (${result.total}${result.total > records.length ? ', showing ' + records.length : ''}${filterDesc})`);
       console.log('');
-      console.log('实体:');
-      console.log('  Exploration（探索记录）— 裸 spawn 产生，完成后锁定，不可变');
-      console.log('  Sub-agent（子代理对话）— 从探索记录派生，可 resume');
-      console.log('  Summary（摘要）— 探索记录的附属品，由 compact 生成');
+      for (const r of records) {
+        const shortId = r.id.length > 30 ? '...' + r.id.slice(-24) : r.id;
+        console.log('  ' + shortId);
+        console.log('    ' + truncate(r.goal, 80));
+        if (r.importantFiles && r.importantFiles.length > 0) {
+          const fp = r.importantFiles.slice(0, 4).map(f => (f.split('/').pop() || f)).join(', ');
+          console.log('    explored: ' + truncate(fp, 100) + (r.importantFiles.length > 4 ? ' +' + (r.importantFiles.length - 4) + ' more' : ''));
+        } else if (r.hasSummary) {
+          console.log('    (has summary)');
+        } else {
+          console.log('    (no summary)');
+        }
+        if (r.domains && r.domains.length > 0) console.log('    domains: ' + r.domains.join(', '));
+        const date = r.timestamp ? formatDate(r.timestamp) : '';
+        const gitInfo = r.gitMeta ? ' · ' + (r.gitMeta.branch || '?') + '@' + (r.gitMeta.commitHash || '?') : '';
+        console.log('    ' + (r.status === 'locked' ? '已锁定' : '运行中') + ' · ' + date + gitInfo);
+        console.log('');
+      }
+      return;
+    }
+
+    case 'subs': {
+      const records = result.records || [];
+      if (records.length === 0) {
+        console.log('暂无子代理对话');
+        console.log('使用 claw spawn <exp-id> --goal "..." 启动子代理');
+        return;
+      }
+      console.log(`子代理对话 (${records.length} 个)`);
       console.log('');
-      console.log('命令:');
-      console.log('  claw                                   状态概览');
-      console.log('  claw spawn --goal <text> [--blocking]  启动探索对话');
-      console.log('  claw spawn <exp-id...> --goal <text>   从探索记录启动子代理');
-      console.log('  claw exp [--limit N] [--file F] [--keyword K]');
-      console.log('                                         列出探索记录（可筛选）');
-      console.log('  claw subs                              列出子代理对话');
-      console.log('  claw show <id>                         查看探索/子代理详情');
-      console.log('  claw compact <exp-id>                  对探索记录生成摘要');
-      console.log('  claw resume <sub-id> --msg <text>      续接子代理对话');
-      break;
+      for (const r of records) {
+        const shortId = r.id.length > 30 ? '...' + r.id.slice(-24) : r.id;
+        console.log('  ' + shortId);
+        console.log('    ' + truncate(r.goal, 80));
+        if (r.domains && r.domains.length > 0) console.log('    领域: ' + r.domains.join(', '));
+        if (r.sourceExplorationIds && r.sourceExplorationIds.length > 0) console.log('    来源: ' + r.sourceExplorationIds.join(', '));
+        console.log('    ' + formatDate(r.createdAt));
+        console.log('');
+      }
+      return;
+    }
+
+    case 'show': {
+      if (result.error) {
+        console.error(result.error);
+        process.exit(1);
+      }
+      if (result.type === 'exploration') {
+        console.log(`探索记录 · ${result.id}`);
+        console.log('目标: ' + result.goal);
+        console.log('状态: ' + (result.status === 'locked' ? '已锁定' : '运行中'));
+        if (result.domains && result.domains.length > 0) console.log('领域: ' + result.domains.join(', '));
+        console.log('摘要: ' + (result.hasSummary ? '已生成' : '未生成（claw compact 生成）'));
+        console.log('消息: ' + result.messageCount + ' 条');
+        if (result.result) {
+          console.log('');
+          console.log('--- 探索结果 ---');
+          console.log(result.result);
+          console.log('--- 结束 ---');
+        }
+      } else {
+        console.log(`子代理对话 · ${result.id}`);
+        console.log('目标: ' + result.goal);
+        if (result.sourceExplorationIds && result.sourceExplorationIds.length > 0) {
+          console.log('来源探索: ' + result.sourceExplorationIds.join(', '));
+        }
+        console.log('消息: ' + result.messageCount + ' 条');
+        if (result.finalOutput) {
+          console.log('');
+          console.log('--- 最终输出 ---');
+          console.log(result.finalOutput);
+          console.log('--- 结束 ---');
+        }
+      }
+      return;
+    }
+
+    case 'spawn': {
+      if (result.error) {
+        console.error(params.from ? '子代理执行失败' : '探索执行失败');
+        console.error('  错误: ' + result.error);
+        process.exit(1);
+      }
+      console.log(params.from ? '子代理执行完成' : '探索完成');
+      console.log('  会话 ID: ' + result.sessionId);
+      console.log('  类型: ' + result.sessionType);
+      console.log('  耗时: ' + (result.durationMs / 1000).toFixed(1) + 's');
+      if (result.response) {
+        console.log('');
+        console.log('--- 执行结果 ---');
+        console.log(result.response);
+        console.log('--- 结束 ---');
+      }
+      return;
+    }
+
+    case 'compact': {
+      if (result.error) {
+        console.error('压缩失败: ' + result.error);
+        process.exit(1);
+      }
+      console.log('压缩完成');
+      console.log('  摘要长度: ' + result.summaryLength + ' 字符');
+      if (result.sessionTitle) console.log('  对话标题: ' + result.sessionTitle);
+      if (result.importantFiles && result.importantFiles.length > 0) {
+        console.log('  重要文件:');
+        for (const f of result.importantFiles) console.log('    - ' + f);
+      }
+      console.log('');
+      console.log(result.summaryText);
+      return;
+    }
+
+    case 'resume': {
+      if (result.error) {
+        console.error('续接失败');
+        console.error('  错误: ' + result.error);
+        process.exit(1);
+      }
+      console.log('子代理续接完成');
+      console.log('  耗时: ' + (result.durationMs / 1000).toFixed(1) + 's');
+      if (result.response) {
+        console.log('');
+        console.log('--- 执行结果 ---');
+        console.log(result.response);
+        console.log('--- 结束 ---');
+      }
+      return;
+    }
+
     default:
-      console.error(`未知命令: ${command}`);
-      console.error('运行 claw help 查看可用命令');
-      process.exit(1);
+      console.log(JSON.stringify(result, null, 2));
   }
 }
 

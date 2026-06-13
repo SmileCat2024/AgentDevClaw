@@ -382,20 +382,40 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
         if (!text) {
           return;
         }
-        const entry = this._callArbiter.enqueue({
-          source: 'weixin',
-          sourceRef: msg.from_user_id || '',
-          text,
-        });
-        const finished = await this._callArbiter.waitForCompletion(entry.id);
-        const responseText = finished.status === 'failed'
-          ? `处理失败: ${finished.error || '未知错误'}`
-          : (finished.result || '处理完成');
-        await weixinBot.apiClient.sendTextMessage(
-          msg.from_user_id,
-          responseText,
-          msg.context_token,
-        );
+
+        // 设置 WeixinBot 的 turn context，使 @CallStart 和 upload_attachment 工具生效
+        weixinBot._currentTurnCtx = {
+          fromUserId: msg.from_user_id,
+          contextToken: msg.context_token,
+        };
+        weixinBot._pendingMedia = [];
+
+        try {
+          const entry = this._callArbiter.enqueue({
+            source: 'weixin',
+            sourceRef: msg.from_user_id || '',
+            text,
+          });
+          const finished = await this._callArbiter.waitForCompletion(entry.id);
+          const responseText = finished.status === 'failed'
+            ? `处理失败: ${finished.error || '未知错误'}`
+            : (finished.result || '');
+
+          // 发送文本回复
+          if (responseText) {
+            await weixinBot.apiClient.sendTextMessage(
+              msg.from_user_id,
+              responseText,
+              msg.context_token,
+            );
+          }
+
+          // flush 所有待发送的媒体附件
+          await weixinBot.flushPendingMedia();
+        } finally {
+          weixinBot._currentTurnCtx = null;
+          weixinBot._pendingMedia = [];
+        }
       };
     }
 
@@ -446,5 +466,46 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       .add('3. 用 `im_connect_line` 执行接线\n')
       .add('4. 如需断开用 `im_disconnect_line`\n')
     );
+  }
+
+  /**
+   * 在所有 Feature 工具注册完毕后调用。
+   * 注册统一的 upload_attachment 工具，按当前活跃渠道委托执行。
+   */
+  async onFeatureToolsReady() {
+    if (process.env.PROTOCLAW_SESSION_TYPE === 'exploration') return;
+    if (!this.qqbotFeature || !this.weixinBotFeature) return;
+
+    const qqUploadTool = this.qqbotFeature.getTools().find(t => t.name === 'upload_attachment');
+    const wxUploadTool = this.weixinBotFeature.getTools().find(t => t.name === 'upload_attachment');
+    this.tools.register({
+      name: 'upload_attachment',
+      description:
+        '上传一个文件/图片/语音/视频作为附件。上传成功后，附件会在当前回复结束后自动发送给对方。' +
+        '支持本地文件绝对路径和公网 URL。文件大小限制 20MB。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: '要发送的文件的本地绝对路径或公网 URL',
+          },
+          filename: {
+            type: 'string',
+            description: '文件名（可选，默认从路径中提取）',
+          },
+        },
+        required: ['path'],
+      },
+      execute: async (args) => {
+        if (this._activeIMChannel === 'weixin' && wxUploadTool) {
+          return wxUploadTool.execute(args);
+        }
+        if (qqUploadTool) {
+          return qqUploadTool.execute(args);
+        }
+        return { error: '没有可用的 IM 渠道处理文件上传' };
+      },
+    }, 'portal-agent');
   }
 }

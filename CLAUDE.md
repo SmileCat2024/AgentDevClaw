@@ -834,17 +834,114 @@ local-features/                                ← 本地 Feature 功能测试
 
 ## 开发时的建议心智
 
-进入实际开发前，优先先回答这 6 个问题：
+进入实际开发前，优先先回答这 7 个问题：
 
 1. 这次改的是壳层、`flow-workspace`、`flow-editor`，还是 `FlowFeature` runtime？
 2. 问题属于项目配置、运行时装配、编排图数据、还是调试 UI？
 3. 当前数据的真相在前端草稿、服务端 workspace state、session index，还是 `agent-flow-graph.json`？
 4. 当前能力来自静态 block、`ClawFW` 前端状态机，还是 `flow_capabilities` 动态聚合？
 5. 当前行为是预制 agent 首页行为，还是装配运行时行为？
-6. 这是当前已实现能力的 bug，还是文档中“下一阶段设计”尚未落地导致的预期偏差？
+6. 这是当前已实现能力的 bug，还是文档中"下一阶段设计"尚未落地导致的预期偏差？
+7. **用户看到的是哪个前端管线？** 如果涉及面板显示、inspector 渲染，先确认该面板是 Claw 前端（`app-ui.js`，端口 1420）还是 DebugHub 查看器（`viewer-html.ts`，端口 2026）渲染的。改错管线 = 白改。
 
-把这 6 个问题先想清楚，通常就能避免在错误层面下手。
+把这 7 个问题先想清楚，通常就能避免在错误层面下手。
 
 ## 跨项目上下文索引
 
 [docs/dev-context-index.md](/D:/code/AgentDevClaw/docs/dev-context-index.md) 记录了 AgentDev 框架与 AgentDevClaw 产品之间的关键连接关系、文件速查表、核心数据流和已知改进方向。需要跨仓库联动排查时，优先阅读它。
+
+## 两套前端渲染管线（重要）
+
+用户日常使用的 Web UI 运行在端口 1420，有一个**独立于框架**的前端渲染管线。框架侧也有自己的 DebugHub 查看器（端口 2026）。这两套系统的渲染代码完全不同，改错地方会导致"代码明明对了但用户看不到效果"。
+
+### 端口 1420：Claw 主前端（用户看到的）
+
+| 文件 | 职责 |
+|------|------|
+| `public/src/app-core.js` | i18n、基础常量、公共函数 |
+| `public/src/app-ui.js` | Feature 面板渲染（`renderFeaturesPanel`）、workspace surface、面板状态管理 |
+| `public/src/app-main.js` | 轮询、数据获取、`normalizeHookInspector`、`setCurrentHookInspector` |
+| `public/styles/layout.css` | 所有面板样式（包括 `.feature-badge.status-*` 系列） |
+
+这些文件是静态 JS/CSS，由 server.js 直接 serve，**不需要编译**。修改后重启 Claw 服务即可生效。
+
+### 端口 2026：DebugHub Viewer（框架侧）
+
+| 文件 | 职责 |
+|------|------|
+| `AgentDev/src/core/viewer-html.ts` | DebugHub 查看器的完整 HTML/JS/CSS 生成 |
+| `AgentDev/src/core/viewer-worker.ts` | ViewerWorker HTTP 服务、inspector 数据存储与 API |
+
+修改这个管线需要在 AgentDev 侧 `npm run build` 后重启 Claw 服务。
+
+### Inspector 数据流
+
+```
+Agent 进程: buildHookInspectorSnapshot()
+  → IPC → ViewerWorker: 存储 hookInspector
+  → API: GET /api/agents/:id/hooks
+  → Claw 前端: app-main.js fetch → normalizeHookInspector() → currentHookInspector
+  → app-ui.js: renderFeaturesPanel() 渲染
+```
+
+### 关键陷阱：normalizeHookInspector 丢字段
+
+`normalizeHookInspector()` 函数**存在于两个地方**，作用是把 API 返回的 inspector snapshot 重构为前端使用的标准化对象。新增 inspector snapshot 字段时，**必须同时更新两处**，否则字段会在重构时被丢弃：
+
+1. **Claw 前端**：`public/src/app-ui.js` — 影响**用户日常看到**的面板
+2. **框架侧**：`AgentDev/src/core/viewer-html.ts` — 影响 DebugHub 查看器（端口 2026）
+
+历史上真实踩过的坑：在框架 `agent.ts` 的 `buildHookInspectorSnapshot()` 中新增了 `standaloneTools` 字段，框架和 API 都正确返回了数据，但 `normalizeHookInspector()` 在重构时没有透传这个字段，导致前端始终看不到。
+
+## 进程架构与重启范围
+
+Claw 启动后存在两类进程：
+
+1. **server.js 主进程**（PID 固定）：包含 Express 服务 + ViewerWorker + DebugHub
+2. **agent 子进程**（per-runtime）：由 server.js 通过 `spawn()` 创建，每个运行的 agent 一个
+
+```
+server.js 主进程
+├── Express (port 1420) → serve 静态前端 + protoclaw API
+├── ViewerWorker (port 2026) → DebugHub 查看器
+└── agent 子进程 (spawn)
+    └── run-prebuilt-agent.js → 动态 import agent.js
+```
+
+**重启 agent（通过 API 或 UI 重新启动）只重建子进程**，不会重新加载 server.js 主进程中的模块。因此：
+
+- 修改 `prebuilt-agents/*/agent.js` → 重启 agent 即可生效
+- 修改框架 dist（`AgentDev/dist/*`）→ **必须重启整个 Claw 服务**（server.js 才会重新 import）
+- 修改 Claw 前端 JS/CSS → **必须重启整个 Claw 服务**（静态文件由 server.js serve）
+- 修改 `local-features/dist/*` → 重启 agent 即可（子进程动态 import）
+
+## 工具注册时序与同名覆盖
+
+### Agent 生命周期中的工具注册顺序
+
+```
+1. new AgentClass()        → 构造函数：this.use(feature) 只存 Map
+2. agent.onCall(input)     → 第一次调用时：
+   a. ensureFeatureTools() → 遍历 features，调用 feature.getTools()，注册到 ToolRegistry
+                             → pushInspectorSnapshot()  ← 初始 inspector 在此推送
+                             → featureToolsReady = true
+   b. onInitiate()         ← 仅首次 onCall 时执行
+   c. _initialized = true
+3. 后续 onCall             → ensureFeatureTools() 直接 return（已 ready）
+```
+
+### 同名工具覆盖（superseded）机制
+
+`ToolRegistry` 内部用 `Map<string, Tool>` 存储，同名工具的 `register()` 会覆盖前值。被覆盖的旧条目保存在 `superseded` Map 中，通过 `getEntries()` 返回 `state: 'superseded'`。
+
+**时序关键点**：如果需要在所有 feature 工具注册之后再注册一个统一工具（覆盖同名 feature 工具），不能放在构造函数中（会被 feature 工具覆盖），也不能放在 `onInitiate` 中（首次 `onCall` 才执行，初始 inspector 不包含）。正确做法是使用 `onFeatureToolsReady()` 虚方法，它在 `ensureFeatureTools()` 的 feature 循环结束后、`pushInspectorSnapshot()` 之前被调用。
+
+### inspector 中的工具分类
+
+`buildHookInspectorSnapshot()` 中，工具按 `source`（注册时传入的第二个参数）分类：
+
+- source 在 `this.features.keys()` 中 → 归入对应 feature 的 tools 列表
+- source 不在任何 feature name 中 → 归入 `standaloneTools`（游离工具）
+- source 为 undefined → 用 `'__no_source__'` 作为 key，归入 standaloneTools
+
+这意味着直接通过 `this.tools.register(tool, 'custom-source')` 注册的工具，只要 source 不等于任何 feature name，就会自动出现在 inspector 的 `standaloneTools` 中。

@@ -1,168 +1,33 @@
+/**
+ * claw-mcp — MCP Server (thin shell)
+ *
+ * Routes all MCP tool calls through claw-core provider registry.
+ * Tool names match the previous version for backward compatibility.
+ *
+ * New tool: workspace_list / workspace_help — discover available workspaces.
+ */
+
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod/v4';
-import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
-import { join } from 'path';
-import os from 'os';
-import { execFileSync } from 'child_process';
 
-// --- Constants ---
-const USER_DATA_ROOT = join(os.homedir(), '.agentdev', 'AgentDevClaw');
-const WORKSPACES_ROOT = join(USER_DATA_ROOT, 'workspaces');
-const PROGRAMMING_HELPER_DIR = join(WORKSPACES_ROOT, 'programming-helper');
-const SESSIONS_DIR = join(PROGRAMMING_HELPER_DIR, 'sessions');
-const HANDOFFS_DIR = join(USER_DATA_ROOT, 'context-handoffs', 'programming-helper');
-const SERVER_URL = process.env.PROTOCLAW_SERVER_URL || 'http://127.0.0.1:1420';
+import {
+  loadProviders, listProviders, getProvider, getDefaultWorkspaceId,
+  dispatch,
+  readSessionIndex, getExplorations, getSubs,
+  findHandoffSummary, loadSessionDetail, loadFinalOutput,
+  cleanText,
+} from './claw-core.mjs';
 
-// --- Helpers ---
-function cleanText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function readJson(filePath) {
-  if (!existsSync(filePath)) return null;
-  try {
-    return JSON.parse(readFileSync(filePath, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function formatDate(isoString) {
-  if (!isoString) return '';
-  try {
-    const d = new Date(isoString);
-    if (isNaN(d.getTime())) return isoString;
-    return d.toLocaleDateString('zh-CN', {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit',
-    });
-  } catch {
-    return isoString;
-  }
-}
-
-function truncate(text, maxLen = 120) {
-  if (!text || text.length <= maxLen) return text || '';
-  return text.slice(0, maxLen - 1) + '…';
-}
-
-// --- Data readers (same logic as claw.mjs) ---
-
-function readSessionIndex() {
-  const index = readJson(join(SESSIONS_DIR, 'index.json'));
-  if (!index) return { activeSessionId: null, sessions: [] };
-  const sessions = Array.isArray(index.sessions)
-    ? index.sessions.filter(s => s && s.id && s.id !== 'legacy')
-    : [];
-  return { activeSessionId: index.activeSessionId, sessions };
-}
-
-function getExplorations() {
-  const index = readSessionIndex();
-  return index.sessions.filter(s => {
-    const st = cleanText(s.sessionType);
-    if (st === 'exploration') return true;
-    if (st === 'sub' && s.metadata?.clean === true) return true;
-    if (st === 'sub' && s.metadata?.sourceSessionId?.startsWith('__protoclaw-clean-')) return true;
-    return false;
-  });
-}
-
-function getSubs() {
-  const index = readSessionIndex();
-  return index.sessions.filter(s => {
-    const st = cleanText(s.sessionType);
-    if (st === 'sub' && s.metadata?.clean === true) return false;
-    if (st === 'sub' && s.metadata?.sourceSessionId?.startsWith('__protoclaw-clean-')) return false;
-    if (st === 'sub' && s.metadata?.resumeMode === 'one-shot') return true;
-    return false;
-  });
-}
-
-function findHandoffSummary(sessionId) {
-  if (!sessionId) return null;
-  if (!existsSync(HANDOFFS_DIR)) return null;
-
-  let files;
-  try {
-    files = readdirSync(HANDOFFS_DIR)
-      .filter(name => name.startsWith('handoff-') && name.endsWith('.json'))
-      .map(name => join(HANDOFFS_DIR, name))
-      .filter(filePath => statSync(filePath).isFile());
-  } catch {
-    return null;
-  }
-
-  let best = null;
-  for (const filePath of files) {
-    const handoff = readJson(filePath);
-    if (!handoff || handoff.sourceSessionId !== sessionId) continue;
-    const createdAt = handoff.createdAt || '';
-    if (!best || createdAt > (best.createdAt || '')) {
-      best = handoff;
-    }
-  }
-
-  if (!best) return null;
-
-  return {
-    sessionId,
-    handoffId: best.handoffId || '',
-    handoffCreatedAt: best.createdAt || '',
-    mode: best.mode || '',
-    summaryText: cleanText(best.sourceSummary),
-    importantFiles: Array.isArray(best.compactOutput?.importantFiles)
-      ? best.compactOutput.importantFiles : [],
-    importantSkills: Array.isArray(best.compactOutput?.importantSkills)
-      ? best.compactOutput.importantSkills : [],
-    seedMessages: Array.isArray(best.seedMessages) ? best.seedMessages : [],
-    stats: best.stats || {},
-    sessionTimestamp: best.sessionTimestamp || null,
-    sessionTitle: best.sessionTitle || null,
-    gitMeta: best.gitMeta || null,
-  };
-}
-
-function loadSessionDetail(sessionId) {
-  const filePath = join(SESSIONS_DIR, `${sessionId}.json`);
-  if (!existsSync(filePath)) return null;
-  const raw = readJson(filePath);
-  if (!raw) return null;
-
-  const messages = Array.isArray(raw?.runtime?.context?.messages)
-    ? raw.runtime.context.messages
-    : [];
-  const lastMessage = [...messages].reverse().find(
-    m => m && typeof m.content === 'string' && m.role !== 'system'
-  );
-
-  return {
-    id: sessionId,
-    savedAt: raw.savedAt,
-    messageCount: messages.length,
-    lastMessage: lastMessage?.content
-      ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 200)
-      : '',
-    messages,
-  };
-}
-
-function loadFinalOutput(sessionId) {
-  const detail = loadSessionDetail(sessionId);
-  if (!detail) return null;
-  const lastAssistant = [...detail.messages].reverse().find(
-    m => m && m.role === 'assistant' && typeof m.content === 'string'
-  );
-  return lastAssistant?.content || null;
-}
-
-// --- MCP Server ---
+// ── MCP Server ───────────────────────────────────────────────────
 
 export class ClawMCPServer {
   constructor() {}
 
   async handleRequest(req, res) {
+    // Ensure providers are loaded
+    await loadProviders();
+
     const server = this.createServer();
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -190,7 +55,7 @@ export class ClawMCPServer {
 
   createServer() {
     const server = new McpServer(
-      { name: 'claw-cli', version: '1.0.0' },
+      { name: 'claw-cli', version: '2.0.0' },
       { capabilities: { logging: {} } }
     );
 
@@ -200,28 +65,45 @@ export class ClawMCPServer {
     return server;
   }
 
+  // ── Tool registration ──────────────────────────────────────────
+
   registerTools(server) {
+    const defaultWs = getDefaultWorkspaceId();
+
+    // Helper: wrap dispatch result into MCP content
+    const wrap = (result) => ({
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    });
+    const wrapError = (errorMsg) => ({
+      content: [{ type: 'text', text: JSON.stringify({ error: errorMsg }) }],
+      isError: true,
+    });
+
     // --- overview ---
     server.registerTool('overview', {
       title: 'Claw Status Overview',
       description: 'Get an overview of the claw workspace: working directory, exploration count, sub-agent count.',
       inputSchema: z.object({}).optional(),
     }, async () => {
-      const state = readJson(join(PROGRAMMING_HELPER_DIR, 'state.json')) || { forms: {}, openDirectory: '' };
-      const explorations = getExplorations();
-      const subs = getSubs();
-      const openDir = cleanText(state.openDirectory);
+      const { ok, result } = await dispatch(defaultWs, 'overview');
+      if (!ok) return wrapError('Failed to get overview');
+      return wrap(result);
+    });
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            workingDirectory: openDir || '(not set)',
-            explorationCount: explorations.length,
-            subAgentCount: subs.length,
-          }, null, 2),
-        }],
-      };
+    // --- workspace_list (NEW) ---
+    server.registerTool('workspace_list', {
+      title: 'List Workspaces',
+      description: 'List all registered workspace providers with their available operations.',
+      inputSchema: z.object({}).optional(),
+    }, async () => {
+      const providers = listProviders();
+      const records = providers.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        operations: p.operations.map(op => op.name),
+      }));
+      return wrap({ total: records.length, workspaces: records });
     });
 
     // --- list_explorations ---
@@ -234,54 +116,9 @@ export class ClawMCPServer {
         keyword: z.string().optional().describe('Filter: match goal, summary text, or session title'),
       }),
     }, async ({ limit = 20, file: fileFilter, keyword }) => {
-      let explorations = getExplorations();
-
-      if (fileFilter || keyword) {
-        explorations = explorations.filter(record => {
-          if (fileFilter) {
-            const handoff = findHandoffSummary(record.id);
-            const files = handoff?.importantFiles || [];
-            if (!files.some(f => f.toLowerCase().includes(fileFilter.toLowerCase()))) return false;
-          }
-          if (keyword) {
-            const kw = keyword.toLowerCase();
-            const goalMatch = (record.goal || '').toLowerCase().includes(kw);
-            if (goalMatch) return true;
-            const handoff = findHandoffSummary(record.id);
-            const summaryMatch = handoff?.summaryText?.toLowerCase().includes(kw);
-            const titleMatch = handoff?.sessionTitle?.toLowerCase().includes(kw);
-            if (summaryMatch || titleMatch) return true;
-            return false;
-          }
-          return true;
-        });
-      }
-
-      const totalCount = explorations.length;
-      const displayed = explorations.slice(0, limit);
-
-      const records = displayed.map(record => {
-        const handoff = findHandoffSummary(record.id);
-        return {
-          id: record.id,
-          goal: cleanText(record.goal) || '(no goal)',
-          status: record.status === 'locked' ? 'locked' : 'running',
-          domains: Array.isArray(record.domains) ? record.domains : [],
-          importantFiles: handoff?.importantFiles || [],
-          hasSummary: !!handoff?.summaryText,
-          summaryPreview: handoff?.summaryText ? truncate(handoff.summaryText, 200) : null,
-          sessionTitle: handoff?.sessionTitle || null,
-          timestamp: handoff?.sessionTimestamp || record.updatedAt || record.createdAt,
-          gitMeta: handoff?.gitMeta || null,
-        };
-      });
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ total: totalCount, count: records.length, records }, null, 2),
-        }],
-      };
+      const { ok, result } = await dispatch(defaultWs, 'explorations', { limit, file: fileFilter, keyword });
+      if (!ok) return wrapError(result?.error || 'Failed');
+      return wrap(result);
     });
 
     // --- list_sub_agents ---
@@ -290,23 +127,9 @@ export class ClawMCPServer {
       description: 'List sub-agent conversations derived from exploration records.',
       inputSchema: z.object({}).optional(),
     }, async () => {
-      const subs = getSubs();
-      const records = subs.map(record => ({
-        id: record.id,
-        goal: cleanText(record.goal) || '(no goal)',
-        domains: Array.isArray(record.domains) ? record.domains : [],
-        sourceExplorationIds: Array.isArray(record.metadata?.sourceExplorationIds)
-          ? record.metadata.sourceExplorationIds : [],
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-      }));
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ total: records.length, records }, null, 2),
-        }],
-      };
+      const { ok, result } = await dispatch(defaultWs, 'subs');
+      if (!ok) return wrapError(result?.error || 'Failed');
+      return wrap(result);
     });
 
     // --- show ---
@@ -317,67 +140,10 @@ export class ClawMCPServer {
         sessionId: z.string().describe('The session ID to inspect'),
       }),
     }, async ({ sessionId }) => {
-      const index = readSessionIndex();
-      const record = index.sessions.find(s => s.id === sessionId);
-      if (!record) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: `Session not found: ${sessionId}` }) }],
-          isError: true,
-        };
-      }
-
-      const sessionType = cleanText(record.sessionType);
-      const isExploration = sessionType === 'exploration' || record.metadata?.clean === true;
-      const goal = cleanText(record.goal) || '(no goal)';
-      const detail = loadSessionDetail(sessionId);
-
-      if (isExploration) {
-        const handoff = findHandoffSummary(sessionId);
-        let resultText = null;
-        if (handoff?.summaryText) {
-          resultText = handoff.summaryText;
-        } else {
-          resultText = loadFinalOutput(sessionId);
-        }
-
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              type: 'exploration',
-              id: sessionId,
-              goal,
-              status: record.status === 'locked' ? 'locked' : 'running',
-              domains: Array.isArray(record.domains) ? record.domains : [],
-              hasSummary: !!handoff?.summaryText,
-              sessionTitle: handoff?.sessionTitle || null,
-              timestamp: handoff?.sessionTimestamp || record.createdAt,
-              gitMeta: handoff?.gitMeta || null,
-              messageCount: detail?.messageCount || 0,
-              result: resultText,
-            }, null, 2),
-          }],
-        };
-      } else {
-        const finalOutput = loadFinalOutput(sessionId);
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              type: 'sub-agent',
-              id: sessionId,
-              goal,
-              sourceExplorationIds: Array.isArray(record.metadata?.sourceExplorationIds)
-                ? record.metadata.sourceExplorationIds : [],
-              domains: Array.isArray(record.domains) ? record.domains : [],
-              createdAt: record.createdAt,
-              updatedAt: record.updatedAt,
-              messageCount: detail?.messageCount || 0,
-              finalOutput,
-            }, null, 2),
-          }],
-        };
-      }
+      const { ok, result } = await dispatch(defaultWs, 'show', { sessionId });
+      if (!ok) return wrapError(result?.error || 'Failed');
+      if (result.error) return wrapError(result.error);
+      return wrap(result);
     });
 
     // --- spawn ---
@@ -389,67 +155,13 @@ export class ClawMCPServer {
         explorationIds: z.array(z.string()).default([]).describe('Parent exploration IDs (empty = bare exploration spawn)'),
       }),
     }, async ({ goal, explorationIds = [] }) => {
-      if (!cleanText(goal)) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: 'goal is required' }) }],
-          isError: true,
-        };
-      }
+      const params = { goal };
+      if (explorationIds.length > 0) params.from = explorationIds.join(',');
 
-      const isExploration = explorationIds.length === 0;
-
-      // Validate exploration IDs for sub-agent
-      if (!isExploration) {
-        const index = readSessionIndex();
-        for (const expId of explorationIds) {
-          const record = index.sessions.find(s => s.id === expId);
-          if (!record) {
-            return {
-              content: [{ type: 'text', text: JSON.stringify({ error: `Exploration not found: ${expId}` }) }],
-              isError: true,
-            };
-          }
-        }
-      }
-
-      try {
-        const response = await fetch(`${SERVER_URL}/protoclaw/spawn_one_shot`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ goal, explorationIds }),
-        });
-
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ error: errorBody.error || `HTTP ${response.status}` }) }],
-            isError: true,
-          };
-        }
-
-        const data = await response.json();
-        const result = data.result;
-        const sessionType = data.session?.sessionType || (isExploration ? 'exploration' : 'sub');
-
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              ok: result.ok,
-              sessionId: data.session.id,
-              sessionType,
-              durationMs: result.durationMs,
-              response: result.ok ? result.response : undefined,
-              error: result.ok ? undefined : result.error,
-            }, null, 2),
-          }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: `Spawn failed: ${error.message}` }) }],
-          isError: true,
-        };
-      }
+      const { ok, result } = await dispatch(defaultWs, 'spawn', params);
+      if (!ok) return wrapError(result?.error || 'Failed');
+      if (result.error) return wrapError(result.error);
+      return wrap(result);
     });
 
     // --- compact ---
@@ -460,110 +172,10 @@ export class ClawMCPServer {
         sessionId: z.string().describe('The exploration session ID to compact'),
       }),
     }, async ({ sessionId }) => {
-      if (!cleanText(sessionId)) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: 'sessionId is required' }) }],
-          isError: true,
-        };
-      }
-
-      const index = readSessionIndex();
-      const record = index.sessions.find(s => s.id === sessionId);
-      if (!record) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: `Session not found: ${sessionId}` }) }],
-          isError: true,
-        };
-      }
-
-      const sessionType = cleanText(record.sessionType);
-      if (sessionType !== 'exploration' && record.metadata?.clean !== true) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: `Only exploration records can be compacted (type: ${sessionType})` }) }],
-          isError: true,
-        };
-      }
-
-      try {
-        const resultPath = join(os.tmpdir(), `compact-mirror-${Date.now()}.json`);
-        const args = [
-          join(process.cwd(), 'scripts', 'run-compact-mirror.js'),
-          'prebuilt-agents/official/programming-helper',
-          'programming-helper',
-          sessionId,
-          JSON.stringify({ sessionType }),
-          resultPath,
-        ];
-
-        execFileSync('node', args, {
-          cwd: process.cwd(),
-          timeout: 120000,
-          encoding: 'utf8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-
-        const result = readJson(resultPath);
-        if (!result?.ok) {
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ error: 'Compact failed: no valid result' }) }],
-            isError: true,
-          };
-        }
-
-        // Persist handoff via server API
-        try {
-          const exportResp = await fetch(`${SERVER_URL}/protoclaw/context_handoffs/summary_export`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId,
-              summaryText: result.summaryText,
-              rawResponse: result.rawResponse || '',
-              importantFiles: result.importantFiles || [],
-              importantSkills: result.importantSkills || [],
-              sessionTitle: result.sessionTitle || '',
-              fileRanges: result.fileRanges || {},
-              sessionTimestamp: result.sessionTimestamp || null,
-              gitMeta: result.gitMeta || null,
-            }),
-          });
-
-          if (!exportResp.ok) {
-            const errBody = await exportResp.text();
-            return {
-              content: [{ type: 'text', text: JSON.stringify({ error: `Summary save failed: ${exportResp.status} ${errBody}` }) }],
-              isError: true,
-            };
-          }
-
-          const exportResult = await exportResp.json();
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                ok: true,
-                sessionId,
-                summaryLength: cleanText(result.summaryText).length,
-                sessionTitle: cleanText(result.sessionTitle),
-                importantFiles: result.importantFiles || [],
-                importantSkills: result.importantSkills || [],
-                summaryText: result.summaryText,
-                handoffPath: exportResult.handoffPath || null,
-              }, null, 2),
-            }],
-          };
-        } catch (exportErr) {
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ error: `Summary save failed: ${exportErr.message}` }) }],
-            isError: true,
-          };
-        }
-      } catch (error) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: `Compact failed: ${error.message}` }) }],
-          isError: true,
-        };
-      }
+      const { ok, result } = await dispatch(defaultWs, 'compact', { sessionId });
+      if (!ok) return wrapError(result?.error || 'Failed');
+      if (result.error) return wrapError(result.error);
+      return wrap(result);
     });
 
     // --- resume ---
@@ -575,79 +187,27 @@ export class ClawMCPServer {
         message: z.string().describe('The message to append'),
       }),
     }, async ({ sessionId, message }) => {
-      if (!cleanText(sessionId) || !cleanText(message)) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: 'sessionId and message are required' }) }],
-          isError: true,
-        };
-      }
-
-      const index = readSessionIndex();
-      const record = index.sessions.find(s => s.id === sessionId);
-      if (!record) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: `Session not found: ${sessionId}` }) }],
-          isError: true,
-        };
-      }
-
-      const sessionType = cleanText(record.sessionType);
-      if (sessionType === 'exploration' || record.metadata?.clean === true) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: 'Exploration records are locked and cannot be resumed. Only sub-agents can be resumed.' }) }],
-          isError: true,
-        };
-      }
-
-      try {
-        const response = await fetch(`${SERVER_URL}/protoclaw/resume_sub`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, message }),
-        });
-
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ error: errorBody.error || `HTTP ${response.status}` }) }],
-            isError: true,
-          };
-        }
-
-        const data = await response.json();
-        const result = data.result;
-
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              ok: result.ok,
-              sessionId,
-              durationMs: result.durationMs,
-              response: result.ok ? result.response : undefined,
-              error: result.ok ? undefined : result.error,
-            }, null, 2),
-          }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: `Resume failed: ${error.message}` }) }],
-          isError: true,
-        };
-      }
+      const { ok, result } = await dispatch(defaultWs, 'resume', { sessionId, message });
+      if (!ok) return wrapError(result?.error || 'Failed');
+      if (result.error) return wrapError(result.error);
+      return wrap(result);
     });
   }
 
+  // ── Resource registration ──────────────────────────────────────
+
   registerResources(server) {
-    // claw://explorations — all exploration records
+    const defaultWs = getDefaultWorkspaceId();
+
+    // claw://explorations
     server.registerResource('explorations', 'claw://explorations', {
       title: 'All Explorations',
       description: 'Complete list of exploration records with metadata.',
       mimeType: 'application/json',
     }, async (uri) => {
-      const explorations = getExplorations();
+      const explorations = getExplorations(defaultWs);
       const records = explorations.map(record => {
-        const handoff = findHandoffSummary(record.id);
+        const handoff = findHandoffSummary(defaultWs, record.id);
         return {
           id: record.id,
           goal: cleanText(record.goal) || '(no goal)',
@@ -667,13 +227,13 @@ export class ClawMCPServer {
       };
     });
 
-    // claw://sub-agents — all sub-agent conversations
+    // claw://sub-agents
     server.registerResource('sub-agents', 'claw://sub-agents', {
       title: 'All Sub-agents',
       description: 'Complete list of sub-agent conversations.',
       mimeType: 'application/json',
     }, async (uri) => {
-      const subs = getSubs();
+      const subs = getSubs(defaultWs);
       const records = subs.map(record => ({
         id: record.id,
         goal: cleanText(record.goal) || '(no goal)',
@@ -692,7 +252,7 @@ export class ClawMCPServer {
       };
     });
 
-    // claw://sessions/{sessionId} — detail for any session
+    // claw://sessions/{sessionId}
     server.registerResource(
       'session-detail',
       new ResourceTemplate('claw://sessions/{sessionId}', { list: undefined }),
@@ -706,7 +266,7 @@ export class ClawMCPServer {
           ? variables.sessionId
           : (Array.isArray(variables.sessionId) ? variables.sessionId[0] : String(variables.sessionId || ''));
 
-        const index = readSessionIndex();
+        const index = readSessionIndex(defaultWs);
         const record = index.sessions.find(s => s.id === sessionId);
         if (!record) {
           return {
@@ -720,12 +280,12 @@ export class ClawMCPServer {
 
         const sessionType = cleanText(record.sessionType);
         const isExploration = sessionType === 'exploration' || record.metadata?.clean === true;
-        const detail = loadSessionDetail(sessionId);
+        const detail = loadSessionDetail(defaultWs, sessionId);
         const goal = cleanText(record.goal) || '(no goal)';
 
         let result = {};
         if (isExploration) {
-          const handoff = findHandoffSummary(sessionId);
+          const handoff = findHandoffSummary(defaultWs, sessionId);
           result = {
             type: 'exploration', id: sessionId, goal,
             status: record.status === 'locked' ? 'locked' : 'running',
@@ -743,7 +303,7 @@ export class ClawMCPServer {
               ? record.metadata.sourceExplorationIds : [],
             domains: Array.isArray(record.domains) ? record.domains : [],
             messageCount: detail?.messageCount || 0,
-            finalOutput: loadFinalOutput(sessionId),
+            finalOutput: loadFinalOutput(defaultWs, sessionId),
           };
         }
 
@@ -757,6 +317,8 @@ export class ClawMCPServer {
       }
     );
   }
+
+  // ── Prompt registration ────────────────────────────────────────
 
   registerPrompts(server) {
     server.registerPrompt('explore_codebase', {

@@ -521,7 +521,7 @@ async function mountCarrierFeature(carrier) {
         accountId: qqCfg?.accountId || '',
         markdownSupport: qqCfg?.markdownSupport ?? true,
       });
-      agent.use(feature);
+      await agent.mountFeature(feature);
       await feature.startGateway(agent);
       // Route IM messages through CallArbiter for serialization
       if (callArbiter) {
@@ -543,7 +543,7 @@ async function mountCarrierFeature(carrier) {
       const feature = new WeixinBot({
         configPath: process.env.PROTOCLAW_WEIXIN_CONFIG_PATH || '',
       });
-      agent.use(feature);
+      await agent.mountFeature(feature);
       await feature.startGateway(agent);
       // Override handleMessage to route through CallArbiter
       if (callArbiter && typeof feature.handleMessage === 'function') {
@@ -553,16 +553,33 @@ async function mountCarrierFeature(carrier) {
           if (!msg || msg.message_type !== 1) return;
           const text = WeixinApiClient.extractText(msg);
           if (!text) return;
-          const entry = callArbiter.enqueue({
-            source: 'im-line-weixin',
-            sourceRef: msg.from_user_id || '',
-            text,
-          });
-          const finished = await callArbiter.waitForCompletion(entry.id);
-          const resp = finished.status === 'failed'
-            ? `处理失败: ${finished.error || '未知错误'}`
-            : (finished.result || '处理完成');
-          await feature.apiClient.sendTextMessage(msg.from_user_id, resp, msg.context_token);
+
+          // 设置 WeixinBot 的 turn context，使 @CallStart 和 upload_attachment 工具生效
+          feature._currentTurnCtx = {
+            fromUserId: msg.from_user_id,
+            contextToken: msg.context_token,
+          };
+          feature._pendingMedia = [];
+
+          try {
+            const entry = callArbiter.enqueue({
+              source: 'im-line-weixin',
+              sourceRef: msg.from_user_id || '',
+              text,
+            });
+            const finished = await callArbiter.waitForCompletion(entry.id);
+            const resp = finished.status === 'failed'
+              ? `处理失败: ${finished.error || '未知错误'}`
+              : (finished.result || '处理完成');
+            if (resp) {
+              await feature.apiClient.sendTextMessage(msg.from_user_id, resp, msg.context_token);
+            }
+            // flush 所有待发送的媒体附件
+            await feature.flushPendingMedia();
+          } finally {
+            feature._currentTurnCtx = null;
+            feature._pendingMedia = [];
+          }
         };
       }
       _mountedCarrierFeature = 'weixin';
@@ -606,13 +623,18 @@ process.on('message', (msg) => {
     const carrier = _mountedCarrierFeature;
     try {
       const featureName = carrier === 'qq' ? 'qqbot' : 'weixin-bot';
-      const feature = agent.features?.get?.(featureName);
-      if (feature && typeof feature.onDestroy === 'function') {
-        feature.onDestroy({ agent }).catch(err => {
-          console.warn(`[IM-Line] onDestroy error for ${featureName}:`, err.message);
-        });
+      if (typeof agent.removeFeature === 'function') {
+        agent.removeFeature(featureName);
+      } else {
+        // fallback: 手动清理工具和 feature
+        const feature = agent.features?.get?.(featureName);
+        if (feature && typeof feature.onDestroy === 'function') {
+          feature.onDestroy({ agent }).catch(err => {
+            console.warn(`[IM-Line] onDestroy error for ${featureName}:`, err.message);
+          });
+        }
+        agent.features?.delete?.(featureName);
       }
-      agent.features?.delete?.(featureName);
       _mountedCarrierFeature = null;
       console.log(`[IM-Line] ✓ Carrier "${carrier}" unmounted and gateway stopped`);
     } catch (err) {

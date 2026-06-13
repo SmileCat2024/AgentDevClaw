@@ -4313,13 +4313,20 @@ async function poll() {
     }
 
     // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住
-    const statusTask = refreshCurrentRuntimeStatus(currentRuntimeAgentId);
+    const pollRuntimeId = currentRuntimeAgentId;
+    const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId);
 
     const [msgsRes, inputRes, overviewRes] = await Promise.all([
-      fetch(`/api/agents/${currentRuntimeAgentId}/messages`),
-      fetch(`/api/agents/${currentRuntimeAgentId}/input-requests`),
-      fetch(`/api/agents/${currentRuntimeAgentId}/overview`),
+      fetch(`/api/agents/${pollRuntimeId}/messages`),
+      fetch(`/api/agents/${pollRuntimeId}/input-requests`),
+      fetch(`/api/agents/${pollRuntimeId}/overview`),
     ]);
+
+    // 如果在 fetch 期间已经切换了 agent，丢弃过时的响应，避免旧数据覆盖新会话
+    if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(pollRuntimeId)) {
+      setTimeout(poll, 300);
+      return;
+    }
 
     const coreResponses = [msgsRes, inputRes, overviewRes];
     if (coreResponses.some(res => res.status === 404)) {

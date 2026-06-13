@@ -6952,6 +6952,7 @@ function normalizeHookInspector(snapshot) {
         entries: [],
       };
     }),
+    standaloneTools: raw.standaloneTools || undefined,
   };
 }
 
@@ -8084,7 +8085,7 @@ function renderFeaturesPanel() {
           '<div class="feature-tool-card">',
           '<div class="feature-tool-top">',
           '<div class="feature-tool-name">' + escapeHtml(tool.name) + '</div>',
-          '<div class="' + getStatusBadgeClass(tool.state || (tool.enabled ? 'enabled' : 'disabled')) + '">' + escapeHtml(tool.state === 'removed' ? t('feature_tool_removed') : tool.state === 'disabled' || tool.enabled === false ? t('feature_tool_disabled') : t('feature_tool_enabled')) + '</div>',
+          '<div class="' + getStatusBadgeClass(tool.state || (tool.enabled ? 'enabled' : 'disabled')) + '">' + escapeHtml(tool.state === 'superseded' ? t('feature_tool_superseded') : tool.state === 'removed' ? t('feature_tool_removed') : tool.state === 'disabled' || tool.enabled === false ? t('feature_tool_disabled') : t('feature_tool_enabled')) + '</div>',
           '</div>',
           '<div class="feature-tool-desc">' + escapeHtml(tool.description || '') + '</div>',
           '<div class="feature-tool-meta">',
@@ -8099,12 +8100,31 @@ function renderFeaturesPanel() {
     '</div>',
   ].join('') : '';
 
+  const standaloneSection = (currentHookInspector.standaloneTools && currentHookInspector.standaloneTools.length > 0)
+    ? [
+      '<section class="hooks-section">',
+      '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(t('standalone_tools_title')) + '</div><div class="hooks-section-meta">' + String(currentHookInspector.standaloneTools.length) + '</div></div>',
+      '<div class="feature-tool-list">' + currentHookInspector.standaloneTools.map(tool => [
+        '<div class="feature-tool-card">',
+        '<div class="feature-tool-top">',
+        '<div class="feature-tool-name">' + escapeHtml(tool.name) + '</div>',
+        '<div class="' + getStatusBadgeClass(tool.state || 'enabled') + '">' + escapeHtml(tool.state === 'superseded' ? t('feature_tool_superseded') : tool.state === 'removed' ? t('feature_tool_removed') : tool.state === 'disabled' ? t('feature_tool_disabled') : t('feature_tool_enabled')) + '</div>',
+        '</div>',
+        '<div class="feature-tool-desc">' + escapeHtml(tool.description || '') + '</div>',
+        tool.source ? '<div class="feature-tool-meta"><span class="feature-tool-pill">source: ' + escapeHtml(tool.source) + '</span></div>' : '',
+        '</div>',
+      ].join('')).join('') + '</div>',
+      '</section>',
+    ].join('')
+    : '';
+
   return [
     '<div class="hooks-panel feature-detail-shell">',
     '<section class="hooks-section">',
     '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(t('panel_all_features')) + '</div><div class="hooks-section-meta">' + String(currentHookInspector.features.length) + ' ' + escapeHtml(t('panel_registered')) + '</div></div>',
     '<div class="feature-grid">' + featureCards + '</div>',
     '</section>',
+    standaloneSection,
     detailOverlay,
     '</div>',
   ].join('');
