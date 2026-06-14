@@ -50,6 +50,9 @@ export function resolveModelPresetLLM(presetName) {
       baseUrl,
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
       ...(preset.maxTokens ? { maxTokens: preset.maxTokens } : {}),
+      ...(Array.isArray(preset.customHeaders) && preset.customHeaders.length > 0
+        ? { customHeaders: preset.customHeaders }
+        : {}),
     });
     console.log(`[ModelPreset] Resolved preset "${presetName}" => ${preset.model} (${protocol})`);
     return { llm, modelName: preset.model };

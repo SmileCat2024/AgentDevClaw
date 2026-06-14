@@ -433,6 +433,11 @@ function getEffectiveRuntimeSnapshot(notifData) {
     }
   }
 
+  // llm.complete 且无 pending tool calls：call 即将结束，不要显示 awaiting_runtime
+  if (stateType === 'llm.complete' && pendingToolCalls.length === 0 && runtime.callActive) {
+    runtime.stage = 'completed';
+  }
+
   const rememberedHadToolPhase = remembered
     && (remembered.stage === 'tool_executing'
       || remembered.stage === 'llm_tool_call_building'
@@ -568,13 +573,12 @@ function getRuntimeStageClass(runtime) {
 }
 
 function shouldShowRuntimeStatus(runtime, stateType = '') {
-  if (runtime.callActive && runtime.stage !== 'idle') {
+  if (runtime.callActive && runtime.stage !== 'idle' && runtime.stage !== 'completed' && runtime.stage !== 'failed') {
     return true;
   }
-  const settledRecently = runtime.updatedAt > 0 && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' ? 8000 : 1800);
+  const settledRecently = runtime.updatedAt > 0 && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' ? 8000 : 800);
   return ((runtime.stage === 'completed' || runtime.stage === 'failed') && settledRecently)
-    || stateType === 'llm.char_count'
-    || stateType === 'llm.complete';
+    || stateType === 'llm.char_count';
 }
 
 function shouldStatusUseQueueSync(runtime) {
@@ -740,6 +744,7 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
 
 async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {}) {
   const expectedRuntimeId = normalizeAgentIdentity(options.previousRuntimeId);
+  const expectedSessionId = String(options.expectedSessionId || '').trim();
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const agents = await invoke('get_connected_agents');
     const findConnectedChild = (list) => list.find((agent) => {
@@ -747,6 +752,12 @@ async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {
       const runtimeId = normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId || agent.id);
       if (!runtimeId) return false;
       if (expectedRuntimeId && runtimeId === expectedRuntimeId) return false;
+      // When we know the target session ID, require the child to either
+      // match it or have no session set yet (still initializing).
+      if (expectedSessionId) {
+        const childSessionId = String(agent.active_workspace_session_id || '').trim();
+        if (childSessionId && childSessionId !== expectedSessionId) return false;
+      }
       return agent.connected === true;
     });
     const matched = findConnectedChild(agents);
@@ -755,7 +766,21 @@ async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {
       const verify = await invoke('get_connected_agents');
       const still = findConnectedChild(verify);
       if (still) {
-        allAgents = verify;
+        // Merge verify into allAgents without clobbering workspace data.
+        // get_connected_agents returns empty workspace_state, workspace_data,
+        // and workspace_sessions.sessions for prebuilt agents, so we must
+        // preserve the rich data loaded by loadAgentDetail.
+        const prevById = new Map(allAgents.map(a => [a.id, a]));
+        allAgents = verify.map(agent => {
+          const prev = prevById.get(agent.id);
+          if (!prev) return agent;
+          return {
+            ...agent,
+            workspace_state: prev.workspace_state || agent.workspace_state,
+            workspace_data: prev.workspace_data || agent.workspace_data,
+            workspace_sessions: prev.workspace_sessions || agent.workspace_sessions,
+          };
+        });
         return still;
       }
     }
@@ -808,8 +833,17 @@ async function loadAgents() {
           connected: resolvedConnected,
           ...(prev && loadedAgentDetailIds.has(agent.id) ? {
             workspace_data: prev.workspace_data,
-            workspace_sessions: prev.workspace_sessions,
             workspace_state: prev.workspace_state,
+            // Preserve prev sessions (get_connected_agents always returns
+            // sessions: []), but merge in any fresh activeSessionId from
+            // the server so activation changes are reflected.
+            workspace_sessions: {
+              ...(prev.workspace_sessions || {}),
+              ...(agent.workspace_sessions?.activeSessionId
+                && agent.workspace_sessions.activeSessionId !== prev.workspace_sessions?.activeSessionId
+                ? { activeSessionId: agent.workspace_sessions.activeSessionId }
+                : {}),
+            },
           } : {}),
           // 当新数据的 workspace_sessions.sessions 为空但旧数据有值时，保留旧 sessions 避免闪空
           ...(!loadedAgentDetailIds.has(agent.id) && prev?.workspace_sessions?.sessions?.length > 0
@@ -1594,11 +1628,17 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             targetDir: action.targetDir,
       };
       const runSessionOpen = async () => {
-        const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId);
+        const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
         const optimisticAgent = result?.session
           ? (applyOptimisticWorkspaceSession(activeAgent.id, result.session) || activeAgent)
           : activeAgent;
+        // Immediately render the workspace surface so the user sees the new
+        // session appear in the list without waiting for the runtime to start.
+        if (!currentRuntimeAgentId) {
+          lastRenderedWorkspaceHtml = '';
+          renderCurrentMainView();
+        }
         const isAssemblyLaunch =
           activeAgent?.id === 'agent-creator'
           && action.type === 'create_session'
@@ -1634,10 +1674,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           return;
         }
         try {
-          const readyAgent = await waitForPrebuiltRuntimeSession(activeAgent.id, 30, { previousRuntimeId });
+          const readyAgent = await waitForPrebuiltRuntimeSession(activeAgent.id, 30, {
+            previousRuntimeId,
+            expectedSessionId: result?.session?.id || '',
+          });
           if (!readyAgent) return;
           const nextRuntimeId = readyAgent.runtime_session_id || readyAgent.runtimeSessionId || readyAgent.id;
           if (!nextRuntimeId) return;
+          setPreferredUnitMode('chat', activeAgent);
           if (nextRuntimeId === currentRuntimeAgentId) {
             beginFollowLatestEntryWindow();
             renderCurrentMainView();
@@ -4366,6 +4410,7 @@ async function poll() {
 
     await statusTask;
     await refreshAgentCallStates(allAgents);
+    _syncPersistentActionButton();
     _syncPersistentInputUi(currentRuntimeAgentId);
 
     // ── Auto-generate session title when first response completes ──
@@ -4380,6 +4425,9 @@ async function poll() {
       currentOverviewSignature = nextOverviewSignature;
       if (activeFeaturePanel === 'workspace') {
         renderFeaturePanel();
+      }
+      if (typeof updateChatContextBar === 'function') {
+        updateChatContextBar();
       }
     }
 
@@ -4636,6 +4684,15 @@ function updateNotificationStatus(notifData) {
     summaryEl.textContent = '';
     metricsEl.innerHTML = '';
     _lastRenderedNotificationRuntime = null;
+  } else if (!shouldShowStatus) {
+    // callActive 为 true 但 shouldShowStatus 为 false（如 llm.complete + 无 pending tools 的收尾窗口）
+    statusEl.style.display = 'none';
+    statusEl.className = 'notification-status';
+    phaseEl.textContent = '';
+    summaryEl.textContent = '';
+    metricsEl.innerHTML = '';
+    _lastRenderedNotificationRuntime = null;
+    _syncPersistentActionButton();
   }
 
   if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
@@ -4672,6 +4729,12 @@ function renderInputRequests(requests) {
 
   lastRenderedInputSignature = signature;
   lastRenderedInputMode = renderMode;
+
+  // 取消活跃录音 / 重置转写状态，避免 DOM 销毁后状态残留
+  if (_voiceRecording) {
+    _cancelVoiceRecording();
+  }
+  _voiceTranscribing = false;
 
   // 清空现有内容
   runWithSuppressedChatViewportObservers(() => {
@@ -4829,6 +4892,12 @@ function renderPersistentInput(container) {
 function onPersistentBtnClick() {
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
+  if (_voiceTranscribing) return;
+  if (_voiceRecording) {
+    _voicePendingSend = true;
+    stopVoiceRecording();
+    return;
+  }
   if (btn.classList.contains('is-stop')) {
     interruptAgent();
   } else {
@@ -4903,6 +4972,12 @@ function handlePersistentInputKey(event) {
     if (event.ctrlKey || event.shiftKey) {
       return;
     }
+    if (_voiceTranscribing) return;
+    if (_voiceRecording) {
+      _voicePendingSend = true;
+      stopVoiceRecording();
+      return;
+    }
     event.preventDefault();
     submitQueuedInput();
   }
@@ -4923,6 +4998,7 @@ async function submitQueuedInput() {
     if (res.ok) {
       textarea.value = '';
       autoResize(textarea);
+      beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       _localQueuedInputPending = true;
       _pendingQueuedCount++;
@@ -4991,6 +5067,31 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
 
 async function interruptAgent() {
   if (!currentRuntimeAgentId) { console.log('[Interrupt] no currentRuntimeAgentId, skip'); return; }
+
+  // 乐观 UI 更新：立即清空 calling 状态、切换按钮、清空队列，
+  // 不等 POST 返回，让用户瞬间看到反馈
+  _agentCallActive.delete(currentRuntimeAgentId);
+  _localQueuedInputPending = false;
+  _pendingQueuedCount = 0;
+  _queuedTexts = [];
+  _lastQueueBubbleSignature = '';
+  updateQueueIndicator();
+  _setActionBtnSend();
+  // 立即隐藏状态栏
+  const statusEl = document.getElementById('notification-status');
+  if (statusEl) {
+    statusEl.style.display = 'none';
+    statusEl.className = 'notification-status';
+    const phaseEl = document.getElementById('notification-phase');
+    const summaryEl = document.getElementById('notification-summary');
+    const metricsEl = document.getElementById('notification-metrics');
+    if (phaseEl) phaseEl.textContent = '';
+    if (summaryEl) summaryEl.textContent = '';
+    if (metricsEl) metricsEl.innerHTML = '';
+  }
+  _lastRenderedNotificationRuntime = null;
+  renderAgentList();
+
   console.log(`[Interrupt] sending POST /api/agents/${currentRuntimeAgentId}/interrupt`);
   try {
     const res = await fetch(`/api/agents/${currentRuntimeAgentId}/interrupt`, {
@@ -4999,11 +5100,6 @@ async function interruptAgent() {
     });
     const data = await res.json();
     console.log(`[Interrupt] response:`, res.status, data);
-    _localQueuedInputPending = false;
-    _pendingQueuedCount = 0;
-    _queuedTexts = [];
-    _lastQueueBubbleSignature = '';
-    updateQueueIndicator();
     lastRenderedInputSignature = '';
     renderInputRequests(currentInputRequests || []);
   } catch (e) {
@@ -5345,6 +5441,12 @@ function handleInputKey(event, requestId) {
 
 // 提交输入
 async function submitInput(requestId) {
+  if (_voiceTranscribing) return;
+  if (_voiceRecording) {
+    _voicePendingSend = true;
+    stopVoiceRecording();
+    return;
+  }
   const textarea = document.getElementById(`input-${requestId}`);
   const input = textarea ? textarea.value : '';
 
@@ -5362,8 +5464,19 @@ async function submitInput(requestId) {
       })
     });
     if (res.ok) {
+      beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
-      // 刷新输入请求列表
+      // 乐观清空输入请求并立即重渲染，避免等待下一轮 poll 才归位
+      currentInputRequests = [];
+      window.lastInputRequests = [];
+      lastRenderedInputSignature = '';
+      renderInputRequests([]);
+      // 乐观标记 agent 进入 calling 状态，使 action button 立即切换为 stop
+      if (currentRuntimeAgentId) {
+        _agentCallActive.set(currentRuntimeAgentId, true);
+        _syncPersistentActionButton();
+      }
+      // 后台刷新
       poll();
     }
   } catch (e) {
@@ -5493,7 +5606,17 @@ async function submitInputAction(requestId, actionId, payload = {}) {
       }),
     });
     if (res.ok) {
+      beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+      // 乐观清空输入请求并立即重渲染
+      currentInputRequests = [];
+      window.lastInputRequests = [];
+      lastRenderedInputSignature = '';
+      renderInputRequests([]);
+      if (currentRuntimeAgentId) {
+        _agentCallActive.set(currentRuntimeAgentId, true);
+        _syncPersistentActionButton();
+      }
       poll();
     }
   } catch (e) {
@@ -5795,6 +5918,15 @@ function updateLastMessage(msg) {
       });
     }
     lastRow.dataset.toolSuccess = success ? 'true' : 'false';
+    enhanceMathInElement(lastRow);
+  } else if (msg.role === 'assistant') {
+    // 流式更新：重建 assistant 消息的正文内容
+    const contentEl = lastRow.querySelector('.markdown-body:not(.reasoning-content)');
+    if (contentEl) {
+      runWithSuppressedChatViewportObservers(() => {
+        contentEl.innerHTML = renderMarkdown(msg.content || '');
+      });
+    }
     enhanceMathInElement(lastRow);
   } else {
     enhanceMathInElement(lastRow);
@@ -6113,14 +6245,36 @@ window.toggleReasoning = function(id) {
 // ── Voice Input / ASR ──────────────────────────────────────────────────────
 
 let _voiceRecording = false;
+let _voiceTranscribing = false;
 let _voiceMediaRecorder = null;
 let _voiceAudioChunks = [];
 let _voiceTargetBtn = null;
+let _voiceCancelled = false;
+let _voicePendingSend = false;      // 录音期间点了发送：停止录音后，转写完成自动发送
+let _voiceAgentId = null;           // 录音发起时的 agent ID（用于跨会话暂存）
+let _pendingVoiceResults = {};      // { agentId: text } — ASR 结果在会话切换后暂存，待切回时注入
+
+function _voiceBusy() {
+  return _voiceRecording || _voiceTranscribing;
+}
+
+// Sync send-button disabled state and voice-button spinner to current flags.
+// During recording the send button stays clickable (clicking it stops the recording
+// and auto-sends after transcription). Only during transcription is it disabled.
+function _updateVoiceUI() {
+  const btn = _voiceTargetBtn;
+  if (!btn || !btn.isConnected) return;
+  const row = btn.parentElement;
+  if (!row) return;
+  const sendBtn = row.querySelector('.persistent-action-btn');
+  if (sendBtn) sendBtn.classList.toggle('voice-disabled', _voiceTranscribing);
+  btn.classList.toggle('transcribing', _voiceTranscribing);
+}
 
 async function toggleVoiceRecording(btn) {
   if (_voiceRecording) {
     stopVoiceRecording();
-  } else {
+  } else if (!_voiceTranscribing) {
     await startVoiceRecording(btn);
   }
 }
@@ -6145,6 +6299,8 @@ async function startVoiceRecording(btn) {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     _voiceTargetBtn = btn;
     _voiceAudioChunks = [];
+    _voiceAgentId = currentRuntimeAgentId;
+    _voicePendingSend = false;
 
     // Determine best supported MIME type
     const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
@@ -6171,18 +6327,47 @@ async function startVoiceRecording(btn) {
       btn.classList.remove('recording');
       _voiceRecording = false;
 
-      if (_voiceAudioChunks.length === 0) return;
+      if (_voiceCancelled) {
+        _voiceCancelled = false;
+        _voiceAudioChunks = [];
+        _updateVoiceUI();
+        return;
+      }
+
+      if (_voiceAudioChunks.length === 0) {
+        _updateVoiceUI();
+        return;
+      }
 
       const mimeType = _voiceMediaRecorder.mimeType || 'audio/webm';
       const blob = new Blob(_voiceAudioChunks, { type: mimeType });
       _voiceAudioChunks = [];
 
-      await sendAudioToASR(blob, btn);
+      _voiceTranscribing = true;
+      _updateVoiceUI();
+      try {
+        await sendAudioToASR(blob, btn);
+      } finally {
+        _voiceTranscribing = false;
+        _updateVoiceUI();
+      }
+
+      // Auto-send if user pressed send while recording
+      if (_voicePendingSend) {
+        _voicePendingSend = false;
+        const targetId = btn.dataset.target;
+        if (targetId === 'input-persistent') {
+          submitQueuedInput();
+        } else if (targetId.startsWith('input-')) {
+          submitInput(targetId.slice('input-'.length));
+        }
+      }
     };
 
     _voiceMediaRecorder.start(1000); // collect chunks every 1s
     _voiceRecording = true;
     btn.classList.add('recording');
+    _updateVoiceUI();
   } catch (err) {
     console.error('[VoiceInput] Failed to start recording:', err);
     alert(currentLanguage === 'zh' ? '无法访问麦克风：' + err.message : 'Cannot access microphone: ' + err.message);
@@ -6193,6 +6378,11 @@ function stopVoiceRecording() {
   if (_voiceMediaRecorder && _voiceMediaRecorder.state === 'recording') {
     _voiceMediaRecorder.stop();
   }
+}
+
+function _cancelVoiceRecording() {
+  _voiceCancelled = true;
+  stopVoiceRecording();
 }
 
 async function sendAudioToASR(blob, btn) {

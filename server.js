@@ -3396,18 +3396,20 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
     const totalUsage = usageStats?.totalUsage;
     const sType = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
     const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
-    const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole]) || {};
-    // 优先使用 index record 中持久化的模型信息（session 创建时写入），回退到全局配置推算
+    const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole])
+      || await resolveSessionModelInfo(agentId, sType);
+    // 优先使用动态解析的模型信息（当前全局配置），回退到 index record 中持久化的模型信息
     const persistedModelName = cleanSessionText(record.modelName);
     const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
       ? record.contextLength : null;
     const sessionModelInfo = {
-      modelName: persistedModelName || fallbackModelInfo.modelName || '',
-      contextLength: persistedCL || fallbackModelInfo.contextLength || null,
+      modelName: fallbackModelInfo.modelName || persistedModelName || '',
+      contextLength: fallbackModelInfo.contextLength || persistedCL || null,
+      compressRatio: fallbackModelInfo.compressRatio || 80,
     };
     return {
       id: record.id,
-      title: compactTitle || record.title || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
+      title: cleanSessionText(record.title) || compactTitle || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
       featureName,
       agentName,
       taskTitle,
@@ -3437,6 +3439,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         lastRequestUsage: usageStats?.lastRequestUsage || null,
       },
       contextLength: sessionModelInfo.contextLength || null,
+      compressRatio: sessionModelInfo.compressRatio || 80,
       modelName: sessionModelInfo.modelName || '',
     };
   } catch {
@@ -3467,6 +3470,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       hasSummary: false,
       tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       contextLength: null,
+      compressRatio: 80,
       modelName: '',
     };
   }
@@ -3515,11 +3519,20 @@ async function listPrebuiltSessions(agentId) {
   const summaryMap = await buildSessionSummaryMap(agentId);
   const modelInfoMap = await buildSessionModelInfoMap(agentId);
   const sessions = await Promise.all(index.sessions.map((record) => summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap)));
-  sessions.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+  sessions.sort((left, right) => {
+    const aUpdated = String(right.updatedAt || '');
+    const bUpdated = String(left.updatedAt || '');
+    if (aUpdated !== bUpdated) return aUpdated.localeCompare(bUpdated);
+    const aCreated = String(right.createdAt || '');
+    const bCreated = String(left.createdAt || '');
+    if (aCreated !== bCreated) return aCreated.localeCompare(bCreated);
+    return String(right.id || '').localeCompare(String(left.id || ''));
+  });
   const defaultModelInfo = modelInfoMap.default || modelInfoMap.main || {};
   return {
     activeSessionId: index.activeSessionId || (sessions[0]?.id ?? null),
     contextLength: defaultModelInfo.contextLength || null,
+    compressRatio: defaultModelInfo.compressRatio || 80,
     sessions,
   };
 }
@@ -6838,8 +6851,10 @@ async function resolveSessionModelInfo(agentId, sessionType) {
     const preset = presets.find(p => p.name === presetName);
     if (preset) {
       const cl = Number.isFinite(preset.contextLength) && preset.contextLength > 0 ? preset.contextLength : null;
+      const cr = Number.isFinite(preset.compressRatio) ? preset.compressRatio : 80;
       return {
         contextLength: cl,
+        compressRatio: cr,
         modelName: preset.model || preset.name,
         presetName: preset.name,
       };
@@ -6848,8 +6863,10 @@ async function resolveSessionModelInfo(agentId, sessionType) {
 
   for (const preset of presets) {
     if (Number.isFinite(preset.contextLength) && preset.contextLength > 0) {
+      const cr = Number.isFinite(preset.compressRatio) ? preset.compressRatio : 80;
       return {
         contextLength: preset.contextLength,
+        compressRatio: cr,
         modelName: preset.model || preset.name,
         presetName: preset.name,
       };
@@ -6857,6 +6874,7 @@ async function resolveSessionModelInfo(agentId, sessionType) {
   }
   return {
     contextLength: null,
+    compressRatio: 80,
     modelName: config.defaultModel?.model || '',
     presetName: null,
   };
@@ -6919,7 +6937,9 @@ function flattenModelPresets(data) {
       thinkingBudgetTokens: Number.isFinite(Number(preset?.thinkingBudgetTokens)) ? Number(preset.thinkingBudgetTokens) : null,
       temperature: Number.isFinite(Number(preset?.temperature)) ? Number(preset.temperature) : null,
       contextLength: Number.isFinite(Number(preset?.contextLength)) ? Number(preset.contextLength) : null,
+      compressRatio: Number.isFinite(Number(preset?.compressRatio)) ? Math.max(1, Math.min(100, Number(preset.compressRatio))) : 80,
       countTokenPath: cleanSessionText(preset?.countTokenPath) || null,
+      customHeaders: Array.isArray(preset?.customHeaders) ? preset.customHeaders.filter(h => h && typeof h === 'object') : [],
     };
   });
 }
@@ -6996,7 +7016,9 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       thinkingBudgetTokens: Number.isFinite(Number(rawPreset.thinkingBudgetTokens)) ? Number(rawPreset.thinkingBudgetTokens) : null,
       temperature: Number.isFinite(Number(rawPreset.temperature)) ? Number(rawPreset.temperature) : null,
       contextLength: Number.isFinite(Number(rawPreset.contextLength)) ? Number(rawPreset.contextLength) : null,
+      compressRatio: Number.isFinite(Number(rawPreset.compressRatio)) ? Math.max(1, Math.min(100, Number(rawPreset.compressRatio))) : 80,
       countTokenPath: cleanSessionText(rawPreset.countTokenPath) || null,
+      customHeaders: Array.isArray(rawPreset.customHeaders) ? rawPreset.customHeaders.filter(h => h && typeof h === 'object') : [],
     };
     presets.push(presetRecord);
   });

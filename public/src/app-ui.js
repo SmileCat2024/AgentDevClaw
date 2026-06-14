@@ -186,27 +186,37 @@ function getSessionContextLength(session, agent) {
   if (Number.isFinite(cl) && cl > 0) return cl;
   const fallback = agent?.workspace_sessions?.contextLength;
   if (Number.isFinite(fallback) && fallback > 0) return fallback;
-  return 128000;
+  return 200000;
+}
+
+function getSessionCompressRatio(session, agent) {
+  const cr = session?.compressRatio;
+  if (Number.isFinite(cr) && cr > 0 && cr <= 100) return cr;
+  const fallback = agent?.workspace_sessions?.compressRatio;
+  if (Number.isFinite(fallback) && fallback > 0 && fallback <= 100) return fallback;
+  return 80;
 }
 
 function renderSessionTokenBar(session, agent) {
   // 优先使用最后一次请求的用量，如果不存在则回退到累积值
   const lastRequest = session?.tokenUsage?.lastRequestUsage;
-  const used = (lastRequest?.totalTokens || session?.tokenUsage?.totalTokens || 0);
+  const used = (lastRequest?.inputTokens || session?.tokenUsage?.totalTokens || 0);
   if (!used) return '';
   const hasExplicitCL = Number.isFinite(session?.contextLength) && session.contextLength > 0
     || Number.isFinite(agent?.workspace_sessions?.contextLength) && agent.workspace_sessions.contextLength > 0;
   if (!hasExplicitCL && !used) return '';
   const max = getSessionContextLength(session, agent);
   const pct = Math.min(100, Math.round((used / max) * 100));
-  const tone = pct < 50 ? 'low' : pct < 80 ? 'mid' : 'high';
+  const compressRatio = getSessionCompressRatio(session, agent);
+  const isCompressed = pct >= compressRatio;
+  const tone = isCompressed ? 'compress' : pct < 50 ? 'low' : pct < compressRatio ? 'mid' : 'high';
   const modelLabel = session?.modelName ? ' · ' + session.modelName : '';
   // 如果使用的是累积值（没有lastRequestUsage），添加标注
   const dataSource = lastRequest ? '' : ' (累积)';
   // 添加刷新按钮
   const refreshBtn = '<button class="token-refresh-btn" type="button" title="刷新 Token 计数" onclick="refreshSessionTokenCount(\'' + session.id + '\', \'' + agent.id + '\', this)" aria-label="刷新 Token 计数">↻</button>';
   return '<span class="session-token-inline tone-' + tone + '">'
-    + '<span class="session-token-bar"><span class="session-token-bar-fill" style="width:' + pct + '%"></span></span>'
+    + '<span class="session-token-bar"><span class="session-token-compress-zone" style="left:' + compressRatio + '%"></span><span class="session-token-bar-fill" style="width:' + pct + '%"></span></span>'
     + '<span class="session-token-pct">' + pct + '%' + modelLabel + dataSource + '</span>'
     + refreshBtn
     + '</span>';
@@ -228,6 +238,16 @@ function getRuntimeAwareAgentRecord() {
         || runtimeRecord.active_workspace_display_name
       );
       if (runtimeHasWorkspaceState || !hostRecord) {
+        // Runtime child records have active_workspace_session_id etc. but never
+        // workspace_sessions.sessions (that only comes from the host record via
+        // GET /protoclaw/prebuilt_sessions). Always merge in host's sessions so
+        // context bar can find activeSession and read correct contextLength.
+        if (hostRecord && hostRecord.workspace_sessions) {
+          return {
+            ...runtimeRecord,
+            workspace_sessions: runtimeRecord.workspace_sessions || hostRecord.workspace_sessions,
+          };
+        }
         return runtimeRecord;
       }
       return {
@@ -298,9 +318,6 @@ function updateChatContextBar() {
     ? sessions.find(function(s) { return s.id === activeId; })
     : (sessions[0] || null);
 
-  // 模型名：从 session 元数据取（已在创建时持久化）
-  var modelName = activeSession ? activeSession.modelName : '';
-
   // token 用量：优先从 session 持久化数据取，仅在 runtime 确实绑定当前 session 时才用 overview 实时数据
   var used = 0;
   var isLastRequest = false;
@@ -312,17 +329,27 @@ function updateChatContextBar() {
     runtimeSessionId === activeId
     || (runtimeRecord.parent_id && runtimeRecord.parent_id === (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord()?.id : null))
   );
+
+  // 模型名：运行时绑定当前 session 时优先从 overview 实时取，回退到 session 元数据
+  var modelName = '';
+  if (runtimeBoundToSession && currentOverviewSnapshot && currentOverviewSnapshot.modelName) {
+    modelName = currentOverviewSnapshot.modelName;
+  }
+  if (!modelName && activeSession) {
+    modelName = activeSession.modelName || '';
+  }
+
   if (runtimeBoundToSession) {
     var liveUsage = currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.lastRequestUsage;
-    if (liveUsage && liveUsage.totalTokens) {
-      used = liveUsage.totalTokens;
+    if (liveUsage && liveUsage.inputTokens) {
+      used = liveUsage.inputTokens;
       isLastRequest = true;
     }
   }
   if (!used && activeSession && activeSession.tokenUsage) {
     var lr = activeSession.tokenUsage.lastRequestUsage;
-    if (lr && lr.totalTokens) {
-      used = lr.totalTokens;
+    if (lr && lr.inputTokens) {
+      used = lr.inputTokens;
       isLastRequest = true;
     } else {
       used = activeSession.tokenUsage.totalTokens || 0;
@@ -331,37 +358,44 @@ function updateChatContextBar() {
 
   // context length
   var contextLength = getSessionContextLength(activeSession, agent);
-
-  if (!used && !modelName) {
-    bar.innerHTML = '';
-    if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
-        notifyChatViewportMutation({
-          reason: 'context-bar',
-          shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-          preserveTop: followLatestEnabled ? null : container.scrollTop,
-          forceSnap: false,
-          allowChase: false,
-          preferSmooth: false,
-        });
-    }
-    return;
-  }
+  var compressRatio = getSessionCompressRatio(activeSession, agent);
 
   var html = '';
   if (modelName) {
     html += '<span class="ccb-model">' + escapeHtml(modelName) + '</span>';
   }
-  if (used && contextLength > 0) {
-    var pct = Math.min(100, Math.round((used / contextLength) * 100));
-    var tone = pct < 50 ? 'low' : pct < 80 ? 'mid' : 'high';
-    var label = isLastRequest
-      ? pct + '%'
-      : pct + '% (\u7d2f\u79ef)';
+  if (contextLength > 0) {
+    var pct = used > 0 ? Math.min(100, Math.round((used / contextLength) * 100)) : 0;
+    var isCompressed = pct >= compressRatio;
+    var tone = isCompressed ? 'compress' : pct < 50 ? 'low' : pct < compressRatio ? 'mid' : 'high';
+    var label = (used > 0 && !isLastRequest)
+      ? pct + '% (\u7d2f\u79ef)'
+      : pct + '%';
     html += '<span class="ccb-token tone-' + tone + '">'
-      + '<span class="ccb-bar"><span class="ccb-fill" style="width:' + pct + '%"></span></span>'
+      + '<span class="ccb-bar"><span class="ccb-compress-zone" style="left:' + compressRatio + '%"></span><span class="ccb-fill" style="width:' + pct + '%"></span></span>'
       + '<span class="ccb-label">' + label + '</span>'
       + '</span>';
   }
+
+  // 存储详细数据供 hover popup 使用
+  var detailData = { modelName: modelName || '', used: used, contextLength: contextLength, compressRatio: compressRatio, isLastRequest: isLastRequest };
+  var totalUsage = (currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.totalUsage) || {};
+  var lastReq = null;
+  if (runtimeBoundToSession) {
+    lastReq = currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.lastRequestUsage;
+  }
+  if (!lastReq && activeSession && activeSession.tokenUsage) {
+    lastReq = activeSession.tokenUsage.lastRequestUsage || null;
+  }
+  detailData.totalInput = totalUsage.inputTokens || 0;
+  detailData.totalOutput = totalUsage.outputTokens || 0;
+  detailData.cacheCreation = totalUsage.cacheCreationTokens || 0;
+  detailData.cacheRead = totalUsage.cacheReadTokens || 0;
+  detailData.reasoningTokens = totalUsage.reasoningTokens || 0;
+  detailData.lastRequestUsage = lastReq;
+  detailData.totalRequests = (currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.totalRequests) || 0;
+  window._ccbDetailData = detailData;
+
   bar.innerHTML = html;
   if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
     notifyChatViewportMutation({
@@ -374,6 +408,139 @@ function updateChatContextBar() {
     });
   }
 }
+
+// ── Context bar hover popup ──
+var _ccbPopup = null;
+var _ccbPopupHideTimer = null;
+var _ccbPopupShowTimer = null;
+
+function _formatTokens(n) {
+  if (!n) return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function _buildCcbPopupHtml(d) {
+  var isZh = currentLanguage === 'zh';
+  var cr = (Number.isFinite(d.compressRatio) && d.compressRatio > 0) ? d.compressRatio : 80;
+  var pct = d.contextLength > 0 ? Math.min(100, Math.round((d.used / d.contextLength) * 100)) : 0;
+  var tone = pct >= cr ? 'compress' : pct < 50 ? 'low' : 'high';
+
+  // 阈限占比：当前用量占压缩阈值的比例
+  var thresholdTokens = d.contextLength > 0 ? Math.round(d.contextLength * cr / 100) : 0;
+  var thresholdPct = thresholdTokens > 0 ? Math.round((d.used / thresholdTokens) * 100) : 0;
+  var thresholdTone = thresholdPct >= 100 ? 'compress' : thresholdPct >= 80 ? 'high' : thresholdPct >= 50 ? 'mid' : 'low';
+
+  var sections = [];
+
+  // ── Model ──
+  if (d.modelName) {
+    sections.push('<div class="ccb-popup-model">' + escapeHtml(d.modelName) + '</div>');
+  }
+
+  // ── Context section ──
+  var ctxRows = [];
+  if (d.contextLength > 0) {
+    ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '上下文窗口' : 'Context Window') + '</span><span class="ccb-popup-value">' + _formatTokens(d.contextLength) + '</span></div>');
+    ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '压缩阈值' : 'Compress At') + '</span><span class="ccb-popup-value">' + cr + '% (' + _formatTokens(thresholdTokens) + ')</span></div>');
+  }
+  if (d.used > 0) {
+    ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '当前用量' : 'Current Usage') + '</span><span class="ccb-popup-value ccb-popup-tone-' + tone + '">' + _formatTokens(d.used) + ' (' + pct + '%)</span></div>');
+    if (thresholdTokens > 0) {
+      ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '阈限进度' : 'Threshold Usage') + '</span><span class="ccb-popup-value ccb-popup-tone-' + thresholdTone + '">' + Math.min(999, thresholdPct) + '%</span></div>');
+    }
+  }
+  if (ctxRows.length) {
+    sections.push('<div class="ccb-popup-section">' + ctxRows.join('') + '</div>');
+  }
+
+  // ── Token details section ──
+  var detailRows = [];
+  if (d.lastRequestUsage) {
+    var lr = d.lastRequestUsage;
+    var lrParts = [];
+    if (lr.inputTokens) lrParts.push((isZh ? '入 ' : 'in ') + _formatTokens(lr.inputTokens));
+    if (lr.outputTokens) lrParts.push((isZh ? '出 ' : 'out ') + _formatTokens(lr.outputTokens));
+    if (lr.cacheCreationTokens) lrParts.push((isZh ? '缓存写 ' : 'cw ') + _formatTokens(lr.cacheCreationTokens));
+    if (lr.cacheReadTokens) lrParts.push((isZh ? '缓存读 ' : 'cr ') + _formatTokens(lr.cacheReadTokens));
+    if (lrParts.length) {
+      detailRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '最近请求' : 'Last Request') + '</span><span class="ccb-popup-value ccb-popup-mono">' + escapeHtml(lrParts.join(' · ')) + '</span></div>');
+    }
+  }
+  if (d.totalInput || d.totalOutput) {
+    detailRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '累计' : 'Total') + '</span><span class="ccb-popup-value ccb-popup-mono">' + (isZh ? '入 ' : 'in ') + _formatTokens(d.totalInput) + ' · ' + (isZh ? '出 ' : 'out ') + _formatTokens(d.totalOutput) + '</span></div>');
+  }
+  if (d.cacheRead) {
+    detailRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '缓存读取' : 'Cache Read') + '</span><span class="ccb-popup-value ccb-popup-mono">' + _formatTokens(d.cacheRead) + '</span></div>');
+  }
+  if (d.reasoningTokens) {
+    detailRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '推理' : 'Reasoning') + '</span><span class="ccb-popup-value ccb-popup-mono">' + _formatTokens(d.reasoningTokens) + '</span></div>');
+  }
+  if (d.totalRequests) {
+    detailRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '请求次数' : 'Requests') + '</span><span class="ccb-popup-value">' + d.totalRequests + '</span></div>');
+  }
+  if (detailRows.length) {
+    sections.push('<div class="ccb-popup-divider"></div>');
+    sections.push('<div class="ccb-popup-section">' + detailRows.join('') + '</div>');
+  }
+
+  if (!sections.length) return '';
+  return '<div class="ccb-popup-inner">' + sections.join('') + '</div>';
+}
+
+function _showCcbPopup() {
+  var bar = document.getElementById('chat-context-bar');
+  if (!bar || bar.classList.contains('hidden') || !bar.innerHTML.trim()) return;
+  var d = window._ccbDetailData;
+  if (!d) return;
+  var html = _buildCcbPopupHtml(d);
+  if (!html) return;
+
+  if (!_ccbPopup) {
+    _ccbPopup = document.createElement('div');
+    _ccbPopup.className = 'ccb-popup';
+    _ccbPopup.addEventListener('mouseenter', function() {
+      if (_ccbPopupHideTimer) { clearTimeout(_ccbPopupHideTimer); _ccbPopupHideTimer = null; }
+    });
+    _ccbPopup.addEventListener('mouseleave', function() {
+      _scheduleHideCcbPopup();
+    });
+    document.body.appendChild(_ccbPopup);
+  }
+  _ccbPopup.innerHTML = html;
+  var rect = bar.getBoundingClientRect();
+  _ccbPopup.style.left = rect.left + 'px';
+  _ccbPopup.style.top = (rect.bottom + 4) + 'px';
+  _ccbPopup.classList.add('visible');
+}
+
+function _hideCcbPopup() {
+  if (_ccbPopup) _ccbPopup.classList.remove('visible');
+}
+
+function _scheduleShowCcbPopup() {
+  if (_ccbPopupHideTimer) { clearTimeout(_ccbPopupHideTimer); _ccbPopupHideTimer = null; }
+  if (_ccbPopupShowTimer) clearTimeout(_ccbPopupShowTimer);
+  _ccbPopupShowTimer = setTimeout(function() { _showCcbPopup(); _ccbPopupShowTimer = null; }, 200);
+}
+
+function _scheduleHideCcbPopup() {
+  if (_ccbPopupShowTimer) { clearTimeout(_ccbPopupShowTimer); _ccbPopupShowTimer = null; }
+  if (_ccbPopupHideTimer) clearTimeout(_ccbPopupHideTimer);
+  _ccbPopupHideTimer = setTimeout(function() { _hideCcbPopup(); _ccbPopupHideTimer = null; }, 200);
+}
+
+function _initCcbPopup() {
+  var bar = document.getElementById('chat-context-bar');
+  if (!bar || bar.dataset.popupBound) return;
+  bar.dataset.popupBound = '1';
+  bar.addEventListener('mouseenter', function() { _scheduleShowCcbPopup(); });
+  bar.addEventListener('mouseleave', function() { _scheduleHideCcbPopup(); });
+}
+
+window.addEventListener('DOMContentLoaded', _initCcbPopup);
+setTimeout(_initCcbPopup, 0);
 
 async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
   if (!btnElement) return;
@@ -404,6 +571,7 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
         if (target) {
           if (!target.tokenUsage) target.tokenUsage = {};
           target.tokenUsage.lastRequestUsage = {
+            inputTokens: result.tokenCount,
             totalTokens: result.tokenCount,
           };
         }
@@ -614,6 +782,21 @@ function buildWorkspaceProjectKey(source = {}) {
   return '';
 }
 
+/**
+ * Stable descending sort comparator for sessions and projects.
+ * Primary key: updatedAt, secondary: createdAt, tertiary: id.
+ * Prevents ordering jumps when updatedAt is equal or missing.
+ */
+function compareByRecency(a, b) {
+  const aUpdated = String(a?.updatedAt || '');
+  const bUpdated = String(b?.updatedAt || '');
+  if (aUpdated !== bUpdated) return bUpdated.localeCompare(aUpdated);
+  const aCreated = String(a?.createdAt || '');
+  const bCreated = String(b?.createdAt || '');
+  if (aCreated !== bCreated) return bCreated.localeCompare(aCreated);
+  return String(b?.id || '').localeCompare(String(a?.id || ''));
+}
+
 function getFeatureCreatorProjects(agent = getCurrentAgentRecord()) {
   if (agent?.id !== 'feature-creator') return [];
 
@@ -682,7 +865,7 @@ function getFeatureCreatorProjects(agent = getCurrentAgentRecord()) {
 
   return Array.from(projects.values())
     .map((project) => {
-      const sortedSessions = [...(project.sessions || [])].sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+      const sortedSessions = [...(project.sessions || [])].sort(compareByRecency);
       const latestSession = sortedSessions[0] || null;
       const updatedAt = latestSession?.updatedAt || project.updatedAt || project.createdAt || workspaceState?.updatedAt || '';
       return {
@@ -694,7 +877,7 @@ function getFeatureCreatorProjects(agent = getCurrentAgentRecord()) {
         updatedAt,
       };
     })
-    .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+    .sort(compareByRecency);
 }
 
 function getAgentCreatorProjects(agent = getCurrentAgentRecord()) {
@@ -780,7 +963,7 @@ function getAgentCreatorProjects(agent = getCurrentAgentRecord()) {
 
   return Array.from(projects.values())
     .map((project) => {
-      const sortedSessions = [...(project.sessions || [])].sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+      const sortedSessions = [...(project.sessions || [])].sort(compareByRecency);
       const latestSession = sortedSessions[0] || null;
       const updatedAt = latestSession?.updatedAt || project.updatedAt || project.createdAt || workspaceState?.updatedAt || '';
       return {
@@ -792,7 +975,7 @@ function getAgentCreatorProjects(agent = getCurrentAgentRecord()) {
         updatedAt,
       };
     })
-    .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+    .sort(compareByRecency);
 }
 
 function getPathLeaf(value) {
@@ -892,12 +1075,12 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
   return Array.from(projects.values())
     .map((project) => ({
       ...project,
-      sessions: project.sessions.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))),
+      sessions: project.sessions.sort(compareByRecency),
       conversationCount: project.sessions.length,
       latestSessionId: project.sessions[0]?.id || null,
       updatedAt: project.sessions[0]?.updatedAt || project.updatedAt || '',
     }))
-    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    .sort(compareByRecency);
 }
 
 function getProgrammingHelperProjectDisplayName(project) {
@@ -3261,9 +3444,27 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<input class="settings-input" id="settings-preset-context-length" type="number" value="' + (preset.contextLength ?? '') + '" placeholder="200000">',
     '</div>',
     '<div class="settings-field">',
+    '<label>' + (isZh ? '压缩阈值' : 'Compress Threshold') + '</label>',
+    '<input class="settings-input" id="settings-preset-compress-ratio" type="number" min="1" max="100" value="' + (preset.compressRatio ?? 80) + '" placeholder="80">',
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? '上下文占用达到此比例时触发压缩 (1-100%)' : 'Trigger compression at this context usage (1-100%)') + '</div>',
+    '</div>',
+    '</div>',
+    '<div class="settings-field">',
     '<label>' + (isZh ? 'Count Token 路径' : 'Count Token Path') + '</label>',
     '<input class="settings-input" id="settings-preset-count-token-path" type="text" value="' + escapeHtml(preset.countTokenPath || '') + '" placeholder="/v1/messages/count_tokens">',
     '</div>',
+    /* Custom Headers Section */
+    '<div class="settings-field">',
+    '<label>' + (isZh ? '自定义请求头' : 'Custom Headers') + '</label>',
+    '<div id="settings-headers-container">',
+    (Array.isArray(preset.customHeaders) ? preset.customHeaders : []).map(function(h, i) {
+      return createSettingsHeaderRowHTML(i, h.key || '', h.value || '', h.valueMode || 'static', isZh);
+    }).join(''),
+    '</div>',
+    '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:4px;" onclick="addSettingsHeaderRow()">+ ' + (isZh ? '添加 Header' : 'Add Header') + '</button>',
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">' + (isZh ?
+      'UUID v4 / 随机数模式会在每次 API 请求时自动生成新值' :
+      'UUID v4 / random mode generates a new value on each API request') + '</div>',
     '</div>',
     '<div class="settings-actions">',
     '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSettingsEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
@@ -3272,6 +3473,43 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '</div>',
   ].join('');
 }
+
+function createSettingsHeaderRowHTML(idx, key, value, mode, isZh) {
+  var isDynamic = mode === 'uuid' || mode === 'random';
+  var modeOptions = [
+    '<option value="static"' + (mode === 'static' ? ' selected' : '') + '>' + (isZh ? '固定值' : 'Static') + '</option>',
+    '<option value="uuid"' + (mode === 'uuid' ? ' selected' : '') + '>UUID v4</option>',
+    '<option value="random"' + (mode === 'random' ? ' selected' : '') + '>' + (isZh ? '随机数' : 'Random') + '</option>',
+  ].join('');
+  return [
+    '<div data-header-row style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">',
+    '<input class="settings-input" data-header-key type="text" value="' + escapeHtml(key) + '" placeholder="' + (isZh ? 'Header 名' : 'Header name') + '" style="flex:1;min-width:0;">',
+    '<select class="settings-input" data-header-mode style="width:90px;flex-shrink:0;" onchange="onSettingsHeaderModeChange(this)">' + modeOptions + '</select>',
+    '<input class="settings-input" data-header-value type="text" value="' + escapeHtml(value) + '" placeholder="' + (isDynamic ? '(auto)' : (isZh ? 'Header 值' : 'Header value')) + '" style="flex:1;min-width:0;' + (isDynamic ? 'opacity:0.4;' : '') + '"' + (isDynamic ? ' disabled' : '') + '>',
+    '<button type="button" onclick="this.closest(\'[data-header-row]\').remove()" style="background:none;border:none;cursor:pointer;padding:6px;color:var(--text-secondary);flex-shrink:0;" title="' + (isZh ? '删除' : 'Delete') + '">',
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
+    '</button>',
+    '</div>',
+  ].join('');
+}
+
+window.addSettingsHeaderRow = function() {
+  var container = document.getElementById('settings-headers-container');
+  if (!container) return;
+  var isZh = currentLanguage === 'zh';
+  container.insertAdjacentHTML('beforeend', createSettingsHeaderRowHTML(container.children.length, '', '', 'static', isZh));
+};
+
+window.onSettingsHeaderModeChange = function(select) {
+  var row = select.closest('[data-header-row]');
+  var valueInput = row ? row.querySelector('[data-header-value]') : null;
+  if (!valueInput) return;
+  var isDynamic = select.value === 'uuid' || select.value === 'random';
+  var isZh = currentLanguage === 'zh';
+  valueInput.disabled = isDynamic;
+  valueInput.placeholder = isDynamic ? '(auto)' : (isZh ? 'Header 值' : 'Header value');
+  valueInput.style.opacity = isDynamic ? '0.4' : '';
+};
 
 function addSettingsPreset() {
   const presets = window.ClawFW.settingsData?.presets || [];
@@ -3284,6 +3522,9 @@ function addSettingsPreset() {
     apiKey: '',
     thinkingBudgetTokens: null,
     temperature: null,
+    contextLength: null,
+    compressRatio: 80,
+    customHeaders: [],
   });
   window.ClawFW.settingsData = window.ClawFW.settingsData || {};
   window.ClawFW.settingsData.presets = presets;
@@ -3338,7 +3579,19 @@ async function saveSettingsPreset(idx) {
   const thinkingRaw = el('settings-preset-thinking')?.value?.trim();
   const tempRaw = el('settings-preset-temperature')?.value?.trim();
   const contextLengthRaw = el('settings-preset-context-length')?.value?.trim();
+  const compressRatioRaw = el('settings-preset-compress-ratio')?.value?.trim();
   const countTokenPathRaw = el('settings-preset-count-token-path')?.value?.trim();
+  // 收集自定义请求头
+  const customHeaders = [];
+  const headerContainer = document.getElementById('settings-headers-container');
+  if (headerContainer) {
+    headerContainer.querySelectorAll('[data-header-row]').forEach(function(row) {
+      const key = row.querySelector('[data-header-key]')?.value?.trim();
+      const value = row.querySelector('[data-header-value]')?.value?.trim();
+      const mode = row.querySelector('[data-header-mode]')?.value || 'static';
+      if (key) customHeaders.push({ key, value: value || '', valueMode: mode });
+    });
+  }
   const preset = {
     name: (el('settings-preset-name')?.value || '').trim(),
     providerName: presets[idx]?.providerName || '',
@@ -3349,7 +3602,9 @@ async function saveSettingsPreset(idx) {
     thinkingBudgetTokens: thinkingRaw !== '' ? parseInt(thinkingRaw, 10) || null : null,
     temperature: tempRaw !== '' ? parseFloat(tempRaw) || null : null,
     contextLength: contextLengthRaw !== '' ? parseInt(contextLengthRaw, 10) || null : null,
+    compressRatio: compressRatioRaw !== '' ? Math.max(1, Math.min(100, parseInt(compressRatioRaw, 10) || 80)) : 80,
     countTokenPath: countTokenPathRaw || null,
+    customHeaders,
   };
   presets[idx] = preset;
   window.ClawFW.settingsData.presets = presets;
@@ -3387,6 +3642,15 @@ async function applySettingsPreset(idx) {
     window.ClawFW.settingsData.presets = result.presets;
     window.ClawFW._modelPresets = Array.isArray(result?.presets) ? result.presets : [];
     renderSettingsOverlay();
+    // Refresh session data to reflect updated model config
+    var _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+    if (_agent && _agent.id) {
+      try {
+        var freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(_agent.id));
+        if (freshRes.ok) { _agent.workspace_sessions = await freshRes.json(); }
+      } catch {}
+    }
+    if (typeof updateChatContextBar === 'function') { updateChatContextBar(); }
   } catch (error) {
     console.error('Failed to save model config:', error);
   }
@@ -3406,6 +3670,15 @@ async function saveSettingsConfig() {
     window.ClawFW.settingsData.presets = result.presets;
     window.ClawFW._modelPresets = Array.isArray(result?.presets) ? result.presets : [];
     renderSettingsOverlay();
+    // Refresh session data to reflect updated model config
+    var _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+    if (_agent && _agent.id) {
+      try {
+        var freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(_agent.id));
+        if (freshRes.ok) { _agent.workspace_sessions = await freshRes.json(); }
+      } catch {}
+    }
+    if (typeof updateChatContextBar === 'function') { updateChatContextBar(); }
   } catch (error) {
     console.error('Failed to save config:', error);
   }
@@ -6870,6 +7143,7 @@ function getEmptyOverviewSnapshot() {
       lastErrorType: null,
       lastErrorMessage: null,
     },
+    modelName: '',
   };
 }
 
@@ -6927,6 +7201,7 @@ function normalizeOverviewSnapshot(snapshot) {
       lastRequestUsage: snapshot.usageStats?.lastRequestUsage || null,
     },
     runtime: normalizeRuntimeSnapshot(snapshot.runtime),
+    modelName: typeof snapshot.modelName === 'string' ? snapshot.modelName : '',
   };
 }
 
