@@ -18,6 +18,11 @@ function selectWorkspaceSurface(agentId, options = {}) {
     }
   }
   const prevAgentId = currentAgentId;
+  const previousRuntimeId = currentRuntimeAgentId;
+  const previousRuntimeContextKey = getRuntimeContextKey(previousRuntimeId);
+  if (previousRuntimeId && !readOnlyMode) {
+    saveCurrentRuntimeToCache(previousRuntimeId, previousRuntimeContextKey);
+  }
   currentAgentId = agentId || null;
   currentRuntimeAgentId = null;
   readOnlyMode = false;

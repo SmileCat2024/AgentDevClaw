@@ -1629,6 +1629,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       };
       const runSessionOpen = async () => {
         const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
+        _storeVisibleSessionInputDraft();
+        if (previousRuntimeId) {
+          saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId, activeAgent));
+        }
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
         const optimisticAgent = result?.session
           ? (applyOptimisticWorkspaceSession(activeAgent.id, result.session) || activeAgent)
@@ -2795,6 +2799,9 @@ async function ctxRestartAgent(target) {
     const domId = id;
     const agent = getExternalRuntimeAgent(serverAgentId);
 
+    // Clear cached runtime data — restart creates a fresh session
+    clearAgentRuntimeCache(domId);
+
     // Track the restarting state in a Set so that any sidebar re-render
     // (e.g. from switching agents during restart) preserves the yellow dot.
     restartingRuntimeIds.add(domId);
@@ -2846,6 +2853,8 @@ async function ctxStopAgent(target) {
     const serverAgentId = (variant === 'managed-runtime') ? ns : id;
     const agent = getExternalRuntimeAgent(serverAgentId);
     const affectedRuntimeId = id || agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id || null;
+    // Clear cached data — runtime is being stopped
+    if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (variant === 'external') {
       await closeSidebarExternalRuntime(agent);
     } else if (variant === 'child') {
@@ -3284,6 +3293,10 @@ window.switchAgent = async (newAgentId) => {
     return;
   }
   if (targetAgent?.id === currentAgentId && runtimeAgentId === currentRuntimeAgentId) return;
+  _storeVisibleSessionInputDraft();
+  if (currentRuntimeAgentId && !readOnlyMode) {
+    saveCurrentRuntimeToCache(currentRuntimeAgentId);
+  }
   try {
     const res = await fetch('/api/agents/current', {
       method: 'PUT',
@@ -3296,12 +3309,6 @@ window.switchAgent = async (newAgentId) => {
     }
 
     currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
-    // 保存当前会话的输入框内容，在切换 agent 之前
-    const _switchingTa = document.getElementById('input-persistent');
-    if (_switchingTa && currentRuntimeAgentId) {
-      if (_switchingTa.value) _sessionInputCache[currentRuntimeAgentId] = _switchingTa.value;
-      else delete _sessionInputCache[currentRuntimeAgentId];
-    }
     currentRuntimeAgentId = runtimeAgentId;
     readOnlyMode = false;
     currentWorkspaceArtifactDetail = null;
@@ -3310,8 +3317,21 @@ window.switchAgent = async (newAgentId) => {
     currentProjectRequirementEdit = null;
     currentProjectDocsetPage = 'requirement';
     currentWorkspaceTab = 'chat';
-    // 立即清除旧 overview，避免切换期间残留上个 runtime 的数据
-    setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
+    // Optimistic restore: show cached data immediately if available
+    const _restored = restoreRuntimeFromCache(runtimeAgentId);
+    if (_restored) {
+      _optimisticMessagesSignature = _computeMessagesSignature(currentMessages);
+      _optimisticRuntimeContextKey = getRuntimeContextKey(runtimeAgentId) || '';
+      lastRenderedWorkspaceHtml = '';
+      renderAgentList();
+      renderCurrentMainView();
+      renderFeaturePanel();
+    } else {
+      // No cache: clear overview to avoid stale display
+      setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
+      _optimisticMessagesSignature = '';
+      _optimisticRuntimeContextKey = '';
+    }
     beginFollowLatestCooldown();
     beginFollowLatestEntryWindow();
     setFollowLatest(true);
@@ -3498,6 +3518,8 @@ restartAgentAction.addEventListener('click', async () => {
 
   try {
     const agent = getExternalRuntimeAgent(contextMenuAgentId);
+    // Clear cached data — restart creates a fresh session
+    clearAgentRuntimeCache(contextMenuAgentId);
     const runtimeItem = document.querySelector(`[data-agent-id="${CSS.escape(contextMenuAgentId)}"]`);
     if (runtimeItem) {
       runtimeItem.classList.add('restarting');
@@ -3557,6 +3579,8 @@ stopAgentAction.addEventListener('click', async () => {
   try {
     const agent = getExternalRuntimeAgent(contextMenuAgentId);
     const affectedRuntimeId = agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id || null;
+    // Clear cached data — runtime is being stopped
+    if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (contextMenuAgentMode === 'external-runtime') {
       await closeSidebarExternalRuntime(agent);
     } else if (contextMenuAgentMode === 'child-runtime') {
@@ -3687,6 +3711,8 @@ deleteSessionAction.addEventListener('click', async () => {
 
   const targetAgent = allAgents.find((item) => item.id === pendingAgentId) || null;
   const affectedRuntimeId = targetAgent?.runtime_session_id || targetAgent?.runtimeSessionId || null;
+  // Clear cached data for the deleted session's runtime
+  if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
   const deletedWasActive = pendingSessionId === (targetAgent?.active_workspace_session_id || targetAgent?.workspace_sessions?.activeSessionId || null);
 
   if (deletedWasActive) {
@@ -4154,6 +4180,7 @@ async function loadAgentData(agentId) {
   }
   try {
     currentRuntimeAgentId = agentId;
+    const expectedRuntimeContextKey = getRuntimeContextKey(agentId);
     const [msgsRes, toolsRes, hooksRes, overviewRes, inputRes] = await Promise.all([
       fetch(`/api/agents/${agentId}/messages`),
       fetch(`/api/agents/${agentId}/tools`),
@@ -4161,6 +4188,11 @@ async function loadAgentData(agentId) {
       fetch(`/api/agents/${agentId}/overview`),
       fetch(`/api/agents/${agentId}/input-requests`)
     ]);
+    if (expectedRuntimeContextKey !== getRuntimeContextKey(agentId)) {
+      _optimisticMessagesSignature = '';
+      _optimisticRuntimeContextKey = '';
+      return;
+    }
 
     const msgsData = await msgsRes.json();
     const tools = await toolsRes.json();
@@ -4169,6 +4201,13 @@ async function loadAgentData(agentId) {
     const inputRequests = await inputRes.json();
 
     currentMessages = msgsData.messages || [];
+    // Compare with optimistic signature to skip redundant re-render
+    const _newMsgSig = _computeMessagesSignature(currentMessages);
+    const _skipRender = _optimisticMessagesSignature
+      && _optimisticRuntimeContextKey === expectedRuntimeContextKey
+      && _newMsgSig === _optimisticMessagesSignature;
+    _optimisticMessagesSignature = '';
+    _optimisticRuntimeContextKey = '';
     window.lastInputRequests = inputRequests;
     renderInputRequests(inputRequests);
     updateRollbackActionVisibility();
@@ -4202,9 +4241,9 @@ async function loadAgentData(agentId) {
       TOOL_NAMES[tool.name] = DEFAULT_DISPLAY_NAMES[tool.name] || tool.name;
     }
 
-    renderCurrentMainView();
-    // 恢复当前会话的输入框缓存（在所有渲染完成后）
-    _restoreSessionInput();
+    if (!_skipRender) {
+      renderCurrentMainView();
+    }
     await refreshCurrentRuntimeStatus(agentId);
     if (activeFeaturePanel === 'logs') {
       await loadLogs(true);
@@ -4409,6 +4448,7 @@ async function poll() {
 
     // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住
     const pollRuntimeId = currentRuntimeAgentId;
+    const pollRuntimeContextKey = getRuntimeContextKey(pollRuntimeId);
     const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId);
 
     const [msgsRes, inputRes, overviewRes] = await Promise.all([
@@ -4418,7 +4458,10 @@ async function poll() {
     ]);
 
     // 如果在 fetch 期间已经切换了 agent，丢弃过时的响应，避免旧数据覆盖新会话
-    if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(pollRuntimeId)) {
+    if (
+      normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(pollRuntimeId)
+      || getRuntimeContextKey(pollRuntimeId) !== pollRuntimeContextKey
+    ) {
       setTimeout(poll, 300);
       return;
     }
@@ -4579,6 +4622,11 @@ async function poll() {
           renderFeaturePanel();
         }
       }
+    }
+
+    // Write-through: keep cache fresh so switching back is instant
+    if (currentRuntimeAgentId) {
+      saveCurrentRuntimeToCache(currentRuntimeAgentId);
     }
 
   } catch (e) {
@@ -4758,10 +4806,12 @@ function updateNotificationStatus(notifData) {
 function getInputRenderSignature(requests, renderMode) {
   const runtimeId = currentRuntimeAgentId || 'none';
   if (renderMode === 'persistent') {
-    return `persistent|${runtimeId}|${readOnlyMode ? 'ro' : 'rw'}`;
+    const contextKey = getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
+    return `persistent|${contextKey}|${readOnlyMode ? 'ro' : 'rw'}`;
   }
   if (renderMode === 'requests') {
-    return `requests|${runtimeId}|${JSON.stringify(requests || [])}`;
+    const contextKey = getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
+    return `requests|${contextKey}|${JSON.stringify(requests || [])}`;
   }
   return `${renderMode}|${runtimeId}`;
 }
@@ -4791,6 +4841,8 @@ function renderInputRequests(requests) {
   }
   // 仅重置 flag 以解除新会话的 UI 限制，不中断进行中的 ASR fetch
   _voiceTranscribing = false;
+
+  _storeVisibleSessionInputDraft(inputContainer);
 
   // 清空现有内容
   runWithSuppressedChatViewportObservers(() => {
@@ -4868,7 +4920,7 @@ function renderInputRequests(requests) {
         <div class="persistent-input-row">
           <textarea class="user-input-textarea" rows="1" id="input-${req.requestId}"
             onkeydown="handleInputKey(event, '${req.requestId}')"
-            oninput="autoResize(this)"
+            oninput="autoResize(this); _cacheSessionInput(this)"
             placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
           <button class="voice-input-btn" data-target="input-${req.requestId}" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
             <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
@@ -4882,13 +4934,22 @@ function renderInputRequests(requests) {
       runWithSuppressedChatViewportObservers(() => {
         inputContainer.appendChild(card);
       });
-      
+
+      const requestTextarea = document.getElementById(`input-${req.requestId}`);
+      const requestCacheKey = _getSessionInputCacheKey();
+      if (requestTextarea) {
+        requestTextarea.dataset.sessionKey = requestCacheKey || '';
+        _restoreSessionInputDraft(requestTextarea, requestCacheKey);
+      }
+
       // Auto-focus
       setTimeout(() => {
         const el = document.getElementById(`input-${req.requestId}`);
         if(el) {
-           if (typeof req.initialValue === 'string' && req.initialValue.length > 0) {
+           const hasCachedDraft = !!(el.dataset.sessionKey && _sessionInputCache[el.dataset.sessionKey]);
+           if (!hasCachedDraft && !el.value && typeof req.initialValue === 'string' && req.initialValue.length > 0) {
              el.value = req.initialValue;
+             _cacheSessionInput(el);
            }
            el.focus();
            const end = el.value.length;
@@ -4942,6 +5003,13 @@ function renderPersistentInput(container) {
     </div>
   `;
   container.appendChild(card);
+  // 在 textarea 上标记所属会话，供销毁前 save 使用（不依赖全局 currentRuntimeAgentId 时序）
+  const ta = document.getElementById('input-persistent');
+  if (ta) {
+    const cacheKey = _getSessionInputCacheKey();
+    ta.dataset.sessionKey = cacheKey || '';
+    _restoreSessionInputDraft(ta, cacheKey);
+  }
   _syncPersistentInputUi();
 }
 
@@ -5044,9 +5112,11 @@ async function submitQueuedInput() {
   if (!textarea) return;
   const text = textarea.value.trim();
   if (!text) return;
+  const targetRuntimeId = currentRuntimeAgentId;
+  const targetCacheKey = textarea.dataset.sessionKey || _getSessionInputCacheKey();
 
   try {
-    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/queue-input`, {
+    const res = await fetch(`/api/agents/${targetRuntimeId}/queue-input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text })
@@ -5054,7 +5124,7 @@ async function submitQueuedInput() {
     if (res.ok) {
       textarea.value = '';
       autoResize(textarea);
-      delete _sessionInputCache[currentRuntimeAgentId];
+      if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       _localQueuedInputPending = true;
@@ -5092,10 +5162,15 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     }
 
     const expectedRuntimeId = runtimeId;
+    const expectedRuntimeContextKey = getRuntimeContextKey(expectedRuntimeId);
     _syncPersistentActionButton();
 
     const res = await fetch(`/api/agents/${expectedRuntimeId}/queued-inputs`);
-    if (!res.ok || expectedRuntimeId !== currentRuntimeAgentId) return;
+    if (
+      !res.ok
+      || expectedRuntimeId !== currentRuntimeAgentId
+      || expectedRuntimeContextKey !== getRuntimeContextKey(expectedRuntimeId)
+    ) return;
     const data = await res.json();
     const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
     const viewerQueueTexts = queue
@@ -5506,6 +5581,7 @@ async function submitInput(requestId) {
   }
   const textarea = document.getElementById(`input-${requestId}`);
   const input = textarea ? textarea.value : '';
+  const targetCacheKey = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
 
   try {
     const res = await fetch(`/api/agents/${currentRuntimeAgentId}/input`, {
@@ -5521,6 +5597,11 @@ async function submitInput(requestId) {
       })
     });
     if (res.ok) {
+      if (textarea) {
+        textarea.value = '';
+        autoResize(textarea);
+      }
+      if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       // 乐观清空输入请求并立即重渲染，避免等待下一轮 poll 才归位
@@ -6308,9 +6389,15 @@ let _voiceAudioChunks = [];
 let _voiceTargetBtn = null;
 let _voiceCancelled = false;
 let _voicePendingSend = false;      // 录音期间点了发送：停止录音后，转写完成自动发送
-let _voiceAgentId = null;           // 录音发起时的 agent ID（用于跨会话暂存）
+let _voiceAgentId = null;           // 录音发起时的 runtime agent ID（用于 API 调用）
+let _voiceCacheKey = null;          // 录音发起时的 session cache key（用于检测会话切换）
 let _pendingVoiceResults = {};      // { agentId: text } — ASR 结果在会话切换后暂存，待切回时注入
-let _sessionInputCache = {};        // { agentId: text } — 每个会话 persistent 输入框内容缓存
+let _sessionInputCache = {};        // { cacheKey: text } — 每个会话 persistent 输入框内容缓存
+
+// Use the same immutable runtime-context identity as rendering and optimistic data.
+function _getSessionInputCacheKey() {
+  return getRuntimeContextKey();
+}
 
 // Sync send-button disabled state and voice-button spinner to current flags.
 // During recording the send button stays clickable (clicking it stops the recording
@@ -6354,6 +6441,7 @@ async function startVoiceRecording(btn) {
     _voiceTargetBtn = btn;
     _voiceAudioChunks = [];
     _voiceAgentId = currentRuntimeAgentId;
+    _voiceCacheKey = _getSessionInputCacheKey();
     _voicePendingSend = false;
 
     // Determine best supported MIME type
@@ -6411,16 +6499,17 @@ async function startVoiceRecording(btn) {
         _voicePendingSend = false;
         const targetId = btn.dataset.target;
         if (targetId === 'input-persistent') {
-          if (currentRuntimeAgentId === _voiceAgentId) {
+          const _currentCacheKey = _getSessionInputCacheKey();
+          if (_currentCacheKey === _voiceCacheKey) {
             // Same session — text already in textarea, submit normally
             submitQueuedInput();
           } else {
             // Session switched — auto-submit directly to original agent
-            let fullText = _pendingVoiceResults[_voiceAgentId] || '';
-            delete _pendingVoiceResults[_voiceAgentId];
+            let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
+            delete _pendingVoiceResults[_voiceCacheKey];
             // Also include any cached typed text from the original session
-            const cachedInput = _sessionInputCache[_voiceAgentId] || '';
-            delete _sessionInputCache[_voiceAgentId];
+            const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
+            delete _sessionInputCache[_voiceCacheKey];
             fullText = cachedInput + fullText;
             if (fullText.trim()) {
               fetch(`/api/agents/${_voiceAgentId}/queue-input`, {
@@ -6432,7 +6521,7 @@ async function startVoiceRecording(btn) {
           }
         } else if (targetId.startsWith('input-')) {
           // Non-persistent request — only auto-send if still on same session
-          if (currentRuntimeAgentId === _voiceAgentId) {
+          if (_getSessionInputCacheKey() === _voiceCacheKey) {
             submitInput(targetId.slice('input-'.length));
           }
           // If session switched, leave result in _pendingVoiceResults for manual injection
@@ -6485,13 +6574,14 @@ async function sendAudioToASR(blob, btn) {
     if (text) {
       const textarea = document.getElementById(targetId);
       // Only inject if we're still on the same session that started the recording.
-      // Otherwise the textarea belongs to a different session (same ID, different agent).
-      if (textarea && currentRuntimeAgentId === _voiceAgentId) {
+      const _currentCacheKey = _getSessionInputCacheKey();
+      if (textarea && _currentCacheKey === _voiceCacheKey) {
         insertTextAtCursor(textarea, text);
         autoResize(textarea);
-      } else if (_voiceAgentId) {
+        _cacheSessionInput(textarea);
+      } else if (_voiceCacheKey) {
         // Session switched while transcribing — store for later injection
-        _pendingVoiceResults[_voiceAgentId] = (_pendingVoiceResults[_voiceAgentId] || '') + text;
+        _pendingVoiceResults[_voiceCacheKey] = (_pendingVoiceResults[_voiceCacheKey] || '') + text;
       }
     }
 
@@ -6510,32 +6600,51 @@ function insertTextAtCursor(textarea, text) {
   textarea.setSelectionRange(newPos, newPos);
 }
 
-// Real-time cache of persistent textarea content per session
+// Real-time cache shared by persistent and request text inputs per session.
 function _cacheSessionInput(textarea) {
-  if (!currentRuntimeAgentId) return;
-  if (textarea.value) _sessionInputCache[currentRuntimeAgentId] = textarea.value;
-  else delete _sessionInputCache[currentRuntimeAgentId];
+  const key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
+  if (!key) return;
+  if (textarea.value) _sessionInputCache[key] = textarea.value;
+  else delete _sessionInputCache[key];
 }
 
-// Restore cached input for the current session after all rendering is complete.
-// Called from loadAgentData — not from the rendering pipeline — to avoid timing issues.
-function _restoreSessionInput() {
-  if (!currentRuntimeAgentId) return;
-  const cached = _sessionInputCache[currentRuntimeAgentId];
-  if (!cached) return;
-  const ta = document.getElementById('input-persistent');
-  if (ta && !ta.value) {
-    ta.value = cached;
-    autoResize(ta);
+function _restoreSessionInputDraft(textarea, key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey()) {
+  if (!textarea || !key) return false;
+  const cached = _sessionInputCache[key];
+  if (typeof cached !== 'string' || cached.length === 0) return false;
+  textarea.value = cached;
+  autoResize(textarea);
+  return true;
+}
+
+function _storeSessionInputDraft(textarea) {
+  if (!textarea) return;
+  const key = textarea.dataset?.sessionKey || _getSessionInputCacheKey();
+  if (!key) return;
+  if (textarea.value) {
+    _sessionInputCache[key] = textarea.value;
+  } else {
+    delete _sessionInputCache[key];
   }
+}
+
+function _storeVisibleSessionInputDraft(root = document) {
+  const textareas = root.querySelectorAll
+    ? Array.from(root.querySelectorAll('.user-input-textarea:not([disabled])'))
+    : [];
+  if (textareas.length === 0) return;
+  const focused = textareas.find((textarea) => textarea === document.activeElement);
+  const populated = textareas.find((textarea) => textarea.value);
+  _storeSessionInputDraft(focused || populated || textareas[0]);
 }
 
 // Inject pending voice ASR result for the current session into whichever textarea is visible
 function _injectPendingVoiceResult() {
-  const agentId = currentRuntimeAgentId;
-  const text = _pendingVoiceResults[agentId];
+  const key = _getSessionInputCacheKey();
+  if (!key) return;
+  const text = _pendingVoiceResults[key];
   if (!text) return;
-  delete _pendingVoiceResults[agentId];
+  delete _pendingVoiceResults[key];
   const textarea = document.getElementById('input-persistent')
     || document.querySelector('.user-input-textarea[id^="input-"]');
   if (textarea) {

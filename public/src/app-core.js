@@ -379,6 +379,97 @@ let lastRenderedInputSignature = '';
 let lastRenderedInputMode = null;
 let unitModePreferences = {};
 let lastRenderedWorkspaceHtml = '';
+let _optimisticMessagesSignature = '';
+let _optimisticRuntimeContextKey = '';
+
+// ── Per-session runtime data cache (P0: optimistic render on switch) ────────
+// Caches messages, toolRenderConfigs, TOOL_NAMES, hookInspector + signature,
+// overviewSnapshot + signature, and connection status per runtime context.
+const _agentRuntimeCache = new Map();
+
+function getActiveWorkspaceSessionId(agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
+  return String(
+    agent?.workspace_sessions?.activeSessionId
+    || agent?.active_workspace_session_id
+    || ''
+  ).trim();
+}
+
+function getRuntimeWorkspaceSessionId(runtimeId) {
+  const normalizedRuntimeId = String(runtimeId || '').trim();
+  if (!normalizedRuntimeId || !Array.isArray(allAgents)) return '';
+  const runtimeRecord = allAgents.find((item) => {
+    const itemId = String(item?.id || '').trim();
+    const itemRuntimeId = String(item?.runtime_session_id || item?.runtimeSessionId || '').trim();
+    return itemId === normalizedRuntimeId || itemRuntimeId === normalizedRuntimeId;
+  });
+  return String(runtimeRecord?.active_workspace_session_id || '').trim();
+}
+
+function getRuntimeContextKey(runtimeId = currentRuntimeAgentId, agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
+  const normalizedRuntimeId = String(runtimeId || '').trim();
+  if (!normalizedRuntimeId) return null;
+  const hostId = String(agent?.parent_id || agent?.id || currentAgentId || '').trim();
+  const sessionId = getRuntimeWorkspaceSessionId(normalizedRuntimeId) || getActiveWorkspaceSessionId(agent);
+  if (hostId && sessionId) {
+    return `host:${hostId}|session:${sessionId}`;
+  }
+  return `runtime:${normalizedRuntimeId}`;
+}
+
+function _computeMessagesSignature(messages) {
+  if (!messages || messages.length === 0) return '';
+  return messages.length + ':' +
+    (messages.length > 0
+      ? JSON.stringify(messages[messages.length - 1]).length + ':' + messages[messages.length - 1].role
+      : '');
+}
+
+function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(agentId)) {
+  if (!agentId || !contextKey) return;
+  _agentRuntimeCache.set(contextKey, {
+    runtimeId: agentId,
+    messages: currentMessages,
+    messagesSignature: _computeMessagesSignature(currentMessages),
+    inputRequests: Array.isArray(currentInputRequests) ? currentInputRequests : [],
+    toolRenderConfigs: toolRenderConfigs,
+    TOOL_NAMES: TOOL_NAMES,
+    hookInspector: currentHookInspector,
+    hookInspectorSignature: currentHookInspectorSignature,
+    overviewSnapshot: currentOverviewSnapshot,
+    overviewSignature: currentOverviewSignature,
+    connected: typeof currentRuntimeConnected !== 'undefined' ? currentRuntimeConnected : true,
+  });
+}
+
+function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agentId)) {
+  if (!agentId || !contextKey) return false;
+  const cached = _agentRuntimeCache.get(contextKey);
+  if (!cached) return false;
+  currentMessages = cached.messages;
+  toolRenderConfigs = cached.toolRenderConfigs;
+  TOOL_NAMES = cached.TOOL_NAMES;
+  currentHookInspector = cached.hookInspector;
+  currentHookInspectorSignature = cached.hookInspectorSignature;
+  currentOverviewSnapshot = cached.overviewSnapshot;
+  currentOverviewSignature = cached.overviewSignature;
+  currentRuntimeConnected = cached.connected;
+  currentInputRequests = Array.isArray(cached.inputRequests) ? cached.inputRequests : [];
+  window.lastInputRequests = currentInputRequests;
+  return true;
+}
+
+function clearAgentRuntimeCache(agentId) {
+  if (agentId) {
+    for (const [key, cached] of _agentRuntimeCache.entries()) {
+      if (cached?.runtimeId === agentId || key === `runtime:${agentId}`) {
+        _agentRuntimeCache.delete(key);
+      }
+    }
+  } else {
+    _agentRuntimeCache.clear();
+  }
+}
 
 const I18N = {
   zh: {
