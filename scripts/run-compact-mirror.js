@@ -9,6 +9,7 @@ import { FileSessionStore } from 'agentdev';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { execSync } from 'child_process';
+import { tuneMirrorLLM } from './mirror-runtime.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -126,23 +127,6 @@ function extractSessionTimestamp(sessionDir, sessionId) {
   }
 }
 
-function tuneMirrorLLM(llm) {
-  if (!llm || typeof llm !== 'object') return;
-  try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'thinkingBudgetTokens')) {
-      llm.thinkingBudgetTokens = undefined;
-    }
-  } catch {}
-  try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
-      const current = Number(llm.maxTokens);
-      llm.maxTokens = Number.isFinite(current) && current > 0
-        ? Math.min(current, 2500)
-        : 2500;
-    }
-  } catch {}
-}
-
 function shouldPreserveToolSchema(agent) {
   const modelName = cleanValue(
     agent?.getSystemContext?.()?.SYSTEM_CURRENT_MODEL
@@ -221,7 +205,7 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     await agent.loadSession(sessionId, sessionStore);
     logPhase('load session done');
 
-    tuneMirrorLLM(agent.llm);
+    tuneMirrorLLM(agent.llm, 2500);
 
     const toolRegistry = typeof agent.getTools === 'function' ? agent.getTools() : null;
     const toolEntries = toolRegistry?.getEntries?.() || [];
@@ -244,8 +228,6 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
       turn: Number.isFinite(message?.turn) ? Number(message.turn) : index,
       toolCallId: message?.toolCallId,
       toolCalls: Array.isArray(message?.toolCalls) ? message.toolCalls : undefined,
-      reasoning: typeof message?.reasoning === 'string' ? message.reasoning : undefined,
-      thinkingBlocks: Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : undefined,
     }));
     const callIndex = typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : compactMessages.length;
     const { files: refFiles, skills: refSkills, fileRanges } = scanFilesAndSkills(rawMessages);

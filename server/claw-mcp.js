@@ -192,6 +192,20 @@ export class ClawMCPServer {
       if (result.error) return wrapError(result.error);
       return wrap(result);
     });
+
+    // --- create_session ---
+    server.registerTool('create_session', {
+      title: 'Create New Session',
+      description: 'Create a new programming-helper session for a given project path. The session will be created and the runtime will be started automatically.',
+      inputSchema: z.object({
+        path: z.string().describe('The project directory path for the new session'),
+      }),
+    }, async ({ path }) => {
+      const { ok, result } = await dispatch(defaultWs, 'create_session', { path });
+      if (!ok) return wrapError(result?.error || 'Failed');
+      if (result.error) return wrapError(result.error);
+      return wrap(result);
+    });
   }
 
   // ── Resource registration ──────────────────────────────────────

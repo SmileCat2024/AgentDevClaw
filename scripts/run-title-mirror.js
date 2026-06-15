@@ -4,7 +4,6 @@ import { dirname, join, resolve } from 'path';
 import { writeFileSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
-import { buildTrimmedSeedMessages, normalizeExportPolicy } from '../server/context-continuity/handoff-package.js';
 import { fileURLToPath } from 'url';
 import {
   cleanValue,
@@ -12,6 +11,7 @@ import {
   resolveWorkspaceCwd,
   createTextOnlyMirrorAgent,
   loadMirrorSession,
+  tuneMirrorLLM,
 } from './mirror-runtime.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,45 +22,51 @@ function logPhase(message) {
   process.stderr.write(`[title-mirror] ${message}\n`);
 }
 
-function tuneTitleLLM(llm) {
-  if (!llm || typeof llm !== 'object') return;
-  try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'thinkingBudgetTokens')) {
-      llm.thinkingBudgetTokens = undefined;
-    }
-  } catch {}
-  try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
-      const current = Number(llm.maxTokens);
-      llm.maxTokens = Number.isFinite(current) && current > 0
-        ? Math.min(current, 1024)
-        : 1024;
-    }
-  } catch {}
-}
-
-const TITLE_PROMPT = `以上是一段对话的完整历史记录。请直接为这段对话生成一个简洁的标题并输出。
+const TITLE_PROMPT = `以上是一段对话的历史记录。请从整段会话中识别稳定的主任务，为它生成一个简洁准确的标题。
 
 要求：
-- 以用户最后一轮输入的请求为核心叙述点
-- 标题应体现当前工作进展和涉及的关键内容
+- 首先综合整段会话，确定用户真正要解决的问题、项目背景和核心目标，不要只概括最后一句
+- 标题应优先说明“在什么背景下，处理什么核心问题或目标”
+- 会话靠后的内容权重更高，但只有当它引入新的技术对象、约束、目标、故障现象或明确的方向调整时，才用于修正标题
+- 忽略“复述一遍”“继续”“好的”“再看看”“按这个做”等低信息量、确认性或仅控制对话过程的表达
+- 如果最后一轮只是要求解释、复述或整理已有内容，标题仍应描述被解释、复述或整理的原始主题，而不是“复述内容”本身
+- 如果会话包含多个阶段，选择贯穿会话且对当前工作最重要的主线；用靠后的实质性关注点补充细节
+- 标题应体现核心对象、问题背景、目标或正在解决的故障，避免“讨论问题”“继续处理”“复述方案”等空泛措辞
 - 10-30个中文字符（英文 3-8 个单词）
 - 不要使用引号或标点符号
 - 不要复述系统提示或工具说明
-- 严禁调用工具 严禁描述思考过程
-- 直接输出标题文本且只能输出一行，不要输出任何其他内容`;
+- 不要描述思考过程
+- 必须调用 record_session_title 工具提交标题，不要输出其他内容`;
+
+const TITLE_TOOL = {
+  name: 'record_session_title',
+  description: '提交为当前会话生成的简洁标题。这是唯一允许的输出方式。',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: {
+        type: 'string',
+        description: '10-30个中文字符或3-8个英文单词的会话标题',
+      },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+};
 
 function buildTitleMessages(rawMessages) {
-  const trimPolicy = normalizeExportPolicy({
-    includeSystemMessages: false,
-    assistantToolCallMode: 'fold',
-    toolMessageMode: 'fold',
-    toolFoldScope: 'all',
-  });
-  const { seedMessages, stats } = buildTrimmedSeedMessages(rawMessages, trimPolicy);
-  logPhase(`trim stats: original=${stats.originalMessageCount} kept=${stats.keptSeedMessageCount} folded_notes=${stats.foldedToolNoteCount}`);
+  const conversationalMessages = rawMessages.filter((message) => (
+    (message?.role === 'user' || message?.role === 'assistant')
+    && cleanValue(message?.content)
+  ));
+  const firstUser = conversationalMessages.find((message) => message.role === 'user');
+  const recentMessages = conversationalMessages.slice(-32);
+  if (firstUser && !recentMessages.includes(firstUser)) {
+    recentMessages.unshift(firstUser);
+  }
+  logPhase(`context stats: original=${rawMessages.length} conversational=${conversationalMessages.length} kept=${recentMessages.length}`);
 
-  const compactMessages = seedMessages.slice(-24).map((message, index) => ({
+  const compactMessages = recentMessages.map((message, index) => ({
     role: message.role,
     content: typeof message.content === 'string' ? message.content : '',
     turn: Number.isFinite(message.turn) ? Number(message.turn) : index,
@@ -152,7 +158,7 @@ async function runTitleGeneration({ agentDir, agentId, sessionId }) {
   }
 
   logPhase(`using model preset role=system model=${resolvedModel.modelName}`);
-  tuneTitleLLM(resolvedModel.llm);
+  tuneMirrorLLM(resolvedModel.llm, 2048);
 
   const workspaceDir = resolveWorkspaceCwd(agentId, PROTOCLAW_ROOT);
   const agent = createTextOnlyMirrorAgent({
@@ -172,21 +178,28 @@ async function runTitleGeneration({ agentDir, agentId, sessionId }) {
   }
 
   const compactMessages = buildTitleMessages(rawMessages);
-  const compiledTools = [];
+  const compiledTools = [TITLE_TOOL];
 
   logPhase(`chat begin messages=${compactMessages.length} tools=${compiledTools.length}`);
   try {
     const response = await resolvedModel.llm.chat(compactMessages, compiledTools);
     logPhase('chat done');
 
-    const rawTitle = typeof response?.content === 'string' ? response.content : '';
+    const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
+    const titleCall = toolCalls.find((toolCall) => toolCall?.name === TITLE_TOOL.name);
+    const toolArgs = typeof titleCall?.arguments === 'string'
+      ? (() => { try { return JSON.parse(titleCall.arguments); } catch { return {}; } })()
+      : (titleCall?.arguments || {});
+    const rawTitle = typeof toolArgs?.title === 'string'
+      ? toolArgs.title
+      : (typeof response?.content === 'string' ? response.content : '');
     const cleanTitle = sanitizeGeneratedTitle(rawTitle);
     if (cleanTitle) {
       logPhase(`title="${cleanTitle}"`);
       return { title: cleanTitle, source: 'model' };
     }
 
-    logPhase(`model returned empty title, raw response keys=${Object.keys(response || {}).join(',')} content=${JSON.stringify(response?.content)?.slice(0, 200)} reasoning=${JSON.stringify(response?.reasoning)?.slice(0, 120)}`);
+    logPhase(`model returned empty title, raw response keys=${Object.keys(response || {}).join(',')} toolCalls=${toolCalls.length} content=${JSON.stringify(response?.content)?.slice(0, 200)} reasoning=${JSON.stringify(response?.reasoning)?.slice(0, 120)}`);
     throw new Error('Model returned empty title after sanitization — will retry');
   } finally {
     if (typeof agent.dispose === 'function') {

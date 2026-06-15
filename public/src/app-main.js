@@ -3296,6 +3296,12 @@ window.switchAgent = async (newAgentId) => {
     }
 
     currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
+    // 保存当前会话的输入框内容，在切换 agent 之前
+    const _switchingTa = document.getElementById('input-persistent');
+    if (_switchingTa && currentRuntimeAgentId) {
+      if (_switchingTa.value) _sessionInputCache[currentRuntimeAgentId] = _switchingTa.value;
+      else delete _sessionInputCache[currentRuntimeAgentId];
+    }
     currentRuntimeAgentId = runtimeAgentId;
     readOnlyMode = false;
     currentWorkspaceArtifactDetail = null;
@@ -4197,6 +4203,8 @@ async function loadAgentData(agentId) {
     }
 
     renderCurrentMainView();
+    // 恢复当前会话的输入框缓存（在所有渲染完成后）
+    _restoreSessionInput();
     await refreshCurrentRuntimeStatus(agentId);
     if (activeFeaturePanel === 'logs') {
       await loadLogs(true);
@@ -4250,34 +4258,67 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
 }
 
 // ── Auto session title generation ──────────────────────────────────────────
+const _autoTitlePending = new Set();
+const _autoTitleAttempts = new Map();
+const _autoTitleRetryAt = new Map();
+
+function getAutoTitleSessionInfo() {
+  const agent = getCurrentAgentRecord();
+  if (!agent) return null;
+  const sessionId = String(agent.active_workspace_session_id || agent.workspace_sessions?.activeSessionId || '').trim();
+  return sessionId ? { agent, sessionId } : null;
+}
+
+function markAutoTitleCandidate(previousMessages, nextMessages) {
+  const info = getAutoTitleSessionInfo();
+  if (!info) return;
+  const previousAssistantCount = previousMessages.filter(function(message) {
+    return message && message.role === 'assistant';
+  }).length;
+  const nextAssistantCount = nextMessages.filter(function(message) {
+    return message && message.role === 'assistant';
+  }).length;
+  if (previousAssistantCount === 0 && nextAssistantCount > 0) {
+    _autoTitlePending.add(info.sessionId);
+  }
+}
+
 function tryAutoTitleGeneration(messages) {
   if (!currentRuntimeAgentId || !currentAgentId) return;
 
-  // Need at least one assistant message (first round complete)
-  const hasAssistantMsg = messages.some(function(m) {
-    return m && m.role === 'assistant' && typeof m.content === 'string' && m.content.trim();
-  });
-  if (!hasAssistantMsg) return;
+  const info = getAutoTitleSessionInfo();
+  if (!info) return;
+  const { agent, sessionId } = info;
+  if (!_autoTitlePending.has(sessionId)) return;
 
-  // Resolve session info from current agent record
-  const agent = getCurrentAgentRecord();
-  if (!agent) return;
-  const sessionId = String(agent.active_workspace_session_id || agent.workspace_sessions?.activeSessionId || '').trim();
-  if (!sessionId) return;
+  const latestMessage = messages[messages.length - 1];
+  if (!latestMessage || latestMessage.role !== 'assistant' || !String(latestMessage.content || '').trim()) return;
 
   // Only auto-generate for default "新对话N" titles
   const currentTitle = String(agent.active_workspace_session_title || '').trim();
-  if (!/^新对话\d+$/.test(currentTitle)) return;
+  if (!/^新对话\d+$/.test(currentTitle)) {
+    _autoTitlePending.delete(sessionId);
+    return;
+  }
 
-  // Only trigger once per session
   if (_autoTitleTriggered.has(sessionId)) return;
+  const attempts = _autoTitleAttempts.get(sessionId) || 0;
+  if (attempts >= 3) {
+    _autoTitlePending.delete(sessionId);
+    _autoTitleRetryAt.delete(sessionId);
+    return;
+  }
+  if (Date.now() < (_autoTitleRetryAt.get(sessionId) || 0)) return;
+
   _autoTitleTriggered.add(sessionId);
+  _autoTitleAttempts.set(sessionId, attempts + 1);
 
   // Fire and forget — don't block the poll loop
   autoGenerateSessionTitle(agent.id, sessionId);
 }
 
 async function autoGenerateSessionTitle(agentId, sessionId) {
+  let succeeded = false;
   try {
     var response = await fetch('/protoclaw/generate_session_title', {
       method: 'POST',
@@ -4298,9 +4339,19 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
         if (target) target.title = result.title;
       }
       console.log('[AutoTitle] title set:', result.title);
+      succeeded = true;
     }
   } catch (error) {
     console.warn('[AutoTitle] error:', error.message || error);
+  } finally {
+    _autoTitleTriggered.delete(sessionId);
+    if (succeeded) {
+      _autoTitlePending.delete(sessionId);
+      _autoTitleAttempts.delete(sessionId);
+      _autoTitleRetryAt.delete(sessionId);
+    } else {
+      _autoTitleRetryAt.set(sessionId, Date.now() + 15000);
+    }
   }
 }
 
@@ -4413,11 +4464,6 @@ async function poll() {
     _syncPersistentActionButton();
     _syncPersistentInputUi(currentRuntimeAgentId);
 
-    // ── Auto-generate session title when first response completes ──
-    if (currentRuntimeAgentId && !isRuntimeCalling(currentRuntimeAgentId)) {
-      tryAutoTitleGeneration(currentMessages);
-    }
-
     const nextOverview = normalizeOverviewSnapshot(await overviewRes.json());
     const nextOverviewSignature = getOverviewSignature(nextOverview);
     if (nextOverviewSignature !== currentOverviewSignature) {
@@ -4442,6 +4488,8 @@ async function poll() {
       _syncPersistentInputUi(currentRuntimeAgentId);
     }
 
+    const previousMessages = currentMessages;
+    markAutoTitleCandidate(previousMessages, messages);
     if (messages.length !== currentMessages.length) {
       if (messages.length > currentMessages.length) {
         // 有新消息：只追加新的
@@ -4469,6 +4517,11 @@ async function poll() {
           updateLastMessage(messages[messages.length - 1]);
         }
       }
+    }
+
+    // Generate only after this session's first assistant response was newly observed and completed.
+    if (currentRuntimeAgentId && !isRuntimeCalling(currentRuntimeAgentId)) {
+      tryAutoTitleGeneration(currentMessages);
     }
 
     // Refresh the Claw-composed agent list occasionally.
@@ -4731,9 +4784,12 @@ function renderInputRequests(requests) {
   lastRenderedInputMode = renderMode;
 
   // 取消活跃录音 / 重置转写状态，避免 DOM 销毁后状态残留
+  // 注意：不重置 _voiceTranscribing 期间的 in-flight ASR 请求，
+  // 那些请求完成后会自行存入 _pendingVoiceResults，待切回时注入。
   if (_voiceRecording) {
     _cancelVoiceRecording();
   }
+  // 仅重置 flag 以解除新会话的 UI 限制，不中断进行中的 ASR fetch
   _voiceTranscribing = false;
 
   // 清空现有内容
@@ -4848,6 +4904,9 @@ function renderInputRequests(requests) {
     renderPersistentInput(inputContainer);
   }
 
+  // Inject any pending voice ASR result that arrived while viewing another session
+  _injectPendingVoiceResult();
+
   notifyChatViewportMutation({
     reason: 'input-render',
     shouldFollow: followLatestEnabled && chatActive,
@@ -4872,10 +4931,7 @@ function renderPersistentInput(container) {
   card.className = 'user-input-card persistent-input';
   card.innerHTML = `
     <div class="persistent-input-row">
-      <textarea class="user-input-textarea" rows="1" id="input-persistent"
-        onkeydown="handlePersistentInputKey(event)"
-        oninput="autoResize(this)"
-        placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
+      <textarea class="user-input-textarea" rows="1" id="input-persistent"\n        onkeydown="handlePersistentInputKey(event)"\n        oninput="autoResize(this); _cacheSessionInput(this)"\n        placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
       <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
         <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
       </button>
@@ -4998,6 +5054,7 @@ async function submitQueuedInput() {
     if (res.ok) {
       textarea.value = '';
       autoResize(textarea);
+      delete _sessionInputCache[currentRuntimeAgentId];
       beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       _localQueuedInputPending = true;
@@ -6253,10 +6310,7 @@ let _voiceCancelled = false;
 let _voicePendingSend = false;      // 录音期间点了发送：停止录音后，转写完成自动发送
 let _voiceAgentId = null;           // 录音发起时的 agent ID（用于跨会话暂存）
 let _pendingVoiceResults = {};      // { agentId: text } — ASR 结果在会话切换后暂存，待切回时注入
-
-function _voiceBusy() {
-  return _voiceRecording || _voiceTranscribing;
-}
+let _sessionInputCache = {};        // { agentId: text } — 每个会话 persistent 输入框内容缓存
 
 // Sync send-button disabled state and voice-button spinner to current flags.
 // During recording the send button stays clickable (clicking it stops the recording
@@ -6357,9 +6411,31 @@ async function startVoiceRecording(btn) {
         _voicePendingSend = false;
         const targetId = btn.dataset.target;
         if (targetId === 'input-persistent') {
-          submitQueuedInput();
+          if (currentRuntimeAgentId === _voiceAgentId) {
+            // Same session — text already in textarea, submit normally
+            submitQueuedInput();
+          } else {
+            // Session switched — auto-submit directly to original agent
+            let fullText = _pendingVoiceResults[_voiceAgentId] || '';
+            delete _pendingVoiceResults[_voiceAgentId];
+            // Also include any cached typed text from the original session
+            const cachedInput = _sessionInputCache[_voiceAgentId] || '';
+            delete _sessionInputCache[_voiceAgentId];
+            fullText = cachedInput + fullText;
+            if (fullText.trim()) {
+              fetch(`/api/agents/${_voiceAgentId}/queue-input`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: fullText })
+              }).catch(e => console.error('[VoiceInput] cross-session auto-send failed:', e));
+            }
+          }
         } else if (targetId.startsWith('input-')) {
-          submitInput(targetId.slice('input-'.length));
+          // Non-persistent request — only auto-send if still on same session
+          if (currentRuntimeAgentId === _voiceAgentId) {
+            submitInput(targetId.slice('input-'.length));
+          }
+          // If session switched, leave result in _pendingVoiceResults for manual injection
         }
       }
     };
@@ -6382,13 +6458,12 @@ function stopVoiceRecording() {
 
 function _cancelVoiceRecording() {
   _voiceCancelled = true;
+  _voicePendingSend = false;
   stopVoiceRecording();
 }
 
 async function sendAudioToASR(blob, btn) {
   const targetId = btn.dataset.target;
-  const textarea = document.getElementById(targetId);
-  if (!textarea) return;
 
   try {
     const resp = await fetch('/protoclaw/speech_to_text', {
@@ -6408,8 +6483,16 @@ async function sendAudioToASR(blob, btn) {
     const data = await resp.json();
     const text = data?.text || '';
     if (text) {
-      insertTextAtCursor(textarea, text);
-      autoResize(textarea);
+      const textarea = document.getElementById(targetId);
+      // Only inject if we're still on the same session that started the recording.
+      // Otherwise the textarea belongs to a different session (same ID, different agent).
+      if (textarea && currentRuntimeAgentId === _voiceAgentId) {
+        insertTextAtCursor(textarea, text);
+        autoResize(textarea);
+      } else if (_voiceAgentId) {
+        // Session switched while transcribing — store for later injection
+        _pendingVoiceResults[_voiceAgentId] = (_pendingVoiceResults[_voiceAgentId] || '') + text;
+      }
     }
 
   } catch (err) {
@@ -6425,6 +6508,42 @@ function insertTextAtCursor(textarea, text) {
   textarea.value = value.slice(0, start) + text + value.slice(end);
   const newPos = start + text.length;
   textarea.setSelectionRange(newPos, newPos);
+}
+
+// Real-time cache of persistent textarea content per session
+function _cacheSessionInput(textarea) {
+  if (!currentRuntimeAgentId) return;
+  if (textarea.value) _sessionInputCache[currentRuntimeAgentId] = textarea.value;
+  else delete _sessionInputCache[currentRuntimeAgentId];
+}
+
+// Restore cached input for the current session after all rendering is complete.
+// Called from loadAgentData — not from the rendering pipeline — to avoid timing issues.
+function _restoreSessionInput() {
+  if (!currentRuntimeAgentId) return;
+  const cached = _sessionInputCache[currentRuntimeAgentId];
+  if (!cached) return;
+  const ta = document.getElementById('input-persistent');
+  if (ta && !ta.value) {
+    ta.value = cached;
+    autoResize(ta);
+  }
+}
+
+// Inject pending voice ASR result for the current session into whichever textarea is visible
+function _injectPendingVoiceResult() {
+  const agentId = currentRuntimeAgentId;
+  const text = _pendingVoiceResults[agentId];
+  if (!text) return;
+  delete _pendingVoiceResults[agentId];
+  const textarea = document.getElementById('input-persistent')
+    || document.querySelector('.user-input-textarea[id^="input-"]');
+  if (textarea) {
+    insertTextAtCursor(textarea, text);
+    autoResize(textarea);
+    _cacheSessionInput(textarea);
+    textarea.focus();
+  }
 }
 
 applyTheme(currentTheme);

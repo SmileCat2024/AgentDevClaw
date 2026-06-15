@@ -4,8 +4,8 @@
  * Covers the core decision logic extracted from scripts/run-title-mirror.js:
  * 1. sanitizeGeneratedTitle — cleans raw model output into a usable title
  * 2. buildHeuristicTitle — generates a fallback title from last user message
- * 3. prepareTitleMessages — post-processing of compacted messages (anchor insertion, truncation, prompt append)
- * 4. tuneTitleLLM — caps maxTokens and clears thinkingBudget for title generation
+ * 3. prepareTitleMessages — selects conversational context and appends the title prompt
+ * 4. tuneMirrorLLM — caps output and clears configured reasoning options
  *
  * These mirror the actual code paths in run-title-mirror.js.
  * When that script changes, these tests should be updated accordingly.
@@ -13,6 +13,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { tuneMirrorLLM } from '../scripts/mirror-runtime.js';
 
 // ── Inline helpers (mirrors scripts/run-title-mirror.js) ──
 
@@ -228,16 +229,24 @@ describe('buildHeuristicTitle', () => {
 const TITLE_PROMPT = '以上是一段对话的完整历史记录。请直接为这段对话生成一个简洁的标题并输出。';
 
 /**
- * Mirrors the post-processing logic from buildTitleMessages():
- * - compactMessages normalization (role, content, turn)
- * - slice to last 24 messages
+ * Mirrors buildTitleMessages():
+ * - keep non-empty user/assistant text only
+ * - preserve the first user request plus the last 32 conversational messages
  * - synthetic user anchor insertion when first non-system is not 'user'
  * - TITLE_PROMPT appended as last user message
- *
- * Input is an array of messages already trimmed (simulating buildTrimmedSeedMessages output).
  */
-function prepareTitleMessages(seedMessages) {
-  const compactMessages = seedMessages.slice(-24).map((message, index) => ({
+function prepareTitleMessages(rawMessages) {
+  const conversationalMessages = rawMessages.filter((message) => (
+    (message?.role === 'user' || message?.role === 'assistant')
+    && cleanValue(message?.content)
+  ));
+  const firstUser = conversationalMessages.find((message) => message.role === 'user');
+  const recentMessages = conversationalMessages.slice(-32);
+  if (firstUser && !recentMessages.includes(firstUser)) {
+    recentMessages.unshift(firstUser);
+  }
+
+  const compactMessages = recentMessages.map((message, index) => ({
     role: message.role,
     content: typeof message.content === 'string' ? message.content : '',
     turn: Number.isFinite(message.turn) ? message.turn : index,
@@ -268,27 +277,6 @@ function prepareTitleMessages(seedMessages) {
   });
 
   return compactMessages;
-}
-
-/**
- * Mirrors tuneTitleLLM from run-title-mirror.js.
- * Caps maxTokens to 1024 and clears thinkingBudgetTokens.
- */
-function tuneTitleLLM(llm) {
-  if (!llm || typeof llm !== 'object') return;
-  try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'thinkingBudgetTokens')) {
-      llm.thinkingBudgetTokens = undefined;
-    }
-  } catch {}
-  try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
-      const current = Number(llm.maxTokens);
-      llm.maxTokens = Number.isFinite(current) && current > 0
-        ? Math.min(current, 1024)
-        : 1024;
-    }
-  } catch {}
 }
 
 // ── Additional tests ──
@@ -341,29 +329,27 @@ describe('prepareTitleMessages', () => {
     assert.equal(result[0].content, 'hello');
   });
 
-  it('truncates to last 24 messages from seed', () => {
+  it('preserves the first user request plus the last 32 messages', () => {
     const messages = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 40; i++) {
       messages.push({ role: 'user', content: `msg ${i}` });
     }
     const result = prepareTitleMessages(messages);
-    // 24 sliced messages + 1 appended TITLE_PROMPT = 25
-    // (no anchor prepended since first is user)
-    assert.equal(result.length, 25);
-    // First should be msg 6 (30-24=6)
-    assert.equal(result[0].content, 'msg 6');
+    assert.equal(result.length, 34);
+    assert.equal(result[0].content, 'msg 0');
+    assert.equal(result[1].content, 'msg 8');
   });
 
-  it('normalizes non-string content to empty string', () => {
+  it('filters non-string and tool content', () => {
     const messages = [
       { role: 'user', content: null },
-      { role: 'assistant', content: 42 },
+      { role: 'tool', content: 'tool output' },
+      { role: 'assistant', content: 'final answer' },
     ];
     const result = prepareTitleMessages(messages);
-    // null content becomes ''
-    assert.equal(result[0].content, '');
-    // number content becomes ''
-    assert.equal(result[1].content, '');
+    assert.equal(result.length, 3);
+    assert.ok(result[0].content.includes('截取'));
+    assert.equal(result[1].content, 'final answer');
   });
 
   it('assigns turn index when turn is not a finite number', () => {
@@ -391,46 +377,58 @@ describe('prepareTitleMessages', () => {
 describe('tuneTitleLLM', () => {
   it('caps maxTokens to 1024 when larger', () => {
     const llm = { maxTokens: 4096 };
-    tuneTitleLLM(llm);
+    tuneMirrorLLM(llm, 1024);
     assert.equal(llm.maxTokens, 1024);
   });
 
   it('keeps maxTokens when already <= 1024', () => {
     const llm = { maxTokens: 512 };
-    tuneTitleLLM(llm);
+    tuneMirrorLLM(llm, 1024);
     assert.equal(llm.maxTokens, 512);
   });
 
   it('sets maxTokens to 1024 when invalid', () => {
     const llm = { maxTokens: 'abc' };
-    tuneTitleLLM(llm);
+    tuneMirrorLLM(llm, 1024);
     assert.equal(llm.maxTokens, 1024);
   });
 
   it('sets maxTokens to 1024 when negative', () => {
     const llm = { maxTokens: -1 };
-    tuneTitleLLM(llm);
+    tuneMirrorLLM(llm, 1024);
     assert.equal(llm.maxTokens, 1024);
   });
 
-  it('clears thinkingBudgetTokens to undefined', () => {
-    const llm = { thinkingBudgetTokens: 8192, maxTokens: 2048 };
-    tuneTitleLLM(llm);
+  it('clears configured reasoning options', () => {
+    const llm = {
+      thinkingBudgetTokens: 8192,
+      thinkingKeepTurns: 5,
+      maxTokens: 2048,
+      providerOptions: {
+        reasoning: { enabled: true },
+        reasoning_effort: 'high',
+        thinking: { type: 'enabled' },
+        temperature: 0,
+      },
+    };
+    tuneMirrorLLM(llm, 1024);
     assert.equal(llm.thinkingBudgetTokens, undefined);
+    assert.equal(llm.thinkingKeepTurns, 0);
     assert.equal(llm.maxTokens, 1024);
+    assert.deepEqual(llm.providerOptions, { temperature: 0 });
   });
 
   it('does nothing for null or non-object input', () => {
-    assert.doesNotThrow(() => tuneTitleLLM(null));
-    assert.doesNotThrow(() => tuneTitleLLM(undefined));
-    assert.doesNotThrow(() => tuneTitleLLM('string'));
-    assert.doesNotThrow(() => tuneTitleLLM(42));
+    assert.doesNotThrow(() => tuneMirrorLLM(null, 1024));
+    assert.doesNotThrow(() => tuneMirrorLLM(undefined, 1024));
+    assert.doesNotThrow(() => tuneMirrorLLM('string', 1024));
+    assert.doesNotThrow(() => tuneMirrorLLM(42, 1024));
   });
 
   it('does nothing when maxTokens is not an own property', () => {
     const proto = { maxTokens: 9999 };
     const llm = Object.create(proto);
-    tuneTitleLLM(llm);
+    tuneMirrorLLM(llm, 1024);
     assert.equal(llm.maxTokens, 9999);
     assert.ok(!Object.prototype.hasOwnProperty.call(llm, 'maxTokens'));
   });

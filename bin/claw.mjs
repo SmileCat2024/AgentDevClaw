@@ -26,6 +26,8 @@ const LEGACY_ALIASES = {
   'compact': 'compact',
   'compress': 'compact',
   'resume': 'resume',
+  'new-session': 'create_session',
+  'new-chat': 'create_session',
 };
 
 // ── Main ────────────────────────────────────────────────────────
@@ -87,6 +89,7 @@ function printHelp() {
   console.log('  claw spawn <exp-id>... --goal "..."');
   console.log('  claw compact <exp-id>');
   console.log('  claw resume <sub-id> --msg "..."');
+  console.log('  claw new-session <project-path>');
 }
 
 // ── Overview ────────────────────────────────────────────────────
@@ -111,6 +114,7 @@ async function cmdOverview(defaultWs) {
   console.log('  claw spawn --goal ...  Spawn exploration');
   console.log('  claw compact <id>      Compact exploration');
   console.log('  claw resume <id> --msg Resume sub-agent');
+  console.log('  claw new-session <path> Create new session');
 }
 
 // ── ws command ──────────────────────────────────────────────────
@@ -208,6 +212,7 @@ function parseLegacyArgs(opName, args) {
     else if (args[i] === '--limit' && args[i + 1]) { params.limit = parseInt(args[i + 1], 10) || 20; i++; }
     else if (args[i] === '--file' && args[i + 1]) { params.file = args[i + 1]; i++; }
     else if (args[i] === '--keyword' && args[i + 1]) { params.keyword = args[i + 1]; i++; }
+    else if (args[i] === '--path' && args[i + 1]) { params.path = args[i + 1]; i++; }
     else if (args[i] === '--blocking' || args[i] === '--wait') { params.blocking = true; }
     else if (!args[i].startsWith('-')) { positional.push(args[i]); }
   }
@@ -218,6 +223,8 @@ function parseLegacyArgs(opName, args) {
     if (positional.length > 0) params.from = positional.join(',');
   } else if (opName === 'resume') {
     if (positional.length > 0) params.sessionId = positional[0];
+  } else if (opName === 'create_session') {
+    if (positional.length > 0) params.path = positional[0];
   }
 
   return params;
@@ -371,6 +378,22 @@ function formatLegacyOutput(opName, result, params) {
         console.log('--- 执行结果 ---');
         console.log(result.response);
         console.log('--- 结束 ---');
+      }
+      return;
+    }
+
+    case 'create_session': {
+      if (result.error) {
+        console.error('创建会话失败: ' + result.error);
+        process.exit(1);
+      }
+      console.log('会话已创建');
+      console.log('  会话 ID: ' + result.sessionId);
+      console.log('  标题: ' + (result.title || '(未命名)'));
+      console.log('  项目路径: ' + result.openDirectory);
+      console.log('  运行时状态: ' + result.runtimeStatus);
+      if (result.viewerAgentId) {
+        console.log('  Viewer Agent: ' + result.viewerAgentId);
       }
       return;
     }

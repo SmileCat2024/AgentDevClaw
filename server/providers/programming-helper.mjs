@@ -317,6 +317,45 @@ export default {
       },
     },
 
+    // ── create_session ───────────────────────────────────────
+    {
+      name: 'create_session',
+      description: '为指定项目路径创建新的编程助手会话',
+      params: [
+        { name: 'path', required: true, description: '项目路径（openDirectory）' },
+      ],
+      execute: async (ctx, { path: openDirectory } = {}) => {
+        const dir = cleanText(openDirectory);
+        if (!dir) {
+          return { error: 'Project path is required' };
+        }
+
+        const { ok, data } = await ctx.http('/protoclaw/prebuilt_sessions', {
+          method: 'POST',
+          body: {
+            agentId: ctx.workspaceId,
+            openDirectory: dir,
+          },
+        });
+
+        if (!ok) {
+          return { error: data?.error || `HTTP ${data?.status || 'error'}` };
+        }
+
+        const session = data.session || {};
+        const status = data.status || {};
+        return {
+          ok: true,
+          sessionId: session.id || '',
+          title: session.title || '',
+          openDirectory: session.openDirectory || dir,
+          runtimeStatus: status.status || 'unknown',
+          viewerAgentId: status.viewerAgentId || '',
+          createdAt: session.createdAt || '',
+        };
+      },
+    },
+
     // ── resume ────────────────────────────────────────────────
     {
       name: 'resume',

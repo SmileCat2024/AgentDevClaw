@@ -616,6 +616,7 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
   if (!btnElement) return;
   
   var isZh = currentLanguage === 'zh';
+  var generated = false;
   var originalContent = btnElement.innerHTML;
   btnElement.innerHTML = '<span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + (isZh ? '生成中...' : 'Generating...') + '</span>';
   btnElement.classList.add('loading');
@@ -661,6 +662,7 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
         var target = sessions.find(function(s) { return s.id === sessionId; });
         if (target) target.title = result.title;
       }
+      generated = true;
     }
   } catch (error) {
     console.error('Failed to generate session title:', error);
@@ -673,8 +675,9 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
     if (btnElement._setGenerating) {
       btnElement._setGenerating(false);
     }
-    // Hide button after generation completes
-    btnElement.classList.add('session-title-ai-btn-hidden');
+    if (generated) {
+      btnElement.classList.add('session-title-ai-btn-hidden');
+    }
   }
 };
 
