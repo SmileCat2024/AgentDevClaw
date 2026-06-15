@@ -257,6 +257,18 @@ class CallArbiter {
     this._listeners = { callStarted: [], callFinished: [] };
     // Completion trackers: envelopeId → resolve callback
     this._completionCallbacks = new Map();
+
+    // ── Continuation support ──
+    // Session save callback for checkpoint/rollback barriers.
+    // Set via `arbiter.sessionSaveFn = async () => { ... }`.
+    this.sessionSaveFn = null;
+
+    // Continuation budget limits (per envelope).
+    this.continuationBudget = {
+      maxSegments: 20,
+      maxCheckpoints: 5,
+      maxRollbacks: 3,
+    };
   }
 
   /**
@@ -351,6 +363,11 @@ class CallArbiter {
     const envelope = this._activeEnvelope;
     envelope.status = 'running';
 
+    // Track continuation counters for this envelope
+    envelope._segmentCount = 0;
+    envelope._checkpointCount = 0;
+    envelope._rollbackCount = 0;
+
     if (envelope.source === 'queued-input' && envelope.sourceRef && this._agent?.agentId) {
       try {
         DebugHub.getInstance().consumeQueuedInput(this._agent.agentId, envelope.sourceRef);
@@ -363,21 +380,20 @@ class CallArbiter {
     this._emit('callStarted', envelope);
 
     // Run asynchronously so enqueue() returns immediately
-    Promise.resolve()
-      .then(() => this._agent.onCall(envelope.text))
-      .then((result) => {
-        envelope.status = 'completed';
-        envelope.result = typeof result === 'string' ? result : '';
-      })
+    this._runEnvelope(envelope)
       .catch((err) => {
         envelope.status = 'failed';
         envelope.error = err instanceof Error ? err.message : String(err);
-        console.error(`[CallArbiter] onCall failed for ${envelope.id}:`, err);
+        console.error(`[CallArbiter] envelope ${envelope.id} failed:`, err);
       })
       .finally(() => {
+        if (envelope.status === 'running') {
+          // _runEnvelope completed without setting status (normal completion)
+          envelope.status = 'completed';
+        }
         this._active = false;
         this._status = this._queue.length > 0 ? 'queued' : 'idle';
-        console.log(`[CallArbiter] finished ${envelope.id} (status=${envelope.status}, remaining=${this._queue.length})`);
+        console.log(`[CallArbiter] finished ${envelope.id} (status=${envelope.status}, segments=${envelope._segmentCount || 0}, remaining=${this._queue.length})`);
         this._emit('callFinished', envelope);
         // Resolve any waitForCompletion() promises for this envelope
         const cb = this._completionCallbacks.get(envelope.id);
@@ -389,6 +405,157 @@ class CallArbiter {
         // Continue draining the queue
         this._kick();
       });
+  }
+
+  /**
+   * Execute a logical envelope, which may consist of multiple sequential
+   * onCall segments connected by checkpoint/rollback continuation requests.
+   *
+   * Each segment is a complete, non-recursive onCall().  Between segments,
+   * the arbiter applies a barrier (checkpoint commit or rollback restore)
+   * and then starts the next segment with an internal continuation input.
+   *
+   * The envelope is only "done" when a segment completes without registering
+   * a continuation request, or when the continuation budget is exhausted.
+   */
+  async _runEnvelope(envelope) {
+    let input = envelope.text;
+
+    while (true) {
+      // ── Budget enforcement ──
+      envelope._segmentCount += 1;
+      if (envelope._segmentCount > this.continuationBudget.maxSegments) {
+        throw new Error(`Continuation budget exhausted: maxSegments=${this.continuationBudget.maxSegments} reached for envelope ${envelope.id}`);
+      }
+
+      // ── Execute one onCall segment ──
+      const result = await this._agent.onCall(input);
+      envelope.result = typeof result === 'string' ? result : '';
+
+      // ── Check for continuation request ──
+      const continuation = typeof this._agent.consumeContinuationRequest === 'function'
+        ? this._agent.consumeContinuationRequest()
+        : null;
+
+      if (!continuation) {
+        // Normal completion — no continuation requested
+        envelope.status = 'completed';
+        return;
+      }
+
+      console.log(`[CallArbiter] continuation request: kind=${continuation.kind}, checkpointId=${continuation.checkpointId} (envelope=${envelope.id})`);
+
+      // ── Apply continuation barrier ──
+      if (continuation.kind === 'checkpoint') {
+        envelope._checkpointCount += 1;
+        if (envelope._checkpointCount > this.continuationBudget.maxCheckpoints) {
+          throw new Error(`Continuation budget exhausted: maxCheckpoints=${this.continuationBudget.maxCheckpoints} reached for envelope ${envelope.id}`);
+        }
+
+        await this._checkpointBarrier(continuation, envelope);
+        this._injectContinuationSystemMessage('checkpoint', continuation);
+        input = this._buildCheckpointContinuationInput(continuation);
+
+      } else if (continuation.kind === 'rollback') {
+        envelope._rollbackCount += 1;
+        if (envelope._rollbackCount > this.continuationBudget.maxRollbacks) {
+          throw new Error(`Continuation budget exhausted: maxRollbacks=${this.continuationBudget.maxRollbacks} reached for envelope ${envelope.id}`);
+        }
+
+        await this._rollbackBarrier(continuation, envelope);
+        this._injectContinuationSystemMessage('rollback', continuation);
+        input = this._buildRollbackContinuationInput(continuation);
+      }
+    }
+  }
+
+  /**
+   * Checkpoint barrier: capture named runtime snapshot and persist session.
+   */
+  async _checkpointBarrier(continuation, envelope) {
+    const checkpointId = continuation.checkpointId;
+
+    if (typeof this._agent.createNamedCheckpoint === 'function') {
+      // Single-checkpoint model: clear existing checkpoints before creating a new one
+      if (typeof this._agent.clearNamedCheckpoints === 'function') {
+        this._agent.clearNamedCheckpoints();
+      }
+      await this._agent.createNamedCheckpoint(checkpointId);
+      console.log(`[CallArbiter] checkpoint committed: ${checkpointId} (envelope=${envelope.id})`);
+    }
+
+    // Save session and wait for completion
+    if (this.sessionSaveFn) {
+      await this.sessionSaveFn();
+    }
+  }
+
+  /**
+   * Rollback barrier: restore named checkpoint and persist session.
+   */
+  async _rollbackBarrier(continuation, envelope) {
+    const checkpointId = continuation.checkpointId;
+
+    if (typeof this._agent.rollbackToNamedCheckpoint === 'function') {
+      await this._agent.rollbackToNamedCheckpoint(checkpointId);
+      console.log(`[CallArbiter] rollback completed: ${checkpointId} (envelope=${envelope.id})`);
+    }
+
+    // Save session and wait for completion
+    if (this.sessionSaveFn) {
+      await this.sessionSaveFn();
+    }
+  }
+
+  /**
+   * Inject a system message before the continuation user input.
+   *
+   * The system message carries the detailed continuation context (checkpoint
+   * info or rollback summary + side-effects warning), while the user message
+   * that onCall will add afterwards is kept short and auto-generated in tone.
+   */
+  _injectContinuationSystemMessage(kind, continuation) {
+    const ctx = typeof this._agent.getContext === 'function'
+      ? this._agent.getContext()
+      : null;
+    if (!ctx || typeof ctx.add !== 'function') return;
+
+    if (kind === 'checkpoint') {
+      const note = continuation.metadata?.note ? `\n备注: ${continuation.metadata.note}` : '';
+      ctx.add({
+        role: 'system',
+        content: `检查点 "${continuation.checkpointId}" 已建立并提交。当前对话上下文已保存。${note}\n\n后续视需要可调用 rollback_to_checkpoint 回退到此处。`,
+      });
+    } else if (kind === 'rollback') {
+      ctx.add({
+        role: 'system',
+        content: [
+          `会话已回退到检查点 "${continuation.checkpointId}"。`,
+          '',
+          '以下是被回退会话的摘要：',
+          continuation.summary,
+          '',
+          '注意：回退仅恢复对话上下文和部分工具状态。外部执行（文件写入、命令执行、API 调用等）不会被撤销——请验证所修改的外部资源的真实状态。',
+        ].join('\n'),
+      });
+    }
+  }
+
+  /**
+   * Build the continuation user input for a checkpoint segment.
+   * Kept short — the detailed context is in the preceding system message.
+   */
+  _buildCheckpointContinuationInput(_continuation) {
+    return '[本条消息由系统自动发送] 检查点已生效。请从此处继续执行当前任务——可以自由探索，如果方向不对可随时回退。';
+  }
+
+  /**
+   * Build the continuation user input for a rollback segment.
+   * Kept short — the detailed context (summary, warnings) is in the
+   * preceding system message.
+   */
+  _buildRollbackContinuationInput(_continuation) {
+    return '[本条消息由系统自动发送] 刚才会话发生了回退，以上为相关信息。请从恢复的检查点继续原始任务。';
   }
 }
 
@@ -1109,6 +1276,12 @@ async function main() {
   if (typeof agent.setCallArbiter === 'function') {
     agent.setCallArbiter(callArbiter);
   }
+
+  // Wire session save for checkpoint/rollback continuation barriers
+  callArbiter.sessionSaveFn = async () => {
+    if (!sessionId) return;
+    await agent.saveSession(sessionId, sessionStore);
+  };
 
   console.log('[ProtoClaw Runtime] ✓ CallArbiter 已初始化');
 

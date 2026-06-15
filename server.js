@@ -7508,7 +7508,7 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
     const resultPath = path.join(resultDir, 'result.json');
     await fs.mkdir(resultDir, { recursive: true });
 
-    const child = spawn(process.execPath, [titleMirrorScript, agentRelativeDir, ownerAgentId, sessionId, '{}', resultPath], {
+    const child = spawn(process.execPath, [titleMirrorScript, agentRelativeDir, ownerAgentId, sessionId, JSON.stringify({ maxAttempts: 1 }), resultPath], {
       cwd: __dirname,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -7517,7 +7517,9 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
 
     let stderr = '';
     const timeoutMs = 120000;
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGTERM');
     }, timeoutMs);
 
@@ -7536,6 +7538,10 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
       });
       child.on('exit', (code) => {
         clearTimeout(timer);
+        if (timedOut) {
+          reject(new Error(`Title generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
+          return;
+        }
         if (code !== 0) {
           reject(new Error(stderr.trim() || `run-title-mirror exited with code ${code}`));
           return;

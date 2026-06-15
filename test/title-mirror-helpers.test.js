@@ -3,9 +3,8 @@
  *
  * Covers the core decision logic extracted from scripts/run-title-mirror.js:
  * 1. sanitizeGeneratedTitle — cleans raw model output into a usable title
- * 2. buildHeuristicTitle — generates a fallback title from last user message
- * 3. prepareTitleMessages — selects conversational context and appends the title prompt
- * 4. tuneMirrorLLM — caps output and clears configured reasoning options
+ * 2. prepareTitleMessages — selects conversational context and appends the title prompt
+ * 3. tuneMirrorLLM — caps output and clears configured reasoning options
  *
  * These mirror the actual code paths in run-title-mirror.js.
  * When that script changes, these tests should be updated accordingly.
@@ -30,44 +29,6 @@ function sanitizeGeneratedTitle(title) {
     .trim();
   if (!line) return '';
   return line.slice(0, 60);
-}
-
-function buildHeuristicTitle(rawMessages) {
-  const userMessages = rawMessages
-    .filter((message) => message.role === 'user' && cleanValue(message.content))
-    .map((message) => message.content);
-  const lastUser = cleanValue(userMessages[userMessages.length - 1] || '');
-  if (!lastUser) return '新对话';
-
-  const cleaned = lastUser
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/`[^`]*`/g, ' ')
-    .replace(/https?:\/\/\S+/g, ' ')
-    .replace(/[A-Za-z]:\\[^\s]+/g, ' ')
-    .replace(/[<>]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  const segments = cleaned
-    .split(/[。！？!?；;\n\r]/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  const candidate = segments.find((part) => part.length >= 8) || segments[0] || cleaned;
-  const normalized = candidate
-    .replace(/^(请|帮我|麻烦|看看|你看下|你看一下|需要|想要)\s*/u, '')
-    .replace(/^(这个|当前|现在)?项目(里|中)?的?/u, '')
-    .replace(/还是有/g, '')
-    .replace(/[""'""`]/g, '')
-    .replace(/[，,、:：;；]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  if (/会话标题|session title|标题生成/i.test(normalized) && /空|empty|报错|失败/i.test(normalized)) {
-    return '修复会话标题生成空内容报错';
-  }
-
-  return sanitizeGeneratedTitle(normalized) || '新对话';
 }
 
 // ── Tests ──
@@ -123,117 +84,16 @@ describe('sanitizeGeneratedTitle', () => {
   });
 });
 
-describe('buildHeuristicTitle', () => {
-  it('returns 新对话 for empty messages', () => {
-    assert.equal(buildHeuristicTitle([]), '新对话');
-  });
-
-  it('returns 新对话 when no user messages exist', () => {
-    assert.equal(buildHeuristicTitle([{ role: 'assistant', content: 'hello' }]), '新对话');
-  });
-
-  it('returns 新对话 when user messages are empty', () => {
-    assert.equal(buildHeuristicTitle([{ role: 'user', content: '' }]), '新对话');
-  });
-
-  it('uses last user message as basis', () => {
-    const messages = [
-      { role: 'user', content: '第一次提问' },
-      { role: 'assistant', content: '回答' },
-      { role: 'user', content: '第二次提问关于数据库优化的问题' },
-    ];
-    assert.ok(buildHeuristicTitle(messages).includes('数据库优化'));
-  });
-
-  it('strips code blocks from user message', () => {
-    const messages = [
-      { role: 'user', content: '帮我看看这段代码```javascript\nconst x = 1;\n```有什么问题需要修复的地方' },
-    ];
-    const title = buildHeuristicTitle(messages);
-    assert.ok(!title.includes('```'));
-    assert.ok(!title.includes('javascript'));
-    assert.ok(title.length > 0);
-  });
-
-  it('strips inline code from user message', () => {
-    const messages = [
-      { role: 'user', content: '这个 `function foo()` 函数需要重构优化代码结构让它更清晰' },
-    ];
-    const title = buildHeuristicTitle(messages);
-    assert.ok(!title.includes('`'));
-  });
-
-  it('strips URLs from user message', () => {
-    const messages = [
-      { role: 'user', content: '请参考 https://example.com/docs 这个文档来修复接口问题需要尽快处理' },
-    ];
-    const title = buildHeuristicTitle(messages);
-    assert.ok(!title.includes('https://'));
-  });
-
-  it('strips Windows file paths from user message', () => {
-    const messages = [
-      { role: 'user', content: 'C:\\Users\\test\\project\\src 文件里的登录模块需要优化用户认证流程' },
-    ];
-    const title = buildHeuristicTitle(messages);
-    assert.ok(!title.includes('C:\\'));
-  });
-
-  it('strips common prefixes like 请/帮我/麻烦', () => {
-    const messages1 = [{ role: 'user', content: '请帮我分析一下这段代码的性能瓶颈在哪里需要怎么优化' }];
-    assert.ok(!buildHeuristicTitle(messages1).startsWith('请'));
-
-    const messages2 = [{ role: 'user', content: '帮我看看这个登录功能的安全性问题需要怎样修复' }];
-    assert.ok(!buildHeuristicTitle(messages2).startsWith('帮我'));
-
-    const messages3 = [{ role: 'user', content: '麻烦检查一下数据库连接池的配置有没有什么问题' }];
-    assert.ok(!buildHeuristicTitle(messages3).startsWith('麻烦'));
-  });
-
-  it('picks first segment >= 8 chars when multiple sentences', () => {
-    const messages = [
-      { role: 'user', content: '好的。这是一个需要超过八个字符的核心问题描述部分' },
-    ];
-    const title = buildHeuristicTitle(messages);
-    assert.ok(!title.startsWith('好的'));
-    assert.ok(title.includes('核心问题'));
-  });
-
-  it('falls back to first segment when none >= 8 chars', () => {
-    const messages = [
-      { role: 'user', content: '修Bug。小改' },
-    ];
-    const title = buildHeuristicTitle(messages);
-    // Should pick first segment "修Bug"
-    assert.ok(title.length > 0);
-  });
-
-  it('recognizes title-generation-related error pattern', () => {
-    const messages = [
-      { role: 'user', content: '会话标题生成返回空内容报错了需要修复' },
-    ];
-    assert.equal(buildHeuristicTitle(messages), '修复会话标题生成空内容报错');
-  });
-
-  it('truncates very long content to 60 chars', () => {
-    const messages = [
-      { role: 'user', content: '这是一段非常长的用户输入内容'.repeat(10) },
-    ];
-    const title = buildHeuristicTitle(messages);
-    assert.ok(title.length <= 60);
-  });
-});
-
 // ── Additional inline helpers (mirrors buildTitleMessages post-processing in run-title-mirror.js) ──
 
-const TITLE_PROMPT = '以上是一段对话的完整历史记录。请直接为这段对话生成一个简洁的标题并输出。';
+const TITLE_RULES = '请从整段会话中识别稳定的主任务，为它生成一个简洁准确的标题。';
 
 /**
  * Mirrors buildTitleMessages():
  * - keep non-empty user/assistant text only
  * - preserve the first user request plus the last 32 conversational messages
- * - synthetic user anchor insertion when first non-system is not 'user'
- * - TITLE_PROMPT appended as last user message
+ * - serialize the selected history into one user transcript message
+ * - append the structured tool-output instruction
  */
 function prepareTitleMessages(rawMessages) {
   const conversationalMessages = rawMessages.filter((message) => (
@@ -246,87 +106,53 @@ function prepareTitleMessages(rawMessages) {
     recentMessages.unshift(firstUser);
   }
 
-  const compactMessages = recentMessages.map((message, index) => ({
-    role: message.role,
-    content: typeof message.content === 'string' ? message.content : '',
-    turn: Number.isFinite(message.turn) ? message.turn : index,
-  }));
-
-  const firstNonSystemIndex = compactMessages.findIndex((message) => message.role !== 'system');
-  const firstNonSystemRole = firstNonSystemIndex >= 0 ? compactMessages[firstNonSystemIndex]?.role : '';
-  if (firstNonSystemIndex === -1) {
-    compactMessages.unshift({
-      role: 'user',
-      content: '以下是一个会话的历史片段，请基于这些内容生成标题。',
-      turn: -1,
-    });
-  } else if (firstNonSystemRole !== 'user') {
-    compactMessages.splice(firstNonSystemIndex, 0, {
-      role: 'user',
-      content: '以下是从会话中截取的历史片段，请基于后续内容生成标题。',
-      turn: Number.isFinite(compactMessages[firstNonSystemIndex]?.turn)
-        ? Number(compactMessages[firstNonSystemIndex].turn) - 0.5
-        : -1,
-    });
-  }
-
-  compactMessages.push({
+  const transcript = recentMessages.length > 0
+    ? recentMessages.map((message, index) => {
+      const speaker = message.role === 'user' ? '用户' : '助手';
+      return `【${speaker} ${index + 1}】\n${cleanValue(message.content)}`;
+    }).join('\n\n')
+    : '（会话中没有可用的用户或助手正文）';
+  return [{
     role: 'user',
-    content: TITLE_PROMPT,
-    turn: compactMessages.length,
-  });
-
-  return compactMessages;
+    content: `以下是会话转录：\n\n${transcript}\n\n${TITLE_RULES}\n- 必须调用 record_session_title 工具提交标题，不要输出其他内容。`,
+    turn: 0,
+  }];
 }
 
 // ── Additional tests ──
 
 describe('prepareTitleMessages', () => {
-  it('appends TITLE_PROMPT as last user message', () => {
+  it('returns one user message containing transcript and title rules', () => {
     const messages = [
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'hi' },
     ];
     const result = prepareTitleMessages(messages);
-    const last = result[result.length - 1];
-    assert.equal(last.role, 'user');
-    assert.equal(last.content, TITLE_PROMPT);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].role, 'user');
+    assert.ok(result[0].content.includes('【用户 1】\nhello'));
+    assert.ok(result[0].content.includes('【助手 2】\nhi'));
+    assert.ok(result[0].content.includes(TITLE_RULES));
   });
 
-  it('prepends synthetic user anchor when all messages are system', () => {
+  it('uses an empty-transcript marker when no conversational text exists', () => {
     const messages = [
       { role: 'system', content: 'You are helpful.' },
     ];
     const result = prepareTitleMessages(messages);
-    // First message should be the synthetic anchor
+    assert.equal(result.length, 1);
     assert.equal(result[0].role, 'user');
-    assert.ok(result[0].content.includes('历史片段'));
-    // Last should be TITLE_PROMPT
-    assert.equal(result[result.length - 1].content, TITLE_PROMPT);
+    assert.ok(result[0].content.includes('没有可用的用户或助手正文'));
   });
 
-  it('prepends synthetic user anchor when first non-system is assistant', () => {
+  it('supports assistant-only transcript without invalid role ordering', () => {
     const messages = [
       { role: 'system', content: 'sys' },
       { role: 'assistant', content: 'hi there' },
-      { role: 'user', content: 'hello' },
     ];
     const result = prepareTitleMessages(messages);
-    // Should have synthetic anchor before the assistant message
-    const firstNonSystem = result.find(m => m.role !== 'system' && m.content !== TITLE_PROMPT);
-    assert.equal(firstNonSystem.role, 'user');
-    assert.ok(firstNonSystem.content.includes('截取'));
-  });
-
-  it('does not prepend anchor when first non-system is user', () => {
-    const messages = [
-      { role: 'user', content: 'hello' },
-      { role: 'assistant', content: 'hi' },
-    ];
-    const result = prepareTitleMessages(messages);
-    // First message is still user, no extra anchor before it
-    assert.equal(result[0].role, 'user');
-    assert.equal(result[0].content, 'hello');
+    assert.equal(result.length, 1);
+    assert.ok(result[0].content.includes('【助手 1】\nhi there'));
   });
 
   it('preserves the first user request plus the last 32 messages', () => {
@@ -335,9 +161,10 @@ describe('prepareTitleMessages', () => {
       messages.push({ role: 'user', content: `msg ${i}` });
     }
     const result = prepareTitleMessages(messages);
-    assert.equal(result.length, 34);
-    assert.equal(result[0].content, 'msg 0');
-    assert.equal(result[1].content, 'msg 8');
+    assert.equal(result.length, 1);
+    assert.ok(result[0].content.includes('msg 0'));
+    assert.ok(result[0].content.includes('msg 8'));
+    assert.ok(!result[0].content.includes('msg 7\n'));
   });
 
   it('filters non-string and tool content', () => {
@@ -347,30 +174,22 @@ describe('prepareTitleMessages', () => {
       { role: 'assistant', content: 'final answer' },
     ];
     const result = prepareTitleMessages(messages);
-    assert.equal(result.length, 3);
-    assert.ok(result[0].content.includes('截取'));
-    assert.equal(result[1].content, 'final answer');
+    assert.equal(result.length, 1);
+    assert.ok(result[0].content.includes('final answer'));
+    assert.ok(!result[0].content.includes('tool output'));
   });
 
-  it('assigns turn index when turn is not a finite number', () => {
+  it('collapses consecutive assistant messages into a valid single-user request', () => {
     const messages = [
-      { role: 'user', content: 'a' },   // no turn → index 0
-      { role: 'assistant', content: 'b', turn: 5 },
+      { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'step one' },
+      { role: 'assistant', content: 'step two' },
     ];
     const result = prepareTitleMessages(messages);
-    assert.equal(result[0].turn, 0);
-    assert.equal(result[1].turn, 5);
-  });
-
-  it('computes synthetic anchor turn as previous turn - 0.5', () => {
-    const messages = [
-      { role: 'system', content: 'sys', turn: 0 },
-      { role: 'assistant', content: 'hi', turn: 10 },
-    ];
-    const result = prepareTitleMessages(messages);
-    // Synthetic anchor inserted before assistant (turn=10), so turn = 10 - 0.5 = 9.5
-    const anchor = result.find(m => m.role === 'user' && m.content.includes('截取'));
-    assert.equal(anchor.turn, 9.5);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].role, 'user');
+    assert.ok(result[0].content.includes('step one'));
+    assert.ok(result[0].content.includes('step two'));
   });
 });
 

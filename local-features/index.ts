@@ -5,3 +5,4 @@ export { ContextHandoffSeedFeature } from './context-handoff-seed/src/index.js';
 export { ContextCompactionMirrorFeature } from './context-compaction-mirror/src/index.js';
 export { ContextCompactionControlFeature } from './context-compaction-control/src/index.js';
 export { ClawDispatchFeature } from './dispatch/src/index.js';
+export { CheckpointFeature } from './checkpoint/src/index.js';

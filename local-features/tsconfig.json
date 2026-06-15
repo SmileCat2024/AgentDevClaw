@@ -21,6 +21,8 @@
     "./agent-dev/src/**/*.ts",
     "./flow/src/**/*.ts",
     "./flow/test/**/*.ts",
-    "./dispatch/src/**/*.ts"
+    "./dispatch/src/**/*.ts",
+    "./checkpoint/src/**/*.ts",
+    "./checkpoint/test/**/*.ts"
   ]
 }

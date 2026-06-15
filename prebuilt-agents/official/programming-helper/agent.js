@@ -16,6 +16,7 @@ import { dirname, join } from 'path';
 import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
+import { CheckpointFeature } from '../../../local-features/dist/checkpoint/src/index.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -129,6 +130,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
       }));
 
       this.use(new UserInputFeature());
+      this.use(new CheckpointFeature());
     }
   }
 
