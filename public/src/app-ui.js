@@ -3265,6 +3265,7 @@ function renderSettingsOverlay() {
         dm.baseUrl ? '<span style="color:var(--text-secondary);font-weight:500;">Base URL</span><span style="color:var(--text-primary);word-break:break-all;">' + escapeHtml(dm.baseUrl) + '</span>' : '',
         '<span style="color:var(--text-secondary);font-weight:500;">API Key</span><span style="color:var(--text-primary);">' + (dm.apiKey ? dm.apiKey.slice(0, 8) + '••••' : '—') + '</span>',
         dm.thinkingBudgetTokens != null ? '<span style="color:var(--text-secondary);font-weight:500;">Thinking Tokens</span><span style="color:var(--text-primary);">' + dm.thinkingBudgetTokens + '</span>' : '',
+        dm.maxTokens != null ? '<span style="color:var(--text-secondary);font-weight:500;">Max Output Tokens</span><span style="color:var(--text-primary);">' + dm.maxTokens + '</span>' : '',
         '</div>',
         '</div>',
         '</div>',
@@ -3442,6 +3443,13 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<input class="settings-input" id="settings-preset-thinking" type="number" value="' + (preset.thinkingBudgetTokens ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '">',
     '</div>',
     '<div class="settings-field">',
+    '<label>Max Output Tokens</label>',
+    '<input class="settings-input" id="settings-preset-max-tokens" type="number" value="' + (preset.maxTokens ?? '') + '" placeholder="' + (isZh ? '留空自动计算' : 'Leave empty for auto') + '">',
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? '含思考内容的总输出上限。留空时框架会根据思考预算自动推算' : 'Total output cap incl. thinking. Auto-calculated from thinking budget when empty') + '</div>',
+    '</div>',
+    '</div>',
+    '<div class="settings-row">',
+    '<div class="settings-field">',
     '<label>Temperature</label>',
     '<input class="settings-input" id="settings-preset-temperature" type="number" step="0.1" min="0" max="2" value="' + (preset.temperature ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '">',
     '</div>',
@@ -3529,6 +3537,7 @@ function addSettingsPreset() {
     baseUrl: '',
     apiKey: '',
     thinkingBudgetTokens: null,
+    maxTokens: null,
     temperature: null,
     contextLength: null,
     compressRatio: 80,
@@ -3585,6 +3594,7 @@ async function saveSettingsPreset(idx) {
   const presets = window.ClawFW.settingsData?.presets || [];
   const el = (id) => document.getElementById(id);
   const thinkingRaw = el('settings-preset-thinking')?.value?.trim();
+  const maxTokensRaw = el('settings-preset-max-tokens')?.value?.trim();
   const tempRaw = el('settings-preset-temperature')?.value?.trim();
   const contextLengthRaw = el('settings-preset-context-length')?.value?.trim();
   const compressRatioRaw = el('settings-preset-compress-ratio')?.value?.trim();
@@ -3608,6 +3618,7 @@ async function saveSettingsPreset(idx) {
     baseUrl: (el('settings-preset-baseurl')?.value || '').trim(),
     apiKey: (el('settings-preset-apikey')?.value || '').trim(),
     thinkingBudgetTokens: thinkingRaw !== '' ? parseInt(thinkingRaw, 10) || null : null,
+    maxTokens: maxTokensRaw !== '' ? parseInt(maxTokensRaw, 10) || null : null,
     temperature: tempRaw !== '' ? parseFloat(tempRaw) || null : null,
     contextLength: contextLengthRaw !== '' ? parseInt(contextLengthRaw, 10) || null : null,
     compressRatio: compressRatioRaw !== '' ? Math.max(1, Math.min(100, parseInt(compressRatioRaw, 10) || 80)) : 80,
@@ -3633,6 +3644,9 @@ async function applySettingsPreset(idx) {
   };
   if (preset.thinkingBudgetTokens != null) {
     defaultModel.thinkingBudgetTokens = preset.thinkingBudgetTokens;
+  }
+  if (preset.maxTokens != null) {
+    defaultModel.maxTokens = preset.maxTokens;
   }
   config.defaultModel = defaultModel;
   if (preset.temperature != null) {

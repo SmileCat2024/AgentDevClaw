@@ -3320,8 +3320,6 @@ window.switchAgent = async (newAgentId) => {
     // Optimistic restore: show cached data immediately if available
     const _restored = restoreRuntimeFromCache(runtimeAgentId);
     if (_restored) {
-      _optimisticMessagesSignature = _computeMessagesSignature(currentMessages);
-      _optimisticRuntimeContextKey = getRuntimeContextKey(runtimeAgentId) || '';
       lastRenderedWorkspaceHtml = '';
       renderAgentList();
       renderCurrentMainView();
@@ -3329,8 +3327,6 @@ window.switchAgent = async (newAgentId) => {
     } else {
       // No cache: clear overview to avoid stale display
       setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
-      _optimisticMessagesSignature = '';
-      _optimisticRuntimeContextKey = '';
     }
     beginFollowLatestCooldown();
     beginFollowLatestEntryWindow();
@@ -4180,7 +4176,6 @@ async function loadAgentData(agentId) {
   }
   try {
     currentRuntimeAgentId = agentId;
-    const expectedRuntimeContextKey = getRuntimeContextKey(agentId);
     const [msgsRes, toolsRes, hooksRes, overviewRes, inputRes] = await Promise.all([
       fetch(`/api/agents/${agentId}/messages`),
       fetch(`/api/agents/${agentId}/tools`),
@@ -4188,11 +4183,6 @@ async function loadAgentData(agentId) {
       fetch(`/api/agents/${agentId}/overview`),
       fetch(`/api/agents/${agentId}/input-requests`)
     ]);
-    if (expectedRuntimeContextKey !== getRuntimeContextKey(agentId)) {
-      _optimisticMessagesSignature = '';
-      _optimisticRuntimeContextKey = '';
-      return;
-    }
 
     const msgsData = await msgsRes.json();
     const tools = await toolsRes.json();
@@ -4201,13 +4191,6 @@ async function loadAgentData(agentId) {
     const inputRequests = await inputRes.json();
 
     currentMessages = msgsData.messages || [];
-    // Compare with optimistic signature to skip redundant re-render
-    const _newMsgSig = _computeMessagesSignature(currentMessages);
-    const _skipRender = _optimisticMessagesSignature
-      && _optimisticRuntimeContextKey === expectedRuntimeContextKey
-      && _newMsgSig === _optimisticMessagesSignature;
-    _optimisticMessagesSignature = '';
-    _optimisticRuntimeContextKey = '';
     window.lastInputRequests = inputRequests;
     renderInputRequests(inputRequests);
     updateRollbackActionVisibility();
@@ -4241,9 +4224,7 @@ async function loadAgentData(agentId) {
       TOOL_NAMES[tool.name] = DEFAULT_DISPLAY_NAMES[tool.name] || tool.name;
     }
 
-    if (!_skipRender) {
-      renderCurrentMainView();
-    }
+    renderCurrentMainView();
     await refreshCurrentRuntimeStatus(agentId);
     if (activeFeaturePanel === 'logs') {
       await loadLogs(true);
@@ -4448,7 +4429,6 @@ async function poll() {
 
     // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住
     const pollRuntimeId = currentRuntimeAgentId;
-    const pollRuntimeContextKey = getRuntimeContextKey(pollRuntimeId);
     const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId);
 
     const [msgsRes, inputRes, overviewRes] = await Promise.all([
@@ -4458,10 +4438,7 @@ async function poll() {
     ]);
 
     // 如果在 fetch 期间已经切换了 agent，丢弃过时的响应，避免旧数据覆盖新会话
-    if (
-      normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(pollRuntimeId)
-      || getRuntimeContextKey(pollRuntimeId) !== pollRuntimeContextKey
-    ) {
+    if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(pollRuntimeId)) {
       setTimeout(poll, 300);
       return;
     }
@@ -5162,15 +5139,10 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     }
 
     const expectedRuntimeId = runtimeId;
-    const expectedRuntimeContextKey = getRuntimeContextKey(expectedRuntimeId);
     _syncPersistentActionButton();
 
     const res = await fetch(`/api/agents/${expectedRuntimeId}/queued-inputs`);
-    if (
-      !res.ok
-      || expectedRuntimeId !== currentRuntimeAgentId
-      || expectedRuntimeContextKey !== getRuntimeContextKey(expectedRuntimeId)
-    ) return;
+    if (!res.ok || expectedRuntimeId !== currentRuntimeAgentId) return;
     const data = await res.json();
     const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
     const viewerQueueTexts = queue

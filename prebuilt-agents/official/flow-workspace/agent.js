@@ -106,6 +106,7 @@ function resolveModelPresetLLM(presetName) {
       apiKey,
       baseUrl,
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
+      ...(preset.maxTokens ? { maxTokens: preset.maxTokens } : {}),
     });
   } catch (error) {
     console.warn('[FlowWorkspace] Failed to resolve model preset:', error.message);

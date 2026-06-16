@@ -379,8 +379,6 @@ let lastRenderedInputSignature = '';
 let lastRenderedInputMode = null;
 let unitModePreferences = {};
 let lastRenderedWorkspaceHtml = '';
-let _optimisticMessagesSignature = '';
-let _optimisticRuntimeContextKey = '';
 
 // ── Per-session runtime data cache (P0: optimistic render on switch) ────────
 // Caches messages, toolRenderConfigs, TOOL_NAMES, hookInspector + signature,
@@ -417,20 +415,11 @@ function getRuntimeContextKey(runtimeId = currentRuntimeAgentId, agent = typeof 
   return `runtime:${normalizedRuntimeId}`;
 }
 
-function _computeMessagesSignature(messages) {
-  if (!messages || messages.length === 0) return '';
-  return messages.length + ':' +
-    (messages.length > 0
-      ? JSON.stringify(messages[messages.length - 1]).length + ':' + messages[messages.length - 1].role
-      : '');
-}
-
 function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(agentId)) {
   if (!agentId || !contextKey) return;
   _agentRuntimeCache.set(contextKey, {
     runtimeId: agentId,
     messages: currentMessages,
-    messagesSignature: _computeMessagesSignature(currentMessages),
     inputRequests: Array.isArray(currentInputRequests) ? currentInputRequests : [],
     toolRenderConfigs: toolRenderConfigs,
     TOOL_NAMES: TOOL_NAMES,
