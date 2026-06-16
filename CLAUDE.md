@@ -684,6 +684,7 @@ Node 是阶段上下文，当前支持的关键能力包括：
 
 - [public/src/app-core.js](/D:/code/AgentDevClaw/public/src/app-core.js)
   - 基础常量、i18n、fetch/invoke、公共 DOM 引用、初始化底座
+  - `getRuntimeContextKey()`、optimistic runtime cache (`_agentRuntimeCache`)、session input cache
 - [public/src/app-ui.js](/D:/code/AgentDevClaw/public/src/app-ui.js)
   - workspace surface 渲染、block 渲染
   - `flow-workspace` 的 UI 逻辑
@@ -692,9 +693,11 @@ Node 是阶段上下文，当前支持的关键能力包括：
   - 注意：此文件已膨胀至 ~9700 行，后续需要模块化拆分
 - [public/src/app-main.js](/D:/code/AgentDevClaw/public/src/app-main.js)
   - agent 加载、轮询、session / runtime 切换
+  - `switchAgent()`、`loadAgentData()`、`poll()` 核心循环
+  - `render(messages)` 聊天消息渲染（含 `_lastRenderedChatSig` 去重）
   - assembly 启动、恢复、提交、环境处理
   - 输入队列与中断处理、会话分支与精简
-  - 注意：此文件已膨胀至 ~6300 行，后续需要模块化拆分
+  - 注意：此文件已膨胀至 ~6600 行，后续需要模块化拆分
 
 ### 一个重要经验
 
@@ -902,7 +905,7 @@ IM 线路管理相关：
 - Feature mode 双层控制面是明确方向，但不是所有 contract 都已落地
 - `onEnter` 目前仍有 tool-call 兼容语义，尚未完全升级为正式 workflow functions
 - block 壳层仍存在，但主复杂度已转移到 Flow 主线
-- `app-ui.js`（~9700 行）和 `app-main.js`（~6300 行）极度膨胀，是当前技术债最大的风险点
+- `app-ui.js`（~9700 行）和 `app-main.js`（~6600 行）极度膨胀，是当前技术债最大的风险点
   - 完整拆分计划：[docs/plans/2026-06-04-frontend-split-plan.md](/D:/code/AgentDevClaw/docs/plans/2026-06-04-frontend-split-plan.md)
   - 包含：功能域划分（11域）、耦合地图、分 3 Phase 拆分顺序、风险缓解策略
 
@@ -959,17 +962,18 @@ local-features/                                ← 本地 Feature 功能测试
 
 ## 开发时的建议心智
 
-进入实际开发前，优先先回答这 7 个问题：
+进入实际开发前，优先先回答这 8 个问题：
 
 1. 这次改的是壳层、`flow-workspace`、`flow-editor`，还是 `FlowFeature` runtime？
-2. 问题属于项目配置、运行时装配、编排图数据、还是调试 UI？
+2. 问题属于项目配置、运行时装配、编排图数据，还是调试 UI？
 3. 当前数据的真相在前端草稿、服务端 workspace state、session index，还是 `agent-flow-graph.json`？
 4. 当前能力来自静态 block、`ClawFW` 前端状态机，还是 `flow_capabilities` 动态聚合？
 5. 当前行为是预制 agent 首页行为，还是装配运行时行为？
 6. 这是当前已实现能力的 bug，还是文档中"下一阶段设计"尚未落地导致的预期偏差？
 7. **用户看到的是哪个前端管线？** 如果涉及面板显示、inspector 渲染，先确认该面板是 Claw 前端（`app-ui.js`，端口 1420）还是 DebugHub 查看器（`viewer-html.ts`，端口 2026）渲染的。改错管线 = 白改。
+8. **stale check 依赖的全局变量在 `await` 期间会变吗？** `allAgents`、`currentAgentId` 等全局状态会被 poll / `loadAgents()` 异步修改。在 `await fetch()` 前后比较基于这些变量计算的值（如 `getRuntimeContextKey`）会产生虚假判定。stale check 只能用同步设置的 `currentRuntimeAgentId`。
 
-把这 7 个问题先想清楚，通常就能避免在错误层面下手。
+把这 8 个问题先想清楚，通常就能避免在错误层面下手。
 
 ## 跨项目上下文索引
 
@@ -1017,6 +1021,13 @@ Agent 进程: buildHookInspectorSnapshot()
 2. **框架侧**：`AgentDev/src/core/viewer-html.ts` — 影响 DebugHub 查看器（端口 2026）
 
 历史上真实踩过的坑：在框架 `agent.ts` 的 `buildHookInspectorSnapshot()` 中新增了 `standaloneTools` 字段，框架和 API 都正确返回了数据，但 `normalizeHookInspector()` 在重构时没有透传这个字段，导致前端始终看不到。
+
+## 会话切换与异步渲染的关键约束
+
+会话切换链路（`switchAgent` → `loadAgentData` → `poll`）的详细渲染契约、去重策略和自检清单见 [docs/frontend-rendering-patterns.md](/D:/code/AgentDevClaw/docs/frontend-rendering-patterns.md)。以下是最容易踩坑的两条不变量：
+
+1. **`getRuntimeContextKey` 不是 stable 的**：它依赖 `allAgents`（由 `loadAgents()` 异步更新），在 `await` 前后会返回不同值。**不能用于 stale check**，只能用于 cache key（miss 无害）。stale check 只用 `currentRuntimeAgentId`。
+2. **PUT 不阻塞渲染**：`switchAgent` 先设全局状态 + optimistic 渲染，PUT `/api/agents/current` 与 `loadAgentData` 并行。`loadAgentData` 所有 URL 用显式 `agentId`，不依赖服务端 "current" 状态。
 
 ## 进程架构与重启范围
 

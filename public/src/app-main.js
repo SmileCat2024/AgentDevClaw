@@ -3274,6 +3274,7 @@ function requestSwitch(runtimeId, source) {
 window.switchAgent = async (newAgentId) => {
   // A-class (direct) calls cancel any pending deferred switch.
   pendingSwitchTarget = null;
+  const epoch = ++_switchEpoch;
   closeAgentContextMenu();
   const targetAgent = findAgentByIdentity(newAgentId);
   const requestedRuntimeOfWorkspaceHost = !!(
@@ -3298,16 +3299,8 @@ window.switchAgent = async (newAgentId) => {
     saveCurrentRuntimeToCache(currentRuntimeAgentId);
   }
   try {
-    const res = await fetch('/api/agents/current', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: runtimeAgentId })
-    });
-    if (!res.ok && res.status !== 404) {
-      const errorText = await res.text().catch(() => '');
-      throw new Error(`Switch failed: ${res.status} ${res.statusText} ${errorText}`);
-    }
-
+    // Set global state and do optimistic render IMMEDIATELY — before the PUT.
+    // This lets the user see cached data without waiting for a network round trip.
     currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
     currentRuntimeAgentId = runtimeAgentId;
     readOnlyMode = false;
@@ -3321,7 +3314,6 @@ window.switchAgent = async (newAgentId) => {
     const _restored = restoreRuntimeFromCache(runtimeAgentId);
     if (_restored) {
       lastRenderedWorkspaceHtml = '';
-      renderAgentList();
       renderCurrentMainView();
       renderFeaturePanel();
     } else {
@@ -3332,8 +3324,29 @@ window.switchAgent = async (newAgentId) => {
     beginFollowLatestEntryWindow();
     setFollowLatest(true);
     renderAgentList();
+
+    // Fire PUT in parallel with loadAgentData — loadAgentData uses explicit
+    // agentId in all fetch URLs, so it doesn't depend on the PUT completing.
+    const _putPromise = fetch('/api/agents/current', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: runtimeAgentId })
+    }).then((res) => {
+      if (!res.ok && res.status !== 404) {
+        console.warn(`Switch PUT returned ${res.status} ${res.statusText}`);
+      }
+    }).catch((e) => {
+      console.warn('Switch PUT failed:', e?.message || e);
+    });
+
     await loadAgentData(runtimeAgentId);
-    loadAgents().catch((error) => console.error('Failed to refresh agents after switch:', error));
+    await _putPromise;
+    // Only refresh the agent list if no newer switch has happened — a stale
+    // switchAgent continuation could otherwise trigger loadAgentData for the
+    // wrong agent via the loadAgents() initialization path (PUT race).
+    if (epoch === _switchEpoch) {
+      loadAgents().catch((error) => console.error('Failed to refresh agents after switch:', error));
+    }
   } catch (e) {
     console.error('Failed to switch agent:', e);
     window.alert(`Switch failed: ${e && e.message ? e.message : e}`);
@@ -4183,6 +4196,12 @@ async function loadAgentData(agentId) {
       fetch(`/api/agents/${agentId}/overview`),
       fetch(`/api/agents/${agentId}/input-requests`)
     ]);
+
+    // Stale guard: if the user switched to a different agent during the
+    // fetch, discard this response to prevent rendering stale data (flashback).
+    if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(agentId)) {
+      return;
+    }
 
     const msgsData = await msgsRes.json();
     const tools = await toolsRes.json();
@@ -6123,11 +6142,25 @@ function applyCollapseLogic(containerElement, startIndex = 0) {
 
 function render(messages) {
   if (messages.length === 0) {
+    _lastRenderedChatSig = '';
     cancelChatScrollSettlement();
     container.innerHTML = getEmptyStateHtml();
     updateFollowLatestButton();
     return;
   }
+
+  // Dedup: skip the expensive full HTML generation + DOM rebuild when the
+  // message list and tool count haven't changed since the last render.
+  // This avoids a redundant container.innerHTML replacement after
+  // optimistic cache render → loadAgentData render with identical data.
+  const _sig = messages.length + ':'
+    + messages[messages.length - 1].role + ':'
+    + (messages[messages.length - 1].content || '').length + ':'
+    + Object.keys(toolRenderConfigs).length;
+  if (_sig === _lastRenderedChatSig && container.querySelector('.message-row')) {
+    return;
+  }
+  _lastRenderedChatSig = _sig;
 
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   const html = messages.map((msg, index) => {

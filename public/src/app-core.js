@@ -379,6 +379,8 @@ let lastRenderedInputSignature = '';
 let lastRenderedInputMode = null;
 let unitModePreferences = {};
 let lastRenderedWorkspaceHtml = '';
+let _lastRenderedChatSig = '';
+let _switchEpoch = 0;             // monotonically increasing; used to guard stale async work from rapid switches
 
 // ── Per-session runtime data cache (P0: optimistic render on switch) ────────
 // Caches messages, toolRenderConfigs, TOOL_NAMES, hookInspector + signature,
