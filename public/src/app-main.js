@@ -953,14 +953,14 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
 
   let changed = false;
   for (const runtimeId of runtimeIds) {
-    const isCalling = nextCallStates.get(runtimeId) === true;
+    const backendCalling = nextCallStates.get(runtimeId) === true;
     const prevCalling = _agentCallActive.get(runtimeId) === true;
-    if (isCalling) {
+    if (backendCalling) {
       _agentCallActive.set(runtimeId, true);
     } else {
       _agentCallActive.delete(runtimeId);
     }
-    if (prevCalling !== isCalling) {
+    if (prevCalling !== backendCalling) {
       changed = true;
     }
   }
@@ -4498,35 +4498,8 @@ async function poll() {
     const data = await msgsRes.json();
     const messages = data.messages || [];
 
-    await statusTask;
-    await refreshAgentCallStates(allAgents);
-    _syncPersistentActionButton();
-    _syncPersistentInputUi(currentRuntimeAgentId);
-
-    const nextOverview = normalizeOverviewSnapshot(await overviewRes.json());
-    const nextOverviewSignature = getOverviewSignature(nextOverview);
-    if (nextOverviewSignature !== currentOverviewSignature) {
-      currentOverviewSnapshot = nextOverview;
-      currentOverviewSignature = nextOverviewSignature;
-      if (activeFeaturePanel === 'workspace') {
-        renderFeaturePanel();
-      }
-      if (typeof updateChatContextBar === 'function') {
-        updateChatContextBar();
-      }
-    }
-
-    // 处理输入请求（只在变化时重新渲染）
-    const inputRequestsRaw = await inputRes.json();
-    const inputRequests = Array.isArray(inputRequestsRaw) ? inputRequestsRaw : [];
-    if (JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || [])) {
-      window.lastInputRequests = inputRequests;
-      renderInputRequests(inputRequests);
-      updateRollbackActionVisibility();
-    } else if (isChatSurfaceActive()) {
-      _syncPersistentInputUi(currentRuntimeAgentId);
-    }
-
+    // Render messages immediately — before non-critical async ops
+    // (status refresh, call states, queue sync) that add visible latency.
     const previousMessages = currentMessages;
     markAutoTitleCandidate(previousMessages, messages);
     if (messages.length !== currentMessages.length) {
@@ -4556,6 +4529,35 @@ async function poll() {
           updateLastMessage(messages[messages.length - 1]);
         }
       }
+    }
+
+    await statusTask;
+    await refreshAgentCallStates(allAgents);
+    _syncPersistentActionButton();
+    _syncPersistentInputUi(currentRuntimeAgentId);
+
+    const nextOverview = normalizeOverviewSnapshot(await overviewRes.json());
+    const nextOverviewSignature = getOverviewSignature(nextOverview);
+    if (nextOverviewSignature !== currentOverviewSignature) {
+      currentOverviewSnapshot = nextOverview;
+      currentOverviewSignature = nextOverviewSignature;
+      if (activeFeaturePanel === 'workspace') {
+        renderFeaturePanel();
+      }
+      if (typeof updateChatContextBar === 'function') {
+        updateChatContextBar();
+      }
+    }
+
+    // 处理输入请求（只在变化时重新渲染）
+    const inputRequestsRaw = await inputRes.json();
+    const inputRequests = Array.isArray(inputRequestsRaw) ? inputRequestsRaw : [];
+    if (JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || [])) {
+      window.lastInputRequests = inputRequests;
+      renderInputRequests(inputRequests);
+      updateRollbackActionVisibility();
+    } else if (isChatSurfaceActive()) {
+      _syncPersistentInputUi(currentRuntimeAgentId);
     }
 
     // Generate only after this session's first assistant response was newly observed and completed.
@@ -4642,6 +4644,7 @@ function updateNotificationStatus(notifData) {
   const metricsEl = document.getElementById('notification-metrics');
   lastNotificationStatusPayload = payload;
   const runtime = getEffectiveRuntimeSnapshot(payload);
+
   let callingStateChanged = false;
   const actionSource = getNotificationActionSource(payload);
   // `callActive` is tracked independently from the transient `state` payload.
@@ -4651,7 +4654,7 @@ function updateNotificationStatus(notifData) {
     const runtimeId = currentRuntimeAgentId;
     if (runtimeId) {
       const prev = _agentCallActive.get(runtimeId);
-      const nextCalling = resolveNotificationCallingState(payload);
+      let nextCalling = resolveNotificationCallingState(payload);
       if (nextCalling) {
         _agentCallActive.set(runtimeId, true);
       } else {
@@ -5123,10 +5126,14 @@ async function submitQueuedInput() {
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
-      _localQueuedInputPending = true;
-      _pendingQueuedCount++;
-      _queuedTexts.push(text);
-      updateQueueIndicator();
+      // 只有当 agent 正在 calling 时才显示排队气泡。
+      // agent 空闲时后端会立即消费输入，不需要排队指示。
+      if (isRuntimeCalling(targetRuntimeId)) {
+        _localQueuedInputPending = true;
+        _pendingQueuedCount++;
+        _queuedTexts.push(text);
+        updateQueueIndicator();
+      }
       const nextMode = getInputSurfaceMode(currentInputRequests || []);
       if (nextMode !== lastRenderedInputMode) {
         lastRenderedInputSignature = '';
@@ -5189,10 +5196,12 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
 }
 
 async function interruptAgent() {
-  if (!currentRuntimeAgentId) { console.log('[Interrupt] no currentRuntimeAgentId, skip'); return; }
+  if (!currentRuntimeAgentId) return;
 
   // 乐观 UI 更新：立即清空 calling 状态、切换按钮、清空队列，
-  // 不等 POST 返回，让用户瞬间看到反馈
+  // 不等 POST 返回，让用户瞬间看到反馈。
+  // 框架层已支持真正的无延迟中断（tool execution race + LLM stream abort），
+  // 后端会在毫秒级完成 abort，因此前端不需要伪抑制窗口。
   _agentCallActive.delete(currentRuntimeAgentId);
   _localQueuedInputPending = false;
   _pendingQueuedCount = 0;
