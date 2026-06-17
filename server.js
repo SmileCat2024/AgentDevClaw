@@ -7046,6 +7046,11 @@ async function writeModelPresets(flatPresets) {
   return flattenModelPresets(nextData);
 }
 
+app.post('/protoclaw/shutdown', async (_req, res) => {
+  res.json({ ok: true });
+  setTimeout(() => void shutdown(0), 200);
+});
+
 app.get('/protoclaw/model_config', async (_req, res, next) => {
   try {
     const config = await readModelConfig();

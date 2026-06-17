@@ -2456,6 +2456,28 @@ body[data-theme="light"] .log-card:hover {
   color: var(--text-primary);
 }
 
+.settings-menu-wrapper {
+  position: relative;
+}
+
+.settings-flyout-menu {
+  position: absolute;
+  right: 100%;
+  bottom: 0;
+  min-width: 160px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--shadow-color);
+  padding: 6px;
+  z-index: 1000;
+  display: none;
+}
+
+.settings-flyout-menu.open {
+  display: block;
+}
+
 header {
   background-color: var(--header-bg);
   border-bottom: 1px solid var(--border-color);

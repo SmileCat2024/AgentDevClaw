@@ -380,7 +380,16 @@ let lastRenderedInputMode = null;
 let unitModePreferences = {};
 let lastRenderedWorkspaceHtml = '';
 let _lastRenderedChatSig = '';
+let _restoredScrollTop = null;    // set by restoreRuntimeFromCache, consumed by switchAgent
+let _chatLoadingSession = false;  // true while waiting for a just-opened session's messages to arrive
+let _chatLoadingTimeout = null;   // safety timeout to clear _chatLoadingSession
 let _switchEpoch = 0;             // monotonically increasing; used to guard stale async work from rapid switches
+
+// ── User expand/collapse preferences (survive full re-render) ──────────────
+// Keyed by message index. These override syncCollapseStates auto-rules.
+let _userExpandedReasoning = new Set();  // reasoning blocks the user expanded
+let _userCollapsedMsgs = new Set();       // messages the user explicitly collapsed
+let _userExpandedMsgs = new Set();        // messages the user explicitly expanded (un-collapsed)
 
 // ── Per-session runtime data cache (P0: optimistic render on switch) ────────
 // Caches messages, toolRenderConfigs, TOOL_NAMES, hookInspector + signature,
@@ -430,6 +439,8 @@ function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(ag
     overviewSnapshot: currentOverviewSnapshot,
     overviewSignature: currentOverviewSignature,
     connected: typeof currentRuntimeConnected !== 'undefined' ? currentRuntimeConnected : true,
+    followLatest: followLatestEnabled,
+    scrollTop: container ? container.scrollTop : 0,
   });
 }
 
@@ -447,6 +458,8 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
   currentRuntimeConnected = cached.connected;
   currentInputRequests = Array.isArray(cached.inputRequests) ? cached.inputRequests : [];
   window.lastInputRequests = currentInputRequests;
+  followLatestEnabled = cached.followLatest !== undefined ? cached.followLatest : true;
+  _restoredScrollTop = typeof cached.scrollTop === 'number' ? cached.scrollTop : null;
   return true;
 }
 
@@ -1148,7 +1161,28 @@ function getStatusBadgeClass(status) {
 }
 
 function getEmptyStateHtml() {
+  if (_chatLoadingSession) {
+    return '<div class="empty-state chat-loading"><span class="chat-loading-spinner"></span><span>' + escapeHtml(currentLanguage === 'zh' ? '正在加载对话…' : 'Loading conversation…') + '</span></div>';
+  }
   return '<div class="empty-state">' + escapeHtml(t('empty_waiting')) + '</div>';
+}
+
+function beginChatLoadingSession() {
+  _chatLoadingSession = true;
+  if (_chatLoadingTimeout) clearTimeout(_chatLoadingTimeout);
+  _chatLoadingTimeout = setTimeout(() => {
+    _chatLoadingSession = false;
+    _chatLoadingTimeout = null;
+  }, 10000);
+}
+
+function clearChatLoadingSession() {
+  if (!_chatLoadingSession && !_chatLoadingTimeout) return;
+  _chatLoadingSession = false;
+  if (_chatLoadingTimeout) {
+    clearTimeout(_chatLoadingTimeout);
+    _chatLoadingTimeout = null;
+  }
 }
 
 function getFeaturePanelEmptyHtml() {

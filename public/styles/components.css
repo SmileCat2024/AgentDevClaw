@@ -450,6 +450,15 @@ body[data-theme="light"] .markdown-body blockquote {
 }
 
 .empty-state { text-align: center; margin-top: 20vh; color: var(--text-secondary); }
+.empty-state.chat-loading { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.chat-loading-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--text-secondary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: chat-loading-spin 0.8s linear infinite;
+}
+@keyframes chat-loading-spin { to { transform: rotate(360deg); } }
 
 .workspace-tabs-bar {
   display: flex;

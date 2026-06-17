@@ -1612,6 +1612,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const shouldMarkLoading = action.type === 'open_session' && action.sessionId;
     if (shouldMarkLoading) {
       markSessionLoading(activeAgent.id, action.sessionId);
+      beginChatLoadingSession();
     }
     if (triggerButton) markActionLoading(triggerButton);
     try {
@@ -3310,19 +3311,28 @@ window.switchAgent = async (newAgentId) => {
     currentProjectRequirementEdit = null;
     currentProjectDocsetPage = 'requirement';
     currentWorkspaceTab = 'chat';
+    // Clear chat render dedup so the new agent's messages always rebuild the DOM
+    _lastRenderedChatSig = '';
     // Optimistic restore: show cached data immediately if available
     const _restored = restoreRuntimeFromCache(runtimeAgentId);
     if (_restored) {
       lastRenderedWorkspaceHtml = '';
+      // Restore scroll position from cache before render so render() can preserve it
+      if (_restoredScrollTop != null) {
+        container.scrollTop = _restoredScrollTop;
+      }
+      _restoredScrollTop = null;
       renderCurrentMainView();
       renderFeaturePanel();
     } else {
-      // No cache: clear overview to avoid stale display
+      // No cache: clear stale messages to prevent poll race mixing old/new agent content
       setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
+      currentMessages = [];
+      renderCurrentMainView();
+      setFollowLatest(true);
     }
     beginFollowLatestCooldown();
     beginFollowLatestEntryWindow();
-    setFollowLatest(true);
     renderAgentList();
 
     // Fire PUT in parallel with loadAgentData — loadAgentData uses explicit
@@ -4021,6 +4031,12 @@ document.addEventListener('click', (event) => {
   if (!featureRepoContextMenu.contains(event.target)) {
     closeFeatureRepoContextMenu();
   }
+  // Close settings flyout on outside click
+  const settingsMenuWrapper = document.getElementById('settings-menu-wrapper');
+  if (settingsMenuWrapper && !settingsMenuWrapper.contains(event.target)) {
+    const sf = document.getElementById('settings-flyout-menu');
+    if (sf) sf.classList.remove('open');
+  }
 });
 
 window.addEventListener('resize', () => {
@@ -4210,6 +4226,7 @@ async function loadAgentData(agentId) {
     const inputRequests = await inputRes.json();
 
     currentMessages = msgsData.messages || [];
+    if (currentMessages.length > 0) clearChatLoadingSession();
     window.lastInputRequests = inputRequests;
     renderInputRequests(inputRequests);
     updateRollbackActionVisibility();
@@ -4425,7 +4442,6 @@ async function poll() {
               const nextSig = JSON.stringify(freshSessions);
               if (prevSig !== nextSig) {
                 wsHostAgent.workspace_sessions = freshSessions;
-                lastRenderedWorkspaceHtml = '';
                 if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
                   renderCurrentMainView();
                 } else {
@@ -4497,6 +4513,9 @@ async function poll() {
 
     const data = await msgsRes.json();
     const messages = data.messages || [];
+
+    // Clear session loading indicator once messages are available
+    if (messages.length > 0) clearChatLoadingSession();
 
     // Render messages immediately — before non-critical async ops
     // (status refresh, call states, queue sync) that add visible latency.
@@ -4590,7 +4609,6 @@ async function poll() {
             const nextSig = JSON.stringify(freshSessions);
             if (prevSig !== nextSig) {
               wsHostAgent.workspace_sessions = freshSessions;
-              lastRenderedWorkspaceHtml = '';
               if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
                 renderCurrentMainView();
               } else {
@@ -6149,6 +6167,43 @@ function applyCollapseLogic(containerElement, startIndex = 0) {
   syncCollapseStates(containerElement, startIndex);
 }
 
+// Re-apply user's explicit expand/collapse choices after a full re-render.
+// Runs AFTER syncCollapseStates + applyConversationProcessState so user
+// preferences take final precedence over auto-collapse rules.
+function restoreUserCollapseState(root) {
+  // Reasoning blocks: restore expanded state
+  _userExpandedReasoning.forEach(function (index) {
+    var el = document.getElementById('reasoning-msg-' + index);
+    if (el) el.classList.add('expanded');
+  });
+
+  // Messages the user explicitly expanded (override auto-collapse)
+  _userExpandedMsgs.forEach(function (index) {
+    var el = document.getElementById('msg-' + index);
+    if (!el) return;
+    var row = el.closest('.message-row');
+    if (row && (row.classList.contains('process-hidden') || row.classList.contains('process-hidden-empty'))) return;
+    el.classList.remove('collapsed');
+    var meta = row && row.querySelector('.message-meta .collapse-toggle svg');
+    if (meta) meta.style.transform = 'rotate(0deg)';
+    var btn = row && row.querySelector('.expand-toggle-btn');
+    if (btn) btn.innerHTML = getToggleButtonLabel(false);
+  });
+
+  // Messages the user explicitly collapsed
+  _userCollapsedMsgs.forEach(function (index) {
+    var el = document.getElementById('msg-' + index);
+    if (!el) return;
+    var row = el.closest('.message-row');
+    if (row && (row.classList.contains('process-hidden') || row.classList.contains('process-hidden-empty'))) return;
+    el.classList.add('collapsed');
+    var meta = row && row.querySelector('.message-meta .collapse-toggle svg');
+    if (meta) meta.style.transform = 'rotate(-90deg)';
+    var btn = row && row.querySelector('.expand-toggle-btn');
+    if (btn) btn.innerHTML = getToggleButtonLabel(true);
+  });
+}
+
 function render(messages) {
   if (messages.length === 0) {
     _lastRenderedChatSig = '';
@@ -6336,6 +6391,7 @@ function render(messages) {
 
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
+  restoreUserCollapseState(container);
   updateFollowLatestButton();
   notifyChatViewportMutation({
     reason: 'render-full',
@@ -6353,6 +6409,18 @@ window.toggleMessage = function(id) {
     el.classList.toggle('collapsed');
     const row = el.closest('.message-row');
     const isCollapsed = el.classList.contains('collapsed');
+
+    // Record user's explicit choice so it survives full re-render
+    const msgIndex = parseInt((id || '').replace('msg-', ''), 10);
+    if (!isNaN(msgIndex)) {
+      if (isCollapsed) {
+        _userCollapsedMsgs.add(msgIndex);
+        _userExpandedMsgs.delete(msgIndex);
+      } else {
+        _userExpandedMsgs.add(msgIndex);
+        _userCollapsedMsgs.delete(msgIndex);
+      }
+    }
 
     // Update meta icon
     const meta = row.querySelector('.message-meta .collapse-toggle svg');
@@ -6383,6 +6451,17 @@ window.toggleReasoning = function(id) {
   if (el) {
     const chatViewportTopBefore = container.scrollTop;
     el.classList.toggle('expanded');
+
+    // Record user's explicit choice so it survives full re-render
+    const msgIndex = parseInt((id || '').replace('reasoning-msg-', ''), 10);
+    if (!isNaN(msgIndex)) {
+      if (el.classList.contains('expanded')) {
+        _userExpandedReasoning.add(msgIndex);
+      } else {
+        _userExpandedReasoning.delete(msgIndex);
+      }
+    }
+
     notifyChatViewportMutation({
       reason: 'reasoning-toggle',
       shouldFollow: followLatestEnabled && isChatSurfaceActive(),

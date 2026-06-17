@@ -29,6 +29,8 @@ function createCoreContext() {
     TOOL_NAMES: {},
     allAgents: [],
     window: { lastInputRequests: [] },
+    followLatestEnabled: true,
+    container: { scrollTop: 0 },
   };
   context.currentAgent = {
     id: 'flow-workspace',

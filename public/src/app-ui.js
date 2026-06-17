@@ -6349,6 +6349,8 @@ function renderCurrentMainView() {
   renderInputRequests(currentInputRequests);
   if (shouldRenderWorkspaceSurface(agent)) {
     cancelChatScrollSettlement();
+    // Capture before renderWorkspaceSurface consumes and resets it
+    const isNewWorkspaceSurface = shouldAnimateWorkspaceSurface;
     const newHtml = renderWorkspaceSurface(agent);
     // Also force re-render if the container is not currently showing workspace content
     // (e.g. returning from chat mode where workspace HTML was cached but DOM shows messages).
@@ -6371,16 +6373,20 @@ function renderCurrentMainView() {
           savedPhTabState[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
         }
       });
-      // Instantly jump to top — temporarily disable smooth scroll so there's no animation
+      // Preserve scroll position only when refreshing the SAME workspace surface
+      // (e.g. poll detected session data change). When transitioning from chat
+      // or switching to a different workspace, always start from top.
+      const shouldScrollToTop = !containerIsWorkspace || isNewWorkspaceSurface;
+      const savedWsScrollTop = shouldScrollToTop ? 0 : container.scrollTop;
       const prevScrollBehavior = container.style.scrollBehavior;
       runWithSuppressedChatViewportObservers(() => {
         container.style.scrollBehavior = 'auto';
         container.style.visibility = 'hidden';
-        container.scrollTop = 0;
         container.innerHTML = newHtml;
       }, 220);
       lastRenderedWorkspaceHtml = newHtml;
       requestAnimationFrame(() => {
+        container.scrollTop = savedWsScrollTop;
         container.style.visibility = '';
         container.style.scrollBehavior = prevScrollBehavior;
       });
@@ -6485,11 +6491,16 @@ function resetRuntimeBackedSurfaceState() {
   setConnectionStatus(false);
   updateNotificationStatus({});
   lastRenderedWorkspaceHtml = '';
+  _lastRenderedChatSig = '';
+  clearChatLoadingSession();
   currentWorkspaceArtifactDetail = null;
   currentWorkspaceDocsetDetail = null;
   currentProjectDocsetOpen = false;
   currentProjectRequirementEdit = null;
   currentProjectDocsetPage = 'requirement';
+  _userExpandedReasoning.clear();
+  _userCollapsedMsgs.clear();
+  _userExpandedMsgs.clear();
   updateProjectDocsetChrome(getCurrentAgentRecord());
 }
 
@@ -9005,12 +9016,27 @@ languageToggle.addEventListener('click', () => {
   applyLanguage();
 });
 
-settingsToggle.addEventListener('click', () => {
+// Settings flyout menu — click gear to toggle, click item to act + close
+const settingsFlyout = document.getElementById('settings-flyout-menu');
+
+settingsToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  settingsFlyout.classList.toggle('open');
+});
+
+document.getElementById('settings-flyout-config').addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
   if (window.ClawFW.settingsOpen) {
     closeSettings();
   } else {
     openSettings();
   }
+});
+
+document.getElementById('settings-flyout-exit').addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (!confirm(currentLanguage === 'zh' ? '确定要退出程序吗？' : 'Are you sure you want to quit?')) return;
+  fetch('/protoclaw/shutdown', { method: 'POST' }).catch(() => {});
 });
 
 featurePanelResizer.addEventListener('mousedown', (event) => {
