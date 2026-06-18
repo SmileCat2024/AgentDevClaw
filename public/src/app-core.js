@@ -207,6 +207,7 @@ const deleteAgentAction = document.getElementById('delete-agent-action');
 const sessionContextMenu = document.getElementById('session-context-menu');
 const openSessionAction = document.getElementById('open-session-action');
 const compactedResumeSessionAction = document.getElementById('compacted-resume-session-action');
+const archiveSessionAction = document.getElementById('archive-session-action');
 const deleteSessionAction = document.getElementById('delete-session-action');
 const compactContextMenu = document.getElementById('compact-context-menu');
 const compactSummaryAction = document.getElementById('compact-summary-action');

@@ -1323,6 +1323,19 @@ body[data-theme="light"] .workspace-docset-row {
   text-transform: uppercase;
 }
 
+.workspace-history-archived {
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 171, 64, 0.3);
+  background: rgba(255, 171, 64, 0.12);
+  color: #ffab40;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+}
+
 .workspace-history-preview {
   color: var(--text-secondary);
   font-size: 14px;
@@ -4046,6 +4059,54 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   border-color: var(--text-primary);
 }
 
+.partial-compact-card {
+  border-color: rgba(88, 166, 255, 0.34);
+  background:
+    linear-gradient(135deg, rgba(88, 166, 255, 0.12), rgba(255, 255, 255, 0.035)),
+    var(--input-card-bg);
+}
+
+.partial-compact-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+}
+
+.partial-compact-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(88, 166, 255, 0.22);
+  border-top-color: rgba(88, 166, 255, 0.95);
+  border-radius: 50%;
+  animation: partial-compact-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+.partial-compact-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.partial-compact-title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.partial-compact-elapsed {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+@keyframes partial-compact-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ── Persistent Input Row ────────────────────────────────────────────── */
 
 .persistent-input-row {
@@ -6210,3 +6271,5 @@ body[data-theme="light"] .ph-session-type-badge {
     justify-content: flex-start;
   }
 }
+
+

@@ -174,8 +174,8 @@ describe('Speech Model Config', () => {
 
     it('preserves valid full input', () => {
       const input = {
-        baseUrl: 'https://api.xiaomimimo.com/v1',
-        apiKey: 'sk-test-key-123',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'test-api-key-123',
         model: 'mimo-v2.5-asr',
         language: 'zh',
       };
@@ -189,13 +189,13 @@ describe('Speech Model Config', () => {
     it('trims whitespace from all fields', () => {
       const input = {
         baseUrl: '  https://api.example.com/v1  ',
-        apiKey: '  sk-key  ',
+        apiKey: '  test-key  ',
         model: '  my-model  ',
         language: '  en  ',
       };
       const result = normalizeSpeechModel(input);
       assert.equal(result.baseUrl, 'https://api.example.com/v1');
-      assert.equal(result.apiKey, 'sk-key');
+      assert.equal(result.apiKey, 'test-key');
       assert.equal(result.model, 'my-model');
       assert.equal(result.language, 'en');
     });
@@ -259,8 +259,8 @@ describe('Speech Model Config', () => {
 
       // Write initial config with speechModel
       const speechModel = {
-        baseUrl: 'https://api.xiaomimimo.com/v1',
-        apiKey: 'sk-test-key',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: 'test-api-key',
         model: 'mimo-v2.5-asr',
         language: 'zh',
       };

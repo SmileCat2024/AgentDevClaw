@@ -43,12 +43,16 @@ export function resolveModelPresetLLM(presetName) {
       console.warn(`[ModelPreset] Incomplete config for preset "${presetName}": baseUrl=${!!baseUrl} apiKey=${!!apiKey} model=${!!preset.model}`);
       return null;
     }
+    const apiSurface = protocol === 'openai'
+      ? (preset.apiSurface || 'chat')
+      : undefined;
     const llm = createLLM({
       provider: protocol,
       model: preset.model,
       apiKey,
       baseUrl,
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
+      ...(apiSurface ? { apiSurface } : {}),
       ...(preset.maxTokens ? { maxTokens: preset.maxTokens } : {}),
       ...(Array.isArray(preset.customHeaders) && preset.customHeaders.length > 0
         ? { customHeaders: preset.customHeaders }

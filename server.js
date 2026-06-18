@@ -2732,6 +2732,7 @@ async function readSessionIndex(agentId) {
           referenceMaterials: cleanSessionText(session.referenceMaterials),
           openDirectory: cleanSessionText(session.openDirectory),
           sessionType: cleanSessionText(session.sessionType) || (session.metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
+          archived: session.archived === true,
           metadata: normalizeSessionMetadata(session.metadata),
         }))
       : [];
@@ -3239,14 +3240,14 @@ function buildLightPrebuiltSessionRecord(agentId, record) {
     createdAt: cleanSessionText(record?.createdAt) || new Date().toISOString(),
     updatedAt: cleanSessionText(record?.updatedAt) || cleanSessionText(record?.createdAt) || new Date().toISOString(),
     path: getPrebuiltSessionFilePath(agentId, cleanSessionText(record?.id) || ''),
-    exists: false,
-    bytes: 0,
-    messageCount: 0,
-    preview: '',
+    exists: true,
+    bytes: record?.fileSize || 0,
+    messageCount: typeof record?.messageCount === 'number' ? record.messageCount : 0,
+    preview: cleanSessionText(record?.preview),
     hasSummary: false,
-    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    tokenUsage: record?.tokenUsage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     contextLength: null,
-    modelName: '',
+    modelName: cleanSessionText(record?.modelName),
   };
 }
 
@@ -3354,6 +3355,12 @@ function buildSessionTrimPreview(messages) {
   return rounds;
 }
 
+/**
+ * Session index metadata version. Bump when the cached fields schema changes;
+ * old index records will auto-heal via the slow path on first access.
+ */
+const META_VERSION = 1;
+
 async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap) {
   const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
   const normalizedAgentId = sanitizeSessionFragment(agentId);
@@ -3386,6 +3393,63 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
     : (normalizedAgentId === 'programming-helper' ? taskTitle : featureName);
   try {
     const stat = await fs.stat(sessionPath);
+
+    // ── Fast path: use cached metadata when the session file hasn't changed ──
+    if (
+      record.fileMtimeMs === stat.mtimeMs &&
+      record.fileSize === stat.size &&
+      record.metaVersion === META_VERSION &&
+      typeof record.messageCount === 'number' &&
+      typeof record.preview !== 'undefined' &&
+      record.tokenUsage
+    ) {
+      const sType = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
+      const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
+      const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole])
+        || await resolveSessionModelInfo(agentId, sType);
+      const persistedModelName = cleanSessionText(record.modelName);
+      const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
+        ? record.contextLength : null;
+      const sessionModelInfo = {
+        modelName: fallbackModelInfo.modelName || persistedModelName || '',
+        contextLength: fallbackModelInfo.contextLength || persistedCL || null,
+        compressRatio: fallbackModelInfo.compressRatio || 80,
+      };
+      const summaryInfo = summaryMap ? summaryMap.get(record.id) : null;
+      const compactTitle = summaryInfo?.sessionTitle || '';
+      return {
+        id: record.id,
+        title: cleanSessionText(record.title) || compactTitle || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
+        featureName,
+        agentName,
+        taskTitle,
+        taskType,
+        goal,
+        constraints,
+        expectedOutput,
+        targetFiles,
+        referenceMaterials,
+        sessionType: sType,
+        status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
+        archived: record.archived === true,
+        metadata,
+        formId,
+        openDirectory,
+        createdAt: record.createdAt || stat.birthtime.toISOString(),
+        updatedAt: record.savedAt ? new Date(record.savedAt).toISOString() : (record.updatedAt || stat.mtime.toISOString()),
+        path: sessionPath,
+        exists: true,
+        bytes: stat.size,
+        messageCount: record.messageCount,
+        preview: cleanSessionText(record.preview),
+        hasSummary: summaryMap ? summaryMap.has(record.id) : (await checkSessionHasSummary(agentId, record.id)),
+        tokenUsage: record.tokenUsage,
+        contextLength: sessionModelInfo.contextLength || null,
+        compressRatio: sessionModelInfo.compressRatio || 80,
+        modelName: sessionModelInfo.modelName || '',
+      };
+    }
+
     const raw = await fs.readFile(sessionPath, 'utf8');
     const parsed = JSON.parse(raw);
     const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
@@ -3407,7 +3471,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       contextLength: fallbackModelInfo.contextLength || persistedCL || null,
       compressRatio: fallbackModelInfo.compressRatio || 80,
     };
-    return {
+    const result = {
       id: record.id,
       title: cleanSessionText(record.title) || compactTitle || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
       featureName,
@@ -3421,6 +3485,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       referenceMaterials,
       sessionType: cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
       status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
+      archived: record.archived === true,
       metadata,
       formId,
       openDirectory,
@@ -3442,6 +3507,26 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       compressRatio: sessionModelInfo.compressRatio || 80,
       modelName: sessionModelInfo.modelName || '',
     };
+    // Attach writeback payload as non-enumerable so it doesn't leak into API JSON responses
+    Object.defineProperty(result, '_metaWriteback', {
+      value: {
+        fileMtimeMs: stat.mtimeMs,
+        fileSize: stat.size,
+        messageCount: messages.length,
+        preview: lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '',
+        tokenUsage: {
+          inputTokens: totalUsage?.inputTokens || 0,
+          outputTokens: totalUsage?.outputTokens || 0,
+          totalTokens: totalUsage?.totalTokens || 0,
+          lastRequestUsage: usageStats?.lastRequestUsage || null,
+        },
+        savedAt: typeof parsed?.savedAt === 'number' ? parsed.savedAt : null,
+        metaVersion: META_VERSION,
+      },
+      enumerable: false,
+      configurable: true,
+    });
+    return result;
   } catch {
     return {
       id: record.id,
@@ -3457,6 +3542,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       referenceMaterials,
       sessionType: cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
       status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
+      archived: record.archived === true,
       metadata,
       formId,
       openDirectory,
@@ -3519,6 +3605,45 @@ async function listPrebuiltSessions(agentId) {
   const summaryMap = await buildSessionSummaryMap(agentId);
   const modelInfoMap = await buildSessionModelInfoMap(agentId);
   const sessions = await Promise.all(index.sessions.map((record) => summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap)));
+
+  // ── Batch writeback of stale index metadata ──
+  const writebacks = [];
+  for (const s of sessions) {
+    if (s?._metaWriteback) {
+      writebacks.push({ id: s.id, updatedAt: s.updatedAt, ...s._metaWriteback });
+      delete s._metaWriteback;
+    }
+  }
+  if (writebacks.length > 0) {
+    updateSessionIndex(agentId, (idx) => {
+      let dirty = false;
+      const sessionMap = new Map(idx.sessions.map((s) => [s.id, s]));
+      for (const wb of writebacks) {
+        const existing = sessionMap.get(wb.id);
+        if (!existing) continue;
+        if (
+          existing.fileMtimeMs === wb.fileMtimeMs &&
+          existing.fileSize === wb.fileSize &&
+          existing.metaVersion === wb.metaVersion
+        ) continue; // already up-to-date (concurrent list may have written first)
+        dirty = true;
+        sessionMap.set(wb.id, {
+          ...existing,
+          fileMtimeMs: wb.fileMtimeMs,
+          fileSize: wb.fileSize,
+          messageCount: wb.messageCount,
+          preview: wb.preview,
+          tokenUsage: wb.tokenUsage,
+          savedAt: wb.savedAt,
+          metaVersion: wb.metaVersion,
+          updatedAt: wb.updatedAt,
+        });
+      }
+      if (!dirty) return idx;
+      return { ...idx, sessions: Array.from(sessionMap.values()) };
+    }).catch(() => {});
+  }
+
   sessions.sort((left, right) => {
     const aUpdated = String(right.updatedAt || '');
     const bUpdated = String(left.updatedAt || '');
@@ -3859,6 +3984,28 @@ async function deletePrebuiltSession(agentId, sessionId) {
 
   return {
     deletedSessionId: sessionId,
+    activeSessionId: newIndex.activeSessionId,
+    sessions: await listPrebuiltSessions(agentId),
+  };
+}
+
+async function archivePrebuiltSession(agentId, sessionId, archived) {
+  const newIndex = await updateSessionIndex(agentId, (index) => {
+    const existing = index.sessions.find((session) => session.id === sessionId);
+    if (!existing) {
+      const error = new Error(`Unknown prebuilt session: ${sessionId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    const sessions = index.sessions.map((session) =>
+      session.id === sessionId ? { ...session, archived: !!archived } : session,
+    );
+    return { activeSessionId: index.activeSessionId, sessions };
+  });
+
+  return {
+    archivedSessionId: sessionId,
+    archived: !!archived,
     activeSessionId: newIndex.activeSessionId,
     sessions: await listPrebuiltSessions(agentId),
   };
@@ -4695,15 +4842,20 @@ async function getAgents() {
   return Promise.all(lightAgents.map(enrichAgent));
 }
 
-async function requireAgent(agentId) {
-  const agents = await getAgents();
-  const agent = agents.find((item) => item.id === agentId);
+async function requireAgentLight(agentId) {
+  const lightAgents = await getAgentsLight();
+  const agent = lightAgents.find((item) => item.id === agentId);
   if (!agent) {
     const error = new Error(`Unknown agent: ${agentId}`);
     error.statusCode = 404;
     throw error;
   }
   return agent;
+}
+
+async function requireAgent(agentId) {
+  const agent = await requireAgentLight(agentId);
+  return enrichAgent(agent);
 }
 
 function normalizeClientAgentId(value, fallback = '') {
@@ -4793,7 +4945,7 @@ async function readWorkspaceSessionSnapshot(agentId) {
   const index = await readSessionIndex(agentId);
   return {
     activeSessionId: index.activeSessionId || null,
-    sessions: [],
+    sessions: index.sessions.map((record) => buildLightPrebuiltSessionRecord(agentId, record)),
   };
 }
 
@@ -5351,7 +5503,7 @@ async function startOneShotAgent(agent, sessionId, goal, options = {}) {
 async function startAssemblyRuntime(sessionId, agentId = 'agent-creator', preActivatedSession = null, preloadedWorkspaceState = null) {
   const _t0 = Date.now();
   console.log(`[PERF] startAssemblyRuntime BEGIN session=${sessionId} agent=${agentId} hasSession=${!!preActivatedSession} hasState=${!!preloadedWorkspaceState}`);
-  const agent = await requireAgent(agentId || 'agent-creator');
+  const agent = await requireAgentLight(agentId || 'agent-creator');
   let session = preActivatedSession || await activatePrebuiltSession(agent.id, sessionId);
   if (!preActivatedSession) {
     console.log(`[PERF] startAssemblyRuntime activatePrebuiltSession (${Date.now() - _t0}ms)`);
@@ -6014,7 +6166,7 @@ app.get('/protoclaw/agent_detail', async (req, res, next) => {
 
 app.post('/protoclaw/start_agent', express.json(), async (req, res, next) => {
   try {
-    const agent = await requireAgent(req.body.agentId);
+    const agent = await requireAgentLight(req.body.agentId);
     if (agent.launchMode === 'ui-only') {
       const connectedAgents = await getConnectedAgents();
       const connected = connectedAgents.find((item) => item.id === agent.id) || null;
@@ -6122,6 +6274,33 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       return;
     }
 
+    // Determine the maximum user turn in the branch so we can preserve the
+    // invariant: user message turn === checkpoint callIndex === _callIndex.
+    // Previously callIndex was hardcoded to 0 which broke rollback entirely.
+    let maxUserTurn = -1;
+    for (const m of branchMessages) {
+      if (m.role === 'user' && typeof m.turn === 'number') {
+        maxUserTurn = Math.max(maxUserTurn, m.turn);
+      }
+    }
+
+    // Only keep checkpoints whose callIndex is within the branch range.
+    // Checkpoints beyond the cut point reference context that no longer exists.
+    const sourceCheckpoints = Array.isArray(sourceSnapshot.rollbackHistory)
+      ? sourceSnapshot.rollbackHistory
+      : [];
+    const branchCheckpoints = sourceCheckpoints.filter(
+      cp => typeof cp.callIndex === 'number' && cp.callIndex <= maxUserTurn
+    );
+
+    // Truncate enrichedMessages to match the branch message range.
+    const sourceEnriched = Array.isArray(sourceSnapshot.runtime?.context?.enrichedMessages)
+      ? sourceSnapshot.runtime.context.enrichedMessages
+      : [];
+    const branchEnriched = sourceEnriched.filter(
+      em => typeof em.turn !== 'number' || em.turn <= maxUserTurn
+    );
+
     const newSessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
     const createdAt = new Date().toISOString();
     let sourceRecord = null;
@@ -6132,13 +6311,15 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       savedAt: Date.now(),
       runtime: {
         ...(sourceSnapshot.runtime || {}),
-        initialized: false,
-        callIndex: 0,
+        initialized: true,
+        callIndex: maxUserTurn,
         context: {
           ...(sourceSnapshot.runtime?.context || {}),
           messages: branchMessages,
+          enrichedMessages: branchEnriched,
         },
       },
+      rollbackHistory: branchCheckpoints,
     };
     delete branchSnapshot.title;
 
@@ -6454,7 +6635,7 @@ app.put('/protoclaw/im_workspace_bundle', express.json(), async (req, res, next)
           await waitForProcessExit(rt.process);
         }
         try {
-          const agent = await requireAgent('qqbot');
+          const agent = await requireAgentLight('qqbot');
           await startManagedAgent(agent);
           portalRestarted = true;
           console.log(`[ProtoClaw IM] 渠道切换: ${prevConfig.selectedChannel || 'qq'} → ${newChannel}，门户代理已重启`);
@@ -6934,6 +7115,7 @@ function flattenModelPresets(data) {
       model: cleanSessionText(preset?.model),
       baseUrl: cleanSessionText(provider?.endpoints?.[protocol] || preset?.baseUrl),
       apiKey: cleanSessionText(provider?.apiKey || preset?.apiKey),
+      apiSurface: cleanSessionText(preset?.apiSurface) || 'chat',
       thinkingBudgetTokens: Number.isFinite(Number(preset?.thinkingBudgetTokens)) ? Number(preset.thinkingBudgetTokens) : null,
       maxTokens: Number.isFinite(Number(preset?.maxTokens)) ? Number(preset.maxTokens) : null,
       temperature: Number.isFinite(Number(preset?.temperature)) ? Number(preset.temperature) : null,
@@ -7013,6 +7195,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       name,
       providerName,
       protocol,
+      apiSurface: cleanSessionText(rawPreset.apiSurface) || 'chat',
       model,
       thinkingBudgetTokens: Number.isFinite(Number(rawPreset.thinkingBudgetTokens)) ? Number(rawPreset.thinkingBudgetTokens) : null,
       maxTokens: Number.isFinite(Number(rawPreset.maxTokens)) ? Number(rawPreset.maxTokens) : null,
@@ -7443,7 +7626,7 @@ app.post('/protoclaw/refresh_session_token_count', express.json(), async (req, r
 
 app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) => {
   try {
-    const agent = await requireAgent(req.body.agentId);
+    const agent = await requireAgentLight(req.body.agentId);
     const session = await createPrebuiltSession(agent.id, {
       returnSummary: false,
       sourceSessionId: req.body.sourceSessionId,
@@ -8161,7 +8344,7 @@ app.post('/protoclaw/assembly_runtime/stop', express.json(), async (req, res, ne
 
 app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, res, next) => {
   try {
-    const agent = await requireAgent(req.body.agentId);
+    const agent = await requireAgentLight(req.body.agentId);
     if (typeof req.body.sessionId !== 'string' || !req.body.sessionId) {
       res.status(400).json({ error: 'sessionId is required' });
       return;
@@ -8176,7 +8359,7 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
 
 app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res, next) => {
   try {
-    const agent = await requireAgent(req.body.agentId);
+    const agent = await requireAgentLight(req.body.agentId);
     if (typeof req.body.sessionId !== 'string' || !req.body.sessionId) {
       res.status(400).json({ error: 'sessionId is required' });
       return;
@@ -8201,6 +8384,68 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
       agent: connected,
       assemblyRuntime,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res, next) => {
+  try {
+    const agent = await requireAgentLight(req.body.agentId);
+    if (typeof req.body.sessionId !== 'string' || !req.body.sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+    const archived = req.body.archived !== false;
+    const result = await archivePrebuiltSession(agent.id, req.body.sessionId, archived);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Session meta sync: runtime child process pushes fresh metadata after save ──
+app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.body?.agentId);
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    if (!agentId || !sessionId) {
+      res.status(400).json({ error: 'agentId and sessionId are required' });
+      return;
+    }
+    const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
+    let stat;
+    try {
+      stat = await fs.stat(sessionPath);
+    } catch {
+      res.status(404).json({ error: 'session file not found' });
+      return;
+    }
+
+    const messageCount = typeof req.body.messageCount === 'number' ? req.body.messageCount : 0;
+    const preview = cleanSessionText(req.body.preview);
+    const tokenUsage = req.body.tokenUsage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    const savedAt = typeof req.body.savedAt === 'number' ? req.body.savedAt : stat.mtimeMs;
+
+    await updateSessionIndex(agentId, (index) => {
+      const sessions = index.sessions.map((s) => {
+        if (s.id !== sessionId) return s;
+        return {
+          ...s,
+          fileMtimeMs: stat.mtimeMs,
+          fileSize: stat.size,
+          messageCount,
+          preview,
+          tokenUsage,
+          savedAt,
+          metaVersion: META_VERSION,
+          updatedAt: new Date(savedAt).toISOString(),
+        };
+      });
+      return { ...index, sessions };
+    });
+
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
@@ -8284,7 +8529,7 @@ app.post('/protoclaw/ph_project/open_in_explorer', express.json(), async (req, r
 
 app.post('/protoclaw/prebuilt_project/delete', express.json(), async (req, res, next) => {
   try {
-    const agent = await requireAgent(req.body.agentId);
+    const agent = await requireAgentLight(req.body.agentId);
     if (typeof req.body.projectId !== 'string' || !req.body.projectId) {
       res.status(400).json({ error: 'projectId is required' });
       return;
@@ -8441,7 +8686,7 @@ app.post('/protoclaw/stop_agent', express.json(), async (req, res, next) => {
 
 app.post('/protoclaw/restart_agent', express.json(), async (req, res, next) => {
   try {
-    const agent = await requireAgent(req.body.agentId);
+    const agent = await requireAgentLight(req.body.agentId);
     const selectedSessionId = req.body.sessionId || null;
     await stopManagedAgent(agent.id, selectedSessionId);
     const status = await startManagedAgent(agent, selectedSessionId);

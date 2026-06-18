@@ -2772,6 +2772,7 @@ window.phOpenInExplorer = async (dirPath) => {
 function getCtxMenuItems(role, ns, variant, id) {
   if (role === 'runtime' && ns === 'programming-helper') {
     return [
+      { label: currentLanguage === 'zh' ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
       { label: currentLanguage === 'zh' ? '总结历史（摘要）' : 'Summary', action: 'summary' },
       { label: currentLanguage === 'zh' ? '精简历史（Trim）' : 'Trim', action: 'trim' },
       { label: currentLanguage === 'zh' ? '创建分支' : 'Branch', action: 'branch' },
@@ -2781,7 +2782,11 @@ function getCtxMenuItems(role, ns, variant, id) {
     ];
   }
   if (role === 'session' && ns === 'programming-helper') {
+    const agent = allAgents.find((item) => item.id === ns) || null;
+    const session = getWorkspaceSessionById(agent, id);
+    const isArchived = session?.archived === true;
     return [
+      { label: isArchived ? (currentLanguage === 'zh' ? '取消归档' : 'Unarchive') : (currentLanguage === 'zh' ? '归档会话' : 'Archive'), action: 'archive-session' },
       { label: currentLanguage === 'zh' ? '删除对话' : 'Delete', action: 'delete-session', danger: true },
     ];
   }
@@ -2881,6 +2886,92 @@ async function ctxStopAgent(target) {
   }
 }
 
+async function ctxGenerateTitle(target) {
+  const { ns, sessionId } = target;
+  const isZh = currentLanguage === 'zh';
+  try {
+    const response = await fetch('/protoclaw/generate_session_title', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: ns, sessionId }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'Failed to generate title'));
+    }
+    const result = await response.json();
+    if (result.ok && result.title) {
+      const agent = allAgents.find((item) => item.id === ns);
+      if (agent) {
+        const sessions = agent.workspace_sessions?.sessions || [];
+        const targetSession = sessions.find((s) => s.id === sessionId);
+        if (targetSession) targetSession.title = result.title;
+        if (agent.active_workspace_session_id === sessionId) {
+          updateAgentRecord(ns, { active_workspace_session_title: result.title });
+        }
+      }
+      renderAgentList();
+    }
+  } catch (error) {
+    console.error('Failed to generate session title:', error);
+    window.alert((isZh ? '生成标题失败: ' : 'Failed to generate title: ') + (error.message || error));
+  }
+}
+
+async function ctxArchiveSession(target) {
+  const { ns: agentId, id: sessionId } = target;
+  if (!agentId || !sessionId) return;
+
+  const agent = allAgents.find((item) => item.id === agentId) || null;
+  const session = getWorkspaceSessionById(agent, sessionId);
+  const nextArchived = !(session?.archived === true);
+
+  // Optimistic update
+  if (agent) {
+    const currentSessions = getWorkspaceSessions(agent);
+    const updatedSessions = currentSessions.map((s) =>
+      s.id === sessionId ? { ...s, archived: nextArchived } : s,
+    );
+    updateAgentRecord(agentId, {
+      workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
+    });
+    renderCurrentMainView();
+  }
+
+  try {
+    const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, sessionId, archived: nextArchived }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'archive session failed'));
+    }
+    const result = await response.json();
+    if (result?.sessions) {
+      updateAgentRecord(agentId, {
+        workspace_sessions: result.sessions,
+        active_workspace_session_id: result.activeSessionId || null,
+      });
+    }
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+  } catch (e) {
+    // Revert on failure
+    if (agent) {
+      const currentSessions = getWorkspaceSessions(agent);
+      const revertedSessions = currentSessions.map((s) =>
+        s.id === sessionId ? { ...s, archived: !nextArchived } : s,
+      );
+      updateAgentRecord(agentId, {
+        workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
+      });
+    }
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+    window.alert((currentLanguage === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
+  }
+}
+
 function dispatchCtxAction(action, target) {
   if (!action || !target) return;
   const { ns, id, sessionId, variant } = target;
@@ -2888,6 +2979,13 @@ function dispatchCtxAction(action, target) {
   switch (action) {
     case 'activate':
       window.switchAgent(id);
+      break;
+
+    case 'generate-title':
+      window.closeCtxMenu();
+      if (ns && sessionId) {
+        ctxGenerateTitle(target);
+      }
       break;
 
     case 'summary':
@@ -2921,6 +3019,11 @@ function dispatchCtxAction(action, target) {
     case 'delete-session':
       window.closeCtxMenu();
       window.runWorkspaceAction(JSON.stringify({ type: 'delete_session', sessionId: id }));
+      break;
+
+    case 'archive-session':
+      window.closeCtxMenu();
+      ctxArchiveSession(target);
       break;
 
     default:
@@ -4058,7 +4161,17 @@ window.addEventListener('scroll', () => {
   closeProjectContextMenu();
   requestAnimationFrame(updateAssemblySideRailPosition);
 }, true);
-container.addEventListener('wheel', () => registerManualScrollIntent({ interrupt: true }), { passive: true });
+container.addEventListener('wheel', (e) => {
+  if (e.deltaY < 0) {
+    // Scrolling up — always cancel follow
+    registerManualScrollIntent({ interrupt: true });
+  } else {
+    // Scrolling down — don't immediately interrupt; let the scroll handler
+    // decide via isNearBottom(). When already at the bottom, an involuntary
+    // downward scroll shouldn't cancel follow mode.
+    registerManualScrollIntent();
+  }
+}, { passive: true });
 container.addEventListener('wheel', () => window.closeCtxMenu(), { passive: true });
 container.addEventListener('touchmove', () => registerManualScrollIntent({ interrupt: true }), { passive: true });
 container.addEventListener('pointerdown', (event) => {
@@ -4124,11 +4237,19 @@ container.addEventListener('keydown', (event) => {
   }
 });
 container.addEventListener('scroll', () => {
-  if (suppressFollowScrollEvent || !followLatestEnabled) {
+  if (suppressFollowScrollEvent) {
     return;
   }
-  if (!isNearBottom() && hasRecentManualScrollIntent()) {
-    setFollowLatest(false);
+  if (followLatestEnabled) {
+    // Follow is on — cancel if user scrolled away from bottom
+    if (!isNearBottom() && hasRecentManualScrollIntent()) {
+      setFollowLatest(false);
+    }
+  } else {
+    // Follow is off — re-enable if user manually scrolled to bottom
+    if (isNearBottom() && hasRecentManualScrollIntent()) {
+      setFollowLatest(true);
+    }
   }
 });
 followLatestButton.addEventListener('click', () => {
@@ -4210,7 +4331,12 @@ async function loadAgentData(agentId) {
       fetch(`/api/agents/${agentId}/tools`),
       fetch(`/api/agents/${agentId}/hooks`),
       fetch(`/api/agents/${agentId}/overview`),
-      fetch(`/api/agents/${agentId}/input-requests`)
+      fetch(`/api/agents/${agentId}/input-requests`),
+      // Ensure the host agent has full workspace_sessions (contextLength,
+      // compressRatio, per-session model info) before the first render.
+      // Without this, updateChatContextBar falls back to hardcoded defaults
+      // because getConnectedAgents only returns light session records.
+      loadAgentDetail(currentAgentId),
     ]);
 
     // Stale guard: if the user switched to a different agent during the
@@ -4337,6 +4463,21 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
   if (previousAssistantCount === 0 && nextAssistantCount > 0) {
     _autoTitlePending.add(info.sessionId);
   }
+}
+
+function findFirstChangedMessageIndex(nextMessages, previousMessages) {
+  if (!Array.isArray(nextMessages) || !Array.isArray(previousMessages)) {
+    return 0;
+  }
+
+  const length = Math.min(nextMessages.length, previousMessages.length);
+  for (let i = 0; i < length; i++) {
+    if (JSON.stringify(nextMessages[i]) !== JSON.stringify(previousMessages[i])) {
+      return i;
+    }
+  }
+
+  return nextMessages.length === previousMessages.length ? -1 : length;
 }
 
 function tryAutoTitleGeneration(messages) {
@@ -4480,6 +4621,11 @@ async function poll() {
 
     const coreResponses = [msgsRes, inputRes, overviewRes];
     if (coreResponses.some(res => res.status === 404)) {
+      // In-session partial compact doesn't create a new session, so if we get 404
+      // while compact is in flight, just clear the flag and fall through to normal handling
+      if (_partialCompactInFlight && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)) {
+        clearPartialCompactState();
+      }
       if (prebuiltSessionSwitchInFlight || suppressSidebarRerender) {
         setTimeout(poll, 300);
         return;
@@ -4521,8 +4667,9 @@ async function poll() {
     // (status refresh, call states, queue sync) that add visible latency.
     const previousMessages = currentMessages;
     markAutoTitleCandidate(previousMessages, messages);
+    const firstChangedIndex = findFirstChangedMessageIndex(messages, currentMessages);
     if (messages.length !== currentMessages.length) {
-      if (messages.length > currentMessages.length) {
+      if (messages.length > currentMessages.length && firstChangedIndex === currentMessages.length) {
         // 有新消息：只追加新的
         const newMessages = messages.slice(currentMessages.length);
         currentMessages = messages;
@@ -4531,20 +4678,20 @@ async function poll() {
         } else {
           appendNewMessages(newMessages, currentMessages.length - newMessages.length);
         }
-      } else if (messages.length < currentMessages.length) {
-        // 消息减少：完全重建（极少情况）
+      } else {
+        // 消息减少，或消息变多但前缀已变化：完全重建。
         currentMessages = messages;
         renderCurrentMainView();
       }
     } else {
-      const lastMsgChanged = messages.length > 0 &&
-        JSON.stringify(messages[messages.length - 1]) !== JSON.stringify(currentMessages[currentMessages.length - 1]);
-      if (lastMsgChanged) {
-        // 最后一条消息变化：替换最后一条（避免滚动重置）
+      if (firstChangedIndex >= 0) {
         currentMessages = messages;
-        if (shouldRenderWorkspaceSurface()) {
+        // Rollback + partial compact can replace the middle of the transcript while
+        // keeping the same length after the summary reminder is inserted.
+        if (shouldRenderWorkspaceSurface() || firstChangedIndex < messages.length - 1) {
           renderCurrentMainView();
         } else {
+          // 最后一条消息变化：替换最后一条（避免滚动重置）
           updateLastMessage(messages[messages.length - 1]);
         }
       }
@@ -4571,6 +4718,15 @@ async function poll() {
     // 处理输入请求（只在变化时重新渲染）
     const inputRequestsRaw = await inputRes.json();
     const inputRequests = Array.isArray(inputRequestsRaw) ? inputRequestsRaw : [];
+    // If partial compact was in flight but runtime is back to accepting input,
+    // compact is done (or failed) — clear the flag so normal input is shown.
+    if (
+      _partialCompactInFlight
+      && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
+      && inputRequests.length > 0
+    ) {
+      clearPartialCompactState();
+    }
     if (JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || [])) {
       window.lastInputRequests = inputRequests;
       renderInputRequests(inputRequests);
@@ -4836,6 +4992,10 @@ function getInputRenderSignature(requests, renderMode) {
 function renderInputRequests(requests) {
   const inputContainer = document.getElementById('user-input-container');
   if (!inputContainer) return;
+
+  // Don't re-render while the rollback action dialog is open
+  if (_rollbackDialogOpen) return;
+
   const chatViewportTopBefore = container.scrollTop;
   currentInputRequests = requests;
   const chatActive = isChatSurfaceActive();
@@ -4909,10 +5069,60 @@ function renderInputRequests(requests) {
     return;
   }
 
-  // 常驻输入框的显示条件一直是“当前正在查看某个 runtime 聊天面板”，
-  // 而不是“runtime 此刻一定处于执行中”。
+  // 常驻输入框的显示条件一直是"当前正在查看某个 runtime 聊天面板"，
+  // 而不是"runtime 此刻一定处于执行中"。
   const hasRequests = Array.isArray(requests) && requests.length > 0;
   const hasRuntimeSelected = !!currentRuntimeAgentId && chatActive;
+
+  // 部分压缩进行中：显示压缩状态，禁止输入
+  // 仅对发起压缩的 runtime 生效，不污染其他 runtime
+  if (_partialCompactInFlight && hasRuntimeSelected && currentRuntimeAgentId === _partialCompactRuntimeId) {
+    inputContainer.classList.remove('choice-input-active', 'choice-collapsed');
+    const card = document.createElement('div');
+    card.className = 'user-input-card partial-compact-card';
+    const compactContextKey = _partialCompactContextKey || _getSessionInputCacheKey();
+    let compactStart = readPartialCompactStartedAt(compactContextKey);
+    if (!Number.isFinite(compactStart)) {
+      compactStart = Date.now();
+      writePartialCompactStartedAt(compactStart, compactContextKey);
+    }
+    card.innerHTML = `
+      <div class="partial-compact-status" aria-live="polite">
+        <span class="partial-compact-spinner" aria-hidden="true"></span>
+        <span class="partial-compact-copy">
+          <span class="partial-compact-title">${currentLanguage === 'zh' ? '压缩中' : 'Compacting'}</span>
+          <span class="partial-compact-elapsed" id="partial-compact-elapsed">${currentLanguage === 'zh' ? '已用时 0s' : 'Elapsed 0s'}</span>
+        </span>
+      </div>
+    `;
+    runWithSuppressedChatViewportObservers(() => {
+      inputContainer.appendChild(card);
+    });
+    // Start elapsed timer
+    const elapsedEl = card.querySelector('#partial-compact-elapsed');
+    const updateCompactTimer = () => {
+      if (!elapsedEl || !document.body.contains(elapsedEl)) {
+        clearInterval(_compactTimerInterval);
+        _compactTimerInterval = null;
+        return;
+      }
+      const elapsed = Math.floor((Date.now() - compactStart) / 1000);
+      elapsedEl.textContent = currentLanguage === 'zh'
+        ? `已用时 ${elapsed}s`
+        : `Elapsed ${elapsed}s`;
+    };
+    updateCompactTimer();
+    if (_compactTimerInterval) clearInterval(_compactTimerInterval);
+    _compactTimerInterval = setInterval(updateCompactTimer, 1000);
+    notifyChatViewportMutation({
+      reason: 'input-render',
+      shouldFollow: followLatestEnabled && chatActive,
+      preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
+      forceSnap: followLatestEnabled,
+      allowChase: false,
+    });
+    return;
+  }
 
   // 如果有 pending requests，正常渲染
   // 如果没有 pending requests 但当前有 runtime 聊天上下文，渲染常驻输入框（队列模式）
@@ -4926,7 +5136,7 @@ function renderInputRequests(requests) {
       const card = document.createElement('div');
       card.className = 'user-input-card';
       const visibleActions = Array.isArray(req.actions)
-        ? req.actions.filter(action => action && action.id !== 'rollback_to_call')
+        ? req.actions.filter(action => action && action.id !== 'rollback_to_call' && action.id !== 'compact_from_call')
         : [];
       const actionsHtml = visibleActions.length > 0
         ? '<div class="user-input-actions">' + visibleActions.map(action =>
@@ -5655,7 +5865,10 @@ function getRollbackInputRequest() {
   if (!Array.isArray(currentInputRequests)) {
     return null;
   }
-  return currentInputRequests.find((request) => requestSupportsAction(request, 'rollback_to_call')) || null;
+  return currentInputRequests.find((request) =>
+    requestSupportsAction(request, 'rollback_to_call')
+    || requestSupportsAction(request, 'compact_from_call')
+  ) || null;
 }
 
 function canRollbackMessage(msg) {
@@ -5780,6 +5993,58 @@ async function submitInputAction(requestId, actionId, payload = {}) {
   }
 }
 
+let _partialCompactInFlight = false;
+let _partialCompactRuntimeId = null;
+let _partialCompactContextKey = null;
+let _compactTimerInterval = null;
+
+let _rollbackDialogOpen = false;
+
+function getPartialCompactStorageKey(contextKey = _getSessionInputCacheKey()) {
+  return contextKey ? `agentdev-partial-compact-start:${contextKey}` : '';
+}
+
+function readPartialCompactStartedAt(contextKey = _getSessionInputCacheKey()) {
+  const storageKey = getPartialCompactStorageKey(contextKey);
+  if (!storageKey) return null;
+  try {
+    const raw = sessionStorage.getItem(storageKey);
+    if (!raw) return null;
+    const startedAt = Number(raw);
+    return Number.isFinite(startedAt) ? startedAt : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePartialCompactStartedAt(startedAt, contextKey = _getSessionInputCacheKey()) {
+  const storageKey = getPartialCompactStorageKey(contextKey);
+  if (!storageKey || !Number.isFinite(startedAt)) return;
+  try {
+    sessionStorage.setItem(storageKey, String(startedAt));
+  } catch {}
+}
+
+function clearPartialCompactStartedAt(contextKey = _partialCompactContextKey || _getSessionInputCacheKey()) {
+  const storageKey = getPartialCompactStorageKey(contextKey);
+  if (!storageKey) return;
+  try {
+    sessionStorage.removeItem(storageKey);
+  } catch {}
+}
+
+function clearPartialCompactState(contextKey = _partialCompactContextKey || _getSessionInputCacheKey()) {
+  _partialCompactInFlight = false;
+  _partialCompactRuntimeId = null;
+  _partialCompactContextKey = null;
+  if (_compactTimerInterval) {
+    clearInterval(_compactTimerInterval);
+    _compactTimerInterval = null;
+  }
+  clearPartialCompactStartedAt(contextKey);
+  lastRenderedInputSignature = '';
+}
+
 window.requestRollbackEdit = async function(messageIndex) {
   const request = getRollbackInputRequest();
   if (!request) {
@@ -5798,11 +6063,96 @@ window.requestRollbackEdit = async function(messageIndex) {
     .length - 1;
   const callIndex = typeof msg.turn === 'number' ? msg.turn : fallbackCallIndex;
 
-  await submitInputAction(request.requestId, 'rollback_to_call', {
-    callIndex,
-    draftInput: msg.content,
-  });
+  showRollbackActionDialog(request, callIndex, msg);
 };
+
+function showRollbackActionDialog(request, callIndex, msg) {
+  const container = document.getElementById('user-input-container');
+  if (!container) return;
+
+  _rollbackDialogOpen = true;
+
+  const msgPreview = (typeof msg.content === 'string' ? msg.content : '').slice(0, 120);
+  const isZh = currentLanguage === 'zh';
+
+  const card = document.createElement('div');
+  card.className = 'user-input-card user-choice-card';
+  card.innerHTML = `
+    <div class="user-choice-topline">
+      <div class="user-choice-title">${isZh ? '选择操作' : 'Choose Action'}</div>
+      <button class="user-choice-close" type="button" data-mode="cancel">×</button>
+    </div>
+    <div class="user-choice-question">${escapeHtml(msgPreview)}</div>
+    <div class="user-choice-options">
+      <button class="user-choice-option" type="button" data-mode="rollback">
+        <span class="user-choice-key">1</span>
+        <span>
+          <span class="user-choice-label">${isZh ? '回退到此轮' : 'Rewind to Here'}</span>
+          <span class="user-choice-description">${isZh ? '丢弃此轮之后的所有消息，回到此轮重新编辑' : 'Discard everything after this turn and edit again'}</span>
+        </span>
+      </button>
+      <button class="user-choice-option" type="button" data-mode="compact">
+        <span class="user-choice-key">2</span>
+        <span>
+          <span class="user-choice-label">${isZh ? '从此处压缩' : 'Summarize from Here'}</span>
+          <span class="user-choice-description">${isZh ? '保留此轮之前的消息，将此轮及之后的内容压缩为摘要' : 'Keep earlier messages, summarize from this turn onward'}</span>
+        </span>
+      </button>
+    </div>
+    <div class="user-choice-footer">
+      <span>${isZh ? '点击选择操作' : 'Click to choose an action'}</span>
+    </div>
+  `;
+
+  runWithSuppressedChatViewportObservers(() => {
+    container.innerHTML = '';
+    container.classList.add('choice-input-active');
+    container.classList.remove('choice-collapsed');
+    container.onclick = null;
+    container.appendChild(card);
+  });
+
+  setTimeout(() => card.focus(), 30);
+
+  const close = () => {
+    _rollbackDialogOpen = false;
+    container.classList.remove('choice-input-active', 'choice-collapsed');
+    lastRenderedInputSignature = '';
+    renderInputRequests(currentInputRequests || []);
+  };
+
+  card.querySelector('[data-mode="cancel"]').addEventListener('click', close);
+
+  container.addEventListener('click', function backdropHandler(e) {
+    if (e.target === container) {
+      container.removeEventListener('click', backdropHandler);
+      close();
+    }
+  });
+
+  card.querySelector('[data-mode="rollback"]').addEventListener('click', async () => {
+    close();
+    await submitInputAction(request.requestId, 'rollback_to_call', {
+      callIndex,
+      draftInput: msg.content,
+    });
+  });
+
+  card.querySelector('[data-mode="compact"]').addEventListener('click', async () => {
+    close();
+    _partialCompactInFlight = true;
+    _partialCompactRuntimeId = currentRuntimeAgentId;
+    _partialCompactContextKey = _getSessionInputCacheKey();
+    writePartialCompactStartedAt(Date.now(), _partialCompactContextKey);
+    currentInputRequests = [];
+    window.lastInputRequests = [];
+    lastRenderedInputSignature = '';
+    renderInputRequests([]);
+    await submitInputAction(request.requestId, 'compact_from_call', {
+      callIndex,
+    });
+  });
+}
 
 // 生成单条消息的 HTML
 function renderMessage(msg, index) {
