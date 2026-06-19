@@ -36,11 +36,21 @@ for (const test of tests) {
   const raw = JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
   const messages = raw?.runtime?.context?.messages || [];
 
+  // Build call timestamps from usageStats
+  const callTimestamps = new Map();
+  const calls = raw?.runtime?.usageStats?.calls || [];
+  for (const c of calls) {
+    if (c.callIndex != null && c.startTime) {
+      callTimestamps.set(c.callIndex, c.startTime);
+    }
+  }
+
   const html = renderConversationHtml(messages, {
     title: `${test.agentId} 对话记录 (${test.label})`,
     agentId: test.agentId,
     sessionId: path.basename(test.file, '.json'),
     lastNCalls: test.lastNCalls ?? null,
+    callTimestamps,
   });
 
   const outPath = path.join(outDir, `conversation-${test.label}.html`);

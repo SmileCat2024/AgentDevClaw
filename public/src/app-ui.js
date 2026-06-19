@@ -2766,17 +2766,11 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '</div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
-    '<label>Provider</label>',
+    '<label>' + (isZh ? '接口协议' : 'Protocol') + '</label>',
     '<select class="settings-input" id="settings-preset-provider">',
     '<option value="anthropic"' + (preset.provider === 'anthropic' ? ' selected' : '') + '>Anthropic</option>',
-    '<option value="openai"' + (preset.provider === 'openai' ? ' selected' : '') + '>OpenAI</option>',
-    '</select>',
-    '</div>',
-    '<div class="settings-field">',
-    '<label>API Surface</label>',
-    '<select class="settings-input" id="settings-preset-surface">',
-    '<option value="chat"' + ((preset.apiSurface || 'chat') === 'chat' ? ' selected' : '') + '>Chat</option>',
-    '<option value="responses"' + ((preset.apiSurface || 'chat') === 'responses' ? ' selected' : '') + '>Responses</option>',
+    '<option value="openai"' + (preset.provider === 'openai' && (preset.apiSurface || 'chat') !== 'responses' ? ' selected' : '') + '>OpenAI Chat</option>',
+    '<option value="openai-responses"' + (preset.provider === 'openai' && (preset.apiSurface || 'chat') === 'responses' ? ' selected' : '') + '>OpenAI Responses</option>',
     '</select>',
     '</div>',
     '<div class="settings-field">',
@@ -2981,8 +2975,8 @@ async function saveSettingsPreset(idx) {
   const preset = {
     name: (el('settings-preset-name')?.value || '').trim(),
     providerName: presets[idx]?.providerName || '',
-    provider: (el('settings-preset-provider')?.value || 'anthropic').trim(),
-    apiSurface: (el('settings-preset-surface')?.value || 'chat').trim(),
+    provider: (el('settings-preset-provider')?.value || 'anthropic').trim().replace(/^openai-responses$/, 'openai'),
+    apiSurface: (el('settings-preset-provider')?.value || 'anthropic').trim() === 'openai-responses' ? 'responses' : 'chat',
     model: (el('settings-preset-model')?.value || '').trim(),
     baseUrl: (el('settings-preset-baseurl')?.value || '').trim(),
     apiKey: (el('settings-preset-apikey')?.value || '').trim(),
@@ -5630,6 +5624,32 @@ function renderProjectDocsetBlock(agent, block) {
   ].join('');
 }
 
+function renderWorkGroupChatBlock(agent, block) {
+  if (!window.WorkGroupUI) return '';
+  _ensureWorkGroupEventDelegation();
+  return window.WorkGroupUI.render();
+}
+
+function _ensureWorkGroupEventDelegation() {
+  if (_workGroupEventsWired) return;
+  _workGroupEventsWired = true;
+  container.addEventListener('click', (e) => {
+    if (window.WorkGroupUI && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerClick(e);
+    }
+  });
+  container.addEventListener('input', (e) => {
+    if (window.WorkGroupUI && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerInput(e);
+    }
+  });
+  container.addEventListener('keydown', (e) => {
+    if (window.WorkGroupUI && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerKeyDown(e);
+    }
+  });
+}
+
 function renderWorkspaceBlock(agent, block) {
   if (!shouldRenderBlock(block)) return '';
   if (block.type === 'hero') return renderWorkspaceHero(agent, block);
@@ -5647,6 +5667,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'config-editor') return isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : '';
   if (block.type === 'system-feature-config') return isSystemFeatureConfigBlock(block) ? renderSystemFeatureConfigBlock(block) : '';
   if (block.type === 'flow-editor') return renderFlowEditorBlock(agent, block);
+  if (block.type === 'work-group-chat') return renderWorkGroupChatBlock(agent, block);
   return '';
 }
 

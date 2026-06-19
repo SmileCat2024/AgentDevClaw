@@ -187,12 +187,15 @@ const agentList = document.getElementById('agent-list');
 const prebuiltAgentList = document.getElementById('prebuilt-agent-list');
 const toolAgentList = document.getElementById('tool-agent-list');
 const externalAgentList = document.getElementById('external-agent-list');
+const workGroupAgentList = document.getElementById('work-group-agent-list');
 const prebuiltGroup = document.getElementById('prebuilt-group');
 const toolGroup = document.getElementById('tool-group');
 const externalGroup = document.getElementById('external-group');
+const workGroupGroup = document.getElementById('work-group-group');
 const prebuiltCount = document.getElementById('prebuilt-count');
 const toolCount = document.getElementById('tool-count');
 const externalCount = document.getElementById('external-count');
+const workGroupCount = document.getElementById('work-group-count');
 const currentAgentTitle = document.getElementById('current-agent-name');
 const sidebar = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
@@ -268,6 +271,7 @@ let contextMenuFeatureRepoPackageId = null;
 let activeFeaturePanel = null;
 let currentWorkspaceTab = null;
 let shouldAnimateWorkspaceSurface = true;
+let _workGroupEventsWired = false;
 let assemblyDraftRenderTimer = null;
 let expandedProjectIds = new Set();
 let savedPhTabState = {};
@@ -385,6 +389,7 @@ let _restoredScrollTop = null;    // set by restoreRuntimeFromCache, consumed by
 let _chatLoadingSession = false;  // true while waiting for a just-opened session's messages to arrive
 let _chatLoadingTimeout = null;   // safety timeout to clear _chatLoadingSession
 let _switchEpoch = 0;             // monotonically increasing; used to guard stale async work from rapid switches
+let phSessionSortMode = 'updatedAt'; // 'updatedAt' | 'createdAt' — programming-helper session list sort preference
 
 // ── User expand/collapse preferences (survive full re-render) ──────────────
 // Keyed by message index. These override syncCollapseStates auto-rules.
@@ -699,6 +704,8 @@ const I18N = {
     workspace_main_conversations: '我的对话',
     workspace_sub_conversations: '子代理对话',
     workspace_exploration_conversations: '探索记录',
+    workspace_sort_updated: '更新时间',
+    workspace_sort_created: '创建时间',
     workspace_expand_records: '展开记录',
     workspace_collapse_records: '收起记录',
     workspace_feature_no_sessions: '暂无对话记录',
@@ -1030,6 +1037,8 @@ const I18N = {
     workspace_main_conversations: 'My Chats',
     workspace_sub_conversations: 'Sub-agents',
     workspace_exploration_conversations: 'Explorations',
+    workspace_sort_updated: 'Updated',
+    workspace_sort_created: 'Created',
     workspace_expand_records: 'Show Records',
     workspace_collapse_records: 'Hide Records',
     workspace_feature_no_sessions: 'No conversations yet',

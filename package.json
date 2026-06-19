@@ -11,9 +11,9 @@
     "dev": "node server.js",
     "prestart": "npm run build:local-features",
     "start": "node server.js",
-    "test": "node --test test/*.test.js && node local-features/dist/flow/test/flow-feature.test.js && node local-features/dist/context-compaction-mirror/test/smoke.test.js && node local-features/dist/checkpoint/test/smoke.test.js",
+    "test": "node --test test/*.test.js && node local-features/dist/flow/test/flow-feature.test.js && node local-features/dist/context-compaction-mirror/test/smoke.test.js && node local-features/dist/checkpoint/test/smoke.test.js && node local-features/dist/dispatch/test/smoke.test.js && node local-features/dist/context-handoff-seed/test/smoke.test.js",
     "test:core": "node --test test/*.test.js",
-    "test:features": "node local-features/dist/flow/test/flow-feature.test.js && node local-features/dist/context-compaction-mirror/test/smoke.test.js && node local-features/dist/checkpoint/test/smoke.test.js",
+    "test:features": "node local-features/dist/flow/test/flow-feature.test.js && node local-features/dist/context-compaction-mirror/test/smoke.test.js && node local-features/dist/checkpoint/test/smoke.test.js && node local-features/dist/dispatch/test/smoke.test.js && node local-features/dist/context-handoff-seed/test/smoke.test.js",
     "pretest:features": "npm run build:local-features"
   },
   "dependencies": {

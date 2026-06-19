@@ -29,6 +29,7 @@ import {
   EnvelopeSource,
   EnvelopeStatus,
 } from './server/runtime-call-envelope.js';
+import { renderConversationHtml } from './server/conversation-renderer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -5315,13 +5316,31 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
       const idx = await readSessionIndex(agent.id);
       const sessionRecord = idx.sessions.find(s => s.id === resolvedSessionId);
       if (sessionRecord?.metadata?.handoffPath) {
-        runtimeOptions = {
-          ...runtimeOptions,
-          extraEnv: {
-            ...(runtimeOptions?.extraEnv || {}),
-            PROTOCLAW_HANDOFF_PATH: sessionRecord.metadata.handoffPath,
-          },
-        };
+        // Only pass handoff env when the session has no persisted messages yet.
+        // If the session file already exists and contains messages, the handoff
+        // was already consumed on first boot and re-injecting would duplicate
+        // seed messages with conflicting turn values.
+        let shouldInjectHandoff = true;
+        try {
+          const sessionPath = getPrebuiltSessionFilePath(agent.id, resolvedSessionId);
+          const raw = await fs.readFile(sessionPath, 'utf8');
+          const snapshot = JSON.parse(raw);
+          const messages = snapshot?.runtime?.context?.messages;
+          if (Array.isArray(messages) && messages.length > 0) {
+            shouldInjectHandoff = false;
+          }
+        } catch {
+          // Session file doesn't exist or is unreadable — safe to inject
+        }
+        if (shouldInjectHandoff) {
+          runtimeOptions = {
+            ...runtimeOptions,
+            extraEnv: {
+              ...(runtimeOptions?.extraEnv || {}),
+              PROTOCLAW_HANDOFF_PATH: sessionRecord.metadata.handoffPath,
+            },
+          };
+        }
       }
     } catch {}
   }
@@ -6221,6 +6240,52 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
   }
 });
 
+app.post('/protoclaw/render_conversation', express.json(), async (req, res, next) => {
+  try {
+    const { sessionId, agentId, lastNCalls } = req.body || {};
+    if (!sessionId || typeof sessionId !== 'string') {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+    const resolvedAgentId = (typeof agentId === 'string' && agentId) || 'qqbot';
+    const sessionPath = getPrebuiltSessionFilePath(resolvedAgentId, sessionId);
+    const raw = await fs.readFile(sessionPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
+    if (messages.length === 0) {
+      res.status(404).json({ error: 'Session has no messages to render' });
+      return;
+    }
+
+    const html = renderConversationHtml(messages, {
+      title: `对话记录 ${sessionId.slice(-12)}`,
+      agentId: resolvedAgentId,
+      sessionId,
+      lastNCalls: typeof lastNCalls === 'number' && lastNCalls > 0 ? lastNCalls : null,
+    });
+
+    const tempDir = path.join(process.cwd(), '.agentdev', 'temp');
+    await fs.mkdir(tempDir, { recursive: true });
+    const filename = `conversation-${sessionId.slice(-12)}-${Date.now()}.html`;
+    const filePath = path.join(tempDir, filename);
+    await fs.writeFile(filePath, html, 'utf8');
+
+    const stat = await fs.stat(filePath);
+    res.json({
+      path: filePath,
+      filename,
+      size: stat.size,
+      messageCount: messages.length,
+    });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      res.status(404).json({ error: 'Session file not found' });
+    } else {
+      next(error);
+    }
+  }
+});
+
 app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
   try {
     const agentId = req.query.agentId;
@@ -6301,9 +6366,28 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       em => typeof em.turn !== 'number' || em.turn <= maxUserTurn
     );
 
+    // Read the source session index record early so its metadata (title, etc.)
+    // is available when building the branch record. Previously sourceRecord was
+    // only assigned inside the updateSessionIndex callback, which ran AFTER the
+    // branch record was constructed — so all sourceRecord fields were always null.
+    let sourceRecord = null;
+    try {
+      const sourceIdx = await readSessionIndex(agentId);
+      sourceRecord = sourceIdx.sessions.find(s => s.id === sourceSessionId) || null;
+    } catch {}
+
+    // Validate checkpoint integrity: warn if user turns lack matching checkpoints.
+    const branchUserTurns = branchMessages
+      .filter(m => m.role === 'user' && typeof m.turn === 'number')
+      .map(m => m.turn);
+    const branchCpIndices = branchCheckpoints.map(cp => cp.callIndex);
+    const missingCheckpoints = branchUserTurns.filter(t => !branchCpIndices.includes(t));
+    if (missingCheckpoints.length > 0) {
+      console.warn(`[ProtoClaw] Branch from ${sourceSessionId}: user turns [${branchUserTurns.join(',')}] have missing checkpoints for turns [${missingCheckpoints.join(',')}]. Rollback will be unavailable for those turns.`);
+    }
+
     const newSessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
     const createdAt = new Date().toISOString();
-    let sourceRecord = null;
 
     const branchSnapshot = {
       ...sourceSnapshot,
@@ -6356,7 +6440,6 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     };
 
     const nextIndex = await updateSessionIndex(agentId, (index) => {
-      sourceRecord = index.sessions.find((s) => s.id === sourceSessionId) || null;
       return {
         activeSessionId: newSessionId,
         sessions: [branchRecord, ...index.sessions.filter((s) => s.id !== newSessionId)],
@@ -6909,41 +6992,72 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
           .map(rt => getManagedRuntimeKey(agent.id, rt.selectedSessionId))
       );
 
-      // Also get session titles from the session index
+      // Get session metadata from the session index
       let sessionIndex;
       try {
         sessionIndex = await readSessionIndex(agent.id);
       } catch {
         sessionIndex = { sessions: [] };
       }
-      const sessionTitleMap = new Map(
-        (sessionIndex.sessions || []).map(s => [s.id, s.title || s.id])
+      const sessionMetaMap = new Map(
+        (sessionIndex.sessions || []).map(s => [s.id, s])
       );
+
+      // Resolve model info once per agent
+      const agentModelInfo = await resolveSessionModelInfo(agent.id, 'default');
 
       for (const project of projects) {
         const projectSessionIds = project.sessionIds || [];
         const projectSessions = [];
 
+        const buildSessionEntry = (sid) => {
+          const meta = sessionMetaMap.get(sid);
+          const tokenUsage = meta?.tokenUsage || null;
+          const lastReq = tokenUsage?.lastRequestUsage || null;
+          const contextTokens = lastReq?.totalTokens || lastReq?.inputTokens || null;
+          const contextLength = agentModelInfo.contextLength || null;
+          const contextUsagePct = (contextTokens && contextLength)
+            ? Math.round(contextTokens / contextLength * 100) : null;
+          // Execution state: idle | queued | running
+          const rtKey = getManagedRuntimeKey(agent.id, sid);
+          const execState = getRuntimeExecutionState(rtKey);
+          const savedAt = typeof meta?.savedAt === 'number' ? meta.savedAt : null;
+          return {
+            id: sid,
+            title: meta?.title || sid,
+            running: true,
+            modelName: agentModelInfo.modelName || '',
+            contextLength,
+            compressRatio: agentModelInfo.compressRatio || 80,
+            messageCount: typeof meta?.messageCount === 'number' ? meta.messageCount : null,
+            sessionType: meta?.sessionType || null,
+            tokenUsage: tokenUsage ? {
+              inputTokens: tokenUsage.inputTokens || 0,
+              outputTokens: tokenUsage.outputTokens || 0,
+              totalTokens: tokenUsage.totalTokens || 0,
+            } : null,
+            contextTokens,
+            contextUsagePct,
+            updatedAt: meta?.updatedAt || null,
+            savedAt,
+            execStatus: execState.status,
+            execQueueLength: execState.queueLength,
+            execLastActiveAt: execState.lastActiveAt,
+          };
+        };
+
         if (projectSessionIds.length > 0) {
           for (const sid of projectSessionIds) {
             const key = getManagedRuntimeKey(agent.id, sid);
             if (liveSessionKeys.has(key)) {
-              projectSessions.push({
-                id: sid,
-                title: sessionTitleMap.get(sid) || sid,
-                running: true,
-              });
+              projectSessions.push(buildSessionEntry(sid));
             }
           }
         } else {
           // When project has no explicit sessionIds, associate all live runtimes
           for (const rt of runtimes) {
             if (rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId) {
-              projectSessions.push({
-                id: rt.selectedSessionId,
-                title: sessionTitleMap.get(rt.selectedSessionId) || rt.selectedSessionId,
-                running: true,
-              });
+              projectSessions.push(buildSessionEntry(rt.selectedSessionId));
             }
           }
         }
@@ -6961,25 +7075,47 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
     const activeWorkspaces = workspaces;
 
     // Build current lines snapshot
-    const lines = (imConfig.lines || []).map(l => {
+    const lines = await Promise.all((imConfig.lines || []).map(async l => {
       const bound = l.boundSession;
-      let sessionTitle = null;
+      let boundSessionInfo = null;
       if (bound?.agentId && bound?.sessionId) {
         try {
           const idx = readSessionIndexSync(bound.agentId);
           const match = (idx?.sessions || []).find(s => s.id === bound.sessionId);
-          sessionTitle = match?.title || bound.sessionId;
+          const sessionTitle = match?.title || bound.sessionId;
+          const tokenUsage = match?.tokenUsage || null;
+          const lastReq = tokenUsage?.lastRequestUsage || null;
+          const boundModelInfo = await resolveSessionModelInfo(bound.agentId, 'default');
+          const contextLength = boundModelInfo.contextLength || null;
+          const contextTokens = lastReq?.totalTokens || lastReq?.inputTokens || null;
+          const contextUsagePct = (contextTokens && contextLength)
+            ? Math.round(contextTokens / contextLength * 100) : null;
+          const boundRtKey = getManagedRuntimeKey(bound.agentId, bound.sessionId);
+          const boundExecState = getRuntimeExecutionState(boundRtKey);
+          boundSessionInfo = {
+            agentId: bound.agentId,
+            sessionId: bound.sessionId,
+            sessionTitle,
+            modelName: boundModelInfo.modelName || '',
+            contextLength,
+            compressRatio: boundModelInfo.compressRatio || 80,
+            contextTokens,
+            contextUsagePct,
+            execStatus: boundExecState.status,
+            execQueueLength: boundExecState.queueLength,
+            savedAt: typeof match?.savedAt === 'number' ? match.savedAt : null,
+          };
         } catch {
-          sessionTitle = bound.sessionId;
+          boundSessionInfo = { agentId: bound.agentId, sessionId: bound.sessionId, sessionTitle: bound.sessionId };
         }
       }
       return {
         id: l.id,
         name: l.name || l.id,
         carrier: l.carrier || null,
-        boundSession: bound ? { agentId: bound.agentId, sessionId: bound.sessionId, sessionTitle } : null,
+        boundSession: boundSessionInfo,
       };
-    });
+    }));
 
     res.json({ workspaces: activeWorkspaces, lines });
   } catch (error) {

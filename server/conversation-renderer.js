@@ -136,53 +136,63 @@ function buildToolCallIndex(messages) {
   return index;
 }
 
-function renderToolCallCard(call) {
+/**
+ * 渲染一个紧凑的工具调用块（call + result 合并，默认折叠）
+ * 折叠时只显示一行：图标 + 工具名 + 状态
+ */
+function renderCompactToolBlock(call, resultMsg) {
   const displayName = getToolDisplayName(call.name);
   const argsJson = JSON.stringify(call.arguments, null, 2);
-  return `
-        <div class="tool-call-container">
-          <div class="tool-header">
-            <span class="tool-header-name">${escapeHtml(displayName)}</span>
-          </div>
-          <div class="tool-content">
-            <details class="tool-args-details">
-              <summary>参数</summary>
-              <pre class="tool-args-json">${escapeHtml(argsJson)}</pre>
-            </details>
-          </div>
-        </div>`;
-}
 
-function renderToolResult(msg, toolCallIndex) {
-  const toolCallId = msg.toolCallId;
-  const meta = toolCallIndex.get(toolCallId) || {};
-  const displayName = getToolDisplayName(meta.name);
-  const { success, data } = parseToolResult(msg.content);
+  let statusIcon = '·';
+  let statusClass = 'pending';
+  let resultHtml = '';
 
-  let bodyHtml;
-  if (!success) {
-    bodyHtml = formatToolError(data);
-  } else {
-    const displayData = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
-    bodyHtml = `<pre class="bash-output">${escapeHtml(truncateForPreview(displayData, 5000))}</pre>`;
+  if (resultMsg) {
+    const { success, data } = parseToolResult(resultMsg.content);
+    if (success) {
+      statusIcon = '✓';
+      statusClass = 'ok';
+    } else {
+      statusIcon = '✗';
+      statusClass = 'fail';
+    }
+
+    if (!success) {
+      resultHtml = `<div class="tool-block-section tool-block-result"><div class="tool-block-label">结果</div>${formatToolError(data)}</div>`;
+    } else {
+      const displayData = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+      resultHtml = `<div class="tool-block-section tool-block-result"><div class="tool-block-label">结果</div><pre class="bash-output">${escapeHtml(truncateForPreview(displayData, 5000))}</pre></div>`;
+    }
   }
 
-  return `
-      <div class="message-row tool">
-        <div class="message-meta">
-          <div class="role-badge">tool</div>
-        </div>
-        <div class="message-content tool-result-wrapper">
-          <div class="tool-result-header">
-            <span class="status-dot ${success ? 'success' : 'error'}"></span>
-            <span>${escapeHtml(displayName)}</span>
-          </div>
-          <div class="tool-result-body">${bodyHtml}</div>
-        </div>
-      </div>`;
+  // 参数预览：如果是单参数且值简短，直接显示在 summary 里
+  const argKeys = Object.keys(call.arguments || {});
+  let argPreview = '';
+  if (argKeys.length === 1) {
+    const val = String(call.arguments[argKeys[0]] ?? '');
+    if (val.length <= 80) {
+      argPreview = `<span class="tool-block-arg-preview">${escapeHtml(truncateForPreview(val, 80))}</span>`;
+    }
+  }
+
+  return `<details class="tool-block">
+  <summary class="tool-block-bar">
+    <span class="tool-block-status ${statusClass}">${statusIcon}</span>
+    <span class="tool-block-name">${escapeHtml(displayName)}</span>
+    ${argPreview}
+  </summary>
+  <div class="tool-block-detail">
+    <div class="tool-block-section">
+      <div class="tool-block-label">参数</div>
+      <pre class="tool-block-json">${escapeHtml(argsJson)}</pre>
+    </div>
+    ${resultHtml}
+  </div>
+</details>`;
 }
 
-function renderAssistantMessage(msg) {
+function renderAssistantMessage(msg, toolResults) {
   let innerContent = '';
 
   // Reasoning block (collapsible)
@@ -197,20 +207,23 @@ function renderAssistantMessage(msg) {
       </details>`;
   }
 
-  // Content
+  // Content — 这是 agent 的核心输出，视觉强调
   if (msg.content) {
     if (msg.content.startsWith('[Error:') || msg.content.startsWith('[API Error:')) {
       innerContent += `<div class="tool-error">${escapeHtml(msg.content)}</div>`;
     } else {
-      innerContent += `<div class="markdown-body assistant-content">${renderMarkdown(msg.content)}</div>`;
+      innerContent += `<div class="assistant-text markdown-body">${renderMarkdown(msg.content)}</div>`;
     }
   }
 
-  // Tool calls
+  // Tool calls — 紧凑折叠块，call+result 合并
   if (msg.toolCalls && msg.toolCalls.length > 0) {
+    innerContent += '<div class="tool-block-group">';
     for (const call of msg.toolCalls) {
-      innerContent += renderToolCallCard(call);
+      const resultMsg = toolResults?.get(call.id);
+      innerContent += renderCompactToolBlock(call, resultMsg);
     }
+    innerContent += '</div>';
   }
 
   return `
@@ -301,7 +314,15 @@ function groupByTurn(messages) {
   return groups;
 }
 
-function renderTurnGroup(group, groupIndex, toolCallIndex) {
+function renderTurnGroup(group, groupIndex, toolCallIndex, callTimestamps, turnGroupCount) {
+  // 收集 tool 结果，按 toolCallId 索引，供 assistant 消息合并使用
+  const toolResults = new Map();
+  for (const msg of group.messages) {
+    if (msg.role === 'tool' && msg.toolCallId) {
+      toolResults.set(msg.toolCallId, msg);
+    }
+  }
+
   const parts = [];
   let hasUserMessage = false;
 
@@ -310,12 +331,11 @@ function renderTurnGroup(group, groupIndex, toolCallIndex) {
       hasUserMessage = true;
       parts.push(renderUserMessage(msg));
     } else if (msg.role === 'assistant') {
-      parts.push(renderAssistantMessage(msg));
-    } else if (msg.role === 'tool') {
-      parts.push(renderToolResult(msg, toolCallIndex));
+      parts.push(renderAssistantMessage(msg, toolResults));
     } else if (msg.role === 'system') {
       parts.push(renderSystemMessage(msg));
     }
+    // tool 消息不再独立渲染，已合并到 assistant 的 tool-block 中
   }
 
   // 找到用户消息作为摘要标题
@@ -324,20 +344,36 @@ function renderTurnGroup(group, groupIndex, toolCallIndex) {
     ? truncateForPreview(userMsg.content.replace(/\n/g, ' '), 80)
     : `Turn ${group.turn}`;
 
+  // 时间戳
+  let timeLabel = '';
+  if (callTimestamps) {
+    const ts = callTimestamps.get(group.turn);
+    if (ts) {
+      timeLabel = new Date(ts).toLocaleString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      });
+    }
+  }
+
   const isInteractive = hasUserMessage;
 
   if (isInteractive) {
     return `
-    <details class="turn-group" ${groupIndex === 0 ? 'open' : ''}>
+    <details class="turn-group" ${groupIndex === turnGroupCount - 1 ? 'open' : ''}>
       <summary class="turn-summary">
         <span class="turn-number">#${group.turn}</span>
         <span class="turn-title">${escapeHtml(titleText)}</span>
+        ${timeLabel ? `<span class="turn-time">${escapeHtml(timeLabel)}</span>` : ''}
       </summary>
+      <div class="turn-body">
       ${parts.join('')}
+      </div>
     </details>`;
   } else {
     // 没有 user 消息的组（通常是初始 system prompt）不折叠
-    return `<div class="turn-group static">${parts.join('')}</div>`;
+    return `<div class="turn-group static"><div class="turn-body">${parts.join('')}</div></div>`;
   }
 }
 
@@ -349,6 +385,7 @@ function renderConversationHtml(messages, options = {}) {
     agentId = '',
     sessionId = '',
     lastNCalls = null,
+    callTimestamps = null, // Map<turn, number(ms)> from usageStats.calls
   } = options;
 
   // 过滤：最近 N 轮
@@ -370,7 +407,7 @@ function renderConversationHtml(messages, options = {}) {
     chars: filteredMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0),
   };
 
-  const groupHtml = turnGroups.map((g, i) => renderTurnGroup(g, i, toolCallIndex)).join('\n');
+  const groupHtml = turnGroups.map((g, i) => renderTurnGroup(g, i, toolCallIndex, callTimestamps, turnGroups.length)).join('\n');
 
   const now = new Date();
   const timestamp = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
@@ -414,23 +451,29 @@ ${groupHtml}
 
 const CONVERSATION_CSS = `
 :root {
-  --bg-color: #0d1117;
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-muted: #484f58;
-  --border-color: #30363d;
-  --user-msg-bg: #1c2128;
-  --tool-msg-bg: #161b22;
-  --hover-bg: #21262d;
-  --success-color: #3fb950;
-  --error-color: #f85149;
-  --accent-blue: #58a6ff;
-  --code-bg: #161b22;
-  --reasoning-bg: rgba(255,255,255,0.03);
-  --reasoning-border: #30363d;
+  --bg-color: #000000;
+  --surface: #0a0a0a;
+  --surface-2: #111;
+  --text-primary: #ededed;
+  --text-secondary: #888;
+  --text-muted: #555;
+  --border-color: #222;
+  --border-light: #333;
+  --user-msg-bg: #1a1a1a;
+  --tool-msg-bg: #050505;
+  --accent: #ededed;
+  --accent-soft: rgba(255,255,255,0.04);
+  --accent-border: #444;
+  --success: #3fb950;
+  --error: #f85149;
+  --code-bg: #0d0d0d;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* 隐藏滚动条但保留滚动 */
+::-webkit-scrollbar { width: 0; height: 0; }
+* { scrollbar-width: none; -ms-overflow-style: none; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Helvetica, Arial, sans-serif;
@@ -457,6 +500,7 @@ body {
   font-size: 20px;
   font-weight: 700;
   margin-bottom: 8px;
+  color: var(--text-primary);
 }
 .conv-meta {
   display: flex;
@@ -470,17 +514,17 @@ body {
 .chat-container {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 /* ── Turn 分组 ── */
 .turn-group {
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
-  background: rgba(255,255,255,0.01);
+  background: var(--surface);
 }
-.turn-group[open] { background: rgba(255,255,255,0.015); }
+.turn-group[open] { background: var(--surface); }
 
 .turn-summary {
   padding: 10px 16px;
@@ -491,22 +535,30 @@ body {
   align-items: center;
   gap: 10px;
   user-select: none;
-  background: rgba(255,255,255,0.03);
+  background: var(--surface-2);
   list-style: none;
+  border-bottom: 1px solid var(--border-color);
 }
 .turn-summary::-webkit-details-marker { display: none; }
 .turn-summary::before {
   content: '▶';
-  font-size: 10px;
+  font-size: 9px;
   transition: transform 0.2s;
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 .turn-group[open] > .turn-summary::before {
   transform: rotate(90deg);
 }
+.turn-group[open] > .turn-summary {
+  border-bottom: 1px solid var(--border-color);
+}
+.turn-group:not([open]) > .turn-summary {
+  border-bottom: none;
+}
 .turn-number {
   font-weight: 700;
-  color: var(--accent-blue);
+  color: var(--accent);
   font-size: 12px;
   flex-shrink: 0;
 }
@@ -514,6 +566,17 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+.turn-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-body {
+  padding: 4px 0 16px;
 }
 
 .turn-group.static {
@@ -521,17 +584,19 @@ body {
   border-radius: 0;
   background: transparent;
 }
+.turn-group.static .turn-body {
+  padding: 0;
+}
 
 /* ── 消息行 ── */
 .message-row {
-  padding: 0 16px;
-  padding-top: 12px;
+  padding: 10px 16px 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
-.turn-group.static > .message-row:first-child {
-  padding-top: 0;
+.message-row:last-child {
+  padding-bottom: 0;
 }
 
 .message-meta {
@@ -548,11 +613,10 @@ body {
   letter-spacing: 0.5px;
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-light);
 }
-.message-row.user .role-badge { color: var(--accent-blue); border-color: rgba(88,166,255,0.4); }
-.message-row.assistant .role-badge { color: #3fb950; border-color: rgba(63,185,80,0.4); }
-.message-row.tool .role-badge { color: var(--text-secondary); }
+.message-row.user .role-badge { color: var(--text-primary); border-color: var(--border-light); }
+.message-row.assistant .role-badge { color: var(--success); border-color: rgba(63,185,80,0.3); }
 .message-row.system .role-badge { color: var(--text-muted); }
 
 .token-info {
@@ -584,10 +648,6 @@ body {
   background: transparent;
   padding: 0;
   width: 100%;
-}
-
-.assistant-content {
-  margin-bottom: 8px;
 }
 
 /* ── System ── */
@@ -655,6 +715,7 @@ body {
   margin-top: 18px;
   margin-bottom: 10px;
   font-weight: 700;
+  color: var(--text-primary);
 }
 .markdown-body h1 { font-size: 1.4em; }
 .markdown-body h2 { font-size: 1.25em; }
@@ -664,7 +725,7 @@ body {
 .markdown-body code {
   font-family: ui-monospace, SFMono-Regular, "Cascadia Code", "Source Code Pro", Consolas, monospace;
   font-size: 0.875em;
-  background: rgba(255,255,255,0.08);
+  background: var(--code-bg);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -688,7 +749,7 @@ body {
   margin-bottom: 12px;
   color: var(--text-secondary);
 }
-.markdown-body a { color: var(--accent-blue); text-decoration: none; }
+.markdown-body a { color: var(--accent); text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
 .markdown-body table {
   width: 100%;
@@ -701,7 +762,7 @@ body {
   border: 1px solid var(--border-color);
 }
 .markdown-body th {
-  background: var(--hover-bg);
+  background: var(--surface-2);
   font-weight: 600;
   text-align: left;
 }
@@ -715,9 +776,9 @@ body {
 /* ── Reasoning ── */
 .reasoning-block {
   margin-bottom: 12px;
-  border-left: 2px solid var(--reasoning-border);
+  border-left: 2px solid var(--border-light);
   padding-left: 14px;
-  background: var(--reasoning-bg);
+  background: var(--accent-soft);
   border-radius: 0 4px 4px 0;
 }
 .reasoning-header {
@@ -747,112 +808,112 @@ body {
   color: var(--text-secondary);
 }
 
-/* ── Tool Call ── */
-.tool-call-container {
+/* ── Assistant Text (核心输出，视觉强调) ── */
+.assistant-text {
+  font-size: 15px;
+  line-height: 1.7;
+  padding: 6px 0 8px 14px;
+  border-left: 3px solid var(--accent-border);
+  margin-left: -2px;
+}
+
+/* ── Tool Block (紧凑折叠，call+result 合并) ── */
+.tool-block-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin-top: 8px;
-  margin-bottom: 8px;
+}
+.tool-block {
   border: 1px solid var(--border-color);
   border-radius: 6px;
   overflow: hidden;
   background: var(--tool-msg-bg);
 }
-.tool-header {
-  background: var(--hover-bg);
-  padding: 6px 12px;
-  font-size: 12px;
+.tool-block-bar {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
   color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
 }
-.tool-header-name {
+.tool-block-bar::-webkit-details-marker { display: none; }
+.tool-block-bar::before {
+  content: '▸';
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.tool-block[open] > .tool-block-bar { border-bottom: 1px solid var(--border-color); }
+.tool-block[open] > .tool-block-bar::before { content: '▾'; }
+.tool-block-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.tool-block-status.ok { background: rgba(63,185,80,0.15); color: var(--success); }
+.tool-block-status.fail { background: rgba(248,81,73,0.15); color: var(--error); }
+.tool-block-status.pending { background: rgba(136,136,136,0.1); color: var(--text-muted); }
+.tool-block-name {
   color: var(--text-primary);
   font-weight: 600;
+  flex-shrink: 0;
 }
-.tool-content {
-  padding: 10px 12px;
-  font-size: 13px;
-}
-.tool-args-details {
-  font-size: 12px;
-}
-.tool-args-details > summary {
-  cursor: pointer;
+.tool-block-arg-preview {
   color: var(--text-secondary);
-  padding: 2px 0;
-  user-select: none;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
 }
-.tool-args-details > summary::before {
-  content: '▶ ';
-  font-size: 9px;
+.tool-block-detail { padding: 0; }
+.tool-block-section { padding: 8px 12px; }
+.tool-block-section + .tool-block-section {
+  border-top: 1px solid var(--border-color);
 }
-.tool-args-details[open] > summary::before {
-  content: '▼ ';
+.tool-block-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
 }
-.tool-args-json {
+.tool-block-json {
   font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
   font-size: 12px;
   color: var(--text-secondary);
   white-space: pre-wrap;
-  margin-top: 6px;
-  margin-bottom: 0;
+  word-break: break-all;
+  margin: 0;
 }
-
-/* ── Tool Result ── */
-.tool-result-wrapper {
-  padding: 0 !important;
-  overflow: hidden;
-}
-.tool-result-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--hover-bg);
-  font-size: 12px;
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color);
-  border-bottom: none;
-}
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.status-dot.success {
-  background: var(--success-color);
-  box-shadow: 0 0 4px rgba(63,185,80,0.4);
-}
-.status-dot.error {
-  background: var(--error-color);
-  box-shadow: 0 0 4px rgba(248,81,73,0.4);
-}
-.tool-result-body {
-  background: var(--tool-msg-bg);
-  border: 1px solid var(--border-color);
-  border-top: none;
-  padding: 10px 12px;
-  overflow-x: auto;
-  max-height: 400px;
-  overflow-y: auto;
-  font-size: 13px;
-}
-.bash-output {
+.tool-block-result .bash-output {
   font-family: ui-monospace, SFMono-Regular, "Cascadia Code", "Source Code Pro", Consolas, monospace;
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
   margin: 0;
   font-size: 12px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 /* ── Tool Error ── */
 .tool-error {
-  background: rgba(248,81,73,0.1);
-  border: 1px solid rgba(248,81,73,0.3);
-  color: #ff7b72;
+  background: rgba(248,81,73,0.08);
+  border: 1px solid rgba(248,81,73,0.25);
+  color: var(--error);
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 13px;
@@ -866,7 +927,7 @@ body {
   .message-content { font-size: 14px; }
   .message-row.user .message-content { max-width: 92%; }
   .markdown-body pre { font-size: 12px; padding: 10px; }
-  .tool-result-body { max-height: 300px; }
+  .tool-block-result .bash-output { max-height: 250px; }
 }
 `;
 

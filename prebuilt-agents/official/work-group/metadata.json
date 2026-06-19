@@ -1,0 +1,33 @@
+{
+  "id": "work-group",
+  "kind": "workspace",
+  "launchMode": "ui-only",
+  "name": "工作群",
+  "description": "群聊指挥台 — 以即时通讯的方式管理多个 Agent 的协作",
+  "version": "0.1.0",
+  "icon": "chat",
+  "category": "workspace",
+  "enabled": true,
+  "features": [],
+  "sortOrder": 1,
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "群聊",
+          "en": "Chats"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "work-group-chat",
+          "type": "work-group-chat"
+        }
+      ]
+    }
+  }
+}

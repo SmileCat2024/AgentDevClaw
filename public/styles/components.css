@@ -1573,6 +1573,32 @@ body[data-theme="light"] .workspace-docset-row {
   border-bottom: 1px solid var(--border);
 }
 
+.ph-session-sort-toggle {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding-right: 4px;
+}
+
+.ph-session-sort-toggle button {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.ph-session-sort-toggle button:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
 .ph-session-tab {
   background: none;
   border: none;
@@ -6273,3 +6299,513 @@ body[data-theme="light"] .ph-session-type-badge {
 }
 
 
+/* ── Work Group (群聊指挥台) ─────────────────────────────── */
+
+.wg-app {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-color);
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+/* 左侧 sidebar */
+.wg-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+  overflow: hidden;
+}
+
+.wg-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.wg-search-input {
+  flex: 1;
+  background: var(--input-card-bg);
+  border: 1px solid var(--input-card-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+.wg-search-input:focus { border-color: var(--text-secondary); }
+
+.wg-new-chat-btn {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.wg-new-chat-btn:hover { background: var(--active-bg); }
+
+.wg-chat-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.wg-chat-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 40px 0;
+  font-size: 13px;
+}
+
+.wg-chat-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s;
+}
+.wg-chat-item:hover { background: var(--hover-bg); }
+.wg-chat-item.active { background: var(--active-bg); }
+
+.wg-chat-avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--hover-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+.wg-chat-item.active .wg-chat-avatar { background: var(--bg-secondary); }
+
+.wg-chat-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wg-chat-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wg-chat-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wg-chat-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.wg-chat-preview {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wg-chat-badge {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  background: #dc3545;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+}
+
+/* 右侧 main */
+.wg-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wg-conversation {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wg-conv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.wg-conv-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wg-conv-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.wg-icon-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+}
+.wg-icon-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+
+/* 态势层 */
+.wg-awareness {
+  padding: 8px 20px;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.wg-awareness-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 4px;
+}
+
+.wg-member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wg-member-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.wg-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  display: inline-block;
+}
+.wg-status-dot.running { background: #f5a623; box-shadow: 0 0 4px #f5a623; }
+.wg-status-dot.idle { background: var(--text-muted); }
+.wg-status-dot.online { background: #198754; }
+
+.wg-awareness-goal {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* 消息流 */
+.wg-msg-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.wg-msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.wg-msg-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.wg-msg-row.me {
+  flex-direction: row-reverse;
+}
+
+.wg-msg-avatar {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: var(--hover-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.wg-msg-body {
+  min-width: 0;
+  max-width: 70%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wg-msg-row.me .wg-msg-body { align-items: flex-end; }
+
+.wg-msg-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.wg-msg-row.me .wg-msg-meta { flex-direction: row-reverse; }
+
+.wg-msg-author {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.wg-msg-tag {
+  background: var(--active-bg);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.wg-msg-time {
+  color: var(--text-muted);
+}
+
+.wg-msg-bubble {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+.wg-msg-row.me .wg-msg-bubble {
+  background: #2b5279;
+  color: #fff;
+}
+.wg-msg-bubble.report {
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+}
+
+/* 输入区 */
+.wg-input-area {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-color);
+  padding: 8px 16px 12px;
+  background: var(--bg-color);
+}
+
+.wg-input-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.wg-input-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wg-input-btn:hover { background: var(--hover-bg); color: var(--text-primary); }
+
+.wg-input-editor {
+  min-height: 48px;
+  max-height: 120px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  outline: none;
+}
+.wg-input-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+}
+
+.wg-input-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.wg-input-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wg-send-btn {
+  background: var(--accent-color);
+  color: var(--bg-color);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.wg-send-btn:hover { opacity: 0.85; }
+
+/* 空状态 */
+.wg-conversation-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+}
+.wg-conversation-empty p { font-size: 14px; }
+
+/* 设置面板 */
+.wg-settings-panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.wg-settings-section {
+  margin-bottom: 24px;
+}
+
+.wg-settings-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.wg-settings-field {
+  margin-bottom: 12px;
+}
+.wg-settings-field label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.wg-settings-input {
+  width: 100%;
+  background: var(--input-card-bg);
+  border: 1px solid var(--input-card-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  margin-top: 4px;
+}
+.wg-settings-input:focus { border-color: var(--text-secondary); }
+textarea.wg-settings-input { resize: vertical; min-height: 60px; }
+
+.wg-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.wg-settings-row:last-child { border-bottom: none; }
+
+.wg-settings-row-name {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.wg-settings-row-role {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.wg-settings-row-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Full-bleed layout for work-group (locks container, independent scroll) */
+.workspace-surface:has(.wg-app) {
+  height: 100%;
+  max-width: none;
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+  box-sizing: border-box;
+}
+
+.main-content:has(.wg-app),
+#chat-container:has(.wg-app) {
+  height: 100%;
+  overflow: hidden;
+}
+
+#chat-container:has(.wg-app) {
+  padding: 0;
+  gap: 0;
+}
+
+.workspace-surface:has(.wg-app) > .wg-app {
+  height: 100%;
+  min-height: 0;
+}

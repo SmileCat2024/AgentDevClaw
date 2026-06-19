@@ -17,6 +17,9 @@ async function main(): Promise<void> {
 
   const messages: Array<{ role: string; content: string }> = [];
   const context = {
+    add(msg: any): void {
+      messages.push({ role: msg.role, content: msg.content });
+    },
     addSystemMessage(content: string): void {
       messages.push({ role: 'system', content });
     },
@@ -28,15 +31,23 @@ async function main(): Promise<void> {
     },
   } as unknown as Context;
 
+  const agent = { _callIndex: 0 };
   await feature.injectHandoffSummary({
     input: 'hello',
     isFirstCall: true,
     context,
-    agent: { _callIndex: 0 },
+    agent,
   } as any);
 
   if (messages.length !== 3) {
     throw new Error(`expected three injected seed messages, got ${messages.length}`);
+  }
+
+  // Verify _callIndex was advanced past seed turns.
+  // seedMessages have turns 1, 2, 2 → injectionTurn = max(0, 1+1, 2+1, 2+1) = 3
+  // _callIndex should be set to injectionTurn - 1 = 2
+  if (agent._callIndex !== 2) {
+    throw new Error(`expected _callIndex=2 (injectionTurn-1), got ${agent._callIndex}`);
   }
 
   await feature.injectHandoffSummary({
@@ -49,6 +60,8 @@ async function main(): Promise<void> {
   if (messages.length !== 3) {
     throw new Error('handoff seed should inject only once');
   }
+
+  console.log('[PASS] ContextHandoffSeed: seed injection + _callIndex advancement');
 }
 
 main().catch(error => {

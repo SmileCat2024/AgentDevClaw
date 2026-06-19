@@ -168,8 +168,16 @@ export class ContextHandoffSeedFeature implements AgentFeature {
           ? Number(message.turn)
           : (fallbackTurn + index);
         injectionTurn = Math.max(injectionTurn, turn + 1);
-        ctx.context.add({ ...message, turn });
+        ctx.context.add({ ...message, turn, source: 'handoff-seed' });
       });
+
+      // Advance the runtime call index past all seed turns so the first real
+      // user message gets a non-colliding turn value. Without this, seed turns
+      // (e.g. 0,1,2,3,4,5) overlap with the first local user call (turn=0).
+      const agentRef = ctx.agent as any;
+      if (typeof agentRef?._callIndex === 'number' && injectionTurn - 1 > agentRef._callIndex) {
+        agentRef._callIndex = injectionTurn - 1;
+      }
     }
 
     // Inject sourceSummary as a system message only when seedMessages is empty (legacy fallback)

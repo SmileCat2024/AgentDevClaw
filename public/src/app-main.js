@@ -84,6 +84,7 @@ function getCurrentAgentRecord() {
 
 function groupConnectedAgents(agents) {
   const TOOL_AGENT_IDS = new Set(['programming-helper']);
+  const WORK_GROUP_IDS = new Set(['work-group']);
   const prebuiltIds = new Set(
     agents
       .filter((agent) => agent.source === 'prebuilt')
@@ -97,7 +98,8 @@ function groupConnectedAgents(agents) {
   });
   const allPrebuilt = agents.filter((agent) => agent.source === 'prebuilt');
   return {
-    prebuilt: allPrebuilt.filter((agent) => !TOOL_AGENT_IDS.has(String(agent.id || '').trim())),
+    prebuilt: allPrebuilt.filter((agent) => !TOOL_AGENT_IDS.has(String(agent.id || '').trim()) && !WORK_GROUP_IDS.has(String(agent.id || '').trim())),
+    workGroup: allPrebuilt.filter((agent) => WORK_GROUP_IDS.has(String(agent.id || '').trim())),
     tool: allPrebuilt.filter((agent) => TOOL_AGENT_IDS.has(String(agent.id || '').trim())),
     external: orphanRuntimeAgents,
   };
@@ -1027,6 +1029,7 @@ function renderAgentList() {
   lastAgentListRenderSignature = nextSignature;
   const groups = groupConnectedAgents(allAgents);
   renderAgentGroup(prebuiltAgentList, prebuiltGroup, prebuiltCount, groups.prebuilt, { prebuilt: true });
+  renderAgentGroup(workGroupAgentList, workGroupGroup, workGroupCount, groups.workGroup, { prebuilt: true });
   renderAgentGroup(toolAgentList, toolGroup, toolCount, groups.tool, { prebuilt: true });
   renderAgentGroup(externalAgentList, externalGroup, externalCount, groups.external);
 
@@ -1273,6 +1276,11 @@ window.switchPhSessionTab = (btn) => {
   if (tabGroup.dataset.tabGroup) {
     savedPhTabState[tabGroup.dataset.tabGroup] = targetTab;
   }
+};
+
+window.phToggleSessionSort = () => {
+  phSessionSortMode = phSessionSortMode === 'createdAt' ? 'updatedAt' : 'createdAt';
+  renderCurrentMainView();
 };
 
 window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
@@ -5752,7 +5760,7 @@ function syncRollbackActionButtons() {
     if (!meta) return;
 
     const existingButton = meta.querySelector('.message-action');
-    const shouldShow = allowRollback && !!msg && msg.role === 'user';
+    const shouldShow = allowRollback && canRollbackMessage(msg);
 
     if (!shouldShow) {
       if (existingButton) {
@@ -5871,8 +5879,29 @@ function getRollbackInputRequest() {
   ) || null;
 }
 
+function getAvailableCallIndices() {
+  const request = getRollbackInputRequest();
+  if (!request) return null;
+  // Find the action that carries availableCallIndices
+  for (const action of (request.actions || [])) {
+    if (Array.isArray(action?.data?.availableCallIndices)) {
+      return action.data.availableCallIndices;
+    }
+  }
+  // Fallback: if no data is provided (older runtime), return null to signal
+  // "unknown" — in that case we allow all user messages to be rollbackable
+  // to preserve backward compatibility.
+  return null;
+}
+
 function canRollbackMessage(msg) {
-  return !!getRollbackInputRequest() && !!msg && msg.role === 'user';
+  if (!getRollbackInputRequest() || !msg || msg.role !== 'user') return false;
+  // Seed messages from handoff are never rollbackable
+  if (msg.source === 'handoff-seed') return false;
+  const available = getAvailableCallIndices();
+  // If runtime didn't send availableCallIndices, fall back to allowing all
+  if (available === null) return true;
+  return available.includes(msg.turn);
 }
 
 function saveChatProcessVisibility() {

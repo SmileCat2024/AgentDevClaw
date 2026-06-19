@@ -22,6 +22,8 @@
     "./flow/src/**/*.ts",
     "./flow/test/**/*.ts",
     "./dispatch/src/**/*.ts",
+    "./dispatch/test/**/*.ts",
+    "./conversation-export/src/**/*.ts",
     "./checkpoint/src/**/*.ts",
     "./checkpoint/test/**/*.ts"
   ]

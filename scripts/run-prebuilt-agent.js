@@ -818,7 +818,14 @@ process.on('message', (msg) => {
 
 function getNextTurnActions() {
   const checkpoints = Array.isArray(agent?._callCheckpoints) ? agent._callCheckpoints : [];
-  return checkpoints.length > 0 ? NEXT_TURN_ACTIONS : undefined;
+  if (checkpoints.length === 0) return undefined;
+  const availableCallIndices = checkpoints.map(cp => cp.callIndex);
+  // Return actions enriched with availableCallIndices so the frontend can
+  // determine which user messages actually have rollback targets.
+  return NEXT_TURN_ACTIONS.map(action => ({
+    ...action,
+    data: { availableCallIndices },
+  }));
 }
 
 async function disposeAgent(exitCode = 0) {

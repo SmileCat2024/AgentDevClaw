@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
+import { ConversationExportFeature } from '../../../local-features/dist/conversation-export/src/index.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -109,13 +110,41 @@ class IMOperatorFeature {
             if (lines.length === 0) {
               return { text: '当前没有配置任何 IM 线路。', lines: [] };
             }
+            const fmtTokens = (n) => n != null ? n.toLocaleString() : '?';
+            const fmtAgo = (ms) => {
+              if (!ms) return '?';
+              const diff = Date.now() - ms;
+              if (diff < 60_000) return '刚刚';
+              if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+              if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+              return `${Math.floor(diff / 86_400_000)}天前`;
+            };
+            const execLabel = (s) => {
+              if (s === 'running') return '忙（处理中）';
+              if (s === 'queued') return '排队中';
+              return '空闲';
+            };
             const summary = lines.map(l => {
               const carrierLabel = l.carrier === 'qq' ? 'QQ' : l.carrier === 'weixin' ? '微信' : '未配置';
               const bound = l.boundSession;
-              const status = bound
-                ? `已连接 → ${bound.sessionTitle || bound.sessionId} (${bound.agentId})`
-                : '空闲（未连接）';
-              return `- **${l.name}** [${carrierLabel}]: ${status}`;
+              if (!bound) {
+                return `- **${l.name}** [${carrierLabel}]: 空闲（未连接）`;
+              }
+              const model = bound.modelName || '未知';
+              const ctxPct = bound.contextUsagePct != null ? `${bound.contextUsagePct}%` : '?';
+              const ctxDetail = bound.contextTokens != null && bound.contextLength
+                ? `${fmtTokens(bound.contextTokens)}/${fmtTokens(bound.contextLength)}`
+                : '?';
+              const threshold = bound.compressRatio != null ? `${bound.compressRatio}%` : '?';
+              const warn = bound.contextUsagePct != null && bound.compressRatio != null
+                && bound.contextUsagePct >= bound.compressRatio ? ' ⚠️已达压缩阈值' : '';
+              const exec = execLabel(bound.execStatus);
+              const lastActive = fmtAgo(bound.savedAt);
+              return (
+                `- **${l.name}** [${carrierLabel}]: 已连接 → ${bound.sessionTitle || bound.sessionId} (${bound.agentId})\n` +
+                `  状态: ${exec} | 最后活动: ${lastActive}\n` +
+                `  模型: ${model} | 上下文: ${ctxDetail} (${ctxPct}) | 压缩阈值: ${threshold}${warn}`
+              );
             });
             return {
               text: `当前 IM 线路状态：\n${summary.join('\n')}`,
@@ -128,7 +157,7 @@ class IMOperatorFeature {
       },
       {
         name: 'im_browse',
-        description: '列出所有可连接的工作空间会话。返回每个工作空间下的项目和在线会话，包含 im_connect_line 所需的 agentId 和 sessionId。',
+        description: '列出所有可连接的工作空间会话。返回每个工作空间下的项目和在线会话，包含模型名称、上下文用量、压缩阈值等运行时状态，以及 im_connect_line 所需的 agentId 和 sessionId。',
         parameters: {
           type: 'object',
           properties: {},
@@ -143,13 +172,60 @@ class IMOperatorFeature {
             if (workspaces.length === 0) {
               return { text: '当前没有在线的工作空间会话。', sessions: [] };
             }
+            const fmtTokens = (n) => n != null ? n.toLocaleString() : '?';
+            const fmtAgo = (ms) => {
+              if (!ms) return '?';
+              const diff = Date.now() - ms;
+              if (diff < 60_000) return '刚刚';
+              if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+              if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+              return `${Math.floor(diff / 86_400_000)}天前`;
+            };
+            const execLabel = (s) => {
+              if (s === 'running') return '忙（处理中）';
+              if (s === 'queued') return '排队中';
+              return '空闲';
+            };
             const lines = [];
             const flatSessions = [];
             for (const ws of workspaces) {
               for (const project of ws.projects) {
                 for (const session of (project.runningSessions || [])) {
-                  lines.push(`- 工作空间: ${ws.name} | agentId: ${ws.agentId} | 会话: ${session.title} | sessionId: ${session.id}`);
-                  flatSessions.push({ agentId: ws.agentId, agentName: ws.name, sessionId: session.id, sessionTitle: session.title });
+                  const model = session.modelName || '未知';
+                  const ctxPct = session.contextUsagePct != null ? `${session.contextUsagePct}%` : '?';
+                  const ctxDetail = session.contextTokens != null && session.contextLength
+                    ? `${fmtTokens(session.contextTokens)}/${fmtTokens(session.contextLength)}`
+                    : '?';
+                  const threshold = session.compressRatio != null ? `${session.compressRatio}%` : '?';
+                  const msgCount = session.messageCount != null ? session.messageCount : '?';
+                  const warn = session.contextUsagePct != null && session.compressRatio != null
+                    && session.contextUsagePct >= session.compressRatio ? ' ⚠️已达压缩阈值' : '';
+                  const exec = execLabel(session.execStatus);
+                  const lastActive = fmtAgo(session.savedAt);
+                  const queueInfo = session.execQueueLength > 0 ? ` | 队列: ${session.execQueueLength}` : '';
+                  lines.push(
+                    `- 工作空间: ${ws.name} | agentId: ${ws.agentId}\n` +
+                    `  会话: ${session.title} | sessionId: ${session.id}\n` +
+                    `  状态: ${exec}${queueInfo} | 最后活动: ${lastActive}\n` +
+                    `  模型: ${model} | 上下文: ${ctxDetail} (${ctxPct}) | 压缩阈值: ${threshold} | 消息数: ${msgCount}${warn}`
+                  );
+                  flatSessions.push({
+                    agentId: ws.agentId,
+                    agentName: ws.name,
+                    sessionId: session.id,
+                    sessionTitle: session.title,
+                    modelName: model,
+                    contextTokens: session.contextTokens ?? null,
+                    contextLength: session.contextLength ?? null,
+                    contextUsagePct: session.contextUsagePct ?? null,
+                    compressRatio: session.compressRatio ?? null,
+                    messageCount: session.messageCount ?? null,
+                    tokenUsage: session.tokenUsage ?? null,
+                    sessionType: session.sessionType ?? null,
+                    execStatus: session.execStatus ?? null,
+                    execQueueLength: session.execQueueLength ?? 0,
+                    savedAt: session.savedAt ?? null,
+                  });
                 }
               }
             }
@@ -295,6 +371,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       this.use(new WebSearchFeature());
       this.use(new ShellFeature());
       this.use(new IMOperatorFeature());
+      this.use(new ConversationExportFeature());
     }
   }
 
@@ -456,15 +533,23 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       .add('用户通过 QQ 或微信与你对话，你可以使用接线员工具查看线路状态、浏览可连接的工作空间和会话、以及进行接线转接。')
       .add('\n\n## 接线员工具（唯一信息来源）\n\n')
       .add('你只能使用以下 4 个接线员工具获取线路和目标信息，禁止使用其他工具（如 MCP 调试工具）来查询线路或会话状态：\n\n')
-      .add('- `im_overview`: 查看所有线路的当前状态（线路 ID、载体、是否已连接）\n')
-      .add('- `im_browse`: 列出所有可连接的在线会话（直接返回 agentId 和 sessionId，无需多次调用）\n')
+      .add('- `im_overview`: 查看所有线路的当前状态（线路 ID、载体、是否已连接、已连接会话的运行状态、模型与上下文用量）\n')
+      .add('- `im_browse`: 列出所有可连接的在线会话，含运行状态（空闲/忙/排队）、最后活动时间、模型名称、上下文用量百分比、压缩阈值、消息数等运行时状态（直接返回 agentId 和 sessionId，无需多次调用）\n')
       .add('- `im_connect_line`: 将线路连接到指定会话。参数：lineId（来自 im_overview）、agentId 和 sessionId（来自 im_browse）\n')
       .add('- `im_disconnect_line`: 断开线路的当前连接。参数：lineId（来自 im_overview）\n')
       .add('\n## 工作流程\n\n')
       .add('1. 收到转接请求时，用 `im_overview` 查看线路状态，获取 lineId\n')
-      .add('2. 用 `im_browse` 获取所有可连接会话，找到目标的 agentId 和 sessionId\n')
+      .add('2. 用 `im_browse` 获取所有可连接会话及其运行时状态（模型、上下文用量、压缩阈值），找到目标的 agentId 和 sessionId\n')
       .add('3. 用 `im_connect_line` 执行接线\n')
       .add('4. 如需断开用 `im_disconnect_line`\n')
+      .add('\n## 上下文用量判断\n\n')
+      .add('`im_browse` 和 `im_overview` 返回的上下文用量百分比反映目标会话当前上下文窗口的使用率。')
+      .add('当用量达到或超过压缩阈值时，会显示 ⚠️ 警告，表示该会话即将或已经触发上下文压缩。')
+      .add('接线时应优先选择上下文余量充足的会话，避免接入即将压缩的会话导致对话不连贯。')
+      .add('\n## 会话运行状态判断\n\n')
+      .add('每个会话会显示运行状态：**空闲**（随时可接收消息）、**忙（处理中）**（正在处理请求，新消息需等待）、**排队中**（有积压消息队列）。')
+      .add('"最后活动"时间帮助判断会话活跃程度。')
+      .add('接线时应优先选择空闲且最近有活动的会话；正在忙碌的会话接入后消息会有延迟。')
     );
   }
 

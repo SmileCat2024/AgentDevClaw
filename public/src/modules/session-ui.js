@@ -28,6 +28,23 @@ function getWorkspaceSessionById(agent = getCurrentAgentRecord(), sessionId = ''
   return getWorkspaceSessions(agent).find((session) => session.id === String(sessionId || '').trim()) || null;
 }
 
+function sortPhSessionsByMode(sessions) {
+  var mode = phSessionSortMode === 'createdAt' ? 'createdAt' : 'updatedAt';
+  var sorted = sessions.slice();
+  sorted.sort(function (a, b) {
+    var primary = String(a?.[mode] || '');
+    var secondaryKey = mode === 'createdAt' ? 'updatedAt' : 'createdAt';
+    if (primary !== String(b?.[mode] || '')) {
+      return String(b?.[mode] || '').localeCompare(primary);
+    }
+    var aSec = String(a?.[secondaryKey] || '');
+    var bSec = String(b?.[secondaryKey] || '');
+    if (aSec !== bSec) return bSec.localeCompare(aSec);
+    return String(b?.id || '').localeCompare(String(a?.id || ''));
+  });
+  return sorted;
+}
+
 function isCompactedResumeSession(session) {
   return String(session?.metadata?.resumeMode || '').trim() === 'compacted';
 }
@@ -626,9 +643,9 @@ function renderWorkspaceSessionList(agent, block) {
     }
 
     // Project is active - show its sessions with tabs
-    const mainSessions = currentProject.sessions.filter(s => s.sessionType !== 'exploration' && s.sessionType !== 'sub');
-    const explorationSessions = currentProject.sessions.filter(s => s.sessionType === 'exploration');
-    const subSessions = currentProject.sessions.filter(s => s.sessionType === 'sub');
+    const mainSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.sessionType !== 'exploration' && s.sessionType !== 'sub'));
+    const explorationSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.sessionType === 'exploration'));
+    const subSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.sessionType === 'sub'));
     const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
     const newChatAction = escapeHtml(JSON.stringify({
       type: 'create_session',
@@ -695,6 +712,7 @@ function renderWorkspaceSessionList(agent, block) {
       sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainSessions.length)) + '</span></button>';
       sessionsHtml += '<button class="ph-session-tab" data-ph-tab="exploration" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_exploration_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
       sessionsHtml += '<button class="ph-session-tab" data-ph-tab="sub" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_sub_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(subSessions.length)) + '</span></button>';
+      sessionsHtml += '<div class="ph-session-sort-toggle"><button type="button" onclick="window.phToggleSessionSort(this)" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2v8M3 10L1.5 8.5M3 10l1.5-1.5M9 10V2M9 2L7.5 3.5M9 2l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' + escapeHtml(phSessionSortMode === 'createdAt' ? t('workspace_sort_created') : t('workspace_sort_updated')) + '</button></div>';
       sessionsHtml += '</div>';
       sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? mainSessions.map(s => renderPhSessionItem(s, 'main')).join('') : mainEmptyNote) + '</div></div>';
       sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="exploration"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? explorationSessions.map(s => renderPhSessionItem(s, 'exploration')).join('') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
