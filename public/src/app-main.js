@@ -6887,6 +6887,18 @@ function _getSessionInputCacheKey() {
   return getRuntimeContextKey();
 }
 
+// Play short audio cue for voice recording start/stop.
+function _playVoiceSound(type) {
+  try {
+    const url = type === 'start'
+      ? '/sounds/voice-recording-start.mp3'
+      : '/sounds/voice-recording-stop.mp3';
+    const audio = new Audio(url);
+    audio.volume = 0.6;
+    audio.play().catch(() => { /* ignore autoplay rejection */ });
+  } catch (e) { /* non-critical */ }
+}
+
 // Sync send-button disabled state and voice-button spinner to current flags.
 // During recording the send button stays clickable (clicking it stops the recording
 // and auto-sends after transcription). Only during transcription is it disabled.
@@ -6956,6 +6968,7 @@ async function startVoiceRecording(btn) {
       stream.getTracks().forEach(t => t.stop());
       btn.classList.remove('recording');
       _voiceRecording = false;
+      _playVoiceSound('stop');
 
       if (_voiceCancelled) {
         _voiceCancelled = false;
@@ -7020,6 +7033,7 @@ async function startVoiceRecording(btn) {
     _voiceMediaRecorder.start(1000); // collect chunks every 1s
     _voiceRecording = true;
     btn.classList.add('recording');
+    _playVoiceSound('start');
     _updateVoiceUI();
   } catch (err) {
     console.error('[VoiceInput] Failed to start recording:', err);

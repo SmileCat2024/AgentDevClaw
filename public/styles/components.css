@@ -6931,3 +6931,148 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   height: 100%;
   min-height: 0;
 }
+
+/* ── Mention picker ── */
+.wg-mention-picker {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-color);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  margin-bottom: 4px;
+}
+
+.wg-mention-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color-light, rgba(0,0,0,0.04));
+}
+.wg-mention-item:last-child { border-bottom: none; }
+.wg-mention-item:hover { background: var(--hover-bg); }
+
+.wg-mention-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.wg-mention-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ── Routing status badges ── */
+.wg-routing-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.wg-routing-badge.pending { opacity: 0.5; }
+.wg-routing-badge.delivered { animation: wg-spin 2s linear infinite; }
+.wg-routing-badge.completed { color: #4caf50; }
+.wg-routing-badge.failed { color: #f44336; }
+
+@keyframes wg-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Routing navigation link ── */
+.wg-routing-link {
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: underline;
+  margin-left: 4px;
+}
+.wg-routing-link:hover { color: var(--text-primary); }
+
+/* ── Link input area ── */
+.wg-links-area {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+  align-items: center;
+}
+
+.wg-link-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--bg-color);
+  color: var(--text-primary);
+  outline: none;
+}
+.wg-link-input:focus { border-color: var(--accent-color, #4a9eff); }
+
+.wg-link-add-btn {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.wg-link-add-btn:hover { background: var(--border-color); }
+
+.wg-link-list { margin-bottom: 4px; }
+
+.wg-link-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background: var(--hover-bg);
+  border-radius: 3px;
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.wg-link-entry-url {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.wg-link-entry-desc { color: var(--text-muted); }
+
+.wg-link-remove {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+}
+.wg-link-remove:hover { color: #f44336; }
+
+/* ── Links in message bubbles ── */
+.wg-msg-links {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.wg-msg-link {
+  font-size: 11px;
+  color: var(--accent-color, #4a9eff);
+  text-decoration: none;
+  padding: 2px 6px;
+  background: var(--hover-bg);
+  border-radius: 3px;
+}
+.wg-msg-link:hover { text-decoration: underline; }

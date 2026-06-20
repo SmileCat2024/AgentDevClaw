@@ -5627,6 +5627,10 @@ function renderProjectDocsetBlock(agent, block) {
 function renderWorkGroupChatBlock(agent, block) {
   if (!window.WorkGroupUI) return '';
   _ensureWorkGroupEventDelegation();
+  if (window.WorkGroupUI.init && !window._workGroupInitialized) {
+    window._workGroupInitialized = true;
+    window.WorkGroupUI.init();
+  }
   return window.WorkGroupUI.render();
 }
 

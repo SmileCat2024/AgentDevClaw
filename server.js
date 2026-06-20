@@ -52,6 +52,7 @@ const PROJECT_IM_WORKSPACE_CONFIG_PATH = path.join(__dirname, '.agentdev', 'im-w
 const FEATURE_REPOSITORY_ROOT = path.join(__dirname, 'resources', 'features');
 const USER_FEATURE_REPOSITORY_ROOT = path.join(USER_DATA_ROOT, 'user-features');
 const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
+const GROUP_CHATS_ROOT = path.join(USER_DATA_ROOT, 'group-chats');
 const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
 const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'flow-test']);
 const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
@@ -6115,6 +6116,440 @@ app.get('/protoclaw/identities/:workspaceId/:identityId/sessions', async (req, r
 });
 
 // ── End Identity Registry API ─────────────────────────────────────
+
+// ── Group Chat Data Layer ──────────────────────────────────────────
+
+/**
+ * 群聊文件存储。每个群聊一个 JSON 文件，消息 append-only（routing 字段除外可更新）。
+ * 文件路径：~/.agentdev/AgentDevClaw/group-chats/<chatId>.json
+ */
+
+async function ensureGroupChatsDir() {
+  await fs.mkdir(GROUP_CHATS_ROOT, { recursive: true });
+}
+
+function getGroupChatPath(chatId) {
+  return path.join(GROUP_CHATS_ROOT, `${sanitizeSessionFragment(chatId)}.json`);
+}
+
+async function listGroupChats() {
+  await ensureGroupChatsDir();
+  const entries = await fs.readdir(GROUP_CHATS_ROOT);
+  const chats = [];
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    try {
+      const raw = await fs.readFile(path.join(GROUP_CHATS_ROOT, entry), 'utf8');
+      const chat = JSON.parse(raw);
+      // 列表只返回摘要，不包含消息
+      chats.push({
+        id: chat.id,
+        name: chat.name,
+        goal: chat.goal || null,
+        createdAt: chat.createdAt,
+        updatedAt: chat.updatedAt,
+        memberCount: Array.isArray(chat.members) ? chat.members.length : 0,
+        messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0,
+        lastMessage: Array.isArray(chat.messages) && chat.messages.length > 0
+          ? {
+              text: (chat.messages[chat.messages.length - 1].text || '').slice(0, 100),
+              from: chat.messages[chat.messages.length - 1].from,
+              timestamp: chat.messages[chat.messages.length - 1].timestamp,
+            }
+          : null,
+      });
+    } catch {}
+  }
+  chats.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return chats;
+}
+
+async function readGroupChat(chatId) {
+  const filePath = getGroupChatPath(chatId);
+  try {
+    const raw = await fs.readFile(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function writeGroupChat(chat) {
+  await ensureGroupChatsDir();
+  const filePath = getGroupChatPath(chat.id);
+  chat.updatedAt = Date.now();
+  await fs.writeFile(filePath, JSON.stringify(chat, null, 2), 'utf8');
+  return chat;
+}
+
+async function deleteGroupChatFile(chatId) {
+  const filePath = getGroupChatPath(chatId);
+  try {
+    await fs.unlink(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 向群聊追加一条消息（append-only）。
+ * 返回更新后的群聊对象。
+ */
+async function appendGroupChatMessage(chatId, message) {
+  const chat = await readGroupChat(chatId);
+  if (!chat) return null;
+  if (!Array.isArray(chat.messages)) chat.messages = [];
+  chat.messages.push(message);
+  await writeGroupChat(chat);
+  return chat;
+}
+
+/**
+ * 更新群聊中某条消息的 routing 状态。
+ */
+async function updateMessageRouting(chatId, messageId, routingUpdate) {
+  const chat = await readGroupChat(chatId);
+  if (!chat || !Array.isArray(chat.messages)) return null;
+  const msg = chat.messages.find((m) => m.id === messageId);
+  if (!msg) return null;
+  msg.routing = { ...(msg.routing || {}), ...routingUpdate };
+  await writeGroupChat(chat);
+  return msg;
+}
+
+/**
+ * 构建发送给 agent 的 prompt：群聊上下文头 + 消息正文 + 链接引用。
+ */
+function composeDispatchPrompt(chatName, message) {
+  const parts = [];
+  if (chatName) {
+    parts.push(`[群聊：${chatName}]`);
+  }
+  parts.push(message.text || '');
+  if (Array.isArray(message.links) && message.links.length > 0) {
+    parts.push('\n参考链接：');
+    for (const link of message.links) {
+      const desc = link.description ? ` — ${link.description}` : '';
+      parts.push(`- ${link.url}${desc}`);
+    }
+  }
+  return parts.join('\n\n');
+}
+
+/**
+ * Level 1 mention 派发：将群聊消息发送到目标 agent 的 session。
+ *
+ * 流程：
+ * 1. 解析 mention → workspaceId
+ * 2. 找到或启动 agent runtime
+ * 3. 等待 runtime ready
+ * 4. 通过 ViewerWorker queue-input 发送消息
+ * 5. 更新 routing.status = "delivered"
+ * 6. 后台跟踪 agent 完成状态 → "completed" / "failed"
+ */
+async function dispatchGroupChatMessage(chatId, message) {
+  const routing = message.routing;
+  if (!routing || !routing.targetWorkspaceId) return;
+
+  const workspaceId = routing.targetWorkspaceId;
+  log('GroupChat', `dispatching message ${message.id} to ${workspaceId}`);
+
+  // 读取群聊信息，构建上下文头
+  const chat = await readGroupChat(chatId);
+  const chatName = chat?.name || '';
+  const composedPrompt = composeDispatchPrompt(chatName, message);
+
+  // 1. 找到或启动 agent runtime
+  let runtime = getAgentRuntime(workspaceId);
+  const isAlive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
+
+  if (!isAlive) {
+    try {
+      const agent = await requireAgentLight(workspaceId);
+      log('GroupChat', `starting agent ${workspaceId} for dispatch`);
+      await startManagedAgent(agent);
+      runtime = await waitForManagedRuntimeReady(workspaceId, 30000);
+      if (!runtime) {
+        throw new Error('Agent runtime failed to become ready within 30s');
+      }
+    } catch (err) {
+      log('GroupChat', `failed to start agent: ${err.message}`, 'error');
+      await updateMessageRouting(chatId, message.id, {
+        status: 'failed',
+        error: `Failed to start agent: ${err.message}`,
+        completedAt: Date.now(),
+      });
+      return;
+    }
+  }
+
+  // 2. 确保 runtime ready（有 viewerAgentId）
+  if (!runtime.viewerAgentId) {
+    const ready = await waitForManagedRuntimeReady(workspaceId, 15000);
+    if (!ready?.id) {
+      await updateMessageRouting(chatId, message.id, {
+        status: 'failed',
+        error: 'Agent runtime not ready (no viewerAgentId)',
+        completedAt: Date.now(),
+      });
+      return;
+    }
+    runtime = getAgentRuntime(workspaceId);
+  }
+
+  const viewerAgentId = runtime?.viewerAgentId;
+  if (!viewerAgentId) {
+    await updateMessageRouting(chatId, message.id, {
+      status: 'failed',
+      error: 'No viewerAgentId available',
+      completedAt: Date.now(),
+    });
+    return;
+  }
+
+  // 3. 通过 ViewerWorker 发送消息
+  try {
+    const response = await fetch(
+      `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/queue-input`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: composedPrompt }),
+      }
+    );
+    if (!response.ok) {
+      throw new Error(`ViewerWorker returned ${response.status}`);
+    }
+    log('GroupChat', `message ${message.id} dispatched to ${viewerAgentId}`);
+  } catch (err) {
+    log('GroupChat', `failed to send message: ${err.message}`, 'error');
+    await updateMessageRouting(chatId, message.id, {
+      status: 'failed',
+      error: `Failed to send: ${err.message}`,
+      completedAt: Date.now(),
+    });
+    return;
+  }
+
+  // 4. 更新 routing 状态为 delivered
+  await updateMessageRouting(chatId, message.id, {
+    status: 'delivered',
+    targetSessionId: runtime.selectedSessionId,
+    dispatchedAt: Date.now(),
+  });
+
+  // 5. 后台跟踪 agent 完成状态
+  trackGroupChatDispatch(chatId, message.id, workspaceId, viewerAgentId);
+}
+
+/**
+ * 后台跟踪 agent 是否完成处理。
+ * 通过 ViewerWorker /running 端点检测 agent 运行状态变化。
+ * 当 agent 从 running → idle 时，标记消息为 completed。
+ */
+function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId) {
+  let wasRunning = false;
+  const startTime = Date.now();
+  const TIMEOUT_MS = 15 * 60 * 1000; // 15 分钟超时
+
+  const interval = setInterval(async () => {
+    // 超时保护
+    if (Date.now() - startTime > TIMEOUT_MS) {
+      clearInterval(interval);
+      await updateMessageRouting(chatId, messageId, {
+        status: 'failed',
+        error: 'Agent call timeout (15min)',
+        completedAt: Date.now(),
+      });
+      return;
+    }
+
+    try {
+      // 检查 runtime 是否还活着
+      const runtime = getAgentRuntime(workspaceId);
+      if (!runtime || runtime.stopped || runtime.process?.exitCode !== null) {
+        if (wasRunning) {
+          // Agent 曾经运行过，现在进程已退出
+          clearInterval(interval);
+          await updateMessageRouting(chatId, messageId, {
+            status: 'completed',
+            completedAt: Date.now(),
+          });
+        }
+        return;
+      }
+
+      // 检查 ViewerWorker 的 running 状态
+      const currentViewerId = runtime.viewerAgentId || viewerAgentId;
+      const res = await fetch(
+        `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(currentViewerId)}/running`
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const isRunning = data.running === true || data.callActive === true;
+
+      if (isRunning) {
+        wasRunning = true;
+      } else if (wasRunning) {
+        // Agent 曾在运行，现在空闲 → 完成
+        clearInterval(interval);
+        await updateMessageRouting(chatId, messageId, {
+          status: 'completed',
+          completedAt: Date.now(),
+        });
+        log('GroupChat', `message ${messageId} completed`);
+      }
+    } catch {
+      // 网络错误等，继续重试
+    }
+  }, 3000);
+}
+
+// ── Group Chat CRUD API ────────────────────────────────────────────
+
+app.get('/protoclaw/group_chats', async (_req, res, next) => {
+  try {
+    const chats = await listGroupChats();
+    res.json({ chats });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
+  try {
+    const { name, goal, members } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'name required' });
+
+    const chatId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const chat = {
+      id: chatId,
+      name,
+      goal: goal || null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      members: Array.isArray(members) ? members : [
+        { identityRef: 'user', role: 'human' },
+      ],
+      messages: [],
+    };
+    await writeGroupChat(chat);
+    res.status(201).json(chat);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/protoclaw/group_chats/:chatId', async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+    res.json(chat);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const { name, goal, members } = req.body || {};
+    if (name !== undefined) chat.name = name;
+    if (goal !== undefined) chat.goal = goal;
+    if (Array.isArray(members)) chat.members = members;
+
+    await writeGroupChat(chat);
+    res.json(chat);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/protoclaw/group_chats/:chatId', async (req, res, next) => {
+  try {
+    const deleted = await deleteGroupChatFile(req.params.chatId);
+    if (!deleted) return res.status(404).json({ error: 'Group chat not found' });
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Group Chat Messages API ────────────────────────────────────────
+
+app.get('/protoclaw/group_chats/:chatId/messages', async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const offset = parseInt(req.query.offset) || 0;
+    const messages = (chat.messages || []).slice(offset, offset + limit);
+
+    res.json({
+      messages,
+      total: (chat.messages || []).length,
+      offset,
+      limit,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, res, next) => {
+  try {
+    const { text, mentions, links } = req.body || {};
+    if (!text) return res.status(400).json({ error: 'text required' });
+
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const message = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      chatId: chat.id,
+      from: 'user',
+      text,
+      mentions: Array.isArray(mentions) ? mentions : [],
+      links: Array.isArray(links) ? links.filter((l) => l && l.url) : [],
+      kind: 'text',
+      timestamp: Date.now(),
+      routing: null,
+    };
+
+    // 如果有 mention，初始化 routing 状态
+    if (message.mentions.length > 0) {
+      const firstMention = message.mentions[0];
+      message.routing = {
+        status: 'pending',
+        targetIdentityRef: firstMention.identityRef || null,
+        targetWorkspaceId: firstMention.identityRef?.split(':')[0] || null,
+        targetSessionId: null,
+        dispatchedAt: null,
+        completedAt: null,
+        error: null,
+      };
+    }
+
+    await appendGroupChatMessage(chat.id, message);
+
+    // 异步派发（不阻塞响应）
+    if (message.mentions.length > 0 && message.routing) {
+      dispatchGroupChatMessage(chat.id, message).catch((err) => {
+        console.error(`[GroupChat] dispatch failed for ${message.id}:`, err);
+      });
+    }
+
+    res.status(201).json(message);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── End Group Chat API ─────────────────────────────────────────────
 
 // ── System Feature Config API ────────────────────────────────────
 
