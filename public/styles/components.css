@@ -6137,13 +6137,29 @@ body[data-theme="light"] .ph-session-type-badge {
 .fs-cards {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 18px;
+}
+
+/* Group: title sits above the card */
+.fs-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fs-group-title {
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #9aa3b2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* Setting card */
 .fs-card {
-  border: 1px solid var(--border-color, rgba(255,255,255,0.08));
-  border-radius: 10px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.07));
+  border-radius: 8px;
   background: var(--card-bg, rgba(255,255,255,0.02));
   overflow: hidden;
 }
@@ -6162,8 +6178,8 @@ body[data-theme="light"] .ph-session-type-badge {
   align-items: center;
   justify-content: space-between;
   gap: 28px;
-  padding: 16px 24px;
-  min-height: 56px;
+  padding: 14px 20px;
+  min-height: 52px;
   border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.04));
 }
 
@@ -6180,13 +6196,43 @@ body[data-theme="light"] .ph-session-type-badge {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
-  margin-bottom: 1px;
+  margin-bottom: 2px;
 }
 
 .fs-row-desc {
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.45;
   color: var(--text-tertiary, var(--text-secondary));
+}
+
+/* Shell availability badges */
+.fs-shell-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 400;
+  padding: 1px 7px;
+  border-radius: 9px;
+  margin-left: 8px;
+  vertical-align: middle;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fs-shell-ok {
+  color: rgba(120, 200, 130, 0.85);
+  background: rgba(120, 200, 130, 0.1);
+}
+
+.fs-shell-none {
+  color: var(--text-tertiary, rgba(150, 150, 160, 0.6));
+  background: rgba(150, 150, 160, 0.08);
+}
+
+.fs-row-unavailable .fs-checkbox {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .fs-row-ctrl {
@@ -6243,6 +6289,82 @@ body[data-theme="light"] .ph-session-type-badge {
   height: 16px;
   cursor: pointer;
   accent-color: var(--accent, #5b8def);
+}
+
+/* List-type controls (directory / file-list) */
+.fs-row:has(.fs-list) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.fs-row-ctrl:has(.fs-list) {
+  width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.fs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.fs-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fs-list-item .fs-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.fs-list-remove {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  background: var(--input-bg, rgba(255,255,255,0.06));
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.fs-list-remove:hover {
+  border-color: var(--error, #e55);
+  color: var(--error, #e55);
+  background: rgba(229,85,85,0.08);
+}
+
+.fs-list-add {
+  align-self: flex-start;
+  padding: 5px 14px;
+  border: 1px dashed var(--border-color, rgba(255,255,255,0.15));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.fs-list-add:not(:disabled):hover {
+  border-color: var(--accent, #5b8def);
+  color: var(--accent, #5b8def);
+}
+
+.fs-list-add:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Auto-save status */

@@ -16,6 +16,18 @@ const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'agent-creator', 'state.json');
 const SESSION_INDEX_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'agent-creator', 'sessions', 'index.json');
+const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
+
+function readSystemFeatureConfig() {
+  if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
+  try {
+    const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -128,6 +140,7 @@ export class AgentCreatorAgent extends BasicAgent {
     const resolvedWorkspaceDir = config.workspaceDir ?? PROTOCLAW_ROOT;
     const assemblySessionMode = readCurrentSessionFormId() === 'assembly-form';
     let preMcpConfig = null;
+    const systemFeatureConfig = readSystemFeatureConfig();
 
     if (assemblySessionMode) {
       const workspaceState = readAgentCreatorWorkspaceState();
@@ -137,12 +150,11 @@ export class AgentCreatorAgent extends BasicAgent {
 
     super({
       ...config,
-      ...((preMcpConfig && Object.keys(preMcpConfig).length > 0) ? {
-        features: {
-          ...(config.features || {}),
-          mcp: preMcpConfig,
-        },
-      } : {}),
+      features: {
+        ...(config.features || {}),
+        ...((preMcpConfig && Object.keys(preMcpConfig).length > 0) ? { mcp: preMcpConfig } : {}),
+        ...(systemFeatureConfig.shell ? { shell: systemFeatureConfig.shell } : {}),
+      },
       projectRoot: resolvedProjectRoot,
       workspaceDir: resolvedWorkspaceDir,
       skillsDir: assemblySessionMode ? undefined : join(PROTOCLAW_ROOT, '.agentdev', 'skills'),

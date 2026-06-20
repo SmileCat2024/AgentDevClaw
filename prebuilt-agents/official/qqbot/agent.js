@@ -13,6 +13,7 @@ import { WebSearchFeature } from '@agentdev/websearch-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
+import * as os from 'os';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { ConversationExportFeature } from '../../../local-features/dist/conversation-export/src/index.js';
 
@@ -24,6 +25,19 @@ const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const PROTOCLAW_ROOT = join(__dirname, '..', '..', '..');
 const SERVER_ORIGIN = `http://127.0.0.1:${process.env.PORT || 1420}`;
+
+const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
+
+function readSystemFeatureConfig() {
+  if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
+  try {
+    const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 const DEFAULT_QQBOT_CONFIG_CANDIDATES = [
   join(PROTOCLAW_ROOT, '.agentdev', 'qqbot.config.json'),
@@ -91,6 +105,13 @@ class IMOperatorFeature {
     this.name = 'im-operator';
   }
 
+  static nowStr() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${weekday} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
   getTools() {
     return [
       {
@@ -107,8 +128,9 @@ class IMOperatorFeature {
             if (!resp.ok) return { error: `服务端返回 ${resp.status}` };
             const data = await resp.json();
             const lines = data.lines || [];
+            const now = IMOperatorFeature.nowStr();
             if (lines.length === 0) {
-              return { text: '当前没有配置任何 IM 线路。', lines: [] };
+              return { text: `当前没有配置任何 IM 线路。\n（当前时间: ${now}）`, lines: [] };
             }
             const fmtTokens = (n) => n != null ? n.toLocaleString() : '?';
             const fmtAgo = (ms) => {
@@ -140,14 +162,16 @@ class IMOperatorFeature {
                 && bound.contextUsagePct >= bound.compressRatio ? ' ⚠️已达压缩阈值' : '';
               const exec = execLabel(bound.execStatus);
               const lastActive = fmtAgo(bound.savedAt);
+              const workdirLine = bound.workdir ? `\n  工作目录: ${bound.workdir}` : '';
               return (
                 `- **${l.name}** [${carrierLabel}]: 已连接 → ${bound.sessionTitle || bound.sessionId} (${bound.agentId})\n` +
                 `  状态: ${exec} | 最后活动: ${lastActive}\n` +
-                `  模型: ${model} | 上下文: ${ctxDetail} (${ctxPct}) | 压缩阈值: ${threshold}${warn}`
+                `  模型: ${model} | 上下文: ${ctxDetail} (${ctxPct}) | 压缩阈值: ${threshold}${warn}` +
+                workdirLine
               );
             });
             return {
-              text: `当前 IM 线路状态：\n${summary.join('\n')}`,
+              text: `当前 IM 线路状态（${now}）：\n${summary.join('\n')}`,
               lines,
             };
           } catch (err) {
@@ -203,11 +227,13 @@ class IMOperatorFeature {
                   const exec = execLabel(session.execStatus);
                   const lastActive = fmtAgo(session.savedAt);
                   const queueInfo = session.execQueueLength > 0 ? ` | 队列: ${session.execQueueLength}` : '';
+                  const workdirLine = session.workdir ? `\n  工作目录: ${session.workdir}` : '';
                   lines.push(
                     `- 工作空间: ${ws.name} | agentId: ${ws.agentId}\n` +
                     `  会话: ${session.title} | sessionId: ${session.id}\n` +
                     `  状态: ${exec}${queueInfo} | 最后活动: ${lastActive}\n` +
-                    `  模型: ${model} | 上下文: ${ctxDetail} (${ctxPct}) | 压缩阈值: ${threshold} | 消息数: ${msgCount}${warn}`
+                    `  模型: ${model} | 上下文: ${ctxDetail} (${ctxPct}) | 压缩阈值: ${threshold} | 消息数: ${msgCount}${warn}` +
+                    workdirLine
                   );
                   flatSessions.push({
                     agentId: ws.agentId,
@@ -224,13 +250,14 @@ class IMOperatorFeature {
                     sessionType: session.sessionType ?? null,
                     execStatus: session.execStatus ?? null,
                     execQueueLength: session.execQueueLength ?? 0,
+                    workdir: session.workdir ?? null,
                     savedAt: session.savedAt ?? null,
                   });
                 }
               }
             }
             return {
-              text: `可连接的在线会话：\n${lines.join('\n')}\n\n使用 im_connect_line 并传入 lineId、agentId、sessionId 即可接线。`,
+              text: `可连接的在线会话（${IMOperatorFeature.nowStr()}）：\n${lines.join('\n')}\n\n使用 im_connect_line 并传入 lineId、agentId、sessionId 即可接线。`,
               sessions: flatSessions,
             };
           } catch (err) {
@@ -272,7 +299,7 @@ class IMOperatorFeature {
             if (!resp.ok) {
               return { error: result.error || `连接失败 (${resp.status})` };
             }
-            return { text: `线路「${line.name}」已连接到 ${agentId}::${sessionId}。`, success: true };
+            return { text: `线路「${line.name}」已连接到 ${agentId}::${sessionId}。\n（操作时间: ${IMOperatorFeature.nowStr()}）`, success: true };
           } catch (err) {
             return { error: `连接失败: ${err.message}` };
           }
@@ -301,7 +328,7 @@ class IMOperatorFeature {
             if (!resp.ok) {
               return { error: result.error || `断开失败 (${resp.status})` };
             }
-            return { text: `线路已断开。`, success: true };
+            return { text: `线路已断开。\n（操作时间: ${IMOperatorFeature.nowStr()}）`, success: true };
           } catch (err) {
             return { error: `断开失败: ${err.message}` };
           }
@@ -326,8 +353,14 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
   _lastIMTarget = null;
 
   constructor(config = {}) {
+    const systemConfig = readSystemFeatureConfig();
+
     super({
       ...config,
+      features: {
+        ...(config.features || {}),
+        ...(systemConfig.shell ? { shell: systemConfig.shell } : {}),
+      },
       excludeMcpServers: Array.from(new Set([
         ...(config.excludeMcpServers ?? []),
         ...DEFAULT_EXCLUDED_MCP_SERVERS,
@@ -529,23 +562,26 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     this.setSystemPrompt(new TemplateComposer()
       .add({ file: SYSTEM_PROMPT_PATH })
       .add('\n\n## 身份设定\n\n')
-      .add('你是 IM 门户接线员。你的职责是管理 IM 线路连接，将消息路由到正确的工作空间会话。')
-      .add('用户通过 QQ 或微信与你对话，你可以使用接线员工具查看线路状态、浏览可连接的工作空间和会话、以及进行接线转接。')
+      .add('你是AgentDevClaw中的门户代理。你的职责是管理 IM 线路连接，将消息路由到正确的工作空间会话。')
+      .add('AgentDevClaw是一个运行在用户电脑中的智能体运行及开发平台，内设有多个工作空间，运行不同的智能体会话服务')
+      .add('你运行在”IM渠道“工作空间中，其核心功能是让用户通过多种渠道监视、管理Claw项目，用户可在Claw中直接与你进行对话，或通过QQ、微信等IM渠道与你对话，只有用户输入内容前有相关system-reminder提示时，才代表用户的本次输入由对应渠道发送而来，否则一定是在Claw中与你直接进行的对话')
+      .add('你可以使用接线员工具查看线路状态、浏览可连接的工作空间和会话、以及进行接线转接。')
+      .add('\n\n## 重要提醒\n\n')
+      .add('当前会话可能是持续的，用户输入之间可能间隔较长时间（从几分钟到几小时乃至几天都有可能），需要你理解时序的复杂性。Claw中会话的运行状态可能发生较大变化，且间隔期间发生的各种变化可能无法展现在你的上下文中，因此需要你保持对会话状态的更新，不要被过时信息误导，及时调整策略。')
       .add('\n\n## 接线员工具（唯一信息来源）\n\n')
       .add('你只能使用以下 4 个接线员工具获取线路和目标信息，禁止使用其他工具（如 MCP 调试工具）来查询线路或会话状态：\n\n')
-      .add('- `im_overview`: 查看所有线路的当前状态（线路 ID、载体、是否已连接、已连接会话的运行状态、模型与上下文用量）\n')
-      .add('- `im_browse`: 列出所有可连接的在线会话，含运行状态（空闲/忙/排队）、最后活动时间、模型名称、上下文用量百分比、压缩阈值、消息数等运行时状态（直接返回 agentId 和 sessionId，无需多次调用）\n')
+      .add('- `im_overview`: 查看所有线路的当前状态（线路 ID、载体、是否已连接、已连接会话的运行状态、模型、上下文用量、工作目录）\n')
+      .add('- `im_browse`: 列出所有可连接的在线会话，含运行状态（空闲/忙/排队）、最后活动时间、模型名称、上下文用量百分比、压缩阈值、消息数、工作目录等运行时状态（直接返回 agentId 和 sessionId，无需多次调用）\n')
       .add('- `im_connect_line`: 将线路连接到指定会话。参数：lineId（来自 im_overview）、agentId 和 sessionId（来自 im_browse）\n')
       .add('- `im_disconnect_line`: 断开线路的当前连接。参数：lineId（来自 im_overview）\n')
       .add('\n## 工作流程\n\n')
       .add('1. 收到转接请求时，用 `im_overview` 查看线路状态，获取 lineId\n')
-      .add('2. 用 `im_browse` 获取所有可连接会话及其运行时状态（模型、上下文用量、压缩阈值），找到目标的 agentId 和 sessionId\n')
+      .add('2. 用 `im_browse` 获取所有可连接会话及其运行时状态（模型、上下文用量、压缩阈值、工作目录），找到目标的 agentId 和 sessionId\n')
       .add('3. 用 `im_connect_line` 执行接线\n')
       .add('4. 如需断开用 `im_disconnect_line`\n')
       .add('\n## 上下文用量判断\n\n')
       .add('`im_browse` 和 `im_overview` 返回的上下文用量百分比反映目标会话当前上下文窗口的使用率。')
       .add('当用量达到或超过压缩阈值时，会显示 ⚠️ 警告，表示该会话即将或已经触发上下文压缩。')
-      .add('接线时应优先选择上下文余量充足的会话，避免接入即将压缩的会话导致对话不连贯。')
       .add('\n## 会话运行状态判断\n\n')
       .add('每个会话会显示运行状态：**空闲**（随时可接收消息）、**忙（处理中）**（正在处理请求，新消息需等待）、**排队中**（有积压消息队列）。')
       .add('"最后活动"时间帮助判断会话活跃程度。')

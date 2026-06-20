@@ -253,6 +253,8 @@ const workspaceSurfaceModePreferences = {};
 let allAgents = [];
 // 追踪每个 agent 的 call 运行状态（实时更新，比 3s 轮询更快）
 const _agentCallActive = new Map();
+// 追踪刚完成调用的 runtimeId，用于在侧边栏显示"已完成"指示灯
+const _recentlyFinishedRuntimes = new Set();
 let currentMessages = [];
 let currentInputRequests = [];
 let choiceInputState = {};

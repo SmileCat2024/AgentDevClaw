@@ -26,18 +26,20 @@ function renderSystemFeatureConfigBlock(_block) {
 
 // ── State ────────────────────────────────────────────────────
 
-window._featureSetupData = { manifests: null, config: null, loading: false, sections: [], activeId: null };
+window._featureSetupData = { manifests: null, config: null, loading: false, sections: [], activeId: null, shellAvailability: null };
 
 window._loadFeatureSetupData = async function () {
   if (window._featureSetupData.loading) return;
   window._featureSetupData.loading = true;
   try {
-    const [mRes, cRes] = await Promise.all([
+    const [mRes, cRes, saRes] = await Promise.all([
       fetch('/protoclaw/system_feature_manifests'),
       fetch('/protoclaw/system_feature_config'),
+      fetch('/protoclaw/shell_availability'),
     ]);
     window._featureSetupData.manifests = (await mRes.json()).features || [];
     window._featureSetupData.config = await cRes.json();
+    try { window._featureSetupData.shellAvailability = await saRes.json(); } catch { window._featureSetupData.shellAvailability = null; }
     _buildSections();
   } catch (err) {
     console.error('Failed to load feature setup data:', err);
@@ -146,6 +148,11 @@ window._fsSelect = function (id) {
   mainEl.scrollTop = 0;
   _attachShowWhenListeners(mainEl);
   _attachAutoSave(mainEl);
+
+  // Shell-specific: apply availability indicators
+  if (sec.featureName === 'shell') {
+    _applyShellAvailability();
+  }
 };
 
 // ── Group card (e.g. a server with mode/binary/runtime) ──────
@@ -157,9 +164,11 @@ function _renderGroupCard(key, prop, groupValue, scopePrefix) {
     rowsHtml += _renderRow(sp, groupValue[sk], `${scopePrefix}.${sk}`, scopePrefix);
   }
   return `
-    <div class="fs-card">
-      <div class="fs-card-header">${escapeHtml(prop.title || key)}</div>
-      ${rowsHtml}
+    <div class="fs-group">
+      <div class="fs-group-title">${escapeHtml(prop.title || key)}</div>
+      <div class="fs-card">
+        ${rowsHtml}
+      </div>
     </div>
   `;
 }
@@ -191,7 +200,40 @@ function _renderRow(prop, value, fullKey, scopePrefix) {
 
 // ── Input controls ───────────────────────────────────────────
 
+function _isListType(prop) {
+  return prop.type === 'directory'
+    || (prop.type === 'file' && (Array.isArray(prop.default) || prop.maxItems != null));
+}
+
+function _renderListInput(fullKey, prop, value) {
+  const items = Array.isArray(value)
+    ? value.filter(v => v != null && String(v).trim() !== '')
+    : [];
+  const maxItems = prop.maxItems || 99;
+  const placeholder = prop.placeholder || (currentLanguage === 'zh' ? '输入路径...' : 'Enter path...');
+  const addLabel = currentLanguage === 'zh' ? '添加' : 'Add';
+  const removeLabel = currentLanguage === 'zh' ? '移除' : 'Remove';
+
+  const itemsHtml = items.map(item => `
+    <div class="fs-list-item">
+      <input type="text" class="fs-input fs-list-input" data-config-key="${escapeHtml(fullKey)}" value="${escapeHtml(String(item))}" placeholder="${escapeHtml(placeholder)}" />
+      <button type="button" class="fs-list-remove" title="${escapeHtml(removeLabel)}" onclick="window._fsListRemoveItem(this)">&#215;</button>
+    </div>
+  `).join('');
+
+  return `
+    <div class="fs-list" data-list-key="${escapeHtml(fullKey)}" data-list-max="${maxItems}" data-list-placeholder="${escapeHtml(placeholder)}">
+      ${itemsHtml}
+      <button type="button" class="fs-list-add" ${items.length >= maxItems ? 'disabled' : ''} onclick="window._fsListAddItem(this)">+ ${escapeHtml(addLabel)}</button>
+    </div>
+  `;
+}
+
 function _renderInput(fullKey, prop, value) {
+  if (_isListType(prop)) {
+    return _renderListInput(fullKey, prop, value);
+  }
+
   const id = `fsp-${_cssid(fullKey)}`;
   const val = value != null ? String(value) : (prop.default != null ? String(prop.default) : '');
 
@@ -253,14 +295,30 @@ let _autoSaveTimer = null;
 function _syncCurrentPageToConfig() {
   const { config } = window._featureSetupData;
   if (!config) return;
+
+  // Collect list-type values separately (multiple inputs share one key)
+  const listValues = new Map();
+
   for (const input of document.querySelectorAll('#fs-main [data-config-key]')) {
     const key = input.getAttribute('data-config-key');
     if (!key) continue;
+
+    if (input.classList.contains('fs-list-input')) {
+      if (!listValues.has(key)) listValues.set(key, []);
+      const v = input.value.trim();
+      if (v) listValues.get(key).push(v);
+      continue;
+    }
+
     let val;
     if (input.type === 'checkbox') val = input.checked;
     else if (input.type === 'number') val = input.value ? Number(input.value) : '';
     else val = input.value.trim();
     _setNestedValue(config, key.split('.'), val);
+  }
+
+  for (const [key, values] of listValues) {
+    _setNestedValue(config, key.split('.'), values);
   }
 }
 
@@ -312,6 +370,137 @@ async function _doAutoSave() {
   setTimeout(() => {
     if (statusEl) statusEl.classList.remove('visible');
   }, 1500);
+}
+
+// ── List item add/remove ─────────────────────────────────────
+
+window._fsListAddItem = function (btn) {
+  const container = btn.closest('.fs-list');
+  if (!container) return;
+  const max = parseInt(container.getAttribute('data-list-max')) || 99;
+  if (container.querySelectorAll('.fs-list-item').length >= max) return;
+
+  const fullKey = container.getAttribute('data-list-key') || '';
+  const placeholder = container.getAttribute('data-list-placeholder') || '';
+  const removeLabel = currentLanguage === 'zh' ? '移除' : 'Remove';
+
+  const item = document.createElement('div');
+  item.className = 'fs-list-item';
+  item.innerHTML =
+    `<input type="text" class="fs-input fs-list-input" data-config-key="${escapeHtml(fullKey)}" value="" placeholder="${escapeHtml(placeholder)}" />`
+    + `<button type="button" class="fs-list-remove" title="${escapeHtml(removeLabel)}" onclick="window._fsListRemoveItem(this)">&#215;</button>`;
+
+  container.insertBefore(item, btn);
+
+  if (container.querySelectorAll('.fs-list-item').length >= max) {
+    btn.disabled = true;
+  }
+
+  item.querySelector('input').focus();
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(_doAutoSave, 600);
+};
+
+window._fsListRemoveItem = function (btn) {
+  const item = btn.closest('.fs-list-item');
+  const container = btn.closest('.fs-list');
+  if (!item || !container) return;
+
+  item.remove();
+
+  const max = parseInt(container.getAttribute('data-list-max')) || 99;
+  const addBtn = container.querySelector('.fs-list-add');
+  if (addBtn) addBtn.disabled = false;
+
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(_doAutoSave, 600);
+};
+
+// ── Shell availability indicators ─────────────────────────────
+
+/**
+ * Apply shell availability badges and toggle states to the shell config section.
+ * - Available: subtle green badge with detected path
+ * - Not available: muted gray badge, checkbox disabled + unchecked
+ */
+function _applyShellAvailability() {
+  const avail = window._featureSetupData.shellAvailability;
+  if (!avail) return;
+
+  const isZh = currentLanguage === 'zh';
+  const shells = [
+    { key: 'bashEnabled', pathKey: 'bashPath', info: avail.bash, label: 'Bash' },
+    { key: 'powershellEnabled', pathKey: 'powershellPath', info: avail.powershell, label: 'PowerShell' },
+  ];
+
+  for (const s of shells) {
+    const fullKey = `shell.${s.key}`;
+    const row = document.querySelector(`[data-prop-key="${CSS.escape(fullKey)}"]`);
+    if (!row) continue;
+
+    const titleEl = row.querySelector('.fs-row-title');
+    if (!titleEl) continue;
+
+    // Remove any previous badge
+    const oldBadge = titleEl.querySelector('.fs-shell-badge');
+    if (oldBadge) oldBadge.remove();
+
+    if (s.info.available) {
+      const shortPath = s.info.path && s.info.path.length > 50
+        ? '…' + s.info.path.slice(-48)
+        : (s.info.path || '');
+      const badge = document.createElement('span');
+      badge.className = 'fs-shell-badge fs-shell-ok';
+      badge.textContent = isZh ? `已检测到 · ${shortPath}` : `Detected · ${shortPath}`;
+      badge.title = s.info.path || '';
+      titleEl.appendChild(badge);
+
+      // Ensure checkbox is enabled
+      const cb = row.querySelector('.fs-checkbox');
+      if (cb) cb.disabled = false;
+    } else {
+      const badge = document.createElement('span');
+      badge.className = 'fs-shell-badge fs-shell-none';
+      badge.textContent = isZh ? '未检测到' : 'Not found';
+      titleEl.appendChild(badge);
+
+      // Disable and uncheck
+      const cb = row.querySelector('.fs-checkbox');
+      if (cb) { cb.disabled = true; cb.checked = false; }
+      row.classList.add('fs-row-unavailable');
+    }
+  }
+
+  // Re-check availability when path inputs change (debounced)
+  for (const s of shells) {
+    const pathInput = document.querySelector(`[data-config-key="shell.${s.pathKey}"]`);
+    if (pathInput && !pathInput.dataset.shellWatch) {
+      pathInput.dataset.shellWatch = '1';
+      pathInput.addEventListener('input', () => {
+        clearTimeout(pathInput._shellTimer);
+        pathInput._shellTimer = setTimeout(() => _refreshShellAvailability(), 500);
+      });
+    }
+  }
+}
+
+async function _refreshShellAvailability() {
+  try {
+    // Save current changes first so the server sees the latest path
+    _syncCurrentPageToConfig();
+    const { config } = window._featureSetupData;
+    const newConfig = JSON.parse(JSON.stringify(config || {}));
+    await fetch('/protoclaw/system_feature_config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newConfig),
+    });
+    const res = await fetch('/protoclaw/shell_availability');
+    window._featureSetupData.shellAvailability = await res.json();
+    _applyShellAvailability();
+  } catch (err) {
+    console.error('Failed to refresh shell availability:', err);
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────

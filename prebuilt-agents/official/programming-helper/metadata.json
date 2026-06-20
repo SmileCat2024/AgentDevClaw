@@ -25,6 +25,23 @@
     "mcp",
     "skill"
   ],
+  "identities": [
+    {
+      "id": "main",
+      "displayName": "主代理",
+      "description": "擅长编码、调试、重构，支持完整工具链",
+      "sessionModel": "persistent",
+      "qualifierLabel": "项目",
+      "operations": ["status", "sessions", "send", "interrupt", "create", "overview", "explorations"]
+    },
+    {
+      "id": "explorer",
+      "displayName": "探索代理",
+      "description": "只读分析、知识收集，不可修改文件",
+      "sessionModel": "one-shot",
+      "operations": ["status", "spawn", "compact"]
+    }
+  ],
   "ui": {
     "entry": "sessions",
     "tabs": [

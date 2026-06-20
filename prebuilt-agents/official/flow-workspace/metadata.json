@@ -8,6 +8,24 @@
   "category": "development",
   "enabled": true,
   "features": ["user-input", "skill", "flow"],
+  "identities": [
+    {
+      "id": "architect",
+      "displayName": "架构师",
+      "description": "编排图设计与组装配置",
+      "sessionModel": "persistent",
+      "qualifierLabel": "项目",
+      "operations": ["status"]
+    },
+    {
+      "id": "runtime",
+      "displayName": "运行时",
+      "description": "装配会话运行与测试",
+      "sessionModel": "persistent",
+      "qualifierLabel": "项目",
+      "operations": ["status", "sessions", "send", "interrupt"]
+    }
+  ],
   "ui": {
     "entry": "workspace",
     "tabs": [

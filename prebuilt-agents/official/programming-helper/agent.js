@@ -84,9 +84,15 @@ export class ProgrammingHelperAgent extends BasicAgent {
   constructor(config = {}) {
     const workspaceDir = config.workspaceDir || process.cwd();
     const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
+    const systemConfig = readSystemFeatureConfig();
+    const audioConfig = systemConfig['audio-feedback'] || {};
 
     super({
       ...config,
+      features: {
+        ...(config.features || {}),
+        ...(systemConfig.shell ? { shell: systemConfig.shell } : {}),
+      },
       excludeMcpServers: Array.from(new Set([
         ...(config.excludeMcpServers ?? []),
         ...(isExploration ? EXCLUDED_MCP_SERVERS_EXPLORE : DEFAULT_EXCLUDED_MCP_SERVERS),
@@ -116,13 +122,15 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
       this.use(new AuditFeature());
       this.use(new AudioFeedbackFeature({
-        enabled: true,
-        volume: 0.5,
+        enabled: audioConfig.enabled !== undefined ? audioConfig.enabled : true,
+        volume: audioConfig.volume !== undefined ? audioConfig.volume : 0.5,
+        ...(cleanValue(audioConfig.audioPath) ? { audioPath: audioConfig.audioPath } : {}),
+        ...(cleanValue(audioConfig.errorAudioPath) ? { errorAudioPath: audioConfig.errorAudioPath } : {}),
       }));
       this.use(new WebSearchFeature());
       this.use(new MemoryFeature({ workspaceDir }));
       this.use(new ShellFeature({ workspaceDir }));
-      const systemConfig = readSystemFeatureConfig();
+
       this.use(new LspFeature({
         workdir: workspaceDir,
         runtimes: systemConfig.runtimes || {},

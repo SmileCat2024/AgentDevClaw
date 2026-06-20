@@ -10,6 +10,8 @@ import { AuditFeature } from '@agentdev/audit-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import * as os from 'os';
 import { FeatureDevFeature } from '../../../local-features/dist/index.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
@@ -18,14 +20,31 @@ const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = join(__dirname, '..', '..', '..');
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
+const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
+
+function readSystemFeatureConfig() {
+  if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
+  try {
+    const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 export class FeatureCreatorAgent extends BasicAgent {
   constructor(config = {}) {
     const resolvedProjectRoot = config.projectRoot ?? PROTOCLAW_ROOT;
     const resolvedWorkspaceDir = config.workspaceDir ?? PROTOCLAW_ROOT;
+    const systemFeatureConfig = readSystemFeatureConfig();
 
     super({
       ...config,
+      features: {
+        ...(config.features || {}),
+        ...(systemFeatureConfig.shell ? { shell: systemFeatureConfig.shell } : {}),
+      },
       projectRoot: resolvedProjectRoot,
       workspaceDir: resolvedWorkspaceDir,
       excludeMcpServers: Array.from(new Set([

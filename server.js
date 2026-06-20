@@ -3382,13 +3382,16 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
   const expectedOutput = cleanSessionText(record.expectedOutput) || cleanSessionText(sourceForm.expected_output) || cleanSessionText(startupForm.expected_output);
   const targetFiles = cleanSessionText(record.targetFiles) || cleanSessionText(sourceForm.target_files) || cleanSessionText(startupForm.target_files);
   const referenceMaterials = cleanSessionText(record.referenceMaterials) || cleanSessionText(sourceForm.reference_materials) || cleanSessionText(startupForm.reference_materials);
+  // NOTE: Do NOT fall back to workspaceState.openDirectory for non-assembly
+  // agents. workspaceState.openDirectory is the *current* project directory,
+  // not the one the session was created with. Falling back here causes sessions
+  // with empty openDirectory to appear in every project the user opens.
   const openDirectory = (normalizedAgentId === 'agent-creator' || normalizedAgentId === 'flow-workspace') && formId === 'assembly-form'
     ? (
         cleanSessionText(sourceForm.env_dir)
         || cleanSessionText(record.openDirectory)
-        || cleanSessionText(workspaceState?.openDirectory)
       )
-    : (cleanSessionText(record.openDirectory) || cleanSessionText(workspaceState?.openDirectory));
+    : cleanSessionText(record.openDirectory);
   const displayName = (normalizedAgentId === 'agent-creator' || (normalizedAgentId === 'flow-workspace' && formId === 'assembly-form'))
     ? agentName
     : (normalizedAgentId === 'programming-helper' ? taskTitle : featureName);
@@ -5997,9 +6000,200 @@ app.post('/protoclaw/dispatch/agent_status', express.json(), (req, res) => {
 
 // ── End Dispatch API ─────────────────────────────────────────────
 
+// ── Identity Registry API ─────────────────────────────────────────
+
+/**
+ * 收集所有已启用 prebuilt agent 声明的 identities。
+ * 无 identities 声明的 workspace 自动生成默认身份（向后兼容）。
+ */
+async function collectIdentities() {
+  const agents = await getAgentsLight();
+  const identities = [];
+
+  for (const agent of agents) {
+    if (agent.enabled === false) continue;
+    // ui-only workspace 不暴露身份（如 work-group 自身）
+    if (agent.launchMode === 'ui-only') continue;
+
+    const declared = Array.isArray(agent.identities) ? agent.identities : null;
+
+    if (declared && declared.length > 0) {
+      for (const id of declared) {
+        identities.push({
+          workspaceId: agent.id,
+          workspaceName: agent.name,
+          identityId: id.id,
+          identityRef: `${agent.id}:${id.id}`,
+          displayName: id.displayName || id.id,
+          description: id.description || '',
+          sessionModel: id.sessionModel || 'persistent',
+          qualifierLabel: id.qualifierLabel || null,
+          operations: Array.isArray(id.operations) ? id.operations : [],
+          callTimeoutMs: typeof id.callTimeoutMs === 'number' ? id.callTimeoutMs : 900000,
+        });
+      }
+    } else {
+      // 向后兼容：无 identities 声明 → 默认身份
+      identities.push({
+        workspaceId: agent.id,
+        workspaceName: agent.name,
+        identityId: 'default',
+        identityRef: `${agent.id}:default`,
+        displayName: agent.name || agent.id,
+        description: agent.description || '',
+        sessionModel: 'persistent',
+        qualifierLabel: null,
+        operations: ['status'],
+        callTimeoutMs: 900000,
+      });
+    }
+  }
+
+  return identities;
+}
+
+app.get('/protoclaw/identities', async (_req, res, next) => {
+  try {
+    const identities = await collectIdentities();
+    res.json({ identities });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/protoclaw/identities/:workspaceId/:identityId/sessions', async (req, res, next) => {
+  try {
+    const { workspaceId, identityId } = req.params;
+
+    // 验证 identity 存在
+    const identities = await collectIdentities();
+    const identity = identities.find(
+      (i) => i.workspaceId === workspaceId && i.identityId === identityId
+    );
+    if (!identity) {
+      return res.status(404).json({ error: `Identity not found: ${workspaceId}:${identityId}` });
+    }
+
+    const sessions = [];
+
+    if (identity.sessionModel === 'persistent' && identity.qualifierLabel) {
+      // 有 qualifierLabel 的 persistent 身份：从 session index 提取 qualifier 列表
+      try {
+        const index = await readSessionIndex(workspaceId);
+        const seen = new Set();
+
+        for (const record of index.sessions) {
+          if (record.archived) continue;
+          // qualifier 优先用 openDirectory，其次 title
+          const qualifier = record.openDirectory || record.title || record.id;
+          if (!qualifier || seen.has(qualifier)) continue;
+          seen.add(qualifier);
+
+          sessions.push({
+            qualifier,
+            label: record.title || qualifier,
+            status: buildStatus(workspaceId).status === 'running' ? 'running' : 'idle',
+            lastActiveTime: record.updatedAt || record.createdAt || null,
+            summary: record.goal || null,
+          });
+        }
+      } catch {
+        // session index 不存在或读取失败 → 空列表
+      }
+    }
+
+    const allowCreate = identity.operations.includes('create');
+
+    res.json({
+      sessions,
+      allowCreate,
+      qualifierLabel: identity.qualifierLabel,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── End Identity Registry API ─────────────────────────────────────
+
 // ── System Feature Config API ────────────────────────────────────
 
 const SYSTEM_FEATURE_CONFIG_PATH = path.join(USER_DATA_ROOT, 'feature-setup.json');
+
+/**
+ * Detect whether a shell executable is available on this system.
+ * Mirrors the logic in ShellFeature's findGitBashPath / findPowerShellPath.
+ */
+function detectShellPath(type, configuredPath) {
+  // 0. User-configured path
+  if (configuredPath && configuredPath.trim()) {
+    const p = configuredPath.trim();
+    if (existsSync(p)) return { available: true, path: p, source: 'configured' };
+  }
+
+  const isWin = process.platform === 'win32';
+
+  if (type === 'bash') {
+    // 1. Env var
+    if (process.env.AGENTDEV_GIT_BASH_PATH && existsSync(process.env.AGENTDEV_GIT_BASH_PATH)) {
+      return { available: true, path: process.env.AGENTDEV_GIT_BASH_PATH, source: 'env' };
+    }
+    if (!isWin) {
+      const shellPath = process.env.SHELL || '/bin/bash';
+      return { available: true, path: shellPath, source: 'env' };
+    }
+    // 2. Common Windows locations
+    const candidates = [
+      'C:\\Program Files\\Git\\bin\\bash.exe',
+      'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+    ];
+    // 3. `where bash`
+    try {
+      const result = execSync('where bash', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      for (const line of result.split('\n').map(l => l.trim()).filter(Boolean)) {
+        if (line.toLowerCase().includes('git')) candidates.push(line);
+      }
+    } catch { /* where not available or bash not found */ }
+    // 4. Derive from git path
+    try {
+      const gitPath = execSync('where git', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n')[0]?.trim();
+      if (gitPath) candidates.push(path.join(path.dirname(path.dirname(gitPath)), 'bin', 'bash.exe'));
+    } catch { /* git not in PATH */ }
+
+    for (const c of candidates) {
+      if (c && existsSync(c)) return { available: true, path: c, source: 'auto-detected' };
+    }
+    return { available: false, path: null, source: null };
+  }
+
+  if (type === 'powershell') {
+    // 1. Env var
+    if (process.env.AGENTDEV_POWERSHELL_PATH && existsSync(process.env.AGENTDEV_POWERSHELL_PATH)) {
+      return { available: true, path: process.env.AGENTDEV_POWERSHELL_PATH, source: 'env' };
+    }
+    const whereCmd = isWin ? 'where' : 'which';
+    // 2. pwsh (PS 7+)
+    try {
+      const result = execSync(`${whereCmd} pwsh`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const p = result.split('\n').map(l => l.trim()).filter(Boolean)[0];
+      if (p && existsSync(p)) return { available: true, path: p, source: 'auto-detected' };
+    } catch { /* pwsh not installed */ }
+    // 3. powershell (5.1, Windows only)
+    if (isWin) {
+      try {
+        const result = execSync(`${whereCmd} powershell`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        const p = result.split('\n').map(l => l.trim()).filter(Boolean)[0];
+        if (p && existsSync(p)) return { available: true, path: p, source: 'auto-detected' };
+      } catch { /* not in PATH */ }
+      // 4. System default path
+      const sysPath = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+      if (existsSync(sysPath)) return { available: true, path: sysPath, source: 'auto-detected' };
+    }
+    return { available: false, path: null, source: null };
+  }
+
+  return { available: false, path: null, source: null };
+}
 
 function readSystemFeatureConfigFile() {
   try {
@@ -6029,8 +6223,34 @@ app.put('/protoclaw/system_feature_config', express.json(), (req, res) => {
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     return res.status(400).json({ error: 'Config must be a non-null object' });
   }
+
+  // ── Validate shell config: strip enabled-but-unavailable shells ──
+  if (config.shell && typeof config.shell === 'object') {
+    const bashAvail = detectShellPath('bash', config.shell.bashPath);
+    const psAvail = detectShellPath('powershell', config.shell.powershellPath);
+    const changes = [];
+
+    if (config.shell.bashEnabled && !bashAvail.available) {
+      config.shell.bashEnabled = false;
+      changes.push('bash');
+    }
+    if (config.shell.powershellEnabled && !psAvail.available) {
+      config.shell.powershellEnabled = false;
+      changes.push('powershell');
+    }
+  }
+
   writeSystemFeatureConfigFile(config);
   res.json({ ok: true });
+});
+
+app.get('/protoclaw/shell_availability', (req, res) => {
+  const config = readSystemFeatureConfigFile();
+  const shellConfig = config.shell || {};
+  res.json({
+    bash: detectShellPath('bash', shellConfig.bashPath),
+    powershell: detectShellPath('powershell', shellConfig.powershellPath),
+  });
 });
 
 app.get('/protoclaw/system_feature_manifests', async (_req, res) => {
@@ -6992,6 +7212,33 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
           .map(rt => getManagedRuntimeKey(agent.id, rt.selectedSessionId))
       );
 
+      // Batch-query ViewerWorker callActive + collect workdir for live runtimes.
+      // The envelope-based getRuntimeExecutionState() only tracks the dispatch
+      // path; normal messages (viewer-input, IM) bypass it entirely, so we must
+      // ask the ViewerWorker for the real busy state.
+      const callActiveMap = new Map();   // sessionId → boolean
+      const workdirMap = new Map();      // sessionId → workdir string
+      await Promise.all(
+        runtimes
+          .filter(rt => rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId)
+          .map(async (rt) => {
+            const sid = rt.selectedSessionId;
+            if (rt.workspaceDir) {
+              workdirMap.set(sid, rt.workspaceDir);
+            }
+            if (rt.viewerAgentId) {
+              try {
+                const notif = await readViewerJson(`/api/agents/${encodeURIComponent(rt.viewerAgentId)}/notification`);
+                callActiveMap.set(sid, notif?.callActive === true);
+              } catch {
+                callActiveMap.set(sid, false);
+              }
+            } else {
+              callActiveMap.set(sid, false);
+            }
+          })
+      );
+
       // Get session metadata from the session index
       let sessionIndex;
       try {
@@ -7018,10 +7265,17 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
           const contextLength = agentModelInfo.contextLength || null;
           const contextUsagePct = (contextTokens && contextLength)
             ? Math.round(contextTokens / contextLength * 100) : null;
-          // Execution state: idle | queued | running
+          // Execution state: ViewerWorker callActive is the primary signal;
+          // envelope system (dispatch-only) supplements for queue length.
           const rtKey = getManagedRuntimeKey(agent.id, sid);
           const execState = getRuntimeExecutionState(rtKey);
+          const callActive = callActiveMap.get(sid) ?? false;
           const savedAt = typeof meta?.savedAt === 'number' ? meta.savedAt : null;
+          const sessionWorkdir = workdirMap.get(sid)
+            || (typeof meta?.openDirectory === 'string' ? meta.openDirectory.trim() : '')
+            || null;
+          const realExecStatus = callActive ? 'running'
+            : (execState.queueLength > 0 ? 'queued' : execState.status);
           return {
             id: sid,
             title: meta?.title || sid,
@@ -7040,7 +7294,8 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
             contextUsagePct,
             updatedAt: meta?.updatedAt || null,
             savedAt,
-            execStatus: execState.status,
+            workdir: sessionWorkdir,
+            execStatus: realExecStatus,
             execQueueLength: execState.queueLength,
             execLastActiveAt: execState.lastActiveAt,
           };
@@ -7092,6 +7347,19 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
             ? Math.round(contextTokens / contextLength * 100) : null;
           const boundRtKey = getManagedRuntimeKey(bound.agentId, bound.sessionId);
           const boundExecState = getRuntimeExecutionState(boundRtKey);
+          const boundRuntime = getAgentRuntime(bound.agentId, bound.sessionId);
+          let boundCallActive = false;
+          if (boundRuntime?.viewerAgentId) {
+            try {
+              const boundNotif = await readViewerJson(`/api/agents/${encodeURIComponent(boundRuntime.viewerAgentId)}/notification`);
+              boundCallActive = boundNotif?.callActive === true;
+            } catch {}
+          }
+          const boundWorkdir = boundRuntime?.workspaceDir
+            || (typeof match?.openDirectory === 'string' ? match.openDirectory.trim() : '')
+            || null;
+          const boundExecStatus = boundCallActive ? 'running'
+            : (boundExecState.queueLength > 0 ? 'queued' : boundExecState.status);
           boundSessionInfo = {
             agentId: bound.agentId,
             sessionId: bound.sessionId,
@@ -7101,7 +7369,8 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
             compressRatio: boundModelInfo.compressRatio || 80,
             contextTokens,
             contextUsagePct,
-            execStatus: boundExecState.status,
+            workdir: boundWorkdir,
+            execStatus: boundExecStatus,
             execQueueLength: boundExecState.queueLength,
             savedAt: typeof match?.savedAt === 'number' ? match.savedAt : null,
           };

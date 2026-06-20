@@ -212,6 +212,17 @@ body[data-theme="light"] .agent-icon {
   to { transform: rotate(360deg); }
 }
 
+.agent-item.just-finished .agent-status-dot {
+  background: var(--code-accent);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--code-accent) 60%, transparent);
+  animation: just-finished-pulse 2s ease-in-out infinite;
+}
+
+@keyframes just-finished-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .context-menu {
   position: fixed;
   min-width: 160px;

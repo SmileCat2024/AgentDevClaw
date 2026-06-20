@@ -628,6 +628,7 @@ function renderSidebarChildItems(entries) {
         const disconnected = entry.status === 'disconnected';
         const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
         const restarting = restartingRuntimeIds.has(entry.runtimeId);
+        const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
         const itemClass = [
           'agent-item',
           'agent-runtime-item',
@@ -635,6 +636,7 @@ function renderSidebarChildItems(entries) {
           disconnected ? 'disconnected' : '',
           calling ? 'calling' : '',
           restarting ? 'restarting' : '',
+          justFinished ? 'just-finished' : '',
         ].filter(Boolean).join(' ');
         return `
           <div
@@ -694,6 +696,7 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
       && !pending
       && !idle
       && (isRuntimeCalling(runtimeId) || agent.callActive === true);
+    const justFinished = !prebuilt && !calling && connected && !idle && _recentlyFinishedRuntimes.has(runtimeId);
     const itemClass = [
       'agent-item',
       active ? 'active' : '',
@@ -701,6 +704,7 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
       pending ? 'pending' : '',
       idle ? 'idle' : '',
       calling ? 'calling' : '',
+      justFinished ? 'just-finished' : '',
     ].filter(Boolean).join(' ');
     const hasRuntime = !!(agent.runtime_session_id || agent.runtimeSessionId);
     const contextMenuEnabled = prebuilt
@@ -861,6 +865,9 @@ async function loadAgents() {
     for (const key of _agentCallActive.keys()) {
       if (!activeRuntimeIds.has(key)) _agentCallActive.delete(key);
     }
+    for (const key of Array.from(_recentlyFinishedRuntimes)) {
+      if (!activeRuntimeIds.has(key)) _recentlyFinishedRuntimes.delete(key);
+    }
 
     if (!suppressSidebarRerender) {
       renderAgentList();
@@ -965,12 +972,19 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     if (prevCalling !== backendCalling) {
       changed = true;
     }
+    // 检测调用完成：true → false 转换，标记为"刚完成"
+    if (prevCalling && !backendCalling) {
+      if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
+        _recentlyFinishedRuntimes.add(runtimeId);
+      }
+    }
   }
 
   const activeRuntimeIds = new Set(runtimeIds);
   for (const key of Array.from(_agentCallActive.keys())) {
     if (!activeRuntimeIds.has(key)) {
       _agentCallActive.delete(key);
+      _recentlyFinishedRuntimes.delete(key);
       changed = true;
     }
   }
@@ -1005,6 +1019,7 @@ function getAgentListRenderSignature() {
     currentRuntimeAgentId: normalizeAgentIdentity(currentRuntimeAgentId),
     pending: Array.from(pendingPrebuiltAgentIds || []).sort(),
     restarting: Array.from(restartingRuntimeIds || []).sort(),
+    recentlyFinished: Array.from(_recentlyFinishedRuntimes).sort(),
     agents: (Array.isArray(allAgents) ? allAgents : []).map((agent) => ({
       id: normalizeAgentIdentity(agent?.id),
       runtimeId: normalizeAgentIdentity(getAgentRuntimeId(agent)),
@@ -3415,6 +3430,7 @@ window.switchAgent = async (newAgentId) => {
     // This lets the user see cached data without waiting for a network round trip.
     currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
     currentRuntimeAgentId = runtimeAgentId;
+    _recentlyFinishedRuntimes.delete(runtimeAgentId);
     readOnlyMode = false;
     currentWorkspaceArtifactDetail = null;
     currentWorkspaceDocsetDetail = null;

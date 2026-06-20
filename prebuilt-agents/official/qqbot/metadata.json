@@ -8,6 +8,15 @@
   "category": "chatbot",
   "enabled": true,
   "features": ["qqbot", "weixin-bot", "todo", "websearch", "shell", "im-operator", "mcp", "skill"],
+  "identities": [
+    {
+      "id": "operator",
+      "displayName": "接线员",
+      "description": "IM 线路接线与消息路由",
+      "sessionModel": "persistent",
+      "operations": ["status", "send", "interrupt"]
+    }
+  ],
   "ui": {
     "entry": "home",
     "tabs": [
