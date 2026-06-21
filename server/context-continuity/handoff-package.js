@@ -12,12 +12,13 @@ export const DEFAULT_EXPORT_POLICY = {
   includeAssistantMessages: true,
   keepRecentTurns: null,
   fullPreserveFromTurn: null,
+  preservedTurns: null,
   assistantToolCallMode: 'fold',
   toolMessageMode: 'fold',
   toolFoldScope: 'all',
   toolFoldRecentTurns: null,
   foldConsecutiveToolActivity: true,
-  foldedToolNoteRole: 'system',
+  foldedToolNoteRole: 'assistant',
   foldToolCallArgs: false,
   foldToolResultSummary: false,
   maxFoldedToolChars: 240,
@@ -116,6 +117,9 @@ export function normalizeExportPolicy(rawPolicy = {}) {
     includeAssistantMessages: rawPolicy?.includeAssistantMessages !== false,
     keepRecentTurns: normalizeNullableTurnCount(rawPolicy?.keepRecentTurns),
     fullPreserveFromTurn: normalizeNullableTurnIndex(rawPolicy?.fullPreserveFromTurn),
+    preservedTurns: Array.isArray(rawPolicy?.preservedTurns)
+      ? [...new Set(rawPolicy.preservedTurns.filter(t => Number.isFinite(t)).map(Number))]
+      : null,
     assistantToolCallMode: normalizeEnum(rawPolicy?.assistantToolCallMode, VALID_TOOL_MODES, DEFAULT_EXPORT_POLICY.assistantToolCallMode),
     toolMessageMode: normalizeEnum(rawPolicy?.toolMessageMode, VALID_TOOL_MODES, DEFAULT_EXPORT_POLICY.toolMessageMode),
     toolFoldScope: normalizeEnum(rawPolicy?.toolFoldScope, VALID_TOOL_SCOPES, DEFAULT_EXPORT_POLICY.toolFoldScope),
@@ -308,7 +312,13 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
   const foldedToolTurns = getFoldedToolTurnSet(rawMessages, retainedTurns, policy);
   const skillProtectedTurns = getSkillInvokeProtectedTurns(rawMessages, policy);
   const fullPreserveFrom = policy.fullPreserveFromTurn;
-  const hasPreserveBoundary = Number.isFinite(fullPreserveFrom);
+  // preservedTurns: when set, only these specific turns get full-detail preserve.
+  // This takes precedence over fullPreserveFromTurn and supports non-contiguous
+  // selections (e.g. "keep round 0, fold rounds 1-N").
+  const preservedTurnSet = Array.isArray(policy.preservedTurns) && policy.preservedTurns.length > 0
+    ? new Set(policy.preservedTurns)
+    : null;
+  const hasPreserveBoundary = preservedTurnSet || Number.isFinite(fullPreserveFrom);
   const seedMessages = [];
   const stats = {
     originalMessageCount: rawMessages.length,
@@ -357,7 +367,10 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
     const withinDialogueWindow = hasPreserveBoundary || !retainedTurns || retainedTurns.has(turn);
 
     // Preserve zone: pass through original message structure (preserves toolCallId, toolCalls, etc.)
-    if (hasPreserveBoundary && turn >= fullPreserveFrom) {
+    const inPreserveZone = preservedTurnSet
+      ? preservedTurnSet.has(turn)
+      : (Number.isFinite(fullPreserveFrom) && turn >= fullPreserveFrom);
+    if (inPreserveZone) {
       flushIfNeeded();
       if (role === 'tool' || shouldKeepDialogueMessage(role, policy)) {
         seedMessages.push({ ...message, turn });

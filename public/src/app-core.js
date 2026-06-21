@@ -392,6 +392,11 @@ let _chatLoadingSession = false;  // true while waiting for a just-opened sessio
 let _chatLoadingTimeout = null;   // safety timeout to clear _chatLoadingSession
 let _switchEpoch = 0;             // monotonically increasing; used to guard stale async work from rapid switches
 let phSessionSortMode = 'updatedAt'; // 'updatedAt' | 'createdAt' — programming-helper session list sort preference
+let phSearchQuery = '';              // current search query for session list
+let phSearchResults = null;          // search results array or null (not searching)
+let phSearchLoading = false;         // search in progress
+let phSearchTab = 'main';            // which tab filter to apply during search: 'main' | 'exploration' | 'sub'
+let _phSearchTimer = null;           // debounce timer for search input
 
 // ── User expand/collapse preferences (survive full re-render) ──────────────
 // Keyed by message index. These override syncCollapseStates auto-rules.
@@ -704,6 +709,7 @@ const I18N = {
     workspace_conversation_count: '对话数',
     workspace_conversation_group: '对话记录',
     workspace_main_conversations: '我的对话',
+    workspace_archived_conversations: '已归档',
     workspace_sub_conversations: '子代理对话',
     workspace_exploration_conversations: '探索记录',
     workspace_sort_updated: '更新时间',
@@ -1037,6 +1043,7 @@ const I18N = {
     workspace_conversation_count: 'Conversations',
     workspace_conversation_group: 'Conversations',
     workspace_main_conversations: 'My Chats',
+    workspace_archived_conversations: 'Archived',
     workspace_sub_conversations: 'Sub-agents',
     workspace_exploration_conversations: 'Explorations',
     workspace_sort_updated: 'Updated',
@@ -1283,7 +1290,7 @@ function isUiOnlyUnit(agent) {
 }
 
 function isWorkspaceHostUnit(agent) {
-  return !!(agent && agent.source === 'prebuilt' && (agent.id === 'agent-creator' || agent.id === 'feature-creator' || agent.id === 'qqbot' || agent.id === 'programming-helper' || agent.id === 'flow-workspace'));
+  return !!(agent && agent.source === 'prebuilt' && (agent.id === 'agent-creator' || agent.id === 'feature-creator' || agent.id === 'qqbot' || agent.id === 'programming-helper' || agent.id === 'flow-workspace' || agent.id === 'work-group'));
 }
 
 function isWorkspaceSurfaceUnit(agent) {

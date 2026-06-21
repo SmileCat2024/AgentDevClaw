@@ -16,6 +16,7 @@ import { dirname, join } from 'path';
 import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
+import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
 import { CheckpointFeature } from '../../../local-features/dist/checkpoint/src/index.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
@@ -31,6 +32,15 @@ const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * 校验音频路径：非空且文件存在才返回 true。
+ * 防止 Feature Setup UI 自动保存的无效路径（如框架 dist 路径）传入 feature 构造函数。
+ */
+function resolveAudioPath(value) {
+  const trimmed = cleanValue(value);
+  return trimmed ? existsSync(trimmed) : false;
 }
 
 function readSystemFeatureConfig() {
@@ -108,6 +118,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
     tools.remove('wait');
 
     this.use(new ClawDispatchFeature());
+    this.use(new GroupChatBridgeFeature());
 
     if (isExploration) {
       this.use(new ShellFeature({ workspaceDir }));
@@ -124,8 +135,8 @@ export class ProgrammingHelperAgent extends BasicAgent {
       this.use(new AudioFeedbackFeature({
         enabled: audioConfig.enabled !== undefined ? audioConfig.enabled : true,
         volume: audioConfig.volume !== undefined ? audioConfig.volume : 0.5,
-        ...(cleanValue(audioConfig.audioPath) ? { audioPath: audioConfig.audioPath } : {}),
-        ...(cleanValue(audioConfig.errorAudioPath) ? { errorAudioPath: audioConfig.errorAudioPath } : {}),
+        ...(resolveAudioPath(audioConfig.audioPath) ? { audioPath: audioConfig.audioPath } : {}),
+        ...(resolveAudioPath(audioConfig.errorAudioPath) ? { errorAudioPath: audioConfig.errorAudioPath } : {}),
       }));
       this.use(new WebSearchFeature());
       this.use(new MemoryFeature({ workspaceDir }));

@@ -176,13 +176,16 @@ window.submitTrimCompact = async () => {
   const { agentId, sessionId, rounds, keepSkillInvokes } = trimDialogState;
   if (!agentId || !sessionId || !rounds.length) return;
 
-  let fullPreserveFromTurn = null;
-  const firstKeptIndex = rounds.findIndex(r => !r.suggestedTrim);
-  if (firstKeptIndex >= 0) {
-    fullPreserveFromTurn = rounds[firstKeptIndex].turnStart;
-  }
+  // Compute the set of turns to preserve as-is (full detail).
+  // Using preservedTurns instead of fullPreserveFromTurn supports non-contiguous
+  // selections (e.g. "keep round 0, fold rounds 1-N"). fullPreserveFromTurn=N
+  // would preserve everything from turn N onwards, which breaks when N=0.
+  const keptRounds = rounds.filter(r => !r.suggestedTrim);
 
   const policy = {};
+  if (keptRounds.length > 0) {
+    policy.preservedTurns = keptRounds.map(r => r.turnStart);
+  }
   if (keepSkillInvokes != null && keepSkillInvokes > 0) {
     policy.keepRecentSkillInvokes = keepSkillInvokes;
   }
@@ -191,7 +194,7 @@ window.submitTrimCompact = async () => {
   markSessionLoading(agentId, sessionId);
 
   try {
-    const result = await createCompactedResumeSession(agentId, sessionId, '', null, fullPreserveFromTurn, policy);
+    const result = await createCompactedResumeSession(agentId, sessionId, '', null, null, policy);
     if (result?.agent) {
       applyManagedPrebuiltAgent(agentId, result.agent);
     }

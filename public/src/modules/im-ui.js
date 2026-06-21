@@ -330,8 +330,12 @@ function renderLineConnectionSection(draft) {
     var currentLabel = String(current.label);
     var currentIcon = current.icon || '';
 
+    // Preserve open state across re-renders (e.g. after background bundle refresh)
+    var dropdownKey = lineId + ':' + type;
+    var shouldOpen = window._imOpenDropdownKey === dropdownKey;
+
     return [
-      '<div class="im-dropdown im-line-' + type + '">',
+      '<div class="im-dropdown im-line-' + type + (shouldOpen ? ' open' : '') + '" data-line-id="' + escapeHtml(lineId) + '" data-dropdown-type="' + escapeHtml(type) + '">',
       '<div class="im-dropdown-trigger' + (type === 'session' && !line.carrier ? ' im-dropdown-disabled' : '') + '" onclick="window.toggleIMDropdown(this)">',
       currentIcon + '<span>' + escapeHtml(currentLabel) + '</span>',
       '<svg class="im-dropdown-arrow" viewBox="0 0 12 12" fill="currentColor"><path d="M2 4l4 4 4-4"/></svg>',

@@ -172,11 +172,14 @@ export class ContextHandoffSeedFeature implements AgentFeature {
       });
 
       // Advance the runtime call index past all seed turns so the first real
-      // user message gets a non-colliding turn value. Without this, seed turns
-      // (e.g. 0,1,2,3,4,5) overlap with the first local user call (turn=0).
+      // user message gets a non-colliding turn value. After this hook returns,
+      // agent.ts calls context.addUserMessage(input, this._callIndex) which
+      // assigns turn = _callIndex. We need _callIndex = injectionTurn so the
+      // user message gets turn = injectionTurn (= maxSeedTurn + 1), avoiding
+      // collision with the last seed message.
       const agentRef = ctx.agent as any;
-      if (typeof agentRef?._callIndex === 'number' && injectionTurn - 1 > agentRef._callIndex) {
-        agentRef._callIndex = injectionTurn - 1;
+      if (typeof agentRef?._callIndex === 'number' && injectionTurn > agentRef._callIndex) {
+        agentRef._callIndex = injectionTurn;
       }
     }
 

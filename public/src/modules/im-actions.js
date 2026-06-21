@@ -329,12 +329,42 @@ window.closeIMChannelDetail = () => {
 };
 
 
+window._imOpenDropdownKey = null;
+
 window.toggleIMDropdown = (trigger) => {
   const dropdown = trigger.closest('.im-dropdown');
   if (!dropdown) return;
   const isOpen = dropdown.classList.contains('open');
   document.querySelectorAll('.im-dropdown.open').forEach((d) => d.classList.remove('open'));
-  if (!isOpen) dropdown.classList.add('open');
+
+  if (isOpen) {
+    window._imOpenDropdownKey = null;
+    return;
+  }
+
+  dropdown.classList.add('open');
+
+  // Track open state for re-render persistence
+  const lineId = dropdown.dataset?.lineId || '';
+  const dropdownType = dropdown.dataset?.dropdownType || '';
+  window._imOpenDropdownKey = lineId + ':' + dropdownType;
+
+  // When opening a session dropdown, refresh the bundle to get the latest
+  // connectable sessions (new sessions, runtime state changes, etc.)
+  // Use a soft fetch that doesn't clear existing data, so the dropdown
+  // stays open and populated during the refresh.
+  if (dropdownType === 'session') {
+    fetch('/protoclaw/im_workspace_bundle')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (!payload) return;
+        const bundle = normalizeIMWorkspaceBundleData(payload);
+        imWorkspaceState.data = bundle;
+        imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
+        renderCurrentMainView();
+      })
+      .catch((e) => console.error('Failed to refresh connectable sessions:', e));
+  }
 };
 
 window.imSelectChannel = (item, value) => {
@@ -348,6 +378,7 @@ window.imSelectLine = (item, type, lineId) => {
   const dropdown = item.closest('.im-dropdown');
   if (!dropdown) return;
   dropdown.classList.remove('open');
+  window._imOpenDropdownKey = null;
   const value = item.dataset.value;
   if (type === 'carrier') {
     window.handleLineCarrierChange(lineId, value);
@@ -395,6 +426,7 @@ window.togglePortalAgentAutostart = async (enabled, existingScheduleId) => {
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.im-dropdown')) {
     document.querySelectorAll('.im-dropdown.open').forEach((d) => d.classList.remove('open'));
+    window._imOpenDropdownKey = null;
   }
 });
 

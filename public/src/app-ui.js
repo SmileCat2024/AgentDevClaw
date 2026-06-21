@@ -5647,6 +5647,11 @@ function _ensureWorkGroupEventDelegation() {
       window.WorkGroupUI.onContainerInput(e);
     }
   });
+  container.addEventListener('change', (e) => {
+    if (window.WorkGroupUI && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerChange(e);
+    }
+  });
   container.addEventListener('keydown', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerKeyDown(e);

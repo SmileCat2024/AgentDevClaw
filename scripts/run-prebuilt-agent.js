@@ -1312,27 +1312,32 @@ async function triggerPartialCompact(callIndex, feedback = '') {
       return;
     }
 
-    // 3. Inject summary as system reminder. Pin the message list to the same
-    // prefix selected for summary so the target turn and tail are definitely removed.
+    // 3. Inject summary as system reminder.
+    // After rollback, the context already has the correct kept prefix in both
+    // messages and enrichedMessages. We append the summary via addSystemMessage
+    // (which syncs both arrays) instead of ctx.restore({ enrichedMessages: [] })
+    // which would wipe enrichedMessages and break Feature queries.
     const ctx = typeof agent?.getContext === 'function' ? agent.getContext() : null;
-    if (!ctx || typeof ctx.restore !== 'function') {
-      throw new Error('无法获取上下文或上下文不支持 restore');
+    if (!ctx) {
+      throw new Error('无法获取上下文');
     }
 
     const restoredCallIndex = typeof agent._callIndex === 'number' ? Number(agent._callIndex) : callIndex - 1;
     const reminderTurn = Math.max(0, restoredCallIndex + 1);
-    const finalMessages = [
-      ...keptMessages,
-      {
-        role: 'system',
-        content: summaryContent,
-        turn: reminderTurn,
-        source: 'partial-compact',
-        tags: ['compact-summary'],
-        isCompactSummary: true,
-      },
-    ];
-    ctx.restore({ version: 2, messages: finalMessages, enrichedMessages: [], sequence: 0 });
+
+    // Verify the rollback produced the expected prefix; if not, fall back to
+    // explicit restore (with rebuilt enrichedMessages from post-rollback state).
+    const postRollbackMessages = ctx.getAll();
+    if (postRollbackMessages.length === keptMessages.length) {
+      ctx.addSystemMessage(summaryContent, reminderTurn, 'partial-compact');
+    } else {
+      console.warn(`[ProtoClaw Runtime] 部分压缩: 回滚后消息数 (${postRollbackMessages.length}) 与预期 (${keptMessages.length}) 不一致，使用显式 restore`);
+      const postRollbackEnriched = typeof ctx.getAllEnriched === 'function' ? ctx.getAllEnriched() : [];
+      const finalMessages = [...keptMessages, {
+        role: 'system', content: summaryContent, turn: reminderTurn,
+      }];
+      ctx.restore({ version: 2, messages: finalMessages, enrichedMessages: postRollbackEnriched, sequence: postRollbackEnriched.length });
+    }
 
     // 4. Save and sync final state.
     await agent.saveSession(sessionId, sessionStore);
@@ -1621,6 +1626,16 @@ async function main() {
     }
   } catch (error) {
     console.error('[ProtoClaw Runtime] ClawDispatch 启动失败:', error);
+  }
+
+  try {
+    const gcBridgeFeature = agent.features?.get?.('group-chat-bridge');
+    if (gcBridgeFeature && typeof gcBridgeFeature.startBridgeLoop === 'function') {
+      await gcBridgeFeature.startBridgeLoop(agent, callArbiter);
+      console.log('[ProtoClaw Runtime] ✓ 已启动 GroupChatBridge loop');
+    }
+  } catch (error) {
+    console.error('[ProtoClaw Runtime] GroupChatBridge 启动失败:', error);
   }
 
   const userInput = agent.features?.get?.('user-input');

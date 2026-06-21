@@ -1193,6 +1193,53 @@ async function writeProjectIMWorkspaceConfig(rawConfig) {
   return config;
 }
 
+/**
+ * Serialized read-modify-write for IM workspace config.
+ *
+ * Without this, concurrent HTTP requests (e.g. im_line_transfer + GET
+ * im_workspace_bundle) interleave their read → modify → write cycles and
+ * silently overwrite each other's results — the primary cause of intermittent
+ * "接不上" (connection fails silently).
+ *
+ * Every mutator callback receives the freshly-read config and may mutate it
+ * in-place. The config is written back automatically after the callback
+ * resolves. Operations are chained sequentially via a promise queue.
+ */
+let _imConfigOpChain = Promise.resolve();
+function withIMWorkspaceConfig(mutator) {
+  const run = _imConfigOpChain.then(async () => {
+    const config = await readProjectIMWorkspaceConfig();
+    const shouldWrite = await mutator(config);
+    if (shouldWrite) {
+      await writeProjectIMWorkspaceConfig(config);
+    }
+    return config;
+  });
+  // Swallow rejections so the chain never breaks for subsequent callers
+  _imConfigOpChain = run.catch(() => {});
+  return run;
+}
+
+/**
+ * Prune line bindings whose target runtime is no longer alive.
+ * Runs through the serializer to avoid racing with concurrent transfers.
+ * Returns the number of pruned lines.
+ */
+function pruneStaleIMLineBindings() {
+  return withIMWorkspaceConfig((config) => {
+    let pruned = 0;
+    for (const line of (config.lines || [])) {
+      if (!line.boundSession?.agentId || !line.boundSession?.sessionId) continue;
+      const rt = getAgentRuntime(line.boundSession.agentId, line.boundSession.sessionId);
+      if (!rt?.process || rt.process.exitCode !== null || rt.stopped) {
+        line.boundSession = null;
+        pruned++;
+      }
+    }
+    return pruned > 0;
+  });
+}
+
 function serializeWeixinBindingState(state = null) {
   if (!state) {
     return {
@@ -1230,18 +1277,21 @@ async function buildIMWorkspaceBundle(agentId = 'qqbot') {
     readSessionIndex('programming-helper').catch(() => ({ sessions: [], activeSessionId: null })),
   ]);
 
-  // Prune stale line bindings whose target runtime is no longer alive
-  let pruned = false;
+  // Detect stale line bindings for display, and fire background pruning
+  // through the serializer (non-blocking). This replaces the old inline
+  // read-modify-write that raced with concurrent transfers.
+  let hasStaleBindings = false;
   for (const line of (workspaceConfig.lines || [])) {
     if (!line.boundSession?.agentId || !line.boundSession?.sessionId) continue;
     const rt = getAgentRuntime(line.boundSession.agentId, line.boundSession.sessionId);
     if (!rt?.process || rt.process.exitCode !== null || rt.stopped) {
-      line.boundSession = null;
-      pruned = true;
+      hasStaleBindings = true;
     }
   }
-  if (pruned) {
-    workspaceConfig = await writeProjectIMWorkspaceConfig(workspaceConfig);
+  if (hasStaleBindings) {
+    pruneStaleIMLineBindings().catch((e) =>
+      console.error('[ProtoClaw IM] Background prune failed:', e)
+    );
   }
 
   const sessions = Array.isArray(index?.sessions)
@@ -3567,6 +3617,214 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
   }
 }
 
+// ── Session Content Search Index ────────────────────────────────
+// In-memory cache: agentId → Map<sessionId, { sessionId, title, openDirectory, fileMtimeMs, text }>
+const _searchIndexCache = new Map();
+const _searchIndexBuilding = new Map();
+const SEARCH_INDEX_VERSION = 1;
+const SEARCH_SNIPPET_RADIUS = 40;
+const SEARCH_MAX_RESULTS = 50;
+
+function getSearchIndexPath(agentId) {
+  return path.join(getPrebuiltAgentSessionDir(agentId), 'search-index.json');
+}
+
+async function loadPersistentSearchIndex(agentId) {
+  try {
+    const raw = await fs.readFile(getSearchIndexPath(agentId), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== SEARCH_INDEX_VERSION) return null;
+    return parsed.entries || {};
+  } catch {
+    return null;
+  }
+}
+
+async function savePersistentSearchIndex(agentId, entriesMap) {
+  try {
+    const data = { version: SEARCH_INDEX_VERSION, entries: entriesMap };
+    await fs.writeFile(getSearchIndexPath(agentId), JSON.stringify(data), 'utf8');
+  } catch {}
+}
+
+async function extractSessionSearchText(sessionPath) {
+  const raw = await fs.readFile(sessionPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
+  const parts = [];
+  for (const m of messages) {
+    if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
+      parts.push('[user] ' + m.content);
+    } else if (m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()) {
+      parts.push('[assistant] ' + m.content);
+    }
+  }
+  return parts.join('\n');
+}
+
+async function ensureSearchIndex(agentId) {
+  // Deduplicate concurrent builds
+  if (_searchIndexBuilding.has(agentId)) {
+    return _searchIndexBuilding.get(agentId);
+  }
+
+  const buildPromise = (async () => {
+    const index = await readSessionIndex(agentId);
+    const memCache = _searchIndexCache.get(agentId);
+    const persistent = memCache ? null : await loadPersistentSearchIndex(agentId);
+
+    // Source of truth for valid entries: index.json session IDs
+    const validIds = new Set(index.sessions.map(s => s.id));
+
+    // Build entries map: start from existing cache (in-memory or persistent)
+    const entries = new Map();
+    const toRead = []; // sessions that need file reads
+
+    for (const record of index.sessions) {
+      // Check in-memory cache first, then persistent
+      const source = memCache?.get(record.id) || persistent?.[record.id];
+      if (
+        source &&
+        source.fileMtimeMs === record.fileMtimeMs &&
+        typeof source.text === 'string'
+      ) {
+        entries.set(record.id, {
+          ...source,
+          title: cleanSessionText(record.title) || source.title || record.id,
+          openDirectory: cleanSessionText(record.openDirectory),
+          sessionType: cleanSessionText(record.sessionType) || source.sessionType || 'main',
+          archived: record.archived === true,
+        });
+      } else {
+        toRead.push(record);
+      }
+    }
+
+    // Read files in batches, yielding between batches
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < toRead.length; i += BATCH_SIZE) {
+      const batch = toRead.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(async (record) => {
+        try {
+          const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
+          const text = await extractSessionSearchText(sessionPath);
+          entries.set(record.id, {
+            sessionId: record.id,
+            title: cleanSessionText(record.title) || record.id,
+            openDirectory: cleanSessionText(record.openDirectory),
+            sessionType: cleanSessionText(record.sessionType) || 'main',
+            archived: record.archived === true,
+            fileMtimeMs: record.fileMtimeMs || 0,
+            text,
+          });
+        } catch {
+          // Skip unreadable sessions
+        }
+      }));
+      if (i + BATCH_SIZE < toRead.length) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    }
+
+    // Persist updated index (only if we actually read files)
+    if (toRead.length > 0) {
+      const persistData = {};
+      for (const [id, entry] of entries) {
+        persistData[id] = {
+          sessionId: entry.sessionId,
+          title: entry.title,
+          openDirectory: entry.openDirectory,
+          sessionType: entry.sessionType,
+          archived: entry.archived,
+          fileMtimeMs: entry.fileMtimeMs,
+          text: entry.text,
+        };
+      }
+      await savePersistentSearchIndex(agentId, persistData);
+    }
+
+    // Cache in memory
+    _searchIndexCache.set(agentId, entries);
+    return entries;
+  })();
+
+  _searchIndexBuilding.set(agentId, buildPromise);
+  try {
+    const result = await buildPromise;
+    return result;
+  } finally {
+    _searchIndexBuilding.delete(agentId);
+  }
+}
+
+function searchInText(text, queryLower) {
+  const idx = text.toLowerCase().indexOf(queryLower);
+  if (idx === -1) return null;
+  const start = Math.max(0, idx - SEARCH_SNIPPET_RADIUS);
+  const end = Math.min(text.length, idx + queryLower.length + SEARCH_SNIPPET_RADIUS);
+  let snippet = text.slice(start, end);
+  // Strip role prefix from the beginning of snippet if present
+  snippet = snippet.replace(/^\[[^\]]*\]\s*/, '');
+  // Determine match role by looking backwards for role tag
+  const beforeSnippet = text.slice(0, idx);
+  const lastRoleMatch = beforeSnippet.match(/\[(user|assistant)\][^\[]*$/);
+  const matchRole = lastRoleMatch ? lastRoleMatch[1] : '';
+  return { snippet, matchRole, matchIndex: idx };
+}
+
+async function searchSessionsContent(agentId, query, openDirectory) {
+  const entries = await ensureSearchIndex(agentId);
+  const queryLower = query.toLowerCase();
+  const results = [];
+
+  // Normalize openDirectory for filtering
+  const normalizedDir = openDirectory
+    ? String(openDirectory).replace(/\\/g, '/').toLowerCase()
+    : null;
+
+  for (const [sessionId, entry] of entries) {
+    // Filter by openDirectory
+    if (normalizedDir) {
+      const entryDir = String(entry.openDirectory || '').replace(/\\/g, '/').toLowerCase();
+      if (entryDir !== normalizedDir) continue;
+    }
+
+    // Search in text content
+    const match = searchInText(entry.text, queryLower);
+    if (match) {
+      results.push({
+        sessionId: entry.sessionId,
+        title: entry.title,
+        openDirectory: entry.openDirectory,
+        sessionType: entry.sessionType || 'main',
+        archived: entry.archived === true,
+        snippet: match.snippet,
+        matchRole: match.matchRole,
+        matchedInText: true,
+      });
+    }
+  }
+
+  // Sort by title relevance then by recency (approximated by sessionId timestamp)
+  results.sort((a, b) => {
+    // Exact title match gets priority
+    const aTitle = a.title.toLowerCase().includes(queryLower) ? 0 : 1;
+    const bTitle = b.title.toLowerCase().includes(queryLower) ? 0 : 1;
+    if (aTitle !== bTitle) return aTitle - bTitle;
+    return String(b.sessionId).localeCompare(String(a.sessionId));
+  });
+
+  const total = results.length;
+  const trimmed = results.slice(0, SEARCH_MAX_RESULTS);
+
+  return {
+    query,
+    results: trimmed,
+    total,
+    indexed: entries.size,
+  };
+}
+
 async function cleanupEmptySessions(agentId) {
   const index = await readSessionIndex(agentId);
   const toDelete = [];
@@ -4850,12 +5108,14 @@ async function getAgents() {
 async function requireAgentLight(agentId) {
   const lightAgents = await getAgentsLight();
   const agent = lightAgents.find((item) => item.id === agentId);
-  if (!agent) {
-    const error = new Error(`Unknown agent: ${agentId}`);
-    error.statusCode = 404;
-    throw error;
-  }
-  return agent;
+  if (agent) return agent;
+  // Fallback: hidden agents (e.g. work-group-admin) are not in getAgentsLight
+  const allAgents = await discoverAgents(AGENTS_ROOT);
+  const hidden = allAgents.find((item) => item.id === agentId);
+  if (hidden) return { ...hidden, status: buildStatus(agentId) };
+  const error = new Error(`Unknown agent: ${agentId}`);
+  error.statusCode = 404;
+  throw error;
 }
 
 async function requireAgent(agentId) {
@@ -6008,44 +6268,31 @@ app.post('/protoclaw/dispatch/agent_status', express.json(), (req, res) => {
  * 无 identities 声明的 workspace 自动生成默认身份（向后兼容）。
  */
 async function collectIdentities() {
-  const agents = await getAgentsLight();
+  const agents = await discoverAgents(AGENTS_ROOT);
   const identities = [];
 
   for (const agent of agents) {
     if (agent.enabled === false) continue;
-    // ui-only workspace 不暴露身份（如 work-group 自身）
     if (agent.launchMode === 'ui-only') continue;
 
     const declared = Array.isArray(agent.identities) ? agent.identities : null;
+    if (!declared || declared.length === 0) continue;
 
-    if (declared && declared.length > 0) {
-      for (const id of declared) {
-        identities.push({
-          workspaceId: agent.id,
-          workspaceName: agent.name,
-          identityId: id.id,
-          identityRef: `${agent.id}:${id.id}`,
-          displayName: id.displayName || id.id,
-          description: id.description || '',
-          sessionModel: id.sessionModel || 'persistent',
-          qualifierLabel: id.qualifierLabel || null,
-          operations: Array.isArray(id.operations) ? id.operations : [],
-          callTimeoutMs: typeof id.callTimeoutMs === 'number' ? id.callTimeoutMs : 900000,
-        });
-      }
-    } else {
-      // 向后兼容：无 identities 声明 → 默认身份
+    for (const id of declared) {
+      // 只暴露显式标记为 groupChat 的身份
+      if (!id.groupChat) continue;
+
       identities.push({
         workspaceId: agent.id,
         workspaceName: agent.name,
-        identityId: 'default',
-        identityRef: `${agent.id}:default`,
-        displayName: agent.name || agent.id,
-        description: agent.description || '',
-        sessionModel: 'persistent',
-        qualifierLabel: null,
-        operations: ['status'],
-        callTimeoutMs: 900000,
+        identityId: id.id,
+        identityRef: `${agent.id}:${id.id}`,
+        displayName: id.displayName || id.id,
+        description: id.description || '',
+        sessionModel: id.sessionModel || 'persistent',
+        qualifierLabel: id.qualifierLabel || null,
+        operations: Array.isArray(id.operations) ? id.operations : [],
+        callTimeoutMs: typeof id.callTimeoutMs === 'number' ? id.callTimeoutMs : 900000,
       });
     }
   }
@@ -6219,6 +6466,57 @@ async function updateMessageRouting(chatId, messageId, routingUpdate) {
 }
 
 /**
+ * 为群聊中的某个 identity 解析或创建 session。
+ * - persistent: 首次创建，后续复用
+ * - one-shot: 总是创建新的
+ * 返回 { sessionId, isNew }
+ */
+async function resolveGroupChatSession(chatId, identityRef, sessionModel) {
+  const chat = await readGroupChat(chatId);
+  if (!chat) throw new Error(`Group chat not found: ${chatId}`);
+
+  const workspaceId = identityRef.split(':')[0];
+
+  // 查找身份显示名用于 session 标题
+  const allIdentities = await collectIdentities();
+  const identityInfo = allIdentities.find((i) => i.identityRef === identityRef);
+  const displayName = identityInfo?.displayName || identityRef.split(':')[1] || 'Agent';
+  const sessionTitle = `${chat.name || '群聊'} · ${displayName}`;
+
+  // one-shot: 总是创建新 session
+  if (sessionModel === 'one-shot') {
+    const agent = await requireAgentLight(workspaceId);
+    const session = await createPrebuiltSession(agent.id, {
+      sessionType: 'exploration',
+      taskTitle: sessionTitle,
+    });
+    return { sessionId: session.id, isNew: true };
+  }
+
+  // persistent: 检查映射
+  if (!chat.sessions) chat.sessions = {};
+  const existing = chat.sessions[identityRef];
+  if (existing) {
+    // 验证 session 是否仍存在于 index 中
+    const index = await readSessionIndex(workspaceId);
+    const found = index.sessions.find((s) => s.id === existing);
+    if (found) {
+      return { sessionId: existing, isNew: false };
+    }
+    // session 不存在了（可能被删除），重建
+  }
+
+  // 创建新 session 并存储映射
+  const agent = await requireAgentLight(workspaceId);
+  const session = await createPrebuiltSession(agent.id, {
+    taskTitle: sessionTitle,
+  });
+  chat.sessions[identityRef] = session.id;
+  await writeGroupChat(chat);
+  return { sessionId: session.id, isNew: true };
+}
+
+/**
  * 构建发送给 agent 的 prompt：群聊上下文头 + 消息正文 + 链接引用。
  */
 function composeDispatchPrompt(chatName, message) {
@@ -6237,6 +6535,77 @@ function composeDispatchPrompt(chatName, message) {
   return parts.join('\n\n');
 }
 
+// ── Group Chat Bridge: inbox + writeback ───────────────────────────
+
+const gcInboxQueue = new Map();       // runtimeKey → message[]
+const gcInboxPendingPolls = new Map(); // runtimeKey → callback
+
+/**
+ * 向 gc inbox 投递一条消息，唤醒等待的 long-poll。
+ */
+function enqueueGcInbox(runtimeKey, msg) {
+  if (!gcInboxQueue.has(runtimeKey)) gcInboxQueue.set(runtimeKey, []);
+  gcInboxQueue.get(runtimeKey).push(msg);
+  const cb = gcInboxPendingPolls.get(runtimeKey);
+  if (cb) {
+    gcInboxPendingPolls.delete(runtimeKey);
+    cb(msg);
+  }
+}
+
+app.get('/protoclaw/gc/inbox', async (req, res) => {
+  const agentId = req.query.agentId;
+  const sessionId = req.query.sessionId || null;
+  if (!agentId) return res.status(400).json({ error: 'agentId required' });
+  const timeoutMs = Math.min(Number(req.query.timeout) || 25, 30) * 1000;
+  const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
+
+  const queue = gcInboxQueue.get(runtimeKey);
+  if (queue && queue.length > 0) {
+    return res.json(queue.shift());
+  }
+
+  const timer = setTimeout(() => {
+    gcInboxPendingPolls.delete(runtimeKey);
+    res.status(204).end();
+  }, timeoutMs);
+
+  gcInboxPendingPolls.set(runtimeKey, (msg) => {
+    clearTimeout(timer);
+    gcInboxPendingPolls.delete(runtimeKey);
+    res.json(msg);
+  });
+});
+
+app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
+  try {
+    const { chatId, identityRef, response, error } = req.body || {};
+    if (!chatId || !identityRef) {
+      return res.status(400).json({ error: 'chatId and identityRef required' });
+    }
+
+    const text = error
+      ? `执行出错: ${error}`
+      : (response || '(无回复)');
+
+    await appendGroupChatMessage(chatId, {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      chatId,
+      from: identityRef,
+      text,
+      mentions: [],
+      links: [],
+      kind: error ? 'text' : 'text',
+      timestamp: Date.now(),
+      routing: null,
+    });
+    log('GroupChat', `writeback from ${identityRef} to chat ${chatId}`);
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /**
  * Level 1 mention 派发：将群聊消息发送到目标 agent 的 session。
  *
@@ -6244,32 +6613,37 @@ function composeDispatchPrompt(chatName, message) {
  * 1. 解析 mention → workspaceId
  * 2. 找到或启动 agent runtime
  * 3. 等待 runtime ready
- * 4. 通过 ViewerWorker queue-input 发送消息
+ * 4. 通过 gc inbox 投递消息（GroupChatBridgeFeature 轮询消费）
  * 5. 更新 routing.status = "delivered"
  * 6. 后台跟踪 agent 完成状态 → "completed" / "failed"
  */
-async function dispatchGroupChatMessage(chatId, message) {
-  const routing = message.routing;
-  if (!routing || !routing.targetWorkspaceId) return;
+/**
+ * 核心派发逻辑：将消息投递到指定 identity 的 session。
+ * 负责 session 解析、runtime 启动、gc inbox 投递、状态跟踪。
+ */
+async function dispatchToIdentity(chatId, message, chat, identityRef, composedPrompt) {
+  const workspaceId = identityRef.split(':')[0];
+  log('GroupChat', `dispatching message ${message.id} to ${workspaceId} (${identityRef})`);
 
-  const workspaceId = routing.targetWorkspaceId;
-  log('GroupChat', `dispatching message ${message.id} to ${workspaceId}`);
+  // 1. 解析 identity 的 sessionModel
+  const allIdentities = await collectIdentities();
+  const identityInfo = allIdentities.find((i) => i.identityRef === identityRef);
+  const sessionModel = identityInfo?.sessionModel || 'persistent';
 
-  // 读取群聊信息，构建上下文头
-  const chat = await readGroupChat(chatId);
-  const chatName = chat?.name || '';
-  const composedPrompt = composeDispatchPrompt(chatName, message);
+  // 2. 解析或创建 session
+  const { sessionId, isNew } = await resolveGroupChatSession(chatId, identityRef, sessionModel);
+  log('GroupChat', `resolved session ${sessionId} (isNew=${isNew}) for ${identityRef}`);
 
-  // 1. 找到或启动 agent runtime
-  let runtime = getAgentRuntime(workspaceId);
+  // 3. 找到或启动指定 session 的 runtime
+  let runtime = getAgentRuntime(workspaceId, sessionId);
   const isAlive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
 
   if (!isAlive) {
     try {
       const agent = await requireAgentLight(workspaceId);
-      log('GroupChat', `starting agent ${workspaceId} for dispatch`);
-      await startManagedAgent(agent);
-      runtime = await waitForManagedRuntimeReady(workspaceId, 30000);
+      log('GroupChat', `starting agent ${workspaceId} session=${sessionId} for dispatch`);
+      await startManagedAgent(agent, sessionId);
+      runtime = await waitForManagedRuntimeReady(workspaceId, 30000, sessionId);
       if (!runtime) {
         throw new Error('Agent runtime failed to become ready within 30s');
       }
@@ -6284,9 +6658,9 @@ async function dispatchGroupChatMessage(chatId, message) {
     }
   }
 
-  // 2. 确保 runtime ready（有 viewerAgentId）
+  // 4. 确保 runtime ready
   if (!runtime.viewerAgentId) {
-    const ready = await waitForManagedRuntimeReady(workspaceId, 15000);
+    const ready = await waitForManagedRuntimeReady(workspaceId, 15000, sessionId);
     if (!ready?.id) {
       await updateMessageRouting(chatId, message.id, {
         status: 'failed',
@@ -6295,7 +6669,7 @@ async function dispatchGroupChatMessage(chatId, message) {
       });
       return;
     }
-    runtime = getAgentRuntime(workspaceId);
+    runtime = getAgentRuntime(workspaceId, sessionId);
   }
 
   const viewerAgentId = runtime?.viewerAgentId;
@@ -6308,45 +6682,159 @@ async function dispatchGroupChatMessage(chatId, message) {
     return;
   }
 
-  // 3. 通过 ViewerWorker 发送消息
-  try {
-    const response = await fetch(
-      `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/queue-input`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: composedPrompt }),
-      }
-    );
-    if (!response.ok) {
-      throw new Error(`ViewerWorker returned ${response.status}`);
-    }
-    log('GroupChat', `message ${message.id} dispatched to ${viewerAgentId}`);
-  } catch (err) {
-    log('GroupChat', `failed to send message: ${err.message}`, 'error');
-    await updateMessageRouting(chatId, message.id, {
-      status: 'failed',
-      error: `Failed to send: ${err.message}`,
-      completedAt: Date.now(),
-    });
-    return;
-  }
+  // 5. 通过 gc inbox 投递消息
+  const runtimeKey = getManagedRuntimeKey(workspaceId, sessionId);
+  enqueueGcInbox(runtimeKey, {
+    id: message.id,
+    text: composedPrompt,
+    gcChatId: chatId,
+    gcIdentityRef: identityRef,
+  });
+  log('GroupChat', `message ${message.id} enqueued to gc inbox for ${workspaceId}/${sessionId}`);
 
-  // 4. 更新 routing 状态为 delivered
+  // 6. 更新 routing 状态
   await updateMessageRouting(chatId, message.id, {
     status: 'delivered',
-    targetSessionId: runtime.selectedSessionId,
+    targetSessionId: sessionId,
     dispatchedAt: Date.now(),
   });
 
-  // 5. 后台跟踪 agent 完成状态
+  // 7. 后台跟踪完成状态
   trackGroupChatDispatch(chatId, message.id, workspaceId, viewerAgentId);
+}
+
+/**
+ * 群聊消息派发入口。
+ * 根据群的主动性模式决定路由策略：
+ * - assist: 直接派发到目标 agent
+ * - plan: 直接派发 + 通知管理员观察
+ * - execute: 转发给管理员协调
+ */
+async function dispatchGroupChatMessage(chatId, message) {
+  const routing = message.routing;
+  if (!routing || !routing.targetWorkspaceId) return;
+
+  const chat = await readGroupChat(chatId);
+  const chatName = chat?.name || '';
+  const initiativeMode = chat?.initiativeMode || 'assist';
+  const autonomyMode = chat?.autonomyMode || 'auto';
+  const targetIdentityRef = routing.targetIdentityRef;
+  const targetIsAdmin = targetIdentityRef === 'work-group:admin';
+
+  // @管理员 → 始终直接派发给管理员
+  if (targetIsAdmin) {
+    const prompt = composeDispatchPrompt(chatName, message);
+    await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
+    return;
+  }
+
+  switch (initiativeMode) {
+    case 'execute': {
+      // 执行模式：转发给管理员协调
+      log('GroupChat', `execute mode: routing to admin for ${message.id}`);
+      const allIdentities = await collectIdentities();
+      const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
+      const targetName = targetInfo?.displayName || targetIdentityRef;
+      const autonomyDesc = {
+        auto: '直接执行——请自行判断并处理，无需征求用户确认',
+        cautious: '有疑则停——正常推进，遇到不确定的地方停下来问用户',
+        confirm: '方案确认——先给出方案，等用户确认后再执行',
+      }[autonomyMode] || '直接执行';
+
+      const coordinatorPrompt = [
+        `[群聊：${chatName}]`,
+        `管理员协调模式（执行）`,
+        '',
+        `用户 @了 ${targetName}，消息内容：`,
+        message.text || '',
+        '',
+        `请你作为管理员决定如何处理。你可以：`,
+        `1. 使用 gc_dispatch 工具将任务派发给 ${targetIdentityRef}`,
+        `2. 如果需要更多信息，在群里回复用户`,
+        `3. 如果任务不清晰，向用户提问`,
+        '',
+        `自决权：${autonomyDesc}`,
+      ].join('\n');
+
+      // 更新 routing 目标为管理员
+      await updateMessageRouting(chatId, message.id, {
+        targetIdentityRef: 'work-group:admin',
+        targetWorkspaceId: 'work-group',
+        routedByMode: 'execute',
+      });
+      await dispatchToIdentity(chatId, message, chat, 'work-group:admin', coordinatorPrompt);
+      break;
+    }
+
+    case 'plan': {
+      // 规划模式：直接派发 + 通知管理员观察
+      const prompt = composeDispatchPrompt(chatName, message);
+      await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
+
+      // 异步通知管理员（不阻塞主派发）
+      notifyAdminForObservation(chatId, message, chat, targetIdentityRef).catch((err) => {
+        log('GroupChat', `admin observation notify failed: ${err.message}`, 'warn');
+      });
+      break;
+    }
+
+    case 'assist':
+    default: {
+      // 辅助模式：直接派发
+      const prompt = composeDispatchPrompt(chatName, message);
+      await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
+      break;
+    }
+  }
+}
+
+/**
+ * 规划模式下，通知管理员观察群内活动。
+ * 不创建 routing，只投递一条观察消息到管理员的 gc inbox。
+ */
+async function notifyAdminForObservation(chatId, message, chat, targetIdentityRef) {
+  const chatName = chat?.name || '';
+  const allIdentities = await collectIdentities();
+  const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
+  const targetName = targetInfo?.displayName || targetIdentityRef;
+
+  const observationPrompt = [
+    `[群聊观察：${chatName}]`,
+    `用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
+    `任务已自动派发。你正在观察模式下，可以适时在群里提出建议。`,
+  ].join('\n');
+
+  // 确保管理员 runtime 存在
+  const { sessionId } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
+  let runtime = getAgentRuntime('work-group', sessionId);
+  const isAlive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
+
+  if (!isAlive) {
+    try {
+      const agent = await requireAgentLight('work-group');
+      await startManagedAgent(agent, sessionId);
+      runtime = await waitForManagedRuntimeReady('work-group', 30000, sessionId);
+    } catch (err) {
+      log('GroupChat', `admin observation: failed to start runtime: ${err.message}`, 'warn');
+      return;
+    }
+  }
+
+  const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
+  enqueueGcInbox(runtimeKey, {
+    id: `obs-${message.id}`,
+    text: observationPrompt,
+    gcChatId: chatId,
+    gcIdentityRef: 'work-group:admin',
+  });
+  log('GroupChat', `observation notify enqueued for admin`);
 }
 
 /**
  * 后台跟踪 agent 是否完成处理。
  * 通过 ViewerWorker /running 端点检测 agent 运行状态变化。
  * 当 agent 从 running → idle 时，标记消息为 completed。
+ * Agent 回复通过 GroupChatBridgeFeature 的 CallFinish piggyback 写回群聊。
  */
 function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId) {
   let wasRunning = false;
@@ -6433,6 +6921,9 @@ app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
         { identityRef: 'user', role: 'human' },
       ],
       messages: [],
+      sessions: {},
+      initiativeMode: 'assist',
+      autonomyMode: 'auto',
     };
     await writeGroupChat(chat);
     res.status(201).json(chat);
@@ -6456,10 +6947,12 @@ app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next)
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
 
-    const { name, goal, members } = req.body || {};
+    const { name, goal, members, initiativeMode, autonomyMode } = req.body || {};
     if (name !== undefined) chat.name = name;
     if (goal !== undefined) chat.goal = goal;
     if (Array.isArray(members)) chat.members = members;
+    if (typeof initiativeMode === 'string') chat.initiativeMode = initiativeMode;
+    if (typeof autonomyMode === 'string') chat.autonomyMode = autonomyMode;
 
     await writeGroupChat(chat);
     res.json(chat);
@@ -6502,26 +6995,28 @@ app.get('/protoclaw/group_chats/:chatId/messages', async (req, res, next) => {
 
 app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, res, next) => {
   try {
-    const { text, mentions, links } = req.body || {};
+    const { text, mentions, links, from, kind } = req.body || {};
     if (!text) return res.status(400).json({ error: 'text required' });
 
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
 
+    const messageFrom = from || 'user';
+
     const message = {
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       chatId: chat.id,
-      from: 'user',
+      from: messageFrom,
       text,
       mentions: Array.isArray(mentions) ? mentions : [],
       links: Array.isArray(links) ? links.filter((l) => l && l.url) : [],
-      kind: 'text',
+      kind: kind || 'text',
       timestamp: Date.now(),
       routing: null,
     };
 
-    // 如果有 mention，初始化 routing 状态
-    if (message.mentions.length > 0) {
+    // 仅 user 发送的消息：如果有 mention，初始化 routing 状态
+    if (messageFrom === 'user' && message.mentions.length > 0) {
       const firstMention = message.mentions[0];
       message.routing = {
         status: 'pending',
@@ -6536,8 +7031,8 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
 
     await appendGroupChatMessage(chat.id, message);
 
-    // 异步派发（不阻塞响应）
-    if (message.mentions.length > 0 && message.routing) {
+    // 异步派发（不阻塞响应）——仅 user 发送的带 mention 消息触发
+    if (messageFrom === 'user' && message.mentions.length > 0 && message.routing) {
       dispatchGroupChatMessage(chat.id, message).catch((err) => {
         console.error(`[GroupChat] dispatch failed for ${message.id}:`, err);
       });
@@ -6863,6 +7358,26 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
       return;
     }
     res.json(await listPrebuiltSessions(req.query.agentId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/protoclaw/search_sessions', async (req, res, next) => {
+  try {
+    const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : '';
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const openDirectory = typeof req.query.openDirectory === 'string' ? req.query.openDirectory : '';
+    if (!agentId) {
+      res.status(400).json({ error: 'agentId is required' });
+      return;
+    }
+    if (!query) {
+      res.json({ query: '', results: [], total: 0, indexed: 0 });
+      return;
+    }
+    const result = await searchSessionsContent(agentId, query, openDirectory);
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -7504,56 +8019,59 @@ app.post('/protoclaw/im_line_transfer', express.json(), async (req, res, next) =
       return res.status(400).json({ error: 'lineId is required' });
     }
 
-    const config = await readProjectIMWorkspaceConfig();
-    const line = findLine(config, lineId);
-    if (!line) {
-      return res.status(400).json({ error: `Unknown line: ${lineId}` });
-    }
-
-    // If clearing the line (no carrier)
-    if (!carrier) {
-      line.carrier = '';
-      line.boundSession = null;
-      await writeProjectIMWorkspaceConfig(config);
-      const bundle = await buildIMWorkspaceBundle('qqbot');
-      return res.json({ success: true, bundle });
-    }
-
-    // If binding to a session, validate runtime
-    if (agentId && sessionId) {
+    // Validate runtime BEFORE mutating config (fail fast, outside serializer)
+    if (carrier && agentId && sessionId) {
       const runtime = getAgentRuntime(agentId, sessionId);
       if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
         return res.status(409).json({ error: 'Target runtime is not running' });
       }
     }
 
-    // Save previous binding so we can unmount from the OLD session
-    const prevBinding = line.boundSession ? { ...line.boundSession } : null;
-
-    if (agentId && sessionId) {
-      line.carrier = carrier;
-      line.boundSession = { agentId, sessionId };
-    } else {
-      line.carrier = carrier;
-      line.boundSession = null;
-    }
-
-    // Enforce three-way exclusivity: clear conflicting entities
-    for (const otherLine of (config.lines || [])) {
-      if (otherLine.id !== lineId && otherLine.carrier === carrier) {
-        otherLine.carrier = '';
-        otherLine.boundSession = null;
+    // Serialized read-modify-write: prevents concurrent transfers (or
+    // concurrent bundle reads that prune stale bindings) from interleaving
+    // their file writes and silently overwriting each other's results.
+    let prevBinding = null;
+    await withIMWorkspaceConfig((config) => {
+      const line = findLine(config, lineId);
+      if (!line) {
+        throw new Error(`Unknown line: ${lineId}`);
       }
-    }
-    if (config.selectedChannel === carrier) {
-      const available = ['qq', 'weixin'].find(c =>
-        c !== carrier && !(config.lines || []).some(l => l.carrier === c)
-      );
-      config.selectedChannel = available || '';
-    }
 
-    await writeProjectIMWorkspaceConfig(config);
+      prevBinding = line.boundSession ? { ...line.boundSession } : null;
 
+      // If clearing the line (no carrier)
+      if (!carrier) {
+        line.carrier = '';
+        line.boundSession = null;
+        return true;
+      }
+
+      if (agentId && sessionId) {
+        line.carrier = carrier;
+        line.boundSession = { agentId, sessionId };
+      } else {
+        line.carrier = carrier;
+        line.boundSession = null;
+      }
+
+      // Enforce three-way exclusivity: clear conflicting entities
+      for (const otherLine of (config.lines || [])) {
+        if (otherLine.id !== lineId && otherLine.carrier === carrier) {
+          otherLine.carrier = '';
+          otherLine.boundSession = null;
+        }
+      }
+      if (config.selectedChannel === carrier) {
+        const available = ['qq', 'weixin'].find(c =>
+          c !== carrier && !(config.lines || []).some(l => l.carrier === c)
+        );
+        config.selectedChannel = available || '';
+      }
+
+      return true;
+    });
+
+    // After config write: handle IPC side-effects
     // Unmount from the OLD session (if different from new)
     if (prevBinding?.agentId && prevBinding?.sessionId) {
       const isSameSession = (agentId && sessionId
@@ -7564,17 +8082,27 @@ app.post('/protoclaw/im_line_transfer', express.json(), async (req, res, next) =
     }
 
     // Dynamically mount carrier on the TARGET session via IPC (no restart)
-    if (agentId && sessionId) {
-      try {
-        sendIPCtoSession(agentId, sessionId, { type: 'mount-im-carrier', carrier });
-      } catch (ipcErr) {
-        console.error('[ProtoClaw IM] IPC mount failed:', ipcErr);
+    if (carrier && agentId && sessionId) {
+      const mountOK = sendIPCtoSession(agentId, sessionId, { type: 'mount-im-carrier', carrier });
+      if (!mountOK) {
+        // Retry once after a short delay — the target runtime might still
+        // be starting up and its IPC channel not yet ready.
+        console.warn(`[ProtoClaw IM] IPC mount to ${agentId}::${sessionId} failed, retrying in 1.5s...`);
+        setTimeout(() => {
+          const retryOK = sendIPCtoSession(agentId, sessionId, { type: 'mount-im-carrier', carrier });
+          if (!retryOK) {
+            console.error(`[ProtoClaw IM] IPC mount retry also failed for ${agentId}::${sessionId}`);
+          }
+        }, 1500);
       }
     }
 
     const bundle = await buildIMWorkspaceBundle('qqbot');
     res.json({ success: true, bundle });
   } catch (error) {
+    if (error.message?.startsWith('Unknown line:')) {
+      return res.status(400).json({ error: error.message });
+    }
     next(error);
   }
 });
@@ -7586,16 +8114,18 @@ app.post('/protoclaw/im_line_disconnect', express.json(), async (req, res, next)
       return res.status(400).json({ error: 'lineId is required' });
     }
 
-    const config = await readProjectIMWorkspaceConfig();
-    const line = findLine(config, lineId);
-    if (!line) {
-      return res.status(400).json({ error: `Unknown line: ${lineId}` });
-    }
+    // Serialized read-modify-write
+    let prevBinding = null;
+    await withIMWorkspaceConfig((config) => {
+      const line = findLine(config, lineId);
+      if (!line) {
+        throw new Error(`Unknown line: ${lineId}`);
+      }
 
-    // Remember the previous binding so we can notify that session
-    const prevBinding = line.boundSession || null;
-    line.boundSession = null;
-    await writeProjectIMWorkspaceConfig(config);
+      prevBinding = line.boundSession || null;
+      line.boundSession = null;
+      return true;
+    });
 
     // Notify the previously bound session to unmount its carrier via IPC
     if (prevBinding?.agentId && prevBinding?.sessionId) {
@@ -7609,6 +8139,9 @@ app.post('/protoclaw/im_line_disconnect', express.json(), async (req, res, next)
     const bundle = await buildIMWorkspaceBundle('qqbot');
     res.json({ success: true, bundle });
   } catch (error) {
+    if (error.message?.startsWith('Unknown line:')) {
+      return res.status(400).json({ error: error.message });
+    }
     next(error);
   }
 });
@@ -10219,6 +10752,21 @@ app.get('/protoclaw/flow_capabilities', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get('/protoclaw/agent_model_presets', async (req, res, next) => {
+  try {
+    const agentId = req.query.agentId;
+    if (!agentId || typeof agentId !== 'string') {
+      return res.status(400).json({ error: 'agentId is required' });
+    }
+    const metaPath = path.join(__dirname, 'prebuilt-agents', 'official', agentId, 'metadata.json');
+    const meta = await readJson(metaPath);
+    if (!meta) {
+      return res.status(404).json({ error: 'Agent metadata not found' });
+    }
+    res.json({ agentId, modelPresets: meta.modelPresets || {} });
+  } catch (error) { next(error); }
+});
+
 app.put('/protoclaw/agent_model_presets', express.json(), async (req, res, next) => {
   try {
     const { agentId, modelPresets } = req.body || {};
@@ -10237,6 +10785,72 @@ app.put('/protoclaw/agent_model_presets', express.json(), async (req, res, next)
     await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
     res.json({ ok: true, agentId, modelPresets });
   } catch (error) { next(error); }
+});
+
+// ── Server-side audio feedback for choice input requests ───────────────────
+
+const _seenChoiceRequestIds = new Set();
+const PLAY_SOUND_SCRIPT = path.join(__dirname, 'scripts', 'play-sound.ps1');
+
+/**
+ * Play an audio file on the server machine via PowerShell MCI.
+ * Fire-and-forget — does not block the response.
+ */
+function playSoundOnServer(soundFile) {
+  const soundPath = path.join(__dirname, 'public', 'sounds', soundFile);
+  const child = spawn('powershell', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass',
+    '-File', PLAY_SOUND_SCRIPT,
+    '-Path', soundPath,
+  ], { stdio: 'ignore', windowsHide: true, detached: true });
+  child.unref();
+}
+
+/**
+ * Intercept input-requests proxy: forward to ViewerWorker, but also inspect
+ * the response for new choice-type requests and play a terminal bell sound
+ * on the server immediately — independent of frontend rendering state.
+ */
+app.get('/api/agents/:agentId/input-requests', async (req, res, next) => {
+  try {
+    const targetUrl = `${VIEWER_ORIGIN}${req.originalUrl}`;
+    const headers = new Headers();
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (value == null) continue;
+      if (key.toLowerCase() === 'host') continue;
+      headers.set(key, Array.isArray(value) ? value.join(', ') : value);
+    }
+    const response = await fetch(targetUrl, { method: 'GET', headers });
+    res.status(response.status);
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase() === 'transfer-encoding') return;
+      res.setHeader(key, value);
+    });
+    const buffer = Buffer.from(await response.arrayBuffer());
+    res.end(buffer);
+
+    // Detect new choice requests after forwarding the response
+    if (response.ok) {
+      try {
+        const requests = JSON.parse(buffer.toString('utf8'));
+        if (Array.isArray(requests)) {
+          for (const r of requests) {
+            const isChoice = r && r.mode === 'choices'
+              && Array.isArray(r.questions) && r.questions.length > 0
+              && typeof r.requestId === 'string';
+            if (isChoice && !_seenChoiceRequestIds.has(r.requestId)) {
+              if (_seenChoiceRequestIds.size > 500) _seenChoiceRequestIds.clear();
+              _seenChoiceRequestIds.add(r.requestId);
+              playSoundOnServer('terminal-bell.mp3');
+              break; // one bell per poll cycle
+            }
+          }
+        }
+      } catch { /* non-critical */ }
+    }
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.get(/^\/(api|features|template|tools|npm)(\/.*)?$/, (req, res, next) => {

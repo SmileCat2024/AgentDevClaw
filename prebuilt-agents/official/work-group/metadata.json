@@ -1,15 +1,30 @@
 {
   "id": "work-group",
   "kind": "workspace",
-  "launchMode": "ui-only",
   "name": "工作群",
   "description": "群聊指挥台 — 以即时通讯的方式管理多个 Agent 的协作",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "icon": "chat",
   "category": "workspace",
   "enabled": true,
-  "features": [],
+  "features": [
+    "group-admin"
+  ],
   "sortOrder": 1,
+  "identities": [
+    {
+      "id": "admin",
+      "displayName": "管理员",
+      "description": "群聊协调者，可以查看群状态、派发任务、生成摘要",
+      "sessionModel": "persistent",
+      "groupChat": true,
+      "operations": [
+        "status",
+        "sessions",
+        "send"
+      ]
+    }
+  ],
   "ui": {
     "entry": "home",
     "tabs": [
@@ -29,5 +44,8 @@
         }
       ]
     }
+  },
+  "modelPresets": {
+    "default": "小米Mimo-V2.5-Pro"
   }
 }

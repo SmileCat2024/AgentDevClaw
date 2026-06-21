@@ -85,13 +85,14 @@ describe('partial compact rollback shape', () => {
     const ctx = agent.getContext();
     const restoredCallIndex = Number(agent._callIndex);
     const reminderTurn = Math.max(0, restoredCallIndex + 1);
-    const keptMessages = before.slice(0, before.findIndex(message => message.role === 'user' && message.turn === 1));
-    ctx.restore({
-      version: 2,
-      messages: [...keptMessages, { role: 'system', content: `## 已压缩的后续对话摘要\n\n${summary}`, turn: reminderTurn }],
-      enrichedMessages: [],
-      sequence: 0,
-    });
+
+    // After rollback, context has correct prefix in both messages and enrichedMessages.
+    // Append summary via addSystemMessage (syncs both arrays) — this is the fix
+    // for the enrichedMessages-wipe bug where ctx.restore({ enrichedMessages: [] })
+    // destroyed all enriched metadata.
+    const enrichedBefore = ctx.getAllEnriched().length;
+    ctx.addSystemMessage(`## 已压缩的后续对话摘要\n\n${summary}`, reminderTurn, 'partial-compact');
+    const enrichedAfter = ctx.getAllEnriched().length;
 
     const after = ctx.getAll();
     assert.deepEqual(after.map(message => message.role), ['system', 'user', 'assistant', 'system']);
@@ -99,5 +100,9 @@ describe('partial compact rollback shape', () => {
     assert.equal(after.at(-1).turn, 1);
     assert.match(after.at(-1).content, /已压缩的后续对话摘要/);
     assert.match(after.at(-1).content, /summary of second and third/);
+
+    // enrichedMessages must be preserved, not wiped
+    assert.ok(enrichedAfter > enrichedBefore, 'addSystemMessage must add to enrichedMessages');
+    assert.ok(enrichedAfter >= 3, 'enrichedMessages should contain prefix + summary entries');
   });
 });

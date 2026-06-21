@@ -1286,16 +1286,154 @@ window.switchPhSessionTab = (btn) => {
   const tabGroup = btn.closest('.ph-session-tabs');
   if (!tabGroup) return;
   const targetTab = btn.dataset.phTab;
+  // Update active tab indicator (visible when search is cleared later)
   tabGroup.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === targetTab));
-  tabGroup.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === targetTab));
   if (tabGroup.dataset.tabGroup) {
     savedPhTabState[tabGroup.dataset.tabGroup] = targetTab;
   }
+  // If currently searching, update tab filter and re-render search panel
+  if (phSearchQuery.trim()) {
+    phSearchTab = targetTab;
+    const activeAgent = getCurrentAgentRecord();
+    _updatePhSearchPanelDom(activeAgent?.id || 'programming-helper');
+    return;
+  }
+  tabGroup.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === targetTab));
 };
 
 window.phToggleSessionSort = () => {
   phSessionSortMode = phSessionSortMode === 'createdAt' ? 'updatedAt' : 'createdAt';
   renderCurrentMainView();
+};
+
+window._buildPhSearchPanelHtml = (agentId) => {
+  const isZh = currentLanguage === 'zh';
+  if (!phSearchQuery.trim()) return '';
+  if (phSearchLoading) {
+    return '<div class="ph-search-status">' + escapeHtml(isZh ? '搜索中...' : 'Searching...') + '</div>';
+  }
+  if (phSearchResults === null) {
+    return '<div class="ph-search-status">' + escapeHtml(isZh ? '正在构建搜索索引...' : 'Building search index...') + '</div>';
+  }
+  // Filter results by current tab
+  const filtered = phSearchResults.filter((r) => {
+    const st = r.sessionType || 'main';
+    const isArchived = r.archived === true;
+    if (phSearchTab === 'archived') return isArchived;
+    if (phSearchTab === 'exploration') return st === 'exploration' && !isArchived;
+    if (phSearchTab === 'sub') return st === 'sub' && !isArchived;
+    // 'main' tab: non-archived, non-exploration, non-sub
+    return !isArchived && st !== 'exploration' && st !== 'sub';
+  });
+  if (filtered.length === 0) {
+    return '<div class="ph-search-status">' + escapeHtml(isZh ? '未找到匹配的对话' : 'No matching conversations found') + '</div>';
+  }
+  const queryEscaped = escapeHtml(phSearchQuery.trim());
+  let html = '<div class="ph-search-status">' + escapeHtml((isZh ? '找到 ' : 'Found ') + filtered.length + (isZh ? ' 个结果' : ' results')) + '</div>';
+  html += '<div class="feature-project-session-list">';
+  html += filtered.map((r) => {
+    const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: r.sessionId }));
+    let snippetHtml = escapeHtml(r.snippet);
+    if (queryEscaped) {
+      const safePattern = queryEscaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      try {
+        snippetHtml = snippetHtml.replace(new RegExp('(' + safePattern + ')', 'gi'), '<mark class="search-highlight">$1</mark>');
+      } catch {}
+    }
+    const roleLabel = r.matchRole === 'user' ? (isZh ? '用户' : 'User') : r.matchRole === 'assistant' ? (isZh ? '助手' : 'Assistant') : '';
+    return [
+      '<div class="feature-project-session-item workspace-history-item ph-search-result-item" data-prebuilt-session-agent-id="' + escapeHtml(agentId) + '" data-prebuilt-session-id="' + escapeHtml(r.sessionId) + '">',
+      '<div class="workspace-history-main">',
+      '<div class="workspace-history-title-row">',
+      '<div class="workspace-history-title">' + escapeHtml(r.title || r.sessionId) + '</div>',
+      roleLabel ? '<span class="ph-search-role-badge">' + escapeHtml(roleLabel) + '</span>' : '',
+      '</div>',
+      '<div class="ph-search-snippet">' + snippetHtml + '</div>',
+      '</div>',
+      '<div class="workspace-history-side">',
+      '<div class="workspace-actions stacked">',
+      '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
+      '</div>',
+      '</div>',
+      '</div>',
+    ].join('');
+  }).join('');
+  html += '</div>';
+  return html;
+};
+
+function _updatePhSearchPanelDom(agentId) {
+  const panel = document.querySelector('.ph-search-panel');
+  if (panel) panel.innerHTML = window._buildPhSearchPanelHtml(agentId);
+}
+
+window.phOnSearchInput = (value) => {
+  phSearchQuery = value || '';
+  if (_phSearchTimer) {
+    clearTimeout(_phSearchTimer);
+    _phSearchTimer = null;
+  }
+  const trimmed = phSearchQuery.trim();
+  const activeAgent = getCurrentAgentRecord();
+  const agentId = activeAgent?.id || 'programming-helper';
+
+  // Update clear button visibility
+  const clearBtn = document.querySelector('.ph-search-clear-btn');
+  if (clearBtn) clearBtn.style.display = trimmed ? 'flex' : 'none';
+
+  if (!trimmed) {
+    // Clear search via DOM toggle — no full re-render
+    phSearchResults = null;
+    phSearchLoading = false;
+    const tabsContainer = document.querySelector('.ph-session-tabs');
+    if (tabsContainer) tabsContainer.classList.remove('searching');
+    return;
+  }
+
+  // Switch to searching mode via CSS class — no full re-render
+  const tabsContainer = document.querySelector('.ph-session-tabs');
+  if (tabsContainer) tabsContainer.classList.add('searching');
+
+  // Debounce the API call
+  _phSearchTimer = setTimeout(async () => {
+    const wsState = getAgentWorkspaceState(activeAgent);
+    const openDirectory = String(wsState?.openDirectory || '').trim();
+    // Show loading state in search panel
+    phSearchLoading = true;
+    phSearchResults = null;
+    _updatePhSearchPanelDom(agentId);
+    try {
+      const params = new URLSearchParams({ agentId, q: trimmed, openDirectory });
+      const resp = await fetch('/protoclaw/search_sessions?' + params.toString());
+      if (!resp.ok) throw new Error('search failed');
+      const data = await resp.json();
+      // Guard against stale results
+      if (phSearchQuery.trim() !== trimmed) return;
+      phSearchResults = data.results || [];
+      phSearchLoading = false;
+      _updatePhSearchPanelDom(agentId);
+    } catch (err) {
+      if (phSearchQuery.trim() !== trimmed) return;
+      phSearchResults = [];
+      phSearchLoading = false;
+      _updatePhSearchPanelDom(agentId);
+    }
+  }, 300);
+};
+
+window.phClearSearch = () => {
+  phSearchQuery = '';
+  phSearchResults = null;
+  phSearchLoading = false;
+  if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+  const input = document.querySelector('.ph-search-input');
+  if (input) input.value = '';
+  const clearBtn = document.querySelector('.ph-search-clear-btn');
+  if (clearBtn) clearBtn.style.display = 'none';
+  const tabsContainer = document.querySelector('.ph-session-tabs');
+  if (tabsContainer) tabsContainer.classList.remove('searching');
+  const panel = document.querySelector('.ph-search-panel');
+  if (panel) panel.innerHTML = '';
 };
 
 window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
@@ -1616,6 +1754,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       renderCurrentMainView();
       window.alert((currentLanguage === 'zh' ? '删除会话失败：' : 'Failed to delete session: ') + (error?.message || error));
     }
+    return;
+  }
+
+  if (action.type === 'unarchive_session') {
+    if (!activeAgent?.id || !action.sessionId) return;
+    // Delegate to ctxArchiveSession which handles optimistic update + API + re-render
+    ctxArchiveSession({ ns: activeAgent.id, id: action.sessionId });
     return;
   }
 
@@ -2752,6 +2897,12 @@ window.phSwitchProject = async (projectId) => {
     const dropdown = document.querySelector('.ph-project-dropdown');
     if (dropdown) dropdown.classList.remove('open');
 
+    // Clear search state on project switch
+    phSearchQuery = '';
+    phSearchResults = null;
+    phSearchLoading = false;
+    if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   } catch (error) {
@@ -2800,6 +2951,7 @@ function getCtxMenuItems(role, ns, variant, id) {
       { label: currentLanguage === 'zh' ? '精简历史（Trim）' : 'Trim', action: 'trim' },
       { label: currentLanguage === 'zh' ? '创建分支' : 'Branch', action: 'branch' },
       { type: 'separator' },
+      { label: currentLanguage === 'zh' ? '归档会话' : 'Archive Session', action: 'archive-and-stop' },
       { label: currentLanguage === 'zh' ? '重启 Agent' : 'Restart Agent', action: 'restart' },
       { label: currentLanguage === 'zh' ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
     ];
@@ -2905,6 +3057,80 @@ async function ctxStopAgent(target) {
       }
     }
   } catch (e) {
+    window.alert(t('close_failed') + (e && e.message ? e.message : e));
+  }
+}
+
+async function ctxArchiveAndStopRuntime(target) {
+  const { ns: agentId, id: runtimeId, sessionId, variant } = target;
+  if (!agentId || !sessionId) return;
+
+  // 1. Archive the session first (optimistic + API)
+  const agent = allAgents.find((item) => item.id === agentId) || null;
+  if (agent) {
+    const currentSessions = getWorkspaceSessions(agent);
+    const updatedSessions = currentSessions.map((s) =>
+      s.id === sessionId ? { ...s, archived: true } : s,
+    );
+    updateAgentRecord(agentId, {
+      workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
+    });
+  }
+
+  try {
+    const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, sessionId, archived: true }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'archive session failed'));
+    }
+    const result = await response.json();
+    if (result?.sessions) {
+      updateAgentRecord(agentId, {
+        workspace_sessions: result.sessions,
+        active_workspace_session_id: result.activeSessionId || null,
+      });
+    }
+  } catch (e) {
+    // Revert optimistic archive on failure, then alert
+    if (agent) {
+      const currentSessions = getWorkspaceSessions(agent);
+      const revertedSessions = currentSessions.map((s) =>
+        s.id === sessionId ? { ...s, archived: false } : s,
+      );
+      updateAgentRecord(agentId, {
+        workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
+      });
+    }
+    window.alert((currentLanguage === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
+    return;
+  }
+
+  // 2. Stop the agent runtime (same logic as ctxStopAgent)
+  const serverAgentId = (variant === 'managed-runtime') ? agentId : runtimeId;
+  const externalAgent = getExternalRuntimeAgent(serverAgentId);
+  const affectedRuntimeId = runtimeId || externalAgent?.runtime_session_id || externalAgent?.runtimeSessionId || externalAgent?.id || null;
+  try {
+    if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
+    if (variant === 'external') {
+      await closeSidebarExternalRuntime(externalAgent);
+    } else if (variant === 'child') {
+      const hostId = externalAgent?.parent_id || serverAgentId;
+      const sId = sessionId || externalAgent?.active_workspace_session_id || null;
+      await invoke('stop_agent', { agentId: hostId, sessionId: sId });
+    } else {
+      const sId = sessionId || externalAgent?.active_workspace_session_id || null;
+      await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
+    }
+    await refreshSidebarRuntimeAfterMutation(500);
+    // 3. Switch to workspace surface so user sees the updated session list
+    if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
+      selectWorkspaceSurface(agentId);
+    }
+  } catch (e) {
+    // Session archived successfully but stop failed — still surface the error
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
   }
 }
@@ -3047,6 +3273,11 @@ function dispatchCtxAction(action, target) {
     case 'archive-session':
       window.closeCtxMenu();
       ctxArchiveSession(target);
+      break;
+
+    case 'archive-and-stop':
+      window.closeCtxMenu();
+      ctxArchiveAndStopRuntime(target);
       break;
 
     default:
@@ -4350,6 +4581,7 @@ async function loadAgentData(agentId) {
   }
   try {
     currentRuntimeAgentId = agentId;
+    _lastCallFinishTime = 0;
     const [msgsRes, toolsRes, hooksRes, overviewRes, inputRes] = await Promise.all([
       fetch(`/api/agents/${agentId}/messages`),
       fetch(`/api/agents/${agentId}/tools`),
@@ -4836,6 +5068,7 @@ async function poll() {
 // 通知状态更新
 function updateNotificationStatus(notifData) {
   const payload = (notifData && typeof notifData === 'object') ? notifData : {};
+  if (!notifData) _lastCallFinishTime = 0;
   const statusEl = document.getElementById('notification-status');
   const phaseEl = document.getElementById('notification-phase');
   const summaryEl = document.getElementById('notification-summary');
@@ -4863,6 +5096,14 @@ function updateNotificationStatus(notifData) {
         renderAgentList();
       }
     }
+  }
+
+  // Capture last call finish time for elapsed display
+  if (payload.state && typeof payload.state === 'object' && payload.state.type === 'call.finish') {
+    _lastCallFinishTime = typeof payload.state.timestamp === 'number'
+      ? payload.state.timestamp
+      : (runtime.updatedAt || Date.now());
+    _renderLastCallElapsed();
   }
 
   const stateType = String(actionSource?.type || '').trim();
@@ -5219,6 +5460,8 @@ function renderInputRequests(requests) {
   // Inject any pending voice ASR result that arrived while viewing another session
   _injectPendingVoiceResult();
 
+  _renderLastCallElapsed();
+
   notifyChatViewportMutation({
     reason: 'input-render',
     shouldFollow: followLatestEnabled && chatActive,
@@ -5234,6 +5477,56 @@ let _queuedTexts = []; // 仅用于气泡展示
 let _persistentUiSyncInFlight = false;
 let _localQueuedInputPending = false;
 let _lastQueueBubbleSignature = '';
+
+// ── 上次对话结束时间显示 ──────────────────────────────────────────
+let _lastCallFinishTime = 0;
+let _callFinishTimerInterval = null;
+
+function formatCallElapsed(finishTime) {
+  const elapsed = Math.max(0, Date.now() - finishTime);
+  const totalSeconds = Math.floor(elapsed / 1000);
+  const zh = currentLanguage === 'zh';
+  if (totalSeconds < 600) {
+    if (totalSeconds < 60) {
+      return zh ? totalSeconds + ' 秒前' : totalSeconds + 's ago';
+    }
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return zh ? m + ' 分 ' + s + ' 秒前' : m + 'm ' + s + 's ago';
+  }
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    return zh ? totalMinutes + ' 分钟前' : totalMinutes + 'm ago';
+  }
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (m > 0) {
+    return zh ? h + ' 小时 ' + m + ' 分前' : h + 'h ' + m + 'm ago';
+  }
+  return zh ? h + ' 小时前' : h + 'h ago';
+}
+
+function _renderLastCallElapsed() {
+  const container = document.getElementById('user-input-container');
+  if (!container) return;
+
+  let el = container.querySelector('.last-call-elapsed');
+
+  if (!_lastCallFinishTime || isRuntimeCalling(currentRuntimeAgentId) || !isChatSurfaceActive()) {
+    if (el) el.remove();
+    return;
+  }
+
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'last-call-elapsed';
+    container.insertBefore(el, container.firstChild);
+  }
+
+  el.textContent = formatCallElapsed(_lastCallFinishTime);
+}
+
+_callFinishTimerInterval = setInterval(_renderLastCallElapsed, 1000);
 
 function renderPersistentInput(container) {
   // 先渲染队列气泡

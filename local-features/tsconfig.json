@@ -25,6 +25,7 @@
     "./dispatch/test/**/*.ts",
     "./conversation-export/src/**/*.ts",
     "./checkpoint/src/**/*.ts",
-    "./checkpoint/test/**/*.ts"
+    "./checkpoint/test/**/*.ts",
+    "./group-admin/src/**/*.ts"
   ]
 }
