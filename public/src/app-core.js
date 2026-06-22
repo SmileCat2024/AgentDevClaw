@@ -253,6 +253,24 @@ const workspaceSurfaceModePreferences = {};
 let allAgents = [];
 // 追踪每个 agent 的 call 运行状态（实时更新，比 3s 轮询更快）
 const _agentCallActive = new Map();
+// 中断抑制窗口：用户点击打断后，后端从 abort 信号生效到 call.finish 通知有延迟，
+// 期间轮询会拿到旧的 callActive:true 覆盖乐观 UI。此 Map 记录每个 runtime 的抑制到期时间戳，
+// 在窗口内忽略轮询返回的 callActive:true。
+const _interruptSuppression = new Map();
+const INTERRUPT_SUPPRESSION_MS = 8000;
+function isInterruptSuppressed(runtimeId) {
+  if (!runtimeId) return false;
+  const expiry = _interruptSuppression.get(runtimeId);
+  if (!expiry) return false;
+  if (Date.now() > expiry) {
+    _interruptSuppression.delete(runtimeId);
+    return false;
+  }
+  return true;
+}
+function clearInterruptSuppression(runtimeId) {
+  if (runtimeId) _interruptSuppression.delete(runtimeId);
+}
 // 追踪刚完成调用的 runtimeId，用于在侧边栏显示"已完成"指示灯
 const _recentlyFinishedRuntimes = new Set();
 let currentMessages = [];

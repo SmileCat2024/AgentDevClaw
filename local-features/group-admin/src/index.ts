@@ -88,11 +88,17 @@ export class GroupAdminFeature implements AgentFeature {
           if (!chatId || !text || !identityRef) {
             return { error: 'chatId, text, identityRef are required' };
           }
+          // 禁止向自己派发（防止反馈循环）
+          if (identityRef === 'work-group:admin') {
+            return { error: '不能向管理员自身派发任务' };
+          }
           const msg = await this.apiPost(
             `/protoclaw/group_chats/${encodeURIComponent(chatId)}/messages`,
             {
               text,
+              from: 'work-group:admin',
               mentions: [{ identityRef }],
+              kind: 'dispatch',
             }
           );
           return { success: true, text: `已派发任务到 ${identityRef}，消息 ID: ${msg.id}` };
@@ -123,6 +129,33 @@ export class GroupAdminFeature implements AgentFeature {
             }
           );
           return { success: true, text: `摘要已写入，消息 ID: ${msg.id}` };
+        },
+      },
+      {
+        name: 'gc_reply',
+        description: '向群聊发送一条消息。你的对话默认不会出现在群聊中，需要发消息时必须调用此工具。',
+        parameters: {
+          type: 'object',
+          properties: {
+            chatId: { type: 'string', description: '群聊 ID' },
+            text: { type: 'string', description: '消息内容' },
+          },
+          required: ['chatId', 'text'],
+        },
+        execute: async (args: any) => {
+          const { chatId, text } = args || {};
+          if (!chatId || !text) {
+            return { error: 'chatId and text are required' };
+          }
+          const msg = await this.apiPost(
+            `/protoclaw/group_chats/${encodeURIComponent(chatId)}/messages`,
+            {
+              text,
+              from: 'work-group:admin',
+              mentions: [],
+            }
+          );
+          return { success: true, text: `消息已发送，消息 ID: ${msg.id}` };
         },
       },
       {

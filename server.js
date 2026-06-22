@@ -6466,6 +6466,135 @@ async function updateMessageRouting(chatId, messageId, routingUpdate) {
 }
 
 /**
+ * 将时间范围字符串转为毫秒。
+ */
+function parseMemoryRange(range) {
+  switch (range) {
+    case '1d': return 86400000;
+    case '3d': return 86400000 * 3;
+    case '1w': return 86400000 * 7;
+    case 'all': return Infinity;
+    default: return 86400000 * 3;
+  }
+}
+
+/**
+ * 从框架 session index 中读取上下文使用量（token 数）。
+ * 框架已经在 tokenUsage.lastRequestUsage 中记录了最近一次请求的 token 消耗。
+ */
+async function getSessionContextUsage(workspaceId, sessionId) {
+  try {
+    const index = await readSessionIndex(workspaceId);
+    const record = (index.sessions || []).find((s) => s.id === sessionId);
+    if (!record?.tokenUsage) return { contextTokens: 0, available: false };
+    const lastReq = record.tokenUsage.lastRequestUsage || null;
+    const contextTokens = lastReq?.totalTokens || lastReq?.inputTokens || 0;
+    return { contextTokens, available: contextTokens > 0 };
+  } catch {
+    return { contextTokens: 0, available: false };
+  }
+}
+
+/**
+ * 组装群聊记忆：按 memoryRange 提取消息摘要，作为 agent 上下文的「视图」。
+ * 这是长线记忆的基础——从一个不可能全塞进上下文的完整记录中提取 agent 需要的部分。
+ */
+async function composeGroupMemory(chat, range) {
+  const now = Date.now();
+  const rangeMs = parseMemoryRange(range);
+  const allIdentities = await collectIdentities();
+
+  // 按时间范围过滤
+  const since = rangeMs === Infinity ? 0 : now - rangeMs;
+  const recentMessages = (chat.messages || []).filter(
+    (m) => (m.timestamp || 0) >= since && m.kind !== 'event'
+  );
+
+  // 组装摘要行
+  const lines = recentMessages.map((m) => {
+    const identityInfo = allIdentities.find((i) => i.identityRef === m.from);
+    const from = m.from === 'user' ? '用户' : (identityInfo?.displayName || m.from);
+    const time = new Date(m.timestamp).toLocaleString('zh-CN', {
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+    const text = (m.text || '').slice(0, 200);
+    return `[${time}] ${from}：${text}`;
+  });
+
+  // 活跃 session 状态
+  const activeSessions = Object.entries(chat.sessions || {})
+    .map(([ref, sid]) => {
+      const info = allIdentities.find((i) => i.identityRef === ref);
+      return `${info?.displayName || ref} → ${sid}`;
+    });
+
+  return {
+    name: chat.name,
+    goal: chat.goal || null,
+    summary: lines.join('\n'),
+    activeSessions,
+    messageCount: recentMessages.length,
+  };
+}
+
+/**
+ * 将群记忆格式化为可注入 session 的 prompt 文本。
+ */
+function formatGroupMemoryPrompt(memory) {
+  const parts = [];
+  parts.push(`[群聊：${memory.name}]`);
+  parts.push(`当前时间：${new Date().toLocaleString('zh-CN')}`);
+  if (memory.goal) parts.push(`[群目标：${memory.goal}]`);
+
+  if (memory.summary) {
+    parts.push('', '=== 群聊记录 ===', memory.summary);
+  }
+
+  if (memory.activeSessions.length > 0) {
+    parts.push('', '=== 活跃会话 ===', ...memory.activeSessions);
+  }
+
+  return parts.join('\n');
+}
+
+/**
+ * 格式化 catch-up 增量消息：身份被唤醒时，补上它离开后错过的群聊变化。
+ * 这是通用的上下文完整性保证——任何身份被派发时都适用。
+ *
+ * @param {Array} messages - 增量消息数组（已排除当前消息）
+ * @returns {string|null} 格式化后的 catch-up 文本，无内容时返回 null
+ */
+function formatCatchUpPrompt(messages, allIdentities) {
+  if (!messages || messages.length === 0) return null;
+
+  const lines = messages.map((m) => {
+    const time = new Date(m.timestamp).toLocaleString('zh-CN', {
+      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+
+    // 事件消息（task_started 等）：让管理员知道哪些派发已经发生
+    if (m.kind === 'event' && m.event) {
+      const evtName = m.event.identityName || m.event.identityRef || '';
+      if (m.event.type === 'task_started') {
+        return `[${time}] [系统事件] ${evtName} 已开始处理`;
+      }
+      return `[${time}] [系统事件] ${evtName}：${m.event.type}`;
+    }
+
+    const identityInfo = allIdentities.find((i) => i.identityRef === m.from);
+    const from = m.from === 'user' ? '用户' : (identityInfo?.displayName || m.from);
+    const text = (m.text || '').slice(0, 300);
+    return `[${time}] ${from}：${text}`;
+  });
+
+  return [
+    `当前时间：${new Date().toLocaleString('zh-CN')}`,
+    '=== 你离开后群聊中发生了以下变化 ===',
+    ...lines,
+  ].join('\n');
+}
+
+/**
  * 为群聊中的某个 identity 解析或创建 session。
  * - persistent: 首次创建，后续复用
  * - one-shot: 总是创建新的
@@ -6501,7 +6630,33 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel) {
     const index = await readSessionIndex(workspaceId);
     const found = index.sessions.find((s) => s.id === existing);
     if (found) {
-      return { sessionId: existing, isNew: false };
+      // 管理员：检查上下文是否超限，超限则滚动到新 session
+      if (identityRef === 'work-group:admin') {
+        const mem = chat.adminMemory || { limitMode: 'tokens', limitValue: 8000 };
+        const { contextTokens, available } = await getSessionContextUsage(workspaceId, existing);
+        if (available) {
+          let exceeded = false;
+          if (mem.limitMode === 'ratio') {
+            // 按比例：contextTokens / contextLength > limitValue%
+            const modelInfo = await resolveSessionModelInfo(workspaceId, 'default');
+            const contextLength = modelInfo?.contextLength || 200000;
+            exceeded = contextTokens / contextLength > mem.limitValue / 100;
+          } else {
+            // 按 token 数
+            exceeded = contextTokens >= mem.limitValue;
+          }
+          if (!exceeded) {
+            return { sessionId: existing, isNew: false };
+          }
+          // 超限 → fall through 创建新 session
+          log('GroupChat', `admin session ${existing} context exceeded (${contextTokens} tokens), rolling to new session`);
+        } else {
+          // 无用量数据（首次/刚创建），直接复用
+          return { sessionId: existing, isNew: false };
+        }
+      } else {
+        return { sessionId: existing, isNew: false };
+      }
     }
     // session 不存在了（可能被删除），重建
   }
@@ -6544,13 +6699,18 @@ const gcInboxPendingPolls = new Map(); // runtimeKey → callback
  * 向 gc inbox 投递一条消息，唤醒等待的 long-poll。
  */
 function enqueueGcInbox(runtimeKey, msg) {
-  if (!gcInboxQueue.has(runtimeKey)) gcInboxQueue.set(runtimeKey, []);
-  gcInboxQueue.get(runtimeKey).push(msg);
+  // If a long-poll is waiting, deliver directly via callback WITHOUT
+  // also pushing to the queue.  Pushing to the queue AND delivering via
+  // callback causes the same message to be returned again on the next
+  // poll (double-delivery bug).
   const cb = gcInboxPendingPolls.get(runtimeKey);
   if (cb) {
     gcInboxPendingPolls.delete(runtimeKey);
     cb(msg);
+    return;
   }
+  if (!gcInboxQueue.has(runtimeKey)) gcInboxQueue.set(runtimeKey, []);
+  gcInboxQueue.get(runtimeKey).push(msg);
 }
 
 app.get('/protoclaw/gc/inbox', async (req, res) => {
@@ -6600,6 +6760,16 @@ app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
       routing: null,
     });
     log('GroupChat', `writeback from ${identityRef} to chat ${chatId}`);
+
+    // 规划模式下，通知管理员 agent 完成了回复
+    const wbChat = await readGroupChat(chatId);
+    if (wbChat && (wbChat.initiativeMode || 'assist') === 'plan' && identityRef !== 'work-group:admin') {
+      const wbMessage = { id: `wb-${Date.now()}`, from: identityRef, text, kind: 'text', timestamp: Date.now() };
+      notifyAdminForActivity(chatId, wbMessage, wbChat).catch((err) => {
+        log('GroupChat', `admin activity notify (writeback) failed: ${err.message}`, 'warn');
+      });
+    }
+
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -6682,11 +6852,51 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
     return;
   }
 
-  // 5. 通过 gc inbox 投递消息
+  // 5. 上下文完整性：管理员专属的 catch-up + 群记忆预注入
+  // 这些内容合并到 composedPrompt 中，不作为独立的 gc inbox 消息投递。
+  // 原因：独立投递会导致它们成为单独的 call，而不是 dispatch 的上下文。
   const runtimeKey = getManagedRuntimeKey(workspaceId, sessionId);
+
+  let fullPrompt = composedPrompt;
+
+  if (identityRef === 'work-group:admin') {
+    // 5a. 新 session 时，预注入群记忆
+    if (isNew) {
+      const mem = chat.adminMemory || { range: '3d' };
+      const groupMemory = await composeGroupMemory(chat, mem.range || '3d');
+      const memoryPrompt = formatGroupMemoryPrompt(groupMemory);
+      if (memoryPrompt) {
+        fullPrompt = memoryPrompt + '\n\n' + fullPrompt;
+        log('GroupChat', `group memory pre-injected for new admin session (${groupMemory.messageCount} messages)`);
+      }
+    }
+
+    // 5b. catch-up：补上管理员离开后错过的群聊消息（包含事件消息）
+    // 包含事件消息（task_started 等），让管理员知道哪些派发已经发生了
+    if (!chat.lastActiveAt) chat.lastActiveAt = {};
+    const lastActive = chat.lastActiveAt[identityRef] || 0;
+    const catchUpMessages = (chat.messages || []).filter(
+      (m) => (m.timestamp || 0) > lastActive
+        && (m.timestamp || 0) < (message.timestamp || Date.now())
+        && m.id !== message.id // 排除当前消息本身，避免重复
+    );
+    if (catchUpMessages.length > 0) {
+      const catchUpPrompt = formatCatchUpPrompt(catchUpMessages, allIdentities);
+      if (catchUpPrompt) {
+        fullPrompt = catchUpPrompt + '\n\n' + fullPrompt;
+        log('GroupChat', `catch-up merged into dispatch prompt: ${catchUpMessages.length} messages for admin`);
+      }
+    }
+
+    // 更新管理员的 lastActiveAt
+    chat.lastActiveAt[identityRef] = message.timestamp || Date.now();
+    await writeGroupChat(chat);
+  }
+
+  // 6. 通过 gc inbox 投递实际消息（catch-up 和群记忆已合并到 fullPrompt 中）
   enqueueGcInbox(runtimeKey, {
     id: message.id,
-    text: composedPrompt,
+    text: fullPrompt,
     gcChatId: chatId,
     gcIdentityRef: identityRef,
   });
@@ -6698,6 +6908,36 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
     targetSessionId: sessionId,
     dispatchedAt: Date.now(),
   });
+
+  // 6.5. 追加"任务已启动"事件卡片（以 agent 身份发送，便于追踪）
+  await appendGroupChatMessage(chatId, {
+    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    chatId,
+    from: identityRef,
+    text: '',
+    kind: 'event',
+    event: {
+      type: 'task_started',
+      identityRef,
+      identityName: identityInfo?.displayName || workspaceId,
+      sessionId,
+      workspaceId,
+    },
+    mentions: [],
+    links: [],
+    timestamp: Date.now(),
+    routing: null,
+  });
+  log('GroupChat', `event card appended: task_started for ${identityRef} in ${chatId}`);
+
+  // 6.6. 规划模式下，通知管理员系统事件（任务已启动）
+  if (identityRef !== 'work-group:admin' && (chat.initiativeMode || 'assist') === 'plan') {
+    const evtMessage = { id: `evt-notify-${Date.now()}`, from: identityRef, kind: 'event',
+      event: { type: 'task_started', identityName: identityInfo?.displayName || workspaceId }, text: '', timestamp: Date.now() };
+    notifyAdminForActivity(chatId, evtMessage, chat).catch((err) => {
+      log('GroupChat', `admin activity notify (event) failed: ${err.message}`, 'warn');
+    });
+  }
 
   // 7. 后台跟踪完成状态
   trackGroupChatDispatch(chatId, message.id, workspaceId, viewerAgentId);
@@ -6728,6 +6968,14 @@ async function dispatchGroupChatMessage(chatId, message) {
     return;
   }
 
+  // 管理员发出的派发消息 → 直接到达目标，不再经过模式路由。
+  // 否则在 execute 模式下，admin dispatch → 新消息 → 又路由回 admin → 无限循环。
+  if (message.from === 'work-group:admin') {
+    const prompt = composeDispatchPrompt(chatName, message);
+    await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
+    return;
+  }
+
   switch (initiativeMode) {
     case 'execute': {
       // 执行模式：转发给管理员协调
@@ -6736,22 +6984,15 @@ async function dispatchGroupChatMessage(chatId, message) {
       const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
       const targetName = targetInfo?.displayName || targetIdentityRef;
       const autonomyDesc = {
-        auto: '直接执行——请自行判断并处理，无需征求用户确认',
-        cautious: '有疑则停——正常推进，遇到不确定的地方停下来问用户',
-        confirm: '方案确认——先给出方案，等用户确认后再执行',
+        auto: '直接执行',
+        cautious: '遇疑则停',
+        confirm: '先给方案再执行',
       }[autonomyMode] || '直接执行';
 
       const coordinatorPrompt = [
         `[群聊：${chatName}]`,
-        `管理员协调模式（执行）`,
-        '',
-        `用户 @了 ${targetName}，消息内容：`,
+        `用户 @了 ${targetName}：`,
         message.text || '',
-        '',
-        `请你作为管理员决定如何处理。你可以：`,
-        `1. 使用 gc_dispatch 工具将任务派发给 ${targetIdentityRef}`,
-        `2. 如果需要更多信息，在群里回复用户`,
-        `3. 如果任务不清晰，向用户提问`,
         '',
         `自决权：${autonomyDesc}`,
       ].join('\n');
@@ -6799,9 +7040,11 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
   const targetName = targetInfo?.displayName || targetIdentityRef;
 
   const observationPrompt = [
-    `[群聊观察：${chatName}]`,
+    `[观察 · ${chatName}]`,
+    `当前时间：${new Date().toLocaleString('zh-CN')}`,
     `用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
-    `任务已自动派发。你正在观察模式下，可以适时在群里提出建议。`,
+    '',
+    `系统已将此消息派发给 ${targetName}，会话已启动。你不需要重复派发。`,
   ].join('\n');
 
   // 确保管理员 runtime 存在
@@ -6828,6 +7071,61 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
     gcIdentityRef: 'work-group:admin',
   });
   log('GroupChat', `observation notify enqueued for admin`);
+}
+
+/**
+ * 规划模式下，通知管理员观察一般群聊活动（非 @mention 消息）。
+ * 用于纯讨论消息、agent 回复等。
+ */
+async function notifyAdminForActivity(chatId, message, chat) {
+  const chatName = chat?.name || '';
+  const allIdentities = await collectIdentities();
+  const senderInfo = allIdentities.find((i) => i.identityRef === message.from);
+  const senderName = message.from === 'user'
+    ? '用户'
+    : (senderInfo?.displayName || message.from);
+
+  const now = new Date().toLocaleString('zh-CN');
+
+  let activityDesc;
+  if (message.kind === 'event') {
+    activityDesc = `系统事件：${message.event?.identityName || ''} ${message.event?.type === 'task_started' ? '已开始处理' : message.event?.type || ''}`;
+  } else if (message.from === 'user') {
+    activityDesc = `用户发送了消息：${(message.text || '').slice(0, 200)}`;
+  } else {
+    activityDesc = `${senderName} 回复了：${(message.text || '').slice(0, 200)}`;
+  }
+
+  const activityPrompt = [
+    `[群聊动态 · ${chatName}]`,
+    `当前时间：${now}`,
+    activityDesc,
+  ].join('\n');
+
+  // 确保管理员 runtime 存在
+  const { sessionId } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
+  let runtime = getAgentRuntime('work-group', sessionId);
+  const isAlive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
+
+  if (!isAlive) {
+    try {
+      const agent = await requireAgentLight('work-group');
+      await startManagedAgent(agent, sessionId);
+      runtime = await waitForManagedRuntimeReady('work-group', 30000, sessionId);
+    } catch (err) {
+      log('GroupChat', `admin activity: failed to start runtime: ${err.message}`, 'warn');
+      return;
+    }
+  }
+
+  const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
+  enqueueGcInbox(runtimeKey, {
+    id: `act-${message.id}`,
+    text: activityPrompt,
+    gcChatId: chatId,
+    gcIdentityRef: 'work-group:admin',
+  });
+  log('GroupChat', `activity notify enqueued for admin: ${activityDesc.slice(0, 50)}`);
 }
 
 /**
@@ -6924,6 +7222,8 @@ app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
       sessions: {},
       initiativeMode: 'assist',
       autonomyMode: 'auto',
+      adminMemory: { range: '3d', limitMode: 'tokens', limitValue: 8000 },
+      lastActiveAt: {},
     };
     await writeGroupChat(chat);
     res.status(201).json(chat);
@@ -6947,12 +7247,19 @@ app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next)
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
 
-    const { name, goal, members, initiativeMode, autonomyMode } = req.body || {};
+    const { name, goal, members, initiativeMode, autonomyMode, adminMemory } = req.body || {};
     if (name !== undefined) chat.name = name;
     if (goal !== undefined) chat.goal = goal;
     if (Array.isArray(members)) chat.members = members;
     if (typeof initiativeMode === 'string') chat.initiativeMode = initiativeMode;
     if (typeof autonomyMode === 'string') chat.autonomyMode = autonomyMode;
+    if (adminMemory && typeof adminMemory === 'object') {
+      chat.adminMemory = {
+        range: adminMemory.range || '3d',
+        limitMode: adminMemory.limitMode || 'tokens',
+        limitValue: typeof adminMemory.limitValue === 'number' ? adminMemory.limitValue : 8000,
+      };
+    }
 
     await writeGroupChat(chat);
     res.json(chat);
@@ -7015,26 +7322,35 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
       routing: null,
     };
 
-    // 仅 user 发送的消息：如果有 mention，初始化 routing 状态
-    if (messageFrom === 'user' && message.mentions.length > 0) {
+    // 任何带 mention 的消息都初始化 routing（user 和 admin 派发均可）
+    if (message.mentions.length > 0) {
       const firstMention = message.mentions[0];
-      message.routing = {
-        status: 'pending',
-        targetIdentityRef: firstMention.identityRef || null,
-        targetWorkspaceId: firstMention.identityRef?.split(':')[0] || null,
-        targetSessionId: null,
-        dispatchedAt: null,
-        completedAt: null,
-        error: null,
-      };
+      const targetRef = firstMention.identityRef || null;
+      // 防止 admin 向自己派发（反馈循环）
+      if (targetRef && targetRef !== messageFrom) {
+        message.routing = {
+          status: 'pending',
+          targetIdentityRef: targetRef,
+          targetWorkspaceId: targetRef.split(':')[0] || null,
+          targetSessionId: null,
+          dispatchedAt: null,
+          completedAt: null,
+          error: null,
+        };
+      }
     }
 
     await appendGroupChatMessage(chat.id, message);
 
-    // 异步派发（不阻塞响应）——仅 user 发送的带 mention 消息触发
-    if (messageFrom === 'user' && message.mentions.length > 0 && message.routing) {
+    // 异步派发（不阻塞响应）——任何带 routing 的消息触发
+    if (message.routing) {
       dispatchGroupChatMessage(chat.id, message).catch((err) => {
         console.error(`[GroupChat] dispatch failed for ${message.id}:`, err);
+      });
+    } else if ((chat.initiativeMode || 'assist') === 'plan' && messageFrom !== 'work-group:admin') {
+      // 规划模式：观察所有非 admin 的非 @mention 消息
+      notifyAdminForActivity(chat.id, message, chat).catch((err) => {
+        log('GroupChat', `admin activity notify failed: ${err.message}`, 'warn');
       });
     }
 

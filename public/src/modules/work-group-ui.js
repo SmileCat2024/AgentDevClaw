@@ -1,22 +1,22 @@
 /**
  * work-group-ui.js — 群聊指挥台 UI 模块
  *
- * 渲染微信桌面端风格的工作群界面：
- *   左侧：群聊列表 + 搜索 + 新建按钮
- *   右侧：群头部（模式切换 + 态势层）→ 消息流 → 结构化输入框
- *
- * 数据来自后端 API（/protoclaw/group_chats/*）。
+ * 设计原则：
+ *   - 无 emoji，所有状态用文字或 CSS 元素表达
+ *   - 消息块有清晰边界，强调消息性而非报告感
+ *   - 遵循 Claw 项目整体设计语言（间距、字体、配色）
+ *   - 最小字号 13px
  */
 
 (function () {
   'use strict';
 
-  // ── 常量 ────────────────────────────────────────────────────
+  // ── 模式定义（纯文字，无图标）──────────────────────────────
 
   const INITIATIVE_MODES = [
-    { value: 'assist', label: '辅助', icon: '🔧', desc: '完全被动，不主动参与路由' },
-    { value: 'plan', label: '规划', icon: '📋', desc: '主动观察，适时提出建议' },
-    { value: 'execute', label: '执行', icon: '⚡', desc: '全权管理，决定路由和调度' },
+    { value: 'assist', label: '辅助', desc: '不主动参与路由，仅响应直接提及' },
+    { value: 'plan', label: '规划', desc: '主动观察群内活动，适时提出建议' },
+    { value: 'execute', label: '执行', desc: '全权管理路由、session 和调度' },
   ];
 
   const AUTONOMY_MODES = [
@@ -25,11 +25,11 @@
     { value: 'confirm', label: '方案确认', desc: '先出方案，确认后再执行' },
   ];
 
-  const ROUTING_ICONS = {
-    pending: '⏳',
-    delivered: '🔄',
-    completed: '✓',
-    failed: '✗',
+  const DISPATCH_STATUS_TEXT = {
+    pending: '等待派发',
+    delivered: '处理中',
+    completed: '已完成',
+    failed: '失败',
   };
 
   // ── 状态 ────────────────────────────────────────────────────
@@ -69,6 +69,12 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    return res.json();
+  }
+
+  async function apiDelete(path) {
+    const res = await fetch(path, { method: 'DELETE' });
     if (!res.ok) throw new Error(`${path}: ${res.status}`);
     return res.json();
   }
@@ -126,11 +132,6 @@
 
   function getMemberName(chat, from) {
     if (from === 'user') return '我';
-    const member = (chat?.members || []).find((m) => m.identityRef === from);
-    if (member) {
-      const id = identities.find((i) => i.identityRef === from);
-      return id ? id.displayName : from;
-    }
     const id = identities.find((i) => i.identityRef === from);
     return id ? id.displayName : from;
   }
@@ -140,10 +141,6 @@
     return id ? id.displayName : identityRef;
   }
 
-  /**
-   * 从消息列表中收集活跃 session 信息。
-   * 返回 [{ identityRef, sessionId, displayName, status, lastActivity }]
-   */
   function collectActiveSessions(chat) {
     const sessionMap = new Map();
     for (const msg of (chat?.messages || [])) {
@@ -162,7 +159,6 @@
         });
       }
     }
-    // 只保留未失败的 session
     const sessions = Array.from(sessionMap.values()).filter((s) => s.status !== 'failed');
     sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     return sessions;
@@ -187,7 +183,7 @@
       const isActive = chat.id === activeChatId;
       const avatarLetter = (chat.name || '?').charAt(0);
       const lm = chat.lastMessage;
-      const preview = lm ? `${lm.from === 'user' ? '' : ''}${(lm.text || '').slice(0, 40)}` : '暂无消息';
+      const preview = lm ? (lm.text || '').slice(0, 40) : '暂无消息';
       const modeLabel = INITIATIVE_MODES.find((m) => m.value === (chat.initiativeMode || 'assist'));
 
       return [
@@ -196,7 +192,7 @@
         '  <div class="wg-chat-info">',
         '    <div class="wg-chat-top">',
         `      <span class="wg-chat-name">${esc(chat.name)}</span>`,
-        modeLabel ? `      <span class="wg-chat-mode">${modeLabel.icon}</span>` : '',
+        modeLabel ? `      <span class="wg-chat-mode">${esc(modeLabel.label)}</span>` : '',
         `      <span class="wg-chat-time">${esc(formatTime(chat.updatedAt || chat.createdAt))}</span>`,
         '    </div>',
         `    <div class="wg-chat-preview">${esc(preview)}</div>`,
@@ -208,7 +204,7 @@
     return items;
   }
 
-  // ── 右侧：群头部（模式切换 + 标题）─────────────────────────
+  // ── 右侧：群头部 ─────────────────────────────────────────────
 
   function renderGroupHeader(chat) {
     const initiative = chat.initiativeMode || 'assist';
@@ -223,11 +219,7 @@
       renderModeDropdown('initiative', initMode),
       renderModeDropdown('autonomy', autoMode),
       '  </div>',
-      '  <button class="wg-icon-btn" data-wg-action="toggle-settings" title="群设置">',
-      '    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5">',
-      '      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
-      '    </svg>',
-      '  </button>',
+      '  <button class="wg-icon-btn" data-wg-action="toggle-settings">设置</button>',
       '</div>',
     ].join('');
   }
@@ -240,9 +232,11 @@
       const isSelected = m.value === currentMode.value;
       return [
         `<div class="wg-dropdown-item${isSelected ? ' selected' : ''}" data-wg-mode-type="${type}" data-wg-mode-value="${m.value}">`,
-        `  <span class="wg-dropdown-item-label">${m.icon || ''} ${esc(m.label)}</span>`,
-        `  <span class="wg-dropdown-item-desc">${esc(m.desc)}</span>`,
-        isSelected ? '  <span class="wg-dropdown-check">✓</span>' : '',
+        '  <div class="wg-dropdown-item-content">',
+        `    <span class="wg-dropdown-item-label">${esc(m.label)}</span>`,
+        `    <span class="wg-dropdown-item-desc">${esc(m.desc)}</span>`,
+        '  </div>',
+        isSelected ? '  <span class="wg-dropdown-check">&#10003;</span>' : '',
         '</div>',
       ].join('');
     }).join('');
@@ -251,8 +245,7 @@
       `<div class="wg-mode-dropdown${openDropdown === type ? ' open' : ''}" data-wg-dropdown="${type}">`,
       `  <button class="wg-mode-trigger" data-wg-action="toggle-dropdown" data-wg-dropdown-type="${type}">`,
       `    <span class="wg-mode-label">${esc(label)}</span>`,
-      `    <span class="wg-mode-value">${currentMode.icon || ''} ${esc(currentMode.label)}</span>`,
-      '    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>',
+      `    <span class="wg-mode-value">${esc(currentMode.label)}</span>`,
       '  </button>',
       `  <div class="wg-dropdown-menu">${items}</div>`,
       '</div>',
@@ -265,15 +258,14 @@
     const sessions = collectActiveSessions(chat);
     const agentMembers = (chat.members || []).filter((m) => m.role !== 'human');
 
-    const sessionItems = sessions.slice(0, 5).map((s) => {
-      const icon = ROUTING_ICONS[s.status] || '⏳';
+    const sessionItems = sessions.slice(0, 6).map((s) => {
       const statusClass = s.status || 'pending';
       const shortId = s.sessionId ? s.sessionId.slice(-6) : '';
       return [
         `<div class="wg-session-chip ${statusClass}" data-wg-session-nav="${esc(s.workspaceId)}:${esc(s.sessionId)}" title="点击查看会话">`,
-        `  <span class="wg-session-icon">${icon}</span>`,
+        `  <span class="wg-session-dot"></span>`,
         `  <span class="wg-session-name">${esc(s.displayName)}</span>`,
-        shortId ? `  <span class="wg-session-id">${esc(shortId)}</span>` : '',
+        shortId ? `<span class="wg-session-id">${esc(shortId)}</span>` : '',
         '</div>',
       ].join('');
     }).join('');
@@ -292,46 +284,133 @@
     ].join('');
   }
 
+  // ── 右侧：事件消息（agent 身份的通知卡片） ─────────────────────
+
+  function renderEventMessage(chat, msg) {
+    const evt = msg.event || {};
+    if (evt.type !== 'task_started') return '';
+
+    const name = evt.identityName || getMemberName(chat, msg.from);
+    const time = formatTime(msg.timestamp);
+    const avatarLetter = name.charAt(0);
+    const navTarget = evt.workspaceId && evt.sessionId
+      ? `${evt.workspaceId}:${evt.sessionId}` : null;
+
+    return [
+      '<div class="wg-msg-row">',
+      `  <div class="wg-msg-avatar">${esc(avatarLetter)}</div>`,
+      '  <div class="wg-msg-body">',
+      `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(name)}</span> <span class="wg-msg-time">${esc(time)}</span></div>`,
+      '    <div class="wg-card">',
+      '      <div class="wg-card-header">',
+      '        <span class="wg-card-dot active"></span>',
+      '        <span class="wg-card-title">已开始处理</span>',
+      '      </div>',
+      '      <div class="wg-card-body">',
+      '        <span class="wg-card-label">会话</span>',
+      `        <span class="wg-card-value">${esc(evt.sessionId ? evt.sessionId.slice(0, 12) : '—')}</span>`,
+      navTarget
+        ? `        <span class="wg-card-link" data-wg-session-nav="${esc(navTarget)}">查看会话</span>`
+        : '',
+      '      </div>',
+      '    </div>',
+      '  </div>',
+      '</div>',
+    ].join('');
+  }
+
+  // ── 右侧：派发卡片（管理员派遣任务） ─────────────────────────
+
+  function renderDispatchCard(chat, msg) {
+    const time = formatTime(msg.timestamp);
+    const fromName = getMemberName(chat, msg.from);
+    const fromAvatar = fromName.charAt(0);
+    const targetRef = msg.mentions?.[0]?.identityRef || msg.routing?.targetIdentityRef;
+    const targetName = targetRef ? getIdentityName(targetRef) : '';
+    const targetAvatar = targetName ? targetName.charAt(0) : '?';
+    const navTarget = msg.routing?.targetWorkspaceId && msg.routing?.targetSessionId
+      ? `${msg.routing.targetWorkspaceId}:${msg.routing.targetSessionId}` : null;
+
+    return [
+      '<div class="wg-msg-row">',
+      `  <div class="wg-msg-avatar admin">${esc(fromAvatar)}</div>`,
+      '  <div class="wg-msg-body">',
+      `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(fromName)}</span> <span class="wg-msg-time">${esc(time)}</span></div>`,
+      '    <div class="wg-card dispatch">',
+      '      <div class="wg-card-header">',
+      `        <span class="wg-card-arrow-from">${esc(fromName)}</span>`,
+      '        <span class="wg-card-arrow"></span>',
+      `        <span class="wg-card-arrow-to">${esc(targetName)}</span>`,
+      '      </div>',
+      '      <div class="wg-card-body">',
+      `        <span class="wg-card-text">${esc((msg.text || '').slice(0, 200))}</span>`,
+      navTarget
+        ? `        <span class="wg-card-link" data-wg-session-nav="${esc(navTarget)}">查看会话</span>`
+        : '',
+      '      </div>',
+      '    </div>',
+      '  </div>',
+      '</div>',
+    ].join('');
+  }
+
   // ── 右侧：消息流 ────────────────────────────────────────────
 
   function renderMessageBubble(chat, msg) {
+    // 事件卡片 — 以 agent 身份发送的通知消息，左对齐
+    if (msg.kind === 'event') {
+      return renderEventMessage(chat, msg);
+    }
+    // 派发卡片 — 管理员派遣任务
+    if (msg.kind === 'dispatch') {
+      return renderDispatchCard(chat, msg);
+    }
+
     const isMe = msg.from === 'user';
     const isSummary = msg.kind === 'summary';
-    const isAdmin = msg.from === 'work-group:admin';
+    const isAdmin = msg.from === 'work-group:admin' || msg.from === 'work-group-admin:admin';
     const name = getMemberName(chat, msg.from);
     const time = formatTime(msg.timestamp);
 
-    // routing badge（仅用户发送的带 mention 消息）
-    let badge = '';
+    // dispatch 状态（用户消息的派发状态，替代旧的 routing badge）
+    let dispatchHtml = '';
     if (isMe && msg.routing) {
-      const icon = ROUTING_ICONS[msg.routing.status] || '⏳';
-      const statusText = {
-        pending: '等待中',
-        delivered: '处理中',
-        completed: '已完成',
-        failed: '失败',
-      }[msg.routing.status] || '';
-      const cls = msg.routing.status || 'pending';
-      badge = `<span class="wg-routing-badge ${cls}">${icon} ${esc(statusText)}</span>`;
+      const status = msg.routing.status || 'pending';
+      const statusText = DISPATCH_STATUS_TEXT[status] || status;
+      const targetName = msg.routing.targetIdentityRef
+        ? getIdentityName(msg.routing.targetIdentityRef) : '';
+      const navTarget = msg.routing.targetWorkspaceId && msg.routing.targetSessionId
+        ? `${msg.routing.targetWorkspaceId}:${msg.routing.targetSessionId}` : null;
+
+      dispatchHtml = [
+        '<div class="wg-msg-dispatch">',
+        `  <span class="wg-dispatch-status ${status}">`,
+        '    <span class="wg-session-dot"></span>',
+        `    ${esc(statusText)}`,
+        '  </span>',
+        targetName ? `<span class="wg-dispatch-text">${esc(targetName)}</span>` : '',
+        navTarget
+          ? `<span class="wg-dispatch-link" data-wg-session-nav="${esc(navTarget)}">查看会话</span>`
+          : '',
+        '</div>',
+      ].join('');
     }
 
-    // session 导航链接
+    // agent 回复消息的 session 导航
     let sessionLink = '';
-    if (isMe && msg.routing?.targetSessionId && msg.routing?.targetWorkspaceId) {
-      const targetName = getIdentityName(msg.routing.targetIdentityRef);
+    if (!isMe && msg.routing?.targetSessionId && msg.routing?.targetWorkspaceId) {
       const navTarget = `${msg.routing.targetWorkspaceId}:${msg.routing.targetSessionId}`;
-      sessionLink = `<span class="wg-session-link" data-wg-session-nav="${esc(navTarget)}">${esc(targetName)} 会话 →</span>`;
+      sessionLink = `<span class="wg-session-link" data-wg-session-nav="${esc(navTarget)}">查看会话</span>`;
     }
 
-    // agent 身份标签（非管理员回复时显示来源身份）
+    // 身份标签（非用户消息）
     const identityTag = (!isMe && !isSummary && msg.from && msg.from !== 'user')
-      ? `<span class="wg-msg-identity">${esc(name)}</span>`
-      : '';
+      ? `<span class="wg-msg-identity">${esc(name)}</span>` : '';
 
-    // 链接引用渲染
+    // 链接引用
     const linksHtml = (Array.isArray(msg.links) && msg.links.length > 0)
       ? '<div class="wg-msg-links">' + msg.links.map((l) => {
-          return `<a href="${esc(l.url)}" target="_blank" class="wg-msg-link">🔗 ${esc(l.description || l.url)}</a>`;
+          return `<a href="${esc(l.url)}" target="_blank" class="wg-msg-link">${esc(l.description || l.url)}</a>`;
         }).join('') + '</div>'
       : '';
 
@@ -342,10 +421,10 @@
       return [
         '<div class="wg-msg-row me">',
         '  <div class="wg-msg-body">',
-        `    <div class="wg-msg-meta"><span class="wg-msg-author">${esc(name)}</span> <span class="wg-msg-time">${esc(time)}</span>${badge}</div>`,
-        `    <div class="wg-msg-bubble${bubbleClass}">${esc(msg.text)}</div>`,
+        `    <div class="wg-msg-meta"><span class="wg-msg-time">${esc(time)}</span></div>`,
+        `    <div class="wg-msg-bubble markdown-body${bubbleClass}">${renderMarkdown(msg.text || '')}</div>`,
         linksHtml,
-        sessionLink ? `    <div class="wg-msg-footer">${sessionLink}</div>` : '',
+        dispatchHtml,
         '  </div>',
         `  <div class="wg-msg-avatar">${esc(avatarLetter)}</div>`,
         '</div>',
@@ -357,8 +436,9 @@
       `  <div class="wg-msg-avatar${isAdmin ? ' admin' : ''}">${esc(avatarLetter)}</div>`,
       '  <div class="wg-msg-body">',
       `    <div class="wg-msg-meta">${identityTag} <span class="wg-msg-time">${esc(time)}</span></div>`,
-      `    <div class="wg-msg-bubble${bubbleClass}">${esc(msg.text)}</div>`,
+      `    <div class="wg-msg-bubble markdown-body${bubbleClass}">${renderMarkdown(msg.text || '')}</div>`,
       linksHtml,
+      sessionLink ? `    <div class="wg-msg-footer">${sessionLink}</div>` : '',
       '  </div>',
       '</div>',
     ].join('');
@@ -391,29 +471,26 @@
     return [
       '<div class="wg-input-area">',
       '  <div class="wg-input-toolbar">',
-      '    <button class="wg-input-btn" title="@提及成员" data-wg-action="mention">@</button>',
-      '    <button class="wg-input-btn" title="附加链接" data-wg-action="toggle-links">🔗</button>',
+      '    <button class="wg-input-btn" data-wg-action="mention">提及</button>',
+      '    <button class="wg-input-btn" data-wg-action="toggle-links">链接</button>',
       '  </div>',
       renderMentionPicker(),
       '  <div class="wg-links-area" data-wg-role="links-area" style="display:none;">',
-      '    <input type="text" class="wg-link-input" data-wg-role="link-url" placeholder="粘贴参考链接 URL…" />',
+      '    <input type="text" class="wg-link-input" data-wg-role="link-url" placeholder="参考链接 URL" />',
       '    <input type="text" class="wg-link-input" data-wg-role="link-desc" placeholder="描述（可选）" />',
       '    <button class="wg-link-add-btn" data-wg-action="add-link">添加</button>',
       '  </div>',
       '  <div class="wg-link-list" data-wg-role="link-list"></div>',
-      '  <div class="wg-input-editor" contenteditable="true" data-placeholder="输入消息，@提及成员派发任务…"></div>',
+      '  <div class="wg-input-editor" contenteditable="true" data-placeholder="输入消息，使用「提及」派发任务"></div>',
       '  <div class="wg-input-footer">',
-      '    <span class="wg-input-hint">Enter 发送 · Shift+Enter 换行</span>',
-      '    <button class="wg-send-btn" data-wg-action="send">',
-      '      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
-      '      发送',
-      '    </button>',
+      '    <span class="wg-input-hint">Enter 发送 / Shift+Enter 换行</span>',
+      '    <button class="wg-send-btn" data-wg-action="send">发送</button>',
       '  </div>',
       '</div>',
     ].join('');
   }
 
-  // ── 右侧：设置面板 ──────────────────────────────────────────
+  // ── 右侧：设置面板 ───────────────────────────────────────────
 
   function renderSettingsPanel(chat) {
     const initiative = chat.initiativeMode || 'assist';
@@ -430,7 +507,7 @@
     }).join('');
 
     const initiativeOptions = INITIATIVE_MODES.map((m) =>
-      `<option value="${m.value}"${m.value === initiative ? ' selected' : ''}>${m.icon} ${esc(m.label)} — ${esc(m.desc)}</option>`
+      `<option value="${m.value}"${m.value === initiative ? ' selected' : ''}>${esc(m.label)} — ${esc(m.desc)}</option>`
     ).join('');
 
     const autonomyOptions = AUTONOMY_MODES.map((m) =>
@@ -450,14 +527,33 @@
       `    <div class="wg-settings-field"><label>自决权模式</label><select class="wg-settings-input" data-wg-field="autonomyMode">${autonomyOptions}</select></div>`,
       '  </div>',
       '  <div class="wg-settings-section">',
+      '    <div class="wg-settings-section-title">管理员记忆</div>',
+      '    <div class="wg-settings-field"><label>记忆范围</label>',
+      `      <select class="wg-settings-input" data-wg-field="memoryRange">`,
+      `        <option value="1d"${(chat.adminMemory?.range || '3d') === '1d' ? ' selected' : ''}>最近 1 天</option>`,
+      `        <option value="3d"${(chat.adminMemory?.range || '3d') === '3d' ? ' selected' : ''}>最近 3 天</option>`,
+      `        <option value="1w"${(chat.adminMemory?.range || '3d') === '1w' ? ' selected' : ''}>最近 1 周</option>`,
+      `        <option value="all"${(chat.adminMemory?.range || '3d') === 'all' ? ' selected' : ''}>全部记录</option>`,
+      `      </select></div>`,
+      '    <div class="wg-settings-field"><label>上下文限制</label>',
+      `      <select class="wg-settings-input" data-wg-field="memoryLimitMode">`,
+      `        <option value="tokens"${(chat.adminMemory?.limitMode || 'tokens') === 'tokens' ? ' selected' : ''}>按 token 数</option>`,
+      `        <option value="ratio"${(chat.adminMemory?.limitMode || 'tokens') === 'ratio' ? ' selected' : ''}>按比例 (%)</option>`,
+      `      </select></div>`,
+      `    <div class="wg-settings-field"><label>限制值</label><input type="number" value="${chat.adminMemory?.limitValue ?? 8000}" class="wg-settings-input" data-wg-field="memoryLimitValue" /></div>`,
+      '  </div>',
+      '  <div class="wg-settings-section">',
       '    <div class="wg-settings-section-title">管理员模型</div>',
       '    <div class="wg-settings-field"><label>模型预设</label>',
-      '      <select class="wg-settings-input" data-wg-field="admin-model" data-wg-role="admin-model-select"><option value="">加载中…</option></select>',
+      '      <select class="wg-settings-input" data-wg-field="admin-model" data-wg-role="admin-model-select"><option value="">加载中</option></select>',
       '    </div>',
       '  </div>',
       '  <div class="wg-settings-section">',
       '    <div class="wg-settings-section-title">群成员</div>',
       memberRows,
+      '  </div>',
+      '  <div class="wg-settings-section wg-settings-danger">',
+      '    <button class="wg-btn-danger" data-wg-action="dissolve-chat">解散此群聊</button>',
       '  </div>',
       '</div>',
     ].join('');
@@ -466,25 +562,14 @@
   // ── 右侧：空状态 ────────────────────────────────────────────
 
   function renderEmptyConversation() {
-    return [
-      '<div class="wg-conversation-empty">',
-      '  <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4">',
-      '    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
-      '  </svg>',
-      '  <p>选择一个群聊开始工作</p>',
-      '</div>',
-    ].join('');
-  }
-
-  function renderLoadingConversation() {
-    return '<div class="wg-conversation-empty"><p>加载中…</p></div>';
+    return '<div class="wg-conversation-empty"><p>选择一个群聊开始工作</p></div>';
   }
 
   // ── 右侧：整体渲染 ──────────────────────────────────────────
 
   function renderConversation() {
     if (!activeChatId) return renderEmptyConversation();
-    if (!activeChat) return renderLoadingConversation();
+    if (!activeChat) return '<div class="wg-conversation-empty"><p>加载中</p></div>';
 
     if (viewMode === 'settings') {
       return [
@@ -492,7 +577,7 @@
         '  <div class="wg-conv-header">',
         `    <span class="wg-conv-title">${esc(activeChat.name)} — 设置</span>`,
         '    <div class="wg-conv-actions">',
-        '      <button class="wg-icon-btn" data-wg-action="back-to-chat" title="返回聊天">← 返回</button>',
+        '      <button class="wg-icon-btn" data-wg-action="back-to-chat">返回</button>',
         '    </div>',
         '  </div>',
         '<div class="wg-settings-scroll">',
@@ -519,7 +604,7 @@
       '<div class="wg-app">',
       '  <div class="wg-sidebar">',
       '    <div class="wg-sidebar-header">',
-      '      <input type="text" class="wg-search-input" placeholder="搜索群聊…" data-wg-role="search" value="' + esc(searchKeyword) + '">',
+      '      <input type="text" class="wg-search-input" placeholder="搜索群聊" data-wg-role="search" value="' + esc(searchKeyword) + '">',
       '      <button class="wg-new-chat-btn" data-wg-action="new-chat" title="新建群聊">',
       '        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>',
       '      </button>',
@@ -535,7 +620,10 @@
 
   function refreshMain() {
     const main = document.querySelector('[data-wg-role="main"]');
-    if (main) main.innerHTML = renderConversation();
+    if (main) {
+      main.innerHTML = renderConversation();
+      if (typeof enhanceMathInElement === 'function') enhanceMathInElement(main);
+    }
   }
 
   function refreshMessagesOnly() {
@@ -543,11 +631,11 @@
     if (!scroll) return;
     const wasNearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
     scroll.innerHTML = renderMessageList(activeChat);
+    if (typeof enhanceMathInElement === 'function') enhanceMathInElement(scroll);
     if (wasNearBottom) scroll.scrollTop = scroll.scrollHeight;
   }
 
   function refreshHeaderAndMessages() {
-    // 刷新 header + awareness + messages，保持输入框不动
     const conv = document.querySelector('.wg-conversation');
     if (!conv) { refreshMain(); return; }
     const editor = conv.querySelector('.wg-input-editor');
@@ -561,7 +649,6 @@
       if (newEditor) {
         newEditor.textContent = editorText;
         newEditor.focus();
-        // 将光标移到末尾
         const range = document.createRange();
         range.selectNodeContents(newEditor);
         range.collapse(false);
@@ -681,7 +768,7 @@
     if (!list) return;
     if (pendingLinks.length === 0) { list.innerHTML = ''; return; }
     list.innerHTML = pendingLinks.map((l, i) => {
-      return `<div class="wg-link-entry"><span class="wg-link-entry-url">${esc(l.url)}</span>${l.description ? ` <span class="wg-link-entry-desc">${esc(l.description)}</span>` : ''}<button class="wg-link-remove" data-wg-action="remove-link" data-wg-link-index="${i}">✕</button></div>`;
+      return `<div class="wg-link-entry"><span class="wg-link-entry-url">${esc(l.url)}</span>${l.description ? ` <span class="wg-link-entry-desc">${esc(l.description)}</span>` : ''}<button class="wg-link-remove" data-wg-action="remove-link" data-wg-link-index="${i}">&#10005;</button></div>`;
     }).join('');
   }
 
@@ -720,11 +807,18 @@
     }
   }
 
-  function navigateToSession(target) {
-    // target = "workspaceId:sessionId"
-    const [workspaceId] = target.split(':');
-    if (workspaceId && window.handlePrebuiltAgentClick) {
-      window.handlePrebuiltAgentClick(workspaceId);
+  async function navigateToSession(target) {
+    const [workspaceId, sessionId] = target.split(':');
+    if (!workspaceId || !window.handlePrebuiltAgentClick) return;
+    try {
+      // Step 1: navigate to the target workspace
+      await window.handlePrebuiltAgentClick(workspaceId);
+      // Step 2: activate the specific session
+      if (sessionId && window.runWorkspaceAction) {
+        await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
+      }
+    } catch (err) {
+      console.error('[WorkGroup] navigateToSession failed:', err);
     }
   }
 
@@ -736,6 +830,15 @@
       else if (field === 'goal') body.goal = value;
       else if (field === 'initiativeMode') body.initiativeMode = value;
       else if (field === 'autonomyMode') body.autonomyMode = value;
+      else if (field === 'memoryRange' || field === 'memoryLimitMode' || field === 'memoryLimitValue') {
+        // 合并当前 adminMemory 设置后整体提交
+        const cur = activeChat?.adminMemory || { range: '3d', limitMode: 'tokens', limitValue: 8000 };
+        const merged = { ...cur };
+        if (field === 'memoryRange') merged.range = value;
+        else if (field === 'memoryLimitMode') merged.limitMode = value;
+        else if (field === 'memoryLimitValue') merged.limitValue = parseInt(value) || 8000;
+        body.adminMemory = merged;
+      }
       else if (field === 'admin-model') {
         await saveAdminModel(value);
         return;
@@ -781,6 +884,23 @@
       });
     } catch (err) {
       console.error('[WorkGroup] save admin model failed:', err);
+    }
+  }
+
+  async function handleDissolveChat() {
+    if (!activeChatId) return;
+    const confirmed = confirm(`确定要解散群聊「${activeChat?.name || activeChatId}」吗？\n\n解散后群聊记录将被删除，无法恢复。`);
+    if (!confirmed) return;
+    try {
+      await apiDelete(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}`);
+      activeChatId = null;
+      activeChat = null;
+      await loadChatSummaries();
+      refreshChatList();
+      refreshMain();
+    } catch (err) {
+      console.error('[WorkGroup] dissolve chat failed:', err);
+      alert('解散群聊失败');
     }
   }
 
@@ -867,6 +987,7 @@
         return;
       }
       if (act === 'back-to-chat') { viewMode = 'chat'; refreshMain(); return; }
+      if (act === 'dissolve-chat') { handleDissolveChat(); return; }
       if (act === 'mention') { toggleMentionPicker(); return; }
       if (act === 'toggle-links') { toggleLinksArea(); return; }
       if (act === 'add-link') { addLink(); return; }
@@ -875,10 +996,9 @@
         toggleDropdown(action.dataset.wgDropdownType);
         return;
       }
-      if (act === 'cancel-new-chat') return; // handled by modal listener
+      if (act === 'cancel-new-chat') return;
     }
 
-    // remove link
     const removeLink = e.target.closest('[data-wg-action="remove-link"]');
     if (removeLink) {
       const idx = parseInt(removeLink.dataset.wgLinkIndex);
@@ -887,28 +1007,24 @@
       return;
     }
 
-    // chat list item
     const chatItem = e.target.closest('[data-wg-chat-id]');
     if (chatItem) {
       selectChat(chatItem.dataset.wgChatId);
       return;
     }
 
-    // mention item
     const mentionItem = e.target.closest('[data-wg-mention]');
     if (mentionItem) {
       insertMention(mentionItem.dataset.wgMention);
       return;
     }
 
-    // mode dropdown item
     const modeItem = e.target.closest('[data-wg-mode-type]');
     if (modeItem) {
       handleModeChange(modeItem.dataset.wgModeType, modeItem.dataset.wgModeValue);
       return;
     }
 
-    // session navigation
     const navItem = e.target.closest('[data-wg-session-nav]');
     if (navItem) {
       navigateToSession(navItem.dataset.wgSessionNav);
@@ -924,7 +1040,6 @@
       return;
     }
 
-    // settings field changes
     const field = e.target.closest('[data-wg-field]');
     if (field) {
       const fieldName = field.dataset.wgField;

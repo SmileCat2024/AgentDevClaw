@@ -275,6 +275,12 @@ class CallArbiter {
       maxCheckpoints: 5,
       maxRollbacks: 3,
     };
+
+    // ── Supplement buffer ──
+    // When the agent is busy (call active), queued-input messages go here
+    // instead of becoming new envelopes. They are drained at each step start
+    // and injected as system messages inside the current call.
+    this._supplementBuffer = [];
   }
 
   /**
@@ -284,6 +290,28 @@ class CallArbiter {
    * @returns {object} The envelope with assigned id and status
    */
   enqueue(envelope) {
+    // When agent is busy and this is a queued-input (user supplement),
+    // route to the supplement buffer instead of creating a new envelope.
+    // The supplement will be injected as a system message inside the
+    // current call at the next step start.
+    if (this._active && envelope.source === 'queued-input') {
+      const supp = {
+        text: envelope.text,
+        sourceRef: envelope.sourceRef || '',
+        timestamp: Date.now(),
+      };
+      this._supplementBuffer.push(supp);
+      console.log(`[CallArbiter] supplemented (sourceRef=${supp.sourceRef}, buffer=${this._supplementBuffer.length})`);
+      return {
+        id: envelope.id || `supp-${Date.now()}`,
+        source: envelope.source,
+        sourceRef: supp.sourceRef,
+        text: envelope.text,
+        status: 'supplemented',
+        createdAt: supp.timestamp,
+      };
+    }
+
     const entry = {
       id: envelope.id || `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       source: envelope.source || 'unknown',
@@ -299,6 +327,29 @@ class CallArbiter {
     console.log(`[CallArbiter] enqueued ${entry.id} (source=${entry.source}, queue=${this._queue.length})`);
     this._kick();
     return entry;
+  }
+
+  /**
+   * Drain all pending supplements (called at each step start).
+   * Also notifies the ViewerWorker to remove them from its queue display.
+   * @returns {Array<{text: string, sourceRef: string}>} Drained supplements in order
+   */
+  drainSupplements() {
+    if (this._supplementBuffer.length === 0) return [];
+    const supplements = this._supplementBuffer.splice(0);
+    if (this._agent?.agentId) {
+      for (const supp of supplements) {
+        if (supp.sourceRef) {
+          try {
+            DebugHub.getInstance().consumeQueuedInput(this._agent.agentId, supp.sourceRef);
+          } catch (error) {
+            console.warn('[CallArbiter] consumeQueuedInput for supplement failed:', error);
+          }
+        }
+      }
+    }
+    console.log(`[CallArbiter] drained ${supplements.length} supplement(s)`);
+    return supplements;
   }
 
   /**
@@ -345,8 +396,10 @@ class CallArbiter {
         cb(envelope);
       }
     }
+    // Also clear pending supplements
+    const clearedSupps = this._supplementBuffer.splice(0);
     this._status = this._active ? 'running' : 'idle';
-    return removed.length;
+    return removed.length + clearedSupps.length;
   }
 
   // -- Internal --
@@ -398,6 +451,28 @@ class CallArbiter {
           envelope.status = 'completed';
         }
         this._active = false;
+
+        // Convert leftover supplements to regular queued envelopes.
+        // This happens when the call finishes before the next step could
+        // drain them (e.g. agent completed at the current step).
+        if (this._supplementBuffer.length > 0) {
+          for (const supp of this._supplementBuffer) {
+            this._queue.push({
+              id: `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              source: 'queued-input',
+              sourceRef: supp.sourceRef || '',
+              text: supp.text,
+              status: 'queued',
+              createdAt: supp.timestamp || Date.now(),
+              result: null,
+              error: null,
+            });
+          }
+          const count = this._supplementBuffer.length;
+          this._supplementBuffer = [];
+          console.log(`[CallArbiter] converted ${count} leftover supplement(s) to envelopes`);
+        }
+
         this._status = this._queue.length > 0 ? 'queued' : 'idle';
         console.log(`[CallArbiter] finished ${envelope.id} (status=${envelope.status}, segments=${envelope._segmentCount || 0}, remaining=${this._queue.length})`);
         this._emit('callFinished', envelope);
@@ -1539,6 +1614,29 @@ async function main() {
       }
     }
   });
+
+  // ── Supplement injection: override agent.onStepStart ──
+  // At each step start, drain all pending supplements from the CallArbiter
+  // and inject them as system messages inside the current call.
+  // This lets the user add context mid-call without triggering a new onCall.
+  const _originalOnStepStart = agent.onStepStart?.bind(agent);
+  agent.onStepStart = async (ctx) => {
+    const supplements = callArbiter.drainSupplements();
+    if (supplements.length > 0 && ctx?.context?.addSystemMessage) {
+      for (const supp of supplements) {
+        ctx.context.addSystemMessage(
+          `用户补充信息：${supp.text}`,
+          ctx.callIndex,
+        );
+      }
+      // Push updated context so DebugHub reflects the injected messages
+      try { agent['pushToDebug']?.(ctx.context.getAll()); } catch {}
+      console.log(`[ProtoClaw Runtime] injected ${supplements.length} supplement(s) at step ${ctx.step}`);
+    }
+    if (typeof _originalOnStepStart === 'function') {
+      await _originalOnStepStart(ctx);
+    }
+  };
 
   callArbiter.on('callFinished', (_envelope) => {
     if (!sessionId) return;

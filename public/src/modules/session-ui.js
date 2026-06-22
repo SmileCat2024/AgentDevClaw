@@ -555,9 +555,12 @@ function renderWorkspaceSessionList(agent, block) {
     const isZh = currentLanguage === 'zh';
     const agentName = isZh ? '编程小助手' : 'Programming Helper';
 
-    // Determine current project
+    // Determine current project — match by normalized id, not raw openDirectory,
+    // because workspace_state.openDirectory and project.openDirectory may use
+    // different path separators (backslash vs forward slash) or case.
+    var normCurrentDir = currentOpenDir.replace(/\\/g, '/').toLowerCase();
     const currentProject = currentOpenDir
-      ? projects.find(p => p.openDirectory === currentOpenDir) || null
+      ? projects.find(p => p.id === ('dir:' + normCurrentDir)) || null
       : (projects.length > 0 ? projects[0] : null);
 
     // Project header avatar
@@ -572,7 +575,7 @@ function renderWorkspaceSessionList(agent, block) {
     const dropdownItems = projects.map((p) => {
       const pName = getProgrammingHelperProjectDisplayName(p);
       const pAvatar = escapeHtml((pName || '?')[0].toUpperCase());
-      const isActive = p.openDirectory === (currentProject?.openDirectory || '');
+      const isActive = p.id === (currentProject?.id || '');
       return [
         '<div class="ph-project-dropdown-item' + (isActive ? ' active' : '') + '" data-project-id="' + escapeHtml(p.id) + '" onclick="window.phSwitchProject(\'' + escapeHtml(p.id) + '\')">',
         '<div class="ph-project-dropdown-avatar">' + pAvatar + '</div>',

@@ -110,6 +110,13 @@ function isRuntimeItemActive(runtimeId) {
   return normalizedRuntimeId !== '' && normalizeAgentIdentity(currentRuntimeAgentId) === normalizedRuntimeId;
 }
 
+function toEpochMs(value) {
+  if (!value) return 0;
+  if (typeof value === 'number') return value;
+  const parsed = Date.parse(value);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
 function buildSyntheticRuntimeEntry(prebuiltAgent) {
   const runtimeId = prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || '';
   if (!runtimeId) return null;
@@ -126,6 +133,7 @@ function buildSyntheticRuntimeEntry(prebuiltAgent) {
     status: prebuiltAgent.connected === false ? 'disconnected' : 'connected',
     source: 'managed-runtime',
     contextMenuEnabled: true,
+    createdAt: prebuiltAgent.created_at || null,
   };
 }
 
@@ -147,6 +155,7 @@ function buildChildRuntimeEntry(runtimeAgent) {
     status: runtimeAgent.connected === false ? 'disconnected' : 'connected',
     source: runtimeAgent.source || 'external',
     contextMenuEnabled: true,
+    createdAt: runtimeAgent.created_at || null,
   };
 }
 
@@ -166,6 +175,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   agents
     .filter((agent) => agent.source !== 'prebuilt' && String(agent.parent_id || '').trim() === String(prebuiltAgent.id || '').trim())
     .forEach((agent) => addEntry(buildChildRuntimeEntry(agent)));
+
+  entries.sort((a, b) => toEpochMs(b.createdAt) - toEpochMs(a.createdAt));
 
   return entries;
 }
@@ -941,6 +952,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     let changed = false;
     for (const key of Array.from(_agentCallActive.keys())) {
       _agentCallActive.delete(key);
+      _interruptSuppression.delete(key);
       changed = true;
     }
     if (changed) {
@@ -964,16 +976,21 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
   for (const runtimeId of runtimeIds) {
     const backendCalling = nextCallStates.get(runtimeId) === true;
     const prevCalling = _agentCallActive.get(runtimeId) === true;
-    if (backendCalling) {
+    // 中断抑制窗口内忽略 backend 的 callActive:true
+    const effectiveCalling = backendCalling && !isInterruptSuppressed(runtimeId);
+    if (effectiveCalling) {
       _agentCallActive.set(runtimeId, true);
     } else {
       _agentCallActive.delete(runtimeId);
     }
-    if (prevCalling !== backendCalling) {
+    if (!backendCalling) {
+      clearInterruptSuppression(runtimeId);
+    }
+    if (prevCalling !== effectiveCalling) {
       changed = true;
     }
     // 检测调用完成：true → false 转换，标记为"刚完成"
-    if (prevCalling && !backendCalling) {
+    if (prevCalling && !effectiveCalling) {
       if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
         _recentlyFinishedRuntimes.add(runtimeId);
       }
@@ -984,6 +1001,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
   for (const key of Array.from(_agentCallActive.keys())) {
     if (!activeRuntimeIds.has(key)) {
       _agentCallActive.delete(key);
+      _interruptSuppression.delete(key);
       _recentlyFinishedRuntimes.delete(key);
       changed = true;
     }
@@ -4890,6 +4908,7 @@ async function poll() {
       const failedRuntimeRecord = getRuntimeRecord(failedRuntimeId);
       if (failedRuntimeId) {
         _agentCallActive.delete(failedRuntimeId);
+        clearInterruptSuppression(failedRuntimeId);
       }
       if (failedRuntimeRecord) {
         failedRuntimeRecord.callActive = false;
@@ -5087,9 +5106,16 @@ function updateNotificationStatus(notifData) {
       const prev = _agentCallActive.get(runtimeId);
       let nextCalling = resolveNotificationCallingState(payload);
       if (nextCalling) {
-        _agentCallActive.set(runtimeId, true);
+        // 中断抑制窗口内：用户已点击打断，后端尚未发出 call.finish，
+        // 忽略轮询返回的 callActive:true，防止覆盖乐观状态。
+        if (!isInterruptSuppressed(runtimeId)) {
+          _agentCallActive.set(runtimeId, true);
+        } else {
+          nextCalling = false;
+        }
       } else {
         _agentCallActive.delete(runtimeId);
+        clearInterruptSuppression(runtimeId);
       }
       callingStateChanged = (prev === true) !== nextCalling;
       if (callingStateChanged) {
@@ -5110,7 +5136,7 @@ function updateNotificationStatus(notifData) {
   const shouldShowStatus = !currentRuntimeConnected || shouldShowRuntimeStatus(runtime, stateType);
   if (currentRuntimeAgentId && payload.callActive === undefined) {
     if (stateType === 'call.start') {
-      if (!isRuntimeCalling(currentRuntimeAgentId)) {
+      if (!isRuntimeCalling(currentRuntimeAgentId) && !isInterruptSuppressed(currentRuntimeAgentId)) {
         _agentCallActive.set(currentRuntimeAgentId, true);
         callingStateChanged = true;
         renderAgentList();
@@ -5121,6 +5147,7 @@ function updateNotificationStatus(notifData) {
         callingStateChanged = true;
         renderAgentList();
       }
+      clearInterruptSuppression(currentRuntimeAgentId);
     }
   }
 
@@ -5171,6 +5198,7 @@ function updateNotificationStatus(notifData) {
   if (type === 'call.finish') {
     if (currentRuntimeAgentId) {
       _agentCallActive.delete(currentRuntimeAgentId);
+      clearInterruptSuppression(currentRuntimeAgentId);
       renderAgentList();
     }
     _syncPersistentActionButton();
@@ -5745,8 +5773,10 @@ async function interruptAgent() {
 
   // 乐观 UI 更新：立即清空 calling 状态、切换按钮、清空队列，
   // 不等 POST 返回，让用户瞬间看到反馈。
-  // 框架层已支持真正的无延迟中断（tool execution race + LLM stream abort），
-  // 后端会在毫秒级完成 abort，因此前端不需要伪抑制窗口。
+  // 设置中断抑制窗口：后端从 abort 生效到 call.finish 有延迟（取决于 agent
+  // 当前所处阶段：LLM 流式 ~50ms，工具执行 + 钩子 + auto-save 可能数秒），
+  // 期间轮询会拿到旧的 callActive:true。抑制窗口防止轮询覆盖乐观状态。
+  _interruptSuppression.set(currentRuntimeAgentId, Date.now() + INTERRUPT_SUPPRESSION_MS);
   _agentCallActive.delete(currentRuntimeAgentId);
   _localQueuedInputPending = false;
   _pendingQueuedCount = 0;

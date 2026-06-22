@@ -33,6 +33,12 @@ export class GroupChatBridgeFeature implements AgentFeature {
   private pendingBuffer: GcMessage[] = [];
   private injectedThisCall: GcMessage[] = [];
 
+  // ── 消息去重 ──
+  private processedIds = new Set<string>();
+
+  // ── 管理员模式：不自动 writeback，需要显式 gc_reply ──
+  private suppressAutoWriteback = false;
+
   async onDestroy(): Promise<void> {
     this.abortController.abort();
   }
@@ -71,12 +77,18 @@ export class GroupChatBridgeFeature implements AgentFeature {
 
     const serverOrigin =
       process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
-    const response: string = ctx.response || '';
 
-    // Piggyback：用本轮 call 的最终 response 回写所有已注入的消息
-    for (const msg of this.injectedThisCall) {
-      console.log(`[GroupChatBridge] piggyback writeback for ${msg.id}`);
-      await this.postWriteback(serverOrigin, msg, response, null);
+    // 管理员模式：不自动 writeback
+    if (!this.suppressAutoWriteback) {
+      const response: string = ctx.response || '';
+
+      // Piggyback：用本轮 call 的最终 response 回写所有已注入的消息
+      for (const msg of this.injectedThisCall) {
+        console.log(`[GroupChatBridge] piggyback writeback for ${msg.id}`);
+        await this.postWriteback(serverOrigin, msg, response, null);
+      }
+    } else {
+      console.log('[GroupChatBridge] suppressAutoWriteback: skipping writeback');
     }
     this.injectedThisCall = [];
 
@@ -96,6 +108,11 @@ export class GroupChatBridgeFeature implements AgentFeature {
     this.agentRef = agent;
     this.arbiterRef = arbiter || null;
     this.started = true;
+
+    // 管理员 agent 不自动 writeback —— 需要显式调用 gc_reply 工具
+    const agentId = process.env.PROTOCLAW_PREBUILT_AGENT_ID || '';
+    this.suppressAutoWriteback = agentId === 'work-group';
+
     this.runLoop().catch((err) => {
       if (!this.abortController.signal.aborted) {
         console.error('[GroupChatBridge] loop crashed:', err);
@@ -124,6 +141,16 @@ export class GroupChatBridgeFeature implements AgentFeature {
         if (response.status === 200) {
           const msg: GcMessage = await response.json();
           if (msg && msg.text) {
+            // 去重：跳过已处理的消息
+            if (this.processedIds.has(msg.id)) {
+              continue;
+            }
+            this.processedIds.add(msg.id);
+            // 防止 Set 无限增长：保留最近 200 条
+            if (this.processedIds.size > 200) {
+              const first = this.processedIds.values().next().value;
+              if (first) this.processedIds.delete(first);
+            }
             await this.handleMessage(msg, serverOrigin);
           }
         } else if (response.status === 204) {
@@ -187,19 +214,25 @@ export class GroupChatBridgeFeature implements AgentFeature {
         console.error(
           `[GroupChatBridge] arbiter call failed for ${msg.id}: ${error}`,
         );
-        await this.postWriteback(serverOrigin, msg, null, error);
+        if (!this.suppressAutoWriteback) {
+          await this.postWriteback(serverOrigin, msg, null, error);
+        }
       } else {
         console.log(`[GroupChatBridge] arbiter call completed for ${msg.id}`);
-        await this.postWriteback(serverOrigin, msg, result, null);
+        if (!this.suppressAutoWriteback) {
+          await this.postWriteback(serverOrigin, msg, result, null);
+        }
       }
     } catch (err) {
       console.error('[GroupChatBridge] dispatchViaArbiter error:', err);
-      await this.postWriteback(
-        serverOrigin,
-        msg,
-        null,
-        err instanceof Error ? err.message : String(err),
-      );
+      if (!this.suppressAutoWriteback) {
+        await this.postWriteback(
+          serverOrigin,
+          msg,
+          null,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     }
   }
 
