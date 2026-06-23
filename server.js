@@ -6392,7 +6392,7 @@ async function listGroupChats() {
       chats.push({
         id: chat.id,
         name: chat.name,
-        goal: chat.goal || null,
+        workDir: chat.workDir || null,
         createdAt: chat.createdAt,
         updatedAt: chat.updatedAt,
         memberCount: Array.isArray(chat.members) ? chat.members.length : 0,
@@ -6437,6 +6437,36 @@ async function deleteGroupChatFile(chatId) {
   } catch {
     return false;
   }
+}
+
+// ── Group Chat Resources (文件附件) ────────────────────────────────
+
+const RESOURCE_ALLOWED_EXTS = new Set(['.md', '.txt', '.json']);
+
+/**
+ * 获取群聊资源目录路径。需要 chat.workDir 已设置。
+ */
+function getResourcesDir(chat) {
+  if (!chat.workDir) return null;
+  return path.join(chat.workDir, '.agentdev', 'resources');
+}
+
+/**
+ * 校验并规范化资源文件名。
+ * 返回 { ok, name, error }。
+ */
+function validateResourceName(rawName) {
+  if (!rawName || typeof rawName !== 'string') return { ok: false, error: 'name required' };
+  const name = rawName.trim();
+  if (!name) return { ok: false, error: 'name required' };
+  if (name.length > 100) return { ok: false, error: 'name too long (max 100)' };
+  if (/[\/\\]/.test(name) || name.includes('..')) return { ok: false, error: 'invalid name' };
+  // 如果没有合法扩展名，默认加 .md
+  const ext = path.extname(name).toLowerCase();
+  if (!RESOURCE_ALLOWED_EXTS.has(ext)) {
+    return { ok: true, name: name + '.md' };
+  }
+  return { ok: true, name };
 }
 
 /**
@@ -6521,18 +6551,10 @@ async function composeGroupMemory(chat, range) {
     return `[${time}] ${from}：${text}`;
   });
 
-  // 活跃 session 状态
-  const activeSessions = Object.entries(chat.sessions || {})
-    .map(([ref, sid]) => {
-      const info = allIdentities.find((i) => i.identityRef === ref);
-      return `${info?.displayName || ref} → ${sid}`;
-    });
-
   return {
     name: chat.name,
-    goal: chat.goal || null,
+    chatId: chat.id,
     summary: lines.join('\n'),
-    activeSessions,
     messageCount: recentMessages.length,
   };
 }
@@ -6543,15 +6565,11 @@ async function composeGroupMemory(chat, range) {
 function formatGroupMemoryPrompt(memory) {
   const parts = [];
   parts.push(`[群聊：${memory.name}]`);
+  parts.push(`群聊ID：${memory.chatId}`);
   parts.push(`当前时间：${new Date().toLocaleString('zh-CN')}`);
-  if (memory.goal) parts.push(`[群目标：${memory.goal}]`);
 
   if (memory.summary) {
     parts.push('', '=== 群聊记录 ===', memory.summary);
-  }
-
-  if (memory.activeSessions.length > 0) {
-    parts.push('', '=== 活跃会话 ===', ...memory.activeSessions);
   }
 
   return parts.join('\n');
@@ -6562,9 +6580,12 @@ function formatGroupMemoryPrompt(memory) {
  * 这是通用的上下文完整性保证——任何身份被派发时都适用。
  *
  * @param {Array} messages - 增量消息数组（已排除当前消息）
+ * @param {Array} allIdentities - collectIdentities() 结果
+ * @param {string} chatId - 群聊 ID
+ * @param {string} chatName - 群聊名称
  * @returns {string|null} 格式化后的 catch-up 文本，无内容时返回 null
  */
-function formatCatchUpPrompt(messages, allIdentities) {
+function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
   if (!messages || messages.length === 0) return null;
 
   const lines = messages.map((m) => {
@@ -6588,8 +6609,9 @@ function formatCatchUpPrompt(messages, allIdentities) {
   });
 
   return [
+    `[群聊：${chatName || ''}] 群聊ID：${chatId}`,
     `当前时间：${new Date().toLocaleString('zh-CN')}`,
-    '=== 你离开后群聊中发生了以下变化 ===',
+    '=== 你未读的群聊消息 ===',
     ...lines,
   ].join('\n');
 }
@@ -6632,7 +6654,7 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel) {
     if (found) {
       // 管理员：检查上下文是否超限，超限则滚动到新 session
       if (identityRef === 'work-group:admin') {
-        const mem = chat.adminMemory || { limitMode: 'tokens', limitValue: 8000 };
+        const mem = chat.adminMemory || { limitMode: 'tokens', limitValue: 100000 };
         const { contextTokens, available } = await getSessionContextUsage(workspaceId, existing);
         if (available) {
           let exceeded = false;
@@ -6674,12 +6696,20 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel) {
 /**
  * 构建发送给 agent 的 prompt：群聊上下文头 + 消息正文 + 链接引用。
  */
-function composeDispatchPrompt(chatName, message) {
+function composeDispatchPrompt(chatName, message, chatId) {
   const parts = [];
   if (chatName) {
-    parts.push(`[群聊：${chatName}]`);
+    parts.push(chatId ? `[群聊：${chatName}] 群聊ID：${chatId}` : `[群聊：${chatName}]`);
   }
   parts.push(message.text || '');
+  // 附件内联
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+    parts.push('\n附件：');
+    for (const att of message.attachments) {
+      parts.push(`--- ${att.name} ---`);
+      parts.push(att.content || '');
+    }
+  }
   if (Array.isArray(message.links) && message.links.length > 0) {
     parts.push('\n参考链接：');
     for (const link of message.links) {
@@ -6788,6 +6818,74 @@ app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
  * 6. 后台跟踪 agent 完成状态 → "completed" / "failed"
  */
 /**
+ * 管理员上下文完整性保证（基础语义）。
+ *
+ * 这是管理员被唤醒时的唯一上下文准备通道。所有向管理员投递消息的路径
+ * —— dispatchToIdentity（直接派发 / execute 模式）、
+ *    notifyAdminForActivity（plan 模式动态通知）、
+ *    notifyAdminForObservation（plan 模式观察通知）——
+ * 都必须经过此函数。
+ *
+ * 保证三条不变量：
+ * 1. catch-up：管理员离开后错过的群聊消息全部补全
+ * 2. 群记忆：新 session 时注入历史摘要
+ * 3. 水位线：lastActiveAt 在每次调用后正确推进
+ *
+ * 函数内部读取最新群聊状态（避免调用方传入 stale 对象），计算后写回。
+ *
+ * @param {string} chatId - 群聊 ID
+ * @param {Array}  allIdentities - collectIdentities() 结果（避免重复调用）
+ * @param {number} currentMessageTimestamp - 触发本次唤醒的消息时间戳（catch-up 上界）
+ * @param {string} currentMessageId - 触发本次唤醒的消息 ID（排除自身）
+ * @param {boolean} isNew - 管理员 session 是否为本次新建
+ * @returns {string|null} 合并后的上下文前缀文本（群记忆 + catch-up），无内容时返回 null
+ */
+async function prepareAdminContext(chatId, allIdentities, currentMessageTimestamp, currentMessageId, isNew) {
+  const identityRef = 'work-group:admin';
+  const chat = await readGroupChat(chatId);
+  if (!chat) return null;
+
+  let contextPrompt = null;
+
+  // ── 群记忆预注入（仅新 session）──
+  if (isNew) {
+    const mem = chat.adminMemory || { range: '3d' };
+    const groupMemory = await composeGroupMemory(chat, mem.range || '3d');
+    groupMemory.chatId = chatId;
+    const memoryPrompt = formatGroupMemoryPrompt(groupMemory);
+    if (memoryPrompt) {
+      contextPrompt = memoryPrompt;
+      log('GroupChat', `group memory pre-injected for new admin session (${groupMemory.messageCount} messages)`);
+    }
+  }
+
+  // ── catch-up：补上管理员离开后错过的全部群聊消息（含事件消息）──
+  // 首轮（新 session 且无历史水位线）跳过 catch-up，群记忆已覆盖历史
+  if (!chat.lastActiveAt) chat.lastActiveAt = {};
+  const lastActive = chat.lastActiveAt[identityRef] || 0;
+  if (!(isNew && lastActive === 0)) {
+    const catchUpMessages = (chat.messages || []).filter(
+      (m) => (m.timestamp || 0) > lastActive
+        && (m.timestamp || 0) < (currentMessageTimestamp || Date.now())
+        && m.id !== currentMessageId
+    );
+    if (catchUpMessages.length > 0) {
+      const catchUpPrompt = formatCatchUpPrompt(catchUpMessages, allIdentities, chatId, chat.name);
+      if (catchUpPrompt) {
+        contextPrompt = contextPrompt ? contextPrompt + '\n\n' + catchUpPrompt : catchUpPrompt;
+        log('GroupChat', `catch-up merged into admin context: ${catchUpMessages.length} messages`);
+      }
+    }
+  }
+
+  // ── 推进水位线 ──
+  chat.lastActiveAt[identityRef] = currentMessageTimestamp || Date.now();
+  await writeGroupChat(chat);
+
+  return contextPrompt;
+}
+
+/**
  * 核心派发逻辑：将消息投递到指定 identity 的 session。
  * 负责 session 解析、runtime 启动、gc inbox 投递、状态跟踪。
  */
@@ -6812,7 +6910,11 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
     try {
       const agent = await requireAgentLight(workspaceId);
       log('GroupChat', `starting agent ${workspaceId} session=${sessionId} for dispatch`);
-      await startManagedAgent(agent, sessionId);
+      await startManagedAgent(agent, sessionId, {
+        extraEnv: {
+          ...(chat.workDir ? { PROTOCLAW_GC_WORKDIR: chat.workDir } : {}),
+        },
+      });
       runtime = await waitForManagedRuntimeReady(workspaceId, 30000, sessionId);
       if (!runtime) {
         throw new Error('Agent runtime failed to become ready within 30s');
@@ -6853,50 +6955,25 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
   }
 
   // 5. 上下文完整性：管理员专属的 catch-up + 群记忆预注入
-  // 这些内容合并到 composedPrompt 中，不作为独立的 gc inbox 消息投递。
-  // 原因：独立投递会导致它们成为单独的 call，而不是 dispatch 的上下文。
+  // 这些内容通过 contextText 分离传递，bridge 在 CallStart 时注入为 system-reminder，
+  // 而不是混入用户消息。
   const runtimeKey = getManagedRuntimeKey(workspaceId, sessionId);
 
   let fullPrompt = composedPrompt;
+  let contextText = null;
 
   if (identityRef === 'work-group:admin') {
-    // 5a. 新 session 时，预注入群记忆
-    if (isNew) {
-      const mem = chat.adminMemory || { range: '3d' };
-      const groupMemory = await composeGroupMemory(chat, mem.range || '3d');
-      const memoryPrompt = formatGroupMemoryPrompt(groupMemory);
-      if (memoryPrompt) {
-        fullPrompt = memoryPrompt + '\n\n' + fullPrompt;
-        log('GroupChat', `group memory pre-injected for new admin session (${groupMemory.messageCount} messages)`);
-      }
-    }
-
-    // 5b. catch-up：补上管理员离开后错过的群聊消息（包含事件消息）
-    // 包含事件消息（task_started 等），让管理员知道哪些派发已经发生了
-    if (!chat.lastActiveAt) chat.lastActiveAt = {};
-    const lastActive = chat.lastActiveAt[identityRef] || 0;
-    const catchUpMessages = (chat.messages || []).filter(
-      (m) => (m.timestamp || 0) > lastActive
-        && (m.timestamp || 0) < (message.timestamp || Date.now())
-        && m.id !== message.id // 排除当前消息本身，避免重复
+    contextText = await prepareAdminContext(
+      chatId, allIdentities,
+      message.timestamp || Date.now(), message.id, isNew,
     );
-    if (catchUpMessages.length > 0) {
-      const catchUpPrompt = formatCatchUpPrompt(catchUpMessages, allIdentities);
-      if (catchUpPrompt) {
-        fullPrompt = catchUpPrompt + '\n\n' + fullPrompt;
-        log('GroupChat', `catch-up merged into dispatch prompt: ${catchUpMessages.length} messages for admin`);
-      }
-    }
-
-    // 更新管理员的 lastActiveAt
-    chat.lastActiveAt[identityRef] = message.timestamp || Date.now();
-    await writeGroupChat(chat);
   }
 
-  // 6. 通过 gc inbox 投递实际消息（catch-up 和群记忆已合并到 fullPrompt 中）
+  // 6. 通过 gc inbox 投递实际消息（context 通过 contextText 字段分离传递）
   enqueueGcInbox(runtimeKey, {
     id: message.id,
     text: fullPrompt,
+    contextText,
     gcChatId: chatId,
     gcIdentityRef: identityRef,
   });
@@ -6910,25 +6987,28 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
   });
 
   // 6.5. 追加"任务已启动"事件卡片（以 agent 身份发送，便于追踪）
-  await appendGroupChatMessage(chatId, {
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    chatId,
-    from: identityRef,
-    text: '',
-    kind: 'event',
-    event: {
-      type: 'task_started',
-      identityRef,
-      identityName: identityInfo?.displayName || workspaceId,
-      sessionId,
-      workspaceId,
-    },
-    mentions: [],
-    links: [],
-    timestamp: Date.now(),
-    routing: null,
-  });
-  log('GroupChat', `event card appended: task_started for ${identityRef} in ${chatId}`);
+  // 管理员自身不需要 task_started 卡片——它是协调者，不是执行者
+  if (identityRef !== 'work-group:admin') {
+    await appendGroupChatMessage(chatId, {
+      id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      chatId,
+      from: identityRef,
+      text: '',
+      kind: 'event',
+      event: {
+        type: 'task_started',
+        identityRef,
+        identityName: identityInfo?.displayName || workspaceId,
+        sessionId,
+        workspaceId,
+      },
+      mentions: [],
+      links: [],
+      timestamp: Date.now(),
+      routing: null,
+    });
+    log('GroupChat', `event card appended: task_started for ${identityRef} in ${chatId}`);
+  }
 
   // 6.6. 规划模式下，通知管理员系统事件（任务已启动）
   if (identityRef !== 'work-group:admin' && (chat.initiativeMode || 'assist') === 'plan') {
@@ -6963,7 +7043,7 @@ async function dispatchGroupChatMessage(chatId, message) {
 
   // @管理员 → 始终直接派发给管理员
   if (targetIsAdmin) {
-    const prompt = composeDispatchPrompt(chatName, message);
+    const prompt = composeDispatchPrompt(chatName, message, chatId);
     await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
     return;
   }
@@ -6971,7 +7051,7 @@ async function dispatchGroupChatMessage(chatId, message) {
   // 管理员发出的派发消息 → 直接到达目标，不再经过模式路由。
   // 否则在 execute 模式下，admin dispatch → 新消息 → 又路由回 admin → 无限循环。
   if (message.from === 'work-group:admin') {
-    const prompt = composeDispatchPrompt(chatName, message);
+    const prompt = composeDispatchPrompt(chatName, message, chatId);
     await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
     return;
   }
@@ -6990,7 +7070,7 @@ async function dispatchGroupChatMessage(chatId, message) {
       }[autonomyMode] || '直接执行';
 
       const coordinatorPrompt = [
-        `[群聊：${chatName}]`,
+        `[群聊：${chatName}] 群聊ID：${chatId}`,
         `用户 @了 ${targetName}：`,
         message.text || '',
         '',
@@ -7009,7 +7089,7 @@ async function dispatchGroupChatMessage(chatId, message) {
 
     case 'plan': {
       // 规划模式：直接派发 + 通知管理员观察
-      const prompt = composeDispatchPrompt(chatName, message);
+      const prompt = composeDispatchPrompt(chatName, message, chatId);
       await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
 
       // 异步通知管理员（不阻塞主派发）
@@ -7022,7 +7102,7 @@ async function dispatchGroupChatMessage(chatId, message) {
     case 'assist':
     default: {
       // 辅助模式：直接派发
-      const prompt = composeDispatchPrompt(chatName, message);
+      const prompt = composeDispatchPrompt(chatName, message, chatId);
       await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
       break;
     }
@@ -7040,7 +7120,7 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
   const targetName = targetInfo?.displayName || targetIdentityRef;
 
   const observationPrompt = [
-    `[观察 · ${chatName}]`,
+    `[观察 · ${chatName}] 群聊ID：${chatId}`,
     `当前时间：${new Date().toLocaleString('zh-CN')}`,
     `用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
     '',
@@ -7048,7 +7128,7 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
   ].join('\n');
 
   // 确保管理员 runtime 存在
-  const { sessionId } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
+  const { sessionId, isNew } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
   let runtime = getAgentRuntime('work-group', sessionId);
   const isAlive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
 
@@ -7063,10 +7143,16 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
     }
   }
 
+  // 上下文完整性：经统一通道补全 catch-up + 群记忆
+  const contextText = await prepareAdminContext(
+    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew,
+  );
+
   const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
   enqueueGcInbox(runtimeKey, {
     id: `obs-${message.id}`,
     text: observationPrompt,
+    contextText,
     gcChatId: chatId,
     gcIdentityRef: 'work-group:admin',
   });
@@ -7097,13 +7183,13 @@ async function notifyAdminForActivity(chatId, message, chat) {
   }
 
   const activityPrompt = [
-    `[群聊动态 · ${chatName}]`,
+    `[群聊动态 · ${chatName}] 群聊ID：${chatId}`,
     `当前时间：${now}`,
     activityDesc,
   ].join('\n');
 
   // 确保管理员 runtime 存在
-  const { sessionId } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
+  const { sessionId, isNew } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
   let runtime = getAgentRuntime('work-group', sessionId);
   const isAlive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
 
@@ -7118,10 +7204,16 @@ async function notifyAdminForActivity(chatId, message, chat) {
     }
   }
 
+  // 上下文完整性：经统一通道补全 catch-up + 群记忆
+  const contextText = await prepareAdminContext(
+    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew,
+  );
+
   const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
   enqueueGcInbox(runtimeKey, {
     id: `act-${message.id}`,
     text: activityPrompt,
+    contextText,
     gcChatId: chatId,
     gcIdentityRef: 'work-group:admin',
   });
@@ -7205,14 +7297,14 @@ app.get('/protoclaw/group_chats', async (_req, res, next) => {
 
 app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
   try {
-    const { name, goal, members } = req.body || {};
+    const { name, workDir, members } = req.body || {};
     if (!name) return res.status(400).json({ error: 'name required' });
 
     const chatId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const chat = {
       id: chatId,
       name,
-      goal: goal || null,
+      workDir: workDir || null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       members: Array.isArray(members) ? members : [
@@ -7222,7 +7314,7 @@ app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
       sessions: {},
       initiativeMode: 'assist',
       autonomyMode: 'auto',
-      adminMemory: { range: '3d', limitMode: 'tokens', limitValue: 8000 },
+      adminMemory: { range: '3d', limitMode: 'tokens', limitValue: 100000 },
       lastActiveAt: {},
     };
     await writeGroupChat(chat);
@@ -7247,9 +7339,9 @@ app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next)
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
 
-    const { name, goal, members, initiativeMode, autonomyMode, adminMemory } = req.body || {};
+    const { name, workDir, members, initiativeMode, autonomyMode, adminMemory } = req.body || {};
     if (name !== undefined) chat.name = name;
-    if (goal !== undefined) chat.goal = goal;
+    if (workDir !== undefined) chat.workDir = workDir || null;
     if (Array.isArray(members)) chat.members = members;
     if (typeof initiativeMode === 'string') chat.initiativeMode = initiativeMode;
     if (typeof autonomyMode === 'string') chat.autonomyMode = autonomyMode;
@@ -7257,7 +7349,7 @@ app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next)
       chat.adminMemory = {
         range: adminMemory.range || '3d',
         limitMode: adminMemory.limitMode || 'tokens',
-        limitValue: typeof adminMemory.limitValue === 'number' ? adminMemory.limitValue : 8000,
+        limitValue: typeof adminMemory.limitValue === 'number' ? adminMemory.limitValue : 100000,
       };
     }
 
@@ -7273,6 +7365,216 @@ app.delete('/protoclaw/group_chats/:chatId', async (req, res, next) => {
     const deleted = await deleteGroupChatFile(req.params.chatId);
     if (!deleted) return res.status(404).json({ error: 'Group chat not found' });
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Group Chat GROUP.md API ────────────────────────────────────────
+
+app.get('/protoclaw/group_chats/:chatId/group_md', async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+    if (!chat.workDir) return res.json({ content: '', exists: false });
+
+    const mdPath = path.join(chat.workDir, '.agentdev', 'GROUP.md');
+    try {
+      const content = await fs.readFile(mdPath, 'utf-8');
+      res.json({ content, exists: true });
+    } catch {
+      res.json({ content: '', exists: false });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/protoclaw/group_chats/:chatId/group_md', express.json(), async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+    if (!chat.workDir) return res.status(400).json({ error: 'Group chat has no workDir set' });
+
+    const { content } = req.body || {};
+    if (typeof content !== 'string') return res.status(400).json({ error: 'content (string) required' });
+
+    const agentdevDir = path.join(chat.workDir, '.agentdev');
+    await fs.mkdir(agentdevDir, { recursive: true });
+    const mdPath = path.join(agentdevDir, 'GROUP.md');
+    await fs.writeFile(mdPath, content, 'utf-8');
+    res.json({ ok: true, path: mdPath });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Group Chat Resources API ───────────────────────────────────────
+
+app.get('/protoclaw/group_chats/:chatId/resources', async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const resDir = getResourcesDir(chat);
+    if (!resDir) return res.json({ resources: [], noWorkDir: true });
+
+    try {
+      await fs.mkdir(resDir, { recursive: true });
+      const entries = await fs.readdir(resDir);
+      const resources = [];
+      for (const entry of entries) {
+        const ext = path.extname(entry).toLowerCase();
+        if (!RESOURCE_ALLOWED_EXTS.has(ext)) continue;
+        try {
+          const stat = await fs.stat(path.join(resDir, entry));
+          resources.push({
+            name: entry,
+            size: stat.size,
+            mtime: stat.mtimeMs,
+            ext: ext.slice(1),
+          });
+        } catch {}
+      }
+      resources.sort((a, b) => b.mtime - a.mtime);
+      res.json({ resources });
+    } catch {
+      res.json({ resources: [] });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/protoclaw/group_chats/:chatId/resources/:name', async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const resDir = getResourcesDir(chat);
+    if (!resDir) return res.status(400).json({ error: 'Group chat has no workDir set' });
+
+    const validation = validateResourceName(req.params.name);
+    if (!validation.ok) return res.status(400).json({ error: validation.error });
+
+    const filePath = path.join(resDir, validation.name);
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      const stat = await fs.stat(filePath);
+      res.json({ name: validation.name, content, size: stat.size, mtime: stat.mtimeMs });
+    } catch {
+      res.status(404).json({ error: 'Resource not found' });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/protoclaw/group_chats/:chatId/resources/:name', express.json(), async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const resDir = getResourcesDir(chat);
+    if (!resDir) return res.status(400).json({ error: 'Group chat has no workDir set' });
+
+    const validation = validateResourceName(req.params.name);
+    if (!validation.ok) return res.status(400).json({ error: validation.error });
+
+    const { content } = req.body || {};
+    if (typeof content !== 'string') return res.status(400).json({ error: 'content (string) required' });
+
+    await fs.mkdir(resDir, { recursive: true });
+    const filePath = path.join(resDir, validation.name);
+    await fs.writeFile(filePath, content, 'utf8');
+    const stat = await fs.stat(filePath);
+    res.json({ ok: true, name: validation.name, size: stat.size });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/protoclaw/group_chats/:chatId/resources/:name', async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const resDir = getResourcesDir(chat);
+    if (!resDir) return res.status(400).json({ error: 'Group chat has no workDir set' });
+
+    const validation = validateResourceName(req.params.name);
+    if (!validation.ok) return res.status(400).json({ error: validation.error });
+
+    const filePath = path.join(resDir, validation.name);
+    try {
+      await fs.unlink(filePath);
+      res.json({ ok: true });
+    } catch {
+      res.status(404).json({ error: 'Resource not found' });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Group Chat WorkDir Scan API ─────────────────────────────────────
+
+app.get('/protoclaw/group_chats/:chatId/workdir_scan', async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+    if (!chat.workDir) return res.json({ workDir: null, entries: [], keyFiles: {} });
+
+    const workDir = chat.workDir;
+    const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', '.cache', '__pycache__', '.next', 'build', '.svelte-kit', 'coverage', '.turbo', '.nuxt', 'target', 'vendor']);
+    const KEY_FILE_NAMES = ['package.json', 'README.md', 'README', 'CLAUDE.md', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'pom.xml', 'Makefile', 'docker-compose.yml', '.env.example', 'tsconfig.json', 'requirements.txt'];
+
+    // Scan top-level directory
+    const entries = [];
+    const dirItems = await fs.readdir(workDir, { withFileTypes: true });
+    for (const item of dirItems) {
+      if (item.name.startsWith('.') && item.name !== '.env.example' && item.name !== '.agentdev') continue;
+      if (IGNORE_DIRS.has(item.name)) continue;
+      entries.push({
+        type: item.isDirectory() ? 'dir' : 'file',
+        name: item.name,
+      });
+    }
+
+    // Read key files
+    const keyFiles = {};
+    for (const fname of KEY_FILE_NAMES) {
+      const fpath = path.join(workDir, fname);
+      try {
+        const stat = await fs.stat(fpath);
+        if (!stat.isFile()) continue;
+        const raw = await fs.readFile(fpath, 'utf-8');
+        // Truncate large files
+        keyFiles[fname] = raw.length > 4000 ? raw.slice(0, 4000) + '\n...(truncated)' : raw;
+      } catch {
+        // File doesn't exist, skip
+      }
+    }
+
+    // Also scan second-level directories (names only, for structure awareness)
+    const subDirs = entries.filter(e => e.type === 'dir');
+    for (const dir of subDirs) {
+      const dirPath = path.join(workDir, dir.name);
+      try {
+        const subItems = await fs.readdir(dirPath, { withFileTypes: true });
+        const subNames = subItems
+          .filter(i => !i.name.startsWith('.') && !IGNORE_DIRS.has(i.name))
+          .slice(0, 15)
+          .map(i => `${i.isDirectory() ? '[D]' : '[F]'} ${i.name}`);
+        if (subNames.length > 0) {
+          entries.push({ type: 'subdir_listing', name: `${dir.name}/`, children: subNames });
+        }
+      } catch {
+        // Permission denied or other error, skip
+      }
+    }
+
+    res.json({ workDir, entries, keyFiles });
   } catch (error) {
     next(error);
   }
@@ -7302,7 +7604,7 @@ app.get('/protoclaw/group_chats/:chatId/messages', async (req, res, next) => {
 
 app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, res, next) => {
   try {
-    const { text, mentions, links, from, kind } = req.body || {};
+    const { text, mentions, links, from, kind, attachments } = req.body || {};
     if (!text) return res.status(400).json({ error: 'text required' });
 
     const chat = await readGroupChat(req.params.chatId);
@@ -7317,6 +7619,7 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
       text,
       mentions: Array.isArray(mentions) ? mentions : [],
       links: Array.isArray(links) ? links.filter((l) => l && l.url) : [],
+      attachments: Array.isArray(attachments) ? attachments.filter((a) => a && a.name) : [],
       kind: kind || 'text',
       timestamp: Date.now(),
       routing: null,
@@ -9448,6 +9751,87 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
     });
 
     res.json({ ok: true, sessionId, title });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.body?.agentId);
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    if (!agentId || !sessionId) {
+      return res.status(400).json({ error: 'agentId and sessionId are required' });
+    }
+
+    const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, agentId);
+    if (!ownerAgentId) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
+    const agentRelativeDir = agent.relativeDir;
+    if (!agentRelativeDir) {
+      return res.status(500).json({ error: 'Agent directory not resolved' });
+    }
+
+    const recapMirrorScript = path.join(__dirname, 'scripts', 'run-recap-mirror.js');
+    const resultDir = path.join(os.tmpdir(), `recap-mirror-${Date.now()}-${randomUUID().slice(0, 8)}`);
+    const resultPath = path.join(resultDir, 'result.json');
+    await fs.mkdir(resultDir, { recursive: true });
+
+    const child = spawn(process.execPath, [recapMirrorScript, agentRelativeDir, ownerAgentId, sessionId, JSON.stringify({ maxAttempts: 1 }), resultPath], {
+      cwd: __dirname,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: { ...process.env },
+    });
+
+    let stderr = '';
+    const timeoutMs = 120000;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, timeoutMs);
+
+    child.stderr.on('data', (chunk) => {
+      const text = String(chunk);
+      stderr += text;
+      for (const line of text.split('\n')) {
+        if (line.trim()) console.log(`[recap-mirror] ${line.trimEnd()}`);
+      }
+    });
+
+    await new Promise((resolve, reject) => {
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.on('exit', (code) => {
+        clearTimeout(timer);
+        if (timedOut) {
+          reject(new Error(`Recap generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
+          return;
+        }
+        if (code !== 0) {
+          reject(new Error(stderr.trim() || `run-recap-mirror exited with code ${code}`));
+          return;
+        }
+        resolve();
+      });
+    });
+
+    const raw = await fs.readFile(resultPath, 'utf8');
+    const result = JSON.parse(raw.trim());
+    await fs.rm(resultDir, { recursive: true, force: true }).catch(() => {});
+
+    const recap = typeof result?.recap === 'string' ? result.recap.trim() : '';
+    if (!recap) {
+      return res.status(500).json({ error: 'Recap generation returned empty result' });
+    }
+
+    res.json({ ok: true, sessionId, recap });
   } catch (error) {
     next(error);
   }

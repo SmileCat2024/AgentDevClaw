@@ -170,11 +170,17 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     seenRuntimeIds.add(entry.runtimeId);
     entries.push(entry);
   };
-  addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
 
+  // Add child entries first — they carry accurate createdAt from the viewer.
+  // The synthetic entry is added last so that when it shares a runtimeId with
+  // a child entry (which happens when pickPrimaryAgentRuntime selects the same
+  // runtime as the prebuilt's primary), the child entry wins and its createdAt
+  // is preserved instead of being shadowed by the synthetic's null createdAt.
   agents
     .filter((agent) => agent.source !== 'prebuilt' && String(agent.parent_id || '').trim() === String(prebuiltAgent.id || '').trim())
     .forEach((agent) => addEntry(buildChildRuntimeEntry(agent)));
+
+  addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
 
   entries.sort((a, b) => toEpochMs(b.createdAt) - toEpochMs(a.createdAt));
 
@@ -677,6 +683,7 @@ const AGENT_ICONS = {
   'dispatch-console': 'dispatch-console.svg',
   'programming-helper': 'programming-helper.svg',
   'feature-setup': 'feature-setup.svg',
+  'work-group': 'work-group.svg',
 };
 
 let currentRuntimeConnected = true;
@@ -882,7 +889,10 @@ async function loadAgents() {
 
     if (!suppressSidebarRerender) {
       renderAgentList();
-      renderFeaturePanel();
+      // files 面板数据与 agent 列表无关，跳过以避免编辑器/输入框失焦
+      if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'files') {
+        renderFeaturePanel();
+      }
     }
 
     await refreshAgentCallStates(allAgents, { force: true });
@@ -1580,6 +1590,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       return;
     }
 
+    const isZh = currentLanguage === 'zh';
+    const toastId = 'compact-resume-' + action.sessionId;
+    ClawToast.show({
+      id: toastId,
+      title: isZh ? '正在创建轻量继续会话...' : 'Creating compacted resume session...',
+      status: 'loading',
+    });
     try {
       const result = await createCompactedResumeSession(activeAgent.id, action.sessionId);
       if (result?.agent) {
@@ -1593,13 +1610,25 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (nextRuntimeId) {
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
         await requestSwitch(nextRuntimeId, 'compact-resume');
+        ClawToast.update(toastId, {
+          status: 'success',
+          title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
+        });
       } else {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
+        ClawToast.update(toastId, {
+          status: 'success',
+          title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
+        });
       }
     } catch (error) {
       console.error('Failed to compact-resume session:', error);
-      window.alert(t('workspace_compacted_resume_failed') + (error && error.message ? error.message : error));
+      ClawToast.update(toastId, {
+        status: 'error',
+        title: isZh ? '轻量继续失败' : 'Compacted resume failed',
+        description: (error && error.message ? error.message : String(error)),
+      });
     }
     return;
   }
@@ -1621,6 +1650,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     }
 
     markSessionLoading(activeAgent.id, action.sessionId);
+    const _csIsZh = currentLanguage === 'zh';
+    const _csToastId = 'compact-summary-' + action.sessionId;
+    ClawToast.show({
+      id: _csToastId,
+      title: _csIsZh ? '正在总结会话历史...' : 'Summarizing session history...',
+      status: 'loading',
+    });
     try {
       const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy);
       if (result?.agent) {
@@ -1638,10 +1674,18 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
       }
+      ClawToast.update(_csToastId, {
+        status: 'success',
+        title: _csIsZh ? '会话总结完成' : 'Session summary completed',
+      });
     } catch (error) {
       console.error('Failed to compact session:', error);
       clearSessionLoading(activeAgent.id);
-      window.alert(t('workspace_compact_failed') + (error?.message || error));
+      ClawToast.update(_csToastId, {
+        status: 'error',
+        title: _csIsZh ? '总结失败' : 'Summary failed',
+        description: (error?.message || String(error)),
+      });
     }
     return;
   }
@@ -3156,6 +3200,12 @@ async function ctxArchiveAndStopRuntime(target) {
 async function ctxGenerateTitle(target) {
   const { ns, sessionId } = target;
   const isZh = currentLanguage === 'zh';
+  const toastId = 'title-gen-' + sessionId;
+  ClawToast.show({
+    id: toastId,
+    title: isZh ? '正在生成标题...' : 'Generating title...',
+    status: 'loading',
+  });
   try {
     const response = await fetch('/protoclaw/generate_session_title', {
       method: 'POST',
@@ -3177,10 +3227,25 @@ async function ctxGenerateTitle(target) {
         }
       }
       renderAgentList();
+      ClawToast.update(toastId, {
+        status: 'success',
+        title: isZh ? '标题已生成' : 'Title generated',
+        description: result.title,
+      });
+    } else {
+      ClawToast.update(toastId, {
+        status: 'error',
+        title: isZh ? '生成标题失败' : 'Title generation failed',
+        description: isZh ? '服务器未返回有效标题' : 'Server returned no valid title',
+      });
     }
   } catch (error) {
     console.error('Failed to generate session title:', error);
-    window.alert((isZh ? '生成标题失败: ' : 'Failed to generate title: ') + (error.message || error));
+    ClawToast.update(toastId, {
+      status: 'error',
+      title: isZh ? '生成标题失败' : 'Title generation failed',
+      description: error.message || String(error),
+    });
   }
 }
 
@@ -4600,6 +4665,8 @@ async function loadAgentData(agentId) {
   try {
     currentRuntimeAgentId = agentId;
     _lastCallFinishTime = 0;
+    _currentRecapText = '';
+    _recapPendingTrigger = false;
     const [msgsRes, toolsRes, hooksRes, overviewRes, inputRes] = await Promise.all([
       fetch(`/api/agents/${agentId}/messages`),
       fetch(`/api/agents/${agentId}/tools`),
@@ -4790,6 +4857,13 @@ function tryAutoTitleGeneration(messages) {
 
 async function autoGenerateSessionTitle(agentId, sessionId) {
   let succeeded = false;
+  const isZh = currentLanguage === 'zh';
+  const toastId = 'title-auto-' + sessionId;
+  ClawToast.show({
+    id: toastId,
+    title: isZh ? '正在生成会话标题...' : 'Generating session title...',
+    status: 'loading',
+  });
   try {
     var response = await fetch('/protoclaw/generate_session_title', {
       method: 'POST',
@@ -4798,6 +4872,11 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
     });
     if (!response.ok) {
       console.warn('[AutoTitle] generation failed:', response.status);
+      ClawToast.update(toastId, {
+        status: 'error',
+        title: isZh ? '标题生成失败' : 'Title generation failed',
+        description: isZh ? ('HTTP ' + response.status) : ('HTTP ' + response.status),
+      });
       return;
     }
     var result = await response.json();
@@ -4811,9 +4890,25 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
       }
       console.log('[AutoTitle] title set:', result.title);
       succeeded = true;
+      ClawToast.update(toastId, {
+        status: 'success',
+        title: isZh ? '标题已生成' : 'Title generated',
+        description: result.title,
+      });
+    } else {
+      ClawToast.update(toastId, {
+        status: 'error',
+        title: isZh ? '标题生成失败' : 'Title generation failed',
+        description: isZh ? '未返回有效标题' : 'No valid title returned',
+      });
     }
   } catch (error) {
     console.warn('[AutoTitle] error:', error.message || error);
+    ClawToast.update(toastId, {
+      status: 'error',
+      title: isZh ? '标题生成失败' : 'Title generation failed',
+      description: error.message || String(error),
+    });
   } finally {
     _autoTitleTriggered.delete(sessionId);
     if (succeeded) {
@@ -5057,7 +5152,8 @@ async function poll() {
     if (activeFeaturePanel) {
       if (activeFeaturePanel === 'logs') {
         await loadLogs();
-      } else {
+      } else if (activeFeaturePanel !== 'files') {
+        // files 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
         const hooksRes = await fetch(`/api/agents/${currentRuntimeAgentId}/hooks`);
         const nextHookInspector = normalizeHookInspector(await hooksRes.json());
         const nextSignature = getHookInspectorSignature(nextHookInspector);
@@ -5075,6 +5171,9 @@ async function poll() {
     if (currentRuntimeAgentId) {
       saveCurrentRuntimeToCache(currentRuntimeAgentId);
     }
+
+    // Track recap session presence (detects "return after absence")
+    _trackRecapSessionPresence();
 
   } catch (e) {
     console.warn('Polling failed, keeping last known connection state:', e);
@@ -5130,6 +5229,11 @@ function updateNotificationStatus(notifData) {
       ? payload.state.timestamp
       : (runtime.updatedAt || Date.now());
     _renderLastCallElapsed();
+    // Trigger deferred recap if user was away while AI was generating
+    if (_recapPendingTrigger) {
+      _recapPendingTrigger = false;
+      _maybeFetchRecap();
+    }
   }
 
   const stateType = String(actionSource?.type || '').trim();
@@ -5307,7 +5411,13 @@ function renderInputRequests(requests) {
   // 注意：不重置 _voiceTranscribing 期间的 in-flight ASR 请求，
   // 那些请求完成后会自行存入 _pendingVoiceResults，待切回时注入。
   if (_voiceRecording) {
-    _cancelVoiceRecording();
+    if (_voicePendingSend) {
+      // User already pressed send — preserve auto-send intent.
+      // Just stop the recording; onstop will run ASR and auto-send normally.
+      stopVoiceRecording();
+    } else {
+      _cancelVoiceRecording();
+    }
   }
   // 仅重置 flag 以解除新会话的 UI 限制，不中断进行中的 ASR fetch
   _voiceTranscribing = false;
@@ -5489,6 +5599,7 @@ function renderInputRequests(requests) {
   _injectPendingVoiceResult();
 
   _renderLastCallElapsed();
+  _renderRecapHint();
 
   notifyChatViewportMutation({
     reason: 'input-render',
@@ -5534,27 +5645,224 @@ function formatCallElapsed(finishTime) {
   return zh ? h + ' 小时前' : h + 'h ago';
 }
 
+function _ensureInputMetaBar(container) {
+  let bar = container.querySelector('.input-meta-bar');
+  if (bar) return bar;
+
+  bar = document.createElement('div');
+  bar.className = 'input-meta-bar';
+
+  // Insert before the input card or queue bubbles
+  const refEl = container.querySelector('.user-input-card, .queue-bubbles-stack');
+  if (refEl) {
+    container.insertBefore(bar, refEl);
+  } else {
+    container.appendChild(bar);
+  }
+  return bar;
+}
+
+function _cleanupInputMetaBar(container) {
+  const bar = container.querySelector('.input-meta-bar');
+  if (bar && bar.children.length === 0) {
+    bar.remove();
+  }
+}
+
 function _renderLastCallElapsed() {
   const container = document.getElementById('user-input-container');
   if (!container) return;
 
-  let el = container.querySelector('.last-call-elapsed');
+  let el = container.querySelector('.call-elapsed-capsule');
 
   if (!_lastCallFinishTime || isRuntimeCalling(currentRuntimeAgentId) || !isChatSurfaceActive()) {
-    if (el) el.remove();
+    if (el) {
+      el.remove();
+      _cleanupInputMetaBar(container);
+    }
     return;
   }
 
+  const bar = _ensureInputMetaBar(container);
+
   if (!el) {
     el = document.createElement('div');
-    el.className = 'last-call-elapsed';
-    container.insertBefore(el, container.firstChild);
+    el.className = 'call-elapsed-capsule';
+    bar.insertBefore(el, bar.firstChild); // always leftmost
   }
 
-  el.textContent = formatCallElapsed(_lastCallFinishTime);
+  el.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg><span>${formatCallElapsed(_lastCallFinishTime)}</span>`;
 }
 
 _callFinishTimerInterval = setInterval(_renderLastCallElapsed, 1000);
+
+// ── Recap (离开摘要) ──────────────────────────────────────────────
+// 当用户切走离开当前会话（切到别的 agent/session/workspace 视图）超过阈值后
+// 再切回来，自动生成一段简短回顾，显示在输入框上方帮助用户恢复上下文。
+let _recapLastSeenBySession = {};     // sessionKey → 最后活跃时间戳
+let _recapShownForSession = new Set();   // session cache keys that have had recap generated
+let _recapDismissedForSession = new Set(); // session cache keys where user dismissed
+let _currentRecapText = '';
+let _recapFetchInFlight = false;
+let _recapPendingTrigger = false;        // set when away threshold met but AI was busy
+const RECAP_AWAY_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+function _getRecapAgentAndSession() {
+  const agent = getCurrentAgentRecord();
+  const agentId = String(agent?.parent_id || agent?.id || currentAgentId || '').trim();
+  const sessionId = getActiveWorkspaceSessionId(agent);
+  return { agentId, sessionId };
+}
+
+async function _maybeFetchRecap() {
+  if (_recapFetchInFlight) return;
+  const sessionKey = _getSessionInputCacheKey();
+  if (!sessionKey) return;
+  if (_recapShownForSession.has(sessionKey)) return;
+  if (_recapDismissedForSession.has(sessionKey)) return;
+
+  // Need at least some conversation to generate a meaningful recap
+  if (!Array.isArray(currentMessages) || currentMessages.length < 2) return;
+
+  const { agentId, sessionId } = _getRecapAgentAndSession();
+  if (!agentId || !sessionId) return;
+
+  // Don't trigger recap while agent is actively generating — defer to after call finish
+  if (currentRuntimeAgentId && isRuntimeCalling(currentRuntimeAgentId)) {
+    _recapPendingTrigger = true;
+    return;
+  }
+
+  _recapFetchInFlight = true;
+  try {
+    const response = await fetch('/protoclaw/generate_recap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, sessionId }),
+    });
+    if (!response.ok) return;
+    const result = await response.json();
+    if (result.ok && result.recap) {
+      // Verify we're still on the same session
+      if (_getSessionInputCacheKey() === sessionKey) {
+        _currentRecapText = result.recap;
+        _recapShownForSession.add(sessionKey);
+        _renderRecapHint();
+      }
+    }
+  } catch (e) {
+    console.error('[Recap] Failed to fetch:', e);
+  } finally {
+    _recapFetchInFlight = false;
+  }
+}
+
+function _dismissRecap() {
+  const sessionKey = _getSessionInputCacheKey();
+  if (sessionKey) _recapDismissedForSession.add(sessionKey);
+  _currentRecapText = '';
+  const container = document.getElementById('user-input-container');
+  if (container) {
+    const hint = container.querySelector('.recap-hint');
+    if (hint) hint.remove();
+    _cleanupInputMetaBar(container);
+  }
+}
+
+function _clearRecapForNewMessage() {
+  _currentRecapText = '';
+  _recapPendingTrigger = false;
+  const sessionKey = _getSessionInputCacheKey();
+  if (sessionKey) {
+    _recapShownForSession.delete(sessionKey);
+    _recapDismissedForSession.delete(sessionKey);
+  }
+  const container = document.getElementById('user-input-container');
+  if (container) {
+    const hint = container.querySelector('.recap-hint');
+    if (hint) hint.remove();
+    _cleanupInputMetaBar(container);
+  }
+}
+
+function _renderRecapHint() {
+  const container = document.getElementById('user-input-container');
+  if (!container) return;
+
+  const existing = container.querySelector('.recap-hint');
+
+  if (!_currentRecapText || !isChatSurfaceActive()) {
+    if (existing) {
+      existing.remove();
+      _cleanupInputMetaBar(container);
+    }
+    return;
+  }
+
+  const sessionKey = _getSessionInputCacheKey();
+  if (sessionKey && _recapDismissedForSession.has(sessionKey)) {
+    if (existing) {
+      existing.remove();
+      _cleanupInputMetaBar(container);
+    }
+    return;
+  }
+
+  const bar = _ensureInputMetaBar(container);
+
+  if (existing) {
+    const textEl = existing.querySelector('.recap-hint-text');
+    if (textEl) textEl.textContent = _currentRecapText;
+    return;
+  }
+
+  const el = document.createElement('div');
+  el.className = 'recap-hint';
+  el.innerHTML = `
+    <span class="recap-hint-icon">#</span>
+    <span class="recap-hint-text">${escapeHtml(_currentRecapText)}</span>
+    <button class="recap-hint-close" onclick="_dismissRecap()" title="${currentLanguage === 'zh' ? '关闭' : 'Dismiss'}">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+    </button>
+  `;
+
+  // Hover to expand full text, leave to collapse
+  let expandTimer = null;
+  el.addEventListener('mouseenter', () => {
+    const textEl = el.querySelector('.recap-hint-text');
+    if (!textEl) return;
+    expandTimer = setTimeout(() => {
+      textEl.classList.add('expanded');
+    }, 300);
+  });
+  el.addEventListener('mouseleave', () => {
+    if (expandTimer) { clearTimeout(expandTimer); expandTimer = null; }
+    const textEl = el.querySelector('.recap-hint-text');
+    if (textEl) textEl.classList.remove('expanded');
+  });
+
+  bar.appendChild(el); // always rightmost
+}
+
+// Per-session "last seen" tracking — runs in poll loop.
+// When user is actively on a chat surface, update the timestamp.
+// When they return to a session after being away >= threshold, trigger recap.
+function _trackRecapSessionPresence() {
+  if (!isChatSurfaceActive()) return;
+  const sessionKey = _getSessionInputCacheKey();
+  if (!sessionKey) return;
+
+  const now = Date.now();
+  const lastSeen = _recapLastSeenBySession[sessionKey];
+
+  if (lastSeen && (now - lastSeen) >= RECAP_AWAY_THRESHOLD_MS) {
+    // Returning after absence — allow re-generation
+    _recapShownForSession.delete(sessionKey);
+    _maybeFetchRecap();
+  }
+
+  _recapLastSeenBySession[sessionKey] = now;
+}
 
 function renderPersistentInput(container) {
   // 先渲染队列气泡
@@ -5697,6 +6005,7 @@ async function submitQueuedInput() {
       textarea.value = '';
       autoResize(textarea);
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
+      _clearRecapForNewMessage();
       beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       // 只有当 agent 正在 calling 时才显示排队气泡。
@@ -7367,6 +7676,13 @@ async function startVoiceRecording(btn) {
 function stopVoiceRecording() {
   if (_voiceMediaRecorder && _voiceMediaRecorder.state === 'recording') {
     _voiceMediaRecorder.stop();
+    // Set _voiceRecording = false immediately — don't wait for the async
+    // onstop event.  Otherwise renderInputRequests() (triggered by a poll
+    // cycle or session switch in the gap between .stop() and onstop) would
+    // still see _voiceRecording === true and call _cancelVoiceRecording(),
+    // which clears _voicePendingSend and discards the auto-send intent.
+    _voiceRecording = false;
+    if (_voiceTargetBtn) _voiceTargetBtn.classList.remove('recording');
   }
 }
 

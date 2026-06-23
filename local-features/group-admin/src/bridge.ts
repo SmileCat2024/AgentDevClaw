@@ -16,6 +16,7 @@ import { CallStart, CallFinish, StepStart } from 'agentdev';
 interface GcMessage {
   id: string;
   text: string;
+  contextText?: string | null;
   gcChatId: string;
   gcIdentityRef: string;
 }
@@ -33,6 +34,10 @@ export class GroupChatBridgeFeature implements AgentFeature {
   private pendingBuffer: GcMessage[] = [];
   private injectedThisCall: GcMessage[] = [];
 
+  // ── 空闲时收到消息的上下文前缀（群记忆 / catch-up）──
+  // 在 CallStart 时注入为 system-reminder，不混入用户消息
+  private pendingContext: string | null = null;
+
   // ── 消息去重 ──
   private processedIds = new Set<string>();
 
@@ -46,9 +51,20 @@ export class GroupChatBridgeFeature implements AgentFeature {
   // ========== Hooks ==========
 
   @CallStart
-  async onCallStartHook(): Promise<void> {
+  async onCallStartHook(ctx: any): Promise<void> {
     this.callActive = true;
     this.injectedThisCall = [];
+
+    // 空闲路径下收到的上下文（群记忆 / catch-up）在 CallStart 注入为 system-reminder，
+    // 出现在用户消息之前，让 agent 以 system-reminder 形式感知环境背景。
+    if (this.pendingContext && ctx?.context) {
+      ctx.context.add({
+        role: 'system',
+        content: `<system-reminder>\n${this.pendingContext}\n</system-reminder>`,
+      });
+      console.log('[GroupChatBridge] injected context as system-reminder at CallStart');
+      this.pendingContext = null;
+    }
   }
 
   @StepStart
@@ -57,7 +73,13 @@ export class GroupChatBridgeFeature implements AgentFeature {
 
     const messages = this.pendingBuffer.splice(0);
     const content = messages
-      .map((msg) => msg.text)
+      .map((msg) => {
+        // busy 路径下，contextText 和消息文本一起作为 system-reminder 注入
+        if (msg.contextText) {
+          return msg.contextText + '\n\n' + msg.text;
+        }
+        return msg.text;
+      })
       .join('\n\n');
 
     ctx.context.add({
@@ -176,7 +198,10 @@ export class GroupChatBridgeFeature implements AgentFeature {
       return;
     }
 
-    // 空闲 → fallback 到 arbiter（起新 call）
+    // 空闲 → 分离上下文，存储待 CallStart 注入为 system-reminder
+    if (msg.contextText) {
+      this.pendingContext = msg.contextText;
+    }
     console.log(`[GroupChatBridge] idle, dispatching via arbiter: ${msg.id}`);
     await this.dispatchViaArbiter(msg, serverOrigin);
   }

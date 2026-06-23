@@ -43,7 +43,18 @@
   let pollTimer = null;
   let isLoading = false;
   let pendingLinks = [];
+  let pendingAttachments = [];  // [{ name, content }]
   let openDropdown = null;
+  let groupMdContent = '';      // GROUP.md 编辑器内容
+  let groupMdLoading = false;   // GROUP.md 是否正在加载
+
+  // ── 按群聊隔离的输入缓存 ─────────────────────────────────────
+  // chatId → { editorHtml, pendingLinks, pendingAttachments }
+  const _chatInputCache = {};
+
+  // 滚动位置保持
+  let _savedMsgScrollTop = 0;       // 跨 DOM 重建保持消息区滚动位置
+  let _shouldScrollToBottom = false; // 进入/切换聊天时滚动到底部
 
   // ── API helpers ─────────────────────────────────────────────
 
@@ -219,7 +230,6 @@
       renderModeDropdown('initiative', initMode),
       renderModeDropdown('autonomy', autoMode),
       '  </div>',
-      '  <button class="wg-icon-btn" data-wg-action="toggle-settings">设置</button>',
       '</div>',
     ].join('');
   }
@@ -279,7 +289,7 @@
       '<div class="wg-awareness">',
       sessions.length > 0 ? `  <div class="wg-awareness-sessions">${sessionItems}</div>` : '',
       `  <div class="wg-awareness-members">${memberChips}</div>`,
-      chat.goal ? `  <div class="wg-awareness-goal">${esc(chat.goal)}</div>` : '',
+      chat.workDir ? `  <div class="wg-awareness-workdir"><code>${esc(chat.workDir)}</code></div>` : '',
       '</div>',
     ].join('');
   }
@@ -327,7 +337,6 @@
     const fromAvatar = fromName.charAt(0);
     const targetRef = msg.mentions?.[0]?.identityRef || msg.routing?.targetIdentityRef;
     const targetName = targetRef ? getIdentityName(targetRef) : '';
-    const targetAvatar = targetName ? targetName.charAt(0) : '?';
     const navTarget = msg.routing?.targetWorkspaceId && msg.routing?.targetSessionId
       ? `${msg.routing.targetWorkspaceId}:${msg.routing.targetSessionId}` : null;
 
@@ -338,12 +347,13 @@
       `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(fromName)}</span> <span class="wg-msg-time">${esc(time)}</span></div>`,
       '    <div class="wg-card dispatch">',
       '      <div class="wg-card-header">',
-      `        <span class="wg-card-arrow-from">${esc(fromName)}</span>`,
-      '        <span class="wg-card-arrow"></span>',
-      `        <span class="wg-card-arrow-to">${esc(targetName)}</span>`,
+      `        <span class="wg-card-mention-from">${esc(fromName)}</span>`,
+      '        <span class="wg-card-mention-at">@</span>',
+      `        <span class="wg-card-mention-to">${esc(targetName)}</span>`,
       '      </div>',
-      '      <div class="wg-card-body">',
-      `        <span class="wg-card-text">${esc((msg.text || '').slice(0, 200))}</span>`,
+      `      <div class="wg-card-body markdown-body">${renderMarkdown((msg.text || '').slice(0, 300))}</div>`,
+      '      <div class="wg-card-footer">',
+      '        <span class="wg-card-status"><span class="wg-card-dot active"></span>进行中</span>',
       navTarget
         ? `        <span class="wg-card-link" data-wg-session-nav="${esc(navTarget)}">查看会话</span>`
         : '',
@@ -414,6 +424,13 @@
         }).join('') + '</div>'
       : '';
 
+    // 附件标签
+    const attachmentsHtml = (Array.isArray(msg.attachments) && msg.attachments.length > 0)
+      ? '<div class="wg-msg-attachments">' + msg.attachments.map((a) => {
+          return `<span class="wg-msg-attachment-tag" title="${esc(a.name)}">${esc(a.name)}</span>`;
+        }).join('') + '</div>'
+      : '';
+
     const avatarLetter = name.charAt(0);
     const bubbleClass = isSummary ? ' summary' : (isAdmin ? ' admin' : '');
 
@@ -423,10 +440,10 @@
         '  <div class="wg-msg-body">',
         `    <div class="wg-msg-meta"><span class="wg-msg-time">${esc(time)}</span></div>`,
         `    <div class="wg-msg-bubble markdown-body${bubbleClass}">${renderMarkdown(msg.text || '')}</div>`,
+        attachmentsHtml,
         linksHtml,
         dispatchHtml,
         '  </div>',
-        `  <div class="wg-msg-avatar">${esc(avatarLetter)}</div>`,
         '</div>',
       ].join('');
     }
@@ -437,6 +454,7 @@
       '  <div class="wg-msg-body">',
       `    <div class="wg-msg-meta">${identityTag} <span class="wg-msg-time">${esc(time)}</span></div>`,
       `    <div class="wg-msg-bubble markdown-body${bubbleClass}">${renderMarkdown(msg.text || '')}</div>`,
+      attachmentsHtml,
       linksHtml,
       sessionLink ? `    <div class="wg-msg-footer">${sessionLink}</div>` : '',
       '  </div>',
@@ -470,22 +488,20 @@
   function renderInputArea() {
     return [
       '<div class="wg-input-area">',
-      '  <div class="wg-input-toolbar">',
-      '    <button class="wg-input-btn" data-wg-action="mention">提及</button>',
-      '    <button class="wg-input-btn" data-wg-action="toggle-links">链接</button>',
+      '  <div class="wg-input-box">',
+      '    <div class="wg-attachment-list" data-wg-role="attachment-list" style="display:none;"></div>',
+      '    <div class="wg-link-list" data-wg-role="link-list"></div>',
+      '    <div class="wg-input-editor" contenteditable="true" data-placeholder="输入消息，使用「@」派发任务"></div>',
+      '    <div class="wg-input-footer">',
+      '      <button class="wg-mention-icon" data-wg-action="mention" title="提及成员">',
+      '        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>',
+      '      </button>',
+      '      <span class="wg-input-hint">Enter 发送 · Shift+Enter 换行</span>',
+      '      <div class="wg-input-spacer"></div>',
+      '      <button class="wg-send-btn" data-wg-action="send">发送</button>',
+      '    </div>',
       '  </div>',
       renderMentionPicker(),
-      '  <div class="wg-links-area" data-wg-role="links-area" style="display:none;">',
-      '    <input type="text" class="wg-link-input" data-wg-role="link-url" placeholder="参考链接 URL" />',
-      '    <input type="text" class="wg-link-input" data-wg-role="link-desc" placeholder="描述（可选）" />',
-      '    <button class="wg-link-add-btn" data-wg-action="add-link">添加</button>',
-      '  </div>',
-      '  <div class="wg-link-list" data-wg-role="link-list"></div>',
-      '  <div class="wg-input-editor" contenteditable="true" data-placeholder="输入消息，使用「提及」派发任务"></div>',
-      '  <div class="wg-input-footer">',
-      '    <span class="wg-input-hint">Enter 发送 / Shift+Enter 换行</span>',
-      '    <button class="wg-send-btn" data-wg-action="send">发送</button>',
-      '  </div>',
       '</div>',
     ].join('');
   }
@@ -518,34 +534,46 @@
       '<div class="wg-settings-panel">',
       '  <div class="wg-settings-section">',
       '    <div class="wg-settings-section-title">群信息</div>',
-      `    <div class="wg-settings-field"><label>群名称</label><input type="text" value="${esc(chat.name)}" class="wg-settings-input" data-wg-field="name" /></div>`,
-      `    <div class="wg-settings-field"><label>群目标</label><textarea class="wg-settings-input" data-wg-field="goal">${esc(chat.goal || '')}</textarea></div>`,
+      `    <div class="wg-settings-field"><label>群名称</label><input type="text" value="${esc(chat.name)}" class="wg-settings-input" onchange="window._wgSettingsChange('name', this.value)" /></div>`,
+      `    <div class="wg-settings-field"><label>工作目录</label>`,
+      `      <div class="wg-workdir-row">`,
+      `        <code class="wg-workdir-path">${esc(chat.workDir || '未设置')}</code>`,
+      `        <button class="wg-modal-btn" onclick="window._wgChangeWorkDir()">更改</button>`,
+      `      </div>`,
+      `    </div>`,
+      '  </div>',
+      `  <div class="wg-settings-section">`,
+      `    <div class="wg-settings-section-title">群聊背景文档 (GROUP.md)</div>`,
+      `    <div class="wg-settings-field">`,
+      `      <textarea class="wg-settings-input wg-md-editor" data-wg-role="group-md-editor" oninput="window._wgMdAutoSave()" placeholder="${esc(chat.workDir ? '在此编写群聊的背景、目标、约定和关键资源…' : '请先设置工作目录')}">${esc(groupMdLoading ? '加载中…' : groupMdContent)}</textarea>`,
+      `      <div class="wg-md-save-status" data-wg-role="md-save-status">自动保存</div>`,
+      `    </div>`,
       '  </div>',
       '  <div class="wg-settings-section">',
       '    <div class="wg-settings-section-title">模式设置</div>',
-      `    <div class="wg-settings-field"><label>主动性模式</label><select class="wg-settings-input" data-wg-field="initiativeMode">${initiativeOptions}</select></div>`,
-      `    <div class="wg-settings-field"><label>自决权模式</label><select class="wg-settings-input" data-wg-field="autonomyMode">${autonomyOptions}</select></div>`,
+      `    <div class="wg-settings-field"><label>主动性模式</label><select class="wg-settings-input" onchange="window._wgSettingsChange('initiativeMode', this.value)">${initiativeOptions}</select></div>`,
+      `    <div class="wg-settings-field"><label>自决权模式</label><select class="wg-settings-input" onchange="window._wgSettingsChange('autonomyMode', this.value)">${autonomyOptions}</select></div>`,
       '  </div>',
       '  <div class="wg-settings-section">',
       '    <div class="wg-settings-section-title">管理员记忆</div>',
       '    <div class="wg-settings-field"><label>记忆范围</label>',
-      `      <select class="wg-settings-input" data-wg-field="memoryRange">`,
+      `      <select class="wg-settings-input" onchange="window._wgSettingsChange('memoryRange', this.value)">`,
       `        <option value="1d"${(chat.adminMemory?.range || '3d') === '1d' ? ' selected' : ''}>最近 1 天</option>`,
       `        <option value="3d"${(chat.adminMemory?.range || '3d') === '3d' ? ' selected' : ''}>最近 3 天</option>`,
       `        <option value="1w"${(chat.adminMemory?.range || '3d') === '1w' ? ' selected' : ''}>最近 1 周</option>`,
       `        <option value="all"${(chat.adminMemory?.range || '3d') === 'all' ? ' selected' : ''}>全部记录</option>`,
       `      </select></div>`,
       '    <div class="wg-settings-field"><label>上下文限制</label>',
-      `      <select class="wg-settings-input" data-wg-field="memoryLimitMode">`,
+      `      <select class="wg-settings-input" onchange="window._wgSettingsChange('memoryLimitMode', this.value)">`,
       `        <option value="tokens"${(chat.adminMemory?.limitMode || 'tokens') === 'tokens' ? ' selected' : ''}>按 token 数</option>`,
       `        <option value="ratio"${(chat.adminMemory?.limitMode || 'tokens') === 'ratio' ? ' selected' : ''}>按比例 (%)</option>`,
       `      </select></div>`,
-      `    <div class="wg-settings-field"><label>限制值</label><input type="number" value="${chat.adminMemory?.limitValue ?? 8000}" class="wg-settings-input" data-wg-field="memoryLimitValue" /></div>`,
+      `    <div class="wg-settings-field"><label>限制值</label><input type="number" value="${chat.adminMemory?.limitValue ?? 100000}" class="wg-settings-input" onchange="window._wgSettingsChange('memoryLimitValue', this.value)" /></div>`,
       '  </div>',
       '  <div class="wg-settings-section">',
       '    <div class="wg-settings-section-title">管理员模型</div>',
       '    <div class="wg-settings-field"><label>模型预设</label>',
-      '      <select class="wg-settings-input" data-wg-field="admin-model" data-wg-role="admin-model-select"><option value="">加载中</option></select>',
+      `      <select class="wg-settings-input" onchange="window._wgSettingsChange('admin-model', this.value)" data-wg-role="admin-model-select"><option value="">加载中</option></select>`,
       '    </div>',
       '  </div>',
       '  <div class="wg-settings-section">',
@@ -553,7 +581,7 @@
       memberRows,
       '  </div>',
       '  <div class="wg-settings-section wg-settings-danger">',
-      '    <button class="wg-btn-danger" data-wg-action="dissolve-chat">解散此群聊</button>',
+      `    <button class="wg-btn-danger" onclick="window._wgDissolve()">解散此群聊</button>`,
       '  </div>',
       '</div>',
     ].join('');
@@ -571,22 +599,6 @@
     if (!activeChatId) return renderEmptyConversation();
     if (!activeChat) return '<div class="wg-conversation-empty"><p>加载中</p></div>';
 
-    if (viewMode === 'settings') {
-      return [
-        '<div class="wg-conversation">',
-        '  <div class="wg-conv-header">',
-        `    <span class="wg-conv-title">${esc(activeChat.name)} — 设置</span>`,
-        '    <div class="wg-conv-actions">',
-        '      <button class="wg-icon-btn" data-wg-action="back-to-chat">返回</button>',
-        '    </div>',
-        '  </div>',
-        '<div class="wg-settings-scroll">',
-        renderSettingsPanel(activeChat),
-        '</div>',
-        '</div>',
-      ].join('');
-    }
-
     return [
       '<div class="wg-conversation">',
       renderGroupHeader(activeChat),
@@ -600,7 +612,22 @@
   // ── 整体 workspace surface ─────────────────────────────────
 
   function renderWorkGroupSurface() {
-    return [
+    // 外层 renderCurrentMainView() 重建 DOM 前，保存消息区滚动位置
+    const existingScroll = document.querySelector('.wg-msg-scroll');
+    const scrollExistsInDom = !!existingScroll;
+    if (existingScroll) {
+      _savedMsgScrollTop = existingScroll.scrollTop;
+    }
+
+    // 保存输入框内容和焦点状态（DOM 重建后会丢失）
+    const existingEditor = document.querySelector('.wg-input-editor');
+    const savedEditorHtml = existingEditor ? existingEditor.innerHTML : null;
+    const savedEditorFocus = existingEditor ? (existingEditor === document.activeElement) : false;
+    // 保存搜索框焦点
+    const existingSearch = document.querySelector('[data-wg-role="search"]');
+    const savedSearchFocus = existingSearch ? (existingSearch === document.activeElement) : false;
+
+    const html = [
       '<div class="wg-app">',
       '  <div class="wg-sidebar">',
       '    <div class="wg-sidebar-header">',
@@ -614,6 +641,52 @@
       '  <div class="wg-main" data-wg-role="main">' + renderConversation() + '</div>',
       '</div>',
     ].join('');
+
+    // DOM 更新后恢复滚动位置、输入框内容和焦点
+    requestAnimationFrame(() => {
+      // 恢复滚动位置
+      const newScroll = document.querySelector('.wg-msg-scroll');
+      if (newScroll) {
+        if (_shouldScrollToBottom) {
+          _shouldScrollToBottom = false;
+          newScroll.scrollTop = newScroll.scrollHeight;
+        } else if (scrollExistsInDom && _savedMsgScrollTop > 0) {
+          newScroll.scrollTop = _savedMsgScrollTop;
+        } else {
+          newScroll.scrollTop = newScroll.scrollHeight;
+        }
+      }
+
+      // 恢复输入框内容和焦点
+      if (savedEditorHtml !== null) {
+        const newEditor = document.querySelector('.wg-input-editor');
+        if (newEditor && newEditor.innerHTML !== savedEditorHtml) {
+          newEditor.innerHTML = savedEditorHtml;
+        }
+        if (savedEditorFocus && newEditor) {
+          newEditor.focus();
+          // 将光标移到末尾
+          const range = document.createRange();
+          range.selectNodeContents(newEditor);
+          range.collapse(false);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      }
+
+      // 恢复搜索框焦点
+      if (savedSearchFocus) {
+        const newSearch = document.querySelector('[data-wg-role="search"]');
+        if (newSearch) newSearch.focus();
+      }
+
+      // 恢复附件列表和链接列表
+      renderAttachmentList();
+      renderLinkList();
+    });
+
+    return html;
   }
 
   // ── 局部刷新 ────────────────────────────────────────────────
@@ -621,8 +694,30 @@
   function refreshMain() {
     const main = document.querySelector('[data-wg-role="main"]');
     if (main) {
+      // 保存滚动位置（DOM 重建前）
+      const scroll = main.querySelector('.wg-msg-scroll');
+      const savedTop = scroll ? scroll.scrollTop : 0;
+      const scrollExists = !!scroll;
+
       main.innerHTML = renderConversation();
       if (typeof enhanceMathInElement === 'function') enhanceMathInElement(main);
+      // DOM 重建后恢复附件列表和链接列表（pendingAttachments/pendingLinks 是模块级变量，不会因重渲染丢失）
+      renderAttachmentList();
+      renderLinkList();
+
+      // 恢复滚动位置（DOM 重建后）
+      const newScroll = main.querySelector('.wg-msg-scroll');
+      if (newScroll) {
+        if (_shouldScrollToBottom) {
+          _shouldScrollToBottom = false;
+          newScroll.scrollTop = newScroll.scrollHeight;
+        } else if (scrollExists) {
+          newScroll.scrollTop = savedTop;
+        } else {
+          // 退出再进入场景：滚动到底部
+          newScroll.scrollTop = newScroll.scrollHeight;
+        }
+      }
     }
   }
 
@@ -632,7 +727,12 @@
     const wasNearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
     scroll.innerHTML = renderMessageList(activeChat);
     if (typeof enhanceMathInElement === 'function') enhanceMathInElement(scroll);
-    if (wasNearBottom) scroll.scrollTop = scroll.scrollHeight;
+    if (_shouldScrollToBottom) {
+      _shouldScrollToBottom = false;
+      scroll.scrollTop = scroll.scrollHeight;
+    } else if (wasNearBottom) {
+      scroll.scrollTop = scroll.scrollHeight;
+    }
   }
 
   function refreshHeaderAndMessages() {
@@ -688,18 +788,76 @@
     }
   }
 
+  // ── 输入缓存 save/load ────────────────────────────────────────
+
+  function _saveCurrentDraft(chatId) {
+    if (!chatId) return;
+    const editor = document.querySelector('.wg-input-editor');
+    const html = editor ? editor.innerHTML : '';
+    _chatInputCache[chatId] = {
+      editorHtml: html,
+      pendingLinks: pendingLinks.slice(),
+      pendingAttachments: pendingAttachments.slice(),
+    };
+  }
+
+  function _loadDraft(chatId) {
+    const cached = _chatInputCache[chatId];
+    if (cached) {
+      pendingLinks = cached.pendingLinks.slice();
+      pendingAttachments = cached.pendingAttachments.slice();
+    } else {
+      pendingLinks = [];
+      pendingAttachments = [];
+    }
+  }
+
+  function _restoreEditorFromDraft(chatId) {
+    const cached = _chatInputCache[chatId];
+    const editor = document.querySelector('.wg-input-editor');
+    if (!editor) return;
+    if (cached && cached.editorHtml) {
+      editor.innerHTML = cached.editorHtml;
+    } else {
+      editor.innerHTML = '';
+    }
+  }
+
   // ── 事件处理 ────────────────────────────────────────────────
 
   async function selectChat(chatId) {
+    // 保存当前群聊的输入草稿
+    if (activeChatId) _saveCurrentDraft(activeChatId);
+
     activeChatId = chatId;
     viewMode = 'chat';
     activeChat = null;
     openDropdown = null;
+    _shouldScrollToBottom = true;
     refreshChatList();
+
+    // 加载目标群聊的草稿
+    _loadDraft(chatId);
+
     refreshMain();
     await loadActiveChat();
+    _shouldScrollToBottom = true;
     refreshMain();
     scrollToBottom();
+
+    // 恢复编辑器内容和附件/链接列表
+    _restoreEditorFromDraft(chatId);
+    renderAttachmentList();
+    renderLinkList();
+
+    // 刷新 Files 面板（如果正打开着）
+    if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'files' && typeof loadFilesPanelResources === 'function') {
+      loadFilesPanelResources();
+    }
+    // 刷新 Settings 面板（如果正打开着）
+    if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'settings' && typeof window._wgSettingsRefresh === 'function') {
+      window._wgSettingsRefresh();
+    }
   }
 
   async function handleSend() {
@@ -719,16 +877,23 @@
 
     editor.textContent = '';
     editor.focus();
+    // 清空当前群聊的草稿缓存
+    delete _chatInputCache[activeChatId];
 
     const links = pendingLinks.slice();
     pendingLinks = [];
     renderLinkList();
+
+    const attachments = pendingAttachments.slice();
+    pendingAttachments = [];
+    renderAttachmentList();
 
     try {
       await apiPost(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/messages`, {
         text,
         mentions,
         links: links.length > 0 ? links : undefined,
+        attachments: attachments.length > 0 ? attachments : undefined,
       });
       await loadActiveChat();
       refreshHeaderAndMessages();
@@ -768,7 +933,23 @@
     if (!list) return;
     if (pendingLinks.length === 0) { list.innerHTML = ''; return; }
     list.innerHTML = pendingLinks.map((l, i) => {
-      return `<div class="wg-link-entry"><span class="wg-link-entry-url">${esc(l.url)}</span>${l.description ? ` <span class="wg-link-entry-desc">${esc(l.description)}</span>` : ''}<button class="wg-link-remove" data-wg-action="remove-link" data-wg-link-index="${i}">&#10005;</button></div>`;
+      return `<div class="wg-link-chip"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span class="wg-link-chip-text">${esc(l.description || l.url)}</span><button class="wg-chip-remove" data-wg-action="remove-link" data-wg-link-index="${i}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div>`;
+    }).join('');
+  }
+
+  function renderAttachmentList() {
+    const list = document.querySelector('[data-wg-role="attachment-list"]');
+    if (!list) return;
+    if (pendingAttachments.length === 0) {
+      list.innerHTML = '';
+      list.style.display = 'none';
+      return;
+    }
+    list.style.display = 'flex';
+    list.innerHTML = pendingAttachments.map((a, i) => {
+      const displayName = a.name.length > 28 ? a.name.slice(0, 26) + '...' : a.name;
+      const ext = (a.name.split('.').pop() || '').toUpperCase().slice(0, 4);
+      return `<div class="wg-attachment-chip" title="${esc(a.name)}"><span class="wg-attachment-chip-ext">${esc(ext)}</span><span class="wg-attachment-chip-name">${esc(displayName)}</span><button class="wg-chip-remove" data-wg-action="remove-attachment" data-wg-attachment-index="${i}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div>`;
     }).join('');
   }
 
@@ -827,16 +1008,15 @@
     try {
       const body = {};
       if (field === 'name') body.name = value;
-      else if (field === 'goal') body.goal = value;
       else if (field === 'initiativeMode') body.initiativeMode = value;
       else if (field === 'autonomyMode') body.autonomyMode = value;
       else if (field === 'memoryRange' || field === 'memoryLimitMode' || field === 'memoryLimitValue') {
         // 合并当前 adminMemory 设置后整体提交
-        const cur = activeChat?.adminMemory || { range: '3d', limitMode: 'tokens', limitValue: 8000 };
+        const cur = activeChat?.adminMemory || { range: '3d', limitMode: 'tokens', limitValue: 100000 };
         const merged = { ...cur };
         if (field === 'memoryRange') merged.range = value;
         else if (field === 'memoryLimitMode') merged.limitMode = value;
-        else if (field === 'memoryLimitValue') merged.limitValue = parseInt(value) || 8000;
+        else if (field === 'memoryLimitValue') merged.limitValue = parseInt(value) || 100000;
         body.adminMemory = merged;
       }
       else if (field === 'admin-model') {
@@ -851,6 +1031,75 @@
       }
     } catch (err) {
       console.error('[WorkGroup] settings save failed:', err);
+    }
+  }
+
+  async function loadGroupMd() {
+    if (!activeChatId) return;
+    groupMdLoading = true;
+    if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
+    try {
+      const data = await apiGet(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/group_md`);
+      groupMdContent = data.content || '';
+    } catch (err) {
+      console.error('[WorkGroup] load GROUP.md failed:', err);
+      groupMdContent = '';
+    }
+    groupMdLoading = false;
+    if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
+  }
+
+  async function saveGroupMd() {
+    if (!activeChatId) return;
+    const editor = document.querySelector('[data-wg-role="group-md-editor"]');
+    if (!editor) return;
+    const content = editor.value;
+    try {
+      await apiPut(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/group_md`, { content });
+      groupMdContent = content;
+      _setMdSaveStatus('已保存');
+    } catch (err) {
+      console.error('[WorkGroup] save GROUP.md failed:', err);
+      _setMdSaveStatus('保存失败');
+    }
+  }
+
+  let _mdAutoSaveTimer = null;
+  function _wgMdAutoSave() {
+    _setMdSaveStatus('保存中…');
+    if (_mdAutoSaveTimer) clearTimeout(_mdAutoSaveTimer);
+    _mdAutoSaveTimer = setTimeout(() => {
+      _mdAutoSaveTimer = null;
+      saveGroupMd();
+    }, 800);
+  }
+
+  function _setMdSaveStatus(text) {
+    const el = document.querySelector('[data-wg-role="md-save-status"]');
+    if (el) {
+      el.textContent = text;
+      el.classList.toggle('error', text === '保存失败');
+      el.classList.toggle('saved', text === '已保存');
+    }
+  }
+
+  async function changeWorkDir() {
+    if (!activeChatId) return;
+    try {
+      const result = await invoke('select_directory');
+      if (!result || result.cancelled || !result.path) return;
+      activeChat = await apiPut(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}`, {
+        workDir: result.path,
+      });
+      await loadChatSummaries();
+      refreshChatList();
+      refreshMain();
+      // 刷新 settings 面板（工作目录已变更）
+      if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
+      // workDir 变了，重新加载 GROUP.md
+      await loadGroupMd();
+    } catch (err) {
+      console.error('[WorkGroup] change workDir failed:', err);
     }
   }
 
@@ -898,6 +1147,11 @@
       await loadChatSummaries();
       refreshChatList();
       refreshMain();
+      // 关闭 settings 面板
+      if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'settings') {
+        activeFeaturePanel = null;
+        if (typeof renderFeaturePanel === 'function') renderFeaturePanel();
+      }
     } catch (err) {
       console.error('[WorkGroup] dissolve chat failed:', err);
       alert('解散群聊失败');
@@ -923,6 +1177,11 @@
     <div class="wg-modal">
       <div class="wg-modal-title">新建群聊</div>
       <input type="text" class="wg-modal-input" data-wg-role="new-chat-name" placeholder="群聊名称" />
+      <div class="wg-modal-section-title">工作目录（知识库根目录）</div>
+      <div class="wg-modal-dir-row">
+        <input type="text" class="wg-modal-input wg-modal-dir-display" data-wg-role="new-chat-workdir" placeholder="点击右侧按钮选择项目目录" readonly />
+        <button class="wg-modal-btn" data-wg-action="pick-workdir">选择</button>
+      </div>
       <div class="wg-modal-section-title">选择成员</div>
       <div class="wg-modal-identity-list">${identityCheckboxes}</div>
       <div class="wg-modal-actions">
@@ -932,9 +1191,22 @@
     </div>`;
     document.body.appendChild(modal);
 
+    modal.querySelector('[data-wg-action="pick-workdir"]').addEventListener('click', async () => {
+      try {
+        const result = await invoke('select_directory');
+        if (result && !result.cancelled && result.path) {
+          modal.querySelector('[data-wg-role="new-chat-workdir"]').value = result.path;
+        }
+      } catch (err) {
+        console.error('[WorkGroup] directory pick failed:', err);
+      }
+    });
+
     modal.querySelector('[data-wg-action="confirm-new-chat"]').addEventListener('click', async () => {
       const name = modal.querySelector('[data-wg-role="new-chat-name"]').value.trim();
       if (!name) return;
+
+      const workDir = modal.querySelector('[data-wg-role="new-chat-workdir"]').value.trim() || null;
 
       const selected = Array.from(modal.querySelectorAll('input[type="checkbox"]:checked'))
         .map((cb) => cb.value);
@@ -947,7 +1219,7 @@
       document.body.removeChild(modal);
 
       try {
-        const chat = await apiPost('/protoclaw/group_chats', { name, members });
+        const chat = await apiPost('/protoclaw/group_chats', { name, workDir, members });
         await loadChatSummaries();
         refreshChatList();
         await selectChat(chat.id);
@@ -979,15 +1251,6 @@
       const act = action.dataset.wgAction;
 
       if (act === 'new-chat') { handleNewChat(); return; }
-      if (act === 'toggle-settings') {
-        viewMode = viewMode === 'settings' ? 'chat' : 'settings';
-        openDropdown = null;
-        refreshMain();
-        if (viewMode === 'settings') loadAdminModelOptions();
-        return;
-      }
-      if (act === 'back-to-chat') { viewMode = 'chat'; refreshMain(); return; }
-      if (act === 'dissolve-chat') { handleDissolveChat(); return; }
       if (act === 'mention') { toggleMentionPicker(); return; }
       if (act === 'toggle-links') { toggleLinksArea(); return; }
       if (act === 'add-link') { addLink(); return; }
@@ -997,6 +1260,7 @@
         return;
       }
       if (act === 'cancel-new-chat') return;
+      if (act === 'pick-workdir') return; // handled by modal-specific listener
     }
 
     const removeLink = e.target.closest('[data-wg-action="remove-link"]');
@@ -1004,6 +1268,14 @@
       const idx = parseInt(removeLink.dataset.wgLinkIndex);
       pendingLinks.splice(idx, 1);
       renderLinkList();
+      return;
+    }
+
+    const removeAtt = e.target.closest('[data-wg-action="remove-attachment"]');
+    if (removeAtt) {
+      const idx = parseInt(removeAtt.dataset.wgAttachmentIndex);
+      pendingAttachments.splice(idx, 1);
+      renderAttachmentList();
       return;
     }
 
@@ -1039,21 +1311,10 @@
       refreshChatList();
       return;
     }
-
-    const field = e.target.closest('[data-wg-field]');
-    if (field) {
-      const fieldName = field.dataset.wgField;
-      if (fieldName === 'admin-model') {
-        saveAdminModel(field.value);
-      }
-    }
   }
 
   function onContainerChange(e) {
-    const field = e.target.closest('[data-wg-field]');
-    if (field) {
-      handleSettingsFieldChange(field.dataset.wgField, field.value);
-    }
+    // settings fields now use inline onchange handlers
   }
 
   function onContainerKeyDown(e) {
@@ -1062,6 +1323,51 @@
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    }
+  }
+
+  // ── 拖拽：接收 Files 面板的文件 ───────────────────────────────
+
+  function onContainerDragOver(e) {
+    // 只处理来自 Files 面板的拖拽
+    if (!e.dataTransfer?.types?.includes('application/x-claw-resource')) return;
+    const inputArea = e.target.closest('.wg-input-area');
+    if (!inputArea) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    inputArea.classList.add('dragover');
+  }
+
+  function onContainerDragLeave(e) {
+    const inputArea = e.target.closest('.wg-input-area');
+    if (!inputArea) return;
+    // 只在真正离开 inputArea 时移除样式
+    if (!inputArea.contains(e.relatedTarget)) {
+      inputArea.classList.remove('dragover');
+    }
+  }
+
+  async function onContainerDrop(e) {
+    const inputArea = e.target.closest('.wg-input-area');
+    if (!inputArea) return;
+    const name = e.dataTransfer?.getData('application/x-claw-resource');
+    if (!name) return;
+    e.preventDefault();
+    inputArea.classList.remove('dragover');
+
+    // 从 Files 面板获取文件内容
+    const chatId = activeChatId;
+    if (!chatId) return;
+    try {
+      const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(name)}`);
+      const data = await res.json();
+      // 检查是否已存在同名附件
+      if (!pendingAttachments.find(a => a.name === name)) {
+        pendingAttachments.push({ name, content: data.content || '' });
+        renderAttachmentList();
+      }
+    } catch (err) {
+      console.error('[WorkGroup] drop attachment failed:', err);
     }
   }
 
@@ -1079,13 +1385,57 @@
 
   // ── 对外接口 ────────────────────────────────────────────────
 
+  function deactivate() {
+    // 离开工作空间前保存当前群聊的输入草稿
+    if (activeChatId) _saveCurrentDraft(activeChatId);
+    stopPolling();
+    pendingLinks = [];
+    pendingAttachments = [];
+    openDropdown = null;
+  }
+
+  // ── 全局暴露：Settings 面板（右侧边栏） ──────────────────────
+
+  window._wgGetSettingsHtml = function () {
+    if (!activeChat) return '<div class="feature-panel-empty"><div>请先选择一个群聊。</div></div>';
+    return renderSettingsPanel(activeChat);
+  };
+
+  window._wgSettingsInit = async function () {
+    if (!activeChatId) return;
+    await Promise.all([loadAdminModelOptions(), loadGroupMd()]);
+  };
+
+  window._wgSettingsRefresh = function () {
+    if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'settings' && typeof renderFeaturePanel === 'function') {
+      renderFeaturePanel();
+    }
+  };
+
+  window._wgSettingsChange = async function (field, value) {
+    await handleSettingsFieldChange(field, value);
+    // 字段变更后刷新 settings 面板，让 UI 同步
+    window._wgSettingsRefresh();
+  };
+
+  window._wgMdAutoSave = _wgMdAutoSave;
+  window._wgChangeWorkDir = changeWorkDir;
+  window._wgDissolve = handleDissolveChat;
+
   window.WorkGroupUI = {
     render: renderWorkGroupSurface,
     onContainerClick,
     onContainerInput,
     onContainerChange,
     onContainerKeyDown,
+    onContainerDragOver,
+    onContainerDragLeave,
+    onContainerDrop,
     init,
     destroy: stopPolling,
+    deactivate,
+    startPolling,
+    getActiveChatId: () => activeChatId,
+    getActiveChat: () => activeChat,
   };
 })();

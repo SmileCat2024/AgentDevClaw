@@ -183,9 +183,15 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
   var isZh = currentLanguage === 'zh';
   var generated = false;
   var originalContent = btnElement.innerHTML;
+  var toastId = 'title-gen-' + sessionId;
   btnElement.innerHTML = '<span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + (isZh ? '生成中...' : 'Generating...') + '</span>';
   btnElement.classList.add('loading');
   btnElement.disabled = true;
+  ClawToast.show({
+    id: toastId,
+    title: isZh ? '正在生成标题...' : 'Generating title...',
+    status: 'loading',
+  });
   
   // Set generating flag to prevent closing
   if (btnElement._setGenerating) {
@@ -228,10 +234,25 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
         if (target) target.title = result.title;
       }
       generated = true;
+      ClawToast.update(toastId, {
+        status: 'success',
+        title: isZh ? '标题已生成' : 'Title generated',
+        description: result.title,
+      });
+    } else {
+      ClawToast.update(toastId, {
+        status: 'error',
+        title: isZh ? '生成标题失败' : 'Title generation failed',
+        description: isZh ? '未返回有效标题' : 'No valid title returned',
+      });
     }
   } catch (error) {
     console.error('Failed to generate session title:', error);
-    window.alert((isZh ? '生成标题失败: ' : 'Failed to generate title: ') + (error.message || error));
+    ClawToast.update(toastId, {
+      status: 'error',
+      title: isZh ? '生成标题失败' : 'Title generation failed',
+      description: error.message || String(error),
+    });
   } finally {
     btnElement.innerHTML = originalContent;
     btnElement.classList.remove('loading');

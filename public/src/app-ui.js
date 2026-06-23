@@ -5657,6 +5657,22 @@ function _ensureWorkGroupEventDelegation() {
       window.WorkGroupUI.onContainerKeyDown(e);
     }
   });
+  // 拖拽事件：从 Files 面板拖文件到输入区
+  container.addEventListener('dragover', (e) => {
+    if (window.WorkGroupUI && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerDragOver(e);
+    }
+  });
+  container.addEventListener('dragleave', (e) => {
+    if (window.WorkGroupUI && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerDragLeave(e);
+    }
+  });
+  container.addEventListener('drop', (e) => {
+    if (window.WorkGroupUI && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerDrop(e);
+    }
+  });
 }
 
 function renderWorkspaceBlock(agent, block) {
@@ -5744,6 +5760,48 @@ function isEditingWorkspaceForm() {
 
 function renderCurrentMainView() {
   const agent = getCurrentAgentRecord();
+  // ── 根据表面类型控制 rail button 可见性 ──
+  const isWorkGroup = !!(agent && agent.id === 'work-group');
+  const inChat = isChatSurfaceActive(agent);
+  // 调试类面板（workspace/monitor/hooks/inspector/logs/mcp）只在 AI 对话时显示
+  // files 面板只在群聊工作空间显示
+  railButtons.forEach(btn => {
+    const panel = btn.dataset.panel;
+    if (!panel) return; // 工具按钮（语言/主题/设置）始终显示
+    if (panel === 'files' || panel === 'settings') {
+      btn.style.display = isWorkGroup ? '' : 'none';
+    } else {
+      btn.style.display = inChat ? '' : 'none';
+    }
+  });
+  // 离开 AI 对话时关闭调试类面板
+  if (!inChat && activeFeaturePanel && activeFeaturePanel !== 'files' && activeFeaturePanel !== 'settings') {
+    activeFeaturePanel = null;
+  }
+  // 离开 group chat workspace 时清理状态
+  if (!isWorkGroup) {
+    if (activeFeaturePanel === 'files' || activeFeaturePanel === 'settings') activeFeaturePanel = null;
+    if (window._wgActive && typeof window.WorkGroupUI?.deactivate === 'function') {
+      window.WorkGroupUI.deactivate();
+      window._wgActive = false;
+    }
+    // 清空 Files 面板缓存
+    _filesPanelResources = [];
+    _filesPanelSelected = null;
+    _filesPanelContent = '';
+    _filesPanelLoadedChatId = null;
+    _filesPanelView = 'list';
+  } else {
+    // 重新进入 group chat workspace 时恢复轮询
+    if (!window._wgActive && window.WorkGroupUI) {
+      window._wgActive = true;
+      if (typeof window.WorkGroupUI.startPolling === 'function') {
+        window.WorkGroupUI.startPolling();
+      }
+    } else {
+      window._wgActive = true;
+    }
+  }
   ensureChatViewportObservers();
   renderWorkspaceTabs(agent);
   renderInputRequests(currentInputRequests);
@@ -7408,6 +7466,9 @@ function updateSummaryOverlayDOM(data) {
 }
 
 function openSummaryPopup(agentId, sessionId) {
+  const _isZh = currentLanguage === 'zh';
+  const _toastId = 'summary-' + sessionId;
+  let _toastActive = false;
   summaryPopupData = { agentId, sessionId, loading: true, generating: false, data: null, error: null };
   updateSummaryOverlayDOM(summaryPopupData);
   fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId))
@@ -7417,6 +7478,12 @@ function openSummaryPopup(agentId, sessionId) {
           summaryPopupData.generating = true;
           updateSummaryOverlayDOM(summaryPopupData);
         }
+        _toastActive = true;
+        ClawToast.show({
+          id: _toastId,
+          title: _isZh ? '正在生成会话摘要...' : 'Generating session summary...',
+          status: 'loading',
+        });
         return fetch('/protoclaw/session_generate_summary', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -7442,6 +7509,12 @@ function openSummaryPopup(agentId, sessionId) {
         updateSummaryOverlayDOM(summaryPopupData);
       }
       loadAgents().catch(() => {});
+      if (_toastActive) {
+        ClawToast.update(_toastId, {
+          status: 'success',
+          title: _isZh ? '摘要已生成' : 'Summary generated',
+        });
+      }
     })
     .catch(err => {
       if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
@@ -7449,6 +7522,13 @@ function openSummaryPopup(agentId, sessionId) {
         summaryPopupData.generating = false;
         summaryPopupData.error = err.message;
         updateSummaryOverlayDOM(summaryPopupData);
+      }
+      if (_toastActive) {
+        ClawToast.update(_toastId, {
+          status: 'error',
+          title: _isZh ? '摘要生成失败' : 'Summary generation failed',
+          description: err.message || String(err),
+        });
       }
     });
 }
@@ -7465,8 +7545,15 @@ window.closeSummaryPopup = closeSummaryPopup;
 function regenerateSummary() {
   if (!summaryPopupData) return;
   const { agentId, sessionId } = summaryPopupData;
+  const _isZh = currentLanguage === 'zh';
+  const _toastId = 'summary-regen-' + sessionId;
   summaryPopupData = { agentId, sessionId, loading: true, generating: true, data: null, error: null };
   updateSummaryOverlayDOM(summaryPopupData);
+  ClawToast.show({
+    id: _toastId,
+    title: _isZh ? '正在重新生成摘要...' : 'Regenerating summary...',
+    status: 'loading',
+  });
   fetch('/protoclaw/session_generate_summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -7483,6 +7570,10 @@ function regenerateSummary() {
         updateSummaryOverlayDOM(summaryPopupData);
       }
       loadAgents().catch(() => {});
+      ClawToast.update(_toastId, {
+        status: 'success',
+        title: _isZh ? '摘要已重新生成' : 'Summary regenerated',
+      });
     })
     .catch(err => {
       if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
@@ -7491,6 +7582,11 @@ function regenerateSummary() {
         summaryPopupData.error = err.message;
         updateSummaryOverlayDOM(summaryPopupData);
       }
+      ClawToast.update(_toastId, {
+        status: 'error',
+        title: _isZh ? '摘要生成失败' : 'Summary generation failed',
+        description: err.message || String(err),
+      });
     });
 }
 
@@ -7903,6 +7999,336 @@ function renderReverseHooksPanel() {
   ].join('');
 }
 
+// ── Files Panel (群聊资源文件) ────────────────────────────────────
+
+let _filesPanelResources = [];
+let _filesPanelSelected = null;   // 文件名
+let _filesPanelContent = '';
+let _filesPanelLoading = false;
+let _filesPanelLoadedChatId = null;
+let _filesPanelView = 'list';     // 'list' | 'detail'
+let _filesPanelPreview = false;   // markdown 预览开关（仅 detail 模式）
+
+/** 检查当前编辑器是否有未保存的修改 */
+function _filesPanelHasUnsaved() {
+  if (!_filesPanelSelected || _filesPanelPreview || _filesPanelView !== 'detail') return false;
+  const ta = document.querySelector('[data-files-role="editor"]');
+  if (!ta) return false;
+  return ta.value !== _filesPanelContent;
+}
+
+async function loadFilesPanelResources() {
+  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+  if (!chatId) {
+    _filesPanelResources = [];
+    _filesPanelSelected = null;
+    _filesPanelContent = '';
+    _filesPanelLoadedChatId = null;
+    _filesPanelView = 'list';
+    return;
+  }
+  // chatId 变了，重置视图到列表层
+  if (_filesPanelLoadedChatId !== chatId) {
+    // 切换群聊前 flush 自动保存
+    if (_filesAutoSaveTimer) {
+      clearTimeout(_filesAutoSaveTimer);
+      _filesAutoSaveTimer = null;
+      const ta = document.querySelector('[data-files-role="editor"]');
+      if (ta) _filesPanelContent = ta.value;
+      saveFileInPanel();
+    }
+    _filesPanelView = 'list';
+    _filesPanelSelected = null;
+    _filesPanelContent = '';
+    _filesPanelResources = []; // 清空旧列表，避免切换群聊时闪现上一个群的文件
+  }
+  _filesPanelLoading = true;
+  renderFeaturePanel();
+  try {
+    const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources`);
+    const data = await res.json();
+    _filesPanelResources = data.resources || [];
+    _filesPanelLoadedChatId = chatId;
+    // 如果当前选中的文件不在列表中，回到列表层
+    if (_filesPanelSelected && !_filesPanelResources.find(r => r.name === _filesPanelSelected)) {
+      _filesPanelSelected = null;
+      _filesPanelContent = '';
+      _filesPanelView = 'list';
+    }
+  } catch (err) {
+    _filesPanelResources = [];
+  }
+  _filesPanelLoading = false;
+  renderFeaturePanel();
+}
+
+async function selectFileInPanel(name) {
+  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+  if (!chatId) return;
+  if (name === _filesPanelSelected && _filesPanelView === 'detail') return;
+  // 自动保存：如果有 pending timer，立即保存当前文件
+  if (_filesAutoSaveTimer) {
+    clearTimeout(_filesAutoSaveTimer);
+    _filesAutoSaveTimer = null;
+    const ta = document.querySelector('[data-files-role="editor"]');
+    if (ta) _filesPanelContent = ta.value;
+    saveFileInPanel();
+  }
+  _filesPanelSelected = name;
+  _filesPanelContent = '';
+  _filesPanelPreview = false;
+  _filesPanelView = 'detail';
+  renderFeaturePanel();
+  try {
+    const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(name)}`);
+    const data = await res.json();
+    _filesPanelContent = data.content || '';
+  } catch (err) {
+    _filesPanelContent = '(加载失败)';
+  }
+  renderFeaturePanel();
+  const ta = document.querySelector('[data-files-role="editor"]');
+  if (ta) ta.focus();
+}
+
+let _filesAutoSaveTimer = null;
+let _filesAutoSaving = false;
+
+function _setFilesSaveStatus(text) {
+  const el = document.querySelector('[data-files-role="save-status"]');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove('saving', 'saved', 'error');
+  if (text === '保存中…') el.classList.add('saving');
+  else if (text === '已保存') el.classList.add('saved');
+  else if (text === '保存失败') el.classList.add('error');
+}
+
+async function saveFileInPanel() {
+  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+  if (!chatId || !_filesPanelSelected) return;
+  const ta = document.querySelector('[data-files-role="editor"]');
+  const content = ta ? ta.value : _filesPanelContent;
+  _filesAutoSaving = true;
+  _setFilesSaveStatus('保存中…');
+  try {
+    await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(_filesPanelSelected)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    _filesPanelContent = content;
+    _setFilesSaveStatus('已保存');
+    // 静默刷新文件列表元数据（size/mtime），不触发视图重渲染
+    const refreshRes = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources`);
+    const refreshData = await refreshRes.json();
+    _filesPanelResources = refreshData.resources || [];
+  } catch (err) {
+    console.error('[FilesPanel] save failed:', err);
+    _setFilesSaveStatus('保存失败');
+  }
+  _filesAutoSaving = false;
+}
+
+function _filesAutoSave() {
+  if (_filesAutoSaveTimer) clearTimeout(_filesAutoSaveTimer);
+  _filesAutoSaveTimer = setTimeout(() => {
+    _filesAutoSaveTimer = null;
+    saveFileInPanel();
+  }, 1000);
+}
+
+async function deleteFileInPanel(name) {
+  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+  if (!chatId) return;
+  try {
+    await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+    if (_filesPanelSelected === name) {
+      _filesPanelSelected = null;
+      _filesPanelContent = '';
+      _filesPanelView = 'list';
+    }
+    await loadFilesPanelResources();
+  } catch (err) {
+    console.error('[FilesPanel] delete failed:', err);
+  }
+}
+
+async function createFileInPanel() {
+  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+  if (!chatId) return;
+  const input = document.querySelector('[data-files-role="new-name"]');
+  const rawName = (input?.value || '').trim();
+  if (!rawName) {
+    if (input) {
+      input.focus();
+      input.classList.add('files-input-error');
+      setTimeout(() => input.classList.remove('files-input-error'), 1500);
+    }
+    return;
+  }
+  const btn = document.querySelector('.files-new-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(rawName)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '' }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      _showFilesPanelError(`创建失败: ${errData.error || 'HTTP ' + res.status}`);
+      return;
+    }
+    const data = await res.json();
+    if (input) input.value = '';
+    // 静默刷新列表
+    const refreshRes = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources`);
+    const refreshData = await refreshRes.json();
+    _filesPanelResources = refreshData.resources || [];
+    _filesPanelLoadedChatId = chatId;
+    // 自动选中新文件，进入详情层
+    if (data.name) {
+      await selectFileInPanel(data.name);
+    } else {
+      renderFeaturePanel();
+    }
+  } catch (err) {
+    _showFilesPanelError(`创建失败: ${err.message || err}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '新建'; }
+  }
+}
+
+function _showFilesPanelError(msg) {
+  const body = document.getElementById('feature-panel-body');
+  if (!body) return;
+  const existing = body.querySelector('.files-panel-error');
+  if (existing) existing.remove();
+  const div = document.createElement('div');
+  div.className = 'files-panel-error';
+  div.textContent = msg;
+  div.style.cssText = 'padding:8px 12px;background:#f44336;color:#fff;font-size:13px;border-radius:4px;margin:8px 12px;';
+  body.prepend(div);
+  setTimeout(() => div.remove(), 5000);
+}
+
+function renderFilesPanel() {
+  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+
+  // 未选择群聊
+  if (!chatId) {
+    return '<div class="feature-panel-empty"><div>请先选择一个群聊。</div></div>';
+  }
+
+  // 检查 workDir（通过 activeChat）
+  const activeChat = window.WorkGroupUI?.getActiveChat?.();
+  if (!activeChat?.workDir) {
+    return '<div class="feature-panel-empty"><div>请先在群聊设置中配置工作目录。</div></div>';
+  }
+
+  // 如果 chatId 变了，重新加载
+  if (_filesPanelLoadedChatId !== chatId && !_filesPanelLoading) {
+    _filesPanelView = 'list';
+    _filesPanelSelected = null;
+    _filesPanelContent = '';
+    loadFilesPanelResources();
+    return '<div class="feature-panel-empty"><div>加载中...</div></div>';
+  }
+
+  if (_filesPanelLoading && _filesPanelResources.length === 0) {
+    return '<div class="feature-panel-empty"><div>加载中...</div></div>';
+  }
+
+  // ── 详情层 ──
+  if (_filesPanelView === 'detail' && _filesPanelSelected) {
+    return _renderFilesDetailView();
+  }
+
+  // ── 列表层 ──
+  return _renderFilesListView();
+}
+
+function _renderFilesListView() {
+  const listHtml = _filesPanelResources.length === 0
+    ? '<div class="files-empty">暂无文件，点击上方新建</div>'
+    : _filesPanelResources.map(r => {
+        const sizeStr = r.size < 1024 ? `${r.size} B` : `${(r.size / 1024).toFixed(1)} KB`;
+        const extClass = `files-ext-${r.ext || 'md'}`;
+        const jsName = r.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        return `<div class="files-item" onclick="window._filesSelect('${jsName}')" draggable="true" data-files-name="${escapeHtml(r.name)}">
+          <div class="files-item-row">
+            <span class="files-item-icon ${extClass}">${escapeHtml(r.ext?.toUpperCase() || 'MD')}</span>
+            <span class="files-item-name">${escapeHtml(r.name)}</span>
+          </div>
+          <div class="files-item-meta">
+            <span>${sizeStr}</span>
+            <button class="files-item-delete" onclick="event.stopPropagation();window._filesDelete('${jsName}')" title="删除">&#10005;</button>
+          </div>
+        </div>`;
+      }).join('');
+
+  return [
+    '<div class="files-panel files-panel-list">',
+    '  <div class="files-toolbar">',
+    '    <div class="files-new-row">',
+    '      <input type="text" class="files-new-input" data-files-role="new-name" placeholder="新建文件名" onkeydown="if(event.key===\'Enter\'){event.preventDefault();window._filesCreate&&window._filesCreate()}" />',
+    '      <button class="files-new-btn" onclick="window._filesCreate?window._filesCreate():alert(\'Files面板未正确加载，请刷新页面\')">新建</button>',
+    '    </div>',
+    '  </div>',
+    `  <div class="files-list">${listHtml}</div>`,
+    '</div>',
+  ].join('');
+}
+
+function _renderFilesDetailView() {
+  const isMd = /\.md$/i.test(_filesPanelSelected);
+  const showPreview = isMd && _filesPanelPreview;
+
+  // 预览模式：渲染 markdown
+  let contentAreaHtml;
+  if (showPreview) {
+    const mdHtml = typeof marked !== 'undefined'
+      ? marked.parse(_filesPanelContent || '')
+      : escapeHtml(_filesPanelContent || '');
+    contentAreaHtml = `<div class="files-detail-preview markdown-body" data-files-role="preview">${mdHtml}</div>`;
+  } else {
+    contentAreaHtml = `<textarea class="files-detail-editor" data-files-role="editor" oninput="window._filesAutoSave()" placeholder="在此编辑文件内容...">${escapeHtml(_filesPanelContent)}</textarea>`;
+  }
+
+  // 单一切换按钮：编辑模式显示"预览"，预览模式显示"编辑"
+  const toggleBtn = isMd
+    ? `<button class="files-toggle-btn${!_filesPanelPreview ? ' active' : ''}" onclick="window._filesTogglePreview()">${_filesPanelPreview ? '编辑' : '预览'}</button>`
+    : '';
+
+  return [
+    '<div class="files-panel files-panel-detail">',
+    '  <div class="files-detail-header">',
+    '    <button class="files-back-btn" onclick="window._filesBack()" title="返回列表">',
+    '      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>',
+    '    </button>',
+    `    <span class="files-detail-title">${escapeHtml(_filesPanelSelected)}</span>`,
+    '    <div class="files-detail-actions">',
+    toggleBtn,
+    `      <span class="files-auto-save-status" data-files-role="save-status"></span>`,
+    '    </div>',
+    '  </div>',
+    `  <div class="files-detail-body">${contentAreaHtml}</div>`,
+    '</div>',
+  ].join('');
+}
+
+// 暴露给 work-group-ui 拖拽使用
+window._filesPanelGetResources = () => _filesPanelResources;
+window._filesPanelGetSelectedContent = () => _filesPanelContent;
+// 暴露给 work-group-ui 切换群聊时检查未保存修改
+window._filesPanelHasUnsaved = _filesPanelHasUnsaved;
+window._filesAutoSave = _filesAutoSave;
+
+// ── Feature Panels 注册 ──────────────────────────────────────────
+
 const featurePanels = {
   workspace: {
     title: () => t('panel_structure'),
@@ -7927,6 +8353,14 @@ const featurePanels = {
   mcp: {
     title: () => t('panel_mcp'),
     render: () => renderMcpPanel(),
+  },
+  files: {
+    title: () => t('panel_files'),
+    render: () => renderFilesPanel(),
+  },
+  settings: {
+    title: () => '群聊设置',
+    render: () => window._wgGetSettingsHtml ? window._wgGetSettingsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
   },
 };
 
@@ -8172,6 +8606,7 @@ function applyLanguage() {
   const inspectorButton = document.getElementById('rail-inspector');
   const logsButton = document.getElementById('rail-logs');
   const mcpButton = document.getElementById('rail-mcp');
+  const filesButton = document.getElementById('rail-files');
 
   if (sidebarToggleEl) sidebarToggleEl.title = t('sidebar_toggle');
   if (panelResizerEl) panelResizerEl.title = t('resize_panel');
@@ -8181,6 +8616,7 @@ function applyLanguage() {
   if (inspectorButton) inspectorButton.title = t('reverse_hooks_tooltip');
   if (logsButton) logsButton.title = t('logs_tooltip');
   if (mcpButton) mcpButton.title = t('mcp_tooltip');
+  if (filesButton) filesButton.title = t('files_tooltip');
 
   if (typeof updateNotificationStatus === 'function' && typeof lastNotificationStatusPayload !== 'undefined' && lastNotificationStatusPayload) {
     updateNotificationStatus(lastNotificationStatusPayload);
@@ -8221,14 +8657,32 @@ function applyTheme(theme) {
 }
 
 function renderFeaturePanel() {
+  // ── 泛化焦点保持：任何 featurePanelBody 内的 input/textarea 都保护 ──
   const activeElement = document.activeElement;
-  const preserveLogSearchFocus = activeFeaturePanel === 'logs' && activeElement && activeElement.classList && activeElement.classList.contains('log-input');
-  const preservedSelectionStart = preserveLogSearchFocus && typeof activeElement.selectionStart === 'number'
-    ? activeElement.selectionStart
-    : null;
-  const preservedSelectionEnd = preserveLogSearchFocus && typeof activeElement.selectionEnd === 'number'
-    ? activeElement.selectionEnd
-    : null;
+  let focusRestore = null;
+  if (activeElement && featurePanelBody.contains(activeElement)) {
+    const tag = activeElement.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') {
+      // 构建 CSS 选择器，在 innerHTML 替换后重新定位元素
+      let selector = tag.toLowerCase();
+      const role = activeElement.getAttribute('data-files-role');
+      const id = activeElement.id;
+      const cls = typeof activeElement.className === 'string' ? activeElement.className.trim() : '';
+      if (role) {
+        selector += `[data-files-role="${role}"]`;
+      } else if (id) {
+        selector += `#${id}`;
+      } else if (cls) {
+        selector += '.' + cls.split(/\s+/).join('.');
+      }
+      focusRestore = {
+        selector,
+        value: activeElement.value,
+        selectionStart: typeof activeElement.selectionStart === 'number' ? activeElement.selectionStart : null,
+        selectionEnd: typeof activeElement.selectionEnd === 'number' ? activeElement.selectionEnd : null,
+      };
+    }
+  }
 
   if (!activeFeaturePanel || !featurePanels[activeFeaturePanel]) {
     featurePanel.classList.remove('open');
@@ -8248,20 +8702,29 @@ function renderFeaturePanel() {
     button.classList.toggle('active', button.dataset.panel === activeFeaturePanel);
   });
 
-  if (preserveLogSearchFocus) {
-    const nextSearchInput = featurePanelBody.querySelector('.log-input');
-    if (nextSearchInput) {
-      nextSearchInput.focus();
-      if (preservedSelectionStart !== null && preservedSelectionEnd !== null && typeof nextSearchInput.setSelectionRange === 'function') {
-        nextSearchInput.setSelectionRange(preservedSelectionStart, preservedSelectionEnd);
+  if (focusRestore) {
+    const el = featurePanelBody.querySelector(focusRestore.selector);
+    if (el) {
+      // 恢复用户正在输入的值（重新渲染的 HTML 可能带有过期值）
+      if (focusRestore.value != null && el.value !== focusRestore.value) {
+        el.value = focusRestore.value;
+      }
+      el.focus();
+      if (focusRestore.selectionStart != null && focusRestore.selectionEnd != null && typeof el.setSelectionRange === 'function') {
+        el.setSelectionRange(focusRestore.selectionStart, focusRestore.selectionEnd);
       }
     }
   }
 }
 
 function toggleFeaturePanel(panelId) {
-  activeFeaturePanel = activeFeaturePanel === panelId ? null : panelId;
+  const wasOpen = activeFeaturePanel === panelId;
+  activeFeaturePanel = wasOpen ? null : panelId;
   renderFeaturePanel();
+  // 初始化钩子：settings 面板首次打开时加载异步数据
+  if (!wasOpen && panelId === 'settings' && window._wgSettingsInit) {
+    window._wgSettingsInit();
+  }
 }
 
 window.setLogPanelScope = async (scope) => {
@@ -8428,9 +8891,63 @@ railButtons.forEach(button => {
       loadLogs(true).catch((error) => console.error('Failed to load logs:', error));
     } else if (button.dataset.panel === 'mcp' && activeFeaturePanel === 'mcp') {
       loadMcpInfo(true).catch((error) => console.error('Failed to load MCP info:', error));
+    } else if (button.dataset.panel === 'files' && activeFeaturePanel === 'files') {
+      loadFilesPanelResources().catch((error) => console.error('Failed to load files:', error));
     }
   });
 });
+
+// Files panel — window 函数（与 logs/mcp 面板 inline onclick 模式一致）
+window._filesSelect = (name) => selectFileInPanel(name);
+window._filesDelete = (name) => {
+  if (confirm(`确定删除「${name}」？`)) deleteFileInPanel(name);
+};
+window._filesSave = () => saveFileInPanel();
+window._filesCreate = () => createFileInPanel();
+window._filesBack = () => {
+  // 自动保存：如果有 pending timer，立即保存
+  const ta = document.querySelector('[data-files-role="editor"]');
+  if (ta) {
+    _filesPanelContent = ta.value;
+    if (_filesAutoSaveTimer) {
+      clearTimeout(_filesAutoSaveTimer);
+      _filesAutoSaveTimer = null;
+      saveFileInPanel();
+    }
+  }
+  _filesPanelView = 'list';
+  renderFeaturePanel();
+};
+window._filesTogglePreview = () => {
+  // 切换前同步编辑器内容到 state 并触发保存
+  const ta = document.querySelector('[data-files-role="editor"]');
+  if (ta) {
+    _filesPanelContent = ta.value;
+    // 如果有 pending timer，立即保存
+    if (_filesAutoSaveTimer) {
+      clearTimeout(_filesAutoSaveTimer);
+      _filesAutoSaveTimer = null;
+      saveFileInPanel();
+    }
+  }
+  _filesPanelPreview = !_filesPanelPreview;
+  renderFeaturePanel();
+};
+
+// Files panel — dragstart 事件委托（文件条目可拖拽到输入区）
+if (featurePanelBody) {
+  featurePanelBody.addEventListener('dragstart', (e) => {
+    const item = e.target.closest('.files-item');
+    if (!item) return;
+    const name = item.dataset.filesName;
+    if (!name) return;
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('application/x-claw-resource', name);
+    item.classList.add('dragging');
+    const onEnd = () => { item.classList.remove('dragging'); item.removeEventListener('dragend', onEnd); };
+    item.addEventListener('dragend', onEnd);
+  });
+}
 
 themeToggle.addEventListener('click', () => {
   applyTheme(currentTheme === 'light' ? 'dark' : 'light');

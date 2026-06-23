@@ -433,7 +433,8 @@
   align-items: flex-start;
 }
 .wg-msg-row.me {
-  flex-direction: row-reverse;
+  flex-direction: row;
+  justify-content: flex-end;
 }
 
 .wg-msg-avatar {
@@ -462,7 +463,10 @@
   gap: 4px;
   min-width: 0;
 }
-.wg-msg-row.me .wg-msg-body { align-items: flex-end; }
+.wg-msg-row.me .wg-msg-body {
+  align-items: flex-end;
+  margin-left: auto;
+}
 
 .wg-msg-meta {
   display: flex;
@@ -551,6 +555,13 @@
 .wg-msg-bubble.markdown-body h4 {
   margin: 0.75rem 0 0.4rem !important;
 }
+/* 首尾子元素清零 margin — 保证气泡 padding 是唯一的边缘间距 */
+.wg-msg-bubble.markdown-body > :first-child {
+  margin-top: 0 !important;
+}
+.wg-msg-bubble.markdown-body > :last-child {
+  margin-bottom: 0 !important;
+}
 /* 代码块在气泡内减小内距 */
 .wg-msg-bubble.markdown-body pre {
   margin: 0 0 0.5rem !important;
@@ -566,7 +577,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 2px;
+  margin-top: 4px;
   font-size: 13px;
 }
 
@@ -625,7 +636,7 @@
 
 /* 链接 */
 .wg-msg-links {
-  margin-top: 6px;
+  margin-top: 4px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -683,29 +694,45 @@
   color: var(--text-primary);
 }
 
-/* 派发卡片 header：from → to */
+/* 派发卡片 header：from @ to */
 .wg-card.dispatch .wg-card-header {
-  gap: 6px;
+  gap: 4px;
 }
 
-.wg-card-arrow-from {
+.wg-card-mention-from {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.wg-card-arrow {
-  color: var(--text-muted);
+.wg-card-mention-at {
   font-size: 14px;
-}
-.wg-card-arrow::before {
-  content: '→';
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
-.wg-card-arrow-to {
+.wg-card-mention-to {
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: #7aa7f7;
+}
+
+/* 派发卡片底部 */
+.wg-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  border-top: 1px solid var(--border-color);
+  background: var(--hover-bg);
+}
+
+.wg-card-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .wg-card-body {
@@ -715,6 +742,16 @@
   padding: 10px 14px;
   flex-wrap: wrap;
 }
+
+/* 派发卡片内的 markdown 内容：与气泡同款渲染管线，字号约束一致 */
+.wg-card-body.markdown-body {
+  --md-font-size: 14px;
+  --md-line-height: 1.6;
+  display: block;
+  padding: 10px 14px;
+}
+.wg-card-body.markdown-body > :first-child { margin-top: 0 !important; }
+.wg-card-body.markdown-body > :last-child { margin-bottom: 0 !important; }
 
 .wg-card-label {
   font-size: 13px;
@@ -755,37 +792,26 @@
 .wg-input-area {
   flex-shrink: 0;
   border-top: 1px solid var(--border-color);
-  padding: 12px 20px 16px;
+  padding: 10px 16px 14px;
   background: var(--bg-color);
+  position: relative;
 }
 
-.wg-input-toolbar {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 8px;
+/* ── 输入容器（编辑器 + 底栏一体） ── */
+.wg-input-box {
+  border: 1px solid var(--input-card-border, var(--border-color));
+  border-radius: 12px;
+  background: var(--input-card-bg, var(--hover-bg));
+  transition: border-color 0.15s;
+  overflow: hidden;
+}
+.wg-input-box:focus-within {
+  border-color: var(--text-secondary);
 }
 
-.wg-input-btn {
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  transition: background 0.15s, color 0.15s;
-}
-.wg-input-btn:hover {
-  background: var(--hover-bg);
-  color: var(--text-primary);
-}
-
+/* ── 编辑器 ── */
 .wg-input-editor {
-  min-height: 44px;
+  min-height: 42px;
   max-height: 120px;
   overflow-y: auto;
   padding: 10px 14px;
@@ -793,29 +819,42 @@
   line-height: 1.6;
   color: var(--text-primary);
   outline: none;
-  background: var(--input-card-bg);
-  border: 1px solid var(--input-card-border);
-  border-radius: 10px;
-  transition: border-color 0.15s;
-}
-.wg-input-editor:focus {
-  border-color: var(--text-secondary);
 }
 .wg-input-editor:empty::before {
   content: attr(data-placeholder);
   color: var(--text-muted);
 }
 
+/* ── 底部操作栏 ── */
 .wg-input-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 0;
+  padding: 4px 8px 8px 12px;
+}
+
+.wg-mention-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 .wg-input-hint {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.wg-input-spacer {
+  flex: 1;
 }
 
 .wg-send-btn {
@@ -823,26 +862,33 @@
   color: var(--bg-color);
   border: none;
   border-radius: 8px;
-  padding: 8px 24px;
-  font-size: 14px;
-  font-weight: 500;
+  padding: 7px 20px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   transition: opacity 0.15s;
+  flex-shrink: 0;
 }
-.wg-send-btn:hover { opacity: 0.85; }
+.wg-send-btn:hover { opacity: 0.88; }
+.wg-send-btn:active { opacity: 0.72; }
 
 /* ═══════════════════════════════════════════════
    Mention 选择器
    ═══════════════════════════════════════════════ */
 
 .wg-mention-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 16px;
+  max-width: 340px;
   max-height: 240px;
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 10px;
   background: var(--bg-color);
   box-shadow: 0 8px 24px var(--shadow-strong);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+  z-index: 50;
 }
 
 .wg-mention-item {
@@ -869,80 +915,55 @@
 }
 
 /* ═══════════════════════════════════════════════
-   链接输入
+   链接 / 附件芯片（容器内）
    ═══════════════════════════════════════════════ */
 
-.wg-links-area {
+.wg-link-list {
   display: flex;
-  gap: 8px;
-  margin-bottom: 6px;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 12px 0;
+}
+.wg-link-list:empty { display: none; }
+
+.wg-link-chip {
+  display: inline-flex;
   align-items: center;
-  padding: 8px;
-  background: var(--input-card-bg);
-  border: 1px solid var(--input-card-border);
-  border-radius: 8px;
-}
-
-.wg-link-input {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  font-size: 13px;
-  background: var(--bg-color);
-  color: var(--text-primary);
-  outline: none;
-  transition: border-color 0.15s;
-}
-.wg-link-input:focus { border-color: var(--text-secondary); }
-
-.wg-link-add-btn {
-  flex-shrink: 0;
-  padding: 6px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
   background: var(--hover-bg);
-  color: var(--text-primary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.wg-link-add-btn:hover { background: var(--active-bg); }
-
-.wg-link-list { margin-bottom: 6px; }
-
-.wg-link-entry {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  background: var(--hover-bg);
-  border-radius: 6px;
-  margin-bottom: 4px;
-  font-size: 13px;
-}
-
-.wg-link-entry-url {
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  font-size: 12px;
   color: var(--text-secondary);
+  max-width: 100%;
+}
+.wg-link-chip svg { color: var(--text-muted); flex-shrink: 0; }
+.wg-link-chip-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 320px;
+  max-width: 200px;
 }
 
-.wg-link-entry-desc { color: var(--text-muted); }
-
-.wg-link-remove {
+.wg-chip-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
   border: none;
   background: none;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 14px;
-  padding: 0 4px;
-  transition: color 0.15s;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
 }
-.wg-link-remove:hover { color: var(--error-color); }
+.wg-chip-remove:hover {
+  background: var(--active-bg);
+  color: var(--text-primary);
+}
 
 /* ═══════════════════════════════════════════════
    设置面板
@@ -975,7 +996,7 @@
 }
 
 .wg-settings-panel {
-  max-width: 520px;
+  max-width: none;
 }
 
 .wg-settings-section {
@@ -1223,4 +1244,495 @@ textarea.wg-settings-input { resize: vertical; min-height: 64px; }
 .wg-btn-danger:hover {
   background: var(--danger-color, #e5484d);
   color: #fff;
+}
+
+/* ═══════════════════════════════════════════════
+   工作目录选择 & GROUP.md 编辑器
+   ═══════════════════════════════════════════════ */
+
+.wg-modal-dir-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.wg-modal-dir-row .wg-modal-dir-display {
+  flex: 1;
+  margin-bottom: 0;
+  cursor: default;
+  color: var(--text-secondary);
+}
+.wg-modal-dir-row .wg-modal-dir-display:not([placeholder-shown]) {
+  color: var(--text-primary);
+}
+
+.wg-workdir-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wg-workdir-path {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--input-card-bg);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--input-card-border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wg-md-editor {
+  min-height: 200px !important;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.wg-awareness-workdir {
+  padding: 4px 0;
+}
+.wg-awareness-workdir code {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════════
+   附件标签条（输入区内）
+   ═══════════════════════════════════════════════ */
+
+.wg-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+
+.wg-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 4px;
+  background: var(--hover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.wg-attachment-chip-ext {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 18px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 4px;
+  background: var(--accent-color, #4a9eff);
+  color: var(--bg-color);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.wg-attachment-chip-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 输入区拖拽高亮 */
+.wg-input-area.dragover .wg-input-box {
+  border-color: var(--accent-color, #4a9eff);
+  background: var(--hover-bg);
+}
+
+/* ═══════════════════════════════════════════════
+   消息中的附件标签
+   ═══════════════════════════════════════════════ */
+
+.wg-msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.wg-msg-attachment-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--hover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+.wg-msg-attachment-tag::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════════
+   右侧边栏 Files 面板
+   ═══════════════════════════════════════════════ */
+
+.files-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.files-toolbar {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.files-new-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.files-new-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-card-bg);
+  color: var(--text-primary);
+  outline: none;
+}
+.files-new-input:focus {
+  border-color: var(--text-secondary);
+}
+.files-input-error {
+  border-color: #f44336 !important;
+  animation: files-input-shake 0.3s ease;
+}
+@keyframes files-input-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-3px); }
+  75% { transform: translateX(3px); }
+}
+
+.files-new-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.files-new-btn:hover {
+  background: var(--active-bg);
+}
+
+.files-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.files-empty {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.files-item {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.files-item:hover {
+  background: var(--hover-bg);
+}
+.files-item.selected {
+  background: var(--active-bg);
+  border-left: 3px solid var(--accent-color, #4a9eff);
+}
+.files-item.dragging {
+  opacity: 0.5;
+}
+
+.files-item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.files-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 20px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 4px;
+  background: var(--hover-bg);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.files-item-icon.files-ext-md { color: var(--accent-color, #4a9eff); }
+.files-item-icon.files-ext-json { color: #f0ad4e; }
+.files-item-icon.files-ext-txt { color: var(--text-secondary); }
+
+.files-item-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.files-item-delete {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.files-item:hover .files-item-delete {
+  opacity: 1;
+}
+.files-item-delete:hover {
+  color: #e74c3c;
+}
+
+/* Files 详情层 (detail view) */
+
+.files-panel-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.files-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.files-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: var(--hover-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.files-back-btn:hover {
+  background: var(--active-bg);
+  color: var(--text-primary);
+}
+
+.files-detail-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.files-detail-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.files-toggle-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: var(--hover-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.files-toggle-btn:hover {
+  background: var(--active-bg);
+  color: var(--text-primary);
+}
+.files-toggle-btn.active {
+  background: var(--accent-color, #4a9eff);
+  color: var(--bg-color);
+  border-color: var(--accent-color, #4a9eff);
+}
+
+.files-save-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.files-save-btn:hover {
+  background: var(--active-bg);
+}
+
+.files-detail-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.files-detail-editor {
+  flex: 1;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  color: var(--text-primary);
+  background: var(--bg-color);
+  border: none;
+  outline: none;
+  resize: none;
+  overflow-y: auto;
+}
+
+.files-detail-preview {
+  flex: 1;
+  padding: 16px 20px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.files-detail-preview h1,
+.files-detail-preview h2,
+.files-detail-preview h3 {
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+}
+.files-detail-preview h1:first-child,
+.files-detail-preview h2:first-child,
+.files-detail-preview h3:first-child {
+  margin-top: 0;
+}
+.files-detail-preview pre {
+  background: var(--hover-bg);
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+.files-detail-preview code {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.9em;
+}
+.files-detail-preview p code {
+  padding: 1px 4px;
+  background: var(--hover-bg);
+  border-radius: 3px;
+}
+.files-detail-preview table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+}
+.files-detail-preview th,
+.files-detail-preview td {
+  border: 1px solid var(--border-color);
+  padding: 4px 8px;
+  font-size: 13px;
+}
+.files-detail-preview blockquote {
+  margin: 0.5em 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+/* ═══════════════════════════════════════════════
+   Files 面板自动保存状态
+   ═══════════════════════════════════════════════ */
+
+.files-auto-save-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.files-auto-save-status.saving,
+.files-auto-save-status.saved,
+.files-auto-save-status.error {
+  opacity: 1;
+}
+.files-auto-save-status.saving { color: var(--text-secondary); }
+.files-auto-save-status.saved { color: var(--green, #4caf50); }
+.files-auto-save-status.error { color: var(--error-color, #f44336); }
+
+/* ═══════════════════════════════════════════════
+   GROUP.md 自动保存状态（Settings 面板）
+   ═══════════════════════════════════════════════ */
+
+.wg-md-save-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.wg-md-save-status.saved { color: var(--green, #4caf50); }
+.wg-md-save-status.error { color: var(--error-color, #f44336); }
+
+/* ═══════════════════════════════════════════════
+   Settings 面板（右侧边栏适配）
+   ═══════════════════════════════════════════════ */
+
+#wg-settings-panel .wg-settings-panel,
+.feature-panel-body .wg-settings-panel {
+  max-width: none;
+  padding: 4px 0;
+}
+.feature-panel-body .wg-settings-input {
+  font-size: 13px;
 }
