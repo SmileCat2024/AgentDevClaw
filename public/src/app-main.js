@@ -1276,6 +1276,7 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
       const nextSessionId = String(refreshed?.active_workspace_session_id || refreshed?.workspace_sessions?.activeSessionId || '').trim();
       const nextRuntimeId = refreshed?.runtime_session_id || refreshed?.runtimeSessionId || null;
       if (nextSessionId && nextSessionId !== String(sessionId || '').trim() && nextRuntimeId) {
+        beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-resume-live');
         return { scheduled: true, liveRuntime: true, switched: true };
       }
@@ -1609,6 +1610,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         || null;
       if (nextRuntimeId) {
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
+        beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-resume');
         ClawToast.update(toastId, {
           status: 'success',
@@ -1624,6 +1626,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       }
     } catch (error) {
       console.error('Failed to compact-resume session:', error);
+      clearChatLoadingSession();
       ClawToast.update(toastId, {
         status: 'error',
         title: isZh ? '轻量继续失败' : 'Compacted resume failed',
@@ -1669,6 +1672,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         || null;
       if (nextRuntimeId) {
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
+        beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-summary');
       } else {
         lastRenderedWorkspaceHtml = '';
@@ -1681,6 +1685,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     } catch (error) {
       console.error('Failed to compact session:', error);
       clearSessionLoading(activeAgent.id);
+      clearChatLoadingSession();
       ClawToast.update(_csToastId, {
         status: 'error',
         title: _csIsZh ? '总结失败' : 'Summary failed',
@@ -1839,10 +1844,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     );
 
   if (needsManagedSession) {
-    const shouldMarkLoading = action.type === 'open_session' && action.sessionId;
-    if (shouldMarkLoading) {
+    beginChatLoadingSession();
+    if (action.type === 'open_session' && action.sessionId) {
       markSessionLoading(activeAgent.id, action.sessionId);
-      beginChatLoadingSession();
     }
     if (triggerButton) markActionLoading(triggerButton);
     try {
@@ -1949,6 +1953,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       return;
     } finally {
       prebuiltSessionSwitchInFlight = false;
+      // For create_session, the new session legitimately has 0 messages.
+      // loadAgentData only clears loading when messages arrive, so clear
+      // it here to avoid a 10s spinner on an intentionally empty session.
+      if (action.type === 'create_session' || action.type === 'create_session_from_session') {
+        clearChatLoadingSession();
+        renderCurrentMainView();
+      }
       if (shouldMarkLoading) clearSessionLoading(activeAgent.id);
       else if (triggerButton) triggerButton.classList.remove('action-loading');
     }
@@ -3022,10 +3033,14 @@ function getCtxMenuItems(role, ns, variant, id) {
     const agent = allAgents.find((item) => item.id === ns) || null;
     const session = getWorkspaceSessionById(agent, id);
     const isArchived = session?.archived === true;
-    return [
-      { label: isArchived ? (currentLanguage === 'zh' ? '取消归档' : 'Unarchive') : (currentLanguage === 'zh' ? '归档会话' : 'Archive'), action: 'archive-session' },
-      { label: currentLanguage === 'zh' ? '删除对话' : 'Delete', action: 'delete-session', danger: true },
-    ];
+    const isTodo = session?.todo === true;
+    const items = [];
+    if (!isArchived) {
+      items.push({ label: isTodo ? (currentLanguage === 'zh' ? '取消待办' : 'Remove TODO') : (currentLanguage === 'zh' ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
+    }
+    items.push({ label: isArchived ? (currentLanguage === 'zh' ? '取消归档' : 'Unarchive') : (currentLanguage === 'zh' ? '归档会话' : 'Archive'), action: 'archive-session' });
+    items.push({ label: currentLanguage === 'zh' ? '删除对话' : 'Delete', action: 'delete-session', danger: true });
+    return items;
   }
   return [];
 }
@@ -3304,6 +3319,62 @@ async function ctxArchiveSession(target) {
   }
 }
 
+async function ctxTodoSession(target) {
+  const { ns: agentId, id: sessionId } = target;
+  if (!agentId || !sessionId) return;
+
+  const agent = allAgents.find((item) => item.id === agentId) || null;
+  const session = getWorkspaceSessionById(agent, sessionId);
+  const nextTodo = !(session?.todo === true);
+
+  // Optimistic update
+  if (agent) {
+    const currentSessions = getWorkspaceSessions(agent);
+    const updatedSessions = currentSessions.map((s) =>
+      s.id === sessionId ? { ...s, todo: nextTodo } : s,
+    );
+    updateAgentRecord(agentId, {
+      workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
+    });
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+  }
+
+  try {
+    const response = await fetch('/protoclaw/prebuilt_sessions/todo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, sessionId, todo: nextTodo }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'todo session failed'));
+    }
+    const result = await response.json();
+    if (result?.sessions) {
+      updateAgentRecord(agentId, {
+        workspace_sessions: result.sessions,
+        active_workspace_session_id: result.activeSessionId || null,
+      });
+    }
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+  } catch (e) {
+    // Revert on failure
+    if (agent) {
+      const currentSessions = getWorkspaceSessions(agent);
+      const revertedSessions = currentSessions.map((s) =>
+        s.id === sessionId ? { ...s, todo: !nextTodo } : s,
+      );
+      updateAgentRecord(agentId, {
+        workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
+      });
+    }
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+    window.alert((currentLanguage === 'zh' ? '设置待办失败：' : 'Failed to set todo: ') + (e?.message || e));
+  }
+}
+
 function dispatchCtxAction(action, target) {
   if (!action || !target) return;
   const { ns, id, sessionId, variant } = target;
@@ -3361,6 +3432,11 @@ function dispatchCtxAction(action, target) {
     case 'archive-and-stop':
       window.closeCtxMenu();
       ctxArchiveAndStopRuntime(target);
+      break;
+
+    case 'todo-session':
+      window.closeCtxMenu();
+      ctxTodoSession(target);
       break;
 
     default:
@@ -4693,6 +4769,11 @@ async function loadAgentData(agentId) {
     const inputRequests = await inputRes.json();
 
     currentMessages = msgsData.messages || [];
+    // Only clear loading if messages arrived. If the runtime hasn't loaded
+    // messages yet (common for freshly-created compacted resume sessions),
+    // keep the spinner so the user doesn't see a premature empty welcome page.
+    // The poll loop will clear it once real messages appear, and the 10s
+    // timeout in beginChatLoadingSession is the ultimate fallback.
     if (currentMessages.length > 0) clearChatLoadingSession();
     window.lastInputRequests = inputRequests;
     renderInputRequests(inputRequests);

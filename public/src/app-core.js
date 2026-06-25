@@ -1203,9 +1203,30 @@ function getStatusBadgeClass(status) {
 
 function getEmptyStateHtml() {
   if (_chatLoadingSession) {
-    return '<div class="empty-state chat-loading"><span class="chat-loading-spinner"></span><span>' + escapeHtml(currentLanguage === 'zh' ? '正在加载对话…' : 'Loading conversation…') + '</span></div>';
+    return '<div class="empty-state chat-loading"><span class="chat-loading-spinner"></span><span>'
+      + escapeHtml(currentLanguage === 'zh' ? '正在加载对话…' : 'Loading conversation…')
+      + '</span></div>';
   }
-  return '<div class="empty-state">' + escapeHtml(t('empty_waiting')) + '</div>';
+  var _isZh = currentLanguage === 'zh';
+  var _displayName = '';
+  try {
+    var _agent = getCurrentAgentRecord();
+    _displayName = String(_agent && _agent.name || '').trim();
+  } catch (_) { /* agent not loaded yet */ }
+  var _title = _displayName
+    ? (_isZh ? '欢迎使用' : 'Welcome to')
+    : (_isZh ? '新对话' : 'New Conversation');
+  var _hint = _isZh ? '输入消息开始对话' : 'Type a message to begin';
+  if (_displayName) {
+    return '<div class="empty-state empty-welcome">'
+      + '<div class="empty-welcome-title">' + escapeHtml((_isZh ? '欢迎使用 ' : 'Welcome to ') + _displayName) + '</div>'
+      + '<div class="empty-welcome-hint">' + escapeHtml(_hint) + '</div>'
+      + '</div>';
+  }
+  return '<div class="empty-state empty-welcome">'
+    + '<div class="empty-welcome-title">' + escapeHtml(_title) + '</div>'
+    + '<div class="empty-welcome-hint">' + escapeHtml(_hint) + '</div>'
+    + '</div>';
 }
 
 function beginChatLoadingSession() {
@@ -1214,6 +1235,12 @@ function beginChatLoadingSession() {
   _chatLoadingTimeout = setTimeout(() => {
     _chatLoadingSession = false;
     _chatLoadingTimeout = null;
+    // Force re-render so the spinner is replaced by the welcome page.
+    // Without this, the poll loop sees messages.length === currentMessages.length (0===0)
+    // and skips rendering entirely, leaving the spinner stuck in the DOM forever.
+    if (typeof renderCurrentMainView === 'function') {
+      renderCurrentMainView();
+    }
   }, 10000);
 }
 
@@ -1246,6 +1273,77 @@ function formatWorkspaceDate(isoString) {
   const date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return isoString;
   return date.toLocaleString(currentLanguage === 'zh' ? 'zh-CN' : 'en-US');
+}
+
+/**
+ * Human-readable relative time formatter.
+ * Returns friendly labels like "刚刚", "5分钟前", "今天 14:30", "昨天 09:15",
+ * "周二 16:00", "3月15日", "2024年3月15日".
+ */
+function formatRelativeTime(isoString) {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
+  const isZh = currentLanguage === 'zh';
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+
+  // ── Very recent: under 1 minute ──
+  if (diffMin < 1) return isZh ? '刚刚' : 'just now';
+
+  // ── Under 1 hour ──
+  if (diffMin < 60) return isZh ? diffMin + '分钟前' : diffMin + 'm ago';
+
+  // Same calendar day helpers
+  var hh = date.getHours();
+  var mm = String(date.getMinutes()).padStart(2, '0');
+  var amPmSuffix = hh < 12 ? 'AM' : 'PM';
+  var h12 = String(hh % 12 || 12);
+  var ampmZh = hh < 12 ? '上午' : '下午';
+
+  var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  var calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
+
+  // ── Today ──
+  if (calendarDiff === 0) {
+    return isZh ? ('今天' + ampmZh + hh + ':' + mm) : ('Today ' + h12 + ':' + mm + ' ' + amPmSuffix);
+  }
+
+  // ── Yesterday ──
+  if (calendarDiff === 1) {
+    return isZh
+      ? ('昨天 ' + ampmZh + hh + ':' + mm)
+      : ('Yesterday ' + h12 + ':' + mm + ' ' + amPmSuffix);
+  }
+
+  // ── Day before yesterday ──
+  if (calendarDiff === 2) {
+    return isZh
+      ? ('前天 ' + ampmZh + hh + ':' + mm)
+      : ('2 days ago ' + h12 + ':' + mm + ' ' + amPmSuffix);
+  }
+
+  // ── This week (3-6 days ago): use full weekday ──
+  if (calendarDiff >= 3 && calendarDiff <= 6) {
+    if (isZh) {
+      var weekdayZh = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+      return weekdayZh[date.getDay()] + ' ' + ampmZh + hh + ':' + mm;
+    }
+    var weekdayEn = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    return weekdayEn[date.getDay()] + ' ' + h12 + ':' + mm + ' ' + amPmSuffix;
+  }
+
+  // ── This year ──
+  if (date.getFullYear() === now.getFullYear()) {
+    if (isZh) return (date.getMonth() + 1) + '月' + date.getDate() + '日';
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  // ── Older ──
+  if (isZh) return date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function convertLegacyWorkspaceToUi(workspace) {

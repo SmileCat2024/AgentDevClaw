@@ -32,6 +32,11 @@ function sortPhSessionsByMode(sessions) {
   var mode = phSessionSortMode === 'createdAt' ? 'createdAt' : 'updatedAt';
   var sorted = sessions.slice();
   sorted.sort(function (a, b) {
+    // TODO sessions always sort above non-TODO sessions
+    var aTodo = a?.todo === true ? 1 : 0;
+    var bTodo = b?.todo === true ? 1 : 0;
+    if (aTodo !== bTodo) return bTodo - aTodo;
+    // Within the same TODO group, sort by the selected mode
     var primary = String(a?.[mode] || '');
     var secondaryKey = mode === 'createdAt' ? 'updatedAt' : 'createdAt';
     if (primary !== String(b?.[mode] || '')) {
@@ -57,6 +62,12 @@ function renderSessionArchivedBadge(session) {
   if (!session || session.archived !== true) return '';
   var isZh = currentLanguage === 'zh';
   return '<span class="workspace-history-archived">' + escapeHtml(isZh ? '已归档' : 'Archived') + '</span>';
+}
+
+function renderSessionTodoBadge(session) {
+  if (!session || session.todo !== true) return '';
+  var isZh = currentLanguage === 'zh';
+  return '<span class="workspace-history-todo">' + escapeHtml(isZh ? '待办' : 'TODO') + '</span>';
 }
 
 function renderSessionTitleAiButton(session) {
@@ -717,6 +728,7 @@ function renderWorkspaceSessionList(agent, block) {
         '<div class="workspace-history-title-row">',
         '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(isZh ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
         renderSessionResumeBadge(session),
+        renderSessionTodoBadge(session),
         renderSessionArchivedBadge(session),
         renderSessionTitleAiButton(session),
         '</div>',

@@ -47,6 +47,7 @@
   let openDropdown = null;
   let groupMdContent = '';      // GROUP.md 编辑器内容
   let groupMdLoading = false;   // GROUP.md 是否正在加载
+  let _annotations = {};        // messageId → { text, timestamp }
 
   // ── 按群聊隔离的输入缓存 ─────────────────────────────────────
   // chatId → { editorHtml, pendingLinks, pendingAttachments }
@@ -114,9 +115,17 @@
     if (!activeChatId) return;
     try {
       activeChat = await apiGet(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}`);
+      // 并行加载批注
+      try {
+        const annData = await apiGet(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/annotations`);
+        _annotations = annData.annotations || {};
+      } catch {
+        _annotations = {};
+      }
     } catch (err) {
       console.error('[WorkGroup] loadActiveChat:', err);
       activeChat = null;
+      _annotations = {};
     }
   }
 
@@ -323,7 +332,7 @@
     ].filter(Boolean).join(' ');
 
     return [
-      `<div class="wg-msg-row" ${quoteAttrs}>`,
+      `<div class="wg-msg-row" data-wg-msg-id="${esc(msg.id || '')}" ${quoteAttrs}>`,
       `  <div class="wg-msg-avatar">${esc(avatarLetter)}</div>`,
       '  <div class="wg-msg-body">',
       `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(name)}</span> <span class="wg-msg-time">${esc(time)}</span></div>`,
@@ -370,7 +379,7 @@
       : '';
 
     return [
-      `<div class="wg-msg-row" ${quoteAttrs}>`,
+      `<div class="wg-msg-row" data-wg-msg-id="${esc(msg.id || '')}" ${quoteAttrs}>`,
       `  <div class="wg-msg-avatar admin">${esc(fromAvatar)}</div>`,
       '  <div class="wg-msg-body">',
       `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(fromName)}</span> <span class="wg-msg-time">${esc(time)}</span></div>`,
@@ -474,7 +483,7 @@
 
     if (isMe) {
       return [
-        '<div class="wg-msg-row me">',
+        `<div class="wg-msg-row me" data-wg-msg-id="${esc(msg.id || '')}">`,
         '  <div class="wg-msg-body">',
         `    <div class="wg-msg-meta"><span class="wg-msg-time">${esc(time)}</span></div>`,
         `    <div class="wg-msg-bubble markdown-body${bubbleClass}">${renderMarkdown(msg.text || '')}</div>`,
@@ -501,7 +510,7 @@
       : '';
 
     return [
-      `<div class="wg-msg-row" ${quoteAttrs}>`,
+      `<div class="wg-msg-row" data-wg-msg-id="${esc(msg.id || '')}" ${quoteAttrs}>`,
       `  <div class="wg-msg-avatar${isAdmin ? ' admin' : ''}">${esc(avatarLetter)}</div>`,
       '  <div class="wg-msg-body">',
       `    <div class="wg-msg-meta">${identityTag} <span class="wg-msg-time">${esc(time)}</span></div>`,
@@ -521,26 +530,45 @@
 
   // 长消息气泡自动折叠
   const COLLAPSE_THRESHOLD = 180;
+  const _expandedMsgIds = new Set();
   function applyCollapsible(container) {
     if (!container) return;
     const targets = container.querySelectorAll('.wg-msg-bubble, .wg-card-body.markdown-body');
     targets.forEach((el) => {
+      const row = el.closest('.wg-msg-row');
+      if (!row) return;
+      const msgId = row.dataset.wgMsgId;
+      if (!msgId) return;
       if (el.dataset.wgCollapseInit) return;
       if (el.scrollHeight <= COLLAPSE_THRESHOLD) return;
       el.dataset.wgCollapseInit = '1';
-      el.classList.add('wg-collapsible', 'collapsed');
 
-      const toggle = document.createElement('span');
-      toggle.className = 'wg-collapse-toggle';
-      toggle.textContent = '展开';
-      toggle.addEventListener('click', (ev) => {
+      const isExpanded = _expandedMsgIds.has(msgId);
+      el.classList.add('wg-collapsible');
+      if (!isExpanded) el.classList.add('collapsed');
+
+      const toggleBar = document.createElement('div');
+      toggleBar.className = 'wg-collapse-toggle';
+      const btn = document.createElement('button');
+      btn.innerHTML = isExpanded
+        ? '<svg viewBox="0 0 24 24"><path d="M12 8l-6 6 1.41 1.41L12 10.83l4.59 4.58L18 14z"/></svg> 收起'
+        : '<svg viewBox="0 0 24 24"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg> 展开';
+      btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const isCollapsed = el.classList.toggle('collapsed');
-        toggle.textContent = isCollapsed ? '展开' : '收起';
+        const willCollapse = !el.classList.contains('collapsed');
+        el.classList.toggle('collapsed');
+        btn.innerHTML = willCollapse
+          ? '<svg viewBox="0 0 24 24"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg> 展开'
+          : '<svg viewBox="0 0 24 24"><path d="M12 8l-6 6 1.41 1.41L12 10.83l4.59 4.58L18 14z"/></svg> 收起';
+        if (willCollapse) {
+          _expandedMsgIds.delete(msgId);
+        } else {
+          _expandedMsgIds.add(msgId);
+        }
       });
-      // 放到 bubble/card-body 内部底部，配合 CSS 绝对定位居中到中轴线。
-      // 之前 appendChild(el.parentElement) 会让 toggle 靠左，看起来"位置阴间"。
-      el.appendChild(toggle);
+      toggleBar.appendChild(btn);
+      // 放到 bubble 外面、下方（作为 .wg-msg-body 内的兄弟元素）
+      el.insertAdjacentElement('afterend', toggleBar);
     });
   }
 
@@ -869,6 +897,7 @@
         }
       }
       applyCollapsible(main);
+      _renderAnnotationBars();
     }
   }
 
@@ -890,6 +919,7 @@
       scroll.scrollTop = savedTop;
     }
     applyCollapsible(scroll);
+    _renderAnnotationBars();
   }
 
   function refreshHeaderAndMessages() {
@@ -930,6 +960,7 @@
         scroll.scrollTop = savedTop;
       }
       applyCollapsible(scroll);
+      _renderAnnotationBars();
     }
   }
 
@@ -1680,67 +1711,74 @@
     const msgRow = e.target.closest('.wg-msg-row');
     if (!msgRow) return;
 
-    // 自己发的消息不给引用菜单
-    if (msgRow.classList.contains('me')) return;
-
-    // 从 msg-row 的 quote 数据属性中提取会话信息（可能为空）
-    const quoteRef = msgRow.dataset.wgQuoteRef || '';
-    const quoteSession = msgRow.dataset.wgQuoteSession || '';
-    const quoteWorkspace = msgRow.dataset.wgQuoteWorkspace || '';
-    const quoteName = msgRow.dataset.wgQuoteName || '';
-    const quoteTitle = msgRow.dataset.wgQuoteTitle || quoteSession.slice(-8) || '';
-
-    // 找到对应的 identity；优先按 ref，其次按 displayName
-    const matchedId = identities.find((id) =>
-      (quoteRef && id.identityRef === quoteRef) ||
-      (quoteName && id.displayName === quoteName)
-    );
-    // 没法识别发送者就不弹菜单
-    if (!matchedId) return;
+    const msgId = msgRow.dataset.wgMsgId;
+    if (!msgId) return;
 
     e.preventDefault();
 
     const items = [];
-    if (quoteSession && quoteWorkspace) {
-      // 有完整 routing：引用并切换到那个 session
-      items.push({
-        label: '引用续话',
-        hint: `@${matchedId.displayName} → ${quoteTitle}`,
-        action: () => {
-          const editor = document.querySelector('.wg-input-editor');
-          if (!editor) return;
-          editor.focus();
-          document.execCommand('insertText', false, `@${matchedId.displayName} `);
 
-          setSessionSelection(activeChatId, matchedId.identityRef, {
-            mode: 'specific',
-            sessionId: quoteSession,
-            sessionTitle: quoteTitle,
+    // 批注（所有消息都支持）
+    const existingAnn = _annotations[msgId];
+    items.push({
+      label: existingAnn ? '编辑批注' : '批注',
+      hint: existingAnn ? existingAnn.text.slice(0, 30) : '',
+      action: () => _openAnnotationEditor(msgId),
+    });
+
+    // 引用续话（自己发的消息不给）
+    if (!msgRow.classList.contains('me')) {
+      const quoteRef = msgRow.dataset.wgQuoteRef || '';
+      const quoteSession = msgRow.dataset.wgQuoteSession || '';
+      const quoteWorkspace = msgRow.dataset.wgQuoteWorkspace || '';
+      const quoteName = msgRow.dataset.wgQuoteName || '';
+      const quoteTitle = msgRow.dataset.wgQuoteTitle || quoteSession.slice(-8) || '';
+
+      const matchedId = identities.find((id) =>
+        (quoteRef && id.identityRef === quoteRef) ||
+        (quoteName && id.displayName === quoteName)
+      );
+      if (matchedId) {
+        if (quoteSession && quoteWorkspace) {
+          items.push({
+            label: '引用续话',
+            hint: `@${matchedId.displayName} → ${quoteTitle}`,
+            action: () => {
+              const editor = document.querySelector('.wg-input-editor');
+              if (!editor) return;
+              editor.focus();
+              document.execCommand('insertText', false, `@${matchedId.displayName} `);
+
+              setSessionSelection(activeChatId, matchedId.identityRef, {
+                mode: 'specific',
+                sessionId: quoteSession,
+                sessionTitle: quoteTitle,
+              });
+
+              if (!_sessionDataCache[matchedId.identityRef]) {
+                fetchSessionData(matchedId.identityRef);
+              }
+              renderSessionBar();
+            },
           });
+        } else {
+          items.push({
+            label: '引用并提及',
+            hint: `@${matchedId.displayName}`,
+            action: () => {
+              const editor = document.querySelector('.wg-input-editor');
+              if (!editor) return;
+              editor.focus();
+              document.execCommand('insertText', false, `@${matchedId.displayName} `);
 
-          if (!_sessionDataCache[matchedId.identityRef]) {
-            fetchSessionData(matchedId.identityRef);
-          }
-          renderSessionBar();
-        },
-      });
-    } else {
-      // 没有 routing 数据：退化为单纯 @mention
-      items.push({
-        label: '引用并提及',
-        hint: `@${matchedId.displayName}`,
-        action: () => {
-          const editor = document.querySelector('.wg-input-editor');
-          if (!editor) return;
-          editor.focus();
-          document.execCommand('insertText', false, `@${matchedId.displayName} `);
-
-          if (!_sessionDataCache[matchedId.identityRef]) {
-            fetchSessionData(matchedId.identityRef);
-          }
-          renderSessionBar();
-        },
-      });
+              if (!_sessionDataCache[matchedId.identityRef]) {
+                fetchSessionData(matchedId.identityRef);
+              }
+              renderSessionBar();
+            },
+          });
+        }
+      }
     }
 
     _showContextMenu(e.clientX, e.clientY, items);
@@ -1792,6 +1830,120 @@
       _contextMenuEl.remove();
       _contextMenuEl = null;
     }
+  }
+
+  // ── 批注编辑器（模态弹窗） ──────────────────────────────────
+
+  function _openAnnotationEditor(msgId) {
+    _closeAnnotationEditor();
+
+    const existing = _annotations[msgId];
+    const overlay = document.createElement('div');
+    overlay.className = 'wg-modal-overlay wg-annotation-overlay';
+    overlay.innerHTML = [
+      '<div class="wg-modal wg-annotation-modal">',
+      '  <div class="wg-modal-title">批注消息</div>',
+      `  <textarea class="wg-annotation-textarea" placeholder="输入批注内容…" rows="5">${esc(existing ? existing.text : '')}</textarea>`,
+      '  <div class="wg-modal-actions">',
+      existing ? '    <button class="wg-modal-btn danger" data-action="delete">删除批注</button>' : '',
+      '    <div style="flex:1"></div>',
+      '    <button class="wg-modal-btn" data-action="cancel">取消</button>',
+      '    <button class="wg-modal-btn confirm" data-action="save">保存</button>',
+      '  </div>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(overlay);
+
+    const textarea = overlay.querySelector('.wg-annotation-textarea');
+    textarea.focus();
+    if (existing) {
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    }
+
+    overlay.addEventListener('click', (ev) => {
+      if (ev.target === overlay) { _closeAnnotationEditor(); return; }
+      const btn = ev.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      if (action === 'cancel') {
+        _closeAnnotationEditor();
+      } else if (action === 'save') {
+        const text = textarea.value.trim();
+        if (!text) return;
+        _saveAnnotation(msgId, text);
+        _closeAnnotationEditor();
+      } else if (action === 'delete') {
+        _deleteAnnotation(msgId);
+        _closeAnnotationEditor();
+      }
+    });
+
+    // Enter 保存，Escape 取消
+    textarea.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
+        ev.preventDefault();
+        const text = textarea.value.trim();
+        if (text) { _saveAnnotation(msgId, text); _closeAnnotationEditor(); }
+      }
+      if (ev.key === 'Escape') { _closeAnnotationEditor(); }
+    });
+  }
+
+  function _closeAnnotationEditor() {
+    const el = document.querySelector('.wg-annotation-overlay');
+    if (el) el.remove();
+  }
+
+  async function _saveAnnotation(msgId, text) {
+    if (!activeChatId) return;
+    try {
+      const data = await apiPut(
+        `/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/annotations/${encodeURIComponent(msgId)}`,
+        { text }
+      );
+      if (data.annotation) _annotations[msgId] = data.annotation;
+      _renderAnnotationBars();
+    } catch (err) {
+      console.error('[WorkGroup] saveAnnotation:', err);
+    }
+  }
+
+  async function _deleteAnnotation(msgId) {
+    if (!activeChatId) return;
+    try {
+      await apiDelete(
+        `/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/annotations/${encodeURIComponent(msgId)}`
+      );
+      delete _annotations[msgId];
+      _renderAnnotationBars();
+    } catch (err) {
+      console.error('[WorkGroup] deleteAnnotation:', err);
+    }
+  }
+
+  /** 在消息列表渲染后，给每条有批注的消息插入批注条 */
+  function _renderAnnotationBars() {
+    if (!activeChatId) return;
+    const container = document.querySelector('.wg-msg-list');
+    if (!container) return;
+    // 清理旧批注条
+    container.querySelectorAll('.wg-annotation-bar').forEach((el) => el.remove());
+    // 插入新批注条
+    Object.entries(_annotations).forEach(([msgId, ann]) => {
+      const row = container.querySelector(`.wg-msg-row[data-wg-msg-id="${CSS.escape(msgId)}"]`);
+      if (!row) return;
+      const body = row.querySelector('.wg-msg-body');
+      if (!body) return;
+      const time = formatTime(ann.timestamp);
+      const bar = document.createElement('div');
+      bar.className = 'wg-annotation-bar';
+      bar.innerHTML = [
+        '<span class="wg-annotation-icon">📝</span>',
+        `<span class="wg-annotation-text">${esc(ann.text)}</span>`,
+        `<span class="wg-annotation-time">${esc(time)}</span>`,
+      ].join('');
+      body.appendChild(bar);
+    });
   }
 
   // ── 拖拽：接收 Files 面板的文件 ───────────────────────────────

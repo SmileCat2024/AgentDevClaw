@@ -134,6 +134,58 @@ describe('trim-compact fixes', () => {
     });
   });
 
+  describe('Fix: consecutive tool-only assistant turns merge into one fold', () => {
+    it('produces a single fold note for consecutive tool-only assistant messages', () => {
+      // Simulates the common pattern: assistant calls tools back-to-back
+      // without text output between them.
+      const messages = [
+        { role: 'user', content: 'fix the bug', turn: 0 },
+        { role: 'assistant', content: 'Let me investigate.', turn: 0, toolCalls: [{ name: 'grep', arguments: '{}' }] },
+        { role: 'tool', toolCallId: 'tc1', content: '{"result":"match found"}', turn: 0 },
+        // tool-only assistant turns (no text):
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ name: 'grep', arguments: '{}' }] },
+        { role: 'tool', toolCallId: 'tc2', content: '{"result":"another match"}', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ name: 'bash', arguments: '{}' }] },
+        { role: 'tool', toolCallId: 'tc3', content: '{"result":"done"}', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ name: 'read', arguments: '{"filePath":"a.js"}' }] },
+        { role: 'tool', toolCallId: 'tc4', content: '{"result":"file content"}', turn: 0 },
+        // Finally, assistant produces text:
+        { role: 'assistant', content: 'Found the issue.', turn: 0 },
+        { role: 'user', content: 'great', turn: 1 },
+        { role: 'assistant', content: 'done', turn: 1 },
+      ];
+      const policy = normalizeExportPolicy({ preservedTurns: [1] });
+      const { seedMessages, stats } = buildTrimmedSeedMessages(messages, policy);
+
+      const foldNotes = seedMessages.filter(m => m.content.includes('[Folded tool activity]'));
+      // All 4 tool calls (grep, grep, bash, read) should be in a SINGLE fold note
+      assert.equal(foldNotes.length, 1, 'consecutive tool-only turns should produce exactly ONE fold note');
+      assert.ok(foldNotes[0].content.includes('grep'), 'fold should contain grep');
+      assert.ok(foldNotes[0].content.includes('bash'), 'fold should contain bash');
+      assert.ok(foldNotes[0].content.includes('read'), 'fold should contain read');
+      assert.equal(stats.foldedToolNoteCount, 1, 'only one foldedToolNoteCount');
+      assert.equal(stats.foldedToolCallCount, 4, 'all 4 tool calls folded');
+    });
+
+    it('still separates folds when assistant text appears between tool calls', () => {
+      const messages = [
+        { role: 'user', content: 'do task', turn: 0 },
+        { role: 'assistant', content: 'Step 1.', turn: 0, toolCalls: [{ name: 'grep', arguments: '{}' }] },
+        { role: 'tool', toolCallId: 'tc1', content: '{}', turn: 0 },
+        { role: 'assistant', content: 'Step 2.', turn: 0, toolCalls: [{ name: 'bash', arguments: '{}' }] },
+        { role: 'tool', toolCallId: 'tc2', content: '{}', turn: 0 },
+        { role: 'user', content: 'ok', turn: 1 },
+        { role: 'assistant', content: 'done', turn: 1 },
+      ];
+      const policy = normalizeExportPolicy({ preservedTurns: [1] });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      const foldNotes = seedMessages.filter(m => m.content.includes('[Folded tool activity]'));
+      // "Step 1." and "Step 2." are real text, so each should flush the previous fold
+      assert.equal(foldNotes.length, 2, 'text between tool calls should produce separate folds');
+    });
+  });
+
   describe('Fix 1: seed feature turn collision verification (logic)', () => {
     // This test verifies the core logic that was fixed:
     // Given seed messages with max turn N, _callIndex should be set to N+1

@@ -1219,9 +1219,14 @@ textarea.wg-settings-input { resize: vertical; min-height: 64px; }
 
 .wg-modal-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.5);
+  background: rgba(5, 7, 12, 0.64);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
   display: flex; align-items: center; justify-content: center;
   z-index: 10000;
+}
+body[data-theme="light"] .wg-modal-overlay {
+  background: rgba(18, 20, 26, 0.32);
 }
 
 .wg-modal {
@@ -1914,53 +1919,117 @@ textarea.wg-settings-input { resize: vertical; min-height: 64px; }
 /* ── 长消息折叠 ──────────────────────────────────────────── */
 .wg-msg-bubble.wg-collapsible,
 .wg-card-body.markdown-body.wg-collapsible {
-  position: relative;
   overflow: hidden;
   transition: max-height 0.2s ease;
 }
 .wg-msg-bubble.wg-collapsible.collapsed,
 .wg-card-body.markdown-body.wg-collapsible.collapsed {
   max-height: 180px;
+  mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
 }
 .wg-msg-bubble.wg-collapsible:not(.collapsed),
 .wg-card-body.markdown-body.wg-collapsible:not(.collapsed) {
   max-height: none;
-  padding-bottom: 28px;
 }
 .wg-collapse-toggle {
-  position: absolute;
-  left: 50%;
-  bottom: 4px;
-  transform: translateX(-50%);
-  padding: 2px 12px;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding-top: 4px;
+}
+.wg-collapse-toggle button {
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  border-radius: 12px;
+  padding: 4px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.wg-collapse-toggle button:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+.wg-collapse-toggle button svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+
+/* ═══════════════════════════════════════════════
+   批注条
+   ═══════════════════════════════════════════════ */
+
+.wg-annotation-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: var(--hover-bg);
+  border-left: 3px solid var(--text-secondary);
+  border-radius: 0 6px 6px 0;
   font-size: 12px;
   color: var(--text-secondary);
-  background: var(--hover-bg);
-  border-radius: 10px;
-  cursor: pointer;
-  user-select: none;
-  z-index: 2;
-  white-space: nowrap;
+  line-height: 1.5;
 }
-.wg-msg-row.me .wg-collapse-toggle {
-  background: var(--active-bg);
+.wg-annotation-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1.5;
 }
-.wg-card-body.markdown-body.wg-collapsible .wg-collapse-toggle {
-  background: var(--bg-color);
+.wg-annotation-text {
+  flex: 1;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
-.wg-collapse-toggle:hover {
+.wg-annotation-time {
+  flex-shrink: 0;
+  font-size: 10px;
+  opacity: 0.6;
+}
+
+/* ═══════════════════════════════════════════════
+   批注编辑器模态框
+   ═══════════════════════════════════════════════ */
+
+.wg-annotation-overlay {
+  z-index: 10001;
+}
+.wg-annotation-modal {
+  width: 480px;
+}
+.wg-annotation-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid var(--input-card-border);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--input-card-bg);
   color: var(--text-primary);
+  outline: none;
+  resize: vertical;
+  min-height: 80px;
+  margin-bottom: 16px;
+  transition: border-color 0.15s;
 }
-.wg-msg-bubble.wg-collapsible.collapsed::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 40px;
-  background: linear-gradient(transparent, var(--hover-bg));
-  pointer-events: none;
+.wg-annotation-textarea:focus {
+  border-color: var(--text-secondary);
 }
-.wg-msg-row.me .wg-msg-bubble.wg-collapsible.collapsed::after {
-  background: linear-gradient(transparent, var(--active-bg));
+.wg-modal-btn.danger {
+  color: #e57373;
+  border-color: rgba(229, 115, 115, 0.3);
+}
+.wg-modal-btn.danger:hover {
+  background: rgba(229, 115, 115, 0.1);
+  border-color: #e57373;
 }

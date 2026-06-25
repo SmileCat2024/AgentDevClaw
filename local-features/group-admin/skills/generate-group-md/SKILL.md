@@ -44,5 +44,5 @@ description: 扫描群聊绑定的工作目录和群聊历史，生成一份 GRO
 
 ## 第三步：保存并通知
 
-1. 调用 **`gc_save_group_md`** 将生成的 GROUP.md 保存到工作目录
+1. 调用 **`gc_save_group_md`** 保存生成的 GROUP.md
 2. 调用 **`gc_reply`** 告知用户 GROUP.md 已生成，简述其中包含的关键信息（不要粘贴全文）

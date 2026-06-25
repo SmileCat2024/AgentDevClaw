@@ -458,7 +458,20 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       return;
     }
 
-    flushIfNeeded();
+    // When the assistant makes consecutive tool-only turns (no text output),
+    // flushing before each one produces a separate [Folded tool activity]
+    // entry per turn — needlessly verbose. Skip the flush so tool-call
+    // summaries from consecutive tool-only assistant messages accumulate
+    // into a single fold, which is flushed later by actual text or a
+    // non-assistant message.
+    const isToolOnlyAssistantFold = role === 'assistant'
+      && !cleanMultilineText(message.content)
+      && toolCalls.length > 0
+      && policy.assistantToolCallMode === 'fold'
+      && shouldHandleToolCalls;
+    if (!isToolOnlyAssistantFold) {
+      flushIfNeeded();
+    }
 
     if (!shouldKeepDialogueMessage(role, policy)) {
       stats.droppedDialogueMessageCount += 1;

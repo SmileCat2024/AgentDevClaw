@@ -273,7 +273,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_save_group_md',
-        description: '保存 GROUP.md 内容到群聊的工作目录。GROUP.md 是群聊的静态背景文档，会在每次管理员启动时作为系统上下文注入。',
+        description: '保存 GROUP.md 群聊背景文档。GROUP.md 是群聊的静态背景，会在管理员新会话首次启动时作为背景上下文注入（类似 CLAUDE.md 的角色）。更新后需要重启管理员会话才能生效。',
         parameters: {
           type: 'object',
           properties: {

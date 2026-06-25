@@ -449,8 +449,46 @@ body[data-theme="light"] .markdown-body blockquote {
   overflow-x: auto;
 }
 
-.empty-state { text-align: center; margin-top: 20vh; color: var(--text-secondary); }
-.empty-state.chat-loading { display: flex; align-items: center; justify-content: center; gap: 8px; }
+/* ── Empty state: welcome cover & loading ── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 55vh;
+  text-align: center;
+  padding: 0 24px;
+}
+.empty-state.chat-loading {
+  flex-direction: row;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
+}
+.empty-state.empty-welcome {
+  gap: 20px;
+  animation: empty-welcome-in 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+@keyframes empty-welcome-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.empty-welcome-title {
+  font-size: 2.25rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.empty-welcome-hint {
+  font-size: 1.05rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
 .chat-loading-spinner {
   width: 14px; height: 14px;
   border: 2px solid var(--text-secondary);
@@ -1328,6 +1366,19 @@ body[data-theme="light"] .workspace-docset-row {
   border: 1px solid rgba(255, 171, 64, 0.3);
   background: rgba(255, 171, 64, 0.12);
   color: #ffab40;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+}
+
+.workspace-history-todo {
+  flex-shrink: 0;
+  border: 1px solid rgba(100, 180, 255, 0.3);
+  background: rgba(100, 180, 255, 0.12);
+  color: #64b4ff;
   border-radius: 999px;
   padding: 4px 10px;
   font-size: 11px;
@@ -5088,6 +5139,10 @@ body[data-theme="light"] .ccb-popup-inner {
 .ccb-popup-tone-mid { color: #ff9800; }
 .ccb-popup-tone-high { color: #ef4444; }
 .ccb-popup-tone-compress { color: #9c27b0; }
+
+/* ── Title hover popup (session metadata on #current-agent-name) ── */
+#current-agent-name { cursor: help; }
+.title-hover-popup .ccb-popup-inner { max-width: 340px; }
 
 /* ── Trim dialog ── */
 .trim-dialog {

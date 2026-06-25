@@ -205,6 +205,7 @@ window.submitTrimCompact = async () => {
       || null;
     if (nextRuntimeId) {
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+      beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'trim');
     } else {
       lastRenderedWorkspaceHtml = '';
@@ -213,6 +214,7 @@ window.submitTrimCompact = async () => {
   } catch (error) {
     console.error('Failed to trim compact session:', error);
     clearSessionLoading(agentId);
+    clearChatLoadingSession();
     window.alert((currentLanguage === 'zh' ? '精简失败：' : 'Trim failed: ') + (error?.message || error));
   }
 };
@@ -343,6 +345,7 @@ window.submitBranch = async () => {
       || null;
     if (nextRuntimeId) {
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+      beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'branch');
     } else {
       lastRenderedWorkspaceHtml = '';
@@ -351,6 +354,7 @@ window.submitBranch = async () => {
   } catch (error) {
     console.error('Failed to branch session:', error);
     clearSessionLoading(agentId);
+    clearChatLoadingSession();
     window.alert((currentLanguage === 'zh' ? '分支失败：' : 'Branch failed: ') + (error?.message || error));
   }
 };

@@ -485,6 +485,203 @@ window.addEventListener('DOMContentLoaded', _initCcbPopup);
 setTimeout(_initCcbPopup, 0);
 
 
+// ── Title hover popup: session metadata ───────────────────────────
+var _titlePopup = null;
+var _titlePopupHideTimer = null;
+var _titlePopupShowTimer = null;
+
+/**
+ * Collect the active session metadata from the current agent record.
+ * Uses getRuntimeAwareAgentRecord() for correct session binding —
+ * same pattern as updateChatContextBar.
+ */
+function _collectActiveSessionMeta() {
+  var agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : (typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null);
+  if (!agent) return null;
+
+  var activeSessionId = String(
+    agent.active_workspace_session_id
+    || agent.workspace_sessions?.activeSessionId
+    || ''
+  ).trim();
+
+  var sessions = Array.isArray(agent.workspace_sessions?.sessions)
+    ? agent.workspace_sessions.sessions
+    : [];
+
+  var session = activeSessionId
+    ? sessions.find(function (s) { return s && s.id === activeSessionId; }) || null
+    : null;
+
+  return {
+    session: session,
+    agent: agent,
+    activeSessionId: activeSessionId,
+  };
+}
+
+function _buildTitlePopupHtml(meta) {
+  if (!meta) return '';
+  var isZh = currentLanguage === 'zh';
+  var s = meta.session || {};
+  var a = meta.agent || {};
+  var sections = [];
+
+  // ── Session title ──
+  var fullTitle = s.title
+    || a.active_workspace_session_title
+    || a.active_workspace_display_name
+    || a.name
+    || '';
+  if (fullTitle) {
+    sections.push('<div class="ccb-popup-model">' + escapeHtml(fullTitle) + '</div>');
+  }
+
+  // ── Time info ──
+  var timeRows = [];
+
+  var createdAt = s.createdAt || a.created_at || null;
+  if (createdAt) {
+    var relCreated = formatRelativeTime(createdAt);
+    var absCreated = formatWorkspaceDate(createdAt);
+    timeRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
+      + (isZh ? '创建' : 'Created')
+      + '</span><span class="ccb-popup-value" title="' + escapeHtml(absCreated) + '">'
+      + escapeHtml(relCreated || absCreated) + '</span></div>');
+  }
+
+  var updatedAt = s.updatedAt || null;
+  if (updatedAt) {
+    var relUpdated = formatRelativeTime(updatedAt);
+    var absUpdated = formatWorkspaceDate(updatedAt);
+    timeRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
+      + (isZh ? '最近活动' : 'Last Active')
+      + '</span><span class="ccb-popup-value" title="' + escapeHtml(absUpdated) + '">'
+      + escapeHtml(relUpdated || absUpdated) + '</span></div>');
+  }
+
+  // ── Session stats ──
+  var statRows = [];
+
+  var msgCount = (typeof s.messageCount === 'number' ? s.messageCount : null)
+    ?? (typeof a.message_count === 'number' ? a.message_count : null);
+  if (msgCount !== null && msgCount !== undefined) {
+    statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
+      + (isZh ? '消息数' : 'Messages')
+      + '</span><span class="ccb-popup-value">' + msgCount + '</span></div>');
+  }
+
+  // Token usage
+  var tu = s.tokenUsage;
+  if (tu && (tu.totalTokens || tu.inputTokens || tu.outputTokens)) {
+    var tokenParts = [];
+    if (tu.inputTokens) tokenParts.push((isZh ? '入 ' : 'in ') + _formatTokens(tu.inputTokens));
+    if (tu.outputTokens) tokenParts.push((isZh ? '出 ' : 'out ') + _formatTokens(tu.outputTokens));
+    if (tokenParts.length) {
+      statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
+        + (isZh ? '累计用量' : 'Total Tokens')
+        + '</span><span class="ccb-popup-value ccb-popup-mono">' + escapeHtml(tokenParts.join(' · ')) + '</span></div>');
+    }
+  }
+
+  // Session type
+  var sType = s.sessionType || '';
+  if (sType) {
+    var typeLabels = {
+      main: isZh ? '主对话' : 'Main',
+      sub: isZh ? '子代理' : 'Sub-agent',
+      exploration: isZh ? '探索' : 'Exploration',
+      archived: isZh ? '已归档' : 'Archived',
+    };
+    var typeLabel = typeLabels[sType] || sType;
+    statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
+      + (isZh ? '类型' : 'Type')
+      + '</span><span class="ccb-popup-value">' + escapeHtml(typeLabel) + '</span></div>');
+  }
+
+  // Working directory
+  var openDir = s.openDirectory || '';
+  if (openDir) {
+    statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
+      + (isZh ? '工作目录' : 'Directory')
+      + '</span><span class="ccb-popup-value" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="'
+      + escapeHtml(openDir) + '">' + escapeHtml(openDir) + '</span></div>');
+  }
+
+  // Session ID (compact)
+  if (meta.activeSessionId) {
+    statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
+      + (isZh ? '会话 ID' : 'Session')
+      + '</span><span class="ccb-popup-value ccb-popup-mono">' + escapeHtml(meta.activeSessionId.slice(-12)) + '</span></div>');
+  }
+
+  if (timeRows.length) {
+    sections.push('<div class="ccb-popup-section">' + timeRows.join('') + '</div>');
+  }
+  if (statRows.length) {
+    if (timeRows.length) sections.push('<div class="ccb-popup-divider"></div>');
+    sections.push('<div class="ccb-popup-section">' + statRows.join('') + '</div>');
+  }
+
+  if (!sections.length) return '';
+  return '<div class="ccb-popup-inner">' + sections.join('') + '</div>';
+}
+
+function _showTitlePopup() {
+  var titleEl = document.getElementById('current-agent-name');
+  if (!titleEl) return;
+  var meta = _collectActiveSessionMeta();
+  var html = _buildTitlePopupHtml(meta);
+  if (!html) return;
+
+  if (!_titlePopup) {
+    _titlePopup = document.createElement('div');
+    _titlePopup.className = 'ccb-popup title-hover-popup';
+    _titlePopup.addEventListener('mouseenter', function () {
+      if (_titlePopupHideTimer) { clearTimeout(_titlePopupHideTimer); _titlePopupHideTimer = null; }
+    });
+    _titlePopup.addEventListener('mouseleave', function () {
+      _scheduleHideTitlePopup();
+    });
+    document.body.appendChild(_titlePopup);
+  }
+  _titlePopup.innerHTML = html;
+  var rect = titleEl.getBoundingClientRect();
+  _titlePopup.style.left = rect.left + 'px';
+  _titlePopup.style.top = (rect.bottom + 4) + 'px';
+  _titlePopup.classList.add('visible');
+}
+
+function _hideTitlePopup() {
+  if (_titlePopup) _titlePopup.classList.remove('visible');
+}
+
+function _scheduleShowTitlePopup() {
+  if (_titlePopupHideTimer) { clearTimeout(_titlePopupHideTimer); _titlePopupHideTimer = null; }
+  if (_titlePopupShowTimer) clearTimeout(_titlePopupShowTimer);
+  _titlePopupShowTimer = setTimeout(function () { _showTitlePopup(); _titlePopupShowTimer = null; }, 300);
+}
+
+function _scheduleHideTitlePopup() {
+  if (_titlePopupShowTimer) { clearTimeout(_titlePopupShowTimer); _titlePopupShowTimer = null; }
+  if (_titlePopupHideTimer) clearTimeout(_titlePopupHideTimer);
+  _titlePopupHideTimer = setTimeout(function () { _hideTitlePopup(); _titlePopupHideTimer = null; }, 200);
+}
+
+function _initTitlePopup() {
+  var titleEl = document.getElementById('current-agent-name');
+  if (!titleEl || titleEl.dataset.titlePopupBound) return;
+  titleEl.dataset.titlePopupBound = '1';
+  titleEl.addEventListener('mouseenter', function () { _scheduleShowTitlePopup(); });
+  titleEl.addEventListener('mouseleave', function () { _scheduleHideTitlePopup(); });
+}
+
+window.addEventListener('DOMContentLoaded', _initTitlePopup);
+setTimeout(_initTitlePopup, 0);
+
+
 function ensurePhModelConfigHost() {
   let host = document.getElementById('ph-model-config-host');
   if (!host) {

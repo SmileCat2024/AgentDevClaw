@@ -2785,6 +2785,7 @@ async function readSessionIndex(agentId) {
           openDirectory: cleanSessionText(session.openDirectory),
           sessionType: cleanSessionText(session.sessionType) || (session.metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
           archived: session.archived === true,
+          todo: session.todo === true,
           metadata: normalizeSessionMetadata(session.metadata),
         }))
       : [];
@@ -3487,6 +3488,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         sessionType: sType,
         status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
         archived: record.archived === true,
+        todo: record.todo === true,
         metadata,
         formId,
         openDirectory,
@@ -3541,6 +3543,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       sessionType: cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
       status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
       archived: record.archived === true,
+      todo: record.todo === true,
       metadata,
       formId,
       openDirectory,
@@ -3598,6 +3601,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       sessionType: cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
       status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
       archived: record.archived === true,
+      todo: record.todo === true,
       metadata,
       formId,
       openDirectory,
@@ -3694,6 +3698,7 @@ async function ensureSearchIndex(agentId) {
           openDirectory: cleanSessionText(record.openDirectory),
           sessionType: cleanSessionText(record.sessionType) || source.sessionType || 'main',
           archived: record.archived === true,
+          todo: record.todo === true,
         });
       } else {
         toRead.push(record);
@@ -3714,6 +3719,7 @@ async function ensureSearchIndex(agentId) {
             openDirectory: cleanSessionText(record.openDirectory),
             sessionType: cleanSessionText(record.sessionType) || 'main',
             archived: record.archived === true,
+            todo: record.todo === true,
             fileMtimeMs: record.fileMtimeMs || 0,
             text,
           });
@@ -4269,6 +4275,34 @@ async function archivePrebuiltSession(agentId, sessionId, archived) {
   return {
     archivedSessionId: sessionId,
     archived: !!archived,
+    activeSessionId: newIndex.activeSessionId,
+    sessions: await listPrebuiltSessions(agentId),
+  };
+}
+
+async function tagPrebuiltSessionTodo(agentId, sessionId, todo) {
+  const newIndex = await updateSessionIndex(agentId, (index) => {
+    const existing = index.sessions.find((session) => session.id === sessionId);
+    if (!existing) {
+      const error = new Error(`Unknown prebuilt session: ${sessionId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    // Only non-archived sessions can be tagged as todo
+    if (todo && existing.archived) {
+      const error = new Error('Cannot tag an archived session as todo');
+      error.statusCode = 400;
+      throw error;
+    }
+    const sessions = index.sessions.map((session) =>
+      session.id === sessionId ? { ...session, todo: !!todo } : session,
+    );
+    return { activeSessionId: index.activeSessionId, sessions };
+  });
+
+  return {
+    todoSessionId: sessionId,
+    todo: !!todo,
     activeSessionId: newIndex.activeSessionId,
     sessions: await listPrebuiltSessions(agentId),
   };
@@ -6384,7 +6418,7 @@ async function listGroupChats() {
   const entries = await fs.readdir(GROUP_CHATS_ROOT);
   const chats = [];
   for (const entry of entries) {
-    if (!entry.endsWith('.json')) continue;
+    if (!entry.endsWith('.json') || entry.endsWith('.annotations.json')) continue;
     try {
       const raw = await fs.readFile(path.join(GROUP_CHATS_ROOT, entry), 'utf8');
       const chat = JSON.parse(raw);
@@ -6431,12 +6465,20 @@ async function writeGroupChat(chat) {
 
 async function deleteGroupChatFile(chatId) {
   const filePath = getGroupChatPath(chatId);
+  let deleted = false;
   try {
     await fs.unlink(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+    deleted = true;
+  } catch {}
+  // 清理 annotations 文件
+  try {
+    await fs.unlink(_annotationsFilePath(chatId));
+  } catch {}
+  // 清理数据目录（GROUP.md 等）
+  try {
+    await fs.rm(getGroupChatDataDir(chatId), { recursive: true, force: true });
+  } catch {}
+  return deleted;
 }
 
 // ── Group Chat Resources (文件附件) ────────────────────────────────
@@ -6562,16 +6604,34 @@ async function composeGroupMemory(chat, range) {
 /**
  * 将群记忆格式化为可注入 session 的 prompt 文本。
  */
-function formatGroupMemoryPrompt(memory) {
-  const parts = [];
-  parts.push(`[群聊：${memory.name}]`);
-  parts.push(`群聊ID：${memory.chatId}`);
-  parts.push(`当前时间：${new Date().toLocaleString('zh-CN')}`);
-
-  if (memory.summary) {
-    parts.push('', '=== 群聊记录 ===', memory.summary);
+function formatGroupInfoBlock(chat) {
+  const lines = [
+    '─── 群聊基本信息 ───',
+    `群聊名称：${chat.name || '(未命名)'}`,
+    `群聊ID：${chat.id}`,
+  ];
+  if (chat.createdAt) {
+    const created = new Date(chat.createdAt).toLocaleString('zh-CN');
+    lines.push(`创建时间：${created}`);
   }
+  lines.push(`当前时间：${new Date().toLocaleString('zh-CN')}`);
+  return lines.join('\n');
+}
 
+function formatMemoryRange(range) {
+  const map = { '1d': '近1天', '3d': '近3天', '1w': '近1周', all: '全部历史' };
+  return map[range] || '近3天';
+}
+
+function formatGroupMemoryPrompt(memory, range) {
+  const parts = [];
+  if (memory.summary) {
+    const rangeLabel = formatMemoryRange(range);
+    parts.push(
+      `─── 群聊记录（${rangeLabel}，共${memory.messageCount}条）───`,
+      memory.summary,
+    );
+  }
   return parts.join('\n');
 }
 
@@ -6605,13 +6665,21 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
     const identityInfo = allIdentities.find((i) => i.identityRef === m.from);
     const from = m.from === 'user' ? '用户' : (identityInfo?.displayName || m.from);
     const text = (m.text || '').slice(0, 300);
-    return `[${time}] ${from}：${text}`;
+
+    // 批注：附加到消息行尾部，供管理员参考
+    let suffix = '';
+    if (m._annotation) {
+      const annTime = new Date(m._annotation.timestamp).toLocaleString('zh-CN', {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      });
+      suffix = `  [批注 ${annTime}] ${m._annotation.text}`;
+    }
+
+    return `[${time}] ${from}：${text}${suffix}`;
   });
 
   return [
-    `[群聊：${chatName || ''}] 群聊ID：${chatId}`,
-    `当前时间：${new Date().toLocaleString('zh-CN')}`,
-    '=== 你未读的群聊消息 ===',
+    `─── 你未读的群聊消息（共${messages.length}条）───`,
     ...lines,
   ].join('\n');
 }
@@ -6721,10 +6789,9 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel, option
  * 构建发送给 agent 的 prompt：群聊上下文头 + 消息正文 + 链接引用。
  */
 function composeDispatchPrompt(chatName, message, chatId) {
+  // 群聊上下文已通过 contextText (system block) 独立注入，
+  // 这里只返回消息正文 + 附件 + 链接
   const parts = [];
-  if (chatName) {
-    parts.push(chatId ? `[群聊：${chatName}] 群聊ID：${chatId}` : `[群聊：${chatName}]`);
-  }
   parts.push(message.text || '');
   // 附件内联
   if (Array.isArray(message.attachments) && message.attachments.length > 0) {
@@ -6742,6 +6809,42 @@ function composeDispatchPrompt(chatName, message, chatId) {
     }
   }
   return parts.join('\n\n');
+}
+
+/**
+ * 为被派发的 agent 构建群聊 system 上下文块。
+ * 让 agent 知道自己处于群聊中、发送者是谁、回复会被同步回群聊。
+ */
+function buildGroupDispatchSystemMessage(chat, message, allIdentities) {
+  const chatName = chat?.name || '(未命名群聊)';
+
+  // 解析发送者身份
+  let senderRole;
+  let senderName;
+  if (message.from === 'user') {
+    senderRole = '用户';
+    senderName = '用户';
+  } else if (message.from === 'work-group:admin') {
+    senderRole = '群管理员';
+    senderName = '管理员';
+  } else {
+    const identityInfo = allIdentities.find((i) => i.identityRef === message.from);
+    senderRole = identityInfo?.displayName || message.from;
+    senderName = senderRole;
+  }
+
+  const lines = [
+    `本会话同时被 AgentDevClaw 中群聊「${chatName}」关联管理。下方紧跟的一条用户消息由群聊中的${senderName}（${senderRole}）发送`,
+    '',
+  ];
+
+  lines.push(
+    `当前时间：${new Date().toLocaleString('zh-CN')}`,
+    '',
+    '你的本轮的最后一次回复将自动同步到群聊中，群管理员和用户都能看到。',
+  );
+
+  return lines.join('\n');
 }
 
 // ── Group Chat Bridge: inbox + writeback ───────────────────────────
@@ -6888,31 +6991,35 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
   const chat = await readGroupChat(chatId);
   if (!chat) return null;
 
-  let contextPrompt = null;
+  const sections = [];
 
-  // ── 群聊背景文档 + 群记忆预注入（仅新 session）──
-  // GROUP.md 是静态背景，类似 CLAUDE.md，只在 session 首次注入，避免每轮重复污染
+  // ── 新 session：群聊基本信息 + GROUP.md + 群记忆 ──
+  // 这些是静态/半静态背景，只在 session 首次注入，避免每轮重复污染
   if (isNew) {
+    // 群聊基本信息
+    sections.push(formatGroupInfoBlock(chat));
+
     // GROUP.md
     try {
       const mdPath = path.join(GROUP_CHATS_ROOT, chatId, 'GROUP.md');
       const mdContent = await fs.readFile(mdPath, 'utf-8');
       if (mdContent && mdContent.trim()) {
-        contextPrompt = `=== 群聊背景 ===\n${mdContent}`;
+        sections.push(`─── 群聊背景 ───\n${mdContent}`);
         log('GroupChat', `GROUP.md injected (${mdContent.length} chars) for new admin session`);
       }
     } catch {
       // GROUP.md 不存在或不可读，跳过
     }
 
-    // 群记忆（近期消息摘要）
+    // 群记忆（近期消息摘要，标注时间范围）
     const mem = chat.adminMemory || { range: '3d' };
-    const groupMemory = await composeGroupMemory(chat, mem.range || '3d');
+    const range = mem.range || '3d';
+    const groupMemory = await composeGroupMemory(chat, range);
     groupMemory.chatId = chatId;
-    const memoryPrompt = formatGroupMemoryPrompt(groupMemory);
+    const memoryPrompt = formatGroupMemoryPrompt(groupMemory, range);
     if (memoryPrompt) {
-      contextPrompt = contextPrompt ? contextPrompt + '\n\n' + memoryPrompt : memoryPrompt;
-      log('GroupChat', `group memory pre-injected for new admin session (${groupMemory.messageCount} messages)`);
+      sections.push(memoryPrompt);
+      log('GroupChat', `group memory pre-injected for new admin session (${groupMemory.messageCount} messages, range=${range})`);
     }
   }
 
@@ -6927,9 +7034,16 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
         && m.id !== currentMessageId
     );
     if (catchUpMessages.length > 0) {
+      // 合并批注到 catch-up 消息（仅管理员注入）
+      const annotations = await readAnnotations(chatId);
+      if (Object.keys(annotations).length > 0) {
+        catchUpMessages.forEach((m) => {
+          if (annotations[m.id]) m._annotation = annotations[m.id];
+        });
+      }
       const catchUpPrompt = formatCatchUpPrompt(catchUpMessages, allIdentities, chatId, chat.name);
       if (catchUpPrompt) {
-        contextPrompt = contextPrompt ? contextPrompt + '\n\n' + catchUpPrompt : catchUpPrompt;
+        sections.push(catchUpPrompt);
         log('GroupChat', `catch-up merged into admin context: ${catchUpMessages.length} messages`);
       }
     }
@@ -6939,13 +7053,12 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
   chat.lastActiveAt[identityRef] = currentMessageTimestamp || Date.now();
   await writeGroupChat(chat);
 
-  return contextPrompt;
+  return sections.length > 0 ? sections.join('\n\n') : null;
 }
 
 /**
  * 确保 work-group admin runtime 已启动。
- * 统一注入 PROTOCLAW_GC_DATA_DIR 环境变量，让 WorkGroupAgent 能读取 GROUP.md。
- * 所有启动 admin runtime 的路径都必须经过此函数，否则 MemoryFeature 不会挂载。
+ * 统一管理员 runtime 的启动入口，供所有 admin 通知路径调用。
  * 返回 runtime 对象（已 ready），失败时抛异常。
  */
 async function ensureAdminRuntime(chatId, sessionId) {
@@ -6955,14 +7068,8 @@ async function ensureAdminRuntime(chatId, sessionId) {
   }
 
   const agent = await requireAgentLight('work-group');
-  const chat = await readGroupChat(chatId);
   log('GroupChat', `starting work-group admin session=${sessionId} for chat=${chatId}`);
-  await startManagedAgent(agent, sessionId, {
-    extraEnv: {
-      PROTOCLAW_GC_DATA_DIR: path.join(GROUP_CHATS_ROOT, chatId),
-      ...(chat?.workDir ? { PROTOCLAW_GC_WORKDIR: chat.workDir } : {}),
-    },
-  });
+  await startManagedAgent(agent, sessionId);
   runtime = await waitForManagedRuntimeReady('work-group', 30000, sessionId);
   if (!runtime) throw new Error('Admin runtime failed to become ready within 30s');
   return runtime;
@@ -6993,12 +7100,7 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
     try {
       const agent = await requireAgentLight(workspaceId);
       log('GroupChat', `starting agent ${workspaceId} session=${sessionId} for dispatch`);
-      await startManagedAgent(agent, sessionId, {
-        extraEnv: {
-          PROTOCLAW_GC_DATA_DIR: path.join(GROUP_CHATS_ROOT, chatId),
-          ...(chat.workDir ? { PROTOCLAW_GC_WORKDIR: chat.workDir } : {}),
-        },
-      });
+      await startManagedAgent(agent, sessionId);
       runtime = await waitForManagedRuntimeReady(workspaceId, 30000, sessionId);
       if (!runtime) {
         throw new Error('Agent runtime failed to become ready within 30s');
@@ -7038,8 +7140,10 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
     return;
   }
 
-  // 5. 上下文完整性：管理员专属的 catch-up + 群记忆预注入
-  // 这些内容通过 contextText 分离传递，bridge 在 CallStart 时注入为 system-reminder，
+  // 5. 上下文完整性：
+  // - 管理员：catch-up + 群记忆 + GROUP.md + 群聊基本信息
+  // - 被派发 agent：群聊 system 上下文块（交代群聊背景、发送者身份、回复可见性）
+  // 这些内容通过 contextText 分离传递，bridge 在 CallStart 时注入为 system 消息，
   // 而不是混入用户消息。
   const runtimeKey = getManagedRuntimeKey(workspaceId, sessionId);
 
@@ -7051,6 +7155,9 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
       chatId, allIdentities,
       message.timestamp || Date.now(), message.id, isNew,
     );
+  } else {
+    // 被派发的 agent：注入群聊 system 上下文块
+    contextText = buildGroupDispatchSystemMessage(chat, message, allIdentities);
   }
 
   // 6. 通过 gc inbox 投递实际消息（context 通过 contextText 字段分离传递）
@@ -7160,7 +7267,6 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
       }[autonomyMode] || '直接执行';
 
       const coordinatorPrompt = [
-        `[群聊：${chatName}] 群聊ID：${chatId}`,
         `用户 @了 ${targetName}：`,
         message.text || '',
         '',
@@ -7189,8 +7295,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
       const targetName = targetInfo?.displayName || targetIdentityRef;
 
       const observationPrompt = [
-        `[群聊动态 · ${chatName}]`,
-        `用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
+        `[观察] 用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
         `${targetName} 已开始处理。你不需要重复派发。`,
       ].join('\n');
 
@@ -7253,9 +7358,7 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
   const targetName = targetInfo?.displayName || targetIdentityRef;
 
   const observationPrompt = [
-    `[观察 · ${chatName}] 群聊ID：${chatId}`,
-    `当前时间：${new Date().toLocaleString('zh-CN')}`,
-    `用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
+    `[观察] 用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
     '',
     `系统已将此消息派发给 ${targetName}，会话已启动。你不需要重复派发。`,
   ].join('\n');
@@ -7308,10 +7411,7 @@ async function notifyAdminForActivity(chatId, message, chat) {
   }
 
   // user 块包含当前触发消息的摘要（catch-up 只含更早的未读消息，无重复）
-  const activityPrompt = [
-    `[群聊动态 · ${chatName}]`,
-    activityDesc,
-  ].join('\n');
+  const activityPrompt = activityDesc;
 
   // 确保管理员 runtime 存在
   const { sessionId, isNew } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
@@ -7837,6 +7937,67 @@ app.get('/protoclaw/group_chats/:chatId/sessions/:identityRef', async (req, res,
       inChatSessions,
       externalSessions,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Group Chat Annotations API ──────────────────────────────────
+
+function _annotationsFilePath(chatId) {
+  return path.join(GROUP_CHATS_ROOT, `${sanitizeSessionFragment(chatId)}.annotations.json`);
+}
+
+async function readAnnotations(chatId) {
+  try {
+    const raw = await fs.readFile(_annotationsFilePath(chatId), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function writeAnnotations(chatId, annotations) {
+  await ensureGroupChatsDir();
+  await fs.writeFile(_annotationsFilePath(chatId), JSON.stringify(annotations, null, 2), 'utf8');
+}
+
+app.get('/protoclaw/group_chats/:chatId/annotations', async (req, res, next) => {
+  try {
+    const annotations = await readAnnotations(req.params.chatId);
+    res.json({ annotations });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/protoclaw/group_chats/:chatId/annotations/:messageId', express.json(), async (req, res, next) => {
+  try {
+    const { chatId, messageId } = req.params;
+    const { text } = req.body;
+    if (typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'text is required' });
+    }
+    const annotations = await readAnnotations(chatId);
+    annotations[messageId] = {
+      text: text.trim(),
+      timestamp: Date.now(),
+      author: 'user',
+    };
+    await writeAnnotations(chatId, annotations);
+    res.json({ success: true, annotation: annotations[messageId] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/protoclaw/group_chats/:chatId/annotations/:messageId', async (req, res, next) => {
+  try {
+    const { chatId, messageId } = req.params;
+    const annotations = await readAnnotations(chatId);
+    delete annotations[messageId];
+    await writeAnnotations(chatId, annotations);
+    res.json({ success: true });
   } catch (error) {
     next(error);
   }
@@ -10656,6 +10817,21 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
   }
 });
 
+app.post('/protoclaw/prebuilt_sessions/todo', express.json(), async (req, res, next) => {
+  try {
+    const agent = await requireAgentLight(req.body.agentId);
+    if (typeof req.body.sessionId !== 'string' || !req.body.sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+    const todo = req.body.todo !== false;
+    const result = await tagPrebuiltSessionTodo(agent.id, req.body.sessionId, todo);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Session meta sync: runtime child process pushes fresh metadata after save ──
 app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) => {
   try {
@@ -10692,6 +10868,8 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
           savedAt,
           metaVersion: META_VERSION,
           updatedAt: new Date(savedAt).toISOString(),
+          // Auto-clear todo when session is actively producing new data
+          todo: false,
         };
       });
       return { ...index, sessions };
