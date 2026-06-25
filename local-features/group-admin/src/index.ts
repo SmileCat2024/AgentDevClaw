@@ -79,26 +79,30 @@ export class GroupAdminFeature implements AgentFeature {
           );
           const msgs = data.messages || [];
           const lines = msgs.map((m: any) => {
-            const routing = m.routing ? ` [${m.routing.status}]` : '';
-            return `[${new Date(m.timestamp).toLocaleString()}] ${m.from}: ${m.text}${routing}`;
+            const routeInfo = m.routing?.status
+              ? ` [${m.routing.status}${m.routing.targetSessionTitle ? ` → ${m.routing.targetSessionTitle}` : m.routing.targetSessionId ? ` → ${m.routing.targetSessionId.slice(0, 16)}` : ''}]`
+              : '';
+            return `[${new Date(m.timestamp).toLocaleString()}] ${m.from}: ${m.text}${routeInfo}`;
           });
           return { success: true, text: lines.join('\n') || '暂无消息' };
         },
       },
       {
         name: 'gc_dispatch',
-        description: '向指定群聊中的 Agent 派发任务',
+        description: '向指定群聊中的 Agent 派发任务。默认复用该 Agent 在群内的最近会话。',
         parameters: {
           type: 'object',
           properties: {
             chatId: { type: 'string', description: '群聊 ID' },
-            text: { type: 'string', description: '任务描述' },
+            text: { type: 'string', description: '任务描述（要清晰完整地说明任务要求，因为被派发的 Agent 没有群聊上下文）' },
             identityRef: { type: 'string', description: '目标身份，如 programming-helper:main' },
+            targetSessionId: { type: 'string', description: '可选。指定目标 Agent 的具体会话 ID。传入后将任务路由到该会话。先用 gc_sessions 查看可用会话。' },
+            forceNew: { type: 'boolean', description: '可选。设为 true 时强制创建全新会话。默认 false（复用最近会话）。' },
           },
           required: ['chatId', 'text', 'identityRef'],
         },
         execute: async (args: any) => {
-          const { chatId, text, identityRef } = args || {};
+          const { chatId, text, identityRef, targetSessionId, forceNew } = args || {};
           if (!chatId || !text || !identityRef) {
             return { error: 'chatId, text, identityRef are required' };
           }
@@ -106,16 +110,25 @@ export class GroupAdminFeature implements AgentFeature {
           if (identityRef === 'work-group:admin') {
             return { error: '不能向管理员自身派发任务' };
           }
+          const body: any = {
+            text,
+            from: 'work-group:admin',
+            mentions: [{ identityRef }],
+            kind: 'dispatch',
+          };
+          if (targetSessionId) body.targetSessionId = targetSessionId;
+          if (forceNew) body.forceNew = true;
+
           const msg = await this.apiPost(
             `/protoclaw/group_chats/${encodeURIComponent(chatId)}/messages`,
-            {
-              text,
-              from: 'work-group:admin',
-              mentions: [{ identityRef }],
-              kind: 'dispatch',
-            }
+            body
           );
-          return { success: true, text: `已派发任务到 ${identityRef}，消息 ID: ${msg.id}` };
+
+          let routeInfo = '默认会话';
+          if (forceNew) routeInfo = '全新会话';
+          else if (targetSessionId) routeInfo = `会话 ${targetSessionId.slice(0, 20)}`;
+
+          return { success: true, text: `已派发任务到 ${identityRef} → ${routeInfo}，消息 ID: ${msg.id}` };
         },
       },
       {
@@ -143,6 +156,55 @@ export class GroupAdminFeature implements AgentFeature {
             }
           );
           return { success: true, text: `消息已发送，消息 ID: ${msg.id}` };
+        },
+      },
+      {
+        name: 'gc_sessions',
+        description: '查看群聊中某个 Agent 的会话列表，包括群内会话（被映射的）和外部会话。用于决定 gc_dispatch 使用哪个会话。',
+        parameters: {
+          type: 'object',
+          properties: {
+            chatId: { type: 'string', description: '群聊 ID' },
+            identityRef: { type: 'string', description: '目标身份，如 programming-helper:main' },
+          },
+          required: ['chatId', 'identityRef'],
+        },
+        execute: async (args: any) => {
+          const { chatId, identityRef } = args || {};
+          if (!chatId || !identityRef) {
+            return { error: 'chatId and identityRef are required' };
+          }
+          try {
+            const data = await this.apiGet(
+              `/protoclaw/group_chats/${encodeURIComponent(chatId)}/sessions/${encodeURIComponent(identityRef)}`
+            );
+            const lines = [
+              `${identityRef} 的会话列表（模式: ${data.sessionModel}，当前活跃: ${data.activeSessionId || '无'}）`,
+              '',
+            ];
+
+            if (data.inChatSessions?.length > 0) {
+              lines.push('── 群内会话 ──');
+              for (const s of data.inChatSessions) {
+                const tag = s.isActive ? ' [当前]' : '';
+                const time = s.updatedAt ? new Date(s.updatedAt).toLocaleString('zh-CN') : '';
+                lines.push(` ${s.title}${tag} (id: ${s.id}) ${time}`);
+              }
+              lines.push('');
+            }
+
+            if (data.externalSessions?.length > 0) {
+              lines.push('── 外部会话 ──');
+              for (const s of data.externalSessions) {
+                const time = s.updatedAt ? new Date(s.updatedAt).toLocaleString('zh-CN') : '';
+                lines.push(` ${s.title} (id: ${s.id}) ${time}`);
+              }
+            }
+
+            return { success: true, text: lines.join('\n') };
+          } catch (err: any) {
+            return { error: `获取会话列表失败: ${err.message || err}` };
+          }
         },
       },
       {

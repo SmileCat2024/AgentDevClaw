@@ -55,14 +55,14 @@ export class GroupChatBridgeFeature implements AgentFeature {
     this.callActive = true;
     this.injectedThisCall = [];
 
-    // 空闲路径下收到的上下文（群记忆 / catch-up）在 CallStart 注入为 system-reminder，
-    // 出现在用户消息之前，让 agent 以 system-reminder 形式感知环境背景。
+    // 空闲路径下收到的上下文（群记忆 / catch-up）在 CallStart 注入，
+    // 出现在用户消息之前，让 agent 以 system 消息形式感知环境背景。
     if (this.pendingContext && ctx?.context) {
       ctx.context.add({
         role: 'system',
-        content: `<system-reminder>\n${this.pendingContext}\n</system-reminder>`,
+        content: this.pendingContext,
       });
-      console.log('[GroupChatBridge] injected context as system-reminder at CallStart');
+      console.log('[GroupChatBridge] injected context at CallStart');
       this.pendingContext = null;
     }
   }
@@ -74,7 +74,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
     const messages = this.pendingBuffer.splice(0);
     const content = messages
       .map((msg) => {
-        // busy 路径下，contextText 和消息文本一起作为 system-reminder 注入
+        // busy 路径下，contextText 和消息文本合并注入
         if (msg.contextText) {
           return msg.contextText + '\n\n' + msg.text;
         }
@@ -84,7 +84,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
 
     ctx.context.add({
       role: 'system',
-      content: `<system-reminder>\n${content}\n</system-reminder>`,
+      content,
     });
 
     this.injectedThisCall.push(...messages);

@@ -4,7 +4,7 @@
  * 群聊工作空间的运行时 agent。
  * 通过 GroupAdminFeature 暴露 gc_* 工具集，为 @管理员 提供协调能力。
  */
-import { BasicAgent, TemplateComposer, MemoryFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer } from 'agentdev';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { GroupAdminFeature } from '../../../local-features/dist/group-admin/src/index.js';
@@ -21,16 +21,6 @@ export class WorkGroupAgent extends BasicAgent {
 
     this.use(new GroupAdminFeature());
     this.use(new GroupChatBridgeFeature());
-
-    // 从群聊 dispatch 时传入的 PROTOCLAW_GC_WORKDIR 读取 GROUP.md
-    // GROUP.md 作为群聊的静态背景文档，类似 CLAUDE.md 对编程项目的意义
-    const gcWorkDir = process.env.PROTOCLAW_GC_WORKDIR;
-    if (gcWorkDir) {
-      this.use(new MemoryFeature({
-        workspaceDir: gcWorkDir,
-        filename: '.agentdev/GROUP.md',
-      }));
-    }
   }
 
   async onInitiate(ctx) {

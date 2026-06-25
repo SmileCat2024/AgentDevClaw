@@ -6622,7 +6622,7 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
  * - one-shot: 总是创建新的
  * 返回 { sessionId, isNew }
  */
-async function resolveGroupChatSession(chatId, identityRef, sessionModel) {
+async function resolveGroupChatSession(chatId, identityRef, sessionModel, options = {}) {
   const chat = await readGroupChat(chatId);
   if (!chat) throw new Error(`Group chat not found: ${chatId}`);
 
@@ -6641,6 +6641,30 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel) {
       sessionType: 'exploration',
       taskTitle: sessionTitle,
     });
+    return { sessionId: session.id, isNew: true };
+  }
+
+  // 指定会话：管理员或用户通过 targetSessionId 精准路由
+  if (options.targetSessionId) {
+    const index = await readSessionIndex(workspaceId);
+    const found = index.sessions.find((s) => s.id === options.targetSessionId);
+    if (found) {
+      // 更新群聊会话映射，使后续默认派发也走这个会话
+      chat.sessions[identityRef] = found.id;
+      await writeGroupChat(chat);
+      return { sessionId: found.id, isNew: false };
+    }
+    log('GroupChat', `targetSessionId ${options.targetSessionId} not found for ${workspaceId}, falling back`);
+  }
+
+  // 强制新会话
+  if (options.forceNew) {
+    const agent = await requireAgentLight(workspaceId);
+    const session = await createPrebuiltSession(agent.id, {
+      taskTitle: sessionTitle,
+    });
+    chat.sessions[identityRef] = session.id;
+    await writeGroupChat(chat);
     return { sessionId: session.id, isNew: true };
   }
 
@@ -6778,6 +6802,18 @@ app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
       ? `执行出错: ${error}`
       : (response || '(无回复)');
 
+    // 回写消息携带 session 信息，供前端显示会话标签和跳转
+    const workspaceId = identityRef.split(':')[0];
+    const wbSessionId = process.env.PROTOCLAW_PREBUILT_SESSION_ID || null;
+    let wbSessionTitle = wbSessionId;
+    if (wbSessionId) {
+      try {
+        const idx = await readSessionIndex(workspaceId);
+        const rec = idx.sessions.find((s) => s.id === wbSessionId);
+        if (rec) wbSessionTitle = rec.title || rec.taskTitle || wbSessionId;
+      } catch {}
+    }
+
     await appendGroupChatMessage(chatId, {
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       chatId,
@@ -6787,7 +6823,14 @@ app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
       links: [],
       kind: error ? 'text' : 'text',
       timestamp: Date.now(),
-      routing: null,
+      routing: wbSessionId ? {
+        status: 'completed',
+        targetSessionId: wbSessionId,
+        targetSessionTitle: wbSessionTitle,
+        targetWorkspaceId: workspaceId,
+        targetIdentityRef: identityRef,
+        completedAt: Date.now(),
+      } : null,
     });
     log('GroupChat', `writeback from ${identityRef} to chat ${chatId}`);
 
@@ -6847,14 +6890,28 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
 
   let contextPrompt = null;
 
-  // ── 群记忆预注入（仅新 session）──
+  // ── 群聊背景文档 + 群记忆预注入（仅新 session）──
+  // GROUP.md 是静态背景，类似 CLAUDE.md，只在 session 首次注入，避免每轮重复污染
   if (isNew) {
+    // GROUP.md
+    try {
+      const mdPath = path.join(GROUP_CHATS_ROOT, chatId, 'GROUP.md');
+      const mdContent = await fs.readFile(mdPath, 'utf-8');
+      if (mdContent && mdContent.trim()) {
+        contextPrompt = `=== 群聊背景 ===\n${mdContent}`;
+        log('GroupChat', `GROUP.md injected (${mdContent.length} chars) for new admin session`);
+      }
+    } catch {
+      // GROUP.md 不存在或不可读，跳过
+    }
+
+    // 群记忆（近期消息摘要）
     const mem = chat.adminMemory || { range: '3d' };
     const groupMemory = await composeGroupMemory(chat, mem.range || '3d');
     groupMemory.chatId = chatId;
     const memoryPrompt = formatGroupMemoryPrompt(groupMemory);
     if (memoryPrompt) {
-      contextPrompt = memoryPrompt;
+      contextPrompt = contextPrompt ? contextPrompt + '\n\n' + memoryPrompt : memoryPrompt;
       log('GroupChat', `group memory pre-injected for new admin session (${groupMemory.messageCount} messages)`);
     }
   }
@@ -6886,20 +6943,46 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
 }
 
 /**
+ * 确保 work-group admin runtime 已启动。
+ * 统一注入 PROTOCLAW_GC_DATA_DIR 环境变量，让 WorkGroupAgent 能读取 GROUP.md。
+ * 所有启动 admin runtime 的路径都必须经过此函数，否则 MemoryFeature 不会挂载。
+ * 返回 runtime 对象（已 ready），失败时抛异常。
+ */
+async function ensureAdminRuntime(chatId, sessionId) {
+  let runtime = getAgentRuntime('work-group', sessionId);
+  if (runtime?.process && runtime.process.exitCode === null && !runtime.stopped) {
+    return runtime;
+  }
+
+  const agent = await requireAgentLight('work-group');
+  const chat = await readGroupChat(chatId);
+  log('GroupChat', `starting work-group admin session=${sessionId} for chat=${chatId}`);
+  await startManagedAgent(agent, sessionId, {
+    extraEnv: {
+      PROTOCLAW_GC_DATA_DIR: path.join(GROUP_CHATS_ROOT, chatId),
+      ...(chat?.workDir ? { PROTOCLAW_GC_WORKDIR: chat.workDir } : {}),
+    },
+  });
+  runtime = await waitForManagedRuntimeReady('work-group', 30000, sessionId);
+  if (!runtime) throw new Error('Admin runtime failed to become ready within 30s');
+  return runtime;
+}
+
+/**
  * 核心派发逻辑：将消息投递到指定 identity 的 session。
  * 负责 session 解析、runtime 启动、gc inbox 投递、状态跟踪。
  */
-async function dispatchToIdentity(chatId, message, chat, identityRef, composedPrompt) {
+async function dispatchToIdentity(chatId, message, chat, identityRef, composedPrompt, sessionOptions = {}) {
   const workspaceId = identityRef.split(':')[0];
-  log('GroupChat', `dispatching message ${message.id} to ${workspaceId} (${identityRef})`);
+  log('GroupChat', `dispatching message ${message.id} to ${workspaceId} (${identityRef}) sessionOpts=${JSON.stringify(sessionOptions)}`);
 
   // 1. 解析 identity 的 sessionModel
   const allIdentities = await collectIdentities();
   const identityInfo = allIdentities.find((i) => i.identityRef === identityRef);
   const sessionModel = identityInfo?.sessionModel || 'persistent';
 
-  // 2. 解析或创建 session
-  const { sessionId, isNew } = await resolveGroupChatSession(chatId, identityRef, sessionModel);
+  // 2. 解析或创建 session（传入 sessionOptions）
+  const { sessionId, isNew } = await resolveGroupChatSession(chatId, identityRef, sessionModel, sessionOptions);
   log('GroupChat', `resolved session ${sessionId} (isNew=${isNew}) for ${identityRef}`);
 
   // 3. 找到或启动指定 session 的 runtime
@@ -6912,6 +6995,7 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
       log('GroupChat', `starting agent ${workspaceId} session=${sessionId} for dispatch`);
       await startManagedAgent(agent, sessionId, {
         extraEnv: {
+          PROTOCLAW_GC_DATA_DIR: path.join(GROUP_CHATS_ROOT, chatId),
           ...(chat.workDir ? { PROTOCLAW_GC_WORKDIR: chat.workDir } : {}),
         },
       });
@@ -6979,16 +7063,26 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
   });
   log('GroupChat', `message ${message.id} enqueued to gc inbox for ${workspaceId}/${sessionId}`);
 
-  // 6. 更新 routing 状态
+  // 6. 更新 routing 状态（含 sessionTitle 供 dispatch 卡片展示）
+  // 查找 session 标题用于展示
+  let resolvedSessionTitle = sessionId;
+  try {
+    const idx = await readSessionIndex(workspaceId);
+    const rec = idx.sessions.find((s) => s.id === sessionId);
+    if (rec) resolvedSessionTitle = rec.title || rec.taskTitle || sessionId;
+  } catch {}
+
   await updateMessageRouting(chatId, message.id, {
     status: 'delivered',
     targetSessionId: sessionId,
+    targetSessionTitle: resolvedSessionTitle,
     dispatchedAt: Date.now(),
   });
 
   // 6.5. 追加"任务已启动"事件卡片（以 agent 身份发送，便于追踪）
   // 管理员自身不需要 task_started 卡片——它是协调者，不是执行者
-  if (identityRef !== 'work-group:admin') {
+  // 管理员发起的 dispatch 已经有 dispatch 卡片传达了完整信息，不再追加冗余事件
+  if (identityRef !== 'work-group:admin' && message.from !== 'work-group:admin') {
     await appendGroupChatMessage(chatId, {
       id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       chatId,
@@ -7000,6 +7094,7 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
         identityRef,
         identityName: identityInfo?.displayName || workspaceId,
         sessionId,
+        sessionTitle: resolvedSessionTitle,
         workspaceId,
       },
       mentions: [],
@@ -7010,14 +7105,9 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
     log('GroupChat', `event card appended: task_started for ${identityRef} in ${chatId}`);
   }
 
-  // 6.6. 规划模式下，通知管理员系统事件（任务已启动）
-  if (identityRef !== 'work-group:admin' && (chat.initiativeMode || 'assist') === 'plan') {
-    const evtMessage = { id: `evt-notify-${Date.now()}`, from: identityRef, kind: 'event',
-      event: { type: 'task_started', identityName: identityInfo?.displayName || workspaceId }, text: '', timestamp: Date.now() };
-    notifyAdminForActivity(chatId, evtMessage, chat).catch((err) => {
-      log('GroupChat', `admin activity notify (event) failed: ${err.message}`, 'warn');
-    });
-  }
+  // 6.6. 规划模式下不再单独通知 task_started 事件
+  // plan 模式的通知已在 dispatchGroupChatMessage 的 plan 分支合并投递
+  // （notifyAdminWithPrompt 包含了"@了X + X已开始处理"的完整信息）
 
   // 7. 后台跟踪完成状态
   trackGroupChatDispatch(chatId, message.id, workspaceId, viewerAgentId);
@@ -7030,7 +7120,7 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
  * - plan: 直接派发 + 通知管理员观察
  * - execute: 转发给管理员协调
  */
-async function dispatchGroupChatMessage(chatId, message) {
+async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
   const routing = message.routing;
   if (!routing || !routing.targetWorkspaceId) return;
 
@@ -7044,7 +7134,7 @@ async function dispatchGroupChatMessage(chatId, message) {
   // @管理员 → 始终直接派发给管理员
   if (targetIsAdmin) {
     const prompt = composeDispatchPrompt(chatName, message, chatId);
-    await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
+    await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
     return;
   }
 
@@ -7052,7 +7142,7 @@ async function dispatchGroupChatMessage(chatId, message) {
   // 否则在 execute 模式下，admin dispatch → 新消息 → 又路由回 admin → 无限循环。
   if (message.from === 'work-group:admin') {
     const prompt = composeDispatchPrompt(chatName, message, chatId);
-    await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
+    await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
     return;
   }
 
@@ -7088,12 +7178,23 @@ async function dispatchGroupChatMessage(chatId, message) {
     }
 
     case 'plan': {
-      // 规划模式：直接派发 + 通知管理员观察
+      // 规划模式：直接派发 + 单一通知管理员
       const prompt = composeDispatchPrompt(chatName, message, chatId);
-      await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
+      await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
 
-      // 异步通知管理员（不阻塞主派发）
-      notifyAdminForObservation(chatId, message, chat, targetIdentityRef).catch((err) => {
+      // 异步通知管理员（合并：观察 + 任务启动信息，一次 call 搞定）
+      // user 块只放精简的身份标签，详细内容在 catch-up（system 块）中
+      const allIdentities = await collectIdentities();
+      const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
+      const targetName = targetInfo?.displayName || targetIdentityRef;
+
+      const observationPrompt = [
+        `[群聊动态 · ${chatName}]`,
+        `用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
+        `${targetName} 已开始处理。你不需要重复派发。`,
+      ].join('\n');
+
+      notifyAdminWithPrompt(chatId, message, chat, observationPrompt).catch((err) => {
         log('GroupChat', `admin observation notify failed: ${err.message}`, 'warn');
       });
       break;
@@ -7107,6 +7208,38 @@ async function dispatchGroupChatMessage(chatId, message) {
       break;
     }
   }
+}
+
+/**
+ * 统一管理员通知通道：向管理员投递一条自定义 prompt（合并到一次 call）。
+ * 内部调用 prepareAdminContext 保证 catch-up + 群记忆完整性。
+ * 用于替代 notifyAdminForObservation，避免产生多次碎片化 call。
+ */
+async function notifyAdminWithPrompt(chatId, message, chat, promptText) {
+  const allIdentities = await collectIdentities();
+
+  const { sessionId, isNew } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
+  let runtime;
+  try {
+    runtime = await ensureAdminRuntime(chatId, sessionId);
+  } catch (err) {
+    log('GroupChat', `notifyAdminWithPrompt: failed to start runtime: ${err.message}`, 'warn');
+    return;
+  }
+
+  const contextText = await prepareAdminContext(
+    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew,
+  );
+
+  const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
+  enqueueGcInbox(runtimeKey, {
+    id: `obs-${message.id}`,
+    text: promptText,
+    contextText,
+    gcChatId: chatId,
+    gcIdentityRef: 'work-group:admin',
+  });
+  log('GroupChat', `notifyAdminWithPrompt enqueued for admin`);
 }
 
 /**
@@ -7129,18 +7262,12 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
 
   // 确保管理员 runtime 存在
   const { sessionId, isNew } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
-  let runtime = getAgentRuntime('work-group', sessionId);
-  const isAlive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
-
-  if (!isAlive) {
-    try {
-      const agent = await requireAgentLight('work-group');
-      await startManagedAgent(agent, sessionId);
-      runtime = await waitForManagedRuntimeReady('work-group', 30000, sessionId);
-    } catch (err) {
-      log('GroupChat', `admin observation: failed to start runtime: ${err.message}`, 'warn');
-      return;
-    }
+  let runtime;
+  try {
+    runtime = await ensureAdminRuntime(chatId, sessionId);
+  } catch (err) {
+    log('GroupChat', `admin observation: failed to start runtime: ${err.message}`, 'warn');
+    return;
   }
 
   // 上下文完整性：经统一通道补全 catch-up + 群记忆
@@ -7171,37 +7298,29 @@ async function notifyAdminForActivity(chatId, message, chat) {
     ? '用户'
     : (senderInfo?.displayName || message.from);
 
-  const now = new Date().toLocaleString('zh-CN');
-
   let activityDesc;
   if (message.kind === 'event') {
-    activityDesc = `系统事件：${message.event?.identityName || ''} ${message.event?.type === 'task_started' ? '已开始处理' : message.event?.type || ''}`;
+    activityDesc = `系统事件：${message.event?.identityName || ''} 已开始处理`;
   } else if (message.from === 'user') {
     activityDesc = `用户发送了消息：${(message.text || '').slice(0, 200)}`;
   } else {
     activityDesc = `${senderName} 回复了：${(message.text || '').slice(0, 200)}`;
   }
 
+  // user 块包含当前触发消息的摘要（catch-up 只含更早的未读消息，无重复）
   const activityPrompt = [
-    `[群聊动态 · ${chatName}] 群聊ID：${chatId}`,
-    `当前时间：${now}`,
+    `[群聊动态 · ${chatName}]`,
     activityDesc,
   ].join('\n');
 
   // 确保管理员 runtime 存在
   const { sessionId, isNew } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
-  let runtime = getAgentRuntime('work-group', sessionId);
-  const isAlive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
-
-  if (!isAlive) {
-    try {
-      const agent = await requireAgentLight('work-group');
-      await startManagedAgent(agent, sessionId);
-      runtime = await waitForManagedRuntimeReady('work-group', 30000, sessionId);
-    } catch (err) {
-      log('GroupChat', `admin activity: failed to start runtime: ${err.message}`, 'warn');
-      return;
-    }
+  let runtime;
+  try {
+    runtime = await ensureAdminRuntime(chatId, sessionId);
+  } catch (err) {
+    log('GroupChat', `admin activity: failed to start runtime: ${err.message}`, 'warn');
+    return;
   }
 
   // 上下文完整性：经统一通道补全 catch-up + 群记忆
@@ -7371,14 +7490,19 @@ app.delete('/protoclaw/group_chats/:chatId', async (req, res, next) => {
 });
 
 // ── Group Chat GROUP.md API ────────────────────────────────────────
+// GROUP.md 存放在群聊独立数据目录 group-chats/<chatId>/GROUP.md，
+// 不依赖 workDir，避免同 workDir 多群聊共用污染。
+
+function getGroupChatDataDir(chatId) {
+  return path.join(GROUP_CHATS_ROOT, chatId);
+}
 
 app.get('/protoclaw/group_chats/:chatId/group_md', async (req, res, next) => {
   try {
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
-    if (!chat.workDir) return res.json({ content: '', exists: false });
 
-    const mdPath = path.join(chat.workDir, '.agentdev', 'GROUP.md');
+    const mdPath = path.join(getGroupChatDataDir(req.params.chatId), 'GROUP.md');
     try {
       const content = await fs.readFile(mdPath, 'utf-8');
       res.json({ content, exists: true });
@@ -7394,14 +7518,13 @@ app.put('/protoclaw/group_chats/:chatId/group_md', express.json(), async (req, r
   try {
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
-    if (!chat.workDir) return res.status(400).json({ error: 'Group chat has no workDir set' });
 
     const { content } = req.body || {};
     if (typeof content !== 'string') return res.status(400).json({ error: 'content (string) required' });
 
-    const agentdevDir = path.join(chat.workDir, '.agentdev');
-    await fs.mkdir(agentdevDir, { recursive: true });
-    const mdPath = path.join(agentdevDir, 'GROUP.md');
+    const dataDir = getGroupChatDataDir(req.params.chatId);
+    await fs.mkdir(dataDir, { recursive: true });
+    const mdPath = path.join(dataDir, 'GROUP.md');
     await fs.writeFile(mdPath, content, 'utf-8');
     res.json({ ok: true, path: mdPath });
   } catch (error) {
@@ -7604,7 +7727,7 @@ app.get('/protoclaw/group_chats/:chatId/messages', async (req, res, next) => {
 
 app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, res, next) => {
   try {
-    const { text, mentions, links, from, kind, attachments } = req.body || {};
+    const { text, mentions, links, from, kind, attachments, targetSessionId, forceNew } = req.body || {};
     if (!text) return res.status(400).json({ error: 'text required' });
 
     const chat = await readGroupChat(req.params.chatId);
@@ -7647,7 +7770,10 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
 
     // 异步派发（不阻塞响应）——任何带 routing 的消息触发
     if (message.routing) {
-      dispatchGroupChatMessage(chat.id, message).catch((err) => {
+      const sessionOptions = {};
+      if (targetSessionId) sessionOptions.targetSessionId = targetSessionId;
+      if (forceNew) sessionOptions.forceNew = true;
+      dispatchGroupChatMessage(chat.id, message, sessionOptions).catch((err) => {
         console.error(`[GroupChat] dispatch failed for ${message.id}:`, err);
       });
     } else if ((chat.initiativeMode || 'assist') === 'plan' && messageFrom !== 'work-group:admin') {
@@ -7658,6 +7784,59 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
     }
 
     res.status(201).json(message);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Group Chat Sessions API ────────────────────────────────────────
+
+app.get('/protoclaw/group_chats/:chatId/sessions/:identityRef', async (req, res, next) => {
+  try {
+    const { chatId, identityRef } = req.params;
+    const chat = await readGroupChat(chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const workspaceId = identityRef.split(':')[0];
+    const sessionModel = (await collectIdentities()).find((i) => i.identityRef === identityRef)?.sessionModel || 'persistent';
+    const activeSessionId = chat.sessions?.[identityRef] || null;
+
+    // 获取该 workspace 的全部会话
+    const index = await readSessionIndex(workspaceId);
+
+    // 群内会话：被 chat.sessions 映射引用的 session（不只是当前活跃的）
+    const chatSessionIds = new Set(
+      Object.entries(chat.sessions || {})
+        .filter(([ref]) => ref.startsWith(workspaceId))
+        .map(([, sid]) => sid)
+    );
+
+    const inChatSessions = index.sessions
+      .filter((s) => chatSessionIds.has(s.id))
+      .map((s) => ({
+        id: s.id,
+        title: s.title || s.taskTitle || '未命名',
+        updatedAt: s.updatedAt || s.createdAt,
+        isActive: s.id === activeSessionId,
+      }));
+
+    // 外部会话：不在群内映射中的会话（取最近 20 条）
+    const externalSessions = index.sessions
+      .filter((s) => !chatSessionIds.has(s.id))
+      .slice(0, 20)
+      .map((s) => ({
+        id: s.id,
+        title: s.title || s.taskTitle || '未命名',
+        updatedAt: s.updatedAt || s.createdAt,
+      }));
+
+    res.json({
+      identityRef,
+      sessionModel,
+      activeSessionId,
+      inChatSessions,
+      externalSessions,
+    });
   } catch (error) {
     next(error);
   }

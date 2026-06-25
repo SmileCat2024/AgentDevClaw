@@ -4953,7 +4953,13 @@ async function poll() {
               if (prevSig !== nextSig) {
                 wsHostAgent.workspace_sessions = freshSessions;
                 if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
-                  renderCurrentMainView();
+                  // 群聊工作空间：避免整个 workspace DOM 重建导致输入框失焦/内容丢失，
+                  // 改用轻量刷新（只更新左侧群聊列表）
+                  if (wsHostAgent.id === 'work-group' && window.WorkGroupUI?.softRefresh) {
+                    window.WorkGroupUI.softRefresh();
+                  } else {
+                    renderCurrentMainView();
+                  }
                 } else {
                   // Chat mode: only refresh context bar, avoid full re-render that resets scroll
                   if (typeof updateChatContextBar === 'function') {
@@ -5411,6 +5417,7 @@ function renderInputRequests(requests) {
   // 注意：不重置 _voiceTranscribing 期间的 in-flight ASR 请求，
   // 那些请求完成后会自行存入 _pendingVoiceResults，待切回时注入。
   if (_voiceRecording) {
+    console.log('[VoiceInput] renderInputRequests: recording=true pendingSend=%s', _voicePendingSend);
     if (_voicePendingSend) {
       // User already pressed send — preserve auto-send intent.
       // Just stop the recording; onstop will run ASR and auto-send normally.
@@ -5898,6 +5905,7 @@ function onPersistentBtnClick() {
   if (!btn) return;
   if (_voiceTranscribing) return;
   if (_voiceRecording) {
+    console.log('[VoiceInput] send pressed while recording → _voicePendingSend=true, voiceAgentId=%s', _voiceAgentId);
     _voicePendingSend = true;
     stopVoiceRecording();
     return;
@@ -7602,6 +7610,9 @@ async function startVoiceRecording(btn) {
       _voiceRecording = false;
       _playVoiceSound('stop');
 
+      console.log('[VoiceInput] onstop fired: cancelled=%s pendingSend=%s chunkCount=%d',
+        _voiceCancelled, _voicePendingSend, _voiceAudioChunks.length);
+
       if (_voiceCancelled) {
         _voiceCancelled = false;
         _voiceAudioChunks = [];
@@ -7631,10 +7642,13 @@ async function startVoiceRecording(btn) {
       if (_voicePendingSend) {
         _voicePendingSend = false;
         const targetId = btn.dataset.target;
+        console.log('[VoiceInput] auto-send check: targetId=%s voiceAgentId=%s voiceCacheKey=%s currentCacheKey=%s',
+          targetId, _voiceAgentId, _voiceCacheKey, _getSessionInputCacheKey());
         if (targetId === 'input-persistent') {
           const _currentCacheKey = _getSessionInputCacheKey();
           if (_currentCacheKey === _voiceCacheKey) {
             // Same session — text already in textarea, submit normally
+            console.log('[VoiceInput] same-session auto-send → submitQueuedInput()');
             submitQueuedInput();
           } else {
             // Session switched — auto-submit directly to original agent
@@ -7644,12 +7658,21 @@ async function startVoiceRecording(btn) {
             const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
             delete _sessionInputCache[_voiceCacheKey];
             fullText = cachedInput + fullText;
+            console.log('[VoiceInput] cross-session auto-send: voiceAgentId=%s fullTextLen=%d fullText=%s',
+              _voiceAgentId, fullText.length, fullText.slice(0, 80));
             if (fullText.trim()) {
               fetch(`/api/agents/${_voiceAgentId}/queue-input`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: fullText })
-              }).catch(e => console.error('[VoiceInput] cross-session auto-send failed:', e));
+              }).then(res => {
+                console.log('[VoiceInput] cross-session queue-input response: status=%d ok=%s', res.status, res.ok);
+                if (!res.ok) {
+                  res.text().then(t => console.error('[VoiceInput] cross-session queue-input error body:', t));
+                }
+              }).catch(e => console.error('[VoiceInput] cross-session auto-send fetch failed:', e));
+            } else {
+              console.log('[VoiceInput] cross-session auto-send SKIPPED: fullText is empty');
             }
           }
         } else if (targetId.startsWith('input-')) {
@@ -7716,6 +7739,8 @@ async function sendAudioToASR(blob, btn) {
       const textarea = document.getElementById(targetId);
       // Only inject if we're still on the same session that started the recording.
       const _currentCacheKey = _getSessionInputCacheKey();
+      console.log('[VoiceInput] ASR result: textLen=%d currentCacheKey=%s voiceCacheKey=%s same=%s',
+        text.length, _currentCacheKey, _voiceCacheKey, _currentCacheKey === _voiceCacheKey);
       if (textarea && _currentCacheKey === _voiceCacheKey) {
         insertTextAtCursor(textarea, text);
         autoResize(textarea);

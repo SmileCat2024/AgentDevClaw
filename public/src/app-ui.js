@@ -262,28 +262,26 @@ function updateChatContextBar() {
     ? sessions.find(function(s) { return s.id === activeId; })
     : (sessions[0] || null);
 
-  // token 用量：优先从 session 持久化数据取，仅在 runtime 确实绑定当前 session 时才用 overview 实时数据
+  // token 用量：在有活跃 runtime 时始终优先使用 overview 实时数据。
+  // runtime 进程始终服务于当前激活的会话（chat surface 下由
+  // loadAgentData / reloadRuntimeForSessionSwitch 保证），所以 overview
+  // 总是反映正确会话的用量。不再依赖 runtimeBoundToSession 判定——
+  // 该判定依赖 allAgents 中异步刷新的 active_workspace_session_id，
+  // 会在 poll 周期间波动，导致用量在两个值之间反复跳动。
   var used = 0;
   var isLastRequest = false;
   var runtimeRecord = typeof getCurrentRuntimeRecord === 'function' ? getCurrentRuntimeRecord() : null;
-  var runtimeSessionId = runtimeRecord
-    ? (runtimeRecord.active_workspace_session_id || runtimeRecord.runtime_session_id || runtimeRecord.runtimeSessionId)
-    : null;
-  var runtimeBoundToSession = runtimeRecord && activeId && (
-    runtimeSessionId === activeId
-    || (runtimeRecord.parent_id && runtimeRecord.parent_id === (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord()?.id : null))
-  );
 
-  // 模型名：运行时绑定当前 session 时优先从 overview 实时取，回退到 session 元数据
+  // 模型名：有 runtime 时优先从 overview 实时取，回退到 session 元数据
   var modelName = '';
-  if (runtimeBoundToSession && currentOverviewSnapshot && currentOverviewSnapshot.modelName) {
+  if (runtimeRecord && currentOverviewSnapshot && currentOverviewSnapshot.modelName) {
     modelName = currentOverviewSnapshot.modelName;
   }
   if (!modelName && activeSession) {
     modelName = activeSession.modelName || '';
   }
 
-  if (runtimeBoundToSession) {
+  if (runtimeRecord) {
     var liveUsage = currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.lastRequestUsage;
     if (liveUsage && liveUsage.inputTokens) {
       used = liveUsage.inputTokens;
@@ -325,7 +323,7 @@ function updateChatContextBar() {
   var detailData = { modelName: modelName || '', used: used, contextLength: contextLength, compressRatio: compressRatio, isLastRequest: isLastRequest };
   var totalUsage = (currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.totalUsage) || {};
   var lastReq = null;
-  if (runtimeBoundToSession) {
+  if (runtimeRecord) {
     lastReq = currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.lastRequestUsage;
   }
   if (!lastReq && activeSession && activeSession.tokenUsage) {
@@ -5655,6 +5653,11 @@ function _ensureWorkGroupEventDelegation() {
   container.addEventListener('keydown', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerKeyDown(e);
+    }
+  });
+  container.addEventListener('contextmenu', (e) => {
+    if (window.WorkGroupUI && window.WorkGroupUI.onContainerContextMenu && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerContextMenu(e);
     }
   });
   // 拖拽事件：从 Files 面板拖文件到输入区

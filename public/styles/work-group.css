@@ -634,6 +634,30 @@
   text-decoration: underline;
 }
 
+.wg-session-link-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--code-bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wg-session-link-tag:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+.wg-session-link-tag svg {
+  flex-shrink: 0;
+}
+
 /* 链接 */
 .wg-msg-links {
   margin-top: 4px;
@@ -785,6 +809,19 @@
   text-decoration: underline;
 }
 
+.wg-card-session-tag {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--code-bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* ═══════════════════════════════════════════════
    输入区
    ═══════════════════════════════════════════════ */
@@ -795,6 +832,110 @@
   padding: 10px 16px 14px;
   background: var(--bg-color);
   position: relative;
+}
+
+/* ── Session Bar（输入框上方的会话选择栏） ── */
+.wg-session-bar {
+  min-height: 0;
+}
+.wg-session-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.wg-session-pill-wrap {
+  position: relative;
+}
+.wg-session-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--hover-bg);
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+.wg-session-pill:hover {
+  border-color: var(--text-secondary);
+}
+.wg-session-pill.active {
+  border-color: var(--text-secondary);
+  background: var(--code-bg);
+}
+.wg-session-pill-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.wg-session-pill-arrow {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+.wg-session-pill-label {
+  color: var(--text-muted);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* dropdown 向上弹出 */
+.wg-session-dropdown {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  min-width: 260px;
+  max-width: 340px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.15);
+  z-index: 100;
+  padding: 4px;
+}
+.wg-session-dropdown-loading {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.wg-session-option {
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.wg-session-option:hover {
+  background: var(--hover-bg);
+}
+.wg-session-option.selected {
+  background: var(--code-bg);
+}
+.wg-session-opt-title {
+  display: block;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wg-session-opt-desc {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.wg-session-opt-group {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
 }
 
 /* ── 输入容器（编辑器 + 底栏一体） ── */
@@ -1735,4 +1876,91 @@ textarea.wg-settings-input { resize: vertical; min-height: 64px; }
 }
 .feature-panel-body .wg-settings-input {
   font-size: 13px;
+}
+
+/* ── 右键上下文菜单 ── */
+.wg-context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 180px;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  padding: 4px;
+}
+.wg-context-menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.wg-context-menu-item:hover {
+  background: var(--hover-bg);
+}
+.wg-context-menu-label {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.wg-context-menu-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── 长消息折叠 ──────────────────────────────────────────── */
+.wg-msg-bubble.wg-collapsible,
+.wg-card-body.markdown-body.wg-collapsible {
+  position: relative;
+  overflow: hidden;
+  transition: max-height 0.2s ease;
+}
+.wg-msg-bubble.wg-collapsible.collapsed,
+.wg-card-body.markdown-body.wg-collapsible.collapsed {
+  max-height: 180px;
+}
+.wg-msg-bubble.wg-collapsible:not(.collapsed),
+.wg-card-body.markdown-body.wg-collapsible:not(.collapsed) {
+  max-height: none;
+  padding-bottom: 28px;
+}
+.wg-collapse-toggle {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  transform: translateX(-50%);
+  padding: 2px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--hover-bg);
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  z-index: 2;
+  white-space: nowrap;
+}
+.wg-msg-row.me .wg-collapse-toggle {
+  background: var(--active-bg);
+}
+.wg-card-body.markdown-body.wg-collapsible .wg-collapse-toggle {
+  background: var(--bg-color);
+}
+.wg-collapse-toggle:hover {
+  color: var(--text-primary);
+}
+.wg-msg-bubble.wg-collapsible.collapsed::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  background: linear-gradient(transparent, var(--hover-bg));
+  pointer-events: none;
+}
+.wg-msg-row.me .wg-msg-bubble.wg-collapsible.collapsed::after {
+  background: linear-gradient(transparent, var(--active-bg));
 }
