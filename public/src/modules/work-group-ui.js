@@ -48,6 +48,12 @@
   let groupMdContent = '';      // GROUP.md 编辑器内容
   let groupMdLoading = false;   // GROUP.md 是否正在加载
   let _annotations = {};        // messageId → { text, timestamp }
+  let _adminStatus = null;      // 管理员会话状态（admin_status API 返回）
+  let _adminRestarting = false; // 管理员正在重启中（UI 状态锁）
+  let _hoverIdentity = null;     // 当前 hover 的成员 identityRef
+  let _hoverTimer = null;        // hover 延迟计时器
+  let _popoverEl = null;         // 成员 popover DOM 元素
+  let _popoverHideTimer = null;  // popover 隐藏延迟计时器
 
   // ── 按群聊隔离的输入缓存 ─────────────────────────────────────
   // chatId → { editorHtml, pendingLinks, pendingAttachments }
@@ -115,17 +121,18 @@
     if (!activeChatId) return;
     try {
       activeChat = await apiGet(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}`);
-      // 并行加载批注
-      try {
-        const annData = await apiGet(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/annotations`);
-        _annotations = annData.annotations || {};
-      } catch {
-        _annotations = {};
-      }
+      // 并行加载批注和管理员状态
+      const [annData, adminData] = await Promise.allSettled([
+        apiGet(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/annotations`),
+        apiGet(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/admin_status`),
+      ]);
+      _annotations = annData.status === 'fulfilled' ? (annData.value.annotations || {}) : {};
+      _adminStatus = adminData.status === 'fulfilled' ? adminData.value : null;
     } catch (err) {
       console.error('[WorkGroup] loadActiveChat:', err);
       activeChat = null;
       _annotations = {};
+      _adminStatus = null;
     }
   }
 
@@ -187,9 +194,20 @@
         });
       }
     }
-    const sessions = Array.from(sessionMap.values()).filter((s) => s.status !== 'failed');
+    const sessions = Array.from(sessionMap.values()).filter((s) => s.status !== 'failed' && s.identityRef !== 'work-group:admin');
     sessions.sort((a, b) => b.lastActivity - a.lastActivity);
     return sessions;
+  }
+
+  /** 按身份分组活跃会话，返回 identityRef → session[] */
+  function collectSessionsByIdentity(chat) {
+    const sessions = collectActiveSessions(chat);
+    const map = new Map();
+    for (const s of sessions) {
+      if (!map.has(s.identityRef)) map.set(s.identityRef, []);
+      map.get(s.identityRef).push(s);
+    }
+    return map;
   }
 
   // ── 左侧：群聊列表 ──────────────────────────────────────────
@@ -279,33 +297,70 @@
     ].join('');
   }
 
+  // ── 右侧：管理员状态 chip（精简内联，集成到态势层） ──────────
+
+  function renderAdminChip() {
+    if (!activeChat) return '';
+
+    const st = _adminStatus;
+    const restarting = _adminRestarting;
+
+    // 状态指示
+    let dotClass = 'offline';
+    if (restarting) {
+      dotClass = 'switching';
+    } else if (st?.online) {
+      dotClass = 'online';
+    }
+
+    // 健康度文本（紧凑）
+    let healthText = '';
+    if (st && !restarting && st.healthStatus && st.healthStatus !== 'unknown') {
+      const pct = Math.round(Math.min(1, st.healthRatio || 0) * 100);
+      healthText = `${pct}%`;
+    }
+
+    // 重启/启动按钮 — 始终可用
+    const btnLabel = restarting ? '…' : (st?.sessionId ? '重启' : '启动');
+
+    return [
+      `<span class="wg-admin-chip ${dotClass}">`,
+      `<span class="wg-admin-chip-dot"></span>`,
+      `<span class="wg-admin-chip-name">管理员</span>`,
+      healthText ? `<span class="wg-admin-chip-health ${st.healthStatus}">${esc(healthText)}</span>` : '',
+      `<button class="wg-admin-chip-btn${restarting ? ' spinning' : ''}" data-wg-action="admin-restart"`,
+      restarting ? ' disabled' : '',
+      ` title="${st?.sessionId ? '重启管理员会话' : '启动管理员会话'}">${esc(btnLabel)}</button>`,
+      '</span>',
+    ].join('');
+  }
+
   // ── 右侧：态势层 ────────────────────────────────────────────
 
   function renderAwarenessBar(chat) {
-    const sessions = collectActiveSessions(chat);
     const agentMembers = (chat.members || []).filter((m) => m.role !== 'human');
-
-    const sessionItems = sessions.slice(0, 6).map((s) => {
-      const statusClass = s.status || 'pending';
-      const shortId = s.sessionId ? s.sessionId.slice(-6) : '';
-      return [
-        `<div class="wg-session-chip ${statusClass}" data-wg-session-nav="${esc(s.workspaceId)}:${esc(s.sessionId)}" title="点击查看会话">`,
-        `  <span class="wg-session-dot"></span>`,
-        `  <span class="wg-session-name">${esc(s.displayName)}</span>`,
-        shortId ? `<span class="wg-session-id">${esc(shortId)}</span>` : '',
-        '</div>',
-      ].join('');
-    }).join('');
+    const sessionsByIdentity = collectSessionsByIdentity(chat);
 
     const memberChips = agentMembers.map((m) => {
       const name = getIdentityName(m.identityRef);
-      return `<span class="wg-member-chip">${esc(name)}</span>`;
+      const count = sessionsByIdentity.get(m.identityRef)?.length || 0;
+      const badge = count > 0
+        ? `<span class="wg-member-badge">${count}</span>`
+        : '';
+      return [
+        `<span class="wg-member-chip" data-wg-member-identity="${esc(m.identityRef)}">`,
+        `<span class="wg-member-name">${esc(name)}</span>`,
+        badge,
+        '</span>',
+      ].join('');
     }).join('');
+
+    const adminChip = renderAdminChip();
 
     return [
       '<div class="wg-awareness">',
-      sessions.length > 0 ? `  <div class="wg-awareness-sessions">${sessionItems}</div>` : '',
-      `  <div class="wg-awareness-members">${memberChips}</div>`,
+      adminChip ? `  <div class="wg-awareness-admin">${adminChip}</div>` : '',
+      memberChips ? `  <div class="wg-awareness-members">${memberChips}</div>` : '',
       chat.workDir ? `  <div class="wg-awareness-workdir"><code>${esc(chat.workDir)}</code></div>` : '',
       '</div>',
     ].join('');
@@ -923,7 +978,7 @@
   }
 
   function refreshHeaderAndMessages() {
-    // 只更新 header / awareness / messages，完全不触碰输入区。
+    // 只更新 header / admin bar / awareness / messages，完全不触碰输入区。
     // 旧实现会 refreshMain() 重建整个 main，导致输入框 DOM 被销毁重建，
     // 当焦点不在编辑器（例如点击模式按钮）时输入内容会丢失。
     const conv = document.querySelector('.wg-conversation');
@@ -969,6 +1024,15 @@
     if (list) list.innerHTML = renderChatList();
   }
 
+  function refreshAdminBarOnly() {
+    const awareness = document.querySelector('.wg-awareness');
+    if (!awareness) return;
+    const newEl = document.createElement('div');
+    newEl.innerHTML = renderAwarenessBar(activeChat);
+    const replacement = newEl.firstElementChild;
+    if (replacement) awareness.replaceWith(replacement);
+  }
+
   function scrollToBottom() {
     const scroll = document.querySelector('.wg-msg-scroll');
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
@@ -982,6 +1046,7 @@
       if (activeChatId && !isLoading) {
         await loadActiveChat();
         refreshMessagesOnly();
+        refreshAdminBarOnly();
       }
     }, 3000);
   }
@@ -1038,6 +1103,9 @@
     viewMode = 'chat';
     activeChat = null;
     openDropdown = null;
+    _adminStatus = null;
+    _adminRestarting = false;
+    hideMemberPopover(true);
     _shouldScrollToBottom = true;
     refreshChatList();
 
@@ -1062,6 +1130,144 @@
     // 刷新 Settings 面板（如果正打开着）
     if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'settings' && typeof window._wgSettingsRefresh === 'function') {
       window._wgSettingsRefresh();
+    }
+  }
+
+  async function handleAdminRestart() {
+    if (!activeChatId || _adminRestarting) return;
+    _adminRestarting = true;
+    refreshAdminBarOnly();
+    try {
+      _adminStatus = await apiPost(
+        `/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/admin_restart`
+      );
+    } catch (err) {
+      console.error('[WorkGroup] admin restart failed:', err);
+    } finally {
+      _adminRestarting = false;
+      refreshAdminBarOnly();
+    }
+  }
+
+  // ── 成员 chip hover popover ──────────────────────────────────
+
+  async function showMemberPopover(identityRef, anchorEl) {
+    if (!anchorEl) return;
+    clearTimeout(_popoverHideTimer);
+
+    // 懒加载会话数据
+    if (!_sessionDataCache[identityRef]) {
+      await fetchSessionData(identityRef);
+    }
+
+    hideMemberPopover(true);
+
+    const data = _sessionDataCache[identityRef];
+    if (!data) return;
+
+    const displayName = getIdentityName(identityRef);
+    const modelLabel = data.sessionModel === 'persistent' ? '持久' : '一次性';
+
+    // 群内会话 — 活跃会话 live 导航，历史会话只读
+    const poolItems = (data.inChatSessions || []).map((s) => {
+      const active = s.isActive ? ' <span class="wg-pop-active">当前</span>' : '';
+      const workspaceId = identityRef.split(':')[0];
+      const navAttr = s.isActive
+        ? `data-wg-session-nav="${esc(workspaceId)}:${esc(s.id)}"`
+        : `data-wg-session-record="${esc(workspaceId)}:${esc(s.id)}"`;
+      return [
+        `<div class="wg-pop-session" ${navAttr} title="${s.isActive ? '点击查看会话' : '点击查看会话记录（只读）'}">`,
+        `  <span class="wg-pop-dot${s.isActive ? ' active' : ''}"></span>`,
+        `  <span class="wg-pop-title">${esc(s.title)}${active}</span>`,
+        '</div>',
+      ].join('');
+    }).join('');
+
+    // 外部会话（最近）— 全部只读
+    const extItems = (data.externalSessions || []).slice(0, 5).map((s) => {
+      const workspaceId = identityRef.split(':')[0];
+      return [
+        `<div class="wg-pop-session ext" data-wg-session-record="${esc(workspaceId)}:${esc(s.id)}" title="点击查看会话记录（只读）">`,
+        `  <span class="wg-pop-title">${esc(s.title)}</span>`,
+        '</div>',
+      ].join('');
+    }).join('');
+
+    const el = document.createElement('div');
+    el.className = 'wg-member-popover';
+    el.innerHTML = [
+      `<div class="wg-pop-header">`,
+      `  <span class="wg-pop-name">${esc(displayName)}</span>`,
+      `  <span class="wg-pop-model">${esc(modelLabel)}</span>`,
+      `</div>`,
+      poolItems ? `<div class="wg-pop-section-label">群内会话 (${data.inChatSessions.length})</div><div class="wg-pop-list">${poolItems}</div>` : '',
+      extItems ? `<div class="wg-pop-section-label">其他会话</div><div class="wg-pop-list">${extItems}</div>` : '',
+      (!poolItems && !extItems) ? '<div class="wg-pop-empty">暂无会话</div>' : '',
+    ].join('');
+    document.body.appendChild(el);
+    _popoverEl = el;
+
+    // 定位
+    const rect = anchorEl.getBoundingClientRect();
+    el.style.left = `${rect.left}px`;
+    el.style.top = `${rect.bottom + 4}px`;
+
+    // hover popover 自身不触发隐藏
+    el.addEventListener('mouseenter', () => clearTimeout(_popoverHideTimer));
+    el.addEventListener('mouseleave', () => {
+      _popoverHideTimer = setTimeout(() => hideMemberPopover(), 200);
+    });
+    // popover 内的会话导航
+    el.addEventListener('click', (ev) => {
+      const navItem = ev.target.closest('[data-wg-session-nav]');
+      if (navItem) {
+        navigateToSession(navItem.dataset.wgSessionNav);
+        hideMemberPopover(true);
+        return;
+      }
+      const recordItem = ev.target.closest('[data-wg-session-record]');
+      if (recordItem) {
+        const [workspaceId, sessionId] = recordItem.dataset.wgSessionRecord.split(':');
+        navigateToSessionRecord(workspaceId, sessionId);
+        hideMemberPopover(true);
+      }
+    });
+  }
+
+  function hideMemberPopover(immediate) {
+    if (immediate) {
+      if (_popoverEl) { _popoverEl.remove(); _popoverEl = null; }
+      return;
+    }
+    _popoverHideTimer = setTimeout(() => {
+      if (_popoverEl) { _popoverEl.remove(); _popoverEl = null; }
+    }, 200);
+  }
+
+  function onContainerMouseOver(e) {
+    const chip = e.target.closest('[data-wg-member-identity]');
+    if (chip) {
+      const identityRef = chip.dataset.wgMemberIdentity;
+      clearTimeout(_popoverHideTimer);
+      if (_hoverIdentity !== identityRef) {
+        _hoverIdentity = identityRef;
+        clearTimeout(_hoverTimer);
+        _hoverTimer = setTimeout(() => showMemberPopover(identityRef, chip), 250);
+      }
+    }
+  }
+
+  function onContainerMouseOut(e) {
+    const chip = e.target.closest('[data-wg-member-identity]');
+    if (chip) {
+      const related = e.relatedTarget;
+      // 如果移到了 popover 自身或另一个 member chip，不隐藏
+      if (related && (related.closest('.wg-member-popover') || related.closest('[data-wg-member-identity]'))) {
+        return;
+      }
+      clearTimeout(_hoverTimer);
+      _hoverIdentity = null;
+      hideMemberPopover();
     }
   }
 
@@ -1357,6 +1563,22 @@
     }
   }
 
+  async function navigateToSessionRecord(workspaceId, sessionId) {
+    if (!workspaceId || !window.handlePrebuiltAgentClick) return;
+    try {
+      await window.handlePrebuiltAgentClick(workspaceId);
+      if (window.runWorkspaceAction) {
+        await window.runWorkspaceAction(JSON.stringify({
+          type: 'view_session_record',
+          agentId: workspaceId,
+          sessionId,
+        }));
+      }
+    } catch (err) {
+      console.error('[WorkGroup] navigateToSessionRecord failed:', err);
+    }
+  }
+
   async function handleSettingsFieldChange(field, value) {
     if (!activeChatId) return;
     try {
@@ -1615,6 +1837,7 @@
         toggleDropdown(action.dataset.wgDropdownType);
         return;
       }
+      if (act === 'admin-restart') { handleAdminRestart(); return; }
       if (act === 'cancel-new-chat') return;
       if (act === 'pick-workdir') return; // handled by modal-specific listener
     }
@@ -2012,6 +2235,7 @@
     pendingLinks = [];
     pendingAttachments = [];
     openDropdown = null;
+    hideMemberPopover(true);
   }
 
   // ── 全局暴露：Settings 面板（右侧边栏） ──────────────────────
@@ -2058,6 +2282,8 @@
     onContainerDragOver,
     onContainerDragLeave,
     onContainerDrop,
+    onContainerMouseOver,
+    onContainerMouseOut,
     init,
     destroy: stopPolling,
     deactivate,

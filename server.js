@@ -4267,7 +4267,7 @@ async function archivePrebuiltSession(agentId, sessionId, archived) {
       throw error;
     }
     const sessions = index.sessions.map((session) =>
-      session.id === sessionId ? { ...session, archived: !!archived } : session,
+      session.id === sessionId ? { ...session, archived: !!archived, todo: archived ? false : session.todo } : session,
     );
     return { activeSessionId: index.activeSessionId, sessions };
   });
@@ -6571,7 +6571,7 @@ async function getSessionContextUsage(workspaceId, sessionId) {
  * 组装群聊记忆：按 memoryRange 提取消息摘要，作为 agent 上下文的「视图」。
  * 这是长线记忆的基础——从一个不可能全塞进上下文的完整记录中提取 agent 需要的部分。
  */
-async function composeGroupMemory(chat, range) {
+async function composeGroupMemory(chat, range, options = {}) {
   const now = Date.now();
   const rangeMs = parseMemoryRange(range);
   const allIdentities = await collectIdentities();
@@ -6582,6 +6582,12 @@ async function composeGroupMemory(chat, range) {
     (m) => (m.timestamp || 0) >= since && m.kind !== 'event'
   );
 
+  // 合并批注（仅管理员注入路径）
+  let annotations = {};
+  if (options.includeAnnotations) {
+    annotations = await readAnnotations(chat.id);
+  }
+
   // 组装摘要行
   const lines = recentMessages.map((m) => {
     const identityInfo = allIdentities.find((i) => i.identityRef === m.from);
@@ -6590,7 +6596,16 @@ async function composeGroupMemory(chat, range) {
       month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
     });
     const text = (m.text || '').slice(0, 200);
-    return `[${time}] ${from}：${text}`;
+
+    let suffix = '';
+    if (annotations[m.id]) {
+      const annTime = new Date(annotations[m.id].timestamp).toLocaleString('zh-CN', {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      });
+      suffix = `  [批注 ${annTime}] ${annotations[m.id].text}`;
+    }
+
+    return `[${time}] ${from}：${text}${suffix}`;
   });
 
   return {
@@ -6685,12 +6700,52 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
 }
 
 /**
+ * Per-chat 互斥锁：串行化管理员 session 解析。
+ * 防止并发调用（@admin + plan 模式通知 + activity 通知）同时创建多个 admin session。
+ * key = `${chatId}:admin`, value = Promise chain
+ */
+const _gcAdminLocks = new Map();
+
+function withAdminSessionLock(chatId, fn) {
+  const key = `${chatId}:admin`;
+  const prev = _gcAdminLocks.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  _gcAdminLocks.set(key, next.catch(() => {}));
+  return next;
+}
+
+/**
+ * 在覆盖 chat.sessions[identityRef] 之前，将旧 session ID 记录到 adminSessionHistory。
+ * 仅对管理员生效，用于追踪滚动/重启产生的历史 session。
+ */
+function _recordAdminSessionHistory(chat, identityRef) {
+  if (identityRef !== 'work-group:admin') return;
+  const oldSid = chat.sessions?.[identityRef];
+  if (!oldSid) return;
+  if (!Array.isArray(chat.adminSessionHistory)) chat.adminSessionHistory = [];
+  if (!chat.adminSessionHistory.includes(oldSid)) {
+    chat.adminSessionHistory.push(oldSid);
+  }
+}
+
+/**
  * 为群聊中的某个 identity 解析或创建 session。
  * - persistent: 首次创建，后续复用
  * - one-shot: 总是创建新的
  * 返回 { sessionId, isNew }
+ *
+ * 管理员（work-group:admin）的解析会自动加互斥锁，
+ * 保证同一群聊同一时刻只有一个 admin session 被创建/解析。
  */
 async function resolveGroupChatSession(chatId, identityRef, sessionModel, options = {}) {
+  // 管理员：通过互斥锁串行化，防止并发创建多个 session
+  if (identityRef === 'work-group:admin') {
+    return withAdminSessionLock(chatId, () => _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, options));
+  }
+  return _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, options);
+}
+
+async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, options = {}) {
   const chat = await readGroupChat(chatId);
   if (!chat) throw new Error(`Group chat not found: ${chatId}`);
 
@@ -6718,6 +6773,7 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel, option
     const found = index.sessions.find((s) => s.id === options.targetSessionId);
     if (found) {
       // 更新群聊会话映射，使后续默认派发也走这个会话
+      _recordAdminSessionHistory(chat, identityRef);
       chat.sessions[identityRef] = found.id;
       await writeGroupChat(chat);
       return { sessionId: found.id, isNew: false };
@@ -6731,6 +6787,7 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel, option
     const session = await createPrebuiltSession(agent.id, {
       taskTitle: sessionTitle,
     });
+    _recordAdminSessionHistory(chat, identityRef);
     chat.sessions[identityRef] = session.id;
     await writeGroupChat(chat);
     return { sessionId: session.id, isNew: true };
@@ -6762,8 +6819,14 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel, option
           if (!exceeded) {
             return { sessionId: existing, isNew: false };
           }
-          // 超限 → fall through 创建新 session
+          // 超限 → 先停止旧 runtime，再 fall through 创建新 session
           log('GroupChat', `admin session ${existing} context exceeded (${contextTokens} tokens), rolling to new session`);
+          try {
+            await stopManagedAgent(workspaceId, existing);
+            log('GroupChat', `stopped old admin runtime ${existing} before rolling`);
+          } catch (err) {
+            log('GroupChat', `failed to stop old admin runtime ${existing}: ${err.message}`, 'warn');
+          }
         } else {
           // 无用量数据（首次/刚创建），直接复用
           return { sessionId: existing, isNew: false };
@@ -6780,6 +6843,7 @@ async function resolveGroupChatSession(chatId, identityRef, sessionModel, option
   const session = await createPrebuiltSession(agent.id, {
     taskTitle: sessionTitle,
   });
+  _recordAdminSessionHistory(chat, identityRef);
   chat.sessions[identityRef] = session.id;
   await writeGroupChat(chat);
   return { sessionId: session.id, isNew: true };
@@ -7014,7 +7078,7 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
     // 群记忆（近期消息摘要，标注时间范围）
     const mem = chat.adminMemory || { range: '3d' };
     const range = mem.range || '3d';
-    const groupMemory = await composeGroupMemory(chat, range);
+    const groupMemory = await composeGroupMemory(chat, range, { includeAnnotations: true });
     groupMemory.chatId = chatId;
     const memoryPrompt = formatGroupMemoryPrompt(groupMemory, range);
     if (memoryPrompt) {
@@ -7904,12 +7968,18 @@ app.get('/protoclaw/group_chats/:chatId/sessions/:identityRef', async (req, res,
     // 获取该 workspace 的全部会话
     const index = await readSessionIndex(workspaceId);
 
-    // 群内会话：被 chat.sessions 映射引用的 session（不只是当前活跃的）
+    // 群内会话：被 chat.sessions 映射引用的 session
+    // 使用精确 identityRef 匹配（非 workspace 前缀），避免其他身份的 session 混入
     const chatSessionIds = new Set(
       Object.entries(chat.sessions || {})
-        .filter(([ref]) => ref.startsWith(workspaceId))
+        .filter(([ref]) => ref === identityRef)
         .map(([, sid]) => sid)
     );
+
+    // 管理员：将历史 session（滚动前的旧 session）也纳入群内会话
+    if (identityRef === 'work-group:admin' && Array.isArray(chat.adminSessionHistory)) {
+      for (const sid of chat.adminSessionHistory) chatSessionIds.add(sid);
+    }
 
     const inChatSessions = index.sessions
       .filter((s) => chatSessionIds.has(s.id))
@@ -7937,6 +8007,136 @@ app.get('/protoclaw/group_chats/:chatId/sessions/:identityRef', async (req, res,
       inChatSessions,
       externalSessions,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Group Chat Admin Status API ─────────────────────────────────
+
+/**
+ * 计算管理员会话的健康状态。
+ * 统一 healthRatio 语义：0 = 空，1.0 = 到达上限（触发滚动），>1.0 = 已超限。
+ */
+async function getAdminStatus(chatId) {
+  const chat = await readGroupChat(chatId);
+  if (!chat) return null;
+
+  const identityRef = 'work-group:admin';
+  const workspaceId = 'work-group';
+  const sessionId = chat.sessions?.[identityRef] || null;
+
+  if (!sessionId) {
+    return {
+      online: false,
+      sessionId: null,
+      sessionTitle: null,
+      contextTokens: 0,
+      contextLimit: null,
+      limitMode: (chat.adminMemory?.limitMode || 'tokens'),
+      limitValue: (chat.adminMemory?.limitValue ?? 100000),
+      healthRatio: 0,
+      healthStatus: 'unknown',
+    };
+  }
+
+  // 判断 runtime 是否存活
+  const runtime = getAgentRuntime(workspaceId, sessionId);
+  const online = !!(runtime?.process && runtime.process.exitCode === null && !runtime.stopped);
+
+  // 获取上下文用量
+  const { contextTokens, available } = await getSessionContextUsage(workspaceId, sessionId);
+
+  // 获取 session 标题
+  let sessionTitle = null;
+  try {
+    const index = await readSessionIndex(workspaceId);
+    const record = index.sessions.find((s) => s.id === sessionId);
+    sessionTitle = record?.title || record?.taskTitle || null;
+  } catch { /* ignore */ }
+
+  const mem = chat.adminMemory || { limitMode: 'tokens', limitValue: 100000 };
+  let healthRatio = 0;
+  let contextLimit = null;
+
+  if (mem.limitMode === 'ratio') {
+    const modelInfo = await resolveSessionModelInfo(workspaceId, 'default');
+    const contextLength = modelInfo?.contextLength || 200000;
+    contextLimit = Math.floor(contextLength * mem.limitValue / 100);
+    if (available && contextLength > 0) {
+      const actualRatio = contextTokens / contextLength;
+      const limitRatio = mem.limitValue / 100;
+      healthRatio = limitRatio > 0 ? actualRatio / limitRatio : 0;
+    }
+  } else {
+    contextLimit = mem.limitValue;
+    if (available && mem.limitValue > 0) {
+      healthRatio = contextTokens / mem.limitValue;
+    }
+  }
+
+  let healthStatus = 'healthy';
+  if (!available || healthRatio === 0) {
+    healthStatus = 'unknown';
+  } else if (healthRatio >= 1.0) {
+    healthStatus = 'critical';
+  } else if (healthRatio >= 0.8) {
+    healthStatus = 'warning';
+  }
+
+  return {
+    online,
+    sessionId,
+    sessionTitle,
+    contextTokens,
+    contextLimit,
+    limitMode: mem.limitMode || 'tokens',
+    limitValue: mem.limitValue ?? 100000,
+    healthRatio,
+    healthStatus,
+  };
+}
+
+app.get('/protoclaw/group_chats/:chatId/admin_status', async (req, res, next) => {
+  try {
+    const status = await getAdminStatus(req.params.chatId);
+    if (!status) return res.status(404).json({ error: 'Group chat not found' });
+    res.json(status);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/group_chats/:chatId/admin_restart', async (req, res, next) => {
+  try {
+    const chatId = req.params.chatId;
+    const identityRef = 'work-group:admin';
+
+    // 整个 stop + create 流程在锁内完成，防止并发 dispatch 在 stop 后重启旧 runtime
+    const { oldSessionId, newSessionId } = await withAdminSessionLock(chatId, async () => {
+      const chat = await readGroupChat(chatId);
+      if (!chat) throw new Error('Group chat not found');
+
+      const oldSid = chat.sessions?.[identityRef] || null;
+
+      // 1. 停止旧 runtime（如果存在）
+      if (oldSid) {
+        log('GroupChat', `admin restart: stopping old session ${oldSid}`);
+        await stopManagedAgent('work-group', oldSid);
+      }
+
+      // 2. 强制新建 session（更新 chat.sessions 映射 + 记录历史）
+      const result = await _resolveGroupChatSessionInner(
+        chatId, identityRef, 'persistent', { forceNew: true }
+      );
+      log('GroupChat', `admin restart: created new session ${result.sessionId}`);
+
+      return { oldSessionId: oldSid, newSessionId: result.sessionId };
+    });
+
+    // 3. 返回最新状态
+    const status = await getAdminStatus(req.params.chatId);
+    res.json({ ...status, restartedFromSession: oldSessionId });
   } catch (error) {
     next(error);
   }
@@ -8649,20 +8849,34 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
       agentDir,
       agentId,
       sessionId,
-      JSON.stringify({ sessionType }),
+      JSON.stringify({ sessionType, maxAttempts: 1 }),
       resultPath,
     ];
     const output = await new Promise((resolve, reject) => {
-      const child = spawn('node', args, { cwd: __dirname, timeout: 120000, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn('node', args, { cwd: __dirname, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
+      const timeoutMs = 120000;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+      }, timeoutMs);
       child.stdout.on('data', (d) => { stdout += d; });
       child.stderr.on('data', (d) => { stderr += d; });
       child.on('close', (code) => {
+        clearTimeout(timer);
+        if (timedOut) {
+          reject(new Error(`Compact mirror timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
+          return;
+        }
         if (code !== 0) reject(new Error(stderr || stdout || `compact mirror exited with code ${code}`));
         else resolve(stdout);
       });
-      child.on('error', reject);
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
     });
     console.log('[generate_summary] compact mirror output:', output?.slice(0, 200));
     const result = await fs.readFile(resultPath, 'utf8').then(JSON.parse).catch(() => null);

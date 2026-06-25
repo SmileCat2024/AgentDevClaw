@@ -1646,13 +1646,17 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     }
 
     const strategy = 'summarized-nine-section';
-    const confirmMsg = t('workspace_compact_summary_confirm');
+    const _csIsZh2 = currentLanguage === 'zh';
+    const confirmMsg = action.archiveOriginal
+      ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？\n\n原会话将被自动归档。' : 'Summarize session history and create a new session?\n\nThe original session will be archived.')
+      : t('workspace_compact_summary_confirm');
     const confirmed = window.confirm(confirmMsg);
     if (!confirmed) {
       return;
     }
 
     markSessionLoading(activeAgent.id, action.sessionId);
+    const _csOldRuntimeId = currentRuntimeAgentId;
     const _csIsZh = currentLanguage === 'zh';
     const _csToastId = 'compact-summary-' + action.sessionId;
     ClawToast.show({
@@ -1682,6 +1686,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         status: 'success',
         title: _csIsZh ? '会话总结完成' : 'Session summary completed',
       });
+      if (action.archiveOriginal) {
+        await archiveSessionAfterMutation(activeAgent.id, action.sessionId, _csOldRuntimeId);
+      }
     } catch (error) {
       console.error('Failed to compact session:', error);
       clearSessionLoading(activeAgent.id);
@@ -3020,9 +3027,18 @@ function getCtxMenuItems(role, ns, variant, id) {
   if (role === 'runtime' && ns === 'programming-helper') {
     return [
       { label: currentLanguage === 'zh' ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
-      { label: currentLanguage === 'zh' ? '总结历史（摘要）' : 'Summary', action: 'summary' },
-      { label: currentLanguage === 'zh' ? '精简历史（Trim）' : 'Trim', action: 'trim' },
-      { label: currentLanguage === 'zh' ? '创建分支' : 'Branch', action: 'branch' },
+      { label: currentLanguage === 'zh' ? '总结历史（摘要）' : 'Summary', submenu: [
+        { label: currentLanguage === 'zh' ? '仅摘要' : 'Summary Only', action: 'summary' },
+        { label: currentLanguage === 'zh' ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
+      ]},
+      { label: currentLanguage === 'zh' ? '精简历史（Trim）' : 'Trim', submenu: [
+        { label: currentLanguage === 'zh' ? '仅精简' : 'Trim Only', action: 'trim' },
+        { label: currentLanguage === 'zh' ? '精简并归档原会话' : 'Trim & Archive', action: 'trim-and-archive' },
+      ]},
+      { label: currentLanguage === 'zh' ? '创建分支' : 'Branch', submenu: [
+        { label: currentLanguage === 'zh' ? '仅分支' : 'Branch Only', action: 'branch' },
+        { label: currentLanguage === 'zh' ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
+      ]},
       { type: 'separator' },
       { label: currentLanguage === 'zh' ? '归档会话' : 'Archive Session', action: 'archive-and-stop' },
       { label: currentLanguage === 'zh' ? '重启 Agent' : 'Restart Agent', action: 'restart' },
@@ -3319,6 +3335,57 @@ async function ctxArchiveSession(target) {
   }
 }
 
+/**
+ * Archive a session (set archived=true) AND stop its runtime.
+ * Used after summary/trim/branch creates a new session, to archive + close the original.
+ * Silent on success, logs on failure — the primary operation already succeeded.
+ */
+async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId) {
+  if (!agentId || !sessionId) return;
+
+  // 1. Archive the session (optimistic + API)
+  const agent = allAgents.find((item) => item.id === agentId) || null;
+  if (agent) {
+    const currentSessions = getWorkspaceSessions(agent);
+    const updatedSessions = currentSessions.map((s) =>
+      s.id === sessionId ? { ...s, archived: true } : s,
+    );
+    updateAgentRecord(agentId, {
+      workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
+    });
+  }
+  try {
+    const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, sessionId, archived: true }),
+    });
+    if (!response.ok) throw new Error(await response.text().catch(() => 'archive session failed'));
+    const result = await response.json();
+    if (result?.sessions) {
+      updateAgentRecord(agentId, {
+        workspace_sessions: result.sessions,
+        active_workspace_session_id: result.activeSessionId || null,
+      });
+    }
+  } catch (e) {
+    console.error('Failed to archive session after mutation:', e);
+    return; // Don't proceed to stop if archive failed
+  }
+
+  // 2. Stop the original session's runtime (same as ctxArchiveAndStopRuntime)
+  try {
+    if (oldRuntimeId) clearAgentRuntimeCache(oldRuntimeId);
+    await invoke('stop_agent', { agentId, sessionId });
+    await refreshSidebarRuntimeAfterMutation(500);
+  } catch (e) {
+    console.error('Failed to stop runtime after archive:', e);
+  }
+
+  lastRenderedWorkspaceHtml = '';
+  renderCurrentMainView();
+}
+
 async function ctxTodoSession(target) {
   const { ns: agentId, id: sessionId } = target;
   if (!agentId || !sessionId) return;
@@ -3397,15 +3464,33 @@ function dispatchCtxAction(action, target) {
       }
       break;
 
+    case 'summary-and-archive':
+      if (ns && sessionId) {
+        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', sessionId, compactType: 'summary', archiveOriginal: true }));
+      }
+      break;
+
     case 'trim':
       if (ns && sessionId) {
         window.openTrimDialog(ns, sessionId);
       }
       break;
 
+    case 'trim-and-archive':
+      if (ns && sessionId) {
+        window.openTrimDialog(ns, sessionId, true);
+      }
+      break;
+
     case 'branch':
       if (ns && sessionId) {
         window.openBranchDialog(ns, sessionId);
+      }
+      break;
+
+    case 'branch-and-archive':
+      if (ns && sessionId) {
+        window.openBranchDialog(ns, sessionId, true);
       }
       break;
 

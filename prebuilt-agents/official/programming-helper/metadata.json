@@ -8,7 +8,7 @@
   "category": "development",
   "enabled": true,
   "modelPresets": {
-    "default": "ZCode GLM-5.2",
+    "default": "小米Mimo-V2.5-Pro",
     "exploration": "小米Mimo-V2.5-Pro",
     "sub": "小米Mimo-V2.5-Pro",
     "system": "小米Mimo-V2.5-Pro"

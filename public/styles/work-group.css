@@ -331,36 +331,33 @@
    ═══════════════════════════════════════════════ */
 
 .wg-awareness {
-  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 8px 20px;
   background: var(--panel-bg);
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
-.wg-awareness-sessions {
+/* 管理员区域：独立层级，视觉区分 */
+.wg-awareness-admin {
+  flex-shrink: 0;
+  padding-right: 12px;
+  margin-right: 12px;
+  border-right: 1px solid var(--border-color);
+}
+
+/* 成员区域：抽象身份列表 */
+.wg-awareness-members {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: 6px 8px;
+  flex: 1;
+  min-width: 0;
 }
 
-.wg-session-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s;
-  background: var(--hover-bg);
-  border: 1px solid transparent;
-}
-.wg-session-chip:hover {
-  border-color: var(--border-color);
-}
-
-/* session 状态指示 — CSS 圆点 */
+/* session 状态指示 — CSS 圆点（保留给消息卡片等复用） */
 .wg-session-dot {
   width: 6px;
   height: 6px;
@@ -368,13 +365,6 @@
   background: var(--text-muted);
   flex-shrink: 0;
 }
-.wg-session-chip.pending .wg-session-dot { background: var(--text-muted); }
-.wg-session-chip.delivered .wg-session-dot {
-  background: var(--warning-color);
-  animation: wg-pulse 2s ease-in-out infinite;
-}
-.wg-session-chip.completed .wg-session-dot { background: var(--success-color); }
-
 @keyframes wg-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
@@ -387,18 +377,139 @@
   font-size: 12px;
 }
 
-.wg-awareness-members {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-}
-
 .wg-member-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
   font-size: 13px;
   color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: default;
+  transition: background 0.15s, border-color 0.15s;
+}
+.wg-member-chip[data-wg-member-identity] {
+  cursor: pointer;
+}
+.wg-member-chip[data-wg-member-identity]:hover {
+  background: var(--hover-bg);
+  border-color: var(--border-color);
+}
+
+.wg-member-name {
+  color: var(--text-secondary);
+}
+
+.wg-member-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-bg, rgba(100, 150, 250, 0.15));
+  color: var(--accent-color, #6e9eff);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* ═══════════════════════════════════════════════
+   成员 hover popover
+   ═══════════════════════════════════════════════ */
+
+.wg-member-popover {
+  position: fixed;
+  z-index: 10000;
+  min-width: 220px;
+  max-width: 300px;
+  background: var(--panel-bg, #1e1e2e);
+  border: 1px solid var(--border-color, #3c3c50);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 8px 0;
+  font-size: 13px;
+}
+
+.wg-pop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px 8px;
+  border-bottom: 1px solid var(--border-color, #3c3c50);
+}
+.wg-pop-name {
+  font-weight: 600;
+  color: var(--text-primary, #e0e0e8);
+}
+.wg-pop-model {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.wg-pop-section-label {
+  padding: 6px 12px 2px;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.wg-pop-list {
+  padding: 0;
+}
+
+.wg-pop-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.wg-pop-session:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+}
+.wg-pop-session.ext .wg-pop-title {
+  color: var(--text-muted, #888);
+  font-size: 12px;
+}
+
+.wg-pop-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted, #888);
+  flex-shrink: 0;
+}
+.wg-pop-dot.active {
+  background: var(--success-color, #66bb6a);
+}
+
+.wg-pop-title {
+  color: var(--text-secondary, #b0b0c0);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wg-pop-active {
+  font-size: 10px;
+  color: var(--success-color, #66bb6a);
+  font-weight: 600;
+}
+
+.wg-pop-empty {
+  padding: 8px 12px;
+  color: var(--text-muted, #888);
+  font-size: 12px;
 }
 
 .wg-awareness-goal {
@@ -1437,6 +1548,8 @@ body[data-theme="light"] .wg-modal-overlay {
 }
 
 .wg-awareness-workdir {
+  flex-shrink: 0;
+  margin-left: auto;
   padding: 4px 0;
 }
 .wg-awareness-workdir code {
@@ -2032,4 +2145,72 @@ body[data-theme="light"] .wg-modal-overlay {
 .wg-modal-btn.danger:hover {
   background: rgba(229, 115, 115, 0.1);
   border-color: #e57373;
+}
+
+/* ═══════════════════════════════════════════════
+   管理员状态 chip（内联在态势层中）
+   ═══════════════════════════════════════════════ */
+
+.wg-admin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  background: var(--hover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.wg-admin-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.wg-admin-chip.online .wg-admin-chip-dot {
+  background: #66bb6a;
+  box-shadow: 0 0 4px rgba(102, 187, 106, 0.5);
+}
+.wg-admin-chip.offline .wg-admin-chip-dot {
+  background: var(--text-secondary);
+  opacity: 0.4;
+}
+.wg-admin-chip.switching .wg-admin-chip-dot {
+  background: #ffa726;
+  animation: wg-admin-pulse 1s ease-in-out infinite;
+}
+@keyframes wg-admin-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.wg-admin-chip-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.wg-admin-chip-health {
+  font-size: 11px;
+  font-weight: 600;
+}
+.wg-admin-chip-health.healthy { color: #66bb6a; }
+.wg-admin-chip-health.warning { color: #ffa726; }
+.wg-admin-chip-health.critical { color: #ef5350; }
+
+.wg-admin-chip-btn {
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1;
+}
+.wg-admin-chip-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+.wg-admin-chip-btn.spinning {
+  opacity: 0.5;
 }

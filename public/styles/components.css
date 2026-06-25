@@ -6002,9 +6002,9 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   align-items: center;
   gap: 16px;
   padding: 12px 28px;
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid var(--border-color);
   border-radius: 14px;
-  background: rgba(255,255,255,0.03);
+  background: var(--bg-color);
 }
 .ph-project-bar-left { flex: 0 1 auto; min-width: 0; }
 .ph-project-bar-right { display: flex; gap: 16px; flex-shrink: 0; align-items: center; }
@@ -6034,8 +6034,8 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   font-size: 15px;
   font-weight: 700;
   flex-shrink: 0;
-  background: linear-gradient(135deg, rgba(99,145,255,0.22), rgba(99,145,255,0.08));
-  color: #8ab4ff;
+  background: linear-gradient(135deg, rgba(88,166,255,0.22), rgba(88,166,255,0.08));
+  color: var(--code-accent);
   user-select: none;
 }
 .ph-project-header-info { flex: 1; min-width: 0; }
@@ -6079,7 +6079,7 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   max-width: 220px;
 }
 .ph-project-dropdown-trigger:hover {
-  background: rgba(255,255,255,0.06);
+  background: var(--hover-bg);
 }
 .ph-project-dropdown-arrow {
   flex-shrink: 0;
@@ -6100,10 +6100,10 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   min-width: 280px;
   max-height: 320px;
   overflow-y: auto;
-  background: #1e2030;
-  border: 1px solid rgba(255,255,255,0.1);
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  box-shadow: 0 8px 32px var(--shadow-strong);
   z-index: 200;
   padding: 6px;
 }
@@ -6122,13 +6122,13 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   transition: background 0.12s;
 }
 .ph-project-dropdown-item:hover {
-  background: rgba(255,255,255,0.06);
+  background: var(--hover-bg);
 }
 .ph-project-dropdown-item.active {
-  background: rgba(99,145,255,0.12);
+  background: rgba(88,166,255,0.12);
 }
 .ph-project-dropdown-item.active .ph-project-dropdown-avatar {
-  background: linear-gradient(135deg, rgba(99,145,255,0.35), rgba(99,145,255,0.15));
+  background: linear-gradient(135deg, rgba(88,166,255,0.35), rgba(88,166,255,0.15));
 }
 .ph-project-dropdown-avatar {
   width: 30px;
@@ -6239,7 +6239,7 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 4px;
-  background: rgba(255,255,255,0.07);
+  background: var(--hover-bg);
   color: var(--text-secondary);
   margin-left: 6px;
   vertical-align: middle;
@@ -6248,29 +6248,29 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 
 /* ── PH Project Bar: light theme overrides ── */
 body[data-theme="light"] .ph-project-bar {
-  border-color: rgba(0,0,0,0.08);
-  background: rgba(0,0,0,0.02);
+  border-color: var(--border-color);
+  background: var(--bg-color);
 }
 body[data-theme="light"] .ph-project-header-avatar {
-  background: linear-gradient(135deg, rgba(59,100,200,0.15), rgba(59,100,200,0.05));
-  color: #4a7dff;
+  background: linear-gradient(135deg, rgba(88,166,255,0.15), rgba(88,166,255,0.05));
+  color: var(--code-accent);
 }
 body[data-theme="light"] .ph-project-dropdown-menu {
-  background: #fff;
-  border-color: rgba(0,0,0,0.1);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+  background: var(--bg-color);
+  border-color: var(--border-color);
+  box-shadow: 0 8px 32px var(--shadow-strong);
 }
 body[data-theme="light"] .ph-project-dropdown-item:hover {
-  background: rgba(0,0,0,0.04);
+  background: var(--hover-bg);
 }
 body[data-theme="light"] .ph-project-dropdown-item.active {
-  background: rgba(59,100,200,0.08);
+  background: rgba(88,166,255,0.12);
 }
 body[data-theme="light"] .ph-project-dropdown-avatar {
   background: linear-gradient(135deg, rgba(0,0,0,0.06), rgba(0,0,0,0.02));
 }
 body[data-theme="light"] .ph-session-type-badge {
-  background: rgba(0,0,0,0.06);
+  background: var(--hover-bg);
 }
 
 /* ── Feature Setup ────────────────────────────────────────── */

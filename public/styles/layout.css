@@ -273,7 +273,7 @@ body[data-theme="light"] .agent-icon {
   display: none;
 }
 .ctx-menu.open { display: block; }
-.ctx-menu button.ctx-menu-item {
+.ctx-menu .ctx-menu-item {
   width: 100%;
   border: none;
   background: transparent;
@@ -289,9 +289,9 @@ body[data-theme="light"] .agent-icon {
   justify-content: space-between;
   gap: 8px;
 }
-.ctx-menu button.ctx-menu-item:hover { background: var(--hover-bg); }
-.ctx-menu button.ctx-menu-item.danger { color: var(--error-color); }
-.ctx-menu button.ctx-menu-item:disabled { color: var(--text-secondary); cursor: not-allowed; opacity: 0.6; }
+.ctx-menu .ctx-menu-item:hover { background: var(--hover-bg); }
+.ctx-menu .ctx-menu-item.danger { color: var(--error-color); }
+.ctx-menu .ctx-menu-item:disabled { color: var(--text-secondary); cursor: not-allowed; opacity: 0.6; }
 .ctx-menu .ctx-menu-sep { height: 1px; background: var(--border-color); margin: 4px 2px; }
 .ctx-menu .ctx-menu-arrow { font-size: 14px; opacity: 0.5; }
 .ctx-menu .ctx-menu-item.has-submenu { position: relative; }

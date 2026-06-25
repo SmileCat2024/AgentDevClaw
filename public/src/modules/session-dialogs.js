@@ -64,11 +64,21 @@ trimKeepSkillInc.addEventListener('click', () => {
   }
 });
 
-window.openTrimDialog = async (agentId, sessionId) => {
-  trimDialogState = { agentId, sessionId, rounds: [], loading: true, keepSkillInvokes: 5 };
+window.openTrimDialog = async (agentId, sessionId, archiveAfter = false) => {
+  trimDialogState = { agentId, sessionId, rounds: [], loading: true, keepSkillInvokes: 5, archiveAfter };
   trimKeepSkillToggle.checked = true;
   renderSkillStepper();
   closeCompactMenu();
+  // Update title and submit button to reflect archive behavior
+  const trimTitleEl = trimDialog.querySelector('.trim-title');
+  const trimSubmitEl = document.getElementById('trim-submit');
+  if (archiveAfter) {
+    if (trimTitleEl) trimTitleEl.textContent = currentLanguage === 'zh' ? '精简历史并归档原会话' : 'Trim & Archive Original';
+    if (trimSubmitEl) trimSubmitEl.textContent = currentLanguage === 'zh' ? '精简并归档' : 'Trim & Archive';
+  } else {
+    if (trimTitleEl) trimTitleEl.textContent = currentLanguage === 'zh' ? '精简历史（Trim）' : 'Trim';
+    if (trimSubmitEl) trimSubmitEl.textContent = currentLanguage === 'zh' ? '确认精简' : 'Confirm Trim';
+  }
   trimDialog.style.display = '';
   document.getElementById('trim-submit').disabled = true;
   trimRoundList.innerHTML = '<div class="trim-loading">加载中...</div>';
@@ -95,7 +105,7 @@ window.openTrimDialog = async (agentId, sessionId) => {
 
 window.closeTrimDialog = () => {
   trimDialog.style.display = 'none';
-  trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false, keepSkillInvokes: 5 };
+  trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false, keepSkillInvokes: 5, archiveAfter: false };
 };
 
 function renderTrimRoundList() {
@@ -173,7 +183,7 @@ trimRoundList.addEventListener('change', handleTrimCheckboxChange);
 trimRoundList.addEventListener('click', handleTrimToHere);
 
 window.submitTrimCompact = async () => {
-  const { agentId, sessionId, rounds, keepSkillInvokes } = trimDialogState;
+  const { agentId, sessionId, rounds, keepSkillInvokes, archiveAfter } = trimDialogState;
   if (!agentId || !sessionId || !rounds.length) return;
 
   // Compute the set of turns to preserve as-is (full detail).
@@ -192,6 +202,7 @@ window.submitTrimCompact = async () => {
 
   window.closeTrimDialog();
   markSessionLoading(agentId, sessionId);
+  const _oldRuntimeId = currentRuntimeAgentId;
 
   try {
     const result = await createCompactedResumeSession(agentId, sessionId, '', null, null, policy);
@@ -211,6 +222,9 @@ window.submitTrimCompact = async () => {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
+    if (archiveAfter) {
+      await archiveSessionAfterMutation(agentId, sessionId, _oldRuntimeId);
+    }
   } catch (error) {
     console.error('Failed to trim compact session:', error);
     clearSessionLoading(agentId);
@@ -220,14 +234,24 @@ window.submitTrimCompact = async () => {
 };
 
 /* ── Branch dialog state ── */
-let branchDialogState = { agentId: '', sessionId: '', rounds: [], selectedIdx: -1 };
+let branchDialogState = { agentId: '', sessionId: '', rounds: [], selectedIdx: -1, archiveAfter: false };
 const branchDialog = document.getElementById('branch-dialog');
 const branchRoundList = document.getElementById('branch-round-list');
 const branchFooterInfo = document.getElementById('branch-footer-info');
 
-window.openBranchDialog = async (agentId, sessionId) => {
-  branchDialogState = { agentId, sessionId, rounds: [], selectedIdx: -1 };
+window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
+  branchDialogState = { agentId, sessionId, rounds: [], selectedIdx: -1, archiveAfter };
   closeCompactMenu();
+  // Update title and submit button to reflect archive behavior
+  const branchTitleEl = branchDialog.querySelector('.trim-title');
+  const branchSubmitEl = document.getElementById('branch-submit');
+  if (archiveAfter) {
+    if (branchTitleEl) branchTitleEl.textContent = currentLanguage === 'zh' ? '创建分支并归档原会话' : 'Branch & Archive Original';
+    if (branchSubmitEl) branchSubmitEl.textContent = currentLanguage === 'zh' ? '分支并归档' : 'Branch & Archive';
+  } else {
+    if (branchTitleEl) branchTitleEl.textContent = currentLanguage === 'zh' ? '分支' : 'Branch';
+    if (branchSubmitEl) branchSubmitEl.textContent = currentLanguage === 'zh' ? '创建分支' : 'Create Branch';
+  }
   branchDialog.style.display = '';
   document.getElementById('branch-submit').disabled = true;
   branchRoundList.innerHTML = '<div class="trim-loading">加载中...</div>';
@@ -252,7 +276,7 @@ window.openBranchDialog = async (agentId, sessionId) => {
 
 window.closeBranchDialog = () => {
   branchDialog.style.display = 'none';
-  branchDialogState = { agentId: '', sessionId: '', rounds: [], selectedIdx: -1 };
+  branchDialogState = { agentId: '', sessionId: '', rounds: [], selectedIdx: -1, archiveAfter: false };
 };
 
 function renderBranchRoundList() {
@@ -318,13 +342,14 @@ function updateBranchFooterInfo() {
 branchRoundList.addEventListener('click', handleBranchRoundClick);
 
 window.submitBranch = async () => {
-  const { agentId, sessionId, rounds, selectedIdx } = branchDialogState;
+  const { agentId, sessionId, rounds, selectedIdx, archiveAfter } = branchDialogState;
   if (!agentId || !sessionId || selectedIdx < 0 || !rounds.length) return;
 
   const cutMsgIndexEnd = rounds[selectedIdx].msgIndexEnd;
 
   window.closeBranchDialog();
   markSessionLoading(agentId, sessionId);
+  const _oldRuntimeId = currentRuntimeAgentId;
 
   try {
     const res = await fetch('/protoclaw/sessions/branch', {
@@ -350,6 +375,9 @@ window.submitBranch = async () => {
     } else {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
+    }
+    if (archiveAfter) {
+      await archiveSessionAfterMutation(agentId, sessionId, _oldRuntimeId);
     }
   } catch (error) {
     console.error('Failed to branch session:', error);

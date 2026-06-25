@@ -5873,6 +5873,16 @@ function _ensureWorkGroupEventDelegation() {
       window.WorkGroupUI.onContainerDrop(e);
     }
   });
+  container.addEventListener('mouseover', (e) => {
+    if (window.WorkGroupUI && window.WorkGroupUI.onContainerMouseOver && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerMouseOver(e);
+    }
+  });
+  container.addEventListener('mouseout', (e) => {
+    if (window.WorkGroupUI && window.WorkGroupUI.onContainerMouseOut && e.target.closest('.wg-app')) {
+      window.WorkGroupUI.onContainerMouseOut(e);
+    }
+  });
 }
 
 function renderWorkspaceBlock(agent, block) {
@@ -7665,10 +7675,15 @@ function updateSummaryOverlayDOM(data) {
   }
 }
 
+// Guard token: prevents stale openSummaryPopup callbacks from updating the toast
+// when a newer call for the same session has superseded them.
+const _summaryGenGuard = new Map();
+
 function openSummaryPopup(agentId, sessionId) {
   const _isZh = currentLanguage === 'zh';
   const _toastId = 'summary-' + sessionId;
-  let _toastActive = false;
+  const _token = {};
+  _summaryGenGuard.set(sessionId, _token);
   summaryPopupData = { agentId, sessionId, loading: true, generating: false, data: null, error: null };
   updateSummaryOverlayDOM(summaryPopupData);
   fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId))
@@ -7678,7 +7693,6 @@ function openSummaryPopup(agentId, sessionId) {
           summaryPopupData.generating = true;
           updateSummaryOverlayDOM(summaryPopupData);
         }
-        _toastActive = true;
         ClawToast.show({
           id: _toastId,
           title: _isZh ? '正在生成会话摘要...' : 'Generating session summary...',
@@ -7702,6 +7716,8 @@ function openSummaryPopup(agentId, sessionId) {
       return r.json();
     })
     .then(data => {
+      // Stale check: a newer openSummaryPopup call for the same session has superseded this one.
+      if (_summaryGenGuard.get(sessionId) !== _token) return;
       if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
         summaryPopupData.loading = false;
         summaryPopupData.generating = false;
@@ -7709,27 +7725,25 @@ function openSummaryPopup(agentId, sessionId) {
         updateSummaryOverlayDOM(summaryPopupData);
       }
       loadAgents().catch(() => {});
-      if (_toastActive) {
-        ClawToast.update(_toastId, {
-          status: 'success',
-          title: _isZh ? '摘要已生成' : 'Summary generated',
-        });
-      }
+      ClawToast.update(_toastId, {
+        status: 'success',
+        title: _isZh ? '摘要已生成' : 'Summary generated',
+      });
     })
     .catch(err => {
+      // Stale check: a newer openSummaryPopup call for the same session has superseded this one.
+      if (_summaryGenGuard.get(sessionId) !== _token) return;
       if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
         summaryPopupData.loading = false;
         summaryPopupData.generating = false;
         summaryPopupData.error = err.message;
         updateSummaryOverlayDOM(summaryPopupData);
       }
-      if (_toastActive) {
-        ClawToast.update(_toastId, {
-          status: 'error',
-          title: _isZh ? '摘要生成失败' : 'Summary generation failed',
-          description: err.message || String(err),
-        });
-      }
+      ClawToast.update(_toastId, {
+        status: 'error',
+        title: _isZh ? '摘要生成失败' : 'Summary generation failed',
+        description: err.message || String(err),
+      });
     });
 }
 
@@ -8896,11 +8910,23 @@ function renderFeaturePanel() {
   featurePanel.classList.add('open');
   featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
   featurePanelTitle.textContent = typeof panel.title === 'function' ? panel.title() : panel.title;
+
+  // ── 滚动位置保持：innerHTML 替换会重置所有 scrollTop ──
+  const _savedBodyScrollTop = featurePanelBody.scrollTop;
+  // .feature-detail-window 是 Feature 详情弹窗的独立滚动容器
+  const _oldDetailWindow = featurePanelBody.querySelector('.feature-detail-window');
+  const _savedDetailScrollTop = _oldDetailWindow ? _oldDetailWindow.scrollTop : 0;
+
   featurePanelBody.innerHTML = panel.render();
   enhanceMathInElement(featurePanelBody);
   railButtons.forEach(button => {
     button.classList.toggle('active', button.dataset.panel === activeFeaturePanel);
   });
+
+  // 恢复滚动位置
+  featurePanelBody.scrollTop = _savedBodyScrollTop;
+  const _newDetailWindow = featurePanelBody.querySelector('.feature-detail-window');
+  if (_newDetailWindow) _newDetailWindow.scrollTop = _savedDetailScrollTop;
 
   if (focusRestore) {
     const el = featurePanelBody.querySelector(focusRestore.selector);
@@ -9496,11 +9522,11 @@ function renderCtxItems(items) {
   return items.map((item, i) => {
     if (item.type === 'separator') return '<div class="ctx-menu-sep"></div>';
     if (item.submenu) {
-      return '<button class="ctx-menu-item has-submenu" type="button">'
+      return '<div class="ctx-menu-item has-submenu">'
         + escapeHtmlCtx(item.label)
         + '<span class="ctx-menu-arrow">›</span>'
         + '<div class="ctx-sub">' + renderCtxItems(item.submenu) + '</div>'
-        + '</button>';
+        + '</div>';
     }
     const cls = ['ctx-menu-item'];
     if (item.danger) cls.push('danger');
