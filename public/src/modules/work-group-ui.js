@@ -54,6 +54,8 @@
   let _hoverTimer = null;        // hover 延迟计时器
   let _popoverEl = null;         // 成员 popover DOM 元素
   let _popoverHideTimer = null;  // popover 隐藏延迟计时器
+  let _importModalEl = null;     // 引入会话搜索弹窗 DOM
+  let _importSearchTimer = null; // 搜索防抖计时器
 
   // ── 按群聊隔离的输入缓存 ─────────────────────────────────────
   // chatId → { editorHtml, pendingLinks, pendingAttachments }
@@ -356,11 +358,18 @@
     }).join('');
 
     const adminChip = renderAdminChip();
+    const importedCount = (chat.importedSessions || []).length;
+    const importBtn = [
+      `<button class="wg-import-btn" data-wg-action="open-import-modal" title="从其他工作空间引入会话">`,
+      `引入${importedCount > 0 ? ` <span class="wg-import-badge">${importedCount}</span>` : ''}`,
+      `</button>`,
+    ].join('');
 
     return [
       '<div class="wg-awareness">',
       adminChip ? `  <div class="wg-awareness-admin">${adminChip}</div>` : '',
       memberChips ? `  <div class="wg-awareness-members">${memberChips}</div>` : '',
+      `  <div class="wg-awareness-import">${importBtn}</div>`,
       chat.workDir ? `  <div class="wg-awareness-workdir"><code>${esc(chat.workDir)}</code></div>` : '',
       '</div>',
     ].join('');
@@ -1106,6 +1115,7 @@
     _adminStatus = null;
     _adminRestarting = false;
     hideMemberPopover(true);
+    closeImportModal();
     _shouldScrollToBottom = true;
     refreshChatList();
 
@@ -1168,17 +1178,43 @@
     const displayName = getIdentityName(identityRef);
     const modelLabel = data.sessionModel === 'persistent' ? '持久' : '一次性';
 
-    // 群内会话 — 活跃会话 live 导航，历史会话只读
+    // 检查该成员是否已被 @mention（决定是否显示派发选项）
+    const isMentioned = getMentionedIdentities().some((m) => m.identityRef === identityRef);
+    const sel = activeChatId ? getSessionSelection(activeChatId, identityRef) : { mode: 'default' };
+
+    // 派发设置区（仅 mentioned 时显示）
+    let dispatchSection = '';
+    if (isMentioned) {
+      const isDefault = sel.mode === 'default';
+      const isNew = sel.mode === 'new';
+      dispatchSection = [
+        '<div class="wg-pop-dispatch">',
+        '  <div class="wg-pop-dispatch-label">派发设置</div>',
+        '  <div class="wg-pop-dispatch-opts">',
+        `    <button class="wg-pop-dispatch-opt${isDefault ? ' selected' : ''}" data-wg-dispatch="default" data-wg-dispatch-id="${esc(identityRef)}">接续最近</button>`,
+        `    <button class="wg-pop-dispatch-opt${isNew ? ' selected' : ''}" data-wg-dispatch="new" data-wg-dispatch-id="${esc(identityRef)}">新建</button>`,
+        '  </div>',
+        '</div>',
+      ].join('');
+    }
+
+    // 群内会话 — 活跃会话 live 导航，历史会话只读；mentioned 时增加派发选择
     const poolItems = (data.inChatSessions || []).map((s) => {
       const active = s.isActive ? ' <span class="wg-pop-active">当前</span>' : '';
       const workspaceId = identityRef.split(':')[0];
       const navAttr = s.isActive
         ? `data-wg-session-nav="${esc(workspaceId)}:${esc(s.id)}"`
         : `data-wg-session-record="${esc(workspaceId)}:${esc(s.id)}"`;
+      // 派发至此按钮（仅 mentioned 且非当前选中时显示）
+      const isSelected = sel.mode === 'specific' && sel.sessionId === s.id;
+      const dispatchBtn = (isMentioned && !isSelected)
+        ? `<button class="wg-pop-dispatch-to" data-wg-dispatch="specific" data-wg-dispatch-id="${esc(identityRef)}" data-wg-dispatch-sid="${esc(s.id)}" data-wg-dispatch-title="${esc(s.title)}">派发至此</button>`
+        : (isSelected ? '<span class="wg-pop-dispatch-cur">已选</span>' : '');
       return [
         `<div class="wg-pop-session" ${navAttr} title="${s.isActive ? '点击查看会话' : '点击查看会话记录（只读）'}">`,
         `  <span class="wg-pop-dot${s.isActive ? ' active' : ''}"></span>`,
         `  <span class="wg-pop-title">${esc(s.title)}${active}</span>`,
+        dispatchBtn,
         '</div>',
       ].join('');
     }).join('');
@@ -1199,7 +1235,8 @@
       `<div class="wg-pop-header">`,
       `  <span class="wg-pop-name">${esc(displayName)}</span>`,
       `  <span class="wg-pop-model">${esc(modelLabel)}</span>`,
-      `</div>`,
+      '</div>',
+      dispatchSection,
       poolItems ? `<div class="wg-pop-section-label">群内会话 (${data.inChatSessions.length})</div><div class="wg-pop-list">${poolItems}</div>` : '',
       extItems ? `<div class="wg-pop-section-label">其他会话</div><div class="wg-pop-list">${extItems}</div>` : '',
       (!poolItems && !extItems) ? '<div class="wg-pop-empty">暂无会话</div>' : '',
@@ -1217,8 +1254,29 @@
     el.addEventListener('mouseleave', () => {
       _popoverHideTimer = setTimeout(() => hideMemberPopover(), 200);
     });
-    // popover 内的会话导航
+    // popover 内的会话导航和派发选择
     el.addEventListener('click', (ev) => {
+      // 派发选项按钮
+      const dispatchBtn = ev.target.closest('[data-wg-dispatch]');
+      if (dispatchBtn) {
+        ev.stopPropagation();
+        const mode = dispatchBtn.dataset.wgDispatch;
+        const identityRef = dispatchBtn.dataset.wgDispatchId;
+        if (mode === 'default') {
+          handleSessionOption(identityRef, 'default');
+        } else if (mode === 'new') {
+          handleSessionOption(identityRef, 'new');
+        } else if (mode === 'specific') {
+          handleSessionOption(identityRef, 'specific', dispatchBtn.dataset.wgDispatchSid, dispatchBtn.dataset.wgDispatchTitle);
+        }
+        // 刷新 popover 以更新选中状态
+        if (_hoverIdentity) {
+          const chip = document.querySelector(`[data-wg-member-identity="${CSS.escape(identityRef)}"]`);
+          if (chip) showMemberPopover(identityRef, chip);
+        }
+        return;
+      }
+
       const navItem = ev.target.closest('[data-wg-session-nav]');
       if (navItem) {
         navigateToSession(navItem.dataset.wgSessionNav);
@@ -1358,26 +1416,23 @@
     const mentioned = getMentionedIdentities();
     if (mentioned.length === 0) { bar.innerHTML = ''; return; }
 
+    // 只读指示器：显示每个被提及成员的当前派发路由
+    // 交互式选择已移至 member popover（hover → 派发设置）
     const pills = mentioned.map((id) => {
       const sel = getSessionSelection(activeChatId, id.identityRef);
-      let label = '接续最近会话';
-      if (sel.mode === 'new') label = '新建会话';
-      else if (sel.mode === 'specific') label = sel.sessionTitle || sel.sessionId?.slice(-8) || '指定会话';
-
-      const isOpen = _openSessionDropdown === id.identityRef;
+      let label = '接续最近';
+      if (sel.mode === 'new') label = '新建';
+      else if (sel.mode === 'specific') label = sel.sessionTitle || '指定会话';
       return [
-        `<div class="wg-session-pill-wrap">`,
-        `  <div class="wg-session-pill${isOpen ? ' active' : ''}" data-wg-action="toggle-session-dropdown" data-wg-identity="${esc(id.identityRef)}">`,
-        `    <span class="wg-session-pill-name">${esc(id.displayName)}</span>`,
-        `    <span class="wg-session-pill-arrow">&#9662;</span>`,
-        `    <span class="wg-session-pill-label">${esc(label)}</span>`,
-        `  </div>`,
-        isOpen ? renderSessionDropdown(id.identityRef) : '',
-        `</div>`,
+        `<div class="wg-session-pill-readonly">`,
+        `  <span class="wg-session-pill-name">${esc(id.displayName)}</span>`,
+        `  <span class="wg-session-pill-sep">→</span>`,
+        `  <span class="wg-session-pill-label">${esc(label)}</span>`,
+        '</div>',
       ].join('');
     }).join('');
 
-    bar.innerHTML = `<div class="wg-session-pills">${pills}</div>`;
+    bar.innerHTML = `<div class="wg-session-pills-readonly">${pills}</div>`;
   }
 
   function renderSessionDropdown(identityRef) {
@@ -1811,6 +1866,184 @@
     });
   }
 
+  // ── 引入会话搜索弹窗 ────────────────────────────────────────
+
+  async function openImportModal() {
+    if (!activeChatId) return;
+    closeImportModal();
+
+    const imported = activeChat?.importedSessions || [];
+
+    const modal = document.createElement('div');
+    modal.className = 'wg-modal-overlay';
+    modal.innerHTML = [
+      '<div class="wg-modal wg-import-modal">',
+      '  <div class="wg-modal-title">引入会话</div>',
+      '  <input type="text" class="wg-modal-input wg-import-search" data-wg-role="import-search" placeholder="搜索会话标题或目标..." />',
+      '  <div class="wg-import-sections">',
+      '    <div class="wg-import-section">',
+      '      <div class="wg-import-section-label">已引入 (' + imported.length + ')</div>',
+      '      <div class="wg-import-list" data-wg-role="imported-list">' + renderImportedList(imported) + '</div>',
+      '    </div>',
+      '    <div class="wg-import-section">',
+      '      <div class="wg-import-section-label">搜索结果</div>',
+      '      <div class="wg-import-list" data-wg-role="search-results"><div class="wg-import-empty">输入关键词搜索跨工作空间会话</div></div>',
+      '    </div>',
+      '  </div>',
+      '  <div class="wg-modal-actions">',
+      '    <button class="wg-modal-btn" data-wg-action="close-import-modal">关闭</button>',
+      '  </div>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(modal);
+    _importModalEl = modal;
+
+    // 搜索防抖
+    const searchInput = modal.querySelector('[data-wg-role="import-search"]');
+    searchInput.addEventListener('input', () => {
+      clearTimeout(_importSearchTimer);
+      _importSearchTimer = setTimeout(() => doImportSearch(searchInput.value.trim()), 300);
+    });
+
+    // 弹窗内点击代理
+    modal.addEventListener('click', (e) => {
+      // 点击遮罩关闭
+      if (e.target === modal) { closeImportModal(); return; }
+
+      const importBtn = e.target.closest('[data-wg-import-action]');
+      if (importBtn) {
+        const action = importBtn.dataset.wgImportAction;
+        const { workspaceId, sessionId, title } = importBtn.dataset;
+        if (action === 'do-import') {
+          doImportSession(workspaceId, sessionId);
+        } else if (action === 'do-unimport') {
+          doUnimportSession(workspaceId, sessionId);
+        } else if (action === 'navigate') {
+          navigateToSessionRecord(workspaceId, sessionId);
+          closeImportModal();
+        }
+      }
+
+      const closeBtn = e.target.closest('[data-wg-action="close-import-modal"]');
+      if (closeBtn) closeImportModal();
+    });
+
+    // 自动聚焦搜索框
+    searchInput.focus();
+  }
+
+  function closeImportModal() {
+    if (_importModalEl) { _importModalEl.remove(); _importModalEl = null; }
+    clearTimeout(_importSearchTimer);
+  }
+
+  function renderImportedList(imported) {
+    if (!imported || imported.length === 0) {
+      return '<div class="wg-import-empty">暂无引入会话</div>';
+    }
+    return imported.map((s) => {
+      return [
+        `<div class="wg-import-item">`,
+        `  <div class="wg-import-item-info" data-wg-import-action="navigate" data-workspace-id="${esc(s.workspaceId)}" data-session-id="${esc(s.sessionId)}" title="点击跳转">`,
+        `    <span class="wg-import-item-ws">${esc(s.workspaceName || s.workspaceId)}</span>`,
+        `    <span class="wg-import-item-title">${esc(s.title)}</span>`,
+        `  </div>`,
+        `  <button class="wg-import-item-btn danger" data-wg-import-action="do-unimport" data-workspace-id="${esc(s.workspaceId)}" data-session-id="${esc(s.sessionId)}">移除</button>`,
+        `</div>`,
+      ].join('');
+    }).join('');
+  }
+
+  function renderSearchResults(results, importedIds) {
+    if (!results || results.length === 0) {
+      return '<div class="wg-import-empty">无匹配会话</div>';
+    }
+    return results.map((s) => {
+      const key = `${s.workspaceId}:${s.sessionId}`;
+      const already = importedIds.has(key);
+      return [
+        `<div class="wg-import-item">`,
+        `  <div class="wg-import-item-info">`,
+        `    <span class="wg-import-item-ws">${esc(s.workspaceName || s.workspaceId)}</span>`,
+        `    <span class="wg-import-item-title">${esc(s.title)}</span>`,
+        `  </div>`,
+        already
+          ? `<span class="wg-import-item-done">已引入</span>`
+          : `<button class="wg-import-item-btn confirm" data-wg-import-action="do-import" data-workspace-id="${esc(s.workspaceId)}" data-session-id="${esc(s.sessionId)}">引入</button>`,
+        `</div>`,
+      ].join('');
+    }).join('');
+  }
+
+  async function doImportSearch(q) {
+    if (!_importModalEl || !activeChatId) return;
+    const resultsEl = _importModalEl.querySelector('[data-wg-role="search-results"]');
+    if (!resultsEl) return;
+
+    if (!q) {
+      resultsEl.innerHTML = '<div class="wg-import-empty">输入关键词搜索跨工作空间会话</div>';
+      return;
+    }
+
+    resultsEl.innerHTML = '<div class="wg-import-empty">搜索中...</div>';
+    try {
+      const data = await apiGet(
+        `/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/search_sessions?q=${encodeURIComponent(q)}`
+      );
+      const importedIds = new Set(
+        (activeChat?.importedSessions || []).map((s) => `${s.workspaceId}:${s.sessionId}`)
+      );
+      resultsEl.innerHTML = renderSearchResults(data.sessions || [], importedIds);
+    } catch (err) {
+      resultsEl.innerHTML = '<div class="wg-import-empty">搜索失败</div>';
+      console.error('[WorkGroup] import search failed:', err);
+    }
+  }
+
+  async function doImportSession(workspaceId, sessionId) {
+    if (!activeChatId) return;
+    try {
+      const result = await apiPost(
+        `/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/import_session`,
+        { workspaceId, sessionId }
+      );
+      // 更新 activeChat
+      if (activeChat) activeChat.importedSessions = result.imported || [];
+      // 刷新弹窗内列表
+      if (_importModalEl) {
+        const listEl = _importModalEl.querySelector('[data-wg-role="imported-list"]');
+        if (listEl) listEl.innerHTML = renderImportedList(result.imported || []);
+        // 刷新搜索结果中的"已引入"状态
+        const searchInput = _importModalEl.querySelector('[data-wg-role="import-search"]');
+        if (searchInput) doImportSearch(searchInput.value.trim());
+      }
+      // 刷新态势层 badge
+      refreshAdminBarOnly();
+    } catch (err) {
+      console.error('[WorkGroup] import session failed:', err);
+    }
+  }
+
+  async function doUnimportSession(workspaceId, sessionId) {
+    if (!activeChatId) return;
+    try {
+      const result = await fetch(
+        `/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/import_session`,
+        { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceId, sessionId }) }
+      ).then((r) => r.json());
+      if (activeChat) activeChat.importedSessions = result.imported || [];
+      if (_importModalEl) {
+        const listEl = _importModalEl.querySelector('[data-wg-role="imported-list"]');
+        if (listEl) listEl.innerHTML = renderImportedList(result.imported || []);
+        const searchInput = _importModalEl.querySelector('[data-wg-role="import-search"]');
+        if (searchInput) doImportSearch(searchInput.value.trim());
+      }
+      refreshAdminBarOnly();
+    } catch (err) {
+      console.error('[WorkGroup] unimport session failed:', err);
+    }
+  }
+
   // ── 容器事件代理 ────────────────────────────────────────────
 
   function onContainerClick(e) {
@@ -1838,8 +2071,16 @@
         return;
       }
       if (act === 'admin-restart') { handleAdminRestart(); return; }
+      if (act === 'open-import-modal') { openImportModal(); return; }
       if (act === 'cancel-new-chat') return;
       if (act === 'pick-workdir') return; // handled by modal-specific listener
+    }
+
+    // 态势层 member chip 点击 → 插入 @mention
+    const memberChip = e.target.closest('[data-wg-member-identity]');
+    if (memberChip) {
+      insertMention(memberChip.dataset.wgMemberIdentity);
+      return;
     }
 
     const removeLink = e.target.closest('[data-wg-action="remove-link"]');
@@ -2236,6 +2477,7 @@
     pendingAttachments = [];
     openDropdown = null;
     hideMemberPopover(true);
+    closeImportModal();
   }
 
   // ── 全局暴露：Settings 面板（右侧边栏） ──────────────────────

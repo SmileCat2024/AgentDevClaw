@@ -8142,6 +8142,152 @@ app.post('/protoclaw/group_chats/:chatId/admin_restart', async (req, res, next) 
   }
 });
 
+// ── Group Chat Session Pool (External Import) API ─────────────────
+
+/**
+ * 跨所有 workspace 搜索会话，用于"引入到群聊会话池"。
+ * 排除已引入的 session 和已在 chat.sessions 映射中的 session。
+ */
+app.get('/protoclaw/group_chats/:chatId/search_sessions', async (req, res, next) => {
+  try {
+    const chatId = req.params.chatId;
+    const q = (req.query.q || '').trim().toLowerCase();
+    const chat = await readGroupChat(chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    // 已在会话池中的 session ID 集合（包括 chat.sessions 映射和已引入的）
+    const pooledIds = new Set([
+      ...Object.values(chat.sessions || {}).filter(Boolean),
+      ...(chat.importedSessions || []).map((s) => s.sessionId),
+    ]);
+
+    const agents = await discoverAgents(AGENTS_ROOT);
+    const results = [];
+
+    for (const agent of agents) {
+      if (agent.enabled === false || agent.launchMode === 'ui-only') continue;
+      let index;
+      try {
+        index = await readSessionIndex(agent.id);
+      } catch {
+        continue;
+      }
+
+      for (const session of index.sessions) {
+        if (session.archived) continue;
+        if (pooledIds.has(session.id)) continue;
+
+        const title = session.title || session.taskTitle || '未命名';
+        const searchText = [title, session.goal, session.taskTitle]
+          .filter(Boolean).join(' ').toLowerCase();
+
+        // 无关键词时返回所有（前端限制数量）；有关键词时模糊匹配
+        if (q && !searchText.includes(q)) continue;
+
+        results.push({
+          workspaceId: agent.id,
+          workspaceName: agent.name || agent.id,
+          sessionId: session.id,
+          title,
+          updatedAt: session.updatedAt || session.createdAt,
+          sessionType: session.sessionType || null,
+        });
+      }
+    }
+
+    // 按更新时间降序
+    results.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    res.json({ sessions: results.slice(0, 50) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * 引入一个外部 session 到群聊会话池。
+ */
+app.post('/protoclaw/group_chats/:chatId/import_session', express.json(), async (req, res, next) => {
+  try {
+    const chatId = req.params.chatId;
+    const { workspaceId, sessionId } = req.body;
+    if (!workspaceId || !sessionId) {
+      return res.status(400).json({ error: 'workspaceId and sessionId are required' });
+    }
+
+    const chat = await readGroupChat(chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    // 验证 session 存在
+    let sessionTitle = null;
+    try {
+      const index = await readSessionIndex(workspaceId);
+      const record = index.sessions.find((s) => s.id === sessionId);
+      if (!record) return res.status(404).json({ error: 'Session not found' });
+      sessionTitle = record.title || record.taskTitle || '未命名';
+    } catch {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    // 初始化 importedSessions 数组
+    if (!Array.isArray(chat.importedSessions)) chat.importedSessions = [];
+
+    // 避免重复引入
+    const exists = chat.importedSessions.find(
+      (s) => s.workspaceId === workspaceId && s.sessionId === sessionId
+    );
+    if (exists) {
+      return res.json({ imported: chat.importedSessions });
+    }
+
+    // 获取 workspace 名称
+    const agents = await discoverAgents(AGENTS_ROOT);
+    const agentInfo = agents.find((a) => a.id === workspaceId);
+
+    chat.importedSessions.push({
+      workspaceId,
+      sessionId,
+      title: sessionTitle,
+      workspaceName: agentInfo?.name || workspaceId,
+      importedAt: Date.now(),
+    });
+
+    await writeGroupChat(chat);
+    log('GroupChat', `imported session ${sessionId} from ${workspaceId} into chat ${chatId}`);
+
+    res.json({ imported: chat.importedSessions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * 移除已引入的外部 session。
+ */
+app.delete('/protoclaw/group_chats/:chatId/import_session', express.json(), async (req, res, next) => {
+  try {
+    const chatId = req.params.chatId;
+    const { workspaceId, sessionId } = req.body;
+    if (!workspaceId || !sessionId) {
+      return res.status(400).json({ error: 'workspaceId and sessionId are required' });
+    }
+
+    const chat = await readGroupChat(chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    if (Array.isArray(chat.importedSessions)) {
+      chat.importedSessions = chat.importedSessions.filter(
+        (s) => !(s.workspaceId === workspaceId && s.sessionId === sessionId)
+      );
+      await writeGroupChat(chat);
+    }
+
+    res.json({ imported: chat.importedSessions || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Group Chat Annotations API ──────────────────────────────────
 
 function _annotationsFilePath(chatId) {

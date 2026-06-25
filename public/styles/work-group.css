@@ -493,6 +493,8 @@
 }
 
 .wg-pop-title {
+  flex: 1;
+  min-width: 0;
   color: var(--text-secondary, #b0b0c0);
   font-size: 13px;
   overflow: hidden;
@@ -510,6 +512,109 @@
   padding: 8px 12px;
   color: var(--text-muted, #888);
   font-size: 12px;
+}
+
+/* ── Popover 派发设置 ────────────────────────────────────── */
+
+.wg-pop-dispatch {
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.15));
+  margin-bottom: 4px;
+}
+
+.wg-pop-dispatch-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary, rgba(128,128,128,0.6));
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.wg-pop-dispatch-opts {
+  display: flex;
+  gap: 6px;
+}
+
+.wg-pop-dispatch-opt {
+  padding: 3px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-color, rgba(128,128,128,0.25));
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.wg-pop-dispatch-opt:hover {
+  border-color: var(--accent-color, #4a9eff);
+  color: var(--text-primary);
+}
+
+.wg-pop-dispatch-opt.selected {
+  background: var(--accent-color, #4a9eff);
+  border-color: var(--accent-color, #4a9eff);
+  color: #fff;
+}
+
+.wg-pop-dispatch-to {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--accent-color, #4a9eff);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-color, #4a9eff);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.wg-pop-dispatch-to:hover {
+  background: var(--accent-color, #4a9eff);
+  color: #fff;
+}
+
+.wg-pop-dispatch-cur {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--success-color, #66bb6a);
+  font-weight: 600;
+}
+
+/* ── 只读 session 指示器 ─────────────────────────────────── */
+
+.wg-session-pills-readonly {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.wg-session-pill-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: rgba(128,128,128,0.06);
+  border: 1px solid var(--border-color, rgba(128,128,128,0.15));
+  border-radius: 5px;
+}
+
+.wg-session-pill-readonly .wg-session-pill-name {
+  font-weight: 500;
+}
+
+.wg-session-pill-readonly .wg-session-pill-sep {
+  color: var(--text-muted, #888);
+}
+
+.wg-session-pill-readonly .wg-session-pill-label {
+  color: var(--text-tertiary, rgba(128,128,128,0.7));
 }
 
 .wg-awareness-goal {
@@ -2213,4 +2318,174 @@ body[data-theme="light"] .wg-modal-overlay {
 }
 .wg-admin-chip-btn.spinning {
   opacity: 0.5;
+}
+
+/* ── 引入会话按钮 ─────────────────────────────────────────── */
+
+.wg-awareness-import {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.wg-import-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-color, rgba(128,128,128,0.25));
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+
+.wg-import-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color, #4a9eff);
+  background: rgba(74,158,255,0.06);
+}
+
+.wg-import-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: var(--accent-color, #4a9eff);
+  border-radius: 8px;
+}
+
+/* ── 引入会话搜索弹窗 ─────────────────────────────────────── */
+
+.wg-import-modal {
+  max-width: 560px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.wg-import-search {
+  margin-bottom: 12px;
+}
+
+.wg-import-sections {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 200px;
+}
+
+.wg-import-section {
+  margin-bottom: 16px;
+}
+
+.wg-import-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary, rgba(128,128,128,0.7));
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.wg-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wg-import-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  transition: background 0.12s;
+}
+
+.wg-import-item:hover {
+  background: rgba(128,128,128,0.06);
+}
+
+.wg-import-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: default;
+}
+
+.wg-import-item-info[data-wg-import-action="navigate"] {
+  cursor: pointer;
+}
+
+.wg-import-item-ws {
+  font-size: 11px;
+  color: var(--text-tertiary, rgba(128,128,128,0.7));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wg-import-item-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wg-import-item-btn {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-color, rgba(128,128,128,0.25));
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.wg-import-item-btn.confirm {
+  color: var(--accent-color, #4a9eff);
+  border-color: var(--accent-color, #4a9eff);
+}
+
+.wg-import-item-btn.confirm:hover {
+  background: var(--accent-color, #4a9eff);
+  color: #fff;
+}
+
+.wg-import-item-btn.danger {
+  color: var(--danger-color, #e74c3c);
+  border-color: rgba(231,76,60,0.3);
+}
+
+.wg-import-item-btn.danger:hover {
+  background: var(--danger-color, #e74c3c);
+  color: #fff;
+}
+
+.wg-import-item-done {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary, rgba(128,128,128,0.5));
+  padding: 3px 8px;
+}
+
+.wg-import-empty {
+  padding: 12px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary, rgba(128,128,128,0.5));
 }
