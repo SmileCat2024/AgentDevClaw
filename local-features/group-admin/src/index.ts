@@ -4,11 +4,15 @@
  * 提供群聊状态查看、消息读取、任务派发、摘要写入等工具。
  * 所有工具通过 HTTP API 调用 Claw server。
  *
+ * 管理员与群聊一一绑定，chatId 从环境变量 PROTOCLAW_GC_CHAT_ID 自动获取，
+ * 管理员无需（也无法）手动传入 chatId。
+ * 所有工具的数据范围严格限制在当前群聊，不暴露其他群聊信息。
+ *
  * 内嵌 skill: generate-group-md — 引导管理员生成 GROUP.md 群聊背景文档。
  */
 import { fileURLToPath } from 'url';
 import type { AgentFeature, Tool } from 'agentdev';
-import { CallStart } from 'agentdev';
+import { CallStart, StepStart } from 'agentdev';
 
 const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 1420}`;
 
@@ -17,13 +21,37 @@ export class GroupAdminFeature implements AgentFeature {
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
 
   /** 每多少轮 call 注入一次身份提醒 */
-  private static readonly REMINDER_INTERVAL = 3;
+  private static readonly REMINDER_INTERVAL = 1;
+  /** 每多少 step 注入一次身份提醒（call 内） */
+  private static readonly STEP_REMINDER_INTERVAL = 3;
   private callCount = 0;
+  private stepCount = 0;
+
+  /** 当前管理员绑定的群聊 ID（启动时从环境变量注入） */
+  private get chatId(): string {
+    return process.env.PROTOCLAW_GC_CHAT_ID || '';
+  }
 
   @CallStart
   async injectIdentityReminder(ctx: any): Promise<void> {
     this.callCount++;
+    this.stepCount = 0; // 跨 call 重置 step 计数
     if (this.callCount % GroupAdminFeature.REMINDER_INTERVAL !== 0) return;
+    if (!ctx?.context) return;
+
+    ctx.context.add({
+      role: 'system',
+      content:
+        '[管理员身份提醒] 你是群聊管理员，处理具体业务并不是你的核心职责。\n' +
+        '- 你的所有对话默认只有你能看到。要让群里用户看到回复，必须调用 gc_reply 发送到群里。\n' +
+        '- 其他 Agent 看不到群聊，也不会主动响应群聊内容。用户说的话、Agent 的回复，它们都看不到。除非你通过 gc_dispatch 派发任务过去。',
+    });
+  }
+
+  @StepStart
+  async injectStepReminder(ctx: any): Promise<void> {
+    this.stepCount++;
+    if (this.stepCount % GroupAdminFeature.STEP_REMINDER_INTERVAL !== 0) return;
     if (!ctx?.context) return;
 
     ctx.context.add({
@@ -47,7 +75,10 @@ export class GroupAdminFeature implements AgentFeature {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`API ${path} failed: ${res.status}`);
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error || `API ${path} failed: ${res.status}`);
+    }
     return res.json();
   }
 
@@ -65,37 +96,48 @@ export class GroupAdminFeature implements AgentFeature {
     return [
       {
         name: 'gc_overview',
-        description: '查看所有群聊的概览，包括群名、成员、消息数、最近活动',
+        description: '查看当前群聊的概览，包括群名、成员、消息数、最近活动',
         parameters: {
           type: 'object',
           properties: {},
         },
         execute: async () => {
-          const data = await this.apiGet('/protoclaw/group_chats');
-          const chats = data.chats || [];
-          const lines = chats.map((c: any) => {
-            return `【${c.name}】(id: ${c.id})\n  成员数: ${c.memberCount}, 消息数: ${c.messageCount}\n  最近: ${c.lastMessage?.text || '(无)'}`;
-          });
-          return { success: true, text: lines.join('\n\n') || '暂无群聊' };
+          const chat = await this.apiGet(`/protoclaw/group_chats/${encodeURIComponent(this.chatId)}`);
+          const members = (chat.members || [])
+            .map((m: any) => {
+              const name = m.identityRef === 'user' ? '用户' : m.identityRef;
+              return `  - ${name} (${m.role || 'member'})`;
+            })
+            .join('\n');
+          const lines = [
+            `【${chat.name || '(未命名)'}】`,
+            `消息数: ${(chat.messages || []).length}`,
+            `成员:`,
+            members || '  (无)',
+          ];
+          // 最近活动
+          const msgs = (chat.messages || []).filter((m: any) => m.kind !== 'event');
+          if (msgs.length > 0) {
+            const last = msgs[msgs.length - 1];
+            lines.push(`最近消息: [${new Date(last.timestamp).toLocaleString()}] ${last.from}: ${(last.text || '').slice(0, 80)}`);
+          }
+          return { success: true, text: lines.join('\n') };
         },
       },
       {
         name: 'gc_messages',
-        description: '读取指定群聊的最近消息',
+        description: '读取当前群聊的最近消息（含路由状态和会话标题）',
         parameters: {
           type: 'object',
           properties: {
-            chatId: { type: 'string', description: '群聊 ID' },
             limit: { type: 'number', description: '消息数量，默认 20' },
           },
-          required: ['chatId'],
         },
         execute: async (args: any) => {
-          const { chatId, limit } = args || {};
-          if (!chatId) return { error: 'chatId is required' };
+          const { limit } = args || {};
           const reqLimit = limit || 20;
           const data = await this.apiGet(
-            `/protoclaw/group_chats/${encodeURIComponent(chatId)}/messages?limit=${reqLimit}`
+            `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages?limit=${reqLimit}`
           );
           const msgs = data.messages || [];
           const lines = msgs.map((m: any) => {
@@ -109,35 +151,26 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_dispatch',
-        description: '向指定群聊中的 Agent 派发任务。默认复用该 Agent 在群内的最近会话。',
+        description: '向群内某个 Agent 派发任务。默认复用该 Agent 在群内的最近会话。',
         parameters: {
           type: 'object',
           properties: {
-            chatId: { type: 'string', description: '群聊 ID' },
             text: { type: 'string', description: '任务描述（要清晰完整地说明任务要求，因为被派发的 Agent 没有群聊上下文）' },
             identityRef: { type: 'string', description: '目标身份，如 programming-helper:main' },
-            title: { type: 'string', description: '新会话标题。仅当 forceNew 为 true 时有效且必填；复用已有会话时此字段会被忽略。' },
+            title: { type: 'string', description: '会话标题。创建新会话时用此标题命名；复用已有会话时忽略。必填。' },
             targetSessionId: { type: 'string', description: '可选。指定目标 Agent 的具体会话 ID。传入后将任务路由到该会话。先用 gc_sessions 查看可用会话。' },
             forceNew: { type: 'boolean', description: '可选。设为 true 时强制创建全新会话。默认 false（复用最近会话）。' },
           },
-          required: ['chatId', 'text', 'identityRef'],
+          required: ['text', 'identityRef', 'title'],
         },
         execute: async (args: any) => {
-          const { chatId, text, identityRef, title, targetSessionId, forceNew } = args || {};
-          if (!chatId || !text || !identityRef) {
-            return { error: 'chatId, text, identityRef are required' };
+          const { text, identityRef, title, targetSessionId, forceNew } = args || {};
+          if (!text || !identityRef || !title?.trim()) {
+            return { error: 'text, identityRef, title 都是必填项' };
           }
           // 禁止向自己派发（防止反馈循环）
           if (identityRef === 'work-group:admin') {
             return { error: '不能向管理员自身派发任务' };
-          }
-          // forceNew 时强制要求 title
-          if (forceNew && (!title || !title.trim())) {
-            return {
-              error: '新建会话时必须指定 title（会话标题），请补充 title 参数后重试。' +
-                '\n标题要求：精简反映会话主题，20字以内，不要使用引号或标点，避免"处理问题""继续任务"等空泛措辞。' +
-                '\n示例：gc_dispatch({ ..., forceNew: true, title: "修复登录页面 Bug" })',
-            };
           }
           const body: any = {
             text,
@@ -147,19 +180,33 @@ export class GroupAdminFeature implements AgentFeature {
           };
           if (targetSessionId) body.targetSessionId = targetSessionId;
           if (forceNew) body.forceNew = true;
-          // 仅新建会话时传递 title，复用已有会话时忽略
-          if (forceNew && title?.trim()) body.title = title.trim();
+          if (title?.trim()) body.title = title.trim();
 
-          const msg = await this.apiPost(
-            `/protoclaw/group_chats/${encodeURIComponent(chatId)}/messages`,
-            body
-          );
+          try {
+            const msg = await this.apiPost(
+              `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages`,
+              body
+            );
 
-          let routeInfo = '默认会话';
-          if (forceNew) routeInfo = `全新会话「${title.trim()}」`;
-          else if (targetSessionId) routeInfo = `会话 ${targetSessionId.slice(0, 20)}`;
+            // 从响应中提取会话信息
+            const resolved = msg.resolvedSession;
+            if (resolved) {
+              const action = resolved.isNew
+                ? `创建了新会话「${resolved.sessionTitle}」`
+                : `复用已有会话「${resolved.sessionTitle}」`;
+              return {
+                success: true,
+                text: `已派发任务到 ${identityRef}，${action}。\n会话 ID: ${resolved.sessionId}\n消息 ID: ${msg.id}`,
+                sessionId: resolved.sessionId,
+                sessionTitle: resolved.sessionTitle,
+                isNew: resolved.isNew,
+              };
+            }
 
-          return { success: true, text: `已派发任务到 ${identityRef} → ${routeInfo}，消息 ID: ${msg.id}` };
+            return { success: true, text: `已派发任务到 ${identityRef}，消息 ID: ${msg.id}` };
+          } catch (err: any) {
+            return { error: `派发失败: ${err.message || err}` };
+          }
         },
       },
       {
@@ -168,18 +215,17 @@ export class GroupAdminFeature implements AgentFeature {
         parameters: {
           type: 'object',
           properties: {
-            chatId: { type: 'string', description: '群聊 ID' },
             text: { type: 'string', description: '消息内容' },
           },
-          required: ['chatId', 'text'],
+          required: ['text'],
         },
         execute: async (args: any) => {
-          const { chatId, text } = args || {};
-          if (!chatId || !text) {
-            return { error: 'chatId and text are required' };
+          const { text } = args || {};
+          if (!text) {
+            return { error: 'text is required' };
           }
           const msg = await this.apiPost(
-            `/protoclaw/group_chats/${encodeURIComponent(chatId)}/messages`,
+            `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages`,
             {
               text,
               from: 'work-group:admin',
@@ -191,45 +237,36 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_sessions',
-        description: '查看群聊中某个 Agent 的会话列表，包括群内会话（被映射的）和外部会话。用于决定 gc_dispatch 使用哪个会话。',
+        description: '查看群内某个 Agent 的会话列表（仅群内会话池）。用于决定 gc_dispatch 使用哪个会话。',
         parameters: {
           type: 'object',
           properties: {
-            chatId: { type: 'string', description: '群聊 ID' },
             identityRef: { type: 'string', description: '目标身份，如 programming-helper:main' },
           },
-          required: ['chatId', 'identityRef'],
+          required: ['identityRef'],
         },
         execute: async (args: any) => {
-          const { chatId, identityRef } = args || {};
-          if (!chatId || !identityRef) {
-            return { error: 'chatId and identityRef are required' };
+          const { identityRef } = args || {};
+          if (!identityRef) {
+            return { error: 'identityRef is required' };
           }
           try {
             const data = await this.apiGet(
-              `/protoclaw/group_chats/${encodeURIComponent(chatId)}/sessions/${encodeURIComponent(identityRef)}`
+              `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/sessions/${encodeURIComponent(identityRef)}`
             );
             const lines = [
-              `${identityRef} 的会话列表（模式: ${data.sessionModel}，当前活跃: ${data.activeSessionId || '无'}）`,
+              `${identityRef} 的群内会话列表（模式: ${data.sessionModel}，当前活跃: ${data.activeSessionId || '无'}）`,
               '',
             ];
 
             if (data.inChatSessions?.length > 0) {
-              lines.push('── 群内会话 ──');
               for (const s of data.inChatSessions) {
                 const tag = s.isActive ? ' [当前]' : '';
                 const time = s.updatedAt ? new Date(s.updatedAt).toLocaleString('zh-CN') : '';
                 lines.push(` ${s.title}${tag} (id: ${s.id}) ${time}`);
               }
-              lines.push('');
-            }
-
-            if (data.externalSessions?.length > 0) {
-              lines.push('── 外部会话 ──');
-              for (const s of data.externalSessions) {
-                const time = s.updatedAt ? new Date(s.updatedAt).toLocaleString('zh-CN') : '';
-                lines.push(` ${s.title} (id: ${s.id}) ${time}`);
-              }
+            } else {
+              lines.push('（暂无群内会话）');
             }
 
             return { success: true, text: lines.join('\n') };
@@ -259,17 +296,12 @@ export class GroupAdminFeature implements AgentFeature {
         description: '扫描群聊工作目录的结构和关键文件内容，用于了解项目背景。返回目录树和关键文件（如 package.json、README.md、CLAUDE.md 等）的摘要。',
         parameters: {
           type: 'object',
-          properties: {
-            chatId: { type: 'string', description: '群聊 ID' },
-          },
-          required: ['chatId'],
+          properties: {},
         },
-        execute: async (args: any) => {
-          const { chatId } = args || {};
-          if (!chatId) return { error: 'chatId is required' };
+        execute: async () => {
           try {
             const data = await this.apiGet(
-              `/protoclaw/group_chats/${encodeURIComponent(chatId)}/workdir_scan`
+              `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/workdir_scan`
             );
             if (!data.workDir) {
               return { error: '该群聊未设置工作目录' };
@@ -308,19 +340,18 @@ export class GroupAdminFeature implements AgentFeature {
         parameters: {
           type: 'object',
           properties: {
-            chatId: { type: 'string', description: '群聊 ID' },
             content: { type: 'string', description: 'GROUP.md 的完整 markdown 内容' },
           },
-          required: ['chatId', 'content'],
+          required: ['content'],
         },
         execute: async (args: any) => {
-          const { chatId, content } = args || {};
-          if (!chatId || typeof content !== 'string') {
-            return { error: 'chatId and content are required' };
+          const { content } = args || {};
+          if (typeof content !== 'string') {
+            return { error: 'content is required' };
           }
           try {
             const result = await this.apiPut(
-              `/protoclaw/group_chats/${encodeURIComponent(chatId)}/group_md`,
+              `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/group_md`,
               { content }
             );
             return { success: true, text: `GROUP.md 已保存到 ${result.path}` };
@@ -331,23 +362,22 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_interrupt',
-        description: '中断指定群聊中正在运行的 Agent 会话。用于停止正在执行的任务。',
+        description: '中断群聊中正在运行的 Agent 会话。用于停止正在执行的任务。',
         parameters: {
           type: 'object',
           properties: {
-            chatId: { type: 'string', description: '群聊 ID' },
             identityRef: { type: 'string', description: '目标身份，如 programming-helper:main' },
           },
-          required: ['chatId', 'identityRef'],
+          required: ['identityRef'],
         },
         execute: async (args: any) => {
-          const { chatId, identityRef } = args || {};
-          if (!chatId || !identityRef) {
-            return { error: 'chatId and identityRef are required' };
+          const { identityRef } = args || {};
+          if (!identityRef) {
+            return { error: 'identityRef is required' };
           }
           try {
-            const result = await this.apiPost('/protoclaw/gc/control', {
-              chatId,
+            await this.apiPost('/protoclaw/gc/control', {
+              chatId: this.chatId,
               identityRef,
               action: 'interrupt',
             });

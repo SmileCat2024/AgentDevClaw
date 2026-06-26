@@ -67,7 +67,7 @@ export function resolveModelPresetLLM(presetName) {
 }
 
 /**
- * Read agent metadata.json and resolve the model preset for a given role.
+ * Read agent metadata.json and user config to resolve the model preset for a given role.
  * @param {string} agentDir - Absolute path to the agent directory
  * @param {'default'|'exploration'|'sub'|'system'} role
  * @returns {{ llm: import('agentdev').LLMClient, modelName: string } | null}
@@ -77,7 +77,25 @@ export function resolveAgentModelLLM(agentDir, role = 'default') {
   if (!existsSync(metaPath)) return null;
   try {
     const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
-    const presets = meta?.modelPresets;
+    
+    // 从 agentDir 中提取 agentId（最后一级目录名）
+    const agentId = agentDir.split(/[\\/]/).pop();
+    
+    // 读取用户配置文件（如果存在）
+    const userConfigPath = join(PROTOCLAW_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
+    let userConfig = {};
+    if (existsSync(userConfigPath)) {
+      try {
+        userConfig = JSON.parse(readFileSync(userConfigPath, 'utf8')) || {};
+      } catch {}
+    }
+    
+    // 合并配置：用户配置优先，metadata.json 中的 modelPresets 作为后备
+    const presets = {
+      ...(meta?.modelPresets || {}),
+      ...(userConfig?.modelPresets || {})
+    };
+    
     if (!presets || typeof presets !== 'object') return null;
     
     const roleConfig = presets[role];

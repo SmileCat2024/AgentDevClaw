@@ -44,8 +44,5 @@
         }
       ]
     }
-  },
-  "modelPresets": {
-    "default": "小米Mimo-V2.5-Pro"
   }
 }

@@ -2,7 +2,7 @@
 node_modules/
 
 # Session data (user data, should not be in repo)
-.agentdev/
+/.agentdev/
 .playwright-mcp/
 *docs/
 config/
@@ -36,10 +36,6 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
-
-# User-specific config (contains secrets)
-.agentdev/qqbot.config.json
-.agentdev/*.config.json
 
 # TypeScript cache
 *.tsbuildinfo

@@ -200,12 +200,13 @@ describe('withIMWorkspaceConfig serializer', () => {
  * Inline replication of the gc_dispatch guard logic.
  * Mirrors local-features/group-admin/src/index.ts gc_dispatch.execute.
  *
- * Only tests the validation/guard portion — the actual API call is mocked.
+ * chatId is no longer a parameter — it is auto-resolved from the environment.
+ * Tests only the validation/guard portion — the actual API call is mocked.
  */
 function gcDispatchGuard(args) {
-  const { chatId, text, identityRef } = args || {};
-  if (!chatId || !text || !identityRef) {
-    return { error: 'chatId, text, identityRef are required' };
+  const { text, identityRef, title } = args || {};
+  if (!text || !identityRef || !title?.trim()) {
+    return { error: 'text, identityRef, title are required' };
   }
   // 禁止向自己派发（防止反馈循环）
   if (identityRef === 'work-group:admin') {
@@ -218,38 +219,38 @@ describe('gc_dispatch self-dispatch guard', () => {
 
   it('allows dispatch to other identities', () => {
     const result = gcDispatchGuard({
-      chatId: 'chat-1',
       text: 'do something',
       identityRef: 'programming-helper:main',
+      title: '测试任务',
     });
     assert.equal(result.wouldDispatch, true);
   });
 
   it('blocks dispatch to work-group:admin (self)', () => {
     const result = gcDispatchGuard({
-      chatId: 'chat-1',
       text: 'do something',
       identityRef: 'work-group:admin',
+      title: '测试任务',
     });
     assert.ok(result.error);
     assert.match(result.error, /不能向管理员自身派发/);
     assert.equal(result.wouldDispatch, undefined);
   });
 
-  it('requires chatId', () => {
-    const result = gcDispatchGuard({ text: 'x', identityRef: 'helper:main' });
-    assert.ok(result.error);
-    assert.match(result.error, /required/);
-  });
-
   it('requires text', () => {
-    const result = gcDispatchGuard({ chatId: 'c1', identityRef: 'helper:main' });
+    const result = gcDispatchGuard({ identityRef: 'helper:main', title: 't' });
     assert.ok(result.error);
     assert.match(result.error, /required/);
   });
 
   it('requires identityRef', () => {
-    const result = gcDispatchGuard({ chatId: 'c1', text: 'x' });
+    const result = gcDispatchGuard({ text: 'x', title: 't' });
+    assert.ok(result.error);
+    assert.match(result.error, /required/);
+  });
+
+  it('requires title', () => {
+    const result = gcDispatchGuard({ text: 'x', identityRef: 'helper:main' });
     assert.ok(result.error);
     assert.match(result.error, /required/);
   });
@@ -260,7 +261,7 @@ describe('gc_dispatch self-dispatch guard', () => {
   });
 
   it('handles empty string values', () => {
-    const result = gcDispatchGuard({ chatId: '', text: '', identityRef: '' });
+    const result = gcDispatchGuard({ text: '', identityRef: '', title: '' });
     assert.ok(result.error);
   });
 });

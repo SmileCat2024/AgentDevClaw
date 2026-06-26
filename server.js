@@ -6568,6 +6568,35 @@ async function getSessionContextUsage(workspaceId, sessionId) {
 }
 
 /**
+ * 格式化管理员上下文中的会话标识（含 ID）。
+ * 同一身份可能有多个同名会话，或会话被改名，因此必须附带短 ID 以消歧。
+ * @param {string|null} title - 会话标题
+ * @param {string|null} sessionId - 会话 ID
+ * @returns {string} 形如 ' [会话:修复Bug #a1b2c3d4]'，无信息时返回空字符串
+ */
+/**
+ * 管理员派遣消息的会话标注：管理员向某会话派发了任务，需标注目标。
+ * 与 formatSessionLabel 的区别：语义不同——管理员不"属于"该会话，而是"派遣到"该会话。
+ */
+function formatDispatchTarget(title, sessionId) {
+  if (!title && !sessionId) return '';
+  const shortId = sessionId ? sessionId.slice(-8) : '';
+  if (title && shortId) return ` → 派遣到会话「${title} #${shortId}」`;
+  if (title) return ` → 派遣到会话「${title}」`;
+  if (shortId) return ` → 派遣到会话「#${shortId}」`;
+  return '';
+}
+
+function formatSessionLabel(title, sessionId) {
+  if (!title && !sessionId) return '';
+  const shortId = sessionId ? sessionId.slice(-8) : '';
+  if (title && shortId) return ` [会话:${title} #${shortId}]`;
+  if (title) return ` [会话:${title}]`;
+  if (shortId) return ` [会话:#${shortId}]`;
+  return '';
+}
+
+/**
  * 组装群聊记忆：按 memoryRange 提取消息摘要，作为 agent 上下文的「视图」。
  * 这是长线记忆的基础——从一个不可能全塞进上下文的完整记录中提取 agent 需要的部分。
  */
@@ -6597,6 +6626,12 @@ async function composeGroupMemory(chat, range, options = {}) {
     });
     const text = (m.text || '').slice(0, 200);
 
+    // 会话标识：管理员派遣 vs agent 回复语义不同
+    // 管理员 → 派遣到某会话；agent 回复 → 标注回复来源会话
+    const sessionLabel = m.from === 'work-group:admin'
+      ? formatDispatchTarget(m.routing?.targetSessionTitle, m.routing?.targetSessionId)
+      : formatSessionLabel(m.routing?.targetSessionTitle, m.routing?.targetSessionId);
+
     let suffix = '';
     if (annotations[m.id]) {
       const annTime = new Date(annotations[m.id].timestamp).toLocaleString('zh-CN', {
@@ -6605,7 +6640,7 @@ async function composeGroupMemory(chat, range, options = {}) {
       suffix = `  [批注 ${annTime}] ${annotations[m.id].text}`;
     }
 
-    return `[${time}] ${from}：${text}${suffix}`;
+    return `[${time}] ${from}${sessionLabel}：${text}${suffix}`;
   });
 
   return {
@@ -6671,15 +6706,21 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
     // 事件消息（task_started 等）：让管理员知道哪些派发已经发生
     if (m.kind === 'event' && m.event) {
       const evtName = m.event.identityName || m.event.identityRef || '';
+      const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);
       if (m.event.type === 'task_started') {
-        return `[${time}] [系统事件] ${evtName} 已开始处理`;
+        return `[${time}] [系统事件] ${evtName}${evtSession} 已开始处理`;
       }
-      return `[${time}] [系统事件] ${evtName}：${m.event.type}`;
+      return `[${time}] [系统事件] ${evtName}${evtSession}：${m.event.type}`;
     }
 
     const identityInfo = allIdentities.find((i) => i.identityRef === m.from);
     const from = m.from === 'user' ? '用户' : (identityInfo?.displayName || m.from);
     const text = (m.text || '').slice(0, 300);
+
+    // 会话标识：管理员派遣 vs agent 回复语义不同
+    const sessionLabel = m.from === 'work-group:admin'
+      ? formatDispatchTarget(m.routing?.targetSessionTitle, m.routing?.targetSessionId)
+      : formatSessionLabel(m.routing?.targetSessionTitle, m.routing?.targetSessionId);
 
     // 批注：附加到消息行尾部，供管理员参考
     let suffix = '';
@@ -6697,7 +6738,7 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
       attachmentInfo = `  [附件: ${attNames}]`;
     }
 
-    return `[${time}] ${from}：${text}${suffix}${attachmentInfo}`;
+    return `[${time}] ${from}${sessionLabel}：${text}${suffix}${attachmentInfo}`;
   });
 
   return [
@@ -6758,18 +6799,22 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
 
   const workspaceId = identityRef.split(':')[0];
 
-  // 查找身份显示名用于 session 标题
+  // 查找身份显示名
   const allIdentities = await collectIdentities();
   const identityInfo = allIdentities.find((i) => i.identityRef === identityRef);
   const displayName = identityInfo?.displayName || identityRef.split(':')[1] || 'Agent';
-  const sessionTitle = `${chat.name || '群聊'} · ${displayName}`;
+  // 管理员会话使用「群聊名 · 管理员」格式；其他身份由 dispatch title 或 createPrebuiltSession 默认规则决定
+  const isAdmin = identityRef === 'work-group:admin';
+  const adminSessionTitle = isAdmin ? `${chat.name || '群聊'} · ${displayName}` : null;
+  const explicitTitle = (typeof options.title === 'string' && options.title.trim()) || null;
 
   // one-shot: 总是创建新 session
   if (sessionModel === 'one-shot') {
     const agent = await requireAgentLight(workspaceId);
+    const taskTitle = explicitTitle || adminSessionTitle;
     const session = await createPrebuiltSession(agent.id, {
       sessionType: 'exploration',
-      taskTitle: sessionTitle,
+      ...(taskTitle ? { taskTitle } : {}),
     });
     return { sessionId: session.id, isNew: true };
   }
@@ -6785,18 +6830,15 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
       await writeGroupChat(chat);
       return { sessionId: found.id, isNew: false };
     }
-    log('GroupChat', `targetSessionId ${options.targetSessionId} not found for ${workspaceId}, falling back`);
+    // 指定的 targetSessionId 不存在 → 明确报错，不静默降级
+    throw new Error(`指定的会话 ${options.targetSessionId} 不存在，请用 gc_sessions 确认可用会话`);
   }
 
   // 强制新会话
   if (options.forceNew) {
     const agent = await requireAgentLight(workspaceId);
-    const taskTitle = (options.title && typeof options.title === 'string' && options.title.trim())
-      ? options.title.trim()
-      : sessionTitle;
-    const session = await createPrebuiltSession(agent.id, {
-      taskTitle,
-    });
+    const taskTitle = explicitTitle || adminSessionTitle;
+    const session = await createPrebuiltSession(agent.id, taskTitle ? { taskTitle } : {});
     _recordAdminSessionHistory(chat, identityRef);
     chat.sessions[identityRef] = session.id;
     await writeGroupChat(chat);
@@ -6838,7 +6880,14 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
             log('GroupChat', `failed to stop old admin runtime ${existing}: ${err.message}`, 'warn');
           }
         } else {
-          // 无用量数据（首次/刚创建），直接复用
+          // 无用量数据（首次/刚创建）
+          // 检查是否为 admin_restart 创建的待初始化 session
+          if (chat.adminNeedsContextInit === existing) {
+            chat.adminNeedsContextInit = null;
+            await writeGroupChat(chat);
+            log('GroupChat', `admin session ${existing} marked for context init, returning isNew=true`);
+            return { sessionId: existing, isNew: true };
+          }
           return { sessionId: existing, isNew: false };
         }
       } else {
@@ -6850,9 +6899,8 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
 
   // 创建新 session 并存储映射
   const agent = await requireAgentLight(workspaceId);
-  const session = await createPrebuiltSession(agent.id, {
-    taskTitle: sessionTitle,
-  });
+  const taskTitle = explicitTitle || adminSessionTitle;
+  const session = await createPrebuiltSession(agent.id, taskTitle ? { taskTitle } : {});
   _recordAdminSessionHistory(chat, identityRef);
   chat.sessions[identityRef] = session.id;
   await writeGroupChat(chat);
@@ -7013,7 +7061,7 @@ app.get('/protoclaw/gc/inbox', async (req, res) => {
 
 app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
   try {
-    const { chatId, identityRef, response, error } = req.body || {};
+    const { chatId, identityRef, response, error, sessionId: reqSessionId } = req.body || {};
     if (!chatId || !identityRef) {
       return res.status(400).json({ error: 'chatId and identityRef required' });
     }
@@ -7023,8 +7071,9 @@ app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
       : (response || '(无回复)');
 
     // 回写消息携带 session 信息，供前端显示会话标签和跳转
+    // sessionId 从请求体获取（由 agent 子进程通过 bridge 传入）
     const workspaceId = identityRef.split(':')[0];
-    const wbSessionId = process.env.PROTOCLAW_PREBUILT_SESSION_ID || null;
+    const wbSessionId = reqSessionId || null;
     let wbSessionTitle = wbSessionId;
     if (wbSessionId) {
       try {
@@ -7057,7 +7106,15 @@ app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
     // 规划模式下，通知管理员 agent 完成了回复
     const wbChat = await readGroupChat(chatId);
     if (wbChat && (wbChat.initiativeMode || 'assist') === 'plan' && identityRef !== 'work-group:admin') {
-      const wbMessage = { id: `wb-${Date.now()}`, from: identityRef, text, kind: 'text', timestamp: Date.now() };
+      const wbMessage = {
+        id: `wb-${Date.now()}`,
+        from: identityRef,
+        text,
+        kind: 'text',
+        timestamp: Date.now(),
+        // 携带 session 信息，使管理员通知能区分同一身份的不同会话
+        routing: wbSessionId ? { targetSessionTitle: wbSessionTitle, targetSessionId: wbSessionId } : null,
+      };
       notifyAdminForActivity(chatId, wbMessage, wbChat).catch((err) => {
         log('GroupChat', `admin activity notify (writeback) failed: ${err.message}`, 'warn');
       });
@@ -7121,6 +7178,14 @@ app.post('/protoclaw/gc/control', express.json(), async (req, res, next) => {
     // 写入状态消息到群聊
     const statusText = '[任务已中断]';
 
+    // 解析 session 标题，供前端显示会话标识
+    let interruptSessionTitle = resolvedSessionId;
+    try {
+      const idx = await readSessionIndex(workspaceId);
+      const rec = idx.sessions.find((s) => s.id === resolvedSessionId);
+      if (rec) interruptSessionTitle = rec.title || rec.taskTitle || resolvedSessionId;
+    } catch {}
+
     await appendGroupChatMessage(chatId, {
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       chatId,
@@ -7135,6 +7200,7 @@ app.post('/protoclaw/gc/control', express.json(), async (req, res, next) => {
         targetWorkspaceId: workspaceId,
         targetIdentityRef: identityRef,
         targetSessionId: resolvedSessionId,
+        targetSessionTitle: interruptSessionTitle,
         completedAt: Date.now(),
       },
     });
@@ -7183,7 +7249,12 @@ function readGroupChatSync(chatId) {
 
 /**
  * 群聊运行时状态查询 API。
- * 按会话粒度返回：每个活跃会话独立一条，含运行状态（running/idle/offline）。
+ * 返回完整会话池中每个会话的运行状态（running/idle/offline）。
+ *
+ * 数据来源：
+ * 1. chat.sessions 映射（持久会话）
+ * 2. chat.messages 消息路由（派发产生的会话，含已完成的）
+ * 3. chat.importedSessions（从外部引入的会话）
  *
  * 前端态势感知面板轮询此接口获取实时会话池状态。
  */
@@ -7199,8 +7270,31 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
       return res.status(404).json({ error: 'Chat not found' });
     }
 
-    // 从消息路由中收集活跃会话（与前端 collectActiveSessions 逻辑一致）
+    const allIdentities = await collectIdentities();
+    const identityDisplayName = (ref) => {
+      const info = allIdentities.find((i) => i.identityRef === ref);
+      return info?.displayName || ref.split(':')[1] || ref;
+    };
+
+    // 收集会话池中所有会话（去重 key = identityRef:sessionId）
     const sessionMap = new Map();
+
+    // Source 1: chat.sessions 映射（持久会话）
+    for (const [identityRef, sessionId] of Object.entries(chat.sessions || {})) {
+      if (identityRef === 'work-group:admin') continue;
+      if (!sessionId) continue;
+      const workspaceId = identityRef.split(':')[0];
+      const key = `${identityRef}:${sessionId}`;
+      sessionMap.set(key, {
+        identityRef,
+        sessionId,
+        workspaceId,
+        displayName: identityDisplayName(identityRef),
+        lastActivity: 0,
+      });
+    }
+
+    // Source 2: 消息路由（含已完成会话，排除 failed）
     for (const msg of (chat.messages || [])) {
       const r = msg.routing;
       if (!r || !r.targetSessionId) continue;
@@ -7208,25 +7302,39 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
       if (r.targetIdentityRef === 'work-group:admin') continue;
       const key = `${r.targetIdentityRef}:${r.targetSessionId}`;
       const existing = sessionMap.get(key);
-      if (!existing || (msg.timestamp || 0) > existing.lastActivity) {
+      if (!existing || (msg.timestamp || 0) > (existing.lastActivity || 0)) {
         sessionMap.set(key, {
           identityRef: r.targetIdentityRef,
           sessionId: r.targetSessionId,
-          workspaceId: r.targetWorkspaceId,
-          displayName: (r.targetIdentityRef.split(':')[1] || r.targetIdentityRef),
-          routingStatus: r.status || 'pending',
+          workspaceId: r.targetWorkspaceId || r.targetIdentityRef.split(':')[0],
+          displayName: identityDisplayName(r.targetIdentityRef),
           lastActivity: msg.timestamp || 0,
         });
       }
     }
 
-    // 过滤掉已 completed 的会话（只有 completed 的才不算活跃）
-    const activeSessions = Array.from(sessionMap.values())
-      .filter((s) => s.routingStatus === 'pending' || s.routingStatus === 'delivered');
+    // Source 3: 导入的外部会话
+    for (const imp of (chat.importedSessions || [])) {
+      if (!imp.sessionId || !imp.workspaceId) continue;
+      // 导入会话可能没有 identityRef，用 workspaceId 找匹配的群成员身份
+      const memberIdentity = (chat.members || [])
+        .find((m) => m.identityRef && m.identityRef.startsWith(imp.workspaceId + ':'));
+      const identityRef = memberIdentity?.identityRef || `${imp.workspaceId}:main`;
+      const key = `${identityRef}:${imp.sessionId}`;
+      if (!sessionMap.has(key)) {
+        sessionMap.set(key, {
+          identityRef,
+          sessionId: imp.sessionId,
+          workspaceId: imp.workspaceId,
+          displayName: imp.workspaceName || identityDisplayName(identityRef),
+          lastActivity: imp.importedAt || 0,
+        });
+      }
+    }
 
-    // 对每个活跃会话查运行时状态
+    // 对每个会话查实际运行时状态
     const results = [];
-    for (const s of activeSessions) {
+    for (const s of sessionMap.values()) {
       const runtimeKey = getManagedRuntimeKey(s.workspaceId, s.sessionId);
       const runtime = managedAgents.get(runtimeKey);
 
@@ -7238,6 +7346,7 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
           displayName: s.displayName,
           status: 'offline',
           viewerAgentId: null,
+          lastActivity: s.lastActivity,
         });
         continue;
       }
@@ -7247,13 +7356,15 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
 
       if (viewerAgentId) {
         try {
-          const rtRes = await fetch(
-            `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/running`
+          // 使用 /notification API 而非 /running：
+          // /running 在进程存活时永远返回 {running:true}（仅检查 UDS socket 连通），
+          // 不反映是否有 call 正在执行。
+          // /notification 的 callActive 字段由 call.start/call.finish 事件维护，
+          // 能准确反映会话是否真正处于调用中。
+          const notif = await readViewerJson(
+            `/api/agents/${encodeURIComponent(viewerAgentId)}/notification`
           );
-          if (rtRes.ok) {
-            const rtData = await rtRes.json();
-            isRunning = rtData.running === true || rtData.callActive === true;
-          }
+          isRunning = notif?.callActive === true;
         } catch {}
       }
 
@@ -7264,6 +7375,7 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
         displayName: s.displayName,
         status: isRunning ? 'running' : 'idle',
         viewerAgentId,
+        lastActivity: s.lastActivity,
       });
     }
 
@@ -7390,7 +7502,9 @@ async function ensureAdminRuntime(chatId, sessionId) {
 
   const agent = await requireAgentLight('work-group');
   log('GroupChat', `starting work-group admin session=${sessionId} for chat=${chatId}`);
-  await startManagedAgent(agent, sessionId);
+  await startManagedAgent(agent, sessionId, {
+    extraEnv: { PROTOCLAW_GC_CHAT_ID: chatId },
+  });
   runtime = await waitForManagedRuntimeReady('work-group', 30000, sessionId);
   if (!runtime) throw new Error('Admin runtime failed to become ready within 30s');
   return runtime;
@@ -7752,12 +7866,14 @@ async function notifyAdminForActivity(chatId, message, chat) {
     : (senderInfo?.displayName || message.from);
 
   let activityDesc;
+  const sessionLabel = formatSessionLabel(message.routing?.targetSessionTitle, message.routing?.targetSessionId);
   if (message.kind === 'event') {
-    activityDesc = `系统事件：${message.event?.identityName || ''} 已开始处理`;
+    const evtSession = formatSessionLabel(message.event?.sessionTitle, message.event?.sessionId);
+    activityDesc = `系统事件：${message.event?.identityName || ''}${evtSession} 已开始处理`;
   } else if (message.from === 'user') {
     activityDesc = `用户发送了消息：${(message.text || '').slice(0, 200)}`;
   } else {
-    activityDesc = `${senderName} 回复了：${(message.text || '').slice(0, 200)}`;
+    activityDesc = `${senderName}${sessionLabel} 回复了：${(message.text || '').slice(0, 200)}`;
   }
 
   // 附件摘要：显示附件数量和名称
@@ -8229,11 +8345,40 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
     await appendGroupChatMessage(chat.id, message);
 
     // 异步派发（不阻塞响应）——任何带 routing 的消息触发
+    let resolvedSession = null;
     if (message.routing) {
-      const sessionOptions = {};
+      let sessionOptions = {};
       if (targetSessionId) sessionOptions.targetSessionId = targetSessionId;
       if (forceNew) sessionOptions.forceNew = true;
       if (title && typeof title === 'string' && title.trim()) sessionOptions.title = title.trim();
+
+      // 管理员派发：同步预解析会话，返回 sessionId/title/isNew 供工具反馈
+      if (messageFrom === 'work-group:admin') {
+        try {
+          const targetRef = message.routing.targetIdentityRef;
+          const allIdentities = await collectIdentities();
+          const targetInfo = allIdentities.find((i) => i.identityRef === targetRef);
+          const sessionModel = targetInfo?.sessionModel || 'persistent';
+          const { sessionId: preSid, isNew: preNew } = await resolveGroupChatSession(
+            chat.id, targetRef, sessionModel, sessionOptions
+          );
+          // 查找会话标题
+          let preTitle = preSid;
+          try {
+            const wsId = targetRef.split(':')[0];
+            const idx = await readSessionIndex(wsId);
+            const rec = idx.sessions.find((s) => s.id === preSid);
+            if (rec) preTitle = rec.title || rec.taskTitle || preSid;
+          } catch {}
+          resolvedSession = { sessionId: preSid, sessionTitle: preTitle, isNew: preNew };
+          // 覆盖 sessionOptions：用预解析的 sessionId 作为 targetSessionId，
+          // 避免异步 dispatch 重复创建会话
+          sessionOptions = { targetSessionId: preSid };
+        } catch (resolveErr) {
+          return res.status(400).json({ error: resolveErr.message || '会话解析失败' });
+        }
+      }
+
       dispatchGroupChatMessage(chat.id, message, sessionOptions).catch((err) => {
         console.error(`[GroupChat] dispatch failed for ${message.id}:`, err);
       });
@@ -8244,7 +8389,7 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
       });
     }
 
-    res.status(201).json(message);
+    res.status(201).json(resolvedSession ? { ...message, resolvedSession } : message);
   } catch (error) {
     next(error);
   }
@@ -8298,6 +8443,7 @@ app.get('/protoclaw/group_chats/:chatId/sessions/:identityRef', async (req, res,
       .map((s) => ({
         id: s.id,
         title: s.title || s.taskTitle || '未命名',
+        createdAt: s.createdAt || null,
         updatedAt: s.updatedAt || s.createdAt,
         isActive: s.id === activeSessionId,
       }));
@@ -8442,6 +8588,13 @@ app.post('/protoclaw/group_chats/:chatId/admin_restart', async (req, res, next) 
         chatId, identityRef, 'persistent', { forceNew: true }
       );
       log('GroupChat', `admin restart: created new session ${result.sessionId}`);
+
+      // 3. 标记新 session 需要完整上下文初始化
+      //    后续消息派发时 _resolveGroupChatSessionInner 检测到此标记，
+      //    返回 isNew=true，触发 prepareAdminContext 完整注入
+      const chatForMark = await readGroupChat(chatId);
+      chatForMark.adminNeedsContextInit = result.sessionId;
+      await writeGroupChat(chatForMark);
 
       return { oldSessionId: oldSid, newSessionId: result.sessionId };
     });
@@ -10034,8 +10187,10 @@ async function resolveSessionModelInfo(agentId, sessionType) {
   let presetName = null;
   if (agentId) {
     try {
-      const agentMeta = await readJson(path.join(__dirname, 'prebuilt-agents', 'official', agentId, 'metadata.json'));
-      const mp = agentMeta?.modelPresets;
+      // 读取用户配置文件
+      const userConfigPath = path.join(__dirname, '.agentdev', 'agent-configs', `${agentId}.json`);
+      const userConfig = await readJson(userConfigPath) || {};
+      const mp = userConfig?.modelPresets;
       if (mp && typeof mp === 'object') {
         presetName = mp[role] || mp.default || null;
       }
@@ -12525,7 +12680,18 @@ app.get('/protoclaw/agent_model_presets', async (req, res, next) => {
     if (!meta) {
       return res.status(404).json({ error: 'Agent metadata not found' });
     }
-    res.json({ agentId, modelPresets: meta.modelPresets || {} });
+    
+    // 读取用户配置文件（如果存在）
+    const userConfigPath = path.join(__dirname, '.agentdev', 'agent-configs', `${agentId}.json`);
+    const userConfig = await readJson(userConfigPath) || {};
+    
+    // 合并配置：用户配置优先，metadata.json 中的 modelPresets 作为后备
+    const modelPresets = {
+      ...(meta.modelPresets || {}),
+      ...(userConfig.modelPresets || {})
+    };
+    
+    res.json({ agentId, modelPresets });
   } catch (error) { next(error); }
 });
 
@@ -12538,13 +12704,28 @@ app.put('/protoclaw/agent_model_presets', express.json(), async (req, res, next)
     if (!modelPresets || typeof modelPresets !== 'object') {
       return res.status(400).json({ error: 'modelPresets object is required' });
     }
+    
+    // 验证 agent 存在
     const metaPath = path.join(__dirname, 'prebuilt-agents', 'official', agentId, 'metadata.json');
     const meta = await readJson(metaPath);
     if (!meta) {
       return res.status(404).json({ error: 'Agent metadata not found' });
     }
-    meta.modelPresets = modelPresets;
-    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+    
+    // 只写入用户配置文件，不修改 metadata.json
+    const userConfigDir = path.join(__dirname, '.agentdev', 'agent-configs');
+    await fs.mkdir(userConfigDir, { recursive: true });
+    const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
+    
+    // 读取现有用户配置（如果存在）
+    const existingConfig = await readJson(userConfigPath) || {};
+    
+    // 更新 modelPresets
+    existingConfig.modelPresets = modelPresets;
+    
+    // 写入用户配置文件
+    await fs.writeFile(userConfigPath, JSON.stringify(existingConfig, null, 2), 'utf8');
+    
     res.json({ ok: true, agentId, modelPresets });
   } catch (error) { next(error); }
 });

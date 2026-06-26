@@ -5,6 +5,7 @@
  * 1. composeDispatchPrompt — prompt building with chat name, text, links
  * 2. searchInText — snippet extraction, role detection, edge cases
  * 3. Group Chat CRUD — write/read/list/append/updateMessageRouting round-trip
+ * 4. aggregateSessionPool — session pool aggregation from 3 sources (runtime_status)
  *
  * The CRUD tests use a temp directory to exercise real file I/O.
  * The pure functions are inline-replicated from server.js.
@@ -494,5 +495,292 @@ describe('Group Chat data layer', () => {
       const deleted = await store.deleteGroupChatFile('nope');
       assert.equal(deleted, false);
     });
+  });
+});
+
+// ── aggregateSessionPool (mirrors GET /protoclaw/gc/runtime_status) ──
+
+/**
+ * Aggregate all sessions in a group chat's session pool from three sources:
+ * 1. chat.sessions mapping (persistent sessions)
+ * 2. chat.messages routing (dispatched sessions, including completed)
+ * 3. chat.importedSessions (imported external sessions)
+ *
+ * Excludes: work-group:admin identity, failed routing status.
+ * Deduplicates by key = identityRef:sessionId.
+ *
+ * This mirrors the aggregation logic in GET /protoclaw/gc/runtime_status
+ * in server.js. When the server code changes, update this copy accordingly.
+ */
+function aggregateSessionPool(chat, identities) {
+  const identityDisplayName = (ref) => {
+    const info = identities.find((i) => i.identityRef === ref);
+    return info?.displayName || ref.split(':')[1] || ref;
+  };
+
+  const sessionMap = new Map();
+
+  // Source 1: chat.sessions mapping (persistent sessions)
+  for (const [identityRef, sessionId] of Object.entries(chat.sessions || {})) {
+    if (identityRef === 'work-group:admin') continue;
+    if (!sessionId) continue;
+    const workspaceId = identityRef.split(':')[0];
+    const key = `${identityRef}:${sessionId}`;
+    sessionMap.set(key, {
+      identityRef, sessionId, workspaceId,
+      displayName: identityDisplayName(identityRef),
+      lastActivity: 0,
+    });
+  }
+
+  // Source 2: message routing (including completed, excluding failed)
+  for (const msg of (chat.messages || [])) {
+    const r = msg.routing;
+    if (!r || !r.targetSessionId) continue;
+    if (r.status === 'failed') continue;
+    if (r.targetIdentityRef === 'work-group:admin') continue;
+    const key = `${r.targetIdentityRef}:${r.targetSessionId}`;
+    const existing = sessionMap.get(key);
+    if (!existing || (msg.timestamp || 0) > (existing.lastActivity || 0)) {
+      sessionMap.set(key, {
+        identityRef: r.targetIdentityRef,
+        sessionId: r.targetSessionId,
+        workspaceId: r.targetWorkspaceId || r.targetIdentityRef.split(':')[0],
+        displayName: identityDisplayName(r.targetIdentityRef),
+        lastActivity: msg.timestamp || 0,
+      });
+    }
+  }
+
+  // Source 3: imported external sessions
+  for (const imp of (chat.importedSessions || [])) {
+    if (!imp.sessionId || !imp.workspaceId) continue;
+    const memberIdentity = (chat.members || [])
+      .find((m) => m.identityRef && m.identityRef.startsWith(imp.workspaceId + ':'));
+    const identityRef = memberIdentity?.identityRef || `${imp.workspaceId}:main`;
+    const key = `${identityRef}:${imp.sessionId}`;
+    if (!sessionMap.has(key)) {
+      sessionMap.set(key, {
+        identityRef,
+        sessionId: imp.sessionId,
+        workspaceId: imp.workspaceId,
+        displayName: imp.workspaceName || identityDisplayName(identityRef),
+        lastActivity: imp.importedAt || 0,
+      });
+    }
+  }
+
+  return Array.from(sessionMap.values());
+}
+
+describe('aggregateSessionPool', () => {
+  const mockIdentities = [
+    { identityRef: 'programming-helper:main', displayName: '编程小助手' },
+    { identityRef: 'flow-workspace:main', displayName: 'Flow工作空间' },
+    { identityRef: 'work-group:admin', displayName: '管理员' },
+  ];
+
+  it('returns empty array for a brand-new chat with no sessions or messages', () => {
+    const chat = {
+      id: 'chat-new',
+      name: '新群',
+      members: [{ identityRef: 'user', role: 'human' }],
+      messages: [],
+      sessions: {},
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.deepEqual(pool, []);
+  });
+
+  it('collects persistent sessions from chat.sessions mapping', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: { 'programming-helper:main': 'sess-aaa' },
+      messages: [],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool.length, 1);
+    assert.equal(pool[0].sessionId, 'sess-aaa');
+    assert.equal(pool[0].identityRef, 'programming-helper:main');
+    assert.equal(pool[0].displayName, '编程小助手');
+    assert.equal(pool[0].workspaceId, 'programming-helper');
+  });
+
+  it('includes completed sessions from message routing (regression: old code filtered them)', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: {},
+      messages: [
+        {
+          id: 'm1',
+          routing: {
+            status: 'completed',
+            targetIdentityRef: 'programming-helper:main',
+            targetSessionId: 'sess-bbb',
+            targetWorkspaceId: 'programming-helper',
+          },
+          timestamp: 1000,
+        },
+      ],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool.length, 1, 'completed session should remain in pool');
+    assert.equal(pool[0].sessionId, 'sess-bbb');
+  });
+
+  it('excludes failed routing entries', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: {},
+      messages: [
+        {
+          id: 'm1',
+          routing: {
+            status: 'failed',
+            targetIdentityRef: 'programming-helper:main',
+            targetSessionId: 'sess-fail',
+            targetWorkspaceId: 'programming-helper',
+          },
+          timestamp: 1000,
+        },
+      ],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool.length, 0);
+  });
+
+  it('excludes work-group:admin sessions from all sources', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: { 'work-group:admin': 'sess-admin' },
+      messages: [
+        {
+          id: 'm1',
+          routing: {
+            status: 'delivered',
+            targetIdentityRef: 'work-group:admin',
+            targetSessionId: 'sess-admin',
+            targetWorkspaceId: 'work-group',
+          },
+          timestamp: 1000,
+        },
+      ],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool.length, 0);
+  });
+
+  it('deduplicates same session appearing in both chat.sessions and message routing', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: { 'programming-helper:main': 'sess-aaa' },
+      messages: [
+        {
+          id: 'm1',
+          routing: {
+            status: 'completed',
+            targetIdentityRef: 'programming-helper:main',
+            targetSessionId: 'sess-aaa',
+            targetWorkspaceId: 'programming-helper',
+          },
+          timestamp: 5000,
+        },
+      ],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool.length, 1, 'same session from two sources should be deduplicated');
+    assert.equal(pool[0].lastActivity, 5000, 'lastActivity should come from the message routing (newer)');
+  });
+
+  it('collects imported external sessions', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: {},
+      messages: [],
+      members: [
+        { identityRef: 'user', role: 'human' },
+        { identityRef: 'flow-workspace:main', role: 'agent' },
+      ],
+      importedSessions: [
+        { workspaceId: 'flow-workspace', sessionId: 'ext-111', workspaceName: 'Flow工作空间', importedAt: 3000 },
+      ],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool.length, 1);
+    assert.equal(pool[0].sessionId, 'ext-111');
+    assert.equal(pool[0].identityRef, 'flow-workspace:main');
+    assert.equal(pool[0].workspaceId, 'flow-workspace');
+  });
+
+  it('resolves displayName from identities for routing-derived sessions', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: {},
+      messages: [
+        {
+          id: 'm1',
+          routing: {
+            status: 'delivered',
+            targetIdentityRef: 'flow-workspace:main',
+            targetSessionId: 'sess-xyz',
+            targetWorkspaceId: 'flow-workspace',
+          },
+          timestamp: 1000,
+        },
+      ],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool[0].displayName, 'Flow工作空间');
+  });
+
+  it('handles multiple distinct sessions across all three sources', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: { 'programming-helper:main': 'sess-persistent' },
+      messages: [
+        {
+          id: 'm1',
+          routing: {
+            status: 'delivered',
+            targetIdentityRef: 'programming-helper:main',
+            targetSessionId: 'sess-dispatched',
+            targetWorkspaceId: 'programming-helper',
+          },
+          timestamp: 2000,
+        },
+      ],
+      members: [
+        { identityRef: 'user', role: 'human' },
+        { identityRef: 'flow-workspace:main', role: 'agent' },
+      ],
+      importedSessions: [
+        { workspaceId: 'flow-workspace', sessionId: 'sess-imported', importedAt: 3000 },
+      ],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool.length, 3);
+    const sessionIds = pool.map((s) => s.sessionId).sort();
+    assert.deepEqual(sessionIds, ['sess-dispatched', 'sess-imported', 'sess-persistent']);
+  });
+
+  it('handles chat with null/undefined optional fields gracefully', () => {
+    const chat = { id: 'chat-1' };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.deepEqual(pool, []);
+  });
+
+  it('uses workspaceId:main as fallback identityRef for imported sessions without matching member', () => {
+    const chat = {
+      id: 'chat-1',
+      sessions: {},
+      messages: [],
+      members: [{ identityRef: 'user', role: 'human' }],
+      importedSessions: [
+        { workspaceId: 'some-workspace', sessionId: 'ext-222', importedAt: 1000 },
+      ],
+    };
+    const pool = aggregateSessionPool(chat, mockIdentities);
+    assert.equal(pool.length, 1);
+    assert.equal(pool[0].identityRef, 'some-workspace:main');
   });
 });

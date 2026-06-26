@@ -646,6 +646,35 @@
 .wg-pop-dot.active {
   background: var(--success-color, #66bb6a);
 }
+.wg-pop-dot.running {
+  background: var(--success-color, #66bb6a);
+  animation: wg-pulse 1.5s ease-in-out infinite;
+}
+.wg-pop-dot.idle {
+  background: var(--success-color, #66bb6a);
+}
+.wg-pop-dot.offline {
+  background: var(--text-muted, #888);
+}
+
+.wg-pop-interrupt-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color, rgba(128,128,128,0.3));
+  background: transparent;
+  color: var(--text-secondary, #b0b0c0);
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+.wg-pop-interrupt-btn:hover {
+  background: var(--hover-bg, rgba(255,255,255,0.06));
+}
+.wg-pop-interrupt-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .wg-pop-title {
   flex: 1;
@@ -835,6 +864,27 @@
   color: #fff;
 }
 
+/* 管理员活跃会话跳转按钮 */
+.wg-pop-admin-active {
+  padding: 0 14px;
+  margin-bottom: 8px;
+}
+.wg-pop-admin-jump {
+  width: 100%;
+  padding: 6px 14px;
+  font-size: 12px;
+  border: 1px solid var(--accent-color, #ededed);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent-color, #ededed);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.wg-pop-admin-jump:hover {
+  background: var(--accent-color, #ededed);
+  color: var(--bg-color, #000);
+}
+
 .wg-pop-dispatch-cur {
   flex-shrink: 0;
   margin-left: auto;
@@ -987,6 +1037,23 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.wg-msg-session-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: var(--code-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 4px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .wg-msg-time {
@@ -1492,6 +1559,39 @@
   background: none;
   color: var(--text-muted);
   flex-shrink: 0;
+}
+
+.wg-voice-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, transform 0.15s;
+  flex-shrink: 0;
+}
+
+.wg-voice-btn:hover {
+  color: var(--text-primary);
+}
+
+.wg-voice-btn.recording {
+  color: #ef4444;
+  animation: wg-voice-pulse 1.2s ease-in-out infinite;
+}
+
+.wg-voice-btn.transcribing {
+  color: var(--accent-color);
+  cursor: not-allowed;
+}
+
+@keyframes wg-voice-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
 }
 
 .wg-input-hint {

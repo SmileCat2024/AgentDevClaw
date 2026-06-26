@@ -3027,7 +3027,7 @@ function renderSpeechPresetEditForm(preset, editIdx, isZh) {
     '</div>',
     '<div class="settings-actions">',
     '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSpeechPresetEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
-    '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSpeechPreset(' + editIdx + ')">' + (isZh ? '保存' : 'Save') + '</button>',
+    '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSpeechPreset(\'' + editIdx + '\')">' + (isZh ? '保存' : 'Save') + '</button>',
     '</div>',
     '</div>',
   ].join('');

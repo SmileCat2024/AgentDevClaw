@@ -49,7 +49,7 @@
   let groupMdLoading = false;   // GROUP.md 是否正在加载
   let _annotations = {};        // messageId → { text, timestamp }
   let _adminStatus = null;      // 管理员会话状态（admin_status API 返回）
-  let _adminRestarting = false; // 管理员正在重启中（UI 状态锁）
+  let _adminRestarting = false; // 管理员正在创建新会话中（UI 状态锁）
   let _hoverIdentity = null;     // 当前 hover 的成员 identityRef
   let _hoverTimer = null;        // hover 延迟计时器
   let _popoverEl = null;         // 成员 popover DOM 元素
@@ -57,6 +57,16 @@
   let _importModalEl = null;     // 引入会话搜索弹窗 DOM
   let _importSearchTimer = null; // 搜索防抖计时器
   let _mentionTarget = null;     // @mention picker 当前选中的 identityRef（level 2）
+
+  // ── 语音输入状态 ─────────────────────────────────────────────
+  let _voiceRecording = false;
+  let _voiceTranscribing = false;
+  let _voiceMediaRecorder = null;
+  let _voiceAudioChunks = [];
+  let _voiceTargetBtn = null;
+  let _voiceCancelled = false;
+  let _voicePendingSend = false;
+  let _voiceChatId = null;           // 录音发起时的 chatId（用于检测群聊切换）
 
   // ── 按群聊隔离的输入缓存 ─────────────────────────────────────
   // chatId → { editorHtml, pendingLinks, pendingAttachments }
@@ -329,8 +339,8 @@
       healthText = `${pct}%`;
     }
 
-    // 重启/启动按钮 — 始终可用
-    const btnLabel = restarting ? '…' : (st?.sessionId ? '重启' : '启动');
+    // 新会话/启动按钮 — 始终可用
+    const btnLabel = restarting ? '…' : (st?.sessionId ? '新会话' : '启动');
 
     return [
       `<span class="wg-admin-chip ${dotClass}">`,
@@ -341,43 +351,47 @@
       '</span>',
       `<button class="wg-admin-chip-btn${restarting ? ' spinning' : ''}" data-wg-action="admin-restart"`,
       restarting ? ' disabled' : '',
-      ` title="${st?.sessionId ? '重启管理员会话' : '启动管理员会话'}">${esc(btnLabel)}</button>`,
+      ` title="${st?.sessionId ? '创建新管理员会话' : '启动管理员会话'}">${esc(btnLabel)}</button>`,
       '</span>',
     ].join('');
   }
 
   // ── 右侧：态势层 ────────────────────────────────────────────
 
-  function renderAwarenessBar(chat) {
-    // 从运行时状态缓存获取会话池（按 lastActivity 排序，最近的在前面）
-    const sessions = Object.values(_runtimeStatusCache)
-      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
+  /** 计算某个成员的聚合运行时状态 */
+  function getMemberAggregateStatus(identityRef) {
+    const memberSessions = Object.values(_runtimeStatusCache).filter(
+      (s) => s.identityRef === identityRef
+    );
+    if (memberSessions.some((s) => s.status === 'running')) return 'running';
+    if (memberSessions.some((s) => s.status === 'idle')) return 'idle';
+    return 'offline';
+  }
 
-    const sessionChips = sessions.map((s) => {
-      const name = s.displayName || s.identityRef.split(':')[1] || s.identityRef;
-      const dotClass = s.status === 'running' ? 'running'
-        : s.status === 'idle' ? 'idle'
-        : 'offline';
-      const dotTitle = s.status === 'running' ? '运行中'
-        : s.status === 'idle' ? '在线 · 空闲'
+  function renderAwarenessBar(chat) {
+    const adminChip = renderAdminChip();
+    const importedCount = (chat.importedSessions || []).length;
+
+    // 成员 chip：每个群成员一个，带 data-wg-member-identity 触发 popover
+    const agentMembers = (chat.members || []).filter(
+      (m) => m.identityRef !== 'user' && m.identityRef !== 'work-group:admin'
+    );
+
+    const memberChips = agentMembers.map((m) => {
+      const identityRef = m.identityRef;
+      const name = getIdentityName(identityRef);
+      const dotClass = getMemberAggregateStatus(identityRef);
+      const dotTitle = dotClass === 'running' ? '运行中'
+        : dotClass === 'idle' ? '在线 · 空闲'
         : '离线';
-      const canInterrupt = s.status === 'running';
-      const sessionIdShort = (s.sessionId || '').slice(0, 8);
 
       return [
-        `<span class="wg-session-chip" data-wg-session-identity="${esc(s.identityRef)}" data-wg-session-id="${esc(s.sessionId)}" data-wg-workspace-id="${esc(s.workspaceId)}">`,
+        `<span class="wg-member-chip ${dotClass}" data-wg-member-identity="${esc(identityRef)}">`,
         `  <span class="wg-member-dot ${dotClass}" title="${esc(dotTitle)}"></span>`,
-        `  <span class="wg-session-chip-name">${esc(name)}</span>`,
-        `  <span class="wg-session-chip-id">${esc(sessionIdShort)}</span>`,
-        canInterrupt
-          ? `  <button class="wg-session-interrupt-btn" data-wg-action="interrupt-session" data-wg-identity="${esc(s.identityRef)}" data-wg-session-id="${esc(s.sessionId)}" data-wg-workspace-id="${esc(s.workspaceId)}" title="中断此会话">中断</button>`
-          : '',
+        `  <span class="wg-member-name">${esc(name)}</span>`,
         '</span>',
       ].join('');
     }).join('');
-
-    const adminChip = renderAdminChip();
-    const importedCount = (chat.importedSessions || []).length;
 
     // 引入按钮：低频操作，降级为极简图标
     const importBtn = [
@@ -390,7 +404,7 @@
     return [
       '<div class="wg-awareness">',
       adminChip ? `  <div class="wg-awareness-admin">${adminChip}</div>` : '',
-      sessionChips ? `  <div class="wg-awareness-sessions">${sessionChips}</div>` : `  <div class="wg-awareness-empty">暂无活跃会话</div>`,
+      memberChips ? `  <div class="wg-awareness-members">${memberChips}</div>` : `  <div class="wg-awareness-empty">暂无成员</div>`,
       `  <div class="wg-awareness-import">${importBtn}</div>`,
       '</div>',
     ].join('');
@@ -407,6 +421,8 @@
     const avatarLetter = name.charAt(0);
     const navTarget = evt.workspaceId && evt.sessionId
       ? `${evt.workspaceId}:${evt.sessionId}` : null;
+    const evtSessionBadge = evt.sessionTitle
+      ? `<span class="wg-msg-session-badge">${esc(evt.sessionTitle)}</span>` : '';
 
     const quoteAttrs = [
       `data-wg-quote-ref="${esc(msg.from)}"`,
@@ -420,7 +436,7 @@
       `<div class="wg-msg-row" data-wg-msg-id="${esc(msg.id || '')}" ${quoteAttrs}>`,
       `  <div class="wg-msg-avatar">${esc(avatarLetter)}</div>`,
       '  <div class="wg-msg-body">',
-      `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(name)}</span> <span class="wg-msg-time">${esc(time)}</span></div>`,
+      `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(name)}</span>${evtSessionBadge} <span class="wg-msg-time">${esc(time)}</span></div>`,
       '    <div class="wg-card">',
       '      <div class="wg-card-header">',
       '        <span class="wg-card-dot active"></span>',
@@ -545,9 +561,12 @@
       ].join('');
     }
 
-    // 身份标签（非用户消息）
+    // 身份标签（非用户消息）+ 会话标识 badge
+    // 同一身份可能同时有多个会话，用 session badge 区分来源
+    const sessionBadge = (!isMe && !isSummary && msg.routing?.targetSessionTitle)
+      ? `<span class="wg-msg-session-badge">${esc(msg.routing.targetSessionTitle)}</span>` : '';
     const identityTag = (!isMe && !isSummary && msg.from && msg.from !== 'user')
-      ? `<span class="wg-msg-identity">${esc(name)}</span>` : '';
+      ? `<span class="wg-msg-identity">${esc(name)}</span>${sessionBadge}` : '';
 
     // 链接引用
     const linksHtml = (Array.isArray(msg.links) && msg.links.length > 0)
@@ -694,13 +713,16 @@
       '    <div class="wg-attachment-list" data-wg-role="attachment-list" style="display:none;"></div>',
       '    <div class="wg-link-list" data-wg-role="link-list"></div>',
       '    <div class="wg-input-editor" contenteditable="true" data-placeholder="输入消息，使用「@」派发任务"></div>',
-      '    <div class="wg-input-footer">',
-      '      <button class="wg-mention-icon" data-wg-action="mention" title="提及成员">',
-      '        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>',
+      '    <div class=\"wg-input-footer\">',
+      '      <button class=\"wg-mention-icon\" data-wg-action=\"mention\" title=\"提及成员\">',
+      '        <svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94\"/></svg>',
       '      </button>',
-      '      <span class="wg-input-hint">Enter 发送 · Shift+Enter 换行</span>',
-      '      <div class="wg-input-spacer"></div>',
-      '      <button class="wg-send-btn" data-wg-action="send">发送</button>',
+      '      <button class=\"wg-voice-btn\" data-wg-action=\"voice\" title=\"语音输入\">',
+      '        <svg class=\"icon-mic\" width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z\"></path><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"></path><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"22\"></line></svg>',
+      '      </button>',
+      '      <span class=\"wg-input-hint\">Enter 发送 · Shift+Enter 换行</span>',
+      '      <div class=\"wg-input-spacer\"></div>',
+      '      <button class=\"wg-send-btn\" data-wg-action=\"send\">发送</button>',
       '    </div>',
       '  </div>',
       renderMentionPicker(),
@@ -944,8 +966,21 @@
       renderAttachmentList();
       renderLinkList();
 
+      // 应用长消息折叠 & 注解条（必须在恢复滚动位置之前完成，
+      // 因为折叠会改变 scrollHeight）
+      // 这一步对于 workspace 切换后"冷加载"场景尤为关键：
+      // 外层 renderCurrentMainView 先把 HTML 写入 DOM 再通过
+      // rAF 恢复 visibility，此微任务在 rAF 之前执行，
+      // 因此折叠在用户看到页面之前完成，避免展开态闪烁。
+      const msgScroll = document.querySelector('.wg-msg-scroll');
+      if (msgScroll) {
+        if (typeof enhanceMathInElement === 'function') enhanceMathInElement(msgScroll);
+        applyCollapsible(msgScroll);
+        _renderAnnotationBars();
+      }
+
       // 最后恢复滚动位置——在所有 DOM 修改完成之后，保证视觉位置不变
-      const newScroll = document.querySelector('.wg-msg-scroll');
+      const newScroll = msgScroll;
       if (newScroll) {
         _suppressScrollEvent = true;
         if (_shouldScrollToBottom) {
@@ -1099,10 +1134,85 @@
   function refreshAdminBarOnly() {
     const awareness = document.querySelector('.wg-awareness');
     if (!awareness) return;
+
+    // 如果 popover 正在显示，不能替换整个 DOM（会丢失 hover 状态），
+    // 只原地更新 chip 状态点。
+    if (_popoverEl && _hoverIdentity) {
+      _updateAwarenessDotsInPlace(awareness);
+      // 同时刷新 popover 内容（更新会话运行时状态）
+      _refreshPopoverIfOpen();
+      return;
+    }
+
     const newEl = document.createElement('div');
     newEl.innerHTML = renderAwarenessBar(activeChat);
     const replacement = newEl.firstElementChild;
     if (replacement) awareness.replaceWith(replacement);
+
+    // 如果 hover timer 正在等待（120ms 窗口内），原来的 anchor chip 已被销毁。
+    // 在新 DOM 中重新找到对应 chip 并重新绑定 timer。
+    if (_hoverIdentity) {
+      const newChip = replacement.querySelector(
+        `[data-wg-member-identity="${CSS.escape(_hoverIdentity)}"]`
+      );
+      if (newChip) {
+        clearTimeout(_hoverTimer);
+        const pendingId = _hoverIdentity;
+        _hoverTimer = setTimeout(() => {
+          if (_hoverIdentity === pendingId) showMemberPopover(pendingId, newChip);
+        }, 120);
+      }
+    }
+  }
+
+  /** 原地更新态势栏中各 chip 的状态点，不替换 DOM 元素 */
+  function _updateAwarenessDotsInPlace(awareness) {
+    // 更新成员 chip 状态
+    const chips = awareness.querySelectorAll('.wg-member-chip[data-wg-member-identity]');
+    chips.forEach((chip) => {
+      const identityRef = chip.dataset.wgMemberIdentity;
+      if (identityRef === 'work-group:admin') return; // admin 单独处理
+      const dotClass = getMemberAggregateStatus(identityRef);
+      const dotTitle = dotClass === 'running' ? '运行中'
+        : dotClass === 'idle' ? '在线 · 空闲' : '离线';
+      chip.classList.remove('running', 'idle', 'offline');
+      chip.classList.add(dotClass);
+      const dot = chip.querySelector('.wg-member-dot');
+      if (dot) {
+        dot.classList.remove('running', 'idle', 'offline');
+        dot.classList.add(dotClass);
+        dot.title = dotTitle;
+      }
+    });
+
+    // 更新 admin chip（替换 admin 区域的 HTML）
+    const adminDiv = awareness.querySelector('.wg-awareness-admin');
+    if (adminDiv) {
+      const newAdminHtml = renderAdminChip();
+      if (newAdminHtml) {
+        adminDiv.innerHTML = newAdminHtml;
+      }
+    }
+  }
+
+  /** 如果 popover 正打开，刷新其会话列表内容（不重建 popover 容器） */
+  function _refreshPopoverIfOpen() {
+    if (!_popoverEl || !_hoverIdentity) return;
+    const data = _sessionDataCache[_hoverIdentity];
+    if (!data) return;
+
+    if (_hoverIdentity === 'work-group:admin') {
+      // 管理员：刷新历史列表（活跃按钮不变）
+      const adminResult = _renderAdminSessionList(data);
+      const listContainer = _popoverEl.querySelector('.wg-pop-list');
+      if (listContainer) {
+        listContainer.innerHTML = adminResult.historyHtml;
+      }
+    } else {
+      const listContainer = _popoverEl.querySelector('.wg-pop-list');
+      if (!listContainer) return;
+      listContainer.innerHTML = _renderPopoverSessionList(_hoverIdentity, data);
+    }
   }
 
   function scrollToBottom() {
@@ -1202,6 +1312,9 @@
     openDropdown = null;
     _adminStatus = null;
     _adminRestarting = false;
+    // 清除跨群聊缓存，防止上一个群的会话数据泄漏到新群
+    _runtimeStatusCache = {};
+    _sessionDataCache = {};
     hideMemberPopover(true);
     closeImportModal();
     _shouldScrollToBottom = true;
@@ -1212,6 +1325,7 @@
 
     refreshMain();
     await loadActiveChat();
+    await fetchRuntimeStatus();
     _shouldScrollToBottom = true;
     refreshMain();
     scrollToBottom();
@@ -1249,14 +1363,110 @@
 
   // ── 成员 chip hover popover ──────────────────────────────────
 
+  /**
+   * 渲染 popover 中的会话列表（群内会话池）。
+   * 每个会话显示运行时状态（running/idle/offline）+ 可选的中断按钮。
+   * 被 showMemberPopover 和 _refreshPopoverIfOpen 共用。
+   */
+  function _renderPopoverSessionList(identityRef, data) {
+    const workspaceId = identityRef.split(':')[0];
+    const isMentioned = getMentionedIdentities().some((m) => m.identityRef === identityRef);
+    const sel = activeChatId ? getSessionSelection(activeChatId, identityRef) : { mode: 'default' };
+
+    return (data.inChatSessions || []).map((s) => {
+      // 运行时状态（从 _runtimeStatusCache 交叉引用）
+      const rt = _runtimeStatusCache[s.id];
+      const rtStatus = rt?.status || 'offline';
+      const dotClass = rtStatus === 'running' ? 'running'
+        : rtStatus === 'idle' ? 'idle'
+        : 'offline';
+      const dotTitle = rtStatus === 'running' ? '运行中'
+        : rtStatus === 'idle' ? '在线 · 空闲'
+        : '离线';
+
+      const activeMark = s.isActive ? ' <span class="wg-pop-active">当前</span>' : '';
+      // 成员会话一律使用导航跳转（非只读）
+      const navAttr = `data-wg-session-nav="${esc(workspaceId)}:${esc(s.id)}"`;
+
+      // 派发至此按钮
+      const isSelected = sel.mode === 'specific' && sel.sessionId === s.id;
+      const dispatchBtn = (isMentioned && !isSelected)
+        ? `<button class="wg-pop-dispatch-to" data-wg-dispatch="specific" data-wg-dispatch-id="${esc(identityRef)}" data-wg-dispatch-sid="${esc(s.id)}" data-wg-dispatch-title="${esc(s.title)}">派发至此</button>`
+        : (isSelected ? '<span class="wg-pop-dispatch-cur">已选</span>' : '');
+
+      // 中断按钮（仅 running 状态显示）
+      const interruptBtn = rtStatus === 'running'
+        ? `<button class="wg-pop-interrupt-btn" data-wg-action="interrupt-session" data-wg-identity="${esc(identityRef)}" data-wg-session-id="${esc(s.id)}" data-wg-workspace-id="${esc(workspaceId)}" title="中断此会话">中断</button>`
+        : '';
+
+      return [
+        `<div class="wg-pop-session" ${navAttr} title="${s.isActive ? '点击查看会话' : '点击查看会话记录（只读）'}">`,
+        `  <span class="wg-pop-dot ${dotClass}" title="${esc(dotTitle)}"></span>`,
+        `  <span class="wg-pop-title">${esc(s.title)}${activeMark}</span>`,
+        dispatchBtn,
+        interruptBtn,
+        '</div>',
+      ].join('');
+    }).join('');
+  }
+
+  /**
+   * 格式化会话创建时间为 "MM-DD HH:MM"
+   */
+  function _formatSessionTime(isoStr) {
+    if (!isoStr) return '未知时间';
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '未知时间';
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${mm}-${dd} ${hh}:${mi}`;
+  }
+
+  /**
+   * 渲染管理员 popover 内容（活跃会话跳转 + 历史会话记录）。
+   * 活跃会话在顶部显示一个跳转按钮，不在历史列表中重复出现。
+   * 历史会话以只读方式打开，名称使用创建时间。
+   * 返回 { activeHtml, historyHtml, historyCount }
+   */
+  function _renderAdminSessionList(data) {
+    const workspaceId = 'work-group';
+    const sessions = data.inChatSessions || [];
+    const active = sessions.find((s) => s.isActive);
+    const history = sessions.filter((s) => !s.isActive);
+
+    // 活跃会话跳转按钮（accent 色风格）
+    let activeHtml = '';
+    if (active) {
+      activeHtml = [
+        `<div class="wg-pop-admin-active">`,
+        `  <button class="wg-pop-admin-jump" data-wg-session-nav="${esc(workspaceId)}:${esc(active.id)}">`,
+        `    <span>跳转到当前会话</span>`,
+        `  </button>`,
+        `</div>`,
+      ].join('');
+    }
+
+    // 历史会话记录（只读，用创建时间命名）
+    const historyHtml = history.map((s) => {
+      return [
+        `<div class="wg-pop-session" data-wg-session-record="${esc(workspaceId)}:${esc(s.id)}" title="点击查看会话记录（只读）">`,
+        `  <span class="wg-pop-dot offline"></span>`,
+        `  <span class="wg-pop-title">${esc(_formatSessionTime(s.createdAt))}</span>`,
+        '</div>',
+      ].join('');
+    }).join('');
+
+    return { activeHtml, historyHtml, historyCount: history.length };
+  }
+
   async function showMemberPopover(identityRef, anchorEl) {
     if (!anchorEl) return;
     clearTimeout(_popoverHideTimer);
 
-    // 懒加载会话数据
-    if (!_sessionDataCache[identityRef]) {
-      await fetchSessionData(identityRef);
-    }
+    // 每次重新拉取会话数据（不依赖缓存），确保新建会话立即可见
+    await fetchSessionData(identityRef);
 
     hideMemberPopover(true);
 
@@ -1286,26 +1496,25 @@
       ].join('');
     }
 
-    // 群内会话 — 活跃会话 live 导航，历史会话只读；mentioned 时增加派发选择
-    const poolItems = (data.inChatSessions || []).map((s) => {
-      const active = s.isActive ? ' <span class="wg-pop-active">当前</span>' : '';
-      const workspaceId = identityRef.split(':')[0];
-      const navAttr = s.isActive
-        ? `data-wg-session-nav="${esc(workspaceId)}:${esc(s.id)}"`
-        : `data-wg-session-record="${esc(workspaceId)}:${esc(s.id)}"`;
-      // 派发至此按钮（仅 mentioned 且非当前选中时显示）
-      const isSelected = sel.mode === 'specific' && sel.sessionId === s.id;
-      const dispatchBtn = (isMentioned && !isSelected)
-        ? `<button class="wg-pop-dispatch-to" data-wg-dispatch="specific" data-wg-dispatch-id="${esc(identityRef)}" data-wg-dispatch-sid="${esc(s.id)}" data-wg-dispatch-title="${esc(s.title)}">派发至此</button>`
-        : (isSelected ? '<span class="wg-pop-dispatch-cur">已选</span>' : '');
-      return [
-        `<div class="wg-pop-session" ${navAttr} title="${s.isActive ? '点击查看会话' : '点击查看会话记录（只读）'}">`,
-        `  <span class="wg-pop-dot${s.isActive ? ' active' : ''}"></span>`,
-        `  <span class="wg-pop-title">${esc(s.title)}${active}</span>`,
-        dispatchBtn,
-        '</div>',
-      ].join('');
-    }).join('');
+    // 群内会话 — 管理员显示活跃会话跳转 + 只读历史会话，成员显示运行时状态 + 导航 + 派发选项
+    const isAdmin = identityRef === 'work-group:admin';
+    let sessionSectionHtml = '';
+    if (isAdmin) {
+      const adminResult = _renderAdminSessionList(data);
+      const parts = [];
+      if (adminResult.activeHtml) parts.push(adminResult.activeHtml);
+      if (adminResult.historyHtml) {
+        parts.push(`<div class="wg-pop-section-label">历史会话记录 (${adminResult.historyCount})</div><div class="wg-pop-list">${adminResult.historyHtml}</div>`);
+      }
+      sessionSectionHtml = parts.length > 0
+        ? parts.join('')
+        : '<div class="wg-pop-empty">暂无历史会话</div>';
+    } else {
+      const poolItems = _renderPopoverSessionList(identityRef, data);
+      sessionSectionHtml = poolItems
+        ? `<div class="wg-pop-section-label">群内会话 (${(data.inChatSessions || []).length})</div><div class="wg-pop-list">${poolItems}</div>`
+        : '<div class="wg-pop-empty">暂无活跃会话</div>';
+    }
 
     const el = document.createElement('div');
     // 管理员：在 header 追加在线状态
@@ -1315,7 +1524,7 @@
       const restarting = _adminRestarting;
       let label = '离线';
       let cls = 'offline';
-      if (restarting) { label = '重启中'; cls = 'switching'; }
+      if (restarting) { label = '创建中'; cls = 'switching'; }
       else if (st?.online) { label = '在线'; cls = 'online'; }
       statusBadge = `<span class="wg-pop-status ${cls}">${esc(label)}</span>`;
     }
@@ -1360,8 +1569,7 @@
       statusBadge ? `  ${statusBadge}` : `  <span class="wg-pop-model">${esc(modelLabel)}</span>`,
       '</div>',
       dispatchSection,
-      poolItems ? `<div class="wg-pop-section-label">群内会话 (${data.inChatSessions.length})</div><div class="wg-pop-list">${poolItems}</div>` : '',
-      !poolItems ? '<div class="wg-pop-empty">暂无活跃会话</div>' : '',
+      sessionSectionHtml,
       importToggle,
       '</div>',
       importPanel,
@@ -1377,7 +1585,7 @@
     // hover popover 自身不触发隐藏
     el.addEventListener('mouseenter', () => clearTimeout(_popoverHideTimer));
     el.addEventListener('mouseleave', () => {
-      _popoverHideTimer = setTimeout(() => hideMemberPopover(), 200);
+      _popoverHideTimer = setTimeout(() => hideMemberPopover(), 80);
     });
     // popover 内的会话导航和派发选择
     el.addEventListener('click', async (ev) => {
@@ -1399,6 +1607,23 @@
           const chip = document.querySelector(`[data-wg-member-identity="${CSS.escape(identityRef)}"]`);
           if (chip) showMemberPopover(identityRef, chip);
         }
+        return;
+      }
+
+      // 中断按钮
+      const interruptBtn = ev.target.closest('[data-wg-action="interrupt-session"]');
+      if (interruptBtn) {
+        ev.stopPropagation();
+        interruptBtn.disabled = true;
+        interruptBtn.textContent = '...';
+        handleInterruptSession(
+          interruptBtn.dataset.wgIdentity,
+          interruptBtn.dataset.wgSessionId,
+          interruptBtn.dataset.wgWorkspaceId
+        ).finally(() => {
+          // 刷新 popover 内容（中断后状态会变化）
+          _refreshPopoverIfOpen();
+        });
         return;
       }
 
@@ -1460,7 +1685,7 @@
     }
     _popoverHideTimer = setTimeout(() => {
       if (_popoverEl) { _popoverEl.remove(); _popoverEl = null; }
-    }, 200);
+    }, 80);
   }
 
   function onContainerMouseOver(e) {
@@ -1471,7 +1696,7 @@
       if (_hoverIdentity !== identityRef) {
         _hoverIdentity = identityRef;
         clearTimeout(_hoverTimer);
-        _hoverTimer = setTimeout(() => showMemberPopover(identityRef, chip), 250);
+        _hoverTimer = setTimeout(() => showMemberPopover(identityRef, chip), 120);
       }
     }
   }
@@ -1491,6 +1716,16 @@
   }
 
   async function handleSend() {
+    // 如果正在录音，停止录音并设置自动发送标志
+    if (_voiceRecording) {
+      _voicePendingSend = true;
+      stopVoiceRecording();
+      return;
+    }
+
+    // 如果正在转写，忽略发送请求
+    if (_voiceTranscribing) return;
+
     const editor = document.querySelector('.wg-input-editor');
     if (!editor) return;
     const text = editor.textContent.trim();
@@ -2391,6 +2626,7 @@
       if (act === 'toggle-links') { toggleLinksArea(); return; }
       if (act === 'add-link') { addLink(); return; }
       if (act === 'send') { handleSend(); return; }
+      if (act === 'voice') { toggleVoiceRecording(action); return; }
       if (act === 'toggle-session-dropdown') {
         toggleSessionDropdown(action.dataset.wgIdentity);
         return;
@@ -2402,7 +2638,7 @@
       if (act === 'admin-restart') { handleAdminRestart(); return; }
       if (act === 'open-import-modal') { openImportModal(); return; }
       if (act === 'interrupt-session') {
-        ev.stopPropagation();
+        e.stopPropagation();
         const btn = action;
         btn.disabled = true;
         btn.textContent = '...';
@@ -2881,6 +3117,210 @@
     }, true); // 使用捕获阶段确保能监听到
   }
 
+  // ── 语音输入功能 ──────────────────────────────────────────────
+
+  function _playVoiceSound(type) {
+    try {
+      const url = type === 'start'
+        ? '/sounds/voice-recording-start.mp3'
+        : '/sounds/voice-recording-stop.mp3';
+      const audio = new Audio(url);
+      audio.volume = 0.6;
+      audio.play().catch(() => { /* ignore autoplay rejection */ });
+    } catch (e) { /* non-critical */ }
+  }
+
+  function _updateVoiceUI() {
+    const btn = _voiceTargetBtn;
+    if (!btn || !btn.isConnected) return;
+    btn.classList.toggle('transcribing', _voiceTranscribing);
+    btn.classList.toggle('recording', _voiceRecording);
+  }
+
+  async function toggleVoiceRecording(btn) {
+    if (_voiceRecording) {
+      stopVoiceRecording();
+    } else if (!_voiceTranscribing) {
+      await startVoiceRecording(btn);
+    }
+  }
+
+  async function startVoiceRecording(btn) {
+    // Check speech config
+    let speechConfig = window.ClawFW?._speechModelConfig;
+    if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
+      try {
+        const resp = await fetch('/protoclaw/speech_model_config');
+        const data = await resp.json();
+        speechConfig = data?.speechModel;
+        if (window.ClawFW) window.ClawFW._speechModelConfig = speechConfig;
+      } catch (e) { /* ignore */ }
+    }
+    if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
+      alert('语音模型未配置，请在设置中配置 ASR 模型');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      _voiceTargetBtn = btn;
+      _voiceAudioChunks = [];
+      _voiceChatId = activeChatId;
+      _voicePendingSend = false;
+
+      // Determine best supported MIME type
+      const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
+      let selectedMime = '';
+      for (const mt of mimeTypes) {
+        if (!mt || MediaRecorder.isTypeSupported(mt)) {
+          selectedMime = mt;
+          break;
+        }
+      }
+
+      const options = selectedMime ? { mimeType: selectedMime } : {};
+      _voiceMediaRecorder = new MediaRecorder(stream, options);
+
+      _voiceMediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          _voiceAudioChunks.push(e.data);
+        }
+      };
+
+      _voiceMediaRecorder.onstop = async () => {
+        // Stop all tracks
+        stream.getTracks().forEach(t => t.stop());
+        btn.classList.remove('recording');
+        _voiceRecording = false;
+        _playVoiceSound('stop');
+
+        console.log('[WorkGroup][VoiceInput] onstop fired: cancelled=%s pendingSend=%s chunkCount=%d',
+          _voiceCancelled, _voicePendingSend, _voiceAudioChunks.length);
+
+        if (_voiceCancelled) {
+          _voiceCancelled = false;
+          _voiceAudioChunks = [];
+          _updateVoiceUI();
+          return;
+        }
+
+        if (_voiceAudioChunks.length === 0) {
+          _updateVoiceUI();
+          return;
+        }
+
+        const mimeType = _voiceMediaRecorder.mimeType || 'audio/webm';
+        const blob = new Blob(_voiceAudioChunks, { type: mimeType });
+        _voiceAudioChunks = [];
+
+        _voiceTranscribing = true;
+        _updateVoiceUI();
+        try {
+          await sendAudioToASR(blob, btn);
+        } finally {
+          _voiceTranscribing = false;
+          _updateVoiceUI();
+        }
+
+        // Auto-send if user pressed send while recording
+        if (_voicePendingSend) {
+          _voicePendingSend = false;
+          console.log('[WorkGroup][VoiceInput] auto-send check: voiceChatId=%s activeChatId=%s',
+            _voiceChatId, activeChatId);
+          if (_voiceChatId === activeChatId) {
+            // Same chat — text already in editor, submit normally
+            console.log('[WorkGroup][VoiceInput] same-chat auto-send → handleSend()');
+            handleSend();
+          }
+        }
+      };
+
+      _voiceMediaRecorder.start(1000); // collect chunks every 1s
+      _voiceRecording = true;
+      btn.classList.add('recording');
+      _playVoiceSound('start');
+      _updateVoiceUI();
+    } catch (err) {
+      console.error('[WorkGroup][VoiceInput] Failed to start recording:', err);
+      alert('无法访问麦克风：' + err.message);
+    }
+  }
+
+  function stopVoiceRecording() {
+    if (_voiceMediaRecorder && _voiceMediaRecorder.state === 'recording') {
+      _voiceMediaRecorder.stop();
+      _voiceRecording = false;
+      if (_voiceTargetBtn) _voiceTargetBtn.classList.remove('recording');
+    }
+  }
+
+  function _cancelVoiceRecording() {
+    _voiceCancelled = true;
+    _voicePendingSend = false;
+    stopVoiceRecording();
+  }
+
+  async function sendAudioToASR(blob, btn) {
+    try {
+      const resp = await fetch('/protoclaw/speech_to_text', {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type || 'audio/webm' },
+        body: blob,
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: 'Unknown error' }));
+        console.error('[WorkGroup][VoiceInput] ASR error:', err);
+        alert(err.error || 'ASR request failed');
+        return;
+      }
+
+      // Non-streaming JSON response
+      const data = await resp.json();
+      const text = data?.text || '';
+      if (text) {
+        const editor = document.querySelector('.wg-input-editor');
+        // Only inject if we're still on the same chat that started the recording.
+        if (editor && activeChatId === _voiceChatId) {
+          insertTextAtEditorCursor(editor, text);
+        }
+      }
+
+    } catch (err) {
+      console.error('[WorkGroup][VoiceInput] ASR request failed:', err);
+      alert('语音识别失败：' + err.message);
+    }
+  }
+
+  function insertTextAtEditorCursor(editor, text) {
+    editor.focus();
+    const selection = window.getSelection();
+    if (!selection) {
+      // Fallback: append to end
+      editor.textContent += text;
+      return;
+    }
+
+    // If cursor is not inside editor, place at end
+    if (!editor.contains(selection.anchorNode)) {
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    // Insert text at cursor position
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const textNode = document.createTextNode(text);
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.setEndAfter(textNode);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
   // ── 对外接口 ────────────────────────────────────────────────
 
   function deactivate() {
@@ -2892,6 +3332,10 @@
     openDropdown = null;
     hideMemberPopover(true);
     closeImportModal();
+    // 取消正在进行的语音录制
+    if (_voiceRecording) {
+      _cancelVoiceRecording();
+    }
   }
 
   // ── 全局暴露：Settings 面板（右侧边栏） ──────────────────────

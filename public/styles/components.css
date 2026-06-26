@@ -7644,6 +7644,23 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   color: var(--text-secondary);
 }
 
+.wg-msg-session-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: var(--code-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 4px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .wg-msg-avatar.admin {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
   color: white !important;

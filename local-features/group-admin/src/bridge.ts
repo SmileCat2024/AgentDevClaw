@@ -331,6 +331,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
     const payload = {
       chatId: msg.gcChatId,
       identityRef: msg.gcIdentityRef,
+      sessionId: process.env.PROTOCLAW_PREBUILT_SESSION_ID || '',
       response: '[任务已中断]',
     };
     await fetch(`${serverOrigin}/protoclaw/gc/writeback`, {
@@ -353,6 +354,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
     const payload: any = {
       chatId: msg.gcChatId,
       identityRef: msg.gcIdentityRef,
+      sessionId: process.env.PROTOCLAW_PREBUILT_SESSION_ID || '',
     };
     if (error) {
       payload.error = error;
