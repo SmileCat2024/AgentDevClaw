@@ -17,7 +17,7 @@
     "pretest:features": "npm run build:local-features"
   },
   "dependencies": {
-    "@agentdev/audio-feedback-feature": "file:../AgentDev/packages/audio-feedback-feature",
+    "@agentdev/audio-feedback-feature": "file:resources/features/agentdev-audio-feedback-feature-0.1.0.tgz",
     "@agentdev/audit-feature": "file:resources/features/agentdev-audit-feature-0.1.0.tgz",
     "@agentdev/lsp-feature": "file:resources/features/agentdev-lsp-feature-0.1.0.tgz",
     "@agentdev/memory-feature": "file:resources/features/agentdev-memory-feature-0.1.0.tgz",
@@ -28,7 +28,7 @@
     "@agentdev/visual-feature": "file:resources/features/agentdev-visual-feature-0.1.0.tgz",
     "@agentdev/websearch-feature": "file:resources/features/agentdev-websearch-feature-0.1.0.tgz",
     "@agentdev/weixin-bot": "file:resources/features/agentdev-weixin-bot-0.2.0.tgz",
-    "agentdev": "file:../AgentDev",
+    "agentdev": "^0.2.1",
     "express": "^4.21.2",
     "marked": "^18.0.4",
     "multer": "^2.1.1",
