@@ -360,6 +360,22 @@
   align-items: center;
 }
 
+/* 会话池区域 */
+.wg-awareness-sessions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+.wg-awareness-empty {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-muted, #666);
+  padding: 4px 0;
+}
+
 /* session 状态指示 — CSS 圆点（保留给消息卡片等复用） */
 .wg-session-dot {
   width: 6px;
@@ -406,6 +422,81 @@
 /* 有运行中会话的成员 chip — 轻微高亮 */
 .wg-member-chip.running {
   color: var(--text-primary);
+}
+
+/* 会话池 chip（态势层） */
+.wg-session-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+.wg-session-chip:hover {
+  background: var(--hover-bg);
+  border-color: var(--border-color);
+}
+.wg-session-chip-name {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.wg-session-chip-id {
+  color: var(--text-muted, #666);
+  font-size: 10px;
+  font-family: monospace;
+}
+.wg-session-interrupt-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 80, 80, 0.3);
+  border-radius: 10px;
+  background: rgba(255, 80, 80, 0.08);
+  color: #ff6464;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.wg-session-interrupt-btn:hover:not(:disabled) {
+  background: rgba(255, 80, 80, 0.15);
+}
+.wg-session-interrupt-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 状态指示灯 */
+.wg-member-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.wg-member-dot.running {
+  border: 2px solid var(--accent-color, #6e9eff);
+  border-top-color: transparent;
+  background: transparent;
+  animation: wg-dot-spin 0.8s linear infinite;
+}
+.wg-member-dot.idle {
+  background: #4ade80;
+}
+.wg-member-dot.offline {
+  background: #6b6b6b;
+  opacity: 0.5;
+}
+@keyframes wg-dot-spin {
+  to { transform: rotate(360deg); }
 }
 
 .wg-member-name {
@@ -589,14 +680,16 @@
 .wg-pop-import-toggle {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 7px 14px;
+  gap: 6px;
+  padding: 8px 14px;
   margin-top: 4px;
   border-top: 1px solid var(--border-color, rgba(128,128,128,0.15));
-  font-size: 11px;
-  color: var(--text-muted, #888);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
   cursor: pointer;
   transition: color 0.12s, background 0.12s;
+  line-height: 1;
 }
 .wg-pop-import-toggle:hover {
   color: var(--accent-color, #4a9eff);
@@ -607,6 +700,7 @@
 }
 .wg-pop-import-toggle svg {
   flex-shrink: 0;
+  display: block;
 }
 .wg-pop-import-count {
   margin-left: auto;
@@ -614,29 +708,30 @@
   font-weight: 600;
   color: var(--text-muted, #888);
   background: var(--hover-bg, rgba(128,128,128,0.1));
-  padding: 0 6px;
+  padding: 1px 6px;
   border-radius: 8px;
+  display: block;
 }
 
 /* 右侧引入面板 */
 .wg-pop-side {
-  width: 200px;
+  width: 210px;
   flex-direction: column;
   border-left: 1px solid var(--border-color, rgba(128,128,128,0.15));
   max-height: 340px;
   overflow: hidden;
 }
 .wg-pop-side-header {
-  padding: 10px 14px 6px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted, #888);
+  padding: 10px 14px 8px;
+  font-size: 12px;
   font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.1));
 }
 .wg-pop-side-list {
   overflow-y: auto;
   flex: 1;
+  padding: 4px 0;
 }
 .wg-pop-side-item {
   display: flex;
@@ -645,21 +740,23 @@
   padding: 7px 14px;
   cursor: pointer;
   transition: background 0.1s;
+  line-height: 1;
 }
 .wg-pop-side-item:hover {
   background: var(--hover-bg, rgba(128,128,128,0.06));
 }
 .wg-pop-side-item.imported {
   pointer-events: none;
-  opacity: 0.4;
+  opacity: 0.35;
 }
 .wg-pop-side-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: var(--text-muted, #888);
-  opacity: 0.4;
+  opacity: 0.35;
   flex-shrink: 0;
+  display: block;
 }
 .wg-pop-side-item:hover .wg-pop-side-dot {
   background: var(--accent-color, #4a9eff);
@@ -673,6 +770,7 @@
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+  display: block;
 }
 
 /* ── Popover 派发设置 ────────────────────────────────────── */
@@ -1446,41 +1544,32 @@
   padding: 4px 0;
 }
 .wg-mention-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 6px 1fr auto;
   align-items: center;
   gap: 8px;
-  padding: 7px 14px;
+  padding: 8px 14px;
   cursor: pointer;
   transition: background 0.1s;
 }
 .wg-mention-item:hover { background: var(--hover-bg); }
 
-.wg-mention-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-}
-
 .wg-mention-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  flex-shrink: 0;
   background: var(--accent-color, #4a9eff);
-  opacity: 0.5;
+  opacity: 0.7;
 }
 .wg-mention-dot.admin {
   background: #ffa726;
-  opacity: 0.7;
+  opacity: 0.85;
 }
 
 .wg-mention-name {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
-  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1488,7 +1577,6 @@
 
 .wg-mention-arrow {
   color: var(--text-muted, #888);
-  flex-shrink: 0;
   opacity: 0.5;
 }
 
@@ -1499,34 +1587,59 @@
 }
 
 /* Level 2 — 会话选择 */
-.wg-mention-level2 {
-  padding: 0;
-}
-
-.wg-mention-back {
+.wg-mention-header {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
-  font-size: 12px;
-  font-weight: 500;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-color);
   cursor: pointer;
   background: var(--hover-bg, rgba(128,128,128,0.04));
+  line-height: 1;
 }
-.wg-mention-back:hover { background: var(--hover-bg); }
-.wg-mention-back svg { color: var(--text-muted, #888); flex-shrink: 0; }
+.wg-mention-header:hover { background: var(--hover-bg); }
+.wg-mention-header svg { color: var(--text-muted, #888); flex-shrink: 0; }
+
+.wg-mention-actions {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.12));
+}
+.wg-mention-action {
+  flex: 1;
+  padding: 7px 0;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border-color, rgba(128,128,128,0.25));
+  border-radius: 8px;
+  background: var(--hover-bg, rgba(128,128,128,0.08));
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.12s;
+  text-align: center;
+  line-height: 1;
+}
+.wg-mention-action:hover {
+  border-color: var(--text-secondary, #555);
+  background: var(--code-bg, rgba(128,128,128,0.12));
+}
+.wg-mention-action.active {
+  background: var(--accent-color, #4a9eff);
+  border-color: var(--accent-color, #4a9eff);
+  color: var(--bg-color, #fff);
+}
 
 .wg-mention-section {
-  padding: 4px 0;
-}
-.wg-mention-section + .wg-mention-section {
-  border-top: 1px solid var(--border-color, rgba(128,128,128,0.15));
+  padding: 6px 0 8px;
 }
 .wg-mention-section-label {
-  padding: 6px 14px 2px;
+  padding: 4px 14px 2px;
   font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-muted, #888);
@@ -1539,6 +1652,7 @@
   padding: 7px 14px;
   cursor: pointer;
   transition: background 0.1s;
+  line-height: 1;
 }
 .wg-mention-session-item:hover { background: var(--hover-bg); }
 .wg-mention-session-item.selected {
@@ -1554,28 +1668,22 @@
   height: 5px;
   border-radius: 50%;
   flex-shrink: 0;
+  display: block;
   background: var(--text-muted, #888);
-  opacity: 0.35;
+  opacity: 0.4;
 }
 .wg-mention-session-dot.active {
   background: #66bb6a;
   opacity: 1;
 }
-.wg-mention-session-dot.new {
-  background: var(--accent-color, #4a9eff);
-  opacity: 1;
-}
-.wg-mention-session-dot.default {
-  background: var(--text-muted, #888);
-  opacity: 0.5;
-}
 
 .wg-mention-session-title {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: block;
 }
 
 /* ═══════════════════════════════════════════════

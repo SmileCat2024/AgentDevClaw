@@ -19,6 +19,7 @@ interface GcMessage {
   contextText?: string | null;
   gcChatId: string;
   gcIdentityRef: string;
+  attachments?: Array<{ name: string; content: string }>;
 }
 
 export class GroupChatBridgeFeature implements AgentFeature {
@@ -37,6 +38,10 @@ export class GroupChatBridgeFeature implements AgentFeature {
   // ── 空闲时收到消息的上下文前缀（群记忆 / catch-up）──
   // 在 CallStart 时注入为 system-reminder，不混入用户消息
   private pendingContext: string | null = null;
+
+  // ── 待注入的附件列表 ──
+  // 在 CallStart 时作为独立的 system-reminder 块注入
+  private pendingAttachments: Array<{ name: string; content: string }> = [];
 
   // ── 消息去重 ──
   private processedIds = new Set<string>();
@@ -65,11 +70,25 @@ export class GroupChatBridgeFeature implements AgentFeature {
       console.log('[GroupChatBridge] injected context at CallStart');
       this.pendingContext = null;
     }
+
+    // 注入待处理的附件作为独立的 system-reminder 块
+    if (this.pendingAttachments.length > 0 && ctx?.context) {
+      const attachmentContent = this.pendingAttachments
+        .map((att) => `--- ${att.name} ---\n${att.content}`)
+        .join('\n\n');
+      
+      ctx.context.add({
+        role: 'system',
+        content: `附件内容：\n${attachmentContent}`,
+      });
+      console.log(`[GroupChatBridge] injected ${this.pendingAttachments.length} attachment(s) at CallStart`);
+      this.pendingAttachments = [];
+    }
   }
 
   @StepStart
   async onStepStartHook(ctx: any): Promise<void> {
-    if (this.pendingBuffer.length === 0) return;
+    if (this.pendingBuffer.length === 0 && this.pendingAttachments.length === 0) return;
 
     const messages = this.pendingBuffer.splice(0);
     const content = messages
@@ -82,15 +101,31 @@ export class GroupChatBridgeFeature implements AgentFeature {
       })
       .join('\n\n');
 
-    ctx.context.add({
-      role: 'system',
-      content,
-    });
+    // 注入消息内容
+    if (content) {
+      ctx.context.add({
+        role: 'system',
+        content,
+      });
+      this.injectedThisCall.push(...messages);
+      console.log(
+        `[GroupChatBridge] injected ${messages.length} message(s) at step ${ctx.step}`,
+      );
+    }
 
-    this.injectedThisCall.push(...messages);
-    console.log(
-      `[GroupChatBridge] injected ${messages.length} message(s) at step ${ctx.step}`,
-    );
+    // 注入附件作为独立的 system 块
+    if (this.pendingAttachments.length > 0 && ctx?.context) {
+      const attachmentContent = this.pendingAttachments
+        .map((att) => `--- ${att.name} ---\n${att.content}`)
+        .join('\n\n');
+      
+      ctx.context.add({
+        role: 'system',
+        content: `附件内容：\n${attachmentContent}`,
+      });
+      console.log(`[GroupChatBridge] injected ${this.pendingAttachments.length} attachment(s) at step ${ctx.step}`);
+      this.pendingAttachments = [];
+    }
   }
 
   @CallFinish
@@ -202,6 +237,13 @@ export class GroupChatBridgeFeature implements AgentFeature {
     if (msg.contextText) {
       this.pendingContext = msg.contextText;
     }
+    
+    // 处理附件：将附件添加到待注入列表
+    if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+      this.pendingAttachments.push(...msg.attachments);
+      console.log(`[GroupChatBridge] queued ${msg.attachments.length} attachment(s) for injection`);
+    }
+    
     console.log(`[GroupChatBridge] idle, dispatching via arbiter: ${msg.id}`);
     await this.dispatchViaArbiter(msg, serverOrigin);
   }
@@ -239,7 +281,13 @@ export class GroupChatBridgeFeature implements AgentFeature {
         console.error(
           `[GroupChatBridge] arbiter call failed for ${msg.id}: ${error}`,
         );
-        if (!this.suppressAutoWriteback) {
+        // 检测中断：如果是用户中断，写入特殊状态消息
+        if (this.isInterruptError(error)) {
+          console.log(`[GroupChatBridge] detected interrupt for ${msg.id}`);
+          if (!this.suppressAutoWriteback) {
+            await this.postInterruptStatus(serverOrigin, msg);
+          }
+        } else if (!this.suppressAutoWriteback) {
           await this.postWriteback(serverOrigin, msg, null, error);
         }
       } else {
@@ -250,15 +298,48 @@ export class GroupChatBridgeFeature implements AgentFeature {
       }
     } catch (err) {
       console.error('[GroupChatBridge] dispatchViaArbiter error:', err);
-      if (!this.suppressAutoWriteback) {
-        await this.postWriteback(
-          serverOrigin,
-          msg,
-          null,
-          err instanceof Error ? err.message : String(err),
-        );
+      // 检测中断
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (this.isInterruptError(errMsg)) {
+        console.log(`[GroupChatBridge] detected interrupt for ${msg.id}`);
+        if (!this.suppressAutoWriteback) {
+          await this.postInterruptStatus(serverOrigin, msg);
+        }
+      } else if (!this.suppressAutoWriteback) {
+        await this.postWriteback(serverOrigin, msg, null, errMsg);
       }
     }
+  }
+
+  /**
+   * 检测是否为中断错误。
+   */
+  private isInterruptError(error: string): boolean {
+    return error.includes('Interrupted by user') ||
+           error.includes('interrupt') ||
+           error.includes('aborted');
+  }
+
+  /**
+   * 写入中断状态消息到群聊。
+   * 使用 gc/control API 的 writeback 格式。
+   */
+  private async postInterruptStatus(
+    serverOrigin: string,
+    msg: GcMessage,
+  ): Promise<void> {
+    const payload = {
+      chatId: msg.gcChatId,
+      identityRef: msg.gcIdentityRef,
+      response: '[任务已中断]',
+    };
+    await fetch(`${serverOrigin}/protoclaw/gc/writeback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch((err) => {
+      console.error('[GroupChatBridge] failed to post interrupt status:', err);
+    });
   }
 
   // ========== HTTP helpers ==========

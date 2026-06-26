@@ -4019,9 +4019,9 @@ async function createPrebuiltSession(agentId, options = {}) {
   const sessionDisplayName = normalizedAgentId === 'agent-creator'
     ? nextAgentName
     : (normalizedAgentId === 'programming-helper' ? '' : nextFeatureName);
-  const nextTitle = isProgrammingHelper
+  const nextTitle = nextTaskTitle || (isProgrammingHelper
     ? await getNextNewSessionTitle(agentId, nextOpenDirectory)
-    : buildNamedSessionTitle(sessionDisplayName, createdAt);
+    : buildNamedSessionTitle(sessionDisplayName, createdAt));
   // 解析当前模型配置，持久化到 session index record
   const sessionType = cleanSessionText(options.sessionType) || 'main';
   const modelRole = sessionType === 'exploration' ? 'exploration' : sessionType === 'sub' ? 'sub' : 'default';
@@ -6690,7 +6690,14 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
       suffix = `  [批注 ${annTime}] ${m._annotation.text}`;
     }
 
-    return `[${time}] ${from}：${text}${suffix}`;
+    // 附件摘要：显示附件数量和名称
+    let attachmentInfo = '';
+    if (Array.isArray(m.attachments) && m.attachments.length > 0) {
+      const attNames = m.attachments.map(a => a.name).join(', ');
+      attachmentInfo = `  [附件: ${attNames}]`;
+    }
+
+    return `[${time}] ${from}：${text}${suffix}${attachmentInfo}`;
   });
 
   return [
@@ -6784,8 +6791,11 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
   // 强制新会话
   if (options.forceNew) {
     const agent = await requireAgentLight(workspaceId);
+    const taskTitle = (options.title && typeof options.title === 'string' && options.title.trim())
+      ? options.title.trim()
+      : sessionTitle;
     const session = await createPrebuiltSession(agent.id, {
-      taskTitle: sessionTitle,
+      taskTitle,
     });
     _recordAdminSessionHistory(chat, identityRef);
     chat.sessions[identityRef] = session.id;
@@ -6850,21 +6860,64 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
 }
 
 /**
- * 构建发送给 agent 的 prompt：群聊上下文头 + 消息正文 + 链接引用。
+ * 处理附件内容，实现渐进式加载。
+ * 如果附件内容超过指定行数，只显示前N行并添加提示信息。
+ * @param {Array} attachments - 附件数组
+ * @param {Object} chat - 群聊对象，用于构建本地文件路径
+ * @param {number} maxLines - 最大显示行数，默认50
+ * @returns {Array} 处理后的附件数组
+ */
+function processAttachmentsForInjection(attachments, chat = null, maxLines = 50) {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return [];
+  }
+  
+  return attachments.map(att => {
+    const content = att.content || '';
+    const lines = content.split('\n');
+    
+    if (lines.length <= maxLines) {
+      return att;
+    }
+    
+    // 截断内容，只显示前maxLines行
+    const truncatedContent = lines.slice(0, maxLines).join('\n');
+    const totalLines = lines.length;
+    const remainingLines = totalLines - maxLines;
+    
+    // 构建本地文件路径
+    let resourceLink = '';
+    if (chat && att.name) {
+      const resDir = getResourcesDir(chat);
+      if (resDir) {
+        const localPath = path.join(resDir, att.name);
+        resourceLink = `\n\n完整内容请查看本地文件: ${localPath}`;
+      }
+    }
+    
+    // 添加提示信息
+    const hint = `\n\n... [内容已截断] 共 ${totalLines} 行，已显示前 ${maxLines} 行，还有 ${remainingLines} 行未显示。${resourceLink}`;
+    const fullContent = truncatedContent + hint;
+    
+    return {
+      ...att,
+      content: fullContent,
+      truncated: true,
+      originalLineCount: totalLines,
+      displayedLines: maxLines,
+    };
+  });
+}
+
+/**
+ * 构建发送给 agent 的 prompt：消息正文 + 链接引用。
+ * 附件不再拼入文本，而是通过 attachments 字段独立传递。
  */
 function composeDispatchPrompt(chatName, message, chatId) {
   // 群聊上下文已通过 contextText (system block) 独立注入，
-  // 这里只返回消息正文 + 附件 + 链接
+  // 附件通过 attachments 字段独立传递，不再混入用户消息文本
   const parts = [];
   parts.push(message.text || '');
-  // 附件内联
-  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
-    parts.push('\n附件：');
-    for (const att of message.attachments) {
-      parts.push(`--- ${att.name} ---`);
-      parts.push(att.content || '');
-    }
-  }
   if (Array.isArray(message.links) && message.links.length > 0) {
     parts.push('\n参考链接：');
     for (const link of message.links) {
@@ -7011,6 +7064,210 @@ app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {
     }
 
     res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * 群聊控制 API：中断/暂停/恢复指定 identity 的会话。
+ *
+ * 流程：
+ * 1. 根据 chatId + identityRef 找到对应的 runtime
+ * 2. 获取 viewerAgentId
+ * 3. 调用 ViewerWorker 的 interrupt API
+ * 4. 通过 gc/writeback 写入状态消息到群聊
+ */
+app.post('/protoclaw/gc/control', express.json(), async (req, res, next) => {
+  try {
+    const { chatId, identityRef, sessionId, action } = req.body || {};
+    if (!chatId || !identityRef || !action) {
+      return res.status(400).json({ error: 'chatId, identityRef, and action required' });
+    }
+
+    if (!['interrupt'].includes(action)) {
+      return res.status(400).json({ error: 'action must be interrupt' });
+    }
+
+    const workspaceId = identityRef.split(':')[0];
+    // 优先使用传入的 sessionId，否则回退到从群聊配置查找
+    const resolvedSessionId = sessionId || resolveGroupChatSessionSync(chatId, identityRef);
+
+    if (!resolvedSessionId) {
+      return res.status(404).json({ error: 'No active session found for this identity' });
+    }
+
+    const runtime = getAgentRuntime(workspaceId, resolvedSessionId);
+    if (!runtime) {
+      return res.status(404).json({ error: 'Runtime not found' });
+    }
+
+    const viewerAgentId = runtime.viewerAgentId;
+    if (!viewerAgentId) {
+      return res.status(404).json({ error: 'Runtime has no viewerAgentId' });
+    }
+
+    // 调用 ViewerWorker 的 interrupt API
+    const interruptRes = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/interrupt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!interruptRes.ok) {
+      const errText = await interruptRes.text().catch(() => 'unknown error');
+      return res.status(502).json({ error: `Interrupt failed: ${errText}` });
+    }
+
+    // 写入状态消息到群聊
+    const statusText = '[任务已中断]';
+
+    await appendGroupChatMessage(chatId, {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      chatId,
+      from: identityRef,
+      text: statusText,
+      mentions: [],
+      links: [],
+      kind: 'system',
+      timestamp: Date.now(),
+      routing: {
+        status: 'interrupted',
+        targetWorkspaceId: workspaceId,
+        targetIdentityRef: identityRef,
+        targetSessionId: resolvedSessionId,
+        completedAt: Date.now(),
+      },
+    });
+
+    log('GroupChat', `control action=${action} for ${identityRef} in chat ${chatId}`);
+    res.json({ ok: true, action, viewerAgentId });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * 同步解析群聊 session（无 async）。
+ * 用于 gc/control 等需要快速查找的场景。
+ */
+function resolveGroupChatSessionSync(chatId, identityRef) {
+  try {
+    const chat = readGroupChatSync(chatId);
+    if (chat?.sessions?.[identityRef]) {
+      return chat.sessions[identityRef];
+    }
+  } catch {}
+
+  // 从 runtime 中查找
+  const workspaceId = identityRef.split(':')[0];
+  for (const [runtimeKey, runtime] of managedAgents.entries()) {
+    if (runtimeKey.startsWith(`${workspaceId}::`) && runtime.process?.exitCode === null) {
+      return runtimeKey.split('::')[1];
+    }
+  }
+  return null;
+}
+
+/**
+ * 同步读取群聊配置（用于快速查找）。
+ */
+function readGroupChatSync(chatId) {
+  const chatPath = path.join(GROUP_CHATS_ROOT, `${sanitizeSessionFragment(chatId)}.json`);
+  if (!existsSync(chatPath)) return null;
+  try {
+    return JSON.parse(readFileSync(chatPath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 群聊运行时状态查询 API。
+ * 按会话粒度返回：每个活跃会话独立一条，含运行状态（running/idle/offline）。
+ *
+ * 前端态势感知面板轮询此接口获取实时会话池状态。
+ */
+app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
+  try {
+    const chatId = req.query.chatId;
+    if (!chatId) {
+      return res.status(400).json({ error: 'chatId required' });
+    }
+
+    const chat = await readGroupChat(chatId);
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+
+    // 从消息路由中收集活跃会话（与前端 collectActiveSessions 逻辑一致）
+    const sessionMap = new Map();
+    for (const msg of (chat.messages || [])) {
+      const r = msg.routing;
+      if (!r || !r.targetSessionId) continue;
+      if (r.status === 'failed') continue;
+      if (r.targetIdentityRef === 'work-group:admin') continue;
+      const key = `${r.targetIdentityRef}:${r.targetSessionId}`;
+      const existing = sessionMap.get(key);
+      if (!existing || (msg.timestamp || 0) > existing.lastActivity) {
+        sessionMap.set(key, {
+          identityRef: r.targetIdentityRef,
+          sessionId: r.targetSessionId,
+          workspaceId: r.targetWorkspaceId,
+          displayName: (r.targetIdentityRef.split(':')[1] || r.targetIdentityRef),
+          routingStatus: r.status || 'pending',
+          lastActivity: msg.timestamp || 0,
+        });
+      }
+    }
+
+    // 过滤掉已 completed 的会话（只有 completed 的才不算活跃）
+    const activeSessions = Array.from(sessionMap.values())
+      .filter((s) => s.routingStatus === 'pending' || s.routingStatus === 'delivered');
+
+    // 对每个活跃会话查运行时状态
+    const results = [];
+    for (const s of activeSessions) {
+      const runtimeKey = getManagedRuntimeKey(s.workspaceId, s.sessionId);
+      const runtime = managedAgents.get(runtimeKey);
+
+      if (!runtime || runtime.process?.exitCode !== null || runtime.stopped) {
+        results.push({
+          identityRef: s.identityRef,
+          sessionId: s.sessionId,
+          workspaceId: s.workspaceId,
+          displayName: s.displayName,
+          status: 'offline',
+          viewerAgentId: null,
+        });
+        continue;
+      }
+
+      const viewerAgentId = runtime.viewerAgentId || null;
+      let isRunning = false;
+
+      if (viewerAgentId) {
+        try {
+          const rtRes = await fetch(
+            `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/running`
+          );
+          if (rtRes.ok) {
+            const rtData = await rtRes.json();
+            isRunning = rtData.running === true || rtData.callActive === true;
+          }
+        } catch {}
+      }
+
+      results.push({
+        identityRef: s.identityRef,
+        sessionId: s.sessionId,
+        workspaceId: s.workspaceId,
+        displayName: s.displayName,
+        status: isRunning ? 'running' : 'idle',
+        viewerAgentId,
+      });
+    }
+
+    res.json({ sessions: results });
   } catch (error) {
     next(error);
   }
@@ -7225,12 +7482,17 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
   }
 
   // 6. 通过 gc inbox 投递实际消息（context 通过 contextText 字段分离传递）
+  // 附件作为独立字段传递，不再混入用户消息文本
+  // 处理附件内容，实现渐进式加载
+  const processedAttachments = processAttachmentsForInjection(message.attachments, chat);
+  
   enqueueGcInbox(runtimeKey, {
     id: message.id,
     text: fullPrompt,
     contextText,
     gcChatId: chatId,
     gcIdentityRef: identityRef,
+    attachments: processedAttachments,
   });
   log('GroupChat', `message ${message.id} enqueued to gc inbox for ${workspaceId}/${sessionId}`);
 
@@ -7358,8 +7620,16 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
       const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
       const targetName = targetInfo?.displayName || targetIdentityRef;
 
+      let observationText = `[观察] 用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`;
+      
+      // 附件摘要：显示附件数量和名称
+      if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+        const attNames = message.attachments.map(a => a.name).join(', ');
+        observationText += `  [附件: ${attNames}]`;
+      }
+      
       const observationPrompt = [
-        `[观察] 用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
+        observationText,
         `${targetName} 已开始处理。你不需要重复派发。`,
       ].join('\n');
 
@@ -7401,12 +7671,16 @@ async function notifyAdminWithPrompt(chatId, message, chat, promptText) {
   );
 
   const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
+  // 处理附件内容，实现渐进式加载
+  const processedAttachments = processAttachmentsForInjection(message.attachments, chat);
+  
   enqueueGcInbox(runtimeKey, {
     id: `obs-${message.id}`,
     text: promptText,
     contextText,
     gcChatId: chatId,
     gcIdentityRef: 'work-group:admin',
+    attachments: processedAttachments,
   });
   log('GroupChat', `notifyAdminWithPrompt enqueued for admin`);
 }
@@ -7421,8 +7695,16 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
   const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
   const targetName = targetInfo?.displayName || targetIdentityRef;
 
+  let observationText = `[观察] 用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`;
+  
+  // 附件摘要：显示附件数量和名称
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+    const attNames = message.attachments.map(a => a.name).join(', ');
+    observationText += `  [附件: ${attNames}]`;
+  }
+  
   const observationPrompt = [
-    `[观察] 用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`,
+    observationText,
     '',
     `系统已将此消息派发给 ${targetName}，会话已启动。你不需要重复派发。`,
   ].join('\n');
@@ -7443,12 +7725,16 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
   );
 
   const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
+  // 处理附件内容，实现渐进式加载
+  const processedAttachments = processAttachmentsForInjection(message.attachments, chat);
+  
   enqueueGcInbox(runtimeKey, {
     id: `obs-${message.id}`,
     text: observationPrompt,
     contextText,
     gcChatId: chatId,
     gcIdentityRef: 'work-group:admin',
+    attachments: processedAttachments,
   });
   log('GroupChat', `observation notify enqueued for admin`);
 }
@@ -7474,6 +7760,12 @@ async function notifyAdminForActivity(chatId, message, chat) {
     activityDesc = `${senderName} 回复了：${(message.text || '').slice(0, 200)}`;
   }
 
+  // 附件摘要：显示附件数量和名称
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+    const attNames = message.attachments.map(a => a.name).join(', ');
+    activityDesc += `  [附件: ${attNames}]`;
+  }
+
   // user 块包含当前触发消息的摘要（catch-up 只含更早的未读消息，无重复）
   const activityPrompt = activityDesc;
 
@@ -7493,12 +7785,16 @@ async function notifyAdminForActivity(chatId, message, chat) {
   );
 
   const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
+  // 处理附件内容，实现渐进式加载
+  const processedAttachments = processAttachmentsForInjection(message.attachments, chat);
+  
   enqueueGcInbox(runtimeKey, {
     id: `act-${message.id}`,
     text: activityPrompt,
     contextText,
     gcChatId: chatId,
     gcIdentityRef: 'work-group:admin',
+    attachments: processedAttachments,
   });
   log('GroupChat', `activity notify enqueued for admin: ${activityDesc.slice(0, 50)}`);
 }
@@ -7891,7 +8187,7 @@ app.get('/protoclaw/group_chats/:chatId/messages', async (req, res, next) => {
 
 app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, res, next) => {
   try {
-    const { text, mentions, links, from, kind, attachments, targetSessionId, forceNew } = req.body || {};
+    const { text, mentions, links, from, kind, attachments, targetSessionId, forceNew, title } = req.body || {};
     if (!text) return res.status(400).json({ error: 'text required' });
 
     const chat = await readGroupChat(req.params.chatId);
@@ -7937,6 +8233,7 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
       const sessionOptions = {};
       if (targetSessionId) sessionOptions.targetSessionId = targetSessionId;
       if (forceNew) sessionOptions.forceNew = true;
+      if (title && typeof title === 'string' && title.trim()) sessionOptions.title = title.trim();
       dispatchGroupChatMessage(chat.id, message, sessionOptions).catch((err) => {
         console.error(`[GroupChat] dispatch failed for ${message.id}:`, err);
       });

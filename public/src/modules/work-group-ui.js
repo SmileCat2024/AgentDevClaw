@@ -70,6 +70,9 @@
   // session 数据缓存: identityRef → { pool, external, activeSessionId, sessionModel }
   let _sessionDataCache = {};
 
+  // 运行时状态缓存: sessionId → { status, viewerAgentId, identityRef, displayName, workspaceId }
+  let _runtimeStatusCache = {};
+
   // 滚动位置保持
   let _savedMsgScrollTop = 0;       // 跨 DOM 重建保持消息区滚动位置
   let _shouldScrollToBottom = false; // 进入/切换聊天时滚动到底部
@@ -346,22 +349,29 @@
   // ── 右侧：态势层 ────────────────────────────────────────────
 
   function renderAwarenessBar(chat) {
-    const agentMembers = (chat.members || []).filter((m) => m.role !== 'human' && m.identityRef !== 'work-group:admin');
-    const sessionsByIdentity = collectSessionsByIdentity(chat);
+    // 从运行时状态缓存获取会话池（按 lastActivity 排序，最近的在前面）
+    const sessions = Object.values(_runtimeStatusCache)
+      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
 
-    const memberChips = agentMembers.map((m) => {
-      const name = getIdentityName(m.identityRef);
-      const sessions = sessionsByIdentity.get(m.identityRef) || [];
-      // 只计算运行中的会话（status !== 'completed'）
-      const running = sessions.filter((s) => s.status === 'pending' || s.status === 'delivered');
-      const badge = running.length > 0
-        ? `<span class="wg-member-badge active">${running.length}</span>`
-        : '';
-      const statusClass = running.length > 0 ? ' running' : '';
+    const sessionChips = sessions.map((s) => {
+      const name = s.displayName || s.identityRef.split(':')[1] || s.identityRef;
+      const dotClass = s.status === 'running' ? 'running'
+        : s.status === 'idle' ? 'idle'
+        : 'offline';
+      const dotTitle = s.status === 'running' ? '运行中'
+        : s.status === 'idle' ? '在线 · 空闲'
+        : '离线';
+      const canInterrupt = s.status === 'running';
+      const sessionIdShort = (s.sessionId || '').slice(0, 8);
+
       return [
-        `<span class="wg-member-chip${statusClass}" data-wg-member-identity="${esc(m.identityRef)}">`,
-        `<span class="wg-member-name">${esc(name)}</span>`,
-        badge,
+        `<span class="wg-session-chip" data-wg-session-identity="${esc(s.identityRef)}" data-wg-session-id="${esc(s.sessionId)}" data-wg-workspace-id="${esc(s.workspaceId)}">`,
+        `  <span class="wg-member-dot ${dotClass}" title="${esc(dotTitle)}"></span>`,
+        `  <span class="wg-session-chip-name">${esc(name)}</span>`,
+        `  <span class="wg-session-chip-id">${esc(sessionIdShort)}</span>`,
+        canInterrupt
+          ? `  <button class="wg-session-interrupt-btn" data-wg-action="interrupt-session" data-wg-identity="${esc(s.identityRef)}" data-wg-session-id="${esc(s.sessionId)}" data-wg-workspace-id="${esc(s.workspaceId)}" title="中断此会话">中断</button>`
+          : '',
         '</span>',
       ].join('');
     }).join('');
@@ -380,7 +390,7 @@
     return [
       '<div class="wg-awareness">',
       adminChip ? `  <div class="wg-awareness-admin">${adminChip}</div>` : '',
-      memberChips ? `  <div class="wg-awareness-members">${memberChips}</div>` : '',
+      sessionChips ? `  <div class="wg-awareness-sessions">${sessionChips}</div>` : `  <div class="wg-awareness-empty">暂无活跃会话</div>`,
       `  <div class="wg-awareness-import">${importBtn}</div>`,
       '</div>',
     ].join('');
@@ -1106,11 +1116,32 @@
 
   // ── 轮询 ────────────────────────────────────────────────────
 
+  /**
+   * 拉取群聊成员的运行时状态（running / idle / offline）。
+   * 与主轮询同步执行，更新 _runtimeStatusCache 后刷新态势层。
+   */
+  async function fetchRuntimeStatus() {
+    if (!activeChatId) return;
+    try {
+      const data = await apiGet(
+        `/protoclaw/gc/runtime_status?chatId=${encodeURIComponent(activeChatId)}`
+      );
+      const map = {};
+      for (const s of (data.sessions || [])) {
+        map[s.sessionId] = s;
+      }
+      _runtimeStatusCache = map;
+    } catch (err) {
+      // 静默失败，不阻断轮询
+    }
+  }
+
   function startPolling() {
     stopPolling();
     pollTimer = setInterval(async () => {
       if (activeChatId && !isLoading) {
         await loadActiveChat();
+        await fetchRuntimeStatus();
         refreshMessagesOnly();
         refreshAdminBarOnly();
       }
@@ -1544,10 +1575,8 @@
       return [
         `<div class="wg-mention-item" data-wg-mention="${esc(id.identityRef)}">`,
         `  <span class="wg-mention-dot${isAdmin ? ' admin' : ''}"></span>`,
-        `  <span class="wg-mention-row">`,
-        `    <span class="wg-mention-name">${esc(id.displayName)}</span>`,
-        hasArrow ? '    <svg class="wg-mention-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>' : '',
-        '  </span>',
+        `  <span class="wg-mention-name">${esc(id.displayName)}</span>`,
+        hasArrow ? `  <svg class="wg-mention-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>` : '',
         '</div>',
       ].join('');
     }).join('');
@@ -1586,27 +1615,19 @@
     }).join('');
 
     const modeItems = [
-      `<div class="wg-mention-session-item${sel.mode === 'default' ? ' selected' : ''}" data-wg-mention-session="__default__">`,
-      '  <span class="wg-mention-session-dot default"></span>',
-      '  <span class="wg-mention-session-title">接续最近</span>',
-      '</div>',
-      `<div class="wg-mention-session-item${sel.mode === 'new' ? ' selected' : ''}" data-wg-mention-session="__new__">`,
-      '  <span class="wg-mention-session-dot new"></span>',
-      '  <span class="wg-mention-session-title">新建会话</span>',
-      '</div>',
+      `<button class="wg-mention-action${sel.mode === 'default' ? ' active' : ''}" data-wg-mention-session="__default__">接续最近</button>`,
+      `<button class="wg-mention-action${sel.mode === 'new' ? ' active' : ''}" data-wg-mention-session="__new__">新建</button>`,
     ].join('');
 
     picker.innerHTML = [
-      '<div class="wg-mention-level2">',
-      '  <div class="wg-mention-back" data-wg-mention-back>',
-      '    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>',
-      `    <span>${esc(id.displayName)}</span>`,
-      '  </div>',
-      `  <div class="wg-mention-section">${modeItems}</div>`,
-      sessionItems
-        ? `  <div class="wg-mention-section"><div class="wg-mention-section-label">会话池</div>${sessionItems}</div>`
-        : '',
+      '<div class="wg-mention-header" data-wg-mention-back>',
+      '  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>',
+      `  <span>${esc(id.displayName)}</span>`,
       '</div>',
+      `<div class="wg-mention-actions">${modeItems}</div>`,
+      sessionItems
+        ? `<div class="wg-mention-section"><div class="wg-mention-section-label">会话池</div>${sessionItems}</div>`
+        : '',
     ].join('');
     picker.style.display = 'block';
     _mentionTarget = identityRef;
@@ -2314,6 +2335,36 @@
     }
   }
 
+  /**
+   * 中断指定会话。
+   */
+  async function handleInterruptSession(identityRef, sessionId, workspaceId) {
+    if (!activeChatId || !identityRef) return;
+    try {
+      const res = await fetch('/protoclaw/gc/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId: activeChatId,
+          identityRef,
+          sessionId,
+          action: 'interrupt',
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        console.log(`[WorkGroup] interrupted session ${sessionId} (${identityRef})`);
+        // 立即刷新运行时状态
+        await fetchRuntimeStatus();
+        refreshAdminBarOnly();
+      } else {
+        console.error('[WorkGroup] interrupt failed:', data.error);
+      }
+    } catch (err) {
+      console.error('[WorkGroup] interrupt request failed:', err);
+    }
+  }
+
   // ── 容器事件代理 ────────────────────────────────────────────
 
   function onContainerClick(e) {
@@ -2350,6 +2401,21 @@
       }
       if (act === 'admin-restart') { handleAdminRestart(); return; }
       if (act === 'open-import-modal') { openImportModal(); return; }
+      if (act === 'interrupt-session') {
+        ev.stopPropagation();
+        const btn = action;
+        btn.disabled = true;
+        btn.textContent = '...';
+        handleInterruptSession(
+          btn.dataset.wgIdentity,
+          btn.dataset.wgSessionId,
+          btn.dataset.wgWorkspaceId
+        ).finally(() => {
+          btn.disabled = false;
+          btn.textContent = '中断';
+        });
+        return;
+      }
       if (act === 'cancel-new-chat') return;
       if (act === 'pick-workdir') return; // handled by modal-specific listener
     }
@@ -2451,7 +2517,6 @@
     // 编辑器内容变化时更新 session bar（@mention 增减时 pill 跟随）
     const editor = e.target.closest('.wg-input-editor');
     if (editor && activeChatId) {
-      // 检测 @ 触发 mention picker
       const text = editor.textContent || '';
       const picker = document.querySelector('[data-wg-role="mention-picker"]');
       if (picker) {
@@ -2462,6 +2527,10 @@
           if (picker.style.display === 'none') {
             showMentionLevel1();
           }
+        }
+        // @ 被删除 → 自动关闭弹窗
+        if (picker.style.display !== 'none' && !trimmed.includes('@')) {
+          hideMentionPicker();
         }
       }
       renderSessionBar();
@@ -2722,7 +2791,7 @@
       const bar = document.createElement('div');
       bar.className = 'wg-annotation-bar';
       bar.innerHTML = [
-        '<span class="wg-annotation-icon">📝</span>',
+        '<span class="wg-annotation-icon">我：</span>',
         `<span class="wg-annotation-text">${esc(ann.text)}</span>`,
         `<span class="wg-annotation-time">${esc(time)}</span>`,
       ].join('');
