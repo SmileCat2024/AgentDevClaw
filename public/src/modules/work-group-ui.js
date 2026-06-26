@@ -56,6 +56,7 @@
   let _popoverHideTimer = null;  // popover 隐藏延迟计时器
   let _importModalEl = null;     // 引入会话搜索弹窗 DOM
   let _importSearchTimer = null; // 搜索防抖计时器
+  let _mentionTarget = null;     // @mention picker 当前选中的 identityRef（level 2）
 
   // ── 按群聊隔离的输入缓存 ─────────────────────────────────────
   // chatId → { editorHtml, pendingLinks, pendingAttachments }
@@ -72,6 +73,9 @@
   // 滚动位置保持
   let _savedMsgScrollTop = 0;       // 跨 DOM 重建保持消息区滚动位置
   let _shouldScrollToBottom = false; // 进入/切换聊天时滚动到底部
+  let _userScrolling = false;        // 用户正在手动滚动
+  let _userScrollingTimer = null;    // 用户滚动状态清除计时器
+  let _suppressScrollEvent = false;  // 程序设置 scrollTop 时抑制事件
 
   // ── API helpers ─────────────────────────────────────────────
 
@@ -327,9 +331,11 @@
 
     return [
       `<span class="wg-admin-chip ${dotClass}">`,
+      `<span class="wg-admin-chip-info" data-wg-member-identity="work-group:admin">`,
       `<span class="wg-admin-chip-dot"></span>`,
       `<span class="wg-admin-chip-name">管理员</span>`,
       healthText ? `<span class="wg-admin-chip-health ${st.healthStatus}">${esc(healthText)}</span>` : '',
+      '</span>',
       `<button class="wg-admin-chip-btn${restarting ? ' spinning' : ''}" data-wg-action="admin-restart"`,
       restarting ? ' disabled' : '',
       ` title="${st?.sessionId ? '重启管理员会话' : '启动管理员会话'}">${esc(btnLabel)}</button>`,
@@ -340,17 +346,20 @@
   // ── 右侧：态势层 ────────────────────────────────────────────
 
   function renderAwarenessBar(chat) {
-    const agentMembers = (chat.members || []).filter((m) => m.role !== 'human');
+    const agentMembers = (chat.members || []).filter((m) => m.role !== 'human' && m.identityRef !== 'work-group:admin');
     const sessionsByIdentity = collectSessionsByIdentity(chat);
 
     const memberChips = agentMembers.map((m) => {
       const name = getIdentityName(m.identityRef);
-      const count = sessionsByIdentity.get(m.identityRef)?.length || 0;
-      const badge = count > 0
-        ? `<span class="wg-member-badge">${count}</span>`
+      const sessions = sessionsByIdentity.get(m.identityRef) || [];
+      // 只计算运行中的会话（status !== 'completed'）
+      const running = sessions.filter((s) => s.status === 'pending' || s.status === 'delivered');
+      const badge = running.length > 0
+        ? `<span class="wg-member-badge active">${running.length}</span>`
         : '';
+      const statusClass = running.length > 0 ? ' running' : '';
       return [
-        `<span class="wg-member-chip" data-wg-member-identity="${esc(m.identityRef)}">`,
+        `<span class="wg-member-chip${statusClass}" data-wg-member-identity="${esc(m.identityRef)}">`,
         `<span class="wg-member-name">${esc(name)}</span>`,
         badge,
         '</span>',
@@ -359,9 +368,12 @@
 
     const adminChip = renderAdminChip();
     const importedCount = (chat.importedSessions || []).length;
+
+    // 引入按钮：低频操作，降级为极简图标
     const importBtn = [
-      `<button class="wg-import-btn" data-wg-action="open-import-modal" title="从其他工作空间引入会话">`,
-      `引入${importedCount > 0 ? ` <span class="wg-import-badge">${importedCount}</span>` : ''}`,
+      `<button class="wg-import-icon-btn" data-wg-action="open-import-modal" title="从其他工作空间引入会话">`,
+      `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
+      importedCount > 0 ? `<span class="wg-import-mini-badge">${importedCount}</span>` : '',
       `</button>`,
     ].join('');
 
@@ -370,7 +382,6 @@
       adminChip ? `  <div class="wg-awareness-admin">${adminChip}</div>` : '',
       memberChips ? `  <div class="wg-awareness-members">${memberChips}</div>` : '',
       `  <div class="wg-awareness-import">${importBtn}</div>`,
-      chat.workDir ? `  <div class="wg-awareness-workdir"><code>${esc(chat.workDir)}</code></div>` : '',
       '</div>',
     ].join('');
   }
@@ -604,12 +615,33 @@
       const msgId = row.dataset.wgMsgId;
       if (!msgId) return;
       if (el.dataset.wgCollapseInit) return;
-      if (el.scrollHeight <= COLLAPSE_THRESHOLD) return;
-      el.dataset.wgCollapseInit = '1';
 
-      const isExpanded = _expandedMsgIds.has(msgId);
+      // 先隐藏元素，避免闪烁
+      const originalVisibility = el.style.visibility;
+      const originalPosition = el.style.position;
+      el.style.visibility = 'hidden';
+      el.style.position = 'absolute';
+
+      // 添加折叠类，但先不添加 collapsed 类，检查自然高度
       el.classList.add('wg-collapsible');
+      const needsCollapse = el.scrollHeight > COLLAPSE_THRESHOLD;
+
+      if (!needsCollapse) {
+        // 不需要折叠，移除类并恢复样式
+        el.classList.remove('wg-collapsible');
+        el.style.visibility = originalVisibility;
+        el.style.position = originalPosition;
+        return;
+      }
+
+      // 需要折叠
+      el.dataset.wgCollapseInit = '1';
+      const isExpanded = _expandedMsgIds.has(msgId);
       if (!isExpanded) el.classList.add('collapsed');
+
+      // 恢复元素可见性
+      el.style.visibility = originalVisibility;
+      el.style.position = originalPosition;
 
       const toggleBar = document.createElement('div');
       toggleBar.className = 'wg-collapse-toggle';
@@ -639,17 +671,7 @@
   // ── 右侧：@mention 选择器 ───────────────────────────────────
 
   function renderMentionPicker() {
-    if (identities.length === 0) return '';
-    const items = identities.map((id) => {
-      return [
-        `<div class="wg-mention-item" data-wg-mention="${esc(id.identityRef)}">`,
-        `  <span class="wg-mention-name">${esc(id.displayName)}</span>`,
-        `  <span class="wg-mention-desc">${esc(id.description || '')}</span>`,
-        '</div>',
-      ].join('');
-    }).join('');
-
-    return `<div class="wg-mention-picker" data-wg-role="mention-picker" style="display:none;">${items}</div>`;
+    return '<div class="wg-mention-picker" data-wg-role="mention-picker" style="display:none;"></div>';
   }
 
   // ── 右侧：输入区 ────────────────────────────────────────────
@@ -846,11 +868,13 @@
   }
 
   function renderWorkGroupSurface() {
-    // 外层 renderCurrentMainView() 重建 DOM 前，保存消息区滚动位置
+    // 外层 renderCurrentMainView() 重建 DOM 前，保存消息区滚动位置（距底部偏移量）
     const existingScroll = document.querySelector('.wg-msg-scroll');
     const scrollExistsInDom = !!existingScroll;
+    let savedOffsetFromBottom = 0;
     if (existingScroll) {
-      _savedMsgScrollTop = existingScroll.scrollTop;
+      savedOffsetFromBottom = existingScroll.scrollHeight - existingScroll.scrollTop;
+      _savedMsgScrollTop = existingScroll.scrollTop; // 兼容其他路径
     }
 
     // 保存输入框内容、焦点、光标位置（DOM 重建后会丢失）
@@ -883,19 +907,6 @@
 
     // 用 microtask 而不是 rAF，让 DOM 替换完成后立刻恢复，避免一帧的失焦闪烁
     Promise.resolve().then(() => {
-      // 恢复滚动位置
-      const newScroll = document.querySelector('.wg-msg-scroll');
-      if (newScroll) {
-        if (_shouldScrollToBottom) {
-          _shouldScrollToBottom = false;
-          newScroll.scrollTop = newScroll.scrollHeight;
-        } else if (scrollExistsInDom && _savedMsgScrollTop > 0) {
-          newScroll.scrollTop = _savedMsgScrollTop;
-        } else {
-          newScroll.scrollTop = newScroll.scrollHeight;
-        }
-      }
-
       // 始终恢复输入框内容（无论是否有焦点），避免外部重建时内容丢失
       if (savedEditorHtml !== null) {
         const newEditor = document.querySelector('.wg-input-editor');
@@ -913,10 +924,8 @@
         const newSearch = document.querySelector('[data-wg-role="search"]');
         if (newSearch) {
           newSearch.focus();
-          if (savedSearchSelectionStart !== null && savedSearchSelectionEnd !== null) {
-            try {
-              newSearch.setSelectionRange(savedSearchSelectionStart, savedSearchSelectionEnd);
-            } catch (_) {}
+          if (savedSearchSelectionStart !== null) {
+            newSearch.setSelectionRange(savedSearchSelectionStart, savedSearchSelectionEnd);
           }
         }
       }
@@ -924,6 +933,21 @@
       // 恢复附件列表和链接列表
       renderAttachmentList();
       renderLinkList();
+
+      // 最后恢复滚动位置——在所有 DOM 修改完成之后，保证视觉位置不变
+      const newScroll = document.querySelector('.wg-msg-scroll');
+      if (newScroll) {
+        _suppressScrollEvent = true;
+        if (_shouldScrollToBottom) {
+          _shouldScrollToBottom = false;
+          newScroll.scrollTop = newScroll.scrollHeight;
+        } else if (scrollExistsInDom) {
+          newScroll.scrollTop = newScroll.scrollHeight - savedOffsetFromBottom;
+        } else {
+          newScroll.scrollTop = newScroll.scrollHeight;
+        }
+        _suppressScrollEvent = false;
+      }
     });
 
     return html;
@@ -936,7 +960,7 @@
     if (main) {
       // 保存滚动位置（DOM 重建前）
       const scroll = main.querySelector('.wg-msg-scroll');
-      const savedTop = scroll ? scroll.scrollTop : 0;
+      const offsetFromBottom = scroll ? scroll.scrollHeight - scroll.scrollTop : 0;
       const scrollExists = !!scroll;
 
       main.innerHTML = renderConversation();
@@ -950,15 +974,17 @@
       // 恢复滚动位置（DOM 重建后）
       const newScroll = main.querySelector('.wg-msg-scroll');
       if (newScroll) {
+        _suppressScrollEvent = true;
         if (_shouldScrollToBottom) {
           _shouldScrollToBottom = false;
           newScroll.scrollTop = newScroll.scrollHeight;
         } else if (scrollExists) {
-          newScroll.scrollTop = savedTop;
+          newScroll.scrollTop = newScroll.scrollHeight - offsetFromBottom;
         } else {
           // 退出再进入场景：滚动到底部
           newScroll.scrollTop = newScroll.scrollHeight;
         }
+        _suppressScrollEvent = false;
       }
       applyCollapsible(main);
       _renderAnnotationBars();
@@ -968,22 +994,37 @@
   function refreshMessagesOnly() {
     const scroll = document.querySelector('.wg-msg-scroll');
     if (!scroll) return;
-    const savedTop = scroll.scrollTop;
-    const wasNearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+
+    // 用"距底部偏移量"而非绝对 scrollTop 来保存位置，这样在 DOM 修改导致
+    // scrollHeight 变化时仍能精确恢复到同一视觉位置。
+    const offsetFromBottom = scroll.scrollHeight - scroll.scrollTop;
+    const nearBottom = offsetFromBottom - scroll.clientHeight < 80;
+
+    // 隐藏元素避免 innerHTML 重建时的闪烁
+    const originalVisibility = scroll.style.visibility;
+    scroll.style.visibility = 'hidden';
+
     scroll.innerHTML = renderMessageList(activeChat);
     if (typeof enhanceMathInElement === 'function') enhanceMathInElement(scroll);
+
+    // 先完成所有会修改 scrollHeight 的 DOM 操作，再恢复滚动位置
+    applyCollapsible(scroll);
+    _renderAnnotationBars();
+
+    // 现在 scrollHeight 已经稳定，恢复滚动位置
+    // 抑制 scroll 事件，防止程序触发的 scrollTop 被误判为用户手动滚动
+    _suppressScrollEvent = true;
     if (_shouldScrollToBottom) {
       _shouldScrollToBottom = false;
       scroll.scrollTop = scroll.scrollHeight;
-    } else if (wasNearBottom) {
+    } else if (nearBottom && !_userScrolling) {
       scroll.scrollTop = scroll.scrollHeight;
     } else {
-      // 用户主动滚动浏览历史时，innerHTML 重建后浏览器会把 scrollTop 重置为 0，
-      // 显得"自动向上滑一下"。这里恢复用户原来的滚动位置。
-      scroll.scrollTop = savedTop;
+      scroll.scrollTop = scroll.scrollHeight - offsetFromBottom;
     }
-    applyCollapsible(scroll);
-    _renderAnnotationBars();
+    _suppressScrollEvent = false;
+
+    scroll.style.visibility = originalVisibility;
   }
 
   function refreshHeaderAndMessages() {
@@ -1011,20 +1052,32 @@
 
     const scroll = conv.querySelector('.wg-msg-scroll');
     if (scroll) {
-      const savedTop = scroll.scrollTop;
-      const wasNearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+      const offsetFromBottom = scroll.scrollHeight - scroll.scrollTop;
+      const nearBottom = offsetFromBottom - scroll.clientHeight < 80;
+
+      const originalVisibility = scroll.style.visibility;
+      scroll.style.visibility = 'hidden';
+
       scroll.innerHTML = renderMessageList(activeChat);
       if (typeof enhanceMathInElement === 'function') enhanceMathInElement(scroll);
+
+      // 先完成所有会修改 scrollHeight 的 DOM 操作，再恢复滚动位置
+      applyCollapsible(scroll);
+      _renderAnnotationBars();
+
+      // 现在 scrollHeight 已经稳定，恢复滚动位置
+      _suppressScrollEvent = true;
       if (_shouldScrollToBottom) {
         _shouldScrollToBottom = false;
         scroll.scrollTop = scroll.scrollHeight;
-      } else if (wasNearBottom) {
+      } else if (nearBottom && !_userScrolling) {
         scroll.scrollTop = scroll.scrollHeight;
       } else {
-        scroll.scrollTop = savedTop;
+        scroll.scrollTop = scroll.scrollHeight - offsetFromBottom;
       }
-      applyCollapsible(scroll);
-      _renderAnnotationBars();
+      _suppressScrollEvent = false;
+
+      scroll.style.visibility = originalVisibility;
     }
   }
 
@@ -1044,7 +1097,11 @@
 
   function scrollToBottom() {
     const scroll = document.querySelector('.wg-msg-scroll');
-    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    if (scroll) {
+      _suppressScrollEvent = true;
+      scroll.scrollTop = scroll.scrollHeight;
+      _suppressScrollEvent = false;
+    }
   }
 
   // ── 轮询 ────────────────────────────────────────────────────
@@ -1219,27 +1276,64 @@
       ].join('');
     }).join('');
 
-    // 外部会话（最近）— 全部只读
-    const extItems = (data.externalSessions || []).slice(0, 5).map((s) => {
-      const workspaceId = identityRef.split(':')[0];
-      return [
-        `<div class="wg-pop-session ext" data-wg-session-record="${esc(workspaceId)}:${esc(s.id)}" title="点击查看会话记录（只读）">`,
-        `  <span class="wg-pop-title">${esc(s.title)}</span>`,
+    const el = document.createElement('div');
+    // 管理员：在 header 追加在线状态
+    let statusBadge = '';
+    if (identityRef === 'work-group:admin') {
+      const st = _adminStatus;
+      const restarting = _adminRestarting;
+      let label = '离线';
+      let cls = 'offline';
+      if (restarting) { label = '重启中'; cls = 'switching'; }
+      else if (st?.online) { label = '在线'; cls = 'online'; }
+      statusBadge = `<span class="wg-pop-status ${cls}">${esc(label)}</span>`;
+    }
+
+    // 引入外部会话区（非管理员）— 右侧子面板
+    let importToggle = '';
+    let importPanel = '';
+    if (identityRef !== 'work-group:admin') {
+      const extCount = (data.externalSessions || []).length;
+      importToggle = [
+        '<div class="wg-pop-import-toggle" data-wg-pop-import-toggle>',
+        `  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
+        `  <span>引入外部会话</span>`,
+        extCount > 0 ? `  <span class="wg-pop-import-count">${extCount}</span>` : '',
         '</div>',
       ].join('');
-    }).join('');
 
-    const el = document.createElement('div');
+      const wsId = identityRef.split(':')[0];
+      const ext = (data.externalSessions || []).slice(0, 10);
+      const extItems = ext.length === 0
+        ? '<div class="wg-pop-empty">无可引入的会话</div>'
+        : ext.map((s) => [
+            `<div class="wg-pop-side-item" data-wg-pop-import-do data-workspace-id="${esc(wsId)}" data-session-id="${esc(s.id)}" title="${esc(s.title)}">`,
+            `  <span class="wg-pop-side-dot"></span>`,
+            `  <span class="wg-pop-side-title">${esc(s.title)}</span>`,
+            '</div>',
+          ].join('')).join('');
+
+      importPanel = [
+        '<div class="wg-pop-side" data-wg-pop-side style="display:none">',
+        '  <div class="wg-pop-side-header">引入会话</div>',
+        `  <div class="wg-pop-side-list">${extItems}</div>`,
+        '</div>',
+      ].join('');
+    }
+
     el.className = 'wg-member-popover';
     el.innerHTML = [
+      '<div class="wg-pop-main">',
       `<div class="wg-pop-header">`,
       `  <span class="wg-pop-name">${esc(displayName)}</span>`,
-      `  <span class="wg-pop-model">${esc(modelLabel)}</span>`,
+      statusBadge ? `  ${statusBadge}` : `  <span class="wg-pop-model">${esc(modelLabel)}</span>`,
       '</div>',
       dispatchSection,
       poolItems ? `<div class="wg-pop-section-label">群内会话 (${data.inChatSessions.length})</div><div class="wg-pop-list">${poolItems}</div>` : '',
-      extItems ? `<div class="wg-pop-section-label">其他会话</div><div class="wg-pop-list">${extItems}</div>` : '',
-      (!poolItems && !extItems) ? '<div class="wg-pop-empty">暂无会话</div>' : '',
+      !poolItems ? '<div class="wg-pop-empty">暂无活跃会话</div>' : '',
+      importToggle,
+      '</div>',
+      importPanel,
     ].join('');
     document.body.appendChild(el);
     _popoverEl = el;
@@ -1255,7 +1349,7 @@
       _popoverHideTimer = setTimeout(() => hideMemberPopover(), 200);
     });
     // popover 内的会话导航和派发选择
-    el.addEventListener('click', (ev) => {
+    el.addEventListener('click', async (ev) => {
       // 派发选项按钮
       const dispatchBtn = ev.target.closest('[data-wg-dispatch]');
       if (dispatchBtn) {
@@ -1288,6 +1382,42 @@
         const [workspaceId, sessionId] = recordItem.dataset.wgSessionRecord.split(':');
         navigateToSessionRecord(workspaceId, sessionId);
         hideMemberPopover(true);
+      }
+
+      // 引入外部会话 toggle — 展开/收起右侧子面板
+      const importToggleBtn = ev.target.closest('[data-wg-pop-import-toggle]');
+      if (importToggleBtn) {
+        ev.stopPropagation();
+        const sideEl = el.querySelector('[data-wg-pop-side]');
+        if (sideEl) {
+          const isOpen = sideEl.style.display !== 'none';
+          if (isOpen) {
+            sideEl.style.display = 'none';
+            importToggleBtn.classList.remove('open');
+          } else {
+            sideEl.style.display = 'flex';
+            importToggleBtn.classList.add('open');
+          }
+        }
+        return;
+      }
+
+      // 引入操作 — 直接选中导入
+      const importDo = ev.target.closest('[data-wg-pop-import-do]');
+      if (importDo) {
+        ev.stopPropagation();
+        const { workspaceId, sessionId } = importDo.dataset;
+        importDo.classList.add('imported');
+        try {
+          await doImportSession(workspaceId, sessionId);
+          // 刷新缓存 + 关闭 popover
+          delete _sessionDataCache[identityRef];
+          hideMemberPopover(true);
+          refreshAdminBarOnly();
+        } catch {
+          importDo.classList.remove('imported');
+        }
+        return;
       }
     });
   }
@@ -1387,7 +1517,156 @@
 
   function toggleMentionPicker() {
     const picker = document.querySelector('[data-wg-role="mention-picker"]');
-    if (picker) picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
+    if (!picker) return;
+    if (picker.style.display !== 'none') {
+      hideMentionPicker();
+    } else {
+      showMentionLevel1();
+    }
+  }
+
+  function hideMentionPicker() {
+    const picker = document.querySelector('[data-wg-role="mention-picker"]');
+    if (picker) picker.style.display = 'none';
+    _mentionTarget = null;
+  }
+
+  function showMentionLevel1() {
+    const picker = document.querySelector('[data-wg-role="mention-picker"]');
+    if (!picker) return;
+
+    const mentionable = identities.filter((id) => id.identityRef !== 'user');
+    if (mentionable.length === 0) return;
+
+    const items = mentionable.map((id) => {
+      const isAdmin = id.identityRef === 'work-group:admin';
+      const hasArrow = !isAdmin;
+      return [
+        `<div class="wg-mention-item" data-wg-mention="${esc(id.identityRef)}">`,
+        `  <span class="wg-mention-dot${isAdmin ? ' admin' : ''}"></span>`,
+        `  <span class="wg-mention-name">${esc(id.displayName)}</span>`,
+        hasArrow ? '  <svg class="wg-mention-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>' : '',
+        '</div>',
+      ].join('');
+    }).join('');
+
+    picker.innerHTML = `<div class="wg-mention-level1">${items}</div>`;
+    picker.style.display = 'block';
+    _mentionTarget = null;
+  }
+
+  function showMentionLevel2(identityRef) {
+    const picker = document.querySelector('[data-wg-role="mention-picker"]');
+    if (!picker) return;
+    const id = identities.find((i) => i.identityRef === identityRef);
+    if (!id) return;
+
+    // 懒加载 session 数据
+    if (!_sessionDataCache[identityRef] && activeChatId) {
+      fetchSessionData(identityRef).then(() => showMentionLevel2(identityRef));
+      picker.innerHTML = '<div class="wg-mention-loading">加载中...</div>';
+      picker.style.display = 'block';
+      return;
+    }
+
+    const data = _sessionDataCache[identityRef];
+    const sel = activeChatId ? getSessionSelection(activeChatId, identityRef) : { mode: 'default' };
+    const poolSessions = (data?.inChatSessions || []).slice(0, 6);
+
+    const sessionItems = poolSessions.map((s) => {
+      const selected = sel.mode === 'specific' && sel.sessionId === s.id;
+      return [
+        `<div class="wg-mention-session-item${selected ? ' selected' : ''}" data-wg-mention-session="${esc(s.id)}" data-wg-mention-title="${esc(s.title)}">`,
+        `  <span class="wg-mention-session-dot${s.isActive ? ' active' : ''}"></span>`,
+        `  <span class="wg-mention-session-title">${esc(s.title)}</span>`,
+        '</div>',
+      ].join('');
+    }).join('');
+
+    const modeItems = [
+      `<div class="wg-mention-session-item${sel.mode === 'default' ? ' selected' : ''}" data-wg-mention-session="__default__">`,
+      '  <span class="wg-mention-session-dot default"></span>',
+      '  <span class="wg-mention-session-title">接续最近</span>',
+      '</div>',
+      `<div class="wg-mention-session-item${sel.mode === 'new' ? ' selected' : ''}" data-wg-mention-session="__new__">`,
+      '  <span class="wg-mention-session-dot new"></span>',
+      '  <span class="wg-mention-session-title">新建会话</span>',
+      '</div>',
+    ].join('');
+
+    picker.innerHTML = [
+      '<div class="wg-mention-level2">',
+      '  <div class="wg-mention-back" data-wg-mention-back>',
+      '    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>',
+      `    <span>${esc(id.displayName)}</span>`,
+      '  </div>',
+      `  <div class="wg-mention-section">${modeItems}</div>`,
+      sessionItems
+        ? `  <div class="wg-mention-section"><div class="wg-mention-section-label">会话池</div>${sessionItems}</div>`
+        : '',
+      '</div>',
+    ].join('');
+    picker.style.display = 'block';
+    _mentionTarget = identityRef;
+  }
+
+  function _doInsertMention(displayName) {
+    const editor = document.querySelector('.wg-input-editor');
+    if (!editor) return;
+    editor.focus();
+    // 如果编辑器末尾已经有 @（由用户键入触发），先删除它再插入完整 mention
+    const text = editor.textContent || '';
+    if (text.endsWith('@')) {
+      // 删除最后一个 @ 字符
+      const sel = window.getSelection();
+      const range = document.createRange();
+      editor.focus();
+      // 选中末尾的 @
+      const lastNode = editor.lastChild;
+      if (lastNode && lastNode.nodeType === Node.TEXT_NODE) {
+        const nodeText = lastNode.textContent;
+        range.setStart(lastNode, nodeText.length - 1);
+        range.setEnd(lastNode, nodeText.length);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('insertText', false, `@${displayName} `);
+      } else {
+        // fallback：直接整体替换
+        editor.textContent = text.slice(0, -1) + `@${displayName} `;
+      }
+    } else {
+      document.execCommand('insertText', false, `@${displayName} `);
+    }
+  }
+
+  function insertMention(identityRef) {
+    const id = identities.find((i) => i.identityRef === identityRef);
+    if (!id) return;
+    _doInsertMention(id.displayName);
+    hideMentionPicker();
+    if (!_sessionDataCache[identityRef]) {
+      fetchSessionData(identityRef);
+    }
+    renderSessionBar();
+  }
+
+  function insertMentionWithSession(identityRef, mode, sessionId, sessionTitle) {
+    const id = identities.find((i) => i.identityRef === identityRef);
+    if (!id) return;
+    _doInsertMention(id.displayName);
+
+    if (activeChatId) {
+      if (mode === 'new') {
+        setSessionSelection(activeChatId, identityRef, { mode: 'new' });
+      } else if (mode === 'specific') {
+        setSessionSelection(activeChatId, identityRef, { mode: 'specific', sessionId, sessionTitle });
+      } else {
+        setSessionSelection(activeChatId, identityRef, { mode: 'default' });
+      }
+    }
+
+    hideMentionPicker();
+    renderSessionBar();
   }
 
   // ── Session Bar ─────────────────────────────────────────────
@@ -1421,12 +1700,13 @@
     const pills = mentioned.map((id) => {
       const sel = getSessionSelection(activeChatId, id.identityRef);
       let label = '接续最近';
-      if (sel.mode === 'new') label = '新建';
-      else if (sel.mode === 'specific') label = sel.sessionTitle || '指定会话';
+      let modeClass = 'default';
+      if (sel.mode === 'new') { label = '新建'; modeClass = 'new'; }
+      else if (sel.mode === 'specific') { label = sel.sessionTitle || '指定会话'; modeClass = 'specific'; }
       return [
-        `<div class="wg-session-pill-readonly">`,
+        `<div class="wg-session-pill-readonly ${modeClass}">`,
         `  <span class="wg-session-pill-name">${esc(id.displayName)}</span>`,
-        `  <span class="wg-session-pill-sep">→</span>`,
+        `  <span class="wg-session-pill-sep"></span>`,
         `  <span class="wg-session-pill-label">${esc(label)}</span>`,
         '</div>',
       ].join('');
@@ -1492,6 +1772,12 @@
       }
     } catch (err) {
       console.error('[WorkGroup] fetchSessionData failed:', err);
+      // 即使失败也缓存空结构，确保 popover 能显示"无会话"状态
+      _sessionDataCache[identityRef] = {
+        inChatSessions: [],
+        externalSessions: [],
+        sessionModel: 'persistent',
+      };
     }
   }
 
@@ -1560,24 +1846,6 @@
       const ext = (a.name.split('.').pop() || '').toUpperCase().slice(0, 4);
       return `<div class="wg-attachment-chip" title="${esc(a.name)}"><span class="wg-attachment-chip-ext">${esc(ext)}</span><span class="wg-attachment-chip-name">${esc(displayName)}</span><button class="wg-chip-remove" data-wg-action="remove-attachment" data-wg-attachment-index="${i}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg></button></div>`;
     }).join('');
-  }
-
-  function insertMention(identityRef) {
-    const id = identities.find((i) => i.identityRef === identityRef);
-    if (!id) return;
-    const editor = document.querySelector('.wg-input-editor');
-    if (!editor) return;
-    editor.focus();
-    document.execCommand('insertText', false, `@${id.displayName} `);
-
-    const picker = document.querySelector('[data-wg-role="mention-picker"]');
-    if (picker) picker.style.display = 'none';
-
-    // 预加载 session 数据并渲染 session bar
-    if (!_sessionDataCache[identityRef]) {
-      fetchSessionData(identityRef);
-    }
-    renderSessionBar();
   }
 
   function toggleDropdown(type) {
@@ -2053,6 +2321,14 @@
       refreshHeaderAndMessages();
     }
 
+    // 关闭 mention picker（点击外部）
+    const picker = document.querySelector('[data-wg-role="mention-picker"]');
+    if (picker && picker.style.display !== 'none') {
+      if (!e.target.closest('[data-wg-role="mention-picker"]') && !e.target.closest('[data-wg-action="mention"]')) {
+        hideMentionPicker();
+      }
+    }
+
     const action = e.target.closest('[data-wg-action]');
     if (action) {
       const act = action.dataset.wgAction;
@@ -2074,13 +2350,6 @@
       if (act === 'open-import-modal') { openImportModal(); return; }
       if (act === 'cancel-new-chat') return;
       if (act === 'pick-workdir') return; // handled by modal-specific listener
-    }
-
-    // 态势层 member chip 点击 → 插入 @mention
-    const memberChip = e.target.closest('[data-wg-member-identity]');
-    if (memberChip) {
-      insertMention(memberChip.dataset.wgMemberIdentity);
-      return;
     }
 
     const removeLink = e.target.closest('[data-wg-action="remove-link"]');
@@ -2105,9 +2374,38 @@
       return;
     }
 
+    // @mention picker — level 1: member selection
     const mentionItem = e.target.closest('[data-wg-mention]');
     if (mentionItem) {
-      insertMention(mentionItem.dataset.wgMention);
+      const identityRef = mentionItem.dataset.wgMention;
+      // 管理员：没有 level 2，直接插入
+      if (identityRef === 'work-group:admin') {
+        insertMention(identityRef);
+      } else {
+        showMentionLevel2(identityRef);
+      }
+      return;
+    }
+
+    // @mention picker — back button
+    const mentionBack = e.target.closest('[data-wg-mention-back]');
+    if (mentionBack) {
+      showMentionLevel1();
+      return;
+    }
+
+    // @mention picker — level 2: session selection
+    const mentionSession = e.target.closest('[data-wg-mention-session]');
+    if (mentionSession && _mentionTarget) {
+      const val = mentionSession.dataset.wgMentionSession;
+      const title = mentionSession.dataset.wgMentionTitle;
+      if (val === '__new__') {
+        insertMentionWithSession(_mentionTarget, 'new');
+      } else if (val === '__default__') {
+        insertMentionWithSession(_mentionTarget, 'default');
+      } else {
+        insertMentionWithSession(_mentionTarget, 'specific', val, title);
+      }
       return;
     }
 
@@ -2151,6 +2449,19 @@
     // 编辑器内容变化时更新 session bar（@mention 增减时 pill 跟随）
     const editor = e.target.closest('.wg-input-editor');
     if (editor && activeChatId) {
+      // 检测 @ 触发 mention picker
+      const text = editor.textContent || '';
+      const picker = document.querySelector('[data-wg-role="mention-picker"]');
+      if (picker) {
+        const trimmed = text.trim();
+        const lastChar = text.slice(-1);
+        // @ 作为首个字符或在空格后键入 @ → 弹出 level 1
+        if (lastChar === '@' && (trimmed === '@' || text.endsWith(' @'))) {
+          if (picker.style.display === 'none') {
+            showMentionLevel1();
+          }
+        }
+      }
       renderSessionBar();
     }
   }
@@ -2162,6 +2473,13 @@
   function onContainerKeyDown(e) {
     const editor = e.target.closest('.wg-input-editor');
     if (!editor) return;
+    // Escape 关闭 mention picker
+    const picker = document.querySelector('[data-wg-role="mention-picker"]');
+    if (e.key === 'Escape' && picker && picker.style.display !== 'none') {
+      hideMentionPicker();
+      e.stopPropagation();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -2465,6 +2783,31 @@
     }
     isLoading = false;
     startPolling();
+    setupScrollListener();
+  }
+
+  function setupScrollListener() {
+    // 使用事件委托监听scroll事件
+    document.addEventListener('scroll', (e) => {
+      // 忽略程序触发的 scroll 事件
+      if (_suppressScrollEvent) return;
+      const scrollEl = e.target.closest('.wg-msg-scroll');
+      if (!scrollEl) return;
+      
+      // 用户手动滚动时设置标志位
+      _userScrolling = true;
+      
+      // 清除之前的计时器
+      if (_userScrollingTimer) {
+        clearTimeout(_userScrollingTimer);
+      }
+      
+      // 2秒后清除标志位
+      _userScrollingTimer = setTimeout(() => {
+        _userScrolling = false;
+        _userScrollingTimer = null;
+      }, 2000);
+    }, true); // 使用捕获阶段确保能监听到
   }
 
   // ── 对外接口 ────────────────────────────────────────────────

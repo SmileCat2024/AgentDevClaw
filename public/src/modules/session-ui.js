@@ -651,12 +651,43 @@ function renderWorkspaceSessionList(agent, block) {
       '</div>',
     ].join('');
 
+    // 获取当前主代理模型显示
+    const modelPresets = agent?.modelPresets || {};
+    const defaultPreset = modelPresets.default || {};
+    const primaryModel = typeof defaultPreset === 'string' ? defaultPreset : (defaultPreset.primary || '');
+    const secondaryModel = typeof defaultPreset === 'string' ? '' : (defaultPreset.secondary || '');
+    
+    // 获取模型显示名称（从全局presets中查找）
+    const getModelDisplayName = (modelName) => {
+      if (!modelName) return '';
+      const presets = window.ClawFW?._modelPresets || [];
+      const preset = presets.find(p => p.name === modelName);
+      if (preset) {
+        // 显示模型名称，如果有contextLength则显示
+        const ctx = preset.contextLength ? ' · ' + Math.round(preset.contextLength / 1000) + 'K' : '';
+        return preset.name + ctx;
+      }
+      return modelName;
+    };
+    
+    const modelDisplayName = getModelDisplayName(primaryModel);
+    const hasSecondary = !!secondaryModel;
+    
+    // 模型显示组件 - 简洁设计，无图标
+    const modelSwitchHtml = currentProject && modelDisplayName ? [
+      '<div class="ph-model-switch' + (hasSecondary ? ' has-secondary' : '') + '" onclick="window.phToggleModelSlot()" title="' + escapeHtml(isZh ? (hasSecondary ? '点击切换到: ' + secondaryModel : '点击配置备选模型') : (hasSecondary ? 'Click to switch to: ' + secondaryModel : 'Click to configure secondary model')) + '">',
+      '<span class="ph-model-switch-name">' + escapeHtml(modelDisplayName) + '</span>',
+      (hasSecondary ? '<svg class="ph-model-switch-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M2 4l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' : ''),
+      '</div>',
+    ].join('') : '';
+    
     const headerBar = [
       '<div class="ph-project-bar">',
       '<div class="ph-project-bar-left">',
       dropdownHtml,
       '</div>',
       '<div class="ph-project-bar-right">',
+      modelSwitchHtml,
       (currentProject ? '<div class="ph-project-bar-path" title="' + escapeHtml(isZh ? '点击在文件管理器中打开' : 'Click to open in file explorer') + '" data-path="' + escapeHtml(currentProject.openDirectory) + '" onclick="window.phOpenInExplorer(this.dataset.path)">' + escapeHtml(currentProject.openDirectory) + '</div>' : ''),
       (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'create_session', openDirectory: currentProject.openDirectory || '' })) + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
       '</div>',

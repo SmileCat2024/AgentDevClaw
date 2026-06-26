@@ -2879,12 +2879,35 @@ window.phSaveModelConfig = async () => {
   if (!agentId) return;
   const selects = document.querySelectorAll('#ph-model-config-host .ph-mc-select');
   const modelPresets = { default: null, exploration: null, sub: null, system: null };
+  
+  // 收集所有select的值
+  const collected = {};
   selects.forEach(function(sel) {
     const role = sel.dataset.presetRole;
-    if (role && modelPresets.hasOwnProperty(role)) {
-      modelPresets[role] = sel.value || null;
-    }
+    const slot = sel.dataset.slot;
+    if (!role) return;
+    if (!collected[role]) collected[role] = {};
+    collected[role][slot || 'primary'] = sel.value || null;
   });
+  
+  // 构建最终格式：default用双槽位，其他角色用单值
+  for (const role of Object.keys(modelPresets)) {
+    const data = collected[role] || {};
+    if (role === 'default') {
+      // 主代理：双槽位格式
+      const primary = data.primary || null;
+      const secondary = data.secondary || null;
+      if (primary || secondary) {
+        modelPresets[role] = { primary, secondary };
+      } else {
+        modelPresets[role] = null;
+      }
+    } else {
+      // 其他角色：单值格式
+      modelPresets[role] = data.primary || null;
+    }
+  }
+  
   try {
     const resp = await fetch('/protoclaw/agent_model_presets', {
       method: 'PUT',
@@ -3016,6 +3039,84 @@ window.phOpenInExplorer = async (dirPath) => {
     });
   } catch (e) {
     console.error('Failed to open in explorer:', e);
+  }
+};
+
+/**
+ * 切换主代理的主模型和备选模型
+ * 点击操作条上的模型名称时触发
+ */
+window.phToggleModelSlot = async () => {
+  const currentAgent = getCurrentAgentRecord();
+  if (!currentAgent || currentAgent.id !== 'programming-helper') {
+    return;
+  }
+  
+  const modelPresets = currentAgent.modelPresets || {};
+  const defaultPreset = modelPresets.default || {};
+  const primaryModel = typeof defaultPreset === 'string' ? defaultPreset : (defaultPreset.primary || '');
+  const secondaryModel = typeof defaultPreset === 'string' ? '' : (defaultPreset.secondary || '');
+  
+  // 如果没有备选模型，打开配置面板
+  if (!secondaryModel) {
+    window.phOpenModelConfig();
+    return;
+  }
+  
+  const isZh = currentLanguage === 'zh';
+  const toastId = 'model-switch';
+  
+  // 显示切换中提示
+  ClawToast.show({
+    id: toastId,
+    title: isZh ? '正在切换模型...' : 'Switching model...',
+    status: 'loading',
+    closable: false,
+  });
+  
+  // 切换主模型和备选模型
+  const newDefaultPreset = {
+    primary: secondaryModel || null,
+    secondary: primaryModel || null,
+  };
+  
+  const newModelPresets = {
+    ...modelPresets,
+    default: newDefaultPreset,
+  };
+  
+  try {
+    const resp = await fetch('/protoclaw/agent_model_presets', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        agentId: 'programming-helper', 
+        modelPresets: newModelPresets 
+      }),
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      currentAgent.modelPresets = newModelPresets;
+      // 刷新UI
+      renderCurrentMainView();
+      
+      // 显示切换成功提示
+      ClawToast.update(toastId, {
+        status: 'success',
+        title: isZh ? '模型已切换' : 'Model switched',
+        description: secondaryModel,
+        autoDismiss: 3000,
+      });
+    } else {
+      throw new Error(result.error || 'Unknown error');
+    }
+  } catch (e) {
+    console.error('Failed to toggle model slot:', e);
+    ClawToast.update(toastId, {
+      status: 'error',
+      title: isZh ? '切换失败' : 'Switch failed',
+      description: e?.message || String(e),
+    });
   }
 };
 

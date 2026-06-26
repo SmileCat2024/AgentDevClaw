@@ -69,7 +69,7 @@ export function resolveModelPresetLLM(presetName) {
 /**
  * Read agent metadata.json and resolve the model preset for a given role.
  * @param {string} agentDir - Absolute path to the agent directory
- * @param {'default'|'exploration'|'sub'} role
+ * @param {'default'|'exploration'|'sub'|'system'} role
  * @returns {{ llm: import('agentdev').LLMClient, modelName: string } | null}
  */
 export function resolveAgentModelLLM(agentDir, role = 'default') {
@@ -79,7 +79,27 @@ export function resolveAgentModelLLM(agentDir, role = 'default') {
     const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
     const presets = meta?.modelPresets;
     if (!presets || typeof presets !== 'object') return null;
-    const presetName = presets[role] || presets['default'] || null;
+    
+    const roleConfig = presets[role];
+    let presetName = null;
+    
+    // 支持双槽位格式：{ primary: 'model1', secondary: 'model2' } 或旧格式字符串
+    if (typeof roleConfig === 'string') {
+      presetName = roleConfig;
+    } else if (roleConfig && typeof roleConfig === 'object') {
+      presetName = roleConfig.primary || null;
+    }
+    
+    // 回退到 default
+    if (!presetName && role !== 'default') {
+      const defaultConfig = presets['default'];
+      if (typeof defaultConfig === 'string') {
+        presetName = defaultConfig;
+      } else if (defaultConfig && typeof defaultConfig === 'object') {
+        presetName = defaultConfig.primary || null;
+      }
+    }
+    
     if (!presetName) return null;
     return resolveModelPresetLLM(presetName);
   } catch (error) {

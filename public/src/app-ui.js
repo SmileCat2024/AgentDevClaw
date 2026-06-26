@@ -704,34 +704,79 @@ function renderPhModelConfigOverlay(agent, presets) {
     { key: 'system', label: isZh ? '系统管理' : 'System', desc: isZh ? '系统自管理能力' : 'System self-management' },
   ];
   const rows = roles.map(function(role) {
-    const val = current[role.key] || '';
-    const opts = presets.map(function(p) {
-      const sel = (p.name === val) ? ' selected' : '';
-      return '<option value="' + escapeHtml(p.name) + '"' + sel + '>' + escapeHtml(p.name) + '</option>';
-    }).join('');
-    const currentPreset = presets.find(function(p) { return p.name === val; });
-    const infoHtml = currentPreset
-      ? '<span class="ph-mc-info">' + escapeHtml(currentPreset.model || '') + (currentPreset.contextLength ? ' · ' + Math.round(currentPreset.contextLength / 1000) + 'K ctx' : '') + '</span>'
-      : '<span class="ph-mc-info">' + (isZh ? '跟随全局默认' : 'Follows global default') + '</span>';
-    return '<div class="ph-mc-row">'
-      + '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>'
-      + '<div class="ph-mc-control">'
-      + '<select class="ph-mc-select" data-preset-role="' + role.key + '">'
-      + '<option value=""' + (!val ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
-      + opts
-      + '</select>'
-      + infoHtml
-      + '</div>'
-      + '</div>';
+    // 支持双槽位格式：{ primary: 'model1', secondary: 'model2' } 或旧格式字符串
+    const roleConfig = current[role.key] || {};
+    const primaryVal = typeof roleConfig === 'string' ? roleConfig : (roleConfig.primary || '');
+    const secondaryVal = typeof roleConfig === 'string' ? '' : (roleConfig.secondary || '');
+    const isDefaultRole = role.key === 'default'; // 只有主代理有双槽位
+    
+    const buildOptions = (selectedVal) => {
+      return presets.map(function(p) {
+        const sel = (p.name === selectedVal) ? ' selected' : '';
+        return '<option value="' + escapeHtml(p.name) + '"' + sel + '>' + escapeHtml(p.name) + '</option>';
+      }).join('');
+    };
+    
+    const buildInfoHtml = (val) => {
+      const currentPreset = presets.find(function(p) { return p.name === val; });
+      return currentPreset
+        ? '<span class="ph-mc-info">' + escapeHtml(currentPreset.model || '') + (currentPreset.contextLength ? ' · ' + Math.round(currentPreset.contextLength / 1000) + 'K ctx' : '') + '</span>'
+        : '<span class="ph-mc-info">' + (isZh ? '跟随全局默认' : 'Follows global default') + '</span>';
+    };
+    
+    // 主代理显示双槽位，其他角色只显示单槽位
+    if (isDefaultRole) {
+      const primarySelect = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="primary">'
+        + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
+        + buildOptions(primaryVal)
+        + '</select>';
+      
+      const secondarySelect = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="secondary">'
+        + '<option value=""' + (!secondaryVal ? ' selected' : '') + '>' + (isZh ? '(不设置)' : '(Not set)') + '</option>'
+        + buildOptions(secondaryVal)
+        + '</select>';
+      
+      return '<div class="ph-mc-row ph-mc-row-primary">'
+        + '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>'
+        + '<div class="ph-mc-control">'
+        + '<div class="ph-mc-slots">'
+        + '<div class="ph-mc-slot">'
+        + '<div class="ph-mc-slot-label">' + (isZh ? '主模型' : 'Primary') + '</div>'
+        + primarySelect
+        + buildInfoHtml(primaryVal)
+        + '</div>'
+        + '<div class="ph-mc-slot">'
+        + '<div class="ph-mc-slot-label">' + (isZh ? '备选模型' : 'Secondary') + '</div>'
+        + secondarySelect
+        + buildInfoHtml(secondaryVal)
+        + '</div>'
+        + '</div>'
+        + '</div>'
+        + '</div>';
+    } else {
+      // 其他角色只显示单槽位
+      const selectHtml = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="primary">'
+        + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
+        + buildOptions(primaryVal)
+        + '</select>';
+      
+      return '<div class="ph-mc-row">'
+        + '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>'
+        + '<div class="ph-mc-control">'
+        + selectHtml
+        + buildInfoHtml(primaryVal)
+        + '</div>'
+        + '</div>';
+    }
   }).join('');
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
-    '<div class="feature-detail-window" style="max-width:520px;">',
+    '<div class="feature-detail-window" style="max-width:680px;">',
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '模型配置' : 'Model Config') + '</div>',
-    '<div class="feature-detail-subtitle">' + (isZh ? '为不同角色指定模型预设' : 'Assign model presets to different roles') + '</div>',
+    '<div class="feature-detail-subtitle">' + (isZh ? '为主代理设置主模型和备选模型，其他角色设置单个模型' : 'Set primary and secondary models for main agent, single model for other roles') + '</div>',
     '</div>',
     '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">×</button>',
     '</div>',
@@ -2710,6 +2755,7 @@ async function openSettings() {
   window.ClawFW.settingsEditing = null;
   window.ClawFW.settingsData = null;
   window.ClawFW._speechModelConfig = null;
+  window.ClawFW._speechPresets = [];
   renderSettingsOverlay();
   try {
     const [modelResp, speechResp] = await Promise.all([
@@ -2722,6 +2768,7 @@ async function openSettings() {
     try {
       const speechData = await speechResp.json();
       window.ClawFW._speechModelConfig = speechData?.speechModel || null;
+      window.ClawFW._speechPresets = Array.isArray(speechData?.speechPresets) ? speechData.speechPresets : [];
     } catch (e) { /* speech config may not exist yet */ }
     renderSettingsOverlay();
   } catch (error) {
@@ -2733,7 +2780,8 @@ function closeSettings() {
   window.ClawFW.settingsOpen = false;
   window.ClawFW.settingsEditing = null;
   window.ClawFW.settingsData = null;
-  window.ClawFW._speechModelEditing = false;
+  window.ClawFW._speechEditing = null;
+  window.ClawFW._speechPresets = [];
   const host = document.getElementById('settings-overlay-host');
   if (host) host.innerHTML = '';
 }
@@ -2753,6 +2801,14 @@ function renderSettingsOverlay() {
   const isZh = currentLanguage === 'zh';
   const activeTab = window.ClawFW.settingsTab || 'text';
 
+  // ── Find active preset name ──
+  const activePreset = presets.find(function(p) {
+    return dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl;
+  });
+  const activePresetName = activePreset
+    ? (activePreset.name || activePreset.model || '')
+    : '';
+
   const presetCards = presets.length
     ? presets.map((p, idx) => {
         const isActive = dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl;
@@ -2761,7 +2817,7 @@ function renderSettingsOverlay() {
           '<div class="settings-preset-dot"></div>',
           '<div class="settings-preset-info">',
           '<div class="settings-preset-name">' + escapeHtml(p.name || p.model || ('Preset ' + (idx + 1))) + '</div>',
-          '<div class="settings-preset-detail">' + escapeHtml((p.provider || '—') + ' · ' + (p.model || '—') + (p.baseUrl ? ' · ' + p.baseUrl : '')) + '</div>',
+          '<div class="settings-preset-detail">' + escapeHtml((p.provider || '—') + ' · ' + (p.model || '—')) + '</div>',
           '</div>',
           '<div class="settings-preset-actions">',
           '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSettingsPreset(' + idx + ')">',
@@ -2796,35 +2852,37 @@ function renderSettingsOverlay() {
 
   if (tabText) {
     // Text model tab
+    const activeBanner = [
+      '<div class="settings-active-banner">',
+      '<div class="settings-active-icon">',
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>',
+      '</div>',
+      '<div class="settings-active-info">',
+      '<div class="settings-active-label">' + (isZh ? '当前激活' : 'ACTIVE') + '</div>',
+      '<div class="settings-active-name">' + escapeHtml(activePresetName || dm.model || (isZh ? '未选择预设' : 'No preset selected')) + '</div>',
+      '<div class="settings-active-detail">' + escapeHtml((dm.provider || '—') + (dm.model ? ' · ' + dm.model : '') + (dm.baseUrl ? ' · ' + dm.baseUrl : '')) + '</div>',
+      '</div>',
+      activePresetName ? '<div class="settings-active-badge">' + (isZh ? '预设' : 'Preset') + '</div>' : '',
+      '</div>',
+    ].join('');
+
     tabContent = [
+      /* Active Config Banner (always visible) */
+      '<div class="settings-section">',
+      activeBanner,
+      '</div>',
+
       /* Presets Section (hidden when editing) */
       editing === null ? [
         '<div class="settings-section">',
         '<div class="settings-section-title">' + (isZh ? '预设列表' : 'Presets') + '</div>',
-        '<div class="settings-presets-list">' + presetCards + '</div>',
-        '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;" onclick="addSettingsPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button>',
+        '<div class="settings-presets-grid">' + presetCards + '</div>',
+        '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:4px;" onclick="addSettingsPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button>',
         '</div>',
       ].join('') : '',
 
       /* Edit Form (inline) */
       editing !== null ? renderSettingsEditForm(editing, presets, isZh) : '',
-
-      /* Current Config Display (hidden when editing) */
-      !editing ? [
-        '<div class="settings-section">',
-        '<div class="settings-section-title">' + (isZh ? '当前激活配置' : 'Active Configuration') + '</div>',
-        '<div style="padding:14px;border-radius:12px;border:1px solid rgba(99,145,255,0.25);background:rgba(99,145,255,0.05);">',
-        '<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;">',
-        '<span style="color:var(--text-secondary);font-weight:500;">Provider</span><span style="color:var(--text-primary);">' + escapeHtml(dm.provider || '—') + '</span>',
-        '<span style="color:var(--text-secondary);font-weight:500;">Model</span><span style="color:var(--text-primary);">' + escapeHtml(dm.model || '—') + '</span>',
-        dm.baseUrl ? '<span style="color:var(--text-secondary);font-weight:500;">Base URL</span><span style="color:var(--text-primary);word-break:break-all;">' + escapeHtml(dm.baseUrl) + '</span>' : '',
-        '<span style="color:var(--text-secondary);font-weight:500;">API Key</span><span style="color:var(--text-primary);">' + (dm.apiKey ? dm.apiKey.slice(0, 8) + '••••' : '—') + '</span>',
-        dm.thinkingBudgetTokens != null ? '<span style="color:var(--text-secondary);font-weight:500;">Thinking Tokens</span><span style="color:var(--text-primary);">' + dm.thinkingBudgetTokens + '</span>' : '',
-        dm.maxTokens != null ? '<span style="color:var(--text-secondary);font-weight:500;">Max Output Tokens</span><span style="color:var(--text-primary);">' + dm.maxTokens + '</span>' : '',
-        '</div>',
-        '</div>',
-        '</div>',
-      ].join('') : '',
     ].join('');
   } else {
     // Speech model tab
@@ -2859,95 +2917,196 @@ window.switchSettingsTab = function(tab) {
 
 function renderSpeechModelSection(isZh) {
   const sc = window.ClawFW._speechModelConfig || {};
-  const isEditing = window.ClawFW._speechModelEditing === true;
-  if (!isEditing) {
-    const configured = !!(sc.baseUrl && sc.apiKey);
+  const presets = window.ClawFW._speechPresets || [];
+  const speechEditing = window.ClawFW._speechEditing; // null = not editing, 'new' = new preset, number = edit existing
+  const configured = !!(sc.baseUrl && sc.apiKey);
+
+  // Find active preset
+  const activePreset = presets.find(function(p) {
+    return p.baseUrl === sc.baseUrl && p.apiKey === sc.apiKey && p.model === sc.model;
+  });
+  const activePresetName = activePreset ? (activePreset.name || activePreset.model || '') : '';
+
+  // Active banner
+  const activeBanner = [
+    '<div class="settings-active-banner">',
+    '<div class="settings-active-icon">',
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
+    '</div>',
+    '<div class="settings-active-info">',
+    '<div class="settings-active-label">' + (isZh ? '当前激活' : 'ACTIVE') + '</div>',
+    configured
+      ? '<div class="settings-active-name">' + escapeHtml(activePresetName || sc.model || (isZh ? '自定义配置' : 'Custom Config')) + '</div>' +
+        '<div class="settings-active-detail">' + escapeHtml((sc.model || '—') + (sc.language ? ' · ' + sc.language : '') + (sc.baseUrl ? ' · ' + sc.baseUrl : '')) + '</div>'
+      : '<div class="settings-active-name">' + (isZh ? '未配置' : 'Not Configured') + '</div>' +
+        '<div class="settings-active-detail">' + (isZh ? '请添加并激活一个语音模型预设' : 'Add and activate a speech model preset') + '</div>',
+    '</div>',
+    activePresetName ? '<div class="settings-active-badge">' + (isZh ? '预设' : 'Preset') + '</div>' : '',
+    '</div>',
+  ].join('');
+
+  // If editing a preset, show edit form
+  if (speechEditing != null) {
+    const editPreset = speechEditing === 'new'
+      ? { name: '', baseUrl: '', apiKey: '', model: 'mimo-v2.5-asr', language: 'auto' }
+      : (presets[speechEditing] || {});
     return [
       '<div class="settings-section">',
-      '<div class="settings-section-title" style="display:flex;align-items:center;gap:8px;">',
-      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
-      (isZh ? '语音模型 (ASR)' : 'Speech Model (ASR)'),
+      activeBanner,
       '</div>',
-      configured ? [
-        '<div style="padding:14px;border-radius:12px;border:1px solid rgba(99,145,255,0.25);background:rgba(99,145,255,0.05);">',
-        '<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;">',
-        '<span style="color:var(--text-secondary);font-weight:500;">Base URL</span><span style="color:var(--text-primary);word-break:break-all;">' + escapeHtml(sc.baseUrl) + '</span>',
-        '<span style="color:var(--text-secondary);font-weight:500;">Model</span><span style="color:var(--text-primary);">' + escapeHtml(sc.model || '—') + '</span>',
-        '<span style="color:var(--text-secondary);font-weight:500;">API Key</span><span style="color:var(--text-primary);">' + (sc.apiKey ? sc.apiKey.slice(0, 8) + '••••' : '—') + '</span>',
-        '<span style="color:var(--text-secondary);font-weight:500;">' + (isZh ? '语言' : 'Language') + '</span><span style="color:var(--text-primary);">' + escapeHtml(sc.language || 'auto') + '</span>',
-        '</div>',
-        '</div>',
-      ].join('') : '<div style="padding:14px;text-align:center;color:var(--text-secondary);font-size:13px;">' + (isZh ? '尚未配置语音模型' : 'Speech model not configured') + '</div>',
-      '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:8px;" onclick="editSpeechModelConfig()">' + (configured ? (isZh ? '编辑配置' : 'Edit Config') : (isZh ? '配置语音模型' : 'Configure')) + '</button>',
-      '</div>',
+      renderSpeechPresetEditForm(editPreset, speechEditing, isZh),
     ].join('');
   }
-  // Editing form
+
+  // Preset list
+  const presetCards = presets.length
+    ? presets.map(function(p, idx) {
+        const isActive = p.baseUrl === sc.baseUrl && p.apiKey === sc.apiKey && p.model === sc.model;
+        return [
+          '<div class="settings-preset-card' + (isActive ? ' active' : '') + '" onclick="applySpeechPreset(' + idx + ')">',
+          '<div class="settings-preset-dot"></div>',
+          '<div class="settings-preset-info">',
+          '<div class="settings-preset-name">' + escapeHtml(p.name || p.model || ('Preset ' + (idx + 1))) + '</div>',
+          '<div class="settings-preset-detail">' + escapeHtml((p.model || '—') + (p.language ? ' · ' + p.language : '')) + '</div>',
+          '</div>',
+          '<div class="settings-preset-actions">',
+          '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSpeechPreset(' + idx + ')">',
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
+          '</button>',
+          '<button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" onclick="event.stopPropagation();deleteSpeechPreset(' + idx + ')">',
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
+          '</button>',
+          '</div>',
+          '</div>',
+        ].join('');
+      }).join('')
+    : '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:13px;">' + (isZh ? '暂无预设，点击下方按钮添加' : 'No presets yet. Click below to add one') + '</div>';
+
   return [
     '<div class="settings-section">',
-    '<div class="settings-section-title">' + (isZh ? '语音模型配置' : 'Speech Model Config') + '</div>',
+    activeBanner,
+    '</div>',
+    '<div class="settings-section">',
+    '<div class="settings-section-title">' + (isZh ? '语音预设列表' : 'Speech Presets') + '</div>',
+    '<div class="settings-presets-compact">' + presetCards + '</div>',
+    '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:4px;" onclick="addSpeechPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button>',
+    '</div>',
+  ].join('');
+}
+
+function renderSpeechPresetEditForm(preset, editIdx, isZh) {
+  const isNew = editIdx === 'new';
+  return [
+    '<div class="settings-section">',
+    '<div class="settings-section-title">' + (isNew ? (isZh ? '新建语音预设' : 'New Speech Preset') : (isZh ? '编辑语音预设' : 'Edit Speech Preset')) + '</div>',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? '名称' : 'Name') + '</label>',
+    '<input class="settings-input" id="speech-preset-name" type="text" value="' + escapeHtml(preset.name || '') + '" placeholder="' + (isZh ? '例如：小米 MiMo ASR' : 'e.g. MiMo ASR') + '">',
+    '</div>',
     '<div class="settings-field">',
     '<label>Base URL</label>',
-    '<input class="settings-input" id="speech-baseurl" type="text" value="' + escapeHtml(sc.baseUrl || '') + '" placeholder="https://api.xiaomimimo.com/v1">',
+    '<input class="settings-input" id="speech-preset-baseurl" type="text" value="' + escapeHtml(preset.baseUrl || '') + '" placeholder="https://api.xiaomimimo.com/v1">',
     '</div>',
     '<div class="settings-field">',
     '<label>API Key</label>',
-    '<input class="settings-input" id="speech-apikey" type="password" value="' + escapeHtml(sc.apiKey || '') + '" placeholder="sk-...">',
+    '<input class="settings-input" id="speech-preset-apikey" type="password" value="' + escapeHtml(preset.apiKey || '') + '" placeholder="sk-...">',
     '</div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>Model</label>',
-    '<input class="settings-input" id="speech-model" type="text" value="' + escapeHtml(sc.model || 'mimo-v2.5-asr') + '" placeholder="mimo-v2.5-asr">',
+    '<input class="settings-input" id="speech-preset-model" type="text" value="' + escapeHtml(preset.model || 'mimo-v2.5-asr') + '" placeholder="mimo-v2.5-asr">',
     '</div>',
     '<div class="settings-field">',
     '<label>' + (isZh ? '语言' : 'Language') + '</label>',
-    '<select class="settings-input" id="speech-language">',
-    '<option value="auto"' + ((sc.language || 'auto') === 'auto' ? ' selected' : '') + '>' + (isZh ? '自动检测' : 'Auto Detect') + '</option>',
-    '<option value="zh"' + (sc.language === 'zh' ? ' selected' : '') + '>' + (isZh ? '中文' : 'Chinese') + '</option>',
-    '<option value="en"' + (sc.language === 'en' ? ' selected' : '') + '>' + (isZh ? '英文' : 'English') + '</option>',
+    '<select class="settings-input" id="speech-preset-language">',
+    '<option value="auto"' + ((preset.language || 'auto') === 'auto' ? ' selected' : '') + '>' + (isZh ? '自动检测' : 'Auto Detect') + '</option>',
+    '<option value="zh"' + (preset.language === 'zh' ? ' selected' : '') + '>' + (isZh ? '中文' : 'Chinese') + '</option>',
+    '<option value="en"' + (preset.language === 'en' ? ' selected' : '') + '>' + (isZh ? '英文' : 'English') + '</option>',
     '</select>',
     '</div>',
     '</div>',
     '<div class="settings-actions">',
-    '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSpeechModelEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
-    '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSpeechModelConfig()">' + (isZh ? '保存' : 'Save') + '</button>',
+    '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSpeechPresetEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
+    '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSpeechPreset(' + editIdx + ')">' + (isZh ? '保存' : 'Save') + '</button>',
     '</div>',
     '</div>',
   ].join('');
 }
 
-window.editSpeechModelConfig = function() {
-  window.ClawFW._speechModelEditing = true;
+window.addSpeechPreset = function() {
+  window.ClawFW._speechEditing = 'new';
   renderSettingsOverlay();
 };
 
-window.cancelSpeechModelEdit = function() {
-  window.ClawFW._speechModelEditing = false;
+window.editSpeechPreset = function(idx) {
+  window.ClawFW._speechEditing = idx;
   renderSettingsOverlay();
 };
 
-window.saveSpeechModelConfig = async function() {
-  const el = (id) => document.getElementById(id);
-  const speechModel = {
-    baseUrl: (el('speech-baseurl')?.value || '').trim(),
-    apiKey: (el('speech-apikey')?.value || '').trim(),
-    model: (el('speech-model')?.value || '').trim() || 'mimo-v2.5-asr',
-    language: el('speech-language')?.value || 'auto',
+window.cancelSpeechPresetEdit = function() {
+  window.ClawFW._speechEditing = null;
+  renderSettingsOverlay();
+};
+
+window.deleteSpeechPreset = async function(idx) {
+  const presets = window.ClawFW._speechPresets || [];
+  presets.splice(idx, 1);
+  window.ClawFW._speechPresets = presets;
+  window.ClawFW._speechEditing = null;
+  await saveSpeechFullConfig();
+};
+
+window.applySpeechPreset = async function(idx) {
+  const presets = window.ClawFW._speechPresets || [];
+  const preset = presets[idx];
+  if (!preset) return;
+  // Set as active speech model
+  window.ClawFW._speechModelConfig = {
+    baseUrl: preset.baseUrl || '',
+    apiKey: preset.apiKey || '',
+    model: preset.model || 'mimo-v2.5-asr',
+    language: preset.language || 'auto',
   };
+  await saveSpeechFullConfig();
+};
+
+window.saveSpeechPreset = async function(editIdx) {
+  const el = (id) => document.getElementById(id);
+  const preset = {
+    name: (el('speech-preset-name')?.value || '').trim(),
+    baseUrl: (el('speech-preset-baseurl')?.value || '').trim(),
+    apiKey: (el('speech-preset-apikey')?.value || '').trim(),
+    model: (el('speech-preset-model')?.value || '').trim() || 'mimo-v2.5-asr',
+    language: el('speech-preset-language')?.value || 'auto',
+  };
+  const presets = window.ClawFW._speechPresets || [];
+  if (editIdx === 'new') {
+    presets.push(preset);
+  } else {
+    presets[editIdx] = preset;
+  }
+  window.ClawFW._speechPresets = presets;
+  window.ClawFW._speechEditing = null;
+  await saveSpeechFullConfig();
+};
+
+async function saveSpeechFullConfig() {
+  const speechModel = window.ClawFW._speechModelConfig || { baseUrl: '', apiKey: '', model: 'mimo-v2.5-asr', language: 'auto' };
+  const speechPresets = window.ClawFW._speechPresets || [];
   try {
     const resp = await fetch('/protoclaw/speech_model_config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speechModel }),
+      body: JSON.stringify({ speechModel, speechPresets }),
     });
     const result = await resp.json();
     window.ClawFW._speechModelConfig = result.speechModel;
-    window.ClawFW._speechModelEditing = false;
+    window.ClawFW._speechPresets = Array.isArray(result.speechPresets) ? result.speechPresets : [];
     renderSettingsOverlay();
   } catch (error) {
     console.error('Failed to save speech model config:', error);
   }
-};
+}
 
 function renderSettingsEditForm(editIdx, presets, isZh) {
   const preset = presets[editIdx] || {};

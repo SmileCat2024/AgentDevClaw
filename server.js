@@ -7981,6 +7981,21 @@ app.get('/protoclaw/group_chats/:chatId/sessions/:identityRef', async (req, res,
       for (const sid of chat.adminSessionHistory) chatSessionIds.add(sid);
     }
 
+    // 消息路由中出现的 session 也属于群内会话（覆盖 one-shot / 指定会话派发）
+    for (const msg of (chat.messages || [])) {
+      const r = msg.routing;
+      if (r && r.targetIdentityRef === identityRef && r.targetSessionId) {
+        chatSessionIds.add(r.targetSessionId);
+      }
+    }
+
+    // 已引入的外部会话也属于群内会话池
+    for (const imp of (chat.importedSessions || [])) {
+      if (imp.workspaceId === workspaceId && imp.sessionId) {
+        chatSessionIds.add(imp.sessionId);
+      }
+    }
+
     const inChatSessions = index.sessions
       .filter((s) => chatSessionIds.has(s.id))
       .map((s) => ({
@@ -8134,7 +8149,17 @@ app.post('/protoclaw/group_chats/:chatId/admin_restart', async (req, res, next) 
       return { oldSessionId: oldSid, newSessionId: result.sessionId };
     });
 
-    // 3. 返回最新状态
+    // 3. 启动新 runtime（必须在锁外执行，ensureAdminRuntime 会等待 READY）
+    if (newSessionId) {
+      log('GroupChat', `admin restart: starting runtime for new session ${newSessionId}`);
+      try {
+        await ensureAdminRuntime(chatId, newSessionId);
+      } catch (err) {
+        log('GroupChat', `admin restart: runtime start failed: ${err.message}`, 'warn');
+      }
+    }
+
+    // 4. 返回最新状态
     const status = await getAdminStatus(req.params.chatId);
     res.json({ ...status, restartedFromSession: oldSessionId });
   } catch (error) {
@@ -8166,6 +8191,11 @@ app.get('/protoclaw/group_chats/:chatId/search_sessions', async (req, res, next)
 
     for (const agent of agents) {
       if (agent.enabled === false || agent.launchMode === 'ui-only') continue;
+      // 只搜索当前有运行中 runtime 的 agent（排除 group chat 自身）
+      if (agent.id === 'work-group') continue;
+      const runtimes = listAgentRuntimes(agent.id);
+      const hasRunning = runtimes.some((rt) => rt?.process && rt.process.exitCode === null && !rt.stopped);
+      if (!hasRunning) continue;
       let index;
       try {
         index = await readSessionIndex(agent.id);
@@ -9977,22 +10007,40 @@ function normalizeSpeechModel(raw) {
   };
 }
 
-async function readSpeechModelConfig() {
-  const config = await readModelConfig();
-  return normalizeSpeechModel(config.speechModel);
+function normalizeSpeechPreset(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    name: cleanSessionText(raw.name) || '',
+    baseUrl: cleanSessionText(raw.baseUrl) || '',
+    apiKey: cleanSessionText(raw.apiKey) || '',
+    model: cleanSessionText(raw.model) || DEFAULT_SPEECH_MODEL.model,
+    language: cleanSessionText(raw.language) || DEFAULT_SPEECH_MODEL.language,
+  };
 }
 
-async function writeSpeechModelConfig(speechModel) {
+async function readSpeechModelConfig() {
+  const config = await readModelConfig();
+  const speechModel = normalizeSpeechModel(config.speechModel);
+  const speechPresets = Array.isArray(config.speechPresets)
+    ? config.speechPresets.map(normalizeSpeechPreset).filter(Boolean)
+    : [];
+  return { speechModel, speechPresets };
+}
+
+async function writeSpeechModelConfig(speechModel, speechPresets) {
   const config = await readModelConfig();
   config.speechModel = normalizeSpeechModel(speechModel);
+  if (Array.isArray(speechPresets)) {
+    config.speechPresets = speechPresets.map(normalizeSpeechPreset).filter(Boolean);
+  }
   await writeModelConfig(config);
-  return config.speechModel;
+  return { speechModel: config.speechModel, speechPresets: config.speechPresets || [] };
 }
 
 app.get('/protoclaw/speech_model_config', async (_req, res, next) => {
   try {
-    const speechModel = await readSpeechModelConfig();
-    res.json({ speechModel });
+    const { speechModel, speechPresets } = await readSpeechModelConfig();
+    res.json({ speechModel, speechPresets });
   } catch (error) {
     next(error);
   }
@@ -10000,12 +10048,12 @@ app.get('/protoclaw/speech_model_config', async (_req, res, next) => {
 
 app.put('/protoclaw/speech_model_config', express.json(), async (req, res, next) => {
   try {
-    const { speechModel } = req.body || {};
+    const { speechModel, speechPresets } = req.body || {};
     if (!speechModel || typeof speechModel !== 'object') {
       return res.status(400).json({ error: 'speechModel object is required' });
     }
-    const saved = await writeSpeechModelConfig(speechModel);
-    res.json({ speechModel: saved, savedAt: new Date().toISOString() });
+    const saved = await writeSpeechModelConfig(speechModel, speechPresets);
+    res.json({ speechModel: saved.speechModel, speechPresets: saved.speechPresets, savedAt: new Date().toISOString() });
   } catch (error) {
     next(error);
   }
@@ -10075,7 +10123,7 @@ function convertAudioToWav(inputBuffer) {
 
 app.post('/protoclaw/speech_to_text', express.raw({ type: '*/*', limit: '20mb' }), async (req, res, next) => {
   try {
-    const speechConfig = await readSpeechModelConfig();
+    const { speechModel: speechConfig } = await readSpeechModelConfig();
     if (!speechConfig.apiKey || !speechConfig.baseUrl) {
       return res.status(400).json({ error: 'Speech model not configured. Set baseUrl and apiKey in Speech settings.' });
     }

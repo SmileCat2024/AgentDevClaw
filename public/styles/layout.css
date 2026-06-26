@@ -1485,6 +1485,140 @@ body[data-theme="light"] .settings-btn-secondary:hover {
   background: #e4e4e4;
 }
 
+/* ── Settings Active Config Banner ──────────────────────────────────────── */
+
+.settings-active-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(99, 145, 255, 0.35);
+  background: linear-gradient(135deg, rgba(99, 145, 255, 0.1), rgba(99, 145, 255, 0.04));
+  position: relative;
+  overflow: hidden;
+}
+
+.settings-active-banner::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #6391ff;
+  border-radius: 3px 0 0 3px;
+}
+
+body[data-theme="light"] .settings-active-banner {
+  border-color: rgba(99, 145, 255, 0.3);
+  background: linear-gradient(135deg, rgba(99, 145, 255, 0.08), rgba(99, 145, 255, 0.03));
+}
+
+.settings-active-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(99, 145, 255, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #6391ff;
+}
+
+body[data-theme="light"] .settings-active-icon {
+  background: rgba(99, 145, 255, 0.1);
+}
+
+.settings-active-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-active-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6391ff;
+  margin-bottom: 2px;
+}
+
+.settings-active-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-active-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+
+.settings-active-badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(99, 145, 255, 0.15);
+  color: #6391ff;
+  flex-shrink: 0;
+}
+
+body[data-theme="light"] .settings-active-badge {
+  background: rgba(99, 145, 255, 0.1);
+}
+
+/* ── Settings Preset Grid ───────────────────────────────────────────────── */
+
+.settings-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 280px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.12) transparent;
+}
+
+body[data-theme="light"] .settings-presets-grid {
+  scrollbar-color: rgba(0,0,0,0.15) transparent;
+}
+
+.settings-presets-grid .settings-preset-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.settings-presets-grid .settings-preset-name {
+  font-size: 13px;
+}
+
+.settings-presets-grid .settings-preset-detail {
+  font-size: 11px;
+}
+
+/* ── Settings Preset List (compact single column for speech) ────────────── */
+
+.settings-presets-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  max-height: 240px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.12) transparent;
+}
+
+body[data-theme="light"] .settings-presets-compact {
+  scrollbar-color: rgba(0,0,0,0.15) transparent;
+}
+
 /* ── Settings Provider Group ─────────────────────────────────────────────── */
 
 .settings-group {
