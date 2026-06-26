@@ -5073,6 +5073,25 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
   }
 }
 
+function _messagesEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.role !== b.role) return false;
+  if ((a.content || '') !== (b.content || '')) return false;
+  if ((a.reasoning || '') !== (b.reasoning || '')) return false;
+  if ((a.toolCallId || '') !== (b.toolCallId || '')) return false;
+  var ac = a.toolCalls, bc = b.toolCalls;
+  var acLen = ac ? ac.length : 0;
+  var bcLen = bc ? bc.length : 0;
+  if (acLen !== bcLen) return false;
+  for (var j = 0; j < acLen; j++) {
+    if (ac[j].id !== bc[j].id) return false;
+    if (ac[j].name !== bc[j].name) return false;
+    if (JSON.stringify(ac[j].arguments) !== JSON.stringify(bc[j].arguments)) return false;
+  }
+  return true;
+}
+
 function findFirstChangedMessageIndex(nextMessages, previousMessages) {
   if (!Array.isArray(nextMessages) || !Array.isArray(previousMessages)) {
     return 0;
@@ -5080,7 +5099,7 @@ function findFirstChangedMessageIndex(nextMessages, previousMessages) {
 
   const length = Math.min(nextMessages.length, previousMessages.length);
   for (let i = 0; i < length; i++) {
-    if (JSON.stringify(nextMessages[i]) !== JSON.stringify(previousMessages[i])) {
+    if (!_messagesEqual(nextMessages[i], previousMessages[i])) {
       return i;
     }
   }
@@ -7507,6 +7526,7 @@ function restoreUserCollapseState(root) {
 }
 
 function render(messages) {
+  if (typeof clearTruncatedHighlightData === 'function') clearTruncatedHighlightData();
   if (messages.length === 0) {
     _lastRenderedChatSig = '';
     cancelChatScrollSettlement();
@@ -7688,8 +7708,6 @@ function render(messages) {
     container.innerHTML = html;
     enhanceMathInElement(container);
   }, 220);
-
-  syncCollapseStates(container);
 
   updateRollbackActionVisibility();
   applyConversationProcessState(container);

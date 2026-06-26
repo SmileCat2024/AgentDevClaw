@@ -4084,6 +4084,19 @@ body[data-theme="light"] .notification-metric {
   flex: 1;
   white-space: pre;
 }
+.code-read-truncated {
+  padding: 6px 16px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  border-top: 1px solid var(--border-color);
+  text-align: center;
+  user-select: none;
+}
+.code-read-truncated:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
 
 /* ========== Diff2Html 深色模式适配 ========== */
 .d2h-wrapper {

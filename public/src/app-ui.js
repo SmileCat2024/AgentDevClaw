@@ -8932,15 +8932,60 @@ const RENDER_TEMPLATES = {
 // 模板缓存
 const templateCache = new Map();
 
+// DOM node budget: each line generates 3 nodes (div + 2 spans). For 500-line tool
+// results that's 1500 nodes, most invisible (collapsed to 160px). Cap at 200 lines
+// and offer "click to expand" to keep the DOM lean while preserving data access.
+const MAX_HIGHLIGHT_LINES = 200;
+const _fullHighlightData = new Map();
+let _highlightIdCounter = 0;
+
+function clearTruncatedHighlightData() {
+  _fullHighlightData.clear();
+}
+
 function renderJsonHighlight(data) {
   const displayData = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
   const lines = displayData.split('\n');
-  return '<div class="code-read-container">' + lines.map((line, i) => {
+  const isTruncated = lines.length > MAX_HIGHLIGHT_LINES;
+  const effectiveLines = isTruncated ? lines.slice(0, MAX_HIGHLIGHT_LINES) : lines;
+
+  let html = '<div class="code-read-container">' + effectiveLines.map((line, i) => {
     let highlighted;
     try { highlighted = hljs.highlight(line, { language: 'json' }).value; }
     catch (e) { highlighted = escapeHtml(line); }
     return '<div class="code-read-line"><span class="code-read-line-num">' + (i + 1) + '</span><span class="code-read-content">' + highlighted + '</span></div>';
-  }).join('') + '</div>';
+  }).join('');
+
+  if (isTruncated) {
+    const id = 'trunc-' + (++_highlightIdCounter);
+    _fullHighlightData.set(id, data);
+    const remaining = lines.length - MAX_HIGHLIGHT_LINES;
+    html += '<div class="code-read-truncated" data-expand-id="' + id + '" onclick="expandTruncatedResult(this)">'
+      + '&hellip; ' + remaining + ' more lines (click to expand)</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function expandTruncatedResult(el) {
+  const id = el.getAttribute('data-expand-id');
+  const data = _fullHighlightData.get(id);
+  if (!data) return;
+
+  const container = el.closest('.code-read-container');
+  if (!container) return;
+
+  const displayData = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+  const lines = displayData.split('\n');
+  container.innerHTML = lines.map((line, i) => {
+    let highlighted;
+    try { highlighted = hljs.highlight(line, { language: 'json' }).value; }
+    catch (e) { highlighted = escapeHtml(line); }
+    return '<div class="code-read-line"><span class="code-read-line-num">' + (i + 1) + '</span><span class="code-read-content">' + highlighted + '</span></div>';
+  }).join('');
+
+  _fullHighlightData.delete(id);
 }
 
 function getTemplateFallback(templateName) {

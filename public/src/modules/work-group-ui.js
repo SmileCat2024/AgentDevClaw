@@ -1544,8 +1544,10 @@
       return [
         `<div class="wg-mention-item" data-wg-mention="${esc(id.identityRef)}">`,
         `  <span class="wg-mention-dot${isAdmin ? ' admin' : ''}"></span>`,
-        `  <span class="wg-mention-name">${esc(id.displayName)}</span>`,
-        hasArrow ? '  <svg class="wg-mention-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>' : '',
+        `  <span class="wg-mention-row">`,
+        `    <span class="wg-mention-name">${esc(id.displayName)}</span>`,
+        hasArrow ? '    <svg class="wg-mention-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>' : '',
+        '  </span>',
         '</div>',
       ].join('');
     }).join('');

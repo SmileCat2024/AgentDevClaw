@@ -1452,16 +1452,16 @@
   padding: 7px 14px;
   cursor: pointer;
   transition: background 0.1s;
-  flex-wrap: nowrap;
-}
-.wg-mention-item > * {
-  flex-shrink: 0;
-}
-.wg-mention-item > .wg-mention-name {
-  flex-shrink: 1;
-  min-width: 0;
 }
 .wg-mention-item:hover { background: var(--hover-bg); }
+
+.wg-mention-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
 
 .wg-mention-dot {
   width: 6px;
