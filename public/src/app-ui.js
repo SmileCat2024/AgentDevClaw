@@ -2051,10 +2051,18 @@ function renderWorkspaceStatusGrid(agent, block) {
           label: t('workspace_live_config'),
           value: imDraft.workspaceConfig?.selectedChannel === 'weixin'
             ? (imDraft.weixinConfig?.configured ? t('im_workspace_bound') : t('im_workspace_not_bound'))
-            : (imDraft.qqConfig?.appId && imDraft.qqConfig?.clientSecret ? t('qqbot_config_ready') : t('qqbot_config_incomplete')),
+            : imDraft.workspaceConfig?.selectedChannel === 'feishu'
+              ? (imDraft.feishuConfig?.configured ? t('im_workspace_bound') : t('im_workspace_not_bound'))
+              : imDraft.workspaceConfig?.selectedChannel === 'wecom'
+                ? (imDraft.wecomConfig?.configured ? t('im_workspace_bound') : t('im_workspace_not_bound'))
+                : (imDraft.qqConfig?.appId && imDraft.qqConfig?.clientSecret ? t('qqbot_config_ready') : t('qqbot_config_incomplete')),
           note: imDraft.workspaceConfig?.selectedChannel === 'weixin'
             ? (imDraft.workspaceConfig?.channels?.weixin?.label || t('im_workspace_weixin_section'))
-            : (imDraft.workspaceConfig?.channels?.qq?.label || t('im_workspace_qq_section')),
+            : imDraft.workspaceConfig?.selectedChannel === 'feishu'
+              ? (imDraft.workspaceConfig?.channels?.feishu?.label || '飞书')
+              : imDraft.workspaceConfig?.selectedChannel === 'wecom'
+                ? (imDraft.workspaceConfig?.channels?.wecom?.label || '企业微信')
+                : (imDraft.workspaceConfig?.channels?.qq?.label || t('im_workspace_qq_section')),
         }
       : null,
   ].filter(Boolean).map((card) => (

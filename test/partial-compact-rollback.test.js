@@ -14,7 +14,6 @@ class EchoLLM {
         toolCalls: [{
           name: 'record_compaction_context',
           arguments: {
-            session_title: 'partial compact test',
             summary: 'summary of second and third',
             important_files: [],
             important_skills: [],

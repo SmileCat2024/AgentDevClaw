@@ -656,7 +656,7 @@ let callArbiter = null;
 
 const IM_REPLY_POLICY = {
   /** IM sources that already handle their own reply — skip callfinish delivery */
-  IM_SOURCES: new Set(['qq', 'weixin']),
+  IM_SOURCES: new Set(['qq', 'weixin', 'feishu', 'wecom']),
   /** Maximum character length for IM result delivery before truncation */
   MAX_IM_RESULT_LENGTH: 1500,
   /** Maximum length for error messages sent to IM */
@@ -832,6 +832,50 @@ async function mountCarrierFeature(carrier) {
       }
       _mountedCarrierFeature = 'weixin';
       console.log('[IM-Line] ✓ WeixinBot dynamically mounted + gateway started');
+    } else if (carrier === 'feishu') {
+      const { FeishuBot } = await import('@agentdev/feishu-bot');
+      const feature = new FeishuBot({
+        configPath: process.env.PROTOCLAW_FEISHU_CONFIG_PATH || '',
+      });
+      await agent.mountFeature(feature);
+      await feature.startGateway(agent);
+      // Route IM messages through CallArbiter for serialization
+      if (callArbiter) {
+        feature.agentRef = {
+          onCall: async (text) => {
+            const entry = callArbiter.enqueue({ source: 'im-line-feishu', text });
+            const finished = await callArbiter.waitForCompletion(entry.id);
+            if (finished.status === 'failed') {
+              throw new Error(finished.error || 'unknown error');
+            }
+            return finished.result || '处理完成';
+          },
+        };
+      }
+      _mountedCarrierFeature = 'feishu';
+      console.log('[IM-Line] ✓ FeishuBot dynamically mounted + gateway started');
+    } else if (carrier === 'wecom') {
+      const { WecomBot } = await import('@agentdev/wecom-bot');
+      const feature = new WecomBot({
+        configPath: process.env.PROTOCLAW_WECOM_CONFIG_PATH || '',
+      });
+      await agent.mountFeature(feature);
+      await feature.startGateway(agent);
+      // Route IM messages through CallArbiter for serialization
+      if (callArbiter) {
+        feature.agentRef = {
+          onCall: async (text) => {
+            const entry = callArbiter.enqueue({ source: 'im-line-wecom', text });
+            const finished = await callArbiter.waitForCompletion(entry.id);
+            if (finished.status === 'failed') {
+              throw new Error(finished.error || 'unknown error');
+            }
+            return finished.result || '处理完成';
+          },
+        };
+      }
+      _mountedCarrierFeature = 'wecom';
+      console.log('[IM-Line] ✓ WecomBot dynamically mounted + gateway started');
     }
   } catch (err) {
     console.error(`[IM-Line] Failed to mount carrier "${carrier}":`, err);
@@ -870,7 +914,7 @@ process.on('message', (msg) => {
     if (!_mountedCarrierFeature) return;
     const carrier = _mountedCarrierFeature;
     try {
-      const featureName = carrier === 'qq' ? 'qqbot' : 'weixin-bot';
+      const featureName = carrier === 'qq' ? 'qqbot' : carrier === 'feishu' ? 'feishu-bot' : carrier === 'wecom' ? 'wecom-bot' : 'weixin-bot';
       if (typeof agent.removeFeature === 'function') {
         agent.removeFeature(featureName);
       } else {
@@ -1038,7 +1082,6 @@ async function generateInProcessSummary(extraInstructions = '') {
 
     let importantFiles = [];
     let importantSkills = [];
-    let sessionTitle = '';
     let summaryText = '';
 
     if (compactCall && compactCall.arguments) {
@@ -1046,7 +1089,6 @@ async function generateInProcessSummary(extraInstructions = '') {
         ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
         : compactCall.arguments;
       summaryText = typeof args.summary === 'string' ? args.summary.trim() : '';
-      sessionTitle = typeof args.session_title === 'string' ? args.session_title.trim() : '';
       importantFiles = Array.isArray(args.important_files)
         ? args.important_files.filter(f => typeof f === 'string')
         : [];
@@ -1068,7 +1110,6 @@ async function generateInProcessSummary(extraInstructions = '') {
       summaryText,
       importantFiles,
       importantSkills,
-      sessionTitle,
       fileRanges,
     };
   } finally {
@@ -1099,7 +1140,6 @@ async function triggerSummaryCompaction(extraInstructions = '') {
       rawResponse: summaryResult.rawResponse,
       importantFiles: summaryResult.importantFiles || [],
       importantSkills: summaryResult.importantSkills || [],
-      sessionTitle: summaryResult.sessionTitle || '',
       fileRanges: summaryResult.fileRanges || {},
       policy: {
         strategy: 'summarized-nine-section',
@@ -1144,7 +1184,6 @@ async function triggerSummaryCompactionResume(extraInstructions = '') {
       rawResponse: summaryResult.rawResponse,
       importantFiles: summaryResult.importantFiles || [],
       importantSkills: summaryResult.importantSkills || [],
-      sessionTitle: summaryResult.sessionTitle || '',
       fileRanges: summaryResult.fileRanges || {},
       policy: {
         strategy: 'summarized-nine-section',
@@ -1238,7 +1277,6 @@ async function generatePartialInProcessSummary(allMessages, pivotMsgIndex, feedb
 
     let importantFiles = [];
     let importantSkills = [];
-    let sessionTitle = '';
     let summaryText = '';
 
     if (compactCall && compactCall.arguments) {
@@ -1246,7 +1284,6 @@ async function generatePartialInProcessSummary(allMessages, pivotMsgIndex, feedb
         ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
         : compactCall.arguments;
       summaryText = typeof args.summary === 'string' ? args.summary.trim() : '';
-      sessionTitle = typeof args.session_title === 'string' ? args.session_title.trim() : '';
       importantFiles = Array.isArray(args.important_files)
         ? args.important_files.filter(f => typeof f === 'string')
         : [];
@@ -1268,7 +1305,6 @@ async function generatePartialInProcessSummary(allMessages, pivotMsgIndex, feedb
       summaryText,
       importantFiles,
       importantSkills,
-      sessionTitle,
       fileRanges,
     };
   } finally {
@@ -1696,7 +1732,11 @@ async function main() {
     try {
       if (typeof agent.startSelectedIMGateway === 'function') {
         const channel = await agent.startSelectedIMGateway();
-        console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
+        if (channel === 'none') {
+          console.log('[ProtoClaw Runtime] • IM Gateway 未启动（未选择渠道），仅调试模式运行');
+        } else {
+          console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
+        }
       } else if (typeof agent.startQQBotGateway === 'function') {
         await agent.startQQBotGateway();
         console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');

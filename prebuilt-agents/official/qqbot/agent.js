@@ -8,6 +8,8 @@
 import { BasicAgent, TemplateComposer, TodoFeature } from 'agentdev';
 import { QQBotFeature } from '@agentdev/qqbot-feature';
 import { WeixinBot, WeixinApiClient } from '@agentdev/weixin-bot';
+import { FeishuBot } from '@agentdev/feishu-bot';
+import { WecomBot } from '@agentdev/wecom-bot';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
 import { fileURLToPath } from 'url';
@@ -78,9 +80,8 @@ function readIMWorkspaceConfig(configPath) {
   try {
     const raw = JSON.parse(readFileSync(configPath, 'utf8'));
     const channels = raw && typeof raw.channels === 'object' && raw.channels ? raw.channels : {};
-    const selectedChannel = typeof raw.selectedChannel === 'string' && channels[raw.selectedChannel]
-      ? raw.selectedChannel
-      : 'qq';
+    const rawChannel = typeof raw.selectedChannel === 'string' ? raw.selectedChannel.trim() : '';
+    const selectedChannel = rawChannel && channels[rawChannel] ? rawChannel : '';
     return {
       selectedChannel,
       receptionistSessionId: typeof raw.receptionistSessionId === 'string' ? raw.receptionistSessionId.trim() : '',
@@ -88,7 +89,7 @@ function readIMWorkspaceConfig(configPath) {
     };
   } catch {
     return {
-      selectedChannel: 'qq',
+      selectedChannel: '',
       receptionistSessionId: '',
       channels: {},
     };
@@ -147,7 +148,7 @@ class IMOperatorFeature {
               return '空闲';
             };
             const summary = lines.map(l => {
-              const carrierLabel = l.carrier === 'qq' ? 'QQ' : l.carrier === 'weixin' ? '微信' : '未配置';
+              const carrierLabel = l.carrier === 'qq' ? 'QQ' : l.carrier === 'weixin' ? '微信' : l.carrier === 'feishu' ? '飞书' : l.carrier === 'wecom' ? '企业微信' : '未配置';
               const bound = l.boundSession;
               if (!bound) {
                 return `- **${l.name}** [${carrierLabel}]: 空闲（未连接）`;
@@ -395,6 +396,12 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       });
       this.use(this.weixinBotFeature);
 
+      this.feishuBotFeature = new FeishuBot({});
+      this.use(this.feishuBotFeature);
+
+      this.wecomBotFeature = new WecomBot({});
+      this.use(this.wecomBotFeature);
+
       this.use(new TodoFeature({
         reminderTemplate: TODO_REMINDER_PROMPT_PATH,
         reminderThresholdWithTasks: config.reminderThresholdWithTasks,
@@ -533,11 +540,61 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     this._activeIMChannel = 'weixin';
   }
 
+  async startFeishuBotGateway() {
+    const feishuBot = this.feishuBotFeature;
+    await feishuBot.startGateway(this);
+    this._activeIMChannel = 'feishu';
+    if (this._callArbiter && feishuBot) {
+      feishuBot.agentRef = {
+        onCall: async (text) => {
+          const entry = this._callArbiter.enqueue({ source: 'feishu', text });
+          const finished = await this._callArbiter.waitForCompletion(entry.id);
+          if (finished.status === 'failed') {
+            throw new Error(finished.error || 'unknown error');
+          }
+          return finished.result || '处理完成';
+        },
+      };
+    }
+  }
+
+  async startWecomBotGateway() {
+    const wecomBot = this.wecomBotFeature;
+    await wecomBot.startGateway(this);
+    this._activeIMChannel = 'wecom';
+    if (this._callArbiter && wecomBot) {
+      wecomBot.agentRef = {
+        onCall: async (text) => {
+          const entry = this._callArbiter.enqueue({ source: 'wecom', text });
+          const finished = await this._callArbiter.waitForCompletion(entry.id);
+          if (finished.status === 'failed') {
+            throw new Error(finished.error || 'unknown error');
+          }
+          return finished.result || '处理完成';
+        },
+      };
+    }
+  }
+
   async startSelectedIMGateway() {
     const workspaceConfig = readIMWorkspaceConfig(this.imWorkspaceConfigPath);
+    if (!workspaceConfig.selectedChannel) {
+      console.log('[PortalAgent] 未选择 IM 渠道，跳过 Gateway 启动（仅调试模式运行）');
+      return 'none';
+    }
     if (workspaceConfig.selectedChannel === 'weixin') {
       await this.startWeixinBotGateway();
       return 'weixin';
+    }
+
+    if (workspaceConfig.selectedChannel === 'feishu') {
+      await this.startFeishuBotGateway();
+      return 'feishu';
+    }
+
+    if (workspaceConfig.selectedChannel === 'wecom') {
+      await this.startWecomBotGateway();
+      return 'wecom';
     }
 
     await this.startQQBotGateway();
@@ -574,6 +631,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
 
     const qqUploadTool = this.qqbotFeature.getTools().find(t => t.name === 'upload_attachment');
     const wxUploadTool = this.weixinBotFeature.getTools().find(t => t.name === 'upload_attachment');
+    const wcUploadTool = this.wecomBotFeature?.getTools().find(t => t.name === 'upload_attachment');
     this.tools.register({
       name: 'upload_attachment',
       description:
@@ -596,6 +654,9 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       execute: async (args) => {
         if (this._activeIMChannel === 'weixin' && wxUploadTool) {
           return wxUploadTool.execute(args);
+        }
+        if (this._activeIMChannel === 'wecom' && wcUploadTool) {
+          return wcUploadTool.execute(args);
         }
         if (qqUploadTool) {
           return qqUploadTool.execute(args);

@@ -278,11 +278,6 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
       ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
       : (compactCall.arguments || {});
 
-    const sessionTitle = typeof args.session_title === 'string' ? args.session_title.trim() : '';
-    if (!sessionTitle) {
-      throw new Error(`session_title is required but was empty — retrying (args keys: ${Object.keys(args).join(',')})`);
-    }
-
     const importantFiles = Array.isArray(args.important_files)
       ? args.important_files.filter(f => typeof f === 'string')
       : [];
@@ -296,7 +291,7 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
       summaryText = stripCompactAnalysis(rawResponse);
     }
 
-    logPhase(`tool output: title="${sessionTitle.slice(0, 60)}" files=${importantFiles.length} skills=${importantSkills.length} summary=${summaryText.length}chars`);
+    logPhase(`tool output: files=${importantFiles.length} skills=${importantSkills.length} summary=${summaryText.length}chars`);
 
     const usedTools = toolCalls.some(tc => tc?.name !== 'record_compaction_context');
 
@@ -306,7 +301,6 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
       usedTools,
       importantFiles,
       importantSkills,
-      sessionTitle,
       fileRanges,
     };
   } finally {
@@ -364,7 +358,6 @@ async function main() {
         rawResponse: result.rawResponse,
         importantFiles: result.importantFiles || [],
         importantSkills: result.importantSkills || [],
-        sessionTitle: result.sessionTitle || '',
         fileRanges: result.fileRanges || {},
         sessionTimestamp,
         gitMeta,

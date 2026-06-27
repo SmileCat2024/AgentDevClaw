@@ -1929,6 +1929,54 @@ textarea.wg-settings-input { resize: vertical; min-height: 64px; }
   color: var(--text-muted);
 }
 
+.wg-settings-member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.wg-settings-member-row:last-of-type { border-bottom: none; }
+
+.wg-settings-member-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wg-member-remove-btn {
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 7px;
+  padding: 5px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.wg-member-remove-btn:hover {
+  color: var(--danger-color, #e5484d);
+  border-color: var(--danger-color, #e5484d);
+}
+
+.wg-add-member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.wg-add-member-row .wg-settings-input {
+  margin-bottom: 0;
+}
+
+.wg-settings-empty-note {
+  padding: 10px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 /* ═══════════════════════════════════════════════
    空状态
    ═══════════════════════════════════════════════ */
@@ -1976,6 +2024,32 @@ body[data-theme="light"] .wg-modal-overlay {
   font-weight: 600;
   margin-bottom: 16px;
   color: var(--text-primary);
+}
+
+.wg-modal-fixed-members {
+  display: flex;
+  gap: 8px;
+  margin: -4px 0 18px;
+}
+
+.wg-modal-fixed-member {
+  flex: 1;
+  border: 1px solid var(--input-card-border);
+  background: var(--input-card-bg);
+  border-radius: 8px;
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.wg-modal-fixed-member span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.wg-modal-fixed-member small {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .wg-modal-input {
@@ -2155,6 +2229,37 @@ body[data-theme="light"] .wg-modal-overlay {
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid var(--input-card-border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wg-resource-bridge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--input-card-bg);
+  border: 1px solid var(--input-card-border);
+  border-radius: 8px;
+}
+
+.wg-resource-bridge-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.wg-resource-bridge-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 3px;
+}
+
+.wg-resource-bridge-path {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

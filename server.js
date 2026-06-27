@@ -48,6 +48,8 @@ const PREBUILT_SESSIONS_ROOT = path.join(USER_DATA_ROOT, 'prebuilt-sessions');
 const PREBUILT_WORKSPACES_ROOT = path.join(USER_DATA_ROOT, 'workspaces');
 const PROJECT_QQBOT_CONFIG_PATH = path.join(__dirname, '.agentdev', 'qqbot.config.json');
 const PROJECT_WEIXIN_CONFIG_PATH = path.join(__dirname, '.agentdev', 'weixin-bot.config.json');
+const PROJECT_FEISHU_CONFIG_PATH = path.join(__dirname, '.agentdev', 'feishu-bot.config.json');
+const PROJECT_WECOM_CONFIG_PATH = path.join(__dirname, '.agentdev', 'wecom-bot.config.json');
 const PROJECT_IM_WORKSPACE_CONFIG_PATH = path.join(__dirname, '.agentdev', 'im-workspace.config.json');
 const FEATURE_REPOSITORY_ROOT = path.join(__dirname, 'resources', 'features');
 const USER_FEATURE_REPOSITORY_ROOT = path.join(USER_DATA_ROOT, 'user-features');
@@ -508,6 +510,14 @@ async function fireDispatchNow(schedule) {
       let sessionId = target.sessionId || s.targetSessionId;
       try {
         const agent = await requirePrebuiltAgentForRuntime(agentId);
+        // Skip qqbot auto-start when no IM channel is selected
+        if (sanitizeSessionFragment(agentId) === 'qqbot') {
+          const wsConfig = await readProjectIMWorkspaceConfig();
+          if (!wsConfig.selectedChannel) {
+            console.log(`[Dispatch] start_agent skipped for ${agentId}: 未选择 IM 渠道`);
+            continue;
+          }
+        }
         // Resolve __latest__ to the actual latest session from the session index
         if (!sessionId || sessionId === '__latest__') {
           const idx = await readSessionIndex(agentId);
@@ -1080,6 +1090,20 @@ function normalizeWeixinConfig(raw = {}) {
   };
 }
 
+function normalizeFeishuConfig(raw = {}) {
+  return {
+    appId: typeof raw.appId === 'string' ? raw.appId.trim() : '',
+    appSecret: typeof raw.appSecret === 'string' ? raw.appSecret.trim() : '',
+  };
+}
+
+function normalizeWecomConfig(raw = {}) {
+  return {
+    botId: typeof raw.botId === 'string' ? raw.botId.trim() : '',
+    secret: typeof raw.secret === 'string' ? raw.secret.trim() : '',
+  };
+}
+
 function normalizeIMChannelConfig(raw = {}, defaults = {}) {
   return {
     label: typeof raw.label === 'string' && raw.label.trim()
@@ -1133,9 +1157,22 @@ function normalizeIMWorkspaceConfig(raw = {}) {
     });
   }
 
-  const selectedChannel = typeof raw.selectedChannel === 'string' && raw.selectedChannel.trim()
-    ? raw.selectedChannel.trim()
-    : 'qq';
+  if (!channels.feishu) {
+    channels.feishu = normalizeIMChannelConfig({}, {
+      label: '飞书',
+      note: '',
+    });
+  }
+
+  if (!channels.wecom) {
+    channels.wecom = normalizeIMChannelConfig({}, {
+      label: '企业微信',
+      note: '',
+    });
+  }
+
+  const rawChannel = typeof raw.selectedChannel === 'string' ? raw.selectedChannel.trim() : '';
+  const selectedChannel = rawChannel && channels[rawChannel] ? rawChannel : '';
   const receptionistSessionId = typeof raw.receptionistSessionId === 'string'
     ? sanitizeSessionFragment(raw.receptionistSessionId)
     : '';
@@ -1146,17 +1183,17 @@ function normalizeIMWorkspaceConfig(raw = {}) {
     : [normalizeIMLine({}, 0), normalizeIMLine({}, 1)];
 
   return {
-    selectedChannel: channels[selectedChannel] ? selectedChannel : 'qq',
+    selectedChannel,
     receptionistSessionId,
     channels,
     lines,
   };
 }
 
-const IM_CHANNEL_DISPLAY_LABELS = { qq: 'QQ', weixin: '微信' };
+const IM_CHANNEL_DISPLAY_LABELS = { qq: 'QQ', weixin: '微信', feishu: '飞书', wecom: '企业微信' };
 
 function getPortalAgentDisplayName(channelId) {
-  const label = IM_CHANNEL_DISPLAY_LABELS[channelId] || channelId || 'QQ';
+  const label = IM_CHANNEL_DISPLAY_LABELS[channelId] || channelId || '未接渠道';
   return `门户代理（${label}）`;
 }
 
@@ -1183,6 +1220,38 @@ async function readProjectWeixinConfig() {
   } catch {
     return normalizeWeixinConfig({});
   }
+}
+
+async function readProjectFeishuConfig() {
+  try {
+    const data = await readJson(PROJECT_FEISHU_CONFIG_PATH);
+    return normalizeFeishuConfig(data);
+  } catch {
+    return normalizeFeishuConfig({});
+  }
+}
+
+async function writeProjectFeishuConfig(rawConfig) {
+  const config = normalizeFeishuConfig(rawConfig);
+  await ensureDir(path.dirname(PROJECT_FEISHU_CONFIG_PATH));
+  await fs.writeFile(PROJECT_FEISHU_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  return config;
+}
+
+async function readProjectWecomConfig() {
+  try {
+    const data = await readJson(PROJECT_WECOM_CONFIG_PATH);
+    return normalizeWecomConfig(data);
+  } catch {
+    return normalizeWecomConfig({});
+  }
+}
+
+async function writeProjectWecomConfig(rawConfig) {
+  const config = normalizeWecomConfig(rawConfig);
+  await ensureDir(path.dirname(PROJECT_WECOM_CONFIG_PATH));
+  await fs.writeFile(PROJECT_WECOM_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  return config;
 }
 
 async function readProjectIMWorkspaceConfig() {
@@ -1278,9 +1347,11 @@ function serializeWeixinBindingState(state = null) {
 
 async function buildIMWorkspaceBundle(agentId = 'qqbot') {
   let workspaceConfig = await readProjectIMWorkspaceConfig();
-  const [qqConfig, weixinConfig, index, phIndex] = await Promise.all([
+  const [qqConfig, weixinConfig, feishuConfig, wecomConfig, index, phIndex] = await Promise.all([
     readProjectQQBotConfig(),
     readProjectWeixinConfig(),
+    readProjectFeishuConfig(),
+    readProjectWecomConfig(),
     readSessionIndex(agentId).catch(() => ({ sessions: [], activeSessionId: null })),
     readSessionIndex('programming-helper').catch(() => ({ sessions: [], activeSessionId: null })),
   ]);
@@ -1324,6 +1395,18 @@ async function buildIMWorkspaceBundle(agentId = 'qqbot') {
       baseUrl: weixinConfig.baseUrl || '',
       loginTime: weixinConfig.loginTime || null,
       sourcePath: PROJECT_WEIXIN_CONFIG_PATH,
+    },
+    feishuConfig: {
+      configured: !!feishuConfig.appId && !!feishuConfig.appSecret,
+      appId: feishuConfig.appId || '',
+      appSecret: feishuConfig.appSecret || '',
+      sourcePath: PROJECT_FEISHU_CONFIG_PATH,
+    },
+    wecomConfig: {
+      configured: !!wecomConfig.botId && !!wecomConfig.secret,
+      botId: wecomConfig.botId || '',
+      secret: wecomConfig.secret || '',
+      sourcePath: PROJECT_WECOM_CONFIG_PATH,
     },
     binding,
     sessions,
@@ -6449,7 +6532,7 @@ async function listGroupChats() {
         workDir: chat.workDir || null,
         createdAt: chat.createdAt,
         updatedAt: chat.updatedAt,
-        memberCount: Array.isArray(chat.members) ? chat.members.length : 0,
+        memberCount: normalizeGroupChatMembers(chat.members).length,
         messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0,
         lastMessage: Array.isArray(chat.messages) && chat.messages.length > 0
           ? {
@@ -6469,7 +6552,9 @@ async function readGroupChat(chatId) {
   const filePath = getGroupChatPath(chatId);
   try {
     const raw = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(raw);
+    const chat = JSON.parse(raw);
+    chat.members = normalizeGroupChatMembers(chat.members);
+    return chat;
   } catch {
     return null;
   }
@@ -8010,6 +8095,26 @@ app.get('/protoclaw/group_chats', async (_req, res, next) => {
   }
 });
 
+function normalizeGroupChatMembers(members) {
+  const result = [];
+  const seen = new Set();
+  const add = (member) => {
+    const ref = member?.identityRef;
+    if (!ref || seen.has(ref)) return;
+    seen.add(ref);
+    result.push(member);
+  };
+  add({ identityRef: 'user', role: 'human' });
+  add({ identityRef: 'work-group:admin', role: 'admin' });
+  if (Array.isArray(members)) {
+    for (const member of members) {
+      if (!member || member.identityRef === 'user' || member.identityRef === 'work-group:admin') continue;
+      add({ identityRef: member.identityRef, role: member.role || 'agent' });
+    }
+  }
+  return result;
+}
+
 app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
   try {
     const { name, workDir, members } = req.body || {};
@@ -8022,9 +8127,7 @@ app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
       workDir: workDir || null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      members: Array.isArray(members) ? members : [
-        { identityRef: 'user', role: 'human' },
-      ],
+      members: normalizeGroupChatMembers(members),
       messages: [],
       sessions: {},
       initiativeMode: 'assist',
@@ -8057,7 +8160,7 @@ app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next)
     const { name, workDir, members, initiativeMode, autonomyMode, adminMemory } = req.body || {};
     if (name !== undefined) chat.name = name;
     if (workDir !== undefined) chat.workDir = workDir || null;
-    if (Array.isArray(members)) chat.members = members;
+    if (Array.isArray(members)) chat.members = normalizeGroupChatMembers(members);
     if (typeof initiativeMode === 'string') chat.initiativeMode = initiativeMode;
     if (typeof autonomyMode === 'string') chat.autonomyMode = autonomyMode;
     if (adminMemory && typeof adminMemory === 'object') {
@@ -9147,6 +9250,16 @@ app.post('/protoclaw/start_agent', express.json(), async (req, res, next) => {
       res.json({ status: buildStatus(agent.id), agent: connected });
       return;
     }
+    // Block qqbot from starting when no IM channel is selected
+    if (sanitizeSessionFragment(agent.id) === 'qqbot') {
+      const wsConfig = await readProjectIMWorkspaceConfig();
+      if (!wsConfig.selectedChannel) {
+        const connectedAgents = await getConnectedAgents();
+        const connected = connectedAgents.find((item) => item.id === agent.id) || null;
+        res.json({ status: buildStatus(agent.id), agent: connected, warning: '未选择 IM 渠道，门户代理不会启动' });
+        return;
+      }
+    }
     const selectedSessionId = req.body.sessionId || null;
     const status = await startManagedAgent(agent, selectedSessionId);
     const connected = await waitForManagedRuntimeReady(agent.id, 10000, selectedSessionId);
@@ -9678,9 +9791,11 @@ app.put('/protoclaw/im_workspace_bundle', express.json(), async (req, res, next)
     const prevConfig = await readProjectIMWorkspaceConfig();
     const workspaceConfig = await writeProjectIMWorkspaceConfig(req.body?.workspaceConfig || {});
     const qqConfig = await writeProjectQQBotConfig(req.body?.qqConfig || {});
+    const feishuConfig = await writeProjectFeishuConfig(req.body?.feishuConfig || {});
+    const wecomConfig = await writeProjectWecomConfig(req.body?.wecomConfig || {});
 
-    const newChannel = workspaceConfig.selectedChannel || 'qq';
-    const channelChanged = newChannel !== (prevConfig.selectedChannel || 'qq');
+    const newChannel = workspaceConfig.selectedChannel || '';
+    const channelChanged = newChannel !== (prevConfig.selectedChannel || '');
     let portalRestarted = false;
 
     // Enforce three-way exclusivity: if portal's new channel conflicts with a line, clear that line
@@ -9706,13 +9821,19 @@ app.put('/protoclaw/im_workspace_bundle', express.json(), async (req, res, next)
         for (const rt of running) {
           await waitForProcessExit(rt.process);
         }
-        try {
-          const agent = await requireAgentLight('qqbot');
-          await startManagedAgent(agent);
-          portalRestarted = true;
-          console.log(`[ProtoClaw IM] 渠道切换: ${prevConfig.selectedChannel || 'qq'} → ${newChannel}，门户代理已重启`);
-        } catch (restartErr) {
-          console.error('[ProtoClaw IM] 门户代理重启失败:', restartErr);
+        if (newChannel) {
+          // Channel switched to a different non-empty channel: restart
+          try {
+            const agent = await requireAgentLight('qqbot');
+            await startManagedAgent(agent);
+            portalRestarted = true;
+            console.log(`[ProtoClaw IM] 渠道切换: ${prevConfig.selectedChannel || '(空)'} → ${newChannel}，门户代理已重启`);
+          } catch (restartErr) {
+            console.error('[ProtoClaw IM] 门户代理重启失败:', restartErr);
+          }
+        } else {
+          // Channel set to empty: stop without restart
+          console.log('[ProtoClaw IM] 渠道已置空，门户代理已停止');
         }
       }
     }
@@ -9720,8 +9841,6 @@ app.put('/protoclaw/im_workspace_bundle', express.json(), async (req, res, next)
     const bundle = await buildIMWorkspaceBundle('qqbot');
     res.json({
       ...bundle,
-      workspaceConfig,
-      qqConfig,
       savedAt: new Date().toISOString(),
       portalRestarted,
     });
@@ -9881,7 +10000,7 @@ app.post('/protoclaw/im_line_transfer', express.json(), async (req, res, next) =
         }
       }
       if (config.selectedChannel === carrier) {
-        const available = ['qq', 'weixin'].find(c =>
+        const available = ['qq', 'weixin', 'feishu', 'wecom'].find(c =>
           c !== carrier && !(config.lines || []).some(l => l.carrier === c)
         );
         config.selectedChannel = available || '';
@@ -11997,6 +12116,17 @@ app.post('/protoclaw/stop_agent', express.json(), async (req, res, next) => {
 app.post('/protoclaw/restart_agent', express.json(), async (req, res, next) => {
   try {
     const agent = await requireAgentLight(req.body.agentId);
+    // Block qqbot from restarting when no IM channel is selected
+    if (sanitizeSessionFragment(agent.id) === 'qqbot') {
+      const wsConfig = await readProjectIMWorkspaceConfig();
+      if (!wsConfig.selectedChannel) {
+        await stopManagedAgent(agent.id, req.body.sessionId || null);
+        const connectedAgents = await getConnectedAgents();
+        const connected = connectedAgents.find((item) => item.id === agent.id) || null;
+        res.json({ status: buildStatus(agent.id), agent: connected, warning: '未选择 IM 渠道，门户代理不会启动' });
+        return;
+      }
+    }
     const selectedSessionId = req.body.sessionId || null;
     await stopManagedAgent(agent.id, selectedSessionId);
     const status = await startManagedAgent(agent, selectedSessionId);

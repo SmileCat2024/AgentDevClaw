@@ -164,10 +164,6 @@ export class ContextCompactionControlFeature implements AgentFeature {
         parameters: {
           type: 'object',
           properties: {
-            session_title: {
-              type: 'string',
-              description: 'A one-sentence summary of what this conversation was mainly about (e.g. "Debug Flow node tool permission logic"). Must not be empty.',
-            },
             summary: {
               type: 'string',
               description: 'The complete summary text. For exploration sessions: three-section format (goals, findings, important files). For regular sessions: nine-section format. Must not be empty.',
@@ -183,7 +179,7 @@ export class ContextCompactionControlFeature implements AgentFeature {
               description: 'Skill names that were used and are important for continuing the task.',
             },
           },
-          required: ['session_title'],
+          required: ['summary'],
         },
         execute: async () => ({ ok: true }),
       }, this.source),

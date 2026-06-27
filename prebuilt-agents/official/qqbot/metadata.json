@@ -7,7 +7,7 @@
   "icon": "qq",
   "category": "chatbot",
   "enabled": true,
-  "features": ["qqbot", "weixin-bot", "todo", "websearch", "shell", "im-operator", "mcp", "skill"],
+  "features": ["qqbot", "weixin-bot", "feishu-bot", "wecom-bot", "todo", "websearch", "shell", "im-operator", "mcp", "skill"],
   "identities": [
     {
       "id": "operator",

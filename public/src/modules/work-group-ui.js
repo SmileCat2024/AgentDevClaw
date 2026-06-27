@@ -47,6 +47,14 @@
   let openDropdown = null;
   let groupMdContent = '';      // GROUP.md 编辑器内容
   let groupMdLoading = false;   // GROUP.md 是否正在加载
+  let groupMdChatId = null;     // GROUP.md 内容所属群聊，防止切群串数据
+  let adminModelState = {
+    loading: false,
+    loaded: false,
+    presets: [],
+    current: '',
+    error: null,
+  };
   let _annotations = {};        // messageId → { text, timestamp }
   let _adminStatus = null;      // 管理员会话状态（admin_status API 返回）
   let _adminRestarting = false; // 管理员正在创建新会话中（UI 状态锁）
@@ -732,19 +740,122 @@
 
   // ── 右侧：设置面板 ───────────────────────────────────────────
 
-  function renderSettingsPanel(chat) {
-    const initiative = chat.initiativeMode || 'assist';
-    const autonomy = chat.autonomyMode || 'auto';
+  function renderAdminModelOptions() {
+    if (adminModelState.loading && !adminModelState.loaded) {
+      return '<option value="">加载中</option>';
+    }
+    if (adminModelState.error) {
+      return '<option value="">加载失败</option>';
+    }
+    const current = adminModelState.current || '';
+    const presetOptions = adminModelState.presets.map((p) => {
+      const name = typeof p === 'string' ? p : (p.name || '');
+      if (!name) return '';
+      const sel = name === current ? ' selected' : '';
+      return `<option value="${esc(name)}"${sel}>${esc(name)}</option>`;
+    }).filter(Boolean).join('');
+    return `<option value=""${current ? '' : ' selected'}>使用全局默认</option>` + presetOptions;
+  }
 
-    const memberRows = (chat.members || []).map((m) => {
-      const name = m.identityRef === 'user' ? '我' : getIdentityName(m.identityRef);
+  function isManageableGroupIdentity(identityRef) {
+    return identityRef && identityRef !== 'user' && identityRef !== 'work-group:admin';
+  }
+
+  function normalizeGroupMembers(members) {
+    const result = [];
+    const seen = new Set();
+    const add = (member) => {
+      const ref = member?.identityRef;
+      if (!ref || seen.has(ref)) return;
+      seen.add(ref);
+      result.push(member);
+    };
+    add({ identityRef: 'user', role: 'human' });
+    add({ identityRef: 'work-group:admin', role: 'admin' });
+    (members || []).forEach((m) => {
+      if (m.identityRef === 'user' || m.identityRef === 'work-group:admin') return;
+      add({ identityRef: m.identityRef, role: m.role || 'agent' });
+    });
+    return result;
+  }
+
+  function getChatMemberRefs(chat = activeChat) {
+    return new Set(normalizeGroupMembers(chat?.members || []).map((m) => m.identityRef));
+  }
+
+  function getAvailableMemberIdentities(chat = activeChat) {
+    const memberRefs = getChatMemberRefs(chat);
+    return identities.filter((id) =>
+      isManageableGroupIdentity(id.identityRef) && !memberRefs.has(id.identityRef)
+    );
+  }
+
+  function renderGroupMemberRows(chat) {
+    const members = normalizeGroupMembers(chat.members || []);
+    if (!members.length) {
+      return '<div class="wg-settings-empty-note">当前群聊还没有成员。</div>';
+    }
+    return members.map((m) => {
+      const identity = identities.find((id) => id.identityRef === m.identityRef);
+      const name = m.identityRef === 'user' ? '我' : (identity?.displayName || getIdentityName(m.identityRef));
+      const desc = m.identityRef === 'user'
+        ? '群主 / 人类协作者'
+        : m.identityRef === 'work-group:admin'
+          ? '固定管理员 / 群聊协调层'
+          : (identity?.description || m.role || 'Agent 成员');
+      const canRemove = isManageableGroupIdentity(m.identityRef);
+      const encodedRef = encodeURIComponent(m.identityRef);
       return [
-        '<div class="wg-settings-row">',
-        `  <span class="wg-settings-row-name">${esc(name)}</span>`,
-        `  <span class="wg-settings-row-role">${esc(m.role)}</span>`,
+        '<div class="wg-settings-member-row">',
+        '  <div class="wg-settings-member-main">',
+        `    <span class="wg-settings-row-name">${esc(name)}</span>`,
+        `    <span class="wg-settings-row-role">${esc(desc)}</span>`,
+        '  </div>',
+        canRemove
+          ? `  <button class="wg-member-remove-btn" onclick="window._wgRemoveMember(decodeURIComponent('${encodedRef}'))">移除</button>`
+          : '',
         '</div>',
       ].join('');
     }).join('');
+  }
+
+  function renderAddMemberControl(chat) {
+    const available = getAvailableMemberIdentities(chat);
+    if (!available.length) {
+      return '<div class="wg-settings-empty-note">没有可添加的 Agent 身份。</div>';
+    }
+    const options = available.map((id) =>
+      `<option value="${esc(id.identityRef)}">${esc(id.displayName)} — ${esc(id.description || id.identityRef)}</option>`
+    ).join('');
+    return [
+      '<div class="wg-add-member-row">',
+      `  <select class="wg-settings-input" data-wg-role="add-member-select">${options}</select>`,
+      '  <button class="wg-modal-btn" onclick="window._wgAddSelectedMember()">添加</button>',
+      '</div>',
+    ].join('');
+  }
+
+  function renderFilesBridgeSection(chat) {
+    const hasWorkDir = !!chat.workDir;
+    return [
+      '  <div class="wg-settings-section">',
+      '    <div class="wg-settings-section-title">群资料</div>',
+      '    <div class="wg-resource-bridge">',
+      '      <div class="wg-resource-bridge-main">',
+      `        <div class="wg-resource-bridge-title">${hasWorkDir ? '文件面板已连接' : '未配置工作目录'}</div>`,
+      `        <code class="wg-resource-bridge-path">${esc(hasWorkDir ? '.agentdev/resources' : '先选择工作目录')}</code>`,
+      '      </div>',
+      `      <button class="wg-modal-btn" onclick="${hasWorkDir ? 'window._wgOpenFilesPanel()' : 'window._wgChangeWorkDir()'}">${hasWorkDir ? '打开文件' : '选择目录'}</button>`,
+      '    </div>',
+      '  </div>',
+    ].join('');
+  }
+
+  function renderSettingsPanel(chat) {
+    const initiative = chat.initiativeMode || 'assist';
+    const autonomy = chat.autonomyMode || 'auto';
+    const mdValue = groupMdLoading || groupMdChatId !== chat.id ? '加载中…' : groupMdContent;
+    const memberRows = renderGroupMemberRows(chat);
 
     const initiativeOptions = INITIATIVE_MODES.map((m) =>
       `<option value="${m.value}"${m.value === initiative ? ' selected' : ''}>${esc(m.label)} — ${esc(m.desc)}</option>`
@@ -766,10 +877,11 @@
       `      </div>`,
       `    </div>`,
       '  </div>',
+      renderFilesBridgeSection(chat),
       `  <div class="wg-settings-section">`,
       `    <div class="wg-settings-section-title">群聊背景文档 (GROUP.md)</div>`,
       `    <div class="wg-settings-field">`,
-      `      <textarea class="wg-settings-input wg-md-editor" data-wg-role="group-md-editor" oninput="window._wgMdAutoSave()" placeholder="在此编写群聊的背景、目标、约定和关键资源…">${esc(groupMdLoading ? '加载中…' : groupMdContent)}</textarea>`,
+      `      <textarea class="wg-settings-input wg-md-editor" data-wg-role="group-md-editor" oninput="window._wgMdAutoSave()" placeholder="在此编写群聊的背景、目标、约定和关键资源…">${esc(mdValue)}</textarea>`,
       `      <div class="wg-md-save-status" data-wg-role="md-save-status">自动保存</div>`,
       `    </div>`,
       '  </div>',
@@ -797,12 +909,13 @@
       '  <div class="wg-settings-section">',
       '    <div class="wg-settings-section-title">管理员模型</div>',
       '    <div class="wg-settings-field"><label>模型预设</label>',
-      `      <select class="wg-settings-input" onchange="window._wgSettingsChange('admin-model', this.value)" data-wg-role="admin-model-select"><option value="">加载中</option></select>`,
+      `      <select class="wg-settings-input" onchange="window._wgSettingsChange('admin-model', this.value)" data-wg-role="admin-model-select">${renderAdminModelOptions()}</select>`,
       '    </div>',
       '  </div>',
       '  <div class="wg-settings-section">',
       '    <div class="wg-settings-section-title">群成员</div>',
       memberRows,
+      renderAddMemberControl(chat),
       '  </div>',
       '  <div class="wg-settings-section wg-settings-danger">',
       `    <button class="wg-btn-danger" onclick="window._wgDissolve()">解散此群聊</button>`,
@@ -1305,6 +1418,7 @@
   async function selectChat(chatId) {
     // 保存当前群聊的输入草稿
     if (activeChatId) _saveCurrentDraft(activeChatId);
+    await _flushGroupMdAutoSave();
 
     activeChatId = chatId;
     viewMode = 'chat';
@@ -1340,8 +1454,12 @@
       loadFilesPanelResources();
     }
     // 刷新 Settings 面板（如果正打开着）
-    if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'settings' && typeof window._wgSettingsRefresh === 'function') {
-      window._wgSettingsRefresh();
+    if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'settings') {
+      if (typeof window._wgSettingsInit === 'function') {
+        window._wgSettingsInit();
+      } else if (typeof window._wgSettingsRefresh === 'function') {
+        window._wgSettingsRefresh();
+      }
     }
   }
 
@@ -1734,7 +1852,7 @@
     // 解析 @mentions（带 session 选择）
     const mentions = [];
     const chatSel = _chatSessionSelection[activeChatId] || {};
-    for (const id of identities) {
+    for (const id of getMentionableIdentities()) {
       const atName = `@${id.displayName}`;
       if (text.includes(atName)) {
         const sel = chatSel[id.identityRef] || { mode: 'default' };
@@ -1801,7 +1919,7 @@
     const picker = document.querySelector('[data-wg-role="mention-picker"]');
     if (!picker) return;
 
-    const mentionable = identities.filter((id) => id.identityRef !== 'user');
+    const mentionable = getMentionableIdentities();
     if (mentionable.length === 0) return;
 
     const items = mentionable.map((id) => {
@@ -1933,7 +2051,12 @@
     const editor = document.querySelector('.wg-input-editor');
     if (!editor) return [];
     const text = editor.textContent || '';
-    return identities.filter((id) => text.includes(`@${id.displayName}`));
+    return getMentionableIdentities().filter((id) => text.includes(`@${id.displayName}`));
+  }
+
+  function getMentionableIdentities() {
+    const memberRefs = getChatMemberRefs(activeChat);
+    return identities.filter((id) => memberRefs.has(id.identityRef) && id.identityRef !== 'user');
   }
 
   function getSessionSelection(chatId, identityRef) {
@@ -2192,28 +2315,39 @@
   }
 
   async function loadGroupMd() {
-    if (!activeChatId) return;
+    const chatId = activeChatId;
+    if (!chatId) return;
     groupMdLoading = true;
+    groupMdChatId = chatId;
+    groupMdContent = '';
     if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
     try {
-      const data = await apiGet(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/group_md`);
+      const data = await apiGet(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/group_md`);
+      if (activeChatId !== chatId) return;
       groupMdContent = data.content || '';
     } catch (err) {
+      if (activeChatId !== chatId) return;
       console.error('[WorkGroup] load GROUP.md failed:', err);
       groupMdContent = '';
+    } finally {
+      if (activeChatId === chatId) {
+        groupMdLoading = false;
+        if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
+      }
     }
-    groupMdLoading = false;
-    if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
   }
 
-  async function saveGroupMd() {
-    if (!activeChatId) return;
+  async function saveGroupMd(chatId = activeChatId) {
+    if (!chatId) return;
     const editor = document.querySelector('[data-wg-role="group-md-editor"]');
     if (!editor) return;
     const content = editor.value;
     try {
-      await apiPut(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}/group_md`, { content });
-      groupMdContent = content;
+      await apiPut(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/group_md`, { content });
+      if (activeChatId === chatId) {
+        groupMdContent = content;
+        groupMdChatId = chatId;
+      }
       _setMdSaveStatus('已保存');
     } catch (err) {
       console.error('[WorkGroup] save GROUP.md failed:', err);
@@ -2222,13 +2356,22 @@
   }
 
   let _mdAutoSaveTimer = null;
+  let _mdAutoSaveChatId = null;
   function _wgMdAutoSave() {
     _setMdSaveStatus('保存中…');
     if (_mdAutoSaveTimer) clearTimeout(_mdAutoSaveTimer);
+    _mdAutoSaveChatId = activeChatId;
     _mdAutoSaveTimer = setTimeout(() => {
       _mdAutoSaveTimer = null;
-      saveGroupMd();
+      saveGroupMd(_mdAutoSaveChatId);
     }, 800);
+  }
+
+  async function _flushGroupMdAutoSave() {
+    if (!_mdAutoSaveTimer) return;
+    clearTimeout(_mdAutoSaveTimer);
+    _mdAutoSaveTimer = null;
+    await saveGroupMd(_mdAutoSaveChatId || activeChatId);
   }
 
   function _setMdSaveStatus(text) {
@@ -2259,8 +2402,8 @@
   }
 
   async function loadAdminModelOptions() {
-    const select = document.querySelector('[data-wg-role="admin-model-select"]');
-    if (!select) return;
+    adminModelState = { ...adminModelState, loading: true, error: null };
+    if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
     try {
       const [configRes, presetRes] = await Promise.all([
         apiGet('/protoclaw/model_config'),
@@ -2268,27 +2411,94 @@
       ]);
       const presets = Array.isArray(configRes.presets) ? configRes.presets : [];
       const current = presetRes.modelPresets?.default || '';
-      select.innerHTML = '<option value="">使用全局默认</option>' +
-        presets.map((p) => {
-          const name = typeof p === 'string' ? p : (p.name || '');
-          const sel = name === current ? ' selected' : '';
-          return `<option value="${esc(name)}"${sel}>${esc(name)}</option>`;
-        }).join('');
-    } catch {
-      select.innerHTML = '<option value="">加载失败</option>';
+      adminModelState = {
+        loading: false,
+        loaded: true,
+        presets,
+        current,
+        error: null,
+      };
+    } catch (err) {
+      console.error('[WorkGroup] load admin model options failed:', err);
+      adminModelState = {
+        ...adminModelState,
+        loading: false,
+        loaded: true,
+        error: err,
+      };
     }
+    if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
   }
 
   async function saveAdminModel(presetName) {
     try {
-      await fetch('/protoclaw/agent_model_presets', {
+      const res = await fetch('/protoclaw/agent_model_presets', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentId: 'work-group', modelPresets: { default: presetName || null } }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      adminModelState = { ...adminModelState, current: presetName || '', error: null };
     } catch (err) {
       console.error('[WorkGroup] save admin model failed:', err);
+      adminModelState = { ...adminModelState, error: err };
     }
+  }
+
+  function openFilesPanel() {
+    if (typeof activeFeaturePanel !== 'undefined') {
+      activeFeaturePanel = 'files';
+      if (typeof renderFeaturePanel === 'function') renderFeaturePanel();
+    }
+    if (typeof loadFilesPanelResources === 'function') {
+      loadFilesPanelResources();
+    }
+  }
+
+  async function updateGroupMembers(nextMembers) {
+    if (!activeChatId) return;
+    activeChat = await apiPut(`/protoclaw/group_chats/${encodeURIComponent(activeChatId)}`, {
+      members: normalizeGroupMembers(nextMembers),
+    });
+    await loadChatSummaries();
+    refreshChatList();
+    refreshAdminBarOnly();
+    if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
+  }
+
+  async function addGroupMember(identityRef) {
+    if (!activeChat || !isManageableGroupIdentity(identityRef)) return;
+    const members = normalizeGroupMembers(activeChat.members || []);
+    if (members.some((m) => m.identityRef === identityRef)) return;
+    try {
+      await updateGroupMembers([
+        ...members,
+        { identityRef, role: 'agent' },
+      ]);
+    } catch (err) {
+      console.error('[WorkGroup] add member failed:', err);
+    }
+  }
+
+  async function removeGroupMember(identityRef) {
+    if (!activeChat || !isManageableGroupIdentity(identityRef)) return;
+    const name = getIdentityName(identityRef);
+    const confirmed = confirm(`将「${name}」移出此群聊？\n\n已有消息和会话记录会保留，但它不会再出现在本群成员和 @ 选择器中。`);
+    if (!confirmed) return;
+    const members = normalizeGroupMembers(activeChat.members || []).filter((m) => m.identityRef !== identityRef);
+    try {
+      await updateGroupMembers(members);
+      delete _sessionDataCache[identityRef];
+      if (_chatSessionSelection[activeChatId]) delete _chatSessionSelection[activeChatId][identityRef];
+    } catch (err) {
+      console.error('[WorkGroup] remove member failed:', err);
+    }
+  }
+
+  function addSelectedMember() {
+    const select = document.querySelector('[data-wg-role="add-member-select"]');
+    const ref = select?.value;
+    if (ref) addGroupMember(ref);
   }
 
   async function handleDissolveChat() {
@@ -2318,13 +2528,16 @@
   async function handleNewChat() {
     if (identities.length === 0) await loadIdentities();
 
-    const identityCheckboxes = identities.map((id) => {
+    const memberCandidates = identities.filter((id) => isManageableGroupIdentity(id.identityRef));
+    const identityCheckboxes = memberCandidates.length
+      ? memberCandidates.map((id) => {
       return `<label class="wg-modal-identity">
       <input type="checkbox" value="${esc(id.identityRef)}" />
       <span class="wg-modal-identity-name">${esc(id.displayName)}</span>
       <span class="wg-modal-identity-desc">${esc(id.description || '')}</span>
     </label>`;
-    }).join('');
+      }).join('')
+      : '<div class="wg-settings-empty-note">当前没有可拉入群聊的 Agent 身份。</div>';
 
     const modal = document.createElement('div');
     modal.className = 'wg-modal-overlay';
@@ -2332,6 +2545,10 @@
     <div class="wg-modal">
       <div class="wg-modal-title">新建群聊</div>
       <input type="text" class="wg-modal-input" data-wg-role="new-chat-name" placeholder="群聊名称" />
+      <div class="wg-modal-fixed-members">
+        <div class="wg-modal-fixed-member"><span>我</span><small>群主</small></div>
+        <div class="wg-modal-fixed-member"><span>管理员</span><small>固定入群</small></div>
+      </div>
       <div class="wg-modal-section-title">工作目录（知识库根目录）</div>
       <div class="wg-modal-dir-row">
         <input type="text" class="wg-modal-input wg-modal-dir-display" data-wg-role="new-chat-workdir" placeholder="点击右侧按钮选择项目目录" readonly />
@@ -2366,10 +2583,9 @@
       const selected = Array.from(modal.querySelectorAll('input[type="checkbox"]:checked'))
         .map((cb) => cb.value);
 
-      const members = [
-        { identityRef: 'user', role: 'human' },
+      const members = normalizeGroupMembers([
         ...selected.map((ref) => ({ identityRef: ref, role: 'agent' })),
-      ];
+      ]);
 
       document.body.removeChild(modal);
 
@@ -3364,6 +3580,9 @@
 
   window._wgMdAutoSave = _wgMdAutoSave;
   window._wgChangeWorkDir = changeWorkDir;
+  window._wgOpenFilesPanel = openFilesPanel;
+  window._wgAddSelectedMember = addSelectedMember;
+  window._wgRemoveMember = removeGroupMember;
   window._wgDissolve = handleDissolveChat;
 
   // 给外部 poll 用的轻量刷新：只更新左侧群聊列表，避免整个 workspace DOM 重建

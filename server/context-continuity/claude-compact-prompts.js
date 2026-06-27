@@ -1,14 +1,13 @@
 const TOOL_CALL_PREAMBLE = `你必须调用 record_compaction_context 工具，将所有结果作为参数传入。
 
 参数说明：
-- session_title（必填，不能为空）：对对话主要内容的一句话概括，例如 "调试 Flow 节点工具权限逻辑"
 - summary：完整摘要文本，按下方摘要结构输出
 - important_files：恢复工作所需的文件路径列表
 - important_skills：实际使用invoke_skill工具激活的技能名称列表
 
 不要调用其他工具。`;
 
-const TOOL_CALL_TRAILER = `现在调用 record_compaction_context，传入 session_title（必填）、summary、文件路径和技能名称。
+const TOOL_CALL_TRAILER = `现在调用 record_compaction_context，传入 summary、文件路径和技能名称。
 只包含恢复工作真正需要的文件和技能。`;
 
 const BASE_SUMMARY_PROMPT = `你的任务是为当前对话创建一份详细摘要，重点关注用户的明确请求和你之前采取的行动。
@@ -70,7 +69,6 @@ export function scanFilesAndSkills(rawMessages) {
 const EXPLORATION_SUMMARY_PREAMBLE = `你必须调用 record_compaction_context 工具，将所有结果作为参数传入。
 
 参数说明：
-- session_title（必填，不能为空）：对对话主要内容的一句话概括，例如 "探索 Flow 运行时 Hook 驱动机制"
 - summary：完整三段式探索摘要文本
 - important_files：探索中发现的重要文件路径列表
 - important_skills：探索中使用invoke_skill工具激活的技能名称列表

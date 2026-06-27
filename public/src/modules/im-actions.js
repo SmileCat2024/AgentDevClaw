@@ -10,6 +10,7 @@
  *   loadAgents
  * 导出全局函数 (window.*):
  *   updateQQBotConfigDraft, updateIMWorkspaceField, updateIMQQConfigDraft,
+ *   updateIMFeishuConfigDraft,
  *   scheduleIMWorkspaceAutoSave, reloadIMWorkspaceConfig, saveIMWorkspaceConfig,
  *   createReceptionistSession, handleLineCarrierChange, handleLineSessionChange,
  *   launchReceptionistSession, startWeixinBinding, refreshWeixinBinding,
@@ -56,7 +57,36 @@ window.updateIMQQConfigDraft = (fieldName, value) => {
     }),
   };
   window.scheduleIMWorkspaceAutoSave();
-  renderCurrentMainView();
+};
+
+window.updateIMFeishuConfigDraft = (fieldName, value) => {
+  const draft = getIMWorkspaceDraft();
+  const prevFeishu = draft.feishuConfig || {};
+  imWorkspaceState.draft = {
+    ...draft,
+    feishuConfig: {
+      ...prevFeishu,
+      [fieldName]: value,
+      configured: !!(fieldName === 'appId' ? value : prevFeishu.appId) &&
+                  !!(fieldName === 'appSecret' ? value : prevFeishu.appSecret),
+    },
+  };
+  window.scheduleIMWorkspaceAutoSave();
+};
+
+window.updateIMWecomConfigDraft = (fieldName, value) => {
+  const draft = getIMWorkspaceDraft();
+  const prevWecom = draft.wecomConfig || {};
+  imWorkspaceState.draft = {
+    ...draft,
+    wecomConfig: {
+      ...prevWecom,
+      [fieldName]: value,
+      configured: !!(fieldName === 'botId' ? value : prevWecom.botId) &&
+                  !!(fieldName === 'secret' ? value : prevWecom.secret),
+    },
+  };
+  window.scheduleIMWorkspaceAutoSave();
 };
 
 window.scheduleIMWorkspaceAutoSave = () => {
@@ -83,9 +113,10 @@ window.saveIMWorkspaceConfig = async () => {
     clearTimeout(imWorkspaceAutoSaveTimer);
     imWorkspaceAutoSaveTimer = null;
   }
+  const skipRender = !!window._imChannelDetailId;
   imWorkspaceState.saving = true;
   imWorkspaceState.error = '';
-  renderCurrentMainView();
+  if (!skipRender) renderCurrentMainView();
   try {
     const response = await fetch('/protoclaw/im_workspace_bundle', {
       method: 'PUT',
@@ -93,6 +124,8 @@ window.saveIMWorkspaceConfig = async () => {
       body: JSON.stringify({
         workspaceConfig: getIMWorkspaceDraft().workspaceConfig,
         qqConfig: getIMWorkspaceDraft().qqConfig,
+        feishuConfig: getIMWorkspaceDraft().feishuConfig,
+        wecomConfig: getIMWorkspaceDraft().wecomConfig,
       }),
     });
     if (!response.ok) {
@@ -111,7 +144,7 @@ window.saveIMWorkspaceConfig = async () => {
     console.error('Failed to save IM workspace config:', error);
   } finally {
     imWorkspaceState.saving = false;
-    renderCurrentMainView();
+    if (!skipRender) renderCurrentMainView();
   }
 };
 
