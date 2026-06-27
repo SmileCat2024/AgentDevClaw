@@ -998,6 +998,14 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, 'utf8'));
 }
 
+async function readJsonSafe(filePath, fallback = null) {
+  try {
+    return await readJson(filePath);
+  } catch {
+    return fallback;
+  }
+}
+
 function getPrebuiltAgentSessionDir(agentId) {
   if (isWorkspaceSessionAgent(agentId)) {
     return path.join(PREBUILT_WORKSPACES_ROOT, sanitizeSessionFragment(agentId), 'sessions');
@@ -5125,12 +5133,24 @@ async function getAgentsLight() {
   return visibleAgents.map((agent) => ({ ...agent, status: buildStatus(agent.id) }));
 }
 
+async function resolveAgentModelPresets(agentId, metaPresets = null) {
+  const userConfigPath = path.join(__dirname, '.agentdev', 'agent-configs', `${agentId}.json`);
+  const userConfig = await readJsonSafe(userConfigPath, null);
+  const userPresets = userConfig?.modelPresets || null;
+  if (!userPresets) return metaPresets || null;
+  return {
+    ...(metaPresets && typeof metaPresets === 'object' ? metaPresets : {}),
+    ...userPresets,
+  };
+}
+
 async function enrichAgent(agent) {
   return {
     ...agent,
     workspace_sessions: await listPrebuiltSessions(agent.id),
     workspace_data: await resolveWorkspaceData(agent),
     workspace_state: await readWorkspaceState(agent.id),
+    modelPresets: await resolveAgentModelPresets(agent.id, agent.modelPresets),
   };
 }
 
@@ -5398,7 +5418,7 @@ async function getConnectedAgents() {
       message_count: 0,
       pending_input_count: null,
       created_at: null,
-      modelPresets: agent.modelPresets || null,
+      modelPresets: await resolveAgentModelPresets(agent.id, agent.modelPresets),
       connected: false,
     };
   }));
@@ -12683,7 +12703,7 @@ app.get('/protoclaw/agent_model_presets', async (req, res, next) => {
     
     // 读取用户配置文件（如果存在）
     const userConfigPath = path.join(__dirname, '.agentdev', 'agent-configs', `${agentId}.json`);
-    const userConfig = await readJson(userConfigPath) || {};
+    const userConfig = await readJsonSafe(userConfigPath, {}) || {};
     
     // 合并配置：用户配置优先，metadata.json 中的 modelPresets 作为后备
     const modelPresets = {
@@ -12718,7 +12738,7 @@ app.put('/protoclaw/agent_model_presets', express.json(), async (req, res, next)
     const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
     
     // 读取现有用户配置（如果存在）
-    const existingConfig = await readJson(userConfigPath) || {};
+    const existingConfig = await readJsonSafe(userConfigPath, {}) || {};
     
     // 更新 modelPresets
     existingConfig.modelPresets = modelPresets;
@@ -12868,6 +12888,23 @@ process.on('SIGTERM', () => void shutdown(0));
 
 async function main() {
   await viewerWorker.start();
+
+  // Ensure config directory and essential files exist (config/ is gitignored)
+  try {
+    await ensureDir(path.join(__dirname, 'config'));
+    const exampleConfigPath = path.join(__dirname, 'config', 'default.example.json');
+    if (!existsSync(MODEL_CONFIG_PATH)) {
+      const example = await readJsonSafe(exampleConfigPath, null);
+      await writeModelConfig(example || { defaultModel: {}, agent: {} });
+      log('server', 'Created config/default.json from template');
+    }
+    if (!existsSync(MODEL_PRESETS_PATH)) {
+      await writeModelPresetsFile({ providers: [], presets: [] });
+      log('server', 'Created config/presets.json');
+    }
+  } catch (err) {
+    log('server', `config init failed: ${err.message}`, 'warn');
+  }
 
   // One-time cleanup of stale empty sessions from previous runs.
   // Only runs at startup — never during normal operation.
