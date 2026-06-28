@@ -5802,11 +5802,16 @@ function renderInputRequests(requests) {
   lastRenderedInputSignature = signature;
   lastRenderedInputMode = renderMode;
 
-  // 取消活跃录音 / 重置转写状态，避免 DOM 销毁后状态残留
-  // 注意：不重置 _voiceTranscribing 期间的 in-flight ASR 请求，
-  // 那些请求完成后会自行存入 _pendingVoiceResults，待切回时注入。
-  if (_voiceRecording) {
-    console.log('[VoiceInput] renderInputRequests: recording=true pendingSend=%s', _voicePendingSend);
+  // 当持久输入框在同一会话内重渲染时（如 call 状态变化触发的重建），
+  // 保留正在进行的语音录音。MediaRecorder 不依赖 DOM，重建后只需将
+  // 按钮引用重新指向新元素即可。仅在输入面真正切换时才取消录音。
+  const _preserveVoiceRecording = _voiceRecording
+    && renderMode === 'persistent'
+    && lastRenderedInputMode === 'persistent';
+
+  if (_voiceRecording && !_preserveVoiceRecording) {
+    console.log('[VoiceInput] renderInputRequests: cancelling recording (mode %s→%s)',
+      lastRenderedInputMode, renderMode);
     if (_voicePendingSend) {
       // User already pressed send — preserve auto-send intent.
       // Just stop the recording; onstop will run ASR and auto-send normally.
@@ -5815,8 +5820,10 @@ function renderInputRequests(requests) {
       _cancelVoiceRecording();
     }
   }
-  // 仅重置 flag 以解除新会话的 UI 限制，不中断进行中的 ASR fetch
-  _voiceTranscribing = false;
+  // 仅在非保留场景下重置 flag；保留时不影响进行中的 ASR fetch
+  if (!_preserveVoiceRecording) {
+    _voiceTranscribing = false;
+  }
 
   _storeVisibleSessionInputDraft(inputContainer);
 
@@ -5989,6 +5996,16 @@ function renderInputRequests(requests) {
   } else if (renderMode === 'persistent' && hasRuntimeSelected && !readOnlyMode) {
     // 常驻输入框：当前正在查看 runtime 聊天，但没有 pending input request
     renderPersistentInput(inputContainer);
+    // 跨 DOM 重建保留了录音时，将按钮引用重新指向新元素
+    if (_preserveVoiceRecording) {
+      const newBtn = inputContainer.querySelector('.voice-input-btn');
+      if (newBtn) {
+        _voiceTargetBtn = newBtn;
+        newBtn.classList.add('recording');
+        _updateVoiceUI();
+        console.log('[VoiceInput] reattached button after persistent re-render, pendingSend=%s', _voicePendingSend);
+      }
+    }
   }
 
   // Inject any pending voice ASR result that arrived while viewing another session
@@ -8105,43 +8122,71 @@ function _cancelVoiceRecording() {
 
 async function sendAudioToASR(blob, btn) {
   const targetId = btn.dataset.target;
+  const MAX_RETRIES = 2; // 3 total attempts (initial + 2 retries)
 
-  try {
-    const resp = await fetch('/protoclaw/speech_to_text', {
-      method: 'POST',
-      headers: { 'Content-Type': blob.type || 'audio/webm' },
-      body: blob,
-    });
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch('/protoclaw/speech_to_text', {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type || 'audio/webm' },
+        body: blob,
+      });
 
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ error: 'Unknown error' }));
-      console.error('[VoiceInput] ASR error:', err);
-      alert(err.error || 'ASR request failed');
-      return;
-    }
-
-    // Non-streaming JSON response
-    const data = await resp.json();
-    const text = data?.text || '';
-    if (text) {
-      const textarea = document.getElementById(targetId);
-      // Only inject if we're still on the same session that started the recording.
-      const _currentCacheKey = _getSessionInputCacheKey();
-      console.log('[VoiceInput] ASR result: textLen=%d currentCacheKey=%s voiceCacheKey=%s same=%s',
-        text.length, _currentCacheKey, _voiceCacheKey, _currentCacheKey === _voiceCacheKey);
-      if (textarea && _currentCacheKey === _voiceCacheKey) {
-        insertTextAtCursor(textarea, text);
-        autoResize(textarea);
-        _cacheSessionInput(textarea);
-      } else if (_voiceCacheKey) {
-        // Session switched while transcribing — store for later injection
-        _pendingVoiceResults[_voiceCacheKey] = (_pendingVoiceResults[_voiceCacheKey] || '') + text;
+      if (resp.ok) {
+        const data = await resp.json();
+        const text = data?.text || '';
+        if (text) {
+          const textarea = document.getElementById(targetId);
+          const _currentCacheKey = _getSessionInputCacheKey();
+          console.log('[VoiceInput] ASR result: textLen=%d currentCacheKey=%s voiceCacheKey=%s same=%s',
+            text.length, _currentCacheKey, _voiceCacheKey, _currentCacheKey === _voiceCacheKey);
+          if (textarea && _currentCacheKey === _voiceCacheKey) {
+            insertTextAtCursor(textarea, text);
+            autoResize(textarea);
+            _cacheSessionInput(textarea);
+          } else if (_voiceCacheKey) {
+            // Session switched while transcribing — store for later injection
+            _pendingVoiceResults[_voiceCacheKey] = (_pendingVoiceResults[_voiceCacheKey] || '') + text;
+          }
+        }
+        return; // success
       }
-    }
 
-  } catch (err) {
-    console.error('[VoiceInput] ASR request failed:', err);
-    alert(currentLanguage === 'zh' ? '语音识别失败：' + err.message : 'ASR failed: ' + err.message);
+      // Non-OK response
+      const errBody = await resp.json().catch(() => ({ error: 'Unknown error' }));
+
+      // 4xx client errors (except 429) won't benefit from retry
+      if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+        console.error('[VoiceInput] ASR client error (HTTP %d), not retrying:', resp.status, errBody);
+        alert(errBody.error || 'ASR request failed');
+        return;
+      }
+
+      // Retryable: 5xx, 429, or other non-OK
+      if (attempt < MAX_RETRIES) {
+        const delay = 1000 * Math.pow(2, attempt);
+        console.warn('[VoiceInput] ASR retryable error (HTTP %d), retry %d/%d in %dms',
+          resp.status, attempt + 1, MAX_RETRIES, delay);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
+      console.error('[VoiceInput] ASR error after %d attempts:', MAX_RETRIES + 1, errBody);
+      alert(errBody.error || 'ASR request failed');
+
+    } catch (err) {
+      // Network-level error (fetch threw)
+      if (attempt < MAX_RETRIES) {
+        const delay = 1000 * Math.pow(2, attempt);
+        console.warn('[VoiceInput] ASR network error, retry %d/%d in %dms: %s',
+          attempt + 1, MAX_RETRIES, delay, err.message);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      console.error('[VoiceInput] ASR failed after %d attempts:', MAX_RETRIES + 1, err);
+      alert(currentLanguage === 'zh' ? '语音识别失败（已重试 ' + MAX_RETRIES + ' 次）：' + err.message
+        : 'ASR failed (after ' + MAX_RETRIES + ' retries): ' + err.message);
+    }
   }
 }
 

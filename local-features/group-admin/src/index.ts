@@ -244,15 +244,17 @@ export class GroupAdminFeature implements AgentFeature {
           if (identityRef === 'work-group:admin') {
             return { error: '不能向管理员自身派发任务' };
           }
+          const mentionObj: any = { identityRef };
+          if (targetSessionId) mentionObj.targetSessionId = targetSessionId;
+          if (forceNew) mentionObj.forceNew = true;
+          if (title?.trim()) mentionObj.title = title.trim();
+
           const body: any = {
             text,
             from: 'work-group:admin',
-            mentions: [{ identityRef }],
+            mentions: [mentionObj],
             kind: 'dispatch',
           };
-          if (targetSessionId) body.targetSessionId = targetSessionId;
-          if (forceNew) body.forceNew = true;
-          if (title?.trim()) body.title = title.trim();
 
           try {
             const msg = await this.apiPost(

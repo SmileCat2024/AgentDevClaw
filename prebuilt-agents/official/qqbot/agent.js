@@ -449,6 +449,20 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
         return false;
       }
 
+      if (this._activeIMChannel === 'feishu' && this.feishuBotFeature) {
+        await this.feishuBotFeature.sendTextMessage(
+          this._lastIMTarget.userId,
+          this._lastIMTarget.receiveIdType || 'open_id',
+          text,
+        );
+        return true;
+      }
+
+      if (this._activeIMChannel === 'wecom' && this.wecomBotFeature) {
+        await this.wecomBotFeature.sendTextMessage(this._lastIMTarget.userId, text);
+        return true;
+      }
+
       return false;
     } catch (err) {
       console.error('[PortalAgent] sendIMMessage failed:', err);
@@ -547,6 +561,14 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     if (this._callArbiter && feishuBot) {
       feishuBot.agentRef = {
         onCall: async (text) => {
+          // 捕获当前 IM 目标，供 sendIMMessage（调度结果投递）使用
+          if (feishuBot._currentTurnCtx) {
+            this._lastIMTarget = {
+              userId: feishuBot._currentTurnCtx.receiveId,
+              contextToken: '',
+              receiveIdType: feishuBot._currentTurnCtx.receiveIdType,
+            };
+          }
           const entry = this._callArbiter.enqueue({ source: 'feishu', text });
           const finished = await this._callArbiter.waitForCompletion(entry.id);
           if (finished.status === 'failed') {
@@ -565,6 +587,13 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     if (this._callArbiter && wecomBot) {
       wecomBot.agentRef = {
         onCall: async (text) => {
+          // 捕获当前 IM 目标，供 sendIMMessage（调度结果投递）使用
+          if (wecomBot._currentTurnCtx) {
+            this._lastIMTarget = {
+              userId: wecomBot._currentTurnCtx.chatId,
+              contextToken: '',
+            };
+          }
           const entry = this._callArbiter.enqueue({ source: 'wecom', text });
           const finished = await this._callArbiter.waitForCompletion(entry.id);
           if (finished.status === 'failed') {
@@ -631,6 +660,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
 
     const qqUploadTool = this.qqbotFeature.getTools().find(t => t.name === 'upload_attachment');
     const wxUploadTool = this.weixinBotFeature.getTools().find(t => t.name === 'upload_attachment');
+    const fsUploadTool = this.feishuBotFeature?.getTools().find(t => t.name === 'upload_attachment');
     const wcUploadTool = this.wecomBotFeature?.getTools().find(t => t.name === 'upload_attachment');
     this.tools.register({
       name: 'upload_attachment',
@@ -654,6 +684,9 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       execute: async (args) => {
         if (this._activeIMChannel === 'weixin' && wxUploadTool) {
           return wxUploadTool.execute(args);
+        }
+        if (this._activeIMChannel === 'feishu' && fsUploadTool) {
+          return fsUploadTool.execute(args);
         }
         if (this._activeIMChannel === 'wecom' && wcUploadTool) {
           return wcUploadTool.execute(args);
