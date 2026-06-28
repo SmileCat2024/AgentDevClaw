@@ -1477,6 +1477,17 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 
   const activeAgent = getCurrentAgentRecord();
   const hasSessions = hasWorkspaceSessions(activeAgent);
+  const shouldMarkLoading = !!(
+    activeAgent?.id
+    && (
+      action.type === 'show_chat'
+      || action.type === 'resume_session'
+      || action.type === 'open_session'
+      || action.type === 'open_latest_session'
+      || action.type === 'create_session'
+      || action.type === 'create_session_from_session'
+    )
+  );
   if (action.type === 'open_latest_session') {
     if (activeAgent?.id === 'feature-creator') {
       const projects = getFeatureCreatorProjects(activeAgent);
@@ -4761,7 +4772,79 @@ window.addEventListener('scroll', () => {
   closeProjectContextMenu();
   requestAnimationFrame(updateAssemblySideRailPosition);
 }, true);
+
+function normalizeWheelDeltaY(event) {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return event.deltaY * 40;
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return event.deltaY * Math.max(1, container.clientHeight);
+  return event.deltaY;
+}
+
+function canElementScrollVertically(element, deltaY) {
+  if (!element || element === container || element === document.body || element === document.documentElement) {
+    return false;
+  }
+  const style = window.getComputedStyle(element);
+  const overflowY = style.overflowY;
+  if (overflowY !== 'auto' && overflowY !== 'scroll' && overflowY !== 'overlay') {
+    return false;
+  }
+  const maxTop = element.scrollHeight - element.clientHeight;
+  if (maxTop <= 1) {
+    return false;
+  }
+  if (deltaY > 0) {
+    return element.scrollTop < maxTop - 1;
+  }
+  if (deltaY < 0) {
+    return element.scrollTop > 1;
+  }
+  return false;
+}
+
+function hasScrollableWheelTarget(target, deltaY) {
+  let node = target instanceof Element ? target : target?.parentElement;
+  while (node && node !== container) {
+    if (canElementScrollVertically(node, deltaY)) {
+      return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+function isChromeWithoutEdge() {
+  const ua = navigator.userAgent || '';
+  return /\bChrome\//.test(ua) && !/\bEdg\//.test(ua);
+}
+
+let chatScrollNeedsWheelRecovery = false;
+
+function shouldUseManualWheelScroll() {
+  if (!isChromeWithoutEdge()) return false;
+  if (!chatScrollNeedsWheelRecovery) return false;
+
+  chatScrollNeedsWheelRecovery = false;
+  return true;
+}
+
 container.addEventListener('wheel', (e) => {
+  const beforeTop = container.scrollTop;
+  const rawDeltaY = normalizeWheelDeltaY(e);
+  const canManualScroll = isChatSurfaceActive()
+    && !shouldRenderWorkspaceSurface()
+    && !e.ctrlKey
+    && !e.metaKey
+    && Math.abs(rawDeltaY) > Math.abs(e.deltaX || 0)
+    && !hasScrollableWheelTarget(e.target, rawDeltaY);
+  const manualWheelScroll = canManualScroll && shouldUseManualWheelScroll();
+  if (manualWheelScroll) {
+    const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    const nextTop = Math.max(0, Math.min(maxTop, beforeTop + rawDeltaY));
+    e.preventDefault();
+    if (Math.abs(nextTop - beforeTop) > 0.5) {
+      container.scrollTop = nextTop;
+    }
+  }
   if (e.deltaY < 0) {
     // Scrolling up — always cancel follow
     registerManualScrollIntent({ interrupt: true });
@@ -4771,7 +4854,7 @@ container.addEventListener('wheel', (e) => {
     // downward scroll shouldn't cancel follow mode.
     registerManualScrollIntent();
   }
-}, { passive: true });
+}, { passive: false });
 container.addEventListener('wheel', () => window.closeCtxMenu(), { passive: true });
 container.addEventListener('touchmove', () => registerManualScrollIntent({ interrupt: true }), { passive: true });
 container.addEventListener('pointerdown', (event) => {
@@ -4854,6 +4937,26 @@ container.addEventListener('scroll', () => {
 });
 followLatestButton.addEventListener('click', () => {
   setFollowLatest(true, { scroll: true, behavior: 'smooth' });
+});
+
+function markChatPageResumed() {
+  if (isChromeWithoutEdge() && isChatSurfaceActive()) {
+    chatScrollNeedsWheelRecovery = true;
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    markChatPageResumed();
+  }
+});
+
+window.addEventListener('focus', () => {
+  markChatPageResumed();
+});
+
+window.addEventListener('pageshow', () => {
+  markChatPageResumed();
 });
 
 ensureNotificationClockTimer();
