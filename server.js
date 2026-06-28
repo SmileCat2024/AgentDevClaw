@@ -31,42 +31,49 @@ import {
 } from './server/runtime-call-envelope.js';
 import { renderConversationHtml } from './server/conversation-renderer.js';
 
+// ── Phase 0: shared infrastructure ────────────────────────────────
+import {
+  PROJECT_ROOT, rootRequire, APP_PORT, VIEWER_PORT,
+  AGENTS_ROOT, RUNTIME_SCRIPT, ONE_SHOT_SCRIPT,
+  AGENTDEV_ROOT, AGENTDEV_CREATE_FEATURE_CLI, VIEWER_ORIGIN,
+  USER_DATA_ROOT, NO_SESSION_TOKEN,
+  PREBUILT_SESSIONS_ROOT, PREBUILT_WORKSPACES_ROOT,
+  PROJECT_QQBOT_CONFIG_PATH, PROJECT_WEIXIN_CONFIG_PATH,
+  PROJECT_FEISHU_CONFIG_PATH, PROJECT_WECOM_CONFIG_PATH,
+  PROJECT_IM_WORKSPACE_CONFIG_PATH,
+  FEATURE_REPOSITORY_ROOT, USER_FEATURE_REPOSITORY_ROOT,
+  FEATURE_MANIFEST_NAME, GROUP_CHATS_ROOT,
+  WORKSPACE_SESSION_AGENT_IDS, HIDDEN_PREBUILT_AGENT_IDS,
+  PROJECT_DOCSET_SUBPATH, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH,
+  APP_ORIGIN,
+} from './server/shared/constants.js';
+import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log } from './server/shared/string-helpers.js';
+import { readJson, readJsonSafe, ensureDir } from './server/shared/fs-helpers.js';
+import {
+  managedAgents, assemblyRuntimeProcesses,
+  getManagedRuntimeKey, listAgentRuntimes, pickPrimaryAgentRuntime,
+  getAgentRuntime, getAssemblyRuntime, stopAssemblyRuntime, buildStatus,
+} from './server/shared/agent-access.js';
+import {
+  getPrebuiltAgentSessionDir, getPrebuiltSessionFilePath, getPrebuiltSessionIndexPath,
+  getPrebuiltWorkspaceDir, getPrebuiltWorkspaceStatePath, getPrebuiltWorkspaceArtifactsDir,
+  getWorkspaceArtifactPath,
+  getProjectDocsetDir, getProjectDocsetProjectPath, getProjectDocsetFormsDir,
+  getProjectDocsetMaterialsDir, getProjectDocsetConversationsDir,
+  readSessionIndex, resolvePrebuiltSessionType,
+  writeSessionIndex, updateSessionIndex,
+  buildSessionTitle, normalizeSessionMetadata, readSessionIndexSync,
+} from './server/shared/session-access.js';
+import { sendIPCtoSession } from './server/shared/ipc.js';
+import { proxyToViewer } from './server/shared/proxy.js';
+import { onRuntimeReady, notifyRuntimeReady } from './server/shared/runtime-hooks.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const rootRequire = createRequire(path.join(__dirname, 'package.json'));
-const APP_PORT = Number.parseInt(process.env.PORT || '1420', 10);
-const VIEWER_PORT = Number.parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
-const AGENTS_ROOT = path.join(__dirname, 'prebuilt-agents');
-const RUNTIME_SCRIPT = path.join(__dirname, 'scripts', 'run-prebuilt-agent.js');
-const ONE_SHOT_SCRIPT = path.join(__dirname, 'scripts', 'run-one-shot-agent.js');
-const AGENTDEV_ROOT = path.resolve(__dirname, '..', 'AgentDev');
-const AGENTDEV_CREATE_FEATURE_CLI = path.join(AGENTDEV_ROOT, 'dist', 'create-feature-cli.js');
-const VIEWER_ORIGIN = `http://127.0.0.1:${VIEWER_PORT}`;
-const USER_DATA_ROOT = path.join(os.homedir(), '.agentdev', 'AgentDevClaw');
-const NO_SESSION_TOKEN = '__protoclaw-no-session__';
-const PREBUILT_SESSIONS_ROOT = path.join(USER_DATA_ROOT, 'prebuilt-sessions');
-const PREBUILT_WORKSPACES_ROOT = path.join(USER_DATA_ROOT, 'workspaces');
-const PROJECT_QQBOT_CONFIG_PATH = path.join(__dirname, '.agentdev', 'qqbot.config.json');
-const PROJECT_WEIXIN_CONFIG_PATH = path.join(__dirname, '.agentdev', 'weixin-bot.config.json');
-const PROJECT_FEISHU_CONFIG_PATH = path.join(__dirname, '.agentdev', 'feishu-bot.config.json');
-const PROJECT_WECOM_CONFIG_PATH = path.join(__dirname, '.agentdev', 'wecom-bot.config.json');
-const PROJECT_IM_WORKSPACE_CONFIG_PATH = path.join(__dirname, '.agentdev', 'im-workspace.config.json');
-const FEATURE_REPOSITORY_ROOT = path.join(__dirname, 'resources', 'features');
-const USER_FEATURE_REPOSITORY_ROOT = path.join(USER_DATA_ROOT, 'user-features');
-const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
-const GROUP_CHATS_ROOT = path.join(USER_DATA_ROOT, 'group-chats');
-const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
-const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'flow-test']);
-const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
-const MODEL_CONFIG_PATH = path.join(__dirname, 'config', 'default.json');
-const MODEL_PRESETS_PATH = path.join(__dirname, 'config', 'presets.json');
-const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
 
 const app = express();
 const viewerWorker = new ViewerWorker(VIEWER_PORT, false, process.env.AGENTDEV_UDS_PATH);
 const clawMcp = new ClawMCPServer();
-const managedAgents = new Map();
-const assemblyRuntimeProcesses = new Map();
 const pendingFeatureImports = new Map();
 const weixinBindingSessions = new Map();
 
@@ -595,6 +602,9 @@ async function fireDispatchNow(schedule) {
 loadDispatchSchedules();
 restoreDispatchSchedulesOnBoot();
 
+// Phase 0: register runtime-ready callback for event-driven dispatch schedules
+onRuntimeReady((agentId, sessionId) => emitDispatchReadyEvent(agentId, sessionId));
+
 /**
  * 统一启动恢复 sweep：对所有 schedule 按状态和触发类型做恢复处理。
  * 覆盖场景：pending timer（未来/过期）、pending on-idle、pending on-ready、
@@ -713,76 +723,6 @@ async function fireBootSchedules() {
     console.log(`[Dispatch] on-boot: ${s.action?.type || 'send_message'} → ${s.targetAgentId}`);
     await fireDispatchNow(s);
   }
-}
-
-function getManagedRuntimeKey(agentId, sessionId = null) {
-  const normalizedAgentId = sanitizeSessionFragment(agentId);
-  const normalizedSessionId = sessionId == null ? NO_SESSION_TOKEN : sanitizeSessionFragment(sessionId);
-  return `${normalizedAgentId}::${normalizedSessionId}`;
-}
-
-function log(prefix, message, stream = 'log') {
-  console[stream](`[${prefix}] ${message}`);
-}
-
-function listAgentRuntimes(agentId) {
-  const normalizedAgentId = sanitizeSessionFragment(agentId);
-  return Array.from(managedAgents.values()).filter((runtime) => sanitizeSessionFragment(runtime.agentId || runtime.id) === normalizedAgentId);
-}
-
-function pickPrimaryAgentRuntime(agentId) {
-  const runtimes = listAgentRuntimes(agentId);
-  if (runtimes.length === 0) return null;
-  const running = runtimes.filter((runtime) => runtime?.process && runtime.process.exitCode === null && !runtime.stopped);
-  const pool = running.length ? running : runtimes;
-  return pool.sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))[0] || null;
-}
-
-function getAgentRuntime(agentId, sessionId = undefined) {
-  if (sessionId !== undefined) {
-    return managedAgents.get(getManagedRuntimeKey(agentId, sessionId)) ?? null;
-  }
-  return pickPrimaryAgentRuntime(agentId);
-}
-
-function getAssemblyRuntime(sessionId) {
-  return assemblyRuntimeProcesses.get(sanitizeSessionFragment(sessionId)) ?? null;
-}
-
-async function stopAssemblyRuntime(sessionId) {
-  const runtime = getAssemblyRuntime(sessionId);
-  if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
-    return { sessionId: sanitizeSessionFragment(sessionId), status: 'stopped' };
-  }
-
-  runtime.stopped = true;
-  const normalizedSessionId = sanitizeSessionFragment(sessionId);
-  const waitForExit = new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(false), 2500);
-    runtime.process.once('exit', () => {
-      clearTimeout(timeout);
-      resolve(true);
-    });
-  });
-  runtime.process.kill('SIGTERM');
-  const exited = await waitForExit;
-  return {
-    sessionId: normalizedSessionId,
-    status: exited ? 'stopped' : 'stopping',
-    viewerAgentId: runtime.viewerAgentId ?? null,
-  };
-}
-
-function sanitizeSessionFragment(value) {
-  return String(value || '')
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || 'default';
-}
-
-function isWorkspaceSessionAgent(agentId) {
-  return WORKSPACE_SESSION_AGENT_IDS.has(sanitizeSessionFragment(agentId));
 }
 
 function isValidFeatureName(value) {
@@ -984,91 +924,6 @@ async function ensureAssemblyWorkspaceDependencies(envDir, selectedFeatures) {
     installDir: envDir,
     skipped: false,
   };
-}
-
-function buildStatus(agentId, sessionId = undefined) {
-  const runtime = getAgentRuntime(agentId, sessionId);
-  if (!runtime) {
-    return { id: agentId, status: 'stopped', pid: null, startedAt: null, exitCode: null, viewerAgentId: null, selectedSessionId: null };
-  }
-
-  const running = runtime.process && runtime.process.exitCode === null && !runtime.stopped;
-  return {
-    id: agentId,
-    status: running ? 'running' : 'stopped',
-    pid: running ? runtime.process.pid : null,
-    startedAt: runtime.startedAt ?? null,
-    exitCode: runtime.exitCode ?? null,
-    viewerAgentId: running ? (runtime.viewerAgentId ?? null) : null,
-    selectedSessionId: runtime.selectedSessionId ?? null,
-  };
-}
-
-async function readJson(filePath) {
-  return JSON.parse(await fs.readFile(filePath, 'utf8'));
-}
-
-async function readJsonSafe(filePath, fallback = null) {
-  try {
-    return await readJson(filePath);
-  } catch {
-    return fallback;
-  }
-}
-
-function getPrebuiltAgentSessionDir(agentId) {
-  if (isWorkspaceSessionAgent(agentId)) {
-    return path.join(PREBUILT_WORKSPACES_ROOT, sanitizeSessionFragment(agentId), 'sessions');
-  }
-  return path.join(PREBUILT_SESSIONS_ROOT, sanitizeSessionFragment(agentId));
-}
-
-function getPrebuiltSessionFilePath(agentId, sessionId) {
-  return path.join(getPrebuiltAgentSessionDir(agentId), `${sanitizeSessionFragment(sessionId)}.json`);
-}
-
-function getPrebuiltSessionIndexPath(agentId) {
-  return path.join(getPrebuiltAgentSessionDir(agentId), 'index.json');
-}
-
-function getPrebuiltWorkspaceDir(agentId) {
-  return path.join(PREBUILT_WORKSPACES_ROOT, sanitizeSessionFragment(agentId));
-}
-
-function getPrebuiltWorkspaceStatePath(agentId) {
-  return path.join(getPrebuiltWorkspaceDir(agentId), 'state.json');
-}
-
-function getPrebuiltWorkspaceArtifactsDir(agentId) {
-  return path.join(getPrebuiltWorkspaceDir(agentId), 'artifacts');
-}
-
-function getProjectDocsetDir(projectDir) {
-  return path.join(path.resolve(String(projectDir || '').trim()), PROJECT_DOCSET_SUBPATH);
-}
-
-function getProjectDocsetProjectPath(projectDir) {
-  return path.join(getProjectDocsetDir(projectDir), 'project.json');
-}
-
-function getProjectDocsetFormsDir(projectDir) {
-  return path.join(getProjectDocsetDir(projectDir), 'forms');
-}
-
-function getProjectDocsetMaterialsDir(projectDir) {
-  return path.join(getProjectDocsetDir(projectDir), 'materials');
-}
-
-function getProjectDocsetConversationsDir(projectDir) {
-  return path.join(getProjectDocsetDir(projectDir), 'conversations');
-}
-
-function getWorkspaceArtifactPath(agentId, artifactId) {
-  return path.join(getPrebuiltWorkspaceArtifactsDir(agentId), `${sanitizeSessionFragment(artifactId)}.json`);
-}
-
-async function ensureDir(dirPath) {
-  await fs.mkdir(dirPath, { recursive: true });
 }
 
 function normalizeQQBotConfig(raw = {}) {
@@ -2848,161 +2703,6 @@ async function resolveWorkspaceData(agent) {
   }));
 
   return Object.fromEntries(entries.filter(Boolean));
-}
-
-async function readSessionIndex(agentId) {
-  const dirPath = getPrebuiltAgentSessionDir(agentId);
-  const indexPath = getPrebuiltSessionIndexPath(agentId);
-  await ensureDir(dirPath);
-
-  try {
-    const data = await readJson(indexPath);
-    const sessions = Array.isArray(data.sessions)
-      ? data.sessions
-        .filter((session) => session && session.id && session.id !== 'legacy')
-        .map((session) => ({
-          ...session,
-          id: String(session.id),
-          title: cleanSessionText(session.title),
-          featureName: cleanSessionText(session.featureName),
-          agentName: cleanSessionText(session.agentName),
-          taskTitle: cleanSessionText(session.taskTitle),
-          taskType: cleanSessionText(session.taskType),
-          goal: cleanSessionText(session.goal),
-          constraints: cleanSessionText(session.constraints),
-          expectedOutput: cleanSessionText(session.expectedOutput),
-          targetFiles: cleanSessionText(session.targetFiles),
-          referenceMaterials: cleanSessionText(session.referenceMaterials),
-          openDirectory: cleanSessionText(session.openDirectory),
-          sessionType: cleanSessionText(session.sessionType) || (session.metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
-          archived: session.archived === true,
-          todo: session.todo === true,
-          metadata: normalizeSessionMetadata(session.metadata),
-        }))
-      : [];
-    return {
-      activeSessionId: sessions.some((session) => session.id === data.activeSessionId) ? data.activeSessionId : null,
-      sessions,
-    };
-  } catch {
-    return {
-      activeSessionId: null,
-      sessions: [],
-    };
-  }
-}
-
-async function resolvePrebuiltSessionType(agentId, sessionId) {
-  const normalizedSessionId = cleanSessionText(sessionId);
-  if (!normalizedSessionId) return '';
-
-  try {
-    const index = await readSessionIndex(agentId);
-    const record = Array.isArray(index?.sessions)
-      ? index.sessions.find((session) => cleanSessionText(session?.id) === normalizedSessionId)
-      : null;
-    const indexedType = cleanSessionText(record?.sessionType);
-    if (indexedType) {
-      return indexedType;
-    }
-    const indexedResumeMode = cleanSessionText(record?.metadata?.resumeMode);
-    if (indexedResumeMode === 'one-shot') {
-      return 'sub';
-    }
-  } catch {}
-
-  try {
-    const sessionPath = getPrebuiltSessionFilePath(agentId, normalizedSessionId);
-    const sessionRecord = await fs.readFile(sessionPath, 'utf8').then(JSON.parse).catch(() => null);
-    const fileType = cleanSessionText(sessionRecord?.sessionType);
-    if (fileType) {
-      return fileType;
-    }
-    const fileResumeMode = cleanSessionText(sessionRecord?.metadata?.resumeMode);
-    if (fileResumeMode === 'one-shot') {
-      return 'sub';
-    }
-  } catch {}
-
-  return '';
-}
-
-const _indexLocks = new Map();
-
-async function writeSessionIndex(agentId, index) {
-  const dirPath = getPrebuiltAgentSessionDir(agentId);
-  const indexPath = getPrebuiltSessionIndexPath(agentId);
-  await ensureDir(dirPath);
-  const tmpPath = indexPath + '.tmp';
-  await fs.writeFile(tmpPath, JSON.stringify(index, null, 2), 'utf8');
-  try {
-    await fs.rename(tmpPath, indexPath);
-  } catch (err) {
-    if (err.code === 'EPERM' || err.code === 'EACCES') {
-      await fs.unlink(indexPath).catch(() => {});
-      await fs.rename(tmpPath, indexPath);
-    } else if (err.code === 'EXDEV') {
-      await fs.copyFile(tmpPath, indexPath);
-      await fs.unlink(tmpPath).catch(() => {});
-    } else {
-      throw err;
-    }
-  }
-}
-
-async function updateSessionIndex(agentId, fn) {
-  const prev = _indexLocks.get(agentId) || Promise.resolve();
-  let release;
-  const next = new Promise(r => release = r);
-  _indexLocks.set(agentId, next);
-  await prev;
-  try {
-    const index = await readSessionIndex(agentId);
-    const newIndex = await fn(index);
-    await writeSessionIndex(agentId, newIndex);
-    return newIndex;
-  } finally {
-    release();
-    if (_indexLocks.get(agentId) === next) _indexLocks.delete(agentId);
-  }
-}
-
-function buildSessionTitle(createdAtIso) {
-  const date = new Date(createdAtIso);
-  const parts = [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, '0'),
-    String(date.getDate()).padStart(2, '0'),
-  ];
-  const time = [
-    String(date.getHours()).padStart(2, '0'),
-    String(date.getMinutes()).padStart(2, '0'),
-  ];
-  return `对话 ${parts.join('-')} ${time.join(':')}`;
-}
-
-function cleanSessionText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function normalizeSessionMetadata(raw = {}) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return {};
-  }
-
-  const metadata = {
-    resumeMode: cleanSessionText(raw.resumeMode),
-    sourceAgentId: cleanSessionText(raw.sourceAgentId),
-    sourceSessionId: cleanSessionText(raw.sourceSessionId),
-    handoffId: cleanSessionText(raw.handoffId),
-    handoffPath: cleanSessionText(raw.handoffPath),
-    handoffCreatedAt: cleanSessionText(raw.handoffCreatedAt),
-    handoffSummaryKind: cleanSessionText(raw.handoffSummaryKind),
-  };
-
-  return Object.fromEntries(
-    Object.entries(metadata).filter(([, value]) => value),
-  );
 }
 
 function sanitizeProjectDocsetId(value) {
@@ -5805,8 +5505,8 @@ async function startManagedAgent(agent, selectedSessionId = undefined, runtimeOp
     }
     if (text.includes('[ProtoClaw Runtime] READY session=')) {
       runtime.ready = true;
-      // Emit on-ready event for event-driven dispatch schedules
-      emitDispatchReadyEvent(agent.id, resolvedSessionId || null);
+      // Notify runtime-ready hook (for event-driven dispatch schedules)
+      notifyRuntimeReady(agent.id, resolvedSessionId || null);
     }
     log(agent.id, text.trim());
   });
@@ -6068,39 +5768,6 @@ async function stopManagedAgent(agentId, sessionId = undefined) {
     runtime.process.kill('SIGTERM');
   }
   return buildStatus(agentId, sessionId);
-}
-
-async function proxyToViewer(req, res) {
-  const targetUrl = `${VIEWER_ORIGIN}${req.originalUrl}`;
-  const headers = new Headers();
-
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (value == null) continue;
-    if (key.toLowerCase() === 'host') continue;
-    headers.set(key, Array.isArray(value) ? value.join(', ') : value);
-  }
-
-  const method = req.method.toUpperCase();
-  const init = { method, headers };
-
-  if (method !== 'GET' && method !== 'HEAD') {
-    const chunks = [];
-    for await (const chunk of req) {
-      chunks.push(chunk);
-    }
-    init.body = Buffer.concat(chunks);
-  }
-
-  const response = await fetch(targetUrl, init);
-  res.status(response.status);
-
-  response.headers.forEach((value, key) => {
-    if (key.toLowerCase() === 'transfer-encoding') return;
-    res.setHeader(key, value);
-  });
-
-  const arrayBuffer = await response.arrayBuffer();
-  res.end(Buffer.from(arrayBuffer));
 }
 
 app.all('/protoclaw/claw-mcp', async (req, res, next) => {
@@ -10255,26 +9922,6 @@ function findLine(config, lineId) {
   return (config.lines || []).find(l => l.id === lineId) || null;
 }
 
-/**
- * Send an IPC message to a running managed session's child process.
- * Used for dynamic carrier feature mounting without restart.
- */
-function sendIPCtoSession(targetAgentId, targetSessionId, message) {
-  const runtime = getAgentRuntime(targetAgentId, targetSessionId);
-  if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
-    console.warn(`[ProtoClaw IPC] Target ${targetAgentId}::${targetSessionId} not running`);
-    return false;
-  }
-  try {
-    runtime.process.send(message);
-    console.log(`[ProtoClaw IPC] Sent to ${targetAgentId}::${targetSessionId}:`, JSON.stringify(message));
-    return true;
-  } catch (err) {
-    console.error(`[ProtoClaw IPC] Failed to send to ${targetAgentId}::${targetSessionId}:`, err);
-    return false;
-  }
-}
-
 // ── IM Line Binding ────────────────────────────────────────────────────
 //
 // When a line is connected to a session, that session's runtime mounts the
@@ -10686,18 +10333,6 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
     next(error);
   }
 });
-
-function readSessionIndexSync(agentId) {
-  const sessionDir = isWorkspaceSessionAgent(agentId)
-    ? path.join(PREBUILT_WORKSPACES_ROOT, agentId, 'sessions')
-    : path.join(PREBUILT_SESSIONS_ROOT, agentId);
-  const indexPath = path.join(sessionDir, 'index.json');
-  try {
-    return JSON.parse(readFileSync(indexPath, 'utf8'));
-  } catch {
-    return { sessions: [] };
-  }
-}
 
 // ── Model Config ──────────────────────────────────────────────────────────────
 

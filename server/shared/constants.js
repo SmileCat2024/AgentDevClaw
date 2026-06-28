@@ -1,0 +1,35 @@
+import path from 'path';
+import os from 'os';
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+
+// server/shared/constants.js → 向上 2 级到项目根
+export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+export const rootRequire = createRequire(path.join(PROJECT_ROOT, 'package.json'));
+export const APP_PORT = Number.parseInt(process.env.PORT || '1420', 10);
+export const VIEWER_PORT = Number.parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
+export const AGENTS_ROOT = path.join(PROJECT_ROOT, 'prebuilt-agents');
+export const RUNTIME_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'run-prebuilt-agent.js');
+export const ONE_SHOT_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'run-one-shot-agent.js');
+export const AGENTDEV_ROOT = path.resolve(PROJECT_ROOT, '..', 'AgentDev');
+export const AGENTDEV_CREATE_FEATURE_CLI = path.join(AGENTDEV_ROOT, 'dist', 'create-feature-cli.js');
+export const VIEWER_ORIGIN = `http://127.0.0.1:${VIEWER_PORT}`;
+export const USER_DATA_ROOT = path.join(os.homedir(), '.agentdev', 'AgentDevClaw');
+export const NO_SESSION_TOKEN = '__protoclaw-no-session__';
+export const PREBUILT_SESSIONS_ROOT = path.join(USER_DATA_ROOT, 'prebuilt-sessions');
+export const PREBUILT_WORKSPACES_ROOT = path.join(USER_DATA_ROOT, 'workspaces');
+export const PROJECT_QQBOT_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'qqbot.config.json');
+export const PROJECT_WEIXIN_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'weixin-bot.config.json');
+export const PROJECT_FEISHU_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'feishu-bot.config.json');
+export const PROJECT_WECOM_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'wecom-bot.config.json');
+export const PROJECT_IM_WORKSPACE_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'im-workspace.config.json');
+export const FEATURE_REPOSITORY_ROOT = path.join(PROJECT_ROOT, 'resources', 'features');
+export const USER_FEATURE_REPOSITORY_ROOT = path.join(USER_DATA_ROOT, 'user-features');
+export const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
+export const GROUP_CHATS_ROOT = path.join(USER_DATA_ROOT, 'group-chats');
+export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
+export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'flow-test']);
+export const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
+export const MODEL_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'default.json');
+export const MODEL_PRESETS_PATH = path.join(PROJECT_ROOT, 'config', 'presets.json');
+export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
