@@ -6729,7 +6729,7 @@ async function composeGroupMemory(chat, range, options = {}) {
     const time = new Date(m.timestamp).toLocaleString('zh-CN', {
       month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
     });
-    const text = (m.text || '').slice(0, 200);
+    const text = m.text || '';
 
     // 会话标识：管理员派遣 vs agent 回复语义不同
     // 管理员 → 派遣到某会话；agent 回复 → 标注回复来源会话
@@ -6820,7 +6820,7 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
 
     const identityInfo = allIdentities.find((i) => i.identityRef === m.from);
     const from = m.from === 'user' ? '用户' : (identityInfo?.displayName || m.from);
-    const text = (m.text || '').slice(0, 300);
+    const text = m.text || '';
 
     // 会话标识：管理员派遣 vs agent 回复语义不同
     const sessionLabel = m.from === 'work-group:admin'
@@ -6960,18 +6960,20 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
     if (found) {
       // 管理员：检查上下文是否超限，超限则滚动到新 session
       if (identityRef === 'work-group:admin') {
-        const mem = chat.adminMemory || { limitMode: 'tokens', limitValue: 100000 };
+        const mem = chat.adminMemory || { limitMode: 'tokens', tokenLimit: 100000, ratioLimit: 80 };
         const { contextTokens, available } = await getSessionContextUsage(workspaceId, existing);
         if (available) {
           let exceeded = false;
           if (mem.limitMode === 'ratio') {
-            // 按比例：contextTokens / contextLength > limitValue%
+            // 按比例：contextTokens / contextLength > ratioLimit%
+            const ratioVal = mem.ratioLimit ?? mem.limitValue ?? 80;
             const modelInfo = await resolveSessionModelInfo(workspaceId, 'default');
             const contextLength = modelInfo?.contextLength || 200000;
-            exceeded = contextTokens / contextLength > mem.limitValue / 100;
+            exceeded = contextTokens / contextLength > ratioVal / 100;
           } else {
             // 按 token 数
-            exceeded = contextTokens >= mem.limitValue;
+            const tokenVal = mem.tokenLimit ?? mem.limitValue ?? 100000;
+            exceeded = contextTokens >= tokenVal;
           }
           if (!exceeded) {
             return { sessionId: existing, isNew: false };
@@ -7280,36 +7282,6 @@ app.post('/protoclaw/gc/control', express.json(), async (req, res, next) => {
       return res.status(502).json({ error: `Interrupt failed: ${errText}` });
     }
 
-    // 写入状态消息到群聊
-    const statusText = '[任务已中断]';
-
-    // 解析 session 标题，供前端显示会话标识
-    let interruptSessionTitle = resolvedSessionId;
-    try {
-      const idx = await readSessionIndex(workspaceId);
-      const rec = idx.sessions.find((s) => s.id === resolvedSessionId);
-      if (rec) interruptSessionTitle = rec.title || rec.taskTitle || resolvedSessionId;
-    } catch {}
-
-    await appendGroupChatMessage(chatId, {
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      chatId,
-      from: identityRef,
-      text: statusText,
-      mentions: [],
-      links: [],
-      kind: 'system',
-      timestamp: Date.now(),
-      routing: {
-        status: 'interrupted',
-        targetWorkspaceId: workspaceId,
-        targetIdentityRef: identityRef,
-        targetSessionId: resolvedSessionId,
-        targetSessionTitle: interruptSessionTitle,
-        completedAt: Date.now(),
-      },
-    });
-
     log('GroupChat', `control action=${action} for ${identityRef} in chat ${chatId}`);
     res.json({ ok: true, action, viewerAgentId });
   } catch (error) {
@@ -7350,6 +7322,216 @@ function readGroupChatSync(chatId) {
   } catch {
     return null;
   }
+}
+
+function getUsageContextTokens(tokenUsage) {
+  const lastReq = tokenUsage?.lastRequestUsage || null;
+  if (Number.isFinite(lastReq?.inputTokens) && lastReq.inputTokens > 0) return lastReq.inputTokens;
+  if (Number.isFinite(lastReq?.totalTokens) && lastReq.totalTokens > 0) return lastReq.totalTokens;
+  if (Number.isFinite(tokenUsage?.totalTokens) && tokenUsage.totalTokens > 0) return tokenUsage.totalTokens;
+  return null;
+}
+
+async function getRuntimeExecSnapshot(agentId, sessionId) {
+  const runtime = getAgentRuntime(agentId, sessionId);
+  const alive = !!(runtime?.process && runtime.process.exitCode === null && !runtime.stopped);
+  if (!alive) {
+    return {
+      status: 'offline',
+      viewerAgentId: null,
+      queueLength: 0,
+      lastActiveAt: null,
+      workdir: null,
+    };
+  }
+
+  let callActive = false;
+  if (runtime.viewerAgentId) {
+    try {
+      const notif = await readViewerJson(`/api/agents/${encodeURIComponent(runtime.viewerAgentId)}/notification`);
+      callActive = notif?.callActive === true;
+    } catch {}
+  }
+
+  const rtKey = getManagedRuntimeKey(agentId, sessionId);
+  const execState = getRuntimeExecutionState(rtKey);
+  return {
+    status: callActive ? 'running' : (execState.queueLength > 0 ? 'queued' : 'idle'),
+    viewerAgentId: runtime.viewerAgentId || null,
+    queueLength: execState.queueLength || 0,
+    lastActiveAt: execState.lastActiveAt || null,
+    workdir: runtime.workspaceDir || null,
+  };
+}
+
+async function buildGroupChatAwareness(chatId) {
+  const chat = await readGroupChat(chatId);
+  if (!chat) return null;
+
+  const allIdentities = await collectIdentities();
+  const identityInfoByRef = new Map(allIdentities.map((i) => [i.identityRef, i]));
+  const identityRefs = new Set();
+
+  const isAdminIdentity = (identityRef) => identityRef === 'work-group:admin';
+
+  for (const member of (chat.members || [])) {
+    if (!member?.identityRef || member.identityRef === 'user' || isAdminIdentity(member.identityRef)) continue;
+    identityRefs.add(member.identityRef);
+  }
+  for (const ref of Object.keys(chat.sessions || {})) {
+    if (ref && ref !== 'user' && !isAdminIdentity(ref)) identityRefs.add(ref);
+  }
+  for (const msg of (chat.messages || [])) {
+    const ref = msg?.routing?.targetIdentityRef;
+    if (ref && ref !== 'user' && !isAdminIdentity(ref)) identityRefs.add(ref);
+  }
+  for (const imp of (chat.importedSessions || [])) {
+    if (!imp?.workspaceId) continue;
+    const memberIdentity = (chat.members || [])
+      .find((m) => m.identityRef && m.identityRef.startsWith(`${imp.workspaceId}:`));
+    const identityRef = memberIdentity?.identityRef || `${imp.workspaceId}:main`;
+    if (!isAdminIdentity(identityRef)) identityRefs.add(identityRef);
+  }
+
+  const latestRoutingBySession = new Map();
+  for (const msg of (chat.messages || [])) {
+    const r = msg?.routing;
+    if (!r?.targetIdentityRef || !r?.targetSessionId) continue;
+    const key = `${r.targetIdentityRef}:${r.targetSessionId}`;
+    const existing = latestRoutingBySession.get(key);
+    if (!existing || (msg.timestamp || 0) >= (existing.messageTimestamp || 0)) {
+      latestRoutingBySession.set(key, {
+        status: r.status || null,
+        error: r.error || null,
+        messageId: msg.id || null,
+        messageTimestamp: msg.timestamp || null,
+        dispatchedAt: r.dispatchedAt || null,
+        completedAt: r.completedAt || null,
+      });
+    }
+  }
+
+  const identities = [];
+  const totals = {
+    identities: 0,
+    sessions: 0,
+    running: 0,
+    queued: 0,
+    idle: 0,
+    offline: 0,
+    thresholdReached: 0,
+    pendingRoutes: 0,
+    deliveredRoutes: 0,
+  };
+
+  for (const identityRef of Array.from(identityRefs).sort()) {
+    const workspaceId = identityRef.split(':')[0];
+    const info = identityInfoByRef.get(identityRef) || null;
+    const sessionIds = new Set();
+
+    const activeSessionId = chat.sessions?.[identityRef] || null;
+    if (activeSessionId) sessionIds.add(activeSessionId);
+    for (const msg of (chat.messages || [])) {
+      const r = msg?.routing;
+      if (r?.targetIdentityRef === identityRef && r.targetSessionId) sessionIds.add(r.targetSessionId);
+    }
+    for (const imp of (chat.importedSessions || [])) {
+      if (imp?.workspaceId === workspaceId && imp.sessionId) sessionIds.add(imp.sessionId);
+    }
+
+    let index = { sessions: [] };
+    try {
+      index = readSessionIndexSync(workspaceId);
+    } catch {}
+    const metaMap = new Map((index.sessions || []).map((s) => [s.id, s]));
+
+    const sessions = [];
+    for (const sid of Array.from(sessionIds)) {
+      const meta = metaMap.get(sid) || {};
+      const sessionType = cleanSessionText(meta.sessionType) || 'main';
+      const modelInfo = await resolveSessionModelInfo(workspaceId, sessionType);
+      const tokenUsage = meta.tokenUsage || null;
+      const contextTokens = getUsageContextTokens(tokenUsage);
+      const contextLength = Number.isFinite(modelInfo.contextLength) && modelInfo.contextLength > 0
+        ? modelInfo.contextLength : null;
+      const compressRatio = Number.isFinite(modelInfo.compressRatio) && modelInfo.compressRatio > 0
+        ? modelInfo.compressRatio : 80;
+      const contextUsagePct = (contextTokens && contextLength)
+        ? Math.round(contextTokens / contextLength * 100)
+        : null;
+      const runtime = await getRuntimeExecSnapshot(workspaceId, sid);
+      const routing = latestRoutingBySession.get(`${identityRef}:${sid}`) || null;
+      const status = runtime.status;
+      if (status === 'running') totals.running++;
+      else if (status === 'queued') totals.queued++;
+      else if (status === 'idle') totals.idle++;
+      else totals.offline++;
+      if (contextUsagePct != null && contextUsagePct >= compressRatio) totals.thresholdReached++;
+      if (routing?.status === 'pending') totals.pendingRoutes++;
+      if (routing?.status === 'delivered') totals.deliveredRoutes++;
+
+      sessions.push({
+        sessionId: sid,
+        title: meta.title || meta.taskTitle || sid,
+        isActive: sid === activeSessionId,
+        sessionType,
+        createdAt: meta.createdAt || null,
+        updatedAt: meta.updatedAt || meta.createdAt || null,
+        savedAt: typeof meta.savedAt === 'number' ? meta.savedAt : null,
+        messageCount: typeof meta.messageCount === 'number' ? meta.messageCount : null,
+        modelName: modelInfo.modelName || cleanSessionText(meta.modelName) || '',
+        contextLength,
+        compressRatio,
+        contextTokens,
+        contextUsagePct,
+        tokenUsage: tokenUsage ? {
+          inputTokens: tokenUsage.inputTokens || 0,
+          outputTokens: tokenUsage.outputTokens || 0,
+          totalTokens: tokenUsage.totalTokens || 0,
+          lastRequestUsage: tokenUsage.lastRequestUsage || null,
+        } : null,
+        runtimeStatus: status,
+        execQueueLength: runtime.queueLength,
+        execLastActiveAt: runtime.lastActiveAt,
+        viewerAgentId: runtime.viewerAgentId,
+        workdir: runtime.workdir || cleanSessionText(meta.openDirectory) || null,
+        routing,
+      });
+    }
+
+    sessions.sort((left, right) => {
+      if (left.runtimeStatus === 'running' && right.runtimeStatus !== 'running') return -1;
+      if (right.runtimeStatus === 'running' && left.runtimeStatus !== 'running') return 1;
+      return String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''));
+    });
+
+    const aggregateStatus = sessions.some((s) => s.runtimeStatus === 'running') ? 'running'
+      : sessions.some((s) => s.runtimeStatus === 'queued') ? 'queued'
+      : sessions.some((s) => s.runtimeStatus === 'idle') ? 'idle'
+      : 'offline';
+    identities.push({
+      identityRef,
+      workspaceId,
+      displayName: info?.displayName || identityRef,
+      description: info?.description || '',
+      sessionModel: info?.sessionModel || 'persistent',
+      aggregateStatus,
+      sessions,
+    });
+    totals.sessions += sessions.length;
+  }
+
+  totals.identities = identities.length;
+  return {
+    chat: {
+      id: chat.id,
+      name: chat.name || '',
+      messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0,
+      updatedAt: chat.updatedAt || null,
+    },
+    totals,
+    identities,
+  };
 }
 
 /**
@@ -7485,6 +7667,16 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
     }
 
     res.json({ sessions: results });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/protoclaw/group_chats/:chatId/awareness', async (req, res, next) => {
+  try {
+    const awareness = await buildGroupChatAwareness(req.params.chatId);
+    if (!awareness) return res.status(404).json({ error: 'Group chat not found' });
+    res.json(awareness);
   } catch (error) {
     next(error);
   }
@@ -7839,7 +8031,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
       const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
       const targetName = targetInfo?.displayName || targetIdentityRef;
 
-      let observationText = `[观察] 用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`;
+      let observationText = `[观察] 用户 @了 ${targetName}：${message.text || ''}`;
       
       // 附件摘要：显示附件数量和名称
       if (Array.isArray(message.attachments) && message.attachments.length > 0) {
@@ -7862,7 +8054,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
     default: {
       // 辅助模式：直接派发
       const prompt = composeDispatchPrompt(chatName, message, chatId);
-      await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt);
+      await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
       break;
     }
   }
@@ -7914,7 +8106,7 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
   const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
   const targetName = targetInfo?.displayName || targetIdentityRef;
 
-  let observationText = `[观察] 用户 @了 ${targetName}：${(message.text || '').slice(0, 200)}`;
+  let observationText = `[观察] 用户 @了 ${targetName}：${message.text || ''}`;
   
   // 附件摘要：显示附件数量和名称
   if (Array.isArray(message.attachments) && message.attachments.length > 0) {
@@ -7976,9 +8168,9 @@ async function notifyAdminForActivity(chatId, message, chat) {
     const evtSession = formatSessionLabel(message.event?.sessionTitle, message.event?.sessionId);
     activityDesc = `系统事件：${message.event?.identityName || ''}${evtSession} 已开始处理`;
   } else if (message.from === 'user') {
-    activityDesc = `用户发送了消息：${(message.text || '').slice(0, 200)}`;
+    activityDesc = `用户发送了消息：${message.text || ''}`;
   } else {
-    activityDesc = `${senderName}${sessionLabel} 回复了：${(message.text || '').slice(0, 200)}`;
+    activityDesc = `${senderName}${sessionLabel} 回复了：${message.text || ''}`;
   }
 
   // 附件摘要：显示附件数量和名称
@@ -8132,7 +8324,7 @@ app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
       sessions: {},
       initiativeMode: 'assist',
       autonomyMode: 'auto',
-      adminMemory: { range: '3d', limitMode: 'tokens', limitValue: 100000 },
+      adminMemory: { range: '3d', limitMode: 'tokens', tokenLimit: 100000, ratioLimit: 80 },
       lastActiveAt: {},
     };
     await writeGroupChat(chat);
@@ -8164,10 +8356,18 @@ app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next)
     if (typeof initiativeMode === 'string') chat.initiativeMode = initiativeMode;
     if (typeof autonomyMode === 'string') chat.autonomyMode = autonomyMode;
     if (adminMemory && typeof adminMemory === 'object') {
+      const prev = chat.adminMemory || {};
       chat.adminMemory = {
         range: adminMemory.range || '3d',
         limitMode: adminMemory.limitMode || 'tokens',
-        limitValue: typeof adminMemory.limitValue === 'number' ? adminMemory.limitValue : 100000,
+        tokenLimit: typeof adminMemory.tokenLimit === 'number'
+          ? adminMemory.tokenLimit
+          : (typeof prev.tokenLimit === 'number' ? prev.tokenLimit
+            : (typeof adminMemory.limitValue === 'number' ? adminMemory.limitValue
+              : (typeof prev.limitValue === 'number' ? prev.limitValue : 100000))),
+        ratioLimit: typeof adminMemory.ratioLimit === 'number'
+          ? adminMemory.ratioLimit
+          : (typeof prev.ratioLimit === 'number' ? prev.ratioLimit : 80),
       };
     }
 
@@ -8238,31 +8438,69 @@ app.get('/protoclaw/group_chats/:chatId/resources', async (req, res, next) => {
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
 
-    const resDir = getResourcesDir(chat);
-    if (!resDir) return res.json({ resources: [], noWorkDir: true });
+    const resources = [];
 
+    // ── GROUP.md 虚拟条目（始终置顶） ──
     try {
-      await fs.mkdir(resDir, { recursive: true });
-      const entries = await fs.readdir(resDir);
-      const resources = [];
-      for (const entry of entries) {
-        const ext = path.extname(entry).toLowerCase();
-        if (!RESOURCE_ALLOWED_EXTS.has(ext)) continue;
-        try {
-          const stat = await fs.stat(path.join(resDir, entry));
-          resources.push({
-            name: entry,
-            size: stat.size,
-            mtime: stat.mtimeMs,
-            ext: ext.slice(1),
-          });
-        } catch {}
-      }
-      resources.sort((a, b) => b.mtime - a.mtime);
-      res.json({ resources });
+      const mdPath = path.join(getGroupChatDataDir(req.params.chatId), 'GROUP.md');
+      const mdContent = await fs.readFile(mdPath, 'utf-8');
+      const mdStat = await fs.stat(mdPath);
+      const previewLines = mdContent.split('\n').map(l => l.trim()).filter(l => l).slice(0, 3).join('\n');
+      resources.push({
+        name: 'GROUP.md',
+        isGroupMd: true,
+        size: mdStat.size,
+        mtime: mdStat.mtimeMs,
+        ext: 'md',
+        preview: previewLines,
+      });
     } catch {
-      res.json({ resources: [] });
+      // GROUP.md 不存在时也显示虚拟条目（空内容）
+      resources.push({
+        name: 'GROUP.md',
+        isGroupMd: true,
+        size: 0,
+        mtime: 0,
+        ext: 'md',
+        preview: '',
+      });
     }
+
+    // ── 资源文件 ──
+    const resDir = getResourcesDir(chat);
+    if (resDir) {
+      try {
+        await fs.mkdir(resDir, { recursive: true });
+        const entries = await fs.readdir(resDir);
+        for (const entry of entries) {
+          const ext = path.extname(entry).toLowerCase();
+          if (!RESOURCE_ALLOWED_EXTS.has(ext)) continue;
+          try {
+            const filePath = path.join(resDir, entry);
+            const stat = await fs.stat(filePath);
+            // 提取前两行非空内容作为预览
+            let preview = '';
+            try {
+              const raw = await fs.readFile(filePath, 'utf-8');
+              preview = raw.split('\n').map(l => l.trim()).filter(l => l).slice(0, 2).join('\n');
+              if (preview.length > 200) preview = preview.slice(0, 200) + '...';
+            } catch {}
+            resources.push({
+              name: entry,
+              size: stat.size,
+              mtime: stat.mtimeMs,
+              ext: ext.slice(1),
+              preview,
+            });
+          } catch {}
+        }
+      } catch {}
+    }
+
+    // 资源文件按 mtime 降序（GROUP.md 虚拟条目已在最前面，保持不动）
+    const groupMdEntry = resources.shift();
+    const fileEntries = resources.sort((a, b) => b.mtime - a.mtime);
+    res.json({ resources: [groupMdEntry, ...fileEntries] });
   } catch (error) {
     next(error);
   }
@@ -8311,6 +8549,85 @@ app.put('/protoclaw/group_chats/:chatId/resources/:name', express.json(), async 
     await fs.writeFile(filePath, content, 'utf8');
     const stat = await fs.stat(filePath);
     res.json({ ok: true, name: validation.name, size: stat.size });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── 自动命名创建：POST /resources ──
+// 服务端生成 note-MMDD-HHmm.md 格式的文件名，避免重名。
+app.post('/protoclaw/group_chats/:chatId/resources', express.json(), async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const resDir = getResourcesDir(chat);
+    if (!resDir) return res.status(400).json({ error: 'Group chat has no workDir set' });
+
+    await fs.mkdir(resDir, { recursive: true });
+
+    // 生成 note-MMDD-HHmm.md
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = `${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+    let name = `note-${stamp}.md`;
+    // 防止同一分钟内重名
+    let suffix = 2;
+    while (true) {
+      try {
+        await fs.access(path.join(resDir, name));
+        name = `note-${stamp}-${suffix}.md`;
+        suffix++;
+      } catch {
+        break;
+      }
+    }
+
+    const content = (req.body && typeof req.body.content === 'string') ? req.body.content : '';
+    const filePath = path.join(resDir, name);
+    await fs.writeFile(filePath, content, 'utf8');
+    const stat = await fs.stat(filePath);
+    res.json({ ok: true, name, size: stat.size });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── 重命名：POST /resources/:name/rename ──
+app.post('/protoclaw/group_chats/:chatId/resources/:name/rename', express.json(), async (req, res, next) => {
+  try {
+    const chat = await readGroupChat(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const resDir = getResourcesDir(chat);
+    if (!resDir) return res.status(400).json({ error: 'Group chat has no workDir set' });
+
+    const validation = validateResourceName(req.params.name);
+    if (!validation.ok) return res.status(400).json({ error: validation.error });
+
+    const { newName } = req.body || {};
+    const nameValidation = validateResourceName(newName);
+    if (!nameValidation.ok) return res.status(400).json({ error: nameValidation.error });
+
+    const oldPath = path.join(resDir, validation.name);
+    const newPath = path.join(resDir, nameValidation.name);
+
+    // 检查原文件存在
+    try {
+      await fs.access(oldPath);
+    } catch {
+      return res.status(404).json({ error: 'Resource not found' });
+    }
+    // 检查目标文件不存在（防止覆盖）
+    try {
+      await fs.access(newPath);
+      return res.status(409).json({ error: 'A file with that name already exists' });
+    } catch {
+      // 目标不存在，可以重命名
+    }
+
+    await fs.rename(oldPath, newPath);
+    res.json({ ok: true, oldName: validation.name, newName: nameValidation.name });
   } catch (error) {
     next(error);
   }
@@ -8426,7 +8743,7 @@ app.get('/protoclaw/group_chats/:chatId/messages', async (req, res, next) => {
 
 app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, res, next) => {
   try {
-    const { text, mentions, links, from, kind, attachments, targetSessionId, forceNew, title } = req.body || {};
+    const { text, mentions, links, from, kind, attachments } = req.body || {};
     if (!text) return res.status(400).json({ error: 'text required' });
 
     const chat = await readGroupChat(req.params.chatId);
@@ -8470,10 +8787,12 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
     // 异步派发（不阻塞响应）——任何带 routing 的消息触发
     let resolvedSession = null;
     if (message.routing) {
+      // sessionOptions 从 first mention 中提取（前端放在 mention 对象内发送）
+      const firstMention = message.mentions[0] || {};
       let sessionOptions = {};
-      if (targetSessionId) sessionOptions.targetSessionId = targetSessionId;
-      if (forceNew) sessionOptions.forceNew = true;
-      if (title && typeof title === 'string' && title.trim()) sessionOptions.title = title.trim();
+      if (firstMention.targetSessionId) sessionOptions.targetSessionId = firstMention.targetSessionId;
+      if (firstMention.forceNew) sessionOptions.forceNew = true;
+      if (firstMention.title && typeof firstMention.title === 'string' && firstMention.title.trim()) sessionOptions.title = firstMention.title.trim();
 
       // 管理员派发：同步预解析会话，返回 sessionId/title/isNew 供工具反馈
       if (messageFrom === 'work-group:admin') {
@@ -8615,7 +8934,8 @@ async function getAdminStatus(chatId) {
       contextTokens: 0,
       contextLimit: null,
       limitMode: (chat.adminMemory?.limitMode || 'tokens'),
-      limitValue: (chat.adminMemory?.limitValue ?? 100000),
+      tokenLimit: (chat.adminMemory?.tokenLimit ?? chat.adminMemory?.limitValue ?? 100000),
+      ratioLimit: (chat.adminMemory?.ratioLimit ?? 80),
       healthRatio: 0,
       healthStatus: 'unknown',
     };
@@ -8636,23 +8956,25 @@ async function getAdminStatus(chatId) {
     sessionTitle = record?.title || record?.taskTitle || null;
   } catch { /* ignore */ }
 
-  const mem = chat.adminMemory || { limitMode: 'tokens', limitValue: 100000 };
+  const mem = chat.adminMemory || { limitMode: 'tokens', tokenLimit: 100000, ratioLimit: 80 };
   let healthRatio = 0;
   let contextLimit = null;
 
   if (mem.limitMode === 'ratio') {
+    const ratioVal = mem.ratioLimit ?? mem.limitValue ?? 80;
     const modelInfo = await resolveSessionModelInfo(workspaceId, 'default');
     const contextLength = modelInfo?.contextLength || 200000;
-    contextLimit = Math.floor(contextLength * mem.limitValue / 100);
+    contextLimit = Math.floor(contextLength * ratioVal / 100);
     if (available && contextLength > 0) {
       const actualRatio = contextTokens / contextLength;
-      const limitRatio = mem.limitValue / 100;
+      const limitRatio = ratioVal / 100;
       healthRatio = limitRatio > 0 ? actualRatio / limitRatio : 0;
     }
   } else {
-    contextLimit = mem.limitValue;
-    if (available && mem.limitValue > 0) {
-      healthRatio = contextTokens / mem.limitValue;
+    const tokenVal = mem.tokenLimit ?? mem.limitValue ?? 100000;
+    contextLimit = tokenVal;
+    if (available && tokenVal > 0) {
+      healthRatio = contextTokens / tokenVal;
     }
   }
 
@@ -8672,7 +8994,8 @@ async function getAdminStatus(chatId) {
     contextTokens,
     contextLimit,
     limitMode: mem.limitMode || 'tokens',
-    limitValue: mem.limitValue ?? 100000,
+    tokenLimit: mem.tokenLimit ?? mem.limitValue ?? 100000,
+    ratioLimit: mem.ratioLimit ?? 80,
     healthRatio,
     healthStatus,
   };
@@ -9956,6 +10279,9 @@ app.post('/protoclaw/im_line_transfer', express.json(), async (req, res, next) =
     if (!lineId) {
       return res.status(400).json({ error: 'lineId is required' });
     }
+    if (carrier && agentId === 'qqbot') {
+      return res.status(400).json({ error: 'Portal agent sessions cannot be used as IM transfer targets' });
+    }
 
     // Validate runtime BEFORE mutating config (fail fast, outside serializer)
     if (carrier && agentId && sessionId) {
@@ -10099,14 +10425,31 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
     // Build workspace → project → session tree
     const workspaces = [];
     for (const agent of agents) {
+      if (agent.id === 'qqbot') continue;
       const adapter = getProjectAdapter(agent.id);
-      if (!adapter) continue;
 
       let projects;
-      try {
-        projects = await adapter.listProjects();
-      } catch {
-        projects = [];
+      if (adapter) {
+        try {
+          projects = await adapter.listProjects();
+        } catch {
+          projects = [];
+        }
+      } else if (agent.id === 'work-group') {
+        projects = [{
+          id: 'work-group-admin',
+          name: '管理员会话',
+          type: 'workspace',
+          config: {},
+          sessionIds: listAgentRuntimes(agent.id)
+            .filter(rt => rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId)
+            .map(rt => rt.selectedSessionId),
+          latestSessionId: null,
+          createdAt: null,
+          updatedAt: null,
+        }];
+      } else {
+        continue;
       }
       if (!projects || projects.length === 0) continue;
 
@@ -10157,17 +10500,25 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
       );
 
       // Resolve model info once per agent
-      const agentModelInfo = await resolveSessionModelInfo(agent.id, 'default');
+      const modelInfoCache = new Map();
+      const getAgentModelInfo = async (sessionType) => {
+        const key = sessionType || 'default';
+        if (!modelInfoCache.has(key)) {
+          modelInfoCache.set(key, await resolveSessionModelInfo(agent.id, key));
+        }
+        return modelInfoCache.get(key);
+      };
 
       for (const project of projects) {
         const projectSessionIds = project.sessionIds || [];
         const projectSessions = [];
 
-        const buildSessionEntry = (sid) => {
+        const buildSessionEntry = async (sid) => {
           const meta = sessionMetaMap.get(sid);
+          const sessionType = meta?.sessionType || 'main';
+          const agentModelInfo = await getAgentModelInfo(sessionType);
           const tokenUsage = meta?.tokenUsage || null;
-          const lastReq = tokenUsage?.lastRequestUsage || null;
-          const contextTokens = lastReq?.totalTokens || lastReq?.inputTokens || null;
+          const contextTokens = getUsageContextTokens(tokenUsage);
           const contextLength = agentModelInfo.contextLength || null;
           const contextUsagePct = (contextTokens && contextLength)
             ? Math.round(contextTokens / contextLength * 100) : null;
@@ -10211,14 +10562,14 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
           for (const sid of projectSessionIds) {
             const key = getManagedRuntimeKey(agent.id, sid);
             if (liveSessionKeys.has(key)) {
-              projectSessions.push(buildSessionEntry(sid));
+              projectSessions.push(await buildSessionEntry(sid));
             }
           }
         } else {
           // When project has no explicit sessionIds, associate all live runtimes
           for (const rt of runtimes) {
             if (rt?.process && rt.process.exitCode === null && !rt.stopped && rt.selectedSessionId) {
-              projectSessions.push(buildSessionEntry(rt.selectedSessionId));
+              projectSessions.push(await buildSessionEntry(rt.selectedSessionId));
             }
           }
         }
@@ -10241,14 +10592,21 @@ app.get('/protoclaw/im_routable_targets', async (_req, res, next) => {
       let boundSessionInfo = null;
       if (bound?.agentId && bound?.sessionId) {
         try {
+          if (bound.agentId === 'qqbot') {
+            return {
+              id: l.id,
+              name: l.name || l.id,
+              carrier: l.carrier || null,
+              boundSession: null,
+            };
+          }
           const idx = readSessionIndexSync(bound.agentId);
           const match = (idx?.sessions || []).find(s => s.id === bound.sessionId);
           const sessionTitle = match?.title || bound.sessionId;
           const tokenUsage = match?.tokenUsage || null;
-          const lastReq = tokenUsage?.lastRequestUsage || null;
           const boundModelInfo = await resolveSessionModelInfo(bound.agentId, 'default');
           const contextLength = boundModelInfo.contextLength || null;
-          const contextTokens = lastReq?.totalTokens || lastReq?.inputTokens || null;
+          const contextTokens = getUsageContextTokens(tokenUsage);
           const contextUsagePct = (contextTokens && contextLength)
             ? Math.round(contextTokens / contextLength * 100) : null;
           const boundRtKey = getManagedRuntimeKey(bound.agentId, bound.sessionId);

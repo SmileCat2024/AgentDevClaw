@@ -6141,33 +6141,36 @@ function renderCurrentMainView() {
   const isWorkGroup = !!(agent && agent.id === 'work-group');
   const inChat = isChatSurfaceActive(agent);
   // 调试类面板（workspace/monitor/hooks/inspector/logs/mcp）只在 AI 对话时显示
-  // files 面板只在群聊工作空间显示
+  // resources/viewer/settings 面板只在群聊工作空间显示
   railButtons.forEach(btn => {
     const panel = btn.dataset.panel;
     if (!panel) return; // 工具按钮（语言/主题/设置）始终显示
-    if (panel === 'files' || panel === 'settings') {
+    if (panel === 'resources' || panel === 'viewer' || panel === 'settings') {
       btn.style.display = isWorkGroup ? '' : 'none';
     } else {
       btn.style.display = inChat ? '' : 'none';
     }
   });
   // 离开 AI 对话时关闭调试类面板
-  if (!inChat && activeFeaturePanel && activeFeaturePanel !== 'files' && activeFeaturePanel !== 'settings') {
+  if (!inChat && activeFeaturePanel && activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings') {
     activeFeaturePanel = null;
   }
   // 离开 group chat workspace 时清理状态
   if (!isWorkGroup) {
-    if (activeFeaturePanel === 'files' || activeFeaturePanel === 'settings') activeFeaturePanel = null;
+    if (activeFeaturePanel === 'resources' || activeFeaturePanel === 'viewer' || activeFeaturePanel === 'settings') activeFeaturePanel = null;
     if (window._wgActive && typeof window.WorkGroupUI?.deactivate === 'function') {
       window.WorkGroupUI.deactivate();
       window._wgActive = false;
     }
-    // 清空 Files 面板缓存
+    // 清空资源/文档面板缓存
     _filesPanelResources = [];
-    _filesPanelSelected = null;
-    _filesPanelContent = '';
     _filesPanelLoadedChatId = null;
-    _filesPanelView = 'list';
+    _resourcesSwitcherChatId = null;
+    _viewerFile = null;
+    _viewerContent = '';
+    _viewerChatId = null;
+    _viewerIsGroupMd = false;
+    _viewerPreview = false;
   } else {
     // 重新进入 group chat workspace 时恢复轮询
     if (!window._wgActive && window.WorkGroupUI) {
@@ -8380,48 +8383,45 @@ function renderReverseHooksPanel() {
   ].join('');
 }
 
-// ── Files Panel (群聊资源文件) ────────────────────────────────────
+// ── 资料面板 & 文档面板（Phase 2 双面板拆分） ──────────────────────
 
+// ── 共享文档状态 ──
+let _viewerFile = null;        // 当前文件名（或 'GROUP.md'）
+let _viewerContent = '';       // 文件内容
+let _viewerChatId = null;      // 文件来源群聊 ID（支持跨群查看）
+let _viewerIsGroupMd = false;  // 是否为 GROUP.md（决定 API 路由）
+let _viewerPreview = false;    // markdown 预览模式
+let _viewerAutoSaveTimer = null;
+
+// ── 资料面板状态 ──
 let _filesPanelResources = [];
-let _filesPanelSelected = null;   // 文件名
-let _filesPanelContent = '';
 let _filesPanelLoading = false;
 let _filesPanelLoadedChatId = null;
-let _filesPanelView = 'list';     // 'list' | 'detail'
-let _filesPanelPreview = false;   // markdown 预览开关（仅 detail 模式）
+let _resourcesSwitcherChatId = null; // 群切换器选中的群ID（null = 当前群）
 
-/** 检查当前编辑器是否有未保存的修改 */
-function _filesPanelHasUnsaved() {
-  if (!_filesPanelSelected || _filesPanelPreview || _filesPanelView !== 'detail') return false;
-  const ta = document.querySelector('[data-files-role="editor"]');
-  if (!ta) return false;
-  return ta.value !== _filesPanelContent;
+// ════════════════════════════════════════════════════════════════
+// 资料面板 (resources)
+// ════════════════════════════════════════════════════════════════
+
+function _getResourcesChatId() {
+  return _resourcesSwitcherChatId || window.WorkGroupUI?.getActiveChatId?.() || null;
 }
 
-async function loadFilesPanelResources() {
-  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+async function loadResourcesPanelData() {
+  const chatId = _getResourcesChatId();
   if (!chatId) {
     _filesPanelResources = [];
-    _filesPanelSelected = null;
-    _filesPanelContent = '';
     _filesPanelLoadedChatId = null;
-    _filesPanelView = 'list';
     return;
   }
-  // chatId 变了，重置视图到列表层
+  // 切换群聊前 flush viewer 自动保存
+  if (_viewerAutoSaveTimer) {
+    clearTimeout(_viewerAutoSaveTimer);
+    _viewerAutoSaveTimer = null;
+    saveViewerFile();
+  }
   if (_filesPanelLoadedChatId !== chatId) {
-    // 切换群聊前 flush 自动保存
-    if (_filesAutoSaveTimer) {
-      clearTimeout(_filesAutoSaveTimer);
-      _filesAutoSaveTimer = null;
-      const ta = document.querySelector('[data-files-role="editor"]');
-      if (ta) _filesPanelContent = ta.value;
-      saveFileInPanel();
-    }
-    _filesPanelView = 'list';
-    _filesPanelSelected = null;
-    _filesPanelContent = '';
-    _filesPanelResources = []; // 清空旧列表，避免切换群聊时闪现上一个群的文件
+    _filesPanelResources = [];
   }
   _filesPanelLoading = true;
   renderFeaturePanel();
@@ -8430,12 +8430,6 @@ async function loadFilesPanelResources() {
     const data = await res.json();
     _filesPanelResources = data.resources || [];
     _filesPanelLoadedChatId = chatId;
-    // 如果当前选中的文件不在列表中，回到列表层
-    if (_filesPanelSelected && !_filesPanelResources.find(r => r.name === _filesPanelSelected)) {
-      _filesPanelSelected = null;
-      _filesPanelContent = '';
-      _filesPanelView = 'list';
-    }
   } catch (err) {
     _filesPanelResources = [];
   }
@@ -8443,118 +8437,14 @@ async function loadFilesPanelResources() {
   renderFeaturePanel();
 }
 
-async function selectFileInPanel(name) {
-  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+async function createResourceFile() {
+  const chatId = _getResourcesChatId();
   if (!chatId) return;
-  if (name === _filesPanelSelected && _filesPanelView === 'detail') return;
-  // 自动保存：如果有 pending timer，立即保存当前文件
-  if (_filesAutoSaveTimer) {
-    clearTimeout(_filesAutoSaveTimer);
-    _filesAutoSaveTimer = null;
-    const ta = document.querySelector('[data-files-role="editor"]');
-    if (ta) _filesPanelContent = ta.value;
-    saveFileInPanel();
-  }
-  _filesPanelSelected = name;
-  _filesPanelContent = '';
-  _filesPanelPreview = false;
-  _filesPanelView = 'detail';
-  renderFeaturePanel();
-  try {
-    const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(name)}`);
-    const data = await res.json();
-    _filesPanelContent = data.content || '';
-  } catch (err) {
-    _filesPanelContent = '(加载失败)';
-  }
-  renderFeaturePanel();
-  const ta = document.querySelector('[data-files-role="editor"]');
-  if (ta) ta.focus();
-}
-
-let _filesAutoSaveTimer = null;
-let _filesAutoSaving = false;
-
-function _setFilesSaveStatus(text) {
-  const el = document.querySelector('[data-files-role="save-status"]');
-  if (!el) return;
-  el.textContent = text;
-  el.classList.remove('saving', 'saved', 'error');
-  if (text === '保存中…') el.classList.add('saving');
-  else if (text === '已保存') el.classList.add('saved');
-  else if (text === '保存失败') el.classList.add('error');
-}
-
-async function saveFileInPanel() {
-  const chatId = window.WorkGroupUI?.getActiveChatId?.();
-  if (!chatId || !_filesPanelSelected) return;
-  const ta = document.querySelector('[data-files-role="editor"]');
-  const content = ta ? ta.value : _filesPanelContent;
-  _filesAutoSaving = true;
-  _setFilesSaveStatus('保存中…');
-  try {
-    await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(_filesPanelSelected)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    _filesPanelContent = content;
-    _setFilesSaveStatus('已保存');
-    // 静默刷新文件列表元数据（size/mtime），不触发视图重渲染
-    const refreshRes = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources`);
-    const refreshData = await refreshRes.json();
-    _filesPanelResources = refreshData.resources || [];
-  } catch (err) {
-    console.error('[FilesPanel] save failed:', err);
-    _setFilesSaveStatus('保存失败');
-  }
-  _filesAutoSaving = false;
-}
-
-function _filesAutoSave() {
-  if (_filesAutoSaveTimer) clearTimeout(_filesAutoSaveTimer);
-  _filesAutoSaveTimer = setTimeout(() => {
-    _filesAutoSaveTimer = null;
-    saveFileInPanel();
-  }, 1000);
-}
-
-async function deleteFileInPanel(name) {
-  const chatId = window.WorkGroupUI?.getActiveChatId?.();
-  if (!chatId) return;
-  try {
-    await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(name)}`, {
-      method: 'DELETE',
-    });
-    if (_filesPanelSelected === name) {
-      _filesPanelSelected = null;
-      _filesPanelContent = '';
-      _filesPanelView = 'list';
-    }
-    await loadFilesPanelResources();
-  } catch (err) {
-    console.error('[FilesPanel] delete failed:', err);
-  }
-}
-
-async function createFileInPanel() {
-  const chatId = window.WorkGroupUI?.getActiveChatId?.();
-  if (!chatId) return;
-  const input = document.querySelector('[data-files-role="new-name"]');
-  const rawName = (input?.value || '').trim();
-  if (!rawName) {
-    if (input) {
-      input.focus();
-      input.classList.add('files-input-error');
-      setTimeout(() => input.classList.remove('files-input-error'), 1500);
-    }
-    return;
-  }
-  const btn = document.querySelector('.files-new-btn');
+  const btn = document.querySelector('.resources-new-btn');
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
   try {
-    const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(rawName)}`, {
-      method: 'PUT',
+    const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: '' }),
     });
@@ -8564,22 +8454,51 @@ async function createFileInPanel() {
       return;
     }
     const data = await res.json();
-    if (input) input.value = '';
-    // 静默刷新列表
-    const refreshRes = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources`);
-    const refreshData = await refreshRes.json();
-    _filesPanelResources = refreshData.resources || [];
-    _filesPanelLoadedChatId = chatId;
-    // 自动选中新文件，进入详情层
+    await loadResourcesPanelData();
     if (data.name) {
-      await selectFileInPanel(data.name);
-    } else {
-      renderFeaturePanel();
+      openViewer(data.name, chatId, false);
     }
   } catch (err) {
     _showFilesPanelError(`创建失败: ${err.message || err}`);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '新建'; }
+    if (btn) { btn.disabled = false; btn.textContent = '+ 新建'; }
+  }
+}
+
+async function deleteResourceFile(name) {
+  const chatId = _getResourcesChatId();
+  if (!chatId) return;
+  try {
+    await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+    await loadResourcesPanelData();
+  } catch (err) {
+    console.error('[ResourcesPanel] delete failed:', err);
+  }
+}
+
+async function renameResourceFile(name, newName) {
+  const chatId = _getResourcesChatId();
+  if (!chatId) return;
+  try {
+    const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(chatId)}/resources/${encodeURIComponent(name)}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      _showFilesPanelError(`重命名失败: ${errData.error || 'HTTP ' + res.status}`);
+      return;
+    }
+    // 如果当前 viewer 正在显示该文件，同步更新
+    if (_viewerFile === name && _viewerChatId === chatId) {
+      _viewerFile = newName;
+    }
+    await loadResourcesPanelData();
+  } catch (err) {
+    _showFilesPanelError(`重命名失败: ${err.message || err}`);
   }
 }
 
@@ -8596,26 +8515,15 @@ function _showFilesPanelError(msg) {
   setTimeout(() => div.remove(), 5000);
 }
 
-function renderFilesPanel() {
-  const chatId = window.WorkGroupUI?.getActiveChatId?.();
+function renderResourcesPanel() {
+  const chatId = _getResourcesChatId();
 
-  // 未选择群聊
   if (!chatId) {
     return '<div class="feature-panel-empty"><div>请先选择一个群聊。</div></div>';
   }
 
-  // 检查 workDir（通过 activeChat）
-  const activeChat = window.WorkGroupUI?.getActiveChat?.();
-  if (!activeChat?.workDir) {
-    return '<div class="feature-panel-empty"><div>请先在群聊设置中配置工作目录。</div></div>';
-  }
-
-  // 如果 chatId 变了，重新加载
   if (_filesPanelLoadedChatId !== chatId && !_filesPanelLoading) {
-    _filesPanelView = 'list';
-    _filesPanelSelected = null;
-    _filesPanelContent = '';
-    loadFilesPanelResources();
+    loadResourcesPanelData();
     return '<div class="feature-panel-empty"><div>加载中...</div></div>';
   }
 
@@ -8623,90 +8531,259 @@ function renderFilesPanel() {
     return '<div class="feature-panel-empty"><div>加载中...</div></div>';
   }
 
-  // ── 详情层 ──
-  if (_filesPanelView === 'detail' && _filesPanelSelected) {
-    return _renderFilesDetailView();
+  const chatSummaries = window.WorkGroupUI?.getChatSummaries?.() || [];
+  const activeChat = window.WorkGroupUI?.getActiveChat?.();
+
+  const switcherChat = _resourcesSwitcherChatId
+    ? chatSummaries.find(c => c.id === _resourcesSwitcherChatId)
+    : activeChat;
+  const hasWorkDir = !!(switcherChat?.workDir);
+  const workDir = switcherChat?.workDir || '';
+
+  // ── 群切换器 ──
+  const switcherOptions = chatSummaries.length > 0
+    ? chatSummaries.map(c =>
+        `<option value="${escapeHtml(c.id)}"${c.id === chatId ? ' selected' : ''}>${escapeHtml(c.name)}${c.workDir ? '' : ' (无目录)'}</option>`
+      ).join('')
+    : `<option value="${escapeHtml(chatId)}" selected>${escapeHtml(activeChat?.name || '当前群聊')}</option>`;
+
+  // ── 统一文件列表（GROUP.md 置顶 + 普通文件，共享卡片样式） ──
+  const groupMdEntry = _filesPanelResources.find(r => r.isGroupMd);
+  const fileEntries = _filesPanelResources.filter(r => !r.isGroupMd);
+
+  function renderFileItem(r, isGroupMd) {
+    const name = isGroupMd ? 'GROUP.md' : r.name;
+    const ext = (isGroupMd ? 'md' : r.ext) || 'md';
+    const extLabel = ext.toUpperCase();
+    const jsName = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const previewHtml = r.preview
+      ? `<div class="resources-file-preview">${escapeHtml(r.preview)}</div>`
+      : (isGroupMd ? '<div class="resources-file-preview resources-file-preview-empty">尚无群简介</div>' : '');
+
+    const actionsHtml = isGroupMd ? '' : [
+      '<div class="resources-file-actions">',
+      `  <button class="resources-file-action" onclick="event.stopPropagation();window._filesRename('${jsName}')" title="重命名">改名</button>`,
+      `  <button class="resources-file-action resources-file-delete" onclick="event.stopPropagation();window._filesDelete('${jsName}')" title="删除">&times;</button>`,
+      '</div>',
+    ].join('');
+
+    const metaText = isGroupMd ? '群文档' : (r.size < 1024 ? `${r.size} B` : `${(r.size / 1024).toFixed(1)} KB`);
+    const itemClass = isGroupMd ? 'resources-file-item is-groupmd' : 'resources-file-item';
+    const dragAttr = isGroupMd ? '' : ` draggable="true" data-files-name="${escapeHtml(name)}"`;
+
+    return [
+      `<div class="${itemClass}" onclick="window._viewerOpen('${jsName}','${escapeHtml(chatId)}',${isGroupMd})"${dragAttr}>`,
+      '  <div class="resources-file-top">',
+      `    <span class="resources-file-ext resources-file-ext-${ext}">${escapeHtml(extLabel)}</span>`,
+      '    <div class="resources-file-info">',
+      `      <span class="resources-file-name">${escapeHtml(name)}</span>`,
+      previewHtml,
+      '    </div>',
+      actionsHtml,
+      '  </div>',
+      `  <span class="resources-file-meta-text">${escapeHtml(metaText)}</span>`,
+      '</div>',
+    ].join('');
   }
 
-  // ── 列表层 ──
-  return _renderFilesListView();
-}
+  let listHtml;
+  if (!hasWorkDir) {
+    listHtml = '<div class="resources-list-empty">未配置工作目录，无法管理资源文件。</div>';
+  } else if (!groupMdEntry && fileEntries.length === 0) {
+    listHtml = '<div class="resources-list-empty">暂无文件，点击右上角新建</div>';
+  } else {
+    const items = [];
+    if (groupMdEntry) items.push(renderFileItem(groupMdEntry, true));
+    fileEntries.forEach(r => items.push(renderFileItem(r, false)));
+    listHtml = items.join('');
+  }
 
-function _renderFilesListView() {
-  const listHtml = _filesPanelResources.length === 0
-    ? '<div class="files-empty">暂无文件，点击上方新建</div>'
-    : _filesPanelResources.map(r => {
-        const sizeStr = r.size < 1024 ? `${r.size} B` : `${(r.size / 1024).toFixed(1)} KB`;
-        const extClass = `files-ext-${r.ext || 'md'}`;
-        const jsName = r.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-        return `<div class="files-item" onclick="window._filesSelect('${jsName}')" draggable="true" data-files-name="${escapeHtml(r.name)}">
-          <div class="files-item-row">
-            <span class="files-item-icon ${extClass}">${escapeHtml(r.ext?.toUpperCase() || 'MD')}</span>
-            <span class="files-item-name">${escapeHtml(r.name)}</span>
-          </div>
-          <div class="files-item-meta">
-            <span>${sizeStr}</span>
-            <button class="files-item-delete" onclick="event.stopPropagation();window._filesDelete('${jsName}')" title="删除">&#10005;</button>
-          </div>
-        </div>`;
-      }).join('');
+  const totalCount = (groupMdEntry ? 1 : 0) + fileEntries.length;
+  const pathHtml = workDir
+    ? `<div class="resources-path"><code title="${escapeHtml(workDir)}">${escapeHtml(workDir)}</code></div>`
+    : '';
 
   return [
-    '<div class="files-panel files-panel-list">',
-    '  <div class="files-toolbar">',
-    '    <div class="files-new-row">',
-    '      <input type="text" class="files-new-input" data-files-role="new-name" placeholder="新建文件名" onkeydown="if(event.key===\'Enter\'){event.preventDefault();window._filesCreate&&window._filesCreate()}" />',
-    '      <button class="files-new-btn" onclick="window._filesCreate?window._filesCreate():alert(\'Files面板未正确加载，请刷新页面\')">新建</button>',
-    '    </div>',
+    '<div class="resources-panel">',
+    '  <div class="resources-header">',
+    `    <select class="resources-switcher" onchange="window._resourcesSwitchChat(this.value)">`,
+    switcherOptions,
+    '    </select>',
     '  </div>',
-    `  <div class="files-list">${listHtml}</div>`,
+    '  <div class="resources-body">',
+    '    <div class="resources-body-header">',
+    '      <div class="resources-title-row">',
+    '        <span class="resources-title">资料文件</span>',
+    `        <span class="resources-count">${totalCount}</span>`,
+    hasWorkDir
+      ? '        <button class="resources-new-btn" onclick="window._filesCreate()">+ 新建</button>'
+      : '',
+    '      </div>',
+    pathHtml,
+    '    </div>',
+    `    <div class="resources-list">${listHtml}</div>`,
+    '  </div>',
     '</div>',
   ].join('');
 }
 
-function _renderFilesDetailView() {
-  const isMd = /\.md$/i.test(_filesPanelSelected);
-  const showPreview = isMd && _filesPanelPreview;
+// ════════════════════════════════════════════════════════════════
+// 文档面板 (viewer)
+// ════════════════════════════════════════════════════════════════
 
-  // 预览模式：渲染 markdown
+function openViewer(file, chatId, isGroupMd) {
+  // Flush 之前文件的自动保存
+  if (_viewerAutoSaveTimer) {
+    clearTimeout(_viewerAutoSaveTimer);
+    _viewerAutoSaveTimer = null;
+    saveViewerFile();
+  }
+  _viewerFile = file;
+  _viewerChatId = chatId;
+  _viewerIsGroupMd = !!isGroupMd;
+  _viewerContent = '';
+  const _isMd = !!isGroupMd || /\.md$/i.test(file);
+  _viewerPreview = _isMd;
+  if (typeof activeFeaturePanel !== 'undefined') {
+    activeFeaturePanel = 'viewer';
+  }
+  renderFeaturePanel();
+  loadViewerContent();
+}
+
+async function loadViewerContent() {
+  if (!_viewerFile || !_viewerChatId) return;
+  const cid = _viewerChatId;
+  try {
+    let content;
+    if (_viewerIsGroupMd) {
+      const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(cid)}/group_md`);
+      const data = await res.json();
+      content = data.content || '';
+    } else {
+      const res = await fetch(`/protoclaw/group_chats/${encodeURIComponent(cid)}/resources/${encodeURIComponent(_viewerFile)}`);
+      const data = await res.json();
+      content = data.content || '';
+    }
+    if (_viewerChatId !== cid) return; // 竞态保护
+    _viewerContent = content;
+  } catch (err) {
+    if (_viewerChatId !== cid) return;
+    _viewerContent = '(加载失败)';
+  }
+  renderFeaturePanel();
+  const ta = document.querySelector('[data-files-role="editor"]');
+  if (ta) ta.focus();
+}
+
+let _viewerAutoSaving = false;
+
+function _setViewerSaveStatus(text) {
+  const el = document.querySelector('[data-files-role="save-status"]');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove('saving', 'saved', 'error');
+  if (text === '保存中…') el.classList.add('saving');
+  else if (text === '已保存') el.classList.add('saved');
+  else if (text === '保存失败') el.classList.add('error');
+}
+
+async function saveViewerFile() {
+  if (!_viewerFile || !_viewerChatId) return;
+  const cid = _viewerChatId;
+  const ta = document.querySelector('[data-files-role="editor"]');
+  const content = ta ? ta.value : _viewerContent;
+  _viewerAutoSaving = true;
+  _setViewerSaveStatus('保存中…');
+  try {
+    if (_viewerIsGroupMd) {
+      await fetch(`/protoclaw/group_chats/${encodeURIComponent(cid)}/group_md`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+    } else {
+      await fetch(`/protoclaw/group_chats/${encodeURIComponent(cid)}/resources/${encodeURIComponent(_viewerFile)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+    }
+    if (_viewerChatId !== cid) return; // 竞态保护
+    _viewerContent = content;
+    _setViewerSaveStatus('已保存');
+  } catch (err) {
+    console.error('[ViewerPanel] save failed:', err);
+    _setViewerSaveStatus('保存失败');
+  }
+  _viewerAutoSaving = false;
+}
+
+function _viewerAutoSave() {
+  if (_viewerAutoSaveTimer) clearTimeout(_viewerAutoSaveTimer);
+  _viewerAutoSaveTimer = setTimeout(() => {
+    _viewerAutoSaveTimer = null;
+    saveViewerFile();
+  }, 1000);
+}
+
+function renderViewerPanel() {
+  // 空状态
+  if (!_viewerFile) {
+    return '<div class="feature-panel-empty"><div>从「资料」面板选择一个文件开始编辑。</div></div>';
+  }
+
+  const isMd = /\.md$/i.test(_viewerFile) || _viewerIsGroupMd;
+  const showPreview = isMd && _viewerPreview;
+
+  // 跨群来源标记
+  const activeChatId = window.WorkGroupUI?.getActiveChatId?.();
+  const isCrossChat = _viewerChatId && activeChatId && _viewerChatId !== activeChatId;
+  const chatSummaries = window.WorkGroupUI?.getChatSummaries?.() || [];
+  const sourceChatName = isCrossChat
+    ? (chatSummaries.find(c => c.id === _viewerChatId)?.name || _viewerChatId)
+    : null;
+
+  // 文件名显示
+  const displayName = _viewerIsGroupMd ? 'GROUP.md · 群文档' : _viewerFile;
+  const nameSuffix = sourceChatName ? ` · 来自「${escapeHtml(sourceChatName)}」` : '';
+
+  // 内容区域
   let contentAreaHtml;
   if (showPreview) {
     const mdHtml = typeof marked !== 'undefined'
-      ? marked.parse(_filesPanelContent || '')
-      : escapeHtml(_filesPanelContent || '');
+      ? marked.parse(_viewerContent || '')
+      : escapeHtml(_viewerContent || '');
     contentAreaHtml = `<div class="files-detail-preview markdown-body" data-files-role="preview">${mdHtml}</div>`;
   } else {
-    contentAreaHtml = `<textarea class="files-detail-editor" data-files-role="editor" oninput="window._filesAutoSave()" placeholder="在此编辑文件内容...">${escapeHtml(_filesPanelContent)}</textarea>`;
+    contentAreaHtml = `<textarea class="files-detail-editor" data-files-role="editor" oninput="window._viewerAutoSave()" placeholder="在此编辑文件内容...">${escapeHtml(_viewerContent)}</textarea>`;
   }
 
-  // 单一切换按钮：编辑模式显示"预览"，预览模式显示"编辑"
+  // 编辑/预览切换
   const toggleBtn = isMd
-    ? `<button class="files-toggle-btn${!_filesPanelPreview ? ' active' : ''}" onclick="window._filesTogglePreview()">${_filesPanelPreview ? '编辑' : '预览'}</button>`
+    ? `<button class="files-toggle-btn${!_viewerPreview ? ' active' : ''}" onclick="window._viewerTogglePreview()">${_viewerPreview ? '编辑' : '预览'}</button>`
     : '';
 
   return [
-    '<div class="files-panel files-panel-detail">',
+    '<div class="files-panel files-panel-detail viewer-panel">',
     '  <div class="files-detail-header">',
-    '    <button class="files-back-btn" onclick="window._filesBack()" title="返回列表">',
-    '      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>',
-    '    </button>',
-    `    <span class="files-detail-title">${escapeHtml(_filesPanelSelected)}</span>`,
+    `    <span class="files-detail-title">${escapeHtml(displayName)}${nameSuffix}</span>`,
     '    <div class="files-detail-actions">',
     toggleBtn,
     `      <span class="files-auto-save-status" data-files-role="save-status"></span>`,
     '    </div>',
     '  </div>',
     `  <div class="files-detail-body">${contentAreaHtml}</div>`,
+    '  <div class="viewer-action-bar">',
+    '    <button class="viewer-action-btn" onclick="window._viewerInsertMessage()">插入消息</button>',
+    '    <button class="viewer-action-btn" onclick="window._viewerCopyContent()">复制内容</button>',
+    '  </div>',
     '</div>',
   ].join('');
 }
 
 // 暴露给 work-group-ui 拖拽使用
 window._filesPanelGetResources = () => _filesPanelResources;
-window._filesPanelGetSelectedContent = () => _filesPanelContent;
-// 暴露给 work-group-ui 切换群聊时检查未保存修改
-window._filesPanelHasUnsaved = _filesPanelHasUnsaved;
-window._filesAutoSave = _filesAutoSave;
 
 // ── Feature Panels 注册 ──────────────────────────────────────────
 
@@ -8735,9 +8812,13 @@ const featurePanels = {
     title: () => t('panel_mcp'),
     render: () => renderMcpPanel(),
   },
-  files: {
-    title: () => t('panel_files'),
-    render: () => renderFilesPanel(),
+  resources: {
+    title: () => '资料',
+    render: () => renderResourcesPanel(),
+  },
+  viewer: {
+    title: () => '文档',
+    render: () => renderViewerPanel(),
   },
   settings: {
     title: () => '群聊设置',
@@ -9032,7 +9113,8 @@ function applyLanguage() {
   const inspectorButton = document.getElementById('rail-inspector');
   const logsButton = document.getElementById('rail-logs');
   const mcpButton = document.getElementById('rail-mcp');
-  const filesButton = document.getElementById('rail-files');
+  const resourcesButton = document.getElementById('rail-resources');
+  const viewerButton = document.getElementById('rail-viewer');
 
   if (sidebarToggleEl) sidebarToggleEl.title = t('sidebar_toggle');
   if (panelResizerEl) panelResizerEl.title = t('resize_panel');
@@ -9042,7 +9124,8 @@ function applyLanguage() {
   if (inspectorButton) inspectorButton.title = t('reverse_hooks_tooltip');
   if (logsButton) logsButton.title = t('logs_tooltip');
   if (mcpButton) mcpButton.title = t('mcp_tooltip');
-  if (filesButton) filesButton.title = t('files_tooltip');
+  if (resourcesButton) resourcesButton.title = '资料';
+  if (viewerButton) viewerButton.title = '文档';
 
   if (typeof updateNotificationStatus === 'function' && typeof lastNotificationStatusPayload !== 'undefined' && lastNotificationStatusPayload) {
     updateNotificationStatus(lastNotificationStatusPayload);
@@ -9329,53 +9412,67 @@ railButtons.forEach(button => {
       loadLogs(true).catch((error) => console.error('Failed to load logs:', error));
     } else if (button.dataset.panel === 'mcp' && activeFeaturePanel === 'mcp') {
       loadMcpInfo(true).catch((error) => console.error('Failed to load MCP info:', error));
-    } else if (button.dataset.panel === 'files' && activeFeaturePanel === 'files') {
-      loadFilesPanelResources().catch((error) => console.error('Failed to load files:', error));
+    } else if (button.dataset.panel === 'resources' && activeFeaturePanel === 'resources') {
+      loadResourcesPanelData().catch((error) => console.error('Failed to load resources:', error));
     }
   });
 });
 
-// Files panel — window 函数（与 logs/mcp 面板 inline onclick 模式一致）
-window._filesSelect = (name) => selectFileInPanel(name);
+// Resources / Viewer panel — window 函数
 window._filesDelete = (name) => {
-  if (confirm(`确定删除「${name}」？`)) deleteFileInPanel(name);
+  if (confirm(`确定删除「${name}」？`)) deleteResourceFile(name);
 };
-window._filesSave = () => saveFileInPanel();
-window._filesCreate = () => createFileInPanel();
-window._filesBack = () => {
-  // 自动保存：如果有 pending timer，立即保存
-  const ta = document.querySelector('[data-files-role="editor"]');
-  if (ta) {
-    _filesPanelContent = ta.value;
-    if (_filesAutoSaveTimer) {
-      clearTimeout(_filesAutoSaveTimer);
-      _filesAutoSaveTimer = null;
-      saveFileInPanel();
-    }
+window._filesCreate = () => createResourceFile();
+window._filesRename = (name) => {
+  const newName = prompt('重命名文件', name);
+  if (newName && newName.trim() && newName.trim() !== name) {
+    renameResourceFile(name, newName.trim());
   }
-  _filesPanelView = 'list';
-  renderFeaturePanel();
 };
-window._filesTogglePreview = () => {
+
+// ── 文档面板 window 函数 ──
+window._viewerOpen = (file, chatId, isGroupMd) => openViewer(file, chatId, isGroupMd);
+window._viewerAutoSave = _viewerAutoSave;
+window._viewerTogglePreview = () => {
   // 切换前同步编辑器内容到 state 并触发保存
   const ta = document.querySelector('[data-files-role="editor"]');
   if (ta) {
-    _filesPanelContent = ta.value;
-    // 如果有 pending timer，立即保存
-    if (_filesAutoSaveTimer) {
-      clearTimeout(_filesAutoSaveTimer);
-      _filesAutoSaveTimer = null;
-      saveFileInPanel();
+    _viewerContent = ta.value;
+    if (_viewerAutoSaveTimer) {
+      clearTimeout(_viewerAutoSaveTimer);
+      _viewerAutoSaveTimer = null;
+      saveViewerFile();
     }
   }
-  _filesPanelPreview = !_filesPanelPreview;
+  _viewerPreview = !_viewerPreview;
   renderFeaturePanel();
+};
+window._viewerInsertMessage = () => {
+  const ta = document.querySelector('[data-files-role="editor"]');
+  const content = ta ? ta.value : _viewerContent;
+  const name = _viewerFile || 'untitled';
+  if (window.WorkGroupUI?.addAttachment) {
+    window.WorkGroupUI.addAttachment(name, content);
+  }
+};
+window._viewerCopyContent = () => {
+  const ta = document.querySelector('[data-files-role="editor"]');
+  const content = ta ? ta.value : _viewerContent;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(content).catch(() => {});
+  }
+};
+
+// ── 资料面板群切换器 ──
+window._resourcesSwitchChat = (chatId) => {
+  _resourcesSwitcherChatId = chatId || null;
+  loadResourcesPanelData();
 };
 
 // Files panel — dragstart 事件委托（文件条目可拖拽到输入区）
 if (featurePanelBody) {
   featurePanelBody.addEventListener('dragstart', (e) => {
-    const item = e.target.closest('.files-item');
+    const item = e.target.closest('[data-files-name]');
     if (!item) return;
     const name = item.dataset.filesName;
     if (!name) return;

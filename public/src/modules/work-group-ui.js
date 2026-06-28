@@ -65,6 +65,9 @@
   let _importModalEl = null;     // 引入会话搜索弹窗 DOM
   let _importSearchTimer = null; // 搜索防抖计时器
   let _mentionTarget = null;     // @mention picker 当前选中的 identityRef（level 2）
+  let _settingsAdminCollapsed = true; // 管理员配置折叠区状态（默认收起）
+  let _addMemberModalEl = null;  // 添加成员弹窗 DOM
+  let _addMemberSearchTimer = null; // 添加成员搜索防抖计时器
 
   // ── 语音输入状态 ─────────────────────────────────────────────
   let _voiceRecording = false;
@@ -192,6 +195,19 @@
     return `${mo}/${dd} ${hh}:${mm}`;
   }
 
+  function _formatCreateDate(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${mo}/${dd}`;
+  }
+
+  function _extractMdSummary(content) {
+    if (!content) return '';
+    return content.split('\n').map((l) => l.trim()).filter((l) => l).slice(0, 3).join('\n');
+  }
+
   function getMemberName(chat, from) {
     if (from === 'user') return '我';
     const id = identities.find((i) => i.identityRef === from);
@@ -201,6 +217,43 @@
   function getIdentityName(identityRef) {
     const id = identities.find((i) => i.identityRef === identityRef);
     return id ? id.displayName : identityRef;
+  }
+
+  // ── 生成式头像 ──────────────────────────────────────────────
+  // 参考 Discord/GitHub 默认头像：首字母 + 基于 hash 的配色
+  // 纯函数：name → { initials, color }
+
+  const AVATAR_COLORS = [
+    '#5865F2', '#57F287', '#FEE75C', '#EB459E',
+    '#ED4245', '#F47B67', '#3BA55D', '#FAA61A',
+    '#9B59B6', '#1ABC9C', '#E67E22', '#3498DB',
+  ];
+
+  const AVATAR_SPECIAL_COLORS = {
+    'user': '#5865F2',           // 品牌蓝
+    'work-group:admin': '#9B59B6', // 管理紫
+  };
+
+  function _avatarInitials(name, identityRef) {
+    if (identityRef === 'user') return '我';
+    if (identityRef === 'work-group:admin') return '管';
+    if (!name) return '?';
+    return name.charAt(0).toUpperCase();
+  }
+
+  function generateAvatar(name, identityRef) {
+    const special = identityRef ? AVATAR_SPECIAL_COLORS[identityRef] : null;
+    if (special) {
+      return { initials: _avatarInitials(name, identityRef), color: special };
+    }
+    if (!name) return { initials: '?', color: '#808080' };
+    const initials = _avatarInitials(name, identityRef);
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+    }
+    const color = AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+    return { initials, color };
   }
 
   function collectActiveSessions(chat) {
@@ -583,10 +636,10 @@
         }).join('') + '</div>'
       : '';
 
-    // 附件标签
+    // 附件标签（点击可在文档面板打开）
     const attachmentsHtml = (Array.isArray(msg.attachments) && msg.attachments.length > 0)
       ? '<div class="wg-msg-attachments">' + msg.attachments.map((a) => {
-          return `<span class="wg-msg-attachment-tag" title="${esc(a.name)}">${esc(a.name)}</span>`;
+          return `<span class="wg-msg-attachment-tag clickable" data-wg-attachment-open="${esc(a.name)}" title="${esc(a.name)} — 点击在文档面板打开">${esc(a.name)}</span>`;
         }).join('') + '</div>'
       : '';
 
@@ -641,7 +694,7 @@
   }
 
   // 长消息气泡自动折叠
-  const COLLAPSE_THRESHOLD = 180;
+  const COLLAPSE_THRESHOLD = 300;
   const _expandedMsgIds = new Set();
   function applyCollapsible(container) {
     if (!container) return;
@@ -790,72 +843,148 @@
     );
   }
 
+  // ── 成员头像网格（微信/QQ 风格） ───────────────────────────
+
   function renderGroupMemberRows(chat) {
     const members = normalizeGroupMembers(chat.members || []);
     if (!members.length) {
       return '<div class="wg-settings-empty-note">当前群聊还没有成员。</div>';
     }
-    return members.map((m) => {
+
+    const cells = members.map((m) => {
       const identity = identities.find((id) => id.identityRef === m.identityRef);
       const name = m.identityRef === 'user' ? '我' : (identity?.displayName || getIdentityName(m.identityRef));
-      const desc = m.identityRef === 'user'
-        ? '群主 / 人类协作者'
-        : m.identityRef === 'work-group:admin'
-          ? '固定管理员 / 群聊协调层'
-          : (identity?.description || m.role || 'Agent 成员');
+      const avatar = generateAvatar(name, m.identityRef);
       const canRemove = isManageableGroupIdentity(m.identityRef);
       const encodedRef = encodeURIComponent(m.identityRef);
+
       return [
-        '<div class="wg-settings-member-row">',
-        '  <div class="wg-settings-member-main">',
-        `    <span class="wg-settings-row-name">${esc(name)}</span>`,
-        `    <span class="wg-settings-row-role">${esc(desc)}</span>`,
-        '  </div>',
+        `<div class="wg-member-cell${canRemove ? ' removable' : ''}">`,
+        '  <div class="wg-member-cell-avatar-wrap">',
+        `    <div class="wg-avatar wg-avatar-md" style="background-color:${avatar.color}">${esc(avatar.initials)}</div>`,
         canRemove
-          ? `  <button class="wg-member-remove-btn" onclick="window._wgRemoveMember(decodeURIComponent('${encodedRef}'))">移除</button>`
+          ? `    <button class="wg-member-cell-remove" onclick="window._wgRemoveMember(decodeURIComponent('${encodedRef}'))" title="移出群聊">&times;</button>`
           : '',
+        '  </div>',
+        `  <span class="wg-member-cell-name" title="${esc(name)}">${esc(name)}</span>`,
         '</div>',
       ].join('');
     }).join('');
-  }
 
-  function renderAddMemberControl(chat) {
-    const available = getAvailableMemberIdentities(chat);
-    if (!available.length) {
-      return '<div class="wg-settings-empty-note">没有可添加的 Agent 身份。</div>';
-    }
-    const options = available.map((id) =>
-      `<option value="${esc(id.identityRef)}">${esc(id.displayName)} — ${esc(id.description || id.identityRef)}</option>`
-    ).join('');
-    return [
-      '<div class="wg-add-member-row">',
-      `  <select class="wg-settings-input" data-wg-role="add-member-select">${options}</select>`,
-      '  <button class="wg-modal-btn" onclick="window._wgAddSelectedMember()">添加</button>',
+    // 网格末尾的「+ 添加」按钮
+    const addCell = [
+      '<div class="wg-member-cell wg-member-cell-add">',
+      '  <button class="wg-member-cell-add-btn" onclick="window._wgOpenAddMemberModal()" title="添加成员">',
+      '    <span class="wg-member-cell-add-icon">+</span>',
+      '  </button>',
+      '  <span class="wg-member-cell-name">添加</span>',
       '</div>',
     ].join('');
+
+    return `<div class="wg-member-grid">${cells}${addCell}</div>`;
   }
+
+  // renderAddMemberControl 已被头像网格中的「+」按钮 + 弹窗替代
+  function renderAddMemberControl(_chat) {
+    return '';
+  }
+
+  // ── GROUP.md 只读卡片 + 群资料库入口 ──────────────────────────
 
   function renderFilesBridgeSection(chat) {
     const hasWorkDir = !!chat.workDir;
+    const mdValue = (groupMdLoading || groupMdChatId !== chat.id) ? '' : groupMdContent;
+    const mdSummary = _extractMdSummary(mdValue);
+
+    const groupMdCard = (groupMdLoading && groupMdChatId === chat.id)
+      ? '<div class="wg-group-md-summary wg-group-md-loading wg-group-md-clickable">加载中</div>'
+      : mdSummary
+        ? `<div class="wg-group-md-summary wg-group-md-clickable" onclick="window._wgEditGroupMd()">${esc(mdSummary)}</div>`
+        : '<div class="wg-group-md-summary wg-group-md-empty wg-group-md-clickable" onclick="window._wgEditGroupMd()">点击添加群聊背景、目标和约定。</div>';
+
     return [
+      // GROUP.md 只读卡片
       '  <div class="wg-settings-section">',
-      '    <div class="wg-settings-section-title">群资料</div>',
-      '    <div class="wg-resource-bridge">',
-      '      <div class="wg-resource-bridge-main">',
-      `        <div class="wg-resource-bridge-title">${hasWorkDir ? '文件面板已连接' : '未配置工作目录'}</div>`,
-      `        <code class="wg-resource-bridge-path">${esc(hasWorkDir ? '.agentdev/resources' : '先选择工作目录')}</code>`,
-      '      </div>',
-      `      <button class="wg-modal-btn" onclick="${hasWorkDir ? 'window._wgOpenFilesPanel()' : 'window._wgChangeWorkDir()'}">${hasWorkDir ? '打开文件' : '选择目录'}</button>`,
+      '    <div class="wg-settings-section-header">',
+      '      <span class="wg-settings-section-title">GROUP.md</span>',
       '    </div>',
+      groupMdCard,
+      '  </div>',
+      // 群资料库
+      '  <div class="wg-settings-section">',
+      '    <div class="wg-settings-section-header">',
+      '      <span class="wg-settings-section-title">群资料库</span>',
+      hasWorkDir
+        ? '      <button class="wg-settings-section-action" onclick="window._wgOpenFilesPanel()">打开文件</button>'
+        : '      <button class="wg-settings-section-action" onclick="window._wgChangeWorkDir()">选择目录</button>',
+      '    </div>',
+      hasWorkDir
+        ? `    <div class="wg-resource-bridge-info"><code>${esc(chat.workDir)}/.agentdev/resources</code></div>`
+        : '    <div class="wg-settings-empty-note">未配置工作目录</div>',
       '  </div>',
     ].join('');
   }
 
   function renderSettingsPanel(chat) {
+    const members = normalizeGroupMembers(chat.members || []);
+    const memberCount = members.length;
+    const avatar = generateAvatar(chat.name, null);
+    const createdDate = _formatCreateDate(chat.createdAt);
+    const memberGrid = renderGroupMemberRows(chat);
+
+    return [
+      '<div class="wg-settings-panel">',
+
+      // ── 群资料卡片头部 ──
+      '  <div class="wg-settings-profile-card">',
+      `    <div class="wg-avatar wg-avatar-lg" style="background-color:${avatar.color}">${esc(avatar.initials)}</div>`,
+      '    <div class="wg-settings-profile-info">',
+      `      <input type="text" class="wg-settings-profile-name" value="${esc(chat.name)}" onchange="window._wgSettingsChange('name', this.value)" />`,
+      `      <div class="wg-settings-profile-meta">${memberCount} 名成员${createdDate ? ' · 创建于 ' + esc(createdDate) : ''}</div>`,
+      chat.workDir
+        ? `      <div class="wg-settings-profile-workdir"><code title="${esc(chat.workDir)}">${esc(chat.workDir)}</code></div>`
+        : '      <div class="wg-settings-profile-workdir"><span class="wg-settings-profile-no-workdir">未设置工作目录</span> <button class="wg-link-btn" onclick="window._wgChangeWorkDir()">设置</button></div>',
+      '    </div>',
+      '  </div>',
+
+      // ── 成员头像网格 ──
+      '  <div class="wg-settings-section">',
+      '    <div class="wg-settings-section-header">',
+      `      <span class="wg-settings-section-title">成员 (${memberCount})</span>`,
+      '    </div>',
+      memberGrid,
+      '  </div>',
+
+      // ── GROUP.md 只读卡片 + 群资料库 ──
+      renderFilesBridgeSection(chat),
+
+      // ── 管理员配置折叠区 ──
+      '  <div class="wg-settings-collapse">',
+      `    <button class="wg-settings-collapse-toggle${_settingsAdminCollapsed ? '' : ' expanded'}" onclick="window._wgToggleAdminConfig()">`,
+      '      <span class="wg-settings-collapse-label">管理员配置</span>',
+      `      <span class="wg-collapse-arrow">${_settingsAdminCollapsed ? '&#9654;' : '&#9660;'}</span>`,
+      '    </button>',
+      !_settingsAdminCollapsed ? renderAdminConfigBody(chat) : '',
+      '  </div>',
+
+      // ── 危险区 ──
+      '  <div class="wg-settings-section wg-settings-danger">',
+      `    <button class="wg-btn-danger" onclick="window._wgDissolve()">解散此群聊</button>`,
+      '  </div>',
+
+      '</div>',
+    ].join('');
+  }
+
+  // ── 管理员配置折叠区内容（模式设置 + 记忆 + 模型） ───────────
+
+  function renderAdminConfigBody(chat) {
     const initiative = chat.initiativeMode || 'assist';
     const autonomy = chat.autonomyMode || 'auto';
-    const mdValue = groupMdLoading || groupMdChatId !== chat.id ? '加载中…' : groupMdContent;
-    const memberRows = renderGroupMemberRows(chat);
+    const memRange = chat.adminMemory?.range || '3d';
+    const memLimitMode = chat.adminMemory?.limitMode || 'tokens';
+    const memTokenLimit = chat.adminMemory?.tokenLimit ?? chat.adminMemory?.limitValue ?? 100000;
+    const memRatioLimit = chat.adminMemory?.ratioLimit ?? 80;
 
     const initiativeOptions = INITIATIVE_MODES.map((m) =>
       `<option value="${m.value}"${m.value === initiative ? ' selected' : ''}>${esc(m.label)} — ${esc(m.desc)}</option>`
@@ -865,62 +994,56 @@
       `<option value="${m.value}"${m.value === autonomy ? ' selected' : ''}>${esc(m.label)} — ${esc(m.desc)}</option>`
     ).join('');
 
+    // 上下文限制：分段切换 + 对应值输入（两组值独立存储，切换不丢失）
+    const isTokenMode = memLimitMode === 'tokens';
+    const limitSuffix = isTokenMode ? 'tokens' : '%';
+    const limitMin = isTokenMode ? '1000' : '1';
+    const limitMax = isTokenMode ? '1000000' : '100';
+    const limitPlaceholder = isTokenMode ? '100000' : '80';
+    const currentLimitValue = isTokenMode ? memTokenLimit : memRatioLimit;
+    const limitField = isTokenMode ? 'memoryTokenLimit' : 'memoryRatioLimit';
+
     return [
-      '<div class="wg-settings-panel">',
-      '  <div class="wg-settings-section">',
-      '    <div class="wg-settings-section-title">群信息</div>',
-      `    <div class="wg-settings-field"><label>群名称</label><input type="text" value="${esc(chat.name)}" class="wg-settings-input" onchange="window._wgSettingsChange('name', this.value)" /></div>`,
-      `    <div class="wg-settings-field"><label>工作目录</label>`,
-      `      <div class="wg-workdir-row">`,
-      `        <code class="wg-workdir-path">${esc(chat.workDir || '未设置')}</code>`,
-      `        <button class="wg-modal-btn" onclick="window._wgChangeWorkDir()">更改</button>`,
-      `      </div>`,
-      `    </div>`,
-      '  </div>',
-      renderFilesBridgeSection(chat),
-      `  <div class="wg-settings-section">`,
-      `    <div class="wg-settings-section-title">群聊背景文档 (GROUP.md)</div>`,
-      `    <div class="wg-settings-field">`,
-      `      <textarea class="wg-settings-input wg-md-editor" data-wg-role="group-md-editor" oninput="window._wgMdAutoSave()" placeholder="在此编写群聊的背景、目标、约定和关键资源…">${esc(mdValue)}</textarea>`,
-      `      <div class="wg-md-save-status" data-wg-role="md-save-status">自动保存</div>`,
-      `    </div>`,
-      '  </div>',
-      '  <div class="wg-settings-section">',
-      '    <div class="wg-settings-section-title">模式设置</div>',
-      `    <div class="wg-settings-field"><label>主动性模式</label><select class="wg-settings-input" onchange="window._wgSettingsChange('initiativeMode', this.value)">${initiativeOptions}</select></div>`,
-      `    <div class="wg-settings-field"><label>自决权模式</label><select class="wg-settings-input" onchange="window._wgSettingsChange('autonomyMode', this.value)">${autonomyOptions}</select></div>`,
-      '  </div>',
-      '  <div class="wg-settings-section">',
-      '    <div class="wg-settings-section-title">管理员记忆</div>',
-      '    <div class="wg-settings-field"><label>记忆范围</label>',
-      `      <select class="wg-settings-input" onchange="window._wgSettingsChange('memoryRange', this.value)">`,
-      `        <option value="1d"${(chat.adminMemory?.range || '3d') === '1d' ? ' selected' : ''}>最近 1 天</option>`,
-      `        <option value="3d"${(chat.adminMemory?.range || '3d') === '3d' ? ' selected' : ''}>最近 3 天</option>`,
-      `        <option value="1w"${(chat.adminMemory?.range || '3d') === '1w' ? ' selected' : ''}>最近 1 周</option>`,
-      `        <option value="all"${(chat.adminMemory?.range || '3d') === 'all' ? ' selected' : ''}>全部记录</option>`,
-      `      </select></div>`,
-      '    <div class="wg-settings-field"><label>上下文限制</label>',
-      `      <select class="wg-settings-input" onchange="window._wgSettingsChange('memoryLimitMode', this.value)">`,
-      `        <option value="tokens"${(chat.adminMemory?.limitMode || 'tokens') === 'tokens' ? ' selected' : ''}>按 token 数</option>`,
-      `        <option value="ratio"${(chat.adminMemory?.limitMode || 'tokens') === 'ratio' ? ' selected' : ''}>按比例 (%)</option>`,
-      `      </select></div>`,
-      `    <div class="wg-settings-field"><label>限制值</label><input type="number" value="${chat.adminMemory?.limitValue ?? 100000}" class="wg-settings-input" onchange="window._wgSettingsChange('memoryLimitValue', this.value)" /></div>`,
-      '  </div>',
-      '  <div class="wg-settings-section">',
-      '    <div class="wg-settings-section-title">管理员模型</div>',
-      '    <div class="wg-settings-field"><label>模型预设</label>',
-      `      <select class="wg-settings-input" onchange="window._wgSettingsChange('admin-model', this.value)" data-wg-role="admin-model-select">${renderAdminModelOptions()}</select>`,
+      '    <div class="wg-settings-collapse-body">',
+
+      // 模式设置
+      '      <div class="wg-settings-sub-section">',
+      '        <div class="wg-settings-sub-title">模式设置</div>',
+      `        <div class="wg-config-row"><span class="wg-config-label">主动性</span><select class="wg-config-select" onchange="window._wgSettingsChange('initiativeMode', this.value)">${initiativeOptions}</select></div>`,
+      `        <div class="wg-config-row"><span class="wg-config-label">自决权</span><select class="wg-config-select" onchange="window._wgSettingsChange('autonomyMode', this.value)">${autonomyOptions}</select></div>`,
+      '      </div>',
+
+      // 管理员记忆
+      '      <div class="wg-settings-sub-section">',
+      '        <div class="wg-settings-sub-title">管理员记忆</div>',
+      `        <div class="wg-config-row"><span class="wg-config-label">记忆范围</span><select class="wg-config-select" onchange="window._wgSettingsChange('memoryRange', this.value)">`,
+      `          <option value="1d"${memRange === '1d' ? ' selected' : ''}>最近 1 天</option>`,
+      `          <option value="3d"${memRange === '3d' ? ' selected' : ''}>最近 3 天</option>`,
+      `          <option value="1w"${memRange === '1w' ? ' selected' : ''}>最近 1 周</option>`,
+      `          <option value="all"${memRange === 'all' ? ' selected' : ''}>全部记录</option>`,
+      '        </select></div>',
+      // 上下文限制：标签 + 分段切换 + 值输入，全部在同一行
+      `        <div class="wg-config-row"><span class="wg-config-label">上下文限制</span>`,
+      `          <div class="wg-config-limit-controls">`,
+      `            <div class="wg-segment-toggle">`,
+      `              <button class="wg-segment-btn${isTokenMode ? ' active' : ''}" onclick="window._wgSettingsChange('memoryLimitMode','tokens')">按 Token</button>`,
+      `              <button class="wg-segment-btn${!isTokenMode ? ' active' : ''}" onclick="window._wgSettingsChange('memoryLimitMode','ratio')">按比例</button>`,
+      `            </div>`,
+      `            <div class="wg-config-limit-input">`,
+      `              <input type="number" value="${currentLimitValue}" min="${limitMin}" max="${limitMax}" class="wg-settings-input wg-config-limit-value" onchange="window._wgSettingsChange('${limitField}', this.value)" placeholder="${limitPlaceholder}" />`,
+      `              <span class="wg-config-limit-suffix">${limitSuffix}</span>`,
+      `            </div>`,
+      `          </div>`,
+      `        </div>`,
+      '      </div>',
+
+      // 管理员模型
+      '      <div class="wg-settings-sub-section">',
+      '        <div class="wg-settings-sub-title">管理员模型</div>',
+      `        <div class="wg-config-row"><span class="wg-config-label">模型预设</span><select class="wg-config-select" onchange="window._wgSettingsChange('admin-model', this.value)" data-wg-role="admin-model-select">${renderAdminModelOptions()}</select></div>`,
+      '      </div>',
+
       '    </div>',
-      '  </div>',
-      '  <div class="wg-settings-section">',
-      '    <div class="wg-settings-section-title">群成员</div>',
-      memberRows,
-      renderAddMemberControl(chat),
-      '  </div>',
-      '  <div class="wg-settings-section wg-settings-danger">',
-      `    <button class="wg-btn-danger" onclick="window._wgDissolve()">解散此群聊</button>`,
-      '  </div>',
-      '</div>',
     ].join('');
   }
 
@@ -1418,7 +1541,6 @@
   async function selectChat(chatId) {
     // 保存当前群聊的输入草稿
     if (activeChatId) _saveCurrentDraft(activeChatId);
-    await _flushGroupMdAutoSave();
 
     activeChatId = chatId;
     viewMode = 'chat';
@@ -1431,6 +1553,7 @@
     _sessionDataCache = {};
     hideMemberPopover(true);
     closeImportModal();
+    closeAddMemberModal();
     _shouldScrollToBottom = true;
     refreshChatList();
 
@@ -1449,9 +1572,9 @@
     renderAttachmentList();
     renderLinkList();
 
-    // 刷新 Files 面板（如果正打开着）
-    if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'files' && typeof loadFilesPanelResources === 'function') {
-      loadFilesPanelResources();
+    // 刷新资料面板（如果正打开着）
+    if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'resources' && typeof loadResourcesPanelData === 'function') {
+      loadResourcesPanelData();
     }
     // 刷新 Settings 面板（如果正打开着）
     if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'settings') {
@@ -2290,13 +2413,14 @@
       if (field === 'name') body.name = value;
       else if (field === 'initiativeMode') body.initiativeMode = value;
       else if (field === 'autonomyMode') body.autonomyMode = value;
-      else if (field === 'memoryRange' || field === 'memoryLimitMode' || field === 'memoryLimitValue') {
+      else if (field === 'memoryRange' || field === 'memoryLimitMode' || field === 'memoryTokenLimit' || field === 'memoryRatioLimit') {
         // 合并当前 adminMemory 设置后整体提交
-        const cur = activeChat?.adminMemory || { range: '3d', limitMode: 'tokens', limitValue: 100000 };
+        const cur = activeChat?.adminMemory || { range: '3d', limitMode: 'tokens', tokenLimit: 100000, ratioLimit: 80 };
         const merged = { ...cur };
         if (field === 'memoryRange') merged.range = value;
         else if (field === 'memoryLimitMode') merged.limitMode = value;
-        else if (field === 'memoryLimitValue') merged.limitValue = parseInt(value) || 100000;
+        else if (field === 'memoryTokenLimit') merged.tokenLimit = parseInt(value) || 100000;
+        else if (field === 'memoryRatioLimit') merged.ratioLimit = parseInt(value) || 80;
         body.adminMemory = merged;
       }
       else if (field === 'admin-model') {
@@ -2447,11 +2571,25 @@
 
   function openFilesPanel() {
     if (typeof activeFeaturePanel !== 'undefined') {
-      activeFeaturePanel = 'files';
+      activeFeaturePanel = 'resources';
       if (typeof renderFeaturePanel === 'function') renderFeaturePanel();
     }
-    if (typeof loadFilesPanelResources === 'function') {
-      loadFilesPanelResources();
+    if (typeof loadResourcesPanelData === 'function') {
+      loadResourcesPanelData();
+    }
+  }
+
+  function toggleAdminConfig() {
+    _settingsAdminCollapsed = !_settingsAdminCollapsed;
+    if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
+  }
+
+  function editGroupMd() {
+    // 写入共享文档状态 + 切换到 viewer panel
+    const chatId = activeChatId;
+    if (!chatId) return;
+    if (typeof window._viewerOpen === 'function') {
+      window._viewerOpen('GROUP.md', chatId, true);
     }
   }
 
@@ -2501,6 +2639,115 @@
     if (ref) addGroupMember(ref);
   }
 
+  // ── 添加成员弹窗（overlay，替代旧 <select>） ──────────────────
+
+  function renderAddMemberListItems(candidates, memberRefs, keyword) {
+    if (!candidates.length) {
+      return keyword
+        ? '<div class="wg-settings-empty-note">没有匹配的身份。</div>'
+        : '<div class="wg-settings-empty-note">当前没有可拉入群聊的 Agent 身份。</div>';
+    }
+    return candidates.map((id) => {
+      const inGroup = memberRefs.has(id.identityRef);
+      const name = id.displayName || id.identityRef;
+      const avatar = generateAvatar(name, id.identityRef);
+      return [
+        `<div class="wg-add-member-item${inGroup ? ' disabled' : ''}" data-wg-identity="${esc(id.identityRef)}">`,
+        `  <div class="wg-avatar wg-avatar-sm" style="background-color:${avatar.color}">${esc(avatar.initials)}</div>`,
+        '  <div class="wg-add-member-item-info">',
+        `    <span class="wg-add-member-item-name">${esc(name)}</span>`,
+        `    <span class="wg-add-member-item-desc">${esc(id.description || '')}</span>`,
+        '  </div>',
+        inGroup
+          ? '  <span class="wg-add-member-item-tag">已在群中</span>'
+          : '  <span class="wg-add-member-item-check">&#10003;</span>',
+        '</div>',
+      ].join('');
+    }).join('');
+  }
+
+  function closeAddMemberModal() {
+    if (_addMemberModalEl) {
+      document.body.removeChild(_addMemberModalEl);
+      _addMemberModalEl = null;
+    }
+    if (_addMemberSearchTimer) {
+      clearTimeout(_addMemberSearchTimer);
+      _addMemberSearchTimer = null;
+    }
+  }
+
+  async function openAddMemberModal() {
+    if (identities.length === 0) await loadIdentities();
+
+    const memberRefs = getChatMemberRefs(activeChat);
+    const candidates = identities.filter((id) => isManageableGroupIdentity(id.identityRef));
+
+    closeAddMemberModal();
+
+    const modal = document.createElement('div');
+    modal.className = 'wg-modal-overlay';
+    modal.innerHTML = [
+      '<div class="wg-modal wg-add-member-modal">',
+      '  <div class="wg-modal-title">添加成员</div>',
+      '  <input type="text" class="wg-modal-input" data-wg-role="add-member-search" placeholder="搜索身份..." />',
+      '  <div class="wg-add-member-list" data-wg-role="add-member-list">',
+      renderAddMemberListItems(candidates, memberRefs, ''),
+      '  </div>',
+      '  <div class="wg-modal-actions">',
+      '    <button class="wg-modal-btn" data-wg-action="close-add-member">取消</button>',
+      '    <button class="wg-modal-btn confirm" data-wg-action="confirm-add-member">确定</button>',
+      '  </div>',
+      '</div>',
+    ].join('');
+    document.body.appendChild(modal);
+    _addMemberModalEl = modal;
+
+    // 搜索防抖
+    const searchInput = modal.querySelector('[data-wg-role="add-member-search"]');
+    searchInput.addEventListener('input', () => {
+      clearTimeout(_addMemberSearchTimer);
+      const kw = searchInput.value.trim().toLowerCase();
+      _addMemberSearchTimer = setTimeout(() => {
+        const filtered = kw
+          ? candidates.filter((id) =>
+            (id.displayName || '').toLowerCase().includes(kw) ||
+            (id.description || '').toLowerCase().includes(kw) ||
+            (id.identityRef || '').toLowerCase().includes(kw))
+          : candidates;
+        const listEl = modal.querySelector('[data-wg-role="add-member-list"]');
+        if (listEl) listEl.innerHTML = renderAddMemberListItems(filtered, memberRefs, kw);
+      }, 200);
+    });
+
+    // 点击代理
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) { closeAddMemberModal(); return; }
+
+      const closeBtn = e.target.closest('[data-wg-action="close-add-member"]');
+      if (closeBtn) { closeAddMemberModal(); return; }
+
+      const confirmBtn = e.target.closest('[data-wg-action="confirm-add-member"]');
+      if (confirmBtn) {
+        const selected = Array.from(modal.querySelectorAll('.wg-add-member-item.selected'))
+          .map((el) => el.dataset.wgIdentity);
+        closeAddMemberModal();
+        (async () => {
+          for (const ref of selected) {
+            await addGroupMember(ref);
+          }
+        })();
+        return;
+      }
+
+      // 切换选中状态
+      const item = e.target.closest('.wg-add-member-item');
+      if (item && !item.classList.contains('disabled')) {
+        item.classList.toggle('selected');
+      }
+    });
+  }
+
   async function handleDissolveChat() {
     if (!activeChatId) return;
     const confirmed = confirm(`确定要解散群聊「${activeChat?.name || activeChatId}」吗？\n\n解散后群聊记录将被删除，无法恢复。`);
@@ -2529,13 +2776,18 @@
     if (identities.length === 0) await loadIdentities();
 
     const memberCandidates = identities.filter((id) => isManageableGroupIdentity(id.identityRef));
-    const identityCheckboxes = memberCandidates.length
+    const identityItems = memberCandidates.length
       ? memberCandidates.map((id) => {
-      return `<label class="wg-modal-identity">
-      <input type="checkbox" value="${esc(id.identityRef)}" />
-      <span class="wg-modal-identity-name">${esc(id.displayName)}</span>
-      <span class="wg-modal-identity-desc">${esc(id.description || '')}</span>
-    </label>`;
+        const name = id.displayName || id.identityRef;
+        const avatar = generateAvatar(name, id.identityRef);
+        return `<label class="wg-modal-identity wg-new-chat-identity">
+        <input type="checkbox" value="${esc(id.identityRef)}" />
+        <div class="wg-avatar wg-avatar-sm" style="background-color:${avatar.color}">${esc(avatar.initials)}</div>
+        <div class="wg-new-chat-identity-info">
+          <span class="wg-modal-identity-name">${esc(name)}</span>
+          <span class="wg-modal-identity-desc">${esc(id.description || '')}</span>
+        </div>
+      </label>`;
       }).join('')
       : '<div class="wg-settings-empty-note">当前没有可拉入群聊的 Agent 身份。</div>';
 
@@ -2544,24 +2796,57 @@
     modal.innerHTML = `
     <div class="wg-modal">
       <div class="wg-modal-title">新建群聊</div>
-      <input type="text" class="wg-modal-input" data-wg-role="new-chat-name" placeholder="群聊名称" />
-      <div class="wg-modal-fixed-members">
-        <div class="wg-modal-fixed-member"><span>我</span><small>群主</small></div>
-        <div class="wg-modal-fixed-member"><span>管理员</span><small>固定入群</small></div>
+
+      <div class="wg-new-chat-name-row">
+        <div class="wg-avatar wg-avatar-lg wg-new-chat-avatar" data-wg-role="new-chat-avatar">?</div>
+        <input type="text" class="wg-modal-input wg-new-chat-name-input" data-wg-role="new-chat-name" placeholder="群聊名称" />
       </div>
-      <div class="wg-modal-section-title">工作目录（知识库根目录）</div>
+
+      <div class="wg-modal-section-title">群简介（可选）</div>
+      <textarea class="wg-modal-input wg-new-chat-desc" data-wg-role="new-chat-desc" placeholder="这个群是干什么的..." rows="2"></textarea>
+
+      <div class="wg-modal-section-title">固定成员</div>
+      <div class="wg-modal-fixed-members">
+        <div class="wg-modal-fixed-member">
+          <div class="wg-avatar wg-avatar-sm" style="background-color:${AVATAR_SPECIAL_COLORS['user']}">我</div>
+          <span>我</span><small>群主</small>
+        </div>
+        <div class="wg-modal-fixed-member">
+          <div class="wg-avatar wg-avatar-sm" style="background-color:${AVATAR_SPECIAL_COLORS['work-group:admin']}">管</div>
+          <span>管理员</span><small>固定入群</small>
+        </div>
+      </div>
+
+      <div class="wg-modal-section-title">选择成员</div>
+      <div class="wg-modal-identity-list">${identityItems}</div>
+
+      <div class="wg-modal-section-title">工作目录（可选）</div>
       <div class="wg-modal-dir-row">
-        <input type="text" class="wg-modal-input wg-modal-dir-display" data-wg-role="new-chat-workdir" placeholder="点击右侧按钮选择项目目录" readonly />
+        <input type="text" class="wg-modal-input wg-modal-dir-display" data-wg-role="new-chat-workdir" placeholder="不设置也可创建群聊" readonly />
         <button class="wg-modal-btn" data-wg-action="pick-workdir">选择</button>
       </div>
-      <div class="wg-modal-section-title">选择成员</div>
-      <div class="wg-modal-identity-list">${identityCheckboxes}</div>
+
       <div class="wg-modal-actions">
         <button class="wg-modal-btn" data-wg-action="cancel-new-chat">取消</button>
         <button class="wg-modal-btn confirm" data-wg-action="confirm-new-chat">创建</button>
       </div>
     </div>`;
     document.body.appendChild(modal);
+
+    // 头像预览：输入群名时实时更新
+    const nameInput = modal.querySelector('[data-wg-role="new-chat-name"]');
+    const avatarEl = modal.querySelector('[data-wg-role="new-chat-avatar"]');
+    nameInput.addEventListener('input', () => {
+      const name = nameInput.value.trim();
+      if (name) {
+        const av = generateAvatar(name, null);
+        avatarEl.textContent = av.initials;
+        avatarEl.style.backgroundColor = av.color;
+      } else {
+        avatarEl.textContent = '?';
+        avatarEl.style.backgroundColor = '#808080';
+      }
+    });
 
     modal.querySelector('[data-wg-action="pick-workdir"]').addEventListener('click', async () => {
       try {
@@ -2575,12 +2860,13 @@
     });
 
     modal.querySelector('[data-wg-action="confirm-new-chat"]').addEventListener('click', async () => {
-      const name = modal.querySelector('[data-wg-role="new-chat-name"]').value.trim();
-      if (!name) return;
+      const name = nameInput.value.trim();
+      if (!name) { nameInput.focus(); return; }
 
       const workDir = modal.querySelector('[data-wg-role="new-chat-workdir"]').value.trim() || null;
+      const desc = modal.querySelector('[data-wg-role="new-chat-desc"]').value.trim();
 
-      const selected = Array.from(modal.querySelectorAll('input[type="checkbox"]:checked'))
+      const selected = Array.from(modal.querySelectorAll('.wg-modal-identity-list input[type="checkbox"]:checked'))
         .map((cb) => cb.value);
 
       const members = normalizeGroupMembers([
@@ -2591,6 +2877,14 @@
 
       try {
         const chat = await apiPost('/protoclaw/group_chats', { name, workDir, members });
+        // 写入 GROUP.md 初始内容（如果填了群简介）
+        if (desc) {
+          try {
+            await apiPut(`/protoclaw/group_chats/${encodeURIComponent(chat.id)}/group_md`, { content: desc });
+          } catch (e) {
+            console.error('[WorkGroup] write initial GROUP.md failed:', e);
+          }
+        }
         await loadChatSummaries();
         refreshChatList();
         await selectChat(chat.id);
@@ -2938,6 +3232,16 @@
     const navItem = e.target.closest('[data-wg-session-nav]');
     if (navItem) {
       navigateToSession(navItem.dataset.wgSessionNav);
+      return;
+    }
+
+    // 附件 chip 点击 → 在文档面板打开该文件
+    const attachmentOpen = e.target.closest('[data-wg-attachment-open]');
+    if (attachmentOpen) {
+      const name = attachmentOpen.dataset.wgAttachmentOpen;
+      if (name && activeChatId && window._viewerOpen) {
+        window._viewerOpen(name, activeChatId, false);
+      }
       return;
     }
 
@@ -3548,6 +3852,7 @@
     openDropdown = null;
     hideMemberPopover(true);
     closeImportModal();
+    closeAddMemberModal();
     // 取消正在进行的语音录制
     if (_voiceRecording) {
       _cancelVoiceRecording();
@@ -3563,7 +3868,27 @@
 
   window._wgSettingsInit = async function () {
     if (!activeChatId) return;
-    await Promise.all([loadAdminModelOptions(), loadGroupMd()]);
+    const cid = activeChatId;
+    // 并行加载 admin model 选项和 GROUP.md 摘要内容（只读展示）
+    groupMdLoading = true;
+    groupMdChatId = cid;
+    groupMdContent = '';
+    if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
+    try {
+      const [, mdData] = await Promise.all([
+        loadAdminModelOptions(),
+        apiGet(`/protoclaw/group_chats/${encodeURIComponent(cid)}/group_md`),
+      ]);
+      if (activeChatId !== cid) return;
+      groupMdContent = mdData.content || '';
+    } catch {
+      if (activeChatId === cid) groupMdContent = '';
+    } finally {
+      if (activeChatId === cid) {
+        groupMdLoading = false;
+        if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
+      }
+    }
   };
 
   window._wgSettingsRefresh = function () {
@@ -3578,10 +3903,15 @@
     window._wgSettingsRefresh();
   };
 
-  window._wgMdAutoSave = _wgMdAutoSave;
+  // ── Phase 1 新增导出 ──
+  window._wgToggleAdminConfig = toggleAdminConfig;
+  window._wgEditGroupMd = editGroupMd;
+  window._wgOpenAddMemberModal = openAddMemberModal;
+
+  // ── 保留导出 ──
   window._wgChangeWorkDir = changeWorkDir;
   window._wgOpenFilesPanel = openFilesPanel;
-  window._wgAddSelectedMember = addSelectedMember;
+  window._wgAddSelectedMember = addSelectedMember; // 旧 select 已移除，保留占位
   window._wgRemoveMember = removeGroupMember;
   window._wgDissolve = handleDissolveChat;
 
@@ -3610,5 +3940,12 @@
     softRefresh,
     getActiveChatId: () => activeChatId,
     getActiveChat: () => activeChat,
+    getChatSummaries: () => chatSummaries,
+    addAttachment: (name, content) => {
+      if (!pendingAttachments.find(a => a.name === name)) {
+        pendingAttachments.push({ name, content: content || '' });
+        renderAttachmentList();
+      }
+    },
   };
 })();

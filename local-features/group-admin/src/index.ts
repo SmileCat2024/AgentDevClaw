@@ -44,7 +44,8 @@ export class GroupAdminFeature implements AgentFeature {
       content:
         '[管理员身份提醒] 你是群聊管理员，处理具体业务并不是你的核心职责。\n' +
         '- 你的所有对话默认只有你能看到。要让群里用户看到回复，必须调用 gc_reply 发送到群里。\n' +
-        '- 其他 Agent 看不到群聊，也不会主动响应群聊内容。用户说的话、Agent 的回复，它们都看不到。除非你通过 gc_dispatch 派发任务过去。',
+        '- 其他 Agent 看不到群聊，也不会主动响应群聊内容。用户说的话、Agent 的回复，它们都看不到。除非你通过 gc_dispatch 派发任务过去。\n' +
+        '- 管理多个会话时，优先依据 gc_overview/gc_status/gc_sessions 和 gc_dispatch 返回的态势信息；回复或继续派发时反复核对 identityRef、sessionId、运行状态、模型和上下文用量。',
     });
   }
 
@@ -59,7 +60,8 @@ export class GroupAdminFeature implements AgentFeature {
       content:
         '[管理员身份提醒] 你是群聊管理员，处理具体业务并不是你的核心职责。\n' +
         '- 你的所有对话默认只有你能看到。要让群里用户看到回复，必须调用 gc_reply 发送到群里。\n' +
-        '- 其他 Agent 看不到群聊，也不会主动响应群聊内容。用户说的话、Agent 的回复，它们都看不到。除非你通过 gc_dispatch 派发任务过去。',
+        '- 其他 Agent 看不到群聊，也不会主动响应群聊内容。用户说的话、Agent 的回复，它们都看不到。除非你通过 gc_dispatch 派发任务过去。\n' +
+        '- 管理多个会话时，优先依据 gc_overview/gc_status/gc_sessions 和 gc_dispatch 返回的态势信息；回复或继续派发时反复核对 identityRef、sessionId、运行状态、模型和上下文用量。',
     });
   }
 
@@ -92,17 +94,83 @@ export class GroupAdminFeature implements AgentFeature {
     return res.json();
   }
 
+  private statusLabel(status: string): string {
+    if (status === 'running') return '运行中';
+    if (status === 'queued') return '排队中';
+    if (status === 'idle') return '空闲';
+    return '离线';
+  }
+
+  private formatNumber(value: any): string {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '?';
+    return n.toLocaleString('zh-CN');
+  }
+
+  private formatSessionLine(session: any): string {
+    const title = session?.title || '未命名';
+    const sessionId = session?.sessionId || session?.id || '';
+    const status = this.statusLabel(session?.runtimeStatus || session?.status || 'offline');
+    const model = session?.modelName || '未知模型';
+    const ctxTokens = session?.contextTokens;
+    const ctxLength = session?.contextLength;
+    const ctxPct = session?.contextUsagePct != null ? `${session.contextUsagePct}%` : '?';
+    const ctx = ctxTokens && ctxLength
+      ? `${this.formatNumber(ctxTokens)}/${this.formatNumber(ctxLength)} (${ctxPct})`
+      : `? (${ctxPct})`;
+    const threshold = session?.compressRatio != null ? `${session.compressRatio}%` : '?';
+    const warn = session?.contextUsagePct != null && session?.compressRatio != null
+      && session.contextUsagePct >= session.compressRatio ? '，已到压缩阈值' : '';
+    const route = session?.routing?.status ? `，路由: ${session.routing.status}` : '';
+    const active = session?.isActive ? '，当前会话' : '';
+    return `  - [${status}] ${title}${active}\n    sessionId: ${sessionId}\n    模型: ${model}；上下文: ${ctx}；压缩阈值: ${threshold}${warn}${route}`;
+  }
+
+  private formatAwarenessText(data: any, options: { focusIdentityRef?: string; focusSessionId?: string } = {}): string {
+    const totals = data?.totals || {};
+    const lines = [
+      `群聊态势: 会话 ${totals.sessions ?? 0} 个；运行中 ${totals.running ?? 0}；排队 ${totals.queued ?? 0}；空闲 ${totals.idle ?? 0}；离线 ${totals.offline ?? 0}`,
+    ];
+    if ((totals.pendingRoutes || 0) > 0 || (totals.deliveredRoutes || 0) > 0) {
+      lines.push(`路由: pending ${totals.pendingRoutes || 0}；delivered ${totals.deliveredRoutes || 0}`);
+    }
+
+    const identities = Array.isArray(data?.identities) ? data.identities : [];
+    for (const identity of identities) {
+      if (options.focusIdentityRef && identity.identityRef !== options.focusIdentityRef) continue;
+      const sessions = Array.isArray(identity.sessions) ? identity.sessions : [];
+      const shown = options.focusSessionId
+        ? sessions.filter((s: any) => s.sessionId === options.focusSessionId)
+        : sessions;
+      lines.push('');
+      lines.push(`${identity.displayName || identity.identityRef} (${identity.identityRef}) - ${this.statusLabel(identity.aggregateStatus || 'offline')}，会话 ${sessions.length} 个`);
+      if (shown.length === 0) {
+        lines.push('  （暂无群内会话）');
+      } else {
+        for (const session of shown) {
+          lines.push(this.formatSessionLine(session));
+        }
+      }
+    }
+    return lines.join('\n');
+  }
+
+  private async fetchAwareness(): Promise<any> {
+    return this.apiGet(`/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/awareness`);
+  }
+
   getTools(): Tool[] {
     return [
       {
         name: 'gc_overview',
-        description: '查看当前群聊的概览，包括群名、成员、消息数、最近活动',
+        description: '查看当前群聊的概览和会话态势，包括每个 Agent 的会话 ID、运行状态、模型、上下文用量和压缩阈值。',
         parameters: {
           type: 'object',
           properties: {},
         },
         execute: async () => {
           const chat = await this.apiGet(`/protoclaw/group_chats/${encodeURIComponent(this.chatId)}`);
+          const awareness = await this.fetchAwareness().catch(() => null);
           const members = (chat.members || [])
             .map((m: any) => {
               const name = m.identityRef === 'user' ? '用户' : m.identityRef;
@@ -120,6 +188,10 @@ export class GroupAdminFeature implements AgentFeature {
           if (msgs.length > 0) {
             const last = msgs[msgs.length - 1];
             lines.push(`最近消息: [${new Date(last.timestamp).toLocaleString()}] ${last.from}: ${(last.text || '').slice(0, 80)}`);
+          }
+          if (awareness) {
+            lines.push('');
+            lines.push(this.formatAwarenessText(awareness));
           }
           return { success: true, text: lines.join('\n') };
         },
@@ -194,16 +266,26 @@ export class GroupAdminFeature implements AgentFeature {
               const action = resolved.isNew
                 ? `创建了新会话「${resolved.sessionTitle}」`
                 : `复用已有会话「${resolved.sessionTitle}」`;
+              const awareness = await this.fetchAwareness().catch(() => null);
+              const awarenessText = awareness
+                ? '\n\n派发后的最新态势:\n' + this.formatAwarenessText(awareness)
+                : '';
               return {
                 success: true,
-                text: `已派发任务到 ${identityRef}，${action}。\n会话 ID: ${resolved.sessionId}\n消息 ID: ${msg.id}`,
+                text: `已派发任务到 ${identityRef}，${action}。\nsessionId: ${resolved.sessionId}\n消息 ID: ${msg.id}${awarenessText}`,
                 sessionId: resolved.sessionId,
                 sessionTitle: resolved.sessionTitle,
                 isNew: resolved.isNew,
+                awareness,
               };
             }
 
-            return { success: true, text: `已派发任务到 ${identityRef}，消息 ID: ${msg.id}` };
+            const awareness = await this.fetchAwareness().catch(() => null);
+            return {
+              success: true,
+              text: `已派发任务到 ${identityRef}，消息 ID: ${msg.id}` + (awareness ? `\n\n派发后的最新态势:\n${this.formatAwarenessText(awareness)}` : ''),
+              awareness,
+            };
           } catch (err: any) {
             return { error: `派发失败: ${err.message || err}` };
           }
@@ -254,6 +336,11 @@ export class GroupAdminFeature implements AgentFeature {
             const data = await this.apiGet(
               `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/sessions/${encodeURIComponent(identityRef)}`
             );
+            const awareness = await this.fetchAwareness().catch(() => null);
+            if (awareness) {
+              const text = this.formatAwarenessText(awareness, { focusIdentityRef: identityRef });
+              return { success: true, text, awareness };
+            }
             const lines = [
               `${identityRef} 的群内会话列表（模式: ${data.sessionModel}，当前活跃: ${data.activeSessionId || '无'}）`,
               '',
@@ -277,18 +364,20 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_status',
-        description: '查看所有可用身份及其运行状态',
+        description: '查看所有可用身份及其会话态势，包括会话 ID、运行状态、模型、上下文用量和压缩阈值。',
         parameters: {
           type: 'object',
           properties: {},
         },
         execute: async () => {
           const data = await this.apiGet('/protoclaw/identities');
+          const awareness = await this.fetchAwareness().catch(() => null);
           const ids = data.identities || [];
           const lines = ids.map((i: any) => {
             return `${i.displayName} (${i.identityRef})\n  ${i.description || ''}\n  session: ${i.sessionModel}`;
           });
-          return { success: true, text: lines.join('\n\n') || '暂无可用身份' };
+          const awarenessText = awareness ? `\n\n${this.formatAwarenessText(awareness)}` : '';
+          return { success: true, text: (lines.join('\n\n') || '暂无可用身份') + awarenessText, awareness };
         },
       },
       {

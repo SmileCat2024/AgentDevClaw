@@ -281,13 +281,8 @@ export class GroupChatBridgeFeature implements AgentFeature {
         console.error(
           `[GroupChatBridge] arbiter call failed for ${msg.id}: ${error}`,
         );
-        // 检测中断：如果是用户中断，写入特殊状态消息
-        if (this.isInterruptError(error)) {
-          console.log(`[GroupChatBridge] detected interrupt for ${msg.id}`);
-          if (!this.suppressAutoWriteback) {
-            await this.postInterruptStatus(serverOrigin, msg);
-          }
-        } else if (!this.suppressAutoWriteback) {
+        // 中断时不额外回写：模型自身会返回中断通知
+        if (!this.isInterruptError(error) && !this.suppressAutoWriteback) {
           await this.postWriteback(serverOrigin, msg, null, error);
         }
       } else {
@@ -298,14 +293,9 @@ export class GroupChatBridgeFeature implements AgentFeature {
       }
     } catch (err) {
       console.error('[GroupChatBridge] dispatchViaArbiter error:', err);
-      // 检测中断
+      // 中断时不额外回写：模型自身会返回中断通知
       const errMsg = err instanceof Error ? err.message : String(err);
-      if (this.isInterruptError(errMsg)) {
-        console.log(`[GroupChatBridge] detected interrupt for ${msg.id}`);
-        if (!this.suppressAutoWriteback) {
-          await this.postInterruptStatus(serverOrigin, msg);
-        }
-      } else if (!this.suppressAutoWriteback) {
+      if (!this.isInterruptError(errMsg) && !this.suppressAutoWriteback) {
         await this.postWriteback(serverOrigin, msg, null, errMsg);
       }
     }
@@ -318,29 +308,6 @@ export class GroupChatBridgeFeature implements AgentFeature {
     return error.includes('Interrupted by user') ||
            error.includes('interrupt') ||
            error.includes('aborted');
-  }
-
-  /**
-   * 写入中断状态消息到群聊。
-   * 使用 gc/control API 的 writeback 格式。
-   */
-  private async postInterruptStatus(
-    serverOrigin: string,
-    msg: GcMessage,
-  ): Promise<void> {
-    const payload = {
-      chatId: msg.gcChatId,
-      identityRef: msg.gcIdentityRef,
-      sessionId: process.env.PROTOCLAW_PREBUILT_SESSION_ID || '',
-      response: '[任务已中断]',
-    };
-    await fetch(`${serverOrigin}/protoclaw/gc/writeback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch((err) => {
-      console.error('[GroupChatBridge] failed to post interrupt status:', err);
-    });
   }
 
   // ========== HTTP helpers ==========
