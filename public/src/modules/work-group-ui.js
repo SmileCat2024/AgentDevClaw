@@ -58,6 +58,7 @@
   let _annotations = {};        // messageId → { text, timestamp }
   let _adminStatus = null;      // 管理员会话状态（admin_status API 返回）
   let _adminRestarting = false; // 管理员正在创建新会话中（UI 状态锁）
+  let _archivedCollapsed = true; // 已归档群聊分组是否折叠
   let _hoverIdentity = null;     // 当前 hover 的成员 identityRef
   let _hoverTimer = null;        // hover 延迟计时器
   let _popoverEl = null;         // 成员 popover DOM 元素
@@ -223,15 +224,29 @@
   // 参考 Discord/GitHub 默认头像：首字母 + 基于 hash 的配色
   // 纯函数：name → { initials, color }
 
+  // 高饱和、偏暗 — 作为 2px 边框在黑色底上醒目但不刺眼
   const AVATAR_COLORS = [
-    '#5865F2', '#57F287', '#FEE75C', '#EB459E',
-    '#ED4245', '#F47B67', '#3BA55D', '#FAA61A',
-    '#9B59B6', '#1ABC9C', '#E67E22', '#3498DB',
+    '#4F46E5', // Indigo
+    '#7C3AED', // Violet
+    '#9333EA', // Purple
+    '#DB2777', // Pink
+    '#E11D48', // Rose
+    '#DC2626', // Red
+    '#EA580C', // Orange
+    '#CA8A04', // Yellow
+    '#65A30D', // Lime
+    '#16A34A', // Green
+    '#0D9488', // Teal
+    '#0891B2', // Cyan
+    '#2563EB', // Blue
+    '#0284C7', // Sky
+    '#C026D3', // Fuchsia
+    '#D97706', // Amber
   ];
 
   const AVATAR_SPECIAL_COLORS = {
-    'user': '#5865F2',           // 品牌蓝
-    'work-group:admin': '#9B59B6', // 管理紫
+    'user': '#2563EB',             // 品牌蓝
+    'work-group:admin': '#9333EA', // 管理紫
   };
 
   function _avatarInitials(name, identityRef) {
@@ -241,16 +256,21 @@
     return name.charAt(0).toUpperCase();
   }
 
-  function generateAvatar(name, identityRef) {
+  function generateAvatar(name, identityRef, seed) {
     const special = identityRef ? AVATAR_SPECIAL_COLORS[identityRef] : null;
     if (special) {
       return { initials: _avatarInitials(name, identityRef), color: special };
     }
-    if (!name) return { initials: '?', color: '#808080' };
+    if (!name) return { initials: '?', color: '#6a6a6a' };
     const initials = _avatarInitials(name, identityRef);
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) {
-      hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+    // FNV-1a hash — 分布比经典 multiply-add 更均匀
+    // seed（如 createdAt）优先于 name，避免相似命名导致颜色聚集
+    // String() 兜底：createdAt 可能是 Date.now() 数字，数字无 .length
+    const source = String(seed || name || '');
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < source.length; i++) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
     }
     const color = AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
     return { initials, color };
@@ -269,7 +289,7 @@
           sessionId: r.targetSessionId,
           workspaceId: r.targetWorkspaceId,
           displayName: getIdentityName(r.targetIdentityRef),
-          status: r.status || 'pending',
+          status: resolveDispatchDisplayStatus(r),
           lastActivity: msg.timestamp || 0,
         });
       }
@@ -292,6 +312,26 @@
 
   // ── 左侧：群聊列表 ──────────────────────────────────────────
 
+  function _renderChatItem(chat) {
+    const isActive = chat.id === activeChatId;
+    const av = generateAvatar(chat.name, null, chat.createdAt);
+    const lm = chat.lastMessage;
+    const preview = lm ? (lm.text || '').slice(0, 40) : '暂无消息';
+
+    return [
+      `<div class="wg-chat-item${isActive ? ' active' : ''}" data-wg-chat-id="${esc(chat.id)}">`,
+      `  <div class="wg-chat-avatar" style="--av-grad:${av.color}">${esc(av.initials)}</div>`,
+      '  <div class="wg-chat-info">',
+      '    <div class="wg-chat-top">',
+      `      <span class="wg-chat-name">${esc(chat.name)}</span>`,
+      `      <span class="wg-chat-time">${esc(formatTime(chat.updatedAt || chat.createdAt))}</span>`,
+      '    </div>',
+      `    <div class="wg-chat-preview">${esc(preview)}</div>`,
+      '  </div>',
+      '</div>',
+    ].join('');
+  }
+
   function renderChatList() {
     const filtered = searchKeyword
       ? chatSummaries.filter((c) =>
@@ -305,29 +345,30 @@
       return '<div class="wg-chat-empty">未找到匹配的群聊</div>';
     }
 
-    const items = filtered.map((chat) => {
-      const isActive = chat.id === activeChatId;
-      const avatarLetter = (chat.name || '?').charAt(0);
-      const lm = chat.lastMessage;
-      const preview = lm ? (lm.text || '').slice(0, 40) : '暂无消息';
-      const modeLabel = INITIATIVE_MODES.find((m) => m.value === (chat.initiativeMode || 'assist'));
+    const activeChats = filtered.filter((c) => !c.archived);
+    const archivedChats = filtered.filter((c) => c.archived);
 
-      return [
-        `<div class="wg-chat-item${isActive ? ' active' : ''}" data-wg-chat-id="${esc(chat.id)}">`,
-        `  <div class="wg-chat-avatar">${esc(avatarLetter)}</div>`,
-        '  <div class="wg-chat-info">',
-        '    <div class="wg-chat-top">',
-        `      <span class="wg-chat-name">${esc(chat.name)}</span>`,
-        modeLabel ? `      <span class="wg-chat-mode">${esc(modeLabel.label)}</span>` : '',
-        `      <span class="wg-chat-time">${esc(formatTime(chat.updatedAt || chat.createdAt))}</span>`,
-        '    </div>',
-        `    <div class="wg-chat-preview">${esc(preview)}</div>`,
-        '  </div>',
+    const parts = [];
+
+    // 活跃群聊（无标题，直接列出）
+    parts.push(activeChats.map(_renderChatItem).join(''));
+
+    // 已归档群聊（可折叠分组；搜索时自动展开）
+    if (archivedChats.length > 0) {
+      const collapsed = _archivedCollapsed && !searchKeyword;
+      parts.push([
+        `<div class="wg-chat-group${collapsed ? ' collapsed' : ''}" data-wg-role="archived-group">`,
+        `  <button class="wg-chat-group-header" data-wg-action="toggle-archived">`,
+        `    <span class="wg-chat-group-arrow">${collapsed ? '&#9654;' : '&#9660;'}</span>`,
+        `    <span class="wg-chat-group-title">已归档</span>`,
+        `    <span class="wg-chat-group-count">${archivedChats.length}</span>`,
+        '  </button>',
+        `  <div class="wg-chat-group-body">${archivedChats.map(_renderChatItem).join('')}</div>`,
         '</div>',
-      ].join('');
-    }).join('');
+      ].join(''));
+    }
 
-    return items;
+    return parts.join('');
   }
 
   // ── 右侧：群头部 ─────────────────────────────────────────────
@@ -429,6 +470,28 @@
     return 'offline';
   }
 
+  /**
+   * 根据 _runtimeStatusCache 中的实时运行时状态，解析派发消息的显示状态。
+   * 与态势感知面板使用同一数据源（runtime_status API），替代旧版 routing.status
+   * （由 trackGroupChatDispatch 轮询维护，使用 /running 端点，经常误标 failed）。
+   *
+   * 映射关系：
+   *   running → delivered（处理中）
+   *   idle    → completed（已完成 — agent 在线但空闲，任务处理完毕）
+   *   offline → completed（已完成 — 进程已退出，任务处理完毕）
+   *   未命中缓存 → 回退到 routing.status
+   */
+  function resolveDispatchDisplayStatus(routing) {
+    if (!routing) return 'pending';
+    var sessionId = routing.targetSessionId;
+    if (sessionId && _runtimeStatusCache[sessionId]) {
+      var rtStatus = _runtimeStatusCache[sessionId].status;
+      if (rtStatus === 'running') return 'delivered';
+      if (rtStatus === 'idle' || rtStatus === 'offline') return 'completed';
+    }
+    return routing.status || 'pending';
+  }
+
   function renderAwarenessBar(chat) {
     const adminChip = renderAdminChip();
     const importedCount = (chat.importedSessions || []).length;
@@ -479,7 +542,7 @@
 
     const name = evt.identityName || getMemberName(chat, msg.from);
     const time = formatTime(msg.timestamp);
-    const avatarLetter = name.charAt(0);
+    const av = generateAvatar(name, msg.from);
     const navTarget = evt.workspaceId && evt.sessionId
       ? `${evt.workspaceId}:${evt.sessionId}` : null;
     const evtSessionBadge = evt.sessionTitle
@@ -495,7 +558,7 @@
 
     return [
       `<div class="wg-msg-row" data-wg-msg-id="${esc(msg.id || '')}" ${quoteAttrs}>`,
-      `  <div class="wg-msg-avatar">${esc(avatarLetter)}</div>`,
+      `  <div class="wg-msg-avatar" style="--av-grad:${av.color}">${esc(av.initials)}</div>`,
       '  <div class="wg-msg-body">',
       `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(name)}</span>${evtSessionBadge} <span class="wg-msg-time">${esc(time)}</span></div>`,
       '    <div class="wg-card">',
@@ -522,13 +585,14 @@
   function renderDispatchCard(chat, msg) {
     const time = formatTime(msg.timestamp);
     const fromName = getMemberName(chat, msg.from);
-    const fromAvatar = fromName.charAt(0);
+    const fromAv = generateAvatar(fromName, msg.from);
     const targetRef = msg.mentions?.[0]?.identityRef || msg.routing?.targetIdentityRef;
     const targetName = targetRef ? getIdentityName(targetRef) : '';
     const routing = msg.routing || {};
     const navTarget = routing.targetWorkspaceId && routing.targetSessionId
       ? `${routing.targetWorkspaceId}:${routing.targetSessionId}` : null;
     const sessionLabel = routing.targetSessionTitle || null;
+    const displayStatus = resolveDispatchDisplayStatus(routing);
 
     const quoteAttrs = targetRef && navTarget
       ? [
@@ -542,7 +606,7 @@
 
     return [
       `<div class="wg-msg-row" data-wg-msg-id="${esc(msg.id || '')}" ${quoteAttrs}>`,
-      `  <div class="wg-msg-avatar admin">${esc(fromAvatar)}</div>`,
+      `  <div class="wg-msg-avatar" style="--av-grad:${fromAv.color}">${esc(fromAv.initials)}</div>`,
       '  <div class="wg-msg-body">',
       `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(fromName)}</span> <span class="wg-msg-time">${esc(time)}</span></div>`,
       '    <div class="wg-card dispatch">',
@@ -553,7 +617,7 @@
       '      </div>',
       `      <div class="wg-card-body markdown-body">${renderMarkdown((msg.text || '').slice(0, 300))}</div>`,
       '      <div class="wg-card-footer">',
-      `        <span class="wg-card-status"><span class="wg-card-dot ${routing.status === 'completed' ? '' : 'active'}"></span>${routing.status === 'completed' ? '已完成' : routing.status === 'failed' ? '失败' : '进行中'}</span>`,
+      `        <span class="wg-card-status"><span class="wg-card-dot ${displayStatus === 'completed' ? '' : 'active'}"></span>${displayStatus === 'completed' ? '已完成' : displayStatus === 'failed' ? '失败' : '进行中'}</span>`,
       sessionLabel
         ? `        <span class="wg-card-session-tag">${esc(sessionLabel)}</span>`
         : '',
@@ -586,9 +650,11 @@
     const time = formatTime(msg.timestamp);
 
     // dispatch 状态（用户消息的派发状态，替代旧的 routing badge）
+    // 使用 resolveDispatchDisplayStatus 从 runtime_status 实时数据解析，
+    // 与态势感知面板同一数据源，避免旧版 routing.status 误标 failed 的问题。
     let dispatchHtml = '';
     if (isMe && msg.routing) {
-      const status = msg.routing.status || 'pending';
+      const status = resolveDispatchDisplayStatus(msg.routing);
       const statusText = DISPATCH_STATUS_TEXT[status] || status;
       const targetName = msg.routing.targetIdentityRef
         ? getIdentityName(msg.routing.targetIdentityRef) : '';
@@ -643,7 +709,7 @@
         }).join('') + '</div>'
       : '';
 
-    const avatarLetter = name.charAt(0);
+    const av = generateAvatar(name, msg.from);
     const bubbleClass = isSummary ? ' summary' : (isAdmin ? ' admin' : '');
 
     if (isMe) {
@@ -676,7 +742,7 @@
 
     return [
       `<div class="wg-msg-row" data-wg-msg-id="${esc(msg.id || '')}" ${quoteAttrs}>`,
-      `  <div class="wg-msg-avatar${isAdmin ? ' admin' : ''}">${esc(avatarLetter)}</div>`,
+      `  <div class="wg-msg-avatar" style="--av-grad:${av.color}">${esc(av.initials)}</div>`,
       '  <div class="wg-msg-body">',
       `    <div class="wg-msg-meta">${identityTag} <span class="wg-msg-time">${esc(time)}</span></div>`,
       `    <div class="wg-msg-bubble markdown-body${bubbleClass}">${renderMarkdown(msg.text || '')}</div>`,
@@ -861,7 +927,7 @@
       return [
         `<div class="wg-member-cell${canRemove ? ' removable' : ''}">`,
         '  <div class="wg-member-cell-avatar-wrap">',
-        `    <div class="wg-avatar wg-avatar-md" style="background-color:${avatar.color}">${esc(avatar.initials)}</div>`,
+        `    <div class="wg-avatar wg-avatar-md" style="--av-grad:${avatar.color}">${esc(avatar.initials)}</div>`,
         canRemove
           ? `    <button class="wg-member-cell-remove" onclick="window._wgRemoveMember(decodeURIComponent('${encodedRef}'))" title="移出群聊">&times;</button>`
           : '',
@@ -928,7 +994,7 @@
   function renderSettingsPanel(chat) {
     const members = normalizeGroupMembers(chat.members || []);
     const memberCount = members.length;
-    const avatar = generateAvatar(chat.name, null);
+    const avatar = generateAvatar(chat.name, null, chat.createdAt);
     const createdDate = _formatCreateDate(chat.createdAt);
     const memberGrid = renderGroupMemberRows(chat);
 
@@ -937,7 +1003,7 @@
 
       // ── 群资料卡片头部 ──
       '  <div class="wg-settings-profile-card">',
-      `    <div class="wg-avatar wg-avatar-lg" style="background-color:${avatar.color}">${esc(avatar.initials)}</div>`,
+      `    <div class="wg-avatar wg-avatar-lg" style="--av-grad:${avatar.color}">${esc(avatar.initials)}</div>`,
       '    <div class="wg-settings-profile-info">',
       `      <input type="text" class="wg-settings-profile-name" value="${esc(chat.name)}" onchange="window._wgSettingsChange('name', this.value)" />`,
       `      <div class="wg-settings-profile-meta">${memberCount} 名成员${createdDate ? ' · 创建于 ' + esc(createdDate) : ''}</div>`,
@@ -969,6 +1035,9 @@
 
       // ── 危险区 ──
       '  <div class="wg-settings-section wg-settings-danger">',
+      chat.archived
+        ? '    <button class="wg-btn-secondary" onclick="window._wgUnarchive()">取消归档</button>'
+        : '    <button class="wg-btn-secondary" onclick="window._wgArchive()">归档群聊</button>',
       `    <button class="wg-btn-danger" onclick="window._wgDissolve()">解散此群聊</button>`,
       '  </div>',
 
@@ -2653,7 +2722,7 @@
       const avatar = generateAvatar(name, id.identityRef);
       return [
         `<div class="wg-add-member-item${inGroup ? ' disabled' : ''}" data-wg-identity="${esc(id.identityRef)}">`,
-        `  <div class="wg-avatar wg-avatar-sm" style="background-color:${avatar.color}">${esc(avatar.initials)}</div>`,
+        `  <div class="wg-avatar wg-avatar-sm" style="--av-grad:${avatar.color}">${esc(avatar.initials)}</div>`,
         '  <div class="wg-add-member-item-info">',
         `    <span class="wg-add-member-item-name">${esc(name)}</span>`,
         `    <span class="wg-add-member-item-desc">${esc(id.description || '')}</span>`,
@@ -2770,6 +2839,66 @@
     }
   }
 
+  async function handleArchiveChat(chatId) {
+    const targetId = chatId || activeChatId;
+    if (!targetId) return;
+    try {
+      await apiPut(`/protoclaw/group_chats/${encodeURIComponent(targetId)}`, { archived: true });
+      await loadChatSummaries();
+      refreshChatList();
+      if (targetId === activeChatId) refreshMain();
+    } catch (err) {
+      console.error('[WorkGroup] archive chat failed:', err);
+      alert('归档群聊失败');
+    }
+  }
+
+  async function handleUnarchiveChat(chatId) {
+    const targetId = chatId || activeChatId;
+    if (!targetId) return;
+    try {
+      await apiPut(`/protoclaw/group_chats/${encodeURIComponent(targetId)}`, { archived: false });
+      await loadChatSummaries();
+      refreshChatList();
+      if (targetId === activeChatId) refreshMain();
+    } catch (err) {
+      console.error('[WorkGroup] unarchive chat failed:', err);
+      alert('取消归档失败');
+    }
+  }
+
+  async function handleDeleteChat(chatId) {
+    if (!chatId) return;
+    const chat = chatSummaries.find((c) => c.id === chatId);
+    const name = chat?.name || chatId;
+    const confirmed = confirm(`确定要解散群聊「${name}」吗？\n\n解散后群聊记录将被删除，无法恢复。`);
+    if (!confirmed) return;
+    try {
+      await apiDelete(`/protoclaw/group_chats/${encodeURIComponent(chatId)}`);
+      const wasActive = chatId === activeChatId;
+      if (wasActive) {
+        activeChatId = null;
+        activeChat = null;
+      }
+      await loadChatSummaries();
+      // 如果删除的是当前群聊，切换到第一个可用活跃群
+      if (wasActive) {
+        const firstActive = chatSummaries.find((c) => !c.archived);
+        if (firstActive) {
+          await selectChat(firstActive.id);
+        } else {
+          refreshChatList();
+          refreshMain();
+        }
+      } else {
+        refreshChatList();
+      }
+    } catch (err) {
+      console.error('[WorkGroup] delete chat failed:', err);
+      alert('删除群聊失败');
+    }
+  }
+
   // ── 建群模态框 ──────────────────────────────────────────────
 
   async function handleNewChat() {
@@ -2782,7 +2911,7 @@
         const avatar = generateAvatar(name, id.identityRef);
         return `<label class="wg-modal-identity wg-new-chat-identity">
         <input type="checkbox" value="${esc(id.identityRef)}" />
-        <div class="wg-avatar wg-avatar-sm" style="background-color:${avatar.color}">${esc(avatar.initials)}</div>
+        <div class="wg-avatar wg-avatar-sm" style="--av-grad:${avatar.color}">${esc(avatar.initials)}</div>
         <div class="wg-new-chat-identity-info">
           <span class="wg-modal-identity-name">${esc(name)}</span>
           <span class="wg-modal-identity-desc">${esc(id.description || '')}</span>
@@ -2798,7 +2927,7 @@
       <div class="wg-modal-title">新建群聊</div>
 
       <div class="wg-new-chat-name-row">
-        <div class="wg-avatar wg-avatar-lg wg-new-chat-avatar" data-wg-role="new-chat-avatar">?</div>
+        <div class="wg-avatar wg-avatar-lg wg-new-chat-avatar" data-wg-role="new-chat-avatar" style="--av-grad:#6a6a6a">?</div>
         <input type="text" class="wg-modal-input wg-new-chat-name-input" data-wg-role="new-chat-name" placeholder="群聊名称" />
       </div>
 
@@ -2808,11 +2937,11 @@
       <div class="wg-modal-section-title">固定成员</div>
       <div class="wg-modal-fixed-members">
         <div class="wg-modal-fixed-member">
-          <div class="wg-avatar wg-avatar-sm" style="background-color:${AVATAR_SPECIAL_COLORS['user']}">我</div>
+          <div class="wg-avatar wg-avatar-sm" style="--av-grad:${AVATAR_SPECIAL_COLORS['user']}">我</div>
           <span>我</span><small>群主</small>
         </div>
         <div class="wg-modal-fixed-member">
-          <div class="wg-avatar wg-avatar-sm" style="background-color:${AVATAR_SPECIAL_COLORS['work-group:admin']}">管</div>
+          <div class="wg-avatar wg-avatar-sm" style="--av-grad:${AVATAR_SPECIAL_COLORS['work-group:admin']}">管</div>
           <span>管理员</span><small>固定入群</small>
         </div>
       </div>
@@ -2841,10 +2970,10 @@
       if (name) {
         const av = generateAvatar(name, null);
         avatarEl.textContent = av.initials;
-        avatarEl.style.backgroundColor = av.color;
+        avatarEl.style.setProperty('--av-grad', av.color);
       } else {
         avatarEl.textContent = '?';
-        avatarEl.style.backgroundColor = '#808080';
+        avatarEl.style.setProperty('--av-grad', '#6a6a6a');
       }
     });
 
@@ -3164,6 +3293,11 @@
       }
       if (act === 'cancel-new-chat') return;
       if (act === 'pick-workdir') return; // handled by modal-specific listener
+      if (act === 'toggle-archived') {
+        _archivedCollapsed = !_archivedCollapsed;
+        refreshChatList();
+        return;
+      }
     }
 
     const removeLink = e.target.closest('[data-wg-action="remove-link"]');
@@ -3316,6 +3450,38 @@
   // ── 右键上下文菜单：引用续话 ──────────────────────────────
 
   function onContainerContextMenu(e) {
+    // 群聊列表项右键菜单
+    const chatItem = e.target.closest('[data-wg-chat-id]');
+    if (chatItem) {
+      const chatId = chatItem.dataset.wgChatId;
+      const chat = chatSummaries.find((c) => c.id === chatId);
+      if (!chat) return;
+
+      e.preventDefault();
+      const items = [];
+
+      if (chat.archived) {
+        items.push({
+          label: '取消归档',
+          action: () => handleUnarchiveChat(chatId),
+        });
+      } else {
+        items.push({
+          label: '归档群聊',
+          action: () => handleArchiveChat(chatId),
+        });
+      }
+
+      items.push({
+        label: '删除群聊',
+        hint: '解散后数据不可恢复',
+        action: () => handleDeleteChat(chatId),
+      });
+
+      _showContextMenu(e.clientX, e.clientY, items);
+      return;
+    }
+
     if (!activeChatId) return;
     const msgRow = e.target.closest('.wg-msg-row');
     if (!msgRow) return;
@@ -3605,7 +3771,11 @@
   async function init() {
     isLoading = true;
     await Promise.all([loadChatSummaries(), loadIdentities()]);
-    if (chatSummaries.length > 0) {
+    // 优先选择第一个活跃群聊，跳过已归档的
+    const firstActive = chatSummaries.find((c) => !c.archived);
+    if (firstActive) {
+      await selectChat(firstActive.id);
+    } else if (chatSummaries.length > 0) {
       await selectChat(chatSummaries[0].id);
     }
     isLoading = false;
@@ -3914,6 +4084,8 @@
   window._wgAddSelectedMember = addSelectedMember; // 旧 select 已移除，保留占位
   window._wgRemoveMember = removeGroupMember;
   window._wgDissolve = handleDissolveChat;
+  window._wgArchive = async function () { await handleArchiveChat(); window._wgSettingsRefresh(); };
+  window._wgUnarchive = async function () { await handleUnarchiveChat(); window._wgSettingsRefresh(); };
 
   // 给外部 poll 用的轻量刷新：只更新左侧群聊列表，避免整个 workspace DOM 重建
   // 导致输入框失焦/内容丢失。

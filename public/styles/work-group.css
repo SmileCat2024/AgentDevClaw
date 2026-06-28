@@ -107,17 +107,16 @@
   height: 40px;
   flex-shrink: 0;
   border-radius: 10px;
-  background: var(--hover-bg);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-secondary);
-}
-.wg-chat-item.active .wg-chat-avatar {
-  background: var(--bg-secondary);
-  color: var(--text-primary);
+  color: rgba(255, 255, 255, 0.9);
+  user-select: none;
+  background: var(--av-grad, #3a3a45);
+  border: 1px solid transparent;
+  box-shadow: inset 0 0 0 100px rgba(0,0,0,0.80), 0 1px 4px rgba(0,0,0,0.25);
 }
 
 .wg-chat-info {
@@ -158,14 +157,66 @@
   text-overflow: ellipsis;
 }
 
-/* mode indicator — 文字而非 emoji */
-.wg-chat-mode {
-  font-size: 12px;
+/* ── 已归档分组（折叠容器） ── */
+.wg-chat-group {
+  margin-top: 4px;
+}
+.wg-chat-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  cursor: pointer;
   color: var(--text-muted);
-  flex-shrink: 0;
-  padding: 1px 6px;
-  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: color 0.12s;
+}
+.wg-chat-group-header:hover { color: var(--text-secondary); }
+.wg-chat-group-arrow {
+  font-size: 10px;
+  display: inline-flex;
+  width: 12px;
+  transition: transform 0.15s ease;
+}
+.wg-chat-group-title {
+  flex: 1;
+  text-align: left;
+}
+.wg-chat-group-count {
   background: var(--hover-bg);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.wg-chat-group-body {
+  overflow: hidden;
+  transition: max-height 0.2s ease, opacity 0.15s ease;
+  max-height: 2000px;
+  opacity: 1;
+}
+.wg-chat-group.collapsed .wg-chat-group-body {
+  max-height: 0;
+  opacity: 0;
+}
+
+/* ── 次要按钮（归档/取消归档） ── */
+.wg-btn-secondary {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: none;
+  color: var(--text-secondary);
+  transition: background 0.15s;
+}
+.wg-btn-secondary:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
 }
 
 /* ═══════════════════════════════════════════════
@@ -997,19 +1048,17 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: var(--hover-bg);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: rgba(255, 255, 255, 0.9);
   flex-shrink: 0;
-}
-
-.wg-msg-avatar.admin {
-  background: linear-gradient(135deg, #4a4a6a, #3a3a5a);
-  color: var(--text-primary);
+  user-select: none;
+  background: var(--av-grad, #3a3a45);
+  border: 1px solid transparent;
+  box-shadow: inset 0 0 0 100px rgba(0,0,0,0.80), 0 1px 4px rgba(0,0,0,0.25);
 }
 
 .wg-msg-body {
@@ -2189,6 +2238,9 @@ body[data-theme="light"] .wg-modal-overlay {
    ═══════════════════════════════════════════════ */
 
 .wg-settings-danger {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-top: 24px;
   padding-top: 16px;
   border-top: 1px solid var(--border-color);
@@ -3177,16 +3229,13 @@ body[data-theme="light"] .wg-modal-overlay {
   align-items: center;
   justify-content: center;
   font-weight: 600;
-  color: #fff;
+  color: rgba(255, 255, 255, 0.9);
   line-height: 1;
   user-select: none;
   overflow: hidden;
-  background-image:
-    radial-gradient(circle at 30% 25%, rgba(255,255,255,0.30) 0%, transparent 55%),
-    linear-gradient(155deg, transparent 0%, rgba(0,0,0,0.06) 45%, rgba(0,0,0,0.20) 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.18),
-    0 1px 3px rgba(0,0,0,0.14);
+  background: var(--av-grad, #3a3a45);
+  border: 1px solid transparent;
+  box-shadow: inset 0 0 0 100px rgba(0,0,0,0.80), 0 1px 4px rgba(0,0,0,0.25);
 }
 .wg-avatar-sm  { width: 32px; height: 32px; font-size: 13px; }
 .wg-avatar-md  { width: 40px; height: 40px; font-size: 16px; }
@@ -3651,8 +3700,7 @@ body[data-theme="light"] .wg-segment-toggle {
   margin-bottom: 0;
 }
 .wg-new-chat-avatar {
-  background-color: #808080 !important;
-  transition: background-color 0.15s;
+  /* --av-grad 由 JS 动态设置，无需 transition */
 }
 .wg-new-chat-desc {
   resize: vertical;

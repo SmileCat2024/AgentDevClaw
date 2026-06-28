@@ -6865,13 +6865,16 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   height: 40px;
   flex-shrink: 0;
   border-radius: 8px;
-  background: var(--hover-bg);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
+  user-select: none;
+  background: var(--av-grad, #3a3a45);
+  border: 1px solid transparent;
+  box-shadow: inset 0 0 0 100px rgba(0,0,0,0.80), 0 1px 4px rgba(0,0,0,0.25);
 }
-.wg-chat-item.active .wg-chat-avatar { background: var(--bg-secondary); }
 
 .wg-chat-info {
   flex: 1;
@@ -7045,13 +7048,16 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   height: 36px;
   flex-shrink: 0;
   border-radius: 6px;
-  background: var(--hover-bg);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: rgba(255, 255, 255, 0.9);
+  user-select: none;
+  background: var(--av-grad, #3a3a45);
+  border: 1px solid transparent;
+  box-shadow: inset 0 0 0 100px rgba(0,0,0,0.80), 0 1px 4px rgba(0,0,0,0.25);
 }
 
 .wg-msg-body {
@@ -7661,11 +7667,6 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   vertical-align: middle;
 }
 
-.wg-msg-avatar.admin {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-  color: white !important;
-}
-
 .wg-msg-bubble.admin {
   border-left: 2px solid #667eea;
 }
@@ -7699,15 +7700,6 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 
 @keyframes wg-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .wg-routing-badge.delivered .wg-routing-icon { animation: wg-spin 2s linear infinite; display: inline-block; }
-
-/* ── 群列表模式图标 ── */
-
-.wg-chat-mode {
-  font-size: 11px;
-  margin-left: auto;
-  margin-right: 4px;
-  opacity: 0.6;
-}
 
 /* ── 设置面板滚动 ── */
 
@@ -7754,14 +7746,17 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--hover-bg);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: rgba(255, 255, 255, 0.9);
   flex-shrink: 0;
+  user-select: none;
+  background: var(--av-grad, #3a3a45);
+  border: 1px solid transparent;
+  box-shadow: inset 0 0 0 100px rgba(0,0,0,0.80), 0 1px 4px rgba(0,0,0,0.25);
 }
 
 .wg-msg-body {

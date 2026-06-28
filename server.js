@@ -6541,6 +6541,7 @@ async function listGroupChats() {
               timestamp: chat.messages[chat.messages.length - 1].timestamp,
             }
           : null,
+        archived: chat.archived || false,
       });
     } catch {}
   }
@@ -7581,11 +7582,12 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
       });
     }
 
-    // Source 2: 消息路由（含已完成会话，排除 failed）
+    // Source 2: 消息路由（含已完成和 failed 会话——不再排除 failed，
+    // 因为 routing.status 由旧版 trackGroupChatDispatch 维护，经常误标 failed，
+    // 实际运行时状态以 runtime 查询结果为准）
     for (const msg of (chat.messages || [])) {
       const r = msg.routing;
       if (!r || !r.targetSessionId) continue;
-      if (r.status === 'failed') continue;
       if (r.targetIdentityRef === 'work-group:admin') continue;
       const key = `${r.targetIdentityRef}:${r.targetSessionId}`;
       const existing = sessionMap.get(key);
@@ -7955,6 +7957,8 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
 
   // 7. 后台跟踪完成状态
   trackGroupChatDispatch(chatId, message.id, workspaceId, viewerAgentId);
+
+  return { sessionId, sessionTitle: resolvedSessionTitle, isNew, workspaceId, viewerAgentId };
 }
 
 /**
@@ -8023,28 +8027,46 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
     case 'plan': {
       // 规划模式：直接派发 + 单一通知管理员
       const prompt = composeDispatchPrompt(chatName, message, chatId);
-      await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
+      const dispatchResult = await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
 
       // 异步通知管理员（合并：观察 + 任务启动信息，一次 call 搞定）
-      // user 块只放精简的身份标签，详细内容在 catch-up（system 块）中
       const allIdentities = await collectIdentities();
       const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
       const targetName = targetInfo?.displayName || targetIdentityRef;
 
+      // user 块：仅保留观察摘要（谁说了什么），不含派发细节
       let observationText = `[观察] 用户 @了 ${targetName}：${message.text || ''}`;
-      
+
       // 附件摘要：显示附件数量和名称
       if (Array.isArray(message.attachments) && message.attachments.length > 0) {
         const attNames = message.attachments.map(a => a.name).join(', ');
         observationText += `  [附件: ${attNames}]`;
       }
-      
-      const observationPrompt = [
-        observationText,
-        `${targetName} 已开始处理。你不需要重复派发。`,
-      ].join('\n');
 
-      notifyAdminWithPrompt(chatId, message, chat, observationPrompt).catch((err) => {
+      // system 层：派发状态，与 gc_dispatch 工具返回的信息丰富度保持一致
+      let systemNote;
+      if (dispatchResult) {
+        const action = dispatchResult.isNew
+          ? `创建了新会话「${dispatchResult.sessionTitle}」`
+          : `复用已有会话「${dispatchResult.sessionTitle}」`;
+        systemNote = [
+          '─── 自动派发状态 ───',
+          `目标：${targetName}（${targetIdentityRef}）`,
+          `操作：${action}`,
+          `sessionId: ${dispatchResult.sessionId}`,
+          `消息 ID: ${message.id}`,
+          `系统已自动将此消息派发给 ${targetName}，你不需要重复派发。`,
+        ].join('\n');
+      } else {
+        systemNote = [
+          '─── 自动派发状态 ───',
+          `目标：${targetName}（${targetIdentityRef}）`,
+          `状态：会话启动可能失败，请关注。`,
+          `消息 ID: ${message.id}`,
+        ].join('\n');
+      }
+
+      notifyAdminWithPrompt(chatId, message, chat, observationText, systemNote).catch((err) => {
         log('GroupChat', `admin observation notify failed: ${err.message}`, 'warn');
       });
       break;
@@ -8065,7 +8087,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
  * 内部调用 prepareAdminContext 保证 catch-up + 群记忆完整性。
  * 用于替代 notifyAdminForObservation，避免产生多次碎片化 call。
  */
-async function notifyAdminWithPrompt(chatId, message, chat, promptText) {
+async function notifyAdminWithPrompt(chatId, message, chat, promptText, systemNote) {
   const allIdentities = await collectIdentities();
 
   const { sessionId, isNew } = await resolveGroupChatSession(chatId, 'work-group:admin', 'persistent');
@@ -8077,14 +8099,22 @@ async function notifyAdminWithPrompt(chatId, message, chat, promptText) {
     return;
   }
 
-  const contextText = await prepareAdminContext(
+  let contextText = await prepareAdminContext(
     chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew,
   );
+
+  // systemNote 作为 system 层辅助信息注入，与 catch-up / 群记忆并列，
+  // 避免辅助性内容混入 user 块导致模型困惑。
+  if (systemNote) {
+    contextText = contextText
+      ? `${systemNote}\n\n${contextText}`
+      : systemNote;
+  }
 
   const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
   // 处理附件内容，实现渐进式加载
   const processedAttachments = processAttachmentsForInjection(message.attachments, chat);
-  
+
   enqueueGcInbox(runtimeKey, {
     id: `obs-${message.id}`,
     text: promptText,
@@ -8349,12 +8379,13 @@ app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next)
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
 
-    const { name, workDir, members, initiativeMode, autonomyMode, adminMemory } = req.body || {};
+    const { name, workDir, members, initiativeMode, autonomyMode, adminMemory, archived } = req.body || {};
     if (name !== undefined) chat.name = name;
     if (workDir !== undefined) chat.workDir = workDir || null;
     if (Array.isArray(members)) chat.members = normalizeGroupChatMembers(members);
     if (typeof initiativeMode === 'string') chat.initiativeMode = initiativeMode;
     if (typeof autonomyMode === 'string') chat.autonomyMode = autonomyMode;
+    if (typeof archived === 'boolean') chat.archived = archived;
     if (adminMemory && typeof adminMemory === 'object') {
       const prev = chat.adminMemory || {};
       chat.adminMemory = {
