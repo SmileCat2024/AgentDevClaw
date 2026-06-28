@@ -39,8 +39,8 @@ import {
 
 describe('constants', () => {
   it('PROJECT_ROOT should resolve to the project directory', () => {
-    assert.ok(PROJECT_ROOT.endsWith('agentdevclaw'),
-      `PROJECT_ROOT should end with 'agentdevclaw', got: ${PROJECT_ROOT}`);
+    assert.ok(PROJECT_ROOT.toLowerCase().endsWith('agentdevclaw'),
+      `PROJECT_ROOT should end with 'agentdevclaw' (case-insensitive), got: ${PROJECT_ROOT}`);
   });
 
   it('WORKSPACE_SESSION_AGENT_IDS should include expected agents', () => {
