@@ -4043,6 +4043,7 @@ window.switchAgent = async (newAgentId) => {
     currentWorkspaceTab = 'chat';
     // Clear chat render dedup so the new agent's messages always rebuild the DOM
     _lastRenderedChatSig = '';
+    activateUserCollapseStateForContext(getRuntimeContextKey(runtimeAgentId));
     // Optimistic restore: show cached data immediately if available
     const _restored = restoreRuntimeFromCache(runtimeAgentId);
     if (_restored) {
@@ -5045,6 +5046,7 @@ async function loadAgentData(agentId) {
   }
   try {
     currentRuntimeAgentId = agentId;
+    activateUserCollapseStateForContext(getRuntimeContextKey(agentId));
     _lastCallFinishTime = 0;
     _currentRecapText = '';
     _recapPendingTrigger = false;
@@ -7399,6 +7401,7 @@ function renderMessage(msg, index) {
 // 追加新消息（保持现有 DOM 状态）
 function appendNewMessages(newMessages, startIndex) {
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
+  const chatViewportTopBefore = container.scrollTop;
   // 移除空状态
   const emptyState = container.querySelector('.empty-state');
   runWithSuppressedChatViewportObservers(() => {
@@ -7474,10 +7477,12 @@ function appendNewMessages(newMessages, startIndex) {
   applyCollapseLogic(container, startIndex);
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
+  restoreUserCollapseState(container);
   updateFollowLatestButton();
   notifyChatViewportMutation({
     reason: 'append',
     shouldFollow: shouldFollowAfterMutation,
+    preserveTop: shouldFollowAfterMutation ? null : chatViewportTopBefore,
     allowChase: false,
     preferSmooth: false,
     forceSnap: false,
@@ -7487,6 +7492,7 @@ function appendNewMessages(newMessages, startIndex) {
 // 更新最后一条消息
 function updateLastMessage(msg) {
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
+  const chatViewportTopBefore = container.scrollTop;
   const lastIndex = currentMessages.length - 1;
   const lastRow = container.querySelectorAll('.message-row')[lastIndex];
   if (!lastRow) {
@@ -7547,10 +7553,12 @@ function updateLastMessage(msg) {
 
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
+  restoreUserCollapseState(container);
   updateFollowLatestButton();
   notifyChatViewportMutation({
     reason: 'patch-last',
     shouldFollow: shouldFollowAfterMutation,
+    preserveTop: shouldFollowAfterMutation ? null : chatViewportTopBefore,
     allowChase: false,
     preferSmooth: false,
     forceSnap: false,

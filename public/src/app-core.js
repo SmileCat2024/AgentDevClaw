@@ -417,7 +417,8 @@ let phSearchTab = 'main';            // which tab filter to apply during search:
 let _phSearchTimer = null;           // debounce timer for search input
 
 // ── User expand/collapse preferences (survive full re-render) ──────────────
-// Keyed by message index. These override syncCollapseStates auto-rules.
+// Keyed by message index within the active runtime context. These override
+// syncCollapseStates auto-rules.
 let _userExpandedReasoning = new Set();  // reasoning blocks the user expanded
 let _userCollapsedMsgs = new Set();       // messages the user explicitly collapsed
 let _userExpandedMsgs = new Set();        // messages the user explicitly expanded (un-collapsed)
@@ -426,6 +427,41 @@ let _userExpandedMsgs = new Set();        // messages the user explicitly expand
 // Caches messages, toolRenderConfigs, TOOL_NAMES, hookInspector + signature,
 // overviewSnapshot + signature, and connection status per runtime context.
 const _agentRuntimeCache = new Map();
+const _userCollapseStateByContext = new Map();
+
+function getUserCollapseStateContextKey(runtimeId = currentRuntimeAgentId) {
+  const runtimeKey = typeof getRuntimeContextKey === 'function' ? getRuntimeContextKey(runtimeId) : null;
+  if (runtimeKey) return runtimeKey;
+  const agentKey = String(currentAgentId || '').trim();
+  return agentKey ? `agent:${agentKey}` : 'global';
+}
+
+function getUserCollapseStateForContext(contextKey = getUserCollapseStateContextKey()) {
+  const key = contextKey || 'global';
+  let state = _userCollapseStateByContext.get(key);
+  if (!state) {
+    state = {
+      expandedReasoning: new Set(),
+      collapsedMsgs: new Set(),
+      expandedMsgs: new Set(),
+    };
+    _userCollapseStateByContext.set(key, state);
+  }
+  return state;
+}
+
+function activateUserCollapseStateForContext(contextKey = getUserCollapseStateContextKey()) {
+  const state = getUserCollapseStateForContext(contextKey);
+  _userExpandedReasoning = state.expandedReasoning;
+  _userCollapsedMsgs = state.collapsedMsgs;
+  _userExpandedMsgs = state.expandedMsgs;
+}
+
+function resetUserCollapseStateForContext(contextKey = getUserCollapseStateContextKey()) {
+  const key = contextKey || 'global';
+  _userCollapseStateByContext.delete(key);
+  activateUserCollapseStateForContext(key);
+}
 
 function getActiveWorkspaceSessionId(agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
   return String(
@@ -479,6 +515,7 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
   if (!agentId || !contextKey) return false;
   const cached = _agentRuntimeCache.get(contextKey);
   if (!cached) return false;
+  activateUserCollapseStateForContext(contextKey);
   currentMessages = cached.messages;
   toolRenderConfigs = cached.toolRenderConfigs;
   TOOL_NAMES = cached.TOOL_NAMES;

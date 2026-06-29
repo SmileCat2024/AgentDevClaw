@@ -6336,9 +6336,7 @@ function resetRuntimeBackedSurfaceState() {
   currentProjectDocsetOpen = false;
   currentProjectRequirementEdit = null;
   currentProjectDocsetPage = 'requirement';
-  _userExpandedReasoning.clear();
-  _userCollapsedMsgs.clear();
-  _userExpandedMsgs.clear();
+  resetUserCollapseStateForContext();
   updateProjectDocsetChrome(getCurrentAgentRecord());
 }
 

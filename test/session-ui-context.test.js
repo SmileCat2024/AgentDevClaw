@@ -169,3 +169,83 @@ globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;`, context);
   assert.equal(requestTextarea.value, 'draft from A');
   assert.equal(resizeState.calls, 1);
 });
+
+function createChatMutationContext() {
+  const calls = [];
+  const restoreState = { calls: 0 };
+  const row = {
+    dataset: {},
+    querySelector() {
+      return null;
+    },
+  };
+  const context = {
+    followLatestEnabled: false,
+    currentMessages: [{ role: 'user', content: 'existing' }],
+    currentMessagesLength: 1,
+    container: {
+      scrollTop: 123,
+      querySelector() {
+        return null;
+      },
+      querySelectorAll(selector) {
+        return selector === '.message-row' ? [row] : [];
+      },
+      insertAdjacentHTML() {},
+      get lastElementChild() {
+        return row;
+      },
+    },
+    isChatSurfaceActive: () => true,
+    runWithSuppressedChatViewportObservers(work) {
+      return work();
+    },
+    applyCollapseLogic() {},
+    updateRollbackActionVisibility() {},
+    applyConversationProcessState() {},
+    restoreUserCollapseState() {
+      restoreState.calls += 1;
+    },
+    updateFollowLatestButton() {},
+    notifyChatViewportMutation(options) {
+      calls.push(options);
+    },
+    enhanceMathInElement() {},
+    renderMarkdown(value) {
+      return value;
+    },
+  };
+  vm.createContext(context);
+  const mutationBlock = sourceBetween(
+    mainSource,
+    'function appendNewMessages',
+    '\nfunction getCollapseThresholdForRow',
+  );
+  vm.runInContext(`${mutationBlock}
+globalThis.__chatMutation = { appendNewMessages, updateLastMessage };`, context);
+  return { context, calls, restoreState };
+}
+
+test('append preserves viewport and reapplies explicit collapse state when follow is off', () => {
+  const { context, calls, restoreState } = createChatMutationContext();
+
+  context.__chatMutation.appendNewMessages([], 1);
+
+  assert.equal(restoreState.calls, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].reason, 'append');
+  assert.equal(calls[0].shouldFollow, false);
+  assert.equal(calls[0].preserveTop, 123);
+});
+
+test('patch-last preserves viewport and reapplies explicit collapse state when follow is off', () => {
+  const { context, calls, restoreState } = createChatMutationContext();
+
+  context.__chatMutation.updateLastMessage({ role: 'user', content: 'existing' });
+
+  assert.equal(restoreState.calls, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].reason, 'patch-last');
+  assert.equal(calls[0].shouldFollow, false);
+  assert.equal(calls[0].preserveTop, 123);
+});
