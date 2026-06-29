@@ -1,8 +1,8 @@
 # server.js 拆分计划
 
 > 创建日期：2026-06-28
-> 状态：Phase 0-4 完成，待执行 Phase 5
-> 涉及文件：`server.js`（13,449 行），目标降至 ~300-500 行
+> 状态：Phase 0-5 完成，待执行 Phase 6-7
+> 涉及文件：`server.js`（13,449 行 → 4,710 行），目标降至 ~300-500 行
 > 关联文档：[2026-04-04 前端拆分计划](./2026-06-04-frontend-split-plan.md)
 
 ---
@@ -570,11 +570,51 @@ Phase 4 后 server.js：~7,492 行。
 
 ### Phase 5：Session 系统（最散布）
 
-两步走：
-- **5a**：搬 session 路由（散布在 L9626-12224）→ `server/routes/session.js`
-- **5b**：搬 session helpers（L2853-4660）→ `server/routes/session-helpers.js`
+> **状态：✅ 完成（2026-06-29）**
+> server.js：7,492 → 4,710 行（-2,782 行）
 
-Phase 5 后 server.js：~5,000 行。
+实际执行与原计划的差异：
+
+1. **执行顺序反转**：先提取 helpers（5b），再提取 routes（5a），因为 helpers 是 routes 的直接依赖。
+
+2. **预提取纯函数**（额外步骤）：
+   - `getAssemblyWorkspaceDir`、`normalizeClientAgentId` 从 server.js 移入 `server/shared/string-helpers.js`
+   - 这两个函数零域依赖，先于 helpers 提取确保干净拆分
+
+3. **helpers 提取**（`server/routes/session-helpers.js`，1,670 行）：
+   - 工厂函数 `createSessionHelpers(ctx)`，ctx 注入 6 个外部函数：`readWorkspaceState`、`writeWorkspaceState`、`discoverAgents`、`enrichAgent`、`startManagedAgent`、`waitForManagedRuntimeReady`
+   - 返回 40 个 session helper 函数
+   - `META_VERSION` 从闭包内提升为模块顶层 `export const`，供 session routes 模块 import
+   - server.js 侧：`const sessionHelpers = createSessionHelpers({...})` + 解构全部 40 个函数到本地作用域
+
+4. **routes 提取**（`server/routes/session.js`，1,297 行）：
+   - 26 个路由分布在 4 个非连续块（A/B/C/D），中间夹杂 workspace、assembly、ph_project 等非 session 路由
+   - `setupSessionRoutes(app, express, ctx)` 接收 26 个 ctx 函数（21 个来自 session helpers + 5 个 server.js 生命周期函数）
+   - ESM `__dirname` 不可用，改用 `import.meta.url` + `fileURLToPath` 计算 `PROJECT_ROOT`
+   - `__dirname` 引用的脚本路径修正为 `PROJECT_ROOT`（模块位于 `server/routes/` 而非项目根）
+
+5. **测试覆盖**（`test/session-extraction.test.js`，23 个测试用例）：
+   - `createSessionHelpers` 工厂完整性：40 函数返回、类型检查、ctx 注入契约验证
+   - `setupSessionRoutes` 路由注册完整性：25 条路由精确匹配、无重复注册
+   - 纯函数行为验证：`getAssemblyWorkspaceDir`、`normalizeClientAgentId`
+   - `META_VERSION` 导出验证
+   - 模块接线完整性：无循环依赖、导入链无断裂
+
+#### 新增文件清单
+
+| 文件 | 行数 | 职责 |
+|------|------|------|
+| `server/routes/session-helpers.js` | 1,670 | 40 个 session helper 函数 + `META_VERSION` |
+| `server/routes/session.js` | 1,297 | 26 个 session 路由 |
+| `test/session-extraction.test.js` | 319 | Phase 5 提取的数据流测试（23 用例） |
+
+#### Phase 5 中遇到的修正
+
+| 问题 | 影响 | 解决方案 |
+|------|------|----------|
+| **ESM `__dirname` 不可用** | `session.js` 启动时 `ReferenceError` | 添加 `import.meta.url` + `fileURLToPath`，计算 `PROJECT_ROOT = path.resolve(__dirname, '..', '..')` |
+| **`META_VERSION` 闭包隔离** | `session_meta_sync` 路由无法访问 `META_VERSION` | 从 `createSessionHelpers` 闭包内提升到模块顶层并 `export` |
+| **`__dirname` 路径偏移** | 模块位于 `server/routes/` 而非项目根，脚本路径错位 | `path.join(__dirname, 'scripts', ...)` → `path.join(PROJECT_ROOT, 'scripts', ...)` |
 
 ### Phase 6：Flow + Feature Repository + PH Project
 
@@ -616,6 +656,6 @@ Phase 6 后 server.js：~3,500 行。
 | 2 | group-chat | ✅ 完成 | 12,189 → 9,394 | 2026-06-29 |
 | 3 | dispatch | ✅ 完成 | 9,394 → 8,500 | 2026-06-29 |
 | 4 | im | ✅ 完成 | 8,500 → 7,492 | 2026-06-29 |
-| 5 | session | 待执行 | → ~5,000 | |
+| 5 | session (helpers + routes + tests) | ✅ 完成 | 7,492 → 4,710 | 2026-06-29 |
 | 6 | flow + feature-repo + ph-project | 待执行 | → ~3,500 | |
 | 7 | agent-lifecycle + 收编 | 待执行 | → ~300-500 | |

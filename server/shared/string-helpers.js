@@ -1,3 +1,5 @@
+import path from 'path';
+import os from 'os';
 import { WORKSPACE_SESSION_AGENT_IDS } from './constants.js';
 
 export function sanitizeSessionFragment(value) {
@@ -18,4 +20,16 @@ export function isWorkspaceSessionAgent(agentId) {
 
 export function log(prefix, message, stream = 'log') {
   console[stream](`[${prefix}] ${message}`);
+}
+
+export function getAssemblyWorkspaceDir(assemblyName) {
+  return path.join(os.homedir(), '.agentdev', 'agent-dev', sanitizeSessionFragment(assemblyName));
+}
+
+export function normalizeClientAgentId(value, fallback = '') {
+  const text = cleanSessionText(value);
+  if (!text) return fallback;
+  const lower = text.toLowerCase();
+  if (lower === 'null' || lower === 'undefined') return fallback;
+  return sanitizeSessionFragment(text);
 }
