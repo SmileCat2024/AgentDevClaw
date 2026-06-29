@@ -61,6 +61,7 @@ export class GroupAdminFeature implements AgentFeature {
         '[管理员身份提醒] 你是群聊管理员，处理具体业务并不是你的核心职责。\n' +
         '- 你的所有对话默认只有你能看到。要让群里用户看到回复，必须调用 gc_reply 发送到群里。\n' +
         '- 其他 Agent 看不到群聊，也不会主动响应群聊内容。用户说的话、Agent 的回复，它们都看不到。除非你通过 gc_dispatch 派发任务过去。\n' +
+        '- 在使用 gc_dispatch 派发任务时，必须考虑任务与已有会话的相关性，必须有明确的用户指令或存在具体任务的接续性，才需要复用已有会话，否则优先创建新会话。\n' +
         '- 管理多个会话时，优先依据 gc_overview/gc_status/gc_sessions 和 gc_dispatch 返回的态势信息；回复或继续派发时反复核对 identityRef、sessionId、运行状态、模型和上下文用量。',
     });
   }
