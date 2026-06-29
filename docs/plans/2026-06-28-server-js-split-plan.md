@@ -1,7 +1,7 @@
 # server.js 拆分计划
 
 > 创建日期：2026-06-28
-> 状态：Phase 0-1 完成，待执行 Phase 2
+> 状态：Phase 0-2 完成，待执行 Phase 3
 > 涉及文件：`server.js`（13,449 行），目标降至 ~300-500 行
 > 关联文档：[2026-04-04 前端拆分计划](./2026-06-04-frontend-split-plan.md)
 
@@ -594,7 +594,7 @@ Phase 6 后 server.js：~3,500 行。
 | **Phase 0 managedAgents 引用断裂** | 低 | 全站崩溃 | export Map 本身，不包装；grep 确认所有引用点都已改为 import |
 | **Phase 0 notifyRuntimeReady 时序问题** | 中 | Dispatch 事件丢失 | 在 `main()` 开头注册回调，确保在 `app.listen` 前 |
 | **Phase 0 `readSessionIndexSync` 缺少 `readFileSync`** | ~~中~~ | ~~session-access 启动报错~~ | ~~**P0-2 已修正**：文档已标注 session-access 需单独 import~~ |
-| **Phase 2 GC 遗漏跨域函数** | 中 | GC 功能异常 | 44 处调用逐一核对 ctx 注入参数 |
+| **Phase 2 GC 遗漏跨域函数** | ~~中~~ | ~~GC 功能异常~~ | ~~**已完成**：44 处调用逐一核对，8 个函数通过 ctx 注入~~ |
 | **Phase 3 Dispatch top-level 副作用** | 低 | 调度丢失 | 转为显式 init()，在正确位置调用 |
 | **Express 路由顺序** | 低 | 路由不匹配 | 保持路由注册顺序不变；用 `app.use(prefix, router)` 前缀挂载 |
 | **ESM import 循环** | 低 | 启动失败 | Phase 0 shared 模块互不依赖；域模块不 import server.js |
@@ -609,7 +609,7 @@ Phase 6 后 server.js：~3,500 行。
 | 1a | system-feature-config | ✅ 完成 | 13,083 → 12,908 | 2026-06-28 |
 | 1b | model-config | ✅ 完成 | 12,908 → 12,394 | 2026-06-28 |
 | 1c | fs-operations | ✅ 完成 | 12,394 → 12,188 | 2026-06-28 |
-| 2 | group-chat | 待执行 | → ~9,500 | |
+| 2 | group-chat | ✅ 完成 | 12,189 → 9,394 | 2026-06-29 |
 | 3 | dispatch | 待执行 | → ~8,800 | |
 | 4 | im | 待执行 | → ~8,000 | |
 | 5 | session | 待执行 | → ~5,000 | |
