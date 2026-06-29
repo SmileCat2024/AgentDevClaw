@@ -1269,7 +1269,7 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
     if (!submitRes.ok) {
       throw new Error(await submitRes.text().catch(() => 'failed to submit compact summary command'));
     }
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       await loadAgents();
       const refreshed = allAgents.find((item) => String(item?.id || '').trim() === String(agentId || '').trim()) || null;
@@ -1281,7 +1281,9 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
         return { scheduled: true, liveRuntime: true, switched: true };
       }
     }
-    return { scheduled: true, liveRuntime: true, switched: false };
+    throw new Error(currentLanguage === 'zh'
+      ? '摘要压缩超时：新会话在 120 秒内未创建成功。摘要可能仍在后台运行，请稍后在会话列表中检查，或重试。'
+      : 'Summary compaction timed out: new session was not created within 120 seconds. The summary may still be running in the background — check the session list later or retry.');
   }
 
   const policy = strategy ? { strategy } : {};
@@ -1677,6 +1679,20 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     });
     try {
       const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy);
+      if (result?.liveRuntime && result?.switched) {
+        // Live-runtime shortcut path: session switch was already handled
+        // inside createCompactedResumeSession — skip normal agent/runtime logic
+        await loadAgents();
+        clearSessionLoading(activeAgent.id);
+        ClawToast.update(_csToastId, {
+          status: 'success',
+          title: _csIsZh ? '会话总结完成' : 'Session summary completed',
+        });
+        if (action.archiveOriginal) {
+          await archiveSessionAfterMutation(activeAgent.id, action.sessionId, _csOldRuntimeId);
+        }
+        return;
+      }
       if (result?.agent) {
         applyManagedPrebuiltAgent(activeAgent.id, result.agent);
       }
