@@ -291,13 +291,31 @@ function createSeedMessage(role, content, turn) {
   };
 }
 
+function deduplicateToolCallSummaries(summaries) {
+  const counts = new Map();
+  const order = [];
+  for (const s of summaries) {
+    if (counts.has(s)) {
+      counts.set(s, counts.get(s) + 1);
+    } else {
+      counts.set(s, 1);
+      order.push(s);
+    }
+  }
+  return order.map(s => {
+    const c = counts.get(s);
+    return c > 1 ? `${s} ×${c}` : s;
+  });
+}
+
 function flushPendingToolFold(seedMessages, pendingFold, policy, stats) {
   if (!pendingFold || pendingFold.toolCalls.length === 0) {
     return null;
   }
 
+  const deduped = deduplicateToolCallSummaries(pendingFold.toolCalls);
   const lines = ['[Folded tool activity]'];
-  lines.push(`assistant tool calls: ${pendingFold.toolCalls.join('; ')}`);
+  lines.push(`assistant tool calls: ${deduped.join('; ')}`);
 
   const note = createSeedMessage(policy.foldedToolNoteRole, lines.join('\n'), pendingFold.turn);
   if (note) {
