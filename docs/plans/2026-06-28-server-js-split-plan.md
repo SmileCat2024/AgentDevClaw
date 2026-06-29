@@ -1,7 +1,7 @@
 # server.js 拆分计划
 
 > 创建日期：2026-06-28
-> 状态：Phase 0-3 完成，待执行 Phase 4
+> 状态：Phase 0-4 完成，待执行 Phase 5
 > 涉及文件：`server.js`（13,449 行），目标降至 ~300-500 行
 > 关联文档：[2026-04-04 前端拆分计划](./2026-06-04-frontend-split-plan.md)
 
@@ -560,9 +560,13 @@ Phase 3 后 server.js：~8,800 行。
 
 ### Phase 4：IM
 
-helpers（L1074-1530）+ routes（L10107-10449）。跨域调用仅 14 处，全部是 Phase 0 shared 函数。
+helpers（原 L1074-1530，实际 L287-741）+ routes（原 L10107-10449，实际 L5754-6315）。
 
-Phase 4 后 server.js：~8,000 行。
+跨域调用 14 处：8 处 `readProjectIMWorkspaceConfig` + 5 处 `getPortalAgentDisplayName` 通过 export 回导，6 个 agent lifecycle 函数通过 ctx 注入。
+
+额外修复：`getUsageContextTokens` 在 server.js 中被调用但未定义（Phase 2 提取遗留），已内联到 im.js。
+
+Phase 4 后 server.js：~7,492 行。
 
 ### Phase 5：Session 系统（最散布）
 
@@ -611,7 +615,7 @@ Phase 6 后 server.js：~3,500 行。
 | 1c | fs-operations | ✅ 完成 | 12,394 → 12,188 | 2026-06-28 |
 | 2 | group-chat | ✅ 完成 | 12,189 → 9,394 | 2026-06-29 |
 | 3 | dispatch | ✅ 完成 | 9,394 → 8,500 | 2026-06-29 |
-| 4 | im | 待执行 | → ~8,000 | |
+| 4 | im | ✅ 完成 | 8,500 → 7,492 | 2026-06-29 |
 | 5 | session | 待执行 | → ~5,000 | |
 | 6 | flow + feature-repo + ph-project | 待执行 | → ~3,500 | |
 | 7 | agent-lifecycle + 收编 | 待执行 | → ~300-500 | |
