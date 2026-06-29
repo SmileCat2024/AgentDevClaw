@@ -1,7 +1,7 @@
 # server.js 拆分计划
 
 > 创建日期：2026-06-28
-> 状态：Phase 0-5 完成，待执行 Phase 6-7
+> 状态：Phase 0-6 完成，待执行 Phase 7
 > 涉及文件：`server.js`（13,449 行 → 4,710 行），目标降至 ~300-500 行
 > 关联文档：[2026-04-04 前端拆分计划](./2026-06-04-frontend-split-plan.md)
 
@@ -616,11 +616,41 @@ Phase 4 后 server.js：~7,492 行。
 | **`META_VERSION` 闭包隔离** | `session_meta_sync` 路由无法访问 `META_VERSION` | 从 `createSessionHelpers` 闭包内提升到模块顶层并 `export` |
 | **`__dirname` 路径偏移** | 模块位于 `server/routes/` 而非项目根，脚本路径错位 | `path.join(__dirname, 'scripts', ...)` → `path.join(PROJECT_ROOT, 'scripts', ...)` |
 
-### Phase 6：Flow + Feature Repository + PH Project
+### Phase 6：Flow + Feature Repository + PH Project ✅ 完成
 
-各自独立度高，快速搬走。
+**实际执行与原计划差异**：
 
-Phase 6 后 server.js：~3,500 行。
+原计划认为三域"各自独立度高，快速搬走"。实际调研后发现：
+
+- **Flow 域**（567 行）独立度最高，仅有 4 个 ctx 依赖，直接提取为 `server/routes/flow.js`
+- **Feature Repository 域**（~640 行）有 5 个函数被 server.js 其他域反向引用（`summarizeFeatureRepository`、`mergeFeatureRepositoryPackages`、`uniqueStrings`、`ensureFeatureProjectManifest`、`summarizeFeatureArchive`），通过 export + server.js import 解决
+- **PH Project 域**（75 行）不值得单独建模块——4 个路由极薄，核心逻辑全部是 workspace 三件套调用，且与 `normalizeWorkspacePhProject` 存在循环依赖。决定保留在 server.js
+
+**提取的模块**：
+
+| 文件 | 行数 | 职责 |
+|------|------|------|
+| `server/shared/feature-utils.js` | 17 | `compareSemver`、`uniqueStrings`（预提取纯函数，避免跨路由模块反向依赖） |
+| `server/routes/feature-repository.js` | ~560 | 6 个路由 + 12 个 helper + multer/pendingFeatureImports |
+| `server/routes/flow.js` | ~600 | 6 个路由 + 16 个 helper（含 capability 聚合 BFS 算法） |
+
+**关键技术决策**：
+
+- `parseListField` 移入 `shared/string-helpers.js`（被 flow + workspace + assembly 三域共用）
+- `uniqueStrings`、`compareSemver` 移入 `shared/feature-utils.js`（被 feature-repo + assembly 共用）
+- Flow 域的 `__dirname` 全部替换为 `PROJECT_ROOT`（11 处）
+- Feature Repo 域的 `multer` import 和 `pendingFeatureImports` Map 移入模块内部
+- Feature Repo 域的 `uploadsDir` 顶层 await 改为 `mkdirSync`
+- `normalizeBuiltInCapabilityId` 提取时发现实现被误改（严格正则 vs 原始链式 replace），已修复并添加测试覆盖
+
+**新增测试**：
+
+| 文件 | 测试数 | 覆盖内容 |
+|------|--------|---------|
+| `test/feature-utils.test.js` | 11 | `compareSemver` 版本比较边界、`uniqueStrings` 去重与空值处理 |
+| `test/flow-capabilities.test.js` | 22 | `normalizeBuiltInCapabilityId` 名称转换、`graphToRuntimeFlowsForCapabilities` BFS 算法（空图/legacy/workflow-head 分区/连通分量回退/auto 去重/entry 解析/edge 过滤/默认值） |
+
+Phase 6 后 server.js：4,710 → **3,523 行**。
 
 ### Phase 7：Agent Lifecycle 核心（最后）
 
@@ -657,5 +687,5 @@ Phase 6 后 server.js：~3,500 行。
 | 3 | dispatch | ✅ 完成 | 9,394 → 8,500 | 2026-06-29 |
 | 4 | im | ✅ 完成 | 8,500 → 7,492 | 2026-06-29 |
 | 5 | session (helpers + routes + tests) | ✅ 完成 | 7,492 → 4,710 | 2026-06-29 |
-| 6 | flow + feature-repo + ph-project | 待执行 | → ~3,500 | |
+| 6 | flow + feature-repo (ph-project 保留) + tests | ✅ 完成 | 4,710 → 3,523 | 2026-06-29 |
 | 7 | agent-lifecycle + 收编 | 待执行 | → ~300-500 | |

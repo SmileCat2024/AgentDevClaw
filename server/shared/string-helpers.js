@@ -33,3 +33,10 @@ export function normalizeClientAgentId(value, fallback = '') {
   if (lower === 'null' || lower === 'undefined') return fallback;
   return sanitizeSessionFragment(text);
 }
+
+export function parseListField(value) {
+  return String(value || '')
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}

@@ -1,6 +1,9 @@
 import path from 'path';
+import os from 'os';
+import { promises as fs } from 'fs';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 
 import { USER_DATA_ROOT } from '../shared/constants.js';
 import {
