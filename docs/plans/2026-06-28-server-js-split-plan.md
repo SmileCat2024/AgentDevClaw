@@ -1,8 +1,8 @@
 # server.js 拆分计划
 
 > 创建日期：2026-06-28
-> 状态：Phase 0-8 完成，待执行 Phase 9-13
-> 涉及文件：`server.js`（13,449 行 → 3,022 行），目标降至 ~300 行
+> 状态：Phase 0-9 完成，待执行 Phase 10-13
+> 涉及文件：`server.js`（13,449 行 → 2,171 行），目标降至 ~300 行
 > 关联文档：[2026-04-04 前端拆分计划](./2026-06-04-frontend-split-plan.md)
 
 ---
@@ -814,58 +814,58 @@ Phase 8 后 server.js：~3,350 → ~2,960 行。
 
 ---
 
-### Phase 9：Workspace State + Data（helpers + 3 路由）
+### Phase 9：Workspace State + Data（helpers + 3 路由）✅ 完成
+
+> **执行结果**: 新文件 `server/routes/workspace.js`（894 行）。server.js 3,022 → 2,171 行。486 测试全绿。
+> 实际采用 `setupWorkspaceRoutes(app, express)` 模式（无 ctx 参数），所有外部依赖通过 ESM import 解决。
+> `summarizeDirectorySource` 中唯一的 `__dirname` 已替换为 `PROJECT_ROOT`（来自 `shared/constants.js`）。
 
 | 项目 | 值 |
 |------|-----|
-| 行范围 | L284-991 (state helpers, 含 `normalizeFeatureConfigs`) + L993-1106 (data helpers) + L2901-2936 (routes) |
-| 约行数 | ~710 + ~114 + ~36 = ~860 |
-| 新文件 | `server/routes/workspace.js` |
-| 模式 | `setupWorkspaceRoutes(app, express, ctx)` |
+| 行范围 | 原 L109-931 (helpers) + 原 L2452-2487 (routes) |
+| 约行数 | ~822 (helpers) + ~36 (routes) = ~858 |
+| 新文件 | `server/routes/workspace.js`（894 行） |
+| 模式 | `setupWorkspaceRoutes(app, express)` — 无需 ctx |
 
 本域是剩余最大的连续代码块。所有 workspace 状态读写、artifact 管理、项目同步、目录摘要和数据聚合逻辑集中在此。
 
 **提取的函数（分组）**:
 
-| 分组 | 函数 | 行号 |
+| 分组 | 函数 | 导出 |
 |------|------|------|
-| **状态标准化** | `normalizeFeatureConfigs`, `normalizeWorkspaceState` | L284, L297 |
-| **Artifact** | `cleanWorkspaceArtifactPayload`, `normalizeWorkspaceArtifact`, `buildFeatureCreatorDraftArtifact`, `buildAgentCreatorDraftArtifact`, `buildProgrammingHelperDraftArtifact`, `writeWorkspaceArtifact`, `listWorkspaceArtifacts`, `summarizeWorkspaceArtifacts`, `summarizeWorkspaceArtifactsCollection` | L375-614 |
-| **项目标准化** | `normalizeWorkspaceFeatureProject`, `normalizeWorkspaceAgentProject`, `normalizeWorkspacePhProject`, `buildWorkspaceFeatureProjectId`, `buildWorkspaceAgentProjectId` | L616-719 |
-| **项目 CRUD** | `upsertWorkspaceFeatureProject`, `upsertWorkspaceAgentProject`, `upsertWorkspacePhProject`, `removeWorkspacePhProject` | L721-815 |
-| **项目同步** | `syncFeatureCreatorProjects`, `syncAgentCreatorProjects`, `syncFlowAssemblyProjects` | L816-898 |
-| **读写核心** | `_wsCache` Map, `readWorkspaceState`, `writeWorkspaceState` | L899-991 |
-| **数据聚合** | `summarizeDirectorySource`, `resolveWorkspaceData` | L993-1106 |
+| **状态标准化** | `normalizeFeatureConfigs`, `normalizeWorkspaceState` | `normalizeFeatureConfigs` export（`normalizeWorkspaceState` 仅域内使用） |
+| **Artifact** | `cleanWorkspaceArtifactPayload`, `normalizeWorkspaceArtifact`, `buildFeatureCreatorDraftArtifact`, `buildAgentCreatorDraftArtifact`, `buildProgrammingHelperDraftArtifact`, `writeWorkspaceArtifact`, `listWorkspaceArtifacts`, `summarizeWorkspaceArtifacts`, `summarizeWorkspaceArtifactsCollection` | 仅 `writeWorkspaceArtifact` export（其余域内私有） |
+| **项目标准化** | `normalizeWorkspaceFeatureProject`, `normalizeWorkspaceAgentProject`, `normalizeWorkspacePhProject`, `buildWorkspaceFeatureProjectId`, `buildWorkspaceAgentProjectId` | `normalizeWorkspaceFeatureProject`, `normalizeWorkspaceAgentProject`, `normalizeWorkspacePhProject` export（build* 域内私有） |
+| **项目 CRUD** | `upsertWorkspaceFeatureProject`, `upsertWorkspaceAgentProject`, `upsertWorkspacePhProject`, `removeWorkspacePhProject` | 仅 `upsertWorkspacePhProject`, `removeWorkspacePhProject` export |
+| **项目同步** | `syncFeatureCreatorProjects`, `syncAgentCreatorProjects`, `syncFlowAssemblyProjects` | 全部域内私有 |
+| **读写核心** | `_wsCache` Map, `readWorkspaceState`, `writeWorkspaceState` | `readWorkspaceState`, `writeWorkspaceState` export |
+| **数据聚合** | `summarizeDirectorySource`, `resolveWorkspaceData` | 仅 `resolveWorkspaceData` export |
 
 **提取的路由**:
 
-| 路由 | 行号 |
+| 路由 | 说明 |
 |------|------|
-| `GET /protoclaw/workspace_state` | L2901 |
-| `GET /protoclaw/workspace_artifacts` | L2913 |
-| `PUT /protoclaw/workspace_state` | L2925 |
+| `GET /protoclaw/workspace_state` | 调用 `readWorkspaceState` |
+| `GET /protoclaw/workspace_artifacts` | 调用 `listWorkspaceArtifacts`（域内私有） |
+| `PUT /protoclaw/workspace_state` | 调用 `writeWorkspaceState` |
 
-**依赖**:
-- `shared/*` (constants, fs, string, session-access)
+**import 依赖**:
+- `shared/constants.js`: `PROJECT_ROOT`, `USER_FEATURE_REPOSITORY_ROOT`
+- `shared/string-helpers.js`: `sanitizeSessionFragment`, `cleanSessionText`, `parseListField`, `getAssemblyWorkspaceDir`
+- `shared/fs-helpers.js`: `readJson`, `ensureDir`
+- `shared/session-access.js`: `getPrebuiltWorkspaceDir`, `getPrebuiltWorkspaceStatePath`, `getPrebuiltWorkspaceArtifactsDir`, `getWorkspaceArtifactPath`, `readSessionIndex`
 - `project-docset.js` (Phase 8): `syncWorkspaceProjectDocset`, `summarizeProjectDocset`
 - `feature-repository.js`: `summarizeFeatureRepository`, `mergeFeatureRepositoryPackages`
+- Node.js 内置: `fs`, `os`, `path`, `crypto.randomUUID`
 
-**被消费（高频，最核心的中层模块）**:
-- Agent discovery (Phase 11): `readWorkspaceState`, `resolveWorkspaceData`
-- Session-helpers (via ctx): `readWorkspaceState`, `writeWorkspaceState`
-- Dispatch (via ctx): `readWorkspaceState`, `writeWorkspaceState`
-- Flow.js (via ctx): `readWorkspaceState`
-- Assembly routes (Phase 13): `readWorkspaceState`, `writeWorkspaceState`
-- PH project routes (Phase 13): `readWorkspaceState`, `writeWorkspaceState`, `upsertWorkspacePhProject`
-- Creator routes (Phase 10): `writeWorkspaceState`, `writeWorkspaceArtifact`
+**server.js 侧 re-export import**: `readWorkspaceState`, `writeWorkspaceState`, `writeWorkspaceArtifact`, `resolveWorkspaceData`, `upsertWorkspacePhProject`（供 Phase 10-13 仍在 server.js 中的消费者使用）
 
-**export 回导**: `readWorkspaceState`, `writeWorkspaceState`, `resolveWorkspaceData`, `upsertWorkspacePhProject`, `writeWorkspaceArtifact`
+**风险及处理**:
+- `summarizeDirectorySource` 中唯一的 `__dirname`（解析相对路径）→ 替换为 `PROJECT_ROOT`
+- `writeWorkspaceState` 调用 `syncWorkspaceProjectDocset`（Phase 8 已提取）→ import 解决
+- `resolveWorkspaceData` 跨域聚合（`summarizeFeatureRepository` + `mergeFeatureRepositoryPackages` + `summarizeProjectDocset`）→ 全部 import 解决，无循环依赖
 
-**风险**: `writeWorkspaceState` 调用 `syncWorkspaceProjectDocset`（Phase 8 已提取），需 import 解决。`resolveWorkspaceData` 是跨域聚合函数，调用 `summarizeDirectorySource` + `summarizeFeatureRepository` + `summarizeWorkspaceArtifacts` + `summarizeProjectDocset` + `mergeFeatureRepositoryPackages`——全部在已提取模块或本域内。
-
-**验证**: `npm start` → workspace 状态读写 → 项目列表（Feature Creator / Agent Creator / Flow Workspace）→ artifact 正常
-
-Phase 9 后 server.js：~2,960 → ~2,110 行。
+Phase 9 后 server.js：3,022 → 2,171 行。
 
 ---
 
