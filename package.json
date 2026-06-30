@@ -30,7 +30,7 @@
     "@agentdev/weixin-bot": "file:resources/features/agentdev-weixin-bot-0.2.0.tgz",
     "@agentdev/feishu-bot": "file:resources/features/agentdev-feishu-bot-0.1.0.tgz",
     "@agentdev/wecom-bot": "file:resources/features/agentdev-wecom-bot-0.1.0.tgz",
-    "agentdev": "^0.2.1",
+    "agentdev": "file:../AgentDev",
     "express": "^4.21.2",
     "marked": "^18.0.4",
     "multer": "^2.1.1",

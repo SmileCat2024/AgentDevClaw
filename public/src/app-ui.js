@@ -6326,6 +6326,7 @@ function resetRuntimeBackedSurfaceState() {
   setCurrentLogs([]);
   setCurrentHookInspector({ lifecycleOrder: [], features: [], hooks: [] });
   setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
+  setCurrentTodoPlan(getEmptyTodoPlan());
   setConnectionStatus(false);
   updateNotificationStatus({});
   lastRenderedWorkspaceHtml = '';
@@ -7076,6 +7077,59 @@ function normalizeOverviewSnapshot(snapshot) {
 
 function getOverviewSignature(snapshot) {
   return JSON.stringify(normalizeOverviewSnapshot(snapshot));
+}
+
+function getEmptyTodoPlan() {
+  return {
+    feature: 'todo',
+    updatedAt: 0,
+    counter: 0,
+    tasks: [],
+    summary: { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0, blocked: 0 },
+  };
+}
+
+function normalizeTodoPlan(snapshot) {
+  const empty = getEmptyTodoPlan();
+  if (!snapshot || typeof snapshot !== 'object') return empty;
+  const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks.map(task => ({
+    id: String(task?.id || ''),
+    subject: String(task?.subject || ''),
+    description: String(task?.description || ''),
+    activeForm: String(task?.activeForm || ''),
+    status: ['pending', 'in_progress', 'completed', 'deleted'].includes(task?.status) ? task.status : 'pending',
+    owner: typeof task?.owner === 'string' ? task.owner : '',
+    blocks: Array.isArray(task?.blocks) ? task.blocks.map(String) : [],
+    blockedBy: Array.isArray(task?.blockedBy) ? task.blockedBy.map(String) : [],
+    metadata: task?.metadata && typeof task.metadata === 'object' ? task.metadata : {},
+    createdAt: typeof task?.createdAt === 'number' ? task.createdAt : 0,
+    updatedAt: typeof task?.updatedAt === 'number' ? task.updatedAt : 0,
+  })).filter(task => task.id) : [];
+  const summary = snapshot.summary || {};
+  return {
+    feature: 'todo',
+    updatedAt: typeof snapshot.updatedAt === 'number' ? snapshot.updatedAt : 0,
+    counter: typeof snapshot.counter === 'number' ? snapshot.counter : tasks.length,
+    tasks,
+    summary: {
+      total: typeof summary.total === 'number' ? summary.total : tasks.length,
+      pending: typeof summary.pending === 'number' ? summary.pending : tasks.filter(task => task.status === 'pending').length,
+      inProgress: typeof summary.inProgress === 'number' ? summary.inProgress : tasks.filter(task => task.status === 'in_progress').length,
+      completed: typeof summary.completed === 'number' ? summary.completed : tasks.filter(task => task.status === 'completed').length,
+      cancelled: typeof summary.cancelled === 'number' ? summary.cancelled : tasks.filter(task => task.status === 'deleted').length,
+      blocked: typeof summary.blocked === 'number' ? summary.blocked : tasks.filter(task => (task.status === 'pending' || task.status === 'in_progress') && task.blockedBy.length > 0).length,
+    },
+  };
+}
+
+function getTodoPlanSignature(snapshot) {
+  return JSON.stringify(normalizeTodoPlan(snapshot));
+}
+
+function setCurrentTodoPlan(snapshot) {
+  const normalized = normalizeTodoPlan(snapshot);
+  currentTodoPlan = normalized;
+  currentTodoPlanSignature = getTodoPlanSignature(normalized);
 }
 
 function normalizeHookInspector(snapshot) {
@@ -8783,12 +8837,93 @@ function renderViewerPanel() {
 // 暴露给 work-group-ui 拖拽使用
 window._filesPanelGetResources = () => _filesPanelResources;
 
+function getTodoStatusLabel(status) {
+  const labels = {
+    pending: t('plan_pending'),
+    in_progress: t('plan_in_progress'),
+    completed: t('plan_completed'),
+    deleted: t('plan_cancelled'),
+  };
+  return labels[status] || status || t('metric_unavailable');
+}
+
+function renderPlanTask(task) {
+  const status = String(task?.status || 'pending');
+  const isTerminal = status === 'completed' || status === 'deleted';
+  const blocked = !isTerminal && Array.isArray(task?.blockedBy) && task.blockedBy.length > 0;
+  const meta = [
+    '#' + escapeHtml(task?.id || ''),
+    getTodoStatusLabel(status),
+    blocked ? t('plan_blocked') : '',
+  ].filter(Boolean).join(' · ');
+  const detail = isTerminal ? '' : (task?.description || task?.activeForm || '');
+  const marker = status === 'in_progress'
+    ? '<div class="plan-task-spinner"></div>'
+    : '<div class="plan-task-dot"></div>';
+  return [
+    '<article class="plan-task status-' + escapeHtml(status.replace(/[^a-z0-9_-]/gi, '-')) + (blocked ? ' is-blocked' : '') + (isTerminal ? ' is-terminal' : '') + '">',
+    '<div class="plan-task-marker">' + marker + '</div>',
+    '<div class="plan-task-main">',
+    '<div class="plan-task-title">' + escapeHtml(task?.subject || '') + '</div>',
+    detail ? '<div class="plan-task-desc">' + escapeHtml(detail) + '</div>' : '',
+    isTerminal ? '' : '<div class="plan-task-meta">' + escapeHtml(meta) + '</div>',
+    '</div>',
+    '</article>',
+  ].join('');
+}
+
+function renderPlanPanel() {
+  const plan = currentTodoPlan || {};
+  const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
+  const summary = plan.summary || {};
+  const stats = [
+    [t('plan_total'), summary.total ?? tasks.length],
+    [t('plan_in_progress'), summary.inProgress ?? tasks.filter(task => task.status === 'in_progress').length],
+    [t('plan_pending'), summary.pending ?? tasks.filter(task => task.status === 'pending').length],
+    [t('plan_completed'), summary.completed ?? tasks.filter(task => task.status === 'completed').length],
+    [t('plan_cancelled'), summary.cancelled ?? tasks.filter(task => task.status === 'deleted').length],
+  ];
+
+  if (tasks.length === 0) {
+    return [
+      '<div class="plan-panel">',
+      '<section class="plan-summary">',
+      '<div class="plan-summary-line">',
+      stats.map(([label, value]) => '<span><strong>' + escapeHtml(String(value)) + '</strong> ' + escapeHtml(label) + '</span>').join(''),
+      '</div>',
+      '</section>',
+      '<div class="plan-empty">',
+      '<div class="plan-empty-title">' + escapeHtml(t('plan_empty')) + '</div>',
+      '<div class="plan-empty-desc">' + escapeHtml(t('plan_empty_desc')) + '</div>',
+      '</div>',
+      '</div>',
+    ].join('');
+  }
+
+  return [
+    '<div class="plan-panel">',
+    '<section class="plan-summary">',
+    '<div class="plan-summary-line">',
+    stats.map(([label, value]) => '<span><strong>' + escapeHtml(String(value)) + '</strong> ' + escapeHtml(label) + '</span>').join(''),
+    '</div>',
+    '</section>',
+    '<section class="plan-task-list">',
+    tasks.map(renderPlanTask).join(''),
+    '</section>',
+    '</div>',
+  ].join('');
+}
+
 // ── Feature Panels 注册 ──────────────────────────────────────────
 
 const featurePanels = {
   workspace: {
     title: () => t('panel_structure'),
     render: () => renderStructurePanel(),
+  },
+  plan: {
+    title: () => t('panel_plan'),
+    render: () => renderPlanPanel(),
   },
   monitor: {
     title: () => t('panel_monitor'),
@@ -9106,6 +9241,7 @@ function applyLanguage() {
   const sidebarToggleEl = document.getElementById('sidebar-toggle');
   const panelResizerEl = document.getElementById('feature-panel-resizer');
   const workspaceButton = document.getElementById('rail-workspace');
+  const planButton = document.getElementById('rail-plan');
   const monitorButton = document.getElementById('rail-monitor');
   const hooksButton = document.getElementById('rail-hooks');
   const inspectorButton = document.getElementById('rail-inspector');
@@ -9117,6 +9253,7 @@ function applyLanguage() {
   if (sidebarToggleEl) sidebarToggleEl.title = t('sidebar_toggle');
   if (panelResizerEl) panelResizerEl.title = t('resize_panel');
   if (workspaceButton) workspaceButton.title = t('structure_tooltip');
+  if (planButton) planButton.title = t('plan_tooltip');
   if (monitorButton) monitorButton.title = t('monitor_tooltip');
   if (hooksButton) hooksButton.title = t('features_tooltip');
   if (inspectorButton) inspectorButton.title = t('reverse_hooks_tooltip');

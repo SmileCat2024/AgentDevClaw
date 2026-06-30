@@ -5098,6 +5098,7 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   font-size: 12px;
   color: var(--text-secondary);
   cursor: help;
+  flex-shrink: 0;
 }
 .chat-context-bar.hidden {
   display: none;

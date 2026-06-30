@@ -45,9 +45,9 @@ async function main(): Promise<void> {
 
   // Verify _callIndex was advanced past seed turns.
   // seedMessages have turns 1, 2, 2 → injectionTurn = max(0, 1+1, 2+1, 2+1) = 3
-  // _callIndex should be set to injectionTurn - 1 = 2
-  if (agent._callIndex !== 2) {
-    throw new Error(`expected _callIndex=2 (injectionTurn-1), got ${agent._callIndex}`);
+  // _callIndex should be set to injectionTurn so the next user message lands after seed turns.
+  if (agent._callIndex !== 3) {
+    throw new Error(`expected _callIndex=3 (injectionTurn), got ${agent._callIndex}`);
   }
 
   await feature.injectHandoffSummary({

@@ -338,6 +338,14 @@ let currentOverviewSnapshot = {
   },
 };
 let currentOverviewSignature = '';
+let currentTodoPlan = {
+  feature: 'todo',
+  updatedAt: 0,
+  counter: 0,
+  tasks: [],
+  summary: { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0, blocked: 0 },
+};
+let currentTodoPlanSignature = '';
 let currentLogs = [];
 let currentLogsSignature = '';
 let currentMcpInfo = null;
@@ -493,8 +501,28 @@ function getRuntimeContextKey(runtimeId = currentRuntimeAgentId, agent = typeof 
   return `runtime:${normalizedRuntimeId}`;
 }
 
+function getRuntimeCacheTodoPlanFallback() {
+  return {
+    feature: 'todo',
+    updatedAt: 0,
+    counter: 0,
+    tasks: [],
+    summary: { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0, blocked: 0 },
+  };
+}
+
+function getRuntimeCacheTodoPlanSignature(plan) {
+  if (typeof getTodoPlanSignature === 'function') {
+    return getTodoPlanSignature(plan);
+  }
+  return JSON.stringify(plan || getRuntimeCacheTodoPlanFallback());
+}
+
 function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(agentId)) {
   if (!agentId || !contextKey) return;
+  const cachedTodoPlan = typeof currentTodoPlan !== 'undefined'
+    ? currentTodoPlan
+    : getRuntimeCacheTodoPlanFallback();
   _agentRuntimeCache.set(contextKey, {
     runtimeId: agentId,
     messages: currentMessages,
@@ -505,6 +533,10 @@ function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(ag
     hookInspectorSignature: currentHookInspectorSignature,
     overviewSnapshot: currentOverviewSnapshot,
     overviewSignature: currentOverviewSignature,
+    todoPlan: cachedTodoPlan,
+    todoPlanSignature: typeof currentTodoPlanSignature !== 'undefined'
+      ? currentTodoPlanSignature
+      : getRuntimeCacheTodoPlanSignature(cachedTodoPlan),
     connected: typeof currentRuntimeConnected !== 'undefined' ? currentRuntimeConnected : true,
     followLatest: followLatestEnabled,
     scrollTop: container ? container.scrollTop : 0,
@@ -523,6 +555,12 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
   currentHookInspectorSignature = cached.hookInspectorSignature;
   currentOverviewSnapshot = cached.overviewSnapshot;
   currentOverviewSignature = cached.overviewSignature;
+  currentTodoPlan = cached.todoPlan || (
+    typeof getEmptyTodoPlan === 'function'
+      ? getEmptyTodoPlan()
+      : getRuntimeCacheTodoPlanFallback()
+  );
+  currentTodoPlanSignature = cached.todoPlanSignature || getRuntimeCacheTodoPlanSignature(currentTodoPlan);
   currentRuntimeConnected = cached.connected;
   currentInputRequests = Array.isArray(cached.inputRequests) ? cached.inputRequests : [];
   window.lastInputRequests = currentInputRequests;
@@ -654,6 +692,7 @@ const I18N = {
     im_workspace_receptionist_hint: '点击任一对话后，会按当前身份配置启动门户代理。',
     panel_hint: '选择右侧功能按钮以展开面板。',
     panel_structure: '结构',
+    panel_plan: '计划',
     panel_monitor: '监视',
     panel_features: '功能特性',
     panel_reverse_hooks: '反向钩子',
@@ -792,6 +831,7 @@ const I18N = {
     language_toggle: '切换到英文',
     language_toggle_short: 'EN',
     structure_tooltip: '结构',
+    plan_tooltip: '计划',
     monitor_tooltip: '监视',
     features_tooltip: '功能特性',
     reverse_hooks_tooltip: '反向钩子',
@@ -832,6 +872,14 @@ const I18N = {
     logs_empty: '当前筛选条件下没有日志。',
     logs_total: '日志',
     logs_details: '查看结构化数据',
+    plan_empty: '当前还没有任务。',
+    plan_empty_desc: '当 Agent 使用 todo 工具组织工作时，任务会在这里同步显示。',
+    plan_total: '总计',
+    plan_pending: '待执行',
+    plan_in_progress: '进行中',
+    plan_completed: '已完成',
+    plan_cancelled: '已取消',
+    plan_blocked: '受阻',
     phase_thinking: '思考中',
     phase_content: '生成内容',
     phase_tool_calling: '工具调用',
@@ -990,6 +1038,7 @@ const I18N = {
     im_workspace_receptionist_hint: 'Click any conversation to start the portal agent with the current identity config.',
     panel_hint: 'Select a tool on the right rail to open the panel.',
     panel_structure: 'Structure',
+    panel_plan: 'Plan',
     panel_monitor: 'Monitor',
     panel_features: 'Features',
     panel_reverse_hooks: 'Reverse Hooks',
@@ -1128,6 +1177,7 @@ const I18N = {
     language_toggle: 'Switch to Chinese',
     language_toggle_short: '中',
     structure_tooltip: 'Structure',
+    plan_tooltip: 'Plan',
     monitor_tooltip: 'Monitor',
     features_tooltip: 'Features',
     reverse_hooks_tooltip: 'Reverse Hooks',
@@ -1168,6 +1218,14 @@ const I18N = {
     logs_empty: 'No logs match the current filters.',
     logs_total: 'logs',
     logs_details: 'Structured payload',
+    plan_empty: 'No tasks yet.',
+    plan_empty_desc: 'Tasks appear here when the agent uses todo tools to organize work.',
+    plan_total: 'Total',
+    plan_pending: 'Pending',
+    plan_in_progress: 'In progress',
+    plan_completed: 'Done',
+    plan_cancelled: 'Cancelled',
+    plan_blocked: 'Blocked',
     phase_thinking: 'Thinking',
     phase_content: 'Streaming',
     phase_tool_calling: 'Tool Calling',

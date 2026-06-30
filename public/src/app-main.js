@@ -4058,6 +4058,7 @@ window.switchAgent = async (newAgentId) => {
     } else {
       // No cache: clear stale messages to prevent poll race mixing old/new agent content
       setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
+      setCurrentTodoPlan(getEmptyTodoPlan());
       currentMessages = [];
       renderCurrentMainView();
       setFollowLatest(true);
@@ -4441,6 +4442,7 @@ deleteAgentAction.addEventListener('click', async () => {
       setCurrentLogs([]);
       setCurrentHookInspector({ lifecycleOrder: [], features: [], hooks: [] });
       setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
+      setCurrentTodoPlan(getEmptyTodoPlan());
       renderCurrentMainView();
       setFollowLatest(true);
       currentAgentTitle.textContent = t('page_title');
@@ -5050,11 +5052,12 @@ async function loadAgentData(agentId) {
     _lastCallFinishTime = 0;
     _currentRecapText = '';
     _recapPendingTrigger = false;
-    const [msgsRes, toolsRes, hooksRes, overviewRes, inputRes] = await Promise.all([
+    const [msgsRes, toolsRes, hooksRes, overviewRes, todoRes, inputRes] = await Promise.all([
       fetch(`/api/agents/${agentId}/messages`),
       fetch(`/api/agents/${agentId}/tools`),
       fetch(`/api/agents/${agentId}/hooks`),
       fetch(`/api/agents/${agentId}/overview`),
+      fetch(`/api/agents/${agentId}/todo`),
       fetch(`/api/agents/${agentId}/input-requests`),
       // Ensure the host agent has full workspace_sessions (contextLength,
       // compressRatio, per-session model info) before the first render.
@@ -5073,6 +5076,7 @@ async function loadAgentData(agentId) {
     const tools = await toolsRes.json();
     setCurrentHookInspector(await hooksRes.json());
     setCurrentOverviewSnapshot(await overviewRes.json());
+    setCurrentTodoPlan(todoRes.ok ? await todoRes.json() : getEmptyTodoPlan());
     const inputRequests = await inputRes.json();
 
     currentMessages = msgsData.messages || [];
@@ -5389,10 +5393,11 @@ async function poll() {
     const pollRuntimeId = currentRuntimeAgentId;
     const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId);
 
-    const [msgsRes, inputRes, overviewRes] = await Promise.all([
+    const [msgsRes, inputRes, overviewRes, todoRes] = await Promise.all([
       fetch(`/api/agents/${pollRuntimeId}/messages`),
       fetch(`/api/agents/${pollRuntimeId}/input-requests`),
       fetch(`/api/agents/${pollRuntimeId}/overview`),
+      fetch(`/api/agents/${pollRuntimeId}/todo`),
     ]);
 
     // 如果在 fetch 期间已经切换了 agent，丢弃过时的响应，避免旧数据覆盖新会话
@@ -5432,6 +5437,7 @@ async function poll() {
         currentMessages = [];
         currentInputRequests = [];
         window.lastInputRequests = [];
+        setCurrentTodoPlan(getEmptyTodoPlan());
         renderCurrentMainView();
         renderInputRequests([]);
       }
@@ -5495,6 +5501,18 @@ async function poll() {
       }
       if (typeof updateChatContextBar === 'function') {
         updateChatContextBar();
+      }
+    }
+
+    if (todoRes.ok) {
+      const nextTodoPlan = normalizeTodoPlan(await todoRes.json());
+      const nextTodoSignature = getTodoPlanSignature(nextTodoPlan);
+      if (nextTodoSignature !== currentTodoPlanSignature) {
+        currentTodoPlan = nextTodoPlan;
+        currentTodoPlanSignature = nextTodoSignature;
+        if (activeFeaturePanel === 'plan') {
+          renderFeaturePanel();
+        }
       }
     }
 
@@ -5565,7 +5583,7 @@ async function poll() {
     if (activeFeaturePanel) {
       if (activeFeaturePanel === 'logs') {
         await loadLogs();
-      } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings') {
+      } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan') {
         // resources/viewer 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
         const hooksRes = await fetch(`/api/agents/${currentRuntimeAgentId}/hooks`);
         const nextHookInspector = normalizeHookInspector(await hooksRes.json());
