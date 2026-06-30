@@ -1,9 +1,9 @@
 {
   "name": "agentdevclaw",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
-  "description": "Pure web ProtoClaw-style debugger UI built on top of AgentDev ViewerWorker.",
+  "description": "A visual, extensible AI agent workspace powered by AgentDev.",
   "scripts": {
     "build:local-features": "tsc -p local-features/tsconfig.json && node scripts/copy-local-feature-skills.mjs",
     "enrich:features": "node scripts/enrich-feature-packages.mjs",
