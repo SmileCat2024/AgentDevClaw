@@ -186,6 +186,39 @@ describe('trim-compact fixes', () => {
     });
   });
 
+  describe('Claw continuity protected tools', () => {
+    it('preserves protected todo tool calls and their tool results outside the normal preserve window', () => {
+      const messages = [
+        { role: 'user', content: 'plan this', turn: 0 },
+        {
+          role: 'assistant',
+          content: '',
+          turn: 0,
+          toolCalls: [
+            { id: 'tc_todo', name: 'task_update', arguments: '{"id":"1","status":"in_progress"}' },
+            { id: 'tc_read', name: 'read', arguments: '{"filePath":"a.js"}' },
+          ],
+        },
+        { role: 'tool', toolCallId: 'tc_todo', content: '{"ok":true}', turn: 0 },
+        { role: 'tool', toolCallId: 'tc_read', content: '{"result":"file"}', turn: 0 },
+        { role: 'user', content: 'continue', turn: 1 },
+        { role: 'assistant', content: 'done', turn: 1 },
+      ];
+      const policy = normalizeExportPolicy({
+        preservedTurns: [1],
+        preserveToolNames: ['task_update'],
+      });
+      const { seedMessages, stats } = buildTrimmedSeedMessages(messages, policy);
+
+      const protectedAssistant = seedMessages.find(m => m.role === 'assistant' && m.toolCalls?.some(tc => tc.name === 'task_update'));
+      assert.ok(protectedAssistant, 'assistant message containing task_update should survive trim');
+      assert.ok(seedMessages.some(m => m.role === 'tool' && m.toolCallId === 'tc_todo'), 'task_update tool result should survive trim');
+      assert.ok(!seedMessages.some(m => m.role === 'tool' && m.toolCallId === 'tc_read'), 'unprotected read result should still be foldable/droppable');
+      assert.equal(stats.keptProtectedToolCallCount, 1);
+      assert.equal(stats.keptProtectedToolMessageCount, 1);
+    });
+  });
+
   describe('Fix 1: seed feature turn collision verification (logic)', () => {
     // This test verifies the core logic that was fixed:
     // Given seed messages with max turn N, _callIndex should be set to N+1

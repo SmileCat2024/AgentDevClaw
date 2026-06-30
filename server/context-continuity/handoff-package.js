@@ -1,6 +1,10 @@
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
+import {
+  applyContinuityToolPolicy,
+  exportFeatureContinuity,
+} from './feature-continuity.js';
 
 const HANDOFF_SCHEMA_VERSION = 1;
 const HANDOFF_COMPILER_VERSION = 'trim-transcript-v1';
@@ -22,6 +26,7 @@ export const DEFAULT_EXPORT_POLICY = {
   foldToolCallArgs: false,
   foldToolResultSummary: false,
   maxFoldedToolChars: 240,
+  preserveToolNames: [],
 };
 
 const VALID_TOOL_MODES = new Set(['keep', 'drop', 'fold']);
@@ -84,6 +89,11 @@ function normalizeKeepRecentSkillInvokes(value) {
   return clampInteger(value, null, 1, 2000);
 }
 
+function normalizeToolNameList(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(cleanInlineText).filter(Boolean))];
+}
+
 function normalizeEnum(value, validValues, fallback) {
   const text = cleanInlineText(value);
   return validValues.has(text) ? text : fallback;
@@ -130,6 +140,7 @@ export function normalizeExportPolicy(rawPolicy = {}) {
     foldToolResultSummary: rawPolicy?.foldToolResultSummary === true,
     maxFoldedToolChars: clampInteger(rawPolicy?.maxFoldedToolChars, DEFAULT_EXPORT_POLICY.maxFoldedToolChars, 80, 4000),
     keepRecentSkillInvokes: normalizeKeepRecentSkillInvokes(rawPolicy?.keepRecentSkillInvokes),
+    preserveToolNames: normalizeToolNameList(rawPolicy?.preserveToolNames),
   };
 }
 
@@ -329,6 +340,18 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
   const retainedTurns = getRetainedTurnSet(rawMessages, policy);
   const foldedToolTurns = getFoldedToolTurnSet(rawMessages, retainedTurns, policy);
   const skillProtectedTurns = getSkillInvokeProtectedTurns(rawMessages, policy);
+  const protectedToolNames = new Set(Array.isArray(policy?.preserveToolNames) ? policy.preserveToolNames : []);
+  const protectedToolCallIds = new Set();
+  for (const message of rawMessages) {
+    const toolCalls = Array.isArray(message?.toolCalls) ? message.toolCalls : [];
+    for (const call of toolCalls) {
+      const name = cleanInlineText(call?.name);
+      const id = cleanInlineText(call?.id);
+      if (name && id && protectedToolNames.has(name)) {
+        protectedToolCallIds.add(id);
+      }
+    }
+  }
   const fullPreserveFrom = policy.fullPreserveFromTurn;
   // preservedTurns: when set, only these specific turns get full-detail preserve.
   // This takes precedence over fullPreserveFromTurn and supports non-contiguous
@@ -349,6 +372,8 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
     foldedToolMessageCount: 0,
     droppedToolMessageCount: 0,
     foldedToolNoteCount: 0,
+    keptProtectedToolCallCount: 0,
+    keptProtectedToolMessageCount: 0,
   };
 
   let pendingFold = null;
@@ -400,6 +425,32 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
         stats.droppedDialogueMessageCount += 1;
         stats.droppedMessageCount += 1;
       }
+      return;
+    }
+
+    const toolCalls = Array.isArray(message?.toolCalls) ? message.toolCalls : [];
+    const protectedCalls = role === 'assistant'
+      ? toolCalls.filter((call) => protectedToolNames.has(cleanInlineText(call?.name)))
+      : [];
+    if (protectedCalls.length > 0) {
+      flushIfNeeded();
+      if (shouldKeepDialogueMessage(role, policy)) {
+        seedMessages.push({ ...message, turn });
+        stats.keptSeedMessageCount += 1;
+        stats.keptDialogueMessageCount += 1;
+        stats.keptProtectedToolCallCount += protectedCalls.length;
+      } else {
+        stats.droppedDialogueMessageCount += 1;
+        stats.droppedMessageCount += 1;
+      }
+      return;
+    }
+
+    if (role === 'tool' && protectedToolCallIds.has(cleanInlineText(message?.toolCallId))) {
+      flushIfNeeded();
+      seedMessages.push({ ...message, turn });
+      stats.keptSeedMessageCount += 1;
+      stats.keptProtectedToolMessageCount += 1;
       return;
     }
 
@@ -455,7 +506,6 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       return;
     }
 
-    const toolCalls = Array.isArray(message?.toolCalls) ? message.toolCalls : [];
     const shouldHandleToolCalls = toolCalls.length > 0 && (hasPreserveBoundary
       ? true
       : shouldHandleToolActivity(turn, foldedToolTurns, policy));
@@ -542,8 +592,9 @@ export async function exportHistoryOnlyHandoffPackage({
   sourceRecord = {},
   policy: rawPolicy = {},
 }) {
-  const policy = normalizeExportPolicy(rawPolicy);
   const sessionSnapshot = await readJson(path.resolve(String(sessionPath || '').trim()));
+  const featureContinuity = exportFeatureContinuity(sessionSnapshot, { mode: 'trim-transcript' });
+  const policy = normalizeExportPolicy(applyContinuityToolPolicy(rawPolicy));
   const rawMessages = Array.isArray(sessionSnapshot?.runtime?.context?.messages)
     ? sessionSnapshot.runtime.context.messages
     : [];
@@ -566,6 +617,7 @@ export async function exportHistoryOnlyHandoffPackage({
     sourceRecord: buildSourceRecord(sourceRecord),
     policy,
     stats,
+    featureContinuity,
     sourceSummary,
     seedMessages,
   };

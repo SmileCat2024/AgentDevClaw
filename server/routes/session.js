@@ -277,17 +277,30 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
 
     const newSessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
     const createdAt = new Date().toISOString();
+    const sourceRuntime = sourceSnapshot.runtime || {};
+    const runtimeCheckpointAfterCut = sourceCheckpoints.find(
+      cp => cp?.runtime && typeof cp.callIndex === 'number' && cp.callIndex === maxUserTurn + 1
+    )?.runtime;
+    const runtimeCheckpointAtCut = [...sourceCheckpoints]
+      .reverse()
+      .find(cp => typeof cp.callIndex === 'number' && cp.callIndex <= maxUserTurn && cp.runtime)
+      ?.runtime;
+    const runtimeForBranchState = runtimeCheckpointAfterCut || runtimeCheckpointAtCut || sourceRuntime;
 
     const branchSnapshot = {
       ...sourceSnapshot,
       sessionId: newSessionId,
       savedAt: Date.now(),
       runtime: {
-        ...(sourceSnapshot.runtime || {}),
+        ...sourceRuntime,
         initialized: true,
         callIndex: maxUserTurn,
+        featureStates: Array.isArray(runtimeForBranchState?.featureStates)
+          ? runtimeForBranchState.featureStates
+          : (Array.isArray(sourceRuntime.featureStates) ? sourceRuntime.featureStates : []),
+        usageStats: runtimeForBranchState?.usageStats || sourceRuntime.usageStats,
         context: {
-          ...(sourceSnapshot.runtime?.context || {}),
+          ...(sourceRuntime.context || {}),
           messages: branchMessages,
           enrichedMessages: branchEnriched,
         },

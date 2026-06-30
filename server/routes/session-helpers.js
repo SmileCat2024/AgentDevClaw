@@ -188,6 +188,15 @@ async function findSessionSummaryPath(agentId, sessionId) {
   return null;
 }
 
+async function readSessionSnapshotForContinuity(agentId, sessionId) {
+  try {
+    const raw = await fs.readFile(getPrebuiltSessionFilePath(agentId, sessionId), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 function extractToolCallLabel(name, args) {
   if (!args || typeof args !== 'object') return null;
   if (name === 'read' || name === 'edit' || name === 'write') {
@@ -1224,6 +1233,7 @@ async function exportContextHandoffForSession(sessionId, preferredAgentId = '', 
   const normalizedStrategy = typeof policy?.strategy === 'string' ? policy.strategy.trim() : '';
   if (normalizedStrategy === 'summarized-nine-section') {
     const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
+    const sourceSessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
     return exportSummarizedHandoffPackage({
       userDataRoot: USER_DATA_ROOT,
       agentId: ownerAgentId,
@@ -1232,6 +1242,7 @@ async function exportContextHandoffForSession(sessionId, preferredAgentId = '', 
       policy,
       agentRelativeDir: agent.relativeDir,
       projectRoot: __dirname,
+      sourceSessionSnapshot,
     });
   }
   return exportHistoryOnlyHandoffPackage({
@@ -1354,6 +1365,7 @@ async function compactAndResumeFromProvidedSummary({
   }
 
   const record = await requirePrebuiltSessionRecord(ownerAgentId, sessionId);
+  const sourceSessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
   const handoffResult = await writeSummarizedHandoffPackage({
     userDataRoot: USER_DATA_ROOT,
     agentId: ownerAgentId,
@@ -1366,6 +1378,7 @@ async function compactAndResumeFromProvidedSummary({
     importantSkills,
     sessionTitle,
     fileRanges,
+    sourceSessionSnapshot,
   });
 
   return createCompactedResumeFromHandoff({
@@ -1397,6 +1410,7 @@ async function exportProvidedSummaryHandoff({
   }
 
   const record = await requirePrebuiltSessionRecord(ownerAgentId, sessionId);
+  const sourceSessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
   return writeSummarizedHandoffPackage({
     userDataRoot: USER_DATA_ROOT,
     agentId: ownerAgentId,
@@ -1411,6 +1425,7 @@ async function exportProvidedSummaryHandoff({
     fileRanges,
     sessionTimestamp,
     gitMeta,
+    sourceSessionSnapshot,
   });
 }
 

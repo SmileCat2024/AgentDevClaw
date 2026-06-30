@@ -34,6 +34,7 @@ export interface ContextHandoffSeedPayload {
   importantFiles?: string[];
   importantSkills?: string[];
   fileRanges?: Record<string, string>;
+  featureContinuity?: unknown;
 }
 
 export interface ContextHandoffSeedFeatureConfig {
@@ -118,6 +119,7 @@ export class ContextHandoffSeedFeature implements AgentFeature {
       fileRanges: typeof config?.handoff?.fileRanges === 'object' && config.handoff.fileRanges !== null
         ? config.handoff.fileRanges
         : {},
+      featureContinuity: config?.handoff?.featureContinuity,
     };
   }
 

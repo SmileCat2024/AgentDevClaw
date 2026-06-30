@@ -7,6 +7,9 @@ import { spawn } from 'child_process';
 import {
   getContextHandoffFilePath,
 } from './handoff-package.js';
+import {
+  exportFeatureContinuity,
+} from './feature-continuity.js';
 
 const HANDOFF_SCHEMA_VERSION = 1;
 const HANDOFF_COMPILER_VERSION = 'summarized-nine-section-v1';
@@ -177,8 +180,13 @@ export async function writeSummarizedHandoffPackage({
   fileRanges = {},
   sessionTimestamp = null,
   gitMeta = null,
+  sourceSessionSnapshot = null,
+  featureContinuity = null,
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
+  const continuity = featureContinuity && typeof featureContinuity === 'object'
+    ? featureContinuity
+    : exportFeatureContinuity(sourceSessionSnapshot, { mode: 'summarized-nine-section' });
   const createdAt = new Date().toISOString();
   const handoffId = `handoff-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const summaryText = cleanMultilineText(rawSummaryText);
@@ -222,6 +230,7 @@ export async function writeSummarizedHandoffPackage({
       commitMessage: cleanInlineText(gitMeta.commitMessage),
       isDirty: !!gitMeta.isDirty,
     } : null,
+    featureContinuity: continuity,
     seedMessages: [buildSummarySeedMessage(summaryText)],
   };
 
@@ -243,6 +252,7 @@ export async function exportSummarizedHandoffPackage({
   policy: rawPolicy = {},
   agentRelativeDir,
   projectRoot,
+  sourceSessionSnapshot = null,
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
   const mirrorScriptPath = path.join(path.resolve(String(projectRoot || '').trim()), 'scripts', 'run-compact-mirror.js');
@@ -285,5 +295,6 @@ export async function exportSummarizedHandoffPackage({
     importantSkills: Array.isArray(mirrorResult?.importantSkills) ? mirrorResult.importantSkills : [],
     sessionTitle: typeof mirrorResult?.sessionTitle === 'string' ? mirrorResult.sessionTitle : '',
     fileRanges: typeof mirrorResult?.fileRanges === 'object' && mirrorResult.fileRanges !== null ? mirrorResult.fileRanges : {},
+    sourceSessionSnapshot,
   });
 }

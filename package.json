@@ -5,12 +5,14 @@
   "type": "module",
   "description": "Pure web ProtoClaw-style debugger UI built on top of AgentDev ViewerWorker.",
   "scripts": {
-    "build:local-features": "npx tsc -p local-features/tsconfig.json && node scripts/copy-local-feature-skills.mjs",
+    "build:local-features": "tsc -p local-features/tsconfig.json && node scripts/copy-local-feature-skills.mjs",
     "enrich:features": "node scripts/enrich-feature-packages.mjs",
     "predev": "npm run build:local-features",
     "dev": "node server.js",
     "prestart": "npm run build:local-features",
     "start": "node server.js",
+    "agentdev:local": "node scripts/use-agentdev-local.mjs",
+    "agentdev:published": "node scripts/use-agentdev-published.mjs",
     "test": "node --test test/*.test.js && node local-features/dist/flow/test/flow-feature.test.js && node local-features/dist/context-compaction-mirror/test/smoke.test.js && node local-features/dist/checkpoint/test/smoke.test.js && node local-features/dist/dispatch/test/smoke.test.js && node local-features/dist/context-handoff-seed/test/smoke.test.js",
     "test:core": "node --test test/*.test.js",
     "test:features": "node local-features/dist/flow/test/flow-feature.test.js && node local-features/dist/context-compaction-mirror/test/smoke.test.js && node local-features/dist/checkpoint/test/smoke.test.js && node local-features/dist/dispatch/test/smoke.test.js && node local-features/dist/context-handoff-seed/test/smoke.test.js",
@@ -30,11 +32,14 @@
     "@agentdev/weixin-bot": "file:resources/features/agentdev-weixin-bot-0.2.0.tgz",
     "@agentdev/feishu-bot": "file:resources/features/agentdev-feishu-bot-0.1.0.tgz",
     "@agentdev/wecom-bot": "file:resources/features/agentdev-wecom-bot-0.1.0.tgz",
-    "agentdev": "file:../AgentDev",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "agentdev": "^0.2.1",
     "express": "^4.21.2",
     "marked": "^18.0.4",
     "multer": "^2.1.1",
-    "undici": "^7.25.0"
+    "openai": "^6.45.0",
+    "undici": "^7.25.0",
+    "zod": "^4.4.3"
   },
   "bin": {
     "claw": "./bin/claw.mjs"

@@ -16,6 +16,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { DebugHub, FileSessionStore } from 'agentdev';
 import { setTimeout as sleep } from 'timers/promises';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
+import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -87,6 +88,9 @@ function parseHandoffContent(raw, sourceLabel) {
         fileRanges: typeof parsed.compactOutput?.fileRanges === 'object' && parsed.compactOutput.fileRanges !== null
           ? parsed.compactOutput.fileRanges
           : {},
+        featureContinuity: parsed.featureContinuity && typeof parsed.featureContinuity === 'object'
+          ? parsed.featureContinuity
+          : null,
       };
     }
   } catch (error) {
@@ -1596,11 +1600,26 @@ async function main() {
   }
 
   if (sessionId) {
+    let sessionLoaded = false;
     try {
       await agent.loadSession(sessionId, sessionStore);
+      sessionLoaded = true;
       console.log('[ProtoClaw Runtime] ✓ 已恢复会话: ' + sessionId);
     } catch {
       console.log('[ProtoClaw Runtime] 创建新会话: ' + sessionId);
+    }
+    if (!sessionLoaded && runtimeHandoff?.handoff?.featureContinuity) {
+      try {
+        const imported = await importFeatureContinuity(agent, runtimeHandoff.handoff.featureContinuity, {
+          sourceSessionId: runtimeHandoff.handoff.sourceSessionId,
+        });
+        if (imported.length > 0) {
+          await agent.saveSession(sessionId, sessionStore);
+          console.log(`[ProtoClaw Runtime] ✓ 已导入 continuity feature state: ${imported.join(', ')}`);
+        }
+      } catch (error) {
+        console.warn('[ProtoClaw Runtime] continuity feature state 导入失败:', error instanceof Error ? error.message : String(error));
+      }
     }
     // 启用 step 级自动保存：每个 StepFinish 后自动落盘
     if (typeof agent.enableStepAutoSave === 'function') {
