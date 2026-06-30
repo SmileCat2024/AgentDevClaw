@@ -1,7 +1,7 @@
 # server.js 拆分计划
 
 > 创建日期：2026-06-28
-> 状态：Phase 0-11 完成，待执行 Phase 12-13
+> 状态：Phase 0-12 完成，待执行 Phase 13
 > 涉及文件：`server.js`（13,449 行 → 2,171 行），目标降至 ~300 行
 > 关联文档：[2026-04-04 前端拆分计划](./2026-06-04-frontend-split-plan.md)
 
@@ -990,96 +990,91 @@ Phase 11 后 server.js：~1,760 → ~1,400 行。
 
 ---
 
-### Phase 12：Agent Lifecycle 核心（最大 phase）
+### Phase 12：Agent Lifecycle 核心（最大 phase）✅ 已完成
 
 | 项目 | 值 |
 |------|-----|
-| 行范围 | L1940-2545 (lifecycle functions) + L2785-2886 (agent status routes) + L3232-3264 (stop/restart routes) |
-| 约行数 | ~606 + ~100 + ~32 = ~740 |
-| 新文件 | `server/routes/agent-lifecycle.js` |
-| 模式 | `setupAgentLifecycleRoutes(app, express, ctx)` + export 函数 |
+| 行范围 | L132-737 (lifecycle functions) + L294-395 (agent status routes) + L655-686 (stop/restart routes) |
+| 约行数 | ~606 + ~102 + ~32 = ~740 |
+| 新文件 | `server/routes/agent-lifecycle.js`（793 行） |
+| 模式 | `createAgentLifecycleModule(ctx)` 工厂函数 + `setupRoutes(app, express)` |
+| 完成日期 | 2026-06-30 |
+| 验证 | `npm run test:core` → 541 tests, 0 fail, 4 skipped |
+| server.js | 1,462 → 735 行（-727 行） |
 
 **提取的函数**:
 
-| 函数 | 行号 | 说明 | 跨域依赖 |
-|------|------|------|----------|
-| `getConnectedAgents` | L1940 | 最复杂的聚合函数（170行） | agent-discovery (5 个函数), shared/agent-access |
-| `waitForProcessExit` | L2113 | 等待子进程退出 | 无 |
-| `waitForManagedRuntimeReady` | L2120 | 等待 runtime READY | shared/agent-access, agent-discovery |
-| `waitForAssemblyRuntimeReady` | L2143 | 等待装配 runtime READY | shared/agent-access |
-| `startManagedAgent` | L2164 | 启动 agent（IPC + spawn） | im.js, assembly-helpers, shared/runtime-hooks, session-helpers |
-| `startOneShotAgent` | L2322 | 启动一次性 agent | assembly-helpers |
-| `startAssemblyRuntime` | L2397 | 启动装配 runtime（跨域最深） | assembly-helpers, workspace, agent-discovery, session-helpers |
-| `stopManagedAgent` | L2531 | 停止 agent | shared/agent-access |
+| 函数 | 说明 | 跨域依赖 |
+|------|------|----------|
+| `getConnectedAgents` | 最复杂的聚合函数（172行） | agent-discovery (5 个函数), shared/agent-access |
+| `waitForProcessExit` | 等待子进程退出 | 无 |
+| `waitForManagedRuntimeReady` | 等待 runtime READY | shared/agent-access, 自引用 getConnectedAgents |
+| `waitForAssemblyRuntimeReady` | 等待装配 runtime READY | shared/agent-access, agent-discovery (readViewerJson) |
+| `startManagedAgent` | 启动 agent（IPC + spawn） | im.js, shared/runtime-hooks, session-access |
+| `startOneShotAgent` | 启动一次性 agent | 无跨域（仅 shared + constants） |
+| `startAssemblyRuntime` | 启动装配 runtime（跨域最深） | assembly-helpers, workspace, agent-discovery, **sessionApi** |
+| `stopManagedAgent` | 停止 agent | shared/agent-access |
 
-**提取的路由**:
+**提取的路由**（全部由 `setupRoutes(app, express)` 注册）:
 
-| 路由 | 行号 |
-|------|------|
-| `GET /protoclaw/health` | L2785 |
-| `GET /protoclaw/get_prebuilt_agents` | L2789 |
-| `GET /protoclaw/get_agents_status` | L2815 |
-| `GET /protoclaw/get_connected_agents` | L2828 |
-| `GET /protoclaw/agent_detail` | L2836 |
-| `POST /protoclaw/start_agent` | L2860 |
-| `POST /protoclaw/stop_agent` | L3233 |
-| `POST /protoclaw/restart_agent` | L3242 |
+| 路由 |
+|------|
+| `GET /protoclaw/health` |
+| `GET /protoclaw/get_prebuilt_agents` |
+| `GET /protoclaw/get_agents_status` |
+| `GET /protoclaw/get_connected_agents` |
+| `GET /protoclaw/agent_detail` |
+| `POST /protoclaw/start_agent` |
+| `POST /protoclaw/stop_agent` |
+| `POST /protoclaw/restart_agent` |
 
-**依赖**:
-- `shared/*` (constants, string, agent-access, runtime-hooks, ipc)
-- `assembly-helpers.js` (Phase 7): `sanitizeSpawnEnv` (from shared), `ensureAssemblyWorkspaceBase`, `ensureAssemblyWorkspaceDependencies`
+**实际依赖**（与计划的差异）:
+
+模块直接 import：
+- `shared/constants.js`: `RUNTIME_SCRIPT`, `ONE_SHOT_SCRIPT`, `VIEWER_PORT`, `APP_ORIGIN`, `PROJECT_ROOT`, `NO_SESSION_TOKEN`, `APP_PORT`
+- `shared/string-helpers.js`: `sanitizeSessionFragment`, `cleanSessionText`, `sanitizeSpawnEnv`, `getAssemblyWorkspaceDir`, `parseListField`, `log`
+- `shared/agent-access.js`: `managedAgents`, `assemblyRuntimeProcesses`, `getManagedRuntimeKey`, `listAgentRuntimes`, `getAgentRuntime`, `getAssemblyRuntime`, `buildStatus`
+- `shared/session-access.js`: `readSessionIndex`, `getPrebuiltSessionFilePath`, `updateSessionIndex`
+- `shared/runtime-hooks.js`: `notifyRuntimeReady`
+- `assembly-helpers.js` (Phase 7): `ensureAssemblyWorkspaceBase`, `ensureAssemblyWorkspaceDependencies`
 - `workspace.js` (Phase 9): `readWorkspaceState`, `writeWorkspaceState`
-- `agent-discovery.js` (Phase 11): `getAgentsLight`, `requireAgentLight`, `resolveRuntimeDisplayName`, `readActiveWorkspaceSessionMeta`, `readWorkspaceSessionMeta`, `readViewerJson`, `getPendingInputCount`, `resolveAgentModelPresets`
 - `im.js`: `readProjectIMWorkspaceConfig`
-- `session-helpers` (via ctx): `activatePrebuiltSession`, `summarizePrebuiltSession`, `createPrebuiltSession`
 
-**⚠️ 循环依赖处理**:
+通过 ctx 注入（agent-discovery 工厂产物，非 ESM export）:
+- `getAgents`, `getAgentsLight`, `enrichAgent`, `requireAgentLight`
+- `resolveRuntimeDisplayName`, `readActiveWorkspaceSessionMeta`, `readWorkspaceSessionMeta`
+- `readViewerJson`, `getPendingInputCount`, `resolveAgentModelPresets`
 
-`startManagedAgent` 和 `startAssemblyRuntime` 调用 session-helpers 函数。
+通过 `sessionApi` 可变引用（打破循环依赖）:
+- `activatePrebuiltSession`, `summarizePrebuiltSession`
 
-同时 session-helpers 已通过 ctx 接收 `startManagedAgent`, `waitForManagedRuntimeReady`。
+**⚠️ 循环依赖实际范围**:
 
-组合根负责双向注入：
+调研发现循环依赖比计划描述的更窄：只有 `startAssemblyRuntime` 调用 session-helpers 函数（`activatePrebuiltSession`, `summarizePrebuiltSession`）。`startManagedAgent` 本身不直接调用 session-helpers。因此 `sessionApi` 只需 2 个函数引用，而非计划中提到的 3 个（`createPrebuiltSession` 不在 lifecycle 内调用）。
+
+**实际组合根**:
 
 ```js
-const lifecycleCtx = {
-  readWorkspaceState, writeWorkspaceState,
-  getAgentsLight, requireAgentLight,
-  resolveRuntimeDisplayName, readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
+const agentLifecycle = createAgentLifecycleModule({
+  sessionApi,
+  getAgents, getAgentsLight, enrichAgent, requireAgentLight,
+  resolveRuntimeDisplayName,
+  readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
   readViewerJson, getPendingInputCount, resolveAgentModelPresets,
-  readProjectIMWorkspaceConfig,
-  ensureAssemblyWorkspaceBase, ensureAssemblyWorkspaceDependencies,
-  activatePrebuiltSession, summarizePrebuiltSession, createPrebuiltSession,
-  managedAgents, assemblyRuntimeProcesses, getAgentRuntime,
-  getAssemblyRuntime, getManagedRuntimeKey, listAgentRuntimes,
-  buildStatus, sanitizeSpawnEnv, notifyRuntimeReady,
-  RUNTIME_SCRIPT, ONE_SHOT_SCRIPT, PROJECT_ROOT,
-};
+});
+const {
+  getConnectedAgents, waitForProcessExit,
+  waitForManagedRuntimeReady, waitForAssemblyRuntimeReady,
+  startManagedAgent, startOneShotAgent, startAssemblyRuntime,
+  stopManagedAgent,
+} = agentLifecycle;
 
-const { startManagedAgent, startAssemblyRuntime, stopManagedAgent,
-        startOneShotAgent, getConnectedAgents,
-        waitForManagedRuntimeReady, waitForAssemblyRuntimeReady,
-} = createAgentLifecycleModule(lifecycleCtx);
+// 后续注入到 session-helpers / dispatch / group-chat / im / session 路由
 ```
 
-**`__dirname` 替换** (3 处 spawn cwd):
-- L2241: `cwd: __dirname` → `cwd: PROJECT_ROOT`
-- L2342: `cwd: __dirname` → `cwd: PROJECT_ROOT`
-- L2475: `cwd: __dirname` → `cwd: PROJECT_ROOT`
+**`__dirname` 替换**: 3 处 `cwd: __dirname` → `cwd: PROJECT_ROOT`，在模块内完成。
 
-**被消费**:
-- Session-helpers (via ctx): `startManagedAgent`, `waitForManagedRuntimeReady`
-- Assembly routes (Phase 13): `startAssemblyRuntime`, `waitForAssemblyRuntimeReady`
-- Dispatch (via ctx): `startManagedAgent`, `waitForManagedRuntimeReady`
-- Group Chat (via ctx): `startManagedAgent`, `stopManagedAgent`, `waitForManagedRuntimeReady`
-- Creator routes (Phase 10→13): `startManagedAgent`
-- PH project routes (Phase 13): `stopManagedAgent`, `requireAgentLight`
-
-**export 回导**: `startManagedAgent`, `startOneShotAgent`, `startAssemblyRuntime`, `stopManagedAgent`, `getConnectedAgents`, `waitForManagedRuntimeReady`, `waitForAssemblyRuntimeReady`
-
-**验证**: `npm start` → 启动 agent → 消息收发 → 停止 agent → 重启 agent → `GET /protoclaw/get_connected_agents` → `GET /protoclaw/get_agents_status`
-
-Phase 12 后 server.js：~1,400 → ~670 行。
+**server.js 清理**: 移除了仅被 lifecycle 函数使用的 import：`RUNTIME_SCRIPT`, `ONE_SHOT_SCRIPT`, `NO_SESSION_TOKEN`, `sanitizeSpawnEnv`, `notifyRuntimeReady`。
 
 ---
 
