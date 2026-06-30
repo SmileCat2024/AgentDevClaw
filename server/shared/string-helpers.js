@@ -40,3 +40,11 @@ export function parseListField(value) {
     .map((item) => item.trim())
     .filter(Boolean);
 }
+
+export function sanitizeSpawnEnv(inputEnv) {
+  return Object.fromEntries(
+    Object.entries(inputEnv || {}).filter(([key, value]) => {
+      return typeof key === 'string' && key.length > 0 && value != null;
+    }).map(([key, value]) => [key, String(value)])
+  );
+}

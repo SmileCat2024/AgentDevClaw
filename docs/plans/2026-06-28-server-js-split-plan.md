@@ -1,8 +1,8 @@
 # server.js 拆分计划
 
 > 创建日期：2026-06-28
-> 状态：Phase 0-6 完成，待执行 Phase 7
-> 涉及文件：`server.js`（13,449 行 → 4,710 行），目标降至 ~300-500 行
+> 状态：Phase 0-8 完成，待执行 Phase 9-13
+> 涉及文件：`server.js`（13,449 行 → 3,022 行），目标降至 ~300 行
 > 关联文档：[2026-04-04 前端拆分计划](./2026-06-04-frontend-split-plan.md)
 
 ---
@@ -652,11 +652,493 @@ Phase 4 后 server.js：~7,492 行。
 
 Phase 6 后 server.js：4,710 → **3,523 行**。
 
-### Phase 7：Agent Lifecycle 核心（最后）
+### Phase 7-13：剩余域拆分（7 个独立 Phase）
 
-`startManagedAgent`、`stopManagedAgent`、`startAssemblyRuntime`、`getConnectedAgents` 等。
+原 Phase 7 将 server.js 剩余 ~3,523 行中的全部内容笼统归为一个 phase。实际调研发现剩余内容横跨 7 个功能域，且存在 agent-lifecycle ↔ session-helpers 循环依赖。
 
-最终 server.js：~300-500 行（组合根 + 中间件 + 启动逻辑）。
+重新拆分为 7 个独立 phase，每个 phase 移动一个域，按依赖 DAG 自底向上执行。每步独立提交、独立验证。
+
+#### 依赖 DAG（决定提取顺序）
+
+```
+Level 0 (已提取):
+  shared/*, feature-repository.js, flow.js, model-config.js,
+  session-helpers.js (via ctx), session.js (via ctx),
+  group-chat.js, dispatch.js, im.js, system-feature-config.js, fs-operations.js
+
+Level 1: Assembly Helpers (Phase 7)      ← shared/* + feature-repository
+Level 1: Project Docset (Phase 8)         ← shared/* + feature-repository
+
+Level 2: Workspace State (Phase 9)       ← Phase 7 (normalizeFeatureConfigs) + Phase 8 (syncWorkspaceProjectDocset, summarizeProjectDocset)
+
+Level 3: Workspace Creators (Phase 10)   ← Phase 7 (isValidFeatureName, resolveFeatureCreatorOutputDir) + Phase 9 (readWorkspaceState, writeWorkspaceState, writeWorkspaceArtifact)
+
+Level 4: Agent Discovery + Identity (Phase 11) ← Phase 9 (readWorkspaceState, resolveWorkspaceData) + session-helpers (circular!) + im.js
+
+Level 5: Agent Lifecycle (Phase 12)      ← Phase 7 + Phase 9 + Phase 11 + session-helpers (circular!)
+
+Level 6: Remaining Routes (Phase 13)     ← Phase 9 + Phase 11 + Phase 12 + session-helpers
+```
+
+#### 循环依赖：agent-lifecycle ↔ session-helpers
+
+这是 Phase 11-12 的核心架构约束。
+
+```
+agent-lifecycle → session-helpers:
+  enrichAgent → listPrebuiltSessions
+  resolveRuntimeDisplayName → summarizePrebuiltSession
+  readActiveWorkspaceSessionMeta → summarizePrebuiltSession
+  startAssemblyRuntime → activatePrebuiltSession, summarizePrebuiltSession
+
+session-helpers → agent-lifecycle (via ctx):
+  discoverAgents, enrichAgent, startManagedAgent, waitForManagedRuntimeReady
+```
+
+**现有 `createSessionHelpers(ctx)` 已经通过 ctx 接收 agent-lifecycle 函数**。反向引用只需 agent-lifecycle 模块也通过 ctx 接收 session-helpers 函数。server.js 组合根负责双向注入：
+
+```js
+// Phase 11 后的组合根（伪代码）
+const sessionApi = {};  // 可变引用占位
+
+const agentDiscovery = createAgentDiscoveryModule({
+  readWorkspaceState, resolveWorkspaceData,
+  sessionApi,  // ← 运行时读取
+  readProjectIMWorkspaceConfig, getPortalAgentDisplayName,
+});
+
+Object.assign(sessionApi, {
+  listPrebuiltSessions, summarizePrebuiltSession, buildLightPrebuiltSessionRecord,
+});
+```
+
+agent-discovery 和 agent-lifecycle 模块内用 `ctx.sessionApi.listPrebuiltSessions()` 而非闭包捕获。由于这些调用发生在请求处理时（非模块加载时），`Object.assign` 在 server.js 模块顶层执行完毕后即生效，不存在时序问题。
+
+---
+
+### Phase 7：Assembly Helpers（纯函数提取）
+
+| 项目 | 值 |
+|------|-----|
+| 行范围 | L93-282（不含 `sanitizeSpawnEnv` 和 `normalizeFeatureConfigs`） |
+| 约行数 | ~190 |
+| 新文件 | `server/routes/assembly-helpers.js` |
+| 模式 | 纯 export，无路由 |
+
+**提取的函数**:
+
+| 函数 | 行号 | 说明 |
+|------|------|------|
+| `isValidFeatureName` | L93 | Feature 名校验 |
+| `resolveFeatureCreatorOutputDir` | L97 | Feature 输出目录计算 |
+| `ensureAssemblyWorkspaceBase` | L109 | 创建装配环境基础目录 |
+| `resolveAssemblyFeatureArchives` | L136 | 解析 Feature tgz 包路径 |
+| `toFileDependencySpec` | L198 | 路径 → `file:` 协议 spec |
+| `computeDependencyHash` | L202 | 依赖哈希计算 |
+| `ensureAssemblyWorkspaceDependencies` | L214 | npm install 装配依赖 |
+
+**预提取到 shared**:
+
+| 函数 | 目标 | 原因 |
+|------|------|------|
+| `sanitizeSpawnEnv` (L101) | `shared/string-helpers.js` | 被 assembly + agent-lifecycle 共用 |
+
+**留在 server.js（随 Phase 9 走）**:
+
+| 函数 | 原因 |
+|------|------|
+| `normalizeFeatureConfigs` (L284) | 是 workspace state 的内部依赖，不是 assembly 逻辑 |
+
+**依赖**: `shared/*` (constants, fs, string, feature-utils), `feature-repository.js` (`summarizeFeatureRepository`)
+
+**被消费**:
+- `flow.js` ctx: `resolveAssemblyFeatureArchives`
+- Creator init (Phase 10): `isValidFeatureName`, `resolveFeatureCreatorOutputDir`
+- Agent lifecycle (Phase 12): `ensureAssemblyWorkspaceBase`, `ensureAssemblyWorkspaceDependencies`
+- Assembly routes (Phase 13): `ensureAssemblyWorkspaceBase`, `ensureAssemblyWorkspaceDependencies`
+
+**server.js 侧改动**:
+```js
+import {
+  isValidFeatureName, resolveFeatureCreatorOutputDir,
+  ensureAssemblyWorkspaceBase, resolveAssemblyFeatureArchives,
+  ensureAssemblyWorkspaceDependencies,
+} from './server/routes/assembly-helpers.js';
+```
+
+**验证**: `npm start` → flow-workspace 创建装配环境 → Feature 包解析正常
+
+Phase 7 后 server.js：3,523 → ~3,350 行。
+
+---
+
+### Phase 8：Project Docset（helpers + 1 路由）
+
+| 项目 | 值 |
+|------|-----|
+| 行范围 | L1108-1382 (helpers) + L2938-2999 (route) |
+| 约行数 | ~340 + ~62 = ~400 |
+| 新文件 | `server/routes/project-docset.js` |
+| 模式 | `setupProjectDocsetRoutes(app, express, ctx)` |
+
+**提取的函数**:
+
+| 函数 | 行号 | 说明 |
+|------|------|------|
+| `sanitizeProjectDocsetId` | L1108 | Docset ID 清理 |
+| `buildProjectDocsetMarkdownId` | L1117 | Markdown ID 生成 |
+| `cleanProjectDocsetPayload` | L1125 | Payload 清理 |
+| `normalizeProjectConversationRecord` | L1137 | 会话记录标准化 |
+| `extractMaterialSourcePath` | L1154 | 材料源路径提取 |
+| `ensureProjectDocset` | L1159 | 确保 docset 目录结构 |
+| `syncWorkspaceProjectDocset` | L1265 | workspace → docset 同步 |
+| `summarizeProjectDocset` | L1292 | docset 摘要 |
+
+**提取的路由**:
+
+| 路由 | 行号 |
+|------|------|
+| `POST /protoclaw/project_docset/import_materials` | L2938 |
+
+**依赖**: `shared/*` (constants, fs, string, session-access)
+
+**被消费**:
+- Workspace (Phase 9): `syncWorkspaceProjectDocset`, `summarizeProjectDocset`
+- Agent discovery (Phase 11): `summarizeProjectDocset` (via `resolveWorkspaceData`)
+
+**export 回导**: `ensureProjectDocset`, `syncWorkspaceProjectDocset`, `summarizeProjectDocset`
+
+**验证**: `npm start` → 导入材料到项目 docset → workspace 项目列表正常
+
+Phase 8 后 server.js：~3,350 → ~2,960 行。
+
+---
+
+### Phase 9：Workspace State + Data（helpers + 3 路由）
+
+| 项目 | 值 |
+|------|-----|
+| 行范围 | L284-991 (state helpers, 含 `normalizeFeatureConfigs`) + L993-1106 (data helpers) + L2901-2936 (routes) |
+| 约行数 | ~710 + ~114 + ~36 = ~860 |
+| 新文件 | `server/routes/workspace.js` |
+| 模式 | `setupWorkspaceRoutes(app, express, ctx)` |
+
+本域是剩余最大的连续代码块。所有 workspace 状态读写、artifact 管理、项目同步、目录摘要和数据聚合逻辑集中在此。
+
+**提取的函数（分组）**:
+
+| 分组 | 函数 | 行号 |
+|------|------|------|
+| **状态标准化** | `normalizeFeatureConfigs`, `normalizeWorkspaceState` | L284, L297 |
+| **Artifact** | `cleanWorkspaceArtifactPayload`, `normalizeWorkspaceArtifact`, `buildFeatureCreatorDraftArtifact`, `buildAgentCreatorDraftArtifact`, `buildProgrammingHelperDraftArtifact`, `writeWorkspaceArtifact`, `listWorkspaceArtifacts`, `summarizeWorkspaceArtifacts`, `summarizeWorkspaceArtifactsCollection` | L375-614 |
+| **项目标准化** | `normalizeWorkspaceFeatureProject`, `normalizeWorkspaceAgentProject`, `normalizeWorkspacePhProject`, `buildWorkspaceFeatureProjectId`, `buildWorkspaceAgentProjectId` | L616-719 |
+| **项目 CRUD** | `upsertWorkspaceFeatureProject`, `upsertWorkspaceAgentProject`, `upsertWorkspacePhProject`, `removeWorkspacePhProject` | L721-815 |
+| **项目同步** | `syncFeatureCreatorProjects`, `syncAgentCreatorProjects`, `syncFlowAssemblyProjects` | L816-898 |
+| **读写核心** | `_wsCache` Map, `readWorkspaceState`, `writeWorkspaceState` | L899-991 |
+| **数据聚合** | `summarizeDirectorySource`, `resolveWorkspaceData` | L993-1106 |
+
+**提取的路由**:
+
+| 路由 | 行号 |
+|------|------|
+| `GET /protoclaw/workspace_state` | L2901 |
+| `GET /protoclaw/workspace_artifacts` | L2913 |
+| `PUT /protoclaw/workspace_state` | L2925 |
+
+**依赖**:
+- `shared/*` (constants, fs, string, session-access)
+- `project-docset.js` (Phase 8): `syncWorkspaceProjectDocset`, `summarizeProjectDocset`
+- `feature-repository.js`: `summarizeFeatureRepository`, `mergeFeatureRepositoryPackages`
+
+**被消费（高频，最核心的中层模块）**:
+- Agent discovery (Phase 11): `readWorkspaceState`, `resolveWorkspaceData`
+- Session-helpers (via ctx): `readWorkspaceState`, `writeWorkspaceState`
+- Dispatch (via ctx): `readWorkspaceState`, `writeWorkspaceState`
+- Flow.js (via ctx): `readWorkspaceState`
+- Assembly routes (Phase 13): `readWorkspaceState`, `writeWorkspaceState`
+- PH project routes (Phase 13): `readWorkspaceState`, `writeWorkspaceState`, `upsertWorkspacePhProject`
+- Creator routes (Phase 10): `writeWorkspaceState`, `writeWorkspaceArtifact`
+
+**export 回导**: `readWorkspaceState`, `writeWorkspaceState`, `resolveWorkspaceData`, `upsertWorkspacePhProject`, `writeWorkspaceArtifact`
+
+**风险**: `writeWorkspaceState` 调用 `syncWorkspaceProjectDocset`（Phase 8 已提取），需 import 解决。`resolveWorkspaceData` 是跨域聚合函数，调用 `summarizeDirectorySource` + `summarizeFeatureRepository` + `summarizeWorkspaceArtifacts` + `summarizeProjectDocset` + `mergeFeatureRepositoryPackages`——全部在已提取模块或本域内。
+
+**验证**: `npm start` → workspace 状态读写 → 项目列表（Feature Creator / Agent Creator / Flow Workspace）→ artifact 正常
+
+Phase 9 后 server.js：~2,960 → ~2,110 行。
+
+---
+
+### Phase 10：Workspace Creators（helpers + 2 路由）
+
+| 项目 | 值 |
+|------|-----|
+| 行范围 | L1386-1660 (helpers) + L3268-3354 (routes) |
+| 约行数 | ~275 + ~87 = ~360 |
+| 新文件 | `server/routes/workspace-creators.js` |
+| 模式 | `setupWorkspaceCreatorRoutes(app, express, ctx)` |
+
+**提取的函数**:
+
+| 函数 | 行号 | 说明 |
+|------|------|------|
+| `initializeFeatureCreatorWorkspace` | L1386 | 初始化 Feature Creator 工作区 |
+| `buildGeneratedAgentClassName` | L1439 | Agent 类名生成 |
+| `buildAgentWorkspacePackageJson` | L1444 | package.json 模板 |
+| `buildAgentWorkspaceMetadata` | L1466 | metadata.json 模板 |
+| `buildAgentWorkspaceAgentSource` | L1530 | agent.js 源码模板 |
+| `buildAgentWorkspaceSystemPrompt` | L1573 | system prompt 模板 |
+| `buildAgentWorkspaceReadme` | L1590 | README 模板 |
+| `initializeAgentCreatorWorkspace` | L1608 | 初始化 Agent Creator 工作区 |
+
+**提取的路由**:
+
+| 路由 | 行号 |
+|------|------|
+| `POST /protoclaw/feature_creator/initialize` | L3268 |
+| `POST /protoclaw/agent_creator/initialize` | L3306 |
+
+**依赖**:
+- `shared/*` (constants, fs, string)
+- `assembly-helpers.js` (Phase 7): `isValidFeatureName`, `resolveFeatureCreatorOutputDir`
+- `workspace.js` (Phase 9): `writeWorkspaceState`, `writeWorkspaceArtifact` (via ctx)
+- `feature-repository.js`: `ensureFeatureProjectManifest`
+
+**验证**: `npm start` → 初始化 Feature Creator → 初始化 Agent Creator → workspace 状态更新
+
+Phase 10 后 server.js：~2,110 → ~1,760 行。
+
+---
+
+### Phase 11：Agent Discovery + Identity（helpers + 2 路由）
+
+| 项目 | 值 |
+|------|-----|
+| 行范围 | L1662-1938 (discovery + session meta) + L2594-2687 (identity) |
+| 约行数 | ~277 + ~94 = ~370 |
+| 新文件 | `server/routes/agent-discovery.js` |
+| 模式 | `setupAgentDiscoveryRoutes(app, express, ctx)` + export 函数 |
+
+**提取的函数**:
+
+| 分组 | 函数 | 行号 | 说明 |
+|------|------|------|------|
+| **Discovery** | `discoverAgents` | L1662 | 递归扫描 prebuilt-agents |
+| | `getAgentsLight` | L1695 | 轻量 agent 列表（含 status） |
+| | `resolveAgentModelPresets` | L1701 | 解析 agent 模型预设 |
+| | `enrichAgent` | L1712 | 完整 agent 数据聚合 |
+| | `getAgents` | L1722 | 全量 agent 列表 |
+| | `requireAgentLight` | L1727 | 获取单个 agent（轻量） |
+| | `requireAgent` | L1740 | 获取单个 agent（完整） |
+| **Viewer** | `readViewerJson` | L1745 | 读取 ViewerWorker API |
+| | `getPendingInputCount` | L1753 | 待处理输入计数 |
+| **Session meta** | `resolveActiveWorkspaceSessionMeta` | L1762 | 活跃会话元数据（同步） |
+| | `resolveRuntimeDisplayName` | L1792 | 运行时显示名 |
+| | `readWorkspaceSessionSnapshot` | L1820 | 会话快照 |
+| | `readActiveWorkspaceSessionMeta` | L1828 | 活跃会话元数据（异步） |
+| | `readWorkspaceSessionMeta` | L1895 | 指定会话元数据 |
+| **Identity** | `collectIdentities` | L2594 | 收集群聊身份 |
+
+**提取的路由**:
+
+| 路由 | 行号 |
+|------|------|
+| `GET /protoclaw/identities` | L2627 |
+| `GET /protoclaw/identities/:workspaceId/:identityId/sessions` | L2636 |
+
+**依赖**:
+- `shared/*` (constants, string, agent-access, session-access)
+- `workspace.js` (Phase 9): `readWorkspaceState`, `resolveWorkspaceData`
+- `im.js`: `readProjectIMWorkspaceConfig`, `getPortalAgentDisplayName`
+- `session-helpers` (via ctx → `sessionApi` 可变引用): `listPrebuiltSessions`, `summarizePrebuiltSession`, `buildLightPrebuiltSessionRecord`
+
+**⚠️ 循环依赖处理**:
+
+`enrichAgent` 调用 `listPrebuiltSessions`，`resolveRuntimeDisplayName` 和 `readActiveWorkspaceSessionMeta` 调用 `summarizePrebuiltSession`。
+
+同时 session-helpers 已通过 ctx 接收 `discoverAgents`, `enrichAgent`。
+
+组合根用 `sessionApi` 可变引用对象打破环：
+
+```js
+const sessionApi = {};
+
+const agentDiscovery = createAgentDiscoveryModule({
+  readWorkspaceState, resolveWorkspaceData,
+  sessionApi,
+  readProjectIMWorkspaceConfig, getPortalAgentDisplayName,
+});
+
+Object.assign(sessionApi, {
+  listPrebuiltSessions, summarizePrebuiltSession, buildLightPrebuiltSessionRecord,
+});
+```
+
+**被消费**:
+- Agent lifecycle (Phase 12): `getAgentsLight`, `requireAgentLight`, `resolveRuntimeDisplayName`, `readActiveWorkspaceSessionMeta`, `readWorkspaceSessionMeta`, `readViewerJson`, `getPendingInputCount`, `resolveAgentModelPresets`, `collectIdentities`
+- Session-helpers (via ctx): `discoverAgents`, `enrichAgent`
+- Group Chat (via ctx): `collectIdentities`, `readViewerJson`, `discoverAgents`
+- Status routes (Phase 12): `getAgentsLight`, `getConnectedAgents`
+
+**export 回导**: `discoverAgents`, `enrichAgent`, `getAgentsLight`, `requireAgentLight`, `requireAgent`, `resolveRuntimeDisplayName`, `readActiveWorkspaceSessionMeta`, `readWorkspaceSessionMeta`, `readViewerJson`, `getPendingInputCount`, `resolveAgentModelPresets`, `collectIdentities`
+
+**`__dirname` 替换**: L1702 `path.join(__dirname, '.agentdev', 'agent-configs', ...)` → `path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', ...)`
+
+**验证**: `npm start` → `GET /protoclaw/get_prebuilt_agents` 正常 → `GET /protoclaw/identities` 正常 → 切换 agent → session 列表正常
+
+Phase 11 后 server.js：~1,760 → ~1,400 行。
+
+---
+
+### Phase 12：Agent Lifecycle 核心（最大 phase）
+
+| 项目 | 值 |
+|------|-----|
+| 行范围 | L1940-2545 (lifecycle functions) + L2785-2886 (agent status routes) + L3232-3264 (stop/restart routes) |
+| 约行数 | ~606 + ~100 + ~32 = ~740 |
+| 新文件 | `server/routes/agent-lifecycle.js` |
+| 模式 | `setupAgentLifecycleRoutes(app, express, ctx)` + export 函数 |
+
+**提取的函数**:
+
+| 函数 | 行号 | 说明 | 跨域依赖 |
+|------|------|------|----------|
+| `getConnectedAgents` | L1940 | 最复杂的聚合函数（170行） | agent-discovery (5 个函数), shared/agent-access |
+| `waitForProcessExit` | L2113 | 等待子进程退出 | 无 |
+| `waitForManagedRuntimeReady` | L2120 | 等待 runtime READY | shared/agent-access, agent-discovery |
+| `waitForAssemblyRuntimeReady` | L2143 | 等待装配 runtime READY | shared/agent-access |
+| `startManagedAgent` | L2164 | 启动 agent（IPC + spawn） | im.js, assembly-helpers, shared/runtime-hooks, session-helpers |
+| `startOneShotAgent` | L2322 | 启动一次性 agent | assembly-helpers |
+| `startAssemblyRuntime` | L2397 | 启动装配 runtime（跨域最深） | assembly-helpers, workspace, agent-discovery, session-helpers |
+| `stopManagedAgent` | L2531 | 停止 agent | shared/agent-access |
+
+**提取的路由**:
+
+| 路由 | 行号 |
+|------|------|
+| `GET /protoclaw/health` | L2785 |
+| `GET /protoclaw/get_prebuilt_agents` | L2789 |
+| `GET /protoclaw/get_agents_status` | L2815 |
+| `GET /protoclaw/get_connected_agents` | L2828 |
+| `GET /protoclaw/agent_detail` | L2836 |
+| `POST /protoclaw/start_agent` | L2860 |
+| `POST /protoclaw/stop_agent` | L3233 |
+| `POST /protoclaw/restart_agent` | L3242 |
+
+**依赖**:
+- `shared/*` (constants, string, agent-access, runtime-hooks, ipc)
+- `assembly-helpers.js` (Phase 7): `sanitizeSpawnEnv` (from shared), `ensureAssemblyWorkspaceBase`, `ensureAssemblyWorkspaceDependencies`
+- `workspace.js` (Phase 9): `readWorkspaceState`, `writeWorkspaceState`
+- `agent-discovery.js` (Phase 11): `getAgentsLight`, `requireAgentLight`, `resolveRuntimeDisplayName`, `readActiveWorkspaceSessionMeta`, `readWorkspaceSessionMeta`, `readViewerJson`, `getPendingInputCount`, `resolveAgentModelPresets`
+- `im.js`: `readProjectIMWorkspaceConfig`
+- `session-helpers` (via ctx): `activatePrebuiltSession`, `summarizePrebuiltSession`, `createPrebuiltSession`
+
+**⚠️ 循环依赖处理**:
+
+`startManagedAgent` 和 `startAssemblyRuntime` 调用 session-helpers 函数。
+
+同时 session-helpers 已通过 ctx 接收 `startManagedAgent`, `waitForManagedRuntimeReady`。
+
+组合根负责双向注入：
+
+```js
+const lifecycleCtx = {
+  readWorkspaceState, writeWorkspaceState,
+  getAgentsLight, requireAgentLight,
+  resolveRuntimeDisplayName, readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
+  readViewerJson, getPendingInputCount, resolveAgentModelPresets,
+  readProjectIMWorkspaceConfig,
+  ensureAssemblyWorkspaceBase, ensureAssemblyWorkspaceDependencies,
+  activatePrebuiltSession, summarizePrebuiltSession, createPrebuiltSession,
+  managedAgents, assemblyRuntimeProcesses, getAgentRuntime,
+  getAssemblyRuntime, getManagedRuntimeKey, listAgentRuntimes,
+  buildStatus, sanitizeSpawnEnv, notifyRuntimeReady,
+  RUNTIME_SCRIPT, ONE_SHOT_SCRIPT, PROJECT_ROOT,
+};
+
+const { startManagedAgent, startAssemblyRuntime, stopManagedAgent,
+        startOneShotAgent, getConnectedAgents,
+        waitForManagedRuntimeReady, waitForAssemblyRuntimeReady,
+} = createAgentLifecycleModule(lifecycleCtx);
+```
+
+**`__dirname` 替换** (3 处 spawn cwd):
+- L2241: `cwd: __dirname` → `cwd: PROJECT_ROOT`
+- L2342: `cwd: __dirname` → `cwd: PROJECT_ROOT`
+- L2475: `cwd: __dirname` → `cwd: PROJECT_ROOT`
+
+**被消费**:
+- Session-helpers (via ctx): `startManagedAgent`, `waitForManagedRuntimeReady`
+- Assembly routes (Phase 13): `startAssemblyRuntime`, `waitForAssemblyRuntimeReady`
+- Dispatch (via ctx): `startManagedAgent`, `waitForManagedRuntimeReady`
+- Group Chat (via ctx): `startManagedAgent`, `stopManagedAgent`, `waitForManagedRuntimeReady`
+- Creator routes (Phase 10→13): `startManagedAgent`
+- PH project routes (Phase 13): `stopManagedAgent`, `requireAgentLight`
+
+**export 回导**: `startManagedAgent`, `startOneShotAgent`, `startAssemblyRuntime`, `stopManagedAgent`, `getConnectedAgents`, `waitForManagedRuntimeReady`, `waitForAssemblyRuntimeReady`
+
+**验证**: `npm start` → 启动 agent → 消息收发 → 停止 agent → 重启 agent → `GET /protoclaw/get_connected_agents` → `GET /protoclaw/get_agents_status`
+
+Phase 12 后 server.js：~1,400 → ~670 行。
+
+---
+
+### Phase 13：Remaining Routes（收尾）
+
+| 项目 | 值 |
+|------|-----|
+| 行范围 | L2749-2783 (runtime obs) + L2938 已在 Phase 8 移走 + L3005-3011 (shutdown) + L3017-3128 (assembly routes) + L3131-3230 (ph_project routes) + L3356-3411 (audio) |
+| 约行数 | ~35 + ~7 + ~111 + ~99 + ~56 = ~310 |
+| 新文件 | `server/routes/assembly-routes.js` (assembly + ph_project), `server/routes/misc-routes.js` (runtime obs + audio + shutdown) |
+| 模式 | `setup*Routes(app, express, ctx)` |
+
+**提取的路由分组**:
+
+| 模块 | 路由 | 行号 | 说明 |
+|------|------|------|------|
+| **assembly-routes.js** | `POST /protoclaw/assembly_environment/create` | L3017 | 创建装配环境 |
+| | `POST /protoclaw/assembly_runtime/start` | L3084 | 启动装配 runtime |
+| | `POST /protoclaw/assembly_runtime/stop` | L3117 | 停止装配 runtime |
+| | `POST /protoclaw/ph_project/open` | L3131 | 打开 PH 项目 |
+| | `POST /protoclaw/ph_project/switch` | L3150 | 切换 PH 项目 |
+| | `POST /protoclaw/ph_project/add` | L3169 | 添加 PH 项目 |
+| | `POST /protoclaw/ph_project/open_in_explorer` | L3185 | 资源管理器打开 |
+| | `POST /protoclaw/prebuilt_project/delete` | L3207 | 删除预制项目 |
+| **misc-routes.js** | `GET /protoclaw/runtime/inbox` | L2749 | 运行时收件箱 |
+| | `GET /protoclaw/runtime/execution_state` | L2757 | 执行状态 |
+| | `GET /protoclaw/runtime/execution_states` | L2765 | 全部执行状态 |
+| | `GET /protoclaw/runtime/envelope` | L2769 | 信封查询 |
+| | `GET /protoclaw/runtime/envelopes_by_source` | L2777 | 按源查询信封 |
+| | `POST /protoclaw/shutdown` | L3005 | 关机路由 |
+| | `GET /api/agents/:agentId/input-requests` | L3371 | 输入请求代理（含音频反馈） |
+
+**依赖**:
+- assembly-routes: Phase 7 (assembly-helpers), Phase 9 (workspace), Phase 12 (agent-lifecycle), session-helpers, shared/agent-access
+- misc-routes: `runtime-call-envelope.js` (已提取), shared/proxy, `spawn` (child_process)
+
+**`__dirname` 替换**:
+- L3350: `PLAY_SOUND_SCRIPT = path.join(__dirname, 'scripts', ...)` → `PROJECT_ROOT`
+- L3357: `path.join(__dirname, 'public', 'sounds', ...)` → `PROJECT_ROOT`
+
+**验证**: `npm start` → 全链路冒烟 → 装配环境创建 → 装配 runtime 启动/停止 → PH 项目管理 → 音频反馈 → shutdown 路由
+
+Phase 13 后 server.js：~670 → **~300 行**（组合根 + API proxy + 静态文件 + error handler + `shutdown()` + `main()`）。
+
+---
+
+### server.js 最终残留（~300 行）
+
+| 内容 | 约行数 |
+|------|--------|
+| import 语句（Phase 0-13 全部模块） | ~70 |
+| `app`, `viewerWorker`, `clawMcp` 创建 | ~5 |
+| `sessionApi` 可变引用 + 各模块创建 + ctx 组装 | ~80 |
+| 路由注册顺序调用（13 个 `setup*Routes`） | ~40 |
+| Claw MCP 路由（2 条） | ~40 |
+| API proxy 路由（11 条，含 `proxyToViewer`） | ~20 |
+| 静态文件 + error handler | ~5 |
+| `shutdown()` + `main()` + 信号处理 | ~40 |
+| **合计** | **~300** |
 
 ---
 
@@ -672,6 +1154,10 @@ Phase 6 后 server.js：4,710 → **3,523 行**。
 | **Phase 3 Dispatch top-level 副作用** | 低 | 调度丢失 | 转为显式 init()，在正确位置调用 |
 | **Express 路由顺序** | 低 | 路由不匹配 | 保持路由注册顺序不变；用 `app.use(prefix, router)` 前缀挂载 |
 | **ESM import 循环** | 低 | 启动失败 | Phase 0 shared 模块互不依赖；域模块不 import server.js |
+| **Phase 11-12 agent-lifecycle ↔ session-helpers 循环依赖** | 中 | 模块加载失败或运行时 undefined | 用 `sessionApi` 可变引用对象打破环；调用发生在请求处理时，非模块加载时 |
+| **Phase 9 `writeWorkspaceState` 调用链断裂** | 中 | workspace 状态写入失败 | 确认 `syncWorkspaceProjectDocset` import 自 Phase 8；逐函数核对调用链 |
+| **Phase 12 `startAssemblyRuntime` 跨域遗漏** | 中 | 装配 runtime 启动失败 | 该函数调用 4 个域的函数，ctx 注入清单需逐一核对 |
+| **Phase 7-13 `__dirname` → `PROJECT_ROOT`** | 中 | 路径错位、spawn 失败 | 共 8 处需替换；提取时逐个检查 |
 
 ---
 
@@ -688,4 +1174,10 @@ Phase 6 后 server.js：4,710 → **3,523 行**。
 | 4 | im | ✅ 完成 | 8,500 → 7,492 | 2026-06-29 |
 | 5 | session (helpers + routes + tests) | ✅ 完成 | 7,492 → 4,710 | 2026-06-29 |
 | 6 | flow + feature-repo (ph-project 保留) + tests | ✅ 完成 | 4,710 → 3,523 | 2026-06-29 |
-| 7 | agent-lifecycle + 收编 | 待执行 | → ~300-500 | |
+| 7 | assembly-helpers (纯函数提取) | ✅ 完成 | 3,523 → 3,342 | 2026-06-29 |
+| 8 | project-docset (helpers + 1 route) | ✅ 完成 | 3,342 → 3,022 | 2026-06-29 |
+| 9 | workspace (state + data + 3 routes) | 待执行 | ~2,960 → ~2,110 | |
+| 10 | workspace-creators (helpers + 2 routes) | 待执行 | ~2,110 → ~1,760 | |
+| 11 | agent-discovery + identity (helpers + 2 routes) | 待执行 | ~1,760 → ~1,400 | |
+| 12 | agent-lifecycle (functions + 8 routes) | 待执行 | ~1,400 → ~670 | |
+| 13 | remaining routes (assembly + ph_project + misc) | 待执行 | ~670 → ~300 | |
