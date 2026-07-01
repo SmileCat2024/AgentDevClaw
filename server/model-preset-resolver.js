@@ -18,7 +18,7 @@ const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
 /**
  * Resolve a preset name to { llm, modelName }.
  * @param {string} presetName
- * @returns {{ llm: import('agentdev').LLMClient, modelName: string } | null}
+ * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
 export function resolveModelPresetLLM(presetName) {
   if (!presetName || !existsSync(PRESETS_PATH)) return null;
@@ -59,7 +59,16 @@ export function resolveModelPresetLLM(presetName) {
         : {}),
     });
     console.log(`[ModelPreset] Resolved preset "${presetName}" => ${preset.model} (${protocol})`);
-    return { llm, modelName: preset.model };
+    return {
+      llm,
+      modelName: preset.model,
+      presetName: preset.name || presetName,
+      providerName: provider.name || preset.providerName || '',
+      provider: protocol,
+      protocol,
+      ...(apiSurface ? { apiSurface } : {}),
+      baseUrl,
+    };
   } catch (error) {
     console.warn(`[ModelPreset] Failed to resolve preset "${presetName}":`, error.message);
     return null;
@@ -70,7 +79,7 @@ export function resolveModelPresetLLM(presetName) {
  * Read agent metadata.json and user config to resolve the model preset for a given role.
  * @param {string} agentDir - Absolute path to the agent directory
  * @param {'default'|'exploration'|'sub'|'system'} role
- * @returns {{ llm: import('agentdev').LLMClient, modelName: string } | null}
+ * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string, presetRole: string } | null}
  */
 export function resolveAgentModelLLM(agentDir, role = 'default') {
   const metaPath = join(agentDir, 'metadata.json');
@@ -119,7 +128,8 @@ export function resolveAgentModelLLM(agentDir, role = 'default') {
     }
     
     if (!presetName) return null;
-    return resolveModelPresetLLM(presetName);
+    const resolved = resolveModelPresetLLM(presetName);
+    return resolved ? { ...resolved, presetRole: role } : null;
   } catch (error) {
     console.warn(`[ModelPreset] Failed to read agent metadata from ${metaPath}:`, error.message);
     return null;

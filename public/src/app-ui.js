@@ -6950,6 +6950,12 @@ function applyLanguage() {
   if (mcpButton) mcpButton.title = t('mcp_tooltip');
   if (resourcesButton) resourcesButton.title = '资料';
   if (viewerButton) viewerButton.title = '文档';
+  const settingsConfigItem = document.getElementById('settings-flyout-config');
+  const settingsUsageItem = document.getElementById('settings-flyout-usage');
+  const settingsExitItem = document.getElementById('settings-flyout-exit');
+  if (settingsConfigItem) settingsConfigItem.textContent = currentLanguage === 'zh' ? '模型配置' : 'Model settings';
+  if (settingsUsageItem) settingsUsageItem.textContent = currentLanguage === 'zh' ? '用量信息' : 'Usage';
+  if (settingsExitItem) settingsExitItem.textContent = currentLanguage === 'zh' ? '退出程序' : 'Quit';
 
   if (typeof updateNotificationStatus === 'function' && typeof lastNotificationStatusPayload !== 'undefined' && lastNotificationStatusPayload) {
     updateNotificationStatus(lastNotificationStatusPayload);
@@ -7265,6 +7271,13 @@ document.getElementById('settings-flyout-config').addEventListener('click', () =
     closeSettings();
   } else {
     openSettings();
+  }
+});
+
+document.getElementById('settings-flyout-usage').addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof openUsageInfo === 'function') {
+    openUsageInfo();
   }
 });
 
@@ -7628,4 +7641,3 @@ function closeCtxMenu() {
 
 window.showCtxMenu = showCtxMenu;
 window.closeCtxMenu = closeCtxMenu;
-

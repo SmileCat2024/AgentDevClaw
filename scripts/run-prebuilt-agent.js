@@ -18,6 +18,7 @@ import { setTimeout as sleep } from 'timers/promises';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -29,6 +30,9 @@ const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
 const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
 const IS_EXPLORATION = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
+const runtimeInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+const reportedUsageEventIds = new Set();
+let resolvedUsageModel = null;
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -1539,6 +1543,7 @@ async function main() {
   }
 
   const resolved = resolveAgentModelLLM(agentPath, 'default');
+  resolvedUsageModel = resolved || null;
   agent = new AgentClass({
     name: agentName,
     projectRoot: PROTOCLAW_ROOT,
@@ -1704,6 +1709,43 @@ async function main() {
         const preview = lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '';
         const usageStats = typeof agent.getUsage === 'function' ? agent.getUsage().toSnapshot() : null;
         const totalUsage = usageStats?.totalUsage;
+        const callIndex = typeof agent?._callIndex === 'number' ? agent._callIndex : null;
+        const callSummary = Array.isArray(usageStats?.calls)
+          ? usageStats.calls.find((call) => call?.callIndex === callIndex)
+          : null;
+        if (callSummary?.totalUsage && callIndex !== null) {
+          const usageEventId = [
+            'agent-call',
+            agentId,
+            sessionId,
+            runtimeInstanceId,
+            callIndex,
+            callSummary.endTime || Date.now(),
+          ].join(':');
+          if (!reportedUsageEventIds.has(usageEventId)) {
+            reportedUsageEventIds.add(usageEventId);
+            const usageResult = await reportUsageEvent(SERVER_ORIGIN, {
+              eventId: usageEventId,
+              timestamp: callSummary.endTime || Date.now(),
+              source: IS_EXPLORATION ? 'exploration-call' : 'agent-call',
+              agentId,
+              sessionId,
+              runtimeInstanceId,
+              callIndex,
+              requestCount: callSummary.stepCount || 1,
+              cacheHitRequests: callSummary.cacheHitRequests || 0,
+              model: buildModelUsageMeta(resolvedUsageModel, IS_EXPLORATION ? 'exploration' : 'default'),
+              usage: callSummary.totalUsage,
+              context: {
+                contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
+                messageCount: messages.length,
+              },
+            });
+            if (usageResult?.ok === false) {
+              console.warn('[ProtoClaw Runtime] usage event sync failed:', usageResult.error || usageResult.status);
+            }
+          }
+        }
         await fetch(`${SERVER_ORIGIN}/protoclaw/session_meta_sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

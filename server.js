@@ -22,6 +22,7 @@ import {
   findEnvelopesBySourceRef,
 } from './server/runtime-call-envelope.js';
 import { renderConversationHtml } from './server/conversation-renderer.js';
+import { setupUsageRoutes } from './server/usage-ledger.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
 import {
@@ -332,6 +333,7 @@ app.post('/protoclaw/shutdown', async (_req, res) => {
 setupModelConfigRoutes(app, express);
 setupFeatureRepositoryRoutes(app, express);
 setupFlowRoutes(app, express, { readWorkspaceState, resolveAssemblyFeatureArchives });
+setupUsageRoutes(app, express);
 
 
 

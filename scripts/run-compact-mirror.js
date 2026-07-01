@@ -10,10 +10,12 @@ import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } fr
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { execSync } from 'child_process';
 import { tuneMirrorLLM } from './mirror-runtime.js';
+import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = resolve(__dirname, '..');
+const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:1420';
 const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
 
 function cleanValue(value) {
@@ -265,6 +267,22 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
       compiledTools,
     );
     logPhase('chat done');
+    await reportUsageEvent(SERVER_ORIGIN, {
+      eventId: ['compact-mirror', agentId, sessionId, Date.now()].join(':'),
+      timestamp: Date.now(),
+      source: 'compact-mirror',
+      agentId,
+      sessionId,
+      jobId: `compact:${sessionId}`,
+      requestCount: 1,
+      cacheHitRequests: response?.usage?.cacheReadTokens ? 1 : 0,
+      model: buildModelUsageMeta(resolvedModel, modelPresetRole),
+      usage: response?.usage,
+      context: {
+        contextInputTokens: response?.usage?.inputTokens || 0,
+        messageCount: compactMessages.length,
+      },
+    });
 
     const rawResponse = typeof response?.content === 'string' ? response.content : '';
     const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];

@@ -5,6 +5,7 @@ import { writeFileSync, mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { fileURLToPath } from 'url';
+import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 import {
   cleanValue,
   sanitizeSessionFragment,
@@ -17,6 +18,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = resolve(__dirname, '..');
+const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:1420';
 
 function logPhase(message) {
   process.stderr.write(`[recap-mirror] ${message}\n`);
@@ -120,6 +122,22 @@ async function runRecapGeneration({ agentDir, agentId, sessionId }) {
   try {
     const response = await resolvedModel.llm.chat(compactMessages, compiledTools);
     logPhase('chat done');
+    await reportUsageEvent(SERVER_ORIGIN, {
+      eventId: ['recap-mirror', agentId, sessionId, Date.now()].join(':'),
+      timestamp: Date.now(),
+      source: 'recap-mirror',
+      agentId,
+      sessionId,
+      jobId: `recap:${sessionId}`,
+      requestCount: 1,
+      cacheHitRequests: response?.usage?.cacheReadTokens ? 1 : 0,
+      model: buildModelUsageMeta(resolvedModel, modelRole),
+      usage: response?.usage,
+      context: {
+        contextInputTokens: response?.usage?.inputTokens || 0,
+        messageCount: compactMessages.length,
+      },
+    });
 
     const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
     const recapCall = toolCalls.find((toolCall) => toolCall?.name === RECAP_TOOL.name);
