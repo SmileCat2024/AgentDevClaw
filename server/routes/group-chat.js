@@ -972,10 +972,12 @@ async function buildGroupChatAwareness(chatId) {
       const modelInfo = await resolveSessionModelInfo(workspaceId, sessionType);
       const tokenUsage = meta.tokenUsage || null;
       const contextTokens = getUsageContextTokens(tokenUsage);
-      const contextLength = Number.isFinite(modelInfo.contextLength) && modelInfo.contextLength > 0
-        ? modelInfo.contextLength : null;
-      const compressRatio = Number.isFinite(modelInfo.compressRatio) && modelInfo.compressRatio > 0
-        ? modelInfo.compressRatio : 80;
+      const contextLength = Number.isFinite(meta.contextLength) && meta.contextLength > 0
+        ? meta.contextLength : (Number.isFinite(modelInfo.contextLength) && modelInfo.contextLength > 0
+        ? modelInfo.contextLength : null);
+      const compressRatio = Number.isFinite(meta.compressRatio) && meta.compressRatio > 0
+        ? meta.compressRatio : (Number.isFinite(modelInfo.compressRatio) && modelInfo.compressRatio > 0
+        ? modelInfo.compressRatio : 80);
       const contextUsagePct = (contextTokens && contextLength)
         ? Math.round(contextTokens / contextLength * 100)
         : null;
@@ -999,7 +1001,7 @@ async function buildGroupChatAwareness(chatId) {
         updatedAt: meta.updatedAt || meta.createdAt || null,
         savedAt: typeof meta.savedAt === 'number' ? meta.savedAt : null,
         messageCount: typeof meta.messageCount === 'number' ? meta.messageCount : null,
-        modelName: modelInfo.modelName || cleanSessionText(meta.modelName) || '',
+        modelName: cleanSessionText(meta.modelName) || modelInfo.modelName || '',
         contextLength,
         compressRatio,
         contextTokens,

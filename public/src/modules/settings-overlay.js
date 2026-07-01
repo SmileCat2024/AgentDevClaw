@@ -237,6 +237,55 @@ function usageInfoAddBreakdown(target, usage) {
   target.requests += usage?.requests || 1;
 }
 
+function usageInfoSmoothPath(points) {
+  if (!Array.isArray(points) || !points.length) return '';
+  if (points.length < 3) {
+    return 'M ' + points.map((point) => point.map((value) => value.toFixed(2)).join(' ')).join(' L ');
+  }
+  const slopes = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const dx = points[index + 1][0] - points[index][0] || 1;
+    slopes.push((points[index + 1][1] - points[index][1]) / dx);
+  }
+  const tangents = points.map((_, index) => {
+    if (index === 0) return slopes[0];
+    if (index === points.length - 1) return slopes[slopes.length - 1];
+    if (slopes[index - 1] * slopes[index] <= 0) return 0;
+    return (slopes[index - 1] + slopes[index]) / 2;
+  });
+  for (let index = 0; index < slopes.length; index += 1) {
+    if (slopes[index] === 0) {
+      tangents[index] = 0;
+      tangents[index + 1] = 0;
+      continue;
+    }
+    const a = tangents[index] / slopes[index];
+    const b = tangents[index + 1] / slopes[index];
+    const sum = a * a + b * b;
+    if (sum > 9) {
+      const scale = 3 / Math.sqrt(sum);
+      tangents[index] = scale * a * slopes[index];
+      tangents[index + 1] = scale * b * slopes[index];
+    }
+  }
+  const commands = ['M ' + points[0][0].toFixed(2) + ' ' + points[0][1].toFixed(2)];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const p1 = points[index];
+    const p2 = points[index + 1];
+    const dx = p2[0] - p1[0];
+    const c1x = p1[0] + dx / 3;
+    const c1y = p1[1] + (tangents[index] * dx) / 3;
+    const c2x = p2[0] - dx / 3;
+    const c2y = p2[1] - (tangents[index + 1] * dx) / 3;
+    commands.push(
+      'C ' + c1x.toFixed(2) + ' ' + c1y.toFixed(2)
+      + ' ' + c2x.toFixed(2) + ' ' + c2y.toFixed(2)
+      + ' ' + p2[0].toFixed(2) + ' ' + p2[1].toFixed(2)
+    );
+  }
+  return commands.join(' ');
+}
+
 function usageInfoBucketRows(daily, from, to, events) {
   const byDate = new Map((Array.isArray(daily) ? daily : []).map((item) => [item.date, item]));
   const dates = usageInfoDateRange(from, to);
@@ -363,7 +412,7 @@ function renderUsageInfoTrend(daily, from, to, events) {
           ].join('\n');
       return '<rect class="usage-info-trend-hit" x="' + Math.max(left, x - (plotWidth / Math.max(1, buckets.length)) / 2).toFixed(2) + '" y="' + top + '" width="' + Math.max(10, plotWidth / Math.max(1, buckets.length)).toFixed(2) + '" height="' + plotHeight + '" data-tip="' + escapeHtml(tip) + '" data-guide-target="' + index + '"></rect>';
     }).join(''),
-    '<polyline class="usage-info-trend-line" points="' + totalPoints.map((point) => point.map((value) => value.toFixed(2)).join(',')).join(' ') + '"></polyline>',
+    '<path class="usage-info-trend-line" d="' + usageInfoSmoothPath(totalPoints) + '"></path>',
     buckets.map((item, index) => {
       const total = bucketTotal(item);
       if (total <= 0) return '';

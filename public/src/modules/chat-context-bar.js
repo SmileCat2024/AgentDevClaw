@@ -103,14 +103,18 @@ function updateChatContextBar() {
   var contextLength = getSessionContextLength(activeSession, agent);
   var compressRatio = getSessionCompressRatio(activeSession, agent);
 
+  // 阈限占比：当前用量占压缩阈值的比例（而非全窗口）
+  var thresholdTokens = contextLength > 0 ? Math.round(contextLength * compressRatio / 100) : 0;
+  var thresholdPct = thresholdTokens > 0 ? Math.round((used / thresholdTokens) * 100) : 0;
+
   var html = '';
   if (modelName) {
     html += '<span class="ccb-model">' + escapeHtml(modelName) + '</span>';
   }
   if (contextLength > 0) {
     var pct = used > 0 ? Math.min(100, Math.round((used / contextLength) * 100)) : 0;
-    var isCompressed = pct >= compressRatio;
-    var tone = isCompressed ? 'compress' : pct < 50 ? 'low' : pct < compressRatio ? 'mid' : 'high';
+    // 进度条颜色按阈限占比分三段：<70% green, 70-100% amber, ≥100% red
+    var tone = thresholdPct >= 100 ? 'compress' : thresholdPct >= 70 ? 'mid' : 'low';
     var label = (used > 0 && !isLastRequest)
       ? pct + '% (\u7d2f\u79ef)'
       : pct + '%';
@@ -139,6 +143,11 @@ function updateChatContextBar() {
   detailData.totalRequests = (currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.totalRequests) || 0;
   window._ccbDetailData = detailData;
 
+  // 检查阈限压力等级，在等级跨越时触发 Toast 提醒
+  if (activeId) {
+    _checkContextPressureToast(activeId, thresholdPct);
+  }
+
   bar.innerHTML = html;
   if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
     notifyChatViewportMutation({
@@ -149,6 +158,45 @@ function updateChatContextBar() {
       allowChase: false,
       preferSmooth: false,
     });
+  }
+}
+
+// ── Context pressure toast trigger ──
+// Per-session 压力等级：0 (安全), 1 (警告 ≥70%), 2 (超限 ≥100%)
+var _ctxPressureLevel = {};
+
+function _checkContextPressureToast(sessionId, thresholdPct) {
+  if (!sessionId || typeof ClawToast === 'undefined') return;
+  var newLevel = thresholdPct >= 100 ? 2 : thresholdPct >= 70 ? 1 : 0;
+  var prevLevel = _ctxPressureLevel[sessionId] || 0;
+  if (newLevel === prevLevel) return;
+
+  _ctxPressureLevel[sessionId] = newLevel;
+
+  var isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  var toastId = 'ctx-pressure-' + sessionId;
+
+  if (newLevel === 1) {
+    ClawToast.show({
+      id: toastId,
+      status: 'warning',
+      title: isZh ? '上下文即将达到压缩阈值' : 'Context Approaching Compression Threshold',
+      description: isZh
+        ? '当前用量已达压缩阈值的 ' + thresholdPct + '%。可考虑使用 trim、summary 或 branch 接续新会话，以节省上下文开销。'
+        : 'Usage at ' + thresholdPct + '% of compression threshold. Consider trim, summary, or branch to save context.',
+    });
+  } else if (newLevel === 2) {
+    ClawToast.show({
+      id: toastId,
+      status: 'error',
+      title: isZh ? '已超过压缩阈值' : 'Compression Threshold Exceeded',
+      description: isZh
+        ? '当前用量已达压缩阈值的 ' + thresholdPct + '%。强烈建议立即执行 trim、summary 或 branch，否则上下文开销将大幅增加。'
+        : 'Usage at ' + thresholdPct + '% of compression threshold. Strongly recommended to trim, summary, or branch immediately.',
+    });
+  } else {
+    // 用量回落到安全区，静默清除
+    ClawToast.dismiss(toastId);
   }
 }
 
@@ -173,7 +221,7 @@ function _buildCcbPopupHtml(d) {
   // 阈限占比：当前用量占压缩阈值的比例
   var thresholdTokens = d.contextLength > 0 ? Math.round(d.contextLength * cr / 100) : 0;
   var thresholdPct = thresholdTokens > 0 ? Math.round((d.used / thresholdTokens) * 100) : 0;
-  var thresholdTone = thresholdPct >= 100 ? 'compress' : thresholdPct >= 80 ? 'high' : thresholdPct >= 50 ? 'mid' : 'low';
+  var thresholdTone = thresholdPct >= 100 ? 'compress' : thresholdPct >= 70 ? 'mid' : 'low';
 
   var sections = [];
 

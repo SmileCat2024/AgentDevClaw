@@ -3921,7 +3921,7 @@ body[data-theme="light"] .im-identity-session-item.active {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   background: var(--hover-bg);
   border: 1px solid var(--border-color);
   border-radius: 10px;
@@ -4852,7 +4852,7 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 }
 
 .session-token-inline.tone-compress .session-token-bar-fill {
-  background: #9c27b0;
+  background: #ef4444;
 }
 
 .session-token-inline .session-token-pct {
@@ -4874,8 +4874,8 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 }
 
 .session-token-inline.tone-compress .session-token-pct {
-  color: #9c27b0;
-  background-color: rgba(156, 39, 176, 0.1);
+  color: #ef4444;
+  background-color: rgba(239, 68, 52, 0.1);
 }
 
 /* Token refresh button */
@@ -5141,7 +5141,7 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ccb-token.tone-low .ccb-fill { background: #4caf50; }
 .ccb-token.tone-mid .ccb-fill { background: #ff9800; }
 .ccb-token.tone-high .ccb-fill { background: #ef4444; }
-.ccb-token.tone-compress .ccb-fill { background: #9c27b0; }
+.ccb-token.tone-compress .ccb-fill { background: #ef4444; }
 .ccb-label {
   font-size: 11px;
 }
@@ -5211,7 +5211,7 @@ body[data-theme="light"] .ccb-popup-inner {
 .ccb-popup-tone-low { color: #4caf50; }
 .ccb-popup-tone-mid { color: #ff9800; }
 .ccb-popup-tone-high { color: #ef4444; }
-.ccb-popup-tone-compress { color: #9c27b0; }
+.ccb-popup-tone-compress { color: #ef4444; }
 
 /* ── Title hover popup (session metadata on #current-agent-name) ── */
 #current-agent-name { cursor: help; }

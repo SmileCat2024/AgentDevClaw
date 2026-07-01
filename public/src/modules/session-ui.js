@@ -107,12 +107,10 @@ function renderSessionTokenBar(session, agent) {
   const modelLabel = session?.modelName ? ' · ' + session.modelName : '';
   // 如果使用的是累积值（没有lastRequestUsage），添加标注
   const dataSource = lastRequest ? '' : ' (累积)';
-  // 添加刷新按钮
-  const refreshBtn = '<button class="token-refresh-btn" type="button" title="刷新 Token 计数" onclick="refreshSessionTokenCount(\'' + session.id + '\', \'' + agent.id + '\', this)" aria-label="刷新 Token 计数">↻</button>';
+  // 刷新按钮已移除：用量信息现在在运行过程中实时更新，不再依赖手动刷新
   return '<span class="session-token-inline tone-' + tone + '">'
     + '<span class="session-token-bar"><span class="session-token-compress-zone" style="left:' + compressRatio + '%"></span><span class="session-token-bar-fill" style="width:' + pct + '%"></span></span>'
     + '<span class="session-token-pct">' + pct + '%' + modelLabel + dataSource + '</span>'
-    + refreshBtn
     + '</span>';
 }
 

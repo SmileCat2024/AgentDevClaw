@@ -188,7 +188,16 @@ async function resolveSessionModelInfo(agentId, sessionType) {
       const userConfig = await readJson(userConfigPath) || {};
       const mp = userConfig?.modelPresets;
       if (mp && typeof mp === 'object') {
-        presetName = mp[role] || mp.default || null;
+        // modelPresets values may be either a string preset name
+        // or an object { primary, secondary } (dual-model slot format)
+        const resolvePresetName = (val) => {
+          if (typeof val === 'string') return val.trim() || null;
+          if (val && typeof val === 'object') {
+            return cleanSessionText(val.primary) || cleanSessionText(val.default) || null;
+          }
+          return null;
+        };
+        presetName = resolvePresetName(mp[role]) || resolvePresetName(mp.default) || null;
       }
     } catch {}
   }

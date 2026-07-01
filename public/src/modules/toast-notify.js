@@ -10,7 +10,7 @@
  *   ClawToast.update('title-gen', { status: 'error', description: 'API timeout' });
  *   ClawToast.dismiss('title-gen');
  *
- * Status: 'loading' (blue) | 'success' (green) | 'error' (red)
+ * Status: 'loading' (blue) | 'success' (green) | 'error' (red) | 'warning' (amber)
  */
 (function () {
   'use strict';
@@ -34,6 +34,12 @@
     '<circle cx="12" cy="12" r="10"></circle>' +
     '<line x1="12" y1="8" x2="12" y2="12"></line>' +
     '<line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+
+  var ICON_WARNING =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>' +
+    '<line x1="12" y1="9" x2="12" y2="13"></line>' +
+    '<line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
 
   var ICON_CLOSE =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
@@ -60,6 +66,7 @@
       loading: '进行中',
       success: '已完成',
       error: '失败',
+      warning: '警告',
     };
     var en = {
       detail: 'Details',
@@ -70,6 +77,7 @@
       loading: 'In Progress',
       success: 'Completed',
       error: 'Failed',
+      warning: 'Warning',
     };
     return (isZh() ? zh : en)[key] || key;
   }
@@ -77,6 +85,7 @@
   function statusLabel(status) {
     if (status === 'success') return lbl('success');
     if (status === 'error') return lbl('error');
+    if (status === 'warning') return lbl('warning');
     return lbl('loading');
   }
 
@@ -85,6 +94,7 @@
   function iconForStatus(status) {
     if (status === 'success') return ICON_CHECK;
     if (status === 'error') return ICON_ERROR;
+    if (status === 'warning') return ICON_WARNING;
     return ICON_SPINNER;
   }
 
@@ -244,6 +254,7 @@
     if (svgEl) {
       if (entry.status === 'success') svgEl.style.color = '#22c55e';
       else if (entry.status === 'error') svgEl.style.color = '#ef4444';
+      else if (entry.status === 'warning') svgEl.style.color = '#f59e0b';
       else svgEl.style.color = '#3b82f6';
     }
 
@@ -404,10 +415,10 @@
       createdAt: Date.now(),
     };
 
-    // Auto-dismiss for success
+    // Auto-dismiss for success and warning
     var status = opts.status || 'loading';
-    if (status === 'success' && opts.autoDismiss !== 0) {
-      scheduleAutoDismiss(id, opts.autoDismiss || 3500);
+    if ((status === 'success' || status === 'warning') && opts.autoDismiss !== 0) {
+      scheduleAutoDismiss(id, opts.autoDismiss || (status === 'warning' ? 8000 : 3500));
     }
   }
 
@@ -432,9 +443,9 @@
     if (changes.title !== undefined) entry.title = changes.title;
     if (changes.description !== undefined) entry.description = changes.description;
 
-    // Auto-dismiss when transitioning to success
-    if (changes.status === 'success' && changes.autoDismiss !== 0) {
-      scheduleAutoDismiss(id, changes.autoDismiss || 3500);
+    // Auto-dismiss when transitioning to success or warning
+    if ((changes.status === 'success' || changes.status === 'warning') && changes.autoDismiss !== 0) {
+      scheduleAutoDismiss(id, changes.autoDismiss || (changes.status === 'warning' ? 8000 : 3500));
     }
   }
 

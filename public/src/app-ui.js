@@ -7236,6 +7236,7 @@ function openSessionContextMenu(agentId, sessionId, x, y) {
 }
 
 railButtons.forEach(button => {
+  if (!button.dataset.panel) return; // 工具按钮（语言/主题/设置）不参与面板切换
   button.addEventListener('click', () => {
     toggleFeaturePanel(button.dataset.panel);
     if (button.dataset.panel === 'logs' && activeFeaturePanel === 'logs') {

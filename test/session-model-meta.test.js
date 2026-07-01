@@ -1,12 +1,17 @@
 /**
  * Tests for session model metadata resolution logic.
  *
- * Covers the core decision logic extracted from server.js:
+ * Covers the core decision logic extracted from session-helpers.js:
  * 1. resolveSessionModelInfo — resolves model config from metadata.json + global config
- * 2. Model info merge logic — prioritize persisted record over runtime fallback
+ * 2. Fast-path model info merge — prioritize persisted record over runtime fallback
+ *    (used when the session file hasn't changed since last read)
  *
- * These mirror the actual code paths in server.js (createPrebuiltSession / summarizePrebuiltSession).
- * When the server code changes, these tests should be updated accordingly.
+ * Note: The slow path (file changed = new activity) uses the live config values
+ * directly and writes them back to the index via _metaWriteback. This ensures
+ * sessions show the model from their most recent activity, not just creation time.
+ *
+ * These mirror the actual code paths in session-helpers.js (createPrebuiltSession /
+ * summarizePrebuiltSession). When the server code changes, update accordingly.
  */
 
 import { describe, it, beforeEach } from 'node:test';

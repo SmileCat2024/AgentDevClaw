@@ -317,10 +317,14 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       const persistedModelName = cleanSessionText(record.modelName);
       const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
         ? record.contextLength : null;
+      const persistedCR = Number.isFinite(record.compressRatio) && record.compressRatio > 0
+        ? record.compressRatio : null;
+      // Fast path: file unchanged since last read, so the persisted values
+      // (captured at creation or updated on last file change) are authoritative.
       const sessionModelInfo = {
-        modelName: fallbackModelInfo.modelName || persistedModelName || '',
-        contextLength: fallbackModelInfo.contextLength || persistedCL || null,
-        compressRatio: fallbackModelInfo.compressRatio || 80,
+        modelName: persistedModelName || fallbackModelInfo.modelName || '',
+        contextLength: persistedCL || fallbackModelInfo.contextLength || null,
+        compressRatio: persistedCR || fallbackModelInfo.compressRatio || 80,
       };
       const summaryInfo = summaryMap ? summaryMap.get(record.id) : null;
       const compactTitle = summaryInfo?.sessionTitle || '';
@@ -370,13 +374,12 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
     const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
     const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole])
       || await resolveSessionModelInfo(agentId, sType);
-    // 优先使用动态解析的模型信息（当前全局配置），回退到 index record 中持久化的模型信息
-    const persistedModelName = cleanSessionText(record.modelName);
-    const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
-      ? record.contextLength : null;
+    // When the session file has changed (new activity), the session is running
+    // with the current model configuration. Use the live config values for both
+    // display and writeback so the index stays fresh.
     const sessionModelInfo = {
-      modelName: fallbackModelInfo.modelName || persistedModelName || '',
-      contextLength: fallbackModelInfo.contextLength || persistedCL || null,
+      modelName: fallbackModelInfo.modelName || '',
+      contextLength: fallbackModelInfo.contextLength || null,
       compressRatio: fallbackModelInfo.compressRatio || 80,
     };
     const result = {
@@ -431,6 +434,9 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         },
         savedAt: typeof parsed?.savedAt === 'number' ? parsed.savedAt : null,
         metaVersion: META_VERSION,
+        modelName: sessionModelInfo.modelName || '',
+        contextLength: sessionModelInfo.contextLength || null,
+        compressRatio: sessionModelInfo.compressRatio || 80,
       },
       enumerable: false,
       configurable: true,
@@ -757,6 +763,9 @@ async function listPrebuiltSessions(agentId) {
           savedAt: wb.savedAt,
           metaVersion: wb.metaVersion,
           updatedAt: wb.updatedAt,
+          modelName: wb.modelName || existing.modelName || '',
+          contextLength: wb.contextLength ?? existing.contextLength ?? null,
+          compressRatio: wb.compressRatio ?? existing.compressRatio ?? 80,
         });
       }
       if (!dirty) return idx;
@@ -896,6 +905,7 @@ async function createPrebuiltSession(agentId, options = {}) {
     metadata: sessionMetadata,
     modelName: currentModelInfo.modelName || '',
     contextLength: currentModelInfo.contextLength || null,
+    compressRatio: currentModelInfo.compressRatio || 80,
     createdAt,
     updatedAt: createdAt,
   };

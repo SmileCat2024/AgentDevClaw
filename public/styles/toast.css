@@ -79,6 +79,11 @@ body[data-theme="light"] .toast-card {
   --toast-accent-glow: rgba(239, 68, 68, 0.1);
 }
 
+.toast-card[data-status="warning"] {
+  --toast-accent: #f59e0b;
+  --toast-accent-glow: rgba(245, 158, 11, 0.1);
+}
+
 /* ── Status Icon ── */
 
 .toast-icon {
@@ -107,6 +112,10 @@ body[data-theme="light"] .toast-card {
 
 .toast-card[data-status="error"] .toast-icon svg {
   color: #ef4444;
+}
+
+.toast-card[data-status="warning"] .toast-icon svg {
+  color: #f59e0b;
 }
 
 /* ── Toast Content ── */
@@ -143,8 +152,16 @@ body[data-theme="light"] .toast-card {
   color: #f87171;
 }
 
+.toast-card[data-status="warning"] .toast-desc {
+  color: #f59e0b;
+}
+
 body[data-theme="light"] .toast-card[data-status="error"] .toast-desc {
   color: #dc2626;
+}
+
+body[data-theme="light"] .toast-card[data-status="warning"] .toast-desc {
+  color: #d97706;
 }
 
 /* ── Detail Button ── */
@@ -410,6 +427,7 @@ body[data-theme="light"] .toast-modal-status-badge[data-status="error"] {
 }
 
 .toast-card[data-status="success"] .toast-progress,
-.toast-card[data-status="error"] .toast-progress {
+.toast-card[data-status="error"] .toast-progress,
+.toast-card[data-status="warning"] .toast-progress {
   opacity: 0;
 }
