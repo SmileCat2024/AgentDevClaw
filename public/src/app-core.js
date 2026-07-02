@@ -273,6 +273,9 @@ function clearInterruptSuppression(runtimeId) {
 }
 // 追踪刚完成调用的 runtimeId，用于在侧边栏显示"已完成"指示灯
 const _recentlyFinishedRuntimes = new Set();
+// 全局 choice 请求提醒：跟踪已弹 toast 的 requestId，避免重复提醒
+const _seenChoiceAlertIds = new Set();
+let _lastChoiceAlertCheckAt = 0;
 let currentMessages = [];
 let currentInputRequests = [];
 let choiceInputState = {};

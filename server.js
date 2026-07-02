@@ -1,5 +1,5 @@
 import express from 'express';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -561,64 +561,100 @@ setupWorkspaceCreatorRoutes(app, express);
 // ── Server-side audio feedback for choice input requests ───────────────────
 
 const _seenChoiceRequestIds = new Set();
-const PLAY_SOUND_SCRIPT = path.join(__dirname, 'scripts', 'play-sound.ps1');
 
 /**
- * Play an audio file on the server machine via PowerShell MCI.
- * Fire-and-forget — does not block the response.
+ * Play an audio file on the server machine via WPF MediaPlayer + Dispatcher.
+ * Uses the same proven pattern as AudioFeedbackFeature._playSound to avoid
+ * the MCI reliability issues (silent failures, codec/device registration gaps)
+ * that plagued the previous play-sound.ps1 approach.
+ *
+ * Fire-and-forget (callback style) — does not block the response.
  */
 function playSoundOnServer(soundFile) {
   const soundPath = path.join(__dirname, 'public', 'sounds', soundFile);
-  const child = spawn('powershell', [
-    '-NoProfile', '-ExecutionPolicy', 'Bypass',
-    '-File', PLAY_SOUND_SCRIPT,
-    '-Path', soundPath,
-  ], { stdio: 'ignore', windowsHide: true, detached: true });
-  child.unref();
+  const escapedPath = soundPath.replace(/'/g, "''");
+  const psScript = [
+    'Add-Type -AssemblyName PresentationCore',
+    'Add-Type -AssemblyName WindowsBase',
+    '$p = New-Object System.Windows.Media.MediaPlayer',
+    '$frame = New-Object System.Windows.Threading.DispatcherFrame',
+    '$timer = New-Object System.Windows.Threading.DispatcherTimer',
+    '$timer.Interval = [TimeSpan]::FromMilliseconds(5000)',
+    '$timer.Add_Tick({ $frame.Continue = $false })',
+    '$p.Add_MediaOpened({ $frame.Continue = $false })',
+    "$p.Open('" + escapedPath + "')",
+    '$timer.Start()',
+    '[System.Windows.Threading.Dispatcher]::PushFrame($frame)',
+    '$timer.Stop()',
+    '$p.Volume = 1.0',
+    '$p.Play()',
+    '$dur = 2',
+    'try { if ($p.NaturalDuration.HasTimeSpan) { $dur = $p.NaturalDuration.TimeSpan.TotalSeconds } } catch {}',
+    'Start-Sleep -Seconds ([math]::Ceiling([math]::Max($dur, 0.5)))',
+    '$p.Stop()',
+    '$p.Close()',
+  ].join('; ');
+
+  execFile('powershell', ['-NoProfile', '-Command', psScript], {
+    timeout: 15000,
+    windowsHide: true,
+  }, (err) => {
+    if (err) console.error('[choice-bell] Playback failed:', err.message);
+  });
 }
 
 /**
- * Intercept input-requests proxy: forward to ViewerWorker, but also inspect
- * the response for new choice-type requests and play a terminal bell sound
- * on the server immediately — independent of frontend rendering state.
+ * Global choice-request alerts: scan ALL connected agents for pending
+ * choice-type input requests (not just the currently focused one).
+ * Plays a terminal bell for any newly seen requests and returns the
+ * full list of active choice alerts so the frontend can show toasts.
  */
-app.get('/api/agents/:agentId/input-requests', async (req, res, next) => {
+app.get('/protoclaw/choice_alerts', async (_req, res, next) => {
   try {
-    const targetUrl = `${VIEWER_ORIGIN}${req.originalUrl}`;
-    const headers = new Headers();
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (value == null) continue;
-      if (key.toLowerCase() === 'host') continue;
-      headers.set(key, Array.isArray(value) ? value.join(', ') : value);
+    const agentsRes = await fetch(`${VIEWER_ORIGIN}/api/agents`);
+    if (!agentsRes.ok) {
+      res.json({ alerts: [] });
+      return;
     }
-    const response = await fetch(targetUrl, { method: 'GET', headers });
-    res.status(response.status);
-    response.headers.forEach((value, key) => {
-      if (key.toLowerCase() === 'transfer-encoding') return;
-      res.setHeader(key, value);
-    });
-    const buffer = Buffer.from(await response.arrayBuffer());
-    res.end(buffer);
+    const agentsData = await agentsRes.json();
+    const agents = Array.isArray(agentsData?.agents) ? agentsData.agents : [];
+    const connected = agents.filter((a) => a.connected !== false);
 
-    // Detect new choice requests after forwarding the response
-    if (response.ok) {
+    const alerts = [];
+    await Promise.all(connected.map(async (agent) => {
       try {
-        const requests = JSON.parse(buffer.toString('utf8'));
-        if (Array.isArray(requests)) {
-          for (const r of requests) {
-            const isChoice = r && r.mode === 'choices'
-              && Array.isArray(r.questions) && r.questions.length > 0
-              && typeof r.requestId === 'string';
-            if (isChoice && !_seenChoiceRequestIds.has(r.requestId)) {
-              if (_seenChoiceRequestIds.size > 500) _seenChoiceRequestIds.clear();
-              _seenChoiceRequestIds.add(r.requestId);
-              playSoundOnServer('terminal-bell.mp3');
-              break; // one bell per poll cycle
-            }
+        const reqRes = await fetch(
+          `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(agent.id)}/input-requests`
+        );
+        if (!reqRes.ok) return;
+        const requests = await reqRes.json();
+        if (!Array.isArray(requests)) return;
+        for (const r of requests) {
+          const isChoice = r && r.mode === 'choices'
+            && Array.isArray(r.questions) && r.questions.length > 0
+            && typeof r.requestId === 'string';
+          if (isChoice) {
+            alerts.push({
+              requestId: r.requestId,
+              agentId: agent.id,
+              agentName: agent.name || agent.id,
+            });
           }
         }
-      } catch { /* non-critical */ }
+      } catch { /* skip individual agent errors */ }
+    }));
+
+    // Play terminal bell for newly discovered choice requests
+    for (const alert of alerts) {
+      if (!_seenChoiceRequestIds.has(alert.requestId)) {
+        if (_seenChoiceRequestIds.size > 500) _seenChoiceRequestIds.clear();
+        _seenChoiceRequestIds.add(alert.requestId);
+        playSoundOnServer('terminal-bell.mp3');
+        break; // one bell per cycle
+      }
     }
+
+    res.json({ alerts });
   } catch (err) {
     next(err);
   }

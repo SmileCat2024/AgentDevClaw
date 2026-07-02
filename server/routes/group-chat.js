@@ -1237,9 +1237,11 @@ app.get('/protoclaw/group_chats/:chatId/awareness', async (req, res, next) => {
  * @param {number} currentMessageTimestamp - 触发本次唤醒的消息时间戳（catch-up 上界）
  * @param {string} currentMessageId - 触发本次唤醒的消息 ID（排除自身）
  * @param {boolean} isNew - 管理员 session 是否为本次新建
+ * @param {boolean} [includeCurrentMessage=false] - 是否将触发消息本身纳入 catch-up
+ *        （非 @admin 直达场景需要 true，使触发消息内容进入 system-reminder 而非 user 块）
  * @returns {string|null} 合并后的上下文前缀文本（群记忆 + catch-up），无内容时返回 null
  */
-async function prepareAdminContext(chatId, allIdentities, currentMessageTimestamp, currentMessageId, isNew) {
+async function prepareAdminContext(chatId, allIdentities, currentMessageTimestamp, currentMessageId, isNew, includeCurrentMessage = false) {
   const identityRef = 'work-group:admin';
   const chat = await readGroupChat(chatId);
   if (!chat) return null;
@@ -1282,9 +1284,15 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
   const lastActive = chat.lastActiveAt[identityRef] || 0;
   if (!(isNew && lastActive === 0)) {
     const catchUpMessages = (chat.messages || []).filter(
-      (m) => (m.timestamp || 0) > lastActive
-        && (m.timestamp || 0) < (currentMessageTimestamp || Date.now())
-        && m.id !== currentMessageId
+      (m) => {
+        if ((m.timestamp || 0) <= lastActive) return false;
+        // includeCurrentMessage=true 时，触发消息本身纳入 catch-up（进入 system-reminder），
+        // 使 user 块只需承载事件通知而非原始内容
+        if (includeCurrentMessage) return true;
+        if ((m.timestamp || 0) >= (currentMessageTimestamp || Date.now())) return false;
+        if (m.id === currentMessageId) return false;
+        return true;
+      }
     );
     if (catchUpMessages.length > 0) {
       // 合并批注到 catch-up 消息（仅管理员注入）
@@ -1334,7 +1342,7 @@ async function ensureAdminRuntime(chatId, sessionId) {
  * 核心派发逻辑：将消息投递到指定 identity 的 session。
  * 负责 session 解析、runtime 启动、gc inbox 投递、状态跟踪。
  */
-async function dispatchToIdentity(chatId, message, chat, identityRef, composedPrompt, sessionOptions = {}) {
+async function dispatchToIdentity(chatId, message, chat, identityRef, composedPrompt, sessionOptions = {}, opts = {}) {
   const workspaceId = identityRef.split(':')[0];
   log('GroupChat', `dispatching message ${message.id} to ${workspaceId} (${identityRef}) sessionOpts=${JSON.stringify(sessionOptions)}`);
 
@@ -1409,6 +1417,7 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
     contextText = await prepareAdminContext(
       chatId, allIdentities,
       message.timestamp || Date.now(), message.id, isNew,
+      opts.includeCurrentMessage || false,
     );
   } else {
     // 被派发的 agent：注入群聊 system 上下文块
@@ -1427,6 +1436,7 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
     gcChatId: chatId,
     gcIdentityRef: identityRef,
     attachments: processedAttachments,
+    textInCatchUp: opts.includeCurrentMessage || false,
   });
   log('GroupChat', `message ${message.id} enqueued to gc inbox for ${workspaceId}/${sessionId}`);
 
@@ -1522,18 +1532,9 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
       const allIdentities = await collectIdentities();
       const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
       const targetName = targetInfo?.displayName || targetIdentityRef;
-      const autonomyDesc = {
-        auto: '直接执行',
-        cautious: '遇疑则停',
-        confirm: '先给方案再执行',
-      }[autonomyMode] || '直接执行';
 
-      const coordinatorPrompt = [
-        `用户 @了 ${targetName}：`,
-        message.text || '',
-        '',
-        `自决权：${autonomyDesc}`,
-      ].join('\n');
+      // user 块仅保留事件通知，用户原话由 catch-up（含触发消息）注入 system-reminder
+      const coordinatorPrompt = `用户 @了 ${targetName}`;
 
       // 更新 routing 目标为管理员
       await updateMessageRouting(chatId, message.id, {
@@ -1541,7 +1542,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
         targetWorkspaceId: 'work-group',
         routedByMode: 'execute',
       });
-      await dispatchToIdentity(chatId, message, chat, 'work-group:admin', coordinatorPrompt);
+      await dispatchToIdentity(chatId, message, chat, 'work-group:admin', coordinatorPrompt, {}, { includeCurrentMessage: true });
       break;
     }
 
@@ -1555,8 +1556,8 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
       const targetInfo = allIdentities.find((i) => i.identityRef === targetIdentityRef);
       const targetName = targetInfo?.displayName || targetIdentityRef;
 
-      // user 块：仅保留观察摘要（谁说了什么），不含派发细节
-      let observationText = `[观察] 用户 @了 ${targetName}：${message.text || ''}`;
+      // user 块：仅保留事件通知，用户原话由 catch-up（含触发消息）注入 system-reminder
+      let observationText = `用户 @了 ${targetName}`;
 
       // 附件摘要：显示附件数量和名称
       if (Array.isArray(message.attachments) && message.attachments.length > 0) {
@@ -1621,7 +1622,7 @@ async function notifyAdminWithPrompt(chatId, message, chat, promptText, systemNo
   }
 
   let contextText = await prepareAdminContext(
-    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew,
+    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew, true,
   );
 
   // systemNote 作为 system 层辅助信息注入，与 catch-up / 群记忆并列，
@@ -1643,6 +1644,7 @@ async function notifyAdminWithPrompt(chatId, message, chat, promptText, systemNo
     gcChatId: chatId,
     gcIdentityRef: 'work-group:admin',
     attachments: processedAttachments,
+    textInCatchUp: true,
   });
   log('GroupChat', `notifyAdminWithPrompt enqueued for admin`);
 }
@@ -1681,9 +1683,9 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
     return;
   }
 
-  // 上下文完整性：经统一通道补全 catch-up + 群记忆
+  // 上下文完整性：经统一通道补全 catch-up + 群记忆（含触发消息本身）
   const contextText = await prepareAdminContext(
-    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew,
+    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew, true,
   );
 
   const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
@@ -1697,6 +1699,7 @@ async function notifyAdminForObservation(chatId, message, chat, targetIdentityRe
     gcChatId: chatId,
     gcIdentityRef: 'work-group:admin',
     attachments: processedAttachments,
+    textInCatchUp: true,
   });
   log('GroupChat', `observation notify enqueued for admin`);
 }
@@ -1719,9 +1722,9 @@ async function notifyAdminForActivity(chatId, message, chat) {
     const evtSession = formatSessionLabel(message.event?.sessionTitle, message.event?.sessionId);
     activityDesc = `系统事件：${message.event?.identityName || ''}${evtSession} 已开始处理`;
   } else if (message.from === 'user') {
-    activityDesc = `用户发送了消息：${message.text || ''}`;
+    activityDesc = `用户发送了消息`;
   } else {
-    activityDesc = `${senderName}${sessionLabel} 回复了：${message.text || ''}`;
+    activityDesc = `${senderName}${sessionLabel} 回复了`;
   }
 
   // 附件摘要：显示附件数量和名称
@@ -1730,7 +1733,7 @@ async function notifyAdminForActivity(chatId, message, chat) {
     activityDesc += `  [附件: ${attNames}]`;
   }
 
-  // user 块包含当前触发消息的摘要（catch-up 只含更早的未读消息，无重复）
+  // user 块仅保留事件通知，原始内容由 catch-up（含触发消息）注入 system-reminder
   const activityPrompt = activityDesc;
 
   // 确保管理员 runtime 存在
@@ -1743,9 +1746,9 @@ async function notifyAdminForActivity(chatId, message, chat) {
     return;
   }
 
-  // 上下文完整性：经统一通道补全 catch-up + 群记忆
+  // 上下文完整性：经统一通道补全 catch-up + 群记忆（含触发消息本身）
   const contextText = await prepareAdminContext(
-    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew,
+    chatId, allIdentities, message.timestamp || Date.now(), message.id, isNew, true,
   );
 
   const runtimeKey = getManagedRuntimeKey('work-group', sessionId);
@@ -1759,6 +1762,7 @@ async function notifyAdminForActivity(chatId, message, chat) {
     gcChatId: chatId,
     gcIdentityRef: 'work-group:admin',
     attachments: processedAttachments,
+    textInCatchUp: true,
   });
   log('GroupChat', `activity notify enqueued for admin: ${activityDesc.slice(0, 50)}`);
 }

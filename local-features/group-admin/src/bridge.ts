@@ -20,6 +20,10 @@ interface GcMessage {
   gcChatId: string;
   gcIdentityRef: string;
   attachments?: Array<{ name: string; content: string }>;
+  /** text 的内容是否已包含在 contextText（catch-up）中。
+   *  非 @admin 直达场景为 true（catch-up 含触发消息），@admin 直达为 false。
+   *  busy 路径据此决定是否跳过 text 注入。 */
+  textInCatchUp?: boolean;
 }
 
 export class GroupChatBridgeFeature implements AgentFeature {
@@ -93,8 +97,13 @@ export class GroupChatBridgeFeature implements AgentFeature {
     const messages = this.pendingBuffer.splice(0);
     const content = messages
       .map((msg) => {
-        // busy 路径下，contextText 和消息文本合并注入
+        // busy 路径：注入新的水位线（catch-up system-reminder）
+        // 非 @admin 场景：catch-up 已含触发消息完整内容，text 只是事件通知，跳过
+        // @admin 直达场景：catch-up 不含触发消息，text 是用户原话，需要保留
         if (msg.contextText) {
+          if (msg.textInCatchUp) {
+            return msg.contextText;
+          }
           return msg.contextText + '\n\n' + msg.text;
         }
         return msg.text;

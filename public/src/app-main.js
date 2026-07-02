@@ -5332,11 +5332,54 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
   }
 }
 
+/**
+ * Global choice-request alert check: polls the server for choice-type
+ * input requests across ALL connected agents (not just the focused one).
+ * Shows a ClawToast warning for each newly discovered request so the user
+ * is alerted even when viewing a different conversation.
+ */
+async function checkGlobalChoiceAlerts() {
+  try {
+    const res = await fetch('/protoclaw/choice_alerts');
+    if (!res.ok) return;
+    const data = await res.json();
+    const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+    for (const alert of alerts) {
+      if (!_seenChoiceAlertIds.has(alert.requestId)) {
+        if (_seenChoiceAlertIds.size > 500) _seenChoiceAlertIds.clear();
+        _seenChoiceAlertIds.add(alert.requestId);
+        // Try to find a richer display name from allAgents
+        const matched = allAgents.find(
+          (a) => (a.runtime_session_id || a.runtimeSessionId) === alert.agentId
+        );
+        const displayName = matched?.active_workspace_display_name
+          || matched?.active_workspace_session_title
+          || matched?.name
+          || alert.agentName
+          || alert.agentId;
+        const isZh = currentLanguage === 'zh';
+        ClawToast.show({
+          id: 'choice-alert-' + alert.requestId,
+          title: isZh ? '等待用户选择' : 'Waiting for user choice',
+          description: (isZh ? '会话：' : 'Session: ') + displayName,
+          status: 'warning',
+        });
+      }
+    }
+  } catch { /* non-critical */ }
+}
+
 async function poll() {
   try {
     if (prebuiltSessionSwitchInFlight) {
       setTimeout(poll, 300);
       return;
+    }
+
+    // 全局 choice 请求提醒（跨所有 agent，不限于当前焦点）
+    if (Date.now() - _lastChoiceAlertCheckAt > 3000) {
+      _lastChoiceAlertCheckAt = Date.now();
+      checkGlobalChoiceAlerts().catch(() => {});
     }
 
     // 定期检查并重新加载 Feature 模板映射（如果为空）
