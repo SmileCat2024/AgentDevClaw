@@ -944,199 +944,108 @@ async function loadAgents() {
   }
 }
 
-// ── Desktop notification (Notification API) ─────────────────────────────────
-const _notifiedFinishIds = new Set();  // 防止同一 agent 短时间内重复通知
+// Desktop notification -> modules/desktop-notify.js
 
-function _truncateForNotification(text, maxLen = 120) {
-  if (!text) return '';
-  // 去除 markdown 语法标记，只保留纯文本预览
-  let plain = text
-    .replace(/```[\s\S]*?```/g, '[code]')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/!\[.*?\]\(.*?\)/g, '[image]')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[#>*_~|-]/g, '')
-    .replace(/\n{2,}/g, '\n')
-    .trim();
-  if (plain.length > maxLen) {
-    plain = plain.slice(0, maxLen) + '...';
-  }
-  return plain;
-}
-
-async function _tryNotifyAgentFinished(runtimeId) {
-  if (typeof Notification === 'undefined') return;
-  if (Notification.permission !== 'granted') return;
-  if (!document.hidden && document.hasFocus()) return;
-
-  const normId = normalizeAgentIdentity(runtimeId);
-  if (_notifiedFinishIds.has(normId)) return;
-  _notifiedFinishIds.add(normId);
-  setTimeout(() => _notifiedFinishIds.delete(normId), 5000);
-
-  const agent = (Array.isArray(allAgents) ? allAgents : []).find(
-    (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
-  );
-  const agentName = (agent?.name || agent?.id || normId).trim();
-  const sessionTitle = (agent?.active_workspace_session_title || '').trim();
-  const isZh = currentLanguage === 'zh';
-
-  // 尝试获取最后一条 assistant 回复
-  let replyPreview = '';
-  try {
-    const res = await fetch(`/api/agents/${encodeURIComponent(normId)}/messages`);
-    if (res.ok) {
-      const data = await res.json();
-      const messages = data.messages || [];
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === 'assistant' && messages[i].content) {
-          replyPreview = _truncateForNotification(messages[i].content);
-          break;
-        }
-      }
-    }
-  } catch (e) { /* ignore — 通知照常发出，只是没有预览 */ }
-
-  // 构建通知正文
-  const bodyParts = [];
-  if (sessionTitle) bodyParts.push(sessionTitle);
-  if (replyPreview) bodyParts.push(replyPreview);
-  const body = bodyParts.length > 0
-    ? bodyParts.join('\n')
-    : (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.');
-
-  try {
-    const n = new Notification(
-      isZh ? `${agentName} 已完成` : `${agentName} finished`,
-      { body, tag: 'claw-agent-finished-' + normId }
-    );
-    n.onclick = () => {
-      window.focus();
-      n.close();
-      if (agent?.source === 'prebuilt') {
-        window.handlePrebuiltAgentClick(agent.id);
-      } else if (agent) {
-        window.switchAgent(agent.id);
-      }
-    };
-  } catch (e) { /* ignore */ }
-}
-
-// ── Background heartbeat via Web Worker (bypass browser timer throttling) ────
-// 浏览器会将后台 tab 的 setTimeout 节流至 1s 甚至 1min，导致轮询检测不到
-// agent 完成。Web Worker 的 setInterval 不受此限制。
-const _bgHeartbeatWorker = (function () {
-  try {
-    const code = `setInterval(()=>postMessage('tick'),1000);`;
-    const blob = new Blob([code], { type: 'application/javascript' });
-    const worker = new Worker(URL.createObjectURL(blob));
-    worker.onmessage = () => {
-      // 页面可见且有焦点时，常规 poll (300ms) 已经在跑，不需要 worker 介入
-      if (!document.hidden && document.hasFocus()) return;
-      // 通知权限未授予时也不需要心跳
-      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-      refreshAgentCallStates(allAgents, { force: true });
-    };
-    return worker;
-  } catch (e) {
-    console.warn('[Notify] Web Worker heartbeat unavailable:', e);
-    return null;
-  }
-})();
-
+let _callStatesRefreshInProgress = false;
 async function refreshAgentCallStates(agents = allAgents, options = {}) {
   const { force = false } = options;
+  // 互斥锁：防止 Worker 心跳与常规 poll 并发执行导致重复触发通知
+  if (_callStatesRefreshInProgress) return;
   const now = Date.now();
   if (!force && now - lastCallStateRefreshAt < 1000) {
     return;
   }
+  _callStatesRefreshInProgress = true;
   lastCallStateRefreshAt = now;
-
-  const runtimeIds = Array.from(new Set(
-    (Array.isArray(agents) ? agents : [])
-      .filter((agent) => agent?.connected)
-      .map((agent) => agent.runtime_session_id || agent.runtimeSessionId || agent.id)
-      .filter(Boolean)
-  ));
-  if (runtimeIds.length === 0) {
-    let changed = false;
-    for (const key of Array.from(_agentCallActive.keys())) {
-      _agentCallActive.delete(key);
-      _interruptSuppression.delete(key);
-      changed = true;
+  try {
+    const runtimeIds = Array.from(new Set(
+      (Array.isArray(agents) ? agents : [])
+        .filter((agent) => agent?.connected)
+        .map((agent) => agent.runtime_session_id || agent.runtimeSessionId || agent.id)
+        .filter(Boolean)
+    ));
+    if (runtimeIds.length === 0) {
+      let changed = false;
+      for (const key of Array.from(_agentCallActive.keys())) {
+        _agentCallActive.delete(key);
+        _interruptSuppression.delete(key);
+        changed = true;
+      }
+      if (changed) {
+        renderAgentList();
+      }
+      return;
     }
+
+    const nextCallStates = new Map();
+    await Promise.all(runtimeIds.map(async (runtimeId) => {
+      try {
+        const res = await fetch(`/api/agents/${encodeURIComponent(runtimeId)}/notification`);
+        if (!res.ok) return;
+        const notifData = await res.json();
+        nextCallStates.set(runtimeId, resolveNotificationCallingState(notifData));
+      } catch (error) {
+      }
+    }));
+
+    let changed = false;
+    for (const runtimeId of runtimeIds) {
+      const backendCalling = nextCallStates.get(runtimeId) === true;
+      const prevCalling = _agentCallActive.get(runtimeId) === true;
+      // 中断抑制窗口内忽略 backend 的 callActive:true
+      const effectiveCalling = backendCalling && !isInterruptSuppressed(runtimeId);
+      if (effectiveCalling) {
+        _agentCallActive.set(runtimeId, true);
+      } else {
+        _agentCallActive.delete(runtimeId);
+      }
+      if (!backendCalling) {
+        clearInterruptSuppression(runtimeId);
+      }
+      if (prevCalling !== effectiveCalling) {
+        changed = true;
+      }
+      // 检测调用完成：true → false 转换，标记为"刚完成"
+      if (prevCalling && !effectiveCalling) {
+        if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
+          _recentlyFinishedRuntimes.add(runtimeId);
+        }
+        _tryNotifyAgentFinished(runtimeId);
+      }
+    }
+
+    const activeRuntimeIds = new Set(runtimeIds);
+    for (const key of Array.from(_agentCallActive.keys())) {
+      if (!activeRuntimeIds.has(key)) {
+        _agentCallActive.delete(key);
+        _interruptSuppression.delete(key);
+        _recentlyFinishedRuntimes.delete(key);
+        changed = true;
+      }
+    }
+
+    for (const agent of Array.isArray(agents) ? agents : []) {
+      if (agent?.source === 'prebuilt') {
+        if (agent.callActive) {
+          agent.callActive = false;
+          changed = true;
+        }
+        continue;
+      }
+      const runtimeId = agent.runtime_session_id || agent.runtimeSessionId || agent.id;
+      if (!runtimeId) continue;
+      const nextCalling = nextCallStates.get(runtimeId) === true;
+      if (agent.callActive !== nextCalling) {
+        agent.callActive = nextCalling;
+        changed = true;
+      }
+    }
+
     if (changed) {
       renderAgentList();
     }
-    return;
-  }
-
-  const nextCallStates = new Map();
-  await Promise.all(runtimeIds.map(async (runtimeId) => {
-    try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(runtimeId)}/notification`);
-      if (!res.ok) return;
-      const notifData = await res.json();
-      nextCallStates.set(runtimeId, resolveNotificationCallingState(notifData));
-    } catch (error) {
-    }
-  }));
-
-  let changed = false;
-  for (const runtimeId of runtimeIds) {
-    const backendCalling = nextCallStates.get(runtimeId) === true;
-    const prevCalling = _agentCallActive.get(runtimeId) === true;
-    // 中断抑制窗口内忽略 backend 的 callActive:true
-    const effectiveCalling = backendCalling && !isInterruptSuppressed(runtimeId);
-    if (effectiveCalling) {
-      _agentCallActive.set(runtimeId, true);
-    } else {
-      _agentCallActive.delete(runtimeId);
-    }
-    if (!backendCalling) {
-      clearInterruptSuppression(runtimeId);
-    }
-    if (prevCalling !== effectiveCalling) {
-      changed = true;
-    }
-    // 检测调用完成：true → false 转换，标记为"刚完成"
-    if (prevCalling && !effectiveCalling) {
-      if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
-        _recentlyFinishedRuntimes.add(runtimeId);
-      }
-      _tryNotifyAgentFinished(runtimeId);
-    }
-  }
-
-  const activeRuntimeIds = new Set(runtimeIds);
-  for (const key of Array.from(_agentCallActive.keys())) {
-    if (!activeRuntimeIds.has(key)) {
-      _agentCallActive.delete(key);
-      _interruptSuppression.delete(key);
-      _recentlyFinishedRuntimes.delete(key);
-      changed = true;
-    }
-  }
-
-  for (const agent of Array.isArray(agents) ? agents : []) {
-    if (agent?.source === 'prebuilt') {
-      if (agent.callActive) {
-        agent.callActive = false;
-        changed = true;
-      }
-      continue;
-    }
-    const runtimeId = agent.runtime_session_id || agent.runtimeSessionId || agent.id;
-    if (!runtimeId) continue;
-    const nextCalling = nextCallStates.get(runtimeId) === true;
-    if (agent.callActive !== nextCalling) {
-      agent.callActive = nextCalling;
-      changed = true;
-    }
-  }
-
-  if (changed) {
-    renderAgentList();
+  } finally {
+    _callStatesRefreshInProgress = false;
   }
 }
 
@@ -6295,6 +6204,9 @@ _callFinishTimerInterval = setInterval(_renderLastCallElapsed, 1000);
 // ── Recap (离开摘要) ──────────────────────────────────────────────
 // 当用户切走离开当前会话（切到别的 agent/session/workspace 视图）超过阈值后
 // 再切回来，自动生成一段简短回顾，显示在输入框上方帮助用户恢复上下文。
+// 【已临时屏蔽】设为 true 断开 recap 链路，所有触发入口提前返回，不再实际运行。
+const RECAP_DISABLED = true;
+
 let _recapLastSeenBySession = {};     // sessionKey → 最后活跃时间戳
 let _recapShownForSession = new Set();   // session cache keys that have had recap generated
 let _recapDismissedForSession = new Set(); // session cache keys where user dismissed
@@ -6311,6 +6223,7 @@ function _getRecapAgentAndSession() {
 }
 
 async function _maybeFetchRecap() {
+  if (RECAP_DISABLED) return;
   if (_recapFetchInFlight) return;
   const sessionKey = _getSessionInputCacheKey();
   if (!sessionKey) return;
@@ -6444,6 +6357,7 @@ function _renderRecapHint() {
 // When user is actively on a chat surface, update the timestamp.
 // When they return to a session after being away >= threshold, trigger recap.
 function _trackRecapSessionPresence() {
+  if (RECAP_DISABLED) return;
   if (!isChatSurfaceActive()) return;
   const sessionKey = _getSessionInputCacheKey();
   if (!sessionKey) return;
@@ -6585,10 +6499,8 @@ function handlePersistentInputKey(event) {
 }
 
 async function submitQueuedInput() {
-  // 首次发送消息时请求桌面通知权限（用户手势内请求）
-  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-    Notification.requestPermission().catch(() => {});
-  }
+  // 首次发送消息时请求桌面通知权限（用户手势内请求）-> modules/desktop-notify.js
+  _requestNotifyPermission();
   const textarea = document.getElementById('input-persistent');
   if (!textarea) return;
   const text = textarea.value.trim();
