@@ -719,38 +719,18 @@ function renderWorkspaceSessionList(agent, block) {
 
     const renderPhSessionItem = (session, type) => {
       const sType = type || session.sessionType || 'main';
-      const deleteAction = escapeHtml(JSON.stringify({ type: 'delete_session', sessionId: session.id, openDirectory: currentProject.openDirectory }));
-      let buttonsHtml = '';
-      if (sType === 'main') {
+      const isExplorationOrSub = sType === 'exploration' || sType === 'sub';
+      // Primary action button + ⋯ more menu button (equivalent to right-click ctx-menu)
+      let primaryBtn = '';
+      if (isExplorationOrSub) {
+        const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: sType }));
+        primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>';
+      } else {
         const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
-        const compactAction = escapeHtml(JSON.stringify({ type: 'compact_session_menu', sessionId: session.id }));
-        buttonsHtml = [
-          '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>',
-          '<button class="workspace-action secondary compact-trigger" type="button" data-workspace-action="' + compactAction + '" onclick="window.showCompactMenu(event, this)">' + escapeHtml(t('workspace_compact_session')) + '</button>',
-          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-        ].join('');
-      } else if (sType === 'exploration') {
-        const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'exploration' }));
-        const summaryAction = escapeHtml(JSON.stringify({ type: 'open_summary', sessionId: session.id, agentId: agent.id }));
-        const summaryBtnClass = session.hasSummary ? 'workspace-action summary-exists' : 'workspace-action secondary';
-        buttonsHtml = [
-          '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>',
-          '<button class="' + summaryBtnClass + '" type="button" data-workspace-action="' + summaryAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(session.hasSummary ? t('workspace_view_summary') : t('workspace_generate_summary')) + '</button>',
-          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-        ].join('');
-      } else if (sType === 'sub') {
-        const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: 'sub' }));
-        buttonsHtml = [
-          '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>',
-          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-        ].join('');
-      } else if (sType === 'archived') {
-        const unarchiveAction = escapeHtml(JSON.stringify({ type: 'unarchive_session', sessionId: session.id }));
-        buttonsHtml = [
-          '<button class="workspace-action secondary" type="button" data-workspace-action="' + unarchiveAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(isZh ? '取消归档' : 'Unarchive') + '</button>',
-          '<button class="workspace-action secondary delete-trigger" type="button" data-workspace-action="' + deleteAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_session_delete')) + '</button>',
-        ].join('');
+        primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>';
       }
+      const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" onclick="window.phShowSessionCtxMenu(event, this, \'' + escapeHtml(agent.id) + '\', \'' + escapeHtml(session.id) + '\', \'' + escapeHtml(sType) + '\')"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
+      const buttonsHtml = [primaryBtn, moreBtn].join('');
       return [
         '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '">',
         '<div class="workspace-history-main">',

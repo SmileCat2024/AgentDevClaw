@@ -1477,6 +1477,23 @@ window.phClearSearch = () => {
   if (panel) panel.innerHTML = '';
 };
 
+/**
+ * Open the unified ctx-menu for a session list item (triggered by ⋯ button).
+ * Equivalent to right-clicking the session item — both use getCtxMenuItems('session', ...).
+ */
+window.phShowSessionCtxMenu = (event, button, agentId, sessionId, variant) => {
+  if (event) { event.stopPropagation(); }
+  const items = getCtxMenuItems('session', agentId, variant, sessionId);
+  if (items.length === 0) return;
+  const rect = button.getBoundingClientRect();
+  window.closeCtxMenu();
+  closeAgentContextMenu();
+  closeSessionContextMenu();
+  closeCompactMenu();
+  closeProjectContextMenu();
+  window.showCtxMenu(rect.right, rect.bottom, items, { role: 'session', ns: agentId, id: sessionId, variant, sessionId });
+};
+
 window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   let action = rawAction || {};
   if (typeof rawAction === 'string') {
@@ -3163,37 +3180,81 @@ window.phToggleModelSlot = async () => {
 
 function getCtxMenuItems(role, ns, variant, id) {
   if (role === 'runtime' && ns === 'programming-helper') {
+    const isZh = currentLanguage === 'zh';
+    const agent = allAgents.find((item) => item.id === ns) || null;
+    const activeSessionId = agent?.workspace_sessions?.activeSessionId;
+    const activeSession = activeSessionId ? getWorkspaceSessionById(agent, activeSessionId) : null;
+    const isArchived = activeSession?.archived === true;
     return [
-      { label: currentLanguage === 'zh' ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
-      { label: currentLanguage === 'zh' ? '总结历史（摘要）' : 'Summary', submenu: [
-        { label: currentLanguage === 'zh' ? '仅摘要' : 'Summary Only', action: 'summary' },
-        { label: currentLanguage === 'zh' ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
+      { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
+      { label: isZh ? '总结历史（摘要）' : 'Summary', submenu: [
+        { label: isZh ? '仅摘要' : 'Summary Only', action: 'summary' },
+        { label: isZh ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
       ]},
-      { label: currentLanguage === 'zh' ? '精简历史（Trim）' : 'Trim', submenu: [
-        { label: currentLanguage === 'zh' ? '仅精简' : 'Trim Only', action: 'trim' },
-        { label: currentLanguage === 'zh' ? '精简并归档原会话' : 'Trim & Archive', action: 'trim-and-archive' },
+      { label: isZh ? '精简历史（Trim）' : 'Trim', submenu: [
+        { label: isZh ? '仅精简' : 'Trim Only', action: 'trim' },
+        { label: isZh ? '精简并归档原会话' : 'Trim & Archive', action: 'trim-and-archive' },
       ]},
-      { label: currentLanguage === 'zh' ? '创建分支' : 'Branch', submenu: [
-        { label: currentLanguage === 'zh' ? '仅分支' : 'Branch Only', action: 'branch' },
-        { label: currentLanguage === 'zh' ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
+      { label: isZh ? '创建分支' : 'Branch', submenu: [
+        { label: isZh ? '仅分支' : 'Branch Only', action: 'branch' },
+        { label: isZh ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
       ]},
       { type: 'separator' },
-      { label: currentLanguage === 'zh' ? '归档会话' : 'Archive Session', action: 'archive-and-stop' },
-      { label: currentLanguage === 'zh' ? '重启 Agent' : 'Restart Agent', action: 'restart' },
-      { label: currentLanguage === 'zh' ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
+      { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive Session'), action: 'archive-and-stop' },
+      { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
+      { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
     ];
   }
   if (role === 'session' && ns === 'programming-helper') {
     const agent = allAgents.find((item) => item.id === ns) || null;
     const session = getWorkspaceSessionById(agent, id);
-    const isArchived = session?.archived === true;
+    const sType = variant || 'main';
+    const isArchived = sType === 'archived' || session?.archived === true;
     const isTodo = session?.todo === true;
+    const isExplorationOrSub = sType === 'exploration' || sType === 'sub';
+    const isZh = currentLanguage === 'zh';
+
     const items = [];
-    if (!isArchived) {
-      items.push({ label: isTodo ? (currentLanguage === 'zh' ? '取消待办' : 'Remove TODO') : (currentLanguage === 'zh' ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
+
+    // AI Generate Title
+    items.push({ label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' });
+
+    // Summary / Trim / Branch — only for main/archived sessions
+    if (!isExplorationOrSub) {
+      if (isArchived) {
+        // Archived: no need for "archive original" option, flatten to direct items
+        items.push({ label: isZh ? '总结历史（摘要）' : 'Summary', action: 'summary' });
+        items.push({ label: isZh ? '精简历史（Trim）' : 'Trim', action: 'trim' });
+        items.push({ label: isZh ? '创建分支' : 'Branch', action: 'branch' });
+      } else {
+        items.push({ label: isZh ? '总结历史（摘要）' : 'Summary', submenu: [
+          { label: isZh ? '仅摘要' : 'Summary Only', action: 'summary' },
+          { label: isZh ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
+        ]});
+        items.push({ label: isZh ? '精简历史（Trim）' : 'Trim', submenu: [
+          { label: isZh ? '仅精简' : 'Trim Only', action: 'trim' },
+          { label: isZh ? '精简并归档原会话' : 'Trim & Archive', action: 'trim-and-archive' },
+        ]});
+        items.push({ label: isZh ? '创建分支' : 'Branch', submenu: [
+          { label: isZh ? '仅分支' : 'Branch Only', action: 'branch' },
+          { label: isZh ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
+        ]});
+      }
     }
-    items.push({ label: isArchived ? (currentLanguage === 'zh' ? '取消归档' : 'Unarchive') : (currentLanguage === 'zh' ? '归档会话' : 'Archive'), action: 'archive-session' });
-    items.push({ label: currentLanguage === 'zh' ? '删除对话' : 'Delete', action: 'delete-session', danger: true });
+
+    items.push({ type: 'separator' });
+
+    // TODO toggle — non-archived only
+    if (!isArchived) {
+      items.push({ label: isTodo ? (isZh ? '取消待办' : 'Remove TODO') : (isZh ? '设为待办' : 'Set as TODO'), action: 'todo-session' });
+    }
+
+    // Archive / Unarchive
+    items.push({ label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive'), action: 'archive-session' });
+
+    // Delete
+    items.push({ label: isZh ? '删除对话' : 'Delete', action: 'delete-session', danger: true });
+
     return items;
   }
   return [];
@@ -3296,8 +3357,55 @@ async function ctxArchiveAndStopRuntime(target) {
   const { ns: agentId, id: runtimeId, sessionId, variant } = target;
   if (!agentId || !sessionId) return;
 
-  // 1. Archive the session first (optimistic + API)
+  // Check if session is already archived → toggle to unarchive (no stop)
   const agent = allAgents.find((item) => item.id === agentId) || null;
+  const currentSession = getWorkspaceSessionById(agent, sessionId);
+  const alreadyArchived = currentSession?.archived === true;
+
+  if (alreadyArchived) {
+    // Unarchive only
+    if (agent) {
+      const currentSessions = getWorkspaceSessions(agent);
+      const updatedSessions = currentSessions.map((s) =>
+        s.id === sessionId ? { ...s, archived: false } : s,
+      );
+      updateAgentRecord(agentId, {
+        workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
+      });
+    }
+    try {
+      const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, sessionId, archived: false }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text().catch(() => 'unarchive session failed'));
+      }
+      const result = await response.json();
+      if (result?.sessions) {
+        updateAgentRecord(agentId, {
+          workspace_sessions: result.sessions,
+          active_workspace_session_id: result.activeSessionId || null,
+        });
+      }
+    } catch (e) {
+      // Revert optimistic unarchive on failure
+      if (agent) {
+        const currentSessions = getWorkspaceSessions(agent);
+        const revertedSessions = currentSessions.map((s) =>
+          s.id === sessionId ? { ...s, archived: true } : s,
+        );
+        updateAgentRecord(agentId, {
+          workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
+        });
+      }
+      window.alert((currentLanguage === 'zh' ? '取消归档失败：' : 'Failed to unarchive session: ') + (e?.message || e));
+    }
+    return;
+  }
+
+  // 1. Archive the session first (optimistic + API)
   if (agent) {
     const currentSessions = getWorkspaceSessions(agent);
     const updatedSessions = currentSessions.map((s) =>
@@ -3583,6 +3691,8 @@ async function ctxTodoSession(target) {
 function dispatchCtxAction(action, target) {
   if (!action || !target) return;
   const { ns, id, sessionId, variant } = target;
+  // For session role, sessionId may not be set — fall back to id
+  const sid = sessionId || id;
 
   switch (action) {
     case 'activate':
@@ -3591,44 +3701,44 @@ function dispatchCtxAction(action, target) {
 
     case 'generate-title':
       window.closeCtxMenu();
-      if (ns && sessionId) {
-        ctxGenerateTitle(target);
+      if (ns && sid) {
+        ctxGenerateTitle({ ...target, sessionId: sid });
       }
       break;
 
     case 'summary':
-      if (ns && sessionId) {
-        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', sessionId, compactType: 'summary' }));
+      if (ns && sid) {
+        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', sessionId: sid, compactType: 'summary' }));
       }
       break;
 
     case 'summary-and-archive':
-      if (ns && sessionId) {
-        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', sessionId, compactType: 'summary', archiveOriginal: true }));
+      if (ns && sid) {
+        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', sessionId: sid, compactType: 'summary', archiveOriginal: true }));
       }
       break;
 
     case 'trim':
-      if (ns && sessionId) {
-        window.openTrimDialog(ns, sessionId);
+      if (ns && sid) {
+        window.openTrimDialog(ns, sid);
       }
       break;
 
     case 'trim-and-archive':
-      if (ns && sessionId) {
-        window.openTrimDialog(ns, sessionId, true);
+      if (ns && sid) {
+        window.openTrimDialog(ns, sid, true);
       }
       break;
 
     case 'branch':
-      if (ns && sessionId) {
-        window.openBranchDialog(ns, sessionId);
+      if (ns && sid) {
+        window.openBranchDialog(ns, sid);
       }
       break;
 
     case 'branch-and-archive':
-      if (ns && sessionId) {
-        window.openBranchDialog(ns, sessionId, true);
+      if (ns && sid) {
+        window.openBranchDialog(ns, sid, true);
       }
       break;
 
@@ -4907,7 +5017,9 @@ container.addEventListener('contextmenu', (event) => {
       closeSessionContextMenu();
       closeCompactMenu();
       closeProjectContextMenu();
-      window.showCtxMenu(event.clientX, event.clientY, items, { role, ns, id, variant });
+      const ctxTarget = { role, ns, id, variant };
+      if (role === 'session') ctxTarget.sessionId = id;
+      window.showCtxMenu(event.clientX, event.clientY, items, ctxTarget);
       return;
     }
   }

@@ -7631,10 +7631,20 @@ function showCtxMenu(x, y, items, target) {
   const maxTop = window.innerHeight - rect.height - margin;
   ctxMenu.style.left = Math.max(margin, Math.min(x, maxLeft)) + 'px';
   ctxMenu.style.top = Math.max(margin, Math.min(y, maxTop)) + 'px';
+
+  // Flip submenus to the left when there's not enough space on the right
+  const submenuWidth = 160;
+  const placedRect = ctxMenu.getBoundingClientRect();
+  if (placedRect.right + submenuWidth > window.innerWidth - margin) {
+    ctxMenu.classList.add('flip-submenu');
+  } else {
+    ctxMenu.classList.remove('flip-submenu');
+  }
 }
 
 function closeCtxMenu() {
   ctxMenu.classList.remove('open');
+  ctxMenu.classList.remove('flip-submenu');
   ctxMenu.innerHTML = '';
   _ctxTarget = null;
   window._ctxTarget = null;
