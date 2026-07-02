@@ -1612,6 +1612,16 @@ async function main() {
       console.log('[ProtoClaw Runtime] ✓ 已恢复会话: ' + sessionId);
     } catch {
       console.log('[ProtoClaw Runtime] 创建新会话: ' + sessionId);
+
+      // 对新 session 预注入 CallStart 钩子内容（CLAUDE.md、交接摘要等），
+      // 使首次加载时就能展示注入的上下文，而非空白。
+      if (typeof agent['preInjectCallStart'] === 'function') {
+        try {
+          await agent['preInjectCallStart']();
+        } catch (error) {
+          console.warn('[ProtoClaw Runtime] preInjectCallStart 失败:', error instanceof Error ? error.message : String(error));
+        }
+      }
     }
     if (!sessionLoaded && runtimeHandoff?.handoff?.featureContinuity) {
       try {
