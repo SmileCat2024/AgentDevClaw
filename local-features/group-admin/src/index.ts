@@ -224,7 +224,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_dispatch',
-        description: '向群内某个 Agent 派发任务。默认复用该 Agent 在群内的最近会话。',
+        description: '向群内某个 Agent 派发任务。默认复用该 Agent 在群内的最近会话。在规划模式下，派发请求需要群内用户审批后才会执行。',
         parameters: {
           type: 'object',
           properties: {
@@ -262,6 +262,22 @@ export class GroupAdminFeature implements AgentFeature {
               `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages`,
               body
             );
+
+            // 规划模式：派发需要人工审批
+            if (msg.pendingApproval) {
+              const resolved = msg.resolvedSession;
+              const sessionInfo = resolved
+                ? `\n预解析会话: ${resolved.sessionTitle}（${resolved.sessionId}）`
+                : '';
+              return {
+                success: true,
+                text: `派发请求已创建，等待群内用户审批。\n目标: ${identityRef}${sessionInfo}\n消息 ID: ${msg.id}\n\n用户可以在群聊中批准或拒绝此派发。批准后任务将自动执行。`,
+                pendingApproval: true,
+                messageId: msg.id,
+                identityRef,
+                ...(resolved ? { sessionId: resolved.sessionId, sessionTitle: resolved.sessionTitle } : {}),
+              };
+            }
 
             // 从响应中提取会话信息
             const resolved = msg.resolvedSession;

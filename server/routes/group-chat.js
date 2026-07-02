@@ -164,6 +164,20 @@ async function updateMessageRouting(chatId, messageId, routingUpdate) {
 }
 
 /**
+ * 更新群聊中某条消息的任意字段（浅合并）。
+ * 用于 dispatch_pending → approved/rejected 等状态变更。
+ */
+async function updateMessageFields(chatId, messageId, fieldUpdate) {
+  const chat = await readGroupChat(chatId);
+  if (!chat || !Array.isArray(chat.messages)) return null;
+  const msg = chat.messages.find((m) => m.id === messageId);
+  if (!msg) return null;
+  Object.assign(msg, fieldUpdate);
+  await writeGroupChat(chat);
+  return msg;
+}
+
+/**
  * 将时间范围字符串转为毫秒。
  */
 function parseMemoryRange(range) {
@@ -339,6 +353,22 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
       return `[${time}] [系统事件] ${evtName}${evtSession}：${m.event.type}`;
     }
 
+    // 待审批派发：让管理员知道审批状态
+    if (m.kind === 'dispatch_pending') {
+      const targetRef = m.mentions?.[0]?.identityRef || m.routing?.targetIdentityRef;
+      const targetInfo = allIdentities.find((i) => i.identityRef === targetRef);
+      const targetName = targetInfo?.displayName || targetRef;
+      const senderInfo = allIdentities.find((i) => i.identityRef === m.from);
+      const senderName = m.from === 'user' ? '用户' : (senderInfo?.displayName || m.from);
+      const approvalStatus = m.approval?.status || 'pending';
+      const statusLabel = approvalStatus === 'approved'
+        ? '[已批准]'
+        : approvalStatus === 'rejected'
+          ? '[已拒绝]'
+          : '[待审批]';
+      return `[${time}] ${senderName} [审批派发 → ${targetName}] ${statusLabel}：${m.text || ''}`;
+    }
+
     const identityInfo = allIdentities.find((i) => i.identityRef === m.from);
     const from = m.from === 'user' ? '用户' : (identityInfo?.displayName || m.from);
     const text = m.text || '';
@@ -434,8 +464,9 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
   const adminSessionTitle = isAdmin ? `${chat.name || '群聊'} · ${displayName}` : null;
   const explicitTitle = (typeof options.title === 'string' && options.title.trim()) || null;
 
-  // one-shot: 总是创建新 session
+  // one-shot: 总是创建新 session（resolveOnly 模式下不创建）
   if (sessionModel === 'one-shot') {
+    if (options.resolveOnly) return null;
     const agent = await requireAgentLight(workspaceId);
     const taskTitle = explicitTitle || adminSessionTitle;
     const session = await createPrebuiltSession(agent.id, {
@@ -460,8 +491,9 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
     throw new Error(`指定的会话 ${options.targetSessionId} 不存在，请用 gc_sessions 确认可用会话`);
   }
 
-  // 强制新会话
+  // 强制新会话（resolveOnly 模式下不创建）
   if (options.forceNew) {
+    if (options.resolveOnly) return null;
     const agent = await requireAgentLight(workspaceId);
     const taskTitle = explicitTitle || adminSessionTitle;
     const session = await createPrebuiltSession(agent.id, taskTitle ? { taskTitle } : {});
@@ -525,7 +557,8 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
     // session 不存在了（可能被删除），重建
   }
 
-  // 创建新 session 并存储映射
+  // 创建新 session 并存储映射（resolveOnly 模式下不创建）
+  if (options.resolveOnly) return null;
   const agent = await requireAgentLight(workspaceId);
   const taskTitle = explicitTitle || adminSessionTitle;
   const session = await createPrebuiltSession(agent.id, taskTitle ? { taskTitle } : {});
@@ -849,6 +882,107 @@ app.post('/protoclaw/gc/control', express.json(), async (req, res, next) => {
         log('GroupChat', `post-interrupt event failed: ${e.message}`, 'error');
       }
     })();
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * 审批通过：将 dispatch_pending 转为正式派发并执行。
+ *
+ * 流程：
+ * 1. 读取待审批消息，验证状态
+ * 2. 更新消息 kind → 'dispatch'，approval.status → 'approved'
+ * 3. 从 mentions 提取 sessionOptions
+ * 4. 调用 dispatchGroupChatMessage 执行派发
+ * 5. 规划模式下通知管理员审批结果
+ */
+app.post('/protoclaw/gc/dispatch/approve', express.json(), async (req, res, next) => {
+  try {
+    const { chatId, messageId } = req.body || {};
+    if (!chatId || !messageId) {
+      return res.status(400).json({ error: 'chatId and messageId required' });
+    }
+
+    const chat = await readGroupChat(chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    const pendingMsg = (chat.messages || []).find((m) => m.id === messageId);
+    if (!pendingMsg) return res.status(404).json({ error: 'Message not found' });
+    if (pendingMsg.kind !== 'dispatch_pending') {
+      return res.status(400).json({ error: 'Message is not a pending dispatch' });
+    }
+    if (pendingMsg.approval?.status !== 'pending') {
+      return res.status(400).json({ error: `Dispatch already ${pendingMsg.approval?.status || 'resolved'}` });
+    }
+
+    // 标记为已批准
+    pendingMsg.approval.status = 'approved';
+    pendingMsg.approval.approvedAt = Date.now();
+    pendingMsg.kind = 'dispatch';
+    await writeGroupChat(chat);
+    log('GroupChat', `dispatch ${messageId} approved by user`);
+
+    // 提取 sessionOptions
+    const firstMention = pendingMsg.mentions?.[0] || {};
+    let sessionOptions = {};
+    if (firstMention.targetSessionId) sessionOptions.targetSessionId = firstMention.targetSessionId;
+    if (firstMention.forceNew) sessionOptions.forceNew = true;
+    if (firstMention.title && typeof firstMention.title === 'string' && firstMention.title.trim()) {
+      sessionOptions.title = firstMention.title.trim();
+    }
+
+    // 执行派发（异步，不阻塞响应）
+    dispatchGroupChatMessage(chatId, pendingMsg, sessionOptions).then(async (dispatchResult) => {
+      // 规划模式下通知管理员：审批通过 + 派发结果
+      if ((chat.initiativeMode || 'assist') === 'plan') {
+        try {
+          const allIdentities = await collectIdentities();
+          const targetRef = pendingMsg.routing?.targetIdentityRef;
+          const targetInfo = allIdentities.find((i) => i.identityRef === targetRef);
+          const targetName = targetInfo?.displayName || targetRef;
+
+          let systemNote;
+          if (dispatchResult) {
+            const action = dispatchResult.isNew
+              ? `创建了新会话「${dispatchResult.sessionTitle}」`
+              : `复用已有会话「${dispatchResult.sessionTitle}」`;
+            systemNote = [
+              '─── 审批通过 · 派发已执行 ───',
+              `目标：${targetName}（${targetRef}）`,
+              `操作：${action}`,
+              `sessionId: ${dispatchResult.sessionId}`,
+              `原派发消息 ID: ${messageId}`,
+            ].join('\n');
+          } else {
+            systemNote = [
+              '─── 审批通过 · 派发可能失败 ───',
+              `目标：${targetName}（${targetRef}）`,
+              `原派发消息 ID: ${messageId}`,
+              '状态：会话启动可能失败，请关注。',
+            ].join('\n');
+          }
+
+          // 构造一个虚拟消息用于通知（不写入群聊消息列表）
+          const notifyMsg = {
+            id: `approve-${messageId}`,
+            from: 'user',
+            text: '',
+            kind: 'event',
+            timestamp: Date.now(),
+            routing: null,
+          };
+          await notifyAdminWithPrompt(chatId, notifyMsg, chat, `用户批准了 ${targetName} 的派发请求`, systemNote);
+          log('GroupChat', `admin notified of approved dispatch ${messageId}`);
+        } catch (err) {
+          log('GroupChat', `post-approve admin notify failed: ${err.message}`, 'warn');
+        }
+      }
+    }).catch((err) => {
+      console.error(`[GroupChat] approved dispatch failed for ${messageId}:`, err);
+    });
+
+    res.json({ ok: true, messageId, status: 'approved' });
   } catch (error) {
     next(error);
   }
@@ -1464,6 +1598,10 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
       message.timestamp || Date.now(), message.id, isNew,
       opts.includeCurrentMessage || false,
     );
+    // systemNote 作为 system 层辅助信息注入（如审批拒绝上下文）
+    if (opts.systemNote) {
+      contextText = contextText ? `${opts.systemNote}\n\n${contextText}` : opts.systemNote;
+    }
   } else {
     // 被派发的 agent：注入群聊 system 上下文块
     contextText = buildGroupDispatchSystemMessage(chat, message, allIdentities);
@@ -1558,7 +1696,23 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
   // @管理员 → 始终直接派发给管理员
   if (targetIsAdmin) {
     const prompt = composeDispatchPrompt(chatName, message, chatId);
-    await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
+    let opts = {};
+    // 拒绝审批派发的消息：附带 systemNote 让管理员理解拒绝上下文
+    if (message.rejectDispatchId) {
+      const pendingMsg = (chat?.messages || []).find((m) => m.id === message.rejectDispatchId);
+      if (pendingMsg) {
+        const pTargetRef = pendingMsg.mentions?.[0]?.identityRef || pendingMsg.routing?.targetIdentityRef;
+        const pTargetInfo = (await collectIdentities()).find((i) => i.identityRef === pTargetRef);
+        const pTargetName = pTargetInfo?.displayName || pTargetRef;
+        opts.systemNote = [
+          '─── 派发请求被拒绝 ───',
+          `被拒绝的派发目标：${pTargetName}（${pTargetRef}）`,
+          `被拒绝的派发内容：${(pendingMsg.text || '').slice(0, 300)}`,
+          `原派发消息 ID: ${message.rejectDispatchId}`,
+        ].join('\n');
+      }
+    }
+    await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions, opts);
     return;
   }
 
@@ -2358,7 +2512,7 @@ app.get('/protoclaw/group_chats/:chatId/messages', async (req, res, next) => {
 
 app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, res, next) => {
   try {
-    const { text, mentions, links, from, kind, attachments } = req.body || {};
+    const { text, mentions, links, from, kind, attachments, rejectDispatchId } = req.body || {};
     if (!text) return res.status(400).json({ error: 'text required' });
 
     const chat = await readGroupChat(req.params.chatId);
@@ -2397,10 +2551,82 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
       }
     }
 
+    // 规划模式：管理员派发需要人工审批
+    const isPlanModeAdminDispatch = message.routing
+      && messageFrom === 'work-group:admin'
+      && (chat.initiativeMode || 'assist') === 'plan';
+
+    let resolvedSession = null;
+
+    if (isPlanModeAdminDispatch) {
+      message.kind = 'dispatch_pending';
+      message.approval = { status: 'pending', createdAt: Date.now() };
+
+      // 预解析会话，存入 routing 供前端展示目标会话信息
+      const firstMention = message.mentions[0] || {};
+      let sessionOptions = {};
+      if (firstMention.targetSessionId) sessionOptions.targetSessionId = firstMention.targetSessionId;
+      if (firstMention.forceNew) sessionOptions.forceNew = true;
+      if (firstMention.title && typeof firstMention.title === 'string' && firstMention.title.trim()) sessionOptions.title = firstMention.title.trim();
+
+      try {
+        const targetRef = message.routing.targetIdentityRef;
+        const allIdentities = await collectIdentities();
+        const targetInfo = allIdentities.find((i) => i.identityRef === targetRef);
+        const sessionModel = targetInfo?.sessionModel || 'persistent';
+        // resolveOnly: 只查找已有会话，不创建新会话。
+        // 如果被拒绝，不会留下空会话；如果被批准，approve 端点会正常创建。
+        const pre = await resolveGroupChatSession(
+          chat.id, targetRef, sessionModel, { ...sessionOptions, resolveOnly: true }
+        );
+        if (pre) {
+          let preTitle = pre.sessionId;
+          try {
+            const wsId = targetRef.split(':')[0];
+            const idx = await readSessionIndex(wsId);
+            const rec = idx.sessions.find((s) => s.id === pre.sessionId);
+            if (rec) preTitle = rec.title || rec.taskTitle || pre.sessionId;
+          } catch {}
+          message.routing.targetSessionId = pre.sessionId;
+          message.routing.targetSessionTitle = preTitle;
+          resolvedSession = { sessionId: pre.sessionId, sessionTitle: preTitle, isNew: pre.isNew };
+        } else {
+          // 无已有会话（将创建新会话），在卡片上显示提示
+          message.routing.targetSessionId = null;
+          message.routing.targetSessionTitle = '（新会话）';
+        }
+      } catch (resolveErr) {
+        return res.status(400).json({ error: resolveErr.message || '会话解析失败' });
+      }
+    }
+
     await appendGroupChatMessage(chat.id, message);
 
+    // 拒绝审批中的派发：用户发送了拒绝消息（含 rejectDispatchId）
+    if (rejectDispatchId) {
+      // 必须重新读取 chat：appendGroupChatMessage 写入的是另一份副本，
+      // 直接用旧 chat 对象 writeGroupChat 会覆盖掉刚追加的新消息
+      const freshChat = await readGroupChat(chat.id);
+      const pendingMsg = freshChat.messages.find((m) => m.id === rejectDispatchId);
+      if (pendingMsg && pendingMsg.approval?.status === 'pending') {
+        pendingMsg.approval.status = 'rejected';
+        pendingMsg.approval.rejectedBy = 'user';
+        pendingMsg.approval.rejectedAt = Date.now();
+        pendingMsg.approval.rejectMessageId = message.id;
+        await writeGroupChat(freshChat);
+        // 在消息上记录拒绝关联，供 dispatchGroupChatMessage 构造 systemNote
+        message.rejectDispatchId = rejectDispatchId;
+        log('GroupChat', `dispatch ${rejectDispatchId} rejected by user via message ${message.id}`);
+      }
+    }
+
     // 异步派发（不阻塞响应）——任何带 routing 的消息触发
-    let resolvedSession = null;
+    if (message.kind === 'dispatch_pending') {
+      // 规划模式待审批：已在上方预解析会话，此处仅返回响应
+      res.status(201).json({ ...message, resolvedSession, pendingApproval: true });
+      return;
+    }
+
     if (message.routing) {
       // sessionOptions 从 first mention 中提取（前端放在 mention 对象内发送）
       const firstMention = message.mentions[0] || {};
@@ -2436,11 +2662,14 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
         }
       }
 
+      if (message.rejectDispatchId) {
+        log('GroupChat', `dispatching rejection message ${message.id} to admin (rejectDispatchId=${message.rejectDispatchId})`);
+      }
       dispatchGroupChatMessage(chat.id, message, sessionOptions).catch((err) => {
         console.error(`[GroupChat] dispatch failed for ${message.id}:`, err);
       });
-    } else if ((chat.initiativeMode || 'assist') === 'plan' && messageFrom !== 'work-group:admin') {
-      // 规划模式：观察所有非 admin 的非 @mention 消息
+    } else if (['plan', 'execute'].includes(chat.initiativeMode || 'assist') && messageFrom !== 'work-group:admin') {
+      // 规划/执行模式：观察所有非 admin 的非 @mention 消息
       notifyAdminForActivity(chat.id, message, chat).catch((err) => {
         log('GroupChat', `admin activity notify failed: ${err.message}`, 'warn');
       });

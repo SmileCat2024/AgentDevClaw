@@ -14,9 +14,9 @@
   // ── 模式定义（纯文字，无图标）──────────────────────────────
 
   const INITIATIVE_MODES = [
-    { value: 'assist', label: '辅助', desc: '不主动参与路由，仅响应直接提及' },
-    { value: 'plan', label: '规划', desc: '主动观察群内活动，适时提出建议' },
-    { value: 'execute', label: '执行', desc: '全权管理路由、session 和调度' },
+    { value: 'assist', label: '辅助', desc: '仅@管理员时才响应' },
+    { value: 'plan', label: '规划', desc: '自动响应，用户确认后执行' },
+    { value: 'execute', label: '执行', desc: '自动响应，自动执行' },
   ];
 
   const AUTONOMY_MODES = [
@@ -69,6 +69,12 @@
   let _settingsAdminCollapsed = true; // 管理员配置折叠区状态（默认收起）
   let _addMemberModalEl = null;  // 添加成员弹窗 DOM
   let _addMemberSearchTimer = null; // 添加成员搜索防抖计时器
+
+  // ── 拒绝派发的特殊输入状态 ─────────────────────────────────
+  // 用户点击"拒绝"后，输入框进入预填充状态，
+  // 必须发送消息才算有效拒绝；退格删除预填充内容则取消。
+  let _rejectDispatchId = null;    // 当前拒绝中的 dispatch_pending 消息 ID
+  let _rejectPrefillText = '';     // 预填充的完整文本（用于检测退格删除）
 
   // ── 语音输入状态 ─────────────────────────────────────────────
   let _voiceRecording = false;
@@ -631,6 +637,79 @@
     ].join('');
   }
 
+  function renderDispatchPendingCard(chat, msg) {
+    const time = formatTime(msg.timestamp);
+    const fromName = getMemberName(chat, msg.from);
+    const fromAv = generateAvatar(fromName, msg.from);
+    const targetRef = msg.mentions?.[0]?.identityRef || msg.routing?.targetIdentityRef;
+    const targetName = targetRef ? getIdentityName(targetRef) : '';
+    const approval = msg.approval || { status: 'pending' };
+    const routing = msg.routing || {};
+    const sessionLabel = routing.targetSessionTitle || null;
+    const navTarget = routing.targetWorkspaceId && routing.targetSessionId
+      ? `${routing.targetWorkspaceId}:${routing.targetSessionId}` : null;
+
+    // 会话信息行（pending 和 approved 都显示）
+    function sessionInfoHtml() {
+      if (!sessionLabel && !navTarget) return '';
+      const tag = sessionLabel ? `<span class="wg-card-session-tag">${esc(sessionLabel)}</span>` : '';
+      const link = navTarget ? `<span class="wg-card-link" data-wg-session-nav="${esc(navTarget)}">查看会话</span>` : '';
+      return `${tag}${link}`;
+    }
+
+    // 审批状态对应的展示
+    let statusHtml = '';
+    let cardClass = 'dispatch-pending';
+    let headerTag = '<span class="wg-card-pending-tag">待审批</span>';
+
+    if (approval.status === 'pending') {
+      cardClass = 'dispatch-pending';
+      statusHtml = [
+        '      <div class="wg-card-actions">',
+        `        <button class="wg-approve-btn" data-wg-action="approve-dispatch" data-wg-dispatch-id="${esc(msg.id)}">批准</button>`,
+        `        <button class="wg-reject-btn" data-wg-action="reject-dispatch" data-wg-dispatch-id="${esc(msg.id)}" data-wg-dispatch-text="${esc((msg.text || '').slice(0, 100))}" data-wg-dispatch-target="${esc(targetName)}">拒绝</button>`,
+        sessionInfoHtml(),
+        '      </div>',
+      ].join('');
+    } else if (approval.status === 'approved') {
+      cardClass = 'dispatch-resolved approved';
+      headerTag = '';
+      statusHtml = [
+        '      <div class="wg-card-footer">',
+        '        <span class="wg-card-status approved"><span class="wg-card-dot"></span>已批准</span>',
+        sessionInfoHtml(),
+        '      </div>',
+      ].join('');
+    } else if (approval.status === 'rejected') {
+      cardClass = 'dispatch-resolved rejected';
+      headerTag = '';
+      statusHtml = [
+        '      <div class="wg-card-footer">',
+        '        <span class="wg-card-status rejected"><span class="wg-card-dot"></span>已拒绝</span>',
+        '      </div>',
+      ].join('');
+    }
+
+    return [
+      `<div class="wg-msg-row" data-wg-msg-id="${esc(msg.id || '')}">`,
+      `  <div class="wg-msg-avatar" style="--av-grad:${fromAv.color}">${esc(fromAv.initials)}</div>`,
+      '  <div class="wg-msg-body">',
+      `    <div class="wg-msg-meta"><span class="wg-msg-identity">${esc(fromName)}</span> <span class="wg-msg-time">${esc(time)}</span></div>`,
+      `    <div class="wg-card ${cardClass}">`,
+      '      <div class="wg-card-header">',
+      `        <span class="wg-card-mention-from">${esc(fromName)}</span>`,
+      '        <span class="wg-card-mention-at">@</span>',
+      `        <span class="wg-card-mention-to">${esc(targetName)}</span>`,
+      headerTag,
+      '      </div>',
+      `      <div class="wg-card-body markdown-body">${renderMarkdown((msg.text || '').slice(0, 300))}</div>`,
+      statusHtml,
+      '    </div>',
+      '  </div>',
+      '</div>',
+    ].join('');
+  }
+
   // ── 右侧：消息流 ────────────────────────────────────────────
 
   function renderMessageBubble(chat, msg) {
@@ -641,6 +720,10 @@
     // 派发卡片 — 管理员派遣任务
     if (msg.kind === 'dispatch') {
       return renderDispatchCard(chat, msg);
+    }
+    // 待审批派发卡片 — 规划模式下需要人工审批
+    if (msg.kind === 'dispatch_pending') {
+      return renderDispatchPendingCard(chat, msg);
     }
 
     const isMe = msg.from === 'user';
@@ -1623,6 +1706,9 @@
     hideMemberPopover(true);
     closeImportModal();
     closeAddMemberModal();
+    // 清除拒绝派发状态
+    _rejectDispatchId = null;
+    _rejectPrefillText = '';
     _shouldScrollToBottom = true;
     refreshChatList();
 
@@ -2079,7 +2165,12 @@
         mentions,
         links: links.length > 0 ? links : undefined,
         attachments: attachments.length > 0 ? attachments : undefined,
+        rejectDispatchId: _rejectDispatchId || undefined,
       });
+      // 清除拒绝派发状态
+      _rejectDispatchId = null;
+      _rejectPrefillText = '';
+      updateRejectInputVisual();
       await loadActiveChat();
       refreshHeaderAndMessages();
       scrollToBottom();
@@ -2088,6 +2179,65 @@
     } catch (err) {
       console.error('[WorkGroup] send failed:', err);
       editor.textContent = text;
+    }
+  }
+
+  // ── 派发审批：批准 ──────────────────────────────────────────
+
+  async function handleApproveDispatch(dispatchId) {
+    if (!activeChatId || !dispatchId) return;
+    try {
+      await apiPost('/protoclaw/gc/dispatch/approve', {
+        chatId: activeChatId,
+        messageId: dispatchId,
+      });
+      await loadActiveChat();
+      refreshHeaderAndMessages();
+    } catch (err) {
+      console.error('[WorkGroup] approve dispatch failed:', err);
+    }
+  }
+
+  // ── 派发审批：拒绝（进入特殊输入状态）──────────────────────────
+
+  function enterRejectDispatchState(dispatchId) {
+    if (!dispatchId) return;
+    _rejectDispatchId = dispatchId;
+    // 获取管理员显示名（确保 @mention 解析正确）
+    const adminId = identities.find((i) => i.identityRef === 'work-group:admin');
+    const adminName = adminId?.displayName || '管理员';
+    // 锚点：仅 @管理员 本身，用于 startsWith 判断
+    _rejectPrefillText = `@${adminName}`;
+
+    const editor = document.querySelector('.wg-input-editor');
+    if (editor) {
+      editor.focus();
+      // 用 \u00A0（不间断空格）确保尾部空格可见且不被 contenteditable 吞掉
+      editor.textContent = `@${adminName}\u00A0`;
+      // 将光标移到末尾
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    updateRejectInputVisual();
+  }
+
+  function exitRejectDispatchState() {
+    _rejectDispatchId = null;
+    _rejectPrefillText = '';
+    updateRejectInputVisual();
+  }
+
+  function updateRejectInputVisual() {
+    const container = document.querySelector('.wg-input-area');
+    if (!container) return;
+    if (_rejectDispatchId) {
+      container.classList.add('reject-mode');
+    } else {
+      container.classList.remove('reject-mode');
     }
   }
 
@@ -3293,6 +3443,11 @@
       }
       if (act === 'cancel-new-chat') return;
       if (act === 'pick-workdir') return; // handled by modal-specific listener
+      if (act === 'approve-dispatch') { handleApproveDispatch(action.dataset.wgDispatchId); return; }
+      if (act === 'reject-dispatch') {
+        enterRejectDispatchState(action.dataset.wgDispatchId);
+        return;
+      }
       if (act === 'toggle-archived') {
         _archivedCollapsed = !_archivedCollapsed;
         refreshChatList();
@@ -3408,6 +3563,17 @@
     const editor = e.target.closest('.wg-input-editor');
     if (editor && activeChatId) {
       const text = editor.textContent || '';
+
+      // 拒绝派发模式：不渲染 session bar、不弹 @ picker
+      if (_rejectDispatchId) {
+        if (!text.startsWith(_rejectPrefillText)) {
+          exitRejectDispatchState();
+          // 退出后继续正常流程
+        } else {
+          return; // 仍在拒绝模式，跳过所有编辑器交互逻辑
+        }
+      }
+
       const picker = document.querySelector('[data-wg-role="mention-picker"]');
       if (picker) {
         const trimmed = text.trim();

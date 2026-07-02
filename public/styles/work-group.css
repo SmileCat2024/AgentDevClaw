@@ -1444,6 +1444,85 @@
   flex-shrink: 0;
 }
 
+/* ── 待审批派发卡片 ── */
+.wg-card.dispatch-pending {
+  border: 1px solid #e8a740;
+  border-color: #e8a740;
+}
+
+.wg-card.dispatch-resolved {
+  border-color: var(--border-color);
+  opacity: 0.75;
+}
+.wg-card.dispatch-resolved.approved { border-left: 3px solid #22c55e; }
+.wg-card.dispatch-resolved.rejected { border-left: 3px solid #ef4444; }
+
+.wg-card-pending-tag {
+  margin-left: auto;
+  font-size: 11px;
+  color: #b8821e;
+  background: #fff4e0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.wg-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-color);
+  background: var(--hover-bg);
+}
+
+.wg-approve-btn {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 16px;
+  border-radius: 6px;
+  border: none;
+  background: #3b82f6;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.wg-approve-btn:hover { background: #2563eb; }
+
+.wg-reject-btn {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.wg-reject-btn:hover {
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.wg-card-status.approved { color: #22c55e; }
+.wg-card-status.approved .wg-card-dot { background: #22c55e; }
+.wg-card-status.rejected { color: #ef4444; }
+.wg-card-status.rejected .wg-card-dot { background: #ef4444; }
+
+/* ── 拒绝模式输入区 ── */
+.wg-input-area.reject-mode {
+  border-top: 2px solid #ef4444;
+}
+.wg-input-area.reject-mode::before {
+  content: '即将发送【拒绝执行】指令，可补充说明原因';
+  display: block;
+  font-size: 12px;
+  color: #f87171;
+  padding: 2px 0 6px;
+  font-weight: 500;
+}
+
 /* ═══════════════════════════════════════════════
    输入区
    ═══════════════════════════════════════════════ */
