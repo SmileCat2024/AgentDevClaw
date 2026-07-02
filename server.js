@@ -226,7 +226,7 @@ Object.assign(sessionApi, {
 agentDiscovery.setupRoutes(app);
 
 // ── Group Chat API → server/routes/group-chat.js ──
-setupGroupChatRoutes(app, express, {
+const { cleanupOrphanedRouting } = setupGroupChatRoutes(app, express, {
   collectIdentities,
   createPrebuiltSession,
   startManagedAgent,
@@ -235,6 +235,7 @@ setupGroupChatRoutes(app, express, {
   requireAgentLight,
   readViewerJson,
   discoverAgents,
+  onAgentExit: agentLifecycle.onAgentExit,
 });
 
 // ── System Feature Config API → server/routes/system-feature-config.js ──
@@ -758,6 +759,13 @@ async function main() {
     } catch (err) {
       console.warn(`[sessions] startup cleanup failed for ${agentId}:`, err.message);
     }
+  }
+
+  // 群聊孤儿 routing 状态修复：Claw 重启后清理 processing 状态的死亡消息
+  try {
+    await cleanupOrphanedRouting();
+  } catch (err) {
+    console.warn('[group-chat] startup cleanup failed:', err.message);
   }
 
   app.listen(APP_PORT, () => {

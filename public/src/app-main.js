@@ -944,6 +944,106 @@ async function loadAgents() {
   }
 }
 
+// ── Desktop notification (Notification API) ─────────────────────────────────
+const _notifiedFinishIds = new Set();  // 防止同一 agent 短时间内重复通知
+
+function _truncateForNotification(text, maxLen = 120) {
+  if (!text) return '';
+  // 去除 markdown 语法标记，只保留纯文本预览
+  let plain = text
+    .replace(/```[\s\S]*?```/g, '[code]')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[.*?\]\(.*?\)/g, '[image]')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[#>*_~|-]/g, '')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+  if (plain.length > maxLen) {
+    plain = plain.slice(0, maxLen) + '...';
+  }
+  return plain;
+}
+
+async function _tryNotifyAgentFinished(runtimeId) {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'granted') return;
+  if (!document.hidden && document.hasFocus()) return;
+
+  const normId = normalizeAgentIdentity(runtimeId);
+  if (_notifiedFinishIds.has(normId)) return;
+  _notifiedFinishIds.add(normId);
+  setTimeout(() => _notifiedFinishIds.delete(normId), 5000);
+
+  const agent = (Array.isArray(allAgents) ? allAgents : []).find(
+    (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
+  );
+  const agentName = (agent?.name || agent?.id || normId).trim();
+  const sessionTitle = (agent?.active_workspace_session_title || '').trim();
+  const isZh = currentLanguage === 'zh';
+
+  // 尝试获取最后一条 assistant 回复
+  let replyPreview = '';
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(normId)}/messages`);
+    if (res.ok) {
+      const data = await res.json();
+      const messages = data.messages || [];
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'assistant' && messages[i].content) {
+          replyPreview = _truncateForNotification(messages[i].content);
+          break;
+        }
+      }
+    }
+  } catch (e) { /* ignore — 通知照常发出，只是没有预览 */ }
+
+  // 构建通知正文
+  const bodyParts = [];
+  if (sessionTitle) bodyParts.push(sessionTitle);
+  if (replyPreview) bodyParts.push(replyPreview);
+  const body = bodyParts.length > 0
+    ? bodyParts.join('\n')
+    : (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.');
+
+  try {
+    const n = new Notification(
+      isZh ? `${agentName} 已完成` : `${agentName} finished`,
+      { body, tag: 'claw-agent-finished-' + normId }
+    );
+    n.onclick = () => {
+      window.focus();
+      n.close();
+      if (agent?.source === 'prebuilt') {
+        window.handlePrebuiltAgentClick(agent.id);
+      } else if (agent) {
+        window.switchAgent(agent.id);
+      }
+    };
+  } catch (e) { /* ignore */ }
+}
+
+// ── Background heartbeat via Web Worker (bypass browser timer throttling) ────
+// 浏览器会将后台 tab 的 setTimeout 节流至 1s 甚至 1min，导致轮询检测不到
+// agent 完成。Web Worker 的 setInterval 不受此限制。
+const _bgHeartbeatWorker = (function () {
+  try {
+    const code = `setInterval(()=>postMessage('tick'),1000);`;
+    const blob = new Blob([code], { type: 'application/javascript' });
+    const worker = new Worker(URL.createObjectURL(blob));
+    worker.onmessage = () => {
+      // 页面可见且有焦点时，常规 poll (300ms) 已经在跑，不需要 worker 介入
+      if (!document.hidden && document.hasFocus()) return;
+      // 通知权限未授予时也不需要心跳
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+      refreshAgentCallStates(allAgents, { force: true });
+    };
+    return worker;
+  } catch (e) {
+    console.warn('[Notify] Web Worker heartbeat unavailable:', e);
+    return null;
+  }
+})();
+
 async function refreshAgentCallStates(agents = allAgents, options = {}) {
   const { force = false } = options;
   const now = Date.now();
@@ -1004,6 +1104,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
         _recentlyFinishedRuntimes.add(runtimeId);
       }
+      _tryNotifyAgentFinished(runtimeId);
     }
   }
 
@@ -5689,6 +5790,7 @@ function updateNotificationStatus(notifData) {
       } else {
         _agentCallActive.delete(runtimeId);
         clearInterruptSuppression(runtimeId);
+        if (prev === true) _tryNotifyAgentFinished(runtimeId);
       }
       callingStateChanged = (prev === true) !== nextCalling;
       if (callingStateChanged) {
@@ -5724,6 +5826,7 @@ function updateNotificationStatus(notifData) {
         _agentCallActive.delete(currentRuntimeAgentId);
         callingStateChanged = true;
         renderAgentList();
+        _tryNotifyAgentFinished(currentRuntimeAgentId);
       }
       clearInterruptSuppression(currentRuntimeAgentId);
     }
@@ -5778,6 +5881,7 @@ function updateNotificationStatus(notifData) {
       _agentCallActive.delete(currentRuntimeAgentId);
       clearInterruptSuppression(currentRuntimeAgentId);
       renderAgentList();
+      _tryNotifyAgentFinished(currentRuntimeAgentId);
     }
     _syncPersistentActionButton();
     _syncPersistentInputUi();
@@ -6481,6 +6585,10 @@ function handlePersistentInputKey(event) {
 }
 
 async function submitQueuedInput() {
+  // 首次发送消息时请求桌面通知权限（用户手势内请求）
+  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
   const textarea = document.getElementById('input-persistent');
   if (!textarea) return;
   const text = textarea.value.trim();

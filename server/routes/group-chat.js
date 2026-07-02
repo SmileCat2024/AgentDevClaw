@@ -18,6 +18,7 @@ export function setupGroupChatRoutes(app, express, ctx) {
     stopManagedAgent,
     discoverAgents,
     readViewerJson,
+    onAgentExit,
   } = ctx;
 
 // ── Group Chat Data Layer ──────────────────────────────────────────
@@ -804,6 +805,50 @@ app.post('/protoclaw/gc/control', express.json(), async (req, res, next) => {
 
     log('GroupChat', `control action=${action} for ${identityRef} in chat ${chatId}`);
     res.json({ ok: true, action, viewerAgentId });
+
+    // 异步写入中断事件到群聊（不阻塞响应）
+    (async () => {
+      try {
+        const allIdentities = await collectIdentities();
+        const identityInfo = allIdentities.find((i) => i.identityRef === identityRef);
+        const identityName = identityInfo?.displayName || workspaceId;
+
+        // 读取 session 标题
+        const sessionIndex = await readSessionIndex(workspaceId).catch(() => null);
+        const sessionRecord = sessionIndex?.sessions?.find((s) => s.id === resolvedSessionId);
+        const sessionTitle = sessionRecord?.title || null;
+
+        const eventMessage = {
+          id: `evt-interrupt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          chatId,
+          from: identityRef,
+          text: '',
+          kind: 'event',
+          event: {
+            type: 'session_interrupted',
+            identityRef,
+            identityName,
+            sessionId: resolvedSessionId,
+            sessionTitle,
+            workspaceId,
+          },
+          mentions: [],
+          links: [],
+          timestamp: Date.now(),
+          routing: null,
+        };
+
+        const chat = await appendGroupChatMessage(chatId, eventMessage);
+        log('GroupChat', `event card appended: session_interrupted for ${identityRef} in ${chatId}`);
+
+        // plan 模式下通知管理员
+        if (chat && (chat.initiativeMode || 'assist') === 'plan') {
+          await notifyAdminForActivity(chatId, eventMessage, chat);
+        }
+      } catch (e) {
+        log('GroupChat', `post-interrupt event failed: ${e.message}`, 'error');
+      }
+    })();
   } catch (error) {
     next(error);
   }
@@ -1720,7 +1765,21 @@ async function notifyAdminForActivity(chatId, message, chat) {
   const sessionLabel = formatSessionLabel(message.routing?.targetSessionTitle, message.routing?.targetSessionId);
   if (message.kind === 'event') {
     const evtSession = formatSessionLabel(message.event?.sessionTitle, message.event?.sessionId);
-    activityDesc = `系统事件：${message.event?.identityName || ''}${evtSession} 已开始处理`;
+    const evtName = message.event?.identityName || '';
+    switch (message.event?.type) {
+      case 'task_started':
+        activityDesc = `系统事件：${evtName}${evtSession} 已开始处理`;
+        break;
+      case 'session_interrupted':
+        activityDesc = `系统事件：${evtName}${evtSession} 会话已被管理员中断`;
+        break;
+      case 'agent_offline':
+        activityDesc = `系统事件：${evtName}${evtSession} 进程已退出`;
+        break;
+      default:
+        activityDesc = `系统事件：${evtName}${evtSession}`;
+        break;
+    }
   } else if (message.from === 'user') {
     activityDesc = `用户发送了消息`;
   } else {
@@ -2833,4 +2892,122 @@ app.delete('/protoclaw/group_chats/:chatId/annotations/:messageId', async (req, 
 
 // ── End Group Chat API ─────────────────────────────────────────────
 
+  // ── Startup Cleanup: 孤儿 routing 状态修复 ────────────────────────
+  // Claw 重启后，所有 agent 子进程被杀，但群聊 JSON 中的 routing 仍可能为 'processing'。
+  // 此函数扫描所有群聊，将 processing 状态但 agent 已不在线的消息标记为 failed。
+  async function cleanupOrphanedRouting() {
+    const summaries = await listGroupChats();
+    let totalFixed = 0;
+
+    for (const summary of summaries) {
+      const chat = await readGroupChat(summary.id);
+      if (!chat || !Array.isArray(chat.messages)) continue;
+
+      let modified = false;
+      for (const msg of chat.messages) {
+        const r = msg.routing;
+        if (!r || r.status !== 'processing') continue;
+
+        const workspaceId = r.targetWorkspaceId;
+        const sessionId = r.targetSessionId;
+        const runtime = getAgentRuntime(workspaceId, sessionId);
+        const alive = runtime?.process && runtime.process.exitCode === null && !runtime.stopped;
+
+        if (!alive) {
+          msg.routing.status = 'failed';
+          msg.routing.failureReason = 'agent_unavailable_on_restart';
+          modified = true;
+          totalFixed++;
+          log('GroupChat', `orphaned routing fixed: ${msg.id} in ${chat.id} (target: ${workspaceId}/${sessionId})`);
+        }
+      }
+
+      if (modified) {
+        await writeGroupChat(chat);
+      }
+    }
+
+    if (totalFixed > 0) {
+      log('GroupChat', `cleanupOrphanedRouting: fixed ${totalFixed} orphaned routing(s) across ${summaries.length} chat(s)`);
+    }
+  }
+
+  // ── Agent Exit Callback ───────────────────────────────────────────
+  // 当 agent 进程死亡时，检查群聊中是否有该 agent 处于 processing 状态的消息，
+  // 写入离线事件 + 通知管理员，闭环群聊状态。
+  if (onAgentExit) {
+    onAgentExit(async (agentId, sessionId, exitCode, _runtimeKey) => {
+      try {
+        const allIdentities = await collectIdentities();
+        const summaries = await listGroupChats();
+
+        for (const summary of summaries) {
+          const chat = await readGroupChat(summary.id);
+          if (!chat || !Array.isArray(chat.messages)) continue;
+
+          // 查找该 agent 在本群聊中处于 processing 状态的消息
+          const pending = chat.messages.filter((m) => {
+            const r = m.routing;
+            if (!r || r.status !== 'processing') return false;
+            if (r.targetWorkspaceId !== agentId) return false;
+            if (sessionId && r.targetSessionId && r.targetSessionId !== sessionId) return false;
+            return true;
+          });
+
+          if (pending.length === 0) continue;
+
+          log('GroupChat', `agent ${agentId} (session ${sessionId}) exited with code ${exitCode}, ` +
+            `closing ${pending.length} pending routing(s) in chat ${chat.id}`);
+
+          // 找到受影响的 identity 信息
+          const affectedRef = pending[0].routing?.targetIdentityRef;
+          const identityInfo = allIdentities.find((i) => i.identityRef === affectedRef);
+          const identityName = identityInfo?.displayName || agentId;
+          const affectedSessionTitle = pending[0].routing?.targetSessionTitle || null;
+
+          // 更新所有 pending 消息的 routing 状态
+          for (const msg of pending) {
+            msg.routing.status = 'failed';
+            msg.routing.failureReason = 'agent_process_exit';
+            msg.routing.exitCode = exitCode;
+          }
+          await writeGroupChat(chat);
+
+          // 写入离线事件消息
+          const eventMessage = {
+            id: `evt-offline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            chatId: chat.id,
+            from: affectedRef,
+            text: '',
+            kind: 'event',
+            event: {
+              type: 'agent_offline',
+              identityRef: affectedRef,
+              identityName,
+              sessionId,
+              sessionTitle: affectedSessionTitle,
+              workspaceId: agentId,
+              exitCode,
+            },
+            mentions: [],
+            links: [],
+            timestamp: Date.now(),
+            routing: null,
+          };
+
+          const updatedChat = await appendGroupChatMessage(chat.id, eventMessage);
+          log('GroupChat', `event card appended: agent_offline for ${affectedRef} in ${chat.id}`);
+
+          // plan 模式下通知管理员
+          if (updatedChat && (updatedChat.initiativeMode || 'assist') === 'plan') {
+            await notifyAdminForActivity(chat.id, eventMessage, updatedChat);
+          }
+        }
+      } catch (e) {
+        console.error('[group-chat] onAgentExit callback error:', e);
+      }
+    });
+  }
+
+  return { cleanupOrphanedRouting };
 }

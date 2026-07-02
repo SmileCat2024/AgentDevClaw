@@ -38,6 +38,8 @@ export function createAgentLifecycleModule(ctx) {
     readViewerJson, getPendingInputCount, resolveAgentModelPresets,
   } = ctx;
 
+  const _exitCallbacks = [];
+
   async function getConnectedAgents() {
     const prebuiltAgents = await getAgentsLight();
     const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [], currentAgentId: null }));
@@ -397,6 +399,15 @@ export function createAgentLifecycleModule(ctx) {
         current.stopped = true;
       }
       log(agent.id, `process exited with code ${code ?? 'null'}`);
+
+      // 通知外部回调（如群聊模块需要在 agent 死亡时闭环）
+      for (const cb of _exitCallbacks) {
+        try {
+          cb(agent.id, resolvedSessionId || null, code, runtime.key);
+        } catch (e) {
+          console.error('[agent-lifecycle] exit callback error:', e);
+        }
+      }
     });
 
     child.on('error', (error) => {
@@ -789,5 +800,6 @@ export function createAgentLifecycleModule(ctx) {
     startManagedAgent, startOneShotAgent, startAssemblyRuntime,
     stopManagedAgent,
     setupRoutes,
+    onAgentExit: (cb) => { _exitCallbacks.push(cb); },
   };
 }
