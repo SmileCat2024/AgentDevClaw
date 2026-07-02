@@ -1,6 +1,6 @@
 {
   "name": "agentdevclaw",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "A visual, extensible AI agent workspace powered by AgentDev.",
@@ -33,7 +33,7 @@
     "@agentdev/feishu-bot": "file:resources/features/agentdev-feishu-bot-0.1.0.tgz",
     "@agentdev/wecom-bot": "file:resources/features/agentdev-wecom-bot-0.1.0.tgz",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "agentdev": "^0.2.2",
+    "agentdev": "^0.2.3",
     "express": "^4.21.2",
     "marked": "^18.0.4",
     "multer": "^2.1.1",
