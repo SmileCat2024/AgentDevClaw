@@ -711,7 +711,7 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
     const resultPath = path.join(resultDir, 'result.json');
     await fs.mkdir(resultDir, { recursive: true });
 
-    const child = spawn(process.execPath, [titleMirrorScript, agentRelativeDir, ownerAgentId, sessionId, JSON.stringify({ maxAttempts: 1 }), resultPath], {
+    const child = spawn(process.execPath, [titleMirrorScript, agentRelativeDir, ownerAgentId, sessionId, JSON.stringify({ maxAttempts: 3 }), resultPath], {
       cwd: __dirname,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,

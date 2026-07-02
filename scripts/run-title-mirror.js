@@ -55,6 +55,36 @@ const TITLE_TOOL = {
   },
 };
 
+const LLM_RETRY_BASE_MS = 1000;
+const LLM_MAX_RETRIES = 3;
+
+function _isTransientLLMError(error) {
+  const msg = String(error?.message || error || '').toLowerCase();
+  if (/\b(429|rate.?limit|too many requests)\b/.test(msg)) return true;
+  if (/\b(500|502|503|504|internal server error|bad gateway|service unavailable|gateway timeout)\b/.test(msg)) return true;
+  if (/\b(econnreset|etimedout|enotfound|eai_again|socket hang up|fetch failed|aborted)\b/.test(msg)) return true;
+  return false;
+}
+
+async function chatWithRetry(llm, messages, tools, phaseLogger) {
+  let lastError = null;
+  for (let retry = 0; retry <= LLM_MAX_RETRIES; retry += 1) {
+    try {
+      return await llm.chat(messages, tools);
+    } catch (error) {
+      lastError = error;
+      if (retry < LLM_MAX_RETRIES && _isTransientLLMError(error)) {
+        const delayMs = LLM_RETRY_BASE_MS * Math.pow(2, retry); // 1s → 2s → 4s
+        phaseLogger(`llm chat failed (retry ${retry + 1}/${LLM_MAX_RETRIES}): ${error?.message || error} — backing off ${delayMs}ms`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      } else {
+        throw error;
+      }
+    }
+  }
+  throw lastError;
+}
+
 function buildTitleMessages(rawMessages) {
   const conversationalMessages = rawMessages.filter((message) => (
     (message?.role === 'user' || message?.role === 'assistant')
@@ -124,7 +154,7 @@ async function runTitleGeneration({ agentDir, agentId, sessionId }) {
 
     logPhase(`chat begin role=${modelRole} messages=${compactMessages.length} tools=${compiledTools.length}`);
   try {
-    const response = await resolvedModel.llm.chat(compactMessages, compiledTools);
+    const response = await chatWithRetry(resolvedModel.llm, compactMessages, compiledTools, logPhase);
     logPhase('chat done');
     await reportUsageEvent(SERVER_ORIGIN, {
       eventId: ['title-mirror', agentId, sessionId, Date.now()].join(':'),
@@ -173,12 +203,12 @@ async function main() {
   }
 
   const maxAttempts = (() => {
-    if (!rawOptions) return 1;
+    if (!rawOptions) return 3;
     try {
       const parsed = JSON.parse(String(rawOptions));
       const n = Number(parsed?.maxAttempts);
-      return Number.isFinite(n) && n > 0 ? Math.min(n, 1) : 1;
-    } catch { return 1; }
+      return Number.isFinite(n) && n > 0 ? Math.min(n, 5) : 3;
+    } catch { return 3; }
   })();
 
   const agentPath = resolve(PROTOCLAW_ROOT, agentDir);
@@ -209,6 +239,11 @@ async function main() {
     } catch (error) {
       lastFailure = error;
       logPhase(`attempt ${attempt}/${maxAttempts} failed: ${error?.message || error}`);
+      if (attempt < maxAttempts) {
+        const delayMs = 2000 * Math.pow(2, attempt - 1); // 2s → 4s → 8s
+        logPhase(`backoff ${delayMs}ms before retry`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
     }
   }
 
