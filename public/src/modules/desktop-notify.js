@@ -38,12 +38,17 @@ function _truncateForNotification(text, maxLen = 120) {
 async function _tryNotifyAgentFinished(runtimeId) {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
-  if (!document.hidden && document.hasFocus()) return;
 
   const normId = normalizeAgentIdentity(runtimeId);
+
+  // 关键：dedup 标记必须在可见性检查之前。
+  // 即使前台时跳过了通知，也要标记"已完成"，防止用户切走后重复触发。
   if (_notifiedFinishIds.has(normId)) return;
   _notifiedFinishIds.add(normId);
   setTimeout(() => _notifiedFinishIds.delete(normId), 60000);
+
+  // 前台时不需要通知——用户已经看到了
+  if (!document.hidden && document.hasFocus()) return;
 
   const agent = (Array.isArray(allAgents) ? allAgents : []).find(
     (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
