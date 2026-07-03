@@ -42,7 +42,8 @@
     "zod": "^4.4.3"
   },
   "bin": {
-    "claw": "./bin/claw.mjs"
+    "claw": "./bin/claw.mjs",
+    "advclaw": "./bin/advclaw.mjs"
   },
   "engines": {
     "node": ">=20"
