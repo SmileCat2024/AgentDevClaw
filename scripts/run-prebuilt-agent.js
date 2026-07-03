@@ -1570,6 +1570,14 @@ async function main() {
       const ctx = typeof agent.getSystemContext === 'function' ? agent.getSystemContext() : agent._systemContext;
       if (ctx) ctx.SYSTEM_CURRENT_MODEL = resolved.modelName;
     } catch {}
+  } else {
+    // No preset in metadata.json — BasicAgent resolved its own LLM internally.
+    // Capture model info from the running LLM so usage events record the real model name.
+    const fallbackModelName = agent?.llm?.modelName;
+    if (fallbackModelName) {
+      resolvedUsageModel = { modelName: fallbackModelName };
+      console.log(`[ProtoClaw Runtime] No model preset found, using agent LLM model => ${fallbackModelName}`);
+    }
   }
 
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
