@@ -5076,6 +5076,19 @@ container.addEventListener('scroll', () => {
     }
   }
 });
+// Sticky bar: detect pin/unpin and toggle .is-pinned for expand animation
+let _stickyPadTop = null;
+container.addEventListener('scroll', () => {
+  const bar = container.querySelector('.ph-project-bar');
+  if (!bar) return;
+  if (_stickyPadTop === null) {
+    _stickyPadTop = parseFloat(getComputedStyle(container).paddingTop) || 0;
+  }
+  const isPinned = bar.getBoundingClientRect().top <= container.getBoundingClientRect().top + _stickyPadTop + 1;
+  if (isPinned !== bar.classList.contains('is-pinned')) {
+    bar.classList.toggle('is-pinned', isPinned);
+  }
+}, { passive: true });
 followLatestButton.addEventListener('click', () => {
   setFollowLatest(true, { scroll: true, behavior: 'smooth' });
 });
