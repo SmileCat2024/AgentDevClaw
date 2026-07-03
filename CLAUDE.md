@@ -518,7 +518,7 @@ IM 门户代理，支持 QQ/微信/企业微信/飞书的多渠道消息接入�
   - workspace surface 渲染、block 渲染
   - IM 渠道配置面板、群聊管理 UI、模型预设管理 UI
   - `renderCurrentMainView()`、`renderWorkspaceSurface()` 等核心入口
-  - 注意：此文件已膨胀至 ~9700 行，后续需要模块化拆分
+  - 注意：此文件已从 ~9700 行拆分至 ~3980 行（已完成 Phase 1 ~ 2f-2），后续继续模块化拆分
 - [public/src/app-main.js](/D:/code/AgentDevClaw/public/src/app-main.js)
   - agent 加载、轮询、session / runtime 切换
   - `switchAgent()`、`loadAgentData()`、`poll()` 核心循环
@@ -667,7 +667,7 @@ npm run agentdev:published
 这些边界不是遗漏，而是当前阶段的真实状态：
 
 - 工作群（Beta）基础闭环已初步可用，深度功能仍在开发中
-- `app-ui.js`（~9700 行）和 `app-main.js`（~6600 行）极度膨胀，是当前技术债最大的风险点
+- `app-ui.js`（~3980 行，已从 ~9700 行拆分）和 `app-main.js`（~6600 行）极度膨胀，是当前技术债最大的风险点
   - 完整拆分计划：[docs/plans/2026-06-04-frontend-split-plan.md](/D:/code/AgentDevClaw/docs/plans/2026-06-04-frontend-split-plan.md)
   - 包含：功能域划分（11域）、耦合地图、分 3 Phase 拆分顺序、风险缓解策略
 - 项目中保留了若干悬置工作空间（flow-workspace、feature-creator、agent-creator、dispatch-console）的代码，这些代码仍可运行但不再积极迭代

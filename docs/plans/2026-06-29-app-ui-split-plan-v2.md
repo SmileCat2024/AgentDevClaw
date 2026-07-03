@@ -1,7 +1,7 @@
 # app-ui.js 拆分计划 v2（2026-06-29 创建，2026-07-03 更新）
 
 > 基于 v1（2026-06-04）的全面复核与更新
-> 当前文件：`public/src/app-ui.js` — **5,925 行**（Phase 1 + 2a + 2b + 2c + 2d 已完成）
+> 当前文件：`public/src/app-ui.js` — **3,977 行**（Phase 1 + 2a + 2b + 2c + 2d + 2e-1 + 2f-1 + 2f-2 已完成）
 > v2 创建时行数：9,871 行 / v1 时的行数：9,498 行
 
 ---
@@ -30,14 +30,17 @@
 | `markdown-utils.js` | 160 | 域 O-a | ✅ Phase 2d-1 (2026-07-03) |
 | `template-engine.js` | 374 | 域 O-b | ✅ Phase 2d-2 (2026-07-03) |
 | `theme-lang.js` | 95 | 域 O-c | ✅ Phase 2d-3 (2026-07-03) |
+| `overview-data.js` | 176 | 域 K-a | ✅ Phase 2f-1 (2026-07-03) |
+| `chat-viewport.js` | 516 | 域 N | ✅ Phase 2e-1 (2026-07-03) |
+| `debug-panels.js` | 1,425 | 域 K-b+L | ✅ Phase 2f-2 (2026-07-03) |
 
-**已移出总计：~13,051 行**
+**已移出总计：~15,168 行**
 
 ---
 
-## 二、当前 app-ui.js 内部地图（Phase 2c+2d 后残留域）
+## 二、当前 app-ui.js 内部地图（Phase 2f-2 后残留域）
 
-> 域 D (PH Model Config)、域 F (Project Data)、域 O (Markdown/Template)、域 P (Context Menu)、域 Q (Docset) 已在 Phase 2c+2d 中移出。以下仅保留仍在 app-ui.js 中的域。
+> 域 D (PH Model Config)、域 F (Project Data)、域 O (Markdown/Template)、域 P (Context Menu)、域 Q (Docset) 已在 Phase 2c+2d 中移出。域 N (Chat Viewport) 和域 K-a (Overview Data) 已在 Phase 2e-1+2f-1 中移出。域 K-b+L (Debug 面板) 已在 Phase 2f-2 中移出。以下仅保留仍在 app-ui.js 中的域。
 
 ### 域 A: Workspace Surface 核心（~260 行）
 
@@ -185,31 +188,37 @@
 
 ---
 
-### 域 K: Overview / Debug / Inspector（~816 行）
+### 域 K: Overview / Debug / Inspector（~816 行） ✅ 已移出
+
+> **域 K-a (Overview Data) 已完成 Phase 2f-1** → `overview-data.js` (176 行, 10 函数 + 1 常量)
+> **域 K-b (Usage/Token/Logs/MCP/Lifecycle) 已完成 Phase 2f-2** → `debug-panels.js` (1,425 行)
 
 | 行号 | 函数 | 说明 |
 |------|------|------|
-| L6955–7125 | `shortenSourcePath`, `getHookInspectorSignature`, `getEmptyOverviewSnapshot`, `normalizeRuntimeSnapshot`, `normalizeOverviewSnapshot`, `getOverviewSignature`, `normalizeHookInspector`, `setCurrentHookInspector`, `setCurrentOverviewSnapshot`, `setCurrentLogs` | 数据规范化 |
-| L7126–7256 | `formatMetricNumber`, `formatRate`, `getLatestCallSummary`, `getUsageBreakdown`, `renderTokenBar`, `renderRateRing`, `renderUsageCard`, `renderCacheCard`, `renderContextChip` | 用量/Token 渲染 |
-| L7257–7398 | `setCurrentMcpInfo`, `getLevelWeight`, `formatLogTimestamp`, `safePrettyJson`, `getFilteredLogs`, `renderLogsPanel` | 日志面板 |
-| L7418–7714 | `renderMcpPanel` | MCP 面板 (297 行) |
-| L7715–7770 | `selectOverviewLifecycle`, `openFeatureDetails`, `closeFeatureDetails`, `openRepositoryPackageDetails`, `closeRepositoryPackageDetails` | 生命周期选择器 |
+| ~~L6955–7125~~ | ~~`shortenSourcePath`, `getHookInspectorSignature`, `getEmptyOverviewSnapshot`, `normalizeRuntimeSnapshot`, `normalizeOverviewSnapshot`, `getOverviewSignature`, `normalizeHookInspector`, `setCurrentHookInspector`, `setCurrentOverviewSnapshot`, `setCurrentLogs`~~ | ✅ 已移出到 `overview-data.js` |
+| ~~L7126–7256~~ | ~~`formatMetricNumber`, `formatRate`, `getLatestCallSummary`, `getUsageBreakdown`, `renderTokenBar`, `renderRateRing`, `renderUsageCard`, `renderCacheCard`, `renderContextChip`~~ | ✅ 已移出到 `debug-panels.js` |
+| ~~L7257–7398~~ | ~~`setCurrentMcpInfo`, `getLevelWeight`, `formatLogTimestamp`, `safePrettyJson`, `getFilteredLogs`, `renderLogsPanel`~~ | ✅ 已移出到 `debug-panels.js` |
+| ~~L7418–7714~~ | ~~`renderMcpPanel` + `renderMcpItems`~~ | ✅ 已移出到 `debug-panels.js` |
+| ~~L7715–7770~~ | ~~`lifecycleDocs`, `selectOverviewLifecycle`, `openFeatureDetails`, `closeFeatureDetails`, `openRepositoryPackageDetails`, `closeRepositoryPackageDetails`~~ | ✅ 已移出到 `debug-panels.js` |
 
 **耦合级别：★★★☆☆** — app-main.js 在 polling 中调用 12 处（`normalizeHookInspector`, `setCurrentHookInspector`, `setCurrentOverviewSnapshot`, `setCurrentLogs`, `setCurrentMcpInfo`）。其余为 UI 渲染。
 **拆分建议：** 分两步：先提取数据规范化函数到 `overview-data.js`（被 polling 依赖），再提取 UI 面板到 `debug-panels.js`。
 
 ---
 
-### 域 L: Debug 面板渲染（~379 行）
+### 域 L: Debug 面板渲染（~379 行） ✅ 已移出
+
+> **已完成 Phase 2f-2** → `debug-panels.js` (1,425 行, 41 函数 + 3 模块级状态变量 + `lifecycleDocs` 常量)
+> 实际 app-main.js 引用 **18 处**（计划估计 12 处）：`renderFeaturePanel` ×14, `setCurrentMcpInfo` ×2, `window.openSummaryPopup` ×2。
 
 | 行号 | 函数 | 说明 |
 |------|------|------|
-| L7771–8118 | `getOrCreateSummaryOverlay`, `renderSummaryBodyContent`, `updateSummaryOverlayDOM`, `openSummaryPopup`, `closeSummaryPopup`, `regenerateSummary`, `setRepoSearchQuery`, `setRepoSourceFilter`, `openFeatureUploadDialog`, `closeFeatureUploadDialog`, `handleFeatureUploadFile`, `submitFeatureUpload` | Summary + Upload |
-| L8119–8403 | `renderStructurePanel`, `renderMonitorPanel`, `renderFeaturesPanel`, `renderReverseHooksPanel` | 结构/监控/特性/hook 面板 |
-| L9166–9259 | `renderFeaturePanel`, `toggleFeaturePanel` | 面板入口 |
+| ~~L7771–8118~~ | ~~`getOrCreateSummaryOverlay`, `renderSummaryBodyContent`, `updateSummaryOverlayDOM`, `openSummaryPopup`, `closeSummaryPopup`, `regenerateSummary`, `setRepoSearchQuery`, `setRepoSourceFilter`, `openFeatureUploadDialog`, `closeFeatureUploadDialog`, `handleFeatureUploadFile`, `submitFeatureUpload`~~ | ✅ 已移出到 `debug-panels.js` |
+| ~~L8119–8403~~ | ~~`renderStructurePanel`, `renderMonitorPanel`, `renderFeaturesPanel`, `renderReverseHooksPanel`~~ | ✅ 已移出到 `debug-panels.js` |
+| ~~L9166–9259~~ | ~~`renderFeaturePanel`, `toggleFeaturePanel`~~ | ✅ 已移出到 `debug-panels.js` |
 
 **耦合级别：★★☆☆☆** — app-main.js 引用 12 处（主要是面板渲染调用）。
-**拆分建议：** 与域 K 合并提取为 `debug-panels.js`。
+**拆分建议：** ✅ 已完成。与域 K 合并提取为 `debug-panels.js`。
 
 ---
 
@@ -225,15 +234,19 @@
 
 ---
 
-### 域 N: Chat Viewport / Scroll 管理（~573 行）
+### 域 N: Chat Viewport / Scroll 管理 ✅ 已移出
+
+> **已完成 Phase 2e-1** → `chat-viewport.js` (516 行, 31 函数)
+> 实际 app-main.js 引用 **58 处**（计划估计 33 处）。`resetRuntimeBackedSurfaceState` 和 `renderWorkspaceTabs` 保留在 app-ui.js。
+> 28 个 viewport scroll 函数形成自闭环，移动后内部互调不受影响。
 
 | 行号 | 函数 | 说明 |
 |------|------|------|
-| L6281–6372 | `updateAssemblySideRailPosition`, `resetRuntimeBackedSurfaceState`, `renderWorkspaceTabs`, `getToggleButtonLabel` | side rail + tabs |
-| L6373–6945 | `isNearBottom`, `updateFollowLatestButton`, `markManualScrollIntent`, `getChatViewportMetrics`, `getChatViewportBottomTop`, `setChatViewportTop`, `lockChatViewportToBottomNow`, `suppressChatViewportObservers`, `resumeChatViewportObservers`, `shouldIgnoreChatViewportObserverEvent`, `runWithSuppressedChatViewportObservers`, `cancelFollowLatestAnimation`, `startFollowLatestAnimation`, `ensureChatViewportObservers`, `interruptFollowLatest`, `registerManualScrollIntent`, `hasRecentManualScrollIntent`, `beginFollowLatestCooldown`, `isFollowLatestCooldownActive`, `beginFollowLatestEntryWindow`, `isFollowLatestEntryWindowActive`, `cancelChatScrollSettlement`, `notifyChatViewportMutation`, `scrollToLatest`, `setFollowLatest`, `scheduleFollowLatestSettlePass`, `requestFollowLatest`, `scheduleScrollToLatest`, `scheduleScrollToLatestWithVersion` | viewport 滚动/跟随系统 |
+| L6281–6372 | ~~`updateAssemblySideRailPosition`, `getToggleButtonLabel`~~ | ✅ 已移出（`resetRuntimeBackedSurfaceState`, `renderWorkspaceTabs` 保留在 app-ui.js） |
+| L6373–6945 | ~~`isNearBottom` … `scheduleScrollToLatestWithVersion`（29 个 viewport scroll 函数）~~ | ✅ 已移出到 `chat-viewport.js` |
 
-**耦合级别：★★★☆☆** — app-ui.js 内部 38 处引用，app-main.js 33 处引用。函数密集调用但自成闭环。
-**拆分建议：** 提取为 `chat-viewport.js`。注意 `ensureChatViewportObservers` 被 `renderCurrentMainView` 直接调用。
+**耦合级别：★★★☆☆** — app-ui.js 内部 20 处引用，app-main.js 58 处引用。函数密集调用但自成闭环。
+**拆分策略：** 已完成提取。所有引用通过全局作用域运行时解析。
 
 ---
 
@@ -306,9 +319,9 @@
 |----|----------|-------------------|------|
 | 域 E (Assembly Data) | `getWorkspaceFormDraft`, `normalizeAssemblyDraft`, `getAssemblyEnvironmentState`, `persistWorkspaceState`, `collectAssemblyProjectFeatureConfigs`, `findAssemblyConfigConflict`, `syncAssemblyEnvironmentDraft`, `requestAssemblyEnvironmentCreate`, `updateAssemblyDraftWithoutRender` 等 | **88** | ★★★★★ |
 | 域 O (Template/Markdown) | `renderMarkdown`, `escapeHtml`, `parseToolResult`, `applyTemplate`, `getToolDisplayName` | **76** | ★★★☆ |
-| 域 N (Viewport) | `setFollowLatest`, `scrollToLatest`, `ensureChatViewportObservers`, `interruptFollowLatest`, `notifyChatViewportMutation` | **33** | ★★★☆ |
+| 域 N (Viewport) | `setFollowLatest`, `scrollToLatest`, `ensureChatViewportObservers`, `interruptFollowLatest`, `notifyChatViewportMutation` | **33**（实际 **58**） | ★★★☆ → ✅ 已移出 |
 | 域 K+L (Debug) | `renderLogsPanel`, `renderMcpPanel`, `renderStructurePanel`, `renderMonitorPanel`, `renderFeaturesPanel`, `renderFeaturePanel`, `toggleFeaturePanel`, `renderReverseHooksPanel` | **12** | ★★☆ |
-| 域 K (Overview) | `normalizeHookInspector`, `setCurrentHookInspector`, `normalizeOverviewSnapshot`, `setCurrentOverviewSnapshot`, `setCurrentLogs`, `normalizeRuntimeSnapshot` | **12** | ★★☆ |
+| 域 K (Overview) | `normalizeHookInspector`, `setCurrentHookInspector`, `normalizeOverviewSnapshot`, `setCurrentOverviewSnapshot`, `setCurrentLogs`, `normalizeRuntimeSnapshot` | **12**（实际 **14**） | ★★☆ → ✅ K-a 已移出 |
 | 域 J (ClawFW) | `window.ClawFW.*`, `fwRerender`, `renderProjectListBlock` | **12** | ★★★ |
 | 域 C (CCB) | `updateChatContextBar` | 间接 (通过 renderCurrentMainView) | ★★☆ |
 | 域 F (Project) | `getFeatureCreatorProjects`, `hasWorkspaceSessions`, `canEnterWorkspaceChat` | **6** (实际 **59**) | ★★☆ |
@@ -509,9 +522,27 @@
 
 ---
 
-### Phase 2e：Viewport 系统（风险 ★★★）
+### Phase 2e：Viewport 系统（风险 ★★★）✅ 完成
 
-#### 2e-1. chat-viewport.js
+> **状态：✅ 完成（2026-07-03）**
+> app-ui.js：5,758 → 5,305 行（-453 行）
+> 实际 app-main.js 引用 **58 处**（计划估计 33 处）
+
+**实际执行与原计划的差异：**
+
+1. **引用次数严重低估**：计划估计 33 处，实际 58 处。主因是 `runWithSuppressedChatViewportObservers`（10 处）和 `notifyChatViewportMutation`（10 处）在 `render()` 函数的消息渲染管线中高频调用。
+
+2. **`resetRuntimeBackedSurfaceState` 和 `renderWorkspaceTabs` 保留在 app-ui.js**：`resetRuntimeBackedSurfaceState` 是跨域编排函数（调用 overview/todo/connection/docset 多域 setter），`renderWorkspaceTabs` 依赖域 B unit mode 函数群，两者不适合放入 chat-viewport.js。
+
+3. **`updateAssemblySideRailPosition` 和 `getToggleButtonLabel` 一并移出**：虽然语义上不完全属于 viewport scroll，但作为独立碎片留在 app-ui.js 无意义。
+
+**新增文件清单：**
+
+| 文件 | 行数 | 函数数 | 来源域 | app-main.js 引用 |
+|------|------|--------|--------|-----------------|
+| `public/src/modules/chat-viewport.js` | 516 | 31 | 域 N | 58 |
+
+#### 2e-1. chat-viewport.js ✅
 
 | 项 | 值 |
 |----|-----|
@@ -527,25 +558,64 @@
 
 ### Phase 2f：Debug 面板（风险 ★★★）
 
-#### 2f-1. overview-data.js
+#### 2f-1. overview-data.js ✅ 完成
+
+> **状态：✅ 完成（2026-07-03）**
+> app-ui.js：5,925 → 5,758 行（-167 行）
+> 实际 app-main.js 引用 **14 处**（计划估计 12 处）
+
+**实际执行与原计划的差异：**
+
+1. **`FULL_HOOK_LIFECYCLE_ORDER` 常量**：计划函数清单未列出，但它是 `normalizeHookInspector` 的硬依赖，已一并移入。
+
+2. **行数基本吻合**：计划估计 ~171 行 → 实际 176 行（+3%）。
+
+**新增文件清单：**
+
+| 文件 | 行数 | 函数数 | 来源域 | app-main.js 引用 |
+|------|------|--------|--------|-----------------|
+| `public/src/modules/overview-data.js` | 176 | 10 + 1 常量 | 域 K-a | 14 |
 
 | 项 | 值 |
 |----|-----|
 | 来源 | L6955–7125 |
-| 行数 | ~171 |
-| 移动函数 | `shortenSourcePath`, `getHookInspectorSignature`, `getEmptyOverviewSnapshot`, `normalizeRuntimeSnapshot`, `normalizeOverviewSnapshot`, `getOverviewSignature`, `normalizeHookInspector`, `setCurrentHookInspector`, `setCurrentOverviewSnapshot`, `setCurrentLogs` |
-| 依赖 | `currentHookInspector`, `currentOverviewSnapshot`, `currentLogs` 等全局状态 |
-| 注意 | 这些函数被 app-main.js polling 调用。是纯函数 + setter。 |
+| 行数 | ~171（实际 176） |
+| 移动函数 | `shortenSourcePath`, `getHookInspectorSignature`, `getEmptyOverviewSnapshot`, `normalizeRuntimeSnapshot`, `normalizeOverviewSnapshot`, `getOverviewSignature`, `normalizeHookInspector`, `setCurrentHookInspector`, `setCurrentOverviewSnapshot`, `setCurrentLogs` + `const FULL_HOOK_LIFECYCLE_ORDER` |
+| 依赖 | `currentHookInspector`, `currentOverviewSnapshot`, `currentLogs`, `selectedFeatureName` 等全局状态 |
+| 注意 | 这些函数被 app-main.js polling 调用。是纯函数 + setter。是 debug-panels.js（2f-2）的数据生产者。 |
 
-#### 2f-2. debug-panels.js
+#### 2f-2. debug-panels.js ✅ 完成
+
+> **状态：✅ 完成（2026-07-03）**
+> app-ui.js：5,307 → 3,977 行（-1,330 行）
+> 实际 app-main.js 引用 **18 处**（计划估计 12 处）
+
+**实际执行与原计划的差异：**
+
+1. **行数严重低估**：计划估计 ~950 行 → 实际 1,425 行（+50%）。主因：
+   - `lifecycleDocs` 常量（248 行纯 i18n 数据），计划完全未列出
+   - `renderMcpItems` 辅助函数（18 行），计划未列出
+   - 模块级状态变量（`summaryPopupData`, `_summaryGenGuard`, `featureUploadFile`）+ `window.*` 赋值 ~20 行，计划未提及
+
+2. **函数数偏多**：计划 38 个 → 实际 41 个。额外归入 `renderMcpItems`, `lifecycleDocs`, `renderFeaturePanel`。
+
+3. **非连续块**：目标代码分布在 4 个不连续块中，中间夹有 ~165 行 Todo/Plan 域代码 + `featurePanels` 注册表 + 事件监听器。这些保留在 app-ui.js。
+
+4. **app-main.js 引用全部通过全局作用域运行时解析**，加载顺序无功能影响。
+
+**新增文件清单：**
+
+| 文件 | 行数 | 函数数 | 来源域 | app-main.js 引用 |
+|------|------|--------|--------|-----------------|
+| `public/src/modules/debug-panels.js` | 1,425 | 41 + 3 模块级状态 + 1 常量 | 域 K-b+L | 18 |
 
 | 项 | 值 |
 |----|-----|
-| 来源 | L7126–7256 + L7257–7398 + L7418–8403 + L7715–8118 + L9166–9259 |
-| 行数 | ~950 |
-| 移动函数 | usage 渲染, log 面板, MCP 面板, summary overlay, upload dialog, structure/monitor/features/reverseHooks 面板, feature panel |
-| 依赖 | `currentHookInspector`, `currentOverviewSnapshot`, `currentLogs`, `currentMcpInfo`, DOM 引用, `renderMarkdown`, `escapeHtml` |
-| 注意 | `renderFeaturePanel` 和 `toggleFeaturePanel` 被 `renderCurrentMainView` 和 app-main.js 间接调用 |
+| 来源 | 4 个非连续块：L3654–4280, L4282–4636, L4638–4901, L5069–5150 |
+| 行数 | ~950（实际 1,425） |
+| 移动函数 | usage 渲染 (`formatMetricNumber` 等 9 个), log 面板 (6 个), MCP 面板 (`renderMcpPanel` + `renderMcpItems`), `lifecycleDocs` 常量, 生命周期选择器 (5 个), summary overlay (6 个), repo 搜索/过滤 (2 个), upload dialog (4 个), structure/monitor/features/reverseHooks 面板 (4 个), `renderFeaturePanel`, `toggleFeaturePanel` |
+| 依赖 | `currentHookInspector`, `currentOverviewSnapshot`, `currentLogs`, `currentMcpInfo`, DOM 引用, `renderMarkdown`, `escapeHtml`, `featurePanels` 注册表 (留在 app-ui.js), `renderCurrentMainView` (留在 app-ui.js) |
+| 注意 | `renderFeaturePanel` 和 `toggleFeaturePanel` 被 `renderCurrentMainView` 和 app-main.js 间接调用。`featurePanels` 注册表的箭头函数延迟解析，加载顺序不影响功能。 |
 
 ---
 
@@ -656,8 +726,14 @@
 <script src="./src/modules/template-engine.js"></script>
 <script src="./src/modules/theme-lang.js"></script>
 
-<!-- resources-viewer 放在 app-ui.js 之后（仅 group-chat 分支调用） -->
-<script src="./src/modules/resources-viewer.js"></script>
+<!-- Phase 2f-1 已完成模块（在 app-ui.js 之前） -->
+<script src="./src/modules/overview-data.js"></script>
+
+<!-- Phase 2e-1 已完成模块（在 app-ui.js 之前） -->
+<script src="./src/modules/chat-viewport.js"></script>
+
+<!-- Phase 2f-2 已完成模块（在 app-ui.js 之前） -->
+<script src="./src/modules/debug-panels.js"></script>
 
 <!-- Phase 3 新模块（在 app-ui.js 之前） -->
 <script src="./src/modules/workspace-blocks.js"></script>
@@ -666,6 +742,9 @@
 
 <!-- 瘦身后的壳层 -->
 <script src="./src/app-ui.js"></script>
+
+<!-- resources-viewer 放在 app-ui.js 之后（仅 group-chat 分支调用） -->
+<script src="./src/modules/resources-viewer.js"></script>
 
 <!-- Phase 1 已完成模块（在 app-ui.js 之后，不依赖 app-ui.js 内函数） -->
 <script src="./src/modules/session-ui.js"></script>
@@ -797,17 +876,17 @@
 | 2d-1 | markdown-utils.js | ~236 (实际 160) | ★★★ | ✅ 完成 | 2026-07-03 |
 | 2d-2 | template-engine.js | ~334 (实际 374) | ★★★ | ✅ 完成 | 2026-07-03 |
 | 2d-3 | theme-lang.js | ~88 (实际 95) | ★★☆ | ✅ 完成 | 2026-07-03 |
-| 2e-1 | chat-viewport.js | ~573 | ★★★ | 待执行 | |
-| 2f-1 | overview-data.js | ~171 | ★★★ | 待执行 | |
-| 2f-2 | debug-panels.js | ~950 | ★★★ | 待执行 | |
+| 2e-1 | chat-viewport.js | ~573 (实际 516) | ★★★ | ✅ 完成 | 2026-07-03 |
+| 2f-1 | overview-data.js | ~171 (实际 176) | ★★★ | ✅ 完成 | 2026-07-03 |
+| 2f-2 | debug-panels.js | ~950 (实际 1,425) | ★★★ | ✅ 完成 | 2026-07-03 |
 | 3a-1 | workspace-blocks.js | ~820 | ★★★ | 待执行 | |
 | 3b-1 | assembly-data.js | ~700 | ★★★★★ | 待执行 | |
 | 3c-1 | flow-workspace-ui.js | ~1,700 | ★★★★ | 待执行 | |
 | 3d-1 | workspace-surface.js | ~260 | ★★★★★ | 可选 | |
 
-**Phase 2c+2d 实际拆出：1,864 行（7 个模块）**
-**已完成拆出总计（Phase 1 + 2a + 2b + 2c + 2d）：~13,051 行**
-**拆分后 app-ui.js 残留：5,925 行**（剩余 Phase 2e-3d 待执行）
+**Phase 2f-2 实际拆出：1,425 行（1 个模块）**
+**已完成拆出总计（Phase 1 + 2a + 2b + 2c + 2d + 2e-1 + 2f-1 + 2f-2）：~15,493 行**
+**拆分后 app-ui.js 残留：3,977 行**（剩余 Phase 3a-3d 待执行）
 
 ---
 
