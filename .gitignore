@@ -37,6 +37,9 @@ Thumbs.db
 .env.local
 .env.*.local
 
+# advclaw auto-update config
+.advclaw-config.json
+
 # TypeScript cache
 *.tsbuildinfo
 dist/

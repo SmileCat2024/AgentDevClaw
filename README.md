@@ -34,6 +34,43 @@ npm start
 
 > 如果 1420 或 2026 端口被占用，可以通过环境变量调整：`PORT=1500 AGENTDEV_VIEWER_PORT=2100 npm start`
 
+### 全局命令 `advclaw`（推荐）
+
+如果你希望在本机任意位置通过一条命令启动，可以使用全局命令：
+
+```bash
+cd AgentDevClaw
+npm install        # 首次需要安装依赖
+npm link           # 注册全局命令（只需执行一次）
+```
+
+之后在**任意目录**执行：
+
+```bash
+advclaw            # 启动服务器
+```
+
+#### 自动更新
+
+`advclaw` 启动时会在后台检测 GitHub 上是否有新 Release。发现新版本时会打印通知，你可以随时执行更新：
+
+```bash
+advclaw update          # 更新到最新 GitHub Release
+advclaw update --check  # 仅检查是否有新版本
+```
+
+更新过程会自动执行 `git checkout <release-tag>` + `npm install` + 编译，无需手动操作。只会拉取 Release 发布的版本，不会拉取中间提交。
+
+如果你不想在启动时自动检测，有以下方式关闭：
+
+```bash
+# 永久关闭（写入项目根目录 .advclaw-config.json）
+echo '{"autoUpdateCheck": false}' > .advclaw-config.json
+
+# 本次启动跳过
+ADVCLAW_NO_UPDATE_CHECK=1 advclaw
+```
+
 ## 配置模型
 
 首次使用前需在 Web UI 左下角的设置面板中配置全局 LLM 模型预设方案（需填写Provider、Model、Base URL、API Key），否则 Agent 无法响应。配置完成后，还可在设置面板中创建多个**模型预设**，便于快速切换。**部分工作空间内部支持单独配置模型**，为工作空间下不同身份的agent分别配置不同的模型预设
@@ -144,23 +181,37 @@ server.js 主进程
 
 ## CLI
 
-安装后可通过 `claw` 命令在终端中操作工作空间：
+项目提供两个全局命令：
+
+**`advclaw`** — 全局启动器（推荐），通过 `npm link` 注册后可在任意目录使用：
 
 ```bash
-npx claw                      # 查看工作空间概览
-npx claw explorations         # 列出探索记录
-npx claw show <sessionId>     # 查看会话详情
-npx claw spawn "分析X模块"     # 创建探索会话
-npx claw compact <sessionId>  # 精简会话上下文
-npx claw resume <sessionId> "继续分析"  # 恢复子代理对话
+advclaw                       # 启动服务器（自动检测新版本）
+advclaw update                # 更新到最新 GitHub Release
+advclaw update --check        # 仅检查是否有新版本
 ```
+
+**`claw`** — 工作空间 CLI，用于在终端中操作探索记录、子代理等：
+
+```bash
+claw                          # 查看工作空间概览
+claw explorations             # 列出探索记录
+claw show <sessionId>         # 查看会话详情
+claw spawn "分析X模块"         # 创建探索会话
+claw compact <sessionId>      # 精简会话上下文
+claw resume <sessionId> "继续分析"  # 恢复子代理对话
+```
+
+> `claw` 也可通过 `npx claw` 使用。
 
 ## 目录结构
 
 ```
 server.js                      Express 服务端入口
 config/default.json            模型配置（gitignored，首次通过 UI 或手动创建）
-bin/claw.mjs                   CLI 工具
+bin/claw.mjs                   工作空间 CLI 工具
+bin/advclaw.mjs                全局启动器（advclaw 命令入口）
+bin/advclaw-update.mjs         自动更新模块（GitHub Releases）
 server/                        服务端模块
   claw-core.mjs                CLI/MCP 共享核心（provider 注册与分发）
   claw-mcp.js                  MCP Server
@@ -214,6 +265,7 @@ AgentDevClaw 的 Agent 能力建立在 agentdev 框架的 Feature 机制之上�
 | `AGENTDEV_VIEWER_PORT` | `2026` | ViewerWorker 端口 |
 | `AGENTDEV_UDS_PATH` | — | ViewerWorker UDS / named pipe |
 | `AGENTDEV_DEBUG_TRANSPORT` | — | 调试传输模式 |
+| `ADVCLAW_NO_UPDATE_CHECK` | — | 设为 `1` 时本次启动跳过版本检测 |
 | `ANTHROPIC_API_KEY` | — | 可在模型配置中通过 `${ANTHROPIC_API_KEY}` 引用 |
 
 ## 技术栈
