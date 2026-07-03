@@ -879,8 +879,8 @@
 | 2e-1 | chat-viewport.js | ~573 (实际 516) | ★★★ | ✅ 完成 | 2026-07-03 |
 | 2f-1 | overview-data.js | ~171 (实际 176) | ★★★ | ✅ 完成 | 2026-07-03 |
 | 2f-2 | debug-panels.js | ~950 (实际 1,425) | ★★★ | ✅ 完成 | 2026-07-03 |
-| 3a-1 | workspace-blocks.js | ~820 | ★★★ | 待执行 | |
-| 3b-1 | assembly-data.js | ~700 | ★★★★★ | 待执行 | |
+| 3a-1 | workspace-blocks.js | ~820 (实际 830) | ★★★ | ✅ 完成 | 2026-07-03 |
+| 3b-1 | assembly-data.js | ~700 (实际 606) | ★★★★★ | ✅ 完成 | 2026-07-03 |
 | 3c-1 | flow-workspace-ui.js | ~1,700 | ★★★★ | 待执行 | |
 | 3d-1 | workspace-surface.js | ~260 | ★★★★★ | 可选 | |
 

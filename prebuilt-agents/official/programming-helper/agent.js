@@ -104,6 +104,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
         ...(config.features || {}),
         ...(systemConfig.shell ? { shell: systemConfig.shell } : {}),
       },
+      skillConfig: systemConfig.skill || undefined,
       excludeMcpServers: Array.from(new Set([
         ...(config.excludeMcpServers ?? []),
         ...(isExploration ? EXCLUDED_MCP_SERVERS_EXPLORE : DEFAULT_EXCLUDED_MCP_SERVERS),

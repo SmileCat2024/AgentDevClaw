@@ -1,5 +1,6 @@
 import path from 'path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import os from 'os';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { execSync } from 'child_process';
 
 import { USER_DATA_ROOT } from '../shared/constants.js';
@@ -138,6 +139,44 @@ export function setupSystemFeatureConfigRoutes(app, express) {
       bash: detectShellPath('bash', shellConfig.bashPath),
       powershell: detectShellPath('powershell', shellConfig.powershellPath),
     });
+  });
+
+  // ── Directory browser for feature-setup UI ──────────────────
+  app.get('/protoclaw/browse_dirs', (req, res) => {
+    try {
+      const targetPath = req.query.path || os.homedir();
+      const resolved = path.resolve(targetPath);
+
+      const entries = readdirSync(resolved, { withFileTypes: true })
+        .filter(e => e.isDirectory())
+        .map(e => ({ name: e.name, path: path.join(resolved, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      // Detect available drive letters on Windows
+      let drives = [];
+      if (process.platform === 'win32') {
+        for (let i = 65; i <= 90; i++) {
+          const letter = String.fromCharCode(i);
+          const drivePath = `${letter}:\\`;
+          if (existsSync(drivePath)) {
+            drives.push({ label: `${letter}:`, path: drivePath });
+          }
+        }
+      }
+
+      const parent = path.dirname(resolved);
+      const hasParent = parent !== resolved && parent.length > 0;
+
+      res.json({
+        currentPath: resolved,
+        parent: hasParent ? parent : null,
+        entries,
+        drives,
+        platform: process.platform,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get('/protoclaw/system_feature_manifests', async (_req, res) => {

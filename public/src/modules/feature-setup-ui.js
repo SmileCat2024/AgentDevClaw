@@ -213,16 +213,21 @@ function _renderListInput(fullKey, prop, value) {
   const placeholder = prop.placeholder || (currentLanguage === 'zh' ? '输入路径...' : 'Enter path...');
   const addLabel = currentLanguage === 'zh' ? '添加' : 'Add';
   const removeLabel = currentLanguage === 'zh' ? '移除' : 'Remove';
+  const browseLabel = currentLanguage === 'zh' ? '浏览...' : 'Browse...';
+  const showBrowse = prop.type === 'directory';
 
-  const itemsHtml = items.map(item => `
-    <div class="fs-list-item">
-      <input type="text" class="fs-input fs-list-input" data-config-key="${escapeHtml(fullKey)}" value="${escapeHtml(String(item))}" placeholder="${escapeHtml(placeholder)}" />
-      <button type="button" class="fs-list-remove" title="${escapeHtml(removeLabel)}" onclick="window._fsListRemoveItem(this)">&#215;</button>
-    </div>
-  `).join('');
+  function _listItemHtml(val) {
+    return `<div class="fs-list-item">`
+      + `<input type="text" class="fs-input fs-list-input" data-config-key="${escapeHtml(fullKey)}" value="${escapeHtml(String(val))}" placeholder="${escapeHtml(placeholder)}" />`
+      + (showBrowse ? `<button type="button" class="fs-list-browse" title="${escapeHtml(browseLabel)}" onclick="window._fsBrowseDir(this)">&#128193;</button>` : '')
+      + `<button type="button" class="fs-list-remove" title="${escapeHtml(removeLabel)}" onclick="window._fsListRemoveItem(this)">&#215;</button>`
+      + `</div>`;
+  }
+
+  const itemsHtml = items.map(_listItemHtml).join('');
 
   return `
-    <div class="fs-list" data-list-key="${escapeHtml(fullKey)}" data-list-max="${maxItems}" data-list-placeholder="${escapeHtml(placeholder)}">
+    <div class="fs-list" data-list-key="${escapeHtml(fullKey)}" data-list-max="${maxItems}" data-list-placeholder="${escapeHtml(placeholder)}" data-list-type="${escapeHtml(prop.type || '')}">
       ${itemsHtml}
       <button type="button" class="fs-list-add" ${items.length >= maxItems ? 'disabled' : ''} onclick="window._fsListAddItem(this)">+ ${escapeHtml(addLabel)}</button>
     </div>
@@ -382,21 +387,31 @@ window._fsListAddItem = function (btn) {
 
   const fullKey = container.getAttribute('data-list-key') || '';
   const placeholder = container.getAttribute('data-list-placeholder') || '';
+  const listType = container.getAttribute('data-list-type') || '';
   const removeLabel = currentLanguage === 'zh' ? '移除' : 'Remove';
+  const browseLabel = currentLanguage === 'zh' ? '浏览...' : 'Browse...';
 
   const item = document.createElement('div');
   item.className = 'fs-list-item';
   item.innerHTML =
     `<input type="text" class="fs-input fs-list-input" data-config-key="${escapeHtml(fullKey)}" value="" placeholder="${escapeHtml(placeholder)}" />`
+    + (listType === 'directory' ? `<button type="button" class="fs-list-browse" title="${escapeHtml(browseLabel)}" onclick="window._fsBrowseDir(this)">&#128193;</button>` : '')
     + `<button type="button" class="fs-list-remove" title="${escapeHtml(removeLabel)}" onclick="window._fsListRemoveItem(this)">&#215;</button>`;
 
   container.insertBefore(item, btn);
+
+  // Attach auto-save listener to the dynamically created input
+  const newInput = item.querySelector('input');
+  newInput.addEventListener('input', () => {
+    clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = setTimeout(_doAutoSave, 600);
+  });
 
   if (container.querySelectorAll('.fs-list-item').length >= max) {
     btn.disabled = true;
   }
 
-  item.querySelector('input').focus();
+  newInput.focus();
   clearTimeout(_autoSaveTimer);
   _autoSaveTimer = setTimeout(_doAutoSave, 600);
 };
@@ -415,6 +430,119 @@ window._fsListRemoveItem = function (btn) {
   clearTimeout(_autoSaveTimer);
   _autoSaveTimer = setTimeout(_doAutoSave, 600);
 };
+
+// ── Directory picker ────────────────────────────────────────
+
+window._fsBrowseDir = function (btn) {
+  const item = btn.closest('.fs-list-item');
+  const input = item?.querySelector('.fs-list-input');
+  if (!input) return;
+  _openDirPicker(input.value || '', (selectedPath) => {
+    input.value = selectedPath;
+    clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = setTimeout(_doAutoSave, 600);
+  });
+};
+
+function _openDirPicker(initialPath, onSelect) {
+  const isZh = currentLanguage === 'zh';
+  const overlay = document.createElement('div');
+  overlay.className = 'fs-dir-picker-overlay';
+  overlay.innerHTML = `
+    <div class="fs-dir-picker">
+      <div class="fs-dir-picker-header">
+        <span>${isZh ? '选择目录' : 'Select Directory'}</span>
+        <button class="fs-dir-picker-close">&times;</button>
+      </div>
+      <div class="fs-dir-picker-toolbar">
+        <button class="fs-dir-picker-up" title="${isZh ? '上一级' : 'Parent'}">&#8593;</button>
+        <input type="text" class="fs-dir-picker-path" value="" />
+      </div>
+      <div class="fs-dir-picker-drives"></div>
+      <div class="fs-dir-picker-body"><div class="fs-dir-picker-spinner"></div></div>
+      <div class="fs-dir-picker-footer">
+        <button class="fs-dir-picker-cancel">${isZh ? '取消' : 'Cancel'}</button>
+        <button class="fs-dir-picker-select">${isZh ? '选择此目录' : 'Select'}</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  let currentPath = '';
+
+  async function loadDir(targetPath) {
+    const body = overlay.querySelector('.fs-dir-picker-body');
+    const pathInput = overlay.querySelector('.fs-dir-picker-path');
+    const upBtn = overlay.querySelector('.fs-dir-picker-up');
+    const drivesEl = overlay.querySelector('.fs-dir-picker-drives');
+    body.innerHTML = '<div class="fs-dir-picker-spinner"></div>';
+
+    try {
+      const res = await fetch(`/protoclaw/browse_dirs?path=${encodeURIComponent(targetPath)}`);
+      if (!res.ok) {
+        body.innerHTML = `<div class="fs-dir-picker-error">${isZh ? '无法读取此目录' : 'Cannot read this directory'}</div>`;
+        return;
+      }
+      const data = await res.json();
+      currentPath = data.currentPath;
+      pathInput.value = currentPath;
+      upBtn.disabled = !data.parent;
+      upBtn.onclick = () => { if (data.parent) loadDir(data.parent); };
+
+      // Drive letters
+      if (data.drives && data.drives.length > 1) {
+        drivesEl.innerHTML = data.drives.map(d =>
+          `<button class="fs-dir-picker-drive ${d.path === currentPath ? 'active' : ''}" data-path="${escapeHtml(d.path)}">${escapeHtml(d.label)}</button>`
+        ).join('');
+        drivesEl.querySelectorAll('.fs-dir-picker-drive').forEach(b => {
+          b.onclick = () => loadDir(b.getAttribute('data-path'));
+        });
+        drivesEl.style.display = '';
+      } else {
+        drivesEl.style.display = 'none';
+      }
+
+      if (data.entries.length === 0) {
+        body.innerHTML = `<div class="fs-dir-picker-empty">${isZh ? '(空目录)' : '(empty)'}</div>`;
+      } else {
+        body.innerHTML = data.entries.map(e =>
+          `<div class="fs-dir-entry" data-path="${escapeHtml(e.path)}">&#128193; ${escapeHtml(e.name)}</div>`
+        ).join('');
+        body.querySelectorAll('.fs-dir-entry').forEach(el => {
+          el.ondblclick = () => loadDir(el.getAttribute('data-path'));
+          el.onclick = () => {
+            body.querySelectorAll('.fs-dir-entry').forEach(e2 => e2.classList.remove('selected'));
+            el.classList.add('selected');
+          };
+        });
+      }
+    } catch {
+      body.innerHTML = `<div class="fs-dir-picker-error">${isZh ? '加载失败' : 'Failed to load'}</div>`;
+    }
+  }
+
+  // Path input: Enter to navigate
+  overlay.querySelector('.fs-dir-picker-path').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      loadDir(e.target.value);
+    }
+  });
+
+  // Select / Cancel / Close
+  overlay.querySelector('.fs-dir-picker-select').onclick = () => {
+    if (currentPath) {
+      onSelect(currentPath);
+      overlay.remove();
+    }
+  };
+  const close = () => overlay.remove();
+  overlay.querySelector('.fs-dir-picker-cancel').onclick = close;
+  overlay.querySelector('.fs-dir-picker-close').onclick = close;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  loadDir(initialPath || '');
+}
 
 // ── Shell availability indicators ─────────────────────────────
 
