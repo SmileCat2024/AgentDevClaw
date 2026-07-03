@@ -207,7 +207,7 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     await agent.loadSession(sessionId, sessionStore);
     logPhase('load session done');
 
-    tuneMirrorLLM(agent.llm, 2500);
+    tuneMirrorLLM(agent.llm, 8000);
 
     const toolRegistry = typeof agent.getTools === 'function' ? agent.getTools() : null;
     const toolEntries = toolRegistry?.getEntries?.() || [];
@@ -265,8 +265,13 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     const response = await agent.llm.chat(
       compactMessages,
       compiledTools,
+      { noStream: true },
     );
     logPhase('chat done');
+
+    if (response?.stopReason === 'max_tokens') {
+      throw new Error('Mirror compaction 摘要因 max_tokens 限制被截断（stopReason=max_tokens）');
+    }
     await reportUsageEvent(SERVER_ORIGIN, {
       eventId: ['compact-mirror', agentId, sessionId, Date.now()].join(':'),
       timestamp: Date.now(),
