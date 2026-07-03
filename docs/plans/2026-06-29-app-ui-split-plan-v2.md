@@ -1,12 +1,12 @@
-# app-ui.js 拆分计划 v2（2026-06-29 创建，2026-07-01 更新）
+# app-ui.js 拆分计划 v2（2026-06-29 创建，2026-07-03 更新）
 
 > 基于 v1（2026-06-04）的全面复核与更新
-> 当前文件：`public/src/app-ui.js` — **7,631 行**（Phase 1 + 2a + 2b 已完成）
+> 当前文件：`public/src/app-ui.js` — **5,925 行**（Phase 1 + 2a + 2b + 2c + 2d 已完成）
 > v2 创建时行数：9,871 行 / v1 时的行数：9,498 行
 
 ---
 
-## 一、已完成拆分（Phase 1 + 2a + 2b）
+## 一、已完成拆分（Phase 1 + 2a + 2b + 2c + 2d）
 
 | 模块 | 行数 | 来源域 | 完成状态 |
 |------|------|--------|----------|
@@ -23,12 +23,21 @@
 | `feature-config.js` | 784 | 域 H | ✅ Phase 2b |
 | `chat-context-bar.js` | 483 | 域 C | ✅ Phase 2b |
 | `resources-viewer.js` | 460 | 域 M | ✅ Phase 2b |
+| `ph-model-config.js` | 125 | 域 D | ✅ Phase 2c-4 (2026-07-03) |
+| `project-data.js` | 382 | 域 F | ✅ Phase 2c-2 (2026-07-03) |
+| `workspace-docset.js` | 575 | 域 Q | ✅ Phase 2c-1 (2026-07-03) |
+| `context-menu.js` | 153 | 域 P | ✅ Phase 2c-3 (2026-07-03) |
+| `markdown-utils.js` | 160 | 域 O-a | ✅ Phase 2d-1 (2026-07-03) |
+| `template-engine.js` | 374 | 域 O-b | ✅ Phase 2d-2 (2026-07-03) |
+| `theme-lang.js` | 95 | 域 O-c | ✅ Phase 2d-3 (2026-07-03) |
 
-**已移出总计：~11,057 行**
+**已移出总计：~13,051 行**
 
 ---
 
-## 二、当前 app-ui.js 内部地图（380 函数 → 14 个残留域）
+## 二、当前 app-ui.js 内部地图（Phase 2c+2d 后残留域）
+
+> 域 D (PH Model Config)、域 F (Project Data)、域 O (Markdown/Template)、域 P (Context Menu)、域 Q (Docset) 已在 Phase 2c+2d 中移出。以下仅保留仍在 app-ui.js 中的域。
 
 ### 域 A: Workspace Surface 核心（~260 行）
 
@@ -74,7 +83,9 @@
 
 ---
 
-### 域 D: PH Model Config（~110 行）
+### 域 D: PH Model Config ✅ 已移出
+
+> **已完成 Phase 2c-4** → `ph-model-config.js` (125 行, 2 函数)
 
 | 行号 | 函数 | 说明 |
 |------|------|------|
@@ -101,7 +112,10 @@
 
 ---
 
-### 域 F: Project/Creator 数据层（~332 行）
+### 域 F: Project/Creator 数据层 ✅ 已移出
+
+> **已完成 Phase 2c-2** → `project-data.js` (382 行, 18 函数)
+> 实际 app-main.js 引用 **59 处**（远超计划估计的 6 处），session-ui.js 引用 14 处。机械风险仍低（全局作用域）。
 
 | 行号 | 函数 | 说明 |
 |------|------|------|
@@ -223,7 +237,12 @@
 
 ---
 
-### 域 O: Markdown / Template 引擎（~962 行）
+### 域 O: Markdown / Template 引擎 ✅ 已移出
+
+> **已完成 Phase 2d**，分三个子模块移出：
+> - `markdown-utils.js` (160 行) — `escapeHtml`, `renderMarkdown`, `extractDisplayMathBlocks`, `renderDisplayMathLatex`, `enhanceMathInElement` + `const renderer` 配置 + `marked.setOptions`
+> - `template-engine.js` (374 行, 15 函数) — `formatError`, `interpolateTemplate`, `applyTemplate`, `parseToolResult`, `resolveTemplatePath`, `collectTemplateNames`, `warmTemplatesInBackground`, `getToolRenderTemplate`, `getToolDisplayName`, `getAgentRuntimeId`, `getAgentDisplayId` + `clearTruncatedHighlightData`, `renderJsonHighlight`, `expandTruncatedResult`, `getTemplateFallback`
+> - `theme-lang.js` (95 行, 5 函数) — `setConnectionStatus`, `showAgentStartError`, `renderThemeToggle`, `applyLanguage`, `applyTheme`
 
 | 行号 | 函数 | 说明 |
 |------|------|------|
@@ -239,7 +258,10 @@
 
 ---
 
-### 域 P: Context Menu（~278 行）
+### 域 P: Context Menu ✅ 已移出
+
+> **已完成 Phase 2c-3** → `context-menu.js` (153 行, 10 函数)
+> 实际 app-main.js 引用 **54 处**（计划估计 0）。实际行数 145（计划估计 278，偏大 48%）。
 
 | 行号 | 函数 | 说明 |
 |------|------|------|
@@ -250,7 +272,10 @@
 
 ---
 
-### 域 Q: Workspace Artifacts / Docset（~514 行，v1 计划中不存在）
+### 域 Q: Workspace Artifacts / Docset ✅ 已移出
+
+> **已完成 Phase 2c-1** → `workspace-docset.js` (575 行, 25 函数)
+> 实际行数 654（含 `updateProjectDocsetChrome`），计划估计 514，偏低 21%。
 
 | 行号 | 函数 | 说明 |
 |------|------|------|
@@ -286,12 +311,15 @@
 | 域 K (Overview) | `normalizeHookInspector`, `setCurrentHookInspector`, `normalizeOverviewSnapshot`, `setCurrentOverviewSnapshot`, `setCurrentLogs`, `normalizeRuntimeSnapshot` | **12** | ★★☆ |
 | 域 J (ClawFW) | `window.ClawFW.*`, `fwRerender`, `renderProjectListBlock` | **12** | ★★★ |
 | 域 C (CCB) | `updateChatContextBar` | 间接 (通过 renderCurrentMainView) | ★★☆ |
-| 域 F (Project) | `getFeatureCreatorProjects`, `hasWorkspaceSessions`, `canEnterWorkspaceChat` | **6** | ★★☆ |
-| 域 Q (Docset) | `toggleProjectDocsetOverlay` | **2** | ★☆☆ |
+| 域 F (Project) | `getFeatureCreatorProjects`, `hasWorkspaceSessions`, `canEnterWorkspaceChat` | **6** (实际 **59**) | ★★☆ |
+| 域 Q (Docset) | `toggleProjectDocsetOverlay` | **2** (实际 **3**) | ★☆☆ |
+| 域 P (Context Menu) | — | **0** (实际 **54**) | ★☆☆ |
 | 域 L (Summary) | `openSummaryPopup`, `closeSummaryPopup` | **2** | ★☆☆ |
 | 域 I (Settings) | — | **0** | ★☆☆ |
 | 域 H (Feature Config) | — | **0** | ★☆☆ |
 | 域 M (Resources) | — | **0** | ★☆☆ |
+
+> **注**：域 D/F/O/P/Q 已在 Phase 2c+2d 中移出。域 F 和 P 的实际引用次数远超计划估计（F: 6→59, P: 0→54），这是因为计划统计时未涵盖 `updateAgentRecord`、`closeAgentContextMenu` 等高频函数。
 
 ### 关键不变量
 
@@ -424,85 +452,60 @@
 
 ---
 
-### Phase 2c：低耦合 UI 面板（风险 ★★☆）
+### Phase 2c：低耦合 UI 面板（风险 ★★☆）✅ 完成
 
-#### 2c-1. workspace-docset.js
+> **状态：✅ 完成（2026-07-03）**
+> app-ui.js：7,701 → 6,541 行（-1,160 行）
+> 实际执行顺序与计划不同：先 2c-4 → 2c-2 → 2c-1 → 2c-3（从简单到复杂）
 
-| 项 | 值 |
-|----|-----|
-| 来源 | L5475–5988 |
-| 行数 | ~514 |
-| 移动函数 | 全部 artifact/docset 函数（见域 Q） |
-| 依赖 | `getCurrentAgentRecord`, `escapeHtml`, `localizeWorkspaceValue`, `invoke()` |
-| 注意 | `updateProjectDocsetChrome` 被 `renderCurrentMainView` 调用（L6091），`renderWorkspaceBlock` 通过 block type 分派到 `renderProjectDocsetBlock` |
-| 验证 | flow-workspace agent → 进入 chat → 打开项目文档覆层 → 查看需求卡片 → 编辑需求 → 查看工件面板 |
+**实际执行与原计划的差异：**
 
-#### 2c-2. project-data.js
+1. **执行顺序调整**：原计划 2c-1 到 2c-4，实际执行 2c-4 → 2c-2 → 2c-1 → 2c-3。先做最简单的 2c-4 热身，再做被高频引用的 2c-2 和 2c-1，最后做引用量最大的 2c-3。
 
-| 项 | 值 |
-|----|-----|
-| 来源 | L839–1140 + L1285–1320 |
-| 行数 | ~332 |
-| 移动函数 | `compareByRecency`, `getFeatureCreatorProjects`, `getAgentCreatorProjects`, `getPathLeaf`, `toFeatureDisplayName`, 各 display name 函数, `getProgrammingHelperProjects`, `hasWorkspaceSessions`, `canEnterWorkspaceChat`, `getWorkspaceFormStorageKey`, `getAgentWorkspaceState`, `updateAgentWorkspaceState`, `updateAgentRecord`, `applyManagedPrebuiltAgent`, `getWorkspaceBlockData` |
-| 依赖 | `invoke()` (app-core.js), `allAgents` |
-| 注意 | 被 session-ui.js 引用 9 处 |
-| 验证 | 切换 feature-creator / agent-creator / programming-helper → 查看 session 列表 → 验证项目名正确 |
+2. **引用次数严重低估**：
+   - project-data.js (2c-2)：计划估计 app-main.js 引用 6 次，实际 **59 次**。主因是 `updateAgentRecord` (~30) 和 `applyManagedPrebuiltAgent` (~12) 被大量调用。
+   - context-menu.js (2c-3)：计划估计 0 次（onclick），实际 **54 次**。`closeAgentContextMenu` 等被 app-main.js 直接调用约 20 次。
 
-#### 2c-3. context-menu.js
+3. **行数偏差**：
+   - workspace-docset.js：计划 ~514 行 → 实际 575 行（+12%）
+   - project-data.js：计划 ~332 行 → 实际 382 行（+15%）
+   - context-menu.js：计划 ~278 行 → 实际 153 行（-45%，原计划包含 `showCtxMenu`/`closeCtxMenu` 等通用辅助函数，实际拆分时这些保留在 app-ui.js）
 
-| 项 | 值 |
-|----|-----|
-| 来源 | L9260–9537 |
-| 行数 | ~278 |
-| 移动函数 | 所有 `close*ContextMenu`, `open*ContextMenu`, `openCompactMenu` |
-| 依赖 | DOM 引用, `invoke()`, 全局 agent/session 数据 |
-| 注意 | HTML onclick 调用这些函数 |
-| 验证 | 右键 agent / session / project / feature-repo → 验证菜单弹出和操作 |
+4. **所有引用通过全局作用域运行时解析**，加载顺序无功能影响。
 
-#### 2c-4. ph-model-config.js
+**新增文件清单：**
 
-| 项 | 值 |
-|----|-----|
-| 来源 | L685–794 |
-| 行数 | ~110 |
-| 移动函数 | `ensurePhModelConfigHost`, `renderPhModelConfigOverlay` |
-| 注意 | 被 `window.phOpenModelConfig` (app-main.js) 调用 |
+| 文件 | 行数 | 函数数 | 来源域 | app-main.js 引用 |
+|------|------|--------|--------|-----------------|
+| `public/src/modules/ph-model-config.js` | 125 | 2 | 域 D | 1 |
+| `public/src/modules/project-data.js` | 382 | 18 | 域 F | 59 |
+| `public/src/modules/workspace-docset.js` | 575 | 25 | 域 Q | 3 |
+| `public/src/modules/context-menu.js` | 153 | 10 | 域 P | 54 |
 
 ---
 
-### Phase 2d：渲染工具函数（风险 ★★★）
+### Phase 2d：渲染工具函数（风险 ★★★）✅ 完成
 
-#### 2d-1. markdown-utils.js
+> **状态：✅ 完成（2026-07-03）**
+> app-ui.js：6,541 → 5,925 行（-616 行）
 
-| 项 | 值 |
-|----|-----|
-| 来源 | L8842–9077 |
-| 行数 | ~236 |
-| 移动函数 | `escapeHtml`, `extractDisplayMathBlocks`, `renderDisplayMathLatex`, `renderMarkdown`, `enhanceMathInElement`, `clearTruncatedHighlightData`, `renderJsonHighlight`, `expandTruncatedResult` |
-| 依赖 | `marked` (全局), `katetex` (全局), `Prism` (全局) |
-| 注意 | `escapeHtml` 被全项目调用（约 100+ 处）。`renderMarkdown` 被 app-main.js 大量调用。但都是纯函数，移动后通过全局作用域可见即可 |
-| **关键风险** | `escapeHtml` 是最基础的工具函数。移动它不会造成功能问题（全局作用域），但会让 grep 定位变难。建议在 app-ui.js 原位留一行注释 `// escapeHtml -> modules/markdown-utils.js` |
-| 验证 | 发送消息 → 查看 markdown 渲染 → 代码高亮 → 数学公式 → JSON 工具结果展开 |
+**实际执行与原计划的差异：**
 
-#### 2d-2. template-engine.js
+1. **markdown-utils.js 比 markdown 渲染多移了 marked 配置块**：`const renderer = new marked.Renderer()` + `renderer.codespan` 原本未在计划函数清单中，但它们与 `escapeHtml`/`renderMarkdown` 紧密耦合，属于同一域。首次创建模块时遗漏了这两段，发现后补充到模块文件。
 
-| 项 | 值 |
-|----|-----|
-| 来源 | L9538–9800 |
-| 行数 | ~334 |
-| 移动函数 | `formatError`, `interpolateTemplate`, `applyTemplate`, `parseToolResult`, `resolveTemplatePath`, `loadTemplate`, `collectTemplateNames`, `warmTemplatesInBackground`, `getToolRenderTemplate`, `getToolDisplayName`, `getAgentRuntimeId`, `getAgentDisplayId` |
-| 依赖 | `invoke()` (app-core.js), `marked` (全局), 全局模板缓存 |
-| 注意 | `parseToolResult` 和 `applyTemplate` 被 app-main.js 的 `render()` 大量调用 |
-| 验证 | 发送消息 → 查看 tool call 渲染 → 验证模板正确加载和应用 |
+2. **template-engine.js 函数数多于计划**：计划 12 个函数，实际 15 个。额外移入的 `clearTruncatedHighlightData`, `renderJsonHighlight`, `expandTruncatedResult`, `getTemplateFallback` 原属域 O 但计划清单未列入，实际拆分时归入。
 
-#### 2d-3. theme-lang.js
+3. **theme-lang.js 行数略高**：计划 ~88 行 → 实际 95 行（+8%）。
 
-| 项 | 值 |
-|----|-----|
-| 来源 | L9078–9165 |
-| 行数 | ~88 |
-| 移动函数 | `setConnectionStatus`, `showAgentStartError`, `renderThemeToggle`, `applyLanguage`, `applyTheme` |
-| 依赖 | DOM 引用, `currentLanguage` |
+4. **escapeHtml 移到 markdown-utils.js** 而非计划建议的 app-core.js。全局作用域下功能无差异。
+
+**新增文件清单：**
+
+| 文件 | 行数 | 函数数 | 来源域 |
+|------|------|--------|--------|
+| `public/src/modules/markdown-utils.js` | 160 | 5 + 2 配置块 | 域 O-a |
+| `public/src/modules/template-engine.js` | 374 | 15 | 域 O-b |
+| `public/src/modules/theme-lang.js` | 95 | 5 | 域 O-c |
 
 ---
 
@@ -637,21 +640,24 @@
 <script src="./src/modules/feature-setup-ui.js"></script>
 <script src="./src/modules/work-group-ui.js"></script>
 
-<!-- Phase 2b-2f 新模块（在 app-ui.js 之前） -->
+<!-- Phase 2b 已完成模块（在 app-ui.js 之前） -->
 <script src="./src/modules/settings-overlay.js"></script>
-<script src="./src/modules/resources-viewer.js"></script>
 <script src="./src/modules/feature-config.js"></script>
 <script src="./src/modules/chat-context-bar.js"></script>
+
+<!-- Phase 2c 已完成模块（在 app-ui.js 之前） -->
+<script src="./src/modules/ph-model-config.js"></script>
+<script src="./src/modules/project-data.js"></script>
+<script src="./src/modules/workspace-docset.js"></script>
+<script src="./src/modules/context-menu.js"></script>
+
+<!-- Phase 2d 已完成模块（在 app-ui.js 之前） -->
 <script src="./src/modules/markdown-utils.js"></script>
 <script src="./src/modules/template-engine.js"></script>
 <script src="./src/modules/theme-lang.js"></script>
-<script src="./src/modules/workspace-docset.js"></script>
-<script src="./src/modules/project-data.js"></script>
-<script src="./src/modules/context-menu.js"></script>
-<script src="./src/modules/ph-model-config.js"></script>
-<script src="./src/modules/chat-viewport.js"></script>
-<script src="./src/modules/overview-data.js"></script>
-<script src="./src/modules/debug-panels.js"></script>
+
+<!-- resources-viewer 放在 app-ui.js 之后（仅 group-chat 分支调用） -->
+<script src="./src/modules/resources-viewer.js"></script>
 
 <!-- Phase 3 新模块（在 app-ui.js 之前） -->
 <script src="./src/modules/workspace-blocks.js"></script>
@@ -784,13 +790,13 @@
 | 2b-2 | resources-viewer.js | ~438 (实际 460) | ★☆☆ | ✅ 完成 | 2026-07-01 |
 | 2b-3 | feature-config.js | ~730 (实际 784) | ★☆☆ | ✅ 完成 | 2026-07-01 |
 | 2b-4 | chat-context-bar.js | ~466 (实际 483) | ★★☆ | ✅ 完成 | 2026-07-01 |
-| 2c-1 | workspace-docset.js | ~514 | ★★☆ | 待执行 | |
-| 2c-2 | project-data.js | ~332 | ★★☆ | 待执行 | |
-| 2c-3 | context-menu.js | ~278 | ★★☆ | 待执行 | |
-| 2c-4 | ph-model-config.js | ~110 | ★★☆ | 待执行 | |
-| 2d-1 | markdown-utils.js | ~236 | ★★★ | 待执行 | |
-| 2d-2 | template-engine.js | ~334 | ★★★ | 待执行 | |
-| 2d-3 | theme-lang.js | ~88 | ★★☆ | 待执行 | |
+| 2c-4 | ph-model-config.js | ~110 (实际 125) | ★★☆ | ✅ 完成 | 2026-07-03 |
+| 2c-2 | project-data.js | ~332 (实际 382) | ★★☆ | ✅ 完成 | 2026-07-03 |
+| 2c-1 | workspace-docset.js | ~514 (实际 575) | ★★☆ | ✅ 完成 | 2026-07-03 |
+| 2c-3 | context-menu.js | ~278 (实际 153) | ★★☆ | ✅ 完成 | 2026-07-03 |
+| 2d-1 | markdown-utils.js | ~236 (实际 160) | ★★★ | ✅ 完成 | 2026-07-03 |
+| 2d-2 | template-engine.js | ~334 (实际 374) | ★★★ | ✅ 完成 | 2026-07-03 |
+| 2d-3 | theme-lang.js | ~88 (实际 95) | ★★☆ | ✅ 完成 | 2026-07-03 |
 | 2e-1 | chat-viewport.js | ~573 | ★★★ | 待执行 | |
 | 2f-1 | overview-data.js | ~171 | ★★★ | 待执行 | |
 | 2f-2 | debug-panels.js | ~950 | ★★★ | 待执行 | |
@@ -799,9 +805,9 @@
 | 3c-1 | flow-workspace-ui.js | ~1,700 | ★★★★ | 待执行 | |
 | 3d-1 | workspace-surface.js | ~260 | ★★★★★ | 可选 | |
 
-**预计拆出总计：~9,054 行**
-**已完成拆出（Phase 1 + 2a + 2b）：~11,057 行**
-**拆分后 app-ui.js 残留：7,631 行**（剩余 Phase 2c-3d 待执行）
+**Phase 2c+2d 实际拆出：1,864 行（7 个模块）**
+**已完成拆出总计（Phase 1 + 2a + 2b + 2c + 2d）：~13,051 行**
+**拆分后 app-ui.js 残留：5,925 行**（剩余 Phase 2e-3d 待执行）
 
 ---
 
@@ -819,5 +825,17 @@
 | 拆分顺序 | 3 Phase | **5 Phase (2b/2c/2d/2e/2f/3a/3b/3c/3d)** | 更细粒度的风险分级 |
 | settings-overlay | 合并在 feature-config | **独立优先拆** | 发现 app-main.js 零引用 |
 | resources-viewer | 未提及 | **新增** | 发现完全自包含 |
-| escapeHtml | 未特别提及 | **建议移到 app-core.js** | 发现是最基础的跨域依赖 |
+| escapeHtml | 未特别提及 | **已移到 markdown-utils.js** | Phase 2d 执行时移入，全局作用域下功能无差异 |
 | workspace-surface (3d) | 必须拆 | **可选** | 260 行壳层可接受 |
+
+### Phase 2c+2d 执行后的补充差异（2026-07-03）
+
+| 项 | v2 计划估计 | 实际执行 | 说明 |
+|----|------------|---------|------|
+| app-ui.js 行数 | 7,631 (Phase 2b 后) | 5,925 (Phase 2d 后) | -1,706 行 |
+| project-data app-main.js 引用 | 6 | **59** | 计划漏统计 `updateAgentRecord`(~30)、`applyManagedPrebuiltAgent`(~12) |
+| context-menu app-main.js 引用 | 0 (onclick) | **54** | 计划误判为纯 onclick，实际 `close*ContextMenu` 被 app-main.js 大量直接调用 |
+| context-menu 行数 | ~278 | 153 | 计划包含 `showCtxMenu`/`closeCtxMenu` 等通用辅助函数，实际保留在 app-ui.js |
+| template-engine 函数数 | 12 | 15 | 额外归入 `clearTruncatedHighlightData`, `renderJsonHighlight`, `expandTruncatedResult`, `getTemplateFallback` |
+| markdown-utils | 仅 markdown 函数 | 含 `const renderer` + `marked.setOptions` 配置 | 首次遗漏，后补入 |
+| 执行顺序 | 2c-1→2c-2→2c-3→2c-4 | **2c-4→2c-2→2c-1→2c-3** | 从简单到复杂，降低风险 |
