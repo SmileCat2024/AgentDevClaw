@@ -3480,6 +3480,71 @@ body[data-theme="light"] .plan-task-marker::after {
   line-height: 1.2;
 }
 
+/* ── 完成后停止：hover 高亮 + 中断目标标记 ── */
+
+.plan-task:not(.is-terminal):hover {
+  margin: 0 -6px;
+  padding-left: 6px;
+  padding-right: 6px;
+  border-radius: 6px;
+  background: var(--hover-bg);
+}
+
+.plan-task.is-interrupt-target {
+  margin: 0 -6px;
+  padding-left: 6px;
+  padding-right: 6px;
+  border-radius: 6px;
+  background: rgba(255, 193, 7, 0.06);
+}
+
+body[data-theme="light"] .plan-task.is-interrupt-target {
+  background: rgba(255, 193, 7, 0.04);
+}
+
+.plan-task.is-interrupt-target .plan-task-dot {
+  background: var(--warning-color) !important;
+  box-shadow: 0 0 6px rgba(255, 193, 7, 0.4);
+}
+
+.plan-task-interrupt-label {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--warning-color);
+}
+
+.plan-task-action {
+  display: none;
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.12s;
+}
+
+.plan-task-action:hover {
+  color: var(--code-accent);
+}
+
+.plan-task.is-interrupt-target .plan-task-action {
+  display: inline-block;
+  color: var(--warning-color);
+}
+
+.plan-task.is-interrupt-target .plan-task-action:hover {
+  color: var(--warning-color);
+  opacity: 0.7;
+}
+
+.plan-task:not(.is-terminal):hover .plan-task-action {
+  display: inline-block;
+}
+
 .plan-empty {
   padding: 28px 2px;
 }

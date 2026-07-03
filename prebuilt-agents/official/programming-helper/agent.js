@@ -5,7 +5,8 @@
  * 基于 ProtoClaw 当前内置的 npm agentdev 兼容层运行
  */
 
-import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature, LspFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature } from 'agentdev';
+import { ControlledTodoFeature } from './controlled-todo-feature.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';
@@ -125,7 +126,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
       this.use(new WebSearchFeature());
       this.use(new MemoryFeature({ workspaceDir }));
     } else {
-      this.use(new TodoFeature({
+      this.use(new ControlledTodoFeature({
         reminderTemplate: TODO_REMINDER_PROMPT_PATH,
         reminderThresholdWithTasks: config.reminderThresholdWithTasks,
         reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,

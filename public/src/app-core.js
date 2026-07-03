@@ -349,6 +349,21 @@ let currentTodoPlan = {
   summary: { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0, blocked: 0 },
 };
 let currentTodoPlanSignature = '';
+let _interruptTargetCache = new Map(); // key: runtimeContextKey, value: taskId|null
+function getInterruptTargetId() {
+  const key = getRuntimeContextKey();
+  if (!key) return null;
+  return _interruptTargetCache.get(key) || null;
+}
+function setInterruptTargetId(taskId) {
+  const key = getRuntimeContextKey();
+  if (!key) return;
+  if (taskId) {
+    _interruptTargetCache.set(key, taskId);
+  } else {
+    _interruptTargetCache.delete(key);
+  }
+}
 let currentLogs = [];
 let currentLogsSignature = '';
 let currentMcpInfo = null;
@@ -569,6 +584,7 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
   window.lastInputRequests = currentInputRequests;
   followLatestEnabled = cached.followLatest !== undefined ? cached.followLatest : true;
   _restoredScrollTop = typeof cached.scrollTop === 'number' ? cached.scrollTop : null;
+  if (typeof updatePlanBadge === 'function') updatePlanBadge();
   return true;
 }
 

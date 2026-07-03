@@ -5672,12 +5672,25 @@ async function poll() {
     if (todoRes.ok) {
       const nextTodoPlan = normalizeTodoPlan(await todoRes.json());
       const nextTodoSignature = getTodoPlanSignature(nextTodoPlan);
+      // 当目标任务进入终态时，自动清除中断标记
+      let interruptCleared = false;
+      const currentInterruptTarget = getInterruptTargetId();
+      if (currentInterruptTarget) {
+        const target = nextTodoPlan.tasks.find(tk => tk.id === currentInterruptTarget);
+        if (target && (target.status === 'completed' || target.status === 'deleted')) {
+          setInterruptTargetId(null);
+          interruptCleared = true;
+        }
+      }
       if (nextTodoSignature !== currentTodoPlanSignature) {
         currentTodoPlan = nextTodoPlan;
         currentTodoPlanSignature = nextTodoSignature;
         if (activeFeaturePanel === 'plan') {
           renderFeaturePanel();
         }
+        updatePlanBadge();
+      } else if (interruptCleared && activeFeaturePanel === 'plan') {
+        renderFeaturePanel();
       }
     }
 

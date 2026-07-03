@@ -940,6 +940,14 @@ process.on('message', (msg) => {
     } catch (err) {
       console.error(`[IM-Line] Unmount error for "${carrier}":`, err);
     }
+  } else if (msg.type === 'todo-control') {
+    // 设置/取消 TODO 中断目标
+    const todoFeature = agent?.features?.get?.('todo');
+    if (todoFeature && typeof todoFeature.setInterruptTarget === 'function') {
+      todoFeature.setInterruptTarget(msg.taskId || null);
+    } else {
+      console.warn('[IPC] Todo feature not found or does not support setInterruptTarget');
+    }
   }
 });
 
@@ -1026,7 +1034,7 @@ function tuneSummaryLLM(llm) {
   try {
     if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
       const current = Number(llm.maxTokens);
-      llm.maxTokens = Number.isFinite(current) && current > 0 ? Math.min(current, 2500) : 2500;
+      llm.maxTokens = Number.isFinite(current) && current > 0 ? Math.min(current, 8000) : 8000;
     }
   } catch {}
   return () => {
@@ -1080,7 +1088,10 @@ async function generateInProcessSummary(extraInstructions = '') {
   const restoreLLM = tuneSummaryLLM(agent?.llm);
   try {
     console.log(`[ProtoClaw Runtime] 开始进程内摘要压缩 messages=${messages.length} tools=${tools.length}`);
-    const response = await agent.llm.chat(messages, tools);
+    const response = await agent.llm.chat(messages, tools, { noStream: true });
+    if (response?.stopReason === 'max_tokens') {
+      throw new Error('摘要因 max_tokens 限制被截断（stopReason=max_tokens），拒绝接受不完整结果');
+    }
     const rawResponse = typeof response?.content === 'string' ? response.content : '';
     const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
     if (toolCalls.some(tc => tc?.name !== 'record_compaction_context')) {
@@ -1275,7 +1286,10 @@ async function generatePartialInProcessSummary(allMessages, pivotMsgIndex, feedb
   const restoreLLM = tuneSummaryLLM(agent?.llm);
   try {
     console.log(`[ProtoClaw Runtime] 开始部分摘要压缩 messages=${messages.length} tools=${tools.length}`);
-    const response = await agent.llm.chat(messages, tools);
+    const response = await agent.llm.chat(messages, tools, { noStream: true });
+    if (response?.stopReason === 'max_tokens') {
+      throw new Error('摘要因 max_tokens 限制被截断（stopReason=max_tokens），拒绝接受不完整结果');
+    }
     const rawResponse = typeof response?.content === 'string' ? response.content : '';
     const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
     if (toolCalls.some(tc => tc?.name !== 'record_compaction_context')) {

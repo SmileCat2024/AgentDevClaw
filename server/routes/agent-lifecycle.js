@@ -23,6 +23,7 @@ import {
 } from './assembly-helpers.js';
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
+import { sendIPCtoSession } from '../shared/ipc.js';
 
 // ── Agent Lifecycle ──────────────────────────────────────────────
 // Factory pattern: sessionApi is a mutable reference object that gets
@@ -788,6 +789,32 @@ export function createAgentLifecycleModule(ctx) {
         const status = await startManagedAgent(agent, selectedSessionId);
         const connected = await waitForManagedRuntimeReady(agent.id, 10000, selectedSessionId);
         res.json({ status, agent: connected });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post('/protoclaw/todo_control', express.json(), async (req, res, next) => {
+      try {
+        const { agentId, sessionId, taskId } = req.body || {};
+        if (!agentId) {
+          return res.status(400).json({ error: 'agentId is required' });
+        }
+        // Try exact session match first, then fall back to primary runtime
+        let sent = false;
+        if (sessionId) {
+          sent = sendIPCtoSession(agentId, sessionId, {
+            type: 'todo-control',
+            taskId: taskId || null,
+          });
+        }
+        if (!sent) {
+          sent = sendIPCtoSession(agentId, undefined, {
+            type: 'todo-control',
+            taskId: taskId || null,
+          });
+        }
+        res.json({ ok: sent });
       } catch (error) {
         next(error);
       }

@@ -5613,7 +5613,7 @@ async function sendTodoControl(taskId) {
     await fetch('/protoclaw/todo_control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: currentRuntimeAgentId, sessionId, taskId }),
+      body: JSON.stringify({ agentId: currentAgentId, sessionId, taskId }),
     });
   } catch (e) {
     console.error('[TodoControl] request failed:', e);
