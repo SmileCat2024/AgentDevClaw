@@ -6014,8 +6014,6 @@ function renderInputRequests(requests) {
     && lastRenderedInputMode === 'persistent';
 
   if (_voiceRecording && !_preserveVoiceRecording) {
-    console.log('[VoiceInput] renderInputRequests: cancelling recording (mode %s→%s)',
-      lastRenderedInputMode, renderMode);
     if (_voicePendingSend) {
       // User already pressed send — preserve auto-send intent.
       // Just stop the recording; onstop will run ASR and auto-send normally.
@@ -6207,7 +6205,6 @@ function renderInputRequests(requests) {
         _voiceTargetBtn = newBtn;
         newBtn.classList.add('recording');
         _updateVoiceUI();
-        console.log('[VoiceInput] reattached button after persistent re-render, pendingSend=%s', _voicePendingSend);
       }
     }
   }
@@ -6520,7 +6517,6 @@ function onPersistentBtnClick() {
   if (!btn) return;
   if (_voiceTranscribing) return;
   if (_voiceRecording) {
-    console.log('[VoiceInput] send pressed while recording → _voicePendingSend=true, voiceAgentId=%s', _voiceAgentId);
     _voicePendingSend = true;
     stopVoiceRecording();
     return;
@@ -8232,9 +8228,6 @@ async function startVoiceRecording(btn) {
       _voiceRecording = false;
       _playVoiceSound('stop');
 
-      console.log('[VoiceInput] onstop fired: cancelled=%s pendingSend=%s chunkCount=%d',
-        _voiceCancelled, _voicePendingSend, _voiceAudioChunks.length);
-
       if (_voiceCancelled) {
         _voiceCancelled = false;
         _voiceAudioChunks = [];
@@ -8264,13 +8257,10 @@ async function startVoiceRecording(btn) {
       if (_voicePendingSend) {
         _voicePendingSend = false;
         const targetId = btn.dataset.target;
-        console.log('[VoiceInput] auto-send check: targetId=%s voiceAgentId=%s voiceCacheKey=%s currentCacheKey=%s',
-          targetId, _voiceAgentId, _voiceCacheKey, _getSessionInputCacheKey());
         if (targetId === 'input-persistent') {
           const _currentCacheKey = _getSessionInputCacheKey();
           if (_currentCacheKey === _voiceCacheKey) {
             // Same session — text already in textarea, submit normally
-            console.log('[VoiceInput] same-session auto-send → submitQueuedInput()');
             submitQueuedInput();
           } else {
             // Session switched — auto-submit directly to original agent
@@ -8280,29 +8270,45 @@ async function startVoiceRecording(btn) {
             const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
             delete _sessionInputCache[_voiceCacheKey];
             fullText = cachedInput + fullText;
-            console.log('[VoiceInput] cross-session auto-send: voiceAgentId=%s fullTextLen=%d fullText=%s',
-              _voiceAgentId, fullText.length, fullText.slice(0, 80));
             if (fullText.trim()) {
               fetch(`/api/agents/${_voiceAgentId}/queue-input`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: fullText })
               }).then(res => {
-                console.log('[VoiceInput] cross-session queue-input response: status=%d ok=%s', res.status, res.ok);
                 if (!res.ok) {
                   res.text().then(t => console.error('[VoiceInput] cross-session queue-input error body:', t));
                 }
               }).catch(e => console.error('[VoiceInput] cross-session auto-send fetch failed:', e));
-            } else {
-              console.log('[VoiceInput] cross-session auto-send SKIPPED: fullText is empty');
             }
           }
         } else if (targetId.startsWith('input-')) {
-          // Non-persistent request — only auto-send if still on same session
+          const requestId = targetId.slice('input-'.length);
           if (_getSessionInputCacheKey() === _voiceCacheKey) {
-            submitInput(targetId.slice('input-'.length));
+            submitInput(requestId);
+          } else {
+            // Session switched — auto-submit to original agent's input request
+            let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
+            delete _pendingVoiceResults[_voiceCacheKey];
+            const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
+            delete _sessionInputCache[_voiceCacheKey];
+            fullText = cachedInput + fullText;
+            if (fullText.trim()) {
+              fetch(`/api/agents/${_voiceAgentId}/input`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  requestId,
+                  input: fullText,
+                  response: { kind: 'text', text: fullText },
+                })
+              }).then(res => {
+                if (!res.ok) {
+                  res.text().then(t => console.error('[VoiceInput] cross-session input error:', t));
+                }
+              }).catch(e => console.error('[VoiceInput] cross-session input failed:', e));
+            }
           }
-          // If session switched, leave result in _pendingVoiceResults for manual injection
         }
       }
     };
@@ -8355,8 +8361,6 @@ async function sendAudioToASR(blob, btn) {
         if (text) {
           const textarea = document.getElementById(targetId);
           const _currentCacheKey = _getSessionInputCacheKey();
-          console.log('[VoiceInput] ASR result: textLen=%d currentCacheKey=%s voiceCacheKey=%s same=%s',
-            text.length, _currentCacheKey, _voiceCacheKey, _currentCacheKey === _voiceCacheKey);
           if (textarea && _currentCacheKey === _voiceCacheKey) {
             insertTextAtCursor(textarea, text);
             autoResize(textarea);
