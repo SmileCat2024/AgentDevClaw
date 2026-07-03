@@ -601,6 +601,15 @@ function renderWorkspaceSessionList(agent, block) {
       ? escapeHtml(getProgrammingHelperProjectDisplayName(currentProject))
       : (isZh ? '未打开项目' : 'No Project');
 
+    // Open-folder icon button for the active project
+    const openFolderBtnHtml = (dir) =>
+      '<button class="ph-dropdown-open-folder" type="button" title="' +
+      escapeHtml(isZh ? '在文件夹中打开' : 'Open in folder') +
+      '" onclick="event.stopPropagation();window.phOpenInExplorer(\'' + escapeHtml(dir) + '\')">' +
+      '<svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M2 4.5C2 3.67 2.67 3 3.5 3H6.5L8 4.5H12.5C13.33 4.5 14 5.17 14 6V11.5C14 12.33 13.33 13 12.5 13H3.5C2.67 13 2 12.33 2 11.5V4.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>' +
+      '<span class="ph-dropdown-open-folder-text">' + escapeHtml(isZh ? '打开' : 'Open') + '</span>' +
+      '</button>';
+
     // Dropdown items for recent projects
     const dropdownItems = projects.map((p) => {
       const pName = getProgrammingHelperProjectDisplayName(p);
@@ -613,6 +622,7 @@ function renderWorkspaceSessionList(agent, block) {
         '<div class="ph-project-dropdown-name">' + escapeHtml(pName) + '</div>',
         '<div class="ph-project-dropdown-path">' + escapeHtml(p.openDirectory) + '</div>',
         '</div>',
+        (isActive ? openFolderBtnHtml(p.openDirectory) : ''),
         '</div>',
       ].join('');
     }).join('');
@@ -633,6 +643,7 @@ function renderWorkspaceSessionList(agent, block) {
         '<div class="ph-project-header-info">' +
         '<div class="ph-project-header-name">' + headerName + '</div>' +
         '</div>' +
+        (currentProject ? openFolderBtnHtml(currentProject.openDirectory) : '') +
         '</div>';
 
     // Banner (restored) + project bar
@@ -686,7 +697,6 @@ function renderWorkspaceSessionList(agent, block) {
       '</div>',
       '<div class="ph-project-bar-right">',
       modelSwitchHtml,
-      (currentProject ? '<div class="ph-project-bar-path" title="' + escapeHtml(isZh ? '点击在文件管理器中打开' : 'Click to open in file explorer') + '" data-path="' + escapeHtml(currentProject.openDirectory) + '" onclick="window.phOpenInExplorer(this.dataset.path)">' + escapeHtml(currentProject.openDirectory) + '</div>' : ''),
       (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'create_session', openDirectory: currentProject.openDirectory || '' })) + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
       '</div>',
       '</div>',

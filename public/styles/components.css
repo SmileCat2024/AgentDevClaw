@@ -5049,8 +5049,9 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
-  border-radius: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
   background: transparent;
   border: 1px solid rgba(255,255,255,0.1);
   cursor: default;
@@ -5065,8 +5066,8 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   border-color: rgba(99,145,255,0.4);
 }
 .ph-model-switch-name {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -6092,20 +6093,6 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
 }
 .ph-project-bar-left { flex: 0 1 auto; min-width: 0; }
 .ph-project-bar-right { display: flex; gap: 16px; flex-shrink: 0; align-items: center; }
-.ph-project-bar-path {
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 280px;
-  cursor: pointer;
-  transition: color 0.15s;
-}
-.ph-project-bar-path:hover {
-  color: var(--text-primary);
-  text-decoration: underline;
-}
 
 /* Project header avatar */
 .ph-project-header-avatar {
@@ -6245,6 +6232,33 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   margin-top: 1px;
 }
 
+/* Open-folder button inside dropdown item / static header */
+.ph-dropdown-open-folder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.ph-dropdown-open-folder:hover {
+  background: rgba(255,255,255,0.12);
+  color: var(--text-primary);
+}
+.ph-dropdown-open-folder-text {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
 /* ── PH Welcome (no project state) ── */
 .ph-welcome {
   display: flex;
@@ -6352,6 +6366,9 @@ body[data-theme="light"] .ph-project-dropdown-item.active {
 }
 body[data-theme="light"] .ph-project-dropdown-avatar {
   background: linear-gradient(135deg, rgba(0,0,0,0.06), rgba(0,0,0,0.02));
+}
+body[data-theme="light"] .ph-dropdown-open-folder:hover {
+  background: rgba(0,0,0,0.08);
 }
 body[data-theme="light"] .ph-session-type-badge {
   background: var(--hover-bg);
