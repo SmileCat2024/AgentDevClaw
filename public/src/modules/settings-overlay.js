@@ -97,7 +97,7 @@ function usageInfoDefaults() {
     search: '',
     chartView: 'trend',
     chartModel: '__all__',
-    calendarMode: 'daily',
+    calendarDaily: null,
     groupMenuOpen: false,
     chartModelMenuOpen: false,
     from: today,
@@ -118,11 +118,32 @@ function usageInfoRangeDates(range) {
   return { from: today, to: today };
 }
 
+async function loadUsageInfoCalendarData() {
+  const state = getUsageInfoState();
+  try {
+    const params = new URLSearchParams({
+      from: usageInfoDateDaysAgo(364),
+      to: usageInfoToday(),
+      groupBy: 'model',
+    });
+    const resp = await fetch('/protoclaw/usage/summary?' + params.toString());
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    state.calendarDaily = Array.isArray(data.daily) ? data.daily : [];
+  } catch (e) {
+    state.calendarDaily = [];
+  }
+  renderUsageInfoOverlay();
+}
+
 async function openUsageInfo() {
   const state = getUsageInfoState();
   Object.assign(state, usageInfoDefaults(), { open: true });
   renderUsageInfoOverlay();
-  await loadUsageInfoData();
+  await Promise.all([
+    loadUsageInfoData(),
+    loadUsageInfoCalendarData(),
+  ]);
 }
 
 function closeUsageInfo() {
@@ -159,8 +180,9 @@ async function loadUsageInfoData() {
 
 function usageInfoNumber(value) {
   const n = Number.isFinite(value) ? value : 0;
-  if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'K';
+  if (n >= 1000000000) return (n / 1000000000).toFixed(2) + 'B';
+  if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(2) + 'K';
   return String(n);
 }
 
@@ -397,18 +419,18 @@ function renderUsageInfoTrend(daily, from, to, events) {
       const modelLines = Array.from(item.models.entries())
         .sort((a, b) => (b[1]?.total || 0) - (a[1]?.total || 0))
         .slice(0, 5)
-        .map(([model, stats]) => model + '  ' + usageInfoFullNumber(stats.total || 0));
+        .map(([model, stats]) => model + '  ' + usageInfoNumber(stats.total || 0));
       const tip = usingAllModels
         ? [
             item.title,
-            (isZh ? '总量' : 'Total') + ' ' + usageInfoFullNumber(total),
+            (isZh ? '总量' : 'Total') + ' ' + usageInfoNumber(total),
             ...(modelLines.length ? modelLines : [isZh ? '暂无模型明细' : 'No model detail']),
           ].join('\n')
         : [
             item.title,
             selectedModel,
-            (isZh ? '总量' : 'Total') + ' ' + usageInfoFullNumber(total),
-            (isZh ? '请求' : 'Requests') + ' ' + usageInfoFullNumber(value.requests || 0),
+            (isZh ? '总量' : 'Total') + ' ' + usageInfoNumber(total),
+            (isZh ? '请求' : 'Requests') + ' ' + usageInfoNumber(value.requests || 0),
           ].join('\n');
       return '<rect class="usage-info-trend-hit" x="' + Math.max(left, x - (plotWidth / Math.max(1, buckets.length)) / 2).toFixed(2) + '" y="' + top + '" width="' + Math.max(10, plotWidth / Math.max(1, buckets.length)).toFixed(2) + '" height="' + plotHeight + '" data-tip="' + escapeHtml(tip) + '" data-guide-target="' + index + '"></rect>';
     }).join(''),
@@ -486,10 +508,10 @@ function renderUsageInfoBars(daily, from, to, events) {
       const tip = [
         item.title,
         usingAllModels ? (isZh ? '全部模型' : 'All models') : selectedModel,
-        (isZh ? '总量' : 'Total') + ' ' + usageInfoFullNumber(total),
-        (isZh ? '输入（命中缓存）' : 'Input cached') + ' ' + usageInfoFullNumber(cached),
-        (isZh ? '输入（未命中缓存）' : 'Input uncached') + ' ' + usageInfoFullNumber(uncached),
-        (isZh ? '输出' : 'Output') + ' ' + usageInfoFullNumber(output),
+        (isZh ? '总量' : 'Total') + ' ' + usageInfoNumber(total),
+        (isZh ? '输入（命中缓存）' : 'Input cached') + ' ' + usageInfoNumber(cached),
+        (isZh ? '输入（未命中缓存）' : 'Input uncached') + ' ' + usageInfoNumber(uncached),
+        (isZh ? '输出' : 'Output') + ' ' + usageInfoNumber(output),
       ].join('\n');
       return '<rect class="usage-info-trend-hit" x="' + Math.max(left, x - (plotWidth / Math.max(1, buckets.length)) / 2).toFixed(2) + '" y="' + top + '" width="' + Math.max(10, plotWidth / Math.max(1, buckets.length)).toFixed(2) + '" height="' + plotHeight + '" data-tip="' + escapeHtml(tip) + '" data-guide-target="' + index + '"></rect>'
         + '<g class="usage-info-trend-stack" data-tip="' + escapeHtml(tip) + '">'
@@ -513,26 +535,14 @@ function renderUsageInfoBars(daily, from, to, events) {
   ].join('');
 }
 
-function renderUsageInfoCalendar(daily, from, to) {
+function renderUsageInfoCalendar() {
   const isZh = currentLanguage === 'zh';
   const state = getUsageInfoState();
-  const end = usageInfoParseLocalDate(to || usageInfoToday());
+  const end = usageInfoParseLocalDate(usageInfoToday());
   const start = new Date(end.getTime() - 364 * 86400000);
   const dates = usageInfoDateRange(usageInfoLocalDateString(start), usageInfoLocalDateString(end));
-  const byDate = new Map((Array.isArray(daily) ? daily : []).map((item) => [item.date, item]));
-  const cells = dates.map((date) => ({ date, rawTotal: byDate.get(date)?.totals?.totalTokens || 0, total: byDate.get(date)?.totals?.totalTokens || 0 }));
-  if (state.calendarMode === 'weekly') {
-    for (let index = 0; index < cells.length; index += 7) {
-      const sum = cells.slice(index, index + 7).reduce((acc, item) => acc + item.rawTotal, 0);
-      cells.slice(index, index + 7).forEach((item) => { item.total = sum; });
-    }
-  } else if (state.calendarMode === 'cumulative') {
-    let running = 0;
-    cells.forEach((item) => {
-      running += item.rawTotal;
-      item.total = running;
-    });
-  }
+  const byDate = new Map((Array.isArray(state.calendarDaily) ? state.calendarDaily : []).map((item) => [item.date, item]));
+  const cells = dates.map((date) => ({ date, total: byDate.get(date)?.totals?.totalTokens || 0 }));
   const max = Math.max(1, cells.reduce((acc, item) => Math.max(acc, item.total), 0));
   if (!cells.length) return '';
   const leading = usageInfoParseLocalDate(cells[0].date).getDay();
@@ -551,18 +561,13 @@ function renderUsageInfoCalendar(daily, from, to) {
     '<div class="usage-info-calendar">',
     '<div class="usage-info-calendar-head">',
     '<span>' + (isZh ? 'Token 活动' : 'Token activity') + '</span>',
-    '<div>',
-    [['daily', isZh ? '每日' : 'Daily'], ['weekly', isZh ? '每周' : 'Weekly'], ['cumulative', isZh ? '累计' : 'Total']].map(([value, label]) => (
-      '<button class="' + (state.calendarMode === value ? 'active' : '') + '" type="button" onclick="setUsageInfoCalendarMode(\'' + value + '\')">' + escapeHtml(label) + '</button>'
-    )).join(''),
-    '</div>',
     '</div>',
     '<div class="usage-info-calendar-scroll">',
     '<div class="usage-info-calendar-grid">',
     padded.map((item) => {
       if (!item) return '<div class="usage-info-calendar-cell ghost"></div>';
       const level = item.total <= 0 ? 0 : Math.max(1, Math.min(4, Math.ceil((item.total / max) * 4)));
-      const tip = item.date + '\n' + (isZh ? 'Token 增量 ' : 'Token delta ') + usageInfoFullNumber(item.rawTotal) + '\n' + (isZh ? '当前口径 ' : 'Current view ') + usageInfoFullNumber(item.total);
+      const tip = item.date + '\n' + (isZh ? 'Token 增量 ' : 'Token delta ') + usageInfoNumber(item.total);
       return '<div class="usage-info-calendar-cell level-' + level + '" data-tip="' + escapeHtml(tip) + '"></div>';
     }).join(''),
     '</div>',
@@ -578,7 +583,7 @@ function renderUsageInfoMainChart(daily, from, to, events) {
   const state = getUsageInfoState();
   if (state.chartModel === '__all__' && state.chartView === 'bar') state.chartView = 'trend';
   if (state.chartModel !== '__all__' && state.chartView === 'calendar') state.chartView = 'trend';
-  if (state.chartView === 'calendar') return renderUsageInfoCalendar(daily, from, to);
+  if (state.chartView === 'calendar') return renderUsageInfoCalendar();
   if (state.chartView === 'bar') return renderUsageInfoBars(daily, from, to, events);
   return renderUsageInfoTrend(daily, from, to, events);
 }
@@ -640,7 +645,7 @@ function renderUsageInfoGroups(groups, totals) {
         '</div>',
         '<div class="usage-info-rank-value">',
         '<strong>' + usageInfoNumber(total) + '</strong>',
-        '<span>' + pct + '% · ' + usageInfoFullNumber(rowTotals.requests || 0) + ' req</span>',
+        '<span>' + pct + '% · ' + usageInfoNumber(rowTotals.requests || 0) + ' req</span>',
         '</div>',
         '</div>',
       ].join('');
@@ -853,12 +858,6 @@ function moveUsageInfoTooltip(event, tooltip) {
 window.setUsageInfoChartView = function(chartView) {
   const state = getUsageInfoState();
   state.chartView = chartView;
-  renderUsageInfoOverlay();
-};
-
-window.setUsageInfoCalendarMode = function(calendarMode) {
-  const state = getUsageInfoState();
-  state.calendarMode = calendarMode;
   renderUsageInfoOverlay();
 };
 
