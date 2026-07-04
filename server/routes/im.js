@@ -32,6 +32,7 @@ import { sendIPCtoSession } from '../shared/ipc.js';
 import { resolveSessionModelInfo } from './model-config.js';
 import { getProjectAdapter } from './dispatch.js';
 import { getRuntimeExecutionState } from '../runtime-call-envelope.js';
+import { IM_CHANNELS, getIMChannelIds, getIMChannelLabel } from '../shared/im-channels.js';
 
 // ── Module state ──────────────────────────────────────────────────
 
@@ -111,32 +112,11 @@ export function normalizeIMWorkspaceConfig(raw = {}) {
     channels[String(channelId)] = normalizeIMChannelConfig(channelValue, {});
   }
 
-  if (!channels.qq) {
-    channels.qq = normalizeIMChannelConfig({}, {
-      label: 'QQ',
-      note: '',
-    });
-  }
-
-  if (!channels.weixin) {
-    channels.weixin = normalizeIMChannelConfig({}, {
-      label: '微信',
-      note: '',
-    });
-  }
-
-  if (!channels.feishu) {
-    channels.feishu = normalizeIMChannelConfig({}, {
-      label: '飞书',
-      note: '',
-    });
-  }
-
-  if (!channels.wecom) {
-    channels.wecom = normalizeIMChannelConfig({}, {
-      label: '企业微信',
-      note: '',
-    });
+  // Ensure all registered channels have a default entry
+  for (const ch of IM_CHANNELS) {
+    if (!channels[ch.id]) {
+      channels[ch.id] = normalizeIMChannelConfig({}, { label: ch.label });
+    }
   }
 
   const rawChannel = typeof raw.selectedChannel === 'string' ? raw.selectedChannel.trim() : '';
@@ -158,10 +138,8 @@ export function normalizeIMWorkspaceConfig(raw = {}) {
   };
 }
 
-const IM_CHANNEL_DISPLAY_LABELS = { qq: 'QQ', weixin: '微信', feishu: '飞书', wecom: '企业微信' };
-
 export function getPortalAgentDisplayName(channelId) {
-  const label = IM_CHANNEL_DISPLAY_LABELS[channelId] || channelId || '未接渠道';
+  const label = getIMChannelLabel(channelId) || '未接渠道';
   return `门户代理（${label}）`;
 }
 
@@ -539,7 +517,7 @@ export function resolveLineTransferConflict(config, { lineId, carrier }) {
     }
   }
   if (config.selectedChannel === carrier) {
-    const available = ['qq', 'weixin', 'feishu', 'wecom'].find(c =>
+    const available = getIMChannelIds().find(c =>
       c !== carrier && !(config.lines || []).some(l => l.carrier === c)
     );
     config.selectedChannel = available || '';

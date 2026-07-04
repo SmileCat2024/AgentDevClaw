@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from 'fs';
 import * as os from 'os';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { ConversationExportFeature } from '../../../local-features/dist/conversation-export/src/index.js';
+import { getIMChannelLabel } from '../../../server/shared/im-channels.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -148,7 +149,7 @@ class IMOperatorFeature {
               return '空闲';
             };
             const summary = lines.map(l => {
-              const carrierLabel = l.carrier === 'qq' ? 'QQ' : l.carrier === 'weixin' ? '微信' : l.carrier === 'feishu' ? '飞书' : l.carrier === 'wecom' ? '企业微信' : '未配置';
+              const carrierLabel = l.carrier ? getIMChannelLabel(l.carrier) : '未配置';
               const bound = l.boundSession;
               if (!bound) {
                 return `- **${l.name}** [${carrierLabel}]: 空闲（未连接）`;

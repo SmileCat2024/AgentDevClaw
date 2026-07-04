@@ -19,6 +19,7 @@ import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } fr
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
+import { getIMSourceValues, getIMChannel, getIMChannelLabel } from '../server/shared/im-channels.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -663,8 +664,11 @@ let callArbiter = null;
 //    and at least one prior IM peer is known.
 
 const IM_REPLY_POLICY = {
-  /** IM sources that already handle their own reply — skip callfinish delivery */
-  IM_SOURCES: new Set(['qq', 'weixin', 'feishu', 'wecom']),
+  /**
+   * IM sources that already handle their own reply — skip callfinish delivery.
+   * Derived from the channel registry so it stays in sync automatically.
+   */
+  IM_SOURCES: getIMSourceValues(),
   /** Maximum character length for IM result delivery before truncation */
   MAX_IM_RESULT_LENGTH: 1500,
   /** Maximum length for error messages sent to IM */
@@ -766,45 +770,42 @@ async function mountCarrierFeature(carrier) {
   try {
     console.log(`[IM-Line] Mounting carrier="${carrier}" dynamically...`);
 
-    if (carrier === 'qq') {
-      const { QQBotFeature } = await import('@agentdev/qqbot-feature');
+    const ch = getIMChannel(carrier);
+    if (!ch) {
+      console.error(`[IM-Line] Unknown carrier: "${carrier}"`);
+      return;
+    }
+
+    const mod = await import(ch.packageName);
+    const CarrierClass = mod[ch.exportName];
+
+    // ── Config loading ──
+    let feature;
+    if (ch.configEnv === null) {
+      // QQ loads config from server API
       const cfgResp = await fetch(`${SERVER_ORIGIN}/protoclaw/qqbot_config`);
       const qqCfg = cfgResp.ok ? await cfgResp.json() : {};
-      const feature = new QQBotFeature({
+      feature = new CarrierClass({
         appId: qqCfg?.appId || '',
         clientSecret: qqCfg?.clientSecret || '',
         configPath: qqCfg?.configPath || '',
         accountId: qqCfg?.accountId || '',
         markdownSupport: qqCfg?.markdownSupport ?? true,
       });
-      await agent.mountFeature(feature);
-      await feature.startGateway(agent);
-      // Route IM messages through CallArbiter for serialization
-      if (callArbiter) {
-        feature.agentRef = {
-          onCall: async (text) => {
-            const entry = callArbiter.enqueue({ source: 'im-line-qq', text });
-            const finished = await callArbiter.waitForCompletion(entry.id);
-            if (finished.status === 'failed') {
-              throw new Error(finished.error || 'unknown error');
-            }
-            return finished.result || '处理完成';
-          },
-        };
-      }
-      _mountedCarrierFeature = 'qq';
-      console.log('[IM-Line] ✓ QQBot dynamically mounted + gateway started');
-    } else if (carrier === 'weixin') {
-      const { WeixinBot } = await import('@agentdev/weixin-bot');
-      const feature = new WeixinBot({
-        configPath: process.env.PROTOCLAW_WEIXIN_CONFIG_PATH || '',
+    } else {
+      feature = new CarrierClass({
+        configPath: process.env[ch.configEnv] || '',
       });
-      await agent.mountFeature(feature);
-      await feature.startGateway(agent);
-      // Override handleMessage to route through CallArbiter
-      if (callArbiter && typeof feature.handleMessage === 'function') {
-        const origHandle = feature.handleMessage.bind(feature);
-        const { WeixinApiClient } = await import('@agentdev/weixin-bot');
+    }
+
+    await agent.mountFeature(feature);
+    await feature.startGateway(agent);
+
+    // ── Message routing through CallArbiter ──
+    if (callArbiter) {
+      if (ch.messageMode === 'handleMessage') {
+        // Weixin: override handleMessage (uses weixin-specific API client)
+        const { WeixinApiClient } = mod;
         feature.handleMessage = async (msg) => {
           if (!msg || msg.message_type !== 1) return;
           const text = WeixinApiClient.extractText(msg);
@@ -819,7 +820,7 @@ async function mountCarrierFeature(carrier) {
 
           try {
             const entry = callArbiter.enqueue({
-              source: 'im-line-weixin',
+              source: ch.id,
               sourceRef: msg.from_user_id || '',
               text,
             });
@@ -837,21 +838,11 @@ async function mountCarrierFeature(carrier) {
             feature._pendingMedia = [];
           }
         };
-      }
-      _mountedCarrierFeature = 'weixin';
-      console.log('[IM-Line] ✓ WeixinBot dynamically mounted + gateway started');
-    } else if (carrier === 'feishu') {
-      const { FeishuBot } = await import('@agentdev/feishu-bot');
-      const feature = new FeishuBot({
-        configPath: process.env.PROTOCLAW_FEISHU_CONFIG_PATH || '',
-      });
-      await agent.mountFeature(feature);
-      await feature.startGateway(agent);
-      // Route IM messages through CallArbiter for serialization
-      if (callArbiter) {
+      } else {
+        // QQ/Feishu/Wecom: use agentRef.onCall
         feature.agentRef = {
           onCall: async (text) => {
-            const entry = callArbiter.enqueue({ source: 'im-line-feishu', text });
+            const entry = callArbiter.enqueue({ source: ch.id, text });
             const finished = await callArbiter.waitForCompletion(entry.id);
             if (finished.status === 'failed') {
               throw new Error(finished.error || 'unknown error');
@@ -860,31 +851,10 @@ async function mountCarrierFeature(carrier) {
           },
         };
       }
-      _mountedCarrierFeature = 'feishu';
-      console.log('[IM-Line] ✓ FeishuBot dynamically mounted + gateway started');
-    } else if (carrier === 'wecom') {
-      const { WecomBot } = await import('@agentdev/wecom-bot');
-      const feature = new WecomBot({
-        configPath: process.env.PROTOCLAW_WECOM_CONFIG_PATH || '',
-      });
-      await agent.mountFeature(feature);
-      await feature.startGateway(agent);
-      // Route IM messages through CallArbiter for serialization
-      if (callArbiter) {
-        feature.agentRef = {
-          onCall: async (text) => {
-            const entry = callArbiter.enqueue({ source: 'im-line-wecom', text });
-            const finished = await callArbiter.waitForCompletion(entry.id);
-            if (finished.status === 'failed') {
-              throw new Error(finished.error || 'unknown error');
-            }
-            return finished.result || '处理完成';
-          },
-        };
-      }
-      _mountedCarrierFeature = 'wecom';
-      console.log('[IM-Line] ✓ WecomBot dynamically mounted + gateway started');
     }
+
+    _mountedCarrierFeature = carrier;
+    console.log(`[IM-Line] ✓ ${ch.label} dynamically mounted + gateway started`);
   } catch (err) {
     console.error(`[IM-Line] Failed to mount carrier "${carrier}":`, err);
   }
@@ -922,7 +892,7 @@ process.on('message', (msg) => {
     if (!_mountedCarrierFeature) return;
     const carrier = _mountedCarrierFeature;
     try {
-      const featureName = carrier === 'qq' ? 'qqbot' : carrier === 'feishu' ? 'feishu-bot' : carrier === 'wecom' ? 'wecom-bot' : 'weixin-bot';
+      const featureName = getIMChannel(carrier)?.featureName || '';
       if (typeof agent.removeFeature === 'function') {
         agent.removeFeature(featureName);
       } else {

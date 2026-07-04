@@ -22,6 +22,7 @@ import {
   EnvelopeStatus,
 } from '../runtime-call-envelope.js';
 import { USER_DATA_ROOT } from '../shared/constants.js';
+import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import {
   getManagedRuntimeKey,
@@ -143,7 +144,7 @@ class QqbotProjectAdapter {
         name: '门户代理',
         type: 'im-portal',
         workspaceId: this.workspaceId,
-        config: { selectedChannel: config.selectedChannel || 'qq' },
+        config: { selectedChannel: config.selectedChannel || getDefaultIMChannelId() },
         sessionIds: [],
         latestSessionId: config.receptionistSessionId || null,
         createdAt: null,
@@ -157,7 +158,7 @@ class QqbotProjectAdapter {
 
   getProjectConfig(projectId) {
     if (projectId !== 'qqbot') return {};
-    return { selectedChannel: 'qq' };
+    return { selectedChannel: getDefaultIMChannelId() };
   }
 
   async activateProject(_projectId) {

@@ -30,13 +30,16 @@ export const EnvelopeStatus = Object.freeze({
 });
 
 // ── Source type constants ──────────────────────────────────────
+//
+// IM channel source values (e.g. 'qq', 'weixin', 'feishu', 'wecom') are
+// NOT enumerated here. They are defined in the channel registry at
+// server/shared/im-channels.js. Use getIMSourceValues() from there when
+// you need to check whether a source is an IM channel.
 
 export const EnvelopeSource = Object.freeze({
   DISPATCH:     'dispatch',
   VIEWER_INPUT: 'viewer-input',
   QUEUED_INPUT: 'queued-input',
-  QQ:           'qq',
-  WEIXIN:       'weixin',
   SYSTEM:       'system',
 });
 

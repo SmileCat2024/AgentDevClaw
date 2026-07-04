@@ -9,6 +9,7 @@ import { buildStatus } from '../shared/agent-access.js';
 import { readSessionIndex } from '../shared/session-access.js';
 import { resolveWorkspaceData, readWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './im.js';
+import { getDefaultIMChannelId } from '../shared/im-channels.js';
 
 // ── Agent Discovery + Identity ─────────────────────────────────────
 // Factory pattern: sessionApi is a mutable reference object that gets
@@ -156,7 +157,7 @@ export function createAgentDiscoveryModule(ctx) {
         const imConfig = await readProjectIMWorkspaceConfig();
         return getPortalAgentDisplayName(imConfig.selectedChannel);
       } catch {}
-      return getPortalAgentDisplayName('qq');
+      return getPortalAgentDisplayName(getDefaultIMChannelId());
     }
     if (!requestedSessionId) {
       return fallbackName;
