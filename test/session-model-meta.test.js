@@ -2,7 +2,7 @@
  * Tests for session model metadata resolution logic.
  *
  * Covers the core decision logic extracted from session-helpers.js:
- * 1. resolveSessionModelInfo — resolves model config from metadata.json + global config
+ * 1. resolveSessionModelFromRecord — resolves model config from metadata.json + global config
  * 2. Fast-path model info merge — prioritize persisted record over runtime fallback
  *    (used when the session file hasn't changed since last read)
  *
@@ -10,8 +10,7 @@
  * directly and writes them back to the index via _metaWriteback. This ensures
  * sessions show the model from their most recent activity, not just creation time.
  *
- * These mirror the actual code paths in session-helpers.js (createPrebuiltSession /
- * summarizePrebuiltSession). When the server code changes, update accordingly.
+ * These tests import the real code from session-helpers.js and string-helpers.js.
  */
 
 import { describe, it, beforeEach } from 'node:test';
@@ -20,47 +19,19 @@ import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 
-// ── Inline helpers (mirrors server.js) ──
-
-function cleanSessionText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-/**
- * Resolve model info for a session, prioritizing persisted record data.
- * This mirrors the logic in summarizePrebuiltSession() in server.js.
- *
- * @param {object} record - session index record (may have modelName, contextLength)
- * @param {object} modelInfoMap - { default: { modelName, contextLength, presetName }, ... }
- * @param {string} sessionType - 'main' | 'exploration' | 'sub'
- * @param {object} [metadata] - optional session metadata
- * @returns {{ modelName: string, contextLength: number|null }}
- */
-function resolveSessionModel(record, modelInfoMap, sessionType, metadata) {
-  const sType = cleanSessionText(sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
-  const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
-  const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole]) || {};
-
-  const persistedModelName = cleanSessionText(record.modelName);
-  const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
-    ? record.contextLength : null;
-
-  return {
-    modelName: persistedModelName || fallbackModelInfo.modelName || '',
-    contextLength: persistedCL || fallbackModelInfo.contextLength || null,
-  };
-}
+import { resolveSessionModelFromRecord } from '../server/routes/session-helpers.js';
+import { cleanSessionText } from '../server/shared/string-helpers.js';
 
 // ── Tests ──
 
 describe('Session model metadata resolution', () => {
 
-  describe('resolveSessionModel — persisted vs fallback priority', () => {
+  describe('resolveSessionModelFromRecord — persisted vs fallback priority', () => {
 
     it('uses persisted modelName from record when available', () => {
       const record = { modelName: 'glm-5.1', contextLength: 200000 };
       const modelInfoMap = { default: { modelName: 'deepseek-v4-pro', contextLength: 1000000 } };
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.modelName, 'glm-5.1');
       assert.equal(result.contextLength, 200000);
     });
@@ -68,7 +39,7 @@ describe('Session model metadata resolution', () => {
     it('falls back to modelInfoMap when record has no modelName', () => {
       const record = {};
       const modelInfoMap = { default: { modelName: 'deepseek-v4-pro', contextLength: 1000000 } };
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.modelName, 'deepseek-v4-pro');
       assert.equal(result.contextLength, 1000000);
     });
@@ -76,7 +47,7 @@ describe('Session model metadata resolution', () => {
     it('falls back to modelInfoMap when record modelName is empty string', () => {
       const record = { modelName: '', contextLength: 0 };
       const modelInfoMap = { default: { modelName: 'glm-5.1', contextLength: 200000 } };
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.modelName, 'glm-5.1');
       assert.equal(result.contextLength, 200000);
     });
@@ -86,7 +57,7 @@ describe('Session model metadata resolution', () => {
       // has since changed to deepseek-v4-pro. The persisted value should win.
       const record = { modelName: 'glm-5.1', contextLength: 200000 };
       const modelInfoMap = { default: { modelName: 'deepseek-v4-pro', contextLength: 1000000 } };
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.modelName, 'glm-5.1');
       assert.equal(result.contextLength, 200000);
     });
@@ -94,7 +65,7 @@ describe('Session model metadata resolution', () => {
     it('returns empty values when both record and fallback are empty', () => {
       const record = {};
       const modelInfoMap = {};
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.modelName, '');
       assert.equal(result.contextLength, null);
     });
@@ -102,14 +73,14 @@ describe('Session model metadata resolution', () => {
     it('uses persisted contextLength even when fallback has different value', () => {
       const record = { modelName: 'glm-4.7', contextLength: 128000 };
       const modelInfoMap = { default: { modelName: 'glm-5.1', contextLength: 200000 } };
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.contextLength, 128000);
     });
 
     it('ignores persisted contextLength when it is zero', () => {
       const record = { modelName: 'glm-5-turbo', contextLength: 0 };
       const modelInfoMap = { default: { modelName: 'glm-5.1', contextLength: 200000 } };
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       // contextLength 0 is treated as not set, falls back to 200000
       assert.equal(result.contextLength, 200000);
     });
@@ -117,12 +88,12 @@ describe('Session model metadata resolution', () => {
     it('ignores persisted contextLength when it is negative', () => {
       const record = { modelName: 'glm-5-turbo', contextLength: -1 };
       const modelInfoMap = { default: { modelName: 'glm-5.1', contextLength: 200000 } };
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.contextLength, 200000);
     });
   });
 
-  describe('resolveSessionModel — sessionType to role mapping', () => {
+  describe('resolveSessionModelFromRecord — sessionType to role mapping', () => {
 
     const modelInfoMap = {
       default: { modelName: 'glm-5.1', contextLength: 200000 },
@@ -132,37 +103,37 @@ describe('Session model metadata resolution', () => {
 
     it('maps main sessionType to default role', () => {
       const record = {};
-      const result = resolveSessionModel(record, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.modelName, 'glm-5.1');
     });
 
     it('maps exploration sessionType to exploration role', () => {
       const record = {};
-      const result = resolveSessionModel(record, modelInfoMap, 'exploration', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'exploration', {});
       assert.equal(result.modelName, 'glm-5-turbo');
     });
 
     it('maps sub sessionType to sub role', () => {
       const record = {};
-      const result = resolveSessionModel(record, modelInfoMap, 'sub', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'sub', {});
       assert.equal(result.modelName, 'glm-4.7');
     });
 
     it('defaults to main when sessionType is empty', () => {
       const record = {};
-      const result = resolveSessionModel(record, modelInfoMap, '', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, '', {});
       assert.equal(result.modelName, 'glm-5.1');
     });
 
     it('uses sub role when metadata has resumeMode one-shot', () => {
       const record = {};
-      const result = resolveSessionModel(record, modelInfoMap, '', { resumeMode: 'one-shot' });
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, '', { resumeMode: 'one-shot' });
       assert.equal(result.modelName, 'glm-4.7');
     });
 
     it('persisted record overrides even for exploration role', () => {
       const record = { modelName: 'persisted-model', contextLength: 50000 };
-      const result = resolveSessionModel(record, modelInfoMap, 'exploration', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'exploration', {});
       assert.equal(result.modelName, 'persisted-model');
       assert.equal(result.contextLength, 50000);
     });
@@ -255,7 +226,7 @@ describe('Session model metadata resolution', () => {
         default: { modelName: 'deepseek-v4-pro', contextLength: 1000000 },
       };
 
-      const result = resolveSessionModel(indexRecord, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(indexRecord, modelInfoMap, 'main', {});
 
       // The persisted values from creation time should win
       assert.equal(result.modelName, 'glm-5.1');
@@ -274,7 +245,7 @@ describe('Session model metadata resolution', () => {
         default: { modelName: 'deepseek-v4-pro', contextLength: 1000000 },
       };
 
-      const result = resolveSessionModel(indexRecord, modelInfoMap, 'main', {});
+      const result = resolveSessionModelFromRecord(indexRecord, modelInfoMap, 'main', {});
 
       // Falls back to current global config
       assert.equal(result.modelName, 'deepseek-v4-pro');

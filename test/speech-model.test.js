@@ -6,7 +6,8 @@
  * 2. convertAudioToWav — ffmpeg pipe conversion (skip if ffmpeg unavailable)
  * 3. Config persistence — write/read round-trip via temp config file
  *
- * When server.js speech model logic changes, update the inline copies here.
+ * Imports the real code from routes/model-config.js.
+ * generateSilentWav and isFfmpegAvailable are test-only utilities (not production code).
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
@@ -17,82 +18,14 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 
-// ── Inline helpers (mirrors server.js) ──
+import {
+  normalizeSpeechModel,
+  convertAudioToWav,
+  encodeWav,
+  DEFAULT_SPEECH_MODEL,
+} from '../server/routes/model-config.js';
 
-function cleanSessionText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-const DEFAULT_SPEECH_MODEL = {
-  baseUrl: '',
-  apiKey: '',
-  model: 'mimo-v2.5-asr',
-  language: 'auto',
-};
-
-function normalizeSpeechModel(raw) {
-  if (!raw || typeof raw !== 'object') return { ...DEFAULT_SPEECH_MODEL };
-  return {
-    baseUrl: cleanSessionText(raw.baseUrl) || '',
-    apiKey: cleanSessionText(raw.apiKey) || '',
-    model: cleanSessionText(raw.model) || DEFAULT_SPEECH_MODEL.model,
-    language: cleanSessionText(raw.language) || DEFAULT_SPEECH_MODEL.language,
-  };
-}
-
-function convertAudioToWav(inputBuffer) {
-  return new Promise((resolve) => {
-    const ffmpegArgs = ['-i', 'pipe:0', '-f', 'wav', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', 'pipe:1'];
-    const child = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
-    const chunks = [];
-
-    child.stdout.on('data', (chunk) => chunks.push(chunk));
-    child.stderr.resume();
-
-    child.on('error', () => resolve(null));
-    child.on('close', (code) => {
-      if (code !== 0) {
-        resolve(null);
-      } else {
-        resolve(Buffer.concat(chunks));
-      }
-    });
-
-    child.stdin.write(inputBuffer);
-    child.stdin.end();
-  });
-}
-
-/**
- * Encode raw PCM samples as a WAV buffer (16kHz, 16-bit, mono).
- * Pure JS — mirrors server.js encodeWav ported from MiMo-Code voice.ts.
- */
-function encodeWav(samples) {
-  const sampleRate = 16000;
-  const isBuf = Buffer.isBuffer(samples);
-  const dataSize = isBuf ? samples.length : (samples.length * 2);
-  const buffer = Buffer.alloc(44 + dataSize);
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write('WAVE', 8);
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(1, 22);
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * 2, 28);
-  buffer.writeUInt16LE(2, 32);
-  buffer.writeUInt16LE(16, 34);
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(dataSize, 40);
-  if (isBuf) {
-    samples.copy(buffer, 44);
-  } else {
-    const int16 = new Int16Array(buffer.buffer, buffer.byteOffset + 44, samples.length);
-    int16.set(samples);
-  }
-  return buffer;
-}
+// ── Test-only helpers (not production code) ──
 
 /**
  * Generate a minimal valid WAV file buffer with silence.
@@ -128,8 +61,7 @@ function generateSilentWav(durationSec = 1, sampleRate = 16000) {
   return buffer;
 }
 
-// ── Helper: check ffmpeg availability ──
-
+/** Check ffmpeg availability — test-only utility. */
 function isFfmpegAvailable() {
   return new Promise((resolve) => {
     const child = spawn('ffmpeg', ['-version'], { stdio: 'ignore' });

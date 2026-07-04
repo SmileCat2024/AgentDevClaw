@@ -4,65 +4,61 @@
  * 1. withIMWorkspaceConfig — serialized read-modify-write promise queue.
  *    The core guarantee is that concurrent mutators execute sequentially,
  *    not interleaved. A rejection in one mutator must not break the chain.
+ *    Uses the real createConfigSerializer from routes/im.js.
  *
  * 2. GroupAdminFeature gc_dispatch — self-dispatch guard prevents the
  *    admin from dispatching tasks to itself (feedback loop prevention).
+ *    Test-only replication from local-features/group-admin/src/index.ts.
  *
  * 3. gc inbox queue — enqueue + dequeue semantics for the long-poll bridge.
- *
- * Inline-replicated from server.js and local-features/group-admin/src/index.ts.
+ *    Test-only replication of the server.js runtime pattern.
  */
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+
+import { createConfigSerializer } from '../server/routes/im.js';
 
 // ══════════════════════════════════════════════════════════════════
 // 1. withIMWorkspaceConfig serializer
 // ══════════════════════════════════════════════════════════════════
 
 /**
- * Creates a serializer instance that mirrors the server.js pattern:
- *   - reads from a backing store
- *   - passes config to mutator
- *   - writes back if mutator returns truthy
- *   - chains operations via promise queue
- *   - swallows rejections so chain never breaks
+ * Creates a test serializer backed by an in-memory store.
+ * Uses the real createConfigSerializer from routes/im.js as the engine,
+ * with test-only instrumentation (execution log, store accessor) added.
  */
 function createSerializer(initialConfig) {
-  let _store = JSON.parse(JSON.stringify(initialConfig));
-  let _chain = Promise.resolve();
-
-  // Track execution order for tests
+  let store = JSON.parse(JSON.stringify(initialConfig));
   const executionLog = [];
 
   function read() {
-    return Promise.resolve(JSON.parse(JSON.stringify(_store)));
+    return Promise.resolve(JSON.parse(JSON.stringify(store)));
   }
 
   function write(config) {
-    _store = JSON.parse(JSON.stringify(config));
+    store = JSON.parse(JSON.stringify(config));
     return Promise.resolve();
   }
 
+  // Use the real serializer engine from im.js
+  const withConfigRaw = createConfigSerializer({ read, write });
+
+  // Wrap to add execution logging (test-only instrumentation)
   function withConfig(mutator, label) {
-    const run = _chain.then(async () => {
+    return withConfigRaw(async (config) => {
       executionLog.push(`${label}:start`);
-      const config = JSON.parse(JSON.stringify(_store));
       const shouldWrite = await mutator(config);
-      if (shouldWrite) {
-        await write(config);
-      }
       executionLog.push(`${label}:end`);
-      return config;
+      return shouldWrite;
     });
-    _chain = run.catch(() => {});
-    return run;
   }
 
-  function getStore() { return _store; }
-  function getLog() { return executionLog; }
-
-  return { withConfig, getStore, getLog };
+  return {
+    withConfig,
+    getStore: () => store,
+    getLog: () => executionLog,
+  };
 }
 
 describe('withIMWorkspaceConfig serializer', () => {

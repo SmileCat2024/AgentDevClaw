@@ -1,72 +1,20 @@
 /**
  * Tests for empty session cleanup decision logic.
  *
- * Covers the core selection logic extracted from cleanupEmptySessions() in server.js:
+ * Covers the core selection logic extracted from cleanupEmptySessions():
  * 1. selectEmptySessions — identifies sessions eligible for cleanup
  * 2. resolvePostCleanupState — computes updated index after removal
  *
  * Cleanup runs once at server startup only, never during normal operation.
  * This prevents new-but-not-yet-used sessions from being deleted mid-run.
  *
- * These mirror the actual code paths in server.js.
- * When the server code changes, these tests should be updated accordingly.
+ * These tests import the real code from session-helpers.js.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-// ── Inline helpers (mirrors server.js cleanupEmptySessions logic) ──
-
-function cleanSessionText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-/**
- * Determine which sessions are eligible for cleanup.
- * Mirrors the loop in cleanupEmptySessions().
- *
- * @param {Array} sessions - session index records
- * @param {Map} sessionMessageCounts - Map<sessionId, {messageCount, fileExists}>
- * @returns {string[]} session IDs to delete
- */
-function selectEmptySessions(sessions, sessionMessageCounts) {
-  const toDelete = [];
-  for (const record of sessions) {
-    // Only target default "新对话N" titled sessions
-    if (!/^新对话\d+$/.test(cleanSessionText(record.title))) continue;
-    const info = sessionMessageCounts.get(record.id);
-    if (!info) {
-      // Session file missing or unreadable — clean up
-      toDelete.push(record.id);
-      continue;
-    }
-    // Empty session: no messages at all (never had user input)
-    if (info.messageCount === 0) {
-      toDelete.push(record.id);
-    }
-  }
-  return toDelete;
-}
-
-/**
- * Compute the updated index state after removing sessions.
- * Mirrors the post-loop logic in cleanupEmptySessions().
- *
- * @param {object} index - { activeSessionId, sessions }
- * @param {string[]} toDelete - session IDs to remove
- * @returns {object} updated { activeSessionId, sessions }
- */
-function resolvePostCleanupState(index, toDelete) {
-  if (toDelete.length === 0) return index;
-
-  const deleteSet = new Set(toDelete);
-  let nextActiveId = index.activeSessionId;
-  const remaining = index.sessions.filter((s) => !deleteSet.has(s.id));
-  if (deleteSet.has(nextActiveId)) {
-    nextActiveId = remaining[0]?.id ?? null;
-  }
-  return { activeSessionId: nextActiveId, sessions: remaining };
-}
+import { selectEmptySessions, resolvePostCleanupState } from '../server/routes/session-helpers.js';
 
 // ── Tests ──
 

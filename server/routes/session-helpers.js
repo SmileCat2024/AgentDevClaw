@@ -32,6 +32,84 @@ import {
  */
 export const META_VERSION = 1;
 
+/**
+ * Resolve session model info from a persisted index record, prioritizing
+ * persisted values and falling back to modelInfoMap when they are missing.
+ *
+ * Extracted from the summarizePrebuiltSession fast-path so it can be tested
+ * directly without spinning up the full session helper factory.
+ *
+ * @param {object} record - session index record (may have modelName, contextLength, compressRatio)
+ * @param {object} modelInfoMap - { default: {...}, exploration: {...}, sub: {...} }
+ * @param {string} sessionType - raw sessionType from the record
+ * @param {object} [metadata] - normalized session metadata
+ * @returns {{ modelName: string, contextLength: number|null, compressRatio: number }}
+ */
+export function resolveSessionModelFromRecord(record, modelInfoMap, sessionType, metadata) {
+  const sType = cleanSessionText(sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
+  const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
+  const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole]) || {};
+  const persistedModelName = cleanSessionText(record.modelName);
+  const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
+    ? record.contextLength : null;
+  const persistedCR = Number.isFinite(record.compressRatio) && record.compressRatio > 0
+    ? record.compressRatio : null;
+  return {
+    modelName: persistedModelName || fallbackModelInfo.modelName || '',
+    contextLength: persistedCL || fallbackModelInfo.contextLength || null,
+    compressRatio: persistedCR || fallbackModelInfo.compressRatio || 80,
+  };
+}
+
+/**
+ * Determine which sessions are eligible for cleanup.
+ * Only targets default "新对话N" titled sessions that have zero messages
+ * or whose session file is missing/corrupt.
+ *
+ * Extracted from cleanupEmptySessions for testability.
+ *
+ * @param {Array} sessions - session index records
+ * @param {Map} sessionMessageCounts - Map<sessionId, {messageCount, fileExists}>
+ *   Sessions not in the map are treated as "file missing" and selected for deletion.
+ * @returns {string[]} session IDs to delete
+ */
+export function selectEmptySessions(sessions, sessionMessageCounts) {
+  const toDelete = [];
+  for (const record of sessions) {
+    if (!/^新对话\d+$/.test(cleanSessionText(record.title))) continue;
+    const info = sessionMessageCounts.get(record.id);
+    if (!info) {
+      toDelete.push(record.id);
+      continue;
+    }
+    if (info.messageCount === 0) {
+      toDelete.push(record.id);
+    }
+  }
+  return toDelete;
+}
+
+/**
+ * Compute the updated index state after removing sessions.
+ * If the active session is deleted, shifts to the first remaining session.
+ *
+ * Extracted from cleanupEmptySessions for testability.
+ *
+ * @param {object} index - { activeSessionId, sessions }
+ * @param {string[]} toDelete - session IDs to remove
+ * @returns {object} updated { activeSessionId, sessions }
+ */
+export function resolvePostCleanupState(index, toDelete) {
+  if (toDelete.length === 0) return index;
+  const deleteSet = new Set(toDelete);
+  let nextActiveId = index.activeSessionId;
+  const remaining = index.sessions.filter((s) => !deleteSet.has(s.id));
+  if (deleteSet.has(nextActiveId)) {
+    nextActiveId = remaining[0]?.id ?? null;
+  }
+  return { activeSessionId: nextActiveId, sessions: remaining };
+}
+
 export function createSessionHelpers(ctx) {
   const {
     readWorkspaceState,
@@ -302,22 +380,15 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       typeof record.preview !== 'undefined' &&
       record.tokenUsage
     ) {
-      const sType = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
-      const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
-      const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole])
-        || await resolveSessionModelInfo(agentId, sType);
-      const persistedModelName = cleanSessionText(record.modelName);
-      const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
-        ? record.contextLength : null;
-      const persistedCR = Number.isFinite(record.compressRatio) && record.compressRatio > 0
-        ? record.compressRatio : null;
       // Fast path: file unchanged since last read, so the persisted values
       // (captured at creation or updated on last file change) are authoritative.
-      const sessionModelInfo = {
-        modelName: persistedModelName || fallbackModelInfo.modelName || '',
-        contextLength: persistedCL || fallbackModelInfo.contextLength || null,
-        compressRatio: persistedCR || fallbackModelInfo.compressRatio || 80,
-      };
+      // Ensure modelInfoMap has the needed role before delegating to the pure resolver.
+      const sTypeFP = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
+      const modelRoleFP = sTypeFP === 'exploration' ? 'exploration' : sTypeFP === 'sub' ? 'sub' : 'default';
+      const effectiveMap = (modelInfoMap && modelInfoMap[modelRoleFP])
+        ? modelInfoMap
+        : { ...(modelInfoMap || {}), [modelRoleFP]: await resolveSessionModelInfo(agentId, sTypeFP) };
+      const sessionModelInfo = resolveSessionModelFromRecord(record, effectiveMap, record.sessionType, metadata);
       const summaryInfo = summaryMap ? summaryMap.get(record.id) : null;
       const compactTitle = summaryInfo?.sessionTitle || '';
       return {
@@ -682,33 +753,27 @@ async function searchSessionsContent(agentId, query, openDirectory) {
 
 async function cleanupEmptySessions(agentId) {
   const index = await readSessionIndex(agentId);
-  const toDelete = [];
+
+  // Build message count map for sessions with default titles
+  const sessionMessageCounts = new Map();
   for (const record of index.sessions) {
-    // Only target default "新对话N" titled sessions
     if (!/^新对话\d+$/.test(cleanSessionText(record.title))) continue;
     const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
     try {
       const raw = await fs.readFile(sessionPath, 'utf8');
       const parsed = JSON.parse(raw);
       const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
-      // Empty session: no messages at all (never had user input)
-      if (messages.length === 0) {
-        toDelete.push(record.id);
-      }
+      sessionMessageCounts.set(record.id, { messageCount: messages.length, fileExists: true });
     } catch {
-      // Session file missing or corrupt — also clean up
-      toDelete.push(record.id);
+      // File missing or corrupt — leave out of map; selectEmptySessions will mark it
     }
   }
 
+  const toDelete = selectEmptySessions(index.sessions, sessionMessageCounts);
   if (toDelete.length === 0) return 0;
 
-  let nextActiveId = index.activeSessionId;
-  const remaining = index.sessions.filter((s) => !toDelete.includes(s.id));
-  if (toDelete.includes(nextActiveId)) {
-    nextActiveId = remaining[0]?.id ?? null;
-  }
-  await writeSessionIndex(agentId, { activeSessionId: nextActiveId, sessions: remaining });
+  const updated = resolvePostCleanupState(index, toDelete);
+  await writeSessionIndex(agentId, updated);
 
   for (const id of toDelete) {
     await fs.rm(getPrebuiltSessionFilePath(agentId, id), { force: true }).catch(() => {});

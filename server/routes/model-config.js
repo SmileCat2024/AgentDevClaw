@@ -242,14 +242,14 @@ async function resolveSessionModelInfo(agentId, sessionType) {
 
 // ── Speech Model Config ───────────────────────────────────────────
 
-const DEFAULT_SPEECH_MODEL = {
+export const DEFAULT_SPEECH_MODEL = {
   baseUrl: '',
   apiKey: '',
   model: 'mimo-v2.5-asr',
   language: 'auto',
 };
 
-function normalizeSpeechModel(raw) {
+export function normalizeSpeechModel(raw) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_SPEECH_MODEL };
   return {
     baseUrl: cleanSessionText(raw.baseUrl) || '',
@@ -295,7 +295,7 @@ async function writeSpeechModelConfig(speechModel, speechPresets) {
  * Encode raw PCM samples as a WAV buffer (16kHz, 16-bit, mono).
  * Pure JS — no ffmpeg dependency. Ported from MiMo-Code voice.ts.
  */
-function encodeWav(samples) {
+export function encodeWav(samples) {
   const sampleRate = 16000;
   const isBuf = Buffer.isBuffer(samples);
   const dataSize = isBuf ? samples.length : (samples.length * 2);
@@ -326,7 +326,7 @@ function encodeWav(samples) {
  * Convert audio buffer to 16kHz mono PCM16 WAV via ffmpeg.
  * Returns null if ffmpeg is not available or conversion fails.
  */
-function convertAudioToWav(inputBuffer) {
+export function convertAudioToWav(inputBuffer) {
   return new Promise((resolve) => {
     const ffmpegArgs = ['-i', 'pipe:0', '-f', 'wav', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', 'pipe:1'];
     const child = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
