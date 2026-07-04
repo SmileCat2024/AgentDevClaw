@@ -550,4 +550,8 @@ export {
   readModelPresets,
   writeModelPresetsFile,
   resolveSessionModelInfo,
+  normalizeModelPresetsData,
+  flattenModelPresets,
+  buildStructuredModelPresets,
+  normalizeSpeechPreset,
 };

@@ -629,3 +629,11 @@ export function setupFeatureRepositoryRoutes(app, express) {
     }
   });
 }
+
+export {
+  normalizeFeatureRequirements,
+  normalizeFeatureTypes,
+  normalizeFeatureCompatibility,
+  inferFeatureTypes,
+  inferFeatureManifest,
+};

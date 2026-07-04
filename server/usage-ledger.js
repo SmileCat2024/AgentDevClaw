@@ -8,15 +8,15 @@ const EVENTS_DIR = path.join(USAGE_ROOT, 'events');
 const EVENT_INDEX_PATH = path.join(USAGE_ROOT, 'event-index.json');
 const MAX_INDEX_IDS = 20000;
 
-function cleanText(value) {
+export function cleanText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function toNumber(value) {
+export function toNumber(value) {
   return Number.isFinite(value) ? value : 0;
 }
 
-function normalizeDate(value) {
+export function normalizeDate(value) {
   const text = cleanText(value);
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
 }
@@ -48,17 +48,17 @@ function timestampValue(event) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function hashBaseUrl(value) {
+export function hashBaseUrl(value) {
   const text = cleanText(value);
   if (!text) return '';
   return `sha256:${createHash('sha256').update(text).digest('hex').slice(0, 16)}`;
 }
 
-function stableHash(value) {
+export function stableHash(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24);
 }
 
-function normalizeUsage(usage = {}) {
+export function normalizeUsage(usage = {}) {
   const inputTokens = toNumber(usage.inputTokens);
   const outputTokens = toNumber(usage.outputTokens);
   const cacheReadTokens = toNumber(usage.cacheReadTokens);
@@ -77,7 +77,7 @@ function normalizeUsage(usage = {}) {
   };
 }
 
-function normalizeModel(model = {}) {
+export function normalizeModel(model = {}) {
   return {
     modelName: cleanText(model.modelName),
     provider: cleanText(model.provider),
