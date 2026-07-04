@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
+const voiceInputSource = fs.readFileSync(new URL('../public/src/modules/voice-input.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -121,12 +122,11 @@ test('detached textarea writes back to its frozen session key', () => {
   };
   vm.createContext(context);
   const inputCacheBlock = sourceBetween(
-    mainSource,
+    voiceInputSource,
     'function _cacheSessionInput',
     '\n// Inject pending voice ASR result',
   );
-  vm.runInContext(`${inputCacheBlock}
-globalThis.__cacheSessionInput = _cacheSessionInput;
+  vm.runInContext(`${inputCacheBlock}\nglobalThis.__cacheSessionInput = _cacheSessionInput;
 globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;
 globalThis.__storeSessionInputDraft = _storeSessionInputDraft;`, context);
 
@@ -154,7 +154,7 @@ test('cached session draft restores into request textarea', () => {
   };
   vm.createContext(context);
   const inputCacheBlock = sourceBetween(
-    mainSource,
+    voiceInputSource,
     'function _cacheSessionInput',
     '\n// Inject pending voice ASR result',
   );
