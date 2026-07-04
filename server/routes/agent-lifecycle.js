@@ -371,6 +371,7 @@ export function createAgentLifecycleModule(ctx) {
       selectedSessionId: resolvedSessionId || null,
       ready: false,
       sessionType: runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE || null,
+      gcChatId: runtimeOptions?.extraEnv?.PROTOCLAW_GC_CHAT_ID || null,
     };
 
     managedAgents.set(runtime.key, runtime);

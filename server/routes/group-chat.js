@@ -1504,7 +1504,16 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
 async function ensureAdminRuntime(chatId, sessionId) {
   let runtime = getAgentRuntime('work-group', sessionId);
   if (runtime?.process && runtime.process.exitCode === null && !runtime.stopped) {
-    return runtime;
+    // Verify the runtime was started with the correct PROTOCLAW_GC_CHAT_ID.
+    // The admin can be started through UI paths (start_agent, activate) that
+    // don't set the env var; in that case all GroupAdminFeature API calls
+    // would hit /group_chats//messages → 404.
+    if (runtime.gcChatId === chatId) {
+      return runtime;
+    }
+    log('GroupChat', `admin runtime chatId mismatch: expected=${chatId}, actual=${runtime.gcChatId || '(none)'}, restarting`);
+    await stopManagedAgent('work-group', sessionId);
+    // Fall through to restart with correct env
   }
 
   const agent = await requireAgentLight('work-group');

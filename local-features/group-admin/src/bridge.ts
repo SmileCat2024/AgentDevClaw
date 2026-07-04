@@ -207,6 +207,14 @@ export class GroupChatBridgeFeature implements AgentFeature {
         if (response.status === 200) {
           const msg: GcMessage = await response.json();
           if (msg && msg.text) {
+            // Sync PROTOCLAW_GC_CHAT_ID from the inbox message.
+            // The admin may have been started via UI paths (start_agent,
+            // prebuilt_sessions/activate) that don't set this env var.
+            // GroupAdminFeature reads it at runtime to build API URLs.
+            // Without this, gc_dispatch hits /group_chats//messages → 404.
+            if (msg.gcChatId) {
+              process.env.PROTOCLAW_GC_CHAT_ID = msg.gcChatId;
+            }
             // 去重：跳过已处理的消息
             if (this.processedIds.has(msg.id)) {
               continue;
