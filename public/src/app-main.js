@@ -597,6 +597,7 @@ function renderAgentList() {
 agentList.addEventListener('click', async (event) => {
   const item = event.target.closest('.agent-item');
   if (!item) return;
+  if (item.classList.contains('editing')) return;
 
   const agentId = item.dataset.agentId;
   if (!agentId) return;
@@ -612,6 +613,7 @@ agentList.addEventListener('click', async (event) => {
 agentList.addEventListener('contextmenu', (event) => {
   const item = event.target.closest('.agent-item');
   if (!item) return;
+  if (item.classList.contains('editing')) return;
   if (item.dataset.agentContextMenu !== 'true') return;
 
   // ── Generic ctx-menu: check for data-ctx-* on runtime items ──

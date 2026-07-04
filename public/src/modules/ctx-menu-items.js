@@ -7,6 +7,7 @@
  *   - ctxRestartAgent: 重启 Agent
  *   - ctxStopAgent: 关闭 Agent
  *   - ctxArchiveAndStopRuntime: 归档会话并关闭 runtime
+ *   - ctxRenameSession: 侧栏 runtime 项内联重命名
  *   - ctxGenerateTitle: AI 生成标题
  *   - ctxArchiveSession: 归档/取消归档会话
  *   - archiveSessionAfterMutation: 变更后归档原会话（被 runWorkspaceAction 调用）
@@ -43,6 +44,7 @@ function getCtxMenuItems(role, ns, variant, id) {
     const activeSession = activeSessionId ? getWorkspaceSessionById(agent, activeSessionId) : null;
     const isArchived = activeSession?.archived === true;
     return [
+      { label: isZh ? '重命名' : 'Rename', action: 'rename' },
       { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
       { label: isZh ? '总结历史（摘要）' : 'Summary', submenu: [
         { label: isZh ? '仅摘要' : 'Summary Only', action: 'summary' },
@@ -383,6 +385,99 @@ async function ctxGenerateTitle(target) {
   }
 }
 
+function ctxRenameSession(target) {
+  const { ns: agentId, id: runtimeId, sessionId } = target;
+  if (!agentId || !sessionId) return;
+
+  const itemEl = document.querySelector(
+    `[data-ctx-id="${CSS.escape(runtimeId)}"][data-ctx-role="runtime"]`,
+  );
+  if (!itemEl) return;
+
+  const nameEl = itemEl.querySelector('.agent-name');
+  if (!nameEl) return;
+
+  const agent = allAgents.find((item) => item.id === agentId);
+  const session = agent ? getWorkspaceSessionById(agent, sessionId) : null;
+  const currentTitle = session?.title || nameEl.textContent.trim();
+  const isZh = currentLanguage === 'zh';
+
+  // Mark item as editing so click/contextmenu handlers skip it
+  itemEl.classList.add('editing');
+
+  nameEl.innerHTML = '<input type="text" class="agent-name-edit-input" value="'
+    + escapeHtml(currentTitle) + '" placeholder="'
+    + escapeHtml(isZh ? '输入标题' : 'Enter title') + '">';
+
+  const input = nameEl.querySelector('input');
+  input.focus();
+  input.select();
+
+  // Prevent click/mousedown from bubbling to the agent-item click handler
+  ['click', 'mousedown', 'dblclick'].forEach((evt) => {
+    input.addEventListener(evt, (e) => e.stopPropagation());
+  });
+
+  let saved = false;
+
+  const finishEditing = () => {
+    itemEl.classList.remove('editing');
+  };
+
+  const restore = () => {
+    nameEl.textContent = currentTitle;
+    finishEditing();
+  };
+
+  const saveTitle = async () => {
+    if (saved) return;
+    saved = true;
+    const newTitle = input.value.trim();
+    if (!newTitle || newTitle === currentTitle) {
+      restore();
+      return;
+    }
+    try {
+      const resp = await fetch('/protoclaw/prebuilt_sessions/' + encodeURIComponent(sessionId) + '/title', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, title: newTitle }),
+      });
+      const result = await resp.json();
+      if (result.ok) {
+        nameEl.textContent = newTitle;
+        finishEditing();
+        if (agent?.workspace_sessions?.sessions) {
+          const s = agent.workspace_sessions.sessions.find((s2) => s2.id === sessionId);
+          if (s) s.title = newTitle;
+        }
+        if (agent?.active_workspace_session_id === sessionId) {
+          updateAgentRecord(agentId, { active_workspace_session_title: newTitle });
+        }
+        renderAgentList();
+      } else {
+        restore();
+        console.error('Failed to update session title:', result.error);
+      }
+    } catch (error) {
+      restore();
+      console.error('Failed to update session title:', error);
+    }
+  };
+
+  input.addEventListener('blur', saveTitle);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveTitle();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      saved = true;
+      restore();
+    }
+  });
+}
+
 async function ctxArchiveSession(target) {
   const { ns: agentId, id: sessionId } = target;
   if (!agentId || !sessionId) return;
@@ -554,6 +649,13 @@ function dispatchCtxAction(action, target) {
   switch (action) {
     case 'activate':
       window.switchAgent(id);
+      break;
+
+    case 'rename':
+      window.closeCtxMenu();
+      if (ns && sessionId) {
+        ctxRenameSession(target);
+      }
       break;
 
     case 'generate-title':

@@ -148,6 +148,19 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   flex: 1;
 }
 
+.agent-name-edit-input {
+  width: 100%;
+  padding: 5px 6px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--panel-bg);
+  border: 2px solid var(--code-accent);
+  border-radius: 4px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+}
+
 .agent-status {
   display: inline-flex;
   align-items: center;
