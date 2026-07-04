@@ -14,7 +14,7 @@ import {
 import {
   readSessionIndex, updateSessionIndex, writeSessionIndex,
   getPrebuiltSessionFilePath, getPrebuiltAgentSessionDir,
-  normalizeSessionMetadata, buildSessionTitle,
+  normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
 } from '../shared/session-access.js';
 import { resolveSessionModelInfo } from './model-config.js';
 import {
@@ -63,19 +63,7 @@ function buildNamedSessionTitle(name, createdAtIso) {
 
 async function getNextNewSessionTitle(agentId, openDirectory) {
   const index = await readSessionIndex(agentId);
-  const normalizedDir = String(openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-  const newSessionPattern = /^新对话(\d+)$/;
-  let maxN = 0;
-  for (const session of (index.sessions || [])) {
-    const sessionDir = String(session?.openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    if (normalizedDir && sessionDir !== normalizedDir) continue;
-    const m = cleanSessionText(session?.title).match(newSessionPattern);
-    if (m) {
-      const n = parseInt(m[1], 10);
-      if (n > maxN) maxN = n;
-    }
-  }
-  return `新对话${maxN + 1}`;
+  return `新对话${computeNextSessionNumber(index.sessions, openDirectory)}`;
 }
 
 async function checkSessionHasSummary(agentId, sessionId) {

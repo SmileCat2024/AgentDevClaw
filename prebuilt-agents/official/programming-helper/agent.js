@@ -19,6 +19,7 @@ import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
 import { CheckpointFeature } from '../../../local-features/dist/checkpoint/src/index.js';
+import { extractLspServerConfig } from '../../../server/routes/system-feature-config.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -53,25 +54,6 @@ function readSystemFeatureConfig() {
   } catch {
     return {};
   }
-}
-
-function extractLspServerConfig(systemConfig) {
-  const lspSection = systemConfig?.lsp;
-  if (!lspSection || typeof lspSection !== 'object') return {};
-  const result = {};
-  for (const [serverId, entry] of Object.entries(lspSection)) {
-    if (entry && typeof entry === 'object') {
-      const serverConfig = {};
-      if (typeof entry.mode === 'string') serverConfig.mode = entry.mode;
-      if (typeof entry.runtime === 'string') serverConfig.runtime = entry.runtime;
-      if (typeof entry.binary === 'string' && entry.binary.trim()) serverConfig.binary = entry.binary.trim();
-      if (typeof entry.package === 'string' && entry.package.trim()) serverConfig.package = entry.package.trim();
-      if (typeof entry.uvPackage === 'string' && entry.uvPackage.trim()) serverConfig.uvPackage = entry.uvPackage.trim();
-      if (typeof entry.args === 'string' && entry.args.trim()) serverConfig.args = entry.args.trim().split(/\s+/);
-      if (Object.keys(serverConfig).length) result[serverId] = serverConfig;
-    }
-  }
-  return result;
 }
 
 function readProgrammingWorkspaceState() {

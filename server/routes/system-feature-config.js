@@ -82,10 +82,10 @@ function detectShellPath(type, configuredPath) {
   return { available: false, path: null, source: null };
 }
 
-function readSystemFeatureConfigFile() {
+export function readSystemFeatureConfigFile(configPath = SYSTEM_FEATURE_CONFIG_PATH) {
   try {
-    if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
-    const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
+    if (!existsSync(configPath)) return {};
+    const raw = readFileSync(configPath, 'utf8');
     const parsed = JSON.parse(raw);
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
   } catch {
@@ -93,12 +93,36 @@ function readSystemFeatureConfigFile() {
   }
 }
 
-function writeSystemFeatureConfigFile(config) {
-  const dir = path.dirname(SYSTEM_FEATURE_CONFIG_PATH);
+export function writeSystemFeatureConfigFile(config, configPath = SYSTEM_FEATURE_CONFIG_PATH) {
+  const dir = path.dirname(configPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  writeFileSync(SYSTEM_FEATURE_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+}
+
+/**
+ * Extract LSP server config from system feature config.
+ * Input:  { lsp: { typescript: { mode, runtime, binary, package, uvPackage, args } } }
+ * Output: { typescript: { mode, runtime, binary, package, uvPackage, args } }
+ */
+export function extractLspServerConfig(systemConfig) {
+  const lspSection = systemConfig?.lsp;
+  if (!lspSection || typeof lspSection !== 'object') return {};
+  const result = {};
+  for (const [serverId, entry] of Object.entries(lspSection)) {
+    if (entry && typeof entry === 'object') {
+      const serverConfig = {};
+      if (typeof entry.mode === 'string') serverConfig.mode = entry.mode;
+      if (typeof entry.runtime === 'string') serverConfig.runtime = entry.runtime;
+      if (typeof entry.binary === 'string' && entry.binary.trim()) serverConfig.binary = entry.binary.trim();
+      if (typeof entry.package === 'string' && entry.package.trim()) serverConfig.package = entry.package.trim();
+      if (typeof entry.uvPackage === 'string' && entry.uvPackage.trim()) serverConfig.uvPackage = entry.uvPackage.trim();
+      if (typeof entry.args === 'string' && entry.args.trim()) serverConfig.args = entry.args.trim().split(/\s+/);
+      if (Object.keys(serverConfig).length) result[serverId] = serverConfig;
+    }
+  }
+  return result;
 }
 
 export function setupSystemFeatureConfigRoutes(app, express) {

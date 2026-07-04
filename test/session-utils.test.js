@@ -1,118 +1,30 @@
 /**
- * Tests for server.js session utility pure functions.
+ * Tests for session utility pure functions.
  *
  * Covers:
  * 1. buildSessionTitle — "对话 YYYY-MM-DD HH:MM" format generation
- * 2. getNextNewSessionTitle counter logic — "新对话N" increment
+ * 2. computeNextSessionNumber — "新对话N" increment counter logic
  * 3. normalizeSessionMetadata — metadata normalization and empty value filtering
  * 4. sanitizeProjectDocsetId — ID slugification
  * 5. cleanProjectDocsetPayload — payload cleaning
  * 6. normalizeProjectConversationRecord — conversation record normalization
  *
- * These mirror the actual code paths in server.js.
- * When the server code changes, these tests should be updated accordingly.
+ * These import the actual exported functions from the real source modules.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-// ── Inline helpers (mirrors server.js) ──
-
-function cleanSessionText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function buildSessionTitle(createdAtIso) {
-  const date = new Date(createdAtIso);
-  const parts = [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, '0'),
-    String(date.getDate()).padStart(2, '0'),
-  ];
-  const time = [
-    String(date.getHours()).padStart(2, '0'),
-    String(date.getMinutes()).padStart(2, '0'),
-  ];
-  return `对话 ${parts.join('-')} ${time.join(':')}`;
-}
-
-/**
- * Mirrors getNextNewSessionTitle counter logic.
- * Extracted from the server.js function to test the pure increment decision.
- */
-function computeNextSessionNumber(sessions, openDirectory) {
-  const normalizedDir = String(openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-  const newSessionPattern = /^新对话(\d+)$/;
-  let maxN = 0;
-  for (const session of sessions) {
-    const sessionDir = String(session?.openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    if (normalizedDir && sessionDir !== normalizedDir) continue;
-    const m = cleanSessionText(session?.title).match(newSessionPattern);
-    if (m) {
-      const n = parseInt(m[1], 10);
-      if (n > maxN) maxN = n;
-    }
-  }
-  return maxN + 1;
-}
-
-function normalizeSessionMetadata(raw = {}) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return {};
-  }
-
-  const metadata = {
-    resumeMode: cleanSessionText(raw.resumeMode),
-    sourceAgentId: cleanSessionText(raw.sourceAgentId),
-    sourceSessionId: cleanSessionText(raw.sourceSessionId),
-    handoffId: cleanSessionText(raw.handoffId),
-    handoffPath: cleanSessionText(raw.handoffPath),
-    handoffCreatedAt: cleanSessionText(raw.handoffCreatedAt),
-    handoffSummaryKind: cleanSessionText(raw.handoffSummaryKind),
-  };
-
-  return Object.fromEntries(
-    Object.entries(metadata).filter(([, value]) => value),
-  );
-}
-
-function sanitizeProjectDocsetId(value) {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || 'doc';
-}
-
-function cleanProjectDocsetPayload(raw = {}) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return {};
-  }
-
-  return Object.fromEntries(
-    Object.entries(raw)
-      .map(([key, value]) => [String(key), typeof value === 'string' ? value.trim() : value])
-      .filter(([, value]) => value !== undefined && value !== null && !(typeof value === 'string' && value === '')),
-  );
-}
-
-function normalizeProjectConversationRecord(raw = {}) {
-  const source = raw && typeof raw === 'object' ? raw : {};
-  const timestamp = new Date().toISOString();
-  return {
-    sessionId: sanitizeProjectDocsetId(source.sessionId || 'session'),
-    title: cleanSessionText(source.title) || 'conversation-record',
-    summary: cleanSessionText(source.summary),
-    currentFocus: cleanSessionText(source.currentFocus),
-    keyDecisions: Array.isArray(source.keyDecisions) ? source.keyDecisions.map((value) => cleanSessionText(value)).filter(Boolean) : [],
-    nextActions: Array.isArray(source.nextActions) ? source.nextActions.map((value) => cleanSessionText(value)).filter(Boolean) : [],
-    openQuestions: Array.isArray(source.openQuestions) ? source.openQuestions.map((value) => cleanSessionText(value)).filter(Boolean) : [],
-    relatedMaterialIds: Array.isArray(source.relatedMaterialIds) ? source.relatedMaterialIds.map((value) => sanitizeProjectDocsetId(value)).filter(Boolean) : [],
-    createdAt: typeof source.createdAt === 'string' && source.createdAt ? source.createdAt : timestamp,
-    updatedAt: typeof source.updatedAt === 'string' && source.updatedAt ? source.updatedAt : timestamp,
-  };
-}
+import {
+  buildSessionTitle,
+  computeNextSessionNumber,
+  normalizeSessionMetadata,
+} from '../server/shared/session-access.js';
+import {
+  sanitizeProjectDocsetId,
+  cleanProjectDocsetPayload,
+  normalizeProjectConversationRecord,
+} from '../server/routes/project-docset.js';
 
 // ── Tests ──
 

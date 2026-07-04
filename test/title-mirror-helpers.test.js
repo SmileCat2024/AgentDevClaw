@@ -1,35 +1,22 @@
 /**
  * Tests for title-mirror pure functions.
  *
- * Covers the core decision logic extracted from scripts/run-title-mirror.js:
+ * Covers the core decision logic from scripts/mirror-runtime.js:
  * 1. sanitizeGeneratedTitle — cleans raw model output into a usable title
- * 2. prepareTitleMessages — selects conversational context and appends the title prompt
+ * 2. buildTitleMessages — selects conversational context and appends the title prompt
  * 3. tuneMirrorLLM — caps output and clears configured reasoning options
  *
- * These mirror the actual code paths in run-title-mirror.js.
- * When that script changes, these tests should be updated accordingly.
+ * Directly imports the real exported functions from mirror-runtime.js.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { tuneMirrorLLM } from '../scripts/mirror-runtime.js';
-
-// ── Inline helpers (mirrors scripts/run-title-mirror.js) ──
-
-function cleanValue(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function sanitizeGeneratedTitle(title) {
-  const line = cleanValue(title)
-    .replace(/^["""''«»]+|["""''«»]+$/g, '')
-    .replace(/[。！？!?,，、:：;；]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .split('\n')[0]
-    .trim();
-  if (!line) return '';
-  return line.slice(0, 60);
-}
+import {
+  tuneMirrorLLM,
+  sanitizeGeneratedTitle,
+  buildTitleMessages,
+  TITLE_RULES,
+} from '../scripts/mirror-runtime.js';
 
 // ── Tests ──
 
@@ -84,50 +71,15 @@ describe('sanitizeGeneratedTitle', () => {
   });
 });
 
-// ── Additional inline helpers (mirrors buildTitleMessages post-processing in run-title-mirror.js) ──
+// ── Tests for buildTitleMessages ──
 
-const TITLE_RULES = '请从整段会话中识别稳定的主任务，为它生成一个简洁准确的标题。';
-
-/**
- * Mirrors buildTitleMessages():
- * - keep non-empty user/assistant text only
- * - preserve the first user request plus the last 32 conversational messages
- * - serialize the selected history into one user transcript message
- * - append the structured tool-output instruction
- */
-function prepareTitleMessages(rawMessages) {
-  const conversationalMessages = rawMessages.filter((message) => (
-    (message?.role === 'user' || message?.role === 'assistant')
-    && cleanValue(message?.content)
-  ));
-  const firstUser = conversationalMessages.find((message) => message.role === 'user');
-  const recentMessages = conversationalMessages.slice(-32);
-  if (firstUser && !recentMessages.includes(firstUser)) {
-    recentMessages.unshift(firstUser);
-  }
-
-  const transcript = recentMessages.length > 0
-    ? recentMessages.map((message, index) => {
-      const speaker = message.role === 'user' ? '用户' : '助手';
-      return `【${speaker} ${index + 1}】\n${cleanValue(message.content)}`;
-    }).join('\n\n')
-    : '（会话中没有可用的用户或助手正文）';
-  return [{
-    role: 'user',
-    content: `以下是会话转录：\n\n${transcript}\n\n${TITLE_RULES}\n- 必须调用 record_session_title 工具提交标题，不要输出其他内容。`,
-    turn: 0,
-  }];
-}
-
-// ── Additional tests ──
-
-describe('prepareTitleMessages', () => {
+describe('buildTitleMessages', () => {
   it('returns one user message containing transcript and title rules', () => {
     const messages = [
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'hi' },
     ];
-    const result = prepareTitleMessages(messages);
+    const result = buildTitleMessages(messages);
     assert.equal(result.length, 1);
     assert.equal(result[0].role, 'user');
     assert.ok(result[0].content.includes('【用户 1】\nhello'));
@@ -139,7 +91,7 @@ describe('prepareTitleMessages', () => {
     const messages = [
       { role: 'system', content: 'You are helpful.' },
     ];
-    const result = prepareTitleMessages(messages);
+    const result = buildTitleMessages(messages);
     assert.equal(result.length, 1);
     assert.equal(result[0].role, 'user');
     assert.ok(result[0].content.includes('没有可用的用户或助手正文'));
@@ -150,7 +102,7 @@ describe('prepareTitleMessages', () => {
       { role: 'system', content: 'sys' },
       { role: 'assistant', content: 'hi there' },
     ];
-    const result = prepareTitleMessages(messages);
+    const result = buildTitleMessages(messages);
     assert.equal(result.length, 1);
     assert.ok(result[0].content.includes('【助手 1】\nhi there'));
   });
@@ -160,7 +112,7 @@ describe('prepareTitleMessages', () => {
     for (let i = 0; i < 40; i++) {
       messages.push({ role: 'user', content: `msg ${i}` });
     }
-    const result = prepareTitleMessages(messages);
+    const result = buildTitleMessages(messages);
     assert.equal(result.length, 1);
     assert.ok(result[0].content.includes('msg 0'));
     assert.ok(result[0].content.includes('msg 8'));
@@ -173,7 +125,7 @@ describe('prepareTitleMessages', () => {
       { role: 'tool', content: 'tool output' },
       { role: 'assistant', content: 'final answer' },
     ];
-    const result = prepareTitleMessages(messages);
+    const result = buildTitleMessages(messages);
     assert.equal(result.length, 1);
     assert.ok(result[0].content.includes('final answer'));
     assert.ok(!result[0].content.includes('tool output'));
@@ -185,7 +137,7 @@ describe('prepareTitleMessages', () => {
       { role: 'assistant', content: 'step one' },
       { role: 'assistant', content: 'step two' },
     ];
-    const result = prepareTitleMessages(messages);
+    const result = buildTitleMessages(messages);
     assert.equal(result.length, 1);
     assert.equal(result[0].role, 'user');
     assert.ok(result[0].content.includes('step one'));

@@ -1,20 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-/**
- * Branch checkpoint integrity validation
- *
- * 纯函数复刻自 server.js sessions/branch 端点中的 checkpoint 校验逻辑。
- * 当 server.js 中的对应逻辑变更时，需同步更新此处。
- */
-
-function findMissingCheckpoints(branchMessages, branchCheckpoints) {
-  const branchUserTurns = branchMessages
-    .filter(m => m.role === 'user' && typeof m.turn === 'number')
-    .map(m => m.turn);
-  const branchCpIndices = branchCheckpoints.map(cp => cp.callIndex);
-  return branchUserTurns.filter(t => !branchCpIndices.includes(t));
-}
+import { findMissingCheckpoints } from '../server/shared/session-access.js';
 
 describe('Branch checkpoint integrity validation', () => {
   it('returns empty when all user turns have matching checkpoints', () => {
@@ -50,7 +37,7 @@ describe('Branch checkpoint integrity validation', () => {
     assert.deepEqual(findMissingCheckpoints(messages, checkpoints), []);
   });
 
-  it('ignores user messages without numeric turn', () => {
+  it('ignores user messages without numerical turn', () => {
     const messages = [
       { role: 'user', turn: 0 },
       { role: 'user' },

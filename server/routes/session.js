@@ -17,6 +17,7 @@ import {
   getPrebuiltAgentSessionDir,
   getPrebuiltSessionFilePath,
   resolvePrebuiltSessionType,
+  findMissingCheckpoints,
 } from '../shared/session-access.js';
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
 import {
@@ -266,12 +267,11 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     } catch {}
 
     // Validate checkpoint integrity: warn if user turns lack matching checkpoints.
-    const branchUserTurns = branchMessages
-      .filter(m => m.role === 'user' && typeof m.turn === 'number')
-      .map(m => m.turn);
-    const branchCpIndices = branchCheckpoints.map(cp => cp.callIndex);
-    const missingCheckpoints = branchUserTurns.filter(t => !branchCpIndices.includes(t));
+    const missingCheckpoints = findMissingCheckpoints(branchMessages, branchCheckpoints);
     if (missingCheckpoints.length > 0) {
+      const branchUserTurns = branchMessages
+        .filter(m => m.role === 'user' && typeof m.turn === 'number')
+        .map(m => m.turn);
       console.warn(`[ProtoClaw] Branch from ${sourceSessionId}: user turns [${branchUserTurns.join(',')}] have missing checkpoints for turns [${missingCheckpoints.join(',')}]. Rollback will be unavailable for those turns.`);
     }
 

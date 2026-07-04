@@ -199,6 +199,30 @@ export function buildSessionTitle(createdAtIso) {
   return `对话 ${parts.join('-')} ${time.join(':')}`;
 }
 
+export function computeNextSessionNumber(sessions, openDirectory) {
+  const normalizedDir = String(openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const newSessionPattern = /^新对话(\d+)$/;
+  let maxN = 0;
+  for (const session of (sessions || [])) {
+    const sessionDir = String(session?.openDirectory || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    if (normalizedDir && sessionDir !== normalizedDir) continue;
+    const m = cleanSessionText(session?.title).match(newSessionPattern);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > maxN) maxN = n;
+    }
+  }
+  return maxN + 1;
+}
+
+export function findMissingCheckpoints(branchMessages, branchCheckpoints) {
+  const branchUserTurns = branchMessages
+    .filter(m => m.role === 'user' && typeof m.turn === 'number')
+    .map(m => m.turn);
+  const branchCpIndices = branchCheckpoints.map(cp => cp.callIndex);
+  return branchUserTurns.filter(t => !branchCpIndices.includes(t));
+}
+
 export function normalizeSessionMetadata(raw = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return {};
