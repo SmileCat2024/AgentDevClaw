@@ -33,6 +33,38 @@ import {
 export const META_VERSION = 1;
 
 /**
+ * Extract token usage from a parsed session file object.
+ *
+ * @param {object} parsed - parsed session JSON (may have runtime.usageStats)
+ * @returns {{ inputTokens: number, outputTokens: number, totalTokens: number, lastRequestUsage: object|null }}
+ */
+export function extractTokenUsage(parsed) {
+  const usageStats = parsed?.runtime?.usageStats;
+  const totalUsage = usageStats?.totalUsage;
+  return {
+    inputTokens: totalUsage?.inputTokens || 0,
+    outputTokens: totalUsage?.outputTokens || 0,
+    totalTokens: totalUsage?.totalTokens || 0,
+    lastRequestUsage: usageStats?.lastRequestUsage || null,
+  };
+}
+
+/**
+ * Extract a short preview from the last non-system message in a message list.
+ * Whitespace is collapsed and content is truncated to 140 characters.
+ *
+ * @param {Array} messages - messages from parsed session file
+ * @returns {string}
+ */
+export function extractLastMessagePreview(messages) {
+  if (!Array.isArray(messages)) return '';
+  const lastMessage = [...messages].reverse().find(
+    (message) => message && typeof message.content === 'string' && message.role !== 'system',
+  ) || null;
+  return lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '';
+}
+
+/**
  * Resolve session model info from a persisted index record, prioritizing
  * persisted values and falling back to modelInfoMap when they are missing.
  *
@@ -403,7 +435,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         expectedOutput,
         targetFiles,
         referenceMaterials,
-        sessionType: sType,
+        sessionType: sTypeFP,
         status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
         archived: record.archived === true,
         todo: record.todo === true,
@@ -428,11 +460,10 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
     const raw = await fs.readFile(sessionPath, 'utf8');
     const parsed = JSON.parse(raw);
     const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
-    const lastMessage = [...messages].reverse().find((message) => message && typeof message.content === 'string' && message.role !== 'system') || null;
+    const preview = extractLastMessagePreview(messages);
     const summaryInfo = summaryMap ? summaryMap.get(record.id) : null;
     const compactTitle = summaryInfo?.sessionTitle || '';
-    const usageStats = parsed?.runtime?.usageStats;
-    const totalUsage = usageStats?.totalUsage;
+    const tokenUsage = extractTokenUsage(parsed);
     const sType = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
     const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
     const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole])
@@ -470,14 +501,9 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       exists: true,
       bytes: stat.size,
       messageCount: messages.length,
-      preview: lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '',
+      preview,
       hasSummary: summaryMap ? summaryMap.has(record.id) : (await checkSessionHasSummary(agentId, record.id)),
-      tokenUsage: {
-        inputTokens: totalUsage?.inputTokens || 0,
-        outputTokens: totalUsage?.outputTokens || 0,
-        totalTokens: totalUsage?.totalTokens || 0,
-        lastRequestUsage: usageStats?.lastRequestUsage || null,
-      },
+      tokenUsage,
       contextLength: sessionModelInfo.contextLength || null,
       compressRatio: sessionModelInfo.compressRatio || 80,
       modelName: sessionModelInfo.modelName || '',
@@ -488,13 +514,8 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         fileMtimeMs: stat.mtimeMs,
         fileSize: stat.size,
         messageCount: messages.length,
-        preview: lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '',
-        tokenUsage: {
-          inputTokens: totalUsage?.inputTokens || 0,
-          outputTokens: totalUsage?.outputTokens || 0,
-          totalTokens: totalUsage?.totalTokens || 0,
-          lastRequestUsage: usageStats?.lastRequestUsage || null,
-        },
+        preview,
+        tokenUsage,
         savedAt: typeof parsed?.savedAt === 'number' ? parsed.savedAt : null,
         metaVersion: META_VERSION,
         modelName: sessionModelInfo.modelName || '',
