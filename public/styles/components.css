@@ -1334,11 +1334,12 @@ body[data-theme="light"] .workspace-docset-row {
   align-items: center;
   gap: 12px;
   min-width: 0;
+  font-size: 17px;
 }
 
 .workspace-history-title {
   min-width: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   line-height: 1.4;
   overflow: hidden;
@@ -1407,6 +1408,61 @@ body[data-theme="light"] .workspace-docset-row {
 
 .workspace-history-meta.compact {
   line-height: 1.5;
+}
+
+/* ── Session time indicator (title-row left side) ── */
+.session-time-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-right: -4px;
+}
+
+.session-time-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.session-time-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: #8b949e;
+}
+
+/* Recency variants — dot opacity fades for older items; label color stays uniform */
+.session-time-indicator.just-now .session-time-dot {
+  background: rgba(88, 166, 255, 0.7);
+}
+.session-time-indicator.today .session-time-dot {
+  background: rgba(88, 166, 255, 0.55);
+}
+.session-time-indicator.yesterday .session-time-dot {
+  background: rgba(88, 166, 255, 0.4);
+}
+.session-time-indicator.day-before .session-time-dot {
+  background: rgba(88, 166, 255, 0.3);
+}
+.session-time-indicator.this-week .session-time-dot {
+  background: rgba(88, 166, 255, 0.22);
+}
+
+/* ── Session group headers ── */
+.ph-session-group-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  padding: 12px 0 2px 14px;
+  user-select: none;
+}
+
+.ph-session-group-header:first-child {
+  padding-top: 4px;
 }
 
 .feature-project-card {
@@ -1823,6 +1879,9 @@ body[data-theme="light"] .workspace-docset-row {
   width: auto;
   flex: 0 0 auto;
   gap: 8px;
+  align-self: stretch;
+  justify-content: center;
+  padding-right: 16px;
 }
 
 .feature-project-session-item .workspace-actions.stacked {
@@ -1830,6 +1889,13 @@ body[data-theme="light"] .workspace-docset-row {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.feature-project-session-item:hover .workspace-actions.stacked,
+.feature-project-session-item.active .workspace-actions.stacked {
+  opacity: 1;
 }
 
 .feature-project-session-item .workspace-action {
@@ -2047,6 +2113,30 @@ body[data-theme="light"] .feature-project-session-item:hover {
 body[data-theme="light"] .feature-project-session-item {
   background: #ffffff;
   border-color: #ececec;
+}
+
+body[data-theme="light"] .session-time-label {
+  color: #57606a;
+}
+
+body[data-theme="light"] .session-time-indicator.just-now .session-time-dot {
+  background: rgba(9, 105, 218, 0.65);
+}
+
+body[data-theme="light"] .session-time-indicator.today .session-time-dot {
+  background: rgba(9, 105, 218, 0.5);
+}
+
+body[data-theme="light"] .session-time-indicator.yesterday .session-time-dot {
+  background: rgba(9, 105, 218, 0.35);
+}
+
+body[data-theme="light"] .session-time-indicator.day-before .session-time-dot {
+  background: rgba(9, 105, 218, 0.26);
+}
+
+body[data-theme="light"] .session-time-indicator.this-week .session-time-dot {
+  background: rgba(9, 105, 218, 0.2);
 }
 
 @media (max-width: 900px) {
@@ -5054,7 +5144,7 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ph-model-switch {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   height: 36px;
   padding: 0 14px;
   border-radius: 10px;
@@ -5083,10 +5173,7 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ph-model-switch-arrow {
   color: var(--text-secondary);
   flex-shrink: 0;
-  transition: transform 0.15s;
-}
-.ph-model-switch.has-secondary:hover .ph-model-switch-arrow {
-  transform: translateY(1px);
+  display: block;
 }
 
 /* ── IM Channel Config Dialog ── */
@@ -6190,7 +6277,7 @@ body[data-theme="light"] .workspace-history-item.session-loading::after {
   max-width: 220px;
 }
 .ph-project-dropdown-trigger:hover {
-  background: var(--hover-bg);
+  background: rgba(255, 255, 255, 0.08);
 }
 .ph-project-dropdown-arrow {
   flex-shrink: 0;
@@ -6424,6 +6511,9 @@ body[data-theme="light"] .ph-project-dropdown-menu {
 }
 body[data-theme="light"] .ph-project-dropdown-item:hover {
   background: var(--hover-bg);
+}
+body[data-theme="light"] .ph-project-dropdown-trigger:hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 body[data-theme="light"] .ph-project-dropdown-item.active {
   background: rgba(88,166,255,0.12);

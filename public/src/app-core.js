@@ -1390,9 +1390,25 @@ function formatWorkspaceDate(isoString) {
 }
 
 /**
+ * Returns a time-of-day qualifier for the given hour.
+ * 凌晨(0-5) / 上午(6-11) / 中午(12-13) / 下午(14-17) / 晚上(18-23)
+ */
+function getTimeOfDayLabel(hour, isZh) {
+  if (isZh) {
+    if (hour < 6) return '凌晨';
+    if (hour < 12) return '上午';
+    if (hour < 14) return '中午';
+    if (hour < 18) return '下午';
+    return '晚上';
+  }
+  if (hour < 12) return 'AM';
+  return 'PM';
+}
+
+/**
  * Human-readable relative time formatter.
- * Returns friendly labels like "刚刚", "5分钟前", "今天 14:30", "昨天 09:15",
- * "周二 16:00", "3月15日", "2024年3月15日".
+ * Returns friendly labels like "刚刚", "5分钟前", "今天上午9点", "昨天上午9点",
+ * "前天下午3点", "星期二 下午3点", "3月15日", "2024年3月15日".
  */
 function formatRelativeTime(isoString) {
   if (!isoString) return '';
@@ -1409,12 +1425,11 @@ function formatRelativeTime(isoString) {
   // ── Under 1 hour ──
   if (diffMin < 60) return isZh ? diffMin + '分钟前' : diffMin + 'm ago';
 
-  // Same calendar day helpers
-  var hh = date.getHours();
-  var mm = String(date.getMinutes()).padStart(2, '0');
-  var amPmSuffix = hh < 12 ? 'AM' : 'PM';
-  var h12 = String(hh % 12 || 12);
-  var ampmZh = hh < 12 ? '上午' : '下午';
+  // Same calendar day helpers — use time-of-day + hour (no minutes)
+  var hour = date.getHours();
+  var hour12 = String(hour % 12 || 12);
+  var todZh = getTimeOfDayLabel(hour, true);
+  var todEn = getTimeOfDayLabel(hour, false);
 
   var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -1422,31 +1437,27 @@ function formatRelativeTime(isoString) {
 
   // ── Today ──
   if (calendarDiff === 0) {
-    return isZh ? ('今天' + ampmZh + hh + ':' + mm) : ('Today ' + h12 + ':' + mm + ' ' + amPmSuffix);
+    return isZh ? ('今天' + todZh + hour12 + '点') : ('Today ' + hour12 + todEn);
   }
 
   // ── Yesterday ──
   if (calendarDiff === 1) {
-    return isZh
-      ? ('昨天 ' + ampmZh + hh + ':' + mm)
-      : ('Yesterday ' + h12 + ':' + mm + ' ' + amPmSuffix);
+    return isZh ? ('昨天' + todZh + hour12 + '点') : ('Yesterday ' + hour12 + todEn);
   }
 
   // ── Day before yesterday ──
   if (calendarDiff === 2) {
-    return isZh
-      ? ('前天 ' + ampmZh + hh + ':' + mm)
-      : ('2 days ago ' + h12 + ':' + mm + ' ' + amPmSuffix);
+    return isZh ? ('前天' + todZh + hour12 + '点') : ('2 days ago ' + hour12 + todEn);
   }
 
   // ── This week (3-6 days ago): use full weekday ──
   if (calendarDiff >= 3 && calendarDiff <= 6) {
     if (isZh) {
       var weekdayZh = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-      return weekdayZh[date.getDay()] + ' ' + ampmZh + hh + ':' + mm;
+      return weekdayZh[date.getDay()] + ' ' + todZh + hour12 + '点';
     }
     var weekdayEn = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return weekdayEn[date.getDay()] + ' ' + h12 + ':' + mm + ' ' + amPmSuffix;
+    return weekdayEn[date.getDay()] + ' ' + hour12 + todEn;
   }
 
   // ── This year ──
@@ -1458,6 +1469,96 @@ function formatRelativeTime(isoString) {
   // ── Older ──
   if (isZh) return date.getFullYear() + '年' + (date.getMonth() + 1) + '月' + date.getDate() + '日';
   return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/**
+ * Returns a coarse time-group label for session list section headers.
+ * Categories: '今天' / '昨天' / '本周' / '更早'.
+ */
+function getTimeGroupLabel(isoString) {
+  if (!isoString) return '';
+  var date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
+  var isZh = currentLanguage === 'zh';
+  var now = new Date();
+  var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  var calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
+
+  if (calendarDiff <= 0) return isZh ? '今天' : 'Today';
+  if (calendarDiff === 1) return isZh ? '昨天' : 'Yesterday';
+  if (calendarDiff === 2) return isZh ? '前天' : 'Day Before';
+  if (calendarDiff <= 6) return isZh ? '本周' : 'This Week';
+  return isZh ? '更早' : 'Earlier';
+}
+
+/**
+ * Returns a CSS class suffix indicating how recent a timestamp is,
+ * used to apply differentiated color treatment to session time labels.
+ * Returns one of: 'just-now' | 'today' | 'yesterday' | 'this-week' | 'older'.
+ */
+function getSessionRecencyClass(isoString) {
+  if (!isoString) return 'older';
+  var date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return 'older';
+  var now = new Date();
+  var diffMin = Math.floor((now.getTime() - date.getTime()) / 60000);
+  if (diffMin < 60) return 'just-now';
+
+  var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  var calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
+
+  if (calendarDiff <= 0) return 'today';
+  if (calendarDiff === 1) return 'yesterday';
+  if (calendarDiff === 2) return 'day-before';
+  if (calendarDiff <= 6) return 'this-week';
+  return 'older';
+}
+
+/**
+ * Ultra-short time label for the session list title-row indicator.
+ * Returns compact labels like '刚刚', '5分钟', '上午9点', '昨天上午', '前天下午', '周二晚上'.
+ * Returns '' for sessions older than one week (no indicator shown).
+ */
+function getSessionShortTime(isoString) {
+  if (!isoString) return '';
+  var date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
+  var isZh = currentLanguage === 'zh';
+  var now = new Date();
+  var diffMin = Math.floor((now.getTime() - date.getTime()) / 60000);
+
+  if (diffMin < 1) return isZh ? '刚刚' : 'now';
+  if (diffMin < 60) return isZh ? diffMin + '分钟' : diffMin + 'm';
+
+  var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  var calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
+
+  var hour = date.getHours();
+  var hour12 = String(hour % 12 || 12);
+  var todZh = getTimeOfDayLabel(hour, true);
+  var todEn = getTimeOfDayLabel(hour, false);
+
+  if (calendarDiff <= 0) {
+    // Today: 上午9点 / 下午3点
+    return isZh ? (todZh + hour12 + '点') : (hour12 + todEn);
+  }
+  if (calendarDiff === 1) {
+    // Yesterday: 昨天上午 / 昨天下午
+    return isZh ? ('昨天' + todZh) : ('Yest ' + todEn);
+  }
+  if (calendarDiff === 2) {
+    // Day before yesterday: 前天上午 / 前天下午
+    return isZh ? ('前天' + todZh) : ('2d ' + todEn);
+  }
+  if (calendarDiff <= 6) {
+    // This week: 周二下午 / 周三晚上
+    if (isZh) return '周' + '日一二三四五六'[date.getDay()] + todZh;
+    return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][date.getDay()] + ' ' + todEn;
+  }
+  return '';
 }
 
 function convertLegacyWorkspaceToUi(workspace) {
