@@ -165,6 +165,16 @@ async function ensureDir(dirPath) {
   await fs.mkdir(dirPath, { recursive: true });
 }
 
+export {
+  sanitizeFragment,
+  cleanInlineText,
+  cleanMultilineText,
+  buildSourceRecord,
+  buildCompactOverview,
+  normalizeSummaryPolicy,
+  buildSummarySeedMessage,
+};
+
 export async function writeSummarizedHandoffPackage({
   userDataRoot,
   agentId,

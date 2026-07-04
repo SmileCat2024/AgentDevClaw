@@ -937,5 +937,7 @@ export {
   parseToolResult,
   escapeHtml,
   getToolDisplayName,
+  buildToolCallIndex,
+  formatToolError,
   TOOL_DISPLAY_NAMES,
 };
