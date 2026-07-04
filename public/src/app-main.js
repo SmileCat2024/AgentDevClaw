@@ -563,18 +563,22 @@ function getAgentListRenderSignature() {
     pending: Array.from(pendingPrebuiltAgentIds || []).sort(),
     restarting: Array.from(restartingRuntimeIds || []).sort(),
     recentlyFinished: Array.from(_recentlyFinishedRuntimes).sort(),
-    agents: (Array.isArray(allAgents) ? allAgents : []).map((agent) => ({
-      id: normalizeAgentIdentity(agent?.id),
-      runtimeId: normalizeAgentIdentity(getAgentRuntimeId(agent)),
-      source: agent?.source || '',
-      parentId: normalizeAgentIdentity(agent?.parent_id),
-      connected: agent?.connected !== false,
-      status: agent?.status || '',
-      callActive: agent?.callActive === true,
-      activeSessionId: normalizeAgentIdentity(agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId),
-      displayName: agent?.active_workspace_display_name || '',
-      sessionTitle: agent?.active_workspace_session_title || '',
-    })),
+    agents: (Array.isArray(allAgents) ? allAgents : []).map((agent) => {
+      const rid = normalizeAgentIdentity(getAgentRuntimeId(agent));
+      return {
+        id: normalizeAgentIdentity(agent?.id),
+        runtimeId: rid,
+        source: agent?.source || '',
+        parentId: normalizeAgentIdentity(agent?.parent_id),
+        connected: agent?.connected !== false,
+        status: agent?.status || '',
+        callActive: agent?.callActive === true,
+        calling: rid !== '' && _agentCallActive.get(rid) === true,
+        activeSessionId: normalizeAgentIdentity(agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId),
+        displayName: agent?.active_workspace_display_name || '',
+        sessionTitle: agent?.active_workspace_session_title || '',
+      };
+    }),
   });
 }
 
@@ -1826,6 +1830,26 @@ window.switchAgent = async (newAgentId) => {
     beginFollowLatestCooldown();
     beginFollowLatestEntryWindow();
     renderAgentList();
+
+    // Pre-warm calling status for the new runtime in parallel with PUT + loadAgentData.
+    // For dispatched agents not yet tracked by refreshAgentCallStates, this eliminates
+    // the window where the send button incorrectly shows because _agentCallActive has
+    // no entry for this runtime yet.
+    fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/notification`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (!data) return;
+        if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(runtimeAgentId)) return;
+        const isCalling = resolveNotificationCallingState(data);
+        if (isCalling) {
+          _agentCallActive.set(runtimeAgentId, true);
+        } else {
+          _agentCallActive.delete(runtimeAgentId);
+        }
+        _syncPersistentActionButton();
+        renderAgentList();
+      })
+      .catch(() => {});
 
     // Fire PUT in parallel with loadAgentData — loadAgentData uses explicit
     // agentId in all fetch URLs, so it doesn't depend on the PUT completing.
@@ -3900,6 +3924,19 @@ function _getSessionInputCacheKey() {
 
 applyTheme(currentTheme);
 applyLanguage();
+
+// When the page returns to foreground after being in a background tab,
+// browser timer throttling may have caused us to miss state transitions.
+// Force a full refresh to catch up.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  // Re-sync all agent calling states immediately
+  refreshAgentCallStates(allAgents, { force: true });
+  // Re-sync current runtime's notification status (button, status bar)
+  if (currentRuntimeAgentId) {
+    refreshCurrentRuntimeStatus(currentRuntimeAgentId);
+  }
+});
 
 (async () => {
   await waitForViewerReady();

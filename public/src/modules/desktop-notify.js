@@ -14,8 +14,11 @@
  *   _tryNotifyAgentFinished, _requestNotifyPermission
  */
 
-/* ── Dedup: 防止同一 agent 短时间内重复通知 (60s 内不重复) ── */
-const _notifiedFinishIds = new Set();
+/* ── Dedup: 防止同一 agent 短时间内重复通知 ──
+ * 用 Map 存储 normId → 完成时的时间戳，仅在实际发出通知后才标记。
+ * 前台跳过时不标记，确保用户切走后连续任务的后续完成仍能正常通知。
+ */
+const _notifiedFinishMap = new Map();
 
 /* ── 文本截断：去除 markdown 语法，只保留纯文本预览 ── */
 function _truncateForNotification(text, maxLen = 120) {
@@ -41,14 +44,15 @@ async function _tryNotifyAgentFinished(runtimeId) {
 
   const normId = normalizeAgentIdentity(runtimeId);
 
-  // 关键：dedup 标记必须在可见性检查之前。
-  // 即使前台时跳过了通知，也要标记"已完成"，防止用户切走后重复触发。
-  if (_notifiedFinishIds.has(normId)) return;
-  _notifiedFinishIds.add(normId);
-  setTimeout(() => _notifiedFinishIds.delete(normId), 60000);
-
-  // 前台时不需要通知——用户已经看到了
+  // 前台时不需要通知——用户已经看到了。
+  // 不标记 dedup，确保用户随后切走时，同一 agent 的新完成事件仍能正常通知。
   if (!document.hidden && document.hasFocus()) return;
+
+  // dedup: 30s 内同一 agent 的完成事件不重复通知。
+  // 仅在确认需要通知（后台 + 权限已授）时才检查和标记。
+  const now = Date.now();
+  const lastNotified = _notifiedFinishMap.get(normId);
+  if (lastNotified && (now - lastNotified) < 30000) return;
 
   const agent = (Array.isArray(allAgents) ? allAgents : []).find(
     (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
@@ -80,6 +84,9 @@ async function _tryNotifyAgentFinished(runtimeId) {
   const body = bodyParts.length > 0
     ? bodyParts.join('\n')
     : (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.');
+
+  // 标记已通知（在实际发送通知之前，防止 fetch 期间重复触发）
+  _notifiedFinishMap.set(normId, Date.now());
 
   try {
     const n = new Notification(

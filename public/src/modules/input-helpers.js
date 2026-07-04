@@ -132,6 +132,7 @@ async function submitInput(requestId) {
       if (currentRuntimeAgentId) {
         _agentCallActive.set(currentRuntimeAgentId, true);
         _syncPersistentActionButton();
+        renderAgentList();
       }
       // 后台刷新
       poll();
@@ -297,6 +298,7 @@ async function submitInputAction(requestId, actionId, payload = {}) {
       if (currentRuntimeAgentId) {
         _agentCallActive.set(currentRuntimeAgentId, true);
         _syncPersistentActionButton();
+        renderAgentList();
       }
       poll();
     }
