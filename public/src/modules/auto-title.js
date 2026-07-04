@@ -10,8 +10,8 @@
  *   getCurrentAgentRecord (app-main.js)
  *   ClawToast (modules/toast-notify.js)
  * 导出全局函数:
- *   getAutoTitleSessionInfo, markAutoTitleCandidate, _messagesEqual,
- *   findFirstChangedMessageIndex, tryAutoTitleGeneration,
+ *   getAutoTitleSessionInfo, markAutoTitleCandidate, recheckAutoTitleCandidate,
+ *   _messagesEqual, findFirstChangedMessageIndex, tryAutoTitleGeneration,
  *   autoGenerateSessionTitle, checkGlobalChoiceAlerts
  * 导出全局变量:
  *   _autoTitlePending, _autoTitleAttempts, _autoTitleRetryAt
@@ -40,6 +40,25 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
   }).length;
   if (previousAssistantCount === 0 && nextAssistantCount > 0) {
     _autoTitlePending.add(info.sessionId);
+  }
+}
+
+/**
+ * Recheck whether the current session should be a title-generation candidate.
+ * Called after loadAgentData / cache restore — covers the case where the
+ * 0→1 assistant transition was missed because messages arrived in bulk
+ * (page refresh, session switch with cached data).
+ */
+function recheckAutoTitleCandidate() {
+  const info = getAutoTitleSessionInfo();
+  if (!info) return;
+  const { agent, sessionId } = info;
+  const currentTitle = String(agent.active_workspace_session_title || '').trim();
+  if (!/^新对话\d+$/.test(currentTitle)) return;
+  const hasAssistant = Array.isArray(currentMessages)
+    && currentMessages.some(function(m) { return m && m.role === 'assistant'; });
+  if (hasAssistant) {
+    _autoTitlePending.add(sessionId);
   }
 }
 
@@ -77,26 +96,50 @@ function findFirstChangedMessageIndex(nextMessages, previousMessages) {
   return nextMessages.length === previousMessages.length ? -1 : length;
 }
 
-function tryAutoTitleGeneration(messages) {
-  if (!currentRuntimeAgentId || !currentAgentId) return;
+/**
+ * Find the agent record and session info for a given sessionId by searching allAgents.
+ * Returns { agent, session, sessionId, runtimeId, title } or null if not found.
+ */
+function _findSessionOwner(sessionId) {
+  if (!Array.isArray(allAgents)) return null;
+  for (const agent of allAgents) {
+    const sessions = agent && agent.workspace_sessions && agent.workspace_sessions.sessions;
+    if (!Array.isArray(sessions)) continue;
+    const session = sessions.find(function(s) { return s && s.id === sessionId; });
+    if (session) {
+      return {
+        agent: agent,
+        session: session,
+        sessionId: sessionId,
+        runtimeId: typeof getAgentRuntimeId === 'function' ? getAgentRuntimeId(agent) : (agent.runtime_session_id || agent.id),
+        title: String(session.title || '').trim(),
+      };
+    }
+  }
+  return null;
+}
 
-  const info = getAutoTitleSessionInfo();
-  if (!info) return;
-  const { agent, sessionId } = info;
-  if (!_autoTitlePending.has(sessionId)) return;
-
-  const latestMessage = messages[messages.length - 1];
-  if (!latestMessage || latestMessage.role !== 'assistant' || !String(latestMessage.content || '').trim()) return;
-
-  // Only auto-generate for default "新对话N" titles
-  const currentTitle = String(agent.active_workspace_session_title || '').trim();
-  if (!/^新对话\d+$/.test(currentTitle)) {
+/**
+ * Attempt title generation for a single session after all guard checks pass.
+ * @param agent  - agent record (must have .id)
+ * @param sessionId
+ * @param sessionTitle - current title string (checked against /^新对话\d+$/)
+ * @param messages - current session's messages array (null for non-current sessions)
+ */
+function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
+  if (!/^新对话\d+$/.test(sessionTitle)) {
     _autoTitlePending.delete(sessionId);
     return;
   }
 
+  // For the current session, verify the latest message is a completed assistant response
+  if (messages) {
+    var latestMessage = messages[messages.length - 1];
+    if (!latestMessage || latestMessage.role !== 'assistant' || !String(latestMessage.content || '').trim()) return;
+  }
+
   if (_autoTitleTriggered.has(sessionId)) return;
-  const attempts = _autoTitleAttempts.get(sessionId) || 0;
+  var attempts = _autoTitleAttempts.get(sessionId) || 0;
   if (attempts >= 3) {
     _autoTitlePending.delete(sessionId);
     _autoTitleRetryAt.delete(sessionId);
@@ -111,6 +154,42 @@ function tryAutoTitleGeneration(messages) {
   autoGenerateSessionTitle(agent.id, sessionId);
 }
 
+function tryAutoTitleGeneration(messages) {
+  if (!currentRuntimeAgentId || !currentAgentId) return;
+
+  var info = getAutoTitleSessionInfo();
+
+  // 1. Try the currently-viewed session
+  if (info && _autoTitlePending.has(info.sessionId)) {
+    var currentTitle = String(info.agent.active_workspace_session_title || '').trim();
+    _tryTitleForSession(info.agent, info.sessionId, currentTitle, messages);
+  }
+
+  // 2. Scan other pending sessions whose runtimes are idle.
+  //    This covers sessions the user switched away from before the title
+  //    could be generated.
+  var pendingIds = Array.from(_autoTitlePending);
+  for (var i = 0; i < pendingIds.length; i++) {
+    var pendingId = pendingIds[i];
+    if (info && pendingId === info.sessionId) continue; // already handled above
+
+    var owner = _findSessionOwner(pendingId);
+    if (!owner) {
+      // Session no longer exists in any agent — clean up
+      _autoTitlePending.delete(pendingId);
+      _autoTitleTriggered.delete(pendingId);
+      _autoTitleAttempts.delete(pendingId);
+      _autoTitleRetryAt.delete(pendingId);
+      continue;
+    }
+
+    // Only trigger if the owning runtime is idle (assistant finished responding)
+    if (typeof isRuntimeCalling === 'function' && isRuntimeCalling(owner.runtimeId)) continue;
+
+    _tryTitleForSession(owner.agent, pendingId, owner.title, null);
+  }
+}
+
 async function autoGenerateSessionTitle(agentId, sessionId) {
   let succeeded = false;
   const isZh = currentLanguage === 'zh';
@@ -120,18 +199,34 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
     title: isZh ? '正在生成会话标题...' : 'Generating session title...',
     status: 'loading',
   });
+
+  // Fallback: if no response after 60s, convert the loading toast to error
+  // so it doesn't stay stuck forever (server can take up to 120s internally).
+  const fallbackTimer = setTimeout(function() {
+    ClawToast.update(toastId, {
+      status: 'error',
+      title: isZh ? '标题生成超时' : 'Title generation timed out',
+      description: isZh ? '服务端响应超过60秒' : 'Server response exceeded 60s',
+    });
+  }, 60000);
+
+  // AbortController: cancel the fetch after 30s
+  const controller = new AbortController();
+  const fetchTimer = setTimeout(function() { controller.abort(); }, 30000);
+
   try {
     var response = await fetch('/protoclaw/generate_session_title', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId: agentId, sessionId: sessionId }),
+      signal: controller.signal,
     });
     if (!response.ok) {
       console.warn('[AutoTitle] generation failed:', response.status);
       ClawToast.update(toastId, {
         status: 'error',
         title: isZh ? '标题生成失败' : 'Title generation failed',
-        description: isZh ? ('HTTP ' + response.status) : ('HTTP ' + response.status),
+        description: 'HTTP ' + response.status,
       });
       return;
     }
@@ -143,6 +238,10 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
         var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
         var target = sessions.find(function(s) { return s.id === sessionId; });
         if (target) target.title = result.title;
+        // Also sync active_workspace_session_title for immediate sidebar refresh
+        if (String(agent.active_workspace_session_id || '') === String(sessionId)) {
+          agent.active_workspace_session_title = result.title;
+        }
       }
       console.log('[AutoTitle] title set:', result.title);
       succeeded = true;
@@ -159,13 +258,18 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
       });
     }
   } catch (error) {
+    var isAbort = error && error.name === 'AbortError';
     console.warn('[AutoTitle] error:', error.message || error);
     ClawToast.update(toastId, {
       status: 'error',
       title: isZh ? '标题生成失败' : 'Title generation failed',
-      description: error.message || String(error),
+      description: isAbort
+        ? (isZh ? '请求超时（30秒）' : 'Request timed out (30s)')
+        : (error.message || String(error)),
     });
   } finally {
+    clearTimeout(fetchTimer);
+    clearTimeout(fallbackTimer);
     _autoTitleTriggered.delete(sessionId);
     if (succeeded) {
       _autoTitlePending.delete(sessionId);

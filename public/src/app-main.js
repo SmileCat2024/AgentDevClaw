@@ -2584,6 +2584,7 @@ async function loadAgentData(agentId) {
     const inputRequests = await inputRes.json();
 
     currentMessages = msgsData.messages || [];
+    recheckAutoTitleCandidate();
     // Only clear loading if messages arrived. If the runtime hasn't loaded
     // messages yet (common for freshly-created compacted resume sessions),
     // keep the spinner so the user doesn't see a premature empty welcome page.
