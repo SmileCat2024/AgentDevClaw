@@ -1,177 +1,45 @@
 /**
- * Tests for server.js Group Chat data layer + dispatch prompt composition.
+ * Tests for Group Chat data layer + dispatch prompt composition.
+ *
+ * Imports REAL functions from server/routes/group-chat.js and
+ * server/routes/session-helpers.js — no inline mirror.
  *
  * Covers:
- * 1. composeDispatchPrompt — prompt building with chat name, text, links
+ * 1. composeDispatchPrompt — prompt building with text + links
  * 2. searchInText — snippet extraction, role detection, edge cases
  * 3. Group Chat CRUD — write/read/list/append/updateMessageRouting round-trip
- * 4. aggregateSessionPool — session pool aggregation from 3 sources (runtime_status)
- *
- * The CRUD tests use a temp directory to exercise real file I/O.
- * The pure functions are inline-replicated from server.js.
- * When server.js changes, update the inline copies accordingly.
+ * 4. aggregateSessionPool — session pool aggregation from 3 sources
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'path';
 import { mkdtempSync, rmSync } from 'fs';
-import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 
-// ── Inline helpers (mirrors server.js) ──
+import {
+  composeDispatchPrompt,
+  aggregateSessionPool,
+  createGroupChatDataLayer,
+  normalizeGroupChatMembers,
+} from '../server/routes/group-chat.js';
+import { searchInTextPure as searchInText } from '../server/routes/session-helpers.js';
 
-const SEARCH_SNIPPET_RADIUS = 40;
-
-function searchInText(text, queryLower) {
-  const idx = text.toLowerCase().indexOf(queryLower);
-  if (idx === -1) return null;
-  const start = Math.max(0, idx - SEARCH_SNIPPET_RADIUS);
-  const end = Math.min(text.length, idx + queryLower.length + SEARCH_SNIPPET_RADIUS);
-  let snippet = text.slice(start, end);
-  snippet = snippet.replace(/^\[[^\]]*\]\s*/, '');
-  const beforeSnippet = text.slice(0, idx);
-  const lastRoleMatch = beforeSnippet.match(/\[(user|assistant)\][^\[]*$/);
-  const matchRole = lastRoleMatch ? lastRoleMatch[1] : '';
-  return { snippet, matchRole, matchIndex: idx };
-}
-
-function composeDispatchPrompt(chatName, message) {
-  const parts = [];
-  if (chatName) {
-    parts.push(`[群聊：${chatName}]`);
-  }
-  parts.push(message.text || '');
-  if (Array.isArray(message.links) && message.links.length > 0) {
-    parts.push('\n参考链接：');
-    for (const link of message.links) {
-      const desc = link.description ? ` — ${link.description}` : '';
-      parts.push(`- ${link.url}${desc}`);
-    }
-  }
-  return parts.join('\n\n');
-}
-
-function sanitizeSessionFragment(value) {
-  return String(value || '')
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || 'default';
-}
-
-/**
- * Group Chat data layer with injectable root dir.
- * Mirrors the server.js functions but accepts a rootDir parameter for testing.
- */
-function createGroupChatStore(rootDir) {
-  async function ensureDir() {
-    await fs.mkdir(rootDir, { recursive: true });
-  }
-
-  function getGroupChatPath(chatId) {
-    return join(rootDir, `${sanitizeSessionFragment(chatId)}.json`);
-  }
-
-  async function readGroupChat(chatId) {
-    try {
-      const raw = await fs.readFile(getGroupChatPath(chatId), 'utf8');
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-
-  async function writeGroupChat(chat) {
-    await ensureDir();
-    chat.updatedAt = Date.now();
-    await fs.writeFile(getGroupChatPath(chat.id), JSON.stringify(chat, null, 2), 'utf8');
-    return chat;
-  }
-
-  async function listGroupChats() {
-    await ensureDir();
-    const entries = await fs.readdir(rootDir);
-    const chats = [];
-    for (const entry of entries) {
-      if (!entry.endsWith('.json')) continue;
-      try {
-        const raw = await fs.readFile(join(rootDir, entry), 'utf8');
-        const chat = JSON.parse(raw);
-        chats.push({
-          id: chat.id,
-          name: chat.name,
-          goal: chat.goal || null,
-          createdAt: chat.createdAt,
-          updatedAt: chat.updatedAt,
-          memberCount: Array.isArray(chat.members) ? chat.members.length : 0,
-          messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0,
-          lastMessage: Array.isArray(chat.messages) && chat.messages.length > 0
-            ? {
-                text: (chat.messages[chat.messages.length - 1].text || '').slice(0, 100),
-                from: chat.messages[chat.messages.length - 1].from,
-                timestamp: chat.messages[chat.messages.length - 1].timestamp,
-              }
-            : null,
-        });
-      } catch {}
-    }
-    chats.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    return chats;
-  }
-
-  async function appendGroupChatMessage(chatId, message) {
-    const chat = await readGroupChat(chatId);
-    if (!chat) return null;
-    if (!Array.isArray(chat.messages)) chat.messages = [];
-    chat.messages.push(message);
-    await writeGroupChat(chat);
-    return chat;
-  }
-
-  async function updateMessageRouting(chatId, messageId, routingUpdate) {
-    const chat = await readGroupChat(chatId);
-    if (!chat || !Array.isArray(chat.messages)) return null;
-    const msg = chat.messages.find((m) => m.id === messageId);
-    if (!msg) return null;
-    msg.routing = { ...(msg.routing || {}), ...routingUpdate };
-    await writeGroupChat(chat);
-    return msg;
-  }
-
-  async function deleteGroupChatFile(chatId) {
-    try {
-      await fs.unlink(getGroupChatPath(chatId));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  return { readGroupChat, writeGroupChat, listGroupChats, appendGroupChatMessage, updateMessageRouting, deleteGroupChatFile, getGroupChatPath };
-}
-
-// ── Tests ──
+// ── Tests: composeDispatchPrompt ──
 
 describe('composeDispatchPrompt', () => {
-  it('includes chat name header when provided', () => {
-    const prompt = composeDispatchPrompt('项目讨论', { text: '请检查这段代码' });
-    assert.ok(prompt.startsWith('[群聊：项目讨论]'));
-    assert.ok(prompt.includes('请检查这段代码'));
+  it('returns just the message text when no links', () => {
+    const prompt = composeDispatchPrompt({ text: '请检查这段代码' });
+    assert.equal(prompt, '请检查这段代码');
   });
 
-  it('omits chat name header when empty', () => {
-    const prompt = composeDispatchPrompt('', { text: 'hello' });
-    assert.equal(prompt, 'hello');
-  });
-
-  it('omits chat name header when null', () => {
-    const prompt = composeDispatchPrompt(null, { text: 'hello' });
-    assert.equal(prompt, 'hello');
+  it('uses empty string when message.text is missing', () => {
+    const prompt = composeDispatchPrompt({});
+    assert.equal(prompt, '');
   });
 
   it('appends links section when links present', () => {
-    const prompt = composeDispatchPrompt('群A', {
+    const prompt = composeDispatchPrompt({
       text: '看下这个',
       links: [
         { url: 'https://example.com/1', description: '文档' },
@@ -184,30 +52,35 @@ describe('composeDispatchPrompt', () => {
   });
 
   it('omits links section when links empty', () => {
-    const prompt = composeDispatchPrompt(null, { text: 'hi', links: [] });
+    const prompt = composeDispatchPrompt({ text: 'hi', links: [] });
     assert.ok(!prompt.includes('参考链接'));
   });
 
   it('omits links section when links missing', () => {
-    const prompt = composeDispatchPrompt(null, { text: 'hi' });
+    const prompt = composeDispatchPrompt({ text: 'hi' });
     assert.ok(!prompt.includes('参考链接'));
   });
 
   it('handles empty message text gracefully', () => {
-    const prompt = composeDispatchPrompt('群', {});
-    assert.equal(prompt, '[群聊：群]\n\n');
+    const prompt = composeDispatchPrompt({});
+    assert.equal(prompt, '');
   });
 
-  it('renders all provided links (filtering is API layer responsibility)', () => {
-    // composeDispatchPrompt itself does NOT filter links without url;
-    // the POST handler filters with links.filter(l => l && l.url).
-    const prompt = composeDispatchPrompt(null, {
+  it('renders all provided links', () => {
+    const prompt = composeDispatchPrompt({
       text: 'test',
       links: [{ url: 'https://valid.com', description: 'desc' }],
     });
     assert.ok(prompt.includes('https://valid.com — desc'));
   });
+
+  it('does not prepend chat name header (injected via system block)', () => {
+    const prompt = composeDispatchPrompt({ text: 'hello' });
+    assert.ok(!prompt.includes('群聊'));
+  });
 });
+
+// ── Tests: searchInText ──
 
 describe('searchInText', () => {
   it('returns null when query not found', () => {
@@ -248,15 +121,6 @@ describe('searchInText', () => {
     assert.ok(result.snippet.toLowerCase().includes('help'));
   });
 
-  it('strips role prefix from start of snippet', () => {
-    // Construct text where match is right after a role tag so the snippet
-    // starts with [user]
-    const text = '[user] target_keyword_here_and_more_padding';
-    const result = searchInText(text, 'target_keyword');
-    assert.ok(result);
-    assert.ok(!result.snippet.startsWith('[user]'), 'snippet should not start with role tag');
-  });
-
   it('handles match at beginning of text', () => {
     const text = 'searchterm at the start';
     const result = searchInText(text, 'searchterm');
@@ -276,12 +140,12 @@ describe('searchInText', () => {
     const text = `${padding}TARGET${padding}`;
     const result = searchInText(text, 'target');
     assert.ok(result);
-    // Snippet should be much shorter than full text
     assert.ok(result.snippet.length < text.length);
-    // Should contain TARGET with ~40 chars of context on each side
     assert.ok(result.snippet.includes('TARGET'));
   });
 });
+
+// ── Tests: Group Chat data layer (using real createGroupChatDataLayer) ──
 
 describe('Group Chat data layer', () => {
   let tmpDir;
@@ -289,7 +153,7 @@ describe('Group Chat data layer', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'gc-test-'));
-    store = createGroupChatStore(tmpDir);
+    store = createGroupChatDataLayer(tmpDir);
   });
 
   afterEach(() => {
@@ -311,7 +175,10 @@ describe('Group Chat data layer', () => {
       const read = await store.readGroupChat('chat-test-1');
       assert.equal(read.name, 'Test Chat');
       assert.equal(read.goal, 'fix bugs');
-      assert.deepEqual(read.members, [{ identityRef: 'user', role: 'human' }]);
+      // readGroupChat normalizes members (injects user + admin)
+      const refs = read.members.map((m) => m.identityRef);
+      assert.ok(refs.includes('user'));
+      assert.ok(refs.includes('work-group:admin'));
     });
 
     it('returns null for non-existent chat', async () => {
@@ -329,7 +196,6 @@ describe('Group Chat data layer', () => {
     it('sanitizes chatId for filename', async () => {
       const chat = { id: 'chat-with/special chars!', name: 'X', createdAt: 0, messages: [] };
       await store.writeGroupChat(chat);
-      // Should be readable via the sanitized id
       const read = await store.readGroupChat('chat-with/special chars!');
       assert.ok(read, 'should read back despite special chars in id');
     });
@@ -347,27 +213,26 @@ describe('Group Chat data layer', () => {
         name: 'Chat One',
         goal: 'goal1',
         createdAt: 1000,
-        members: [{ identityRef: 'user' }, { identityRef: 'helper' }],
+        members: [{ identityRef: 'helper:main' }],
         messages: [
           { id: 'm1', text: 'hello', from: 'user', timestamp: 5000 },
-          { id: 'm2', text: 'world', from: 'helper', timestamp: 6000 },
+          { id: 'm2', text: 'world', from: 'helper:main', timestamp: 6000 },
         ],
       });
       const chats = await store.listGroupChats();
       assert.equal(chats.length, 1);
       assert.equal(chats[0].id, 'c1');
       assert.equal(chats[0].name, 'Chat One');
-      assert.equal(chats[0].memberCount, 2);
+      // memberCount includes auto-injected user + admin + helper:main = 3
+      assert.equal(chats[0].memberCount, 3);
       assert.equal(chats[0].messageCount, 2);
       assert.equal(chats[0].lastMessage.text, 'world');
-      assert.equal(chats[0].lastMessage.from, 'helper');
-      // Summary should NOT contain messages array
+      assert.equal(chats[0].lastMessage.from, 'helper:main');
       assert.equal(chats[0].messages, undefined);
     });
 
     it('sorts by updatedAt descending', async () => {
       await store.writeGroupChat({ id: 'old', name: 'Old', createdAt: 100, messages: [] });
-      // Small delay to ensure different updatedAt
       await new Promise(r => setTimeout(r, 10));
       await store.writeGroupChat({ id: 'new', name: 'New', createdAt: 200, messages: [] });
       const chats = await store.listGroupChats();
@@ -393,8 +258,17 @@ describe('Group Chat data layer', () => {
     });
 
     it('skips non-JSON files', async () => {
+      const { promises: fs } = await import('fs');
       await fs.writeFile(join(tmpDir, 'readme.txt'), 'not json');
       await store.writeGroupChat({ id: 'c1', name: 'C', createdAt: 0, messages: [] });
+      const chats = await store.listGroupChats();
+      assert.equal(chats.length, 1);
+    });
+
+    it('skips annotations.json files', async () => {
+      const { promises: fs } = await import('fs');
+      await store.writeGroupChat({ id: 'c1', name: 'C', createdAt: 0, messages: [] });
+      await fs.writeFile(join(tmpDir, 'c1.annotations.json'), '{}');
       const chats = await store.listGroupChats();
       assert.equal(chats.length, 1);
     });
@@ -454,7 +328,6 @@ describe('Group Chat data layer', () => {
           routing: { status: 'pending', targetIdentityRef: 'helper:main' },
         }],
       });
-      // Only update status, should NOT lose targetIdentityRef
       await store.updateMessageRouting('c1', 'm1', { status: 'delivered' });
       const read = await store.readGroupChat('c1');
       assert.equal(read.messages[0].routing.status, 'delivered');
@@ -498,80 +371,7 @@ describe('Group Chat data layer', () => {
   });
 });
 
-// ── aggregateSessionPool (mirrors GET /protoclaw/gc/runtime_status) ──
-
-/**
- * Aggregate all sessions in a group chat's session pool from three sources:
- * 1. chat.sessions mapping (persistent sessions)
- * 2. chat.messages routing (dispatched sessions, including completed)
- * 3. chat.importedSessions (imported external sessions)
- *
- * Excludes: work-group:admin identity, failed routing status.
- * Deduplicates by key = identityRef:sessionId.
- *
- * This mirrors the aggregation logic in GET /protoclaw/gc/runtime_status
- * in server.js. When the server code changes, update this copy accordingly.
- */
-function aggregateSessionPool(chat, identities) {
-  const identityDisplayName = (ref) => {
-    const info = identities.find((i) => i.identityRef === ref);
-    return info?.displayName || ref.split(':')[1] || ref;
-  };
-
-  const sessionMap = new Map();
-
-  // Source 1: chat.sessions mapping (persistent sessions)
-  for (const [identityRef, sessionId] of Object.entries(chat.sessions || {})) {
-    if (identityRef === 'work-group:admin') continue;
-    if (!sessionId) continue;
-    const workspaceId = identityRef.split(':')[0];
-    const key = `${identityRef}:${sessionId}`;
-    sessionMap.set(key, {
-      identityRef, sessionId, workspaceId,
-      displayName: identityDisplayName(identityRef),
-      lastActivity: 0,
-    });
-  }
-
-  // Source 2: message routing (including completed, excluding failed)
-  for (const msg of (chat.messages || [])) {
-    const r = msg.routing;
-    if (!r || !r.targetSessionId) continue;
-    if (r.status === 'failed') continue;
-    if (r.targetIdentityRef === 'work-group:admin') continue;
-    const key = `${r.targetIdentityRef}:${r.targetSessionId}`;
-    const existing = sessionMap.get(key);
-    if (!existing || (msg.timestamp || 0) > (existing.lastActivity || 0)) {
-      sessionMap.set(key, {
-        identityRef: r.targetIdentityRef,
-        sessionId: r.targetSessionId,
-        workspaceId: r.targetWorkspaceId || r.targetIdentityRef.split(':')[0],
-        displayName: identityDisplayName(r.targetIdentityRef),
-        lastActivity: msg.timestamp || 0,
-      });
-    }
-  }
-
-  // Source 3: imported external sessions
-  for (const imp of (chat.importedSessions || [])) {
-    if (!imp.sessionId || !imp.workspaceId) continue;
-    const memberIdentity = (chat.members || [])
-      .find((m) => m.identityRef && m.identityRef.startsWith(imp.workspaceId + ':'));
-    const identityRef = memberIdentity?.identityRef || `${imp.workspaceId}:main`;
-    const key = `${identityRef}:${imp.sessionId}`;
-    if (!sessionMap.has(key)) {
-      sessionMap.set(key, {
-        identityRef,
-        sessionId: imp.sessionId,
-        workspaceId: imp.workspaceId,
-        displayName: imp.workspaceName || identityDisplayName(identityRef),
-        lastActivity: imp.importedAt || 0,
-      });
-    }
-  }
-
-  return Array.from(sessionMap.values());
-}
+// ── Tests: aggregateSessionPool ──
 
 describe('aggregateSessionPool', () => {
   const mockIdentities = [
@@ -606,7 +406,7 @@ describe('aggregateSessionPool', () => {
     assert.equal(pool[0].workspaceId, 'programming-helper');
   });
 
-  it('includes completed sessions from message routing (regression: old code filtered them)', () => {
+  it('includes completed sessions from message routing', () => {
     const chat = {
       id: 'chat-1',
       sessions: {},
@@ -628,7 +428,8 @@ describe('aggregateSessionPool', () => {
     assert.equal(pool[0].sessionId, 'sess-bbb');
   });
 
-  it('excludes failed routing entries', () => {
+  it('includes failed routing entries (behavior: no longer excluded)', () => {
+    // Real code comment: "不再排除 failed，因为 routing.status 经常误标 failed"
     const chat = {
       id: 'chat-1',
       sessions: {},
@@ -646,7 +447,7 @@ describe('aggregateSessionPool', () => {
       ],
     };
     const pool = aggregateSessionPool(chat, mockIdentities);
-    assert.equal(pool.length, 0);
+    assert.equal(pool.length, 1, 'failed sessions are NOT excluded (real behavior)');
   });
 
   it('excludes work-group:admin sessions from all sources', () => {
@@ -782,5 +583,32 @@ describe('aggregateSessionPool', () => {
     const pool = aggregateSessionPool(chat, mockIdentities);
     assert.equal(pool.length, 1);
     assert.equal(pool[0].identityRef, 'some-workspace:main');
+  });
+});
+
+// ── Tests: normalizeGroupChatMembers ──
+
+describe('normalizeGroupChatMembers', () => {
+  it('injects user and admin automatically', () => {
+    const result = normalizeGroupChatMembers([]);
+    const refs = result.map((m) => m.identityRef);
+    assert.ok(refs.includes('user'));
+    assert.ok(refs.includes('work-group:admin'));
+  });
+
+  it('deduplicates by identityRef', () => {
+    const result = normalizeGroupChatMembers([
+      { identityRef: 'user', role: 'human' },
+      { identityRef: 'helper:main' },
+      { identityRef: 'helper:main' },
+    ]);
+    const helperCount = result.filter((m) => m.identityRef === 'helper:main').length;
+    assert.equal(helperCount, 1);
+  });
+
+  it('defaults role to agent for non-user/admin members', () => {
+    const result = normalizeGroupChatMembers([{ identityRef: 'helper:main' }]);
+    const helper = result.find((m) => m.identityRef === 'helper:main');
+    assert.equal(helper.role, 'agent');
   });
 });

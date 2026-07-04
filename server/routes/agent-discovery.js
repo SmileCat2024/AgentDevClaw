@@ -11,6 +11,46 @@ import { resolveWorkspaceData, readWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './im.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 
+// ── Identity Registry (pure function, exported for testing) ────────
+
+/**
+ * 从已发现的 agent 元数据列表中提取 groupChat 身份。
+ * 纯函数：不涉及文件 I/O，可直接 import 测试。
+ *
+ * @param {Array<object>} agents — discoverAgents() 的返回结果
+ * @returns {Array<object>} identities 数组
+ */
+export function collectIdentitiesFromAgents(agents) {
+  const identities = [];
+
+  for (const agent of agents) {
+    if (agent.enabled === false) continue;
+    if (agent.launchMode === 'ui-only') continue;
+
+    const declared = Array.isArray(agent.identities) ? agent.identities : null;
+    if (!declared || declared.length === 0) continue;
+
+    for (const id of declared) {
+      if (!id.groupChat) continue;
+
+      identities.push({
+        workspaceId: agent.id,
+        workspaceName: agent.name,
+        identityId: id.id,
+        identityRef: `${agent.id}:${id.id}`,
+        displayName: id.displayName || id.id,
+        description: id.description || '',
+        sessionModel: id.sessionModel || 'persistent',
+        qualifierLabel: id.qualifierLabel || null,
+        operations: Array.isArray(id.operations) ? id.operations : [],
+        callTimeoutMs: typeof id.callTimeoutMs === 'number' ? id.callTimeoutMs : 900000,
+      });
+    }
+  }
+
+  return identities;
+}
+
 // ── Agent Discovery + Identity ─────────────────────────────────────
 // Factory pattern: sessionApi is a mutable reference object that gets
 // filled after session-helpers is created, breaking the circular
@@ -305,35 +345,7 @@ export function createAgentDiscoveryModule(ctx) {
    */
   async function collectIdentities() {
     const agents = await discoverAgents(AGENTS_ROOT);
-    const identities = [];
-
-    for (const agent of agents) {
-      if (agent.enabled === false) continue;
-      if (agent.launchMode === 'ui-only') continue;
-
-      const declared = Array.isArray(agent.identities) ? agent.identities : null;
-      if (!declared || declared.length === 0) continue;
-
-      for (const id of declared) {
-        // 只暴露显式标记为 groupChat 的身份
-        if (!id.groupChat) continue;
-
-        identities.push({
-          workspaceId: agent.id,
-          workspaceName: agent.name,
-          identityId: id.id,
-          identityRef: `${agent.id}:${id.id}`,
-          displayName: id.displayName || id.id,
-          description: id.description || '',
-          sessionModel: id.sessionModel || 'persistent',
-          qualifierLabel: id.qualifierLabel || null,
-          operations: Array.isArray(id.operations) ? id.operations : [],
-          callTimeoutMs: typeof id.callTimeoutMs === 'number' ? id.callTimeoutMs : 900000,
-        });
-      }
-    }
-
-    return identities;
+    return collectIdentitiesFromAgents(agents);
   }
 
   // ── Route Registration ────────────────────────────────────────────

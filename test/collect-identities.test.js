@@ -1,53 +1,13 @@
 /**
- * Tests for server.js collectIdentities filtering logic.
+ * Tests for collectIdentities filtering logic.
  *
- * The function was refactored: previously it auto-generated a default
- * identity for agents without explicit identities declaration. Now it
- * only exposes identities explicitly marked with `groupChat: true`.
- *
- * This is an inline replication of the core filtering logic.
- * When server.js collectIdentities changes, update accordingly.
+ * Imports the REAL collectIdentitiesFromAgents from agent-discovery.js.
+ * The pure function was extracted from the closure to enable direct testing.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-
-// ── Inline helper (mirrors collectIdentities core logic) ──
-
-/**
- * Extracts identities from discovered agent metadata.
- * Mirrors the filtering logic in server.js collectIdentities().
- */
-function collectIdentitiesFromAgents(agents) {
-  const identities = [];
-
-  for (const agent of agents) {
-    if (agent.enabled === false) continue;
-    if (agent.launchMode === 'ui-only') continue;
-
-    const declared = Array.isArray(agent.identities) ? agent.identities : null;
-    if (!declared || declared.length === 0) continue;
-
-    for (const id of declared) {
-      if (!id.groupChat) continue;
-
-      identities.push({
-        workspaceId: agent.id,
-        workspaceName: agent.name,
-        identityId: id.id,
-        identityRef: `${agent.id}:${id.id}`,
-        displayName: id.displayName || id.id,
-        description: id.description || '',
-        sessionModel: id.sessionModel || 'persistent',
-        qualifierLabel: id.qualifierLabel || null,
-        operations: Array.isArray(id.operations) ? id.operations : [],
-        callTimeoutMs: typeof id.callTimeoutMs === 'number' ? id.callTimeoutMs : 900000,
-      });
-    }
-  }
-
-  return identities;
-}
+import { collectIdentitiesFromAgents } from '../server/routes/agent-discovery.js';
 
 // ── Tests ──
 
@@ -107,13 +67,10 @@ describe('collectIdentities groupChat filter', () => {
 
   describe('no auto-generated default identity (behavior change)', () => {
     it('returns empty for agent with no identities declaration', () => {
-      // Previously this would auto-generate a 'default' identity.
-      // Now it returns nothing.
       const agents = [{
         id: 'plain-agent',
         name: 'Plain Agent',
         enabled: true,
-        // no identities field
       }];
       const ids = collectIdentitiesFromAgents(agents);
       assert.equal(ids.length, 0);
@@ -169,7 +126,6 @@ describe('collectIdentities groupChat filter', () => {
       const agents = [{
         id: 'agent1',
         name: 'Agent1',
-        // enabled not specified → treated as enabled
         identities: [{ id: 'main', groupChat: true }],
       }];
       const ids = collectIdentitiesFromAgents(agents);
@@ -267,7 +223,7 @@ describe('collectIdentities groupChat filter', () => {
       const agents = [
         { id: 'a', name: 'A', enabled: true, identities: [{ id: 'main', groupChat: true }] },
         { id: 'b', name: 'B', enabled: true, identities: [{ id: 'main', groupChat: true }] },
-        { id: 'c', name: 'C', enabled: true, identities: [{ id: 'main' }] }, // not groupChat
+        { id: 'c', name: 'C', enabled: true, identities: [{ id: 'main' }] },
       ];
       const ids = collectIdentitiesFromAgents(agents);
       assert.equal(ids.length, 2);

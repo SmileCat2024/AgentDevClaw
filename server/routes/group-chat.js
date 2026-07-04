@@ -8,6 +8,248 @@ import { readSessionIndex, readSessionIndexSync } from '../shared/session-access
 import { resolveSessionModelInfo } from './model-config.js';
 import { getRuntimeExecutionState } from '../runtime-call-envelope.js';
 
+// ── Module-level exports (pure functions + data layer factory) ─────
+// Extracted from setupGroupChatRoutes closures for direct unit testing.
+
+/**
+ * 规范化群聊成员列表。自动注入 user 和 work-group:admin。
+ * @param {Array} members — 原始成员数组
+ * @returns {Array} 规范化后的成员数组
+ */
+export function normalizeGroupChatMembers(members) {
+  const result = [];
+  const seen = new Set();
+  const add = (member) => {
+    const ref = member?.identityRef;
+    if (!ref || seen.has(ref)) return;
+    seen.add(ref);
+    result.push(member);
+  };
+  add({ identityRef: 'user', role: 'human' });
+  add({ identityRef: 'work-group:admin', role: 'admin' });
+  if (Array.isArray(members)) {
+    for (const member of members) {
+      if (!member || member.identityRef === 'user' || member.identityRef === 'work-group:admin') continue;
+      add({ identityRef: member.identityRef, role: member.role || 'agent' });
+    }
+  }
+  return result;
+}
+
+/**
+ * 组装派发 prompt（用户消息文本 + 参考链接）。
+ * 群聊上下文已通过 contextText (system block) 独立注入，
+ * 附件通过 attachments 字段独立传递，不再混入用户消息文本。
+ * @param {object} message — { text, links }
+ * @returns {string}
+ */
+export function composeDispatchPrompt(message) {
+  const parts = [];
+  parts.push(message.text || '');
+  if (Array.isArray(message.links) && message.links.length > 0) {
+    parts.push('\n参考链接：');
+    for (const link of message.links) {
+      const desc = link.description ? ` — ${link.description}` : '';
+      parts.push(`- ${link.url}${desc}`);
+    }
+  }
+  return parts.join('\n\n');
+}
+
+/**
+ * 聚合群聊会话池中的所有会话（3 个来源去重）。
+ * 1. chat.sessions 映射（持久会话）
+ * 2. chat.messages routing（派发会话）
+ * 3. chat.importedSessions（导入的外部会话）
+ *
+ * 排除 work-group:admin 身份。
+ * 去重 key = identityRef:sessionId。
+ *
+ * @param {object} chat — 群聊对象
+ * @param {Array} identities — collectIdentities() 返回的身份列表
+ * @returns {Array} 会话池数组
+ */
+export function aggregateSessionPool(chat, identities) {
+  const identityDisplayName = (ref) => {
+    const info = identities.find((i) => i.identityRef === ref);
+    return info?.displayName || ref.split(':')[1] || ref;
+  };
+
+  const sessionMap = new Map();
+
+  // Source 1: chat.sessions 映射（持久会话）
+  for (const [identityRef, sessionId] of Object.entries(chat.sessions || {})) {
+    if (identityRef === 'work-group:admin') continue;
+    if (!sessionId) continue;
+    const workspaceId = identityRef.split(':')[0];
+    const key = `${identityRef}:${sessionId}`;
+    sessionMap.set(key, {
+      identityRef,
+      sessionId,
+      workspaceId,
+      displayName: identityDisplayName(identityRef),
+      lastActivity: 0,
+    });
+  }
+
+  // Source 2: 消息路由（含已完成和 failed 会话——不再排除 failed，
+  // 因为 routing.status 由旧版 trackGroupChatDispatch 维护，经常误标 failed，
+  // 实际运行时状态以 runtime 查询结果为准）
+  for (const msg of (chat.messages || [])) {
+    const r = msg.routing;
+    if (!r || !r.targetSessionId) continue;
+    if (r.targetIdentityRef === 'work-group:admin') continue;
+    const key = `${r.targetIdentityRef}:${r.targetSessionId}`;
+    const existing = sessionMap.get(key);
+    if (!existing || (msg.timestamp || 0) > (existing.lastActivity || 0)) {
+      sessionMap.set(key, {
+        identityRef: r.targetIdentityRef,
+        sessionId: r.targetSessionId,
+        workspaceId: r.targetWorkspaceId || r.targetIdentityRef.split(':')[0],
+        displayName: identityDisplayName(r.targetIdentityRef),
+        lastActivity: msg.timestamp || 0,
+      });
+    }
+  }
+
+  // Source 3: 导入的外部会话
+  for (const imp of (chat.importedSessions || [])) {
+    if (!imp.sessionId || !imp.workspaceId) continue;
+    const memberIdentity = (chat.members || [])
+      .find((m) => m.identityRef && m.identityRef.startsWith(imp.workspaceId + ':'));
+    const identityRef = memberIdentity?.identityRef || `${imp.workspaceId}:main`;
+    const key = `${identityRef}:${imp.sessionId}`;
+    if (!sessionMap.has(key)) {
+      sessionMap.set(key, {
+        identityRef,
+        sessionId: imp.sessionId,
+        workspaceId: imp.workspaceId,
+        displayName: imp.workspaceName || identityDisplayName(identityRef),
+        lastActivity: imp.importedAt || 0,
+      });
+    }
+  }
+
+  return Array.from(sessionMap.values());
+}
+
+/**
+ * 群聊文件存储工厂。接受 rootDir 参数，便于测试注入临时目录。
+ * @param {string} rootDir — 群聊文件存储根目录
+ * @returns {object} data layer 方法集
+ */
+export function createGroupChatDataLayer(rootDir) {
+  async function ensureDir() {
+    await fs.mkdir(rootDir, { recursive: true });
+  }
+
+  function getGroupChatPath(chatId) {
+    return path.join(rootDir, `${sanitizeSessionFragment(chatId)}.json`);
+  }
+
+  async function readGroupChat(chatId) {
+    const filePath = getGroupChatPath(chatId);
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      const chat = JSON.parse(raw);
+      chat.members = normalizeGroupChatMembers(chat.members);
+      return chat;
+    } catch {
+      return null;
+    }
+  }
+
+  async function writeGroupChat(chat) {
+    await ensureDir();
+    const filePath = getGroupChatPath(chat.id);
+    chat.updatedAt = Date.now();
+    await fs.writeFile(filePath, JSON.stringify(chat, null, 2), 'utf8');
+    return chat;
+  }
+
+  async function listGroupChats() {
+    await ensureDir();
+    const entries = await fs.readdir(rootDir);
+    const chats = [];
+    for (const entry of entries) {
+      if (!entry.endsWith('.json') || entry.endsWith('.annotations.json')) continue;
+      try {
+        const raw = await fs.readFile(path.join(rootDir, entry), 'utf8');
+        const chat = JSON.parse(raw);
+        chats.push({
+          id: chat.id,
+          name: chat.name,
+          workDir: chat.workDir || null,
+          createdAt: chat.createdAt,
+          updatedAt: chat.updatedAt,
+          memberCount: normalizeGroupChatMembers(chat.members).length,
+          messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0,
+          lastMessage: Array.isArray(chat.messages) && chat.messages.length > 0
+            ? {
+                text: (chat.messages[chat.messages.length - 1].text || '').slice(0, 100),
+                from: chat.messages[chat.messages.length - 1].from,
+                timestamp: chat.messages[chat.messages.length - 1].timestamp,
+              }
+            : null,
+          archived: chat.archived || false,
+        });
+      } catch {}
+    }
+    chats.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return chats;
+  }
+
+  async function appendGroupChatMessage(chatId, message) {
+    const chat = await readGroupChat(chatId);
+    if (!chat) return null;
+    if (!Array.isArray(chat.messages)) chat.messages = [];
+    chat.messages.push(message);
+    await writeGroupChat(chat);
+    return chat;
+  }
+
+  async function updateMessageRouting(chatId, messageId, routingUpdate) {
+    const chat = await readGroupChat(chatId);
+    if (!chat || !Array.isArray(chat.messages)) return null;
+    const msg = chat.messages.find((m) => m.id === messageId);
+    if (!msg) return null;
+    msg.routing = { ...(msg.routing || {}), ...routingUpdate };
+    await writeGroupChat(chat);
+    return msg;
+  }
+
+  async function updateMessageFields(chatId, messageId, fieldUpdate) {
+    const chat = await readGroupChat(chatId);
+    if (!chat || !Array.isArray(chat.messages)) return null;
+    const msg = chat.messages.find((m) => m.id === messageId);
+    if (!msg) return null;
+    Object.assign(msg, fieldUpdate);
+    await writeGroupChat(chat);
+    return msg;
+  }
+
+  async function deleteGroupChatFile(chatId) {
+    try {
+      await fs.unlink(getGroupChatPath(chatId));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return {
+    ensureDir,
+    getGroupChatPath,
+    readGroupChat,
+    writeGroupChat,
+    listGroupChats,
+    appendGroupChatMessage,
+    updateMessageRouting,
+    updateMessageFields,
+    deleteGroupChatFile,
+  };
+}
+
 export function setupGroupChatRoutes(app, express, ctx) {
   const {
     collectIdentities,
@@ -26,76 +268,28 @@ export function setupGroupChatRoutes(app, express, ctx) {
 /**
  * 群聊文件存储。每个群聊一个 JSON 文件，消息 append-only（routing 字段除外可更新）。
  * 文件路径：~/.agentdev/AgentDevClaw/group-chats/<chatId>.json
+ *
+ * 核心数据操作委托给模块级 createGroupChatDataLayer 工厂。
  */
 
+const _dataLayer = createGroupChatDataLayer(GROUP_CHATS_ROOT);
+const {
+  ensureGroupChatsDir: _ensureGroupChatsDir,
+  getGroupChatPath,
+  readGroupChat,
+  writeGroupChat,
+  listGroupChats,
+  appendGroupChatMessage,
+  updateMessageRouting,
+  updateMessageFields,
+} = _dataLayer;
+
 async function ensureGroupChatsDir() {
-  await fs.mkdir(GROUP_CHATS_ROOT, { recursive: true });
-}
-
-function getGroupChatPath(chatId) {
-  return path.join(GROUP_CHATS_ROOT, `${sanitizeSessionFragment(chatId)}.json`);
-}
-
-async function listGroupChats() {
-  await ensureGroupChatsDir();
-  const entries = await fs.readdir(GROUP_CHATS_ROOT);
-  const chats = [];
-  for (const entry of entries) {
-    if (!entry.endsWith('.json') || entry.endsWith('.annotations.json')) continue;
-    try {
-      const raw = await fs.readFile(path.join(GROUP_CHATS_ROOT, entry), 'utf8');
-      const chat = JSON.parse(raw);
-      // 列表只返回摘要，不包含消息
-      chats.push({
-        id: chat.id,
-        name: chat.name,
-        workDir: chat.workDir || null,
-        createdAt: chat.createdAt,
-        updatedAt: chat.updatedAt,
-        memberCount: normalizeGroupChatMembers(chat.members).length,
-        messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0,
-        lastMessage: Array.isArray(chat.messages) && chat.messages.length > 0
-          ? {
-              text: (chat.messages[chat.messages.length - 1].text || '').slice(0, 100),
-              from: chat.messages[chat.messages.length - 1].from,
-              timestamp: chat.messages[chat.messages.length - 1].timestamp,
-            }
-          : null,
-        archived: chat.archived || false,
-      });
-    } catch {}
-  }
-  chats.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  return chats;
-}
-
-async function readGroupChat(chatId) {
-  const filePath = getGroupChatPath(chatId);
-  try {
-    const raw = await fs.readFile(filePath, 'utf8');
-    const chat = JSON.parse(raw);
-    chat.members = normalizeGroupChatMembers(chat.members);
-    return chat;
-  } catch {
-    return null;
-  }
-}
-
-async function writeGroupChat(chat) {
-  await ensureGroupChatsDir();
-  const filePath = getGroupChatPath(chat.id);
-  chat.updatedAt = Date.now();
-  await fs.writeFile(filePath, JSON.stringify(chat, null, 2), 'utf8');
-  return chat;
+  await _ensureGroupChatsDir();
 }
 
 async function deleteGroupChatFile(chatId) {
-  const filePath = getGroupChatPath(chatId);
-  let deleted = false;
-  try {
-    await fs.unlink(filePath);
-    deleted = true;
-  } catch {}
+  let deleted = await _dataLayer.deleteGroupChatFile(chatId);
   // 清理 annotations 文件
   try {
     await fs.unlink(_annotationsFilePath(chatId));
@@ -141,41 +335,7 @@ function validateResourceName(rawName) {
  * 向群聊追加一条消息（append-only）。
  * 返回更新后的群聊对象。
  */
-async function appendGroupChatMessage(chatId, message) {
-  const chat = await readGroupChat(chatId);
-  if (!chat) return null;
-  if (!Array.isArray(chat.messages)) chat.messages = [];
-  chat.messages.push(message);
-  await writeGroupChat(chat);
-  return chat;
-}
-
-/**
- * 更新群聊中某条消息的 routing 状态。
- */
-async function updateMessageRouting(chatId, messageId, routingUpdate) {
-  const chat = await readGroupChat(chatId);
-  if (!chat || !Array.isArray(chat.messages)) return null;
-  const msg = chat.messages.find((m) => m.id === messageId);
-  if (!msg) return null;
-  msg.routing = { ...(msg.routing || {}), ...routingUpdate };
-  await writeGroupChat(chat);
-  return msg;
-}
-
-/**
- * 更新群聊中某条消息的任意字段（浅合并）。
- * 用于 dispatch_pending → approved/rejected 等状态变更。
- */
-async function updateMessageFields(chatId, messageId, fieldUpdate) {
-  const chat = await readGroupChat(chatId);
-  if (!chat || !Array.isArray(chat.messages)) return null;
-  const msg = chat.messages.find((m) => m.id === messageId);
-  if (!msg) return null;
-  Object.assign(msg, fieldUpdate);
-  await writeGroupChat(chat);
-  return msg;
-}
+// ── Group Chat Resources (文件附件) ────────────────────────────────
 
 /**
  * 将时间范围字符串转为毫秒。
@@ -622,21 +782,6 @@ function processAttachmentsForInjection(attachments, chat = null, maxLines = 50)
  * 构建发送给 agent 的 prompt：消息正文 + 链接引用。
  * 附件不再拼入文本，而是通过 attachments 字段独立传递。
  */
-function composeDispatchPrompt(chatName, message, chatId) {
-  // 群聊上下文已通过 contextText (system block) 独立注入，
-  // 附件通过 attachments 字段独立传递，不再混入用户消息文本
-  const parts = [];
-  parts.push(message.text || '');
-  if (Array.isArray(message.links) && message.links.length > 0) {
-    parts.push('\n参考链接：');
-    for (const link of message.links) {
-      const desc = link.description ? ` — ${link.description}` : '';
-      parts.push(`- ${link.url}${desc}`);
-    }
-  }
-  return parts.join('\n\n');
-}
-
 /**
  * 为被派发的 agent 构建群聊 system 上下文块。
  * 让 agent 知道自己处于群聊中、发送者是谁、回复会被同步回群聊。
@@ -1259,71 +1404,13 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
     }
 
     const allIdentities = await collectIdentities();
-    const identityDisplayName = (ref) => {
-      const info = allIdentities.find((i) => i.identityRef === ref);
-      return info?.displayName || ref.split(':')[1] || ref;
-    };
 
     // 收集会话池中所有会话（去重 key = identityRef:sessionId）
-    const sessionMap = new Map();
-
-    // Source 1: chat.sessions 映射（持久会话）
-    for (const [identityRef, sessionId] of Object.entries(chat.sessions || {})) {
-      if (identityRef === 'work-group:admin') continue;
-      if (!sessionId) continue;
-      const workspaceId = identityRef.split(':')[0];
-      const key = `${identityRef}:${sessionId}`;
-      sessionMap.set(key, {
-        identityRef,
-        sessionId,
-        workspaceId,
-        displayName: identityDisplayName(identityRef),
-        lastActivity: 0,
-      });
-    }
-
-    // Source 2: 消息路由（含已完成和 failed 会话——不再排除 failed，
-    // 因为 routing.status 由旧版 trackGroupChatDispatch 维护，经常误标 failed，
-    // 实际运行时状态以 runtime 查询结果为准）
-    for (const msg of (chat.messages || [])) {
-      const r = msg.routing;
-      if (!r || !r.targetSessionId) continue;
-      if (r.targetIdentityRef === 'work-group:admin') continue;
-      const key = `${r.targetIdentityRef}:${r.targetSessionId}`;
-      const existing = sessionMap.get(key);
-      if (!existing || (msg.timestamp || 0) > (existing.lastActivity || 0)) {
-        sessionMap.set(key, {
-          identityRef: r.targetIdentityRef,
-          sessionId: r.targetSessionId,
-          workspaceId: r.targetWorkspaceId || r.targetIdentityRef.split(':')[0],
-          displayName: identityDisplayName(r.targetIdentityRef),
-          lastActivity: msg.timestamp || 0,
-        });
-      }
-    }
-
-    // Source 3: 导入的外部会话
-    for (const imp of (chat.importedSessions || [])) {
-      if (!imp.sessionId || !imp.workspaceId) continue;
-      // 导入会话可能没有 identityRef，用 workspaceId 找匹配的群成员身份
-      const memberIdentity = (chat.members || [])
-        .find((m) => m.identityRef && m.identityRef.startsWith(imp.workspaceId + ':'));
-      const identityRef = memberIdentity?.identityRef || `${imp.workspaceId}:main`;
-      const key = `${identityRef}:${imp.sessionId}`;
-      if (!sessionMap.has(key)) {
-        sessionMap.set(key, {
-          identityRef,
-          sessionId: imp.sessionId,
-          workspaceId: imp.workspaceId,
-          displayName: imp.workspaceName || identityDisplayName(identityRef),
-          lastActivity: imp.importedAt || 0,
-        });
-      }
-    }
+    const sessionPool = aggregateSessionPool(chat, allIdentities);
 
     // 对每个会话查实际运行时状态
     const results = [];
-    for (const s of sessionMap.values()) {
+    for (const s of sessionPool) {
       const runtimeKey = getManagedRuntimeKey(s.workspaceId, s.sessionId);
       const runtime = managedAgents.get(runtimeKey);
 
@@ -2063,26 +2150,6 @@ app.get('/protoclaw/group_chats', async (_req, res, next) => {
     next(error);
   }
 });
-
-function normalizeGroupChatMembers(members) {
-  const result = [];
-  const seen = new Set();
-  const add = (member) => {
-    const ref = member?.identityRef;
-    if (!ref || seen.has(ref)) return;
-    seen.add(ref);
-    result.push(member);
-  };
-  add({ identityRef: 'user', role: 'human' });
-  add({ identityRef: 'work-group:admin', role: 'admin' });
-  if (Array.isArray(members)) {
-    for (const member of members) {
-      if (!member || member.identityRef === 'user' || member.identityRef === 'work-group:admin') continue;
-      add({ identityRef: member.identityRef, role: member.role || 'agent' });
-    }
-  }
-  return result;
-}
 
 app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
   try {

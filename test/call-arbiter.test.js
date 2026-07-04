@@ -1,230 +1,16 @@
 /**
- * Tests for CallArbiter (defined in scripts/run-prebuilt-agent.js)
+ * Tests for CallArbiter (server/call-arbiter.js)
  *
  * Covers: serialization guarantee, enqueue/drain, waitForCompletion,
- * event listeners, error handling.
+ * event listeners, error handling, continuation (checkpoint/rollback),
+ * budget enforcement, supplement buffer.
  *
- * We extract and test the CallArbiter class in isolation.
+ * Imports the REAL CallArbiter class — no inline mirror.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-
-// ── Inline CallArbiter (mirrors the class in run-prebuilt-agent.js) ──
-
-class CallArbiter {
-  constructor(agentInstance) {
-    this._agent = agentInstance;
-    this._queue = [];
-    this._active = false;
-    this._activeEnvelope = null;
-    this._status = 'idle'; // idle | queued | running
-    this._listeners = { callStarted: [], callFinished: [] };
-    this._completionCallbacks = new Map();
-
-    // ── Continuation support ──
-    this.sessionSaveFn = null;
-    this.continuationBudget = {
-      maxSegments: 20,
-      maxCheckpoints: 5,
-      maxRollbacks: 3,
-    };
-  }
-
-  enqueue(envelope) {
-    const entry = {
-      id: envelope.id || `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      source: envelope.source || 'unknown',
-      sourceRef: envelope.sourceRef || '',
-      text: envelope.text,
-      status: 'queued',
-      createdAt: Date.now(),
-      result: null,
-      error: null,
-    };
-    this._queue.push(entry);
-    this._status = 'queued';
-    this._kick();
-    return entry;
-  }
-
-  on(event, fn) {
-    if (this._listeners[event]) {
-      this._listeners[event].push(fn);
-    }
-  }
-
-  waitForCompletion(envelopeId) {
-    return new Promise((resolve) => {
-      this._completionCallbacks.set(envelopeId, resolve);
-    });
-  }
-
-  getStatus() {
-    return {
-      status: this._status,
-      queueLength: this._queue.length,
-      activeEnvelopeId: this._activeEnvelope?.id || null,
-    };
-  }
-
-  clearQueued(reason = 'cancelled by interrupt') {
-    const removed = this._queue.splice(0, this._queue.length);
-    for (const envelope of removed) {
-      envelope.status = 'cancelled';
-      envelope.error = reason;
-      const cb = this._completionCallbacks.get(envelope.id);
-      if (cb) {
-        this._completionCallbacks.delete(envelope.id);
-        cb(envelope);
-      }
-    }
-    this._status = this._active ? 'running' : 'idle';
-    return removed.length;
-  }
-
-  _emit(event, envelope) {
-    for (const fn of this._listeners[event] || []) {
-      try { fn(envelope); } catch (err) {
-        console.error(`[CallArbiter] ${event} listener error:`, err);
-      }
-    }
-  }
-
-  _kick() {
-    if (this._active || this._queue.length === 0) return;
-    this._active = true;
-    this._activeEnvelope = this._queue.shift();
-    this._status = 'running';
-
-    const envelope = this._activeEnvelope;
-    envelope.status = 'running';
-    envelope._segmentCount = 0;
-    envelope._checkpointCount = 0;
-    envelope._rollbackCount = 0;
-
-    this._emit('callStarted', envelope);
-
-    this._runEnvelope(envelope)
-      .catch((err) => {
-        envelope.status = 'failed';
-        envelope.error = err instanceof Error ? err.message : String(err);
-      })
-      .finally(() => {
-        if (envelope.status === 'running') {
-          envelope.status = 'completed';
-        }
-        this._active = false;
-        this._status = this._queue.length > 0 ? 'queued' : 'idle';
-        this._emit('callFinished', envelope);
-        const cb = this._completionCallbacks.get(envelope.id);
-        if (cb) {
-          this._completionCallbacks.delete(envelope.id);
-          cb(envelope);
-        }
-        this._activeEnvelope = null;
-        this._kick();
-      });
-  }
-
-  async _runEnvelope(envelope) {
-    let input = envelope.text;
-
-    while (true) {
-      envelope._segmentCount += 1;
-      if (envelope._segmentCount > this.continuationBudget.maxSegments) {
-        throw new Error(`Continuation budget exhausted: maxSegments=${this.continuationBudget.maxSegments}`);
-      }
-
-      const result = await this._agent.onCall(input);
-      envelope.result = typeof result === 'string' ? result : '';
-
-      const continuation = typeof this._agent.consumeContinuationRequest === 'function'
-        ? this._agent.consumeContinuationRequest()
-        : null;
-
-      if (!continuation) {
-        envelope.status = 'completed';
-        return;
-      }
-
-      if (continuation.kind === 'checkpoint') {
-        envelope._checkpointCount += 1;
-        if (envelope._checkpointCount > this.continuationBudget.maxCheckpoints) {
-          throw new Error(`Continuation budget exhausted: maxCheckpoints=${this.continuationBudget.maxCheckpoints}`);
-        }
-        await this._checkpointBarrier(continuation, envelope);
-        this._injectContinuationSystemMessage('checkpoint', continuation);
-        input = this._buildCheckpointContinuationInput(continuation);
-
-      } else if (continuation.kind === 'rollback') {
-        envelope._rollbackCount += 1;
-        if (envelope._rollbackCount > this.continuationBudget.maxRollbacks) {
-          throw new Error(`Continuation budget exhausted: maxRollbacks=${this.continuationBudget.maxRollbacks}`);
-        }
-        await this._rollbackBarrier(continuation, envelope);
-        this._injectContinuationSystemMessage('rollback', continuation);
-        input = this._buildRollbackContinuationInput(continuation);
-      }
-    }
-  }
-
-  async _checkpointBarrier(continuation, _envelope) {
-    if (typeof this._agent.createNamedCheckpoint === 'function') {
-      if (typeof this._agent.clearNamedCheckpoints === 'function') {
-        this._agent.clearNamedCheckpoints();
-      }
-      await this._agent.createNamedCheckpoint(continuation.checkpointId);
-    }
-    if (this.sessionSaveFn) {
-      await this.sessionSaveFn();
-    }
-  }
-
-  async _rollbackBarrier(continuation, _envelope) {
-    if (typeof this._agent.rollbackToNamedCheckpoint === 'function') {
-      await this._agent.rollbackToNamedCheckpoint(continuation.checkpointId);
-    }
-    if (this.sessionSaveFn) {
-      await this.sessionSaveFn();
-    }
-  }
-
-  _injectContinuationSystemMessage(kind, continuation) {
-    const ctx = typeof this._agent.getContext === 'function'
-      ? this._agent.getContext()
-      : null;
-    if (!ctx || typeof ctx.add !== 'function') return;
-
-    if (kind === 'checkpoint') {
-      const note = continuation.metadata?.note ? `\n备注: ${continuation.metadata.note}` : '';
-      ctx.add({
-        role: 'system',
-        content: `检查点 "${continuation.checkpointId}" 已建立并提交。当前对话上下文已保存。${note}\n\n后续可视需要调用 rollback_to_checkpoint 回退到此处。`,
-      });
-    } else if (kind === 'rollback') {
-      ctx.add({
-        role: 'system',
-        content: [
-          `会话已回退到检查点 "${continuation.checkpointId}"。`,
-          '',
-          '以下是被回退会话的摘要：',
-          continuation.summary,
-          '',
-          '注意：回退仅恢复对话上下文和部分功能状态。外部执行（文件写入、命令执行、API 调用等）不会被撤销——请验证所修改的外部资源的真实状态。',
-        ].join('\n'),
-      });
-    }
-  }
-
-  _buildCheckpointContinuationInput(_continuation) {
-    return '[本条消息由系统自动发送] 检查点已生效，请从此处继续执行任务';
-  }
-
-  _buildRollbackContinuationInput(_continuation) {
-    return '[本条消息由系统自动发送] 会话发生了回退，以上为相关信息。请继续执行任务。';
-  }
-}
+import { CallArbiter } from '../server/call-arbiter.js';
 
 // ── Helpers ──
 
@@ -497,7 +283,6 @@ describe('CallArbiter', () => {
     assert.equal(f2._segmentCount, 1, 'E2 should have 1 segment');
 
     // E1 should fully complete before E2 starts
-    // Check that all E1 segments happened before any E2 segment
     const e1CallsEnd = 2; // E1 used calls[0] and calls[1]
     assert.ok(agent.calls.length >= 3, 'E1 + E2 should produce at least 3 calls');
   });
@@ -522,7 +307,6 @@ describe('CallArbiter', () => {
     let _continuation = null;
     const agent = {
       onCall: async () => {
-        // Always register a continuation — will exhaust budget
         _continuation = { kind: 'checkpoint', checkpointId: 'cp-loop' };
         return 'looping';
       },
@@ -551,7 +335,6 @@ describe('CallArbiter', () => {
     const agent = {
       onCall: async () => {
         segmentIdx++;
-        // Alternate checkpoint continuation
         if (segmentIdx <= 4) {
           _continuation = { kind: 'checkpoint', checkpointId: `cp-${segmentIdx}` };
         }
@@ -582,7 +365,6 @@ describe('CallArbiter', () => {
     const agent = {
       onCall: async () => {
         segmentIdx++;
-        // First checkpoint, then alternating rollback
         if (segmentIdx === 1) {
           _continuation = { kind: 'checkpoint', checkpointId: 'cp-1' };
         } else if (segmentIdx <= 5) {
@@ -623,7 +405,6 @@ describe('CallArbiter', () => {
   });
 
   it('backward-compatible with agents lacking consumeContinuationRequest', async () => {
-    // Plain agent without continuation support (old-style)
     const agent = {
       onCall: async (text) => `processed: ${text}`,
     };
@@ -634,5 +415,91 @@ describe('CallArbiter', () => {
     assert.equal(finished.status, 'completed');
     assert.equal(finished.result, 'processed: simple');
     assert.equal(finished._segmentCount, 1);
+  });
+
+  // ── Supplement buffer tests (new — not in mirror version) ──
+
+  it('routes queued-input to supplement buffer when agent is busy', async () => {
+    const agent = makeSlowAgent(50);
+    const arbiter = new CallArbiter(agent);
+
+    // First call starts immediately (agent idle)
+    const e1 = arbiter.enqueue({ source: 'test', text: 'main task' });
+
+    // Wait a tick so agent is definitely active
+    await new Promise(r => setTimeout(r, 5));
+
+    // Supplement while agent is busy
+    const supp = arbiter.enqueue({ source: 'queued-input', text: 'additional info' });
+
+    assert.equal(supp.status, 'supplemented', 'queued-input should be supplemented, not queued');
+    assert.ok(supp.id.startsWith('supp-'));
+
+    // drainSupplements should return it
+    const drained = arbiter.drainSupplements();
+    assert.equal(drained.length, 1);
+    assert.equal(drained[0].text, 'additional info');
+
+    // After draining, buffer is empty
+    assert.equal(arbiter.drainSupplements().length, 0);
+
+    await arbiter.waitForCompletion(e1.id);
+  });
+
+  it('clearQueued also clears supplement buffer', async () => {
+    const agent = makeSlowAgent(100);
+    const arbiter = new CallArbiter(agent);
+
+    const e1 = arbiter.enqueue({ source: 'test', text: 'main' });
+    await new Promise(r => setTimeout(r, 5));
+
+    // Buffer a supplement
+    arbiter.enqueue({ source: 'queued-input', text: 'supp1' });
+    // Queue a regular call
+    const e2 = arbiter.enqueue({ source: 'test', text: 'next' });
+
+    // Register waitForCompletion BEFORE clearQueued (clearQueued resolves it)
+    const e2Promise = arbiter.waitForCompletion(e2.id);
+
+    const cleared = arbiter.clearQueued('test cancel');
+    // 1 queued envelope + 1 supplement = 2
+    assert.equal(cleared, 2, 'should clear both queue and supplement buffer');
+
+    // e2 should be cancelled
+    const f2 = await e2Promise;
+    assert.equal(f2.status, 'cancelled');
+    assert.equal(f2.error, 'test cancel');
+
+    await arbiter.waitForCompletion(e1.id);
+  });
+
+  it('converts leftover supplements to envelopes when call finishes', async () => {
+    const agent = makeSlowAgent(30);
+    const arbiter = new CallArbiter(agent);
+
+    const e1 = arbiter.enqueue({ source: 'test', text: 'task1' });
+    await new Promise(r => setTimeout(r, 5));
+
+    // Supplement while busy — NOT drained during the call
+    arbiter.enqueue({ source: 'queued-input', text: 'follow-up' });
+
+    // Wait for e1 to complete; the supplement should convert to a new envelope
+    await arbiter.waitForCompletion(e1.id);
+
+    // After e1 finishes, supplement becomes a queued envelope
+    // The _kick in finally block should process it automatically
+    const status = arbiter.getStatus();
+    // Either still processing the converted envelope, or already done
+    assert.ok(status.status === 'idle' || status.status === 'running' || status.status === 'queued');
+
+    // Wait for everything to settle
+    await new Promise(r => setTimeout(r, 100));
+    assert.equal(arbiter.getStatus().status, 'idle');
+  });
+
+  it('drainSupplements returns empty array when buffer is empty', () => {
+    const arbiter = new CallArbiter({ onCall: async () => '' });
+    const result = arbiter.drainSupplements();
+    assert.deepEqual(result, []);
   });
 });

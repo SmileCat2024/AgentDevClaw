@@ -142,6 +142,27 @@ export function resolvePostCleanupState(index, toDelete) {
   return { activeSessionId: nextActiveId, sessions: remaining };
 }
 
+// ── searchInText (pure function, exported for testing) ────────────
+
+const SEARCH_SNIPPET_RADIUS_EXPORT = 40;
+
+/**
+ * 在文本中搜索关键词，返回包含上下文的摘要片段。
+ * 纯函数，不依赖闭包上下文，可直接 import 测试。
+ */
+export function searchInTextPure(text, queryLower) {
+  const idx = text.toLowerCase().indexOf(queryLower);
+  if (idx === -1) return null;
+  const start = Math.max(0, idx - SEARCH_SNIPPET_RADIUS_EXPORT);
+  const end = Math.min(text.length, idx + queryLower.length + SEARCH_SNIPPET_RADIUS_EXPORT);
+  let snippet = text.slice(start, end);
+  snippet = snippet.replace(/^\[[^\]]*\]\s*/, '');
+  const beforeSnippet = text.slice(0, idx);
+  const lastRoleMatch = beforeSnippet.match(/\[(user|assistant)\][^\[]*$/);
+  const matchRole = lastRoleMatch ? lastRoleMatch[1] : '';
+  return { snippet, matchRole, matchIndex: idx };
+}
+
 export function createSessionHelpers(ctx) {
   const {
     readWorkspaceState,
