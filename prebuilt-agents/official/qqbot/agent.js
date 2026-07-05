@@ -361,7 +361,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       ...config,
       features: {
         ...(config.features || {}),
-        ...(systemConfig.shell ? { shell: systemConfig.shell } : {}),
+        ...systemConfig,
       },
       excludeMcpServers: Array.from(new Set([
         ...(config.excludeMcpServers ?? []),

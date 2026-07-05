@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { GroupAdminFeature } from '../../../local-features/dist/group-admin/src/index.js';
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
+import { ShellFeature } from '@agentdev/shell-feature';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -27,6 +28,7 @@ export class WorkGroupAgent extends BasicAgent {
 
     this.use(new GroupAdminFeature());
     this.use(new GroupChatBridgeFeature());
+    this.use(new ShellFeature());
   }
 
   async onInitiate(ctx) {

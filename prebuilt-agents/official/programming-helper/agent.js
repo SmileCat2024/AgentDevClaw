@@ -18,8 +18,6 @@ import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
-import { CheckpointFeature } from '../../../local-features/dist/checkpoint/src/index.js';
-import { extractLspServerConfig } from '../../../server/routes/system-feature-config.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -36,21 +34,18 @@ function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-/**
- * 校验音频路径：非空且文件存在才返回 true。
- * 防止 Feature Setup UI 自动保存的无效路径（如框架 dist 路径）传入 feature 构造函数。
- */
-function resolveAudioPath(value) {
-  const trimmed = cleanValue(value);
-  return trimmed ? existsSync(trimmed) : false;
-}
-
 function readSystemFeatureConfig() {
   if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
   try {
     const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
     const parsed = JSON.parse(raw);
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+    const config = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
+    // Backward compat: migrate top-level runtimes into lsp.runtimes
+    if (config.runtimes && typeof config.runtimes === 'object') {
+      config.lsp = { ...(config.lsp || {}), runtimes: config.runtimes };
+      delete config.runtimes;
+    }
+    return config;
   } catch {
     return {};
   }
@@ -78,13 +73,12 @@ export class ProgrammingHelperAgent extends BasicAgent {
     const workspaceDir = config.workspaceDir || process.cwd();
     const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
     const systemConfig = readSystemFeatureConfig();
-    const audioConfig = systemConfig['audio-feedback'] || {};
 
     super({
       ...config,
       features: {
         ...(config.features || {}),
-        ...(systemConfig.shell ? { shell: systemConfig.shell } : {}),
+        ...systemConfig,
       },
       skillConfig: systemConfig.skill || undefined,
       excludeMcpServers: Array.from(new Set([
@@ -116,24 +110,14 @@ export class ProgrammingHelperAgent extends BasicAgent {
       }));
 
       this.use(new AuditFeature());
-      this.use(new AudioFeedbackFeature({
-        enabled: audioConfig.enabled !== undefined ? audioConfig.enabled : true,
-        volume: audioConfig.volume !== undefined ? audioConfig.volume : 0.5,
-        ...(resolveAudioPath(audioConfig.audioPath) ? { audioPath: audioConfig.audioPath } : {}),
-        ...(resolveAudioPath(audioConfig.errorAudioPath) ? { errorAudioPath: audioConfig.errorAudioPath } : {}),
-      }));
+      this.use(new AudioFeedbackFeature());
       this.use(new WebSearchFeature());
       this.use(new MemoryFeature({ workspaceDir }));
       this.use(new ShellFeature({ workspaceDir }));
 
-      this.use(new LspFeature({
-        workdir: workspaceDir,
-        runtimes: systemConfig.runtimes || {},
-        servers: extractLspServerConfig(systemConfig),
-      }));
+      this.use(new LspFeature({ workdir: workspaceDir }));
 
       this.use(new UserInputFeature());
-      this.use(new CheckpointFeature());
     }
   }
 

@@ -347,11 +347,11 @@ async function _doAutoSave() {
   _syncCurrentPageToConfig();
   const newConfig = JSON.parse(JSON.stringify(config || {}));
 
+  // Migrate: move top-level runtimes to lsp.runtimes (legacy config compat)
   if (newConfig.runtimes) {
-    for (const [k, v] of Object.entries(newConfig.runtimes)) {
-      if (v === '') delete newConfig.runtimes[k];
-    }
-    if (!Object.keys(newConfig.runtimes).length) delete newConfig.runtimes;
+    newConfig.lsp = newConfig.lsp || {};
+    newConfig.lsp.runtimes = { ...(newConfig.lsp.runtimes || {}), ...newConfig.runtimes };
+    delete newConfig.runtimes;
   }
 
   if (statusEl) { statusEl.textContent = 'Saving...'; statusEl.classList.add('visible'); }
