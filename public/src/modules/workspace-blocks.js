@@ -33,7 +33,7 @@
  *   app-ui.js (域 E): getWorkspaceFormDraft, saveWorkspaceFormDraft, persistWorkspaceState,
  *                     getFeatureCreatorOutputDirectory
  *   app-main.js: getSavedAssemblyConfigs, canonicalizeAssemblyFeatureSelection
- *   debug-panels.js: window.openRepositoryPackageDetails, window.closeRepositoryPackageDetails,
+ *   debug-overview.js: window.openRepositoryPackageDetails, window.closeRepositoryPackageDetails,
  *                    window.setRepoSourceFilter, window.setRepoSearchQuery, window.openFeatureUploadDialog
  */
 
