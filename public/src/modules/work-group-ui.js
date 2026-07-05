@@ -11,18 +11,20 @@
 (function () {
   'use strict';
 
-  // ── 模式定义（纯文字，无图标）──────────────────────────────
+  // ── 模式定义 ──────────────────────────────────────────────────
 
+  // 响应模式：控制 Agent 何时介入
   const INITIATIVE_MODES = [
-    { value: 'assist', label: '辅助', desc: '仅@管理员时才响应' },
-    { value: 'plan', label: '规划', desc: '自动响应，用户确认后执行' },
-    { value: 'execute', label: '执行', desc: '自动响应，自动执行' },
+    { value: 'assist', label: '被动响应', short: '被动', desc: '仅被 @提及时才响应' },
+    { value: 'plan', label: '交互确认', short: '交互', desc: '自动响应，执行前需确认' },
+    { value: 'execute', label: '自主执行', short: '自主', desc: '自动接收并执行任务' },
   ];
 
+  // 执行策略：控制 Agent 的自主裁决空间
   const AUTONOMY_MODES = [
-    { value: 'auto', label: '直接执行', desc: '拿到任务就做，自行判断' },
-    { value: 'cautious', label: '有疑则停', desc: '正常推进，不确定时停下来问' },
-    { value: 'confirm', label: '方案确认', desc: '先出方案，确认后再执行' },
+    { value: 'auto', label: '放手执行', short: '放手', desc: '拿到任务就做，自行判断' },
+    { value: 'cautious', label: '遇疑暂停', short: '审慎', desc: '正常推进，不确定时询问' },
+    { value: 'confirm', label: '先方案后执行', short: '先方案', desc: '先出方案，确认后再执行' },
   ];
 
   const DISPATCH_STATUS_TEXT = {
@@ -398,7 +400,7 @@
 
   function renderModeDropdown(type, currentMode) {
     const modes = type === 'initiative' ? INITIATIVE_MODES : AUTONOMY_MODES;
-    const label = type === 'initiative' ? '主动性' : '自决权';
+    const label = type === 'initiative' ? '响应模式' : '执行策略';
 
     const items = modes.map((m) => {
       const isSelected = m.value === currentMode.value;
@@ -408,7 +410,7 @@
         `    <span class="wg-dropdown-item-label">${esc(m.label)}</span>`,
         `    <span class="wg-dropdown-item-desc">${esc(m.desc)}</span>`,
         '  </div>',
-        isSelected ? '  <span class="wg-dropdown-check">&#10003;</span>' : '',
+        isSelected ? '  <span class="wg-dropdown-check"><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg></span>' : '',
         '</div>',
       ].join('');
     }).join('');
@@ -417,9 +419,14 @@
       `<div class="wg-mode-dropdown${openDropdown === type ? ' open' : ''}" data-wg-dropdown="${type}">`,
       `  <button class="wg-mode-trigger" data-wg-action="toggle-dropdown" data-wg-dropdown-type="${type}">`,
       `    <span class="wg-mode-label">${esc(label)}</span>`,
-      `    <span class="wg-mode-value">${esc(currentMode.label)}</span>`,
+      `    <span class="wg-mode-sep">·</span>`,
+      `    <span class="wg-mode-value">${esc(currentMode.short || currentMode.label)}</span>`,
+      '    <svg class="wg-mode-chevron" viewBox="0 0 24 24"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg>',
       '  </button>',
-      `  <div class="wg-dropdown-menu">${items}</div>`,
+      `  <div class="wg-dropdown-menu">`,
+      `    <div class="wg-dropdown-title">${esc(label)}</div>`,
+      items,
+      `  </div>`,
       '</div>',
     ].join('');
   }
@@ -621,7 +628,7 @@
       '        <span class="wg-card-mention-at">@</span>',
       `        <span class="wg-card-mention-to">${esc(targetName)}</span>`,
       '      </div>',
-      `      <div class="wg-card-body markdown-body">${renderMarkdown((msg.text || '').slice(0, 300))}</div>`,
+      `      <div class="wg-card-body markdown-body">${renderMarkdown(msg.text || '')}</div>`,
       '      <div class="wg-card-footer">',
       `        <span class="wg-card-status"><span class="wg-card-dot ${displayStatus === 'completed' ? '' : 'active'}"></span>${displayStatus === 'completed' ? '已完成' : displayStatus === 'failed' ? '失败' : '进行中'}</span>`,
       sessionLabel
@@ -702,7 +709,7 @@
       `        <span class="wg-card-mention-to">${esc(targetName)}</span>`,
       headerTag,
       '      </div>',
-      `      <div class="wg-card-body markdown-body">${renderMarkdown((msg.text || '').slice(0, 300))}</div>`,
+      `      <div class="wg-card-body markdown-body">${renderMarkdown(msg.text || '')}</div>`,
       statusHtml,
       '    </div>',
       '  </div>',
@@ -1161,8 +1168,8 @@
       // 模式设置
       '      <div class="wg-settings-sub-section">',
       '        <div class="wg-settings-sub-title">模式设置</div>',
-      `        <div class="wg-config-row"><span class="wg-config-label">主动性</span><select class="wg-config-select" onchange="window._wgSettingsChange('initiativeMode', this.value)">${initiativeOptions}</select></div>`,
-      `        <div class="wg-config-row"><span class="wg-config-label">自决权</span><select class="wg-config-select" onchange="window._wgSettingsChange('autonomyMode', this.value)">${autonomyOptions}</select></div>`,
+      `        <div class="wg-config-row"><span class="wg-config-label">响应模式</span><select class="wg-config-select" onchange="window._wgSettingsChange('initiativeMode', this.value)">${initiativeOptions}</select></div>`,
+      `        <div class="wg-config-row"><span class="wg-config-label">执行策略</span><select class="wg-config-select" onchange="window._wgSettingsChange('autonomyMode', this.value)">${autonomyOptions}</select></div>`,
       '      </div>',
 
       // 管理员记忆
@@ -1477,10 +1484,15 @@
 
     const awareness = conv.querySelector('.wg-awareness');
     if (awareness) {
-      const newAwareness = document.createElement('div');
-      newAwareness.innerHTML = renderAwarenessBar(activeChat);
-      const replacement = newAwareness.firstElementChild;
-      if (replacement) awareness.replaceWith(replacement);
+      // popover 正在显示时不替换 awareness DOM，避免 anchor chip 被销毁导致 popover 失效
+      if (_popoverEl && _hoverIdentity) {
+        _updateAwarenessDotsInPlace(awareness);
+      } else {
+        const newAwareness = document.createElement('div');
+        newAwareness.innerHTML = renderAwarenessBar(activeChat);
+        const replacement = newAwareness.firstElementChild;
+        if (replacement) awareness.replaceWith(replacement);
+      }
     }
 
     const scroll = conv.querySelector('.wg-msg-scroll');
@@ -1973,8 +1985,20 @@
     document.body.appendChild(el);
     _popoverEl = el;
 
-    // 定位
-    const rect = anchorEl.getBoundingClientRect();
+    // 定位 — anchor 可能在 await 期间被 DOM 重建移除，需检查有效性
+    let anchor = anchorEl;
+    if (!anchor.isConnected) {
+      // 尝试在新 DOM 中重新查找
+      anchor = document.querySelector(
+        `[data-wg-member-identity="${CSS.escape(identityRef)}"]`
+      );
+      if (!anchor) {
+        // anchor 已失效且无法找回，放弃显示
+        hideMemberPopover(true);
+        return;
+      }
+    }
+    const rect = anchor.getBoundingClientRect();
     el.style.left = `${rect.left}px`;
     el.style.top = `${rect.bottom + 4}px`;
 
@@ -2084,7 +2108,28 @@
     }, 80);
   }
 
+  let _dropdownHideTimer = null;
+
   function onContainerMouseOver(e) {
+    // 模式选择器：hover 自动展开（直接操作 DOM，不触发 refresh）
+    const modeDropdown = e.target.closest('.wg-mode-dropdown');
+    if (modeDropdown) {
+      clearTimeout(_dropdownHideTimer);
+      const type = modeDropdown.dataset.wgDropdown;
+      if (type && openDropdown !== type) {
+        // 关闭其他已打开的 dropdown
+        document.querySelectorAll('.wg-mode-dropdown.open').forEach((el) => {
+          if (el !== modeDropdown) el.classList.remove('open');
+        });
+        modeDropdown.classList.add('open');
+        openDropdown = type;
+      }
+      return;
+    }
+
+    // dropdown 打开时，屏蔽 chip hover（菜单可能覆盖 chip 区域）
+    if (openDropdown) return;
+
     const chip = e.target.closest('[data-wg-member-identity]');
     if (chip) {
       const identityRef = chip.dataset.wgMemberIdentity;
@@ -2098,6 +2143,24 @@
   }
 
   function onContainerMouseOut(e) {
+    // 模式选择器：离开时延迟关闭（处理 trigger 与 menu 之间的视觉间隙）
+    const modeDropdown = e.target.closest('.wg-mode-dropdown');
+    if (modeDropdown) {
+      const related = e.relatedTarget;
+      if (!related || !related.closest('.wg-mode-dropdown')) {
+        _dropdownHideTimer = setTimeout(() => {
+          document.querySelectorAll('.wg-mode-dropdown.open').forEach((el) => {
+            el.classList.remove('open');
+          });
+          openDropdown = null;
+        }, 200);
+      }
+      return;
+    }
+
+    // dropdown 打开时，屏蔽 chip 事件
+    if (openDropdown) return;
+
     const chip = e.target.closest('[data-wg-member-identity]');
     if (chip) {
       const related = e.relatedTarget;
