@@ -6,6 +6,7 @@ import vm from 'node:vm';
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const voiceInputSource = fs.readFileSync(new URL('../public/src/modules/voice-input.js', import.meta.url), 'utf8');
+const chatRendererSource = fs.readFileSync(new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -217,7 +218,7 @@ function createChatMutationContext() {
   };
   vm.createContext(context);
   const mutationBlock = sourceBetween(
-    mainSource,
+    chatRendererSource,
     'function appendNewMessages',
     '\nfunction getCollapseThresholdForRow',
   );
