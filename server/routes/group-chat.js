@@ -424,7 +424,12 @@ async function composeGroupMemory(chat, range, options = {}) {
     const time = new Date(m.timestamp).toLocaleString('zh-CN', {
       month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
     });
-    const text = m.text || '';
+
+    // 截断超长消息：只保留头部摘要，完整内容通过 gc_messages(messageId) 查看
+    const { text: displayText, truncated, originalLength } = truncateMessageText(m.text || '');
+    const truncNotice = truncated
+      ? `\n[已截断，原文 ${originalLength} 字符。使用 gc_messages 查看 messageId: ${m.id} 的完整内容]`
+      : '';
 
     // 会话标识：管理员派遣 vs agent 回复语义不同
     // 管理员 → 派遣到某会话；agent 回复 → 标注回复来源会话
@@ -440,7 +445,7 @@ async function composeGroupMemory(chat, range, options = {}) {
       suffix = `  [批注 ${annTime}] ${annotations[m.id].text}`;
     }
 
-    return `[${time}] ${from}${sessionLabel}：${text}${suffix}`;
+    return `[${time}] ${from}${sessionLabel}：${displayText}${truncNotice}${suffix}`;
   });
 
   return {
@@ -483,6 +488,36 @@ function formatGroupMemoryPrompt(memory, range) {
     );
   }
   return parts.join('\n');
+}
+
+// ── 超长消息截断 ────────────────────────────────────────────────────
+
+/**
+ * 单条消息在 catch-up / gc_messages 列表中的截断阈值（字符）。
+ * 超过此值的消息只保留头部摘要，完整内容通过 gc_messages(messageId) 查询。
+ */
+const GC_MSG_TRUNCATE_THRESHOLD = 800;
+
+/**
+ * 截断超长消息文本，在最近的换行边界截断以避免破坏 markdown 结构。
+ *
+ * @param {string} text - 原始消息文本
+ * @param {number} [threshold=GC_MSG_TRUNCATE_THRESHOLD] - 截断阈值
+ * @returns {{ text: string, truncated: boolean, originalLength: number }}
+ */
+function truncateMessageText(text, threshold = GC_MSG_TRUNCATE_THRESHOLD) {
+  if (!text || text.length <= threshold) {
+    return { text: text || '', truncated: false, originalLength: text?.length || 0 };
+  }
+  // 向前回溯到最近的换行，避免截断在行中间
+  let cut = threshold;
+  const minCut = Math.floor(threshold * 0.5);
+  while (cut > minCut && text[cut] !== '\n') cut--;
+  return {
+    text: text.slice(0, cut).trimEnd(),
+    truncated: true,
+    originalLength: text.length,
+  };
 }
 
 /**
@@ -531,7 +566,12 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
 
     const identityInfo = allIdentities.find((i) => i.identityRef === m.from);
     const from = m.from === 'user' ? '用户' : (identityInfo?.displayName || m.from);
-    const text = m.text || '';
+
+    // 截断超长消息：只保留头部摘要，完整内容通过 gc_messages(messageId) 查看
+    const { text: displayText, truncated, originalLength } = truncateMessageText(m.text || '');
+    const truncNotice = truncated
+      ? `\n[已截断，原文 ${originalLength} 字符。使用 gc_messages 查看 messageId: ${m.id} 的完整内容]`
+      : '';
 
     // 会话标识：管理员派遣 vs agent 回复语义不同
     const sessionLabel = m.from === 'work-group:admin'
@@ -554,7 +594,7 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
       attachmentInfo = `  [附件: ${attNames}]`;
     }
 
-    return `[${time}] ${from}${sessionLabel}：${text}${suffix}${attachmentInfo}`;
+    return `[${time}] ${from}${sessionLabel}：${displayText}${truncNotice}${suffix}${attachmentInfo}`;
   });
 
   return [
@@ -2570,6 +2610,13 @@ app.get('/protoclaw/group_chats/:chatId/messages', async (req, res, next) => {
   try {
     const chat = await readGroupChat(req.params.chatId);
     if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    // 单条查询模式：按 messageId 返回完整消息（不截断）
+    if (req.query.messageId) {
+      const msg = (chat.messages || []).find((m) => m.id === req.query.messageId);
+      if (!msg) return res.status(404).json({ error: 'Message not found' });
+      return res.json({ message: msg });
+    }
 
     const limit = Math.min(parseInt(req.query.limit) || 200, 500);
     const offset = parseInt(req.query.offset) || 0;

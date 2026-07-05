@@ -199,15 +199,32 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_messages',
-        description: '读取当前群聊的最近消息（含路由状态和会话标题）',
+        description: '读取当前群聊的最近消息（含路由状态和会话标题）。超长消息会被截断，可通过 messageId 参数查看完整内容。',
         parameters: {
           type: 'object',
           properties: {
             limit: { type: 'number', description: '消息数量，默认 20' },
+            messageId: { type: 'string', description: '可选。指定消息 ID 时返回该消息的完整内容（不截断），用于查看被截断的超长消息。' },
           },
         },
         execute: async (args: any) => {
-          const { limit } = args || {};
+          const { limit, messageId } = args || {};
+
+          // 单条查询模式：返回完整内容（不截断）
+          if (messageId) {
+            const data = await this.apiGet(
+              `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages?messageId=${encodeURIComponent(messageId)}`
+            );
+            if (!data.message) return { error: '消息未找到' };
+            const m = data.message;
+            const time = new Date(m.timestamp).toLocaleString();
+            const routeInfo = m.routing?.status
+              ? ` [${m.routing.status}${m.routing.targetSessionTitle ? ` → ${m.routing.targetSessionTitle}` : m.routing.targetSessionId ? ` → ${m.routing.targetSessionId.slice(0, 16)}` : ''}]`
+              : '';
+            return { success: true, text: `[${time}] ${m.from}${routeInfo}\n\n${m.text}` };
+          }
+
+          // 列表模式：超长消息截断
           const reqLimit = limit || 20;
           const data = await this.apiGet(
             `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages?limit=${reqLimit}`
@@ -217,7 +234,15 @@ export class GroupAdminFeature implements AgentFeature {
             const routeInfo = m.routing?.status
               ? ` [${m.routing.status}${m.routing.targetSessionTitle ? ` → ${m.routing.targetSessionTitle}` : m.routing.targetSessionId ? ` → ${m.routing.targetSessionId.slice(0, 16)}` : ''}]`
               : '';
-            return `[${new Date(m.timestamp).toLocaleString()}] ${m.from}: ${m.text}${routeInfo}`;
+            // 截断超长消息
+            const rawText: string = m.text || '';
+            if (rawText.length <= 800) {
+              return `[${new Date(m.timestamp).toLocaleString()}] ${m.from}: ${rawText}${routeInfo}`;
+            }
+            const cut = rawText.slice(0, 800);
+            const lastNl = cut.lastIndexOf('\n');
+            const displayText = (lastNl > 400 ? cut.slice(0, lastNl) : cut).trimEnd();
+            return `[${new Date(m.timestamp).toLocaleString()}] ${m.from}: ${displayText}${routeInfo}\n[已截断，原文 ${rawText.length} 字符。使用 gc_messages 查看 messageId: ${m.id} 的完整内容]`;
           });
           return { success: true, text: lines.join('\n') || '暂无消息' };
         },
