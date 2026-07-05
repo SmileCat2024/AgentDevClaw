@@ -4342,6 +4342,7 @@
     getActiveChatId: () => activeChatId,
     getActiveChat: () => activeChat,
     getChatSummaries: () => chatSummaries,
+    selectChat: (chatId) => selectChat(chatId),
     addAttachment: (name, content) => {
       if (!pendingAttachments.find(a => a.name === name)) {
         pendingAttachments.push({ name, content: content || '' });

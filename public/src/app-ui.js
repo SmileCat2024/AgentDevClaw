@@ -2066,6 +2066,11 @@ function renderWorkspaceBlock(agent, block) {
 }
 
 function renderWorkspaceSurface(agent = getCurrentAgentRecord()) {
+  // Home agent — render the new Dashboard instead of legacy blocks
+  if (agent?.id === 'home' && typeof renderHomeDashboard === 'function') {
+    return renderHomeDashboard();
+  }
+
   const ui = getCurrentUnitUi(agent);
   if (!agent || !ui) {
     return getEmptyStateHtml();

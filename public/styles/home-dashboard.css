@@ -1,0 +1,527 @@
+/* ── Home Dashboard ───────────────────────────────────────────
+   独立首页 Dashboard 样式。
+   所有 class 以 hd- 前缀命名，避免与现有 workspace / chat 样式冲突。
+   仅在 #chat-container:has(.hd-page) 时生效，覆写默认 padding。
+   ─────────────────────────────────────────────────────────────── */
+
+#chat-container:has(.hd-page) {
+  padding: 24px;
+  gap: 0;
+  overflow-y: auto;
+}
+
+.hd-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 32px 40px 48px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  box-sizing: border-box;
+  color: #e8edf3;
+}
+
+.hd-page * {
+  box-sizing: border-box;
+}
+
+/* ── Color tokens (内部使用，保持一致性) ──────────── */
+
+/*
+  文字梯度：
+    标题强调  #e8edf3
+    正文      #c0c8d2
+    次要      #939ba6
+    辅助说明  #7d8794
+    最弱      #525a64
+  强调色：
+    蓝调      #6fa8e8 / #6298d4
+*/
+
+/* ── Hero ─────────────────────────────────────── */
+
+.hd-hero {
+  position: relative;
+  min-height: 108px;
+  border: 1px solid rgba(66, 153, 225, 0.3);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 0 0, rgba(40, 112, 183, 0.22), transparent 30%),
+    linear-gradient(90deg, rgba(20, 33, 46, 0.92), rgba(8, 9, 10, 0.96) 38%, rgba(6, 7, 8, 0.98));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 28px;
+}
+
+.hd-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 72px 72px;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.hd-hero-content,
+.hd-hero-actions {
+  position: relative;
+  z-index: 1;
+}
+
+.hd-eyebrow {
+  color: #6fa8e8;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+.hd-hero h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+  letter-spacing: -0.3px;
+  font-weight: 700;
+  color: #e8edf3;
+}
+
+.hd-hero p {
+  margin: 8px 0 0;
+  color: #7d8794;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.hd-hero p::after {
+  content: "";
+  display: block;
+  width: 200px;
+  height: 1px;
+  margin-top: 8px;
+  background: linear-gradient(90deg, #4a8fce, transparent);
+}
+
+.hd-hero-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ── Buttons ──────────────────────────────────── */
+
+.hd-page button {
+  height: 34px;
+  padding: 0 15px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.02);
+  color: #c0c8d2;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.hd-page button:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #e8edf3;
+}
+
+.hd-page button.primary {
+  border-color: rgba(85, 170, 255, 0.4);
+  background: rgba(47, 128, 237, 0.12);
+  color: #c8e0ff;
+}
+
+.hd-page button.primary:hover {
+  background: rgba(47, 128, 237, 0.2);
+}
+
+.hd-page .small-btn {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 11.5px;
+  border-radius: 6px;
+}
+
+/* ── Main Grid Layout ─────────────────────────── */
+/*
+  Row 1: [Left: Usage + IM stacked] [Right: Work Group]
+  Row 2: [Sessions - full width, 2 internal columns]
+*/
+
+.hd-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.82fr) minmax(0, 1.18fr);
+  gap: 12px;
+  margin-top: 12px;
+  align-items: stretch;
+}
+
+.hd-col-left {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+}
+
+/* ── Card Base ────────────────────────────────── */
+
+.hd-card {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 26%),
+    #0b0d10;
+  padding: 16px 18px 16px;
+}
+
+.hd-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.hd-label {
+  color: #6298d4;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.hd-card-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #e8edf3;
+}
+
+/* ── Usage Card (compact) ─────────────────────── */
+
+.hd-usage-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.hd-usage-top {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.hd-usage-value {
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: #e8edf3;
+}
+
+.hd-usage-stats {
+  display: flex;
+  gap: 14px;
+}
+
+.hd-usage-stats span {
+  font-size: 11.5px;
+  color: #7d8794;
+}
+
+.hd-usage-stats strong {
+  color: #c0c8d2;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.hd-usage-empty {
+  margin-top: 10px;
+}
+
+.hd-subtle {
+  color: #7d8794;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* ── Bars ─────────────────────────────────────── */
+
+.hd-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.hd-bar-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.hd-bar-label {
+  color: #939ba6;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hd-bar-value {
+  color: #c0c8d2;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hd-bar-track {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 999px;
+  background: #1c2128;
+  overflow: hidden;
+  margin-top: -5px;
+}
+
+.hd-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4a8fce, #6fa8e8);
+}
+
+.hd-bar-fill.idle {
+  background: #2a2f38;
+}
+
+/* ── IM Card ──────────────────────────────────── */
+
+.hd-im-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.hd-im-card .hd-table {
+  flex: 1;
+}
+
+.hd-big-status {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.1px;
+  margin-bottom: 3px;
+  color: #e8edf3;
+}
+
+.hd-table {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.hd-table-row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  min-height: 38px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  align-items: center;
+}
+
+.hd-table-row .th {
+  color: #5f6874;
+  font-size: 12px;
+}
+
+.hd-table-row .td {
+  color: #c0c8d2;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ── Work Group Card ──────────────────────────── */
+
+.hd-group-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.hd-group-card .hd-chat-list {
+  flex: 1;
+}
+
+.hd-group-main {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 2px 0 2px;
+  color: #e8edf3;
+}
+
+.hd-chat-list {
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.hd-chat-item {
+  padding: 10px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.hd-chat-item:hover {
+  background: rgba(74, 143, 206, 0.06);
+}
+
+.hd-chat-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.hd-chat-top strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e8edf3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hd-chat-time {
+  font-size: 11px;
+  color: #5f6874;
+  flex-shrink: 0;
+}
+
+.hd-chat-preview {
+  font-size: 11.5px;
+  color: #7d8794;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Sessions Section ─────────────────────────── */
+
+.hd-sessions {
+  margin-top: 12px;
+  border: 1px solid rgba(66, 153, 225, 0.22);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 100% 100%, rgba(35, 112, 185, 0.06), transparent 28%),
+    linear-gradient(180deg, rgba(14, 17, 21, 0.98), rgba(7, 8, 9, 0.98));
+  padding: 16px 18px 14px;
+}
+
+.hd-sessions .hd-card-header {
+  margin-bottom: 4px;
+}
+
+/* Session two-column grid */
+.hd-session-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+  margin-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.hd-session {
+  padding: 9px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.hd-session:hover {
+  background: rgba(74, 143, 206, 0.06);
+}
+
+.hd-session-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.hd-session strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e8edf3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hd-session .hd-session-time {
+  font-size: 11px;
+  color: #5f6874;
+  flex-shrink: 0;
+}
+
+.hd-session-sub {
+  font-size: 11.5px;
+  color: #7d8794;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ── States ───────────────────────────────────── */
+
+.dim {
+  opacity: 0.42;
+}
+
+/* ── Responsive ───────────────────────────────── */
+
+@media (max-width: 900px) {
+  .hd-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hd-session-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hd-hero {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+  }
+}
+
+@media (max-width: 560px) {
+  .hd-page {
+    padding: 20px 16px 32px;
+  }
+
+  .hd-hero {
+    padding: 18px 16px;
+  }
+
+  .hd-hero h1 {
+    font-size: 19px;
+  }
+
+  .hd-table-row {
+    grid-template-columns: 70px 1fr;
+  }
+}
