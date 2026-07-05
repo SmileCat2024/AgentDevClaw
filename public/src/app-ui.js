@@ -20,6 +20,7 @@ function selectWorkspaceSurface(agentId, options = {}) {
   const prevAgentId = currentAgentId;
   const previousRuntimeId = currentRuntimeAgentId;
   const previousRuntimeContextKey = getRuntimeContextKey(previousRuntimeId);
+  saveCurrentWorkspaceSurfaceScroll();
   if (previousRuntimeId && !readOnlyMode) {
     saveCurrentRuntimeToCache(previousRuntimeId, previousRuntimeContextKey);
   }
@@ -164,6 +165,49 @@ function getUnitTabLabel(tab) {
   if (tab?.id === 'chat') return localizeWorkspaceValue(tab?.label, t('workspace_tab_chat'));
   return localizeWorkspaceValue(tab?.label, String(tab?.id || ''));
 }
+
+function getWorkspaceSurfaceScrollKey(agent = getCurrentAgentRecord(), mode = currentWorkspaceTab) {
+  const key = getUnitPreferenceKey(agent);
+  if (!key) return '';
+  const safeMode = mode || getPassiveWorkspaceSurfaceMode(agent) || 'home';
+  const workspaceState = getAgentWorkspaceState(agent);
+  const forms = typeof getWorkspaceFormDraft === 'function'
+    ? getWorkspaceFormDraft(agent)
+    : (workspaceState?.forms || {});
+  const startupForm = forms?.['startup-form'] || workspaceState?.forms?.['startup-form'] || {};
+  const assemblyForm = forms?.['assembly-form'] || workspaceState?.forms?.['assembly-form'] || {};
+  const scopeParts = [
+    workspaceState?.openDirectory,
+    startupForm.openDirectory,
+    startupForm.open_directory,
+    startupForm.target_dir,
+    startupForm.feature_name,
+    startupForm.agent_name,
+    assemblyForm.editing_config_id,
+    assemblyForm.assembly_name,
+    assemblyForm.env_dir,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  const scope = scopeParts.join('|').replace(/\\/g, '/').toLowerCase();
+  return [key, safeMode, scope].join('|');
+}
+
+function saveCurrentWorkspaceSurfaceScroll() {
+  if (!container || !container.querySelector('.workspace-surface')) return;
+  const agent = getCurrentAgentRecord();
+  if (!agent || !shouldRenderWorkspaceSurface(agent)) return;
+  const key = getWorkspaceSurfaceScrollKey(agent);
+  if (!key) return;
+  workspaceSurfaceScrollCache.set(key, container.scrollTop || 0);
+  lastRenderedWorkspaceScrollKey = key;
+}
+
+container.addEventListener('scroll', () => {
+  if (workspaceSurfaceScrollSaveRaf || !container.querySelector('.workspace-surface')) return;
+  workspaceSurfaceScrollSaveRaf = requestAnimationFrame(() => {
+    workspaceSurfaceScrollSaveRaf = 0;
+    saveCurrentWorkspaceSurfaceScroll();
+  });
+}, { passive: true });
 
 /**
  * 更新聊天界面顶部的 context bar（模型名 + token 占比）。
@@ -2115,11 +2159,18 @@ function renderCurrentMainView() {
           savedPhTabState[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
         }
       });
-      // Preserve scroll position only when refreshing the SAME workspace surface
-      // (e.g. poll detected session data change). When transitioning from chat
-      // or switching to a different workspace, always start from top.
-      const shouldScrollToTop = !containerIsWorkspace || isNewWorkspaceSurface;
-      const savedWsScrollTop = shouldScrollToTop ? 0 : container.scrollTop;
+      const workspaceScrollKey = getWorkspaceSurfaceScrollKey(agent);
+      const isSameWorkspaceScrollSurface =
+        containerIsWorkspace
+        && workspaceScrollKey
+        && lastRenderedWorkspaceScrollKey === workspaceScrollKey
+        && !isNewWorkspaceSurface;
+      if (containerIsWorkspace && lastRenderedWorkspaceScrollKey && !isSameWorkspaceScrollSurface) {
+        workspaceSurfaceScrollCache.set(lastRenderedWorkspaceScrollKey, container.scrollTop || 0);
+      }
+      const savedWsScrollTop = isSameWorkspaceScrollSurface
+        ? container.scrollTop
+        : (workspaceScrollKey ? (workspaceSurfaceScrollCache.get(workspaceScrollKey) || 0) : 0);
       const prevScrollBehavior = container.style.scrollBehavior;
       runWithSuppressedChatViewportObservers(() => {
         container.style.scrollBehavior = 'auto';
@@ -2127,11 +2178,7 @@ function renderCurrentMainView() {
         container.innerHTML = newHtml;
       }, 220);
       lastRenderedWorkspaceHtml = newHtml;
-      requestAnimationFrame(() => {
-        container.scrollTop = savedWsScrollTop;
-        container.style.visibility = '';
-        container.style.scrollBehavior = prevScrollBehavior;
-      });
+      lastRenderedWorkspaceScrollKey = workspaceScrollKey;
       expandedProjectIds.forEach((pid) => {
         const card = container.querySelector(`.feature-project-card[data-prebuilt-project-id="${CSS.escape(pid)}"]`);
         if (card) {
@@ -2145,6 +2192,16 @@ function renderCurrentMainView() {
           tg.querySelectorAll('.ph-session-tab').forEach((t) => t.classList.toggle('active', t.dataset.phTab === tab));
           tg.querySelectorAll('.ph-session-tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.phPanel === tab));
         }
+      });
+      requestAnimationFrame(() => {
+        container.scrollTop = savedWsScrollTop;
+        container.style.visibility = '';
+        container.style.scrollBehavior = prevScrollBehavior;
+        requestAnimationFrame(() => {
+          if (lastRenderedWorkspaceScrollKey === workspaceScrollKey && shouldRenderWorkspaceSurface(agent)) {
+            container.scrollTop = savedWsScrollTop;
+          }
+        });
       });
     }
     updateProjectDocsetChrome(agent);

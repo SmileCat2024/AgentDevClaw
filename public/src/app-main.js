@@ -1016,6 +1016,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   }
 
   const activeAgent = getCurrentAgentRecord();
+  if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
+    saveCurrentWorkspaceSurfaceScroll();
+  }
   const hasSessions = hasWorkspaceSessions(activeAgent);
   const shouldMarkLoading = !!(
     activeAgent?.id
@@ -1789,6 +1792,9 @@ window.switchAgent = async (newAgentId) => {
   }
   if (targetAgent?.id === currentAgentId && runtimeAgentId === currentRuntimeAgentId) return;
   _storeVisibleSessionInputDraft();
+  if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
+    saveCurrentWorkspaceSurfaceScroll();
+  }
   if (currentRuntimeAgentId && !readOnlyMode) {
     saveCurrentRuntimeToCache(currentRuntimeAgentId);
   }
