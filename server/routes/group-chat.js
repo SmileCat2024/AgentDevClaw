@@ -1791,7 +1791,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
 
   // @管理员 → 始终直接派发给管理员
   if (targetIsAdmin) {
-    const prompt = composeDispatchPrompt(chatName, message, chatId);
+    const prompt = composeDispatchPrompt(message);
     let opts = {};
     // 拒绝审批派发的消息：附带 systemNote 让管理员理解拒绝上下文
     if (message.rejectDispatchId) {
@@ -1815,7 +1815,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
   // 管理员发出的派发消息 → 直接到达目标，不再经过模式路由。
   // 否则在 execute 模式下，admin dispatch → 新消息 → 又路由回 admin → 无限循环。
   if (message.from === 'work-group:admin') {
-    const prompt = composeDispatchPrompt(chatName, message, chatId);
+    const prompt = composeDispatchPrompt(message);
     await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
     return;
   }
@@ -1843,7 +1843,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
 
     case 'plan': {
       // 规划模式：直接派发 + 单一通知管理员
-      const prompt = composeDispatchPrompt(chatName, message, chatId);
+      const prompt = composeDispatchPrompt(message);
       const dispatchResult = await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
 
       // 异步通知管理员（合并：观察 + 任务启动信息，一次 call 搞定）
@@ -1892,7 +1892,7 @@ async function dispatchGroupChatMessage(chatId, message, sessionOptions = {}) {
     case 'assist':
     default: {
       // 辅助模式：直接派发
-      const prompt = composeDispatchPrompt(chatName, message, chatId);
+      const prompt = composeDispatchPrompt(message);
       await dispatchToIdentity(chatId, message, chat, targetIdentityRef, prompt, sessionOptions);
       break;
     }
