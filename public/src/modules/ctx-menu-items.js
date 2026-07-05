@@ -231,6 +231,8 @@ async function ctxArchiveAndStopRuntime(target) {
       updateAgentRecord(agentId, {
         workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
       });
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
     }
     try {
       const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
@@ -247,6 +249,8 @@ async function ctxArchiveAndStopRuntime(target) {
           workspace_sessions: result.sessions,
           active_workspace_session_id: result.activeSessionId || null,
         });
+        lastRenderedWorkspaceHtml = '';
+        renderCurrentMainView();
       }
     } catch (e) {
       // Revert optimistic unarchive on failure
@@ -258,6 +262,8 @@ async function ctxArchiveAndStopRuntime(target) {
         updateAgentRecord(agentId, {
           workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
         });
+        lastRenderedWorkspaceHtml = '';
+        renderCurrentMainView();
       }
       window.alert((currentLanguage === 'zh' ? '取消归档失败：' : 'Failed to unarchive session: ') + (e?.message || e));
     }
@@ -273,6 +279,8 @@ async function ctxArchiveAndStopRuntime(target) {
     updateAgentRecord(agentId, {
       workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
     });
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
   }
 
   try {
@@ -290,6 +298,8 @@ async function ctxArchiveAndStopRuntime(target) {
         workspace_sessions: result.sessions,
         active_workspace_session_id: result.activeSessionId || null,
       });
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
     }
   } catch (e) {
     // Revert optimistic archive on failure, then alert
@@ -301,6 +311,8 @@ async function ctxArchiveAndStopRuntime(target) {
       updateAgentRecord(agentId, {
         workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
       });
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
     }
     window.alert((currentLanguage === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
     return;
@@ -551,6 +563,10 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId) {
     updateAgentRecord(agentId, {
       workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
     });
+    // Render immediately so the user sees the archive without waiting for the
+    // runtime stop + agent reload chain below.
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
   }
   try {
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
@@ -565,23 +581,39 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId) {
         workspace_sessions: result.sessions,
         active_workspace_session_id: result.activeSessionId || null,
       });
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
     }
   } catch (e) {
     console.error('Failed to archive session after mutation:', e);
+    // Revert optimistic update so the UI matches the server state.
+    if (agent) {
+      const currentSessions = getWorkspaceSessions(agent);
+      const revertedSessions = currentSessions.map((s) =>
+        s.id === sessionId ? { ...s, archived: false } : s,
+      );
+      updateAgentRecord(agentId, {
+        workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
+      });
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
+    }
     return; // Don't proceed to stop if archive failed
   }
 
-  // 2. Stop the original session's runtime (same as ctxArchiveAndStopRuntime)
+  // 2. Stop the original session's runtime.
+  //    The stop_agent API call is awaited (to ensure SIGTERM is sent), but the
+  //    500ms blind delay + loadAgents refresh is fired in the background — the
+  //    poll loop (300ms interval) will pick up the disconnected runtime status.
+  //    This was previously a blocking await that caused visible UI lag after
+  //    compact/trim/branch operations.
   try {
     if (oldRuntimeId) clearAgentRuntimeCache(oldRuntimeId);
     await invoke('stop_agent', { agentId, sessionId });
-    await refreshSidebarRuntimeAfterMutation(500);
+    refreshSidebarRuntimeAfterMutation(500);
   } catch (e) {
     console.error('Failed to stop runtime after archive:', e);
   }
-
-  lastRenderedWorkspaceHtml = '';
-  renderCurrentMainView();
 }
 
 async function ctxTodoSession(target) {
