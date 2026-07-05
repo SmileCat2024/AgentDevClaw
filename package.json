@@ -39,7 +39,8 @@
     "multer": "^2.1.1",
     "openai": "^6.45.0",
     "undici": "^7.25.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "typescript": "^5.3.3"
   },
   "bin": {
     "claw": "./bin/claw.mjs",
@@ -47,8 +48,5 @@
   },
   "engines": {
     "node": ">=20"
-  },
-  "devDependencies": {
-    "typescript": "^5.3.3"
   }
 }
