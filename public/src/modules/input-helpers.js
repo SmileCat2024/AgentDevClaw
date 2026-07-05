@@ -12,7 +12,7 @@
  *   - getAvailableCallIndices / canRollbackMessage: rollback 可用性判断（纯函数）
  *   - saveChatProcessVisibility / hasConversationProcessContent / updateChatProcessToggle:
  *     对话过程显隐
- *   - syncAssistantProcessOnlyRows / applyConversationProcessState: 过程内容 DOM 同步
+ *   - syncAssistantProcessOnlyRows / applyConversationProcessState / syncProcessHiddenEmptyState: 过程内容 DOM 同步
  *   - window.toggleChatProcessVisibility: 全局切换函数
  *   - submitInputAction: 提交动作输入（async）
  *
@@ -256,7 +256,41 @@ function applyConversationProcessState(root = container) {
   syncAssistantProcessOnlyRows(root);
   syncCollapseStates(root);
   updateChatProcessToggle();
+  syncProcessHiddenEmptyState(root);
 };
+
+/**
+ * When "hide process" is active, all message rows may be visually hidden
+ * (system/tool rows get process-hidden; assistant rows with only tool calls
+ * get process-hidden-empty). In that case, inject the welcome overlay so the
+ * chat area doesn't look jarringly blank.
+ */
+function syncProcessHiddenEmptyState(root) {
+  var existing = root.querySelector('.process-hidden-empty-overlay');
+  if (showChatProcess) {
+    if (existing) existing.remove();
+    return;
+  }
+  var rows = root.querySelectorAll('.message-row');
+  var hasVisibleRow = false;
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (row.classList.contains('process-hidden')) continue;
+    if (row.classList.contains('process-hidden-empty')) continue;
+    hasVisibleRow = true;
+    break;
+  }
+  if (!hasVisibleRow && rows.length > 0) {
+    if (!existing) {
+      var overlay = document.createElement('div');
+      overlay.className = 'process-hidden-empty-overlay';
+      overlay.innerHTML = getEmptyStateHtml();
+      root.appendChild(overlay);
+    }
+  } else {
+    if (existing) existing.remove();
+  }
+}
 
 window.toggleChatProcessVisibility = function() {
   const chatViewportTopBefore = container.scrollTop;
