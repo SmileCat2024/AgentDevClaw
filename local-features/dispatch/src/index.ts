@@ -142,11 +142,23 @@ export class ClawDispatchFeature implements AgentFeature {
     }
   }
 
+  /**
+   * 判断是否有真实的 onCall 正在进行。
+   * callActive 在 preInjectCallStart() 场景下不可靠（@CallStart 被触发
+   * 但 @CallFinish 不会被触发），用 CallArbiter 的真实状态做交叉校验。
+   */
+  private isTrulyBusy(): boolean {
+    if (this.arbiterRef && typeof this.arbiterRef.getStatus === 'function') {
+      return this.arbiterRef.getStatus().status === 'running';
+    }
+    return this.callActive;
+  }
+
   private async handleMessage(
     msg: DispatchMessage,
     serverOrigin: string,
   ): Promise<void> {
-    if (this.callActive) {
+    if (this.isTrulyBusy()) {
       // 活跃 call 期间 → 缓存，等 @StepStart 注入
       this.pendingBuffer.push(msg);
       console.log(

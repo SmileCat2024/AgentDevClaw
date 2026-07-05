@@ -237,11 +237,26 @@ export class GroupChatBridgeFeature implements AgentFeature {
     }
   }
 
+  /**
+   * 判断是否有真实的 onCall 正在进行。
+   *
+   * callActive（由 @CallStart/@CallFinish 维护）在 preInjectCallStart()
+   * 场景下不可靠：preInjectCallStart 触发 @CallStart 但不触发 @CallFinish，
+   * 导致 callActive 永久卡在 true。
+   * 因此用 CallArbiter 的真实状态做交叉校验。
+   */
+  private isTrulyBusy(): boolean {
+    if (this.arbiterRef && typeof this.arbiterRef.getStatus === 'function') {
+      return this.arbiterRef.getStatus().status === 'running';
+    }
+    return this.callActive;
+  }
+
   private async handleMessage(
     msg: GcMessage,
     serverOrigin: string,
   ): Promise<void> {
-    if (this.callActive) {
+    if (this.isTrulyBusy()) {
       // 活跃 call 期间 → 缓存，等 @StepStart 注入
       this.pendingBuffer.push(msg);
       console.log(
