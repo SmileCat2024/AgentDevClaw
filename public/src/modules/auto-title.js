@@ -14,13 +14,11 @@
  *   _messagesEqual, findFirstChangedMessageIndex, tryAutoTitleGeneration,
  *   autoGenerateSessionTitle, checkGlobalChoiceAlerts
  * 导出全局变量:
- *   _autoTitlePending, _autoTitleAttempts, _autoTitleRetryAt
+ *   _autoTitlePending
  */
 
 // ── Auto session title generation ──────────────────────────────────────────
 const _autoTitlePending = new Set();
-const _autoTitleAttempts = new Map();
-const _autoTitleRetryAt = new Map();
 
 function getAutoTitleSessionInfo() {
   const agent = getCurrentAgentRecord();
@@ -32,6 +30,12 @@ function getAutoTitleSessionInfo() {
 function markAutoTitleCandidate(previousMessages, nextMessages) {
   const info = getAutoTitleSessionInfo();
   if (!info) return;
+  // Guard: if the session already has a generated title, skip entirely.
+  // This prevents false re-triggers when currentMessages is reset to []
+  // (runtime hiccup, session switch without cache, agent restart) and the
+  // next poll sees a bogus [] → [messages with assistant] transition.
+  const currentTitle = String(info.agent.active_workspace_session_title || '').trim();
+  if (currentTitle && !/^新对话\d+$/.test(currentTitle)) return;
   const previousAssistantCount = previousMessages.filter(function(message) {
     return message && message.role === 'assistant';
   }).length;
@@ -138,17 +142,11 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
     if (!latestMessage || latestMessage.role !== 'assistant' || !String(latestMessage.content || '').trim()) return;
   }
 
+  // Prevent concurrent calls for the same session.
+  // autoGenerateSessionTitle handles all retries internally.
   if (_autoTitleTriggered.has(sessionId)) return;
-  var attempts = _autoTitleAttempts.get(sessionId) || 0;
-  if (attempts >= 3) {
-    _autoTitlePending.delete(sessionId);
-    _autoTitleRetryAt.delete(sessionId);
-    return;
-  }
-  if (Date.now() < (_autoTitleRetryAt.get(sessionId) || 0)) return;
 
   _autoTitleTriggered.add(sessionId);
-  _autoTitleAttempts.set(sessionId, attempts + 1);
 
   // Fire and forget — don't block the poll loop
   autoGenerateSessionTitle(agent.id, sessionId);
@@ -178,8 +176,6 @@ function tryAutoTitleGeneration(messages) {
       // Session no longer exists in any agent — clean up
       _autoTitlePending.delete(pendingId);
       _autoTitleTriggered.delete(pendingId);
-      _autoTitleAttempts.delete(pendingId);
-      _autoTitleRetryAt.delete(pendingId);
       continue;
     }
 
@@ -190,95 +186,94 @@ function tryAutoTitleGeneration(messages) {
   }
 }
 
+var AUTO_TITLE_MAX_ATTEMPTS = 3;
+var AUTO_TITLE_RETRY_BACKOFF_MS = 5000;
+// Must exceed server's 120s child-process timeout to avoid false-abort
+var AUTO_TITLE_FETCH_TIMEOUT_MS = 125000;
+
+/**
+ * Generate a session title with internal retries.
+ * Shows a single loading toast for the entire operation; retries are silent.
+ * Only the final success or final failure updates the toast.
+ */
 async function autoGenerateSessionTitle(agentId, sessionId) {
-  let succeeded = false;
+  var succeeded = false;
+  var lastError = null;
   const isZh = currentLanguage === 'zh';
   const toastId = 'title-auto-' + sessionId;
+
   ClawToast.show({
     id: toastId,
     title: isZh ? '正在生成会话标题...' : 'Generating session title...',
     status: 'loading',
   });
 
-  // Fallback: if no response after 60s, convert the loading toast to error
-  // so it doesn't stay stuck forever (server can take up to 120s internally).
-  const fallbackTimer = setTimeout(function() {
-    ClawToast.update(toastId, {
-      status: 'error',
-      title: isZh ? '标题生成超时' : 'Title generation timed out',
-      description: isZh ? '服务端响应超过60秒' : 'Server response exceeded 60s',
-    });
-  }, 60000);
+  for (var attempt = 1; attempt <= AUTO_TITLE_MAX_ATTEMPTS; attempt++) {
+    var controller = new AbortController();
+    var fetchTimer = setTimeout(function() { controller.abort(); }, AUTO_TITLE_FETCH_TIMEOUT_MS);
 
-  // AbortController: cancel the fetch after 30s
-  const controller = new AbortController();
-  const fetchTimer = setTimeout(function() { controller.abort(); }, 30000);
-
-  try {
-    var response = await fetch('/protoclaw/generate_session_title', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: agentId, sessionId: sessionId }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      console.warn('[AutoTitle] generation failed:', response.status);
-      ClawToast.update(toastId, {
-        status: 'error',
-        title: isZh ? '标题生成失败' : 'Title generation failed',
-        description: 'HTTP ' + response.status,
+    try {
+      var response = await fetch('/protoclaw/generate_session_title', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: agentId, sessionId: sessionId }),
+        signal: controller.signal,
       });
-      return;
-    }
-    var result = await response.json();
-    if (result.ok && result.title) {
-      // Update local data
-      var agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
-      if (agent) {
-        var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
-        var target = sessions.find(function(s) { return s.id === sessionId; });
-        if (target) target.title = result.title;
-        // Also sync active_workspace_session_title for immediate sidebar refresh
-        if (String(agent.active_workspace_session_id || '') === String(sessionId)) {
-          agent.active_workspace_session_title = result.title;
-        }
+      if (!response.ok) {
+        throw new Error('HTTP ' + response.status);
       }
-      console.log('[AutoTitle] title set:', result.title);
-      succeeded = true;
-      ClawToast.update(toastId, {
-        status: 'success',
-        title: isZh ? '标题已生成' : 'Title generated',
-        description: result.title,
-      });
-    } else {
-      ClawToast.update(toastId, {
-        status: 'error',
-        title: isZh ? '标题生成失败' : 'Title generation failed',
-        description: isZh ? '未返回有效标题' : 'No valid title returned',
-      });
+      var result = await response.json();
+      if (result.ok && result.title) {
+        // Update local data
+        var agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+        if (agent) {
+          var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+          var target = sessions.find(function(s) { return s.id === sessionId; });
+          if (target) target.title = result.title;
+          if (String(agent.active_workspace_session_id || '') === String(sessionId)) {
+            agent.active_workspace_session_title = result.title;
+          }
+        }
+        console.log('[AutoTitle] title set:', result.title);
+        succeeded = true;
+        ClawToast.update(toastId, {
+          status: 'success',
+          title: isZh ? '标题已生成' : 'Title generated',
+          description: result.title,
+        });
+        break;
+      } else {
+        throw new Error(isZh ? '未返回有效标题' : 'No valid title returned');
+      }
+    } catch (error) {
+      lastError = error;
+      var isAbort = error && error.name === 'AbortError';
+      console.warn('[AutoTitle] attempt ' + attempt + '/' + AUTO_TITLE_MAX_ATTEMPTS +
+        (isAbort ? ' timed out' : ' failed') + ':', error.message || error);
+      // Silent retry — only show error on the last attempt
+      if (attempt < AUTO_TITLE_MAX_ATTEMPTS) {
+        clearTimeout(fetchTimer);
+        await new Promise(function(r) { setTimeout(r, AUTO_TITLE_RETRY_BACKOFF_MS); });
+        continue;
+      }
+    } finally {
+      clearTimeout(fetchTimer);
     }
-  } catch (error) {
-    var isAbort = error && error.name === 'AbortError';
-    console.warn('[AutoTitle] error:', error.message || error);
+  }
+
+  if (!succeeded) {
+    var isAbort = lastError && lastError.name === 'AbortError';
     ClawToast.update(toastId, {
       status: 'error',
       title: isZh ? '标题生成失败' : 'Title generation failed',
       description: isAbort
-        ? (isZh ? '请求超时（30秒）' : 'Request timed out (30s)')
-        : (error.message || String(error)),
+        ? (isZh ? '请求超时' : 'Request timed out')
+        : (lastError ? (lastError.message || String(lastError)) : 'Unknown error'),
     });
-  } finally {
-    clearTimeout(fetchTimer);
-    clearTimeout(fallbackTimer);
-    _autoTitleTriggered.delete(sessionId);
-    if (succeeded) {
-      _autoTitlePending.delete(sessionId);
-      _autoTitleAttempts.delete(sessionId);
-      _autoTitleRetryAt.delete(sessionId);
-    } else {
-      _autoTitleRetryAt.set(sessionId, Date.now() + 15000);
-    }
   }
+
+  _autoTitleTriggered.delete(sessionId);
+  _autoTitlePending.delete(sessionId);
 }
 
 /**
