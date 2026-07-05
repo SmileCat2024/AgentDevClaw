@@ -1435,20 +1435,12 @@ body[data-theme="light"] .workspace-docset-row {
 }
 
 /* Recency variants — dot opacity fades for older items; label color stays uniform */
-.session-time-indicator.just-now .session-time-dot {
-  background: rgba(88, 166, 255, 0.7);
-}
-.session-time-indicator.today .session-time-dot {
-  background: rgba(88, 166, 255, 0.55);
-}
-.session-time-indicator.yesterday .session-time-dot {
-  background: rgba(88, 166, 255, 0.4);
-}
-.session-time-indicator.day-before .session-time-dot {
-  background: rgba(88, 166, 255, 0.3);
-}
+.session-time-indicator.just-now .session-time-dot,
+.session-time-indicator.today .session-time-dot,
+.session-time-indicator.yesterday .session-time-dot,
+.session-time-indicator.day-before .session-time-dot,
 .session-time-indicator.this-week .session-time-dot {
-  background: rgba(88, 166, 255, 0.22);
+  background: #58a6ff;
 }
 
 /* ── Session group headers ── */
@@ -1881,7 +1873,7 @@ body[data-theme="light"] .workspace-docset-row {
   gap: 8px;
   align-self: stretch;
   justify-content: center;
-  padding-right: 16px;
+  padding-right: 28px;
 }
 
 .feature-project-session-item .workspace-actions.stacked {
@@ -2119,24 +2111,12 @@ body[data-theme="light"] .session-time-label {
   color: #57606a;
 }
 
-body[data-theme="light"] .session-time-indicator.just-now .session-time-dot {
-  background: rgba(9, 105, 218, 0.65);
-}
-
-body[data-theme="light"] .session-time-indicator.today .session-time-dot {
-  background: rgba(9, 105, 218, 0.5);
-}
-
-body[data-theme="light"] .session-time-indicator.yesterday .session-time-dot {
-  background: rgba(9, 105, 218, 0.35);
-}
-
-body[data-theme="light"] .session-time-indicator.day-before .session-time-dot {
-  background: rgba(9, 105, 218, 0.26);
-}
-
+body[data-theme="light"] .session-time-indicator.just-now .session-time-dot,
+body[data-theme="light"] .session-time-indicator.today .session-time-dot,
+body[data-theme="light"] .session-time-indicator.yesterday .session-time-dot,
+body[data-theme="light"] .session-time-indicator.day-before .session-time-dot,
 body[data-theme="light"] .session-time-indicator.this-week .session-time-dot {
-  background: rgba(9, 105, 218, 0.2);
+  background: #0969da;
 }
 
 @media (max-width: 900px) {
