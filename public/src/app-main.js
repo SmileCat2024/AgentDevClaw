@@ -3190,7 +3190,7 @@ function renderInputRequests(requests) {
       setTimeout(() => {
         const el = document.getElementById(`input-${req.requestId}`);
         if(el) {
-           const hasCachedDraft = !!(el.dataset.sessionKey && _sessionInputCache[el.dataset.sessionKey]);
+           const hasCachedDraft = !!(el.dataset.sessionKey && Object.prototype.hasOwnProperty.call(_sessionInputCache, el.dataset.sessionKey));
            if (!hasCachedDraft && !el.value && typeof req.initialValue === 'string' && req.initialValue.length > 0) {
              el.value = req.initialValue;
              _cacheSessionInput(el);

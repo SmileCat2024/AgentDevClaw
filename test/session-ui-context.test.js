@@ -141,7 +141,7 @@ globalThis.__storeSessionInputDraft = _storeSessionInputDraft;`, context);
 
   oldTextarea.value = '';
   context.__storeSessionInputDraft(oldTextarea);
-  assert.equal(context._sessionInputCache['session-a'], undefined);
+  assert.equal(context._sessionInputCache['session-a'], '');
 });
 
 test('cached session draft restores into request textarea', () => {
@@ -168,6 +168,33 @@ globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;`, context);
   };
   assert.equal(context.__restoreSessionInputDraft(requestTextarea), true);
   assert.equal(requestTextarea.value, 'draft from A');
+  assert.equal(resizeState.calls, 1);
+});
+
+test('empty cached session draft restores as an intentional blank', () => {
+  const resizeState = { calls: 0 };
+  const context = {
+    _sessionInputCache: { 'session-a': '' },
+    _getSessionInputCacheKey: () => 'session-a',
+    autoResize() {
+      resizeState.calls += 1;
+    },
+  };
+  vm.createContext(context);
+  const inputCacheBlock = sourceBetween(
+    voiceInputSource,
+    'function _cacheSessionInput',
+    '\n// Inject pending voice ASR result',
+  );
+  vm.runInContext(`${inputCacheBlock}
+globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;`, context);
+
+  const requestTextarea = {
+    value: 'initial prompt',
+    dataset: { sessionKey: 'session-a' },
+  };
+  assert.equal(context.__restoreSessionInputDraft(requestTextarea), true);
+  assert.equal(requestTextarea.value, '');
   assert.equal(resizeState.calls, 1);
 });
 

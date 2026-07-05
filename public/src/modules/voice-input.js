@@ -319,14 +319,14 @@ function insertTextAtCursor(textarea, text) {
 function _cacheSessionInput(textarea) {
   const key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
   if (!key) return;
-  if (textarea.value) _sessionInputCache[key] = textarea.value;
-  else delete _sessionInputCache[key];
+  _sessionInputCache[key] = textarea.value || '';
 }
 
 function _restoreSessionInputDraft(textarea, key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey()) {
   if (!textarea || !key) return false;
+  if (!Object.prototype.hasOwnProperty.call(_sessionInputCache, key)) return false;
   const cached = _sessionInputCache[key];
-  if (typeof cached !== 'string' || cached.length === 0) return false;
+  if (typeof cached !== 'string') return false;
   textarea.value = cached;
   autoResize(textarea);
   return true;
@@ -336,11 +336,7 @@ function _storeSessionInputDraft(textarea) {
   if (!textarea) return;
   const key = textarea.dataset?.sessionKey || _getSessionInputCacheKey();
   if (!key) return;
-  if (textarea.value) {
-    _sessionInputCache[key] = textarea.value;
-  } else {
-    delete _sessionInputCache[key];
-  }
+  _sessionInputCache[key] = textarea.value || '';
 }
 
 function _storeVisibleSessionInputDraft(root = document) {
