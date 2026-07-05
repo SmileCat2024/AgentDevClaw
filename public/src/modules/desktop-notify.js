@@ -20,6 +20,33 @@
  */
 const _notifiedFinishMap = new Map();
 
+/* ── Foreground grace period: 解决转换检测延迟导致的前台完成被误判为后台完成 ──
+ *
+ * 问题场景：
+ *   1. 用户在前台观看 agent 运行
+ *   2. Agent 完成，用户看到结果并读完
+ *   3. calling-state 转换（true→false）被 refreshAgentCallStates 的 1s 节流、
+ *      poll 周期延迟、或 _callStatesRefreshInProgress 互斥锁推迟
+ *   4. 用户切到其他应用
+ *   5. Web Worker 心跳检测到延迟的转换，此时 document.hidden=true → 误发通知
+ *
+ * 方案：追踪页面最后一次处于前台（visible + focused）的时间戳。
+ *       若通知触发时距最后一次前台在宽限期内，说明用户刚离开，
+ *       agent 完成时用户很可能就在看着，跳过通知。
+ */
+const FOREGROUND_GRACE_MS = 5000;
+let _lastForegroundTs = 0; // 0 = 页面从未获得过前台焦点
+
+function _syncForegroundState() {
+  if (!document.hidden && document.hasFocus()) {
+    _lastForegroundTs = Date.now();
+  }
+}
+document.addEventListener('visibilitychange', _syncForegroundState);
+window.addEventListener('focus', _syncForegroundState);
+window.addEventListener('blur', _syncForegroundState);
+_syncForegroundState(); // 页面加载时初始化
+
 /* ── 文本截断：去除 markdown 语法，只保留纯文本预览 ── */
 function _truncateForNotification(text, maxLen = 120) {
   if (!text) return '';
@@ -45,8 +72,17 @@ async function _tryNotifyAgentFinished(runtimeId) {
   const normId = normalizeAgentIdentity(runtimeId);
 
   // 前台时不需要通知——用户已经看到了。
-  // 不标记 dedup，确保用户随后切走时，同一 agent 的新完成事件仍能正常通知。
   if (!document.hidden && document.hasFocus()) return;
+
+  // 前台宽限期：如果页面刚从前台切走不久（在 FOREGROUND_GRACE_MS 内），
+  // 说明 agent 完成时用户很可能就在看着，只是 calling-state 转换检测被
+  // 节流/poll延迟/互斥锁推迟到了用户离开之后。
+  // 标记 dedup 防止同一完成事件稍后被重复触发。
+  const sinceForeground = _lastForegroundTs > 0 ? Date.now() - _lastForegroundTs : Infinity;
+  if (sinceForeground < FOREGROUND_GRACE_MS) {
+    _notifiedFinishMap.set(normId, Date.now());
+    return;
+  }
 
   // dedup: 30s 内同一 agent 的完成事件不重复通知。
   // 仅在确认需要通知（后台 + 权限已授）时才检查和标记。
@@ -122,6 +158,8 @@ function _requestNotifyPermission() {
     const blob = new Blob([code], { type: 'application/javascript' });
     const worker = new Worker(URL.createObjectURL(blob));
     worker.onmessage = () => {
+      // 持续刷新前台时间戳（worker 不受后台 tab timer 节流）
+      _syncForegroundState();
       // 页面可见且有焦点时，常规 poll (300ms) 已经在跑，不需要 worker 介入
       if (!document.hidden && document.hasFocus()) return;
       // 通知权限未授予时也不需要心跳
