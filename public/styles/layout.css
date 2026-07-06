@@ -4462,10 +4462,20 @@ body[data-theme="light"] .project-docset-detail-empty {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
   user-select: none;
-  margin: 4px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04);
+  min-height: 42px;
+  box-sizing: border-box;
+}
+
+body[data-theme="light"] .settings-checkbox {
+  border-color: #d0d5dd;
+  background: #fff;
 }
 
 .settings-checkbox input[type="checkbox"] {
@@ -4474,11 +4484,13 @@ body[data-theme="light"] .project-docset-detail-empty {
   accent-color: var(--accent, #5b8def);
   cursor: pointer;
   flex-shrink: 0;
+  margin: 0;
 }
 
 .settings-checkbox label {
   margin: 0;
   cursor: pointer;
-  font-weight: 500;
+  font-weight: 400;
+  font-size: 13px;
 }
 
