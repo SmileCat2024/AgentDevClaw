@@ -101,6 +101,11 @@ async function submitInput(requestId) {
   const textarea = document.getElementById(`input-${requestId}`);
   const input = textarea ? textarea.value : '';
   const targetCacheKey = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
+  // Wait for background image uploads before reading pending images
+  if (typeof _awaitPendingImageUploads === 'function') {
+    await _awaitPendingImageUploads();
+  }
+  const images = typeof getPendingInputImages === 'function' ? getPendingInputImages() : [];
 
   try {
     const res = await fetch(`/api/agents/${currentRuntimeAgentId}/input`, {
@@ -112,6 +117,7 @@ async function submitInput(requestId) {
         response: {
           kind: 'text',
           text: input,
+          ...(images.length > 0 ? { payload: { images } } : {}),
         },
       })
     });
@@ -119,6 +125,9 @@ async function submitInput(requestId) {
       if (textarea) {
         textarea.value = '';
         autoResize(textarea);
+      }
+      if (typeof clearPendingInputImages === 'function') {
+        clearPendingInputImages();
       }
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       beginFollowLatestEntryWindow();

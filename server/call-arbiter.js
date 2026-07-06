@@ -71,17 +71,24 @@ export class CallArbiter {
   }
 
   /**
-   * Enqueue a call envelope and kick the processing loop.
-   *
-   * @param {{ id?: string, source: string, sourceRef?: string, text: string }} envelope
-   * @returns {object} The envelope with assigned id and status
-   */
+    * Enqueue a call envelope and kick the processing loop.
+    *
+    * @param {{ id?: string, source: string, sourceRef?: string, text: string, images?: Array<{base64?:string,mediaType?:string,source?:string}> }} envelope
+    * @returns {object} The envelope with assigned id and status
+    */
   enqueue(envelope) {
-    // When agent is busy and this is a queued-input (user supplement),
+    // When agent is busy and this is a text-only queued-input (user supplement),
     // route to the supplement buffer instead of creating a new envelope.
     // The supplement will be injected as a system message inside the
     // current call at the next step start.
-    if (this._active && envelope.source === 'queued-input') {
+    //
+    // IMPORTANT: inputs carrying images bypass the supplement path entirely.
+    // Supplements are injected as system messages, which cannot carry image
+    // content in any LLM API. Image inputs are substantive and need their own
+    // onCall turn, so they queue as regular envelopes for execution after the
+    // current call finishes.
+    const hasImages = Array.isArray(envelope.images) && envelope.images.length > 0;
+    if (this._active && envelope.source === 'queued-input' && !hasImages) {
       const supp = {
         text: envelope.text,
         sourceRef: envelope.sourceRef || '',
@@ -108,10 +115,11 @@ export class CallArbiter {
       createdAt: Date.now(),
       result: null,
       error: null,
+      ...(Array.isArray(envelope.images) && envelope.images.length > 0 ? { images: envelope.images } : {}),
     };
     this._queue.push(entry);
     this._status = 'queued';
-    console.log(`[CallArbiter] enqueued ${entry.id} (source=${entry.source}, queue=${this._queue.length})`);
+    console.log(`[CallArbiter] enqueued ${entry.id} (source=${entry.source}, queue=${this._queue.length}${hasImages ? `, images=${envelope.images.length}` : ''}${this._active ? ', waiting-for-active' : ''})`);
     this._kick();
     return entry;
   }
@@ -299,7 +307,7 @@ export class CallArbiter {
       }
 
       // ── Execute one onCall segment ──
-      const result = await this._agent.onCall(input);
+      const result = await this._agent.onCall(input, envelope.images);
       envelope.result = typeof result === 'string' ? result : '';
 
       // ── Check for continuation request ──

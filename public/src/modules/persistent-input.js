@@ -33,6 +33,9 @@ let _persistentUiSyncInFlight = false;
 let _localQueuedInputPending = false;
 let _lastQueueBubbleSignature = '';
 
+// 待发送的图片附件
+let _pendingImages = [];
+
 // ── 上次对话结束时间显示 ──────────────────────────────────────────
 let _lastCallFinishTime = 0;
 let _callFinishTimerInterval = null;
@@ -112,6 +115,153 @@ function _renderLastCallElapsed() {
 
 // ── Recap (离开摘要) → modules/recap-hint.js (Phase A-7, 2026-07-03) ──
 
+// ── 图片附件管理 ──────────────────────────────────────────────────
+
+const _MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * Read a File, show preview instantly via local data URL,
+ * and kick off a silent background upload to get a server-side path.
+ * The user never sees any upload state — the preview is immediate.
+ */
+function _addImageFile(file) {
+  if (!file || !file.type || !file.type.startsWith('image/')) return;
+  if (file.size > _MAX_IMAGE_SIZE) {
+    console.warn('[Image Attach] File too large, skipping:', file.name, file.size);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function() {
+    const dataUrl = reader.result;
+    const base64 = dataUrl.split(',')[1];
+
+    // Entry with instant local preview; path is filled when upload completes
+    const entry = {
+      mediaType: file.type,
+      source: file.name || '(pasted image)',
+      _previewUrl: dataUrl,
+      _uploadPromise: null,
+      path: null,
+    };
+
+    // Silent background upload — no UI feedback needed
+    entry._uploadPromise = fetch('/protoclaw/images/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base64,
+        mediaType: file.type,
+        source: entry.source,
+      }),
+    }).then(function(res) {
+      if (!res.ok) throw new Error('Upload failed: ' + res.status);
+      return res.json();
+    }).then(function(data) {
+      entry.path = data.path;
+      entry.mediaType = data.mediaType || file.type;
+      entry._previewUrl = data.url;
+      return entry;
+    }).catch(function(err) {
+      console.error('[Image Attach] Background upload failed:', err);
+      throw err;
+    });
+
+    _pendingImages.push(entry);
+    _renderAttachmentPreview();
+  };
+  reader.readAsDataURL(file);
+}
+
+function _getAttachmentPreviewTargets() {
+  const targets = Array.from(document.querySelectorAll('[data-attachment-preview]'));
+  const legacy = document.getElementById('attachment-preview');
+  if (legacy && !targets.includes(legacy)) targets.push(legacy);
+  return targets;
+}
+
+function _renderAttachmentPreview() {
+  const previews = _getAttachmentPreviewTargets();
+  if (previews.length === 0) return;
+  const cards = Array.from(document.querySelectorAll('.user-input-card'));
+  if (_pendingImages.length === 0) {
+    previews.forEach(function(preview) {
+      preview.style.display = 'none';
+      preview.innerHTML = '';
+    });
+    cards.forEach(function(card) { card.classList.remove('has-attachments'); });
+    return;
+  }
+  const html = _pendingImages.map(function(img, idx) {
+    return '<div class="attachment-thumb">' +
+      '<img src="' + img._previewUrl + '" alt="' + escapeHtml(img.source || '') + '">' +
+      '<button class="attachment-remove" type="button" onclick="removePendingImage(' + idx + ')" title="' +
+        (currentLanguage === 'zh' ? '移除' : 'Remove') + '">×</button>' +
+      '</div>';
+  }).join('');
+  previews.forEach(function(preview) {
+    preview.style.display = 'flex';
+    preview.innerHTML = html;
+  });
+  cards.forEach(function(card) { card.classList.add('has-attachments'); });
+}
+
+/**
+ * Wait for all pending background uploads to finish.
+ * Called before sending so the message carries path references.
+ */
+async function _awaitPendingImageUploads() {
+  var promises = _pendingImages
+    .filter(function(img) { return img._uploadPromise; })
+    .map(function(img) { return img._uploadPromise.catch(function() { return null; }); });
+  await Promise.all(promises);
+}
+
+function getPendingInputImages() {
+  return _pendingImages
+    .filter(function(img) { return img.path; })
+    .map(function(img) {
+      return { path: img.path, mediaType: img.mediaType, source: img.source };
+    });
+}
+
+function clearPendingInputImages() {
+  _pendingImages = [];
+  _renderAttachmentPreview();
+}
+
+// ── window 导出 ────────────────────────────────────────────────────
+
+window.handleInputPaste = function(event) {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  let hasImage = false;
+  for (const item of items) {
+    if (item.type && item.type.startsWith('image/')) {
+      hasImage = true;
+      const file = item.getAsFile();
+      if (file) _addImageFile(file);
+    }
+  }
+  if (hasImage) {
+    event.preventDefault();
+  }
+};
+
+window.onImageFilesSelected = function(input) {
+  if (!input.files) return;
+  for (const file of input.files) {
+    _addImageFile(file);
+  }
+  input.value = ''; // reset so same file can be re-selected
+};
+
+window.removePendingImage = function(idx) {
+  _pendingImages.splice(idx, 1);
+  _renderAttachmentPreview();
+};
+
+// ── 渲染常驻输入框 ────────────────────────────────────────────────
+
 function renderPersistentInput(container) {
   // 先渲染队列气泡
   _renderQueueBubbles(container);
@@ -119,8 +269,13 @@ function renderPersistentInput(container) {
   const card = document.createElement('div');
   card.className = 'user-input-card persistent-input';
   card.innerHTML = `
+    <div class="persistent-attachment-preview" id="attachment-preview" data-attachment-preview style="display:none;"></div>
     <div class="persistent-input-row">
-      <textarea class="user-input-textarea" rows="1" id="input-persistent"\n        onkeydown="handlePersistentInputKey(event)"\n        oninput="autoResize(this); _cacheSessionInput(this)"\n        placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
+      <textarea class="user-input-textarea" rows="1" id="input-persistent"\n        onkeydown="handlePersistentInputKey(event)"\n        oninput="autoResize(this); _cacheSessionInput(this)"\n        onpaste="handleInputPaste(event)"\n        placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
+      <input type="file" id="image-file-input" accept="image/*" multiple style="display:none;" onchange="onImageFilesSelected(this)">
+      <button class="persistent-icon-btn" id="attach-image-btn" onclick="document.getElementById('image-file-input').click()" title="${currentLanguage === 'zh' ? '添加图片' : 'Attach Image'}">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+      </button>
       <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
         <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
       </button>
@@ -139,6 +294,8 @@ function renderPersistentInput(container) {
     _restoreSessionInputDraft(ta, cacheKey);
   }
   _syncPersistentInputUi();
+  // Restore attachment preview if there are pending images (e.g. after re-render)
+  _renderAttachmentPreview();
 }
 
 function onPersistentBtnClick() {
@@ -241,19 +398,24 @@ async function submitQueuedInput() {
   const textarea = document.getElementById('input-persistent');
   if (!textarea) return;
   const text = textarea.value.trim();
-  if (!text) return;
+  if (!text && _pendingImages.length === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
   const targetCacheKey = textarea.dataset.sessionKey || _getSessionInputCacheKey();
+
+  // Build images payload — wait for background uploads to finish first
+  await _awaitPendingImageUploads();
+  const images = getPendingInputImages();
 
   try {
     const res = await fetch(`/api/agents/${targetRuntimeId}/queue-input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text: text || ' ', images: images.length > 0 ? images : undefined })
     });
     if (res.ok) {
       textarea.value = '';
       autoResize(textarea);
+      clearPendingInputImages();
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       _clearRecapForNewMessage();
       beginFollowLatestEntryWindow();
@@ -263,7 +425,7 @@ async function submitQueuedInput() {
       if (isRuntimeCalling(targetRuntimeId)) {
         _localQueuedInputPending = true;
         _pendingQueuedCount++;
-        _queuedTexts.push(text);
+        _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
         updateQueueIndicator();
       }
       const nextMode = getInputSurfaceMode(currentInputRequests || []);
@@ -304,7 +466,12 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
     const data = await res.json();
     const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
     const viewerQueueTexts = queue
-      .map((item) => typeof item?.text === 'string' ? item.text.trim() : '')
+      .map((item) => {
+        const t = typeof item?.text === 'string' ? item.text.trim() : '';
+        if (t) return t;
+        const imgCount = Array.isArray(item?.images) ? item.images.length : 0;
+        return imgCount > 0 ? '🖼' : '';
+      })
       .filter(Boolean);
 
     _queuedTexts = viewerQueueTexts.slice();

@@ -1075,7 +1075,10 @@ async function handleInputResponse(userInput, response) {
 
   if (response.kind === 'text') {
     const text = response.text ?? '';
-    if (!text) {
+    const images = Array.isArray(response.payload?.images)
+      ? response.payload.images.filter((img) => img && typeof img === 'object')
+      : [];
+    if (!text && images.length === 0) {
       return { kind: 'continue' };
     }
     if (text === '/exit') {
@@ -1091,7 +1094,11 @@ async function handleInputResponse(userInput, response) {
       void triggerSummaryCompaction(extraInstructions);
       return { kind: 'continue' };
     }
-    return { kind: 'text', text };
+    return {
+      kind: 'text',
+      text: text || ' ',
+      ...(images.length > 0 ? { images } : {}),
+    };
   }
 
   if (response.kind === 'action' && response.actionId === 'rollback_to_call') {
@@ -1276,6 +1283,7 @@ async function main() {
       source: 'queued-input',
       sourceRef: input.id || '',
       text: input.text,
+      ...(Array.isArray(input.images) && input.images.length > 0 ? { images: input.images } : {}),
     });
   });
   DebugHub.getInstance().setInterruptHandler((targetAgentId, clearQueue) => {
@@ -1494,7 +1502,11 @@ async function main() {
     }
 
     try {
-      const entry = callArbiter.enqueue({ source: 'viewer-input', text: handled.text });
+      const entry = callArbiter.enqueue({
+        source: 'viewer-input',
+        text: handled.text,
+        ...(Array.isArray(handled.images) && handled.images.length > 0 ? { images: handled.images } : {}),
+      });
       await callArbiter.waitForCompletion(entry.id);
     } catch (error) {
       console.error('[ProtoClaw Runtime] CallArbiter 入队失败:', error);

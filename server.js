@@ -1,10 +1,10 @@
 import express from 'express';
 import { spawn, execFile } from 'child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, promises as fs } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, createReadStream, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import process from 'process';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { ViewerWorker } from 'agentdev';
@@ -700,6 +700,106 @@ app.get('/api/agents/:agentId/running', (req, res, next) => {
 
 app.delete('/api/agents/:agentId', (req, res, next) => {
   proxyToViewer(req, res).catch(next);
+});
+
+// ── Image attachment storage ───────────────────────────────────────
+// Images are persisted to ~/.agentdev/AgentDevClaw/images/ and referenced by
+// absolute path in messages. This avoids bloating session JSON with inline base64.
+const IMAGES_DIR = path.join(USER_DATA_ROOT, 'images');
+
+const MIME_TO_EXT = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+};
+
+// Content-hash → resolved path cache (in-process dedup)
+const _imageHashCache = new Map();
+
+app.post('/protoclaw/images/upload', async (req, res) => {
+  let body = '';
+  req.on('data', (chunk) => { body += chunk; });
+  req.on('end', async () => {
+    try {
+      const { base64, mediaType, source } = JSON.parse(body);
+      if (!base64 || typeof base64 !== 'string') {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'Missing or invalid base64' }));
+        return;
+      }
+
+      const mime = mediaType || 'image/png';
+      const ext = MIME_TO_EXT[mime] || 'png';
+
+      // Dedup by content hash — but verify the file still exists on disk
+      const hash = createHash('sha256').update(base64).digest('hex').slice(0, 32);
+
+      if (_imageHashCache.has(hash)) {
+        const cached = _imageHashCache.get(hash);
+        if (existsSync(cached.path)) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            path: cached.path,
+            mediaType: mime,
+            source: source || `image.${ext}`,
+            size: cached.size,
+            url: `/protoclaw/images/${cached.filename}`,
+          }));
+          return;
+        }
+        // File was deleted externally — purge stale cache entry, fall through to re-write
+        _imageHashCache.delete(hash);
+      }
+
+      mkdirSync(IMAGES_DIR, { recursive: true });
+      const filename = `${hash}.${ext}`;
+      const filePath = path.join(IMAGES_DIR, filename);
+
+      if (!existsSync(filePath)) {
+        writeFileSync(filePath, Buffer.from(base64, 'base64'));
+      }
+
+      const size = statSync(filePath).size;
+      _imageHashCache.set(hash, { path: filePath, size, filename });
+
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        path: filePath,
+        mediaType: mime,
+        source: source || `image.${ext}`,
+        size,
+        url: `/protoclaw/images/${filename}`,
+      }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: err.message || 'Upload failed' }));
+    }
+  });
+});
+
+// Serve stored images for frontend preview
+app.get('/protoclaw/images/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  // Prevent path traversal
+  if (filename !== req.params.filename || filename.includes('..')) {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'Invalid filename' }));
+    return;
+  }
+  const filePath = path.join(IMAGES_DIR, filename);
+  if (!existsSync(filePath)) {
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'Image not found' }));
+    return;
+  }
+  const ext = path.extname(filename).slice(1);
+  const mimeEntry = Object.entries(MIME_TO_EXT).find(([, e]) => e === ext);
+  const mime = mimeEntry ? mimeEntry[0] : 'application/octet-stream';
+  res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' });
+  createReadStream(filePath).pipe(res);
 });
 
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));

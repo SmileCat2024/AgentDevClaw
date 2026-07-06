@@ -70,6 +70,7 @@ function renderMessage(msg, index) {
           ${metaHtml}
         </div>
         ${contentHtml}
+        ${renderUserImages(msg.images)}
       </div>
     `;
   } else if (role === 'assistant') {
@@ -161,6 +162,7 @@ function renderMessage(msg, index) {
         ${metaHtml}
       </div>
       ${contentHtml}
+      ${renderUserImages(msg.images)}
     </div>
   `;
 }
@@ -610,6 +612,7 @@ function render(messages) {
           ${metaHtml}
         </div>
         ${contentHtml}
+        ${renderUserImages(msg.images)}
       </div>
     `;
   }).join('');
@@ -702,4 +705,47 @@ window.toggleReasoning = function(id) {
       preferSmooth: false,
     });
   }
+};
+
+// ── Image rendering ──────────────────────────────────────────────
+
+function imageUrlFromImage(img) {
+  if (img.url) return img.url;
+  if (img.path) {
+    var parts = img.path.replace(/\\/g, '/').split('/');
+    return '/protoclaw/images/' + encodeURIComponent(parts[parts.length - 1]);
+  }
+  if (img.base64) {
+    return 'data:' + (img.mediaType || 'image/png') + ';base64,' + img.base64;
+  }
+  return null;
+}
+
+function renderUserImages(images) {
+  if (!images || images.length === 0) return '';
+  var thumbs = images.map(function(img) {
+    var url = imageUrlFromImage(img);
+    if (!url) return '';
+    return '<div class="message-img-thumb" onclick="openImageZoom(\'' + url.replace(/'/g, "\\'") + '\')">' +
+      '<img src="' + url + '" alt="' + escapeHtml(img.source || '') + '">' +
+      '</div>';
+  }).join('');
+  return '<div class="message-images">' + thumbs + '</div>';
+}
+
+window.openImageZoom = function(src) {
+  var existing = document.getElementById('image-zoom-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'image-zoom-overlay';
+  overlay.className = 'image-zoom-overlay';
+  overlay.onclick = function() { overlay.remove(); };
+
+  var img = document.createElement('img');
+  img.src = src;
+  img.onclick = function(e) { e.stopPropagation(); };
+  overlay.appendChild(img);
+
+  document.body.appendChild(overlay);
 };

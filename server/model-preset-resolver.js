@@ -54,6 +54,7 @@ export function resolveModelPresetLLM(presetName) {
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
       ...(apiSurface ? { apiSurface } : {}),
       ...(preset.maxTokens ? { maxTokens: preset.maxTokens } : {}),
+      ...(preset.vision === true ? { vision: true } : {}),
       ...(Array.isArray(preset.customHeaders) && preset.customHeaders.length > 0
         ? { customHeaders: preset.customHeaders }
         : {}),
@@ -66,6 +67,7 @@ export function resolveModelPresetLLM(presetName) {
       providerName: provider.name || preset.providerName || '',
       provider: protocol,
       protocol,
+      vision: preset.vision === true,
       ...(apiSurface ? { apiSurface } : {}),
       baseUrl,
     };
