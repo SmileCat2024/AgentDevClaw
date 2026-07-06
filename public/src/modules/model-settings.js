@@ -83,7 +83,7 @@ function renderSettingsOverlay() {
           '<div class="settings-preset-dot"></div>',
           '<div class="settings-preset-info">',
           '<div class="settings-preset-name">' + escapeHtml(p.name || p.model || ('Preset ' + (idx + 1))) + '</div>',
-          '<div class="settings-preset-detail">' + escapeHtml((p.provider || '—') + ' · ' + (p.model || '—')) + '</div>',
+          '<div class="settings-preset-detail">' + escapeHtml((p.provider || '—') + ' · ' + (p.model || '—')) + (p.vision ? ' · 🖼️' : '') + '</div>',
           '</div>',
           '<div class="settings-preset-actions">',
           '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSettingsPreset(' + idx + ')">',
@@ -242,6 +242,11 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<input class="settings-input" id="settings-preset-temperature" type="number" step="0.1" min="0" max="2" value="' + (preset.temperature ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '">',
     '</div>',
     '</div>',
+    '<div class="settings-checkbox">',
+    '<input type="checkbox" id="settings-preset-vision" ' + (preset.vision ? 'checked' : '') + '>',
+    '<label for="settings-preset-vision">' + (isZh ? '视觉模式' : 'Vision mode') + '</label>',
+    '</div>',
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? '启用多模态图片输入能力' : 'Enable multimodal image input capability') + '</div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>' + (isZh ? '上下文长度' : 'Context Length') + '</label>',
@@ -328,6 +333,7 @@ function addSettingsPreset() {
     thinkingBudgetTokens: null,
     maxTokens: null,
     temperature: null,
+    vision: false,
     contextLength: null,
     compressRatio: 80,
     customHeaders: [],
@@ -410,6 +416,7 @@ async function saveSettingsPreset(idx) {
     thinkingBudgetTokens: thinkingRaw !== '' ? parseInt(thinkingRaw, 10) || null : null,
     maxTokens: maxTokensRaw !== '' ? parseInt(maxTokensRaw, 10) || null : null,
     temperature: tempRaw !== '' ? parseFloat(tempRaw) || null : null,
+    vision: el('settings-preset-vision')?.checked === true,
     contextLength: contextLengthRaw !== '' ? parseInt(contextLengthRaw, 10) || null : null,
     compressRatio: compressRatioRaw !== '' ? Math.max(1, Math.min(100, parseInt(compressRatioRaw, 10) || 80)) : 80,
     countTokenPath: countTokenPathRaw || null,
@@ -439,6 +446,7 @@ async function applySettingsPreset(idx) {
   if (preset.maxTokens != null) {
     defaultModel.maxTokens = preset.maxTokens;
   }
+  defaultModel.vision = preset.vision === true;
   config.defaultModel = defaultModel;
   if (preset.temperature != null) {
     config.agent = config.agent || {};

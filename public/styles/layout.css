@@ -4456,3 +4456,29 @@ body[data-theme="light"] .project-docset-detail-empty {
   }
 }
 
+/* ── Settings Checkbox (for model settings) ──────────────────────────── */
+.settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  margin: 4px 0;
+}
+
+.settings-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent, #5b8def);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.settings-checkbox label {
+  margin: 0;
+  cursor: pointer;
+  font-weight: 500;
+}
+
