@@ -132,6 +132,28 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   background-color: var(--active-bg);
 }
 
+.agent-runtime-project-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-runtime-project-group + .agent-runtime-project-group {
+  margin-top: 4px;
+}
+
+.agent-runtime-project-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-tertiary, var(--text-secondary));
+  margin-left: -18px;
+  padding: 4px 10px 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .agent-line {
   display: flex;
   align-items: center;

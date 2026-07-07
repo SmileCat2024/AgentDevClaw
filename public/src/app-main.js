@@ -149,40 +149,65 @@ function getInputSurfaceMode(requests = currentInputRequests || []) {
 
 function renderSidebarChildItems(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
-  return `
-    <div class="agent-runtime-list">
-      ${entries.map((entry) => {
-        const active = isRuntimeItemActive(entry.runtimeId);
-        const disconnected = entry.status === 'disconnected';
-        const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
-        const restarting = restartingRuntimeIds.has(entry.runtimeId);
-        const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
-        const itemClass = [
-          'agent-item',
-          'agent-runtime-item',
-          active ? 'active' : '',
-          disconnected ? 'disconnected' : '',
-          calling ? 'calling' : '',
-          restarting ? 'restarting' : '',
-          justFinished ? 'just-finished' : '',
-        ].filter(Boolean).join(' ');
-        return `
-          <div
-            class="${itemClass}"
-            data-agent-id="${escapeHtml(entry.runtimeId)}"
-            data-agent-prebuilt="false"
-            data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
-            data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
-          >
-            <div class="agent-line">
-              <span class="agent-status-dot"></span>
-              <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}</div>
-            </div>
-          </div>
-        `;
-      }).join('')}
-    </div>
-  `;
+
+  const renderItem = (entry) => {
+    const active = isRuntimeItemActive(entry.runtimeId);
+    const disconnected = entry.status === 'disconnected';
+    const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
+    const restarting = restartingRuntimeIds.has(entry.runtimeId);
+    const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
+    const itemClass = [
+      'agent-item',
+      'agent-runtime-item',
+      active ? 'active' : '',
+      disconnected ? 'disconnected' : '',
+      calling ? 'calling' : '',
+      restarting ? 'restarting' : '',
+      justFinished ? 'just-finished' : '',
+    ].filter(Boolean).join(' ');
+    return `
+      <div
+        class="${itemClass}"
+        data-agent-id="${escapeHtml(entry.runtimeId)}"
+        data-agent-prebuilt="false"
+        data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
+        data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
+      >
+        <div class="agent-line">
+          <span class="agent-status-dot"></span>
+          <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}</div>
+        </div>
+      </div>
+    `;
+  };
+
+  // Group entries by projectName when present (programming-helper).
+  // Entries are already sorted by createdAt desc; group order follows
+  // the first entry encountered, so the most recently active project appears first.
+  const hasProjects = entries.some((e) => e.projectName);
+
+  if (!hasProjects) {
+    return `<div class="agent-runtime-list">${entries.map(renderItem).join('')}</div>`;
+  }
+
+  const groups = [];
+  const groupIndex = new Map();
+  for (const entry of entries) {
+    const key = entry.projectName || '';
+    if (!groupIndex.has(key)) {
+      groupIndex.set(key, groups.length);
+      groups.push({ projectName: key, projectDir: entry.projectDir || '', items: [] });
+    }
+    groups[groupIndex.get(key)].items.push(entry);
+  }
+
+  return `<div class="agent-runtime-list">${groups.map((group) => {
+    const label = group.projectName || (currentLanguage === 'zh' ? '未分组' : 'Ungrouped');
+    return `<div class="agent-runtime-project-group">` +
+      `<div class="agent-runtime-project-header" title="${escapeHtml(group.projectDir || label)}">${escapeHtml(label)}</div>` +
+      group.items.map(renderItem).join('') +
+    `</div>`;
+  }).join('')}</div>`;
 }
 
 const AGENT_ICONS = {

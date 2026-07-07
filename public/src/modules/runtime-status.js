@@ -76,11 +76,44 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   const entries = [];
   const seenRuntimeIds = new Set();
 
+  // Build sessionId → openDirectory map for project grouping (programming-helper).
+  // Each runtime entry carries a sessionId; we resolve it to the session's
+  // openDirectory so the sidebar can group runtimes by project.
+  // We also cross-reference phProjects to pick up the correct-cased directory
+  // path (sessions may store a lowercased path on Windows).
+  const sessionDirMap = new Map();
+  if (String(prebuiltAgent?.id || '').trim() === 'programming-helper') {
+    const phProjects = Array.isArray(prebuiltAgent?.workspace_state?.phProjects)
+      ? prebuiltAgent.workspace_state.phProjects
+      : [];
+    const projectIdToDir = new Map();
+    for (const project of phProjects) {
+      const pid = String(project?.id || '').trim();
+      const pdir = String(project?.openDirectory || '').trim();
+      if (pid && pdir) projectIdToDir.set(pid, pdir);
+    }
+    const sessions = Array.isArray(prebuiltAgent?.workspace_sessions?.sessions)
+      ? prebuiltAgent.workspace_sessions.sessions
+      : [];
+    for (const session of sessions) {
+      const sid = String(session?.id || '').trim();
+      const rawDir = String(session?.openDirectory || '').trim();
+      if (!sid || !rawDir) continue;
+      const projectId = 'dir:' + rawDir.replace(/\\/g, '/').toLowerCase();
+      sessionDirMap.set(sid, projectIdToDir.get(projectId) || rawDir);
+    }
+  }
+
   const addEntry = (entry) => {
     if (!entry) return;
     if (!entry?.runtimeId) return;
     if (seenRuntimeIds.has(entry.runtimeId)) return;
     seenRuntimeIds.add(entry.runtimeId);
+    if (sessionDirMap.size > 0) {
+      const dir = entry.sessionId ? (sessionDirMap.get(entry.sessionId) || '') : '';
+      entry.projectDir = dir;
+      entry.projectName = dir ? getPathLeaf(dir) : '';
+    }
     entries.push(entry);
   };
 
