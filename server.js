@@ -454,10 +454,13 @@ app.post('/protoclaw/assembly_runtime/stop', express.json(), async (req, res, ne
 
 app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) => {
   try {
-    const openDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
-    if (!openDirectory) {
+    const rawDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
+    if (!rawDirectory) {
       return res.status(400).json({ error: 'openDirectory is required' });
     }
+    // Resolve actual filesystem casing so display matches the real directory name.
+    // On Windows the directory picker may return a lowercased path.
+    const openDirectory = await fs.realpath(rawDirectory).then(p => p.replace(/^\\\\\?\\/, '')).catch(() => rawDirectory);
     const timestamp = new Date().toISOString();
     const state = await readWorkspaceState('programming-helper');
     // Add to phProjects if not already there
@@ -477,9 +480,17 @@ app.post('/protoclaw/ph_project/switch', express.json(), async (req, res, next) 
     if (!projectId || !projectId.startsWith('dir:')) {
       return res.status(400).json({ error: 'Valid projectId (dir:...) is required' });
     }
-    const openDirectory = projectId.slice(4);
+    const rawDirectory = projectId.slice(4);
     const timestamp = new Date().toISOString();
     const state = await readWorkspaceState('programming-helper');
+    // Prefer the stored openDirectory (preserves original casing) over the
+    // ID-derived path (which is always lowercased).
+    const stored = Array.isArray(state.phProjects)
+      ? state.phProjects.find((p) => p?.id === projectId)
+      : null;
+    let openDirectory = stored?.openDirectory || rawDirectory;
+    // Resolve actual filesystem casing for paths that were stored lowercased.
+    openDirectory = await fs.realpath(openDirectory).then(p => p.replace(/^\\\\\?\\/, '')).catch(() => openDirectory);
     // Ensure the project exists in phProjects
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
     nextState.openDirectory = openDirectory;
