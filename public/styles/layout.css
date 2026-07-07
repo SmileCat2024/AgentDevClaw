@@ -152,6 +152,44 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   text-overflow: ellipsis;
   white-space: nowrap;
   user-select: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.project-collapse-arrow {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 4px 0 4px 5px;
+  border-color: transparent transparent transparent currentColor;
+  opacity: 0.7;
+  transition: transform 0.15s ease;
+  transform: rotate(90deg);
+}
+
+.agent-runtime-project-group.collapsed .project-collapse-arrow {
+  transform: rotate(0deg);
+}
+
+.project-collapse-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.agent-runtime-project-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-runtime-project-group.collapsed .agent-runtime-project-items {
+  display: none;
 }
 
 .agent-line {

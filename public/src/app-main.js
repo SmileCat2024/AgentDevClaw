@@ -147,6 +147,10 @@ function getInputSurfaceMode(requests = currentInputRequests || []) {
   return 'hidden';
 }
 
+// Tracks collapsed state of project groups in the sidebar (programming-helper).
+// Keyed by projectDir||projectName so state persists across re-renders.
+const _collapsedProjectGroups = new Set();
+
 function renderSidebarChildItems(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
 
@@ -201,11 +205,24 @@ function renderSidebarChildItems(entries) {
     groups[groupIndex.get(key)].items.push(entry);
   }
 
+  // Sort groups alphabetically by display label; items within each
+  // group keep their existing (time-desc) order.
+  groups.sort((a, b) => {
+    const la = a.projectName || '';
+    const lb = b.projectName || '';
+    return la.localeCompare(lb, undefined, { sensitivity: 'base', numeric: true });
+  });
+
   return `<div class="agent-runtime-list">${groups.map((group) => {
     const label = group.projectName || (currentLanguage === 'zh' ? '未分组' : 'Ungrouped');
-    return `<div class="agent-runtime-project-group">` +
-      `<div class="agent-runtime-project-header" title="${escapeHtml(group.projectDir || label)}">${escapeHtml(label)}</div>` +
-      group.items.map(renderItem).join('') +
+    const projectKey = group.projectDir || group.projectName || label;
+    const collapsed = _collapsedProjectGroups.has(projectKey);
+    return `<div class="agent-runtime-project-group${collapsed ? ' collapsed' : ''}" data-project-key="${escapeHtml(projectKey)}">` +
+      `<div class="agent-runtime-project-header" title="${escapeHtml(group.projectDir || label)}">` +
+        `<span class="project-collapse-arrow"></span>` +
+        `<span class="project-collapse-label">${escapeHtml(label)}</span>` +
+      `</div>` +
+      `<div class="agent-runtime-project-items">${group.items.map(renderItem).join('')}</div>` +
     `</div>`;
   }).join('')}</div>`;
 }
@@ -624,6 +641,25 @@ function renderAgentList() {
 }
 
 agentList.addEventListener('click', async (event) => {
+  // Handle project group collapse/expand toggle (programming-helper).
+  const projectHeader = event.target.closest('.agent-runtime-project-header');
+  if (projectHeader) {
+    const groupEl = projectHeader.closest('.agent-runtime-project-group');
+    if (groupEl) {
+      const key = groupEl.dataset.projectKey;
+      if (key) {
+        if (_collapsedProjectGroups.has(key)) {
+          _collapsedProjectGroups.delete(key);
+          groupEl.classList.remove('collapsed');
+        } else {
+          _collapsedProjectGroups.add(key);
+          groupEl.classList.add('collapsed');
+        }
+      }
+    }
+    return;
+  }
+
   const item = event.target.closest('.agent-item');
   if (!item) return;
   if (item.classList.contains('editing')) return;
