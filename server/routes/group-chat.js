@@ -664,6 +664,12 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
   const adminSessionTitle = isAdmin ? `${chat.name || '群聊'} · ${displayName}` : null;
   const explicitTitle = (typeof options.title === 'string' && options.title.trim()) || null;
 
+  // 新会话的项目目录：优先使用 dispatch 指定的目录，其次用群聊绑定的 workDir
+  const sessionOpenDir =
+    (typeof options.openDirectory === 'string' && options.openDirectory.trim())
+    || chat.workDir
+    || undefined;
+
   // one-shot: 总是创建新 session（resolveOnly 模式下不创建）
   if (sessionModel === 'one-shot') {
     if (options.resolveOnly) return null;
@@ -671,6 +677,7 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
     const taskTitle = explicitTitle || adminSessionTitle;
     const session = await createPrebuiltSession(agent.id, {
       sessionType: 'exploration',
+      ...(sessionOpenDir ? { openDirectory: sessionOpenDir } : {}),
       ...(taskTitle ? { taskTitle } : {}),
     });
     return { sessionId: session.id, isNew: true };
@@ -696,7 +703,10 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
     if (options.resolveOnly) return null;
     const agent = await requireAgentLight(workspaceId);
     const taskTitle = explicitTitle || adminSessionTitle;
-    const session = await createPrebuiltSession(agent.id, taskTitle ? { taskTitle } : {});
+    const session = await createPrebuiltSession(agent.id, {
+      ...(sessionOpenDir ? { openDirectory: sessionOpenDir } : {}),
+      ...(taskTitle ? { taskTitle } : {}),
+    });
     _recordAdminSessionHistory(chat, identityRef);
     chat.sessions[identityRef] = session.id;
     await writeGroupChat(chat);
@@ -761,7 +771,10 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
   if (options.resolveOnly) return null;
   const agent = await requireAgentLight(workspaceId);
   const taskTitle = explicitTitle || adminSessionTitle;
-  const session = await createPrebuiltSession(agent.id, taskTitle ? { taskTitle } : {});
+  const session = await createPrebuiltSession(agent.id, {
+    ...(sessionOpenDir ? { openDirectory: sessionOpenDir } : {}),
+    ...(taskTitle ? { taskTitle } : {}),
+  });
   _recordAdminSessionHistory(chat, identityRef);
   chat.sessions[identityRef] = session.id;
   await writeGroupChat(chat);
@@ -2195,6 +2208,7 @@ app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
   try {
     const { name, workDir, members } = req.body || {};
     if (!name) return res.status(400).json({ error: 'name required' });
+    if (!workDir) return res.status(400).json({ error: 'workDir required' });
 
     const chatId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const chat = {
@@ -2691,6 +2705,7 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
       if (firstMention.targetSessionId) sessionOptions.targetSessionId = firstMention.targetSessionId;
       if (firstMention.forceNew) sessionOptions.forceNew = true;
       if (firstMention.title && typeof firstMention.title === 'string' && firstMention.title.trim()) sessionOptions.title = firstMention.title.trim();
+      if (firstMention.openDirectory && typeof firstMention.openDirectory === 'string' && firstMention.openDirectory.trim()) sessionOptions.openDirectory = firstMention.openDirectory.trim();
 
       try {
         const targetRef = message.routing.targetIdentityRef;
@@ -2757,6 +2772,7 @@ app.post('/protoclaw/group_chats/:chatId/messages', express.json(), async (req, 
       if (firstMention.targetSessionId) sessionOptions.targetSessionId = firstMention.targetSessionId;
       if (firstMention.forceNew) sessionOptions.forceNew = true;
       if (firstMention.title && typeof firstMention.title === 'string' && firstMention.title.trim()) sessionOptions.title = firstMention.title.trim();
+      if (firstMention.openDirectory && typeof firstMention.openDirectory === 'string' && firstMention.openDirectory.trim()) sessionOptions.openDirectory = firstMention.openDirectory.trim();
 
       // 管理员派发：同步预解析会话，返回 sessionId/title/isNew 供工具反馈
       if (messageFrom === 'work-group:admin') {

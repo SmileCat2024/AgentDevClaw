@@ -3162,9 +3162,9 @@
       <div class="wg-modal-section-title">选择成员</div>
       <div class="wg-modal-identity-list">${identityItems}</div>
 
-      <div class="wg-modal-section-title">工作目录（可选）</div>
+      <div class="wg-modal-section-title">工作目录 <span class="wg-required-mark">*</span></div>
       <div class="wg-modal-dir-row">
-        <input type="text" class="wg-modal-input wg-modal-dir-display" data-wg-role="new-chat-workdir" placeholder="不设置也可创建群聊" readonly />
+        <input type="text" class="wg-modal-input wg-modal-dir-display" data-wg-role="new-chat-workdir" placeholder="请选择项目目录（必填）" readonly />
         <button class="wg-modal-btn" data-wg-action="pick-workdir">选择</button>
       </div>
 
@@ -3206,6 +3206,10 @@
       if (!name) { nameInput.focus(); return; }
 
       const workDir = modal.querySelector('[data-wg-role="new-chat-workdir"]').value.trim() || null;
+      if (!workDir) {
+        modal.querySelector('[data-wg-action="pick-workdir"]').click();
+        return;
+      }
       const desc = modal.querySelector('[data-wg-role="new-chat-desc"]').value.trim();
 
       const selected = Array.from(modal.querySelectorAll('.wg-modal-identity-list input[type="checkbox"]:checked'))

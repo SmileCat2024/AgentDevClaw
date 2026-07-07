@@ -258,11 +258,12 @@ export class GroupAdminFeature implements AgentFeature {
             title: { type: 'string', description: '会话标题。创建新会话时用此标题命名；复用已有会话时忽略。必填。' },
             targetSessionId: { type: 'string', description: '可选。指定目标 Agent 的具体会话 ID。传入后将任务路由到该会话。先用 gc_sessions 查看可用会话。' },
             forceNew: { type: 'boolean', description: '可选。设为 true 时强制创建全新会话。默认 false（复用最近会话）。' },
+            openDirectory: { type: 'string', description: '可选。新会话的项目目录（绝对路径）。仅创建新会话时生效，复用已有会话时忽略。不传则使用群聊绑定的工作目录。' },
           },
           required: ['text', 'identityRef', 'title'],
         },
         execute: async (args: any) => {
-          const { text, identityRef, title, targetSessionId, forceNew } = args || {};
+          const { text, identityRef, title, targetSessionId, forceNew, openDirectory } = args || {};
           if (!text || !identityRef || !title?.trim()) {
             return { error: 'text, identityRef, title 都是必填项' };
           }
@@ -274,6 +275,7 @@ export class GroupAdminFeature implements AgentFeature {
           if (targetSessionId) mentionObj.targetSessionId = targetSessionId;
           if (forceNew) mentionObj.forceNew = true;
           if (title?.trim()) mentionObj.title = title.trim();
+          if (openDirectory?.trim()) mentionObj.openDirectory = openDirectory.trim();
 
           const body: any = {
             text,

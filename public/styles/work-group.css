@@ -2251,6 +2251,11 @@ body[data-theme="light"] .wg-modal-overlay {
   color: var(--text-secondary);
 }
 
+.wg-required-mark {
+  color: var(--danger, #e5484d);
+  margin-left: 2px;
+}
+
 .wg-modal-identity-list {
   display: flex;
   flex-direction: column;
