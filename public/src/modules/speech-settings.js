@@ -38,7 +38,7 @@ function renderSpeechModelSection(isZh) {
   // If editing a preset, show edit form
   if (speechEditing != null) {
     const editPreset = speechEditing === 'new'
-      ? { name: '', baseUrl: '', apiKey: '', model: 'mimo-v2.5-asr', language: 'auto' }
+      ? { name: '', baseUrl: '', apiKey: '', model: '', language: 'auto' }
       : (presets[speechEditing] || {});
     return [
       '<div class="settings-section">',
@@ -104,7 +104,7 @@ function renderSpeechPresetEditForm(preset, editIdx, isZh) {
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>Model</label>',
-    '<input class="settings-input" id="speech-preset-model" type="text" value="' + escapeHtml(preset.model || 'mimo-v2.5-asr') + '" placeholder="mimo-v2.5-asr">',
+    '<input class="settings-input" id="speech-preset-model" type="text" value="' + escapeHtml(preset.model || '') + '" placeholder="model-name">',
     '</div>',
     '<div class="settings-field">',
     '<label>' + (isZh ? '语言' : 'Language') + '</label>',
@@ -154,7 +154,7 @@ window.applySpeechPreset = async function(idx) {
   window.ClawFW._speechModelConfig = {
     baseUrl: preset.baseUrl || '',
     apiKey: preset.apiKey || '',
-    model: preset.model || 'mimo-v2.5-asr',
+    model: preset.model || '',
     language: preset.language || 'auto',
   };
   await saveSpeechFullConfig();
@@ -166,7 +166,7 @@ window.saveSpeechPreset = async function(editIdx) {
     name: (el('speech-preset-name')?.value || '').trim(),
     baseUrl: (el('speech-preset-baseurl')?.value || '').trim(),
     apiKey: (el('speech-preset-apikey')?.value || '').trim(),
-    model: (el('speech-preset-model')?.value || '').trim() || 'mimo-v2.5-asr',
+    model: (el('speech-preset-model')?.value || '').trim(),
     language: el('speech-preset-language')?.value || 'auto',
   };
   const presets = window.ClawFW._speechPresets || [];
@@ -181,7 +181,7 @@ window.saveSpeechPreset = async function(editIdx) {
 };
 
 async function saveSpeechFullConfig() {
-  const speechModel = window.ClawFW._speechModelConfig || { baseUrl: '', apiKey: '', model: 'mimo-v2.5-asr', language: 'auto' };
+  const speechModel = window.ClawFW._speechModelConfig || { baseUrl: '', apiKey: '', model: '', language: 'auto' };
   const speechPresets = window.ClawFW._speechPresets || [];
   try {
     const resp = await fetch('/protoclaw/speech_model_config', {

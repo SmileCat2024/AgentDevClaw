@@ -241,7 +241,7 @@ describe('normalizeSpeechModel', () => {
     const result = normalizeSpeechModel({});
     assert.strictEqual(result.baseUrl, '');
     assert.strictEqual(result.apiKey, '');
-    assert.strictEqual(result.model, 'mimo-v2.5-asr');
+    assert.strictEqual(result.model, '');
     assert.strictEqual(result.language, 'auto');
   });
 
@@ -273,7 +273,7 @@ describe('normalizeSpeechModel', () => {
 
   it('falls back to default model when model is empty', () => {
     const result = normalizeSpeechModel({ model: '' });
-    assert.strictEqual(result.model, 'mimo-v2.5-asr');
+    assert.strictEqual(result.model, '');
   });
 
   it('falls back to default language when language is empty', () => {
@@ -309,7 +309,7 @@ describe('normalizeSpeechPreset', () => {
 
   it('falls back to default model and language for empty values', () => {
     const result = normalizeSpeechPreset({ name: 'Test' });
-    assert.strictEqual(result.model, 'mimo-v2.5-asr');
+    assert.strictEqual(result.model, '');
     assert.strictEqual(result.language, 'auto');
     assert.strictEqual(result.name, 'Test');
   });
@@ -318,6 +318,6 @@ describe('normalizeSpeechPreset', () => {
     const result = normalizeSpeechPreset({});
     assert.strictEqual(result.name, '');
     assert.strictEqual(result.baseUrl, '');
-    assert.strictEqual(result.model, 'mimo-v2.5-asr');
+    assert.strictEqual(result.model, '');
   });
 });

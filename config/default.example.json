@@ -1,11 +1,5 @@
 {
-  "defaultModel": {
-    "provider": "anthropic",
-    "model": "deepseek-v4-pro",
-    "baseUrl": "https://api.deepseek.com/anthropic",
-    "apiKey": "${ANTHROPIC_API_KEY}",
-    "thinkingBudgetTokens": 4096
-  },
+  "defaultModel": {},
   "agent": {
     "maxTurns": 20,
     "temperature": 0

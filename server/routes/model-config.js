@@ -247,7 +247,7 @@ async function resolveSessionModelInfo(agentId, sessionType) {
 export const DEFAULT_SPEECH_MODEL = {
   baseUrl: '',
   apiKey: '',
-  model: 'mimo-v2.5-asr',
+  model: '',
   language: 'auto',
 };
 
