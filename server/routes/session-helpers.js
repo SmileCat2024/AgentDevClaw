@@ -7,6 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 import { USER_DATA_ROOT, AGENTS_ROOT } from '../shared/constants.js';
+import { normalizePathCasing } from '../shared/fs-helpers.js';
 import {
   sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent,
   getAssemblyWorkspaceDir, normalizeClientAgentId, log,
@@ -933,13 +934,15 @@ async function createPrebuiltSession(agentId, options = {}) {
     || cleanSessionText(assemblyForm.env_dir)
     || (requestedFormId === 'assembly-form' && nextAgentName ? getAssemblyWorkspaceDir(nextAgentName) : '');
   const nextOpenDirectory =
-    requestedFormId === 'assembly-form'
-      ? nextAssemblyEnvDir
-      : (
-        cleanSessionText(options.openDirectory)
-        || cleanSessionText(sourceSession?.openDirectory)
-        || cleanSessionText(currentState?.openDirectory)
-      );
+    await normalizePathCasing(
+      requestedFormId === 'assembly-form'
+        ? nextAssemblyEnvDir
+        : (
+          cleanSessionText(options.openDirectory)
+          || cleanSessionText(sourceSession?.openDirectory)
+          || cleanSessionText(currentState?.openDirectory)
+        )
+    );
   const nextTaskTitle =
     cleanSessionText(options.taskTitle)
     || cleanSessionText(sourceSession?.taskTitle)

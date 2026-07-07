@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
 import { USER_DATA_ROOT } from '../shared/constants.js';
+import { normalizePathCasing } from '../shared/fs-helpers.js';
 import {
   sanitizeSessionFragment,
   cleanSessionText,
@@ -330,7 +331,7 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       targetFiles: sourceRecord?.targetFiles || '',
       referenceMaterials: sourceRecord?.referenceMaterials || '',
       formId: sourceRecord?.formId || '',
-      openDirectory: sourceRecord?.openDirectory || '',
+      openDirectory: await normalizePathCasing(sourceRecord?.openDirectory || ''),
       sessionType: sourceRecord?.sessionType || 'main',
       metadata: {
         ...(sourceRecord?.metadata || {}),

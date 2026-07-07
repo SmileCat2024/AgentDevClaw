@@ -42,7 +42,7 @@ import {
 } from './server/shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log, getAssemblyWorkspaceDir, normalizeClientAgentId, parseListField } from './server/shared/string-helpers.js';
 import { compareSemver, uniqueStrings } from './server/shared/feature-utils.js';
-import { readJson, readJsonSafe, ensureDir } from './server/shared/fs-helpers.js';
+import { readJson, readJsonSafe, ensureDir, normalizePathCasing } from './server/shared/fs-helpers.js';
 import {
   managedAgents, assemblyRuntimeProcesses,
   getManagedRuntimeKey, listAgentRuntimes, pickPrimaryAgentRuntime,
@@ -460,7 +460,7 @@ app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) =>
     }
     // Resolve actual filesystem casing so display matches the real directory name.
     // On Windows the directory picker may return a lowercased path.
-    const openDirectory = await fs.realpath(rawDirectory).then(p => p.replace(/^\\\\\?\\/, '')).catch(() => rawDirectory);
+    const openDirectory = await normalizePathCasing(rawDirectory);
     const timestamp = new Date().toISOString();
     const state = await readWorkspaceState('programming-helper');
     // Add to phProjects if not already there
@@ -490,7 +490,7 @@ app.post('/protoclaw/ph_project/switch', express.json(), async (req, res, next) 
       : null;
     let openDirectory = stored?.openDirectory || rawDirectory;
     // Resolve actual filesystem casing for paths that were stored lowercased.
-    openDirectory = await fs.realpath(openDirectory).then(p => p.replace(/^\\\\\?\\/, '')).catch(() => openDirectory);
+    openDirectory = await normalizePathCasing(openDirectory);
     // Ensure the project exists in phProjects
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
     nextState.openDirectory = openDirectory;
@@ -503,10 +503,11 @@ app.post('/protoclaw/ph_project/switch', express.json(), async (req, res, next) 
 
 app.post('/protoclaw/ph_project/add', express.json(), async (req, res, next) => {
   try {
-    const openDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
-    if (!openDirectory) {
+    const rawDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
+    if (!rawDirectory) {
       return res.status(400).json({ error: 'openDirectory is required' });
     }
+    const openDirectory = await normalizePathCasing(rawDirectory);
     const timestamp = new Date().toISOString();
     const state = await readWorkspaceState('programming-helper');
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
