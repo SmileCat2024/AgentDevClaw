@@ -809,7 +809,7 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
 
       // 添加折叠类，但先不添加 collapsed 类，检查自然高度
       el.classList.add('wg-collapsible');
-      const needsCollapse = el.scrollHeight > WgState.COLLAPSE_THRESHOLD;
+      const needsCollapse = el.scrollHeight > WG_COLLAPSE_THRESHOLD;
 
       if (!needsCollapse) {
         // 不需要折叠，移除类并恢复样式
@@ -1289,20 +1289,89 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
 
   function startPolling() {
     stopPolling();
-    WgState.pollTimer = setInterval(async () => {
+    WgState._pollingActive = true;
+
+    // 长轮询：等待群聊数据变更（新消息、routing 更新等）
+    _pollCycle();
+
+    // 独立定时器：刷新运行时状态（running/idle 指示灯），不影响消息延迟
+    WgState._runtimeTimer = setInterval(async () => {
       if (WgState.activeChatId && !WgState.isLoading) {
-        await loadActiveChat();
         await fetchRuntimeStatus();
-        refreshMessagesOnly();
         refreshAdminBarOnly();
       }
-    }, 3000);
+    }, 5000);
   }
 
   function stopPolling() {
+    WgState._pollingActive = false;
     if (WgState.pollTimer) {
-      clearInterval(WgState.pollTimer);
+      clearTimeout(WgState.pollTimer);
       WgState.pollTimer = null;
+    }
+    if (WgState._runtimeTimer) {
+      clearInterval(WgState._runtimeTimer);
+      WgState._runtimeTimer = null;
+    }
+    if (WgState._pollAbortController) {
+      WgState._pollAbortController.abort();
+      WgState._pollAbortController = null;
+    }
+  }
+
+  /**
+   * 长轮询循环：向 /updates 端点发起请求，服务端在群聊有变更时立即返回。
+   * 收到更新后拉取 annotations + admin_status 并刷新消息列表。
+   * 超时（25s 无变更）后自动重新发起下一轮。
+   */
+  async function _pollCycle() {
+    if (!WgState._pollingActive) return;
+
+    // 正在加载或无活跃群聊时，短暂等待后重试
+    if (!WgState.activeChatId || WgState.isLoading) {
+      WgState.pollTimer = setTimeout(_pollCycle, 1000);
+      return;
+    }
+
+    try {
+      const since = (WgState.activeChat && WgState.activeChat.updatedAt) || 0;
+      const chatId = encodeURIComponent(WgState.activeChatId);
+      const url = `/protoclaw/group_chats/${chatId}/updates?since=${since}&timeout=25`;
+
+      WgState._pollAbortController = new AbortController();
+      const res = await fetch(url, { signal: WgState._pollAbortController.signal });
+
+      if (!WgState._pollingActive) return;
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.updated && data.chat) {
+          // 守卫：等待期间可能切换了群聊，丢弃过期响应
+          if (data.chat.id !== WgState.activeChatId) {
+            // 直接进入下一轮，用新 chatId 发起
+          } else {
+            WgState.activeChat = data.chat;
+            // 并行拉取批注和管理员状态
+            const [annData, adminData] = await Promise.allSettled([
+              wgApiGet(`/protoclaw/group_chats/${chatId}/annotations`),
+              wgApiGet(`/protoclaw/group_chats/${chatId}/admin_status`),
+            ]);
+            WgState._annotations = annData.status === 'fulfilled' ? (annData.value.annotations || {}) : {};
+            WgState._adminStatus = adminData.status === 'fulfilled' ? adminData.value : null;
+            refreshMessagesOnly();
+            refreshAdminBarOnly();
+          }
+        }
+        // data.updated === false → 超时无变更，直接进入下一轮
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return; // 被 stopPolling 中断，不再继续
+      console.error('[WorkGroup] long-poll error:', err);
+    }
+
+    // 继续下一轮长轮询
+    if (WgState._pollingActive) {
+      WgState.pollTimer = setTimeout(_pollCycle, 500);
     }
   }
 
@@ -1346,6 +1415,12 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
   async function selectChat(chatId) {
     // 保存当前群聊的输入草稿
     if (WgState.activeChatId) _saveCurrentDraft(WgState.activeChatId);
+
+    // 中止正在进行的 long-poll（针对旧群聊），下一轮自动使用新 chatId
+    if (WgState._pollAbortController) {
+      WgState._pollAbortController.abort();
+      WgState._pollAbortController = null;
+    }
 
     WgState.activeChatId = chatId;
     WgState.viewMode = 'chat';
