@@ -241,3 +241,66 @@ describe('frontend-vm sandbox', () => {
     assert.equal(ctx.run('currentLanguage'), 'en');
   });
 });
+
+// ── desktop notification finish visibility ──
+
+function createDesktopNotifySandbox() {
+  const notifications = [];
+  const ctx = createFrontendSandbox({
+    allAgents: [{ id: 'runtime-1', name: 'Runtime One' }],
+    currentLanguage: 'en',
+    normalizeAgentIdentity(value) {
+      return String(value || '').trim();
+    },
+    fetch: async () => ({ ok: false, status: 404, json: async () => ({}) }),
+    Notification: function TestNotification(title, options) {
+      notifications.push({ title, options });
+      return { close() {} };
+    },
+    Blob: function TestBlob() {},
+    URL: { createObjectURL: () => 'blob:test' },
+    Worker: function TestWorker() {},
+  });
+  ctx.Notification.permission = 'granted';
+  ctx.window.focus = () => {};
+  ctx.window.handlePrebuiltAgentClick = () => {};
+  ctx.window.switchAgent = () => {};
+  ctx.document.hidden = false;
+  ctx.document.hasFocus = () => true;
+  ctx.loadSource('public/src/modules/desktop-notify.js');
+  return { ctx, notifications };
+}
+
+describe('desktop-notify: finish visibility', () => {
+  it('suppresses a delayed finish notification after the user already saw Claw', async () => {
+    const { ctx, notifications } = createDesktopNotifySandbox();
+    const foregroundTs = Date.now();
+    ctx.run(`_syncForegroundState()`);
+    ctx.document.hidden = true;
+    ctx.document.hasFocus = () => false;
+
+    await ctx.run(`_tryNotifyAgentFinished("runtime-1", {
+      state: { type: "call.finish", timestamp: ${foregroundTs - 1000} },
+      callActive: false
+    })`);
+
+    assert.equal(notifications.length, 0);
+  });
+
+  it('allows a later unseen finish notification while Claw is hidden', async () => {
+    const { ctx, notifications } = createDesktopNotifySandbox();
+    const foregroundTs = Date.now();
+    ctx.run(`_syncForegroundState()`);
+    ctx.run(`_lastForegroundTs = ${foregroundTs - 10000}`);
+    ctx.document.hidden = true;
+    ctx.document.hasFocus = () => false;
+    ctx.run(`_markAgentCallStartedForNotify("runtime-1")`);
+
+    await ctx.run(`_tryNotifyAgentFinished("runtime-1", {
+      state: { type: "call.finish", timestamp: ${foregroundTs} },
+      callActive: false
+    })`);
+
+    assert.equal(notifications.length, 1);
+  });
+});

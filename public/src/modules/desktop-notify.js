@@ -15,10 +15,11 @@
  */
 
 /* ── Dedup: 防止同一 agent 短时间内重复通知 ──
- * 用 Map 存储 normId → 完成时的时间戳，仅在实际发出通知后才标记。
- * 前台跳过时不标记，确保用户切走后连续任务的后续完成仍能正常通知。
+ * 用 Map 存储 normId → 完成时的时间戳。实际通知和前台已观察完成
+ * 分开记录，新一轮 call.start 会清空对应 runtime 的旧记录。
  */
 const _notifiedFinishMap = new Map();
+const _foregroundObservedFinishMap = new Map();
 
 /* ── Foreground grace period: 解决转换检测延迟导致的前台完成被误判为后台完成 ──
  *
@@ -47,6 +48,68 @@ window.addEventListener('focus', _syncForegroundState);
 window.addEventListener('blur', _syncForegroundState);
 _syncForegroundState(); // 页面加载时初始化
 
+function _isNotifyForeground() {
+  return !document.hidden && document.hasFocus();
+}
+
+function _normalizeNotifyTimestamp(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n < 1000000000000 ? n * 1000 : n;
+}
+
+function _getNotificationAction(notifData) {
+  const state = notifData?.state && typeof notifData.state === 'object' ? notifData.state : null;
+  const event = notifData?.event && typeof notifData.event === 'object' ? notifData.event : null;
+  if (event && (!state || _normalizeNotifyTimestamp(event.timestamp) >= _normalizeNotifyTimestamp(state.timestamp))) {
+    return event;
+  }
+  return state;
+}
+
+function _getFinishObservedTimestamp(notifData) {
+  const action = _getNotificationAction(notifData);
+  if (String(action?.type || '').trim() === 'call.finish') {
+    const actionTs = _normalizeNotifyTimestamp(action.timestamp);
+    if (actionTs) return actionTs;
+  }
+  const runtime = notifData?.runtime && typeof notifData.runtime === 'object' ? notifData.runtime : null;
+  const runtimeSettled = runtime && runtime.callActive === false
+    && ['completed', 'failed'].includes(String(runtime.stage || '').trim());
+  if (runtimeSettled) {
+    const updatedAt = _normalizeNotifyTimestamp(runtime.updatedAt);
+    if (updatedAt) return updatedAt;
+  }
+  return 0;
+}
+
+function _markAgentCallStartedForNotify(runtimeId) {
+  const normId = normalizeAgentIdentity(runtimeId);
+  if (!normId) return;
+  _foregroundObservedFinishMap.delete(normId);
+  _notifiedFinishMap.delete(normId);
+}
+
+function _markAgentFinishObserved(runtimeId, notifData = null) {
+  const normId = normalizeAgentIdentity(runtimeId);
+  if (!normId) return;
+  const finishTs = _getFinishObservedTimestamp(notifData) || Date.now();
+  _foregroundObservedFinishMap.set(normId, finishTs);
+}
+
+function _hasUserAlreadyObservedFinish(runtimeId, notifData = null) {
+  const normId = normalizeAgentIdentity(runtimeId);
+  if (!normId) return false;
+  if (_foregroundObservedFinishMap.has(normId)) return true;
+
+  const finishTs = _getFinishObservedTimestamp(notifData);
+  if (finishTs > 0 && _lastForegroundTs > 0 && finishTs <= _lastForegroundTs) {
+    _foregroundObservedFinishMap.set(normId, finishTs);
+    return true;
+  }
+  return false;
+}
+
 /* ── 文本截断：去除 markdown 语法，只保留纯文本预览 ── */
 function _truncateForNotification(text, maxLen = 120) {
   if (!text) return '';
@@ -65,14 +128,19 @@ function _truncateForNotification(text, maxLen = 120) {
 }
 
 /* ── 主通知逻辑 ── */
-async function _tryNotifyAgentFinished(runtimeId) {
+async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
 
   const normId = normalizeAgentIdentity(runtimeId);
 
   // 前台时不需要通知——用户已经看到了。
-  if (!document.hidden && document.hasFocus()) return;
+  if (_isNotifyForeground()) {
+    _markAgentFinishObserved(normId, notifData);
+    return;
+  }
+
+  if (_hasUserAlreadyObservedFinish(normId, notifData)) return;
 
   // 前台宽限期：如果页面刚从前台切走不久（在 FOREGROUND_GRACE_MS 内），
   // 说明 agent 完成时用户很可能就在看着，只是 calling-state 转换检测被
@@ -80,6 +148,7 @@ async function _tryNotifyAgentFinished(runtimeId) {
   // 标记 dedup 防止同一完成事件稍后被重复触发。
   const sinceForeground = _lastForegroundTs > 0 ? Date.now() - _lastForegroundTs : Infinity;
   if (sinceForeground < FOREGROUND_GRACE_MS) {
+    _markAgentFinishObserved(normId, notifData);
     _notifiedFinishMap.set(normId, Date.now());
     return;
   }

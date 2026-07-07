@@ -533,11 +533,13 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     }
 
     const nextCallStates = new Map();
+    const nextNotificationPayloads = new Map();
     await Promise.all(runtimeIds.map(async (runtimeId) => {
       try {
         const res = await fetch(`/api/agents/${encodeURIComponent(runtimeId)}/notification`);
         if (!res.ok) return;
         const notifData = await res.json();
+        nextNotificationPayloads.set(runtimeId, notifData);
         nextCallStates.set(runtimeId, resolveNotificationCallingState(notifData));
       } catch (error) {
       }
@@ -550,6 +552,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       // 中断抑制窗口内忽略 backend 的 callActive:true
       const effectiveCalling = backendCalling && !isInterruptSuppressed(runtimeId);
       if (effectiveCalling) {
+        _markAgentCallStartedForNotify(runtimeId);
         _agentCallActive.set(runtimeId, true);
       } else {
         _agentCallActive.delete(runtimeId);
@@ -565,7 +568,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
         if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) {
           _recentlyFinishedRuntimes.add(runtimeId);
         }
-        _tryNotifyAgentFinished(runtimeId);
+        _tryNotifyAgentFinished(runtimeId, nextNotificationPayloads.get(runtimeId) || null);
       }
     }
 
@@ -1933,6 +1936,7 @@ window.switchAgent = async (newAgentId) => {
         if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(runtimeAgentId)) return;
         const isCalling = resolveNotificationCallingState(data);
         if (isCalling) {
+          _markAgentCallStartedForNotify(runtimeAgentId);
           _agentCallActive.set(runtimeAgentId, true);
         } else {
           _agentCallActive.delete(runtimeAgentId);

@@ -579,6 +579,7 @@ function updateNotificationStatus(notifData) {
         // 中断抑制窗口内：用户已点击打断，后端尚未发出 call.finish，
         // 忽略轮询返回的 callActive:true，防止覆盖乐观状态。
         if (!isInterruptSuppressed(runtimeId)) {
+          _markAgentCallStartedForNotify(runtimeId);
           _agentCallActive.set(runtimeId, true);
         } else {
           nextCalling = false;
@@ -586,7 +587,7 @@ function updateNotificationStatus(notifData) {
       } else {
         _agentCallActive.delete(runtimeId);
         clearInterruptSuppression(runtimeId);
-        if (prev === true) _tryNotifyAgentFinished(runtimeId);
+        if (prev === true) _tryNotifyAgentFinished(runtimeId, payload);
       }
       callingStateChanged = (prev === true) !== nextCalling;
       if (callingStateChanged) {
@@ -613,6 +614,7 @@ function updateNotificationStatus(notifData) {
   if (currentRuntimeAgentId && payload.callActive === undefined) {
     if (stateType === 'call.start') {
       if (!isRuntimeCalling(currentRuntimeAgentId) && !isInterruptSuppressed(currentRuntimeAgentId)) {
+        _markAgentCallStartedForNotify(currentRuntimeAgentId);
         _agentCallActive.set(currentRuntimeAgentId, true);
         callingStateChanged = true;
         renderAgentList();
@@ -622,7 +624,7 @@ function updateNotificationStatus(notifData) {
         _agentCallActive.delete(currentRuntimeAgentId);
         callingStateChanged = true;
         renderAgentList();
-        _tryNotifyAgentFinished(currentRuntimeAgentId);
+        _tryNotifyAgentFinished(currentRuntimeAgentId, payload);
       }
       clearInterruptSuppression(currentRuntimeAgentId);
     }
@@ -677,7 +679,7 @@ function updateNotificationStatus(notifData) {
       _agentCallActive.delete(currentRuntimeAgentId);
       clearInterruptSuppression(currentRuntimeAgentId);
       renderAgentList();
-      _tryNotifyAgentFinished(currentRuntimeAgentId);
+      _tryNotifyAgentFinished(currentRuntimeAgentId, payload);
     }
     _syncPersistentActionButton();
     _syncPersistentInputUi();
