@@ -164,7 +164,41 @@ function getWorkspaceStatePath(agentId) {
   return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', sanitizeSessionFragment(agentId), 'state.json');
 }
 
-function resolveWorkspaceCwd(agentId) {
+function getSessionIndexPath(agentId) {
+  const normalizedAgentId = sanitizeSessionFragment(agentId);
+  const sessionRoot = WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)
+    ? join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'sessions')
+    : join(os.homedir(), '.agentdev', 'AgentDevClaw', 'prebuilt-sessions', normalizedAgentId);
+  return join(sessionRoot, 'index.json');
+}
+
+function resolveSessionWorkspaceCwd(agentId, sessionId) {
+  const normalizedSessionId = cleanValue(sessionId);
+  if (!normalizedSessionId || normalizedSessionId === NO_SESSION_TOKEN) {
+    return null;
+  }
+
+  const indexPath = getSessionIndexPath(agentId);
+  if (!existsSync(indexPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    const record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId));
+    const openDirectory = cleanValue(record?.openDirectory);
+    if (!openDirectory || !existsSync(openDirectory)) {
+      return null;
+    }
+    return openDirectory;
+  } catch (error) {
+    console.warn('[ProtoClaw Runtime] 读取 session 工作目录失败:', error);
+    return null;
+  }
+}
+
+function resolveWorkspaceCwd(agentId, sessionId = '') {
   if (!WORKSPACE_BOUND_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
     return null;
   }
@@ -202,7 +236,13 @@ function resolveWorkspaceCwd(agentId) {
     return null;
   }
 
-  // --- Project mode: use openDirectory from state ---
+  // --- Project mode: prefer the target session's own openDirectory ---
+  const sessionCwd = resolveSessionWorkspaceCwd(agentId, sessionId);
+  if (sessionCwd) {
+    return sessionCwd;
+  }
+
+  // Fallback for workspace home/no-session mode: use current openDirectory from state.
   const statePath = getWorkspaceStatePath(agentId);
   if (!existsSync(statePath)) {
     return null;
@@ -1136,7 +1176,7 @@ async function handleInputResponse(userInput, response) {
 }
 
 async function main() {
-  const workspaceCwd = resolveWorkspaceCwd(agentId);
+  const workspaceCwd = resolveWorkspaceCwd(agentId, sessionId);
   const runtimeHandoff = loadRuntimeHandoff();
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);

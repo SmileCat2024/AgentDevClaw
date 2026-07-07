@@ -114,10 +114,40 @@ export function getSessionStoreDir(agentId) {
   return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'prebuilt-sessions', normalizedAgentId);
 }
 
-export function resolveWorkspaceCwd(agentId, projectRoot) {
+function resolveSessionWorkspaceCwd(agentId, sessionId) {
+  const normalizedSessionId = cleanValue(sessionId);
+  if (!normalizedSessionId || normalizedSessionId === '__protoclaw-no-session__') {
+    return null;
+  }
+
+  const indexPath = join(getSessionStoreDir(agentId), 'index.json');
+  if (!existsSync(indexPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    const record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId));
+    const openDirectory = cleanValue(record?.openDirectory);
+    if (!openDirectory || !existsSync(openDirectory)) {
+      return null;
+    }
+    return openDirectory;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveWorkspaceCwd(agentId, projectRoot, sessionId = '') {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   if (!WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)) {
     return projectRoot;
+  }
+
+  const sessionCwd = resolveSessionWorkspaceCwd(agentId, sessionId);
+  if (sessionCwd) {
+    return sessionCwd;
   }
 
   const statePath = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'state.json');

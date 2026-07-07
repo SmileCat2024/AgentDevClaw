@@ -50,10 +50,40 @@ function getSessionStoreDir(agentId) {
   return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'prebuilt-sessions', normalizedAgentId);
 }
 
-function resolveWorkspaceCwd(agentId) {
+function resolveSessionWorkspaceCwd(agentId, sessionId) {
+  const normalizedSessionId = cleanValue(sessionId);
+  if (!normalizedSessionId || normalizedSessionId === '__protoclaw-no-session__') {
+    return null;
+  }
+
+  const indexPath = join(getSessionStoreDir(agentId), 'index.json');
+  if (!existsSync(indexPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    const record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId));
+    const openDirectory = cleanValue(record?.openDirectory);
+    if (!openDirectory || !existsSync(openDirectory)) {
+      return null;
+    }
+    return openDirectory;
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorkspaceCwd(agentId, sessionId = '') {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   if (!WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)) {
     return PROTOCLAW_ROOT;
+  }
+
+  const sessionCwd = resolveSessionWorkspaceCwd(agentId, sessionId);
+  if (sessionCwd) {
+    return sessionCwd;
   }
 
   const statePath = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'state.json');
@@ -146,7 +176,7 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     throw new Error(`Unable to resolve Agent class from ${agentJsPath}`);
   }
 
-  const workspaceDir = resolveWorkspaceCwd(agentId);
+  const workspaceDir = resolveWorkspaceCwd(agentId, sessionId);
   const sessionStore = new FileSessionStore(getSessionStoreDir(agentId));
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
   const modelPresetRole = sessionType === 'exploration'
@@ -348,7 +378,7 @@ async function main() {
     sessionType,
   });
 
-  const workspaceDir = resolveWorkspaceCwd(agentId);
+  const workspaceDir = resolveWorkspaceCwd(agentId, sessionId);
   const gitMeta = collectGitMeta(workspaceDir);
   const sessionTimestamp = extractSessionTimestamp(getSessionStoreDir(agentId), sessionId);
 

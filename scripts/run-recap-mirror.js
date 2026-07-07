@@ -98,7 +98,7 @@ async function runRecapGeneration({ agentDir, agentId, sessionId }) {
   logPhase(`using model preset role=${modelRole} model=${resolvedModel.modelName}`);
   tuneMirrorLLM(resolvedModel.llm, 1024);
 
-  const workspaceDir = resolveWorkspaceCwd(agentId, PROTOCLAW_ROOT);
+  const workspaceDir = resolveWorkspaceCwd(agentId, PROTOCLAW_ROOT, sessionId);
   const agent = createTextOnlyMirrorAgent({
     llm: resolvedModel.llm,
     modelName: resolvedModel.modelName,

@@ -144,7 +144,34 @@ function getWorkspaceStatePath(agentId) {
   return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', sanitizeSessionFragment(agentId), 'state.json');
 }
 
-function resolveWorkspaceCwd(agentId) {
+function getSessionIndexPath(agentId) {
+  const normalizedAgentId = sanitizeSessionFragment(agentId);
+  const sessionRoot = WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)
+    ? join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'sessions')
+    : join(os.homedir(), '.agentdev', 'AgentDevClaw', 'prebuilt-sessions', normalizedAgentId);
+  return join(sessionRoot, 'index.json');
+}
+
+function resolveSessionWorkspaceCwd(agentId, sessionId) {
+  const normalizedSessionId = cleanValue(sessionId);
+  if (!normalizedSessionId || normalizedSessionId === '__protoclaw-no-session__') return null;
+
+  const indexPath = getSessionIndexPath(agentId);
+  if (!existsSync(indexPath)) return null;
+
+  try {
+    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
+    const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+    const record = sessions.find((session) => sanitizeSessionFragment(session?.id) === sanitizeSessionFragment(normalizedSessionId));
+    const openDirectory = cleanValue(record?.openDirectory);
+    if (!openDirectory || !existsSync(openDirectory)) return null;
+    return openDirectory;
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorkspaceCwd(agentId, sessionId = '') {
   if (!WORKSPACE_BOUND_AGENT_IDS.has(sanitizeSessionFragment(agentId))) return null;
 
   if (process.env.PROTOCLAW_ASSEMBLY_RUNTIME === '1') {
@@ -167,6 +194,9 @@ function resolveWorkspaceCwd(agentId) {
     }
     return null;
   }
+
+  const sessionCwd = resolveSessionWorkspaceCwd(agentId, sessionId);
+  if (sessionCwd) return sessionCwd;
 
   const statePath = getWorkspaceStatePath(agentId);
   if (!existsSync(statePath)) return null;
@@ -210,7 +240,7 @@ async function main() {
   console.log(`[OneShot] Starting agent=${agentId} session=${sessionId || '(new)'} goal="${goal.slice(0, 80)}"`);
 
   // 1. Resolve workspace
-  const workspaceCwd = resolveWorkspaceCwd(agentId);
+  const workspaceCwd = resolveWorkspaceCwd(agentId, sessionId);
 
   // 2. Load handoff
   const runtimeHandoff = loadRuntimeHandoff();
