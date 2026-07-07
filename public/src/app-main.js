@@ -405,11 +405,19 @@ async function loadAgents() {
           ...(prev && loadedAgentDetailIds.has(agent.id) ? {
             workspace_data: prev.workspace_data,
             workspace_state: prev.workspace_state,
-            // Preserve prev sessions (get_connected_agents always returns
-            // sessions: []), but merge in any fresh activeSessionId from
-            // the server so activation changes are reflected.
+            // Preserve prev sessions (rich data from loadAgentDetail such as
+            // contextLength / compressRatio), but merge in any sessions that
+            // appeared on the server since the last loadAgentDetail call
+            // (e.g. group-chat dispatch creates new sessions at runtime).
             workspace_sessions: {
               ...(prev.workspace_sessions || {}),
+              sessions: (() => {
+                const prevSessions = prev.workspace_sessions?.sessions || [];
+                const freshSessions = agent.workspace_sessions?.sessions || [];
+                if (freshSessions.length === 0) return prevSessions;
+                const prevIds = new Set(prevSessions.map((s) => s.id));
+                return [...prevSessions, ...freshSessions.filter((s) => !prevIds.has(s.id))];
+              })(),
               ...(agent.workspace_sessions?.activeSessionId
                 && agent.workspace_sessions.activeSessionId !== prev.workspace_sessions?.activeSessionId
                 ? { activeSessionId: agent.workspace_sessions.activeSessionId }
