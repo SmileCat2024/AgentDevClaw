@@ -545,23 +545,69 @@ async function ctxArchiveSession(target) {
   }
 }
 
+function markSessionArchivedForMutation(agentId, sessionId) {
+  if (!agentId || !sessionId) return;
+
+  const agent = allAgents.find((item) => item.id === agentId) || null;
+  if (!agent) return null;
+
+  const currentSessions = getWorkspaceSessions(agent);
+  const original = currentSessions.find((s) => s.id === sessionId) || null;
+  if (!original) return null;
+
+  const nextSessions = currentSessions.map((s) =>
+    s.id === sessionId ? { ...s, archived: true, todo: false } : s,
+  );
+  updateAgentRecord(agentId, {
+    workspace_sessions: {
+      sessions: nextSessions,
+      activeSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || null,
+    },
+  });
+  lastRenderedWorkspaceHtml = '';
+  renderCurrentMainView();
+
+  return () => {
+    const latestAgent = allAgents.find((item) => item.id === agentId) || null;
+    if (!latestAgent) return;
+    const latestSessions = getWorkspaceSessions(latestAgent);
+    const revertedSessions = latestSessions.map((s) =>
+      s.id === sessionId ? { ...s, archived: original.archived === true, todo: original.todo === true } : s,
+    );
+    updateAgentRecord(agentId, {
+      workspace_sessions: {
+        sessions: revertedSessions,
+        activeSessionId: latestAgent?.workspace_sessions?.activeSessionId || latestAgent?.active_workspace_session_id || null,
+      },
+    });
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+  };
+}
+
 /**
  * Archive a session (set archived=true) AND stop its runtime.
  * Used after summary/trim/branch creates a new session, to archive + close the original.
  * Silent on success, logs on failure — the primary operation already succeeded.
  */
-async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId) {
+async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, options = {}) {
   if (!agentId || !sessionId) return;
 
   // 1. Archive the session (optimistic + API)
   const agent = allAgents.find((item) => item.id === agentId) || null;
-  if (agent) {
+  const archiveRollback = typeof options.rollback === 'function'
+    ? options.rollback
+    : (!options.skipOptimisticArchive ? markSessionArchivedForMutation(agentId, sessionId) : null);
+  if (options.skipOptimisticArchive && agent) {
     const currentSessions = getWorkspaceSessions(agent);
     const updatedSessions = currentSessions.map((s) =>
-      s.id === sessionId ? { ...s, archived: true } : s,
+      s.id === sessionId ? { ...s, archived: true, todo: false } : s,
     );
     updateAgentRecord(agentId, {
-      workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
+      workspace_sessions: {
+        sessions: updatedSessions,
+        activeSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || null,
+      },
     });
     // Render immediately so the user sees the archive without waiting for the
     // runtime stop + agent reload chain below.
@@ -587,7 +633,9 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId) {
   } catch (e) {
     console.error('Failed to archive session after mutation:', e);
     // Revert optimistic update so the UI matches the server state.
-    if (agent) {
+    if (archiveRollback) {
+      archiveRollback();
+    } else if (agent) {
       const currentSessions = getWorkspaceSessions(agent);
       const revertedSessions = currentSessions.map((s) =>
         s.id === sessionId ? { ...s, archived: false } : s,
@@ -598,7 +646,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId) {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
-    return; // Don't proceed to stop if archive failed
+    return false; // Don't proceed to stop if archive failed
   }
 
   // 2. Stop the original session's runtime.
@@ -614,6 +662,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId) {
   } catch (e) {
     console.error('Failed to stop runtime after archive:', e);
   }
+  return true;
 }
 
 async function ctxTodoSession(target) {

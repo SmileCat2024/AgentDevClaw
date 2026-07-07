@@ -203,6 +203,10 @@ window.submitTrimCompact = async () => {
   window.closeTrimDialog();
   markSessionLoading(agentId, sessionId);
   const _oldRuntimeId = currentRuntimeAgentId;
+  let archiveRollback = null;
+  if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
+    archiveRollback = markSessionArchivedForMutation(agentId, sessionId);
+  }
 
   try {
     const result = await createCompactedResumeSession(agentId, sessionId, '', null, null, policy);
@@ -223,10 +227,18 @@ window.submitTrimCompact = async () => {
       renderCurrentMainView();
     }
     if (archiveAfter) {
-      await archiveSessionAfterMutation(agentId, sessionId, _oldRuntimeId);
+      const archived = await archiveSessionAfterMutation(agentId, sessionId, _oldRuntimeId, {
+        skipOptimisticArchive: true,
+        rollback: archiveRollback,
+      });
+      if (archived) archiveRollback = null;
     }
   } catch (error) {
     console.error('Failed to trim compact session:', error);
+    if (archiveRollback) {
+      archiveRollback();
+      archiveRollback = null;
+    }
     clearSessionLoading(agentId);
     clearChatLoadingSession();
     window.alert((currentLanguage === 'zh' ? '精简失败：' : 'Trim failed: ') + (error?.message || error));
@@ -350,6 +362,10 @@ window.submitBranch = async () => {
   window.closeBranchDialog();
   markSessionLoading(agentId, sessionId);
   const _oldRuntimeId = currentRuntimeAgentId;
+  let archiveRollback = null;
+  if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
+    archiveRollback = markSessionArchivedForMutation(agentId, sessionId);
+  }
 
   try {
     const res = await fetch('/protoclaw/sessions/branch', {
@@ -377,10 +393,18 @@ window.submitBranch = async () => {
       renderCurrentMainView();
     }
     if (archiveAfter) {
-      await archiveSessionAfterMutation(agentId, sessionId, _oldRuntimeId);
+      const archived = await archiveSessionAfterMutation(agentId, sessionId, _oldRuntimeId, {
+        skipOptimisticArchive: true,
+        rollback: archiveRollback,
+      });
+      if (archived) archiveRollback = null;
     }
   } catch (error) {
     console.error('Failed to branch session:', error);
+    if (archiveRollback) {
+      archiveRollback();
+      archiveRollback = null;
+    }
     clearSessionLoading(agentId);
     clearChatLoadingSession();
     window.alert((currentLanguage === 'zh' ? '分支失败：' : 'Branch failed: ') + (error?.message || error));

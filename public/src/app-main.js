@@ -1238,6 +1238,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const _csOldRuntimeId = currentRuntimeAgentId;
     const _csIsZh = currentLanguage === 'zh';
     const _csToastId = 'compact-summary-' + action.sessionId;
+    let _csArchiveRollback = null;
+    if (action.archiveOriginal && typeof markSessionArchivedForMutation === 'function') {
+      _csArchiveRollback = markSessionArchivedForMutation(activeAgent.id, action.sessionId);
+    }
     ClawToast.show({
       id: _csToastId,
       title: _csIsZh ? '正在总结会话历史...' : 'Summarizing session history...',
@@ -1255,7 +1259,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
         if (action.archiveOriginal) {
-          await archiveSessionAfterMutation(activeAgent.id, action.sessionId, _csOldRuntimeId);
+          const archived = await archiveSessionAfterMutation(activeAgent.id, action.sessionId, _csOldRuntimeId, {
+            skipOptimisticArchive: true,
+            rollback: _csArchiveRollback,
+          });
+          if (archived) _csArchiveRollback = null;
         }
         return;
       }
@@ -1280,10 +1288,18 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         title: _csIsZh ? '会话总结完成' : 'Session summary completed',
       });
       if (action.archiveOriginal) {
-        await archiveSessionAfterMutation(activeAgent.id, action.sessionId, _csOldRuntimeId);
+        const archived = await archiveSessionAfterMutation(activeAgent.id, action.sessionId, _csOldRuntimeId, {
+          skipOptimisticArchive: true,
+          rollback: _csArchiveRollback,
+        });
+        if (archived) _csArchiveRollback = null;
       }
     } catch (error) {
       console.error('Failed to compact session:', error);
+      if (_csArchiveRollback) {
+        _csArchiveRollback();
+        _csArchiveRollback = null;
+      }
       clearSessionLoading(activeAgent.id);
       clearChatLoadingSession();
       ClawToast.update(_csToastId, {
