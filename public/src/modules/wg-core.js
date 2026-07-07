@@ -16,23 +16,27 @@ const WG_DISPATCH_STATUS_TEXT = {
 };
 
 const WG_AVATAR_COLORS = [
-  'linear-gradient(135deg,#667eea,#764ba2)',
-  'linear-gradient(135deg,#f093fb,#f5576c)',
-  'linear-gradient(135deg,#4facfe,#00f2fe)',
-  'linear-gradient(135deg,#43e97b,#38f9d7)',
-  'linear-gradient(135deg,#fa709a,#fee140)',
-  'linear-gradient(135deg,#30cfd0,#330867)',
-  'linear-gradient(135deg,#a8edea,#fed6e3)',
-  'linear-gradient(135deg,#ff9a9e,#fecfef)',
-  'linear-gradient(135deg,#ffecd2,#fcb69f)',
-  'linear-gradient(135deg,#ff6a00,#ee0979)',
-  'linear-gradient(135deg,#2af598,#009efd)',
-  'linear-gradient(135deg,#f6d365,#fda085)',
+  '#4F46E5', // Indigo
+  '#7C3AED', // Violet
+  '#9333EA', // Purple
+  '#DB2777', // Pink
+  '#E11D48', // Rose
+  '#DC2626', // Red
+  '#EA580C', // Orange
+  '#CA8A04', // Yellow
+  '#65A30D', // Lime
+  '#16A34A', // Green
+  '#0D9488', // Teal
+  '#0891B2', // Cyan
+  '#2563EB', // Blue
+  '#0284C7', // Sky
+  '#C026D3', // Fuchsia
+  '#D97706', // Amber
 ];
 
 const WG_AVATAR_SPECIAL_COLORS = {
-  'user': 'linear-gradient(135deg,#43e97b,#38f9d7)',
-  'work-group:admin': 'linear-gradient(135deg,#fa709a,#fee140)',
+  'user': '#2563EB',             // 品牌蓝
+  'work-group:admin': '#9333EA', // 管理紫
 };
 
 const WG_COLLAPSE_THRESHOLD = 300;
