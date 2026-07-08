@@ -427,6 +427,12 @@ async function submitQueuedInput() {
         _pendingQueuedCount++;
         _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
         updateQueueIndicator();
+      } else if (targetRuntimeId) {
+        clearInterruptSuppression(targetRuntimeId);
+        _markAgentCallStartedForNotify(targetRuntimeId);
+        _agentCallActive.set(targetRuntimeId, true);
+        _syncPersistentActionButton();
+        renderAgentList();
       }
       const nextMode = getInputSurfaceMode(currentInputRequests || []);
       if (nextMode !== lastRenderedInputMode) {

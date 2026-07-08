@@ -139,6 +139,7 @@ async function submitInput(requestId) {
       renderInputRequests([]);
       // 乐观标记 agent 进入 calling 状态，使 action button 立即切换为 stop
       if (currentRuntimeAgentId) {
+        clearInterruptSuppression(currentRuntimeAgentId);
         _markAgentCallStartedForNotify(currentRuntimeAgentId);
         _agentCallActive.set(currentRuntimeAgentId, true);
         _syncPersistentActionButton();
@@ -340,6 +341,7 @@ async function submitInputAction(requestId, actionId, payload = {}) {
       lastRenderedInputSignature = '';
       renderInputRequests([]);
       if (currentRuntimeAgentId) {
+        clearInterruptSuppression(currentRuntimeAgentId);
         _markAgentCallStartedForNotify(currentRuntimeAgentId);
         _agentCallActive.set(currentRuntimeAgentId, true);
         _syncPersistentActionButton();

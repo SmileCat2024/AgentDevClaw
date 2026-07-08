@@ -338,9 +338,10 @@ function getNotificationActionSource(notifData) {
   return state;
 }
 
-function getEffectiveRuntimeSnapshot(notifData) {
+function getEffectiveRuntimeSnapshot(notifData, options = {}) {
+  const suppressCalling = options?.suppressCalling === true;
   const runtime = normalizeNotificationRuntimeSnapshot(notifData?.runtime);
-  const nextCalling = resolveNotificationCallingState(notifData);
+  const nextCalling = suppressCalling ? false : resolveNotificationCallingState(notifData);
   const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId) || 'none';
   const actionSource = getNotificationActionSource(notifData);
   const stateType = String(actionSource?.type || '').trim();
@@ -348,6 +349,10 @@ function getEffectiveRuntimeSnapshot(notifData) {
     ? actionSource.data
     : null;
   const remembered = _runtimeStatusMemory.get(runtimeId) || null;
+
+  if (suppressCalling) {
+    runtime.callActive = false;
+  }
 
   if (nextCalling) {
     runtime.callActive = true;
@@ -563,7 +568,12 @@ function updateNotificationStatus(notifData) {
   const summaryEl = document.getElementById('notification-summary');
   const metricsEl = document.getElementById('notification-metrics');
   lastNotificationStatusPayload = payload;
-  const runtime = getEffectiveRuntimeSnapshot(payload);
+  const runtimeIdForSuppression = normalizeAgentIdentity(currentRuntimeAgentId);
+  const payloadCalling = resolveNotificationCallingState(payload);
+  const suppressingInterrupt = runtimeIdForSuppression
+    && payloadCalling
+    && isInterruptSuppressed(runtimeIdForSuppression);
+  const runtime = getEffectiveRuntimeSnapshot(payload, { suppressCalling: suppressingInterrupt });
 
   let callingStateChanged = false;
   const actionSource = getNotificationActionSource(payload);
@@ -610,7 +620,8 @@ function updateNotificationStatus(notifData) {
   }
 
   const stateType = String(actionSource?.type || '').trim();
-  const shouldShowStatus = !currentRuntimeConnected || shouldShowRuntimeStatus(runtime, stateType);
+  const shouldShowStatus = !currentRuntimeConnected
+    || (!suppressingInterrupt && shouldShowRuntimeStatus(runtime, stateType));
   if (currentRuntimeAgentId && payload.callActive === undefined) {
     if (stateType === 'call.start') {
       if (!isRuntimeCalling(currentRuntimeAgentId) && !isInterruptSuppressed(currentRuntimeAgentId)) {
@@ -666,6 +677,17 @@ function updateNotificationStatus(notifData) {
       lastRenderedInputSignature = '';
       renderInputRequests(currentInputRequests || []);
     }
+    return;
+  }
+
+  if (suppressingInterrupt) {
+    statusEl.style.display = 'none';
+    statusEl.className = 'notification-status';
+    phaseEl.textContent = '';
+    summaryEl.textContent = '';
+    metricsEl.innerHTML = '';
+    _lastRenderedNotificationRuntime = null;
+    _syncPersistentActionButton();
     return;
   }
 

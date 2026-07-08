@@ -65,6 +65,15 @@ function _updateVoiceUI() {
   btn.classList.toggle('transcribing', _voiceTranscribing);
 }
 
+function _markVoiceAutoSendAccepted(runtimeId) {
+  if (!runtimeId) return;
+  clearInterruptSuppression(runtimeId);
+  _markAgentCallStartedForNotify(runtimeId);
+  _agentCallActive.set(runtimeId, true);
+  _syncPersistentActionButton();
+  renderAgentList();
+}
+
 async function toggleVoiceRecording(btn) {
   if (_voiceRecording) {
     stopVoiceRecording();
@@ -173,6 +182,8 @@ async function startVoiceRecording(btn) {
               }).then(res => {
                 if (!res.ok) {
                   res.text().then(t => console.error('[VoiceInput] cross-session queue-input error body:', t));
+                } else {
+                  _markVoiceAutoSendAccepted(_voiceAgentId);
                 }
               }).catch(e => console.error('[VoiceInput] cross-session auto-send fetch failed:', e));
             }
@@ -200,6 +211,8 @@ async function startVoiceRecording(btn) {
               }).then(res => {
                 if (!res.ok) {
                   res.text().then(t => console.error('[VoiceInput] cross-session input error:', t));
+                } else {
+                  _markVoiceAutoSendAccepted(_voiceAgentId);
                 }
               }).catch(e => console.error('[VoiceInput] cross-session input failed:', e));
             }

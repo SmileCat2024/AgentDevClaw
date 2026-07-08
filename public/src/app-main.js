@@ -596,7 +596,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       }
       const runtimeId = agent.runtime_session_id || agent.runtimeSessionId || agent.id;
       if (!runtimeId) continue;
-      const nextCalling = nextCallStates.get(runtimeId) === true;
+      const nextCalling = nextCallStates.get(runtimeId) === true && !isInterruptSuppressed(runtimeId);
       if (agent.callActive !== nextCalling) {
         agent.callActive = nextCalling;
         changed = true;
