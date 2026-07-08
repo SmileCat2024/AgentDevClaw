@@ -242,6 +242,94 @@ describe('frontend-vm sandbox', () => {
   });
 });
 
+// ── runtime status interrupt suppression ──
+
+function createRuntimeStatusSandbox() {
+  const elements = new Map();
+  function createElementStub(id) {
+    return {
+      id,
+      style: {},
+      className: '',
+      textContent: '',
+      innerHTML: '',
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    };
+  }
+  for (const id of ['notification-status', 'notification-phase', 'notification-summary', 'notification-metrics']) {
+    elements.set(id, createElementStub(id));
+  }
+
+  const document = {
+    getElementById(id) {
+      return elements.get(id) || null;
+    },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement: createElementStub,
+    addEventListener() {},
+    body: createElementStub('body'),
+    head: createElementStub('head'),
+    documentElement: createElementStub('html'),
+    readyState: 'complete',
+  };
+
+  const ctx = createFrontendSandbox({
+    document,
+    currentRuntimeAgentId: 'runtime-1',
+    currentRuntimeConnected: true,
+    currentInputRequests: [],
+    lastRenderedInputMode: 'persistent',
+    currentLanguage: 'zh',
+    renderAgentList() {},
+    _syncPersistentActionButton() {},
+    _syncPersistentInputUi() {},
+    _syncQueueFromBackend() {},
+    _tryNotifyAgentFinished() {},
+    normalizeAgentIdentity(value) {
+      return String(value || '').trim();
+    },
+    getInputSurfaceMode() { return 'persistent'; },
+    renderInputRequests() {},
+  });
+  ctx.loadSource('public/src/app-core.js');
+  ctx.run(`
+    currentRuntimeAgentId = "runtime-1";
+    currentRuntimeConnected = true;
+    currentInputRequests = [];
+    lastRenderedInputMode = "persistent";
+  `);
+  ctx.loadSource('public/src/modules/runtime-status.js');
+  return { ctx, elements };
+}
+
+describe('runtime-status: interrupt suppression', () => {
+  it('keeps stale callActive notifications from reviving the waiting status', () => {
+    const { ctx, elements } = createRuntimeStatusSandbox();
+
+    ctx.run(`
+      _interruptSuppression.set("runtime-1", Date.now() + 8000);
+      _agentCallActive.delete("runtime-1");
+      updateNotificationStatus({
+        callActive: true,
+        runtime: {
+          callActive: true,
+          stage: "awaiting_runtime",
+          updatedAt: Date.now(),
+          callStartedAt: Date.now(),
+          stageStartedAt: Date.now()
+        },
+        state: { type: "llm.char_count", data: { phase: "content", charCount: 10 }, timestamp: Date.now() }
+      });
+    `);
+
+    assert.equal(elements.get('notification-status').style.display, 'none');
+    assert.equal(elements.get('notification-phase').textContent, '');
+    assert.equal(ctx.run('isRuntimeCalling("runtime-1")'), false);
+    ctx.run('if (typeof _notificationClockTimer !== "undefined" && _notificationClockTimer) clearInterval(_notificationClockTimer);');
+  });
+});
+
 // ── desktop notification finish visibility ──
 
 function createDesktopNotifySandbox() {
