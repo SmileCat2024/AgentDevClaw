@@ -679,46 +679,61 @@ npm run agentdev:published
 ```bash
 npm test              # 运行全部测试（core + features）
 npm run test:core     # 只跑 test/*.test.js（无需构建）
-npm run test:features # 只跑 local-features 的 smoke test（需要先构建 dist）
+npm run test:features # 只跑 local-features 的 smoke test（pretest 自动构建 dist）
+npm run test:coverage # 运行 core 测试并输出覆盖率报告
 ```
+
+### 统一测试格式
+
+所有测试（core 和 feature）均使用 `node:test` 的 `describe/it/assert` 格式，由 `node --test` 统一驱动。
+
+### Pre-commit Hook
+
+项目配置了 `.githooks/pre-commit`，在每次 `git commit` 时自动运行 `npm run test:core`。
+
+- 首次 `npm install` 后，`prepare` 脚本会自动执行 `git config core.hooksPath .githooks`
+- 跳过方式：`git commit --no-verify`
+- 手动初始化：`node scripts/setup-hooks.mjs`
 
 ### 测试文件结构
 
 ```
-test/                                          ← 服务端核心逻辑测试
-  call-arbiter.test.js                         ← CallArbiter 调用仲裁（序列化、队列、事件）
-  runtime-call-envelope.test.js                ← 运行时信封（创建、入队、出队、状态查询）
-  session-model-meta.test.js                   ← 会话模型元数据（持久化优先级、回退逻辑、sessionType 映射）
+test/                                          ← 服务端核心逻辑测试（node:test 格式）
+  call-arbiter.test.js                         ← CallArbiter 调用仲裁
+  runtime-call-envelope.test.js                ← 运行时信封
+  session-model-meta.test.js                   ← 会话模型元数据
+  fs-helpers.test.js                           ← 文件系统辅助函数（readJson, ensureDir, normalizePathCasing）
+  fs-operations.test.js                        ← 文件系统操作（runCommand, validateEmptyDirectory）
+  server-smoke.test.js                         ← 服务端模块导入冒烟 + 路由注册验证 + 导出契约
+  claw-mcp.test.js                             ← MCP 服务端工具/资源/提示注册完整性
+  ...                                          ← 其他 ~40 个测试文件覆盖各路由模块
 
-local-features/                                ← 本地 Feature 功能测试
+local-features/                                ← 本地 Feature 功能测试（node:test 格式，TypeScript）
   flow/test/flow-feature.test.ts               ← FlowFeature（节点转换、prompt 注入、分支边）[悬置]
-  context-compaction-mirror/test/smoke.test.ts ← ContextCompactionMirror（工具禁用、状态）
+  context-compaction-mirror/test/smoke.test.ts ← ContextCompactionMirror（工具禁用）
+  dispatch/test/smoke.test.ts                  ← ClawDispatchFeature（双模式注入状态机）
+  checkpoint/test/smoke.test.ts                ← CheckpointFeature（checkpoint/rollback）
+  context-handoff-seed/test/smoke.test.ts      ← ContextHandoffSeedFeature（seed 注入）
 ```
-
-### 两种测试格式
-
-1. **`test/*.test.js`** — 使用 `node:test` 的 `describe/it/assert` 格式，由 `node --test` 驱动，输出 TAP 协议。**新增服务端逻辑测试放这里。**
-
-2. **`local-features/*/test/*.test.ts`** — 自执行 `main().catch(...)` 格式，用 `process.exitCode = 1` 标记失败，输出 `[PASS]`/`[FAIL]`。编译后产物在 `local-features/dist/*/test/`。**新增 feature 功能测试放对应 feature 的 `test/` 目录下。**
 
 ### 何时跑测试
 
 - 修改 `server.js`、`server/` 目录、`scripts/` 目录中的逻辑后 → `npm run test:core`
-- 修改 `local-features/` 下的 TS 源码后 → 先 `npm run build:local-features`，再 `npm run test:features`
+- 修改 `local-features/` 下的 TS 源码后 → `npm run test:features`（会自动先构建）
 - 提交前、合并前 → `npm test` 确保全绿
+- 想看覆盖率 → `npm run test:coverage`
 
 ### 新增测试的约定
 
 - 服务端纯逻辑（server.js 中的决策函数、工具函数）→ 新建 `test/xxx.test.js`，用 `node:test` 格式
-- local-feature 功能 → 新建 `local-features/<name>/test/xxx.test.ts`，用自执行 `main()` 格式
+- local-feature 功能 → 新建 `local-features/<name>/test/xxx.test.ts`，用 `node:test` 格式（`describe/it/assert`）
 - local-feature 测试需要在 `local-features/tsconfig.json` 的 `include` 中添加路径才能被编译
 - local-feature 测试的产物路径需加入 `package.json` 的 `test:features` 脚本
-- 前端 JS 目前无自动化测试（需要浏览器环境）
+- 前端 JS 目前仅有 `frontend-vm.js` 沙箱测试覆盖 `app-core.js` 纯函数
 
 ### 重要注意事项
 
-- local-features 测试依赖编译产物，必须先 `npm run build:local-features`
-- `test:features` 脚本中的每个测试用 `&&` 链接，任何一个失败会终止后续测试并返回非零 exit code
+- local-features 测试依赖编译产物，`npm run test:features` 的 `pretest:features` 钩子会自动构建
 - 测试代码中 inline 复刻的 server.js 逻辑（如 `session-model-meta.test.js` 中的 `resolveSessionModel`）需要在 server.js 对应逻辑变更时同步更新
 
 ---

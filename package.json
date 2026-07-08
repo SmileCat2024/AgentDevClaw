@@ -13,9 +13,11 @@
     "start": "node server.js",
     "agentdev:local": "node scripts/use-agentdev-local.mjs",
     "agentdev:published": "node scripts/use-agentdev-published.mjs",
-    "test": "node --test test/*.test.js && node local-features/dist/flow/test/flow-feature.test.js && node local-features/dist/context-compaction-mirror/test/smoke.test.js && node local-features/dist/checkpoint/test/smoke.test.js && node local-features/dist/dispatch/test/smoke.test.js && node local-features/dist/context-handoff-seed/test/smoke.test.js",
+    "prepare": "node scripts/setup-hooks.mjs",
+    "test": "npm run test:core && npm run test:features",
     "test:core": "node --test test/*.test.js",
-    "test:features": "node local-features/dist/flow/test/flow-feature.test.js && node local-features/dist/context-compaction-mirror/test/smoke.test.js && node local-features/dist/checkpoint/test/smoke.test.js && node local-features/dist/dispatch/test/smoke.test.js && node local-features/dist/context-handoff-seed/test/smoke.test.js",
+    "test:coverage": "node --experimental-test-coverage --test test/*.test.js",
+    "test:features": "node --test local-features/dist/checkpoint/test/smoke.test.js local-features/dist/context-compaction-mirror/test/smoke.test.js local-features/dist/dispatch/test/smoke.test.js local-features/dist/context-handoff-seed/test/smoke.test.js local-features/dist/flow/test/flow-feature.test.js",
     "pretest:features": "npm run build:local-features"
   },
   "dependencies": {
@@ -24,7 +26,7 @@
     "@agentdev/lsp-feature": "file:resources/features/agentdev-lsp-feature-0.1.0.tgz",
     "@agentdev/memory-feature": "file:resources/features/agentdev-memory-feature-0.1.0.tgz",
     "@agentdev/plugin-compat-feature": "file:resources/features/agentdev-plugin-compat-feature-0.1.0.tgz",
-    "@agentdev/qqbot-feature": "file:resources/features/agentdev-qqbot-feature-0.2.0.tgz",
+    "@agentdev/qqbot-feature": "file:resources/features/agentdev-qqbot-feature-0.00.0.tgz",
     "@agentdev/shell-feature": "file:resources/features/agentdev-shell-feature-0.1.0.tgz",
     "@agentdev/tts-feature": "file:resources/features/agentdev-tts-feature-0.1.0.tgz",
     "@agentdev/visual-feature": "file:resources/features/agentdev-visual-feature-0.1.0.tgz",

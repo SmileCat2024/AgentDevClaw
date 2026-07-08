@@ -1,8 +1,16 @@
-import { Context } from 'agentdev';
+/**
+ * ContextHandoffSeedFeature smoke test (node:test format)
+ *
+ * Validates seed injection and _callIndex advancement.
+ */
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import type { Context } from 'agentdev';
 import { ContextHandoffSeedFeature } from '../src/index.js';
 
-async function main(): Promise<void> {
-  const feature = new ContextHandoffSeedFeature({
+function createFeature() {
+  return new ContextHandoffSeedFeature({
     handoff: {
       packageId: 'pkg-1',
       sourceSessionId: 'session-1',
@@ -14,7 +22,9 @@ async function main(): Promise<void> {
       ],
     },
   });
+}
 
+function createContextRecorder() {
   const messages: Array<{ role: string; content: string }> = [];
   const context = {
     add(msg: any): void {
@@ -29,43 +39,61 @@ async function main(): Promise<void> {
     addAssistantMessage(response: { content: string }): void {
       messages.push({ role: 'assistant', content: response.content });
     },
-  } as unknown as Context;
-
-  const agent = { _callIndex: 0 };
-  await feature.injectHandoffSummary({
-    input: 'hello',
-    isFirstCall: true,
-    context,
-    agent,
-  } as any);
-
-  if (messages.length !== 3) {
-    throw new Error(`expected three injected seed messages, got ${messages.length}`);
-  }
-
-  // Verify _callIndex was advanced past seed turns.
-  // seedMessages have turns 1, 2, 2 → injectionTurn = max(0, 1+1, 2+1, 2+1) = 3
-  // _callIndex should be set to injectionTurn so the next user message lands after seed turns.
-  if (agent._callIndex !== 3) {
-    throw new Error(`expected _callIndex=3 (injectionTurn), got ${agent._callIndex}`);
-  }
-
-  await feature.injectHandoffSummary({
-    input: 'again',
-    isFirstCall: false,
-    context,
-    agent: { _callIndex: 1 },
-  } as any);
-
-  if (messages.length !== 3) {
-    throw new Error('handoff seed should inject only once');
-  }
-
-  console.log('[PASS] ContextHandoffSeed: seed injection + _callIndex advancement');
+  };
+  return { messages, context };
 }
 
-main().catch(error => {
-  const message = error instanceof Error ? error.stack || error.message : String(error);
-  console.error(`[FAIL] ${message}`);
-  process.exitCode = 1;
+describe('ContextHandoffSeedFeature', () => {
+
+  it('should inject seed messages on first call', async () => {
+    const feature = createFeature();
+    const { messages, context } = createContextRecorder();
+    const agent = { _callIndex: 0 };
+
+    await feature.injectHandoffSummary({
+      input: 'hello',
+      isFirstCall: true,
+      context,
+      agent,
+    } as any);
+
+    assert.equal(messages.length, 3);
+  });
+
+  it('should advance _callIndex past seed turns', async () => {
+    const feature = createFeature();
+    const { context } = createContextRecorder();
+    const agent = { _callIndex: 0 };
+
+    await feature.injectHandoffSummary({
+      input: 'hello',
+      isFirstCall: true,
+      context,
+      agent,
+    } as any);
+
+    // seedMessages have turns 1, 2, 2 -> injectionTurn = max(0, 1+1, 2+1, 2+1) = 3
+    assert.equal(agent._callIndex, 3);
+  });
+
+  it('should inject only once (skip on subsequent calls)', async () => {
+    const feature = createFeature();
+    const { messages, context } = createContextRecorder();
+
+    await feature.injectHandoffSummary({
+      input: 'hello',
+      isFirstCall: true,
+      context,
+      agent: { _callIndex: 0 },
+    } as any);
+
+    await feature.injectHandoffSummary({
+      input: 'again',
+      isFirstCall: false,
+      context,
+      agent: { _callIndex: 1 },
+    } as any);
+
+    assert.equal(messages.length, 3);
+  });
 });

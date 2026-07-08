@@ -1,0 +1,15 @@
+#!/bin/sh
+# Pre-commit hook: run core tests before each commit.
+# Skip with: git commit --no-verify
+
+echo "[pre-commit] Running core tests..."
+
+node --test test/*.test.js 2>&1
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "[pre-commit] Tests failed. Commit aborted."
+  echo "[pre-commit] To bypass, use: git commit --no-verify"
+  exit 1
+fi
+
+echo "[pre-commit] All core tests passed."
