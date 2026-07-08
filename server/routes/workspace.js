@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 
-import { PROJECT_ROOT, USER_FEATURE_REPOSITORY_ROOT } from '../shared/constants.js';
+import { PROJECT_ROOT, USER_FEATURE_REPOSITORY_ROOT, WORKSPACE_CACHE_TTL_MS } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, parseListField, getAssemblyWorkspaceDir } from '../shared/string-helpers.js';
 import { readJson, ensureDir } from '../shared/fs-helpers.js';
 import {
@@ -647,7 +647,7 @@ const _wsCache = new Map();
 export async function readWorkspaceState(agentId) {
   const key = sanitizeSessionFragment(agentId);
   const cached = _wsCache.get(key);
-  if (cached && Date.now() - cached.ts < 5000) return cached.data;
+  if (cached && Date.now() - cached.ts < WORKSPACE_CACHE_TTL_MS) return cached.data;
   try {
     let data = normalizeWorkspaceState(await readJson(getPrebuiltWorkspaceStatePath(key)));
     if (key === 'programming-helper' && data.forms && data.forms['startup-form']) {

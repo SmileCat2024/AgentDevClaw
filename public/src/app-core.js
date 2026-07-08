@@ -258,6 +258,10 @@ const _agentCallActive = new Map();
 // 在窗口内忽略轮询返回的 callActive:true。
 const _interruptSuppression = new Map();
 const INTERRUPT_SUPPRESSION_MS = 8000;
+
+// ── Polling intervals ──────────────────────────────────────────
+const POLL_INTERVAL_MS   = 1000; // 正常态轮询间隔
+const POLL_FAST_INTERVAL_MS = 300; // 忙碌态/会话切换加速轮询间隔
 function isInterruptSuppressed(runtimeId) {
   if (!runtimeId) return false;
   const expiry = _interruptSuppression.get(runtimeId);

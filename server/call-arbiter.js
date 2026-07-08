@@ -14,6 +14,8 @@
 // run-prebuilt-agent.js calls setDebugHubClass(DebugHub) after import.
 // When null (e.g. in tests), DebugHub-related calls are silently skipped.
 
+import { CONTINUATION_BUDGET } from './shared/constants.js';
+
 let _debugHubClass = null;
 
 /**
@@ -57,11 +59,7 @@ export class CallArbiter {
     this.sessionSaveFn = null;
 
     // Continuation budget limits (per envelope).
-    this.continuationBudget = {
-      maxSegments: 20,
-      maxCheckpoints: 5,
-      maxRollbacks: 3,
-    };
+    this.continuationBudget = { ...CONTINUATION_BUDGET };
 
     // ── Supplement buffer ──
     // When the agent is busy (call active), queued-input messages go here

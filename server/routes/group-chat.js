@@ -1,7 +1,7 @@
 import path from 'path';
 import { existsSync, readFileSync, promises as fs } from 'fs';
 
-import { GROUP_CHATS_ROOT, VIEWER_ORIGIN, AGENTS_ROOT } from '../shared/constants.js';
+import { GROUP_CHATS_ROOT, VIEWER_ORIGIN, AGENTS_ROOT, LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC, GROUP_CHAT_CALL_TIMEOUT_MS } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, log } from '../shared/string-helpers.js';
 import { managedAgents, getManagedRuntimeKey, listAgentRuntimes, getAgentRuntime } from '../shared/agent-access.js';
 import { readSessionIndex, readSessionIndexSync, getPrebuiltSessionFilePath } from '../shared/session-access.js';
@@ -1113,7 +1113,7 @@ app.get('/protoclaw/gc/inbox', async (req, res) => {
   const agentId = req.query.agentId;
   const sessionId = req.query.sessionId || null;
   if (!agentId) return res.status(400).json({ error: 'agentId required' });
-  const timeoutMs = Math.min(Number(req.query.timeout) || 25, 30) * 1000;
+  const timeoutMs = Math.min(Number(req.query.timeout) || LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC) * 1000;
   const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
 
   const queue = gcInboxQueue.get(runtimeKey);
@@ -2727,7 +2727,7 @@ async function notifySessionArchived({ agentId, sessionId }) {
 function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId, sessionInfo) {
   let wasRunning = false;
   const startTime = Date.now();
-  const TIMEOUT_MS = 15 * 60 * 1000; // 15 分钟超时
+  const TIMEOUT_MS = GROUP_CHAT_CALL_TIMEOUT_MS;
 
   // Phase 2: task 完成检测状态
   const knownCompletedTaskIds = new Set();
@@ -2843,12 +2843,6 @@ async function pollTaskCompletion(chatId, viewerAgentId, sessionInfo, knownCompl
 
       await appendGroupChatMessage(chatId, eventMessage);
       log('GroupChat', `task_completed event: ${sessionInfo.identityName} completed "${eventMessage.event.taskTitle}"`);
-
-      // task_completed 是高价值信号，主动唤醒管理员
-      const chat = await readGroupChat(chatId);
-      if (chat && ['plan', 'execute'].includes(chat.initiativeMode || 'assist')) {
-        await notifyAdminForActivity(chatId, eventMessage, chat);
-      }
     }
   } catch {
     // 网络错误等，静默跳过
@@ -2913,7 +2907,7 @@ app.get('/protoclaw/group_chats/:chatId/updates', async (req, res, next) => {
   try {
     const chatId = req.params.chatId;
     const since = parseInt(req.query.since, 10) || 0;
-    const timeoutMs = Math.min(Number(req.query.timeout) || 25, 30) * 1000;
+    const timeoutMs = Math.min(Number(req.query.timeout) || LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC) * 1000;
 
     // 先检查是否已有更新
     const chat = await readGroupChat(chatId);

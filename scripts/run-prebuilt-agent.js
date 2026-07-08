@@ -34,6 +34,7 @@ const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
 const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
+const PREBUILT_AGENT_MAX_TOKENS_CAP = 8000; // 预制 agent maxTokens 上限（应与 server/shared/constants.js 保持一致）
 const IS_EXPLORATION = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
 const runtimeInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const reportedUsageEventIds = new Set();
@@ -657,7 +658,7 @@ function tuneSummaryLLM(llm) {
   try {
     if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
       const current = Number(llm.maxTokens);
-      llm.maxTokens = Number.isFinite(current) && current > 0 ? Math.min(current, 8000) : 8000;
+      llm.maxTokens = Number.isFinite(current) && current > 0 ? Math.min(current, PREBUILT_AGENT_MAX_TOKENS_CAP) : PREBUILT_AGENT_MAX_TOKENS_CAP;
     }
   } catch {}
   return () => {

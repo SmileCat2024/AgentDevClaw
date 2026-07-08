@@ -1,5 +1,5 @@
 import { sanitizeSessionFragment } from './string-helpers.js';
-import { NO_SESSION_TOKEN } from './constants.js';
+import { NO_SESSION_TOKEN, ASSEMBLY_EXIT_WAIT_MS } from './constants.js';
 
 export const managedAgents = new Map();
 export const assemblyRuntimeProcesses = new Map();
@@ -44,7 +44,7 @@ export async function stopAssemblyRuntime(sessionId) {
   runtime.stopped = true;
   const normalizedSessionId = sanitizeSessionFragment(sessionId);
   const waitForExit = new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(false), 2500);
+    const timeout = setTimeout(() => resolve(false), ASSEMBLY_EXIT_WAIT_MS);
     runtime.process.once('exit', () => {
       clearTimeout(timeout);
       resolve(true);

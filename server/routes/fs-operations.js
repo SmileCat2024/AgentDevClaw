@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import express from 'express';
-import { PROJECT_ROOT } from '../shared/constants.js';
+import { PROJECT_ROOT, SHELL_DEFAULT_TIMEOUT_MS } from '../shared/constants.js';
 
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -125,7 +125,7 @@ async function selectDirectory() {
 
 async function runInteractiveSelectionScript(scriptLines, options = {}) {
   const outputPath = path.join(os.tmpdir(), `agentdevclaw-select-${randomUUID()}.txt`);
-  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 5 * 60 * 1000;
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : SHELL_DEFAULT_TIMEOUT_MS;
   const selectionScript = Array.isArray(scriptLines) ? scriptLines.join('\n') : String(scriptLines || '');
   const escapedOutputPath = outputPath.replace(/\\/g, '\\\\');
   const finalScript = selectionScript.replace(/__OUT__/g, escapedOutputPath);

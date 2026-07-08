@@ -4,6 +4,8 @@ import {
   RUNTIME_SCRIPT, ONE_SHOT_SCRIPT,
   VIEWER_PORT, APP_ORIGIN, PROJECT_ROOT,
   NO_SESSION_TOKEN, APP_PORT,
+  PROCESS_EXIT_WAIT_MS, RUNTIME_READY_WAIT_MS,
+  CALL_EXECUTION_TIMEOUT_MS,
 } from '../shared/constants.js';
 import {
   sanitizeSessionFragment, cleanSessionText, sanitizeSpawnEnv,
@@ -214,14 +216,14 @@ export function createAgentLifecycleModule(ctx) {
     return connectedAgents;
   }
 
-  async function waitForProcessExit(child, timeoutMs = 5000) {
+  async function waitForProcessExit(child, timeoutMs = PROCESS_EXIT_WAIT_MS) {
     await Promise.race([
       new Promise((resolve) => child.once('exit', resolve)),
       new Promise((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
   }
 
-  async function waitForManagedRuntimeReady(agentId, timeoutMs = 10000, sessionId = undefined) {
+  async function waitForManagedRuntimeReady(agentId, timeoutMs = RUNTIME_READY_WAIT_MS, sessionId = undefined) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const runtime = getAgentRuntime(agentId, sessionId);
@@ -244,7 +246,7 @@ export function createAgentLifecycleModule(ctx) {
     return null;
   }
 
-  async function waitForAssemblyRuntimeReady(sessionId, timeoutMs = 10000) {
+  async function waitForAssemblyRuntimeReady(sessionId, timeoutMs = RUNTIME_READY_WAIT_MS) {
     const normalizedSessionId = sanitizeSessionFragment(sessionId);
     const start = Date.now();
     console.log(`[PERF] waitForAssemblyRuntimeReady BEGIN session=${normalizedSessionId} timeout=${timeoutMs}`);
@@ -435,7 +437,7 @@ export function createAgentLifecycleModule(ctx) {
    */
   async function startOneShotAgent(agent, sessionId, goal, options = {}) {
     const resolvedSessionId = sanitizeSessionFragment(sessionId);
-    const timeoutMs = options.timeoutMs || 300000;
+    const timeoutMs = options.timeoutMs || CALL_EXECUTION_TIMEOUT_MS;
 
     return new Promise((resolve, reject) => {
       let resultLine = null;

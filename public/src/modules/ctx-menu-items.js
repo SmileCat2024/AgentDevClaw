@@ -560,6 +560,7 @@ function markSessionArchivedForMutation(agentId, sessionId) {
   );
   updateAgentRecord(agentId, {
     workspace_sessions: {
+      ...(agent?.workspace_sessions || {}),
       sessions: nextSessions,
       activeSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || null,
     },
@@ -576,6 +577,7 @@ function markSessionArchivedForMutation(agentId, sessionId) {
     );
     updateAgentRecord(agentId, {
       workspace_sessions: {
+        ...(latestAgent?.workspace_sessions || {}),
         sessions: revertedSessions,
         activeSessionId: latestAgent?.workspace_sessions?.activeSessionId || latestAgent?.active_workspace_session_id || null,
       },
@@ -605,6 +607,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
     );
     updateAgentRecord(agentId, {
       workspace_sessions: {
+        ...(agent?.workspace_sessions || {}),
         sessions: updatedSessions,
         activeSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || null,
       },
@@ -641,7 +644,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
         s.id === sessionId ? { ...s, archived: false } : s,
       );
       updateAgentRecord(agentId, {
-        workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
+        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || null },
       });
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
@@ -658,7 +661,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
   try {
     if (oldRuntimeId) clearAgentRuntimeCache(oldRuntimeId);
     await invoke('stop_agent', { agentId, sessionId });
-    refreshSidebarRuntimeAfterMutation(500);
+    refreshSidebarRuntimeAfterMutation();
   } catch (e) {
     console.error('Failed to stop runtime after archive:', e);
   }

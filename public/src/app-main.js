@@ -420,7 +420,18 @@ async function loadAgents() {
                 const freshSessions = agent.workspace_sessions?.sessions || [];
                 if (freshSessions.length === 0) return prevSessions;
                 const prevIds = new Set(prevSessions.map((s) => s.id));
-                return [...prevSessions, ...freshSessions.filter((s) => !prevIds.has(s.id))];
+                // Enrich new LIGHT records (from getConnectedAgents) with
+                // top-level model info so context bar doesn't flash defaults
+                // before the next workspace session refresh provides FULL data.
+                const prevCl = prev.workspace_sessions?.contextLength;
+                const prevCr = prev.workspace_sessions?.compressRatio;
+                const newSessions = freshSessions.filter((s) => !prevIds.has(s.id))
+                  .map((s) => ({
+                    ...s,
+                    ...(s.contextLength == null && Number.isFinite(prevCl) && prevCl > 0 ? { contextLength: prevCl } : {}),
+                    ...(s.compressRatio == null && Number.isFinite(prevCr) && prevCr > 0 ? { compressRatio: prevCr } : {}),
+                  }));
+                return [...prevSessions, ...newSessions];
               })(),
               ...(agent.workspace_sessions?.activeSessionId
                 && agent.workspace_sessions.activeSessionId !== prev.workspace_sessions?.activeSessionId
@@ -454,7 +465,7 @@ async function loadAgents() {
       }
     }
 
-    await refreshAgentCallStates(allAgents, { force: true });
+    await refreshAgentCallStates(allAgents);
 
     if (currentAgentId && !allAgents.some((agent) => agent.id === currentAgentId || getAgentRuntimeId(agent) === currentAgentId)) {
       const fallbackId = resolveWorkspaceFallbackAgentId();
@@ -1334,7 +1345,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         if (action.archiveOriginal && _csOldRuntimeId) {
           clearAgentRuntimeCache(_csOldRuntimeId);
           try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
-          refreshSidebarRuntimeAfterMutation(500);
+          refreshSidebarRuntimeAfterMutation();
         }
         _csArchiveRollback = null;
         return;
@@ -1363,7 +1374,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (action.archiveOriginal && _csOldRuntimeId) {
         clearAgentRuntimeCache(_csOldRuntimeId);
         try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
-        refreshSidebarRuntimeAfterMutation(500);
+        refreshSidebarRuntimeAfterMutation();
       }
       _csArchiveRollback = null;
     } catch (error) {
@@ -2802,7 +2813,7 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
 async function poll() {
   try {
     if (prebuiltSessionSwitchInFlight) {
-      setTimeout(poll, 300);
+      setTimeout(poll, POLL_FAST_INTERVAL_MS);
       return;
     }
 
@@ -2832,7 +2843,19 @@ async function poll() {
             const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(wsHostAgent.id));
             if (freshRes.ok) {
               const freshSessions = await freshRes.json();
-              const prevSig = JSON.stringify(wsHostAgent.workspace_sessions || {});
+              // Preserve optimistic archived state (same logic as runtime-connected path)
+              const currentWs = wsHostAgent.workspace_sessions;
+              if (currentWs && Array.isArray(currentWs.sessions) && Array.isArray(freshSessions.sessions)) {
+                const currentById = new Map(currentWs.sessions.map(s => [s.id, s]));
+                freshSessions.sessions = freshSessions.sessions.map(s => {
+                  const cur = currentById.get(s.id);
+                  if (cur && cur.archived === true && s.archived !== true) {
+                    return { ...s, archived: true, todo: false };
+                  }
+                  return s;
+                });
+              }
+              const prevSig = JSON.stringify(currentWs || {});
               const nextSig = JSON.stringify(freshSessions);
               if (prevSig !== nextSig) {
                 wsHostAgent.workspace_sessions = freshSessions;
@@ -2858,7 +2881,7 @@ async function poll() {
       if (activeFeaturePanel === 'logs' && logPanelScope === 'all') {
         await loadLogs();
       }
-      setTimeout(poll, 1000);
+      setTimeout(poll, POLL_INTERVAL_MS);
       return;
     }
 
@@ -2875,7 +2898,7 @@ async function poll() {
 
     // 如果在 fetch 期间已经切换了 agent，丢弃过时的响应，避免旧数据覆盖新会话
     if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(pollRuntimeId)) {
-      setTimeout(poll, 300);
+      setTimeout(poll, POLL_FAST_INTERVAL_MS);
       return;
     }
 
@@ -2887,7 +2910,7 @@ async function poll() {
         clearPartialCompactState();
       }
       if (prebuiltSessionSwitchInFlight || suppressSidebarRerender) {
-        setTimeout(poll, 300);
+        setTimeout(poll, POLL_FAST_INTERVAL_MS);
         return;
       }
       const failedRuntimeId = currentRuntimeAgentId;
@@ -2915,7 +2938,7 @@ async function poll() {
         renderInputRequests([]);
       }
       await loadAgents();
-      setTimeout(poll, 1000);
+      setTimeout(poll, POLL_INTERVAL_MS);
       return;
     }
 
@@ -3048,7 +3071,23 @@ async function poll() {
           const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(wsHostAgent.id));
           if (freshRes.ok) {
             const freshSessions = await freshRes.json();
-            const prevSig = JSON.stringify(wsHostAgent.workspace_sessions || {});
+            // Preserve optimistic archived state: during compact+archive operations,
+            // markSessionArchivedForMutation sets archived=true before the server
+            // actually archives (which happens inside compact_and_resume response).
+            // Without this, the 3-second refresh would overwrite the optimistic
+            // state with the server's not-yet-archived data, causing visual flicker.
+            const currentWs = wsHostAgent.workspace_sessions;
+            if (currentWs && Array.isArray(currentWs.sessions) && Array.isArray(freshSessions.sessions)) {
+              const currentById = new Map(currentWs.sessions.map(s => [s.id, s]));
+              freshSessions.sessions = freshSessions.sessions.map(s => {
+                const cur = currentById.get(s.id);
+                if (cur && cur.archived === true && s.archived !== true) {
+                  return { ...s, archived: true, todo: false };
+                }
+                return s;
+              });
+            }
+            const prevSig = JSON.stringify(currentWs || {});
             const nextSig = JSON.stringify(freshSessions);
             if (prevSig !== nextSig) {
               wsHostAgent.workspace_sessions = freshSessions;
@@ -3094,10 +3133,10 @@ async function poll() {
 
   } catch (e) {
     console.warn('Polling failed, keeping last known connection state:', e);
-    setTimeout(poll, 1000);
+    setTimeout(poll, POLL_INTERVAL_MS);
     return;
   }
-  setTimeout(poll, 300);
+  setTimeout(poll, POLL_FAST_INTERVAL_MS);
 }
 
 // 渲染输入请求

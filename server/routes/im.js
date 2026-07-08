@@ -23,6 +23,7 @@ import {
   PROJECT_FEISHU_CONFIG_PATH,
   PROJECT_WECOM_CONFIG_PATH,
   PROJECT_IM_WORKSPACE_CONFIG_PATH,
+  IM_IPC_MOUNT_RETRY_MS,
 } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, ensureDir } from '../shared/fs-helpers.js';
@@ -798,7 +799,7 @@ export function setupIMRoutes(app, express, ctx) {
             if (!retryOK) {
               console.error(`[ProtoClaw IM] IPC mount retry also failed for ${agentId}::${sessionId}`);
             }
-          }, 1500);
+          }, IM_IPC_MOUNT_RETRY_MS);
         }
       }
 

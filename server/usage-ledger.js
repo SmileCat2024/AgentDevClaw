@@ -1,12 +1,11 @@
 import { createHash, randomUUID } from 'crypto';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
-import { USER_DATA_ROOT } from './shared/constants.js';
+import { USER_DATA_ROOT, USAGE_MAX_INDEX_IDS } from './shared/constants.js';
 
 const USAGE_ROOT = path.join(USER_DATA_ROOT, 'usage');
 const EVENTS_DIR = path.join(USAGE_ROOT, 'events');
 const EVENT_INDEX_PATH = path.join(USAGE_ROOT, 'event-index.json');
-const MAX_INDEX_IDS = 20000;
 
 export function cleanText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -148,7 +147,7 @@ async function readEventIndex() {
 }
 
 async function writeEventIndex(index) {
-  const ids = Array.isArray(index?.ids) ? index.ids.slice(-MAX_INDEX_IDS) : [];
+  const ids = Array.isArray(index?.ids) ? index.ids.slice(-USAGE_MAX_INDEX_IDS) : [];
   await writeFile(EVENT_INDEX_PATH, JSON.stringify({ ids }, null, 2), 'utf8');
 }
 

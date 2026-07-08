@@ -655,6 +655,18 @@ export class GroupAdminFeature implements AgentFeature {
           }
         },
       },
+      {
+        name: 'gc_stop',
+        description: '主动结束本轮对话。当你已完成所有必要的回复、派发或操作，确认无需再进行任何后续动作时，调用此工具。调用后会立即结束当前会话轮次，不会继续执行下一步。',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+        execute: async () => {
+          this.stopRequested = true;
+          return { success: true, text: '本轮对话即将结束。' };
+        },
+      },
     ];
   }
 }

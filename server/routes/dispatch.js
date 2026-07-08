@@ -21,7 +21,7 @@ import {
   EnvelopeSource,
   EnvelopeStatus,
 } from '../runtime-call-envelope.js';
-import { USER_DATA_ROOT } from '../shared/constants.js';
+import { USER_DATA_ROOT, DISPATCH_FIRED_TIMEOUT_MS, LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC, DISPATCH_IDLE_THRESHOLD_DEFAULT_SEC, DISPATCH_IDLE_POLL_MIN_MS } from '../shared/constants.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import {
@@ -42,8 +42,6 @@ const dispatchPendingPolls = new Map();    // runtimeKey → resolveFn
 const dispatchTimers = new Map();          // scheduleId → setTimeout handle
 const dispatchRuntimeActivity = new Map(); // runtimeKey → { lastActiveAt, status: 'idle'|'active' }
 const dispatchIdleCheckers = new Map();    // scheduleId → setInterval handle (for on-idle triggers)
-
-const DISPATCH_FIRED_TIMEOUT_MS = 5 * 60 * 1000; // fired schedule 超时阈值：5 分钟
 
 // ── ctx injection (set by setupDispatchRoutes or setDispatchCtx) ──
 
@@ -224,9 +222,9 @@ function scheduleDispatchFire(schedule) {
     dispatchTimers.set(schedule.id, handle);
   } else if (triggerType === 'on-idle') {
     // Start periodic check for idle trigger
-    const threshold = (schedule.trigger.idleThreshold || 300) * 1000;
+    const threshold = (schedule.trigger.idleThreshold || DISPATCH_IDLE_THRESHOLD_DEFAULT_SEC) * 1000;
     const minInterval = (schedule.repeatInterval || 0) * 1000; // minimum time between consecutive fires
-    const interval = Math.max(Math.floor(threshold / 3), 5000);
+    const interval = Math.max(Math.floor(threshold / 3), DISPATCH_IDLE_POLL_MIN_MS);
     const earliestNext = minInterval > 0 ? (schedule._lastFiredAt || 0) + minInterval : 0;
     const handle = setInterval(() => {
       if (schedule.status !== 'pending') {
@@ -829,7 +827,7 @@ export function setupDispatchRoutes(app, express, ctx) {
     const agentId = req.query.agentId;
     const sessionId = req.query.sessionId || null;
     if (!agentId) return res.status(400).json({ error: 'agentId required' });
-    const timeoutMs = Math.min(Number(req.query.timeout) || 25, 30) * 1000;
+    const timeoutMs = Math.min(Number(req.query.timeout) || LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC) * 1000;
     const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
 
     const queue = dispatchQueue.get(runtimeKey);

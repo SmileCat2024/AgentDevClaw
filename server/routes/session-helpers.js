@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
-import { USER_DATA_ROOT, AGENTS_ROOT } from '../shared/constants.js';
+import { USER_DATA_ROOT, AGENTS_ROOT, SESSION_SEARCH_MAX_RESULTS, SESSION_INDEX_BATCH_SIZE } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import {
   sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent,
@@ -591,7 +591,6 @@ const _searchIndexCache = new Map();
 const _searchIndexBuilding = new Map();
 const SEARCH_INDEX_VERSION = 1;
 const SEARCH_SNIPPET_RADIUS = 40;
-const SEARCH_MAX_RESULTS = 50;
 
 function getSearchIndexPath(agentId) {
   return path.join(getPrebuiltAgentSessionDir(agentId), 'search-index.json');
@@ -670,9 +669,8 @@ async function ensureSearchIndex(agentId) {
     }
 
     // Read files in batches, yielding between batches
-    const BATCH_SIZE = 10;
-    for (let i = 0; i < toRead.length; i += BATCH_SIZE) {
-      const batch = toRead.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < toRead.length; i += SESSION_INDEX_BATCH_SIZE) {
+      const batch = toRead.slice(i, i + SESSION_INDEX_BATCH_SIZE);
       await Promise.all(batch.map(async (record) => {
         try {
           const sessionPath = getPrebuiltSessionFilePath(agentId, record.id);
@@ -691,7 +689,7 @@ async function ensureSearchIndex(agentId) {
           // Skip unreadable sessions
         }
       }));
-      if (i + BATCH_SIZE < toRead.length) {
+      if (i + SESSION_INDEX_BATCH_SIZE < toRead.length) {
         await new Promise(resolve => setImmediate(resolve));
       }
     }

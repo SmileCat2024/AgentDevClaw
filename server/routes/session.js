@@ -5,7 +5,12 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
-import { USER_DATA_ROOT } from '../shared/constants.js';
+import {
+  USER_DATA_ROOT,
+  MIRROR_SCRIPT_TIMEOUT_MS,
+  SPAWN_AGENT_TIMEOUT_MS,
+  REQ_TIMEOUT_BUFFER_MS,
+} from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import {
   sanitizeSessionFragment,
@@ -451,7 +456,7 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
       let stdout = '';
       let stderr = '';
       let timedOut = false;
-      const timeoutMs = 120000;
+      const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill('SIGTERM');
@@ -740,7 +745,7 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
     });
 
     let stderr = '';
-    const timeoutMs = 120000;
+    const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -830,7 +835,7 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
     });
 
     let stderr = '';
-    const timeoutMs = 120000;
+    const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -950,7 +955,7 @@ app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => 
     const handoffId = cleanSessionText(req.body?.handoffId);
     const handoffPath = cleanSessionText(req.body?.handoffPath);
     const goal = cleanSessionText(req.body?.goal);
-    const timeoutMs = Number(req.body?.timeoutMs) || 300000;
+    const timeoutMs = Number(req.body?.timeoutMs) || SPAWN_AGENT_TIMEOUT_MS;
     const explorationIds = Array.isArray(req.body?.explorationIds)
       ? req.body.explorationIds.map(id => cleanSessionText(id)).filter(Boolean)
       : [];
@@ -960,7 +965,7 @@ app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => 
       return;
     }
 
-    req.setTimeout(timeoutMs + 10000);
+    req.setTimeout(timeoutMs + REQ_TIMEOUT_BUFFER_MS);
 
     const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
     const agentId = preferredAgentId || 'programming-helper';
@@ -1061,14 +1066,14 @@ app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
   try {
     const subSessionId = cleanSessionText(req.body?.sessionId);
     const message = cleanSessionText(req.body?.message);
-    const timeoutMs = Number(req.body?.timeoutMs) || 300000;
+    const timeoutMs = Number(req.body?.timeoutMs) || SPAWN_AGENT_TIMEOUT_MS;
 
     if (!subSessionId || !message) {
       res.status(400).json({ error: 'sessionId and message are required' });
       return;
     }
 
-    req.setTimeout(timeoutMs + 10000);
+    req.setTimeout(timeoutMs + REQ_TIMEOUT_BUFFER_MS);
 
     const agentId = 'programming-helper';
     const agent = await requirePrebuiltAgentForRuntime(agentId);

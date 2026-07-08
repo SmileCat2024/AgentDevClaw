@@ -2,7 +2,7 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
 
-import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH } from '../shared/constants.js';
+import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
 
@@ -68,7 +68,7 @@ function flattenModelPresets(data) {
       maxTokens: Number.isFinite(Number(preset?.maxTokens)) ? Number(preset.maxTokens) : null,
       temperature: Number.isFinite(Number(preset?.temperature)) ? Number(preset.temperature) : null,
       contextLength: Number.isFinite(Number(preset?.contextLength)) ? Number(preset.contextLength) : null,
-      compressRatio: Number.isFinite(Number(preset?.compressRatio)) ? Math.max(1, Math.min(100, Number(preset.compressRatio))) : 80,
+      compressRatio: Number.isFinite(Number(preset?.compressRatio)) ? Math.max(1, Math.min(100, Number(preset.compressRatio))) : DEFAULT_COMPRESS_RATIO,
       countTokenPath: cleanSessionText(preset?.countTokenPath) || null,
       customHeaders: Array.isArray(preset?.customHeaders) ? preset.customHeaders.filter(h => h && typeof h === 'object') : [],
     };
@@ -150,7 +150,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       maxTokens: Number.isFinite(Number(rawPreset.maxTokens)) ? Number(rawPreset.maxTokens) : null,
       temperature: Number.isFinite(Number(rawPreset.temperature)) ? Number(rawPreset.temperature) : null,
       contextLength: Number.isFinite(Number(rawPreset.contextLength)) ? Number(rawPreset.contextLength) : null,
-      compressRatio: Number.isFinite(Number(rawPreset.compressRatio)) ? Math.max(1, Math.min(100, Number(rawPreset.compressRatio))) : 80,
+      compressRatio: Number.isFinite(Number(rawPreset.compressRatio)) ? Math.max(1, Math.min(100, Number(rawPreset.compressRatio))) : DEFAULT_COMPRESS_RATIO,
       countTokenPath: cleanSessionText(rawPreset.countTokenPath) || null,
       customHeaders: Array.isArray(rawPreset.customHeaders) ? rawPreset.customHeaders.filter(h => h && typeof h === 'object') : [],
     };

@@ -264,8 +264,8 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
   if (!succeeded) {
     var isAbort = lastError && lastError.name === 'AbortError';
     ClawToast.update(toastId, {
-      status: 'error',
-      title: isZh ? '标题生成失败' : 'Title generation failed',
+      status: 'warning',
+      title: isZh ? '标题自动生成未成功' : 'Auto title generation unsuccessful',
       description: isAbort
         ? (isZh ? '请求超时' : 'Request timed out')
         : (lastError ? (lastError.message || String(lastError)) : 'Unknown error'),
