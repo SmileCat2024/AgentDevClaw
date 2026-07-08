@@ -3132,6 +3132,7 @@ function renderInputRequests(requests) {
     return;
   }
 
+  const previousRenderedInputMode = lastRenderedInputMode;
   lastRenderedInputSignature = signature;
   lastRenderedInputMode = renderMode;
 
@@ -3140,7 +3141,7 @@ function renderInputRequests(requests) {
   // 按钮引用重新指向新元素即可。仅在输入面真正切换时才取消录音。
   const _preserveVoiceRecording = _voiceRecording
     && renderMode === 'persistent'
-    && lastRenderedInputMode === 'persistent';
+    && previousRenderedInputMode === 'persistent';
 
   if (_voiceRecording && !_preserveVoiceRecording) {
     if (_voicePendingSend) {
