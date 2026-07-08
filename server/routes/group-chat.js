@@ -8,6 +8,11 @@ import { readSessionIndex, readSessionIndexSync, getPrebuiltSessionFilePath } fr
 import { resolveSessionModelInfo } from './model-config.js';
 import { getRuntimeExecutionState } from '../runtime-call-envelope.js';
 
+// ── 管理员上下文阈值默认值 ──────────────────────────────────────
+const ADMIN_DEFAULT_TOKEN_LIMIT = 200000;   // 按 token 计数的上下文阈值
+const ADMIN_DEFAULT_RATIO_LIMIT = 20;       // 按比例计数的阈值（百分比）
+const ADMIN_DEFAULT_CONTEXT_LENGTH = 200000; // contextLength 回退值（模型未提供时）
+
 // ── Module-level exports (pure functions + data layer factory) ─────
 // Extracted from setupGroupChatRoutes closures for direct unit testing.
 
@@ -933,19 +938,19 @@ async function _resolveGroupChatSessionInner(chatId, identityRef, sessionModel, 
     if (found) {
       // 管理员：检查上下文是否超限，超限则滚动到新 session
       if (identityRef === 'work-group:admin') {
-        const mem = chat.adminMemory || { limitMode: 'tokens', tokenLimit: 100000, ratioLimit: 80 };
+        const mem = chat.adminMemory || { limitMode: 'tokens', tokenLimit: ADMIN_DEFAULT_TOKEN_LIMIT, ratioLimit: ADMIN_DEFAULT_RATIO_LIMIT };
         const { contextTokens, available } = await getSessionContextUsage(workspaceId, existing);
         if (available) {
           let exceeded = false;
           if (mem.limitMode === 'ratio') {
             // 按比例：contextTokens / contextLength > ratioLimit%
-            const ratioVal = mem.ratioLimit ?? mem.limitValue ?? 80;
+            const ratioVal = mem.ratioLimit ?? mem.limitValue ?? ADMIN_DEFAULT_RATIO_LIMIT;
             const modelInfo = await resolveSessionModelInfo(workspaceId, 'default');
-            const contextLength = modelInfo?.contextLength || 200000;
+            const contextLength = modelInfo?.contextLength || ADMIN_DEFAULT_CONTEXT_LENGTH;
             exceeded = contextTokens / contextLength > ratioVal / 100;
           } else {
             // 按 token 数
-            const tokenVal = mem.tokenLimit ?? mem.limitValue ?? 100000;
+            const tokenVal = mem.tokenLimit ?? mem.limitValue ?? ADMIN_DEFAULT_TOKEN_LIMIT;
             exceeded = contextTokens >= tokenVal;
           }
           if (!exceeded) {
@@ -2879,7 +2884,7 @@ app.post('/protoclaw/group_chats', express.json(), async (req, res, next) => {
       sessions: {},
       initiativeMode: 'assist',
       autonomyMode: 'auto',
-      adminMemory: { range: '3d', limitMode: 'tokens', tokenLimit: 100000, ratioLimit: 80 },
+      adminMemory: { range: '3d', limitMode: 'tokens', tokenLimit: ADMIN_DEFAULT_TOKEN_LIMIT, ratioLimit: ADMIN_DEFAULT_RATIO_LIMIT },
       lastActiveAt: {},
     };
     await writeGroupChat(chat);
@@ -2988,10 +2993,10 @@ app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next)
           ? adminMemory.tokenLimit
           : (typeof prev.tokenLimit === 'number' ? prev.tokenLimit
             : (typeof adminMemory.limitValue === 'number' ? adminMemory.limitValue
-              : (typeof prev.limitValue === 'number' ? prev.limitValue : 100000))),
+              : (typeof prev.limitValue === 'number' ? prev.limitValue : ADMIN_DEFAULT_TOKEN_LIMIT))),
         ratioLimit: typeof adminMemory.ratioLimit === 'number'
           ? adminMemory.ratioLimit
-          : (typeof prev.ratioLimit === 'number' ? prev.ratioLimit : 80),
+          : (typeof prev.ratioLimit === 'number' ? prev.ratioLimit : ADMIN_DEFAULT_RATIO_LIMIT),
       };
     }
 
@@ -3642,8 +3647,8 @@ async function getAdminStatus(chatId) {
       contextTokens: 0,
       contextLimit: null,
       limitMode: (chat.adminMemory?.limitMode || 'tokens'),
-      tokenLimit: (chat.adminMemory?.tokenLimit ?? chat.adminMemory?.limitValue ?? 100000),
-      ratioLimit: (chat.adminMemory?.ratioLimit ?? 80),
+      tokenLimit: (chat.adminMemory?.tokenLimit ?? chat.adminMemory?.limitValue ?? ADMIN_DEFAULT_TOKEN_LIMIT),
+      ratioLimit: (chat.adminMemory?.ratioLimit ?? ADMIN_DEFAULT_RATIO_LIMIT),
       healthRatio: 0,
       healthStatus: 'unknown',
     };
@@ -3664,14 +3669,14 @@ async function getAdminStatus(chatId) {
     sessionTitle = record?.title || record?.taskTitle || null;
   } catch { /* ignore */ }
 
-  const mem = chat.adminMemory || { limitMode: 'tokens', tokenLimit: 100000, ratioLimit: 80 };
+  const mem = chat.adminMemory || { limitMode: 'tokens', tokenLimit: ADMIN_DEFAULT_TOKEN_LIMIT, ratioLimit: ADMIN_DEFAULT_RATIO_LIMIT };
   let healthRatio = 0;
   let contextLimit = null;
 
   if (mem.limitMode === 'ratio') {
-    const ratioVal = mem.ratioLimit ?? mem.limitValue ?? 80;
+    const ratioVal = mem.ratioLimit ?? mem.limitValue ?? ADMIN_DEFAULT_RATIO_LIMIT;
     const modelInfo = await resolveSessionModelInfo(workspaceId, 'default');
-    const contextLength = modelInfo?.contextLength || 200000;
+    const contextLength = modelInfo?.contextLength || ADMIN_DEFAULT_CONTEXT_LENGTH;
     contextLimit = Math.floor(contextLength * ratioVal / 100);
     if (available && contextLength > 0) {
       const actualRatio = contextTokens / contextLength;
@@ -3679,7 +3684,7 @@ async function getAdminStatus(chatId) {
       healthRatio = limitRatio > 0 ? actualRatio / limitRatio : 0;
     }
   } else {
-    const tokenVal = mem.tokenLimit ?? mem.limitValue ?? 100000;
+    const tokenVal = mem.tokenLimit ?? mem.limitValue ?? ADMIN_DEFAULT_TOKEN_LIMIT;
     contextLimit = tokenVal;
     if (available && tokenVal > 0) {
       healthRatio = contextTokens / tokenVal;
@@ -3702,8 +3707,8 @@ async function getAdminStatus(chatId) {
     contextTokens,
     contextLimit,
     limitMode: mem.limitMode || 'tokens',
-    tokenLimit: mem.tokenLimit ?? mem.limitValue ?? 100000,
-    ratioLimit: mem.ratioLimit ?? 80,
+    tokenLimit: mem.tokenLimit ?? mem.limitValue ?? ADMIN_DEFAULT_TOKEN_LIMIT,
+    ratioLimit: mem.ratioLimit ?? ADMIN_DEFAULT_RATIO_LIMIT,
     healthRatio,
     healthStatus,
   };
