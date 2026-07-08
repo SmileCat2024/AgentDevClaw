@@ -226,7 +226,7 @@ Object.assign(sessionApi, {
 agentDiscovery.setupRoutes(app);
 
 // ── Group Chat API → server/routes/group-chat.js ──
-const { cleanupOrphanedRouting } = setupGroupChatRoutes(app, express, {
+const { cleanupOrphanedRouting, notifySessionLineage, notifySessionArchived } = setupGroupChatRoutes(app, express, {
   collectIdentities,
   createPrebuiltSession,
   startManagedAgent,
@@ -305,6 +305,9 @@ setupSessionRoutes(app, express, {
   startOneShotAgent,
   stopManagedAgent,
   waitForManagedRuntimeReady,
+  // Group chat lineage callback
+  notifySessionLineage,
+  notifySessionArchived,
 });
 
 

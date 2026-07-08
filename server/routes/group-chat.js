@@ -413,6 +413,48 @@ function formatSessionLabel(title, sessionId) {
 }
 
 /**
+ * 格式化会话生命周期事件为人类可读的描述文本。
+ *
+ * 被 formatCatchUpPrompt 和 notifyAdminForActivity 共用，
+ * 确保无论 admin 是实时收到还是 catch-up 补齐，看到的描述一致。
+ *
+ * @param {object} event — 消息的 event 字段
+ * @returns {string} 格式化后的描述，供直接注入上下文或显示
+ */
+function formatSessionLifecycleEvent(event) {
+  const evtName = event.identityName || '';
+  const reason = event.reason || '';
+
+  // ── 纯归档（无新会话）──
+  if (event.type === 'session_archived') {
+    const label = formatSessionLabel(event.sessionTitle, event.sessionId);
+    return `${evtName}${label} 会话已归档，不再接收新任务`;
+  }
+
+  // ── 会话变更（创建了新会话）──
+  const fromLabel = formatSessionLabel(event.fromSessionTitle, event.fromSessionId);
+  const toLabel = formatSessionLabel(event.sessionTitle, event.toSessionId);
+
+  const reasonLabels = {
+    branch: '创建分支',
+    summary: '摘要交接',
+    trim: '精简历史',
+  };
+  const reasonLabel = reasonLabels[reason] || '变更';
+
+  // 操作详情（trim 附带轮次信息）
+  let detail = '';
+  if (reason === 'trim' && event.trimCutRounds != null) {
+    detail = `（精简 ${event.trimCutRounds} 轮）`;
+  }
+
+  // 归档后缀
+  const archiveSuffix = event.archived ? '，原会话已归档' : '';
+
+  return `${evtName} 会话变更：\n  操作：${reasonLabel}${detail}${archiveSuffix}\n  原会话：「${event.fromSessionTitle || '未命名'} #${(event.fromSessionId || '').slice(-8)}」${event.archived ? '→ 已归档' : '（仍可查看）'}\n  新会话：「${event.sessionTitle || '未命名'} #${(event.toSessionId || '').slice(-8)}」`;
+}
+
+/**
  * 组装群聊记忆：按 memoryRange 提取消息摘要，作为 agent 上下文的「视图」。
  * 这是长线记忆的基础——从一个不可能全塞进上下文的完整记录中提取 agent 需要的部分。
  */
@@ -556,11 +598,16 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
 
     // 事件消息（task_started 等）：让管理员知道哪些派发已经发生
     if (m.kind === 'event' && m.event) {
-      const evtName = m.event.identityName || m.event.identityRef || '';
-      const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);
       if (m.event.type === 'task_started') {
+        const evtName = m.event.identityName || m.event.identityRef || '';
+        const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);
         return `[${time}] [系统事件] ${evtName}${evtSession} 已开始处理`;
       }
+      if (m.event.type === 'session_continued' || m.event.type === 'session_archived') {
+        return `[${time}] [系统事件] ${formatSessionLifecycleEvent(m.event)}`;
+      }
+      const evtName = m.event.identityName || m.event.identityRef || '';
+      const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);
       return `[${time}] [系统事件] ${evtName}${evtSession}：${m.event.type}`;
     }
 
@@ -2095,6 +2142,21 @@ async function notifyAdminForActivity(chatId, message, chat) {
       case 'agent_offline':
         activityDesc = `系统事件：${evtName}${evtSession} 进程已退出`;
         break;
+      case 'session_continued': {
+        const reason = message.event?.reason || '';
+        const reasonMeanings = {
+          trim: '已精简历史——部分工具调用记录被折叠为概要，对话结构完整保留',
+          summary: '已通过摘要交接——完整历史被提炼为结构化摘要，基于摘要继续工作',
+          branch: '已从指定位置创建分支——携带截至该位置的完整记录独立发展',
+        };
+        const meaning = reasonMeanings[reason] || '会话已变更';
+        const archiveNote = message.event?.archived ? '，原会话已归档，不再接收新任务' : '';
+        activityDesc = `系统事件：${evtName}${evtSession} ${meaning}${archiveNote}`;
+        break;
+      }
+      case 'session_archived':
+        activityDesc = `系统事件：${evtName}${evtSession} 会话已归档，不再接收新任务`;
+        break;
       default:
         activityDesc = `系统事件：${evtName}${evtSession}`;
         break;
@@ -2146,7 +2208,243 @@ async function notifyAdminForActivity(chatId, message, chat) {
 }
 
 /**
- * 后台跟踪 agent 是否完成处理。
+ * 反查：哪些群聊关联了指定的 session？
+ *
+ * 查找 3 个来源（按优先级）：
+ * 1. chat.sessions 映射（活跃头部）
+ * 2. chat.importedSessions（导入的外部会话）
+ * 3. 消息 routing.targetSessionId（历史派发记录）
+ *
+ * @param {string} sessionId — 要查找的 session ID
+ * @returns {Promise<Array<{ chat: object, identityRef: string }>>}
+ */
+async function findChatsBySessionId(sessionId) {
+  const chatList = await listGroupChats();
+  const matches = [];
+
+  for (const summary of chatList) {
+    if (summary.archived) continue;
+    const chat = await readGroupChat(summary.id);
+    if (!chat) continue;
+
+    let foundRef = null;
+
+    // Source 1: chat.sessions 映射
+    for (const [identityRef, sid] of Object.entries(chat.sessions || {})) {
+      if (identityRef === 'work-group:admin') continue;
+      if (sid === sessionId) {
+        foundRef = identityRef;
+        break;
+      }
+    }
+
+    // Source 2: importedSessions
+    if (!foundRef && Array.isArray(chat.importedSessions)) {
+      for (const imp of chat.importedSessions) {
+        if (imp.sessionId === sessionId) {
+          foundRef = imp.identityRef || `${imp.workspaceId}:main`;
+          break;
+        }
+      }
+    }
+
+    // Source 3: 消息 routing
+    if (!foundRef) {
+      for (const msg of (chat.messages || [])) {
+        if (msg.routing?.targetSessionId === sessionId) {
+          const ref = msg.routing.targetIdentityRef;
+          if (ref && ref !== 'work-group:admin') {
+            foundRef = ref;
+            break;
+          }
+        }
+      }
+    }
+
+    if (foundRef) {
+      matches.push({ chat, identityRef: foundRef });
+    }
+  }
+
+  return matches;
+}
+
+/**
+ * 会话血缘继承：当上下文管理操作（trim/compact/summary/branch）产生新 session 时，
+ * 自动将新 session 关联到原 session 所属的群聊，并通知管理员。
+ *
+ * 核心流程：
+ * 1. 反查 fromSessionId 关联的群聊
+ * 2. 在群聊中写入血缘记录、更新活跃头部、追加事件消息（原子写入）
+ * 3. plan/execute 模式下通知管理员
+ *
+ * 如果 fromSessionId 不属于任何群聊，静默跳过。
+ *
+ * @param {object} params
+ * @param {string} params.agentId        — workspace ID（如 'programming-helper'），用于解析 session 标题
+ * @param {string} params.fromSessionId  — 源 session ID
+ * @param {string} params.toSessionId    — 新 session ID
+ * @param {string} params.reason         — branch | summary | trim
+ * @param {boolean} [params.archived]   — 原会话是否已被归档
+ * @param {number} [params.trimCutRounds] — trim 操作精简的轮次数
+ */
+async function notifySessionLineage({ agentId, fromSessionId, toSessionId, reason, archived = false, trimCutRounds } = {}) {
+  if (!fromSessionId || !toSessionId || fromSessionId === toSessionId) return;
+
+  const matches = await findChatsBySessionId(fromSessionId);
+  if (matches.length === 0) return;
+
+  const allIdentities = await collectIdentities();
+
+  for (const { chat, identityRef } of matches) {
+    try {
+      const identityInfo = allIdentities.find((i) => i.identityRef === identityRef);
+      const identityName = identityInfo?.displayName || identityRef.split(':')[1] || identityRef;
+      const workspaceId = identityRef.split(':')[0];
+
+      // 读取新 session 和原 session 的标题
+      let sessionTitle = null;
+      let fromSessionTitle = null;
+      try {
+        const sessionIndex = await readSessionIndex(workspaceId);
+        const toRecord = sessionIndex?.sessions?.find((s) => s.id === toSessionId);
+        sessionTitle = toRecord?.title || null;
+        const fromRecord = sessionIndex?.sessions?.find((s) => s.id === fromSessionId);
+        fromSessionTitle = fromRecord?.title || null;
+      } catch {}
+
+      // 原子写入：血缘记录 + 活跃头部更新 + 事件消息
+      if (!Array.isArray(chat.sessionLineage)) chat.sessionLineage = [];
+      chat.sessionLineage.push({
+        from: fromSessionId,
+        to: toSessionId,
+        reason,
+        timestamp: Date.now(),
+        identityRef,
+      });
+
+      // 更新活跃头部
+      if (!chat.sessions) chat.sessions = {};
+      chat.sessions[identityRef] = toSessionId;
+
+      // 追加事件消息
+      const eventMessage = {
+        id: `evt-lineage-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        chatId: chat.id,
+        from: identityRef,
+        text: '',
+        kind: 'event',
+        event: {
+          type: 'session_continued',
+          identityRef,
+          identityName,
+          sessionId: toSessionId,
+          sessionTitle,
+          fromSessionId,
+          fromSessionTitle,
+          toSessionId,
+          reason,
+          archived,
+          ...(trimCutRounds != null ? { trimCutRounds } : {}),
+          workspaceId,
+        },
+        mentions: [],
+        links: [],
+        timestamp: Date.now(),
+        routing: null,
+      };
+
+      if (!Array.isArray(chat.messages)) chat.messages = [];
+      chat.messages.push(eventMessage);
+
+      await writeGroupChat(chat);
+      log('GroupChat', `session lineage: ${fromSessionId} → ${toSessionId} (${reason}) in chat ${chat.id}`);
+
+      // plan/execute 模式下通知管理员
+      if (['plan', 'execute'].includes(chat.initiativeMode || 'assist')) {
+        await notifyAdminForActivity(chat.id, eventMessage, chat);
+      }
+    } catch (err) {
+      log('GroupChat', `session lineage failed for chat ${chat.id}: ${err.message}`, 'error');
+    }
+  }
+}
+
+/**
+ * 会话归档通知：当用户纯归档一个会话（不涉及新会话创建）时，
+ * 向关联群聊推送 session_archived 事件。
+ *
+ * 与 notifySessionLineage 的区别：
+ * - 不创建新会话，不更新活跃头部
+ * - 从活跃头部中移除已归档的 session（如果有）
+ * - 事件 type 为 'session_archived'
+ *
+ * @param {object} params
+ * @param {string} params.agentId        — workspace ID
+ * @param {string} params.sessionId      — 被归档的 session ID
+ */
+async function notifySessionArchived({ agentId, sessionId }) {
+  if (!sessionId) return;
+
+  const matches = await findChatsBySessionId(sessionId);
+  if (matches.length === 0) return;
+
+  const allIdentities = await collectIdentities();
+
+  for (const { chat, identityRef } of matches) {
+    try {
+      const identityInfo = allIdentities.find((i) => i.identityRef === identityRef);
+      const identityName = identityInfo?.displayName || identityRef.split(':')[1] || identityRef;
+      const workspaceId = identityRef.split(':')[0];
+
+      let sessionTitle = null;
+      try {
+        const sessionIndex = await readSessionIndex(workspaceId);
+        const record = sessionIndex?.sessions?.find((s) => s.id === sessionId);
+        sessionTitle = record?.title || null;
+      } catch {}
+
+      // 从活跃头部移除已归档的 session
+      if (chat.sessions && chat.sessions[identityRef] === sessionId) {
+        delete chat.sessions[identityRef];
+      }
+
+      const eventMessage = {
+        id: `evt-archive-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        chatId: chat.id,
+        from: identityRef,
+        text: '',
+        kind: 'event',
+        event: {
+          type: 'session_archived',
+          identityRef,
+          identityName,
+          sessionId,
+          sessionTitle,
+          workspaceId,
+        },
+        mentions: [],
+        links: [],
+        timestamp: Date.now(),
+        routing: null,
+      };
+
+      if (!Array.isArray(chat.messages)) chat.messages = [];
+      chat.messages.push(eventMessage);
+
+      await writeGroupChat(chat);
+      log('GroupChat', `session archived: ${sessionId} in chat ${chat.id}`);
+
+      if (['plan', 'execute'].includes(chat.initiativeMode || 'assist')) {
+        await notifyAdminForActivity(chat.id, eventMessage, chat);
+      }
+    } catch (err) {
+      log('GroupChat', `session archived notification failed for chat ${chat.id}: ${err.message}`, 'error');
+    }
+  }
+}
+
+/**
  * 通过 ViewerWorker /running 端点检测 agent 运行状态变化。
  * 当 agent 从 running → idle 时，标记消息为 completed。
  * Agent 回复通过 GroupChatBridgeFeature 的 CallFinish piggyback 写回群聊。
@@ -3461,5 +3759,5 @@ app.delete('/protoclaw/group_chats/:chatId/annotations/:messageId', async (req, 
     });
   }
 
-  return { cleanupOrphanedRouting };
+  return { cleanupOrphanedRouting, notifySessionLineage, notifySessionArchived };
 }

@@ -850,7 +850,7 @@ function applyOptimisticWorkspaceSession(agentId, session) {
   });
 }
 
-async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null, extraPolicy = null) {
+async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null, extraPolicy = null, options = {}) {
   const currentAgent = getCurrentAgentRecord();
   const activeSessionId = String(currentAgent?.active_workspace_session_id || currentAgent?.workspace_sessions?.activeSessionId || '').trim();
   const runtimeAgentId = currentRuntimeAgentId || currentAgent?.runtime_session_id || currentAgent?.runtimeSessionId || '';
@@ -917,6 +917,9 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
       sessionId,
       detached: false,
       policy,
+      ...(options.archiveOriginal ? { archiveOriginal: true } : {}),
+      ...(options.reason ? { reason: options.reason } : {}),
+      ...(options.trimCutRounds != null ? { trimCutRounds: options.trimCutRounds } : {}),
     }),
   });
   if (!resumeResponse.ok) {
@@ -1315,7 +1318,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       status: 'loading',
     });
     try {
-      const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy);
+      const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy, null, null, null, {
+        archiveOriginal: action.archiveOriginal,
+      });
       if (result?.liveRuntime && result?.switched) {
         // Live-runtime shortcut path: session switch was already handled
         // inside createCompactedResumeSession — skip normal agent/runtime logic
@@ -1325,13 +1330,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           status: 'success',
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
-        if (action.archiveOriginal) {
-          const archived = await archiveSessionAfterMutation(activeAgent.id, action.sessionId, _csOldRuntimeId, {
-            skipOptimisticArchive: true,
-            rollback: _csArchiveRollback,
-          });
-          if (archived) _csArchiveRollback = null;
+        // 服务端已原子完成归档，只需停止旧 runtime
+        if (action.archiveOriginal && _csOldRuntimeId) {
+          clearAgentRuntimeCache(_csOldRuntimeId);
+          try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
+          refreshSidebarRuntimeAfterMutation(500);
         }
+        _csArchiveRollback = null;
         return;
       }
       if (result?.agent) {
@@ -1354,13 +1359,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         status: 'success',
         title: _csIsZh ? '会话总结完成' : 'Session summary completed',
       });
-      if (action.archiveOriginal) {
-        const archived = await archiveSessionAfterMutation(activeAgent.id, action.sessionId, _csOldRuntimeId, {
-          skipOptimisticArchive: true,
-          rollback: _csArchiveRollback,
-        });
-        if (archived) _csArchiveRollback = null;
+      // 服务端已原子完成归档，只需停止旧 runtime
+      if (action.archiveOriginal && _csOldRuntimeId) {
+        clearAgentRuntimeCache(_csOldRuntimeId);
+        try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
+        refreshSidebarRuntimeAfterMutation(500);
       }
+      _csArchiveRollback = null;
     } catch (error) {
       console.error('Failed to compact session:', error);
       if (_csArchiveRollback) {

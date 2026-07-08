@@ -209,7 +209,12 @@ window.submitTrimCompact = async () => {
   }
 
   try {
-    const result = await createCompactedResumeSession(agentId, sessionId, '', null, null, policy);
+    const trimmedCount = rounds.filter(r => r.suggestedTrim).length;
+    const result = await createCompactedResumeSession(agentId, sessionId, '', null, null, policy, {
+      reason: 'trim',
+      trimCutRounds: trimmedCount,
+      archiveOriginal: archiveAfter,
+    });
     if (result?.agent) {
       applyManagedPrebuiltAgent(agentId, result.agent);
     }
@@ -226,13 +231,13 @@ window.submitTrimCompact = async () => {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
-    if (archiveAfter) {
-      const archived = await archiveSessionAfterMutation(agentId, sessionId, _oldRuntimeId, {
-        skipOptimisticArchive: true,
-        rollback: archiveRollback,
-      });
-      if (archived) archiveRollback = null;
+    // 服务端已原子完成归档，只需停止旧 runtime
+    if (archiveAfter && _oldRuntimeId) {
+      clearAgentRuntimeCache(_oldRuntimeId);
+      try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
+      refreshSidebarRuntimeAfterMutation(500);
     }
+    archiveRollback = null;
   } catch (error) {
     console.error('Failed to trim compact session:', error);
     if (archiveRollback) {
@@ -371,7 +376,7 @@ window.submitBranch = async () => {
     const res = await fetch('/protoclaw/sessions/branch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, sourceSessionId: sessionId, cutMsgIndexEnd }),
+      body: JSON.stringify({ agentId, sourceSessionId: sessionId, cutMsgIndexEnd, archiveOriginal: archiveAfter }),
     });
     if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
     const result = await res.json();
@@ -392,13 +397,13 @@ window.submitBranch = async () => {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
-    if (archiveAfter) {
-      const archived = await archiveSessionAfterMutation(agentId, sessionId, _oldRuntimeId, {
-        skipOptimisticArchive: true,
-        rollback: archiveRollback,
-      });
-      if (archived) archiveRollback = null;
+    // 服务端已原子完成归档，只需停止旧 runtime
+    if (archiveAfter && _oldRuntimeId) {
+      clearAgentRuntimeCache(_oldRuntimeId);
+      try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
+      refreshSidebarRuntimeAfterMutation(500);
     }
+    archiveRollback = null;
   } catch (error) {
     console.error('Failed to branch session:', error);
     if (archiveRollback) {

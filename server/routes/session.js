@@ -68,7 +68,9 @@ export function setupSessionRoutes(app, express, ctx) {
     startManagedAgent,
     startOneShotAgent,
     stopManagedAgent,
-    waitForManagedRuntimeReady
+    waitForManagedRuntimeReady,
+    notifySessionLineage,
+    notifySessionArchived,
   } = ctx;
 
 // ═══ Block A (server.js L3386-3774) ═══
@@ -206,6 +208,7 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     const agentId = cleanSessionText(req.body?.agentId);
     const sourceSessionId = cleanSessionText(req.body?.sourceSessionId);
     const cutMsgIndexEnd = req.body?.cutMsgIndexEnd;
+    const archiveOriginal = req.body?.archiveOriginal === true;
 
     if (!agentId || !sourceSessionId) {
       res.status(400).json({ error: 'agentId and sourceSessionId are required' });
@@ -361,6 +364,23 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       totalMessages: rawMessages.length,
       agent: connected,
     });
+
+    // 服务端归档原会话（如果请求要求）
+    let branchArchived = false;
+    if (archiveOriginal) {
+      try {
+        await archivePrebuiltSession(agentId, sourceSessionId, true);
+        branchArchived = true;
+      } catch (err) {
+        console.error('[branch] failed to archive original session:', err);
+      }
+    }
+
+    // 血缘继承：branch 产生新 session，通知关联群聊
+    if (notifySessionLineage) {
+      notifySessionLineage({ agentId, fromSessionId: sourceSessionId, toSessionId: newSessionId, reason: 'branch', archived: branchArchived })
+        .catch((err) => console.error('[branch] lineage notification failed:', err));
+    }
   } catch (error) {
     next(error);
   }
@@ -885,6 +905,7 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
     }
 
     const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    const archiveOriginal = req.body?.archiveOriginal === true;
     const result = await createCompactedResumeFromHandoff({
       preferredAgentId,
       handoffId,
@@ -892,7 +913,33 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
       goal: cleanSessionText(req.body?.goal),
       startRuntime: req.body?.startRuntime !== false,
     });
+
+    // 服务端归档原会话
+    let didArchive = false;
+    if (archiveOriginal && result?.handoff?.sourceSessionId) {
+      const archiveAgentId = preferredAgentId || result.handoff.sourceAgentId;
+      if (archiveAgentId) {
+        try {
+          await archivePrebuiltSession(archiveAgentId, result.handoff.sourceSessionId, true);
+          didArchive = true;
+        } catch (err) {
+          console.error('[compacted_resume] failed to archive original session:', err);
+        }
+      }
+    }
+
     res.json(result);
+
+    // 血缘继承：sourceSessionId 来自 handoff 包
+    if (notifySessionLineage && result?.session?.id && result?.handoff?.sourceSessionId) {
+      notifySessionLineage({
+        agentId: preferredAgentId || result.handoff.sourceAgentId,
+        fromSessionId: result.handoff.sourceSessionId,
+        toSessionId: result.session.id,
+        reason: 'summary',
+        archived: didArchive,
+      }).catch((err) => console.error('[compacted_resume] lineage notification failed:', err));
+    }
   } catch (error) {
     next(error);
   }
@@ -1080,7 +1127,10 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
     const detached = req.body?.detached !== false;
     const policy = req.body?.policy || {};
-    console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached}`);
+    const archiveOriginal = req.body?.archiveOriginal === true;
+    const lineageReason = req.body?.reason === 'trim' ? 'trim' : 'summary';
+    const trimCutRounds = typeof req.body?.trimCutRounds === 'number' ? req.body.trimCutRounds : undefined;
+    console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached} archive=${archiveOriginal} reason=${lineageReason}`);
 
     if (detached) {
       const jobId = `compact-resume-${Date.now()}-${randomUUID().slice(0, 8)}`;
@@ -1090,8 +1140,23 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
           sessionId,
           policy,
           startRuntime: req.body?.startRuntime !== false,
-        }).then((result) => {
+        }).then(async (result) => {
           console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
+          // 服务端归档原会话
+          let didArchive = false;
+          if (archiveOriginal && preferredAgentId) {
+            try {
+              await archivePrebuiltSession(preferredAgentId, sessionId, true);
+              didArchive = true;
+            } catch (err) {
+              console.error('[compact_and_resume] failed to archive original session:', err);
+            }
+          }
+          // 血缘继承
+          if (notifySessionLineage && result?.session?.id) {
+            notifySessionLineage({ agentId: preferredAgentId, fromSessionId: sessionId, toSessionId: result.session.id, reason: lineageReason, archived: didArchive, ...(trimCutRounds != null ? { trimCutRounds } : {}) })
+              .catch((err) => console.error('[compact_and_resume] lineage notification failed:', err));
+          }
         }).catch((error) => {
           console.error(`[compact_and_resume] job ${jobId} failed for session=${sessionId}:`, error);
         });
@@ -1113,7 +1178,25 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       startRuntime: req.body?.startRuntime !== false,
     });
     console.log(`[compact_and_resume] completed session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
+
+    // 服务端归档原会话
+    let didArchive = false;
+    if (archiveOriginal && preferredAgentId) {
+      try {
+        await archivePrebuiltSession(preferredAgentId, sessionId, true);
+        didArchive = true;
+      } catch (err) {
+        console.error('[compact_and_resume] failed to archive original session:', err);
+      }
+    }
+
     res.json(result);
+
+    // 血缘继承
+    if (notifySessionLineage && result?.session?.id) {
+      notifySessionLineage({ agentId: preferredAgentId, fromSessionId: sessionId, toSessionId: result.session.id, reason: lineageReason, archived: didArchive, ...(trimCutRounds != null ? { trimCutRounds } : {}) })
+        .catch((err) => console.error('[compact_and_resume] lineage notification failed:', err));
+    }
   } catch (error) {
     next(error);
   }
@@ -1133,6 +1216,7 @@ app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (re
     }
 
     const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    const archiveOriginal = req.body?.archiveOriginal === true;
     console.log(`[summary_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId}`);
     const result = await compactAndResumeFromProvidedSummary({
       preferredAgentId,
@@ -1147,7 +1231,25 @@ app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (re
       startRuntime: req.body?.startRuntime !== false,
     });
     console.log(`[summary_resume] completed session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
+
+    // 服务端归档原会话
+    let didArchive = false;
+    if (archiveOriginal && preferredAgentId) {
+      try {
+        await archivePrebuiltSession(preferredAgentId, sessionId, true);
+        didArchive = true;
+      } catch (err) {
+        console.error('[summary_resume] failed to archive original session:', err);
+      }
+    }
+
     res.json(result);
+
+    // 血缘继承
+    if (notifySessionLineage && result?.session?.id) {
+      notifySessionLineage({ agentId: preferredAgentId, fromSessionId: sessionId, toSessionId: result.session.id, reason: 'summary', archived: didArchive })
+        .catch((err) => console.error('[summary_resume] lineage notification failed:', err));
+    }
   } catch (error) {
     next(error);
   }
@@ -1243,6 +1345,12 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
     const archived = req.body.archived !== false;
     const result = await archivePrebuiltSession(agent.id, req.body.sessionId, archived);
     res.json(result);
+
+    // 纯归档操作通知关联群聊
+    if (archived && notifySessionArchived) {
+      notifySessionArchived({ agentId: agent.id, sessionId: req.body.sessionId })
+        .catch((err) => console.error('[archive] notification failed:', err));
+    }
   } catch (error) {
     next(error);
   }
