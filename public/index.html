@@ -22,7 +22,7 @@
   </script>
   <script src="./src/tauri-bridge.js"></script>
   <link rel="stylesheet" href="./styles/base.css?v=2">
-  <link rel="stylesheet" href="./styles/layout.css?v=4">
+  <link rel="stylesheet" href="./styles/layout.css?v=5">
   <link rel="stylesheet" href="./styles/components.css?v=5">
   <link rel="stylesheet" href="./styles/work-group.css">
   <link rel="stylesheet" href="./styles/toast.css">
@@ -37,28 +37,40 @@
     <div class="agent-list" id="agent-list">
       <div class="agent-group" id="prebuilt-group">
         <div class="agent-group-header">
-          <span>系统空间</span>
+          <span class="agent-group-header-label">
+            <span class="category-collapse-arrow"></span>
+            <span>系统空间</span>
+          </span>
           <span class="agent-group-count" id="prebuilt-count">0</span>
         </div>
         <div class="agent-group-items" id="prebuilt-agent-list"></div>
       </div>
       <div class="agent-group" id="work-group-group" style="display:none;">
         <div class="agent-group-header">
-          <span>工作群</span>
+          <span class="agent-group-header-label">
+            <span class="category-collapse-arrow"></span>
+            <span>工作群</span>
+          </span>
           <span class="agent-group-count" id="work-group-count">0</span>
         </div>
         <div class="agent-group-items" id="work-group-agent-list"></div>
       </div>
       <div class="agent-group" id="tool-group" style="display:none;">
         <div class="agent-group-header">
-          <span>工具与效率</span>
+          <span class="agent-group-header-label">
+            <span class="category-collapse-arrow"></span>
+            <span>工具与效率</span>
+          </span>
           <span class="agent-group-count" id="tool-count">0</span>
         </div>
         <div class="agent-group-items" id="tool-agent-list"></div>
       </div>
       <div class="agent-group" id="external-group" style="display:none;">
         <div class="agent-group-header">
-          <span>外部代理</span>
+          <span class="agent-group-header-label">
+            <span class="category-collapse-arrow"></span>
+            <span>外部代理</span>
+          </span>
           <span class="agent-group-count" id="external-count">0</span>
         </div>
         <div class="agent-group-items" id="external-agent-list"></div>
@@ -390,6 +402,6 @@
   <script src="./src/modules/assembly-actions.js?v=1783300001"></script>
   <!-- ↓↓↓ Phase D: 聊天消息渲染（被 app-ui.js renderCurrentMainView 反向调用） ↓↓↓ -->
   <script src="./src/modules/chat-renderer.js?v=1783400002"></script>
-  <script src="./src/app-main.js?v=1783390001"></script>
+  <script src="./src/app-main.js?v=1783390002"></script>
 </body>
 </html>

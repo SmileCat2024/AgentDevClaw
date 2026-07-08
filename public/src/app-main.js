@@ -151,6 +151,10 @@ function getInputSurfaceMode(requests = currentInputRequests || []) {
 // Keyed by projectDir||projectName so state persists across re-renders.
 const _collapsedProjectGroups = new Set();
 
+// Tracks collapsed state of category groups in the sidebar (系统空间, 工作群, etc.).
+// Keyed by the .agent-group element id so state persists across re-renders.
+const _collapsedCategoryGroups = new Set();
+
 function renderSidebarChildItems(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
 
@@ -652,6 +656,22 @@ function renderAgentList() {
 }
 
 agentList.addEventListener('click', async (event) => {
+  // Handle category group collapse/expand toggle (系统空间, 工作群, etc.).
+  const categoryHeader = event.target.closest('.agent-group-header');
+  if (categoryHeader) {
+    const groupEl = categoryHeader.closest('.agent-group');
+    if (groupEl && groupEl.id) {
+      if (_collapsedCategoryGroups.has(groupEl.id)) {
+        _collapsedCategoryGroups.delete(groupEl.id);
+        groupEl.classList.remove('collapsed');
+      } else {
+        _collapsedCategoryGroups.add(groupEl.id);
+        groupEl.classList.add('collapsed');
+      }
+    }
+    return;
+  }
+
   // Handle project group collapse/expand toggle (programming-helper).
   const projectHeader = event.target.closest('.agent-runtime-project-header');
   if (projectHeader) {
