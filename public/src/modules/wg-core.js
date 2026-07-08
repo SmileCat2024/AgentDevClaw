@@ -1365,8 +1365,12 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
         // data.updated === false → 超时无变更，直接进入下一轮
       }
     } catch (err) {
-      if (err.name === 'AbortError') return; // 被 stopPolling 中断，不再继续
-      console.error('[WorkGroup] long-poll error:', err);
+      if (err.name !== 'AbortError') {
+        console.error('[WorkGroup] long-poll error:', err);
+      }
+      // AbortError 不 return：selectChat 切换群聊时会 abort 旧请求，
+      // 但 _pollingActive 仍为 true，需要继续下一轮（使用新 chatId）。
+      // stopPolling 会先设 _pollingActive=false 再 abort，底部检查会正确跳过。
     }
 
     // 继续下一轮长轮询
