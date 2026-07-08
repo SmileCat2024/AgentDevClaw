@@ -4,7 +4,7 @@ import { existsSync, readFileSync, promises as fs } from 'fs';
 import { GROUP_CHATS_ROOT, VIEWER_ORIGIN, AGENTS_ROOT } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, log } from '../shared/string-helpers.js';
 import { managedAgents, getManagedRuntimeKey, listAgentRuntimes, getAgentRuntime } from '../shared/agent-access.js';
-import { readSessionIndex, readSessionIndexSync } from '../shared/session-access.js';
+import { readSessionIndex, readSessionIndexSync, getPrebuiltSessionFilePath } from '../shared/session-access.js';
 import { resolveSessionModelInfo } from './model-config.js';
 import { getRuntimeExecutionState } from '../runtime-call-envelope.js';
 
@@ -131,6 +131,147 @@ export function aggregateSessionPool(chat, identities) {
   }
 
   return Array.from(sessionMap.values());
+}
+
+/**
+ * Phase 3: 将扁平会话池按血缘关系聚合为工作线程。
+ *
+ * 血缘分组规则：
+ * - trim/compact/summary 产生的后续 session → 同一条工作线程
+ * - branch 产生的新 session → 新的工作线程
+ *
+ * 每个工作线程包含：
+ * - lineage: 血缘链 [{ sessionId, sessionTitle, reason }]
+ * - activeHeadId: 活跃头部 session ID
+ * - identityRef: 归属身份
+ * - phase: 推断的阶段（exploration / coding / possibly_done）
+ *
+ * @param {Array} sessionPool — aggregateSessionPool() 的返回值
+ * @param {Array} lineageRecords — chat.sessionLineage
+ * @param {Array} allIdentities — collectIdentities() 结果
+ * @param {Function} readIndexFn — 异步读取 session index 的函数（可选，用于测试注入）
+ * @returns {Promise<Array>} 工作线程列表
+ */
+async function groupByLineage(sessionPool, lineageRecords, allIdentities, readIndexFn) {
+  const readIndex = readIndexFn || readSessionIndex;
+  const lineage = Array.isArray(lineageRecords) ? lineageRecords : [];
+
+  // 构建 from → to 映射（用于追踪血缘链）
+  const fromToMap = new Map(); // fromSessionId → { to, reason, timestamp }
+  const childSessions = new Set(); // 所有作为 "to" 出现过的 session
+  for (const rec of lineage) {
+    fromToMap.set(rec.from, { to: rec.to, reason: rec.reason, timestamp: rec.timestamp });
+    childSessions.add(rec.to);
+  }
+
+  // 找到所有工作线程的根（出现在 sessionPool 中但不是任何血缘记录的 "to"）
+  const threads = [];
+  const processedSessions = new Set();
+
+  for (const session of sessionPool) {
+    if (processedSessions.has(session.sessionId)) continue;
+    if (childSessions.has(session.sessionId)) continue; // 是别人的后续，不是根
+
+    // 这是一条工作线程的根
+    const chain = [];
+    let currentSession = session;
+    let currentId = session.sessionId;
+
+    while (currentSession) {
+      chain.push({
+        sessionId: currentId,
+        sessionTitle: null, // 填充后补
+        identityRef: currentSession.identityRef,
+        reason: chain.length === 0 ? null : fromToMap.get(chain[chain.length - 1].sessionId)?.reason || 'unknown',
+      });
+      processedSessions.add(currentId);
+
+      const next = fromToMap.get(currentId);
+      if (!next) break;
+
+      currentId = next.to;
+      currentSession = sessionPool.find((s) => s.sessionId === currentId) || null;
+    }
+
+    // 填充 session title
+    const workspaceId = session.identityRef.split(':')[0];
+    try {
+      const idx = await readIndex(workspaceId);
+      if (idx?.sessions) {
+        for (const link of chain) {
+          const rec = idx.sessions.find((s) => s.id === link.sessionId);
+          link.sessionTitle = rec?.title || rec?.taskTitle || null;
+        }
+      }
+    } catch {}
+
+    // 推断阶段
+    const phase = inferThreadPhase(chain, lineage);
+
+    // 聚合 task 完成事件
+    const identityInfo = allIdentities.find((i) => i.identityRef === session.identityRef);
+    const displayName = identityInfo?.displayName || session.identityRef;
+
+    threads.push({
+      identityRef: session.identityRef,
+      identityName: displayName,
+      workspaceId,
+      activeHeadId: chain[chain.length - 1].sessionId,
+      activeHeadTitle: chain[chain.length - 1].sessionTitle,
+      lineageDepth: chain.length,
+      lineage: chain,
+      phase,
+    });
+  }
+
+  // 处理孤儿 session（出现在 sessionPool 中，但根不在 sessionPool 中——可能被归档了）
+  for (const session of sessionPool) {
+    if (processedSessions.has(session.sessionId)) continue;
+
+    const workspaceId = session.identityRef.split(':')[0];
+    try {
+      const idx = await readIndex(workspaceId);
+      const rec = idx?.sessions?.find((s) => s.id === session.sessionId);
+      threads.push({
+        identityRef: session.identityRef,
+        identityName: allIdentities.find((i) => i.identityRef === session.identityRef)?.displayName || session.identityRef,
+        workspaceId,
+        activeHeadId: session.sessionId,
+        activeHeadTitle: rec?.title || rec?.taskTitle || null,
+        lineageDepth: 1,
+        lineage: [{
+          sessionId: session.sessionId,
+          sessionTitle: rec?.title || rec?.taskTitle || null,
+          identityRef: session.identityRef,
+          reason: null,
+        }],
+        phase: 'unknown',
+      });
+    } catch {}
+  }
+
+  return threads;
+}
+
+/**
+ * 推断工作线程的阶段。
+ *
+ * 规则（基于设计文档 3.2 节）：
+ * - lineage 中有 trim/compact/summary → 至少进入过编码阶段
+ * - lineage 全是 branch → 探索阶段
+ * - 无法判断 → unknown
+ */
+function inferThreadPhase(chain, lineageRecords) {
+  const reasons = chain
+    .map((link) => link.reason)
+    .filter((r) => r && r !== 'unknown');
+
+  if (reasons.length === 0) return 'exploration';
+
+  const hasContextManagement = reasons.some((r) => ['trim', 'compact', 'summary'].includes(r));
+  if (hasContextManagement) return 'coding';
+
+  return 'exploration';
 }
 
 /**
@@ -605,6 +746,12 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
       }
       if (m.event.type === 'session_continued' || m.event.type === 'session_archived') {
         return `[${time}] [系统事件] ${formatSessionLifecycleEvent(m.event)}`;
+      }
+      if (m.event.type === 'task_completed') {
+        const evtName = m.event.identityName || m.event.identityRef || '';
+        const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);
+        const taskTitle = m.event.taskTitle || '';
+        return `[${time}] [系统事件] ${evtName}${evtSession} 任务完成：${taskTitle}`;
       }
       const evtName = m.event.identityName || m.event.identityRef || '';
       const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);
@@ -1577,6 +1724,114 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
   }
 });
 
+// ── Phase 3: 拉取工具端点 ──────────────────────────────────────────
+
+/**
+ * GET /protoclaw/gc/session_threads?chatId=xxx
+ * 返回群聊的所有工作线程视图（血缘聚合）。
+ */
+app.get('/protoclaw/gc/session_threads', async (req, res, next) => {
+  try {
+    const chatId = req.query.chatId;
+    if (!chatId) return res.status(400).json({ error: 'chatId required' });
+
+    const chat = await readGroupChat(chatId);
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+    const allIdentities = await collectIdentities();
+    const sessionPool = aggregateSessionPool(chat, allIdentities);
+    const threads = await groupByLineage(sessionPool, chat.sessionLineage, allIdentities);
+
+    res.json({ threads });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /protoclaw/gc/session_tasks?agentId=xxx&sessionId=yyy
+ * 读取指定 session 文件中的 TodoFeature task 列表。
+ */
+app.get('/protoclaw/gc/session_tasks', async (req, res, next) => {
+  try {
+    const agentId = req.query.agentId;
+    const sessionId = req.query.sessionId;
+    if (!agentId || !sessionId) {
+      return res.status(400).json({ error: 'agentId and sessionId required' });
+    }
+
+    // 尝试从 session 文件读取
+    const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
+    let raw;
+    try {
+      raw = await fs.readFile(sessionPath, 'utf8');
+    } catch {
+      return res.status(404).json({ error: 'Session file not found' });
+    }
+
+    const session = JSON.parse(raw);
+    // 提取 TodoFeature tasks
+    const featureStates = session?.runtime?.featureStates;
+    const todoCheckpoint = Array.isArray(featureStates)
+      ? featureStates.find((entry) => entry?.featureName === 'todo' && entry.snapshot)
+      : null;
+    const tasks = todoCheckpoint?.snapshot?.tasks || [];
+
+    res.json({
+      sessionId,
+      tasks: tasks.map((t) => ({
+        id: t.id,
+        subject: t.subject || '',
+        status: t.status || 'pending',
+        activeForm: t.activeForm || '',
+      })),
+      summary: {
+        total: tasks.length,
+        completed: tasks.filter((t) => t.status === 'completed').length,
+        inProgress: tasks.filter((t) => t.status === 'in_progress').length,
+        pending: tasks.filter((t) => t.status === 'pending').length,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /protoclaw/gc/session_summary?agentId=xxx&sessionId=yyy
+ * 返回指定 session 的简要摘要（标题、创建时间、更新时间、项目目录）。
+ */
+app.get('/protoclaw/gc/session_summary', async (req, res, next) => {
+  try {
+    const agentId = req.query.agentId;
+    const sessionId = req.query.sessionId;
+    if (!agentId || !sessionId) {
+      return res.status(400).json({ error: 'agentId and sessionId required' });
+    }
+
+    const index = await readSessionIndex(agentId).catch(() => null);
+    if (!index?.sessions) {
+      return res.status(404).json({ error: 'Session index not found' });
+    }
+
+    const record = index.sessions.find((s) => s.id === sessionId);
+    if (!record) {
+      return res.status(404).json({ error: 'Session not found in index' });
+    }
+
+    res.json({
+      sessionId,
+      title: record.title || record.taskTitle || '',
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      openDirectory: record.openDirectory || null,
+      sessionType: record.sessionType || 'normal',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/protoclaw/group_chats/:chatId/awareness', async (req, res, next) => {
   try {
     const awareness = await buildGroupChatAwareness(req.params.chatId);
@@ -1881,8 +2136,13 @@ async function dispatchToIdentity(chatId, message, chat, identityRef, composedPr
   // plan 模式的通知已在 dispatchGroupChatMessage 的 plan 分支合并投递
   // （notifyAdminWithPrompt 包含了"@了X + X已开始处理"的完整信息）
 
-  // 7. 后台跟踪完成状态
-  trackGroupChatDispatch(chatId, message.id, workspaceId, viewerAgentId);
+  // 7. 后台跟踪完成状态 + task 完成检测
+  trackGroupChatDispatch(chatId, message.id, workspaceId, viewerAgentId, {
+    identityRef,
+    sessionId,
+    sessionTitle: resolvedSessionTitle,
+    identityName: identityInfo?.displayName || workspaceId,
+  });
 
   return { sessionId, sessionTitle: resolvedSessionTitle, isNew, workspaceId, viewerAgentId };
 }
@@ -2157,6 +2417,11 @@ async function notifyAdminForActivity(chatId, message, chat) {
       case 'session_archived':
         activityDesc = `系统事件：${evtName}${evtSession} 会话已归档，不再接收新任务`;
         break;
+      case 'task_completed': {
+        const taskTitle = message.event?.taskTitle || '';
+        activityDesc = `系统事件：${evtName}${evtSession} 任务完成：${taskTitle}`;
+        break;
+      }
       default:
         activityDesc = `系统事件：${evtName}${evtSession}`;
         break;
@@ -2360,10 +2625,8 @@ async function notifySessionLineage({ agentId, fromSessionId, toSessionId, reaso
       await writeGroupChat(chat);
       log('GroupChat', `session lineage: ${fromSessionId} → ${toSessionId} (${reason}) in chat ${chat.id}`);
 
-      // plan/execute 模式下通知管理员
-      if (['plan', 'execute'].includes(chat.initiativeMode || 'assist')) {
-        await notifyAdminForActivity(chat.id, eventMessage, chat);
-      }
+      // 不主动唤醒管理员：session lifecycle 事件降级为纯水位线捕获，
+      // 仅写入 chat.messages，等下一次管理员因其他原因被唤醒时由 catch-up 自然带入。
     } catch (err) {
       log('GroupChat', `session lineage failed for chat ${chat.id}: ${err.message}`, 'error');
     }
@@ -2435,9 +2698,7 @@ async function notifySessionArchived({ agentId, sessionId }) {
       await writeGroupChat(chat);
       log('GroupChat', `session archived: ${sessionId} in chat ${chat.id}`);
 
-      if (['plan', 'execute'].includes(chat.initiativeMode || 'assist')) {
-        await notifyAdminForActivity(chat.id, eventMessage, chat);
-      }
+      // 同 notifySessionLineage：不主动唤醒管理员，由 catch-up 自然带入。
     } catch (err) {
       log('GroupChat', `session archived notification failed for chat ${chat.id}: ${err.message}`, 'error');
     }
@@ -2448,11 +2709,23 @@ async function notifySessionArchived({ agentId, sessionId }) {
  * 通过 ViewerWorker /running 端点检测 agent 运行状态变化。
  * 当 agent 从 running → idle 时，标记消息为 completed。
  * Agent 回复通过 GroupChatBridgeFeature 的 CallFinish piggyback 写回群聊。
+ *
+ * Phase 2: 同时轮询 ViewerWorker 的 todo plan，检测新完成的 task，
+ * 向关联群聊推送 task_completed 事件。
+ *
+ * @param {string} chatId
+ * @param {string} messageId
+ * @param {string} workspaceId
+ * @param {string} viewerAgentId
+ * @param {{ identityRef: string, sessionId: string, sessionTitle: string, identityName: string }} [sessionInfo]
  */
-function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId) {
+function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId, sessionInfo) {
   let wasRunning = false;
   const startTime = Date.now();
   const TIMEOUT_MS = 15 * 60 * 1000; // 15 分钟超时
+
+  // Phase 2: task 完成检测状态
+  const knownCompletedTaskIds = new Set();
 
   const interval = setInterval(async () => {
     // 超时保护
@@ -2492,8 +2765,17 @@ function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId) {
 
       if (isRunning) {
         wasRunning = true;
+
+        // Phase 2: 轮询 todo plan，检测新完成的 task
+        if (sessionInfo) {
+          await pollTaskCompletion(chatId, currentViewerId, sessionInfo, knownCompletedTaskIds);
+        }
       } else if (wasRunning) {
         // Agent 曾在运行，现在空闲 → 完成
+        // 在清除 interval 前做最后一次 task 轮询（agent 刚结束，可能完成了最后一个 task）
+        if (sessionInfo) {
+          await pollTaskCompletion(chatId, currentViewerId, sessionInfo, knownCompletedTaskIds);
+        }
         clearInterval(interval);
         await updateMessageRouting(chatId, messageId, {
           status: 'completed',
@@ -2505,6 +2787,67 @@ function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId) {
       // 网络错误等，继续重试
     }
   }, 3000);
+}
+
+/**
+ * Phase 2: 轮询 ViewerWorker 的 todo plan，检测新完成的 task。
+ * 对每个新完成的 task，写入 task_completed 事件并通知管理员。
+ *
+ * @param {string} chatId
+ * @param {string} viewerAgentId
+ * @param {{ identityRef: string, sessionId: string, sessionTitle: string, identityName: string }} sessionInfo
+ * @param {Set<string>} knownCompletedTaskIds — 已知已完成 task ID 集合（跨轮次保持）
+ */
+async function pollTaskCompletion(chatId, viewerAgentId, sessionInfo, knownCompletedTaskIds) {
+  try {
+    const res = await fetch(
+      `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/todo`
+    );
+    if (!res.ok) return;
+    const todoPlan = await res.json();
+    const tasks = Array.isArray(todoPlan?.tasks) ? todoPlan.tasks : [];
+
+    for (const task of tasks) {
+      if (task.status !== 'completed') continue;
+      const taskId = String(task.id);
+      if (knownCompletedTaskIds.has(taskId)) continue;
+
+      // 新完成的 task
+      knownCompletedTaskIds.add(taskId);
+
+      const eventMessage = {
+        id: `evt-task-${Date.now()}-${taskId}-${Math.random().toString(36).slice(2, 6)}`,
+        chatId,
+        from: sessionInfo.identityRef,
+        text: '',
+        kind: 'event',
+        event: {
+          type: 'task_completed',
+          identityRef: sessionInfo.identityRef,
+          identityName: sessionInfo.identityName,
+          sessionId: sessionInfo.sessionId,
+          sessionTitle: sessionInfo.sessionTitle,
+          taskTitle: task.subject || task.description || `Task #${taskId}`,
+          workspaceId: sessionInfo.identityRef.split(':')[0],
+        },
+        mentions: [],
+        links: [],
+        timestamp: Date.now(),
+        routing: null,
+      };
+
+      await appendGroupChatMessage(chatId, eventMessage);
+      log('GroupChat', `task_completed event: ${sessionInfo.identityName} completed "${eventMessage.event.taskTitle}"`);
+
+      // task_completed 是高价值信号，主动唤醒管理员
+      const chat = await readGroupChat(chatId);
+      if (chat && ['plan', 'execute'].includes(chat.initiativeMode || 'assist')) {
+        await notifyAdminForActivity(chatId, eventMessage, chat);
+      }
+    }
+  } catch {
+    // 网络错误等，静默跳过
+  }
 }
 
 // ── Group Chat CRUD API ────────────────────────────────────────────

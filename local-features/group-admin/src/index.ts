@@ -539,6 +539,122 @@ export class GroupAdminFeature implements AgentFeature {
           }
         },
       },
+      {
+        name: 'gc_session_threads',
+        description: '查看当前群聊的所有工作线程。工作线程是由血缘关系串联的会话链——每次精简、摘要或分支都会在链上产生新会话。返回每个线程的活跃会话、血缘深度和推断的阶段（探索/编码）。',
+        parameters: {
+          type: 'object',
+          properties: {},
+        },
+        execute: async () => {
+          try {
+            const data = await this.apiGet(
+              `/protoclaw/gc/session_threads?chatId=${encodeURIComponent(this.chatId)}`
+            );
+            const threads = data.threads || [];
+            if (threads.length === 0) {
+              return { success: true, text: '当前群聊暂无工作线程' };
+            }
+            const phaseLabels: Record<string, string> = {
+              exploration: '探索',
+              coding: '编码',
+              unknown: '未知',
+            };
+            const lines = threads.map((t: any) => {
+              const phase = phaseLabels[t.phase] || t.phase;
+              const chain = (t.lineage || [])
+                .map((link: any) => {
+                  const title = link.sessionTitle || '未命名';
+                  const shortId = String(link.sessionId || '').slice(-8);
+                  const reasonTag = link.reason ? ` (${link.reason})` : '';
+                  return `    ${title} #${shortId}${reasonTag}`;
+                })
+                .join('\n');
+              const activeMark = t.activeHeadTitle || '未命名';
+              const activeShort = String(t.activeHeadId || '').slice(-8);
+              return `${t.identityName} — 工作线程 (${phase})\n  活跃会话: ${activeMark} #${activeShort}\n  血缘深度: ${t.lineageDepth}\n  链路:\n${chain}`;
+            });
+            return { success: true, text: lines.join('\n\n'), threads };
+          } catch (err: any) {
+            return { error: `获取工作线程失败: ${err.message || err}` };
+          }
+        },
+      },
+      {
+        name: 'gc_session_tasks',
+        description: '查看指定会话的任务列表。需要先用 gc_session_threads 或 gc_sessions 查看 sessionId。返回每个任务的标题和状态（completed/in_progress/pending）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: '工作空间 ID，如 programming-helper' },
+            sessionId: { type: 'string', description: '会话 ID' },
+          },
+          required: ['agentId', 'sessionId'],
+        },
+        execute: async (args: any) => {
+          const { agentId, sessionId } = args || {};
+          if (!agentId || !sessionId) {
+            return { error: 'agentId 和 sessionId 都是必填项' };
+          }
+          try {
+            const data = await this.apiGet(
+              `/protoclaw/gc/session_tasks?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`
+            );
+            const tasks = data.tasks || [];
+            const summary = data.summary || {};
+            if (tasks.length === 0) {
+              return { success: true, text: `会话 ${sessionId} 暂无任务记录` };
+            }
+            const statusIcons: Record<string, string> = {
+              completed: '✓',
+              in_progress: '◐',
+              pending: '○',
+              deleted: '✗',
+            };
+            const lines = tasks.map((t: any) => {
+              const icon = statusIcons[t.status] || '?';
+              return `  ${icon} ${t.subject || '(未命名)'}`;
+            });
+            const header = `会话 ${sessionId} 的任务 (${summary.completed || 0}/${summary.total || 0} 完成)：`;
+            return { success: true, text: header + '\n' + lines.join('\n'), tasks, summary };
+          } catch (err: any) {
+            return { error: `获取任务列表失败: ${err.message || err}` };
+          }
+        },
+      },
+      {
+        name: 'gc_session_summary',
+        description: '查看指定会话的摘要信息（标题、创建时间、项目目录等）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            agentId: { type: 'string', description: '工作空间 ID，如 programming-helper' },
+            sessionId: { type: 'string', description: '会话 ID' },
+          },
+          required: ['agentId', 'sessionId'],
+        },
+        execute: async (args: any) => {
+          const { agentId, sessionId } = args || {};
+          if (!agentId || !sessionId) {
+            return { error: 'agentId 和 sessionId 都是必填项' };
+          }
+          try {
+            const data = await this.apiGet(
+              `/protoclaw/gc/session_summary?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`
+            );
+            const lines = [
+              `标题: ${data.title || '(未命名)'}`,
+              `创建: ${data.createdAt ? new Date(data.createdAt).toLocaleString('zh-CN') : '未知'}`,
+              `更新: ${data.updatedAt ? new Date(data.updatedAt).toLocaleString('zh-CN') : '未知'}`,
+              `项目目录: ${data.openDirectory || '未设置'}`,
+              `类型: ${data.sessionType || 'normal'}`,
+            ];
+            return { success: true, text: lines.join('\n'), session: data };
+          } catch (err: any) {
+            return { error: `获取会话摘要失败: ${err.message || err}` };
+          }
+        },
+      },
     ];
   }
 }
