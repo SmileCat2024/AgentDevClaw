@@ -136,9 +136,10 @@ export function aggregateSessionPool(chat, identities) {
 /**
  * 群聊文件存储工厂。接受 rootDir 参数，便于测试注入临时目录。
  * @param {string} rootDir — 群聊文件存储根目录
+ * @param {object} [hooks] — 可选钩子，目前支持 onWrite(chatId)
  * @returns {object} data layer 方法集
  */
-export function createGroupChatDataLayer(rootDir) {
+export function createGroupChatDataLayer(rootDir, hooks = {}) {
   async function ensureDir() {
     await fs.mkdir(rootDir, { recursive: true });
   }
@@ -164,6 +165,7 @@ export function createGroupChatDataLayer(rootDir) {
     const filePath = getGroupChatPath(chat.id);
     chat.updatedAt = Date.now();
     await fs.writeFile(filePath, JSON.stringify(chat, null, 2), 'utf8');
+    if (typeof hooks.onWrite === 'function') hooks.onWrite(chat.id);
     return chat;
   }
 
@@ -270,9 +272,23 @@ export function setupGroupChatRoutes(app, express, ctx) {
  * 文件路径：~/.agentdev/AgentDevClaw/group-chats/<chatId>.json
  *
  * 核心数据操作委托给模块级 createGroupChatDataLayer 工厂。
+ * 通过 onWrite hook 在每次文件写入后唤醒前端 long-poll waiter。
  */
 
-const _dataLayer = createGroupChatDataLayer(GROUP_CHATS_ROOT);
+// chatId → Set<resolve callback>，用于前端 long-poll 的更新通知
+const _gcUpdateWaiters = new Map();
+
+function notifyGroupChatUpdate(chatId) {
+  const waiters = _gcUpdateWaiters.get(chatId);
+  if (waiters && waiters.size > 0) {
+    for (const resolve of waiters) resolve();
+    waiters.clear();
+  }
+}
+
+const _dataLayer = createGroupChatDataLayer(GROUP_CHATS_ROOT, {
+  onWrite: (chatId) => notifyGroupChatUpdate(chatId),
+});
 const {
   ensureGroupChatsDir: _ensureGroupChatsDir,
   getGroupChatPath,
@@ -2241,6 +2257,74 @@ app.get('/protoclaw/group_chats/:chatId', async (req, res, next) => {
     next(error);
   }
 });
+
+/**
+ * Long-poll 端点：客户端传入 since（上次已知的 updatedAt 时间戳），
+ * 服务端挂起响应直到有新更新或超时。
+ * 返回 { updated: true, updatedAt, chat } 或 { updated: false, updatedAt }。
+ */
+app.get('/protoclaw/group_chats/:chatId/updates', async (req, res, next) => {
+  try {
+    const chatId = req.params.chatId;
+    const since = parseInt(req.query.since, 10) || 0;
+    const timeoutMs = Math.min(Number(req.query.timeout) || 25, 30) * 1000;
+
+    // 先检查是否已有更新
+    const chat = await readGroupChat(chatId);
+    if (!chat) return res.status(404).json({ error: 'Group chat not found' });
+
+    if ((chat.updatedAt || 0) > since) {
+      return res.json({ updated: true, updatedAt: chat.updatedAt, chat });
+    }
+
+    // 无更新，注册 waiter
+    let resolved = false;
+
+    const timer = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      _removeWaiter(chatId, resolve);
+      res.json({ updated: false, updatedAt: chat.updatedAt || Date.now() });
+    }, timeoutMs);
+
+    function resolve() {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      _removeWaiter(chatId, resolve);
+      // 重新读取以获取最新数据
+      readGroupChat(chatId).then((freshChat) => {
+        if (freshChat) {
+          res.json({ updated: true, updatedAt: freshChat.updatedAt || Date.now(), chat: freshChat });
+        } else {
+          res.json({ updated: false, updatedAt: Date.now() });
+        }
+      }).catch(() => {
+        res.json({ updated: false, updatedAt: Date.now() });
+      });
+    }
+
+    if (!_gcUpdateWaiters.has(chatId)) _gcUpdateWaiters.set(chatId, new Set());
+    _gcUpdateWaiters.get(chatId).add(resolve);
+
+    // 客户端断开连接时清理 waiter
+    req.on('close', () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      _removeWaiter(chatId, resolve);
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+function _removeWaiter(chatId, resolve) {
+  const waiters = _gcUpdateWaiters.get(chatId);
+  if (!waiters) return;
+  waiters.delete(resolve);
+  if (waiters.size === 0) _gcUpdateWaiters.delete(chatId);
+}
 
 app.put('/protoclaw/group_chats/:chatId', express.json(), async (req, res, next) => {
   try {
