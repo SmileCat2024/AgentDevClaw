@@ -11,8 +11,8 @@
  * 内嵌 skill: generate-group-md — 引导管理员生成 GROUP.md 群聊背景文档。
  */
 import { fileURLToPath } from 'url';
-import type { AgentFeature, Tool } from 'agentdev';
-import { CallStart, StepStart } from 'agentdev';
+import type { AgentFeature, Tool, DecisionResult } from 'agentdev';
+import { CallStart, StepStart, StepFinish, Decision } from 'agentdev';
 
 const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 1420}`;
 
@@ -26,6 +26,9 @@ export class GroupAdminFeature implements AgentFeature {
   private static readonly STEP_REMINDER_INTERVAL = 3;
   private callCount = 0;
   private stepCount = 0;
+
+  /** 当 gc_reply / gc_dispatch 以 done=true 执行后置位，@StepFinish 检查后消费 */
+  private stopRequested = false;
 
   /** 当前管理员绑定的群聊 ID（启动时从环境变量注入） */
   private get chatId(): string {
@@ -64,6 +67,15 @@ export class GroupAdminFeature implements AgentFeature {
         '- 在使用 gc_dispatch 派发任务时，必须考虑任务与已有会话的相关性，必须有明确的用户指令或存在具体任务的接续性，才需要复用已有会话，否则优先创建新会话。\n' +
         '- 管理多个会话时，优先依据 gc_overview/gc_status/gc_sessions 和 gc_dispatch 返回的态势信息；回复或继续派发时反复核对 identityRef、sessionId、运行状态、模型和上下文用量。',
     });
+  }
+
+  @StepFinish
+  async checkStopRequest(_ctx: any): Promise<DecisionResult> {
+    if (this.stopRequested) {
+      this.stopRequested = false;
+      return Decision.Deny;
+    }
+    return Decision.Continue;
   }
 
   private async apiGet(path: string): Promise<any> {
@@ -259,11 +271,12 @@ export class GroupAdminFeature implements AgentFeature {
             targetSessionId: { type: 'string', description: '可选。指定目标 Agent 的具体会话 ID。传入后将任务路由到该会话。先用 gc_sessions 查看可用会话。' },
             forceNew: { type: 'boolean', description: '可选。设为 true 时强制创建全新会话。默认 false（复用最近会话）。' },
             openDirectory: { type: 'string', description: '可选。新会话的项目目录（绝对路径）。仅创建新会话时生效，复用已有会话时忽略。不传则使用群聊绑定的工作目录。' },
+            done: { type: 'boolean', description: '设为 true 表示这是本轮最后一步操作，工具执行完后将直接结束本次对话。当你已完成派发且无需进一步操作时设为 true。设为 false 表示还会继续后续操作。' },
           },
-          required: ['text', 'identityRef', 'title'],
+          required: ['text', 'identityRef', 'title', 'done'],
         },
         execute: async (args: any) => {
-          const { text, identityRef, title, targetSessionId, forceNew, openDirectory } = args || {};
+          const { text, identityRef, title, targetSessionId, forceNew, openDirectory, done } = args || {};
           if (!text || !identityRef || !title?.trim()) {
             return { error: 'text, identityRef, title 都是必填项' };
           }
@@ -289,6 +302,8 @@ export class GroupAdminFeature implements AgentFeature {
               `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages`,
               body
             );
+
+            if (done) this.stopRequested = true;
 
             // 规划模式：派发需要人工审批
             if (msg.pendingApproval) {
@@ -344,11 +359,12 @@ export class GroupAdminFeature implements AgentFeature {
           type: 'object',
           properties: {
             text: { type: 'string', description: '消息内容' },
+            done: { type: 'boolean', description: '设为 true 表示这是本轮最后一步操作，工具执行完后将直接结束本次对话。当你已发送回复且无需进一步操作时设为 true。设为 false 表示还会继续后续操作。' },
           },
-          required: ['text'],
+          required: ['text', 'done'],
         },
         execute: async (args: any) => {
-          const { text } = args || {};
+          const { text, done } = args || {};
           if (!text) {
             return { error: 'text is required' };
           }
@@ -360,7 +376,8 @@ export class GroupAdminFeature implements AgentFeature {
               mentions: [],
             }
           );
-          return { success: true, text: `消息已成功发送到群聊（ID: ${msg.id}）。该消息已展示给群内用户，无需重复发送。如无其他操作需要执行，可结束本轮回复。` };
+          if (done) this.stopRequested = true;
+          return { success: true, text: `消息已成功发送到群聊（ID: ${msg.id}）。该消息已展示给群内用户，无需重复发送。` };
         },
       },
       {
