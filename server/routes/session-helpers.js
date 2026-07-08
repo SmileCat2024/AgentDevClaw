@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
 import { USER_DATA_ROOT, AGENTS_ROOT } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
@@ -1353,7 +1354,7 @@ async function exportContextHandoffForSession(sessionId, preferredAgentId = '', 
       sourceRecord: record,
       policy,
       agentRelativeDir: agent.relativeDir,
-      projectRoot: __dirname,
+      projectRoot: PROJECT_ROOT,
       sourceSessionSnapshot,
     });
   }
