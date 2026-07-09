@@ -452,10 +452,7 @@ function render(messages) {
   // message list and tool count haven't changed since the last render.
   // This avoids a redundant container.innerHTML replacement after
   // optimistic cache render → loadAgentData render with identical data.
-  const _sig = messages.length + ':'
-    + messages[messages.length - 1].role + ':'
-    + (messages[messages.length - 1].content || '').length + ':'
-    + Object.keys(toolRenderConfigs).length;
+  const _sig = buildChatRenderSignature(messages);
   if (_sig === _lastRenderedChatSig && container.querySelector('.message-row')) {
     return;
   }
@@ -634,6 +631,58 @@ function render(messages) {
     forceSnap: shouldFollowAfterMutation,
     allowChase: false,
   });
+}
+
+function stableSerializeForChatSignature(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(stableSerializeForChatSignature).join(',') + ']';
+  }
+  return '{' + Object.keys(value).sort().map(function(key) {
+    return JSON.stringify(key) + ':' + stableSerializeForChatSignature(value[key]);
+  }).join(',') + '}';
+}
+
+function hashChatSignaturePart(value) {
+  const text = String(value == null ? '' : value);
+  let h1 = 0xdeadbeef ^ text.length;
+  let h2 = 0x41c6ce57 ^ text.length;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+function buildChatRenderSignature(messages) {
+  const configKeys = Object.keys(toolRenderConfigs || {}).sort();
+  const parts = [
+    'messages=' + messages.length,
+    'toolConfigs=' + hashChatSignaturePart(configKeys.map(function(key) {
+      return key + ':' + stableSerializeForChatSignature(toolRenderConfigs[key]);
+    }).join('|')),
+  ];
+
+  messages.forEach(function(msg, index) {
+    const renderState = {
+      index,
+      role: msg.role || '',
+      content: msg.content || '',
+      reasoning: msg.reasoning || '',
+      toolCallId: msg.toolCallId || '',
+      toolCalls: msg.toolCalls || null,
+      images: msg.images || null,
+    };
+    const serialized = stableSerializeForChatSignature(renderState);
+    parts.push(serialized.length + ':' + hashChatSignaturePart(serialized));
+  });
+
+  return parts.join('|');
 }
 
 window.toggleMessage = function(id) {

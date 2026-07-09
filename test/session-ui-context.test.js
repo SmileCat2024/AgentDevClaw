@@ -254,6 +254,21 @@ globalThis.__chatMutation = { appendNewMessages, updateLastMessage };`, context)
   return { context, calls, restoreState };
 }
 
+function createChatRenderSignatureContext() {
+  const context = {
+    toolRenderConfigs: {},
+  };
+  vm.createContext(context);
+  const signatureBlock = sourceBetween(
+    chatRendererSource,
+    'function stableSerializeForChatSignature',
+    '\nwindow.toggleMessage',
+  );
+  vm.runInContext(`${signatureBlock}
+globalThis.__chatSignature = { buildChatRenderSignature };`, context);
+  return context;
+}
+
 test('append preserves viewport and reapplies explicit collapse state when follow is off', () => {
   const { context, calls, restoreState } = createChatMutationContext();
 
@@ -276,4 +291,14 @@ test('patch-last preserves viewport and reapplies explicit collapse state when f
   assert.equal(calls[0].reason, 'patch-last');
   assert.equal(calls[0].shouldFollow, false);
   assert.equal(calls[0].preserveTop, 123);
+});
+
+test('chat render signature changes when equal-length Chinese content changes', () => {
+  const context = createChatRenderSignatureContext();
+  const api = context.__chatSignature;
+
+  const first = api.buildChatRenderSignature([{ role: 'user', content: '问题规范' }]);
+  const second = api.buildChatRenderSignature([{ role: 'user', content: '问题安全' }]);
+
+  assert.notEqual(first, second);
 });
