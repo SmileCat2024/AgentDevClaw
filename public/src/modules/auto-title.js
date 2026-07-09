@@ -9,6 +9,7 @@
  * 依赖全局函数:
  *   getCurrentAgentRecord (app-main.js)
  *   ClawToast (modules/toast-notify.js)
+ *   _tryNotifyInputRequest (modules/desktop-notify.js)
  * 导出全局函数:
  *   getAutoTitleSessionInfo, markAutoTitleCandidate, recheckAutoTitleCandidate,
  *   _messagesEqual, findFirstChangedMessageIndex, tryAutoTitleGeneration,
@@ -281,6 +282,11 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
  * input requests across ALL connected agents (not just the focused one).
  * Shows a ClawToast warning for each newly discovered request so the user
  * is alerted even when viewing a different conversation.
+ *
+ * Note: Desktop notifications for choice requests are handled independently
+ * by refreshChoiceAlertStates() in desktop-notify.js (called from the worker
+ * heartbeat when backgrounded). This separation is intentional — see the
+ * comment on refreshChoiceAlertStates for details.
  */
 async function checkGlobalChoiceAlerts() {
   try {

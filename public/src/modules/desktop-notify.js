@@ -2,8 +2,10 @@
  * Desktop Notification 模块
  * 从 app-main.js 拆出
  *
- * 功能：当 agent 运行完毕且页面不在前台时，通过 Notification API 弹出系统通知。
- *       内置 Web Worker 心跳绕过浏览器后台 tab timer 节流。
+ * 功能：
+ *   1. 当 agent 运行完毕且页面不在前台时，通过 Notification API 弹出系统通知。
+ *   2. 当 user_input feature 的 choice 工具触发且页面不在前台时，同样弹出通知。
+ *   内置 Web Worker 心跳绕过浏览器后台 tab timer 节流。
  *
  * 依赖全局状态 (定义在 app-core.js):
  *   allAgents, currentLanguage
@@ -11,7 +13,7 @@
  *   normalizeAgentIdentity, refreshAgentCallStates,
  *   window.handlePrebuiltAgentClick, window.switchAgent
  * 导出全局函数 (window.*):
- *   _tryNotifyAgentFinished, _requestNotifyPermission
+ *   _tryNotifyAgentFinished, _tryNotifyInputRequest, _requestNotifyPermission
  */
 
 /* ── Dedup: 防止同一 agent 短时间内重复通知 ──
@@ -20,6 +22,14 @@
  */
 const _notifiedFinishMap = new Map();
 const _foregroundObservedFinishMap = new Map();
+
+/* ── Input request notification dedup ──
+ * 与 finish 通知同样的模式：normId → { requestId, timestamp }
+ * 当同一 agent 出现新的 requestId（新的 choice 请求）时替换旧条目，
+ * 使新一轮 choice 请求能正常触发通知。
+ */
+const _notifiedInputRequestMap = new Map();
+const _foregroundObservedInputMap = new Map();
 
 /* ── Foreground grace period: 解决转换检测延迟导致的前台完成被误判为后台完成 ──
  *
@@ -210,11 +220,126 @@ async function _tryNotifyAgentFinished(runtimeId, notifData = null) {
   } catch (e) { /* ignore */ }
 }
 
+/* ── Input request (choice) 通知逻辑 ──────────────────────────────────────
+ * 当 user_input feature 的 choice 工具触发时，如果页面不在前台，
+ * 通过 Notification API 弹出系统通知。复用与 _tryNotifyAgentFinished 相同的
+ * 保护机制：前台检测、已观察去重、前台宽限期、requestId 级去重。
+ *
+ * 与 finish 通知的对应关系：
+ *   _foregroundObservedFinishMap  ↔  _foregroundObservedInputMap
+ *   _notifiedFinishMap            ↔  _notifiedInputRequestMap
+ *   _markAgentCallStartedForNotify (新一轮 call 清除 finish 状态)
+ *     ↔  新 requestId 替换旧条目 (新一轮 choice 清除 input 状态)
+ */
+async function _tryNotifyInputRequest(runtimeId, requestId, alertData = null) {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'granted') return;
+
+  const normId = normalizeAgentIdentity(runtimeId);
+  if (!normId || !requestId) return;
+
+  // 前台时不需要通知——用户已经看到了 choice 卡片或 toast。
+  if (_isNotifyForeground()) {
+    _foregroundObservedInputMap.set(normId, Date.now());
+    return;
+  }
+
+  // 已在前台观察过此 agent 的 input request：跳过。
+  // 如果 requestId 变了（新一轮 choice），清除旧观察记录，继续走通知流程。
+  if (_foregroundObservedInputMap.has(normId)) {
+    const prev = _notifiedInputRequestMap.get(normId);
+    if (prev && prev.requestId !== requestId) {
+      _foregroundObservedInputMap.delete(normId);
+    } else {
+      return;
+    }
+  }
+
+  // 前台宽限期：如果页面刚从前台切走不久（在 FOREGROUND_GRACE_MS 内），
+  // 说明 choice 请求出现时用户很可能就在看着。
+  const sinceForeground = _lastForegroundTs > 0 ? Date.now() - _lastForegroundTs : Infinity;
+  if (sinceForeground < FOREGROUND_GRACE_MS) {
+    _foregroundObservedInputMap.set(normId, Date.now());
+    _notifiedInputRequestMap.set(normId, { requestId, ts: Date.now() });
+    return;
+  }
+
+  // dedup: 同一 requestId 30s 内不重复通知。
+  // 如果是新的 requestId（新一轮 choice），替换旧条目并继续。
+  const now = Date.now();
+  const prevEntry = _notifiedInputRequestMap.get(normId);
+  if (prevEntry && prevEntry.requestId === requestId && (now - prevEntry.ts) < 30000) return;
+
+  const agent = (Array.isArray(allAgents) ? allAgents : []).find(
+    (a) => normalizeAgentIdentity(a.runtime_session_id || a.runtimeSessionId || a.id) === normId
+  );
+  const agentName = (agent?.name || alertData?.agentName || agent?.id || normId).trim();
+  const sessionTitle = (agent?.active_workspace_session_title || '').trim();
+  const isZh = currentLanguage === 'zh';
+
+  // 构建通知正文
+  const bodyParts = [];
+  if (sessionTitle) bodyParts.push(sessionTitle);
+  bodyParts.push(isZh ? '需要你做个选择' : 'Needs your decision');
+  const body = bodyParts.join('\n');
+
+  // 标记已通知（在实际发送通知之前，防止重复触发）
+  _notifiedInputRequestMap.set(normId, { requestId, ts: now });
+
+  try {
+    const n = new Notification(
+      isZh ? `${agentName} 需要你的选择` : `${agentName} needs your decision`,
+      { body, tag: 'claw-agent-input-' + normId }
+    );
+    n.onclick = () => {
+      window.focus();
+      n.close();
+      if (agent?.source === 'prebuilt') {
+        window.handlePrebuiltAgentClick(agent.id);
+      } else if (agent) {
+        window.switchAgent(agent.id);
+      }
+    };
+  } catch (e) { /* ignore */ }
+}
+
 /* ── 请求通知权限（需在用户手势内调用） ── */
 function _requestNotifyPermission() {
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
     Notification.requestPermission().catch(() => {});
   }
+}
+
+/* ── Choice-alert 状态刷新（独立于 checkGlobalChoiceAlerts）────────────────
+ *
+ * 关键设计：此函数与 auto-title.js 中的 checkGlobalChoiceAlerts 完全独立。
+ *
+ * 问题背景：checkGlobalChoiceAlerts 使用 _seenChoiceAlertIds 做去重，
+ *   一旦前台 poll 循环处理了某个 requestId，worker 心跳再调用同一函数时
+ *   会被 _seenChoiceAlertIds 跳过，导致 _tryNotifyInputRequest 永远不会
+ *   从后台路径被触发。
+ *
+ * 解决方案：refreshChoiceAlertStates 直接 fetch /protoclaw/choice_alerts，
+ *   不经过 _seenChoiceAlertIds，为每个活跃请求调用 _tryNotifyInputRequest。
+ *   所有去重逻辑（前台检测、宽限期、requestId 级 30s 窗口）由
+ *   _tryNotifyInputRequest 内部处理。
+ *
+ * 这与 refreshAgentCallStates 的设计完全对称：
+ *   refreshAgentCallStates  → 独立 fetch /notification → _tryNotifyAgentFinished
+ *   refreshChoiceAlertStates → 独立 fetch /choice_alerts → _tryNotifyInputRequest
+ */
+let _lastChoiceNotifyCheckAt = 0;
+
+async function refreshChoiceAlertStates() {
+  try {
+    const res = await fetch('/protoclaw/choice_alerts');
+    if (!res.ok) return;
+    const data = await res.json();
+    const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+    for (const alert of alerts) {
+      _tryNotifyInputRequest(alert.agentId, alert.requestId, alert);
+    }
+  } catch { /* non-critical */ }
 }
 
 /* ── Background heartbeat via Web Worker ──────────────────────────────────
@@ -234,6 +359,13 @@ function _requestNotifyPermission() {
       // 通知权限未授予时也不需要心跳
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
       refreshAgentCallStates(allAgents, { force: true });
+      // 后台时也检查 choice 请求（poll 循环可能被节流，无法及时检测）
+      // 使用独立的 refreshChoiceAlertStates 而非 checkGlobalChoiceAlerts，
+      // 避免 _seenChoiceAlertIds 去重阻断后台通知路径
+      if (Date.now() - _lastChoiceNotifyCheckAt > 2000) {
+        _lastChoiceNotifyCheckAt = Date.now();
+        refreshChoiceAlertStates().catch(() => {});
+      }
     };
   } catch (e) {
     console.warn('[Notify] Web Worker heartbeat unavailable:', e);
