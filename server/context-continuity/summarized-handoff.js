@@ -10,6 +10,7 @@ import {
 import {
   exportFeatureContinuity,
 } from './feature-continuity.js';
+import { childProcessEnv } from '../shared/string-helpers.js';
 
 const HANDOFF_SCHEMA_VERSION = 1;
 const HANDOFF_COMPILER_VERSION = 'summarized-nine-section-v1';
@@ -120,7 +121,7 @@ async function runMirrorCompaction(scriptPath, args, cwd, timeoutMs = 600000) {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       env: {
-        ...process.env,
+        ...childProcessEnv(),
       },
     });
 

@@ -41,10 +41,26 @@ export function parseListField(value) {
     .filter(Boolean);
 }
 
+const PER_SESSION_ENV_KEYS = [
+  'PROTOCLAW_HANDOFF_PATH',
+  'PROTOCLAW_HANDOFF_PAYLOAD',
+];
+
 export function sanitizeSpawnEnv(inputEnv) {
   return Object.fromEntries(
     Object.entries(inputEnv || {}).filter(([key, value]) => {
       return typeof key === 'string' && key.length > 0 && value != null;
     }).map(([key, value]) => [key, String(value)])
   );
+}
+
+/**
+ * Returns a shallow copy of process.env with per-session env vars stripped.
+ * These vars must only be passed via explicit extraEnv to prevent leakage
+ * when the server itself was started from a runtime that carried them.
+ */
+export function childProcessEnv(env = process.env) {
+  const copy = { ...env };
+  for (const key of PER_SESSION_ENV_KEYS) delete copy[key];
+  return copy;
 }

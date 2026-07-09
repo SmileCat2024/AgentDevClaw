@@ -8,7 +8,7 @@ import {
   CALL_EXECUTION_TIMEOUT_MS,
 } from '../shared/constants.js';
 import {
-  sanitizeSessionFragment, cleanSessionText, sanitizeSpawnEnv,
+  sanitizeSessionFragment, cleanSessionText, sanitizeSpawnEnv, childProcessEnv,
   getAssemblyWorkspaceDir, parseListField, log,
 } from '../shared/string-helpers.js';
 import {
@@ -347,7 +347,7 @@ export function createAgentLifecycleModule(ctx) {
       cwd: PROJECT_ROOT,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: sanitizeSpawnEnv({
-        ...process.env,
+        ...childProcessEnv(),
         ...(isExplorationSession ? {} : {
           AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
           AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
@@ -458,7 +458,7 @@ export function createAgentLifecycleModule(ctx) {
         cwd: PROJECT_ROOT,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: sanitizeSpawnEnv({
-          ...process.env,
+          ...childProcessEnv(),
           PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
           PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
           PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
@@ -589,7 +589,7 @@ export function createAgentLifecycleModule(ctx) {
       cwd: PROJECT_ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: sanitizeSpawnEnv({
-        ...process.env,
+        ...childProcessEnv(),
         AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
         AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
         AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || '\\\\.\\pipe\\agentdev-viewer',

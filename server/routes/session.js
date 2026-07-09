@@ -16,6 +16,7 @@ import {
   sanitizeSessionFragment,
   cleanSessionText,
   normalizeClientAgentId,
+  childProcessEnv,
 } from '../shared/string-helpers.js';
 import {
   readSessionIndex,
@@ -741,7 +742,7 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
       cwd: __dirname,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      env: { ...process.env },
+      env: childProcessEnv(),
     });
 
     let stderr = '';
@@ -831,7 +832,7 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
       cwd: __dirname,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      env: { ...process.env },
+      env: childProcessEnv(),
     });
 
     let stderr = '';
