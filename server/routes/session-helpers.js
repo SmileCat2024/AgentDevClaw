@@ -27,6 +27,7 @@ import {
   exportSummarizedHandoffPackage,
   writeSummarizedHandoffPackage,
 } from '../context-continuity/summarized-handoff.js';
+import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 
 /**
  * Session index metadata version. Bump when the cached fields schema changes;
@@ -1212,6 +1213,8 @@ async function deletePrebuiltSession(agentId, sessionId) {
   });
 
   await fs.rm(getPrebuiltSessionFilePath(agentId, sessionId), { force: true }).catch(() => {});
+  // Remove from open-sessions tracker
+  removeOpenSession(agentId, sessionId).catch(() => {});
 
   return {
     deletedSessionId: sessionId,

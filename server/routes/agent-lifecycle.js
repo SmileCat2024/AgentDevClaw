@@ -26,6 +26,7 @@ import {
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { sendIPCtoSession } from '../shared/ipc.js';
+import { addOpenSession, removeOpenSession } from '../shared/open-sessions-tracker.js';
 
 // ── Agent Lifecycle ──────────────────────────────────────────────
 // Factory pattern: sessionApi is a mutable reference object that gets
@@ -388,6 +389,10 @@ export function createAgentLifecycleModule(ctx) {
         runtime.ready = true;
         // Notify runtime-ready hook (for event-driven dispatch schedules)
         notifyRuntimeReady(agent.id, resolvedSessionId || null);
+        // Track open session for post-restart recovery
+        if (resolvedSessionId) {
+          addOpenSession(agent.id, resolvedSessionId).catch(() => {});
+        }
       }
       log(agent.id, text.trim());
     });
@@ -647,15 +652,28 @@ export function createAgentLifecycleModule(ctx) {
   async function stopManagedAgent(agentId, sessionId = undefined) {
     const runtimes = sessionId === undefined ? listAgentRuntimes(agentId) : [getAgentRuntime(agentId, sessionId)].filter(Boolean);
     if (runtimes.length === 0) {
+      // No runtime found — still clean up the tracker in case the process
+      // already exited and was removed from managedAgents
+      if (sessionId) {
+        removeOpenSession(agentId, sessionId).catch(() => {});
+      }
       return buildStatus(agentId, sessionId);
     }
 
     for (const runtime of runtimes) {
       if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
+        // Process already exited — still need to clean up the tracker
+        if (runtime?.selectedSessionId) {
+          removeOpenSession(agentId, runtime.selectedSessionId).catch(() => {});
+        }
         continue;
       }
       runtime.stopped = true;
       runtime.process.kill('SIGTERM');
+      // Remove from open-sessions tracker (explicit stop)
+      if (runtime.selectedSessionId) {
+        removeOpenSession(agentId, runtime.selectedSessionId).catch(() => {});
+      }
     }
     return buildStatus(agentId, sessionId);
   }

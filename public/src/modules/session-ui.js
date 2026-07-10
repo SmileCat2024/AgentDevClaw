@@ -821,9 +821,13 @@ function renderWorkspaceSessionList(agent, block) {
       sessionsHtml = '<div class="feature-project-session-group"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? renderPhSessionsWithGroups(mainSessions, 'main') : emptyNote) + '</div></div>';
     }
 
+    // Schedule async open-sessions recovery card
+    setTimeout(() => window.phLoadOpenSessionsCard(agent.id, currentProject.openDirectory), 0);
+
     return [
       bannerHtml,
       headerBar,
+      '<div id="ph-open-sessions-container"></div>',
       '<section class="workspace-section">',
       sessionsHtml,
       '</section>',
@@ -895,3 +899,148 @@ function renderWorkspaceSessionList(agent, block) {
     '</section>',
   ].join('');
 }
+
+// ── Open Sessions Recovery Card ──────────────────────────────────
+
+window.phLoadOpenSessionsCard = async function(agentId, openDirectory) {
+  const container = document.getElementById('ph-open-sessions-container');
+  if (!container) return;
+
+  try {
+    const resp = await fetch('/protoclaw/open_sessions?agentId=' + encodeURIComponent(agentId));
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const allOpen = Array.isArray(data.sessions) ? data.sessions : [];
+
+    // Filter by current project's openDirectory (normalized comparison)
+    const normDir = String(openDirectory || '').replace(/\\/g, '/').toLowerCase();
+    const projectSessions = allOpen.filter((s) => {
+      const sDir = String(s.openDirectory || '').replace(/\\/g, '/').toLowerCase();
+      return sDir === normDir;
+    });
+
+    // Exclude sessions that already have a running runtime
+    const runningSessionIds = new Set(
+      (allAgents || [])
+        .filter((a) => a.runtime_session_id && a.connected)
+        .map((a) => String(a.runtime_session_id))
+    );
+    const toRestore = projectSessions.filter((s) => !runningSessionIds.has(String(s.sessionId)));
+
+    // Dedup: skip DOM update if content signature hasn't changed
+    const isZh = currentLanguage === 'zh';
+    const sig = isZh + '|' + toRestore.map((s) => s.sessionId + ':' + (s.title || '')).sort().join(',');
+    if (container._phOpenSessionsSig === sig) return;
+    container._phOpenSessionsSig = sig;
+
+    if (toRestore.length === 0) {
+      if (container.innerHTML) container.innerHTML = '';
+      return;
+    }
+
+    container.innerHTML = window._buildPhOpenSessionsCardHtml(toRestore, isZh, agentId);
+  } catch {
+    container._phOpenSessionsSig = null;
+    if (container.innerHTML) container.innerHTML = '';
+  }
+};
+
+window._buildPhOpenSessionsCardHtml = function(sessions, isZh, agentId) {
+  const itemsHtml = sessions.map((s) => {
+    const timeStr = s.updatedAt ? formatWorkspaceDate(s.updatedAt) : '';
+    const title = s.title || s.sessionId;
+    return [
+      '<div class="ph-open-session-item" data-session-id="' + escapeHtml(s.sessionId) + '">',
+      '<div class="ph-open-session-dot"></div>',
+      '<div class="ph-open-session-info">',
+      '<div class="ph-open-session-title">' + escapeHtml(title) + '</div>',
+      (timeStr ? '<div class="ph-open-session-meta">' + escapeHtml(timeStr) + '</div>' : ''),
+      '</div>',
+      '<button class="ph-open-session-enter" type="button" onclick="window.phRestoreOneOpenSession(\'' + escapeHtml(agentId) + '\', \'' + escapeHtml(s.sessionId) + '\', this)">' + escapeHtml(isZh ? '进入对话' : 'Open') + '</button>',
+      '</div>',
+    ].join('');
+  }).join('');
+
+  const count = sessions.length;
+  const allIds = sessions.map((s) => s.sessionId);
+  return [
+    '<div class="ph-open-sessions-card">',
+    '<div class="ph-open-sessions-header">',
+    '<div class="ph-open-sessions-title">',
+    '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM8 4v4l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    '<span>' + escapeHtml(isZh ? '上次未关闭的会话 (' + count + ')' : 'Unclosed sessions (' + count + ')') + '</span>',
+    '</div>',
+    '<div class="ph-open-sessions-actions">',
+    (count > 1 ? '<button class="ph-open-sessions-restore-all" type="button" onclick="window.phRestoreAllOpenSessions(\'' + escapeHtml(agentId) + '\', ' + escapeHtml(JSON.stringify(allIds)) + ', this)">' + escapeHtml(isZh ? '全部恢复' : 'Restore All') + '</button>' : ''),
+    '<button class="ph-open-sessions-dismiss" type="button" title="' + escapeHtml(isZh ? '关闭' : 'Dismiss') + '" onclick="window.phDismissOpenSessions(\'' + escapeHtml(agentId) + '\', this)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>',
+    '</div>',
+    '</div>',
+    '<div class="ph-open-sessions-body">',
+    itemsHtml,
+    '</div>',
+    '</div>',
+  ].join('');
+};
+
+window.phRestoreOneOpenSession = async function(agentId, sessionId, btnEl) {
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = '...';
+  }
+  try {
+    // Use existing open_session action to activate + start runtime
+    window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }), btnEl);
+    // Remove the item from the card
+    const item = btnEl?.closest('.ph-open-session-item');
+    if (item) item.remove();
+    // If no more items, hide the card
+    const card = document.querySelector('.ph-open-sessions-card');
+    if (card && !card.querySelector('.ph-open-session-item')) {
+      card.style.display = 'none';
+    }
+  } catch (err) {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.textContent = currentLanguage === 'zh' ? '进入对话' : 'Open';
+    }
+  }
+};
+
+window.phRestoreAllOpenSessions = async function(agentId, sessionIds, btnEl) {
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = currentLanguage === 'zh' ? '恢复中...' : 'Restoring...';
+  }
+  try {
+    const resp = await fetch('/protoclaw/open_sessions/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, sessionIds }),
+    });
+    const data = await resp.json();
+    // Reload agent data to reflect newly started runtimes
+    if (typeof loadAgents === 'function') {
+      await loadAgents();
+    }
+    // Hide the card
+    const card = document.querySelector('.ph-open-sessions-card');
+    if (card) card.style.display = 'none';
+  } catch (err) {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.textContent = currentLanguage === 'zh' ? '全部恢复' : 'Restore All';
+    }
+  }
+};
+
+window.phDismissOpenSessions = async function(agentId, btnEl) {
+  try {
+    await fetch('/protoclaw/open_sessions/dismiss', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId }),
+    });
+  } catch { /* non-critical */ }
+  const card = btnEl?.closest('.ph-open-sessions-card');
+  if (card) card.remove();
+};

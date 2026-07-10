@@ -60,6 +60,12 @@ import {
 } from './server/shared/session-access.js';
 import { sendIPCtoSession } from './server/shared/ipc.js';
 import { proxyToViewer } from './server/shared/proxy.js';
+import {
+  initRecoveryCache,
+  getRecoverySessions,
+  consumeRecoverySession,
+  dismissRecoverySessions,
+} from './server/shared/open-sessions-tracker.js';
 
 // ── Phase 1: domain route modules ────────────────────────────────
 import { setupSystemFeatureConfigRoutes } from './server/routes/system-feature-config.js';
@@ -308,6 +314,65 @@ setupSessionRoutes(app, express, {
   // Group chat lineage callback
   notifySessionLineage,
   notifySessionArchived,
+});
+
+// ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
+app.get('/protoclaw/open_sessions', async (req, res, next) => {
+  try {
+    const agentId = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
+    if (!agentId) {
+      res.status(400).json({ error: 'agentId is required' });
+      return;
+    }
+    const sessions = await getRecoverySessions(agentId);
+    res.json({ sessions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/open_sessions/restore', express.json(), async (req, res, next) => {
+  try {
+    const agentId = typeof req.body.agentId === 'string' ? req.body.agentId.trim() : '';
+    if (!agentId) {
+      res.status(400).json({ error: 'agentId is required' });
+      return;
+    }
+    const sessionIds = Array.isArray(req.body.sessionIds) ? req.body.sessionIds.filter((id) => typeof id === 'string' && id) : [];
+    if (sessionIds.length === 0) {
+      res.status(400).json({ error: 'sessionIds is required' });
+      return;
+    }
+
+    const agent = await requireAgentLight(agentId);
+    const results = [];
+
+    for (const sessionId of sessionIds) {
+      try {
+        const session = await activatePrebuiltSession(agent.id, sessionId, { returnSummary: false });
+        const status = await startManagedAgent(agent, session.id);
+        await waitForManagedRuntimeReady(agent.id, 10000, session.id);
+        results.push({ sessionId, ok: true, status });
+        consumeRecoverySession(agent.id, sessionId);
+      } catch (err) {
+        results.push({ sessionId, ok: false, error: String(err.message || err) });
+      }
+    }
+
+    res.json({ results });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/open_sessions/dismiss', express.json(), (req, res) => {
+  const agentId = typeof req.body.agentId === 'string' ? req.body.agentId.trim() : '';
+  if (!agentId) {
+    res.status(400).json({ error: 'agentId is required' });
+    return;
+  }
+  dismissRecoverySessions(agentId);
+  res.json({ ok: true });
 });
 
 
@@ -881,6 +946,15 @@ async function main() {
     await cleanupOrphanedRouting();
   } catch (err) {
     console.warn('[group-chat] startup cleanup failed:', err.message);
+  }
+
+  // 初始化 crash recovery 缓存：读取上次异常关闭时的 open-sessions → 内存，然后清空文件
+  for (const agentId of WORKSPACE_SESSION_AGENT_IDS) {
+    try {
+      await initRecoveryCache(agentId);
+    } catch (err) {
+      console.warn(`[open-sessions] initRecoveryCache failed for ${agentId}:`, err.message);
+    }
   }
 
   app.listen(APP_PORT, () => {

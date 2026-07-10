@@ -12,6 +12,7 @@ import {
   REQ_TIMEOUT_BUFFER_MS,
 } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
+import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
 import {
   sanitizeSessionFragment,
   cleanSessionText,
@@ -1303,6 +1304,7 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
     }
     const session = await activatePrebuiltSession(agent.id, req.body.sessionId, { returnSummary: false });
     const status = await startManagedAgent(agent, session.id);
+    consumeRecoverySession(agent.id, session.id);
     res.json({ session, status, agent: null });
   } catch (error) {
     next(error);
