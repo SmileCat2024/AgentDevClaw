@@ -1271,6 +1271,10 @@ async function main() {
       if (typeof agent['preInjectCallStart'] === 'function') {
         try {
           await agent['preInjectCallStart']();
+          // preInjectCallStart 注入了 seedMessages 到内存 context，
+          // 需立即落盘，否则 title mirror 等独立子进程从磁盘加载时会 ENOENT
+          await agent.saveSession(sessionId, sessionStore);
+          console.log('[ProtoClaw Runtime] ✓ preInjectCallStart 内容已落盘');
         } catch (error) {
           console.warn('[ProtoClaw Runtime] preInjectCallStart 失败:', error instanceof Error ? error.message : String(error));
         }

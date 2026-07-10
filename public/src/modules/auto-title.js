@@ -36,15 +36,25 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
   // (runtime hiccup, session switch without cache, agent restart) and the
   // next poll sees a bogus [] → [messages with assistant] transition.
   const currentTitle = String(info.agent.active_workspace_session_title || '').trim();
-  if (currentTitle && !/^新对话\d+$/.test(currentTitle)) return;
+  // 衍生会话标题以 （ 开头（如 （精简）（摘要）（分支）），允许触发自动标题
+  const isDerivedSession = /^（/.test(currentTitle);
+  if (currentTitle && !/^新对话\d+$/.test(currentTitle) && !isDerivedSession) return;
   const previousAssistantCount = previousMessages.filter(function(message) {
     return message && message.role === 'assistant';
   }).length;
   const nextAssistantCount = nextMessages.filter(function(message) {
     return message && message.role === 'assistant';
   }).length;
-  if (previousAssistantCount === 0 && nextAssistantCount > 0) {
-    _autoTitlePending.add(info.sessionId);
+  if (isDerivedSession) {
+    // 衍生会话：检测 assistant 数量增长（用户首次真实交互后才触发）
+    if (nextAssistantCount > previousAssistantCount && nextAssistantCount > 0) {
+      _autoTitlePending.add(info.sessionId);
+    }
+  } else {
+    // 新会话：检测 0→1 转变
+    if (previousAssistantCount === 0 && nextAssistantCount > 0) {
+      _autoTitlePending.add(info.sessionId);
+    }
   }
 }
 
@@ -60,6 +70,9 @@ function recheckAutoTitleCandidate() {
   const { agent, sessionId } = info;
   const currentTitle = String(agent.active_workspace_session_title || '').trim();
   if (!/^新对话\d+$/.test(currentTitle)) return;
+  // 衍生会话（标题以 （ 开头）不在加载时触发标题生成，
+  // 需等用户首次真实输入后再由 markAutoTitleCandidate 检测增量触发
+  if (/^（/.test(currentTitle)) return;
   const hasAssistant = Array.isArray(currentMessages)
     && currentMessages.some(function(m) { return m && m.role === 'assistant'; });
   if (hasAssistant) {
@@ -132,7 +145,8 @@ function _findSessionOwner(sessionId) {
  * @param messages - current session's messages array (null for non-current sessions)
  */
 function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
-  if (!/^新对话\d+$/.test(sessionTitle)) {
+  // 匹配新对话 或 衍生会话前缀（（精简）（摘要）（分支）等）
+  if (!/^新对话\d+$/.test(sessionTitle) && !/^（/.test(sessionTitle)) {
     _autoTitlePending.delete(sessionId);
     return;
   }

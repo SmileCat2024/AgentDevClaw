@@ -1407,9 +1407,24 @@ async function createCompactedResumeFromHandoff({
   if (!handoff?.stats?.synthetic) {
     await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
   }
+
+  // 根据操作类型确定标题前缀
+  const handoffMode = cleanSessionText(handoff?.mode);
+  const sourceTitle = cleanSessionText(handoff?.sourceRecord?.title);
+  let derivedTitle = '';
+  if (sourceTitle) {
+    if (handoffMode === 'summarized-nine-section') {
+      derivedTitle = `（摘要）${sourceTitle}`;
+    } else {
+      // trim-transcript 或其他模式默认为精简
+      derivedTitle = `（精简）${sourceTitle}`;
+    }
+  }
+
   const session = await createPrebuiltSession(agent.id, {
     sourceSessionId,
     goal: goal || undefined,
+    title: derivedTitle || undefined,
       metadata: {
         resumeMode: 'compacted',
         sourceAgentId,

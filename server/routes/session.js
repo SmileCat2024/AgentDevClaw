@@ -325,8 +325,8 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
 
     const sourceTitle = sourceRecord?.title || '';
     const branchTitle = sourceTitle
-      ? `${sourceTitle}（分支）`
-      : `分支会话 · ${createdAt.replace(/[TZ]/g, ' ').trim()}`;
+      ? `（分支）${sourceTitle}`
+      : `（分支）新对话 · ${createdAt.replace(/[TZ]/g, ' ').trim()}`;
 
     const branchRecord = {
       id: newSessionId,
@@ -732,6 +732,15 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
     const agentRelativeDir = agent.relativeDir;
     if (!agentRelativeDir) {
       return res.status(500).json({ error: 'Agent directory not resolved' });
+    }
+
+    // 防御：检查 session JSON 文件是否已落盘。
+    // 新创建的会话（尤其是 trim/summary 衍生会话）在 runtime 首次保存前
+    // 磁盘上不存在 JSON 文件，title mirror 子进程加载时会 ENOENT。
+    try {
+      await fs.access(getPrebuiltSessionFilePath(ownerAgentId, sessionId));
+    } catch {
+      return res.status(404).json({ error: 'Session file not yet written to disk' });
     }
 
     const titleMirrorScript = path.join(PROJECT_ROOT, 'scripts', 'run-title-mirror.js');
