@@ -827,7 +827,7 @@ function renderWorkspaceSessionList(agent, block) {
     return [
       bannerHtml,
       headerBar,
-      '<div id="ph-open-sessions-container"></div>',
+      '<div id="ph-open-sessions-container">' + (_phOpenSessionsCache.html || '') + '</div>',
       '<section class="workspace-section">',
       sessionsHtml,
       '</section>',
@@ -902,6 +902,23 @@ function renderWorkspaceSessionList(agent, block) {
 
 // ── Open Sessions Recovery Card ──────────────────────────────────
 
+/**
+ * Module-level cache for the open-sessions card.
+ *
+ * The workspace surface HTML is rebuilt on every poll when any session data
+ * changes (token usage, relative timestamps, etc.).  Because the
+ * #ph-open-sessions-container div lives inside that HTML string, it is
+ * destroyed and recreated empty on every rebuild.  Previously the dedup
+ * signature was stored on the DOM element, so it was lost on every rebuild
+ * — the card vanished then reappeared after fetch, causing visible flicker.
+ *
+ * By keeping both the signature and the rendered HTML here (module scope),
+ * we survive DOM rebuilds: the cached HTML is baked directly into the
+ * workspace string so the card is present immediately after rebuild, and
+ * the async fetch only fires when data actually changes.
+ */
+var _phOpenSessionsCache = { sig: null, html: '' };
+
 window.phLoadOpenSessionsCard = async function(agentId, openDirectory) {
   const container = document.getElementById('ph-open-sessions-container');
   if (!container) return;
@@ -927,20 +944,23 @@ window.phLoadOpenSessionsCard = async function(agentId, openDirectory) {
     );
     const toRestore = projectSessions.filter((s) => !runningSessionIds.has(String(s.sessionId)));
 
-    // Dedup: skip DOM update if content signature hasn't changed
+    // Dedup via module-level signature (survives DOM rebuilds)
     const isZh = currentLanguage === 'zh';
-    const sig = isZh + '|' + toRestore.map((s) => s.sessionId + ':' + (s.title || '')).sort().join(',');
-    if (container._phOpenSessionsSig === sig) return;
-    container._phOpenSessionsSig = sig;
+    const sig = isZh + '|' + toRestore.map((s) => s.sessionId + ':' + (s.title || '') + ':' + (s.updatedAt || '')).sort().join(',');
+    if (_phOpenSessionsCache.sig === sig) return; // data unchanged
+    _phOpenSessionsCache.sig = sig;
 
     if (toRestore.length === 0) {
+      _phOpenSessionsCache.html = '';
       if (container.innerHTML) container.innerHTML = '';
       return;
     }
 
-    container.innerHTML = window._buildPhOpenSessionsCardHtml(toRestore, isZh, agentId);
+    _phOpenSessionsCache.html = window._buildPhOpenSessionsCardHtml(toRestore, isZh, agentId);
+    container.innerHTML = _phOpenSessionsCache.html;
   } catch {
-    container._phOpenSessionsSig = null;
+    _phOpenSessionsCache.sig = null;
+    _phOpenSessionsCache.html = '';
     if (container.innerHTML) container.innerHTML = '';
   }
 };
@@ -998,6 +1018,10 @@ window.phRestoreOneOpenSession = async function(agentId, sessionId, btnEl) {
     if (card && !card.querySelector('.ph-open-session-item')) {
       card.style.display = 'none';
     }
+    // Sync cache: capture remaining DOM state, force next fetch to verify
+    var container = document.getElementById('ph-open-sessions-container');
+    _phOpenSessionsCache.html = (container && container.querySelector('.ph-open-session-item')) ? container.innerHTML : '';
+    _phOpenSessionsCache.sig = null;
   } catch (err) {
     if (btnEl) {
       btnEl.disabled = false;
@@ -1025,6 +1049,9 @@ window.phRestoreAllOpenSessions = async function(agentId, sessionIds, btnEl) {
     // Hide the card
     const card = document.querySelector('.ph-open-sessions-card');
     if (card) card.style.display = 'none';
+    // Clear cache so workspace rebuilds don't bring the card back
+    _phOpenSessionsCache.html = '';
+    _phOpenSessionsCache.sig = null;
   } catch (err) {
     if (btnEl) {
       btnEl.disabled = false;
@@ -1043,4 +1070,7 @@ window.phDismissOpenSessions = async function(agentId, btnEl) {
   } catch { /* non-critical */ }
   const card = btnEl?.closest('.ph-open-sessions-card');
   if (card) card.remove();
+  // Clear cache so workspace rebuilds don't bring the card back
+  _phOpenSessionsCache.html = '';
+  _phOpenSessionsCache.sig = null;
 };
