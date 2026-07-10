@@ -10,6 +10,14 @@ const WG_VOICE_SOUND_VOLUME = 0.6;
 const WG_VOICE_CHUNK_INTERVAL = 1000;
 
 function _wgPlayVoiceSound(type) {
+  // Delegate to the shared Web Audio API implementation in voice-input.js
+  // (pre-decoded AudioBuffer, near-zero latency). Falls back to new Audio()
+  // internally if buffers aren't ready yet.
+  if (typeof _playVoiceSound === 'function') {
+    _playVoiceSound(type);
+    return;
+  }
+  // Standalone fallback (should not normally happen — voice-input.js loads first)
   try {
     const url = type === 'start'
       ? '/sounds/voice-recording-start.mp3'
@@ -28,6 +36,9 @@ function _wgUpdateVoiceUI() {
 }
 
 async function wgToggleVoiceRecording(btn) {
+  // Initialize AudioContext within user gesture (shared with voice-input.js)
+  if (typeof _initAudioCues === 'function') _initAudioCues();
+
   if (WgState._voiceRecording) {
     wgStopVoiceRecording();
   } else if (!WgState._voiceTranscribing) {

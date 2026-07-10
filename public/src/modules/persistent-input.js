@@ -32,6 +32,7 @@ let _queuedTexts = []; // 仅用于气泡展示
 let _persistentUiSyncInFlight = false;
 let _localQueuedInputPending = false;
 let _lastQueueBubbleSignature = '';
+let _submitInFlight = false;       // 发送重入保护：fetch 期间阻止二次提交/中断
 
 // 待发送的图片附件
 let _pendingImages = [];
@@ -301,6 +302,7 @@ function renderPersistentInput(container) {
 function onPersistentBtnClick() {
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
+  if (_submitInFlight) return;         // fetch 进行中：阻止连点（防误触暂停）
   if (_voiceTranscribing) return;
   if (_voiceRecording) {
     _voicePendingSend = true;
@@ -393,6 +395,7 @@ function handlePersistentInputKey(event) {
 }
 
 async function submitQueuedInput() {
+  if (_submitInFlight) return;
   // 首次发送消息时请求桌面通知权限（用户手势内请求）-> modules/desktop-notify.js
   _requestNotifyPermission();
   const textarea = document.getElementById('input-persistent');
@@ -401,6 +404,11 @@ async function submitQueuedInput() {
   if (!text && _pendingImages.length === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
   const targetCacheKey = textarea.dataset.sessionKey || _getSessionInputCacheKey();
+
+  _submitInFlight = true;
+  // 乐观 UI：立即切换为 stop 按钮提供即时视觉反馈，消除"点击没反应"的手感。
+  // _submitInFlight 守卫确保此期间点击不会触发 interruptAgent。
+  _setActionBtnStop();
 
   // Build images payload — wait for background uploads to finish first
   await _awaitPendingImageUploads();
@@ -442,6 +450,9 @@ async function submitQueuedInput() {
     }
   } catch (e) {
     console.error('排队输入提交失败:', e);
+  } finally {
+    _submitInFlight = false;
+    _syncPersistentActionButton();
   }
 }
 

@@ -4043,6 +4043,11 @@
   // ── 语音输入功能 ──────────────────────────────────────────────
 
   function _playVoiceSound(type) {
+    // Delegate to the shared Web Audio API implementation (voice-input.js)
+    if (typeof window._playVoiceSound === 'function') {
+      window._playVoiceSound(type);
+      return;
+    }
     try {
       const url = type === 'start'
         ? '/sounds/voice-recording-start.mp3'
@@ -4061,6 +4066,7 @@
   }
 
   async function toggleVoiceRecording(btn) {
+    if (typeof window._initAudioCues === 'function') window._initAudioCues();
     if (_voiceRecording) {
       stopVoiceRecording();
     } else if (!_voiceTranscribing) {

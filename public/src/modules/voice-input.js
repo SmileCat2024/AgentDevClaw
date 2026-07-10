@@ -40,15 +40,86 @@ let _voiceCacheKey = null;          // 录音发起时的 session cache key（�
 let _pendingVoiceResults = {};      // { agentId: text } — ASR 结果在会话切换后暂存，待切回时注入
 let _sessionInputCache = {};        // { cacheKey: text } — 每个会话 persistent 输入框内容缓存
 
-// Play short audio cue for voice recording start/stop.
-function _playVoiceSound(type) {
-  try {
+// ── Low-latency audio cue via Web Audio API ──────────────────────────────────
+// Replaces `new Audio(url).play()` which creates a new HTMLAudioElement each
+// time and goes through the browser's HTML media pipeline (fetch → decode →
+// schedule). Web Audio API pre-decodes the audio into AudioBuffer objects,
+// so playback via AudioBufferSourceNode.start() has near-zero scheduling
+// latency — comparable to the server-side audio feedback feature which reads
+// from the local filesystem via PowerShell MediaPlayer.
+//
+// Lifecycle:
+//   1. Page load: prefetch raw ArrayBuffer for both sounds (no user gesture
+//      needed for fetch).
+//   2. First user gesture (toggleVoiceRecording click): create AudioContext
+//      (must be within gesture for autoplay policy) and decode prefetched
+//      data into AudioBuffers.
+//   3. Subsequent plays: instant via AudioBufferSourceNode.
+//   4. First play (buffers not yet decoded): falls back to new Audio().
+
+let _audioCueCtx = null;
+let _audioCueBuffers = {};   // { start: AudioBuffer, stop: AudioBuffer }
+let _audioCueRawData = {};   // { start: ArrayBuffer, stop: ArrayBuffer } — prefetched, pre-decode
+
+(function _prefetchAudioCueRaw() {
+  for (const type of ['start', 'stop']) {
     const url = type === 'start'
       ? '/sounds/voice-recording-start.mp3'
       : '/sounds/voice-recording-stop.mp3';
-    const audio = new Audio(url);
+    fetch(url)
+      .then(function(r) { return r.arrayBuffer(); })
+      .then(function(buf) { _audioCueRawData[type] = buf; })
+      .catch(function() { /* prefetch is best-effort */ });
+  }
+})();
+
+// Must be called within a user gesture for AudioContext creation/resume.
+function _initAudioCues() {
+  if (!_audioCueCtx) {
+    var Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return;
+    _audioCueCtx = new Ctor();
+  }
+  if (_audioCueCtx.state === 'suspended') {
+    _audioCueCtx.resume().catch(function() {});
+  }
+  // Decode any prefetched raw data (async, non-blocking)
+  for (var _i = 0, _types = ['start', 'stop']; _i < _types.length; _i++) {
+    (function(type) {
+      if (_audioCueBuffers[type]) return;
+      var raw = _audioCueRawData[type];
+      if (!raw) return;
+      _audioCueRawData[type] = null;
+      _audioCueCtx.decodeAudioData(raw).then(function(buf) {
+        _audioCueBuffers[type] = buf;
+      }).catch(function() { /* decode failed, will fall back to new Audio() */ });
+    })(_types[_i]);
+  }
+}
+
+// Play short audio cue for voice recording start/stop.
+function _playVoiceSound(type) {
+  // Fast path: play pre-decoded buffer via Web Audio API (near-zero latency)
+  if (_audioCueCtx && _audioCueBuffers[type]) {
+    try {
+      var source = _audioCueCtx.createBufferSource();
+      source.buffer = _audioCueBuffers[type];
+      var gain = _audioCueCtx.createGain();
+      gain.gain.value = 0.6;
+      source.connect(gain);
+      gain.connect(_audioCueCtx.destination);
+      source.start(0);
+      return;
+    } catch (e) { /* fall through to legacy */ }
+  }
+  // Fallback: legacy HTMLAudioElement (first play before buffers are decoded)
+  try {
+    var url = type === 'start'
+      ? '/sounds/voice-recording-start.mp3'
+      : '/sounds/voice-recording-stop.mp3';
+    var audio = new Audio(url);
     audio.volume = 0.6;
-    audio.play().catch(() => { /* ignore autoplay rejection */ });
+    audio.play().catch(function() { /* ignore autoplay rejection */ });
   } catch (e) { /* non-critical */ }
 }
 
@@ -75,6 +146,11 @@ function _markVoiceAutoSendAccepted(runtimeId) {
 }
 
 async function toggleVoiceRecording(btn) {
+  // Initialize AudioContext within user gesture (autoplay policy requires it).
+  // Creates context synchronously; decode happens async so buffers are ready
+  // for subsequent plays.
+  _initAudioCues();
+
   if (_voiceRecording) {
     stopVoiceRecording();
   } else if (!_voiceTranscribing) {
