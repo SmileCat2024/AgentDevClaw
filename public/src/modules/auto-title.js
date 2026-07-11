@@ -46,14 +46,19 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
     return message && message.role === 'assistant';
   }).length;
   if (isDerivedSession) {
-    // 衍生会话：检测 assistant 数量增长（用户首次真实交互后才触发）
+    // 衍生会话：跳过初始加载（previousMessages 为空说明是首次 poll，消息来自 seed 注入）
+    if (previousMessages.length === 0) return;
+    // 后续 poll：检测 assistant 数量增长（用户首次真实交互后才触发）
     if (nextAssistantCount > previousAssistantCount && nextAssistantCount > 0) {
       _autoTitlePending.add(info.sessionId);
     }
   } else {
-    // 新会话：检测 0→1 转变
+    // 新会话：检测 0→1 assistant 转变，且要求至少有一条 user 消息（排除 runtime 初始化产生的消息）
     if (previousAssistantCount === 0 && nextAssistantCount > 0) {
-      _autoTitlePending.add(info.sessionId);
+      var hasUserMessage = nextMessages.some(function(m) { return m && m.role === 'user'; });
+      if (hasUserMessage) {
+        _autoTitlePending.add(info.sessionId);
+      }
     }
   }
 }
@@ -75,7 +80,10 @@ function recheckAutoTitleCandidate() {
   if (/^（/.test(currentTitle)) return;
   const hasAssistant = Array.isArray(currentMessages)
     && currentMessages.some(function(m) { return m && m.role === 'assistant'; });
-  if (hasAssistant) {
+  // 要求至少有一条 user 消息，排除 runtime 初始化或会话切换残留导致的误触发
+  var hasUserMessage = Array.isArray(currentMessages)
+    && currentMessages.some(function(m) { return m && m.role === 'user'; });
+  if (hasAssistant && hasUserMessage) {
     _autoTitlePending.add(sessionId);
   }
 }

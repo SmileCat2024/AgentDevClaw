@@ -981,7 +981,8 @@ async function createPrebuiltSession(agentId, options = {}) {
   const sessionDisplayName = normalizedAgentId === 'agent-creator'
     ? nextAgentName
     : (normalizedAgentId === 'programming-helper' ? '' : nextFeatureName);
-  const nextTitle = nextTaskTitle || (isProgrammingHelper
+  const explicitTitle = cleanSessionText(options.title);
+  const nextTitle = explicitTitle || nextTaskTitle || (isProgrammingHelper
     ? await getNextNewSessionTitle(agentId, nextOpenDirectory)
     : buildNamedSessionTitle(sessionDisplayName, createdAt));
   // 解析当前模型配置，持久化到 session index record
