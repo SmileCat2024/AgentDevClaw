@@ -585,6 +585,14 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
   if (!agentId || !contextKey) return false;
   const cached = _agentRuntimeCache.get(contextKey);
   if (!cached) return false;
+  // Guard against cache key collision: when a new session is created for the same
+  // host agent, the old runtime's saveCurrentRuntimeToCache may write under the
+  // new session's context key (because allAgents was already updated). Verify
+  // that the cached entry actually belongs to the requesting runtime.
+  if (cached.runtimeId && String(cached.runtimeId).trim() !== String(agentId).trim()) {
+    _agentRuntimeCache.delete(contextKey);
+    return false;
+  }
   activateUserCollapseStateForContext(contextKey);
   currentMessages = cached.messages;
   toolRenderConfigs = cached.toolRenderConfigs;

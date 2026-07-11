@@ -20,8 +20,26 @@
 
 // ── Auto session title generation ──────────────────────────────────────────
 const _autoTitlePending = new Set();
+// 衍生会话（trim/summary/branch）基线 assistant 数量。
+// 首次观测到非空消息时记录，之后只有 assistant 数量超过基线才触发标题生成。
+// 这样既能跳过初始 seed 注入，又不会因 currentMessages 被临时重置为 [] 而误判。
+const _derivedBaseline = new Map();
 
 function getAutoTitleSessionInfo() {
+  // 当用户在查看某个 runtime 时，优先使用该 runtime agent 的 session 信息。
+  // host agent 的 active_workspace_session_id 指向 "primary" runtime（通常是最近启动的），
+  // 但用户可能正在查看另一个 runtime 的会话。
+  const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId);
+  if (runtimeId) {
+    const runtimeAgent = allAgents.find(function(a) {
+      return normalizeAgentIdentity(a && a.id) === runtimeId;
+    });
+    if (runtimeAgent) {
+      const sessionId = String(runtimeAgent.active_workspace_session_id || '').trim();
+      if (sessionId) return { agent: runtimeAgent, sessionId: sessionId };
+    }
+  }
+  // Fallback: 使用 host agent
   const agent = getCurrentAgentRecord();
   if (!agent) return null;
   const sessionId = String(agent.active_workspace_session_id || agent.workspace_sessions?.activeSessionId || '').trim();
@@ -31,12 +49,7 @@ function getAutoTitleSessionInfo() {
 function markAutoTitleCandidate(previousMessages, nextMessages) {
   const info = getAutoTitleSessionInfo();
   if (!info) return;
-  // Guard: if the session already has a generated title, skip entirely.
-  // This prevents false re-triggers when currentMessages is reset to []
-  // (runtime hiccup, session switch without cache, agent restart) and the
-  // next poll sees a bogus [] → [messages with assistant] transition.
   const currentTitle = String(info.agent.active_workspace_session_title || '').trim();
-  // 衍生会话标题以 （ 开头（如 （精简）（摘要）（分支）），允许触发自动标题
   const isDerivedSession = /^（/.test(currentTitle);
   if (currentTitle && !/^新对话\d+$/.test(currentTitle) && !isDerivedSession) return;
   const previousAssistantCount = previousMessages.filter(function(message) {
@@ -45,18 +58,29 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
   const nextAssistantCount = nextMessages.filter(function(message) {
     return message && message.role === 'assistant';
   }).length;
+  // [DEBUG-AUTO-TITLE]
+  console.log('[AutoTitle][mark] session:', info.sessionId, 'title:', JSON.stringify(currentTitle),
+    'prevMsgs:', previousMessages.length, 'nextMsgs:', nextMessages.length,
+    'prevAC:', previousAssistantCount, 'nextAC:', nextAssistantCount,
+    'isDerived:', isDerivedSession);
   if (isDerivedSession) {
-    // 衍生会话：跳过初始加载（previousMessages 为空说明是首次 poll，消息来自 seed 注入）
-    if (previousMessages.length === 0) return;
-    // 后续 poll：检测 assistant 数量增长（用户首次真实交互后才触发）
-    if (nextAssistantCount > previousAssistantCount && nextAssistantCount > 0) {
+    if (!_derivedBaseline.has(info.sessionId)) {
+      if (nextMessages.length > 0) {
+        _derivedBaseline.set(info.sessionId, nextAssistantCount);
+        console.log('[AutoTitle][mark] → recorded baseline:', nextAssistantCount);
+      }
+      return;
+    }
+    if (nextAssistantCount > _derivedBaseline.get(info.sessionId)) {
+      console.log('[AutoTitle][mark] → ADD TO PENDING (derived, exceeded baseline)');
       _autoTitlePending.add(info.sessionId);
     }
   } else {
-    // 新会话：检测 0→1 assistant 转变，且要求至少有一条 user 消息（排除 runtime 初始化产生的消息）
     if (previousAssistantCount === 0 && nextAssistantCount > 0) {
       var hasUserMessage = nextMessages.some(function(m) { return m && m.role === 'user'; });
+      console.log('[AutoTitle][mark] → new conv 0→1 check, hasUser:', hasUserMessage);
       if (hasUserMessage) {
+        console.log('[AutoTitle][mark] → ADD TO PENDING (new conv)');
         _autoTitlePending.add(info.sessionId);
       }
     }
@@ -74,16 +98,38 @@ function recheckAutoTitleCandidate() {
   if (!info) return;
   const { agent, sessionId } = info;
   const currentTitle = String(agent.active_workspace_session_title || '').trim();
-  if (!/^新对话\d+$/.test(currentTitle)) return;
-  // 衍生会话（标题以 （ 开头）不在加载时触发标题生成，
-  // 需等用户首次真实输入后再由 markAutoTitleCandidate 检测增量触发
-  if (/^（/.test(currentTitle)) return;
-  const hasAssistant = Array.isArray(currentMessages)
-    && currentMessages.some(function(m) { return m && m.role === 'assistant'; });
-  // 要求至少有一条 user 消息，排除 runtime 初始化或会话切换残留导致的误触发
+  const isDerivedSession = /^（/.test(currentTitle);
+  const isNewConversation = /^新对话\d+$/.test(currentTitle);
+  if (!isDerivedSession && !isNewConversation) return;
+
+  var currentAC = Array.isArray(currentMessages)
+    ? currentMessages.filter(function(m) { return m && m.role === 'assistant'; }).length
+    : 0;
+  var currentMsgLen = Array.isArray(currentMessages) ? currentMessages.length : 0;
+
+  // [DEBUG-AUTO-TITLE]
+  console.log('[AutoTitle][recheck] session:', sessionId, 'title:', JSON.stringify(currentTitle),
+    'msgLen:', currentMsgLen, 'AC:', currentAC, 'isDerived:', isDerivedSession, 'isNew:', isNewConversation);
+
+  if (isDerivedSession) {
+    if (!_derivedBaseline.has(sessionId)) {
+      if (currentMsgLen > 0) {
+        _derivedBaseline.set(sessionId, currentAC);
+        console.log('[AutoTitle][recheck] → recorded baseline:', currentAC);
+      }
+      return;
+    }
+    if (currentAC > _derivedBaseline.get(sessionId)) {
+      console.log('[AutoTitle][recheck] → ADD TO PENDING (derived, exceeded baseline)');
+      _autoTitlePending.add(sessionId);
+    }
+    return;
+  }
+
   var hasUserMessage = Array.isArray(currentMessages)
     && currentMessages.some(function(m) { return m && m.role === 'user'; });
-  if (hasAssistant && hasUserMessage) {
+  if (currentAC > 0 && hasUserMessage) {
+    console.log('[AutoTitle][recheck] → ADD TO PENDING (new conv, AC>0 & hasUser)');
     _autoTitlePending.add(sessionId);
   }
 }
@@ -156,13 +202,18 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
   // 匹配新对话 或 衍生会话前缀（（精简）（摘要）（分支）等）
   if (!/^新对话\d+$/.test(sessionTitle) && !/^（/.test(sessionTitle)) {
     _autoTitlePending.delete(sessionId);
+    _derivedBaseline.delete(sessionId);
     return;
   }
 
-  // For the current session, verify the latest message is a completed assistant response
+  // For the current session, verify there is at least one assistant message
+  // with non-empty content to generate a title from.
+  // (Not necessarily the last message — tool-heavy turns may end with a tool result.)
   if (messages) {
-    var latestMessage = messages[messages.length - 1];
-    if (!latestMessage || latestMessage.role !== 'assistant' || !String(latestMessage.content || '').trim()) return;
+    var hasAssistantContent = messages.some(function(m) {
+      return m && m.role === 'assistant' && String(m.content || '').trim();
+    });
+    if (!hasAssistantContent) return;
   }
 
   // Prevent concurrent calls for the same session.
@@ -171,12 +222,21 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
 
   _autoTitleTriggered.add(sessionId);
 
+  // [DEBUG-AUTO-TITLE]
+  console.log('[AutoTitle][FIRE] → autoGenerateSessionTitle for session:', sessionId, 'agent:', agent.id);
+
   // Fire and forget — don't block the poll loop
-  autoGenerateSessionTitle(agent.id, sessionId);
+  autoGenerateSessionTitle(agent.id, sessionId, !!messages);
 }
 
 function tryAutoTitleGeneration(messages) {
   if (!currentRuntimeAgentId || !currentAgentId) return;
+
+  // [DEBUG-AUTO-TITLE]
+  if (_autoTitlePending.size > 0) {
+    console.log('[AutoTitle][try] pending set:', Array.from(_autoTitlePending),
+      'currentRuntime:', currentRuntimeAgentId);
+  }
 
   var info = getAutoTitleSessionInfo();
 
@@ -199,6 +259,7 @@ function tryAutoTitleGeneration(messages) {
       // Session no longer exists in any agent — clean up
       _autoTitlePending.delete(pendingId);
       _autoTitleTriggered.delete(pendingId);
+      _derivedBaseline.delete(pendingId);
       continue;
     }
 
@@ -216,20 +277,29 @@ var AUTO_TITLE_FETCH_TIMEOUT_MS = 125000;
 
 /**
  * Generate a session title with internal retries.
- * Shows a single loading toast for the entire operation; retries are silent.
- * Only the final success or final failure updates the toast.
+ * Shows a loading toast only for the foreground (currently-viewed) session.
+ * Background sessions generate silently — only success/failure toast is shown.
  */
-async function autoGenerateSessionTitle(agentId, sessionId) {
+async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
   var succeeded = false;
   var lastError = null;
   const isZh = currentLanguage === 'zh';
   const toastId = 'title-auto-' + sessionId;
 
-  ClawToast.show({
-    id: toastId,
-    title: isZh ? '正在生成会话标题...' : 'Generating session title...',
-    status: 'loading',
-  });
+  // 查找会话当前标题，用于 Toast 展示
+  var owner = _findSessionOwner(sessionId);
+  var sessionLabel = owner ? owner.title : '';
+
+  // 只为前台会话（用户当前正在看的）显示 loading toast，
+  // 后台会话静默生成，避免用户在查看新会话时被其他会话的 toast 干扰。
+  if (isForeground) {
+    ClawToast.show({
+      id: toastId,
+      title: isZh ? '正在生成会话标题...' : 'Generating session title...',
+      description: sessionLabel || undefined,
+      status: 'loading',
+    });
+  }
 
   for (var attempt = 1; attempt <= AUTO_TITLE_MAX_ATTEMPTS; attempt++) {
     var controller = new AbortController();
@@ -259,7 +329,8 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
         }
         console.log('[AutoTitle] title set:', result.title);
         succeeded = true;
-        ClawToast.update(toastId, {
+        ClawToast.show({
+          id: toastId,
           status: 'success',
           title: isZh ? '标题已生成' : 'Title generated',
           description: result.title,
@@ -286,7 +357,8 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
 
   if (!succeeded) {
     var isAbort = lastError && lastError.name === 'AbortError';
-    ClawToast.update(toastId, {
+    ClawToast.show({
+      id: toastId,
       status: 'warning',
       title: isZh ? '标题自动生成未成功' : 'Auto title generation unsuccessful',
       description: isAbort
@@ -297,6 +369,7 @@ async function autoGenerateSessionTitle(agentId, sessionId) {
 
   _autoTitleTriggered.delete(sessionId);
   _autoTitlePending.delete(sessionId);
+  _derivedBaseline.delete(sessionId);
 }
 
 /**
