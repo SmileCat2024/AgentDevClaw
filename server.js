@@ -107,6 +107,7 @@ import {
 import { setupWorkspaceCreatorRoutes } from './server/routes/workspace-creators.js';
 import { createAgentDiscoveryModule } from './server/routes/agent-discovery.js';
 import { createAgentLifecycleModule } from './server/routes/agent-lifecycle.js';
+import { startEmbeddedRemoteClawConnector } from './server/remote-claw/embedded-connector.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,6 +115,9 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const viewerWorker = new ViewerWorker(VIEWER_PORT, false, process.env.AGENTDEV_UDS_PATH);
 const clawMcp = new ClawMCPServer();
+let remoteClawConnector = null;
+let remoteClawContext = null;
+const PROJECT_REMOTE_CLAW_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'remote-claw.json');
 
 // ── Assembly helpers extracted to server/routes/assembly-helpers.js ──
 // ── Workspace state + data extracted to server/routes/workspace.js ──
@@ -882,6 +886,114 @@ app.get('/protoclaw/images/:filename', (req, res) => {
   createReadStream(filePath).pipe(res);
 });
 
+app.get('/protoclaw/remote_claw/config', async (_req, res) => {
+  const config = await readRemoteClawConfig();
+  res.json({
+    ok: true,
+    config: sanitizeRemoteClawConfig(config),
+    runtime: {
+      enabled: remoteClawConnector?.enabled === true,
+      appOrigin: APP_ORIGIN,
+      lanUrls: getLanRelayCandidates(config.relayUrl),
+    },
+  });
+});
+
+app.get('/protoclaw/remote_claw/devices', async (_req, res, next) => {
+  try {
+    const config = await readRemoteClawConfig();
+    if (!config?.relayUrl || !config?.connectorToken) return res.json({ ok: true, devices: [] });
+    const data = await relayGet(config.relayUrl, '/api/devices', config.connectorToken);
+    res.json({ ok: true, devices: data.devices || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/remote_claw/connect', express.json(), async (req, res, next) => {
+  try {
+    const relayUrl = cleanRemoteUrl(req.body?.relayUrl);
+    if (!relayUrl) return res.status(400).json({ ok: false, error: 'relayUrl is required' });
+    const workspaceName = String(req.body?.workspaceName || 'AgentDevClaw').trim() || 'AgentDevClaw';
+    const currentConfig = await readRemoteClawConfig();
+    const installationId = String(currentConfig?.installationId || `claw_${randomUUID()}`);
+    if (currentConfig?.connectorToken && cleanRemoteUrl(currentConfig.relayUrl) === relayUrl) {
+      const config = { ...currentConfig, enabled: true, workspaceName, installationId };
+      await writeRemoteClawConfig(config);
+      restartRemoteClawConnector();
+      return res.json({ ok: true, config: sanitizeRemoteClawConfig(config), reusedDevice: true });
+    }
+    const registerResp = await relayPost(relayUrl, '/api/devices/register', null, {
+      schemaVersion: 1,
+      type: 'connector',
+      name: workspaceName,
+      installationId,
+    });
+    const connectorToken = registerResp?.deviceToken;
+    if (!connectorToken) return res.status(502).json({ ok: false, error: 'relay did not return connector token' });
+    const config = {
+      enabled: true,
+      relayUrl,
+      connectorToken,
+      installationId,
+      workspaceName,
+      heartbeatMs: positiveInt(req.body?.heartbeatMs, 15_000),
+      snapshotMs: positiveInt(req.body?.snapshotMs, 5_000),
+      commandMs: positiveInt(req.body?.commandMs, 2_000),
+    };
+    await writeRemoteClawConfig(config);
+    restartRemoteClawConnector();
+    res.json({ ok: true, config: sanitizeRemoteClawConfig(config), deviceId: registerResp.deviceId, userId: registerResp.userId });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/remote_claw/pairing', express.json(), async (req, res, next) => {
+  try {
+    const config = await readRemoteClawConfig();
+    if (!config?.enabled || !config?.relayUrl || !config?.connectorToken) {
+      return res.status(400).json({ ok: false, error: 'Remote Claw is not connected' });
+    }
+    const mobileRelayUrl = cleanRemoteUrl(req.body?.mobileRelayUrl) || pickMobileRelayUrl(config.relayUrl);
+    const data = await relayPost(config.relayUrl, '/api/pairings', config.connectorToken, {
+      schemaVersion: 1,
+      relayUrl: config.relayUrl,
+      mobileRelayUrl,
+      workspaceName: config.workspaceName || 'AgentDevClaw',
+      name: `Connect ${os.hostname()} phone`,
+    });
+    res.json({ ok: true, pairing: data, mobileRelayUrl });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/remote_claw/disconnect', express.json(), async (_req, res, next) => {
+  try {
+    const config = await readRemoteClawConfig();
+    await writeRemoteClawConfig({ ...config, enabled: false });
+    restartRemoteClawConnector();
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/protoclaw/remote_claw/registration', async (_req, res, next) => {
+  try {
+    const config = await readRemoteClawConfig();
+    if (config?.relayUrl && config?.connectorToken) {
+      await relayDelete(config.relayUrl, '/api/me', config.connectorToken);
+    }
+    await writeRemoteClawConfig({ enabled: false, installationId: config?.installationId || `claw_${randomUUID()}` });
+    restartRemoteClawConnector();
+    res.json({ ok: true, removed: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -889,7 +1001,112 @@ app.use((error, _req, res, _next) => {
   res.status(error.statusCode || 500).json({ error: error.message || 'Internal Server Error' });
 });
 
+async function readRemoteClawConfig() {
+  try {
+    return await readJsonSafe(PROJECT_REMOTE_CLAW_CONFIG_PATH, {});
+  } catch {
+    return {};
+  }
+}
+
+async function writeRemoteClawConfig(config) {
+  await ensureDir(path.dirname(PROJECT_REMOTE_CLAW_CONFIG_PATH));
+  await fs.writeFile(PROJECT_REMOTE_CLAW_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+function sanitizeRemoteClawConfig(config = {}) {
+  return {
+    enabled: config.enabled === true,
+    relayUrl: config.relayUrl || '',
+    workspaceName: config.workspaceName || 'AgentDevClaw',
+    hasConnectorToken: Boolean(config.connectorToken),
+    heartbeatMs: config.heartbeatMs || 15_000,
+    snapshotMs: config.snapshotMs || 5_000,
+    commandMs: config.commandMs || 2_000,
+  };
+}
+
+function restartRemoteClawConnector() {
+  remoteClawConnector?.stop?.();
+  remoteClawConnector = remoteClawContext ? startEmbeddedRemoteClawConnector(remoteClawContext) : null;
+}
+
+async function relayPost(relayUrl, pathname, token, body) {
+  const response = await fetch(`${cleanRemoteUrl(relayUrl)}${pathname}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body || {}),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json.ok === false) {
+    const message = json?.error?.message || json?.error || `Relay HTTP ${response.status}`;
+    const error = new Error(message);
+    error.statusCode = response.ok ? 502 : response.status;
+    throw error;
+  }
+  return json.data || json;
+}
+
+async function relayGet(relayUrl, pathname, token) {
+  const response = await fetch(`${cleanRemoteUrl(relayUrl)}${pathname}`, {
+    headers: { 'Authorization': `Bearer ${token}`, 'X-Remote-Claw-Protocol': '1' },
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json.ok === false) throw new Error(json?.error?.message || json?.error || `Relay HTTP ${response.status}`);
+  return json.data || json;
+}
+
+async function relayDelete(relayUrl, pathname, token) {
+  const response = await fetch(`${cleanRemoteUrl(relayUrl)}${pathname}`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'X-Remote-Claw-Protocol': '1',
+    },
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json.ok === false) throw new Error(json?.error?.message || json?.error || `Relay HTTP ${response.status}`);
+  return json.data || json;
+}
+
+function cleanRemoteUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getLanRelayCandidates(relayUrl) {
+  const cleaned = cleanRemoteUrl(relayUrl);
+  const candidates = [];
+  if (cleaned && !/\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(cleaned)) candidates.push(cleaned);
+  let parsed = null;
+  try { parsed = cleaned ? new URL(cleaned) : null; } catch { parsed = null; }
+  const port = parsed?.port || (parsed?.protocol === 'https:' ? '443' : '8080');
+  const protocol = parsed?.protocol || 'http:';
+  for (const [interfaceName, iface] of Object.entries(os.networkInterfaces())) {
+    if (/docker|vethernet|wsl|vmware|virtualbox|loopback/i.test(interfaceName)) continue;
+    for (const addr of iface || []) {
+      if (addr.family !== 'IPv4' || addr.internal || /^169\.254\./.test(addr.address)) continue;
+      candidates.push(`${protocol}//${addr.address}${port ? `:${port}` : ''}`);
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+function pickMobileRelayUrl(relayUrl) {
+  const candidates = getLanRelayCandidates(relayUrl);
+  return candidates.find((url) => !/\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(url)) || candidates[0] || relayUrl;
+}
+
 async function shutdown(exitCode = 0) {
+  remoteClawConnector?.stop?.();
+
   for (const runtime of managedAgents.values()) {
     if (runtime.process && runtime.process.exitCode === null && !runtime.stopped) {
       runtime.stopped = true;
@@ -960,6 +1177,16 @@ async function main() {
   app.listen(APP_PORT, () => {
     log('server', `product ui: http://127.0.0.1:${APP_PORT}`);
     log('server', `viewer worker: ${VIEWER_ORIGIN}`);
+    remoteClawContext = {
+      getAgentsLight,
+      getConnectedAgents,
+      listPrebuiltSessions,
+      requireAgentLight,
+      activatePrebuiltSession,
+      startManagedAgent,
+      waitForManagedRuntimeReady,
+    };
+    restartRemoteClawConnector();
     fireBootSchedules();
   });
 }

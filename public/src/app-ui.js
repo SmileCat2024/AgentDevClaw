@@ -2614,6 +2614,13 @@ document.getElementById('settings-flyout-config').addEventListener('click', () =
   }
 });
 
+document.getElementById('settings-flyout-remote')?.addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof openRemoteClawSettings === 'function') {
+    openRemoteClawSettings();
+  }
+});
+
 document.getElementById('settings-flyout-usage').addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
   if (typeof openUsageInfo === 'function') {
