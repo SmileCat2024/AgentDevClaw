@@ -54,6 +54,9 @@ function buildChildRuntimeEntry(runtimeAgent) {
   const runtimeId = runtimeAgent.runtime_session_id || runtimeAgent.runtimeSessionId || runtimeAgent.id || '';
   const ownerId = String(runtimeAgent.parent_id || '').trim();
   if (!runtimeId || !ownerId) return null;
+  const mutation = typeof getSessionReplacementMutation === 'function'
+    ? getSessionReplacementMutation(ownerId, runtimeAgent.active_workspace_session_id || '')
+    : null;
   return {
     id: runtimeAgent.id || runtimeId,
     ownerId,
@@ -69,6 +72,7 @@ function buildChildRuntimeEntry(runtimeAgent) {
     source: runtimeAgent.source || 'external',
     contextMenuEnabled: true,
     createdAt: runtimeAgent.created_at || null,
+    replacementMutation: mutation,
   };
 }
 
@@ -127,6 +131,36 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     .forEach((agent) => addEntry(buildChildRuntimeEntry(agent)));
 
   addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+
+  if (typeof _sessionReplacementMutations !== 'undefined') {
+    for (const mutation of _sessionReplacementMutations.values()) {
+      if (mutation.agentId !== prebuiltAgent.id) continue;
+      const existing = entries.find((entry) => entry.sessionId === mutation.sessionId);
+      if (existing) existing.replacementMutation = mutation;
+      const sourceSession = Array.isArray(prebuiltAgent?.workspace_sessions?.sessions)
+        ? prebuiltAgent.workspace_sessions.sessions.find((session) => session.id === mutation.sessionId)
+        : null;
+      const dir = String(sourceSession?.openDirectory || '').trim();
+      entries.push({
+        id: `replacement:${mutation.sessionId}`,
+        ownerId: prebuiltAgent.id,
+        runtimeId: `replacement:${mutation.sessionId}`,
+        sessionId: '',
+        name: mutation.kind === 'branch'
+          ? (currentLanguage === 'zh' ? '正在创建分支…' : 'Creating branch…')
+          : mutation.kind === 'trim'
+            ? (currentLanguage === 'zh' ? '正在生成精简会话…' : 'Creating trimmed session…')
+            : (currentLanguage === 'zh' ? '正在生成摘要会话…' : 'Creating summarized session…'),
+        status: 'pending',
+        source: 'replacement-pending',
+        contextMenuEnabled: false,
+        pendingReplacement: true,
+        projectDir: dir,
+        projectName: dir ? getPathLeaf(dir) : '',
+        createdAt: new Date(mutation.startedAt).toISOString(),
+      });
+    }
+  }
 
   entries.sort((a, b) => toEpochMs(b.createdAt) - toEpochMs(a.createdAt));
 

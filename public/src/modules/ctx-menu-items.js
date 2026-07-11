@@ -548,7 +548,55 @@ async function ctxArchiveSession(target) {
   }
 }
 
-function markSessionArchivedForMutation(agentId, sessionId) {
+const _sessionReplacementMutations = new Map();
+
+function getSessionReplacementMutation(agentId, sessionId) {
+  return _sessionReplacementMutations.get(`${agentId}::${sessionId}`) || null;
+}
+
+function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary') {
+  if (!agentId || !sessionId) return null;
+  const key = `${agentId}::${sessionId}`;
+  const mutation = { agentId, sessionId, kind, phase: 'generating', startedAt: Date.now() };
+  _sessionReplacementMutations.set(key, mutation);
+  if (typeof lastAgentListRenderSignature !== 'undefined') lastAgentListRenderSignature = '';
+  if (typeof renderAgentList === 'function') renderAgentList();
+  return mutation;
+}
+
+function updateSessionReplacementMutation(agentId, sessionId, updates = {}) {
+  const key = `${agentId}::${sessionId}`;
+  const current = _sessionReplacementMutations.get(key);
+  if (!current) return;
+  _sessionReplacementMutations.set(key, { ...current, ...updates });
+  if (typeof lastAgentListRenderSignature !== 'undefined') lastAgentListRenderSignature = '';
+  if (typeof renderAgentList === 'function') renderAgentList();
+}
+
+function clearSessionReplacementMutation(agentId, sessionId) {
+  if (!_sessionReplacementMutations.delete(`${agentId}::${sessionId}`)) return;
+  if (typeof lastAgentListRenderSignature !== 'undefined') lastAgentListRenderSignature = '';
+  if (typeof renderAgentList === 'function') renderAgentList();
+}
+
+function settleSessionReplacementMutation(agentId, sessionId, delayMs = 500, attemptsRemaining = 10) {
+  window.setTimeout(async () => {
+    try { await loadAgents(); } catch {}
+    const oldRuntimeStillVisible = Array.isArray(allAgents) && allAgents.some((agent) => (
+      agent?.source !== 'prebuilt'
+      && String(agent?.parent_id || '').trim() === String(agentId).trim()
+      && String(agent?.active_workspace_session_id || '').trim() === String(sessionId).trim()
+      && agent?.connected !== false
+    ));
+    if (oldRuntimeStillVisible && attemptsRemaining > 1) {
+      settleSessionReplacementMutation(agentId, sessionId, 300, attemptsRemaining - 1);
+      return;
+    }
+    clearSessionReplacementMutation(agentId, sessionId);
+  }, Math.max(0, delayMs));
+}
+
+function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
   if (!agentId || !sessionId) return;
 
   const agent = allAgents.find((item) => item.id === agentId) || null;
@@ -557,6 +605,8 @@ function markSessionArchivedForMutation(agentId, sessionId) {
   const currentSessions = getWorkspaceSessions(agent);
   const original = currentSessions.find((s) => s.id === sessionId) || null;
   if (!original) return null;
+
+  beginSessionReplacementMutation(agentId, sessionId, kind);
 
   const nextSessions = currentSessions.map((s) =>
     s.id === sessionId ? { ...s, archived: true, todo: false } : s,
@@ -572,6 +622,7 @@ function markSessionArchivedForMutation(agentId, sessionId) {
   renderCurrentMainView();
 
   return () => {
+    clearSessionReplacementMutation(agentId, sessionId);
     const latestAgent = allAgents.find((item) => item.id === agentId) || null;
     if (!latestAgent) return;
     const latestSessions = getWorkspaceSessions(latestAgent);

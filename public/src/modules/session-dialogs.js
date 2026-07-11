@@ -207,7 +207,7 @@ window.submitTrimCompact = async () => {
   const _oldRuntimeId = currentRuntimeAgentId;
   let archiveRollback = null;
   if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
-    archiveRollback = markSessionArchivedForMutation(agentId, sessionId);
+    archiveRollback = markSessionArchivedForMutation(agentId, sessionId, 'trim');
   }
 
   try {
@@ -217,16 +217,24 @@ window.submitTrimCompact = async () => {
       trimCutRounds: trimmedCount,
       archiveOriginal: archiveAfter,
     });
+    const archiveSucceeded = !archiveAfter || result?.archive?.succeeded === true;
+    if (!archiveSucceeded && archiveRollback) {
+      archiveRollback();
+      archiveRollback = null;
+    }
     if (result?.agent) {
       applyManagedPrebuiltAgent(agentId, result.agent);
     }
     await loadAgents();
     if (_navGuard !== _navigationGuardEpoch) {
-      if (archiveAfter && _oldRuntimeId) {
+      if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
+        updateSessionReplacementMutation(agentId, sessionId, { phase: 'stopping' });
         clearAgentRuntimeCache(_oldRuntimeId);
         try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
         refreshSidebarRuntimeAfterMutation(500);
+        settleSessionReplacementMutation(agentId, sessionId, 700);
       }
+      if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
       archiveRollback = null;
       return;
     }
@@ -243,10 +251,16 @@ window.submitTrimCompact = async () => {
       renderCurrentMainView();
     }
     // 服务端已原子完成归档，只需停止旧 runtime
-    if (archiveAfter && _oldRuntimeId) {
+    if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
+      updateSessionReplacementMutation(agentId, sessionId, { phase: 'stopping' });
       clearAgentRuntimeCache(_oldRuntimeId);
       try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
       refreshSidebarRuntimeAfterMutation(500);
+      settleSessionReplacementMutation(agentId, sessionId, 700);
+    }
+    if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
+    if (archiveAfter && !archiveSucceeded) {
+      window.alert((currentLanguage === 'zh' ? '新会话已创建，但原会话归档失败：' : 'The new session was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
     archiveRollback = null;
   } catch (error) {
@@ -382,7 +396,7 @@ window.submitBranch = async () => {
   const _oldRuntimeId = currentRuntimeAgentId;
   let archiveRollback = null;
   if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
-    archiveRollback = markSessionArchivedForMutation(agentId, sessionId);
+    archiveRollback = markSessionArchivedForMutation(agentId, sessionId, 'branch');
   }
 
   try {
@@ -393,17 +407,25 @@ window.submitBranch = async () => {
     });
     if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
     const result = await res.json();
+    const archiveSucceeded = !archiveAfter || result?.archive?.succeeded === true;
+    if (!archiveSucceeded && archiveRollback) {
+      archiveRollback();
+      archiveRollback = null;
+    }
 
     if (result?.agent) {
       applyManagedPrebuiltAgent(agentId, result.agent);
     }
     await loadAgents();
     if (_navGuard !== _navigationGuardEpoch) {
-      if (archiveAfter && _oldRuntimeId) {
+      if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
+        updateSessionReplacementMutation(agentId, sessionId, { phase: 'stopping' });
         clearAgentRuntimeCache(_oldRuntimeId);
         try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
         refreshSidebarRuntimeAfterMutation(500);
+        settleSessionReplacementMutation(agentId, sessionId, 700);
       }
+      if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
       archiveRollback = null;
       return;
     }
@@ -420,10 +442,16 @@ window.submitBranch = async () => {
       renderCurrentMainView();
     }
     // 服务端已原子完成归档，只需停止旧 runtime
-    if (archiveAfter && _oldRuntimeId) {
+    if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
+      updateSessionReplacementMutation(agentId, sessionId, { phase: 'stopping' });
       clearAgentRuntimeCache(_oldRuntimeId);
       try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
       refreshSidebarRuntimeAfterMutation(500);
+      settleSessionReplacementMutation(agentId, sessionId, 700);
+    }
+    if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
+    if (archiveAfter && !archiveSucceeded) {
+      window.alert((currentLanguage === 'zh' ? '新分支已创建，但原会话归档失败：' : 'The branch was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
     archiveRollback = null;
   } catch (error) {

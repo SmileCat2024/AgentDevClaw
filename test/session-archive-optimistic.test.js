@@ -49,6 +49,7 @@ describe('session archive optimistic helper', () => {
     assert.equal(ctx.run('allAgents[0].workspace_sessions.activeSessionId'), 'session-1');
     assert.equal(ctx.run('lastRenderedWorkspaceHtml'), '');
     assert.equal(ctx.renderCount, 1);
+    assert.equal(ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1').kind`), 'summary');
   });
 
   it('returns a rollback that restores the previous archive and todo state', () => {
@@ -107,5 +108,6 @@ describe('session archive optimistic helper', () => {
     assert.equal(result.ok, false);
     assert.equal(result.session.archived, false);
     assert.equal(result.session.todo, true);
+    assert.equal(ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`), null);
   });
 });

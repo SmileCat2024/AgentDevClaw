@@ -363,6 +363,19 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     await startManagedAgent(agent, newSessionId);
     const connected = await waitForManagedRuntimeReady(agent.id, 10000, newSessionId);
 
+    // 服务端归档原会话（如果请求要求）
+    let branchArchived = false;
+    let branchArchiveError = '';
+    if (archiveOriginal) {
+      try {
+        await archivePrebuiltSession(agentId, sourceSessionId, true);
+        branchArchived = true;
+      } catch (err) {
+        branchArchiveError = err instanceof Error ? err.message : String(err);
+        console.error('[branch] failed to archive original session:', err);
+      }
+    }
+
     res.json({
       ok: true,
       newSessionId,
@@ -370,18 +383,12 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       keptMessages: branchMessages.length,
       totalMessages: rawMessages.length,
       agent: connected,
+      archive: {
+        requested: archiveOriginal,
+        succeeded: archiveOriginal ? branchArchived : null,
+        error: branchArchiveError || null,
+      },
     });
-
-    // 服务端归档原会话（如果请求要求）
-    let branchArchived = false;
-    if (archiveOriginal) {
-      try {
-        await archivePrebuiltSession(agentId, sourceSessionId, true);
-        branchArchived = true;
-      } catch (err) {
-        console.error('[branch] failed to archive original session:', err);
-      }
-    }
 
     // 血缘继承：branch 产生新 session，通知关联群聊
     if (notifySessionLineage) {
@@ -932,6 +939,7 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
 
     // 服务端归档原会话
     let didArchive = false;
+    let archiveError = '';
     if (archiveOriginal && result?.handoff?.sourceSessionId) {
       const archiveAgentId = preferredAgentId || result.handoff.sourceAgentId;
       if (archiveAgentId) {
@@ -939,12 +947,20 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
           await archivePrebuiltSession(archiveAgentId, result.handoff.sourceSessionId, true);
           didArchive = true;
         } catch (err) {
+          archiveError = err instanceof Error ? err.message : String(err);
           console.error('[compacted_resume] failed to archive original session:', err);
         }
       }
     }
 
-    res.json(result);
+    res.json({
+      ...result,
+      archive: {
+        requested: archiveOriginal,
+        succeeded: archiveOriginal ? didArchive : null,
+        error: archiveError || null,
+      },
+    });
 
     // 血缘继承：sourceSessionId 来自 handoff 包
     if (notifySessionLineage && result?.session?.id && result?.handoff?.sourceSessionId) {
@@ -1197,16 +1213,25 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
 
     // 服务端归档原会话
     let didArchive = false;
+    let archiveError = '';
     if (archiveOriginal && preferredAgentId) {
       try {
         await archivePrebuiltSession(preferredAgentId, sessionId, true);
         didArchive = true;
       } catch (err) {
+        archiveError = err instanceof Error ? err.message : String(err);
         console.error('[compact_and_resume] failed to archive original session:', err);
       }
     }
 
-    res.json(result);
+    res.json({
+      ...result,
+      archive: {
+        requested: archiveOriginal,
+        succeeded: archiveOriginal ? didArchive : null,
+        error: archiveError || null,
+      },
+    });
 
     // 血缘继承
     if (notifySessionLineage && result?.session?.id) {
@@ -1250,16 +1275,25 @@ app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (re
 
     // 服务端归档原会话
     let didArchive = false;
+    let archiveError = '';
     if (archiveOriginal && preferredAgentId) {
       try {
         await archivePrebuiltSession(preferredAgentId, sessionId, true);
         didArchive = true;
       } catch (err) {
+        archiveError = err instanceof Error ? err.message : String(err);
         console.error('[summary_resume] failed to archive original session:', err);
       }
     }
 
-    res.json(result);
+    res.json({
+      ...result,
+      archive: {
+        requested: archiveOriginal,
+        succeeded: archiveOriginal ? didArchive : null,
+        error: archiveError || null,
+      },
+    });
 
     // 血缘继承
     if (notifySessionLineage && result?.session?.id) {

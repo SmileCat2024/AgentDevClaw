@@ -163,6 +163,8 @@ function renderSidebarChildItems(entries) {
     const disconnected = entry.status === 'disconnected';
     const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
     const restarting = restartingRuntimeIds.has(entry.runtimeId);
+    const retiring = !!entry.replacementMutation;
+    const replacementPending = entry.pendingReplacement === true;
     const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
     const itemClass = [
       'agent-item',
@@ -171,19 +173,22 @@ function renderSidebarChildItems(entries) {
       disconnected ? 'disconnected' : '',
       calling ? 'calling' : '',
       restarting ? 'restarting' : '',
+      retiring ? 'retiring' : '',
+      replacementPending ? 'replacement-pending' : '',
       justFinished ? 'just-finished' : '',
     ].filter(Boolean).join(' ');
     return `
       <div
         class="${itemClass}"
         data-agent-id="${escapeHtml(entry.runtimeId)}"
+        data-agent-disabled="${replacementPending ? 'true' : 'false'}"
         data-agent-prebuilt="false"
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
         data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
       >
         <div class="agent-line">
           <span class="agent-status-dot"></span>
-          <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}</div>
+          <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(currentLanguage === 'zh' ? '正在归档' : 'Archiving')}</span>` : ''}</div>
         </div>
       </div>
     `;
@@ -631,6 +636,9 @@ function getAgentListRenderSignature() {
     pending: Array.from(pendingPrebuiltAgentIds || []).sort(),
     restarting: Array.from(restartingRuntimeIds || []).sort(),
     recentlyFinished: Array.from(_recentlyFinishedRuntimes).sort(),
+    sessionReplacements: typeof _sessionReplacementMutations !== 'undefined'
+      ? Array.from(_sessionReplacementMutations.values()).map((item) => ({ ...item }))
+      : [],
     agents: (Array.isArray(allAgents) ? allAgents : []).map((agent) => {
       const rid = normalizeAgentIdentity(getAgentRuntimeId(agent));
       return {
@@ -708,6 +716,7 @@ agentList.addEventListener('click', async (event) => {
 
   const agentId = item.dataset.agentId;
   if (!agentId) return;
+  if (item.dataset.agentDisabled === 'true') return;
 
   if (item.dataset.agentPrebuilt === 'true') {
     await window.handlePrebuiltAgentClick(agentId);
@@ -874,7 +883,10 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
     && activeSessionId === String(sessionId || '').trim();
 
   // Only use live-runtime shortcut for summary; trim (empty strategy) goes server-side
-  if (isLiveCurrentSession && strategy) {
+  // Archive-and-replace requires the synchronous server response because it
+  // carries the authoritative archive outcome. The live command path only
+  // reports that a successor appeared and cannot safely confirm archive state.
+  if (isLiveCurrentSession && strategy && !options.archiveOriginal) {
     const inputReqRes = await fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/input-requests`);
     const inputRequests = inputReqRes.ok ? await inputReqRes.json().catch(() => []) : [];
     const primaryRequest = Array.isArray(inputRequests) ? inputRequests[0] : null;
@@ -1338,7 +1350,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const _csToastId = 'compact-summary-' + action.sessionId;
     let _csArchiveRollback = null;
     if (action.archiveOriginal && typeof markSessionArchivedForMutation === 'function') {
-      _csArchiveRollback = markSessionArchivedForMutation(activeAgent.id, action.sessionId);
+      _csArchiveRollback = markSessionArchivedForMutation(activeAgent.id, action.sessionId, 'summary');
     }
     ClawToast.show({
       id: _csToastId,
@@ -1349,6 +1361,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy, null, null, null, {
         archiveOriginal: action.archiveOriginal,
       });
+      const archiveSucceeded = !action.archiveOriginal || result?.archive?.succeeded === true;
+      if (!archiveSucceeded && _csArchiveRollback) {
+        _csArchiveRollback();
+        _csArchiveRollback = null;
+      }
       if (result?.liveRuntime && result?.switched) {
         // Live-runtime shortcut path: session switch was already handled
         // inside createCompactedResumeSession — skip normal agent/runtime logic
@@ -1359,10 +1376,12 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
         // 服务端已原子完成归档，只需停止旧 runtime
-        if (action.archiveOriginal && _csOldRuntimeId) {
+        if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
+          updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'stopping' });
           clearAgentRuntimeCache(_csOldRuntimeId);
           try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
           refreshSidebarRuntimeAfterMutation();
+          settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
         }
         _csArchiveRollback = null;
         return;
@@ -1376,11 +1395,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           status: 'success',
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
-        if (action.archiveOriginal && _csOldRuntimeId) {
+        if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
+          updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'stopping' });
           clearAgentRuntimeCache(_csOldRuntimeId);
           try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
           refreshSidebarRuntimeAfterMutation();
+          settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
         }
+        if (action.archiveOriginal && archiveSucceeded && !_csOldRuntimeId) clearSessionReplacementMutation(activeAgent.id, action.sessionId);
         _csArchiveRollback = null;
         return;
       }
@@ -1401,10 +1423,20 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         title: _csIsZh ? '会话总结完成' : 'Session summary completed',
       });
       // 服务端已原子完成归档，只需停止旧 runtime
-      if (action.archiveOriginal && _csOldRuntimeId) {
+      if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
+        updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'stopping' });
         clearAgentRuntimeCache(_csOldRuntimeId);
         try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
         refreshSidebarRuntimeAfterMutation();
+        settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
+      }
+      if (action.archiveOriginal && archiveSucceeded && !_csOldRuntimeId) clearSessionReplacementMutation(activeAgent.id, action.sessionId);
+      if (action.archiveOriginal && !archiveSucceeded) {
+        ClawToast.update(_csToastId, {
+          status: 'error',
+          title: _csIsZh ? '新会话已创建，但原会话归档失败' : 'New session created, but archive failed',
+          description: result?.archive?.error || '',
+        });
       }
       _csArchiveRollback = null;
     } catch (error) {
