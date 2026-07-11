@@ -185,6 +185,8 @@ trimRoundList.addEventListener('click', handleTrimToHere);
 window.submitTrimCompact = async () => {
   const { agentId, sessionId, rounds, keepSkillInvokes, archiveAfter } = trimDialogState;
   if (!agentId || !sessionId || !rounds.length) return;
+  bumpNavigationGuard();
+  const _navGuard = _navigationGuardEpoch;
 
   // Compute the set of turns to preserve as-is (full detail).
   // Using preservedTurns instead of fullPreserveFromTurn supports non-contiguous
@@ -219,6 +221,15 @@ window.submitTrimCompact = async () => {
       applyManagedPrebuiltAgent(agentId, result.agent);
     }
     await loadAgents();
+    if (_navGuard !== _navigationGuardEpoch) {
+      if (archiveAfter && _oldRuntimeId) {
+        clearAgentRuntimeCache(_oldRuntimeId);
+        try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
+        refreshSidebarRuntimeAfterMutation(500);
+      }
+      archiveRollback = null;
+      return;
+    }
     const nextRuntimeId =
       result?.agent?.runtime_session_id
       || result?.agent?.runtimeSessionId
@@ -361,6 +372,8 @@ branchRoundList.addEventListener('click', handleBranchRoundClick);
 window.submitBranch = async () => {
   const { agentId, sessionId, rounds, selectedIdx, archiveAfter } = branchDialogState;
   if (!agentId || !sessionId || selectedIdx < 0 || !rounds.length) return;
+  bumpNavigationGuard();
+  const _navGuard = _navigationGuardEpoch;
 
   const cutMsgIndexEnd = rounds[selectedIdx].msgIndexEnd;
 
@@ -385,6 +398,15 @@ window.submitBranch = async () => {
       applyManagedPrebuiltAgent(agentId, result.agent);
     }
     await loadAgents();
+    if (_navGuard !== _navigationGuardEpoch) {
+      if (archiveAfter && _oldRuntimeId) {
+        clearAgentRuntimeCache(_oldRuntimeId);
+        try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
+        refreshSidebarRuntimeAfterMutation(500);
+      }
+      archiveRollback = null;
+      return;
+    }
     const nextRuntimeId =
       result?.agent?.runtime_session_id
       || result?.agent?.runtimeSessionId

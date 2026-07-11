@@ -428,7 +428,7 @@ let chatViewportFollowRaf = 0;
 let chatViewportFollowToken = 0;
 let chatViewportFollowTransition = 'locked';
 let prebuiltSessionSwitchInFlight = false;
-let pendingSwitchTarget = null;   // { runtimeId, serial, source }
+let pendingSwitchTarget = null;   // { runtimeId, serial, source, navEpoch }
 let pendingSwitchSerial = 0;      // monotonically increasing
 let lastRenderedInputSignature = '';
 let lastRenderedInputMode = null;
@@ -442,6 +442,19 @@ let _restoredScrollTop = null;    // set by restoreRuntimeFromCache, consumed by
 let _chatLoadingSession = false;  // true while waiting for a just-opened session's messages to arrive
 let _chatLoadingTimeout = null;   // safety timeout to clear _chatLoadingSession
 let _switchEpoch = 0;             // monotonically increasing; used to guard stale async work from rapid switches
+
+// ── Navigation Guard ──────────────────────────────────────────────────────
+// Every user-initiated navigation (workspace switch, session switch, opening
+// a new session, etc.) bumps this epoch.  Async operations that will
+// eventually auto-navigate (e.g. runSessionOpen → requestSwitch) capture the
+// epoch at start and check it before executing the deferred navigation.
+// If the user navigated away in the meantime, the stale operation aborts
+// silently instead of yanking the user back.
+let _navigationGuardEpoch = 0;
+
+function bumpNavigationGuard() {
+  _navigationGuardEpoch++;
+}
 let phSessionSortMode = 'updatedAt'; // 'updatedAt' | 'createdAt' — programming-helper session list sort preference
 let phSearchQuery = '';              // current search query for session list
 let phSearchResults = null;          // search results array or null (not searching)

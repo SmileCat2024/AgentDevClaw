@@ -124,6 +124,9 @@ async function ctxRestartAgent(target) {
   const confirmed = window.confirm(t('restart_prebuilt_confirm'));
   if (!confirmed) return;
 
+  bumpNavigationGuard();
+  const _navGuard = _navigationGuardEpoch;
+
   try {
     // serverAgentId: prebuilt agent ID for invoke('restart_agent')
     // domId: runtime ID matching data-agent-id in sidebar DOM
@@ -165,7 +168,7 @@ async function ctxRestartAgent(target) {
     restartingRuntimeIds.delete(domId);
     suppressSidebarRerender = false;
     await loadAgents();
-    if (nextRuntimeId) {
+    if (nextRuntimeId && _navGuard === _navigationGuardEpoch) {
       await requestSwitch(nextRuntimeId, 'ctx-restart');
     }
   } catch (e) {

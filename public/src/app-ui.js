@@ -1,5 +1,6 @@
 
 function selectWorkspaceSurface(agentId, options = {}) {
+  bumpNavigationGuard();
   if (agentId && !loadedAgentDetailIds.has(agentId)) {
     loadAgentDetail(agentId).then(() => renderCurrentMainView());
   }

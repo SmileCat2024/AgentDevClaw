@@ -752,6 +752,7 @@ agentList.addEventListener('contextmenu', (event) => {
 });
 
 window.handlePrebuiltAgentClick = async (agentId) => {
+  bumpNavigationGuard();
   closeAgentContextMenu();
   const prebuiltAgent = allAgents.find((agent) => agent.id === agentId && agent.source === 'prebuilt');
   if (!prebuiltAgent) return;
@@ -796,11 +797,13 @@ window.handlePrebuiltAgentClick = async (agentId) => {
   statusBadge.classList.remove('disconnected');
   renderAgentList();
 
+  const _startNavGuard = _navigationGuardEpoch;
   try {
     await invoke('start_agent', { agentId });
     const startedAgent = await waitForPrebuiltRuntimeSession(agentId);
     pendingPrebuiltAgentIds.delete(agentId);
     renderAgentList();
+    if (_startNavGuard !== _navigationGuardEpoch) return;
     const nextRuntimeId = startedAgent.runtime_session_id || startedAgent.runtimeSessionId || startedAgent.id;
     setPreferredUnitMode('home', allAgents.find((agent) => agent.id === agentId && agent.source === 'prebuilt') || startedAgent);
     await requestSwitch(nextRuntimeId, 'prebuilt-start');
@@ -893,6 +896,7 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
     if (!submitRes.ok) {
       throw new Error(await submitRes.text().catch(() => 'failed to submit compact summary command'));
     }
+    const _liveNavGuard = _navigationGuardEpoch;
     for (let attempt = 0; attempt < 120; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       await loadAgents();
@@ -900,6 +904,9 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
       const nextSessionId = String(refreshed?.active_workspace_session_id || refreshed?.workspace_sessions?.activeSessionId || '').trim();
       const nextRuntimeId = refreshed?.runtime_session_id || refreshed?.runtimeSessionId || null;
       if (nextSessionId && nextSessionId !== String(sessionId || '').trim() && nextRuntimeId) {
+        if (_liveNavGuard !== _navigationGuardEpoch) {
+          return { scheduled: true, liveRuntime: true, switched: false };
+        }
         beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-resume-live');
         return { scheduled: true, liveRuntime: true, switched: true };
@@ -1112,6 +1119,7 @@ window.phShowSessionCtxMenu = (event, button, agentId, sessionId, variant) => {
 };
 
 window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
+  bumpNavigationGuard();
   let action = rawAction || {};
   if (typeof rawAction === 'string') {
     try {
@@ -1251,6 +1259,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       return;
     }
 
+    const _navGuard = _navigationGuardEpoch;
     const isZh = currentLanguage === 'zh';
     const toastId = 'compact-resume-' + action.sessionId;
     ClawToast.show({
@@ -1264,6 +1273,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         applyManagedPrebuiltAgent(activeAgent.id, result.agent);
       }
       await loadAgents();
+      if (_navGuard !== _navigationGuardEpoch) {
+        ClawToast.update(toastId, {
+          status: 'success',
+          title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
+        });
+        return;
+      }
       const nextRuntimeId =
         result?.agent?.runtime_session_id
         || result?.agent?.runtimeSessionId
@@ -1316,6 +1332,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     }
 
     markSessionLoading(activeAgent.id, action.sessionId);
+    const _csNavGuard = _navigationGuardEpoch;
     const _csOldRuntimeId = currentRuntimeAgentId;
     const _csIsZh = currentLanguage === 'zh';
     const _csToastId = 'compact-summary-' + action.sessionId;
@@ -1354,6 +1371,19 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         applyManagedPrebuiltAgent(activeAgent.id, result.agent);
       }
       await loadAgents();
+      if (_csNavGuard !== _navigationGuardEpoch) {
+        ClawToast.update(_csToastId, {
+          status: 'success',
+          title: _csIsZh ? '会话总结完成' : 'Session summary completed',
+        });
+        if (action.archiveOriginal && _csOldRuntimeId) {
+          clearAgentRuntimeCache(_csOldRuntimeId);
+          try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
+          refreshSidebarRuntimeAfterMutation();
+        }
+        _csArchiveRollback = null;
+        return;
+      }
       const nextRuntimeId =
         result?.agent?.runtime_session_id
         || result?.agent?.runtimeSessionId
@@ -1562,6 +1592,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             targetDir: action.targetDir,
       };
       const runSessionOpen = async () => {
+        const _navGuard = _navigationGuardEpoch;
         const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
         _storeVisibleSessionInputDraft();
         if (previousRuntimeId) {
@@ -1573,7 +1604,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           : activeAgent;
         // Immediately render the workspace surface so the user sees the new
         // session appear in the list without waiting for the runtime to start.
-        if (!currentRuntimeAgentId) {
+        // Guard: skip render if user already navigated to a different surface.
+        if (!currentRuntimeAgentId && _navGuard === _navigationGuardEpoch) {
           lastRenderedWorkspaceHtml = '';
           renderCurrentMainView();
         }
@@ -1583,11 +1615,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           && String(action.formId || '') === 'assembly-form';
         const nextAgent = result?.agent ? (upsertConnectedAgent(result.agent) || result.agent) : null;
         if (isAssemblyLaunch) {
+          if (_navGuard !== _navigationGuardEpoch) return;
           setPreferredUnitMode('assembly', activeAgent);
           loadAgents().catch((error) => console.error('Failed to refresh agents after assembly launch:', error));
           renderCurrentMainView();
           return;
         }
+        if (_navGuard !== _navigationGuardEpoch) return;
         if (nextAgent?.runtime_session_id || nextAgent?.runtimeSessionId) {
           setPreferredUnitMode('chat', nextAgent);
           const nextRuntimeId = nextAgent.runtime_session_id || nextAgent.runtimeSessionId || nextAgent.id;
@@ -1611,12 +1645,17 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           }
           return;
         }
+        // Guard before the potentially long waitForPrebuiltRuntimeSession:
+        // if the user already navigated away, skip the wait entirely.
+        if (_navGuard !== _navigationGuardEpoch) return;
         try {
           const readyAgent = await waitForPrebuiltRuntimeSession(activeAgent.id, 30, {
             previousRuntimeId,
             expectedSessionId: result?.session?.id || '',
           });
           if (!readyAgent) return;
+          // Guard again after the long wait — user may have navigated during polling.
+          if (_navGuard !== _navigationGuardEpoch) return;
           const nextRuntimeId = readyAgent.runtime_session_id || readyAgent.runtimeSessionId || readyAgent.id;
           if (!nextRuntimeId) return;
           setPreferredUnitMode('chat', activeAgent);
@@ -1858,6 +1897,11 @@ function clearSessionLoading(agentId) {
  * Flush the pending switch slot: if the serial still matches, execute the
  * actual switchAgent call and clear the slot.  Only the most recent
  * requestSwitch() call wins; stale flushes are silently discarded.
+ *
+ * Navigation guard: if the user navigated between requestSwitch() and this
+ * flush (the setTimeout(0) gap), the epoch won't match and the switch is
+ * aborted.  This closes the race where a user click event fires between
+ * the guard check at the call-site and the deferred execution here.
  */
 function flushPendingSwitch(serial, resolve) {
   if (!pendingSwitchTarget || pendingSwitchTarget.serial !== serial) {
@@ -1865,7 +1909,12 @@ function flushPendingSwitch(serial, resolve) {
     return;
   }
   const runtimeId = pendingSwitchTarget.runtimeId;
+  const navEpoch = pendingSwitchTarget.navEpoch;
   pendingSwitchTarget = null;
+  if (navEpoch !== _navigationGuardEpoch) {
+    resolve({ switched: false, reason: 'nav-guard-stale' });
+    return;
+  }
   window.switchAgent(runtimeId).then(
     () => resolve({ switched: true }),
     (e) => resolve({ switched: false, reason: e?.message }),
@@ -1886,7 +1935,7 @@ function flushPendingSwitch(serial, resolve) {
 function requestSwitch(runtimeId, source) {
   pendingSwitchSerial += 1;
   const serial = pendingSwitchSerial;
-  pendingSwitchTarget = { runtimeId, serial, source };
+  pendingSwitchTarget = { runtimeId, serial, source, navEpoch: _navigationGuardEpoch };
   return new Promise((resolve) => {
     setTimeout(() => flushPendingSwitch(serial, resolve), 0);
   });
@@ -1894,6 +1943,7 @@ function requestSwitch(runtimeId, source) {
 
 window.switchAgent = async (newAgentId) => {
   // A-class (direct) calls cancel any pending deferred switch.
+  bumpNavigationGuard();
   pendingSwitchTarget = null;
   const epoch = ++_switchEpoch;
   closeAgentContextMenu();
@@ -2036,6 +2086,8 @@ restartAgentAction.addEventListener('click', async () => {
   }
 
   try {
+    bumpNavigationGuard();
+    const _restartNavGuard = _navigationGuardEpoch;
     const agent = getExternalRuntimeAgent(contextMenuAgentId);
     // Clear cached data — restart creates a fresh session
     clearAgentRuntimeCache(contextMenuAgentId);
@@ -2077,7 +2129,7 @@ restartAgentAction.addEventListener('click', async () => {
     }
     suppressSidebarRerender = false;
     await loadAgents();
-    if (nextRuntimeId) {
+    if (nextRuntimeId && _restartNavGuard === _navigationGuardEpoch) {
       await requestSwitch(nextRuntimeId, 'restart-handler');
     }
   } catch (e) {
