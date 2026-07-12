@@ -71,6 +71,7 @@ window.WgState = {
   // UI 折叠状态
   _archivedCollapsed: true,
   _settingsAdminCollapsed: true,
+  _sidebarCollapsed: false,
 
   // Popover / hover
   _hoverIdentity: null,

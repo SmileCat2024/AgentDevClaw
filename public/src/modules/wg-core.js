@@ -1077,7 +1077,7 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
     const savedSearchSelectionEnd = existingSearch ? existingSearch.selectionEnd : null;
 
     const html = [
-      '<div class="wg-app">',
+      '<div class="wg-app' + (WgState._sidebarCollapsed ? ' sidebar-collapsed' : '') + '">',
       '  <div class="wg-sidebar">',
       '    <div class="wg-sidebar-header">',
       '      <input type="text" class="wg-search-input" placeholder="搜索群聊" data-wg-role="search" value="' + wgEsc(WgState.searchKeyword) + '">',
@@ -1087,6 +1087,9 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
       '    </div>',
       '    <div class="wg-chat-list" data-wg-role="chat-list">' + renderChatList() + '</div>',
       '  </div>',
+      '  <button class="wg-sidebar-toggle" data-wg-action="toggle-sidebar" title="' + (WgState._sidebarCollapsed ? '展开群聊列表' : '收起群聊列表') + '">',
+      '    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="' + (WgState._sidebarCollapsed ? 'M9 18l6-6-6-6' : 'M15 18l-6-6 6-6') + '"/></svg>',
+      '  </button>',
       '  <div class="wg-main" data-wg-role="main">' + renderConversation() + '</div>',
       '</div>',
     ].join('');
@@ -2585,6 +2588,20 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
       if (act === 'toggle-archived') {
         WgState._archivedCollapsed = !WgState._archivedCollapsed;
         refreshChatList();
+        return;
+      }
+      if (act === 'toggle-sidebar') {
+        WgState._sidebarCollapsed = !WgState._sidebarCollapsed;
+        const app = document.querySelector('.wg-app');
+        if (app) {
+          app.classList.toggle('sidebar-collapsed', WgState._sidebarCollapsed);
+          const btn = app.querySelector('.wg-sidebar-toggle');
+          if (btn) {
+            btn.title = WgState._sidebarCollapsed ? '展开群聊列表' : '收起群聊列表';
+            const path = btn.querySelector('path');
+            if (path) path.setAttribute('d', WgState._sidebarCollapsed ? 'M9 18l6-6-6-6' : 'M15 18l-6-6 6-6');
+          }
+        }
         return;
       }
     }
