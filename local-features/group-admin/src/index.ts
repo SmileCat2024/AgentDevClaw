@@ -27,8 +27,11 @@ export class GroupAdminFeature implements AgentFeature {
   private callCount = 0;
   private stepCount = 0;
 
-  /** 当 gc_reply / gc_dispatch 以 done=true 执行后置位，@StepFinish 检查后消费 */
+  /** 当 gc_reply / gc_dispatch 以 done=true 或 gc_stop 执行后置位，@StepFinish 检查后消费 */
   private stopRequested = false;
+
+  /** 当 Agent 尝试无工具调用结束时置位，@StepStart 注入提醒后消费 */
+  private stopReminderPending = false;
 
   /** 当前管理员绑定的群聊 ID（启动时从环境变量注入） */
   private get chatId(): string {
@@ -37,44 +40,51 @@ export class GroupAdminFeature implements AgentFeature {
 
   @CallStart
   async injectIdentityReminder(ctx: any): Promise<void> {
-    this.callCount++;
-    this.stepCount = 0; // 跨 call 重置 step 计数
-    if (this.callCount % GroupAdminFeature.REMINDER_INTERVAL !== 0) return;
-    if (!ctx?.context) return;
-
-    ctx.context.add({
-      role: 'system',
-      content:
-        '[管理员身份提醒] 你是群聊管理员，处理具体业务并不是你的核心职责。\n' +
-        '- 你的所有对话默认只有你能看到。要让群里用户看到回复，必须调用 gc_reply 发送到群里。\n' +
-        '- 其他 Agent 看不到群聊，也不会主动响应群聊内容。用户说的话、Agent 的回复，它们都看不到。除非你通过 gc_dispatch 派发任务过去。\n' +
-        '- 管理多个会话时，优先依据 gc_overview/gc_status/gc_sessions 和 gc_dispatch 返回的态势信息；回复或继续派发时反复核对 identityRef、sessionId、运行状态、模型和上下文用量。',
-    });
+    // [已悬置] 身份提醒改由系统提示词 + gc_stop 强制约定兜底，不再反复注入
+    return;
   }
 
   @StepStart
   async injectStepReminder(ctx: any): Promise<void> {
     this.stepCount++;
-    if (this.stepCount % GroupAdminFeature.STEP_REMINDER_INTERVAL !== 0) return;
-    if (!ctx?.context) return;
 
-    ctx.context.add({
-      role: 'system',
-      content:
-        '[管理员身份提醒] 你是群聊管理员，处理具体业务并不是你的核心职责。\n' +
-        '- 你的所有对话默认只有你能看到。要让群里用户看到回复，必须调用 gc_reply 发送到群里。\n' +
-        '- 其他 Agent 看不到群聊，也不会主动响应群聊内容。用户说的话、Agent 的回复，它们都看不到。除非你通过 gc_dispatch 派发任务过去。\n' +
-        '- 在使用 gc_dispatch 派发任务时，必须考虑任务与已有会话的相关性，必须有明确的用户指令或存在具体任务的接续性，才需要复用已有会话，否则优先创建新会话。\n' +
-        '- 管理多个会话时，优先依据 gc_overview/gc_status/gc_sessions 和 gc_dispatch 返回的态势信息；回复或继续派发时反复核对 identityRef、sessionId、运行状态、模型和上下文用量。',
-    });
+    // 优先处理停止提醒：上一轮 Agent 尝试无工具调用结束，强制要求使用工具
+    if (this.stopReminderPending) {
+      this.stopReminderPending = false;
+      if (ctx?.context) {
+        ctx.context.add({
+          role: 'system',
+          content:
+            '[流程提醒] 你刚才尝试直接结束对话，但这不被允许。\n' +
+            '- 如果你要结束本轮对话，必须调用 gc_stop 工具。\n' +
+            '- 如果你有话要对群里说，必须使用 gc_reply 工具（并设置 done=true 表示发送后结束）。\n' +
+            '- 如果你要派发任务，必须使用 gc_dispatch 工具（并设置 done=true 表示派发后结束）。\n' +
+            '不要直接输出文本而不调用任何工具。',
+        });
+      }
+      return;
+    }
+
+    // [已悬置] 常规身份提醒不再注入，由系统提示词 + gc_stop 强制约定兜底
+    return;
   }
 
   @StepFinish
-  async checkStopRequest(_ctx: any): Promise<DecisionResult> {
+  async checkStopRequest(ctx: any): Promise<DecisionResult> {
+    // Case 1: Agent 显式请求停止（gc_stop 或 done=true）
     if (this.stopRequested) {
       this.stopRequested = false;
       return Decision.Deny;
     }
+
+    // Case 2: 无工具调用且未显式停止 — 强制继续，注入提醒
+    const toolCallsCount = ctx?.toolCallsCount ?? 0;
+    if (toolCallsCount === 0) {
+      this.stopReminderPending = true;
+      return Decision.Approve;
+    }
+
+    // Case 3: 有工具调用，正常流程
     return Decision.Continue;
   }
 
