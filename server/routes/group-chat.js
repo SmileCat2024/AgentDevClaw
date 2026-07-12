@@ -227,6 +227,17 @@ export async function groupByLineage(sessionPool, lineageRecords, allIdentities,
     if (!incoming.get(rec.to).some((item) => item.from === rec.from)) incoming.get(rec.to).push(edge);
   }
 
+  // 同一历史节点可能先后产生多个后继。按时间稳定排序后，将第一条非 branch
+  // 后继视为原线程的自然延续；branch 和其余后继均投影为新线程。
+  // 这样线性 trim/summary 的 threadRef 在 head 前移后保持稳定，而旧节点再次
+  // 派生不会抢走已有线程的身份。
+  for (const edges of outgoing.values()) {
+    edges.sort((left, right) =>
+      (left.timestamp || 0) - (right.timestamp || 0)
+      || String(left.to).localeCompare(String(right.to))
+    );
+  }
+
   // Session index 只负责补标题与“是否仍可打开”，不决定节点是否存在。
   const indexByWorkspace = new Map();
   const workspaceIds = new Set(
@@ -250,9 +261,9 @@ export async function groupByLineage(sessionPool, lineageRecords, allIdentities,
 
   const roots = [...nodes.values()].filter((node) => !incoming.has(node.sessionId));
   const paths = [];
-  const walk = (node, nodePath, edgePath, visiting) => {
+  const walk = (node, nodePath, edgePath, visiting, threadAnchorId) => {
     if (!node || visiting.has(node.sessionId)) {
-      if (nodePath.length) paths.push({ nodes: nodePath, edges: edgePath });
+      if (nodePath.length) paths.push({ nodes: nodePath, edges: edgePath, threadAnchorId });
       return;
     }
     const nextVisiting = new Set(visiting);
@@ -260,23 +271,43 @@ export async function groupByLineage(sessionPool, lineageRecords, allIdentities,
     const nextNodes = [...nodePath, node];
     const edges = outgoing.get(node.sessionId) || [];
     if (edges.length === 0) {
-      paths.push({ nodes: nextNodes, edges: edgePath });
+      paths.push({ nodes: nextNodes, edges: edgePath, threadAnchorId });
       return;
     }
-    for (const edge of edges) {
-      walk(nodes.get(edge.to), nextNodes, [...edgePath, edge], nextVisiting);
+
+    const continuations = edges.filter((edge) => edge.reason !== 'branch');
+    const branches = edges.filter((edge) => edge.reason === 'branch');
+
+    // 没有自然延续时，source 本身仍是一条可查看的原线程；branch 只增加新线程，
+    // 不应让原线程从投影中消失。
+    if (continuations.length === 0) {
+      paths.push({ nodes: nextNodes, edges: edgePath, threadAnchorId });
+    }
+
+    continuations.forEach((edge, index) => {
+      walk(
+        nodes.get(edge.to),
+        nextNodes,
+        [...edgePath, edge],
+        nextVisiting,
+        index === 0 ? threadAnchorId : edge.to,
+      );
+    });
+    for (const edge of branches) {
+      walk(nodes.get(edge.to), nextNodes, [...edgePath, edge], nextVisiting, edge.to);
     }
   };
-  for (const root of roots) walk(root, [], [], new Set());
+  for (const root of roots) walk(root, [], [], new Set(), root.sessionId);
 
   // 防御异常环或完全孤立的节点，保证每个已知 session 都能被投影。
   const covered = new Set(paths.flatMap((pathInfo) => pathInfo.nodes.map((node) => node.sessionId)));
   for (const node of nodes.values()) {
-    if (!covered.has(node.sessionId)) paths.push({ nodes: [node], edges: [] });
+    if (!covered.has(node.sessionId)) paths.push({ nodes: [node], edges: [], threadAnchorId: node.sessionId });
   }
 
-  const threads = paths.map(({ nodes: pathNodes, edges }) => {
+  const threads = paths.map(({ nodes: pathNodes, edges, threadAnchorId }) => {
     const head = pathNodes[pathNodes.length - 1];
+    const threadAnchor = pathNodes.find((node) => node.sessionId === threadAnchorId) || pathNodes[0] || head;
     const identityRef = head.identityRef || pathNodes.find((node) => node.identityRef)?.identityRef || 'unknown:main';
     const workspaceId = identityRef.split(':')[0];
     const identityInfo = allIdentities.find((item) => item.identityRef === identityRef);
@@ -309,10 +340,11 @@ export async function groupByLineage(sessionPool, lineageRecords, allIdentities,
       0
     );
     return {
+      threadRef: `${identityRef}::${threadAnchorId || pathNodes[0]?.sessionId || head.sessionId}`,
       identityRef,
       identityName: identityInfo?.displayName || identityRef,
       workspaceId,
-      threadTitle: pathNodes[0]?.title || head.title || null,
+      threadTitle: threadAnchor?.title || head.title || null,
       activeHeadId: head.sessionId, // 兼容旧消费方；语义是 lineage head，不等同于正在运行。
       activeHeadTitle: head.title,
       lineageHeadId: head.sessionId,
@@ -332,6 +364,20 @@ export async function groupByLineage(sessionPool, lineageRecords, allIdentities,
     (lifecycleRank[a.lifecycle] ?? 9) - (lifecycleRank[b.lifecycle] ?? 9)
     || (b.updatedAt || 0) - (a.updatedAt || 0)
   );
+}
+
+/**
+ * 将线程的工作状态和 runtime 执行状态分开。没有 Task 只表示工作尚未结构化，
+ * 不能据此判断完成；running/queued 始终优先视为进行中。
+ */
+export function deriveThreadWorkStatus(thread, taskSummary, runtimeStatus) {
+  if (thread?.lifecycle === 'archived' || thread?.lifecycle === 'missing') return 'history';
+  if (runtimeStatus === 'running' || runtimeStatus === 'queued') return 'active';
+  if (['pending', 'delivered', 'processing'].includes(thread?.latestRoutingStatus)) return 'active';
+  const total = Number(taskSummary?.total) || 0;
+  const completed = Number(taskSummary?.completed) || 0;
+  if (total > 0 && completed >= total) return 'completed';
+  return 'active';
 }
 
 /** 将 session 持久化用量投影为与会话列表一致的上下文占用口径。 */
@@ -730,12 +776,14 @@ function formatSessionLabel(title, sessionId) {
  */
 function formatSessionLifecycleEvent(event) {
   const evtName = event.identityName || '';
+  const threadName = event.threadTitle || event.sessionTitle || event.fromSessionTitle || '';
+  const subject = threadName ? `${evtName} · 工作线程「${threadName}」` : evtName;
   const reason = event.reason || '';
 
   // ── 纯归档（无新会话）──
   if (event.type === 'session_archived') {
     const label = formatSessionLabel(event.sessionTitle, event.sessionId);
-    return `${evtName}${label} 会话已归档，不再接收新任务`;
+    return `${subject}${label} 已归档，不再接收新任务`;
   }
 
   // ── 会话变更（创建了新会话）──
@@ -758,7 +806,11 @@ function formatSessionLifecycleEvent(event) {
   // 归档后缀
   const archiveSuffix = event.archived ? '，原会话已归档' : '';
 
-  return `${evtName} 会话变更：\n  操作：${reasonLabel}${detail}${archiveSuffix}\n  原会话：「${event.fromSessionTitle || '未命名'} #${(event.fromSessionId || '').slice(-8)}」${event.archived ? '→ 已归档' : '（仍可查看）'}\n  新会话：「${event.sessionTitle || '未命名'} #${(event.toSessionId || '').slice(-8)}」`;
+  if (event.threadDisposition === 'new_thread') {
+    return `${subject}已派生为新的并行工作：\n  操作：${reasonLabel}${detail}${archiveSuffix}\n  来源会话：「${event.fromSessionTitle || '未命名'} #${(event.fromSessionId || '').slice(-8)}」${event.archived ? '→ 已归档' : '（仍可查看）'}\n  新线程入口：「${event.sessionTitle || '未命名'} #${(event.toSessionId || '').slice(-8)}」`;
+  }
+
+  return `${subject}上下文已交接：\n  操作：${reasonLabel}${detail}${archiveSuffix}\n  原会话：「${event.fromSessionTitle || '未命名'} #${(event.fromSessionId || '').slice(-8)}」${event.archived ? '→ 已归档' : '（仍可查看）'}\n  当前入口：「${event.sessionTitle || '未命名'} #${(event.toSessionId || '').slice(-8)}」`;
 }
 
 /**
@@ -915,9 +967,9 @@ function formatCatchUpPrompt(messages, allIdentities, chatId, chatName) {
       }
       if (m.event.type === 'task_completed') {
         const evtName = m.event.identityName || m.event.identityRef || '';
-        const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);
+        const threadTitle = m.event.threadTitle || m.event.sessionTitle || '未命名工作';
         const taskTitle = m.event.taskTitle || '';
-        return `[${time}] [系统事件] ${evtName}${evtSession} 任务完成：${taskTitle}`;
+        return `[${time}] [系统事件] ${evtName} · 工作线程「${threadTitle}」Task 完成：${taskTitle}`;
       }
       const evtName = m.event.identityName || m.event.identityRef || '';
       const evtSession = formatSessionLabel(m.event.sessionTitle, m.event.sessionId);
@@ -1892,6 +1944,141 @@ app.get('/protoclaw/gc/runtime_status', async (req, res, next) => {
 
 // ── Phase 3: 拉取工具端点 ──────────────────────────────────────────
 
+async function readThreadHeadOperationalData(workspaceId, sessionId) {
+  let session = null;
+  try {
+    const raw = await fs.readFile(getPrebuiltSessionFilePath(workspaceId, sessionId), 'utf8');
+    session = JSON.parse(raw);
+  } catch {}
+
+  const featureStates = session?.runtime?.featureStates;
+  const todoCheckpoint = Array.isArray(featureStates)
+    ? featureStates.find((entry) => entry?.featureName === 'todo' && entry.snapshot)
+    : null;
+  const tasks = Array.isArray(todoCheckpoint?.snapshot?.tasks) ? todoCheckpoint.snapshot.tasks : [];
+  const sessionIndex = await readSessionIndex(workspaceId).catch(() => null);
+  const sessionRecord = sessionIndex?.sessions?.find((item) => item.id === sessionId) || null;
+  const runtime = await getRuntimeExecSnapshot(workspaceId, sessionId);
+  const taskSummary = {
+    total: tasks.length,
+    completed: tasks.filter((task) => task.status === 'completed').length,
+    inProgress: tasks.filter((task) => task.status === 'in_progress').length,
+    pending: tasks.filter((task) => task.status === 'pending').length,
+  };
+
+  return {
+    tasks: tasks.map((task) => ({
+      id: task.id,
+      subject: task.subject || '',
+      status: task.status || 'pending',
+      activeForm: task.activeForm || '',
+    })),
+    taskSummary,
+    contextUsage: session ? buildSessionContextUsage(session, sessionRecord) : null,
+    latestMessage: session ? buildSessionLatestMessage(session) : null,
+    runtimeStatus: runtime.status,
+    execQueueLength: runtime.queueLength || 0,
+  };
+}
+
+async function buildThreadSituation(chat, allIdentities, options = {}) {
+  const sessionPool = aggregateSessionPool(chat, allIdentities);
+  const projected = await groupByLineage(sessionPool, chat.sessionLineage, allIdentities, undefined, {
+    activeSessions: chat.sessions,
+    messages: chat.messages,
+  });
+
+  const threads = await Promise.all(projected.map(async (thread) => {
+    const operational = await readThreadHeadOperationalData(thread.workspaceId, thread.lineageHeadId);
+    const lineageSessionIds = new Set((thread.lineage || []).map((node) => node.sessionId));
+    const latestRoutingMessage = [...(chat.messages || [])]
+      .reverse()
+      .find((message) => message?.routing?.targetIdentityRef === thread.identityRef
+        && lineageSessionIds.has(message.routing.targetSessionId));
+    const latestRoutingStatus = latestRoutingMessage?.routing?.status || null;
+    const workStatus = deriveThreadWorkStatus(
+      { ...thread, latestRoutingStatus },
+      operational.taskSummary,
+      operational.runtimeStatus,
+    );
+    return {
+      ...thread,
+      workStatus,
+      latestRoutingStatus,
+      runtimeStatus: thread.canDispatch ? operational.runtimeStatus : 'unavailable',
+      taskSummary: operational.taskSummary,
+      contextUsage: operational.contextUsage,
+      latestMessage: operational.latestMessage,
+      execQueueLength: operational.execQueueLength,
+      ...(options.includeTasks ? { tasks: operational.tasks } : {}),
+    };
+  }));
+
+  const workRank = { attention: 0, active: 1, completed: 2, history: 3 };
+  const runtimeRank = { running: 0, queued: 1, idle: 2, offline: 3, unavailable: 4 };
+  threads.sort((left, right) =>
+    (workRank[left.workStatus] ?? 9) - (workRank[right.workStatus] ?? 9)
+    || (runtimeRank[left.runtimeStatus] ?? 9) - (runtimeRank[right.runtimeStatus] ?? 9)
+    || (right.updatedAt || 0) - (left.updatedAt || 0)
+  );
+
+  const totals = {
+    running: threads.filter((thread) => thread.runtimeStatus === 'running').length,
+    active: threads.filter((thread) => thread.workStatus === 'active').length,
+    completed: threads.filter((thread) => thread.workStatus === 'completed').length,
+    history: threads.filter((thread) => thread.workStatus === 'history').length,
+    attention: threads.filter((thread) => thread.workStatus === 'attention').length,
+  };
+  return { generatedAt: Date.now(), totals, threads };
+}
+
+function findThreadByRef(situation, threadRef) {
+  return situation?.threads?.find((thread) => thread.threadRef === threadRef) || null;
+}
+
+function formatAdminThreadSituation(situation) {
+  const threads = Array.isArray(situation?.threads) ? situation.threads : [];
+  const totals = situation?.totals || {};
+  const lines = [
+    '─── 当前工作线程态势 ───',
+    `运行中 ${totals.running || 0}；进行中 ${totals.active || 0}；已完成 ${totals.completed || 0}；历史 ${totals.history || 0}`,
+  ];
+  if (threads.length === 0) {
+    lines.push('当前还没有工作线程。');
+    return lines.join('\n');
+  }
+
+  const visible = threads.filter((thread) => thread.workStatus !== 'history').slice(0, 20);
+  for (const thread of visible) {
+    const workLabel = thread.workStatus === 'completed' ? '已完成'
+      : thread.workStatus === 'attention' ? '需关注' : '进行中';
+    const runtimeLabels = {
+      running: '运行中', queued: '排队中', idle: '空闲可继续', offline: '未运行可继续', unavailable: '不可用',
+    };
+    const task = thread.taskSummary || {};
+    const taskText = (task.total || 0) > 0
+      ? `Task ${task.completed || 0}/${task.total}`
+      : 'Task 尚未建立';
+    const contextText = thread.contextUsage
+      ? `上下文 ${thread.contextUsage.percent || 0}%`
+      : '上下文未知';
+    const title = thread.threadTitle || thread.activeHeadTitle || '未命名工作';
+    lines.push(
+      '',
+      `[${workLabel} · ${runtimeLabels[thread.runtimeStatus] || thread.runtimeStatus || '未知'}] ${thread.identityName} · ${title}`,
+      `  threadRef: ${thread.threadRef}`,
+      `  ${taskText}；${contextText}；${thread.canDispatch ? '可派发' : '不可派发'}`,
+    );
+    const latest = String(thread.latestMessage?.text || '').replace(/\s+/g, ' ').trim();
+    if (latest) lines.push(`  最近：${latest.length > 180 ? `${latest.slice(0, 180)}…` : latest}`);
+  }
+  if ((totals.history || 0) > 0) {
+    lines.push('', `另有 ${totals.history} 条历史线程；只有需要追溯时再用 gc_thread_overview(status="history") 查看。`);
+  }
+  lines.push('', '判断规则：运行中/排队中的线程不要重复派发；空闲且进行中的线程可以继续；已完成线程等待用户提出新需求；没有 Task 不代表完成。');
+  return lines.join('\n');
+}
+
 /**
  * GET /protoclaw/gc/session_threads?chatId=xxx
  * 返回群聊的所有工作线程视图（血缘聚合）。
@@ -1905,13 +2092,28 @@ app.get('/protoclaw/gc/session_threads', async (req, res, next) => {
     if (!chat) return res.status(404).json({ error: 'Chat not found' });
 
     const allIdentities = await collectIdentities();
-    const sessionPool = aggregateSessionPool(chat, allIdentities);
-    const threads = await groupByLineage(sessionPool, chat.sessionLineage, allIdentities, undefined, {
-      activeSessions: chat.sessions,
-      messages: chat.messages,
-    });
+    const situation = await buildThreadSituation(chat, allIdentities);
+    res.json(situation);
+  } catch (error) {
+    next(error);
+  }
+});
 
-    res.json({ threads });
+/**
+ * GET /protoclaw/gc/thread_detail?chatId=xxx&threadRef=yyy
+ * 管理员与人类 UI 共用的线程详情：当前 head、Task、上下文、最近消息和血缘。
+ */
+app.get('/protoclaw/gc/thread_detail', async (req, res, next) => {
+  try {
+    const { chatId, threadRef } = req.query;
+    if (!chatId || !threadRef) return res.status(400).json({ error: 'chatId and threadRef required' });
+    const chat = await readGroupChat(chatId);
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+    const allIdentities = await collectIdentities();
+    const situation = await buildThreadSituation(chat, allIdentities, { includeTasks: true });
+    const thread = findThreadByRef(situation, threadRef);
+    if (!thread) return res.status(404).json({ error: 'Work thread not found' });
+    res.json({ generatedAt: situation.generatedAt, thread });
   } catch (error) {
     next(error);
   }
@@ -1929,41 +2131,15 @@ app.get('/protoclaw/gc/session_tasks', async (req, res, next) => {
       return res.status(400).json({ error: 'agentId and sessionId required' });
     }
 
-    // 尝试从 session 文件读取
-    const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
-    let raw;
-    try {
-      raw = await fs.readFile(sessionPath, 'utf8');
-    } catch {
-      return res.status(404).json({ error: 'Session file not found' });
-    }
-
-    const session = JSON.parse(raw);
-    // 提取 TodoFeature tasks
-    const featureStates = session?.runtime?.featureStates;
-    const todoCheckpoint = Array.isArray(featureStates)
-      ? featureStates.find((entry) => entry?.featureName === 'todo' && entry.snapshot)
-      : null;
-    const tasks = todoCheckpoint?.snapshot?.tasks || [];
-    const sessionIndex = await readSessionIndex(agentId).catch(() => null);
-    const sessionRecord = sessionIndex?.sessions?.find((item) => item.id === sessionId) || null;
+    const operational = await readThreadHeadOperationalData(agentId, sessionId);
 
     res.json({
       sessionId,
-      tasks: tasks.map((t) => ({
-        id: t.id,
-        subject: t.subject || '',
-        status: t.status || 'pending',
-        activeForm: t.activeForm || '',
-      })),
-      summary: {
-        total: tasks.length,
-        completed: tasks.filter((t) => t.status === 'completed').length,
-        inProgress: tasks.filter((t) => t.status === 'in_progress').length,
-        pending: tasks.filter((t) => t.status === 'pending').length,
-      },
-      contextUsage: buildSessionContextUsage(session, sessionRecord),
-      latestMessage: buildSessionLatestMessage(session),
+      tasks: operational.tasks,
+      summary: operational.taskSummary,
+      contextUsage: operational.contextUsage,
+      latestMessage: operational.latestMessage,
+      runtimeStatus: operational.runtimeStatus,
     });
   } catch (error) {
     next(error);
@@ -2086,6 +2262,17 @@ async function prepareAdminContext(chatId, allIdentities, currentMessageTimestam
       sections.push(memoryPrompt);
       log('GroupChat', `group memory pre-injected for new admin session (${groupMemory.messageCount} messages, range=${range})`);
     }
+  }
+
+  // ── 每次激活：注入当前工作线程态势 ──
+  // 保持原有“两层结构”不变：线程态势属于 system-reminder 中的环境证据，
+  // user 块仍只承载真实用户请求或一句事件触发描述。管理员先知道“现在怎样”，
+  // 再通过下方 catch-up 理解“刚刚发生了什么”。
+  try {
+    const situation = await buildThreadSituation(chat, allIdentities);
+    sections.push(formatAdminThreadSituation(situation));
+  } catch (err) {
+    log('GroupChat', `admin thread situation build failed: ${err.message}`, 'warn');
   }
 
   // ── catch-up：补上管理员离开后错过的全部群聊消息（含事件消息）──
@@ -2578,13 +2765,16 @@ async function notifyAdminForActivity(chatId, message, chat) {
       case 'session_continued': {
         const reason = message.event?.reason || '';
         const reasonMeanings = {
-          trim: '已精简历史——部分工具调用记录被折叠为概要，对话结构完整保留',
-          summary: '已通过摘要交接——完整历史被提炼为结构化摘要，基于摘要继续工作',
-          branch: '已从指定位置创建分支——携带截至该位置的完整记录独立发展',
+          trim: '精简历史后已由新上下文接管',
+          summary: '摘要交接后已由新上下文接管',
+          branch: '已创建新的并行工作线程',
         };
-        const meaning = reasonMeanings[reason] || '会话已变更';
+        const meaning = message.event?.threadDisposition === 'new_thread'
+          ? '已从历史上下文派生新的并行工作线程'
+          : (reasonMeanings[reason] || '当前上下文入口已更新');
         const archiveNote = message.event?.archived ? '，原会话已归档，不再接收新任务' : '';
-        activityDesc = `系统事件：${evtName}${evtSession} ${meaning}${archiveNote}`;
+        const threadTitle = message.event?.threadTitle || message.event?.sessionTitle || '未命名工作';
+        activityDesc = `系统事件：${evtName} · 工作线程「${threadTitle}」${meaning}${archiveNote}`;
         break;
       }
       case 'session_archived':
@@ -2592,7 +2782,8 @@ async function notifyAdminForActivity(chatId, message, chat) {
         break;
       case 'task_completed': {
         const taskTitle = message.event?.taskTitle || '';
-        activityDesc = `系统事件：${evtName}${evtSession} 任务完成：${taskTitle}`;
+        const threadTitle = message.event?.threadTitle || message.event?.sessionTitle || '未命名工作';
+        activityDesc = `系统事件：${evtName} · 工作线程「${threadTitle}」Task 完成：${taskTitle}`;
         break;
       }
       default:
@@ -2765,6 +2956,29 @@ async function notifySessionLineage({ agentId, fromSessionId, toSessionId, reaso
       if (!chat.sessions) chat.sessions = {};
       chat.sessions[identityRef] = toSessionId;
 
+      // 基于更新后的血缘图解析稳定线程引用。线性 successor 继承原线程引用，
+      // branch 或旧节点再派生得到新的引用。事件与管理员/UI 因而指向同一工作。
+      let threadRef = null;
+      let threadTitle = sessionTitle || fromSessionTitle || null;
+      let threadDisposition = 'head_advanced';
+      try {
+        const projected = await groupByLineage(
+          aggregateSessionPool(chat, allIdentities),
+          chat.sessionLineage,
+          allIdentities,
+          undefined,
+          { activeSessions: chat.sessions, messages: chat.messages },
+        );
+        const targetThread = projected.find((thread) => thread.lineageHeadId === toSessionId && thread.identityRef === identityRef);
+        if (targetThread) {
+          threadRef = targetThread.threadRef;
+          threadTitle = targetThread.threadTitle || targetThread.activeHeadTitle || threadTitle;
+          if (targetThread.threadRef === `${identityRef}::${toSessionId}`) {
+            threadDisposition = 'new_thread';
+          }
+        }
+      } catch {}
+
       // 追加事件消息
       const eventMessage = {
         id: `evt-lineage-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -2776,6 +2990,9 @@ async function notifySessionLineage({ agentId, fromSessionId, toSessionId, reaso
           type: 'session_continued',
           identityRef,
           identityName,
+          threadRef,
+          threadTitle,
+          threadDisposition,
           sessionId: toSessionId,
           sessionTitle,
           fromSessionId,
@@ -2899,6 +3116,9 @@ function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId, s
 
   // Phase 2: task 完成检测状态
   const knownCompletedTaskIds = new Set();
+  // 先把派发前已经完成的 Task 作为 baseline，避免同一线程再次派发时把旧完成项
+  // 全部重新广播。轮询会等待 baseline 尝试结束；失败时仍可继续跟踪本轮变化。
+  const taskBaselineReady = seedCompletedTaskBaseline(viewerAgentId, knownCompletedTaskIds);
 
   const interval = setInterval(async () => {
     // 超时保护
@@ -2941,12 +3161,14 @@ function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId, s
 
         // Phase 2: 轮询 todo plan，检测新完成的 task
         if (sessionInfo) {
+          await taskBaselineReady;
           await pollTaskCompletion(chatId, currentViewerId, sessionInfo, knownCompletedTaskIds);
         }
       } else if (wasRunning) {
         // Agent 曾在运行，现在空闲 → 完成
         // 在清除 interval 前做最后一次 task 轮询（agent 刚结束，可能完成了最后一个 task）
         if (sessionInfo) {
+          await taskBaselineReady;
           await pollTaskCompletion(chatId, currentViewerId, sessionInfo, knownCompletedTaskIds);
         }
         clearInterval(interval);
@@ -2960,6 +3182,43 @@ function trackGroupChatDispatch(chatId, messageId, workspaceId, viewerAgentId, s
       // 网络错误等，继续重试
     }
   }, 3000);
+}
+
+async function seedCompletedTaskBaseline(viewerAgentId, knownCompletedTaskIds) {
+  if (!viewerAgentId) return;
+  try {
+    const res = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/todo`);
+    if (!res.ok) return;
+    const todoPlan = await res.json();
+    for (const task of (Array.isArray(todoPlan?.tasks) ? todoPlan.tasks : [])) {
+      if (task.status === 'completed') knownCompletedTaskIds.add(String(task.id));
+    }
+  } catch {}
+}
+
+const _gcEventIdempotencyKeys = new Set();
+
+async function appendUniqueGroupChatEvent(chatId, eventMessage) {
+  const key = eventMessage?.event?.idempotencyKey;
+  if (!key) {
+    await appendGroupChatMessage(chatId, eventMessage);
+    return true;
+  }
+  if (_gcEventIdempotencyKeys.has(key)) return false;
+  const chat = await readGroupChat(chatId);
+  if ((chat?.messages || []).some((message) => message?.event?.idempotencyKey === key)) {
+    _gcEventIdempotencyKeys.add(key);
+    return false;
+  }
+  // 单进程内先占位，避免两个并发 tracker 在文件写入前同时通过检查。
+  _gcEventIdempotencyKeys.add(key);
+  try {
+    await appendGroupChatMessage(chatId, eventMessage);
+    return true;
+  } catch (error) {
+    _gcEventIdempotencyKeys.delete(key);
+    throw error;
+  }
 }
 
 /**
@@ -2980,6 +3239,28 @@ async function pollTaskCompletion(chatId, viewerAgentId, sessionInfo, knownCompl
     const todoPlan = await res.json();
     const tasks = Array.isArray(todoPlan?.tasks) ? todoPlan.tasks : [];
 
+    let owningThread = null;
+    try {
+      const chat = await readGroupChat(chatId);
+      const allIdentities = await collectIdentities();
+      const projected = await groupByLineage(
+        aggregateSessionPool(chat, allIdentities),
+        chat.sessionLineage,
+        allIdentities,
+        undefined,
+        { activeSessions: chat.sessions, messages: chat.messages },
+      );
+      const candidates = projected.filter((thread) =>
+        thread.identityRef === sessionInfo.identityRef
+        && (thread.lineageHeadId === sessionInfo.sessionId
+          || thread.lineage?.some((node) => node.sessionId === sessionInfo.sessionId))
+      );
+      owningThread = candidates.find((thread) => thread.lineageHeadId === sessionInfo.sessionId)
+        || candidates.find((thread) => thread.isCurrent)
+        || candidates[0]
+        || null;
+    } catch {}
+
     for (const task of tasks) {
       if (task.status !== 'completed') continue;
       const taskId = String(task.id);
@@ -2998,9 +3279,13 @@ async function pollTaskCompletion(chatId, viewerAgentId, sessionInfo, knownCompl
           type: 'task_completed',
           identityRef: sessionInfo.identityRef,
           identityName: sessionInfo.identityName,
+          threadRef: owningThread?.threadRef || null,
+          threadTitle: owningThread?.threadTitle || sessionInfo.sessionTitle,
           sessionId: sessionInfo.sessionId,
           sessionTitle: sessionInfo.sessionTitle,
+          taskId,
           taskTitle: task.subject || task.description || `Task #${taskId}`,
+          idempotencyKey: `task_completed:${sessionInfo.sessionId}:${taskId}`,
           workspaceId: sessionInfo.identityRef.split(':')[0],
         },
         mentions: [],
@@ -3009,8 +3294,10 @@ async function pollTaskCompletion(chatId, viewerAgentId, sessionInfo, knownCompl
         routing: null,
       };
 
-      await appendGroupChatMessage(chatId, eventMessage);
-      log('GroupChat', `task_completed event: ${sessionInfo.identityName} completed "${eventMessage.event.taskTitle}"`);
+      const appended = await appendUniqueGroupChatEvent(chatId, eventMessage);
+      if (appended) {
+        log('GroupChat', `task_completed event: ${sessionInfo.identityName} completed "${eventMessage.event.taskTitle}"`);
+      }
     }
   } catch {
     // 网络错误等，静默跳过

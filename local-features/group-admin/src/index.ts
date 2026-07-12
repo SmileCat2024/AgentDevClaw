@@ -18,6 +18,7 @@ const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:$
 
 export class GroupAdminFeature implements AgentFeature {
   readonly name = 'group-admin';
+  readonly description = '以工作线程为核心观察群聊态势、派发增量指令并跟踪执行结果。';
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
 
   /** 每多少轮 call 注入一次身份提醒 */
@@ -58,7 +59,8 @@ export class GroupAdminFeature implements AgentFeature {
             '[流程提醒] 你刚才尝试直接结束对话，但这不被允许。\n' +
             '- 如果你要结束本轮对话，必须调用 gc_stop 工具。\n' +
             '- 如果你有话要对群里说，必须使用 gc_reply 工具（并设置 done=true 表示发送后结束）。\n' +
-            '- 如果你要派发任务，必须使用 gc_dispatch 工具（并设置 done=true 表示派发后结束）。\n' +
+            '- 如果你要继续已有工作，使用 gc_dispatch_thread；开始全新工作使用 gc_start_thread（并设置 done=true 表示派发后结束）。\n' +
+            '- gc_dispatch 仅保留给明确 session 的兼容场景。\n' +
             '不要直接输出文本而不调用任何工具。',
         });
       }
@@ -182,11 +184,118 @@ export class GroupAdminFeature implements AgentFeature {
     return this.apiGet(`/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/awareness`);
   }
 
+  private async fetchThreadSituation(): Promise<any> {
+    return this.apiGet(`/protoclaw/gc/session_threads?chatId=${encodeURIComponent(this.chatId)}`);
+  }
+
+  private threadTitle(thread: any): string {
+    return thread?.threadTitle || thread?.activeHeadTitle || '未命名工作';
+  }
+
+  private formatThreadSituation(data: any, status = 'all'): string {
+    const totals = data?.totals || {};
+    const allThreads = Array.isArray(data?.threads) ? data.threads : [];
+    const threads = status === 'all'
+      ? allThreads
+      : allThreads.filter((thread: any) => thread.workStatus === status);
+    const lines = [
+      `工作现场：运行中 ${totals.running || 0}；进行中 ${totals.active || 0}；已完成 ${totals.completed || 0}；历史 ${totals.history || 0}`,
+    ];
+    if (threads.length === 0) {
+      lines.push(status === 'all' ? '当前还没有工作线程。' : `没有 ${status} 状态的工作线程。`);
+      return lines.join('\n');
+    }
+
+    const runtimeLabels: Record<string, string> = {
+      running: '运行中', queued: '排队中', idle: '空闲可继续', offline: '未运行可继续', unavailable: '不可用',
+    };
+    const workLabels: Record<string, string> = {
+      active: '进行中', completed: '已完成', history: '历史', attention: '需关注',
+    };
+    for (const thread of threads) {
+      const summary = thread.taskSummary || {};
+      const taskText = summary.total > 0
+        ? `Task ${summary.completed || 0}/${summary.total}`
+        : 'Task 尚未建立';
+      const contextText = thread.contextUsage
+        ? `上下文 ${thread.contextUsage.percent || 0}%`
+        : '上下文未知';
+      const latest = String(thread.latestMessage?.text || '').replace(/\s+/g, ' ').trim();
+      lines.push(
+        '',
+        `[${workLabels[thread.workStatus] || thread.workStatus} · ${runtimeLabels[thread.runtimeStatus] || thread.runtimeStatus}] ${thread.identityName} · ${this.threadTitle(thread)}`,
+        `  threadRef: ${thread.threadRef}`,
+        `  head: ${thread.lineageHeadId}`,
+        `  ${taskText}；${contextText}；${thread.canDispatch ? '可派发' : '不可派发'}`,
+      );
+      if (latest) lines.push(`  最近：${latest.length > 220 ? `${latest.slice(0, 220)}…` : latest}`);
+    }
+    return lines.join('\n');
+  }
+
+  private async dispatchToAgent(args: any): Promise<any> {
+    const { text, identityRef, title, targetSessionId, forceNew, openDirectory, done } = args || {};
+    if (!text || !identityRef || !title?.trim()) {
+      return { error: 'text, identityRef, title 都是必填项' };
+    }
+    if (identityRef === 'work-group:admin') {
+      return { error: '不能向管理员自身派发任务' };
+    }
+    const mentionObj: any = { identityRef, title: title.trim() };
+    if (targetSessionId) mentionObj.targetSessionId = targetSessionId;
+    if (forceNew) mentionObj.forceNew = true;
+    if (openDirectory?.trim()) mentionObj.openDirectory = openDirectory.trim();
+
+    try {
+      const msg = await this.apiPost(
+        `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages`,
+        { text, from: 'work-group:admin', mentions: [mentionObj], kind: 'dispatch' },
+      );
+      if (done) this.stopRequested = true;
+      const resolved = msg.resolvedSession;
+      if (msg.pendingApproval) {
+        const sessionInfo = resolved
+          ? `\n预解析目标: ${resolved.sessionTitle}（${resolved.sessionId}）`
+          : '';
+        return {
+          success: true,
+          text: `派发请求已创建，等待群内用户审批。\n目标: ${identityRef}${sessionInfo}\n消息 ID: ${msg.id}`,
+          pendingApproval: true,
+          messageId: msg.id,
+          identityRef,
+          ...(resolved ? { sessionId: resolved.sessionId, sessionTitle: resolved.sessionTitle } : {}),
+        };
+      }
+
+      const situation = await this.fetchThreadSituation().catch(() => null);
+      if (resolved) {
+        const action = resolved.isNew
+          ? `创建了新工作「${resolved.sessionTitle}」`
+          : `指令已进入「${resolved.sessionTitle}」的当前上下文`;
+        return {
+          success: true,
+          text: `已派发到 ${identityRef}，${action}。\nsessionId: ${resolved.sessionId}\n消息 ID: ${msg.id}${situation ? `\n\n派发后的工作现场:\n${this.formatThreadSituation(situation)}` : ''}`,
+          sessionId: resolved.sessionId,
+          sessionTitle: resolved.sessionTitle,
+          isNew: resolved.isNew,
+          threads: situation,
+        };
+      }
+      return {
+        success: true,
+        text: `已派发任务到 ${identityRef}，消息 ID: ${msg.id}${situation ? `\n\n派发后的工作现场:\n${this.formatThreadSituation(situation)}` : ''}`,
+        threads: situation,
+      };
+    } catch (err: any) {
+      return { error: `派发失败: ${err.message || err}` };
+    }
+  }
+
   getTools(): Tool[] {
     return [
       {
         name: 'gc_overview',
-        description: '查看当前群聊的概览和会话态势，包括每个 Agent 的会话 ID、运行状态、模型、上下文用量和压缩阈值。',
+        description: '查看当前群聊概览和工作现场。包含群基本信息、最近活动，以及按工作线程组织的当前态势。',
         parameters: {
           type: 'object',
           properties: {},
@@ -194,6 +303,7 @@ export class GroupAdminFeature implements AgentFeature {
         execute: async () => {
           const chat = await this.apiGet(`/protoclaw/group_chats/${encodeURIComponent(this.chatId)}`);
           const awareness = await this.fetchAwareness().catch(() => null);
+          const threadSituation = await this.fetchThreadSituation().catch(() => null);
           const members = (chat.members || [])
             .map((m: any) => {
               const name = m.identityRef === 'user' ? '用户' : m.identityRef;
@@ -216,7 +326,10 @@ export class GroupAdminFeature implements AgentFeature {
             lines.push('');
             lines.push(this.formatAwarenessText(awareness));
           }
-          return { success: true, text: lines.join('\n') };
+          if (threadSituation) {
+            lines.push('', this.formatThreadSituation(threadSituation));
+          }
+          return { success: true, text: lines.join('\n'), threads: threadSituation };
         },
       },
       {
@@ -270,8 +383,153 @@ export class GroupAdminFeature implements AgentFeature {
         },
       },
       {
+        name: 'gc_thread_overview',
+        description: '查看当前群聊的工作现场。按工作线程列出进行中、已完成和历史工作，并包含运行状态、Task 进度、上下文用量和最近消息。做进度判断或派发前优先调用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: ['all', 'active', 'completed', 'history', 'attention'], description: '可选筛选；默认 all。' },
+          },
+        },
+        execute: async (args: any) => {
+          try {
+            const data = await this.fetchThreadSituation();
+            const status = args?.status || 'all';
+            return { success: true, text: this.formatThreadSituation(data, status), ...data };
+          } catch (err: any) {
+            return { error: `获取工作现场失败: ${err.message || err}` };
+          }
+        },
+      },
+      {
+        name: 'gc_thread_detail',
+        description: '查看一条工作线程的详细情况，包括当前 head、全部 Task、最近消息和会话脉络。只有需要判断下一步、验收或追溯分叉时使用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            threadRef: { type: 'string', description: '来自 gc_thread_overview 的稳定工作线程引用。' },
+          },
+          required: ['threadRef'],
+        },
+        execute: async (args: any) => {
+          const threadRef = args?.threadRef;
+          if (!threadRef) return { error: 'threadRef is required' };
+          try {
+            const data = await this.apiGet(
+              `/protoclaw/gc/thread_detail?chatId=${encodeURIComponent(this.chatId)}&threadRef=${encodeURIComponent(threadRef)}`
+            );
+            const thread = data.thread;
+            const lines = [this.formatThreadSituation({
+              totals: { [thread.workStatus]: 1, running: thread.runtimeStatus === 'running' ? 1 : 0 },
+              threads: [thread],
+            })];
+            const tasks = Array.isArray(thread.tasks) ? thread.tasks : [];
+            lines.push('', `Task 详情（${thread.taskSummary?.completed || 0}/${thread.taskSummary?.total || 0}）：`);
+            if (tasks.length === 0) lines.push('  尚未建立 Task。');
+            for (const task of tasks) {
+              const icon = task.status === 'completed' ? '✓' : task.status === 'in_progress' ? '◐' : '○';
+              lines.push(`  ${icon} ${task.activeForm || task.subject || '(未命名)'}`);
+            }
+            if ((thread.lineage || []).length > 1) {
+              lines.push('', '会话脉络：');
+              for (const node of thread.lineage) {
+                const reason = node.reason ? ` ← ${node.reason}` : '';
+                lines.push(`  ${node.sessionTitle || '未命名'} #${String(node.sessionId || '').slice(-8)}${reason}`);
+              }
+            }
+            return { success: true, text: lines.join('\n'), thread };
+          } catch (err: any) {
+            return { error: `获取工作线程详情失败: ${err.message || err}` };
+          }
+        },
+      },
+      {
+        name: 'gc_dispatch_thread',
+        description: '向一条已有工作线程的当前 head 派发增量指令。不要传 sessionId；系统会根据 threadRef 定位最新 head。运行中或排队中的线程不会重复派发。',
+        parameters: {
+          type: 'object',
+          properties: {
+            threadRef: { type: 'string', description: '目标工作线程引用，来自 gc_thread_overview。' },
+            text: { type: 'string', description: '本次增量要求；目标 Agent 能看到该线程已有上下文。' },
+            done: { type: 'boolean', description: '设为 true 表示派发后结束本轮管理员对话。' },
+          },
+          required: ['threadRef', 'text', 'done'],
+        },
+        execute: async (args: any) => {
+          const { threadRef, text, done } = args || {};
+          if (!threadRef || !text) return { error: 'threadRef 和 text 都是必填项' };
+          try {
+            const situation = await this.fetchThreadSituation();
+            const thread = (situation.threads || []).find((item: any) => item.threadRef === threadRef);
+            if (!thread) return { error: '工作线程不存在，请重新调用 gc_thread_overview' };
+            if (!thread.canDispatch) return { error: `工作线程「${this.threadTitle(thread)}」当前不可派发` };
+            if (thread.runtimeStatus === 'running' || thread.runtimeStatus === 'queued') {
+              return { error: `工作线程「${this.threadTitle(thread)}」正在${thread.runtimeStatus === 'running' ? '运行' : '排队'}，不要重复派发；如需停止请使用 gc_interrupt_thread` };
+            }
+            const result = await this.dispatchToAgent({
+              text,
+              identityRef: thread.identityRef,
+              title: this.threadTitle(thread),
+              targetSessionId: thread.lineageHeadId,
+              done,
+            });
+            return { ...result, threadRef };
+          } catch (err: any) {
+            return { error: `线程派发失败: ${err.message || err}` };
+          }
+        },
+      },
+      {
+        name: 'gc_start_thread',
+        description: '为某个 Agent 开始一项全新的工作线程。只有用户明确提出新工作、新方向或重新开始时使用；已有工作的续作请使用 gc_dispatch_thread。',
+        parameters: {
+          type: 'object',
+          properties: {
+            identityRef: { type: 'string', description: '目标身份，如 programming-helper:main。' },
+            title: { type: 'string', description: '新工作的简短标题，20 字以内。' },
+            text: { type: 'string', description: '完整、独立的新工作要求。' },
+            openDirectory: { type: 'string', description: '可选的新会话项目目录。' },
+            done: { type: 'boolean', description: '设为 true 表示创建并派发后结束本轮管理员对话。' },
+          },
+          required: ['identityRef', 'title', 'text', 'done'],
+        },
+        execute: async (args: any) => this.dispatchToAgent({ ...args, forceNew: true }),
+      },
+      {
+        name: 'gc_interrupt_thread',
+        description: '中断一条正在运行的工作线程。系统根据 threadRef 精确定位当前 head，不影响同一 Agent 的其他线程。',
+        parameters: {
+          type: 'object',
+          properties: {
+            threadRef: { type: 'string', description: '要中断的工作线程引用。' },
+          },
+          required: ['threadRef'],
+        },
+        execute: async (args: any) => {
+          const threadRef = args?.threadRef;
+          if (!threadRef) return { error: 'threadRef is required' };
+          try {
+            const situation = await this.fetchThreadSituation();
+            const thread = (situation.threads || []).find((item: any) => item.threadRef === threadRef);
+            if (!thread) return { error: '工作线程不存在，请重新调用 gc_thread_overview' };
+            if (thread.runtimeStatus !== 'running' && thread.runtimeStatus !== 'queued') {
+              return { error: `工作线程「${this.threadTitle(thread)}」当前没有在运行` };
+            }
+            await this.apiPost('/protoclaw/gc/control', {
+              chatId: this.chatId,
+              identityRef: thread.identityRef,
+              sessionId: thread.lineageHeadId,
+              action: 'interrupt',
+            });
+            return { success: true, text: `已中断工作线程「${this.threadTitle(thread)}」`, threadRef, sessionId: thread.lineageHeadId };
+          } catch (err: any) {
+            return { error: `中断失败: ${err.message || err}` };
+          }
+        },
+      },
+      {
         name: 'gc_dispatch',
-        description: '向群内某个 Agent 派发任务。默认复用该 Agent 在群内的最近会话。在规划模式下，派发请求需要群内用户审批后才会执行。',
+        description: '兼容性的会话级派发工具。已有工作优先使用 gc_dispatch_thread，新工作优先使用 gc_start_thread；只有明确知道目标 session 时才直接使用本工具。',
         parameters: {
           type: 'object',
           properties: {
@@ -285,82 +543,7 @@ export class GroupAdminFeature implements AgentFeature {
           },
           required: ['text', 'identityRef', 'title', 'done'],
         },
-        execute: async (args: any) => {
-          const { text, identityRef, title, targetSessionId, forceNew, openDirectory, done } = args || {};
-          if (!text || !identityRef || !title?.trim()) {
-            return { error: 'text, identityRef, title 都是必填项' };
-          }
-          // 禁止向自己派发（防止反馈循环）
-          if (identityRef === 'work-group:admin') {
-            return { error: '不能向管理员自身派发任务' };
-          }
-          const mentionObj: any = { identityRef };
-          if (targetSessionId) mentionObj.targetSessionId = targetSessionId;
-          if (forceNew) mentionObj.forceNew = true;
-          if (title?.trim()) mentionObj.title = title.trim();
-          if (openDirectory?.trim()) mentionObj.openDirectory = openDirectory.trim();
-
-          const body: any = {
-            text,
-            from: 'work-group:admin',
-            mentions: [mentionObj],
-            kind: 'dispatch',
-          };
-
-          try {
-            const msg = await this.apiPost(
-              `/protoclaw/group_chats/${encodeURIComponent(this.chatId)}/messages`,
-              body
-            );
-
-            if (done) this.stopRequested = true;
-
-            // 规划模式：派发需要人工审批
-            if (msg.pendingApproval) {
-              const resolved = msg.resolvedSession;
-              const sessionInfo = resolved
-                ? `\n预解析会话: ${resolved.sessionTitle}（${resolved.sessionId}）`
-                : '';
-              return {
-                success: true,
-                text: `派发请求已创建，等待群内用户审批。\n目标: ${identityRef}${sessionInfo}\n消息 ID: ${msg.id}\n\n用户可以在群聊中批准或拒绝此派发。批准后任务将自动执行。`,
-                pendingApproval: true,
-                messageId: msg.id,
-                identityRef,
-                ...(resolved ? { sessionId: resolved.sessionId, sessionTitle: resolved.sessionTitle } : {}),
-              };
-            }
-
-            // 从响应中提取会话信息
-            const resolved = msg.resolvedSession;
-            if (resolved) {
-              const action = resolved.isNew
-                ? `创建了新会话「${resolved.sessionTitle}」`
-                : `复用已有会话「${resolved.sessionTitle}」`;
-              const awareness = await this.fetchAwareness().catch(() => null);
-              const awarenessText = awareness
-                ? '\n\n派发后的最新态势:\n' + this.formatAwarenessText(awareness)
-                : '';
-              return {
-                success: true,
-                text: `已派发任务到 ${identityRef}，${action}。\nsessionId: ${resolved.sessionId}\n消息 ID: ${msg.id}${awarenessText}`,
-                sessionId: resolved.sessionId,
-                sessionTitle: resolved.sessionTitle,
-                isNew: resolved.isNew,
-                awareness,
-              };
-            }
-
-            const awareness = await this.fetchAwareness().catch(() => null);
-            return {
-              success: true,
-              text: `已派发任务到 ${identityRef}，消息 ID: ${msg.id}` + (awareness ? `\n\n派发后的最新态势:\n${this.formatAwarenessText(awareness)}` : ''),
-              awareness,
-            };
-          } catch (err: any) {
-            return { error: `派发失败: ${err.message || err}` };
-          }
-        },
+        execute: async (args: any) => this.dispatchToAgent(args),
       },
       {
         name: 'gc_reply',
@@ -392,7 +575,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_sessions',
-        description: '查看群内某个 Agent 的会话列表（仅群内会话池）。用于决定 gc_dispatch 使用哪个会话。',
+        description: '底层诊断工具：查看某个 Agent 的原始会话列表。日常判断和派发应优先使用 gc_thread_overview / gc_dispatch_thread。',
         parameters: {
           type: 'object',
           properties: {
@@ -551,40 +734,15 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_session_threads',
-        description: '查看当前群聊的所有工作线程。工作线程是由血缘关系串联的会话链——每次精简、摘要或分支都会在链上产生新会话。返回每个线程的活跃会话、血缘深度和推断的阶段（探索/编码）。',
+        description: 'gc_thread_overview 的兼容别名。返回当前群聊按工作线程组织的工作现场。',
         parameters: {
           type: 'object',
           properties: {},
         },
         execute: async () => {
           try {
-            const data = await this.apiGet(
-              `/protoclaw/gc/session_threads?chatId=${encodeURIComponent(this.chatId)}`
-            );
-            const threads = data.threads || [];
-            if (threads.length === 0) {
-              return { success: true, text: '当前群聊暂无工作线程' };
-            }
-            const phaseLabels: Record<string, string> = {
-              exploration: '探索',
-              coding: '编码',
-              unknown: '未知',
-            };
-            const lines = threads.map((t: any) => {
-              const phase = phaseLabels[t.phase] || t.phase;
-              const chain = (t.lineage || [])
-                .map((link: any) => {
-                  const title = link.sessionTitle || '未命名';
-                  const shortId = String(link.sessionId || '').slice(-8);
-                  const reasonTag = link.reason ? ` (${link.reason})` : '';
-                  return `    ${title} #${shortId}${reasonTag}`;
-                })
-                .join('\n');
-              const activeMark = t.activeHeadTitle || '未命名';
-              const activeShort = String(t.activeHeadId || '').slice(-8);
-              return `${t.identityName} — 工作线程 (${phase})\n  活跃会话: ${activeMark} #${activeShort}\n  血缘深度: ${t.lineageDepth}\n  链路:\n${chain}`;
-            });
-            return { success: true, text: lines.join('\n\n'), threads };
+            const data = await this.fetchThreadSituation();
+            return { success: true, text: this.formatThreadSituation(data), ...data };
           } catch (err: any) {
             return { error: `获取工作线程失败: ${err.message || err}` };
           }
@@ -612,9 +770,6 @@ export class GroupAdminFeature implements AgentFeature {
             );
             const tasks = data.tasks || [];
             const summary = data.summary || {};
-            if (tasks.length === 0) {
-              return { success: true, text: `会话 ${sessionId} 暂无任务记录` };
-            }
             const statusIcons: Record<string, string> = {
               completed: '✓',
               in_progress: '◐',
@@ -625,8 +780,21 @@ export class GroupAdminFeature implements AgentFeature {
               const icon = statusIcons[t.status] || '?';
               return `  ${icon} ${t.subject || '(未命名)'}`;
             });
-            const header = `会话 ${sessionId} 的任务 (${summary.completed || 0}/${summary.total || 0} 完成)：`;
-            return { success: true, text: header + '\n' + lines.join('\n'), tasks, summary };
+            const header = tasks.length > 0
+              ? `会话 ${sessionId} 的任务 (${summary.completed || 0}/${summary.total || 0} 完成)：`
+              : `会话 ${sessionId} 尚未建立 Task。`;
+            const context = data.contextUsage
+              ? `上下文: ${data.contextUsage.percent || 0}% (${this.formatNumber(data.contextUsage.usedTokens || 0)}/${this.formatNumber(data.contextUsage.contextLength || 0)})`
+              : '上下文: 未知';
+            const latest = String(data.latestMessage?.text || '').replace(/\s+/g, ' ').trim();
+            return {
+              success: true,
+              text: [header, ...lines, context, ...(latest ? [`最近消息: ${latest}`] : [])].join('\n'),
+              tasks,
+              summary,
+              contextUsage: data.contextUsage || null,
+              latestMessage: data.latestMessage || null,
+            };
           } catch (err: any) {
             return { error: `获取任务列表失败: ${err.message || err}` };
           }

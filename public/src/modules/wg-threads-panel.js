@@ -25,7 +25,7 @@ const _threadsState = {
 };
 
 function _threadKey(thread) {
-  return `${thread.identityRef}:${thread.lineageHeadId || thread.activeHeadId}`;
+  return thread.threadRef || `${thread.identityRef}:${thread.lineageHeadId || thread.activeHeadId}`;
 }
 
 function _threadTitle(thread) {
@@ -38,15 +38,15 @@ function _headId(thread) {
 
 function _runtimeStatus(thread) {
   if (thread.lifecycle === 'archived' || thread.lifecycle === 'missing') return null;
-  return WgState._runtimeStatusCache[_headId(thread)]?.status || 'offline';
+  return WgState._runtimeStatusCache[_headId(thread)]?.status || thread.runtimeStatus || 'offline';
 }
 
 function _taskSummary(thread) {
-  return _threadsState.taskCache[_headId(thread)]?.summary || null;
+  return _threadsState.taskCache[_headId(thread)]?.summary || thread.taskSummary || null;
 }
 
 function _contextUsage(thread) {
-  return _threadsState.taskCache[_headId(thread)]?.contextUsage || null;
+  return _threadsState.taskCache[_headId(thread)]?.contextUsage || thread.contextUsage || null;
 }
 
 function _derivedState(thread) {
@@ -292,7 +292,7 @@ function _messagePreviewText(value) {
 }
 
 function _renderLatestMessage(thread) {
-  const latest = _threadsState.taskCache[_headId(thread)]?.latestMessage;
+  const latest = _threadsState.taskCache[_headId(thread)]?.latestMessage || thread.latestMessage;
   if (!latest?.text) return '';
   const preview = _messagePreviewText(latest.text);
   if (!preview) return '';

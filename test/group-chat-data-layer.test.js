@@ -22,6 +22,7 @@ import {
   aggregateSessionPool,
   buildSessionContextUsage,
   buildSessionLatestMessage,
+  deriveThreadWorkStatus,
   groupByLineage,
   createGroupChatDataLayer,
   normalizeGroupChatMembers,
@@ -707,7 +708,30 @@ describe('groupByLineage', () => {
     assert.equal(threads[0].lineageHeadId, 'child-b');
     assert.equal(threads[0].lifecycle, 'current');
     assert.equal(threads[1].lifecycle, 'available');
-    assert.equal(threads[0].threadTitle, '重构认证模块');
+    const originalThread = threads.find((thread) => thread.lineageHeadId === 'child-a');
+    const revivedThread = threads.find((thread) => thread.lineageHeadId === 'child-b');
+    assert.equal(originalThread.threadRef, 'programming-helper:main::root');
+    assert.equal(originalThread.threadTitle, '重构认证模块');
+    assert.equal(revivedThread.threadRef, 'programming-helper:main::child-b');
+    assert.equal(revivedThread.threadTitle, '验证兼容性');
+  });
+
+  it('keeps the source thread and creates a stable new thread for branch', async () => {
+    const threads = await groupByLineage(
+      [{ identityRef: 'programming-helper:main', sessionId: 'root', lastActivity: 100 }],
+      [{ from: 'root', to: 'child-a', reason: 'branch', timestamp: 150, identityRef: 'programming-helper:main' }],
+      identities,
+      readIndex,
+      { activeSessions: { 'programming-helper:main': 'child-a' }, messages: [] }
+    );
+
+    assert.equal(threads.length, 2);
+    const source = threads.find((thread) => thread.lineageHeadId === 'root');
+    const branch = threads.find((thread) => thread.lineageHeadId === 'child-a');
+    assert.equal(source.threadRef, 'programming-helper:main::root');
+    assert.equal(branch.threadRef, 'programming-helper:main::child-a');
+    assert.equal(branch.threadTitle, '实现登录流程');
+    assert.deepEqual(branch.lineage.map((node) => node.sessionId), ['root', 'child-a']);
   });
 
   it('enriches transitions with event metadata', async () => {
@@ -733,6 +757,33 @@ describe('groupByLineage', () => {
 
     assert.equal(threads[0].lineage[1].transition.trimCutRounds, 4);
     assert.equal(threads[0].lineage[1].transition.archived, true);
+  });
+});
+
+describe('deriveThreadWorkStatus', () => {
+  it('treats no Task as active rather than completed', () => {
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'available' }, { total: 0, completed: 0 }, 'idle'), 'active');
+  });
+
+  it('keeps running threads active even when every Task is complete', () => {
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'current' }, { total: 2, completed: 2 }, 'running'), 'active');
+  });
+
+  it('keeps a newly dispatched thread active until routing completes', () => {
+    assert.equal(deriveThreadWorkStatus(
+      { lifecycle: 'current', latestRoutingStatus: 'delivered' },
+      { total: 2, completed: 2 },
+      'offline',
+    ), 'active');
+  });
+
+  it('marks idle threads completed only with explicit completed Tasks', () => {
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'current' }, { total: 2, completed: 2 }, 'idle'), 'completed');
+  });
+
+  it('projects archived and missing heads as history', () => {
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'archived' }, { total: 1, completed: 0 }, 'offline'), 'history');
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'missing' }, { total: 1, completed: 0 }, 'offline'), 'history');
   });
 });
 

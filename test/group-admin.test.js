@@ -206,6 +206,11 @@ describe('GroupAdminFeature', () => {
       const names = tools.map(t => t.name);
       assert.ok(names.includes('gc_overview'));
       assert.ok(names.includes('gc_messages'));
+      assert.ok(names.includes('gc_thread_overview'));
+      assert.ok(names.includes('gc_thread_detail'));
+      assert.ok(names.includes('gc_dispatch_thread'));
+      assert.ok(names.includes('gc_start_thread'));
+      assert.ok(names.includes('gc_interrupt_thread'));
       assert.ok(names.includes('gc_dispatch'));
       assert.ok(names.includes('gc_reply'));
       assert.ok(names.includes('gc_sessions'));
@@ -255,6 +260,15 @@ describe('GroupAdminFeature', () => {
       const result = await tool.execute({});
       assert.ok(result.error);
       assert.ok(result.error.includes('identityRef'));
+    });
+
+    it('thread tools validate threadRef', async () => {
+      const detail = tools.find(t => t.name === 'gc_thread_detail');
+      const dispatch = tools.find(t => t.name === 'gc_dispatch_thread');
+      const interrupt = tools.find(t => t.name === 'gc_interrupt_thread');
+      assert.ok((await detail.execute({})).error.includes('threadRef'));
+      assert.ok((await dispatch.execute({ text: '继续' })).error.includes('threadRef'));
+      assert.ok((await interrupt.execute({})).error.includes('threadRef'));
     });
   });
 
@@ -352,6 +366,9 @@ describe('GroupAdminFeature', () => {
       const tool = feature.getTools().find(t => t.name === 'gc_dispatch');
 
       const restore = mockFetch((url, opts) => {
+        if (url.includes('/session_threads')) {
+          return Promise.resolve({ ok: true, json: async () => ({ totals: {}, threads: [] }) });
+        }
         const body = JSON.parse(opts.body);
         assert.equal(body.kind, 'dispatch');
         assert.equal(body.from, 'work-group:admin');
@@ -406,6 +423,115 @@ describe('GroupAdminFeature', () => {
         });
         assert.equal(result.pendingApproval, true);
         assert.ok(result.text.includes('审批'));
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  describe('thread-first tools', () => {
+    it('formats the work scene with Task, runtime and latest message', async () => {
+      const feature = createFeature();
+      const tool = feature.getTools().find(t => t.name === 'gc_thread_overview');
+      const restore = mockFetch(() => Promise.resolve({
+        ok: true,
+        json: async () => ({
+          totals: { running: 1, active: 1, completed: 0, history: 0 },
+          threads: [{
+            threadRef: 'programming-helper:main::root',
+            identityName: '编程小助手',
+            threadTitle: '部署预览',
+            lineageHeadId: 'head-1',
+            workStatus: 'active',
+            runtimeStatus: 'running',
+            canDispatch: true,
+            taskSummary: { total: 4, completed: 1 },
+            contextUsage: { percent: 12 },
+            latestMessage: { text: '正在检查部署区域常量。' },
+          }],
+        }),
+      }));
+      try {
+        const result = await tool.execute({});
+        assert.equal(result.success, true);
+        assert.ok(result.text.includes('工作现场'));
+        assert.ok(result.text.includes('部署预览'));
+        assert.ok(result.text.includes('Task 1/4'));
+        assert.ok(result.text.includes('正在检查部署区域常量'));
+      } finally {
+        restore();
+      }
+    });
+
+    it('dispatches an increment to the current thread head', async () => {
+      const feature = createFeature();
+      const tool = feature.getTools().find(t => t.name === 'gc_dispatch_thread');
+      const threadSituation = {
+        totals: { active: 1 },
+        threads: [{
+          threadRef: 'programming-helper:main::root',
+          identityRef: 'programming-helper:main',
+          identityName: '编程小助手',
+          threadTitle: '部署预览',
+          lineageHeadId: 'head-2',
+          workStatus: 'active',
+          runtimeStatus: 'idle',
+          canDispatch: true,
+          taskSummary: { total: 4, completed: 1 },
+        }],
+      };
+      const restore = mockFetch((url, opts) => {
+        if (url.includes('/session_threads')) {
+          return Promise.resolve({ ok: true, json: async () => threadSituation });
+        }
+        if (url.includes('/messages')) {
+          const body = JSON.parse(opts.body);
+          assert.equal(body.mentions[0].targetSessionId, 'head-2');
+          assert.equal(body.mentions[0].title, '部署预览');
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              id: 'msg-thread-dispatch',
+              resolvedSession: { sessionId: 'head-2', sessionTitle: '部署预览', isNew: false },
+            }),
+          });
+        }
+        throw new Error(`unexpected url: ${url}`);
+      });
+      try {
+        const result = await tool.execute({
+          threadRef: 'programming-helper:main::root',
+          text: '继续完善部署预览',
+          done: true,
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.sessionId, 'head-2');
+        assert.equal(result.threadRef, 'programming-helper:main::root');
+      } finally {
+        restore();
+      }
+    });
+
+    it('refuses duplicate dispatch while a thread is running', async () => {
+      const feature = createFeature();
+      const tool = feature.getTools().find(t => t.name === 'gc_dispatch_thread');
+      const restore = mockFetch(() => Promise.resolve({
+        ok: true,
+        json: async () => ({
+          totals: { running: 1, active: 1 },
+          threads: [{
+            threadRef: 'programming-helper:main::root',
+            identityRef: 'programming-helper:main',
+            threadTitle: '部署预览',
+            lineageHeadId: 'head-2',
+            runtimeStatus: 'running',
+            canDispatch: true,
+          }],
+        }),
+      }));
+      try {
+        const result = await tool.execute({ threadRef: 'programming-helper:main::root', text: '重复任务', done: true });
+        assert.ok(result.error.includes('不要重复派发'));
       } finally {
         restore();
       }
