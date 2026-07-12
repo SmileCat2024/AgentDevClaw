@@ -25,6 +25,7 @@ import {
 } from './assembly-helpers.js';
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
+import { getGroupChatsForSidebar } from './group-chat.js';
 import { sendIPCtoSession } from '../shared/ipc.js';
 import { addOpenSession, removeOpenSession } from '../shared/open-sessions-tracker.js';
 
@@ -54,8 +55,14 @@ export function createAgentLifecycleModule(ctx) {
         .map((runtime) => [String(runtime.viewerAgentId), runtime])
     );
 
+    // Pre-fetch group chat data for work-group sidebar grouping.
+    // Only reads files when work-group agent is present; skipped otherwise.
+    const hasWorkGroup = prebuiltAgents.some((agent) => sanitizeSessionFragment(agent.id) === 'work-group');
+    const gcChats = hasWorkGroup ? await getGroupChatsForSidebar() : [];
+
     const connectedAgents = await Promise.all(prebuiltAgents.map(async (agent) => {
       const { workspaceSessions, sessionMeta } = await readActiveWorkspaceSessionMeta(agent);
+      const isWorkGroup = sanitizeSessionFragment(agent.id) === 'work-group';
       return {
         id: agent.id,
         name: agent.name,
@@ -67,7 +74,9 @@ export function createAgentLifecycleModule(ctx) {
         workspace: agent.workspace || null,
         workspace_sessions: workspaceSessions,
         workspace_data: {},
-        workspace_state: { forms: {}, openDirectory: '', updatedAt: null },
+        workspace_state: isWorkGroup
+          ? { forms: {}, openDirectory: '', updatedAt: null, gcChats }
+          : { forms: {}, openDirectory: '', updatedAt: null },
         active_workspace_session_id: sessionMeta.active_workspace_session_id,
         active_workspace_session_form_id: sessionMeta.active_workspace_session_form_id,
         active_workspace_session_title: sessionMeta.active_workspace_session_title,

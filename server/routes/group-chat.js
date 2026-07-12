@@ -525,6 +525,40 @@ export function createGroupChatDataLayer(rootDir, hooks = {}) {
   };
 }
 
+/**
+ * 读取所有群聊，返回侧栏分组所需的精简数据。
+ *
+ * 每个群聊提取 admin session ID（chat.sessions['work-group:admin']），
+ * 用于前端建立 sessionId → chatId/chatName 的反向映射，将 work-group
+ * 的子运行时按群聊分组显示。
+ *
+ * 独立于 setupGroupChatRoutes 闭包，可在模块级直接 import。
+ *
+ * @returns {Promise<Array<{id: string, name: string, adminSessionId: string|null}>>}
+ */
+export async function getGroupChatsForSidebar() {
+  try {
+    const entries = await fs.readdir(GROUP_CHATS_ROOT);
+    const result = [];
+    for (const entry of entries) {
+      if (!entry.endsWith('.json') || entry.endsWith('.annotations.json')) continue;
+      try {
+        const raw = await fs.readFile(path.join(GROUP_CHATS_ROOT, entry), 'utf8');
+        const chat = JSON.parse(raw);
+        if (chat.archived) continue;
+        result.push({
+          id: chat.id,
+          name: chat.name || chat.id,
+          adminSessionId: chat.sessions?.['work-group:admin'] || null,
+        });
+      } catch {}
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
 export function setupGroupChatRoutes(app, express, ctx) {
   const {
     collectIdentities,
