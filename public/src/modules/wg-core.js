@@ -2069,13 +2069,16 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
 
   async function navigateToSession(target) {
     const [workspaceId, sessionId] = target.split(':');
-    if (!workspaceId || !window.handlePrebuiltAgentClick) return;
+    if (!workspaceId) return;
     try {
-      // Step 1: navigate to the target workspace
-      await window.handlePrebuiltAgentClick(workspaceId);
-      // Step 2: activate the specific session
-      if (sessionId && window.runWorkspaceAction) {
-        await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
+      if (window.navigateToWorkspaceSession) {
+        await window.navigateToWorkspaceSession(workspaceId, sessionId || '');
+      } else if (window.handlePrebuiltAgentClick) {
+        // Fallback for older builds
+        await window.handlePrebuiltAgentClick(workspaceId);
+        if (sessionId && window.runWorkspaceAction) {
+          await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
+        }
       }
     } catch (err) {
       console.error('[WorkGroup] navigateToSession failed:', err);
@@ -2083,15 +2086,21 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
   }
 
   async function navigateToSessionRecord(workspaceId, sessionId) {
-    if (!workspaceId || !window.handlePrebuiltAgentClick) return;
+    if (!workspaceId) return;
     try {
-      await window.handlePrebuiltAgentClick(workspaceId);
-      if (window.runWorkspaceAction) {
-        await window.runWorkspaceAction(JSON.stringify({
-          type: 'view_session_record',
-          agentId: workspaceId,
-          sessionId,
-        }));
+      if (window.navigateToWorkspaceSession) {
+        await window.navigateToWorkspaceSession(workspaceId, '', {
+          actionOverride: sessionId ? { type: 'view_session_record', agentId: workspaceId, sessionId } : null,
+        });
+      } else if (window.handlePrebuiltAgentClick) {
+        await window.handlePrebuiltAgentClick(workspaceId);
+        if (window.runWorkspaceAction) {
+          await window.runWorkspaceAction(JSON.stringify({
+            type: 'view_session_record',
+            agentId: workspaceId,
+            sessionId,
+          }));
+        }
       }
     } catch (err) {
       console.error('[WorkGroup] navigateToSessionRecord failed:', err);

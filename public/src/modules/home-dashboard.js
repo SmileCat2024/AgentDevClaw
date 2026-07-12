@@ -180,13 +180,19 @@ function hdNavigate(agentId) {
 }
 
 function hdOpenSession(sessionId) {
-  hdNavigate('programming-helper').then(function () {
-    if (typeof window.runWorkspaceAction === 'function') {
-      window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId: sessionId }));
-    }
-  }).catch(function (err) {
-    console.error('[HomeDashboard] open session error:', err);
-  });
+  if (typeof window.navigateToWorkspaceSession === 'function') {
+    window.navigateToWorkspaceSession('programming-helper', sessionId).catch(function (err) {
+      console.error('[HomeDashboard] open session error:', err);
+    });
+  } else if (typeof window.handlePrebuiltAgentClick === 'function') {
+    hdNavigate('programming-helper').then(function () {
+      if (typeof window.runWorkspaceAction === 'function') {
+        window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId: sessionId }));
+      }
+    }).catch(function (err) {
+      console.error('[HomeDashboard] open session error:', err);
+    });
+  }
 }
 
 function hdOpenSettings() {

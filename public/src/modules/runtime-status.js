@@ -108,6 +108,25 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     }
   }
 
+  const isWorkGroup = String(prebuiltAgent?.id || '').trim() === 'work-group';
+
+  // Work-group: build sessionId → {chatId, chatName} map from workspace_state.gcChats.
+  // Each group chat stores its admin's sessionId; we reverse-map so that when
+  // we encounter a child runtime with that sessionId, we can group it under
+  // the correct group chat.
+  const wgSessionToChat = new Map();
+  if (isWorkGroup) {
+    const gcChats = Array.isArray(prebuiltAgent?.workspace_state?.gcChats)
+      ? prebuiltAgent.workspace_state.gcChats
+      : [];
+    for (const chat of gcChats) {
+      const sid = String(chat?.adminSessionId || '').trim();
+      if (sid) {
+        wgSessionToChat.set(sid, { chatId: chat.id, chatName: chat.name || chat.id });
+      }
+    }
+  }
+
   const addEntry = (entry) => {
     if (!entry) return;
     if (!entry?.runtimeId) return;
@@ -117,6 +136,14 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       const dir = entry.sessionId ? (sessionDirMap.get(entry.sessionId) || '') : '';
       entry.projectDir = dir;
       entry.projectName = dir ? getPathLeaf(dir) : '';
+    }
+    // Work-group: group by group chat via sessionId → chat mapping.
+    if (isWorkGroup && !entry.projectName && entry.sessionId) {
+      const chat = wgSessionToChat.get(entry.sessionId);
+      if (chat) {
+        entry.projectName = chat.chatName;
+        entry.projectDir = chat.chatId;
+      }
     }
     entries.push(entry);
   };

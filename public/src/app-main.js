@@ -155,7 +155,7 @@ const _collapsedProjectGroups = new Set();
 // Keyed by the .agent-group element id so state persists across re-renders.
 const _collapsedCategoryGroups = new Set();
 
-function renderSidebarChildItems(entries) {
+function renderSidebarChildItems(entries, ownerAgentId) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
 
   const renderItem = (entry) => {
@@ -226,10 +226,18 @@ function renderSidebarChildItems(entries) {
     const label = group.projectName || (currentLanguage === 'zh' ? '未分组' : 'Ungrouped');
     const projectKey = group.projectDir || group.projectName || label;
     const collapsed = _collapsedProjectGroups.has(projectKey);
+    const enterLabel = currentLanguage === 'zh' ? '进入' : 'Enter';
+    const isWorkGroup = ownerAgentId === 'work-group';
+    // For work-group: enter navigates to the group chat by chatId.
+    // For programming-helper: enter navigates to the workspace surface and
+    // scrolls to / expands the corresponding project card.
+    const enterType = isWorkGroup ? 'wg' : 'ph';
+    const enterTarget = isWorkGroup ? projectKey : (group.projectDir || label);
     return `<div class="agent-runtime-project-group${collapsed ? ' collapsed' : ''}" data-project-key="${escapeHtml(projectKey)}">` +
       `<div class="agent-runtime-project-header" title="${escapeHtml(group.projectDir || label)}">` +
         `<span class="project-collapse-arrow"></span>` +
         `<span class="project-collapse-label">${escapeHtml(label)}</span>` +
+        `<button class="project-enter-btn" data-enter-type="${enterType}" data-enter-target="${escapeHtml(enterTarget)}" title="${escapeHtml(enterLabel)}">${escapeHtml(enterLabel)}</button>` +
       `</div>` +
       `<div class="agent-runtime-project-items">${group.items.map(renderItem).join('')}</div>` +
     `</div>`;
@@ -287,7 +295,7 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
     const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
     const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
     if (prebuilt) {
-      const childrenHtml = renderSidebarChildItems(childEntries);
+      const childrenHtml = renderSidebarChildItems(childEntries, agent.id);
       const entryClass = ['agent-entry', hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ');
       return `
         <div class="${entryClass}">
@@ -413,7 +421,12 @@ async function loadAgents() {
           connected: resolvedConnected,
           ...(prev && loadedAgentDetailIds.has(agent.id) ? {
             workspace_data: prev.workspace_data,
-            workspace_state: prev.workspace_state,
+            workspace_state: {
+              ...prev.workspace_state,
+              // gcChats comes from getConnectedAgents (not agent_detail),
+              // so always use the fresh value to avoid losing group chat mapping.
+              ...(agent.workspace_state?.gcChats ? { gcChats: agent.workspace_state.gcChats } : {}),
+            },
             // Preserve prev sessions (rich data from loadAgentDetail such as
             // contextLength / compressRatio), but merge in any sessions that
             // appeared on the server since the last loadAgentDetail call
@@ -686,6 +699,28 @@ agentList.addEventListener('click', async (event) => {
       } else {
         _collapsedCategoryGroups.add(groupEl.id);
         groupEl.classList.add('collapsed');
+      }
+    }
+    return;
+  }
+
+  // Handle "enter" button click on project group headers.
+  const enterBtn = event.target.closest('.project-enter-btn');
+  if (enterBtn) {
+    const enterType = enterBtn.dataset.enterType;
+    const enterTarget = enterBtn.dataset.enterTarget;
+    if (enterType === 'wg') {
+      await window.handlePrebuiltAgentClick('work-group');
+      if (window.WorkGroupUI && typeof window.WorkGroupUI.selectChat === 'function') {
+        window.WorkGroupUI.selectChat(enterTarget);
+      }
+    } else if (enterType === 'ph') {
+      // Navigate to programming-helper workspace, then switch active project.
+      const projectDir = enterTarget || '';
+      await window.handlePrebuiltAgentClick('programming-helper');
+      if (projectDir && typeof window.phSwitchProject === 'function') {
+        const projectId = 'dir:' + projectDir.replace(/\\/g, '/').toLowerCase();
+        await window.phSwitchProject(projectId);
       }
     }
     return;
@@ -1747,6 +1782,86 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     setPreferredUnitMode(`block:${action.target}`, activeAgent);
   }
   renderCurrentMainView();
+};
+
+/**
+ * Unified cross-workspace session navigation.
+ *
+ * Combines workspace switch + session activation into a single smooth flow,
+ * avoiding the intermediate workspace-surface render that handlePrebuiltAgentClick
+ * + runWorkspaceAction would produce when called serially.
+ *
+ * Used by: group chat "jump to session", home dashboard "open session", etc.
+ *
+ * @param {string} agentId  Target workspace agent ID (e.g. 'programming-helper')
+ * @param {string} sessionId  Session ID to activate (empty = just switch workspace)
+ * @param {object} [options]
+ * @param {object} [options.actionOverride]  Custom action object to pass to
+ *   runWorkspaceAction instead of { type: 'open_session', sessionId }.
+ *   Used by navigateToSessionRecord which needs { type: 'view_session_record', ... }.
+ */
+window.navigateToWorkspaceSession = async (agentId, sessionId, options = {}) => {
+  if (!agentId) return;
+  bumpNavigationGuard();
+  const _navGuard = _navigationGuardEpoch;
+  const actionOverride = options.actionOverride || null;
+
+  // Build the action to execute after workspace switch.
+  const action = actionOverride
+    || (sessionId ? { type: 'open_session', sessionId } : null);
+
+  // Already in the target workspace — delegate directly to runWorkspaceAction.
+  if (currentAgentId === agentId) {
+    if (action) {
+      await window.runWorkspaceAction(JSON.stringify(action));
+    }
+    return;
+  }
+
+  const prebuiltAgent = allAgents.find((agent) => agent.id === agentId && agent.source === 'prebuilt');
+  if (!prebuiltAgent) return;
+
+  // Step 1: synchronously switch the sidebar highlight + show loading placeholder.
+  // This mirrors what handlePrebuiltAgentClick does for workspace host units,
+  // but WITHOUT calling selectWorkspaceSurface (which would render the workspace
+  // home page unnecessarily).
+  if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
+    saveCurrentWorkspaceSurfaceScroll();
+  }
+  if (currentRuntimeAgentId && !readOnlyMode) {
+    saveCurrentRuntimeToCache(currentRuntimeAgentId, getRuntimeContextKey(currentRuntimeAgentId));
+  }
+
+  currentAgentId = agentId;
+  currentRuntimeAgentId = null;
+  readOnlyMode = false;
+  currentWorkspaceArtifactDetail = null;
+  currentWorkspaceDocsetDetail = null;
+  currentProjectDocsetOpen = false;
+  currentProjectRequirementEdit = null;
+  currentWorkspaceTab = 'chat';
+  _lastRenderedChatSig = '';
+  resetRuntimeBackedSurfaceState();
+  renderAgentList();
+
+  // Show a loading placeholder in the main area so the user sees immediate feedback.
+  container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
+
+  // Step 2: load agent detail (sessions list, workspace config, etc.) if not cached.
+  await loadAgentDetail(agentId);
+
+  // Guard: user may have navigated away during loadAgentDetail.
+  if (_navGuard !== _navigationGuardEpoch) return;
+
+  // Step 3: delegate to runWorkspaceAction which handles session activation,
+  // optimistic render, runtime switch, and polling — all in one flow.
+  if (action) {
+    await window.runWorkspaceAction(JSON.stringify(action));
+  } else {
+    // No specific session requested — just render the workspace surface.
+    setPreferredUnitMode('home', prebuiltAgent);
+    renderCurrentMainView();
+  }
 };
 
 window.toggleProjectDocsetOverlay = (force) => {
