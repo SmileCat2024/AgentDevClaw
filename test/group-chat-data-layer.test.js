@@ -20,6 +20,9 @@ import { tmpdir } from 'os';
 import {
   composeDispatchPrompt,
   aggregateSessionPool,
+  buildSessionContextUsage,
+  buildSessionLatestMessage,
+  groupByLineage,
   createGroupChatDataLayer,
   normalizeGroupChatMembers,
 } from '../server/routes/group-chat.js';
@@ -583,6 +586,153 @@ describe('aggregateSessionPool', () => {
     const pool = aggregateSessionPool(chat, mockIdentities);
     assert.equal(pool.length, 1);
     assert.equal(pool[0].identityRef, 'some-workspace:main');
+  });
+});
+
+describe('buildSessionContextUsage', () => {
+  it('prefers last request input tokens and persisted model limits', () => {
+    const usage = buildSessionContextUsage({
+      runtime: { usageStats: {
+        lastRequestUsage: { inputTokens: 146942 },
+        totalUsage: { totalTokens: 900000 },
+      } },
+    }, { contextLength: 1000000, compressRatio: 18, modelName: 'GLM-5.2' });
+    assert.deepEqual(usage, {
+      usedTokens: 146942,
+      contextLength: 1000000,
+      compressRatio: 18,
+      percent: 15,
+      modelName: 'GLM-5.2',
+      source: 'last_request',
+    });
+  });
+
+  it('falls back to cumulative usage and safe defaults', () => {
+    const usage = buildSessionContextUsage({
+      runtime: { usageStats: { totalUsage: { totalTokens: 50000 } } },
+    }, null);
+    assert.equal(usage.usedTokens, 50000);
+    assert.equal(usage.contextLength, 200000);
+    assert.equal(usage.compressRatio, 80);
+    assert.equal(usage.percent, 25);
+    assert.equal(usage.source, 'cumulative');
+  });
+});
+
+describe('buildSessionLatestMessage', () => {
+  it('returns the latest non-empty user or assistant message', () => {
+    const latest = buildSessionLatestMessage({
+      runtime: {
+        context: {
+          messages: [
+            { role: 'user', content: '请修复登录问题', turn: 1 },
+            { role: 'assistant', content: '', turn: 1 },
+            { role: 'tool', content: '{"ok":true}', turn: 1 },
+            { role: 'assistant', content: '修复已经完成，并补充了测试。', turn: 1 },
+          ],
+        },
+      },
+    });
+    assert.deepEqual(latest, {
+      role: 'assistant',
+      text: '修复已经完成，并补充了测试。',
+      turn: 1,
+    });
+  });
+
+  it('extracts text blocks and ignores non-conversation roles', () => {
+    const latest = buildSessionLatestMessage({
+      runtime: {
+        context: {
+          messages: [
+            { role: 'system', content: '系统背景' },
+            { role: 'user', content: [{ type: 'text', text: ' 继续完成剩余任务 ' }, { type: 'image', source: {} }] },
+          ],
+        },
+      },
+    });
+    assert.equal(latest?.role, 'user');
+    assert.equal(latest?.text, '继续完成剩余任务');
+  });
+});
+
+// ── Tests: work thread lineage projection ──
+
+describe('groupByLineage', () => {
+  const identities = [{ identityRef: 'programming-helper:main', displayName: '编程小助手' }];
+  const readIndex = async () => ({
+    sessions: [
+      { id: 'root', title: '重构认证模块', updatedAt: 100 },
+      { id: 'child-a', title: '实现登录流程', updatedAt: 200 },
+      { id: 'child-b', title: '验证兼容性', updatedAt: 300 },
+    ],
+  });
+
+  it('keeps archived continuation nodes that are absent from the flat session pool', async () => {
+    const threads = await groupByLineage(
+      [{ identityRef: 'programming-helper:main', sessionId: 'root', lastActivity: 100 }],
+      [{ from: 'root', to: 'child-a', reason: 'trim', timestamp: 150, identityRef: 'programming-helper:main' }],
+      identities,
+      readIndex,
+      {
+        activeSessions: {},
+        messages: [{
+          timestamp: 250,
+          event: { type: 'session_archived', sessionId: 'child-a', sessionTitle: '实现登录流程' },
+        }],
+      }
+    );
+
+    assert.equal(threads.length, 1);
+    assert.deepEqual(threads[0].lineage.map((node) => node.sessionId), ['root', 'child-a']);
+    assert.equal(threads[0].lifecycle, 'archived');
+    assert.equal(threads[0].isCurrent, false);
+    assert.equal(threads[0].lineage[1].reason, 'trim');
+  });
+
+  it('projects one work thread per leaf when a historical node has multiple continuations', async () => {
+    const threads = await groupByLineage(
+      [{ identityRef: 'programming-helper:main', sessionId: 'root', lastActivity: 100 }],
+      [
+        { from: 'root', to: 'child-a', reason: 'trim', timestamp: 150, identityRef: 'programming-helper:main' },
+        { from: 'root', to: 'child-b', reason: 'trim', timestamp: 250, identityRef: 'programming-helper:main' },
+      ],
+      identities,
+      readIndex,
+      { activeSessions: { 'programming-helper:main': 'child-b' }, messages: [] }
+    );
+
+    assert.equal(threads.length, 2);
+    assert.deepEqual(new Set(threads.map((thread) => thread.lineageHeadId)), new Set(['child-a', 'child-b']));
+    assert.equal(threads[0].lineageHeadId, 'child-b');
+    assert.equal(threads[0].lifecycle, 'current');
+    assert.equal(threads[1].lifecycle, 'available');
+    assert.equal(threads[0].threadTitle, '重构认证模块');
+  });
+
+  it('enriches transitions with event metadata', async () => {
+    const threads = await groupByLineage(
+      [{ identityRef: 'programming-helper:main', sessionId: 'root', lastActivity: 100 }],
+      [{ from: 'root', to: 'child-a', reason: 'trim', timestamp: 150, identityRef: 'programming-helper:main' }],
+      identities,
+      readIndex,
+      {
+        activeSessions: { 'programming-helper:main': 'child-a' },
+        messages: [{
+          timestamp: 160,
+          event: {
+            type: 'session_continued',
+            fromSessionId: 'root',
+            toSessionId: 'child-a',
+            trimCutRounds: 4,
+            archived: true,
+          },
+        }],
+      }
+    );
+
+    assert.equal(threads[0].lineage[1].transition.trimCutRounds, 4);
+    assert.equal(threads[0].lineage[1].transition.archived, true);
   });
 });
 

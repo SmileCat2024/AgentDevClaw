@@ -8469,3 +8469,942 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* ── 工作面板 (Threads Panel) ────────────────────────────────── */
+
+.wg-threads-panel {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.wg-threads-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wg-threads-section-header {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* ── 线程卡片 ── */
+
+.wg-thread-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--wg-radius, 8px);
+  overflow: hidden;
+}
+
+.wg-thread-card-header {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wg-thread-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wg-thread-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 阶段标识 */
+.wg-thread-phase {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.wg-thread-phase.phase-exploration {
+  background: rgba(58, 130, 247, 0.15);
+  color: #5b9bf5;
+  border: 1px solid rgba(58, 130, 247, 0.3);
+}
+
+.wg-thread-phase.phase-coding {
+  background: rgba(255, 159, 28, 0.15);
+  color: #e8a838;
+  border: 1px solid rgba(255, 159, 28, 0.3);
+}
+
+.wg-thread-phase.phase-done {
+  background: rgba(25, 135, 84, 0.15);
+  color: var(--success-color);
+  border: 1px solid rgba(25, 135, 84, 0.3);
+}
+
+.wg-thread-phase.phase-unknown {
+  background: var(--hover-bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+}
+
+/* 操作行 */
+.wg-thread-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wg-thread-dispatch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.wg-thread-dispatch-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.wg-thread-dispatch-btn::before {
+  content: '+';
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.wg-thread-expand-btn {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.wg-thread-expand-btn:hover {
+  color: var(--text-primary);
+  background: var(--hover-bg);
+}
+
+/* ── 时间轴 ── */
+
+.wg-thread-timeline {
+  padding: 6px 10px 10px 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.wg-tl-node {
+  display: flex;
+  flex-direction: column;
+}
+
+.wg-tl-node-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: default;
+}
+
+.wg-tl-node-row[data-wg-threads-nav] {
+  cursor: pointer;
+}
+
+.wg-tl-node-row[data-wg-threads-nav]:hover .wg-tl-session-title {
+  text-decoration: underline;
+}
+
+/* 节点状态圆点 */
+.wg-tl-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+  background: var(--text-muted);
+}
+
+.wg-tl-dot.running {
+  background: var(--success-color);
+  box-shadow: 0 0 0 3px rgba(25, 135, 84, 0.15);
+  animation: wg-dot-pulse 2s ease-in-out infinite;
+}
+
+.wg-tl-dot.idle {
+  background: var(--success-color);
+}
+
+.wg-tl-dot.offline {
+  background: var(--text-muted);
+}
+
+.wg-tl-dot.archived {
+  background: var(--border-color);
+}
+
+@keyframes wg-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(25, 135, 84, 0.15); }
+  50% { box-shadow: 0 0 0 5px rgba(25, 135, 84, 0.08); }
+}
+
+.wg-tl-node-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.wg-tl-node-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wg-tl-session-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wg-tl-active-tag {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--success-color);
+  border: 1px solid rgba(25, 135, 84, 0.4);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.wg-tl-node-status {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+
+/* 血缘转换标记 */
+.wg-tl-transition {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 0 2px 16px;
+  position: relative;
+}
+
+.wg-tl-transition::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-color);
+}
+
+/* ── Task 列表 ── */
+
+.wg-tl-tasks {
+  margin-top: 4px;
+  padding-left: 16px;
+}
+
+.wg-tl-tasks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 0;
+  user-select: none;
+}
+
+.wg-tl-tasks-header:hover {
+  color: var(--text-primary);
+}
+
+.wg-tl-tasks-progress {
+  font-weight: 600;
+}
+
+.wg-tl-tasks-toggle {
+  font-size: 10px;
+}
+
+.wg-tl-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0 2px 0;
+}
+
+.wg-tl-task-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.wg-tl-task-item.completed .wg-tl-task-label {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.wg-tl-task-item.in-progress .wg-tl-task-label {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.wg-tl-task-item.pending .wg-tl-task-label {
+  color: var(--text-secondary);
+}
+
+/* task 状态图标 */
+.wg-tl-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border-color);
+}
+
+.wg-tl-icon.completed {
+  background: var(--success-color);
+  border-color: var(--success-color);
+}
+
+.wg-tl-icon.in-progress {
+  border-color: var(--success-color);
+  border-top-color: transparent;
+  animation: wg-icon-spin 1s linear infinite;
+}
+
+.wg-tl-icon.pending {
+  border-color: var(--text-muted);
+}
+
+@keyframes wg-icon-spin {
+  to { transform: rotate(360deg); }
+}
+
+.wg-tl-task-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 态势栏 badge ── */
+
+.wg-thread-badge {
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--active-bg);
+  color: var(--text-secondary);
+  margin-left: 3px;
+}
+
+/* ── 消息流事件分隔线 ── */
+
+.wg-event-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 16px;
+  opacity: 0.5;
+}
+
+.wg-event-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+.wg-event-divider-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: normal;
+  text-align: center;
+  flex-shrink: 0;
+  max-width: min(72%, 680px);
+  line-height: 1.45;
+}
+
+.wg-event-divider.is-clickable { cursor: pointer; }
+.wg-event-divider.is-clickable:hover { opacity: .82; }
+.wg-event-divider.is-clickable:hover .wg-event-divider-text { color: var(--text-primary); }
+
+/* ── Popover 线程摘要 ── */
+
+.wg-pop-thread-summary {
+  padding: 8px 14px 7px;
+}
+
+.wg-pop-thread-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wg-pop-thread-phases {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-top: 1px;
+}
+
+.wg-pop-thread-heads {
+  max-height: min(240px, 42vh);
+  overflow-y: auto;
+}
+
+.wg-pop-thread-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.wg-pop-thread-state,
+.wg-pop-thread-loading {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.wg-pop-thread-loading { padding: 8px 0; }
+.wg-pop-thread-chevron { color: var(--text-muted); font-size: 15px; }
+
+.wg-pop-open-threads {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 0 2px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.wg-pop-open-threads:hover {
+  color: var(--text-primary);
+}
+
+/* ── 工作线程面板 v2：态势优先，详情按需展开 ─────────────── */
+
+.wg-threads-panel {
+  padding: 20px;
+  gap: 24px;
+}
+
+.wg-thread-overview {
+  padding: 2px 2px 0;
+}
+
+.wg-thread-overview-main,
+.wg-thread-section-heading,
+.wg-thread-card-top,
+.wg-thread-actions,
+.wg-thread-detail-toggle,
+.wg-thread-history-toggle,
+.wg-thread-tasks-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wg-thread-overview-title {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.wg-thread-overview-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.wg-thread-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.wg-thread-metric {
+  min-width: 0;
+  padding: 11px 9px;
+  border-radius: 8px;
+  background: var(--hover-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wg-thread-metric strong {
+  color: var(--text-primary);
+  font-size: 19px;
+  line-height: 1;
+}
+
+.wg-thread-metric span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.wg-thread-metric.is-running strong { color: var(--success-color); }
+.wg-thread-metric.muted { opacity: .72; }
+
+.wg-thread-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wg-thread-section-heading {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  justify-content: initial;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.wg-thread-section-heading::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.wg-thread-section.tone-active .wg-thread-section-heading {
+  background: rgba(25,135,84,.08);
+  border-color: rgba(25,135,84,.22);
+}
+
+.wg-thread-section.tone-active .wg-thread-section-heading::before {
+  background: var(--success-color);
+  box-shadow: 0 0 0 3px rgba(25,135,84,.1);
+}
+
+.wg-thread-section.tone-completed .wg-thread-section-heading {
+  background: rgba(58,130,247,.1);
+  border-color: rgba(58,130,247,.28);
+}
+
+.wg-thread-section.tone-completed .wg-thread-section-heading::before {
+  background: #5b9bf5;
+  box-shadow: 0 0 0 3px rgba(58,130,247,.1);
+}
+
+.wg-thread-section-heading span:last-child {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--panel-bg) 75%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wg-thread-card {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel-bg) 92%, var(--hover-bg));
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.wg-thread-card:hover { border-color: color-mix(in srgb, var(--border-color) 55%, var(--text-secondary)); }
+.wg-thread-card.state-completed {
+  opacity: 1;
+}
+.wg-thread-card.state-archived,
+.wg-thread-card.state-unavailable { opacity: .76; }
+
+.wg-thread-card-top {
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 14px 8px;
+}
+
+.wg-thread-card-copy { min-width: 0; flex: 1; }
+
+.wg-thread-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.wg-thread-title {
+  display: block;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: normal;
+  overflow: visible;
+  min-width: 0;
+  flex: 1;
+}
+
+.wg-thread-meta {
+  margin-top: 4px;
+  color: color-mix(in srgb, var(--text-primary) 62%, var(--text-secondary));
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.wg-thread-inline-state {
+  flex: 0 0 auto;
+  min-height: 21px;
+  padding: 0 7px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: color-mix(in srgb, var(--hover-bg) 78%, transparent);
+  color: color-mix(in srgb, var(--text-primary) 68%, var(--text-secondary));
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.wg-thread-inline-state i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+}
+
+.wg-thread-inline-state.running,
+.wg-thread-inline-state.idle { color: var(--success-color); background: rgba(25,135,84,.12); }
+.wg-thread-inline-state.running i,
+.wg-thread-inline-state.idle i { background: var(--success-color); }
+.wg-thread-inline-state.running i { box-shadow: 0 0 0 3px rgba(25,135,84,.12); animation: wg-dot-pulse 2s ease-in-out infinite; }
+.wg-thread-inline-state.completed { color: #6fa8ff; background: rgba(58,130,247,.13); }
+.wg-thread-inline-state.completed i { background: #5b9bf5; }
+.wg-thread-inline-state.history { color: var(--text-secondary); }
+
+.wg-thread-latest {
+  display: -webkit-box;
+  margin: 1px 14px 13px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text-primary) 72%, var(--text-secondary));
+  font-size: 13px;
+  line-height: 1.52;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.wg-thread-actions {
+  justify-content: flex-start;
+  gap: 7px;
+  padding: 0 14px 13px;
+}
+
+.wg-thread-runtime-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px 12px;
+}
+
+.wg-thread-runtime-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.wg-thread-runtime-status > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.wg-thread-runtime-status.running { color: var(--success-color); }
+.wg-thread-runtime-status.running > span {
+  background: var(--success-color);
+  box-shadow: 0 0 0 3px rgba(25,135,84,.12);
+  animation: wg-dot-pulse 2s ease-in-out infinite;
+}
+.wg-thread-runtime-status.idle > span { background: var(--success-color); opacity: .72; }
+
+.wg-thread-context {
+  width: min(168px, 58%);
+  min-width: 118px;
+}
+.wg-thread-context-label {
+  display: flex;
+  justify-content: space-between;
+  color: color-mix(in srgb, var(--text-primary) 62%, var(--text-secondary));
+  font-size: 11px;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.wg-thread-context-bar {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hover-bg);
+  overflow: hidden;
+}
+.wg-thread-context-fill,
+.wg-thread-context-threshold { position: absolute; top: 0; bottom: 0; }
+.wg-thread-context-fill { left: 0; background: var(--success-color); border-radius: 2px; }
+.wg-thread-context-threshold { width: 1px; background: var(--text-secondary); z-index: 1; opacity: .7; }
+.wg-thread-context.tone-mid .wg-thread-context-fill { background: #5b9bf5; }
+.wg-thread-context.tone-high .wg-thread-context-fill { background: #d99a2b; }
+.wg-thread-context.tone-compress .wg-thread-context-fill { background: #df5b5b; }
+.wg-thread-context.unavailable {
+  width: auto;
+  min-width: 0;
+  color: color-mix(in srgb, var(--text-primary) 58%, var(--text-secondary));
+  font-size: 11px;
+}
+
+.wg-thread-interrupt {
+  min-height: 27px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(223,91,91,.35);
+  background: transparent;
+  color: #df6b6b;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wg-thread-interrupt:hover { background: rgba(223,91,91,.1); }
+.wg-thread-interrupt:disabled { opacity: .55; cursor: default; }
+
+.wg-thread-primary,
+.wg-thread-secondary,
+.wg-thread-retry {
+  min-height: 31px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wg-thread-primary {
+  border-color: color-mix(in srgb, var(--wg-accent) 55%, var(--border-color));
+  background: color-mix(in srgb, var(--wg-accent) 14%, transparent);
+  color: color-mix(in srgb, var(--wg-accent) 70%, var(--text-primary));
+}
+
+.wg-thread-secondary,
+.wg-thread-retry {
+  background: transparent;
+  color: color-mix(in srgb, var(--text-primary) 72%, var(--text-secondary));
+}
+.wg-thread-primary:hover,
+.wg-thread-secondary:hover,
+.wg-thread-retry:hover { background: var(--hover-bg); color: var(--text-primary); }
+
+.wg-thread-detail-toggle,
+.wg-thread-history-toggle,
+.wg-thread-tasks-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--text-primary) 68%, var(--text-secondary));
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.wg-thread-detail-toggle {
+  padding: 9px 14px;
+  border-top: 1px solid var(--border-color);
+}
+
+.wg-thread-detail-toggle strong,
+.wg-thread-tasks-toggle strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.wg-thread-detail-toggle > span:last-child,
+.wg-thread-tasks-toggle > span:last-child {
+  color: #6fa8ff;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.wg-thread-detail-toggle i,
+.wg-thread-tasks-toggle i {
+  display: inline-block;
+  margin-left: 2px;
+  font-size: 17px;
+  font-style: normal;
+  line-height: 10px;
+  transition: transform .15s ease;
+}
+
+.wg-thread-detail-toggle[aria-expanded="true"] i,
+.wg-thread-tasks-toggle[aria-expanded="true"] i { transform: rotate(90deg); }
+
+.wg-thread-detail-toggle:hover,
+.wg-thread-history-toggle:hover,
+.wg-thread-tasks-toggle:hover { color: var(--text-primary); }
+
+.wg-thread-details {
+  padding: 7px 14px 14px;
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--hover-bg) 45%, transparent);
+}
+
+.wg-thread-node-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 6px 0;
+}
+
+.wg-thread-node-row[role="button"] { cursor: pointer; }
+.wg-thread-node-row[role="button"]:hover .wg-thread-node-title { text-decoration: underline; }
+
+.wg-thread-node-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  border: 1px solid var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.wg-thread-node-dot.head { background: var(--text-secondary); }
+.wg-thread-node-dot.archived { background: transparent; opacity: .55; }
+.wg-thread-node-copy { min-width: 0; }
+.wg-thread-node-title { color: var(--text-primary); font-size: 12px; line-height: 1.4; }
+.wg-thread-node-meta { color: var(--text-secondary); font-size: 11px; margin-top: 2px; }
+
+.wg-thread-transition {
+  display: flex;
+  align-items: stretch;
+  min-height: 18px;
+  padding-left: 3px;
+}
+
+.wg-thread-transition span { width: 1px; margin-left: 1px; background: var(--border-color); }
+.wg-thread-transition em { padding-left: 13px; color: var(--text-secondary); font-size: 11px; font-style: normal; }
+
+.wg-thread-tasks { margin: 0; border-top: 1px solid var(--border-color); }
+.wg-thread-tasks-toggle {
+  padding: 10px 14px;
+  background: rgba(58,130,247,.035);
+}
+.wg-thread-task-list { display: flex; flex-direction: column; gap: 6px; padding: 3px 14px 12px; }
+.wg-thread-task-empty { padding: 3px 14px 12px; color: var(--text-secondary); font-size: 12px; }
+.wg-thread-task { display: flex; align-items: flex-start; gap: 8px; color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
+.wg-thread-task.completed { opacity: .58; }
+.wg-thread-task.completed > span:last-child { text-decoration: line-through; }
+.wg-thread-task.running { color: var(--text-primary); }
+
+.wg-thread-task-icon {
+  width: 9px;
+  height: 9px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1px solid var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.wg-thread-task.completed .wg-thread-task-icon { background: var(--success-color); border-color: var(--success-color); }
+.wg-thread-task.running .wg-thread-task-icon { border-color: var(--success-color); box-shadow: inset 0 0 0 2px var(--panel-bg); background: var(--success-color); }
+
+.wg-thread-history-toggle {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--hover-bg) 58%, transparent);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.wg-thread-history-toggle::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 2px;
+  border: 1px solid var(--text-muted);
+}
+
+.wg-thread-history-toggle span:first-of-type { margin-right: auto; }
+
+.wg-thread-history-list { display: flex; flex-direction: column; gap: 7px; padding-top: 9px; }
+.wg-thread-card.compact .wg-thread-actions { padding-bottom: 9px; }
+
+.wg-thread-stale {
+  margin-top: -10px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: rgba(217,154,43,.1);
+  color: #d99a2b;
+  font-size: 10px;
+}
+
+.wg-thread-empty { padding: 40px 24px; text-align: center; align-items: center; }
+.wg-thread-empty strong { color: var(--text-primary); font-size: 13px; }
+.wg-thread-empty span { max-width: 260px; font-size: 11px; }
+
+.wg-thread-skeleton { padding: 24px 18px; display: flex; flex-direction: column; gap: 10px; }
+.wg-thread-skeleton span { height: 76px; border-radius: 10px; background: linear-gradient(90deg,var(--hover-bg),var(--active-bg),var(--hover-bg)); background-size: 200% 100%; animation: wg-thread-shimmer 1.4s infinite; }
+@keyframes wg-thread-shimmer { to { background-position: -200% 0; } }
+
+@media (max-width: 1100px) {
+  .wg-thread-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wg-thread-runtime-row { gap: 7px; }
+}

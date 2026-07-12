@@ -463,10 +463,19 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
         : dotClass === 'idle' ? '在线 · 空闲'
         : '离线';
 
+      // 工作线程数 badge
+      const threadCount = (typeof window._wgGetThreadCount === 'function')
+        ? window._wgGetThreadCount(identityRef)
+        : 0;
+      const badgeHtml = threadCount > 1
+        ? `<span class="wg-thread-badge">${threadCount}</span>`
+        : '';
+
       return [
         `<span class="wg-member-chip ${dotClass}" data-wg-member-identity="${wgEsc(identityRef)}">`,
         `  <span class="wg-member-dot ${dotClass}" title="${wgEsc(dotTitle)}"></span>`,
         `  <span class="wg-member-name">${wgEsc(name)}</span>`,
+        badgeHtml,
         '</span>',
       ].join('');
     }).join('');
@@ -492,6 +501,16 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
 
   function renderEventMessage(chat, msg) {
     const evt = msg.event || {};
+
+    // task_completed: 不在消息流中渲染
+    if (evt.type === 'task_completed') return '';
+
+    // session_continued / session_archived: 薄分隔线
+    if (evt.type === 'session_continued' || evt.type === 'session_archived') {
+      return _renderEventDivider(evt);
+    }
+
+    // task_started: 保持卡片渲染
     if (evt.type !== 'task_started') return '';
 
     const name = evt.identityName || getMemberName(chat, msg.from);
@@ -532,6 +551,57 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
       '  </div>',
       '</div>',
     ].join('');
+  }
+
+  /**
+   * 渲染生命周期事件分隔线（session_continued / session_archived）。
+   */
+  function _renderEventDivider(evt) {
+    const name = evt.identityName || '';
+    let text = '';
+    let navTarget = '';
+
+    if (evt.type === 'session_continued') {
+      const reasonLabel = _getEventReasonLabel(evt.reason);
+      const cutInfo = evt.trimCutRounds != null ? ` ${evt.trimCutRounds} 轮` : '';
+      const fromLabel = evt.fromSessionTitle || _shortSessionLabel(evt.fromSessionId);
+      const toLabel = evt.sessionTitle || _shortSessionLabel(evt.toSessionId || evt.sessionId);
+      text = `${name} ·「${fromLabel}」${reasonLabel}${cutInfo}，已续接到「${toLabel}」`;
+      if (evt.workspaceId && (evt.toSessionId || evt.sessionId)) {
+        navTarget = `${evt.workspaceId}:${evt.toSessionId || evt.sessionId}`;
+      }
+    } else if (evt.type === 'session_archived') {
+      const sessionLabel = evt.sessionTitle || _shortSessionLabel(evt.sessionId);
+      text = `${name} ·「${sessionLabel}」已归档`;
+    }
+
+    if (!text) return '';
+
+    return [
+      `<div class="wg-event-divider${navTarget ? ' is-clickable' : ''}"${navTarget ? ` data-wg-session-nav="${wgEsc(navTarget)}" title="查看后续会话"` : ''}>`,
+      '  <span class="wg-event-divider-line"></span>',
+      `  <span class="wg-event-divider-text">${wgEsc(text)}</span>`,
+      '  <span class="wg-event-divider-line"></span>',
+      '</div>',
+    ].join('');
+  }
+
+  function _shortSessionLabel(sessionId) {
+    const shortId = String(sessionId || '').slice(-8);
+    return shortId ? `会话 #${shortId}` : '未命名会话';
+  }
+
+  /**
+   * 将血缘转换 reason 转为可读标签（用于事件分隔线）。
+   */
+  function _getEventReasonLabel(reason) {
+    var labels = {
+      trim: '会话精简',
+      compact: '上下文压缩',
+      summary: '摘要导出',
+      branch: '会话分支',
+    };
+    return labels[reason] || '会话转换';
   }
 
   // ── 右侧：派发卡片（管理员派遣任务） ─────────────────────────
@@ -1360,6 +1430,8 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
             WgState._adminStatus = adminData.status === 'fulfilled' ? adminData.value : null;
             refreshMessagesOnly();
             refreshAdminBarOnly();
+            // 同步刷新工作面板（如果打开）
+            if (window._wgThreadsReload) window._wgThreadsReload();
           }
         }
         // data.updated === false → 超时无变更，直接进入下一轮
@@ -1435,6 +1507,8 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
     // 清除跨群聊缓存，防止上一个群的会话数据泄漏到新群
     WgState._runtimeStatusCache = {};
     WgState._sessionDataCache = {};
+    // 清理工作面板缓存
+    if (window._wgThreadsCleanup) window._wgThreadsCleanup();
     hideMemberPopover(true);
     closeImportModal();
     closeAddMemberModal();
@@ -1450,6 +1524,8 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
     refreshMain();
     await loadActiveChat();
     await fetchRuntimeStatus();
+    // 首次进入群聊即准备线程摘要，不要求用户先打开工作面板。
+    if (window._wgThreadsReload) window._wgThreadsReload();
     WgState._shouldScrollToBottom = true;
     refreshMain();
     scrollToBottom();
@@ -1762,7 +1838,10 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
   function insertMentionWithSession(identityRef, mode, sessionId, sessionTitle) {
     const id = WgState.identities.find((i) => i.identityRef === identityRef);
     if (!id) return;
-    _doInsertMention(id.displayName);
+    const editor = document.querySelector('.wg-input-editor');
+    if (!(editor?.textContent || '').includes(`@${id.displayName}`)) {
+      _doInsertMention(id.displayName);
+    }
 
     if (WgState.activeChatId) {
       if (mode === 'new') {
@@ -2874,6 +2953,8 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
     // 离开工作空间前保存当前群聊的输入草稿
     if (WgState.activeChatId) _saveCurrentDraft(WgState.activeChatId);
     stopPolling();
+    // 清理工作面板
+    if (window._wgThreadsCleanup) window._wgThreadsCleanup();
     WgState.pendingLinks = [];
     WgState.pendingAttachments = [];
     WgState.openDropdown = null;
@@ -2893,6 +2974,7 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
   // 导致输入框失焦/内容丢失。
   function softRefresh() {
     refreshChatList();
+    if (window._wgThreadsReload) window._wgThreadsReload();
   }
 
   window.WorkGroupUI = {

@@ -624,8 +624,9 @@
 .wg-member-popover {
   position: fixed;
   z-index: 10000;
-  min-width: 220px;
-  max-width: 520px;
+  min-width: 280px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
   background: var(--panel-bg, #1e1e2e);
   border: 1px solid var(--border-color, #3c3c50);
   border-radius: 8px;
@@ -639,7 +640,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 12px 8px;
+  padding: 8px 14px 10px;
   border-bottom: 1px solid var(--border-color, #3c3c50);
 }
 .wg-pop-name {
@@ -790,8 +791,10 @@
 
 .wg-pop-main {
   flex: 1;
-  min-width: 220px;
+  min-width: 0;
+  width: 100%;
   padding: 8px 0;
+  overflow: hidden;
 }
 
 .wg-pop-import-toggle {

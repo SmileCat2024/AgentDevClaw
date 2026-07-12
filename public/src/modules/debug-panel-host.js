@@ -70,6 +70,7 @@ function renderFeaturePanel(options = {}) {
 
   const panel = featurePanels[activeFeaturePanel];
   const panelId = activeFeaturePanel;
+  featurePanelBody.dataset.panel = panelId;
   const renderVersion = featurePanelRenderVersion + 1;
   featurePanelRenderVersion = renderVersion;
   featurePanel.classList.add('open');
@@ -135,5 +136,9 @@ function toggleFeaturePanel(panelId) {
   // 初始化钩子：settings 面板首次打开时加载异步数据
   if (!wasOpen && panelId === 'settings' && window._wgSettingsInit) {
     window._wgSettingsInit();
+  }
+  // 初始化钩子：threads 面板首次打开时拉取数据
+  if (!wasOpen && panelId === 'threads' && window._wgThreadsInit) {
+    window._wgThreadsInit();
   }
 }

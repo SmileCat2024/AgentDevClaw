@@ -157,105 +157,232 @@ export function aggregateSessionPool(chat, identities) {
  * @param {Function} readIndexFn — 异步读取 session index 的函数（可选，用于测试注入）
  * @returns {Promise<Array>} 工作线程列表
  */
-async function groupByLineage(sessionPool, lineageRecords, allIdentities, readIndexFn) {
+export async function groupByLineage(sessionPool, lineageRecords, allIdentities, readIndexFn, context = {}) {
   const readIndex = readIndexFn || readSessionIndex;
   const lineage = Array.isArray(lineageRecords) ? lineageRecords : [];
 
-  // 构建 from → to 映射（用于追踪血缘链）
-  const fromToMap = new Map(); // fromSessionId → { to, reason, timestamp }
-  const childSessions = new Set(); // 所有作为 "to" 出现过的 session
-  for (const rec of lineage) {
-    fromToMap.set(rec.from, { to: rec.to, reason: rec.reason, timestamp: rec.timestamp });
-    childSessions.add(rec.to);
+  // 线程必须以血缘图为主数据源。后续 session 归档后可能已不在 sessionPool，
+  // 但仍然是工作线程历史的一部分；同一个源节点也可能产生多个后续节点。
+  const nodes = new Map();
+  const outgoing = new Map();
+  const incoming = new Map();
+  const messages = Array.isArray(context.messages) ? context.messages : [];
+  const activeSessions = context.activeSessions || {};
+  const archivedIds = new Set();
+  const eventTitles = new Map();
+  const transitionMeta = new Map();
+
+  const ensureNode = (sessionId, identityRef = null) => {
+    if (!sessionId) return null;
+    if (!nodes.has(sessionId)) {
+      nodes.set(sessionId, { sessionId, identityRef, pool: null, indexRecord: null });
+    } else if (identityRef && !nodes.get(sessionId).identityRef) {
+      nodes.get(sessionId).identityRef = identityRef;
+    }
+    return nodes.get(sessionId);
+  };
+
+  for (const session of (sessionPool || [])) {
+    const node = ensureNode(session.sessionId, session.identityRef);
+    if (node) node.pool = session;
   }
 
-  // 找到所有工作线程的根（出现在 sessionPool 中但不是任何血缘记录的 "to"）
-  const threads = [];
-  const processedSessions = new Set();
-
-  for (const session of sessionPool) {
-    if (processedSessions.has(session.sessionId)) continue;
-    if (childSessions.has(session.sessionId)) continue; // 是别人的后续，不是根
-
-    // 这是一条工作线程的根
-    const chain = [];
-    let currentSession = session;
-    let currentId = session.sessionId;
-
-    while (currentSession) {
-      chain.push({
-        sessionId: currentId,
-        sessionTitle: null, // 填充后补
-        identityRef: currentSession.identityRef,
-        reason: chain.length === 0 ? null : fromToMap.get(chain[chain.length - 1].sessionId)?.reason || 'unknown',
-      });
-      processedSessions.add(currentId);
-
-      const next = fromToMap.get(currentId);
-      if (!next) break;
-
-      currentId = next.to;
-      currentSession = sessionPool.find((s) => s.sessionId === currentId) || null;
+  for (const message of messages) {
+    const event = message?.event;
+    if (!event) continue;
+    if (event.type === 'session_archived' && event.sessionId) archivedIds.add(event.sessionId);
+    if (event.type === 'session_continued' && event.archived === true && event.fromSessionId) {
+      archivedIds.add(event.fromSessionId);
     }
+    if (event.sessionId && event.sessionTitle) eventTitles.set(event.sessionId, event.sessionTitle);
+    if (event.fromSessionId && event.fromSessionTitle) eventTitles.set(event.fromSessionId, event.fromSessionTitle);
+    if (event.type === 'session_continued' && event.fromSessionId && event.toSessionId) {
+      transitionMeta.set(`${event.fromSessionId}\u0000${event.toSessionId}`, {
+        trimCutRounds: event.trimCutRounds ?? null,
+        archived: event.archived === true,
+        timestamp: event.timestamp || message.timestamp || 0,
+      });
+    }
+  }
 
-    // 填充 session title
-    const workspaceId = session.identityRef.split(':')[0];
-    try {
-      const idx = await readIndex(workspaceId);
-      if (idx?.sessions) {
-        for (const link of chain) {
-          const rec = idx.sessions.find((s) => s.id === link.sessionId);
-          link.sessionTitle = rec?.title || rec?.taskTitle || null;
-        }
-      }
-    } catch {}
+  for (const rec of lineage) {
+    if (!rec?.from || !rec?.to) continue;
+    const identityRef = rec.identityRef
+      || nodes.get(rec.from)?.identityRef
+      || nodes.get(rec.to)?.identityRef
+      || null;
+    ensureNode(rec.from, identityRef);
+    ensureNode(rec.to, identityRef);
+    const edgeKey = `${rec.from}\u0000${rec.to}`;
+    const edge = {
+      from: rec.from,
+      to: rec.to,
+      reason: rec.reason || 'unknown',
+      timestamp: rec.timestamp || 0,
+      ...(transitionMeta.get(edgeKey) || {}),
+    };
+    if (!outgoing.has(rec.from)) outgoing.set(rec.from, []);
+    if (!outgoing.get(rec.from).some((item) => item.to === rec.to)) outgoing.get(rec.from).push(edge);
+    if (!incoming.has(rec.to)) incoming.set(rec.to, []);
+    if (!incoming.get(rec.to).some((item) => item.from === rec.from)) incoming.get(rec.to).push(edge);
+  }
 
-    // 推断阶段
-    const phase = inferThreadPhase(chain, lineage);
+  // Session index 只负责补标题与“是否仍可打开”，不决定节点是否存在。
+  const indexByWorkspace = new Map();
+  const workspaceIds = new Set(
+    [...nodes.values()]
+      .map((node) => node.identityRef?.split(':')[0])
+      .filter(Boolean)
+  );
+  await Promise.all([...workspaceIds].map(async (workspaceId) => {
+    try { indexByWorkspace.set(workspaceId, await readIndex(workspaceId)); }
+    catch { indexByWorkspace.set(workspaceId, null); }
+  }));
+  for (const node of nodes.values()) {
+    const workspaceId = node.identityRef?.split(':')[0];
+    node.indexRecord = indexByWorkspace.get(workspaceId)?.sessions?.find((item) => item.id === node.sessionId) || null;
+    node.title = node.indexRecord?.title || node.indexRecord?.taskTitle || eventTitles.get(node.sessionId) || null;
+    node.updatedAt = Math.max(
+      node.pool?.lastActivity || 0,
+      node.indexRecord?.updatedAt || node.indexRecord?.savedAt || node.indexRecord?.createdAt || 0
+    );
+  }
 
-    // 聚合 task 完成事件
-    const identityInfo = allIdentities.find((i) => i.identityRef === session.identityRef);
-    const displayName = identityInfo?.displayName || session.identityRef;
+  const roots = [...nodes.values()].filter((node) => !incoming.has(node.sessionId));
+  const paths = [];
+  const walk = (node, nodePath, edgePath, visiting) => {
+    if (!node || visiting.has(node.sessionId)) {
+      if (nodePath.length) paths.push({ nodes: nodePath, edges: edgePath });
+      return;
+    }
+    const nextVisiting = new Set(visiting);
+    nextVisiting.add(node.sessionId);
+    const nextNodes = [...nodePath, node];
+    const edges = outgoing.get(node.sessionId) || [];
+    if (edges.length === 0) {
+      paths.push({ nodes: nextNodes, edges: edgePath });
+      return;
+    }
+    for (const edge of edges) {
+      walk(nodes.get(edge.to), nextNodes, [...edgePath, edge], nextVisiting);
+    }
+  };
+  for (const root of roots) walk(root, [], [], new Set());
 
-    threads.push({
-      identityRef: session.identityRef,
-      identityName: displayName,
+  // 防御异常环或完全孤立的节点，保证每个已知 session 都能被投影。
+  const covered = new Set(paths.flatMap((pathInfo) => pathInfo.nodes.map((node) => node.sessionId)));
+  for (const node of nodes.values()) {
+    if (!covered.has(node.sessionId)) paths.push({ nodes: [node], edges: [] });
+  }
+
+  const threads = paths.map(({ nodes: pathNodes, edges }) => {
+    const head = pathNodes[pathNodes.length - 1];
+    const identityRef = head.identityRef || pathNodes.find((node) => node.identityRef)?.identityRef || 'unknown:main';
+    const workspaceId = identityRef.split(':')[0];
+    const identityInfo = allIdentities.find((item) => item.identityRef === identityRef);
+    const isCurrent = activeSessions[identityRef] === head.sessionId;
+    const isArchived = archivedIds.has(head.sessionId);
+    const headAvailable = Boolean(head.indexRecord) && !isArchived;
+    const lifecycle = isCurrent ? 'current' : isArchived ? 'archived' : headAvailable ? 'available' : 'missing';
+    const chain = pathNodes.map((node, index) => {
+      const edge = index > 0 ? edges[index - 1] : null;
+      return {
+        sessionId: node.sessionId,
+        sessionTitle: node.title,
+        identityRef: node.identityRef || identityRef,
+        reason: edge?.reason || null,
+        transition: edge ? {
+          reason: edge.reason,
+          trimCutRounds: edge.trimCutRounds ?? null,
+          archived: edge.archived === true,
+          timestamp: edge.timestamp || 0,
+        } : null,
+        isCurrent: activeSessions[identityRef] === node.sessionId,
+        isArchived: archivedIds.has(node.sessionId),
+        isAvailable: Boolean(node.indexRecord) && !archivedIds.has(node.sessionId),
+        updatedAt: node.updatedAt || 0,
+      };
+    });
+    const updatedAt = Math.max(
+      ...pathNodes.map((node) => node.updatedAt || 0),
+      ...edges.map((edge) => edge.timestamp || 0),
+      0
+    );
+    return {
+      identityRef,
+      identityName: identityInfo?.displayName || identityRef,
       workspaceId,
-      activeHeadId: chain[chain.length - 1].sessionId,
-      activeHeadTitle: chain[chain.length - 1].sessionTitle,
+      threadTitle: pathNodes[0]?.title || head.title || null,
+      activeHeadId: head.sessionId, // 兼容旧消费方；语义是 lineage head，不等同于正在运行。
+      activeHeadTitle: head.title,
+      lineageHeadId: head.sessionId,
       lineageDepth: chain.length,
       lineage: chain,
-      phase,
-    });
+      phase: inferThreadPhase(chain, lineage),
+      lifecycle,
+      isCurrent,
+      isArchived,
+      canDispatch: headAvailable,
+      updatedAt,
+    };
+  });
+
+  const lifecycleRank = { current: 0, available: 1, archived: 2, missing: 3 };
+  return threads.sort((a, b) =>
+    (lifecycleRank[a.lifecycle] ?? 9) - (lifecycleRank[b.lifecycle] ?? 9)
+    || (b.updatedAt || 0) - (a.updatedAt || 0)
+  );
+}
+
+/** 将 session 持久化用量投影为与会话列表一致的上下文占用口径。 */
+export function buildSessionContextUsage(session, sessionRecord) {
+  const usageStats = session?.runtime?.usageStats || {};
+  const lastRequestUsage = usageStats.lastRequestUsage || null;
+  const totalUsage = usageStats.totalUsage || null;
+  const contextLength = Number.isFinite(sessionRecord?.contextLength) && sessionRecord.contextLength > 0
+    ? sessionRecord.contextLength
+    : 200000;
+  const compressRatio = Number.isFinite(sessionRecord?.compressRatio) && sessionRecord.compressRatio > 0
+    ? sessionRecord.compressRatio
+    : 80;
+  const usedTokens = lastRequestUsage?.inputTokens || totalUsage?.totalTokens || 0;
+  return {
+    usedTokens,
+    contextLength,
+    compressRatio,
+    percent: contextLength > 0 ? Math.min(100, Math.round((usedTokens / contextLength) * 100)) : 0,
+    modelName: sessionRecord?.modelName || '',
+    source: lastRequestUsage ? 'last_request' : totalUsage ? 'cumulative' : 'none',
+  };
+}
+
+/** 从持久化上下文中提取最近一条适合在线程卡片展示的对话消息。 */
+export function buildSessionLatestMessage(session) {
+  const messages = Array.isArray(session?.runtime?.context?.messages)
+    ? session.runtime.context.messages
+    : [];
+  const readText = (content) => {
+    if (typeof content === 'string') return content.trim();
+    if (!Array.isArray(content)) return '';
+    return content
+      .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text.trim())
+      .filter(Boolean)
+      .join('\n');
+  };
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!['user', 'assistant'].includes(message?.role)) continue;
+    const text = readText(message.content);
+    if (!text) continue;
+    return {
+      role: message.role,
+      text: text.length > 1200 ? `${text.slice(0, 1200).trimEnd()}…` : text,
+      turn: Number.isFinite(message.turn) ? message.turn : null,
+    };
   }
-
-  // 处理孤儿 session（出现在 sessionPool 中，但根不在 sessionPool 中——可能被归档了）
-  for (const session of sessionPool) {
-    if (processedSessions.has(session.sessionId)) continue;
-
-    const workspaceId = session.identityRef.split(':')[0];
-    try {
-      const idx = await readIndex(workspaceId);
-      const rec = idx?.sessions?.find((s) => s.id === session.sessionId);
-      threads.push({
-        identityRef: session.identityRef,
-        identityName: allIdentities.find((i) => i.identityRef === session.identityRef)?.displayName || session.identityRef,
-        workspaceId,
-        activeHeadId: session.sessionId,
-        activeHeadTitle: rec?.title || rec?.taskTitle || null,
-        lineageDepth: 1,
-        lineage: [{
-          sessionId: session.sessionId,
-          sessionTitle: rec?.title || rec?.taskTitle || null,
-          identityRef: session.identityRef,
-          reason: null,
-        }],
-        phase: 'unknown',
-      });
-    } catch {}
-  }
-
-  return threads;
+  return null;
 }
 
 /**
@@ -1745,7 +1872,10 @@ app.get('/protoclaw/gc/session_threads', async (req, res, next) => {
 
     const allIdentities = await collectIdentities();
     const sessionPool = aggregateSessionPool(chat, allIdentities);
-    const threads = await groupByLineage(sessionPool, chat.sessionLineage, allIdentities);
+    const threads = await groupByLineage(sessionPool, chat.sessionLineage, allIdentities, undefined, {
+      activeSessions: chat.sessions,
+      messages: chat.messages,
+    });
 
     res.json({ threads });
   } catch (error) {
@@ -1781,6 +1911,8 @@ app.get('/protoclaw/gc/session_tasks', async (req, res, next) => {
       ? featureStates.find((entry) => entry?.featureName === 'todo' && entry.snapshot)
       : null;
     const tasks = todoCheckpoint?.snapshot?.tasks || [];
+    const sessionIndex = await readSessionIndex(agentId).catch(() => null);
+    const sessionRecord = sessionIndex?.sessions?.find((item) => item.id === sessionId) || null;
 
     res.json({
       sessionId,
@@ -1796,6 +1928,8 @@ app.get('/protoclaw/gc/session_tasks', async (req, res, next) => {
         inProgress: tasks.filter((t) => t.status === 'in_progress').length,
         pending: tasks.filter((t) => t.status === 'pending').length,
       },
+      contextUsage: buildSessionContextUsage(session, sessionRecord),
+      latestMessage: buildSessionLatestMessage(session),
     });
   } catch (error) {
     next(error);

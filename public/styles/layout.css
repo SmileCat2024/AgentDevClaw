@@ -522,6 +522,10 @@ body[data-theme="light"] .feature-panel-header {
   will-change: opacity, transform;
 }
 
+.feature-panel-body[data-panel="threads"] {
+  padding: 0;
+}
+
 .feature-panel.body-ready .feature-panel-body {
   opacity: 1;
   transform: translateX(0);

@@ -2104,19 +2104,19 @@ function renderCurrentMainView() {
   railButtons.forEach(btn => {
     const panel = btn.dataset.panel;
     if (!panel) return; // 工具按钮（语言/主题/设置）始终显示
-    if (panel === 'resources' || panel === 'viewer' || panel === 'settings') {
+    if (panel === 'resources' || panel === 'viewer' || panel === 'settings' || panel === 'threads') {
       btn.style.display = isWorkGroup ? '' : 'none';
     } else {
       btn.style.display = inChat ? '' : 'none';
     }
   });
   // 离开 AI 对话时关闭调试类面板
-  if (!inChat && activeFeaturePanel && activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings') {
+  if (!inChat && activeFeaturePanel && activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'threads') {
     activeFeaturePanel = null;
   }
   // 离开 group chat workspace 时清理状态
   if (!isWorkGroup) {
-    if (activeFeaturePanel === 'resources' || activeFeaturePanel === 'viewer' || activeFeaturePanel === 'settings') activeFeaturePanel = null;
+    if (activeFeaturePanel === 'resources' || activeFeaturePanel === 'viewer' || activeFeaturePanel === 'settings' || activeFeaturePanel === 'threads') activeFeaturePanel = null;
     if (window._wgActive && typeof window.WorkGroupUI?.deactivate === 'function') {
       window.WorkGroupUI.deactivate();
       window._wgActive = false;
@@ -2549,6 +2549,10 @@ const featurePanels = {
   settings: {
     title: () => '群聊设置',
     render: () => window._wgGetSettingsHtml ? window._wgGetSettingsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+  },
+  threads: {
+    title: () => '工作线程',
+    render: () => window._wgGetThreadsHtml ? window._wgGetThreadsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
   },
 };
 

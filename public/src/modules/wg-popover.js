@@ -30,6 +30,23 @@ function _updateAwarenessDotsInPlace(awareness) {
       dot.classList.add(dotClass);
       dot.title = dotTitle;
     }
+    // 更新线程数 badge
+    const threadCount = (typeof window._wgGetThreadCount === 'function')
+      ? window._wgGetThreadCount(identityRef)
+      : 0;
+    const existingBadge = chip.querySelector('.wg-thread-badge');
+    if (threadCount > 1) {
+      if (existingBadge) {
+        existingBadge.textContent = threadCount;
+      } else {
+        const badge = document.createElement('span');
+        badge.className = 'wg-thread-badge';
+        badge.textContent = threadCount;
+        chip.appendChild(badge);
+      }
+    } else if (existingBadge) {
+      existingBadge.remove();
+    }
   });
 
   // 更新 admin chip（替换 admin 区域的 HTML）
@@ -56,26 +73,95 @@ function _refreshPopoverIfOpen() {
       listContainer.innerHTML = adminResult.historyHtml;
     }
   } else {
-    const listContainer = WgState._popoverEl.querySelector('.wg-pop-list');
-    if (!listContainer) return;
-    listContainer.innerHTML = _renderPopoverSessionList(WgState._hoverIdentity, data);
+    const threadContainer = WgState._popoverEl.querySelector('[data-wg-thread-content]');
+    if (!threadContainer) return;
+    threadContainer.outerHTML = _renderPopoverSessionList(WgState._hoverIdentity, data);
   }
 }
 
 // ── popover 会话列表渲染 ──────────────────────────────────────
 
 /**
- * 渲染 popover 中的会话列表（群内会话池）。
- * 每个会话显示运行时状态（running/idle/offline）+ 可选的中断按钮。
- * 被 showMemberPopover 和 _refreshPopoverIfOpen 共用。
+ * 渲染 popover 中的成员会话区（线程摘要视图）。
+ * 只承担快速感知与导航，不在此处混入派发和中断操作。
  */
 function _renderPopoverSessionList(identityRef, data) {
-  const workspaceId = identityRef.split(':')[0];
-  const isMentioned = getMentionedIdentities().some((m) => m.identityRef === identityRef);
-  const sel = WgState.activeChatId ? getSessionSelection(WgState.activeChatId, identityRef) : { mode: 'default' };
+  const summary = (typeof window._wgGetThreadSummary === 'function')
+    ? window._wgGetThreadSummary(identityRef)
+    : null;
 
+  if (summary && summary.count > 0) {
+    return `<div class="wg-pop-thread-content" data-wg-thread-content>${_renderPopoverThreadSummary(identityRef, summary)}</div>`;
+  }
+
+  const dataState = typeof window._wgGetThreadDataState === 'function'
+    ? window._wgGetThreadDataState()
+    : { loaded: false };
+  const content = (dataState.loaded
+    ? '<div class="wg-pop-empty">暂无可继续的工作线程</div>'
+    : '<div class="wg-pop-thread-loading">正在整理工作线程…</div>')
+    + _renderOpenThreadsLink();
+  return `<div class="wg-pop-thread-content" data-wg-thread-content>${content}</div>`;
+}
+
+/**
+ * 线程摘要视图：线程数 + 工作状态分布 + head 导航。
+ */
+function _renderPopoverThreadSummary(identityRef, summary) {
+  const statusLabels = [
+    summary.statusCounts.active > 0 ? `${summary.statusCounts.active} 进行中` : '',
+    summary.statusCounts.completed > 0 ? `${summary.statusCounts.completed} 已完成` : '',
+  ].filter(Boolean).join(' · ');
+
+  const parts = [
+    '<div class="wg-pop-thread-summary">',
+    `  <div class="wg-pop-thread-count">${summary.count} 条工作线程</div>`,
+    statusLabels ? `  <div class="wg-pop-thread-phases">${wgEsc(statusLabels)}</div>` : '',
+    '</div>',
+  ];
+
+  // 活跃头部列表（最多 4 条），只保留会话导航。
+  const heads = summary.activeHeads.slice(0, 4);
+  if (heads.length > 0) {
+    parts.push('<div class="wg-pop-list wg-pop-thread-heads">');
+    heads.forEach(function (h) {
+      const rt = WgState._runtimeStatusCache[h.sessionId];
+      const rtStatus = rt?.status || 'offline';
+      const dotClass = rtStatus === 'running' ? 'running' : rtStatus === 'idle' ? 'idle' : 'offline';
+
+      parts.push(
+        `<div class="wg-pop-session" data-wg-session-nav="${wgEsc(h.workspaceId)}:${wgEsc(h.sessionId)}" title="点击查看会话">`,
+        `  <span class="wg-pop-dot ${dotClass}"></span>`,
+        '  <span class="wg-pop-thread-copy">',
+        `    <span class="wg-pop-title">${wgEsc(h.title)}</span>`,
+        `    <span class="wg-pop-thread-state">${wgEsc(h.stateLabel || '')}</span>`,
+        '  </span>',
+        '  <span class="wg-pop-thread-chevron">›</span>',
+        '</div>'
+      );
+    });
+    parts.push('</div>');
+  }
+
+  parts.push(_renderOpenThreadsLink());
+
+  return parts.join('');
+}
+
+function _renderOpenThreadsLink() {
+  return [
+    '<div class="wg-pop-open-threads" data-wg-open-threads>',
+    '  <span>查看全部工作线程</span>',
+    '  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>',
+    '</div>',
+  ].join('');
+}
+
+/**
+ * 降级视图：扁平会话池列表（与原实现一致）。
+ */
+function _renderPopoverFlatSessions(identityRef, data, workspaceId, isMentioned, sel) {
   return (data.inChatSessions || []).map((s) => {
-    // 运行时状态（从 _runtimeStatusCache 交叉引用）
     const rt = WgState._runtimeStatusCache[s.id];
     const rtStatus = rt?.status || 'offline';
     const dotClass = rtStatus === 'running' ? 'running'
@@ -86,16 +172,13 @@ function _renderPopoverSessionList(identityRef, data) {
       : '离线';
 
     const activeMark = s.isActive ? ' <span class="wg-pop-active">当前</span>' : '';
-    // 成员会话一律使用导航跳转（非只读）
     const navAttr = `data-wg-session-nav="${wgEsc(workspaceId)}:${wgEsc(s.id)}"`;
 
-    // 派发至此按钮
     const isSelected = sel.mode === 'specific' && sel.sessionId === s.id;
     const dispatchBtn = (isMentioned && !isSelected)
       ? `<button class="wg-pop-dispatch-to" data-wg-dispatch="specific" data-wg-dispatch-id="${wgEsc(identityRef)}" data-wg-dispatch-sid="${wgEsc(s.id)}" data-wg-dispatch-title="${wgEsc(s.title)}">派发至此</button>`
       : (isSelected ? '<span class="wg-pop-dispatch-cur">已选</span>' : '');
 
-    // 中断按钮（仅 running 状态显示）
     const interruptBtn = rtStatus === 'running'
       ? `<button class="wg-pop-interrupt-btn" data-wg-action="interrupt-session" data-wg-identity="${wgEsc(identityRef)}" data-wg-session-id="${wgEsc(s.id)}" data-wg-workspace-id="${wgEsc(workspaceId)}" title="中断此会话">中断</button>`
       : '';
@@ -213,9 +296,9 @@ async function showMemberPopover(identityRef, anchorEl) {
       ? parts.join('')
       : '<div class="wg-pop-empty">暂无历史会话</div>';
   } else {
-    const poolItems = _renderPopoverSessionList(identityRef, data);
-    sessionSectionHtml = poolItems
-      ? `<div class="wg-pop-section-label">群内会话 (${(data.inChatSessions || []).length})</div><div class="wg-pop-list">${poolItems}</div>`
+    const sessionHtml = _renderPopoverSessionList(identityRef, data);
+    sessionSectionHtml = sessionHtml
+      ? sessionHtml
       : '<div class="wg-pop-empty">暂无活跃会话</div>';
   }
 
@@ -294,8 +377,16 @@ async function showMemberPopover(identityRef, anchorEl) {
     }
   }
   const rect = anchor.getBoundingClientRect();
-  el.style.left = `${rect.left}px`;
-  el.style.top = `${rect.bottom + 4}px`;
+  const popoverWidth = Math.min(360, Math.max(280, window.innerWidth - 24));
+  el.style.width = `${popoverWidth}px`;
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - popoverWidth - 12));
+  el.style.left = `${left}px`;
+  const measuredHeight = Math.min(el.scrollHeight, Math.max(220, window.innerHeight - 24));
+  const belowTop = rect.bottom + 4;
+  const top = belowTop + measuredHeight <= window.innerHeight - 12
+    ? belowTop
+    : Math.max(12, rect.top - measuredHeight - 4);
+  el.style.top = `${top}px`;
 
   // hover popover 自身不触发隐藏
   el.addEventListener('mouseenter', () => clearTimeout(WgState._popoverHideTimer));
@@ -353,6 +444,17 @@ async function showMemberPopover(identityRef, anchorEl) {
       const [workspaceId, sessionId] = recordItem.dataset.wgSessionRecord.split(':');
       navigateToSessionRecord(workspaceId, sessionId);
       hideMemberPopover(true);
+    }
+
+    // 打开工作面板
+    const openThreadsBtn = ev.target.closest('[data-wg-open-threads]');
+    if (openThreadsBtn) {
+      ev.stopPropagation();
+      hideMemberPopover(true);
+      if (typeof toggleFeaturePanel === 'function') {
+        toggleFeaturePanel('threads');
+      }
+      return;
     }
 
     // 引入外部会话 toggle — 展开/收起右侧子面板
