@@ -15,7 +15,7 @@ import {
   buildSessionTrimPreview,
   extractDomainsFromText,
   buildLightPrebuiltSessionRecord,
-} from '../server/routes/session-helpers.js';
+} from '../server/routes/session-helpers-pure.js';
 
 // ── extractToolCallLabel ──────────────────────────────────────────
 
