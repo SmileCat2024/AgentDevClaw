@@ -30,6 +30,42 @@ export class ControlledTodoFeature extends TodoFeature {
   }
 
   /**
+   * 为 Task 终态记录稳定时间。TodoFeature 原有 updatedAt 会随任何后续编辑变化，
+   * finishedAt / completedAt / cancelledAt 专门表达本次进入终态的时刻。
+   */
+  updateTask(taskId, updates) {
+    const current = this.getTask(taskId);
+    if (!current) return undefined;
+    const nextStatus = updates?.status || current.status;
+    const terminal = nextStatus === 'completed' || nextStatus === 'deleted';
+    const wasTerminal = current.status === 'completed' || current.status === 'deleted';
+    const metadata = { ...(current.metadata || {}), ...(updates?.metadata || {}) };
+
+    if (terminal) {
+      if (!wasTerminal || !metadata.finishedAt) metadata.finishedAt = Date.now();
+      metadata.completionStatus = nextStatus;
+      if (nextStatus === 'completed' && !metadata.completedAt) metadata.completedAt = metadata.finishedAt;
+      if (nextStatus === 'deleted' && !metadata.cancelledAt) metadata.cancelledAt = metadata.finishedAt;
+    } else if (wasTerminal) {
+      delete metadata.finishedAt;
+      delete metadata.completedAt;
+      delete metadata.cancelledAt;
+      delete metadata.completionStatus;
+    }
+
+    return super.updateTask(taskId, { ...updates, metadata });
+  }
+
+  /** task_clear 也通过 updateTask 进入终态，保证取消时间被记录。 */
+  clearTasks() {
+    for (const task of this.listTasks()) {
+      if (task.status === 'pending' || task.status === 'in_progress') {
+        this.updateTask(task.id, { status: 'deleted' });
+      }
+    }
+  }
+
+  /**
    * Override @StepFinish 钩子。
    *
    * 先执行父类逻辑（todo 工具使用统计 + reminder 计数），

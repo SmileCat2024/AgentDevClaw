@@ -8958,7 +8958,7 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 
 .wg-thread-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   margin-top: 12px;
 }
@@ -9059,6 +9059,10 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 }
 
 .wg-thread-card:hover { border-color: color-mix(in srgb, var(--border-color) 55%, var(--text-secondary)); }
+.wg-thread-card:focus-visible {
+  outline: 1px solid var(--text-secondary);
+  outline-offset: 2px;
+}
 .wg-thread-card.state-completed {
   opacity: 1;
 }
@@ -9126,11 +9130,22 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 .wg-thread-inline-state.running i { box-shadow: 0 0 0 3px rgba(25,135,84,.12); animation: wg-dot-pulse 2s ease-in-out infinite; }
 .wg-thread-inline-state.completed { color: #6fa8ff; background: rgba(58,130,247,.13); }
 .wg-thread-inline-state.completed i { background: #5b9bf5; }
-.wg-thread-inline-state.history { color: var(--text-secondary); }
+.wg-thread-inline-state.archived { color: var(--text-secondary); }
+.wg-thread-inline-state.queued { color: var(--success-color); background: rgba(25,135,84,.1); }
+.wg-thread-inline-state.queued i { background: transparent; border: 1px solid var(--success-color); }
+
+.wg-thread-latest-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 1px 14px 13px;
+}
 
 .wg-thread-latest {
   display: -webkit-box;
-  margin: 1px 14px 13px;
+  min-width: 0;
+  flex: 1;
+  margin: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--text-primary) 72%, var(--text-secondary));
   font-size: 13px;
@@ -9138,6 +9153,15 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   white-space: pre-wrap;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+}
+
+.wg-thread-latest-time {
+  flex: 0 0 auto;
+  padding-bottom: 1px;
+  color: color-mix(in srgb, var(--text-primary) 46%, var(--text-secondary));
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .wg-thread-actions {
@@ -9225,6 +9249,7 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 
 .wg-thread-primary,
 .wg-thread-secondary,
+.wg-thread-archive,
 .wg-thread-retry {
   min-height: 31px;
   padding: 0 12px;
@@ -9242,13 +9267,79 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 }
 
 .wg-thread-secondary,
+.wg-thread-archive,
 .wg-thread-retry {
   background: transparent;
   color: color-mix(in srgb, var(--text-primary) 72%, var(--text-secondary));
 }
 .wg-thread-primary:hover,
 .wg-thread-secondary:hover,
+.wg-thread-archive:hover,
 .wg-thread-retry:hover { background: var(--hover-bg); color: var(--text-primary); }
+
+.wg-thread-archive {
+  margin-left: auto;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+.wg-thread-archive:hover { color: #df6b6b; background: rgba(223,91,91,.08); }
+.wg-thread-archive:disabled { opacity: .55; cursor: default; }
+
+.wg-thread-inspectors {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--hover-bg) 28%, transparent);
+}
+
+.wg-thread-inspector {
+  min-width: 0;
+  min-height: 53px;
+  padding: 9px 14px;
+  border: 0;
+  border-right: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+.wg-thread-inspector:last-child { border-right: 0; }
+.wg-thread-inspector:only-child { grid-column: 1 / -1; }
+.wg-thread-inspector:hover { background: var(--hover-bg); }
+.wg-thread-inspector.is-selected {
+  background: color-mix(in srgb, var(--hover-bg) 82%, var(--panel-bg));
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--text-secondary) 65%, transparent);
+}
+.wg-thread-inspector-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.wg-thread-inspector-copy strong { font-size: 12px; line-height: 1.25; }
+.wg-thread-inspector-copy small {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text-primary) 62%, var(--text-secondary));
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wg-thread-inspector-action {
+  flex: 0 0 auto;
+  color: #6fa8ff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.wg-thread-inspector-action i {
+  display: inline-block;
+  margin-left: 2px;
+  font-size: 16px;
+  font-style: normal;
+  line-height: 10px;
+  transition: transform .15s ease;
+}
+.wg-thread-inspector[aria-selected="true"] .wg-thread-inspector-action { color: var(--text-primary); }
+.wg-thread-inspector[aria-selected="true"] .wg-thread-inspector-action i { transform: rotate(90deg); }
 
 .wg-thread-detail-toggle,
 .wg-thread-history-toggle,
@@ -9349,6 +9440,9 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 .wg-thread-task.completed { opacity: .58; }
 .wg-thread-task.completed > span:last-child { text-decoration: line-through; }
 .wg-thread-task.running { color: var(--text-primary); }
+.wg-thread-task.cancelled { opacity: .62; }
+.wg-thread-task.cancelled > span:nth-child(2) { text-decoration: line-through; }
+.wg-thread-task-result { margin-left: auto; font-size: 10px; white-space: nowrap; }
 
 .wg-thread-task-icon {
   width: 9px;
@@ -9361,6 +9455,26 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 
 .wg-thread-task.completed .wg-thread-task-icon { background: var(--success-color); border-color: var(--success-color); }
 .wg-thread-task.running .wg-thread-task-icon { border-color: var(--success-color); box-shadow: inset 0 0 0 2px var(--panel-bg); background: var(--success-color); }
+.wg-thread-task.cancelled .wg-thread-task-icon { border-color: var(--text-muted); position: relative; }
+.wg-thread-task.cancelled .wg-thread-task-icon::before,
+.wg-thread-task.cancelled .wg-thread-task-icon::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 1px;
+  height: 7px;
+  background: var(--text-muted);
+  transform: rotate(45deg);
+}
+.wg-thread-task.cancelled .wg-thread-task-icon::after { transform: rotate(-45deg); }
+
+.wg-thread-task-details,
+.wg-thread-details {
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--hover-bg) 45%, transparent);
+}
+.wg-thread-task-details { padding-top: 9px; }
 
 .wg-thread-history-toggle {
   min-height: 38px;
@@ -9405,6 +9519,9 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 @keyframes wg-thread-shimmer { to { background-position: -200% 0; } }
 
 @media (max-width: 1100px) {
-  .wg-thread-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wg-thread-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .wg-thread-runtime-row { gap: 7px; }
+  .wg-thread-inspectors { grid-template-columns: 1fr; }
+  .wg-thread-inspector { border-right: 0; border-bottom: 1px solid var(--border-color); }
+  .wg-thread-inspector:last-child { border-bottom: 0; }
 }

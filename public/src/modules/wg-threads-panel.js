@@ -50,26 +50,25 @@ function _contextUsage(thread) {
 }
 
 function _derivedState(thread) {
-  const summary = _taskSummary(thread);
   const runtime = _runtimeStatus(thread);
   if (thread.lifecycle === 'archived') return { key: 'archived', label: '已归档' };
-  if (thread.lifecycle === 'missing') return { key: 'unavailable', label: '记录不可用' };
+  if (thread.lifecycle === 'missing') return { key: 'completed', label: '已完成' };
   if (runtime === 'running') return { key: 'running', label: '运行中' };
-  if (summary?.total > 0 && summary.completed >= summary.total) return { key: 'completed', label: '已完成' };
-  if (runtime === 'idle') return { key: 'idle', label: '空闲' };
-  return { key: 'offline', label: '未运行' };
+  if (runtime === 'queued') return { key: 'queued', label: '排队中' };
+  if (thread.workStatus === 'active') return { key: 'running', label: '进行中' };
+  return { key: 'completed', label: '已完成' };
 }
 
-function _isHistory(thread) {
-  return ['archived', 'missing'].includes(thread.lifecycle);
+function _isArchived(thread) {
+  return thread.lifecycle === 'archived' || thread.workStatus === 'archived';
 }
 
 function _isCompleted(thread) {
-  return !_isHistory(thread) && _derivedState(thread).key === 'completed';
+  return !_isArchived(thread) && thread.workStatus === 'completed';
 }
 
 function _isActive(thread) {
-  return !_isHistory(thread) && !_isCompleted(thread);
+  return !_isArchived(thread) && !_isCompleted(thread);
 }
 
 function _formatRelativeTime(timestamp) {
@@ -78,8 +77,16 @@ function _formatRelativeTime(timestamp) {
   if (diff < 60_000) return '刚刚';
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  const date = new Date(timestamp);
-  return `${date.getMonth() + 1}/${date.getDate()}`;
+  if (diff < 30 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`;
+  if (diff < 365 * 86_400_000) return `${Math.floor(diff / (30 * 86_400_000))} 个月前`;
+  return `${Math.floor(diff / (365 * 86_400_000))} 年前`;
+}
+
+function _formatExactTime(timestamp) {
+  if (!timestamp) return '';
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
 }
 
 function _transitionLabel(transition) {
@@ -110,7 +117,7 @@ async function _fetchTasks(thread, { force = false } = {}) {
     };
   } catch {
     if (!_threadsState.taskCache[sessionId]) {
-      _threadsState.taskCache[sessionId] = { tasks: [], summary: { total: 0, completed: 0, inProgress: 0, pending: 0 } };
+      _threadsState.taskCache[sessionId] = { tasks: [], summary: { total: 0, completed: 0, cancelled: 0, resolved: 0, inProgress: 0, pending: 0 } };
     }
   } finally {
     _threadsState.taskLoading.delete(sessionId);
@@ -132,13 +139,13 @@ async function _fetchThreads({ refreshTasks = true } = {}) {
     _threadsState.lastUpdatedAt = Date.now();
     const counts = {};
     for (const thread of _threadsState.threads) {
-      if (_isHistory(thread)) continue;
+      if (_isArchived(thread)) continue;
       counts[thread.identityRef] = (counts[thread.identityRef] || 0) + 1;
     }
     _threadsState.threadCounts = counts;
 
     if (refreshTasks) {
-      const visibleThreads = _threadsState.threads.filter((thread) => !_isHistory(thread));
+      const visibleThreads = _threadsState.threads.filter((thread) => !_isArchived(thread));
       await Promise.all(visibleThreads.map((thread) => _fetchTasks(thread, { force: true })));
       if (requestVersion !== _threadsState.requestVersion || chatId !== WgState.activeChatId) return;
       _threadsState.lastUpdatedAt = Date.now();
@@ -153,9 +160,9 @@ async function _fetchThreads({ refreshTasks = true } = {}) {
 async function _refreshLiveData() {
   if (!WgState.activeChatId || !_threadsState.loaded) return;
   if (typeof fetchRuntimeStatus === 'function') await fetchRuntimeStatus();
-  const active = _threadsState.threads.filter((thread) => !_isHistory(thread));
-  await Promise.all(active.map((thread) => _fetchTasks(thread, { force: true })));
-  _threadsState.lastUpdatedAt = Date.now();
+  // 重新拉取线程投影，而不只刷新 Task。这样从其他页面归档/取消归档 head 后，
+  // 面板无需依赖群聊事件，也会在下一次刷新直接迁移到正确分区。
+  await _fetchThreads({ refreshTasks: true });
   _refreshPanel();
   _refreshAwareness();
 }
@@ -182,21 +189,20 @@ function _renderPanel() {
 
   const active = _threadsState.threads.filter(_isActive);
   const completed = _threadsState.threads.filter(_isCompleted);
-  const history = _threadsState.threads.filter(_isHistory);
-  const runningCount = active.filter((thread) => _runtimeStatus(thread) === 'running').length;
+  const archived = _threadsState.threads.filter(_isArchived);
 
   return [
     '<div class="wg-threads-panel">',
-    _renderOverview(active.length, completed.length, history.length, runningCount),
+    _renderOverview(active.length, completed.length, archived.length),
     _threadsState.error ? '<div class="wg-thread-stale">暂时无法更新，正在显示上次数据。</div>' : '',
     active.length ? _renderSection('进行中', active, 'active') : '',
     completed.length ? _renderSection('已完成', completed, 'completed') : '',
-    history.length ? _renderHistorySection(history) : '',
+    archived.length ? _renderArchivedSection(archived) : '',
     '</div>',
   ].join('');
 }
 
-function _renderOverview(activeCount, completedCount, historyCount, runningCount) {
+function _renderOverview(activeCount, completedCount, archivedCount) {
   const updated = _formatRelativeTime(_threadsState.lastUpdatedAt);
   return [
     '<div class="wg-thread-overview">',
@@ -205,10 +211,9 @@ function _renderOverview(activeCount, completedCount, historyCount, runningCount
     `    <div class="wg-thread-overview-meta">${updated ? `更新于 ${wgEsc(updated)}` : ''}</div>`,
     '  </div>',
     '  <div class="wg-thread-metrics">',
-    `    <div class="wg-thread-metric${runningCount ? ' is-running' : ''}"><strong>${runningCount}</strong><span>运行中</span></div>`,
-    `    <div class="wg-thread-metric"><strong>${activeCount}</strong><span>进行中</span></div>`,
+    `    <div class="wg-thread-metric${activeCount ? ' is-running' : ''}"><strong>${activeCount}</strong><span>进行中</span></div>`,
     `    <div class="wg-thread-metric"><strong>${completedCount}</strong><span>已完成</span></div>`,
-    `    <div class="wg-thread-metric muted"><strong>${historyCount}</strong><span>历史</span></div>`,
+    `    <div class="wg-thread-metric muted"><strong>${archivedCount}</strong><span>已归档</span></div>`,
     '  </div>',
     '</div>',
   ].join('');
@@ -225,12 +230,12 @@ function _renderSection(title, threads, tone) {
   ].join('');
 }
 
-function _renderHistorySection(threads) {
+function _renderArchivedSection(threads) {
   const show = _threadsState.showHistory;
   return [
-    '<section class="wg-thread-section is-history">',
+    '<section class="wg-thread-section is-archived">',
     `  <button class="wg-thread-history-toggle" data-wg-threads-history aria-expanded="${show}">`,
-    '    <span>历史记录</span>',
+    '    <span>已归档</span>',
     `    <span>${threads.length} ${show ? '收起' : '展开'}</span>`,
     '  </button>',
     show ? `<div class="wg-thread-history-list">${threads.map((thread) => _renderCard(thread, { showIdentity: true, compact: true })).join('')}</div>` : '',
@@ -243,14 +248,12 @@ function _renderCard(thread, { showIdentity = false, compact = false } = {}) {
   const state = _derivedState(thread);
   const summary = _taskSummary(thread);
   const expanded = _threadsState.expandedThreads.has(key);
-  const progress = summary?.total > 0 ? `${summary.completed || 0}/${summary.total} 完成` : '';
-  const latest = _formatRelativeTime(thread.updatedAt);
-  const meta = [showIdentity ? thread.identityName : '', progress, latest].filter(Boolean).join(' · ');
+  const meta = showIdentity ? thread.identityName : '';
   const lineageCount = thread.lineage?.length || 1;
   const runtime = _runtimeStatus(thread) || 'offline';
 
   return [
-    `<article class="wg-thread-card state-${state.key}${compact ? ' compact' : ''}">`,
+    `<article class="wg-thread-card state-${state.key}${compact ? ' compact' : ''}" data-wg-thread-card="${wgEsc(key)}" tabindex="0">`,
     '  <div class="wg-thread-card-top">',
     '    <div class="wg-thread-card-copy">',
     '      <div class="wg-thread-title-row">',
@@ -261,22 +264,18 @@ function _renderCard(thread, { showIdentity = false, compact = false } = {}) {
     '    </div>',
     '  </div>',
     compact ? '' : _renderLatestMessage(thread),
-    _isHistory(thread) ? '' : _renderRuntimeRow(thread),
+    _isArchived(thread) ? '' : _renderRuntimeRow(thread),
     _renderCardActions(thread),
-    _isHistory(thread) ? '' : _renderTasks(thread),
-    lineageCount > 1
-      ? `<button class="wg-thread-detail-toggle" data-wg-threads-toggle="${wgEsc(key)}" aria-expanded="${expanded}"><span><strong>会话脉络</strong> ${lineageCount} 个会话 · ${wgEsc(_transitionLabel(thread.lineage[lineageCount - 1]?.transition))}</span><span>${expanded ? '收起' : '查看脉络'} <i>›</i></span></button>`
-      : '',
+    _renderInspectors(thread, summary, lineageCount, expanded),
+    _isArchived(thread) ? '' : _renderTaskDetails(thread),
     expanded ? _renderDetails(thread) : '',
     '</article>',
   ].join('');
 }
 
 function _renderInlineState(thread, state, runtime) {
-  const label = _isCompleted(thread) || _isHistory(thread)
-    ? state.label
-    : runtime === 'running' ? '运行中' : runtime === 'idle' ? '空闲' : '未运行';
-  const tone = _isCompleted(thread) ? 'completed' : _isHistory(thread) ? 'history' : runtime;
+  const label = state.label;
+  const tone = _isCompleted(thread) ? 'completed' : _isArchived(thread) ? 'archived' : runtime === 'queued' ? 'queued' : 'running';
   return `<span class="wg-thread-inline-state ${wgEsc(tone)}"><i></i>${wgEsc(label)}</span>`;
 }
 
@@ -296,11 +295,20 @@ function _renderLatestMessage(thread) {
   if (!latest?.text) return '';
   const preview = _messagePreviewText(latest.text);
   if (!preview) return '';
-  return `<p class="wg-thread-latest" title="${wgEsc(preview)}">${wgEsc(preview)}</p>`;
+  const timestamp = latest.timestamp || thread.updatedAt || 0;
+  const relative = _formatRelativeTime(timestamp);
+  const exact = _formatExactTime(timestamp);
+  return [
+    '<div class="wg-thread-latest-row">',
+    `  <p class="wg-thread-latest" title="${wgEsc(preview)}">${wgEsc(preview)}</p>`,
+    relative ? `  <time class="wg-thread-latest-time" datetime="${timestamp ? new Date(timestamp).toISOString() : ''}" title="${wgEsc(exact)}">${wgEsc(relative)}</time>` : '',
+    '</div>',
+  ].join('');
 }
 
 function _renderCardActions(thread) {
   const sessionId = _headId(thread);
+  const key = _threadKey(thread);
   const actions = [];
   if (thread.canDispatch) {
     actions.push(
@@ -312,7 +320,50 @@ function _renderCardActions(thread) {
   } else if (thread.lifecycle !== 'missing') {
     actions.push(`<button class="wg-thread-secondary" data-wg-threads-nav="${wgEsc(thread.workspaceId)}:${wgEsc(sessionId)}">查看会话</button>`);
   }
+  if (thread.lifecycle !== 'missing') {
+    const nextArchived = thread.lifecycle !== 'archived';
+    actions.push(`<button class="wg-thread-archive" data-wg-threads-archive="${wgEsc(key)}" data-wg-next-archived="${nextArchived}" title="${nextArchived ? '归档线程（Shift+Delete）' : '取消归档'}">${nextArchived ? '归档线程' : '取消归档'}</button>`);
+  }
   return actions.length ? `<div class="wg-thread-actions">${actions.join('')}</div>` : '';
+}
+
+function _taskProgress(summary) {
+  const total = Number(summary?.total) || 0;
+  const completed = Number(summary?.completed) || 0;
+  const cancelled = Number(summary?.cancelled) || 0;
+  const resolved = summary?.resolved == null ? completed + cancelled : Number(summary.resolved) || 0;
+  if (!total) return { short: '尚未建立', detail: '此线程尚未建立 Task' };
+  const parts = [`${completed} 完成`];
+  if (cancelled) parts.push(`${cancelled} 取消`);
+  const remaining = Math.max(0, total - resolved);
+  if (remaining) parts.push(`${remaining} 待处理`);
+  return { short: `${resolved}/${total} 已处理`, detail: parts.join(' · ') };
+}
+
+function _renderInspectors(thread, summary, lineageCount, lineageExpanded) {
+  const buttons = [];
+  if (!_isArchived(thread)) {
+    const sessionId = _headId(thread);
+    const taskExpanded = _threadsState.expandedTasks.has(sessionId);
+    const progress = _taskProgress(summary);
+    buttons.push([
+      `<button class="wg-thread-inspector${taskExpanded ? ' is-selected' : ''}" role="tab" data-wg-threads-toggle-task="${wgEsc(sessionId)}" aria-selected="${taskExpanded}" aria-controls="wg-thread-task-${wgEsc(sessionId)}">`,
+      '  <span class="wg-thread-inspector-copy"><strong>任务</strong>',
+      `    <small>${wgEsc(progress.short)} · ${wgEsc(progress.detail)}</small></span>`,
+      `  <span class="wg-thread-inspector-action">${taskExpanded ? '当前' : '查看'} <i>›</i></span>`,
+      '</button>',
+    ].join(''));
+  }
+  if (lineageCount > 1) {
+    buttons.push([
+      `<button class="wg-thread-inspector${lineageExpanded ? ' is-selected' : ''}" role="tab" data-wg-threads-toggle="${wgEsc(_threadKey(thread))}" aria-selected="${lineageExpanded}" aria-controls="wg-thread-lineage-${wgEsc(_threadKey(thread))}">`,
+      '  <span class="wg-thread-inspector-copy"><strong>脉络</strong>',
+      `    <small>${lineageCount} 个会话 · ${wgEsc(_transitionLabel(thread.lineage[lineageCount - 1]?.transition))}</small></span>`,
+      `  <span class="wg-thread-inspector-action">${lineageExpanded ? '当前' : '查看'} <i>›</i></span>`,
+      '</button>',
+    ].join(''));
+  }
+  return buttons.length ? `<div class="wg-thread-inspectors" role="tablist" aria-label="线程详情">${buttons.join('')}</div>` : '';
 }
 
 function _formatTokenCount(value) {
@@ -361,7 +412,7 @@ function _renderDetails(thread) {
     }
     nodes.push(_renderLineageNode(node, thread, index === 0));
   });
-  return `<div class="wg-thread-details">${nodes.join('')}</div>`;
+  return `<div class="wg-thread-details" id="wg-thread-lineage-${wgEsc(_threadKey(thread))}" role="tabpanel">${nodes.join('')}</div>`;
 }
 
 function _renderLineageNode(node, thread, isHead) {
@@ -385,29 +436,35 @@ function _renderLineageNode(node, thread, isHead) {
   ].join('');
 }
 
-function _renderTasks(thread) {
+function _renderTaskDetails(thread) {
   const sessionId = _headId(thread);
   const data = _threadsState.taskCache[sessionId];
   const expanded = _threadsState.expandedTasks.has(sessionId);
   const tasks = data?.tasks || [];
-  const summary = data?.summary || { total: 0, completed: 0 };
+  if (!expanded) return '';
   const visibleTasks = expanded
-    ? [...tasks].sort((a, b) => ({ in_progress: 0, pending: 1, completed: 2 }[a.status] ?? 3) - ({ in_progress: 0, pending: 1, completed: 2 }[b.status] ?? 3))
+    ? [...tasks].sort((a, b) => ({ in_progress: 0, pending: 1, completed: 2, deleted: 3, cancelled: 3, canceled: 3 }[a.status] ?? 4) - ({ in_progress: 0, pending: 1, completed: 2, deleted: 3, cancelled: 3, canceled: 3 }[b.status] ?? 4))
     : [];
   return [
-    '<div class="wg-thread-tasks">',
-    `  <button class="wg-thread-tasks-toggle" data-wg-threads-toggle-task="${wgEsc(sessionId)}" aria-expanded="${expanded}"><span><strong>Task</strong>${summary.total > 0 ? ` ${summary.completed || 0}/${summary.total} 已完成` : ' 尚未建立'}</span><span>${expanded ? '收起' : '查看任务'} <i>›</i></span></button>`,
-    expanded ? (visibleTasks.length
+    `<div class="wg-thread-task-details" id="wg-thread-task-${wgEsc(sessionId)}" role="tabpanel">`,
+    visibleTasks.length
       ? `<div class="wg-thread-task-list">${visibleTasks.map(_renderTask).join('')}</div>`
-      : '<div class="wg-thread-task-empty">此会话暂无 Task</div>') : '',
+      : '<div class="wg-thread-task-empty">此线程暂无 Task</div>',
     '</div>',
   ].join('');
 }
 
 function _renderTask(task) {
-  const status = task.status === 'completed' ? 'completed' : task.status === 'in_progress' ? 'running' : 'pending';
+  const status = task.status === 'completed' ? 'completed'
+    : ['deleted', 'cancelled', 'canceled'].includes(task.status) ? 'cancelled'
+      : task.status === 'in_progress' ? 'running' : 'pending';
   const label = task.status === 'in_progress' ? (task.activeForm || task.subject) : task.subject;
-  return `<div class="wg-thread-task ${status}"><span class="wg-thread-task-icon"></span><span>${wgEsc(label || '')}</span></div>`;
+  const finished = task.finishedAt ? _formatRelativeTime(task.finishedAt) : '';
+  const resultLabel = status === 'cancelled' ? '已取消' : status === 'completed' ? '已完成' : '';
+  const suffix = resultLabel
+    ? `<span class="wg-thread-task-result" title="${wgEsc(_formatExactTime(task.finishedAt))}">${wgEsc(resultLabel)}${finished ? ` · ${wgEsc(finished)}` : ''}</span>`
+    : '';
+  return `<div class="wg-thread-task ${status}"><span class="wg-thread-task-icon"></span><span>${wgEsc(label || '')}</span>${suffix}</div>`;
 }
 
 function _loadingHtml() {
@@ -450,11 +507,94 @@ function _navigateRecord(raw) {
   if (typeof navigateToSessionRecord === 'function') navigateToSessionRecord(parts[0], parts.slice(1).join(':'));
 }
 
+function _findThread(key) {
+  return _threadsState.threads.find((thread) => _threadKey(thread) === key) || null;
+}
+
+function _selectThreadInspector(thread, inspector) {
+  if (!thread) return;
+  const key = _threadKey(thread);
+  const sessionId = _headId(thread);
+  const wasSelected = inspector === 'lineage'
+    ? _threadsState.expandedThreads.has(key)
+    : _threadsState.expandedTasks.has(sessionId);
+  // 一个卡片只有一个详情槽。未选中时切换到目标页；再次点击当前页则收起。
+  _threadsState.expandedThreads.delete(key);
+  _threadsState.expandedTasks.delete(sessionId);
+  if (wasSelected) return;
+  if (inspector === 'lineage') _threadsState.expandedThreads.add(key);
+  if (inspector === 'tasks') _threadsState.expandedTasks.add(sessionId);
+}
+
+async function _setThreadArchived(thread, archived, button = null) {
+  const sessionId = _headId(thread);
+  if (!thread?.workspaceId || !sessionId) return;
+  const title = _threadTitle(thread);
+  const runtime = _runtimeStatus(thread);
+  const runningNote = archived && (runtime === 'running' || runtime === 'queued')
+    ? '\n\n当前线程仍在执行，确认后会先中断，再归档当前 head。'
+    : '';
+  const question = archived
+    ? `确定归档工作线程「${title}」吗？${runningNote}`
+    : `确定取消归档工作线程「${title}」吗？`;
+  if (typeof window.confirm === 'function' && !window.confirm(question)) return;
+
+  const originalText = button?.textContent || '';
+  if (button) {
+    button.disabled = true;
+    button.textContent = archived ? '归档中…' : '恢复中…';
+  }
+  try {
+    if (archived && (runtime === 'running' || runtime === 'queued')) {
+      const interruptRes = await fetch('/protoclaw/gc/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId: WgState.activeChatId,
+          identityRef: thread.identityRef,
+          sessionId,
+          action: 'interrupt',
+        }),
+      });
+      if (!interruptRes.ok) throw new Error('无法中断当前执行');
+      const interruptData = await interruptRes.json();
+      if (interruptData.ok === false) throw new Error(interruptData.error || '无法中断当前执行');
+    }
+
+    const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: thread.workspaceId, sessionId, archived }),
+    });
+    if (!response.ok) {
+      const message = await response.text().catch(() => '');
+      throw new Error(message || `${archived ? '归档' : '取消归档'}失败`);
+    }
+    await _fetchThreads({ refreshTasks: true });
+    _refreshPanel();
+    _refreshAwareness();
+  } catch (error) {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+    window.alert(`${archived ? '归档' : '取消归档'}线程失败：${error?.message || error}`);
+  }
+}
+
 function _wireEvents() {
   const body = document.getElementById('feature-panel-body');
   if (!body || body._wgThreadsEventsWired) return;
   body._wgThreadsEventsWired = true;
   body.addEventListener('click', async (event) => {
+    const archive = event.target.closest('[data-wg-threads-archive]');
+    if (archive) {
+      event.preventDefault();
+      event.stopPropagation();
+      const thread = _findThread(archive.dataset.wgThreadsArchive);
+      if (thread) await _setThreadArchived(thread, archive.dataset.wgNextArchived === 'true', archive);
+      return;
+    }
     const interrupt = event.target.closest('[data-wg-threads-interrupt]');
     if (interrupt) {
       event.preventDefault();
@@ -483,14 +623,15 @@ function _wireEvents() {
     const toggle = event.target.closest('[data-wg-threads-toggle]');
     if (toggle) {
       const key = toggle.dataset.wgThreadsToggle;
-      _threadsState.expandedThreads.has(key) ? _threadsState.expandedThreads.delete(key) : _threadsState.expandedThreads.add(key);
+      _selectThreadInspector(_findThread(key), 'lineage');
       _refreshPanel();
       return;
     }
     const taskToggle = event.target.closest('[data-wg-threads-toggle-task]');
     if (taskToggle) {
       const sessionId = taskToggle.dataset.wgThreadsToggleTask;
-      _threadsState.expandedTasks.has(sessionId) ? _threadsState.expandedTasks.delete(sessionId) : _threadsState.expandedTasks.add(sessionId);
+      const thread = _threadsState.threads.find((item) => _headId(item) === sessionId) || null;
+      _selectThreadInspector(thread, 'tasks');
       _refreshPanel();
       return;
     }
@@ -504,7 +645,17 @@ function _wireEvents() {
       _refreshPanel();
     }
   });
-  body.addEventListener('keydown', (event) => {
+  body.addEventListener('keydown', async (event) => {
+    if (event.key === 'Delete' && event.shiftKey) {
+      const card = event.target.closest('[data-wg-thread-card]');
+      if (!card || event.target.closest('button, input, textarea, [contenteditable="true"]')) return;
+      const thread = _findThread(card.dataset.wgThreadCard);
+      if (thread && !_isArchived(thread) && thread.lifecycle !== 'missing') {
+        event.preventDefault();
+        await _setThreadArchived(thread, true);
+      }
+      return;
+    }
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const nav = event.target.closest('[data-wg-threads-nav]');
     if (nav) { event.preventDefault(); _navigate(nav.dataset.wgThreadsNav); }
@@ -541,7 +692,7 @@ window._wgGetThreadDataState = function () {
 };
 
 window._wgGetThreadSummary = function (identityRef) {
-  const threads = _threadsState.threads.filter((thread) => thread.identityRef === identityRef && !_isHistory(thread));
+  const threads = _threadsState.threads.filter((thread) => thread.identityRef === identityRef && !_isArchived(thread));
   if (!threads.length) return null;
   const statusCounts = { active: 0, completed: 0, running: 0 };
   const activeHeads = threads.map((thread) => {

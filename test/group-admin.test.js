@@ -1,6 +1,28 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { GroupAdminFeature } from '../local-features/dist/group-admin/src/index.js';
+
+describe('group admin system prompt', () => {
+  const prompt = readFileSync(
+    new URL('../prebuilt-agents/official/work-group/.agentdev/prompts/system.md', import.meta.url),
+    'utf8',
+  );
+
+  it('teaches the work-thread model positively and keeps lifecycle facts precise', () => {
+    assert.ok(prompt.includes('工作线程是你理解和协调工作的基本单位'));
+    assert.ok(prompt.includes('工作分类回答“当前执行是否还在继续”'));
+    assert.ok(prompt.includes('上下文用量与压缩阈值是观测信息'));
+    assert.ok(prompt.includes('中断只停止当前执行'));
+    assert.ok(prompt.includes('审批由当前群聊的响应模式决定'));
+  });
+
+  it('does not frame the worldview as a migration from a previous model', () => {
+    assert.ok(!prompt.includes('看工作，不看会话'));
+    assert.ok(!prompt.includes('系统自动 compact'));
+    assert.ok(!prompt.includes('以前'));
+  });
+});
 
 describe('GroupAdminFeature', () => {
   const origEnv = { ...process.env };
@@ -430,13 +452,13 @@ describe('GroupAdminFeature', () => {
   });
 
   describe('thread-first tools', () => {
-    it('formats the work scene with Task, runtime and latest message', async () => {
+    it('formats the work-thread overview with Task, runtime and latest message', async () => {
       const feature = createFeature();
       const tool = feature.getTools().find(t => t.name === 'gc_thread_overview');
       const restore = mockFetch(() => Promise.resolve({
         ok: true,
         json: async () => ({
-          totals: { running: 1, active: 1, completed: 0, history: 0 },
+          totals: { active: 1, completed: 0, archived: 0 },
           threads: [{
             threadRef: 'programming-helper:main::root',
             identityName: '编程小助手',
@@ -454,10 +476,11 @@ describe('GroupAdminFeature', () => {
       try {
         const result = await tool.execute({});
         assert.equal(result.success, true);
-        assert.ok(result.text.includes('工作现场'));
+        assert.ok(result.text.includes('工作线程'));
         assert.ok(result.text.includes('部署预览'));
         assert.ok(result.text.includes('Task 1/4'));
         assert.ok(result.text.includes('正在检查部署区域常量'));
+        assert.ok(!result.text.includes('head:'));
       } finally {
         restore();
       }
@@ -507,6 +530,8 @@ describe('GroupAdminFeature', () => {
         assert.equal(result.success, true);
         assert.equal(result.sessionId, 'head-2');
         assert.equal(result.threadRef, 'programming-helper:main::root');
+        assert.ok(!result.text.includes('sessionId:'));
+        assert.ok(!result.text.includes('派发后的工作线程'));
       } finally {
         restore();
       }

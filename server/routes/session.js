@@ -1397,9 +1397,9 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
     const result = await archivePrebuiltSession(agent.id, req.body.sessionId, archived);
     res.json(result);
 
-    // 纯归档操作通知关联群聊
-    if (archived && notifySessionArchived) {
-      notifySessionArchived({ agentId: agent.id, sessionId: req.body.sessionId })
+    // 归档状态变化通知关联群聊；线程投影仍以 session index 的实时状态为准。
+    if (notifySessionArchived) {
+      notifySessionArchived({ agentId: agent.id, sessionId: req.body.sessionId, archived })
         .catch((err) => console.error('[archive] notification failed:', err));
     }
   } catch (error) {

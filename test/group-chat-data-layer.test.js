@@ -22,6 +22,7 @@ import {
   aggregateSessionPool,
   buildSessionContextUsage,
   buildSessionLatestMessage,
+  buildThreadTaskSummary,
   deriveThreadWorkStatus,
   groupByLineage,
   createGroupChatDataLayer,
@@ -638,6 +639,7 @@ describe('buildSessionLatestMessage', () => {
       role: 'assistant',
       text: '修复已经完成，并补充了测试。',
       turn: 1,
+      timestamp: null,
     });
   });
 
@@ -654,6 +656,17 @@ describe('buildSessionLatestMessage', () => {
     });
     assert.equal(latest?.role, 'user');
     assert.equal(latest?.text, '继续完成剩余任务');
+  });
+
+  it('uses the message timestamp or session update time for the displayed latest message', () => {
+    const direct = buildSessionLatestMessage({
+      runtime: { context: { messages: [{ role: 'assistant', content: '刚刚完成', timestamp: 1234 }] } },
+    }, { updatedAt: 999 });
+    const fallback = buildSessionLatestMessage({
+      runtime: { context: { messages: [{ role: 'assistant', content: '历史消息' }] } },
+    }, { updatedAt: 5678 });
+    assert.equal(direct.timestamp, 1234);
+    assert.equal(fallback.timestamp, 5678);
   });
 });
 
@@ -734,6 +747,51 @@ describe('groupByLineage', () => {
     assert.deepEqual(branch.lineage.map((node) => node.sessionId), ['root', 'child-a']);
   });
 
+  it('archives only the branch path whose head is archived', async () => {
+    const branchIndex = async () => ({
+      sessions: [
+        { id: 'root', title: '原始工作', archived: true },
+        { id: 'child-a', title: '方案 A', archived: true },
+        { id: 'child-b', title: '方案 B', archived: false },
+      ],
+    });
+    const threads = await groupByLineage(
+      [{ identityRef: 'programming-helper:main', sessionId: 'root', lastActivity: 100 }],
+      [
+        { from: 'root', to: 'child-a', reason: 'trim', timestamp: 150, identityRef: 'programming-helper:main' },
+        { from: 'root', to: 'child-b', reason: 'branch', timestamp: 160, identityRef: 'programming-helper:main' },
+      ],
+      identities,
+      branchIndex,
+      { activeSessions: { 'programming-helper:main': 'child-b' }, messages: [] },
+    );
+
+    assert.equal(threads.find((thread) => thread.lineageHeadId === 'child-a')?.lifecycle, 'archived');
+    assert.equal(threads.find((thread) => thread.lineageHeadId === 'child-b')?.lifecycle, 'current');
+  });
+
+  it('revives an archived thread when the head is unarchived in the session index', async () => {
+    const liveIndex = async () => ({
+      sessions: [
+        { id: 'root', title: '重构认证模块', archived: true },
+        { id: 'child-a', title: '实现登录流程', archived: false },
+      ],
+    });
+    const threads = await groupByLineage(
+      [{ identityRef: 'programming-helper:main', sessionId: 'root', lastActivity: 100 }],
+      [{ from: 'root', to: 'child-a', reason: 'trim', timestamp: 150, identityRef: 'programming-helper:main' }],
+      identities,
+      liveIndex,
+      {
+        activeSessions: {},
+        messages: [{ timestamp: 200, event: { type: 'session_archived', sessionId: 'child-a' } }],
+      },
+    );
+
+    assert.equal(threads[0].lifecycle, 'available');
+    assert.equal(threads[0].canDispatch, true);
+  });
+
   it('enriches transitions with event metadata', async () => {
     const threads = await groupByLineage(
       [{ identityRef: 'programming-helper:main', sessionId: 'root', lastActivity: 100 }],
@@ -761,8 +819,8 @@ describe('groupByLineage', () => {
 });
 
 describe('deriveThreadWorkStatus', () => {
-  it('treats no Task as active rather than completed', () => {
-    assert.equal(deriveThreadWorkStatus({ lifecycle: 'available' }, { total: 0, completed: 0 }, 'idle'), 'active');
+  it('marks an ended thread completed even when it has no Task', () => {
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'available' }, { total: 0, completed: 0 }, 'idle'), 'completed');
   });
 
   it('keeps running threads active even when every Task is complete', () => {
@@ -777,13 +835,31 @@ describe('deriveThreadWorkStatus', () => {
     ), 'active');
   });
 
-  it('marks idle threads completed only with explicit completed Tasks', () => {
-    assert.equal(deriveThreadWorkStatus({ lifecycle: 'current' }, { total: 2, completed: 2 }, 'idle'), 'completed');
+  it('keeps Task progress independent from an ended thread', () => {
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'current' }, { total: 4, completed: 1, cancelled: 1 }, 'idle'), 'completed');
   });
 
-  it('projects archived and missing heads as history', () => {
-    assert.equal(deriveThreadWorkStatus({ lifecycle: 'archived' }, { total: 1, completed: 0 }, 'offline'), 'history');
-    assert.equal(deriveThreadWorkStatus({ lifecycle: 'missing' }, { total: 1, completed: 0 }, 'offline'), 'history');
+  it('keeps the public classification limited to active, completed and archived', () => {
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'archived' }, { total: 1, completed: 0 }, 'offline'), 'archived');
+    assert.equal(deriveThreadWorkStatus({ lifecycle: 'missing' }, { total: 1, completed: 0 }, 'offline'), 'completed');
+  });
+});
+
+describe('buildThreadTaskSummary', () => {
+  it('counts cancelled Tasks as resolved while preserving their result', () => {
+    assert.deepEqual(buildThreadTaskSummary([
+      { status: 'completed' },
+      { status: 'completed' },
+      { status: 'deleted' },
+      { status: 'pending' },
+    ]), {
+      total: 4,
+      completed: 2,
+      cancelled: 1,
+      resolved: 3,
+      inProgress: 0,
+      pending: 1,
+    });
   });
 });
 
