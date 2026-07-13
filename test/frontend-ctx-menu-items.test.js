@@ -56,6 +56,15 @@ function loadCtxMenuItems(overrides = {}) {
     },
     CSS: { escape: (s) => s },
     bumpNavigationGuard: () => 1,
+    _navigationGuardEpoch: 0,
+    getExternalRuntimeAgent: () => null,
+    clearAgentRuntimeCache: () => {},
+    restartingRuntimeIds: new Set(),
+    suppressSidebarRerender: false,
+    restartSidebarExternalRuntime: () => ({}),
+    loadAgents: () => {},
+    requestSwitch: () => {},
+    invoke: () => ({}),
   };
 
   const ctx = createFrontendSandbox({ ...defaults, ...overrides });
