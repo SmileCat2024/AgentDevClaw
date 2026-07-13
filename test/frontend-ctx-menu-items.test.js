@@ -55,6 +55,7 @@ function loadCtxMenuItems(overrides = {}) {
       })[m]);
     },
     CSS: { escape: (s) => s },
+    bumpNavigationGuard: () => 1,
   };
 
   const ctx = createFrontendSandbox({ ...defaults, ...overrides });
@@ -79,8 +80,8 @@ describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
     // Expected: rename, generate-title, summary submenu, trim submenu, branch submenu,
-    //           separator, archive-and-stop, restart, stop
-    assert.equal(items.length, 9);
+    //           separator, archive-and-stop, restart, stop, delete-session-runtime
+    assert.equal(items.length, 10);
     assert.equal(items[0].action, 'rename');
     assert.equal(items[1].action, 'generate-title');
     assert.ok(items[2].submenu, 'summary should have submenu');
@@ -93,6 +94,8 @@ describe('ctx-menu-items: getCtxMenuItems (runtime)', () => {
     assert.equal(items[7].action, 'restart');
     assert.equal(items[8].action, 'stop');
     assert.equal(items[8].danger, true);
+    assert.equal(items[9].action, 'delete-session-runtime');
+    assert.equal(items[9].danger, true);
   });
 
   it('runtime with archived active session → unarchive label', () => {
@@ -275,13 +278,13 @@ describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
 // ── dispatchCtxAction: ctx* routes call closeCtxMenu ────────
 
 describe('ctx-menu-items: dispatchCtxAction (ctx* routes)', () => {
-  it('restart → calls closeCtxMenu (confirm denied)', () => {
+  it('restart → calls closeCtxMenu', () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('restart', { ns: 'ph', id: 'rt-1', sessionId: 's1' })`);
     assert.ok(calls.find((c) => c.fn === 'closeCtxMenu'));
   });
 
-  it('stop → calls closeCtxMenu (confirm denied)', () => {
+  it('stop → calls closeCtxMenu', () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('stop', { ns: 'ph', id: 'rt-1', sessionId: 's1' })`);
     assert.ok(calls.find((c) => c.fn === 'closeCtxMenu'));

@@ -2226,11 +2226,6 @@ window.openAgentActions = (event, agentId) => {
 
 restartAgentAction.addEventListener('click', async () => {
   if (!contextMenuAgentId || (contextMenuAgentMode !== 'prebuilt-runtime' && contextMenuAgentMode !== 'external-runtime' && contextMenuAgentMode !== 'child-runtime')) return;
-  const confirmed = window.confirm(t('restart_prebuilt_confirm'));
-  if (!confirmed) {
-    closeAgentContextMenu();
-    return;
-  }
 
   try {
     bumpNavigationGuard();
@@ -2288,11 +2283,6 @@ restartAgentAction.addEventListener('click', async () => {
 
 stopAgentAction.addEventListener('click', async () => {
   if (!contextMenuAgentId || (contextMenuAgentMode !== 'prebuilt-runtime' && contextMenuAgentMode !== 'external-runtime' && contextMenuAgentMode !== 'child-runtime')) return;
-  const confirmed = window.confirm(t('close_prebuilt_confirm'));
-  if (!confirmed) {
-    closeAgentContextMenu();
-    return;
-  }
 
   try {
     const agent = getExternalRuntimeAgent(contextMenuAgentId);

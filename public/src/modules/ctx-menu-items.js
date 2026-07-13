@@ -62,6 +62,7 @@ function getCtxMenuItems(role, ns, variant, id) {
       { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive Session'), action: 'archive-and-stop' },
       { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
       { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
+      { label: isZh ? '删除会话' : 'Delete Session', action: 'delete-session-runtime', danger: true },
     ];
   }
   if (role === 'session' && ns === 'programming-helper') {
@@ -121,8 +122,6 @@ function getCtxMenuItems(role, ns, variant, id) {
 
 async function ctxRestartAgent(target) {
   const { ns, id, sessionId, variant } = target;
-  const confirmed = window.confirm(t('restart_prebuilt_confirm'));
-  if (!confirmed) return;
 
   bumpNavigationGuard();
   const _navGuard = _navigationGuardEpoch;
@@ -181,8 +180,6 @@ async function ctxRestartAgent(target) {
 
 async function ctxStopAgent(target) {
   const { ns, id, sessionId, variant } = target;
-  const confirmed = window.confirm(t('close_prebuilt_confirm'));
-  if (!confirmed) return;
 
   try {
     const serverAgentId = (variant === 'managed-runtime') ? ns : id;
@@ -852,6 +849,11 @@ function dispatchCtxAction(action, target) {
     case 'delete-session':
       window.closeCtxMenu();
       window.runWorkspaceAction(JSON.stringify({ type: 'delete_session', sessionId: id }));
+      break;
+
+    case 'delete-session-runtime':
+      window.closeCtxMenu();
+      window.runWorkspaceAction(JSON.stringify({ type: 'delete_session', sessionId: sid }));
       break;
 
     case 'archive-session':
