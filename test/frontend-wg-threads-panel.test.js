@@ -49,6 +49,26 @@ describe('work-thread panel semantics', () => {
     assert.ok(html.includes('压缩阈值 180K tokens'));
   });
 
+  it('collapses active and completed sections from their heading controls', () => {
+    const ctx = loadPanel();
+    const result = ctx.run(`(() => {
+      const threads = [{
+        threadRef: 'agent:main::root', identityRef: 'agent:main', identityName: 'Agent',
+        lineageHeadId: 'head', lifecycle: 'available', workStatus: 'active', threadTitle: '测试线程'
+      }];
+      const expanded = _renderSection('进行中', threads, 'active');
+      _threadsState.collapsedSections.add('active');
+      const collapsed = _renderSection('进行中', threads, 'active');
+      return { expanded, collapsed };
+    })()`);
+    assert.ok(result.expanded.includes('aria-expanded="true"'));
+    assert.ok(result.expanded.includes('1 收起'));
+    assert.ok(result.expanded.includes('wg-thread-card'));
+    assert.ok(result.collapsed.includes('aria-expanded="false"'));
+    assert.ok(result.collapsed.includes('1 展开'));
+    assert.ok(!result.collapsed.includes('wg-thread-card'));
+  });
+
   it('renders terminal Task time and cancellation result', () => {
     const ctx = loadPanel();
     const html = ctx.run(`_renderTask({

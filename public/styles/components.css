@@ -9005,8 +9005,21 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   border: 1px solid var(--border-color);
   border-radius: 8px;
   color: var(--text-primary);
+  background: transparent;
+  width: 100%;
+  font-family: inherit;
   font-size: 14px;
   font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  transition: filter .15s ease, border-color .15s ease;
+}
+
+.wg-thread-section-heading:hover { filter: brightness(1.12); }
+.wg-thread-section-heading:focus-visible {
+  outline: 1px solid var(--text-secondary);
+  outline-offset: 2px;
 }
 
 .wg-thread-section-heading::before {

@@ -17,6 +17,7 @@ const _threadsState = {
   threadCounts: {},
   expandedThreads: new Set(),
   expandedTasks: new Set(),
+  collapsedSections: new Set(),
   showHistory: false,
   lastUpdatedAt: 0,
   requestVersion: 0,
@@ -222,10 +223,13 @@ function _renderOverview(activeCount, completedCount, archivedCount) {
 function _renderSection(title, threads, tone) {
   const identities = new Set(threads.map((thread) => thread.identityRef));
   const showIdentity = identities.size > 1 || new Set(_threadsState.threads.map((thread) => thread.identityRef)).size > 1;
+  const expanded = !_threadsState.collapsedSections.has(tone);
   return [
     `<section class="wg-thread-section tone-${tone}">`,
-    `  <div class="wg-thread-section-heading"><span>${wgEsc(title)}</span><span>${threads.length}</span></div>`,
-    threads.map((thread) => _renderCard(thread, { showIdentity })).join(''),
+    `  <button class="wg-thread-section-heading" type="button" data-wg-threads-section="${wgEsc(tone)}" aria-expanded="${expanded}">`,
+    `    <span>${wgEsc(title)}</span><span>${threads.length} ${expanded ? '收起' : '展开'}</span>`,
+    '  </button>',
+    expanded ? threads.map((thread) => _renderCard(thread, { showIdentity })).join('') : '',
     '</section>',
   ].join('');
 }
@@ -647,6 +651,14 @@ function _wireEvents() {
       _refreshPanel();
       return;
     }
+    const sectionToggle = event.target.closest('[data-wg-threads-section]');
+    if (sectionToggle) {
+      const section = sectionToggle.dataset.wgThreadsSection;
+      if (_threadsState.collapsedSections.has(section)) _threadsState.collapsedSections.delete(section);
+      else _threadsState.collapsedSections.add(section);
+      _refreshPanel();
+      return;
+    }
     if (event.target.closest('[data-wg-threads-retry]')) {
       await _fetchThreads();
       _refreshPanel();
@@ -730,6 +742,7 @@ window._wgThreadsCleanup = function () {
   _threadsState.threadCounts = {};
   _threadsState.expandedThreads.clear();
   _threadsState.expandedTasks.clear();
+  _threadsState.collapsedSections.clear();
   _threadsState.showHistory = false;
   _threadsState.lastUpdatedAt = 0;
   _threadsState.chatId = null;

@@ -58,8 +58,8 @@ describe('GroupAdminFeature', () => {
       assert.equal(messages.length, 1);
       assert.ok(messages[0].content.includes('你是群聊管理员'));
       assert.ok(messages[0].content.includes('专业 Agent 执行'));
-      assert.ok(!messages[0].content.includes('gc_reply'));
-      assert.ok(!messages[0].content.includes('结束'));
+      assert.ok(messages[0].content.includes('必须调用 gc_reply'));
+      assert.ok(messages[0].content.includes('普通文本输出不会进入群聊'));
     });
 
     it('reminds once after eight steps in a long call', async () => {
@@ -80,6 +80,14 @@ describe('GroupAdminFeature', () => {
       for (let index = 0; index < 16; index++) await feature.injectStepReminder(ctx);
       assert.equal(messages.length, 1);
     });
+  });
+
+  it('describes gc_stop as stop-only rather than a group reply', () => {
+    const feature = createFeature();
+    const tool = feature.getTools().find(t => t.name === 'gc_stop');
+    assert.ok(tool.description.includes('不会向群聊发送任何内容'));
+    assert.ok(tool.description.includes('先调用 gc_reply'));
+    assert.ok(tool.description.includes('无需发送消息'));
   });
 
   // ── statusLabel ──────────────────────────────────────────

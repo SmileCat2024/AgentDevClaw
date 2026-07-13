@@ -22,6 +22,7 @@ const COORDINATOR_REMINDER_CONTENT = [
   '你是群聊管理员，负责理解用户意图、定位工作线程、把要求准确交给合适的专业 Agent，并跟踪结果。',
   '具体编码、深入分析、写作和文件修改由专业 Agent 执行；你只承担协调所需的判断、轻量读取与信息整理。',
   '围绕工作线程判断是继续已有工作还是开始新工作，并避免替代执行者完成主体任务。',
+  '需要让群内用户看到内容时必须调用 gc_reply；普通文本输出不会进入群聊。',
 ].join('\n');
 
 export class GroupAdminFeature implements AgentFeature {
@@ -879,7 +880,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_stop',
-        description: '主动结束本轮对话。当你已完成所有必要的回复、派发或操作，确认无需再进行任何后续动作时，调用此工具。调用后会立即结束当前会话轮次，不会继续执行下一步。',
+        description: '结束当前推理轮次，但不会向群聊发送任何内容。若有结论需要让群内用户看到，应先调用 gc_reply（可设置 done=true 直接在发送后结束）；只有无需发送消息且没有后续操作时才使用 gc_stop。',
         parameters: {
           type: 'object',
           properties: {},
