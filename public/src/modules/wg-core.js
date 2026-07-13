@@ -1620,6 +1620,8 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
     delete WgState._chatInputCache[WgState.activeChatId];
     // 清空 session 选择状态（下次 @mention 重新选择）
     WgState._openSessionDropdown = null;
+    delete WgState._chatSessionSelection[WgState.activeChatId];
+    renderSessionBar();
 
     const links = WgState.pendingLinks.slice();
     WgState.pendingLinks = [];
