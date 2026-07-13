@@ -41,6 +41,7 @@ class EmbeddedRemoteClawConnector {
     this.runningLoops = new Set();
     this.catalogDigest = '';
     this.commandCursor = 0;
+    this.failuresByLabel = new Map();
   }
 
   start() {
@@ -60,14 +61,30 @@ class EmbeddedRemoteClawConnector {
 
   stop() {
     this.stopped = true;
-    for (const timer of this.timers) clearInterval(timer);
+    for (const timer of this.timers) clearTimeout(timer);
     this.timers = [];
   }
 
   every(label, ms, fn) {
-    const timer = setInterval(() => this.runLoop(label, fn), ms);
-    timer.unref?.();
-    this.timers.push(timer);
+    const schedule = () => {
+      if (this.stopped) return;
+      const delay = this.backoffDelay(label, ms);
+      const timer = setTimeout(() => {
+        this.runLoop(label, fn).finally(() => {
+          if (!this.stopped) schedule();
+        });
+      }, delay);
+      timer.unref?.();
+      this.timers.push(timer);
+    };
+    schedule();
+  }
+
+  backoffDelay(label, baseMs) {
+    const failures = this.failuresByLabel.get(label) || 0;
+    if (failures === 0) return baseMs;
+    const exponent = Math.min(failures, 5);
+    return Math.min(baseMs * (2 ** exponent), 60_000);
   }
 
   runLoop(label, fn) {
@@ -80,8 +97,17 @@ class EmbeddedRemoteClawConnector {
     if (this.stopped) return;
     try {
       await fn();
+      const prevFailures = this.failuresByLabel.get(label) || 0;
+      if (prevFailures > 0) {
+        this.failuresByLabel.delete(label);
+        this.log(`${label} recovered after ${prevFailures} consecutive failure(s)`);
+      }
     } catch (error) {
-      this.log(`${label} failed: ${error.message || error}`, 'warn');
+      const count = (this.failuresByLabel.get(label) || 0) + 1;
+      this.failuresByLabel.set(label, count);
+      if (count === 1 || count % 10 === 0) {
+        this.log(`${label} failed (attempt ${count}): ${error.message || error}`, 'warn');
+      }
     }
   }
 
