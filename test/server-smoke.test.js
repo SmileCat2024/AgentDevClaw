@@ -74,6 +74,7 @@ describe('Server module imports', () => {
       '../server/routes/dispatch.js',
       '../server/routes/im.js',
       '../server/routes/session-helpers.js',
+      '../server/routes/session-token-refresh.js',
       '../server/routes/feature-repository.js',
       '../server/routes/flow.js',
       '../server/routes/assembly-helpers.js',

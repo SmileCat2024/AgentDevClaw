@@ -14,7 +14,6 @@ import {
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
 import {
-  sanitizeSessionFragment,
   cleanSessionText,
   normalizeClientAgentId,
   childProcessEnv,
@@ -22,19 +21,15 @@ import {
 import {
   readSessionIndex,
   updateSessionIndex,
-  getPrebuiltAgentSessionDir,
   getPrebuiltSessionFilePath,
   resolvePrebuiltSessionType,
   findMissingCheckpoints,
 } from '../shared/session-access.js';
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
-import {
-  readModelPresets,
-  resolveSessionModelInfo,
-} from './model-config.js';
 import { renderConversationHtml } from '../conversation-renderer.js';
 import { readHandoffPackage } from '../context-continuity/handoff-package.js';
 import { META_VERSION } from './session-helpers.js';
+import { setupTokenRefreshRoute } from './session-token-refresh.js';
 
 // server.js lives at project root; this module is at server/routes/session.js
 const __filename = fileURLToPath(import.meta.url);
@@ -508,166 +503,8 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
   }
 });
 
-// ═══ Block B (server.js L3888-4046) ═══
-// ── Token Count Refresh ────────────────────────────────────────────────────────
-
-app.post('/protoclaw/refresh_session_token_count', express.json(), async (req, res, next) => {
-  try {
-    const { sessionId, agentId } = req.body || {};
-    if (!sessionId || !agentId) {
-      return res.status(400).json({ success: false, error: 'Missing sessionId or agentId' });
-    }
-
-    // 读取会话索引
-    const index = await readSessionIndex(agentId);
-    const sessionRecord = index.sessions.find(s => s.id === sessionId);
-    if (!sessionRecord) {
-      return res.status(404).json({ success: false, error: 'Session not found' });
-    }
-
-    // 复用 resolveSessionModelInfo 获取模型预设信息
-    const modelInfo = await resolveSessionModelInfo(agentId, 'default');
-    const presetName = modelInfo.presetName;
-    const modelName = modelInfo.modelName;
-
-    if (!presetName || !modelName) {
-      return res.status(400).json({
-        success: false,
-        error: `Cannot determine model preset for agent ${agentId}`,
-      });
-    }
-
-    // 读取模型预设配置（含 providers 和 countTokenPath）
-    const presetsData = await readModelPresets();
-    const preset = presetsData.presets.find(p => p.name === presetName);
-
-    if (!preset) {
-      return res.status(404).json({ success: false, error: `Model preset not found: ${presetName}` });
-    }
-
-    const countTokenPath = preset.countTokenPath || '/v1/messages/count_tokens';
-
-    // 获取 provider 信息
-    const provider = presetsData.providers.find(p => p.name === preset.providerName);
-    if (!provider) {
-      return res.status(404).json({ success: false, error: `Provider not found: ${preset.providerName}` });
-    }
-
-    const baseUrl = provider.endpoints?.[preset.protocol] || '';
-    if (!baseUrl) {
-      return res.status(400).json({ success: false, error: 'Provider base URL not configured' });
-    }
-
-    // 构建 count tokens API URL
-    const countTokensUrl = baseUrl.replace(/\/+$/, '') + countTokenPath;
-
-    // 读取会话文件中的实际消息
-    const sessionPath = path.join(getPrebuiltAgentSessionDir(agentId), `${sanitizeSessionFragment(sessionId)}.json`);
-    let sessionData = {};
-    let actualMessages = [];
-    try {
-      sessionData = JSON.parse(await fs.readFile(sessionPath, 'utf8'));
-      const rawMessages = sessionData?.runtime?.context?.messages || [];
-      // count_tokens 接口只接受 user/assistant 角色
-      // system 角色的内容合并到第一条 user 消息前
-      // tool 角色映射为 user（tool_result 嵌入 user message）
-      let systemParts = [];
-      for (const m of rawMessages) {
-        if (!m || m.content == null) continue;
-        if (m.role === 'system') {
-          systemParts.push(typeof m.content === 'string' ? m.content : JSON.stringify(m.content));
-          continue;
-        }
-        let content;
-        if (typeof m.content === 'string') {
-          content = m.content;
-        } else if (Array.isArray(m.content)) {
-          content = m.content.map(b => typeof b === 'string' ? b : (b?.text || JSON.stringify(b))).join('\n');
-        } else {
-          content = JSON.stringify(m.content);
-        }
-        // prepend system text to first user message
-        let role = m.role;
-        if (role === 'tool') role = 'user';
-        if (role === 'user' && systemParts.length > 0) {
-          content = systemParts.join('\n\n') + '\n\n' + content;
-          systemParts = [];
-        }
-        actualMessages.push({ role, content });
-      }
-      // 如果只有 system 没有 user，补一条
-      if (actualMessages.length === 0 && systemParts.length > 0) {
-        actualMessages.push({ role: 'user', content: systemParts.join('\n\n') });
-      }
-    } catch {}
-
-    // 如果没有消息，无法计数
-    if (!actualMessages.length) {
-      return res.status(400).json({
-        success: false,
-        error: '会话中没有可用的消息，无法计数',
-      });
-    }
-
-    // 调用 count tokens API，使用实际消息
-    try {
-      const countRequest = {
-        model: modelName,
-        messages: actualMessages,
-      };
-
-      const response = await fetch(countTokensUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': provider.apiKey,
-        },
-        body: JSON.stringify(countRequest),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Count tokens API failed: ${response.status} ${errorText}`);
-      }
-
-      const result = await response.json();
-      const tokenCount = result.input_tokens || result.inputTokens;
-
-      if (typeof tokenCount !== 'number' || tokenCount < 0) {
-        return res.status(500).json({
-          success: false,
-          error: 'Count tokens API did not return a valid token count',
-          details: result,
-        });
-      }
-
-      // 写入路径须与 summarizePrebuiltSession 读取路径一致: runtime.usageStats.lastRequestUsage
-      if (!sessionData.runtime) sessionData.runtime = {};
-      if (!sessionData.runtime.usageStats) sessionData.runtime.usageStats = {};
-      sessionData.runtime.usageStats.lastRequestUsage = {
-        inputTokens: tokenCount,
-        outputTokens: 0,
-        totalTokens: tokenCount,
-      };
-      sessionData.modelName = modelName;
-      sessionData.updatedAt = new Date().toISOString();
-
-      await fs.writeFile(sessionPath, JSON.stringify(sessionData, null, 2));
-
-      res.json({
-        success: true,
-        tokenCount,
-      });
-    } catch (fetchError) {
-      return res.status(500).json({
-        success: false,
-        error: `Failed to call count tokens API: ${fetchError.message}`,
-      });
-    }
-  } catch (error) {
-    next(error);
-  }
-});
+// ═══ Block B: Token Count Refresh (extracted to session-token-refresh.js) ═══
+setupTokenRefreshRoute(app, express);
 
 // ═══ Block C (server.js L4048-4595) ═══
 // ── Sessions ──────────────────────────────────────────────────────────────────
