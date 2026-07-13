@@ -8927,6 +8927,7 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 .wg-threads-panel {
   padding: 20px;
   gap: 24px;
+  container: wg-threads / inline-size;
 }
 
 .wg-thread-overview {
@@ -9167,14 +9168,22 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 .wg-thread-actions {
   justify-content: flex-start;
   gap: 7px;
-  padding: 0 14px 13px;
+  flex-wrap: wrap;
+}
+
+.wg-thread-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto;
+  align-items: end;
+  gap: 16px;
+  padding: 2px 14px 14px;
 }
 
 .wg-thread-runtime-row {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 10px;
-  padding: 0 14px 12px;
+  min-width: 0;
 }
 
 .wg-thread-runtime-status {
@@ -9202,27 +9211,38 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 .wg-thread-runtime-status.idle > span { background: var(--success-color); opacity: .72; }
 
 .wg-thread-context {
-  width: min(168px, 58%);
-  min-width: 118px;
+  width: min(220px, 100%);
+  min-width: 142px;
 }
 .wg-thread-context-label {
   display: flex;
   justify-content: space-between;
+  gap: 10px;
   color: color-mix(in srgb, var(--text-primary) 62%, var(--text-secondary));
   font-size: 11px;
-  line-height: 1;
-  margin-bottom: 4px;
+  line-height: 1.2;
+  margin-bottom: 6px;
+  white-space: nowrap;
+}
+.wg-thread-context-label strong {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+.wg-thread-context-label em {
+  margin: 0 4px;
+  color: var(--text-muted);
+  font-style: normal;
 }
 .wg-thread-context-bar {
   position: relative;
-  height: 4px;
-  border-radius: 2px;
+  height: 5px;
+  border-radius: 3px;
   background: var(--hover-bg);
   overflow: hidden;
 }
 .wg-thread-context-fill,
 .wg-thread-context-threshold { position: absolute; top: 0; bottom: 0; }
-.wg-thread-context-fill { left: 0; background: var(--success-color); border-radius: 2px; }
+.wg-thread-context-fill { left: 0; background: var(--success-color); border-radius: 3px; }
 .wg-thread-context-threshold { width: 1px; background: var(--text-secondary); z-index: 1; opacity: .7; }
 .wg-thread-context.tone-mid .wg-thread-context-fill { background: #5b9bf5; }
 .wg-thread-context.tone-high .wg-thread-context-fill { background: #d99a2b; }
@@ -9257,6 +9277,7 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   border: 1px solid var(--border-color);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -9278,7 +9299,6 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 .wg-thread-retry:hover { background: var(--hover-bg); color: var(--text-primary); }
 
 .wg-thread-archive {
-  margin-left: auto;
   border-color: transparent;
   color: var(--text-secondary);
 }
@@ -9499,7 +9519,7 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 .wg-thread-history-toggle span:first-of-type { margin-right: auto; }
 
 .wg-thread-history-list { display: flex; flex-direction: column; gap: 7px; padding-top: 9px; }
-.wg-thread-card.compact .wg-thread-actions { padding-bottom: 9px; }
+.wg-thread-card.compact .wg-thread-controls { padding-bottom: 9px; }
 
 .wg-thread-stale {
   margin-top: -10px;
@@ -9520,8 +9540,77 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
 
 @media (max-width: 1100px) {
   .wg-thread-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .wg-thread-controls { grid-template-columns: 1fr; gap: 12px; }
   .wg-thread-runtime-row { gap: 7px; }
+  .wg-thread-context { width: min(260px, 100%); }
+  .wg-thread-actions { justify-content: flex-start; }
+  .wg-thread-archive { margin-left: auto; }
   .wg-thread-inspectors { grid-template-columns: 1fr; }
   .wg-thread-inspector { border-right: 0; border-bottom: 1px solid var(--border-color); }
   .wg-thread-inspector:last-child { border-bottom: 0; }
+}
+
+/* 右侧 Feature 面板可能在宽屏窗口中仍然很窄，因此必须按组件宽度响应。 */
+@container wg-threads (max-width: 760px) {
+  .wg-thread-controls {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .wg-thread-runtime-row {
+    width: 100%;
+    align-items: flex-end;
+  }
+
+  .wg-thread-context {
+    width: min(280px, calc(100% - 64px));
+    min-width: 0;
+  }
+
+  .wg-thread-actions {
+    width: 100%;
+  }
+
+  .wg-thread-archive {
+    margin-left: auto;
+  }
+
+  .wg-thread-inspectors {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wg-thread-inspector {
+    border-right: 1px solid var(--border-color);
+    border-bottom: 0;
+  }
+
+  .wg-thread-inspector:last-child {
+    border-right: 0;
+  }
+}
+
+@container wg-threads (max-width: 430px) {
+  .wg-thread-title-row {
+    flex-wrap: wrap;
+  }
+
+  .wg-thread-inline-state {
+    order: -1;
+  }
+
+  .wg-thread-title {
+    flex-basis: 100%;
+  }
+
+  .wg-thread-actions {
+    gap: 6px;
+  }
+
+  .wg-thread-primary,
+  .wg-thread-secondary,
+  .wg-thread-archive {
+    min-height: 29px;
+    padding-inline: 10px;
+  }
 }

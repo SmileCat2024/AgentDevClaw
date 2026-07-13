@@ -264,8 +264,7 @@ function _renderCard(thread, { showIdentity = false, compact = false } = {}) {
     '    </div>',
     '  </div>',
     compact ? '' : _renderLatestMessage(thread),
-    _isArchived(thread) ? '' : _renderRuntimeRow(thread),
-    _renderCardActions(thread),
+    _renderCardControls(thread),
     _renderInspectors(thread, summary, lineageCount, expanded),
     _isArchived(thread) ? '' : _renderTaskDetails(thread),
     expanded ? _renderDetails(thread) : '',
@@ -327,6 +326,13 @@ function _renderCardActions(thread) {
   return actions.length ? `<div class="wg-thread-actions">${actions.join('')}</div>` : '';
 }
 
+function _renderCardControls(thread) {
+  const runtime = _isArchived(thread) ? '' : _renderRuntimeRow(thread);
+  const actions = _renderCardActions(thread);
+  if (!runtime && !actions) return '';
+  return `<div class="wg-thread-controls">${runtime}${actions}</div>`;
+}
+
 function _taskProgress(summary) {
   const total = Number(summary?.total) || 0;
   const completed = Number(summary?.completed) || 0;
@@ -379,11 +385,12 @@ function _renderRuntimeRow(thread) {
   const percent = Math.max(0, Math.min(100, Number(usage?.percent) || 0));
   const compressRatio = Math.max(1, Math.min(100, Number(usage?.compressRatio) || 80));
   const tone = percent >= compressRatio ? 'compress' : percent >= 60 ? 'high' : percent >= 35 ? 'mid' : 'low';
+  const thresholdTokens = Math.round((Number(usage?.contextLength) || 0) * compressRatio / 100);
   const contextHtml = usage ? [
-    `<div class="wg-thread-context tone-${tone}" title="上下文 ${_formatTokenCount(usage.usedTokens)} / ${_formatTokenCount(usage.contextLength)}">`,
+    `<div class="wg-thread-context tone-${tone}" title="当前 ${_formatTokenCount(usage.usedTokens)} tokens；压缩阈值 ${_formatTokenCount(thresholdTokens)} tokens（模型窗口 ${_formatTokenCount(usage.contextLength)}）">`,
     '  <div class="wg-thread-context-label">',
     '    <span>上下文</span>',
-    `    <span>${percent}%</span>`,
+    `    <span><strong>${percent}%</strong><em>/</em>${compressRatio}%</span>`,
     '  </div>',
     '  <div class="wg-thread-context-bar">',
     `    <span class="wg-thread-context-threshold" style="left:${compressRatio}%"></span>`,

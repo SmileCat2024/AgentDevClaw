@@ -15,18 +15,23 @@ import type { AgentFeature, Tool, DecisionResult } from 'agentdev';
 import { CallStart, StepStart, StepFinish, Decision } from 'agentdev';
 
 const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 1420}`;
+const COORDINATOR_REMINDER_CALL_INTERVAL = 2;
+const COORDINATOR_REMINDER_STEP_INTERVAL = 8;
+const COORDINATOR_REMINDER_CONTENT = [
+  '[协调职责提醒]',
+  '你是群聊管理员，负责理解用户意图、定位工作线程、把要求准确交给合适的专业 Agent，并跟踪结果。',
+  '具体编码、深入分析、写作和文件修改由专业 Agent 执行；你只承担协调所需的判断、轻量读取与信息整理。',
+  '围绕工作线程判断是继续已有工作还是开始新工作，并避免替代执行者完成主体任务。',
+].join('\n');
 
 export class GroupAdminFeature implements AgentFeature {
   readonly name = 'group-admin';
   readonly description = '以工作线程为核心观察群聊态势、派发增量指令并跟踪执行结果。';
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
 
-  /** 每多少轮 call 注入一次身份提醒 */
-  private static readonly REMINDER_INTERVAL = 1;
-  /** 每多少 step 注入一次身份提醒（call 内） */
-  private static readonly STEP_REMINDER_INTERVAL = 3;
   private callCount = 0;
   private stepCount = 0;
+  private identityReminderInjectedThisCall = false;
 
   /** 当 gc_reply / gc_dispatch 以 done=true 或 gc_stop 执行后置位，@StepFinish 检查后消费 */
   private stopRequested = false;
@@ -41,8 +46,12 @@ export class GroupAdminFeature implements AgentFeature {
 
   @CallStart
   async injectIdentityReminder(ctx: any): Promise<void> {
-    // [已悬置] 身份提醒改由系统提示词 + gc_stop 强制约定兜底，不再反复注入
-    return;
+    this.callCount++;
+    this.stepCount = 0;
+    this.identityReminderInjectedThisCall = false;
+    if (this.callCount % COORDINATOR_REMINDER_CALL_INTERVAL !== 0) return;
+    this.addCoordinatorReminder(ctx);
+    this.identityReminderInjectedThisCall = true;
   }
 
   @StepStart
@@ -67,8 +76,32 @@ export class GroupAdminFeature implements AgentFeature {
       return;
     }
 
-    // [已悬置] 常规身份提醒不再注入，由系统提示词 + gc_stop 强制约定兜底
-    return;
+    if (!this.identityReminderInjectedThisCall
+      && this.stepCount % COORDINATOR_REMINDER_STEP_INTERVAL === 0) {
+      this.addCoordinatorReminder(ctx);
+      this.identityReminderInjectedThisCall = true;
+    }
+  }
+
+  private addCoordinatorReminder(ctx: any): void {
+    if (!ctx?.context) return;
+    ctx.context.add({
+      role: 'system',
+      content: COORDINATOR_REMINDER_CONTENT,
+    });
+  }
+
+  getHookDescription(lifecycle: string, methodName: string): string | undefined {
+    if (lifecycle === 'CallStart' && methodName === 'injectIdentityReminder') {
+      return '每 2 次管理员 call 提醒协调者职责。';
+    }
+    if (lifecycle === 'StepStart' && methodName === 'injectStepReminder') {
+      return '长 call 每 8 step 补充协调职责；无工具结束时优先注入流程纠错。';
+    }
+    if (lifecycle === 'StepFinish' && methodName === 'checkStopRequest') {
+      return '执行显式停止，并在无工具直接结束时强制继续一轮。';
+    }
+    return undefined;
   }
 
   @StepFinish

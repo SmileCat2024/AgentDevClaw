@@ -37,6 +37,18 @@ describe('work-thread panel semantics', () => {
     assert.equal(ctx.run(`_formatRelativeTime(Date.now() - 3 * 86_400_000)`), '3 天前');
   });
 
+  it('labels current usage and compression threshold on the full context bar', () => {
+    const ctx = loadPanel();
+    const html = ctx.run(`_renderRuntimeRow({
+      lineageHeadId: 's1', lifecycle: 'available', runtimeStatus: 'idle',
+      contextUsage: { usedTokens: 130000, contextLength: 1000000, compressRatio: 18, percent: 13 }
+    })`);
+    assert.ok(html.includes('<strong>13%</strong><em>/</em>18%'));
+    assert.ok(html.includes('width:13%'));
+    assert.ok(html.includes('left:18%'));
+    assert.ok(html.includes('压缩阈值 180K tokens'));
+  });
+
   it('renders terminal Task time and cancellation result', () => {
     const ctx = loadPanel();
     const html = ctx.run(`_renderTask({

@@ -45,6 +45,43 @@ describe('GroupAdminFeature', () => {
     process.env = origEnv;
   });
 
+  describe('coordinator identity reminder', () => {
+    function reminderContext(messages) {
+      return { context: { add(message) { messages.push(message); } } };
+    }
+
+    it('injects a focused reminder every two calls', async () => {
+      const feature = createFeature();
+      const messages = [];
+      const ctx = reminderContext(messages);
+      for (let index = 0; index < 2; index++) await feature.injectIdentityReminder(ctx);
+      assert.equal(messages.length, 1);
+      assert.ok(messages[0].content.includes('你是群聊管理员'));
+      assert.ok(messages[0].content.includes('专业 Agent 执行'));
+      assert.ok(!messages[0].content.includes('gc_reply'));
+      assert.ok(!messages[0].content.includes('结束'));
+    });
+
+    it('reminds once after eight steps in a long call', async () => {
+      const feature = createFeature();
+      const messages = [];
+      const ctx = reminderContext(messages);
+      await feature.injectIdentityReminder(ctx);
+      for (let index = 0; index < 8; index++) await feature.injectStepReminder(ctx);
+      assert.equal(messages.length, 1);
+      assert.ok(messages[0].content.startsWith('[协调职责提醒]'));
+    });
+
+    it('does not repeat the step reminder when CallStart already injected it', async () => {
+      const feature = createFeature();
+      const messages = [];
+      const ctx = reminderContext(messages);
+      for (let index = 0; index < 2; index++) await feature.injectIdentityReminder(ctx);
+      for (let index = 0; index < 16; index++) await feature.injectStepReminder(ctx);
+      assert.equal(messages.length, 1);
+    });
+  });
+
   // ── statusLabel ──────────────────────────────────────────
 
   describe('statusLabel', () => {
