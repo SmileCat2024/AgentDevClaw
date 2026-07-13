@@ -20,6 +20,7 @@ function createArchiveSandbox() {
   ctx.renderCurrentMainView = () => {
     ctx.renderCount += 1;
   };
+  ctx.loadSource('public/src/modules/session-mutation.js');
   ctx.loadSource('public/src/modules/ctx-menu-items.js');
   return ctx;
 }

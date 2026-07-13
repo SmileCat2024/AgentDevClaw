@@ -78,6 +78,7 @@ function loadCtxMenuItems(overrides = {}) {
   ctx.window.confirm = () => false;
   ctx.window.alert = () => {};
 
+  ctx.loadSource('public/src/modules/session-mutation.js');
   ctx.loadSource('public/src/modules/ctx-menu-items.js');
   return { ctx, calls };
 }
