@@ -15,12 +15,12 @@ import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { DebugHub, FileSessionStore } from 'agentdev';
 import { setTimeout as sleep } from 'timers/promises';
-import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
-import { getIMSourceValues, getIMChannel, getIMChannelLabel } from '../server/shared/im-channels.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
+import { createIMBridge } from './runtime-im-bridge.js';
+import { createSummaryHandlers } from './runtime-summary.js';
 
 // Inject DebugHub into the extracted CallArbiter module
 setDebugHubClass(DebugHub);
@@ -299,281 +299,39 @@ const NEXT_TURN_ACTIONS = [
 
 let agent = null;
 let disposed = false;
-let compactSummaryInFlight = false;
 
 // CallArbiter extracted to server/call-arbiter.js
 
 let callArbiter = null;
 
-// ── IM result delivery via callfinish ──────────────────────────────
-//
-// When a call completes via the arbiter, this dispatcher decides whether
-// the result should be mirrored to the active IM channel.
-//
-// Rules:
-//  - IM-originated calls (source=qq|weixin): the Feature's own gateway
-//    adapter already handles the reply — do NOT double-send.
-//  - Non-IM-originated calls (dispatch, viewer-input, system):
-//    deliver result to IM if the runtime has an active IM channel
-//    and at least one prior IM peer is known.
-
-const IM_REPLY_POLICY = {
-  /**
-   * IM sources that already handle their own reply — skip callfinish delivery.
-   * Derived from the channel registry so it stays in sync automatically.
-   */
-  IM_SOURCES: getIMSourceValues(),
-  /** Maximum character length for IM result delivery before truncation */
-  MAX_IM_RESULT_LENGTH: 1500,
-  /** Maximum length for error messages sent to IM */
-  MAX_IM_ERROR_LENGTH: 500,
+// ── Mutable context for extracted modules ──────────────────────────
+// `agent` and `callArbiter` are populated during main(); the context
+// objects below are shared by reference so module functions see the
+// latest values.  `postJson` is a hoisted function declaration, so it
+// is already available here despite being defined further down.
+const imBridgeCtx = {
+  agentId,
+  sessionId,
+  IS_EXPLORATION,
+  SERVER_ORIGIN,
+  agent: null,
+  callArbiter: null,
 };
 
-/**
- * Truncate text for IM delivery, adding an ellipsis indicator.
- */
-function truncateForIM(text, maxLength) {
-  if (!text) return '';
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + '\n...(结果已截断，完整内容请查看调试面板)';
-}
+const summaryCtx = {
+  agentId,
+  sessionId,
+  PREBUILT_AGENT_MAX_TOKENS_CAP,
+  agent: null,
+  sessionStore,
+  postJson,
+};
 
-/**
- * Dispatch a completed call envelope's result to IM.
- * Called from the callFinished listener.
- *
- * @param {object} envelope - The finished envelope from CallArbiter
- */
-async function dispatchIMCallFinish(envelope) {
-  if (!agent || typeof agent.sendIMMessage !== 'function') {
-    return;
-  }
+const imBridge = createIMBridge(imBridgeCtx);
+const summaryHandlers = createSummaryHandlers(summaryCtx);
 
-  // Skip IM-originated calls — the Feature adapter handles its own reply.
-  if (IM_REPLY_POLICY.IM_SOURCES.has(envelope.source)) {
-    return;
-  }
-
-  const channel = typeof agent.getActiveIMChannel === 'function'
-    ? agent.getActiveIMChannel()
-    : null;
-
-  if (!channel) {
-    return;
-  }
-
-  // Determine result text
-  let resultText = '';
-
-  if (envelope.status === 'failed') {
-    const errorText = envelope.error || '未知错误';
-    resultText = `⚠ 调用失败: ${truncateForIM(errorText, IM_REPLY_POLICY.MAX_IM_ERROR_LENGTH)}`;
-  } else if (envelope.status === 'completed') {
-    const raw = envelope.result || '';
-    if (!raw) {
-      // Successful but empty result — skip IM notification for success with no content
-      return;
-    }
-    resultText = truncateForIM(raw, IM_REPLY_POLICY.MAX_IM_RESULT_LENGTH);
-  } else {
-    return;
-  }
-
-  try {
-    const delivered = await agent.sendIMMessage(resultText);
-    if (delivered) {
-      console.log(`[IM-CallFinish] delivered result to ${channel} (source=${envelope.source}, status=${envelope.status})`);
-    } else {
-      console.warn(`[IM-CallFinish] skipped result delivery to ${channel} (source=${envelope.source})`);
-    }
-  } catch (err) {
-    console.error('[IM-CallFinish] failed to deliver result to IM:', err);
-  }
-}
-
-// ── IM Transfer: Dynamic feature injection/removal ──────────────────
-//
-// Manages dynamic IM feature injection into the current runtime.
-// Triggered by IPC messages from server.js when a channel is transferred
-// to or disconnected from this runtime's session.
-
-// ── IM Line Carrier Mount ──────────────────────────────────────────
-//
-// When a line is bound to this session, the carrier feature (QQBotFeature
-// or WeixinBot) is dynamically mounted on THIS agent. The gateway receives
-// IM messages and routes them through the CallArbiter for serialization.
-//
-// Carrier features do NOT use agentdev hooks or tools — they only provide
-// a gateway that calls agentRef.onCall(text). This makes dynamic mounting
-// safe even after the agent is already running.
-
-let _mountedCarrierFeature = null; // tracks currently mounted carrier name
-
-/**
- * Dynamically mount a carrier feature on this running agent.
- * Works because carrier features only provide a gateway (no hooks/tools).
- */
-async function mountCarrierFeature(carrier) {
-  if (!agent || IS_EXPLORATION) return;
-
-  if (_mountedCarrierFeature === carrier) {
-    console.log(`[IM-Line] Carrier "${carrier}" already mounted, skipping`);
-    return;
-  }
-
-  try {
-    console.log(`[IM-Line] Mounting carrier="${carrier}" dynamically...`);
-
-    const ch = getIMChannel(carrier);
-    if (!ch) {
-      console.error(`[IM-Line] Unknown carrier: "${carrier}"`);
-      return;
-    }
-
-    const mod = await import(ch.packageName);
-    const CarrierClass = mod[ch.exportName];
-
-    // ── Config loading ──
-    let feature;
-    if (ch.configEnv === null) {
-      // QQ loads config from server API
-      const cfgResp = await fetch(`${SERVER_ORIGIN}/protoclaw/qqbot_config`);
-      const qqCfg = cfgResp.ok ? await cfgResp.json() : {};
-      feature = new CarrierClass({
-        appId: qqCfg?.appId || '',
-        clientSecret: qqCfg?.clientSecret || '',
-        configPath: qqCfg?.configPath || '',
-        accountId: qqCfg?.accountId || '',
-        markdownSupport: qqCfg?.markdownSupport ?? true,
-      });
-    } else {
-      feature = new CarrierClass({
-        configPath: process.env[ch.configEnv] || '',
-      });
-    }
-
-    await agent.mountFeature(feature);
-    await feature.startGateway(agent);
-
-    // ── Message routing through CallArbiter ──
-    if (callArbiter) {
-      if (ch.messageMode === 'handleMessage') {
-        // Weixin: override handleMessage (uses weixin-specific API client)
-        const { WeixinApiClient } = mod;
-        feature.handleMessage = async (msg) => {
-          if (!msg || msg.message_type !== 1) return;
-          const text = WeixinApiClient.extractText(msg);
-          if (!text) return;
-
-          // 设置 WeixinBot 的 turn context，使 @CallStart 和 upload_attachment 工具生效
-          feature._currentTurnCtx = {
-            fromUserId: msg.from_user_id,
-            contextToken: msg.context_token,
-          };
-          feature._pendingMedia = [];
-
-          try {
-            const entry = callArbiter.enqueue({
-              source: ch.id,
-              sourceRef: msg.from_user_id || '',
-              text,
-            });
-            const finished = await callArbiter.waitForCompletion(entry.id);
-            const resp = finished.status === 'failed'
-              ? `处理失败: ${finished.error || '未知错误'}`
-              : (finished.result || '处理完成');
-            if (resp) {
-              await feature.apiClient.sendTextMessage(msg.from_user_id, resp, msg.context_token);
-            }
-            // flush 所有待发送的媒体附件
-            await feature.flushPendingMedia();
-          } finally {
-            feature._currentTurnCtx = null;
-            feature._pendingMedia = [];
-          }
-        };
-      } else {
-        // QQ/Feishu/Wecom: use agentRef.onCall
-        feature.agentRef = {
-          onCall: async (text) => {
-            const entry = callArbiter.enqueue({ source: ch.id, text });
-            const finished = await callArbiter.waitForCompletion(entry.id);
-            if (finished.status === 'failed') {
-              throw new Error(finished.error || 'unknown error');
-            }
-            return finished.result || '处理完成';
-          },
-        };
-      }
-    }
-
-    _mountedCarrierFeature = carrier;
-    console.log(`[IM-Line] ✓ ${ch.label} dynamically mounted + gateway started`);
-  } catch (err) {
-    console.error(`[IM-Line] Failed to mount carrier "${carrier}":`, err);
-  }
-}
-
-/**
- * Check at startup if this session is bound to an IM line.
- */
-async function mountIMLineCarrierIfBound() {
-  if (!sessionId || IS_EXPLORATION) return;
-
-  try {
-    const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_line_binding?agentId=${agentId}&sessionId=${sessionId}`);
-    if (!resp.ok) return;
-    const binding = await resp.json();
-    if (!binding?.carrier) return;
-    console.log(`[IM-Line] Startup binding found: carrier="${binding.carrier}"`);
-    await mountCarrierFeature(binding.carrier);
-  } catch (err) {
-    console.error('[IM-Line] Failed to check startup binding:', err);
-  }
-}
-
-// Handle IPC messages from server for dynamic carrier mounting
-process.on('message', (msg) => {
-  if (!msg || typeof msg !== 'object') return;
-
-  if (msg.type === 'mount-im-carrier' && msg.carrier) {
-    console.log(`[IM-Line] IPC received: mount carrier "${msg.carrier}"`);
-    mountCarrierFeature(msg.carrier).catch(err => {
-      console.error('[IM-Line] Dynamic mount failed:', err);
-    });
-  } else if (msg.type === 'unmount-im-carrier') {
-    console.log('[IM-Line] IPC received: unmount carrier');
-    if (!_mountedCarrierFeature) return;
-    const carrier = _mountedCarrierFeature;
-    try {
-      const featureName = getIMChannel(carrier)?.featureName || '';
-      if (typeof agent.removeFeature === 'function') {
-        agent.removeFeature(featureName);
-      } else {
-        // fallback: 手动清理工具和 feature
-        const feature = agent.features?.get?.(featureName);
-        if (feature && typeof feature.onDestroy === 'function') {
-          feature.onDestroy({ agent }).catch(err => {
-            console.warn(`[IM-Line] onDestroy error for ${featureName}:`, err.message);
-          });
-        }
-        agent.features?.delete?.(featureName);
-      }
-      _mountedCarrierFeature = null;
-      console.log(`[IM-Line] ✓ Carrier "${carrier}" unmounted and gateway stopped`);
-    } catch (err) {
-      console.error(`[IM-Line] Unmount error for "${carrier}":`, err);
-    }
-  } else if (msg.type === 'todo-control') {
-    // 设置/取消 TODO 中断目标
-    const todoFeature = agent?.features?.get?.('todo');
-    if (todoFeature && typeof todoFeature.setInterruptTarget === 'function') {
-      todoFeature.setInterruptTarget(msg.taskId || null);
-    } else {
-      console.warn('[IPC] Todo feature not found or does not support setInterruptTarget');
-    }
-  }
-});
+// Register IPC handler for dynamic carrier mount/unmount + todo-control
+imBridge.setupIPCMessageHandler();
 
 function getNextTurnActions() {
   const checkpoints = Array.isArray(agent?._callCheckpoints) ? agent._callCheckpoints : [];
@@ -640,541 +398,6 @@ async function postJson(pathname, payload) {
   return data;
 }
 
-function tuneSummaryLLM(llm) {
-  if (!llm || typeof llm !== 'object') return () => {};
-  const restore = new Map();
-  const remember = (key) => {
-    if (Object.prototype.hasOwnProperty.call(llm, key)) {
-      restore.set(key, llm[key]);
-    }
-  };
-  remember('thinkingBudgetTokens');
-  remember('maxTokens');
-  try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'thinkingBudgetTokens')) {
-      llm.thinkingBudgetTokens = undefined;
-    }
-  } catch {}
-  try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
-      const current = Number(llm.maxTokens);
-      llm.maxTokens = Number.isFinite(current) && current > 0 ? Math.min(current, PREBUILT_AGENT_MAX_TOKENS_CAP) : PREBUILT_AGENT_MAX_TOKENS_CAP;
-    }
-  } catch {}
-  return () => {
-    for (const [key, value] of restore.entries()) {
-      try { llm[key] = value; } catch {}
-    }
-  };
-}
-
-function shouldPreserveSummaryTools(agentInstance) {
-  const modelName = cleanValue(
-    agentInstance?.getSystemContext?.()?.SYSTEM_CURRENT_MODEL
-    || agentInstance?._systemContext?.SYSTEM_CURRENT_MODEL
-    || '',
-  ).toLowerCase();
-  return modelName.includes('claude');
-}
-
-async function generateInProcessSummary(extraInstructions = '') {
-  const context = typeof agent?.getContext === 'function' ? agent.getContext() : null;
-  const rawMessages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
-  if (rawMessages.length === 0) {
-    throw new Error('当前上下文为空，无法生成摘要');
-  }
-
-  const prompt = buildClaudeCompactPrompt({
-    additionalInstructions: extraInstructions,
-  });
-  const messages = rawMessages.map((message, index) => ({
-    role: message.role,
-    content: typeof message?.content === 'string' ? message.content : '',
-    turn: Number.isFinite(message?.turn) ? Number(message.turn) : index,
-    toolCallId: message?.toolCallId,
-    toolCalls: Array.isArray(message?.toolCalls) ? message.toolCalls : undefined,
-    reasoning: typeof message?.reasoning === 'string' ? message.reasoning : undefined,
-    thinkingBlocks: Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : undefined,
-  }));
-  messages.push({
-    role: 'user',
-    content: prompt,
-    turn: typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : messages.length,
-  });
-
-  const toolRegistry = typeof agent?.getTools === 'function' ? agent.getTools() : null;
-  const allTools = toolRegistry?.getAll?.() || [];
-  const compactTool = allTools.find(t => t.name === 'record_compaction_context');
-  let tools = shouldPreserveSummaryTools(agent) ? allTools : [];
-  if (compactTool && !tools.includes(compactTool)) {
-    tools = [compactTool];
-  }
-  const restoreLLM = tuneSummaryLLM(agent?.llm);
-  try {
-    console.log(`[ProtoClaw Runtime] 开始进程内摘要压缩 messages=${messages.length} tools=${tools.length}`);
-    const response = await agent.llm.chat(messages, tools, { noStream: true });
-    if (response?.stopReason === 'max_tokens') {
-      throw new Error('摘要因 max_tokens 限制被截断（stopReason=max_tokens），拒绝接受不完整结果');
-    }
-    const rawResponse = typeof response?.content === 'string' ? response.content : '';
-    const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
-    if (toolCalls.some(tc => tc?.name !== 'record_compaction_context')) {
-      throw new Error('摘要模型错误地触发了工具调用');
-    }
-    const compactCall = toolCalls.find(tc => tc?.name === 'record_compaction_context');
-
-    let importantFiles = [];
-    let importantSkills = [];
-    let summaryText = '';
-
-    if (compactCall && compactCall.arguments) {
-      const args = typeof compactCall.arguments === 'string'
-        ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
-        : compactCall.arguments;
-      summaryText = typeof args.summary === 'string' ? args.summary.trim() : '';
-      importantFiles = Array.isArray(args.important_files)
-        ? args.important_files.filter(f => typeof f === 'string')
-        : [];
-      importantSkills = Array.isArray(args.important_skills)
-        ? args.important_skills.filter(s => typeof s === 'string')
-        : [];
-    }
-
-    if (!summaryText) {
-      summaryText = stripCompactAnalysis(rawResponse);
-    }
-
-    if (!summaryText.trim()) {
-      throw new Error('摘要模型返回了空结果');
-    }
-    const { fileRanges } = scanFilesAndSkills(rawMessages);
-    return {
-      rawResponse,
-      summaryText,
-      importantFiles,
-      importantSkills,
-      fileRanges,
-    };
-  } finally {
-    restoreLLM();
-  }
-}
-
-async function triggerSummaryCompaction(extraInstructions = '') {
-  if (compactSummaryInFlight) {
-    console.warn('[ProtoClaw Runtime] 已有 compact summary 正在进行，本次请求已忽略。');
-    return;
-  }
-  if (!sessionId) {
-    console.warn('[ProtoClaw Runtime] 当前 runtime 未绑定 session，无法触发 compact summary。');
-    return;
-  }
-
-  compactSummaryInFlight = true;
-  try {
-    await agent.saveSession(sessionId, sessionStore);
-    console.log('[ProtoClaw Runtime] 已保存当前 session，开始进程内摘要压缩...');
-    const summaryResult = await generateInProcessSummary(extraInstructions);
-
-    const result = await postJson('/protoclaw/context_handoffs/summary_export', {
-      agentId,
-      sessionId,
-      summaryText: summaryResult.summaryText,
-      rawResponse: summaryResult.rawResponse,
-      importantFiles: summaryResult.importantFiles || [],
-      importantSkills: summaryResult.importantSkills || [],
-      fileRanges: summaryResult.fileRanges || {},
-      policy: {
-        strategy: 'summarized-nine-section',
-        additionalInstructions: extraInstructions || '',
-      },
-    });
-
-    const handoffId = cleanValue(result?.handoff?.handoffId);
-    const handoffPath = cleanValue(result?.handoffPath);
-    const mode = cleanValue(result?.handoff?.mode);
-    console.log(`[ProtoClaw Runtime] Compact summary 已生成: mode=${mode || 'summarized-nine-section'} handoffId=${handoffId || '(none)'}`);
-    if (handoffPath) {
-      console.log(`[ProtoClaw Runtime] Handoff path: ${handoffPath}`);
-    }
-  } catch (error) {
-    console.error('[ProtoClaw Runtime] Compact summary 失败:', error);
-  } finally {
-    compactSummaryInFlight = false;
-  }
-}
-
-async function triggerSummaryCompactionResume(extraInstructions = '') {
-  if (compactSummaryInFlight) {
-    console.warn('[ProtoClaw Runtime] 已有 compact summary 正在进行，本次请求已忽略。');
-    return;
-  }
-  if (!sessionId) {
-    console.warn('[ProtoClaw Runtime] 当前 runtime 未绑定 session，无法触发 compact summary resume。');
-    return;
-  }
-
-  compactSummaryInFlight = true;
-  try {
-    await agent.saveSession(sessionId, sessionStore);
-    console.log('[ProtoClaw Runtime] 已保存当前 session，开始进程内摘要并创建新的 resume 会话...');
-    const summaryResult = await generateInProcessSummary(extraInstructions);
-
-    const result = await postJson('/protoclaw/context_handoffs/summary_resume', {
-      agentId,
-      sessionId,
-      summaryText: summaryResult.summaryText,
-      rawResponse: summaryResult.rawResponse,
-      importantFiles: summaryResult.importantFiles || [],
-      importantSkills: summaryResult.importantSkills || [],
-      fileRanges: summaryResult.fileRanges || {},
-      policy: {
-        strategy: 'summarized-nine-section',
-        additionalInstructions: extraInstructions || '',
-      },
-    });
-
-    const nextSessionId = cleanValue(result?.session?.id);
-    console.log(`[ProtoClaw Runtime] 摘要 resume 已创建: newSession=${nextSessionId || '(none)'}`);
-  } catch (error) {
-    console.error('[ProtoClaw Runtime] compact summary resume 失败:', error);
-  } finally {
-    compactSummaryInFlight = false;
-  }
-}
-
-const PARTIAL_COMPACT_BOUNDARY_MARKER = '[PARTIAL_COMPACT_START]';
-
-function buildPartialCompactSummaryContent(summaryText, { messagesSummarized = 0, feedback = '' } = {}) {
-  return [
-    '## 已压缩的后续对话摘要',
-    '',
-    '此消息不是新的用户请求；它是系统在执行“从此处压缩”后注入的连续性摘要。',
-    '它替代了从所选用户消息开始、到压缩前为止的对话内容。上方较早消息已按原文保留。',
-    '继续工作时，请同时参考上方保留的原文和下面的摘要；不要重新回复被摘要的历史用户消息，除非摘要中的“当前工作”或“待办事项”要求继续执行。',
-    '',
-    messagesSummarized > 0 ? `被摘要消息数：${messagesSummarized}` : '',
-    feedback ? `用户压缩说明：${feedback}` : '',
-    '',
-    summaryText,
-  ].filter(Boolean).join('\n');
-}
-
-/**
- * Generate a summary for only a subset of messages (partial compact).
- * The summarizer sees retained context plus an explicit boundary marker so it
- * can explain how the compacted tail relates to the preserved prefix.
- * @param {Array} allMessages - complete messages before partial compact
- * @param {number} pivotMsgIndex - first message that will be summarized
- * @param {string} feedback - optional user-provided extra instructions
- */
-async function generatePartialInProcessSummary(allMessages, pivotMsgIndex, feedback = '') {
-  const rawMessages = Array.isArray(allMessages) ? allMessages : [];
-  const safePivot = Math.max(0, Math.min(Number(pivotMsgIndex) || 0, rawMessages.length));
-  const messagesToSummarize = rawMessages.slice(safePivot);
-  const prompt = buildClaudeCompactPrompt({
-    additionalInstructions: feedback,
-    partial: true,
-  });
-  const messages = rawMessages.map((message, index) => ({
-    role: message.role,
-    content: typeof message?.content === 'string' ? message.content : '',
-    turn: Number.isFinite(message?.turn) ? Number(message.turn) : index,
-    toolCallId: message?.toolCallId,
-    toolCalls: Array.isArray(message?.toolCalls) ? message.toolCalls : undefined,
-    reasoning: typeof message?.reasoning === 'string' ? message.reasoning : undefined,
-    thinkingBlocks: Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : undefined,
-  }));
-  messages.splice(safePivot, 0, {
-    role: 'system',
-    content: [
-      PARTIAL_COMPACT_BOUNDARY_MARKER,
-      '上方消息会按原文保留，仅作为理解背景。',
-      '下方消息是本次“从此处压缩”需要摘要并替换的内容。',
-    ].join('\n'),
-    turn: Number.isFinite(rawMessages[safePivot]?.turn) ? Number(rawMessages[safePivot].turn) : safePivot,
-  });
-  messages.push({
-    role: 'user',
-    content: prompt,
-    turn: typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : messages.length,
-  });
-
-  const toolRegistry = typeof agent?.getTools === 'function' ? agent.getTools() : null;
-  const allTools = toolRegistry?.getAll?.() || [];
-  const compactTool = allTools.find(t => t.name === 'record_compaction_context');
-  let tools = shouldPreserveSummaryTools(agent) ? allTools : [];
-  if (compactTool && !tools.includes(compactTool)) {
-    tools = [compactTool];
-  }
-  const restoreLLM = tuneSummaryLLM(agent?.llm);
-  try {
-    console.log(`[ProtoClaw Runtime] 开始部分摘要压缩 messages=${messages.length} tools=${tools.length}`);
-    const response = await agent.llm.chat(messages, tools, { noStream: true });
-    if (response?.stopReason === 'max_tokens') {
-      throw new Error('摘要因 max_tokens 限制被截断（stopReason=max_tokens），拒绝接受不完整结果');
-    }
-    const rawResponse = typeof response?.content === 'string' ? response.content : '';
-    const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
-    if (toolCalls.some(tc => tc?.name !== 'record_compaction_context')) {
-      throw new Error('摘要模型错误地触发了工具调用');
-    }
-    const compactCall = toolCalls.find(tc => tc?.name === 'record_compaction_context');
-
-    let importantFiles = [];
-    let importantSkills = [];
-    let summaryText = '';
-
-    if (compactCall && compactCall.arguments) {
-      const args = typeof compactCall.arguments === 'string'
-        ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
-        : compactCall.arguments;
-      summaryText = typeof args.summary === 'string' ? args.summary.trim() : '';
-      importantFiles = Array.isArray(args.important_files)
-        ? args.important_files.filter(f => typeof f === 'string')
-        : [];
-      importantSkills = Array.isArray(args.important_skills)
-        ? args.important_skills.filter(s => typeof s === 'string')
-        : [];
-    }
-
-    if (!summaryText) {
-      summaryText = stripCompactAnalysis(rawResponse);
-    }
-
-    if (!summaryText.trim()) {
-      throw new Error('摘要模型返回了空结果');
-    }
-    const { fileRanges } = scanFilesAndSkills(messagesToSummarize);
-    return {
-      rawResponse,
-      summaryText,
-      importantFiles,
-      importantSkills,
-      fileRanges,
-    };
-  } finally {
-    restoreLLM();
-  }
-}
-
-async function rollbackToCallAndSave(callIndex, { draftInput } = {}) {
-  if (typeof agent?.rollbackToCall !== 'function') {
-    console.warn('[ProtoClaw Runtime] 当前 Agent 不支持 rollbackToCall');
-    return { ok: false, draftInput: '' };
-  }
-
-  // Diagnostic: log checkpoint state before attempting rollback
-  const checkpoints = Array.isArray(agent?._callCheckpoints) ? agent._callCheckpoints : [];
-  const cpIndices = checkpoints.map(cp => cp.callIndex);
-  const agentCallIndex = typeof agent?._callIndex === 'number' ? agent._callIndex : 'unknown';
-  const context = typeof agent?.getContext === 'function' ? agent.getContext() : null;
-  const msgs = context?.getAll?.() || [];
-  const userTurns = msgs.filter(m => m.role === 'user').map(m => m.turn);
-  console.log(`[ProtoClaw Runtime] rollbackToCallAndSave 诊断: callIndex=${callIndex} _callIndex=${agentCallIndex} checkpoints=[${cpIndices.join(',')}] userTurns=[${userTurns.join(',')}] msgs=${msgs.length}`);
-
-  let result;
-  try {
-    result = await agent.rollbackToCall(callIndex);
-    console.log(`[ProtoClaw Runtime] rollbackToCall 成功: callIndex=${callIndex}`);
-  } catch (error) {
-    console.error(`[ProtoClaw Runtime] rollbackToCall 失败: callIndex=${callIndex} checkpoints=[${cpIndices.join(',')}] — ${error.message}`);
-    throw error;
-  }
-  const nextDraftInput = typeof draftInput === 'string'
-    ? draftInput
-    : (typeof result?.draftInput === 'string' ? result.draftInput : '');
-
-  if (sessionId) {
-    await agent.saveSession(sessionId, sessionStore);
-    console.log(`[ProtoClaw Runtime] 已回滚到 call ${callIndex}`);
-  }
-
-  return { ok: true, draftInput: nextDraftInput };
-}
-
-/**
- * Trigger partial compaction in-session: summarize messages from the given callIndex
- * onward, roll back to that call, inject the summary as a system reminder message,
- * and save the same session. No new session is created.
- */
-async function triggerPartialCompact(callIndex, feedback = '') {
-  if (compactSummaryInFlight) {
-    console.warn('[ProtoClaw Runtime] 已有 compact summary 正在进行，本次请求已忽略。');
-    return;
-  }
-  if (!sessionId) {
-    console.warn('[ProtoClaw Runtime] 当前 runtime 未绑定 session，无法触发 partial compact。');
-    return;
-  }
-
-  compactSummaryInFlight = true;
-  try {
-    const context = typeof agent?.getContext === 'function' ? agent.getContext() : null;
-    const rawMessages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
-    if (rawMessages.length === 0) {
-      throw new Error('当前上下文为空，无法生成摘要');
-    }
-
-    // Find pivot message index by callIndex (counting user turns)
-    let pivotMsgIndex = -1;
-    let userTurnCount = 0;
-    for (let i = 0; i < rawMessages.length; i++) {
-      if (rawMessages[i].role === 'user') {
-        const turn = Number.isFinite(rawMessages[i].turn) ? Number(rawMessages[i].turn) : userTurnCount;
-        if (turn === callIndex) {
-          pivotMsgIndex = i;
-          break;
-        }
-        userTurnCount++;
-      }
-    }
-    // Fallback: use message index-based heuristic
-    if (pivotMsgIndex < 0) {
-      let count = 0;
-      for (let i = 0; i < rawMessages.length; i++) {
-        if (rawMessages[i].role === 'user') {
-          if (count === callIndex) {
-            pivotMsgIndex = i;
-            break;
-          }
-          count++;
-        }
-      }
-    }
-
-    if (pivotMsgIndex < 0) {
-      throw new Error(`找不到 callIndex=${callIndex} 对应的消息位置`);
-    }
-
-    const messagesToSummarize = rawMessages.slice(pivotMsgIndex);
-    if (messagesToSummarize.length === 0) {
-      throw new Error('没有需要压缩的消息');
-    }
-
-    console.log(`[ProtoClaw Runtime] 部分压缩: pivot=${pivotMsgIndex} summarize=${messagesToSummarize.length} keep=${pivotMsgIndex}`);
-
-    // 1. Generate summary BEFORE rolling back (so we don't lose the messages)
-    const summaryResult = await generatePartialInProcessSummary(rawMessages, pivotMsgIndex, feedback);
-
-    const keptMessages = rawMessages.slice(0, pivotMsgIndex);
-    const summaryContent = buildPartialCompactSummaryContent(summaryResult.summaryText, {
-      messagesSummarized: messagesToSummarize.length,
-      feedback,
-    });
-
-    // 2. Roll back via the exact same helper used by "回退到此轮".
-    const rollback = await rollbackToCallAndSave(callIndex, { draftInput: '' });
-    if (!rollback.ok) {
-      return;
-    }
-
-    // 3. Inject summary as system reminder.
-    // After rollback, the context already has the correct kept prefix in both
-    // messages and enrichedMessages. We append the summary via addSystemMessage
-    // (which syncs both arrays) instead of ctx.restore({ enrichedMessages: [] })
-    // which would wipe enrichedMessages and break Feature queries.
-    const ctx = typeof agent?.getContext === 'function' ? agent.getContext() : null;
-    if (!ctx) {
-      throw new Error('无法获取上下文');
-    }
-
-    const restoredCallIndex = typeof agent._callIndex === 'number' ? Number(agent._callIndex) : callIndex - 1;
-    const reminderTurn = Math.max(0, restoredCallIndex + 1);
-
-    // Verify the rollback produced the expected prefix; if not, fall back to
-    // explicit restore (with rebuilt enrichedMessages from post-rollback state).
-    const postRollbackMessages = ctx.getAll();
-    if (postRollbackMessages.length === keptMessages.length) {
-      ctx.addSystemMessage(summaryContent, reminderTurn, 'partial-compact');
-    } else {
-      console.warn(`[ProtoClaw Runtime] 部分压缩: 回滚后消息数 (${postRollbackMessages.length}) 与预期 (${keptMessages.length}) 不一致，使用显式 restore`);
-      const postRollbackEnriched = typeof ctx.getAllEnriched === 'function' ? ctx.getAllEnriched() : [];
-      const finalMessages = [...keptMessages, {
-        role: 'system', content: summaryContent, turn: reminderTurn,
-      }];
-      ctx.restore({ version: 2, messages: finalMessages, enrichedMessages: postRollbackEnriched, sequence: postRollbackEnriched.length });
-    }
-
-    // 4. Save and sync final state.
-    await agent.saveSession(sessionId, sessionStore);
-    agent['pushToDebug']?.(ctx.getAll());
-    agent['pushInspectorSnapshot']?.();
-    console.log(`[ProtoClaw Runtime] 部分压缩已回退并注入 system reminder: before=${rawMessages.length} after=${ctx.getAll().length} reminderTurn=${reminderTurn}`);
-    console.log(`[ProtoClaw Runtime] 部分压缩完成 (in-session): callIndex=${callIndex}`);
-  } catch (error) {
-    console.error('[ProtoClaw Runtime] 部分压缩失败:', error);
-  } finally {
-    compactSummaryInFlight = false;
-  }
-}
-
-async function handleInputResponse(userInput, response) {
-  if (!response) {
-    return { kind: 'continue' };
-  }
-
-  if (response.kind === 'text') {
-    const text = response.text ?? '';
-    const images = Array.isArray(response.payload?.images)
-      ? response.payload.images.filter((img) => img && typeof img === 'object')
-      : [];
-    if (!text && images.length === 0) {
-      return { kind: 'continue' };
-    }
-    if (text === '/exit') {
-      return { kind: 'exit' };
-    }
-    if (text.startsWith('/compact-summary-resume')) {
-      const extraInstructions = text.slice('/compact-summary-resume'.length).trim();
-      void triggerSummaryCompactionResume(extraInstructions);
-      return { kind: 'continue' };
-    }
-    if (text.startsWith('/compact-summary')) {
-      const extraInstructions = text.slice('/compact-summary'.length).trim();
-      void triggerSummaryCompaction(extraInstructions);
-      return { kind: 'continue' };
-    }
-    return {
-      kind: 'text',
-      text: text || ' ',
-      ...(images.length > 0 ? { images } : {}),
-    };
-  }
-
-  if (response.kind === 'action' && response.actionId === 'rollback_to_call') {
-    const callIndex = response.payload?.callIndex;
-    if (typeof callIndex !== 'number') {
-      console.warn('[ProtoClaw Runtime] rollback_to_call 缺少有效的 callIndex');
-      return { kind: 'continue' };
-    }
-
-    const result = await rollbackToCallAndSave(callIndex, {
-      draftInput: typeof response.payload?.draftInput === 'string'
-        ? response.payload.draftInput
-        : undefined,
-    });
-    if (result.ok && typeof userInput.setNextDraftInput === 'function') {
-      userInput.setNextDraftInput(result.draftInput);
-    }
-    return { kind: 'continue' };
-  }
-
-  if (response.kind === 'action' && response.actionId === 'compact_from_call') {
-    const callIndex = response.payload?.callIndex;
-    if (typeof callIndex !== 'number') {
-      console.warn('[ProtoClaw Runtime] compact_from_call 缺少有效的 callIndex');
-      return { kind: 'continue' };
-    }
-
-    const feedback = typeof response.payload?.feedback === 'string' ? response.payload.feedback : '';
-    await triggerPartialCompact(callIndex, feedback);
-    return { kind: 'continue' };
-  }
-
-  console.warn('[ProtoClaw Runtime] 收到未处理的输入动作:', response.actionId ?? response.kind);
-  return { kind: 'continue' };
-}
 
 async function main() {
   const workspaceCwd = resolveWorkspaceCwd(agentId, sessionId);
@@ -1195,6 +418,9 @@ async function main() {
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
     ...(resolved ? { llm: resolved.llm } : {}),
   });
+  // Propagate agent reference to extracted module contexts
+  imBridgeCtx.agent = agent;
+  summaryCtx.agent = agent;
   if (resolved) {
     console.log(`[ProtoClaw Runtime] Using model preset from metadata.json => ${resolved.modelName}`);
     try {
@@ -1320,6 +546,7 @@ async function main() {
 
   // ── CallArbiter: initialize AFTER session restore, BEFORE runtime inputs open ──
   callArbiter = new CallArbiter(agent);
+  imBridgeCtx.callArbiter = callArbiter;
   DebugHub.getInstance().setQueuedInputHandler((targetAgentId, input) => {
     if (!callArbiter || !agent?.agentId || targetAgentId !== agent.agentId) {
       return;
@@ -1440,7 +667,7 @@ async function main() {
   });
 
   callArbiter.on('callFinished', (envelope) => {
-    dispatchIMCallFinish(envelope).catch(err => {
+    imBridge.dispatchIMCallFinish(envelope).catch(err => {
       console.error('[ProtoClaw Runtime] IM callfinish delivery error:', err);
     });
   });
@@ -1483,7 +710,7 @@ async function main() {
   }
 
   // If this session is bound to an IM line, mount the carrier feature + gateway
-  await mountIMLineCarrierIfBound();
+  await imBridge.mountIMLineCarrierIfBound();
 
   try {
     const dispatchFeature = agent.features?.get?.('claw-dispatch');
@@ -1530,7 +757,7 @@ async function main() {
 
     let handled;
     try {
-      handled = await handleInputResponse(userInput, response);
+      handled = await summaryHandlers.handleInputResponse(userInput, response);
     } catch (error) {
       console.error('[ProtoClaw Runtime] 处理输入动作失败，已忽略本次请求:', error);
       console.error(error?.stack || error);
