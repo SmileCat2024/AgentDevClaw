@@ -75,20 +75,67 @@ function renderSessionTitleAiButton(session) {
   return '<button class="session-title-ai-btn session-title-ai-btn-hidden" type="button" title="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '" onmousedown="if(this._setGenerating)this._setGenerating(true);" onclick="event.stopPropagation();window.generateSessionTitle(\'' + escapeHtml(session.id) + '\',this)" aria-label="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '"><span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + escapeHtml(isZh ? 'AI生成' : 'AI Generate') + '</span></button>';
 }
 
+// ── Client-side model info cache ───────────────────────────────────
+// getConnectedAgents returns light workspace_sessions without top-level
+// contextLength/compressRatio. These only appear after loadAgentDetail or
+// the 3-second prebuilt_sessions refresh. During the gap between data loss
+// (loadAgents replacing allAgents) and recovery (next refresh), the context
+// bar would flash hardcoded defaults. This cache bridges that gap by
+// remembering the last known-good values per agentId.
+var _modelInfoCache = {};
+
+function _resolveAgentKey(agent) {
+  if (!agent) return null;
+  return agent.id || agent.runtime_session_id || agent.runtimeSessionId || null;
+}
+
 function getSessionContextLength(session, agent) {
   const cl = session?.contextLength;
-  if (Number.isFinite(cl) && cl > 0) return cl;
+  if (Number.isFinite(cl) && cl > 0) {
+    _cacheModelInfo(agent, cl, null);
+    return cl;
+  }
   const fallback = agent?.workspace_sessions?.contextLength;
-  if (Number.isFinite(fallback) && fallback > 0) return fallback;
+  if (Number.isFinite(fallback) && fallback > 0) {
+    _cacheModelInfo(agent, fallback, null);
+    return fallback;
+  }
+  // Last resort: check the persistent cache before hardcoded default
+  var key = _resolveAgentKey(agent);
+  if (key && _modelInfoCache[key] && Number.isFinite(_modelInfoCache[key].contextLength) && _modelInfoCache[key].contextLength > 0) {
+    return _modelInfoCache[key].contextLength;
+  }
   return 200000;
 }
 
 function getSessionCompressRatio(session, agent) {
   const cr = session?.compressRatio;
-  if (Number.isFinite(cr) && cr > 0 && cr <= 100) return cr;
+  if (Number.isFinite(cr) && cr > 0 && cr <= 100) {
+    _cacheModelInfo(agent, null, cr);
+    return cr;
+  }
   const fallback = agent?.workspace_sessions?.compressRatio;
-  if (Number.isFinite(fallback) && fallback > 0 && fallback <= 100) return fallback;
+  if (Number.isFinite(fallback) && fallback > 0 && fallback <= 100) {
+    _cacheModelInfo(agent, null, fallback);
+    return fallback;
+  }
+  var key = _resolveAgentKey(agent);
+  if (key && _modelInfoCache[key] && Number.isFinite(_modelInfoCache[key].compressRatio) && _modelInfoCache[key].compressRatio > 0) {
+    return _modelInfoCache[key].compressRatio;
+  }
   return 80;
+}
+
+function _cacheModelInfo(agent, contextLength, compressRatio) {
+  var key = _resolveAgentKey(agent);
+  if (!key) return;
+  if (!_modelInfoCache[key]) _modelInfoCache[key] = {};
+  if (Number.isFinite(contextLength) && contextLength > 0) {
+    _modelInfoCache[key].contextLength = contextLength;
+  }
+  if (Number.isFinite(compressRatio) && compressRatio > 0 && compressRatio <= 100) {
+    _modelInfoCache[key].compressRatio = compressRatio;
+  }
 }
 
 function renderSessionTokenBar(session, agent) {

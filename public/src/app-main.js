@@ -462,6 +462,31 @@ async function loadAgents() {
             && !(agent.workspace_sessions?.sessions?.length > 0) ? {
               workspace_sessions: prev.workspace_sessions,
             } : {}),
+          // Preserve contextLength/compressRatio from prev when the light
+          // getConnectedAgents snapshot doesn't include them. This prevents
+          // the context bar from flashing defaults between data refreshes.
+          // Only applies when loadAgentDetail hasn't run yet AND the new data
+          // has sessions (if sessions are empty, the block above already
+          // preserves the entire prev.workspace_sessions).
+          ...(!loadedAgentDetailIds.has(agent.id)
+            && agent.workspace_sessions?.sessions?.length > 0
+            && prev?.workspace_sessions && (() => {
+            const cur = agent.workspace_sessions;
+            const curCl = cur?.contextLength;
+            const curCr = cur?.compressRatio;
+            const prevCl = prev.workspace_sessions.contextLength;
+            const prevCr = prev.workspace_sessions.compressRatio;
+            const needCl = !(Number.isFinite(curCl) && curCl > 0) && Number.isFinite(prevCl) && prevCl > 0;
+            const needCr = !(Number.isFinite(curCr) && curCr > 0 && curCr <= 100) && Number.isFinite(prevCr) && prevCr > 0 && prevCr <= 100;
+            if (!needCl && !needCr) return {};
+            return {
+              workspace_sessions: {
+                ...cur,
+                ...(needCl ? { contextLength: prevCl } : {}),
+                ...(needCr ? { compressRatio: prevCr } : {}),
+              },
+            };
+          })()),
         };
       });
     }
@@ -3279,6 +3304,21 @@ async function poll() {
             const prevSig = JSON.stringify(currentWs || {});
             const nextSig = JSON.stringify(freshSessions);
             if (prevSig !== nextSig) {
+              // Preserve contextLength/compressRatio when the fresh data from
+              // listPrebuiltSessions returns null (e.g. resolveSessionModelInfo
+              // couldn't resolve a preset). Without this, the 3-second refresh
+              // would wipe out previously valid model info and cause the context
+              // bar to flash defaults.
+              const prevCl = currentWs?.contextLength;
+              const prevCr = currentWs?.compressRatio;
+              if (Number.isFinite(prevCl) && prevCl > 0
+                  && !(Number.isFinite(freshSessions.contextLength) && freshSessions.contextLength > 0)) {
+                freshSessions.contextLength = prevCl;
+              }
+              if (Number.isFinite(prevCr) && prevCr > 0 && prevCr <= 100
+                  && !(Number.isFinite(freshSessions.compressRatio) && freshSessions.compressRatio > 0)) {
+                freshSessions.compressRatio = prevCr;
+              }
               wsHostAgent.workspace_sessions = freshSessions;
               if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
                 renderCurrentMainView();

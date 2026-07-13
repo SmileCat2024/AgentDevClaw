@@ -211,9 +211,30 @@ container.addEventListener('scroll', () => {
 }, { passive: true });
 
 /**
- * 更新聊天界面顶部的 context bar（模型名 + token 占比）。
- * 从 currentOverviewSnapshot 取 lastRequestUsage，从当前 agent/session 取模型名和 contextLength。
+ * Merge two workspace_sessions objects at the property level, ensuring
+ * contextLength / compressRatio are always preserved from whichever source
+ * has a valid value. Without this, `||` can pick the runtime child's light
+ * snapshot (which lacks contextLength) over the host's rich data, causing
+ * the context bar to flash defaults on every loadAgents cycle.
  */
+function _mergeWorkspaceSessions(primary, fallback) {
+  if (!primary) return fallback || null;
+  if (!fallback) return primary;
+  var cl = Number.isFinite(primary.contextLength) && primary.contextLength > 0
+    ? primary.contextLength
+    : (Number.isFinite(fallback.contextLength) && fallback.contextLength > 0 ? fallback.contextLength : null);
+  var cr = Number.isFinite(primary.compressRatio) && primary.compressRatio > 0
+    ? primary.compressRatio
+    : (Number.isFinite(fallback.compressRatio) && fallback.compressRatio > 0 ? fallback.compressRatio : null);
+  return {
+    ...fallback,
+    ...primary,
+    // Ensure model info survives even when the primary source lacks it
+    ...(cl != null ? { contextLength: cl } : {}),
+    ...(cr != null ? { compressRatio: cr } : {}),
+  };
+}
+
 function getRuntimeAwareAgentRecord() {
   var hostRecord = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
   if (typeof getCurrentRuntimeRecord === 'function') {
@@ -233,14 +254,14 @@ function getRuntimeAwareAgentRecord() {
         if (hostRecord && hostRecord.workspace_sessions) {
           return {
             ...runtimeRecord,
-            workspace_sessions: runtimeRecord.workspace_sessions || hostRecord.workspace_sessions,
+            workspace_sessions: _mergeWorkspaceSessions(runtimeRecord.workspace_sessions, hostRecord.workspace_sessions),
           };
         }
         return runtimeRecord;
       }
       return {
         ...runtimeRecord,
-        workspace_sessions: hostRecord.workspace_sessions || runtimeRecord.workspace_sessions,
+        workspace_sessions: _mergeWorkspaceSessions(hostRecord.workspace_sessions, runtimeRecord.workspace_sessions),
         active_workspace_session_id: hostRecord.active_workspace_session_id || runtimeRecord.active_workspace_session_id,
         active_workspace_session_title: hostRecord.active_workspace_session_title || runtimeRecord.active_workspace_session_title,
         active_workspace_display_name: hostRecord.active_workspace_display_name || runtimeRecord.active_workspace_display_name,
