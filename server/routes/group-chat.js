@@ -504,7 +504,11 @@ export function createGroupChatDataLayer(rootDir, hooks = {}) {
     await ensureDir();
     const filePath = getGroupChatPath(chat.id);
     chat.updatedAt = Date.now();
-    await fs.writeFile(filePath, JSON.stringify(chat, null, 2), 'utf8');
+    // Atomic write: write to temp file then rename, prevents corruption
+    // from concurrent writes or process crash mid-write.
+    const tmpPath = filePath + '.tmp';
+    await fs.writeFile(tmpPath, JSON.stringify(chat, null, 2), 'utf8');
+    await fs.rename(tmpPath, filePath);
     if (typeof hooks.onWrite === 'function') hooks.onWrite(chat.id);
     return chat;
   }
