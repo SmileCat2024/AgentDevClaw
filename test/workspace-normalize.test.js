@@ -1,14 +1,14 @@
 /**
- * Tests for server/routes/workspace.js — normalize series pure functions
+ * Tests for workspace state normalization + project functions
  *
  * Covers:
- * 1. normalizeFeatureConfigs
- * 2. normalizeWorkspaceState
- * 3. normalizeWorkspaceFeatureProject
- * 4. normalizeWorkspaceAgentProject
- * 5. normalizeWorkspacePhProject
- * 6. upsertWorkspacePhProject
- * 7. removeWorkspacePhProject
+ * 1. normalizeFeatureConfigs           (workspace.js)
+ * 2. normalizeWorkspaceState           (workspace.js)
+ * 3. normalizeWorkspaceFeatureProject  (workspace-projects.js)
+ * 4. normalizeWorkspaceAgentProject    (workspace-projects.js)
+ * 5. normalizeWorkspacePhProject       (workspace-projects.js)
+ * 6. upsertWorkspacePhProject          (workspace-projects.js)
+ * 7. removeWorkspacePhProject          (workspace-projects.js)
  */
 
 import { describe, it } from 'node:test';
@@ -17,12 +17,15 @@ import assert from 'node:assert/strict';
 import {
   normalizeFeatureConfigs,
   normalizeWorkspaceState,
+} from '../server/routes/workspace.js';
+
+import {
   normalizeWorkspaceFeatureProject,
   normalizeWorkspaceAgentProject,
   normalizeWorkspacePhProject,
   upsertWorkspacePhProject,
   removeWorkspacePhProject,
-} from '../server/routes/workspace.js';
+} from '../server/routes/workspace-projects.js';
 
 // ── normalizeFeatureConfigs ──────────────────────────────────────────────────
 
