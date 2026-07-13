@@ -295,7 +295,7 @@ export class GroupAdminFeature implements AgentFeature {
     return [
       {
         name: 'gc_overview',
-        description: '查看当前群聊概览和工作现场。包含群基本信息、最近活动，以及按工作线程组织的当前态势。',
+        description: '查看当前群聊概览和工作线程。包含群基本信息、最近活动，以及按工作线程组织的当前态势。',
         parameters: {
           type: 'object',
           properties: {},
