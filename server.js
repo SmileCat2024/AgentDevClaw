@@ -119,25 +119,26 @@ let remoteClawConnector = null;
 let remoteClawContext = null;
 const PROJECT_REMOTE_CLAW_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'remote-claw.json');
 
-// ── Assembly helpers extracted to server/routes/assembly-helpers.js ──
-// ── Workspace state + data extracted to server/routes/workspace.js ──
+// ── Agent discovery + identity extracted to server/routes/agent-discovery.js ──
+// sessionApi is a mutable reference filled after session-helpers is created,
+// breaking the circular dependency (agent-discovery → session-helpers → agent-discovery).
+const sessionApi = {};
+const agentDiscoveryApi = createAgentDiscoveryModule({ sessionApi });
+const {
+  discoverAgents, getAgentsLight, resolveAgentModelPresets, enrichAgent,
+  getAgents, requireAgentLight, requireAgent,
+  readViewerJson, getPendingInputCount,
+  resolveActiveWorkspaceSessionMeta, resolveRuntimeDisplayName,
+  readWorkspaceSessionSnapshot, readActiveWorkspaceSessionMeta,
+  readWorkspaceSessionMeta, collectIdentities,
+} = agentDiscoveryApi;
+agentDiscoveryApi.setupRoutes(app);
 
 // ── Project docset helpers extracted to server/routes/project-docset.js ──
 // ── Session helpers extracted to server/routes/session-helpers.js ──
 // ── FS operations extracted to server/routes/fs-operations.js ──
 // ── Workspace creators extracted to server/routes/workspace-creators.js ──
 // ── Agent Discovery + Identity → server/routes/agent-discovery.js ──
-
-const sessionApi = {};
-const agentDiscovery = createAgentDiscoveryModule({ sessionApi });
-const {
-  discoverAgents, getAgentsLight, resolveAgentModelPresets,
-  enrichAgent, getAgents, requireAgentLight, requireAgent,
-  readViewerJson, getPendingInputCount,
-  resolveActiveWorkspaceSessionMeta, resolveRuntimeDisplayName,
-  readWorkspaceSessionSnapshot, readActiveWorkspaceSessionMeta,
-  readWorkspaceSessionMeta, collectIdentities,
-} = agentDiscovery;
 
 // ── Agent Lifecycle → server/routes/agent-lifecycle.js ──
 const agentLifecycle = createAgentLifecycleModule({
@@ -233,7 +234,6 @@ Object.assign(sessionApi, {
 });
 
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──
-agentDiscovery.setupRoutes(app);
 
 // ── Group Chat API → server/routes/group-chat.js ──
 const { cleanupOrphanedRouting, notifySessionLineage, notifySessionArchived } = setupGroupChatRoutes(app, express, {

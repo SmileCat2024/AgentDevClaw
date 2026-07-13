@@ -82,6 +82,8 @@ describe('Server module imports', () => {
       '../server/routes/workspace.js',
       '../server/routes/workspace-creators.js',
       '../server/routes/agent-discovery.js',
+      '../server/routes/agent-connected.js',
+      '../server/routes/agent-startup.js',
       '../server/routes/agent-lifecycle.js',
     ];
 
