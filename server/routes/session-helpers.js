@@ -166,6 +166,160 @@ export function searchInTextPure(text, queryLower) {
   return { snippet, matchRole, matchIndex: idx };
 }
 
+/**
+ * Extract a human-readable label for a tool call (e.g. 'read file.js').
+ *
+ * Pure function — no closure dependencies, exported for direct testing.
+ *
+ * @param {string} name - tool name
+ * @param {object} args - tool call arguments
+ * @returns {string|null}
+ */
+export function extractToolCallLabel(name, args) {
+  if (!args || typeof args !== 'object') return null;
+  if (name === 'read' || name === 'edit' || name === 'write') {
+    const filePath = typeof args.filePath === 'string' ? args.filePath : '';
+    if (filePath) {
+      const baseName = filePath.split(/[\\/]/).pop() || filePath;
+      return `${name} ${baseName}`;
+    }
+  }
+  if (name === 'invoke_skill') {
+    const skill = typeof args.skill === 'string' ? args.skill : '';
+    if (skill) return `invoke_skill ${skill}`;
+  }
+  return null;
+}
+
+/**
+ * Build a trim preview of session messages, grouping them into user→assistant rounds.
+ * The most recent 2 rounds are marked suggestedTrim=false.
+ *
+ * Pure function — depends only on extractToolCallLabel (also module-level).
+ *
+ * @param {Array} messages - session messages
+ * @returns {Array} rounds with preview info and trim suggestions
+ */
+export function buildSessionTrimPreview(messages) {
+  const rounds = [];
+  let currentRound = null;
+
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    const role = typeof m?.role === 'string' ? m.role : '';
+    if (role === 'user') {
+      if (currentRound) rounds.push(currentRound);
+      const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
+      currentRound = {
+        roundIndex: rounds.length,
+        turnStart: Number.isFinite(m.turn) ? m.turn : i,
+        turnEnd: Number.isFinite(m.turn) ? m.turn : i,
+        msgIndexStart: i,
+        msgIndexEnd: i,
+        userPreview: content.slice(0, 120),
+        assistantPreview: '',
+        toolCalls: [],
+        messageCount: 1,
+      };
+    } else if (currentRound) {
+      currentRound.messageCount += 1;
+      currentRound.turnEnd = Number.isFinite(m.turn) ? m.turn : currentRound.turnEnd;
+      currentRound.msgIndexEnd = i;
+      if (role === 'assistant') {
+        const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
+        if (content && !currentRound.assistantPreview) {
+          currentRound.assistantPreview = content.slice(0, 120);
+        }
+        const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
+        for (const tc of toolCalls) {
+          const name = typeof tc?.name === 'string' ? tc.name : '';
+          if (!name) continue;
+          let args = tc.args ?? tc.arguments ?? {};
+          if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+          const label = extractToolCallLabel(name, args) || name;
+          currentRound.toolCalls.push({ name, summary: label });
+        }
+      }
+    }
+  }
+  if (currentRound) rounds.push(currentRound);
+
+  const recentCount = 2;
+  for (let i = 0; i < rounds.length; i++) {
+    rounds[i].suggestedTrim = i < rounds.length - recentCount;
+  }
+
+  return rounds;
+}
+
+/**
+ * Build a lightweight session record from an index entry without reading the file.
+ *
+ * Pure function — depends only on module-level imports (cleanSessionText,
+ * normalizeSessionMetadata, getPrebuiltSessionFilePath).
+ *
+ * @param {string} agentId
+ * @param {object} record - session index record
+ * @returns {object} lightweight session summary
+ */
+export function buildLightPrebuiltSessionRecord(agentId, record) {
+  const metadata = normalizeSessionMetadata(record?.metadata);
+  const sessionType = cleanSessionText(record?.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
+  return {
+    id: cleanSessionText(record?.id),
+    title: cleanSessionText(record?.title),
+    featureName: cleanSessionText(record?.featureName),
+    agentName: cleanSessionText(record?.agentName),
+    taskTitle: cleanSessionText(record?.taskTitle),
+    taskType: cleanSessionText(record?.taskType),
+    goal: cleanSessionText(record?.goal),
+    constraints: cleanSessionText(record?.constraints),
+    expectedOutput: cleanSessionText(record?.expectedOutput),
+    targetFiles: cleanSessionText(record?.targetFiles),
+    referenceMaterials: cleanSessionText(record?.referenceMaterials),
+    sessionType,
+    status: cleanSessionText(record?.status) || (sessionType === 'exploration' ? 'locked' : ''),
+    metadata,
+    formId: cleanSessionText(record?.formId) || '',
+    openDirectory: cleanSessionText(record?.openDirectory),
+    createdAt: cleanSessionText(record?.createdAt) || new Date().toISOString(),
+    updatedAt: cleanSessionText(record?.updatedAt) || cleanSessionText(record?.createdAt) || new Date().toISOString(),
+    path: getPrebuiltSessionFilePath(agentId, cleanSessionText(record?.id) || ''),
+    exists: true,
+    bytes: record?.fileSize || 0,
+    messageCount: typeof record?.messageCount === 'number' ? record.messageCount : 0,
+    preview: cleanSessionText(record?.preview),
+    hasSummary: false,
+    tokenUsage: record?.tokenUsage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    contextLength: null,
+    modelName: cleanSessionText(record?.modelName),
+  };
+}
+
+/**
+ * Extract technology domain keywords from text (for exploration session locking).
+ *
+ * Pure function — no closure dependencies.
+ *
+ * @param {string} text
+ * @returns {string[]} up to 8 unique domain keywords
+ */
+export function extractDomainsFromText(text) {
+  if (!text || typeof text !== 'string') return [];
+  const techPatterns = [
+    /\b(Flow|Feature|Hook|ToolRegistry|Node|Edge|Workflow|Assembly|Session|Workspace|Runtime|Context|Prompt|Compaction|Mirror|Handoff|Seed|Inspector|Editor|Surface|Block|State|Config|Form|Agent|Message|Chunk|Template|Variable|Skill|Tool|Permission)\b/gi,
+  ];
+  const found = new Set();
+  for (const pattern of techPatterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const word = match[1];
+      if (word.length >= 3) found.add(word);
+    }
+  }
+  return [...found].slice(0, 8);
+}
+
 export function createSessionHelpers(ctx) {
   const {
     readWorkspaceState,
@@ -244,40 +398,6 @@ async function buildSessionSummaryMap(agentId) {
   return map;
 }
 
-function buildLightPrebuiltSessionRecord(agentId, record) {
-  const metadata = normalizeSessionMetadata(record?.metadata);
-  const sessionType = cleanSessionText(record?.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
-  return {
-    id: cleanSessionText(record?.id),
-    title: cleanSessionText(record?.title),
-    featureName: cleanSessionText(record?.featureName),
-    agentName: cleanSessionText(record?.agentName),
-    taskTitle: cleanSessionText(record?.taskTitle),
-    taskType: cleanSessionText(record?.taskType),
-    goal: cleanSessionText(record?.goal),
-    constraints: cleanSessionText(record?.constraints),
-    expectedOutput: cleanSessionText(record?.expectedOutput),
-    targetFiles: cleanSessionText(record?.targetFiles),
-    referenceMaterials: cleanSessionText(record?.referenceMaterials),
-    sessionType,
-    status: cleanSessionText(record?.status) || (sessionType === 'exploration' ? 'locked' : ''),
-    metadata,
-    formId: cleanSessionText(record?.formId) || '',
-    openDirectory: cleanSessionText(record?.openDirectory),
-    createdAt: cleanSessionText(record?.createdAt) || new Date().toISOString(),
-    updatedAt: cleanSessionText(record?.updatedAt) || cleanSessionText(record?.createdAt) || new Date().toISOString(),
-    path: getPrebuiltSessionFilePath(agentId, cleanSessionText(record?.id) || ''),
-    exists: true,
-    bytes: record?.fileSize || 0,
-    messageCount: typeof record?.messageCount === 'number' ? record.messageCount : 0,
-    preview: cleanSessionText(record?.preview),
-    hasSummary: false,
-    tokenUsage: record?.tokenUsage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    contextLength: null,
-    modelName: cleanSessionText(record?.modelName),
-  };
-}
-
 async function findSessionSummary(agentId, sessionId) {
   const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
   try {
@@ -321,74 +441,6 @@ async function readSessionSnapshotForContinuity(agentId, sessionId) {
   } catch {
     return null;
   }
-}
-
-function extractToolCallLabel(name, args) {
-  if (!args || typeof args !== 'object') return null;
-  if (name === 'read' || name === 'edit' || name === 'write') {
-    const filePath = typeof args.filePath === 'string' ? args.filePath : '';
-    if (filePath) {
-      const baseName = filePath.split(/[\\/]/).pop() || filePath;
-      return `${name} ${baseName}`;
-    }
-  }
-  if (name === 'invoke_skill') {
-    const skill = typeof args.skill === 'string' ? args.skill : '';
-    if (skill) return `invoke_skill ${skill}`;
-  }
-  return null;
-}
-
-function buildSessionTrimPreview(messages) {
-  const rounds = [];
-  let currentRound = null;
-
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
-    const role = typeof m?.role === 'string' ? m.role : '';
-    if (role === 'user') {
-      if (currentRound) rounds.push(currentRound);
-      const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
-      currentRound = {
-        roundIndex: rounds.length,
-        turnStart: Number.isFinite(m.turn) ? m.turn : i,
-        turnEnd: Number.isFinite(m.turn) ? m.turn : i,
-        msgIndexStart: i,
-        msgIndexEnd: i,
-        userPreview: content.slice(0, 120),
-        assistantPreview: '',
-        toolCalls: [],
-        messageCount: 1,
-      };
-    } else if (currentRound) {
-      currentRound.messageCount += 1;
-      currentRound.turnEnd = Number.isFinite(m.turn) ? m.turn : currentRound.turnEnd;
-      currentRound.msgIndexEnd = i;
-      if (role === 'assistant') {
-        const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
-        if (content && !currentRound.assistantPreview) {
-          currentRound.assistantPreview = content.slice(0, 120);
-        }
-        const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
-        for (const tc of toolCalls) {
-          const name = typeof tc?.name === 'string' ? tc.name : '';
-          if (!name) continue;
-          let args = tc.args ?? tc.arguments ?? {};
-          if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
-          const label = extractToolCallLabel(name, args) || name;
-          currentRound.toolCalls.push({ name, summary: label });
-        }
-      }
-    }
-  }
-  if (currentRound) rounds.push(currentRound);
-
-  const recentCount = 2;
-  for (let i = 0; i < rounds.length; i++) {
-    rounds[i].suggestedTrim = i < rounds.length - recentCount;
-  }
-
-  return rounds;
 }
 
 async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap) {
@@ -1647,22 +1699,6 @@ async function lockExplorationSession(agentId, sessionId, goal, response) {
   } catch (err) {
     console.error(`[lockExploration] Failed for session=${sessionId}:`, err.message);
   }
-}
-
-function extractDomainsFromText(text) {
-  if (!text || typeof text !== 'string') return [];
-  const techPatterns = [
-    /\b(Flow|Feature|Hook|ToolRegistry|Node|Edge|Workflow|Assembly|Session|Workspace|Runtime|Context|Prompt|Compaction|Mirror|Handoff|Seed|Inspector|Editor|Surface|Block|State|Config|Form|Agent|Message|Chunk|Template|Variable|Skill|Tool|Permission)\b/gi,
-  ];
-  const found = new Set();
-  for (const pattern of techPatterns) {
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const word = match[1];
-      if (word.length >= 3) found.add(word);
-    }
-  }
-  return [...found].slice(0, 8);
 }
 
 async function buildExplorationHandoffPayload(agentId, explorationIds, goal) {
