@@ -199,7 +199,7 @@ export function createIMBridge(ctx) {
                 text,
               });
               const finished = await ctx.callArbiter.waitForCompletion(entry.id);
-              const resp = finished.status === 'failed'
+              const resp = finished.status === 'failed' || finished.status === 'cancelled'
                 ? `处理失败: ${finished.error || '未知错误'}`
                 : (finished.result || '处理完成');
               if (resp) {
@@ -218,7 +218,7 @@ export function createIMBridge(ctx) {
             onCall: async (text) => {
               const entry = ctx.callArbiter.enqueue({ source: ch.id, text });
               const finished = await ctx.callArbiter.waitForCompletion(entry.id);
-              if (finished.status === 'failed') {
+              if (finished.status === 'failed' || finished.status === 'cancelled') {
                 throw new Error(finished.error || 'unknown error');
               }
               return finished.result || '处理完成';

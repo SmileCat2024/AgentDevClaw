@@ -27,6 +27,71 @@ let lastNotificationStatusPayload = null;
 const _runtimeStatusMemory = new Map();
 let _lastRenderedNotificationRuntime = null;
 let _notificationClockTimer = null;
+let _contextGuardRuntimeId = '';
+let _contextGuardState = null;
+let _lastContextGuardToastKey = '';
+
+function normalizeContextGuardState(raw) {
+  if (!raw || typeof raw !== 'object' || raw.blocked !== true) return null;
+  const thresholdTokens = Number(raw.thresholdTokens);
+  const inputTokens = Number(raw.inputTokens);
+  const blockedAt = Number(raw.blockedAt);
+  return {
+    blocked: true,
+    thresholdTokens: Number.isFinite(thresholdTokens) && thresholdTokens > 0 ? Math.round(thresholdTokens) : null,
+    inputTokens: Number.isFinite(inputTokens) && inputTokens > 0 ? Math.round(inputTokens) : null,
+    blockedAt: Number.isFinite(blockedAt) && blockedAt > 0 ? Math.round(blockedAt) : null,
+    reason: typeof raw.reason === 'string' ? raw.reason.trim() : '',
+  };
+}
+
+function isCurrentContextGuardBlocked() {
+  return _contextGuardState?.blocked === true
+    && _contextGuardRuntimeId === normalizeAgentIdentity(currentRuntimeAgentId);
+}
+
+function getCurrentContextGuardMessage() {
+  const state = _contextGuardState;
+  if (!state?.blocked) return '';
+  if (currentLanguage === 'zh') {
+    if (state.inputTokens && state.thresholdTokens) {
+      return `本轮上下文已达到限制（${state.inputTokens.toLocaleString()} / ${state.thresholdTokens.toLocaleString()} tokens），会话已被中断。`;
+    }
+    return '本轮上下文已达到限制，会话已被中断。';
+  }
+  if (state.inputTokens && state.thresholdTokens) {
+    return `This session reached its context limit (${state.inputTokens.toLocaleString()} / ${state.thresholdTokens.toLocaleString()} tokens) and was interrupted.`;
+  }
+  return 'This session reached its context limit and was interrupted.';
+}
+
+function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
+  const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
+  if (!normalizedRuntimeId || normalizedRuntimeId !== normalizeAgentIdentity(currentRuntimeAgentId)) return;
+  const nextState = normalizeContextGuardState(payload?.contextGuard);
+  const wasBlocked = isCurrentContextGuardBlocked();
+  _contextGuardRuntimeId = normalizedRuntimeId;
+  _contextGuardState = nextState;
+  const isBlocked = isCurrentContextGuardBlocked();
+
+  if (isBlocked) {
+    const toastKey = `${normalizedRuntimeId}:${nextState.blockedAt || nextState.thresholdTokens || 'blocked'}`;
+    if (_lastContextGuardToastKey !== toastKey) {
+      _lastContextGuardToastKey = toastKey;
+      window.ClawToast?.show?.({
+        id: `context-guard-${normalizedRuntimeId}`,
+        status: 'error',
+        title: currentLanguage === 'zh' ? '上下文限制已达到，已中断会话' : 'Context limit reached — session interrupted',
+        description: getCurrentContextGuardMessage(),
+      });
+    }
+  }
+
+  if (wasBlocked !== isBlocked && typeof renderInputRequests === 'function') {
+    lastRenderedInputSignature = '';
+    renderInputRequests(currentInputRequests || []);
+  }
+}
 
 // ─── 运行时快照构建 ───
 

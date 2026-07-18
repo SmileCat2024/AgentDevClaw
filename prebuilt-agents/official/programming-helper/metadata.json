@@ -16,6 +16,7 @@
     "memory",
     "shell",
     "lsp",
+    "context-guard",
     "mcp",
     "skill"
   ],

@@ -722,3 +722,16 @@ describe('runtime-status: isRuntimeCalling', () => {
     assert.equal(ctx.run('isRuntimeCalling(null)'), false);
   });
 });
+
+describe('runtime-status: context guard state', () => {
+  it('blocks only the runtime that reported the guard event', () => {
+    const ctx = loadRuntimeStatus({ currentRuntimeAgentId: 'rt-1' });
+    ctx.run(`applyContextGuardStatus({ contextGuard: {
+      blocked: true, blockedAt: 123, thresholdTokens: 800, inputTokens: 820,
+    } }, 'rt-1')`);
+    assert.equal(ctx.run('isCurrentContextGuardBlocked()'), true);
+    assert.match(ctx.run('getCurrentContextGuardMessage()'), /820/);
+    ctx.run('currentRuntimeAgentId = "rt-2"');
+    assert.equal(ctx.run('isCurrentContextGuardBlocked()'), false);
+  });
+});

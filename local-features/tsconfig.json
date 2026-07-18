@@ -13,6 +13,8 @@
   "include": [
     "./index.ts",
     "./context-compaction-control/src/**/*.ts",
+    "./context-guard/src/**/*.ts",
+    "./context-guard/test/**/*.ts",
     "./context-compaction-mirror/src/**/*.ts",
     "./context-compaction-mirror/test/**/*.ts",
     "./context-handoff-seed/src/**/*.ts",

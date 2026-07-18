@@ -159,6 +159,6 @@ pending（待执行）→ in_progress（进行中）→ completed（已完成）
 - **主要工作目录：**` {{SYSTEM_WORKING_DIR}}`
 - **是否为 git 仓库：**`{{SYSTEM_IS_GIT_REPOSITORY}}`
 - **用户设备平台：** `{{SYSTEM_PLATFORM}}`
-- **bash环境：** `Git bash`
+- **bash环境：** `{{SYSTEM_SHELL_ENV}}`
 - **当前日期：** `{{SYSTEM_DATE}}`
 - **驱动模型：** `{{SYSTEM_CURRENT_MODEL}}`

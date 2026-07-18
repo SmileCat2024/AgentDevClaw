@@ -995,7 +995,13 @@ app.delete('/protoclaw/remote_claw/registration', async (_req, res, next) => {
 });
 
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (/\.(?:html|css|js)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
+  },
+}));
 
 app.use((error, _req, res, _next) => {
   res.status(error.statusCode || 500).json({ error: error.message || 'Internal Server Error' });

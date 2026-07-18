@@ -170,6 +170,12 @@ async function fireSingleTarget(s, target) {
     }
   } catch (err) {
     console.error(`[Dispatch] failed to start runtime for ${agentId}/${sessionId}:`, err.message);
+    s.status = 'failed';
+    s.lastError = err instanceof Error ? err.message : String(err);
+    s.result = s.result || '(dispatch target is unavailable)';
+    s.completedAt = new Date().toISOString();
+    saveDispatchSchedules();
+    return;
   }
 
   const runtimeKey = getManagedRuntimeKey(agentId, sessionId);

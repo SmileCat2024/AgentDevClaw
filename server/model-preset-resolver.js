@@ -68,6 +68,10 @@ export function resolveModelPresetLLM(presetName) {
       provider: protocol,
       protocol,
       vision: preset.vision === true,
+      contextLength: Number.isFinite(Number(preset.contextLength)) && Number(preset.contextLength) > 0
+        ? Number(preset.contextLength) : null,
+      compressRatio: Number.isFinite(Number(preset.compressRatio))
+        ? Math.max(1, Math.min(100, Number(preset.compressRatio))) : 80,
       ...(apiSurface ? { apiSurface } : {}),
       baseUrl,
     };

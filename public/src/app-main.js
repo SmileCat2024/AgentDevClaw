@@ -2202,9 +2202,16 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
   if (!expectedRuntimeId) return null;
 
   try {
-    const [notifRes, connectionRes] = await Promise.all([
+    const guardOwnerRecord = getCurrentRuntimeRecord() || getCurrentAgentRecord();
+    const guardAgentId = String(guardOwnerRecord?.parent_id || currentAgentId || guardOwnerRecord?.id || '').trim();
+    const guardSessionId = String(guardOwnerRecord?.active_workspace_session_id || getActiveWorkspaceSessionId(guardOwnerRecord) || '').trim();
+    const guardStatusUrl = guardAgentId && guardSessionId
+      ? `/protoclaw/context_guard_status?agentId=${encodeURIComponent(guardAgentId)}&sessionId=${encodeURIComponent(guardSessionId)}`
+      : null;
+    const [notifRes, connectionRes, guardRes] = await Promise.all([
       fetch(`/api/agents/${expectedRuntimeId}/notification`),
       fetch(`/api/agents/${expectedRuntimeId}/connection`),
+      guardStatusUrl ? fetch(guardStatusUrl).catch(() => null) : Promise.resolve(null),
     ]);
 
     if (normalizeAgentIdentity(currentRuntimeAgentId) !== expectedRuntimeId) {
@@ -2214,9 +2221,10 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
       return null;
     }
 
-    const [notifData, connectionData] = await Promise.all([
+    const [notifData, connectionData, guardData] = await Promise.all([
       notifRes.json(),
       connectionRes.json(),
+      guardRes?.ok ? guardRes.json() : Promise.resolve(null),
     ]);
 
     if (normalizeAgentIdentity(currentRuntimeAgentId) !== expectedRuntimeId) {
@@ -2229,6 +2237,9 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
       runtimeRecord.connected = currentRuntimeConnected;
     }
     setConnectionStatus(currentRuntimeConnected);
+    if (typeof applyContextGuardStatus === 'function') {
+      applyContextGuardStatus(guardData, expectedRuntimeId);
+    }
     updateNotificationStatus(notifData);
     return { notifData, connectionData };
   } catch (error) {

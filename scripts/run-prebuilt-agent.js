@@ -416,6 +416,12 @@ async function main() {
     name: agentName,
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
+    ...(agentId === 'programming-helper' ? {
+      contextGuard: {
+        contextLength: resolved?.contextLength ?? null,
+        compressRatio: resolved?.compressRatio ?? 80,
+      },
+    } : {}),
     ...(resolved ? { llm: resolved.llm } : {}),
   });
   // Propagate agent reference to extracted module contexts
@@ -546,6 +552,10 @@ async function main() {
 
   // ── CallArbiter: initialize AFTER session restore, BEFORE runtime inputs open ──
   callArbiter = new CallArbiter(agent);
+  const contextGuardFeature = agent.features?.get?.('context-guard');
+  if (contextGuardFeature && typeof contextGuardFeature.setCallArbiter === 'function') {
+    contextGuardFeature.setCallArbiter(callArbiter);
+  }
   imBridgeCtx.callArbiter = callArbiter;
   DebugHub.getInstance().setQueuedInputHandler((targetAgentId, input) => {
     if (!callArbiter || !agent?.agentId || targetAgentId !== agent.agentId) {
@@ -655,6 +665,8 @@ async function main() {
               totalTokens: totalUsage?.totalTokens || 0,
               lastRequestUsage: usageStats?.lastRequestUsage || null,
             },
+            contextGuard: typeof contextGuardFeature?.getState === 'function'
+              ? contextGuardFeature.getState() : null,
             savedAt: Date.now(),
           }),
         });

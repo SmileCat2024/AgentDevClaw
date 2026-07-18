@@ -75,6 +75,76 @@ export function setupSessionRoutes(app, express, ctx) {
     notifySessionArchived,
   } = ctx;
 
+function normalizeContextGuardState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const thresholdTokens = Number(value.thresholdTokens);
+  const inputTokens = Number(value.inputTokens);
+  const blockedAt = Number(value.blockedAt);
+  return {
+    blocked: value.blocked === true,
+    blockedAt: Number.isFinite(blockedAt) && blockedAt > 0 ? Math.round(blockedAt) : null,
+    thresholdTokens: Number.isFinite(thresholdTokens) && thresholdTokens > 0 ? Math.round(thresholdTokens) : null,
+    inputTokens: Number.isFinite(inputTokens) && inputTokens > 0 ? Math.round(inputTokens) : null,
+    reason: cleanSessionText(value.reason).slice(0, 1000) || null,
+  };
+}
+
+// The runtime reports this event before its interrupted call has completed.
+// Keeping it separate from session_meta_sync makes the UI feedback immediate.
+app.post('/protoclaw/context_guard_event', express.json(), async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.body?.agentId);
+    const sessionId = cleanSessionText(req.body?.sessionId);
+    const contextGuard = normalizeContextGuardState(req.body?.contextGuard);
+    if (!agentId || !sessionId || !contextGuard?.blocked) {
+      res.status(400).json({ error: 'agentId, sessionId, and blocked contextGuard state are required' });
+      return;
+    }
+    let found = false;
+    await updateSessionIndex(agentId, (index) => {
+      const sessions = index.sessions.map((session) => {
+        if (session.id !== sessionId) return session;
+        found = true;
+        return { ...session, contextGuard, updatedAt: new Date().toISOString() };
+      });
+      return { ...index, sessions };
+    });
+    if (!found) {
+      res.status(404).json({ error: 'session not found' });
+      return;
+    }
+    res.json({ ok: true, contextGuard });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// A Claw-owned read endpoint: ViewerWorker notification data does not include
+// local Feature state, so the client reads the persisted guard state alongside it.
+app.get('/protoclaw/context_guard_status', async (req, res, next) => {
+  try {
+    const agentId = cleanSessionText(req.query.agentId);
+    const sessionId = cleanSessionText(req.query.sessionId);
+    if (!agentId || !sessionId) {
+      res.status(400).json({ error: 'agentId and sessionId are required' });
+      return;
+    }
+    const index = await readSessionIndex(agentId);
+    const session = index.sessions.find((item) => item.id === sessionId);
+    if (!session) {
+      res.status(404).json({ error: 'session not found' });
+      return;
+    }
+    res.json({
+      agentId,
+      sessionId,
+      contextGuard: normalizeContextGuardState(session.contextGuard),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ═══ Block A (server.js L3386-3774) ═══
 app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
   try {
@@ -1280,6 +1350,8 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
     const messageCount = typeof req.body.messageCount === 'number' ? req.body.messageCount : 0;
     const preview = cleanSessionText(req.body.preview);
     const tokenUsage = req.body.tokenUsage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    const contextGuard = req.body.contextGuard && typeof req.body.contextGuard === 'object'
+      ? req.body.contextGuard : null;
     const savedAt = typeof req.body.savedAt === 'number' ? req.body.savedAt : stat.mtimeMs;
 
     await updateSessionIndex(agentId, (index) => {
@@ -1292,6 +1364,7 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
           messageCount,
           preview,
           tokenUsage,
+          ...(contextGuard ? { contextGuard } : {}),
           savedAt,
           metaVersion: META_VERSION,
           updatedAt: new Date(savedAt).toISOString(),

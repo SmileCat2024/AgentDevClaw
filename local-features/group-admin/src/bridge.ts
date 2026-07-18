@@ -298,7 +298,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
         });
         const finished = await this.arbiterRef.waitForCompletion(entry.id);
         result = finished.result || '';
-        if (finished.status === 'failed') {
+        if (finished.status === 'failed' || finished.status === 'cancelled') {
           error = finished.error || 'unknown error';
         }
       } else {

@@ -52,6 +52,7 @@ export class CallArbiter {
     this._listeners = { callStarted: [], callFinished: [] };
     // Completion trackers: envelopeId → resolve callback
     this._completionCallbacks = new Map();
+    this._terminalEnvelopes = new Map();
 
     // ── Continuation support ──
     // Session save callback for checkpoint/rollback barriers.
@@ -75,6 +76,21 @@ export class CallArbiter {
     * @returns {object} The envelope with assigned id and status
     */
   enqueue(envelope) {
+    const contextGuard = this._agent?.contextGuard;
+    if (contextGuard && typeof contextGuard.isBlocked === 'function' && contextGuard.isBlocked()) {
+      const entry = {
+        id: envelope.id || `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        source: envelope.source || 'unknown',
+        sourceRef: envelope.sourceRef || '',
+        text: envelope.text,
+        status: 'failed',
+        createdAt: Date.now(),
+        result: '',
+        error: contextGuard.getBlockReason?.() || 'Session is blocked by the context guard.',
+      };
+      this._terminalEnvelopes.set(entry.id, entry);
+      return entry;
+    }
     // When agent is busy and this is a text-only queued-input (user supplement),
     // route to the supplement buffer instead of creating a new envelope.
     // The supplement will be injected as a system message inside the
@@ -165,6 +181,11 @@ export class CallArbiter {
    * @returns {Promise<object>}
    */
   waitForCompletion(envelopeId) {
+    const terminal = this._terminalEnvelopes.get(envelopeId);
+    if (terminal) {
+      this._terminalEnvelopes.delete(envelopeId);
+      return Promise.resolve(terminal);
+    }
     return new Promise((resolve) => {
       this._completionCallbacks.set(envelopeId, resolve);
     });
@@ -194,6 +215,10 @@ export class CallArbiter {
     const clearedSupps = this._supplementBuffer.splice(0);
     this._status = this._active ? 'running' : 'idle';
     return removed.length + clearedSupps.length;
+  }
+
+  blockQueued(reason = 'Session blocked by the context guard') {
+    return this.clearQueued(reason);
   }
 
   // -- Internal --

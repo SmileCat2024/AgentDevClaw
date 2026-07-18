@@ -4406,6 +4406,44 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   border-color: transparent;
 }
 
+.context-guard-input {
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+.context-guard-input .user-input-textarea {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.context-guard-input button:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.context-guard-input-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #f87171;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.context-guard-input-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  color: #fff;
+  background: #ef4444;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .user-input-footer {
   display: flex;
   align-items: center;

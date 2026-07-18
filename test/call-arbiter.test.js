@@ -114,6 +114,24 @@ function makeCheckpointRollbackAgent() {
 // ── Tests ──
 
 describe('CallArbiter', () => {
+  it('rejects new input immediately when the context guard has blocked the session', async () => {
+    const agent = {
+      contextGuard: {
+        isBlocked: () => true,
+        getBlockReason: () => 'Context threshold reached.',
+      },
+      onCall: async () => {
+        throw new Error('onCall must not execute for a blocked session');
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'continue' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'failed');
+    assert.equal(finished.error, 'Context threshold reached.');
+  });
+
   it('enqueues and processes a single call', async () => {
     const agent = makeSlowAgent(10);
     const arbiter = new CallArbiter(agent);

@@ -18,6 +18,7 @@ import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
+import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -97,6 +98,16 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
     this.use(new ClawDispatchFeature());
     this.use(new GroupChatBridgeFeature());
+    this.contextGuard = new ContextGuardFeature({
+      ...(systemConfig.contextGuard && typeof systemConfig.contextGuard === 'object'
+        ? systemConfig.contextGuard : {}),
+      ...(config.contextGuard && typeof config.contextGuard === 'object'
+        ? config.contextGuard : {}),
+      agentId: process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'programming-helper',
+      sessionId: process.env.PROTOCLAW_PREBUILT_SESSION_ID || '',
+      serverOrigin: process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+    });
+    this.use(this.contextGuard);
 
     if (isExploration) {
       this.use(new ShellFeature({ workspaceDir }));
