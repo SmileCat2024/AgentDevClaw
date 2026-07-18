@@ -180,8 +180,16 @@ async function validateEmptyDirectory(dirPath) {
 }
 
 export function setupFsOperationsRoutes(app) {
+  // On non-Windows platforms, native file pickers are unavailable.
+  // Return a flag so the frontend can show a web-based picker instead.
+  const supportsNativePicker = process.platform === 'win32';
+
   app.post('/protoclaw/select_empty_directory', async (_req, res, next) => {
     try {
+      if (!supportsNativePicker) {
+        res.json({ useWebPicker: true, mode: 'empty_directory' });
+        return;
+      }
       res.json(await selectEmptyDirectory());
     } catch (error) {
       next(error);
@@ -190,6 +198,10 @@ export function setupFsOperationsRoutes(app) {
 
   app.post('/protoclaw/select_files', async (_req, res, next) => {
     try {
+      if (!supportsNativePicker) {
+        res.json({ useWebPicker: true, mode: 'files' });
+        return;
+      }
       res.json(await selectFiles());
     } catch (error) {
       next(error);
@@ -198,6 +210,10 @@ export function setupFsOperationsRoutes(app) {
 
   app.post('/protoclaw/select_directory', async (_req, res, next) => {
     try {
+      if (!supportsNativePicker) {
+        res.json({ useWebPicker: true, mode: 'directory' });
+        return;
+      }
       res.json(await selectDirectory());
     } catch (error) {
       next(error);

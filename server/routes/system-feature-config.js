@@ -7,6 +7,24 @@ import { USER_DATA_ROOT } from '../shared/constants.js';
 
 const SYSTEM_FEATURE_CONFIG_PATH = path.join(USER_DATA_ROOT, 'feature-setup.json');
 
+const CONTEXT_GUARD_MANIFEST = {
+  settings: {
+    sections: [{
+      id: 'context-guard',
+      title: '上下文保护',
+      properties: ['enabled'],
+    }],
+    properties: {
+      enabled: {
+        type: 'boolean',
+        default: true,
+        title: '达到压缩阈值时强制停止会话',
+        description: '仅作用于编程小助手。开启后，会话达到模型的压缩阈值将中断当前调用，并拒绝后续派发；关闭后可手动继续。',
+      },
+    },
+  },
+};
+
 /**
  * Detect whether a shell executable is available on this system.
  * Mirrors the logic in ShellFeature's findGitBashPath / findPowerShellPath.
@@ -169,12 +187,25 @@ export function setupSystemFeatureConfigRoutes(app, express) {
   app.get('/protoclaw/browse_dirs', (req, res) => {
     try {
       const targetPath = req.query.path || os.homedir();
+      const includeFiles = req.query.includeFiles === 'true';
       const resolved = path.resolve(targetPath);
 
-      const entries = readdirSync(resolved, { withFileTypes: true })
+      const rawEntries = readdirSync(resolved, { withFileTypes: true });
+
+      const dirs = rawEntries
         .filter(e => e.isDirectory())
-        .map(e => ({ name: e.name, path: path.join(resolved, e.name) }))
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .map(e => ({ name: e.name, path: path.join(resolved, e.name), isDirectory: true }));
+
+      const files = includeFiles
+        ? rawEntries
+            .filter(e => e.isFile())
+            .map(e => ({ name: e.name, path: path.join(resolved, e.name), isDirectory: false }))
+        : [];
+
+      const entries = [...dirs, ...files].sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
 
       // Detect available drive letters on Windows
       let drives = [];
@@ -230,6 +261,10 @@ export function setupSystemFeatureConfigRoutes(app, express) {
             } catch {}
           }
         } catch {}
+      }
+
+      if (!seen.has('contextGuard')) {
+        features.push({ featureName: 'contextGuard', manifest: CONTEXT_GUARD_MANIFEST });
       }
 
       res.json({ features });

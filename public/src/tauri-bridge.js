@@ -52,27 +52,27 @@ window.__PROTOCLAW_TAURI_BRIDGE__ = {
     }
 
     if (command === 'select_empty_directory') {
-      const res = await fetch('/protoclaw/select_empty_directory', {
-        method: 'POST',
-      });
+      const res = await fetch('/protoclaw/select_empty_directory', { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
-      return res.json();
+      const data = await res.json();
+      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'empty_directory');
+      return data;
     }
 
     if (command === 'select_files') {
-      const res = await fetch('/protoclaw/select_files', {
-        method: 'POST',
-      });
+      const res = await fetch('/protoclaw/select_files', { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
-      return res.json();
+      const data = await res.json();
+      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'files');
+      return data;
     }
 
     if (command === 'select_directory') {
-      const res = await fetch('/protoclaw/select_directory', {
-        method: 'POST',
-      });
+      const res = await fetch('/protoclaw/select_directory', { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
-      return res.json();
+      const data = await res.json();
+      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'directory');
+      return data;
     }
 
     throw new Error(`Unsupported invoke command in web mode: ${command}`);

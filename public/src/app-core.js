@@ -93,6 +93,145 @@ async function waitForViewerReady(timeoutMs = 15000) {
   return false;
 }
 
+// ── Web-based file/directory picker (fallback for non-Windows) ──
+
+window._showWebPicker = function (mode) {
+  return new Promise((resolve) => {
+    const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+    const titleMap = {
+      directory: isZh ? '选择目录' : 'Select Directory',
+      empty_directory: isZh ? '选择空目录' : 'Select Empty Directory',
+      files: isZh ? '选择文件' : 'Select Files',
+    };
+    const title = titleMap[mode] || titleMap.directory;
+    const isFileMode = mode === 'files';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'fs-dir-picker-overlay';
+    overlay.innerHTML = `
+      <div class="fs-dir-picker">
+        <div class="fs-dir-picker-header">
+          <span>${title}</span>
+          <button class="fs-dir-picker-close">&times;</button>
+        </div>
+        <div class="fs-dir-picker-toolbar">
+          <button class="fs-dir-picker-up" title="${isZh ? '上一级' : 'Parent'}">&#8593;</button>
+          <input type="text" class="fs-dir-picker-path" value="" />
+        </div>
+        <div class="fs-dir-picker-drives"></div>
+        <div class="fs-dir-picker-body"><div class="fs-dir-picker-spinner"></div></div>
+        <div class="fs-dir-picker-footer">
+          <span class="fs-dir-picker-hint" style="flex:1;font-size:12px;color:var(--text-muted);${isFileMode ? '' : 'display:none'}"></span>
+          <button class="fs-dir-picker-cancel">${isZh ? '取消' : 'Cancel'}</button>
+          <button class="fs-dir-picker-select">${isZh ? '选择此目录' : 'Select'}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    let currentPath = '';
+    const selectedFiles = new Set();
+
+    function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+    async function loadDir(targetPath) {
+      const body = overlay.querySelector('.fs-dir-picker-body');
+      const pathInput = overlay.querySelector('.fs-dir-picker-path');
+      const upBtn = overlay.querySelector('.fs-dir-picker-up');
+      const drivesEl = overlay.querySelector('.fs-dir-picker-drives');
+      body.innerHTML = '<div class="fs-dir-picker-spinner"></div>';
+
+      try {
+        const url = `/protoclaw/browse_dirs?path=${encodeURIComponent(targetPath)}${isFileMode ? '&includeFiles=true' : ''}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          body.innerHTML = `<div class="fs-dir-picker-error">${isZh ? '无法读取此目录' : 'Cannot read this directory'}</div>`;
+          return;
+        }
+        const data = await res.json();
+        currentPath = data.currentPath;
+        pathInput.value = currentPath;
+        upBtn.disabled = !data.parent;
+        upBtn.onclick = () => { if (data.parent) loadDir(data.parent); };
+
+        if (data.drives && data.drives.length > 1) {
+          drivesEl.innerHTML = data.drives.map(d =>
+            `<button class="fs-dir-picker-drive ${d.path === currentPath ? 'active' : ''}" data-path="${escHtml(d.path)}">${escHtml(d.label)}</button>`
+          ).join('');
+          drivesEl.querySelectorAll('.fs-dir-picker-drive').forEach(b => {
+            b.onclick = () => loadDir(b.getAttribute('data-path'));
+          });
+          drivesEl.style.display = '';
+        } else {
+          drivesEl.style.display = 'none';
+        }
+
+        if (data.entries.length === 0) {
+          body.innerHTML = `<div class="fs-dir-picker-empty">${isZh ? '(空目录)' : '(empty)'}</div>`;
+        } else {
+          body.innerHTML = data.entries.map(e => {
+            const icon = e.isDirectory ? '&#128193;' : '&#128196;';
+            const cls = e.isDirectory ? 'fs-dir-entry' : 'fs-dir-entry fs-dir-entry-file';
+            const sel = selectedFiles.has(e.path) ? ' selected' : '';
+            return `<div class="${cls}${sel}" data-path="${escHtml(e.path)}" data-is-dir="${e.isDirectory}">${icon} ${escHtml(e.name)}</div>`;
+          }).join('');
+          body.querySelectorAll('.fs-dir-entry').forEach(el => {
+            const isDir = el.getAttribute('data-is-dir') === 'true';
+            if (isDir) {
+              el.ondblclick = () => loadDir(el.getAttribute('data-path'));
+            }
+            el.onclick = () => {
+              if (!isDir && isFileMode) {
+                if (el.classList.contains('selected')) {
+                  el.classList.remove('selected');
+                  selectedFiles.delete(el.getAttribute('data-path'));
+                } else {
+                  el.classList.add('selected');
+                  selectedFiles.add(el.getAttribute('data-path'));
+                }
+                updateHint();
+              }
+            };
+          });
+        }
+      } catch {
+        body.innerHTML = `<div class="fs-dir-picker-error">${isZh ? '加载失败' : 'Failed to load'}</div>`;
+      }
+    }
+
+    function updateHint() {
+      const hint = overlay.querySelector('.fs-dir-picker-hint');
+      if (hint) {
+        hint.textContent = isZh ? `已选择 ${selectedFiles.size} 个文件` : `${selectedFiles.size} file(s) selected`;
+      }
+    }
+
+    overlay.querySelector('.fs-dir-picker-path').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); loadDir(e.target.value); }
+    });
+
+    overlay.querySelector('.fs-dir-picker-select').onclick = () => {
+      if (isFileMode) {
+        resolve({ paths: Array.from(selectedFiles), cancelled: selectedFiles.size === 0 });
+      } else {
+        if (currentPath) resolve({ path: currentPath, cancelled: false });
+      }
+      overlay.remove();
+    };
+
+    const close = () => {
+      if (isFileMode) resolve({ paths: [], cancelled: true });
+      else resolve({ path: '', cancelled: true });
+      overlay.remove();
+    };
+    overlay.querySelector('.fs-dir-picker-cancel').onclick = close;
+    overlay.querySelector('.fs-dir-picker-close').onclick = close;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    loadDir('');
+  });
+};
+
 async function invoke(command, payload = {}) {
   if (window.__PROTOCLAW_TAURI_BRIDGE__ && typeof window.__PROTOCLAW_TAURI_BRIDGE__.invoke === 'function') {
     try {
@@ -156,7 +295,9 @@ async function invoke(command, payload = {}) {
       if (!res.ok) {
         throw new Error(await res.text());
       }
-      return res.json();
+      const data = await res.json();
+      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'empty_directory');
+      return data;
     }
     if (command === 'select_files') {
       const res = await fetch('/protoclaw/select_files', {
@@ -165,7 +306,9 @@ async function invoke(command, payload = {}) {
       if (!res.ok) {
         throw new Error(await res.text());
       }
-      return res.json();
+      const data = await res.json();
+      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'files');
+      return data;
     }
     if (command === 'select_directory') {
       const res = await fetch('/protoclaw/select_directory', {
@@ -174,7 +317,9 @@ async function invoke(command, payload = {}) {
       if (!res.ok) {
         throw new Error(await res.text());
       }
-      return res.json();
+      const data = await res.json();
+      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'directory');
+      return data;
     }
   }
 

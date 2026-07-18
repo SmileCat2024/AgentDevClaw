@@ -27,6 +27,11 @@ import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { addOpenSession } from '../shared/open-sessions-tracker.js';
 
+// Platform-aware default UDS path for ViewerWorker IPC
+export const DEFAULT_UDS_PATH = process.platform === 'win32'
+  ? '\\\\.\\pipe\\agentdev-viewer'
+  : '/tmp/agentdev-viewer.sock';
+
 // ── Agent Startup ────────────────────────────────────────────────
 // Factory that produces all process-spawning and runtime-readiness
 // functions. Dependencies are injected to avoid circular imports
@@ -177,7 +182,7 @@ export function createAgentStartupFns(deps) {
         ...(isExplorationSession ? {} : {
           AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
           AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
-          AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || '\\\\.\\pipe\\agentdev-viewer',
+          AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || DEFAULT_UDS_PATH,
         }),
         PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
@@ -422,7 +427,7 @@ export function createAgentStartupFns(deps) {
         ...childProcessEnv(),
         AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
         AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
-        AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || '\\\\.\\pipe\\agentdev-viewer',
+        AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || DEFAULT_UDS_PATH,
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
         PROTOCLAW_PREBUILT_SESSION_ID: normalizedSessionId,
         PROTOCLAW_ASSEMBLY_RUNTIME: '1',
