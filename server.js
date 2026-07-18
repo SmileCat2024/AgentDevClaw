@@ -1,5 +1,5 @@
 import express from 'express';
-import { spawn, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, createReadStream, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -43,6 +43,7 @@ import {
 import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log, getAssemblyWorkspaceDir, normalizeClientAgentId, parseListField } from './server/shared/string-helpers.js';
 import { compareSemver, uniqueStrings } from './server/shared/feature-utils.js';
 import { readJson, readJsonSafe, ensureDir, normalizePathCasing } from './server/shared/fs-helpers.js';
+import { openDirectoryInSystem } from './server/shared/system-opener.js';
 import {
   managedAgents, assemblyRuntimeProcesses,
   getManagedRuntimeKey, listAgentRuntimes, pickPrimaryAgentRuntime,
@@ -600,13 +601,11 @@ app.post('/protoclaw/ph_project/open_in_explorer', express.json(), async (req, r
     if (!existsSync(dirPath)) {
       return res.status(404).json({ error: 'Directory not found' });
     }
-    if (process.platform === 'win32') {
-      spawn('cmd.exe', ['/c', 'start', '""', dirPath], { stdio: 'ignore', detached: true }).unref();
-    } else {
-      const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
-      spawn(cmd, [dirPath], { stdio: 'ignore', detached: true }).unref();
+    const result = await openDirectoryInSystem(dirPath);
+    if (!result.opened) {
+      console.warn(`[server] open in explorer skipped: ${result.reason}`);
     }
-    res.json({ ok: true });
+    res.json({ ok: true, ...result });
   } catch (error) {
     next(error);
   }
