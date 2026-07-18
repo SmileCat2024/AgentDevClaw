@@ -4,12 +4,62 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Agent Debugger</title>
+  <script id="app-base-bootstrap">
+    (() => {
+      const isHttp = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+      const pathname = window.location.pathname || '/';
+      const looksLikeFile = /\/[^/]+\.[^/]+$/.test(pathname);
+      let basePath = '';
+
+      if (isHttp) {
+        basePath = looksLikeFile
+          ? pathname.slice(0, pathname.lastIndexOf('/'))
+          : pathname.replace(/\/+$/, '');
+        if (basePath === '/') basePath = '';
+
+        const base = document.createElement('base');
+        base.href = window.location.origin + basePath + '/';
+        document.head.appendChild(base);
+      }
+
+      const withBasePath = (value) => {
+        if (!basePath || typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) {
+          return value;
+        }
+        if (value === basePath || value.startsWith(basePath + '/')) {
+          return value;
+        }
+        return basePath + value;
+      };
+
+      window.__PROTOCLAW_BASE_PATH__ = basePath;
+      window.__PROTOCLAW_APP_URL__ = withBasePath;
+
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        if (typeof input === 'string') {
+          return nativeFetch(withBasePath(input), init);
+        }
+        if (typeof Request !== 'undefined' && input instanceof Request) {
+          const url = new URL(input.url, window.location.href);
+          if (url.origin === window.location.origin) {
+            const nextPath = withBasePath(url.pathname);
+            if (nextPath !== url.pathname) {
+              url.pathname = nextPath;
+              return nativeFetch(new Request(url.toString(), input), init);
+            }
+          }
+        }
+        return nativeFetch(input, init);
+      };
+    })();
+  </script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-dark.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
-  <script src="/vendor/marked/lib/marked.umd.js"></script>
-  <script src="/vendor/openclaw/dist/export-html/vendor/highlight.min.js"></script>
+  <script src="./vendor/marked/lib/marked.umd.js"></script>
+  <script src="./vendor/openclaw/dist/export-html/vendor/highlight.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html.min.js"></script>

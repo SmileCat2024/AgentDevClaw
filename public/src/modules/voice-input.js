@@ -114,9 +114,10 @@ function _playVoiceSound(type) {
   }
   // Fallback: legacy HTMLAudioElement (first play before buffers are decoded)
   try {
-    var url = type === 'start'
+    var path = type === 'start'
       ? '/sounds/voice-recording-start.mp3'
       : '/sounds/voice-recording-stop.mp3';
+    var url = window.__PROTOCLAW_APP_URL__?.(path) || path;
     var audio = new Audio(url);
     audio.volume = 0.6;
     audio.play().catch(function() { /* ignore autoplay rejection */ });

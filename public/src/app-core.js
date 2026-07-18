@@ -60,7 +60,11 @@ const pendingPrebuiltAgentIds = new Set();
 let suppressSidebarRerender = false;
 const restartingRuntimeIds = new Set();
 const nativeFetch = window.fetch.bind(window);
-const USE_SAME_ORIGIN_VIEWER_PROXY = window.location.protocol === 'http:' && window.location.port === '1420';
+// Browser deployments always use the product server's same-origin Viewer proxy.
+// This remains correct when a gateway exposes the app on another port or under
+// a path prefix such as /agentdev/. Non-HTTP desktop shells keep the direct
+// ViewerWorker fallback.
+const USE_SAME_ORIGIN_VIEWER_PROXY = window.location.protocol === 'http:' || window.location.protocol === 'https:';
 
 window.fetch = function(input, init) {
   if (USE_SAME_ORIGIN_VIEWER_PROXY) {

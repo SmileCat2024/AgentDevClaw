@@ -759,10 +759,11 @@ window.toggleReasoning = function(id) {
 // ── Image rendering ──────────────────────────────────────────────
 
 function imageUrlFromImage(img) {
-  if (img.url) return img.url;
+  if (img.url) return window.__PROTOCLAW_APP_URL__?.(img.url) || img.url;
   if (img.path) {
     var parts = img.path.replace(/\\/g, '/').split('/');
-    return '/protoclaw/images/' + encodeURIComponent(parts[parts.length - 1]);
+    var path = '/protoclaw/images/' + encodeURIComponent(parts[parts.length - 1]);
+    return window.__PROTOCLAW_APP_URL__?.(path) || path;
   }
   if (img.base64) {
     return 'data:' + (img.mediaType || 'image/png') + ';base64,' + img.base64;

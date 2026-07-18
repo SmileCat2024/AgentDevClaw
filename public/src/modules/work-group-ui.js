@@ -4049,9 +4049,10 @@
       return;
     }
     try {
-      const url = type === 'start'
+      const path = type === 'start'
         ? '/sounds/voice-recording-start.mp3'
         : '/sounds/voice-recording-stop.mp3';
+      const url = window.__PROTOCLAW_APP_URL__?.(path) || path;
       const audio = new Audio(url);
       audio.volume = 0.6;
       audio.play().catch(() => { /* ignore autoplay rejection */ });

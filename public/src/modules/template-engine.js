@@ -250,7 +250,7 @@ async function loadTemplate(templateName, retryCount = 0) {
 
     // 统一使用 URL 方式加载模板
     // Feature 模板: /template/agentdev/shell/bash.render.js
-    const module = await import(path);
+    const module = await import(window.__PROTOCLAW_APP_URL__?.(path) || path);
 
     // 1. 优先使用 default export（Feature 模板）
     let template = module.default;
