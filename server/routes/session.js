@@ -354,13 +354,25 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     const newSessionId = `session-${Date.now()}-${randomUUID().slice(0, 6)}`;
     const createdAt = new Date().toISOString();
     const sourceRuntime = sourceSnapshot.runtime || {};
-    const runtimeCheckpointAfterCut = sourceCheckpoints.find(
-      cp => cp?.runtime && typeof cp.callIndex === 'number' && cp.callIndex === maxUserTurn + 1
-    )?.runtime;
-    const runtimeCheckpointAtCut = [...sourceCheckpoints]
-      .reverse()
-      .find(cp => typeof cp.callIndex === 'number' && cp.callIndex <= maxUserTurn && cp.runtime)
-      ?.runtime;
+
+    // 从 checkpoint 提取运行态（兼容 v1 runtime 和 v2 runtimeState）
+    const getCheckpointRuntimeState = (cp) => {
+      if (!cp) return null;
+      if (cp.kind === 'context-boundary' && cp.runtimeState) return cp.runtimeState;
+      if (cp.runtime) return cp.runtime;
+      return null;
+    };
+
+    const runtimeCheckpointAfterCut = getCheckpointRuntimeState(
+      sourceCheckpoints.find(
+        cp => typeof cp.callIndex === 'number' && cp.callIndex === maxUserTurn + 1
+      )
+    );
+    const runtimeCheckpointAtCut = getCheckpointRuntimeState(
+      [...sourceCheckpoints]
+        .reverse()
+        .find(cp => typeof cp.callIndex === 'number' && cp.callIndex <= maxUserTurn)
+    );
     const runtimeForBranchState = runtimeCheckpointAfterCut || runtimeCheckpointAtCut || sourceRuntime;
 
     const branchSnapshot = {
