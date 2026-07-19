@@ -32,6 +32,7 @@ import {
   writeProjectIMWorkspaceConfig,
   writeProjectFeishuConfig,
   writeProjectWecomConfig,
+  writeProjectRokidConfig,
   withIMWorkspaceConfig,
 } from './im-config.js';
 
@@ -111,6 +112,7 @@ export function setupIMRoutes(app, express, ctx) {
       const qqConfig = await writeProjectQQBotConfig(req.body?.qqConfig || {});
       const feishuConfig = await writeProjectFeishuConfig(req.body?.feishuConfig || {});
       const wecomConfig = await writeProjectWecomConfig(req.body?.wecomConfig || {});
+      const rokidConfig = await writeProjectRokidConfig(req.body?.rokidConfig || {});
 
       const newChannel = workspaceConfig.selectedChannel || '';
       const channelChanged = newChannel !== (prevConfig.selectedChannel || '');

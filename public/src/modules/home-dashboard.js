@@ -131,7 +131,7 @@ function hdGetPHSessions() {
 }
 
 function hdGetIMChannelLabel() {
-  var labels = { qq: 'QQ', weixin: '微信', feishu: '飞书', wecom: '企业微信' };
+  var labels = { qq: 'QQ', weixin: '微信', feishu: '飞书', wecom: '企业微信', rokid: 'Rokid 眼镜' };
   if (!hdState.imBundle) return '';
   var wc = hdState.imBundle.workspaceConfig || {};
   var selected = wc.selectedChannel || 'qq';
@@ -298,6 +298,7 @@ function renderIMCard() {
     if (ch.qq && ch.qq.label) parts.push('QQ');
     if (hdState.imBundle.weixinConfig && hdState.imBundle.weixinConfig.configured) parts.push('微信');
     if (hdState.imBundle.feishuConfig && hdState.imBundle.feishuConfig.configured) parts.push('飞书');
+    if (hdState.imBundle.rokidConfig && hdState.imBundle.rokidConfig.configured) parts.push('Rokid 眼镜');
     channelsHtml = '<div class="hd-subtle">' + (parts.length ? '已配置渠道：' + escapeHtml(parts.join(' · ')) : '暂无渠道配置') + '</div>';
   }
 

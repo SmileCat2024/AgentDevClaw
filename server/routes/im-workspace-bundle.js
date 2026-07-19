@@ -12,6 +12,7 @@ import {
   PROJECT_WEIXIN_CONFIG_PATH,
   PROJECT_FEISHU_CONFIG_PATH,
   PROJECT_WECOM_CONFIG_PATH,
+  PROJECT_ROKID_CONFIG_PATH,
   PROJECT_IM_WORKSPACE_CONFIG_PATH,
 } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
@@ -25,6 +26,7 @@ import {
   readProjectWeixinConfig,
   readProjectFeishuConfig,
   readProjectWecomConfig,
+  readProjectRokidConfig,
   normalizeWeixinConfig,
   pruneStaleIMLineBindings,
 } from './im-config.js';
@@ -67,11 +69,12 @@ function serializeWeixinBindingState(state = null) {
 
 export async function buildIMWorkspaceBundle(agentId = 'qqbot') {
   let workspaceConfig = await readProjectIMWorkspaceConfig();
-  const [qqConfig, weixinConfig, feishuConfig, wecomConfig, index, phIndex] = await Promise.all([
+  const [qqConfig, weixinConfig, feishuConfig, wecomConfig, rokidConfig, index, phIndex] = await Promise.all([
     readProjectQQBotConfig(),
     readProjectWeixinConfig(),
     readProjectFeishuConfig(),
     readProjectWecomConfig(),
+    readProjectRokidConfig(),
     readSessionIndex(agentId).catch(() => ({ sessions: [], activeSessionId: null })),
     readSessionIndex('programming-helper').catch(() => ({ sessions: [], activeSessionId: null })),
   ]);
@@ -127,6 +130,13 @@ export async function buildIMWorkspaceBundle(agentId = 'qqbot') {
       botId: wecomConfig.botId || '',
       secret: wecomConfig.secret || '',
       sourcePath: PROJECT_WECOM_CONFIG_PATH,
+    },
+    rokidConfig: {
+      configured: !!rokidConfig.linkCode && !!rokidConfig.linkSecret,
+      linkCode: rokidConfig.linkCode || '',
+      linkSecret: rokidConfig.linkSecret || '',
+      wsUrl: rokidConfig.wsUrl || 'wss://rcs.rokid.com/claw/ws/link',
+      sourcePath: PROJECT_ROKID_CONFIG_PATH,
     },
     binding,
     sessions,

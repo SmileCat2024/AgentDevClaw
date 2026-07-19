@@ -25,14 +25,15 @@ import {
 // ───────────────────────────────────────────────────────────────────
 
 describe('normalizeIMWorkspaceConfig', () => {
-  it('creates 4 default channels and 2 default lines from empty input', () => {
+  it('creates 5 default channels and 2 default lines from empty input', () => {
     const config = normalizeIMWorkspaceConfig();
 
-    assert.deepEqual(Object.keys(config.channels).sort(), ['feishu', 'qq', 'wecom', 'weixin']);
+    assert.deepEqual(Object.keys(config.channels).sort(), ['feishu', 'qq', 'rokid', 'wecom', 'weixin']);
     assert.equal(config.channels.qq.label, 'QQ');
     assert.equal(config.channels.weixin.label, '微信');
     assert.equal(config.channels.feishu.label, '飞书');
     assert.equal(config.channels.wecom.label, '企业微信');
+    assert.equal(config.channels.rokid.label, 'Rokid 眼镜');
     assert.equal(config.lines.length, 2);
     assert.equal(config.selectedChannel, '');
     assert.equal(config.receptionistSessionId, '');
@@ -148,7 +149,9 @@ describe('resolveLineTransferConflict', () => {
     assert.ok(['feishu', 'wecom'].includes(config.selectedChannel));
   });
 
-  it('sets portal selectedChannel to empty when all carriers are taken', () => {
+  it('re-assigns portal selectedChannel to rokid when only rokid is left available', () => {
+    // After adding rokid as the 5th channel, the previous "all carriers taken"
+    // scenario now falls back to rokid (the only unbound carrier).
     const config = {
       selectedChannel: 'qq',
       lines: [
@@ -161,7 +164,8 @@ describe('resolveLineTransferConflict', () => {
 
     resolveLineTransferConflict(config, { lineId: 'line-0', carrier: 'qq' });
 
-    assert.equal(config.selectedChannel, '');  // all other carriers taken
+    // qq/weixin/feishu/wecom are all taken; rokid is the only available fallback
+    assert.equal(config.selectedChannel, 'rokid');
   });
 
   it('returns false when no conflicts exist', () => {

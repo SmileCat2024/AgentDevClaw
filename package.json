@@ -34,6 +34,7 @@
     "@agentdev/weixin-bot": "file:resources/features/agentdev-weixin-bot-0.2.0.tgz",
     "@agentdev/feishu-bot": "file:resources/features/agentdev-feishu-bot-0.1.0.tgz",
     "@agentdev/wecom-bot": "file:resources/features/agentdev-wecom-bot-0.1.0.tgz",
+    "@agentdev/rokid-bot": "file:resources/features/agentdev-rokid-bot-0.1.0.tgz",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "agentdev": "^0.2.7",
     "express": "^4.21.2",

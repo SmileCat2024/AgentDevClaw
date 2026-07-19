@@ -10,6 +10,7 @@ import { QQBotFeature } from '@agentdev/qqbot-feature';
 import { WeixinBot, WeixinApiClient } from '@agentdev/weixin-bot';
 import { FeishuBot } from '@agentdev/feishu-bot';
 import { WecomBot } from '@agentdev/wecom-bot';
+import { RokidBot } from '@agentdev/rokid-bot';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
 import { fileURLToPath } from 'url';
@@ -49,6 +50,9 @@ const DEFAULT_QQBOT_CONFIG_CANDIDATES = [
 const DEFAULT_WEIXIN_CONFIG_CANDIDATES = [
   join(PROTOCLAW_ROOT, '.agentdev', 'weixin-bot.config.json'),
 ];
+const DEFAULT_ROKID_CONFIG_CANDIDATES = [
+  join(PROTOCLAW_ROOT, '.agentdev', 'rokid.config.json'),
+];
 const DEFAULT_IM_WORKSPACE_CONFIG_CANDIDATES = [
   join(PROTOCLAW_ROOT, '.agentdev', 'im-workspace.config.json'),
 ];
@@ -67,6 +71,14 @@ function resolveWeixinConfigPath(explicitPath) {
   }
 
   return DEFAULT_WEIXIN_CONFIG_CANDIDATES.find(path => existsSync(path)) || DEFAULT_WEIXIN_CONFIG_CANDIDATES[0];
+}
+
+function resolveRokidConfigPath(explicitPath) {
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  return DEFAULT_ROKID_CONFIG_CANDIDATES.find(path => existsSync(path)) || DEFAULT_ROKID_CONFIG_CANDIDATES[0];
 }
 
 function resolveIMWorkspaceConfigPath(explicitPath) {
@@ -403,6 +415,11 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       this.wecomBotFeature = new WecomBot({});
       this.use(this.wecomBotFeature);
 
+      this.rokidBotFeature = new RokidBot({
+        configPath: resolveRokidConfigPath(config.rokidConfigPath),
+      });
+      this.use(this.rokidBotFeature);
+
       this.use(new TodoFeature({
         reminderTemplate: TODO_REMINDER_PROMPT_PATH,
         reminderThresholdWithTasks: config.reminderThresholdWithTasks,
@@ -462,6 +479,10 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
       if (this._activeIMChannel === 'wecom' && this.wecomBotFeature) {
         await this.wecomBotFeature.sendTextMessage(this._lastIMTarget.userId, text);
         return true;
+      }
+
+      if (this._activeIMChannel === 'rokid' && this.rokidBotFeature) {
+        return await this.rokidBotFeature.sendTextMessage(this._lastIMTarget.userId, text);
       }
 
       return false;
@@ -606,6 +627,33 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     }
   }
 
+  async startRokidBotGateway() {
+    const rokidBot = this.rokidBotFeature;
+    // Rokid 设备没有"carrier 配置就绪"的预检，但 linkCode/linkSecret 缺失时
+    // startGateway 会抛错。这里允许抛出，由上层调用方决定降级策略。
+    await rokidBot.startGateway(this);
+    this._activeIMChannel = 'rokid';
+    if (this._callArbiter && rokidBot) {
+      rokidBot.agentRef = {
+        onCall: async (text) => {
+          // 捕获当前 turn 上下文，供 sendIMMessage（调度结果投递）使用
+          if (rokidBot._currentTurnCtx) {
+            this._lastIMTarget = {
+              userId: rokidBot._currentTurnCtx.accountId,
+              contextToken: '',
+            };
+          }
+          const entry = this._callArbiter.enqueue({ source: 'rokid', text });
+          const finished = await this._callArbiter.waitForCompletion(entry.id);
+          if (finished.status === 'failed') {
+            throw new Error(finished.error || 'unknown error');
+          }
+          return finished.result || '处理完成';
+        },
+      };
+    }
+  }
+
   async startSelectedIMGateway() {
     const workspaceConfig = readIMWorkspaceConfig(this.imWorkspaceConfigPath);
     if (!workspaceConfig.selectedChannel) {
@@ -625,6 +673,11 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     if (workspaceConfig.selectedChannel === 'wecom') {
       await this.startWecomBotGateway();
       return 'wecom';
+    }
+
+    if (workspaceConfig.selectedChannel === 'rokid') {
+      await this.startRokidBotGateway();
+      return 'rokid';
     }
 
     await this.startQQBotGateway();

@@ -12,6 +12,7 @@ import {
   PROJECT_WEIXIN_CONFIG_PATH,
   PROJECT_FEISHU_CONFIG_PATH,
   PROJECT_WECOM_CONFIG_PATH,
+  PROJECT_ROKID_CONFIG_PATH,
   PROJECT_IM_WORKSPACE_CONFIG_PATH,
 } from '../shared/constants.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
@@ -51,6 +52,16 @@ function normalizeWecomConfig(raw = {}) {
   return {
     botId: typeof raw.botId === 'string' ? raw.botId.trim() : '',
     secret: typeof raw.secret === 'string' ? raw.secret.trim() : '',
+  };
+}
+
+export function normalizeRokidConfig(raw = {}) {
+  return {
+    linkCode: typeof raw.linkCode === 'string' ? raw.linkCode.trim() : '',
+    linkSecret: typeof raw.linkSecret === 'string' ? raw.linkSecret.trim() : '',
+    wsUrl: typeof raw.wsUrl === 'string' && raw.wsUrl.trim()
+      ? raw.wsUrl.trim()
+      : 'wss://rcs.rokid.com/claw/ws/link',
   };
 }
 
@@ -180,6 +191,22 @@ export async function writeProjectWecomConfig(rawConfig) {
   const config = normalizeWecomConfig(rawConfig);
   await ensureDir(path.dirname(PROJECT_WECOM_CONFIG_PATH));
   await fs.writeFile(PROJECT_WECOM_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
+  return config;
+}
+
+export async function readProjectRokidConfig() {
+  try {
+    const data = await readJson(PROJECT_ROKID_CONFIG_PATH);
+    return normalizeRokidConfig(data);
+  } catch {
+    return normalizeRokidConfig({});
+  }
+}
+
+export async function writeProjectRokidConfig(rawConfig) {
+  const config = normalizeRokidConfig(rawConfig);
+  await ensureDir(path.dirname(PROJECT_ROKID_CONFIG_PATH));
+  await fs.writeFile(PROJECT_ROKID_CONFIG_PATH, JSON.stringify(config, null, 2), 'utf8');
   return config;
 }
 

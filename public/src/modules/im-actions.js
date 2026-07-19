@@ -89,6 +89,21 @@ window.updateIMWecomConfigDraft = (fieldName, value) => {
   window.scheduleIMWorkspaceAutoSave();
 };
 
+window.updateIMRokidConfigDraft = (fieldName, value) => {
+  const draft = getIMWorkspaceDraft();
+  const prevRokid = draft.rokidConfig || {};
+  imWorkspaceState.draft = {
+    ...draft,
+    rokidConfig: {
+      ...prevRokid,
+      [fieldName]: value,
+      configured: !!(fieldName === 'linkCode' ? value : prevRokid.linkCode) &&
+                  !!(fieldName === 'linkSecret' ? value : prevRokid.linkSecret),
+    },
+  };
+  window.scheduleIMWorkspaceAutoSave();
+};
+
 window.scheduleIMWorkspaceAutoSave = () => {
   if (imWorkspaceAutoSaveTimer) {
     clearTimeout(imWorkspaceAutoSaveTimer);
@@ -126,6 +141,7 @@ window.saveIMWorkspaceConfig = async () => {
         qqConfig: getIMWorkspaceDraft().qqConfig,
         feishuConfig: getIMWorkspaceDraft().feishuConfig,
         wecomConfig: getIMWorkspaceDraft().wecomConfig,
+        rokidConfig: getIMWorkspaceDraft().rokidConfig,
       }),
     });
     if (!response.ok) {
@@ -358,6 +374,11 @@ window.openIMChannelDetail = (channelId) => {
 
 window.closeIMChannelDetail = () => {
   window._imChannelDetailId = null;
+  renderCurrentMainView();
+};
+
+window.toggleIMMoreChannels = () => {
+  window._imMoreChannelsOpen = !window._imMoreChannelsOpen;
   renderCurrentMainView();
 };
 

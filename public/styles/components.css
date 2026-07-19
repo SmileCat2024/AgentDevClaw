@@ -5330,6 +5330,47 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .im-ch-text { min-width: 0; }
 .im-ch-name { font-size: 14px; font-weight: 600; }
 .im-ch-desc { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+/* ── More Channels Fold (secondary category) ── */
+.im-ch-more-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  transition: background 0.15s, color 0.15s;
+}
+.im-ch-more-toggle:hover { background: rgba(255,255,255,0.04); color: var(--text-primary); }
+.im-ch-more-arrow {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.18s ease;
+  transform: rotate(0deg);
+  opacity: 0.7;
+}
+.im-ch-more-arrow.expanded { transform: rotate(90deg); }
+.im-ch-more-label { font-weight: 500; }
+.im-ch-more-count {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+}
+.im-ch-more-section {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.im-ch-more-section.expanded { display: flex; }
+
 .im-qrcode-inline { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.06); margin-top: 8px; }
 .im-qrcode-inline-img { width: 200px; height: 200px; border-radius: 12px; overflow: hidden; background: #fff; display: flex; align-items: center; justify-content: center; }
 .im-qrcode-inline-img img { width: 100%; height: 100%; object-fit: contain; }

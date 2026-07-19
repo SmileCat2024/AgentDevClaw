@@ -18,6 +18,7 @@ export const IM_CHANNELS = Object.freeze([
     exportName: 'QQBotFeature',
     configEnv: null,           // QQ loads config from server API, not env var
     messageMode: 'onCall',     // uses feature.agentRef.onCall for CallArbiter routing
+    category: 'primary',
   },
   {
     id: 'weixin',
@@ -27,6 +28,7 @@ export const IM_CHANNELS = Object.freeze([
     exportName: 'WeixinBot',
     configEnv: 'PROTOCLAW_WEIXIN_CONFIG_PATH',
     messageMode: 'handleMessage', // overrides feature.handleMessage for CallArbiter routing
+    category: 'primary',
   },
   {
     id: 'feishu',
@@ -36,6 +38,7 @@ export const IM_CHANNELS = Object.freeze([
     exportName: 'FeishuBot',
     configEnv: 'PROTOCLAW_FEISHU_CONFIG_PATH',
     messageMode: 'onCall',
+    category: 'primary',
   },
   {
     id: 'wecom',
@@ -45,6 +48,17 @@ export const IM_CHANNELS = Object.freeze([
     exportName: 'WecomBot',
     configEnv: 'PROTOCLAW_WECOM_CONFIG_PATH',
     messageMode: 'onCall',
+    category: 'primary',
+  },
+  {
+    id: 'rokid',
+    label: 'Rokid 眼镜',
+    featureName: 'rokid-bot',
+    packageName: '@agentdev/rokid-bot',
+    exportName: 'RokidBot',
+    configEnv: 'PROTOCLAW_ROKID_CONFIG_PATH',
+    messageMode: 'onCall',
+    category: 'secondary',
   },
 ]);
 
@@ -58,6 +72,24 @@ const _byId = new Map(IM_CHANNELS.map((ch) => [ch.id, ch]));
  */
 export function getIMChannelIds() {
   return IM_CHANNELS.map((ch) => ch.id);
+}
+
+/**
+ * Channels in the 'primary' category — shown directly in the IM config UI.
+ * Useful when a frontend wants to render a compact primary list and tuck
+ * new/experimental channels under a "more" fold.
+ * @returns {object[]}
+ */
+export function getPrimaryIMChannels() {
+  return IM_CHANNELS.filter((ch) => (ch.category || 'primary') === 'primary');
+}
+
+/**
+ * Channels in the 'secondary' category — shown under a "more" fold in the UI.
+ * @returns {object[]}
+ */
+export function getSecondaryIMChannels() {
+  return IM_CHANNELS.filter((ch) => ch.category === 'secondary');
 }
 
 /**
