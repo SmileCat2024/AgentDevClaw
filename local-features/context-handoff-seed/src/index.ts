@@ -23,6 +23,9 @@ export interface ContextHandoffSeedMessage {
   turn?: number | null;
   toolCalls?: Array<{ name: string; arguments: string; id: string }>;
   toolCallId?: string;
+  reasoning?: string;
+  thinkingBlocks?: Array<{ thinking: string; signature: string }>;
+  images?: Array<{ path?: string; base64?: string; mediaType?: string; source?: string }>;
 }
 
 export interface ContextHandoffSeedPayload {
@@ -87,6 +90,48 @@ function buildSummarySeedMessage(handoff: ContextHandoffSeedPayload): string {
     lines.push('', sourceSummary);
   }
   return lines.join('\n');
+}
+
+/**
+ * Inject a single seed message into Context via the typed API that keeps
+ * both messages[] and enrichedMessages[] in sync.
+ *
+ * Previously all seed messages went through ctx.add() which only pushes to
+ * messages[], causing enrichedMessages to miss the injected content. This
+ * broke Feature queries, index rebuilds, and snapshot consistency.
+ *
+ * tool messages fall back to add() because addToolMessage expects a
+ * (ToolCall, ToolExecResult) pair that cannot be reconstructed from a raw
+ * seed message's pre-serialized content string.
+ */
+function injectSeedMessage(
+  context: CallStartContext['context'],
+  message: ContextHandoffSeedMessage,
+  turn: number,
+): void {
+  const content = typeof message.content === 'string' ? message.content : '';
+  const role = message.role;
+
+  if (role === 'system') {
+    context.addSystemMessage(content, turn, 'handoff-seed');
+  } else if (role === 'user') {
+    context.addUserMessage(content, turn, message.images);
+  } else if (role === 'assistant') {
+    context.addAssistantMessage(
+      {
+        content,
+        // Seed messages may carry arguments as string; cast to satisfy
+        // LLMResponse.toolCalls which expects Record<string, any>.
+        toolCalls: message.toolCalls as any,
+        reasoning: message.reasoning,
+        thinkingBlocks: message.thinkingBlocks,
+      },
+      turn,
+    );
+  } else {
+    // tool and other roles: fallback to add() which only updates messages[]
+    context.add({ role, content, turn, toolCallId: message.toolCallId } as any);
+  }
 }
 
 export class ContextHandoffSeedFeature implements AgentFeature {
@@ -163,14 +208,15 @@ export class ContextHandoffSeedFeature implements AgentFeature {
 
     let injectionTurn = fallbackTurn;
 
-    // Inject seed messages as-is — they are raw conversation messages, no processing needed
+    // Inject seed messages via typed Context API so that enrichedMessages
+    // stays in sync with messages[].
     if (seedMessages.length > 0) {
       seedMessages.forEach((message, index) => {
         const turn = typeof message?.turn === 'number' && Number.isFinite(message.turn)
           ? Number(message.turn)
           : (fallbackTurn + index);
         injectionTurn = Math.max(injectionTurn, turn + 1);
-        ctx.context.add({ ...message, turn, source: 'handoff-seed' });
+        injectSeedMessage(ctx.context, message, turn);
       });
 
       // Advance the runtime call index past all seed turns so the first real
