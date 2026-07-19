@@ -7,11 +7,19 @@
  * - 不添加新的 @StepFinish 装饰器（唯一性约束下子类无法注册第二个）。
  * - interruptTargetId 由前端通过 IPC 设置，下一次 StepFinish 检查到目标 task
  *   进入终态（completed/deleted）时返回 Decision.Deny，优雅结束当前 call。
+ *
+ * 同时通过 declareContinuity 包装向 Claw continuity 协议自声明参与，
+ * 让 trim/summary 后任务列表能完整转移到新 runtime。
  */
 
 import { TodoFeature, Decision } from 'agentdev';
+import {
+  declareContinuity,
+} from '../../../local-features/dist/continuity-participant/src/index.js';
 
-export class ControlledTodoFeature extends TodoFeature {
+const TODO_CONTINUITY_PROTOCOL = 'claw.todo-continuity.v1';
+
+class ControlledTodoFeatureInner extends TodoFeature {
   /** 当前中断目标 task ID（null = 无中断目标） */
   _interruptTargetId = null;
 
@@ -114,3 +122,22 @@ export class ControlledTodoFeature extends TodoFeature {
     this._interruptTargetId = snapshot?.interruptTargetId || null;
   }
 }
+
+/**
+ * 通过 declareContinuity 包装：在 inner 类基础上叠加 Claw continuity 自声明。
+ *
+ * 包装链（captureState）：
+ *   declareContinuity 子类 → super.captureState()
+ *     → ControlledTodoFeatureInner.captureState() → super.captureState()
+ *       → TodoFeature 原生 captureState()
+ *     → 加 interruptTargetId
+ *   → 加 __claw_continuity__ descriptor
+ *
+ * 包装链（restoreState）：
+ *   declareContinuity 子类 → 剥离 __claw_continuity__ → super.restoreState()
+ *     → ControlledTodoFeatureInner.restoreState() → super.restoreState() + 恢复 interruptTargetId
+ */
+export const ControlledTodoFeature = declareContinuity(ControlledTodoFeatureInner, {
+  protocol: TODO_CONTINUITY_PROTOCOL,
+  importMode: 'replace',
+});

@@ -7,6 +7,7 @@
 
 import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature } from 'agentdev';
 import { ControlledTodoFeature } from './controlled-todo-feature.js';
+import { ContinuityAwareOpencodeBasic } from './continuity-aware-opencode-basic.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';
@@ -95,6 +96,14 @@ export class ProgrammingHelperAgent extends BasicAgent {
     tools.remove('spawn_agent');
     tools.remove('send_to_agent');
     tools.remove('wait');
+
+    // 替换 BasicAgent 默认挂载的 OpencodeBasicFeature 为带 Claw continuity 声明的包装版。
+    // OpencodeBasicFeature 在 BasicAgent constructor 里通过 this.use() 挂载，还未 onInitiate，
+    // 也未注册工具/钩子/注入器（其工具注册发生在首次 onCall 的 ensureFeatureTools），
+    // 因此直接 use 覆盖同名 feature 即可，无需 removeFeature。
+    // 这样包装类会让 readFiles 状态在 trim/summary 时随 continuity 协议转移到新 runtime，
+    // 避免精简后会话内"先读后写"保护重置导致 write 工具被错误拦截。
+    this.use(new ContinuityAwareOpencodeBasic({ workspaceDir }));
 
     this.use(new ClawDispatchFeature());
     this.use(new GroupChatBridgeFeature());

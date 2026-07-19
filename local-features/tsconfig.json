@@ -28,6 +28,8 @@
     "./conversation-export/src/**/*.ts",
     "./checkpoint/src/**/*.ts",
     "./checkpoint/test/**/*.ts",
+    "./continuity-participant/src/**/*.ts",
+    "./continuity-participant/test/**/*.ts",
     "./group-admin/src/**/*.ts"
   ]
 }

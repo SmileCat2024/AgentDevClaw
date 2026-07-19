@@ -17,7 +17,7 @@
     "test": "npm run test:core && npm run test:features",
     "test:core": "node --test test/*.test.js",
     "test:coverage": "node --experimental-test-coverage --test test/*.test.js",
-    "test:features": "node --test local-features/dist/checkpoint/test/smoke.test.js local-features/dist/context-compaction-mirror/test/smoke.test.js local-features/dist/context-guard/test/smoke.test.js local-features/dist/dispatch/test/smoke.test.js local-features/dist/context-handoff-seed/test/smoke.test.js local-features/dist/flow/test/flow-feature.test.js",
+    "test:features": "node --test local-features/dist/checkpoint/test/smoke.test.js local-features/dist/context-compaction-mirror/test/smoke.test.js local-features/dist/context-guard/test/smoke.test.js local-features/dist/dispatch/test/smoke.test.js local-features/dist/context-handoff-seed/test/smoke.test.js local-features/dist/continuity-participant/test/oninitiate-protection.test.js local-features/dist/flow/test/flow-feature.test.js",
     "pretest:features": "npm run build:local-features"
   },
   "dependencies": {

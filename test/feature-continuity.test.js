@@ -5,9 +5,37 @@ import {
   exportFeatureContinuity,
   importFeatureContinuity,
 } from '../server/context-continuity/feature-continuity.js';
+import {
+  declareContinuity,
+  GENERIC_CONTINUITY_PROTOCOL,
+  CONTINUITY_FIELD_KEY,
+} from '../local-features/dist/continuity-participant/src/index.js';
 
-describe('feature continuity protocol', () => {
-  it('exports todo feature state and continuity tool policy from a session snapshot', () => {
+const TODO_PROTOCOL = 'claw.todo-continuity.v1';
+
+/**
+ * 构造一个最小可用的 mock feature base class，模拟框架自带 feature 的形态。
+ * 用真实的 declareContinuity 包装它，端到端验证 continuity 协议链路。
+ */
+function createMockBase({ featureName, initialState = {} }) {
+  return class MockBase {
+    constructor() {
+      this._state = { ...initialState };
+    }
+    get name() {
+      return featureName;
+    }
+    captureState() {
+      return { ...this._state };
+    }
+    restoreState(snapshot) {
+      this._state = { ...(snapshot || {}) };
+    }
+  };
+}
+
+describe('feature continuity protocol (descriptor-driven)', () => {
+  it('exports todo state when snapshot carries continuity descriptor', () => {
     const sessionSnapshot = {
       runtime: {
         featureStates: [
@@ -26,6 +54,7 @@ describe('feature continuity protocol', () => {
               ],
               counter: 1,
               reminderInjected: true,
+              [CONTINUITY_FIELD_KEY]: { protocol: TODO_PROTOCOL, importMode: 'replace' },
             },
           },
         ],
@@ -38,7 +67,10 @@ describe('feature continuity protocol', () => {
     assert.equal(continuity.mode, 'trim-transcript');
     assert.equal(continuity.states.length, 1);
     assert.equal(continuity.states[0].featureName, 'todo');
+    assert.equal(continuity.states[0].protocol, TODO_PROTOCOL);
     assert.equal(continuity.states[0].state.tasks[0].subject, 'Keep the plan');
+    // export adapter 应剥离 __claw_continuity__ 字段，state 内不应再见 descriptor
+    assert.equal(continuity.states[0].state[CONTINUITY_FIELD_KEY], undefined);
     assert.ok(continuity.toolPolicy.preserveToolNames.includes('task_update'));
   });
 
@@ -53,12 +85,15 @@ describe('feature continuity protocol', () => {
     );
   });
 
-  it('imports todo state into an agent feature through restoreState', async () => {
+  it('imports todo state when agent feature declares matching protocol', async () => {
     let restored = null;
     const agent = {
       features: new Map([
         ['todo', {
           name: 'todo',
+          getContinuityDescriptor() {
+            return { protocol: TODO_PROTOCOL, importMode: 'replace' };
+          },
           restoreState(snapshot) {
             restored = snapshot;
           },
@@ -70,6 +105,7 @@ describe('feature continuity protocol', () => {
       states: [
         {
           featureName: 'todo',
+          protocol: TODO_PROTOCOL,
           state: {
             tasks: [
               { id: '7', subject: 'Resume me', status: 'completed' },
@@ -82,7 +118,211 @@ describe('feature continuity protocol', () => {
 
     assert.deepEqual(imported, ['todo']);
     assert.equal(restored.tasks[0].subject, 'Resume me');
+    // todo import adapter 注入 metadata
     assert.equal(restored.metadata.importedBy, 'claw-continuity');
     assert.equal(restored.metadata.sourceSessionId, 'session-source');
+  });
+
+  it('end-to-end: opencode-basic readFiles survives export → import via declareContinuity', async () => {
+    // 用真实 declareContinuity 包装的 mock feature 验证完整链路
+    const ContinuityAwareMock = declareContinuity(
+      createMockBase({ featureName: 'opencode-basic', initialState: { readFiles: [] } }),
+      { protocol: GENERIC_CONTINUITY_PROTOCOL, importMode: 'replace' },
+    );
+
+    // 模拟源 runtime 中的 feature 实例（已有一些 readFiles）
+    const sourceFeature = new ContinuityAwareMock();
+    sourceFeature._state.readFiles = ['D:/repo/a.ts', 'D:/repo/b.ts'];
+
+    // 框架 captureFeatureSnapshots 的效果：调 captureState 拿到带 descriptor 的 snapshot
+    const sourceSnapshot = sourceFeature.captureState();
+    assert.equal(sourceSnapshot[CONTINUITY_FIELD_KEY].protocol, GENERIC_CONTINUITY_PROTOCOL);
+    assert.deepEqual(sourceSnapshot.readFiles, ['D:/repo/a.ts', 'D:/repo/b.ts']);
+
+    const sessionSnapshot = {
+      runtime: {
+        featureStates: [
+          { featureName: 'opencode-basic', snapshot: sourceSnapshot },
+        ],
+      },
+    };
+
+    const continuity = exportFeatureContinuity(sessionSnapshot, { mode: 'trim-transcript' });
+
+    assert.equal(continuity.states.length, 1);
+    assert.equal(continuity.states[0].featureName, 'opencode-basic');
+    assert.equal(continuity.states[0].protocol, GENERIC_CONTINUITY_PROTOCOL);
+    // state 内的 __claw_continuity__ 应被剥离（通用透传也走 stripContinuityField）
+    assert.equal(continuity.states[0].state[CONTINUITY_FIELD_KEY], undefined);
+    assert.deepEqual(continuity.states[0].state.readFiles, ['D:/repo/a.ts', 'D:/repo/b.ts']);
+
+    // 模拟新 runtime 启动：装配一个未恢复过 readFiles 的包装类实例
+    const targetFeature = new ContinuityAwareMock();
+    assert.deepEqual(targetFeature._state.readFiles, []);
+
+    const agent = {
+      features: new Map([['opencode-basic', targetFeature]]),
+    };
+
+    const imported = await importFeatureContinuity(agent, continuity, { sourceSessionId: 'src' });
+
+    assert.deepEqual(imported, ['opencode-basic']);
+    assert.deepEqual(targetFeature._state.readFiles, ['D:/repo/a.ts', 'D:/repo/b.ts']);
+  });
+
+  it('skips features whose snapshot lacks continuity descriptor', () => {
+    // 框架自带的 OpencodeBasicFeature（未包装）snapshot 里没有 descriptor 字段，不会被采集
+    const sessionSnapshot = {
+      runtime: {
+        featureStates: [
+          { featureName: 'opencode-basic', snapshot: { readFiles: ['x.ts'] } },
+          {
+            featureName: 'todo',
+            snapshot: {
+              tasks: [{ id: '1', subject: 'p', status: 'in_progress', createdAt: 1, updatedAt: 1 }],
+              [CONTINUITY_FIELD_KEY]: { protocol: TODO_PROTOCOL },
+            },
+          },
+        ],
+      },
+    };
+
+    const continuity = exportFeatureContinuity(sessionSnapshot, { mode: 'handoff' });
+
+    assert.equal(continuity.states.length, 1);
+    assert.equal(continuity.states[0].featureName, 'todo');
+  });
+
+  it('skips import when agent feature does not declare getContinuityDescriptor', async () => {
+    // 新 runtime 装配了未包装的原版 feature（无 getContinuityDescriptor 方法），不应误投数据
+    let restoreCalls = 0;
+    const agent = {
+      features: new Map([
+        ['opencode-basic', {
+          name: 'opencode-basic',
+          restoreState() { restoreCalls += 1; },
+          // 故意不提供 getContinuityDescriptor
+        }],
+      ]),
+    };
+
+    const imported = await importFeatureContinuity(agent, {
+      states: [
+        {
+          featureName: 'opencode-basic',
+          protocol: GENERIC_CONTINUITY_PROTOCOL,
+          state: { readFiles: ['x.ts'] },
+        },
+      ],
+    }, {});
+
+    assert.deepEqual(imported, []);
+    assert.equal(restoreCalls, 0);
+  });
+
+  it('skips import when agent feature declares a different protocol', async () => {
+    let restoreCalls = 0;
+    const agent = {
+      features: new Map([
+        ['opencode-basic', {
+          name: 'opencode-basic',
+          getContinuityDescriptor() {
+            // 当前 runtime 改用了不同的 protocol
+            return { protocol: 'claw.some-future-protocol.v2' };
+          },
+          restoreState() { restoreCalls += 1; },
+        }],
+      ]),
+    };
+
+    const imported = await importFeatureContinuity(agent, {
+      states: [
+        {
+          featureName: 'opencode-basic',
+          protocol: GENERIC_CONTINUITY_PROTOCOL,
+          state: { readFiles: [] },
+        },
+      ],
+    }, {});
+
+    assert.deepEqual(imported, []);
+    assert.equal(restoreCalls, 0);
+  });
+
+  it('drops todo continuity when tasks list is empty (normalizeExportState returns null)', () => {
+    const sessionSnapshot = {
+      runtime: {
+        featureStates: [
+          {
+            featureName: 'todo',
+            snapshot: {
+              tasks: [],
+              counter: 0,
+              [CONTINUITY_FIELD_KEY]: { protocol: TODO_PROTOCOL },
+            },
+          },
+        ],
+      },
+    };
+
+    const continuity = exportFeatureContinuity(sessionSnapshot, { mode: 'handoff' });
+    assert.equal(continuity.states.length, 0);
+  });
+
+  it('end-to-end: ControlledTodoFeature-style double-inheritance preserves interruptTargetId', async () => {
+    // 模拟 ControlledTodoFeature 的两层继承：inner 加 interruptTargetId，外层 declareContinuity 加 descriptor
+    const TodoInner = class extends createMockBase({
+      featureName: 'todo',
+      initialState: { tasks: [], counter: 0 },
+    }) {
+      constructor() {
+        super();
+        this._interruptTargetId = null;
+      }
+      captureState() {
+        const base = super.captureState();
+        return { ...base, interruptTargetId: this._interruptTargetId };
+      }
+      restoreState(snapshot) {
+        super.restoreState(snapshot);
+        this._interruptTargetId = snapshot?.interruptTargetId || null;
+      }
+    };
+
+    const ControlledTodo = declareContinuity(TodoInner, {
+      protocol: TODO_PROTOCOL,
+      importMode: 'replace',
+    });
+
+    const sourceFeature = new ControlledTodo();
+    sourceFeature._state.tasks = [{ id: '1', subject: 'task', status: 'in_progress' }];
+    sourceFeature._state.counter = 1;
+    sourceFeature._interruptTargetId = 'task-1';
+
+    const snapshot = sourceFeature.captureState();
+    // 三个字段都在：原 state + interruptTargetId + descriptor
+    assert.equal(snapshot.tasks.length, 1);
+    assert.equal(snapshot.interruptTargetId, 'task-1');
+    assert.equal(snapshot[CONTINUITY_FIELD_KEY].protocol, TODO_PROTOCOL);
+
+    const continuity = exportFeatureContinuity({
+      runtime: { featureStates: [{ featureName: 'todo', snapshot }] },
+    }, { mode: 'trim-transcript' });
+
+    assert.equal(continuity.states.length, 1);
+    // todo export adapter 重新 normalize，所以 interruptTargetId 字段会被丢弃
+    // （adapter 只保留 tasks/counter/reminderContent/consecutiveNoTodoTurns/reminderInjected）
+    // 这是预期行为：todo protocol 的 state schema 不包含 interruptTargetId
+    assert.equal(continuity.states[0].state.tasks[0].subject, 'task');
+    assert.equal(continuity.states[0].state[CONTINUITY_FIELD_KEY], undefined);
+
+    // 模拟新 runtime 恢复
+    const targetFeature = new ControlledTodo();
+    const agent = { features: new Map([['todo', targetFeature]]) };
+
+    await importFeatureContinuity(agent, continuity, { sourceSessionId: 's' });
+
+    assert.equal(targetFeature._state.tasks.length, 1);
+    assert.equal(targetFeature._state.tasks[0].subject, 'task');
   });
 });
