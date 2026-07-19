@@ -4,19 +4,19 @@ import { buildTrimmedSeedMessages, normalizeExportPolicy, DEFAULT_EXPORT_POLICY 
 
 describe('trim-compact fixes', () => {
 
-  describe('Fix 3: foldedToolNoteRole default is assistant (not system)', () => {
-    it('defaults to assistant in DEFAULT_EXPORT_POLICY', () => {
-      assert.equal(DEFAULT_EXPORT_POLICY.foldedToolNoteRole, 'assistant');
+  describe('Fix 3: foldedToolNoteRole default is system (not assistant)', () => {
+    it('defaults to system in DEFAULT_EXPORT_POLICY', () => {
+      assert.equal(DEFAULT_EXPORT_POLICY.foldedToolNoteRole, 'system');
     });
 
-    it('normalizeExportPolicy returns assistant when not specified', () => {
+    it('normalizeExportPolicy returns system when not specified', () => {
       const policy = normalizeExportPolicy({});
-      assert.equal(policy.foldedToolNoteRole, 'assistant');
+      assert.equal(policy.foldedToolNoteRole, 'system');
     });
 
-    it('respects explicit system override', () => {
-      const policy = normalizeExportPolicy({ foldedToolNoteRole: 'system' });
-      assert.equal(policy.foldedToolNoteRole, 'system');
+    it('respects explicit assistant override', () => {
+      const policy = normalizeExportPolicy({ foldedToolNoteRole: 'assistant' });
+      assert.equal(policy.foldedToolNoteRole, 'assistant');
     });
   });
 
@@ -61,8 +61,8 @@ describe('trim-compact fixes', () => {
       assert.ok(foldNotes.length > 0, 'should have a fold note for tool activity in fold zone');
       assert.ok(stats.foldedToolCallCount > 0, 'tool calls should be folded');
 
-      // Fold note should be assistant role (the fix)
-      assert.equal(foldNotes[0].role, 'assistant', 'fold note role should be assistant');
+      // Fold note should be system role (system reminder, not assistant)
+      assert.equal(foldNotes[0].role, 'system', 'fold note role should be system');
 
       // Tool messages in fold zone should not appear as 'tool' role in seed
       const toolMessages = seedMessages.filter(m => m.role === 'tool');

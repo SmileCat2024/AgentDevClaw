@@ -22,7 +22,7 @@ export const DEFAULT_EXPORT_POLICY = {
   toolFoldScope: 'all',
   toolFoldRecentTurns: null,
   foldConsecutiveToolActivity: true,
-  foldedToolNoteRole: 'assistant',
+  foldedToolNoteRole: 'system',
   foldToolCallArgs: false,
   foldToolResultSummary: false,
   maxFoldedToolChars: 240,
