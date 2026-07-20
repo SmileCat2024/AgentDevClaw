@@ -274,8 +274,76 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
     preview: cleanSessionText(record?.preview),
     hasSummary: false,
     tokenUsage: record?.tokenUsage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    contextLength: null,
+    contextLength: Number.isFinite(Number(record?.contextLength)) && Number(record.contextLength) > 0
+      ? Number(record.contextLength)
+      : null,
+    compressRatio: Number.isFinite(Number(record?.compressRatio)) && Number(record.compressRatio) > 0
+      ? Number(record.compressRatio)
+      : 80,
     modelName: cleanSessionText(record?.modelName),
+  };
+}
+
+const SIDEBAR_READ_MODEL_FIELDS = [
+  'title', 'featureName', 'agentName', 'taskTitle', 'sessionType', 'status',
+  'archived', 'todo', 'formId', 'openDirectory', 'createdAt', 'updatedAt',
+  'messageCount', 'preview', 'hasSummary', 'contextLength', 'compressRatio',
+  'modelName', 'tokenUsage',
+];
+
+function sidebarReadModelValue(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') {
+    try { return JSON.stringify(value); } catch { return '[unserializable]'; }
+  }
+  return value;
+}
+
+/**
+ * Compare the index-backed sidebar read model with the authoritative rich
+ * session list. Only aggregate counts leave this function; session content is
+ * never included in diagnostics.
+ */
+export function compareSidebarSessionReadModels(lightSessions = [], authoritativeSessions = []) {
+  const lightById = new Map((Array.isArray(lightSessions) ? lightSessions : [])
+    .filter((session) => cleanSessionText(session?.id))
+    .map((session) => [cleanSessionText(session.id), session]));
+  const authoritativeById = new Map((Array.isArray(authoritativeSessions) ? authoritativeSessions : [])
+    .filter((session) => cleanSessionText(session?.id))
+    .map((session) => [cleanSessionText(session.id), session]));
+  let missingCount = 0;
+  let fieldMismatchCount = 0;
+  let mismatchedSessionCount = 0;
+  let exactSessionCount = 0;
+
+  for (const [id, authoritative] of authoritativeById) {
+    const light = lightById.get(id);
+    if (!light) {
+      missingCount += 1;
+      continue;
+    }
+    let mismatched = false;
+    for (const field of SIDEBAR_READ_MODEL_FIELDS) {
+      if (sidebarReadModelValue(light[field]) === sidebarReadModelValue(authoritative[field])) continue;
+      fieldMismatchCount += 1;
+      mismatched = true;
+    }
+    if (mismatched) mismatchedSessionCount += 1;
+    else exactSessionCount += 1;
+  }
+
+  let extraCount = 0;
+  for (const id of lightById.keys()) {
+    if (!authoritativeById.has(id)) extraCount += 1;
+  }
+  return {
+    lightCount: lightById.size,
+    authoritativeCount: authoritativeById.size,
+    missingCount,
+    extraCount,
+    exactSessionCount,
+    mismatchedSessionCount,
+    fieldMismatchCount,
   };
 }
 

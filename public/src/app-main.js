@@ -1014,26 +1014,45 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
   if (extraPolicy && typeof extraPolicy === 'object') {
     Object.assign(policy, extraPolicy);
   }
-  const resumeResponse = await fetch('/protoclaw/context_handoffs/compact_and_resume', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      agentId,
-      sessionId,
-      detached: false,
-      policy,
-      ...(options.archiveOriginal ? { archiveOriginal: true } : {}),
-      ...(options.reason ? { reason: options.reason } : {}),
-      ...(options.trimCutRounds != null ? { trimCutRounds: options.trimCutRounds } : {}),
-      operationId: options.operationId || createSidebarOperationId(options.reason === 'trim' ? 'trim' : 'summary'),
-      responseMode: 'delta',
-    }),
-  });
-  if (!resumeResponse.ok) {
-    throw new Error(await resumeResponse.text().catch(() => 'compacted resume failed'));
-  }
+  const operationId = options.operationId || createSidebarOperationId(options.reason === 'trim' ? 'trim' : 'summary');
+  const requestStartedAt = sidebarDiagnosticNow();
+  const stopMainThreadObservation = beginSidebarOperationMainThreadObservation(operationId);
+  recordSidebarOperationCheckpoint(operationId, 'request_dispatched');
+  try {
+    const resumeResponse = await fetch('/protoclaw/context_handoffs/compact_and_resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId,
+        sessionId,
+        detached: false,
+        policy,
+        ...(options.archiveOriginal ? { archiveOriginal: true } : {}),
+        ...(options.reason ? { reason: options.reason } : {}),
+        ...(options.trimCutRounds != null ? { trimCutRounds: options.trimCutRounds } : {}),
+        operationId,
+        responseMode: 'delta',
+      }),
+    });
+    const headersReceivedAt = sidebarDiagnosticNow();
+    const responseBytes = Number(resumeResponse.headers?.get?.('content-length')) || 0;
+    recordSidebarOperationCheckpoint(operationId, 'response_headers_received', {
+      requestWaitMs: headersReceivedAt - requestStartedAt,
+      responseBytes,
+    });
+    if (!resumeResponse.ok) {
+      throw new Error(await resumeResponse.text().catch(() => 'compacted resume failed'));
+    }
 
-  return resumeResponse.json();
+    const result = await resumeResponse.json();
+    recordSidebarOperationCheckpoint(operationId, 'response_body_parsed', {
+      bodyParseMs: sidebarDiagnosticNow() - headersReceivedAt,
+      responseBytes,
+    });
+    return result;
+  } finally {
+    stopMainThreadObservation();
+  }
 }
 
 

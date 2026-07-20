@@ -30,6 +30,16 @@ describe('archive-and-replace contract', () => {
     assert.match(appMain, /if \(isLiveCurrentSession && strategy && !options\.archiveOriginal && options\.useLiveCommand === true\)/);
   });
 
+  it('correlates compact response timing on both sides of JSON parsing', () => {
+    const start = appMain.indexOf('async function createCompactedResumeSession');
+    const end = appMain.indexOf('// PH session list helpers', start);
+    const compactClient = appMain.slice(start, end);
+    assert.match(compactClient, /recordSidebarOperationCheckpoint\(operationId, 'request_dispatched'\)/);
+    assert.match(compactClient, /recordSidebarOperationCheckpoint\(operationId, 'response_headers_received'/);
+    assert.match(compactClient, /recordSidebarOperationCheckpoint\(operationId, 'response_body_parsed'/);
+    assert.match(compactClient, /beginSidebarOperationMainThreadObservation\(operationId\)/);
+  });
+
   it('uses delta responses for delete/archive mutations while preserving legacy full responses', () => {
     const deleteStart = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/delete'");
     const archiveStart = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/archive'", deleteStart);

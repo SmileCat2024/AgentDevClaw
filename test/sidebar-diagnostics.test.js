@@ -37,6 +37,10 @@ describe('sidebar diagnostic event sanitization', () => {
       sourceSessionId: 'session-1',
       targetSessionId: 'session-2',
       elapsedMs: 123.4567,
+      requestWaitMs: 6400.25,
+      longTaskCount: 2,
+      longTaskMaxMs: 120.5,
+      fieldMismatchCount: 7,
       sessionCount: Number.MAX_SAFE_INTEGER,
       title: 'private title',
       projectDir: 'D:\\private\\project',
@@ -50,6 +54,10 @@ describe('sidebar diagnostic event sanitization', () => {
     assert.equal(event.operation, 'summarysession');
     assert.equal(event.phase, 'targetready');
     assert.equal(event.elapsedMs, 123.457);
+    assert.equal(event.requestWaitMs, 6400.25);
+    assert.equal(event.longTaskCount, 2);
+    assert.equal(event.longTaskMaxMs, 120.5);
+    assert.equal(event.fieldMismatchCount, 7);
     assert.equal(event.sessionCount, 10_000_000);
     for (const forbidden of ['title', 'projectDir', 'message', 'authorization', 'errorMessage']) {
       assert.equal(Object.hasOwn(event, forbidden), false);

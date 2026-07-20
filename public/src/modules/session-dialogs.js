@@ -233,7 +233,11 @@ window.submitTrimCompact = async () => {
       archiveOriginal: archiveAfter,
       operationId: trimOperation?.operationId || '',
     });
-    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
+    if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {
+      applySidebarMutationDeltaWithDiagnostics(trimOperation?.operationId, agentId, result);
+    } else if (typeof applySessionMutationDelta === 'function') {
+      applySessionMutationDelta(agentId, result);
+    }
     const archiveSucceeded = !archiveAfter || result?.archive?.succeeded === true;
     if (!archiveSucceeded && archiveRollback) {
       archiveRollback();

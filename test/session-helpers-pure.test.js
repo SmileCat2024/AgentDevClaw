@@ -15,6 +15,7 @@ import {
   buildSessionTrimPreview,
   extractDomainsFromText,
   buildLightPrebuiltSessionRecord,
+  compareSidebarSessionReadModels,
 } from '../server/routes/session-helpers-pure.js';
 
 // ── extractToolCallLabel ──────────────────────────────────────────
@@ -341,6 +342,8 @@ describe('buildLightPrebuiltSessionRecord', () => {
       messageCount: 10,
       preview: 'Hello world',
       modelName: 'gpt-4',
+      contextLength: 200000,
+      compressRatio: 75,
     };
     const result = buildLightPrebuiltSessionRecord('programming-helper', record);
     assert.equal(result.id, 'session-abc');
@@ -359,7 +362,8 @@ describe('buildLightPrebuiltSessionRecord', () => {
     assert.equal(result.preview, 'Hello world');
     assert.equal(result.hasSummary, false);
     assert.equal(result.modelName, 'gpt-4');
-    assert.equal(result.contextLength, null);
+    assert.equal(result.contextLength, 200000);
+    assert.equal(result.compressRatio, 75);
     assert.ok(typeof result.path === 'string' && result.path.length > 0);
   });
 
@@ -402,5 +406,30 @@ describe('buildLightPrebuiltSessionRecord', () => {
       'createdAt should be ~now');
     assert.ok(result.updatedAt >= before && result.updatedAt <= after,
       'updatedAt should be ~now');
+  });
+});
+
+describe('compareSidebarSessionReadModels', () => {
+  it('reports only aggregate compatibility counts', () => {
+    const comparison = compareSidebarSessionReadModels(
+      [
+        { id: 'same', title: 'Same', messageCount: 1 },
+        { id: 'changed', title: 'Light title', messageCount: 2 },
+        { id: 'extra', title: 'Extra' },
+      ],
+      [
+        { id: 'same', title: 'Same', messageCount: 1 },
+        { id: 'changed', title: 'Rich title', messageCount: 2 },
+        { id: 'missing', title: 'Missing' },
+      ],
+    );
+    assert.equal(comparison.lightCount, 3);
+    assert.equal(comparison.authoritativeCount, 3);
+    assert.equal(comparison.missingCount, 1);
+    assert.equal(comparison.extraCount, 1);
+    assert.equal(comparison.exactSessionCount, 1);
+    assert.equal(comparison.mismatchedSessionCount, 1);
+    assert.equal(comparison.fieldMismatchCount, 1);
+    assert.equal(JSON.stringify(comparison).includes('Light title'), false);
   });
 });

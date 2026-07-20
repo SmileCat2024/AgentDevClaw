@@ -218,7 +218,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, 'summarized-nine-section', null, null, null, {
         operationId: compactOperation.operationId,
       });
-      if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
+      if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {
+        applySidebarMutationDeltaWithDiagnostics(compactOperation.operationId, activeAgent.id, result);
+      } else if (typeof applySessionMutationDelta === 'function') {
+        applySessionMutationDelta(activeAgent.id, result);
+      }
       const targetSessionId = String(result?.session?.id || '').trim();
       updateSidebarOperation(compactOperation.operationId, {
         phase: 'target-starting',
@@ -328,7 +332,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         archiveOriginal: action.archiveOriginal,
         operationId: _csOperation?.operationId || '',
       });
-      if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
+      if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {
+        applySidebarMutationDeltaWithDiagnostics(_csOperation?.operationId, activeAgent.id, result);
+      } else if (typeof applySessionMutationDelta === 'function') {
+        applySessionMutationDelta(activeAgent.id, result);
+      }
       const archiveSucceeded = !action.archiveOriginal || result?.archive?.succeeded === true;
       if (!archiveSucceeded && _csArchiveRollback) {
         _csArchiveRollback();

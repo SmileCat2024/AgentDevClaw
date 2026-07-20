@@ -79,7 +79,9 @@ export function sanitizeSidebarDiagnosticEvent(raw, defaults = {}) {
 
   const durationFields = [
     'elapsedMs', 'phaseDurationMs', 'durationMs', 'indexMs',
-    'handoffMs', 'modelMs', 'sessionsMs', 'totalMs',
+    'handoffMs', 'modelMs', 'sessionsMs', 'readModelMs', 'totalMs',
+    'requestWaitMs', 'bodyParseMs', 'clientApplyMs',
+    'longTaskTotalMs', 'longTaskMaxMs',
   ];
   for (const key of durationFields) {
     const value = boundedNumber(raw[key]);
@@ -89,7 +91,9 @@ export function sanitizeSidebarDiagnosticEvent(raw, defaults = {}) {
   const countFields = [
     'revision', 'sessionCount', 'handoffSummaryCount', 'writebackCount',
     'runtimeCount', 'removedCount', 'agentCount', 'attempt',
-    'responseBytes',
+    'responseBytes', 'longTaskCount', 'lightCount', 'authoritativeCount',
+    'missingCount', 'extraCount', 'exactSessionCount',
+    'mismatchedSessionCount', 'fieldMismatchCount',
   ];
   for (const key of countFields) {
     const value = boundedNumber(raw[key], MAX_COUNT);

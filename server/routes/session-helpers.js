@@ -34,6 +34,7 @@ import {
   extractToolCallLabel,
   buildSessionTrimPreview,
   buildLightPrebuiltSessionRecord,
+  compareSidebarSessionReadModels,
   extractDomainsFromText,
 } from './session-helpers-pure.js';
 
@@ -59,6 +60,7 @@ export {
   extractToolCallLabel,
   buildSessionTrimPreview,
   buildLightPrebuiltSessionRecord,
+  compareSidebarSessionReadModels,
   extractDomainsFromText,
 };
 
@@ -476,6 +478,12 @@ async function listPrebuiltSessions(agentId) {
     if (aCreated !== bCreated) return aCreated.localeCompare(bCreated);
     return String(right.id || '').localeCompare(String(left.id || ''));
   });
+  const readModelStartedAt = Date.now();
+  const sidebarReadModelComparison = compareSidebarSessionReadModels(
+    index.sessions.map((record) => buildLightPrebuiltSessionRecord(agentId, record)),
+    sessions,
+  );
+  const readModelMs = Date.now() - readModelStartedAt;
   const defaultModelInfo = modelInfoMap.default || modelInfoMap.main || {};
   const perfEvent = {
     kind: 'list_perf',
@@ -489,6 +497,8 @@ async function listPrebuiltSessions(agentId) {
     handoffMs: summariesLoadedAt - indexLoadedAt,
     modelMs: modelsLoadedAt - summariesLoadedAt,
     sessionsMs: sessionsLoadedAt - modelsLoadedAt,
+    readModelMs,
+    ...sidebarReadModelComparison,
     totalMs: Date.now() - startedAt,
     result: 'success',
   };

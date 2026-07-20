@@ -71,6 +71,55 @@ describe('sidebar operation state machine', () => {
     assert.equal(Object.hasOwn(event, 'title'), false);
   });
 
+  it('records response checkpoints and aggregates scoped Long Tasks', () => {
+    class FakePerformanceObserver {
+      constructor(callback) { this.callback = callback; }
+      observe() {}
+      takeRecords() { return [{ duration: 75 }, { duration: 20 }, { duration: 125 }]; }
+      disconnect() {}
+    }
+    let now = 100;
+    const ctx = loadSidebarOperations({
+      PerformanceObserver: FakePerformanceObserver,
+      performance: { now: () => (now += 10) },
+    });
+    const result = ctx.run(`(() => {
+      beginSidebarOperation({
+        operationId: 'trim:timing', kind: 'trim', type: 'replacement',
+        phase: 'generating', agentId: 'programming-helper', sourceSessionId: 'source-1'
+      });
+      const checkpoint = recordSidebarOperationCheckpoint('trim:timing', 'response_headers_received', {
+        requestWaitMs: 6400, responseBytes: 512
+      });
+      const stop = beginSidebarOperationMainThreadObservation('trim:timing');
+      const observation = stop();
+      return { checkpoint, observation };
+    })()`);
+    assert.equal(result.checkpoint.requestWaitMs, 6400);
+    assert.equal(result.checkpoint.responseBytes, 512);
+    assert.equal(result.observation.longTaskCount, 2);
+    assert.equal(result.observation.longTaskTotalMs, 200);
+    assert.equal(result.observation.longTaskMaxMs, 125);
+  });
+
+  it('measures the synchronous delta application without changing its result', () => {
+    let now = 0;
+    const ctx = loadSidebarOperations({ performance: { now: () => (now += 4) } });
+    ctx.run(`allAgents = [{
+      id: 'programming-helper',
+      workspace_sessions: { revision: 1, activeSessionId: 'old', sessions: [{ id: 'old' }] }
+    }]; beginSidebarOperation({
+      operationId: 'summary:apply', kind: 'summary', type: 'replacement',
+      phase: 'generating', agentId: 'programming-helper', sourceSessionId: 'old'
+    });`);
+    const applied = ctx.run(`applySidebarMutationDeltaWithDiagnostics('summary:apply', 'programming-helper', {
+      revision: 2,
+      sessionDelta: { revision: 2, activeSessionId: 'new', upsert: [{ id: 'new' }], remove: ['old'] }
+    })`);
+    assert.equal(applied, true);
+    assert.deepEqual(Array.from(ctx.run('allAgents[0].workspace_sessions.sessions'), (item) => item.id), ['new']);
+  });
+
   it('flushes a bounded client diagnostic batch without operation content', async () => {
     const requests = [];
     const ctx = loadSidebarOperations({

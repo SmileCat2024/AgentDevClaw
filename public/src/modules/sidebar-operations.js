@@ -16,6 +16,12 @@ const _sidebarDiagnosticEventQueue = [];
 let _sidebarDiagnosticFlushTimer = null;
 let _sidebarDiagnosticFlushInFlight = false;
 
+function sidebarDiagnosticNow() {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
 function inferSidebarDiagnosticResult(phase, errorCode = '') {
   if (phase === 'degraded' || errorCode) return phase === 'failed' ? 'failed' : 'degraded';
   if (phase === 'failed') return 'failed';
@@ -26,7 +32,7 @@ function inferSidebarDiagnosticResult(phase, errorCode = '') {
 
 function buildSidebarDiagnosticPhaseEvent(operation, phase, fields = {}) {
   const result = inferSidebarDiagnosticResult(phase, fields.errorCode || operation?.errorCode);
-  return {
+  const event = {
     timestamp: Date.now(),
     kind: 'operation_phase',
     operationId: operation?.operationId || '',
@@ -41,6 +47,14 @@ function buildSidebarDiagnosticPhaseEvent(operation, phase, fields = {}) {
     errorCode: fields.errorCode || operation?.errorCode || '',
     ...(result ? { result } : {}),
   };
+  for (const key of [
+    'durationMs', 'requestWaitMs', 'bodyParseMs', 'clientApplyMs',
+    'longTaskTotalMs', 'longTaskMaxMs', 'longTaskCount', 'responseBytes',
+  ]) {
+    const value = Number(fields[key]);
+    if (Number.isFinite(value) && value >= 0) event[key] = value;
+  }
+  return event;
 }
 
 function scheduleSidebarDiagnosticFlush(delayMs = 250) {
@@ -158,6 +172,66 @@ function recordSidebarOperationPhase(operation, phase = operation?.phase, fields
     ...fields,
   });
   queueSidebarDiagnosticEvent(diagnosticEvent);
+}
+
+// Records a timing checkpoint without mutating UI state. These checkpoints
+// close the evidence gap between a server response and the next visible phase,
+// while remaining content-free and persisted only through the diagnostic queue.
+function recordSidebarOperationCheckpoint(operationId, phase, fields = {}) {
+  const operation = getSidebarOperation(operationId);
+  if (!operation?.operationId) return null;
+  const event = buildSidebarDiagnosticPhaseEvent(operation, phase, {
+    elapsedMs: Date.now() - Number(operation.startedAt || Date.now()),
+    ...fields,
+  });
+  queueSidebarDiagnosticEvent(event);
+  return event;
+}
+
+// Long Task observation is scoped to one network round-trip. It is not a
+// permanent observer and emits one aggregate record, so diagnosis does not
+// create a new source of background work or high-volume logs.
+function beginSidebarOperationMainThreadObservation(operationId) {
+  const operation = getSidebarOperation(operationId);
+  const Observer = typeof PerformanceObserver !== 'undefined' ? PerformanceObserver : null;
+  if (!operation || !Observer || typeof performance === 'undefined') return () => null;
+
+  const observationStartedAt = sidebarDiagnosticNow();
+  let longTaskCount = 0;
+  let longTaskTotalMs = 0;
+  let longTaskMaxMs = 0;
+  let stopped = false;
+  const consume = (entries) => {
+    for (const entry of entries || []) {
+      const duration = Number(entry?.duration);
+      if (!Number.isFinite(duration) || duration < 50) continue;
+      longTaskCount += 1;
+      longTaskTotalMs += duration;
+      longTaskMaxMs = Math.max(longTaskMaxMs, duration);
+    }
+  };
+
+  let observer = null;
+  try {
+    observer = new Observer((list) => consume(list.getEntries()));
+    observer.observe({ type: 'longtask', buffered: false });
+  } catch {
+    try { observer?.disconnect?.(); } catch {}
+    return () => null;
+  }
+
+  return () => {
+    if (stopped) return null;
+    stopped = true;
+    try { consume(observer.takeRecords?.()); } catch {}
+    try { observer.disconnect(); } catch {}
+    return recordSidebarOperationCheckpoint(operationId, 'main_thread_observation', {
+      durationMs: sidebarDiagnosticNow() - observationStartedAt,
+      longTaskCount,
+      longTaskTotalMs,
+      longTaskMaxMs,
+    });
+  };
 }
 
 function invalidateSidebarProjection() {
@@ -397,4 +471,13 @@ function applySessionMutationDelta(agentId, payload) {
   if (typeof lastRenderedWorkspaceHtml !== 'undefined') lastRenderedWorkspaceHtml = '';
   if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
   return true;
+}
+
+function applySidebarMutationDeltaWithDiagnostics(operationId, agentId, payload) {
+  const startedAt = sidebarDiagnosticNow();
+  const applied = applySessionMutationDelta(agentId, payload);
+  recordSidebarOperationCheckpoint(operationId, 'response_applied', {
+    clientApplyMs: sidebarDiagnosticNow() - startedAt,
+  });
+  return applied;
 }
