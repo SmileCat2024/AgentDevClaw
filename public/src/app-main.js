@@ -160,7 +160,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
 
   const renderItem = (entry) => {
     const active = isRuntimeItemActive(entry.runtimeId);
-    const disconnected = entry.status === 'disconnected';
+    const disconnected = isSidebarRuntimeDisconnected(entry);
     const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
     const restarting = restartingRuntimeIds.has(entry.runtimeId);
     const retiring = !!entry.replacementMutation || entry.sidebarOperation?.type === 'archive-close';
@@ -181,7 +181,6 @@ function renderSidebarChildItems(entries, ownerAgentId) {
       replacementPending ? 'replacement-pending' : '',
       operationPending ? 'operation-pending' : '',
       deleting ? 'retiring' : '',
-      operationDegraded ? 'disconnected' : '',
       justFinished ? 'just-finished' : '',
     ].filter(Boolean).join(' ');
     return `

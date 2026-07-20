@@ -248,6 +248,9 @@ async function settleSidebarSourceOperation(operationId, options = {}) {
   const sessionId = String(options.sessionId || initial.sourceSessionId || '').trim();
   const attempts = Math.max(1, Number(options.attempts) || 20);
   const intervalMs = Math.max(50, Number(options.intervalMs) || 300);
+  const lateReconcileAttempts = Math.max(0, Math.min(3,
+    Number.isFinite(Number(options.lateReconcileAttempts)) ? Number(options.lateReconcileAttempts) : 1));
+  const lateReconcileDelayMs = Math.max(250, Number(options.lateReconcileDelayMs) || 5000);
   if (!agentId || !sessionId) {
     updateSidebarOperation(operationId, { phase: 'degraded', errorCode: 'source_identity_missing' });
     return false;
@@ -260,7 +263,16 @@ async function settleSidebarSourceOperation(operationId, options = {}) {
       if (response.ok) {
         const status = await response.json();
         if (status?.lifecycle === 'missing' || status?.lifecycle === 'stopped') {
-          finishSidebarOperation(operationId, 'settled');
+          const latest = getSidebarOperation(operationId);
+          if (latest?.errorCode === 'target_runtime_not_ready' && !latest.targetRuntimeId) {
+            updateSidebarOperation(operationId, {
+              phase: 'degraded',
+              errorCode: 'target_runtime_not_ready',
+            });
+            if (typeof loadAgents === 'function') loadAgents().catch(() => {});
+            return false;
+          }
+          finishSidebarOperation(operationId, 'settled', { errorCode: '' });
           if (typeof loadAgents === 'function') loadAgents().catch(() => {});
           return true;
         }
@@ -269,11 +281,28 @@ async function settleSidebarSourceOperation(operationId, options = {}) {
       // A transient readiness-query failure must not make a disappearing
       // runtime reappear. Keep the tombstone and retry the targeted query.
     }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
   }
 
   updateSidebarOperation(operationId, { phase: 'degraded', errorCode: 'source_stop_timeout' });
   if (typeof loadAgents === 'function') loadAgents().catch(() => {});
+  if (lateReconcileAttempts > 0 && typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+    window.setTimeout(() => {
+      const latest = getSidebarOperation(operationId);
+      if (!latest || latest.phase !== 'degraded') return;
+      void settleSidebarSourceOperation(operationId, {
+        ...options,
+        agentId,
+        sessionId,
+        attempts: 1,
+        intervalMs,
+        lateReconcileAttempts: lateReconcileAttempts - 1,
+        lateReconcileDelayMs,
+      });
+    }, lateReconcileDelayMs);
+  }
   return false;
 }
 

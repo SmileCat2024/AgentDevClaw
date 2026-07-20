@@ -781,6 +781,24 @@ describe('runtime-status: isRuntimeCalling', () => {
   });
 });
 
+describe('runtime-status: sidebar disconnect semantics', () => {
+  it('does not mark a connected target disconnected because source cleanup degraded', () => {
+    const ctx = loadRuntimeStatus();
+    assert.equal(ctx.run(`isSidebarRuntimeDisconnected({
+      status: 'connected',
+      sidebarOperation: { phase: 'degraded', errorCode: 'source_stop_timeout' }
+    })`), false);
+  });
+
+  it('keeps an actually disconnected entry disconnected', () => {
+    const ctx = loadRuntimeStatus();
+    assert.equal(ctx.run(`isSidebarRuntimeDisconnected({
+      status: 'disconnected',
+      sidebarOperation: { phase: 'degraded' }
+    })`), true);
+  });
+});
+
 describe('runtime-status: context guard state', () => {
   it('blocks only the runtime that reported the guard event', () => {
     const ctx = loadRuntimeStatus({ currentRuntimeAgentId: 'rt-1' });

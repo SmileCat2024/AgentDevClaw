@@ -197,6 +197,31 @@ describe('sidebar operation state machine', () => {
     assert.equal(refreshes, 1);
     assert.equal(ctx.run(`getSidebarOperation('delete:settle')`), null);
   });
+
+  it('performs one bounded late reconciliation after a transient stop timeout', async () => {
+    let calls = 0;
+    const ctx = loadSidebarOperations({
+      fetch: async () => ({
+        ok: true,
+        json: async () => ({ lifecycle: ++calls === 1 ? 'stopping' : 'stopped' }),
+      }),
+      loadAgents: async () => {},
+    });
+    const settled = await ctx.run(`(async () => {
+      const operation = beginSidebarOperation({
+        operationId: 'archive:late-settle', type: 'archive-close', kind: 'archive',
+        phase: 'source-stopping', agentId: 'programming-helper', sourceSessionId: 'source-1'
+      });
+      return settleSidebarSourceOperation(operation.operationId, {
+        attempts: 1, intervalMs: 50, lateReconcileAttempts: 1, lateReconcileDelayMs: 250
+      });
+    })()`);
+    assert.equal(settled, false);
+    assert.equal(ctx.run(`getSidebarOperation('archive:late-settle').phase`), 'degraded');
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    assert.equal(calls, 2);
+    assert.equal(ctx.run(`getSidebarOperation('archive:late-settle')`), null);
+  });
 });
 
 describe('sidebar operation trace', () => {

@@ -15,6 +15,7 @@ import {
   managedAgents, assemblyRuntimeProcesses,
   getManagedRuntimeKey, listAgentRuntimes,
   getAgentRuntime, getAssemblyRuntime, buildStatus,
+  isChildProcessRunning, isManagedRuntimeRunning,
 } from '../shared/agent-access.js';
 import {
   readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex,
@@ -48,6 +49,7 @@ export function createAgentStartupFns(deps) {
   } = deps;
 
   async function waitForProcessExit(child, timeoutMs = PROCESS_EXIT_WAIT_MS) {
+    if (!isChildProcessRunning(child)) return;
     await Promise.race([
       new Promise((resolve) => child.once('exit', resolve)),
       new Promise((resolve) => setTimeout(resolve, timeoutMs)),
@@ -113,7 +115,7 @@ export function createAgentStartupFns(deps) {
 
     if (sanitizeSessionFragment(agent?.id) === 'qqbot') {
       const siblings = listAgentRuntimes(agent.id).filter((rt) =>
-        rt?.process && rt.process.exitCode === null && !rt.stopped
+        isManagedRuntimeRunning(rt)
         && rt !== existing
       );
       for (const rt of siblings) {
@@ -157,7 +159,7 @@ export function createAgentStartupFns(deps) {
       } catch {}
     }
 
-    if (existing?.process && existing.process.exitCode === null && !existing.stopped) {
+    if (isManagedRuntimeRunning(existing)) {
       if (!resolvedSessionId || existing.selectedSessionId === resolvedSessionId) {
         return buildStatus(agent.id, resolvedSessionId);
       }
@@ -167,7 +169,7 @@ export function createAgentStartupFns(deps) {
       await waitForProcessExit(existing.process);
     }
 
-    if (existing?.process && existing.process.exitCode === null && existing.stopped) {
+    if (isChildProcessRunning(existing?.process) && existing.stopped) {
       await waitForProcessExit(existing.process);
     }
 
@@ -231,13 +233,14 @@ export function createAgentStartupFns(deps) {
       log(agent.id, String(chunk).trim(), 'error');
     });
 
-    child.on('exit', (code) => {
+    child.on('exit', (code, signal) => {
       const current = managedAgents.get(runtime.key);
       if (current && current === runtime) {
         current.exitCode = code;
+        current.signalCode = signal || child.signalCode || null;
         current.stopped = true;
       }
-      log(agent.id, `process exited with code ${code ?? 'null'}`);
+      log(agent.id, `process exited with code ${code ?? 'null'} signal ${signal || child.signalCode || 'none'}`);
 
       // 通知外部回调（如群聊模块需要在 agent 死亡时闭环）
       for (const cb of exitCallbacks) {
@@ -358,7 +361,7 @@ export function createAgentStartupFns(deps) {
     const normalizedSessionId = sanitizeSessionFragment(session.id);
     const existing = getAssemblyRuntime(normalizedSessionId);
 
-    if (existing?.process && existing.process.exitCode === null && !existing.stopped) {
+    if (isManagedRuntimeRunning(existing)) {
       return existing;
     }
 

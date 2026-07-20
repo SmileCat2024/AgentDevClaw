@@ -77,37 +77,17 @@ function clearSessionReplacementMutation(agentId, sessionId) {
 }
 
 function settleSessionReplacementMutation(agentId, sessionId, delayMs = 300, attemptsRemaining = 20) {
-  window.setTimeout(async () => {
-    let oldRuntimeStillVisible = true;
-    try {
-      const response = await fetch('/protoclaw/runtime_status?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
-      if (response.ok) {
-        const result = await response.json();
-        oldRuntimeStillVisible = result?.viewerConnected === true || !['stopped', 'missing'].includes(result?.lifecycle);
-      }
-    } catch {}
-    if (oldRuntimeStillVisible && attemptsRemaining > 1) {
-      settleSessionReplacementMutation(agentId, sessionId, 300, attemptsRemaining - 1);
-      return;
-    }
-    if (oldRuntimeStillVisible) {
-      updateSessionReplacementMutation(agentId, sessionId, {
-        phase: 'degraded',
-        errorCode: 'source_runtime_still_visible',
-      });
-      return;
-    }
-    const current = getSessionReplacementMutation(agentId, sessionId);
-    if (current?.errorCode === 'target_runtime_not_ready' && !current.targetRuntimeId) {
-      updateSessionReplacementMutation(agentId, sessionId, {
-        phase: 'degraded',
-        errorCode: 'target_runtime_not_ready',
-      });
-      if (typeof loadAgents === 'function') loadAgents().catch(() => {});
-      return;
-    }
-    clearSessionReplacementMutation(agentId, sessionId);
-    if (typeof loadAgents === 'function') loadAgents().catch(() => {});
+  const current = getSessionReplacementMutation(agentId, sessionId);
+  if (!current) return;
+  window.setTimeout(() => {
+    void settleSidebarSourceOperation(current.operationId, {
+      agentId,
+      sessionId,
+      attempts: Math.max(1, Number(attemptsRemaining) || 20),
+      intervalMs: 300,
+      lateReconcileAttempts: 1,
+      lateReconcileDelayMs: 5000,
+    });
   }, Math.max(0, delayMs));
 }
 

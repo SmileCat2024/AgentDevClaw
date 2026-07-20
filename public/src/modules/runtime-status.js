@@ -361,6 +361,13 @@ function isRuntimeCalling(runtimeId) {
   return normalizeAgentIdentity(runtimeId) !== '' && _agentCallActive.get(runtimeId) === true;
 }
 
+function isSidebarRuntimeDisconnected(entry) {
+  // A degraded sidebar operation can describe cleanup of a different runtime
+  // (for example, the archived source of a ready replacement). Transport state
+  // must come from the entry itself, not from the attached operation.
+  return entry?.status === 'disconnected';
+}
+
 function resolveNotificationCallingState(notifData) {
   if (notifData?.runtime && notifData.runtime.callActive !== undefined) {
     return notifData.runtime.callActive === true;

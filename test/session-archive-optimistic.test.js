@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 function createArchiveSandbox() {
-  const ctx = createFrontendSandbox({ renderCount: 0, currentLanguage: 'zh' });
+  const ctx = createFrontendSandbox({ renderCount: 0, currentLanguage: 'zh', URLSearchParams });
   ctx.console = { ...console, error() {} };
   ctx.getWorkspaceSessions = (agent) => (
     Array.isArray(agent?.workspace_sessions?.sessions) ? agent.workspace_sessions.sessions : []

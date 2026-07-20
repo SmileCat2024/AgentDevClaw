@@ -3,7 +3,7 @@ import {
 } from '../shared/constants.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import {
-  listAgentRuntimes, getAgentRuntime, buildStatus,
+  listAgentRuntimes, getAgentRuntime, buildStatus, isChildProcessRunning,
 } from '../shared/agent-access.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { sendIPCtoSession } from '../shared/ipc.js';
@@ -76,7 +76,7 @@ export function createAgentLifecycleModule(ctx) {
     }
 
     for (const runtime of runtimes) {
-      if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
+      if (!isChildProcessRunning(runtime?.process) || runtime.stopped) {
         // Process already exited — still need to clean up the tracker
         if (runtime?.selectedSessionId) {
           removeOpenSession(agentId, runtime.selectedSessionId).catch(() => {});
@@ -187,7 +187,7 @@ export function createAgentLifecycleModule(ctx) {
           ? viewerData.agents.find((agent) => String(agent?.id || '') === viewerAgentId) || null
           : null;
         const viewerConnected = viewerAgent?.connected === true;
-        const processRunning = !!(runtime?.process && runtime.process.exitCode === null);
+        const processRunning = isChildProcessRunning(runtime?.process);
         const ready = !!(runtime?.ready && !runtime?.stopped && processRunning && viewerConnected);
         // The session index can be large. A starting/missing runtime has no
         // agent payload to decorate, so do not reread the index on every

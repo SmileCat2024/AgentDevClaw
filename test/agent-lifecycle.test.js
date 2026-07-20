@@ -10,6 +10,7 @@ function createMockChild() {
   const child = new EventEmitter();
   child.pid = 12345;
   child.exitCode = null;
+  child.signalCode = null;
   child.kill = (signal) => {
     child.exitCode = 0;
     child.stopped = true;
@@ -164,6 +165,23 @@ describe('agent-lifecycle', () => {
       // Both children should have been killed
       assert.equal(child1.stopped, true);
       assert.equal(child2.stopped, true);
+    });
+
+    it('reports stopped after SIGTERM even though the child exitCode stays null', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      child.kill = (signal) => {
+        child.signalCode = signal;
+        child.emit('exit', null, signal);
+      };
+      const runtime = injectRuntime('signal-agent', 'sess-signal', child);
+
+      const status = await mod.stopManagedAgent('signal-agent', 'sess-signal');
+      assert.equal(runtime.stopped, true);
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, 'SIGTERM');
+      assert.equal(status.status, 'stopped');
+      assert.equal(status.signalCode, 'SIGTERM');
     });
   });
 
@@ -420,6 +438,36 @@ describe('agent-lifecycle', () => {
       assert.equal(responseData.lifecycle, 'starting');
       assert.equal(responseData.agent, null);
       assert.equal(metadataReads, 0);
+    });
+
+    it('runtime_status treats signal termination as stopped instead of stopping forever', async () => {
+      const child = createMockChild();
+      child.signalCode = 'SIGTERM';
+      const runtime = injectRuntime('programming-helper', 'session-signal', child);
+      runtime.stopped = true;
+      runtime.ready = true;
+      runtime.viewerAgentId = 'viewer-signal';
+      const mod = createAgentLifecycleModule(createMockCtx({
+        readViewerJson: async () => ({
+          agents: [{ id: 'viewer-signal', connected: false }],
+        }),
+      }));
+      let handler = null;
+      const app = {
+        get: (path, routeHandler) => {
+          if (path === '/protoclaw/runtime_status') handler = routeHandler;
+        },
+        post: () => {}, put: () => {}, delete: () => {},
+      };
+      mod.setupRoutes(app, { json: () => (req, res, next) => next() });
+      let responseData = null;
+      await handler(
+        { query: { agentId: 'programming-helper', sessionId: 'session-signal' } },
+        { status: () => ({ json: () => {} }), json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+      assert.equal(responseData.lifecycle, 'stopped');
+      assert.equal(responseData.ready, false);
     });
   });
 });

@@ -4,6 +4,17 @@ import { NO_SESSION_TOKEN, ASSEMBLY_EXIT_WAIT_MS } from './constants.js';
 export const managedAgents = new Map();
 export const assemblyRuntimeProcesses = new Map();
 
+// ChildProcess.exitCode remains null when a process exits because of a signal.
+// Treat signalCode as an equally authoritative terminal state so SIGTERM does
+// not leave managed runtimes classified as "stopping" forever.
+export function isChildProcessRunning(child) {
+  return !!child && child.exitCode === null && !child.signalCode;
+}
+
+export function isManagedRuntimeRunning(runtime) {
+  return isChildProcessRunning(runtime?.process) && runtime?.stopped !== true;
+}
+
 export function getManagedRuntimeKey(agentId, sessionId = null) {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   const normalizedSessionId = sessionId == null ? NO_SESSION_TOKEN : sanitizeSessionFragment(sessionId);
@@ -19,7 +30,7 @@ export function listAgentRuntimes(agentId) {
 export function pickPrimaryAgentRuntime(agentId) {
   const runtimes = listAgentRuntimes(agentId);
   if (runtimes.length === 0) return null;
-  const running = runtimes.filter((runtime) => runtime?.process && runtime.process.exitCode === null && !runtime.stopped);
+  const running = runtimes.filter(isManagedRuntimeRunning);
   const pool = running.length ? running : runtimes;
   return pool.sort((left, right) => String(right.startedAt || '').localeCompare(String(left.startedAt || '')))[0] || null;
 }
@@ -37,7 +48,7 @@ export function getAssemblyRuntime(sessionId) {
 
 export async function stopAssemblyRuntime(sessionId) {
   const runtime = getAssemblyRuntime(sessionId);
-  if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
+  if (!isManagedRuntimeRunning(runtime)) {
     return { sessionId: sanitizeSessionFragment(sessionId), status: 'stopped' };
   }
 
@@ -62,16 +73,17 @@ export async function stopAssemblyRuntime(sessionId) {
 export function buildStatus(agentId, sessionId = undefined) {
   const runtime = getAgentRuntime(agentId, sessionId);
   if (!runtime) {
-    return { id: agentId, status: 'stopped', pid: null, startedAt: null, exitCode: null, viewerAgentId: null, selectedSessionId: null };
+    return { id: agentId, status: 'stopped', pid: null, startedAt: null, exitCode: null, signalCode: null, viewerAgentId: null, selectedSessionId: null };
   }
 
-  const running = runtime.process && runtime.process.exitCode === null && !runtime.stopped;
+  const running = isManagedRuntimeRunning(runtime);
   return {
     id: agentId,
     status: running ? 'running' : 'stopped',
     pid: running ? runtime.process.pid : null,
     startedAt: runtime.startedAt ?? null,
     exitCode: runtime.exitCode ?? null,
+    signalCode: runtime.signalCode ?? runtime.process?.signalCode ?? null,
     viewerAgentId: running ? (runtime.viewerAgentId ?? null) : null,
     selectedSessionId: runtime.selectedSessionId ?? null,
   };

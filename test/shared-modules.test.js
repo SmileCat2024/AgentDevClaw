@@ -33,6 +33,8 @@ import {
 import {
   getManagedRuntimeKey,
   buildStatus,
+  isChildProcessRunning,
+  isManagedRuntimeRunning,
 } from '../server/shared/agent-access.js';
 
 // ─── constants.js ──────────────────────────────────────────────────
@@ -225,5 +227,20 @@ describe('buildStatus', () => {
     assert.strictEqual(status.status, 'stopped');
     assert.strictEqual(status.pid, null);
     assert.strictEqual(status.viewerAgentId, null);
+  });
+});
+
+describe('managed runtime process state', () => {
+  it('treats a signal-terminated child as stopped even when exitCode is null', () => {
+    const child = { exitCode: null, signalCode: 'SIGTERM' };
+    assert.equal(isChildProcessRunning(child), false);
+    assert.equal(isManagedRuntimeRunning({ process: child, stopped: false }), false);
+  });
+
+  it('requires both an active child and a non-stopped runtime', () => {
+    const child = { exitCode: null, signalCode: null };
+    assert.equal(isChildProcessRunning(child), true);
+    assert.equal(isManagedRuntimeRunning({ process: child, stopped: false }), true);
+    assert.equal(isManagedRuntimeRunning({ process: child, stopped: true }), false);
   });
 });
