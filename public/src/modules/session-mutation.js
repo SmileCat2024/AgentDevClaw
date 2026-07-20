@@ -6,7 +6,7 @@
  * 这套状态机负责追踪 mutation 的生命周期，驱动侧栏渲染。
  *
  * 包含：
- *   - _sessionReplacementMutations: Map 状态
+ *   - _sidebarOperations: 统一侧栏操作状态
  *   - getSessionReplacementMutation: 获取当前 mutation
  *   - beginSessionReplacementMutation: 开始 mutation
  *   - updateSessionReplacementMutation: 更新 mutation 阶段
@@ -27,51 +27,87 @@
  *   invoke
  */
 
-const _sessionReplacementMutations = new Map();
-
 function getSessionReplacementMutation(agentId, sessionId) {
-  return _sessionReplacementMutations.get(`${agentId}::${sessionId}`) || null;
+  if (typeof findSidebarOperation !== 'function') return null;
+  return findSidebarOperation((operation) => (
+    operation.type === 'replacement'
+    && operation.agentId === String(agentId || '').trim()
+    && operation.sourceSessionId === String(sessionId || '').trim()
+  ));
 }
 
-function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary') {
+function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', options = {}) {
   if (!agentId || !sessionId) return null;
-  const key = `${agentId}::${sessionId}`;
-  const mutation = { agentId, sessionId, kind, phase: 'generating', startedAt: Date.now() };
-  _sessionReplacementMutations.set(key, mutation);
-  if (typeof lastAgentListRenderSignature !== 'undefined') lastAgentListRenderSignature = '';
-  if (typeof renderAgentList === 'function') renderAgentList();
-  return mutation;
+  const existing = getSessionReplacementMutation(agentId, sessionId);
+  if (existing) finishSidebarOperation(existing.operationId, 'superseded');
+  const agent = Array.isArray(allAgents) ? allAgents.find((item) => item.id === agentId) : null;
+  const session = Array.isArray(agent?.workspace_sessions?.sessions)
+    ? agent.workspace_sessions.sessions.find((item) => item.id === sessionId)
+    : null;
+  const sourceRuntime = Array.isArray(allAgents) ? allAgents.find((item) => (
+    item?.source !== 'prebuilt'
+    && String(item?.parent_id || '').trim() === String(agentId).trim()
+    && String(item?.active_workspace_session_id || '').trim() === String(sessionId).trim()
+  )) : null;
+  const projectDir = String(options.projectDir || session?.openDirectory || '').trim();
+  return beginSidebarOperation({
+    operationId: options.operationId,
+    type: 'replacement',
+    kind,
+    phase: 'generating',
+    agentId,
+    sourceSessionId: sessionId,
+    sourceRuntimeId: options.sourceRuntimeId || sourceRuntime?.runtime_session_id || sourceRuntime?.runtimeSessionId || sourceRuntime?.id || '',
+    projectDir,
+    projectName: options.projectName || (projectDir && typeof getPathLeaf === 'function' ? getPathLeaf(projectDir) : ''),
+    title: session?.title || '',
+  });
 }
 
 function updateSessionReplacementMutation(agentId, sessionId, updates = {}) {
-  const key = `${agentId}::${sessionId}`;
-  const current = _sessionReplacementMutations.get(key);
-  if (!current) return;
-  _sessionReplacementMutations.set(key, { ...current, ...updates });
-  if (typeof lastAgentListRenderSignature !== 'undefined') lastAgentListRenderSignature = '';
-  if (typeof renderAgentList === 'function') renderAgentList();
+  const current = getSessionReplacementMutation(agentId, sessionId);
+  if (!current) return null;
+  return updateSidebarOperation(current.operationId, updates);
 }
 
 function clearSessionReplacementMutation(agentId, sessionId) {
-  if (!_sessionReplacementMutations.delete(`${agentId}::${sessionId}`)) return;
-  if (typeof lastAgentListRenderSignature !== 'undefined') lastAgentListRenderSignature = '';
-  if (typeof renderAgentList === 'function') renderAgentList();
+  const current = getSessionReplacementMutation(agentId, sessionId);
+  if (!current) return null;
+  return finishSidebarOperation(current.operationId, 'settled');
 }
 
-function settleSessionReplacementMutation(agentId, sessionId, delayMs = 500, attemptsRemaining = 10) {
+function settleSessionReplacementMutation(agentId, sessionId, delayMs = 300, attemptsRemaining = 20) {
   window.setTimeout(async () => {
-    try { await loadAgents(); } catch {}
-    const oldRuntimeStillVisible = Array.isArray(allAgents) && allAgents.some((agent) => (
-      agent?.source !== 'prebuilt'
-      && String(agent?.parent_id || '').trim() === String(agentId).trim()
-      && String(agent?.active_workspace_session_id || '').trim() === String(sessionId).trim()
-      && agent?.connected !== false
-    ));
+    let oldRuntimeStillVisible = true;
+    try {
+      const response = await fetch('/protoclaw/runtime_status?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
+      if (response.ok) {
+        const result = await response.json();
+        oldRuntimeStillVisible = result?.viewerConnected === true || !['stopped', 'missing'].includes(result?.lifecycle);
+      }
+    } catch {}
     if (oldRuntimeStillVisible && attemptsRemaining > 1) {
       settleSessionReplacementMutation(agentId, sessionId, 300, attemptsRemaining - 1);
       return;
     }
+    if (oldRuntimeStillVisible) {
+      updateSessionReplacementMutation(agentId, sessionId, {
+        phase: 'degraded',
+        errorCode: 'source_runtime_still_visible',
+      });
+      return;
+    }
+    const current = getSessionReplacementMutation(agentId, sessionId);
+    if (current?.errorCode === 'target_runtime_not_ready' && !current.targetRuntimeId) {
+      updateSessionReplacementMutation(agentId, sessionId, {
+        phase: 'degraded',
+        errorCode: 'target_runtime_not_ready',
+      });
+      if (typeof loadAgents === 'function') loadAgents().catch(() => {});
+      return;
+    }
     clearSessionReplacementMutation(agentId, sessionId);
+    if (typeof loadAgents === 'function') loadAgents().catch(() => {});
   }, Math.max(0, delayMs));
 }
 
@@ -85,7 +121,7 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
   const original = currentSessions.find((s) => s.id === sessionId) || null;
   if (!original) return null;
 
-  beginSessionReplacementMutation(agentId, sessionId, kind);
+  const mutation = beginSessionReplacementMutation(agentId, sessionId, kind);
 
   const nextSessions = currentSessions.map((s) =>
     s.id === sessionId ? { ...s, archived: true, todo: false } : s,
@@ -100,7 +136,7 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
   lastRenderedWorkspaceHtml = '';
   renderCurrentMainView();
 
-  return () => {
+  const rollback = () => {
     clearSessionReplacementMutation(agentId, sessionId);
     const latestAgent = allAgents.find((item) => item.id === agentId) || null;
     if (!latestAgent) return;
@@ -118,6 +154,8 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
   };
+  rollback.operationId = mutation?.operationId || '';
+  return rollback;
 }
 
 /**
@@ -151,13 +189,21 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
     renderCurrentMainView();
   }
   try {
+    const mutation = getSessionReplacementMutation(agentId, sessionId);
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, sessionId, archived: true }),
+      body: JSON.stringify({
+        agentId,
+        sessionId,
+        archived: true,
+        responseMode: 'delta',
+        operationId: mutation?.operationId || createSidebarOperationId('archive'),
+      }),
     });
     if (!response.ok) throw new Error(await response.text().catch(() => 'archive session failed'));
     const result = await response.json();
+    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
     if (result?.sessions) {
       updateAgentRecord(agentId, {
         workspace_sessions: result.sessions,

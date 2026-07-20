@@ -228,7 +228,7 @@ async function ctxArchiveAndStopRuntime(target) {
         s.id === sessionId ? { ...s, archived: false } : s,
       );
       updateAgentRecord(agentId, {
-        workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
+        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
       });
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
@@ -237,12 +237,19 @@ async function ctxArchiveAndStopRuntime(target) {
       const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, sessionId, archived: false }),
+        body: JSON.stringify({
+          agentId,
+          sessionId,
+          archived: false,
+          responseMode: 'delta',
+          operationId: createSidebarOperationId('unarchive'),
+        }),
       });
       if (!response.ok) {
         throw new Error(await response.text().catch(() => 'unarchive session failed'));
       }
       const result = await response.json();
+      if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
       if (result?.sessions) {
         updateAgentRecord(agentId, {
           workspace_sessions: result.sessions,
@@ -259,7 +266,7 @@ async function ctxArchiveAndStopRuntime(target) {
           s.id === sessionId ? { ...s, archived: true } : s,
         );
         updateAgentRecord(agentId, {
-          workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
+          workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
         });
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
@@ -269,6 +276,19 @@ async function ctxArchiveAndStopRuntime(target) {
     return;
   }
 
+  const projectDir = String(currentSession?.openDirectory || '').trim();
+  const archiveOperation = beginSidebarOperation({
+    type: 'archive-close',
+    kind: 'archive',
+    phase: 'committing',
+    agentId,
+    sourceSessionId: sessionId,
+    sourceRuntimeId: runtimeId || '',
+    projectDir,
+    projectName: projectDir ? getPathLeaf(projectDir) : '',
+    title: currentSession?.title || sessionId,
+  });
+
   // 1. Archive the session first (optimistic + API)
   if (agent) {
     const currentSessions = getWorkspaceSessions(agent);
@@ -276,7 +296,7 @@ async function ctxArchiveAndStopRuntime(target) {
       s.id === sessionId ? { ...s, archived: true } : s,
     );
     updateAgentRecord(agentId, {
-      workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
+      workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
     });
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
@@ -286,12 +306,19 @@ async function ctxArchiveAndStopRuntime(target) {
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, sessionId, archived: true }),
+      body: JSON.stringify({
+        agentId,
+        sessionId,
+        archived: true,
+        responseMode: 'delta',
+        operationId: archiveOperation.operationId,
+      }),
     });
     if (!response.ok) {
       throw new Error(await response.text().catch(() => 'archive session failed'));
     }
     const result = await response.json();
+    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
     if (result?.sessions) {
       updateAgentRecord(agentId, {
         workspace_sessions: result.sessions,
@@ -300,6 +327,10 @@ async function ctxArchiveAndStopRuntime(target) {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
+    updateSidebarOperation(archiveOperation.operationId, {
+      phase: 'source-stopping',
+      serverRevision: result?.revision ?? null,
+    });
   } catch (e) {
     // Revert optimistic archive on failure, then alert
     if (agent) {
@@ -308,11 +339,12 @@ async function ctxArchiveAndStopRuntime(target) {
         s.id === sessionId ? { ...s, archived: false } : s,
       );
       updateAgentRecord(agentId, {
-        workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
+      workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
       });
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
+    finishSidebarOperation(archiveOperation.operationId, 'failed', { errorCode: 'archive_failed' });
     window.alert((currentLanguage === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
     return;
   }
@@ -333,13 +365,16 @@ async function ctxArchiveAndStopRuntime(target) {
       const sId = sessionId || externalAgent?.active_workspace_session_id || null;
       await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
     }
-    await refreshSidebarRuntimeAfterMutation(500);
     // 3. Switch to workspace surface so user sees the updated session list
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       selectWorkspaceSurface(agentId);
     }
+    settleSidebarSourceOperation(archiveOperation.operationId, { agentId, sessionId }).catch(() => {});
   } catch (e) {
     // Session archived successfully but stop failed — still surface the error
+    updateSidebarOperation(archiveOperation.operationId, { phase: 'degraded', errorCode: 'source_stop_failed' });
+    settleSidebarSourceOperation(archiveOperation.operationId, { agentId, sessionId }).catch(() => {});
+    refreshSidebarRuntimeAfterMutation(500).catch(() => {});
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
   }
 }
@@ -363,6 +398,9 @@ async function ctxGenerateTitle(target) {
       throw new Error(await response.text().catch(() => 'Failed to generate title'));
     }
     const result = await response.json();
+    if (typeof applySessionMutationDelta === 'function') {
+      applySessionMutationDelta(ns, result);
+    }
     if (result.ok && result.title) {
       const agent = allAgents.find((item) => item.id === ns);
       if (agent) {
@@ -455,6 +493,9 @@ function ctxRenameSession(target) {
         body: JSON.stringify({ agentId, title: newTitle }),
       });
       const result = await resp.json();
+      if (typeof applySessionMutationDelta === 'function') {
+        applySessionMutationDelta(agentId, result);
+      }
       if (result.ok) {
         nameEl.textContent = newTitle;
         finishEditing();
@@ -496,6 +537,16 @@ async function ctxArchiveSession(target) {
   const agent = allAgents.find((item) => item.id === agentId) || null;
   const session = getWorkspaceSessionById(agent, sessionId);
   const nextArchived = !(session?.archived === true);
+  const archiveOperation = beginSidebarOperation({
+    type: nextArchived ? 'archive' : 'unarchive',
+    kind: nextArchived ? 'archive' : 'unarchive',
+    phase: 'committing',
+    agentId,
+    sourceSessionId: sessionId,
+    projectDir: session?.openDirectory || '',
+    projectName: session?.openDirectory ? getPathLeaf(session.openDirectory) : '',
+    title: session?.title || sessionId,
+  });
 
   // Optimistic update
   if (agent) {
@@ -504,7 +555,7 @@ async function ctxArchiveSession(target) {
       s.id === sessionId ? { ...s, archived: nextArchived } : s,
     );
     updateAgentRecord(agentId, {
-      workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
+      workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
     });
     renderCurrentMainView();
   }
@@ -513,12 +564,19 @@ async function ctxArchiveSession(target) {
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, sessionId, archived: nextArchived }),
+      body: JSON.stringify({
+        agentId,
+        sessionId,
+        archived: nextArchived,
+        responseMode: 'delta',
+        operationId: archiveOperation.operationId,
+      }),
     });
     if (!response.ok) {
       throw new Error(await response.text().catch(() => 'archive session failed'));
     }
     const result = await response.json();
+    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
     if (result?.sessions) {
       updateAgentRecord(agentId, {
         workspace_sessions: result.sessions,
@@ -527,6 +585,7 @@ async function ctxArchiveSession(target) {
     }
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
+    finishSidebarOperation(archiveOperation.operationId, 'settled');
   } catch (e) {
     // Revert on failure
     if (agent) {
@@ -535,11 +594,12 @@ async function ctxArchiveSession(target) {
         s.id === sessionId ? { ...s, archived: !nextArchived } : s,
       );
       updateAgentRecord(agentId, {
-        workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
+      workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
       });
     }
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
+    finishSidebarOperation(archiveOperation.operationId, 'failed', { errorCode: nextArchived ? 'archive_failed' : 'unarchive_failed' });
     window.alert((currentLanguage === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
   }
 }
@@ -559,7 +619,7 @@ async function ctxTodoSession(target) {
       s.id === sessionId ? { ...s, todo: nextTodo } : s,
     );
     updateAgentRecord(agentId, {
-      workspace_sessions: { sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
+      workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
     });
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
@@ -569,12 +629,15 @@ async function ctxTodoSession(target) {
     const response = await fetch('/protoclaw/prebuilt_sessions/todo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, sessionId, todo: nextTodo }),
+      body: JSON.stringify({ agentId, sessionId, todo: nextTodo, responseMode: 'delta' }),
     });
     if (!response.ok) {
       throw new Error(await response.text().catch(() => 'todo session failed'));
     }
     const result = await response.json();
+    if (typeof applySessionMutationDelta === 'function') {
+      applySessionMutationDelta(agentId, result);
+    }
     if (result?.sessions) {
       updateAgentRecord(agentId, {
         workspace_sessions: result.sessions,
@@ -591,7 +654,7 @@ async function ctxTodoSession(target) {
         s.id === sessionId ? { ...s, todo: !nextTodo } : s,
       );
       updateAgentRecord(agentId, {
-        workspace_sessions: { sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
+        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
       });
     }
     lastRenderedWorkspaceHtml = '';

@@ -14,13 +14,14 @@ import {
   getAssemblyWorkspaceDir, normalizeClientAgentId, log,
 } from '../shared/string-helpers.js';
 import {
-  readSessionIndex, updateSessionIndex, writeSessionIndex,
+  readSessionIndex, updateSessionIndex,
   getPrebuiltSessionFilePath,
   normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
 } from '../shared/session-access.js';
 import { resolveSessionModelInfo } from './model-config.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createSessionHandoffHelpers } from './session-handoff-helpers.js';
+import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 
 import {
   META_VERSION,
@@ -400,8 +401,11 @@ async function cleanupEmptySessions(agentId) {
   const toDelete = selectEmptySessions(index.sessions, sessionMessageCounts);
   if (toDelete.length === 0) return 0;
 
-  const updated = resolvePostCleanupState(index, toDelete);
-  await writeSessionIndex(agentId, updated);
+  await updateSessionIndex(agentId, (current) => {
+    const currentIds = new Set(current.sessions.map((session) => session.id));
+    const stillPresent = toDelete.filter((id) => currentIds.has(id));
+    return stillPresent.length > 0 ? resolvePostCleanupState(current, stillPresent) : current;
+  });
 
   for (const id of toDelete) {
     await fs.rm(getPrebuiltSessionFilePath(agentId, id), { force: true }).catch(() => {});
@@ -412,10 +416,15 @@ async function cleanupEmptySessions(agentId) {
 }
 
 async function listPrebuiltSessions(agentId) {
+  const startedAt = Date.now();
   const index = await readSessionIndex(agentId);
+  const indexLoadedAt = Date.now();
   const summaryMap = await buildSessionSummaryMap(agentId);
+  const summariesLoadedAt = Date.now();
   const modelInfoMap = await buildSessionModelInfoMap(agentId);
+  const modelsLoadedAt = Date.now();
   const sessions = await Promise.all(index.sessions.map((record) => summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap)));
+  const sessionsLoadedAt = Date.now();
 
   // ── Batch writeback of stale index metadata ──
   const writebacks = [];
@@ -468,7 +477,24 @@ async function listPrebuiltSessions(agentId) {
     return String(right.id || '').localeCompare(String(left.id || ''));
   });
   const defaultModelInfo = modelInfoMap.default || modelInfoMap.main || {};
+  const perfEvent = {
+    kind: 'list_perf',
+    operation: 'list_sessions',
+    phase: 'completed',
+    agentId: String(agentId || '').slice(0, 128),
+    sessionCount: sessions.length,
+    handoffSummaryCount: summaryMap.size,
+    writebackCount: writebacks.length,
+    indexMs: indexLoadedAt - startedAt,
+    handoffMs: summariesLoadedAt - indexLoadedAt,
+    modelMs: modelsLoadedAt - summariesLoadedAt,
+    sessionsMs: sessionsLoadedAt - modelsLoadedAt,
+    totalMs: Date.now() - startedAt,
+    result: 'success',
+  };
+  void recordSidebarDiagnosticEvent(perfEvent, { source: 'server' });
   return {
+    revision: Number(index.revision) || 0,
     activeSessionId: index.activeSessionId || (sessions[0]?.id ?? null),
     contextLength: defaultModelInfo.contextLength || null,
     compressRatio: defaultModelInfo.compressRatio || 80,
@@ -782,7 +808,7 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
   return summarizePrebuiltSession(agentId, existing);
 }
 
-async function deletePrebuiltSession(agentId, sessionId) {
+async function deletePrebuiltSession(agentId, sessionId, options = {}) {
   const newIndex = await updateSessionIndex(agentId, (index) => {
     const existing = index.sessions.find((session) => session.id === sessionId);
     if (!existing) {
@@ -802,14 +828,25 @@ async function deletePrebuiltSession(agentId, sessionId) {
   // Remove from open-sessions tracker
   removeOpenSession(agentId, sessionId).catch(() => {});
 
-  return {
+  const result = {
+    protocolVersion: 2,
     deletedSessionId: sessionId,
     activeSessionId: newIndex.activeSessionId,
-    sessions: await listPrebuiltSessions(agentId),
+    revision: Number(newIndex.revision) || 0,
+    sessionDelta: {
+      revision: Number(newIndex.revision) || 0,
+      activeSessionId: newIndex.activeSessionId,
+      upsert: [],
+      remove: [sessionId],
+    },
   };
+  if (options.includeSessions !== false) {
+    result.sessions = await listPrebuiltSessions(agentId);
+  }
+  return result;
 }
 
-async function archivePrebuiltSession(agentId, sessionId, archived) {
+async function archivePrebuiltSession(agentId, sessionId, archived, options = {}) {
   const newIndex = await updateSessionIndex(agentId, (index) => {
     const existing = index.sessions.find((session) => session.id === sessionId);
     if (!existing) {
@@ -823,15 +860,27 @@ async function archivePrebuiltSession(agentId, sessionId, archived) {
     return { activeSessionId: index.activeSessionId, sessions };
   });
 
-  return {
+  const updatedSession = newIndex.sessions.find((session) => session.id === sessionId) || null;
+  const result = {
+    protocolVersion: 2,
     archivedSessionId: sessionId,
     archived: !!archived,
     activeSessionId: newIndex.activeSessionId,
-    sessions: await listPrebuiltSessions(agentId),
+    revision: Number(newIndex.revision) || 0,
+    sessionDelta: {
+      revision: Number(newIndex.revision) || 0,
+      activeSessionId: newIndex.activeSessionId,
+      upsert: updatedSession ? [updatedSession] : [],
+      remove: [],
+    },
   };
+  if (options.includeSessions !== false) {
+    result.sessions = await listPrebuiltSessions(agentId);
+  }
+  return result;
 }
 
-async function tagPrebuiltSessionTodo(agentId, sessionId, todo) {
+async function tagPrebuiltSessionTodo(agentId, sessionId, todo, options = {}) {
   const newIndex = await updateSessionIndex(agentId, (index) => {
     const existing = index.sessions.find((session) => session.id === sessionId);
     if (!existing) {
@@ -851,12 +900,24 @@ async function tagPrebuiltSessionTodo(agentId, sessionId, todo) {
     return { activeSessionId: index.activeSessionId, sessions };
   });
 
-  return {
+  const updatedSession = newIndex.sessions.find((session) => session.id === sessionId) || null;
+  const result = {
+    protocolVersion: 2,
     todoSessionId: sessionId,
     todo: !!todo,
     activeSessionId: newIndex.activeSessionId,
-    sessions: await listPrebuiltSessions(agentId),
+    revision: Number(newIndex.revision) || 0,
+    sessionDelta: {
+      revision: Number(newIndex.revision) || 0,
+      activeSessionId: newIndex.activeSessionId,
+      upsert: updatedSession ? [updatedSession] : [],
+      remove: [],
+    },
   };
+  if (options.includeSessions !== false) {
+    result.sessions = await listPrebuiltSessions(agentId);
+  }
+  return result;
 }
 
 async function requirePrebuiltSessionRecord(agentId, sessionId) {
@@ -914,7 +975,7 @@ async function requirePrebuiltAgentForRuntime(agentId) {
   return enrichAgent(metadata);
 }
 
-async function deletePrebuiltProject(agentId, projectId) {
+async function deletePrebuiltProject(agentId, projectId, options = {}) {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   if (!WORKSPACE_SESSION_AGENT_IDS.has(normalizedAgentId)) {
     const error = new Error(`Agent ${agentId} does not support project deletion`);
@@ -946,7 +1007,7 @@ async function deletePrebuiltProject(agentId, projectId) {
 
   let sessionsToDelete = [];
   let nextActiveSessionId = null;
-  await updateSessionIndex(agentId, (index) => {
+  const newIndex = await updateSessionIndex(agentId, (index) => {
     sessionsToDelete = [];
     const remainingSessions = index.sessions.filter((session) => {
       const sessionDir = typeof session.openDirectory === 'string' ? session.openDirectory.trim().toLowerCase().replace(/\\/g, '/') : '';
@@ -971,12 +1032,23 @@ async function deletePrebuiltProject(agentId, projectId) {
     await fs.rm(getPrebuiltSessionFilePath(agentId, session.id), { force: true }).catch(() => {});
   }
 
-  return {
+  const result = {
+    protocolVersion: 2,
     deletedProjectId: projectId,
     deletedSessionIds: sessionsToDelete.map((s) => s.id),
     activeSessionId: nextActiveSessionId,
-    sessions: await listPrebuiltSessions(agentId),
+    revision: Number(newIndex.revision) || 0,
+    sessionDelta: {
+      revision: Number(newIndex.revision) || 0,
+      activeSessionId: nextActiveSessionId,
+      upsert: [],
+      remove: sessionsToDelete.map((session) => session.id),
+    },
   };
+  if (options.includeSessions !== false) {
+    result.sessions = await listPrebuiltSessions(agentId);
+  }
+  return result;
 }
 
 

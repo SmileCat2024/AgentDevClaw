@@ -825,12 +825,16 @@ window.deleteAssemblySessionRecord = async (sessionId) => {
       body: JSON.stringify({
         agentId: agent.id,
         sessionId,
+        responseMode: 'delta',
       }),
     });
     if (!response.ok) {
       throw new Error(await response.text().catch(() => 'delete session failed'));
     }
     const result = await response.json();
+    if (typeof applySessionMutationDelta === 'function') {
+      applySessionMutationDelta(agent.id, result);
+    }
     if (result?.assemblyRuntime?.status === 'stopped' || result?.assemblyRuntime?.status === 'stopping') {
       await loadAgents();
       if (currentRuntimeAgentId) {

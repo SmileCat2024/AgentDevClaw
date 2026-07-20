@@ -25,16 +25,34 @@ const loadedAgentDetailIds = new Set();
 async function loadAgentDetail(agentId) {
   if (!agentId || loadedAgentDetailIds.has(agentId)) return;
   loadedAgentDetailIds.add(agentId);
+  const sidebarSnapshotToken = typeof captureSidebarSnapshotToken === 'function'
+    ? captureSidebarSnapshotToken()
+    : null;
+  let loaded = false;
   try {
     const res = await fetch('/protoclaw/agent_detail?agentId=' + encodeURIComponent(agentId));
     if (!res.ok) return;
     const detail = await res.json();
     const agent = allAgents.find((a) => a.id === agentId);
     if (agent) {
-      Object.assign(agent, detail);
+      const { workspace_sessions: freshSessions, ...otherDetail } = detail || {};
+      Object.assign(agent, otherDetail);
+      if (freshSessions) {
+        agent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
+          ? mergeWorkspaceSessionSnapshots(agent.workspace_sessions || {}, freshSessions, agentId)
+          : freshSessions;
+      }
+      if (sidebarSnapshotToken
+        && typeof isSidebarSnapshotTokenCurrent === 'function'
+        && !isSidebarSnapshotTokenCurrent(sidebarSnapshotToken)) {
+        console.info('[SIDEBAR_OPERATION]', { operation: 'agent_detail', phase: 'stale_snapshot_merged', agentId });
+      }
     }
+    loaded = true;
   } catch (e) {
     console.warn('[Viewer] Failed to load agent detail:', agentId, e);
+  } finally {
+    if (!loaded) loadedAgentDetailIds.delete(agentId);
   }
 }
 

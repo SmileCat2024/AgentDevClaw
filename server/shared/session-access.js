@@ -99,11 +99,15 @@ export async function readSessionIndex(agentId) {
         }))
       : [];
     return {
+      revision: Number.isSafeInteger(Number(data.revision)) && Number(data.revision) >= 0
+        ? Number(data.revision)
+        : 0,
       activeSessionId: sessions.some((session) => session.id === data.activeSessionId) ? data.activeSessionId : null,
       sessions,
     };
   } catch {
     return {
+      revision: 0,
       activeSessionId: null,
       sessions: [],
     };
@@ -168,6 +172,13 @@ export async function writeSessionIndex(agentId, index) {
   }
 }
 
+export function sessionIndexContentSignature(index = {}) {
+  return JSON.stringify({
+    activeSessionId: index?.activeSessionId || null,
+    sessions: Array.isArray(index?.sessions) ? index.sessions : [],
+  });
+}
+
 export async function updateSessionIndex(agentId, fn) {
   const prev = _indexLocks.get(agentId) || Promise.resolve();
   let release;
@@ -176,7 +187,19 @@ export async function updateSessionIndex(agentId, fn) {
   await prev;
   try {
     const index = await readSessionIndex(agentId);
-    const newIndex = await fn(index);
+    const before = sessionIndexContentSignature(index);
+    const proposedIndex = await fn(index);
+    const comparableIndex = {
+      ...(proposedIndex || index),
+      revision: Math.max(0, Number(index.revision) || 0),
+    };
+    if (sessionIndexContentSignature(comparableIndex) === before) {
+      return index;
+    }
+    const newIndex = {
+      ...comparableIndex,
+      revision: Math.max(0, Number(index.revision) || 0) + 1,
+    };
     await writeSessionIndex(agentId, newIndex);
     return newIndex;
   } finally {
@@ -251,6 +274,6 @@ export function readSessionIndexSync(agentId) {
   try {
     return JSON.parse(readFileSync(indexPath, 'utf8'));
   } catch {
-    return { sessions: [] };
+    return { revision: 0, sessions: [] };
   }
 }

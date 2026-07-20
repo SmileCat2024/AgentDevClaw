@@ -78,6 +78,7 @@ function loadCtxMenuItems(overrides = {}) {
   ctx.window.confirm = () => false;
   ctx.window.alert = () => {};
 
+  ctx.loadSource('public/src/modules/sidebar-operations.js');
   ctx.loadSource('public/src/modules/session-mutation.js');
   ctx.loadSource('public/src/modules/ctx-menu-items.js');
   return { ctx, calls };
@@ -197,8 +198,9 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
 describe('ctx-menu-items: getSessionReplacementMutation', () => {
   it('found → mutation object', () => {
     const { ctx } = loadCtxMenuItems();
-    ctx.run(`_sessionReplacementMutations.set('agent1::sess1', {
-      agentId: 'agent1', sessionId: 'sess1', kind: 'summary', phase: 'generating', startedAt: 12345,
+    ctx.run(`beginSidebarOperation({
+      operationId: 'summary:test', type: 'replacement', agentId: 'agent1',
+      sourceSessionId: 'sess1', kind: 'summary', phase: 'generating', startedAt: 12345,
     })`);
     const result = ctx.run(`getSessionReplacementMutation('agent1', 'sess1')`);
     assert.equal(result.agentId, 'agent1');

@@ -322,6 +322,7 @@ describe('agent-lifecycle', () => {
       assert.ok(paths.includes('/protoclaw/get_prebuilt_agents'));
       assert.ok(paths.includes('/protoclaw/get_agents_status'));
       assert.ok(paths.includes('/protoclaw/get_connected_agents'));
+      assert.ok(paths.includes('/protoclaw/runtime_status'));
       assert.ok(paths.includes('/protoclaw/start_agent'));
       assert.ok(paths.includes('/protoclaw/stop_agent'));
       assert.ok(paths.includes('/protoclaw/restart_agent'));
@@ -346,6 +347,79 @@ describe('agent-lifecycle', () => {
       assert.equal(responseData.ok, true);
       assert.ok(responseData.appPort);
       assert.ok(responseData.viewerPort);
+    });
+
+    it('runtime_status returns only the requested ready runtime', async () => {
+      const runtime = injectRuntime('programming-helper', 'session-target', createMockChild());
+      runtime.ready = true;
+      runtime.viewerAgentId = 'viewer-target';
+      const mod = createAgentLifecycleModule(createMockCtx({
+        readViewerJson: async () => ({
+          agents: [{
+            id: 'viewer-target',
+            name: 'Viewer Target',
+            connected: true,
+            messageCount: 4,
+            connectionInfo: 'viewer://target',
+          }],
+        }),
+        readWorkspaceSessionMeta: async () => ({
+          ...EMPTY_SESSION_META,
+          active_workspace_session_id: 'session-target',
+          active_workspace_session_title: 'Target Session',
+          active_workspace_display_name: 'Target Session',
+        }),
+      }));
+      let handler = null;
+      const app = {
+        get: (path, routeHandler) => {
+          if (path === '/protoclaw/runtime_status') handler = routeHandler;
+        },
+        post: () => {}, put: () => {}, delete: () => {},
+      };
+      mod.setupRoutes(app, { json: () => (req, res, next) => next() });
+      let responseData = null;
+      await handler(
+        { query: { agentId: 'programming-helper', sessionId: 'session-target', operationId: 'create:test' } },
+        { status: () => ({ json: () => {} }), json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+      assert.equal(responseData.operationId, 'create:test');
+      assert.equal(responseData.lifecycle, 'ready');
+      assert.equal(responseData.ready, true);
+      assert.equal(responseData.agent.id, 'viewer-target');
+      assert.equal(responseData.agent.parent_id, 'programming-helper');
+      assert.equal(responseData.agent.active_workspace_session_id, 'session-target');
+    });
+
+    it('runtime_status does not scan session metadata while the Viewer runtime is still absent', async () => {
+      const runtime = injectRuntime('programming-helper', 'session-starting', createMockChild());
+      runtime.viewerAgentId = 'viewer-not-connected';
+      let metadataReads = 0;
+      const mod = createAgentLifecycleModule(createMockCtx({
+        readViewerJson: async () => ({ agents: [] }),
+        readWorkspaceSessionMeta: async () => {
+          metadataReads += 1;
+          return { ...EMPTY_SESSION_META };
+        },
+      }));
+      let handler = null;
+      const app = {
+        get: (path, routeHandler) => {
+          if (path === '/protoclaw/runtime_status') handler = routeHandler;
+        },
+        post: () => {}, put: () => {}, delete: () => {},
+      };
+      mod.setupRoutes(app, { json: () => (req, res, next) => next() });
+      let responseData = null;
+      await handler(
+        { query: { agentId: 'programming-helper', sessionId: 'session-starting' } },
+        { status: () => ({ json: () => {} }), json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+      assert.equal(responseData.lifecycle, 'starting');
+      assert.equal(responseData.agent, null);
+      assert.equal(metadataReads, 0);
     });
   });
 });

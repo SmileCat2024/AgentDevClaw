@@ -575,7 +575,7 @@ async function _setThreadArchived(thread, archived, button = null) {
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: thread.workspaceId, sessionId, archived }),
+      body: JSON.stringify({ agentId: thread.workspaceId, sessionId, archived, responseMode: 'delta' }),
     });
     if (!response.ok) {
       const message = await response.text().catch(() => '');

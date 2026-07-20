@@ -163,8 +163,12 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     const disconnected = entry.status === 'disconnected';
     const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
     const restarting = restartingRuntimeIds.has(entry.runtimeId);
-    const retiring = !!entry.replacementMutation;
+    const retiring = !!entry.replacementMutation || entry.sidebarOperation?.type === 'archive-close';
     const replacementPending = entry.pendingReplacement === true;
+    const operationPending = entry.pendingOperation === true;
+    const deleting = entry.deleting === true;
+    const operationDegraded = entry.sidebarOperation?.phase === 'degraded';
+    const targetStartDegraded = operationDegraded && entry.sidebarOperation?.errorCode === 'target_runtime_not_ready';
     const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
     const itemClass = [
       'agent-item',
@@ -175,20 +179,23 @@ function renderSidebarChildItems(entries, ownerAgentId) {
       restarting ? 'restarting' : '',
       retiring ? 'retiring' : '',
       replacementPending ? 'replacement-pending' : '',
+      operationPending ? 'operation-pending' : '',
+      deleting ? 'retiring' : '',
+      operationDegraded ? 'disconnected' : '',
       justFinished ? 'just-finished' : '',
     ].filter(Boolean).join(' ');
     return `
       <div
         class="${itemClass}"
         data-agent-id="${escapeHtml(entry.runtimeId)}"
-        data-agent-disabled="${replacementPending ? 'true' : 'false'}"
+        data-agent-disabled="${replacementPending || operationPending || deleting ? 'true' : 'false'}"
         data-agent-prebuilt="false"
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
         data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
       >
         <div class="agent-line">
           <span class="agent-status-dot"></span>
-          <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(currentLanguage === 'zh' ? '正在归档' : 'Archiving')}</span>` : ''}</div>
+          <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(targetStartDegraded ? (currentLanguage === 'zh' ? '新会话启动未完成' : 'New session start incomplete') : operationDegraded ? (currentLanguage === 'zh' ? '关闭未完成' : 'Close incomplete') : (currentLanguage === 'zh' ? '正在关闭' : 'Closing'))}</span>` : deleting ? `<span class="agent-runtime-transition-label">${escapeHtml(operationDegraded ? (currentLanguage === 'zh' ? '删除未完成' : 'Delete incomplete') : (currentLanguage === 'zh' ? '正在删除' : 'Deleting'))}</span>` : ''}</div>
         </div>
       </div>
     `;
@@ -377,11 +384,32 @@ async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {
   throw new Error(`Timed out waiting for runtime session: ${agentId}`);
 }
 
+async function waitForTargetRuntimeSession(agentId, sessionId, attempts = 50, options = {}) {
+  const operationId = String(options.operationId || '').trim();
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const params = new URLSearchParams({ agentId, sessionId });
+    if (operationId) params.set('operationId', operationId);
+    const response = await fetch('/protoclaw/runtime_status?' + params.toString());
+    if (response.ok) {
+      const result = await response.json();
+      if (result?.ready === true && result?.agent) return result.agent;
+      if (result?.lifecycle === 'stopped' && attempt > 2) {
+        throw new Error(`Runtime stopped before becoming ready: ${agentId}/${sessionId}`);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(`Timed out waiting for runtime session: ${agentId}/${sessionId}`);
+}
+
 async function loadAgents() {
   if (loadAgentsInFlight) {
     return loadAgentsInFlight;
   }
   const _t0 = performance.now();
+  const sidebarSnapshotToken = typeof captureSidebarSnapshotToken === 'function'
+    ? captureSidebarSnapshotToken()
+    : null;
   const task = (async () => {
   try {
     const [connectedAgents, res] = await Promise.all([
@@ -389,6 +417,10 @@ async function loadAgents() {
       fetch('/api/agents'),
     ]);
     const data = res.ok ? await res.json().catch(() => ({ agents: [], currentAgentId: null })) : { agents: [], currentAgentId: null };
+    if (sidebarSnapshotToken && typeof isSidebarSnapshotTokenCurrent === 'function' && !isSidebarSnapshotTokenCurrent(sidebarSnapshotToken)) {
+      window.setTimeout(() => loadAgents().catch(() => {}), 25);
+      return { stale: true };
+    }
     const runtimeAgents = data.agents || [];
     const runtimeById = new Map(runtimeAgents.map((agent) => [agent.id, agent]));
     const prevByAgentId = new Map(allAgents.map((a) => [a.id, a]));
@@ -427,35 +459,11 @@ async function loadAgents() {
               // so always use the fresh value to avoid losing group chat mapping.
               ...(agent.workspace_state?.gcChats ? { gcChats: agent.workspace_state.gcChats } : {}),
             },
-            // Preserve prev sessions (rich data from loadAgentDetail such as
-            // contextLength / compressRatio), but merge in any sessions that
-            // appeared on the server since the last loadAgentDetail call
-            // (e.g. group-chat dispatch creates new sessions at runtime).
-            workspace_sessions: {
-              ...(prev.workspace_sessions || {}),
-              sessions: (() => {
-                const prevSessions = prev.workspace_sessions?.sessions || [];
-                const freshSessions = agent.workspace_sessions?.sessions || [];
-                if (freshSessions.length === 0) return prevSessions;
-                const prevIds = new Set(prevSessions.map((s) => s.id));
-                // Enrich new LIGHT records (from getConnectedAgents) with
-                // top-level model info so context bar doesn't flash defaults
-                // before the next workspace session refresh provides FULL data.
-                const prevCl = prev.workspace_sessions?.contextLength;
-                const prevCr = prev.workspace_sessions?.compressRatio;
-                const newSessions = freshSessions.filter((s) => !prevIds.has(s.id))
-                  .map((s) => ({
-                    ...s,
-                    ...(s.contextLength == null && Number.isFinite(prevCl) && prevCl > 0 ? { contextLength: prevCl } : {}),
-                    ...(s.compressRatio == null && Number.isFinite(prevCr) && prevCr > 0 ? { compressRatio: prevCr } : {}),
-                  }));
-                return [...prevSessions, ...newSessions];
-              })(),
-              ...(agent.workspace_sessions?.activeSessionId
-                && agent.workspace_sessions.activeSessionId !== prev.workspace_sessions?.activeSessionId
-                ? { activeSessionId: agent.workspace_sessions.activeSessionId }
-                : {}),
-            },
+            // The light snapshot is authoritative for membership/status when
+            // its revision is current; merge preserves rich fields by ID.
+            workspace_sessions: typeof mergeWorkspaceSessionSnapshots === 'function'
+              ? mergeWorkspaceSessionSnapshots(prev.workspace_sessions, agent.workspace_sessions, agent.id)
+              : prev.workspace_sessions,
           } : {}),
           // 当新数据的 workspace_sessions.sessions 为空但旧数据有值时，保留旧 sessions 避免闪空
           ...(!loadedAgentDetailIds.has(agent.id) && prev?.workspace_sessions?.sessions?.length > 0
@@ -674,8 +682,9 @@ function getAgentListRenderSignature() {
     pending: Array.from(pendingPrebuiltAgentIds || []).sort(),
     restarting: Array.from(restartingRuntimeIds || []).sort(),
     recentlyFinished: Array.from(_recentlyFinishedRuntimes).sort(),
-    sessionReplacements: typeof _sessionReplacementMutations !== 'undefined'
-      ? Array.from(_sessionReplacementMutations.values()).map((item) => ({ ...item }))
+    sidebarOperationVersion: typeof getSidebarOperationVersion === 'function' ? getSidebarOperationVersion() : 0,
+    sessionReplacements: typeof listSidebarOperations === 'function'
+      ? listSidebarOperations().map((item) => ({ ...item }))
       : [],
     agents: (Array.isArray(allAgents) ? allAgents : []).map((agent) => {
       const rid = normalizeAgentIdentity(getAgentRuntimeId(agent));
@@ -689,6 +698,7 @@ function getAgentListRenderSignature() {
         callActive: agent?.callActive === true,
         calling: rid !== '' && _agentCallActive.get(rid) === true,
         activeSessionId: normalizeAgentIdentity(agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId),
+        workspaceRevision: Number(agent?.workspace_sessions?.revision) || 0,
         displayName: agent?.active_workspace_display_name || '',
         sessionTitle: agent?.active_workspace_session_title || '',
       };
@@ -897,8 +907,10 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
         agentName: action.agentName || '',
         openDirectory: action.openDirectory || '',
         targetDir: action.targetDir || '',
+        operationId: action.operationId || '',
+        responseMode: 'delta',
       }
-    : { agentId, sessionId: action.sessionId };
+    : { agentId, sessionId: action.sessionId, operationId: action.operationId || '', responseMode: 'delta' };
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -946,7 +958,11 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
   // Archive-and-replace requires the synchronous server response because it
   // carries the authoritative archive outcome. The live command path only
   // reports that a successor appeared and cannot safely confirm archive state.
-  if (isLiveCurrentSession && strategy && !options.archiveOriginal) {
+  // The live command path has no operation-correlated target session id and
+  // historically polled the entire agent/session projection once per second.
+  // Keep it as an explicit compatibility escape hatch; normal UI actions use
+  // the synchronous, operation-correlated endpoint below.
+  if (isLiveCurrentSession && strategy && !options.archiveOriginal && options.useLiveCommand === true) {
     const inputReqRes = await fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/input-requests`);
     const inputRequests = inputReqRes.ok ? await inputReqRes.json().catch(() => []) : [];
     const primaryRequest = Array.isArray(inputRequests) ? inputRequests[0] : null;
@@ -1010,6 +1026,8 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
       ...(options.archiveOriginal ? { archiveOriginal: true } : {}),
       ...(options.reason ? { reason: options.reason } : {}),
       ...(options.trimCutRounds != null ? { trimCutRounds: options.trimCutRounds } : {}),
+      operationId: options.operationId || createSidebarOperationId(options.reason === 'trim' ? 'trim' : 'summary'),
+      responseMode: 'delta',
     }),
   });
   if (!resumeResponse.ok) {
@@ -1659,19 +1677,39 @@ deleteSessionAction.addEventListener('click', async () => {
   closeSessionContextMenu();
 
   const targetAgent = allAgents.find((item) => item.id === pendingAgentId) || null;
-  const affectedRuntimeId = targetAgent?.runtime_session_id || targetAgent?.runtimeSessionId || null;
+  const currentSessions = getWorkspaceSessions(targetAgent);
+  const deletedSession = currentSessions.find((session) => session?.id === pendingSessionId) || null;
+  const deletedWasActive = pendingSessionId === (targetAgent?.active_workspace_session_id || targetAgent?.workspace_sessions?.activeSessionId || null);
+  const runtimeAgent = allAgents.find((item) => (
+    item?.source !== 'prebuilt'
+    && String(item?.parent_id || '') === String(pendingAgentId)
+    && String(item?.active_workspace_session_id || '') === String(pendingSessionId)
+  )) || null;
+  const affectedRuntimeId = runtimeAgent?.runtime_session_id
+    || runtimeAgent?.runtimeSessionId
+    || runtimeAgent?.id
+    || (deletedWasActive ? (targetAgent?.runtime_session_id || targetAgent?.runtimeSessionId || null) : null);
+  const deleteOperation = beginSidebarOperation({
+    type: 'delete',
+    kind: 'delete',
+    phase: 'committing',
+    agentId: pendingAgentId,
+    sourceSessionId: pendingSessionId,
+    sourceRuntimeId: affectedRuntimeId || '',
+    projectDir: deletedSession?.openDirectory || '',
+    projectName: deletedSession?.openDirectory ? getPathLeaf(deletedSession.openDirectory) : '',
+    title: deletedSession?.title || pendingSessionId,
+  });
   // Clear cached data for the deleted session's runtime
   if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
-  const deletedWasActive = pendingSessionId === (targetAgent?.active_workspace_session_id || targetAgent?.workspace_sessions?.activeSessionId || null);
 
   if (deletedWasActive) {
     applyManagedPrebuiltAgent(pendingAgentId, null);
   }
-  const currentSessions = getWorkspaceSessions(targetAgent);
   const remainingSessions = currentSessions.filter((s) => s.id !== pendingSessionId);
   const nextActiveId = remainingSessions.length > 0 ? (targetAgent?.active_workspace_session_id === pendingSessionId ? remainingSessions[0].id : targetAgent?.active_workspace_session_id) : null;
   updateAgentRecord(pendingAgentId, {
-    workspace_sessions: { sessions: remainingSessions, activeSessionId: nextActiveId },
+    workspace_sessions: { ...(targetAgent?.workspace_sessions || {}), sessions: remainingSessions, activeSessionId: nextActiveId },
     active_workspace_session_id: nextActiveId,
   });
 
@@ -1691,12 +1729,15 @@ deleteSessionAction.addEventListener('click', async () => {
       body: JSON.stringify({
         agentId: pendingAgentId,
         sessionId: pendingSessionId,
+        responseMode: 'delta',
+        operationId: deleteOperation.operationId,
       }),
     });
     if (!response.ok) {
       throw new Error(await response.text().catch(() => 'delete session failed'));
     }
     const result = await response.json();
+    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(pendingAgentId, result);
 
     if (result?.deleted?.sessions) {
       updateAgentRecord(pendingAgentId, {
@@ -1706,6 +1747,15 @@ deleteSessionAction.addEventListener('click', async () => {
     }
     if (result?.agent) {
       applyManagedPrebuiltAgent(pendingAgentId, result.agent);
+    }
+    if (affectedRuntimeId) {
+      updateSidebarOperation(deleteOperation.operationId, {
+        phase: 'source-stopping',
+        serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
+      });
+      settleSidebarSourceOperation(deleteOperation.operationId).catch(() => {});
+    } else {
+      finishSidebarOperation(deleteOperation.operationId, 'settled');
     }
 
     const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
@@ -1722,11 +1772,12 @@ deleteSessionAction.addEventListener('click', async () => {
     renderCurrentMainView();
   } catch (e) {
     updateAgentRecord(pendingAgentId, {
-      workspace_sessions: { sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
+      workspace_sessions: { ...(targetAgent?.workspace_sessions || {}), sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
       active_workspace_session_id: targetAgent?.active_workspace_session_id,
     });
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
+    finishSidebarOperation(deleteOperation.operationId, 'failed', { errorCode: 'delete_failed' });
     window.alert(t('delete_session_failed') + (e && e.message ? e.message : e));
   }
 });
@@ -1767,12 +1818,20 @@ deleteProjectAction.addEventListener('click', () => {
         const response = await fetch('/protoclaw/prebuilt_project/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agentId: pendingAgentId, projectId: pendingProjectId }),
+          body: JSON.stringify({
+            agentId: pendingAgentId,
+            projectId: pendingProjectId,
+            responseMode: 'delta',
+            operationId: createSidebarOperationId('delete-project'),
+          }),
         });
         if (!response.ok) {
           throw new Error(await response.text().catch(() => 'delete project failed'));
         }
         const result = await response.json();
+        if (typeof applySessionMutationDelta === 'function') {
+          applySessionMutationDelta(pendingAgentId, result?.deleted || result);
+        }
         if (result?.deleted?.sessions) {
           updateAgentRecord(pendingAgentId, {
             workspace_sessions: result.deleted.sessions,
@@ -1835,7 +1894,7 @@ deleteProjectAction.addEventListener('click', () => {
             await fetch('/protoclaw/prebuilt_sessions/delete', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ agentId: pendingAgentId, sessionId: run.id }),
+              body: JSON.stringify({ agentId: pendingAgentId, sessionId: run.id, responseMode: 'delta' }),
             }).catch(() => {});
           }
           await window.deleteSavedAssemblyConfig(pendingProjectId);
@@ -1865,12 +1924,17 @@ deleteProjectAction.addEventListener('click', () => {
           body: JSON.stringify({
             agentId: pendingAgentId,
             projectId: pendingProjectId,
+            responseMode: 'delta',
+            operationId: createSidebarOperationId('delete-project'),
           }),
         });
         if (!response.ok) {
           throw new Error(await response.text().catch(() => 'delete project failed'));
         }
         const result = await response.json();
+        if (typeof applySessionMutationDelta === 'function') {
+          applySessionMutationDelta(pendingAgentId, result?.deleted || result);
+        }
         if (result?.deleted?.sessions) {
           updateAgentRecord(pendingAgentId, {
             workspace_sessions: result.deleted.sessions,
@@ -2295,10 +2359,13 @@ async function poll() {
                   return s;
                 });
               }
+              const mergedSessions = typeof mergeWorkspaceSessionSnapshots === 'function'
+                ? mergeWorkspaceSessionSnapshots(currentWs, freshSessions, wsHostAgent.id)
+                : freshSessions;
               const prevSig = JSON.stringify(currentWs || {});
-              const nextSig = JSON.stringify(freshSessions);
+              const nextSig = JSON.stringify(mergedSessions);
               if (prevSig !== nextSig) {
-                wsHostAgent.workspace_sessions = freshSessions;
+                wsHostAgent.workspace_sessions = mergedSessions;
                 if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
                   // 群聊工作空间：避免整个 workspace DOM 重建导致输入框失焦/内容丢失，
                   // 改用轻量刷新（只更新左侧群聊列表）
@@ -2545,7 +2612,9 @@ async function poll() {
                   && !(Number.isFinite(freshSessions.compressRatio) && freshSessions.compressRatio > 0)) {
                 freshSessions.compressRatio = prevCr;
               }
-              wsHostAgent.workspace_sessions = freshSessions;
+              wsHostAgent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
+                ? mergeWorkspaceSessionSnapshots(currentWs, freshSessions, wsHostAgent.id)
+                : freshSessions;
               if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(wsHostAgent)) {
                 renderCurrentMainView();
               } else {

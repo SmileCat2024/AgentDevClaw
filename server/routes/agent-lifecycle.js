@@ -10,6 +10,7 @@ import { sendIPCtoSession } from '../shared/ipc.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createConnectedAgentsQuery } from './agent-connected.js';
 import { createAgentStartupFns } from './agent-startup.js';
+import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 
 // ── Agent Lifecycle (orchestration layer) ────────────────────────
 // This module wires together three concerns:
@@ -139,14 +140,106 @@ export function createAgentLifecycleModule(ctx) {
     });
 
     app.get('/protoclaw/get_connected_agents', async (_req, res, next) => {
+      const startedAt = Date.now();
       try {
-        res.json(await getConnectedAgents());
+        const agents = await getConnectedAgents();
+        res.json(agents);
+        void recordSidebarDiagnosticEvent({
+          kind: 'read_perf',
+          operation: 'get_connected_agents',
+          phase: 'completed',
+          durationMs: Date.now() - startedAt,
+          agentCount: agents.length,
+          responseBytes: Number(res.getHeader?.('Content-Length')) || 0,
+          result: 'success',
+        }, { source: 'server' });
+      } catch (error) {
+        void recordSidebarDiagnosticEvent({
+          kind: 'read_perf',
+          operation: 'get_connected_agents',
+          phase: 'failed',
+          durationMs: Date.now() - startedAt,
+          result: 'failed',
+          errorCode: error?.code || 'connected_agents_failed',
+        }, { source: 'server' });
+        next(error);
+      }
+    });
+
+    // Targeted runtime readiness query. Unlike get_connected_agents this does
+    // not enumerate every prebuilt session, so creating/opening one session
+    // does not depend on the size of the entire session history.
+    app.get('/protoclaw/runtime_status', async (req, res, next) => {
+      try {
+        const agentId = String(req.query.agentId || '').trim();
+        const sessionId = String(req.query.sessionId || '').trim();
+        if (!agentId || !sessionId) {
+          res.status(400).json({ error: 'agentId and sessionId are required' });
+          return;
+        }
+        const runtime = getAgentRuntime(agentId, sessionId);
+        const status = buildStatus(agentId, sessionId);
+        const viewerAgentId = String(runtime?.viewerAgentId || status.viewerAgentId || '').trim();
+        const viewerData = viewerAgentId
+          ? await readViewerJson('/api/agents').catch(() => ({ agents: [] }))
+          : { agents: [] };
+        const viewerAgent = Array.isArray(viewerData?.agents)
+          ? viewerData.agents.find((agent) => String(agent?.id || '') === viewerAgentId) || null
+          : null;
+        const viewerConnected = viewerAgent?.connected === true;
+        const processRunning = !!(runtime?.process && runtime.process.exitCode === null);
+        const ready = !!(runtime?.ready && !runtime?.stopped && processRunning && viewerConnected);
+        // The session index can be large. A starting/missing runtime has no
+        // agent payload to decorate, so do not reread the index on every
+        // readiness poll; resolve metadata only for the ready response.
+        const meta = ready ? await readWorkspaceSessionMeta(agentId, sessionId) : null;
+        const lifecycle = !runtime
+          ? 'missing'
+          : runtime.stopped && processRunning
+            ? 'stopping'
+            : !processRunning
+              ? 'stopped'
+              : ready
+                ? 'ready'
+                : 'starting';
+        res.json({
+          operationId: String(req.query.operationId || '').trim() || null,
+          agentId,
+          sessionId,
+          lifecycle,
+          ready,
+          viewerConnected,
+          status,
+          agent: viewerAgent ? {
+            id: viewerAgent.id,
+            name: meta?.active_workspace_display_name
+              || meta?.active_workspace_agent_name
+              || meta?.active_workspace_session_title
+              || viewerAgent.name,
+            description: viewerAgent.description || '',
+            status: viewerConnected ? 'running' : 'stopped',
+            source: 'child',
+            parent_id: agentId,
+            active_workspace_session_id: sessionId,
+            active_workspace_session_form_id: meta?.active_workspace_session_form_id || null,
+            active_workspace_session_title: meta?.active_workspace_session_title || '',
+            active_workspace_agent_name: meta?.active_workspace_agent_name || '',
+            active_workspace_display_name: meta?.active_workspace_display_name || '',
+            connection_info: viewerAgent.connectionInfo || 'viewer://127.0.0.1:2026',
+            pid: viewerAgent.pid || runtime?.process?.pid || null,
+            runtime_session_id: viewerAgent.id,
+            message_count: viewerAgent.messageCount ?? 0,
+            created_at: viewerAgent.createdAt ?? runtime?.startedAt ?? null,
+            connected: viewerConnected,
+          } : null,
+        });
       } catch (error) {
         next(error);
       }
     });
 
     app.get('/protoclaw/agent_detail', async (req, res, next) => {
+      const startedAt = Date.now();
       try {
         const agentId = String(req.query.agentId || '').trim();
         if (!agentId) {
@@ -165,7 +258,28 @@ export function createAgentLifecycleModule(ctx) {
           workspace_data: enriched.workspace_data || {},
           workspace_state: enriched.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
         });
+        void recordSidebarDiagnosticEvent({
+          kind: 'read_perf',
+          operation: 'agent_detail',
+          phase: 'completed',
+          agentId,
+          durationMs: Date.now() - startedAt,
+          sessionCount: Array.isArray(enriched.workspace_sessions?.sessions)
+            ? enriched.workspace_sessions.sessions.length
+            : 0,
+          responseBytes: Number(res.getHeader?.('Content-Length')) || 0,
+          result: 'success',
+        }, { source: 'server' });
       } catch (error) {
+        void recordSidebarDiagnosticEvent({
+          kind: 'read_perf',
+          operation: 'agent_detail',
+          phase: 'failed',
+          agentId: String(req.query.agentId || '').trim(),
+          durationMs: Date.now() - startedAt,
+          result: 'failed',
+          errorCode: error?.code || 'agent_detail_failed',
+        }, { source: 'server' });
         next(error);
       }
     });

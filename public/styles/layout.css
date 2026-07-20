@@ -322,12 +322,14 @@ body[data-theme="light"] .agent-icon {
   opacity: 0.58;
 }
 
-.agent-runtime-item.replacement-pending {
+.agent-runtime-item.replacement-pending,
+.agent-runtime-item.operation-pending {
   cursor: default;
   opacity: 0.78;
 }
 
-.agent-runtime-item.replacement-pending .agent-status-dot {
+.agent-runtime-item.replacement-pending .agent-status-dot,
+.agent-runtime-item.operation-pending .agent-status-dot {
   background: var(--accent-color);
   animation: restart-pulse 1.2s ease-in-out infinite;
 }

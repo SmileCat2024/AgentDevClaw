@@ -20,6 +20,7 @@ function createArchiveSandbox() {
   ctx.renderCurrentMainView = () => {
     ctx.renderCount += 1;
   };
+  ctx.loadSource('public/src/modules/sidebar-operations.js');
   ctx.loadSource('public/src/modules/session-mutation.js');
   ctx.loadSource('public/src/modules/ctx-menu-items.js');
   return ctx;
@@ -110,5 +111,35 @@ describe('session archive optimistic helper', () => {
     assert.equal(result.session.archived, false);
     assert.equal(result.session.todo, true);
     assert.equal(ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`), null);
+  });
+
+  it('does not hide a target-readiness failure merely because the source stopped', async () => {
+    const ctx = createArchiveSandbox();
+    ctx.fetch = async () => ({
+      ok: true,
+      json: async () => ({ lifecycle: 'missing', viewerConnected: false }),
+    });
+    ctx.loadAgents = async () => {};
+    ctx.window.setTimeout = (callback) => {
+      Promise.resolve().then(callback);
+      return 1;
+    };
+    ctx.run(`
+      allAgents = [{
+        id: 'programming-helper',
+        workspace_sessions: { activeSessionId: 'session-1', sessions: [{ id: 'session-1' }] }
+      }];
+      beginSessionReplacementMutation('programming-helper', 'session-1', 'summary');
+      updateSessionReplacementMutation('programming-helper', 'session-1', {
+        phase: 'source-stopping',
+        targetSessionId: 'session-2',
+        errorCode: 'target_runtime_not_ready'
+      });
+      settleSessionReplacementMutation('programming-helper', 'session-1', 0, 1);
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const operation = ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`);
+    assert.equal(operation.phase, 'degraded');
+    assert.equal(operation.errorCode, 'target_runtime_not_ready');
   });
 });

@@ -209,6 +209,21 @@ window.submitTrimCompact = async () => {
   if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
     archiveRollback = markSessionArchivedForMutation(agentId, sessionId, 'trim');
   }
+  const sourceAgent = allAgents.find((item) => item.id === agentId) || null;
+  const sourceSession = getWorkspaceSessionById(sourceAgent, sessionId);
+  const trimOperation = archiveRollback?.operationId
+    ? getSidebarOperation(archiveRollback.operationId)
+    : beginSidebarOperation({
+        type: 'create',
+        kind: 'trim',
+        phase: 'generating',
+        agentId,
+        sourceSessionId: sessionId,
+        sourceRuntimeId: _oldRuntimeId || '',
+        projectDir: sourceSession?.openDirectory || '',
+        projectName: getPathLeaf(sourceSession?.openDirectory || ''),
+        title: sourceSession?.title || '',
+      });
 
   try {
     const trimmedCount = rounds.filter(r => r.suggestedTrim).length;
@@ -216,43 +231,71 @@ window.submitTrimCompact = async () => {
       reason: 'trim',
       trimCutRounds: trimmedCount,
       archiveOriginal: archiveAfter,
+      operationId: trimOperation?.operationId || '',
     });
+    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
     const archiveSucceeded = !archiveAfter || result?.archive?.succeeded === true;
     if (!archiveSucceeded && archiveRollback) {
       archiveRollback();
       archiveRollback = null;
     }
-    if (result?.agent) {
-      applyManagedPrebuiltAgent(agentId, result.agent);
+    const targetSessionId = String(result?.session?.id || '').trim();
+    updateSidebarOperation(trimOperation?.operationId, {
+      phase: 'target-starting',
+      targetSessionId,
+      title: result?.session?.title || trimOperation?.title || '',
+      serverRevision: result?.revision ?? null,
+    });
+    let readyAgent = null;
+    try {
+      readyAgent = await waitForSidebarTargetRuntime(trimOperation?.operationId, agentId, targetSessionId, result);
+    } catch (error) {
+      console.error('Trim target runtime is not ready:', error);
     }
-    await loadAgents();
+    const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
+    const nextRuntimeId = connectedTarget?.runtime_session_id
+      || connectedTarget?.runtimeSessionId
+      || connectedTarget?.id
+      || null;
+    if (archiveAfter && archiveSucceeded) {
+      updateSessionReplacementMutation(agentId, sessionId, {
+        phase: nextRuntimeId ? 'target-ready' : 'degraded',
+        targetSessionId: result?.session?.id || '',
+        targetRuntimeId: nextRuntimeId || '',
+        serverRevision: result?.revision ?? null,
+        ...(!nextRuntimeId ? { errorCode: 'target_runtime_not_ready' } : {}),
+      });
+    } else if (nextRuntimeId) {
+      updateSidebarOperation(trimOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
+    } else {
+      updateSidebarOperation(trimOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_not_ready' });
+    }
     if (_navGuard !== _navigationGuardEpoch) {
       if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
-        updateSessionReplacementMutation(agentId, sessionId, { phase: 'stopping' });
+        updateSessionReplacementMutation(agentId, sessionId, { phase: 'source-stopping' });
         clearAgentRuntimeCache(_oldRuntimeId);
         try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
         refreshSidebarRuntimeAfterMutation(500);
         settleSessionReplacementMutation(agentId, sessionId, 700);
       }
       if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
+      if (!archiveAfter && nextRuntimeId) finishSidebarOperation(trimOperation?.operationId, 'settled');
       archiveRollback = null;
       return;
     }
-    const nextRuntimeId =
-      result?.agent?.runtime_session_id
-      || result?.agent?.runtimeSessionId
-      || null;
     if (nextRuntimeId) {
+      if (archiveAfter) updateSessionReplacementMutation(agentId, sessionId, { phase: 'switching' });
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
       beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'trim');
+      if (!archiveAfter) finishSidebarOperation(trimOperation?.operationId, 'settled');
     } else {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
     // 服务端已原子完成归档，只需停止旧 runtime
     if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
-      updateSessionReplacementMutation(agentId, sessionId, { phase: 'stopping' });
+      updateSessionReplacementMutation(agentId, sessionId, { phase: 'source-stopping' });
       clearAgentRuntimeCache(_oldRuntimeId);
       try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
       refreshSidebarRuntimeAfterMutation(500);
@@ -262,12 +305,15 @@ window.submitTrimCompact = async () => {
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新会话已创建，但原会话归档失败：' : 'The new session was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
+    loadAgents().catch(() => {});
     archiveRollback = null;
   } catch (error) {
     console.error('Failed to trim compact session:', error);
     if (archiveRollback) {
       archiveRollback();
       archiveRollback = null;
+    } else if (trimOperation?.operationId) {
+      finishSidebarOperation(trimOperation.operationId, 'failed', { errorCode: 'trim_failed' });
     }
     clearSessionLoading(agentId);
     clearChatLoadingSession();
@@ -398,52 +444,101 @@ window.submitBranch = async () => {
   if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
     archiveRollback = markSessionArchivedForMutation(agentId, sessionId, 'branch');
   }
+  const sourceAgent = allAgents.find((item) => item.id === agentId) || null;
+  const sourceSession = getWorkspaceSessionById(sourceAgent, sessionId);
+  const branchOperation = archiveRollback?.operationId
+    ? getSidebarOperation(archiveRollback.operationId)
+    : beginSidebarOperation({
+        type: 'create',
+        kind: 'branch',
+        phase: 'generating',
+        agentId,
+        sourceSessionId: sessionId,
+        sourceRuntimeId: _oldRuntimeId || '',
+        projectDir: sourceSession?.openDirectory || '',
+        projectName: getPathLeaf(sourceSession?.openDirectory || ''),
+        title: sourceSession?.title || '',
+      });
 
   try {
     const res = await fetch('/protoclaw/sessions/branch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, sourceSessionId: sessionId, cutMsgIndexEnd, archiveOriginal: archiveAfter }),
+      body: JSON.stringify({
+        agentId,
+        sourceSessionId: sessionId,
+        cutMsgIndexEnd,
+        archiveOriginal: archiveAfter,
+        responseMode: 'delta',
+        operationId: branchOperation?.operationId || createSidebarOperationId('branch'),
+      }),
     });
     if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
     const result = await res.json();
+    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
     const archiveSucceeded = !archiveAfter || result?.archive?.succeeded === true;
     if (!archiveSucceeded && archiveRollback) {
       archiveRollback();
       archiveRollback = null;
     }
 
-    if (result?.agent) {
-      applyManagedPrebuiltAgent(agentId, result.agent);
+    const targetSessionId = String(result?.newSessionId || '').trim();
+    updateSidebarOperation(branchOperation?.operationId, {
+      phase: 'target-starting',
+      targetSessionId,
+      title: result?.branchTitle || branchOperation?.title || '',
+      serverRevision: result?.revision ?? null,
+    });
+    let readyAgent = null;
+    try {
+      readyAgent = await waitForSidebarTargetRuntime(branchOperation?.operationId, agentId, targetSessionId, result);
+    } catch (error) {
+      console.error('Branch target runtime is not ready:', error);
     }
-    await loadAgents();
+    const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
+    const nextRuntimeId = connectedTarget?.runtime_session_id
+      || connectedTarget?.runtimeSessionId
+      || connectedTarget?.id
+      || null;
+    if (archiveAfter && archiveSucceeded) {
+      updateSessionReplacementMutation(agentId, sessionId, {
+        phase: nextRuntimeId ? 'target-ready' : 'degraded',
+        targetSessionId: result?.newSessionId || '',
+        targetRuntimeId: nextRuntimeId || '',
+        serverRevision: result?.revision ?? null,
+        ...(!nextRuntimeId ? { errorCode: 'target_runtime_not_ready' } : {}),
+      });
+    } else if (nextRuntimeId) {
+      updateSidebarOperation(branchOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
+    } else {
+      updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_not_ready' });
+    }
     if (_navGuard !== _navigationGuardEpoch) {
       if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
-        updateSessionReplacementMutation(agentId, sessionId, { phase: 'stopping' });
+        updateSessionReplacementMutation(agentId, sessionId, { phase: 'source-stopping' });
         clearAgentRuntimeCache(_oldRuntimeId);
         try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
         refreshSidebarRuntimeAfterMutation(500);
         settleSessionReplacementMutation(agentId, sessionId, 700);
       }
       if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
+      if (!archiveAfter && nextRuntimeId) finishSidebarOperation(branchOperation?.operationId, 'settled');
       archiveRollback = null;
       return;
     }
-    const nextRuntimeId =
-      result?.agent?.runtime_session_id
-      || result?.agent?.runtimeSessionId
-      || null;
     if (nextRuntimeId) {
+      if (archiveAfter) updateSessionReplacementMutation(agentId, sessionId, { phase: 'switching' });
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
       beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'branch');
+      if (!archiveAfter) finishSidebarOperation(branchOperation?.operationId, 'settled');
     } else {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
     // 服务端已原子完成归档，只需停止旧 runtime
     if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
-      updateSessionReplacementMutation(agentId, sessionId, { phase: 'stopping' });
+      updateSessionReplacementMutation(agentId, sessionId, { phase: 'source-stopping' });
       clearAgentRuntimeCache(_oldRuntimeId);
       try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
       refreshSidebarRuntimeAfterMutation(500);
@@ -453,12 +548,15 @@ window.submitBranch = async () => {
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新分支已创建，但原会话归档失败：' : 'The branch was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
+    loadAgents().catch(() => {});
     archiveRollback = null;
   } catch (error) {
     console.error('Failed to branch session:', error);
     if (archiveRollback) {
       archiveRollback();
       archiveRollback = null;
+    } else if (branchOperation?.operationId) {
+      finishSidebarOperation(branchOperation.operationId, 'failed', { errorCode: 'branch_failed' });
     }
     clearSessionLoading(agentId);
     clearChatLoadingSession();

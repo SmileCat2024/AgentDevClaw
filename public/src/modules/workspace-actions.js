@@ -197,46 +197,75 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const _navGuard = _navigationGuardEpoch;
     const isZh = currentLanguage === 'zh';
     const toastId = 'compact-resume-' + action.sessionId;
+    const sourceSession = getWorkspaceSessionById(activeAgent, action.sessionId);
+    const compactOperation = beginSidebarOperation({
+      type: 'create',
+      kind: 'summary',
+      phase: 'generating',
+      agentId: activeAgent.id,
+      sourceSessionId: action.sessionId,
+      sourceRuntimeId: currentRuntimeAgentId || '',
+      projectDir: sourceSession?.openDirectory || '',
+      projectName: getPathLeaf(sourceSession?.openDirectory || ''),
+      title: sourceSession?.title || '',
+    });
     ClawToast.show({
       id: toastId,
       title: isZh ? '正在创建轻量继续会话...' : 'Creating compacted resume session...',
       status: 'loading',
     });
     try {
-      const result = await createCompactedResumeSession(activeAgent.id, action.sessionId);
-      if (result?.agent) {
-        applyManagedPrebuiltAgent(activeAgent.id, result.agent);
-      }
-      await loadAgents();
-      if (_navGuard !== _navigationGuardEpoch) {
-        ClawToast.update(toastId, {
-          status: 'success',
-          title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
+      const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, 'summarized-nine-section', null, null, null, {
+        operationId: compactOperation.operationId,
+      });
+      if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
+      const targetSessionId = String(result?.session?.id || '').trim();
+      updateSidebarOperation(compactOperation.operationId, {
+        phase: 'target-starting',
+        targetSessionId,
+        title: result?.session?.title || compactOperation.title,
+        serverRevision: result?.revision ?? null,
+      });
+      let readyAgent = null;
+      try {
+        readyAgent = await waitForSidebarTargetRuntime(
+          compactOperation.operationId,
+          activeAgent.id,
+          targetSessionId,
+          result,
+        );
+      } catch (error) {
+        console.error('Compacted resume session was created but its runtime is not ready:', error);
+        updateSidebarOperation(compactOperation.operationId, {
+          phase: 'degraded',
+          errorCode: 'target_runtime_not_ready',
         });
-        return;
       }
-      const nextRuntimeId =
-        result?.agent?.runtime_session_id
-        || result?.agent?.runtimeSessionId
+      const managedReadyAgent = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
+      const nextRuntimeId = managedReadyAgent?.runtime_session_id
+        || managedReadyAgent?.runtimeSessionId
+        || managedReadyAgent?.id
         || null;
       if (nextRuntimeId) {
-        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
-        beginChatLoadingSession();
-        await requestSwitch(nextRuntimeId, 'compact-resume');
-        ClawToast.update(toastId, {
-          status: 'success',
-          title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
-        });
+        updateSidebarOperation(compactOperation.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
+        if (_navGuard === _navigationGuardEpoch) {
+          setPreferredUnitMode('chat', managedReadyAgent);
+          beginChatLoadingSession();
+          await requestSwitch(nextRuntimeId, 'compact-resume');
+        }
+        finishSidebarOperation(compactOperation.operationId, 'settled');
       } else {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
-        ClawToast.update(toastId, {
-          status: 'success',
-          title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
-        });
       }
+      loadAgents().catch(() => {});
+      ClawToast.update(toastId, {
+        status: 'success',
+        title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
+      });
     } catch (error) {
       console.error('Failed to compact-resume session:', error);
+      finishSidebarOperation(compactOperation.operationId, 'failed', { errorCode: 'compact_resume_failed' });
       clearChatLoadingSession();
       ClawToast.update(toastId, {
         status: 'error',
@@ -275,6 +304,20 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     if (action.archiveOriginal && typeof markSessionArchivedForMutation === 'function') {
       _csArchiveRollback = markSessionArchivedForMutation(activeAgent.id, action.sessionId, 'summary');
     }
+    const _csSourceSession = getWorkspaceSessionById(activeAgent, action.sessionId);
+    const _csOperation = _csArchiveRollback?.operationId
+      ? getSidebarOperation(_csArchiveRollback.operationId)
+      : beginSidebarOperation({
+          type: 'create',
+          kind: 'summary',
+          phase: 'generating',
+          agentId: activeAgent.id,
+          sourceSessionId: action.sessionId,
+          sourceRuntimeId: _csOldRuntimeId || '',
+          projectDir: _csSourceSession?.openDirectory || '',
+          projectName: getPathLeaf(_csSourceSession?.openDirectory || ''),
+          title: _csSourceSession?.title || '',
+        });
     ClawToast.show({
       id: _csToastId,
       title: _csIsZh ? '正在总结会话历史...' : 'Summarizing session history...',
@@ -283,7 +326,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     try {
       const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy, null, null, null, {
         archiveOriginal: action.archiveOriginal,
+        operationId: _csOperation?.operationId || '',
       });
+      if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
       const archiveSucceeded = !action.archiveOriginal || result?.archive?.succeeded === true;
       if (!archiveSucceeded && _csArchiveRollback) {
         _csArchiveRollback();
@@ -292,7 +337,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (result?.liveRuntime && result?.switched) {
         // Live-runtime shortcut path: session switch was already handled
         // inside createCompactedResumeSession — skip normal agent/runtime logic
-        await loadAgents();
+        loadAgents().catch(() => {});
         clearSessionLoading(activeAgent.id);
         ClawToast.update(_csToastId, {
           status: 'success',
@@ -300,7 +345,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         });
         // 服务端已原子完成归档，只需停止旧 runtime
         if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
-          updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'stopping' });
+          updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'source-stopping' });
           clearAgentRuntimeCache(_csOldRuntimeId);
           try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
           refreshSidebarRuntimeAfterMutation();
@@ -309,34 +354,65 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         _csArchiveRollback = null;
         return;
       }
-      if (result?.agent) {
-        applyManagedPrebuiltAgent(activeAgent.id, result.agent);
+      const targetSessionId = String(result?.session?.id || '').trim();
+      updateSidebarOperation(_csOperation?.operationId, {
+        phase: 'target-starting',
+        targetSessionId,
+        title: result?.session?.title || _csOperation?.title || '',
+        serverRevision: result?.revision ?? null,
+      });
+      let _csReadyAgent = null;
+      try {
+        _csReadyAgent = await waitForSidebarTargetRuntime(
+          _csOperation?.operationId,
+          activeAgent.id,
+          targetSessionId,
+          result,
+        );
+      } catch (error) {
+        console.error('Summary target runtime is not ready:', error);
       }
-      await loadAgents();
+      const _csConnectedTarget = _csReadyAgent ? (upsertConnectedAgent(_csReadyAgent) || _csReadyAgent) : null;
+      const nextRuntimeId = _csConnectedTarget?.runtime_session_id
+        || _csConnectedTarget?.runtimeSessionId
+        || _csConnectedTarget?.id
+        || null;
+      if (action.archiveOriginal && archiveSucceeded) {
+        updateSessionReplacementMutation(activeAgent.id, action.sessionId, {
+          phase: nextRuntimeId ? 'target-ready' : 'degraded',
+          targetSessionId: result?.session?.id || '',
+          targetRuntimeId: nextRuntimeId || '',
+          serverRevision: result?.revision ?? null,
+          ...(!nextRuntimeId ? { errorCode: 'target_runtime_not_ready' } : {}),
+        });
+      } else if (nextRuntimeId) {
+        updateSidebarOperation(_csOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
+      } else {
+        updateSidebarOperation(_csOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_not_ready' });
+      }
       if (_csNavGuard !== _navigationGuardEpoch) {
         ClawToast.update(_csToastId, {
           status: 'success',
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
         if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
-          updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'stopping' });
+          updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'source-stopping' });
           clearAgentRuntimeCache(_csOldRuntimeId);
           try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
           refreshSidebarRuntimeAfterMutation();
           settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
         }
         if (action.archiveOriginal && archiveSucceeded && !_csOldRuntimeId) clearSessionReplacementMutation(activeAgent.id, action.sessionId);
+        if (!action.archiveOriginal && nextRuntimeId) finishSidebarOperation(_csOperation?.operationId, 'settled');
         _csArchiveRollback = null;
         return;
       }
-      const nextRuntimeId =
-        result?.agent?.runtime_session_id
-        || result?.agent?.runtimeSessionId
-        || null;
       if (nextRuntimeId) {
+        if (action.archiveOriginal) updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'switching' });
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
         beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-summary');
+        if (!action.archiveOriginal) finishSidebarOperation(_csOperation?.operationId, 'settled');
       } else {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
@@ -347,12 +423,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       });
       // 服务端已原子完成归档，只需停止旧 runtime
       if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
-        updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'stopping' });
+        updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'source-stopping' });
         clearAgentRuntimeCache(_csOldRuntimeId);
         try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
         refreshSidebarRuntimeAfterMutation();
         settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
       }
+      loadAgents().catch(() => {});
       if (action.archiveOriginal && archiveSucceeded && !_csOldRuntimeId) clearSessionReplacementMutation(activeAgent.id, action.sessionId);
       if (action.archiveOriginal && !archiveSucceeded) {
         ClawToast.update(_csToastId, {
@@ -367,6 +444,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (_csArchiveRollback) {
         _csArchiveRollback();
         _csArchiveRollback = null;
+      } else if (_csOperation?.operationId) {
+        finishSidebarOperation(_csOperation.operationId, 'failed', { errorCode: 'summary_failed' });
       }
       clearSessionLoading(activeAgent.id);
       clearChatLoadingSession();
@@ -426,9 +505,29 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     }
 
     const targetAgent = allAgents.find((item) => item.id === activeAgent.id) || null;
-    const affectedRuntimeId = targetAgent?.runtime_session_id || targetAgent?.runtimeSessionId || null;
     const deletedWasActive = action.sessionId === (targetAgent?.active_workspace_session_id || targetAgent?.workspace_sessions?.activeSessionId || null);
     const currentSessions = getWorkspaceSessions(targetAgent);
+    const deletedSession = currentSessions.find((session) => session?.id === action.sessionId) || null;
+    const runtimeAgent = allAgents.find((item) => (
+      item?.source !== 'prebuilt'
+      && String(item?.parent_id || '') === String(activeAgent.id)
+      && String(item?.active_workspace_session_id || '') === String(action.sessionId)
+    )) || null;
+    const affectedRuntimeId = runtimeAgent?.runtime_session_id
+      || runtimeAgent?.runtimeSessionId
+      || runtimeAgent?.id
+      || (deletedWasActive ? (targetAgent?.runtime_session_id || targetAgent?.runtimeSessionId || null) : null);
+    const deleteOperation = beginSidebarOperation({
+      type: 'delete',
+      kind: 'delete',
+      phase: 'committing',
+      agentId: activeAgent.id,
+      sourceSessionId: action.sessionId,
+      sourceRuntimeId: affectedRuntimeId || '',
+      projectDir: deletedSession?.openDirectory || '',
+      projectName: deletedSession?.openDirectory ? getPathLeaf(deletedSession.openDirectory) : '',
+      title: deletedSession?.title || action.sessionId,
+    });
 
     if (deletedWasActive) {
       applyManagedPrebuiltAgent(activeAgent.id, null);
@@ -438,7 +537,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       ? (targetAgent?.active_workspace_session_id === action.sessionId ? remainingSessions[0].id : targetAgent?.active_workspace_session_id)
       : null;
     updateAgentRecord(activeAgent.id, {
-      workspace_sessions: { sessions: remainingSessions, activeSessionId: nextActiveId },
+      workspace_sessions: { ...(targetAgent?.workspace_sessions || {}), sessions: remainingSessions, activeSessionId: nextActiveId },
       active_workspace_session_id: nextActiveId,
     });
 
@@ -470,12 +569,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         body: JSON.stringify({
           agentId: activeAgent.id,
           sessionId: action.sessionId,
+          responseMode: 'delta',
+          operationId: deleteOperation.operationId,
         }),
       });
       if (!response.ok) {
         throw new Error(await response.text().catch(() => 'delete session failed'));
       }
       const result = await response.json();
+      if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
       if (result?.deleted?.sessions) {
         updateAgentRecord(activeAgent.id, {
           workspace_sessions: result.deleted.sessions,
@@ -484,6 +586,16 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       }
       if (result?.agent) {
         applyManagedPrebuiltAgent(activeAgent.id, result.agent);
+      }
+      if (affectedRuntimeId) {
+        updateSidebarOperation(deleteOperation.operationId, {
+          phase: 'source-stopping',
+          serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
+        });
+        clearAgentRuntimeCache(affectedRuntimeId);
+        settleSidebarSourceOperation(deleteOperation.operationId).catch(() => {});
+      } else {
+        finishSidebarOperation(deleteOperation.operationId, 'settled');
       }
       // Refresh IM workspace draft in background — no re-render needed if DOM already updated
       if (isIMSession) {
@@ -494,9 +606,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     } catch (error) {
       console.error('Failed to delete session:', error);
       updateAgentRecord(activeAgent.id, {
-        workspace_sessions: { sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
+        workspace_sessions: { ...(targetAgent?.workspace_sessions || {}), sessions: currentSessions, activeSessionId: targetAgent?.active_workspace_session_id },
         active_workspace_session_id: targetAgent?.active_workspace_session_id,
       });
+      finishSidebarOperation(deleteOperation.operationId, 'failed', { errorCode: 'delete_failed' });
       // Restore IM draft and re-render on failure
       if (isIMSession) {
         ensureIMWorkspaceLoaded(true).catch(() => {});
@@ -546,17 +659,46 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             openDirectory: action.openDirectory,
             targetDir: action.targetDir,
       };
+      let sidebarOperation = null;
       const runSessionOpen = async () => {
         const _navGuard = _navigationGuardEpoch;
         const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
+        const sourceSessionId = String(activeAgent?.active_workspace_session_id || activeAgent?.workspace_sessions?.activeSessionId || '').trim();
+        const knownTargetSession = sessionAction.type === 'open_session'
+          ? getWorkspaceSessionById(activeAgent, sessionAction.sessionId)
+          : null;
+        const sourceSession = sourceSessionId ? getWorkspaceSessionById(activeAgent, sourceSessionId) : null;
+        sidebarOperation = beginSidebarOperation({
+          type: sessionAction.type === 'open_session' ? 'activate' : 'create',
+          kind: sessionAction.type === 'open_session' ? 'open' : 'create',
+          phase: 'committing',
+          agentId: activeAgent.id,
+          sourceSessionId,
+          sourceRuntimeId: previousRuntimeId || '',
+          targetSessionId: knownTargetSession?.id || '',
+          projectDir: knownTargetSession?.openDirectory || action.openDirectory || sourceSession?.openDirectory || '',
+          projectName: getPathLeaf(knownTargetSession?.openDirectory || action.openDirectory || sourceSession?.openDirectory || ''),
+          title: knownTargetSession?.title || action.agentName || action.featureName || '',
+        });
+        sessionAction.operationId = sidebarOperation.operationId;
         _storeVisibleSessionInputDraft();
         if (previousRuntimeId) {
           saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId, activeAgent));
         }
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
+        if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
         const optimisticAgent = result?.session
           ? (applyOptimisticWorkspaceSession(activeAgent.id, result.session) || activeAgent)
           : activeAgent;
+        const targetSessionId = String(result?.session?.id || sessionAction.sessionId || '').trim();
+        updateSidebarOperation(sidebarOperation.operationId, {
+          phase: 'target-starting',
+          targetSessionId,
+          projectDir: result?.session?.openDirectory || sidebarOperation.projectDir,
+          projectName: getPathLeaf(result?.session?.openDirectory || sidebarOperation.projectDir),
+          title: result?.session?.title || sidebarOperation.title,
+          serverRevision: result?.revision ?? null,
+        });
         // Immediately render the workspace surface so the user sees the new
         // session appear in the list without waiting for the runtime to start.
         // Guard: skip render if user already navigated to a different surface.
@@ -570,58 +712,65 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           && String(action.formId || '') === 'assembly-form';
         const nextAgent = result?.agent ? (upsertConnectedAgent(result.agent) || result.agent) : null;
         if (isAssemblyLaunch) {
+          finishSidebarOperation(sidebarOperation.operationId, 'settled');
           if (_navGuard !== _navigationGuardEpoch) return;
           setPreferredUnitMode('assembly', activeAgent);
           loadAgents().catch((error) => console.error('Failed to refresh agents after assembly launch:', error));
           renderCurrentMainView();
           return;
         }
-        if (_navGuard !== _navigationGuardEpoch) return;
         if (nextAgent?.runtime_session_id || nextAgent?.runtimeSessionId) {
-          setPreferredUnitMode('chat', nextAgent);
           const nextRuntimeId = nextAgent.runtime_session_id || nextAgent.runtimeSessionId || nextAgent.id;
+          updateSidebarOperation(sidebarOperation.operationId, {
+            phase: 'target-ready',
+            targetRuntimeId: nextRuntimeId,
+          });
+          if (_navGuard !== _navigationGuardEpoch) {
+            finishSidebarOperation(sidebarOperation.operationId, 'settled');
+            return;
+          }
+          setPreferredUnitMode('chat', nextAgent);
           if (nextRuntimeId === currentRuntimeAgentId) {
             beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
             await requestSwitch(nextRuntimeId, 'session-open');
           }
+          finishSidebarOperation(sidebarOperation.operationId, 'settled');
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
           return;
         }
-        if (result?.status?.status === 'running' && result.status.viewerAgentId) {
-          const existingRuntimeId = result.status.viewerAgentId;
-          if (existingRuntimeId === currentRuntimeAgentId) {
-            beginFollowLatestEntryWindow();
-            renderCurrentMainView();
-          } else {
-            await loadAgents();
-            await requestSwitch(existingRuntimeId, 'session-open-existing');
-          }
-          return;
-        }
-        // Guard before the potentially long waitForPrebuiltRuntimeSession:
-        // if the user already navigated away, skip the wait entirely.
-        if (_navGuard !== _navigationGuardEpoch) return;
         try {
-          const readyAgent = await waitForPrebuiltRuntimeSession(activeAgent.id, 30, {
-            previousRuntimeId,
-            expectedSessionId: result?.session?.id || '',
+          const readyAgent = await waitForTargetRuntimeSession(activeAgent.id, targetSessionId, 50, {
+            operationId: sidebarOperation.operationId,
           });
           if (!readyAgent) return;
-          // Guard again after the long wait — user may have navigated during polling.
-          if (_navGuard !== _navigationGuardEpoch) return;
+          const managedReadyAgent = upsertConnectedAgent(readyAgent) || readyAgent;
           const nextRuntimeId = readyAgent.runtime_session_id || readyAgent.runtimeSessionId || readyAgent.id;
           if (!nextRuntimeId) return;
-          setPreferredUnitMode('chat', activeAgent);
+          updateSidebarOperation(sidebarOperation.operationId, {
+            phase: 'target-ready',
+            targetRuntimeId: nextRuntimeId,
+          });
+          if (_navGuard !== _navigationGuardEpoch) {
+            finishSidebarOperation(sidebarOperation.operationId, 'settled');
+            return;
+          }
+          setPreferredUnitMode('chat', managedReadyAgent);
           if (nextRuntimeId === currentRuntimeAgentId) {
             beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
             await requestSwitch(nextRuntimeId, 'session-open-wait');
           }
+          finishSidebarOperation(sidebarOperation.operationId, 'settled');
         } catch (error) {
           console.error('Failed while waiting for prebuilt runtime session:', error);
+          updateSidebarOperation(sidebarOperation.operationId, {
+            phase: 'degraded',
+            errorCode: 'target_runtime_not_ready',
+          });
+          window.setTimeout(() => finishSidebarOperation(sidebarOperation?.operationId, 'expired'), 30000);
         } finally {
           loadAgents().catch((error) => console.error('Failed to refresh agents after waiting for prebuilt runtime:', error));
         }
@@ -642,6 +791,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       }
     } catch (error) {
       console.error('Failed to open prebuilt session:', error);
+      if (sidebarOperation?.operationId) {
+        finishSidebarOperation(sidebarOperation.operationId, 'failed', { errorCode: 'session_open_failed' });
+      }
       window.alert(`Session failed: ${error && error.message ? error.message : error}`);
       return;
     } finally {

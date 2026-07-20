@@ -44,6 +44,7 @@ import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log
 import { compareSemver, uniqueStrings } from './server/shared/feature-utils.js';
 import { readJson, readJsonSafe, ensureDir, normalizePathCasing } from './server/shared/fs-helpers.js';
 import { openDirectoryInSystem } from './server/shared/system-opener.js';
+import { createOperationTrace } from './server/shared/operation-trace.js';
 import {
   managedAgents, assemblyRuntimeProcesses,
   getManagedRuntimeKey, listAgentRuntimes, pickPrimaryAgentRuntime,
@@ -82,6 +83,7 @@ import { setupDispatchRoutes, getProjectAdapter, fireBootSchedules } from './ser
 import { setupIMRoutes, readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './server/routes/im.js';
 import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
+import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnostics.js';
 import {
   setupFeatureRepositoryRoutes,
   summarizeFeatureRepository,
@@ -305,6 +307,7 @@ app.get('/protoclaw/runtime/envelopes_by_source', (req, res) => {
 
 // ── Agent Status & Lifecycle API → server/routes/agent-lifecycle.js ──
 agentLifecycle.setupRoutes(app, express);
+setupSidebarDiagnosticsRoutes(app, express);
 
 // ── Sessions → server/routes/session.js ─────────────────────────────────────
 setupSessionRoutes(app, express, {
@@ -612,6 +615,12 @@ app.post('/protoclaw/ph_project/open_in_explorer', express.json(), async (req, r
 });
 
 app.post('/protoclaw/prebuilt_project/delete', express.json(), async (req, res, next) => {
+  const trace = createOperationTrace({
+    operationId: req.body?.operationId,
+    operation: 'delete_project',
+    agentId: req.body?.agentId,
+  });
+  trace.mark('server_received');
   try {
     const agent = await requireAgentLight(req.body.agentId);
     if (typeof req.body.projectId !== 'string' || !req.body.projectId) {
@@ -619,10 +628,14 @@ app.post('/protoclaw/prebuilt_project/delete', express.json(), async (req, res, 
       return;
     }
 
-    const deleted = await deletePrebuiltProject(agent.id, req.body.projectId);
+    const deleted = await deletePrebuiltProject(agent.id, req.body.projectId, {
+      includeSessions: req.body.responseMode !== 'delta',
+    });
+    trace.mark('index_committed', { revision: deleted.revision, removedCount: deleted.deletedSessionIds.length });
     const runtimesToStop = listAgentRuntimes(agent.id).filter((runtime) => deleted.deletedSessionIds.includes(runtime?.selectedSessionId));
     let connected = null;
 
+    if (runtimesToStop.length > 0) trace.mark('source_stop_requested', { runtimeCount: runtimesToStop.length });
     for (const runtime of runtimesToStop) {
       await stopManagedAgent(agent.id, runtime.selectedSessionId);
     }
@@ -630,8 +643,11 @@ app.post('/protoclaw/prebuilt_project/delete', express.json(), async (req, res, 
     res.json({
       deleted,
       agent: connected,
+      operationId: trace.operationId,
     });
+    trace.mark('response_sent', { revision: deleted.revision });
   } catch (error) {
+    trace.mark('failed', { errorCode: error?.code || 'delete_project_failed' });
     next(error);
   }
 });

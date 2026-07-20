@@ -34,13 +34,71 @@ function loadRuntimeStatus(overrides = {}) {
     currentLanguage: 'zh',
     currentMessages: [],
     normalizeAgentIdentity: (x) => String(x || '').trim(),
+    getPathLeaf: (value) => String(value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '',
+    toEpochMs: (value) => Date.parse(value || '') || 0,
     _agentCallActive: new Map(),
   };
   const ctx = createFrontendSandbox({ ...defaults, ...overrides });
   ctx.window.setInterval = () => 0;
+  ctx.loadSource('public/src/modules/sidebar-operations.js');
   ctx.loadSource('public/src/modules/runtime-status.js');
   return ctx;
 }
+
+describe('runtime-status: sidebar operation projection', () => {
+  it('keeps a deleting runtime in its project group until targeted settlement', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      const host = {
+        id: 'programming-helper', name: 'Programming Helper', source: 'prebuilt',
+        workspace_sessions: {
+          sessions: [{ id: 'session-1', title: 'Drawing', openDirectory: 'D:\\\\code\\\\project-a' }]
+        }
+      };
+      beginSidebarOperation({
+        operationId: 'delete:projection', type: 'delete', kind: 'delete', phase: 'source-stopping',
+        agentId: host.id, sourceSessionId: 'session-1', sourceRuntimeId: 'runtime-1',
+        projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a', title: 'Drawing'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, [] )[0];
+    })()`);
+    assert.equal(entry.source, 'operation-tombstone');
+    assert.equal(entry.deleting, true);
+    assert.equal(entry.projectName, 'project-a');
+    assert.equal(entry.sessionId, 'session-1');
+  });
+
+  it('uses the operation kind for compact/trim pending text even without archival', () => {
+    const ctx = loadRuntimeStatus();
+    const name = ctx.run(`(() => {
+      const host = { id: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
+      beginSidebarOperation({
+        operationId: 'summary:projection', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: host.id, sourceSessionId: 'session-1'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, [])[0].name;
+    })()`);
+    assert.equal(name, '正在生成摘要会话…');
+  });
+
+  it('keeps a target-readiness failure explicit after the source runtime disappears', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      const host = { id: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
+      beginSidebarOperation({
+        operationId: 'summary:degraded', type: 'replacement', kind: 'summary', phase: 'degraded',
+        agentId: host.id, sourceSessionId: 'source-1', targetSessionId: 'target-1',
+        projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a',
+        errorCode: 'target_runtime_not_ready'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, [])[0];
+    })()`);
+    assert.equal(entry.source, 'operation-degraded');
+    assert.equal(entry.projectName, 'project-a');
+    assert.equal(entry.name, '摘要会话创建未完成');
+    assert.equal(entry.sidebarOperation.errorCode, 'target_runtime_not_ready');
+  });
+});
 
 // ── formatRuntimeDuration ───────────────────────────────────
 

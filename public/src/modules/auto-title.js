@@ -316,6 +316,9 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
         throw new Error('HTTP ' + response.status);
       }
       var result = await response.json();
+      if (typeof applySessionMutationDelta === 'function') {
+        applySessionMutationDelta(agentId, result);
+      }
       if (result.ok && result.title) {
         // Update local data
         var agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;

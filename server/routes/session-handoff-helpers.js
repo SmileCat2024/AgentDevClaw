@@ -83,6 +83,7 @@ export function createSessionHandoffHelpers(deps) {
     handoffPath = '',
     goal = '',
     startRuntime = true,
+    trace = null,
   }) {
     const normalizedAgentId = normalizeClientAgentId(preferredAgentId);
     if (!handoffPath && (!normalizedAgentId || !handoffId)) {
@@ -96,6 +97,7 @@ export function createSessionHandoffHelpers(deps) {
       handoffId,
       handoffPath,
     });
+    trace?.mark('handoff_loaded');
     const sourceAgentId = cleanSessionText(handoff?.sourceAgentId);
     const sourceSessionId = cleanSessionText(handoff?.sourceSessionId);
 
@@ -144,16 +146,23 @@ export function createSessionHandoffHelpers(deps) {
         handoffSummaryKind: cleanSessionText(handoff?.summaryShape),
       },
     });
+    trace?.mark('target_session_created', { targetSessionId: session.id });
 
     let status = null;
     let connected = null;
     if (startRuntime) {
+      trace?.mark('target_runtime_start_requested', { targetSessionId: session.id });
       status = await startManagedAgent(agent, session.id, {
         extraEnv: {
           PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath,
         },
       });
+      trace?.mark('target_runtime_started', { targetSessionId: session.id });
       connected = await waitForManagedRuntimeReady(agent.id, 10000, session.id);
+      trace?.mark(connected ? 'target_runtime_ready' : 'target_runtime_timeout', {
+        targetSessionId: session.id,
+        readiness: connected ? 'ready' : 'starting',
+      });
     }
 
     return {
@@ -170,8 +179,11 @@ export function createSessionHandoffHelpers(deps) {
     sessionId = '',
     policy = {},
     startRuntime = true,
+    trace = null,
   }) {
+    trace?.mark('handoff_export_started');
     const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy);
+    trace?.mark('handoff_exported');
     const handoffPath = cleanSessionText(exportResult?.handoffPath);
     const handoffId = cleanSessionText(exportResult?.handoff?.handoffId);
     return createCompactedResumeFromHandoff({
@@ -179,6 +191,7 @@ export function createSessionHandoffHelpers(deps) {
       handoffId,
       handoffPath,
       startRuntime,
+      trace,
     });
   }
 

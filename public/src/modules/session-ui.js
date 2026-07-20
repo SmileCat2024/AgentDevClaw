@@ -271,6 +271,9 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
     }
 
     var result = await response.json();
+    if (typeof applySessionMutationDelta === 'function') {
+      applySessionMutationDelta(agentId, result);
+    }
     if (result.ok && result.title) {
       var titleRow = btnElement.closest('.workspace-history-title-row');
       if (titleRow) {
@@ -375,6 +378,9 @@ window.handleSessionTitleDoubleClick = function(event) {
         body: JSON.stringify({ agentId, title: newTitle }),
       });
       const result = await resp.json();
+      if (typeof applySessionMutationDelta === 'function') {
+        applySessionMutationDelta(agentId, result);
+      }
       if (result.ok) {
         titleDiv.textContent = newTitle;
         const agent = allAgents.find(a => a.id === agentId);

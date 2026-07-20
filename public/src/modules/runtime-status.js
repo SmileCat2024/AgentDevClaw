@@ -141,6 +141,32 @@ function buildChildRuntimeEntry(runtimeAgent) {
   };
 }
 
+function getSidebarOperationPendingName(operation) {
+  if (operation?.kind === 'branch') {
+    return currentLanguage === 'zh' ? '正在创建分支…' : 'Creating branch…';
+  }
+  if (operation?.kind === 'trim') {
+    return currentLanguage === 'zh' ? '正在生成精简会话…' : 'Creating trimmed session…';
+  }
+  if (operation?.kind === 'summary') {
+    return currentLanguage === 'zh' ? '正在生成摘要会话…' : 'Creating summarized session…';
+  }
+  return currentLanguage === 'zh' ? '正在启动新会话…' : 'Starting new session…';
+}
+
+function getSidebarOperationFailureName(operation) {
+  if (operation?.kind === 'branch') {
+    return currentLanguage === 'zh' ? '分支会话创建未完成' : 'Branch creation incomplete';
+  }
+  if (operation?.kind === 'trim') {
+    return currentLanguage === 'zh' ? '精简会话创建未完成' : 'Trimmed session creation incomplete';
+  }
+  if (operation?.kind === 'summary') {
+    return currentLanguage === 'zh' ? '摘要会话创建未完成' : 'Summarized session creation incomplete';
+  }
+  return currentLanguage === 'zh' ? '新会话启动未完成' : 'New session start incomplete';
+}
+
 function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   const entries = [];
   const seenRuntimeIds = new Set();
@@ -202,6 +228,24 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       entry.projectDir = dir;
       entry.projectName = dir ? getPathLeaf(dir) : '';
     }
+    if (typeof findSidebarOperation === 'function') {
+      const operation = findSidebarOperation((item) => (
+        item.agentId === String(prebuiltAgent?.id || '').trim()
+        && !['settled', 'failed'].includes(item.phase)
+        && ((item.targetRuntimeId && item.targetRuntimeId === entry.runtimeId)
+          || (item.targetSessionId && item.targetSessionId === entry.sessionId)
+          || (['replacement', 'delete', 'archive-close'].includes(item.type)
+            && ((item.sourceRuntimeId && item.sourceRuntimeId === entry.runtimeId)
+              || (item.sourceSessionId && item.sourceSessionId === entry.sessionId))))
+      ));
+      if (operation) {
+        entry.sidebarOperation = operation;
+        if (!entry.projectDir && operation.projectDir) {
+          entry.projectDir = operation.projectDir;
+          entry.projectName = operation.projectName || getPathLeaf(operation.projectDir);
+        }
+      }
+    }
     // Work-group: group by group chat via sessionId → chat mapping.
     if (isWorkGroup && !entry.projectName && entry.sessionId) {
       const chat = wgSessionToChat.get(entry.sessionId);
@@ -224,34 +268,88 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
 
   addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
 
-  if (typeof _sessionReplacementMutations !== 'undefined') {
-    for (const mutation of _sessionReplacementMutations.values()) {
-      if (mutation.agentId !== prebuiltAgent.id) continue;
-      const existing = entries.find((entry) => entry.sessionId === mutation.sessionId);
-      if (existing) existing.replacementMutation = mutation;
-      const sourceSession = Array.isArray(prebuiltAgent?.workspace_sessions?.sessions)
-        ? prebuiltAgent.workspace_sessions.sessions.find((session) => session.id === mutation.sessionId)
-        : null;
-      const dir = String(sourceSession?.openDirectory || '').trim();
-      entries.push({
-        id: `replacement:${mutation.sessionId}`,
-        ownerId: prebuiltAgent.id,
-        runtimeId: `replacement:${mutation.sessionId}`,
-        sessionId: '',
-        name: mutation.kind === 'branch'
-          ? (currentLanguage === 'zh' ? '正在创建分支…' : 'Creating branch…')
-          : mutation.kind === 'trim'
-            ? (currentLanguage === 'zh' ? '正在生成精简会话…' : 'Creating trimmed session…')
-            : (currentLanguage === 'zh' ? '正在生成摘要会话…' : 'Creating summarized session…'),
-        status: 'pending',
-        source: 'replacement-pending',
-        contextMenuEnabled: false,
-        pendingReplacement: true,
-        projectDir: dir,
-        projectName: dir ? getPathLeaf(dir) : '',
-        createdAt: new Date(mutation.startedAt).toISOString(),
-      });
+  const operations = typeof listSidebarOperations === 'function'
+    ? listSidebarOperations((operation) => operation.agentId === prebuiltAgent.id)
+    : [];
+  for (const operation of operations) {
+    if (['settled', 'failed'].includes(operation.phase)) continue;
+    const sourceEntry = entries.find((entry) => (
+      (operation.sourceRuntimeId && entry.runtimeId === operation.sourceRuntimeId)
+      || (operation.sourceSessionId && entry.sessionId === operation.sourceSessionId)
+    ));
+    if (sourceEntry && operation.type === 'replacement' && ['source-stopping', 'degraded'].includes(operation.phase)) {
+      sourceEntry.replacementMutation = operation;
+      sourceEntry.sidebarOperation = operation;
     }
+
+    if (operation.type === 'delete' || operation.type === 'archive-close') {
+      if (sourceEntry) {
+        sourceEntry.deleting = operation.type === 'delete';
+        sourceEntry.sidebarOperation = operation;
+        sourceEntry.contextMenuEnabled = false;
+        if (!sourceEntry.projectDir && operation.projectDir) {
+          sourceEntry.projectDir = operation.projectDir;
+          sourceEntry.projectName = operation.projectName || getPathLeaf(operation.projectDir);
+        }
+      } else if (operation.sourceRuntimeId && !['degraded'].includes(operation.phase)) {
+        addEntry({
+          id: `operation:${operation.operationId}`,
+          ownerId: prebuiltAgent.id,
+          runtimeId: operation.sourceRuntimeId,
+          sessionId: operation.sourceSessionId,
+          name: operation.title || operation.sourceSessionId,
+          status: 'pending',
+          source: 'operation-tombstone',
+          contextMenuEnabled: false,
+          deleting: operation.type === 'delete',
+          sidebarOperation: operation,
+          projectDir: operation.projectDir,
+          projectName: operation.projectName,
+          createdAt: new Date(operation.startedAt).toISOString(),
+        });
+      }
+      continue;
+    }
+
+    if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
+      addEntry({
+        id: `operation:${operation.operationId}`,
+        ownerId: prebuiltAgent.id,
+        runtimeId: `operation:${operation.operationId}`,
+        sessionId: operation.targetSessionId || operation.sourceSessionId,
+        name: getSidebarOperationFailureName(operation),
+        status: 'disconnected',
+        source: 'operation-degraded',
+        contextMenuEnabled: false,
+        pendingOperation: true,
+        sidebarOperation: operation,
+        projectDir: operation.projectDir,
+        projectName: operation.projectName,
+        createdAt: new Date(operation.startedAt).toISOString(),
+      });
+      continue;
+    }
+
+    const pendingPhase = ['requested', 'committing', 'generating', 'target-starting'].includes(operation.phase);
+    if (!pendingPhase) continue;
+    const isReplacement = operation.type === 'replacement';
+    const pendingName = getSidebarOperationPendingName(operation);
+    addEntry({
+      id: `operation:${operation.operationId}`,
+      ownerId: prebuiltAgent.id,
+      runtimeId: `operation:${operation.operationId}`,
+      sessionId: operation.targetSessionId || operation.sourceSessionId,
+      name: pendingName,
+      status: 'pending',
+      source: 'operation-pending',
+      contextMenuEnabled: false,
+      pendingReplacement: isReplacement,
+      pendingOperation: true,
+      sidebarOperation: operation,
+      projectDir: operation.projectDir,
+      projectName: operation.projectName,
+      createdAt: new Date(operation.startedAt).toISOString(),
+    });
   }
 
   entries.sort((a, b) => toEpochMs(b.createdAt) - toEpochMs(a.createdAt));

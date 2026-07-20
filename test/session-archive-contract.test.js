@@ -4,13 +4,14 @@ import fs from 'node:fs';
 
 const sessionRoutes = fs.readFileSync(new URL('../server/routes/session.js', import.meta.url), 'utf8');
 const appMain = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
+const workspaceActions = fs.readFileSync(new URL('../public/src/modules/workspace-actions.js', import.meta.url), 'utf8');
 
 describe('archive-and-replace contract', () => {
   it('archives a branch source before sending the success response', () => {
     const start = sessionRoutes.indexOf("app.post('/protoclaw/sessions/branch'");
     const end = sessionRoutes.indexOf("app.get('/protoclaw/session_summary'", start);
     const route = sessionRoutes.slice(start, end);
-    const archiveAt = route.indexOf('await archivePrebuiltSession(agentId, sourceSessionId, true)');
+    const archiveAt = route.indexOf('await archivePrebuiltSession(agentId, sourceSessionId, true, { includeSessions: false })');
     const responseAt = route.indexOf('res.json({');
     assert.ok(archiveAt >= 0, 'branch route must archive the source');
     assert.ok(responseAt > archiveAt, 'branch response must be sent after archive settles');
@@ -26,6 +27,27 @@ describe('archive-and-replace contract', () => {
   });
 
   it('does not use the unverifiable live shortcut for archive-and-replace', () => {
-    assert.match(appMain, /if \(isLiveCurrentSession && strategy && !options\.archiveOriginal\)/);
+    assert.match(appMain, /if \(isLiveCurrentSession && strategy && !options\.archiveOriginal && options\.useLiveCommand === true\)/);
+  });
+
+  it('uses delta responses for delete/archive mutations while preserving legacy full responses', () => {
+    const deleteStart = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/delete'");
+    const archiveStart = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/archive'", deleteStart);
+    const todoStart = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/todo'", archiveStart);
+    const deleteRoute = sessionRoutes.slice(deleteStart, archiveStart);
+    const archiveRoute = sessionRoutes.slice(archiveStart, todoStart);
+    assert.match(deleteRoute, /includeSessions:\s*req\.body\.responseMode !== 'delta'/);
+    assert.match(archiveRoute, /includeSessions:\s*req\.body\.responseMode !== 'delta'/);
+    assert.match(deleteRoute, /operationId:\s*trace\.operationId/);
+    assert.match(archiveRoute, /operationId:\s*trace\.operationId/);
+  });
+
+  it('waits for the exact target runtime without a blocking full-list refresh', () => {
+    const start = workspaceActions.indexOf('if (needsManagedSession)');
+    const end = workspaceActions.indexOf("if (action.type === 'show_chat'", start);
+    const managedFlow = workspaceActions.slice(start, end);
+    assert.match(managedFlow, /waitForTargetRuntimeSession\(activeAgent\.id, targetSessionId/);
+    assert.doesNotMatch(managedFlow, /await loadAgents\(\)/);
+    assert.doesNotMatch(managedFlow, /waitForPrebuiltRuntimeSession/);
   });
 });
