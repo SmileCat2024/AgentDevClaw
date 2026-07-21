@@ -99,7 +99,7 @@ const EXPECTED_HELPER_KEYS = [
   'extractSessionSearchText', 'ensureSearchIndex', 'searchInText', 'searchSessionsContent',
   'cleanupEmptySessions', 'listPrebuiltSessions', 'buildSessionModelInfoMap',
   'createPrebuiltSession', 'activatePrebuiltSession', 'deletePrebuiltSession',
-  'archivePrebuiltSession', 'tagPrebuiltSessionTodo', 'requirePrebuiltSessionRecord',
+  'archivePrebuiltSession', 'tagPrebuiltSessionTodo', 'setSessionHasSummary', 'requirePrebuiltSessionRecord',
   'resolvePrebuiltSessionOwner', 'requirePrebuiltAgentForRuntime',
   'exportContextHandoffForSession', 'createCompactedResumeFromHandoff',
   'compactAndResumeCurrentSession', 'compactAndResumeFromProvidedSummary',

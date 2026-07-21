@@ -16,6 +16,9 @@ import {
   extractDomainsFromText,
   buildLightPrebuiltSessionRecord,
   compareSidebarSessionReadModels,
+  SIDEBAR_SESSION_META_VERSION,
+  isSidebarSessionReadModelReady,
+  sortSidebarSessions,
 } from '../server/routes/session-helpers-pure.js';
 
 // ── extractToolCallLabel ──────────────────────────────────────────
@@ -431,5 +434,59 @@ describe('compareSidebarSessionReadModels', () => {
     assert.equal(comparison.mismatchedSessionCount, 1);
     assert.equal(comparison.fieldMismatchCount, 1);
     assert.equal(JSON.stringify(comparison).includes('Light title'), false);
+  });
+});
+
+describe('sidebar production read model', () => {
+  const completeRecord = {
+    id: 'ready',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    archived: false,
+    todo: false,
+    hasSummary: true,
+    messageCount: 3,
+    preview: '',
+    tokenUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+    modelName: '',
+    contextLength: null,
+    compressRatio: 80,
+    sidebarMetaVersion: SIDEBAR_SESSION_META_VERSION,
+  };
+
+  it('requires every field that would otherwise regress sidebar presentation', () => {
+    assert.equal(isSidebarSessionReadModelReady(completeRecord), true);
+    for (const field of ['archived', 'todo', 'hasSummary', 'messageCount', 'preview', 'tokenUsage', 'modelName', 'compressRatio']) {
+      const incomplete = { ...completeRecord };
+      delete incomplete[field];
+      assert.equal(isSidebarSessionReadModelReady(incomplete), false, `${field} must be required`);
+    }
+  });
+
+  it('preserves valid empty model values and rejects an old schema version', () => {
+    assert.equal(isSidebarSessionReadModelReady(completeRecord), true);
+    assert.equal(isSidebarSessionReadModelReady({ ...completeRecord, sidebarMetaVersion: 0 }), false);
+  });
+
+  it('sorts by updatedAt, createdAt, then id without mutating input', () => {
+    const input = [
+      { id: 'a', updatedAt: '2026-01-01', createdAt: '2026-01-01' },
+      { id: 'c', updatedAt: '2026-01-02', createdAt: '2026-01-01' },
+      { id: 'b', updatedAt: '2026-01-02', createdAt: '2026-01-01' },
+    ];
+    assert.deepEqual(sortSidebarSessions(input).map((item) => item.id), ['c', 'b', 'a']);
+    assert.deepEqual(input.map((item) => item.id), ['a', 'c', 'b']);
+  });
+
+  it('projects archive, todo and summary flags from the index', () => {
+    const result = buildLightPrebuiltSessionRecord('programming-helper', {
+      ...completeRecord,
+      archived: true,
+      todo: true,
+      hasSummary: true,
+    });
+    assert.equal(result.archived, true);
+    assert.equal(result.todo, true);
+    assert.equal(result.hasSummary, true);
   });
 });

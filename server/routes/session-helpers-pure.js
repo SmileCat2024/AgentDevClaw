@@ -262,6 +262,8 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
     referenceMaterials: cleanSessionText(record?.referenceMaterials),
     sessionType,
     status: cleanSessionText(record?.status) || (sessionType === 'exploration' ? 'locked' : ''),
+    archived: record?.archived === true,
+    todo: record?.todo === true,
     metadata,
     formId: cleanSessionText(record?.formId) || '',
     openDirectory: cleanSessionText(record?.openDirectory),
@@ -272,7 +274,7 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
     bytes: record?.fileSize || 0,
     messageCount: typeof record?.messageCount === 'number' ? record.messageCount : 0,
     preview: cleanSessionText(record?.preview),
-    hasSummary: false,
+    hasSummary: record?.hasSummary === true,
     tokenUsage: record?.tokenUsage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
     contextLength: Number.isFinite(Number(record?.contextLength)) && Number(record.contextLength) > 0
       ? Number(record.contextLength)
@@ -282,6 +284,40 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
       : 80,
     modelName: cleanSessionText(record?.modelName),
   };
+}
+
+export const SIDEBAR_SESSION_META_VERSION = 1;
+
+/**
+ * Returns whether an index entry contains the complete, versioned projection
+ * required by the production sidebar read model. This deliberately validates
+ * field shape rather than truthiness so legitimate empty values remain valid.
+ */
+export function isSidebarSessionReadModelReady(record) {
+  if (!record || typeof record !== 'object') return false;
+  if (Number(record.sidebarMetaVersion) < SIDEBAR_SESSION_META_VERSION) return false;
+  if (record.archived !== true && record.archived !== false) return false;
+  if (record.todo !== true && record.todo !== false) return false;
+  if (record.hasSummary !== true && record.hasSummary !== false) return false;
+  if (typeof record.createdAt !== 'string' || !record.createdAt) return false;
+  if (typeof record.updatedAt !== 'string' || !record.updatedAt) return false;
+  if (!Number.isFinite(record.messageCount) || record.messageCount < 0) return false;
+  if (typeof record.preview !== 'string') return false;
+  if (!record.tokenUsage || typeof record.tokenUsage !== 'object' || Array.isArray(record.tokenUsage)) return false;
+  if (typeof record.modelName !== 'string') return false;
+  if (record.contextLength !== null && (!Number.isFinite(record.contextLength) || record.contextLength <= 0)) return false;
+  if (!Number.isFinite(record.compressRatio) || record.compressRatio <= 0) return false;
+  return true;
+}
+
+export function sortSidebarSessions(sessions = []) {
+  return [...(Array.isArray(sessions) ? sessions : [])].sort((left, right) => {
+    const updatedOrder = String(right?.updatedAt || '').localeCompare(String(left?.updatedAt || ''));
+    if (updatedOrder !== 0) return updatedOrder;
+    const createdOrder = String(right?.createdAt || '').localeCompare(String(left?.createdAt || ''));
+    if (createdOrder !== 0) return createdOrder;
+    return String(right?.id || '').localeCompare(String(left?.id || ''));
+  });
 }
 
 const SIDEBAR_READ_MODEL_FIELDS = [

@@ -667,6 +667,9 @@ async function main() {
             },
             contextGuard: typeof contextGuardFeature?.getState === 'function'
               ? contextGuardFeature.getState() : null,
+            modelName: resolved?.modelName || resolvedUsageModel?.modelName || undefined,
+            contextLength: resolved?.contextLength ?? undefined,
+            compressRatio: resolved?.compressRatio ?? undefined,
             savedAt: Date.now(),
           }),
         });

@@ -35,6 +35,9 @@ import {
   buildSessionTrimPreview,
   buildLightPrebuiltSessionRecord,
   compareSidebarSessionReadModels,
+  SIDEBAR_SESSION_META_VERSION,
+  isSidebarSessionReadModelReady,
+  sortSidebarSessions,
   extractDomainsFromText,
 } from './session-helpers-pure.js';
 
@@ -61,6 +64,9 @@ export {
   buildSessionTrimPreview,
   buildLightPrebuiltSessionRecord,
   compareSidebarSessionReadModels,
+  SIDEBAR_SESSION_META_VERSION,
+  isSidebarSessionReadModelReady,
+  sortSidebarSessions,
   extractDomainsFromText,
 };
 
@@ -73,6 +79,7 @@ export function createSessionHelpers(ctx) {
     startManagedAgent,
     waitForManagedRuntimeReady,
   } = ctx;
+  const sidebarReadModelRetryAfter = new Map();
 
 function buildFeatureSessionTitle(featureName, createdAtIso) {
   const date = new Date(createdAtIso);
@@ -140,6 +147,19 @@ async function buildSessionSummaryMap(agentId) {
     }
   } catch {}
   return map;
+}
+
+async function setSessionHasSummary(agentId, sessionId, hasSummary) {
+  return updateSessionIndex(agentId, (index) => {
+    let found = false;
+    const sessions = index.sessions.map((record) => {
+      if (record.id !== cleanSessionText(sessionId)) return record;
+      found = true;
+      if (record.hasSummary === (hasSummary === true)) return record;
+      return { ...record, hasSummary: hasSummary === true };
+    });
+    return found ? { ...index, sessions } : index;
+  });
 }
 
 async function findSessionSummary(agentId, sessionId) {
@@ -263,7 +283,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         formId,
         openDirectory,
         createdAt: record.createdAt || stat.birthtime.toISOString(),
-        updatedAt: record.savedAt ? new Date(record.savedAt).toISOString() : (record.updatedAt || stat.mtime.toISOString()),
+        updatedAt: record.updatedAt || (record.savedAt ? new Date(record.savedAt).toISOString() : stat.mtime.toISOString()),
         path: sessionPath,
         exists: true,
         bytes: stat.size,
@@ -417,7 +437,7 @@ async function cleanupEmptySessions(agentId) {
   return toDelete.length;
 }
 
-async function listPrebuiltSessions(agentId) {
+async function listPrebuiltSessionsRich(agentId) {
   const startedAt = Date.now();
   const index = await readSessionIndex(agentId);
   const indexLoadedAt = Date.now();
@@ -510,6 +530,186 @@ async function listPrebuiltSessions(agentId) {
     compressRatio: defaultModelInfo.compressRatio || 80,
     sessions,
   };
+}
+
+function buildSidebarSessionMigrationPatch(summary, hasSummary, existingRecord = {}) {
+  const writeback = summary?._metaWriteback && typeof summary._metaWriteback === 'object'
+    ? summary._metaWriteback
+    : {};
+  return {
+    title: cleanSessionText(summary?.title),
+    featureName: cleanSessionText(summary?.featureName),
+    agentName: cleanSessionText(summary?.agentName),
+    taskTitle: cleanSessionText(summary?.taskTitle),
+    taskType: cleanSessionText(summary?.taskType),
+    goal: cleanSessionText(summary?.goal),
+    constraints: cleanSessionText(summary?.constraints),
+    expectedOutput: cleanSessionText(summary?.expectedOutput),
+    targetFiles: cleanSessionText(summary?.targetFiles),
+    referenceMaterials: cleanSessionText(summary?.referenceMaterials),
+    sessionType: cleanSessionText(summary?.sessionType) || 'main',
+    status: cleanSessionText(summary?.status),
+    archived: summary?.archived === true,
+    todo: summary?.todo === true,
+    metadata: normalizeSessionMetadata(summary?.metadata),
+    formId: cleanSessionText(summary?.formId),
+    openDirectory: cleanSessionText(summary?.openDirectory),
+    createdAt: cleanSessionText(summary?.createdAt) || new Date().toISOString(),
+    updatedAt: cleanSessionText(summary?.updatedAt) || cleanSessionText(summary?.createdAt) || new Date().toISOString(),
+    fileMtimeMs: Number.isFinite(writeback.fileMtimeMs) ? writeback.fileMtimeMs : existingRecord.fileMtimeMs,
+    fileSize: Number.isFinite(writeback.fileSize) ? writeback.fileSize : (Number(summary?.bytes) || existingRecord.fileSize || 0),
+    messageCount: Number.isFinite(summary?.messageCount) ? summary.messageCount : 0,
+    preview: cleanSessionText(summary?.preview),
+    hasSummary: hasSummary === true,
+    tokenUsage: summary?.tokenUsage && typeof summary.tokenUsage === 'object'
+      ? summary.tokenUsage
+      : { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    savedAt: Number.isFinite(writeback.savedAt) ? writeback.savedAt : existingRecord.savedAt,
+    metaVersion: Number.isFinite(writeback.metaVersion) ? writeback.metaVersion : (existingRecord.metaVersion || META_VERSION),
+    modelName: cleanSessionText(summary?.modelName),
+    contextLength: Number.isFinite(summary?.contextLength) && summary.contextLength > 0
+      ? summary.contextLength
+      : null,
+    compressRatio: Number.isFinite(summary?.compressRatio) && summary.compressRatio > 0
+      ? summary.compressRatio
+      : 80,
+    sidebarMetaVersion: SIDEBAR_SESSION_META_VERSION,
+  };
+}
+
+function sessionChangedDuringSidebarMigration(before, current) {
+  if (!before || !current) return true;
+  return before.updatedAt !== current.updatedAt
+    || before.fileMtimeMs !== current.fileMtimeMs
+    || before.fileSize !== current.fileSize
+    || before.title !== current.title
+    || before.archived !== current.archived
+    || before.todo !== current.todo
+    || before.hasSummary !== current.hasSummary;
+}
+
+async function migrateSidebarSessionReadModel(agentId, initialIndex) {
+  const summaryMap = await buildSessionSummaryMap(agentId);
+  const modelInfoMap = await buildSessionModelInfoMap(agentId);
+  const sourceRecords = new Map(initialIndex.sessions.map((record) => [record.id, record]));
+  const richSessions = await Promise.all(initialIndex.sessions.map((record) =>
+    summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMap)));
+  const richById = new Map(richSessions.map((session) => [session.id, session]));
+  const migrationCandidates = initialIndex.sessions.map((record) => ({
+    ...record,
+    ...buildSidebarSessionMigrationPatch(richById.get(record.id), summaryMap.has(record.id), record),
+  }));
+  const compatibility = compareSidebarSessionReadModels(
+    migrationCandidates.map((record) => buildLightPrebuiltSessionRecord(agentId, record)),
+    richSessions,
+  );
+  if (
+    compatibility.missingCount > 0
+    || compatibility.extraCount > 0
+    || compatibility.mismatchedSessionCount > 0
+  ) {
+    const error = new Error('Sidebar session migration failed compatibility validation');
+    error.code = 'sidebar_read_model_mismatch';
+    throw error;
+  }
+
+  return updateSessionIndex(agentId, (current) => {
+    let changed = false;
+    const sessions = current.sessions.map((record) => {
+      if (isSidebarSessionReadModelReady(record)) return record;
+      const sourceRecord = sourceRecords.get(record.id);
+      const rich = richById.get(record.id);
+      // A runtime/title/archive mutation may race the one-time migration. Do
+      // not overwrite fresher state; the guarded production path will use the
+      // rich fallback for this request and retry migration on the next read.
+      if (!rich || sessionChangedDuringSidebarMigration(sourceRecord, record)) return record;
+      changed = true;
+      return {
+        ...record,
+        ...buildSidebarSessionMigrationPatch(rich, summaryMap.has(record.id), record),
+      };
+    });
+    return changed ? { ...current, sessions } : current;
+  });
+}
+
+async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
+  const startedAt = Date.now();
+  let index = await readSessionIndex(agentId);
+  const indexLoadedAt = Date.now();
+  let migratedCount = 0;
+  const incompleteCount = index.sessions.filter((record) => !isSidebarSessionReadModelReady(record)).length;
+  if (incompleteCount > 0) {
+    index = await migrateSidebarSessionReadModel(agentId, index);
+    migratedCount = incompleteCount;
+  }
+  const remainingIncomplete = index.sessions.filter((record) => !isSidebarSessionReadModelReady(record));
+  if (remainingIncomplete.length > 0) {
+    const error = new Error('Sidebar session read model is incomplete');
+    error.code = 'sidebar_read_model_incomplete';
+    throw error;
+  }
+
+  const readModelStartedAt = Date.now();
+  const sessions = sortSidebarSessions(index.sessions.map((record) =>
+    buildLightPrebuiltSessionRecord(agentId, record)));
+  const defaultModelInfo = options.includeModelDefaults === false
+    ? null
+    : await resolveSessionModelInfo(agentId, 'default');
+  const readModelMs = Date.now() - readModelStartedAt;
+  if (options.recordDiagnostics !== false) {
+    void recordSidebarDiagnosticEvent({
+      kind: 'list_perf',
+      operation: 'list_sessions_index',
+      phase: 'completed',
+      agentId: String(agentId || '').slice(0, 128),
+      sessionCount: sessions.length,
+      writebackCount: migratedCount,
+      indexMs: indexLoadedAt - startedAt,
+      handoffMs: 0,
+      sessionsMs: 0,
+      readModelMs,
+      totalMs: Date.now() - startedAt,
+      lightCount: sessions.length,
+      result: 'success',
+    }, { source: 'server' });
+  }
+  return {
+    revision: Number(index.revision) || 0,
+    activeSessionId: index.activeSessionId || (sessions[0]?.id ?? null),
+    ...(defaultModelInfo ? {
+      contextLength: defaultModelInfo.contextLength || null,
+      compressRatio: defaultModelInfo.compressRatio || 80,
+    } : {}),
+    sessions,
+  };
+}
+
+async function listPrebuiltSessions(agentId, options = {}) {
+  const useIndexReadModel = sanitizeSessionFragment(agentId) === 'programming-helper'
+    && options.forceRich !== true;
+  if (!useIndexReadModel) return listPrebuiltSessionsRich(agentId);
+  const retryAfter = Number(sidebarReadModelRetryAfter.get(agentId)) || 0;
+  if (retryAfter > Date.now()) return listPrebuiltSessionsRich(agentId);
+  try {
+    const result = await listPrebuiltSessionsFromIndex(agentId, options);
+    sidebarReadModelRetryAfter.delete(agentId);
+    return result;
+  } catch (error) {
+    // A corrupt legacy record or a concurrent write must not make every
+    // connected-agents poll repeat both migration and rich fallback work.
+    // No timer is retained; the next request after the bounded window retries.
+    sidebarReadModelRetryAfter.set(agentId, Date.now() + 30_000);
+    void recordSidebarDiagnosticEvent({
+      kind: 'list_perf',
+      operation: 'list_sessions_index',
+      phase: 'fallback',
+      agentId: String(agentId || '').slice(0, 128),
+      result: 'degraded',
+      errorCode: error?.code || 'sidebar_read_model_failed',
+    }, { source: 'server' });
+    return listPrebuiltSessionsRich(agentId);
+  }
 }
 
 async function buildSessionModelInfoMap(agentId) {
@@ -630,6 +830,13 @@ async function createPrebuiltSession(agentId, options = {}) {
     modelName: currentModelInfo.modelName || '',
     contextLength: currentModelInfo.contextLength || null,
     compressRatio: currentModelInfo.compressRatio || 80,
+    archived: false,
+    todo: false,
+    hasSummary: false,
+    messageCount: 0,
+    preview: '',
+    tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    sidebarMetaVersion: SIDEBAR_SESSION_META_VERSION,
     createdAt,
     updatedAt: createdAt,
   };
@@ -1076,6 +1283,7 @@ async function resolveContextLength(agentId) {
     requirePrebuiltAgentForRuntime,
     createPrebuiltSession,
     readSessionSnapshotForContinuity,
+    setSessionHasSummary,
   });
 
   return {
@@ -1084,6 +1292,7 @@ async function resolveContextLength(agentId) {
     getNextNewSessionTitle,
     checkSessionHasSummary,
     buildSessionSummaryMap,
+    setSessionHasSummary,
     buildLightPrebuiltSessionRecord,
     findSessionSummary,
     findSessionSummaryPath,

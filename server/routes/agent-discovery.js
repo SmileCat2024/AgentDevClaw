@@ -218,6 +218,12 @@ export function createAgentDiscoveryModule(ctx) {
   }
 
   async function readWorkspaceSessionSnapshot(agentId) {
+    if (sanitizeSessionFragment(agentId) === 'programming-helper') {
+      return sessionApi.listPrebuiltSessions(agentId, {
+        recordDiagnostics: false,
+        includeModelDefaults: false,
+      });
+    }
     const index = await readSessionIndex(agentId);
     return {
       activeSessionId: index.activeSessionId || null,

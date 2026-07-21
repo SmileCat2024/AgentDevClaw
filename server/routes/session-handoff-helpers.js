@@ -34,6 +34,7 @@ export function createSessionHandoffHelpers(deps) {
     requirePrebuiltAgentForRuntime,
     createPrebuiltSession,
     readSessionSnapshotForContinuity,
+    setSessionHasSummary,
   } = deps;
 
   async function exportContextHandoffForSession(sessionId, preferredAgentId = '', policy = {}) {
@@ -56,7 +57,7 @@ export function createSessionHandoffHelpers(deps) {
     if (normalizedStrategy === 'summarized-nine-section') {
       const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
       const sourceSessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
-      return exportSummarizedHandoffPackage({
+      const result = await exportSummarizedHandoffPackage({
         userDataRoot: USER_DATA_ROOT,
         agentId: ownerAgentId,
         sessionId,
@@ -66,8 +67,10 @@ export function createSessionHandoffHelpers(deps) {
         projectRoot: PROJECT_ROOT,
         sourceSessionSnapshot,
       });
+      await setSessionHasSummary(ownerAgentId, sessionId, true);
+      return result;
     }
-    return exportHistoryOnlyHandoffPackage({
+    const result = await exportHistoryOnlyHandoffPackage({
       userDataRoot: USER_DATA_ROOT,
       agentId: ownerAgentId,
       sessionId,
@@ -75,6 +78,8 @@ export function createSessionHandoffHelpers(deps) {
       sourceRecord: record,
       policy,
     });
+    await setSessionHasSummary(ownerAgentId, sessionId, true);
+    return result;
   }
 
   async function createCompactedResumeFromHandoff({
@@ -230,6 +235,7 @@ export function createSessionHandoffHelpers(deps) {
       fileRanges,
       sourceSessionSnapshot,
     });
+    await setSessionHasSummary(ownerAgentId, sessionId, true);
 
     return createCompactedResumeFromHandoff({
       preferredAgentId: ownerAgentId,
@@ -261,7 +267,7 @@ export function createSessionHandoffHelpers(deps) {
 
     const record = await requirePrebuiltSessionRecord(ownerAgentId, sessionId);
     const sourceSessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
-    return writeSummarizedHandoffPackage({
+    const result = await writeSummarizedHandoffPackage({
       userDataRoot: USER_DATA_ROOT,
       agentId: ownerAgentId,
       sessionId,
@@ -277,6 +283,8 @@ export function createSessionHandoffHelpers(deps) {
       gitMeta,
       sourceSessionSnapshot,
     });
+    await setSessionHasSummary(ownerAgentId, sessionId, true);
+    return result;
   }
 
   async function lockExplorationSession(agentId, sessionId, goal, response) {

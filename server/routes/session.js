@@ -66,6 +66,7 @@ export function setupSessionRoutes(app, express, ctx) {
     requirePrebuiltSessionRecord,
     resolvePrebuiltSessionOwner,
     searchSessionsContent,
+    setSessionHasSummary,
     tagPrebuiltSessionTodo,
     writeSyntheticHandoff,
     requireAgentLight,
@@ -566,14 +567,15 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
     const force = !!req.body?.force;
     const existingSummary = await findSessionSummary(agentId, sessionId);
     if (existingSummary && !force) {
+      await setSessionHasSummary(agentId, sessionId, true);
       res.json({ ok: true, alreadyExists: true });
       return;
     }
     if (existingSummary && force) {
-      try {
-        const handoffPath = await findSessionSummaryPath(agentId, sessionId);
-        if (handoffPath) await fs.unlink(handoffPath).catch(() => {});
-      } catch {}
+      const handoffPath = await findSessionSummaryPath(agentId, sessionId);
+      if (handoffPath) await fs.unlink(handoffPath).catch(() => {});
+      const remainingSummary = await findSessionSummary(agentId, sessionId);
+      await setSessionHasSummary(agentId, sessionId, !!remainingSummary);
     }
     const agentDir = path.join('prebuilt-agents', 'official', agentId);
     const resultPath = path.join(os.tmpdir(), `compact-mirror-${Date.now()}.json`);
@@ -1550,6 +1552,13 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
     const contextGuard = req.body.contextGuard && typeof req.body.contextGuard === 'object'
       ? req.body.contextGuard : null;
     const savedAt = typeof req.body.savedAt === 'number' ? req.body.savedAt : stat.mtimeMs;
+    const modelPatch = {};
+    const modelName = cleanSessionText(req.body.modelName);
+    const contextLength = Number(req.body.contextLength);
+    const compressRatio = Number(req.body.compressRatio);
+    if (modelName) modelPatch.modelName = modelName;
+    if (Number.isFinite(contextLength) && contextLength > 0) modelPatch.contextLength = contextLength;
+    if (Number.isFinite(compressRatio) && compressRatio > 0) modelPatch.compressRatio = compressRatio;
 
     await updateSessionIndex(agentId, (index) => {
       const sessions = index.sessions.map((s) => {
@@ -1562,6 +1571,7 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
           preview,
           tokenUsage,
           ...(contextGuard ? { contextGuard } : {}),
+          ...modelPatch,
           savedAt,
           metaVersion: META_VERSION,
           updatedAt: new Date(savedAt).toISOString(),
