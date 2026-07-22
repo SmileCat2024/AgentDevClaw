@@ -2192,14 +2192,7 @@ async function loadAgentData(agentId) {
     renderFeaturePanel();
     return;
   }
-  const loadSnapshot = {
-    runtimeId: normalizeAgentIdentity(agentId),
-    switchEpoch: _switchEpoch,
-  };
-  const isLoadCurrent = () => (
-    normalizeAgentIdentity(currentRuntimeAgentId) === loadSnapshot.runtimeId
-    && _switchEpoch === loadSnapshot.switchEpoch
-  );
+  const loadToken = captureSessionViewToken(agentId);
   try {
     currentRuntimeAgentId = agentId;
     activateUserCollapseStateForContext(getRuntimeContextKey(agentId));
@@ -2222,7 +2215,7 @@ async function loadAgentData(agentId) {
 
     // Stale guard: if the user switched to a different agent during the
     // fetch, discard this response to prevent rendering stale data (flashback).
-    if (!isLoadCurrent()) {
+    if (!isSessionViewTokenCurrent(loadToken)) {
       return;
     }
 
@@ -2236,26 +2229,9 @@ async function loadAgentData(agentId) {
     ]);
     // Response headers may have arrived before a switch while one or more
     // bodies were still streaming/parsing. Never commit that older batch.
-    if (!isLoadCurrent()) {
+    if (!isSessionViewTokenCurrent(loadToken)) {
       return;
     }
-    setCurrentHookInspector(hookInspector);
-    setCurrentOverviewSnapshot(overviewSnapshot);
-    setCurrentTodoPlan(todoPlan);
-
-    currentMessages = msgsData.messages || [];
-    recheckAutoTitleCandidate();
-    // Only clear loading if messages arrived. If the runtime hasn't loaded
-    // messages yet (common for freshly-created compacted resume sessions),
-    // keep the spinner so the user doesn't see a premature empty welcome page.
-    // The poll loop will clear it once real messages appear, and the 10s
-    // timeout in beginChatLoadingSession is the ultimate fallback.
-    if (currentMessages.length > 0) clearChatLoadingSession();
-    window.lastInputRequests = inputRequests;
-    renderInputRequests(inputRequests);
-    updateRollbackActionVisibility();
-    toolRenderConfigs = {};
-    TOOL_NAMES = {};
 
     const DEFAULT_DISPLAY_NAMES = {
       // 系统工具
@@ -2279,19 +2255,44 @@ async function loadAgentData(agentId) {
       ls: 'LS',
     };
 
+    const nextToolRenderConfigs = {};
+    const nextToolNames = {};
     for (const tool of tools) {
-      toolRenderConfigs[tool.name] = tool;
-      TOOL_NAMES[tool.name] = DEFAULT_DISPLAY_NAMES[tool.name] || tool.name;
+      nextToolRenderConfigs[tool.name] = tool;
+      nextToolNames[tool.name] = DEFAULT_DISPLAY_NAMES[tool.name] || tool.name;
     }
 
-    renderCurrentMainView();
-    await refreshCurrentRuntimeStatus(agentId);
-    if (!isLoadCurrent()) {
+    const committed = commitSessionViewState(loadToken, () => {
+      setCurrentHookInspector(hookInspector);
+      setCurrentOverviewSnapshot(overviewSnapshot);
+      setCurrentTodoPlan(todoPlan);
+      currentMessages = msgsData.messages || [];
+      toolRenderConfigs = nextToolRenderConfigs;
+      TOOL_NAMES = nextToolNames;
+      recheckAutoTitleCandidate();
+      // Only clear loading if messages arrived. If the runtime hasn't loaded
+      // messages yet (common for freshly-created compacted resume sessions),
+      // keep the spinner so the user doesn't see a premature empty welcome page.
+      // The poll loop will clear it once real messages appear, and the 10s
+      // timeout in beginChatLoadingSession is the ultimate fallback.
+      if (currentMessages.length > 0) clearChatLoadingSession();
+      const nextInputRequests = Array.isArray(inputRequests) ? inputRequests : [];
+      window.lastInputRequests = nextInputRequests;
+      renderInputRequests(nextInputRequests);
+      updateRollbackActionVisibility();
+      renderCurrentMainView();
+    });
+    if (!committed) {
+      return;
+    }
+
+    await refreshCurrentRuntimeStatus(agentId, loadToken);
+    if (!isSessionViewTokenCurrent(loadToken)) {
       return;
     }
     if (activeFeaturePanel === 'logs') {
       await loadLogs(true);
-      if (!isLoadCurrent()) {
+      if (!isSessionViewTokenCurrent(loadToken)) {
         return;
       }
     }
@@ -2303,7 +2304,10 @@ async function loadAgentData(agentId) {
   }
 }
 
-async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
+async function refreshCurrentRuntimeStatus(
+  runtimeId = currentRuntimeAgentId,
+  viewToken = captureSessionViewToken(runtimeId),
+) {
   const expectedRuntimeId = normalizeAgentIdentity(runtimeId);
   if (!expectedRuntimeId) return null;
 
@@ -2320,7 +2324,7 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
       guardStatusUrl ? fetch(guardStatusUrl).catch(() => null) : Promise.resolve(null),
     ]);
 
-    if (normalizeAgentIdentity(currentRuntimeAgentId) !== expectedRuntimeId) {
+    if (!isSessionViewTokenCurrent(viewToken)) {
       return null;
     }
     if (!notifRes.ok || !connectionRes.ok) {
@@ -2333,21 +2337,23 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
       guardRes?.ok ? guardRes.json() : Promise.resolve(null),
     ]);
 
-    if (normalizeAgentIdentity(currentRuntimeAgentId) !== expectedRuntimeId) {
+    if (!isSessionViewTokenCurrent(viewToken)) {
       return null;
     }
 
-    currentRuntimeConnected = connectionData?.connected !== false;
-    const runtimeRecord = getRuntimeRecord(expectedRuntimeId);
-    if (runtimeRecord) {
-      runtimeRecord.connected = currentRuntimeConnected;
-    }
-    setConnectionStatus(currentRuntimeConnected);
-    if (typeof applyContextGuardStatus === 'function') {
-      applyContextGuardStatus(guardData, expectedRuntimeId);
-    }
-    updateNotificationStatus(notifData);
-    return { notifData, connectionData };
+    const committed = commitSessionViewState(viewToken, () => {
+      currentRuntimeConnected = connectionData?.connected !== false;
+      const runtimeRecord = getRuntimeRecord(expectedRuntimeId);
+      if (runtimeRecord) {
+        runtimeRecord.connected = currentRuntimeConnected;
+      }
+      setConnectionStatus(currentRuntimeConnected);
+      if (typeof applyContextGuardStatus === 'function') {
+        applyContextGuardStatus(guardData, expectedRuntimeId);
+      }
+      updateNotificationStatus(notifData);
+    });
+    return committed ? { notifData, connectionData } : null;
   } catch (error) {
     console.warn('Failed to refresh runtime status:', error);
     return null;
@@ -2363,12 +2369,6 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
 let _pollTimerId = null;
 let _pollCycleInFlight = null;
 let _pollImmediateRequested = false;
-
-function isPollSnapshotCurrent(snapshot) {
-  return !!snapshot
-    && normalizeAgentIdentity(currentRuntimeAgentId) === snapshot.runtimeId
-    && _switchEpoch === snapshot.switchEpoch;
-}
 
 function schedulePoll(delayMs = POLL_FAST_INTERVAL_MS) {
   if (_pollTimerId !== null) {
@@ -2485,12 +2485,9 @@ async function runPollCycle() {
     }
 
     // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住
-    const pollSnapshot = {
-      runtimeId: normalizeAgentIdentity(currentRuntimeAgentId),
-      switchEpoch: _switchEpoch,
-    };
-    const pollRuntimeId = pollSnapshot.runtimeId;
-    const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId);
+    const pollToken = captureSessionViewToken();
+    const pollRuntimeId = pollToken.runtimeId;
+    const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId, pollToken);
 
     const [msgsRes, inputRes, overviewRes, todoRes] = await Promise.all([
       fetch(`/api/agents/${pollRuntimeId}/messages`),
@@ -2500,7 +2497,7 @@ async function runPollCycle() {
     ]);
 
     // 如果在 fetch 期间已经切换了 agent，丢弃过时的响应，避免旧数据覆盖新会话
-    if (!isPollSnapshotCurrent(pollSnapshot)) {
+    if (!isSessionViewTokenCurrent(pollToken)) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
@@ -2516,29 +2513,32 @@ async function runPollCycle() {
         schedulePoll(POLL_FAST_INTERVAL_MS);
         return;
       }
-      const failedRuntimeId = currentRuntimeAgentId;
-      const failedRuntimeRecord = getRuntimeRecord(failedRuntimeId);
-      if (failedRuntimeId) {
-        _agentCallActive.delete(failedRuntimeId);
-        clearInterruptSuppression(failedRuntimeId);
-      }
-      if (failedRuntimeRecord) {
-        failedRuntimeRecord.callActive = false;
-        failedRuntimeRecord.connected = false;
-      }
-      currentRuntimeAgentId = null;
-      const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
-      if (fallbackId) {
-        selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
-      } else {
-        currentAgentId = null;
-        currentWorkspaceTab = null;
-        currentMessages = [];
-        currentInputRequests = [];
-        window.lastInputRequests = [];
-        setCurrentTodoPlan(getEmptyTodoPlan());
-        renderCurrentMainView();
-        renderInputRequests([]);
+      const failureCommitted = commitSessionViewState(pollToken, () => {
+        const failedRuntimeRecord = getRuntimeRecord(pollRuntimeId);
+        _agentCallActive.delete(pollRuntimeId);
+        clearInterruptSuppression(pollRuntimeId);
+        if (failedRuntimeRecord) {
+          failedRuntimeRecord.callActive = false;
+          failedRuntimeRecord.connected = false;
+        }
+        currentRuntimeAgentId = null;
+        const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
+        if (fallbackId) {
+          selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
+        } else {
+          currentAgentId = null;
+          currentWorkspaceTab = null;
+          currentMessages = [];
+          currentInputRequests = [];
+          window.lastInputRequests = [];
+          setCurrentTodoPlan(getEmptyTodoPlan());
+          renderCurrentMainView();
+          renderInputRequests([]);
+        }
+      });
+      if (!failureCommitted) {
+        schedulePoll(POLL_FAST_INTERVAL_MS);
+        return;
       }
       await loadAgents();
       schedulePoll(POLL_INTERVAL_MS);
@@ -2546,95 +2546,120 @@ async function runPollCycle() {
     }
 
     const data = await msgsRes.json();
-    if (!isPollSnapshotCurrent(pollSnapshot)) {
+    if (!isSessionViewTokenCurrent(pollToken)) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
     const messages = data.messages || [];
 
-    // Clear session loading indicator once messages are available
-    if (messages.length > 0) clearChatLoadingSession();
+    const messagesCommitted = commitSessionViewState(pollToken, () => {
+      // Clear session loading indicator once messages are available
+      if (messages.length > 0) clearChatLoadingSession();
 
-    // Render messages immediately — before non-critical async ops
-    // (status refresh, call states, queue sync) that add visible latency.
-    const previousMessages = currentMessages;
-    markAutoTitleCandidate(previousMessages, messages);
-    const firstChangedIndex = findFirstChangedMessageIndex(messages, currentMessages);
-    if (messages.length !== currentMessages.length) {
-      if (messages.length > currentMessages.length && firstChangedIndex === currentMessages.length) {
-        // 有新消息：只追加新的
-        const newMessages = messages.slice(currentMessages.length);
-        currentMessages = messages;
-        if (shouldRenderWorkspaceSurface()) {
-          renderCurrentMainView();
+      // Render messages immediately — before non-critical async ops
+      // (status refresh, call states, queue sync) that add visible latency.
+      const previousMessages = currentMessages;
+      markAutoTitleCandidate(previousMessages, messages);
+      const firstChangedIndex = findFirstChangedMessageIndex(messages, currentMessages);
+      if (messages.length !== currentMessages.length) {
+        if (messages.length > currentMessages.length && firstChangedIndex === currentMessages.length) {
+          // 有新消息：只追加新的
+          const newMessages = messages.slice(currentMessages.length);
+          currentMessages = messages;
+          if (shouldRenderWorkspaceSurface()) {
+            renderCurrentMainView();
+          } else {
+            appendNewMessages(newMessages, currentMessages.length - newMessages.length);
+          }
         } else {
-          appendNewMessages(newMessages, currentMessages.length - newMessages.length);
+          // 消息减少，或消息变多但前缀已变化：完全重建。
+          currentMessages = messages;
+          renderCurrentMainView();
         }
       } else {
-        // 消息减少，或消息变多但前缀已变化：完全重建。
-        currentMessages = messages;
-        renderCurrentMainView();
-      }
-    } else {
-      if (firstChangedIndex >= 0) {
-        currentMessages = messages;
-        // Rollback + partial compact can replace the middle of the transcript while
-        // keeping the same length after the summary reminder is inserted.
-        if (shouldRenderWorkspaceSurface() || firstChangedIndex < messages.length - 1) {
-          renderCurrentMainView();
-        } else {
-          // 最后一条消息变化：替换最后一条（避免滚动重置）
-          updateLastMessage(messages[messages.length - 1]);
+        if (firstChangedIndex >= 0) {
+          currentMessages = messages;
+          // Rollback + partial compact can replace the middle of the transcript while
+          // keeping the same length after the summary reminder is inserted.
+          if (shouldRenderWorkspaceSurface() || firstChangedIndex < messages.length - 1) {
+            renderCurrentMainView();
+          } else {
+            // 最后一条消息变化：替换最后一条（避免滚动重置）
+            updateLastMessage(messages[messages.length - 1]);
+          }
         }
       }
+    });
+    if (!messagesCommitted) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
+      return;
     }
 
     await statusTask;
     await refreshAgentCallStates(allAgents);
-    if (!isPollSnapshotCurrent(pollSnapshot)) {
+    const statusUiCommitted = commitSessionViewState(pollToken, () => {
+      _syncPersistentActionButton();
+      _syncPersistentInputUi(pollRuntimeId);
+    });
+    if (!statusUiCommitted) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
-    _syncPersistentActionButton();
-    _syncPersistentInputUi(pollRuntimeId);
 
-    const nextOverview = normalizeOverviewSnapshot(await overviewRes.json());
-    if (!isPollSnapshotCurrent(pollSnapshot)) {
-      schedulePoll(POLL_FAST_INTERVAL_MS);
-      return;
-    }
+    // Parse the lightweight view metadata together and publish it in one
+    // synchronous transaction. The transcript remains latency-first above,
+    // while usage/todo/input UI never paints a mixed poll generation.
+    const [overviewRaw, todoRaw, inputRequestsRaw] = await Promise.all([
+      overviewRes.json(),
+      todoRes.ok ? todoRes.json() : Promise.resolve(null),
+      inputRes.json(),
+    ]);
+    const nextOverview = normalizeOverviewSnapshot(overviewRaw);
     const nextOverviewSignature = getOverviewSignature(nextOverview);
-    if (nextOverviewSignature !== currentOverviewSignature) {
-      currentOverviewSnapshot = nextOverview;
-      currentOverviewSignature = nextOverviewSignature;
-      if (activeFeaturePanel === 'workspace') {
-        renderFeaturePanel();
-      }
-      if (typeof updateChatContextBar === 'function') {
-        updateChatContextBar();
-      }
-    }
+    const nextTodoPlan = todoRaw === null ? null : normalizeTodoPlan(todoRaw);
+    const nextTodoSignature = nextTodoPlan === null ? null : getTodoPlanSignature(nextTodoPlan);
+    const inputRequests = Array.isArray(inputRequestsRaw) ? inputRequestsRaw : [];
+    const metadataCommitted = commitSessionViewState(pollToken, () => {
+      const overviewChanged = nextOverviewSignature !== currentOverviewSignature;
+      const todoChanged = nextTodoPlan !== null && nextTodoSignature !== currentTodoPlanSignature;
+      const inputChanged = JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || []);
 
-    if (todoRes.ok) {
-      const nextTodoPlan = normalizeTodoPlan(await todoRes.json());
-      if (!isPollSnapshotCurrent(pollSnapshot)) {
-        schedulePoll(POLL_FAST_INTERVAL_MS);
-        return;
+      if (overviewChanged) {
+        currentOverviewSnapshot = nextOverview;
+        currentOverviewSignature = nextOverviewSignature;
       }
-      const nextTodoSignature = getTodoPlanSignature(nextTodoPlan);
-      // 当目标任务进入终态时，自动清除中断标记
-      let interruptCleared = false;
-      const currentInterruptTarget = getInterruptTargetId();
-      if (currentInterruptTarget) {
-        const target = nextTodoPlan.tasks.find(tk => tk.id === currentInterruptTarget);
-        if (target && (target.status === 'completed' || target.status === 'deleted')) {
-          setInterruptTargetId(null);
-          interruptCleared = true;
-        }
-      }
-      if (nextTodoSignature !== currentTodoPlanSignature) {
+      if (todoChanged) {
         currentTodoPlan = nextTodoPlan;
         currentTodoPlanSignature = nextTodoSignature;
+      }
+      if (inputChanged) {
+        currentInputRequests = inputRequests;
+        window.lastInputRequests = inputRequests;
+      }
+
+      // 当目标任务进入终态时，自动清除中断标记
+      let interruptCleared = false;
+      if (nextTodoPlan !== null) {
+        const currentInterruptTarget = getInterruptTargetId();
+        if (currentInterruptTarget) {
+          const target = nextTodoPlan.tasks.find(tk => tk.id === currentInterruptTarget);
+          if (target && (target.status === 'completed' || target.status === 'deleted')) {
+            setInterruptTargetId(null);
+            interruptCleared = true;
+          }
+        }
+      }
+
+      // All logical values are assigned before any renderer observes them.
+      if (overviewChanged) {
+        if (activeFeaturePanel === 'workspace') {
+          renderFeaturePanel();
+        }
+        if (typeof updateChatContextBar === 'function') {
+          updateChatContextBar();
+        }
+      }
+      if (todoChanged) {
         if (activeFeaturePanel === 'plan') {
           renderFeaturePanel();
         }
@@ -2642,36 +2667,34 @@ async function runPollCycle() {
       } else if (interruptCleared && activeFeaturePanel === 'plan') {
         renderFeaturePanel();
       }
-    }
 
-    // 处理输入请求（只在变化时重新渲染）
-    const inputRequestsRaw = await inputRes.json();
-    if (!isPollSnapshotCurrent(pollSnapshot)) {
+      // If partial compact was in flight but runtime is back to accepting input,
+      // compact is done (or failed) — clear the flag so normal input is shown.
+      if (
+        _partialCompactInFlight
+        && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
+        && inputRequests.length > 0
+      ) {
+        clearPartialCompactState();
+      }
+      if (inputChanged) {
+        renderInputRequests(inputRequests);
+        updateRollbackActionVisibility();
+      } else if (isChatSurfaceActive()) {
+        _syncPersistentInputUi(pollRuntimeId);
+      }
+    });
+    if (!metadataCommitted) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
-    const inputRequests = Array.isArray(inputRequestsRaw) ? inputRequestsRaw : [];
-    // If partial compact was in flight but runtime is back to accepting input,
-    // compact is done (or failed) — clear the flag so normal input is shown.
-    if (
-      _partialCompactInFlight
-      && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
-      && inputRequests.length > 0
-    ) {
-      clearPartialCompactState();
-    }
-    if (JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || [])) {
-      window.lastInputRequests = inputRequests;
-      renderInputRequests(inputRequests);
-      updateRollbackActionVisibility();
-    } else if (isChatSurfaceActive()) {
-      _syncPersistentInputUi(pollRuntimeId);
-    }
 
     // Generate only after this session's first assistant response was newly observed and completed.
-    if (isPollSnapshotCurrent(pollSnapshot) && !isRuntimeCalling(pollRuntimeId)) {
-      tryAutoTitleGeneration(currentMessages);
-    }
+    commitSessionViewState(pollToken, () => {
+      if (!isRuntimeCalling(pollRuntimeId)) {
+        tryAutoTitleGeneration(currentMessages);
+      }
+    });
 
     // Refresh the Claw-composed agent list occasionally.
     // Do not overwrite `allAgents` with the raw viewer session list,
@@ -2679,7 +2702,7 @@ async function runPollCycle() {
     if (Date.now() - lastAgentListRefreshAt > 3000) {
        lastAgentListRefreshAt = Date.now();
        await loadAgents();
-       if (!isPollSnapshotCurrent(pollSnapshot)) {
+       if (!isSessionViewTokenCurrent(pollToken)) {
          schedulePoll(POLL_FAST_INTERVAL_MS);
          return;
        }
@@ -2698,7 +2721,7 @@ async function runPollCycle() {
           const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(wsHostAgent.id));
           if (freshRes.ok) {
             const freshSessions = await freshRes.json();
-            if (!isPollSnapshotCurrent(pollSnapshot)) {
+            if (!isSessionViewTokenCurrent(pollToken)) {
               schedulePoll(POLL_FAST_INTERVAL_MS);
               return;
             }
@@ -2760,28 +2783,33 @@ async function runPollCycle() {
         // resources/viewer 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
         const hooksRes = await fetch(`/api/agents/${pollRuntimeId}/hooks`);
         const nextHookInspector = normalizeHookInspector(await hooksRes.json());
-        if (!isPollSnapshotCurrent(pollSnapshot)) {
+        const nextSignature = getHookInspectorSignature(nextHookInspector);
+        const hooksCommitted = commitSessionViewState(pollToken, () => {
+          if (nextSignature !== currentHookInspectorSignature) {
+            currentHookInspector = nextHookInspector;
+            currentHookInspectorSignature = nextSignature;
+            renderFeaturePanel();
+          } else if (activeFeaturePanel === 'inspector') {
+            renderFeaturePanel();
+          }
+        });
+        if (!hooksCommitted) {
           schedulePoll(POLL_FAST_INTERVAL_MS);
           return;
-        }
-        const nextSignature = getHookInspectorSignature(nextHookInspector);
-        if (nextSignature !== currentHookInspectorSignature) {
-          currentHookInspector = nextHookInspector;
-          currentHookInspectorSignature = nextSignature;
-          renderFeaturePanel();
-        } else if (activeFeaturePanel === 'inspector') {
-          renderFeaturePanel();
         }
       }
     }
 
-    // Write-through: keep cache fresh so switching back is instant
-    if (isPollSnapshotCurrent(pollSnapshot)) {
+    const finalStateCommitted = commitSessionViewState(pollToken, () => {
+      // Write-through: keep cache fresh so switching back is instant.
+      // Cache capture and recap tracking observe one synchronous view state.
       saveCurrentRuntimeToCache(pollRuntimeId);
+      _trackRecapSessionPresence();
+    });
+    if (!finalStateCommitted) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
+      return;
     }
-
-    // Track recap session presence (detects "return after absence")
-    _trackRecapSessionPresence();
 
   } catch (e) {
     console.warn('Polling failed, keeping last known connection state:', e);

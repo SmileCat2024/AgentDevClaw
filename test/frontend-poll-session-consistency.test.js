@@ -5,6 +5,11 @@ import vm from 'node:vm';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
+const sessionViewStateSource = fs.readFileSync(
+  new URL('../public/src/modules/session-view-state.js', import.meta.url),
+  'utf8',
+);
+const indexSource = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 function extractPollSource() {
   const start = mainSource.indexOf('// ── Runtime poll coordinator');
@@ -19,6 +24,14 @@ function extractLoadAgentDataSource() {
   const end = mainSource.indexOf('\nasync function refreshCurrentRuntimeStatus', start);
   assert.notEqual(start, -1, 'loadAgentData start marker should exist');
   assert.notEqual(end, -1, 'loadAgentData end marker should exist');
+  return mainSource.slice(start, end);
+}
+
+function extractRuntimeStatusSource() {
+  const start = mainSource.indexOf('async function refreshCurrentRuntimeStatus(');
+  const end = mainSource.indexOf('// ── Auto session title generation', start);
+  assert.notEqual(start, -1, 'runtime status start marker should exist');
+  assert.notEqual(end, -1, 'runtime status end marker should exist');
   return mainSource.slice(start, end);
 }
 
@@ -155,6 +168,7 @@ function createPollSandbox({ blockStatus = true } = {}) {
         kind: 'usage-render',
         runtime: sandbox.currentRuntimeAgentId,
         used: sandbox.currentOverviewSnapshot?.usageStats?.lastRequestUsage?.inputTokens || 0,
+        requests: sandbox.currentInputRequests.map((item) => item.requestId),
       });
     },
     normalizeTodoPlan: (value) => value,
@@ -182,7 +196,7 @@ function createPollSandbox({ blockStatus = true } = {}) {
   };
 
   vm.createContext(sandbox);
-  vm.runInContext(`${extractPollSource()}\nglobalThis.__poll = poll;`, sandbox);
+  vm.runInContext(`${sessionViewStateSource}\n${extractPollSource()}\nglobalThis.__poll = poll;`, sandbox);
 
   return {
     sandbox,
@@ -194,6 +208,92 @@ function createPollSandbox({ blockStatus = true } = {}) {
     getScheduledPollDelays: () => scheduledPollDelays.slice(),
   };
 }
+
+test('session view token rejects an older visit to the same runtime', () => {
+  const sandbox = {
+    currentRuntimeAgentId: 'A',
+    _switchEpoch: 7,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `${sessionViewStateSource}\n`
+      + 'globalThis.__capture = captureSessionViewToken;\n'
+      + 'globalThis.__commit = commitSessionViewState;',
+    sandbox,
+  );
+
+  const oldVisit = sandbox.__capture('A');
+  sandbox._switchEpoch = 8;
+  let applied = false;
+  const committed = sandbox.__commit(oldVisit, () => { applied = true; });
+
+  assert.equal(committed, false);
+  assert.equal(applied, false);
+  assert.equal(
+    sandbox.__commit(sandbox.__capture('A'), () => { applied = true; }),
+    true,
+  );
+  assert.equal(applied, true);
+});
+
+test('session view ownership module loads before app-main', () => {
+  const boundaryIndex = indexSource.indexOf('/modules/session-view-state.js');
+  const mainIndex = indexSource.indexOf('/app-main.js');
+  assert.notEqual(boundaryIndex, -1);
+  assert.notEqual(mainIndex, -1);
+  assert.ok(boundaryIndex < mainIndex);
+});
+
+test('runtime status cannot commit after the same runtime is re-entered', async () => {
+  const notificationBody = createDeferred();
+  const effects = [];
+  const runtimeRecord = { connected: true };
+  const sandbox = {
+    console,
+    Promise,
+    currentRuntimeAgentId: 'A',
+    currentAgentId: 'programming-helper',
+    currentRuntimeConnected: true,
+    _switchEpoch: 11,
+    normalizeAgentIdentity: (value) => String(value || '').trim(),
+    getCurrentRuntimeRecord: () => ({
+      parent_id: 'programming-helper',
+      active_workspace_session_id: 'session-a',
+    }),
+    getCurrentAgentRecord: () => null,
+    getActiveWorkspaceSessionId: () => 'session-a',
+    getRuntimeRecord: () => runtimeRecord,
+    fetch: async (url) => ({
+      ok: true,
+      json: String(url).endsWith('/notification')
+        ? async () => notificationBody.promise
+        : async () => String(url).endsWith('/connection')
+          ? { connected: false }
+          : { blocked: true },
+    }),
+    setConnectionStatus: () => effects.push('connection'),
+    applyContextGuardStatus: () => effects.push('guard'),
+    updateNotificationStatus: () => effects.push('notification'),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `${sessionViewStateSource}\n${extractRuntimeStatusSource()}\n`
+      + 'globalThis.__capture = captureSessionViewToken;\n'
+      + 'globalThis.__refresh = refreshCurrentRuntimeStatus;',
+    sandbox,
+  );
+
+  const oldVisit = sandbox.__capture('A');
+  const refresh = sandbox.__refresh('A', oldVisit);
+  await new Promise((resolve) => setImmediate(resolve));
+  sandbox._switchEpoch = 12;
+  notificationBody.resolve({ calling: false });
+
+  assert.equal(await refresh, null);
+  assert.equal(sandbox.currentRuntimeConnected, true);
+  assert.equal(runtimeRecord.connected, true);
+  assert.deepEqual(effects, []);
+});
 
 test('a poll response that becomes stale after its first guard cannot overwrite the new session', async () => {
   const harness = createPollSandbox();
@@ -240,6 +340,27 @@ test('concurrent poll calls share one in-flight cycle', async () => {
     0,
     'an immediate refresh request during an in-flight cycle should run next',
   );
+});
+
+test('poll metadata render observes one overview and input generation', async () => {
+  const harness = createPollSandbox({ blockStatus: false });
+  harness.sandbox.currentOverviewSnapshot = {
+    modelName: 'old',
+    usageStats: { lastRequestUsage: { inputTokens: 1 } },
+  };
+  harness.sandbox.currentOverviewSignature = JSON.stringify(harness.sandbox.currentOverviewSnapshot);
+  harness.sandbox.currentInputRequests = [{ requestId: 'old-choice' }];
+  harness.sandbox.window.lastInputRequests = harness.sandbox.currentInputRequests;
+
+  await harness.sandbox.__poll();
+
+  const usageRender = harness.events.find((event) => event.kind === 'usage-render');
+  assert.deepEqual(usageRender, {
+    kind: 'usage-render',
+    runtime: 'A',
+    used: 111,
+    requests: [],
+  });
 });
 
 test('loadAgentData discards response bodies that finish after a newer switch', async () => {
@@ -308,7 +429,10 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
   };
 
   vm.createContext(sandbox);
-  vm.runInContext(`${extractLoadAgentDataSource()}\nglobalThis.__loadAgentData = loadAgentData;`, sandbox);
+  vm.runInContext(
+    `${sessionViewStateSource}\n${extractLoadAgentDataSource()}\nglobalThis.__loadAgentData = loadAgentData;`,
+    sandbox,
+  );
 
   const oldLoad = sandbox.__loadAgentData('A');
   await new Promise((resolve) => setImmediate(resolve));
