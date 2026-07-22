@@ -252,9 +252,17 @@ function getRuntimeAwareAgentRecord() {
         // GET /protoclaw/prebuilt_sessions). Always merge in host's sessions so
         // context bar can find activeSession and read correct contextLength.
         if (hostRecord && hostRecord.workspace_sessions) {
+          const mergedWorkspaceSessions = _mergeWorkspaceSessions(runtimeRecord.workspace_sessions, hostRecord.workspace_sessions);
+          const runtimeSessionId = runtimeRecord.active_workspace_session_id || null;
           return {
             ...runtimeRecord,
-            workspace_sessions: _mergeWorkspaceSessions(runtimeRecord.workspace_sessions, hostRecord.workspace_sessions),
+            // The session list belongs to the host, but the selected chat view
+            // belongs to the concrete runtime. A host snapshot may still point
+            // at another concurrently running session, so never let its
+            // activeSessionId override the runtime identity.
+            workspace_sessions: runtimeSessionId
+              ? { ...mergedWorkspaceSessions, activeSessionId: runtimeSessionId }
+              : mergedWorkspaceSessions,
           };
         }
         return runtimeRecord;

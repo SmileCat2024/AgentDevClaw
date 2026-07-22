@@ -2192,6 +2192,14 @@ async function loadAgentData(agentId) {
     renderFeaturePanel();
     return;
   }
+  const loadSnapshot = {
+    runtimeId: normalizeAgentIdentity(agentId),
+    switchEpoch: _switchEpoch,
+  };
+  const isLoadCurrent = () => (
+    normalizeAgentIdentity(currentRuntimeAgentId) === loadSnapshot.runtimeId
+    && _switchEpoch === loadSnapshot.switchEpoch
+  );
   try {
     currentRuntimeAgentId = agentId;
     activateUserCollapseStateForContext(getRuntimeContextKey(agentId));
@@ -2214,16 +2222,26 @@ async function loadAgentData(agentId) {
 
     // Stale guard: if the user switched to a different agent during the
     // fetch, discard this response to prevent rendering stale data (flashback).
-    if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(agentId)) {
+    if (!isLoadCurrent()) {
       return;
     }
 
-    const msgsData = await msgsRes.json();
-    const tools = await toolsRes.json();
-    setCurrentHookInspector(await hooksRes.json());
-    setCurrentOverviewSnapshot(await overviewRes.json());
-    setCurrentTodoPlan(todoRes.ok ? await todoRes.json() : getEmptyTodoPlan());
-    const inputRequests = await inputRes.json();
+    const [msgsData, tools, hookInspector, overviewSnapshot, todoPlan, inputRequests] = await Promise.all([
+      msgsRes.json(),
+      toolsRes.json(),
+      hooksRes.json(),
+      overviewRes.json(),
+      todoRes.ok ? todoRes.json() : Promise.resolve(getEmptyTodoPlan()),
+      inputRes.json(),
+    ]);
+    // Response headers may have arrived before a switch while one or more
+    // bodies were still streaming/parsing. Never commit that older batch.
+    if (!isLoadCurrent()) {
+      return;
+    }
+    setCurrentHookInspector(hookInspector);
+    setCurrentOverviewSnapshot(overviewSnapshot);
+    setCurrentTodoPlan(todoPlan);
 
     currentMessages = msgsData.messages || [];
     recheckAutoTitleCandidate();
@@ -2268,8 +2286,14 @@ async function loadAgentData(agentId) {
 
     renderCurrentMainView();
     await refreshCurrentRuntimeStatus(agentId);
+    if (!isLoadCurrent()) {
+      return;
+    }
     if (activeFeaturePanel === 'logs') {
       await loadLogs(true);
+      if (!isLoadCurrent()) {
+        return;
+      }
     }
     renderFeaturePanel();
 
@@ -2332,10 +2356,60 @@ async function refreshCurrentRuntimeStatus(runtimeId = currentRuntimeAgentId) {
 
 // ── Auto session title generation + Choice alerts → modules/auto-title.js (Phase A-3, 2026-07-03) ──
 
+// ── Runtime poll coordinator ───────────────────────────────────────────────
+// There must be exactly one owner of the self-scheduling poll loop. Input
+// submission paths may request an immediate refresh, but they must not create
+// another recursive timer chain.
+let _pollTimerId = null;
+let _pollCycleInFlight = null;
+let _pollImmediateRequested = false;
+
+function isPollSnapshotCurrent(snapshot) {
+  return !!snapshot
+    && normalizeAgentIdentity(currentRuntimeAgentId) === snapshot.runtimeId
+    && _switchEpoch === snapshot.switchEpoch;
+}
+
+function schedulePoll(delayMs = POLL_FAST_INTERVAL_MS) {
+  if (_pollTimerId !== null) {
+    clearTimeout(_pollTimerId);
+  }
+  _pollTimerId = setTimeout(() => {
+    _pollTimerId = null;
+    poll();
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
 async function poll() {
+  if (_pollCycleInFlight) {
+    _pollImmediateRequested = true;
+    return _pollCycleInFlight;
+  }
+
+  if (_pollTimerId !== null) {
+    clearTimeout(_pollTimerId);
+    _pollTimerId = null;
+  }
+
+  const cycle = runPollCycle();
+  _pollCycleInFlight = cycle;
+  try {
+    return await cycle;
+  } finally {
+    if (_pollCycleInFlight === cycle) {
+      _pollCycleInFlight = null;
+    }
+    if (_pollImmediateRequested) {
+      _pollImmediateRequested = false;
+      schedulePoll(0);
+    }
+  }
+}
+
+async function runPollCycle() {
   try {
     if (prebuiltSessionSwitchInFlight) {
-      setTimeout(poll, POLL_FAST_INTERVAL_MS);
+      schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
 
@@ -2406,12 +2480,16 @@ async function poll() {
       if (activeFeaturePanel === 'logs' && logPanelScope === 'all') {
         await loadLogs();
       }
-      setTimeout(poll, POLL_INTERVAL_MS);
+      schedulePoll(POLL_INTERVAL_MS);
       return;
     }
 
     // 先单独刷新轻量运行态，再并行请求较重的数据，避免状态栏被慢接口拖住
-    const pollRuntimeId = currentRuntimeAgentId;
+    const pollSnapshot = {
+      runtimeId: normalizeAgentIdentity(currentRuntimeAgentId),
+      switchEpoch: _switchEpoch,
+    };
+    const pollRuntimeId = pollSnapshot.runtimeId;
     const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId);
 
     const [msgsRes, inputRes, overviewRes, todoRes] = await Promise.all([
@@ -2422,8 +2500,8 @@ async function poll() {
     ]);
 
     // 如果在 fetch 期间已经切换了 agent，丢弃过时的响应，避免旧数据覆盖新会话
-    if (normalizeAgentIdentity(currentRuntimeAgentId) !== normalizeAgentIdentity(pollRuntimeId)) {
-      setTimeout(poll, POLL_FAST_INTERVAL_MS);
+    if (!isPollSnapshotCurrent(pollSnapshot)) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
 
@@ -2435,7 +2513,7 @@ async function poll() {
         clearPartialCompactState();
       }
       if (prebuiltSessionSwitchInFlight || suppressSidebarRerender) {
-        setTimeout(poll, POLL_FAST_INTERVAL_MS);
+        schedulePoll(POLL_FAST_INTERVAL_MS);
         return;
       }
       const failedRuntimeId = currentRuntimeAgentId;
@@ -2463,11 +2541,15 @@ async function poll() {
         renderInputRequests([]);
       }
       await loadAgents();
-      setTimeout(poll, POLL_INTERVAL_MS);
+      schedulePoll(POLL_INTERVAL_MS);
       return;
     }
 
     const data = await msgsRes.json();
+    if (!isPollSnapshotCurrent(pollSnapshot)) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
+      return;
+    }
     const messages = data.messages || [];
 
     // Clear session loading indicator once messages are available
@@ -2509,10 +2591,18 @@ async function poll() {
 
     await statusTask;
     await refreshAgentCallStates(allAgents);
+    if (!isPollSnapshotCurrent(pollSnapshot)) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
+      return;
+    }
     _syncPersistentActionButton();
-    _syncPersistentInputUi(currentRuntimeAgentId);
+    _syncPersistentInputUi(pollRuntimeId);
 
     const nextOverview = normalizeOverviewSnapshot(await overviewRes.json());
+    if (!isPollSnapshotCurrent(pollSnapshot)) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
+      return;
+    }
     const nextOverviewSignature = getOverviewSignature(nextOverview);
     if (nextOverviewSignature !== currentOverviewSignature) {
       currentOverviewSnapshot = nextOverview;
@@ -2527,6 +2617,10 @@ async function poll() {
 
     if (todoRes.ok) {
       const nextTodoPlan = normalizeTodoPlan(await todoRes.json());
+      if (!isPollSnapshotCurrent(pollSnapshot)) {
+        schedulePoll(POLL_FAST_INTERVAL_MS);
+        return;
+      }
       const nextTodoSignature = getTodoPlanSignature(nextTodoPlan);
       // 当目标任务进入终态时，自动清除中断标记
       let interruptCleared = false;
@@ -2552,6 +2646,10 @@ async function poll() {
 
     // 处理输入请求（只在变化时重新渲染）
     const inputRequestsRaw = await inputRes.json();
+    if (!isPollSnapshotCurrent(pollSnapshot)) {
+      schedulePoll(POLL_FAST_INTERVAL_MS);
+      return;
+    }
     const inputRequests = Array.isArray(inputRequestsRaw) ? inputRequestsRaw : [];
     // If partial compact was in flight but runtime is back to accepting input,
     // compact is done (or failed) — clear the flag so normal input is shown.
@@ -2567,11 +2665,11 @@ async function poll() {
       renderInputRequests(inputRequests);
       updateRollbackActionVisibility();
     } else if (isChatSurfaceActive()) {
-      _syncPersistentInputUi(currentRuntimeAgentId);
+      _syncPersistentInputUi(pollRuntimeId);
     }
 
     // Generate only after this session's first assistant response was newly observed and completed.
-    if (currentRuntimeAgentId && !isRuntimeCalling(currentRuntimeAgentId)) {
+    if (isPollSnapshotCurrent(pollSnapshot) && !isRuntimeCalling(pollRuntimeId)) {
       tryAutoTitleGeneration(currentMessages);
     }
 
@@ -2581,6 +2679,10 @@ async function poll() {
     if (Date.now() - lastAgentListRefreshAt > 3000) {
        lastAgentListRefreshAt = Date.now();
        await loadAgents();
+       if (!isPollSnapshotCurrent(pollSnapshot)) {
+         schedulePoll(POLL_FAST_INTERVAL_MS);
+         return;
+       }
        if (typeof updateChatContextBar === 'function') {
          updateChatContextBar();
        }
@@ -2596,6 +2698,10 @@ async function poll() {
           const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(wsHostAgent.id));
           if (freshRes.ok) {
             const freshSessions = await freshRes.json();
+            if (!isPollSnapshotCurrent(pollSnapshot)) {
+              schedulePoll(POLL_FAST_INTERVAL_MS);
+              return;
+            }
             // Preserve optimistic archived state: during compact+archive operations,
             // markSessionArchivedForMutation sets archived=true before the server
             // actually archives (which happens inside compact_and_resume response).
@@ -2652,8 +2758,12 @@ async function poll() {
         await loadLogs();
       } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan') {
         // resources/viewer 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
-        const hooksRes = await fetch(`/api/agents/${currentRuntimeAgentId}/hooks`);
+        const hooksRes = await fetch(`/api/agents/${pollRuntimeId}/hooks`);
         const nextHookInspector = normalizeHookInspector(await hooksRes.json());
+        if (!isPollSnapshotCurrent(pollSnapshot)) {
+          schedulePoll(POLL_FAST_INTERVAL_MS);
+          return;
+        }
         const nextSignature = getHookInspectorSignature(nextHookInspector);
         if (nextSignature !== currentHookInspectorSignature) {
           currentHookInspector = nextHookInspector;
@@ -2666,8 +2776,8 @@ async function poll() {
     }
 
     // Write-through: keep cache fresh so switching back is instant
-    if (currentRuntimeAgentId) {
-      saveCurrentRuntimeToCache(currentRuntimeAgentId);
+    if (isPollSnapshotCurrent(pollSnapshot)) {
+      saveCurrentRuntimeToCache(pollRuntimeId);
     }
 
     // Track recap session presence (detects "return after absence")
@@ -2675,10 +2785,10 @@ async function poll() {
 
   } catch (e) {
     console.warn('Polling failed, keeping last known connection state:', e);
-    setTimeout(poll, POLL_INTERVAL_MS);
+    schedulePoll(POLL_INTERVAL_MS);
     return;
   }
-  setTimeout(poll, POLL_FAST_INTERVAL_MS);
+  schedulePoll(POLL_FAST_INTERVAL_MS);
 }
 
 // 渲染输入请求
