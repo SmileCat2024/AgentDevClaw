@@ -1350,6 +1350,96 @@ body[data-theme="light"] .feature-detail-window {
   scrollbar-color: rgba(0,0,0,0.15) transparent;
 }
 
+/* ── Feature 详情弹窗内部布局（扁平化，去掉卡片套卡片） ─────────────────────── */
+
+.fdetail-source {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  font-family: var(--mono-font, 'SF Mono', 'Cascadia Code', 'Consolas', monospace);
+  word-break: break-all;
+}
+
+.fdetail-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.fdetail-tool-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.fdetail-tool-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.fdetail-tool-list .fdetail-tool-row:last-child {
+  border-bottom: none;
+}
+
+body[data-theme="light"] .fdetail-tool-row {
+  border-bottom-color: rgba(0,0,0,0.06);
+}
+
+.fdetail-tool-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.fdetail-tool-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fdetail-tool-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.fdetail-tool-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.fdetail-tool-pill {
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-family: var(--mono-font, 'SF Mono', 'Cascadia Code', 'Consolas', monospace);
+  color: var(--text-secondary);
+  background: rgba(255,255,255,0.05);
+}
+
+body[data-theme="light"] .fdetail-tool-pill {
+  background: rgba(0,0,0,0.04);
+}
+
+.fdetail-tool-state {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.fdetail-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 8px 0;
+}
+
 /* ── Settings Overlay ──────────────────────────────────────────────────────── */
 
 .settings-tab-bar {
@@ -5400,17 +5490,9 @@ body[data-theme="light"] .settings-checkbox {
   padding: 2px 0;
 }
 
-.oauth-login-box {
-  padding: 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.02);
-  margin-top: 4px;
-}
-
-body[data-theme="light"] .oauth-login-box {
-  border-color: #e0e0e0;
-  background: #f9f9f9;
+.oauth-status-text {
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .oauth-user-code {
@@ -5432,11 +5514,6 @@ body[data-theme="light"] .oauth-user-code {
   background: rgba(99, 145, 255, 0.08);
 }
 
-.oauth-status-text {
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .oauth-status-text a {
   color: var(--accent-primary, #6391ff);
   text-decoration: none;
@@ -5446,39 +5523,17 @@ body[data-theme="light"] .oauth-user-code {
   text-decoration: underline;
 }
 
-.oauth-btn-row {
+.oauth-action-row {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 8px;
+  align-items: center;
+  margin-top: 6px;
 }
 
-.oauth-btn {
+.oauth-action-row .settings-btn {
   padding: 6px 14px;
-  border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(255,255,255,0.04);
-  color: var(--text-primary);
   font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
-  white-space: nowrap;
-}
-
-.oauth-btn:hover {
-  border-color: rgba(99, 145, 255, 0.4);
-  background: rgba(99, 145, 255, 0.08);
-}
-
-body[data-theme="light"] .oauth-btn {
-  border-color: #d0d0d0;
-  background: #f5f5f5;
-}
-
-body[data-theme="light"] .oauth-btn:hover {
-  border-color: #6391ff;
-  background: rgba(99, 145, 255, 0.06);
 }
 
 .oauth-badge {
@@ -5492,5 +5547,38 @@ body[data-theme="light"] .oauth-btn:hover {
   background: rgba(99, 145, 255, 0.15);
   color: #6391ff;
   margin-left: 4px;
+}
+
+/* ── Preset tags (vision / oauth) ─────────────────────────────── */
+
+.preset-tag {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.preset-tag-vision {
+  background: rgba(139, 195, 74, 0.16);
+  color: #9ccc65;
+}
+
+body[data-theme="light"] .preset-tag-vision {
+  background: rgba(85, 139, 47, 0.12);
+  color: #558b2f;
+}
+
+.preset-tag-oauth {
+  background: rgba(255, 167, 38, 0.16);
+  color: #ffb74d;
+}
+
+body[data-theme="light"] .preset-tag-oauth {
+  background: rgba(230, 81, 0, 0.1);
+  color: #e65100;
 }
 

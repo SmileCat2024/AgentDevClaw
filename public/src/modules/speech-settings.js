@@ -202,14 +202,21 @@ window.saveSpeechPreset = async function(editIdx) {
     language: el('speech-preset-language')?.value || 'auto',
   };
   const presets = window.ClawFW._speechPresets || [];
+  // Check if there's currently an active speech model
+  var sc = window.ClawFW._speechModelConfig || {};
+  var wasActive = !!(sc.baseUrl && sc.apiKey);
   if (editIdx === 'new') {
     presets.push(preset);
+    editIdx = presets.length - 1;
   } else {
     presets[editIdx] = preset;
   }
   window.ClawFW._speechPresets = presets;
   window.ClawFW._speechEditing = null;
   await saveSpeechFullConfig();
+  if (!wasActive) {
+    await window.applySpeechPreset(editIdx);
+  }
 };
 
 async function saveSpeechFullConfig() {

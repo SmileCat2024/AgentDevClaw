@@ -84,7 +84,10 @@ function renderSettingsOverlay() {
           '<div class="settings-preset-dot"></div>',
           '<div class="settings-preset-info">',
           '<div class="settings-preset-name">' + escapeHtml(p.name || p.model || ('Preset ' + (idx + 1))) + '</div>',
-          '<div class="settings-preset-detail">' + escapeHtml((p.provider || '—') + ' · ' + (p.model || '—')) + (p.vision ? ' · 🖼️' : '') + (p.authType === 'oauth-codex' ? ' · 🔑' : '') + '</div>',
+          '<div class="settings-preset-detail">' + escapeHtml((p.provider || '—') + ' · ' + (p.model || '—'))
+            + (p.vision ? ' <span class="preset-tag preset-tag-vision">' + (isZh ? '视觉' : 'Vision') + '</span>' : '')
+            + (p.authType === 'oauth-codex' ? ' <span class="preset-tag preset-tag-oauth">OAuth</span>' : '')
+            + '</div>',
           '</div>',
           '<div class="settings-preset-actions">',
           '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSettingsPreset(' + idx + ')">',
@@ -158,7 +161,7 @@ function renderSettingsOverlay() {
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
-    '<div class="feature-detail-window" style="width:min(100%,560px);max-height:min(100%,720px);">',
+    '<div class="feature-detail-window" style="width:min(100%,560px);min-height:480px;max-height:min(100%,720px);">',
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div>',
@@ -239,7 +242,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-field">',
     '<label>Client ID</label>',
     '<input class="settings-input" id="settings-preset-clientid" type="text" value="' + escapeHtml(preset.clientId || 'app_EMoamEEZ73f0CkXaXp7hrann') + '" placeholder="app_EMoamEEZ73f0CkXaXp7hrann">',
-    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? 'OpenAI 应用注册的 client_id。使用其他 Agent 的 client_id 可伪装为该应用' : 'OpenAI application client_id. Using another agent\'s client_id impersonates that app') + '</div>',
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? 'OpenAI 应用注册的 client_id' : 'OpenAI application client_id') + '</div>',
     '</div>',
     '<div class="settings-field" id="oauth-login-area">',
     renderOAuthLoginArea(preset, isZh),
@@ -456,7 +459,16 @@ async function saveSettingsPreset(idx) {
   presets[idx] = preset;
   window.ClawFW.settingsData.presets = presets;
   window.ClawFW.settingsEditing = null;
+  // Check if no model is currently active — auto-select the first/newly saved preset
+  var config = window.ClawFW.settingsData?.config || {};
+  var dm = config.defaultModel || {};
+  var hasActive = presets.some(function(p) {
+    return dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl;
+  });
   await saveSettingsConfig();
+  if (!hasActive) {
+    await applySettingsPreset(idx);
+  }
 }
 
 async function applySettingsPreset(idx) {
@@ -560,19 +572,17 @@ function checkOAuthProxy(isZh) {
 function renderOAuthLoginArea(preset, isZh) {
   var providerName = preset.providerName || '';
   if (!providerName) {
-    return '<div class="oauth-status-text" style="color:var(--text-secondary);padding:6px 0;">'
+    return '<div class="oauth-status-text" style="color:var(--text-secondary);padding:4px 0;">'
       + (isZh ? '请先保存预设，再登录 OpenAI 账号' : 'Save the preset first, then login with OpenAI')
       + '</div>';
   }
   return [
-    '<div class="oauth-login-box">',
-    '<div id="oauth-status-display" class="oauth-status-text" style="margin-bottom:6px;"></div>',
-    '<div class="oauth-btn-row">',
-    '<button class="oauth-btn" type="button" onclick="startOAuthLogin()">'
-      + (isZh ? '🔑 登录 OpenAI' : '🔑 Login with OpenAI') + '</button>',
-    '<button class="oauth-btn" type="button" onclick="logoutOAuth()">'
+    '<div id="oauth-status-display" class="oauth-status-text" style="padding:2px 0;"></div>',
+    '<div class="oauth-action-row">',
+    '<button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin()">'
+      + (isZh ? '登录 OpenAI' : 'Login with OpenAI') + '</button>',
+    '<button class="settings-btn settings-btn-secondary" type="button" onclick="logoutOAuth()">'
       + (isZh ? '登出' : 'Logout') + '</button>',
-    '</div>',
     '</div>',
   ].join('');
 }
