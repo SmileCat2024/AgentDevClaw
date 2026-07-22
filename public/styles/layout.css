@@ -2426,6 +2426,240 @@ body[data-theme="light"] .settings-btn-secondary:hover {
   background: #e4e4e4;
 }
 
+/* ── Proxy Overlay ─────────────────────────────────────────────────────────── */
+
+#settings-proxy-container {
+  font-family: inherit;
+}
+
+.proxy-info-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+/* Detected proxy card */
+.proxy-detected-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+body[data-theme="light"] .proxy-detected-box {
+  background: rgba(0,0,0,0.03);
+  border-color: rgba(0,0,0,0.08);
+}
+
+.proxy-detected-none {
+  opacity: 0.6;
+}
+
+.proxy-detected-clickable {
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.proxy-detected-clickable:hover {
+  border-color: rgba(99,145,255,0.4);
+  background: rgba(99,145,255,0.06);
+}
+
+body[data-theme="light"] .proxy-detected-clickable:hover {
+  border-color: rgba(99,145,255,0.4);
+  background: rgba(99,145,255,0.04);
+}
+
+.proxy-detected-icon {
+  font-size: 18px;
+  line-height: 1;
+  margin-top: 1px;
+  color: var(--text-secondary);
+}
+
+.proxy-detected-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.proxy-detected-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.proxy-detected-url {
+  margin-top: 2px;
+}
+
+.proxy-detected-url code {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--accent, #6391ff);
+  word-break: break-all;
+}
+
+/* Active status banner */
+.proxy-active-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(94,197,126,0.1);
+  border: 1px solid rgba(94,197,126,0.25);
+  font-size: 13px;
+}
+
+.proxy-active-pending {
+  background: rgba(255,181,71,0.1);
+  border-color: rgba(255,181,71,0.25);
+}
+
+.proxy-active-banner-icon {
+  font-size: 14px;
+  font-weight: 700;
+  color: #5ec57e;
+}
+
+.proxy-active-pending .proxy-active-banner-icon {
+  color: #ffb54d;
+}
+
+.proxy-active-banner-text {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.proxy-active-banner-url {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  word-break: break-all;
+  margin-left: auto;
+}
+
+/* Toggle switch */
+.proxy-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.proxy-toggle-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.proxy-switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.proxy-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.proxy-switch-slider {
+  position: absolute;
+  inset: 0;
+  background: rgba(255,255,255,0.12);
+  border-radius: 24px;
+  transition: 0.25s;
+}
+
+body[data-theme="light"] .proxy-switch-slider {
+  background: rgba(0,0,0,0.15);
+}
+
+.proxy-switch-slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.25s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.proxy-switch input:checked + .proxy-switch-slider {
+  background: #6391ff;
+}
+
+.proxy-switch input:checked + .proxy-switch-slider::before {
+  transform: translateX(18px);
+}
+
+/* Button row */
+.proxy-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Status feedback */
+.proxy-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.proxy-status-ok {
+  background: rgba(94,197,126,0.1);
+}
+
+.proxy-status-error {
+  background: rgba(224,108,108,0.1);
+}
+
+.proxy-status-loading {
+  background: rgba(128,128,128,0.08);
+}
+
+.proxy-status-icon {
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.proxy-status-ok .proxy-status-icon { color: #5ec57e; }
+.proxy-status-ok .proxy-status-text { color: #5ec57e; }
+.proxy-status-error .proxy-status-icon { color: #e06c6c; }
+.proxy-status-error .proxy-status-text { color: #e06c6c; }
+.proxy-status-loading .proxy-status-icon { color: var(--text-secondary); }
+.proxy-status-loading .proxy-status-text { color: var(--text-secondary); }
+
+.proxy-status-text {
+  font-weight: 500;
+}
+
+.proxy-status-detail {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary, rgba(150,150,160,0.6));
+  margin-left: auto;
+}
+
 /* ── Remote Claw Connection Overlay ─────────────────────────────────────── */
 
 /* Overlay & modal shell */

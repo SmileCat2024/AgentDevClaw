@@ -1542,6 +1542,13 @@ document.getElementById('settings-flyout-config').addEventListener('click', () =
   }
 });
 
+document.getElementById('settings-flyout-proxy')?.addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof openProxySettings === 'function') {
+    openProxySettings();
+  }
+});
+
 document.getElementById('settings-flyout-remote')?.addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
   if (typeof openRemoteClawSettings === 'function') {

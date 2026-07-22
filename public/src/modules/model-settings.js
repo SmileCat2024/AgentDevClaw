@@ -101,20 +101,15 @@ function renderSettingsOverlay() {
 
   // ── Tab bar ──
   const tabText = activeTab === 'text';
-  const tabProxy = activeTab === 'proxy';
   const tabBar = [
     '<div class="settings-tab-bar">',
     '<button class="settings-tab' + (tabText ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'text\')">',
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>',
     (isZh ? '文本模型' : 'Text Model'),
     '</button>',
-    '<button class="settings-tab' + (!tabText && !tabProxy ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'speech\')">',
+    '<button class="settings-tab' + (!tabText ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'speech\')">',
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
     (isZh ? '语音模型' : 'Speech Model'),
-    '</button>',
-    '<button class="settings-tab' + (tabProxy ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'proxy\')">',
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>',
-    (isZh ? '网络代理' : 'Proxy'),
     '</button>',
     '</div>',
   ].join('');
@@ -156,8 +151,6 @@ function renderSettingsOverlay() {
       /* Edit Form (inline) */
       editing !== null ? renderSettingsEditForm(editing, presets, isZh) : '',
     ].join('');
-  } else if (tabProxy) {
-    tabContent = '<div id="settings-proxy-container"></div>';
   } else {
     // Speech model tab
     tabContent = renderSpeechModelSection(isZh);
@@ -169,7 +162,7 @@ function renderSettingsOverlay() {
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div>',
-    '<div class="feature-detail-subtitle">' + (isZh ? '管理模型预设与网络代理' : 'Manage model presets and network proxy') + '</div>',
+    '<div class="feature-detail-subtitle">' + (isZh ? '管理模型预设' : 'Manage model presets') + '</div>',
     '</div>',
     '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeSettings()">×</button>',
     '</div>',
@@ -182,10 +175,6 @@ function renderSettingsOverlay() {
     '</div>',
     '</div>',
   ].join('');
-
-  if (tabProxy) {
-    _loadProxyPanel();
-  }
 }
 
 window.switchSettingsTab = function(tab) {
@@ -739,16 +728,60 @@ function refreshOAuthStatus() {
     });
 }
 
-// ── Proxy panel ─────────────────────────────────────────────────
+// ── Proxy overlay (independent) ──────────────────────────────────────────────
 
 window._proxyData = null;
+
+function ensureProxyHost() {
+  var host = document.getElementById('proxy-overlay-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'proxy-overlay-host';
+    document.body.appendChild(host);
+  }
+  return host;
+}
+
+function openProxySettings() {
+  window.ClawFW.proxyOverlayOpen = true;
+  renderProxyOverlay();
+  _loadProxyPanel();
+}
+
+function closeProxySettings() {
+  window.ClawFW.proxyOverlayOpen = false;
+  var host = document.getElementById('proxy-overlay-host');
+  if (host) host.innerHTML = '';
+}
+
+function renderProxyOverlay() {
+  var host = ensureProxyHost();
+  if (!window.ClawFW.proxyOverlayOpen) {
+    host.innerHTML = '';
+    return;
+  }
+  var isZh = currentLanguage === 'zh';
+  host.innerHTML = [
+    '<div class="feature-detail-overlay">',
+    '<div class="feature-detail-window" style="width:min(100%,520px);max-height:min(100%,640px);">',
+    '<div class="feature-detail-head">',
+    '<div>',
+    '<div class="feature-detail-title">' + (isZh ? '网络代理' : 'Network Proxy') + '</div>',
+    '</div>',
+    '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeProxySettings()">×</button>',
+    '</div>',
+    '<div id="settings-proxy-container" class="settings-tab-content"></div>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
 
 async function _loadProxyPanel() {
   var container = document.getElementById('settings-proxy-container');
   if (!container) return;
   var isZh = currentLanguage === 'zh';
 
-  container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);">' + (isZh ? '加载中...' : 'Loading...') + '</div>';
+  container.innerHTML = '<div class="proxy-info-text">' + (isZh ? '加载中...' : 'Loading...') + '</div>';
 
   try {
     var res = await fetch('/protoclaw/proxy_config');
@@ -758,64 +791,84 @@ async function _loadProxyPanel() {
   }
 
   var d = window._proxyData;
-  var detectedHint = '';
-  var detectedBtnText = '';
+
+  // Detected proxy info — clickable card that auto-fills URL + enables
+  var detectedHtml = '';
   if (d.detected && d.detected.url) {
-    detectedHint = isZh
-      ? '检测到系统代理: ' + d.detected.url + ' (' + (d.detected.source === 'registry' ? '注册表' : '环境变量') + ')'
-      : 'System proxy detected: ' + d.detected.url + ' (' + d.detected.source + ')';
-    detectedBtnText = isZh ? '使用检测到的代理' : 'Use Detected';
+    detectedHtml = '<div class="proxy-detected-box proxy-detected-clickable" id="settings-proxy-detected">'
+      + '<div class="proxy-detected-icon">◎</div>'
+      + '<div class="proxy-detected-info">'
+      + '<div class="proxy-detected-label">' + (isZh ? '检测到系统代理，点击使用' : 'System proxy detected — click to use') + '</div>'
+      + '<div class="proxy-detected-url"><code>' + escapeHtml(d.detected.url) + '</code></div>'
+      + '</div></div>';
   } else {
-    detectedHint = isZh ? '未检测到系统代理' : 'No system proxy detected';
+    detectedHtml = '<div class="proxy-detected-box proxy-detected-none">'
+      + '<div class="proxy-detected-icon">○</div>'
+      + '<div class="proxy-detected-info">'
+      + '<div class="proxy-detected-label">' + (isZh ? '未检测到系统代理' : 'No system proxy detected') + '</div>'
+      + '</div></div>';
   }
 
+  // Active status banner
   var activeHtml = '';
   if (d.active && d.active.applied && d.active.url) {
-    activeHtml = '<div style="margin-top:8px;padding:8px 12px;background:rgba(129,199,132,0.1);border-radius:6px;font-size:13px;">'
-      + (isZh ? '代理已生效: ' : 'Proxy active: ') + '<code>' + escapeHtml(d.active.url) + '</code></div>';
+    activeHtml = '<div class="proxy-active-banner">'
+      + '<div class="proxy-active-banner-icon">✓</div>'
+      + '<div class="proxy-active-banner-text">'
+      + (isZh ? '代理已生效' : 'Proxy active')
+      + '</div>'
+      + '<code class="proxy-active-banner-url">' + escapeHtml(d.active.url) + '</code>'
+      + '</div>';
+  } else if (d.config.enabled) {
+    activeHtml = '<div class="proxy-active-banner proxy-active-pending">'
+      + '<div class="proxy-active-banner-icon">◐</div>'
+      + '<div class="proxy-active-banner-text">'
+      + (isZh ? '代理已启用，等待应用（需重启 Agent 子进程）' : 'Proxy enabled, pending apply (restart agent child processes)')
+      + '</div>'
+      + '</div>';
   }
 
   container.innerHTML = [
-    '<div style="padding:16px 4px;">',
     // Description
-    '<div style="margin-bottom:16px;font-size:13px;color:var(--text-secondary);line-height:1.5;">',
-    isZh ? '为服务端所有网络请求和 Agent 子进程启用代理。Node.js 不会自动读取系统代理，需要在此手动配置。' : 'Enable proxy for all server-side HTTP requests and agent child processes. Node.js does not read system proxy settings automatically.',
+    '<div class="proxy-info-text">',
+    isZh ? '为服务端所有网络请求和 Agent 子进程启用全局代理。' : 'Enable a global proxy for all server-side HTTP requests and agent child processes.',
     '</div>',
 
+    // Detected proxy
+    detectedHtml,
+
+    // Active banner
+    activeHtml,
+
     // Enable toggle
-    '<div class="settings-row">',
-    '<div style="flex:1;">',
-    '<div style="font-weight:500;font-size:14px;margin-bottom:2px;">' + (isZh ? '启用代理' : 'Enable Proxy') + '</div>',
-    '</div>',
-    '<input type="checkbox" id="settings-proxy-enabled" class="settings-toggle" ' + (d.config.enabled ? 'checked' : '') + ' />',
+    '<div class="proxy-toggle-row">',
+    '<div class="proxy-toggle-label">' + (isZh ? '启用代理' : 'Enable Proxy') + '</div>',
+    '<label class="proxy-switch">',
+    '<input type="checkbox" id="settings-proxy-enabled" ' + (d.config.enabled ? 'checked' : '') + ' />',
+    '<span class="proxy-switch-slider"></span>',
+    '</label>',
     '</div>',
 
     // Proxy URL
-    '<div style="margin-top:12px;">',
-    '<label style="font-size:13px;font-weight:500;display:block;margin-bottom:4px;">' + (isZh ? '代理地址' : 'Proxy URL') + '</label>',
-    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">' + escapeHtml(detectedHint) + '</div>',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? '代理地址' : 'Proxy URL') + '</label>',
     '<input type="text" id="settings-proxy-url" class="settings-input" placeholder="http://127.0.0.1:7890" value="' + escapeHtml(d.config.url || '') + '" />',
     '</div>',
 
     // Buttons
-    '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">',
-    detectedBtnText ? '<button class="settings-btn settings-btn-secondary" type="button" id="settings-proxy-use-detected">' + escapeHtml(detectedBtnText) + '</button>' : '',
-    '<button class="settings-btn settings-btn-primary" type="button" id="settings-proxy-save">' + (isZh ? '保存并应用' : 'Save & Apply') + '</button>',
+    '<div class="proxy-btn-row">',
     '<button class="settings-btn settings-btn-secondary" type="button" id="settings-proxy-test">' + (isZh ? '测试连通性' : 'Test') + '</button>',
+    '<button class="settings-btn settings-btn-primary" type="button" id="settings-proxy-save" style="margin-left:auto;">' + (isZh ? '保存并应用' : 'Save & Apply') + '</button>',
     '</div>',
 
     // Status
-    '<div id="settings-proxy-status" style="margin-top:12px;"></div>',
-
-    // Active state
-    activeHtml,
-    '</div>',
+    '<div id="settings-proxy-status"></div>',
   ].join('');
 
   // Wire events
-  var detectedBtn = document.getElementById('settings-proxy-use-detected');
-  if (detectedBtn) {
-    detectedBtn.onclick = function() {
+  var detectedCard = document.getElementById('settings-proxy-detected');
+  if (detectedCard) {
+    detectedCard.onclick = function() {
       if (d.detected && d.detected.url) {
         document.getElementById('settings-proxy-url').value = d.detected.url;
         document.getElementById('settings-proxy-enabled').checked = true;
@@ -887,21 +940,21 @@ function _proxyStatus(type, text, detail) {
   var el = document.getElementById('settings-proxy-status');
   if (!el) return;
 
-  var colors = { ok: '#81c784', error: '#e57373', loading: 'var(--text-secondary)' };
   var icons = { ok: '✓', error: '✕', loading: '◐' };
+  var cls = type === 'ok' ? 'proxy-status-ok' : type === 'error' ? 'proxy-status-error' : 'proxy-status-loading';
 
-  el.innerHTML = '<div style="padding:8px 12px;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:6px;background:'
-    + (type === 'ok' ? 'rgba(129,199,132,0.1)' : type === 'error' ? 'rgba(229,115,115,0.1)' : 'rgba(128,128,128,0.08)')
-    + ';">'
-    + '<span style="color:' + (colors[type] || 'inherit') + ';font-weight:bold;">' + (icons[type] || '') + '</span>'
-    + '<span style="color:' + (colors[type] || 'inherit') + ';">' + escapeHtml(text) + '</span>'
-    + (detail ? '<span style="color:var(--text-secondary);font-size:12px;margin-left:auto;">' + escapeHtml(detail) + '</span>' : '')
+  el.innerHTML = '<div class="proxy-status-row ' + cls + '">'
+    + '<span class="proxy-status-icon">' + (icons[type] || '') + '</span>'
+    + '<span class="proxy-status-text">' + escapeHtml(text) + '</span>'
+    + (detail ? '<span class="proxy-status-detail">' + escapeHtml(detail) + '</span>' : '')
     + '</div>';
 }
 
 // ── window 导出 ──────────────────────────────────────────────
 window.openSettings = openSettings;
 window.closeSettings = closeSettings;
+window.openProxySettings = openProxySettings;
+window.closeProxySettings = closeProxySettings;
 window.addSettingsPreset = addSettingsPreset;
 window.editSettingsPreset = editSettingsPreset;
 window.deleteSettingsPreset = deleteSettingsPreset;
