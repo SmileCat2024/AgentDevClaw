@@ -211,7 +211,7 @@ function _renderAttachmentPreview() {
  * Called before sending so the message carries path references.
  */
 async function _awaitPendingImageUploads() {
-  var promises = _pendingImages
+  let promises = _pendingImages
     .filter(function(img) { return img._uploadPromise; })
     .map(function(img) { return img._uploadPromise.catch(function() { return null; }); });
   await Promise.all(promises);

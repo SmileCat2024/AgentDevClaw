@@ -1538,16 +1538,16 @@ function getEmptyStateHtml() {
       + escapeHtml(currentLanguage === 'zh' ? '正在加载对话…' : 'Loading conversation…')
       + '</span></div>';
   }
-  var _isZh = currentLanguage === 'zh';
-  var _displayName = '';
+  let _isZh = currentLanguage === 'zh';
+  let _displayName = '';
   try {
-    var _agent = getCurrentAgentRecord();
+    let _agent = getCurrentAgentRecord();
     _displayName = String(_agent && _agent.name || '').trim();
   } catch (_) { /* agent not loaded yet */ }
-  var _title = _displayName
+  let _title = _displayName
     ? (_isZh ? '欢迎使用' : 'Welcome to')
     : (_isZh ? '新对话' : 'New Conversation');
-  var _hint = _isZh ? '输入消息开始对话' : 'Type a message to begin';
+  let _hint = _isZh ? '输入消息开始对话' : 'Type a message to begin';
   if (_displayName) {
     return '<div class="empty-state empty-welcome">'
       + '<div class="empty-welcome-title">' + escapeHtml((_isZh ? '欢迎使用 ' : 'Welcome to ') + _displayName) + '</div>'
@@ -1643,14 +1643,14 @@ function formatRelativeTime(isoString) {
   if (diffMin < 60) return isZh ? diffMin + '分钟前' : diffMin + 'm ago';
 
   // Same calendar day helpers — use time-of-day + hour (no minutes)
-  var hour = date.getHours();
-  var hour12 = String(hour % 12 || 12);
-  var todZh = getTimeOfDayLabel(hour, true);
-  var todEn = getTimeOfDayLabel(hour, false);
+  let hour = date.getHours();
+  let hour12 = String(hour % 12 || 12);
+  let todZh = getTimeOfDayLabel(hour, true);
+  let todEn = getTimeOfDayLabel(hour, false);
 
-  var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  var calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
+  let today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  let calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
 
   // ── Today ──
   if (calendarDiff === 0) {
@@ -1670,10 +1670,10 @@ function formatRelativeTime(isoString) {
   // ── This week (3-6 days ago): use full weekday ──
   if (calendarDiff >= 3 && calendarDiff <= 6) {
     if (isZh) {
-      var weekdayZh = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+      let weekdayZh = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
       return weekdayZh[date.getDay()] + ' ' + todZh + hour12 + '点';
     }
-    var weekdayEn = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    let weekdayEn = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     return weekdayEn[date.getDay()] + ' ' + hour12 + todEn;
   }
 
@@ -1694,13 +1694,13 @@ function formatRelativeTime(isoString) {
  */
 function getTimeGroupLabel(isoString) {
   if (!isoString) return '';
-  var date = new Date(isoString);
+  let date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return '';
-  var isZh = currentLanguage === 'zh';
-  var now = new Date();
-  var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  var calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
+  let isZh = currentLanguage === 'zh';
+  let now = new Date();
+  let today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  let calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
 
   if (calendarDiff <= 0) return isZh ? '今天' : 'Today';
   if (calendarDiff === 1) return isZh ? '昨天' : 'Yesterday';
@@ -1716,15 +1716,15 @@ function getTimeGroupLabel(isoString) {
  */
 function getSessionRecencyClass(isoString) {
   if (!isoString) return 'older';
-  var date = new Date(isoString);
+  let date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return 'older';
-  var now = new Date();
-  var diffMin = Math.floor((now.getTime() - date.getTime()) / 60000);
+  let now = new Date();
+  let diffMin = Math.floor((now.getTime() - date.getTime()) / 60000);
   if (diffMin < 60) return 'just-now';
 
-  var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  var calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
+  let today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  let calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
 
   if (calendarDiff <= 0) return 'today';
   if (calendarDiff === 1) return 'yesterday';
@@ -1740,23 +1740,23 @@ function getSessionRecencyClass(isoString) {
  */
 function getSessionShortTime(isoString) {
   if (!isoString) return '';
-  var date = new Date(isoString);
+  let date = new Date(isoString);
   if (Number.isNaN(date.getTime())) return '';
-  var isZh = currentLanguage === 'zh';
-  var now = new Date();
-  var diffMin = Math.floor((now.getTime() - date.getTime()) / 60000);
+  let isZh = currentLanguage === 'zh';
+  let now = new Date();
+  let diffMin = Math.floor((now.getTime() - date.getTime()) / 60000);
 
   if (diffMin < 1) return isZh ? '刚刚' : 'now';
   if (diffMin < 60) return isZh ? diffMin + '分钟' : diffMin + 'm';
 
-  var today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  var date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  var calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
+  let today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let date0 = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  let calendarDiff = Math.round((today0.getTime() - date0.getTime()) / 86400000);
 
-  var hour = date.getHours();
-  var hour12 = String(hour % 12 || 12);
-  var todZh = getTimeOfDayLabel(hour, true);
-  var todEn = getTimeOfDayLabel(hour, false);
+  let hour = date.getHours();
+  let hour12 = String(hour % 12 || 12);
+  let todZh = getTimeOfDayLabel(hour, true);
+  let todEn = getTimeOfDayLabel(hour, false);
 
   if (calendarDiff <= 0) {
     // Today: 上午9点 / 下午3点

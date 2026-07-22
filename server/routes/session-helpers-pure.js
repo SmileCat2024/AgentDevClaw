@@ -144,7 +144,7 @@ export function searchInTextPure(text, queryLower) {
   let snippet = text.slice(start, end);
   snippet = snippet.replace(/^\[[^\]]*\]\s*/, '');
   const beforeSnippet = text.slice(0, idx);
-  const lastRoleMatch = beforeSnippet.match(/\[(user|assistant)\][^\[]*$/);
+  const lastRoleMatch = beforeSnippet.match(/\[(user|assistant)\][^[]*$/);
   const matchRole = lastRoleMatch ? lastRoleMatch[1] : '';
   return { snippet, matchRole, matchIndex: idx };
 }

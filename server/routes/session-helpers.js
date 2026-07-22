@@ -1194,7 +1194,7 @@ async function requirePrebuiltAgentForRuntime(agentId) {
 
 async function deletePrebuiltProject(agentId, projectId, options = {}) {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
-  if (!WORKSPACE_SESSION_AGENT_IDS.has(normalizedAgentId)) {
+  if (!isWorkspaceSessionAgent(normalizedAgentId)) {
     const error = new Error(`Agent ${agentId} does not support project deletion`);
     error.statusCode = 400;
     throw error;

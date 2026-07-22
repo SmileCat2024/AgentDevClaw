@@ -545,7 +545,7 @@ async function loadAgents() {
         if (runtimeCurrent) {
           currentAgentId = runtimeCurrent.parent_id || runtimeCurrent.id;
           await loadAgentData(getAgentRuntimeId(runtimeCurrent));
-          return;
+          
         }
       }
     }

@@ -29,21 +29,21 @@ function getWorkspaceSessionById(agent = getCurrentAgentRecord(), sessionId = ''
 }
 
 function sortPhSessionsByMode(sessions) {
-  var mode = phSessionSortMode === 'createdAt' ? 'createdAt' : 'updatedAt';
-  var sorted = sessions.slice();
+  let mode = phSessionSortMode === 'createdAt' ? 'createdAt' : 'updatedAt';
+  let sorted = sessions.slice();
   sorted.sort(function (a, b) {
     // TODO sessions always sort above non-TODO sessions
-    var aTodo = a?.todo === true ? 1 : 0;
-    var bTodo = b?.todo === true ? 1 : 0;
+    let aTodo = a?.todo === true ? 1 : 0;
+    let bTodo = b?.todo === true ? 1 : 0;
     if (aTodo !== bTodo) return bTodo - aTodo;
     // Within the same TODO group, sort by the selected mode
-    var primary = String(a?.[mode] || '');
-    var secondaryKey = mode === 'createdAt' ? 'updatedAt' : 'createdAt';
+    let primary = String(a?.[mode] || '');
+    let secondaryKey = mode === 'createdAt' ? 'updatedAt' : 'createdAt';
     if (primary !== String(b?.[mode] || '')) {
       return String(b?.[mode] || '').localeCompare(primary);
     }
-    var aSec = String(a?.[secondaryKey] || '');
-    var bSec = String(b?.[secondaryKey] || '');
+    let aSec = String(a?.[secondaryKey] || '');
+    let bSec = String(b?.[secondaryKey] || '');
     if (aSec !== bSec) return bSec.localeCompare(aSec);
     return String(b?.id || '').localeCompare(String(a?.id || ''));
   });
@@ -60,18 +60,18 @@ function renderSessionResumeBadge(session) {
 
 function renderSessionArchivedBadge(session) {
   if (!session || session.archived !== true) return '';
-  var isZh = currentLanguage === 'zh';
+  let isZh = currentLanguage === 'zh';
   return '<span class="workspace-history-archived">' + escapeHtml(isZh ? '已归档' : 'Archived') + '</span>';
 }
 
 function renderSessionTodoBadge(session) {
   if (!session || session.todo !== true) return '';
-  var isZh = currentLanguage === 'zh';
+  let isZh = currentLanguage === 'zh';
   return '<span class="workspace-history-todo">' + escapeHtml(isZh ? '待办' : 'TODO') + '</span>';
 }
 
 function renderSessionTitleAiButton(session) {
-  var isZh = currentLanguage === 'zh';
+  let isZh = currentLanguage === 'zh';
   return '<button class="session-title-ai-btn session-title-ai-btn-hidden" type="button" title="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '" onmousedown="if(this._setGenerating)this._setGenerating(true);" onclick="event.stopPropagation();window.generateSessionTitle(\'' + escapeHtml(session.id) + '\',this)" aria-label="' + escapeHtml(isZh ? 'AI 生成标题' : 'AI generate title') + '"><span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + escapeHtml(isZh ? 'AI生成' : 'AI Generate') + '</span></button>';
 }
 
@@ -82,7 +82,7 @@ function renderSessionTitleAiButton(session) {
 // (loadAgents replacing allAgents) and recovery (next refresh), the context
 // bar would flash hardcoded defaults. This cache bridges that gap by
 // remembering the last known-good values per agentId.
-var _modelInfoCache = {};
+let _modelInfoCache = {};
 
 function _resolveAgentKey(agent) {
   if (!agent) return null;
@@ -101,7 +101,7 @@ function getSessionContextLength(session, agent) {
     return fallback;
   }
   // Last resort: check the persistent cache before hardcoded default
-  var key = _resolveAgentKey(agent);
+  let key = _resolveAgentKey(agent);
   if (key && _modelInfoCache[key] && Number.isFinite(_modelInfoCache[key].contextLength) && _modelInfoCache[key].contextLength > 0) {
     return _modelInfoCache[key].contextLength;
   }
@@ -119,7 +119,7 @@ function getSessionCompressRatio(session, agent) {
     _cacheModelInfo(agent, null, fallback);
     return fallback;
   }
-  var key = _resolveAgentKey(agent);
+  let key = _resolveAgentKey(agent);
   if (key && _modelInfoCache[key] && Number.isFinite(_modelInfoCache[key].compressRatio) && _modelInfoCache[key].compressRatio > 0) {
     return _modelInfoCache[key].compressRatio;
   }
@@ -127,7 +127,7 @@ function getSessionCompressRatio(session, agent) {
 }
 
 function _cacheModelInfo(agent, contextLength, compressRatio) {
-  var key = _resolveAgentKey(agent);
+  let key = _resolveAgentKey(agent);
   if (!key) return;
   if (!_modelInfoCache[key]) _modelInfoCache[key] = {};
   if (Number.isFinite(contextLength) && contextLength > 0) {
@@ -185,10 +185,10 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
     
     if (result.success) {
       // 局部更新：只刷新 token 用量显示，不触发全量渲染（避免滚动位置丢失）
-      var agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+      let agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
       if (agent) {
-        var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
-        var target = sessions.find(function(s) { return s.id === sessionId; });
+        let sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+        let target = sessions.find(function(s) { return s.id === sessionId; });
         if (target) {
           if (!target.tokenUsage) target.tokenUsage = {};
           target.tokenUsage.lastRequestUsage = {
@@ -202,18 +202,18 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
         updateChatContextBar();
       }
       // 更新 workspace surface 中的 session token bar（局部替换）
-      var tokenBarEl = btnElement && btnElement.closest('.session-token-inline');
+      let tokenBarEl = btnElement && btnElement.closest('.session-token-inline');
       if (agent && tokenBarEl) {
-        var sessions2 = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
-        var activeId = (agent.workspace_sessions && agent.workspace_sessions.activeSessionId)
+        let sessions2 = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+        let activeId = (agent.workspace_sessions && agent.workspace_sessions.activeSessionId)
           || agent.active_workspace_session_id;
-        var sess = sessionId ? sessions2.find(function(s) { return s.id === sessionId; }) : null;
+        let sess = sessionId ? sessions2.find(function(s) { return s.id === sessionId; }) : null;
         if (sess && typeof renderSessionTokenBar === 'function') {
-          var newBar = renderSessionTokenBar(sess, agent);
+          let newBar = renderSessionTokenBar(sess, agent);
           if (newBar) {
-            var temp = document.createElement('span');
+            let temp = document.createElement('span');
             temp.innerHTML = newBar;
-            var replacement = temp.firstElementChild;
+            let replacement = temp.firstElementChild;
             if (replacement) tokenBarEl.replaceWith(replacement);
           }
         }
@@ -236,10 +236,10 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
 window.generateSessionTitle = async function(sessionId, btnElement) {
   if (!btnElement) return;
   
-  var isZh = currentLanguage === 'zh';
-  var generated = false;
-  var originalContent = btnElement.innerHTML;
-  var toastId = 'title-gen-' + sessionId;
+  let isZh = currentLanguage === 'zh';
+  let generated = false;
+  let originalContent = btnElement.innerHTML;
+  let toastId = 'title-gen-' + sessionId;
   btnElement.innerHTML = '<span class="session-title-ai-btn-icon">✦</span><span class="session-title-ai-btn-text">' + (isZh ? '生成中...' : 'Generating...') + '</span>';
   btnElement.classList.add('loading');
   btnElement.disabled = true;
@@ -255,41 +255,41 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
   }
 
   try {
-    var sessionItem = btnElement.closest('[data-prebuilt-session-agent-id]');
-    var agentId = sessionItem ? sessionItem.dataset.prebuiltSessionAgentId : '';
+    let sessionItem = btnElement.closest('[data-prebuilt-session-agent-id]');
+    let agentId = sessionItem ? sessionItem.dataset.prebuiltSessionAgentId : '';
     if (!agentId) throw new Error('Agent ID not found');
 
-    var response = await fetch('/protoclaw/generate_session_title', {
+    let response = await fetch('/protoclaw/generate_session_title', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId, sessionId }),
     });
 
     if (!response.ok) {
-      var errorText = await response.text();
+      let errorText = await response.text();
       throw new Error(errorText || 'Failed to generate title');
     }
 
-    var result = await response.json();
+    let result = await response.json();
     if (typeof applySessionMutationDelta === 'function') {
       applySessionMutationDelta(agentId, result);
     }
     if (result.ok && result.title) {
-      var titleRow = btnElement.closest('.workspace-history-title-row');
+      let titleRow = btnElement.closest('.workspace-history-title-row');
       if (titleRow) {
-        var titleEl = titleRow.querySelector('.workspace-history-title');
+        let titleEl = titleRow.querySelector('.workspace-history-title');
         if (titleEl) titleEl.textContent = result.title;
         // Exit edit mode: restore the input to plain text div
-        var input = titleRow.querySelector('.session-title-edit-input');
+        let input = titleRow.querySelector('.session-title-edit-input');
         if (input) {
-          var titleDiv = input.closest('.workspace-history-title');
+          let titleDiv = input.closest('.workspace-history-title');
           if (titleDiv) titleDiv.textContent = result.title;
         }
       }
-      var agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+      let agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
       if (agent) {
-        var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
-        var target = sessions.find(function(s) { return s.id === sessionId; });
+        let sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+        let target = sessions.find(function(s) { return s.id === sessionId; });
         if (target) target.title = result.title;
       }
       generated = true;
@@ -453,7 +453,7 @@ window.handleSessionTitleDoubleClick = function(event) {
  * workspace string so the card is present immediately after rebuild, and
  * the async fetch only fires when data actually changes.
  */
-var _phOpenSessionsCache = { sig: null, html: '' };
+let _phOpenSessionsCache = { sig: null, html: '' };
 
 window.phLoadOpenSessionsCard = async function(agentId, openDirectory) {
   const container = document.getElementById('ph-open-sessions-container');
@@ -555,7 +555,7 @@ window.phRestoreOneOpenSession = async function(agentId, sessionId, btnEl) {
       card.style.display = 'none';
     }
     // Sync cache: capture remaining DOM state, force next fetch to verify
-    var container = document.getElementById('ph-open-sessions-container');
+    let container = document.getElementById('ph-open-sessions-container');
     _phOpenSessionsCache.html = (container && container.querySelector('.ph-open-session-item')) ? container.innerHTML : '';
     _phOpenSessionsCache.sig = null;
   } catch (err) {

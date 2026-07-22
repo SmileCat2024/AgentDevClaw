@@ -289,6 +289,7 @@ export function createSessionHandoffHelpers(deps) {
 
   async function lockExplorationSession(agentId, sessionId, goal, response) {
     try {
+      const domains = extractDomainsFromText(response || goal || '');
       await updateSessionIndex(agentId, (index) => {
         const record = index.sessions.find(s => s.id === sessionId);
         if (!record) return index;
@@ -296,11 +297,11 @@ export function createSessionHandoffHelpers(deps) {
         record.status = 'locked';
         record.lockedAt = new Date().toISOString();
         if (goal) record.goal = goal;
-        record.domains = extractDomainsFromText(response || goal || '');
+        record.domains = domains;
         record.updatedAt = new Date().toISOString();
         return { ...index };
       });
-      console.log(`[lockExploration] Locked session=${sessionId} domains=${record.domains?.join(',') || '(none)'}`);
+      console.log(`[lockExploration] Locked session=${sessionId} domains=${domains.join(',') || '(none)'}`);
     } catch (err) {
       console.error(`[lockExploration] Failed for session=${sessionId}:`, err.message);
     }

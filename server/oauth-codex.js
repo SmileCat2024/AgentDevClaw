@@ -202,7 +202,7 @@ export function buildCodexOAuthHeaders(accessToken, customHeaders = []) {
 
 function tokenFilePath(providerName) {
   // Sanitize provider name for filesystem
-  const safe = providerName.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+  const safe = providerName.replace(/[^a-zA-Z0-9_\-.]/g, '_');
   return path.join(OAUTH_TOKENS_DIR, `${safe}.json`);
 }
 

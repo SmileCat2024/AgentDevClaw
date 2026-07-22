@@ -220,10 +220,10 @@ container.addEventListener('scroll', () => {
 function _mergeWorkspaceSessions(primary, fallback) {
   if (!primary) return fallback || null;
   if (!fallback) return primary;
-  var cl = Number.isFinite(primary.contextLength) && primary.contextLength > 0
+  let cl = Number.isFinite(primary.contextLength) && primary.contextLength > 0
     ? primary.contextLength
     : (Number.isFinite(fallback.contextLength) && fallback.contextLength > 0 ? fallback.contextLength : null);
-  var cr = Number.isFinite(primary.compressRatio) && primary.compressRatio > 0
+  let cr = Number.isFinite(primary.compressRatio) && primary.compressRatio > 0
     ? primary.compressRatio
     : (Number.isFinite(fallback.compressRatio) && fallback.compressRatio > 0 ? fallback.compressRatio : null);
   return {
@@ -236,7 +236,7 @@ function _mergeWorkspaceSessions(primary, fallback) {
 }
 
 function getRuntimeAwareAgentRecord() {
-  var hostRecord = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+  let hostRecord = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
   if (typeof getCurrentRuntimeRecord === 'function') {
     const runtimeRecord = getCurrentRuntimeRecord();
     if (runtimeRecord) {

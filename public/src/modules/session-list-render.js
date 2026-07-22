@@ -257,7 +257,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   // Determine current project — match by normalized id, not raw openDirectory,
   // because workspace_state.openDirectory and project.openDirectory may use
   // different path separators (backslash vs forward slash) or case.
-  var normCurrentDir = currentOpenDir.replace(/\\/g, '/').toLowerCase();
+  let normCurrentDir = currentOpenDir.replace(/\\/g, '/').toLowerCase();
   const currentProject = currentOpenDir
     ? projects.find(p => p.id === ('dir:' + normCurrentDir)) || null
     : (projects.length > 0 ? projects[0] : null);
@@ -411,9 +411,9 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" onclick="window.phShowSessionCtxMenu(event, this, \'' + escapeHtml(agent.id) + '\', \'' + escapeHtml(session.id) + '\', \'' + escapeHtml(sType) + '\')"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
     const buttonsHtml = [primaryBtn, moreBtn].join('');
     // Build compact time indicator for title-row left side (only within this week)
-    var shortTime = getSessionShortTime(session.updatedAt);
-    var recencyCls = getSessionRecencyClass(session.updatedAt);
-    var indicatorHtml = shortTime
+    let shortTime = getSessionShortTime(session.updatedAt);
+    let recencyCls = getSessionRecencyClass(session.updatedAt);
+    let indicatorHtml = shortTime
       ? '<span class="session-time-indicator ' + recencyCls + '"><span class="session-time-dot"></span><span class="session-time-label">' + escapeHtml(shortTime) + '</span></span>'
       : '';
     return [
@@ -445,7 +445,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     let html = '';
     let lastGroup = null;
     for (const session of sessions) {
-      var group = getTimeGroupLabel(session.updatedAt);
+      let group = getTimeGroupLabel(session.updatedAt);
       if (group && group !== lastGroup) {
         html += '<div class="ph-session-group-header">' + escapeHtml(group) + '</div>';
         lastGroup = group;

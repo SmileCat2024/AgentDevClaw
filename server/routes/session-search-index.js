@@ -168,7 +168,7 @@ export function searchInText(text, queryLower) {
   snippet = snippet.replace(/^\[[^\]]*\]\s*/, '');
   // Determine match role by looking backwards for role tag
   const beforeSnippet = text.slice(0, idx);
-  const lastRoleMatch = beforeSnippet.match(/\[(user|assistant)\][^\[]*$/);
+  const lastRoleMatch = beforeSnippet.match(/\[(user|assistant)\][^[]*$/);
   const matchRole = lastRoleMatch ? lastRoleMatch[1] : '';
   return { snippet, matchRole, matchIndex: idx };
 }
@@ -216,7 +216,7 @@ export async function searchSessionsContent(agentId, query, openDirectory) {
   });
 
   const total = results.length;
-  const trimmed = results.slice(0, SEARCH_MAX_RESULTS);
+  const trimmed = results.slice(0, SESSION_SEARCH_MAX_RESULTS);
 
   return {
     query,

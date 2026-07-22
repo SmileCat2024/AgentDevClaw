@@ -203,8 +203,8 @@ window.saveSpeechPreset = async function(editIdx) {
   };
   const presets = window.ClawFW._speechPresets || [];
   // Check if there's currently an active speech model
-  var sc = window.ClawFW._speechModelConfig || {};
-  var wasActive = !!(sc.baseUrl && sc.apiKey);
+  let sc = window.ClawFW._speechModelConfig || {};
+  let wasActive = !!(sc.baseUrl && sc.apiKey);
   if (editIdx === 'new') {
     presets.push(preset);
     editIdx = presets.length - 1;

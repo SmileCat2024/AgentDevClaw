@@ -1,6 +1,17 @@
 #!/bin/sh
-# Pre-commit hook: run core tests before each commit.
+# Pre-commit hook: run lint and core tests before each commit.
 # Skip with: git commit --no-verify
+
+echo "[pre-commit] Running linter..."
+
+npx eslint . 2>&1
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "[pre-commit] Lint failed. Fix errors above or use: git commit --no-verify"
+  exit 1
+fi
+
+echo "[pre-commit] Lint passed."
 
 echo "[pre-commit] Running core tests..."
 

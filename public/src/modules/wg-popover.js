@@ -490,7 +490,7 @@ async function showMemberPopover(identityRef, anchorEl) {
       } catch {
         importDo.classList.remove('imported');
       }
-      return;
+      
     }
   });
 }

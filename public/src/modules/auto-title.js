@@ -77,7 +77,7 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
     }
   } else {
     if (previousAssistantCount === 0 && nextAssistantCount > 0) {
-      var hasUserMessage = nextMessages.some(function(m) { return m && m.role === 'user'; });
+      const hasUserMessage = nextMessages.some(function(m) { return m && m.role === 'user'; });
       console.log('[AutoTitle][mark] → new conv 0→1 check, hasUser:', hasUserMessage);
       if (hasUserMessage) {
         console.log('[AutoTitle][mark] → ADD TO PENDING (new conv)');
@@ -102,10 +102,10 @@ function recheckAutoTitleCandidate() {
   const isNewConversation = /^新对话\d+$/.test(currentTitle);
   if (!isDerivedSession && !isNewConversation) return;
 
-  var currentAC = Array.isArray(currentMessages)
+  const currentAC = Array.isArray(currentMessages)
     ? currentMessages.filter(function(m) { return m && m.role === 'assistant'; }).length
     : 0;
-  var currentMsgLen = Array.isArray(currentMessages) ? currentMessages.length : 0;
+  const currentMsgLen = Array.isArray(currentMessages) ? currentMessages.length : 0;
 
   // [DEBUG-AUTO-TITLE]
   console.log('[AutoTitle][recheck] session:', sessionId, 'title:', JSON.stringify(currentTitle),
@@ -126,7 +126,7 @@ function recheckAutoTitleCandidate() {
     return;
   }
 
-  var hasUserMessage = Array.isArray(currentMessages)
+  const hasUserMessage = Array.isArray(currentMessages)
     && currentMessages.some(function(m) { return m && m.role === 'user'; });
   if (currentAC > 0 && hasUserMessage) {
     console.log('[AutoTitle][recheck] → ADD TO PENDING (new conv, AC>0 & hasUser)');
@@ -141,11 +141,11 @@ function _messagesEqual(a, b) {
   if ((a.content || '') !== (b.content || '')) return false;
   if ((a.reasoning || '') !== (b.reasoning || '')) return false;
   if ((a.toolCallId || '') !== (b.toolCallId || '')) return false;
-  var ac = a.toolCalls, bc = b.toolCalls;
-  var acLen = ac ? ac.length : 0;
-  var bcLen = bc ? bc.length : 0;
+  const ac = a.toolCalls, bc = b.toolCalls;
+  const acLen = ac ? ac.length : 0;
+  const bcLen = bc ? bc.length : 0;
   if (acLen !== bcLen) return false;
-  for (var j = 0; j < acLen; j++) {
+  for (let j = 0; j < acLen; j++) {
     if (ac[j].id !== bc[j].id) return false;
     if (ac[j].name !== bc[j].name) return false;
     if (JSON.stringify(ac[j].arguments) !== JSON.stringify(bc[j].arguments)) return false;
@@ -210,7 +210,7 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
   // with non-empty content to generate a title from.
   // (Not necessarily the last message — tool-heavy turns may end with a tool result.)
   if (messages) {
-    var hasAssistantContent = messages.some(function(m) {
+    const hasAssistantContent = messages.some(function(m) {
       return m && m.role === 'assistant' && String(m.content || '').trim();
     });
     if (!hasAssistantContent) return;
@@ -238,23 +238,23 @@ function tryAutoTitleGeneration(messages) {
       'currentRuntime:', currentRuntimeAgentId);
   }
 
-  var info = getAutoTitleSessionInfo();
+  const info = getAutoTitleSessionInfo();
 
   // 1. Try the currently-viewed session
   if (info && _autoTitlePending.has(info.sessionId)) {
-    var currentTitle = String(info.agent.active_workspace_session_title || '').trim();
+    const currentTitle = String(info.agent.active_workspace_session_title || '').trim();
     _tryTitleForSession(info.agent, info.sessionId, currentTitle, messages);
   }
 
   // 2. Scan other pending sessions whose runtimes are idle.
   //    This covers sessions the user switched away from before the title
   //    could be generated.
-  var pendingIds = Array.from(_autoTitlePending);
-  for (var i = 0; i < pendingIds.length; i++) {
-    var pendingId = pendingIds[i];
+  const pendingIds = Array.from(_autoTitlePending);
+  for (let i = 0; i < pendingIds.length; i++) {
+    const pendingId = pendingIds[i];
     if (info && pendingId === info.sessionId) continue; // already handled above
 
-    var owner = _findSessionOwner(pendingId);
+    const owner = _findSessionOwner(pendingId);
     if (!owner) {
       // Session no longer exists in any agent — clean up
       _autoTitlePending.delete(pendingId);
@@ -270,10 +270,10 @@ function tryAutoTitleGeneration(messages) {
   }
 }
 
-var AUTO_TITLE_MAX_ATTEMPTS = 3;
-var AUTO_TITLE_RETRY_BACKOFF_MS = 5000;
+const AUTO_TITLE_MAX_ATTEMPTS = 3;
+const AUTO_TITLE_RETRY_BACKOFF_MS = 5000;
 // Must exceed server's 120s child-process timeout to avoid false-abort
-var AUTO_TITLE_FETCH_TIMEOUT_MS = 125000;
+const AUTO_TITLE_FETCH_TIMEOUT_MS = 125000;
 
 /**
  * Generate a session title with internal retries.
@@ -281,14 +281,14 @@ var AUTO_TITLE_FETCH_TIMEOUT_MS = 125000;
  * Background sessions generate silently — only success/failure toast is shown.
  */
 async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
-  var succeeded = false;
-  var lastError = null;
+  let succeeded = false;
+  let lastError = null;
   const isZh = currentLanguage === 'zh';
   const toastId = 'title-auto-' + sessionId;
 
   // 查找会话当前标题，用于 Toast 展示
-  var owner = _findSessionOwner(sessionId);
-  var sessionLabel = owner ? owner.title : '';
+  const owner = _findSessionOwner(sessionId);
+  const sessionLabel = owner ? owner.title : '';
 
   // 只为前台会话（用户当前正在看的）显示 loading toast，
   // 后台会话静默生成，避免用户在查看新会话时被其他会话的 toast 干扰。
@@ -301,12 +301,12 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
     });
   }
 
-  for (var attempt = 1; attempt <= AUTO_TITLE_MAX_ATTEMPTS; attempt++) {
-    var controller = new AbortController();
-    var fetchTimer = setTimeout(function() { controller.abort(); }, AUTO_TITLE_FETCH_TIMEOUT_MS);
+  for (let attempt = 1; attempt <= AUTO_TITLE_MAX_ATTEMPTS; attempt++) {
+    let controller = new AbortController();
+    const fetchTimer = setTimeout(function() { controller.abort(); }, AUTO_TITLE_FETCH_TIMEOUT_MS);
 
     try {
-      var response = await fetch('/protoclaw/generate_session_title', {
+      const response = await fetch('/protoclaw/generate_session_title', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentId: agentId, sessionId: sessionId }),
@@ -315,16 +315,16 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
       if (!response.ok) {
         throw new Error('HTTP ' + response.status);
       }
-      var result = await response.json();
+      const result = await response.json();
       if (typeof applySessionMutationDelta === 'function') {
         applySessionMutationDelta(agentId, result);
       }
       if (result.ok && result.title) {
         // Update local data
-        var agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+        const agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
         if (agent) {
-          var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
-          var target = sessions.find(function(s) { return s.id === sessionId; });
+          const sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+          const target = sessions.find(function(s) { return s.id === sessionId; });
           if (target) target.title = result.title;
           if (String(agent.active_workspace_session_id || '') === String(sessionId)) {
             agent.active_workspace_session_title = result.title;
@@ -344,7 +344,7 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
       }
     } catch (error) {
       lastError = error;
-      var isAbort = error && error.name === 'AbortError';
+      const isAbort = error && error.name === 'AbortError';
       console.warn('[AutoTitle] attempt ' + attempt + '/' + AUTO_TITLE_MAX_ATTEMPTS +
         (isAbort ? ' timed out' : ' failed') + ':', error.message || error);
       // Silent retry — only show error on the last attempt
@@ -359,7 +359,7 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
   }
 
   if (!succeeded) {
-    var isAbort = lastError && lastError.name === 'AbortError';
+    const isAbort = lastError && lastError.name === 'AbortError';
     ClawToast.show({
       id: toastId,
       status: 'warning',

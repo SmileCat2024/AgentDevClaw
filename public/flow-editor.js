@@ -75,7 +75,7 @@
   }
 
   function variableTypeLabel(type) {
-    var normalized = String(type || 'string').toLowerCase();
+    let normalized = String(type || 'string').toLowerCase();
     if (normalized === 'number' || normalized === 'boolean' || normalized === 'string') return normalized;
     return normalized || 'string';
   }
@@ -88,7 +88,7 @@
   }
 
   function pickerMetaParts(item) {
-    var parts = [];
+    let parts = [];
     if (item?.key) parts.push(String(item.key));
     if (item?.featureName) parts.push(shortFeatureName(String(item.featureName)));
     return parts;
@@ -309,19 +309,19 @@
   }
 
   function ensureViewportContainsNodes() {
-    var graph = state.graph;
+    let graph = state.graph;
     if (!graph || !graph.nodes?.length) return;
-    var v = graph.viewport;
+    let v = graph.viewport;
     if (!v) return;
-    var wrap = document.getElementById('flow-editor-canvas-wrap');
-    var rect = wrap ? wrap.getBoundingClientRect() : null;
-    var ww = rect ? rect.width : 800;
-    var wh = rect ? rect.height : 600;
-    var anyVisible = graph.nodes.some(function (node) {
-      var nx = Number(node.position?.x || 0);
-      var ny = Number(node.position?.y || 0);
-      var sx = nx * v.zoom + v.x;
-      var sy = ny * v.zoom + v.y;
+    let wrap = document.getElementById('flow-editor-canvas-wrap');
+    let rect = wrap ? wrap.getBoundingClientRect() : null;
+    let ww = rect ? rect.width : 800;
+    let wh = rect ? rect.height : 600;
+    let anyVisible = graph.nodes.some(function (node) {
+      let nx = Number(node.position?.x || 0);
+      let ny = Number(node.position?.y || 0);
+      let sx = nx * v.zoom + v.x;
+      let sy = ny * v.zoom + v.y;
       return sx + NODE_W * v.zoom > 0 && sx < ww && sy + NODE_H * v.zoom > 0 && sy < wh;
     });
     if (!anyVisible) {
@@ -329,7 +329,7 @@
     }
   }
 
-  var pendingFitView = false;
+  let pendingFitView = false;
   function scheduleFitViewOnRender() {
     pendingFitView = true;
   }
@@ -651,7 +651,7 @@
     return !graph.edges.some(edge => edge.from === fromId && edge.to === toId);
   }
 
-  var MAX_UNDO = 100;
+  let MAX_UNDO = 100;
 
   function cloneGraph(graph) {
     if (!graph) return null;
@@ -824,8 +824,8 @@
       return;
     }
     normalizeWorkflowMembership(state.graph);
-    var dialogWasOpen = state.promptDialog.open;
-    var dialogEl = dialogWasOpen ? document.querySelector('.feature-detail-overlay') : null;
+    let dialogWasOpen = state.promptDialog.open;
+    let dialogEl = dialogWasOpen ? document.querySelector('.feature-detail-overlay') : null;
     root.innerHTML = [
       '<div class="flow-editor-shell">',
       renderCanvas(),
@@ -838,7 +838,7 @@
       '</div>',
     ].join('');
     if (dialogWasOpen && dialogEl) {
-      var shell = root.querySelector('.flow-editor-shell');
+      let shell = root.querySelector('.flow-editor-shell');
       if (shell) shell.appendChild(dialogEl);
     }
     root.querySelectorAll('.flow-editor-floating-panel[data-flow-panel]').forEach(panel => {
@@ -985,9 +985,9 @@
         const runtimeCount = Math.max(0, component.nodes.filter(node => !isWorkflowHead(node)).length);
         const fallbackDesc = text(`包含 ${runtimeCount} 个节点`, `${runtimeCount} nodes`);
         const desc = String(component.meta.description || '').trim() || fallbackDesc;
-        var modeClass = component.meta.mode === 'auto' ? ' auto' : (component.meta.mode === 'auto-reenterable' ? ' reenterable' : '');
-        var modeLabel = component.meta.mode === 'auto' ? text('自动', 'Auto') : (component.meta.mode === 'auto-reenterable' ? text('可重入', 'Re') : text('按需', 'On'));
-        var modeTitle = component.meta.mode === 'auto' ? text('自动进入，退出后不可重入', 'Auto-enter, no re-entry') : (component.meta.mode === 'auto-reenterable' ? text('自动进入，可重入', 'Auto-enter, re-entry allowed') : text('Agent 按需进入', 'Agent enters on demand'));
+        let modeClass = component.meta.mode === 'auto' ? ' auto' : (component.meta.mode === 'auto-reenterable' ? ' reenterable' : '');
+        let modeLabel = component.meta.mode === 'auto' ? text('自动', 'Auto') : (component.meta.mode === 'auto-reenterable' ? text('可重入', 'Re') : text('按需', 'On'));
+        let modeTitle = component.meta.mode === 'auto' ? text('自动进入，退出后不可重入', 'Auto-enter, no re-entry') : (component.meta.mode === 'auto-reenterable' ? text('自动进入，可重入', 'Auto-enter, re-entry allowed') : text('Agent 按需进入', 'Agent enters on demand'));
         return [
         '<li class="flow-editor-flow-item' + (component.id === selectedWorkflow()?.id ? ' active' : '') + modeClass + '">',
         '<button class="flow-editor-flow-open" type="button" onclick="window.ClawFlowEditor.selectWorkflow(&quot;' + esc(component.id) + '&quot;)">',
@@ -1050,8 +1050,8 @@
   }
 
   function renderWorkflowPromptRules(component) {
-    var meta = component.meta;
-    var rules = ensurePromptRules(meta);
+    let meta = component.meta;
+    let rules = ensurePromptRules(meta);
     return renderPromptSlots('workflow', component.id, rules);
   }
 
@@ -1187,18 +1187,18 @@
   }
 
   function renderPromptSlots(scope, targetId, rules) {
-    var timings = promptTimingOptions();
+    let timings = promptTimingOptions();
     return timings.map(function (opt) {
-      var timing = opt[0];
-      var timingLabel = opt[1];
-      var rule = rules.find(function (r) { return r.timing === timing; }) || null;
-      var filled = rule && String(rule.template || '').trim();
-      var ghost = !filled;
-      var ruleId = rule ? rule.id : '';
-      var preview = filled ? rule.template : '';
-      var intervalField = '';
+      let timing = opt[0];
+      let timingLabel = opt[1];
+      let rule = rules.find(function (r) { return r.timing === timing; }) || null;
+      let filled = rule && String(rule.template || '').trim();
+      let ghost = !filled;
+      let ruleId = rule ? rule.id : '';
+      let preview = filled ? rule.template : '';
+      let intervalField = '';
       if (timing === 'every-n-steps' || timing === 'every-n-calls') {
-        var iv = rule ? (rule.interval || 3) : 3;
+        let iv = rule ? (rule.interval || 3) : 3;
         intervalField = '<input class="flow-editor-input flow-editor-prompt-interval' + (ghost ? ' ghost' : '') + '" type="number" min="1" value="' + esc(String(iv)) + '"' + (ghost ? ' disabled' : '') + ' oninput="window.ClawFlowEditor.updateField(&quot;promptRule:' + scope + ':' + esc(targetId) + ':' + esc(ruleId) + ':interval&quot;, this.value)">';
       }
       return [
@@ -1219,7 +1219,7 @@
   }
 
   function renderNodePromptField(node) {
-    var rules = ensurePromptRules(node);
+    let rules = ensurePromptRules(node);
     return [
       '<div class="flow-editor-field">',
       '<span class="flow-editor-label">Prompts</span>',
@@ -1230,20 +1230,20 @@
 
   function renderNodePromptDialog() {
     if (!state.promptDialog.open) return '';
-    var scope = state.promptDialog.scope;
-    var targetId = state.promptDialog.targetId;
-    var ruleId = state.promptDialog.ruleId;
-    var target = resolvePromptTarget(scope, targetId);
+    let scope = state.promptDialog.scope;
+    let targetId = state.promptDialog.targetId;
+    let ruleId = state.promptDialog.ruleId;
+    let target = resolvePromptTarget(scope, targetId);
     if (!target) return '';
-    var rules = ensurePromptRules(target);
-    var rule = rules.find(function (r) { return r.id === ruleId; });
+    let rules = ensurePromptRules(target);
+    let rule = rules.find(function (r) { return r.id === ruleId; });
     if (!rule) return '';
-    var varCount = (state.capabilities.variables || []).length;
-    var fragmentCount = (state.capabilities.modes || []).reduce(function (s, m) { return s + (Array.isArray(m.suggestedPromptFragments) ? m.suggestedPromptFragments.length : 0); }, 0);
-    var templateCount = Array.isArray(state.capabilities.nodeTemplates) ? state.capabilities.nodeTemplates.length : 0;
-    var snippetCount = fragmentCount + templateCount;
-    var titleText = scope === 'workflow' ? text('编辑工作流提示词规则', 'Edit Workflow Prompt Rule') : text('编辑节点提示词规则', 'Edit Node Prompt Rule');
-    var ruleLabel = promptRuleLabel(rule);
+    let varCount = (state.capabilities.variables || []).length;
+    let fragmentCount = (state.capabilities.modes || []).reduce(function (s, m) { return s + (Array.isArray(m.suggestedPromptFragments) ? m.suggestedPromptFragments.length : 0); }, 0);
+    let templateCount = Array.isArray(state.capabilities.nodeTemplates) ? state.capabilities.nodeTemplates.length : 0;
+    let snippetCount = fragmentCount + templateCount;
+    let titleText = scope === 'workflow' ? text('编辑工作流提示词规则', 'Edit Workflow Prompt Rule') : text('编辑节点提示词规则', 'Edit Node Prompt Rule');
+    let ruleLabel = promptRuleLabel(rule);
     return [
       '<div class="feature-detail-overlay" onkeydown="event.stopPropagation()">',
       '<div class="feature-detail-window" style="width:min(100%,780px);max-height:min(100%,780px);">',
@@ -1484,12 +1484,12 @@
 
   // ── Prompt contentEditable helpers ──────────────────
 
-  var VAR_CHIP_RE = /\{\{([^{}]+)\}\}/g;
+  let VAR_CHIP_RE = /\{\{([^{}]+)\}\}/g;
 
   function varChipHtml(key) {
-    var info = (state.capabilities.variables || []).find(function (v) { return v.key === key; });
-    var label = info ? (info.title || key) : key;
-    var cls = info ? 'fe-var-chip' : 'fe-var-chip unknown';
+    let info = (state.capabilities.variables || []).find(function (v) { return v.key === key; });
+    let label = info ? (info.title || key) : key;
+    let cls = info ? 'fe-var-chip' : 'fe-var-chip unknown';
     return '<span contenteditable="false" class="' + cls + '" data-var-key="' + esc(key) + '">'
       + '<span class="fe-var-chip-brace">{</span>'
       + '<span class="fe-var-chip-label">' + esc(label) + '</span>'
@@ -1499,9 +1499,9 @@
 
   function promptToHTML(rawText) {
     if (!rawText) return '';
-    var parts = rawText.split(VAR_CHIP_RE);
-    var out = [];
-    for (var i = 0; i < parts.length; i++) {
+    let parts = rawText.split(VAR_CHIP_RE);
+    let out = [];
+    for (let i = 0; i < parts.length; i++) {
       if (i % 2 === 0) {
         out.push(esc(parts[i]).replace(/\n/g, '<br>'));
       } else {
@@ -1512,45 +1512,45 @@
   }
 
   function htmlToPrompt(el) {
-    var parts = [];
+    let parts = [];
     function walk(node) {
       if (node.nodeType === 3) { parts.push(node.textContent); return; }
       if (node.nodeType !== 1) return;
-      var tag = node.tagName;
+      let tag = node.tagName;
       if (tag === 'BR') { parts.push('\n'); return; }
       if (tag === 'SPAN' && node.hasAttribute('data-var-key')) {
         parts.push('{{' + node.getAttribute('data-var-key') + '}}');
         return;
       }
-      for (var i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
+      for (let i = 0; i < node.childNodes.length; i++) walk(node.childNodes[i]);
     }
-    for (var i = 0; i < el.childNodes.length; i++) walk(el.childNodes[i]);
+    for (let i = 0; i < el.childNodes.length; i++) walk(el.childNodes[i]);
     return parts.join('');
   }
 
   function getPromptCursorOffset(el) {
-    var sel = window.getSelection();
+    let sel = window.getSelection();
     if (!sel.rangeCount) return -1;
-    var range = sel.getRangeAt(0);
-    var preRange = range.cloneRange();
+    let range = sel.getRangeAt(0);
+    let preRange = range.cloneRange();
     preRange.selectNodeContents(el);
     preRange.setEnd(range.startContainer, range.startOffset);
-    var container = preRange.commonAncestorContainer;
+    let container = preRange.commonAncestorContainer;
     if (container === el && !preRange.startOffset && !preRange.endOffset) {
-      var nodes = [];
-      function collect(n) { if (n.nodeType === 3) { nodes.push(n); } else if (n.nodeType === 1) { for (var i = 0; i < n.childNodes.length; i++) collect(n.childNodes[i]); } }
+      let nodes = [];
+      function collect(n) { if (n.nodeType === 3) { nodes.push(n); } else if (n.nodeType === 1) { for (let i = 0; i < n.childNodes.length; i++) collect(n.childNodes[i]); } }
       collect(el);
       if (!nodes.length) return 0;
       preRange.setEnd(nodes[nodes.length - 1], nodes[nodes.length - 1].length);
     }
-    var frag = preRange.cloneContents();
-    var tmp = document.createElement('div');
+    let frag = preRange.cloneContents();
+    let tmp = document.createElement('div');
     tmp.appendChild(frag);
     return htmlToPrompt(tmp).length;
   }
 
   function setPromptCursorOffset(el, offset) {
-    var acc = 0;
+    let acc = 0;
     function walk(node) {
       if (acc >= offset) return null;
       if (node.nodeType === 3) {
@@ -1561,7 +1561,7 @@
         return null;
       }
       if (node.nodeType !== 1) return null;
-      var tag = node.tagName;
+      let tag = node.tagName;
       if (tag === 'BR') {
         if (acc + 1 > offset) return { node: node.parentNode, offset: Array.from(node.parentNode.childNodes).indexOf(node) };
         acc += 1;
@@ -1574,30 +1574,30 @@
         acc += ('{{' + node.getAttribute('data-var-key') + '}}').length;
         return null;
       }
-      for (var i = 0; i < node.childNodes.length; i++) {
-        var r = walk(node.childNodes[i]);
+      for (let i = 0; i < node.childNodes.length; i++) {
+        let r = walk(node.childNodes[i]);
         if (r) return r;
       }
       return null;
     }
-    var pos = walk(el);
+    let pos = walk(el);
     if (!pos) {
-      var last = el.lastChild;
+      let last = el.lastChild;
       if (!last) { pos = { node: el, offset: 0 }; }
       else if (last.nodeType === 3) { pos = { node: last, offset: last.length }; }
       else { pos = { node: el, offset: el.childNodes.length }; }
     }
-    var sel = window.getSelection();
-    var range = document.createRange();
+    let sel = window.getSelection();
+    let range = document.createRange();
     try { range.setStart(pos.node, pos.offset); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); } catch (e) {}
   }
 
   function getPickerAnchorRect(el) {
-    var sel = window.getSelection();
+    let sel = window.getSelection();
     if (!sel.rangeCount) return null;
-    var range = sel.getRangeAt(0).cloneRange();
+    let range = sel.getRangeAt(0).cloneRange();
     range.collapse(true);
-    var rects = range.getClientRects();
+    let rects = range.getClientRects();
     if (rects.length) return rects[0];
     return el.getBoundingClientRect();
   }
@@ -1605,10 +1605,10 @@
   // ── Prompt slash picker ──────────────────────────────
 
   function collectPromptPickerItems() {
-    var items = [];
-    var seen = new Set();
+    let items = [];
+    let seen = new Set();
     function addItem(item) {
-      var dedupeKey = [item.type, item.key, item.insertText].join('::');
+      let dedupeKey = [item.type, item.key, item.insertText].join('::');
       if (seen.has(dedupeKey)) return;
       seen.add(dedupeKey);
       items.push(item);
@@ -1656,7 +1656,7 @@
 
   function filterPromptPickerItems(items, query) {
     if (!query) return items.slice(0, 60);
-    var q = query.toLowerCase();
+    let q = query.toLowerCase();
     return items.filter(function (item) {
       return [item.title, item.key, item.description, item.featureName, item.insertText].join(' ').toLowerCase().indexOf(q) >= 0;
     }).slice(0, 60);
@@ -1664,48 +1664,48 @@
 
   function detectSlashTrigger(text, cursorPos) {
     if (cursorPos < 1) return null;
-    var before = text.substring(0, cursorPos);
-    var slashMatch = before.match(/\/([^/\s]*)$/);
+    let before = text.substring(0, cursorPos);
+    let slashMatch = before.match(/\/([^/\s]*)$/);
     if (!slashMatch) return null;
-    var startPos = cursorPos - slashMatch[0].length;
+    let startPos = cursorPos - slashMatch[0].length;
     return { startIndex: startPos, query: slashMatch[1] || '' };
   }
 
   function insertPromptPickerItem(scope, targetId, ruleId, item) {
-    var target = resolvePromptTarget(scope, targetId);
+    let target = resolvePromptTarget(scope, targetId);
     if (!target) return;
-    var rules = ensurePromptRules(target);
-    var rule = rules.find(function (r) { return r.id === ruleId; });
+    let rules = ensurePromptRules(target);
+    let rule = rules.find(function (r) { return r.id === ruleId; });
     if (!rule) return;
-    var ce = document.querySelector('.fe-prompt-ce');
+    let ce = document.querySelector('.fe-prompt-ce');
     if (!ce) return;
-    var rawText = htmlToPrompt(ce);
-    var cursorOffset = getPromptCursorOffset(ce);
+    let rawText = htmlToPrompt(ce);
+    let cursorOffset = getPromptCursorOffset(ce);
     if (cursorOffset < 0) cursorOffset = rawText.length;
-    var trigger = detectSlashTrigger(rawText, cursorOffset);
+    let trigger = detectSlashTrigger(rawText, cursorOffset);
     if (!trigger) return;
-    var before = rawText.substring(0, trigger.startIndex);
-    var after = rawText.substring(cursorOffset);
+    let before = rawText.substring(0, trigger.startIndex);
+    let after = rawText.substring(cursorOffset);
     rule.template = before + item.insertText + after;
     state.slashPicker.open = false;
     state.slashPicker.query = '';
     markGraphChanged();
-    var savedOffset = before.length + item.insertText.length;
+    let savedOffset = before.length + item.insertText.length;
     ce.innerHTML = promptToHTML(rule.template);
     setPromptCursorOffset(ce, savedOffset);
     renderPromptPickerDropdown();
   }
 
   function handlePromptEditorInput() {
-    var ce = document.querySelector('.fe-prompt-ce');
+    let ce = document.querySelector('.fe-prompt-ce');
     if (!ce) return;
-    var scope = ce.getAttribute('data-prompt-scope') || 'node';
-    var targetId = ce.getAttribute('data-prompt-target') || '';
-    var ruleId = ce.getAttribute('data-prompt-rule') || '';
-    var rawText = htmlToPrompt(ce);
+    let scope = ce.getAttribute('data-prompt-scope') || 'node';
+    let targetId = ce.getAttribute('data-prompt-target') || '';
+    let ruleId = ce.getAttribute('data-prompt-rule') || '';
+    let rawText = htmlToPrompt(ce);
     updatePromptRuleDraft(scope, targetId, ruleId, rawText);
-    var cursorOffset = getPromptCursorOffset(ce);
-    var trigger = detectSlashTrigger(rawText, cursorOffset >= 0 ? cursorOffset : rawText.length);
+    let cursorOffset = getPromptCursorOffset(ce);
+    let trigger = detectSlashTrigger(rawText, cursorOffset >= 0 ? cursorOffset : rawText.length);
     if (trigger) {
       state.slashPicker.open = true;
       state.slashPicker.query = trigger.query;
@@ -1718,15 +1718,15 @@
     renderPromptPickerDropdown();
   }
 
-  var PICKER_CATEGORIES = ['all', 'template', 'variable'];
-  var PICKER_CATEGORY_LABELS = {
+  let PICKER_CATEGORIES = ['all', 'template', 'variable'];
+  let PICKER_CATEGORY_LABELS = {
     all: text('全部', 'All'),
     template: text('模板', 'Templates'),
     variable: text('变量', 'Variables'),
   };
 
   function applyPickerCategoryFilter(items) {
-    var cat = state.slashPicker.category || 'all';
+    let cat = state.slashPicker.category || 'all';
     if (cat === 'all') return items;
     if (cat === 'template') return items.filter(function (it) { return it.type === 'template' || it.type === 'fragment'; });
     if (cat === 'variable') return items.filter(function (it) { return it.type === 'variable'; });
@@ -1734,12 +1734,12 @@
   }
 
   function findPrevVarChip(ce) {
-    var sel = window.getSelection();
+    let sel = window.getSelection();
     if (!sel.rangeCount || !sel.isCollapsed) return null;
-    var range = sel.getRangeAt(0);
-    var node = range.startContainer;
-    var offset = range.startOffset;
-    var candidate = null;
+    let range = sel.getRangeAt(0);
+    let node = range.startContainer;
+    let offset = range.startOffset;
+    let candidate = null;
     if (node.nodeType === 3 && offset === 0) {
       candidate = node.previousSibling;
     } else if (node.nodeType === 1 && offset > 0) {
@@ -1759,24 +1759,24 @@
   function handlePromptEditorKeydown(e) {
     // ── Backspace: delete variable chip when cursor is right after it ──
     if (e.key === 'Backspace' && !state.slashPicker.open) {
-      var ce = document.querySelector('.fe-prompt-ce');
+      let ce = document.querySelector('.fe-prompt-ce');
       if (ce && (document.activeElement === ce || ce.contains(document.activeElement))) {
-        var chip = findPrevVarChip(ce);
+        let chip = findPrevVarChip(ce);
         if (chip) {
           e.preventDefault();
-          var rawBefore = htmlToPrompt(ce);
+          let rawBefore = htmlToPrompt(ce);
           chip.remove();
-          var rawAfter = htmlToPrompt(ce);
-          var nodeId = ce.getAttribute('data-node-id');
-          var node = state.graph.nodes.find(function (n) { return n.id === nodeId; });
+          let rawAfter = htmlToPrompt(ce);
+          let nodeId = ce.getAttribute('data-node-id');
+          let node = state.graph.nodes.find(function (n) { return n.id === nodeId; });
           if (node) { node.prompt = rawAfter; markGraphChanged(); }
           return;
         }
       }
     }
     if (state.slashPicker.open) {
-      var allItems = filterPromptPickerItems(collectPromptPickerItems(), state.slashPicker.query);
-      var items = applyPickerCategoryFilter(allItems);
+      let allItems = filterPromptPickerItems(collectPromptPickerItems(), state.slashPicker.query);
+      let items = applyPickerCategoryFilter(allItems);
       if (e.key === 'Escape') {
         e.preventDefault();
         state.slashPicker.open = false;
@@ -1786,7 +1786,7 @@
       }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
-        var curIdx = PICKER_CATEGORIES.indexOf(state.slashPicker.category || 'all');
+        let curIdx = PICKER_CATEGORIES.indexOf(state.slashPicker.category || 'all');
         if (e.key === 'ArrowRight') curIdx = (curIdx + 1) % PICKER_CATEGORIES.length;
         else curIdx = (curIdx - 1 + PICKER_CATEGORIES.length) % PICKER_CATEGORIES.length;
         state.slashPicker.category = PICKER_CATEGORIES[curIdx];
@@ -1809,23 +1809,23 @@
         }
         if (e.key === 'Enter' || e.key === 'Tab') {
           e.preventDefault();
-          var item = items[state.slashPicker.activeIndex];
+          let item = items[state.slashPicker.activeIndex];
           if (item) insertPromptPickerItem(state.promptDialog.scope, state.promptDialog.targetId, state.promptDialog.ruleId, item);
-          return;
+          
         }
       }
     }
   }
 
   function renderPromptPickerDropdown() {
-    var host = document.getElementById('flow-prompt-picker-host');
+    let host = document.getElementById('flow-prompt-picker-host');
     if (!host) return;
     if (!state.slashPicker.open) { host.innerHTML = ''; return; }
-    var query = state.slashPicker.query || '';
-    var allItems = filterPromptPickerItems(collectPromptPickerItems(), query);
-    var items = applyPickerCategoryFilter(allItems);
-    var listEl = host.querySelector('.fe-picker-list');
-    var searchEl = host.querySelector('.fe-picker-search');
+    let query = state.slashPicker.query || '';
+    let allItems = filterPromptPickerItems(collectPromptPickerItems(), query);
+    let items = applyPickerCategoryFilter(allItems);
+    let listEl = host.querySelector('.fe-picker-list');
+    let searchEl = host.querySelector('.fe-picker-search');
     if (!host.querySelector('.flow-editor-prompt-picker')) {
       host.innerHTML = '<div class="flow-editor-prompt-picker">'
         + '<div class="fe-picker-search-wrap"><input class="fe-picker-search" value="' + esc(query) + '" placeholder="' + esc(text('搜索变量、模板或片段…', 'Search variables, templates, or fragments…')) + '" oninput="window.ClawFlowEditor.setPickerSearch(this.value)" onkeydown="window.ClawFlowEditor.handlePromptEditorKeydown(event)"></div>'
@@ -1839,17 +1839,17 @@
       searchEl.value = query;
     }
     // render category tabs
-    var tabsEl = host.querySelector('.fe-picker-tabs');
+    let tabsEl = host.querySelector('.fe-picker-tabs');
     if (tabsEl) {
-      var curCat = state.slashPicker.category || 'all';
-      var tabCounts = { all: allItems.length, template: 0, variable: 0 };
+      let curCat = state.slashPicker.category || 'all';
+      let tabCounts = { all: allItems.length, template: 0, variable: 0 };
       allItems.forEach(function (it) {
         if (it.type === 'variable') tabCounts.variable++;
         else tabCounts.template++;
       });
-      var tabsHtml = '';
+      let tabsHtml = '';
       PICKER_CATEGORIES.forEach(function (cat) {
-        var isActive = cat === curCat;
+        let isActive = cat === curCat;
         tabsHtml += '<button type="button" class="fe-picker-tab' + (isActive ? ' active' : '') + '" onmousedown="event.preventDefault()" onclick="window.ClawFlowEditor.setPickerCategory(\'' + cat + '\')">'
           + PICKER_CATEGORY_LABELS[cat]
           + ' <span class="fe-picker-tab-count">' + tabCounts[cat] + '</span>'
@@ -1861,29 +1861,29 @@
       if (listEl) listEl.innerHTML = '<div class="flow-editor-prompt-picker-empty">' + esc(text('没有匹配项', 'No matches')) + '</div>';
       return;
     }
-    var grouped = {};
-    items.forEach(function (item) { var g = shortFeatureName(item.featureName) || text('其他', 'Other'); if (!grouped[g]) grouped[g] = []; grouped[g].push(item); });
-    var groupNames = Object.keys(grouped);
-    var showGroupHeaders = groupNames.length > 1;
-    var html = '';
-    var idx = 0;
+    let grouped = {};
+    items.forEach(function (item) { let g = shortFeatureName(item.featureName) || text('其他', 'Other'); if (!grouped[g]) grouped[g] = []; grouped[g].push(item); });
+    let groupNames = Object.keys(grouped);
+    let showGroupHeaders = groupNames.length > 1;
+    let html = '';
+    let idx = 0;
     groupNames.forEach(function (group) {
       if (showGroupHeaders) html += '<div class="fe-picker-group-header">' + esc(group) + '</div>';
       grouped[group].forEach(function (item) {
-        var i = idx++;
-        var isVar = item.type === 'variable';
-        var isTemplate = item.type === 'template';
-        var icon = isVar ? '{ }' : (isTemplate ? '&#9638;' : '&#9998;');
-        var label = isVar
+        let i = idx++;
+        let isVar = item.type === 'variable';
+        let isTemplate = item.type === 'template';
+        let icon = isVar ? '{ }' : (isTemplate ? '&#9638;' : '&#9998;');
+        let label = isVar
           ? esc(text('变量', 'Var'))
           : (isTemplate ? esc(text('模板', 'Tpl')) : esc(text('片段', 'Snip')));
-        var typeHtml = isVar && item.valueType ? '<small class="fe-picker-type-chip">' + esc(item.valueType) + '</small>' : '';
-        var metaParts = pickerMetaParts(item);
-        var metaHtml = metaParts.length
+        let typeHtml = isVar && item.valueType ? '<small class="fe-picker-type-chip">' + esc(item.valueType) + '</small>' : '';
+        let metaParts = pickerMetaParts(item);
+        let metaHtml = metaParts.length
           ? metaParts.map(function (part) { return '<span>' + highlightMatch(part, query) + '</span>'; }).join('<span class="fe-picker-meta-sep">·</span>')
           : '';
-        var previewText = pickerPreviewText(item);
-        var sublineHtml = [metaHtml, previewText ? '<span class="flow-editor-prompt-picker-preview">' + highlightMatch(previewText, query) + '</span>' : ''].filter(Boolean).join('<span class="fe-picker-meta-sep">·</span>');
+        let previewText = pickerPreviewText(item);
+        let sublineHtml = [metaHtml, previewText ? '<span class="flow-editor-prompt-picker-preview">' + highlightMatch(previewText, query) + '</span>' : ''].filter(Boolean).join('<span class="fe-picker-meta-sep">·</span>');
         html += '<div class="flow-editor-prompt-picker-item' + (i === state.slashPicker.activeIndex ? ' active' : '') + '" data-picker-index="' + i + '" onmousedown="event.preventDefault()" onclick="window.ClawFlowEditor.clickPromptPickerItem(' + i + ')">' +
           '<div class="flow-editor-prompt-picker-main">' +
           '<span class="flow-editor-prompt-picker-icon' + (isVar ? ' var-icon' : ' frag-icon') + '">' + icon + '</span>' +
@@ -1899,18 +1899,18 @@
     if (listEl) listEl.innerHTML = html;
     // auto-scroll active item into view
     if (listEl && state.slashPicker.activeIndex >= 0) {
-      var activeEl = listEl.querySelector('.flow-editor-prompt-picker-item.active');
+      let activeEl = listEl.querySelector('.flow-editor-prompt-picker-item.active');
       if (activeEl) ensurePickerItemVisible(listEl, activeEl);
     }
   }
 
   function ensurePickerItemVisible(container, item) {
     if (!container || !item) return;
-    var margin = 6;
-    var containerRect = container.getBoundingClientRect();
-    var itemRect = item.getBoundingClientRect();
-    var overTop = itemRect.top - containerRect.top;
-    var overBottom = itemRect.bottom - containerRect.bottom;
+    let margin = 6;
+    let containerRect = container.getBoundingClientRect();
+    let itemRect = item.getBoundingClientRect();
+    let overTop = itemRect.top - containerRect.top;
+    let overBottom = itemRect.bottom - containerRect.bottom;
     if (overTop < margin) {
       container.scrollTop = Math.max(container.scrollTop + overTop - margin, 0);
       return;
@@ -1927,9 +1927,9 @@
 
   function highlightMatch(text, query) {
     if (!query || !text) return esc(text);
-    var q = query.toLowerCase();
-    var lower = text.toLowerCase();
-    var idx = lower.indexOf(q);
+    let q = query.toLowerCase();
+    let lower = text.toLowerCase();
+    let idx = lower.indexOf(q);
     if (idx < 0) return esc(text);
     return esc(text.substring(0, idx)) + '<span class="fe-picker-hl">' + esc(text.substring(idx, idx + q.length)) + '</span>' + esc(text.substring(idx + q.length));
   }
@@ -1941,9 +1941,9 @@
   }
 
   function clickPromptPickerItem(index) {
-    var allItems = filterPromptPickerItems(collectPromptPickerItems(), state.slashPicker.query);
-    var items = applyPickerCategoryFilter(allItems);
-    var item = items[index];
+    let allItems = filterPromptPickerItems(collectPromptPickerItems(), state.slashPicker.query);
+    let items = applyPickerCategoryFilter(allItems);
+    let item = items[index];
     if (item) insertPromptPickerItem(state.promptDialog.scope, state.promptDialog.targetId, state.promptDialog.ruleId, item);
   }
 
@@ -2045,32 +2045,32 @@
   }
 
   function promptRuleLabel(rule) {
-    var label = rule.name || '';
+    let label = rule.name || '';
     if (!label) {
-      var match = promptTimingOptions().find(function (opt) { return opt[0] === rule.timing; });
+      let match = promptTimingOptions().find(function (opt) { return opt[0] === rule.timing; });
       label = match ? match[1] : rule.timing;
     }
     return label;
   }
 
   function renderWorkflowModeToggle(component) {
-    var mode = component.meta.mode || 'agent-initiated';
-    var modeLabels = {
+    let mode = component.meta.mode || 'agent-initiated';
+    let modeLabels = {
       'agent-initiated': text('按需进入', 'On demand'),
       'auto': text('自动进入', 'Auto'),
       'auto-reenterable': text('自动且可重入', 'Auto+Re'),
     };
-    var modeDescriptions = {
+    let modeDescriptions = {
       'agent-initiated': text('Agent 按需主动进入', 'Agent enters when needed'),
       'auto': text('对话开始后自动进入，退出后不可再进入', 'Auto-enter on start; no re-entry after exit'),
       'auto-reenterable': text('对话开始后自动进入，退出后仍可重新进入', 'Auto-enter on start; re-entry allowed'),
     };
-    var modeClasses = {
+    let modeClasses = {
       'agent-initiated': '',
       'auto': 'auto',
       'auto-reenterable': 'reenterable',
     };
-    var cls = modeClasses[mode] || '';
+    let cls = modeClasses[mode] || '';
     return [
       '<div class="flow-editor-field">',
       '<span class="flow-editor-label">' + esc(text('进入模式', 'Mode')) + '</span>',
@@ -2086,10 +2086,10 @@
   function cycleWorkflowMode(wid) {
     if (!state.graph?.workflows?.[wid]) return;
     pushUndo(cloneGraph(state.graph));
-    var current = state.graph.workflows[wid].mode || 'agent-initiated';
-    var order = ['agent-initiated', 'auto', 'auto-reenterable'];
-    var idx = order.indexOf(current);
-    var next = order[(idx + 1) % order.length];
+    let current = state.graph.workflows[wid].mode || 'agent-initiated';
+    let order = ['agent-initiated', 'auto', 'auto-reenterable'];
+    let idx = order.indexOf(current);
+    let next = order[(idx + 1) % order.length];
     state.graph.workflows[wid].mode = next;
     state.selectedWorkflowId = wid;
     markGraphChanged();
@@ -2205,7 +2205,7 @@
     const isHead = isWorkflowHead(node);
     const isSelected = node.id === state.selectedNodeId;
     const prompt = isHead ? text('工作流头节点：它定义工作流起点，本身不进入运行时执行。', 'Workflow head: defines the workflow start and is not executed at runtime.') : (function () {
-      var prs = ensurePromptRules(node);
+      let prs = ensurePromptRules(node);
       if (prs.length === 0) return text('未填写节点提示词。', 'No prompt yet.');
       return prs.map(function (r) { return promptRuleLabel(r) + (r.template ? '' : text('（空）', ' (empty)')); }).join(', ');
     })();
@@ -2381,14 +2381,14 @@
         node[key] = value || undefined;
       }
     } else if (parts[0] === 'promptRule') {
-      var prScope = parts[1];
-      var prTargetId = parts[2];
-      var prRuleId = parts[3];
-      var prKey = parts[4];
-      var prTarget = resolvePromptTarget(prScope, prTargetId);
+      let prScope = parts[1];
+      let prTargetId = parts[2];
+      let prRuleId = parts[3];
+      let prKey = parts[4];
+      let prTarget = resolvePromptTarget(prScope, prTargetId);
       if (prTarget) {
-        var prRules = ensurePromptRules(prTarget);
-        var prRule = prRules.find(function (r) { return r.id === prRuleId; });
+        let prRules = ensurePromptRules(prTarget);
+        let prRule = prRules.find(function (r) { return r.id === prRuleId; });
         if (prRule) {
           if (prKey === 'timing') {
             prRule.timing = value;
@@ -2497,7 +2497,7 @@
   function getEffectiveToolRules(node) {
     if (!node) return [];
     // 新结构: advanced.tools.rules
-    var advanced = Array.isArray(node.advanced?.tools?.rules) ? node.advanced.tools.rules : null;
+    let advanced = Array.isArray(node.advanced?.tools?.rules) ? node.advanced.tools.rules : null;
     if (advanced && advanced.length) {
       return advanced
         .filter(function (rule) { return rule && typeof rule.name === 'string' && rule.name.trim(); })
@@ -2519,10 +2519,10 @@
   }
 
   function writeAdvancedToolRules(node, rules) {
-    var normalized = [];
-    var seen = new Set();
+    let normalized = [];
+    let seen = new Set();
     rules.forEach(function (rule) {
-      var name = String(rule?.name || '').trim();
+      let name = String(rule?.name || '').trim();
       if (!name || seen.has(name)) return;
       seen.add(name);
       normalized.push({
@@ -2713,7 +2713,7 @@
   }
 
   function openPromptEditor(scope, targetId, ruleId) {
-    var target = resolvePromptTarget(scope, targetId);
+    let target = resolvePromptTarget(scope, targetId);
     if (!target) return;
     if (scope === 'node' && isWorkflowHead(target)) return;
     ensurePromptRules(target);
@@ -2735,46 +2735,46 @@
   }
 
   function updatePromptRuleDraft(scope, targetId, ruleId, value) {
-    var target = resolvePromptTarget(scope, targetId);
+    let target = resolvePromptTarget(scope, targetId);
     if (!target) return;
-    var rules = ensurePromptRules(target);
-    var rule = rules.find(function (r) { return r.id === ruleId; });
+    let rules = ensurePromptRules(target);
+    let rule = rules.find(function (r) { return r.id === ruleId; });
     if (!rule) return;
     rule.template = value || '';
     markGraphChanged();
   }
 
   function activatePromptSlot(scope, targetId, timing) {
-    var target = resolvePromptTarget(scope, targetId);
+    let target = resolvePromptTarget(scope, targetId);
     if (!target) return;
-    var rules = ensurePromptRules(target);
-    var existing = rules.find(function (r) { return r.timing === timing; });
+    let rules = ensurePromptRules(target);
+    let existing = rules.find(function (r) { return r.timing === timing; });
     if (existing) {
       openPromptEditor(scope, targetId, existing.id);
       return;
     }
-    var newId = 'pr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-    var interval = (timing === 'every-n-steps' || timing === 'every-n-calls') ? 3 : undefined;
+    let newId = 'pr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+    let interval = (timing === 'every-n-steps' || timing === 'every-n-calls') ? 3 : undefined;
     rules.push({ id: newId, timing: timing, interval: interval, template: '' });
     markGraphChanged({ rerender: false });
     openPromptEditor(scope, targetId, newId);
   }
 
   function addPromptRule(scope, targetId) {
-    var target = resolvePromptTarget(scope, targetId);
+    let target = resolvePromptTarget(scope, targetId);
     if (!target) return;
-    var rules = ensurePromptRules(target);
-    var newId = 'pr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+    let rules = ensurePromptRules(target);
+    let newId = 'pr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
     rules.push({ id: newId, timing: 'on-enter', template: '' });
     markGraphChanged({ rerender: true });
     openPromptEditor(scope, targetId, newId);
   }
 
   function deletePromptRule(scope, targetId, ruleId) {
-    var target = resolvePromptTarget(scope, targetId);
+    let target = resolvePromptTarget(scope, targetId);
     if (!target) return;
-    var rules = ensurePromptRules(target);
-    var index = rules.findIndex(function (r) { return r.id === ruleId; });
+    let rules = ensurePromptRules(target);
+    let index = rules.findIndex(function (r) { return r.id === ruleId; });
     if (index >= 0) {
       rules.splice(index, 1);
       markGraphChanged({ rerender: true });
@@ -2795,10 +2795,10 @@
   function toggleAutoWorkflow(wid) {
     if (!state.graph?.workflows?.[wid]) return;
     pushUndo(cloneGraph(state.graph));
-    var current = state.graph.workflows[wid].mode || 'agent-initiated';
-    var order = ['agent-initiated', 'auto', 'auto-reenterable'];
-    var idx = order.indexOf(current);
-    var next = order[(idx + 1) % order.length];
+    let current = state.graph.workflows[wid].mode || 'agent-initiated';
+    let order = ['agent-initiated', 'auto', 'auto-reenterable'];
+    let idx = order.indexOf(current);
+    let next = order[(idx + 1) % order.length];
     state.graph.workflows[wid].mode = next;
     if (next === 'auto' || next === 'auto-reenterable') {
       Object.keys(state.graph.workflows).forEach(id => {
@@ -2937,7 +2937,7 @@
       if (meta.entry === nodeId) delete graph.workflows[wid];
     });
     normalizeWorkflowMembership(graph);
-    var sibling = graph.nodes.find(function (n) { return componentForNode(n.id)?.id === deletedWorkflowId; });
+    let sibling = graph.nodes.find(function (n) { return componentForNode(n.id)?.id === deletedWorkflowId; });
     state.selectedNodeId = sibling ? sibling.id : '';
     state.selectedWorkflowId = sibling ? deletedWorkflowId : (computeComponents()[0]?.id || '');
     state.selectedEdgeId = '';

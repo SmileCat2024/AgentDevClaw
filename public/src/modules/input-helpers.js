@@ -83,7 +83,7 @@ function handleInputKey(event, requestId) {
     if (event.ctrlKey || event.shiftKey) {
       // Ctrl+Enter or Shift+Enter for new line
       // default behavior is new line, but we might want to ensure it works
-      return;
+      
     } else {
       // Enter for submit
       event.preventDefault();
@@ -278,15 +278,15 @@ function applyConversationProcessState(root = container) {
  * chat area doesn't look jarringly blank.
  */
 function syncProcessHiddenEmptyState(root) {
-  var existing = root.querySelector('.process-hidden-empty-overlay');
+  let existing = root.querySelector('.process-hidden-empty-overlay');
   if (showChatProcess) {
     if (existing) existing.remove();
     return;
   }
-  var rows = root.querySelectorAll('.message-row');
-  var hasVisibleRow = false;
-  for (var i = 0; i < rows.length; i++) {
-    var row = rows[i];
+  let rows = root.querySelectorAll('.message-row');
+  let hasVisibleRow = false;
+  for (let i = 0; i < rows.length; i++) {
+    let row = rows[i];
     if (row.classList.contains('process-hidden')) continue;
     if (row.classList.contains('process-hidden-empty')) continue;
     hasVisibleRow = true;
@@ -294,7 +294,7 @@ function syncProcessHiddenEmptyState(root) {
   }
   if (!hasVisibleRow && rows.length > 0) {
     if (!existing) {
-      var overlay = document.createElement('div');
+      let overlay = document.createElement('div');
       overlay.className = 'process-hidden-empty-overlay';
       overlay.innerHTML = getEmptyStateHtml();
       root.appendChild(overlay);

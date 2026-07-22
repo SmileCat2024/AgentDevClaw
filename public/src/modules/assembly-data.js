@@ -129,7 +129,7 @@ function getFeatureCreatorOutputDirectory(agent, startupDraft = {}) {
   const featureName = String(startupDraft.feature_name || '').trim();
   const parentDir = String(startupDraft.target_dir || '').trim();
   if (!featureName || !parentDir) return '';
-  return parentDir.replace(/[\\\/]+$/, '') + '\\' + featureName;
+  return parentDir.replace(/[\\/]+$/, '') + '\\' + featureName;
 }
 
 function getAgentCreatorOutputDirectory(agent, startupDraft = {}) {
@@ -137,7 +137,7 @@ function getAgentCreatorOutputDirectory(agent, startupDraft = {}) {
   const agentName = String(startupDraft.agent_name || '').trim();
   const parentDir = String(startupDraft.target_dir || '').trim();
   if (!agentName || !parentDir) return '';
-  return parentDir.replace(/[\\\/]+$/, '') + '\\' + agentName;
+  return parentDir.replace(/[\\/]+$/, '') + '\\' + agentName;
 }
 
 function normalizeFeatureCreatorStartupDraft(agent, rawDraft = {}) {

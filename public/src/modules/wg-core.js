@@ -437,9 +437,9 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
    */
   function resolveDispatchDisplayStatus(routing) {
     if (!routing) return 'pending';
-    var sessionId = routing.targetSessionId;
+    const sessionId = routing.targetSessionId;
     if (sessionId && WgState._runtimeStatusCache[sessionId]) {
-      var rtStatus = WgState._runtimeStatusCache[sessionId].status;
+      const rtStatus = WgState._runtimeStatusCache[sessionId].status;
       if (rtStatus === 'running') return 'delivered';
       if (rtStatus === 'idle' || rtStatus === 'offline') return 'completed';
     }
@@ -595,7 +595,7 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
    * 将血缘转换 reason 转为可读标签（用于事件分隔线）。
    */
   function _getEventReasonLabel(reason) {
-    var labels = {
+    const labels = {
       trim: '会话精简',
       compact: '上下文压缩',
       summary: '摘要导出',
@@ -939,16 +939,16 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
       '    <div class="wg-attachment-list" data-wg-role="attachment-list" style="display:none;"></div>',
       '    <div class="wg-link-list" data-wg-role="link-list"></div>',
       '    <div class="wg-input-editor" contenteditable="true" data-placeholder="输入消息，使用「@」派发任务"></div>',
-      '    <div class=\"wg-input-footer\">',
-      '      <button class=\"wg-mention-icon\" data-wg-action=\"mention\" title=\"提及成员\">',
-      '        <svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94\"/></svg>',
+      '    <div class="wg-input-footer">',
+      '      <button class="wg-mention-icon" data-wg-action="mention" title="提及成员">',
+      '        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>',
       '      </button>',
-      '      <button class=\"wg-voice-btn\" data-wg-action=\"voice\" title=\"语音输入\">',
-      '        <svg class=\"icon-mic\" width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z\"></path><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"></path><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"22\"></line></svg>',
+      '      <button class="wg-voice-btn" data-wg-action="voice" title="语音输入">',
+      '        <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
       '      </button>',
-      '      <span class=\"wg-input-hint\">Enter 发送 · Shift+Enter 换行</span>',
-      '      <div class=\"wg-input-spacer\"></div>',
-      '      <button class=\"wg-send-btn\" data-wg-action=\"send\">发送</button>',
+      '      <span class="wg-input-hint">Enter 发送 · Shift+Enter 换行</span>',
+      '      <div class="wg-input-spacer"></div>',
+      '      <button class="wg-send-btn" data-wg-action="send">发送</button>',
       '    </div>',
       '  </div>',
       renderMentionPicker(),
@@ -1543,9 +1543,8 @@ const WG_IMPORT_SEARCH_DEBOUNCE = 300;
       loadResourcesPanelData();
     }
     if (typeof activeFeaturePanel !== 'undefined' && activeFeaturePanel === 'settings') {
-      if (typeof window._wgSettingsInit === 'function') {
-      } else if (typeof window._wgSettingsRefresh === 'function') {
-      }
+      if (typeof window._wgSettingsInit === 'function') window._wgSettingsInit();
+      else if (typeof window._wgSettingsRefresh === 'function') window._wgSettingsRefresh();
     }
   }
 

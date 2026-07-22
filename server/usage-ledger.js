@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'crypto';
+import { createHash } from 'crypto';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';
 import { USER_DATA_ROOT, USAGE_MAX_INDEX_IDS } from './shared/constants.js';

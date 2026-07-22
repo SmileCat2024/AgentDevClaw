@@ -496,9 +496,9 @@
    */
   function resolveDispatchDisplayStatus(routing) {
     if (!routing) return 'pending';
-    var sessionId = routing.targetSessionId;
+    let sessionId = routing.targetSessionId;
     if (sessionId && _runtimeStatusCache[sessionId]) {
-      var rtStatus = _runtimeStatusCache[sessionId].status;
+      let rtStatus = _runtimeStatusCache[sessionId].status;
       if (rtStatus === 'running') return 'delivered';
       if (rtStatus === 'idle' || rtStatus === 'offline') return 'completed';
     }
@@ -930,16 +930,16 @@
       '    <div class="wg-attachment-list" data-wg-role="attachment-list" style="display:none;"></div>',
       '    <div class="wg-link-list" data-wg-role="link-list"></div>',
       '    <div class="wg-input-editor" contenteditable="true" data-placeholder="输入消息，使用「@」派发任务"></div>',
-      '    <div class=\"wg-input-footer\">',
-      '      <button class=\"wg-mention-icon\" data-wg-action=\"mention\" title=\"提及成员\">',
-      '        <svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94\"/></svg>',
+      '    <div class="wg-input-footer">',
+      '      <button class="wg-mention-icon" data-wg-action="mention" title="提及成员">',
+      '        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>',
       '      </button>',
-      '      <button class=\"wg-voice-btn\" data-wg-action=\"voice\" title=\"语音输入\">',
-      '        <svg class=\"icon-mic\" width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z\"></path><path d=\"M19 10v2a7 7 0 0 1-14 0v-2\"></path><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"22\"></line></svg>',
+      '      <button class="wg-voice-btn" data-wg-action="voice" title="语音输入">',
+      '        <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
       '      </button>',
-      '      <span class=\"wg-input-hint\">Enter 发送 · Shift+Enter 换行</span>',
-      '      <div class=\"wg-input-spacer\"></div>',
-      '      <button class=\"wg-send-btn\" data-wg-action=\"send\">发送</button>',
+      '      <span class="wg-input-hint">Enter 发送 · Shift+Enter 换行</span>',
+      '      <div class="wg-input-spacer"></div>',
+      '      <button class="wg-send-btn" data-wg-action="send">发送</button>',
       '    </div>',
       '  </div>',
       renderMentionPicker(),
@@ -2093,7 +2093,7 @@
         } catch {
           importDo.classList.remove('imported');
         }
-        return;
+        
       }
     });
   }

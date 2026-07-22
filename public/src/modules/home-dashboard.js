@@ -22,7 +22,7 @@
 //  数据缓存
 // ══════════════════════════════════════════════════════════════
 
-var hdState = {
+let hdState = {
   modelConfig: null,
   usageSummary: null,
   imBundle: null,
@@ -32,13 +32,13 @@ var hdState = {
   loadedAt: 0,
 };
 
-var HD_TTL = 15000;
+let HD_TTL = 15000;
 
 function hdIsStale() {
   return !hdState.loadedAt || (Date.now() - hdState.loadedAt > HD_TTL);
 }
 
-var hdLoadPromise = null;
+let hdLoadPromise = null;
 
 function hdLoadData(force) {
   if (hdLoadPromise && !force) return hdLoadPromise;
@@ -46,13 +46,13 @@ function hdLoadData(force) {
 
   hdState.loading = true;
   hdLoadPromise = (async function () {
-    var today = new Date();
-    var todayStr = today.getFullYear() + '-' +
+    let today = new Date();
+    let todayStr = today.getFullYear() + '-' +
       String(today.getMonth() + 1).padStart(2, '0') + '-' +
       String(today.getDate()).padStart(2, '0');
-    var usageParams = 'from=' + todayStr + '&to=' + todayStr + '&groupBy=model';
+    let usageParams = 'from=' + todayStr + '&to=' + todayStr + '&groupBy=model';
 
-    var results = await Promise.allSettled([
+    let results = await Promise.allSettled([
       fetch('/protoclaw/model_config').then(function (r) { return r.json(); }),
       fetch('/protoclaw/usage/summary?' + usageParams).then(function (r) { return r.json(); }),
       fetch('/protoclaw/im_workspace_bundle').then(function (r) { return r.json(); }),
@@ -91,9 +91,9 @@ function hdGetAgent(agentId) {
 }
 
 function hdGetUsageTotals() {
-  var s = hdState.usageSummary;
+  let s = hdState.usageSummary;
   if (!s || !s.totals) return { totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, requests: 0 };
-  var t = s.totals;
+  let t = s.totals;
   return {
     totalTokens: t.totalTokens || 0,
     inputTokens: t.inputTokens || 0,
@@ -104,7 +104,7 @@ function hdGetUsageTotals() {
 }
 
 function hdGetUsageGroups() {
-  var s = hdState.usageSummary;
+  let s = hdState.usageSummary;
   if (!s || !Array.isArray(s.groups)) return [];
   return s.groups.slice().sort(function (a, b) {
     return (b.totals && b.totals.totalTokens || 0) - (a.totals && a.totals.totalTokens || 0);
@@ -112,7 +112,7 @@ function hdGetUsageGroups() {
 }
 
 function hdFormatTokens(value) {
-  var n = Number.isFinite(value) ? value : 0;
+  let n = Number.isFinite(value) ? value : 0;
   if (n >= 1000000000) return (n / 1000000000).toFixed(2) + 'B';
   if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
@@ -123,7 +123,7 @@ function hdGetPHSessions() {
   if (hdState.phSessions && Array.isArray(hdState.phSessions.sessions)) {
     return hdState.phSessions.sessions;
   }
-  var agent = hdGetAgent('programming-helper');
+  let agent = hdGetAgent('programming-helper');
   if (agent && agent.workspace_sessions && Array.isArray(agent.workspace_sessions.sessions)) {
     return agent.workspace_sessions.sessions;
   }
@@ -131,16 +131,16 @@ function hdGetPHSessions() {
 }
 
 function hdGetIMChannelLabel() {
-  var labels = { qq: 'QQ', weixin: '微信', feishu: '飞书', wecom: '企业微信', rokid: 'Rokid 眼镜' };
+  let labels = { qq: 'QQ', weixin: '微信', feishu: '飞书', wecom: '企业微信', rokid: 'Rokid 眼镜' };
   if (!hdState.imBundle) return '';
-  var wc = hdState.imBundle.workspaceConfig || {};
-  var selected = wc.selectedChannel || 'qq';
+  let wc = hdState.imBundle.workspaceConfig || {};
+  let selected = wc.selectedChannel || 'qq';
   return labels[selected] || selected;
 }
 
 function hdGetIMLines() {
   if (!hdState.imBundle) return [];
-  var wc = hdState.imBundle.workspaceConfig || {};
+  let wc = hdState.imBundle.workspaceConfig || {};
   return Array.isArray(wc.lines) ? wc.lines : [];
 }
 
@@ -153,16 +153,16 @@ function hdGetGroupChats() {
 
 function hdTimeAgo(updatedAt) {
   if (!updatedAt) return '';
-  var ts = typeof updatedAt === 'number' ? updatedAt : Date.parse(updatedAt);
+  let ts = typeof updatedAt === 'number' ? updatedAt : Date.parse(updatedAt);
   if (!ts || isNaN(ts)) return '';
-  var diff = Date.now() - ts;
+  let diff = Date.now() - ts;
   if (diff < 0) return '';
-  var min = Math.floor(diff / 60000);
+  let min = Math.floor(diff / 60000);
   if (min < 1) return '刚刚';
   if (min < 60) return min + 'm';
-  var hr = Math.floor(min / 60);
+  let hr = Math.floor(min / 60);
   if (hr < 24) return hr + 'h';
-  var day = Math.floor(hr / 24);
+  let day = Math.floor(hr / 24);
   return day + 'd';
 }
 
@@ -230,17 +230,17 @@ window.hdOpenGroupChat = hdOpenGroupChat;
 // ══════════════════════════════════════════════════════════════
 
 function renderUsageCard() {
-  var totals = hdGetUsageTotals();
-  var groups = hdGetUsageGroups();
-  var cacheRate = totals.totalTokens > 0
+  let totals = hdGetUsageTotals();
+  let groups = hdGetUsageGroups();
+  let cacheRate = totals.totalTokens > 0
     ? Math.round((totals.cacheReadTokens / totals.totalTokens) * 100) + '%'
     : '—';
 
-  var maxTokens = groups.length > 0 ? (groups[0].totals && groups[0].totals.totalTokens || 1) : 1;
-  var barsHtml = groups.slice(0, 3).map(function (g) {
-    var tokens = (g.totals && g.totals.totalTokens) || 0;
-    var label = g.label || g.modelName || g.key || '未知';
-    var percent = Math.max(4, Math.round((tokens / maxTokens) * 100));
+  let maxTokens = groups.length > 0 ? (groups[0].totals && groups[0].totals.totalTokens || 1) : 1;
+  let barsHtml = groups.slice(0, 3).map(function (g) {
+    let tokens = (g.totals && g.totals.totalTokens) || 0;
+    let label = g.label || g.modelName || g.key || '未知';
+    let percent = Math.max(4, Math.round((tokens / maxTokens) * 100));
     return '<div class="hd-bar-row">' +
       '<div class="hd-bar-label">' + escapeHtml(label) + '</div>' +
       '<div class="hd-bar-value">' + hdFormatTokens(tokens) + '</div>' +
@@ -269,16 +269,16 @@ function renderUsageCard() {
 }
 
 function renderIMCard() {
-  var agent = hdGetAgent('qqbot');
-  var isActive = !!(agent && agent.connected);
-  var channelLabel = hdGetIMChannelLabel();
-  var lines = hdGetIMLines();
-  var agentLabels = { 'programming-helper': '编程小助手', 'qqbot': 'IM 渠道', 'work-group': '工作群' };
-  var bigStatus = isActive ? (channelLabel ? channelLabel + ' 门户运行中' : '门户运行中') : '门户未启动';
+  let agent = hdGetAgent('qqbot');
+  let isActive = !!(agent && agent.connected);
+  let channelLabel = hdGetIMChannelLabel();
+  let lines = hdGetIMLines();
+  let agentLabels = { 'programming-helper': '编程小助手', 'qqbot': 'IM 渠道', 'work-group': '工作群' };
+  let bigStatus = isActive ? (channelLabel ? channelLabel + ' 门户运行中' : '门户运行中') : '门户未启动';
 
-  var linesHtml = lines.map(function (line) {
-    var bound = line.boundSession;
-    var value;
+  let linesHtml = lines.map(function (line) {
+    let bound = line.boundSession;
+    let value;
     if (bound && bound.agentId) {
       value = '绑定 ' + escapeHtml(agentLabels[bound.agentId] || bound.agentId);
     } else {
@@ -290,11 +290,11 @@ function renderIMCard() {
     '</div>';
   }).join('');
 
-  var channelsHtml = '';
+  let channelsHtml = '';
   if (!linesHtml && hdState.imBundle) {
-    var wc = hdState.imBundle.workspaceConfig || {};
-    var ch = wc.channels || {};
-    var parts = [];
+    let wc = hdState.imBundle.workspaceConfig || {};
+    let ch = wc.channels || {};
+    let parts = [];
     if (ch.qq && ch.qq.label) parts.push('QQ');
     if (hdState.imBundle.weixinConfig && hdState.imBundle.weixinConfig.configured) parts.push('微信');
     if (hdState.imBundle.feishuConfig && hdState.imBundle.feishuConfig.configured) parts.push('飞书');
@@ -318,20 +318,20 @@ function renderIMCard() {
 }
 
 function renderWorkGroupCard() {
-  var chats = hdGetGroupChats();
-  var activeChats = chats.filter(function (c) { return !c.archived; });
-  var mainText = activeChats.length > 0
+  let chats = hdGetGroupChats();
+  let activeChats = chats.filter(function (c) { return !c.archived; });
+  let mainText = activeChats.length > 0
     ? activeChats.length + ' 个群聊'
     : '暂无群聊';
 
-  var itemsHtml = activeChats.slice(0, 5).map(function (chat) {
-    var name = chat.name || '未命名群聊';
-    var memberCount = chat.memberCount || 0;
-    var lastMsg = chat.lastMessage;
-    var preview = '';
-    var time = '';
+  let itemsHtml = activeChats.slice(0, 5).map(function (chat) {
+    let name = chat.name || '未命名群聊';
+    let memberCount = chat.memberCount || 0;
+    let lastMsg = chat.lastMessage;
+    let preview = '';
+    let time = '';
     if (lastMsg) {
-      var fromPrefix = lastMsg.from ? lastMsg.from + ': ' : '';
+      let fromPrefix = lastMsg.from ? lastMsg.from + ': ' : '';
       preview = (fromPrefix + (lastMsg.text || '')).slice(0, 60);
       time = hdTimeAgo(lastMsg.timestamp);
     } else {
@@ -368,18 +368,18 @@ function renderWorkGroupCard() {
  * 渲染编程小助手最近会话 — 两栏网格布局。
  */
 function renderSessionsSection() {
-  var sessions = hdGetPHSessions();
+  let sessions = hdGetPHSessions();
 
-  var sorted = sessions.slice().sort(function (a, b) {
-    var ta = typeof a.updatedAt === 'number' ? a.updatedAt : Date.parse(a.updatedAt || '');
-    var tb = typeof b.updatedAt === 'number' ? b.updatedAt : Date.parse(b.updatedAt || '');
+  let sorted = sessions.slice().sort(function (a, b) {
+    let ta = typeof a.updatedAt === 'number' ? a.updatedAt : Date.parse(a.updatedAt || '');
+    let tb = typeof b.updatedAt === 'number' ? b.updatedAt : Date.parse(b.updatedAt || '');
     return (tb || 0) - (ta || 0);
   }).slice(0, 8);
 
-  var itemsHtml = sorted.map(function (s) {
-    var title = s.title || s.id || '未命名会话';
-    var time = hdTimeAgo(s.updatedAt);
-    var cwd = s.cwd || s.openDirectory || '';
+  let itemsHtml = sorted.map(function (s) {
+    let title = s.title || s.id || '未命名会话';
+    let time = hdTimeAgo(s.updatedAt);
+    let cwd = s.cwd || s.openDirectory || '';
     return '<div class="hd-session" onclick="hdOpenSession(\'' + escapeHtml(s.id) + '\')">' +
       '<div class="hd-session-top">' +
         '<strong>' + escapeHtml(title) + '</strong>' +

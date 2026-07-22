@@ -407,33 +407,33 @@ function applyCollapseLogic(containerElement, startIndex = 0) {
 function restoreUserCollapseState(root) {
   // Reasoning blocks: restore expanded state
   _userExpandedReasoning.forEach(function (index) {
-    var el = document.getElementById('reasoning-msg-' + index);
+    let el = document.getElementById('reasoning-msg-' + index);
     if (el) el.classList.add('expanded');
   });
 
   // Messages the user explicitly expanded (override auto-collapse)
   _userExpandedMsgs.forEach(function (index) {
-    var el = document.getElementById('msg-' + index);
+    let el = document.getElementById('msg-' + index);
     if (!el) return;
-    var row = el.closest('.message-row');
+    let row = el.closest('.message-row');
     if (row && (row.classList.contains('process-hidden') || row.classList.contains('process-hidden-empty'))) return;
     el.classList.remove('collapsed');
-    var meta = row && row.querySelector('.message-meta .collapse-toggle svg');
+    let meta = row && row.querySelector('.message-meta .collapse-toggle svg');
     if (meta) meta.style.transform = 'rotate(0deg)';
-    var btn = row && row.querySelector('.expand-toggle-btn');
+    let btn = row && row.querySelector('.expand-toggle-btn');
     if (btn) btn.innerHTML = getToggleButtonLabel(false);
   });
 
   // Messages the user explicitly collapsed
   _userCollapsedMsgs.forEach(function (index) {
-    var el = document.getElementById('msg-' + index);
+    let el = document.getElementById('msg-' + index);
     if (!el) return;
-    var row = el.closest('.message-row');
+    let row = el.closest('.message-row');
     if (row && (row.classList.contains('process-hidden') || row.classList.contains('process-hidden-empty'))) return;
     el.classList.add('collapsed');
-    var meta = row && row.querySelector('.message-meta .collapse-toggle svg');
+    let meta = row && row.querySelector('.message-meta .collapse-toggle svg');
     if (meta) meta.style.transform = 'rotate(-90deg)';
-    var btn = row && row.querySelector('.expand-toggle-btn');
+    let btn = row && row.querySelector('.expand-toggle-btn');
     if (btn) btn.innerHTML = getToggleButtonLabel(true);
   });
 }
@@ -761,8 +761,8 @@ window.toggleReasoning = function(id) {
 function imageUrlFromImage(img) {
   if (img.url) return window.__PROTOCLAW_APP_URL__?.(img.url) || img.url;
   if (img.path) {
-    var parts = img.path.replace(/\\/g, '/').split('/');
-    var path = '/protoclaw/images/' + encodeURIComponent(parts[parts.length - 1]);
+    let parts = img.path.replace(/\\/g, '/').split('/');
+    let path = '/protoclaw/images/' + encodeURIComponent(parts[parts.length - 1]);
     return window.__PROTOCLAW_APP_URL__?.(path) || path;
   }
   if (img.base64) {
@@ -773,8 +773,8 @@ function imageUrlFromImage(img) {
 
 function renderUserImages(images) {
   if (!images || images.length === 0) return '';
-  var thumbs = images.map(function(img) {
-    var url = imageUrlFromImage(img);
+  let thumbs = images.map(function(img) {
+    let url = imageUrlFromImage(img);
     if (!url) return '';
     return '<div class="message-img-thumb" onclick="openImageZoom(\'' + url.replace(/'/g, "\\'") + '\')">' +
       '<img src="' + url + '" alt="' + escapeHtml(img.source || '') + '">' +
@@ -784,15 +784,15 @@ function renderUserImages(images) {
 }
 
 window.openImageZoom = function(src) {
-  var existing = document.getElementById('image-zoom-overlay');
+  let existing = document.getElementById('image-zoom-overlay');
   if (existing) existing.remove();
 
-  var overlay = document.createElement('div');
+  let overlay = document.createElement('div');
   overlay.id = 'image-zoom-overlay';
   overlay.className = 'image-zoom-overlay';
   overlay.onclick = function() { overlay.remove(); };
 
-  var img = document.createElement('img');
+  let img = document.createElement('img');
   img.src = src;
   img.onclick = function(e) { e.stopPropagation(); };
   overlay.appendChild(img);

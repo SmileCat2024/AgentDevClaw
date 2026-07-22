@@ -56,7 +56,7 @@ const nowSec = () => Math.floor(Date.now() / 1000);
  * Mirrors the same USER_DATA_ROOT + sanitization logic.
  */
 function tokenFilePath(providerName) {
-  const safe = providerName.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+  const safe = providerName.replace(/[^a-zA-Z0-9_\-.]/g, '_');
   const dir = path.join(os.homedir(), '.agentdev', 'AgentDevClaw', 'oauth-tokens');
   return path.join(dir, `${safe}.json`);
 }

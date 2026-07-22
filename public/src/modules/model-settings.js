@@ -188,10 +188,10 @@ window.switchSettingsTab = function(tab) {
 function renderSettingsEditForm(editIdx, presets, isZh) {
   const preset = presets[editIdx] || {};
   const isNew = preset._isNew;
-  var dropdownVal = preset.authType === 'oauth-codex' ? 'openai-oauth'
+  let dropdownVal = preset.authType === 'oauth-codex' ? 'openai-oauth'
     : (preset.provider === 'openai' && (preset.apiSurface || 'chat') === 'responses' ? 'openai-responses'
     : (preset.provider || 'anthropic'));
-  var isOAuthMode = dropdownVal === 'openai-oauth';
+  let isOAuthMode = dropdownVal === 'openai-oauth';
   return [
     '<div class="settings-section">',
     '<div class="settings-section-title">' + (isNew ? (isZh ? '新建预设' : 'New Preset') : (isZh ? '编辑预设' : 'Edit Preset')) + '</div>',
@@ -309,8 +309,8 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
 }
 
 function createSettingsHeaderRowHTML(idx, key, value, mode, isZh) {
-  var isDynamic = mode === 'uuid' || mode === 'random';
-  var modeOptions = [
+  let isDynamic = mode === 'uuid' || mode === 'random';
+  let modeOptions = [
     '<option value="static"' + (mode === 'static' ? ' selected' : '') + '>' + (isZh ? '固定值' : 'Static') + '</option>',
     '<option value="uuid"' + (mode === 'uuid' ? ' selected' : '') + '>UUID v4</option>',
     '<option value="random"' + (mode === 'random' ? ' selected' : '') + '>' + (isZh ? '随机数' : 'Random') + '</option>',
@@ -328,18 +328,18 @@ function createSettingsHeaderRowHTML(idx, key, value, mode, isZh) {
 }
 
 window.addSettingsHeaderRow = function() {
-  var container = document.getElementById('settings-headers-container');
+  let container = document.getElementById('settings-headers-container');
   if (!container) return;
-  var isZh = currentLanguage === 'zh';
+  let isZh = currentLanguage === 'zh';
   container.insertAdjacentHTML('beforeend', createSettingsHeaderRowHTML(container.children.length, '', '', 'static', isZh));
 };
 
 window.onSettingsHeaderModeChange = function(select) {
-  var row = select.closest('[data-header-row]');
-  var valueInput = row ? row.querySelector('[data-header-value]') : null;
+  let row = select.closest('[data-header-row]');
+  let valueInput = row ? row.querySelector('[data-header-value]') : null;
   if (!valueInput) return;
-  var isDynamic = select.value === 'uuid' || select.value === 'random';
-  var isZh = currentLanguage === 'zh';
+  let isDynamic = select.value === 'uuid' || select.value === 'random';
+  let isZh = currentLanguage === 'zh';
   valueInput.disabled = isDynamic;
   valueInput.placeholder = isDynamic ? '(auto)' : (isZh ? 'Header 值' : 'Header value');
   valueInput.style.opacity = isDynamic ? '0.4' : '';
@@ -460,9 +460,9 @@ async function saveSettingsPreset(idx) {
   window.ClawFW.settingsData.presets = presets;
   window.ClawFW.settingsEditing = null;
   // Check if no model is currently active — auto-select the first/newly saved preset
-  var config = window.ClawFW.settingsData?.config || {};
-  var dm = config.defaultModel || {};
-  var hasActive = presets.some(function(p) {
+  let config = window.ClawFW.settingsData?.config || {};
+  let dm = config.defaultModel || {};
+  let hasActive = presets.some(function(p) {
     return dm.model === p.model && dm.provider === p.provider && dm.baseUrl === p.baseUrl;
   });
   await saveSettingsConfig();
@@ -508,10 +508,10 @@ async function applySettingsPreset(idx) {
     window.ClawFW._modelPresets = Array.isArray(result?.presets) ? result.presets : [];
     renderSettingsOverlay();
     // Refresh session data to reflect updated model config
-    var _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+    let _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
     if (_agent && _agent.id) {
       try {
-        var freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(_agent.id));
+        let freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(_agent.id));
         if (freshRes.ok) { _agent.workspace_sessions = await freshRes.json(); }
       } catch {}
     }
@@ -536,10 +536,10 @@ async function saveSettingsConfig() {
     window.ClawFW._modelPresets = Array.isArray(result?.presets) ? result.presets : [];
     renderSettingsOverlay();
     // Refresh session data to reflect updated model config
-    var _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+    let _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
     if (_agent && _agent.id) {
       try {
-        var freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(_agent.id));
+        let freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(_agent.id));
         if (freshRes.ok) { _agent.workspace_sessions = await freshRes.json(); }
       } catch {}
     }
@@ -556,7 +556,7 @@ function checkOAuthProxy(isZh) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (!data.proxyConfigured) {
-        var display = document.getElementById('oauth-status-display');
+        let display = document.getElementById('oauth-status-display');
         if (display) {
           display.innerHTML = '<div style="color:#e8a847;font-size:12px;padding:4px 0;">'
             + (isZh
@@ -570,7 +570,7 @@ function checkOAuthProxy(isZh) {
 }
 
 function renderOAuthLoginArea(preset, isZh) {
-  var providerName = preset.providerName || '';
+  let providerName = preset.providerName || '';
   if (!providerName) {
     return '<div class="oauth-status-text" style="color:var(--text-secondary);padding:4px 0;">'
       + (isZh ? '请先保存预设，再登录 OpenAI 账号' : 'Save the preset first, then login with OpenAI')
@@ -588,13 +588,13 @@ function renderOAuthLoginArea(preset, isZh) {
 }
 
 window.onProtocolChange = function() {
-  var select = document.getElementById('settings-preset-provider');
+  let select = document.getElementById('settings-preset-provider');
   if (!select) return;
-  var val = select.value;
-  var apiKeySection = document.getElementById('api-key-section');
-  var oauthSection = document.getElementById('oauth-section');
-  var baseUrlInput = document.getElementById('settings-preset-baseurl');
-  var isZh = currentLanguage === 'zh';
+  let val = select.value;
+  let apiKeySection = document.getElementById('api-key-section');
+  let oauthSection = document.getElementById('oauth-section');
+  let baseUrlInput = document.getElementById('settings-preset-baseurl');
+  let isZh = currentLanguage === 'zh';
 
   if (val === 'openai-oauth') {
     if (apiKeySection) apiKeySection.style.display = 'none';
@@ -604,7 +604,7 @@ window.onProtocolChange = function() {
       baseUrlInput.value = 'https://chatgpt.com/backend-api/codex';
     }
     // Auto-fill client_id default
-    var cidInput = document.getElementById('settings-preset-clientid');
+    let cidInput = document.getElementById('settings-preset-clientid');
     if (cidInput && !cidInput.value) cidInput.value = 'app_EMoamEEZ73f0CkXaXp7hrann';
     // Check proxy status and warn if not configured
     checkOAuthProxy(isZh);
@@ -621,23 +621,23 @@ window.onProtocolChange = function() {
 };
 
 function getEditingProviderName() {
-  var editing = window.ClawFW.settingsEditing;
+  let editing = window.ClawFW.settingsEditing;
   if (editing === null) return '';
-  var presets = window.ClawFW.settingsData?.presets || [];
+  let presets = window.ClawFW.settingsData?.presets || [];
   return presets[editing]?.providerName || '';
 }
 
 window.startOAuthLogin = function() {
-  var providerName = getEditingProviderName();
+  let providerName = getEditingProviderName();
   if (!providerName) {
     alert(currentLanguage === 'zh' ? '请先保存预设，然后再登录' : 'Please save the preset first, then login');
     return;
   }
-  var cidInput = document.getElementById('settings-preset-clientid');
-  var clientId = cidInput ? cidInput.value.trim() : '';
-  var isZh = currentLanguage === 'zh';
+  let cidInput = document.getElementById('settings-preset-clientid');
+  let clientId = cidInput ? cidInput.value.trim() : '';
+  let isZh = currentLanguage === 'zh';
 
-  var display = document.getElementById('oauth-status-display');
+  let display = document.getElementById('oauth-status-display');
   if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
 
   fetch('/protoclaw/oauth/codex/start', {
@@ -646,7 +646,7 @@ window.startOAuthLogin = function() {
     body: JSON.stringify({ providerName: providerName, clientId: clientId }),
   })
     .then(async function(r) {
-      var data = await r.json().catch(function() { return {}; });
+      let data = await r.json().catch(function() { return {}; });
       if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
       return data;
     })
@@ -663,10 +663,10 @@ var _oauthPollTimer = null;
 
 function pollOAuthLogin(sessionId) {
   if (_oauthPollTimer) clearInterval(_oauthPollTimer);
-  var isZh = currentLanguage === 'zh';
-  var display = document.getElementById('oauth-status-display');
+  let isZh = currentLanguage === 'zh';
+  let display = document.getElementById('oauth-status-display');
 
-  var poll = function() {
+  let poll = function() {
     fetch('/protoclaw/oauth/codex/status/' + sessionId)
       .then(function(r) {
         if (!r.ok) throw new Error('Session not found');
@@ -674,7 +674,7 @@ function pollOAuthLogin(sessionId) {
       })
       .then(function(sess) {
         if (sess.status === 'pending' || sess.status === 'initiating') {
-          var codeHtml = sess.userCode
+          let codeHtml = sess.userCode
             ? '<div class="oauth-user-code">' + escapeHtml(sess.userCode) + '</div>'
               + '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '在浏览器打开 ' : 'Open ') + '<a href="' + escapeHtml(sess.verificationUrl) + '" target="_blank">' + escapeHtml(sess.verificationUrl) + '</a>' + (isZh ? ' 并输入上方代码' : ' and enter the code') + '</div>'
             : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
@@ -706,27 +706,27 @@ function pollOAuthLogin(sessionId) {
 }
 
 window.logoutOAuth = function() {
-  var providerName = getEditingProviderName();
+  let providerName = getEditingProviderName();
   if (!providerName) return;
   fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(providerName), { method: 'DELETE' })
     .then(function() { refreshOAuthStatus(); });
 };
 
 function refreshOAuthStatus() {
-  var providerName = getEditingProviderName();
+  let providerName = getEditingProviderName();
   if (!providerName) return;
-  var display = document.getElementById('oauth-status-display');
+  let display = document.getElementById('oauth-status-display');
   if (!display) return;
-  var isZh = currentLanguage === 'zh';
+  let isZh = currentLanguage === 'zh';
 
   fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(providerName))
     .then(function(r) { return r.json(); })
     .then(function(status) {
       if (status.loggedIn) {
-        var expiryStr = status.expiresAt ? new Date(status.expiresAt).toLocaleString() : '';
-        var color = status.isExpiring ? '#ffb74d' : '#81c784';
-        var icon = status.isExpiring ? '⚠' : '✓';
-        var label = status.isExpiring ? (isZh ? '即将过期' : 'Expiring soon') : (isZh ? '已登录' : 'Logged in');
+        let expiryStr = status.expiresAt ? new Date(status.expiresAt).toLocaleString() : '';
+        let color = status.isExpiring ? '#ffb74d' : '#81c784';
+        let icon = status.isExpiring ? '⚠' : '✓';
+        let label = status.isExpiring ? (isZh ? '即将过期' : 'Expiring soon') : (isZh ? '已登录' : 'Logged in');
         display.innerHTML = '<span class="oauth-status-text" style="color:' + color + ';">' + icon + ' ' + label
           + (expiryStr ? ' · ' + (isZh ? '过期: ' : 'Expires: ') + escapeHtml(expiryStr) : '') + '</span>';
       } else {
@@ -743,7 +743,7 @@ function refreshOAuthStatus() {
 window._proxyData = null;
 
 function ensureProxyHost() {
-  var host = document.getElementById('proxy-overlay-host');
+  let host = document.getElementById('proxy-overlay-host');
   if (!host) {
     host = document.createElement('div');
     host.id = 'proxy-overlay-host';
@@ -760,17 +760,17 @@ function openProxySettings() {
 
 function closeProxySettings() {
   window.ClawFW.proxyOverlayOpen = false;
-  var host = document.getElementById('proxy-overlay-host');
+  let host = document.getElementById('proxy-overlay-host');
   if (host) host.innerHTML = '';
 }
 
 function renderProxyOverlay() {
-  var host = ensureProxyHost();
+  let host = ensureProxyHost();
   if (!window.ClawFW.proxyOverlayOpen) {
     host.innerHTML = '';
     return;
   }
-  var isZh = currentLanguage === 'zh';
+  let isZh = currentLanguage === 'zh';
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window" style="width:min(100%,520px);max-height:min(100%,640px);">',
@@ -787,23 +787,23 @@ function renderProxyOverlay() {
 }
 
 async function _loadProxyPanel() {
-  var container = document.getElementById('settings-proxy-container');
+  let container = document.getElementById('settings-proxy-container');
   if (!container) return;
-  var isZh = currentLanguage === 'zh';
+  let isZh = currentLanguage === 'zh';
 
   container.innerHTML = '<div class="proxy-info-text">' + (isZh ? '加载中...' : 'Loading...') + '</div>';
 
   try {
-    var res = await fetch('/protoclaw/proxy_config');
+    let res = await fetch('/protoclaw/proxy_config');
     window._proxyData = await res.json();
   } catch {
     window._proxyData = { config: { enabled: false, url: '' }, detected: { url: null, source: 'none' }, active: { url: null, applied: false } };
   }
 
-  var d = window._proxyData;
+  let d = window._proxyData;
 
   // Detected proxy info — clickable card that auto-fills URL + enables
-  var detectedHtml = '';
+  let detectedHtml = '';
   if (d.detected && d.detected.url) {
     detectedHtml = '<div class="proxy-detected-box proxy-detected-clickable" id="settings-proxy-detected">'
       + '<div class="proxy-detected-icon">◎</div>'
@@ -820,7 +820,7 @@ async function _loadProxyPanel() {
   }
 
   // Active status banner
-  var activeHtml = '';
+  let activeHtml = '';
   if (d.active && d.active.applied && d.active.url) {
     activeHtml = '<div class="proxy-active-banner">'
       + '<div class="proxy-active-banner-icon">✓</div>'
@@ -876,7 +876,7 @@ async function _loadProxyPanel() {
   ].join('');
 
   // Wire events
-  var detectedCard = document.getElementById('settings-proxy-detected');
+  let detectedCard = document.getElementById('settings-proxy-detected');
   if (detectedCard) {
     detectedCard.onclick = function() {
       if (d.detected && d.detected.url) {
@@ -890,9 +890,9 @@ async function _loadProxyPanel() {
 }
 
 async function _saveProxy() {
-  var isZh = currentLanguage === 'zh';
-  var enabled = document.getElementById('settings-proxy-enabled').checked;
-  var url = document.getElementById('settings-proxy-url').value.trim();
+  let isZh = currentLanguage === 'zh';
+  let enabled = document.getElementById('settings-proxy-enabled').checked;
+  let url = document.getElementById('settings-proxy-url').value.trim();
 
   if (enabled && !url) {
     _proxyStatus('error', isZh ? '代理地址不能为空' : 'Proxy URL is required');
@@ -901,15 +901,15 @@ async function _saveProxy() {
 
   _proxyStatus('loading', isZh ? '正在保存...' : 'Saving...');
   try {
-    var res = await fetch('/protoclaw/proxy_config', {
+    let res = await fetch('/protoclaw/proxy_config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: enabled, url: url }),
     });
-    var data = await res.json();
+    let data = await res.json();
     if (res.ok) {
       window._proxyData = data;
-      var msg = data.active && data.active.applied
+      let msg = data.active && data.active.applied
         ? (isZh ? '已保存并应用: ' : 'Saved & Applied: ') + (data.active.url || '')
         : (isZh ? '已保存（代理已禁用）' : 'Saved (proxy disabled)');
       _proxyStatus('ok', msg);
@@ -922,16 +922,16 @@ async function _saveProxy() {
 }
 
 async function _testProxy() {
-  var isZh = currentLanguage === 'zh';
+  let isZh = currentLanguage === 'zh';
   _proxyStatus('loading', isZh ? '正在测试...' : 'Testing...');
 
   try {
-    var res = await fetch('/protoclaw/proxy_test', {
+    let res = await fetch('/protoclaw/proxy_test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
-    var data = await res.json();
+    let data = await res.json();
     if (data.ok) {
       _proxyStatus('ok',
         isZh ? '连接成功 (HTTP ' + data.statusCode + ')' : 'Connected (HTTP ' + data.statusCode + ')',
@@ -947,11 +947,11 @@ async function _testProxy() {
 }
 
 function _proxyStatus(type, text, detail) {
-  var el = document.getElementById('settings-proxy-status');
+  let el = document.getElementById('settings-proxy-status');
   if (!el) return;
 
-  var icons = { ok: '✓', error: '✕', loading: '◐' };
-  var cls = type === 'ok' ? 'proxy-status-ok' : type === 'error' ? 'proxy-status-error' : 'proxy-status-loading';
+  let icons = { ok: '✓', error: '✕', loading: '◐' };
+  let cls = type === 'ok' ? 'proxy-status-ok' : type === 'error' ? 'proxy-status-error' : 'proxy-status-loading';
 
   el.innerHTML = '<div class="proxy-status-row ' + cls + '">'
     + '<span class="proxy-status-icon">' + (icons[type] || '') + '</span>'

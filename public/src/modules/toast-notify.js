@@ -15,38 +15,38 @@
 (function () {
   'use strict';
 
-  var container = null;
-  var toasts = {}; // id -> { el, timer, status, title, description, createdAt }
-  var modalEl = null;
+  let container = null;
+  let toasts = {}; // id -> { el, timer, status, title, description, createdAt }
+  let modalEl = null;
 
   // ── SVG icons ──
 
-  var ICON_SPINNER =
+  let ICON_SPINNER =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">' +
     '<path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>';
 
-  var ICON_CHECK =
+  let ICON_CHECK =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
     '<polyline points="20 6 9 17 4 12"></polyline></svg>';
 
-  var ICON_ERROR =
+  let ICON_ERROR =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
     '<circle cx="12" cy="12" r="10"></circle>' +
     '<line x1="12" y1="8" x2="12" y2="12"></line>' +
     '<line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
 
-  var ICON_WARNING =
+  let ICON_WARNING =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>' +
     '<line x1="12" y1="9" x2="12" y2="13"></line>' +
     '<line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
 
-  var ICON_CLOSE =
+  let ICON_CLOSE =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
     '<line x1="18" y1="6" x2="6" y2="18"></line>' +
     '<line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 
-  var ICON_CHEVRON =
+  let ICON_CHEVRON =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
     '<polyline points="9 18 15 12 9 6"></polyline></svg>';
 
@@ -57,7 +57,7 @@
   }
 
   function lbl(key) {
-    var zh = {
+    let zh = {
       detail: '详情',
       status: '状态',
       time: '时间',
@@ -68,7 +68,7 @@
       error: '失败',
       warning: '警告',
     };
-    var en = {
+    let en = {
       detail: 'Details',
       status: 'Status',
       time: 'Time',
@@ -107,7 +107,7 @@
       container = document.createElement('div');
       container.id = 'toast-container';
       container.className = 'toast-container';
-      var main = document.querySelector('.main-content');
+      let main = document.querySelector('.main-content');
       if (main) {
         main.appendChild(container);
       } else {
@@ -120,43 +120,43 @@
   // ── Build toast element ──
 
   function buildToastElement(opts) {
-    var el = document.createElement('div');
+    let el = document.createElement('div');
     el.className = 'toast-card';
     el.setAttribute('data-status', opts.status || 'loading');
 
-    var icon = document.createElement('div');
+    let icon = document.createElement('div');
     icon.className = 'toast-icon';
     icon.innerHTML = iconForStatus(opts.status);
 
-    var content = document.createElement('div');
+    let content = document.createElement('div');
     content.className = 'toast-content';
 
-    var title = document.createElement('div');
+    let title = document.createElement('div');
     title.className = 'toast-title';
     title.textContent = opts.title || '';
 
     content.appendChild(title);
 
     if (opts.description) {
-      var desc = document.createElement('div');
+      let desc = document.createElement('div');
       desc.className = 'toast-desc';
       desc.textContent = opts.description;
       content.appendChild(desc);
 
-      var detailBtn = document.createElement('button');
+      let detailBtn = document.createElement('button');
       detailBtn.className = 'toast-detail-btn';
       detailBtn.type = 'button';
       detailBtn.innerHTML = lbl('detail') + ICON_CHEVRON;
       content.appendChild(detailBtn);
     }
 
-    var closeBtn = document.createElement('button');
+    let closeBtn = document.createElement('button');
     closeBtn.className = 'toast-close';
     closeBtn.type = 'button';
     closeBtn.innerHTML = ICON_CLOSE;
     closeBtn.title = 'Close';
 
-    var progress = document.createElement('div');
+    let progress = document.createElement('div');
     progress.className = 'toast-progress';
 
     el.appendChild(icon);
@@ -170,20 +170,20 @@
   // ── Update toast DOM ──
 
   function updateToastDom(id, el, opts) {
-    var content = el.querySelector('.toast-content');
+    let content = el.querySelector('.toast-content');
 
     if (opts.status) {
       el.setAttribute('data-status', opts.status);
-      var icon = el.querySelector('.toast-icon');
+      let icon = el.querySelector('.toast-icon');
       if (icon) icon.innerHTML = iconForStatus(opts.status);
     }
     if (opts.title !== undefined) {
-      var titleEl = el.querySelector('.toast-title');
+      let titleEl = el.querySelector('.toast-title');
       if (titleEl) titleEl.textContent = opts.title;
     }
     if (opts.description !== undefined) {
-      var descEl = content.querySelector('.toast-desc');
-      var detailBtn = content.querySelector('.toast-detail-btn');
+      let descEl = content.querySelector('.toast-desc');
+      let detailBtn = content.querySelector('.toast-detail-btn');
       if (opts.description) {
         if (!descEl) {
           descEl = document.createElement('div');
@@ -218,14 +218,14 @@
 
   function formatTime(ts) {
     if (!ts) return '-';
-    var d = new Date(ts);
-    var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    let d = new Date(ts);
+    let pad = function (n) { return n < 10 ? '0' + n : '' + n; };
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
       ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   }
 
   function openDetailModal(id) {
-    var entry = toasts[id];
+    let entry = toasts[id];
     if (!entry) return;
 
     closeDetailModal();
@@ -233,24 +233,24 @@
     modalEl = document.createElement('div');
     modalEl.className = 'toast-modal';
 
-    var overlay = document.createElement('div');
+    let overlay = document.createElement('div');
     overlay.className = 'toast-modal-overlay';
 
-    var panel = document.createElement('div');
+    let panel = document.createElement('div');
     panel.className = 'toast-modal-panel';
 
     // Header
-    var header = document.createElement('div');
+    let header = document.createElement('div');
     header.className = 'toast-modal-header';
 
-    var titleRow = document.createElement('div');
+    let titleRow = document.createElement('div');
     titleRow.className = 'toast-modal-title-row';
 
-    var iconDiv = document.createElement('div');
+    let iconDiv = document.createElement('div');
     iconDiv.className = 'toast-modal-icon';
     iconDiv.innerHTML = iconForStatus(entry.status);
     // Color the icon
-    var svgEl = iconDiv.querySelector('svg');
+    let svgEl = iconDiv.querySelector('svg');
     if (svgEl) {
       if (entry.status === 'success') svgEl.style.color = '#22c55e';
       else if (entry.status === 'error') svgEl.style.color = '#ef4444';
@@ -258,14 +258,14 @@
       else svgEl.style.color = '#3b82f6';
     }
 
-    var titleEl = document.createElement('div');
+    let titleEl = document.createElement('div');
     titleEl.className = 'toast-modal-title';
     titleEl.textContent = entry.title || '';
 
     titleRow.appendChild(iconDiv);
     titleRow.appendChild(titleEl);
 
-    var closeBtn = document.createElement('button');
+    let closeBtn = document.createElement('button');
     closeBtn.className = 'toast-modal-close';
     closeBtn.type = 'button';
     closeBtn.innerHTML = ICON_CLOSE;
@@ -274,16 +274,16 @@
     header.appendChild(closeBtn);
 
     // Body
-    var body = document.createElement('div');
+    let body = document.createElement('div');
     body.className = 'toast-modal-body';
 
     // Status field
-    var statusField = document.createElement('div');
+    let statusField = document.createElement('div');
     statusField.className = 'toast-modal-field';
-    var statusLabel_ = document.createElement('div');
+    let statusLabel_ = document.createElement('div');
     statusLabel_.className = 'toast-modal-field-label';
     statusLabel_.textContent = lbl('status');
-    var statusBadge = document.createElement('div');
+    let statusBadge = document.createElement('div');
     statusBadge.className = 'toast-modal-status-badge';
     statusBadge.setAttribute('data-status', entry.status);
     statusBadge.textContent = statusLabel(entry.status);
@@ -292,12 +292,12 @@
     body.appendChild(statusField);
 
     // Time field
-    var timeField = document.createElement('div');
+    let timeField = document.createElement('div');
     timeField.className = 'toast-modal-field';
-    var timeLabel = document.createElement('div');
+    let timeLabel = document.createElement('div');
     timeLabel.className = 'toast-modal-field-label';
     timeLabel.textContent = lbl('time');
-    var timeValue = document.createElement('div');
+    let timeValue = document.createElement('div');
     timeValue.className = 'toast-modal-field-value';
     timeValue.textContent = formatTime(entry.createdAt);
     timeField.appendChild(timeLabel);
@@ -305,12 +305,12 @@
     body.appendChild(timeField);
 
     // Message field
-    var msgField = document.createElement('div');
+    let msgField = document.createElement('div');
     msgField.className = 'toast-modal-field';
-    var msgLabel = document.createElement('div');
+    let msgLabel = document.createElement('div');
     msgLabel.className = 'toast-modal-field-label';
     msgLabel.textContent = lbl('message');
-    var msgValue = document.createElement('div');
+    let msgValue = document.createElement('div');
     msgValue.className = 'toast-modal-field-value';
     msgValue.textContent = entry.description || lbl('noDesc');
     msgField.appendChild(msgLabel);
@@ -345,7 +345,7 @@
   // ── Auto-dismiss timer ──
 
   function clearTimers(id) {
-    var entry = toasts[id];
+    let entry = toasts[id];
     if (!entry) return;
     if (entry.timer) {
       clearTimeout(entry.timer);
@@ -354,7 +354,7 @@
   }
 
   function scheduleAutoDismiss(id, delay) {
-    var entry = toasts[id];
+    let entry = toasts[id];
     if (!entry) return;
     clearTimers(id);
     entry.timer = setTimeout(function () {
@@ -376,7 +376,7 @@
    */
   function show(opts) {
     if (!opts || !opts.id) return;
-    var id = opts.id;
+    let id = opts.id;
 
     // If already exists, update it
     if (toasts[id]) {
@@ -384,11 +384,11 @@
       return;
     }
 
-    var c = ensureContainer();
-    var el = buildToastElement(opts);
+    let c = ensureContainer();
+    let el = buildToastElement(opts);
 
     // Close button
-    var closeBtn = el.querySelector('.toast-close');
+    let closeBtn = el.querySelector('.toast-close');
     if (opts.closable === false) {
       closeBtn.style.display = 'none';
     } else {
@@ -398,7 +398,7 @@
     }
 
     // Detail button
-    var detailBtn = el.querySelector('.toast-detail-btn');
+    let detailBtn = el.querySelector('.toast-detail-btn');
     if (detailBtn) {
       detailBtn.addEventListener('click', function () {
         openDetailModal(id);
@@ -416,7 +416,7 @@
     };
 
     // Auto-dismiss for success and warning
-    var status = opts.status || 'loading';
+    let status = opts.status || 'loading';
     if ((status === 'success' || status === 'warning') && opts.autoDismiss !== 0) {
       scheduleAutoDismiss(id, opts.autoDismiss || (status === 'warning' ? 8000 : 3500));
     }
@@ -428,7 +428,7 @@
    * @param {Object} changes - Fields to update: status, title, description, autoDismiss.
    */
   function update(id, changes) {
-    var entry = toasts[id];
+    let entry = toasts[id];
     if (!entry) {
       // If toast doesn't exist, create it
       if (changes) show(Object.assign({ id: id }, changes));
@@ -454,12 +454,12 @@
    * @param {string} id - Toast id.
    */
   function dismiss(id) {
-    var entry = toasts[id];
+    let entry = toasts[id];
     if (!entry) return;
 
     clearTimers(id);
 
-    var el = entry.el;
+    let el = entry.el;
     el.classList.add('toast-leaving');
     setTimeout(function () {
       if (el.parentNode) el.parentNode.removeChild(el);

@@ -78,7 +78,7 @@ let _audioCueRawData = {};   // { start: ArrayBuffer, stop: ArrayBuffer } — pr
 // Must be called within a user gesture for AudioContext creation/resume.
 function _initAudioCues() {
   if (!_audioCueCtx) {
-    var Ctor = window.AudioContext || window.webkitAudioContext;
+    let Ctor = window.AudioContext || window.webkitAudioContext;
     if (!Ctor) return;
     _audioCueCtx = new Ctor();
   }
@@ -86,10 +86,10 @@ function _initAudioCues() {
     _audioCueCtx.resume().catch(function() {});
   }
   // Decode any prefetched raw data (async, non-blocking)
-  for (var _i = 0, _types = ['start', 'stop']; _i < _types.length; _i++) {
+  for (let _i = 0, _types = ['start', 'stop']; _i < _types.length; _i++) {
     (function(type) {
       if (_audioCueBuffers[type]) return;
-      var raw = _audioCueRawData[type];
+      let raw = _audioCueRawData[type];
       if (!raw) return;
       _audioCueRawData[type] = null;
       _audioCueCtx.decodeAudioData(raw).then(function(buf) {
@@ -104,9 +104,9 @@ function _playVoiceSound(type) {
   // Fast path: play pre-decoded buffer via Web Audio API (near-zero latency)
   if (_audioCueCtx && _audioCueBuffers[type]) {
     try {
-      var source = _audioCueCtx.createBufferSource();
+      let source = _audioCueCtx.createBufferSource();
       source.buffer = _audioCueBuffers[type];
-      var gain = _audioCueCtx.createGain();
+      let gain = _audioCueCtx.createGain();
       gain.gain.value = 0.6;
       source.connect(gain);
       gain.connect(_audioCueCtx.destination);
@@ -116,11 +116,11 @@ function _playVoiceSound(type) {
   }
   // Fallback: legacy HTMLAudioElement (first play before buffers are decoded)
   try {
-    var path = type === 'start'
+    let path = type === 'start'
       ? '/sounds/voice-recording-start.mp3'
       : '/sounds/voice-recording-stop.mp3';
-    var url = window.__PROTOCLAW_APP_URL__?.(path) || path;
-    var audio = new Audio(url);
+    let url = window.__PROTOCLAW_APP_URL__?.(path) || path;
+    let audio = new Audio(url);
     audio.volume = 0.6;
     audio.play().catch(function() { /* ignore autoplay rejection */ });
   } catch (e) { /* non-critical */ }

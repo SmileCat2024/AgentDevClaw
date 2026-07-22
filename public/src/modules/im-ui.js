@@ -1,5 +1,5 @@
 /** Shared IM channel icon SVGs — single source of truth for frontend channel visuals. */
-var IM_CHANNEL_ICONS = {
+let IM_CHANNEL_ICONS = {
   qq: '<svg class="im-channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M21.395 15.035a40 40 0 0 0-.803-2.264l-1.079-2.695c.001-.032.014-.562.014-.836C19.526 4.632 17.351 0 12 0S4.474 4.632 4.474 9.241c0 .274.013.804.014.836l-1.08 2.695a39 39 0 0 0-.802 2.264c-1.021 3.283-.69 4.643-.438 4.673.54.065 2.103-2.472 2.103-2.472 0 1.469.756 3.387 2.394 4.771-.612.188-1.363.479-1.845.835-.434.32-.379.646-.301.778.343.578 5.883.369 7.482.189 1.6.18 7.14.389 7.483-.189.078-.132.132-.458-.301-.778-.483-.356-1.233-.646-1.846-.836 1.637-1.384 2.393-3.302 2.393-4.771 0 0 1.563 2.537 2.103 2.472.251-.03.581-1.39-.438-4.673"/></svg>',
   weixin: '<svg class="im-channel-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/></svg>',
   feishu: '<svg class="im-channel-icon" xmlns="http://www.w3.org/2000/svg" viewBox="62.16 94.5 407.87 324.19"><path d="M274.18 264.785q.515-.517 1.03-1.027c.685-.688 1.372-1.258 2.056-1.945l1.37-1.372 4.118-4.113 5.598-5.601 4.8-4.797 4.575-4.457 4.796-4.688 4.344-4.344 6.059-6.054c1.14-1.145 2.285-2.29 3.543-3.317 2.168-2.054 4.457-4 6.855-5.828 2.172-1.715 4.344-3.312 6.516-4.914 3.082-2.172 6.398-4.344 9.71-6.285 3.204-1.941 6.63-3.656 10.06-5.371 3.199-1.602 6.515-2.973 9.827-4.23 1.829-.684 3.774-1.372 5.602-2.055.914-.344 1.941-.688 2.856-.914-8.57-33.715-24.227-64.575-45.258-90.86-4.114-5.14-10.399-8.113-17.028-8.113H130.754c-3.203 0-4.457 4-1.945 5.941 59.543 43.66 109.144 99.887 145.03 164.801 0-.226.227-.34.34-.457m0 0" style="fill:currentColor;"/><path d="M204.79 418.691c90.288 0 169.03-49.828 210.058-123.543 1.488-2.628 2.859-5.257 4.23-7.882q-3.087 6-6.86 11.312l-2.741 3.77c-1.141 1.488-2.399 2.972-3.657 4.457-1.03 1.144-2.058 2.285-3.086 3.316-2.058 2.172-4.343 4.227-6.629 6.172a53 53 0 0 1-3.886 3.2c-1.598 1.144-3.086 2.284-4.684 3.429-1.031.683-2.058 1.371-3.086 1.941-1.144.684-2.172 1.258-3.316 1.942a131 131 0 0 1-6.969 3.543c-2.059.918-4.117 1.828-6.289 2.515-2.285.801-4.57 1.602-6.969 2.285-3.543.914-7.086 1.715-10.742 2.286-2.629.457-5.258.687-8 .914-2.86.23-5.601.23-8.457.23-3.086 0-6.289-.23-9.488-.57a83 83 0 0 1-7.086-1.031c-2.055-.34-4.113-.801-6.168-1.258-1.031-.227-2.176-.57-3.203-.797-2.973-.8-6.055-1.602-9.028-2.516-1.488-.457-2.972-.914-4.457-1.258-2.172-.683-4.457-1.37-6.629-2.058-1.828-.57-3.656-1.14-5.37-1.711q-2.573-.86-5.145-1.715c-1.14-.344-2.285-.8-3.543-1.144-1.371-.457-2.856-1.028-4.227-1.485-1.027-.344-2.058-.687-2.972-1.027-1.942-.688-4-1.488-5.942-2.172-1.144-.457-2.285-.914-3.43-1.258-1.484-.57-3.085-1.144-4.57-1.828-1.601-.687-3.203-1.258-4.8-1.945-1.028-.457-2.06-.797-3.087-1.258-1.257-.57-2.628-1.027-3.886-1.598-1.028-.457-1.942-.8-2.969-1.258l-3.086-1.37c-.914-.344-1.832-.801-2.746-1.145a44 44 0 0 1-2.512-1.14c-.8-.345-1.715-.802-2.515-1.145-.914-.344-1.715-.801-2.512-1.141-1.031-.457-2.172-1.031-3.203-1.484-1.14-.575-2.285-1.032-3.426-1.602-1.258-.574-2.402-1.144-3.66-1.715-1.027-.457-2.055-1.027-3.082-1.484-54.172-26.973-102.172-63.086-143.09-106.746-2.055-2.172-5.71-.684-5.71 2.289l.112 154.398v12.57c0 7.317 3.543 14.06 9.598 18.172 38.172 24.801 83.773 39.543 132.914 39.543m0 0" style="fill:currentColor;"/><path d="M414.84 295.188c0 .113-.113.113-.113.226zl.8-1.489c-.343.457-.574 1.028-.8 1.488m3.793-7.05.226-.457.114-.23q-.17.513-.34.687m0 0" style="fill:currentColor;"/><path d="M470.035 201.121c-18.285-9.031-38.86-14.059-60.687-14.059-12.914 0-25.485 1.829-37.371 5.141-1.372.344-2.743.8-4.114 1.258-.914.344-1.941.574-2.855.914-1.945.688-3.774 1.375-5.602 2.059-3.316 1.257-6.629 2.742-9.828 4.23-3.43 1.598-6.742 3.426-10.058 5.371a128 128 0 0 0-9.715 6.285c-2.285 1.602-4.457 3.2-6.512 4.914a154 154 0 0 0-6.86 5.828c-1.14 1.141-2.398 2.172-3.542 3.313l-6.055 6.059-4.344 4.343-4.8 4.684-4.57 4.46-4.802 4.798-11.086 11.086c-.687.687-1.37 1.37-2.058 1.945l-1.028 1.027c-.457.457-1.027 1.028-1.601 1.485-.57.57-1.14 1.031-1.711 1.601a244.4 244.4 0 0 1-49.828 35.313c1.027.457 2.168 1.027 3.199 1.488.8.34 1.715.797 2.512 1.14.8.344 1.715.801 2.515 1.145.801.344 1.602.684 2.516 1.14.914.345 1.828.802 2.742 1.145l3.086 1.371c1.027.457 1.942.801 2.969 1.258 1.258.57 2.629 1.028 3.887 1.598 1.03.46 2.058.8 3.086 1.258 1.601.687 3.199 1.258 4.8 1.945 1.485.57 3.086 1.14 4.57 1.828 1.145.457 2.286.914 3.43 1.258 1.946.684 4 1.484 5.946 2.172a81 81 0 0 1 2.968 1.027c1.371.457 2.856 1.028 4.23 1.485 1.141.343 2.286.8 3.544 1.14q2.567.86 5.14 1.719c1.829.57 3.657 1.14 5.372 1.71 2.171.688 4.457 1.376 6.628 2.06 1.489.457 2.973.914 4.457 1.257 2.973.914 5.942 1.715 9.032 2.512 1.027.344 2.168.574 3.199.8 2.055.458 4.113.915 6.172 1.259 2.398.457 4.683.8 7.082 1.03 3.203.34 6.402.571 9.488.571 2.856 0 5.715 0 8.457-.23 2.63-.227 5.371-.457 8-.914 3.656-.57 7.2-1.371 10.742-2.286 2.399-.683 4.688-1.37 6.973-2.285 2.172-.8 4.227-1.601 6.285-2.515 2.399-1.028 4.684-2.285 6.973-3.543 1.14-.57 2.168-1.258 3.312-1.942 1.028-.687 2.059-1.257 3.086-1.945 1.602-1.027 3.2-2.168 4.684-3.426a52 52 0 0 0 3.887-3.203c2.289-1.941 4.457-4 6.628-6.168 1.032-1.031 2.06-2.172 3.086-3.316 1.258-1.485 2.516-2.969 3.657-4.457.918-1.258 1.828-2.512 2.742-3.77 2.515-3.543 4.8-7.316 6.86-11.199l2.284-4.688 21.145-42.171v.113c6.742-14.742 16.226-28.113 27.656-39.426m0 0" style="fill:currentColor;"/></svg>',
@@ -239,7 +239,7 @@ async function ensureIMWorkspaceLoaded(force = false) {
       imWorkspaceState.draft = JSON.parse(JSON.stringify(bundle));
       imWorkspaceState.savedAt = bundle.savedAt || null;
       imWorkspaceState.error = '';
-      var schedPromise = Promise.resolve();
+      let schedPromise = Promise.resolve();
       if (!window._dispatchSchedulesLoaded && typeof window.loadDispatchSchedules === 'function') {
         // Await the actual fetch - loadDispatchSchedules resolves only after data is loaded
         schedPromise = window.loadDispatchSchedules().catch(() => {});
@@ -358,21 +358,21 @@ function renderLineConnectionSection(draft) {
   const carrierIconMap = IM_CHANNEL_ICONS;
 
   function renderLineDropdown(line, lineId, type, options, currentVal) {
-    var hasIcons = options.some(function(o) { return !!o.icon; });
-    var itemsHtml = options.map(function(opt) {
-      var optVal = String(opt.value);
-      var optLabel = String(opt.label);
-      var isActive = String(currentVal) === optVal;
+    let hasIcons = options.some(function(o) { return !!o.icon; });
+    let itemsHtml = options.map(function(opt) {
+      let optVal = String(opt.value);
+      let optLabel = String(opt.label);
+      let isActive = String(currentVal) === optVal;
       return '<div class="im-dropdown-item' + (isActive ? ' active' : '') + '" data-value="' + escapeHtml(optVal) + '" onclick="window.imSelectLine(this, \'' + escapeHtml(type) + '\', \'' + escapeHtml(lineId) + '\')">' + (opt.icon || '') + '<span>' + escapeHtml(optLabel) + '</span></div>';
     }).join('');
 
-    var current = options.find(function(o) { return String(o.value) === String(currentVal); }) || options[0];
-    var currentLabel = String(current.label);
-    var currentIcon = current.icon || '';
+    let current = options.find(function(o) { return String(o.value) === String(currentVal); }) || options[0];
+    let currentLabel = String(current.label);
+    let currentIcon = current.icon || '';
 
     // Preserve open state across re-renders (e.g. after background bundle refresh)
-    var dropdownKey = lineId + ':' + type;
-    var shouldOpen = window._imOpenDropdownKey === dropdownKey;
+    let dropdownKey = lineId + ':' + type;
+    let shouldOpen = window._imOpenDropdownKey === dropdownKey;
 
     return [
       '<div class="im-dropdown im-line-' + type + (shouldOpen ? ' open' : '') + '" data-line-id="' + escapeHtml(lineId) + '" data-dropdown-type="' + escapeHtml(type) + '">',
@@ -386,9 +386,9 @@ function renderLineConnectionSection(draft) {
   }
 
   function renderLineRow(line) {
-    var otherCarrier = lines.find(function(l) { return l.id !== line.id && l.carrier; });
-    var otherCarrierValue = otherCarrier ? otherCarrier.carrier : '';
-    var carrierOptions = [
+    let otherCarrier = lines.find(function(l) { return l.id !== line.id && l.carrier; });
+    let otherCarrierValue = otherCarrier ? otherCarrier.carrier : '';
+    let carrierOptions = [
       { value: '', label: '-- 未使用 --' },
       { value: 'qq', label: 'QQ', icon: IM_CHANNEL_ICONS.qq },
       { value: 'weixin', label: '微信', icon: IM_CHANNEL_ICONS.weixin },
@@ -403,9 +403,9 @@ function renderLineConnectionSection(draft) {
       return true;
     });
 
-    var hasCarrier = !!line.carrier;
+    let hasCarrier = !!line.carrier;
 
-    var sessionOptions = hasCarrier
+    let sessionOptions = hasCarrier
       ? [{ value: '', label: '-- 未连接对话 --' }].concat(
           sessions.map(function(s) {
             return { value: s.id, label: s.title || s.id };
@@ -413,17 +413,17 @@ function renderLineConnectionSection(draft) {
         )
       : [{ value: '', label: '请先选择渠道' }];
 
-    var statusHtml = line.boundSession
+    let statusHtml = line.boundSession
       ? '<span class="im-binding-status bound">已连接</span>'
       : hasCarrier
         ? '<span class="im-binding-status idle">已绑定渠道</span>'
         : '<span class="im-binding-status unbound">未使用</span>';
 
-    var carrierDropdown = renderLineDropdown(
+    let carrierDropdown = renderLineDropdown(
       line, line.id, 'carrier', carrierOptions, line.carrier || ''
     );
 
-    var sessionDropdown = renderLineDropdown(
+    let sessionDropdown = renderLineDropdown(
       line, line.id, 'session', sessionOptions, (line.boundSession && line.boundSession.sessionId) || ''
     );
 
@@ -550,14 +550,14 @@ function renderIMWorkspaceConfigEditor(block) {
     }).catch(function() {});
   }
 
-  var autostartSchedules = (window._dispatchSchedules || []).filter(function(sc) {
+  let autostartSchedules = (window._dispatchSchedules || []).filter(function(sc) {
     return sc.trigger?.type === 'on-boot'
       && sc.action?.type === 'start_agent'
       && sc.targetAgentId === 'qqbot'
       && sc.status === 'pending';
   });
-  var autostartChecked = autostartSchedules.length > 0;
-  var autostartCheckboxHtml = '<label class="workspace-config-field checkbox im-portal-autostart">'
+  let autostartChecked = autostartSchedules.length > 0;
+  let autostartCheckboxHtml = '<label class="workspace-config-field checkbox im-portal-autostart">'
     + '<span class="workspace-config-label">' + (isZh ? 'Claw 启动时自启' : 'Auto-start with Claw') + '</span>'
     + '<span class="workspace-config-checkbox">'
     + '<input type="checkbox" ' + (autostartChecked ? 'checked ' : '')

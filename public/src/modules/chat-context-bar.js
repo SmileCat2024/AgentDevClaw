@@ -19,10 +19,10 @@
  */
 
 function updateChatContextBar(viewState = readCurrentSessionViewState()) {
-  var bar = document.getElementById('chat-context-bar');
+  let bar = document.getElementById('chat-context-bar');
   if (!bar) return;
-  var prevHtml = bar.innerHTML;
-  var wasHidden = bar.classList.contains('hidden');
+  let prevHtml = bar.innerHTML;
+  let wasHidden = bar.classList.contains('hidden');
 
   // 跟 chat-process-toggle 同一逻辑：非聊天界面时隐藏
   if (shouldRenderWorkspaceSurface()) {
@@ -40,7 +40,7 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   }
   bar.classList.remove('hidden');
 
-  var agent = getRuntimeAwareAgentRecord();
+  let agent = getRuntimeAwareAgentRecord();
   if (!agent) {
     bar.innerHTML = '';
     if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
@@ -57,10 +57,10 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   }
 
   // 找到当前活跃会话
-  var sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
-  var activeId = (agent.workspace_sessions && agent.workspace_sessions.activeSessionId)
+  let sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+  let activeId = (agent.workspace_sessions && agent.workspace_sessions.activeSessionId)
     || agent.active_workspace_session_id;
-  var activeSession = activeId
+  let activeSession = activeId
     ? sessions.find(function(s) { return s.id === activeId; })
     : (sessions[0] || null);
 
@@ -70,13 +70,13 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   // 总是反映正确会话的用量。不再依赖 runtimeBoundToSession 判定——
   // 该判定依赖 allAgents 中异步刷新的 active_workspace_session_id，
   // 会在 poll 周期间波动，导致用量在两个值之间反复跳动。
-  var used = 0;
-  var isLastRequest = false;
-  var runtimeRecord = typeof getCurrentRuntimeRecord === 'function' ? getCurrentRuntimeRecord() : null;
-  var overview = viewState && viewState.overview || {};
+  let used = 0;
+  let isLastRequest = false;
+  let runtimeRecord = typeof getCurrentRuntimeRecord === 'function' ? getCurrentRuntimeRecord() : null;
+  let overview = viewState && viewState.overview || {};
 
   // 模型名：有 runtime 时优先从 overview 实时取，回退到 session 元数据
-  var modelName = '';
+  let modelName = '';
   if (runtimeRecord && overview.modelName) {
     modelName = overview.modelName;
   }
@@ -85,14 +85,14 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   }
 
   if (runtimeRecord) {
-    var liveUsage = overview.usageStats && overview.usageStats.lastRequestUsage;
+    let liveUsage = overview.usageStats && overview.usageStats.lastRequestUsage;
     if (liveUsage && liveUsage.inputTokens) {
       used = liveUsage.inputTokens;
       isLastRequest = true;
     }
   }
   if (!used && activeSession && activeSession.tokenUsage) {
-    var lr = activeSession.tokenUsage.lastRequestUsage;
+    let lr = activeSession.tokenUsage.lastRequestUsage;
     if (lr && lr.inputTokens) {
       used = lr.inputTokens;
       isLastRequest = true;
@@ -102,22 +102,22 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   }
 
   // context length
-  var contextLength = getSessionContextLength(activeSession, agent);
-  var compressRatio = getSessionCompressRatio(activeSession, agent);
+  let contextLength = getSessionContextLength(activeSession, agent);
+  let compressRatio = getSessionCompressRatio(activeSession, agent);
 
   // 阈限占比：当前用量占压缩阈值的比例（而非全窗口）
-  var thresholdTokens = contextLength > 0 ? Math.round(contextLength * compressRatio / 100) : 0;
-  var thresholdPct = thresholdTokens > 0 ? Math.round((used / thresholdTokens) * 100) : 0;
+  let thresholdTokens = contextLength > 0 ? Math.round(contextLength * compressRatio / 100) : 0;
+  let thresholdPct = thresholdTokens > 0 ? Math.round((used / thresholdTokens) * 100) : 0;
 
-  var html = '';
+  let html = '';
   if (modelName) {
     html += '<span class="ccb-model">' + escapeHtml(modelName) + '</span>';
   }
   if (contextLength > 0) {
-    var pct = used > 0 ? Math.min(100, Math.round((used / contextLength) * 100)) : 0;
+    let pct = used > 0 ? Math.min(100, Math.round((used / contextLength) * 100)) : 0;
     // 进度条颜色按阈限占比分三段：<70% green, 70-100% amber, ≥100% red
-    var tone = thresholdPct >= 100 ? 'compress' : thresholdPct >= 70 ? 'mid' : 'low';
-    var label = (used > 0 && !isLastRequest)
+    let tone = thresholdPct >= 100 ? 'compress' : thresholdPct >= 70 ? 'mid' : 'low';
+    let label = (used > 0 && !isLastRequest)
       ? pct + '% (\u7d2f\u79ef)'
       : pct + '%';
     html += '<span class="ccb-token tone-' + tone + '">'
@@ -127,9 +127,9 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   }
 
   // 存储详细数据供 hover popup 使用
-  var detailData = { modelName: modelName || '', used: used, contextLength: contextLength, compressRatio: compressRatio, isLastRequest: isLastRequest };
-  var totalUsage = (overview.usageStats && overview.usageStats.totalUsage) || {};
-  var lastReq = null;
+  let detailData = { modelName: modelName || '', used: used, contextLength: contextLength, compressRatio: compressRatio, isLastRequest: isLastRequest };
+  let totalUsage = (overview.usageStats && overview.usageStats.totalUsage) || {};
+  let lastReq = null;
   if (runtimeRecord) {
     lastReq = overview.usageStats && overview.usageStats.lastRequestUsage;
   }
@@ -165,18 +165,18 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
 
 // ── Context pressure toast trigger ──
 // Per-session 压力等级：0 (安全), 1 (警告 ≥70%), 2 (超限 ≥100%)
-var _ctxPressureLevel = {};
+let _ctxPressureLevel = {};
 
 function _checkContextPressureToast(sessionId, thresholdPct) {
   if (!sessionId || typeof ClawToast === 'undefined') return;
-  var newLevel = thresholdPct >= 100 ? 2 : thresholdPct >= 70 ? 1 : 0;
-  var prevLevel = _ctxPressureLevel[sessionId] || 0;
+  let newLevel = thresholdPct >= 100 ? 2 : thresholdPct >= 70 ? 1 : 0;
+  let prevLevel = _ctxPressureLevel[sessionId] || 0;
   if (newLevel === prevLevel) return;
 
   _ctxPressureLevel[sessionId] = newLevel;
 
-  var isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-  var toastId = 'ctx-pressure-' + sessionId;
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let toastId = 'ctx-pressure-' + sessionId;
 
   if (newLevel === 1) {
     ClawToast.show({
@@ -203,9 +203,9 @@ function _checkContextPressureToast(sessionId, thresholdPct) {
 }
 
 // ── Context bar hover popup ──
-var _ccbPopup = null;
-var _ccbPopupHideTimer = null;
-var _ccbPopupShowTimer = null;
+let _ccbPopup = null;
+let _ccbPopupHideTimer = null;
+let _ccbPopupShowTimer = null;
 
 function _formatTokens(n) {
   if (!n) return '0';
@@ -215,17 +215,17 @@ function _formatTokens(n) {
 }
 
 function _buildCcbPopupHtml(d) {
-  var isZh = currentLanguage === 'zh';
-  var cr = (Number.isFinite(d.compressRatio) && d.compressRatio > 0) ? d.compressRatio : 80;
-  var pct = d.contextLength > 0 ? Math.min(100, Math.round((d.used / d.contextLength) * 100)) : 0;
-  var tone = pct >= cr ? 'compress' : pct < 50 ? 'low' : 'high';
+  let isZh = currentLanguage === 'zh';
+  let cr = (Number.isFinite(d.compressRatio) && d.compressRatio > 0) ? d.compressRatio : 80;
+  let pct = d.contextLength > 0 ? Math.min(100, Math.round((d.used / d.contextLength) * 100)) : 0;
+  let tone = pct >= cr ? 'compress' : pct < 50 ? 'low' : 'high';
 
   // 阈限占比：当前用量占压缩阈值的比例
-  var thresholdTokens = d.contextLength > 0 ? Math.round(d.contextLength * cr / 100) : 0;
-  var thresholdPct = thresholdTokens > 0 ? Math.round((d.used / thresholdTokens) * 100) : 0;
-  var thresholdTone = thresholdPct >= 100 ? 'compress' : thresholdPct >= 70 ? 'mid' : 'low';
+  let thresholdTokens = d.contextLength > 0 ? Math.round(d.contextLength * cr / 100) : 0;
+  let thresholdPct = thresholdTokens > 0 ? Math.round((d.used / thresholdTokens) * 100) : 0;
+  let thresholdTone = thresholdPct >= 100 ? 'compress' : thresholdPct >= 70 ? 'mid' : 'low';
 
-  var sections = [];
+  let sections = [];
 
   // ── Model ──
   if (d.modelName) {
@@ -233,7 +233,7 @@ function _buildCcbPopupHtml(d) {
   }
 
   // ── Context section ──
-  var ctxRows = [];
+  let ctxRows = [];
   if (d.contextLength > 0) {
     ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '上下文窗口' : 'Context Window') + '</span><span class="ccb-popup-value">' + _formatTokens(d.contextLength) + '</span></div>');
     ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '压缩阈值' : 'Compress At') + '</span><span class="ccb-popup-value">' + cr + '% (' + _formatTokens(thresholdTokens) + ')</span></div>');
@@ -249,10 +249,10 @@ function _buildCcbPopupHtml(d) {
   }
 
   // ── Token details section ──
-  var detailRows = [];
+  let detailRows = [];
   if (d.lastRequestUsage) {
-    var lr = d.lastRequestUsage;
-    var lrParts = [];
+    let lr = d.lastRequestUsage;
+    let lrParts = [];
     if (lr.inputTokens) lrParts.push((isZh ? '入 ' : 'in ') + _formatTokens(lr.inputTokens));
     if (lr.outputTokens) lrParts.push((isZh ? '出 ' : 'out ') + _formatTokens(lr.outputTokens));
     if (lr.cacheCreationTokens) lrParts.push((isZh ? '缓存写 ' : 'cw ') + _formatTokens(lr.cacheCreationTokens));
@@ -283,11 +283,11 @@ function _buildCcbPopupHtml(d) {
 }
 
 function _showCcbPopup() {
-  var bar = document.getElementById('chat-context-bar');
+  let bar = document.getElementById('chat-context-bar');
   if (!bar || bar.classList.contains('hidden') || !bar.innerHTML.trim()) return;
-  var d = window._ccbDetailData;
+  let d = window._ccbDetailData;
   if (!d) return;
-  var html = _buildCcbPopupHtml(d);
+  let html = _buildCcbPopupHtml(d);
   if (!html) return;
 
   if (!_ccbPopup) {
@@ -302,7 +302,7 @@ function _showCcbPopup() {
     document.body.appendChild(_ccbPopup);
   }
   _ccbPopup.innerHTML = html;
-  var rect = bar.getBoundingClientRect();
+  let rect = bar.getBoundingClientRect();
   _ccbPopup.style.left = rect.left + 'px';
   _ccbPopup.style.top = (rect.bottom + 4) + 'px';
   _ccbPopup.classList.add('visible');
@@ -325,7 +325,7 @@ function _scheduleHideCcbPopup() {
 }
 
 function _initCcbPopup() {
-  var bar = document.getElementById('chat-context-bar');
+  let bar = document.getElementById('chat-context-bar');
   if (!bar || bar.dataset.popupBound) return;
   bar.dataset.popupBound = '1';
   bar.addEventListener('mouseenter', function() { _scheduleShowCcbPopup(); });
@@ -337,9 +337,9 @@ setTimeout(_initCcbPopup, 0);
 
 
 // ── Title hover popup: session metadata ───────────────────────────
-var _titlePopup = null;
-var _titlePopupHideTimer = null;
-var _titlePopupShowTimer = null;
+let _titlePopup = null;
+let _titlePopupHideTimer = null;
+let _titlePopupShowTimer = null;
 
 /**
  * Collect the active session metadata from the current agent record.
@@ -347,22 +347,22 @@ var _titlePopupShowTimer = null;
  * same pattern as updateChatContextBar.
  */
 function _collectActiveSessionMeta() {
-  var agent = typeof getRuntimeAwareAgentRecord === 'function'
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
     ? getRuntimeAwareAgentRecord()
     : (typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null);
   if (!agent) return null;
 
-  var activeSessionId = String(
+  let activeSessionId = String(
     agent.active_workspace_session_id
     || agent.workspace_sessions?.activeSessionId
     || ''
   ).trim();
 
-  var sessions = Array.isArray(agent.workspace_sessions?.sessions)
+  let sessions = Array.isArray(agent.workspace_sessions?.sessions)
     ? agent.workspace_sessions.sessions
     : [];
 
-  var session = activeSessionId
+  let session = activeSessionId
     ? sessions.find(function (s) { return s && s.id === activeSessionId; }) || null
     : null;
 
@@ -375,13 +375,13 @@ function _collectActiveSessionMeta() {
 
 function _buildTitlePopupHtml(meta) {
   if (!meta) return '';
-  var isZh = currentLanguage === 'zh';
-  var s = meta.session || {};
-  var a = meta.agent || {};
-  var sections = [];
+  let isZh = currentLanguage === 'zh';
+  let s = meta.session || {};
+  let a = meta.agent || {};
+  let sections = [];
 
   // ── Session title ──
-  var fullTitle = s.title
+  let fullTitle = s.title
     || a.active_workspace_session_title
     || a.active_workspace_display_name
     || a.name
@@ -391,22 +391,22 @@ function _buildTitlePopupHtml(meta) {
   }
 
   // ── Time info ──
-  var timeRows = [];
+  let timeRows = [];
 
-  var createdAt = s.createdAt || a.created_at || null;
+  let createdAt = s.createdAt || a.created_at || null;
   if (createdAt) {
-    var relCreated = formatRelativeTime(createdAt);
-    var absCreated = formatWorkspaceDate(createdAt);
+    let relCreated = formatRelativeTime(createdAt);
+    let absCreated = formatWorkspaceDate(createdAt);
     timeRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
       + (isZh ? '创建' : 'Created')
       + '</span><span class="ccb-popup-value" title="' + escapeHtml(absCreated) + '">'
       + escapeHtml(relCreated || absCreated) + '</span></div>');
   }
 
-  var updatedAt = s.updatedAt || null;
+  let updatedAt = s.updatedAt || null;
   if (updatedAt) {
-    var relUpdated = formatRelativeTime(updatedAt);
-    var absUpdated = formatWorkspaceDate(updatedAt);
+    let relUpdated = formatRelativeTime(updatedAt);
+    let absUpdated = formatWorkspaceDate(updatedAt);
     timeRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
       + (isZh ? '最近活动' : 'Last Active')
       + '</span><span class="ccb-popup-value" title="' + escapeHtml(absUpdated) + '">'
@@ -414,9 +414,9 @@ function _buildTitlePopupHtml(meta) {
   }
 
   // ── Session stats ──
-  var statRows = [];
+  let statRows = [];
 
-  var msgCount = (typeof s.messageCount === 'number' ? s.messageCount : null)
+  let msgCount = (typeof s.messageCount === 'number' ? s.messageCount : null)
     ?? (typeof a.message_count === 'number' ? a.message_count : null);
   if (msgCount !== null && msgCount !== undefined) {
     statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
@@ -425,9 +425,9 @@ function _buildTitlePopupHtml(meta) {
   }
 
   // Token usage
-  var tu = s.tokenUsage;
+  let tu = s.tokenUsage;
   if (tu && (tu.totalTokens || tu.inputTokens || tu.outputTokens)) {
-    var tokenParts = [];
+    let tokenParts = [];
     if (tu.inputTokens) tokenParts.push((isZh ? '入 ' : 'in ') + _formatTokens(tu.inputTokens));
     if (tu.outputTokens) tokenParts.push((isZh ? '出 ' : 'out ') + _formatTokens(tu.outputTokens));
     if (tokenParts.length) {
@@ -438,22 +438,22 @@ function _buildTitlePopupHtml(meta) {
   }
 
   // Session type
-  var sType = s.sessionType || '';
+  let sType = s.sessionType || '';
   if (sType) {
-    var typeLabels = {
+    let typeLabels = {
       main: isZh ? '主对话' : 'Main',
       sub: isZh ? '子代理' : 'Sub-agent',
       exploration: isZh ? '探索' : 'Exploration',
       archived: isZh ? '已归档' : 'Archived',
     };
-    var typeLabel = typeLabels[sType] || sType;
+    let typeLabel = typeLabels[sType] || sType;
     statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
       + (isZh ? '类型' : 'Type')
       + '</span><span class="ccb-popup-value">' + escapeHtml(typeLabel) + '</span></div>');
   }
 
   // Working directory
-  var openDir = s.openDirectory || '';
+  let openDir = s.openDirectory || '';
   if (openDir) {
     statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
       + (isZh ? '工作目录' : 'Directory')
@@ -481,10 +481,10 @@ function _buildTitlePopupHtml(meta) {
 }
 
 function _showTitlePopup() {
-  var titleEl = document.getElementById('current-agent-name');
+  let titleEl = document.getElementById('current-agent-name');
   if (!titleEl) return;
-  var meta = _collectActiveSessionMeta();
-  var html = _buildTitlePopupHtml(meta);
+  let meta = _collectActiveSessionMeta();
+  let html = _buildTitlePopupHtml(meta);
   if (!html) return;
 
   if (!_titlePopup) {
@@ -499,7 +499,7 @@ function _showTitlePopup() {
     document.body.appendChild(_titlePopup);
   }
   _titlePopup.innerHTML = html;
-  var rect = titleEl.getBoundingClientRect();
+  let rect = titleEl.getBoundingClientRect();
   _titlePopup.style.left = rect.left + 'px';
   _titlePopup.style.top = (rect.bottom + 4) + 'px';
   _titlePopup.classList.add('visible');
@@ -522,7 +522,7 @@ function _scheduleHideTitlePopup() {
 }
 
 function _initTitlePopup() {
-  var titleEl = document.getElementById('current-agent-name');
+  let titleEl = document.getElementById('current-agent-name');
   if (!titleEl || titleEl.dataset.titlePopupBound) return;
   titleEl.dataset.titlePopupBound = '1';
   titleEl.addEventListener('mouseenter', function () { _scheduleShowTitlePopup(); });

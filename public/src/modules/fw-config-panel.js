@@ -512,7 +512,7 @@ window.fwHandlePromptKeydown = (e) => {
         e.preventDefault();
         const item = items[sp.activeIndex];
         if (item) fwInsertPickerItem(item);
-        return;
+        
       }
     }
   }

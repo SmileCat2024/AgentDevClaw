@@ -716,7 +716,7 @@ function validateResourceName(rawName) {
   const name = rawName.trim();
   if (!name) return { ok: false, error: 'name required' };
   if (name.length > 100) return { ok: false, error: 'name too long (max 100)' };
-  if (/[\/\\]/.test(name) || name.includes('..')) return { ok: false, error: 'invalid name' };
+  if (/[/\\]/.test(name) || name.includes('..')) return { ok: false, error: 'invalid name' };
   // 如果没有合法扩展名，默认加 .md
   const ext = path.extname(name).toLowerCase();
   if (!RESOURCE_ALLOWED_EXTS.has(ext)) {
