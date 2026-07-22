@@ -177,4 +177,18 @@ describe('ClawDispatchFeature', () => {
     await (feature as any).onCallFinishHook({ response: 'Merged answer' });
     assert.equal(countResponds(), before + 2);
   });
+
+  it('should bound slow CallFinish network side effects', async () => {
+    const feature = new ClawDispatchFeature();
+    (feature as any).injectedThisCall = [{ id: 'slow-1', text: 'slow response' }];
+    globalThis.fetch = (() => new Promise(() => {})) as unknown as typeof fetch;
+
+    const startedAt = Date.now();
+    await (feature as any).onCallFinishHook({ response: 'Interrupted' });
+    const elapsed = Date.now() - startedAt;
+
+    assert.ok(elapsed < 600, `CallFinish should not wait for an unbounded fetch (elapsed=${elapsed}ms)`);
+    assert.equal((feature as any).injectedThisCall.length, 0);
+    assert.equal((feature as any).callActive, false);
+  });
 });

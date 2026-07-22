@@ -20,6 +20,22 @@ interface DispatchMessage {
   text: string;
 }
 
+const CALL_FINISH_SIDE_EFFECT_BUDGET_MS = 250;
+
+async function waitForCallFinishSideEffects(task: Promise<void>, label: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guarded = task.catch((error) => {
+    console.error(`[ClawDispatch] ${label} failed:`, error);
+  });
+  await Promise.race([
+    guarded,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CALL_FINISH_SIDE_EFFECT_BUDGET_MS);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
 export class ClawDispatchFeature implements AgentFeature {
   readonly name = 'claw-dispatch';
 
@@ -73,12 +89,9 @@ export class ClawDispatchFeature implements AgentFeature {
       process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
     const response: string = ctx.response || '';
 
-    // Piggyback：用本轮 call 的最终 response 回报所有已注入的消息
-    for (const msg of this.injectedThisCall) {
-      console.log(`[ClawDispatch] piggyback respond for ${msg.id}`);
-      await this.postRespond(serverOrigin, msg, response, null);
-    }
-    this.injectedThisCall = [];
+    // 先同步转移状态所有权，网络回报只允许占用一个很短的总预算。
+    // 超时后请求继续在后台收尾，但不得阻塞 AgentDev 发出 call.finish。
+    const injected = this.injectedThisCall.splice(0);
 
     // Buffer 中残留的消息（call 结束前来不及注入）→ fallback 到 arbiter
     const leftover = this.pendingBuffer.splice(0);
@@ -88,7 +101,13 @@ export class ClawDispatchFeature implements AgentFeature {
       });
     }
 
-    await this.reportStatus(serverOrigin, 'idle');
+    await waitForCallFinishSideEffects((async () => {
+      for (const msg of injected) {
+        console.log(`[ClawDispatch] piggyback respond for ${msg.id}`);
+        await this.postRespond(serverOrigin, msg, response, null);
+      }
+      await this.reportStatus(serverOrigin, 'idle');
+    })(), 'CallFinish side effects');
   }
 
   // ========== Polling ==========

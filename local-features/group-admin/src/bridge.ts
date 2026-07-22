@@ -26,6 +26,22 @@ interface GcMessage {
   textInCatchUp?: boolean;
 }
 
+const CALL_FINISH_SIDE_EFFECT_BUDGET_MS = 250;
+
+async function waitForCallFinishSideEffects(task: Promise<void>, label: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guarded = task.catch((error) => {
+    console.error(`[GroupChatBridge] ${label} failed:`, error);
+  });
+  await Promise.race([
+    guarded,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CALL_FINISH_SIDE_EFFECT_BUDGET_MS);
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
+
 export class GroupChatBridgeFeature implements AgentFeature {
   readonly name = 'group-chat-bridge';
 
@@ -144,19 +160,11 @@ export class GroupChatBridgeFeature implements AgentFeature {
     const serverOrigin =
       process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
 
-    // 管理员模式：不自动 writeback
-    if (!this.suppressAutoWriteback) {
-      const response: string = ctx.response || '';
-
-      // Piggyback：用本轮 call 的最终 response 回写所有已注入的消息
-      for (const msg of this.injectedThisCall) {
-        console.log(`[GroupChatBridge] piggyback writeback for ${msg.id}`);
-        await this.postWriteback(serverOrigin, msg, response, null);
-      }
-    } else {
+    const response: string = ctx.response || '';
+    const injected = this.injectedThisCall.splice(0);
+    if (this.suppressAutoWriteback) {
       console.log('[GroupChatBridge] suppressAutoWriteback: skipping writeback');
     }
-    this.injectedThisCall = [];
 
     // Buffer 中残留的消息 → fallback 到 arbiter
     const leftover = this.pendingBuffer.splice(0);
@@ -164,6 +172,15 @@ export class GroupChatBridgeFeature implements AgentFeature {
       this.dispatchViaArbiter(msg, serverOrigin).catch((err) => {
         console.error(`[GroupChatBridge] leftover dispatch failed for ${msg.id}:`, err);
       });
+    }
+
+    if (!this.suppressAutoWriteback) {
+      await waitForCallFinishSideEffects((async () => {
+        for (const msg of injected) {
+          console.log(`[GroupChatBridge] piggyback writeback for ${msg.id}`);
+          await this.postWriteback(serverOrigin, msg, response, null);
+        }
+      })(), 'CallFinish writeback');
     }
   }
 

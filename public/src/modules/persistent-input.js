@@ -12,12 +12,12 @@
  * - t, escapeHtml, currentLanguage (app-core.js)
  * - currentRuntimeAgentId, currentInputRequests, lastRenderedInputSignature,
  *   lastRenderedInputMode, _agentCallActive, _interruptSuppression,
- *   INTERRUPT_SUPPRESSION_MS (app-core.js / app-main.js)
+ *   markInterruptPending, isInterruptSuppressed (app-core.js / app-main.js)
  * - isRuntimeCalling (runtime-status.js)
  * - renderAgentList, renderInputRequests, getInputSurfaceMode (app-main.js)
  * - isChatSurfaceActive, shouldRenderWorkspaceSurface (app-ui.js)
  * - autoResize (input-helpers.js)
- * - _voiceRecording, _voiceTranscribing, _voicePendingSend, stopVoiceRecording,
+ * - _voiceRecording, _voiceStopping, _voiceTranscribing, _voicePendingSend, stopVoiceRecording,
  *   _getSessionInputCacheKey, _restoreSessionInputDraft, _sessionInputCache,
  *   _cacheSessionInput, toggleVoiceRecording (voice-input.js)
  * - _clearRecapForNewMessage (recap-hint.js)
@@ -318,23 +318,45 @@ function onPersistentBtnClick() {
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
   if (_submitInFlight) return;         // fetch 进行中：阻止连点（防误触暂停）
+  if (btn.classList.contains('is-interrupting')) return;
+  // “停止 Agent”优先于语音按钮状态。录音是独立资源，打断 Agent 不应
+  // 把这次点击改写成“停止录音并发送”，否则会出现二次暂停和录音截断。
+  if (btn.classList.contains('is-stop')) {
+    interruptAgent();
+    return;
+  }
   if (_voiceTranscribing) return;
   if (_voiceRecording) {
     _voicePendingSend = true;
     stopVoiceRecording();
     return;
   }
-  if (btn.classList.contains('is-stop')) {
-    interruptAgent();
-  } else {
-    submitQueuedInput();
+  if (_voiceStopping) {
+    _voicePendingSend = true;
+    return;
   }
+  submitQueuedInput();
 }
 
 function _setActionBtnStop() {
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
+  btn.classList.remove('is-interrupting');
   btn.classList.add('is-stop');
+  btn.removeAttribute('aria-busy');
+  btn.title = currentLanguage === 'zh' ? '停止当前任务' : 'Stop current task';
+  const iconSend = btn.querySelector('.icon-send');
+  const iconStop = btn.querySelector('.icon-stop');
+  if (iconSend) iconSend.style.display = 'none';
+  if (iconStop) iconStop.style.display = '';
+}
+
+function _setActionBtnInterrupting() {
+  const btn = document.getElementById('persistent-action-btn');
+  if (!btn) return;
+  btn.classList.add('is-stop', 'is-interrupting');
+  btn.setAttribute('aria-busy', 'true');
+  btn.title = currentLanguage === 'zh' ? '正在停止当前任务…' : 'Stopping current task…';
   const iconSend = btn.querySelector('.icon-send');
   const iconStop = btn.querySelector('.icon-stop');
   if (iconSend) iconSend.style.display = 'none';
@@ -344,7 +366,9 @@ function _setActionBtnStop() {
 function _setActionBtnSend() {
   const btn = document.getElementById('persistent-action-btn');
   if (!btn) return;
-  btn.classList.remove('is-stop');
+  btn.classList.remove('is-stop', 'is-interrupting');
+  btn.removeAttribute('aria-busy');
+  btn.title = currentLanguage === 'zh' ? '发送' : 'Send';
   const iconSend = btn.querySelector('.icon-send');
   const iconStop = btn.querySelector('.icon-stop');
   if (iconSend) iconSend.style.display = '';
@@ -352,7 +376,9 @@ function _setActionBtnSend() {
 }
 
 function _syncPersistentActionButton() {
-  if (currentRuntimeAgentId && isRuntimeCalling(currentRuntimeAgentId)) {
+  if (currentRuntimeAgentId && isInterruptSuppressed(currentRuntimeAgentId)) {
+    _setActionBtnInterrupting();
+  } else if (currentRuntimeAgentId && isRuntimeCalling(currentRuntimeAgentId)) {
     _setActionBtnStop();
   } else {
     _setActionBtnSend();
@@ -528,47 +554,65 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
 
 async function interruptAgent() {
   if (!currentRuntimeAgentId) return;
+  const targetRuntimeId = currentRuntimeAgentId;
+  if (isInterruptSuppressed(targetRuntimeId)) return;
+  const wasCalling = isRuntimeCalling(targetRuntimeId);
 
-  // 乐观 UI 更新：立即清空 calling 状态、切换按钮、清空队列，
-  // 不等 POST 返回，让用户瞬间看到反馈。
-  // 设置中断抑制窗口：后端从 abort 生效到 call.finish 有延迟（取决于 agent
-  // 当前所处阶段：LLM 流式 ~50ms，工具执行 + 钩子 + auto-save 可能数秒），
-  // 期间轮询会拿到旧的 callActive:true。抑制窗口防止轮询覆盖乐观状态。
-  _interruptSuppression.set(currentRuntimeAgentId, Date.now() + INTERRUPT_SUPPRESSION_MS);
-  _agentCallActive.delete(currentRuntimeAgentId);
+  // 立即进入粘性的 interrupting 状态；中间阶段仍然是“正在停止”，绝不伪装成
+  // idle。后续同一 call 的 callActive:true 只是排空中的旧状态，不能恢复按钮。
+  markInterruptPending(targetRuntimeId, getNotificationCallStartedAt(lastNotificationStatusPayload));
+  _agentCallActive.delete(targetRuntimeId);
   _localQueuedInputPending = false;
   _pendingQueuedCount = 0;
   _queuedTexts = [];
   _lastQueueBubbleSignature = '';
   updateQueueIndicator();
-  _setActionBtnSend();
-  // 立即隐藏状态栏
+  _setActionBtnInterrupting();
+  // 明确展示过渡态，直到同一 call 的终态到达。
   const statusEl = document.getElementById('notification-status');
   if (statusEl) {
-    statusEl.style.display = 'none';
-    statusEl.className = 'notification-status';
+    statusEl.style.display = 'flex';
+    statusEl.className = 'notification-status active is-interrupting';
     const phaseEl = document.getElementById('notification-phase');
     const summaryEl = document.getElementById('notification-summary');
     const metricsEl = document.getElementById('notification-metrics');
-    if (phaseEl) phaseEl.textContent = '';
-    if (summaryEl) summaryEl.textContent = '';
+    if (phaseEl) phaseEl.textContent = currentLanguage === 'zh' ? '正在停止…' : 'Stopping…';
+    if (summaryEl) summaryEl.textContent = currentLanguage === 'zh'
+      ? '等待当前步骤安全退出'
+      : 'Waiting for the current step to exit safely';
     if (metricsEl) metricsEl.innerHTML = '';
   }
   _lastRenderedNotificationRuntime = null;
   renderAgentList();
 
-  console.log(`[Interrupt] sending POST /api/agents/${currentRuntimeAgentId}/interrupt`);
+  console.log(`[Interrupt] sending POST /api/agents/${targetRuntimeId}/interrupt`);
   try {
-    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/interrupt`, {
+    const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/interrupt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     console.log(`[Interrupt] response:`, res.status, data);
-    lastRenderedInputSignature = '';
-    renderInputRequests(currentInputRequests || []);
+    if (!res.ok || data?.success === false || data?.error) {
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
   } catch (e) {
     console.error('[Interrupt] request failed:', e);
+    // 请求没有被接受时才回滚 interrupting。成功请求没有任何超时回滚；它必须
+    // 等待 call.finish/callActive:false，以免旧轮询制造“假恢复”。
+    clearInterruptSuppression(targetRuntimeId);
+    if (wasCalling) _agentCallActive.set(targetRuntimeId, true);
+    if (normalizeAgentIdentity(currentRuntimeAgentId) === normalizeAgentIdentity(targetRuntimeId)) {
+      _syncPersistentActionButton();
+      updateNotificationStatus(lastNotificationStatusPayload || null);
+    }
+    renderAgentList();
+    window.ClawToast?.show?.({
+      id: `interrupt-failed-${targetRuntimeId}`,
+      status: 'error',
+      title: currentLanguage === 'zh' ? '停止请求失败' : 'Stop request failed',
+      description: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 

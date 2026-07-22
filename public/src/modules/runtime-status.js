@@ -800,14 +800,20 @@ function updateNotificationStatus(notifData) {
   const metricsEl = document.getElementById('notification-metrics');
   lastNotificationStatusPayload = payload;
   const runtimeIdForSuppression = normalizeAgentIdentity(currentRuntimeAgentId);
+  const actionSource = getNotificationActionSource(payload);
+  // call.finish is authoritative even if a coalesced runtime snapshot still
+  // carries the previous callActive:true value.
+  if (runtimeIdForSuppression && String(actionSource?.type || '').trim() === 'call.finish') {
+    clearInterruptSuppression(runtimeIdForSuppression);
+  }
   const payloadCalling = resolveNotificationCallingState(payload);
+  const observedCallStartedAt = getNotificationCallStartedAt(payload);
   const suppressingInterrupt = runtimeIdForSuppression
     && payloadCalling
-    && isInterruptSuppressed(runtimeIdForSuppression);
+    && isInterruptSuppressed(runtimeIdForSuppression, observedCallStartedAt);
   const runtime = getEffectiveRuntimeSnapshot(payload, { suppressCalling: suppressingInterrupt });
 
   let callingStateChanged = false;
-  const actionSource = getNotificationActionSource(payload);
   // `callActive` is tracked independently from the transient `state` payload.
   // Some notification responses may only carry the call flag, so update it
   // before any early return based on `state`.
@@ -817,9 +823,9 @@ function updateNotificationStatus(notifData) {
       const prev = _agentCallActive.get(runtimeId);
       let nextCalling = resolveNotificationCallingState(payload);
       if (nextCalling) {
-        // 中断抑制窗口内：用户已点击打断，后端尚未发出 call.finish，
-        // 忽略轮询返回的 callActive:true，防止覆盖乐观状态。
-        if (!isInterruptSuppressed(runtimeId)) {
+        // interrupting 期间同一 call 的 true 只是排空状态；只有更新的
+        // callStartedAt 才代表真正的新 call，可以离开 interrupting。
+        if (!isInterruptSuppressed(runtimeId, observedCallStartedAt)) {
           _markAgentCallStartedForNotify(runtimeId);
           _agentCallActive.set(runtimeId, true);
         } else {
@@ -850,12 +856,26 @@ function updateNotificationStatus(notifData) {
     }
   }
 
+  if (suppressingInterrupt) {
+    statusEl.style.display = 'flex';
+    statusEl.className = 'notification-status active is-interrupting';
+    phaseEl.textContent = currentLanguage === 'zh' ? '正在停止…' : 'Stopping…';
+    summaryEl.textContent = currentLanguage === 'zh'
+      ? '等待当前步骤安全退出'
+      : 'Waiting for the current step to exit safely';
+    metricsEl.innerHTML = '';
+    _lastRenderedNotificationRuntime = null;
+    _syncPersistentActionButton();
+    return;
+  }
+
   const stateType = String(actionSource?.type || '').trim();
   const shouldShowStatus = !currentRuntimeConnected
     || (!suppressingInterrupt && shouldShowRuntimeStatus(runtime, stateType));
   if (currentRuntimeAgentId && payload.callActive === undefined) {
     if (stateType === 'call.start') {
-      if (!isRuntimeCalling(currentRuntimeAgentId) && !isInterruptSuppressed(currentRuntimeAgentId)) {
+      if (!isRuntimeCalling(currentRuntimeAgentId)
+        && !isInterruptSuppressed(currentRuntimeAgentId, observedCallStartedAt)) {
         _markAgentCallStartedForNotify(currentRuntimeAgentId);
         _agentCallActive.set(currentRuntimeAgentId, true);
         callingStateChanged = true;
@@ -908,17 +928,6 @@ function updateNotificationStatus(notifData) {
       lastRenderedInputSignature = '';
       renderInputRequests(currentInputRequests || []);
     }
-    return;
-  }
-
-  if (suppressingInterrupt) {
-    statusEl.style.display = 'none';
-    statusEl.className = 'notification-status';
-    phaseEl.textContent = '';
-    summaryEl.textContent = '';
-    metricsEl.innerHTML = '';
-    _lastRenderedNotificationRuntime = null;
-    _syncPersistentActionButton();
     return;
   }
 

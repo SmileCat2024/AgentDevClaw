@@ -32,6 +32,18 @@ const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'wo
 const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
 const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
+// Audio feedback is presentation-only. Awaiting the OS media process inside
+// @CallFinish delays AgentDev's authoritative call.finish event and therefore
+// extends the visible interrupting interval. Keep the inherited hook metadata,
+// but let playback finish in the background.
+class NonBlockingAudioFeedbackFeature extends AudioFeedbackFeature {
+  async playAudioOnCallFinish(ctx) {
+    void super.playAudioOnCallFinish(ctx).catch((error) => {
+      console.warn('[ProgrammingHelper] audio feedback failed:', error);
+    });
+  }
+}
+
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -130,7 +142,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
       }));
 
       this.use(new AuditFeature());
-      this.use(new AudioFeedbackFeature());
+      this.use(new NonBlockingAudioFeedbackFeature());
       this.use(new WebSearchFeature());
       this.use(new MemoryFeature({ workspaceDir }));
       this.use(new ShellFeature({ workspaceDir }));

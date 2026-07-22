@@ -572,11 +572,9 @@ async function main() {
     if (!callArbiter || !agent?.agentId || targetAgentId !== agent.agentId) {
       return;
     }
-    if (clearQueue) {
-      const cleared = callArbiter.clearQueued();
-      if (cleared > 0) {
-        console.log(`[ProtoClaw Runtime] interrupt cleared ${cleared} queued envelope(s)`);
-      }
+    const result = callArbiter.interruptActive('cancelled by interrupt', { clearQueue });
+    if (result.active || result.cleared > 0) {
+      console.log(`[ProtoClaw Runtime] interrupt marked active=${result.active}, cleared=${result.cleared}`);
     }
   });
 

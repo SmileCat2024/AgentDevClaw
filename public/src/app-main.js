@@ -614,8 +614,10 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     for (const runtimeId of runtimeIds) {
       const backendCalling = nextCallStates.get(runtimeId) === true;
       const prevCalling = _agentCallActive.get(runtimeId) === true;
-      // 中断抑制窗口内忽略 backend 的 callActive:true
-      const effectiveCalling = backendCalling && !isInterruptSuppressed(runtimeId);
+      const notificationPayload = nextNotificationPayloads.get(runtimeId) || null;
+      // interrupting 是粘性状态；同一 call 的旧 true 不能恢复为 running。
+      const effectiveCalling = backendCalling
+        && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(notificationPayload));
       if (effectiveCalling) {
         _markAgentCallStartedForNotify(runtimeId);
         _agentCallActive.set(runtimeId, true);
@@ -657,7 +659,9 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
       }
       const runtimeId = agent.runtime_session_id || agent.runtimeSessionId || agent.id;
       if (!runtimeId) continue;
-      const nextCalling = nextCallStates.get(runtimeId) === true && !isInterruptSuppressed(runtimeId);
+      const notificationPayload = nextNotificationPayloads.get(runtimeId) || null;
+      const nextCalling = nextCallStates.get(runtimeId) === true
+        && !isInterruptSuppressed(runtimeId, getNotificationCallStartedAt(notificationPayload));
       if (agent.callActive !== nextCalling) {
         agent.callActive = nextCalling;
         changed = true;
@@ -2851,18 +2855,16 @@ function renderInputRequests(requests) {
     return;
   }
 
-  const previousRenderedInputMode = lastRenderedInputMode;
   lastRenderedInputSignature = signature;
   lastRenderedInputMode = renderMode;
 
-  // 当持久输入框在同一会话内重渲染时（如 call 状态变化触发的重建），
-  // 保留正在进行的语音录音。MediaRecorder 不依赖 DOM，重建后只需将
-  // 按钮引用重新指向新元素即可。仅在输入面真正切换时才取消录音。
-  const _preserveVoiceRecording = _voiceRecording
-    && renderMode === 'persistent'
-    && previousRenderedInputMode === 'persistent';
+  // MediaRecorder / ASR 属于语音操作本身，不属于某个短命 DOM 节点。
+  // 同一会话的 persistent ↔ requests 重绘只重绑 UI；切换会话或离开输入面
+  // 时才取消仍在采集的录音。已经开始的 ASR 由其异步所有者自行收尾。
+  const _currentVoiceCacheKey = _getSessionInputCacheKey();
+  const _preserveVoiceInput = _shouldPreserveVoiceInputForRender(renderMode, _currentVoiceCacheKey);
 
-  if (_voiceRecording && !_preserveVoiceRecording) {
+  if ((_voiceRecording || _voiceStopping) && !_preserveVoiceInput) {
     if (_voicePendingSend) {
       // User already pressed send — preserve auto-send intent.
       // Just stop the recording; onstop will run ASR and auto-send normally.
@@ -2870,10 +2872,6 @@ function renderInputRequests(requests) {
     } else {
       _cancelVoiceRecording();
     }
-  }
-  // 仅在非保留场景下重置 flag；保留时不影响进行中的 ASR fetch
-  if (!_preserveVoiceRecording) {
-    _voiceTranscribing = false;
   }
 
   _storeVisibleSessionInputDraft(inputContainer);
@@ -3052,17 +3050,15 @@ function renderInputRequests(requests) {
         }
       }, 50);
     }
+    if (_preserveVoiceInput) {
+      _reattachVoiceInputUi(inputContainer);
+    }
   } else if (renderMode === 'persistent' && hasRuntimeSelected && !readOnlyMode) {
     // 常驻输入框：当前正在查看 runtime 聊天，但没有 pending input request
     renderPersistentInput(inputContainer);
     // 跨 DOM 重建保留了录音时，将按钮引用重新指向新元素
-    if (_preserveVoiceRecording) {
-      const newBtn = inputContainer.querySelector('.voice-input-btn');
-      if (newBtn) {
-        _voiceTargetBtn = newBtn;
-        newBtn.classList.add('recording');
-        _updateVoiceUI();
-      }
+    if (_preserveVoiceInput) {
+      _reattachVoiceInputUi(inputContainer);
     }
   }
 

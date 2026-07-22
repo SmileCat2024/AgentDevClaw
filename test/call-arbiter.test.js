@@ -491,6 +491,67 @@ describe('CallArbiter', () => {
     await arbiter.waitForCompletion(e1.id);
   });
 
+  it('does not launch a continuation after the active envelope is interrupted', async () => {
+    let releaseFirstCall;
+    let continuation = null;
+    const calls = [];
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        await new Promise((resolve) => { releaseFirstCall = resolve; });
+        continuation = { kind: 'checkpoint', checkpointId: 'late-checkpoint' };
+        return 'interrupted segment result';
+      },
+      consumeContinuationRequest: () => {
+        const value = continuation;
+        continuation = null;
+        return value;
+      },
+      createNamedCheckpoint: async () => {},
+      getContext: () => ({ add() {} }),
+    };
+    const arbiter = new CallArbiter(agent);
+    const envelope = arbiter.enqueue({ source: 'test', text: 'main' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const interruption = arbiter.interruptActive('user stopped', { clearQueue: true });
+    assert.equal(interruption.active, true);
+    releaseFirstCall();
+
+    const finished = await arbiter.waitForCompletion(envelope.id);
+    assert.equal(finished.status, 'cancelled');
+    assert.equal(finished.error, 'user stopped');
+    assert.deepEqual(calls, ['main'], 'continuation must not become a second onCall');
+    assert.equal(continuation, null, 'late continuation request should be consumed and discarded');
+  });
+
+  it('discards supplements that arrive while an interrupted call is unwinding', async () => {
+    let releaseCall;
+    const calls = [];
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        await new Promise((resolve) => { releaseCall = resolve; });
+        return 'done';
+      },
+    };
+    const arbiter = new CallArbiter(agent);
+    const envelope = arbiter.enqueue({ source: 'test', text: 'main' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    arbiter.interruptActive('user stopped', { clearQueue: true });
+    const supplement = arbiter.enqueue({ source: 'queued-input', text: 'must not resume' });
+    assert.equal(supplement.status, 'supplemented');
+    releaseCall();
+
+    const finished = await arbiter.waitForCompletion(envelope.id);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(finished.status, 'cancelled');
+    assert.deepEqual(calls, ['main']);
+    assert.equal(arbiter.getStatus().queueLength, 0);
+    assert.equal(arbiter.getStatus().status, 'idle');
+  });
+
   it('converts leftover supplements to envelopes when call finishes', async () => {
     const agent = makeSlowAgent(30);
     const arbiter = new CallArbiter(agent);

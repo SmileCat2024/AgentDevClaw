@@ -420,20 +420,43 @@ const workspaceSurfaceModePreferences = {};
 let allAgents = [];
 // 追踪每个 agent 的 call 运行状态（实时更新，比 3s 轮询更快）
 const _agentCallActive = new Map();
-// 中断抑制窗口：用户点击打断后，后端从 abort 信号生效到 call.finish 通知有延迟，
-// 期间轮询会拿到旧的 callActive:true 覆盖乐观 UI。此 Map 记录每个 runtime 的抑制到期时间戳，
-// 在窗口内忽略轮询返回的 callActive:true。
+// 中断中的 runtime：用户点击打断后，abort 生效与 call.finish 之间天然存在异步间隔。
+// 这里记录的是一个粘性生命周期状态，而不是定时“抑制窗口”。只有同一 call 的终态
+// （callActive:false / call.finish）、明确的请求失败，或一个更新的 callStartedAt 才能清除它。
 const _interruptSuppression = new Map();
-const INTERRUPT_SUPPRESSION_MS = 8000;
 
 // ── Polling intervals ──────────────────────────────────────────
 const POLL_INTERVAL_MS   = 1000; // 正常态轮询间隔
 const POLL_FAST_INTERVAL_MS = 300; // 忙碌态/会话切换加速轮询间隔
-function isInterruptSuppressed(runtimeId) {
+function getNotificationCallStartedAt(payload) {
+  const value = payload?.runtime?.callStartedAt ?? payload?.callStartedAt;
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+}
+
+function markInterruptPending(runtimeId, callStartedAt = 0) {
+  if (!runtimeId) return;
+  const normalizedCallStartedAt = Number(callStartedAt);
+  _interruptSuppression.set(runtimeId, {
+    requestedAt: Date.now(),
+    callStartedAt: Number.isFinite(normalizedCallStartedAt) && normalizedCallStartedAt > 0
+      ? normalizedCallStartedAt
+      : 0,
+  });
+}
+
+function isInterruptSuppressed(runtimeId, observedCallStartedAt = 0) {
   if (!runtimeId) return false;
-  const expiry = _interruptSuppression.get(runtimeId);
-  if (!expiry) return false;
-  if (Date.now() > expiry) {
+  const pending = _interruptSuppression.get(runtimeId);
+  if (!pending) return false;
+
+  // A newer call identity is the only `callActive:true` observation allowed to
+  // leave interrupting state. If either side lacks an identity, stay sticky and
+  // wait for the authoritative terminal event instead of guessing by timeout.
+  const interruptedCallStartedAt = Number(pending?.callStartedAt);
+  const observed = Number(observedCallStartedAt);
+  if (Number.isFinite(interruptedCallStartedAt) && interruptedCallStartedAt > 0
+    && Number.isFinite(observed) && observed > interruptedCallStartedAt) {
     _interruptSuppression.delete(runtimeId);
     return false;
   }

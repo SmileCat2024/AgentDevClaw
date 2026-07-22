@@ -217,6 +217,22 @@ export class CallArbiter {
     return removed.length + clearedSupps.length;
   }
 
+  /**
+   * Mark the active logical envelope as interrupted in addition to clearing
+   * AgentDev's current step. This closes the gap where agent.interrupt() ends
+   * one onCall segment but the arbiter immediately launches its continuation.
+   */
+  interruptActive(reason = 'cancelled by interrupt', { clearQueue = true } = {}) {
+    const envelope = this._activeEnvelope;
+    if (envelope) {
+      envelope._interruptRequested = true;
+      envelope._discardQueuedOnInterrupt = clearQueue === true;
+      envelope.error = reason;
+    }
+    const cleared = clearQueue ? this.clearQueued(reason) : 0;
+    return { active: Boolean(envelope), cleared };
+  }
+
   blockQueued(reason = 'Session blocked by the context guard') {
     return this.clearQueued(reason);
   }
@@ -275,7 +291,12 @@ export class CallArbiter {
         // Convert leftover supplements to regular queued envelopes.
         // This happens when the call finishes before the next step could
         // drain them (e.g. agent completed at the current step).
-        if (this._supplementBuffer.length > 0) {
+        if (envelope._interruptRequested && envelope._discardQueuedOnInterrupt) {
+          // Supplements can arrive after clearQueued() while the interrupted
+          // step is still unwinding. They belong to the cancelled call and
+          // must not resurrect it as a fresh envelope.
+          this._supplementBuffer = [];
+        } else if (this._supplementBuffer.length > 0) {
           for (const supp of this._supplementBuffer) {
             this._queue.push({
               id: `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -323,6 +344,8 @@ export class CallArbiter {
     let input = envelope.text;
 
     while (true) {
+      if (this._finishInterruptedEnvelope(envelope)) return;
+
       // ── Budget enforcement ──
       envelope._segmentCount += 1;
       if (envelope._segmentCount > this.continuationBudget.maxSegments) {
@@ -332,6 +355,10 @@ export class CallArbiter {
       // ── Execute one onCall segment ──
       const result = await this._agent.onCall(input, envelope.images);
       envelope.result = typeof result === 'string' ? result : '';
+
+      // AgentDev's abort and onCall completion are intentionally asynchronous.
+      // Re-check the logical envelope before observing/starting continuation.
+      if (this._finishInterruptedEnvelope(envelope)) return;
 
       // ── Check for continuation request ──
       const continuation = typeof this._agent.consumeContinuationRequest === 'function'
@@ -354,6 +381,7 @@ export class CallArbiter {
         }
 
         await this._checkpointBarrier(continuation, envelope);
+        if (this._finishInterruptedEnvelope(envelope)) return;
         this._injectContinuationSystemMessage('checkpoint', continuation);
         input = this._buildCheckpointContinuationInput(continuation);
 
@@ -364,10 +392,23 @@ export class CallArbiter {
         }
 
         await this._rollbackBarrier(continuation, envelope);
+        if (this._finishInterruptedEnvelope(envelope)) return;
         this._injectContinuationSystemMessage('rollback', continuation);
         input = this._buildRollbackContinuationInput(continuation);
       }
     }
+  }
+
+  _finishInterruptedEnvelope(envelope) {
+    if (!envelope?._interruptRequested) return false;
+    // A continuation may have been registered just before abort completed.
+    // Consume and discard it so it cannot leak into a later envelope.
+    if (typeof this._agent.consumeContinuationRequest === 'function') {
+      try { this._agent.consumeContinuationRequest(); } catch {}
+    }
+    envelope.status = 'cancelled';
+    envelope.error = envelope.error || 'cancelled by interrupt';
+    return true;
   }
 
   /**

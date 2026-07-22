@@ -18,8 +18,8 @@
  *   _cacheSessionInput, _restoreSessionInputDraft, _storeSessionInputDraft,
  *   _storeVisibleSessionInputDraft, _injectPendingVoiceResult
  * 导出全局变量:
- *   _voiceRecording, _voiceTranscribing, _voiceMediaRecorder, _voiceAudioChunks,
- *   _voiceTargetBtn, _voiceCancelled, _voicePendingSend, _voiceAgentId,
+ *   _voiceRecording, _voiceStopping, _voiceTranscribing, _voiceMediaRecorder, _voiceAudioChunks,
+ *   _voiceTargetBtn, _voiceTargetId, _voiceCancelled, _voicePendingSend, _voiceAgentId,
  *   _voiceCacheKey, _pendingVoiceResults, _sessionInputCache
  * HTML onclick 引用:
  *   onclick="toggleVoiceRecording(...)"
@@ -29,10 +29,12 @@
 // ── Voice Input / ASR ──────────────────────────────────────────────────────
 
 let _voiceRecording = false;
+let _voiceStopping = false;
 let _voiceTranscribing = false;
 let _voiceMediaRecorder = null;
 let _voiceAudioChunks = [];
 let _voiceTargetBtn = null;
+let _voiceTargetId = null;
 let _voiceCancelled = false;
 let _voicePendingSend = false;      // 录音期间点了发送：停止录音后，转写完成自动发送
 let _voiceAgentId = null;           // 录音发起时的 runtime agent ID（用于 API 调用）
@@ -137,6 +139,27 @@ function _updateVoiceUI() {
   btn.classList.toggle('transcribing', _voiceTranscribing);
 }
 
+function _shouldPreserveVoiceInputForRender(renderMode, cacheKey) {
+  const hasOwnedVoiceOperation = _voiceRecording || _voiceStopping || _voiceTranscribing;
+  const isInteractiveInput = renderMode === 'persistent' || renderMode === 'requests';
+  return hasOwnedVoiceOperation
+    && isInteractiveInput
+    && Boolean(_voiceCacheKey)
+    && _voiceCacheKey === cacheKey;
+}
+
+function _reattachVoiceInputUi(root) {
+  if (!root?.querySelectorAll) return false;
+  const buttons = Array.from(root.querySelectorAll('.voice-input-btn'));
+  if (buttons.length === 0) return false;
+  const nextBtn = buttons.find((button) => button.dataset?.target === _voiceTargetId) || buttons[0];
+  _voiceTargetBtn = nextBtn;
+  _voiceTargetId = nextBtn.dataset?.target || _voiceTargetId;
+  nextBtn.classList.toggle('recording', _voiceRecording || _voiceStopping);
+  _updateVoiceUI();
+  return true;
+}
+
 function _markVoiceAutoSendAccepted(runtimeId) {
   if (!runtimeId) return;
   clearInterruptSuppression(runtimeId);
@@ -154,12 +177,15 @@ async function toggleVoiceRecording(btn) {
 
   if (_voiceRecording) {
     stopVoiceRecording();
-  } else if (!_voiceTranscribing) {
+  } else if (!_voiceStopping && !_voiceTranscribing) {
     await startVoiceRecording(btn);
   }
 }
 
 async function startVoiceRecording(btn) {
+  const recordingAgentId = currentRuntimeAgentId;
+  const recordingCacheKey = _getSessionInputCacheKey();
+  const recordingTargetId = btn?.dataset?.target || '';
   // Check speech config
   let speechConfig = window.ClawFW?._speechModelConfig;
   if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
@@ -177,11 +203,21 @@ async function startVoiceRecording(btn) {
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Permission prompts are asynchronous. If the user changed session while
+    // the browser prompt was open, the old DOM button no longer owns a valid
+    // recording target; release the acquired microphone immediately.
+    if (_getSessionInputCacheKey() !== recordingCacheKey) {
+      stream.getTracks().forEach(t => t.stop());
+      return;
+    }
     _voiceTargetBtn = btn;
+    _voiceTargetId = recordingTargetId;
     _voiceAudioChunks = [];
-    _voiceAgentId = currentRuntimeAgentId;
-    _voiceCacheKey = _getSessionInputCacheKey();
+    _voiceAgentId = recordingAgentId;
+    _voiceCacheKey = recordingCacheKey;
     _voicePendingSend = false;
+    _voiceStopping = false;
+    _voiceCancelled = false;
 
     // Determine best supported MIME type
     const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
@@ -206,18 +242,26 @@ async function startVoiceRecording(btn) {
       // Stop all tracks
       stream.getTracks().forEach(t => t.stop());
       btn.classList.remove('recording');
+      if (_voiceTargetBtn && _voiceTargetBtn !== btn) {
+        _voiceTargetBtn.classList.remove('recording');
+      }
       _voiceRecording = false;
+      _voiceStopping = false;
       _playVoiceSound('stop');
 
       if (_voiceCancelled) {
         _voiceCancelled = false;
         _voiceAudioChunks = [];
         _updateVoiceUI();
+        _voiceTargetBtn = null;
+        _voiceTargetId = null;
         return;
       }
 
       if (_voiceAudioChunks.length === 0) {
         _updateVoiceUI();
+        _voiceTargetBtn = null;
+        _voiceTargetId = null;
         return;
       }
 
@@ -228,7 +272,7 @@ async function startVoiceRecording(btn) {
       _voiceTranscribing = true;
       _updateVoiceUI();
       try {
-        await sendAudioToASR(blob, btn);
+        await sendAudioToASR(blob, _voiceTargetId || recordingTargetId);
       } finally {
         _voiceTranscribing = false;
         _updateVoiceUI();
@@ -237,7 +281,7 @@ async function startVoiceRecording(btn) {
       // Auto-send if user pressed send while recording
       if (_voicePendingSend) {
         _voicePendingSend = false;
-        const targetId = btn.dataset.target;
+        const targetId = _voiceTargetId || recordingTargetId;
         if (targetId === 'input-persistent') {
           const _currentCacheKey = _getSessionInputCacheKey();
           if (_currentCacheKey === _voiceCacheKey) {
@@ -296,6 +340,8 @@ async function startVoiceRecording(btn) {
           }
         }
       }
+      _voiceTargetBtn = null;
+      _voiceTargetId = null;
     };
 
     _voiceMediaRecorder.start(1000); // collect chunks every 1s
@@ -311,6 +357,7 @@ async function startVoiceRecording(btn) {
 
 function stopVoiceRecording() {
   if (_voiceMediaRecorder && _voiceMediaRecorder.state === 'recording') {
+    _voiceStopping = true;
     _voiceMediaRecorder.stop();
     // Set _voiceRecording = false immediately — don't wait for the async
     // onstop event.  Otherwise renderInputRequests() (triggered by a poll
@@ -328,8 +375,8 @@ function _cancelVoiceRecording() {
   stopVoiceRecording();
 }
 
-async function sendAudioToASR(blob, btn) {
-  const targetId = btn.dataset.target;
+async function sendAudioToASR(blob, target) {
+  const targetId = typeof target === 'string' ? target : target?.dataset?.target;
   const MAX_RETRIES = 2; // 3 total attempts (initial + 2 retries)
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {

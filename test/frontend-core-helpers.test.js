@@ -285,7 +285,11 @@ function createRuntimeStatusSandbox() {
     _syncPersistentActionButton() {},
     _syncPersistentInputUi() {},
     _syncQueueFromBackend() {},
+    _markAgentCallStartedForNotify() {},
     _tryNotifyAgentFinished() {},
+    _renderLastCallElapsed() {},
+    _recapPendingTrigger: false,
+    _maybeFetchRecap() {},
     normalizeAgentIdentity(value) {
       return String(value || '').trim();
     },
@@ -304,11 +308,11 @@ function createRuntimeStatusSandbox() {
 }
 
 describe('runtime-status: interrupt suppression', () => {
-  it('keeps stale callActive notifications from reviving the waiting status', () => {
+  it('keeps stale callActive notifications in sticky interrupting state', () => {
     const { ctx, elements } = createRuntimeStatusSandbox();
 
     ctx.run(`
-      _interruptSuppression.set("runtime-1", Date.now() + 8000);
+      markInterruptPending("runtime-1", 1000);
       _agentCallActive.delete("runtime-1");
       updateNotificationStatus({
         callActive: true,
@@ -316,15 +320,41 @@ describe('runtime-status: interrupt suppression', () => {
           callActive: true,
           stage: "awaiting_runtime",
           updatedAt: Date.now(),
-          callStartedAt: Date.now(),
+          callStartedAt: 1000,
           stageStartedAt: Date.now()
         },
         state: { type: "llm.char_count", data: { phase: "content", charCount: 10 }, timestamp: Date.now() }
       });
     `);
 
-    assert.equal(elements.get('notification-status').style.display, 'none');
-    assert.equal(elements.get('notification-phase').textContent, '');
+    assert.equal(elements.get('notification-status').style.display, 'flex');
+    assert.equal(elements.get('notification-phase').textContent, '正在停止…');
+    assert.equal(ctx.run('isRuntimeCalling("runtime-1")'), false);
+    assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 1000)'), true);
+    ctx.run('if (typeof _notificationClockTimer !== "undefined" && _notificationClockTimer) clearInterval(_notificationClockTimer);');
+  });
+
+  it('only releases interrupting for a terminal event or a newer call identity', () => {
+    const { ctx } = createRuntimeStatusSandbox();
+    ctx.run(`
+      markInterruptPending("runtime-1", 1000);
+      updateNotificationStatus({
+        callActive: true,
+        runtime: { callActive: true, callStartedAt: 2000, stage: "llm_thinking" }
+      });
+    `);
+    assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 2000)'), false);
+    assert.equal(ctx.run('isRuntimeCalling("runtime-1")'), true);
+
+    ctx.run(`
+      markInterruptPending("runtime-1", 2000);
+      updateNotificationStatus({
+        callActive: false,
+        runtime: { callActive: false, callStartedAt: 2000, stage: "idle" },
+        state: { type: "call.finish", timestamp: Date.now() }
+      });
+    `);
+    assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 2000)'), false);
     assert.equal(ctx.run('isRuntimeCalling("runtime-1")'), false);
     ctx.run('if (typeof _notificationClockTimer !== "undefined" && _notificationClockTimer) clearInterval(_notificationClockTimer);');
   });
