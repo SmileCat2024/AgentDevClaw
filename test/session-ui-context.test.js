@@ -5,6 +5,10 @@ import vm from 'node:vm';
 
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
+const sessionViewStateSource = fs.readFileSync(
+  new URL('../public/src/modules/session-view-state.js', import.meta.url),
+  'utf8',
+);
 const voiceInputSource = fs.readFileSync(new URL('../public/src/modules/voice-input.js', import.meta.url), 'utf8');
 const chatRendererSource = fs.readFileSync(new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
 
@@ -26,6 +30,8 @@ function createCoreContext() {
     currentHookInspectorSignature: '',
     currentOverviewSnapshot: {},
     currentOverviewSignature: '',
+    currentTodoPlan: {},
+    currentTodoPlanSignature: '',
     currentRuntimeConnected: true,
     toolRenderConfigs: {},
     TOOL_NAMES: {},
@@ -33,6 +39,18 @@ function createCoreContext() {
     window: { lastInputRequests: [] },
     followLatestEnabled: true,
     container: { scrollTop: 0 },
+  };
+  context.setCurrentHookInspector = (value) => {
+    context.currentHookInspector = value;
+    context.currentHookInspectorSignature = JSON.stringify(value);
+  };
+  context.setCurrentOverviewSnapshot = (value) => {
+    context.currentOverviewSnapshot = value;
+    context.currentOverviewSignature = JSON.stringify(value);
+  };
+  context.setCurrentTodoPlan = (value) => {
+    context.currentTodoPlan = value;
+    context.currentTodoPlanSignature = JSON.stringify(value);
   };
   context.currentAgent = {
     id: 'flow-workspace',
@@ -47,7 +65,8 @@ function createCoreContext() {
     '\nconst I18N =',
   );
   vm.runInContext(
-    `${cacheBlock}
+    `${sessionViewStateSource}
+${cacheBlock}
 globalThis.__uiContext = {
   getActiveWorkspaceSessionId,
   getRuntimeContextKey,

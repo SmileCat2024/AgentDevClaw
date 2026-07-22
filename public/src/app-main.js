@@ -1428,9 +1428,11 @@ window.switchAgent = async (newAgentId) => {
       renderFeaturePanel();
     } else {
       // No cache: clear stale messages to prevent poll race mixing old/new agent content
-      setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
-      setCurrentTodoPlan(getEmptyTodoPlan());
-      currentMessages = [];
+      applySessionViewPatch({
+        messages: [],
+        overview: getEmptyOverviewSnapshot(),
+        todoPlan: getEmptyTodoPlan(),
+      });
       renderCurrentMainView();
       setFollowLatest(true);
     }
@@ -1673,13 +1675,15 @@ deleteAgentAction.addEventListener('click', async () => {
       currentAgentId = null;
       currentRuntimeAgentId = null;
       currentWorkspaceTab = null;
-      currentMessages = [];
-      window.lastInputRequests = [];
+      applySessionViewPatch({
+        messages: [],
+        inputRequests: [],
+        hookInspector: { lifecycleOrder: [], features: [], hooks: [] },
+        overview: getEmptyOverviewSnapshot(),
+        todoPlan: getEmptyTodoPlan(),
+      });
       renderInputRequests([]);
       setCurrentLogs([]);
-      setCurrentHookInspector({ lifecycleOrder: [], features: [], hooks: [] });
-      setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
-      setCurrentTodoPlan(getEmptyTodoPlan());
       renderCurrentMainView();
       setFollowLatest(true);
       currentAgentTitle.textContent = t('page_title');
@@ -2189,7 +2193,7 @@ async function loadMcpInfo(forceRender = false) {
 async function loadAgentData(agentId) {
   if (isUiOnlyAgentId(agentId)) {
     currentRuntimeAgentId = null;
-    currentRuntimeConnected = true;
+    applySessionViewPatch({ connected: true });
     updateNotificationStatus(null);
     resetRuntimeBackedSurfaceState();
     renderCurrentMainView();
@@ -2266,23 +2270,23 @@ async function loadAgentData(agentId) {
       nextToolNames[tool.name] = DEFAULT_DISPLAY_NAMES[tool.name] || tool.name;
     }
 
-    const committed = commitSessionViewState(loadToken, () => {
-      setCurrentHookInspector(hookInspector);
-      setCurrentOverviewSnapshot(overviewSnapshot);
-      setCurrentTodoPlan(todoPlan);
-      currentMessages = msgsData.messages || [];
-      toolRenderConfigs = nextToolRenderConfigs;
-      TOOL_NAMES = nextToolNames;
+    const committed = commitSessionViewPatch(loadToken, {
+      hookInspector,
+      overview: overviewSnapshot,
+      todoPlan,
+      messages: msgsData.messages || [],
+      inputRequests,
+      toolRenderConfigs: nextToolRenderConfigs,
+      toolNames: nextToolNames,
+    }, ({ current }) => {
       recheckAutoTitleCandidate();
       // Only clear loading if messages arrived. If the runtime hasn't loaded
       // messages yet (common for freshly-created compacted resume sessions),
       // keep the spinner so the user doesn't see a premature empty welcome page.
       // The poll loop will clear it once real messages appear, and the 10s
       // timeout in beginChatLoadingSession is the ultimate fallback.
-      if (currentMessages.length > 0) clearChatLoadingSession();
-      const nextInputRequests = Array.isArray(inputRequests) ? inputRequests : [];
-      window.lastInputRequests = nextInputRequests;
-      renderInputRequests(nextInputRequests);
+      if (current.messages.length > 0) clearChatLoadingSession();
+      renderInputRequests(current.inputRequests);
       updateRollbackActionVisibility();
       renderCurrentMainView();
     });
@@ -2345,13 +2349,14 @@ async function refreshCurrentRuntimeStatus(
       return null;
     }
 
-    const committed = commitSessionViewState(viewToken, () => {
-      currentRuntimeConnected = connectionData?.connected !== false;
+    const committed = commitSessionViewPatch(viewToken, {
+      connected: connectionData?.connected !== false,
+    }, ({ current }) => {
       const runtimeRecord = getRuntimeRecord(expectedRuntimeId);
       if (runtimeRecord) {
-        runtimeRecord.connected = currentRuntimeConnected;
+        runtimeRecord.connected = current.connected;
       }
-      setConnectionStatus(currentRuntimeConnected);
+      setConnectionStatus(current.connected);
       if (typeof applyContextGuardStatus === 'function') {
         applyContextGuardStatus(guardData, expectedRuntimeId);
       }
@@ -2430,7 +2435,7 @@ async function runPollCycle() {
     }
 
     if (!currentRuntimeAgentId) {
-      currentRuntimeConnected = true;
+      applySessionViewPatch({ connected: true });
       updateNotificationStatus(null);
       await loadAgents();
       await refreshAgentCallStates(allAgents);
@@ -2517,29 +2522,33 @@ async function runPollCycle() {
         schedulePoll(POLL_FAST_INTERVAL_MS);
         return;
       }
-      const failureCommitted = commitSessionViewState(pollToken, () => {
-        const failedRuntimeRecord = getRuntimeRecord(pollRuntimeId);
-        _agentCallActive.delete(pollRuntimeId);
-        clearInterruptSuppression(pollRuntimeId);
-        if (failedRuntimeRecord) {
-          failedRuntimeRecord.callActive = false;
-          failedRuntimeRecord.connected = false;
-        }
-        currentRuntimeAgentId = null;
-        const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
-        if (fallbackId) {
-          selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
-        } else {
-          currentAgentId = null;
-          currentWorkspaceTab = null;
-          currentMessages = [];
-          currentInputRequests = [];
-          window.lastInputRequests = [];
-          setCurrentTodoPlan(getEmptyTodoPlan());
-          renderCurrentMainView();
-          renderInputRequests([]);
-        }
-      });
+      const failedRuntimeRecord = getRuntimeRecord(pollRuntimeId);
+      const fallbackId = resolveWorkspaceFallbackAgentId(failedRuntimeRecord);
+      const failureCommitted = commitSessionViewPatch(
+        pollToken,
+        fallbackId ? {} : {
+          messages: [],
+          inputRequests: [],
+          todoPlan: getEmptyTodoPlan(),
+        },
+        ({ current }) => {
+          _agentCallActive.delete(pollRuntimeId);
+          clearInterruptSuppression(pollRuntimeId);
+          if (failedRuntimeRecord) {
+            failedRuntimeRecord.callActive = false;
+            failedRuntimeRecord.connected = false;
+          }
+          currentRuntimeAgentId = null;
+          if (fallbackId) {
+            selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
+          } else {
+            currentAgentId = null;
+            currentWorkspaceTab = null;
+            renderCurrentMainView();
+            renderInputRequests(current.inputRequests);
+          }
+        },
+      );
       if (!failureCommitted) {
         schedulePoll(POLL_FAST_INTERVAL_MS);
         return;
@@ -2556,40 +2565,38 @@ async function runPollCycle() {
     }
     const messages = data.messages || [];
 
-    const messagesCommitted = commitSessionViewState(pollToken, () => {
+    const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
       // Clear session loading indicator once messages are available
-      if (messages.length > 0) clearChatLoadingSession();
+      if (current.messages.length > 0) clearChatLoadingSession();
 
       // Render messages immediately — before non-critical async ops
       // (status refresh, call states, queue sync) that add visible latency.
-      const previousMessages = currentMessages;
-      markAutoTitleCandidate(previousMessages, messages);
-      const firstChangedIndex = findFirstChangedMessageIndex(messages, currentMessages);
-      if (messages.length !== currentMessages.length) {
-        if (messages.length > currentMessages.length && firstChangedIndex === currentMessages.length) {
+      const previousMessages = previous.messages;
+      const nextMessages = current.messages;
+      markAutoTitleCandidate(previousMessages, nextMessages);
+      const firstChangedIndex = findFirstChangedMessageIndex(nextMessages, previousMessages);
+      if (nextMessages.length !== previousMessages.length) {
+        if (nextMessages.length > previousMessages.length && firstChangedIndex === previousMessages.length) {
           // 有新消息：只追加新的
-          const newMessages = messages.slice(currentMessages.length);
-          currentMessages = messages;
+          const newMessages = nextMessages.slice(previousMessages.length);
           if (shouldRenderWorkspaceSurface()) {
             renderCurrentMainView();
           } else {
-            appendNewMessages(newMessages, currentMessages.length - newMessages.length);
+            appendNewMessages(newMessages, nextMessages.length - newMessages.length);
           }
         } else {
           // 消息减少，或消息变多但前缀已变化：完全重建。
-          currentMessages = messages;
           renderCurrentMainView();
         }
       } else {
         if (firstChangedIndex >= 0) {
-          currentMessages = messages;
           // Rollback + partial compact can replace the middle of the transcript while
           // keeping the same length after the summary reminder is inserted.
-          if (shouldRenderWorkspaceSurface() || firstChangedIndex < messages.length - 1) {
+          if (shouldRenderWorkspaceSurface() || firstChangedIndex < nextMessages.length - 1) {
             renderCurrentMainView();
           } else {
             // 最后一条消息变化：替换最后一条（避免滚动重置）
-            updateLastMessage(messages[messages.length - 1]);
+            updateLastMessage(nextMessages[nextMessages.length - 1]);
           }
         }
       }
@@ -2623,23 +2630,14 @@ async function runPollCycle() {
     const nextTodoPlan = todoRaw === null ? null : normalizeTodoPlan(todoRaw);
     const nextTodoSignature = nextTodoPlan === null ? null : getTodoPlanSignature(nextTodoPlan);
     const inputRequests = Array.isArray(inputRequestsRaw) ? inputRequestsRaw : [];
-    const metadataCommitted = commitSessionViewState(pollToken, () => {
-      const overviewChanged = nextOverviewSignature !== currentOverviewSignature;
-      const todoChanged = nextTodoPlan !== null && nextTodoSignature !== currentTodoPlanSignature;
-      const inputChanged = JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || []);
-
-      if (overviewChanged) {
-        currentOverviewSnapshot = nextOverview;
-        currentOverviewSignature = nextOverviewSignature;
-      }
-      if (todoChanged) {
-        currentTodoPlan = nextTodoPlan;
-        currentTodoPlanSignature = nextTodoSignature;
-      }
-      if (inputChanged) {
-        currentInputRequests = inputRequests;
-        window.lastInputRequests = inputRequests;
-      }
+    const overviewChanged = nextOverviewSignature !== currentOverviewSignature;
+    const todoChanged = nextTodoPlan !== null && nextTodoSignature !== currentTodoPlanSignature;
+    const inputChanged = JSON.stringify(inputRequests) !== JSON.stringify(window.lastInputRequests || []);
+    const metadataPatch = {};
+    if (overviewChanged) metadataPatch.overview = nextOverview;
+    if (todoChanged) metadataPatch.todoPlan = nextTodoPlan;
+    if (inputChanged) metadataPatch.inputRequests = inputRequests;
+    const metadataCommitted = commitSessionViewPatch(pollToken, metadataPatch, () => {
 
       // 当目标任务进入终态时，自动清除中断标记
       let interruptCleared = false;
@@ -2788,15 +2786,18 @@ async function runPollCycle() {
         const hooksRes = await fetch(`/api/agents/${pollRuntimeId}/hooks`);
         const nextHookInspector = normalizeHookInspector(await hooksRes.json());
         const nextSignature = getHookInspectorSignature(nextHookInspector);
-        const hooksCommitted = commitSessionViewState(pollToken, () => {
-          if (nextSignature !== currentHookInspectorSignature) {
-            currentHookInspector = nextHookInspector;
-            currentHookInspectorSignature = nextSignature;
-            renderFeaturePanel();
-          } else if (activeFeaturePanel === 'inspector') {
-            renderFeaturePanel();
-          }
-        });
+        const hookInspectorChanged = nextSignature !== currentHookInspectorSignature;
+        const hooksCommitted = commitSessionViewPatch(
+          pollToken,
+          hookInspectorChanged ? { hookInspector: nextHookInspector } : {},
+          () => {
+            if (hookInspectorChanged) {
+              renderFeaturePanel();
+            } else if (activeFeaturePanel === 'inspector') {
+              renderFeaturePanel();
+            }
+          },
+        );
         if (!hooksCommitted) {
           schedulePoll(POLL_FAST_INTERVAL_MS);
           return;
@@ -2845,7 +2846,7 @@ function renderInputRequests(requests) {
   if (_rollbackDialogOpen) return;
 
   const chatViewportTopBefore = container.scrollTop;
-  currentInputRequests = requests;
+  applySessionViewPatch({ inputRequests: requests });
   const chatActive = isChatSurfaceActive();
   const renderMode = getInputSurfaceMode(requests);
   const signature = getInputRenderSignature(requests, renderMode);

@@ -25,6 +25,7 @@
  *   lastRenderedWorkspaceHtml
  * 依赖全局函数:
  *   bumpNavigationGuard, t, escapeHtml, invoke (app-core.js)
+ *   applySessionViewPatch (session-view-state.js)
  *   getCurrentAgentRecord, hasWorkspaceSessions, getWorkspaceSessions,
  *   getWorkspaceSessionById, requestSwitch, loadAgents,
  *   markSessionLoading, clearSessionLoading, markActionLoading,
@@ -468,6 +469,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 
   if (action.type === 'view_session_record') {
     if (!action.agentId || !action.sessionId) return;
+    const recordNavigationEpoch = _navigationGuardEpoch;
     readOnlyMode = true;
     const agentId = action.agentId;
     const sessionId = action.sessionId;
@@ -475,11 +477,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       const res = await fetch('/protoclaw/session_record?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      currentMessages = (data.messages || []).map(m => ({
-        role: m.role,
-        content: m.content,
-      }));
-      currentInputRequests = [];
+      if (recordNavigationEpoch !== _navigationGuardEpoch) return;
+      applySessionViewPatch({
+        messages: (data.messages || []).map(m => ({
+          role: m.role,
+          content: m.content,
+        })),
+        inputRequests: [],
+      });
       lastRenderedInputSignature = '';
       setPreferredUnitMode('chat', allAgents.find(a => a.id === agentId) || activeAgent);
       renderCurrentMainView();

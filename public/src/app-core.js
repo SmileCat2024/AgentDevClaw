@@ -748,24 +748,25 @@ function getRuntimeCacheTodoPlanSignature(plan) {
 
 function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(agentId)) {
   if (!agentId || !contextKey) return;
-  const cachedTodoPlan = typeof currentTodoPlan !== 'undefined'
-    ? currentTodoPlan
+  const viewState = readCurrentSessionViewState();
+  const cachedTodoPlan = viewState.todoPlan
+    ? viewState.todoPlan
     : getRuntimeCacheTodoPlanFallback();
   _agentRuntimeCache.set(contextKey, {
     runtimeId: agentId,
-    messages: currentMessages,
-    inputRequests: Array.isArray(currentInputRequests) ? currentInputRequests : [],
-    toolRenderConfigs: toolRenderConfigs,
-    TOOL_NAMES: TOOL_NAMES,
-    hookInspector: currentHookInspector,
+    messages: viewState.messages,
+    inputRequests: viewState.inputRequests,
+    toolRenderConfigs: viewState.toolRenderConfigs,
+    TOOL_NAMES: viewState.toolNames,
+    hookInspector: viewState.hookInspector,
     hookInspectorSignature: currentHookInspectorSignature,
-    overviewSnapshot: currentOverviewSnapshot,
+    overviewSnapshot: viewState.overview,
     overviewSignature: currentOverviewSignature,
     todoPlan: cachedTodoPlan,
     todoPlanSignature: typeof currentTodoPlanSignature !== 'undefined'
       ? currentTodoPlanSignature
       : getRuntimeCacheTodoPlanSignature(cachedTodoPlan),
-    connected: typeof currentRuntimeConnected !== 'undefined' ? currentRuntimeConnected : true,
+    connected: viewState.connected,
     followLatest: followLatestEnabled,
     scrollTop: container ? container.scrollTop : 0,
   });
@@ -784,22 +785,20 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
     return false;
   }
   activateUserCollapseStateForContext(contextKey);
-  currentMessages = cached.messages;
-  toolRenderConfigs = cached.toolRenderConfigs;
-  TOOL_NAMES = cached.TOOL_NAMES;
-  currentHookInspector = cached.hookInspector;
-  currentHookInspectorSignature = cached.hookInspectorSignature;
-  currentOverviewSnapshot = cached.overviewSnapshot;
-  currentOverviewSignature = cached.overviewSignature;
-  currentTodoPlan = cached.todoPlan || (
-    typeof getEmptyTodoPlan === 'function'
-      ? getEmptyTodoPlan()
-      : getRuntimeCacheTodoPlanFallback()
-  );
-  currentTodoPlanSignature = cached.todoPlanSignature || getRuntimeCacheTodoPlanSignature(currentTodoPlan);
-  currentRuntimeConnected = cached.connected;
-  currentInputRequests = Array.isArray(cached.inputRequests) ? cached.inputRequests : [];
-  window.lastInputRequests = currentInputRequests;
+  applySessionViewPatch({
+    messages: cached.messages,
+    inputRequests: cached.inputRequests,
+    toolRenderConfigs: cached.toolRenderConfigs,
+    toolNames: cached.TOOL_NAMES,
+    hookInspector: cached.hookInspector,
+    overview: cached.overviewSnapshot,
+    todoPlan: cached.todoPlan || (
+      typeof getEmptyTodoPlan === 'function'
+        ? getEmptyTodoPlan()
+        : getRuntimeCacheTodoPlanFallback()
+    ),
+    connected: cached.connected,
+  });
   followLatestEnabled = cached.followLatest !== undefined ? cached.followLatest : true;
   _restoredScrollTop = typeof cached.scrollTop === 'number' ? cached.scrollTop : null;
   if (typeof updatePlanBadge === 'function') updatePlanBadge();

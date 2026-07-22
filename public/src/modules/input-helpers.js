@@ -31,6 +31,8 @@
  *   isChatSurfaceActive, shouldRenderWorkspaceSurface
  * 依赖 app-main.js:
  *   poll, renderInputRequests, syncCollapseStates
+ * 依赖 session-view-state.js:
+ *   applySessionViewPatch
  */
 
 function syncRollbackActionButtons() {
@@ -133,8 +135,7 @@ async function submitInput(requestId) {
       beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       // 乐观清空输入请求并立即重渲染，避免等待下一轮 poll 才归位
-      currentInputRequests = [];
-      window.lastInputRequests = [];
+      applySessionViewPatch({ inputRequests: [] });
       lastRenderedInputSignature = '';
       renderInputRequests([]);
       // 乐观标记 agent 进入 calling 状态，使 action button 立即切换为 stop
@@ -336,8 +337,7 @@ async function submitInputAction(requestId, actionId, payload = {}) {
       beginFollowLatestEntryWindow();
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       // 乐观清空输入请求并立即重渲染
-      currentInputRequests = [];
-      window.lastInputRequests = [];
+      applySessionViewPatch({ inputRequests: [] });
       lastRenderedInputSignature = '';
       renderInputRequests([]);
       if (currentRuntimeAgentId) {

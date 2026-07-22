@@ -1358,14 +1358,15 @@ function renderCurrentMainView() {
 //     updateAssemblySideRailPosition
 
 function resetRuntimeBackedSurfaceState() {
-  currentMessages = [];
-  currentInputRequests = [];
-  window.lastInputRequests = [];
+  applySessionViewPatch({
+    messages: [],
+    inputRequests: [],
+    hookInspector: { lifecycleOrder: [], features: [], hooks: [] },
+    overview: getEmptyOverviewSnapshot(),
+    todoPlan: getEmptyTodoPlan(),
+  });
   renderInputRequests([]);
   setCurrentLogs([]);
-  setCurrentHookInspector({ lifecycleOrder: [], features: [], hooks: [] });
-  setCurrentOverviewSnapshot(getEmptyOverviewSnapshot());
-  setCurrentTodoPlan(getEmptyTodoPlan());
   setConnectionStatus(false);
   updateNotificationStatus({});
   lastRenderedWorkspaceHtml = '';

@@ -100,6 +100,8 @@ function createPollSandbox({ blockStatus = true } = {}) {
     currentRuntimeConnected: true,
     currentMessages: payloads.A.messages.messages,
     currentInputRequests: payloads.A.input,
+    toolRenderConfigs: {},
+    TOOL_NAMES: {},
     currentOverviewSnapshot: payloads.A.overview,
     currentOverviewSignature: JSON.stringify(payloads.A.overview),
     currentTodoPlan: {},
@@ -162,6 +164,10 @@ function createPollSandbox({ blockStatus = true } = {}) {
     _syncPersistentInputUi: () => {},
     normalizeOverviewSnapshot: (value) => value,
     getOverviewSignature: (value) => JSON.stringify(value),
+    setCurrentOverviewSnapshot: (value) => {
+      sandbox.currentOverviewSnapshot = value;
+      sandbox.currentOverviewSignature = JSON.stringify(value);
+    },
     renderFeaturePanel: () => {},
     updateChatContextBar: () => {
       events.push({
@@ -173,6 +179,10 @@ function createPollSandbox({ blockStatus = true } = {}) {
     },
     normalizeTodoPlan: (value) => value,
     getTodoPlanSignature: (value) => JSON.stringify(value),
+    setCurrentTodoPlan: (value) => {
+      sandbox.currentTodoPlan = value;
+      sandbox.currentTodoPlanSignature = JSON.stringify(value);
+    },
     getInterruptTargetId: () => null,
     setInterruptTargetId: () => {},
     updatePlanBadge: () => {},
@@ -185,6 +195,10 @@ function createPollSandbox({ blockStatus = true } = {}) {
     loadLogs: async () => {},
     normalizeHookInspector: (value) => value,
     getHookInspectorSignature: (value) => JSON.stringify(value),
+    setCurrentHookInspector: (value) => {
+      sandbox.currentHookInspector = value;
+      sandbox.currentHookInspectorSignature = JSON.stringify(value);
+    },
     saveCurrentRuntimeToCache: (runtime) => events.push({
       kind: 'cache-write',
       runtime,
@@ -254,6 +268,14 @@ test('runtime status cannot commit after the same runtime is re-entered', async 
     currentRuntimeAgentId: 'A',
     currentAgentId: 'programming-helper',
     currentRuntimeConnected: true,
+    currentMessages: [],
+    currentInputRequests: [],
+    toolRenderConfigs: {},
+    TOOL_NAMES: {},
+    currentHookInspector: {},
+    currentOverviewSnapshot: {},
+    currentTodoPlan: {},
+    window: { lastInputRequests: [] },
     _switchEpoch: 11,
     normalizeAgentIdentity: (value) => String(value || '').trim(),
     getCurrentRuntimeRecord: () => ({
@@ -371,6 +393,7 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
     Promise,
     currentAgentId: 'programming-helper',
     currentRuntimeAgentId: 'A',
+    currentRuntimeConnected: true,
     currentMessages: [{ role: 'assistant', content: 'A' }],
     currentInputRequests: [],
     currentOverviewSnapshot: { modelName: 'model-a' },

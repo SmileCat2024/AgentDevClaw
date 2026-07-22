@@ -11,6 +11,7 @@
  *   getRollbackInputRequest (app-main.js)
  *   renderInputRequests (app-main.js)
  *   submitInputAction (app-main.js)
+ *   applySessionViewPatch (session-view-state.js)
  *   escapeHtml (app-core.js)
  *   runWithSuppressedChatViewportObservers (app-ui.js)
  * 导出全局函数:
@@ -177,8 +178,7 @@ function showRollbackActionDialog(request, callIndex, msg) {
     _partialCompactRuntimeId = currentRuntimeAgentId;
     _partialCompactContextKey = _getSessionInputCacheKey();
     writePartialCompactStartedAt(Date.now(), _partialCompactContextKey);
-    currentInputRequests = [];
-    window.lastInputRequests = [];
+    applySessionViewPatch({ inputRequests: [] });
     lastRenderedInputSignature = '';
     renderInputRequests([]);
     await submitInputAction(request.requestId, 'compact_from_call', {
