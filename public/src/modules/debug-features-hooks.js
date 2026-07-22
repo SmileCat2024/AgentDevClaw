@@ -4,6 +4,7 @@
  * 从 debug-panels.js 拆出。包含：
  *   - renderFeaturesPanel
  *   - renderReverseHooksPanel
+ *   - renderFeatureDetailOverlay（独立 portal，挂载于 document.body）
  *
  * 依赖（全局变量，声明于 app-core.js）：
  *   - selectedFeatureName, currentHookInspector
@@ -49,46 +50,8 @@ function renderFeaturesPanel() {
     })
     .join('');
 
-  const detailOverlay = selectedFeature ? [
-    '<div class="feature-detail-overlay">',
-    '<div class="feature-detail-window">',
-    '<div class="feature-detail-head">',
-    '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(selectedFeature.name) + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(selectedFeature.description || '') + '</div>',
-    '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="window.closeFeatureDetails()">×</button>',
-    '</div>',
-    '<div class="feature-detail-stats">',
-    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_hooks')) + '</div><div class="feature-detail-stat-value">' + String(selectedFeature.hookCount) + '</div></div>',
-    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_active_tools')) + '</div><div class="feature-detail-stat-value">' + String(selectedFeature.enabledToolCount) + '/' + String(selectedFeature.toolCount) + '</div></div>',
-    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(selectedFeature))) + '</div></div>',
-    '</div>',
-    '<div class="feature-panel-section">',
-    '<div class="feature-panel-section-title">' + escapeHtml(t('panel_feature_details')) + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(shortenSourcePath(selectedFeature.source) || t('feature_source_missing')) + '</div>',
-    '</div>',
-    '<div class="feature-panel-section">',
-    '<div class="feature-panel-section-title">' + escapeHtml(t('panel_loaded_tools')) + '</div>',
-    selectedFeature.tools && selectedFeature.tools.length > 0
-      ? '<div class="feature-tool-list">' + selectedFeature.tools.map(tool => [
-          '<div class="feature-tool-card">',
-          '<div class="feature-tool-top">',
-          '<div class="feature-tool-name">' + escapeHtml(tool.name) + '</div>',
-          '<div class="' + getStatusBadgeClass(tool.state || (tool.enabled ? 'enabled' : 'disabled')) + '">' + escapeHtml(tool.state === 'superseded' ? t('feature_tool_superseded') : tool.state === 'removed' ? t('feature_tool_removed') : tool.state === 'disabled' || tool.enabled === false ? t('feature_tool_disabled') : t('feature_tool_enabled')) + '</div>',
-          '</div>',
-          '<div class="feature-tool-desc">' + escapeHtml(tool.description || '') + '</div>',
-          '<div class="feature-tool-meta">',
-          tool.renderCall ? '<span class="feature-tool-pill">' + escapeHtml(t('feature_tool_render')) + ': call/' + escapeHtml(tool.renderCall) + '</span>' : '',
-          tool.renderResult ? '<span class="feature-tool-pill">' + escapeHtml(t('feature_tool_render')) + ': result/' + escapeHtml(tool.renderResult) + '</span>' : '',
-          '</div>',
-          '</div>',
-        ].join('')).join('') + '</div>'
-      : '<div class="feature-detail-subtitle">' + escapeHtml(t('panel_no_tools')) + '</div>',
-    '</div>',
-    '</div>',
-    '</div>',
-  ].join('') : '';
+  // 弹窗通过独立 portal 渲染到 document.body，不嵌入 panel body（避免 transform 降级 fixed）
+  renderFeatureDetailOverlay(selectedFeature);
 
   const standaloneSection = (currentHookInspector.standaloneTools && currentHookInspector.standaloneTools.length > 0)
     ? [
@@ -115,7 +78,77 @@ function renderFeaturesPanel() {
     '<div class="feature-grid">' + featureCards + '</div>',
     '</section>',
     standaloneSection,
-    detailOverlay,
+    '</div>',
+  ].join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Feature 详情弹窗 — 独立 portal（挂载于 document.body）
+// 避免被 feature-panel-body 的 transform 降级为 containing block
+// ═══════════════════════════════════════════════════════════════
+
+const FEATURE_DETAIL_PORTAL_ID = 'feature-detail-portal';
+
+function ensureFeatureDetailPortal() {
+  let el = document.getElementById(FEATURE_DETAIL_PORTAL_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = FEATURE_DETAIL_PORTAL_ID;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function renderFeatureDetailOverlay(feature) {
+  const portal = ensureFeatureDetailPortal();
+
+  if (!feature) {
+    portal.innerHTML = '';
+    return;
+  }
+
+  const toolRowsHtml = (feature.tools && feature.tools.length > 0)
+    ? '<div class="fdetail-tool-list">' + feature.tools.map(tool => {
+        const stateLabel = tool.state === 'superseded' ? t('feature_tool_superseded')
+          : tool.state === 'removed' ? t('feature_tool_removed')
+          : tool.state === 'disabled' || tool.enabled === false ? t('feature_tool_disabled')
+          : t('feature_tool_enabled');
+        const pills = [
+          tool.renderCall ? '<span class="fdetail-tool-pill">call/' + escapeHtml(tool.renderCall) + '</span>' : '',
+          tool.renderResult ? '<span class="fdetail-tool-pill">result/' + escapeHtml(tool.renderResult) + '</span>' : '',
+        ].filter(Boolean).join('');
+        return [
+          '<div class="fdetail-tool-row">',
+          '<div class="fdetail-tool-info">',
+          '<span class="fdetail-tool-name">' + escapeHtml(tool.name) + '</span>',
+          tool.description ? '<span class="fdetail-tool-desc">' + escapeHtml(tool.description) + '</span>' : '',
+          pills ? '<span class="fdetail-tool-pills">' + pills + '</span>' : '',
+          '</div>',
+          '<span class="fdetail-tool-state ' + getStatusBadgeClass(tool.state || (tool.enabled ? 'enabled' : 'disabled')) + '">' + escapeHtml(stateLabel) + '</span>',
+          '</div>',
+        ].join('');
+      }).join('') + '</div>'
+    : '<div class="fdetail-empty">' + escapeHtml(t('panel_no_tools')) + '</div>';
+
+  portal.innerHTML = [
+    '<div class="feature-detail-overlay" onclick="window.closeFeatureDetails()">',
+    '<div class="feature-detail-window" onclick="event.stopPropagation()">',
+    '<div class="feature-detail-head">',
+    '<div>',
+    '<div class="feature-detail-title">' + escapeHtml(feature.name) + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(feature.description || '') + '</div>',
+    '</div>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="window.closeFeatureDetails()">×</button>',
+    '</div>',
+    '<div class="feature-detail-stats">',
+    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_hooks')) + '</div><div class="feature-detail-stat-value">' + String(feature.hookCount) + '</div></div>',
+    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_active_tools')) + '</div><div class="feature-detail-stat-value">' + String(feature.enabledToolCount) + '/' + String(feature.toolCount) + '</div></div>',
+    '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(feature))) + '</div></div>',
+    '</div>',
+    '<div class="fdetail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + '</div>',
+    '<div class="fdetail-section-title">' + escapeHtml(t('panel_loaded_tools')) + '</div>',
+    toolRowsHtml,
+    '</div>',
     '</div>',
   ].join('');
 }

@@ -65,11 +65,19 @@ function renderFeaturePanel(options = {}) {
     featurePanelTitle.textContent = t('panel_structure');
     featurePanelBody.innerHTML = getFeaturePanelEmptyHtml();
     railButtons.forEach(button => button.classList.remove('active'));
+    // 清理可能残留的 Feature 详情弹窗 portal
+    if (typeof renderFeatureDetailOverlay === 'function') {
+      renderFeatureDetailOverlay(null);
+    }
     return;
   }
 
   const panel = featurePanels[activeFeaturePanel];
   const panelId = activeFeaturePanel;
+  // 切换到非 hooks 面板时，清理 Feature 详情弹窗
+  if (panelId !== 'hooks' && typeof renderFeatureDetailOverlay === 'function') {
+    renderFeatureDetailOverlay(null);
+  }
   featurePanelBody.dataset.panel = panelId;
   const renderVersion = featurePanelRenderVersion + 1;
   featurePanelRenderVersion = renderVersion;
@@ -87,9 +95,6 @@ function renderFeaturePanel(options = {}) {
 
     // ── 滚动位置保持：innerHTML 替换会重置所有 scrollTop ──
     const _savedBodyScrollTop = featurePanelBody.scrollTop;
-    // .feature-detail-window 是 Feature 详情弹窗的独立滚动容器
-    const _oldDetailWindow = featurePanelBody.querySelector('.feature-detail-window');
-    const _savedDetailScrollTop = _oldDetailWindow ? _oldDetailWindow.scrollTop : 0;
 
     featurePanelBody.innerHTML = panel.render();
     if (featurePanelBody.querySelector('.markdown-body')) {
@@ -98,8 +103,6 @@ function renderFeaturePanel(options = {}) {
 
     // 恢复滚动位置
     featurePanelBody.scrollTop = _savedBodyScrollTop;
-    const _newDetailWindow = featurePanelBody.querySelector('.feature-detail-window');
-    if (_newDetailWindow) _newDetailWindow.scrollTop = _savedDetailScrollTop;
 
     if (focusRestore) {
       const el = featurePanelBody.querySelector(focusRestore.selector);
