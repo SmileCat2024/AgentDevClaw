@@ -44,6 +44,11 @@ function normalizeModelPresetsData(data) {
   return { providers: [], presets: [] };
 }
 
+function resolvePresetApiSurface(protocol, authType, apiSurface) {
+  if (protocol === 'openai' && authType === 'oauth-codex') return 'responses';
+  return cleanSessionText(apiSurface) || 'chat';
+}
+
 function flattenModelPresets(data) {
   const normalized = normalizeModelPresetsData(data);
   const providersByName = new Map();
@@ -55,6 +60,7 @@ function flattenModelPresets(data) {
     const protocol = cleanSessionText(preset?.protocol || preset?.provider) || 'anthropic';
     const providerName = cleanSessionText(preset?.providerName);
     const provider = providerName ? providersByName.get(providerName) : null;
+    const authType = cleanSessionText(provider?.authType || preset?.authType) || '';
     return {
       name: cleanSessionText(preset?.name) || cleanSessionText(preset?.model) || `Preset ${index + 1}`,
       provider: protocol,
@@ -62,7 +68,9 @@ function flattenModelPresets(data) {
       model: cleanSessionText(preset?.model),
       baseUrl: cleanSessionText(provider?.endpoints?.[protocol] || preset?.baseUrl),
       apiKey: cleanSessionText(provider?.apiKey || preset?.apiKey),
-      apiSurface: cleanSessionText(preset?.apiSurface) || 'chat',
+      authType,
+      clientId: cleanSessionText(provider?.clientId || preset?.clientId) || '',
+      apiSurface: resolvePresetApiSurface(protocol, authType, preset?.apiSurface),
       vision: preset?.vision === true,
       thinkingBudgetTokens: Number.isFinite(Number(preset?.thinkingBudgetTokens)) ? Number(preset.thinkingBudgetTokens) : null,
       maxTokens: Number.isFinite(Number(preset?.maxTokens)) ? Number(preset.maxTokens) : null,
@@ -97,7 +105,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
     existingProvidersByName.set(name, provider);
     const endpoints = provider?.endpoints && typeof provider.endpoints === 'object' ? provider.endpoints : {};
     Object.entries(endpoints).forEach(([protocol, endpoint]) => {
-      existingProviderNameBySignature.set(JSON.stringify([cleanSessionText(protocol), cleanSessionText(endpoint), cleanSessionText(provider?.apiKey)]), name);
+      existingProviderNameBySignature.set(JSON.stringify([cleanSessionText(protocol), cleanSessionText(endpoint), cleanSessionText(provider?.apiKey), cleanSessionText(provider?.authType)]), name);
     });
   });
 
@@ -113,14 +121,17 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
     const model = cleanSessionText(rawPreset.model);
     const baseUrl = cleanSessionText(rawPreset.baseUrl);
     const apiKey = cleanSessionText(rawPreset.apiKey);
-    const signature = JSON.stringify([protocol, baseUrl, apiKey]);
+    const authType = cleanSessionText(rawPreset.authType) || '';
+    const clientId = cleanSessionText(rawPreset.clientId) || '';
+    // Signature includes authType so OAuth providers (empty apiKey) don't collide with API-key providers
+    const signature = JSON.stringify([protocol, baseUrl, apiKey, authType]);
 
     let providerName = providersBySignature.get(signature);
     if (!providerName) {
       const requestedName = cleanSessionText(rawPreset.providerName);
       const existingProvider = requestedName ? existingProvidersByName.get(requestedName) : null;
       const existingSignature = existingProvider
-        ? JSON.stringify([protocol, cleanSessionText(existingProvider?.endpoints?.[protocol]), cleanSessionText(existingProvider?.apiKey)])
+        ? JSON.stringify([protocol, cleanSessionText(existingProvider?.endpoints?.[protocol]), cleanSessionText(existingProvider?.apiKey), cleanSessionText(existingProvider?.authType)])
         : '';
       if (requestedName && existingSignature === signature && !usedNames.has(requestedName)) {
         providerName = requestedName;
@@ -135,6 +146,8 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
         apiKey,
         endpoints: {},
       };
+      if (authType) providerRecord.authType = authType;
+      if (clientId) providerRecord.clientId = clientId;
       if (baseUrl) providerRecord.endpoints[protocol] = baseUrl;
       providers.push(providerRecord);
     }
@@ -143,7 +156,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       name,
       providerName,
       protocol,
-      apiSurface: cleanSessionText(rawPreset.apiSurface) || 'chat',
+      apiSurface: resolvePresetApiSurface(protocol, authType, rawPreset.apiSurface),
       vision: rawPreset?.vision === true,
       model,
       thinkingBudgetTokens: Number.isFinite(Number(rawPreset.thinkingBudgetTokens)) ? Number(rawPreset.thinkingBudgetTokens) : null,
@@ -555,5 +568,6 @@ export {
   normalizeModelPresetsData,
   flattenModelPresets,
   buildStructuredModelPresets,
+  resolvePresetApiSurface,
   normalizeSpeechPreset,
 };

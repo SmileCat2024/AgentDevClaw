@@ -5160,3 +5160,103 @@ body[data-theme="light"] .settings-checkbox {
   font-size: 13px;
 }
 
+/* ── OAuth login area ─────────────────────────────────────────── */
+
+#oauth-section {
+  padding: 2px 0;
+}
+
+.oauth-login-box {
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+  margin-top: 4px;
+}
+
+body[data-theme="light"] .oauth-login-box {
+  border-color: #e0e0e0;
+  background: #f9f9f9;
+}
+
+.oauth-user-code {
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(99, 145, 255, 0.1);
+  color: #6391ff;
+  text-align: center;
+  margin: 8px 0;
+  user-select: all;
+  cursor: text;
+}
+
+body[data-theme="light"] .oauth-user-code {
+  background: rgba(99, 145, 255, 0.08);
+}
+
+.oauth-status-text {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.oauth-status-text a {
+  color: var(--accent-primary, #6391ff);
+  text-decoration: none;
+}
+
+.oauth-status-text a:hover {
+  text-decoration: underline;
+}
+
+.oauth-btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.oauth-btn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  white-space: nowrap;
+}
+
+.oauth-btn:hover {
+  border-color: rgba(99, 145, 255, 0.4);
+  background: rgba(99, 145, 255, 0.08);
+}
+
+body[data-theme="light"] .oauth-btn {
+  border-color: #d0d0d0;
+  background: #f5f5f5;
+}
+
+body[data-theme="light"] .oauth-btn:hover {
+  border-color: #6391ff;
+  background: rgba(99, 145, 255, 0.06);
+}
+
+.oauth-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(99, 145, 255, 0.15);
+  color: #6391ff;
+  margin-left: 4px;
+}
+

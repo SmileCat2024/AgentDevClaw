@@ -85,6 +85,8 @@ describe('Server module imports', () => {
       '../server/routes/agent-connected.js',
       '../server/routes/agent-startup.js',
       '../server/routes/agent-lifecycle.js',
+      '../server/routes/oauth-codex.js',
+      '../server/routes/proxy-config.js',
     ];
 
     for (const mod of modules) {
@@ -102,6 +104,7 @@ describe('Server module imports', () => {
       '../server/runtime-call-envelope.js',
       '../server/usage-ledger.js',
       '../server/claw-mcp.js',
+      '../server/oauth-codex.js',
     ];
 
     for (const mod of modules) {
@@ -168,6 +171,32 @@ describe('Route registration smoke test', () => {
     const express = expressFactory();
     setupUsageRoutes(app, express);
     assert.ok(routes.length > 0, 'Should register at least one route');
+  });
+
+  it('setupOAuthCodexRoutes should register 5 endpoints', async () => {
+    const { setupOAuthCodexRoutes } = await import('../server/routes/oauth-codex.js');
+    const { app, routes } = createMockApp();
+    const express = expressFactory();
+    setupOAuthCodexRoutes(app, express);
+
+    assert.ok(routes.length >= 5, `Expected >=5 routes, got ${routes.length}`);
+    assert.ok(routes.some(r => r.method === 'post' && r.path === '/protoclaw/oauth/codex/start'));
+    assert.ok(routes.some(r => r.method === 'get' && r.path === '/protoclaw/oauth/codex/status/:sessionId'));
+    assert.ok(routes.some(r => r.method === 'get' && r.path === '/protoclaw/oauth/codex/tokens/:providerName'));
+    assert.ok(routes.some(r => r.method === 'delete' && r.path === '/protoclaw/oauth/codex/tokens/:providerName'));
+    assert.ok(routes.some(r => r.method === 'post' && r.path === '/protoclaw/oauth/codex/refresh/:providerName'));
+    assert.ok(routes.some(r => r.method === 'get' && r.path === '/protoclaw/oauth/codex/defaults'));
+  });
+
+  it('setupProxyConfigRoutes should register config and connectivity endpoints', async () => {
+    const { setupProxyConfigRoutes } = await import('../server/routes/proxy-config.js');
+    const { app, routes } = createMockApp();
+    const express = expressFactory();
+    setupProxyConfigRoutes(app, express);
+
+    assert.ok(routes.some(r => r.method === 'get' && r.path === '/protoclaw/proxy_config'));
+    assert.ok(routes.some(r => r.method === 'put' && r.path === '/protoclaw/proxy_config'));
+    assert.ok(routes.some(r => r.method === 'post' && r.path === '/protoclaw/proxy_test'));
   });
 });
 

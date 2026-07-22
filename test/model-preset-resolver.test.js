@@ -42,6 +42,15 @@ describe('model-preset-resolver', () => {
       }
     });
 
+    it('forces the configured Codex OAuth preset onto the Responses transport', () => {
+      const result = resolveModelPresetLLM('Codex GPT-5.6');
+      if (result) {
+        assert.equal(result.authType, 'oauth-codex');
+        assert.equal(result.apiSurface, 'responses');
+        assert.equal(result.llm.constructor.name, 'OpenAIResponsesLLM');
+      }
+    });
+
     it('returns null when provider is missing (preset references nonexistent provider)', () => {
       // All presets in the real config have valid providers, so this tests the
       // hypothetical path by verifying the function handles bad data gracefully.

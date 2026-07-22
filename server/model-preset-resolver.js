@@ -9,6 +9,7 @@ import { join, resolve, dirname } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { createLLM } from 'agentdev';
+import { buildCodexOAuthHeaders, resolveAccessTokenSync } from './oauth-codex.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,14 +39,32 @@ export function resolveModelPresetLLM(presetName) {
     }
     const protocol = preset.protocol || 'anthropic';
     const baseUrl = provider.endpoints?.[protocol] || '';
-    const apiKey = provider.apiKey || '';
+
+    // OAuth provider: resolve access_token from token store
+    const isOAuth = provider.authType === 'oauth-codex';
+    let apiKey;
+    if (isOAuth) {
+      apiKey = resolveAccessTokenSync(provider.name, provider.clientId) || '';
+      if (!apiKey) {
+        console.warn(`[ModelPreset] OAuth provider "${provider.name}" has no stored token — login required`);
+        return null;
+      }
+    } else {
+      apiKey = provider.apiKey || '';
+    }
+
     if (!baseUrl || !apiKey || !preset.model) {
       console.warn(`[ModelPreset] Incomplete config for preset "${presetName}": baseUrl=${!!baseUrl} apiKey=${!!apiKey} model=${!!preset.model}`);
       return null;
     }
+    // ChatGPT-managed Codex authentication is a Responses API transport.
+    // Force the runtime invariant even for presets saved by older clients.
     const apiSurface = protocol === 'openai'
-      ? (preset.apiSurface || 'chat')
+      ? (isOAuth ? 'responses' : (preset.apiSurface || 'chat'))
       : undefined;
+    const customHeaders = isOAuth
+      ? buildCodexOAuthHeaders(apiKey, preset.customHeaders)
+      : preset.customHeaders;
     const llm = createLLM({
       provider: protocol,
       model: preset.model,
@@ -55,11 +74,11 @@ export function resolveModelPresetLLM(presetName) {
       ...(apiSurface ? { apiSurface } : {}),
       ...(preset.maxTokens ? { maxTokens: preset.maxTokens } : {}),
       ...(preset.vision === true ? { vision: true } : {}),
-      ...(Array.isArray(preset.customHeaders) && preset.customHeaders.length > 0
-        ? { customHeaders: preset.customHeaders }
+      ...(Array.isArray(customHeaders) && customHeaders.length > 0
+        ? { customHeaders }
         : {}),
     });
-    console.log(`[ModelPreset] Resolved preset "${presetName}" => ${preset.model} (${protocol})`);
+    console.log(`[ModelPreset] Resolved preset "${presetName}" => ${preset.model} (${protocol}${isOAuth ? ' / OAuth' : ''})`);
     return {
       llm,
       modelName: preset.model,
@@ -67,6 +86,7 @@ export function resolveModelPresetLLM(presetName) {
       providerName: provider.name || preset.providerName || '',
       provider: protocol,
       protocol,
+      authType: isOAuth ? 'oauth-codex' : '',
       vision: preset.vision === true,
       contextLength: Number.isFinite(Number(preset.contextLength)) && Number(preset.contextLength) > 0
         ? Number(preset.contextLength) : null,
