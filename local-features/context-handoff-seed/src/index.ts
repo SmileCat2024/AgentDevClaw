@@ -100,9 +100,9 @@ function buildSummarySeedMessage(handoff: ContextHandoffSeedPayload): string {
  * messages[], causing enrichedMessages to miss the injected content. This
  * broke Feature queries, index rebuilds, and snapshot consistency.
  *
- * tool messages fall back to add() because addToolMessage expects a
- * (ToolCall, ToolExecResult) pair that cannot be reconstructed from a raw
- * seed message's pre-serialized content string.
+ * tool messages use addSerializedToolMessage() because their content is already
+ * serialized in the handoff package and must be replayed without lossy parsing.
+ * This also keeps messages[] / enrichedMessages[] synchronized and preserves images.
  */
 function injectSeedMessage(
   context: CallStartContext['context'],
@@ -128,9 +128,10 @@ function injectSeedMessage(
       },
       turn,
     );
+  } else if (role === 'tool' && message.toolCallId) {
+    context.addSerializedToolMessage(message.toolCallId, content, turn, message.images);
   } else {
-    // tool and other roles: fallback to add() which only updates messages[]
-    context.add({ role, content, turn, toolCallId: message.toolCallId } as any);
+    context.add({ role, content, turn, toolCallId: message.toolCallId, images: message.images } as any);
   }
 }
 

@@ -25,8 +25,8 @@ function createFeature() {
 }
 
 function createContextRecorder() {
-  const messages: Array<{ role: string; content: string; turn?: number }> = [];
-  const enrichedMessages: Array<{ role: string; content: string; turn?: number }> = [];
+  const messages: Array<{ role: string; content: string; turn?: number; toolCallId?: string; images?: any[] }> = [];
+  const enrichedMessages: Array<{ role: string; content: string; turn?: number; toolCallId?: string; images?: any[] }> = [];
   const context = {
     add(msg: any): void {
       messages.push({ role: msg.role, content: msg.content, turn: msg.turn });
@@ -44,6 +44,11 @@ function createContextRecorder() {
     addAssistantMessage(response: { content: string }, turn: number): void {
       messages.push({ role: 'assistant', content: response.content, turn });
       enrichedMessages.push({ role: 'assistant', content: response.content, turn });
+    },
+    addSerializedToolMessage(toolCallId: string, content: string, turn: number, images?: any[]): void {
+      const message = { role: 'tool', content, turn, toolCallId, images };
+      messages.push(message);
+      enrichedMessages.push(message);
     },
   };
   return { messages, enrichedMessages, context };
@@ -200,14 +205,16 @@ describe('ContextHandoffSeedFeature', () => {
       'assistant seed must reach enrichedMessages via addAssistantMessage');
   });
 
-  it('should fallback to add() for tool seed messages (enrichedMessages not synced)', async () => {
+  it('should replay tool seed messages with images into both context views', async () => {
+    const images = [{ path: 'managed/hash.png', mediaType: 'image/png', source: 'original.png' }];
+    const content = '{"success":true,"result":"done"}';
     const feature = new ContextHandoffSeedFeature({
       handoff: {
         packageId: 'pkg-tool',
         sourceSessionId: 'session-tool',
         mode: 'trim-transcript',
         seedMessages: [
-          { role: 'tool', content: '{"success":true,"result":"done"}', turn: 1, toolCallId: 'tc-1' },
+          { role: 'tool', content, turn: 1, toolCallId: 'tc-1', images },
         ],
       },
     });
@@ -221,11 +228,11 @@ describe('ContextHandoffSeedFeature', () => {
     } as any);
 
     assert.equal(messages.length, 1);
-    assert.equal(messages[0].role, 'tool');
-    // tool messages fall back to add() which does not sync enrichedMessages.
-    // This is expected and documented — addToolMessage requires a
-    // (ToolCall, ToolExecResult) pair not reconstructable from raw content.
-    assert.equal(enrichedMessages.length, 0);
+    assert.equal(enrichedMessages.length, 1);
+    assert.deepEqual(messages[0], {
+      role: 'tool', content, turn: 1, toolCallId: 'tc-1', images,
+    });
+    assert.deepEqual(enrichedMessages[0], messages[0]);
   });
 
   it('should handle mixed-role seed messages with correct enriched sync', async () => {
@@ -254,8 +261,7 @@ describe('ContextHandoffSeedFeature', () => {
 
     // 5 messages total
     assert.equal(messages.length, 5);
-    // 4 enriched (system + user + assistant + user — tool falls back to add())
-    assert.equal(enrichedMessages.length, 4,
-      'only tool message should be missing from enrichedMessages');
+    assert.equal(enrichedMessages.length, 5,
+      'all replayed messages, including tool results, should reach enrichedMessages');
   });
 });

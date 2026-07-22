@@ -107,6 +107,30 @@ describe('trim-compact fixes', () => {
       assert.ok(foldNotes.length > 0, 'should have fold notes for folded turns');
     });
 
+    it('preserves tool-result images only for explicitly preserved turns', () => {
+      const managedImage = {
+        path: 'C:/managed-images/hash.png',
+        mediaType: 'image/png',
+        source: 'C:/workspace/original.png',
+      };
+      const messages = [
+        { role: 'user', content: 'read old image', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ id: 'tc_old', name: 'read_image', arguments: '{}' }] },
+        { role: 'tool', toolCallId: 'tc_old', content: '{"success":true}', turn: 0, images: [managedImage] },
+        { role: 'user', content: 'read current image', turn: 1 },
+        { role: 'assistant', content: '', turn: 1, toolCalls: [{ id: 'tc_keep', name: 'read_image', arguments: '{}' }] },
+        { role: 'tool', toolCallId: 'tc_keep', content: '{"success":true}', turn: 1, images: [managedImage] },
+      ];
+      const policy = normalizeExportPolicy({ preservedTurns: [1] });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      assert.ok(!seedMessages.some(m => m.role === 'tool' && m.toolCallId === 'tc_old'),
+        'folded turn must not retain the old tool image');
+      const preserved = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc_keep');
+      assert.ok(preserved, 'explicitly preserved tool result should survive trim');
+      assert.deepEqual(preserved.images, [managedImage]);
+    });
+
     it('preservedTurns takes precedence over fullPreserveFromTurn', () => {
       const messages = [
         { role: 'user', content: 'msg0', turn: 0 },

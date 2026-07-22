@@ -13,6 +13,7 @@ import { WecomBot } from '@agentdev/wecom-bot';
 import { RokidBot } from '@agentdev/rokid-bot';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
+import { ImageReaderFeature } from '@agentdev/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
@@ -31,6 +32,7 @@ const PROTOCLAW_ROOT = join(__dirname, '..', '..', '..');
 const SERVER_ORIGIN = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
 const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
+const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
 
 function readSystemFeatureConfig() {
   if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
@@ -393,6 +395,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     if (isExploration) {
       this.use(new WebSearchFeature());
       this.use(new ShellFeature());
+      this.use(new ImageReaderFeature({ workspaceDir: process.cwd(), storageDir: IMAGE_STORAGE_DIR }));
     } else {
       // 主模式：IM 门户代理能力
       this.qqbotFeature = new QQBotFeature({
@@ -428,6 +431,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
 
       this.use(new WebSearchFeature());
       this.use(new ShellFeature());
+      this.use(new ImageReaderFeature({ workspaceDir: process.cwd(), storageDir: IMAGE_STORAGE_DIR }));
       this.use(new IMOperatorFeature());
       this.use(new ConversationExportFeature());
     }

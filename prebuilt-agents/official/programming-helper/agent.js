@@ -13,6 +13,7 @@ import { AuditFeature } from '@agentdev/audit-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
+import { ImageReaderFeature } from '@agentdev/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';
@@ -29,6 +30,7 @@ const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const EXPLORE_PROMPT_PATH = join(PROMPTS_DIR, 'explore.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'programming-helper', 'state.json');
+const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
 const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
 const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
@@ -134,6 +136,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
       this.use(new ShellFeature({ workspaceDir }));
       this.use(new WebSearchFeature());
       this.use(new MemoryFeature({ workspaceDir }));
+      this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
     } else {
       this.use(new ControlledTodoFeature({
         reminderTemplate: TODO_REMINDER_PROMPT_PATH,
@@ -146,6 +149,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
       this.use(new WebSearchFeature());
       this.use(new MemoryFeature({ workspaceDir }));
       this.use(new ShellFeature({ workspaceDir }));
+      this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
 
       this.use(new LspFeature({ workdir: workspaceDir }));
 

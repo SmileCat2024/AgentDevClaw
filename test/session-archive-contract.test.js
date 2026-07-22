@@ -7,6 +7,14 @@ const appMain = fs.readFileSync(new URL('../public/src/app-main.js', import.meta
 const workspaceActions = fs.readFileSync(new URL('../public/src/modules/workspace-actions.js', import.meta.url), 'utf8');
 
 describe('archive-and-replace contract', () => {
+  it('branches raw message objects so image attachments before the cut remain intact', () => {
+    const start = sessionRoutes.indexOf("app.post('/protoclaw/sessions/branch'");
+    const end = sessionRoutes.indexOf("app.get('/protoclaw/session_summary'", start);
+    const route = sessionRoutes.slice(start, end);
+    assert.match(route, /const branchMessages = rawMessages\.slice\(0, cutMsgIndexEnd \+ 1\)/);
+    assert.match(route, /context:\s*\{[\s\S]*messages:\s*branchMessages,[\s\S]*enrichedMessages:\s*branchEnriched/);
+  });
+
   it('archives a branch source before sending the success response', () => {
     const start = sessionRoutes.indexOf("app.post('/protoclaw/sessions/branch'");
     const end = sessionRoutes.indexOf("app.get('/protoclaw/session_summary'", start);

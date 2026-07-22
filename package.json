@@ -23,6 +23,7 @@
   "dependencies": {
     "@agentdev/audio-feedback-feature": "file:resources/features/agentdev-audio-feedback-feature-0.1.0.tgz",
     "@agentdev/audit-feature": "file:resources/features/agentdev-audit-feature-0.1.0.tgz",
+    "@agentdev/image-reader-feature": "file:resources/features/agentdev-image-reader-feature-0.1.0.tgz",
     "@agentdev/lsp-feature": "file:resources/features/agentdev-lsp-feature-0.1.0.tgz",
     "@agentdev/memory-feature": "file:resources/features/agentdev-memory-feature-0.1.0.tgz",
     "@agentdev/plugin-compat-feature": "file:resources/features/agentdev-plugin-compat-feature-0.1.0.tgz",
