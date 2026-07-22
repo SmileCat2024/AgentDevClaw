@@ -72,6 +72,7 @@ export function resolveModelPresetLLM(presetName) {
       baseUrl,
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
       ...(apiSurface ? { apiSurface } : {}),
+      ...(isOAuth ? { responsesProfile: 'codex' } : {}),
       ...(preset.maxTokens ? { maxTokens: preset.maxTokens } : {}),
       ...(preset.vision === true ? { vision: true } : {}),
       ...(Array.isArray(customHeaders) && customHeaders.length > 0

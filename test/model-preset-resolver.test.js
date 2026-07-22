@@ -48,6 +48,7 @@ describe('model-preset-resolver', () => {
         assert.equal(result.authType, 'oauth-codex');
         assert.equal(result.apiSurface, 'responses');
         assert.equal(result.llm.constructor.name, 'OpenAIResponsesLLM');
+        assert.equal(result.llm.responsesProfile, 'codex');
       }
     });
 
