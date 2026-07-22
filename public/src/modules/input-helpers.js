@@ -32,7 +32,7 @@
  * 依赖 app-main.js:
  *   poll, renderInputRequests, syncCollapseStates
  * 依赖 session-view-state.js:
- *   applySessionViewPatch
+ *   applySessionViewPatch, readCurrentSessionViewState
  */
 
 function syncRollbackActionButtons() {
@@ -217,9 +217,9 @@ function hasConversationProcessContent(messages = []) {
   );
 }
 
-function updateChatProcessToggle() {
+function updateChatProcessToggle(messages = readCurrentSessionViewState().messages) {
   if (!chatProcessToggle) return;
-  const hasProcess = hasConversationProcessContent(currentMessages) && !shouldRenderWorkspaceSurface();
+  const hasProcess = hasConversationProcessContent(messages) && !shouldRenderWorkspaceSurface();
   chatProcessToggle.classList.toggle('hidden', !hasProcess);
   if (!hasProcess) return;
   chatProcessToggle.classList.toggle('active', showChatProcess);

@@ -14,10 +14,11 @@
  *   - getSessionContextLength, getSessionCompressRatio (session-ui.js)
  *   - escapeHtml (app-ui.js 域 O)
  *   - formatRelativeTime, formatWorkspaceDate (app-core.js)
- *   - currentOverviewSnapshot, followLatestEnabled, currentLanguage, container (app-core.js 全局状态)
+ *   - readCurrentSessionViewState (session-view-state.js)
+ *   - followLatestEnabled, currentLanguage, container (app-core.js 全局状态)
  */
 
-function updateChatContextBar() {
+function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   var bar = document.getElementById('chat-context-bar');
   if (!bar) return;
   var prevHtml = bar.innerHTML;
@@ -72,18 +73,19 @@ function updateChatContextBar() {
   var used = 0;
   var isLastRequest = false;
   var runtimeRecord = typeof getCurrentRuntimeRecord === 'function' ? getCurrentRuntimeRecord() : null;
+  var overview = viewState && viewState.overview || {};
 
   // 模型名：有 runtime 时优先从 overview 实时取，回退到 session 元数据
   var modelName = '';
-  if (runtimeRecord && currentOverviewSnapshot && currentOverviewSnapshot.modelName) {
-    modelName = currentOverviewSnapshot.modelName;
+  if (runtimeRecord && overview.modelName) {
+    modelName = overview.modelName;
   }
   if (!modelName && activeSession) {
     modelName = activeSession.modelName || '';
   }
 
   if (runtimeRecord) {
-    var liveUsage = currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.lastRequestUsage;
+    var liveUsage = overview.usageStats && overview.usageStats.lastRequestUsage;
     if (liveUsage && liveUsage.inputTokens) {
       used = liveUsage.inputTokens;
       isLastRequest = true;
@@ -126,10 +128,10 @@ function updateChatContextBar() {
 
   // 存储详细数据供 hover popup 使用
   var detailData = { modelName: modelName || '', used: used, contextLength: contextLength, compressRatio: compressRatio, isLastRequest: isLastRequest };
-  var totalUsage = (currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.totalUsage) || {};
+  var totalUsage = (overview.usageStats && overview.usageStats.totalUsage) || {};
   var lastReq = null;
   if (runtimeRecord) {
-    lastReq = currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.lastRequestUsage;
+    lastReq = overview.usageStats && overview.usageStats.lastRequestUsage;
   }
   if (!lastReq && activeSession && activeSession.tokenUsage) {
     lastReq = activeSession.tokenUsage.lastRequestUsage || null;
@@ -140,7 +142,7 @@ function updateChatContextBar() {
   detailData.cacheRead = totalUsage.cacheReadTokens || 0;
   detailData.reasoningTokens = totalUsage.reasoningTokens || 0;
   detailData.lastRequestUsage = lastReq;
-  detailData.totalRequests = (currentOverviewSnapshot && currentOverviewSnapshot.usageStats && currentOverviewSnapshot.usageStats.totalRequests) || 0;
+  detailData.totalRequests = (overview.usageStats && overview.usageStats.totalRequests) || 0;
   window._ccbDetailData = detailData;
 
   // 检查阈限压力等级，在等级跨越时触发 Toast 提醒

@@ -46,8 +46,19 @@ function commitSessionViewState(token, apply) {
   return true;
 }
 
+/**
+ * Capture the selected runtime's logical view for one synchronous render.
+ *
+ * The envelope is frozen and identity-bound. Nested values are replacement
+ * snapshots owned by this module and are read-only by contract: consumers may
+ * retain or inspect them, but must submit changes through apply/commit patch.
+ * Keeping the envelope shallow avoids cloning large transcripts on every
+ * render while still preventing consumers from replacing snapshot fields.
+ */
 function readCurrentSessionViewState() {
   return Object.freeze({
+    runtimeId: normalizeSessionViewRuntimeId(currentRuntimeAgentId),
+    switchEpoch: _switchEpoch,
     messages: currentMessages,
     inputRequests: currentInputRequests,
     toolRenderConfigs,
@@ -98,8 +109,7 @@ function applySessionViewPatch(patch) {
 /**
  * Canonical writer for identity-bound loads, polling, cache restoration and
  * surface resets. It deliberately stores no mirror object: existing globals
- * remain the compatibility read surface while interaction modules migrate in
- * later steps.
+ * remain compatibility storage while consumers migrate to the read-only view.
  */
 function commitSessionViewPatch(token, patch, afterCommit) {
   if (afterCommit !== undefined && typeof afterCommit !== 'function') {

@@ -250,6 +250,47 @@ test('session view token rejects an older visit to the same runtime', () => {
   assert.equal(applied, true);
 });
 
+test('session view read snapshots are frozen and identity-bound', () => {
+  const sandbox = {
+    currentRuntimeAgentId: 'A',
+    _switchEpoch: 7,
+    currentMessages: [{ role: 'assistant', content: 'old' }],
+    currentInputRequests: [{ requestId: 'old-request' }],
+    toolRenderConfigs: {},
+    TOOL_NAMES: {},
+    currentHookInspector: {},
+    currentOverviewSnapshot: {},
+    currentTodoPlan: {},
+    currentRuntimeConnected: true,
+    window: { lastInputRequests: [] },
+    setCurrentHookInspector: (value) => { sandbox.currentHookInspector = value; },
+    setCurrentOverviewSnapshot: (value) => { sandbox.currentOverviewSnapshot = value; },
+    setCurrentTodoPlan: (value) => { sandbox.currentTodoPlan = value; },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `${sessionViewStateSource}\n`
+      + 'globalThis.__read = readCurrentSessionViewState;\n'
+      + 'globalThis.__apply = applySessionViewPatch;',
+    sandbox,
+  );
+
+  const previous = sandbox.__read();
+  sandbox.__apply({
+    messages: [{ role: 'assistant', content: 'new' }],
+    inputRequests: [{ requestId: 'new-request' }],
+  });
+  const current = sandbox.__read();
+
+  assert.equal(Object.isFrozen(previous), true);
+  assert.equal(previous.runtimeId, 'A');
+  assert.equal(previous.switchEpoch, 7);
+  assert.equal(previous.messages[0].content, 'old');
+  assert.equal(current.messages[0].content, 'new');
+  assert.equal(current.inputRequests[0].requestId, 'new-request');
+  assert.equal(sandbox.window.lastInputRequests[0].requestId, 'new-request');
+});
+
 test('session view ownership module loads before app-main', () => {
   const boundaryIndex = indexSource.indexOf('/modules/session-view-state.js');
   const mainIndex = indexSource.indexOf('/app-main.js');

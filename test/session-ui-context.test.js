@@ -5,8 +5,13 @@ import vm from 'node:vm';
 
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
+const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
 const sessionViewStateSource = fs.readFileSync(
   new URL('../public/src/modules/session-view-state.js', import.meta.url),
+  'utf8',
+);
+const chatContextBarSource = fs.readFileSync(
+  new URL('../public/src/modules/chat-context-bar.js', import.meta.url),
   'utf8',
 );
 const voiceInputSource = fs.readFileSync(new URL('../public/src/modules/voice-input.js', import.meta.url), 'utf8');
@@ -33,6 +38,7 @@ function createCoreContext() {
     currentTodoPlan: {},
     currentTodoPlanSignature: '',
     currentRuntimeConnected: true,
+    _switchEpoch: 0,
     toolRenderConfigs: {},
     TOOL_NAMES: {},
     allAgents: [],
@@ -320,4 +326,85 @@ test('chat render signature changes when equal-length Chinese content changes', 
   const second = api.buildChatRenderSignature([{ role: 'user', content: '问题安全' }]);
 
   assert.notEqual(first, second);
+});
+
+test('input renderer is a read-only consumer of session view state', () => {
+  const renderBlock = sourceBetween(
+    mainSource,
+    'function renderInputRequests',
+    '\n// ── Persistent Input',
+  );
+
+  assert.doesNotMatch(renderBlock, /applySessionViewPatch\s*\(/);
+  assert.match(renderBlock, /readCurrentSessionViewState\(\)\.inputRequests/);
+});
+
+test('main render boundary consumes one captured session view', () => {
+  const renderBlock = sourceBetween(
+    uiSource,
+    'function renderCurrentMainView',
+    '\nfunction resetRuntimeBackedSurfaceState',
+  );
+
+  assert.match(renderBlock, /viewState\s*=\s*readCurrentSessionViewState\(\)/);
+  assert.match(renderBlock, /renderInputRequests\(viewState\.inputRequests\)/);
+  assert.match(renderBlock, /render\(viewState\.messages\)/);
+  assert.match(renderBlock, /updateChatContextBar\(viewState\)/);
+  assert.doesNotMatch(renderBlock, /\bcurrentMessages\b|\bcurrentInputRequests\b/);
+});
+
+test('context bar renders one supplied session view snapshot', () => {
+  const classNames = new Set();
+  const bar = {
+    innerHTML: '',
+    classList: {
+      add: (name) => classNames.add(name),
+      remove: (name) => classNames.delete(name),
+      contains: (name) => classNames.has(name),
+    },
+  };
+  const context = {
+    currentOverviewSnapshot: {
+      modelName: 'stale-model',
+      usageStats: { lastRequestUsage: { inputTokens: 75 } },
+    },
+    document: {
+      getElementById: (id) => id === 'chat-context-bar' ? bar : null,
+    },
+    window: {},
+    shouldRenderWorkspaceSurface: () => false,
+    getRuntimeAwareAgentRecord: () => ({
+      workspace_sessions: { sessions: [{}] },
+    }),
+    getCurrentRuntimeRecord: () => ({}),
+    getSessionContextLength: () => 100,
+    getSessionCompressRatio: () => 80,
+    escapeHtml: (value) => String(value),
+  };
+  vm.createContext(context);
+  const renderBlock = sourceBetween(
+    chatContextBarSource,
+    'function updateChatContextBar',
+    '\n// ── Context pressure toast trigger',
+  );
+  vm.runInContext(
+    `${renderBlock}\nglobalThis.__updateChatContextBar = updateChatContextBar;`,
+    context,
+  );
+
+  context.__updateChatContextBar({
+    overview: {
+      modelName: 'snapshot-model',
+      usageStats: {
+        lastRequestUsage: { inputTokens: 25 },
+        totalUsage: { inputTokens: 40, outputTokens: 10 },
+        totalRequests: 2,
+      },
+    },
+  });
+
+  assert.match(bar.innerHTML, /snapshot-model/);
+  assert.match(bar.innerHTML, /25%/);
+  assert.equal(context.window._ccbDetailData.used, 25);
+  assert.equal(context.window._ccbDetailData.totalInput, 40);
 });

@@ -1203,7 +1203,7 @@ function isEditingWorkspaceForm() {
   return Boolean(active.closest('.workspace-form') || active.closest('.project-docset-requirement-form'));
 }
 
-function renderCurrentMainView() {
+function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   const agent = getCurrentAgentRecord();
   // ── 根据表面类型控制 rail button 可见性 ──
   const isWorkGroup = !!(agent && agent.id === 'work-group');
@@ -1247,7 +1247,7 @@ function renderCurrentMainView() {
   }
   ensureChatViewportObservers();
   renderWorkspaceTabs(agent);
-  renderInputRequests(currentInputRequests);
+  renderInputRequests(viewState.inputRequests);
   if (shouldRenderWorkspaceSurface(agent)) {
     cancelChatScrollSettlement();
     // Capture before renderWorkspaceSurface consumes and resets it
@@ -1320,9 +1320,9 @@ function renderCurrentMainView() {
       });
     }
     updateProjectDocsetChrome(agent);
-    updateChatContextBar();
+    updateChatContextBar(viewState);
     if (typeof updateChatProcessToggle === 'function') {
-      updateChatProcessToggle();
+      updateChatProcessToggle(viewState.messages);
     }
     updateFollowLatestButton();
     requestAnimationFrame(updateAssemblySideRailPosition);
@@ -1331,25 +1331,25 @@ function renderCurrentMainView() {
 
   // Keep lastRenderedWorkspaceHtml intact so returning from chat to workspace
   // can skip re-render if workspace data hasn't changed.
-  if (currentMessages.length === 0) {
+  if (viewState.messages.length === 0) {
     cancelChatScrollSettlement();
     runWithSuppressedChatViewportObservers(() => {
       container.innerHTML = getEmptyStateHtml();
     }, 180);
     updateProjectDocsetChrome(agent);
-    updateChatContextBar();
+    updateChatContextBar(viewState);
     if (typeof updateChatProcessToggle === 'function') {
-      updateChatProcessToggle();
+      updateChatProcessToggle(viewState.messages);
     }
     updateFollowLatestButton();
     return;
   }
 
-  render(currentMessages);
-  updateChatContextBar();
+  render(viewState.messages);
+  updateChatContextBar(viewState);
   updateProjectDocsetChrome(agent);
   if (typeof updateChatProcessToggle === 'function') {
-    updateChatProcessToggle();
+    updateChatProcessToggle(viewState.messages);
   }
   requestAnimationFrame(updateAssemblySideRailPosition);
 }

@@ -117,7 +117,7 @@ function toEpochMs(value) {
   return isNaN(parsed) ? 0 : parsed;
 }
 
-function getInputSurfaceMode(requests = currentInputRequests || []) {
+function getInputSurfaceMode(requests = readCurrentSessionViewState().inputRequests) {
   const chatActive = isChatSurfaceActive();
   if (!chatActive) return 'hidden';
   if (readOnlyMode) return 'readonly';
@@ -2288,7 +2288,7 @@ async function loadAgentData(agentId) {
       if (current.messages.length > 0) clearChatLoadingSession();
       renderInputRequests(current.inputRequests);
       updateRollbackActionVisibility();
-      renderCurrentMainView();
+      renderCurrentMainView(current);
     });
     if (!committed) {
       return;
@@ -2580,20 +2580,20 @@ async function runPollCycle() {
           // 有新消息：只追加新的
           const newMessages = nextMessages.slice(previousMessages.length);
           if (shouldRenderWorkspaceSurface()) {
-            renderCurrentMainView();
+            renderCurrentMainView(current);
           } else {
             appendNewMessages(newMessages, nextMessages.length - newMessages.length);
           }
         } else {
           // 消息减少，或消息变多但前缀已变化：完全重建。
-          renderCurrentMainView();
+          renderCurrentMainView(current);
         }
       } else {
         if (firstChangedIndex >= 0) {
           // Rollback + partial compact can replace the middle of the transcript while
           // keeping the same length after the summary reminder is inserted.
           if (shouldRenderWorkspaceSurface() || firstChangedIndex < nextMessages.length - 1) {
-            renderCurrentMainView();
+            renderCurrentMainView(current);
           } else {
             // 最后一条消息变化：替换最后一条（避免滚动重置）
             updateLastMessage(nextMessages[nextMessages.length - 1]);
@@ -2637,7 +2637,7 @@ async function runPollCycle() {
     if (overviewChanged) metadataPatch.overview = nextOverview;
     if (todoChanged) metadataPatch.todoPlan = nextTodoPlan;
     if (inputChanged) metadataPatch.inputRequests = inputRequests;
-    const metadataCommitted = commitSessionViewPatch(pollToken, metadataPatch, () => {
+    const metadataCommitted = commitSessionViewPatch(pollToken, metadataPatch, ({ current }) => {
 
       // 当目标任务进入终态时，自动清除中断标记
       let interruptCleared = false;
@@ -2658,7 +2658,7 @@ async function runPollCycle() {
           renderFeaturePanel();
         }
         if (typeof updateChatContextBar === 'function') {
-          updateChatContextBar();
+          updateChatContextBar(current);
         }
       }
       if (todoChanged) {
@@ -2680,7 +2680,7 @@ async function runPollCycle() {
         clearPartialCompactState();
       }
       if (inputChanged) {
-        renderInputRequests(inputRequests);
+        renderInputRequests(current.inputRequests);
         updateRollbackActionVisibility();
       } else if (isChatSurfaceActive()) {
         _syncPersistentInputUi(pollRuntimeId);
@@ -2838,7 +2838,7 @@ function getInputRenderSignature(requests, renderMode) {
   return `${renderMode}|${runtimeId}`;
 }
 
-function renderInputRequests(requests) {
+function renderInputRequests(requests = readCurrentSessionViewState().inputRequests) {
   const inputContainer = document.getElementById('user-input-container');
   if (!inputContainer) return;
 
@@ -2846,7 +2846,6 @@ function renderInputRequests(requests) {
   if (_rollbackDialogOpen) return;
 
   const chatViewportTopBefore = container.scrollTop;
-  applySessionViewPatch({ inputRequests: requests });
   const chatActive = isChatSurfaceActive();
   const renderMode = getInputSurfaceMode(requests);
   const signature = getInputRenderSignature(requests, renderMode);
