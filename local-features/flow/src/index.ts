@@ -234,7 +234,14 @@ export class FlowFeature implements AgentFeature {
           },
           required: [],
         },
-        execute: async ({ result, nextNodeId, nextNodeName, interactionRequest }, runtimeContext?: CompleteNodeRuntimeContext) => {
+        execute: async (args, context) => {
+          const { result, nextNodeId, nextNodeName, interactionRequest } = args as {
+            result?: unknown;
+            nextNodeId?: string;
+            nextNodeName?: string;
+            interactionRequest?: FlowInteractionRequestPayload;
+          };
+          const runtimeContext = context as CompleteNodeRuntimeContext | undefined;
           if (!this.activeFlow || !this.currentNodeId) {
             return { success: false, error: '当前不在任何工作流中。' };
           }

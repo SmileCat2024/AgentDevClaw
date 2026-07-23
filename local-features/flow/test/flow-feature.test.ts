@@ -67,8 +67,9 @@ describe('FlowFeature', () => {
       const completeNode = feature.getTools().find(tool => tool.name === 'complete_node')!;
       const result = await completeNode.execute({});
 
-      assert.equal(result.success, false);
-      assert.match(String(result.error || ''), /必须指定 nextNodeId 或 nextNodeName/);
+      const res = result as Record<string, unknown>;
+      assert.equal(res.success, false);
+      assert.match(String(res.error || ''), /必须指定 nextNodeId 或 nextNodeName/);
     });
 
     it('should accept explicit nextNodeName', async () => {
@@ -85,8 +86,9 @@ describe('FlowFeature', () => {
       const completeNode = feature.getTools().find(tool => tool.name === 'complete_node')!;
       const result = await completeNode.execute({ nextNodeName: '路径B' });
 
-      assert.equal(result.success, true);
-      assert.match(String(result.message || ''), /路径B/);
+      const res = result as Record<string, unknown>;
+      assert.equal(res.success, true);
+      assert.match(String(res.message || ''), /路径B/);
     });
 
     it('should apply queued transition at next StepStart', async () => {
