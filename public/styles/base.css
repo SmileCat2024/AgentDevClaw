@@ -1,8 +1,8 @@
 :root {
-  --bg-color: #000000;
-  --sidebar-bg: #0a0a0a;
-  --header-bg: #0a0a0a;
-  --panel-bg: #070707;
+  --bg-color: #050505;
+  --sidebar-bg: #141417;
+  --header-bg: #141417;
+  --panel-bg: #111114;
   --border-color: #222;
   --text-primary: #ededed;
   --text-secondary: #888;
@@ -20,18 +20,24 @@
   --bg-secondary: var(--hover-bg);
   --scrollbar-thumb: #333;
   --scrollbar-thumb-hover: #555;
-  --input-card-bg: #090909;
+  --input-card-bg: #141417;
   --input-card-border: #222;
   --shadow-color: rgba(0, 0, 0, 0.18);
   --shadow-strong: rgba(0, 0, 0, 0.8);
   --status-text-on-color: #fff;
+  /* ── glass variables ── */
+  --glass-bg: rgba(20, 20, 23, 0.72);
+  --glass-blur: 20px;
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --body-grad-1: rgba(35, 110, 230, 0.38);
+  --body-grad-2: rgba(20, 40, 70, 0.10);
 }
 
 body[data-theme="light"] {
   --bg-color: #fafafa;
-  --sidebar-bg: #f4f4f4;
-  --header-bg: #f4f4f4;
-  --panel-bg: #f7f7f7;
+  --sidebar-bg: #f0f0f2;
+  --header-bg: #f0f0f2;
+  --panel-bg: #f4f4f6;
   --border-color: #d8d8d8;
   --text-primary: #121212;
   --text-secondary: #666;
@@ -49,6 +55,12 @@ body[data-theme="light"] {
   --input-card-border: #d8d8d8;
   --shadow-color: rgba(0, 0, 0, 0.08);
   --shadow-strong: rgba(0, 0, 0, 0.14);
+  /* ── glass variables (light) ── */
+  --glass-bg: rgba(240, 240, 242, 0.72);
+  --glass-blur: 20px;
+  --glass-border: rgba(0, 0, 0, 0.06);
+  --body-grad-1: rgba(80, 130, 220, 0.10);
+  --body-grad-2: rgba(200, 210, 230, 0.08);
 }
 
 body[data-theme="light"] .workspace-hero {
@@ -239,6 +251,9 @@ body[data-theme="light"] .workspace-repo-warning {
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
   background-color: var(--bg-color);
+  background-image:
+    radial-gradient(ellipse 520px 320px at 12% 0%, var(--body-grad-1) 0%, transparent 70%),
+    radial-gradient(circle 200px at 100% 100%, var(--body-grad-2) 0%, transparent 70%);
   color: var(--text-primary);
   height: 100vh;
   display: flex;

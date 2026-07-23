@@ -1,8 +1,10 @@
 /* Sidebar */
 .sidebar {
   width: 312px;
-  background-color: var(--sidebar-bg);
-  border-right: 1px solid var(--border-color);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-right: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
   transition: width 0.3s ease, transform 0.3s ease;
@@ -24,12 +26,13 @@
   height: 56px;
 }
 
-.sidebar-title { font-weight: 600; font-size: 16px; }
+.sidebar-title { font-weight: 700; font-size: 16px; }
 
 .agent-list {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+  margin-right: 6px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -55,7 +58,7 @@
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
   user-select: none;
 }
@@ -88,7 +91,7 @@
 }
 
 .agent-group-count {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 10px;
 }
 
@@ -104,7 +107,7 @@
   cursor: pointer;
   display: block;
   transition: background-color 0.2s;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .agent-item.disconnected {
@@ -174,7 +177,7 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
 .agent-runtime-project-header {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-tertiary, var(--text-secondary));
+  color: var(--text-primary);
   margin-left: -18px;
   padding: 4px 10px 2px;
   overflow: hidden;
@@ -222,7 +225,7 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   border: 1px solid var(--border-color);
   border-radius: 3px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
@@ -475,7 +478,6 @@ body[data-theme="light"] .agent-icon {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background-color: var(--bg-color);
   position: relative; /* For positioning input container */
 }
 
@@ -488,7 +490,9 @@ body[data-theme="light"] .agent-icon {
 
 .feature-panel {
   width: 0;
-  background: var(--panel-bg);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   border-left: 1px solid transparent;
   display: flex;
   flex-direction: column;
@@ -500,7 +504,7 @@ body[data-theme="light"] .agent-icon {
 
 .feature-panel.open {
   width: var(--feature-panel-width, 500px);
-  border-left-color: var(--border-color);
+  border-left-color: var(--glass-border);
 }
 
 .feature-panel-resizer {
@@ -4585,8 +4589,10 @@ body[data-theme="light"] .plan-task.is-interrupt-target {
 
 .right-rail {
   width: 56px;
-  border-left: 1px solid var(--border-color);
-  background: var(--sidebar-bg);
+  border-left: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -4606,7 +4612,7 @@ body[data-theme="light"] .plan-task.is-interrupt-target {
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -4671,8 +4677,10 @@ body[data-theme="light"] .plan-task.is-interrupt-target {
 }
 
 header {
-  background-color: var(--header-bg);
-  border-bottom: 1px solid var(--border-color);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border-bottom: 1px solid var(--glass-border);
   padding: 0 16px;
   display: flex;
   justify-content: space-between;
@@ -4715,7 +4723,7 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); white-space:
 .header-docset-btn {
   border: 1px solid rgba(255,255,255,0.12);
   background: rgba(255,255,255,0.04);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   border-radius: 999px;
   padding: 8px 14px;
   font-size: 12px;
@@ -5384,6 +5392,7 @@ body[data-theme="light"] .project-docset-detail-empty {
   gap: 24px;
   scroll-behavior: auto;
   overflow-anchor: none;
+  background-color: var(--bg-color);
 }
 
 .follow-latest-btn {
