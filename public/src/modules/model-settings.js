@@ -502,6 +502,12 @@ async function applySettingsPreset(idx) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config, presets }),
     });
+    if (!resp.ok) {
+      const errResult = await resp.json().catch(() => ({}));
+      const msg = errResult.details?.length ? errResult.details.join('\n') : (errResult.error || '保存失败');
+      alert(msg);
+      return;
+    }
     const result = await resp.json();
     window.ClawFW.settingsData.config = result.config;
     window.ClawFW.settingsData.presets = result.presets;
@@ -530,6 +536,12 @@ async function saveSettingsConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config, presets }),
     });
+    if (!resp.ok) {
+      const errResult = await resp.json().catch(() => ({}));
+      const msg = errResult.details?.length ? errResult.details.join('\n') : (errResult.error || '保存失败');
+      alert(msg);
+      return;
+    }
     const result = await resp.json();
     window.ClawFW.settingsData.config = result.config;
     window.ClawFW.settingsData.presets = result.presets;
