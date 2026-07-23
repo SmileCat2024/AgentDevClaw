@@ -5405,7 +5405,8 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   display: none;
 }
 .ccb-model {
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
 }
@@ -5444,7 +5445,7 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ccb-token.tone-high .ccb-fill { background: #ef4444; }
 .ccb-token.tone-compress .ccb-fill { background: #ef4444; }
 .ccb-label {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 /* ── Context bar hover popup ── */
