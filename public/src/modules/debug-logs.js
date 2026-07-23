@@ -157,3 +157,40 @@ function renderLogsPanel() {
 
   return '<div class="log-panel">' + toolbar + '<section class="log-list">' + rows + '</section></div>';
 }
+
+// ── loadLogs (from app-main.js) ──
+async function loadLogs(forceRender = false) {
+  try {
+    const params = new URLSearchParams({
+      scope: logPanelScope,
+    });
+    if (currentRuntimeAgentId) {
+      params.set('agentId', currentRuntimeAgentId);
+    }
+
+    const res = await fetch('/api/logs?' + params.toString());
+    if (!res.ok) {
+      throw new Error('Failed to fetch logs');
+    }
+    const data = await res.json();
+    const nextLogs = data.logs || [];
+    const nextSignature = JSON.stringify({
+      count: nextLogs.length,
+      last: nextLogs.length > 0 ? nextLogs[nextLogs.length - 1].id : null,
+    });
+
+    if (nextSignature !== currentLogsSignature) {
+      setCurrentLogs(nextLogs);
+      if (activeFeaturePanel === 'logs') {
+        renderFeaturePanel();
+      }
+    } else if (forceRender && activeFeaturePanel === 'logs') {
+      renderFeaturePanel();
+    }
+  } catch (e) {
+    if (forceRender && activeFeaturePanel === 'logs') {
+      setCurrentLogs([]);
+      renderFeaturePanel();
+    }
+  }
+}

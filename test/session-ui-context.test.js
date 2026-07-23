@@ -5,6 +5,10 @@ import vm from 'node:vm';
 
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
+const inputRenderSource = fs.readFileSync(
+  new URL('../public/src/modules/input-render.js', import.meta.url),
+  'utf8',
+);
 const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
 const sessionViewStateSource = fs.readFileSync(
   new URL('../public/src/modules/session-view-state.js', import.meta.url),
@@ -127,7 +131,7 @@ test('persistent input render signature changes with session context', () => {
   };
   vm.createContext(context);
   const signatureBlock = sourceBetween(
-    mainSource,
+    inputRenderSource,
     'function getInputRenderSignature',
     '\nfunction renderInputRequests',
   );
@@ -332,11 +336,9 @@ test('chat render signature changes when equal-length Chinese content changes', 
 });
 
 test('input renderer is a read-only consumer of session view state', () => {
-  const renderBlock = sourceBetween(
-    mainSource,
-    'function renderInputRequests',
-    '\n// ── Persistent Input',
-  );
+  const start = inputRenderSource.indexOf('function renderInputRequests');
+  assert.notEqual(start, -1, 'renderInputRequests should exist in input-render.js');
+  const renderBlock = inputRenderSource.slice(start);
 
   assert.doesNotMatch(renderBlock, /applySessionViewPatch\s*\(/);
   assert.match(renderBlock, /readCurrentSessionViewState\(\)\.inputRequests/);

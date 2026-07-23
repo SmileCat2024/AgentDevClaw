@@ -573,3 +573,105 @@ function updateProjectDocsetChrome(agent = getCurrentAgentRecord()) {
     '</div>',
   ].join('');
 }
+
+// ── Docset & material action handlers (from app-main.js) ──
+window.toggleProjectDocsetOverlay = (force) => {
+  if (typeof force === 'boolean') {
+    currentProjectDocsetOpen = force;
+  } else {
+    currentProjectDocsetOpen = !currentProjectDocsetOpen;
+  }
+  updateProjectDocsetChrome(getCurrentAgentRecord());
+};
+
+window.setProjectDocsetPage = (page) => {
+  currentProjectDocsetPage = ['requirement', 'log', 'materials'].includes(page) ? page : 'requirement';
+  renderCurrentMainView();
+};
+
+window.startProjectRequirementEdit = () => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  currentProjectDocsetPage = 'requirement';
+  currentProjectRequirementEdit = { agentId: agent.id };
+  renderCurrentMainView();
+};
+
+window.cancelProjectRequirementEdit = () => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  resetProjectRequirementDraft(agent);
+  currentProjectRequirementEdit = null;
+  renderCurrentMainView();
+};
+
+window.saveProjectRequirementForm = async () => {
+  const agent = getCurrentAgentRecord();
+  if (!agent?.id) return;
+  const forms = getWorkspaceFormDraft(agent);
+  try {
+    await persistWorkspaceState(agent, forms, {
+      openDirectory: getAgentWorkspaceState(agent)?.openDirectory || '',
+    });
+    currentProjectRequirementEdit = null;
+    await loadAgents();
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to save project requirement form:', error);
+  }
+};
+
+window.openProjectMaterialImport = (mode = 'files') => {
+  window.importProjectMaterialsByPath(mode).catch((error) => {
+    console.error('Failed to open project material import:', error);
+  });
+};
+
+window.importProjectMaterialsByPath = async (mode = 'files') => {
+  const agent = getCurrentAgentRecord();
+  const docset = getCurrentProjectDocset(agent);
+  if (!agent?.id || !docset?.projectDir) return;
+
+  try {
+    let materials = [];
+    if (mode === 'folder') {
+      const selected = await invoke('select_directory');
+      if (!selected || selected.cancelled || !selected.path) return;
+      materials = [{
+        name: getPathLeaf(selected.path) || selected.path,
+        sourcePath: selected.path,
+        sourceKind: 'directory',
+      }];
+    } else {
+      const selected = await invoke('select_files');
+      const paths = Array.isArray(selected?.paths) ? selected.paths.filter(Boolean) : [];
+      if (!paths.length) return;
+      materials = paths.map((sourcePath) => ({
+        name: getPathLeaf(sourcePath) || sourcePath,
+        sourcePath,
+        sourceKind: 'file',
+      }));
+    }
+
+    const response = await fetch('/protoclaw/project_docset/import_materials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: agent.id,
+        projectDir: docset.projectDir,
+        mode,
+        materials,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await response.text().catch(() => 'Failed to import materials'));
+    }
+
+    await loadAgents();
+    currentProjectDocsetPage = 'materials';
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to import project materials:', error);
+  }
+};

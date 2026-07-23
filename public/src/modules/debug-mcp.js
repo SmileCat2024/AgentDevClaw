@@ -93,3 +93,24 @@ function renderMcpPanel() {
     '</div>',
   ].join('');
 }
+
+// ── loadMcpInfo (from app-main.js) ──
+async function loadMcpInfo(forceRender = false) {
+  try {
+    const res = await fetch('/api/mcp-info');
+    if (!res.ok) {
+      setCurrentMcpInfo(null);
+      return;
+    }
+    const data = await res.json();
+    setCurrentMcpInfo(data);
+    if (forceRender && activeFeaturePanel === 'mcp') {
+      renderFeaturePanel();
+    }
+  } catch (e) {
+    console.error('Failed to load MCP info:', e);
+    if (forceRender && activeFeaturePanel === 'mcp') {
+      renderFeaturePanel();
+    }
+  }
+}

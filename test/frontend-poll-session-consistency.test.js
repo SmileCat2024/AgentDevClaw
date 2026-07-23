@@ -9,30 +9,33 @@ const sessionViewStateSource = fs.readFileSync(
   new URL('../public/src/modules/session-view-state.js', import.meta.url),
   'utf8',
 );
+const agentDataLoaderSource = fs.readFileSync(
+  new URL('../public/src/modules/agent-data-loader.js', import.meta.url),
+  'utf8',
+);
 const indexSource = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 function extractPollSource() {
   const start = mainSource.indexOf('// ── Runtime poll coordinator');
-  const end = mainSource.indexOf('// 渲染输入请求', start);
+  const end = mainSource.indexOf('// ── Input request rendering → modules/input-render.js', start);
   assert.notEqual(start, -1, 'poll start marker should exist');
   assert.notEqual(end, -1, 'poll end marker should exist');
   return mainSource.slice(start, end);
 }
 
 function extractLoadAgentDataSource() {
-  const start = mainSource.indexOf('async function loadAgentData(agentId)');
-  const end = mainSource.indexOf('\nasync function refreshCurrentRuntimeStatus', start);
+  const start = agentDataLoaderSource.indexOf('async function loadAgentData(agentId)');
+  const end = agentDataLoaderSource.indexOf('\nasync function refreshCurrentRuntimeStatus', start);
   assert.notEqual(start, -1, 'loadAgentData start marker should exist');
   assert.notEqual(end, -1, 'loadAgentData end marker should exist');
-  return mainSource.slice(start, end);
+  return agentDataLoaderSource.slice(start, end);
 }
 
 function extractRuntimeStatusSource() {
-  const start = mainSource.indexOf('async function refreshCurrentRuntimeStatus(');
-  const end = mainSource.indexOf('// ── Auto session title generation', start);
+  const start = agentDataLoaderSource.indexOf('async function refreshCurrentRuntimeStatus(');
   assert.notEqual(start, -1, 'runtime status start marker should exist');
-  assert.notEqual(end, -1, 'runtime status end marker should exist');
-  return mainSource.slice(start, end);
+  // refreshCurrentRuntimeStatus is the last function in agent-data-loader.js
+  return agentDataLoaderSource.slice(start);
 }
 
 function extractRuntimeAwareAgentSource() {
