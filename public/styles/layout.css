@@ -4620,6 +4620,11 @@ body[data-theme="light"] .plan-task.is-interrupt-target {
   transition: background-color 0.2s, color 0.2s, border-color 0.2s;
 }
 
+.rail-button svg {
+  width: 22px;
+  height: 22px;
+}
+
 .rail-badge {
   position: absolute;
   top: 3px;
@@ -5403,12 +5408,13 @@ body[data-theme="light"] .project-docset-detail-empty {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(255,255,255,0.12);
   background: color-mix(in srgb, var(--panel-bg) 88%, transparent);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   border-radius: 999px;
-  padding: 10px 14px;
+  padding: 10px 16px;
   font-size: 12px;
+  font-weight: 600;
   font-family: inherit;
   cursor: pointer;
   box-shadow: 0 8px 24px var(--shadow-color);
