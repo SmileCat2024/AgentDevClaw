@@ -236,6 +236,9 @@ function createChatMutationContext() {
     followLatestEnabled: false,
     currentMessages: [{ role: 'user', content: 'existing' }],
     currentMessagesLength: 1,
+    showChatProcess: false,
+    shouldShowChatWelcome: () => false,
+    render: () => {},
     container: {
       scrollTop: 123,
       querySelector() {

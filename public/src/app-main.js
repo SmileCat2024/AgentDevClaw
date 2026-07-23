@@ -1414,6 +1414,8 @@ window.switchAgent = async (newAgentId) => {
     currentWorkspaceTab = 'chat';
     // Clear chat render dedup so the new agent's messages always rebuild the DOM
     _lastRenderedChatSig = '';
+    // Reset process visibility: every session entry starts in hidden-process mode
+    showChatProcess = false;
     activateUserCollapseStateForContext(getRuntimeContextKey(runtimeAgentId));
     // Optimistic restore: show cached data immediately if available
     const _restored = restoreRuntimeFromCache(runtimeAgentId);

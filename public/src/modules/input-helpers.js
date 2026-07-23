@@ -12,7 +12,7 @@
  *   - getAvailableCallIndices / canRollbackMessage: rollback 可用性判断（纯函数）
  *   - saveChatProcessVisibility / hasConversationProcessContent / updateChatProcessToggle:
  *     对话过程显隐
- *   - syncAssistantProcessOnlyRows / applyConversationProcessState / syncProcessHiddenEmptyState: 过程内容 DOM 同步
+ *   - syncAssistantProcessOnlyRows / applyConversationProcessState: 过程内容 DOM 同步
  *   - window.toggleChatProcessVisibility: 全局切换函数
  *   - submitInputAction: 提交动作输入（async）
  *
@@ -268,47 +268,23 @@ function applyConversationProcessState(root = container) {
   syncAssistantProcessOnlyRows(root);
   syncCollapseStates(root);
   updateChatProcessToggle();
-  syncProcessHiddenEmptyState(root);
 };
-
-/**
- * When "hide process" is active, all message rows may be visually hidden
- * (system/tool rows get process-hidden; assistant rows with only tool calls
- * get process-hidden-empty). In that case, inject the welcome overlay so the
- * chat area doesn't look jarringly blank.
- */
-function syncProcessHiddenEmptyState(root) {
-  let existing = root.querySelector('.process-hidden-empty-overlay');
-  if (showChatProcess) {
-    if (existing) existing.remove();
-    return;
-  }
-  let rows = root.querySelectorAll('.message-row');
-  let hasVisibleRow = false;
-  for (let i = 0; i < rows.length; i++) {
-    let row = rows[i];
-    if (row.classList.contains('process-hidden')) continue;
-    if (row.classList.contains('process-hidden-empty')) continue;
-    hasVisibleRow = true;
-    break;
-  }
-  if (!hasVisibleRow && rows.length > 0) {
-    if (!existing) {
-      let overlay = document.createElement('div');
-      overlay.className = 'process-hidden-empty-overlay';
-      overlay.innerHTML = getEmptyStateHtml();
-      root.appendChild(overlay);
-    }
-  } else {
-    if (existing) existing.remove();
-  }
-}
 
 window.toggleChatProcessVisibility = function() {
   const chatViewportTopBefore = container.scrollTop;
+  const hasUserMessages = Array.isArray(currentMessages)
+    && currentMessages.some(m => m.role === 'user');
   showChatProcess = !showChatProcess;
   saveChatProcessVisibility();
-  applyConversationProcessState(container);
+  // When there are no user messages, toggling process visibility switches
+  // between the welcome page and the (hidden-process) content. This requires
+  // a full re-render, not just CSS class toggling.
+  if (!hasUserMessages) {
+    _lastRenderedChatSig = '';
+    render(currentMessages);
+  } else {
+    applyConversationProcessState(container);
+  }
   notifyChatViewportMutation({
     reason: 'process-toggle',
     shouldFollow: followLatestEnabled && isChatSurfaceActive(),

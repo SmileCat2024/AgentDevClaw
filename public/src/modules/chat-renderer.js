@@ -30,6 +30,22 @@
  *   onclick="requestRollbackEdit(...)", onclick="switchAgent(...)"
  */
 
+/**
+ * Data-driven welcome page decision: when process is hidden and no user
+ * message exists in the transcript, show the welcome page instead of
+ * (potentially all-hidden) message rows.
+ *
+ * This replaces the old DOM-patch overlay mechanism (syncProcessHiddenEmptyState)
+ * which was fragile: appendNewMessages deleted the overlay's inner .empty-state
+ * but left the outer container, causing a blank shell.
+ */
+function shouldShowChatWelcome(messages) {
+  return !showChatProcess
+    && Array.isArray(messages)
+    && messages.length > 0
+    && !messages.some(m => m.role === 'user');
+}
+
 // 生成单条消息的 HTML
 function renderMessage(msg, index) {
   const role = msg.role;
@@ -169,6 +185,12 @@ function renderMessage(msg, index) {
 
 // 追加新消息（保持现有 DOM 状态）
 function appendNewMessages(newMessages, startIndex) {
+  // If the welcome page should be showing (process hidden + no user messages),
+  // do a full render instead of appending rows that would all be hidden.
+  if (shouldShowChatWelcome(currentMessages)) {
+    render(currentMessages);
+    return;
+  }
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   const chatViewportTopBefore = container.scrollTop;
   // 移除空状态
@@ -260,6 +282,12 @@ function appendNewMessages(newMessages, startIndex) {
 
 // 更新最后一条消息
 function updateLastMessage(msg) {
+  // If the welcome page should be showing, do a full render instead of
+  // patching a DOM row that doesn't exist.
+  if (shouldShowChatWelcome(currentMessages)) {
+    render(currentMessages);
+    return;
+  }
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
   const chatViewportTopBefore = container.scrollTop;
   const lastIndex = currentMessages.length - 1;
@@ -440,7 +468,7 @@ function restoreUserCollapseState(root) {
 
 function render(messages) {
   if (typeof clearTruncatedHighlightData === 'function') clearTruncatedHighlightData();
-  if (messages.length === 0) {
+  if (messages.length === 0 || shouldShowChatWelcome(messages)) {
     _lastRenderedChatSig = '';
     cancelChatScrollSettlement();
     container.innerHTML = getEmptyStateHtml();
