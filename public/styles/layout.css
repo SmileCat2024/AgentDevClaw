@@ -551,6 +551,7 @@ body[data-theme="light"] .feature-panel-header {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
+  margin-right: 6px;
   position: relative;
   opacity: 0;
   transform: translateX(8px);
@@ -5392,6 +5393,7 @@ body[data-theme="light"] .project-docset-detail-empty {
   overflow-y: auto;
   padding: 24px;
   padding-bottom: 200px; /* 增加底部空间，避免输入框遮挡最新消息 */
+  margin-right: 6px;
   display: flex;
   flex-direction: column;
   gap: 24px;
