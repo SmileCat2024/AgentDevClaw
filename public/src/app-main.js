@@ -417,7 +417,7 @@ async function loadAgents() {
     ]);
     const data = res.ok ? await res.json().catch(() => ({ agents: [], currentAgentId: null })) : { agents: [], currentAgentId: null };
     if (sidebarSnapshotToken && typeof isSidebarSnapshotTokenCurrent === 'function' && !isSidebarSnapshotTokenCurrent(sidebarSnapshotToken)) {
-      window.setTimeout(() => loadAgents().catch(() => {}), 25);
+      window.setTimeout(() => loadAgents().catch(e => console.warn(e)), 25);
       return { stale: true };
     }
     const runtimeAgents = data.agents || [];
@@ -1459,7 +1459,7 @@ window.switchAgent = async (newAgentId) => {
         _syncPersistentActionButton();
         renderAgentList();
       })
-      .catch(() => {});
+      .catch(e => console.warn(e));
 
     // Fire PUT in parallel with loadAgentData — loadAgentData uses explicit
     // agentId in all fetch URLs, so it doesn't depend on the PUT completing.
@@ -1779,7 +1779,7 @@ deleteSessionAction.addEventListener('click', async () => {
         phase: 'source-stopping',
         serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
       });
-      settleSidebarSourceOperation(deleteOperation.operationId).catch(() => {});
+      settleSidebarSourceOperation(deleteOperation.operationId).catch(e => console.warn(e));
     } else {
       finishSidebarOperation(deleteOperation.operationId, 'settled');
     }
@@ -1921,7 +1921,7 @@ deleteProjectAction.addEventListener('click', () => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ agentId: pendingAgentId, sessionId: run.id, responseMode: 'delta' }),
-            }).catch(() => {});
+            }).catch(e => console.warn(e));
           }
           await window.deleteSavedAssemblyConfig(pendingProjectId);
           // Refresh session data after both deletions
@@ -2425,7 +2425,7 @@ async function runPollCycle() {
     // 全局 choice 请求提醒（跨所有 agent，不限于当前焦点）
     if (Date.now() - _lastChoiceAlertCheckAt > 3000) {
       _lastChoiceAlertCheckAt = Date.now();
-      checkGlobalChoiceAlerts().catch(() => {});
+      checkGlobalChoiceAlerts().catch(e => console.warn(e));
     }
 
     // 定期检查并重新加载 Feature 模板映射（如果为空）

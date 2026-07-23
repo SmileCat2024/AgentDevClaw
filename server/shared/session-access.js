@@ -161,11 +161,11 @@ export async function writeSessionIndex(agentId, index) {
     await fs.rename(tmpPath, indexPath);
   } catch (err) {
     if (err.code === 'EPERM' || err.code === 'EACCES') {
-      await fs.unlink(indexPath).catch(() => {});
+      await fs.unlink(indexPath).catch(e => console.warn(e));
       await fs.rename(tmpPath, indexPath);
     } else if (err.code === 'EXDEV') {
       await fs.copyFile(tmpPath, indexPath);
-      await fs.unlink(tmpPath).catch(() => {});
+      await fs.unlink(tmpPath).catch(e => console.warn(e));
     } else {
       throw err;
     }

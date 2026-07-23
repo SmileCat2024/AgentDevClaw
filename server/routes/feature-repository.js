@@ -535,7 +535,7 @@ export function setupFeatureRepositoryRoutes(app, express) {
       const tempPath = req.file.path;
       const originalName = path.basename(req.file.originalname || '');
       if (!originalName.toLowerCase().endsWith('.tgz')) {
-        await fs.unlink(tempPath).catch(() => {});
+        await fs.unlink(tempPath).catch(e => console.warn(e));
         res.status(400).json({ error: 'Only .tgz files are allowed' });
         return;
       }
@@ -551,7 +551,7 @@ export function setupFeatureRepositoryRoutes(app, express) {
       res.json({ uploadId, summary });
     } catch (error) {
       if (req.file?.path) {
-        await fs.unlink(req.file.path).catch(() => {});
+        await fs.unlink(req.file.path).catch(e => console.warn(e));
       }
       next(error);
     }
@@ -588,7 +588,7 @@ export function setupFeatureRepositoryRoutes(app, express) {
       const pending = pendingFeatureImports.get(uploadId);
       if (pending) {
         pendingFeatureImports.delete(uploadId);
-        await fs.unlink(pending.tempPath).catch(() => {});
+        await fs.unlink(pending.tempPath).catch(e => console.warn(e));
       }
       res.json({ success: true });
     } catch (error) {
@@ -607,7 +607,7 @@ export function setupFeatureRepositoryRoutes(app, express) {
       const originalName = req.file.originalname;
 
       if (!originalName.toLowerCase().endsWith('.tgz')) {
-        await fs.unlink(tempPath).catch(() => {});
+        await fs.unlink(tempPath).catch(e => console.warn(e));
         res.status(400).json({ error: 'Only .tgz files are allowed' });
         return;
       }
@@ -623,7 +623,7 @@ export function setupFeatureRepositoryRoutes(app, express) {
     } catch (error) {
       // 清理临时文件
       if (req.file?.path) {
-        await fs.unlink(req.file.path).catch(() => {});
+        await fs.unlink(req.file.path).catch(e => console.warn(e));
       }
       next(error);
     }

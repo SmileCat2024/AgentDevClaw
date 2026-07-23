@@ -143,7 +143,7 @@ async function runTitleGeneration({ agentDir, agentId, sessionId }) {
     throw new Error(`System title model "${resolvedModel.modelName}" returned an empty response`);
   } finally {
     if (typeof agent.dispose === 'function') {
-      await agent.dispose().catch(() => {});
+      await agent.dispose().catch(e => console.warn(e));
     }
   }
 }

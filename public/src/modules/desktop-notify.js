@@ -306,7 +306,7 @@ async function _tryNotifyInputRequest(runtimeId, requestId, alertData = null) {
 /* ── 请求通知权限（需在用户手势内调用） ── */
 function _requestNotifyPermission() {
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-    Notification.requestPermission().catch(() => {});
+    Notification.requestPermission().catch(e => console.warn(e));
   }
 }
 
@@ -364,7 +364,7 @@ async function refreshChoiceAlertStates() {
       // 避免 _seenChoiceAlertIds 去重阻断后台通知路径
       if (Date.now() - _lastChoiceNotifyCheckAt > 2000) {
         _lastChoiceNotifyCheckAt = Date.now();
-        refreshChoiceAlertStates().catch(() => {});
+        refreshChoiceAlertStates().catch(e => console.warn(e));
       }
     };
   } catch (e) {

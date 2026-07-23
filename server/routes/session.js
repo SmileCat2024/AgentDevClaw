@@ -573,7 +573,7 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
     }
     if (existingSummary && force) {
       const handoffPath = await findSessionSummaryPath(agentId, sessionId);
-      if (handoffPath) await fs.unlink(handoffPath).catch(() => {});
+      if (handoffPath) await fs.unlink(handoffPath).catch(e => console.warn(e));
       const remainingSummary = await findSessionSummary(agentId, sessionId);
       await setSessionHasSummary(agentId, sessionId, !!remainingSummary);
     }
@@ -809,7 +809,7 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
 
     const raw = await fs.readFile(resultPath, 'utf8');
     const result = JSON.parse(raw.trim());
-    await fs.rm(resultDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
 
     const title = typeof result?.title === 'string' ? result.title.trim() : '';
     if (!title) {
@@ -912,7 +912,7 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
 
     const raw = await fs.readFile(resultPath, 'utf8');
     const result = JSON.parse(raw.trim());
-    await fs.rm(resultDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
 
     const recap = typeof result?.recap === 'string' ? result.recap.trim() : '';
     if (!recap) {

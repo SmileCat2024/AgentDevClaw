@@ -62,7 +62,7 @@ export default [
       'prefer-const': 'off', // Too many false positives for mutable state vars
       'no-prototype-builtins': 'warn',
       'no-constant-condition': ['warn', { checkLoops: false }],
-      'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-empty': 'error',
       'no-console': 'off',
     },
   },

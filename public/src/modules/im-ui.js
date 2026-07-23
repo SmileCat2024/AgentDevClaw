@@ -242,10 +242,10 @@ async function ensureIMWorkspaceLoaded(force = false) {
       let schedPromise = Promise.resolve();
       if (!window._dispatchSchedulesLoaded && typeof window.loadDispatchSchedules === 'function') {
         // Await the actual fetch - loadDispatchSchedules resolves only after data is loaded
-        schedPromise = window.loadDispatchSchedules().catch(() => {});
+        schedPromise = window.loadDispatchSchedules().catch(e => console.warn(e));
       } else if (typeof window.refreshDispatchConsoleData === 'function') {
         // Already loaded; fire-and-forget staleness refresh with render:true
-        window.refreshDispatchConsoleData({ force: false, render: true }).catch(() => {});
+        window.refreshDispatchConsoleData({ force: false, render: true }).catch(e => console.warn(e));
       }
       return schedPromise.then(() => bundle);
     })
@@ -547,7 +547,7 @@ function renderIMWorkspaceConfigEditor(block) {
   if (typeof window.refreshDispatchConsoleData === 'function') {
     window.refreshDispatchConsoleData({ force: false, render: false }).then(function(changed) {
       if (changed) { renderCurrentMainView(); }
-    }).catch(function() {});
+    }).catch(e => console.warn(e));
   }
 
   let autostartSchedules = (window._dispatchSchedules || []).filter(function(sc) {

@@ -566,7 +566,7 @@ function checkOAuthProxy(isZh) {
         }
       }
     })
-    .catch(function() {});
+    .catch(e => console.warn(e));
 }
 
 function renderOAuthLoginArea(preset, isZh) {

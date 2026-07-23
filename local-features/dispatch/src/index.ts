@@ -278,7 +278,7 @@ export class ClawDispatchFeature implements AgentFeature {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agentId, sessionId: sessionId || null, status }),
-    }).catch(() => {});
+    }).catch(e => console.warn(e));
   }
 
   private sleep(ms: number): Promise<void> {

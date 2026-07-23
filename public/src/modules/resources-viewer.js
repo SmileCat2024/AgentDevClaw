@@ -424,7 +424,7 @@
     const ta = document.querySelector('[data-files-role="editor"]');
     const content = ta ? ta.value : _viewerContent;
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(content).catch(() => {});
+      navigator.clipboard.writeText(content).catch(e => console.warn(e));
     }
   };
 

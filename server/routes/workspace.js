@@ -148,7 +148,7 @@ export async function readWorkspaceState(agentId) {
     let data = normalizeWorkspaceState(await readJson(getPrebuiltWorkspaceStatePath(key)));
     if (key === 'programming-helper' && data.forms && data.forms['startup-form']) {
       delete data.forms['startup-form'];
-      writeWorkspaceState(key, data).catch(() => {});
+      writeWorkspaceState(key, data).catch(e => console.warn(e));
       _wsCache.delete(key);
     }
     if (key === 'programming-helper' && (!Array.isArray(data.phProjects) || data.phProjects.length === 0)) {
@@ -169,7 +169,7 @@ export async function readWorkspaceState(agentId) {
         data.phProjects = Array.from(directories.values()).map(d =>
           normalizeWorkspacePhProject({ ...d, createdAt: d.createdAt || timestamp, updatedAt: d.updatedAt || timestamp })
         ).filter(Boolean);
-        writeWorkspaceState(key, data).catch(() => {});
+        writeWorkspaceState(key, data).catch(e => console.warn(e));
         _wsCache.delete(key);
       }
     }
@@ -178,7 +178,7 @@ export async function readWorkspaceState(agentId) {
       const sorted = [...data.phProjects].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
       data.openDirectory = sorted[0].openDirectory || '';
       if (data.openDirectory) {
-        writeWorkspaceState(key, data).catch(() => {});
+        writeWorkspaceState(key, data).catch(e => console.warn(e));
         _wsCache.delete(key);
       }
     }

@@ -83,7 +83,7 @@ function _initAudioCues() {
     _audioCueCtx = new Ctor();
   }
   if (_audioCueCtx.state === 'suspended') {
-    _audioCueCtx.resume().catch(function() {});
+    _audioCueCtx.resume().catch(e => console.warn(e));
   }
   // Decode any prefetched raw data (async, non-blocking)
   for (let _i = 0, _types = ['start', 'stop']; _i < _types.length; _i++) {

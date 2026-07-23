@@ -343,11 +343,11 @@ async function settleSidebarSourceOperation(operationId, options = {}) {
               phase: 'degraded',
               errorCode: 'target_runtime_not_ready',
             });
-            if (typeof loadAgents === 'function') loadAgents().catch(() => {});
+            if (typeof loadAgents === 'function') loadAgents().catch(e => console.warn(e));
             return false;
           }
           finishSidebarOperation(operationId, 'settled', { errorCode: '' });
-          if (typeof loadAgents === 'function') loadAgents().catch(() => {});
+          if (typeof loadAgents === 'function') loadAgents().catch(e => console.warn(e));
           return true;
         }
       }
@@ -361,7 +361,7 @@ async function settleSidebarSourceOperation(operationId, options = {}) {
   }
 
   updateSidebarOperation(operationId, { phase: 'degraded', errorCode: 'source_stop_timeout' });
-  if (typeof loadAgents === 'function') loadAgents().catch(() => {});
+  if (typeof loadAgents === 'function') loadAgents().catch(e => console.warn(e));
   if (lateReconcileAttempts > 0 && typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
     window.setTimeout(() => {
       const latest = getSidebarOperation(operationId);

@@ -551,7 +551,7 @@ window.fwRefreshFeatureCapabilities = async () => {
   const draft = normalizeAssemblyDraft(getWorkspaceFormDraft(agent)?.['assembly-form'] || {});
   await requestFWFeatureCapabilities(agent, draft, { force: true });
   if (window.ClawFlowEditor && typeof window.ClawFlowEditor.refreshCapabilities === 'function') {
-    window.ClawFlowEditor.refreshCapabilities().catch(() => {});
+    window.ClawFlowEditor.refreshCapabilities().catch(e => console.warn(e));
   }
 };
 

@@ -1566,7 +1566,7 @@ document.getElementById('settings-flyout-usage').addEventListener('click', () =>
 document.getElementById('settings-flyout-exit').addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
   if (!confirm(currentLanguage === 'zh' ? '确定要退出程序吗？' : 'Are you sure you want to quit?')) return;
-  fetch('/protoclaw/shutdown', { method: 'POST' }).catch(() => {});
+  fetch('/protoclaw/shutdown', { method: 'POST' }).catch(e => console.warn(e));
 });
 
 featurePanelResizer.addEventListener('mousedown', (event) => {

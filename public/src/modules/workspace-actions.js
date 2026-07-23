@@ -263,7 +263,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
       }
-      loadAgents().catch(() => {});
+      loadAgents().catch(e => console.warn(e));
       ClawToast.update(toastId, {
         status: 'success',
         title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
@@ -346,7 +346,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (result?.liveRuntime && result?.switched) {
         // Live-runtime shortcut path: session switch was already handled
         // inside createCompactedResumeSession — skip normal agent/runtime logic
-        loadAgents().catch(() => {});
+        loadAgents().catch(e => console.warn(e));
         clearSessionLoading(activeAgent.id);
         ClawToast.update(_csToastId, {
           status: 'success',
@@ -438,7 +438,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         refreshSidebarRuntimeAfterMutation();
         settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
       }
-      loadAgents().catch(() => {});
+      loadAgents().catch(e => console.warn(e));
       if (action.archiveOriginal && archiveSucceeded && !_csOldRuntimeId) clearSessionReplacementMutation(activeAgent.id, action.sessionId);
       if (action.archiveOriginal && !archiveSucceeded) {
         ClawToast.update(_csToastId, {
@@ -606,15 +606,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
         });
         clearAgentRuntimeCache(affectedRuntimeId);
-        settleSidebarSourceOperation(deleteOperation.operationId).catch(() => {});
+        settleSidebarSourceOperation(deleteOperation.operationId).catch(e => console.warn(e));
       } else {
         finishSidebarOperation(deleteOperation.operationId, 'settled');
       }
       // Refresh IM workspace draft in background — no re-render needed if DOM already updated
       if (isIMSession) {
-        ensureIMWorkspaceLoaded(true).catch(() => {});
+        ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
       } else {
-        loadAgents().catch(() => {});
+        loadAgents().catch(e => console.warn(e));
       }
     } catch (error) {
       console.error('Failed to delete session:', error);
@@ -625,7 +625,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       finishSidebarOperation(deleteOperation.operationId, 'failed', { errorCode: 'delete_failed' });
       // Restore IM draft and re-render on failure
       if (isIMSession) {
-        ensureIMWorkspaceLoaded(true).catch(() => {});
+        ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
       }
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();

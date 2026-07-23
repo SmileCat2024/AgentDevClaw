@@ -70,7 +70,7 @@ export function createAgentLifecycleModule(ctx) {
       // No runtime found — still clean up the tracker in case the process
       // already exited and was removed from managedAgents
       if (sessionId) {
-        removeOpenSession(agentId, sessionId).catch(() => {});
+        removeOpenSession(agentId, sessionId).catch(e => console.warn(e));
       }
       return buildStatus(agentId, sessionId);
     }
@@ -79,7 +79,7 @@ export function createAgentLifecycleModule(ctx) {
       if (!isChildProcessRunning(runtime?.process) || runtime.stopped) {
         // Process already exited — still need to clean up the tracker
         if (runtime?.selectedSessionId) {
-          removeOpenSession(agentId, runtime.selectedSessionId).catch(() => {});
+          removeOpenSession(agentId, runtime.selectedSessionId).catch(e => console.warn(e));
         }
         continue;
       }
@@ -87,7 +87,7 @@ export function createAgentLifecycleModule(ctx) {
       runtime.process.kill('SIGTERM');
       // Remove from open-sessions tracker (explicit stop)
       if (runtime.selectedSessionId) {
-        removeOpenSession(agentId, runtime.selectedSessionId).catch(() => {});
+        removeOpenSession(agentId, runtime.selectedSessionId).catch(e => console.warn(e));
       }
     }
     return buildStatus(agentId, sessionId);

@@ -87,15 +87,15 @@ export async function ensureProjectDocset(projectDir, options = {}) {
       await fs.rename(fromPath, toPath).catch(async () => {
         const content = await fs.readFile(fromPath);
         await fs.writeFile(toPath, content);
-        await fs.rm(fromPath, { force: true }).catch(() => {});
+        await fs.rm(fromPath, { force: true }).catch(e => console.warn(e));
       });
     }
-    await fs.rmdir(legacyPlansDir).catch(() => {});
+    await fs.rmdir(legacyPlansDir).catch(e => console.warn(e));
   } catch {
     // Ignore missing legacy plans dir.
   }
 
-  await fs.rm(path.join(docsetDir, 'tasks'), { recursive: true, force: true }).catch(() => {});
+  await fs.rm(path.join(docsetDir, 'tasks'), { recursive: true, force: true }).catch(e => console.warn(e));
 
   const legacySessionsDir = path.join(docsetDir, 'sessions');
   try {
@@ -109,9 +109,9 @@ export async function ensureProjectDocset(projectDir, options = {}) {
         const normalized = normalizeProjectConversationRecord(raw);
         await fs.writeFile(nextPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
       }
-      await fs.rm(legacyPath, { force: true }).catch(() => {});
+      await fs.rm(legacyPath, { force: true }).catch(e => console.warn(e));
     }
-    await fs.rmdir(legacySessionsDir).catch(() => {});
+    await fs.rmdir(legacySessionsDir).catch(e => console.warn(e));
   } catch {
     // Ignore missing legacy sessions dir.
   }

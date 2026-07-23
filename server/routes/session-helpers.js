@@ -430,7 +430,7 @@ async function cleanupEmptySessions(agentId) {
   });
 
   for (const id of toDelete) {
-    await fs.rm(getPrebuiltSessionFilePath(agentId, id), { force: true }).catch(() => {});
+    await fs.rm(getPrebuiltSessionFilePath(agentId, id), { force: true }).catch(e => console.warn(e));
   }
 
   console.log(`[sessions] cleaned up ${toDelete.length} empty session(s) for ${agentId}: ${toDelete.join(', ')}`);
@@ -486,7 +486,7 @@ async function listPrebuiltSessionsRich(agentId) {
       }
       if (!dirty) return idx;
       return { ...idx, sessions: Array.from(sessionMap.values()) };
-    }).catch(() => {});
+    }).catch(e => console.warn(e));
   }
 
   sessions.sort((left, right) => {
@@ -1041,9 +1041,9 @@ async function deletePrebuiltSession(agentId, sessionId, options = {}) {
     return { activeSessionId: nextActiveSessionId, sessions: remainingSessions };
   });
 
-  await fs.rm(getPrebuiltSessionFilePath(agentId, sessionId), { force: true }).catch(() => {});
+  await fs.rm(getPrebuiltSessionFilePath(agentId, sessionId), { force: true }).catch(e => console.warn(e));
   // Remove from open-sessions tracker
-  removeOpenSession(agentId, sessionId).catch(() => {});
+  removeOpenSession(agentId, sessionId).catch(e => console.warn(e));
 
   const result = {
     protocolVersion: 2,
@@ -1246,7 +1246,7 @@ async function deletePrebuiltProject(agentId, projectId, options = {}) {
   });
 
   for (const session of sessionsToDelete) {
-    await fs.rm(getPrebuiltSessionFilePath(agentId, session.id), { force: true }).catch(() => {});
+    await fs.rm(getPrebuiltSessionFilePath(agentId, session.id), { force: true }).catch(e => console.warn(e));
   }
 
   const result = {

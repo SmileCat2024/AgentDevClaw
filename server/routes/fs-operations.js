@@ -146,16 +146,16 @@ async function runInteractiveSelectionScript(scriptLines, options = {}) {
   while (Date.now() - startedAt < timeoutMs) {
     const content = await fs.readFile(outputPath, 'utf8').catch(() => null);
     if (typeof content === 'string') {
-      await fs.unlink(outputPath).catch(() => {});
+      await fs.unlink(outputPath).catch(e => console.warn(e));
       return content.trim() === 'CANCELLED' ? '' : content.trim();
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
   if (Number.isFinite(childPid) && childPid > 0) {
-    await runCommand('powershell.exe', ['-NoProfile', '-Command', `Stop-Process -Id ${childPid} -Force -ErrorAction SilentlyContinue`]).catch(() => {});
+    await runCommand('powershell.exe', ['-NoProfile', '-Command', `Stop-Process -Id ${childPid} -Force -ErrorAction SilentlyContinue`]).catch(e => console.warn(e));
   }
-  await fs.unlink(outputPath).catch(() => {});
+  await fs.unlink(outputPath).catch(e => console.warn(e));
   const error = new Error('Selection dialog timed out');
   error.statusCode = 504;
   throw error;

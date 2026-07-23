@@ -1147,7 +1147,7 @@ async function shutdown(exitCode = 0) {
     }
   }
 
-  await viewerWorker.stop().catch(() => {});
+  await viewerWorker.stop().catch(e => console.warn(e));
   process.exit(exitCode);
 }
 

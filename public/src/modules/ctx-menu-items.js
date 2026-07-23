@@ -369,12 +369,12 @@ async function ctxArchiveAndStopRuntime(target) {
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       selectWorkspaceSurface(agentId);
     }
-    settleSidebarSourceOperation(archiveOperation.operationId, { agentId, sessionId }).catch(() => {});
+    settleSidebarSourceOperation(archiveOperation.operationId, { agentId, sessionId }).catch(e => console.warn(e));
   } catch (e) {
     // Session archived successfully but stop failed — still surface the error
     updateSidebarOperation(archiveOperation.operationId, { phase: 'degraded', errorCode: 'source_stop_failed' });
-    settleSidebarSourceOperation(archiveOperation.operationId, { agentId, sessionId }).catch(() => {});
-    refreshSidebarRuntimeAfterMutation(500).catch(() => {});
+    settleSidebarSourceOperation(archiveOperation.operationId, { agentId, sessionId }).catch(e => console.warn(e));
+    refreshSidebarRuntimeAfterMutation(500).catch(e => console.warn(e));
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
   }
 }

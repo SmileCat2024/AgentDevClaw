@@ -1589,7 +1589,7 @@
     }
     let sel = window.getSelection();
     let range = document.createRange();
-    try { range.setStart(pos.node, pos.offset); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); } catch (e) {}
+    try { range.setStart(pos.node, pos.offset); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); } catch (e) { console.warn(e); }
   }
 
   function getPickerAnchorRect(el) {

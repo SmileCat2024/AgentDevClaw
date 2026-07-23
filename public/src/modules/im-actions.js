@@ -179,7 +179,7 @@ window.createReceptionistSession = async (triggerButton) => {
       const newActiveId = updated?.active_workspace_session_id || updated?.workspace_sessions?.activeSessionId;
       if (newActiveId) {
         window.updateIMWorkspaceField('workspaceConfig.receptionistSessionId', newActiveId);
-        window.saveIMWorkspaceConfig().catch(() => {});
+        window.saveIMWorkspaceConfig().catch(e => console.warn(e));
       }
     }
   } finally {

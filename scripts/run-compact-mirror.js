@@ -358,7 +358,7 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
     };
   } finally {
     if (typeof agent.dispose === 'function') {
-      await agent.dispose().catch(() => {});
+      await agent.dispose().catch(e => console.warn(e));
     }
   }
 }

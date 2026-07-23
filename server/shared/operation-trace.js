@@ -60,7 +60,7 @@ export function createOperationTrace({ operationId, operation, agentId, sessionI
           source: 'server',
           timestamp: now,
           ...payload,
-        }, { source: 'server' })).catch(() => {});
+        }, { source: 'server' })).catch(e => console.warn(e));
       } catch {}
       return payload;
     },

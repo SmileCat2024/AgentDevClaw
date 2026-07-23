@@ -663,7 +663,7 @@ async function fwCancelFeatureImport() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uploadId }),
-    }).catch(() => {});
+    }).catch(e => console.warn(e));
   }
   fwRerender();
 }
@@ -681,7 +681,7 @@ async function fwConfirmFeatureImport(mode) {
     const result = await response.json();
     const token = result?.summary?.packageName || result?.summary?.id || pending?.summary?.packageName || pending?.summary?.id || '';
     window.ClawFW.featureImport = null;
-    await loadAgents().catch(() => {});
+    await loadAgents().catch(e => console.warn(e));
     if (mode === 'mount' && token) {
       await fwToggleFeature(pending.formId || 'assembly-form', token);
     } else {

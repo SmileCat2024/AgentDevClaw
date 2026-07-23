@@ -291,7 +291,7 @@ describe('createConfigSerializer', () => {
     // Second mutator should still execute
     const p2 = serializer((config) => { config.value = 77; return true; });
 
-    await p1.catch(() => {});  // expect rejection
+    await p1.catch(e => console.warn(e));  // expect rejection
     await p2;
 
     assert.equal(stored.value, 77);

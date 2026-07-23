@@ -309,7 +309,7 @@ window.submitTrimCompact = async () => {
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新会话已创建，但原会话归档失败：' : 'The new session was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
-    loadAgents().catch(() => {});
+    loadAgents().catch(e => console.warn(e));
     archiveRollback = null;
   } catch (error) {
     console.error('Failed to trim compact session:', error);
@@ -552,7 +552,7 @@ window.submitBranch = async () => {
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新分支已创建，但原会话归档失败：' : 'The branch was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
-    loadAgents().catch(() => {});
+    loadAgents().catch(e => console.warn(e));
     archiveRollback = null;
   } catch (error) {
     console.error('Failed to branch session:', error);

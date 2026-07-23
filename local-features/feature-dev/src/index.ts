@@ -784,7 +784,7 @@ async function injectManifestIntoArchive(archivePath: string, manifest: FeatureM
     await writeJsonFile(join(tempDir, 'package', FEATURE_MANIFEST_NAME), manifest);
     await runCommand('tar', ['-czf', archivePath, 'package'], tempDir);
   } finally {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(e => console.warn(e));
   }
 }
 
@@ -904,15 +904,15 @@ export class FeatureDevFeature implements AgentFeature {
         await fs.rename(fromPath, toPath).catch(async () => {
           const content = await fs.readFile(fromPath);
           await fs.writeFile(toPath, content);
-          await fs.rm(fromPath, { force: true }).catch(() => {});
+          await fs.rm(fromPath, { force: true }).catch(e => console.warn(e));
         });
       }
-      await fs.rmdir(legacyPlansDir).catch(() => {});
+      await fs.rmdir(legacyPlansDir).catch(e => console.warn(e));
     } catch {
       // Ignore missing legacy plans dir.
     }
 
-    await fs.rm(join(getProjectDocsetDir(this.workspaceDir), 'tasks'), { recursive: true, force: true }).catch(() => {});
+    await fs.rm(join(getProjectDocsetDir(this.workspaceDir), 'tasks'), { recursive: true, force: true }).catch(e => console.warn(e));
 
     const state = await this.readWorkspaceState();
     const startupForm = state?.forms?.['startup-form'] || {};
@@ -1468,7 +1468,7 @@ export class FeatureDevFeature implements AgentFeature {
           }
 
           await fs.copyFile(localArchivePath, targetArchivePath);
-          await fs.rm(localArchivePath, { force: true }).catch(() => {});
+          await fs.rm(localArchivePath, { force: true }).catch(e => console.warn(e));
 
           return {
             featureName: manifest.name,

@@ -172,8 +172,8 @@ export async function ensureAssemblyWorkspaceDependencies(envDir, selectedFeatur
   }, null, 2)}\n`, 'utf8');
 
   await Promise.all([
-    fs.rm(path.join(envDir, 'node_modules'), { recursive: true, force: true }).catch(() => {}),
-    fs.rm(path.join(envDir, 'package-lock.json'), { force: true }).catch(() => {}),
+    fs.rm(path.join(envDir, 'node_modules'), { recursive: true, force: true }).catch(e => console.warn(e)),
+    fs.rm(path.join(envDir, 'package-lock.json'), { force: true }).catch(e => console.warn(e)),
   ]);
 
   await runCommand(npmCommand, [
@@ -184,7 +184,7 @@ export async function ensureAssemblyWorkspaceDependencies(envDir, selectedFeatur
   ], { cwd: envDir });
 
   const hashContent = `${featureKey}|${depHash}`;
-  await fs.writeFile(hashFilePath, hashContent, 'utf8').catch(() => {});
+  await fs.writeFile(hashFilePath, hashContent, 'utf8').catch(e => console.warn(e));
 
   console.log(`[PERF] ensureAssemblyWorkspaceDependencies npm install DONE (${Date.now() - _t0}ms) deps=${Object.keys(nextDependencies).join(',')}`);
   return {

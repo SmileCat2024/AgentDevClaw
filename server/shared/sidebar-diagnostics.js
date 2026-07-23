@@ -134,7 +134,7 @@ export function createSidebarDiagnosticWriter(options = {}) {
     const cutoff = nowMs - retentionDays * 24 * 60 * 60 * 1000;
     await Promise.all(archived.map((entry, index) => {
       if (entry.mtimeMs >= cutoff && index < maxArchivedFiles) return null;
-      return fs.rm(entry.filePath, { force: true }).catch(() => {});
+      return fs.rm(entry.filePath, { force: true }).catch(e => console.warn(e));
     }));
   }
 
@@ -164,7 +164,7 @@ export function createSidebarDiagnosticWriter(options = {}) {
     if (sanitized.length === 0) return Promise.resolve(0);
     const lines = sanitized.map((event) => JSON.stringify(event)).join('\n') + '\n';
     const task = queue.then(() => writeLines(lines)).then(() => sanitized.length);
-    queue = task.catch(() => {});
+    queue = task.catch(e => console.warn(e));
     return task;
   }
 

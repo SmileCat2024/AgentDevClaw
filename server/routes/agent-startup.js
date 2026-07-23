@@ -223,7 +223,7 @@ export function createAgentStartupFns(deps) {
         notifyRuntimeReady(agent.id, resolvedSessionId || null);
         // Track open session for post-restart recovery
         if (resolvedSessionId) {
-          addOpenSession(agent.id, resolvedSessionId).catch(() => {});
+          addOpenSession(agent.id, resolvedSessionId).catch(e => console.warn(e));
         }
       }
       log(agent.id, text.trim());

@@ -156,7 +156,7 @@ async function runMirrorCompaction(scriptPath, args, cwd, timeoutMs = 600000) {
       } catch (error) {
         reject(new Error(`Failed to read mirror compaction result file: ${error instanceof Error ? error.message : String(error)}`));
       } finally {
-        await fs.rm(resultDir, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
       }
     });
   });

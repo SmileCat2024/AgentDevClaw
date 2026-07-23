@@ -215,7 +215,7 @@ window.createAssemblyEnvironment = async () => {
     await syncAssemblyEnvironmentDraft(agent, draft, {
       env_status: 'error',
       env_status_message: (currentLanguage === 'zh' ? '环境创建失败：' : 'Environment creation failed: ') + (error?.message || error),
-    }).catch(() => {});
+    }).catch(e => console.warn(e));
     window.alert('Failed to create environment: ' + (error?.message || error));
   }
 };
@@ -357,7 +357,7 @@ window.launchAssemblyInstance = async () => {
       env_status_message: (currentLanguage === 'zh' ? '启动失败：' : 'Launch failed: ') + (error && error.message ? error.message : error),
     }, {
       persist: true,
-    }).catch(() => {});
+    }).catch(e => console.warn(e));
     window.alert('Assembly runtime failed: ' + (error && error.message ? error.message : error));
   }
 };
@@ -931,7 +931,7 @@ window.stopAssemblySessionRuntime = async (sessionId) => {
             : 'Instance stopped. The setup remains available for editing or relaunching.',
         }, {
           persist: true,
-        }).catch(() => {});
+        }).catch(e => console.warn(e));
       }
     }
     await loadAgents();

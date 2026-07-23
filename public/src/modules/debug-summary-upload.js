@@ -173,7 +173,7 @@ function openSummaryPopup(agentId, sessionId) {
         summaryPopupData.data = data;
         updateSummaryOverlayDOM(summaryPopupData);
       }
-      loadAgents().catch(() => {});
+      loadAgents().catch(e => console.warn(e));
       ClawToast.update(_toastId, {
         status: 'success',
         title: _isZh ? '摘要已生成' : 'Summary generated',
@@ -232,7 +232,7 @@ function regenerateSummary() {
         summaryPopupData.data = data;
         updateSummaryOverlayDOM(summaryPopupData);
       }
-      loadAgents().catch(() => {});
+      loadAgents().catch(e => console.warn(e));
       ClawToast.update(_toastId, {
         status: 'success',
         title: _isZh ? '摘要已重新生成' : 'Summary regenerated',
