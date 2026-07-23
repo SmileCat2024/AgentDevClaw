@@ -20,7 +20,8 @@ export {
   buildSessionLatestMessage,
 } from './group-chat/pure-functions.js';
 
-export { createGroupChatDataLayer, getGroupChatsForSidebar } from './group-chat/data-layer.js';
+import { createGroupChatDataLayer, getGroupChatsForSidebar } from './group-chat/data-layer.js';
+export { createGroupChatDataLayer, getGroupChatsForSidebar };
 
 import {
   RESOURCE_ALLOWED_EXTS,
@@ -133,6 +134,7 @@ const {
 } = sessionResolver;
 
 const awareness = createAwarenessModule({
+  app,
   readGroupChat, collectIdentities, readViewerJson,
   getAgentRuntime, getManagedRuntimeKey, managedAgents,
 });

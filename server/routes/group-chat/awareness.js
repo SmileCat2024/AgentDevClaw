@@ -21,6 +21,7 @@ const ADMIN_DEFAULT_CONTEXT_LENGTH = 200000;
 
 export function createAwarenessModule(deps) {
   const {
+    app,
     readGroupChat,
     collectIdentities,
     readViewerJson,
