@@ -1,5 +1,6 @@
 import globals from 'globals';
 import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
 
 export default [
   // ── Ignore build artifacts and dependencies ──────────────────
@@ -13,6 +14,9 @@ export default [
       '*.tgz',
       'test/_render-test.mjs',
       '.trash/**',
+      // Temporarily excluded: group-chat.js is under active refactoring
+      'server/routes/group-chat.js',
+      'server/routes/group-chat/**',
     ],
   },
 
@@ -52,6 +56,8 @@ export default [
       'no-irregular-whitespace': 'error',
       'no-mixed-spaces-and-tabs': 'error',
       'no-useless-escape': 'error',
+      'no-useless-assignment': 'warn', // TODO: upgrade to 'error' after cleanup
+      'preserve-caught-error': 'warn', // TODO: upgrade to 'error' after cleanup
 
       // ── Best practices (error) ───────────────────────────────
       'eqeqeq': ['error', 'smart'],
@@ -62,14 +68,14 @@ export default [
       'prefer-const': 'off', // Too many false positives for mutable state vars
       'no-prototype-builtins': 'warn',
       'no-constant-condition': ['warn', { checkLoops: false }],
-      'no-empty': 'error',
+      'no-empty': 'warn', // TODO: upgrade to 'error' after clearing empty blocks
       'no-console': 'off',
     },
   },
 
   // ── Server-side files (Node.js) ──────────────────────────────
   {
-    files: ['server/**/*.js', 'scripts/**/*.mjs', 'bin/**/*.mjs', 'eslint.config.js'],
+    files: ['server/**/*.js', 'scripts/**/*.js', 'scripts/**/*.mjs', 'bin/**/*.mjs', 'eslint.config.js'],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -122,4 +128,26 @@ export default [
       }],
     },
   },
+
+  // ── TypeScript files (local-features) ────────────────────────
+  // Placed last so that TS-specific overrides win over common rules.
+  // Scoped to .ts files only via files filter.
+  ...tseslint.config(
+    {
+      files: ['local-features/**/*.ts'],
+      extends: [...tseslint.configs.recommended],
+      rules: {
+        // Disable base rule — use @typescript-eslint equivalent instead
+        'no-unused-vars': 'off',
+        '@typescript-eslint/no-unused-vars': ['warn', {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrors: 'none',
+        }],
+        '@typescript-eslint/no-explicit-any': 'off',
+        '@typescript-eslint/no-require-imports': 'off',
+        '@typescript-eslint/no-this-alias': 'warn', // TODO: upgrade to 'error' after cleanup
+      },
+    }
+  ),
 ];

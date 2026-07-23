@@ -18,33 +18,34 @@
     "test:core": "node --test test/*.test.js",
     "test:coverage": "node --experimental-test-coverage --test test/*.test.js",
     "test:features": "node --test local-features/dist/checkpoint/test/smoke.test.js local-features/dist/context-compaction-mirror/test/smoke.test.js local-features/dist/context-guard/test/smoke.test.js local-features/dist/dispatch/test/smoke.test.js local-features/dist/context-handoff-seed/test/smoke.test.js local-features/dist/continuity-participant/test/oninitiate-protection.test.js local-features/dist/flow/test/flow-feature.test.js",
-    "pretest:features": "npm run build:local-features"
+    "pretest:features": "npm run build:local-features",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@agentdev/audio-feedback-feature": "file:resources/features/agentdev-audio-feedback-feature-0.1.0.tgz",
     "@agentdev/audit-feature": "file:resources/features/agentdev-audit-feature-0.1.0.tgz",
+    "@agentdev/feishu-bot": "file:resources/features/agentdev-feishu-bot-0.1.0.tgz",
     "@agentdev/image-reader-feature": "file:resources/features/agentdev-image-reader-feature-0.1.0.tgz",
     "@agentdev/lsp-feature": "file:resources/features/agentdev-lsp-feature-0.1.0.tgz",
     "@agentdev/memory-feature": "file:resources/features/agentdev-memory-feature-0.1.0.tgz",
     "@agentdev/plugin-compat-feature": "file:resources/features/agentdev-plugin-compat-feature-0.1.0.tgz",
     "@agentdev/qqbot-feature": "file:resources/features/agentdev-qqbot-feature-0.2.0.tgz",
+    "@agentdev/rokid-bot": "file:resources/features/agentdev-rokid-bot-0.1.0.tgz",
     "@agentdev/shell-feature": "file:resources/features/agentdev-shell-feature-0.1.0.tgz",
     "@agentdev/tts-feature": "file:resources/features/agentdev-tts-feature-0.1.0.tgz",
     "@agentdev/visual-feature": "file:resources/features/agentdev-visual-feature-0.1.0.tgz",
     "@agentdev/websearch-feature": "file:resources/features/agentdev-websearch-feature-0.1.0.tgz",
-    "@agentdev/weixin-bot": "file:resources/features/agentdev-weixin-bot-0.2.0.tgz",
-    "@agentdev/feishu-bot": "file:resources/features/agentdev-feishu-bot-0.1.0.tgz",
     "@agentdev/wecom-bot": "file:resources/features/agentdev-wecom-bot-0.1.0.tgz",
-    "@agentdev/rokid-bot": "file:resources/features/agentdev-rokid-bot-0.1.0.tgz",
+    "@agentdev/weixin-bot": "file:resources/features/agentdev-weixin-bot-0.2.0.tgz",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "agentdev": "^0.2.7",
     "express": "^4.21.2",
     "marked": "^18.0.4",
     "multer": "^2.1.1",
     "openai": "^6.45.0",
+    "typescript": "^5.3.3",
     "undici": "^7.25.0",
-    "zod": "^4.4.3",
-    "typescript": "^5.3.3"
+    "zod": "^4.4.3"
   },
   "bin": {
     "claw": "./bin/claw.mjs",
@@ -52,5 +53,11 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0",
+    "typescript-eslint": "^8.65.0"
   }
 }
