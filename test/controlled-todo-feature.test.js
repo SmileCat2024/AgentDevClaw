@@ -34,3 +34,93 @@ describe('ControlledTodoFeature terminal timestamps', () => {
     assert.equal(reopened.metadata.completedAt, undefined);
   });
 });
+
+describe('ControlledTodoFeature interrupt target on restore (zombie breakpoint fix)', () => {
+  it('clears interrupt target when target task is already completed', () => {
+    const feature = new ControlledTodoFeature();
+    const task1 = feature.createTask('任务一', '描述', '正在执行');
+    const task2 = feature.createTask('任务二', '描述', '正在执行');
+    feature.updateTask(task2.id, { status: 'completed' });
+
+    // 模拟 captureState 快照：interruptTargetId 指向已完成的 task2
+    const snapshot = {
+      ...feature.captureState(),
+      interruptTargetId: task2.id,
+    };
+
+    // 新实例模拟 restoreState
+    const restored = new ControlledTodoFeature();
+    restored.restoreState(snapshot);
+
+    assert.equal(restored.getInterruptTarget(), null,
+      'interruptTargetId should be null because task2 is already completed');
+  });
+
+  it('clears interrupt target when target task is already deleted', () => {
+    const feature = new ControlledTodoFeature();
+    const task = feature.createTask('任务', '描述', '正在执行');
+    feature.updateTask(task.id, { status: 'deleted' });
+
+    const snapshot = {
+      ...feature.captureState(),
+      interruptTargetId: task.id,
+    };
+
+    const restored = new ControlledTodoFeature();
+    restored.restoreState(snapshot);
+
+    assert.equal(restored.getInterruptTarget(), null,
+      'interruptTargetId should be null because task is already deleted');
+  });
+
+  it('clears interrupt target when target task does not exist in restored tasks', () => {
+    const feature = new ControlledTodoFeature();
+    feature.createTask('任务一', '描述', '正在执行');
+
+    // interruptTargetId 指向一个在 task 列表中不存在的 ID
+    const snapshot = {
+      ...feature.captureState(),
+      interruptTargetId: '999',
+    };
+
+    const restored = new ControlledTodoFeature();
+    restored.restoreState(snapshot);
+
+    assert.equal(restored.getInterruptTarget(), null,
+      'interruptTargetId should be null because task 999 does not exist');
+  });
+
+  it('preserves interrupt target when target task is still pending', () => {
+    const feature = new ControlledTodoFeature();
+    const task1 = feature.createTask('任务一', '描述', '正在执行');
+    const task2 = feature.createTask('任务二', '描述', '正在执行');
+
+    const snapshot = {
+      ...feature.captureState(),
+      interruptTargetId: task2.id,
+    };
+
+    const restored = new ControlledTodoFeature();
+    restored.restoreState(snapshot);
+
+    assert.equal(restored.getInterruptTarget(), task2.id,
+      'interruptTargetId should be preserved because task2 is still pending');
+  });
+
+  it('preserves interrupt target when target task is in_progress', () => {
+    const feature = new ControlledTodoFeature();
+    const task = feature.createTask('进行中任务', '描述', '正在执行');
+    feature.updateTask(task.id, { status: 'in_progress' });
+
+    const snapshot = {
+      ...feature.captureState(),
+      interruptTargetId: task.id,
+    };
+
+    const restored = new ControlledTodoFeature();
+    restored.restoreState(snapshot);
+
+    assert.equal(restored.getInterruptTarget(), task.id,
+      'interruptTargetId should be preserved because task is in_progress');
+  });
+});

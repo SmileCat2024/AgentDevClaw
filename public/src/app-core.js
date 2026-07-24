@@ -544,6 +544,7 @@ let currentTodoPlan = {
 };
 let currentTodoPlanSignature = '';
 let _interruptTargetCache = new Map(); // key: runtimeContextKey, value: taskId|null
+let _lastInterruptUserActionAt = 0; // timestamp of last user click on interrupt control
 function getInterruptTargetId() {
   const key = getRuntimeContextKey();
   if (!key) return null;

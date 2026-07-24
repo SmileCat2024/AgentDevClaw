@@ -987,6 +987,7 @@ async function runPollCycle() {
 
       // 当目标任务进入终态时，自动清除中断标记
       let interruptCleared = false;
+      let interruptSynced = false;
       if (nextTodoPlan !== null) {
         const currentInterruptTarget = getInterruptTargetId();
         if (currentInterruptTarget) {
@@ -994,6 +995,17 @@ async function runPollCycle() {
           if (target && (target.status === 'completed' || target.status === 'deleted')) {
             setInterruptTargetId(null);
             interruptCleared = true;
+          }
+        }
+
+        // 从 server 同步 interruptTargetId 到本地缓存。
+        // 仅在用户最近未手动操作时同步（避免覆盖乐观更新）。
+        const userActionGraceExpired = (Date.now() - _lastInterruptUserActionAt) > 3000;
+        if (userActionGraceExpired) {
+          const serverTarget = nextTodoPlan.interruptTargetId || null;
+          if (serverTarget !== currentInterruptTarget) {
+            setInterruptTargetId(serverTarget);
+            interruptSynced = true;
           }
         }
       }
@@ -1012,7 +1024,7 @@ async function runPollCycle() {
           renderFeaturePanel();
         }
         updatePlanBadge();
-      } else if (interruptCleared && activeFeaturePanel === 'plan') {
+      } else if ((interruptCleared || interruptSynced) && activeFeaturePanel === 'plan') {
         renderFeaturePanel();
       }
 

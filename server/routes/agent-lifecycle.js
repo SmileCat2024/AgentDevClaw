@@ -351,16 +351,12 @@ export function createAgentLifecycleModule(ctx) {
         if (!agentId) {
           return res.status(400).json({ error: 'agentId is required' });
         }
-        // Try exact session match first, then fall back to primary runtime
+        // Route to exact (agentId, sessionId) only.
+        // Do NOT fall back to pickPrimaryAgentRuntime — that would silently
+        // deliver the interrupt to a different session (cross-session contamination).
         let sent = false;
         if (sessionId) {
           sent = sendIPCtoSession(agentId, sessionId, {
-            type: 'todo-control',
-            taskId: taskId || null,
-          });
-        }
-        if (!sent) {
-          sent = sendIPCtoSession(agentId, undefined, {
             type: 'todo-control',
             taskId: taskId || null,
           });

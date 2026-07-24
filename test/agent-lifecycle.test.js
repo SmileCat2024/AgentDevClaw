@@ -470,4 +470,95 @@ describe('agent-lifecycle', () => {
       assert.equal(responseData.ready, false);
     });
   });
+
+  // ── todo_control route ──────────────────────────────────
+
+  describe('todo_control route', () => {
+    function captureTodoControlHandler(mod) {
+      let handler = null;
+      const app = {
+        get: () => {},
+        post: (path, ...rest) => {
+          if (path === '/protoclaw/todo_control') {
+            // Express middleware: express.json() then the handler
+            // The middleware array is [jsonMiddleware, handler]
+            handler = rest[rest.length - 1];
+          }
+        },
+        put: () => {},
+        delete: () => {},
+      };
+      mod.setupRoutes(app, { json: () => (req, res, next) => next() });
+      return handler;
+    }
+
+    it('sends IPC to the exact (agentId, sessionId) runtime', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      const childA = createMockChild();
+      const childB = createMockChild();
+      const messagesA = [];
+      const messagesB = [];
+      childA.send = (msg) => { messagesA.push(msg); return true; };
+      childB.send = (msg) => { messagesB.push(msg); return true; };
+
+      injectRuntime('test-agent', 'session-A', childA);
+      injectRuntime('test-agent', 'session-B', childB);
+
+      let responseData = null;
+      await handler(
+        { body: { agentId: 'test-agent', sessionId: 'session-A', taskId: '3' } },
+        { json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+
+      assert.equal(responseData.ok, true);
+      assert.equal(messagesA.length, 1, 'session-A should receive the IPC');
+      assert.equal(messagesA[0].type, 'todo-control');
+      assert.equal(messagesA[0].taskId, '3');
+      assert.equal(messagesB.length, 0, 'session-B should NOT receive any IPC');
+    });
+
+    it('does NOT fall back to primary runtime when sessionId does not match', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      // Only session-B exists; request targets session-A
+      const childB = createMockChild();
+      const messagesB = [];
+      childB.send = (msg) => { messagesB.push(msg); return true; };
+      injectRuntime('test-agent', 'session-B', childB);
+
+      let responseData = null;
+      await handler(
+        { body: { agentId: 'test-agent', sessionId: 'session-A', taskId: '3' } },
+        { json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+
+      assert.equal(responseData.ok, false, 'should report not sent when session not found');
+      assert.equal(messagesB.length, 0, 'session-B must NOT receive the IPC (no fallback)');
+    });
+
+    it('returns ok=false when sessionId is missing', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      const child = createMockChild();
+      const messages = [];
+      child.send = (msg) => { messages.push(msg); return true; };
+      injectRuntime('test-agent', 'session-X', child);
+
+      let responseData = null;
+      await handler(
+        { body: { agentId: 'test-agent', taskId: '3' } },
+        { json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+
+      assert.equal(responseData.ok, false, 'should not send without sessionId');
+      assert.equal(messages.length, 0);
+    });
+  });
 });

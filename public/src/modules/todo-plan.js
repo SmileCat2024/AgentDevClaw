@@ -177,8 +177,9 @@ function renderPlanPanel() {
 
 async function sendTodoControl(taskId) {
   if (!currentRuntimeAgentId) return;
-  const agent = (allAgents || []).find(a => a.id === currentRuntimeAgentId || a.id === currentAgentId);
-  const sessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || undefined;
+  // 用 runtime_session_id 精确匹配当前 session 条目，
+  // 不再用 OR find（会误匹配 workspace host 条目，拿到错误的 active session）
+  const sessionId = getRuntimeWorkspaceSessionId(currentRuntimeAgentId) || undefined;
   try {
     await fetch('/protoclaw/todo_control', {
       method: 'POST',
@@ -199,6 +200,7 @@ featurePanelBody.addEventListener('click', (e) => {
   const taskId = btn.dataset.taskId;
   // 立即更新前端变量并重新渲染
   setInterruptTargetId(action === 'set' ? taskId : null);
+  _lastInterruptUserActionAt = Date.now();
   if (activeFeaturePanel === 'plan') {
     renderFeaturePanel();
   }

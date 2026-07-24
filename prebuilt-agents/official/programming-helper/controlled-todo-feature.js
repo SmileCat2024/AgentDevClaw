@@ -120,6 +120,14 @@ class ControlledTodoFeatureInner extends TodoFeature {
   restoreState(snapshot) {
     super.restoreState(snapshot);
     this._interruptTargetId = snapshot?.interruptTargetId || null;
+    // 如果目标 task 已终态或不存在，清除中断目标（防止僵尸断点在精简/压缩后意外触发）
+    if (this._interruptTargetId) {
+      const task = this.getTask(this._interruptTargetId);
+      if (!task || task.status === 'completed' || task.status === 'deleted') {
+        console.log(`[ControlledTodoFeature] Clearing stale interrupt target ${this._interruptTargetId} on restore (task ${task ? task.status : 'missing'})`);
+        this._interruptTargetId = null;
+      }
+    }
   }
 }
 
