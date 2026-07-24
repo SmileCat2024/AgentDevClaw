@@ -1550,12 +1550,16 @@ function getEmptyStateHtml() {
   let _hint = _isZh ? '输入消息开始对话' : 'Type a message to begin';
   if (_displayName) {
     return '<div class="empty-state empty-welcome">'
+      + '<div class="empty-welcome-glow"></div>'
       + '<div class="empty-welcome-title">' + escapeHtml((_isZh ? '欢迎使用 ' : 'Welcome to ') + _displayName) + '</div>'
+      + '<div class="empty-welcome-deco"></div>'
       + '<div class="empty-welcome-hint">' + escapeHtml(_hint) + '</div>'
       + '</div>';
   }
   return '<div class="empty-state empty-welcome">'
+    + '<div class="empty-welcome-glow"></div>'
     + '<div class="empty-welcome-title">' + escapeHtml(_title) + '</div>'
+    + '<div class="empty-welcome-deco"></div>'
     + '<div class="empty-welcome-hint">' + escapeHtml(_hint) + '</div>'
     + '</div>';
 }
