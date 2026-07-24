@@ -194,10 +194,11 @@ window.submitTrimCompact = async () => {
   // would preserve everything from turn N onwards, which breaks when N=0.
   const keptRounds = rounds.filter(r => !r.suggestedTrim);
 
-  const policy = {};
-  if (keptRounds.length > 0) {
-    policy.preservedTurns = keptRounds.map(r => r.turnStart);
-  }
+  // Always set preservedTurns — even when empty. This gives the server an
+  // explicit signal about which rounds the user chose to keep in full detail.
+  // Skill protection (keepRecentSkillInvokes) operates independently at the
+  // message level, preserving only invoke_skill calls and their results.
+  const policy = { preservedTurns: keptRounds.map(r => r.turnStart) };
   if (keepSkillInvokes != null && keepSkillInvokes > 0) {
     policy.keepRecentSkillInvokes = keepSkillInvokes;
   }

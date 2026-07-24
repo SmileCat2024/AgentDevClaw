@@ -274,8 +274,10 @@ function shouldHandleToolActivity(messageTurn, foldedToolTurns, policy) {
   return foldedToolTurns.has(messageTurn);
 }
 
-function getSkillInvokeProtectedTurns(rawMessages, policy) {
+function getSkillInvokeProtectedMessages(rawMessages, policy) {
   if (!policy.keepRecentSkillInvokes) return null;
+
+  // Phase 1: find the N most recent turns that contain invoke_skill calls.
   const skillTurns = [];
   for (let i = rawMessages.length - 1; i >= 0; i--) {
     const m = rawMessages[i];
@@ -289,7 +291,41 @@ function getSkillInvokeProtectedTurns(rawMessages, policy) {
       if (skillTurns.length >= policy.keepRecentSkillInvokes && policy.keepRecentSkillInvokes !== Infinity) break;
     }
   }
-  return skillTurns.length > 0 ? new Set(skillTurns) : null;
+  if (skillTurns.length === 0) return null;
+  const protectedTurnSet = new Set(skillTurns);
+
+  // Phase 2: collect only the specific messages to protect —
+  // the assistant messages that actually carry invoke_skill calls,
+  // and the tool-result messages whose toolCallId matches those calls.
+  // Other messages in the same turn (e.g. unrelated tool calls) are NOT protected.
+  const protectedIndices = new Set();
+  const skillToolCallIds = new Set();
+
+  rawMessages.forEach((message, index) => {
+    const turn = getMessageTurn(message, index);
+    if (!protectedTurnSet.has(turn)) return;
+    if (message?.role !== 'assistant') return;
+    const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+    const skillCalls = toolCalls.filter(tc => tc?.name === 'invoke_skill');
+    if (skillCalls.length === 0) return;
+    protectedIndices.add(index);
+    for (const tc of skillCalls) {
+      const id = cleanInlineText(tc?.id);
+      if (id) skillToolCallIds.add(id);
+    }
+  });
+
+  // Protect tool results for those skill calls (may be in a different turn
+  // in edge cases, so match by toolCallId rather than turn).
+  rawMessages.forEach((message, index) => {
+    if (message?.role !== 'tool') return;
+    const toolCallId = cleanInlineText(message?.toolCallId);
+    if (toolCallId && skillToolCallIds.has(toolCallId)) {
+      protectedIndices.add(index);
+    }
+  });
+
+  return protectedIndices.size > 0 ? protectedIndices : null;
 }
 
 function createSeedMessage(role, content, turn) {
@@ -339,7 +375,11 @@ function flushPendingToolFold(seedMessages, pendingFold, policy, stats) {
 export function buildTrimmedSeedMessages(rawMessages, policy) {
   const retainedTurns = getRetainedTurnSet(rawMessages, policy);
   const foldedToolTurns = getFoldedToolTurnSet(rawMessages, retainedTurns, policy);
-  const skillProtectedTurns = getSkillInvokeProtectedTurns(rawMessages, policy);
+  // Skill protection is now message-level: only the specific assistant messages
+  // that carry invoke_skill calls and their corresponding tool results are
+  // preserved in full detail. Other messages in the same turn are still
+  // subject to normal folding.
+  const skillProtectedIndices = getSkillInvokeProtectedMessages(rawMessages, policy);
   const protectedToolNames = new Set(Array.isArray(policy?.preserveToolNames) ? policy.preserveToolNames : []);
   const protectedToolCallIds = new Set();
   for (const message of rawMessages) {
@@ -454,18 +494,15 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       return;
     }
 
-    // Skill-protected zone: turns containing recent invoke_skill calls pass through intact
-    if (skillProtectedTurns && skillProtectedTurns.has(turn)) {
+    // Skill-protected messages: only the specific invoke_skill assistant
+    // messages and their tool results pass through intact. Other messages
+    // in the same turn are NOT protected here — they fall through to folding.
+    if (skillProtectedIndices && skillProtectedIndices.has(index)) {
       flushIfNeeded();
-      if (role === 'tool' || shouldKeepDialogueMessage(role, policy)) {
-        seedMessages.push({ ...message, turn });
-        stats.keptSeedMessageCount += 1;
-        if (role !== 'tool') {
-          stats.keptDialogueMessageCount += 1;
-        }
-      } else {
-        stats.droppedDialogueMessageCount += 1;
-        stats.droppedMessageCount += 1;
+      seedMessages.push({ ...message, turn });
+      stats.keptSeedMessageCount += 1;
+      if (role !== 'tool') {
+        stats.keptDialogueMessageCount += 1;
       }
       return;
     }

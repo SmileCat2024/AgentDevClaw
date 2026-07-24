@@ -243,6 +243,85 @@ describe('trim-compact fixes', () => {
     });
   });
 
+  describe('skill protection is message-level (not turn-level)', () => {
+    it('protects only invoke_skill call and its result, NOT other tools in the same turn', () => {
+      // This is the core bug: a single invoke_skill in a 286-message turn
+      // used to protect ALL 286 messages. Now only the skill call itself
+      // and its tool result should be preserved; other tool calls in the
+      // same turn should still be folded.
+      const messages = [
+        { role: 'user', content: 'do research', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ id: 'tc_skill', name: 'invoke_skill', arguments: '{"skill":"test"}' }] },
+        { role: 'tool', toolCallId: 'tc_skill', content: '{"success":true,"result":"skill content"}', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ id: 'tc_read', name: 'read', arguments: '{"filePath":"a.js"}' }] },
+        { role: 'tool', toolCallId: 'tc_read', content: '{"success":true,"result":"file content"}', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ id: 'tc_bash', name: 'bash', arguments: '{}' }] },
+        { role: 'tool', toolCallId: 'tc_bash', content: '{"success":true,"result":"done"}', turn: 0 },
+        { role: 'assistant', content: 'Finished research.', turn: 0 },
+        { role: 'user', content: 'thanks', turn: 1 },
+        { role: 'assistant', content: 'you are welcome', turn: 1 },
+      ];
+
+      // Trim all rounds (preservedTurns = []), skill protection enabled
+      const policy = normalizeExportPolicy({ preservedTurns: [], keepRecentSkillInvokes: 5 });
+      const { seedMessages, stats } = buildTrimmedSeedMessages(messages, policy);
+
+      // The invoke_skill assistant message should be preserved in full detail
+      const skillAssistant = seedMessages.find(m =>
+        m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.some(tc => tc.name === 'invoke_skill')
+      );
+      assert.ok(skillAssistant, 'invoke_skill assistant message should be preserved');
+
+      // The skill tool result should be preserved in full detail
+      const skillTool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc_skill');
+      assert.ok(skillTool, 'invoke_skill tool result should be preserved');
+
+      // BUT: the read/bash tool calls in the same turn should be folded
+      const readTool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc_read');
+      assert.ok(!readTool, 'read tool result should NOT be preserved (not a skill call)');
+      const bashTool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc_bash');
+      assert.ok(!bashTool, 'bash tool result should NOT be preserved (not a skill call)');
+
+      // Fold notes should exist for the non-skill tool calls
+      const foldNotes = seedMessages.filter(m => m.content.includes('[Folded tool activity]'));
+      assert.ok(foldNotes.length > 0, 'non-skill tool calls should be folded');
+      assert.ok(stats.foldedToolCallCount > 0, 'folded tool call count should be > 0');
+    });
+
+    it('protects skill calls even when preservedTurns is null (default behavior)', () => {
+      const messages = [
+        { role: 'user', content: 'do research', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ id: 'tc_skill', name: 'invoke_skill', arguments: '{"skill":"test"}' }] },
+        { role: 'tool', toolCallId: 'tc_skill', content: '{"success":true,"result":"skill content"}', turn: 0 },
+        { role: 'user', content: 'thanks', turn: 1 },
+        { role: 'assistant', content: 'welcome', turn: 1 },
+      ];
+
+      // No preservedTurns at all (null) — default behavior
+      const policy = normalizeExportPolicy({ keepRecentSkillInvokes: 5 });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      const skillTool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc_skill');
+      assert.ok(skillTool, 'skill tool result should be preserved when preservedTurns is null');
+    });
+
+    it('does NOT protect skill calls when keepRecentSkillInvokes is disabled', () => {
+      const messages = [
+        { role: 'user', content: 'do research', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ id: 'tc_skill', name: 'invoke_skill', arguments: '{"skill":"test"}' }] },
+        { role: 'tool', toolCallId: 'tc_skill', content: '{"success":true,"result":"skill content"}', turn: 0 },
+        { role: 'user', content: 'thanks', turn: 1 },
+        { role: 'assistant', content: 'welcome', turn: 1 },
+      ];
+
+      const policy = normalizeExportPolicy({ keepRecentSkillInvokes: null });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      const skillTool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc_skill');
+      assert.ok(!skillTool, 'skill tool result should NOT be preserved when keepRecentSkillInvokes is null');
+    });
+  });
+
   describe('Fix 1: seed feature turn collision verification (logic)', () => {
     // This test verifies the core logic that was fixed:
     // Given seed messages with max turn N, _callIndex should be set to N+1
