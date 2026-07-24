@@ -1561,6 +1561,30 @@ body[data-theme="light"] .settings-input:focus {
   box-shadow: 0 0 0 3px rgba(99, 145, 255, 0.1);
 }
 
+.settings-input.invalid {
+  border-color: rgba(255, 107, 107, 0.6);
+}
+
+.settings-input.invalid:focus {
+  border-color: rgba(255, 107, 107, 0.8);
+  box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.12);
+}
+
+body[data-theme="light"] .settings-input.invalid {
+  border-color: #e53e3e;
+}
+
+body[data-theme="light"] .settings-input.invalid:focus {
+  border-color: #e53e3e;
+  box-shadow: 0 0 0 3px rgba(229, 62, 62, 0.1);
+}
+
+.settings-field-warning {
+  font-size: 11px;
+  color: #ff6b6b;
+  margin-top: 2px;
+}
+
 .usage-info-window {
   width: min(100%, 1040px);
   height: min(100%, 820px);

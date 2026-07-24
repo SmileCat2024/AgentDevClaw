@@ -178,7 +178,35 @@ function renderSettingsOverlay() {
     '</div>',
     '</div>',
   ].join('');
+
+  if (typeof window.validateTokenFields === 'function') window.validateTokenFields();
 }
+
+window.validateTokenFields = function() {
+  const thinkingInput = document.getElementById('settings-preset-thinking');
+  const maxTokensInput = document.getElementById('settings-preset-max-tokens');
+  const warningEl = document.getElementById('settings-token-warning');
+  if (!thinkingInput || !maxTokensInput || !warningEl) return;
+
+  const isZh = (typeof currentLanguage === 'function' ? currentLanguage() : window.ClawFW?.lang) === 'zh';
+  const tbt = parseInt(thinkingInput.value, 10);
+  const mt = parseInt(maxTokensInput.value, 10);
+  const hasThinking = Number.isFinite(tbt) && tbt > 0;
+  const hasMax = Number.isFinite(mt) && mt > 0;
+
+  thinkingInput.classList.remove('invalid');
+  maxTokensInput.classList.remove('invalid');
+  warningEl.style.display = 'none';
+
+  if (hasThinking && hasMax && mt <= tbt) {
+    thinkingInput.classList.add('invalid');
+    maxTokensInput.classList.add('invalid');
+    warningEl.textContent = isZh
+      ? 'Max Output Tokens 必须大于 Thinking Budget Tokens，否则模型没有空间输出实际内容。'
+      : 'Max Output Tokens must be greater than Thinking Budget Tokens, otherwise the model has no room for actual output.';
+    warningEl.style.display = 'block';
+  }
+};
 
 window.switchSettingsTab = function(tab) {
   window.ClawFW.settingsTab = tab;
@@ -251,14 +279,15 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>Thinking Budget Tokens</label>',
-    '<input class="settings-input" id="settings-preset-thinking" type="number" value="' + (preset.thinkingBudgetTokens ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '">',
+    '<input class="settings-input" id="settings-preset-thinking" type="number" value="' + (preset.thinkingBudgetTokens ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '" oninput="validateTokenFields()">',
     '</div>',
     '<div class="settings-field">',
     '<label>Max Output Tokens</label>',
-    '<input class="settings-input" id="settings-preset-max-tokens" type="number" value="' + (preset.maxTokens ?? '') + '" placeholder="' + (isZh ? '留空自动计算' : 'Leave empty for auto') + '">',
+    '<input class="settings-input" id="settings-preset-max-tokens" type="number" value="' + (preset.maxTokens ?? '') + '" placeholder="' + (isZh ? '留空自动计算' : 'Leave empty for auto') + '" oninput="validateTokenFields()">',
     '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? '含思考内容的总输出上限。留空时框架会根据思考预算自动推算' : 'Total output cap incl. thinking. Auto-calculated from thinking budget when empty') + '</div>',
     '</div>',
     '</div>',
+    '<div id="settings-token-warning" style="display:none;" class="settings-field-warning"></div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>Temperature</label>',

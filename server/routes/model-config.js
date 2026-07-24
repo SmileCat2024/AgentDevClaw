@@ -8,57 +8,6 @@ import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
 
 // ── Model Config ──────────────────────────────────────────────────
 
-/**
- * 校验 maxTokens 和 thinkingBudgetTokens 的合法性。
- * 规则：
- *   - maxTokens 必须是 > 0 的有限数（0 会导致框架 fallback 到 DEFAULT_MAX_TOKENS=4096，太小）
- *   - 若设置了 thinkingBudgetTokens > 0，则 maxTokens 必须 > thinkingBudgetTokens
- *     （思考预算必须严格小于输出上限，否则模型没有空间输出实际内容）
- *
- * 返回错误消息数组（空数组 = 通过）。
- */
-function validateModelTokenSettings(name, maxTokens, thinkingBudgetTokens) {
-  const errors = [];
-  const mt = Number(maxTokens);
-  const tbt = Number(thinkingBudgetTokens);
-
-  if (!Number.isFinite(mt) || mt <= 0) {
-    errors.push(`「${name}」maxTokens 必须是大于 0 的正整数（当前值: ${maxTokens}）。填 0 会导致框架使用默认值 4096，对于编程任务太小。`);
-  }
-
-  if (Number.isFinite(tbt) && tbt > 0 && Number.isFinite(mt) && mt > 0 && mt <= tbt) {
-    errors.push(`「${name}」maxTokens (${mt}) 必须大于 thinkingBudgetTokens (${tbt})，否则模型没有空间输出实际内容。`);
-  }
-
-  return errors;
-}
-
-/**
- * 校验完整的模型配置和预设。
- * 返回 { valid, errors }。
- */
-function validateModelConfigAndPresets(config, presets) {
-  const errors = [];
-
-  // 校验 defaultModel
-  if (config && typeof config === 'object' && config.defaultModel && typeof config.defaultModel === 'object') {
-    const dm = config.defaultModel;
-    const name = dm.model || 'defaultModel';
-    errors.push(...validateModelTokenSettings(name, dm.maxTokens, dm.thinkingBudgetTokens));
-  }
-
-  // 校验 presets
-  if (Array.isArray(presets)) {
-    presets.forEach((preset, i) => {
-      if (!preset || typeof preset !== 'object') return;
-      const name = preset.name || preset.model || `Preset ${i + 1}`;
-      errors.push(...validateModelTokenSettings(name, preset.maxTokens, preset.thinkingBudgetTokens));
-    });
-  }
-
-  return { valid: errors.length === 0, errors };
-}
-
 async function readModelConfig() {
   try {
     const data = await readJson(MODEL_CONFIG_PATH);
@@ -431,12 +380,6 @@ export function setupModelConfigRoutes(app, express) {
   app.put('/protoclaw/model_config', express.json(), async (req, res, next) => {
     try {
       const { config, presets } = req.body || {};
-
-      // 校验 maxTokens / thinkingBudgetTokens 合法性
-      const { valid, errors } = validateModelConfigAndPresets(config, presets);
-      if (!valid) {
-        return res.status(400).json({ error: '模型参数校验失败', details: errors });
-      }
 
       let savedConfig = null;
       let savedPresets = null;
