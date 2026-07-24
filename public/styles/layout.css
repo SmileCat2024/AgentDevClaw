@@ -479,6 +479,7 @@ body[data-theme="light"] .agent-icon {
   flex-direction: column;
   min-width: 0;
   position: relative; /* For positioning input container */
+  isolation: isolate; /* Create stacking context so high z-index children (user-input, follow-latest) don't escape above the right rail's flyout menus */
 }
 
 .right-workspace {
