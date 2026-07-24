@@ -10,7 +10,8 @@
  *   - currentLanguage (app-core.js)
  *
  * 被 app-main.js 通过 window.phOpenModelConfig → renderPhModelConfigOverlay 调用。
- * onclick 调用 window.phCloseModelConfig / window.phSaveModelConfig（定义在 app-main.js）。
+ * onchange 调用 window.phAutoSaveModelConfig（定义在 ph-project-actions.js）。
+ * 关闭按钮调用 window.phCloseModelConfig（定义在 ph-project-actions.js）。
  */
 'use strict';
 
@@ -58,12 +59,12 @@ function renderPhModelConfigOverlay(agent, presets) {
 
     // 主代理显示双槽位，其他角色只显示单槽位
     if (isDefaultRole) {
-      const primarySelect = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="primary">'
+      const primarySelect = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="primary" onchange="window.phAutoSaveModelConfig()">'
         + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
         + buildOptions(primaryVal)
         + '</select>';
 
-      const secondarySelect = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="secondary">'
+      const secondarySelect = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="secondary" onchange="window.phAutoSaveModelConfig()">'
         + '<option value=""' + (!secondaryVal ? ' selected' : '') + '>' + (isZh ? '(不设置)' : '(Not set)') + '</option>'
         + buildOptions(secondaryVal)
         + '</select>';
@@ -87,7 +88,7 @@ function renderPhModelConfigOverlay(agent, presets) {
         + '</div>';
     } else {
       // 其他角色只显示单槽位
-      const selectHtml = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="primary">'
+      const selectHtml = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="primary" onchange="window.phAutoSaveModelConfig()">'
         + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
         + buildOptions(primaryVal)
         + '</select>';
@@ -114,10 +115,6 @@ function renderPhModelConfigOverlay(agent, presets) {
     '</div>',
     '<div class="ph-mc-body">',
     rows,
-    '</div>',
-    '<div class="ph-mc-footer">',
-    '<button class="settings-btn settings-btn-primary" type="button" onclick="window.phSaveModelConfig()">' + (isZh ? '保存' : 'Save') + '</button>',
-    '<button class="settings-btn settings-btn-secondary" type="button" onclick="window.phCloseModelConfig()">' + (isZh ? '取消' : 'Cancel') + '</button>',
     '</div>',
     '</div>',
     '</div>',

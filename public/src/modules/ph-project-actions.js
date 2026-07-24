@@ -17,13 +17,13 @@
  *   lastRenderedWorkspaceHtml (app-ui.js)
  *   phSearchQuery, phSearchResults, phSearchLoading, _phSearchTimer (app-main.js)
  * window 函数:
- *   phOpenModelConfig, phCloseModelConfig, phSaveModelConfig,
+ *   phOpenModelConfig, phCloseModelConfig, phAutoSaveModelConfig,
  *   phOpenProject, phSwitchProject, phToggleProjectDropdown,
  *   phOpenInExplorer, phToggleModelSlot
  * HTML onclick 引用:
  *   onclick="phOpenModelConfig()"
  *   onclick="phCloseModelConfig()"
- *   onclick="phSaveModelConfig()"
+ *   onchange="phAutoSaveModelConfig()"
  *   onclick="phOpenProject()"
  *   onclick="phSwitchProject(...)"
  *   onclick="phToggleProjectDropdown(...)"
@@ -54,7 +54,7 @@ window.phCloseModelConfig = () => {
   if (host) host.innerHTML = '';
 };
 
-window.phSaveModelConfig = async () => {
+window.phAutoSaveModelConfig = async () => {
   const agentId = window.phModelConfigAgentId;
   if (!agentId) return;
   const selects = document.querySelectorAll('#ph-model-config-host .ph-mc-select');
@@ -98,7 +98,9 @@ window.phSaveModelConfig = async () => {
     if (result.ok) {
       const agent = getCurrentAgentRecord();
       if (agent) agent.modelPresets = modelPresets;
-      window.phCloseModelConfig();
+      // 刷新覆层以更新 info 文本
+      const presets = window.ClawFW?._modelPresets || [];
+      if (agent) renderPhModelConfigOverlay(agent, presets);
       try {
         const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(agentId));
         if (freshRes.ok) {
