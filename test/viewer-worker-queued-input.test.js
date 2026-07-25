@@ -244,4 +244,48 @@ describe('ViewerWorker queued-input HTTP endpoints', () => {
     assert.ok(data.input, 'dequeue must return the queued input, not null');
     assert.equal(data.input.text, 'regression test');
   });
+
+  it('drain-all: consecutive dequeue calls return all items then null', async () => {
+    // Simulates the react-loop while(true) drain pattern:
+    //   while (true) { const qi = await fetchQueuedInput(); if (!qi) break; ... }
+    // When the user queues 3 messages, all 3 must be consumable before null.
+    const session = viewerWorker.agentSessions.get(AGENT_ID);
+    session.queuedInputs = [];
+
+    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'msg-1' });
+    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'msg-2' });
+    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'msg-3' });
+
+    const drained = [];
+    for (;;) {
+      const { data } = await httpPost(`/api/agents/${AGENT_ID}/dequeue-input`, {});
+      if (!data.input) break;
+      drained.push(data.input.text);
+    }
+
+    assert.deepEqual(drained, ['msg-1', 'msg-2', 'msg-3']);
+    assert.equal(session.queuedInputs.length, 0, 'queue must be empty after drain');
+  });
+
+  it('drain-all: images survive across multiple items in one drain', async () => {
+    const session = viewerWorker.agentSessions.get(AGENT_ID);
+    session.queuedInputs = [];
+
+    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, {
+      text: 'with image',
+      images: [{ type: 'image', source_type: 'base64', media_type: 'image/png', data: 'AAAA' }],
+    });
+    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'no image' });
+
+    const { data: first } = await httpPost(`/api/agents/${AGENT_ID}/dequeue-input`, {});
+    assert.ok(first.input.images, 'first item must have images');
+    assert.equal(first.input.images.length, 1);
+
+    const { data: second } = await httpPost(`/api/agents/${AGENT_ID}/dequeue-input`, {});
+    assert.equal(second.input.text, 'no image');
+    assert.ok(!second.input.images, 'second item must not have images');
+
+    const { data: third } = await httpPost(`/api/agents/${AGENT_ID}/dequeue-input`, {});
+    assert.equal(third.input, null, 'queue drained');
+  });
 });
