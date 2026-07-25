@@ -514,6 +514,8 @@ async function _performModelSwap(agentId, presetName) {
       status: 'error',
       title: isZh ? '切换失败' : 'Switch failed',
       description: e?.message || String(e),
+      closable: true,
+      autoDismiss: 8000,
     });
   }
 }

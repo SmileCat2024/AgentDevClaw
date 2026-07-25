@@ -540,12 +540,7 @@ export function setupModelConfigRoutes(app, express) {
         return res.status(400).json({ error: 'modelPresets object is required' });
       }
 
-      const metaPath = path.join(PROJECT_ROOT, 'prebuilt-agents', 'official', agentId, 'metadata.json');
-      const meta = await readJson(metaPath);
-      if (!meta) {
-        return res.status(404).json({ error: 'Agent metadata not found' });
-      }
-
+      // Write user-level agent config (independent of metadata.json)
       const userConfigDir = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs');
       await fs.mkdir(userConfigDir, { recursive: true });
       const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
