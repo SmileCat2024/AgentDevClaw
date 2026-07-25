@@ -192,6 +192,46 @@ export class CallArbiter {
 
   // -- Internal --
 
+  /**
+   * Drain all queued inputs from ViewerWorker and enqueue them as new envelopes.
+   * Called after each envelope completes, as a safety net for messages that
+   * arrived during the call but weren't consumed by react-loop's step-boundary
+   * or post-completion queue checks (e.g., maxTurns reached, call errored).
+   */
+  async _drainViewerQueuedInputs() {
+    if (!this._agent?.agentId) return;
+    const viewerPort = process.env.AGENTDEV_VIEWER_PORT || '2026';
+    const viewerUrl = `http://127.0.0.1:${viewerPort}`;
+    let count = 0;
+
+    while (true) {
+      try {
+        const res = await fetch(
+          `${viewerUrl}/api/agents/${encodeURIComponent(this._agent.agentId)}/dequeue-input`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+        );
+        if (!res.ok) break;
+        const data = await res.json();
+        if (!data.input) break;
+
+        this.enqueue({
+          source: 'queued-input',
+          text: data.input.text,
+          ...(Array.isArray(data.input.images) && data.input.images.length > 0
+            ? { images: data.input.images }
+            : {}),
+        });
+        count++;
+      } catch {
+        break;
+      }
+    }
+
+    if (count > 0) {
+      console.log(`[CallArbiter] drained ${count} leftover queued input(s) after envelope completion`);
+    }
+  }
+
   _emit(event, envelope) {
     for (const fn of this._listeners[event] || []) {
       try { fn(envelope); } catch (err) {
@@ -254,8 +294,13 @@ export class CallArbiter {
           cb(envelope);
         }
         this._activeEnvelope = null;
-        // Continue draining the queue
-        this._kick();
+        // Drain any queued inputs that weren't consumed during the call
+        // (e.g., call hit maxTurns or errored before the step-boundary
+        // queue check could run). React-loop already handles the common
+        // case (natural completion); this is a safety net for edge cases.
+        this._drainViewerQueuedInputs()
+          .catch(() => {})
+          .finally(() => this._kick());
       });
   }
 

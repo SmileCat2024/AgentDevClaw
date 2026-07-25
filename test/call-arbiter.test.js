@@ -595,4 +595,57 @@ describe('CallArbiter', () => {
     const result = arbiter.drainSupplements();
     assert.deepEqual(result, []);
   });
+
+  it('_drainViewerQueuedInputs: picks up leftover messages after call completion', async () => {
+    // Simulates: call completes, react-loop missed a queued message (e.g. maxTurns),
+    // CallArbiter's safety net drains it from ViewerWorker and enqueues as new call.
+    //
+    // We stand up a tiny HTTP server that mimics the ViewerWorker dequeue endpoint.
+    const http = await import('node:http');
+    const queue = [
+      { text: 'leftover-1' },
+      { text: 'leftover-2', images: [{ type: 'image', source_type: 'base64', media_type: 'image/png', data: 'AAAA' }] },
+    ];
+
+    const server = http.createServer((req, res) => {
+      if (req.method === 'POST' && req.url?.includes('/dequeue-input')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        if (queue.length > 0) {
+          res.end(JSON.stringify({ input: queue.shift() }));
+        } else {
+          res.end(JSON.stringify({ input: null }));
+        }
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+
+    await new Promise(resolve => server.listen(0, resolve));
+    const port = server.address().port;
+    process.env.AGENTDEV_VIEWER_PORT = String(port);
+
+    const agent = makeSlowAgent(10);
+    agent.agentId = 'test-drain-agent';
+    const arbiter = new CallArbiter(agent);
+
+    // Run a normal call first
+    const e1 = arbiter.enqueue({ source: 'test', text: 'main-task' });
+    await arbiter.waitForCompletion(e1.id);
+
+    // After the call, _drainViewerQueuedInputs should have run in .finally()
+    // and enqueued the 2 leftover messages. Wait for them to complete.
+    await new Promise(r => setTimeout(r, 100));
+
+    // The agent should have processed all 3 messages: main-task + 2 leftovers
+    assert.equal(agent.callLog.length, 3, 'agent should have processed main + 2 drained messages');
+    assert.equal(agent.callLog[0].text, 'main-task');
+    assert.equal(agent.callLog[1].text, 'leftover-1');
+    assert.equal(agent.callLog[2].text, 'leftover-2');
+
+    assert.equal(arbiter.getStatus().status, 'idle');
+
+    server.close();
+    delete process.env.AGENTDEV_VIEWER_PORT;
+  });
 });
