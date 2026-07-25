@@ -410,7 +410,7 @@ async function main() {
     throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
   }
 
-  const resolved = resolveAgentModelLLM(agentPath, 'default');
+  let resolved = resolveAgentModelLLM(agentPath, 'default');
   resolvedUsageModel = resolved || null;
   agent = new AgentClass({
     name: agentName,
@@ -662,6 +662,38 @@ async function main() {
   };
 
   console.log('[ProtoClaw Runtime] ✓ CallArbiter 已初始化');
+
+  // ── IPC: model hot-swap (no process restart) ──
+  process.on('message', (msg) => {
+    if (!msg || typeof msg !== 'object' || msg.type !== 'swap-model') return;
+
+    if (typeof agent?.setLLM !== 'function') {
+      console.warn('[ProtoClaw Runtime] swap-model: agent.setLLM not available (framework too old)');
+      return;
+    }
+    if (typeof agent.isRunning === 'function' && agent.isRunning()) {
+      console.warn('[ProtoClaw Runtime] swap-model: agent is running, skipped');
+      return;
+    }
+
+    const newResolved = resolveAgentModelLLM(agentPath, 'default');
+    if (!newResolved?.llm) {
+      console.error('[ProtoClaw Runtime] swap-model: failed to resolve new model preset');
+      return;
+    }
+
+    const oldName = resolved?.modelName || resolvedUsageModel?.modelName || 'unknown';
+    agent.setLLM(newResolved.llm, {
+      modelName: newResolved.modelName,
+      contextLength: newResolved.contextLength,
+      compressRatio: newResolved.compressRatio,
+    });
+
+    resolved = newResolved;
+    resolvedUsageModel = newResolved;
+
+    console.log(`[ProtoClaw Runtime] ✓ Model swapped: ${oldName} → ${newResolved.modelName || 'unknown'}`);
+  });
 
   if (!IS_EXPLORATION) {
     try {

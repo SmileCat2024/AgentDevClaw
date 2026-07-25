@@ -35,13 +35,14 @@ export class ContextGuardFeature implements AgentFeature {
   readonly description = 'Stops the programming-helper session when its current request reaches the configured context compression threshold.';
 
   private readonly enabled: boolean;
-  private readonly thresholdTokens: number | null;
+  private thresholdTokens: number | null;
   private readonly agentId: string;
   private readonly sessionId: string;
   private readonly serverOrigin: string;
   private logger?: FeatureInitContext['logger'];
   private packageInfo: PackageInfo | null = null;
   private callArbiter: any = null;
+  private _agent: any = null;
   private state: ContextGuardState = {
     blocked: false,
     blockedAt: null,
@@ -121,6 +122,7 @@ export class ContextGuardFeature implements AgentFeature {
   async installUsageGuard(ctx: any): Promise<void> {
     const agent = ctx?.agent;
     if (!agent || !this.enabled || !this.thresholdTokens || this.state.blocked) return;
+    if (!this._agent) this._agent = agent;
     const llm = agent.llm as any;
     if (!llm || typeof llm.chat !== 'function' || llm.__clawContextGuardInstalled) return;
 
@@ -187,5 +189,34 @@ export class ContextGuardFeature implements AgentFeature {
         message: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  /**
+   * Update the compression threshold when the model changes (e.g. hot-swap).
+   * Called from onLLMSwap or directly by the runtime IPC handler.
+   */
+  updateThreshold(contextLength: number | null, compressRatio: number | null): void {
+    const cl = Number(contextLength);
+    const cr = Number(compressRatio ?? 80);
+    this.thresholdTokens = Number.isFinite(cl) && cl > 0
+      && Number.isFinite(cr) && cr > 0
+      ? Math.floor(cl * Math.min(100, cr) / 100)
+      : null;
+    this.state.thresholdTokens = this.thresholdTokens;
+    this.logger?.info('Context guard threshold updated', { thresholdTokens: this.thresholdTokens });
+  }
+
+  /**
+   * Called by the framework when the LLM is hot-swapped.
+   * Uses agent.getLLMMeta() to read the new model metadata and recompute the threshold.
+   */
+  onLLMSwap(_newLLM: any, _oldLLM: any): void {
+    const meta = this._agent?.getLLMMeta?.();
+    if (meta) {
+      this.updateThreshold(
+        typeof meta.contextLength === 'number' ? meta.contextLength : null,
+        typeof meta.compressRatio === 'number' ? meta.compressRatio : null,
+      );
+    }
   }
 }
