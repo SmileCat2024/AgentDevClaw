@@ -671,11 +671,8 @@ async function main() {
       console.warn('[ProtoClaw Runtime] swap-model: agent.setLLM not available (framework too old)');
       return;
     }
-    if (typeof agent.isRunning === 'function' && agent.isRunning()) {
-      console.warn('[ProtoClaw Runtime] swap-model: agent is running, skipped');
-      return;
-    }
 
+    const isMidTurn = typeof agent.isRunning === 'function' && agent.isRunning();
     const newResolved = resolveAgentModelLLM(agentPath, 'default');
     if (!newResolved?.llm) {
       console.error('[ProtoClaw Runtime] swap-model: failed to resolve new model preset');
@@ -692,7 +689,7 @@ async function main() {
     resolved = newResolved;
     resolvedUsageModel = newResolved;
 
-    console.log(`[ProtoClaw Runtime] ✓ Model swapped: ${oldName} → ${newResolved.modelName || 'unknown'}`);
+    console.log(`[ProtoClaw Runtime] ✓ Model swapped: ${oldName} → ${newResolved.modelName || 'unknown'}${isMidTurn ? ' (mid-turn)' : ''}`);
   });
 
   if (!IS_EXPLORATION) {
