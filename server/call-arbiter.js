@@ -61,12 +61,6 @@ export class CallArbiter {
 
     // Continuation budget limits (per envelope).
     this.continuationBudget = { ...CONTINUATION_BUDGET };
-
-    // ── Supplement buffer ──
-    // When the agent is busy (call active), queued-input messages go here
-    // instead of becoming new envelopes. They are drained at each step start
-    // and injected as system messages inside the current call.
-    this._supplementBuffer = [];
   }
 
   /**
@@ -91,34 +85,7 @@ export class CallArbiter {
       this._terminalEnvelopes.set(entry.id, entry);
       return entry;
     }
-    // When agent is busy and this is a text-only queued-input (user supplement),
-    // route to the supplement buffer instead of creating a new envelope.
-    // The supplement will be injected as a system message inside the
-    // current call at the next step start.
-    //
-    // IMPORTANT: inputs carrying images bypass the supplement path entirely.
-    // Supplements are injected as system messages, which cannot carry image
-    // content in any LLM API. Image inputs are substantive and need their own
-    // onCall turn, so they queue as regular envelopes for execution after the
-    // current call finishes.
     const hasImages = Array.isArray(envelope.images) && envelope.images.length > 0;
-    if (this._active && envelope.source === 'queued-input' && !hasImages) {
-      const supp = {
-        text: envelope.text,
-        sourceRef: envelope.sourceRef || '',
-        timestamp: Date.now(),
-      };
-      this._supplementBuffer.push(supp);
-      console.log(`[CallArbiter] supplemented (sourceRef=${supp.sourceRef}, buffer=${this._supplementBuffer.length})`);
-      return {
-        id: envelope.id || `supp-${Date.now()}`,
-        source: envelope.source,
-        sourceRef: supp.sourceRef,
-        text: envelope.text,
-        status: 'supplemented',
-        createdAt: supp.timestamp,
-      };
-    }
 
     const entry = {
       id: envelope.id || `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -139,27 +106,13 @@ export class CallArbiter {
   }
 
   /**
-   * Drain all pending supplements (called at each step start).
-   * Also notifies the ViewerWorker to remove them from its queue display.
-   * @returns {Array<{text: string, sourceRef: string}>} Drained supplements in order
+   * Drain all pending supplements (kept for backward compatibility —
+   * the supplement mechanism has been removed; queued-input now flows
+   * through the HTTP dequeue path in react-loop).
+   * @returns {Array} Always empty
    */
   drainSupplements() {
-    if (this._supplementBuffer.length === 0) return [];
-    const supplements = this._supplementBuffer.splice(0);
-    const hub = getDebugHubInstance();
-    if (hub && this._agent?.agentId) {
-      for (const supp of supplements) {
-        if (supp.sourceRef) {
-          try {
-            hub.consumeQueuedInput(this._agent.agentId, supp.sourceRef);
-          } catch (error) {
-            console.warn('[CallArbiter] consumeQueuedInput for supplement failed:', error);
-          }
-        }
-      }
-    }
-    console.log(`[CallArbiter] drained ${supplements.length} supplement(s)`);
-    return supplements;
+    return [];
   }
 
   /**
@@ -211,10 +164,8 @@ export class CallArbiter {
         cb(envelope);
       }
     }
-    // Also clear pending supplements
-    const clearedSupps = this._supplementBuffer.splice(0);
     this._status = this._active ? 'running' : 'idle';
-    return removed.length + clearedSupps.length;
+    return removed.length;
   }
 
   /**
@@ -226,6 +177,8 @@ export class CallArbiter {
     const envelope = this._activeEnvelope;
     if (envelope) {
       envelope._interruptRequested = true;
+      // @deprecated (2026-07-25) — set but never read; clearQueued() is called
+      // immediately below instead. Pre-existing dead field; safe to remove.
       envelope._discardQueuedOnInterrupt = clearQueue === true;
       envelope.error = reason;
     }
@@ -262,6 +215,9 @@ export class CallArbiter {
     envelope._checkpointCount = 0;
     envelope._rollbackCount = 0;
 
+    // @deprecated (2026-07-25) — supplement mechanism removed; no new envelopes
+    // are created with source='queued-input'. This call is harmless dead code.
+    // Safe to remove in a future cleanup.
     const hub = getDebugHubInstance();
     if (envelope.source === 'queued-input' && envelope.sourceRef && hub && this._agent?.agentId) {
       try {
@@ -287,32 +243,6 @@ export class CallArbiter {
           envelope.status = 'completed';
         }
         this._active = false;
-
-        // Convert leftover supplements to regular queued envelopes.
-        // This happens when the call finishes before the next step could
-        // drain them (e.g. agent completed at the current step).
-        if (envelope._interruptRequested && envelope._discardQueuedOnInterrupt) {
-          // Supplements can arrive after clearQueued() while the interrupted
-          // step is still unwinding. They belong to the cancelled call and
-          // must not resurrect it as a fresh envelope.
-          this._supplementBuffer = [];
-        } else if (this._supplementBuffer.length > 0) {
-          for (const supp of this._supplementBuffer) {
-            this._queue.push({
-              id: `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              source: 'queued-input',
-              sourceRef: supp.sourceRef || '',
-              text: supp.text,
-              status: 'queued',
-              createdAt: supp.timestamp || Date.now(),
-              result: null,
-              error: null,
-            });
-          }
-          const count = this._supplementBuffer.length;
-          this._supplementBuffer = [];
-          console.log(`[CallArbiter] converted ${count} leftover supplement(s) to envelopes`);
-        }
 
         this._status = this._queue.length > 0 ? 'queued' : 'idle';
         console.log(`[CallArbiter] finished ${envelope.id} (status=${envelope.status}, segments=${envelope._segmentCount || 0}, remaining=${this._queue.length})`);

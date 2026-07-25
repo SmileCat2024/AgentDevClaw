@@ -557,17 +557,6 @@ async function main() {
     contextGuardFeature.setCallArbiter(callArbiter);
   }
   imBridgeCtx.callArbiter = callArbiter;
-  DebugHub.getInstance().setQueuedInputHandler((targetAgentId, input) => {
-    if (!callArbiter || !agent?.agentId || targetAgentId !== agent.agentId) {
-      return;
-    }
-    callArbiter.enqueue({
-      source: 'queued-input',
-      sourceRef: input.id || '',
-      text: input.text,
-      ...(Array.isArray(input.images) && input.images.length > 0 ? { images: input.images } : {}),
-    });
-  });
   DebugHub.getInstance().setInterruptHandler((targetAgentId, clearQueue) => {
     if (!callArbiter || !agent?.agentId || targetAgentId !== agent.agentId) {
       return;
@@ -577,29 +566,6 @@ async function main() {
       console.log(`[ProtoClaw Runtime] interrupt marked active=${result.active}, cleared=${result.cleared}`);
     }
   });
-
-  // ── Supplement injection: override agent.onStepStart ──
-  // At each step start, drain all pending supplements from the CallArbiter
-  // and inject them as system messages inside the current call.
-  // This lets the user add context mid-call without triggering a new onCall.
-  const _originalOnStepStart = agent.onStepStart?.bind(agent);
-  agent.onStepStart = async (ctx) => {
-    const supplements = callArbiter.drainSupplements();
-    if (supplements.length > 0 && ctx?.context?.addSystemMessage) {
-      for (const supp of supplements) {
-        ctx.context.addSystemMessage(
-          `用户补充信息：${supp.text}`,
-          ctx.callIndex,
-        );
-      }
-      // Push updated context so DebugHub reflects the injected messages
-      try { agent['pushToDebug']?.(ctx.context.getAll()); } catch {}
-      console.log(`[ProtoClaw Runtime] injected ${supplements.length} supplement(s) at step ${ctx.step}`);
-    }
-    if (typeof _originalOnStepStart === 'function') {
-      await _originalOnStepStart(ctx);
-    }
-  };
 
   callArbiter.on('callFinished', (_envelope) => {
     if (!sessionId) return;

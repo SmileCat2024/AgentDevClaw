@@ -435,9 +435,14 @@ describe('CallArbiter', () => {
     assert.equal(finished._segmentCount, 1);
   });
 
-  // ── Supplement buffer tests (new — not in mirror version) ──
+  // ── Queued-input routing tests (post-supplement-removal) ──
+  // After the useArbiterQueue / supplement mechanism was removed,
+  // queued-input source envelopes go through the normal queue path,
+  // NOT the supplement buffer. They wait for the active call to finish
+  // and then execute as a new onCall. Mid-call injection is handled
+  // by the react-loop HTTP dequeue path, not by CallArbiter.
 
-  it('routes queued-input to supplement buffer when agent is busy', async () => {
+  it('routes queued-input to normal queue when agent is busy', async () => {
     const agent = makeSlowAgent(50);
     const arbiter = new CallArbiter(agent);
 
@@ -447,44 +452,44 @@ describe('CallArbiter', () => {
     // Wait a tick so agent is definitely active
     await new Promise(r => setTimeout(r, 5));
 
-    // Supplement while agent is busy
-    const supp = arbiter.enqueue({ source: 'queued-input', text: 'additional info' });
+    // queued-input while agent is busy — should be queued, NOT supplemented
+    const entry = arbiter.enqueue({ source: 'queued-input', text: 'additional info' });
 
-    assert.equal(supp.status, 'supplemented', 'queued-input should be supplemented, not queued');
-    assert.ok(supp.id.startsWith('supp-'));
+    assert.equal(entry.status, 'queued', 'queued-input should be queued, not supplemented');
+    assert.ok(!entry.id.startsWith('supp-'), 'should not use supplement id prefix');
 
-    // drainSupplements should return it
-    const drained = arbiter.drainSupplements();
-    assert.equal(drained.length, 1);
-    assert.equal(drained[0].text, 'additional info');
-
-    // After draining, buffer is empty
+    // drainSupplements should always return empty (mechanism removed)
     assert.equal(arbiter.drainSupplements().length, 0);
 
+    // Both should complete
     await arbiter.waitForCompletion(e1.id);
+    await arbiter.waitForCompletion(entry.id);
   });
 
-  it('clearQueued also clears supplement buffer', async () => {
+  it('clearQueued removes all queued envelopes including queued-input source', async () => {
     const agent = makeSlowAgent(100);
     const arbiter = new CallArbiter(agent);
 
     const e1 = arbiter.enqueue({ source: 'test', text: 'main' });
     await new Promise(r => setTimeout(r, 5));
 
-    // Buffer a supplement
-    arbiter.enqueue({ source: 'queued-input', text: 'supp1' });
+    // Queue a queued-input envelope (would have been supplemented before)
+    const q1 = arbiter.enqueue({ source: 'queued-input', text: 'supp1' });
     // Queue a regular call
     const e2 = arbiter.enqueue({ source: 'test', text: 'next' });
 
     // Register waitForCompletion BEFORE clearQueued (clearQueued resolves it)
+    const q1Promise = arbiter.waitForCompletion(q1.id);
     const e2Promise = arbiter.waitForCompletion(e2.id);
 
     const cleared = arbiter.clearQueued('test cancel');
-    // 1 queued envelope + 1 supplement = 2
-    assert.equal(cleared, 2, 'should clear both queue and supplement buffer');
+    // 2 queued envelopes (queued-input + regular)
+    assert.equal(cleared, 2, 'should clear all queued envelopes');
 
-    // e2 should be cancelled
+    // Both should be cancelled
+    const fq1 = await q1Promise;
     const f2 = await e2Promise;
+    assert.equal(fq1.status, 'cancelled');
     assert.equal(f2.status, 'cancelled');
     assert.equal(f2.error, 'test cancel');
 
@@ -525,13 +530,16 @@ describe('CallArbiter', () => {
     assert.equal(continuation, null, 'late continuation request should be consumed and discarded');
   });
 
-  it('discards supplements that arrive while an interrupted call is unwinding', async () => {
-    let releaseCall;
+  it('queued-input arriving during interrupt is processed after call finishes', async () => {
+    let releaseMain;
     const calls = [];
     const agent = {
       onCall: async (text) => {
         calls.push(text);
-        await new Promise((resolve) => { releaseCall = resolve; });
+        if (calls.length === 1) {
+          // First call blocks until released
+          await new Promise((resolve) => { releaseMain = resolve; });
+        }
         return 'done';
       },
     };
@@ -539,44 +547,50 @@ describe('CallArbiter', () => {
     const envelope = arbiter.enqueue({ source: 'test', text: 'main' });
     await new Promise((resolve) => setTimeout(resolve, 5));
 
+    // Interrupt with clearQueue=true — clears any pending items
     arbiter.interruptActive('user stopped', { clearQueue: true });
-    const supplement = arbiter.enqueue({ source: 'queued-input', text: 'must not resume' });
-    assert.equal(supplement.status, 'supplemented');
-    releaseCall();
 
+    // queued-input arrives while interrupt is unwinding — goes to normal queue
+    const entry = arbiter.enqueue({ source: 'queued-input', text: 'late arrival' });
+    assert.equal(entry.status, 'queued', 'queued-input should be queued normally');
+    releaseMain();
+
+    // The interrupted call should be cancelled
     const finished = await arbiter.waitForCompletion(envelope.id);
-    await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(finished.status, 'cancelled');
-    assert.deepEqual(calls, ['main']);
-    assert.equal(arbiter.getStatus().queueLength, 0);
+
+    // The late-arrival queued-input should execute after the interrupted call finishes
+    const entryResult = await arbiter.waitForCompletion(entry.id);
+    assert.equal(entryResult.status, 'completed');
+    assert.deepEqual(calls, ['main', 'late arrival']);
+
     assert.equal(arbiter.getStatus().status, 'idle');
   });
 
-  it('converts leftover supplements to envelopes when call finishes', async () => {
+  it('queued-input auto-processes after current call finishes', async () => {
     const agent = makeSlowAgent(30);
     const arbiter = new CallArbiter(agent);
 
     const e1 = arbiter.enqueue({ source: 'test', text: 'task1' });
     await new Promise(r => setTimeout(r, 5));
 
-    // Supplement while busy — NOT drained during the call
-    arbiter.enqueue({ source: 'queued-input', text: 'follow-up' });
+    // queued-input while busy — goes to normal queue
+    const q1 = arbiter.enqueue({ source: 'queued-input', text: 'follow-up' });
 
-    // Wait for e1 to complete; the supplement should convert to a new envelope
+    // Wait for e1 to complete
     await arbiter.waitForCompletion(e1.id);
 
-    // After e1 finishes, supplement becomes a queued envelope
-    // The _kick in finally block should process it automatically
-    const status = arbiter.getStatus();
-    // Either still processing the converted envelope, or already done
-    assert.ok(status.status === 'idle' || status.status === 'running' || status.status === 'queued');
+    // The queued-input should be auto-processed by _kick in finally
+    // Wait for it to complete
+    const q1Result = await arbiter.waitForCompletion(q1.id);
+    assert.equal(q1Result.status, 'completed');
 
-    // Wait for everything to settle
-    await new Promise(r => setTimeout(r, 100));
+    // Everything settled
+    await new Promise(r => setTimeout(r, 50));
     assert.equal(arbiter.getStatus().status, 'idle');
   });
 
-  it('drainSupplements returns empty array when buffer is empty', () => {
+  it('drainSupplements always returns empty array (mechanism removed)', () => {
     const arbiter = new CallArbiter({ onCall: async () => '' });
     const result = arbiter.drainSupplements();
     assert.deepEqual(result, []);

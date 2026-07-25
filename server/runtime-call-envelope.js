@@ -39,6 +39,8 @@ export const EnvelopeStatus = Object.freeze({
 export const EnvelopeSource = Object.freeze({
   DISPATCH:     'dispatch',
   VIEWER_INPUT: 'viewer-input',
+  // @deprecated (2026-07-25) — supplement mechanism removed; no caller uses
+  // this constant. Kept for backward compatibility; safe to remove.
   QUEUED_INPUT: 'queued-input',
   SYSTEM:       'system',
 });
