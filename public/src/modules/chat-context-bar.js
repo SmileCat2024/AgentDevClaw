@@ -330,10 +330,193 @@ function _initCcbPopup() {
   bar.dataset.popupBound = '1';
   bar.addEventListener('mouseenter', function() { _scheduleShowCcbPopup(); });
   bar.addEventListener('mouseleave', function() { _scheduleHideCcbPopup(); });
+  bar.addEventListener('click', function(e) {
+    // Click on context bar → open model preset dropdown instead of hover popup
+    e.preventDefault();
+    e.stopPropagation();
+    // Cancel hover popup
+    if (_ccbPopupShowTimer) { clearTimeout(_ccbPopupShowTimer); _ccbPopupShowTimer = null; }
+    _hideCcbPopup();
+    _toggleModelDropdown();
+  });
 }
 
 window.addEventListener('DOMContentLoaded', _initCcbPopup);
 setTimeout(_initCcbPopup, 0);
+
+
+// ── Model preset dropdown (click to swap) ────────────────────────
+let _modelDropdown = null;
+
+function _closeModelDropdown() {
+  if (_modelDropdown) {
+    _modelDropdown.classList.remove('visible');
+    setTimeout(function() {
+      if (_modelDropdown) { _modelDropdown.remove(); _modelDropdown = null; }
+    }, 150);
+  }
+}
+
+function _getCurrentAgentIdForSwap() {
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : null;
+  if (agent && agent.id) return agent.id;
+  if (typeof getCurrentAgentRecord === 'function') {
+    agent = getCurrentAgentRecord();
+    if (agent && agent.id) return agent.id;
+  }
+  return typeof currentAgentId !== 'undefined' ? currentAgentId : null;
+}
+
+function _getCurrentDefaultPresetName() {
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : null;
+  if (!agent) return '';
+  let modelPresets = agent.modelPresets || {};
+  let defaultCfg = modelPresets.default || {};
+  if (typeof defaultCfg === 'string') return defaultCfg;
+  return (defaultCfg && defaultCfg.primary) || '';
+}
+
+async function _toggleModelDropdown() {
+  // If already open, close
+  if (_modelDropdown) {
+    _closeModelDropdown();
+    return;
+  }
+
+  let bar = document.getElementById('chat-context-bar');
+  if (!bar) return;
+
+  let agentId = _getCurrentAgentIdForSwap();
+  if (!agentId) return;
+
+  // Fetch presets
+  let presets = window.ClawFW?._modelPresets || [];
+  if (!presets.length) {
+    try {
+      const resp = await fetch('/protoclaw/model_config');
+      const data = await resp.json();
+      presets = Array.isArray(data?.presets) ? data.presets : [];
+      if (window.ClawFW) window.ClawFW._modelPresets = presets;
+    } catch (e) {
+      console.error('[ModelDropdown] Failed to load presets:', e);
+      return;
+    }
+  }
+  if (!presets.length) return;
+
+  let currentPreset = _getCurrentDefaultPresetName();
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+
+  // Build dropdown
+  _modelDropdown = document.createElement('div');
+  _modelDropdown.className = 'ccb-model-dropdown';
+
+  let html = '<div class="ccb-model-dropdown-list">';
+  presets.forEach(function(p) {
+    let name = p.name || p.model || '';
+    let isActive = name === currentPreset;
+    let visionIcon = p.vision === true
+      ? '<span class="ccb-md-vision" title="' + (isZh ? '支持视觉' : 'Vision') + '">' + (isZh ? '视' : 'V') + '</span>'
+      : '';
+    html += '<div class="ccb-md-item' + (isActive ? ' active' : '') + '" data-preset="' + escapeHtml(name) + '">'
+      + '<span class="ccb-md-name">' + escapeHtml(name) + '</span>'
+      + visionIcon
+      + '</div>';
+  });
+  html += '</div>';
+  _modelDropdown.innerHTML = html;
+
+  // Position
+  let rect = bar.getBoundingClientRect();
+  _modelDropdown.style.left = rect.left + 'px';
+  _modelDropdown.style.top = (rect.bottom + 4) + 'px';
+
+  // Item click
+  _modelDropdown.addEventListener('click', function(e) {
+    let item = e.target.closest('.ccb-md-item');
+    if (!item) return;
+    let presetName = item.dataset.preset;
+    _closeModelDropdown();
+    _performModelSwap(agentId, presetName);
+  });
+
+  document.body.appendChild(_modelDropdown);
+  // Trigger transition
+  requestAnimationFrame(function() { _modelDropdown.classList.add('visible'); });
+
+  // Close on outside click
+  setTimeout(function() {
+    document.addEventListener('click', _modelDropdownOutsideClick, { once: true });
+  }, 0);
+}
+
+function _modelDropdownOutsideClick(e) {
+  if (_modelDropdown && !_modelDropdown.contains(e.target)) {
+    let bar = document.getElementById('chat-context-bar');
+    if (!bar || !bar.contains(e.target)) {
+      _closeModelDropdown();
+    }
+  } else if (_modelDropdown) {
+    // Clicked inside dropdown but not on an item — re-register
+    document.addEventListener('click', _modelDropdownOutsideClick, { once: true });
+  }
+}
+
+async function _performModelSwap(agentId, presetName) {
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let toastId = 'model-hot-swap';
+
+  ClawToast.show({
+    id: toastId,
+    title: isZh ? '正在切换模型...' : 'Switching model...',
+    status: 'loading',
+    closable: false,
+  });
+
+  // Build modelPresets: set default.primary to the selected preset
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : null;
+  let existingPresets = (agent && agent.modelPresets) || {};
+  let defaultCfg = existingPresets.default || {};
+  let secondary = (typeof defaultCfg === 'object' && defaultCfg.secondary) || null;
+
+  let newModelPresets = {
+    ...existingPresets,
+    default: { primary: presetName, secondary },
+  };
+
+  try {
+    const resp = await fetch('/protoclaw/agent_model_presets', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, modelPresets: newModelPresets }),
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      if (agent) agent.modelPresets = newModelPresets;
+      ClawToast.update(toastId, {
+        status: 'success',
+        title: isZh ? '模型已切换' : 'Model switched',
+        description: presetName,
+        autoDismiss: 3000,
+      });
+    } else {
+      throw new Error(result.error || 'Unknown error');
+    }
+  } catch (e) {
+    console.error('[ModelDropdown] Swap failed:', e);
+    ClawToast.update(toastId, {
+      status: 'error',
+      title: isZh ? '切换失败' : 'Switch failed',
+      description: e?.message || String(e),
+    });
+  }
+}
 
 
 // ── Title hover popup: session metadata ───────────────────────────

@@ -5,6 +5,7 @@ import { spawn } from 'child_process';
 import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
+import { sendIPCToAllSessions } from '../shared/ipc.js';
 
 // ── Model Config ──────────────────────────────────────────────────
 
@@ -555,7 +556,10 @@ export function setupModelConfigRoutes(app, express) {
 
       await fs.writeFile(userConfigPath, JSON.stringify(existingConfig, null, 2), 'utf8');
 
-      res.json({ ok: true, agentId, modelPresets });
+      // Hot-swap: notify all running runtimes of this agent to reload model
+      const swapCount = sendIPCToAllSessions(agentId, { type: 'swap-model' });
+
+      res.json({ ok: true, agentId, modelPresets, swapCount });
     } catch (error) { next(error); }
   });
 }

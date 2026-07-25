@@ -5575,6 +5575,69 @@ body[data-theme="light"] .ccb-popup-inner {
 #current-agent-name { cursor: help; }
 .title-hover-popup .ccb-popup-inner { max-width: 340px; }
 
+/* ── Model preset dropdown (click on context bar) ── */
+#chat-context-bar { cursor: pointer; }
+.ccb-model-dropdown {
+  position: fixed;
+  z-index: 9100;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s, visibility 0.15s;
+  pointer-events: none;
+  min-width: 240px;
+}
+.ccb-model-dropdown.visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+.ccb-model-dropdown-list {
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  overflow-y: auto;
+  max-height: 320px;
+  padding: 4px;
+}
+body[data-theme="light"] .ccb-model-dropdown-list {
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.15);
+}
+.ccb-md-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ccb-md-item:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.08));
+}
+.ccb-md-item.active {
+  background: var(--accent-bg, rgba(99, 102, 241, 0.15));
+  color: var(--accent-color, #818cf8);
+  font-weight: 600;
+}
+.ccb-md-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ccb-md-vision {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+  flex-shrink: 0;
+}
+
 /* ── Trim dialog ── */
 .trim-dialog {
   position: fixed;
