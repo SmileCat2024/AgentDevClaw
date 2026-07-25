@@ -326,3 +326,92 @@ describe('feature continuity protocol (descriptor-driven)', () => {
     assert.equal(targetFeature._state.tasks[0].subject, 'task');
   });
 });
+
+/**
+ * 显式契约测试：todo continuity 导出适配器的字段保留/丢弃规则。
+ *
+ * normalizeTodoExportState 会重建 state 对象，只保留特定字段。
+ * 此测试将该"预期丢弃"行为固化为受保护的契约，
+ * 防止未来有人误以为是 bug 而改动，也防止新增字段时被意外遗漏。
+ */
+describe('todo continuity export adapter field contract', () => {
+  function buildTodoSnapshotWithAllFields() {
+    return {
+      tasks: [
+        { id: '1', subject: '任务一', description: '描述', status: 'in_progress' },
+        { id: '2', subject: '任务二', description: '描述', status: 'pending' },
+      ],
+      counter: 5,
+      reminderContent: '请使用 todo 工具',
+      consecutiveNoTodoTurns: 3,
+      reminderInjected: true,
+      // 以下字段由 ControlledTodoFeature 扩展，预期在导出时被丢弃
+      interruptTargetId: '2',
+      [CONTINUITY_FIELD_KEY]: { protocol: TODO_PROTOCOL, importMode: 'replace' },
+    };
+  }
+
+  function exportTodo(snapshot) {
+    return exportFeatureContinuity({
+      runtime: {
+        featureStates: [{ featureName: 'todo', snapshot }],
+      },
+    }, { mode: 'trim-transcript' });
+  }
+
+  it('preserves tasks and counter', () => {
+    const continuity = exportTodo(buildTodoSnapshotWithAllFields());
+    const state = continuity.states[0].state;
+
+    assert.equal(state.tasks.length, 2);
+    assert.equal(state.tasks[0].subject, '任务一');
+    assert.equal(state.tasks[1].status, 'pending');
+    assert.equal(state.counter, 5);
+  });
+
+  it('preserves reminderContent when present', () => {
+    const continuity = exportTodo(buildTodoSnapshotWithAllFields());
+    const state = continuity.states[0].state;
+
+    assert.equal(state.reminderContent, '请使用 todo 工具');
+  });
+
+  it('resets consecutiveNoTodoTurns to 0 (not carried over)', () => {
+    const continuity = exportTodo(buildTodoSnapshotWithAllFields());
+    const state = continuity.states[0].state;
+
+    assert.equal(state.consecutiveNoTodoTurns, 0);
+  });
+
+  it('resets reminderInjected to false (not carried over)', () => {
+    const continuity = exportTodo(buildTodoSnapshotWithAllFields());
+    const state = continuity.states[0].state;
+
+    assert.equal(state.reminderInjected, false);
+  });
+
+  it('drops interruptTargetId (not in todo continuity schema)', () => {
+    const continuity = exportTodo(buildTodoSnapshotWithAllFields());
+    const state = continuity.states[0].state;
+
+    // interruptTargetId 是运行时中断状态，不属于可转移的计划数据
+    assert.equal(state.interruptTargetId, undefined);
+  });
+
+  it('drops __claw_continuity__ descriptor field', () => {
+    const continuity = exportTodo(buildTodoSnapshotWithAllFields());
+    const state = continuity.states[0].state;
+
+    assert.equal(state[CONTINUITY_FIELD_KEY], undefined);
+  });
+
+  it('skips entry entirely when tasks are empty (returns null)', () => {
+    const snapshot = buildTodoSnapshotWithAllFields();
+    snapshot.tasks = [];
+
+    const continuity = exportTodo(snapshot);
+
+    // tasks 为空时 adapter 返回 null，整个 todo entry 不出现在 continuity 中
+    assert.equal(continuity.states.length, 0);
+  });
+});
