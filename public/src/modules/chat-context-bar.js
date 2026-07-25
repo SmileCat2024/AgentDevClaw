@@ -477,28 +477,24 @@ async function _performModelSwap(agentId, presetName) {
     closable: false,
   });
 
-  // Build modelPresets: set default.primary to the selected preset
-  let agent = typeof getRuntimeAwareAgentRecord === 'function'
-    ? getRuntimeAwareAgentRecord()
-    : null;
-  let existingPresets = (agent && agent.modelPresets) || {};
-  let defaultCfg = existingPresets.default || {};
-  let secondary = (typeof defaultCfg === 'object' && defaultCfg.secondary) || null;
-
-  let newModelPresets = {
-    ...existingPresets,
-    default: { primary: presetName, secondary },
-  };
-
   try {
-    const resp = await fetch('/protoclaw/agent_model_presets', {
-      method: 'PUT',
+    const resp = await fetch('/protoclaw/swap_model', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, modelPresets: newModelPresets }),
+      body: JSON.stringify({ agentId, presetName }),
     });
     const result = await resp.json();
     if (result.ok) {
-      if (agent) agent.modelPresets = newModelPresets;
+      // Update local agent record so dropdown highlights correctly
+      let agent = typeof getRuntimeAwareAgentRecord === 'function'
+        ? getRuntimeAwareAgentRecord()
+        : null;
+      if (agent) {
+        if (!agent.modelPresets) agent.modelPresets = {};
+        let defaultCfg = agent.modelPresets.default || {};
+        if (typeof defaultCfg !== 'object') defaultCfg = {};
+        agent.modelPresets.default = { primary: presetName, secondary: defaultCfg.secondary || null };
+      }
       ClawToast.update(toastId, {
         status: 'success',
         title: isZh ? '模型已切换' : 'Model switched',

@@ -551,10 +551,38 @@ export function setupModelConfigRoutes(app, express) {
 
       await fs.writeFile(userConfigPath, JSON.stringify(existingConfig, null, 2), 'utf8');
 
-      // Hot-swap: notify all running runtimes of this agent to reload model
+      res.json({ ok: true, agentId, modelPresets });
+    } catch (error) { next(error); }
+  });
+
+  // ── Hot-swap: switch active model for a running agent ──
+  app.post('/protoclaw/swap_model', express.json(), async (req, res, next) => {
+    try {
+      const { agentId, presetName } = req.body || {};
+      if (!agentId || typeof agentId !== 'string') {
+        return res.status(400).json({ error: 'agentId is required' });
+      }
+      if (!presetName || typeof presetName !== 'string') {
+        return res.status(400).json({ error: 'presetName is required' });
+      }
+
+      // Write config so swap persists across restarts
+      const userConfigDir = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs');
+      await fs.mkdir(userConfigDir, { recursive: true });
+      const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
+      const existingConfig = await readJsonSafe(userConfigPath, {}) || {};
+      if (!existingConfig.modelPresets) existingConfig.modelPresets = {};
+
+      const defaultCfg = existingConfig.modelPresets.default || {};
+      const secondary = (typeof defaultCfg === 'object' && defaultCfg.secondary) || null;
+      existingConfig.modelPresets.default = { primary: presetName, secondary };
+
+      await fs.writeFile(userConfigPath, JSON.stringify(existingConfig, null, 2), 'utf8');
+
+      // Notify running runtime to hot-swap
       const swapCount = sendIPCToAllSessions(agentId, { type: 'swap-model' });
 
-      res.json({ ok: true, agentId, modelPresets, swapCount });
+      res.json({ ok: true, agentId, presetName, swapCount });
     } catch (error) { next(error); }
   });
 }
