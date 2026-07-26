@@ -221,39 +221,39 @@
   width: 100% !important;
   border-collapse: collapse !important;
   margin-bottom: 16px !important;
-  background-color: #161b22 !important;
+  background-color: #1a1a1a !important;
   border-radius: 12px !important;
   overflow: hidden !important;
   display: table !important;
 }
 .markdown-body th, .markdown-body td {
   padding: 10px 14px !important;
-  border: 1px solid #30363d !important;
+  border: 1px solid #333 !important;
   vertical-align: top !important;
 }
 .markdown-body th {
-  background-color: #161b22 !important;
+  background-color: #262626 !important;
   font-weight: 600 !important;
   text-align: left !important;
   color: var(--text-primary) !important;
 }
-.markdown-body tr { background-color: #0d1117 !important; }
-.markdown-body tr:nth-child(2n) { background-color: #161b22 !important; }
+.markdown-body tr { background-color: #1a1a1a !important; }
+.markdown-body tr:nth-child(2n) { background-color: #222 !important; }
 body[data-theme="light"] .markdown-body table {
   background-color: #ffffff !important;
 }
 body[data-theme="light"] .markdown-body th,
 body[data-theme="light"] .markdown-body td {
-  border-color: #e3e6ea !important;
+  border-color: #ddd !important;
 }
 body[data-theme="light"] .markdown-body th {
-  background-color: #f6f7f8 !important;
+  background-color: #f0f0f0 !important;
 }
 body[data-theme="light"] .markdown-body tr {
   background-color: #ffffff !important;
 }
 body[data-theme="light"] .markdown-body tr:nth-child(2n) {
-  background-color: #fafafa !important;
+  background-color: #f7f7f7 !important;
 }
 
 .tool-error {
