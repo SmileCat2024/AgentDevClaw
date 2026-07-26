@@ -255,13 +255,9 @@ function getRuntimeAwareAgentRecord() {
         // Also carry modelPresets from host — runtime child records don't have
         // it, but getConnectedAgents populates it on the prebuilt host record
         // via resolveAgentModelPresets() on every refresh.
-        // Same for thinkingEffort (readAgentThinkingEffort on host record).
         const hostExtras = {
           ...(!runtimeRecord.modelPresets && hostRecord?.modelPresets
             ? { modelPresets: hostRecord.modelPresets }
-            : {}),
-          ...(!runtimeRecord.thinkingEffort && hostRecord?.thinkingEffort
-            ? { thinkingEffort: hostRecord.thinkingEffort }
             : {}),
         };
         if (hostRecord && hostRecord.workspace_sessions) {
@@ -285,9 +281,6 @@ function getRuntimeAwareAgentRecord() {
         ...runtimeRecord,
         ...(!runtimeRecord.modelPresets && hostRecord?.modelPresets
           ? { modelPresets: hostRecord.modelPresets }
-          : {}),
-        ...(!runtimeRecord.thinkingEffort && hostRecord?.thinkingEffort
-          ? { thinkingEffort: hostRecord.thinkingEffort }
           : {}),
         workspace_sessions: _mergeWorkspaceSessions(hostRecord.workspace_sessions, runtimeRecord.workspace_sessions),
         active_workspace_session_id: hostRecord.active_workspace_session_id || runtimeRecord.active_workspace_session_id,

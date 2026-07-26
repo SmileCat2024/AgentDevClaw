@@ -131,7 +131,7 @@ const PROJECT_REMOTE_CLAW_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 're
 const sessionApi = {};
 const agentDiscoveryApi = createAgentDiscoveryModule({ sessionApi });
 const {
-  discoverAgents, getAgentsLight, resolveAgentModelPresets, readAgentThinkingEffort, enrichAgent,
+  discoverAgents, getAgentsLight, resolveAgentModelPresets, enrichAgent,
   getAgents, requireAgentLight, requireAgent,
   readViewerJson, getPendingInputCount,
   resolveActiveWorkspaceSessionMeta, resolveRuntimeDisplayName,
@@ -152,7 +152,7 @@ const agentLifecycle = createAgentLifecycleModule({
   getAgents, getAgentsLight, enrichAgent, requireAgentLight,
   resolveRuntimeDisplayName,
   readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
-  readViewerJson, getPendingInputCount, resolveAgentModelPresets, readAgentThinkingEffort,
+  readViewerJson, getPendingInputCount, resolveAgentModelPresets,
 });
 const {
   getConnectedAgents, waitForProcessExit,

@@ -21,7 +21,7 @@ const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
  * @param {string} presetName
  * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
-export function resolveModelPresetLLM(presetName, options = {}) {
+export function resolveModelPresetLLM(presetName) {
   if (!presetName || !existsSync(PRESETS_PATH)) return null;
   try {
     const raw = JSON.parse(readFileSync(PRESETS_PATH, 'utf8'));
@@ -40,19 +40,8 @@ export function resolveModelPresetLLM(presetName, options = {}) {
     const protocol = preset.protocol || 'anthropic';
     const baseUrl = provider.endpoints?.[protocol] || '';
 
-    // Validate thinkingEffort override against current provider's valid values.
-    // This prevents an override set for one provider (e.g. anthropic 'max')
-    // from leaking into another provider's model (e.g. openai) after a model swap.
-    const VALID_EFFORTS = protocol === 'openai'
-      ? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
-      : ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
-    let effectiveThinkingEffort = preset.thinkingEffort || undefined;
-    if (options.thinkingEffortOverride !== undefined) {
-      const override = options.thinkingEffortOverride || undefined;
-      if (override && VALID_EFFORTS.includes(override)) {
-        effectiveThinkingEffort = override;
-      }
-    }
+    // thinkingEffort: always read from preset, never inherit across providers.
+    const effectiveThinkingEffort = preset.thinkingEffort || undefined;
 
     // OAuth provider: resolve access_token from token store
     const isOAuth = provider.authType === 'oauth-codex';
@@ -170,14 +159,7 @@ export function resolveAgentModelLLM(agentDir, role = 'default') {
     }
     
     if (!presetName) return null;
-    // Read thinkingEffort override from agent config (set by input-area hot-swap)
-    const thinkingEffortOverride = typeof userConfig?.thinkingEffort === 'string' && userConfig.thinkingEffort
-      ? userConfig.thinkingEffort
-      : undefined;
-    const resolved = resolveModelPresetLLM(
-      presetName,
-      thinkingEffortOverride !== undefined ? { thinkingEffortOverride } : {},
-    );
+    const resolved = resolveModelPresetLLM(presetName);
     return resolved ? { ...resolved, presetRole: role } : null;
   } catch (error) {
     console.warn(`[ModelPreset] Failed to read agent metadata from ${metaPath}:`, error.message);

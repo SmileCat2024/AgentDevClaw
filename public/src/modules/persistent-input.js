@@ -355,6 +355,8 @@ async function _performInputModelSwap(agentId, presetName) {
           autoDismiss: 3000,
         });
       }
+      // Invalidate cached presets so thinking effort reads from the new preset
+      if (window.ClawFW) window.ClawFW._modelPresets = null;
       updateInputModelSwitcher();
       if (typeof loadAgents === 'function') {
         loadAgents().then(() => {
@@ -515,12 +517,16 @@ const ANTHROPIC_EFFORT_LABELS = {
 
 let _inputThinkingDropdown = null;
 
-function _getCurrentPresetProtocol() {
+function _getCurrentPreset() {
   let presets = (window.ClawFW && window.ClawFW._modelPresets) || [];
-  if (!presets.length) return 'anthropic';
+  if (!presets.length) return null;
   let currentName = _getInputDefaultPresetName();
-  if (!currentName) return 'anthropic';
-  let preset = presets.find(function(p) { return (p.name || p.model) === currentName; });
+  if (!currentName) return null;
+  return presets.find(function(p) { return (p.name || p.model) === currentName; }) || null;
+}
+
+function _getCurrentPresetProtocol() {
+  let preset = _getCurrentPreset();
   return (preset && preset.protocol) || 'anthropic';
 }
 
@@ -535,16 +541,8 @@ function _getEffortLabel(effort) {
 }
 
 function _getCurrentThinkingEffort() {
-  let agent = typeof getRuntimeAwareAgentRecord === 'function'
-    ? getRuntimeAwareAgentRecord()
-    : null;
-  if (!agent || !agent.thinkingEffort) return null;
-  // Validate against current provider's effort list — if the stored
-  // override doesn't belong to the active provider (e.g. switched from
-  // anthropic 'max' to an openai model), treat it as no override.
-  let protocol = _getCurrentPresetProtocol();
-  let validEfforts = _getEffortList(protocol);
-  return validEfforts.includes(agent.thinkingEffort) ? agent.thinkingEffort : null;
+  let preset = _getCurrentPreset();
+  return (preset && preset.thinkingEffort) || null;
 }
 
 function _closeThinkingEffortDropdown() {
@@ -595,6 +593,8 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
           autoDismiss: 3000,
         });
       }
+      // Invalidate cached presets so next read picks up the updated thinkingEffort
+      if (window.ClawFW) window.ClawFW._modelPresets = null;
       updateThinkingEffortSwitcher();
       if (typeof loadAgents === 'function') {
         loadAgents().then(function() {

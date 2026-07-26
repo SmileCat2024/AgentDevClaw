@@ -109,12 +109,6 @@ export function createAgentDiscoveryModule(ctx) {
     };
   }
 
-  async function readAgentThinkingEffort(agentId) {
-    const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
-    const userConfig = await readJsonSafe(userConfigPath, null);
-    return userConfig?.thinkingEffort ?? null;
-  }
-
   async function enrichAgent(agent) {
     return {
       ...agent,
@@ -122,7 +116,6 @@ export function createAgentDiscoveryModule(ctx) {
       workspace_data: await resolveWorkspaceData(agent),
       workspace_state: await readWorkspaceState(agent.id),
       modelPresets: await resolveAgentModelPresets(agent.id, agent.modelPresets),
-      thinkingEffort: await readAgentThinkingEffort(agent.id),
     };
   }
 
@@ -431,7 +424,6 @@ export function createAgentDiscoveryModule(ctx) {
     discoverAgents,
     getAgentsLight,
     resolveAgentModelPresets,
-    readAgentThinkingEffort,
     enrichAgent,
     getAgents,
     requireAgentLight,
