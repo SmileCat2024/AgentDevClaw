@@ -38,7 +38,7 @@
     "@agentdev/wecom-bot": "file:resources/features/agentdev-wecom-bot-0.1.0.tgz",
     "@agentdev/weixin-bot": "file:resources/features/agentdev-weixin-bot-0.2.0.tgz",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "agentdev": "^0.2.9",
+    "agentdev": "^0.2.10",
     "express": "^4.21.2",
     "marked": "^18.0.4",
     "multer": "^2.1.1",
