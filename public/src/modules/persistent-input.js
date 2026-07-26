@@ -359,6 +359,7 @@ async function _performInputModelSwap(agentId, presetName) {
       if (typeof loadAgents === 'function') {
         loadAgents().then(() => {
           updateInputModelSwitcher();
+          updateThinkingEffortSwitcher();
           if (typeof updateChatContextBar === 'function') updateChatContextBar();
         }).catch(() => {});
       }
@@ -537,8 +538,13 @@ function _getCurrentThinkingEffort() {
   let agent = typeof getRuntimeAwareAgentRecord === 'function'
     ? getRuntimeAwareAgentRecord()
     : null;
-  if (agent && agent.thinkingEffort) return agent.thinkingEffort;
-  return null;
+  if (!agent || !agent.thinkingEffort) return null;
+  // Validate against current provider's effort list — if the stored
+  // override doesn't belong to the active provider (e.g. switched from
+  // anthropic 'max' to an openai model), treat it as no override.
+  let protocol = _getCurrentPresetProtocol();
+  let validEfforts = _getEffortList(protocol);
+  return validEfforts.includes(agent.thinkingEffort) ? agent.thinkingEffort : null;
 }
 
 function _closeThinkingEffortDropdown() {

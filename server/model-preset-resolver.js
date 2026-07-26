@@ -40,6 +40,20 @@ export function resolveModelPresetLLM(presetName, options = {}) {
     const protocol = preset.protocol || 'anthropic';
     const baseUrl = provider.endpoints?.[protocol] || '';
 
+    // Validate thinkingEffort override against current provider's valid values.
+    // This prevents an override set for one provider (e.g. anthropic 'max')
+    // from leaking into another provider's model (e.g. openai) after a model swap.
+    const VALID_EFFORTS = protocol === 'openai'
+      ? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+      : ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+    let effectiveThinkingEffort = preset.thinkingEffort || undefined;
+    if (options.thinkingEffortOverride !== undefined) {
+      const override = options.thinkingEffortOverride || undefined;
+      if (override && VALID_EFFORTS.includes(override)) {
+        effectiveThinkingEffort = override;
+      }
+    }
+
     // OAuth provider: resolve access_token from token store
     const isOAuth = provider.authType === 'oauth-codex';
     let apiKey;
@@ -70,9 +84,7 @@ export function resolveModelPresetLLM(presetName, options = {}) {
       model: preset.model,
       apiKey,
       baseUrl,
-      thinkingEffort: options.thinkingEffortOverride !== undefined
-        ? (options.thinkingEffortOverride || undefined)
-        : (preset.thinkingEffort || undefined),
+      thinkingEffort: effectiveThinkingEffort,
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
       ...(apiSurface ? { apiSurface } : {}),
       ...(isOAuth ? { responsesProfile: 'codex' } : {}),
