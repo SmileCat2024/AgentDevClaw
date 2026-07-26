@@ -126,7 +126,7 @@ function getSessionCompressRatio(session, agent) {
   return 80;
 }
 
-function _cacheModelInfo(agent, contextLength, compressRatio) {
+function _cacheModelInfo(agent, contextLength, compressRatio, presetName) {
   let key = _resolveAgentKey(agent);
   if (!key) return;
   if (!_modelInfoCache[key]) _modelInfoCache[key] = {};
@@ -136,6 +136,20 @@ function _cacheModelInfo(agent, contextLength, compressRatio) {
   if (Number.isFinite(compressRatio) && compressRatio > 0 && compressRatio <= 100) {
     _modelInfoCache[key].compressRatio = compressRatio;
   }
+  if (typeof presetName === 'string' && presetName) {
+    _modelInfoCache[key].presetName = presetName;
+  }
+}
+
+/**
+ * Read the cached preset name for the given agent.
+ * Used as a fallback when the live agent record temporarily
+ * lacks modelPresets (e.g. during loadAgents replacement gap).
+ */
+function getCachedPresetName(agent) {
+  let key = _resolveAgentKey(agent);
+  if (!key) return '';
+  return (_modelInfoCache[key] && _modelInfoCache[key].presetName) || '';
 }
 
 function renderSessionTokenBar(session, agent) {

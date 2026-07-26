@@ -1059,17 +1059,23 @@ async function runPollCycle() {
     // Refresh the Claw-composed agent list occasionally.
     // Do not overwrite `allAgents` with the raw viewer session list,
     // otherwise prebuilt/managed grouping disappears.
-    if (Date.now() - lastAgentListRefreshAt > 3000) {
-       lastAgentListRefreshAt = Date.now();
-       await loadAgents();
-       if (!isSessionViewTokenCurrent(pollToken)) {
-         schedulePoll(POLL_FAST_INTERVAL_MS);
-         return;
-       }
-       if (typeof updateChatContextBar === 'function') {
-         updateChatContextBar();
-       }
-    }
+     if (Date.now() - lastAgentListRefreshAt > 3000) {
+        lastAgentListRefreshAt = Date.now();
+        await loadAgents();
+        if (!isSessionViewTokenCurrent(pollToken)) {
+          schedulePoll(POLL_FAST_INTERVAL_MS);
+          return;
+        }
+        if (typeof updateChatContextBar === 'function') {
+          updateChatContextBar();
+        }
+        if (typeof updateInputModelSwitcher === 'function') {
+          updateInputModelSwitcher();
+        }
+        if (typeof updateThinkingEffortSwitcher === 'function') {
+          updateThinkingEffortSwitcher();
+        }
+     }
 
     // Incrementally refresh workspace session data for the active workspace host.
     // This keeps the UI in sync when sessions are created/deleted via CLI.

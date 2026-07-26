@@ -25,6 +25,7 @@
  * - beginFollowLatestEntryWindow, requestFollowLatest (chat-viewport.js)
  * - _lastRenderedNotificationRuntime (runtime-status.js)
  * - _cacheModelInfo, getCachedPresetName (session-ui.js)
+ * - getCurrentHostAgentRecord (app-main.js)
  */
 
 // 渲染常驻输入框（agent 运行期间始终可见）
@@ -267,15 +268,22 @@ window.removePendingImage = function(idx) {
 let _inputModelDropdown = null;
 
 function _getInputAgentId() {
-  let agent = typeof getRuntimeAwareAgentRecord === 'function'
-    ? getRuntimeAwareAgentRecord()
-    : null;
-  if (agent && agent.id) return agent.id;
+  // Model swap is keyed on the HOST agent ID (e.g. 'programming-helper'),
+  // not the ViewerWorker child UUID. The config file
+  // (.agentdev/agent-configs/{agentId}.json) and IPC delivery
+  // (sendIPCToAllSessions → listAgentRuntimes) both use the host ID.
+  // currentAgentId is set to the host ID by switchAgent().
+  if (typeof currentAgentId !== 'undefined' && currentAgentId) return currentAgentId;
+  // Fallback: resolve via host record
+  if (typeof getCurrentHostAgentRecord === 'function') {
+    let host = getCurrentHostAgentRecord();
+    if (host && host.id) return host.id;
+  }
   if (typeof getCurrentAgentRecord === 'function') {
-    agent = getCurrentAgentRecord();
+    let agent = getCurrentAgentRecord();
     if (agent && agent.id) return agent.id;
   }
-  return typeof currentAgentId !== 'undefined' ? currentAgentId : null;
+  return null;
 }
 
 function _getInputDefaultPresetName() {

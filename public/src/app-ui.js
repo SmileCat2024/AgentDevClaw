@@ -251,11 +251,25 @@ function getRuntimeAwareAgentRecord() {
         // workspace_sessions.sessions (that only comes from the host record via
         // GET /protoclaw/prebuilt_sessions). Always merge in host's sessions so
         // context bar can find activeSession and read correct contextLength.
+        //
+        // Also carry modelPresets from host — runtime child records don't have
+        // it, but getConnectedAgents populates it on the prebuilt host record
+        // via resolveAgentModelPresets() on every refresh.
+        // Same for thinkingEffort (readAgentThinkingEffort on host record).
+        const hostExtras = {
+          ...(!runtimeRecord.modelPresets && hostRecord?.modelPresets
+            ? { modelPresets: hostRecord.modelPresets }
+            : {}),
+          ...(!runtimeRecord.thinkingEffort && hostRecord?.thinkingEffort
+            ? { thinkingEffort: hostRecord.thinkingEffort }
+            : {}),
+        };
         if (hostRecord && hostRecord.workspace_sessions) {
           const mergedWorkspaceSessions = _mergeWorkspaceSessions(runtimeRecord.workspace_sessions, hostRecord.workspace_sessions);
           const runtimeSessionId = runtimeRecord.active_workspace_session_id || null;
           return {
             ...runtimeRecord,
+            ...hostExtras,
             // The session list belongs to the host, but the selected chat view
             // belongs to the concrete runtime. A host snapshot may still point
             // at another concurrently running session, so never let its
@@ -265,10 +279,16 @@ function getRuntimeAwareAgentRecord() {
               : mergedWorkspaceSessions,
           };
         }
-        return runtimeRecord;
+        return { ...runtimeRecord, ...hostExtras };
       }
       return {
         ...runtimeRecord,
+        ...(!runtimeRecord.modelPresets && hostRecord?.modelPresets
+          ? { modelPresets: hostRecord.modelPresets }
+          : {}),
+        ...(!runtimeRecord.thinkingEffort && hostRecord?.thinkingEffort
+          ? { thinkingEffort: hostRecord.thinkingEffort }
+          : {}),
         workspace_sessions: _mergeWorkspaceSessions(hostRecord.workspace_sessions, runtimeRecord.workspace_sessions),
         active_workspace_session_id: hostRecord.active_workspace_session_id || runtimeRecord.active_workspace_session_id,
         active_workspace_session_title: hostRecord.active_workspace_session_title || runtimeRecord.active_workspace_session_title,
