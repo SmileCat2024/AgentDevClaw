@@ -91,6 +91,7 @@ export function resolveModelPresetLLM(presetName, overrides) {
       llm,
       modelName: preset.model,
       presetName: preset.name || presetName,
+      thinkingEffort: effectiveThinkingEffort || null,
       providerName: provider.name || preset.providerName || '',
       provider: protocol,
       protocol,

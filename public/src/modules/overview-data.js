@@ -79,6 +79,7 @@ function getEmptyOverviewSnapshot() {
     },
     modelName: '',
     presetName: '',
+    thinkingEffort: null,
   };
 }
 
@@ -138,6 +139,7 @@ function normalizeOverviewSnapshot(snapshot) {
     runtime: normalizeRuntimeSnapshot(snapshot.runtime),
     modelName: typeof snapshot.modelName === 'string' ? snapshot.modelName : '',
     presetName: typeof snapshot.presetName === 'string' ? snapshot.presetName : '',
+    thinkingEffort: typeof snapshot.thinkingEffort === 'string' ? snapshot.thinkingEffort : null,
   };
 }
 

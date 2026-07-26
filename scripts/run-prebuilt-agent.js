@@ -436,6 +436,7 @@ async function main() {
         contextLength: resolved.contextLength,
         compressRatio: resolved.compressRatio,
         presetName: resolved.presetName,
+        thinkingEffort: resolved.thinkingEffort || null,
       });
     }
     console.log(`[ProtoClaw Runtime] Using model preset from metadata.json => ${resolved.modelName}`);
@@ -717,6 +718,7 @@ async function main() {
       contextLength: newResolved.contextLength,
       compressRatio: newResolved.compressRatio,
       presetName: newResolved.presetName,
+      thinkingEffort: newResolved.thinkingEffort || null,
     });
 
     resolved = newResolved;

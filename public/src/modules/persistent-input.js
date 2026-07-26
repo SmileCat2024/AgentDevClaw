@@ -538,7 +538,7 @@ function _getEffortLabel(effort) {
 }
 
 function _getCurrentThinkingEffort() {
-  // Runtime override takes priority (from swap-thinking IPC)
+  // Priority 1: Local optimistic cache (set during swap, before overview catches up)
   let agent = typeof getRuntimeAwareAgentRecord === 'function'
     ? getRuntimeAwareAgentRecord()
     : null;
@@ -546,7 +546,13 @@ function _getCurrentThinkingEffort() {
     let cached = getCachedThinkingEffort(agent);
     if (cached !== undefined) return cached;
   }
-  // Fall back to the preset's default thinkingEffort
+  // Priority 2: Overview snapshot (authoritative from runtime polling)
+  if (typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot) {
+    if (typeof currentOverviewSnapshot.thinkingEffort === 'string' && currentOverviewSnapshot.thinkingEffort) {
+      return currentOverviewSnapshot.thinkingEffort;
+    }
+  }
+  // Priority 3: Preset default
   let preset = _getCurrentPreset();
   return (preset && preset.thinkingEffort) || null;
 }
@@ -713,6 +719,20 @@ function updateThinkingEffortSwitcher() {
   let nameEl = document.querySelector('.input-thinking-name');
   if (!nameEl) return;
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+
+  // Sync local cache with authoritative overview snapshot so that
+  // session switches, page reloads, and agent restarts all converge
+  // to the correct runtime thinkingEffort.
+  if (typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot) {
+    if (typeof currentOverviewSnapshot.thinkingEffort === 'string' && currentOverviewSnapshot.thinkingEffort) {
+      let syncAgent = typeof getRuntimeAwareAgentRecord === 'function'
+        ? getRuntimeAwareAgentRecord()
+        : null;
+      if (syncAgent && typeof _cacheModelInfo === 'function') {
+        _cacheModelInfo(syncAgent, null, null, null, currentOverviewSnapshot.thinkingEffort);
+      }
+    }
+  }
 
   // If current model doesn't support thinking, disable the button and show hint
   let supportsThinking = _currentModelSupportsThinking();
