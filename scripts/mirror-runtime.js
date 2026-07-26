@@ -13,6 +13,9 @@ export function tuneMirrorLLM(llm, maxTokens) {
   if (!llm || typeof llm !== 'object') return;
 
   try {
+    if (Object.prototype.hasOwnProperty.call(llm, 'thinkingEffort')) {
+      llm.thinkingEffort = undefined;
+    }
     if (Object.prototype.hasOwnProperty.call(llm, 'thinkingBudgetTokens')) {
       llm.thinkingBudgetTokens = undefined;
     }

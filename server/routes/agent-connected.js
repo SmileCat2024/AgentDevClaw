@@ -20,6 +20,7 @@ export function createConnectedAgentsQuery(deps) {
     readViewerJson,
     getPendingInputCount,
     resolveAgentModelPresets,
+    readAgentThinkingEffort,
   } = deps;
 
   async function getConnectedAgents() {
@@ -69,6 +70,7 @@ export function createConnectedAgentsQuery(deps) {
         pending_input_count: null,
         created_at: null,
         modelPresets: await resolveAgentModelPresets(agent.id, agent.modelPresets),
+        thinkingEffort: await readAgentThinkingEffort(agent.id),
         connected: false,
       };
     }));

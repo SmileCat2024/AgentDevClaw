@@ -179,33 +179,45 @@ function renderSettingsOverlay() {
     '</div>',
   ].join('');
 
-  if (typeof window.validateTokenFields === 'function') window.validateTokenFields();
+  if (typeof window.populateThinkingEffortOptions === 'function') window.populateThinkingEffortOptions();
 }
 
-window.validateTokenFields = function() {
-  const thinkingInput = document.getElementById('settings-preset-thinking');
-  const maxTokensInput = document.getElementById('settings-preset-max-tokens');
-  const warningEl = document.getElementById('settings-token-warning');
-  if (!thinkingInput || !maxTokensInput || !warningEl) return;
+const OPENAI_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const ANTHROPIC_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
 
+function renderThinkingEffortSelect(preset, isZh) {
+  const current = preset.thinkingEffort || '';
+  return '<select class="settings-input" id="settings-preset-thinking-effort" '
+    + 'data-provider="' + (preset.provider || 'anthropic') + '" '
+    + 'data-current="' + current + '">'
+    + '</select>';
+}
+
+window.populateThinkingEffortOptions = function() {
+  const select = document.getElementById('settings-preset-thinking-effort');
+  if (!select) return;
+  const provider = select.dataset.provider || 'anthropic';
+  const selectedValue = select.dataset.current || select.value || '';
   const isZh = (typeof currentLanguage === 'function' ? currentLanguage() : window.ClawFW?.lang) === 'zh';
-  const tbt = parseInt(thinkingInput.value, 10);
-  const mt = parseInt(maxTokensInput.value, 10);
-  const hasThinking = Number.isFinite(tbt) && tbt > 0;
-  const hasMax = Number.isFinite(mt) && mt > 0;
-
-  thinkingInput.classList.remove('invalid');
-  maxTokensInput.classList.remove('invalid');
-  warningEl.style.display = 'none';
-
-  if (hasThinking && hasMax && mt <= tbt) {
-    thinkingInput.classList.add('invalid');
-    maxTokensInput.classList.add('invalid');
-    warningEl.textContent = isZh
-      ? 'Max Output Tokens 必须大于 Thinking Budget Tokens，否则模型没有空间输出实际内容。'
-      : 'Max Output Tokens must be greater than Thinking Budget Tokens, otherwise the model has no room for actual output.';
-    warningEl.style.display = 'block';
+  const efforts = provider === 'openai' ? OPENAI_EFFORTS : ANTHROPIC_EFFORTS;
+  let html = '<option value="" ' + (selectedValue === '' ? 'selected' : '') + '>'
+    + (isZh ? '默认（厂商决定）' : 'Default (vendor decides)') + '</option>';
+  for (const effort of efforts) {
+    html += '<option value="' + effort + '" ' + (selectedValue === effort ? 'selected' : '') + '>' + effort + '</option>';
   }
+  select.innerHTML = html;
+  select.dataset.current = '';
+};
+
+window.onProviderChangeUpdateThinking = function() {
+  const select = document.getElementById('settings-preset-thinking-effort');
+  if (!select) return;
+  const providerEl = document.getElementById('settings-preset-provider');
+  const raw = providerEl?.value || 'anthropic';
+  select.dataset.provider = raw.startsWith('openai') ? 'openai' : 'anthropic';
+  const selectedValue = select.value || '';
+  select.dataset.current = selectedValue;
+  if (typeof window.populateThinkingEffortOptions === 'function') window.populateThinkingEffortOptions();
 };
 
 window.switchSettingsTab = function(tab) {
@@ -278,16 +290,15 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '</div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
-    '<label>Thinking Budget Tokens</label>',
-    '<input class="settings-input" id="settings-preset-thinking" type="number" value="' + (preset.thinkingBudgetTokens ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '" oninput="validateTokenFields()">',
+    '<label>' + (isZh ? '思考力度' : 'Thinking Effort') + '</label>',
+    renderThinkingEffortSelect(preset, isZh),
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? '选择"默认"则不发送思考参数，由厂商自行决定' : 'Select "Default" to omit the thinking param and let the vendor decide') + '</div>',
     '</div>',
     '<div class="settings-field">',
     '<label>Max Output Tokens</label>',
-    '<input class="settings-input" id="settings-preset-max-tokens" type="number" value="' + (preset.maxTokens ?? '') + '" placeholder="' + (isZh ? '留空自动计算' : 'Leave empty for auto') + '" oninput="validateTokenFields()">',
-    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? '含思考内容的总输出上限。留空时框架会根据思考预算自动推算' : 'Total output cap incl. thinking. Auto-calculated from thinking budget when empty') + '</div>',
+    '<input class="settings-input" id="settings-preset-max-tokens" type="number" value="' + (preset.maxTokens ?? '') + '" placeholder="' + (isZh ? '留空自动计算' : 'Leave empty for auto') + '">',
     '</div>',
     '</div>',
-    '<div id="settings-token-warning" style="display:none;" class="settings-field-warning"></div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>Temperature</label>',
@@ -386,6 +397,7 @@ function addSettingsPreset() {
     model: '',
     baseUrl: '',
     apiKey: '',
+    thinkingEffort: null,
     thinkingBudgetTokens: null,
     maxTokens: null,
     temperature: null,
@@ -446,7 +458,6 @@ async function saveSettingsPreset(idx) {
   if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
   const presets = window.ClawFW.settingsData?.presets || [];
   const el = (id) => document.getElementById(id);
-  const thinkingRaw = el('settings-preset-thinking')?.value?.trim();
   const maxTokensRaw = el('settings-preset-max-tokens')?.value?.trim();
   const tempRaw = el('settings-preset-temperature')?.value?.trim();
   const contextLengthRaw = el('settings-preset-context-length')?.value?.trim();
@@ -476,7 +487,8 @@ async function saveSettingsPreset(idx) {
     model: (el('settings-preset-model')?.value || '').trim(),
     baseUrl: (el('settings-preset-baseurl')?.value || '').trim(),
     apiKey: isOAuth ? '' : (el('settings-preset-apikey')?.value || '').trim(),
-    thinkingBudgetTokens: thinkingRaw !== '' ? parseInt(thinkingRaw, 10) || null : null,
+    thinkingEffort: (el('settings-preset-thinking-effort')?.value || null),
+    thinkingBudgetTokens: presets[idx]?.thinkingBudgetTokens ?? null,
     maxTokens: maxTokensRaw !== '' ? parseInt(maxTokensRaw, 10) || null : null,
     temperature: tempRaw !== '' ? parseFloat(tempRaw) || null : null,
     vision: el('settings-preset-vision')?.checked === true,
@@ -513,6 +525,9 @@ async function applySettingsPreset(idx) {
     apiKey: preset.apiKey || '',
     authType: preset.authType || '',
   };
+  if (preset.thinkingEffort) {
+    defaultModel.thinkingEffort = preset.thinkingEffort;
+  }
   if (preset.thinkingBudgetTokens != null) {
     defaultModel.thinkingBudgetTokens = preset.thinkingBudgetTokens;
   }
@@ -636,6 +651,8 @@ window.onProtocolChange = function() {
   let oauthSection = document.getElementById('oauth-section');
   let baseUrlInput = document.getElementById('settings-preset-baseurl');
   let isZh = currentLanguage === 'zh';
+
+  if (typeof window.onProviderChangeUpdateThinking === 'function') window.onProviderChangeUpdateThinking();
 
   if (val === 'openai-oauth') {
     if (apiKeySection) apiKeySection.style.display = 'none';

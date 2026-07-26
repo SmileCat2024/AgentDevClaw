@@ -28,7 +28,7 @@ export function createAgentLifecycleModule(ctx) {
     getAgents, getAgentsLight, enrichAgent, requireAgentLight,
     resolveRuntimeDisplayName,
     readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
-    readViewerJson, getPendingInputCount, resolveAgentModelPresets,
+    readViewerJson, getPendingInputCount, resolveAgentModelPresets, readAgentThinkingEffort,
   } = ctx;
 
   const _exitCallbacks = [];
@@ -42,6 +42,7 @@ export function createAgentLifecycleModule(ctx) {
     readViewerJson,
     getPendingInputCount,
     resolveAgentModelPresets,
+    readAgentThinkingEffort,
   });
 
   // ── Startup & wait functions (delegated to agent-startup.js) ──

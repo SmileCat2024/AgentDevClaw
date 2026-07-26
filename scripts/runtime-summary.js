@@ -40,8 +40,14 @@ export function createSummaryHandlers(ctx) {
         restore.set(key, llm[key]);
       }
     };
+    remember('thinkingEffort');
     remember('thinkingBudgetTokens');
     remember('maxTokens');
+    try {
+      if (Object.prototype.hasOwnProperty.call(llm, 'thinkingEffort')) {
+        llm.thinkingEffort = undefined;
+      }
+    } catch {}
     try {
       if (Object.prototype.hasOwnProperty.call(llm, 'thinkingBudgetTokens')) {
         llm.thinkingBudgetTokens = undefined;

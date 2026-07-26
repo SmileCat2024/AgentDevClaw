@@ -21,7 +21,7 @@ const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
  * @param {string} presetName
  * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
-export function resolveModelPresetLLM(presetName) {
+export function resolveModelPresetLLM(presetName, options = {}) {
   if (!presetName || !existsSync(PRESETS_PATH)) return null;
   try {
     const raw = JSON.parse(readFileSync(PRESETS_PATH, 'utf8'));
@@ -70,6 +70,9 @@ export function resolveModelPresetLLM(presetName) {
       model: preset.model,
       apiKey,
       baseUrl,
+      thinkingEffort: options.thinkingEffortOverride !== undefined
+        ? (options.thinkingEffortOverride || undefined)
+        : (preset.thinkingEffort || undefined),
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
       ...(apiSurface ? { apiSurface } : {}),
       ...(isOAuth ? { responsesProfile: 'codex' } : {}),
@@ -155,7 +158,14 @@ export function resolveAgentModelLLM(agentDir, role = 'default') {
     }
     
     if (!presetName) return null;
-    const resolved = resolveModelPresetLLM(presetName);
+    // Read thinkingEffort override from agent config (set by input-area hot-swap)
+    const thinkingEffortOverride = typeof userConfig?.thinkingEffort === 'string' && userConfig.thinkingEffort
+      ? userConfig.thinkingEffort
+      : undefined;
+    const resolved = resolveModelPresetLLM(
+      presetName,
+      thinkingEffortOverride !== undefined ? { thinkingEffortOverride } : {},
+    );
     return resolved ? { ...resolved, presetRole: role } : null;
   } catch (error) {
     console.warn(`[ModelPreset] Failed to read agent metadata from ${metaPath}:`, error.message);

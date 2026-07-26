@@ -189,22 +189,39 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
         : '';
       card.innerHTML = `
         <div class="persistent-attachment-preview" data-attachment-preview style="display:none;"></div>
-        <div class="persistent-input-row">
-          <textarea class="user-input-textarea" rows="1" id="input-${req.requestId}"
-            onkeydown="handleInputKey(event, '${req.requestId}')"
-            oninput="autoResize(this); _cacheSessionInput(this)"
-            onpaste="handleInputPaste(event)"
-            placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
-          <input type="file" id="image-file-input-${req.requestId}" accept="image/*" multiple style="display:none;" onchange="onImageFilesSelected(this)">
-          <button class="persistent-icon-btn" onclick="document.getElementById('image-file-input-${req.requestId}').click()" title="${currentLanguage === 'zh' ? '添加图片' : 'Attach Image'}">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
-          </button>
-          <button class="voice-input-btn" data-target="input-${req.requestId}" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
-            <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
-          </button>
-          <button class="persistent-action-btn" onclick="submitInput('${req.requestId}')" title="Send">
-            <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-          </button>
+        <div class="persistent-input-body">
+          <div class="persistent-input-textarea-area">
+            <textarea class="user-input-textarea" rows="1" id="input-${req.requestId}"
+              onkeydown="handleInputKey(event, '${req.requestId}')"
+              oninput="autoResize(this); _cacheSessionInput(this)"
+              onpaste="handleInputPaste(event)"
+              placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
+          </div>
+          <div class="persistent-input-toolbar">
+            <div class="persistent-input-toolbar-left">
+              <input type="file" id="image-file-input-${req.requestId}" accept="image/*" multiple style="display:none;" onchange="onImageFilesSelected(this)">
+              <button class="persistent-icon-btn" onclick="document.getElementById('image-file-input-${req.requestId}').click()" title="${currentLanguage === 'zh' ? '添加图片' : 'Attach Image'}">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              </button>
+            </div>
+            <div class="persistent-input-toolbar-right">
+              <button class="input-model-switch-btn" id="input-model-switch-btn" onclick="toggleInputModelDropdown(event)">
+                <span class="input-model-name">${currentLanguage === 'zh' ? '模型' : 'Model'}</span>
+                <svg class="input-model-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </button>
+              <button class="input-thinking-btn" id="input-thinking-btn" onclick="toggleThinkingEffortDropdown(event)">
+                <svg class="input-thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"></path></svg>
+                <span class="input-thinking-name">${currentLanguage === 'zh' ? '思考强度' : 'Thinking'}</span>
+                <svg class="input-thinking-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+              </button>
+              <button class="voice-input-btn" data-target="input-${req.requestId}" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
+                <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+              </button>
+              <button class="persistent-action-btn" onclick="submitInput('${req.requestId}')" title="Send">
+                <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+              </button>
+            </div>
+          </div>
         </div>
         ${actionsHtml ? `<div class="user-input-footer">${actionsHtml}</div>` : ''}
       `;
@@ -219,6 +236,9 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
         _restoreSessionInputDraft(requestTextarea, requestCacheKey);
       }
       _renderAttachmentPreview();
+      // Populate model switcher button with current preset name
+      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
+      if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
 
       // Auto-focus
       setTimeout(() => {

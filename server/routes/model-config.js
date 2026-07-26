@@ -73,6 +73,7 @@ function flattenModelPresets(data) {
       clientId: cleanSessionText(provider?.clientId || preset?.clientId) || '',
       apiSurface: resolvePresetApiSurface(protocol, authType, preset?.apiSurface),
       vision: preset?.vision === true,
+      thinkingEffort: typeof preset?.thinkingEffort === 'string' && preset.thinkingEffort ? preset.thinkingEffort : null,
       thinkingBudgetTokens: Number.isFinite(Number(preset?.thinkingBudgetTokens)) ? Number(preset.thinkingBudgetTokens) : null,
       maxTokens: Number.isFinite(Number(preset?.maxTokens)) ? Number(preset.maxTokens) : null,
       temperature: Number.isFinite(Number(preset?.temperature)) ? Number(preset.temperature) : null,
@@ -160,6 +161,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       apiSurface: resolvePresetApiSurface(protocol, authType, rawPreset.apiSurface),
       vision: rawPreset?.vision === true,
       model,
+      thinkingEffort: typeof rawPreset?.thinkingEffort === 'string' && rawPreset.thinkingEffort ? rawPreset.thinkingEffort : null,
       thinkingBudgetTokens: Number.isFinite(Number(rawPreset.thinkingBudgetTokens)) ? Number(rawPreset.thinkingBudgetTokens) : null,
       maxTokens: Number.isFinite(Number(rawPreset.maxTokens)) ? Number(rawPreset.maxTokens) : null,
       temperature: Number.isFinite(Number(rawPreset.temperature)) ? Number(rawPreset.temperature) : null,
@@ -552,6 +554,41 @@ export function setupModelConfigRoutes(app, express) {
       await fs.writeFile(userConfigPath, JSON.stringify(existingConfig, null, 2), 'utf8');
 
       res.json({ ok: true, agentId, modelPresets });
+    } catch (error) { next(error); }
+  });
+
+  // ── Hot-swap: switch thinking effort for a running agent ──
+  app.post('/protoclaw/swap_thinking_effort', express.json(), async (req, res, next) => {
+    try {
+      const { agentId, thinkingEffort } = req.body || {};
+      if (!agentId || typeof agentId !== 'string') {
+        return res.status(400).json({ error: 'agentId is required' });
+      }
+      // thinkingEffort is null (clear override → use preset default)
+      // or a non-empty string ('none', 'low', 'medium', 'high', …)
+      const normalized = thinkingEffort === null
+        ? null
+        : (typeof thinkingEffort === 'string' && thinkingEffort ? thinkingEffort : null);
+
+      // Write config so swap persists across restarts
+      const userConfigDir = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs');
+      await fs.mkdir(userConfigDir, { recursive: true });
+      const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
+      const existingConfig = await readJsonSafe(userConfigPath, {}) || {};
+
+      if (normalized === null) {
+        delete existingConfig.thinkingEffort;
+      } else {
+        existingConfig.thinkingEffort = normalized;
+      }
+
+      await fs.writeFile(userConfigPath, JSON.stringify(existingConfig, null, 2), 'utf8');
+
+      // Notify running runtime to hot-swap (reuse swap-model IPC — the
+      // resolver in model-preset-resolver.js picks up the override)
+      const swapCount = sendIPCToAllSessions(agentId, { type: 'swap-model' });
+
+      res.json({ ok: true, agentId, thinkingEffort: normalized, swapCount });
     } catch (error) { next(error); }
   });
 

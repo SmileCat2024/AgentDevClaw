@@ -493,6 +493,202 @@ function updateInputModelSwitcher() {
   nameEl.textContent = displayName || (currentLanguage === 'zh' ? '模型' : 'Model');
 }
 
+// ── 输入框思考强度切换下拉 ──────────────────────────────────────────
+
+const OPENAI_EFFORT_LABELS = {
+  'none': 'none',
+  'minimal': 'minimal',
+  'low': 'low',
+  'medium': 'medium',
+  'high': 'high',
+  'xhigh': 'xhigh',
+};
+const ANTHROPIC_EFFORT_LABELS = {
+  'none': 'none',
+  'low': 'low',
+  'medium': 'medium',
+  'high': 'high',
+  'xhigh': 'xhigh',
+  'max': 'max',
+};
+
+let _inputThinkingDropdown = null;
+
+function _getCurrentPresetProtocol() {
+  let presets = (window.ClawFW && window.ClawFW._modelPresets) || [];
+  if (!presets.length) return 'anthropic';
+  let currentName = _getInputDefaultPresetName();
+  if (!currentName) return 'anthropic';
+  let preset = presets.find(function(p) { return (p.name || p.model) === currentName; });
+  return (preset && preset.protocol) || 'anthropic';
+}
+
+function _getEffortList(protocol) {
+  return protocol === 'openai'
+    ? Object.keys(OPENAI_EFFORT_LABELS)
+    : Object.keys(ANTHROPIC_EFFORT_LABELS);
+}
+
+function _getEffortLabel(effort) {
+  return OPENAI_EFFORT_LABELS[effort] || ANTHROPIC_EFFORT_LABELS[effort] || effort;
+}
+
+function _getCurrentThinkingEffort() {
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : null;
+  if (agent && agent.thinkingEffort) return agent.thinkingEffort;
+  return null;
+}
+
+function _closeThinkingEffortDropdown() {
+  if (_inputThinkingDropdown) {
+    _inputThinkingDropdown.classList.remove('visible');
+    setTimeout(function() {
+      if (_inputThinkingDropdown) { _inputThinkingDropdown.remove(); _inputThinkingDropdown = null; }
+    }, 150);
+  }
+}
+
+function _inputThinkingDropdownOutsideClick(e) {
+  if (_inputThinkingDropdown && !_inputThinkingDropdown.contains(e.target)) {
+    let btn = document.getElementById('input-thinking-btn');
+    if (!btn || !btn.contains(e.target)) {
+      _closeThinkingEffortDropdown();
+    }
+  } else if (_inputThinkingDropdown) {
+    document.addEventListener('click', _inputThinkingDropdownOutsideClick, { once: true });
+  }
+}
+
+async function _performThinkingEffortSwap(agentId, thinkingEffort) {
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let toastId = 'input-thinking-swap';
+
+  if (typeof ClawToast !== 'undefined') {
+    ClawToast.show({
+      id: toastId,
+      title: isZh ? '正在切换思考强度...' : 'Switching thinking effort...',
+      status: 'loading',
+      closable: false,
+    });
+  }
+
+  try {
+    const resp = await fetch('/protoclaw/swap_thinking_effort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, thinkingEffort }),
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      if (typeof ClawToast !== 'undefined') {
+        ClawToast.update(toastId, {
+          status: 'success',
+          title: isZh ? '思考强度已切换' : 'Thinking effort switched',
+          autoDismiss: 3000,
+        });
+      }
+      updateThinkingEffortSwitcher();
+      if (typeof loadAgents === 'function') {
+        loadAgents().then(function() {
+          updateThinkingEffortSwitcher();
+        }).catch(function() {});
+      }
+    } else {
+      throw new Error(result.error || 'Unknown error');
+    }
+  } catch (e) {
+    console.error('[InputThinkingEffort] Swap failed:', e);
+    if (typeof ClawToast !== 'undefined') {
+      ClawToast.update(toastId, {
+        status: 'error',
+        title: isZh ? '切换失败' : 'Switch failed',
+        description: e?.message || String(e),
+        closable: true,
+        autoDismiss: 8000,
+      });
+    }
+  }
+}
+
+window.toggleThinkingEffortDropdown = function(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  if (_inputThinkingDropdown) {
+    _closeThinkingEffortDropdown();
+    return;
+  }
+
+  let btn = document.getElementById('input-thinking-btn');
+  if (!btn) return;
+
+  let agentId = _getInputAgentId();
+  if (!agentId) return;
+
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let protocol = _getCurrentPresetProtocol();
+  let efforts = _getEffortList(protocol);
+  let currentEffort = _getCurrentThinkingEffort();
+
+  _inputThinkingDropdown = document.createElement('div');
+  _inputThinkingDropdown.className = 'ccb-model-dropdown';
+
+  let html = '<div class="ccb-model-dropdown-list">';
+  // "默认" option — clears the override
+  html += '<div class="ccb-md-item' + (!currentEffort ? ' active' : '') + '" data-effort="">'
+    + '<span class="ccb-md-left">'
+    + '<span class="ccb-md-name">' + (isZh ? '默认（预设）' : 'Default (preset)') + '</span>'
+    + '</span>'
+    + '</div>';
+  for (const effort of efforts) {
+    let isActive = effort === currentEffort;
+    let label = _getEffortLabel(effort);
+    html += '<div class="ccb-md-item' + (isActive ? ' active' : '') + '" data-effort="' + effort + '">'
+      + '<span class="ccb-md-left">'
+      + '<span class="ccb-md-name">' + escapeHtml(label) + '</span>'
+      + '</span>'
+      + '</div>';
+  }
+  html += '</div>';
+  _inputThinkingDropdown.innerHTML = html;
+
+  // Position relative to the button — open upward
+  let rect = btn.getBoundingClientRect();
+  _inputThinkingDropdown.style.left = rect.left + 'px';
+
+  _inputThinkingDropdown.addEventListener('click', function(e) {
+    let item = e.target.closest('.ccb-md-item');
+    if (!item) return;
+    let effort = item.dataset.effort;
+    _closeThinkingEffortDropdown();
+    _performThinkingEffortSwap(agentId, effort || null);
+  });
+
+  document.body.appendChild(_inputThinkingDropdown);
+  // Measure height after insert, then place above the button
+  let ddHeight = _inputThinkingDropdown.offsetHeight;
+  _inputThinkingDropdown.style.top = (rect.top - ddHeight - 4) + 'px';
+  requestAnimationFrame(function() { _inputThinkingDropdown.classList.add('visible'); });
+
+  setTimeout(function() {
+    document.addEventListener('click', _inputThinkingDropdownOutsideClick, { once: true });
+  }, 0);
+};
+
+function updateThinkingEffortSwitcher() {
+  let nameEl = document.querySelector('.input-thinking-name');
+  if (!nameEl) return;
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let effort = _getCurrentThinkingEffort();
+  nameEl.textContent = effort
+    ? _getEffortLabel(effort)
+    : (isZh ? '思考强度' : 'Thinking');
+}
+
 // ── 渲染常驻输入框 ────────────────────────────────────────────────
 
 function renderPersistentInput(container) {
@@ -534,6 +730,11 @@ function renderPersistentInput(container) {
             <span class="input-model-name">${currentLanguage === 'zh' ? '模型' : 'Model'}</span>
             <svg class="input-model-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </button>
+          <button class="input-thinking-btn" id="input-thinking-btn" onclick="toggleThinkingEffortDropdown(event)"${disabledAttr}>
+            <svg class="input-thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"></path></svg>
+            <span class="input-thinking-name">${currentLanguage === 'zh' ? '思考强度' : 'Thinking'}</span>
+            <svg class="input-thinking-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
           <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}"${disabledAttr}>
             <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
           </button>
@@ -558,6 +759,8 @@ function renderPersistentInput(container) {
   _renderAttachmentPreview();
   // Update model switcher button with current preset name
   updateInputModelSwitcher();
+  // Update thinking effort switcher button
+  updateThinkingEffortSwitcher();
 }
 
 function onPersistentBtnClick() {
@@ -753,6 +956,7 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
   _persistentUiSyncInFlight = true;
   // Always update model switcher regardless of queue/runtime state
   updateInputModelSwitcher();
+  updateThinkingEffortSwitcher();
   const prevMode = getInputSurfaceMode(currentInputRequests || []);
   const prevQueueSignature = JSON.stringify(_queuedTexts);
   try {

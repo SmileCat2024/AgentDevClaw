@@ -48,6 +48,7 @@ function createMockCtx(overrides = {}) {
     readViewerJson: async () => ({ agents: [], currentAgentId: null }),
     getPendingInputCount: async () => 0,
     resolveAgentModelPresets: async () => null,
+    readAgentThinkingEffort: async () => null,
     ...overrides,
   };
 }

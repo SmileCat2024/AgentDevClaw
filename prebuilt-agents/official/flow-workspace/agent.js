@@ -105,6 +105,7 @@ function resolveModelPresetLLM(presetName) {
       model: preset.model,
       apiKey,
       baseUrl,
+      thinkingEffort: preset.thinkingEffort || undefined,
       thinkingBudgetTokens: preset.thinkingBudgetTokens ?? undefined,
       ...(preset.maxTokens ? { maxTokens: preset.maxTokens } : {}),
     });
