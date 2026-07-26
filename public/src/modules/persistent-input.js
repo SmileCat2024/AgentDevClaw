@@ -24,6 +24,7 @@
  * - _requestNotifyPermission (desktop-notify.js)
  * - beginFollowLatestEntryWindow, requestFollowLatest (chat-viewport.js)
  * - _lastRenderedNotificationRuntime (runtime-status.js)
+ * - _cacheModelInfo, getCachedPresetName (session-ui.js)
  */
 
 // 渲染常驻输入框（agent 运行期间始终可见）
@@ -261,6 +262,229 @@ window.removePendingImage = function(idx) {
   _renderAttachmentPreview();
 };
 
+// ── 输入框模型切换下拉 ──────────────────────────────────────────────
+
+let _inputModelDropdown = null;
+
+function _getInputAgentId() {
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : null;
+  if (agent && agent.id) return agent.id;
+  if (typeof getCurrentAgentRecord === 'function') {
+    agent = getCurrentAgentRecord();
+    if (agent && agent.id) return agent.id;
+  }
+  return typeof currentAgentId !== 'undefined' ? currentAgentId : null;
+}
+
+function _getInputDefaultPresetName() {
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : null;
+  if (!agent) return '';
+  let modelPresets = agent.modelPresets || {};
+  let defaultCfg = modelPresets.default || {};
+  if (typeof defaultCfg === 'string') return defaultCfg;
+  return (defaultCfg && defaultCfg.primary) || '';
+}
+
+function _closeInputModelDropdown() {
+  if (_inputModelDropdown) {
+    _inputModelDropdown.classList.remove('visible');
+    setTimeout(function() {
+      if (_inputModelDropdown) { _inputModelDropdown.remove(); _inputModelDropdown = null; }
+    }, 150);
+  }
+}
+
+function _inputModelDropdownOutsideClick(e) {
+  if (_inputModelDropdown && !_inputModelDropdown.contains(e.target)) {
+    let btn = document.getElementById('input-model-switch-btn');
+    if (!btn || !btn.contains(e.target)) {
+      _closeInputModelDropdown();
+    }
+  } else if (_inputModelDropdown) {
+    document.addEventListener('click', _inputModelDropdownOutsideClick, { once: true });
+  }
+}
+
+async function _performInputModelSwap(agentId, presetName) {
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let toastId = 'input-model-swap';
+
+  if (typeof ClawToast !== 'undefined') {
+    ClawToast.show({
+      id: toastId,
+      title: isZh ? '正在切换模型...' : 'Switching model...',
+      status: 'loading',
+      closable: false,
+    });
+  }
+
+  try {
+    const resp = await fetch('/protoclaw/swap_model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, presetName }),
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      // Optimistic cache update for immediate dropdown highlight feedback,
+      // then trigger loadAgents to get the authoritative modelPresets from
+      // resolveAgentModelPresets (which re-reads .agentdev/agent-configs/).
+      let agent = typeof getRuntimeAwareAgentRecord === 'function'
+        ? getRuntimeAwareAgentRecord()
+        : null;
+      if (agent && typeof _cacheModelInfo === 'function') {
+        _cacheModelInfo(agent, null, null, presetName);
+      }
+      if (typeof ClawToast !== 'undefined') {
+        ClawToast.update(toastId, {
+          status: 'success',
+          title: isZh ? '模型已切换' : 'Model switched',
+          description: presetName,
+          autoDismiss: 3000,
+        });
+      }
+      updateInputModelSwitcher();
+      if (typeof loadAgents === 'function') {
+        loadAgents().then(() => {
+          updateInputModelSwitcher();
+          if (typeof updateChatContextBar === 'function') updateChatContextBar();
+        }).catch(() => {});
+      }
+    } else {
+      throw new Error(result.error || 'Unknown error');
+    }
+  } catch (e) {
+    console.error('[InputModelSwitch] Swap failed:', e);
+    if (typeof ClawToast !== 'undefined') {
+      ClawToast.update(toastId, {
+        status: 'error',
+        title: isZh ? '切换失败' : 'Switch failed',
+        description: e?.message || String(e),
+        closable: true,
+        autoDismiss: 8000,
+      });
+    }
+  }
+}
+
+window.toggleInputModelDropdown = function(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  if (_inputModelDropdown) {
+    _closeInputModelDropdown();
+    return;
+  }
+
+  let btn = document.getElementById('input-model-switch-btn');
+  if (!btn) return;
+
+  let agentId = _getInputAgentId();
+  if (!agentId) return;
+
+  // Fetch presets synchronously from cache or API
+  (async function() {
+    let presets = (window.ClawFW && window.ClawFW._modelPresets) || [];
+    if (!presets.length) {
+      try {
+        const resp = await fetch('/protoclaw/model_config');
+        const data = await resp.json();
+        presets = Array.isArray(data && data.presets) ? data.presets : [];
+        if (window.ClawFW) window.ClawFW._modelPresets = presets;
+      } catch (e) {
+        console.error('[InputModelSwitch] Failed to load presets:', e);
+        return;
+      }
+    }
+    if (!presets.length) return;
+
+    let currentPreset = _getInputDefaultPresetName();
+    let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+
+    _inputModelDropdown = document.createElement('div');
+    _inputModelDropdown.className = 'ccb-model-dropdown';
+
+    let html = '<div class="ccb-model-dropdown-list">';
+    presets.forEach(function(p) {
+      let name = p.name || p.model || '';
+      let isActive = name === currentPreset;
+      let visionIcon = p.vision === true
+        ? '<svg class="ccb-md-vision" title="' + (isZh ? '支持视觉' : 'Vision') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'
+        : '';
+      let ctxText = p.contextLength && p.contextLength > 0
+        ? Math.round(p.contextLength / 1000) + 'K'
+        : '';
+      html += '<div class="ccb-md-item' + (isActive ? ' active' : '') + '" data-preset="' + escapeHtml(name) + '">'
+        + '<span class="ccb-md-left">'
+        + '<span class="ccb-md-name">' + escapeHtml(name) + '</span>'
+        + visionIcon
+        + '</span>'
+        + '<span class="ccb-md-right">'
+        + (ctxText ? '<span class="ccb-md-ctx">' + ctxText + '</span>' : '')
+        + '</span>'
+        + '</div>';
+    });
+    html += '</div>';
+    _inputModelDropdown.innerHTML = html;
+
+    // Position relative to the button — open upward
+    let rect = btn.getBoundingClientRect();
+    _inputModelDropdown.style.left = rect.left + 'px';
+
+    _inputModelDropdown.addEventListener('click', function(e) {
+      let item = e.target.closest('.ccb-md-item');
+      if (!item) return;
+      let presetName = item.dataset.preset;
+      _closeInputModelDropdown();
+      _performInputModelSwap(agentId, presetName);
+    });
+
+    document.body.appendChild(_inputModelDropdown);
+    // Measure height after insert, then place above the button
+    let ddHeight = _inputModelDropdown.offsetHeight;
+    _inputModelDropdown.style.top = (rect.top - ddHeight - 4) + 'px';
+    requestAnimationFrame(function() { _inputModelDropdown.classList.add('visible'); });
+
+    setTimeout(function() {
+      document.addEventListener('click', _inputModelDropdownOutsideClick, { once: true });
+    }, 0);
+  })();
+};
+
+/**
+ * Update the model name shown in the input-area switcher button.
+ * Called on render and after model swap.
+ */
+
+function updateInputModelSwitcher() {
+  let nameEl = document.querySelector('.input-model-name');
+  if (!nameEl) return;
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : null;
+  let displayName = _getInputDefaultPresetName() || '';
+
+  // Cache when live data is available so it bridges the loadAgents gap.
+  // Uses per-agentId cache (same pattern as _modelInfoCache for
+  // contextLength/compressRatio) to prevent cross-agent leakage.
+  if (displayName && agent && typeof _cacheModelInfo === 'function') {
+    _cacheModelInfo(agent, null, null, displayName);
+  }
+
+  // Fallback to per-agentId cache when live modelPresets is temporarily absent
+  if (!displayName && agent && typeof getCachedPresetName === 'function') {
+    displayName = getCachedPresetName(agent);
+  }
+
+  nameEl.textContent = displayName || (currentLanguage === 'zh' ? '模型' : 'Model');
+}
+
 // ── 渲染常驻输入框 ────────────────────────────────────────────────
 
 function renderPersistentInput(container) {
@@ -286,19 +510,31 @@ function renderPersistentInput(container) {
         <span>${escapeHtml(contextGuardMessage)}</span>
       </div>
     ` : ''}
-    <div class="persistent-input-row">
-      <textarea class="user-input-textarea" rows="1" id="input-persistent"${disabledAttr}\n        onkeydown="handlePersistentInputKey(event)"\n        oninput="autoResize(this); _cacheSessionInput(this)"\n        onpaste="handleInputPaste(event)"\n        placeholder="${escapeHtml(contextGuardBlocked ? disabledPlaceholder : t('input_placeholder'))}"${contextGuardBlocked ? ` aria-label="${escapeHtml(contextGuardMessage)}"` : ''}></textarea>
-      <input type="file" id="image-file-input" accept="image/*" multiple style="display:none;" onchange="onImageFilesSelected(this)"${disabledAttr}>
-      <button class="persistent-icon-btn" id="attach-image-btn" onclick="document.getElementById('image-file-input').click()" title="${currentLanguage === 'zh' ? '添加图片' : 'Attach Image'}"${disabledAttr}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
-      </button>
-      <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}"${disabledAttr}>
-        <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
-      </button>
-      <button class="persistent-action-btn" id="persistent-action-btn" onclick="onPersistentBtnClick()"${disabledAttr}>
-        <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-        <svg class="icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="4" y="4" width="16" height="16" rx="3"></rect></svg>
-      </button>
+    <div class="persistent-input-body">
+      <div class="persistent-input-textarea-area">
+        <textarea class="user-input-textarea" rows="1" id="input-persistent"${disabledAttr}\n        onkeydown="handlePersistentInputKey(event)"\n        oninput="autoResize(this); _cacheSessionInput(this)"\n        onpaste="handleInputPaste(event)"\n        placeholder="${escapeHtml(contextGuardBlocked ? disabledPlaceholder : t('input_placeholder'))}"${contextGuardBlocked ? ` aria-label="${escapeHtml(contextGuardMessage)}"` : ''}></textarea>
+      </div>
+      <div class="persistent-input-toolbar">
+        <div class="persistent-input-toolbar-left">
+          <input type="file" id="image-file-input" accept="image/*" multiple style="display:none;" onchange="onImageFilesSelected(this)"${disabledAttr}>
+          <button class="persistent-icon-btn" id="attach-image-btn" onclick="document.getElementById('image-file-input').click()" title="${currentLanguage === 'zh' ? '添加图片' : 'Attach Image'}"${disabledAttr}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+        </div>
+        <div class="persistent-input-toolbar-right">
+          <button class="input-model-switch-btn" id="input-model-switch-btn" onclick="toggleInputModelDropdown(event)"${disabledAttr}>
+            <span class="input-model-name">${currentLanguage === 'zh' ? '模型' : 'Model'}</span>
+            <svg class="input-model-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+          <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}"${disabledAttr}>
+            <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+          </button>
+          <button class="persistent-action-btn" id="persistent-action-btn" onclick="onPersistentBtnClick()"${disabledAttr}>
+            <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            <svg class="icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="4" y="4" width="16" height="16" rx="3"></rect></svg>
+          </button>
+        </div>
+      </div>
     </div>
   `;
   container.appendChild(card);
@@ -312,6 +548,8 @@ function renderPersistentInput(container) {
   _syncPersistentInputUi();
   // Restore attachment preview if there are pending images (e.g. after re-render)
   _renderAttachmentPreview();
+  // Update model switcher button with current preset name
+  updateInputModelSwitcher();
 }
 
 function onPersistentBtnClick() {
@@ -505,6 +743,8 @@ function updateQueueIndicator() {
 async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
   if (_persistentUiSyncInFlight) return;
   _persistentUiSyncInFlight = true;
+  // Always update model switcher regardless of queue/runtime state
+  updateInputModelSwitcher();
   const prevMode = getInputSurfaceMode(currentInputRequests || []);
   const prevQueueSignature = JSON.stringify(_queuedTexts);
   try {

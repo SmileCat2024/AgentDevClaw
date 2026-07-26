@@ -11,11 +11,12 @@
  *   - notifyChatViewportMutation (app-ui.js 域 N)
  *   - getRuntimeAwareAgentRecord (app-ui.js 域 B)
  *   - getCurrentRuntimeRecord, getCurrentHostAgentRecord (app-main.js)
- *   - getSessionContextLength, getSessionCompressRatio (session-ui.js)
+ *   - getSessionContextLength, getSessionCompressRatio, _cacheModelInfo (session-ui.js)
  *   - escapeHtml (app-ui.js 域 O)
  *   - formatRelativeTime, formatWorkspaceDate (app-core.js)
  *   - readCurrentSessionViewState (session-view-state.js)
  *   - followLatestEnabled, currentLanguage, container (app-core.js 全局状态)
+ *   - loadAgents (sidebar-render.js), updateInputModelSwitcher (persistent-input.js)
  */
 
 function updateChatContextBar(viewState = readCurrentSessionViewState()) {
@@ -304,7 +305,7 @@ function _showCcbPopup() {
   _ccbPopup.innerHTML = html;
   let rect = bar.getBoundingClientRect();
   _ccbPopup.style.left = rect.left + 'px';
-  _ccbPopup.style.top = (rect.bottom + 4) + 'px';
+  _ccbPopup.style.top = (rect.bottom + 8) + 'px';
   _ccbPopup.classList.add('visible');
 }
 
@@ -420,11 +421,19 @@ async function _toggleModelDropdown() {
     let name = p.name || p.model || '';
     let isActive = name === currentPreset;
     let visionIcon = p.vision === true
-      ? '<span class="ccb-md-vision" title="' + (isZh ? '支持视觉' : 'Vision') + '">' + (isZh ? '视' : 'V') + '</span>'
+      ? '<svg class="ccb-md-vision" title="' + (isZh ? '支持视觉' : 'Vision') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'
+      : '';
+    let ctxText = p.contextLength && p.contextLength > 0
+      ? Math.round(p.contextLength / 1000) + 'K'
       : '';
     html += '<div class="ccb-md-item' + (isActive ? ' active' : '') + '" data-preset="' + escapeHtml(name) + '">'
+      + '<span class="ccb-md-left">'
       + '<span class="ccb-md-name">' + escapeHtml(name) + '</span>'
       + visionIcon
+      + '</span>'
+      + '<span class="ccb-md-right">'
+      + (ctxText ? '<span class="ccb-md-ctx">' + ctxText + '</span>' : '')
+      + '</span>'
       + '</div>';
   });
   html += '</div>';
@@ -433,7 +442,7 @@ async function _toggleModelDropdown() {
   // Position
   let rect = bar.getBoundingClientRect();
   _modelDropdown.style.left = rect.left + 'px';
-  _modelDropdown.style.top = (rect.bottom + 4) + 'px';
+  _modelDropdown.style.top = (rect.bottom + 8) + 'px';
 
   // Item click
   _modelDropdown.addEventListener('click', function(e) {
@@ -485,15 +494,12 @@ async function _performModelSwap(agentId, presetName) {
     });
     const result = await resp.json();
     if (result.ok) {
-      // Update local agent record so dropdown highlights correctly
+      // Optimistic cache update, then trigger loadAgents for authoritative data
       let agent = typeof getRuntimeAwareAgentRecord === 'function'
         ? getRuntimeAwareAgentRecord()
         : null;
-      if (agent) {
-        if (!agent.modelPresets) agent.modelPresets = {};
-        let defaultCfg = agent.modelPresets.default || {};
-        if (typeof defaultCfg !== 'object') defaultCfg = {};
-        agent.modelPresets.default = { primary: presetName, secondary: defaultCfg.secondary || null };
+      if (agent && typeof _cacheModelInfo === 'function') {
+        _cacheModelInfo(agent, null, null, presetName);
       }
       ClawToast.update(toastId, {
         status: 'success',
@@ -501,6 +507,12 @@ async function _performModelSwap(agentId, presetName) {
         description: presetName,
         autoDismiss: 3000,
       });
+      if (typeof loadAgents === 'function') {
+        loadAgents().then(() => {
+          if (typeof updateChatContextBar === 'function') updateChatContextBar();
+          if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
+        }).catch(() => {});
+      }
     } else {
       throw new Error(result.error || 'Unknown error');
     }
@@ -682,7 +694,7 @@ function _showTitlePopup() {
   _titlePopup.innerHTML = html;
   let rect = titleEl.getBoundingClientRect();
   _titlePopup.style.left = rect.left + 'px';
-  _titlePopup.style.top = (rect.bottom + 4) + 'px';
+  _titlePopup.style.top = (rect.bottom + 8) + 'px';
   _titlePopup.classList.add('visible');
 }
 
