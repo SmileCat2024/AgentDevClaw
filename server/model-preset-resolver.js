@@ -19,9 +19,10 @@ const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
 /**
  * Resolve a preset name to { llm, modelName }.
  * @param {string} presetName
+ * @param {{ thinkingEffort?: string | null }} [overrides] - Runtime overrides for this resolution only; does not mutate config/presets.json.
  * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
-export function resolveModelPresetLLM(presetName) {
+export function resolveModelPresetLLM(presetName, overrides) {
   if (!presetName || !existsSync(PRESETS_PATH)) return null;
   try {
     const raw = JSON.parse(readFileSync(PRESETS_PATH, 'utf8'));
@@ -40,8 +41,10 @@ export function resolveModelPresetLLM(presetName) {
     const protocol = preset.protocol || 'anthropic';
     const baseUrl = provider.endpoints?.[protocol] || '';
 
-    // thinkingEffort: always read from preset, never inherit across providers.
-    const effectiveThinkingEffort = preset.thinkingEffort || undefined;
+    // thinkingEffort: runtime override takes priority, then preset default.
+    const effectiveThinkingEffort = (overrides && typeof overrides === 'object' && 'thinkingEffort' in overrides)
+      ? (overrides.thinkingEffort || undefined)
+      : (preset.thinkingEffort || undefined);
 
     // OAuth provider: resolve access_token from token store
     const isOAuth = provider.authType === 'oauth-codex';

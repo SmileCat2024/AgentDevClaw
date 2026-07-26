@@ -491,32 +491,27 @@ async function _performModelSwap(agentId, presetName) {
   });
 
   try {
+    let sessionId = typeof getActiveWorkspaceSessionId === 'function'
+      ? getActiveWorkspaceSessionId()
+      : '';
+    let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
     const resp = await fetch('/protoclaw/swap_model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, presetName }),
+      body: JSON.stringify({ agentId, presetName, sessionId: sessionId || undefined, runtimeId: runtimeId || undefined }),
     });
     const result = await resp.json();
     if (result.ok) {
-      // Optimistic cache update, then trigger loadAgents for authoritative data
-      let agent = typeof getRuntimeAwareAgentRecord === 'function'
-        ? getRuntimeAwareAgentRecord()
-        : null;
-      if (agent && typeof _cacheModelInfo === 'function') {
-        _cacheModelInfo(agent, null, null, presetName);
-      }
       ClawToast.update(toastId, {
         status: 'success',
         title: isZh ? '模型已切换' : 'Model switched',
         description: presetName,
         autoDismiss: 3000,
       });
-      if (typeof loadAgents === 'function') {
-        loadAgents().then(() => {
-          if (typeof updateChatContextBar === 'function') updateChatContextBar();
-          if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
-        }).catch(() => {});
-      }
+      // Context bar model name comes from overview poll — just refresh.
+      // Input box needs immediate update too.
+      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
+      if (typeof updateChatContextBar === 'function') updateChatContextBar();
     } else {
       throw new Error(result.error || 'Unknown error');
     }

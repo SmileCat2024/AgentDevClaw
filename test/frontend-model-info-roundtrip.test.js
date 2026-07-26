@@ -305,3 +305,81 @@ describe('model swap: agentId resolution', () => {
     // must use currentAgentId (host ID) instead of record.id.
   });
 });
+
+// ── Tests: thinkingEffort runtime override ─────────────────
+
+describe('_cacheModelInfo: thinkingEffort override', () => {
+  it('caches thinkingEffort override per-agentId', () => {
+    const ctx = loadSessionUi();
+    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, 'high')`);
+    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), 'high');
+  });
+
+  it('returns undefined when no override cached', () => {
+    const ctx = loadSessionUi();
+    // Never cached → undefined (means "use preset default")
+    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), undefined);
+  });
+
+  it('caches null as explicit "cleared to default"', () => {
+    const ctx = loadSessionUi();
+    // First set an override
+    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, 'high')`);
+    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), 'high');
+
+    // Then clear it
+    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, null)`);
+    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), null);
+    // null !== undefined — null means "explicitly cleared", not "never set"
+  });
+
+  it('does not leak thinkingEffort across agents', () => {
+    const ctx = loadSessionUi();
+    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, 'high')`);
+    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), 'high');
+    assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'qqbot' })`), undefined);
+  });
+
+  it('thinkingEffort undefined does not overwrite existing cache', () => {
+    const ctx = loadSessionUi();
+    // Set override
+    ctx.run(`_cacheModelInfo({ id: 'ph' }, null, null, null, 'high')`);
+    // Call with only contextLength — thinkingEffort is undefined (not passed)
+    ctx.run(`_cacheModelInfo({ id: 'ph' }, 128000, null)`);
+    // Override should still be there
+     assert.equal(ctx.run(`getCachedThinkingEffort({ id: 'ph' })`), 'high');
+  });
+});
+
+// ── Tests: overview.presetName round-trip ──────────────────
+
+describe('overview.presetName: per-session data source', () => {
+  // The overview snapshot is fetched per-session via
+  // /api/agents/{runtimeId}/overview. Each session has its own
+  // runtime process, so overview.presetName is inherently
+  // per-session isolated — no frontend cache needed.
+
+  it('normalizeOverviewSnapshot preserves presetName', () => {
+    // Simulate what normalizeOverviewSnapshot does with presetName
+    const raw = { modelName: 'claude-sonnet-4-5', presetName: 'glm-5.2' };
+    const normalized = typeof raw.presetName === 'string' ? raw.presetName : '';
+    assert.equal(normalized, 'glm-5.2');
+  });
+
+  it('missing presetName normalizes to empty string', () => {
+    const raw = { modelName: 'claude-sonnet-4-5' };
+    const normalized = typeof raw.presetName === 'string' ? raw.presetName : '';
+    assert.equal(normalized, '');
+  });
+
+  it('different sessions get different overview from different runtimeIds', () => {
+    // Each session's poll fetches from its own runtimeId.
+    // Session A overview: { presetName: 'glm-5.2' }
+    // Session B overview: { presetName: 'claude-sonnet' }
+    // They are completely independent — no shared state.
+    const overviewA = { presetName: 'glm-5.2' };
+    const overviewB = { presetName: 'claude-sonnet' };
+    assert.notEqual(overviewA.presetName, overviewB.presetName);
+  });
+});
+

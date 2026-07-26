@@ -35,17 +35,12 @@ function renderSpeechModelSection(isZh) {
     '</div>',
   ].join('');
 
-  // If editing a preset, show edit form
+  // If editing a preset, show edit form (without active banner for focus)
   if (speechEditing != null) {
     const editPreset = speechEditing === 'new'
       ? { name: '', baseUrl: '', apiKey: '', model: '', language: 'auto' }
       : (presets[speechEditing] || {});
-    return [
-      '<div class="settings-section">',
-      activeBanner,
-      '</div>',
-      renderSpeechPresetEditForm(editPreset, speechEditing, isZh),
-    ].join('');
+    return { banner: '', content: renderSpeechPresetEditForm(editPreset, speechEditing, isZh) };
   }
 
   // Preset list
@@ -72,16 +67,10 @@ function renderSpeechModelSection(isZh) {
       }).join('')
     : '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:13px;">' + (isZh ? '暂无预设，点击下方按钮添加' : 'No presets yet. Click below to add one') + '</div>';
 
-  return [
-    '<div class="settings-section">',
-    activeBanner,
-    '</div>',
-    '<div class="settings-section">',
-    '<div class="settings-section-title">' + (isZh ? '语音预设列表' : 'Speech Presets') + '</div>',
-    '<div class="settings-presets-compact">' + presetCards + '</div>',
-    '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:4px;" onclick="addSpeechPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button>',
-    '</div>',
-  ].join('');
+  return {
+    banner: '<div class="settings-section">' + activeBanner + '</div>',
+    content: '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '语音预设列表' : 'Speech Presets') + '</div><div class="settings-presets-compact">' + presetCards + '</div></div>'
+  };
 }
 
 function renderSpeechPresetEditForm(preset, editIdx, isZh) {
@@ -120,16 +109,12 @@ function renderSpeechPresetEditForm(preset, editIdx, isZh) {
     '</div>',
     '<div class="settings-field">',
     '<label>' + (isZh ? '语言' : 'Language') + '</label>',
-    '<select class="settings-input" id="speech-preset-language">',
+    '<select class="settings-input" data-claw-select id="speech-preset-language">',
     '<option value="auto"' + ((preset.language || 'auto') === 'auto' ? ' selected' : '') + '>' + (isZh ? '自动检测' : 'Auto Detect') + '</option>',
     '<option value="zh"' + (preset.language === 'zh' ? ' selected' : '') + '>' + (isZh ? '中文' : 'Chinese') + '</option>',
     '<option value="en"' + (preset.language === 'en' ? ' selected' : '') + '>' + (isZh ? '英文' : 'English') + '</option>',
     '</select>',
     '</div>',
-    '</div>',
-    '<div class="settings-actions">',
-    '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSpeechPresetEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
-    '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSpeechPreset(\'' + editIdx + '\')">' + (isZh ? '保存' : 'Save') + '</button>',
     '</div>',
     '</div>',
   ].join('');

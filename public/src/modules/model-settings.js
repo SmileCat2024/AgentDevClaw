@@ -117,8 +117,9 @@ function renderSettingsOverlay() {
     '</div>',
   ].join('');
 
-  // ── Tab content ──
-  let tabContent = '';
+  // ── Tab content: split into fixed banner + scrollable content ──
+  let fixedBanner = '';
+  let scrollContent = '';
 
   if (tabText) {
     // Text model tab
@@ -136,32 +137,56 @@ function renderSettingsOverlay() {
       '</div>',
     ].join('');
 
-    tabContent = [
-      /* Active Config Banner (always visible) */
-      '<div class="settings-section">',
-      activeBanner,
-      '</div>',
-
-      /* Presets Section (hidden when editing) */
-      editing === null ? [
+    if (editing === null) {
+      // List mode: banner fixed, preset list scrolls
+      fixedBanner = '<div class="settings-section">' + activeBanner + '</div>';
+      scrollContent = [
         '<div class="settings-section">',
         '<div class="settings-section-title">' + (isZh ? '预设列表' : 'Presets') + '</div>',
         '<div class="settings-presets-grid">' + presetCards + '</div>',
-        '<button class="settings-btn settings-btn-secondary" type="button" style="align-self:flex-start;margin-top:4px;" onclick="addSettingsPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button>',
         '</div>',
-      ].join('') : '',
-
-      /* Edit Form (inline) */
-      editing !== null ? renderSettingsEditForm(editing, presets, isZh) : '',
-    ].join('');
+      ].join('');
+    } else {
+      // Edit mode: form scrolls, no banner
+      scrollContent = renderSettingsEditForm(editing, presets, isZh);
+    }
   } else {
     // Speech model tab
-    tabContent = renderSpeechModelSection(isZh);
+    const speechParts = renderSpeechModelSection(isZh);
+    fixedBanner = speechParts.banner;
+    scrollContent = speechParts.content;
+  }
+
+  // ── Compute footer buttons for mask bar ──
+  let footerButtons = '';
+  if (tabText) {
+    if (editing !== null) {
+      footerButtons = [
+        '<div class="settings-actions">',
+        '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSettingsEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
+        '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSettingsPreset(' + editing + ')">' + (isZh ? '保存' : 'Save') + '</button>',
+        '</div>',
+      ].join('');
+    } else {
+      footerButtons = '<div class="settings-actions"><button class="settings-btn settings-btn-secondary" type="button" onclick="addSettingsPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button></div>';
+    }
+  } else {
+    if (window.ClawFW._speechEditing != null) {
+      const speechEditIdx = window.ClawFW._speechEditing;
+      footerButtons = [
+        '<div class="settings-actions">',
+        '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSpeechPresetEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
+        '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSpeechPreset(\'' + speechEditIdx + '\')">' + (isZh ? '保存' : 'Save') + '</button>',
+        '</div>',
+      ].join('');
+    } else {
+      footerButtons = '<div class="settings-actions"><button class="settings-btn settings-btn-secondary" type="button" onclick="addSpeechPreset()">+ ' + (isZh ? '添加预设' : 'Add Preset') + '</button></div>';
+    }
   }
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
-    '<div class="feature-detail-window" style="width:min(100%,560px);min-height:480px;max-height:min(100%,720px);">',
+    '<div class="feature-detail-window" style="width:min(100%,560px);height:min(100%,640px);overflow:hidden;">',
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div>',
@@ -171,8 +196,12 @@ function renderSettingsOverlay() {
     '</div>',
 
     tabBar,
+    fixedBanner ? '<div style="flex-shrink:0;">' + fixedBanner + '</div>' : '',
     '<div class="settings-tab-content">',
-    tabContent,
+    scrollContent,
+    '</div>',
+    '<div class="settings-footer">',
+    footerButtons,
     '</div>',
 
     '</div>',
@@ -180,6 +209,9 @@ function renderSettingsOverlay() {
   ].join('');
 
   if (typeof window.populateThinkingEffortOptions === 'function') window.populateThinkingEffortOptions();
+
+  // Enhance native <select> elements with custom dropdown
+  if (window.ClawSelect) window.ClawSelect.enhanceAll(host);
 }
 
 const OPENAI_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
@@ -187,11 +219,42 @@ const ANTHROPIC_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 function renderThinkingEffortSelect(preset, isZh) {
   const current = preset.thinkingEffort || '';
-  return '<select class="settings-input" id="settings-preset-thinking-effort" '
+  return '<select class="settings-input" data-claw-select id="settings-preset-thinking-effort" '
     + 'data-provider="' + (preset.provider || 'anthropic') + '" '
     + 'data-current="' + current + '">'
     + '</select>';
 }
+
+window.onThinkingToggleChange = function() {
+  let cb = document.getElementById('settings-preset-thinking-enabled');
+  let config = document.getElementById('settings-thinking-config');
+  if (!cb || !config) return;
+  config.style.display = cb.checked ? '' : 'none';
+  let errEl = document.getElementById('settings-thinking-budget-error');
+  if (errEl) errEl.style.display = 'none';
+};
+
+window.onThinkingBudgetInput = function() {
+  let input = document.getElementById('settings-preset-thinking-budget');
+  let errEl = document.getElementById('settings-thinking-budget-error');
+  if (!input || !errEl) return;
+  let isZh = currentLanguage === 'zh';
+  let raw = input.value.trim();
+  if (raw !== '') {
+    let val = parseInt(raw, 10);
+    if (isNaN(val) || val < 512) {
+      errEl.textContent = isZh ? '思考预算至少为 512 tokens' : 'Thinking budget must be at least 512 tokens';
+      errEl.style.display = '';
+      input.classList.add('invalid');
+    } else {
+      errEl.style.display = 'none';
+      input.classList.remove('invalid');
+    }
+  } else {
+    errEl.style.display = 'none';
+    input.classList.remove('invalid');
+  }
+};
 
 window.populateThinkingEffortOptions = function() {
   const select = document.getElementById('settings-preset-thinking-effort');
@@ -242,7 +305,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>' + (isZh ? '接口协议' : 'Protocol') + '</label>',
-    '<select class="settings-input" id="settings-preset-provider" onchange="onProtocolChange()">',
+    '<select class="settings-input" data-claw-select id="settings-preset-provider" onchange="onProtocolChange()">',
     '<option value="anthropic"' + (dropdownVal === 'anthropic' ? ' selected' : '') + '>Anthropic</option>',
     '<option value="openai"' + (dropdownVal === 'openai' ? ' selected' : '') + '>OpenAI Chat</option>',
     '<option value="openai-responses"' + (dropdownVal === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option>',
@@ -288,16 +351,28 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     renderOAuthLoginArea(preset, isZh),
     '</div>',
     '</div>',
+    '<div class="settings-field">',
+    '<div class="settings-checkbox">',
+    '<input type="checkbox" id="settings-preset-thinking-enabled" ' + (preset.thinkingEffort && preset.thinkingEffort !== 'none' && preset.thinkingEffort !== '' ? 'checked' : '') + ' onchange="onThinkingToggleChange()">',
+    '<label for="settings-preset-thinking-enabled">' + (isZh ? '启用思考' : 'Enable Thinking') + '</label>',
+    '</div>',
+    '</div>',
+    '<div id="settings-thinking-config"' + (preset.thinkingEffort && preset.thinkingEffort !== 'none' && preset.thinkingEffort !== '' ? '' : ' style="display:none;"') + '>',
     '<div class="settings-row">',
     '<div class="settings-field">',
-    '<label>' + (isZh ? '思考力度' : 'Thinking Effort') + '</label>',
+    '<label>' + (isZh ? '默认思考强度' : 'Default Thinking Effort') + '</label>',
     renderThinkingEffortSelect(preset, isZh),
-    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? '选择"默认"则不发送思考参数，由厂商自行决定' : 'Select "Default" to omit the thinking param and let the vendor decide') + '</div>',
+    '</div>',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? '思考预算 (tokens)' : 'Thinking Budget (tokens)') + '</label>',
+    '<input class="settings-input" id="settings-preset-thinking-budget" type="number" min="512" value="' + (preset.thinkingBudgetTokens || '') + '" placeholder="' + (isZh ? '如 16000' : 'e.g. 16000') + '" oninput="onThinkingBudgetInput()">',
+    '<div id="settings-thinking-budget-error" style="font-size:11px;color:#e57373;margin-top:2px;display:none;"></div>',
+    '</div>',
+    '</div>',
     '</div>',
     '<div class="settings-field">',
     '<label>Max Output Tokens</label>',
     '<input class="settings-input" id="settings-preset-max-tokens" type="number" value="' + (preset.maxTokens ?? '') + '" placeholder="' + (isZh ? '留空自动计算' : 'Leave empty for auto') + '">',
-    '</div>',
     '</div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
@@ -340,10 +415,6 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
       'UUID v4 / 随机数模式会在每次 API 请求时自动生成新值' :
       'UUID v4 / random mode generates a new value on each API request') + '</div>',
     '</div>',
-    '<div class="settings-actions">',
-    '<button class="settings-btn settings-btn-secondary" type="button" onclick="cancelSettingsEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
-    '<button class="settings-btn settings-btn-primary" type="button" onclick="saveSettingsPreset(' + editIdx + ')">' + (isZh ? '保存' : 'Save') + '</button>',
-    '</div>',
     '</div>',
   ].join('');
 }
@@ -358,7 +429,7 @@ function createSettingsHeaderRowHTML(idx, key, value, mode, isZh) {
   return [
     '<div data-header-row style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">',
     '<input class="settings-input" data-header-key type="text" value="' + escapeHtml(key) + '" placeholder="' + (isZh ? 'Header 名' : 'Header name') + '" style="flex:1;min-width:0;">',
-    '<select class="settings-input" data-header-mode style="width:90px;flex-shrink:0;" onchange="onSettingsHeaderModeChange(this)">' + modeOptions + '</select>',
+    '<select class="settings-input" data-claw-select data-claw-compact="true" data-header-mode style="width:90px;flex-shrink:0;" onchange="onSettingsHeaderModeChange(this)">' + modeOptions + '</select>',
     '<input class="settings-input" data-header-value type="text" value="' + escapeHtml(value) + '" placeholder="' + (isDynamic ? '(auto)' : (isZh ? 'Header 值' : 'Header value')) + '" style="flex:1;min-width:0;' + (isDynamic ? 'opacity:0.4;' : '') + '"' + (isDynamic ? ' disabled' : '') + '>',
     '<button type="button" onclick="this.closest(\'[data-header-row]\').remove()" style="background:none;border:none;cursor:pointer;padding:6px;color:var(--text-secondary);flex-shrink:0;" title="' + (isZh ? '删除' : 'Delete') + '">',
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
@@ -372,6 +443,8 @@ window.addSettingsHeaderRow = function() {
   if (!container) return;
   let isZh = currentLanguage === 'zh';
   container.insertAdjacentHTML('beforeend', createSettingsHeaderRowHTML(container.children.length, '', '', 'static', isZh));
+  // Enhance newly added select
+  if (window.ClawSelect) window.ClawSelect.enhanceAll(container);
 };
 
 window.onSettingsHeaderModeChange = function(select) {
@@ -458,6 +531,32 @@ async function saveSettingsPreset(idx) {
   if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
   const presets = window.ClawFW.settingsData?.presets || [];
   const el = (id) => document.getElementById(id);
+  const isZh = currentLanguage === 'zh';
+
+  // ── Thinking config ──
+  const thinkingEnabled = el('settings-preset-thinking-enabled')?.checked === true;
+  let thinkingEffort = null;
+  let thinkingBudgetTokens = 0;
+  if (thinkingEnabled) {
+    thinkingEffort = el('settings-preset-thinking-effort')?.value || null;
+    if (!thinkingEffort || thinkingEffort === 'none') {
+      thinkingEffort = el('settings-preset-thinking-effort')?.querySelectorAll('option[value]:not([value=""]):not([value="none"])')?.[0]?.value || null;
+    }
+    const budgetRaw = el('settings-preset-thinking-budget')?.value?.trim();
+    const budgetVal = parseInt(budgetRaw, 10);
+    if (isNaN(budgetVal) || budgetVal < 512) {
+      let errEl = document.getElementById('settings-thinking-budget-error');
+      let budgetInput = document.getElementById('settings-preset-thinking-budget');
+      if (errEl) {
+        errEl.textContent = isZh ? '思考预算至少为 512 tokens' : 'Thinking budget must be at least 512 tokens';
+        errEl.style.display = '';
+      }
+      if (budgetInput) budgetInput.classList.add('invalid');
+      return;
+    }
+    thinkingBudgetTokens = budgetVal;
+  }
+
   const maxTokensRaw = el('settings-preset-max-tokens')?.value?.trim();
   const tempRaw = el('settings-preset-temperature')?.value?.trim();
   const contextLengthRaw = el('settings-preset-context-length')?.value?.trim();
@@ -487,8 +586,8 @@ async function saveSettingsPreset(idx) {
     model: (el('settings-preset-model')?.value || '').trim(),
     baseUrl: (el('settings-preset-baseurl')?.value || '').trim(),
     apiKey: isOAuth ? '' : (el('settings-preset-apikey')?.value || '').trim(),
-    thinkingEffort: (el('settings-preset-thinking-effort')?.value || null),
-    thinkingBudgetTokens: presets[idx]?.thinkingBudgetTokens ?? null,
+    thinkingEffort: thinkingEffort,
+    thinkingBudgetTokens: thinkingBudgetTokens,
     maxTokens: maxTokensRaw !== '' ? parseInt(maxTokensRaw, 10) || null : null,
     temperature: tempRaw !== '' ? parseFloat(tempRaw) || null : null,
     vision: el('settings-preset-vision')?.checked === true,

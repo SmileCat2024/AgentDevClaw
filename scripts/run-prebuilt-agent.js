@@ -16,7 +16,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { DebugHub, FileSessionStore } from 'agentdev';
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
-import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+import { resolveAgentModelLLM, resolveModelPresetLLM } from '../server/model-preset-resolver.js';
 import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
@@ -428,6 +428,16 @@ async function main() {
   imBridgeCtx.agent = agent;
   summaryCtx.agent = agent;
   if (resolved) {
+    // Inject model meta (including presetName) so overview snapshot exposes it
+    // for the frontend input box model switcher.
+    if (typeof agent.setLLM === 'function') {
+      agent.setLLM(resolved.llm, {
+        modelName: resolved.modelName,
+        contextLength: resolved.contextLength,
+        compressRatio: resolved.compressRatio,
+        presetName: resolved.presetName,
+      });
+    }
     console.log(`[ProtoClaw Runtime] Using model preset from metadata.json => ${resolved.modelName}`);
     try {
       const ctx = typeof agent.getSystemContext === 'function' ? agent.getSystemContext() : agent._systemContext;
@@ -663,19 +673,41 @@ async function main() {
 
   console.log('[ProtoClaw Runtime] ✓ CallArbiter 已初始化');
 
-  // ── IPC: model hot-swap (no process restart) ──
+  // ── IPC: model/thinking hot-swap (no process restart) ──
   process.on('message', (msg) => {
-    if (!msg || typeof msg !== 'object' || msg.type !== 'swap-model') return;
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
 
     if (typeof agent?.setLLM !== 'function') {
-      console.warn('[ProtoClaw Runtime] swap-model: agent.setLLM not available (framework too old)');
+      console.warn(`[ProtoClaw Runtime] ${msg.type}: agent.setLLM not available (framework too old)`);
       return;
     }
 
+    let presetName;
+    let overrides;
+
+    if (msg.type === 'swap-model') {
+      // Model swap: resolve the new preset directly from config/presets.json.
+      presetName = msg.presetName;
+      if (!presetName || typeof presetName !== 'string') {
+        console.error('[ProtoClaw Runtime] swap-model: no presetName in IPC payload');
+        return;
+      }
+      overrides = undefined;
+    } else {
+      // Thinking swap: keep current preset, override thinkingEffort only.
+      presetName = resolved?.presetName;
+      if (!presetName) {
+        console.error('[ProtoClaw Runtime] swap-thinking: cannot determine current presetName');
+        return;
+      }
+      overrides = { thinkingEffort: msg.thinkingEffort };
+    }
+
     const isMidTurn = typeof agent.isRunning === 'function' && agent.isRunning();
-    const newResolved = resolveAgentModelLLM(agentPath, 'default');
+    const newResolved = resolveModelPresetLLM(presetName, overrides);
     if (!newResolved?.llm) {
-      console.error('[ProtoClaw Runtime] swap-model: failed to resolve new model preset');
+      console.error(`[ProtoClaw Runtime] ${msg.type}: failed to resolve preset "${presetName}"`);
       return;
     }
 
@@ -684,12 +716,16 @@ async function main() {
       modelName: newResolved.modelName,
       contextLength: newResolved.contextLength,
       compressRatio: newResolved.compressRatio,
+      presetName: newResolved.presetName,
     });
 
     resolved = newResolved;
     resolvedUsageModel = newResolved;
 
-    console.log(`[ProtoClaw Runtime] ✓ Model swapped: ${oldName} → ${newResolved.modelName || 'unknown'}${isMidTurn ? ' (mid-turn)' : ''}`);
+    const detail = msg.type === 'swap-thinking'
+      ? ` (effort: ${msg.thinkingEffort || 'default'})`
+      : '';
+    console.log(`[ProtoClaw Runtime] ✓ ${msg.type === 'swap-model' ? 'Model' : 'Thinking'} swapped: ${oldName}${detail}${isMidTurn ? ' (mid-turn)' : ''}`);
   });
 
   if (!IS_EXPLORATION) {

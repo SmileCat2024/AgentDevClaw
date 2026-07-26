@@ -5,7 +5,8 @@ import { spawn } from 'child_process';
 import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
-import { sendIPCToAllSessions } from '../shared/ipc.js';
+import { sendIPCToAllSessions, sendIPCtoSession } from '../shared/ipc.js';
+import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
 
 // ── Model Config ──────────────────────────────────────────────────
 
@@ -558,9 +559,15 @@ export function setupModelConfigRoutes(app, express) {
   });
 
   // ── Hot-swap: switch thinking effort for a running agent ──
+  // Runtime-only: updates the in-memory LLM instance without touching the
+  // preset definition in config/presets.json. The preset's thinkingEffort is
+  // the authoritative default at launch and must not be mutated by a
+  // mid-session adjustment.
+  // Per-session: when sessionId is provided, IPC is delivered only to that
+  // session's runtime — not broadcast to all sessions of the agent.
   app.post('/protoclaw/swap_thinking_effort', express.json(), async (req, res, next) => {
     try {
-      const { agentId, thinkingEffort } = req.body || {};
+      const { agentId, thinkingEffort, sessionId, runtimeId } = req.body || {};
       if (!agentId || typeof agentId !== 'string') {
         return res.status(400).json({ error: 'agentId is required' });
       }
@@ -569,42 +576,41 @@ export function setupModelConfigRoutes(app, express) {
         ? null
         : (typeof thinkingEffort === 'string' && thinkingEffort ? thinkingEffort : null);
 
-      // Resolve which preset the agent is currently using
-      const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
-      const userConfig = await readJsonSafe(userConfigPath, {}) || {};
-      const defaultCfg = userConfig?.modelPresets?.default;
-      const presetName = typeof defaultCfg === 'string'
-        ? defaultCfg
-        : (defaultCfg?.primary || null);
-      if (!presetName) {
-        return res.status(400).json({ error: 'Cannot resolve current preset for agent' });
+      const message = { type: 'swap-thinking', thinkingEffort: normalized };
+      let swapCount = 0;
+
+      if (runtimeId && typeof runtimeId === 'string') {
+        const rt = getRuntimeByViewerAgentId(runtimeId);
+        if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
+          try {
+            rt.process.send(message);
+            swapCount = 1;
+          } catch (err) {
+            console.warn(`[swap_thinking_effort] IPC failed for runtimeId ${runtimeId}: ${err}`);
+          }
+        }
+      }
+      if (!swapCount && sessionId && typeof sessionId === 'string') {
+        swapCount = sendIPCtoSession(agentId, sessionId, message) ? 1 : 0;
+      }
+      if (!swapCount) {
+        swapCount = sendIPCToAllSessions(agentId, message);
       }
 
-      // Update thinkingEffort on the preset itself
-      const data = await readModelPresetsFile();
-      const structured = normalizeModelPresetsData(data);
-      const preset = structured.presets.find(p => p.name === presetName);
-      if (!preset) {
-        return res.status(404).json({ error: `Preset "${presetName}" not found` });
-      }
-      if (normalized === null) {
-        preset.thinkingEffort = null;
-      } else {
-        preset.thinkingEffort = normalized;
-      }
-      await writeModelPresetsFile(structured);
-
-      // Notify running runtime to hot-swap
-      const swapCount = sendIPCToAllSessions(agentId, { type: 'swap-model' });
-
-      res.json({ ok: true, agentId, presetName, thinkingEffort: normalized, swapCount });
+      res.json({ ok: true, agentId, thinkingEffort: normalized, swapCount });
     } catch (error) { next(error); }
   });
 
   // ── Hot-swap: switch active model for a running agent ──
+  // Runtime-only: updates the in-memory LLM instance without touching the
+  // agent's startup preset (.agentdev/agent-configs). The preset file is the
+  // authoritative source for "what model to use at launch" and must not be
+  // mutated by a mid-session model switch.
+  // Per-session: when sessionId is provided, IPC is delivered only to that
+  // session's runtime — not broadcast to all sessions of the agent.
   app.post('/protoclaw/swap_model', express.json(), async (req, res, next) => {
     try {
-      const { agentId, presetName } = req.body || {};
+      const { agentId, presetName, sessionId, runtimeId } = req.body || {};
       if (!agentId || typeof agentId !== 'string') {
         return res.status(400).json({ error: 'agentId is required' });
       }
@@ -612,21 +618,33 @@ export function setupModelConfigRoutes(app, express) {
         return res.status(400).json({ error: 'presetName is required' });
       }
 
-      // Write config so swap persists across restarts
-      const userConfigDir = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs');
-      await fs.mkdir(userConfigDir, { recursive: true });
-      const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
-      const existingConfig = await readJsonSafe(userConfigPath, {}) || {};
-      if (!existingConfig.modelPresets) existingConfig.modelPresets = {};
+      const message = { type: 'swap-model', presetName };
+      let swapCount = 0;
 
-      const defaultCfg = existingConfig.modelPresets.default || {};
-      const secondary = (typeof defaultCfg === 'object' && defaultCfg.secondary) || null;
-      existingConfig.modelPresets.default = { primary: presetName, secondary };
+      // Priority 1: runtimeId (viewerAgentId) — the most precise identifier.
+      // The frontend always knows currentRuntimeAgentId, which uniquely
+      // identifies the session's runtime process.
+      if (runtimeId && typeof runtimeId === 'string') {
+        const rt = getRuntimeByViewerAgentId(runtimeId);
+        if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
+          try {
+            rt.process.send(message);
+            swapCount = 1;
+          } catch (err) {
+            console.warn(`[swap_model] IPC failed for runtimeId ${runtimeId}: ${err}`);
+          }
+        }
+      }
 
-      await fs.writeFile(userConfigPath, JSON.stringify(existingConfig, null, 2), 'utf8');
+      // Priority 2: agentId + sessionId — fallback when runtimeId is unavailable
+      if (!swapCount && sessionId && typeof sessionId === 'string') {
+        swapCount = sendIPCtoSession(agentId, sessionId, message) ? 1 : 0;
+      }
 
-      // Notify running runtime to hot-swap
-      const swapCount = sendIPCToAllSessions(agentId, { type: 'swap-model' });
+      // Last resort: broadcast (should rarely happen)
+      if (!swapCount) {
+        swapCount = sendIPCToAllSessions(agentId, message);
+      }
 
       res.json({ ok: true, agentId, presetName, swapCount });
     } catch (error) { next(error); }

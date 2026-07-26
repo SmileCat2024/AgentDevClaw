@@ -14,6 +14,7 @@ export default [
       '*.tgz',
       'test/_render-test.mjs',
       '.trash/**',
+      '.agentdev/**',
       // Temporarily excluded: group-chat.js is under active refactoring
       'server/routes/group-chat.js',
       'server/routes/group-chat/**',

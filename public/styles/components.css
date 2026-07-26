@@ -2679,13 +2679,13 @@ body[data-theme="light"] .im-new-chat-btn {
   top: calc(100% + 6px);
   left: 0;
   min-width: 100%;
-  background: rgba(2, 5, 11, 0.96);
-  border: 1px solid rgba(220, 230, 246, 0.18);
-  border-radius: 10px;
-  padding: 4px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px;
   display: none;
   z-index: 100;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  box-shadow: 0 10px 30px var(--shadow-color);
 }
 
 .im-dropdown.open .im-dropdown-menu {
@@ -2705,7 +2705,7 @@ body[data-theme="light"] .im-new-chat-btn {
 }
 
 .im-dropdown-item:hover {
-  background: rgba(99,145,255,0.1);
+  background: var(--hover-bg);
 }
 
 .im-dropdown-item.active {
@@ -4822,6 +4822,23 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   opacity: 1;
 }
 
+/* Disabled state: model doesn't support thinking */
+.input-thinking-btn.thinking-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.input-thinking-btn.thinking-disabled:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+.input-thinking-btn.thinking-disabled:hover .input-thinking-icon,
+.input-thinking-btn.thinking-disabled:hover .input-thinking-name {
+  opacity: 0.6;
+}
+.input-thinking-btn.thinking-disabled .input-thinking-chevron {
+  display: none;
+}
+
 /* Extra spacing between voice and send buttons */
 .persistent-input-toolbar-right .voice-input-btn {
   margin-right: 4px;
@@ -5700,10 +5717,10 @@ body[data-theme="light"] .ccb-popup-inner {
   background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--dropdown-shadow);
   overflow-y: auto;
   max-height: 320px;
-  padding: 4px 4px 4px 4px;
+  padding: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
@@ -5731,11 +5748,11 @@ body[data-theme="light"] .ccb-model-dropdown-list {
   transition: background 0.1s;
 }
 .ccb-md-item:hover {
-  background: var(--hover-bg, rgba(255, 255, 255, 0.08));
+  background: var(--hover-bg);
 }
 .ccb-md-item.active {
-  background: var(--accent-bg, rgba(99, 102, 241, 0.15));
-  color: var(--accent-color, #818cf8);
+  background: var(--accent-bg);
+  color: var(--accent-text);
   font-weight: 600;
 }
 .ccb-md-left {
@@ -6931,10 +6948,10 @@ body[data-theme="light"] .ph-open-sessions-dismiss:hover {
   min-width: 280px;
   max-height: 320px;
   overflow-y: auto;
-  background: var(--bg-color);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
-  box-shadow: 0 8px 32px var(--shadow-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--shadow-color);
   z-index: 200;
   padding: 6px;
 }
@@ -7136,11 +7153,6 @@ body[data-theme="light"] .ph-banner {
 body[data-theme="light"] .ph-project-header-avatar {
   background: linear-gradient(135deg, rgba(88,166,255,0.15), rgba(88,166,255,0.05));
   color: var(--code-accent);
-}
-body[data-theme="light"] .ph-project-dropdown-menu {
-  background: var(--bg-color);
-  border-color: var(--border-color);
-  box-shadow: 0 8px 32px var(--shadow-strong);
 }
 body[data-theme="light"] .ph-project-dropdown-item:hover {
   background: var(--hover-bg);
@@ -8575,12 +8587,13 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
   top: calc(100% + 4px);
   left: 0;
   min-width: 240px;
-  background: var(--bg-color);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
-  border-radius: var(--wg-radius);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--shadow-color);
   z-index: 100;
   overflow: hidden;
+  padding: 6px;
 }
 
 .wg-mode-dropdown.open .wg-dropdown-menu {
@@ -9970,10 +9983,216 @@ textarea.wg-settings-input { resize: vertical; min-height: 60px; }
     gap: 6px;
   }
 
-  .wg-thread-primary,
-  .wg-thread-secondary,
-  .wg-thread-archive {
-    min-height: 29px;
-    padding-inline: 10px;
-  }
+   .wg-thread-primary,
+   .wg-thread-secondary,
+   .wg-thread-archive {
+     min-height: 29px;
+     padding-inline: 10px;
+   }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   ClawSelect — 统一自定义下拉组件
+   替换原生 <select> 弹出面板，两套选中态色系：
+     默认（蓝）    — 配置面板、表单等常规场景
+     .var-accent（紫） — 输入框等第一优先级 UI
+   其他细节（面板底色、圆角、滚动条、间距）全项目统一
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Wrapper + 色系令牌 */
+.claw-select {
+  position: relative;
+  display: block;
+  width: 100%;
+  /* 默认蓝色系（配置面板） */
+  --cs-hover-bg: rgba(99, 145, 255, 0.1);
+  --cs-active-bg: rgba(99, 145, 255, 0.15);
+  --cs-active-text: #8ab4ff;
+}
+
+/* 紫色系变体（第一优先级 UI） */
+.claw-select.var-accent {
+  --cs-hover-bg: var(--hover-bg);
+  --cs-active-bg: var(--accent-bg);
+  --cs-active-text: var(--accent-text);
+}
+
+body[data-theme="light"] .claw-select {
+  --cs-hover-bg: rgba(59, 130, 246, 0.08);
+  --cs-active-bg: rgba(59, 130, 246, 0.12);
+  --cs-active-text: #2563eb;
+}
+
+/* 原生 select 隐藏但保留在 DOM 中（value / onchange 仍可用） */
+.claw-select-native {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  border: none;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* ── 触发器 ── */
+.claw-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.15s;
+  box-sizing: border-box;
+}
+
+body[data-theme="light"] .claw-select-trigger {
+  border-color: #d0d5dd;
+  background: #fff;
+}
+
+.claw-select-trigger:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+body[data-theme="light"] .claw-select-trigger:hover {
+  border-color: #b0b6c0;
+}
+
+.claw-select-trigger:focus,
+.claw-select-trigger:focus-visible {
+  border-color: rgba(99, 145, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(99, 145, 255, 0.12);
+}
+
+body[data-theme="light"] .claw-select-trigger:focus,
+body[data-theme="light"] .claw-select-trigger:focus-visible {
+  border-color: #6391ff;
+  box-shadow: 0 0 0 3px rgba(99, 145, 255, 0.1);
+}
+
+/* Trigger inner elements */
+.claw-select-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.claw-select-chevron {
+  flex-shrink: 0;
+  opacity: 0.5;
+  transition: transform 0.2s, opacity 0.15s;
+}
+
+.claw-select-trigger:hover .claw-select-chevron {
+  opacity: 0.8;
+}
+
+.claw-select.open .claw-select-chevron {
+  transform: rotate(180deg);
+  opacity: 0.8;
+}
+
+/* ── 弹出面板 ── */
+/* 面板挂载在 body 下（脱离 .claw-select），色系令牌定义在此 */
+.claw-select-panel {
+  position: fixed;
+  z-index: 9100;
+  display: none;
+  min-width: 180px;
+  /* 默认蓝色系（配置面板） */
+  --cs-hover-bg: rgba(99, 145, 255, 0.1);
+  --cs-active-bg: rgba(99, 145, 255, 0.15);
+  --cs-active-text: #8ab4ff;
+}
+
+.claw-select-panel.visible {
+  display: block;
+}
+
+/* 紫色系变体（第一优先级 UI） */
+.claw-select-panel.accent {
+  --cs-hover-bg: var(--hover-bg);
+  --cs-active-bg: var(--accent-bg);
+  --cs-active-text: var(--accent-text);
+}
+
+.claw-select-panel-inner {
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--dropdown-shadow);
+  overflow-y: auto;
+  max-height: 280px;
+  padding: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.claw-select-panel-inner::-webkit-scrollbar {
+  width: 6px;
+}
+
+.claw-select-panel-inner::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  border-right: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+/* ── 选项（引用 wrapper 上的色系令牌） ── */
+.claw-select-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.claw-select-item:hover {
+  background: var(--cs-hover-bg);
+}
+
+.claw-select-item.active {
+  background: var(--cs-active-bg);
+  color: var(--cs-active-text);
+  font-weight: 600;
+}
+
+/* ── Disabled state ── */
+.claw-select-trigger:disabled,
+.claw-select-trigger.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Compact variant（窄内联选择器） ── */
+.claw-select.compact .claw-select-trigger {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+.claw-select.compact .claw-select-item {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+/* ── Open state: trigger visual feedback ── */
+.claw-select.open .claw-select-trigger {
+  border-color: rgba(99, 145, 255, 0.5);
 }

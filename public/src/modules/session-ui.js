@@ -126,7 +126,7 @@ function getSessionCompressRatio(session, agent) {
   return 80;
 }
 
-function _cacheModelInfo(agent, contextLength, compressRatio, presetName) {
+function _cacheModelInfo(agent, contextLength, compressRatio, presetName, thinkingEffort) {
   let key = _resolveAgentKey(agent);
   if (!key) return;
   if (!_modelInfoCache[key]) _modelInfoCache[key] = {};
@@ -139,6 +139,11 @@ function _cacheModelInfo(agent, contextLength, compressRatio, presetName) {
   if (typeof presetName === 'string' && presetName) {
     _modelInfoCache[key].presetName = presetName;
   }
+  // thinkingEffort: string (explicit value) or null (cleared to default).
+  // Only cache when the argument was actually provided (not undefined).
+  if (thinkingEffort !== undefined) {
+    _modelInfoCache[key].thinkingEffort = thinkingEffort || null;
+  }
 }
 
 /**
@@ -150,6 +155,18 @@ function getCachedPresetName(agent) {
   let key = _resolveAgentKey(agent);
   if (!key) return '';
   return (_modelInfoCache[key] && _modelInfoCache[key].presetName) || '';
+}
+
+/**
+ * Read the cached runtime thinkingEffort override for the given agent.
+ * Returns undefined when no runtime override has been cached (meaning
+ * the preset's default thinkingEffort should be used).
+ */
+function getCachedThinkingEffort(agent) {
+  let key = _resolveAgentKey(agent);
+  if (!key) return undefined;
+  if (!_modelInfoCache[key] || !('thinkingEffort' in _modelInfoCache[key])) return undefined;
+  return _modelInfoCache[key].thinkingEffort;
 }
 
 function renderSessionTokenBar(session, agent) {

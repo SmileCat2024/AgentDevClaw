@@ -25,6 +25,10 @@
   --shadow-color: rgba(0, 0, 0, 0.18);
   --shadow-strong: rgba(0, 0, 0, 0.8);
   --status-text-on-color: #fff;
+  /* ── selection / dropdown active state ── */
+  --accent-bg: rgba(99, 102, 241, 0.15);
+  --accent-text: #a5b4fc;
+  --dropdown-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
   /* ── glass variables ── */
   --glass-bg: rgba(20, 20, 23, 0.72);
   --glass-blur: 20px;
@@ -61,6 +65,10 @@ body[data-theme="light"] {
   --glass-border: rgba(0, 0, 0, 0.06);
   --body-grad-1: rgba(80, 130, 220, 0.10);
   --body-grad-2: rgba(200, 210, 230, 0.08);
+  /* ── selection / dropdown active state (light) ── */
+  --accent-bg: rgba(79, 70, 229, 0.10);
+  --accent-text: #4f46e5;
+  --dropdown-shadow: 0 12px 36px rgba(0, 0, 0, 0.15);
 }
 
 body[data-theme="light"] .workspace-hero {

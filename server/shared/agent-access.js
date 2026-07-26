@@ -42,6 +42,12 @@ export function getAgentRuntime(agentId, sessionId = undefined) {
   return pickPrimaryAgentRuntime(agentId);
 }
 
+export function getRuntimeByViewerAgentId(viewerAgentId) {
+  const normalized = sanitizeSessionFragment(viewerAgentId);
+  return Array.from(managedAgents.values())
+    .find((runtime) => sanitizeSessionFragment(runtime.viewerAgentId || '') === normalized) || null;
+}
+
 export function getAssemblyRuntime(sessionId) {
   return assemblyRuntimeProcesses.get(sanitizeSessionFragment(sessionId)) ?? null;
 }

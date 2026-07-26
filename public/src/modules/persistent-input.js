@@ -24,7 +24,7 @@
  * - _requestNotifyPermission (desktop-notify.js)
  * - beginFollowLatestEntryWindow, requestFollowLatest (chat-viewport.js)
  * - _lastRenderedNotificationRuntime (runtime-status.js)
- * - _cacheModelInfo, getCachedPresetName (session-ui.js)
+ * - _cacheModelInfo, getCachedPresetName, getCachedThinkingEffort (session-ui.js)
  * - getCurrentHostAgentRecord (app-main.js)
  */
 
@@ -287,6 +287,16 @@ function _getInputAgentId() {
 }
 
 function _getInputDefaultPresetName() {
+  // Priority 1: overview.presetName — the runtime LLM instance's actual preset.
+  // This is the same per-session data source as the context bar's modelName.
+  // It's set by agent.setLLM() and pushed via overview poll, so it's always
+  // correct for the current session and immune to loadAgents replacement gaps.
+  if (typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot) {
+    let pn = currentOverviewSnapshot.presetName;
+    if (pn && typeof pn === 'string') return pn;
+  }
+
+  // Priority 2: preset from agent config (startup default, before first poll)
   let agent = typeof getRuntimeAwareAgentRecord === 'function'
     ? getRuntimeAwareAgentRecord()
     : null;
@@ -331,21 +341,23 @@ async function _performInputModelSwap(agentId, presetName) {
   }
 
   try {
+    let sessionId = typeof getActiveWorkspaceSessionId === 'function'
+      ? getActiveWorkspaceSessionId()
+      : '';
+    let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
     const resp = await fetch('/protoclaw/swap_model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, presetName }),
+      body: JSON.stringify({ agentId, presetName, sessionId: sessionId || undefined, runtimeId: runtimeId || undefined }),
     });
     const result = await resp.json();
     if (result.ok) {
-      // Optimistic cache update for immediate dropdown highlight feedback,
-      // then trigger loadAgents to get the authoritative modelPresets from
-      // resolveAgentModelPresets (which re-reads .agentdev/agent-configs/).
+      // Clear thinking effort override on model change
       let agent = typeof getRuntimeAwareAgentRecord === 'function'
         ? getRuntimeAwareAgentRecord()
         : null;
       if (agent && typeof _cacheModelInfo === 'function') {
-        _cacheModelInfo(agent, null, null, presetName);
+        _cacheModelInfo(agent, null, null, null, null);
       }
       if (typeof ClawToast !== 'undefined') {
         ClawToast.update(toastId, {
@@ -355,16 +367,15 @@ async function _performInputModelSwap(agentId, presetName) {
           autoDismiss: 3000,
         });
       }
-      // Invalidate cached presets so thinking effort reads from the new preset
-      if (window.ClawFW) window.ClawFW._modelPresets = null;
+      // Re-fetch presets so thinking effort reads from the new preset
+      try {
+        const resp2 = await fetch('/protoclaw/model_config');
+        const data2 = await resp2.json();
+        if (window.ClawFW) window.ClawFW._modelPresets = Array.isArray(data2?.presets) ? data2.presets : [];
+      } catch (_) {}
       updateInputModelSwitcher();
-      if (typeof loadAgents === 'function') {
-        loadAgents().then(() => {
-          updateInputModelSwitcher();
-          updateThinkingEffortSwitcher();
-          if (typeof updateChatContextBar === 'function') updateChatContextBar();
-        }).catch(() => {});
-      }
+      updateThinkingEffortSwitcher();
+      if (typeof updateChatContextBar === 'function') updateChatContextBar();
     } else {
       throw new Error(result.error || 'Unknown error');
     }
@@ -476,23 +487,9 @@ window.toggleInputModelDropdown = function(event) {
 function updateInputModelSwitcher() {
   let nameEl = document.querySelector('.input-model-name');
   if (!nameEl) return;
-  let agent = typeof getRuntimeAwareAgentRecord === 'function'
-    ? getRuntimeAwareAgentRecord()
-    : null;
+  // _getInputDefaultPresetName already checks runtime cache first,
+  // then falls back to the preset. No additional cache logic needed here.
   let displayName = _getInputDefaultPresetName() || '';
-
-  // Cache when live data is available so it bridges the loadAgents gap.
-  // Uses per-agentId cache (same pattern as _modelInfoCache for
-  // contextLength/compressRatio) to prevent cross-agent leakage.
-  if (displayName && agent && typeof _cacheModelInfo === 'function') {
-    _cacheModelInfo(agent, null, null, displayName);
-  }
-
-  // Fallback to per-agentId cache when live modelPresets is temporarily absent
-  if (!displayName && agent && typeof getCachedPresetName === 'function') {
-    displayName = getCachedPresetName(agent);
-  }
-
   nameEl.textContent = displayName || (currentLanguage === 'zh' ? '模型' : 'Model');
 }
 
@@ -527,7 +524,7 @@ function _getCurrentPreset() {
 
 function _getCurrentPresetProtocol() {
   let preset = _getCurrentPreset();
-  return (preset && preset.protocol) || 'anthropic';
+  return (preset && (preset.provider || preset.protocol)) || 'anthropic';
 }
 
 function _getEffortList(protocol) {
@@ -541,8 +538,23 @@ function _getEffortLabel(effort) {
 }
 
 function _getCurrentThinkingEffort() {
+  // Runtime override takes priority (from swap-thinking IPC)
+  let agent = typeof getRuntimeAwareAgentRecord === 'function'
+    ? getRuntimeAwareAgentRecord()
+    : null;
+  if (agent && typeof getCachedThinkingEffort === 'function') {
+    let cached = getCachedThinkingEffort(agent);
+    if (cached !== undefined) return cached;
+  }
+  // Fall back to the preset's default thinkingEffort
   let preset = _getCurrentPreset();
   return (preset && preset.thinkingEffort) || null;
+}
+
+function _currentModelSupportsThinking() {
+  let preset = _getCurrentPreset();
+  if (!preset) return false;
+  return preset.thinkingEffort != null && preset.thinkingEffort !== '' && preset.thinkingEffort !== 'none';
 }
 
 function _closeThinkingEffortDropdown() {
@@ -579,13 +591,26 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
   }
 
   try {
+    let sessionId = typeof getActiveWorkspaceSessionId === 'function'
+      ? getActiveWorkspaceSessionId()
+      : '';
+    let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
     const resp = await fetch('/protoclaw/swap_thinking_effort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, thinkingEffort }),
+      body: JSON.stringify({ agentId, thinkingEffort, sessionId: sessionId || undefined, runtimeId: runtimeId || undefined }),
     });
     const result = await resp.json();
     if (result.ok) {
+      // Cache the runtime override so the switcher reflects it immediately.
+      // swap_thinking_effort no longer mutates config/presets.json, so we
+      // must track the override locally rather than re-fetching presets.
+      let agent = typeof getRuntimeAwareAgentRecord === 'function'
+        ? getRuntimeAwareAgentRecord()
+        : null;
+      if (agent && typeof _cacheModelInfo === 'function') {
+        _cacheModelInfo(agent, null, null, null, thinkingEffort);
+      }
       if (typeof ClawToast !== 'undefined') {
         ClawToast.update(toastId, {
           status: 'success',
@@ -593,14 +618,7 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort) {
           autoDismiss: 3000,
         });
       }
-      // Invalidate cached presets so next read picks up the updated thinkingEffort
-      if (window.ClawFW) window.ClawFW._modelPresets = null;
       updateThinkingEffortSwitcher();
-      if (typeof loadAgents === 'function') {
-        loadAgents().then(function() {
-          updateThinkingEffortSwitcher();
-        }).catch(function() {});
-      }
     } else {
       throw new Error(result.error || 'Unknown error');
     }
@@ -634,6 +652,11 @@ window.toggleThinkingEffortDropdown = function(event) {
 
   let agentId = _getInputAgentId();
   if (!agentId) return;
+
+  // Block switching if current model doesn't support thinking
+  if (!_currentModelSupportsThinking()) {
+    return;
+  }
 
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
   let protocol = _getCurrentPresetProtocol();
@@ -686,13 +709,64 @@ window.toggleThinkingEffortDropdown = function(event) {
 };
 
 function updateThinkingEffortSwitcher() {
+  let btn = document.getElementById('input-thinking-btn');
   let nameEl = document.querySelector('.input-thinking-name');
   if (!nameEl) return;
   let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+
+  // If current model doesn't support thinking, disable the button and show hint
+  let supportsThinking = _currentModelSupportsThinking();
+  if (btn) {
+    if (supportsThinking) {
+      btn.classList.remove('thinking-disabled');
+      btn.title = '';
+    } else {
+      btn.classList.add('thinking-disabled');
+      btn.title = isZh ? '当前模型不支持思考' : 'Current model does not support thinking';
+    }
+  }
+
+  if (!supportsThinking) {
+    nameEl.textContent = isZh ? '不支持思考' : 'No Thinking';
+    nameEl.style.opacity = '0.5';
+    return;
+  }
+  nameEl.style.opacity = '';
+
   let effort = _getCurrentThinkingEffort();
   nameEl.textContent = effort
     ? _getEffortLabel(effort)
     : (isZh ? '思考强度' : 'Thinking');
+
+  // If presets aren't loaded yet, fetch them and re-render
+  let presets = (window.ClawFW && window.ClawFW._modelPresets) || [];
+  if (!presets.length) {
+    fetch('/protoclaw/model_config').then(function(r) { return r.json(); }).then(function(d) {
+      if (window.ClawFW) window.ClawFW._modelPresets = Array.isArray(d?.presets) ? d.presets : [];
+      // Re-evaluate after presets are loaded
+      let supports2 = _currentModelSupportsThinking();
+      let btn2 = document.getElementById('input-thinking-btn');
+      let el2 = document.querySelector('.input-thinking-name');
+      if (el2) {
+        if (!supports2) {
+          if (btn2) {
+            btn2.classList.add('thinking-disabled');
+            btn2.title = isZh ? '当前模型不支持思考' : 'Current model does not support thinking';
+          }
+          el2.textContent = isZh ? '不支持思考' : 'No Thinking';
+          el2.style.opacity = '0.5';
+        } else {
+          if (btn2) {
+            btn2.classList.remove('thinking-disabled');
+            btn2.title = '';
+          }
+          el2.style.opacity = '';
+          let effort2 = _getCurrentThinkingEffort();
+          el2.textContent = effort2 ? _getEffortLabel(effort2) : (isZh ? '思考强度' : 'Thinking');
+        }
+      }
+    }).catch(function() {});
+  }
 }
 
 // ── 渲染常驻输入框 ────────────────────────────────────────────────

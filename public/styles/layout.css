@@ -384,7 +384,7 @@ body[data-theme="light"] .agent-icon {
 .context-menu {
   position: fixed;
   min-width: 160px;
-  background: var(--sidebar-bg);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 10px 30px var(--shadow-color);
@@ -422,7 +422,7 @@ body[data-theme="light"] .agent-icon {
 .ctx-menu {
   position: fixed;
   min-width: 170px;
-  background: var(--sidebar-bg);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 10px 30px var(--shadow-color);
@@ -459,7 +459,7 @@ body[data-theme="light"] .agent-icon {
   left: 100%;
   top: -6px;
   min-width: 140px;
-  background: var(--sidebar-bg);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 10px 30px var(--shadow-color);
@@ -1335,6 +1335,7 @@ body[data-theme="light"] .feature-detail-overlay {
 }
 
 .feature-detail-window {
+  position: relative;
   width: min(100%, 720px);
   max-height: min(100%, 700px);
   overflow: auto;
@@ -1342,18 +1343,44 @@ body[data-theme="light"] .feature-detail-overlay {
   flex-direction: column;
   gap: 20px;
   border-radius: 20px;
-  border: 1px solid rgba(255,255,255,0.08);
-  background: var(--panel-bg);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
   box-shadow: 0 28px 70px rgba(0, 0, 0, 0.4);
   padding: 24px;
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,0.12) transparent;
 }
 
+.feature-detail-window::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 60%;
+  height: 50%;
+  pointer-events: none;
+  border-radius: 20px 0 80px 0;
+  background: radial-gradient(ellipse 480px 300px at 15% 0%,
+              rgba(35, 110, 230, 0.12) 0%, transparent 70%);
+  z-index: 0;
+}
+
+.feature-detail-window > *:not(.settings-footer) {
+  position: relative;
+  z-index: 1;
+}
+
 body[data-theme="light"] .feature-detail-window {
   border-color: #e0e0e0;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
   scrollbar-color: rgba(0,0,0,0.15) transparent;
+}
+
+body[data-theme="light"] .feature-detail-window::before {
+  background: radial-gradient(ellipse 480px 300px at 15% 0%,
+              rgba(80, 130, 220, 0.06) 0%, transparent 70%);
 }
 
 /* ── Feature 详情弹窗内部布局（扁平化，去掉卡片套卡片） ─────────────────────── */
@@ -1455,6 +1482,7 @@ body[data-theme="light"] .fdetail-tool-pill {
   background: rgba(255,255,255,0.04);
   border-radius: 12px;
   margin-bottom: 4px;
+  flex-shrink: 0;
 }
 
 body[data-theme="light"] .settings-tab-bar {
@@ -1505,6 +1533,38 @@ body[data-theme="light"] .settings-tab.active {
   gap: 20px;
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
+  padding-bottom: 110px;
+  overscroll-behavior: contain;
+  contain: layout style paint;
+  will-change: scroll-position;
+}
+
+.settings-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 0 36px 16px;
+  height: 110px;
+  background: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(14, 14, 17, 0.7) 30%,
+    rgba(14, 14, 17, 0.97) 55%,
+    rgba(14, 14, 17, 1) 70%);
+  z-index: 2;
+}
+
+body[data-theme="light"] .settings-footer {
+  background: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(238, 238, 240, 0.7) 30%,
+    rgba(238, 238, 240, 0.97) 55%,
+    rgba(238, 238, 240, 1) 70%);
 }
 
 .settings-section {
@@ -1593,6 +1653,32 @@ body[data-theme="light"] .settings-input.invalid:focus {
   gap: 14px;
   overflow: hidden;
   position: relative;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  border-color: var(--glass-border);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5),
+              inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* Echo the top-left ambient glow from the body background */
+.usage-info-window::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 60%;
+  height: 50%;
+  pointer-events: none;
+  border-radius: 20px 0 80px 0;
+  background: radial-gradient(ellipse 480px 300px at 15% 0%,
+              rgba(35, 110, 230, 0.12) 0%, transparent 70%);
+  z-index: 0;
+}
+
+.usage-info-window > * {
+  position: relative;
+  z-index: 1;
 }
 
 .usage-info-toolbar {
@@ -1607,8 +1693,10 @@ body[data-theme="light"] .settings-input.invalid:focus {
   padding: 3px;
   gap: 2px;
   border-radius: 10px;
-  background: rgba(255,255,255,0.045);
-  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.07);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 
 .usage-info-segment button {
@@ -1639,8 +1727,10 @@ body[data-theme="light"] .settings-input.invalid:focus {
   padding: 12px 14px;
   border-radius: 10px;
   color: var(--text-secondary);
-  background: rgba(255,255,255,0.035);
-  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.07);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   font-size: 13px;
 }
 
@@ -1658,10 +1748,14 @@ body[data-theme="light"] .settings-input.invalid:focus {
 
 .usage-info-metric {
   padding: 14px;
-  border: 1px solid rgba(255,255,255,0.075);
+  border: 1px solid rgba(255,255,255,0.085);
   border-radius: 12px;
-  background: rgba(255,255,255,0.03);
+  background: rgba(255,255,255,0.04);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   min-width: 0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12),
+              inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .usage-info-metric-label,
@@ -1709,13 +1803,17 @@ body[data-theme="light"] .settings-input.invalid:focus {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid rgba(255,255,255,0.075);
+  border: 1px solid rgba(255,255,255,0.085);
   border-radius: 12px;
-  background: rgba(255,255,255,0.022);
+  background: rgba(255,255,255,0.035);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12),
+              inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .usage-info-chart-section {
@@ -1927,6 +2025,8 @@ body[data-theme="light"] .settings-input.invalid:focus {
   border-radius: 9px;
   border: 1px solid rgba(255,255,255,0.1);
   background: rgba(255,255,255,0.04);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
   color: var(--text-primary);
   padding: 0 10px 0 12px;
   font: inherit;
@@ -1952,10 +2052,10 @@ body[data-theme="light"] .settings-input.invalid:focus {
   z-index: 10;
   min-width: 132px;
   padding: 6px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: #151515;
-  box-shadow: 0 16px 36px rgba(0,0,0,0.34);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  box-shadow: 0 10px 30px var(--shadow-color);
   display: none;
 }
 
@@ -1978,7 +2078,7 @@ body[data-theme="light"] .settings-input.invalid:focus {
 }
 
 .usage-info-dropdown-menu button:hover {
-  background: rgba(255,255,255,0.08);
+  background: var(--hover-bg);
 }
 
 .usage-info-dropdown-menu button.active {
@@ -2189,12 +2289,26 @@ body[data-theme="light"] .settings-input.invalid:focus {
   font-size: 11px;
 }
 
+body[data-theme="light"] .usage-info-window {
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.18),
+              inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+body[data-theme="light"] .usage-info-window::before {
+  background: radial-gradient(ellipse 480px 300px at 15% 0%,
+              rgba(80, 130, 220, 0.06) 0%, transparent 70%);
+}
+
 body[data-theme="light"] .usage-info-segment,
 body[data-theme="light"] .usage-info-metric,
 body[data-theme="light"] .usage-info-section,
 body[data-theme="light"] .usage-info-empty {
   border-color: rgba(0,0,0,0.08);
   background: rgba(0,0,0,0.025);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05),
+              inset 0 1px 0 rgba(255, 255, 255, 0.4);
 }
 
 body[data-theme="light"] .usage-info-segment button:hover,
@@ -2263,14 +2377,8 @@ body[data-theme="light"] .usage-info-dropdown-trigger {
   background: #fff;
 }
 
-body[data-theme="light"] .usage-info-dropdown-menu {
-  border-color: rgba(0,0,0,0.08);
-  background: #fff;
-  box-shadow: 0 16px 36px rgba(0,0,0,0.14);
-}
-
 body[data-theme="light"] .usage-info-dropdown-menu button:hover {
-  background: rgba(0,0,0,0.05);
+  background: var(--hover-bg);
 }
 
 body[data-theme="light"] .usage-info-calendar-cell {
@@ -2394,14 +2502,18 @@ body[data-theme="light"] .settings-presets-list {
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid rgba(255,255,255,0.08);
-  background: rgba(255,255,255,0.02);
+  background: rgba(255,255,255,0.04);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  backdrop-filter: blur(8px) saturate(1.2);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
 
 .settings-preset-card:hover {
   border-color: rgba(255,255,255,0.15);
-  background: rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.07);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
 .settings-preset-card.active {
@@ -2410,13 +2522,15 @@ body[data-theme="light"] .settings-presets-list {
 }
 
 body[data-theme="light"] .settings-preset-card {
-  border-color: #e0e0e0;
-  background: #f9f9f9;
+  border-color: rgba(0,0,0,0.06);
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
 body[data-theme="light"] .settings-preset-card:hover {
-  border-color: #c0c0c0;
-  background: #f0f0f0;
+  border-color: rgba(0,0,0,0.1);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
 }
 
 body[data-theme="light"] .settings-preset-card.active {
@@ -2498,13 +2612,6 @@ body[data-theme="light"] .settings-icon-btn.danger:hover {
 .settings-actions {
   display: flex;
   gap: 10px;
-  justify-content: flex-end;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255,255,255,0.06);
-}
-
-body[data-theme="light"] .settings-actions {
-  border-top-color: #e8e8e8;
 }
 
 .settings-btn {
@@ -3301,6 +3408,9 @@ body[data-theme="light"] .rc-danger-item--destructive .rc-danger-title { color: 
   border-radius: 14px;
   border: 1px solid rgba(99, 145, 255, 0.35);
   background: linear-gradient(135deg, rgba(99, 145, 255, 0.1), rgba(99, 145, 255, 0.04));
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  backdrop-filter: blur(8px) saturate(1.2);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
   position: relative;
   overflow: hidden;
 }
@@ -3386,10 +3496,6 @@ body[data-theme="light"] .settings-active-badge {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  overflow-y: auto;
-  max-height: 280px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.12) transparent;
 }
 
 body[data-theme="light"] .settings-presets-grid {
@@ -3415,10 +3521,6 @@ body[data-theme="light"] .settings-presets-grid {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  overflow-y: auto;
-  max-height: 240px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.12) transparent;
 }
 
 body[data-theme="light"] .settings-presets-compact {
@@ -4694,7 +4796,7 @@ body[data-theme="light"] .plan-task.is-interrupt-target {
   right: 100%;
   bottom: 0;
   min-width: 160px;
-  background: var(--sidebar-bg);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 10px 30px var(--shadow-color);

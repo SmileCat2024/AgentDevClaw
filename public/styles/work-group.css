@@ -372,13 +372,13 @@
   top: calc(100% + 6px);
   right: 0;
   min-width: 280px;
-  background: var(--bg-color);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
-  border-radius: 10px;
-  box-shadow: 0 8px 32px var(--shadow-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--shadow-color);
   z-index: 100;
   overflow: hidden;
-  padding: 4px;
+  padding: 6px;
 }
 .wg-mode-dropdown.open .wg-dropdown-menu {
   display: block;
@@ -2985,11 +2985,11 @@ body[data-theme="light"] .wg-modal-overlay {
   position: fixed;
   z-index: 10000;
   min-width: 180px;
-  background: var(--bg-color);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.2);
-  padding: 4px;
+  box-shadow: 0 10px 30px var(--shadow-color);
+  padding: 6px;
 }
 .wg-context-menu-item {
   display: flex;

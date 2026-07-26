@@ -78,6 +78,7 @@ function getEmptyOverviewSnapshot() {
       lastErrorMessage: null,
     },
     modelName: '',
+    presetName: '',
   };
 }
 
@@ -136,6 +137,7 @@ function normalizeOverviewSnapshot(snapshot) {
     },
     runtime: normalizeRuntimeSnapshot(snapshot.runtime),
     modelName: typeof snapshot.modelName === 'string' ? snapshot.modelName : '',
+    presetName: typeof snapshot.presetName === 'string' ? snapshot.presetName : '',
   };
 }
 
