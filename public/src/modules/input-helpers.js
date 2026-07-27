@@ -249,23 +249,21 @@ function syncAssistantProcessOnlyRows(root = container) {
 }
 
 function applyConversationProcessState(root = container) {
-  root.querySelectorAll('.message-row.system').forEach((row) => {
-    row.classList.toggle('process-hidden', !showChatProcess);
-  });
-
-  root.querySelectorAll('.reasoning-block').forEach((block) => {
-    block.classList.toggle('process-hidden', !showChatProcess);
-  });
-
-  root.querySelectorAll('.message-row.assistant .tool-call-container').forEach((block) => {
-    block.classList.toggle('process-hidden', !showChatProcess);
-  });
-
-  root.querySelectorAll('.message-row.tool').forEach((row) => {
-    row.classList.toggle('process-hidden', !showChatProcess);
-  });
+  if (showChatProcess) {
+    // Show mode: only un-hide near-viewport process elements.
+    // applyProcessDistance handles the windowing — far elements stay
+    // display:none, avoiding the 27-second full-layout bottleneck.
+    applyProcessDistance(root);
+  } else {
+    // Hide mode: hide ALL process elements
+    clearProcessDistance(root);
+  }
 
   syncAssistantProcessOnlyRows(root);
+  // Synchronous: with process-distance windowing, most rows are display:none
+  // and syncRowCollapseState early-returns for them (~70 rows of actual work).
+  // Deferring to rAF caused a visible flash: frame N shows all-expanded,
+  // frame N+1 collapses long rows → height change → flicker.
   syncCollapseStates(root);
   updateChatProcessToggle();
 };
@@ -274,8 +272,39 @@ window.toggleChatProcessVisibility = function() {
   const chatViewportTopBefore = container.scrollTop;
   const hasUserMessages = Array.isArray(currentMessages)
     && currentMessages.some(m => m.role === 'user');
+
+  // Anchor-based scroll preservation: record the topmost visible row and
+  // its offset from the viewport top. After the toggle changes row heights,
+  // we restore scroll so that the same row stays at the same screen position.
+  // This is more accurate than preserveTop (absolute scrollTop) because rows
+  // above the viewport grow/shrink when process blocks show/hide.
+  let anchorIdx = -1;
+  let anchorOffsetInViewport = 0;
+  if (hasUserMessages) {
+    const rows = container.querySelectorAll('.message-row');
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.classList.contains('process-hidden') ||
+          row.classList.contains('process-hidden-empty')) continue;
+      const rowTop = row.offsetTop;
+      const rowBottom = rowTop + row.offsetHeight;
+      if (rowBottom > chatViewportTopBefore) {
+        anchorIdx = i;
+        anchorOffsetInViewport = chatViewportTopBefore - rowTop;
+        break;
+      }
+    }
+  }
+
   showChatProcess = !showChatProcess;
   saveChatProcessVisibility();
+
+  // Before un-hiding process elements, record the viewport position so
+  // applyProcessDistance can window correctly without triggering a full layout.
+  if (showChatProcess && hasUserMessages) {
+    precomputeViewportIdx();
+  }
+
   // When there are no user messages, toggling process visibility switches
   // between the welcome page and the (hidden-process) content. This requires
   // a full re-render, not just CSS class toggling.
@@ -285,10 +314,26 @@ window.toggleChatProcessVisibility = function() {
   } else {
     applyConversationProcessState(container);
   }
+
+  // Restore scroll position based on the anchor row.
+  // If the anchor itself got hidden (e.g. it was a process-only assistant
+  // row), walk forward to the next visible row.
+  if (anchorIdx >= 0) {
+    const rows = container.querySelectorAll('.message-row');
+    for (let i = anchorIdx; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.classList.contains('process-hidden') ||
+          row.classList.contains('process-hidden-empty')) continue;
+      // Accessing offsetTop forces synchronous layout, giving us the
+      // post-toggle position.
+      container.scrollTop = row.offsetTop + anchorOffsetInViewport;
+      break;
+    }
+  }
+
   notifyChatViewportMutation({
     reason: 'process-toggle',
     shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-    preserveTop: followLatestEnabled ? null : chatViewportTopBefore,
     forceSnap: true,
     allowChase: false,
   });

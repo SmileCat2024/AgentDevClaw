@@ -380,6 +380,11 @@ function syncRowCollapseState(row) {
     return;
   }
 
+  // Skip rows with process-hidden children (far from viewport in windowing mode)
+  // scrollHeight is unreliable for these rows
+  if (row.querySelector('.process-hidden') && 
+      (row.classList.contains('tool') || row.classList.contains('system'))) return;
+
   const collapseThreshold = getCollapseThresholdForRow(row);
   const isCollapsible = el.scrollHeight > collapseThreshold;
   const isSystem = row.classList.contains('system');

@@ -314,6 +314,12 @@ function warmTemplatesInBackground(templateNames, agentId) {
       if (warmupToken !== templateWarmupToken || currentRuntimeAgentId !== agentId) {
         return;
       }
+      // Force a full re-render: messages rendered before templates were
+      // loaded may have fallen back to JSON. Clearing the dedup signature
+      // ensures render() rebuilds all rows with the correct templates.
+      if (typeof _lastRenderedChatSig !== 'undefined') {
+        _lastRenderedChatSig = '';
+      }
       renderCurrentMainView();
     })
     .catch((error) => {

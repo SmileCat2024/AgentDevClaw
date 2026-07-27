@@ -134,15 +134,8 @@
   display: none !important;
 }
 
-/* Process distance windowing: elements far from the viewport in "show process"
-   mode get content-visibility:hidden. Unlike display:none, the element keeps
-   its layout height (via contain-intrinsic-size), preventing scroll jumps.
-   The browser skips layout/paint/style for the element's children entirely.
-   'auto' makes the browser remember the real height after first render. */
-.process-distant {
-  content-visibility: hidden;
-  contain-intrinsic-size: auto 150px;
-}
+/* Process distance windowing handled by lazy-tool-content.js
+   (display:none toggling + scroll-based window management) */
 
 /* Tool Styles */
 .tool-call-container {
