@@ -169,6 +169,9 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
 let _ctxPressureLevel = {};
 
 function _checkContextPressureToast(sessionId, thresholdPct) {
+  // [临时屏蔽] 用量压力 Toast 通知 — 需要恢复时改为 true
+  var _ctxPressureToastEnabled = false;
+  if (!_ctxPressureToastEnabled) return;
   if (!sessionId || typeof ClawToast === 'undefined') return;
   let newLevel = thresholdPct >= 100 ? 2 : thresholdPct >= 70 ? 1 : 0;
   let prevLevel = _ctxPressureLevel[sessionId] || 0;

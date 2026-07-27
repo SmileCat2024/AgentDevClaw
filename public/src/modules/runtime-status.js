@@ -75,6 +75,8 @@ function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
   const isBlocked = isCurrentContextGuardBlocked();
 
   if (isBlocked) {
+    // [临时屏蔽] 上下文保护 Toast 通知 — 需要恢复时移除此注释块
+    /*
     const toastKey = `${normalizedRuntimeId}:${nextState.blockedAt || nextState.thresholdTokens || 'blocked'}`;
     if (_lastContextGuardToastKey !== toastKey) {
       _lastContextGuardToastKey = toastKey;
@@ -85,6 +87,7 @@ function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
         description: getCurrentContextGuardMessage(),
       });
     }
+    */
   }
 
   if (wasBlocked !== isBlocked && typeof renderInputRequests === 'function') {
