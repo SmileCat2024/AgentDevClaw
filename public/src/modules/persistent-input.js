@@ -734,6 +734,26 @@ function updateThinkingEffortSwitcher() {
     }
   }
 
+  // If presets aren't loaded yet, fetch them first and re-render.
+  // This MUST happen before the supportsThinking check, otherwise
+  // the early return for "不支持思考" blocks the fallback forever.
+  let presets = (window.ClawFW && window.ClawFW._modelPresets) || [];
+  if (!presets.length) {
+    // Show a neutral label while loading — NOT "不支持思考" which is misleading
+    nameEl.textContent = isZh ? '思考强度' : 'Thinking';
+    nameEl.style.opacity = '';
+    if (btn) {
+      btn.classList.remove('thinking-disabled');
+      btn.title = '';
+    }
+    fetch('/protoclaw/model_config').then(function(r) { return r.json(); }).then(function(d) {
+      if (window.ClawFW) window.ClawFW._modelPresets = Array.isArray(d?.presets) ? d.presets : [];
+      // Re-render now that presets are available
+      updateThinkingEffortSwitcher();
+    }).catch(function() {});
+    return;
+  }
+
   // If current model doesn't support thinking, disable the button and show hint
   let supportsThinking = _currentModelSupportsThinking();
   if (btn) {
@@ -757,36 +777,6 @@ function updateThinkingEffortSwitcher() {
   nameEl.textContent = effort
     ? _getEffortLabel(effort)
     : (isZh ? '思考强度' : 'Thinking');
-
-  // If presets aren't loaded yet, fetch them and re-render
-  let presets = (window.ClawFW && window.ClawFW._modelPresets) || [];
-  if (!presets.length) {
-    fetch('/protoclaw/model_config').then(function(r) { return r.json(); }).then(function(d) {
-      if (window.ClawFW) window.ClawFW._modelPresets = Array.isArray(d?.presets) ? d.presets : [];
-      // Re-evaluate after presets are loaded
-      let supports2 = _currentModelSupportsThinking();
-      let btn2 = document.getElementById('input-thinking-btn');
-      let el2 = document.querySelector('.input-thinking-name');
-      if (el2) {
-        if (!supports2) {
-          if (btn2) {
-            btn2.classList.add('thinking-disabled');
-            btn2.title = isZh ? '当前模型不支持思考' : 'Current model does not support thinking';
-          }
-          el2.textContent = isZh ? '不支持思考' : 'No Thinking';
-          el2.style.opacity = '0.5';
-        } else {
-          if (btn2) {
-            btn2.classList.remove('thinking-disabled');
-            btn2.title = '';
-          }
-          el2.style.opacity = '';
-          let effort2 = _getCurrentThinkingEffort();
-          el2.textContent = effort2 ? _getEffortLabel(effort2) : (isZh ? '思考强度' : 'Thinking');
-        }
-      }
-    }).catch(function() {});
-  }
 }
 
 // ── 渲染常驻输入框 ────────────────────────────────────────────────
