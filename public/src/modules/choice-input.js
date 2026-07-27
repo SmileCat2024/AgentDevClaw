@@ -18,20 +18,29 @@
  * window 函数:
  *   selectChoiceOption, collapseChoiceRequest, expandChoiceRequest,
  *   updateChoiceCustomText, handleChoiceKey, handleChoiceCustomKey,
- *   confirmChoiceQuestion
+ *   confirmChoiceQuestion, toggleChoiceContext, rejectChoiceRequest
  * HTML onclick 引用:
  *   onclick="selectChoiceOption(...)"
  *   onclick="collapseChoiceRequest(...)"
  *   onclick="expandChoiceRequest(...)"
  *   onclick="confirmChoiceQuestion(...)"
+ *   onclick="toggleChoiceContext(...)"
+ *   onclick="rejectChoiceRequest(...)"
  *   onkeydown="handleChoiceKey(...)"
  *   onkeydown="handleChoiceCustomKey(...)"
  *   oninput="updateChoiceCustomText(...)"
  */
 
+const _rejectedRequests = new Set();
+
 function isChoiceInputRequest(req) {
   return !!req && req.mode === 'choices' && Array.isArray(req.questions) && req.questions.length > 0;
 }
+
+/** Globally accessible — used by renderInputRequests and getInputSurfaceMode */
+window.isChoiceInputRejected = function(requestId) {
+  return _rejectedRequests.has(requestId);
+};
 
 function getChoiceRequestById(requestId) {
   return (currentInputRequests || []).find(req => req.requestId === requestId) || null;
@@ -46,6 +55,7 @@ function getChoiceState(requestId) {
       selectedIndexByQuestion: {},
       customTextByQuestion: {},
       collapsed: false,
+      contextExpanded: false,
     };
   }
   return choiceInputState[requestId];
@@ -80,6 +90,7 @@ function rememberCurrentChoice(req, state) {
 }
 
 function renderChoiceInputRequest(container, req) {
+  if (_rejectedRequests.has(req.requestId)) return;
   const state = getChoiceState(req.requestId);
   const questions = Array.isArray(req.questions) ? req.questions : [];
   if (state.collapsed) {
@@ -106,7 +117,10 @@ function renderChoiceInputRequest(container, req) {
   state.selectedIndex = Math.max(0, Math.min(state.selectedIndexByQuestion?.[question.id] ?? state.selectedIndex ?? 0, Math.max(0, optionCount - 1)));
 
   const card = document.createElement('div');
-  card.className = 'user-input-card user-choice-card';
+  const promptText = req.prompt || '';
+  const hasContext = !!promptText;
+  const contextOpen = hasContext && state.contextExpanded;
+  card.className = 'user-input-card user-choice-card' + (contextOpen ? ' context-open' : '');
   card.tabIndex = 0;
   card.dataset.requestId = req.requestId;
   card.setAttribute('onkeydown', `handleChoiceKey(event, '${req.requestId}')`);
@@ -141,19 +155,42 @@ function renderChoiceInputRequest(container, req) {
   ` : '';
 
   card.innerHTML = `
-    <div class="user-choice-topline">
-      <div class="user-choice-title">${escapeHtml(req.prompt || '需要你做个选择')}</div>
-      <div class="user-choice-progress">${questionIndex + 1} / ${questions.length}</div>
-      <button class="user-choice-close" type="button" title="临时收起" onclick="collapseChoiceRequest('${req.requestId}')">×</button>
-    </div>
-    <div class="user-choice-question">${escapeHtml(question.question || '')}</div>
-    <div class="user-choice-options">
-      ${optionHtml}
-      ${customHtml}
-    </div>
-    <div class="user-choice-footer">
-      <span>↑↓ 选项，←→ 题目，Enter 确认</span>
-      <button class="user-choice-submit" type="button" onclick="confirmChoiceQuestion('${req.requestId}')">${questionIndex + 1 === questions.length ? '提交' : '下一题'}</button>
+    <div class="user-choice-layout${contextOpen ? ' context-open' : ''}">
+      ${hasContext ? `
+      <aside class="user-choice-context">
+        <div class="user-choice-context-head">
+          <span class="user-choice-context-label">决策背景</span>
+          <button class="user-choice-context-hide" type="button" onclick="toggleChoiceContext('${req.requestId}')">◀ 收起</button>
+        </div>
+        <div class="user-choice-context-body">${escapeHtml(promptText)}</div>
+      </aside>
+      ` : ''}
+      <div class="user-choice-main">
+        <div class="user-choice-head">
+          ${hasContext && !contextOpen ? `
+            <button class="user-choice-context-btn" type="button" onclick="toggleChoiceContext('${req.requestId}')">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+              <span>查看背景</span>
+            </button>
+          ` : '<span></span>'}
+          <div class="user-choice-head-actions">
+            <span class="user-choice-progress">${questionIndex + 1} / ${questions.length}</span>
+            <button class="user-choice-close" type="button" title="临时收起" onclick="collapseChoiceRequest('${req.requestId}')">×</button>
+          </div>
+        </div>
+        <div class="user-choice-question">${escapeHtml(question.question || '')}</div>
+        <div class="user-choice-options">
+          ${optionHtml}
+          ${customHtml}
+        </div>
+        <div class="user-choice-footer">
+          <div class="user-choice-footer-left">
+            <button class="user-choice-reject" type="button" onclick="rejectChoiceRequest('${req.requestId}')">跳过并打断</button>
+            <span class="user-choice-hint">↑↓ 选项，←→ 题目，Enter 确认</span>
+          </div>
+          <button class="user-choice-submit" type="button" onclick="confirmChoiceQuestion('${req.requestId}')">${questionIndex + 1 === questions.length ? '提交' : '下一题'}</button>
+        </div>
+      </div>
     </div>
   `;
 
@@ -186,6 +223,36 @@ window.selectChoiceOption = function(requestId, optionIndex) {
     state.selectedIndexByQuestion[question.id] = optionIndex;
   }
   rerenderChoiceRequest(requestId);
+};
+
+window.toggleChoiceContext = function(requestId) {
+  const state = getChoiceState(requestId);
+  state.contextExpanded = !state.contextExpanded;
+  rerenderChoiceRequest(requestId);
+};
+
+window.rejectChoiceRequest = async function(requestId) {
+  _rejectedRequests.add(requestId);
+  const card = document.querySelector(`.user-choice-card[data-request-id="${requestId}"]`);
+  if (card) card.classList.add('is-rejecting');
+  // Force immediate re-render: isChoiceInputRejected now returns true,
+  // so hasChoiceRequest is false → overlay removed → normal input restored.
+  lastRenderedInputSignature = null;
+  renderInputRequests();
+  // Send interrupt in the background.
+  const targetRuntimeId = currentRuntimeAgentId;
+  if (targetRuntimeId) {
+    try {
+      await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/interrupt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (e) {
+      console.error('[Choice] interrupt request failed:', e);
+    }
+  }
+  delete choiceInputState[requestId];
+  poll();
 };
 
 window.collapseChoiceRequest = function(requestId) {
@@ -221,6 +288,22 @@ window.updateChoiceCustomText = function(requestId, value) {
 window.handleChoiceKey = function(event, requestId) {
   const req = getChoiceRequestById(requestId);
   if (!req) return;
+  // Smart boundary: only intercept arrow keys when cursor is at the edge of textarea content
+  const tag = event.target.tagName;
+  if (tag === 'TEXTAREA' || tag === 'INPUT') {
+    const el = event.target;
+    const val = el.value;
+    const pos = el.selectionStart;
+    if (event.key === 'ArrowUp') {
+      if (val.substring(0, pos).includes('\n')) return;
+    } else if (event.key === 'ArrowDown') {
+      if (val.substring(pos).includes('\n')) return;
+    } else if (event.key === 'ArrowLeft') {
+      if (pos > 0) return;
+    } else if (event.key === 'ArrowRight') {
+      if (pos < val.length) return;
+    }
+  }
   const state = getChoiceState(requestId);
   const question = req.questions[state.questionIndex] || {};
   const optionCount = getChoiceOptionCount(question);
@@ -247,8 +330,12 @@ window.handleChoiceKey = function(event, requestId) {
     state.selectedIndex = state.selectedIndexByQuestion[req.questions[state.questionIndex]?.id] ?? 0;
     rerenderChoiceRequest(requestId);
   } else if (event.key === 'Enter') {
+    if (event.target.tagName === 'TEXTAREA' && event.shiftKey) return;
     event.preventDefault();
     confirmChoiceQuestion(requestId);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    rejectChoiceRequest(requestId);
   }
 };
 

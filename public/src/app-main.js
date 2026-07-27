@@ -123,8 +123,8 @@ function getInputSurfaceMode(requests = readCurrentSessionViewState().inputReque
   if (readOnlyMode) return 'readonly';
 
   const hasRuntimeSelected = !!currentRuntimeAgentId;
-  const hasRequests = Array.isArray(requests) && requests.length > 0;
-  const hasChoiceRequest = hasRequests && requests.some(isChoiceInputRequest);
+  const hasRequests = Array.isArray(requests) && requests.some(req => !isChoiceInputRejected(req.requestId));
+  const hasChoiceRequest = hasRequests && requests.some(req => isChoiceInputRequest(req) && !isChoiceInputRejected(req.requestId));
   if (hasChoiceRequest) {
     return 'requests';
   }

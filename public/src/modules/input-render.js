@@ -38,7 +38,7 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   const chatActive = isChatSurfaceActive();
   const renderMode = getInputSurfaceMode(requests);
   const signature = getInputRenderSignature(requests, renderMode);
-  const hasChoiceRequest = Array.isArray(requests) && requests.some(isChoiceInputRequest);
+  const hasChoiceRequest = Array.isArray(requests) && requests.some(req => isChoiceInputRequest(req) && !isChoiceInputRejected(req.requestId));
 
   if (signature === lastRenderedInputSignature && renderMode === lastRenderedInputMode) {
     return;
