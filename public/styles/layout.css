@@ -5820,7 +5820,7 @@ body[data-theme="light"] .preset-tag-oauth {
   align-items: center;
   min-height: 10px;
   padding-left: 8px;
-  padding-right: 24px;
+  padding-right: 40px;
   cursor: pointer;
   pointer-events: auto;
   flex-shrink: 0;
@@ -5857,9 +5857,9 @@ body[data-theme="light"] .preset-tag-oauth {
 .chat-nav-card {
   position: absolute;
   left: 44px;
-  width: 320px;
+  width: 360px;
   max-width: calc(100vw - 80px);
-  padding: 12px 16px;
+  padding: 16px 20px;
   border-radius: 10px;
   background: var(--panel-bg, #252525);
   border: 1px solid var(--border-color, #444);
@@ -5868,7 +5868,7 @@ body[data-theme="light"] .preset-tag-oauth {
   transform: translateX(-8px);
   transition: opacity 0.18s ease, transform 0.18s ease;
   pointer-events: none;
-  z-index: 11;
+  z-index: 1001;
 }
 
 .chat-nav-card.show {
@@ -5879,21 +5879,23 @@ body[data-theme="light"] .preset-tag-oauth {
 .chat-nav-card-head {
   display: flex;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .chat-nav-card-num {
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 700;
-  color: var(--text-primary, #fff);
+  color: var(--text-secondary, #888);
 }
 
 .chat-nav-card-body {
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--text-secondary, #aaa);
+  font-size: 1rem;
+  line-height: 1.75;
+  color: var(--text-primary, #fff);
   word-break: break-word;
-  max-height: 120px;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
