@@ -290,14 +290,14 @@ window.switchSettingsTab = function(tab) {
 
 function renderSettingsEditForm(editIdx, presets, isZh) {
   const preset = presets[editIdx] || {};
-  const isNew = preset._isNew;
   let dropdownVal = preset.authType === 'oauth-codex' ? 'openai-oauth'
     : (preset.provider === 'openai' && (preset.apiSurface || 'chat') === 'responses' ? 'openai-responses'
     : (preset.provider || 'anthropic'));
   let isOAuthMode = dropdownVal === 'openai-oauth';
   return [
     '<div class="settings-section">',
-    '<div class="settings-section-title">' + (isNew ? (isZh ? '新建预设' : 'New Preset') : (isZh ? '编辑预设' : 'Edit Preset')) + '</div>',
+
+    // ── 连接配置 ──
     '<div class="settings-field">',
     '<label>' + (isZh ? '名称' : 'Name') + '</label>',
     '<input class="settings-input" id="settings-preset-name" type="text" value="' + escapeHtml(preset.name || '') + '" placeholder="' + (isZh ? '例如：智谱 GLM-5' : 'e.g. ZhiPu GLM-5') + '">',
@@ -351,42 +351,41 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     renderOAuthLoginArea(preset, isZh),
     '</div>',
     '</div>',
+
+    // ── 模型能力 ──
+    '<div class="settings-divider"></div>',
+    '<div class="settings-subsection-label">' + (isZh ? '模型能力' : 'Capabilities') + '</div>',
+    '<div class="settings-row">',
     '<div class="settings-field">',
     '<div class="settings-checkbox">',
     '<input type="checkbox" id="settings-preset-thinking-enabled" ' + (preset.thinkingEffort && preset.thinkingEffort !== 'none' && preset.thinkingEffort !== '' ? 'checked' : '') + ' onchange="onThinkingToggleChange()">',
     '<label for="settings-preset-thinking-enabled">' + (isZh ? '启用思考' : 'Enable Thinking') + '</label>',
     '</div>',
     '</div>',
-    '<div id="settings-thinking-config"' + (preset.thinkingEffort && preset.thinkingEffort !== 'none' && preset.thinkingEffort !== '' ? '' : ' style="display:none;"') + '>',
+    '<div class="settings-field">',
+    '<div class="settings-checkbox">',
+    '<input type="checkbox" id="settings-preset-vision" ' + (preset.vision ? 'checked' : '') + '>',
+    '<label for="settings-preset-vision">' + (isZh ? '启用视觉输入' : 'Enable Vision Input') + '</label>',
+    '</div>',
+    '</div>',
+    '</div>',
+    '<div id="settings-thinking-config"' + (preset.thinkingEffort && preset.thinkingEffort !== 'none' && preset.thinkingEffort !== '' ? '' : ' style="display:none;"') + ' class="settings-sub-config">',
     '<div class="settings-row">',
     '<div class="settings-field">',
-    '<label>' + (isZh ? '默认思考强度' : 'Default Thinking Effort') + '</label>',
+    '<label>' + (isZh ? '思考强度' : 'Thinking Effort') + '</label>',
     renderThinkingEffortSelect(preset, isZh),
     '</div>',
     '<div class="settings-field">',
     '<label>' + (isZh ? '思考预算 (tokens)' : 'Thinking Budget (tokens)') + '</label>',
-    '<input class="settings-input" id="settings-preset-thinking-budget" type="number" min="512" value="' + (preset.thinkingBudgetTokens || '') + '" placeholder="' + (isZh ? '如 16000' : 'e.g. 16000') + '" oninput="onThinkingBudgetInput()">',
+    '<input class="settings-input" id="settings-preset-thinking-budget" type="number" min="512" value="' + (preset.thinkingBudgetTokens || '') + '" placeholder="' + (isZh ? '留空自动分配' : 'Leave empty for auto') + '" oninput="onThinkingBudgetInput()">',
     '<div id="settings-thinking-budget-error" style="font-size:11px;color:#e57373;margin-top:2px;display:none;"></div>',
     '</div>',
     '</div>',
     '</div>',
-    '<div class="settings-field">',
-    '<label>Max Output Tokens</label>',
-    '<input class="settings-input" id="settings-preset-max-tokens" type="number" value="' + (preset.maxTokens ?? '') + '" placeholder="' + (isZh ? '留空自动计算' : 'Leave empty for auto') + '">',
-    '</div>',
-    '<div class="settings-row">',
-    '<div class="settings-field">',
-    '<label>Temperature</label>',
-    '<input class="settings-input" id="settings-preset-temperature" type="number" step="0.1" min="0" max="2" value="' + (preset.temperature ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '">',
-    '</div>',
-    '<div class="settings-field">',
-    '<label>' + (isZh ? '视觉模式' : 'Vision mode') + '</label>',
-    '<div class="settings-checkbox">',
-    '<input type="checkbox" id="settings-preset-vision" ' + (preset.vision ? 'checked' : '') + '>',
-    '<label for="settings-preset-vision">' + (isZh ? '启用多模态图片输入' : 'Enable multimodal image input') + '</label>',
-    '</div>',
-    '</div>',
-    '</div>',
+
+    // ── 生成参数 ──
+    '<div class="settings-divider"></div>',
+    '<div class="settings-subsection-label">' + (isZh ? '生成参数' : 'Generation') + '</div>',
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>' + (isZh ? '上下文长度' : 'Context Length') + '</label>',
@@ -395,13 +394,22 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-field">',
     '<label>' + (isZh ? '压缩阈值' : 'Compress Threshold') + '</label>',
     '<input class="settings-input" id="settings-preset-compress-ratio" type="number" min="1" max="100" value="' + (preset.compressRatio ?? 80) + '" placeholder="80">',
-    '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + (isZh ? '上下文占用达到此比例时触发压缩 (1-100%)' : 'Trigger compression at this context usage (1-100%)') + '</div>',
     '</div>',
+    '</div>',
+    '<div class="settings-row">',
+    '<div class="settings-field">',
+    '<label>Max Output Tokens</label>',
+    '<input class="settings-input" id="settings-preset-max-tokens" type="number" value="' + (preset.maxTokens ?? '') + '" placeholder="' + (isZh ? '留空自动计算' : 'Leave empty for auto') + '">',
     '</div>',
     '<div class="settings-field">',
-    '<label>' + (isZh ? 'Count Token 路径' : 'Count Token Path') + '</label>',
-    '<input class="settings-input" id="settings-preset-count-token-path" type="text" value="' + escapeHtml(preset.countTokenPath || '') + '" placeholder="/v1/messages/count_tokens">',
+    '<label>Temperature</label>',
+    '<input class="settings-input" id="settings-preset-temperature" type="number" step="0.1" min="0" max="2" value="' + (preset.temperature ?? '') + '" placeholder="' + (isZh ? '留空使用默认值' : 'Leave empty for default') + '">',
     '</div>',
+    '</div>',
+
+    // ── 高级 ──
+    '<div class="settings-divider"></div>',
+    '<div class="settings-subsection-label">' + (isZh ? '高级' : 'Advanced') + '</div>',
     /* Custom Headers Section */
     '<div class="settings-field">',
     '<label>' + (isZh ? '自定义请求头' : 'Custom Headers') + '</label>',
@@ -470,12 +478,12 @@ function addSettingsPreset() {
     model: '',
     baseUrl: '',
     apiKey: '',
-    thinkingEffort: null,
+    thinkingEffort: 'medium',
     thinkingBudgetTokens: null,
     maxTokens: null,
     temperature: null,
     vision: false,
-    contextLength: null,
+    contextLength: 200000,
     compressRatio: 80,
     customHeaders: [],
   });
@@ -543,18 +551,22 @@ async function saveSettingsPreset(idx) {
       thinkingEffort = el('settings-preset-thinking-effort')?.querySelectorAll('option[value]:not([value=""]):not([value="none"])')?.[0]?.value || null;
     }
     const budgetRaw = el('settings-preset-thinking-budget')?.value?.trim();
-    const budgetVal = parseInt(budgetRaw, 10);
-    if (isNaN(budgetVal) || budgetVal < 512) {
-      let errEl = document.getElementById('settings-thinking-budget-error');
-      let budgetInput = document.getElementById('settings-preset-thinking-budget');
-      if (errEl) {
-        errEl.textContent = isZh ? '思考预算至少为 512 tokens' : 'Thinking budget must be at least 512 tokens';
-        errEl.style.display = '';
+    if (budgetRaw !== '') {
+      const budgetVal = parseInt(budgetRaw, 10);
+      if (isNaN(budgetVal) || budgetVal < 512) {
+        let errEl = document.getElementById('settings-thinking-budget-error');
+        let budgetInput = document.getElementById('settings-preset-thinking-budget');
+        if (errEl) {
+          errEl.textContent = isZh ? '思考预算至少为 512 tokens' : 'Thinking budget must be at least 512 tokens';
+          errEl.style.display = '';
+        }
+        if (budgetInput) budgetInput.classList.add('invalid');
+        return;
       }
-      if (budgetInput) budgetInput.classList.add('invalid');
-      return;
+      thinkingBudgetTokens = budgetVal;
+    } else {
+      thinkingBudgetTokens = null;
     }
-    thinkingBudgetTokens = budgetVal;
   }
 
   const maxTokensRaw = el('settings-preset-max-tokens')?.value?.trim();

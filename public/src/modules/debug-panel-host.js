@@ -62,6 +62,7 @@ function renderFeaturePanel(options = {}) {
     featurePanelRenderVersion += 1;
     featurePanel.classList.remove('open');
     featurePanel.classList.remove('body-ready');
+    document.querySelector('.main-content')?.classList.remove('panel-open');
     featurePanelTitle.textContent = t('panel_structure');
     featurePanelBody.innerHTML = getFeaturePanelEmptyHtml();
     railButtons.forEach(button => button.classList.remove('active'));
@@ -82,6 +83,7 @@ function renderFeaturePanel(options = {}) {
   const renderVersion = featurePanelRenderVersion + 1;
   featurePanelRenderVersion = renderVersion;
   featurePanel.classList.add('open');
+  document.querySelector('.main-content')?.classList.add('panel-open');
   featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
   featurePanelTitle.textContent = typeof panel.title === 'function' ? panel.title() : panel.title;
   railButtons.forEach(button => {
