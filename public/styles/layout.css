@@ -5791,3 +5791,120 @@ body[data-theme="light"] .preset-tag-oauth {
   color: #e65100;
 }
 
+/* ── Chat Nav Timeline（用户消息导航时间线） ─────────────── */
+
+.chat-nav-timeline {
+  position: absolute;
+  left: 0;
+  width: 50px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  align-items: stretch;
+  gap: var(--nav-gap, 4px);
+  padding: 6px 0 140px 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  overflow: hidden;
+}
+
+.chat-nav-timeline.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* slot：大命中区域，处理鼠标事件，高度固定提供间距 */
+.chat-nav-slot {
+  display: flex;
+  align-items: center;
+  min-height: 10px;
+  padding-left: 8px;
+  padding-right: 24px;
+  cursor: pointer;
+  pointer-events: auto;
+  flex-shrink: 0;
+}
+
+/* bar：可视条，只做宽度变化，高度恒定 */
+.chat-nav-bar {
+  --nav-wave: 0;
+  width: calc(12px + var(--nav-wave) * 18px);
+  height: 3px;
+  border-radius: 3px;
+  background: var(--text-secondary, #555);
+  opacity: 0.35;
+  flex-shrink: 0;
+  transition:
+    width 50ms linear,
+    background 80ms ease,
+    opacity 80ms ease;
+}
+
+/* 只有 hover-focus 变色，hover-near 只变宽不变色 */
+.chat-nav-slot:hover .chat-nav-bar.hover-focus,
+.chat-nav-bar.hover-focus {
+  background: var(--text-primary, #fff);
+  opacity: 1;
+}
+
+.chat-nav-bar.active {
+  background: var(--text-primary, #fff);
+  opacity: 0.7;
+}
+
+/* 预览卡片 */
+.chat-nav-card {
+  position: absolute;
+  left: 44px;
+  width: 320px;
+  max-width: calc(100vw - 80px);
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--panel-bg, #252525);
+  border: 1px solid var(--border-color, #444);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  pointer-events: none;
+  z-index: 11;
+}
+
+.chat-nav-card.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.chat-nav-card-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.chat-nav-card-num {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary, #fff);
+}
+
+.chat-nav-card-body {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary, #aaa);
+  word-break: break-word;
+  max-height: 120px;
+  overflow: hidden;
+}
+
+/* 点击跳转时的闪烁高亮 */
+.message-row.nav-flash {
+  animation: nav-flash-pulse 0.7s ease;
+}
+
+@keyframes nav-flash-pulse {
+  0%   { background-color: transparent; }
+  20%  { background-color: rgba(255, 255, 255, 0.08); }
+  100% { background-color: transparent; }
+}
+

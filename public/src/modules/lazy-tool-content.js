@@ -20,8 +20,8 @@
 
 /* ── config ── */
 
-var WINDOW_ABOVE = 100;
-var WINDOW_BELOW = 50;
+var WINDOW_ABOVE = 150;
+var WINDOW_BELOW = 100;
 
 /* ── state ── */
 
@@ -32,14 +32,15 @@ var _lastWindowStart = -1;
 var _lastWindowEnd = -1;
 var _cachedRows = null;
 var _lastTopIdx = 0;
-
-/** Pixel bounds for fast-path skip */
 var _winPixTop = -1;
 var _winPixBottom = -1;
-
-/** Row cache: Map<row, {els, content}> — eliminates DOM queries during scroll */
+var _cachedClientHeight = 0;
 var _rowCache = null;
+var _rowIdxMap = null;
 var _collapseTimer = null;
+var _scrollStopTimer = null;
+var _lastScrollTop = 0;
+var _largeDeltaPending = false;
 
 /* ── cache ── */
 
@@ -62,6 +63,19 @@ function _buildRowCache(rows) {
 function _rowHasProcess(row) {
   if (row.classList.contains('tool') || row.classList.contains('system')) return true;
   return _rowCache && _rowCache.has(row);
+}
+
+function _rowIsCvHidden(row) {
+  if (row.classList.contains('tool') || row.classList.contains('system')) {
+    return row.classList.contains('process-cv-hidden');
+  }
+  var entry = _rowCache ? _rowCache.get(row) : null;
+  if (!entry) return false;
+  var els = entry.els;
+  for (var i = 0; i < els.length; i++) {
+    if (!els[i].classList.contains('process-cv-hidden')) return false;
+  }
+  return els.length > 0;
 }
 
 /* ── visibility (cv-hidden, NOT display:none) ── */
@@ -103,11 +117,11 @@ function _findViewportTopRowIdx(rows) {
     }
   }
 
-  for (var i = startIdx; i < rows.length; i++) {
-    var bottom = rows[i].offsetTop + rows[i].offsetHeight;
-    if (bottom > scrollTop) {
-      _lastTopIdx = i;
-      return i;
+  for (var j = startIdx; j < rows.length; j++) {
+    var bRowBottom = rows[j].offsetTop + rows[j].offsetHeight;
+    if (bRowBottom > scrollTop) {
+      _lastTopIdx = j;
+      return j;
     }
   }
 
@@ -139,12 +153,69 @@ function _scheduleCollapseCheck() {
 /* ── scroll handler ── */
 
 function _onScrollForWindowing() {
-  if (_scrollRafPending) return;
-  _scrollRafPending = true;
-  requestAnimationFrame(function() {
-    _scrollRafPending = false;
+  if (!showChatProcess || !container) return;
+
+  var currentScrollTop = container.scrollTop;
+  var delta = Math.abs(currentScrollTop - _lastScrollTop);
+  _lastScrollTop = currentScrollTop;
+
+  if (!_cachedClientHeight) _cachedClientHeight = container.clientHeight;
+
+  // If in large-delta deferral mode, ignore until scroll-stop
+  if (_largeDeltaPending) {
+    if (_scrollStopTimer) clearTimeout(_scrollStopTimer);
+    _scrollStopTimer = setTimeout(_onScrollStop, 150);
+    return;
+  }
+
+  // Large delta (scrollbar drag) — defer ALL work to scroll-stop.
+  // User sees cv-hidden placeholders scroll by (fast, zero layout work).
+  // When they release, one precise window update at the new position.
+  if (delta > _cachedClientHeight * 0.4) {
+    _largeDeltaPending = true;
+    if (_scrollStopTimer) clearTimeout(_scrollStopTimer);
+    _scrollStopTimer = setTimeout(_onScrollStop, 150);
+    return;
+  }
+
+  // Normal incremental scroll — update window via rAF
+  if (!_scrollRafPending) {
+    _scrollRafPending = true;
+    requestAnimationFrame(function() {
+      _scrollRafPending = false;
+      _applyWindow();
+    });
+  }
+
+  // Scroll-stop timer
+  if (_scrollStopTimer) clearTimeout(_scrollStopTimer);
+  _scrollStopTimer = setTimeout(_onScrollStop, 150);
+}
+
+function _onScrollStop() {
+  _scrollStopTimer = null;
+
+  if (_largeDeltaPending) {
+    // Scrollbar drag / large jump — one full precise window update
+    _largeDeltaPending = false;
+    _lastWindowStart = -1; // force fresh windowing
     _applyWindow();
-  });
+    // Synchronously collapse visible rows near viewport
+    if (_cachedRows && typeof syncRowCollapseState === 'function') {
+      var topIdx = _lastTopIdx;
+      var start = Math.max(0, topIdx - 5);
+      var end = Math.min(_cachedRows.length - 1, topIdx + 15);
+      runWithSuppressedChatViewportObservers(function() {
+        for (var i = start; i <= end; i++) {
+          syncRowCollapseState(_cachedRows[i]);
+        }
+      }, 500);
+    }
+    return;
+  }
+
+  // Normal scroll-stop — deferred collapse check
+  _scheduleCollapseCheck();
 }
 
 function _applyWindow() {
@@ -233,8 +304,9 @@ function _applyWindow() {
   // Update pixel bounds after CSS changes
   _updatePixBounds(rows, windowStart, windowEnd);
 
-  // Phase 2: debounced collapse
-  _scheduleCollapseCheck();
+  // NOTE: collapse is handled by _onScrollStop, NOT here.
+  // Putting it here causes a double-shift: reveal at full height →
+  // 200ms later collapse → position jump.
 }
 
 function _updatePixBounds(rows, windowStart, windowEnd) {
@@ -301,6 +373,10 @@ function clearProcessDistance(root) {
   _lastWindowEnd = -1;
   _winPixTop = -1;
   _winPixBottom = -1;
+  _cachedClientHeight = 0;
+  _lastScrollTop = 0;
+  _largeDeltaPending = false;
+  if (_scrollStopTimer) { clearTimeout(_scrollStopTimer); _scrollStopTimer = null; }
 
   if (_collapseTimer) {
     clearTimeout(_collapseTimer);

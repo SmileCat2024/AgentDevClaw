@@ -412,6 +412,26 @@ function syncRowCollapseState(row) {
     return;
   }
 
+  // Check if user has manually toggled this row — respect their choice
+  var msgId = el.id || '';
+  var msgIndex = parseInt(msgId.replace('msg-', ''), 10);
+  var userExpanded = !isNaN(msgIndex) && _userExpandedMsgs.has(msgIndex);
+  var userCollapsed = !isNaN(msgIndex) && _userCollapsedMsgs.has(msgIndex);
+
+  if (userExpanded) {
+    // User explicitly expanded — don't auto-collapse
+    el.classList.remove('collapsed');
+    if (btnBar) btnBar.remove();
+    return;
+  }
+
+  if (userCollapsed) {
+    // User explicitly collapsed — keep collapsed
+    el.classList.add('collapsed');
+    if (btnBar) btnBar.remove();
+    return;
+  }
+
   if (shouldCollapse) {
     el.classList.add('collapsed');
     const meta = row.querySelector('.message-meta .collapse-toggle svg');
