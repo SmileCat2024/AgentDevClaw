@@ -144,6 +144,25 @@
   contain-intrinsic-size: auto 150px;
 }
 
+/* Shimmer placeholder — compound selector to override element backgrounds */
+.message-row.tool.process-cv-hidden,
+.reasoning-block.process-cv-hidden,
+.tool-call-container.process-cv-hidden {
+  background: linear-gradient(
+    90deg,
+    rgba(128, 128, 128, 0.06) 15%,
+    rgba(128, 128, 128, 0.22) 50%,
+    rgba(128, 128, 128, 0.06) 85%
+  );
+  background-size: 250% 100%;
+  animation: cv-shimmer 1.2s linear infinite;
+}
+
+@keyframes cv-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -50% 0; }
+}
+
 /* Tool Styles */
 .tool-call-container {
   margin-top: 12px;

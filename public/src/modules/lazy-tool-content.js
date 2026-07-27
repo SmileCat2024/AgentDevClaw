@@ -61,12 +61,12 @@ function _buildRowCache(rows) {
 }
 
 function _rowHasProcess(row) {
-  if (row.classList.contains('tool') || row.classList.contains('system')) return true;
+  if (row.classList.contains('tool')) return true;
   return _rowCache && _rowCache.has(row);
 }
 
 function _rowIsCvHidden(row) {
-  if (row.classList.contains('tool') || row.classList.contains('system')) {
+  if (row.classList.contains('tool')) {
     return row.classList.contains('process-cv-hidden');
   }
   var entry = _rowCache ? _rowCache.get(row) : null;
@@ -81,7 +81,7 @@ function _rowIsCvHidden(row) {
 /* ── visibility (cv-hidden, NOT display:none) ── */
 
 function _setRowCvVisible(row, isNear) {
-  if (row.classList.contains('tool') || row.classList.contains('system')) {
+  if (row.classList.contains('tool')) {
     row.classList.toggle('process-cv-hidden', !isNear);
     return;
   }
