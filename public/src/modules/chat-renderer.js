@@ -259,6 +259,13 @@ function appendNewMessages(newMessages, startIndex) {
       container.insertAdjacentHTML('beforeend', html);
       const appendedRow = container.lastElementChild;
       if (appendedRow) {
+        // Pre-hide process elements in the new row before any layout
+        var pEls = appendedRow.matches('.message-row.tool, .message-row.system')
+          ? [appendedRow]
+          : Array.from(appendedRow.querySelectorAll('.reasoning-block, .tool-call-container'));
+        for (var pi = 0; pi < pEls.length; pi++) {
+          pEls[pi].classList.add('process-hidden');
+        }
         enhanceMathInElement(appendedRow);
       }
     });
@@ -384,6 +391,11 @@ function syncRowCollapseState(row) {
   // scrollHeight is unreliable for these rows
   if (row.querySelector('.process-hidden') && 
       (row.classList.contains('tool') || row.classList.contains('system'))) return;
+
+  // Skip cv-hidden rows — reading scrollHeight forces layout of the
+  // content-visibility:hidden subtree, triggering Chromium perf warnings
+  if (row.classList.contains('process-cv-hidden')) return;
+  if (row.querySelector('.process-cv-hidden')) return;
 
   const collapseThreshold = getCollapseThresholdForRow(row);
   const isCollapsible = el.scrollHeight > collapseThreshold;
@@ -650,6 +662,12 @@ function render(messages) {
   const savedScrollTop = container.scrollTop;
   runWithSuppressedChatViewportObservers(() => {
     container.innerHTML = html;
+    // Pre-hide ALL process elements before any layout read.
+    // Without this, the browser sees 134K visible nodes and freezes on layout.
+    // applyProcessDistance (called next) will reveal ~70 near-viewport rows.
+    if (typeof clearProcessDistance === 'function') {
+      clearProcessDistance(container);
+    }
     enhanceMathInElement(container);
   }, 220);
 

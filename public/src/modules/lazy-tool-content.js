@@ -1,106 +1,139 @@
 /**
- * lazy-tool-content.js — display:none distance windowing with scroll listener
+ * lazy-tool-content.js — "content-visibility:hidden 虚拟化"
  *
- * Far rows use display:none (process-hidden). Near rows are fully visible.
- * A scroll listener (rAF-throttled) manages the window based on row index.
+ * 根本原理：
+ *   display:none → 高度归零 → 滚动条失真 → 需要 scrollTop 补偿（补丁）
+ *   content-visibility:hidden → 高度保留（contain-intrinsic-size:auto）
+ *     → 滚动条始终准确 → 无需任何补偿
  *
- * Why not content-visibility:hidden:
- *   Chromium still renders content inside cv-hidden subtrees (confirmed by
- *   console warnings), so there's no performance benefit over display:none.
+ *   cv-hidden 的子树不参与 layout/paint（浏览器原生跳过），
+ *   但元素自身保留高度（首次 150px 估算，之后 auto 记住实际高度）。
  *
- * Viewport detection:
- *   Primary: scan for first visible row at scrollTop.
- *   Fallback: proportional estimate (scrollTop/scrollHeight × rowCount).
- *   The fallback handles the case where all rows at the viewport position
- *   are display:none (no visible row to find).
- *
- * Observer suppression:
- *   500ms quiet period after each windowing operation prevents the
- *   settlement system from fighting with our scroll management.
+ * 前提条件（已满足）：
+ *   show 模式下不调用 syncCollapseStates（读 scrollHeight 会强制
+ *   计算 cv-hidden 子树布局，触发 Chromium 性能警告）。
  *
  * 依赖全局变量: container, showChatProcess
  * 依赖全局函数: runWithSuppressedChatViewportObservers, syncRowCollapseState
  * 导出: applyProcessDistance, clearProcessDistance, precomputeViewportIdx
  */
 
-var WINDOW_ABOVE = 50;
-var WINDOW_BELOW = 20;
+/* ── config ── */
+
+var WINDOW_ABOVE = 100;
+var WINDOW_BELOW = 50;
+
+/* ── state ── */
 
 var _preToggleViewportIdx = -1;
 var _scrollRafPending = false;
 var _scrollListenerAttached = false;
 var _lastWindowStart = -1;
 var _lastWindowEnd = -1;
+var _cachedRows = null;
+var _lastTopIdx = 0;
 
-/* ── row visibility ── */
+/** Pixel bounds for fast-path skip */
+var _winPixTop = -1;
+var _winPixBottom = -1;
 
-function _setRowProcessVisible(row, isNear) {
-  if (row.classList.contains('tool') || row.classList.contains('system')) {
-    row.classList.toggle('process-hidden', !isNear);
-  } else if (row.classList.contains('assistant')) {
-    var children = row.querySelectorAll('.reasoning-block, .tool-call-container');
-    for (var i = 0; i < children.length; i++) {
-      children[i].classList.toggle('process-hidden', !isNear);
-    }
-    _updateAssistantEmptyState(row);
-  }
-}
+/** Row cache: Map<row, {els, content}> — eliminates DOM queries during scroll */
+var _rowCache = null;
+var _collapseTimer = null;
 
-function _updateAssistantEmptyState(row) {
-  var content = row.querySelector('.message-content');
-  if (!content) return;
-  var hasVisible = false;
-  var children = content.children;
-  for (var i = 0; i < children.length; i++) {
-    var child = children[i];
-    if (child.classList.contains('process-hidden')) continue;
-    if (child.classList.contains('markdown-body')) {
-      if ((child.textContent || '').trim().length > 0) { hasVisible = true; break; }
-    } else if (child.classList.contains('reasoning-block') ||
-               child.classList.contains('tool-call-container')) {
-      hasVisible = true; break;
+/* ── cache ── */
+
+function _buildRowCache(rows) {
+  _rowCache = new Map();
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (row.classList.contains('assistant')) {
+      var els = row.querySelectorAll('.reasoning-block, .tool-call-container');
+      if (els.length > 0) {
+        _rowCache.set(row, {
+          els: els,
+          content: row.querySelector('.message-content')
+        });
+      }
     }
   }
-  row.classList.toggle('process-hidden-empty', !hasVisible);
 }
 
-function _rowIsProcessHidden(row) {
-  if (row.classList.contains('tool') || row.classList.contains('system')) {
-    return row.classList.contains('process-hidden');
-  }
-  if (row.classList.contains('assistant')) {
-    return row.querySelector('.reasoning-block.process-hidden, .tool-call-container.process-hidden') !== null;
-  }
-  return false;
-}
-
-function _rowHasProcessContent(row) {
+function _rowHasProcess(row) {
   if (row.classList.contains('tool') || row.classList.contains('system')) return true;
-  if (row.classList.contains('assistant')) {
-    return row.querySelector('.reasoning-block, .tool-call-container') !== null;
+  return _rowCache && _rowCache.has(row);
+}
+
+/* ── visibility (cv-hidden, NOT display:none) ── */
+
+function _setRowCvVisible(row, isNear) {
+  if (row.classList.contains('tool') || row.classList.contains('system')) {
+    row.classList.toggle('process-cv-hidden', !isNear);
+    return;
   }
-  return false;
+  var entry = _rowCache ? _rowCache.get(row) : null;
+  if (!entry) return;
+  var els = entry.els;
+  for (var i = 0; i < els.length; i++) {
+    els[i].classList.toggle('process-cv-hidden', !isNear);
+  }
 }
 
 /* ── viewport detection ── */
 
 function _findViewportTopRowIdx(rows) {
   var scrollTop = container.scrollTop;
+  var startIdx = Math.max(0, Math.min(rows.length - 1, _lastTopIdx));
 
-  // Primary: scan for first visible row at scrollTop
-  for (var i = 0; i < rows.length; i++) {
-    var row = rows[i];
-    if (row.classList.contains('process-hidden') ||
-        row.classList.contains('process-hidden-empty')) continue;
-    var bottom = row.offsetTop + row.offsetHeight;
-    if (bottom > scrollTop) return i;
+  // With cv-hidden, ALL rows have non-zero height, so we never need
+  // the proportional fallback. offsetTop/offsetHeight are always valid.
+  var checkRow = rows[startIdx];
+  if (checkRow) {
+    var checkBottom = checkRow.offsetTop + checkRow.offsetHeight;
+    if (checkBottom > scrollTop) {
+      for (var i = startIdx; i >= 0; i--) {
+        var bottom = rows[i].offsetTop + rows[i].offsetHeight;
+        if (bottom <= scrollTop) {
+          _lastTopIdx = i + 1;
+          return i + 1;
+        }
+      }
+      _lastTopIdx = 0;
+      return 0;
+    }
   }
 
-  // Fallback: proportional estimate based on scroll ratio.
-  // When all rows at the viewport are display:none, this gives an
-  // approximate index. The window will be refined on subsequent scrolls.
-  var ratio = scrollTop / Math.max(1, container.scrollHeight);
-  return Math.floor(ratio * rows.length);
+  for (var i = startIdx; i < rows.length; i++) {
+    var bottom = rows[i].offsetTop + rows[i].offsetHeight;
+    if (bottom > scrollTop) {
+      _lastTopIdx = i;
+      return i;
+    }
+  }
+
+  return rows.length - 1;
+}
+
+/* ── debounced collapse ── */
+
+function _scheduleCollapseCheck() {
+  if (_collapseTimer) clearTimeout(_collapseTimer);
+  _collapseTimer = setTimeout(function() {
+    _collapseTimer = null;
+    if (!showChatProcess || !container) return;
+    var rows = _cachedRows;
+    if (!rows || rows.length === 0) return;
+    var topIdx = _findViewportTopRowIdx(rows);
+    var start = Math.max(0, topIdx - 5);
+    var end = Math.min(rows.length - 1, topIdx + 15);
+    runWithSuppressedChatViewportObservers(function() {
+      for (var i = start; i <= end; i++) {
+        if (typeof syncRowCollapseState === 'function') {
+          syncRowCollapseState(rows[i]);
+        }
+      }
+    }, 300);
+  }, 200);
 }
 
 /* ── scroll handler ── */
@@ -117,14 +150,26 @@ function _onScrollForWindowing() {
 function _applyWindow() {
   if (!showChatProcess || !container) return;
 
-  var rows = container.querySelectorAll('.message-row');
+  // Pixel fast-path: skip all work if scrollTop is safely within window
+  var scrollTop = container.scrollTop;
+  if (_winPixTop >= 0) {
+    var halfView = container.clientHeight * 0.6;
+    if (scrollTop >= _winPixTop + halfView && scrollTop <= _winPixBottom - halfView) {
+      return;
+    }
+  }
+
+  if (!_cachedRows || _cachedRows.length === 0 ||
+      _cachedRows[0] !== container.querySelector('.message-row')) {
+    _cachedRows = container.querySelectorAll('.message-row');
+  }
+  var rows = _cachedRows;
   if (rows.length === 0) return;
 
   var topIdx = _findViewportTopRowIdx(rows);
   var windowStart = Math.max(0, topIdx - WINDOW_ABOVE);
   var windowEnd = Math.min(rows.length - 1, topIdx + WINDOW_BELOW);
 
-  // Skip if window hasn't moved
   if (windowStart === _lastWindowStart && windowEnd === _lastWindowEnd) return;
 
   var toReveal = [];
@@ -132,52 +177,72 @@ function _applyWindow() {
   var i;
 
   if (_lastWindowStart < 0) {
-    // First time: process all rows
     for (i = 0; i < rows.length; i++) {
-      if (!_rowHasProcessContent(rows[i])) continue;
+      if (!_rowHasProcess(rows[i])) continue;
       if (i >= windowStart && i <= windowEnd) toReveal.push(rows[i]);
       else toHide.push(rows[i]);
     }
   } else {
-    // Delta: only process rows that entered or left the window
     var oldStart = _lastWindowStart;
     var oldEnd = _lastWindowEnd;
+    var delta = Math.abs(topIdx - _lastTopIdx);
 
-    // Rows that became far (were in old window, not in new)
-    for (i = oldStart; i < windowStart; i++) {
-      if (i >= 0 && i < rows.length && _rowHasProcessContent(rows[i])) toHide.push(rows[i]);
-    }
-    for (i = windowEnd + 1; i <= oldEnd; i++) {
-      if (i < rows.length && _rowHasProcessContent(rows[i])) toHide.push(rows[i]);
-    }
-
-    // Rows that became near (were outside old window, now inside)
-    for (i = windowStart; i < oldStart; i++) {
-      if (i >= 0 && _rowHasProcessContent(rows[i])) toReveal.push(rows[i]);
-    }
-    for (i = oldEnd + 1; i <= windowEnd; i++) {
-      if (i < rows.length && _rowHasProcessContent(rows[i])) toReveal.push(rows[i]);
+    if (delta > WINDOW_ABOVE + WINDOW_BELOW) {
+      for (i = oldStart; i <= oldEnd; i++) {
+        if (i >= 0 && i < rows.length && _rowHasProcess(rows[i])) toHide.push(rows[i]);
+      }
+      for (i = windowStart; i <= windowEnd; i++) {
+        if (i >= 0 && i < rows.length && _rowHasProcess(rows[i])) toReveal.push(rows[i]);
+      }
+    } else {
+      for (i = oldStart; i < windowStart; i++) {
+        if (i >= 0 && i < rows.length && _rowHasProcess(rows[i])) toHide.push(rows[i]);
+      }
+      for (i = windowEnd + 1; i <= oldEnd; i++) {
+        if (i < rows.length && _rowHasProcess(rows[i])) toHide.push(rows[i]);
+      }
+      for (i = windowStart; i < oldStart; i++) {
+        if (i >= 0 && i < rows.length && _rowHasProcess(rows[i])) toReveal.push(rows[i]);
+      }
+      for (i = oldEnd + 1; i <= windowEnd; i++) {
+        if (i < rows.length && _rowHasProcess(rows[i])) toReveal.push(rows[i]);
+      }
     }
   }
 
   _lastWindowStart = windowStart;
   _lastWindowEnd = windowEnd;
 
-  if (!toReveal.length && !toHide.length) return;
+  if (!toReveal.length && !toHide.length) {
+    _updatePixBounds(rows, windowStart, windowEnd);
+    return;
+  }
 
+  // Phase 1: CSS writes — toggle cv-hidden
+  // NO layout reads, NO scrollTop compensation needed.
+  // cv-hidden preserves element height, so the scrollbar stays accurate.
   runWithSuppressedChatViewportObservers(function() {
-    // Hide first (frees layout capacity)
     for (var j = 0; j < toHide.length; j++) {
-      _setRowProcessVisible(toHide[j], false);
+      _setRowCvVisible(toHide[j], false);
     }
-    // Reveal
     for (var k = 0; k < toReveal.length; k++) {
-      _setRowProcessVisible(toReveal[k], true);
-      if (typeof syncRowCollapseState === 'function') {
-        syncRowCollapseState(toReveal[k]);
-      }
+      _setRowCvVisible(toReveal[k], true);
     }
   }, 500);
+
+  // Update pixel bounds after CSS changes
+  _updatePixBounds(rows, windowStart, windowEnd);
+
+  // Phase 2: debounced collapse
+  _scheduleCollapseCheck();
+}
+
+function _updatePixBounds(rows, windowStart, windowEnd) {
+  if (rows.length === 0) return;
+  var fv = rows[Math.max(0, windowStart)];
+  var lv = rows[Math.min(rows.length - 1, windowEnd)];
+  if (fv) _winPixTop = fv.offsetTop;
+  if (lv) _winPixBottom = lv.offsetTop + lv.offsetHeight;
 }
 
 /* ── public API ── */
@@ -186,9 +251,13 @@ function applyProcessDistance(root) {
   root = root || container;
   if (!showChatProcess) return;
 
-  var rows = root.querySelectorAll('.message-row');
-  var viewportIdx;
+  _cachedRows = null;
+  _lastTopIdx = 0;
 
+  var rows = root.querySelectorAll('.message-row');
+  _buildRowCache(rows);
+
+  var viewportIdx;
   if (_preToggleViewportIdx >= 0) {
     viewportIdx = _preToggleViewportIdx;
     _preToggleViewportIdx = -1;
@@ -199,31 +268,53 @@ function applyProcessDistance(root) {
   var windowStart = viewportIdx - WINDOW_ABOVE;
   var windowEnd = viewportIdx + WINDOW_BELOW;
 
+  // Initial windowing: near rows visible, far rows cv-hidden
   for (var idx = 0; idx < rows.length; idx++) {
-    _setRowProcessVisible(rows[idx], idx >= windowStart && idx <= windowEnd);
+    // Remove any leftover process-hidden from hide mode
+    if (rows[idx].classList.contains('tool') || rows[idx].classList.contains('system')) {
+      rows[idx].classList.remove('process-hidden');
+    }
+    _setRowCvVisible(rows[idx], idx >= windowStart && idx <= windowEnd);
   }
+  // Also remove process-hidden from assistant row children
+  root.querySelectorAll('.reasoning-block.process-hidden, .tool-call-container.process-hidden')
+    .forEach(function(el) { el.classList.remove('process-hidden'); });
 
-  // Sync delta tracker so _applyWindow only processes actual changes on scroll
   _lastWindowStart = Math.max(0, windowStart);
   _lastWindowEnd = Math.min(rows.length - 1, windowEnd);
+  _updatePixBounds(rows, _lastWindowStart, _lastWindowEnd);
 
   if (!_scrollListenerAttached && container) {
     container.addEventListener('scroll', _onScrollForWindowing, { passive: true });
     _scrollListenerAttached = true;
   }
+
+  _scheduleCollapseCheck();
 }
 
 function clearProcessDistance(root) {
   root = root || container;
+  _cachedRows = null;
+  _rowCache = null;
+  _lastTopIdx = 0;
+  _lastWindowStart = -1;
+  _lastWindowEnd = -1;
+  _winPixTop = -1;
+  _winPixBottom = -1;
+
+  if (_collapseTimer) {
+    clearTimeout(_collapseTimer);
+    _collapseTimer = null;
+  }
+
+  // Switch from cv-hidden to display:none (hide mode)
   root.querySelectorAll(
     '.message-row.system, .reasoning-block, ' +
     '.message-row.assistant .tool-call-container, .message-row.tool'
   ).forEach(function(el) {
+    el.classList.remove('process-cv-hidden');
     el.classList.add('process-hidden');
   });
-
-  _lastWindowStart = -1;
-  _lastWindowEnd = -1;
 
   if (_scrollListenerAttached && container) {
     container.removeEventListener('scroll', _onScrollForWindowing);
@@ -236,6 +327,7 @@ function precomputeViewportIdx() {
   var rows = container.querySelectorAll('.message-row');
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
+    // In hide mode, skip display:none rows
     if (row.classList.contains('process-hidden') ||
         row.classList.contains('process-hidden-empty')) continue;
     var bottom = row.offsetTop + row.offsetHeight;

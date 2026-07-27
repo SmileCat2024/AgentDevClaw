@@ -6,6 +6,7 @@
   width: 100%;
   margin: 0 auto;
   gap: 6px;
+  contain: layout style;
 }
 
 .message-meta {
@@ -134,8 +135,14 @@
   display: none !important;
 }
 
-/* Process distance windowing handled by lazy-tool-content.js
-   (display:none toggling + scroll-based window management) */
+/* content-visibility:hidden — preserves element height while skipping
+   layout/paint of its subtree. Used for far-from-viewport process rows
+   in "show process" mode. contain-intrinsic-size:auto remembers the
+   last actual height after first render, making scrollbar accurate. */
+.process-cv-hidden {
+  content-visibility: hidden;
+  contain-intrinsic-size: auto 150px;
+}
 
 /* Tool Styles */
 .tool-call-container {

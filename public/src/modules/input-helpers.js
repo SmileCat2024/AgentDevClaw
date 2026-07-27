@@ -260,11 +260,13 @@ function applyConversationProcessState(root = container) {
   }
 
   syncAssistantProcessOnlyRows(root);
-  // Synchronous: with process-distance windowing, most rows are display:none
-  // and syncRowCollapseState early-returns for them (~70 rows of actual work).
-  // Deferring to rAF caused a visible flash: frame N shows all-expanded,
-  // frame N+1 collapses long rows → height change → flicker.
-  syncCollapseStates(root);
+  if (!showChatProcess) {
+    // Hide mode: safe to sync all (most rows are display:none, early-return)
+    syncCollapseStates(root);
+  }
+  // Show mode: skip syncCollapseStates entirely — it reads scrollHeight
+  // on all 1,427 rows causing layout thrashing (27s).
+  // Collapse is handled lazily by _applyWindow's Phase 2 for revealed rows.
   updateChatProcessToggle();
 };
 
