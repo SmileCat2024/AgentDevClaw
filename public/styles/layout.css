@@ -7,14 +7,20 @@
   border-right: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
-  transition: width 0.3s ease, transform 0.3s ease;
+  transition: border-right-color 0.15s ease;
   flex-shrink: 0;
   overflow: hidden;
 }
 
 .sidebar.collapsed {
   width: 0;
-  border-right: none;
+  border-right-color: transparent;
+}
+
+/* 固定子元素宽度，防止 snap 时内部文本回流 */
+.sidebar-header,
+.agent-list {
+  min-width: 312px;
 }
 
 .sidebar-header {
@@ -498,7 +504,7 @@ body[data-theme="light"] .agent-icon {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: border-color 0.16s ease;
+  transition: border-color 0.15s ease;
   position: relative;
   flex-shrink: 0;
 }
@@ -536,6 +542,7 @@ body[data-theme="light"] .agent-icon {
   justify-content: space-between;
   border-bottom: 1px solid rgba(255,255,255,0.05);
   flex-shrink: 0;
+  min-width: var(--feature-panel-width, 500px);
 }
 
 body[data-theme="light"] .feature-panel-header {
@@ -555,9 +562,10 @@ body[data-theme="light"] .feature-panel-header {
   margin-right: 6px;
   position: relative;
   opacity: 0;
-  transform: translateX(8px);
-  transition: opacity 0.16s ease, transform 0.16s ease;
+  transform: translateX(6px);
+  transition: opacity 0.1s ease, transform 0.1s ease;
   will-change: opacity, transform;
+  min-width: var(--feature-panel-width, 500px);
 }
 
 .feature-panel-body[data-panel="threads"] {
@@ -1579,6 +1587,35 @@ body[data-theme="light"] .settings-footer {
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.settings-divider {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 4px 0;
+}
+
+.settings-subsection-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.7;
+}
+
+body[data-theme="light"] .settings-divider {
+  background: rgba(0,0,0,0.08);
+}
+
+.settings-sub-config {
+  padding-left: 16px;
+  border-left: 2px solid rgba(255,255,255,0.1);
+  margin-left: 2px;
+}
+
+body[data-theme="light"] .settings-sub-config {
+  border-left-color: rgba(0,0,0,0.08);
 }
 
 .settings-field {
@@ -5551,7 +5588,7 @@ body[data-theme="light"] .project-docset-detail-empty {
 
 .follow-latest-btn {
   position: absolute;
-  right: 20px;
+  right: 32px;
   bottom: 132px;
   z-index: 20;
   display: inline-flex;
@@ -5568,7 +5605,7 @@ body[data-theme="light"] .project-docset-detail-empty {
   cursor: pointer;
   box-shadow: 0 8px 24px var(--shadow-color);
   backdrop-filter: blur(10px);
-  transition: all 0.2s ease;
+  transition: all 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .follow-latest-btn:hover {
@@ -5589,6 +5626,11 @@ body[data-theme="light"] .project-docset-detail-empty {
   transform: translateY(8px);
 }
 
+/* 面板打开时，按钮上移至输入框右上角方位，避免窄区域碰撞 */
+.main-content.panel-open .follow-latest-btn {
+  bottom: 168px;
+}
+
 .follow-latest-dot {
   width: 8px;
   height: 8px;
@@ -5604,9 +5646,12 @@ body[data-theme="light"] .project-docset-detail-empty {
 
 @media (max-width: 768px) {
   .follow-latest-btn {
-    right: 16px;
+    right: 24px;
     bottom: 116px;
     padding: 9px 12px;
+  }
+  .main-content.panel-open .follow-latest-btn {
+    bottom: 148px;
   }
 }
 
