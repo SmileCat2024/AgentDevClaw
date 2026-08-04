@@ -227,6 +227,7 @@ describe('runtime-status: normalizeNotificationRuntimeSnapshot', () => {
       toolCallCount: 0,
       activeToolNames: [],
       activeToolCount: 0,
+      streamToolNames: [],
       callStartedAt: 0,
       stageStartedAt: 0,
       retryAttempt: undefined,
@@ -264,8 +265,26 @@ describe('runtime-status: normalizeNotificationRuntimeSnapshot', () => {
 
   it('non-array activeToolNames → []', () => {
     const ctx = loadRuntimeStatus();
-    const result = ctx.run(`normalizeNotificationRuntimeSnapshot({ activeToolNames: 'not-array' })`);
+    const result = ctx.run('normalizeNotificationRuntimeSnapshot({ activeToolNames: "not-array" })');
     deepLoose(result.activeToolNames, []);
+  });
+
+  it('preserves streamToolNames array', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run('normalizeNotificationRuntimeSnapshot({ streamToolNames: ["read", "edit"] })');
+    deepLoose(result.streamToolNames, ['read', 'edit']);
+  });
+
+  it('filters falsy entries in streamToolNames', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run('normalizeNotificationRuntimeSnapshot({ streamToolNames: [null, "", "read", undefined, "grep"] })');
+    deepLoose(result.streamToolNames, ['read', 'grep']);
+  });
+
+  it('non-array streamToolNames → []', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run('normalizeNotificationRuntimeSnapshot({ streamToolNames: "not-array" })');
+    deepLoose(result.streamToolNames, []);
   });
 });
 
@@ -640,9 +659,29 @@ describe('runtime-status: getCompactRuntimeLabel', () => {
     assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "llm_content" }, true)'), '生成中');
   });
 
-  it('llm_tool_call_building → 准备工具', () => {
+  it('llm_tool_call_building (no streamToolNames) → 准备工具', () => {
     const ctx = loadRuntimeStatus();
     assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "llm_tool_call_building" }, true)'), '准备工具');
+  });
+
+  it('llm_tool_call_building with streamToolNames → 准备工具 · names', () => {
+    const ctx = loadRuntimeStatus();
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "llm_tool_call_building", streamToolNames: ["read", "edit"] }, true)'), '准备工具 · read, edit');
+  });
+
+  it('llm_tool_call_building with single streamToolNames → 准备工具 · name', () => {
+    const ctx = loadRuntimeStatus();
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "llm_tool_call_building", streamToolNames: ["bash"] }, true)'), '准备工具 · bash');
+  });
+
+  it('llm_tool_call_building with 3+ streamToolNames (zh) → 准备工具 · first two + count', () => {
+    const ctx = loadRuntimeStatus();
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "llm_tool_call_building", streamToolNames: ["read", "write", "grep"] }, true)'), '准备工具 · read, write +1个');
+  });
+
+  it('llm_tool_call_building with streamToolNames (en) → Preparing Tools · names', () => {
+    const ctx = loadRuntimeStatus({ currentLanguage: 'en' });
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "llm_tool_call_building", streamToolNames: ["read", "edit"] }, true)'), 'Preparing Tools · read, edit');
   });
 
   it('tool_executing with tools → 执行工具 · name', () => {
@@ -720,6 +759,20 @@ describe('runtime-status: getRuntimeSummary', () => {
     const ctx = loadRuntimeStatus();
     ctx.run('var rt = { stage: "idle", callActive: true, charCount: 100, updatedAt: Date.now() - 10000 }');
     assert.equal(ctx.run('getRuntimeSummary(rt, true)'), 'runtime_status_stale');
+  });
+
+  it('llm_tool_call_building with streamToolNames → includes tool names', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run('getRuntimeSummary({ stage: "llm_tool_call_building", streamToolNames: ["read", "edit"] }, true)');
+    assert.ok(result.includes('runtime_status_building_tools'));
+    assert.ok(result.includes('read'));
+    assert.ok(result.includes('edit'));
+  });
+
+  it('llm_tool_call_building without streamToolNames → just label', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run('getRuntimeSummary({ stage: "llm_tool_call_building" }, true)');
+    assert.equal(result, 'runtime_status_building_tools');
   });
 });
 

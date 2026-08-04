@@ -18,6 +18,10 @@ export default [
       // Temporarily excluded: group-chat.js is under active refactoring
       'server/routes/group-chat.js',
       'server/routes/group-chat/**',
+      // Untracked external projects in workspace root
+      'json-render/**',
+      'openui/**',
+      'tambo/**',
     ],
   },
 

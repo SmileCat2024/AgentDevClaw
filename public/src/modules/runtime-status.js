@@ -401,6 +401,7 @@ function normalizeNotificationRuntimeSnapshot(runtime) {
     toolCallCount: typeof runtime?.toolCallCount === 'number' ? runtime.toolCallCount : 0,
     activeToolNames: Array.isArray(runtime?.activeToolNames) ? runtime.activeToolNames.map((item) => String(item || '')).filter(Boolean) : [],
     activeToolCount: typeof runtime?.activeToolCount === 'number' ? runtime.activeToolCount : 0,
+    streamToolNames: Array.isArray(runtime?.streamToolNames) ? runtime.streamToolNames.map((item) => String(item || '')).filter(Boolean) : [],
     callStartedAt: typeof runtime?.callStartedAt === 'number' ? runtime.callStartedAt : 0,
     stageStartedAt: typeof runtime?.stageStartedAt === 'number' ? runtime.stageStartedAt : 0,
     retryAttempt: typeof runtime?.retryAttempt === 'number' ? runtime.retryAttempt : undefined,
@@ -453,6 +454,10 @@ function getCompactRuntimeLabel(runtime, isConnected = true) {
       : (currentLanguage === 'zh' ? '生成中' : 'Generating');
   }
   if (runtime.stage === 'llm_tool_call_building') {
+    const toolSummary = summarizeRuntimeToolNames(runtime.streamToolNames || []);
+    if (toolSummary) {
+      return `${currentLanguage === 'zh' ? '准备工具' : 'Preparing Tools'} · ${toolSummary}`;
+    }
     return currentLanguage === 'zh' ? '准备工具' : 'Preparing Tools';
   }
   if (runtime.stage === 'tool_executing') {
@@ -606,6 +611,9 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
     if (phase === 'content' && typeof stateData.charCount === 'number') {
       runtime.contentChars = stateData.charCount;
     }
+    if (Array.isArray(stateData.streamToolNames)) {
+      runtime.streamToolNames = stateData.streamToolNames.map((n) => String(n || '')).filter(Boolean);
+    }
   }
 
   const derivedStage = getDerivedStageFromState(stateType, stateData, runtime.stage);
@@ -707,7 +715,10 @@ function getRuntimeSummary(runtime, isConnected = true) {
     return t('runtime_status_streaming_active');
   }
   if (runtime.stage === 'llm_tool_call_building') {
-    return t('runtime_status_building_tools');
+    const toolSummary = summarizeRuntimeToolNames(runtime.streamToolNames || []);
+    return toolSummary
+      ? `${t('runtime_status_building_tools')} · ${toolSummary}`
+      : t('runtime_status_building_tools');
   }
   if (runtime.stage === 'tool_executing') {
     const toolSummary = summarizeRuntimeToolNames(runtime.activeToolNames);
@@ -899,7 +910,6 @@ function updateNotificationStatus(notifData) {
     statusEl.style.display = 'flex';
     statusEl.className = `notification-status active ${getRuntimeStageClass(runtime)}${currentRuntimeConnected ? '' : ' is-disconnected'}`;
     phaseEl.textContent = getCompactRuntimeLabel(runtime, currentRuntimeConnected);
-    summaryEl.textContent = '';
     _lastRenderedNotificationRuntime = { ...runtime };
     metricsEl.innerHTML = renderRuntimeTimer(runtime, currentRuntimeConnected);
     _syncPersistentActionButton();
