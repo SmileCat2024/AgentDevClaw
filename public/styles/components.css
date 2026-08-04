@@ -1,4 +1,45 @@
 /* Message Styles */
+.runtime-indicator-row {
+  max-width: 800px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.runtime-indicator-main {
+  padding: 8px 16px;
+  font-size: 15px;
+  line-height: 1.5;
+  background: linear-gradient(
+    90deg,
+    var(--text-secondary, #888) 0%,
+    var(--text-secondary, #888) 42%,
+    var(--text-primary, #ededed) 50%,
+    var(--text-secondary, #888) 58%,
+    var(--text-secondary, #888) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: runtime-shimmer 4s linear infinite;
+}
+@keyframes runtime-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+.runtime-indicator-detail {
+  padding: 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono-font, 'Cascadia Code', 'Fira Code', monospace);
+}
+
 .message-row {
   display: flex;
   flex-direction: column;

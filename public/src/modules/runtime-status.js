@@ -780,6 +780,8 @@ function ensureNotificationClockTimer() {
   if (_notificationClockTimer) return;
   _notificationClockTimer = window.setInterval(() => {
     refreshNotificationTimerDisplay();
+    // 同步对话区域临时状态块（处理 early-return 路径和耗时刷新）
+    if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
   }, 200);
 }
 
@@ -1020,6 +1022,221 @@ function updateNotificationStatus(notifData) {
   if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
     lastRenderedInputSignature = '';
     renderInputRequests(currentInputRequests || []);
+  }
+
+  // 同步对话区域临时状态块
+  ensureChatRuntimeIndicator();
+}
+
+// ─── 对话区域临时运行状态块 ───
+
+/**
+ * 从 tool call arguments 中提取人类可读的摘要。
+ * 不同工具展示不同关键参数。
+ */
+function summarizeToolCall(call) {
+  if (!call || !call.name) return '';
+  const name = String(call.name);
+  const args = (call.arguments && typeof call.arguments === 'object') ? call.arguments : {};
+
+  // 提取第一行 / 截断长文本
+  function truncate(str, max) {
+    const s = String(str || '').trim();
+    if (s.length <= max) return s;
+    return s.slice(0, max) + '…';
+  }
+
+  switch (name) {
+    case 'bash':
+    case 'powershell':
+      return truncate(args.command, 80);
+    case 'read':
+      return truncate(args.filePath, 100);
+    case 'edit':
+      return truncate(args.filePath, 100);
+    case 'write':
+      return truncate(args.filePath, 100);
+    case 'grep':
+      return args.pattern ? `"${truncate(args.pattern, 40)}"` + (args.searchPath ? ` in ${truncate(args.searchPath, 50)}` : '') : '';
+    case 'glob':
+      return truncate(args.pattern, 80);
+    case 'ls':
+      return truncate(args.dirPath, 100);
+    case 'web_fetch':
+    case 'mcp_playwright_browser_navigate':
+      return truncate(args.url, 100);
+    case 'task_create':
+    case 'task_update':
+      return truncate(args.subject, 80);
+    case 'mcp_playwright_browser_click':
+    case 'mcp_playwright_browser_type':
+      return truncate(args.element || args.text, 60);
+    case 'mcp_playwright_browser_snapshot':
+    case 'mcp_playwright_browser_take_screenshot':
+      return '';
+    default: {
+      // 通用回退：尝试常见参数名
+      const keys = ['filePath', 'path', 'command', 'query', 'url', 'pattern', 'name', 'subject', 'message'];
+      for (const k of keys) {
+        if (args[k]) return truncate(args[k], 80);
+      }
+      return '';
+    }
+  }
+}
+
+/**
+ * 构建临时状态块的结构化内容。
+ * 返回 { main: string, details: string[] } 或 null。
+ */
+function buildRuntimeIndicatorContent(runtime) {
+  const isZh = currentLanguage === 'zh';
+  const stage = runtime.stage;
+  let mainText = '';
+  const details = [];
+
+  // 主行：阶段标签 + 字符数
+  if (stage === 'llm_thinking') {
+    const chars = runtime.thinkingChars || runtime.charCount;
+    mainText = isZh
+      ? `模型正在思考${chars > 0 ? ' · ' + formatRuntimeCompactNumber(chars) + ' 字' : '…'}`
+      : `Thinking${chars > 0 ? ' · ' + formatRuntimeCompactNumber(chars) + ' chars' : '…'}`;
+  } else if (stage === 'llm_content') {
+    const chars = runtime.contentChars || runtime.charCount;
+    mainText = isZh
+      ? `正在生成回复${chars > 0 ? ' · ' + formatRuntimeCompactNumber(chars) + ' 字' : '…'}`
+      : `Generating${chars > 0 ? ' · ' + formatRuntimeCompactNumber(chars) + ' chars' : '…'}`;
+  } else if (stage === 'llm_tool_call_building') {
+    const toolNames = runtime.streamToolNames || [];
+    if (toolNames.length > 0) {
+      mainText = isZh ? `正在准备工具调用 · ${toolNames.join(', ')}` : `Preparing tools · ${toolNames.join(', ')}`;
+    } else {
+      mainText = isZh ? '正在准备工具调用…' : 'Preparing tools…';
+    }
+  } else if (stage === 'tool_executing') {
+    const pending = getPendingToolCallsFromMessages();
+    if (pending.length > 0) {
+      mainText = isZh ? `正在执行 ${pending.length} 个工具` : `Running ${pending.length} tool${pending.length > 1 ? 's' : ''}`;
+      pending.forEach(function(call) {
+        const summary = summarizeToolCall(call);
+        const display = getToolDisplayName(call.name) || call.name;
+        details.push(summary ? `${display}: ${summary}` : display);
+      });
+    } else {
+      const toolNames = runtime.activeToolNames || [];
+      if (toolNames.length > 0) {
+        mainText = isZh ? `正在执行工具 · ${toolNames.join(', ')}` : `Running tools · ${toolNames.join(', ')}`;
+      } else {
+        mainText = isZh ? '正在执行工具…' : 'Running tools…';
+      }
+    }
+  } else if (stage === 'awaiting_runtime') {
+    const pending = getPendingToolCallsFromMessages();
+    if (pending.length > 0) {
+      mainText = isZh ? `等待 ${pending.length} 个工具返回` : `Waiting for ${pending.length} tool${pending.length > 1 ? 's' : ''}`;
+    } else {
+      mainText = isZh ? '等待响应…' : 'Waiting…';
+    }
+  } else if (stage === 'retry_waiting') {
+    mainText = isZh ? '等待重试…' : 'Waiting to retry…';
+  } else if (stage === 'retry_requesting') {
+    mainText = isZh ? '正在重新请求…' : 'Retrying…';
+  } else if (stage === 'failed') {
+    mainText = isZh ? '请求失败' : 'Failed';
+  } else {
+    if (runtime.callActive) {
+      mainText = isZh ? '处理中…' : 'Working…';
+    }
+  }
+
+  if (!mainText) return null;
+
+  // 耗时（inline 追加到主行末尾）
+  const elapsed = runtime.callStartedAt > 0
+    ? formatRuntimeDuration(Date.now() - runtime.callStartedAt)
+    : '';
+  if (elapsed) mainText += ' · ' + elapsed;
+
+  return { main: mainText, details: details };
+}
+
+/**
+ * 创建 / 更新 / 移除对话区域临时状态块。
+ * 在隐藏过程模式下，Agent 活跃时显示，完成后消失。
+ * 使用 DOM diff 更新文本，避免重建元素导致 CSS 动画重置。
+ */
+function ensureChatRuntimeIndicator() {
+  const chatContainer = document.getElementById('chat-container');
+  if (!chatContainer) return;
+
+  const INDICATOR_ID = 'runtime-indicator-row';
+  let existing = chatContainer.querySelector('#' + INDICATOR_ID);
+
+  // 判断是否应该显示
+  const shouldShow = typeof showChatProcess !== 'undefined' && !showChatProcess
+    && _lastRenderedNotificationRuntime
+    && _lastRenderedNotificationRuntime.callActive
+    && _lastRenderedNotificationRuntime.stage !== 'idle'
+    && _lastRenderedNotificationRuntime.stage !== 'completed'
+    && _lastRenderedNotificationRuntime.stage !== 'failed';
+
+  if (!shouldShow) {
+    if (existing) existing.remove();
+    return;
+  }
+
+  // 构建内容
+  const content = buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime);
+  if (!content) {
+    if (existing) existing.remove();
+    return;
+  }
+
+  if (!existing) {
+    existing = document.createElement('div');
+    existing.id = INDICATOR_ID;
+    existing.className = 'runtime-indicator-row';
+    runWithSuppressedChatViewportObservers(function() {
+      chatContainer.appendChild(existing);
+    });
+  }
+
+  // 更新主行（textContent 而非 innerHTML，保持 CSS 动画连续）
+  let mainEl = existing.querySelector('.runtime-indicator-main');
+  if (!mainEl) {
+    mainEl = document.createElement('div');
+    mainEl.className = 'runtime-indicator-main';
+    existing.appendChild(mainEl);
+  }
+  if (mainEl.textContent !== content.main) {
+    mainEl.textContent = content.main;
+  }
+
+  // 更新详情行：增删改，不重建已有元素
+  let detailEls = existing.querySelectorAll('.runtime-indicator-detail');
+  // 移除多余的
+  for (let i = detailEls.length - 1; i >= content.details.length; i--) {
+    detailEls[i].remove();
+  }
+  // 更新或新增
+  for (let i = 0; i < content.details.length; i++) {
+    detailEls = existing.querySelectorAll('.runtime-indicator-detail');
+    let el = detailEls[i];
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'runtime-indicator-detail';
+      existing.appendChild(el);
+    }
+    if (el.textContent !== content.details[i]) {
+      el.textContent = content.details[i];
+    }
+  }
+
+  // 确保始终在容器最末尾
+  if (chatContainer.lastElementChild !== existing) {
+    runWithSuppressedChatViewportObservers(function() {
+      chatContainer.appendChild(existing);
+    });
   }
 }
 

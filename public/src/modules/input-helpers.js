@@ -268,6 +268,7 @@ function applyConversationProcessState(root = container) {
   // on all 1,427 rows causing layout thrashing (27s).
   // Collapse is handled lazily by _applyWindow's Phase 2 for revealed rows.
   updateChatProcessToggle();
+  if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
 };
 
 window.toggleChatProcessVisibility = function() {

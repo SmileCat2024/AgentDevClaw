@@ -277,6 +277,7 @@ function appendNewMessages(newMessages, startIndex) {
   applyConversationProcessState(container);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
+  if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
   notifyChatViewportMutation({
     reason: 'append',
     shouldFollow: shouldFollowAfterMutation,
@@ -359,6 +360,7 @@ function updateLastMessage(msg) {
   applyConversationProcessState(container);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
+  if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
   notifyChatViewportMutation({
     reason: 'patch-last',
     shouldFollow: shouldFollowAfterMutation,
@@ -695,6 +697,7 @@ function render(messages) {
   applyConversationProcessState(container);
   restoreUserCollapseState(container);
   updateFollowLatestButton();
+  if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
   notifyChatViewportMutation({
     reason: 'render-full',
     shouldFollow: shouldFollowAfterMutation,
