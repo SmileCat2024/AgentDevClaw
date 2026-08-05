@@ -76,6 +76,7 @@ export function setupSessionRoutes(app, express, ctx) {
     waitForManagedRuntimeReady,
     notifySessionLineage,
     notifySessionArchived,
+    clearUISurfaces,
   } = ctx;
 
 function normalizeContextGuardState(value) {
@@ -1457,6 +1458,9 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
     const deleted = await deletePrebuiltSession(agent.id, req.body.sessionId, {
       includeSessions: req.body.responseMode !== 'delta',
     });
+    if (deletedRuntime?.viewerAgentId && clearUISurfaces) {
+      clearUISurfaces(deletedRuntime.viewerAgentId);
+    }
     trace.mark('index_committed', { revision: deleted.revision });
     let connected = null;
 

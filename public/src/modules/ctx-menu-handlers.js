@@ -600,7 +600,8 @@ window.addEventListener('resize', () => {
   closeCompactMenu();
   closeProjectContextMenu();
   closeFeatureRepoContextMenu();
-  featurePanelWidth = Math.max(400, Math.min(750, featurePanelWidth));
+  const _minPw = window.innerWidth <= 1100 ? 300 : 400;
+  featurePanelWidth = Math.max(_minPw, Math.min(750, featurePanelWidth));
   if (featurePanel.classList.contains('open')) {
     featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
   }

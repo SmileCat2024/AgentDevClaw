@@ -142,7 +142,7 @@ export function declareContinuity<T extends AnyFeatureConstructor>(
 
       // 仅在曾恢复过状态时，用 buffer 覆盖 onInitiate 的清空副作用
       if (wasRestored && beforeBuffer && typeof beforeBuffer === 'object') {
-        super.restoreState(beforeBuffer as FeatureStateSnapshot);
+        await super.restoreState(beforeBuffer as FeatureStateSnapshot);
       }
     }
 
@@ -155,16 +155,16 @@ export function declareContinuity<T extends AnyFeatureConstructor>(
       return { [CONTINUITY_FIELD_KEY]: normalizedDescriptor } as FeatureStateSnapshot;
     }
 
-    restoreState(snapshot: FeatureStateSnapshot): void {
+    async restoreState(snapshot: FeatureStateSnapshot): Promise<void> {
       // 标记状态已恢复，供 onInitiate override 判断是否需要保护
       this._continuityStateRestored = true;
       if (snapshot && typeof snapshot === 'object' && CONTINUITY_FIELD_KEY in (snapshot as Record<string, unknown>)) {
         const stripped = stripContinuityField(snapshot);
         // 剥离后若为空对象，传空对象给基类（让基类按"空 state"语义处理，而非 undefined）
-        super.restoreState(stripped);
+        await super.restoreState(stripped as FeatureStateSnapshot);
         return;
       }
-      super.restoreState(snapshot);
+      await super.restoreState(snapshot);
     }
   };
 }

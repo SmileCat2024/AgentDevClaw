@@ -54,4 +54,18 @@ describe('voice input render lifecycle', () => {
     ctx.run('_voiceStopping = false; _voiceTranscribing = true;');
     assert.equal(ctx.run('_shouldPreserveVoiceInputForRender("persistent", "session-a")'), true);
   });
+
+  it('restores a cross-session voice draft when delivery is rejected', () => {
+    const toasts = [];
+    const ctx = createFrontendSandbox();
+    ctx.window.ClawToast = { show: (value) => toasts.push(value) };
+    const source = fs.readFileSync('public/src/modules/voice-input.js', 'utf8');
+    ctx.run('let _sessionInputCache = {};');
+    ctx.run(sourceBetween(source, 'function _restoreCrossSessionVoiceInput', 'function stopVoiceRecording'));
+    ctx.run(`_restoreCrossSessionVoiceInput('session-a', 'typed and spoken', 'agent-a', 'runtime unavailable')`);
+
+    assert.equal(ctx.run(`_sessionInputCache['session-a']`), 'typed and spoken');
+    assert.equal(toasts.length, 1);
+    assert.equal(toasts[0].status, 'error');
+  });
 });

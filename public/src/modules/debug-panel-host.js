@@ -79,6 +79,7 @@ function renderFeaturePanel(options = {}) {
   if (panelId !== 'hooks' && typeof renderFeatureDetailOverlay === 'function') {
     renderFeatureDetailOverlay(null);
   }
+  const prevPanelId = featurePanelBody.dataset.panel;
   featurePanelBody.dataset.panel = panelId;
   const renderVersion = featurePanelRenderVersion + 1;
   featurePanelRenderVersion = renderVersion;
@@ -92,6 +93,15 @@ function renderFeaturePanel(options = {}) {
 
   const commitPanelBody = () => {
     if (renderVersion !== featurePanelRenderVersion || activeFeaturePanel !== panelId) {
+      return;
+    }
+
+    // 面板声明 preserveOnReRender 时，如果当前 body 已经属于该面板且有内容，
+    // 跳过 innerHTML 替换以保留交互状态（事件监听器、输入焦点等）。
+    // 注意：必须用 prevPanelId 判断，因为 dataset.panel 已经被设为新值。
+    // 切换面板时 prevPanelId !== panelId，不会跳过首次渲染。
+    if (panel.preserveOnReRender && prevPanelId === panelId && featurePanelBody.children.length > 0) {
+      featurePanel.classList.add('body-ready');
       return;
     }
 
@@ -136,8 +146,26 @@ function renderFeaturePanel(options = {}) {
 function toggleFeaturePanel(panelId) {
   const wasOpen = activeFeaturePanel === panelId;
   const shouldDeferBody = !activeFeaturePanel && !wasOpen;
+  const previousPanel = activeFeaturePanel;
+
+  // Lifecycle: close previous panel
+  if (previousPanel && previousPanel !== panelId && window.GenUIPanel && previousPanel === 'genui') {
+    window.GenUIPanel.onClose();
+  }
+
   activeFeaturePanel = wasOpen ? null : panelId;
   renderFeaturePanel({ deferBody: shouldDeferBody });
+
+  // Lifecycle: open new panel
+  if (!wasOpen && panelId === 'genui' && window.GenUIPanel) {
+    window.GenUIPanel.onOpen();
+  }
+
+  // Lifecycle: close when toggling off
+  if (wasOpen && panelId === 'genui' && window.GenUIPanel) {
+    window.GenUIPanel.onClose();
+  }
+
   // 初始化钩子：settings 面板首次打开时加载异步数据
   if (!wasOpen && panelId === 'settings' && window._wgSettingsInit) {
     window._wgSettingsInit();

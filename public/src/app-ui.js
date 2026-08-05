@@ -1232,10 +1232,6 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
       btn.style.display = inChat ? '' : 'none';
     }
   });
-  // 离开 AI 对话时关闭调试类面板
-  if (!inChat && activeFeaturePanel && activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'threads') {
-    activeFeaturePanel = null;
-  }
   // 离开 group chat workspace 时清理状态
   if (!isWorkGroup) {
     if (activeFeaturePanel === 'resources' || activeFeaturePanel === 'viewer' || activeFeaturePanel === 'settings' || activeFeaturePanel === 'threads') activeFeaturePanel = null;
@@ -1483,6 +1479,11 @@ const featurePanels = {
     title: () => t('panel_mcp'),
     render: () => renderMcpPanel(),
   },
+  genui: {
+    title: () => '交互页面',
+    render: () => window.GenUIPanel ? window.GenUIPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+    preserveOnReRender: true,
+  },
   settings: {
     title: () => '群聊设置',
     render: () => window._wgGetSettingsHtml ? window._wgGetSettingsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
@@ -1493,10 +1494,83 @@ const featurePanels = {
   },
 };
 
-// Sidebar Toggle
+// Sidebar Toggle + narrow-width drawer backdrop
+let _sidebarBackdrop = null;
+function _ensureSidebarBackdrop() {
+  if (_sidebarBackdrop) return _sidebarBackdrop;
+  _sidebarBackdrop = document.createElement('div');
+  _sidebarBackdrop.className = 'sidebar-backdrop';
+  _sidebarBackdrop.addEventListener('click', () => {
+    sidebar.classList.add('collapsed');
+    _updateSidebarBackdrop();
+  });
+  document.body.insertBefore(_sidebarBackdrop, document.querySelector('.main-content'));
+  return _sidebarBackdrop;
+}
+function _isNarrowScreen() { return window.innerWidth <= 860; }
+function _updateSidebarBackdrop() {
+  if (!_sidebarBackdrop) return;
+  const show = _isNarrowScreen() && !sidebar.classList.contains('collapsed');
+  _sidebarBackdrop.classList.toggle('visible', show);
+}
 sidebarToggle.addEventListener('click', () => {
   sidebar.classList.toggle('collapsed');
+  if (_isNarrowScreen()) {
+    _ensureSidebarBackdrop();
+    _updateSidebarBackdrop();
+  }
 });
+window.addEventListener('resize', () => {
+  if (!_isNarrowScreen()) {
+    // Wide screen: hide backdrop, ensure sidebar visible
+    if (_sidebarBackdrop) _sidebarBackdrop.classList.remove('visible');
+  } else {
+    _updateSidebarBackdrop();
+  }
+});
+
+// Sidebar Resize
+(function initSidebarResizer() {
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 480;
+  const STORAGE_KEY = 'agentdev-sidebar-width';
+
+  // Restore saved width
+  try {
+    const saved = parseInt(localStorage.getItem(STORAGE_KEY));
+    if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) {
+      document.documentElement.style.setProperty('--sidebar-width', saved + 'px');
+    }
+  } catch (_) { /* ignore */ }
+
+  sidebarResizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    sidebarResizer.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    const handleMouseMove = (ev) => {
+      const w = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, ev.clientX));
+      document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+    };
+
+    const handleMouseUp = () => {
+      sidebarResizer.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      const val = getComputedStyle(document.documentElement)
+        .getPropertyValue('--sidebar-width').trim();
+      if (val) {
+        try { localStorage.setItem(STORAGE_KEY, val); } catch (_) { /* ignore */ }
+      }
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  });
+})();
 
 // [Phase 2d-1] Markdown / 数学公式渲染 → modules/markdown-utils.js
 

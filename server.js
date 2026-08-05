@@ -86,6 +86,7 @@ import { setupSessionRoutes } from './server/routes/session.js';
 import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnostics.js';
 import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
+import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
   setupFeatureRepositoryRoutes,
@@ -325,6 +326,7 @@ setupSessionRoutes(app, express, {
   // Group chat lineage callback
   notifySessionLineage,
   notifySessionArchived,
+  clearUISurfaces: (viewerAgentId) => getUISurfaceStore().clearAgent(viewerAgentId),
 });
 
 // ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
@@ -416,6 +418,7 @@ setupProxyConfigRoutes(app, express);
 setupFeatureRepositoryRoutes(app, express);
 setupFlowRoutes(app, express, { readWorkspaceState, resolveAssemblyFeatureArchives });
 setupUsageRoutes(app, express);
+setupUISurfaceRoutes(app, express);
 
 
 
@@ -778,6 +781,10 @@ app.put('/api/agents/current', (req, res, next) => {
 });
 
 app.post('/api/agents/:agentId/input', (req, res, next) => {
+  proxyToViewer(req, res).catch(next);
+});
+
+app.post('/api/agents/:agentId/user-turn', (req, res, next) => {
   proxyToViewer(req, res).catch(next);
 });
 

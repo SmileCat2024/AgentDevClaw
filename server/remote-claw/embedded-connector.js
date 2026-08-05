@@ -9,6 +9,7 @@ import {
 import {
   getPrebuiltSessionFilePath,
 } from '../shared/session-access.js';
+import { submitUserTurn } from '../shared/user-turn.js';
 
 const DEFAULT_HEARTBEAT_MS = 15_000;
 const DEFAULT_SNAPSHOT_MS = 5_000;
@@ -338,20 +339,17 @@ class EmbeddedRemoteClawConnector {
       throw retryableError('viewerAgentId missing after activation', true, 'viewer_agent_id_missing');
     }
     const payload = command.payload || {};
-    const response = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/queue-input`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text: payload.text || ' ',
-        images: Array.isArray(payload.images) ? payload.images : undefined,
-      }),
+    const delivery = await submitUserTurn({
+      agentId: viewerAgentId,
+      text: payload.text || ' ',
+      images: Array.isArray(payload.images) ? payload.images : undefined,
+      source: 'remote-claw',
+      sourceRef: command.id,
     });
-    if (!response.ok) {
-      throw retryableError(`queue-input failed: HTTP ${response.status}`, true, 'local_runtime_not_ready');
-    }
     return {
       localAccepted: true,
-      queued: true,
+      delivery: delivery.delivery,
+      queued: delivery.delivery === 'queued',
       agentId: target.agentId,
       localSessionId: target.localSessionId,
       viewerAgentId,

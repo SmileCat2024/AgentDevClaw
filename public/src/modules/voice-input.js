@@ -289,6 +289,8 @@ async function startVoiceRecording(btn) {
             submitQueuedInput();
           } else {
             // Session switched — auto-submit directly to original agent
+            const originalCacheKey = _voiceCacheKey;
+            const originalAgentId = _voiceAgentId;
             let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
             delete _pendingVoiceResults[_voiceCacheKey];
             // Also include any cached typed text from the original session
@@ -296,17 +298,20 @@ async function startVoiceRecording(btn) {
             delete _sessionInputCache[_voiceCacheKey];
             fullText = cachedInput + fullText;
             if (fullText.trim()) {
-              fetch(`/api/agents/${_voiceAgentId}/queue-input`, {
+              fetch(`/api/agents/${originalAgentId}/user-turn`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: fullText })
-              }).then(res => {
+                body: JSON.stringify({ text: fullText, source: 'voice-input' })
+              }).then(async res => {
                 if (!res.ok) {
-                  res.text().then(t => console.error('[VoiceInput] cross-session queue-input error body:', t));
+                  const error = await res.json().catch(() => ({}));
+                  _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
                 } else {
-                  _markVoiceAutoSendAccepted(_voiceAgentId);
+                  _markVoiceAutoSendAccepted(originalAgentId);
                 }
-              }).catch(e => console.error('[VoiceInput] cross-session auto-send fetch failed:', e));
+              }).catch(e => {
+                _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
+              });
             }
           }
         } else if (targetId.startsWith('input-')) {
@@ -315,13 +320,15 @@ async function startVoiceRecording(btn) {
             submitInput(requestId);
           } else {
             // Session switched — auto-submit to original agent's input request
+            const originalCacheKey = _voiceCacheKey;
+            const originalAgentId = _voiceAgentId;
             let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
             delete _pendingVoiceResults[_voiceCacheKey];
             const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
             delete _sessionInputCache[_voiceCacheKey];
             fullText = cachedInput + fullText;
             if (fullText.trim()) {
-              fetch(`/api/agents/${_voiceAgentId}/input`, {
+              fetch(`/api/agents/${originalAgentId}/input`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -329,13 +336,16 @@ async function startVoiceRecording(btn) {
                   input: fullText,
                   response: { kind: 'text', text: fullText },
                 })
-              }).then(res => {
+              }).then(async res => {
                 if (!res.ok) {
-                  res.text().then(t => console.error('[VoiceInput] cross-session input error:', t));
+                  const error = await res.json().catch(() => ({}));
+                  _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
                 } else {
-                  _markVoiceAutoSendAccepted(_voiceAgentId);
+                  _markVoiceAutoSendAccepted(originalAgentId);
                 }
-              }).catch(e => console.error('[VoiceInput] cross-session input failed:', e));
+              }).catch(e => {
+                _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
+              });
             }
           }
         }
@@ -353,6 +363,18 @@ async function startVoiceRecording(btn) {
     console.error('[VoiceInput] Failed to start recording:', err);
     alert(currentLanguage === 'zh' ? '无法访问麦克风：' + err.message : 'Cannot access microphone: ' + err.message);
   }
+}
+
+function _restoreCrossSessionVoiceInput(cacheKey, text, agentId, errorMessage) {
+  if (cacheKey) _sessionInputCache[cacheKey] = text;
+  console.error('[VoiceInput] cross-session auto-send failed:', errorMessage);
+  window.ClawToast?.show?.({
+    id: `voice-send-failed-${agentId || 'unknown'}`,
+    status: 'error',
+    title: currentLanguage === 'zh' ? '语音消息发送失败' : 'Failed to send voice message',
+    description: errorMessage,
+    autoDismiss: 6000,
+  });
 }
 
 function stopVoiceRecording() {

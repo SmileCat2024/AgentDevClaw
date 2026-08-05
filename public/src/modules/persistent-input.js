@@ -995,12 +995,17 @@ async function submitQueuedInput() {
   const images = getPendingInputImages();
 
   try {
-    const res = await fetch(`/api/agents/${targetRuntimeId}/queue-input`, {
+    const res = await fetch(`/api/agents/${targetRuntimeId}/user-turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text || ' ', images: images.length > 0 ? images : undefined })
+      body: JSON.stringify({
+        text: text || ' ',
+        images: images.length > 0 ? images : undefined,
+        source: 'chat-composer',
+      })
     });
     if (res.ok) {
+      const delivery = await res.json().catch(() => ({}));
       textarea.value = '';
       autoResize(textarea);
       clearPendingInputImages();
@@ -1010,7 +1015,7 @@ async function submitQueuedInput() {
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       // 只有当 agent 正在 calling 时才显示排队气泡。
       // agent 空闲时后端会立即消费输入，不需要排队指示。
-      if (isRuntimeCalling(targetRuntimeId)) {
+      if (delivery.delivery === 'queued') {
         _localQueuedInputPending = true;
         _pendingQueuedCount++;
         _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
@@ -1027,9 +1032,19 @@ async function submitQueuedInput() {
         lastRenderedInputSignature = '';
         renderInputRequests(currentInputRequests || []);
       }
+    } else {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || `HTTP ${res.status}`);
     }
   } catch (e) {
     console.error('排队输入提交失败:', e);
+    window.ClawToast?.show?.({
+      id: `user-turn-failed-${targetRuntimeId}`,
+      status: 'error',
+      title: currentLanguage === 'zh' ? '消息发送失败' : 'Failed to send message',
+      description: e instanceof Error ? e.message : String(e),
+      autoDismiss: 6000,
+    });
   } finally {
     _submitInFlight = false;
     _syncPersistentActionButton();

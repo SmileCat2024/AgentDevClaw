@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from 'fs';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
 import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
+import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -154,6 +155,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
       this.use(new LspFeature({ workdir: workspaceDir }));
 
       this.use(new UserInputFeature());
+      this.use(new GenerativeUISurfaceFeature());
     }
   }
 

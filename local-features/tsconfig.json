@@ -30,6 +30,8 @@
     "./checkpoint/test/**/*.ts",
     "./continuity-participant/src/**/*.ts",
     "./continuity-participant/test/**/*.ts",
-    "./group-admin/src/**/*.ts"
+    "./group-admin/src/**/*.ts",
+    "./generative-ui/src/**/*.ts",
+    "./generative-ui/test/**/*.ts"
   ]
 }
