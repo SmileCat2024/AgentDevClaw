@@ -556,6 +556,14 @@ body[data-theme="light"] .agent-icon {
   border-left-color: var(--glass-border);
 }
 
+/* 拖拽进入收回区时隐藏所有内容，只保留纯底色 */
+.feature-panel.drag-collapsing > *:not(.feature-panel-resizer) {
+  visibility: hidden;
+}
+.feature-panel.drag-collapsing .feature-panel-resizer::after {
+  opacity: 0;
+}
+
 .feature-panel-resizer {
   position: absolute;
   top: 0;

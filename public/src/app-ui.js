@@ -1587,15 +1587,42 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
 
   event.preventDefault();
 
+  let shouldCollapse = false;
+  let inCollapseZone = false;
+
   const handleMouseMove = (moveEvent) => {
     const nextWidth = window.innerWidth - moveEvent.clientX - 56;
-    featurePanelWidth = Math.max(400, Math.min(750, nextWidth));
-    featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
+    const minWidth = window.innerWidth <= 1100 ? 300 : 400;
+    const enterThreshold = minWidth - 60;
+    const exitThreshold = minWidth - 10;
+
+    // Hysteresis: 用不同阈值进出收回区，避免边界抖动
+    if (!inCollapseZone && nextWidth < enterThreshold) {
+      inCollapseZone = true;
+    } else if (inCollapseZone && nextWidth > exitThreshold) {
+      inCollapseZone = false;
+    }
+
+    if (inCollapseZone) {
+      shouldCollapse = true;
+      featurePanel.classList.add('drag-collapsing');
+      featurePanel.style.setProperty('--feature-panel-width', Math.max(nextWidth, 80) + 'px');
+    } else {
+      shouldCollapse = false;
+      featurePanel.classList.remove('drag-collapsing');
+      featurePanelWidth = Math.max(minWidth, Math.min(750, nextWidth));
+      featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
+    }
   };
 
   const handleMouseUp = () => {
     window.removeEventListener('mousemove', handleMouseMove);
     window.removeEventListener('mouseup', handleMouseUp);
+    featurePanel.classList.remove('drag-collapsing');
+    if (shouldCollapse) {
+      activeFeaturePanel = null;
+      renderFeaturePanel();
+    }
   };
 
   window.addEventListener('mousemove', handleMouseMove);

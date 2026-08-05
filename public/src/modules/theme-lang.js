@@ -27,7 +27,6 @@ function applyLanguage() {
   document.title = t('page_title');
 
   const sidebarToggleEl = document.getElementById('sidebar-toggle');
-  const panelResizerEl = document.getElementById('feature-panel-resizer');
   const workspaceButton = document.getElementById('rail-workspace');
   const planButton = document.getElementById('rail-plan');
   const monitorButton = document.getElementById('rail-monitor');
@@ -39,7 +38,6 @@ function applyLanguage() {
   const viewerButton = document.getElementById('rail-viewer');
 
   if (sidebarToggleEl) sidebarToggleEl.title = t('sidebar_toggle');
-  if (panelResizerEl) panelResizerEl.title = t('resize_panel');
   if (workspaceButton) workspaceButton.title = t('structure_tooltip');
   if (planButton) planButton.title = t('plan_tooltip');
   if (monitorButton) monitorButton.title = t('monitor_tooltip');
