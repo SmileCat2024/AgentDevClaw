@@ -5575,7 +5575,7 @@ body[data-theme="light"] .project-docset-detail-empty {
 #chat-container {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 24px 24px 24px 44px;
   padding-bottom: 250px; /* 增加底部空间，避免输入框遮挡最新消息 */
   margin-right: 6px;
   display: flex;
