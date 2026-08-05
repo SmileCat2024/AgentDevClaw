@@ -162,7 +162,7 @@
         return;
       }
 
-      const etag = res.headers.get('ETag');
+      const etag = res.headers ? res.headers.get('ETag') : null;
       if (etag) _lastETag = etag;
 
       const data = await res.json();
