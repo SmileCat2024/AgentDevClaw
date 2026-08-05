@@ -1,6 +1,6 @@
 /* Sidebar */
 .sidebar {
-  width: 312px;
+  width: var(--sidebar-width, 280px);
   background: var(--glass-bg);
   -webkit-backdrop-filter: blur(var(--glass-blur));
   backdrop-filter: blur(var(--glass-blur));
@@ -17,10 +17,50 @@
   border-right-color: transparent;
 }
 
+/* Sidebar resize handle */
+.sidebar-resizer {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s ease;
+}
+
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.06);
+  transition: background 0.15s ease;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer.dragging::after {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+body[data-theme="light"] .sidebar-resizer::after {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+body[data-theme="light"] .sidebar-resizer:hover::after,
+body[data-theme="light"] .sidebar-resizer.dragging::after {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.sidebar.collapsed + .sidebar-resizer {
+  display: none;
+}
+
 /* 固定子元素宽度，防止 snap 时内部文本回流 */
 .sidebar-header,
 .agent-list {
-  min-width: 312px;
+  min-width: var(--sidebar-width, 280px);
 }
 
 .sidebar-header {
@@ -486,6 +526,8 @@ body[data-theme="light"] .agent-icon {
   min-width: 0;
   position: relative; /* For positioning input container */
   isolation: isolate; /* Create stacking context so high z-index children (user-input, follow-latest) don't escape above the right rail's flyout menus */
+  container-type: inline-size;
+  container-name: main-content;
 }
 
 .right-workspace {
@@ -5908,5 +5950,131 @@ body[data-theme="light"] .preset-tag-oauth {
   0%   { background-color: transparent; }
   20%  { background-color: rgba(255, 255, 255, 0.08); }
   100% { background-color: transparent; }
+}
+
+/* ── Narrow width responsive adaptation ─────────────────────────── */
+
+.right-workspace {
+  position: relative;
+}
+
+/* ── Breakpoint 1: ≤1100px — feature panel floats over content ── */
+@media (max-width: 1100px) {
+  .feature-panel.open {
+    position: absolute;
+    right: 56px;
+    top: 0;
+    bottom: 0;
+    z-index: 50;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+    max-width: calc(100vw - 56px - 32px);
+    width: min(var(--feature-panel-width, 500px), calc(100vw - 56px - 32px));
+  }
+
+  .feature-panel-header,
+  .feature-panel-body {
+    min-width: 0;
+    width: min(var(--feature-panel-width, 500px), calc(100vw - 56px - 32px));
+  }
+
+  /* Header: reduce gaps at medium-narrow */
+  header { gap: 8px; padding: 0 12px; }
+}
+
+/* ── Breakpoint 2: ≤860px — sidebar becomes overlay drawer ── */
+@media (max-width: 860px) {
+  /* Sidebar becomes a floating drawer */
+  .sidebar:not(.collapsed) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1001;
+    box-shadow: 4px 0 28px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Hide sidebar resizer handle in drawer mode */
+  .sidebar-resizer { display: none; }
+
+  /* Sidebar backdrop for click-to-close */
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 1000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .sidebar-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Compact header */
+  header {
+    padding: 0 8px;
+    gap: 6px;
+    height: 48px;
+  }
+  h1 { font-size: 14px; }
+
+  /* Hide chat context bar tokens to save space */
+  .chat-context-bar .ccb-token { display: none; }
+
+  /* Chat container: reduce padding */
+  #chat-container {
+    padding: 16px 16px 16px 38px;
+    padding-bottom: 220px;
+  }
+
+  /* Feature panel fills most of screen */
+  .feature-panel.open {
+    width: min(var(--feature-panel-width, 500px), calc(100vw - 56px - 16px));
+    max-width: calc(100vw - 56px - 16px);
+  }
+  .feature-panel-header,
+  .feature-panel-body {
+    width: min(var(--feature-panel-width, 500px), calc(100vw - 56px - 16px));
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .feature-panel-header { height: 48px; }
+
+  /* Follow-latest button: reposition */
+  .follow-latest-btn { right: 16px; bottom: 120px; }
+  .main-content.panel-open .follow-latest-btn { bottom: 140px; }
+
+  /* Input area: full width */
+  .user-input-card,
+  .input-meta-bar {
+    width: calc(100% - 24px);
+    max-width: none;
+  }
+}
+
+/* ── Breakpoint 3: ≤540px — ultra-compact ── */
+@media (max-width: 540px) {
+  header { padding: 0 6px; }
+
+  /* Hide status badge text entirely */
+  .status-badge { padding: 4px 8px; font-size: 0; gap: 0; }
+  .status-badge::before { width: 8px; height: 8px; }
+
+  /* Hide header docset toggle buttons */
+  .header-docset-btn { display: none !important; }
+
+  #chat-container { padding: 10px 10px 10px 34px; padding-bottom: 200px; }
+
+  .feature-panel.open {
+    width: calc(100vw - 56px);
+    max-width: calc(100vw - 56px);
+  }
+  .feature-panel-header,
+  .feature-panel-body {
+    width: calc(100vw - 56px);
+  }
+
+  .follow-latest-btn { right: 12px; bottom: 110px; }
 }
 
