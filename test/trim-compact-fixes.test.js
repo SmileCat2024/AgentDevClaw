@@ -374,4 +374,125 @@ describe('trim-compact fixes', () => {
       assert.equal(injectionTurn - 1, 2, 'old logic would collide');
     });
   });
+
+  // ===== tag-based system message preservation =====
+
+  describe('keepSystemTags default', () => {
+    it('includes folded-tool-activity in DEFAULT_EXPORT_POLICY', () => {
+      assert.ok(DEFAULT_EXPORT_POLICY.keepSystemTags.includes('folded-tool-activity'));
+    });
+
+    it('normalizeExportPolicy keeps default keepSystemTags when not specified', () => {
+      const policy = normalizeExportPolicy({});
+      assert.ok(policy.keepSystemTags.includes('folded-tool-activity'));
+    });
+
+    it('normalizeExportPolicy respects explicit keepSystemTags override', () => {
+      const policy = normalizeExportPolicy({ keepSystemTags: ['custom-tag'] });
+      assert.deepEqual(policy.keepSystemTags, ['custom-tag']);
+    });
+  });
+
+  describe('folded tool activity notes carry tag', () => {
+    it('fold note has tag folded-tool-activity', () => {
+      const messages = [
+        { role: 'user', content: 'first', turn: 0 },
+        { role: 'assistant', content: '', turn: 0, toolCalls: [{ name: 'read', arguments: '{"filePath":"a.js"}' }] },
+        { role: 'tool', toolCallId: 'tc1', content: '{"success":true}', turn: 0 },
+        { role: 'user', content: 'second', turn: 1 },
+        { role: 'assistant', content: 'done', turn: 1 },
+      ];
+      const policy = normalizeExportPolicy({ preservedTurns: [1] });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      const foldNotes = seedMessages.filter(m => m.tag === 'folded-tool-activity');
+      assert.ok(foldNotes.length > 0, 'should have at least one fold note with tag');
+
+      const allFoldNotes = seedMessages.filter(m => m.content.includes('[Folded tool activity]'));
+      assert.equal(foldNotes.length, allFoldNotes.length, 'all fold notes should carry the tag');
+    });
+  });
+
+  describe('repeated trim preserves tagged system messages', () => {
+    // This is the core bug: first trim creates [Folded tool activity] notes
+    // with role:'system'. Second trim drops them because includeSystemMessages=false.
+    // The fix: fold notes carry tag:'folded-tool-activity', which is in keepSystemTags.
+    it('second trim does not drop fold notes from first trim', () => {
+      // Simulate messages that would exist AFTER a first trim:
+      // - turn 0 was trimmed, produced a fold note (role:system, tag:folded-tool-activity)
+      // - turn 1 is preserved (full detail)
+      const afterFirstTrim = [
+        { role: 'user', content: 'original question', turn: 0 },
+        { role: 'system', content: '[Folded tool activity]\nassistant tool calls: read(a.js)', turn: 0, tag: 'folded-tool-activity' },
+        { role: 'user', content: 'follow up', turn: 1 },
+        { role: 'assistant', content: 'answer', turn: 1 },
+      ];
+
+      // Second trim: trim turn 0, keep turn 1
+      const policy = normalizeExportPolicy({ preservedTurns: [1] });
+      const { seedMessages } = buildTrimmedSeedMessages(afterFirstTrim, policy);
+
+      // The fold note from turn 0 should survive because it has tag 'folded-tool-activity'
+      const survivingFoldNotes = seedMessages.filter(m =>
+        m.tag === 'folded-tool-activity' && m.content.includes('[Folded tool activity]')
+      );
+      assert.ok(survivingFoldNotes.length > 0,
+        'fold note with tag folded-tool-activity must survive second trim');
+    });
+
+    it('untagged system messages are still dropped by default', () => {
+      const messages = [
+        { role: 'user', content: 'first', turn: 0 },
+        { role: 'system', content: 'some runtime reminder without tag', turn: 0 },
+        { role: 'assistant', content: 'reply', turn: 0 },
+        { role: 'user', content: 'second', turn: 1 },
+        { role: 'assistant', content: 'reply2', turn: 1 },
+      ];
+
+      const policy = normalizeExportPolicy({ preservedTurns: [1] });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      const survivingUntaggedSystem = seedMessages.filter(m =>
+        m.role === 'system' && !m.tag
+      );
+      assert.equal(survivingUntaggedSystem.length, 0,
+        'untagged system messages should be dropped');
+    });
+
+    it('includeSystemMessages=true overrides keepSystemTags and keeps all system messages', () => {
+      const messages = [
+        { role: 'user', content: 'first', turn: 0 },
+        { role: 'system', content: 'untagged reminder', turn: 0 },
+        { role: 'system', content: 'tagged note', turn: 0, tag: 'folded-tool-activity' },
+        { role: 'user', content: 'second', turn: 1 },
+        { role: 'assistant', content: 'reply', turn: 1 },
+      ];
+
+      const policy = normalizeExportPolicy({ preservedTurns: [1], includeSystemMessages: true });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      const systemMessages = seedMessages.filter(m => m.role === 'system');
+      assert.ok(systemMessages.length >= 2, 'both system messages should survive');
+    });
+  });
+
+  describe('preserve zone passes tag through unchanged', () => {
+    it('preserved system messages keep their tag', () => {
+      const messages = [
+        { role: 'user', content: 'first', turn: 0 },
+        { role: 'system', content: 'tagged note', turn: 0, tag: 'folded-tool-activity' },
+        { role: 'user', content: 'second', turn: 1 },
+        { role: 'assistant', content: 'reply', turn: 1 },
+      ];
+
+      // Preserve both turns
+      const policy = normalizeExportPolicy({ preservedTurns: [0, 1] });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      const taggedSystem = seedMessages.find(m =>
+        m.role === 'system' && m.tag === 'folded-tool-activity'
+      );
+      assert.ok(taggedSystem, 'preserved system message should retain its tag');
+    });
+  });
 });

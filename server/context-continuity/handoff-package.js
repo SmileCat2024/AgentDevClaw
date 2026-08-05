@@ -12,6 +12,7 @@ const HANDOFF_COMPILER_VERSION = 'trim-transcript-v1';
 export const DEFAULT_EXPORT_POLICY = {
   strategy: 'trim-transcript',
   includeSystemMessages: false,
+  keepSystemTags: ['folded-tool-activity'],
   includeUserMessages: true,
   includeAssistantMessages: true,
   keepRecentTurns: null,
@@ -94,6 +95,11 @@ function normalizeToolNameList(value) {
   return [...new Set(value.map(cleanInlineText).filter(Boolean))];
 }
 
+function normalizeKeepSystemTags(value) {
+  if (!Array.isArray(value)) return [...DEFAULT_EXPORT_POLICY.keepSystemTags];
+  return [...new Set(value.map(cleanInlineText).filter(Boolean))];
+}
+
 function normalizeEnum(value, validValues, fallback) {
   const text = cleanInlineText(value);
   return validValues.has(text) ? text : fallback;
@@ -123,6 +129,7 @@ export function normalizeExportPolicy(rawPolicy = {}) {
   return {
     strategy: 'trim-transcript',
     includeSystemMessages: rawPolicy?.includeSystemMessages === true,
+    keepSystemTags: normalizeKeepSystemTags(rawPolicy?.keepSystemTags),
     includeUserMessages: rawPolicy?.includeUserMessages !== false,
     includeAssistantMessages: rawPolicy?.includeAssistantMessages !== false,
     keepRecentTurns: normalizeNullableTurnCount(rawPolicy?.keepRecentTurns),
@@ -261,10 +268,13 @@ function getFoldedToolTurnSet(rawMessages, retainedTurns, policy) {
   return retainedTurns;
 }
 
-function shouldKeepDialogueMessage(role, policy) {
+function shouldKeepDialogueMessage(role, policy, tag) {
   if (role === 'user') return policy.includeUserMessages;
   if (role === 'assistant') return policy.includeAssistantMessages;
-  if (role === 'system') return policy.includeSystemMessages;
+  if (role === 'system') {
+    if (tag && Array.isArray(policy.keepSystemTags) && policy.keepSystemTags.includes(tag)) return true;
+    return policy.includeSystemMessages;
+  }
   return false;
 }
 
@@ -328,13 +338,14 @@ function getSkillInvokeProtectedMessages(rawMessages, policy) {
   return protectedIndices.size > 0 ? protectedIndices : null;
 }
 
-function createSeedMessage(role, content, turn) {
+function createSeedMessage(role, content, turn, tag) {
   const text = cleanMultilineText(content);
   if (!text) return null;
   return {
     role,
     content: text,
     turn: Number.isFinite(turn) ? turn : null,
+    ...(tag ? { tag } : {}),
   };
 }
 
@@ -364,7 +375,7 @@ function flushPendingToolFold(seedMessages, pendingFold, policy, stats) {
   const lines = ['[Folded tool activity]'];
   lines.push(`assistant tool calls: ${deduped.join('; ')}`);
 
-  const note = createSeedMessage(policy.foldedToolNoteRole, lines.join('\n'), pendingFold.turn);
+  const note = createSeedMessage(policy.foldedToolNoteRole, lines.join('\n'), pendingFold.turn, 'folded-tool-activity');
   if (note) {
     seedMessages.push(note);
     stats.foldedToolNoteCount += 1;
@@ -455,7 +466,7 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       : (Number.isFinite(fullPreserveFrom) && turn >= fullPreserveFrom);
     if (inPreserveZone) {
       flushIfNeeded();
-      if (role === 'tool' || shouldKeepDialogueMessage(role, policy)) {
+      if (role === 'tool' || shouldKeepDialogueMessage(role, policy, message?.tag)) {
         seedMessages.push({ ...message, turn });
         stats.keptSeedMessageCount += 1;
         if (role !== 'tool') {
@@ -474,7 +485,7 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       : [];
     if (protectedCalls.length > 0) {
       flushIfNeeded();
-      if (shouldKeepDialogueMessage(role, policy)) {
+      if (shouldKeepDialogueMessage(role, policy, message?.tag)) {
         seedMessages.push({ ...message, turn });
         stats.keptSeedMessageCount += 1;
         stats.keptDialogueMessageCount += 1;
@@ -520,7 +531,7 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
         : shouldHandleToolActivity(turn, foldedToolTurns, policy);
       if (policy.toolMessageMode === 'keep' || !shouldHandle) {
         flushIfNeeded();
-        const seedMessage = createSeedMessage('tool', message.content, turn);
+        const seedMessage = createSeedMessage('tool', message.content, turn, message?.tag);
         if (seedMessage) {
           seedMessages.push(seedMessage);
           stats.keptSeedMessageCount += 1;
@@ -578,7 +589,7 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       flushIfNeeded();
     }
 
-    if (!shouldKeepDialogueMessage(role, policy)) {
+    if (!shouldKeepDialogueMessage(role, policy, message?.tag)) {
       stats.droppedDialogueMessageCount += 1;
       stats.droppedMessageCount += 1;
     } else {
@@ -586,7 +597,7 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       if (role === 'assistant' && toolCalls.length > 0 && policy.assistantToolCallMode === 'keep' && toolCallSummaries.length > 0 && shouldHandleToolCalls) {
         assistantContent = `${assistantContent}\n[tool calls kept inline] ${toolCallSummaries.join('; ')}`.trim();
       }
-      const seedMessage = createSeedMessage(role, assistantContent, turn);
+      const seedMessage = createSeedMessage(role, assistantContent, turn, message?.tag);
       if (seedMessage) {
         seedMessages.push(seedMessage);
         stats.keptSeedMessageCount += 1;

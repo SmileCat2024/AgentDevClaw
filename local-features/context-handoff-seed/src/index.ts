@@ -26,6 +26,7 @@ export interface ContextHandoffSeedMessage {
   reasoning?: string;
   thinkingBlocks?: Array<{ thinking: string; signature: string }>;
   images?: Array<{ path?: string; base64?: string; mediaType?: string; source?: string }>;
+  tag?: string;
 }
 
 export interface ContextHandoffSeedPayload {
@@ -111,9 +112,10 @@ function injectSeedMessage(
 ): void {
   const content = typeof message.content === 'string' ? message.content : '';
   const role = message.role;
+  const tag = typeof message.tag === 'string' ? message.tag : undefined;
 
   if (role === 'system') {
-    context.addSystemMessage(content, turn, 'handoff-seed');
+    context.addSystemMessage(content, turn, 'handoff-seed', tag);
   } else if (role === 'user') {
     context.addUserMessage(content, turn, message.images);
   } else if (role === 'assistant') {
@@ -131,7 +133,7 @@ function injectSeedMessage(
   } else if (role === 'tool' && message.toolCallId) {
     context.addSerializedToolMessage(message.toolCallId, content, turn, message.images);
   } else {
-    context.add({ role, content, turn, toolCallId: message.toolCallId, images: message.images } as any);
+    context.add({ role, content, turn, toolCallId: message.toolCallId, images: message.images, ...(tag ? { tag } : {}) } as any);
   }
 }
 
