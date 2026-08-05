@@ -5,39 +5,65 @@
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 .runtime-indicator-main {
-  padding: 8px 0;
-  font-size: 15px;
-  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+}
+.runtime-indicator-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-secondary, #888);
+  margin-right: 8px;
+  flex-shrink: 0;
+  animation: runtime-pulse 1.5s ease-in-out infinite;
+}
+@keyframes runtime-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+.runtime-indicator-text {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.4;
   background: linear-gradient(
     90deg,
     var(--text-secondary, #888) 0%,
-    var(--text-secondary, #888) 42%,
+    var(--text-secondary, #888) 43%,
     var(--text-primary, #ededed) 50%,
-    var(--text-secondary, #888) 58%,
+    var(--text-secondary, #888) 57%,
     var(--text-secondary, #888) 100%
   );
-  background-size: 300% 100%;
+  background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: runtime-shimmer 4s linear infinite;
+  animation: runtime-shimmer 1.8s linear infinite;
 }
 @keyframes runtime-shimmer {
   0%   { background-position: 100% 0; }
   100% { background-position: 0% 0; }
 }
 .runtime-indicator-detail {
-  padding: 0;
+  padding: 0 0 0 14px;
   font-size: 13px;
+  font-weight: 500;
   line-height: 1.5;
   color: var(--text-secondary, #888);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--mono-font, 'Cascadia Code', 'Fira Code', monospace);
+  position: relative;
+}
+.runtime-indicator-detail::before {
+  content: '│';
+  margin-right: 6px;
+  opacity: 0.4;
 }
 
 .message-row {

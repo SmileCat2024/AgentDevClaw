@@ -1208,8 +1208,21 @@ function ensureChatRuntimeIndicator() {
     mainEl.className = 'runtime-indicator-main';
     existing.appendChild(mainEl);
   }
-  if (mainEl.textContent !== content.main) {
-    mainEl.textContent = content.main;
+  // 确保 dot + text 子结构存在
+  let dotEl = mainEl.querySelector('.runtime-indicator-dot');
+  if (!dotEl) {
+    dotEl = document.createElement('span');
+    dotEl.className = 'runtime-indicator-dot';
+    mainEl.appendChild(dotEl);
+  }
+  let textEl = mainEl.querySelector('.runtime-indicator-text');
+  if (!textEl) {
+    textEl = document.createElement('span');
+    textEl.className = 'runtime-indicator-text';
+    mainEl.appendChild(textEl);
+  }
+  if (textEl.textContent !== content.main) {
+    textEl.textContent = content.main;
   }
 
   // 更新详情行：增删改，不重建已有元素
