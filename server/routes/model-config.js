@@ -350,13 +350,19 @@ export function convertAudioToWav(inputBuffer) {
     const ffmpegArgs = ['-i', 'pipe:0', '-f', 'wav', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', 'pipe:1'];
     const child = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
     const chunks = [];
+    let stderrData = '';
 
     child.stdout.on('data', (chunk) => chunks.push(chunk));
-    child.stderr.resume();
+    child.stderr.on('data', (data) => { stderrData += data.toString(); });
 
-    child.on('error', () => resolve(null));
+    child.on('error', (err) => {
+      console.error('[ASR Proxy] ffmpeg spawn error:', err.message);
+      resolve(null);
+    });
     child.on('close', (code) => {
       if (code !== 0) {
+        // Log last 500 chars of stderr for diagnosis without flooding the console
+        console.error('[ASR Proxy] ffmpeg exited with code', code, '| stderr:', stderrData.slice(-500));
         resolve(null);
       } else {
         resolve(Buffer.concat(chunks));
@@ -447,19 +453,24 @@ export function setupModelConfigRoutes(app, express) {
       const isMp3 = contentType.includes('mp3') || contentType.includes('mpeg');
       const isWav = contentType.includes('wav') || (!isWebm && !isMp3);
 
+      let audioMimeType = 'audio/wav';
+
       if (!isWav) {
         const converted = await convertAudioToWav(audioBuffer);
         if (converted) {
           audioBuffer = converted;
+          // audioMimeType stays 'audio/wav'
         } else {
-          console.warn('[ASR Proxy] ffmpeg conversion failed, attempting raw PCM encode');
-          const pcmSamples = new Int16Array(audioBuffer.buffer, audioBuffer.byteOffset, audioBuffer.byteLength / 2);
-          audioBuffer = encodeWav(pcmSamples);
+          // ffmpeg failed — send the original compressed format directly.
+          // Most ASR APIs (Whisper, GLM-4-Voice, etc.) accept webm/ogg natively.
+          // Do NOT treat compressed binary as raw PCM — that produces garbage.
+          audioMimeType = isWebm ? 'audio/webm' : isMp3 ? 'audio/mpeg' : 'audio/ogg';
+          console.warn(`[ASR Proxy] ffmpeg conversion failed, sending original format (${audioMimeType}) to ASR`);
         }
       }
 
       const audioBase64 = audioBuffer.toString('base64');
-      const dataUri = `data:audio/wav;base64,${audioBase64}`;
+      const dataUri = `data:${audioMimeType};base64,${audioBase64}`;
 
       const asrUrl = speechConfig.baseUrl.replace(/\/+$/, '') + '/chat/completions';
 
