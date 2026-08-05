@@ -59,6 +59,7 @@
   let _lastETag = null;
   let _lastPolledAgentId = null;
   let _activeSurfaceId = null;
+  let _panelOpen = false;
   /** @type {Map<string, {spec:Object, revision:number, title:string, closed:boolean}>} */
   const _registry = new Map();
   /** @type {Map<string, Object>} surfaceId → ViewState object */
@@ -79,9 +80,10 @@
   }
 
   function onOpen() {
+    _panelOpen = true;
     // 立即拉取一次最新数据（不需要 mount div）
     _doPoll().catch(() => {});
-    _startPolling();
+    _ensureBackgroundPolling();
     // 尝试立即填充（如果面板 body 已同步提交，mount div 已存在）
     _tryPopulate();
   }
@@ -104,25 +106,21 @@
   }
 
   function onClose() {
-    _stopPolling();
+    _panelOpen = false;
+    // 不停止后台轮询 — badge 需要持续更新
   }
 
   // ═══════════════════════════════════════════════════════════════
   // Polling
   // ═══════════════════════════════════════════════════════════════
 
-  function _startPolling() {
-    _stopPolling();
+  function _ensureBackgroundPolling() {
+    // 轮询始终在后台运行，不依赖面板是否打开。
+    // 这样 badge 始终能反映当前活跃 surface 数量。
+    if (_pollTimer !== null) return;
     _pollTimer = setInterval(() => {
       _doPoll().catch((e) => console.warn('[GenUI] poll error:', e));
     }, POLL_INTERVAL_MS);
-  }
-
-  function _stopPolling() {
-    if (_pollTimer !== null) {
-      clearInterval(_pollTimer);
-      _pollTimer = null;
-    }
   }
 
   async function _doPoll() {
@@ -659,4 +657,7 @@
       _submitAction,
     },
   };
+
+  // 启动后台轮询 — badge 需要在面板未打开时也持续更新
+  _ensureBackgroundPolling();
 })();
