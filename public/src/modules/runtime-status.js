@@ -1202,48 +1202,53 @@ function ensureChatRuntimeIndicator() {
   }
 
   // 更新主行（textContent 而非 innerHTML，保持 CSS 动画连续）
-  let mainEl = existing.querySelector('.runtime-indicator-main');
-  if (!mainEl) {
-    mainEl = document.createElement('div');
-    mainEl.className = 'runtime-indicator-main';
-    existing.appendChild(mainEl);
-  }
-  // 确保 dot + text 子结构存在
-  let dotEl = mainEl.querySelector('.runtime-indicator-dot');
-  if (!dotEl) {
-    dotEl = document.createElement('span');
-    dotEl.className = 'runtime-indicator-dot';
-    mainEl.appendChild(dotEl);
-  }
-  let textEl = mainEl.querySelector('.runtime-indicator-text');
-  if (!textEl) {
-    textEl = document.createElement('span');
-    textEl.className = 'runtime-indicator-text';
-    mainEl.appendChild(textEl);
-  }
-  if (textEl.textContent !== content.main) {
-    textEl.textContent = content.main;
-  }
+  // 所有子元素的创建和文本更新都包裹在 runWithSuppressedChatViewportObservers 中，
+  // 避免触发 MutationObserver → notifyChatViewportMutation → lockChatViewportToBottomNow，
+  // 后者会在 followLatestEnabled 时强制将视口锁定到最底部。
+  runWithSuppressedChatViewportObservers(function() {
+    let mainEl = existing.querySelector('.runtime-indicator-main');
+    if (!mainEl) {
+      mainEl = document.createElement('div');
+      mainEl.className = 'runtime-indicator-main';
+      existing.appendChild(mainEl);
+    }
+    // 确保 dot + text 子结构存在
+    let dotEl = mainEl.querySelector('.runtime-indicator-dot');
+    if (!dotEl) {
+      dotEl = document.createElement('span');
+      dotEl.className = 'runtime-indicator-dot';
+      mainEl.appendChild(dotEl);
+    }
+    let textEl = mainEl.querySelector('.runtime-indicator-text');
+    if (!textEl) {
+      textEl = document.createElement('span');
+      textEl.className = 'runtime-indicator-text';
+      mainEl.appendChild(textEl);
+    }
+    if (textEl.textContent !== content.main) {
+      textEl.textContent = content.main;
+    }
 
-  // 更新详情行：增删改，不重建已有元素
-  let detailEls = existing.querySelectorAll('.runtime-indicator-detail');
-  // 移除多余的
-  for (let i = detailEls.length - 1; i >= content.details.length; i--) {
-    detailEls[i].remove();
-  }
-  // 更新或新增
-  for (let i = 0; i < content.details.length; i++) {
-    detailEls = existing.querySelectorAll('.runtime-indicator-detail');
-    let el = detailEls[i];
-    if (!el) {
-      el = document.createElement('div');
-      el.className = 'runtime-indicator-detail';
-      existing.appendChild(el);
+    // 更新详情行：增删改，不重建已有元素
+    let detailEls = existing.querySelectorAll('.runtime-indicator-detail');
+    // 移除多余的
+    for (let i = detailEls.length - 1; i >= content.details.length; i--) {
+      detailEls[i].remove();
     }
-    if (el.textContent !== content.details[i]) {
-      el.textContent = content.details[i];
+    // 更新或新增
+    for (let i = 0; i < content.details.length; i++) {
+      detailEls = existing.querySelectorAll('.runtime-indicator-detail');
+      let el = detailEls[i];
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'runtime-indicator-detail';
+        existing.appendChild(el);
+      }
+      if (el.textContent !== content.details[i]) {
+        el.textContent = content.details[i];
+      }
     }
-  }
+  });
 
   // 确保始终在容器最末尾
   if (chatContainer.lastElementChild !== existing) {

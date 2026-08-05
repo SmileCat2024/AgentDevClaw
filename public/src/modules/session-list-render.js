@@ -462,10 +462,12 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     const isSearching = phSearchQuery.trim().length > 0;
     sessionsHtml += '<div class="ph-session-tabs' + (isSearching ? ' searching' : '') + '" data-tab-group="' + tabId + '">';
     sessionsHtml += '<div class="ph-session-tab-bar">';
+    sessionsHtml += '<div class="ph-session-tabs-row">';
     sessionsHtml += '<button class="ph-session-tab' + (isSearching ? '' : ' active') + '" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainSessions.length)) + '</span></button>';
     sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedSessions.length)) + '</span></button>';
     sessionsHtml += '<button class="ph-session-tab" data-ph-tab="exploration" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_exploration_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
     sessionsHtml += '<button class="ph-session-tab" data-ph-tab="sub" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_sub_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(subSessions.length)) + '</span></button>';
+    sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-toolbar">';
     sessionsHtml += '<div class="ph-session-search-inline">';
     sessionsHtml += '<svg class="ph-search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M9.5 9.5L12.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
