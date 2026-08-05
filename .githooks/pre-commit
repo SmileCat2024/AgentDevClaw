@@ -15,7 +15,7 @@ echo "[pre-commit] Lint passed."
 
 echo "[pre-commit] Running core tests..."
 
-node --test test/*.test.js 2>&1
+node --test --test-concurrency=1 test/*.test.js 2>&1
 if [ $? -ne 0 ]; then
   echo ""
   echo "[pre-commit] Tests failed. Commit aborted."

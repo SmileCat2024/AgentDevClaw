@@ -495,4 +495,100 @@ describe('trim-compact fixes', () => {
       assert.ok(taggedSystem, 'preserved system message should retain its tag');
     });
   });
+
+  describe('preservedMsgRanges: message-index-based preservation', () => {
+    it('preserves tool messages at specified indices, folds the rest', () => {
+      const messages = [
+        { role: 'user', content: 'first', turn: 0 },
+        { role: 'assistant', content: 'a0', turn: 0, toolCalls: [{ name: 'read', arguments: '{"filePath":"a.js"}' }] },
+        { role: 'tool', toolCallId: 'tc1', content: '{"success":true}', turn: 0 },
+        { role: 'user', content: 'second', turn: 1 },
+        { role: 'assistant', content: 'a1', turn: 1, toolCalls: [{ name: 'read', arguments: '{"filePath":"b.js"}' }] },
+        { role: 'tool', toolCallId: 'tc2', content: '{"success":true}', turn: 1 },
+        { role: 'user', content: 'third', turn: 2 },
+        { role: 'assistant', content: 'a2', turn: 2, toolCalls: [{ name: 'read', arguments: '{"filePath":"c.js"}' }] },
+        { role: 'tool', toolCallId: 'tc3', content: '{"success":true}', turn: 2 },
+      ];
+      // Keep only the last round (indices 6-8)
+      const policy = normalizeExportPolicy({ preservedMsgRanges: [[6, 8]] });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      // tc3 is in preserve zone → should survive as a raw tool message
+      const tc3 = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc3');
+      assert.ok(tc3, 'tool result in preserved range should be kept as-is');
+
+      // tc1 and tc2 are outside preserve zone → should be folded/dropped
+      const tc1 = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
+      const tc2 = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc2');
+      assert.ok(!tc1, 'tool result outside preserved range should be folded/dropped');
+      assert.ok(!tc2, 'tool result outside preserved range should be folded/dropped');
+    });
+
+    it('takes precedence over preservedTurns when both are set', () => {
+      // Two user messages sharing the same turn (queued input)
+      const messages = [
+        { role: 'user', content: 'initial', turn: 1 },
+        { role: 'assistant', content: 'working', turn: 1, toolCalls: [{ name: 'read', arguments: '{"filePath":"a.js"}' }] },
+        { role: 'tool', toolCallId: 'tc1', content: '{"success":true}', turn: 1 },
+        { role: 'user', content: 'queued input', turn: 1 },
+        { role: 'assistant', content: 'reply', turn: 1, toolCalls: [{ name: 'read', arguments: '{"filePath":"b.js"}' }] },
+        { role: 'tool', toolCallId: 'tc2', content: '{"success":true}', turn: 1 },
+      ];
+      // preservedTurns=[1] alone would preserve everything (all are turn 1).
+      // preservedMsgRanges=[[3,5]] should take priority: only indices 3-5 preserved.
+      const policy = normalizeExportPolicy({
+        preservedTurns: [1],
+        preservedMsgRanges: [[3, 5]],
+      });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      // tc1 (index 2) is outside the range → folded
+      const tc1 = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
+      assert.ok(!tc1, 'tc1 outside preservedMsgRange should be folded even though turn matches preservedTurns');
+
+      // tc2 (index 5) is inside the range → preserved
+      const tc2 = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc2');
+      assert.ok(tc2, 'tc2 inside preservedMsgRange should be preserved');
+    });
+
+    it('correctly handles same-turn multiple user messages (the bug scenario)', () => {
+      // Real-world scenario: turn 1 has initial user msg + a queued mid-conversation user msg
+      const messages = [
+        { role: 'user', content: 'hello', turn: 0 },
+        { role: 'assistant', content: 'hi', turn: 0 },
+        { role: 'user', content: 'do task', turn: 1 },
+        { role: 'assistant', content: 'working', turn: 1, toolCalls: [{ name: 'read', arguments: '{"filePath":"a.js"}' }] },
+        { role: 'tool', toolCallId: 'tc1', content: '{"success":true}', turn: 1 },
+        { role: 'user', content: 'also check b.js', turn: 1 },  // queued input, same turn
+        { role: 'assistant', content: 'ok', turn: 1, toolCalls: [{ name: 'read', arguments: '{"filePath":"b.js"}' }] },
+        { role: 'tool', toolCallId: 'tc2', content: '{"success":true}', turn: 1 },
+        { role: 'assistant', content: 'done', turn: 1 },
+      ];
+      // Simulate trim panel: user kept only the second user message round (indices 5-8)
+      // With turn-based logic, turn 1 would be in preservedTurns regardless,
+      // potentially keeping the first user message too.
+      // With index-based logic, only indices 5-8 are preserved.
+      const policy = normalizeExportPolicy({
+        preservedMsgRanges: [[5, 8]],
+      });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      // The first user message in turn 1 ('do task') should NOT be in preserve zone
+      const doTaskUser = seedMessages.find(m => m.role === 'user' && m.content === 'do task');
+      assert.ok(!doTaskUser || !doTaskUser.toolCalls,
+        'first user message in turn 1 should not be in preserve zone');
+
+      // The second user message ('also check b.js') SHOULD be preserved
+      const queuedUser = seedMessages.find(m => m.role === 'user' && m.content === 'also check b.js');
+      assert.ok(queuedUser, 'queued user message should be preserved');
+
+      // The tool result for b.js (tc2) should be preserved
+      const tc2Tool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc2');
+      assert.ok(tc2Tool, 'tool result for preserved range should be kept');
+
+      // The tool result for a.js (tc1) should NOT be preserved (outside range)
+      const tc1Tool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc1');
+      assert.ok(!tc1Tool, 'tool result outside preserved range should be folded/dropped');
+    });
+  });
 });

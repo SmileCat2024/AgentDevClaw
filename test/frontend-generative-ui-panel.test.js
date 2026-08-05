@@ -1,7 +1,18 @@
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { createDomHarness } from './helpers/dom-harness.js';
+
+const _trackedIntervals = [];
+const _trackedSetInterval = (...args) => {
+  const id = setInterval(...args);
+  _trackedIntervals.push(id);
+  return id;
+};
+
+after(() => {
+  _trackedIntervals.forEach(id => clearInterval(id));
+});
 
 describe('Generative UI panel submit adapter', () => {
   it('renders multiple surfaces as tabs and keeps only the selected page visible', () => {
@@ -9,6 +20,7 @@ describe('Generative UI panel submit adapter', () => {
     dom.createMount('gen-ui-mount');
     const ctx = createFrontendSandbox({
       document: dom.document,
+      setInterval: _trackedSetInterval,
       createGenUIViewState: () => ({}),
       renderGenUISpec: (spec) => {
         const rendered = dom.document.createElement('div');
@@ -44,7 +56,7 @@ describe('Generative UI panel submit adapter', () => {
   });
 
   it('keeps only explicit user overrides when a surface spec is refreshed', () => {
-    const ctx = createFrontendSandbox();
+    const ctx = createFrontendSandbox({ setInterval: _trackedSetInterval });
     ctx.loadSource('public/src/modules/generative-ui-panel.js');
     const merged = ctx.run(`window.GenUIPanel._internal._mergeViewState(
       {
@@ -74,6 +86,7 @@ describe('Generative UI panel submit adapter', () => {
     const ctx = createFrontendSandbox({
       currentRuntimeAgentId: 'agent/a',
       fetch,
+      setInterval: _trackedSetInterval,
       applySessionViewPatch: (patch) => viewPatches.push(patch),
       renderInputRequests() {},
       clearInterruptSuppression() {},
@@ -118,6 +131,7 @@ describe('Generative UI panel submit adapter', () => {
     const toasts = [];
     const ctx = createFrontendSandbox({
       currentRuntimeAgentId: 'agent-a',
+      setInterval: _trackedSetInterval,
       fetch: async () => ({
         ok: false,
         status: 409,
@@ -153,6 +167,7 @@ describe('Generative UI panel submit adapter', () => {
     let executed = 0;
     const ctx = createFrontendSandbox({
       document: dom.document,
+      setInterval: _trackedSetInterval,
       ClawSelect: {
         enhanceAll: (container, selector) => enhancerCalls.push({ container, selector }),
       },

@@ -198,7 +198,13 @@ window.submitTrimCompact = async () => {
   // explicit signal about which rounds the user chose to keep in full detail.
   // Skill protection (keepRecentSkillInvokes) operates independently at the
   // message level, preserving only invoke_skill calls and their results.
-  const policy = { preservedTurns: keptRounds.map(r => r.turnStart) };
+  // preservedMsgRanges provides exact message-index boundaries so the trim
+  // result matches the UI selection 1:1, even when multiple user messages
+  // share the same turn value (e.g. queued inputs mid-conversation).
+  const policy = {
+    preservedTurns: keptRounds.map(r => r.turnStart),
+    preservedMsgRanges: keptRounds.map(r => [r.msgIndexStart, r.msgIndexEnd]),
+  };
   if (keepSkillInvokes != null && keepSkillInvokes > 0) {
     policy.keepRecentSkillInvokes = keepSkillInvokes;
   }

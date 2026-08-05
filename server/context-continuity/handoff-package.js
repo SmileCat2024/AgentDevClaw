@@ -18,6 +18,7 @@ export const DEFAULT_EXPORT_POLICY = {
   keepRecentTurns: null,
   fullPreserveFromTurn: null,
   preservedTurns: null,
+  preservedMsgRanges: null,
   assistantToolCallMode: 'fold',
   toolMessageMode: 'fold',
   toolFoldScope: 'all',
@@ -136,6 +137,11 @@ export function normalizeExportPolicy(rawPolicy = {}) {
     fullPreserveFromTurn: normalizeNullableTurnIndex(rawPolicy?.fullPreserveFromTurn),
     preservedTurns: Array.isArray(rawPolicy?.preservedTurns)
       ? [...new Set(rawPolicy.preservedTurns.filter(t => Number.isFinite(t)).map(Number))]
+      : null,
+    preservedMsgRanges: Array.isArray(rawPolicy?.preservedMsgRanges) && rawPolicy.preservedMsgRanges.length > 0
+      ? rawPolicy.preservedMsgRanges
+          .filter(r => Array.isArray(r) && r.length === 2 && Number.isFinite(r[0]) && Number.isFinite(r[1]))
+          .map(([s, e]) => [Math.floor(s), Math.floor(e)])
       : null,
     assistantToolCallMode: normalizeEnum(rawPolicy?.assistantToolCallMode, VALID_TOOL_MODES, DEFAULT_EXPORT_POLICY.assistantToolCallMode),
     toolMessageMode: normalizeEnum(rawPolicy?.toolMessageMode, VALID_TOOL_MODES, DEFAULT_EXPORT_POLICY.toolMessageMode),
@@ -410,7 +416,23 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
   const preservedTurnSet = Array.isArray(policy.preservedTurns) && policy.preservedTurns.length > 0
     ? new Set(policy.preservedTurns)
     : null;
-  const hasPreserveBoundary = preservedTurnSet || Number.isFinite(fullPreserveFrom);
+  // preservedMsgRanges: when set, takes highest precedence over both preservedTurns
+  // and fullPreserveFromTurn. Uses message array indices [start, end] (inclusive)
+  // so the trim panel's per-round selection maps 1:1 to actual messages kept.
+  // This fixes the case where multiple user messages share the same turn value
+  // (e.g. queued inputs during an ongoing conversation) — turn-based selection
+  // cannot distinguish between them, but index-based selection can.
+  const preservedMsgIndices = Array.isArray(policy.preservedMsgRanges) && policy.preservedMsgRanges.length > 0
+    ? new Set()
+    : null;
+  if (preservedMsgIndices) {
+    for (const [start, end] of policy.preservedMsgRanges) {
+      for (let i = start; i <= end; i++) {
+        preservedMsgIndices.add(i);
+      }
+    }
+  }
+  const hasPreserveBoundary = preservedMsgIndices || preservedTurnSet || Number.isFinite(fullPreserveFrom);
   const seedMessages = [];
   const stats = {
     originalMessageCount: rawMessages.length,
@@ -461,9 +483,12 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
     const withinDialogueWindow = hasPreserveBoundary || !retainedTurns || retainedTurns.has(turn);
 
     // Preserve zone: pass through original message structure (preserves toolCallId, toolCalls, etc.)
-    const inPreserveZone = preservedTurnSet
-      ? preservedTurnSet.has(turn)
-      : (Number.isFinite(fullPreserveFrom) && turn >= fullPreserveFrom);
+    // Priority: preservedMsgIndices (exact message selection) > preservedTurnSet (turn-based) > fullPreserveFrom
+    const inPreserveZone = preservedMsgIndices
+      ? preservedMsgIndices.has(index)
+      : preservedTurnSet
+        ? preservedTurnSet.has(turn)
+        : (Number.isFinite(fullPreserveFrom) && turn >= fullPreserveFrom);
     if (inPreserveZone) {
       flushIfNeeded();
       if (role === 'tool' || shouldKeepDialogueMessage(role, policy, message?.tag)) {
