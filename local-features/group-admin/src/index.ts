@@ -336,6 +336,7 @@ export class GroupAdminFeature implements AgentFeature {
     return [
       {
         name: 'gc_overview',
+        parallelizable: true,
         description: '查看当前群聊概览和工作线程。包含群基本信息、最近活动，以及按工作线程组织的当前态势。',
         parameters: {
           type: 'object',
@@ -375,6 +376,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_messages',
+        parallelizable: true,
         description: '读取当前群聊的最近消息（含路由状态和会话标题）。超长消息会被截断，可通过 messageId 参数查看完整内容。',
         parameters: {
           type: 'object',
@@ -425,6 +427,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_thread_overview',
+        parallelizable: true,
         description: '查看当前群聊的工作线程。按状态列出进行中、已完成和已归档线程，并包含运行状态、Task 进度、上下文用量和最近消息。做进度判断或派发前优先调用。',
         parameters: {
           type: 'object',
@@ -444,6 +447,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_thread_detail',
+        parallelizable: true,
         description: '查看一条工作线程的详细情况，包括当前 head、全部 Task、最近消息和会话脉络。只有需要判断下一步、验收或追溯分叉时使用。',
         parameters: {
           type: 'object',
@@ -620,6 +624,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_sessions',
+        parallelizable: true,
         description: '查看某个 Agent 的原始 session 记录，用于上下文追溯或诊断。工作进展与日常派发使用线程工具。',
         parameters: {
           type: 'object',
@@ -665,6 +670,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_status',
+        parallelizable: true,
         description: '查看所有可用身份及其会话态势，包括会话 ID、运行状态、模型、上下文用量和压缩阈值。',
         parameters: {
           type: 'object',
@@ -683,6 +689,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_scan_workdir',
+        parallelizable: true,
         description: '扫描群聊工作目录的结构和关键文件内容，用于了解项目背景。返回目录树和关键文件（如 package.json、README.md、CLAUDE.md 等）的摘要。',
         parameters: {
           type: 'object',
@@ -779,6 +786,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_session_threads',
+        parallelizable: true,
         description: '查看当前群聊的工作线程概览，包含运行状态、Task 进度、上下文用量和最近消息。',
         parameters: {
           type: 'object',
@@ -795,6 +803,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_session_tasks',
+        parallelizable: true,
         description: '查看指定会话的任务列表。需要先用 gc_session_threads 或 gc_sessions 查看 sessionId。返回每个任务的标题和状态（completed/in_progress/pending）。',
         parameters: {
           type: 'object',
@@ -847,6 +856,7 @@ export class GroupAdminFeature implements AgentFeature {
       },
       {
         name: 'gc_session_summary',
+        parallelizable: true,
         description: '查看指定会话的摘要信息（标题、创建时间、项目目录等）。',
         parameters: {
           type: 'object',

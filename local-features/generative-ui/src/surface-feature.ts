@@ -315,6 +315,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       // ── ui_surface_get ──
       createTool({
         name: 'ui_surface_get',
+        parallelizable: true,
         description: [
           'Get the full current Spec of an existing surface.',
           'Useful after context compaction or when resuming a session to recover',
@@ -371,6 +372,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       // ── ui_surface_list ──
       createTool({
         name: 'ui_surface_list',
+        parallelizable: true,
         description: [
           `List all active surfaces for the current agent that are published to ${BROWSER_SURFACE_LOCATION}.`,
           'Returns summaries (surfaceId, title, revision, status) without full Specs.',

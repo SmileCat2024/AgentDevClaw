@@ -132,6 +132,7 @@ class IMOperatorFeature {
     return [
       {
         name: 'im_overview',
+        parallelizable: true,
         description: '查看所有 IM 线路的当前状态。返回每条线路的载体（QQ/微信）和绑定会话信息。',
         parameters: {
           type: 'object',
@@ -197,6 +198,7 @@ class IMOperatorFeature {
       },
       {
         name: 'im_browse',
+        parallelizable: true,
         description: '列出所有可连接的工作空间会话。返回每个工作空间下的项目和在线会话，包含模型名称、上下文用量、压缩阈值等运行时状态，以及 im_connect_line 所需的 agentId 和 sessionId。',
         parameters: {
           type: 'object',

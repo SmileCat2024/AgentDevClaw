@@ -17,6 +17,7 @@ export class ConversationExportFeature implements AgentFeature {
     return [
       {
         name: 'export_conversation',
+        parallelizable: true,
         description:
           '将指定会话的完整对话记录渲染为精美的 HTML 文件（包含用户消息、AI 回复、工具调用过程、思考过程等），保存到本地并返回文件路径。' +
           '生成的 HTML 文件可直接用浏览器打开，也可通过 upload_attachment 发送给 IM 用户。' +
