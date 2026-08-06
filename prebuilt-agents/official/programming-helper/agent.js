@@ -5,7 +5,7 @@
  * 基于 ProtoClaw 当前内置的 npm agentdev 兼容层运行
  */
 
-import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature } from 'agentdev';
 import { ControlledTodoFeature } from './controlled-todo-feature.js';
 import { ContinuityAwareOpencodeBasic } from './continuity-aware-opencode-basic.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
@@ -22,6 +22,7 @@ import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/i
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
 import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
+import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -133,11 +134,17 @@ export class ProgrammingHelperAgent extends BasicAgent {
     });
     this.use(this.contextGuard);
 
+    // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
+    // 放在所有业务 feature 之前挂载，确保 ToolResultTransform 钩子
+    // 在 feature 注册顺序中靠前（但执行顺序由 hooks registry 决定）。
+    this.use(new OutputGuardFeature());
+
     if (isExploration) {
       this.use(new ShellFeature({ workspaceDir }));
       this.use(new WebSearchFeature());
       this.use(new MemoryFeature({ workspaceDir }));
       this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
+      this.use(new GitHubFeature());
     } else {
       this.use(new ControlledTodoFeature({
         reminderTemplate: TODO_REMINDER_PROMPT_PATH,
@@ -156,6 +163,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
       this.use(new UserInputFeature());
       this.use(new GenerativeUISurfaceFeature());
+      this.use(new GitHubFeature());
     }
   }
 
