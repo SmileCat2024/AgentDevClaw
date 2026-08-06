@@ -7,8 +7,8 @@
  * New tool: workspace_list / workspace_help — discover available workspaces.
  */
 
-import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
+import { NodeStreamableHTTPServerTransport as StreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { z } from 'zod/v4';
 
 import {

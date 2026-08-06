@@ -33,6 +33,7 @@ export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'flow-test'])
 export const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
 export const MODEL_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'default.json');
 export const MODEL_PRESETS_PATH = path.join(PROJECT_ROOT, 'config', 'presets.json');
+export const MCP_GATEWAY_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'mcp-gateway.json');
 export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
 
 // ── Timeout / Wait (ms) ──────────────────────────────────────────

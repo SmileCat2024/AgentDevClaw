@@ -14,6 +14,7 @@ import {
 } from './server/context-continuity/handoff-package.js';
 import { exportSummarizedHandoffPackage, writeSummarizedHandoffPackage } from './server/context-continuity/summarized-handoff.js';
 import { ClawMCPServer } from './server/claw-mcp.js';
+import { registerMCPGatewayRoutes } from './server/mcp-gateway/routes.js';
 import {
   getRuntimeInboxSnapshot,
   getRuntimeExecutionState,
@@ -202,6 +203,9 @@ app.all('/protoclaw/claw-mcp/', async (req, res, next) => {
     }
   }
 });
+
+// ── MCP Gateway: centrally hosted MCP servers for cross-session sharing ──
+registerMCPGatewayRoutes(app);
 
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──
 

@@ -1650,6 +1650,13 @@ document.getElementById('settings-flyout-usage').addEventListener('click', () =>
   }
 });
 
+document.getElementById('settings-flyout-mcp-gateway')?.addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof openMcpGateway === 'function') {
+    openMcpGateway();
+  }
+});
+
 document.getElementById('settings-flyout-exit').addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
   if (!confirm(currentLanguage === 'zh' ? '确定要退出程序吗？' : 'Are you sure you want to quit?')) return;
