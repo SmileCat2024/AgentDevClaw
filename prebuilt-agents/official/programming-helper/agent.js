@@ -137,7 +137,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
     // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
     // 放在所有业务 feature 之前挂载，确保 ToolResultTransform 钩子
     // 在 feature 注册顺序中靠前（但执行顺序由 hooks registry 决定）。
-    this.use(new OutputGuardFeature());
+    this.use(new OutputGuardFeature({ workdir: workspaceDir }));
 
     if (isExploration) {
       this.use(new ShellFeature({ workspaceDir }));

@@ -227,7 +227,7 @@ function appendNewMessages(newMessages, startIndex) {
         }
       }
 
-      const { success, data } = parseToolResult(msg.content);
+      const { success, data } = parseToolResult(msg.content, msg.display);
       const displayName = getToolDisplayName(toolName);
       const template = getToolRenderTemplate(toolName);
 
@@ -324,7 +324,7 @@ function updateLastMessage(msg) {
       }
     }
 
-    const { success, data } = parseToolResult(msg.content);
+    const { success, data } = parseToolResult(msg.content, msg.display);
     const displayName = getToolDisplayName(toolName);
     const template = getToolRenderTemplate(toolName);
 
@@ -647,7 +647,7 @@ function render(messages) {
         }
       }
 
-      const { success, data } = parseToolResult(msg.content);
+      const { success, data } = parseToolResult(msg.content, msg.display);
       rowAttrs = ` data-tool-success="${success ? 'true' : 'false'}"`;
       const displayName = getToolDisplayName(toolName);
       const template = getToolRenderTemplate(toolName);

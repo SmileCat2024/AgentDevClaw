@@ -128,7 +128,8 @@ function applyTemplate(template, data, success = true, args = {}) {
   return interpolateTemplate(template, data);
 }
 
-function parseToolResult(content) {
+function parseToolResult(content, display) {
+  let result;
   try {
     const json = JSON.parse(content);
     if (json && typeof json === 'object' && 'success' in json && 'result' in json) {
@@ -137,19 +138,27 @@ function parseToolResult(content) {
       if (typeof data === 'string') {
          try {
             if (data.trim().startsWith('"') || data.trim().startsWith('{') || data.trim().startsWith('[')) {
-               const parsed = JSON.parse(data);
-               data = parsed;
+                const parsed = JSON.parse(data);
+                data = parsed;
             }
          } catch (e) {
             // Not a JSON string, keep as is
          }
       }
-      return { success: json.success, data: data };
+      result = { success: json.success, data: data };
+    } else {
+      result = { success: true, data: content };
     }
-    return { success: true, data: content };
   } catch (e) {
-    return { success: true, data: content };
+    result = { success: true, data: content };
   }
+  // Merge display-only data (e.g. write tool's diff) that bypassed LLM injection
+  if (display && typeof display === 'object') {
+    result.data = typeof result.data === 'object' && result.data !== null
+      ? { ...result.data, ...display }
+      : { ...display };
+  }
+  return result;
 }
 
 /**
