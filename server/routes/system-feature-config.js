@@ -239,7 +239,10 @@ export function setupSystemFeatureConfigRoutes(app, express) {
       const seen = new Set();
       const features = [];
 
-      const importPaths = ['agentdev'];
+      const importPaths = [
+        'agentdev',
+        '../../local-features/dist/index.js',
+      ];
       for (const importPath of importPaths) {
         try {
           const mod = await import(importPath);

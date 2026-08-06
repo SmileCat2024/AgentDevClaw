@@ -8,3 +8,4 @@ export { ContextGuardFeature } from './context-guard/src/index.js';
 export { ClawDispatchFeature } from './dispatch/src/index.js';
 export { CheckpointFeature } from './checkpoint/src/index.js';
 export { GenerativeUISurfaceFeature } from './generative-ui/src/index.js';
+export { GitHubFeature } from './github/src/index.js';

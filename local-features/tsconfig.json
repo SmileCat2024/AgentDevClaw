@@ -32,6 +32,7 @@
     "./continuity-participant/test/**/*.ts",
     "./group-admin/src/**/*.ts",
     "./generative-ui/src/**/*.ts",
-    "./generative-ui/test/**/*.ts"
+    "./generative-ui/test/**/*.ts",
+    "./github/src/**/*.ts"
   ]
 }
