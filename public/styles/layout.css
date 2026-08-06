@@ -5626,7 +5626,7 @@ body[data-theme="light"] .project-docset-detail-empty {
   flex: 1;
   overflow-y: auto;
   padding: 24px 24px 24px 44px;
-  padding-bottom: 250px; /* 增加底部空间，避免输入框遮挡最新消息 */
+  padding-bottom: 320px; /* 增加底部空间，避免输入框遮挡最新消息 */
   margin-right: 6px;
   display: flex;
   flex-direction: column;
@@ -6072,7 +6072,7 @@ body[data-theme="light"] .preset-tag-oauth {
   /* Hide header docset toggle buttons */
   .header-docset-btn { display: none !important; }
 
-  #chat-container { padding: 10px 10px 10px 34px; padding-bottom: 200px; }
+  #chat-container { padding: 10px 10px 10px 34px; padding-bottom: 260px; }
 
   .feature-panel.open {
     width: calc(100vw - 56px);

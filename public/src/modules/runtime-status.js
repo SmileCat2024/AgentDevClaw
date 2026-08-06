@@ -1181,14 +1181,22 @@ function ensureChatRuntimeIndicator() {
     && _lastRenderedNotificationRuntime.stage !== 'failed';
 
   if (!shouldShow) {
-    if (existing) existing.remove();
+    if (existing) {
+      runWithSuppressedChatViewportObservers(function() {
+        existing.remove();
+      });
+    }
     return;
   }
 
   // 构建内容
   const content = buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime);
   if (!content) {
-    if (existing) existing.remove();
+    if (existing) {
+      runWithSuppressedChatViewportObservers(function() {
+        existing.remove();
+      });
+    }
     return;
   }
 
@@ -1229,14 +1237,16 @@ function ensureChatRuntimeIndicator() {
       textEl.textContent = content.main;
     }
 
-    // 更新详情行：增删改，不重建已有元素
+    // 更新详情行：增删改，不重建已有元素（最多显示 5 行，避免悬挂区侵入过大）
+    var MAX_DETAIL_ROWS = 5;
+    var visibleDetails = content.details.slice(0, MAX_DETAIL_ROWS);
     let detailEls = existing.querySelectorAll('.runtime-indicator-detail');
     // 移除多余的
-    for (let i = detailEls.length - 1; i >= content.details.length; i--) {
+    for (let i = detailEls.length - 1; i >= visibleDetails.length; i--) {
       detailEls[i].remove();
     }
     // 更新或新增
-    for (let i = 0; i < content.details.length; i++) {
+    for (let i = 0; i < visibleDetails.length; i++) {
       detailEls = existing.querySelectorAll('.runtime-indicator-detail');
       let el = detailEls[i];
       if (!el) {
@@ -1244,18 +1254,23 @@ function ensureChatRuntimeIndicator() {
         el.className = 'runtime-indicator-detail';
         existing.appendChild(el);
       }
-      if (el.textContent !== content.details[i]) {
-        el.textContent = content.details[i];
+      if (el.textContent !== visibleDetails[i]) {
+        el.textContent = visibleDetails[i];
       }
     }
-  });
 
-  // 确保始终在容器最末尾
-  if (chatContainer.lastElementChild !== existing) {
-    runWithSuppressedChatViewportObservers(function() {
+    // 确保始终在容器最末尾
+    if (chatContainer.lastElementChild !== existing) {
       chatContainer.appendChild(existing);
-    });
-  }
+    }
+
+    // 动态负 margin 补偿：抵消指示块对 scrollHeight 的贡献
+    // （自身高度 + flex gap），使其随内容滚动但不影响滚动高度，
+    // 彻底消除出现/消失/高度变化时的抖动。
+    var flexGap = parseFloat(getComputedStyle(chatContainer).gap) || 24;
+    var indicatorHeight = existing.offsetHeight;
+    existing.style.marginBottom = (-indicatorHeight - flexGap) + 'px';
+  });
 }
 
 // ─── 启动通知计时器 ───
