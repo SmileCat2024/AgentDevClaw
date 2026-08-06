@@ -112,7 +112,7 @@ function _renderStack(def, ctx, visited) {
   return el;
 }
 
-function _renderRow(def, ctx, visited) {
+function _genUiRenderRow(def, ctx, visited) {
   const el = document.createElement('div');
   el.className = 'gen-ui-row';
   el.style.display = 'flex';
@@ -778,7 +778,7 @@ function _alignToCss(align) {
 
 const _COMPONENT_HANDLERS = {
   Stack:       _renderStack,
-  Row:         _renderRow,
+  Row:         _genUiRenderRow,
   Grid:        _renderGrid,
   Card:        _renderCard,
   Divider:     _renderDivider,
