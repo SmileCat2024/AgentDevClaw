@@ -8,6 +8,7 @@
  *
  * 用法:
  *   advclaw                 启动服务器（后台自动检测新版本）
+ *   advclaw --port 1600    使用指定的 Web UI 端口启动
  *   advclaw update          检查并更新到最新 GitHub Release
  *   advclaw update --check  仅检查是否有新版本
  *
@@ -30,6 +31,39 @@ const projectRoot = join(__dirname, '..');
 const args = process.argv.slice(2);
 const subcommand = args[0] || '';
 
+function parseStartPort(argv) {
+  let rawPort = null;
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--port') {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('-')) {
+        console.error('错误: --port 需要一个 1-65535 范围内的端口号');
+        process.exit(1);
+      }
+      rawPort = argv[++i];
+    } else if (arg.startsWith('--port=')) {
+      rawPort = arg.slice('--port='.length);
+    }
+  }
+
+  if (rawPort === null) return null;
+
+  const normalizedPort = String(rawPort).trim();
+  if (!/^\d+$/.test(normalizedPort)) {
+    console.error(`错误: 无效端口号 "${rawPort}"，必须是 1-65535 之间的整数`);
+    process.exit(1);
+  }
+
+  const port = Number(normalizedPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(`错误: 无效端口号 "${rawPort}"，必须是 1-65535 之间的整数`);
+    process.exit(1);
+  }
+
+  return port;
+}
+
 if (subcommand === 'update') {
   await cmdUpdate(args.slice(1));
   process.exit(0);
@@ -40,6 +74,7 @@ if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
   console.log('');
   console.log('用法:');
   console.log('  advclaw                 启动服务器');
+  console.log('  advclaw --port <port>   使用指定的 Web UI 端口启动');
   console.log('  advclaw update          更新到最新 GitHub Release');
   console.log('  advclaw update --check  仅检查是否有新版本');
   console.log('');
@@ -57,12 +92,18 @@ if (subcommand === '--version' || subcommand === '-v') {
 
 // ── 启动服务器 ──────────────────────────────────────────────────
 
+const requestedPort = parseStartPort(args);
+
 // 后台检测新版本（不阻塞服务器启动）
 backgroundCheck().catch(() => { /* 网络错误静默忽略 */ });
+
+const childEnv = { ...process.env };
+if (requestedPort !== null) childEnv.PORT = String(requestedPort);
 
 const child = spawn(process.execPath, ['server.js'], {
   cwd: projectRoot,
   stdio: 'inherit',
+  env: childEnv,
 });
 
 child.on('exit', (code) => {

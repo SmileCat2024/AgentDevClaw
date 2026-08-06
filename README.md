@@ -32,7 +32,7 @@ npm start
 
 启动成功后浏览器打开 **http://127.0.0.1:1420** 即可看到工作空间界面。
 
-> 如果 1420 或 2026 端口被占用，可以通过环境变量调整：`PORT=1500 AGENTDEV_VIEWER_PORT=2100 npm start`
+> 如果 1420 端口被 Windows 保留，可以直接指定 Web UI 端口启动：`advclaw --port 1600`
 
 ### 全局命令 `advclaw`（推荐）
 
@@ -48,6 +48,7 @@ npm link           # 注册全局命令（只需执行一次）
 
 ```bash
 advclaw            # 启动服务器
+advclaw --port 1600  # 使用指定的 Web UI 端口启动
 ```
 
 #### 自动更新
@@ -187,6 +188,7 @@ server.js 主进程
 
 ```bash
 advclaw                       # 启动服务器（自动检测新版本）
+advclaw --port 1600          # 使用指定的 Web UI 端口启动
 advclaw update                # 更新到最新 GitHub Release
 advclaw update --check        # 仅检查是否有新版本
 ```
