@@ -186,7 +186,7 @@ function renderSettingsOverlay() {
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
-    '<div class="feature-detail-window" style="width:min(100%,560px);height:min(100%,640px);overflow:hidden;">',
+    '<div class="feature-detail-window" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;">',
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div>',
