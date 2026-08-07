@@ -202,6 +202,17 @@ async function startVoiceRecording(btn) {
   }
 
   try {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      const isSecure = window.isSecureContext;
+      const hint = currentLanguage === 'zh'
+        ? (isSecure
+          ? '当前浏览器不支持麦克风访问（mediaDevices API 不可用）。'
+          : '麦克风功能仅在安全上下文下可用。请通过 https:// 访问，或使用 SSH 端口转发后在 localhost 上打开。')
+        : (isSecure
+          ? 'Microphone access is not supported in this browser (mediaDevices API unavailable).'
+          : 'Microphone requires a secure context. Please use https://, or access via localhost through SSH port forwarding.');
+      throw new Error(hint);
+    }
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     // Permission prompts are asynchronous. If the user changed session while
     // the browser prompt was open, the old DOM button no longer owns a valid
