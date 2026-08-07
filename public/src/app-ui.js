@@ -1710,6 +1710,14 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
   window.addEventListener('mouseup', handleMouseUp);
 });
 
+/* ── 面板宽度变化时切换 .narrow class，驱动 feature-grid 列数 ── */
+const _fpNarrowObserver = new ResizeObserver(entries => {
+  for (const entry of entries) {
+    featurePanelBody.classList.toggle('narrow', entry.contentRect.width < 380);
+  }
+});
+_fpNarrowObserver.observe(featurePanelBody);
+
 /* ══════════════════════════════════════
    Generic ctx-menu system
    ══════════════════════════════════════ */

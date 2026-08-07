@@ -921,6 +921,11 @@ body[data-theme="light"] .hooks-chip.active {
   gap: 16px;
 }
 
+/* 面板宽度较窄时切换为单列（由 JS ResizeObserver 切换 .narrow class） */
+.feature-panel-body.narrow .feature-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .overview-usage-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4790,10 +4795,6 @@ body[data-theme="light"] .plan-task.is-interrupt-target {
   }
 
   .context-chip-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .feature-grid {
     grid-template-columns: 1fr;
   }
 
