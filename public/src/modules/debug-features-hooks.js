@@ -89,6 +89,22 @@ function renderFeaturesPanel() {
 
 const FEATURE_DETAIL_PORTAL_ID = 'feature-detail-portal';
 
+// 记录已展开 schema 的工具名（跨轮询重渲染保持状态）
+const _expandedToolNames = new Set();
+
+function toggleToolSchema(toolName) {
+  if (_expandedToolNames.has(toolName)) {
+    _expandedToolNames.delete(toolName);
+  } else {
+    _expandedToolNames.add(toolName);
+  }
+  // 重渲染 overlay 以反映展开/收起状态
+  const selectedFeature = currentHookInspector.features.find(f => f.name === selectedFeatureName) || null;
+  renderFeatureDetailOverlay(selectedFeature);
+}
+
+window.toggleToolSchema = toggleToolSchema;
+
 function ensureFeatureDetailPortal() {
   let el = document.getElementById(FEATURE_DETAIL_PORTAL_ID);
   if (!el) {
@@ -117,18 +133,38 @@ function renderFeatureDetailOverlay(feature) {
           tool.renderCall ? '<span class="fdetail-tool-pill">call/' + escapeHtml(tool.renderCall) + '</span>' : '',
           tool.renderResult ? '<span class="fdetail-tool-pill">result/' + escapeHtml(tool.renderResult) + '</span>' : '',
         ].filter(Boolean).join('');
+        const hasSchema = tool.parameters && Object.keys(tool.parameters).length > 0;
+        const isExpanded = _expandedToolNames.has(tool.name);
+        const toggleAttr = hasSchema
+          ? ' onclick="event.stopPropagation();window.toggleToolSchema(&quot;' + escapeHtml(tool.name) + '&quot;)" style="cursor:pointer"'
+          : '';
+        const schemaHtml = (hasSchema && isExpanded)
+          ? '<div class="fdetail-tool-schema"><pre>' + escapeHtml(JSON.stringify(tool.parameters, null, 2)) + '</pre></div>'
+          : '';
+        const expandHint = hasSchema
+          ? '<span class="fdetail-tool-expand' + (isExpanded ? ' expanded' : '') + '">' + (isExpanded ? '▾' : '▸') + '</span>'
+          : '';
         return [
-          '<div class="fdetail-tool-row">',
+          '<div class="fdetail-tool-row' + (isExpanded ? ' expanded' : '') + '"' + toggleAttr + '>',
           '<div class="fdetail-tool-info">',
+          '<div class="fdetail-tool-name-row">',
           '<span class="fdetail-tool-name">' + escapeHtml(tool.name) + '</span>',
+          expandHint,
+          '</div>',
           tool.description ? '<span class="fdetail-tool-desc">' + escapeHtml(tool.description) + '</span>' : '',
           pills ? '<span class="fdetail-tool-pills">' + pills + '</span>' : '',
           '</div>',
           '<span class="fdetail-tool-state ' + getStatusBadgeClass(tool.state || (tool.enabled ? 'enabled' : 'disabled')) + '">' + escapeHtml(stateLabel) + '</span>',
           '</div>',
+          schemaHtml,
         ].join('');
       }).join('') + '</div>'
     : '<div class="fdetail-empty">' + escapeHtml(t('panel_no_tools')) + '</div>';
+
+  // 保存当前滚动位置，防止轮询重渲染时重置
+  // 注意：实际滚动发生在 .feature-detail-window（overflow:auto），不是 .fdetail-tool-list
+  const prevWin = portal.querySelector('.feature-detail-window');
+  const savedScroll = prevWin ? prevWin.scrollTop : 0;
 
   portal.innerHTML = [
     '<div class="feature-detail-overlay" onclick="window.closeFeatureDetails()">',
@@ -151,6 +187,10 @@ function renderFeatureDetailOverlay(feature) {
     '</div>',
     '</div>',
   ].join('');
+
+  // 恢复滚动位置
+  const newWin = portal.querySelector('.feature-detail-window');
+  if (newWin) newWin.scrollTop = savedScroll;
 }
 
 function renderReverseHooksPanel() {

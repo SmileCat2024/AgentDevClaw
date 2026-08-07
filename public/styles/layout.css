@@ -1261,7 +1261,7 @@ body[data-theme="light"] .feature-card:hover {
 
 .feature-card-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
@@ -1295,75 +1295,37 @@ body[data-theme="light"] .feature-card:hover {
 }
 
 .feature-badge {
-  padding: 3px 7px;
+  padding: 4px 11px;
   border-radius: 999px;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .feature-badge.status-enabled {
-  color: #14532d;
-  background: rgba(134, 239, 172, 0.92);
-  border-color: rgba(74, 222, 128, 0.9);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  background: color-mix(in srgb, var(--success-color) 8%, transparent);
+  color: color-mix(in srgb, var(--success-color) 60%, var(--text-secondary));
 }
 
 .feature-badge.status-partial {
-  color: #7c2d12;
-  background: rgba(253, 186, 116, 0.92);
-  border-color: rgba(251, 146, 60, 0.9);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, var(--warning-color) 8%, transparent);
+  color: color-mix(in srgb, var(--warning-color) 60%, var(--text-secondary));
 }
 
 .feature-badge.status-disabled {
-  color: #7f1d1d;
-  background: rgba(252, 165, 165, 0.9);
-  border-color: rgba(248, 113, 113, 0.88);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--error-color) 8%, transparent);
+  color: color-mix(in srgb, var(--error-color) 60%, var(--text-secondary));
 }
 
 .feature-badge.status-removed {
-  color: #fff1f2;
-  background: rgba(190, 18, 60, 0.72);
-  border-color: rgba(225, 29, 72, 0.75);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--error-color) 8%, transparent);
+  color: color-mix(in srgb, var(--error-color) 60%, var(--text-secondary));
 }
 
 .feature-badge.status-superseded {
-  color: #e2e8f0;
-  background: rgba(100, 116, 139, 0.55);
-  border-color: rgba(148, 163, 184, 0.5);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-}
-
-body[data-theme="light"] .feature-badge.status-enabled {
-  color: #166534;
-  background: rgba(220, 252, 231, 1);
-}
-
-body[data-theme="light"] .feature-badge.status-partial {
-  color: #9a3412;
-  background: rgba(255, 237, 213, 1);
-}
-
-body[data-theme="light"] .feature-badge.status-disabled {
-  color: #991b1b;
-  background: rgba(254, 226, 226, 1);
-}
-
-body[data-theme="light"] .feature-badge.status-removed {
-  color: #881337;
-  background: rgba(255, 228, 230, 1);
-}
-
-body[data-theme="light"] .feature-badge.status-superseded {
-  color: #475569;
-  background: rgba(241, 245, 249, 1);
+  background: color-mix(in srgb, var(--text-muted, #999) 10%, transparent);
+  color: color-mix(in srgb, var(--text-muted, #999) 60%, var(--text-secondary));
 }
 
 .feature-card-detail {
@@ -1477,6 +1439,11 @@ body[data-theme="light"] .feature-detail-window::before {
   border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 
+.fdetail-tool-row.expanded {
+  border-bottom: none;
+  padding-bottom: 4px;
+}
+
 .fdetail-tool-list .fdetail-tool-row:last-child {
   border-bottom: none;
 }
@@ -1497,6 +1464,47 @@ body[data-theme="light"] .fdetail-tool-row {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.fdetail-tool-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fdetail-tool-expand {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.fdetail-tool-schema {
+  padding: 0 0 10px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.fdetail-tool-schema pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  white-space: pre;
+}
+
+body[data-theme="light"] .fdetail-tool-schema pre {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+body[data-theme="light"] .fdetail-tool-schema {
+  border-bottom-color: rgba(0,0,0,0.06);
 }
 
 .fdetail-tool-desc {
