@@ -1,9 +1,9 @@
 /**
  * mcp-gateway-ui.js — MCP 网关管理覆盖层
  *
- * 设计语言：与 model-settings.js 一致。
- *   - 复用 feature-detail-window / settings-btn / settings-icon-btn / settings-input
- *   - server 卡片参考 settings-preset-card 但更宽大，包含状态、工具列表
+ * 布局：
+ *   系统内置 — Claw MCP、Debugger MCP（始终在线，开关控制是否启用 gateway 连接）
+ *   自定义服务器 — 用户通过 gateway 配置添加的共享 MCP
  *
  * 依赖（全局）：escapeHtml, currentLanguage
  */
@@ -16,32 +16,20 @@ let _gatewayConfig = null;   // raw config from /config
 let _editing = null;         // { id, isNew, config }
 let _refreshTimer = null;
 
-// ── Presets ───────────────────────────────────────────────────────
+// ── System preset definitions ─────────────────────────────────────
 
-const MCP_PRESETS = [
+const SYSTEM_PRESETS = [
   {
-    id: 'filesystem',
-    label: 'Filesystem',
-    desc: '文件系统读写',
-    config: { transport: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', 'C:\\'] },
+    id: '__claw_mcp__',
+    name: 'Claw MCP',
+    desc: 'Claw 内置工具集',
+    url: '/protoclaw/claw-mcp',
   },
   {
-    id: 'fetch',
-    label: 'Fetch',
-    desc: '网页抓取与转换',
-    config: { transport: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-fetch'] },
-  },
-  {
-    id: 'git',
-    label: 'Git',
-    desc: 'Git 仓库操作',
-    config: { transport: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-git'] },
-  },
-  {
-    id: 'memory',
-    label: 'Memory',
-    desc: '知识图谱记忆',
-    config: { transport: 'stdio', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] },
+    id: '__debugger_mcp__',
+    name: 'Debugger MCP',
+    desc: '框架调试工具集',
+    url: ':2026/mcp',
   },
 ];
 
@@ -86,29 +74,16 @@ function _startAutoRefresh() {
   _stopAutoRefresh();
   _refreshTimer = setInterval(async () => {
     if (!_gatewayOpen) { _stopAutoRefresh(); return; }
-    // Only refresh status, not config (avoid clobbering edit form)
     try {
       const res = await fetch('/protoclaw/mcp-gateway/status');
       _gatewayData = await res.json();
       if (!_editing) renderGatewayOverlay();
-      else _refreshStatusBadges();
     } catch { /* silent */ }
   }, 5000);
 }
 
 function _stopAutoRefresh() {
   if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
-}
-
-// Only update the status dots/badges without full re-render (for edit mode)
-function _refreshStatusBadges() {
-  const servers = _gatewayData?.servers || [];
-  for (const s of servers) {
-    const dot = document.querySelector(`[data-server-dot="${s.id}"]`);
-    if (dot) {
-      dot.className = 'settings-preset-dot' + (s.status === 'connected' ? ' active' : s.status === 'error' ? ' error' : '');
-    }
-  }
 }
 
 // ── Data loading ──────────────────────────────────────────────────
@@ -134,12 +109,8 @@ window._loadGatewayData = _loadGatewayData;
 // ── Actions ───────────────────────────────────────────────────────
 
 window._gatewayRestart = async function(serverId) {
-  // Optimistic: show connecting state
-  const dot = document.querySelector(`[data-server-dot="${serverId}"]`);
-  if (dot) dot.className = 'settings-preset-dot connecting';
   try {
     await fetch(`/protoclaw/mcp-gateway/${encodeURIComponent(serverId)}/restart`, { method: 'POST' });
-    // Wait a moment then refresh
     setTimeout(() => _loadGatewayData(), 500);
   } catch (e) {
     alert('Failed to restart: ' + e.message);
@@ -178,22 +149,6 @@ window._gatewayAdd = function() {
     config: { transport: 'stdio', command: '', args: [] },
   };
   renderGatewayOverlay();
-};
-
-window._gatewayAddPreset = function(presetId) {
-  const preset = MCP_PRESETS.find(p => p.id === presetId);
-  if (!preset) return;
-  // Check if ID already taken
-  let id = preset.id;
-  let n = 2;
-  while (_gatewayConfig?.servers?.[id]) { id = `${preset.id}-${n++}`; }
-  const config = JSON.parse(JSON.stringify(_gatewayConfig || { servers: {} }));
-  config.servers[id] = JSON.parse(JSON.stringify(preset.config));
-  fetch('/protoclaw/mcp-gateway/config', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(config),
-  }).then(() => _loadGatewayData()).catch(e => alert('Failed to add: ' + e.message));
 };
 
 window._gatewayCancelEdit = function() {
@@ -258,26 +213,45 @@ function _statusDotClass(status) {
   return '';
 }
 
-function _statusText(status) {
-  const isZh = currentLanguage === 'zh';
-  const map = {
+function _renderSystemItem(preset, isZh) {
+  return [
+    '<div class="gateway-list-item">',
+    '<div class="gateway-item-info">',
+    '<div class="gateway-item-icon">',
+    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    '</div>',
+    '<div class="gateway-item-text">',
+    `<div class="gateway-item-name">${escapeHtml(preset.name)}</div>`,
+    `<div class="gateway-item-detail">${escapeHtml(preset.desc)} · <code>${escapeHtml(preset.url)}</code></div>`,
+    '</div>',
+    '</div>',
+    '<div class="gateway-item-actions">',
+    `<span class="gateway-status-text connected">${isZh ? '在线' : 'Online'}</span>`,
+    '<label class="proxy-switch" title="' + (isZh ? '启用/禁用' : 'Enable/Disable') + '">',
+    '<input type="checkbox" checked />',
+    '<span class="proxy-switch-slider"></span>',
+    '</label>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
+function _renderCustomItem(s, isZh) {
+  const dotClass = _statusDotClass(s.status);
+  const statusText = {
     connected: isZh ? '已连接' : 'Connected',
     connecting: isZh ? '连接中' : 'Connecting',
     error: isZh ? '错误' : 'Error',
     disconnected: isZh ? '未连接' : 'Disconnected',
-  };
-  return map[status] || map.disconnected;
-}
+  }[s.status] || (isZh ? '未连接' : 'Disconnected');
 
-function _renderServerCard(s, isZh) {
-  const dotClass = _statusDotClass(s.status);
   const connectedTime = s.connectedAt
     ? new Date(s.connectedAt).toLocaleTimeString()
     : '';
 
-  // Tool tags (show first 8, then "+N")
+  // Tool tags (show first 6, then "+N")
   const tools = s.toolNames || [];
-  const visibleTools = tools.slice(0, 8);
+  const visibleTools = tools.slice(0, 6);
   const extraCount = tools.length - visibleTools.length;
   const toolTagsHtml = tools.length > 0
     ? '<div class="gateway-tool-tags">' +
@@ -286,83 +260,68 @@ function _renderServerCard(s, isZh) {
       '</div>'
     : '';
 
-  // Error message
   const errorHtml = s.lastError
-    ? `<div class="gateway-server-error" title="${escapeHtml(s.lastError)}">${escapeHtml(s.lastError.length > 80 ? s.lastError.substring(0, 80) + '…' : s.lastError)}</div>`
+    ? `<div class="gateway-server-error" title="${escapeHtml(s.lastError)}">${escapeHtml(s.lastError.length > 100 ? s.lastError.substring(0, 100) + '…' : s.lastError)}</div>`
     : '';
 
   return [
-    '<div class="settings-preset-card gateway-server-card">',
-    // Row 1: dot + name + status + actions
-    '<div class="gateway-server-top">',
-    '<div class="gateway-server-left">',
-    `<div class="settings-preset-dot ${dotClass}" data-server-dot="${escapeHtml(s.id)}"></div>`,
-    '<div class="settings-preset-info">',
-    `<div class="settings-preset-name">${escapeHtml(s.id)}</div>`,
-    `<div class="settings-preset-detail">`,
+    '<div class="gateway-list-item">',
+    '<div class="gateway-item-info">',
+    `<div class="settings-preset-dot ${dotClass}"></div>`,
+    '<div class="gateway-item-text">',
+    `<div class="gateway-item-name">${escapeHtml(s.id)}</div>`,
+    '<div class="gateway-item-detail">',
     `<span>${escapeHtml(s.transport)}</span>`,
     `<span class="gateway-dot-sep">·</span>`,
     `<span>${s.toolCount} ${isZh ? '个工具' : 'tools'}</span>`,
-    connectedTime ? `<span class="gateway-dot-sep">·</span><span class="gateway-uptime">${connectedTime}</span>` : '',
-    `</div>`,
+    connectedTime ? `<span class="gateway-dot-sep">·</span><span>${escapeHtml(connectedTime)}</span>` : '',
     '</div>',
     '</div>',
-    '<div class="settings-preset-actions">',
-    // Status badge
-    `<span class="gateway-status-pill ${s.status}">${_statusText(s.status)}</span>`,
-    // Restart button
+    '</div>',
+    '<div class="gateway-item-actions">',
+    `<span class="gateway-status-text ${s.status}">${statusText}</span>`,
     `<button class="settings-icon-btn" type="button" title="${isZh ? '重启' : 'Restart'}" onclick="event.stopPropagation();_gatewayRestart('${escapeHtml(s.id)}')">`,
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>',
     '</button>',
-    // Edit button
     `<button class="settings-icon-btn" type="button" title="${isZh ? '编辑' : 'Edit'}" onclick="event.stopPropagation();_gatewayEdit('${escapeHtml(s.id)}')">`,
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
     '</button>',
-    // Delete button
     `<button class="settings-icon-btn danger" type="button" title="${isZh ? '删除' : 'Delete'}" onclick="event.stopPropagation();_gatewayDelete('${escapeHtml(s.id)}')">`,
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
     '</button>',
     '</div>',
     '</div>',
-    // Row 2: tool tags
     toolTagsHtml,
-    // Row 3: error message
     errorHtml,
     '</div>',
   ].join('');
 }
 
-function _renderServerList(servers, isZh) {
-  if (!servers || servers.length === 0) {
-    return '<div style="padding:32px 16px;text-align:center;color:var(--text-secondary);font-size:13px;">' +
-      (isZh ? '尚未配置任何共享 MCP 服务器' : 'No shared MCP servers configured') +
-      '</div>';
-  }
-
-  return '<div class="settings-presets-grid gateway-server-grid">' +
-    servers.map(s => _renderServerCard(s, isZh)).join('') +
-    '</div>';
+function _renderSystemSection(isZh) {
+  return [
+    '<div class="settings-section">',
+    `<div class="settings-section-title">${isZh ? '系统内置' : 'Built-in'}</div>`,
+    '<div class="gateway-list">',
+    SYSTEM_PRESETS.map(p => _renderSystemItem(p, isZh)).join(''),
+    '</div>',
+    '</div>',
+  ].join('');
 }
 
-function _renderPresetRow(isZh) {
-  const existingIds = new Set(Object.keys(_gatewayConfig?.servers || {}));
-  const presets = MCP_PRESETS.map(p => {
-    const added = existingIds.has(p.id);
-    return `<button class="gateway-preset-btn${added ? ' added' : ''}" type="button" ` +
-      `onclick="_gatewayAddPreset('${p.id}')" ${added ? 'disabled' : ''} ` +
-      `title="${escapeHtml(p.config.args.join(' '))}">` +
-      `<span class="gateway-preset-icon">+</span>` +
-      `<span class="gateway-preset-name">${escapeHtml(p.label)}</span>` +
-      `<span class="gateway-preset-desc">${escapeHtml(p.desc)}</span>` +
-      (added ? `<span class="gateway-preset-added">${isZh ? '已添加' : 'Added'}</span>` : '') +
-      '</button>';
-  }).join('');
+function _renderCustomSection(servers, isZh) {
+  const emptyText = isZh
+    ? '尚未配置自定义服务器'
+    : 'No custom servers configured';
+
+  const items = servers.length > 0
+    ? servers.map(s => _renderCustomItem(s, isZh)).join('')
+    : `<div class="gateway-list-empty">${escapeHtml(emptyText)}</div>`;
 
   return [
-    '<div class="gateway-preset-section">',
-    `<div class="settings-section-title">${isZh ? '快速添加常用 MCP' : 'Quick Add'}</div>`,
-    '<div class="gateway-preset-row">',
-    presets,
+    '<div class="settings-section">',
+    `<div class="settings-section-title">${isZh ? '自定义服务器' : 'Custom Servers'}</div>`,
+    '<div class="gateway-list">',
+    items,
     '</div>',
     '</div>',
   ].join('');
@@ -389,7 +348,7 @@ function _renderEditFields(transport, existing) {
 
   return [
     '<div class="settings-field">',
-    `<label>URL</label>`,
+    '<label>URL</label>',
     '<input type="text" id="gateway-edit-url" class="settings-input" value="' + escapeHtml(existing.url || '') + '" placeholder="http://localhost:3000/mcp" />',
     '</div>',
   ].join('');
@@ -458,13 +417,8 @@ function renderGatewayOverlay() {
   let scrollContent = '';
   if (showList) {
     scrollContent = [
-      // Preset quick-add row
-      _renderPresetRow(isZh),
-      // Server list
-      '<div class="settings-section">',
-      `<div class="settings-section-title">${isZh ? '服务器列表' : 'Servers'}</div>`,
-      _renderServerList(servers, isZh),
-      '</div>',
+      _renderSystemSection(isZh),
+      _renderCustomSection(servers, isZh),
     ].join('');
   } else {
     scrollContent = _renderEditForm(isZh);
