@@ -101,6 +101,10 @@ OpenAI 格式进一步分为两种 API 面（通过 `apiSurface` 字段区分）
 
 每一个模型预设都可以配置压缩阈值，会话界面会时刻显示用量进度条。请注意，AgentDevClaw**不会对会话自动进行任何的压缩处理**，必须手动管理应对模型超限问题
 
+## MCP Gateway
+
+MCP（Model Context Protocol）允许 Agent 接入外部工具服务器。AgentDevClaw 提供了集中托管的 **MCP Gateway**：在设置面板中统一配置上游 MCP 服务器（支持 stdio、HTTP、SSE 三种传输方式），所有 Agent 会话透明共享这些 MCP 工具——无需为每个会话单独配置。网关托管的工具会自动出现在 Agent 的工具列表中，与内置工具无缝混合使用。
+
 ## 核心工作空间
 
 ### 编程小助手
@@ -121,9 +125,10 @@ AgentDevClaw 的核心工作空间——一个对标 Claude Code 的 AI 编程 A
 
 **能力清单：**
 
-- 集成 Shell（命令执行）、LSP（符号跳转 / 类型查看 / 引用查找）等完整工具链
+- 完整工具链：Shell（命令执行）、LSP（符号跳转 / 类型查看 / 引用查找）、Web 搜索、GitHub 集成（32 个工具，覆盖 PR / Issue / Actions / 代码搜索）、图片读取
 - 会话分支、上下文精简（trim / compact / summary）、checkpoint / rollback
 - AI 生成会话标题
+- **交互页面** —— Agent 可在对话旁侧创建持久交互表面（表单、表格、选择卡片等），用户直接操作，无需在对话中反复来回
 - 支持语音输入与声音反馈（需在全局设置中配置语音模型）
 
 ### IM 渠道 
@@ -191,6 +196,7 @@ advclaw                       # 启动服务器（自动检测新版本）
 advclaw --port 1600          # 使用指定的 Web UI 端口启动
 advclaw update                # 更新到最新 GitHub Release
 advclaw update --check        # 仅检查是否有新版本
+advclaw --version             # 查看当前版本
 ```
 
 **`claw`** — 工作空间 CLI，用于在终端中操作探索记录、子代理等：
@@ -257,7 +263,7 @@ AgentDevClaw 的 Agent 能力建立在 agentdev 框架的 Feature 机制之上�
 - **独立 Feature 包**：ShellFeature、WebSearchFeature、QQBotFeature、WeixinBot 等，以 tgz 包形式随仓库分发，位于 `resources/features/`
 - **本地 Feature**：项目自身的 TypeScript Feature（Flow、Dispatch、GroupAdmin 等），编译后通过 `prestart` 钩子自动构建
 
-预制 Agent 通过组合不同 Feature 获得不同能力。例如编程小助手集成了 Shell + LSP + WebSearch + Audit + Memory，而 IM 渠道则集成 QQBot + WeixinBot + IMOperator。
+预制 Agent 通过组合不同 Feature 获得不同能力。例如编程小助手集成了 Shell + LSP + WebSearch + GitHub + Memory + Audit，而 IM 渠道则集成 QQBot + WeixinBot + IMOperator。
 
 ## 环境变量
 
