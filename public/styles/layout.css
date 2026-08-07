@@ -6124,9 +6124,16 @@ body[data-theme="light"] .gateway-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 14px 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background 0.15s;
+}
+
+/* Horizontal wrapper inside list-item: left + right side by side */
+.gateway-list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .gateway-list-item:last-child {
@@ -6145,65 +6152,16 @@ body[data-theme="light"] .gateway-list-item:hover {
   background: rgba(0, 0, 0, 0.015);
 }
 
-/* Item info (left side) */
-.gateway-item-info {
+/* Item left (icon/dot + text) and right (status + buttons) — horizontal row */
+.gateway-item-left {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
-}
-
-.gateway-item-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: rgba(99, 145, 255, 0.1);
-  color: #6391ff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-body[data-theme="light"] .gateway-item-icon {
-  background: rgba(99, 145, 255, 0.08);
-}
-
-.gateway-item-text {
   flex: 1;
   min-width: 0;
 }
 
-.gateway-item-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.gateway-item-detail {
-  font-size: 12px;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-
-.gateway-item-detail code {
-  font-family: var(--mono-font, 'SF Mono', 'Cascadia Code', 'Consolas', monospace);
-  font-size: 11px;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 1px 5px;
-  border-radius: 4px;
-}
-
-body[data-theme="light"] .gateway-item-detail code {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-/* Item actions (right side) */
-.gateway-item-actions {
+.gateway-item-right {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -6214,8 +6172,6 @@ body[data-theme="light"] .gateway-item-detail code {
   color: var(--text-tertiary, rgba(255,255,255,0.25));
   margin: 0 2px;
 }
-
-/* Status text */
 .gateway-status-text {
   font-size: 12px;
   font-weight: 500;

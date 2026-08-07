@@ -1,7 +1,7 @@
 /**
  * mcp-gateway-ui.js — MCP 网关管理覆盖层
  *
- * 布局：
+ * 逻辑分区：
  *   系统内置 — Claw MCP、Debugger MCP（始终在线，开关控制是否启用 gateway 连接）
  *   自定义服务器 — 用户通过 gateway 配置添加的共享 MCP
  *
@@ -204,6 +204,13 @@ window._gatewayTransportChange = function() {
   dynamicFields.innerHTML = _renderEditFields(transport, _editing?.config || {});
 };
 
+// ── SVG icons ─────────────────────────────────────────────────────
+
+const SVG_REFRESH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>';
+const SVG_EDIT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';
+const SVG_DELETE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>';
+const SVG_SERVER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+
 // ── Rendering ─────────────────────────────────────────────────────
 
 function _statusDotClass(status) {
@@ -216,22 +223,22 @@ function _statusDotClass(status) {
 function _renderSystemItem(preset, isZh) {
   return [
     '<div class="gateway-list-item">',
-    '<div class="gateway-item-info">',
-    '<div class="gateway-item-icon">',
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
-    '</div>',
-    '<div class="gateway-item-text">',
-    `<div class="gateway-item-name">${escapeHtml(preset.name)}</div>`,
-    `<div class="gateway-item-detail">${escapeHtml(preset.desc)} · <code>${escapeHtml(preset.url)}</code></div>`,
-    '</div>',
-    '</div>',
-    '<div class="gateway-item-actions">',
-    `<span class="gateway-status-text connected">${isZh ? '在线' : 'Online'}</span>`,
-    '<label class="proxy-switch" title="' + (isZh ? '启用/禁用' : 'Enable/Disable') + '">',
-    '<input type="checkbox" checked />',
-    '<span class="proxy-switch-slider"></span>',
-    '</label>',
-    '</div>',
+    '  <div class="gateway-list-row">',
+    '    <div class="gateway-item-left">',
+    '      <div class="gateway-item-icon">' + SVG_SERVER + '</div>',
+    '      <div class="gateway-item-text">',
+    '        <div class="gateway-item-name">' + escapeHtml(preset.name) + '</div>',
+    '        <div class="gateway-item-detail">' + escapeHtml(preset.desc) + ' · <code>' + escapeHtml(preset.url) + '</code></div>',
+    '      </div>',
+    '    </div>',
+    '    <div class="gateway-item-right">',
+    '      <span class="gateway-status-text connected">' + (isZh ? '在线' : 'Online') + '</span>',
+    '      <label class="proxy-switch" title="' + (isZh ? '启用/禁用' : 'Enable/Disable') + '">',
+    '        <input type="checkbox" checked />',
+    '        <span class="proxy-switch-slider"></span>',
+    '      </label>',
+    '    </div>',
+    '  </div>',
     '</div>',
   ].join('');
 }
@@ -245,52 +252,41 @@ function _renderCustomItem(s, isZh) {
     disconnected: isZh ? '未连接' : 'Disconnected',
   }[s.status] || (isZh ? '未连接' : 'Disconnected');
 
-  const connectedTime = s.connectedAt
-    ? new Date(s.connectedAt).toLocaleTimeString()
-    : '';
-
-  // Tool tags (show first 6, then "+N")
   const tools = s.toolNames || [];
   const visibleTools = tools.slice(0, 6);
   const extraCount = tools.length - visibleTools.length;
   const toolTagsHtml = tools.length > 0
     ? '<div class="gateway-tool-tags">' +
-      visibleTools.map(t => `<span class="gateway-tool-tag">${escapeHtml(t)}</span>`).join('') +
-      (extraCount > 0 ? `<span class="gateway-tool-tag more">+${extraCount}</span>` : '') +
+      visibleTools.map(t => '<span class="gateway-tool-tag">' + escapeHtml(t) + '</span>').join('') +
+      (extraCount > 0 ? '<span class="gateway-tool-tag more">+' + extraCount + '</span>' : '') +
       '</div>'
     : '';
 
   const errorHtml = s.lastError
-    ? `<div class="gateway-server-error" title="${escapeHtml(s.lastError)}">${escapeHtml(s.lastError.length > 100 ? s.lastError.substring(0, 100) + '…' : s.lastError)}</div>`
+    ? '<div class="gateway-server-error" title="' + escapeHtml(s.lastError) + '">' + escapeHtml(s.lastError.length > 120 ? s.lastError.substring(0, 120) + '…' : s.lastError) + '</div>'
     : '';
 
   return [
     '<div class="gateway-list-item">',
-    '<div class="gateway-item-info">',
-    `<div class="settings-preset-dot ${dotClass}"></div>`,
-    '<div class="gateway-item-text">',
-    `<div class="gateway-item-name">${escapeHtml(s.id)}</div>`,
-    '<div class="gateway-item-detail">',
-    `<span>${escapeHtml(s.transport)}</span>`,
-    `<span class="gateway-dot-sep">·</span>`,
-    `<span>${s.toolCount} ${isZh ? '个工具' : 'tools'}</span>`,
-    connectedTime ? `<span class="gateway-dot-sep">·</span><span>${escapeHtml(connectedTime)}</span>` : '',
-    '</div>',
-    '</div>',
-    '</div>',
-    '<div class="gateway-item-actions">',
-    `<span class="gateway-status-text ${s.status}">${statusText}</span>`,
-    `<button class="settings-icon-btn" type="button" title="${isZh ? '重启' : 'Restart'}" onclick="event.stopPropagation();_gatewayRestart('${escapeHtml(s.id)}')">`,
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>',
-    '</button>',
-    `<button class="settings-icon-btn" type="button" title="${isZh ? '编辑' : 'Edit'}" onclick="event.stopPropagation();_gatewayEdit('${escapeHtml(s.id)}')">`,
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
-    '</button>',
-    `<button class="settings-icon-btn danger" type="button" title="${isZh ? '删除' : 'Delete'}" onclick="event.stopPropagation();_gatewayDelete('${escapeHtml(s.id)}')">`,
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>',
-    '</button>',
-    '</div>',
-    '</div>',
+    '  <div class="gateway-list-row">',
+    '    <div class="gateway-item-left">',
+    '      <div class="settings-preset-dot ' + dotClass + '"></div>',
+    '      <div class="gateway-item-text">',
+    '        <div class="gateway-item-name">' + escapeHtml(s.id) + '</div>',
+    '        <div class="gateway-item-detail">',
+    '          <span>' + escapeHtml(s.transport) + '</span>',
+    '          <span class="gateway-dot-sep">·</span>',
+    '          <span>' + s.toolCount + (isZh ? ' 个工具' : ' tools') + '</span>',
+    '        </div>',
+    '      </div>',
+    '    </div>',
+    '    <div class="gateway-item-right">',
+    '      <span class="gateway-status-text ' + s.status + '">' + statusText + '</span>',
+    '      <button class="settings-icon-btn" type="button" title="' + (isZh ? '重启' : 'Restart') + '" onclick="event.stopPropagation();_gatewayRestart(\'' + escapeHtml(s.id) + '\')">' + SVG_REFRESH + '</button>',
+    '      <button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();_gatewayEdit(\'' + escapeHtml(s.id) + '\')">' + SVG_EDIT + '</button>',
+    '      <button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" onclick="event.stopPropagation();_gatewayDelete(\'' + escapeHtml(s.id) + '\')">' + SVG_DELETE + '</button>',
+    '    </div>',
+    '  </div>',
     toolTagsHtml,
     errorHtml,
     '</div>',
@@ -300,10 +296,10 @@ function _renderCustomItem(s, isZh) {
 function _renderSystemSection(isZh) {
   return [
     '<div class="settings-section">',
-    `<div class="settings-section-title">${isZh ? '系统内置' : 'Built-in'}</div>`,
-    '<div class="gateway-list">',
+    '  <div class="settings-section-title">' + (isZh ? '系统内置' : 'Built-in') + '</div>',
+    '  <div class="gateway-list">',
     SYSTEM_PRESETS.map(p => _renderSystemItem(p, isZh)).join(''),
-    '</div>',
+    '  </div>',
     '</div>',
   ].join('');
 }
@@ -315,14 +311,14 @@ function _renderCustomSection(servers, isZh) {
 
   const items = servers.length > 0
     ? servers.map(s => _renderCustomItem(s, isZh)).join('')
-    : `<div class="gateway-list-empty">${escapeHtml(emptyText)}</div>`;
+    : '<div class="gateway-list-empty">' + escapeHtml(emptyText) + '</div>';
 
   return [
     '<div class="settings-section">',
-    `<div class="settings-section-title">${isZh ? '自定义服务器' : 'Custom Servers'}</div>`,
-    '<div class="gateway-list">',
+    '  <div class="settings-section-title">' + (isZh ? '自定义服务器' : 'Custom Servers') + '</div>',
+    '  <div class="gateway-list">',
     items,
-    '</div>',
+    '  </div>',
     '</div>',
   ].join('');
 }
@@ -332,24 +328,24 @@ function _renderEditFields(transport, existing) {
   if (transport === 'stdio') {
     return [
       '<div class="settings-field">',
-      `<label>${isZh ? '命令' : 'Command'}</label>`,
-      '<input type="text" id="gateway-edit-command" class="settings-input" value="' + escapeHtml(existing.command || '') + '" placeholder="npx" />',
+      '  <label>' + (isZh ? '命令' : 'Command') + '</label>',
+      '  <input type="text" id="gateway-edit-command" class="settings-input" value="' + escapeHtml(existing.command || '') + '" placeholder="npx" />',
       '</div>',
       '<div class="settings-field">',
-      `<label>${isZh ? '参数（每行一个）' : 'Arguments (one per line)'}</label>`,
-      '<textarea id="gateway-edit-args" class="settings-input" rows="3" style="resize:vertical;font-family:var(--mono-font,monospace);font-size:12px;" placeholder="-y\n@modelcontextprotocol/server-filesystem\n/tmp">' + escapeHtml((existing.args || []).join('\n')) + '</textarea>',
+      '  <label>' + (isZh ? '参数（每行一个）' : 'Arguments (one per line)') + '</label>',
+      '  <textarea id="gateway-edit-args" class="settings-input" rows="3" style="resize:vertical;font-family:var(--mono-font,monospace);font-size:12px;" placeholder="-y\n@modelcontextprotocol/server-filesystem\n/tmp">' + escapeHtml((existing.args || []).join('\n')) + '</textarea>',
       '</div>',
       '<div class="settings-field">',
-      `<label>${isZh ? '环境变量 (JSON)' : 'Environment Variables (JSON)'}</label>`,
-      '<input type="text" id="gateway-edit-env" class="settings-input" value="' + escapeHtml(existing.env ? JSON.stringify(existing.env) : '') + '" placeholder=\'{"API_KEY":"xxx"}\' />',
+      '  <label>' + (isZh ? '环境变量 (JSON)' : 'Environment Variables (JSON)') + '</label>',
+      '  <input type="text" id="gateway-edit-env" class="settings-input" value="' + escapeHtml(existing.env ? JSON.stringify(existing.env) : '') + '" placeholder=\'{"API_KEY":"xxx"}\' />',
       '</div>',
     ].join('');
   }
 
   return [
     '<div class="settings-field">',
-    '<label>URL</label>',
-    '<input type="text" id="gateway-edit-url" class="settings-input" value="' + escapeHtml(existing.url || '') + '" placeholder="http://localhost:3000/mcp" />',
+    '  <label>URL</label>',
+    '  <input type="text" id="gateway-edit-url" class="settings-input" value="' + escapeHtml(existing.url || '') + '" placeholder="http://localhost:3000/mcp" />',
     '</div>',
   ].join('');
 }
@@ -361,22 +357,22 @@ function _renderEditForm(isZh) {
 
   return [
     '<div class="settings-section">',
-    `<div class="settings-section-title">${isZh ? (isEdit ? '编辑服务器' : '添加服务器') : (isEdit ? 'Edit Server' : 'Add Server')}</div>`,
-    '<div class="settings-field">',
-    `<label>${isZh ? '服务器 ID' : 'Server ID'}</label>`,
-    '<input type="text" id="gateway-edit-id" class="settings-input" value="' + escapeHtml(e.id) + '" placeholder="filesystem" ' + (isEdit ? 'readonly' : '') + ' />',
-    '</div>',
-    '<div class="settings-field">',
-    `<label>${isZh ? '传输类型' : 'Transport'}</label>`,
-    '<select id="gateway-edit-transport" class="settings-input" onchange="_gatewayTransportChange()">',
-    '<option value="stdio"' + (transport === 'stdio' ? ' selected' : '') + '>stdio</option>',
-    '<option value="http"' + (transport === 'http' ? ' selected' : '') + '>HTTP (StreamableHTTP)</option>',
-    '<option value="sse"' + (transport === 'sse' ? ' selected' : '') + '>SSE</option>',
-    '</select>',
-    '</div>',
-    '<div id="gateway-edit-dynamic">',
+    '  <div class="settings-section-title">' + (isZh ? (isEdit ? '编辑服务器' : '添加服务器') : (isEdit ? 'Edit Server' : 'Add Server')) + '</div>',
+    '  <div class="settings-field">',
+    '    <label>' + (isZh ? '服务器 ID' : 'Server ID') + '</label>',
+    '    <input type="text" id="gateway-edit-id" class="settings-input" value="' + escapeHtml(e.id) + '" placeholder="filesystem" ' + (isEdit ? 'readonly' : '') + ' />',
+    '  </div>',
+    '  <div class="settings-field">',
+    '    <label>' + (isZh ? '传输类型' : 'Transport') + '</label>',
+    '    <select id="gateway-edit-transport" class="settings-input" onchange="_gatewayTransportChange()">',
+    '      <option value="stdio"' + (transport === 'stdio' ? ' selected' : '') + '>stdio</option>',
+    '      <option value="http"' + (transport === 'http' ? ' selected' : '') + '>HTTP (StreamableHTTP)</option>',
+    '      <option value="sse"' + (transport === 'sse' ? ' selected' : '') + '>SSE</option>',
+    '    </select>',
+    '  </div>',
+    '  <div id="gateway-edit-dynamic">',
     _renderEditFields(transport, e.config),
-    '</div>',
+    '  </div>',
     '</div>',
   ].join('');
 }
@@ -397,18 +393,18 @@ function renderGatewayOverlay() {
   if (showList) {
     footerButtons = [
       '<div class="settings-actions">',
-      `<button class="settings-btn settings-btn-secondary" type="button" onclick="_loadGatewayData()">`,
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;vertical-align:-2px;"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>',
-      isZh ? '刷新' : 'Refresh',
-      '</button>',
-      `<button class="settings-btn settings-btn-primary" type="button" onclick="_gatewayAdd()">+ ${isZh ? '添加服务器' : 'Add Server'}</button>`,
+      '  <button class="settings-btn settings-btn-secondary" type="button" onclick="_loadGatewayData()">',
+      SVG_REFRESH,
+      (isZh ? '刷新' : 'Refresh'),
+      '  </button>',
+      '  <button class="settings-btn settings-btn-primary" type="button" onclick="_gatewayAdd()">+ ' + (isZh ? '添加服务器' : 'Add Server') + '</button>',
       '</div>',
     ].join('');
   } else {
     footerButtons = [
       '<div class="settings-actions">',
-      `<button class="settings-btn settings-btn-secondary" type="button" onclick="_gatewayCancelEdit()">${isZh ? '取消' : 'Cancel'}</button>`,
-      `<button class="settings-btn settings-btn-primary" type="button" onclick="_gatewaySaveEdit()">${isZh ? '保存' : 'Save'}</button>`,
+      '  <button class="settings-btn settings-btn-secondary" type="button" onclick="_gatewayCancelEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
+      '  <button class="settings-btn settings-btn-primary" type="button" onclick="_gatewaySaveEdit()">' + (isZh ? '保存' : 'Save') + '</button>',
       '</div>',
     ].join('');
   }
@@ -426,24 +422,21 @@ function renderGatewayOverlay() {
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
-    '<div class="feature-detail-window" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;display:flex;flex-direction:column;">',
-    // Header
-    '<div class="feature-detail-head">',
-    '<div>',
-    `<div class="feature-detail-title">${isZh ? 'MCP 网关' : 'MCP Gateway'}</div>`,
-    `<div class="feature-detail-subtitle">${isZh ? '集中托管共享 MCP 服务器，所有会话复用同一连接' : 'Centrally hosted MCP servers, shared across all sessions'}</div>`,
-    '</div>',
-    `<button class="feature-detail-close" type="button" title="${isZh ? '关闭' : 'Close'}" onclick="closeMcpGateway()">×</button>`,
-    '</div>',
-    // Scrollable content
-    '<div class="settings-tab-content">',
+    '  <div class="feature-detail-window" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;display:flex;flex-direction:column;">',
+    '    <div class="feature-detail-head">',
+    '      <div>',
+    '        <div class="feature-detail-title">' + (isZh ? 'MCP 网关' : 'MCP Gateway') + '</div>',
+    '        <div class="feature-detail-subtitle">' + (isZh ? '集中托管共享 MCP 服务器，所有会话复用同一连接' : 'Centrally hosted MCP servers, shared across all sessions') + '</div>',
+    '      </div>',
+    '      <button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeMcpGateway()">×</button>',
+    '    </div>',
+    '    <div class="settings-tab-content">',
     scrollContent,
-    '</div>',
-    // Footer
-    '<div class="settings-footer">',
+    '    </div>',
+    '    <div class="settings-footer">',
     footerButtons,
-    '</div>',
-    '</div>',
+    '    </div>',
+    '  </div>',
     '</div>',
   ].join('');
 }

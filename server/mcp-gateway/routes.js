@@ -22,15 +22,19 @@ function setCORS(res) {
 export function registerMCPGatewayRoutes(app) {
   const manager = getGatewayManager();
 
-  // Load config on startup
-  manager.loadConfig().catch(err => {
-    console.error('[MCP Gateway] Failed to load config:', err.message);
-  });
+  // Load config on startup, then eagerly connect all servers
+  manager.loadConfig()
+    .then(() => manager.connectAll())
+    .catch(err => {
+      console.error('[MCP Gateway] Startup failed:', err.message);
+    });
 
   // ── Discovery: list available gateway servers with URLs ───────
   app.get('/protoclaw/mcp-gateway/servers', async (_req, res) => {
     setCORS(res);
     try {
+      // Ensure all servers are connected before reporting (handles lazy startup)
+      await manager.connectAll();
       const servers = manager.getDiscoveryInfo(APP_ORIGIN);
       res.json({ servers });
     } catch (err) {
