@@ -10,6 +10,7 @@
  *   ALL  /protoclaw/mcp-gateway/:serverId      — MCP proxy (standard StreamableHTTP)
  */
 
+import express from 'express';
 import { getGatewayManager } from './manager.js';
 import { APP_ORIGIN } from '../shared/constants.js';
 
@@ -35,7 +36,7 @@ export function registerMCPGatewayRoutes(app) {
     try {
       // Ensure all servers are connected before reporting (handles lazy startup)
       await manager.connectAll();
-      const servers = manager.getDiscoveryInfo(APP_ORIGIN);
+      const servers = manager.getDiscoveryInfo();
       res.json({ servers });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -58,8 +59,22 @@ export function registerMCPGatewayRoutes(app) {
     res.json(manager.getConfig());
   });
 
+  // ── Management: get server detail (config + tools) ───────────
+  app.get('/protoclaw/mcp-gateway/:serverId/detail', async (req, res) => {
+    setCORS(res);
+    try {
+      const detail = await manager.getServerDetail(req.params.serverId);
+      if (!detail) {
+        return res.status(404).json({ error: 'Server not found' });
+      }
+      res.json(detail);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Management: save config ───────────────────────────────────
-  app.put('/protoclaw/mcp-gateway/config', async (req, res) => {
+  app.put('/protoclaw/mcp-gateway/config', express.json(), async (req, res) => {
     setCORS(res);
     try {
       const newConfig = req.body;
@@ -81,6 +96,18 @@ export function registerMCPGatewayRoutes(app) {
       res.json({ ok: true });
     } catch (err) {
       res.status(404).json({ error: err.message });
+    }
+  });
+
+  // ── Management: toggle system server ──────────────────────────
+  app.post('/protoclaw/mcp-gateway/system/:serverId/toggle', express.json(), async (req, res) => {
+    setCORS(res);
+    try {
+      const enabled = req.body?.enabled === true;
+      await manager.toggleSystemServer(req.params.serverId, enabled);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   });
 

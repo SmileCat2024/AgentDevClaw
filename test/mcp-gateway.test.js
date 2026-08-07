@@ -163,19 +163,21 @@ describe('MCP Gateway Manager', () => {
   });
 
   it('discovery returns server info with URL', () => {
-    const discovery = _manager.getDiscoveryInfo('http://127.0.0.1:1420');
-    assert.equal(discovery.length, 1);
-    assert.equal(discovery[0].id, 'mock-stdio');
-    assert.ok(discovery[0].url.includes('/protoclaw/mcp-gateway/mock-stdio'));
-    assert.ok(discovery[0].toolCount > 0);
+    const discovery = _manager.getDiscoveryInfo();
+    // System servers are included by default
+    const custom = discovery.filter(d => d.id === 'mock-stdio');
+    assert.equal(custom.length, 1);
+    assert.ok(custom[0].url.includes('/protoclaw/mcp-gateway/mock-stdio'));
+    assert.ok(custom[0].toolCount > 0);
   });
 
   it('status returns management info', () => {
     const status = _manager.getStatus();
-    assert.equal(status.servers.length, 1);
-    assert.equal(status.servers[0].id, 'mock-stdio');
-    assert.equal(status.servers[0].status, 'connected');
-    assert.ok(status.servers[0].toolCount > 0);
-    assert.ok(status.servers[0].toolNames.includes('echo'));
+    assert.ok(status.systemServers.length >= 2, 'should have system servers');
+    const custom = status.servers.filter(s => s.id === 'mock-stdio');
+    assert.equal(custom.length, 1);
+    assert.equal(custom[0].status, 'connected');
+    assert.ok(custom[0].toolCount > 0);
+    assert.ok(custom[0].toolNames.includes('echo'));
   });
 });

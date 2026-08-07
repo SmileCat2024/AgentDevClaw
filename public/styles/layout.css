@@ -1414,7 +1414,7 @@ body[data-theme="light"] .feature-detail-window::before {
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.5;
-  font-family: var(--mono-font, 'SF Mono', 'Cascadia Code', 'Consolas', monospace);
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
   word-break: break-all;
 }
 
@@ -1524,7 +1524,7 @@ body[data-theme="light"] .fdetail-tool-schema {
   padding: 2px 6px;
   border-radius: 6px;
   font-size: 10px;
-  font-family: var(--mono-font, 'SF Mono', 'Cascadia Code', 'Consolas', monospace);
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
   color: var(--text-secondary);
   background: rgba(255,255,255,0.05);
 }
@@ -3684,6 +3684,21 @@ body[data-theme="light"] .settings-group-meta {
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.feature-detail-title .settings-preset-dot {
+  margin-left: 0;
+}
+.feature-detail-title .gateway-status-text {
+  font-size: 12px;
+  font-weight: 500;
+}
+.feature-detail-title .gateway-detail-type-badge {
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .feature-detail-subtitle {
@@ -6098,6 +6113,9 @@ body[data-theme="light"] .preset-tag-oauth {
 /* ── MCP Gateway UI ────────────────────────────────────────────── */
 
 /* Status dot variants (extends settings-preset-dot) */
+.settings-preset-dot.active {
+  background: #6391ff;
+}
 .settings-preset-dot.connecting {
   background: #f59e0b;
   animation: gw-pulse 1.2s ease-in-out infinite;
@@ -6170,6 +6188,39 @@ body[data-theme="light"] .gateway-list-item:hover {
   min-width: 0;
 }
 
+.gateway-item-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.gateway-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.gateway-item-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.gateway-item-detail code {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+body[data-theme="light"] .gateway-item-detail code {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 .gateway-item-right {
   display: flex;
   align-items: center;
@@ -6212,7 +6263,7 @@ body[data-theme="light"] .gateway-status-text.error { color: #dc2626; }
   background: rgba(99, 145, 255, 0.1);
   color: rgba(99, 145, 255, 0.9);
   border: 1px solid rgba(99, 145, 255, 0.15);
-  font-family: var(--mono-font, 'SF Mono', 'Cascadia Code', 'Consolas', monospace);
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
 }
 
 .gateway-tool-tag.more {
@@ -6258,6 +6309,84 @@ body[data-theme="light"] .gateway-server-error {
   color: var(--text-secondary);
   font-size: 13px;
 }
+
+/* ── MCP Gateway: detail view ──────────────────────────────────── */
+
+.gateway-list-item.clickable {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.gateway-list-item.clickable:hover {
+  background: rgba(255,255,255,0.04);
+}
+body[data-theme="light"] .gateway-list-item.clickable:hover {
+  background: rgba(0,0,0,0.03);
+}
+
+.gateway-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gateway-detail-type-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 100px;
+  background: rgba(255,255,255,0.08);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+body[data-theme="light"] .gateway-detail-type-badge {
+  background: rgba(0,0,0,0.05);
+}
+
+.gateway-detail-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.gateway-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.gateway-detail-row:last-child {
+  border-bottom: none;
+}
+body[data-theme="light"] .gateway-detail-row {
+  border-bottom-color: rgba(0,0,0,0.04);
+}
+.gateway-detail-label {
+  flex-shrink: 0;
+  width: 90px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.gateway-detail-val {
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.gateway-detail-val.mono {
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.gateway-tool-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gateway-tool-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
 
 
 
