@@ -175,10 +175,69 @@ export function extractToolCallLabel(name, args) {
 }
 
 /**
+ * Estimate the character count of a single message for context usage display.
+ * Counts content text + tool call names/arguments. This is a rough heuristic
+ * (actual token consumption depends on the model's tokenizer), but it gives
+ * users a reliable proportional sense of which rounds consume the most context.
+ *
+ * @param {object} m - message object
+ * @returns {number} estimated character count
+ */
+function estimateMessageCharCount(m) {
+  let count = 0;
+  // content
+  if (typeof m.content === 'string') {
+    count += m.content.length;
+  } else if (Array.isArray(m.content)) {
+    for (const part of m.content) {
+      if (typeof part === 'string') count += part.length;
+      else if (part && typeof part === 'object') count += JSON.stringify(part).length;
+    }
+  }
+  // tool calls (assistant)
+  if (Array.isArray(m.toolCalls)) {
+    for (const tc of m.toolCalls) {
+      count += typeof tc?.name === 'string' ? tc.name.length : 0;
+      const args = tc?.args ?? tc?.arguments;
+      if (typeof args === 'string') count += args.length;
+      else if (args && typeof args === 'object') count += JSON.stringify(args).length;
+    }
+  }
+  // tool results / function_call_output (often in content as non-string)
+  if (m.result != null) {
+    if (typeof m.result === 'string') count += m.result.length;
+    else count += JSON.stringify(m.result).length;
+  }
+  return count;
+}
+
+/**
+ * Estimate the character count of preamble messages (system prompt, injected
+ * context, etc.) that appear before the first user message. These messages
+ * are not part of any trim round but still consume context window space.
+ *
+ * @param {Array} messages - session messages
+ * @returns {number} estimated character count of preamble
+ */
+export function estimatePreambleCharCount(messages) {
+  let count = 0;
+  for (const m of messages) {
+    if (m?.role === 'user') break;
+    count += estimateMessageCharCount(m);
+  }
+  return count;
+}
+
+/**
  * Build a trim preview of session messages, grouping them into user→assistant rounds.
  * The most recent 2 rounds are marked suggestedTrim=false.
  *
- * Pure function — depends only on extractToolCallLabel (also module-level).
+ * Each round includes charCount (estimated characters), cumulativeCharCount
+ * (running total from the first round), charPercent (fraction of total), and
+ * cumulativePercent (running fraction of total).
+ *
+ * Pure function — depends only on extractToolCallLabel and estimateMessageCharCount
+ * (both module-level).
  *
  * @param {Array} messages - session messages
  * @returns {Array} rounds with preview info and trim suggestions
@@ -199,19 +258,21 @@ export function buildSessionTrimPreview(messages) {
         turnEnd: Number.isFinite(m.turn) ? m.turn : i,
         msgIndexStart: i,
         msgIndexEnd: i,
-        userPreview: content.slice(0, 120),
+        userPreview: content.slice(0, 200),
         assistantPreview: '',
         toolCalls: [],
         messageCount: 1,
+        charCount: estimateMessageCharCount(m),
       };
     } else if (currentRound) {
       currentRound.messageCount += 1;
       currentRound.turnEnd = Number.isFinite(m.turn) ? m.turn : currentRound.turnEnd;
       currentRound.msgIndexEnd = i;
+      currentRound.charCount += estimateMessageCharCount(m);
       if (role === 'assistant') {
         const content = typeof m.content === 'string' ? m.content.replace(/\s+/g, ' ').trim() : '';
         if (content && !currentRound.assistantPreview) {
-          currentRound.assistantPreview = content.slice(0, 120);
+          currentRound.assistantPreview = content.slice(0, 200);
         }
         const toolCalls = Array.isArray(m.toolCalls) ? m.toolCalls : [];
         for (const tc of toolCalls) {
@@ -226,6 +287,19 @@ export function buildSessionTrimPreview(messages) {
     }
   }
   if (currentRound) rounds.push(currentRound);
+
+  // Include preamble (system prompt etc.) in the total so that percentages
+  // across all rounds + preamble add up to 100%.
+  const preambleCharCount = estimatePreambleCharCount(messages);
+  let totalCharCount = preambleCharCount;
+  for (const r of rounds) totalCharCount += r.charCount;
+  let cumulative = 0;
+  for (const r of rounds) {
+    cumulative += r.charCount;
+    r.cumulativeCharCount = cumulative;
+    r.charPercent = totalCharCount > 0 ? r.charCount / totalCharCount : 0;
+    r.cumulativePercent = totalCharCount > 0 ? cumulative / totalCharCount : 0;
+  }
 
   const recentCount = 2;
   for (let i = 0; i < rounds.length; i++) {

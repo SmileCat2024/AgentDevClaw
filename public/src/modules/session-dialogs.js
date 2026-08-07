@@ -15,7 +15,7 @@
  */
 
 /* ── Trim dialog state ── */
-let trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false, keepSkillInvokes: 5 };
+let trimDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, loading: false, keepSkillInvokes: 5 };
 const trimDialog = document.getElementById('trim-dialog');
 const trimRoundList = document.getElementById('trim-round-list');
 const trimFooterInfo = document.getElementById('trim-footer-info');
@@ -65,7 +65,7 @@ trimKeepSkillInc.addEventListener('click', () => {
 });
 
 window.openTrimDialog = async (agentId, sessionId, archiveAfter = false) => {
-  trimDialogState = { agentId, sessionId, rounds: [], loading: true, keepSkillInvokes: 5, archiveAfter };
+  trimDialogState = { agentId, sessionId, rounds: [], preamblePercent: 0, loading: true, keepSkillInvokes: 5, archiveAfter };
   trimKeepSkillToggle.checked = true;
   renderSkillStepper();
   closeCompactMenu();
@@ -89,6 +89,7 @@ window.openTrimDialog = async (agentId, sessionId, archiveAfter = false) => {
     if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
     const data = await res.json();
     trimDialogState.rounds = data.rounds || [];
+    trimDialogState.preamblePercent = typeof data.preamblePercent === 'number' ? data.preamblePercent : 0;
     trimDialogState.loading = false;
     if (trimDialogState.rounds.length === 0) {
       trimRoundList.innerHTML = '<div class="trim-loading">无可用轮次</div>';
@@ -105,8 +106,18 @@ window.openTrimDialog = async (agentId, sessionId, archiveAfter = false) => {
 
 window.closeTrimDialog = () => {
   trimDialog.style.display = 'none';
-  trimDialogState = { agentId: '', sessionId: '', rounds: [], loading: false, keepSkillInvokes: 5, archiveAfter: false };
+  trimDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, loading: false, keepSkillInvokes: 5, archiveAfter: false };
 };
+
+function fmtPct(frac) {
+  return (frac * 100).toFixed(1) + '%';
+}
+
+function renderPreambleItem(preamblePercent) {
+  if (preamblePercent <= 0) return '';
+  const pct = fmtPct(preamblePercent);
+  return `<div class="trim-preamble-item"><span class="trim-preamble-label">系统上下文</span><span class="trim-preamble-pct">${pct}</span></div>`;
+}
 
 function renderTrimRoundList() {
   const rounds = trimDialogState.rounds;
@@ -115,21 +126,31 @@ function renderTrimRoundList() {
     return;
   }
 
-  trimRoundList.innerHTML = rounds.map((r, idx) => {
+  const preambleHtml = renderPreambleItem(trimDialogState.preamblePercent);
+
+  const roundsHtml = rounds.map((r, idx) => {
     const checked = r.suggestedTrim ? ' checked' : '';
     const trimmedClass = r.suggestedTrim ? ' trimmed' : '';
+    const pctText = fmtPct(r.charPercent || 0);
+    const cumText = fmtPct(r.cumulativePercent || 0);
 
     return [
       `<div class="trim-round-item${trimmedClass}" data-trim-index="${idx}">`,
       `<input type="checkbox" class="trim-checkbox" data-trim-index="${idx}"${checked} />`,
       `<div class="trim-round-content">`,
-      `<div class="trim-round-index">第 ${idx + 1} 轮${r.messageCount ? ' · ' + r.messageCount + ' 条消息' : ''}${r.toolCalls && r.toolCalls.length ? ' · <span class="trim-tool-count">' + r.toolCalls.length + ' 次调用</span>' : ''}</div>`,
+      `<div class="trim-round-meta">`,
+      `<span class="trim-round-index">第 ${idx + 1} 轮${r.messageCount ? ' · ' + r.messageCount + ' 条消息' : ''}${r.toolCalls && r.toolCalls.length ? ' · ' + r.toolCalls.length + ' 次调用' : ''}</span>`,
+      `<span class="trim-round-ctx">${pctText}<span class="trim-round-ctx-cum"> · 累计 ${cumText}</span></span>`,
+      `</div>`,
       r.userPreview ? `<div class="trim-round-preview">${escapeHtml(r.userPreview)}</div>` : '',
+      r.assistantPreview ? `<div class="trim-round-preview-sub">${escapeHtml(r.assistantPreview)}</div>` : '',
       `</div>`,
       `<button class="trim-to-here-btn" type="button" data-trim-to="${idx}">精简到此处</button>`,
       `</div>`,
     ].join('');
   }).join('');
+
+  trimRoundList.innerHTML = preambleHtml + roundsHtml;
 
   updateTrimFooterInfo();
 }
@@ -172,11 +193,13 @@ function handleTrimToHere(event) {
 
 function updateTrimFooterInfo() {
   const rounds = trimDialogState.rounds;
-  const trimmed = rounds.filter(r => r.suggestedTrim).length;
-  const kept = rounds.length - trimmed;
-  trimFooterInfo.textContent = currentLanguage === 'zh'
-    ? `共 ${rounds.length} 轮，精简 ${trimmed} 轮，保留 ${kept} 轮`
-    : `${rounds.length} rounds, trim ${trimmed}, keep ${kept}`;
+  const trimmed = rounds.filter(r => r.suggestedTrim);
+  const kept = rounds.length - trimmed.length;
+  const freedPercent = trimmed.reduce((sum, r) => sum + (r.charPercent || 0), 0);
+  const freedPctText = fmtPct(freedPercent);
+  trimFooterInfo.innerHTML = currentLanguage === 'zh'
+    ? `共 ${rounds.length} 轮，精简 ${trimmed.length} 轮 · 释放约 <span class="trim-footer-pct">${freedPctText}</span> 上下文`
+    : `${rounds.length} rounds, trim ${trimmed.length} · frees ~<span class="trim-footer-pct">${freedPctText}</span> context`;
 }
 
 trimRoundList.addEventListener('change', handleTrimCheckboxChange);
@@ -333,13 +356,13 @@ window.submitTrimCompact = async () => {
 };
 
 /* ── Branch dialog state ── */
-let branchDialogState = { agentId: '', sessionId: '', rounds: [], selectedIdx: -1, archiveAfter: false };
+let branchDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, selectedIdx: -1, archiveAfter: false };
 const branchDialog = document.getElementById('branch-dialog');
 const branchRoundList = document.getElementById('branch-round-list');
 const branchFooterInfo = document.getElementById('branch-footer-info');
 
 window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
-  branchDialogState = { agentId, sessionId, rounds: [], selectedIdx: -1, archiveAfter };
+  branchDialogState = { agentId, sessionId, rounds: [], preamblePercent: 0, selectedIdx: -1, archiveAfter };
   closeCompactMenu();
   // Update title and submit button to reflect archive behavior
   const branchTitleEl = branchDialog.querySelector('.trim-title');
@@ -361,6 +384,7 @@ window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
     if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
     const data = await res.json();
     branchDialogState.rounds = data.rounds || [];
+    branchDialogState.preamblePercent = typeof data.preamblePercent === 'number' ? data.preamblePercent : 0;
     if (branchDialogState.rounds.length === 0) {
       branchRoundList.innerHTML = '<div class="trim-loading">无可用轮次</div>';
       branchFooterInfo.textContent = '';
@@ -375,7 +399,7 @@ window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
 
 window.closeBranchDialog = () => {
   branchDialog.style.display = 'none';
-  branchDialogState = { agentId: '', sessionId: '', rounds: [], selectedIdx: -1, archiveAfter: false };
+  branchDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, selectedIdx: -1, archiveAfter: false };
 };
 
 function renderBranchRoundList() {
@@ -385,16 +409,27 @@ function renderBranchRoundList() {
     return;
   }
 
-  branchRoundList.innerHTML = rounds.map((r, idx) => {
+  const preambleHtml = renderPreambleItem(branchDialogState.preamblePercent);
+
+  const roundsHtml = rounds.map((r, idx) => {
+    const pctText = fmtPct(r.charPercent || 0);
+    const cumText = fmtPct(r.cumulativePercent || 0);
+
     return [
       `<div class="trim-round-item branch-selectable" data-branch-index="${idx}">`,
       `<div class="trim-round-content">`,
-      `<div class="trim-round-index">第 ${idx + 1} 轮${r.messageCount ? ' · ' + r.messageCount + ' 条消息' : ''}${r.toolCalls && r.toolCalls.length ? ' · <span class="trim-tool-count">' + r.toolCalls.length + ' 次调用</span>' : ''}</div>`,
+      `<div class="trim-round-meta">`,
+      `<span class="trim-round-index">第 ${idx + 1} 轮${r.messageCount ? ' · ' + r.messageCount + ' 条消息' : ''}${r.toolCalls && r.toolCalls.length ? ' · ' + r.toolCalls.length + ' 次调用' : ''}</span>`,
+      `<span class="trim-round-ctx">${pctText}<span class="trim-round-ctx-cum"> · 累计 ${cumText}</span></span>`,
+      `</div>`,
       r.userPreview ? `<div class="trim-round-preview">${escapeHtml(r.userPreview)}</div>` : '',
+      r.assistantPreview ? `<div class="trim-round-preview-sub">${escapeHtml(r.assistantPreview)}</div>` : '',
       `</div>`,
       `</div>`,
     ].join('');
   }).join('');
+
+  branchRoundList.innerHTML = preambleHtml + roundsHtml;
 
   updateBranchFooterInfo();
 }
@@ -433,9 +468,10 @@ function updateBranchFooterInfo() {
   }
   const kept = idx + 1;
   const cut = rounds.length - kept;
-  branchFooterInfo.textContent = currentLanguage === 'zh'
-    ? `共 ${rounds.length} 轮，保留 ${kept} 轮，截断 ${cut} 轮`
-    : `${rounds.length} rounds, keep ${kept}, cut ${cut}`;
+  const cumPct = fmtPct(rounds[idx].cumulativePercent || 0);
+  branchFooterInfo.innerHTML = currentLanguage === 'zh'
+    ? `保留 ${kept} 轮 · 截断 ${cut} 轮 · 占用约 <span class="trim-footer-pct">${cumPct}</span> 上下文`
+    : `Keep ${kept} · cut ${cut} · ~<span class="trim-footer-pct">${cumPct}</span> context`;
 }
 
 branchRoundList.addEventListener('click', handleBranchRoundClick);

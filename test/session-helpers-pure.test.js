@@ -13,6 +13,7 @@ import {
   extractLastMessagePreview,
   extractToolCallLabel,
   buildSessionTrimPreview,
+  estimatePreambleCharCount,
   extractDomainsFromText,
   buildLightPrebuiltSessionRecord,
   compareSidebarSessionReadModels,
@@ -187,6 +188,75 @@ describe('buildSessionTrimPreview', () => {
     const rounds = buildSessionTrimPreview(messages);
     assert.equal(rounds.length, 1);
     assert.equal(rounds[0].messageCount, 2);
+  });
+
+  it('computes charCount, charPercent and cumulativePercent per round', () => {
+    const messages = [
+      { role: 'user', content: 'AAAA', turn: 1 },
+      { role: 'assistant', content: 'BB', turn: 1 },
+      { role: 'user', content: 'CCCCCC', turn: 2 },
+      { role: 'assistant', content: 'DD', turn: 2 },
+    ];
+    const rounds = buildSessionTrimPreview(messages);
+    assert.equal(rounds.length, 2);
+    // round 0: 4+2=6 chars, round 1: 6+2=8 chars, total=14
+    assert.equal(rounds[0].charCount, 6);
+    assert.equal(rounds[1].charCount, 8);
+    assert.equal(rounds[0].cumulativeCharCount, 6);
+    assert.equal(rounds[1].cumulativeCharCount, 14);
+    assert.ok(Math.abs(rounds[0].charPercent - 6/14) < 1e-9);
+    assert.ok(Math.abs(rounds[1].cumulativePercent - 1) < 1e-9);
+  });
+
+  it('includes preamble chars in percentage denominator', () => {
+    const messages = [
+      { role: 'system', content: 'SYSPROMPT' }, // 9 chars preamble
+      { role: 'user', content: 'AB', turn: 1 },
+      { role: 'assistant', content: 'CD', turn: 1 },
+    ];
+    const rounds = buildSessionTrimPreview(messages);
+    assert.equal(rounds.length, 1);
+    // total = 9 (preamble) + 4 (round) = 13
+    // round percent = 4/13
+    assert.ok(Math.abs(rounds[0].charPercent - 4/13) < 1e-9);
+    // cumulative of the only round = 4/13 (not 100%)
+    assert.ok(rounds[0].cumulativePercent < 1);
+  });
+});
+
+// ── estimatePreambleCharCount ─────────────────────────────────────
+
+describe('estimatePreambleCharCount', () => {
+  it('counts chars before first user message', () => {
+    const messages = [
+      { role: 'system', content: 'abc' },
+      { role: 'system', content: 'de' },
+      { role: 'user', content: 'Hello' },
+    ];
+    assert.equal(estimatePreambleCharCount(messages), 5);
+  });
+
+  it('returns 0 when first message is user', () => {
+    const messages = [{ role: 'user', content: 'Hello' }];
+    assert.equal(estimatePreambleCharCount(messages), 0);
+  });
+
+  it('counts all messages when no user message exists', () => {
+    const messages = [
+      { role: 'system', content: 'abc' },
+      { role: 'system', content: 'def' },
+    ];
+    assert.equal(estimatePreambleCharCount(messages), 6);
+  });
+
+  it('counts tool calls in preamble messages', () => {
+    const messages = [
+      { role: 'system', content: 'ab', toolCalls: [{ name: 'read', args: { filePath: '/x.js' } }] },
+      { role: 'user', content: 'Hi' },
+    ];
+    // 2 (content) + 4 (read) + len(JSON.stringify({filePath:"/x.js"}))
+    const expected = 2 + 4 + JSON.stringify({ filePath: '/x.js' }).length;
+    assert.equal(estimatePreambleCharCount(messages), expected);
   });
 });
 

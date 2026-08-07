@@ -51,6 +51,7 @@ export function setupSessionRoutes(app, express, ctx) {
     archivePrebuiltSession,
     buildExplorationHandoffPayload,
     buildSessionTrimPreview,
+    estimatePreambleCharCount,
     compactAndResumeCurrentSession,
     compactAndResumeFromProvidedSummary,
     createCompactedResumeFromHandoff,
@@ -290,10 +291,14 @@ app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
     const parsed = JSON.parse(raw);
     const messages = Array.isArray(parsed?.runtime?.context?.messages) ? parsed.runtime.context.messages : [];
     const rounds = buildSessionTrimPreview(messages);
+    const preambleCharCount = estimatePreambleCharCount(messages);
+    let totalCharCount = preambleCharCount;
+    for (const r of rounds) totalCharCount += r.charCount;
     res.json({
       sessionId,
       sessionTitle: parsed.title || '',
       contextLength: null,
+      preamblePercent: totalCharCount > 0 ? preambleCharCount / totalCharCount : 0,
       rounds,
     });
   } catch (error) {
