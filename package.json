@@ -40,7 +40,7 @@
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
-    "agentdev": "^0.2.10",
+    "agentdev": "^0.2.11 ",
     "express": "^4.21.2",
     "marked": "^18.0.4",
     "multer": "^2.1.1",
