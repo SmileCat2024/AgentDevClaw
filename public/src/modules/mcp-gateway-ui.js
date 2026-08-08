@@ -21,6 +21,23 @@ let _detail = null;          // detail data from /detail endpoint
 let _detailLoading = false;
 let _refreshTimer = null;
 let _loading = false;
+const _expandedSchemas = new Set();   // MCP 工具 schema 展开状态
+
+window._toggleGatewaySchema = function(toolKey) {
+  if (_expandedSchemas.has(toolKey)) {
+    _expandedSchemas.delete(toolKey);
+  } else {
+    _expandedSchemas.add(toolKey);
+  }
+  if (_view === 'detail') {
+    // 保存滚动位置，renderGatewayOverlay 会全量替换 innerHTML
+    const scrollEl = document.querySelector('#mcp-gateway-overlay-host .settings-tab-content');
+    const savedScroll = scrollEl ? scrollEl.scrollTop : 0;
+    renderGatewayOverlay();
+    const newScroll = document.querySelector('#mcp-gateway-overlay-host .settings-tab-content');
+    if (newScroll) newScroll.scrollTop = savedScroll;
+  }
+};
 
 // ── Overlay host ──────────────────────────────────────────────────
 
@@ -317,7 +334,7 @@ const SVG_EDIT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" st
 const SVG_DELETE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>';
 const SVG_SERVER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
 const SVG_BACK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>';
-const SVG_TOOL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+const SVG_TOOL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;opacity:0.6;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -326,6 +343,18 @@ function _statusDotClass(status) {
   if (status === 'connecting') return 'connecting';
   if (status === 'error') return 'error';
   return '';
+}
+
+function _statusBadge(status, isZh) {
+  const labels = {
+    connected: isZh ? '已连接' : 'Connected',
+    connecting: isZh ? '连接中' : 'Connecting',
+    error: isZh ? '错误' : 'Error',
+    disconnected: isZh ? '未连接' : 'Disconnected',
+  };
+  const text = labels[status] || labels.disconnected;
+  const isError = status === 'error' || status === 'disconnected';
+  return '<span class="status-badge' + (isError ? ' disconnected' : '') + '">' + text + '</span>';
 }
 
 function _fmtTime(ts) {
@@ -366,14 +395,6 @@ function _renderSystemItem(s, isZh) {
 }
 
 function _renderCustomItem(s, isZh) {
-  const dotClass = _statusDotClass(s.status);
-  const statusText = {
-    connected: isZh ? '已连接' : 'Connected',
-    connecting: isZh ? '连接中' : 'Connecting',
-    error: isZh ? '错误' : 'Error',
-    disconnected: isZh ? '未连接' : 'Disconnected',
-  }[s.status] || (isZh ? '未连接' : 'Disconnected');
-
   const toolText = s.toolCount > 0
     ? '<span>' + s.toolCount + (isZh ? ' 个工具' : ' tools') + '</span>'
     : '';
@@ -392,14 +413,13 @@ function _renderCustomItem(s, isZh) {
     '<div class="gateway-list-item clickable" onclick="_gatewayViewDetail(\'' + escapeHtml(s.id) + '\')">',
     '  <div class="gateway-list-row">',
     '    <div class="gateway-item-left">',
-    '      <div class="settings-preset-dot ' + dotClass + '"></div>',
     '      <div class="gateway-item-text">',
     '        <div class="gateway-item-name">' + escapeHtml(s.id) + '</div>',
     '        <div class="gateway-item-detail">' + detailParts.join('') + '</div>',
     '      </div>',
     '    </div>',
     '    <div class="gateway-item-right">',
-    '      <span class="gateway-status-text ' + s.status + '">' + statusText + '</span>',
+    '      ' + _statusBadge(s.status, isZh),
     '      <button class="settings-icon-btn" type="button" title="' + (isZh ? '重启' : 'Restart') + '" onclick="event.stopPropagation();_gatewayRestart(\'' + escapeHtml(s.id) + '\')">' + SVG_REFRESH + '</button>',
     '      <button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();_gatewayEdit(\'' + escapeHtml(s.id) + '\')">' + SVG_EDIT + '</button>',
     '      <button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" onclick="event.stopPropagation();_gatewayDelete(\'' + escapeHtml(s.id) + '\')">' + SVG_DELETE + '</button>',
@@ -449,16 +469,29 @@ function _renderDetailRow(label, value, isMono) {
 function _renderToolCard(tool, isZh) {
   const desc = tool.description || (isZh ? '（无描述）' : '(no description)');
   const props = tool.inputSchema?.properties ? Object.keys(tool.inputSchema.properties) : [];
+  const hasSchema = tool.inputSchema && Object.keys(tool.inputSchema).length > 0;
+  const toolKey = tool.name;
+  const isExpanded = _expandedSchemas.has(toolKey);
+  const schemaLabel = isZh ? (isExpanded ? '收起 Schema' : '查看 Schema') : (isExpanded ? 'Hide schema' : 'View schema');
+  const toggleHtml = hasSchema
+    ? '<div class="fdetail-schema-toggle" onclick="event.stopPropagation();_toggleGatewaySchema(&quot;' + escapeHtml(toolKey) + '&quot;)">'
+      + (isExpanded ? '▾ ' : '▸ ') + escapeHtml(schemaLabel) + '</div>'
+    : '';
+  const schemaHtml = (hasSchema && isExpanded)
+    ? '<div class="fdetail-schema-block"><pre>' + escapeHtml(JSON.stringify(tool.inputSchema, null, 2)) + '</pre></div>'
+    : '';
 
   return [
     '<div class="feature-tool-card">',
     '  <div class="feature-tool-top">',
-    '    <div class="feature-tool-name">' + SVG_TOOL + ' ' + escapeHtml(tool.name) + '</div>',
+    '    <div class="feature-tool-name">' + SVG_TOOL + escapeHtml(tool.name) + '</div>',
     '  </div>',
     '  <div class="feature-tool-desc">' + escapeHtml(desc) + '</div>',
     props.length > 0
       ? '<div class="gateway-tool-params">' + props.map(p => '<span class="gateway-tool-tag">' + escapeHtml(p) + '</span>').join('') + '</div>'
       : '',
+    toggleHtml,
+    schemaHtml,
     '</div>',
   ].join('');
 }
@@ -590,22 +623,14 @@ function renderGatewayOverlay() {
   if (_view === 'detail') {
     const d = _detail;
     const detailName = d?.name || d?.id || '';
-    const dotClass = d ? _statusDotClass(d.status) : '';
     const badgeText = d?.isSystem ? (isZh ? '系统' : 'System') : (isZh ? '自定义' : 'Custom');
     title = detailName || (isZh ? 'MCP 详情' : 'MCP Detail');
     subtitle = '';
-    // Build header HTML: status dot → name → status text → type badge
+    // Build header HTML: name → status badge → type badge
     if (d) {
-      const statusLabel = {
-        connected: isZh ? '已连接' : 'Connected',
-        connecting: isZh ? '连接中' : 'Connecting',
-        error: isZh ? '错误' : 'Error',
-        disconnected: isZh ? '未连接' : 'Disconnected',
-      }[d.status] || d.status;
-      titleHtml = '<span class="settings-preset-dot ' + dotClass + '"></span>'
-        + '<span style="margin-left:8px;">' + escapeHtml(title) + '</span>'
-        + '<span class="gateway-status-text ' + d.status + '" style="margin-left:10px;">' + statusLabel + '</span>'
-        + '<span class="gateway-detail-type-badge" style="margin-left:8px;">' + badgeText + '</span>';
+      titleHtml = escapeHtml(title)
+        + _statusBadge(d.status, isZh)
+        + '<span class="gateway-detail-type-badge">' + badgeText + '</span>';
     }
     scrollContent = _renderDetailView(isZh);
     footerButtons = [

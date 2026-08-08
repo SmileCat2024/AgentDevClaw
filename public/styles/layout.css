@@ -1408,83 +1408,28 @@ body[data-theme="light"] .feature-detail-window::before {
               rgba(80, 130, 220, 0.06) 0%, transparent 70%);
 }
 
-/* ── Feature 详情弹窗内部布局（扁平化，去掉卡片套卡片） ─────────────────────── */
+/* ── Feature 详情弹窗内部布局 ───────────────────────────────────────────── */
+/* 复用 MCP 网关的 settings-section / settings-tab-content / gateway-detail-* 体系，
+   工具卡片复用 feature-tool-card 系列，不再使用自定义 fdetail-tool-* 样式。 */
 
-.fdetail-source {
-  font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
-  word-break: break-all;
-}
-
-.fdetail-section-title {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.01em;
-}
-
-.fdetail-tool-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.fdetail-tool-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-}
-
-.fdetail-tool-row.expanded {
-  border-bottom: none;
-  padding-bottom: 4px;
-}
-
-.fdetail-tool-list .fdetail-tool-row:last-child {
-  border-bottom: none;
-}
-
-body[data-theme="light"] .fdetail-tool-row {
-  border-bottom-color: rgba(0,0,0,0.06);
-}
-
-.fdetail-tool-info {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  flex: 1;
-}
-
-.fdetail-tool-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.fdetail-tool-name-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.fdetail-tool-expand {
+/* Schema 展开切换（Feature 详情与 MCP 网关共用） */
+.fdetail-schema-toggle {
+  margin-top: 8px;
   font-size: 11px;
   color: var(--text-tertiary);
-  flex-shrink: 0;
-  line-height: 1;
+  cursor: pointer;
+  user-select: none;
 }
 
-.fdetail-tool-schema {
-  padding: 0 0 10px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+.fdetail-schema-toggle:hover {
+  color: var(--text-secondary);
 }
 
-.fdetail-tool-schema pre {
+.fdetail-schema-block {
+  margin-top: 8px;
+}
+
+.fdetail-schema-block pre {
   margin: 0;
   padding: 10px 12px;
   border-radius: 8px;
@@ -1498,50 +1443,9 @@ body[data-theme="light"] .fdetail-tool-row {
   white-space: pre;
 }
 
-body[data-theme="light"] .fdetail-tool-schema pre {
+body[data-theme="light"] .fdetail-schema-block pre {
   background: rgba(0, 0, 0, 0.04);
   border-color: rgba(0, 0, 0, 0.06);
-}
-
-body[data-theme="light"] .fdetail-tool-schema {
-  border-bottom-color: rgba(0,0,0,0.06);
-}
-
-.fdetail-tool-desc {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-
-.fdetail-tool-pills {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 2px;
-}
-
-.fdetail-tool-pill {
-  padding: 2px 6px;
-  border-radius: 6px;
-  font-size: 10px;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
-  color: var(--text-secondary);
-  background: rgba(255,255,255,0.05);
-}
-
-body[data-theme="light"] .fdetail-tool-pill {
-  background: rgba(0,0,0,0.04);
-}
-
-.fdetail-tool-state {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.fdetail-empty {
-  font-size: 13px;
-  color: var(--text-secondary);
-  padding: 8px 0;
 }
 
 /* ── Settings Overlay ──────────────────────────────────────────────────────── */
@@ -3687,14 +3591,7 @@ body[data-theme="light"] .settings-group-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 2px;
-}
-.feature-detail-title .settings-preset-dot {
-  margin-left: 0;
-}
-.feature-detail-title .gateway-status-text {
-  font-size: 12px;
-  font-weight: 500;
+  gap: 8px;
 }
 .feature-detail-title .gateway-detail-type-badge {
   font-size: 11px;
@@ -3732,6 +3629,14 @@ body[data-theme="light"] .feature-detail-close {
 body[data-theme="light"] .feature-detail-close:hover {
   background: #f0f0f0;
   border-color: #c0c0c0;
+}
+
+.feature-detail-source {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', ui-monospace, monospace;
+  word-break: break-all;
+  line-height: 1.5;
 }
 
 .feature-detail-stats {
@@ -3795,7 +3700,10 @@ body[data-theme="light"] .feature-tool-card {
 }
 
 .feature-tool-name {
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -6382,9 +6290,10 @@ body[data-theme="light"] .gateway-detail-row {
 }
 .gateway-tool-params {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   margin-top: 6px;
+  overflow: hidden;
 }
 
 

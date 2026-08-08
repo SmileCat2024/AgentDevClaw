@@ -89,16 +89,21 @@ function renderFeaturesPanel() {
 
 const FEATURE_DETAIL_PORTAL_ID = 'feature-detail-portal';
 
-// 记录已展开 schema 的工具名（跨轮询重渲染保持状态）
-const _expandedToolNames = new Set();
+const SVG_TOOL_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;opacity:0.6;"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
 
-function toggleToolSchema(toolName) {
-  if (_expandedToolNames.has(toolName)) {
-    _expandedToolNames.delete(toolName);
+// 记录已展开 schema 的工具（跨轮询重渲染保持状态）
+const _expandedToolNames = new Set();
+// 上次渲染签名，避免轮询时无谓的 innerHTML 全量替换导致滚动卡顿
+let _lastDetailSignature = '';
+
+function toggleToolSchema(toolKey) {
+  if (_expandedToolNames.has(toolKey)) {
+    _expandedToolNames.delete(toolKey);
   } else {
-    _expandedToolNames.add(toolName);
+    _expandedToolNames.add(toolKey);
   }
-  // 重渲染 overlay 以反映展开/收起状态
+  // 签名已变，强制重渲染
+  _lastDetailSignature = '';
   const selectedFeature = currentHookInspector.features.find(f => f.name === selectedFeatureName) || null;
   renderFeatureDetailOverlay(selectedFeature);
 }
@@ -119,56 +124,67 @@ function renderFeatureDetailOverlay(feature) {
   const portal = ensureFeatureDetailPortal();
 
   if (!feature) {
-    portal.innerHTML = '';
+    if (portal.innerHTML) portal.innerHTML = '';
+    _lastDetailSignature = '';
     return;
   }
 
+  // 计算签名：feature 名 + 工具数据 + 展开状态 + 语言
+  // 如果签名未变则跳过 innerHTML 替换，避免轮询导致的滚动卡顿
+  const signature = feature.name + '|'
+    + (feature.tools || []).map(t => t.name + ':' + t.state + ':' + (t.enabled ? 1 : 0)).join(',')
+    + '|exp:' + Array.from(_expandedToolNames).sort().join(',')
+    + '|lang:' + currentLanguage;
+  if (signature === _lastDetailSignature && portal.innerHTML) return;
+  _lastDetailSignature = signature;
+
   const toolRowsHtml = (feature.tools && feature.tools.length > 0)
-    ? '<div class="fdetail-tool-list">' + feature.tools.map(tool => {
+    ? '<div class="gateway-tool-grid">' + feature.tools.map(tool => {
         const stateLabel = tool.state === 'superseded' ? t('feature_tool_superseded')
           : tool.state === 'removed' ? t('feature_tool_removed')
           : tool.state === 'disabled' || tool.enabled === false ? t('feature_tool_disabled')
           : t('feature_tool_enabled');
-        const pills = [
-          tool.renderCall ? '<span class="fdetail-tool-pill">call/' + escapeHtml(tool.renderCall) + '</span>' : '',
-          tool.renderResult ? '<span class="fdetail-tool-pill">result/' + escapeHtml(tool.renderResult) + '</span>' : '',
+        const metaPills = [
+          tool.renderCall ? '<span class="feature-tool-pill">call/' + escapeHtml(tool.renderCall) + '</span>' : '',
+          tool.renderResult ? '<span class="feature-tool-pill">result/' + escapeHtml(tool.renderResult) + '</span>' : '',
         ].filter(Boolean).join('');
+        const props = tool.parameters?.properties ? Object.keys(tool.parameters.properties) : [];
         const hasSchema = tool.parameters && Object.keys(tool.parameters).length > 0;
-        const isExpanded = _expandedToolNames.has(tool.name);
-        const toggleAttr = hasSchema
-          ? ' onclick="event.stopPropagation();window.toggleToolSchema(&quot;' + escapeHtml(tool.name) + '&quot;)" style="cursor:pointer"'
+        const toolKey = feature.name + ':' + tool.name;
+        const isExpanded = _expandedToolNames.has(toolKey);
+        const paramsHtml = props.length > 0
+          ? '<div class="gateway-tool-params">' + props.map(p => '<span class="gateway-tool-tag">' + escapeHtml(p) + '</span>').join('') + '</div>'
+          : '';
+        const toggleHtml = hasSchema
+          ? '<div class="fdetail-schema-toggle" onclick="event.stopPropagation();window.toggleToolSchema(&quot;' + escapeHtml(toolKey) + '&quot;)">'
+            + (isExpanded ? '▾ ' : '▸ ') + escapeHtml(t(isExpanded ? 'feature_tool_schema_expanded' : 'feature_tool_schema')) + '</div>'
           : '';
         const schemaHtml = (hasSchema && isExpanded)
-          ? '<div class="fdetail-tool-schema"><pre>' + escapeHtml(JSON.stringify(tool.parameters, null, 2)) + '</pre></div>'
-          : '';
-        const expandHint = hasSchema
-          ? '<span class="fdetail-tool-expand' + (isExpanded ? ' expanded' : '') + '">' + (isExpanded ? '▾' : '▸') + '</span>'
+          ? '<div class="fdetail-schema-block"><pre>' + escapeHtml(JSON.stringify(tool.parameters, null, 2)) + '</pre></div>'
           : '';
         return [
-          '<div class="fdetail-tool-row' + (isExpanded ? ' expanded' : '') + '"' + toggleAttr + '>',
-          '<div class="fdetail-tool-info">',
-          '<div class="fdetail-tool-name-row">',
-          '<span class="fdetail-tool-name">' + escapeHtml(tool.name) + '</span>',
-          expandHint,
+          '<div class="feature-tool-card">',
+          '<div class="feature-tool-top">',
+          '<div class="feature-tool-name">' + SVG_TOOL_ICON + escapeHtml(tool.name) + '</div>',
+          '<div class="' + getStatusBadgeClass(tool.state || (tool.enabled ? 'enabled' : 'disabled')) + '">' + escapeHtml(stateLabel) + '</div>',
           '</div>',
-          tool.description ? '<span class="fdetail-tool-desc">' + escapeHtml(tool.description) + '</span>' : '',
-          pills ? '<span class="fdetail-tool-pills">' + pills + '</span>' : '',
-          '</div>',
-          '<span class="fdetail-tool-state ' + getStatusBadgeClass(tool.state || (tool.enabled ? 'enabled' : 'disabled')) + '">' + escapeHtml(stateLabel) + '</span>',
-          '</div>',
+          tool.description ? '<div class="feature-tool-desc">' + escapeHtml(tool.description) + '</div>' : '',
+          paramsHtml,
+          metaPills ? '<div class="feature-tool-meta">' + metaPills + '</div>' : '',
+          toggleHtml,
           schemaHtml,
+          '</div>',
         ].join('');
       }).join('') + '</div>'
-    : '<div class="fdetail-empty">' + escapeHtml(t('panel_no_tools')) + '</div>';
+    : '<div class="gateway-list-empty">' + escapeHtml(t('panel_no_tools')) + '</div>';
 
-  // 保存当前滚动位置，防止轮询重渲染时重置
-  // 注意：实际滚动发生在 .feature-detail-window（overflow:auto），不是 .fdetail-tool-list
-  const prevWin = portal.querySelector('.feature-detail-window');
-  const savedScroll = prevWin ? prevWin.scrollTop : 0;
+  // 保存滚动位置（settings-tab-content 是滚动容器）
+  const prevScroll = portal.querySelector('.settings-tab-content');
+  const savedScroll = prevScroll ? prevScroll.scrollTop : 0;
 
   portal.innerHTML = [
     '<div class="feature-detail-overlay" onclick="window.closeFeatureDetails()">',
-    '<div class="feature-detail-window" onclick="event.stopPropagation()">',
+    '<div class="feature-detail-window" onclick="event.stopPropagation()" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;display:flex;flex-direction:column;">',
     '<div class="feature-detail-head">',
     '<div>',
     '<div class="feature-detail-title">' + escapeHtml(feature.name) + '</div>',
@@ -176,21 +192,25 @@ function renderFeatureDetailOverlay(feature) {
     '</div>',
     '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="window.closeFeatureDetails()">×</button>',
     '</div>',
+    '<div class="settings-tab-content">',
     '<div class="feature-detail-stats">',
     '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_hooks')) + '</div><div class="feature-detail-stat-value">' + String(feature.hookCount) + '</div></div>',
     '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_active_tools')) + '</div><div class="feature-detail-stat-value">' + String(feature.enabledToolCount) + '/' + String(feature.toolCount) + '</div></div>',
     '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(feature))) + '</div></div>',
     '</div>',
-    '<div class="fdetail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + '</div>',
-    '<div class="fdetail-section-title">' + escapeHtml(t('panel_loaded_tools')) + '</div>',
+    '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + '</div>',
+    '<div class="settings-section">',
+    '<div class="settings-section-title">' + escapeHtml(t('panel_loaded_tools')) + ' (' + String(feature.tools?.length || 0) + ')</div>',
     toolRowsHtml,
+    '</div>',
+    '</div>',
     '</div>',
     '</div>',
   ].join('');
 
   // 恢复滚动位置
-  const newWin = portal.querySelector('.feature-detail-window');
-  if (newWin) newWin.scrollTop = savedScroll;
+  const newScroll = portal.querySelector('.settings-tab-content');
+  if (newScroll) newScroll.scrollTop = savedScroll;
 }
 
 function renderReverseHooksPanel() {
