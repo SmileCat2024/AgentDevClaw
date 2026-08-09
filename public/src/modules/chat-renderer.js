@@ -420,21 +420,21 @@ function syncRowCollapseState(row) {
   var userExpanded = !isNaN(msgIndex) && _userExpandedMsgs.has(msgIndex);
   var userCollapsed = !isNaN(msgIndex) && _userCollapsedMsgs.has(msgIndex);
 
+  // Apply collapse state: user preference takes priority over auto-collapse.
+  // All four branches fall through to the button creation code below — the
+  // toggle button must persist for any collapsible message so the user can
+  // reverse their choice. Previously the userExpanded/userCollapsed branches
+  // removed the button and returned early, causing the button to vanish on
+  // the next poll cycle.
   if (userExpanded) {
-    // User explicitly expanded — don't auto-collapse
     el.classList.remove('collapsed');
-    if (btnBar) btnBar.remove();
-    return;
-  }
-
-  if (userCollapsed) {
-    // User explicitly collapsed — keep collapsed
+    const meta = row.querySelector('.message-meta .collapse-toggle svg');
+    if (meta) meta.style.transform = 'rotate(0deg)';
+  } else if (userCollapsed) {
     el.classList.add('collapsed');
-    if (btnBar) btnBar.remove();
-    return;
-  }
-
-  if (shouldCollapse) {
+    const meta = row.querySelector('.message-meta .collapse-toggle svg');
+    if (meta) meta.style.transform = 'rotate(-90deg)';
+  } else if (shouldCollapse) {
     el.classList.add('collapsed');
     const meta = row.querySelector('.message-meta .collapse-toggle svg');
     if (meta) meta.style.transform = 'rotate(-90deg)';
