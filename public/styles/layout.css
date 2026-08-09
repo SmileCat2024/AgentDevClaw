@@ -627,6 +627,27 @@ body[data-theme="light"] .feature-panel-header {
   transform: translateX(0);
 }
 
+/* 底部渐变遮罩：内容滚动到底部时平滑渐隐（仿 settings-footer） */
+.feature-panel::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, transparent 0%, var(--glass-bg) 90%);
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.feature-panel.open.scrollable::after {
+  opacity: 1;
+}
+body[data-theme="light"] .feature-panel::after {
+  background: linear-gradient(to bottom, transparent 0%, rgba(240, 240, 242, 0.9) 90%);
+}
+
 .feature-panel-empty {
   display: flex;
   flex-direction: column;

@@ -131,6 +131,10 @@ function renderFeaturePanel(options = {}) {
     }
 
     featurePanel.classList.add('body-ready');
+
+    // 底部渐变：内容溢出时显示渐隐遮罩
+    featurePanel.classList.toggle('scrollable',
+      featurePanelBody.scrollHeight > featurePanelBody.clientHeight + 4);
   };
 
   if (options.deferBody === true) {
