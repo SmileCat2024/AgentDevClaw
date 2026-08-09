@@ -323,7 +323,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '<div class="ph-banner-desc">' + escapeHtml(desc) + '</div>',
     '</div>',
     '<div class="ph-banner-actions">',
-    '<button class="ph-banner-btn secondary" type="button" onclick="window.phOpenModelConfig()">' + (isZh ? '配置模型' : 'Model Config') + '</button>',
+    '<button class="ph-banner-btn secondary" type="button" onclick="window.phOpenModelConfig()">' + (isZh ? '工作空间设置' : 'Settings') + '</button>',
     '<button class="ph-banner-btn" type="button" onclick="window.phOpenProject()">' + (isZh ? '打开项目' : 'Open Project') + '</button>',
     '</div>',
     '</div>',
@@ -359,17 +359,25 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '</div>',
   ].join('') : '';
 
-  const headerBar = [
-    '<div class="ph-project-bar">',
-    '<div class="ph-project-bar-left">',
-    dropdownHtml,
-    '</div>',
-    '<div class="ph-project-bar-right">',
-    modelSwitchHtml,
-    (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + escapeHtml(JSON.stringify({ type: 'create_session', openDirectory: currentProject.openDirectory || '' })) + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
-    '</div>',
-    '</div>',
-  ].join('');
+   const newChatAction = escapeHtml(JSON.stringify({
+     type: 'create_session',
+     openDirectory: currentProject?.openDirectory || '',
+     processModeOverride: agent?.processMode === 'shared-by-project'
+       ? (() => { try { return localStorage.getItem('ph_process_mode_' + (currentProject?.openDirectory || '_default')) || 'shared-by-project'; } catch { return 'shared-by-project'; } })()
+       : undefined,
+   }));
+
+   const headerBar = [
+     '<div class="ph-project-bar">',
+     '<div class="ph-project-bar-left">',
+     dropdownHtml,
+     '</div>',
+     '<div class="ph-project-bar-right">',
+     modelSwitchHtml,
+     (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
+     '</div>',
+     '</div>',
+   ].join('');
 
   // No project state
   if (!currentProject) {
@@ -391,10 +399,6 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const explorationSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.sessionType === 'exploration'));
   const subSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.sessionType === 'sub'));
   const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
-  const newChatAction = escapeHtml(JSON.stringify({
-    type: 'create_session',
-    openDirectory: currentProject.openDirectory || '',
-  }));
 
   const renderPhSessionItem = (session, type) => {
     const sType = type || session.sessionType || 'main';
@@ -426,6 +430,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       renderSessionTodoBadge(session),
       renderSessionArchivedBadge(session),
       renderSessionTitleAiButton(session),
+      (agent?.processMode === 'shared-by-project' && session.metadata?.processModeOverride ? '<span class="session-process-badge ' + (session.metadata.processModeOverride === 'isolated' ? 'isolated' : 'shared') + '" title="' + escapeHtml(isZh ? '进程模式' : 'Process mode') + '">' + escapeHtml(isZh ? (session.metadata.processModeOverride === 'isolated' ? '独立' : '共享') : (session.metadata.processModeOverride === 'isolated' ? 'ISO' : 'SHR')) + '</span>' : ''),
       '</div>',
       '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + ' · ' + escapeHtml(String(session.messageCount ?? 0)) + ' ' + escapeHtml(isZh ? '条消息' : 'messages') + '</div>',
       sType !== 'exploration' && session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',

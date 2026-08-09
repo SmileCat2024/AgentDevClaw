@@ -191,4 +191,22 @@ describe('ClawDispatchFeature', () => {
     assert.equal((feature as any).injectedThisCall.length, 0);
     assert.equal((feature as any).callActive, false);
   });
+
+  it('uses its explicit runtime identity instead of process-global session state', async () => {
+    const feature = new ClawDispatchFeature({
+      agentId: 'programming-helper',
+      sessionId: 'second-session',
+      serverOrigin: 'http://runtime.test',
+    });
+
+    await (feature as any).reportStatus((feature as any).getServerOrigin(), 'idle');
+
+    assert.equal(fetchCalls.length, 1);
+    assert.match(fetchCalls[0].url, /^http:\/\/runtime\.test\/protoclaw\/dispatch\/agent_status$/);
+    assert.deepEqual(fetchCalls[0].body, {
+      agentId: 'programming-helper',
+      sessionId: 'second-session',
+      status: 'idle',
+    });
+  });
 });

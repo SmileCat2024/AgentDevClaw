@@ -227,6 +227,7 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
         agentName: action.agentName || '',
         openDirectory: action.openDirectory || '',
         targetDir: action.targetDir || '',
+        processModeOverride: action.processModeOverride || '',
         operationId: action.operationId || '',
         responseMode: 'delta',
       }

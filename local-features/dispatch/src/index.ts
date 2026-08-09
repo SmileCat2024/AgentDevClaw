@@ -20,6 +20,12 @@ interface DispatchMessage {
   text: string;
 }
 
+export interface ClawRuntimeIdentity {
+  agentId?: string;
+  sessionId?: string | null;
+  serverOrigin?: string;
+}
+
 const CALL_FINISH_SIDE_EFFECT_BUDGET_MS = 250;
 
 async function waitForCallFinishSideEffects(task: Promise<void>, label: string): Promise<void> {
@@ -43,6 +49,20 @@ export class ClawDispatchFeature implements AgentFeature {
   private arbiterRef: any = null;
   private abortController = new AbortController();
   private started = false;
+
+  constructor(private readonly runtime: ClawRuntimeIdentity = {}) {}
+
+  private getServerOrigin(): string {
+    return this.runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
+  }
+
+  private getAgentId(): string {
+    return this.runtime.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'unknown';
+  }
+
+  private getSessionId(): string {
+    return this.runtime.sessionId || process.env.PROTOCLAW_PREBUILT_SESSION_ID || '';
+  }
 
   // ── Step 级注入状态 ──
   private callActive = false;
@@ -85,8 +105,7 @@ export class ClawDispatchFeature implements AgentFeature {
   async onCallFinishHook(ctx: any): Promise<void> {
     this.callActive = false;
 
-    const serverOrigin =
-      process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
+    const serverOrigin = this.getServerOrigin();
     const response: string = ctx.response || '';
 
     // 先同步转移状态所有权，网络回报只允许占用一个很短的总预算。
@@ -118,8 +137,7 @@ export class ClawDispatchFeature implements AgentFeature {
     this.arbiterRef = arbiter || null;
     this.started = true;
     // Report initial idle status so on-idle triggers can fire immediately
-    const serverOrigin =
-      process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
+    const serverOrigin = this.getServerOrigin();
     await this.reportStatus(serverOrigin, 'idle');
     this.runLoop().catch((err) => {
       if (!this.abortController.signal.aborted) {
@@ -129,10 +147,9 @@ export class ClawDispatchFeature implements AgentFeature {
   }
 
   private async runLoop(): Promise<void> {
-    const serverOrigin =
-      process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
-    const agentId = process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'unknown';
-    const sessionId = process.env.PROTOCLAW_PREBUILT_SESSION_ID || '';
+    const serverOrigin = this.getServerOrigin();
+    const agentId = this.getAgentId();
+    const sessionId = this.getSessionId();
 
     console.log(
       `[ClawDispatch] polling as agentId=${agentId}, sessionId=${sessionId || '(none)'}`,
@@ -271,8 +288,8 @@ export class ClawDispatchFeature implements AgentFeature {
     serverOrigin: string,
     status: string,
   ): Promise<void> {
-    const agentId = process.env.PROTOCLAW_PREBUILT_AGENT_ID || '';
-    const sessionId = process.env.PROTOCLAW_PREBUILT_SESSION_ID || '';
+    const agentId = this.getAgentId();
+    const sessionId = this.getSessionId();
     if (!agentId) return;
     await fetch(`${serverOrigin}/protoclaw/dispatch/agent_status`, {
       method: 'POST',

@@ -668,6 +668,9 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       agentName: req.body.agentName,
       openDirectory: req.body.openDirectory,
       targetDir: req.body.targetDir,
+      metadata: req.body.processModeOverride
+        ? { processModeOverride: req.body.processModeOverride }
+        : undefined,
     });
     const committedIndex = await readSessionIndex(agent.id);
     trace.mark('index_committed', { revision: committedIndex.revision, sessionCount: committedIndex.sessions.length });

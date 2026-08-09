@@ -1,20 +1,36 @@
 import { getAgentRuntime, listAgentRuntimes } from './agent-access.js';
 import { log } from './string-helpers.js';
 
+/**
+ * Deliver a session-scoped message through one controlled boundary.
+ * A shared child process cannot infer the intended session from its process
+ * identity, so the runtime's own selectedSessionId is authoritative.
+ */
+export function sendIPCToRuntime(runtime, message) {
+  if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
+    return false;
+  }
+  const targetSessionId = runtime.selectedSessionId;
+  const payload = targetSessionId
+    ? { ...message, __targetSessionId: targetSessionId }
+    : { ...message };
+  try {
+    runtime.process.send(payload);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 export function sendIPCtoSession(targetAgentId, targetSessionId, message) {
   const runtime = getAgentRuntime(targetAgentId, targetSessionId);
   if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {
     log('ProtoClaw IPC', `Target ${targetAgentId}::${targetSessionId} not running`, 'warn');
     return false;
   }
-  try {
-    runtime.process.send(message);
-    log('ProtoClaw IPC', `Sent to ${targetAgentId}::${targetSessionId}: ${JSON.stringify(message)}`);
-    return true;
-  } catch (err) {
-    log('ProtoClaw IPC', `Failed to send to ${targetAgentId}::${targetSessionId}: ${err}`, 'error');
-    return false;
-  }
+  const sent = sendIPCToRuntime(runtime, message);
+  log('ProtoClaw IPC', `${sent ? 'Sent' : 'Failed to send'} to ${targetAgentId}::${targetSessionId}: ${JSON.stringify(message)}`, sent ? undefined : 'error');
+  return sent;
 }
 
 /**

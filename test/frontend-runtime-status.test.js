@@ -74,11 +74,72 @@ describe('runtime-status: sidebar operation projection', () => {
       const host = { id: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
       beginSidebarOperation({
         operationId: 'summary:projection', type: 'create', kind: 'summary', phase: 'generating',
-        agentId: host.id, sourceSessionId: 'session-1'
+        agentId: host.id, sourceSessionId: 'session-1',
+        projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a'
       });
       return collectRuntimeEntriesForPrebuilt(host, [])[0].name;
     })()`);
     assert.equal(name, '正在生成摘要会话…');
+  });
+
+  it('does not render a programming-helper pending item without an explicit project directory', () => {
+    const ctx = loadRuntimeStatus();
+    const entries = ctx.run(`(() => {
+      const host = {
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_sessions: {
+          sessions: [{ id: 'session-1', openDirectory: 'D:\\\\code\\\\project-a' }]
+        }
+      };
+      beginSidebarOperation({
+        operationId: 'summary:missing-directory', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: host.id, sourceSessionId: 'session-1'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, []);
+    })()`);
+    assert.equal(entries.length, 0);
+  });
+
+  it('uses the operation project directory as the sole source for a pending item', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      const host = {
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_sessions: {
+          sessions: [{ id: 'session-1', openDirectory: 'D:\\\\code\\\\wrong-project' }]
+        }
+      };
+      beginSidebarOperation({
+        operationId: 'summary:explicit-directory', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: host.id, sourceSessionId: 'session-1',
+        projectDir: 'D:\\\\code\\\\right-project', projectName: 'right-project'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, [])[0];
+    })()`);
+    assert.equal(entry.projectDir, 'D:\\code\\right-project');
+    assert.equal(entry.projectName, 'right-project');
+  });
+
+  it('does not create a pending runtime item for history-only archive or delete operations', () => {
+    const ctx = loadRuntimeStatus();
+    const entries = ctx.run(`(() => {
+      const host = {
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_sessions: {
+          sessions: [{ id: 'history-1', openDirectory: 'D:\\\\code\\\\project-a' }]
+        }
+      };
+      beginSidebarOperation({
+        operationId: 'archive:history-only', type: 'archive', kind: 'archive', phase: 'committing',
+        agentId: host.id, sourceSessionId: 'history-1'
+      });
+      beginSidebarOperation({
+        operationId: 'delete:history-only', type: 'delete', kind: 'delete', phase: 'committing',
+        agentId: host.id, sourceSessionId: 'history-1'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, []);
+    })()`);
+    assert.equal(entries.length, 0);
   });
 
   it('keeps a target-readiness failure explicit after the source runtime disappears', () => {

@@ -26,6 +26,12 @@ interface GcMessage {
   textInCatchUp?: boolean;
 }
 
+export interface GroupChatRuntimeIdentity {
+  agentId?: string;
+  sessionId?: string | null;
+  serverOrigin?: string;
+}
+
 const CALL_FINISH_SIDE_EFFECT_BUDGET_MS = 250;
 
 async function waitForCallFinishSideEffects(task: Promise<void>, label: string): Promise<void> {
@@ -68,6 +74,20 @@ export class GroupChatBridgeFeature implements AgentFeature {
 
   // ── 管理员模式：不自动 writeback，需要显式 gc_reply ──
   private suppressAutoWriteback = false;
+
+  constructor(private readonly runtime: GroupChatRuntimeIdentity = {}) {}
+
+  private getServerOrigin(): string {
+    return this.runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
+  }
+
+  private getAgentId(): string {
+    return this.runtime.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'unknown';
+  }
+
+  private getSessionId(): string {
+    return this.runtime.sessionId || process.env.PROTOCLAW_PREBUILT_SESSION_ID || '';
+  }
 
   async onDestroy(): Promise<void> {
     this.abortController.abort();
@@ -157,8 +177,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
   async onCallFinishHook(ctx: any): Promise<void> {
     this.callActive = false;
 
-    const serverOrigin =
-      process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
+    const serverOrigin = this.getServerOrigin();
 
     const response: string = ctx.response || '';
     const injected = this.injectedThisCall.splice(0);
@@ -193,7 +212,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
     this.started = true;
 
     // 管理员 agent 不自动 writeback —— 需要显式调用 gc_reply 工具
-    const agentId = process.env.PROTOCLAW_PREBUILT_AGENT_ID || '';
+    const agentId = this.getAgentId();
     this.suppressAutoWriteback = agentId === 'work-group';
 
     this.runLoop().catch((err) => {
@@ -204,10 +223,9 @@ export class GroupChatBridgeFeature implements AgentFeature {
   }
 
   private async runLoop(): Promise<void> {
-    const serverOrigin =
-      process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420';
-    const agentId = process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'unknown';
-    const sessionId = process.env.PROTOCLAW_PREBUILT_SESSION_ID || '';
+    const serverOrigin = this.getServerOrigin();
+    const agentId = this.getAgentId();
+    const sessionId = this.getSessionId();
 
     console.log(
       `[GroupChatBridge] polling as agentId=${agentId}, sessionId=${sessionId || '(none)'}`,
@@ -370,7 +388,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
     const payload: any = {
       chatId: msg.gcChatId,
       identityRef: msg.gcIdentityRef,
-      sessionId: process.env.PROTOCLAW_PREBUILT_SESSION_ID || '',
+      sessionId: this.getSessionId(),
     };
     if (error) {
       payload.error = error;

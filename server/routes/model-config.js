@@ -5,7 +5,7 @@ import { spawn } from 'child_process';
 import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
-import { sendIPCToAllSessions, sendIPCtoSession } from '../shared/ipc.js';
+import { sendIPCToAllSessions, sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
 
 // ── Model Config ──────────────────────────────────────────────────
@@ -594,8 +594,7 @@ export function setupModelConfigRoutes(app, express) {
         const rt = getRuntimeByViewerAgentId(runtimeId);
         if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
           try {
-            rt.process.send(message);
-            swapCount = 1;
+            swapCount = sendIPCToRuntime(rt, message) ? 1 : 0;
           } catch (err) {
             console.warn(`[swap_thinking_effort] IPC failed for runtimeId ${runtimeId}: ${err}`);
           }
@@ -639,8 +638,7 @@ export function setupModelConfigRoutes(app, express) {
         const rt = getRuntimeByViewerAgentId(runtimeId);
         if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
           try {
-            rt.process.send(message);
-            swapCount = 1;
+            swapCount = sendIPCToRuntime(rt, message) ? 1 : 0;
           } catch (err) {
             console.warn(`[swap_model] IPC failed for runtimeId ${runtimeId}: ${err}`);
           }

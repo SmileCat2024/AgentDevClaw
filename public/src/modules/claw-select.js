@@ -158,7 +158,13 @@
     _close();
   }
 
-  function _onScrollClose() {
+  function _onScrollClose(e) {
+    if (!_openCtx) return;
+    // Don't close if scrolling inside the dropdown panel itself
+    if (_openCtx.panel.contains(e.target)) {
+      document.addEventListener('scroll', _onScrollClose, { once: true, capture: true });
+      return;
+    }
     _close();
   }
 

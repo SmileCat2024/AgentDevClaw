@@ -1,5 +1,6 @@
 import { sanitizeSessionFragment } from './string-helpers.js';
 import { NO_SESSION_TOKEN, ASSEMBLY_EXIT_WAIT_MS } from './constants.js';
+import { normalize, resolve } from 'path';
 
 export const managedAgents = new Map();
 export const assemblyRuntimeProcesses = new Map();
@@ -93,4 +94,50 @@ export function buildStatus(agentId, sessionId = undefined) {
     viewerAgentId: running ? (runtime.viewerAgentId ?? null) : null,
     selectedSessionId: runtime.selectedSessionId ?? null,
   };
+}
+
+// ── Shared-process support ──────────────────────────────────────
+
+/**
+ * Compute a process group key for shared-process mode.
+ * Returns null when projectDir is empty (no sharing possible).
+ *
+ * @param {string} agentId - Prebuilt agent id (e.g. 'programming-helper')
+ * @param {string|null|undefined} projectDir - Absolute project directory path
+ * @returns {string|null} Group key or null
+ */
+export function computeProcessGroupKey(agentId, projectDir) {
+  if (!projectDir || typeof projectDir !== 'string') return null;
+  const trimmed = projectDir.trim();
+  if (!trimmed) return null;
+  const canonical = normalize(resolve(trimmed)).replace(/\\/g, '/');
+  const normalized = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+  return `${sanitizeSessionFragment(agentId)}::${normalized}`;
+}
+
+/**
+ * Find a running runtime that shares the given process group key.
+ * Used by agent-startup.js to decide whether to send IPC add-session
+ * instead of spawning a new process.
+ *
+ * @param {string|null} processGroupKey
+ * @returns {object|null} A managed runtime entry or null
+ */
+export function findSharedProcessRuntime(processGroupKey) {
+  if (!processGroupKey) return null;
+  return Array.from(managedAgents.values())
+    .find(rt => rt.processGroupKey === processGroupKey && isManagedRuntimeRunning(rt)) || null;
+}
+
+/**
+ * List all runtime entries that share the same child process as the given runtime.
+ * Used by process-exit handlers to mark all affected sessions as stopped.
+ *
+ * @param {object} childProcess - The ChildProcess to match against
+ * @returns {Array<object>} Array of runtime entries sharing this process
+ */
+export function listRuntimesByProcess(childProcess) {
+  if (!childProcess) return [];
+  return Array.from(managedAgents.values())
+    .filter(rt => rt.process === childProcess);
 }

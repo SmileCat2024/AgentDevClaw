@@ -35,10 +35,8 @@ const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
 const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
 const PREBUILT_AGENT_MAX_TOKENS_CAP = 8000; // 预制 agent maxTokens 上限（应与 server/shared/constants.js 保持一致）
-const IS_EXPLORATION = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
 const runtimeInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const reportedUsageEventIds = new Set();
-let resolvedUsageModel = null;
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -297,89 +295,11 @@ const NEXT_TURN_ACTIONS = [
   },
 ];
 
-let agent = null;
-let disposed = false;
+// ── Session registry (multi-session support) ──────────────────
+// sessionId → SessionLifecycle instance
+const sessions = new Map();
 
-// CallArbiter extracted to server/call-arbiter.js
-
-let callArbiter = null;
-
-// ── Mutable context for extracted modules ──────────────────────────
-// `agent` and `callArbiter` are populated during main(); the context
-// objects below are shared by reference so module functions see the
-// latest values.  `postJson` is a hoisted function declaration, so it
-// is already available here despite being defined further down.
-const imBridgeCtx = {
-  agentId,
-  sessionId,
-  IS_EXPLORATION,
-  SERVER_ORIGIN,
-  agent: null,
-  callArbiter: null,
-};
-
-const summaryCtx = {
-  agentId,
-  sessionId,
-  PREBUILT_AGENT_MAX_TOKENS_CAP,
-  agent: null,
-  sessionStore,
-  postJson,
-};
-
-const imBridge = createIMBridge(imBridgeCtx);
-const summaryHandlers = createSummaryHandlers(summaryCtx);
-
-// Register IPC handler for dynamic carrier mount/unmount + todo-control
-imBridge.setupIPCMessageHandler();
-
-function getNextTurnActions() {
-  const checkpoints = Array.isArray(agent?._callCheckpoints) ? agent._callCheckpoints : [];
-  if (checkpoints.length === 0) return undefined;
-  const availableCallIndices = checkpoints.map(cp => cp.callIndex);
-  // Return actions enriched with availableCallIndices so the frontend can
-  // determine which user messages actually have rollback targets.
-  return NEXT_TURN_ACTIONS.map(action => ({
-    ...action,
-    data: { availableCallIndices },
-  }));
-}
-
-async function disposeAgent(exitCode = 0) {
-  if (disposed) return;
-  disposed = true;
-
-  if (agent) {
-    if (sessionId) {
-      // 先禁用 step auto-save，再手动做一次最终保存
-      if (typeof agent.disableStepAutoSave === 'function') {
-        agent.disableStepAutoSave();
-      }
-      try {
-        await agent.saveSession(sessionId, sessionStore);
-      } catch (error) {
-        console.error('[ProtoClaw Runtime] 保存会话失败:', error);
-      }
-    }
-
-    try {
-      await agent.dispose();
-    } catch (error) {
-      console.error('[ProtoClaw Runtime] 释放资源失败:', error);
-    }
-  }
-
-  process.exit(exitCode);
-}
-
-process.on('SIGINT', () => {
-  void disposeAgent(0);
-});
-
-process.on('SIGTERM', () => {
-  void disposeAgent(0);
-});
-
+// ── Shared postJson utility ────────────────────────────────────
 async function postJson(pathname, payload) {
   const response = await fetch(`${SERVER_ORIGIN}${pathname}`, {
     method: 'POST',
@@ -398,10 +318,230 @@ async function postJson(pathname, payload) {
   return data;
 }
 
+// ── SessionLifecycle ──────────────────────────────────────────
+// Encapsulates the full lifecycle of a single agent session within
+// a process that may host multiple sessions concurrently.
+class SessionLifecycle {
+  constructor(opts) {
+    this.sessionId = opts.sessionId ?? null;
+    this.agentName = opts.agentName || agentId;
+    this.workspaceCwd = opts.workspaceCwd ?? null;
+    this.runtimeHandoff = opts.runtimeHandoff ?? null;
+    this.announceOnStdout = opts.announceOnStdout === true;
+    this.runtime = {
+      agentId,
+      sessionId: this.sessionId,
+      serverOrigin: SERVER_ORIGIN,
+      sessionType: opts.runtime?.sessionType || null,
+      gcChatId: opts.runtime?.gcChatId || null,
+      modelPresetRole: opts.runtime?.modelPresetRole || null,
+    };
+    this.isExploration = this.runtime.sessionType === 'exploration';
 
-async function main() {
-  const workspaceCwd = resolveWorkspaceCwd(agentId, sessionId);
-  const runtimeHandoff = loadRuntimeHandoff();
+    // Populated during start()
+    this.agent = null;
+    this.callArbiter = null;
+    this.resolved = null;
+    this.resolvedUsageModel = null;
+    this.disposed = false;
+    this.inputLoopRunning = false;
+
+    // Per-session bridge contexts (shared by reference with extracted modules)
+    this.imBridgeCtx = {
+      agentId,
+      sessionId: this.sessionId,
+      IS_EXPLORATION: this.isExploration,
+      SERVER_ORIGIN,
+      agent: null,
+      callArbiter: null,
+    };
+    this.summaryCtx = {
+      agentId,
+      sessionId: this.sessionId,
+      PREBUILT_AGENT_MAX_TOKENS_CAP,
+      agent: null,
+      sessionStore,
+      postJson,
+    };
+    this.imBridge = createIMBridge(this.imBridgeCtx);
+    this.summaryHandlers = createSummaryHandlers(this.summaryCtx);
+  }
+
+  getNextTurnActions() {
+    const checkpoints = Array.isArray(this.agent?._callCheckpoints) ? this.agent._callCheckpoints : [];
+    if (checkpoints.length === 0) return undefined;
+    const availableCallIndices = checkpoints.map(cp => cp.callIndex);
+    return NEXT_TURN_ACTIONS.map(action => ({
+      ...action,
+      data: { availableCallIndices },
+    }));
+  }
+
+  // ── IPC handler for this session ────────────────────────────
+  // Called by the central IPC dispatcher when __targetSessionId matches
+  // this session, or as fallback when only one session exists.
+  handleIPC(msg) {
+    if (!msg || typeof msg !== 'object') return;
+
+    // ── tool / feature enable-disable ──
+    if (msg.type === 'tool-state') {
+      const { scope, name, action } = msg;
+      if (!name || (action !== 'enable' && action !== 'disable')) return;
+      try {
+        if (scope === 'feature') {
+          if (typeof this.agent?.[action] !== 'function') {
+            console.warn(`[ProtoClaw Runtime] tool-state: agent.${action} not available`);
+            return;
+          }
+          this.agent[action](name);
+          console.log(`[ProtoClaw Runtime] ✓ Feature '${name}' ${action}d`);
+        } else {
+          if (!this.agent?.tools || typeof this.agent.tools[action] !== 'function') {
+            console.warn(`[ProtoClaw Runtime] tool-state: tools.${action} not available`);
+            return;
+          }
+          this.agent.tools[action](name);
+          console.log(`[ProtoClaw Runtime] ✓ Tool '${name}' ${action}d`);
+        }
+      } catch (err) {
+        console.error(`[ProtoClaw Runtime] tool-state error:`, err);
+      }
+      return;
+    }
+
+    // ── IM bridge messages (carrier mount/unmount, todo-control) ──
+    if (msg.type === 'mount-im-carrier' || msg.type === 'unmount-im-carrier' || msg.type === 'todo-control') {
+      this.imBridge.handleIPCMessage(msg);
+      return;
+    }
+
+    // ── model / thinking hot-swap ──
+    if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
+
+    if (typeof this.agent?.setLLM !== 'function') {
+      console.warn(`[ProtoClaw Runtime] ${msg.type}: agent.setLLM not available (framework too old)`);
+      return;
+    }
+
+    let presetName;
+    let overrides;
+
+    if (msg.type === 'swap-model') {
+      presetName = msg.presetName;
+      if (!presetName || typeof presetName !== 'string') {
+        console.error('[ProtoClaw Runtime] swap-model: no presetName in IPC payload');
+        return;
+      }
+      overrides = undefined;
+    } else {
+      presetName = this.resolved?.presetName;
+      if (!presetName) {
+        console.error('[ProtoClaw Runtime] swap-thinking: cannot determine current presetName');
+        return;
+      }
+      overrides = { thinkingEffort: msg.thinkingEffort };
+    }
+
+    const isMidTurn = typeof this.agent.isRunning === 'function' && this.agent.isRunning();
+    const newResolved = resolveModelPresetLLM(presetName, overrides);
+    if (!newResolved?.llm) {
+      console.error(`[ProtoClaw Runtime] ${msg.type}: failed to resolve preset "${presetName}"`);
+      return;
+    }
+
+    const oldName = this.resolved?.modelName || this.resolvedUsageModel?.modelName || 'unknown';
+    this.agent.setLLM(newResolved.llm, {
+      modelName: newResolved.modelName,
+      contextLength: newResolved.contextLength,
+      compressRatio: newResolved.compressRatio,
+      presetName: newResolved.presetName,
+      thinkingEffort: newResolved.thinkingEffort || null,
+    });
+
+    this.resolved = newResolved;
+    this.resolvedUsageModel = newResolved;
+
+    const detail = msg.type === 'swap-thinking'
+      ? ` (effort: ${msg.thinkingEffort || 'default'})`
+      : '';
+    console.log(`[ProtoClaw Runtime] ✓ ${msg.type === 'swap-model' ? 'Model' : 'Thinking'} swapped: ${oldName}${detail}${isMidTurn ? ' (mid-turn)' : ''}`);
+  }
+
+  // ── Dispose this session (does NOT exit the process) ────────
+  async remove() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.inputLoopRunning = false;
+
+    if (this.agent) {
+      if (this.sessionId) {
+        if (typeof this.agent.disableStepAutoSave === 'function') {
+          this.agent.disableStepAutoSave();
+        }
+        try {
+          await this.agent.saveSession(this.sessionId, sessionStore);
+        } catch (error) {
+          console.error(`[ProtoClaw Runtime] 保存会话失败 (session=${this.sessionId}):`, error);
+        }
+      }
+
+      try {
+        await this.agent.dispose();
+      } catch (error) {
+        console.error(`[ProtoClaw Runtime] 释放资源失败 (session=${this.sessionId}):`, error);
+      }
+    }
+  }
+}
+
+async function closeHostedSession(sessionId, { notify = true } = {}) {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  await session.remove();
+  sessions.delete(sessionId);
+  if (notify && process.connected) {
+    try {
+      process.send({ type: 'session-exited', sessionId });
+    } catch (error) {
+      console.warn(`[ProtoClaw Runtime] session-exited 通知失败 (session=${sessionId}):`, error?.message || error);
+    }
+  }
+  if (sessions.size === 0) {
+    console.log('[ProtoClaw Runtime] 最后一个 session 已退出，关闭进程');
+    process.exit(0);
+  }
+  return true;
+}
+
+// ── Process-level signal handlers ─────────────────────────────
+let processDisposing = false;
+
+async function disposeAllSessions(exitCode = 0) {
+  if (processDisposing) return;
+  processDisposing = true;
+
+  const allSessions = Array.from(sessions.values());
+  sessions.clear();
+
+  await Promise.allSettled(allSessions.map(s => s.remove()));
+  process.exit(exitCode);
+}
+
+process.on('SIGINT', () => {
+  void disposeAllSessions(0);
+});
+
+process.on('SIGTERM', () => {
+  void disposeAllSessions(0);
+});
+
+
+// ── SessionLifecycle: start + runInputLoop ────────────────────
+// (Continuation of SessionLifecycle class methods — defined here
+//  after postJson and all helpers are available in module scope.)
+
+SessionLifecycle.prototype.start = async function () {
+  const workspaceCwd = this.workspaceCwd || resolveWorkspaceCwd(agentId, this.sessionId);
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);
   const AgentClass = resolveAgentClass(agentModule);
@@ -410,46 +550,43 @@ async function main() {
     throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
   }
 
-  let resolved = resolveAgentModelLLM(agentPath, 'default');
-  resolvedUsageModel = resolved || null;
-  agent = new AgentClass({
-    name: agentName,
+  this.resolved = resolveAgentModelLLM(agentPath, 'default');
+  this.resolvedUsageModel = this.resolved || null;
+  this.agent = new AgentClass({
+    name: this.agentName,
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
+    runtime: this.runtime,
     ...(agentId === 'programming-helper' ? {
       contextGuard: {
-        contextLength: resolved?.contextLength ?? null,
-        compressRatio: resolved?.compressRatio ?? 80,
+        contextLength: this.resolved?.contextLength ?? null,
+        compressRatio: this.resolved?.compressRatio ?? 80,
       },
     } : {}),
-    ...(resolved ? { llm: resolved.llm } : {}),
+    ...(this.resolved ? { llm: this.resolved.llm } : {}),
   });
   // Propagate agent reference to extracted module contexts
-  imBridgeCtx.agent = agent;
-  summaryCtx.agent = agent;
-  if (resolved) {
-    // Inject model meta (including presetName) so overview snapshot exposes it
-    // for the frontend input box model switcher.
-    if (typeof agent.setLLM === 'function') {
-      agent.setLLM(resolved.llm, {
-        modelName: resolved.modelName,
-        contextLength: resolved.contextLength,
-        compressRatio: resolved.compressRatio,
-        presetName: resolved.presetName,
-        thinkingEffort: resolved.thinkingEffort || null,
+  this.imBridgeCtx.agent = this.agent;
+  this.summaryCtx.agent = this.agent;
+  if (this.resolved) {
+    if (typeof this.agent.setLLM === 'function') {
+      this.agent.setLLM(this.resolved.llm, {
+        modelName: this.resolved.modelName,
+        contextLength: this.resolved.contextLength,
+        compressRatio: this.resolved.compressRatio,
+        presetName: this.resolved.presetName,
+        thinkingEffort: this.resolved.thinkingEffort || null,
       });
     }
-    console.log(`[ProtoClaw Runtime] Using model preset from metadata.json => ${resolved.modelName}`);
+    console.log(`[ProtoClaw Runtime] Using model preset from metadata.json => ${this.resolved.modelName}`);
     try {
-      const ctx = typeof agent.getSystemContext === 'function' ? agent.getSystemContext() : agent._systemContext;
-      if (ctx) ctx.SYSTEM_CURRENT_MODEL = resolved.modelName;
+      const ctx = typeof this.agent.getSystemContext === 'function' ? this.agent.getSystemContext() : this.agent._systemContext;
+      if (ctx) ctx.SYSTEM_CURRENT_MODEL = this.resolved.modelName;
     } catch {}
   } else {
-    // No preset in metadata.json — BasicAgent resolved its own LLM internally.
-    // Capture model info from the running LLM so usage events record the real model name.
-    const fallbackModelName = agent?.llm?.modelName;
+    const fallbackModelName = this.agent?.llm?.modelName;
     if (fallbackModelName) {
-      resolvedUsageModel = { modelName: fallbackModelName };
+      this.resolvedUsageModel = { modelName: fallbackModelName };
       console.log(`[ProtoClaw Runtime] No model preset found, using agent LLM model => ${fallbackModelName}`);
     }
   }
@@ -457,26 +594,26 @@ async function main() {
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
 
   if (typeof localFeatures.ContextCompactionControlFeature === 'function') {
-    agent.use(new localFeatures.ContextCompactionControlFeature({
+    this.agent.use(new localFeatures.ContextCompactionControlFeature({
       serverOrigin: SERVER_ORIGIN,
       agentId,
-      sessionId,
+      sessionId: this.sessionId,
     }));
     console.log('[ProtoClaw Runtime] 已挂载 context compaction control feature');
   }
 
-  if (runtimeHandoff?.handoff && (runtimeHandoff.handoff.sourceSummary || runtimeHandoff.handoff.seedMessages?.length)) {
+  if (this.runtimeHandoff?.handoff && (this.runtimeHandoff.handoff.sourceSummary || this.runtimeHandoff.handoff.seedMessages?.length)) {
     if (typeof localFeatures.ContextHandoffSeedFeature !== 'function') {
       throw new Error('local ContextHandoffSeedFeature 未构建，无法挂载 handoff seed');
     }
-    agent.use(new localFeatures.ContextHandoffSeedFeature({
-      handoff: runtimeHandoff.handoff,
+    this.agent.use(new localFeatures.ContextHandoffSeedFeature({
+      handoff: this.runtimeHandoff.handoff,
     }));
-    console.log(`[ProtoClaw Runtime] 已挂载 context handoff seed (${runtimeHandoff.source})`);
+    console.log(`[ProtoClaw Runtime] 已挂载 context handoff seed (${this.runtimeHandoff.source})`);
   }
 
-  if (typeof agent.prepareRuntime === 'function') {
-    await agent.prepareRuntime();
+  if (typeof this.agent.prepareRuntime === 'function') {
+    await this.agent.prepareRuntime();
   }
 
   if (workspaceCwd) {
@@ -484,113 +621,108 @@ async function main() {
   }
 
   console.log(`[ProtoClaw Runtime] Host workdir => ${process.cwd()}`);
-
-  console.log(`[ProtoClaw Runtime] Agent 实例已创建: ${agentName}`);
+  console.log(`[ProtoClaw Runtime] Agent 实例已创建: ${this.agentName}`);
 
   // Exploration agents run headlessly — no ViewerWorker, no IM gateway.
-  // ClawDispatchFeature polls via HTTP and is independent of ViewerWorker.
-  if (IS_EXPLORATION) {
+  if (this.isExploration) {
     console.log('[ProtoClaw Runtime] Exploration mode — skipping ViewerWorker connection');
   } else {
     console.log(`[ProtoClaw Runtime] 正在连接到 ViewerWorker (端口 ${VIEWER_PORT})...`);
-    await agent.withViewer(agentName, VIEWER_PORT, false, {
+    await this.agent.withViewer(this.agentName, VIEWER_PORT, false, {
       projectRoot: PROTOCLAW_ROOT,
     });
     console.log('[ProtoClaw Runtime] ✓ 已连接到 ViewerWorker');
-    console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${agent.agentId ?? 'unknown'}`);
+    if (this.announceOnStdout) {
+      console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${this.agent.agentId ?? 'unknown'}`);
+    }
   }
 
-  if (sessionId) {
+  if (this.sessionId) {
     let sessionLoaded = false;
     try {
-      await agent.loadSession(sessionId, sessionStore);
+      await this.agent.loadSession(this.sessionId, sessionStore);
       sessionLoaded = true;
-      console.log('[ProtoClaw Runtime] ✓ 已恢复会话: ' + sessionId);
+      console.log('[ProtoClaw Runtime] ✓ 已恢复会话: ' + this.sessionId);
     } catch {
-      console.log('[ProtoClaw Runtime] 创建新会话: ' + sessionId);
+      console.log('[ProtoClaw Runtime] 创建新会话: ' + this.sessionId);
 
-      // 对新 session 预注入 CallStart 钩子内容（CLAUDE.md、交接摘要等），
-      // 使首次加载时就能展示注入的上下文，而非空白。
-      if (typeof agent['preInjectCallStart'] === 'function') {
+      if (typeof this.agent['preInjectCallStart'] === 'function') {
         try {
-          await agent['preInjectCallStart']();
-          // preInjectCallStart 注入了 seedMessages 到内存 context，
-          // 需立即落盘，否则 title mirror 等独立子进程从磁盘加载时会 ENOENT
-          await agent.saveSession(sessionId, sessionStore);
+          await this.agent['preInjectCallStart']();
+          await this.agent.saveSession(this.sessionId, sessionStore);
           console.log('[ProtoClaw Runtime] ✓ preInjectCallStart 内容已落盘');
         } catch (error) {
           console.warn('[ProtoClaw Runtime] preInjectCallStart 失败:', error instanceof Error ? error.message : String(error));
         }
       }
     }
-    if (!sessionLoaded && runtimeHandoff?.handoff?.featureContinuity) {
+    if (!sessionLoaded && this.runtimeHandoff?.handoff?.featureContinuity) {
       try {
-        const imported = await importFeatureContinuity(agent, runtimeHandoff.handoff.featureContinuity, {
-          sourceSessionId: runtimeHandoff.handoff.sourceSessionId,
+        const imported = await importFeatureContinuity(this.agent, this.runtimeHandoff.handoff.featureContinuity, {
+          sourceSessionId: this.runtimeHandoff.handoff.sourceSessionId,
         });
         if (imported.length > 0) {
-          await agent.saveSession(sessionId, sessionStore);
+          await this.agent.saveSession(this.sessionId, sessionStore);
           console.log(`[ProtoClaw Runtime] ✓ 已导入 continuity feature state: ${imported.join(', ')}`);
         }
       } catch (error) {
         console.warn('[ProtoClaw Runtime] continuity feature state 导入失败:', error instanceof Error ? error.message : String(error));
       }
     }
-    // 启用 step 级自动保存：每个 StepFinish 后自动落盘
-    if (typeof agent.enableStepAutoSave === 'function') {
-      agent.enableStepAutoSave(sessionId, sessionStore);
+    if (typeof this.agent.enableStepAutoSave === 'function') {
+      this.agent.enableStepAutoSave(this.sessionId, sessionStore);
       console.log('[ProtoClaw Runtime] ✓ 已启用 step 级自动保存');
     }
   } else {
     console.log('[ProtoClaw Runtime] 当前未绑定对话会话，运行在工作空间首页模式。');
   }
 
-  // `loadSession()` only restores in-memory state. Push the restored state to Viewer
-  // so history is visible immediately without waiting for the next user input.
-  if (!IS_EXPLORATION) {
+  // Push restored state to Viewer
+  if (!this.isExploration) {
     try {
-      const messages = typeof agent.getContext === 'function' ? agent.getContext().getAll() : [];
-      agent['pushToDebug']?.(messages);
-      agent['syncRegisteredToolsToDebug']?.();
-      agent['pushInspectorSnapshot']?.();
-      agent['pushOverviewSnapshot']?.();
+      const messages = typeof this.agent.getContext === 'function' ? this.agent.getContext().getAll() : [];
+      this.agent['pushToDebug']?.(messages);
+      this.agent['syncRegisteredToolsToDebug']?.();
+      this.agent['pushInspectorSnapshot']?.();
+      this.agent['pushOverviewSnapshot']?.();
     } catch (error) {
       console.warn('[ProtoClaw Runtime] 恢复会话后同步调试状态失败:', error);
     }
   }
 
-  console.log('[ProtoClaw Runtime] READY session=' + (sessionId || 'none'));
-
-  // ── CallArbiter: initialize AFTER session restore, BEFORE runtime inputs open ──
-  callArbiter = new CallArbiter(agent);
-  const contextGuardFeature = agent.features?.get?.('context-guard');
-  if (contextGuardFeature && typeof contextGuardFeature.setCallArbiter === 'function') {
-    contextGuardFeature.setCallArbiter(callArbiter);
+  if (this.announceOnStdout) {
+    console.log('[ProtoClaw Runtime] READY session=' + (this.sessionId || 'none'));
   }
-  imBridgeCtx.callArbiter = callArbiter;
-  // Per-agent interrupt handler: DebugHub routes by agentId, so handler body is scoped to this agent only
-  DebugHub.getInstance().setInterruptHandler(agent?.agentId, (_targetAgentId, clearQueue) => {
-    if (!callArbiter) {
-      return;
-    }
-    const result = callArbiter.interruptActive('cancelled by interrupt', { clearQueue });
+
+  // ── CallArbiter ──
+  this.callArbiter = new CallArbiter(this.agent);
+  const contextGuardFeature = this.agent.features?.get?.('context-guard');
+  if (contextGuardFeature && typeof contextGuardFeature.setCallArbiter === 'function') {
+    contextGuardFeature.setCallArbiter(this.callArbiter);
+  }
+  this.imBridgeCtx.callArbiter = this.callArbiter;
+
+  // Per-agent interrupt handler
+  const self = this;
+  DebugHub.getInstance().setInterruptHandler(this.agent?.agentId, (_targetAgentId, clearQueue) => {
+    if (!self.callArbiter) return;
+    const result = self.callArbiter.interruptActive('cancelled by interrupt', { clearQueue });
     if (result.active || result.cleared > 0) {
       console.log(`[ProtoClaw Runtime] interrupt marked active=${result.active}, cleared=${result.cleared}`);
     }
   });
 
-  callArbiter.on('callFinished', (_envelope) => {
-    if (!sessionId) return;
-    agent.saveSession(sessionId, sessionStore).then(async () => {
-      // Push fresh metadata to server so session list can skip reading full files
+  this.callArbiter.on('callFinished', (_envelope) => {
+    if (!self.sessionId) return;
+    self.agent.saveSession(self.sessionId, sessionStore).then(async () => {
       try {
-        const context = typeof agent.getContext === 'function' ? agent.getContext() : null;
+        const context = typeof self.agent.getContext === 'function' ? self.agent.getContext() : null;
         const messages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
         const lastMessage = [...messages].reverse().find((m) => m && typeof m.content === 'string' && m.role !== 'system') || null;
         const preview = lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '';
-        const usageStats = typeof agent.getUsage === 'function' ? agent.getUsage().toSnapshot() : null;
+        const usageStats = typeof self.agent.getUsage === 'function' ? self.agent.getUsage().toSnapshot() : null;
         const totalUsage = usageStats?.totalUsage;
-        const callIndex = typeof agent?._callIndex === 'number' ? agent._callIndex : null;
+        const callIndex = typeof self.agent?._callIndex === 'number' ? self.agent._callIndex : null;
         const callSummary = Array.isArray(usageStats?.calls)
           ? usageStats.calls.find((call) => call?.callIndex === callIndex)
           : null;
@@ -598,7 +730,7 @@ async function main() {
           const usageEventId = [
             'agent-call',
             agentId,
-            sessionId,
+            self.sessionId,
             runtimeInstanceId,
             callIndex,
             callSummary.endTime || Date.now(),
@@ -608,14 +740,14 @@ async function main() {
             const usageResult = await reportUsageEvent(SERVER_ORIGIN, {
               eventId: usageEventId,
               timestamp: callSummary.endTime || Date.now(),
-              source: IS_EXPLORATION ? 'exploration-call' : 'agent-call',
+              source: self.isExploration ? 'exploration-call' : 'agent-call',
               agentId,
-              sessionId,
+              sessionId: self.sessionId,
               runtimeInstanceId,
               callIndex,
               requestCount: callSummary.stepCount || 1,
               cacheHitRequests: callSummary.cacheHitRequests || 0,
-              model: buildModelUsageMeta(resolvedUsageModel, IS_EXPLORATION ? 'exploration' : 'default'),
+              model: buildModelUsageMeta(self.resolvedUsageModel, self.isExploration ? 'exploration' : 'default'),
               usage: callSummary.totalUsage,
               context: {
                 contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
@@ -632,7 +764,7 @@ async function main() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             agentId,
-            sessionId,
+            sessionId: self.sessionId,
             messageCount: messages.length,
             preview,
             tokenUsage: {
@@ -643,9 +775,9 @@ async function main() {
             },
             contextGuard: typeof contextGuardFeature?.getState === 'function'
               ? contextGuardFeature.getState() : null,
-            modelName: resolved?.modelName || resolvedUsageModel?.modelName || undefined,
-            contextLength: resolved?.contextLength ?? undefined,
-            compressRatio: resolved?.compressRatio ?? undefined,
+            modelName: self.resolved?.modelName || self.resolvedUsageModel?.modelName || undefined,
+            contextLength: self.resolved?.contextLength ?? undefined,
+            compressRatio: self.resolved?.compressRatio ?? undefined,
             savedAt: Date.now(),
           }),
         });
@@ -657,139 +789,55 @@ async function main() {
     });
   });
 
-  callArbiter.on('callFinished', (envelope) => {
-    imBridge.dispatchIMCallFinish(envelope).catch(err => {
+  this.callArbiter.on('callFinished', (envelope) => {
+    self.imBridge.dispatchIMCallFinish(envelope).catch(err => {
       console.error('[ProtoClaw Runtime] IM callfinish delivery error:', err);
     });
   });
 
-  if (typeof agent.setCallArbiter === 'function') {
-    agent.setCallArbiter(callArbiter);
+  if (typeof this.agent.setCallArbiter === 'function') {
+    this.agent.setCallArbiter(this.callArbiter);
   }
 
-  // Wire session save for checkpoint/rollback continuation barriers
-  callArbiter.sessionSaveFn = async () => {
-    if (!sessionId) return;
-    await agent.saveSession(sessionId, sessionStore);
+  this.callArbiter.sessionSaveFn = async () => {
+    if (!self.sessionId) return;
+    await self.agent.saveSession(self.sessionId, sessionStore);
   };
 
   console.log('[ProtoClaw Runtime] ✓ CallArbiter 已初始化');
 
-  // ── IPC: model/thinking hot-swap (no process restart) ──
-  process.on('message', (msg) => {
-    if (!msg || typeof msg !== 'object') return;
-
-    // ── IPC: tool / feature enable-disable (no process restart) ──
-    if (msg.type === 'tool-state') {
-      const { scope, name, action } = msg;
-      if (!name || (action !== 'enable' && action !== 'disable')) return;
-      try {
-        if (scope === 'feature') {
-          if (typeof agent?.[action] !== 'function') {
-            console.warn(`[ProtoClaw Runtime] tool-state: agent.${action} not available`);
-            return;
-          }
-          agent[action](name);
-          console.log(`[ProtoClaw Runtime] ✓ Feature '${name}' ${action}d`);
-        } else {
-          if (!agent?.tools || typeof agent.tools[action] !== 'function') {
-            console.warn(`[ProtoClaw Runtime] tool-state: tools.${action} not available`);
-            return;
-          }
-          agent.tools[action](name);
-          console.log(`[ProtoClaw Runtime] ✓ Tool '${name}' ${action}d`);
-        }
-      } catch (err) {
-        console.error(`[ProtoClaw Runtime] tool-state error:`, err);
-      }
-      return;
-    }
-
-    if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
-
-    if (typeof agent?.setLLM !== 'function') {
-      console.warn(`[ProtoClaw Runtime] ${msg.type}: agent.setLLM not available (framework too old)`);
-      return;
-    }
-
-    let presetName;
-    let overrides;
-
-    if (msg.type === 'swap-model') {
-      // Model swap: resolve the new preset directly from config/presets.json.
-      presetName = msg.presetName;
-      if (!presetName || typeof presetName !== 'string') {
-        console.error('[ProtoClaw Runtime] swap-model: no presetName in IPC payload');
-        return;
-      }
-      overrides = undefined;
-    } else {
-      // Thinking swap: keep current preset, override thinkingEffort only.
-      presetName = resolved?.presetName;
-      if (!presetName) {
-        console.error('[ProtoClaw Runtime] swap-thinking: cannot determine current presetName');
-        return;
-      }
-      overrides = { thinkingEffort: msg.thinkingEffort };
-    }
-
-    const isMidTurn = typeof agent.isRunning === 'function' && agent.isRunning();
-    const newResolved = resolveModelPresetLLM(presetName, overrides);
-    if (!newResolved?.llm) {
-      console.error(`[ProtoClaw Runtime] ${msg.type}: failed to resolve preset "${presetName}"`);
-      return;
-    }
-
-    const oldName = resolved?.modelName || resolvedUsageModel?.modelName || 'unknown';
-    agent.setLLM(newResolved.llm, {
-      modelName: newResolved.modelName,
-      contextLength: newResolved.contextLength,
-      compressRatio: newResolved.compressRatio,
-      presetName: newResolved.presetName,
-      thinkingEffort: newResolved.thinkingEffort || null,
-    });
-
-    resolved = newResolved;
-    resolvedUsageModel = newResolved;
-
-    const detail = msg.type === 'swap-thinking'
-      ? ` (effort: ${msg.thinkingEffort || 'default'})`
-      : '';
-    console.log(`[ProtoClaw Runtime] ✓ ${msg.type === 'swap-model' ? 'Model' : 'Thinking'} swapped: ${oldName}${detail}${isMidTurn ? ' (mid-turn)' : ''}`);
-  });
-
-  if (!IS_EXPLORATION) {
+  // ── IM Gateway (only for non-exploration sessions) ──
+  if (!this.isExploration) {
     try {
-      if (typeof agent.startSelectedIMGateway === 'function') {
-        const channel = await agent.startSelectedIMGateway();
+      if (typeof this.agent.startSelectedIMGateway === 'function') {
+        const channel = await this.agent.startSelectedIMGateway();
         if (channel === 'none') {
           console.log('[ProtoClaw Runtime] • IM Gateway 未启动（未选择渠道），仅调试模式运行');
         } else {
           console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
         }
-      } else if (typeof agent.startQQBotGateway === 'function') {
-        await agent.startQQBotGateway();
+      } else if (typeof this.agent.startQQBotGateway === 'function') {
+        await this.agent.startQQBotGateway();
         console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
       } else {
-        const qqbotFeature = agent.features?.get?.('qqbot');
+        const qqbotFeature = this.agent.features?.get?.('qqbot');
         if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
-          await qqbotFeature.startGateway(agent);
+          await qqbotFeature.startGateway(this.agent);
           console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
         }
       }
     } catch (error) {
       console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
     }
-
   }
 
   // If this session is bound to an IM line, mount the carrier feature + gateway
-  await imBridge.mountIMLineCarrierIfBound();
+  await this.imBridge.mountIMLineCarrierIfBound();
 
   try {
-    const dispatchFeature = agent.features?.get?.('claw-dispatch');
+    const dispatchFeature = this.agent.features?.get?.('claw-dispatch');
     if (dispatchFeature && typeof dispatchFeature.startDispatchLoop === 'function') {
-      await dispatchFeature.startDispatchLoop(agent, callArbiter);
+      await dispatchFeature.startDispatchLoop(this.agent, this.callArbiter);
       console.log('[ProtoClaw Runtime] ✓ 已启动 ClawDispatch loop (via arbiter)');
     }
   } catch (error) {
@@ -797,32 +845,44 @@ async function main() {
   }
 
   try {
-    const gcBridgeFeature = agent.features?.get?.('group-chat-bridge');
+    const gcBridgeFeature = this.agent.features?.get?.('group-chat-bridge');
     if (gcBridgeFeature && typeof gcBridgeFeature.startBridgeLoop === 'function') {
-      await gcBridgeFeature.startBridgeLoop(agent, callArbiter);
+      await gcBridgeFeature.startBridgeLoop(this.agent, this.callArbiter);
       console.log('[ProtoClaw Runtime] ✓ 已启动 GroupChatBridge loop');
     }
   } catch (error) {
     console.error('[ProtoClaw Runtime] GroupChatBridge 启动失败:', error);
   }
 
-  const userInput = agent.features?.get?.('user-input');
+  // ── Input loop ──
+  const userInput = this.agent.features?.get?.('user-input');
   const hasUserInput = Boolean(userInput && typeof userInput.getUserInput === 'function');
 
   if (!hasUserInput) {
     console.log('');
     console.log('当前 Agent 不使用 UserInputFeature，运行在被动事件模式。');
-    await new Promise(() => {});
+    // Keep the session alive without an input loop.
+    // The process stays alive as long as pending IPC / DebugHub requests exist.
     return;
   }
 
   console.log('');
   console.log('等待调试界面输入...');
 
-  while (true) {
+  // Start input loop asynchronously (non-blocking).
+  // Multiple sessions can run their loops concurrently.
+  this.runInputLoop(userInput).catch(err => {
+    console.error(`[ProtoClaw Runtime] 输入循环异常 (session=${this.sessionId}):`, err);
+  });
+};
+
+SessionLifecycle.prototype.runInputLoop = async function (userInput) {
+  this.inputLoopRunning = true;
+
+  while (this.inputLoopRunning) {
     let response;
     try {
-      response = await userInput.getUserInputEvent(INPUT_PROMPT, undefined, getNextTurnActions());
+      response = await userInput.getUserInputEvent(INPUT_PROMPT, undefined, this.getNextTurnActions());
     } catch (error) {
       console.error('[ProtoClaw Runtime] 等待用户输入失败，稍后重试:', error);
       await sleep(500);
@@ -831,7 +891,7 @@ async function main() {
 
     let handled;
     try {
-      handled = await summaryHandlers.handleInputResponse(userInput, response);
+      handled = await this.summaryHandlers.handleInputResponse(userInput, response);
     } catch (error) {
       console.error('[ProtoClaw Runtime] 处理输入动作失败，已忽略本次请求:', error);
       console.error(error?.stack || error);
@@ -843,30 +903,131 @@ async function main() {
     }
 
     if (handled.kind === 'exit') {
-      console.log('[ProtoClaw Runtime] 收到退出指令，正在关闭...');
+      console.log(`[ProtoClaw Runtime] 收到退出指令 (session=${this.sessionId})，正在关闭该 session...`);
       break;
     }
 
     try {
-      const entry = callArbiter.enqueue({
+      const entry = this.callArbiter.enqueue({
         source: 'viewer-input',
         text: handled.text,
         ...(Array.isArray(handled.images) && handled.images.length > 0 ? { images: handled.images } : {}),
       });
-      await callArbiter.waitForCompletion(entry.id);
+      await this.callArbiter.waitForCompletion(entry.id);
     } catch (error) {
       console.error('[ProtoClaw Runtime] CallArbiter 入队失败:', error);
     }
-
-    // 只有当前一轮 viewer 输入对应的调用真正结束后，
-    // 才重新挂出下一轮 input-request。
-    // 这样可以保留原本“运行中显示暂停/队列态”的前端语义。
   }
 
-  await disposeAgent(0);
+  // Input loop ended — remove this session and notify the server.
+  await closeHostedSession(this.sessionId);
+};
+
+// ── Central IPC dispatcher ────────────────────────────────────
+process.on('message', async (msg) => {
+  if (!msg || typeof msg !== 'object') return;
+
+  // ── add-session: request process to load a new session ──
+  if (msg.type === 'add-session') {
+    const requestedSessionId = cleanValue(msg.sessionId);
+    const newSessionId = sanitizeSessionFragment(requestedSessionId);
+    if (!requestedSessionId || sessions.has(newSessionId)) {
+      process.send({ type: 'session-error', sessionId: newSessionId, error: 'session already exists or invalid sessionId' });
+      return;
+    }
+    const newSession = new SessionLifecycle({
+      sessionId: newSessionId,
+      agentName: msg.agentName || agentName,
+      workspaceCwd: msg.workspaceCwd || null,
+      runtimeHandoff: msg.handoffPath ? loadRuntimeHandoffFromPath(msg.handoffPath) : null,
+      runtime: msg.runtime,
+    });
+    sessions.set(newSessionId, newSession);
+    try {
+      await newSession.start();
+      process.send({ type: 'session-ready', sessionId: newSessionId, viewerAgentId: newSession.agent?.agentId ?? null });
+    } catch (err) {
+      console.error(`[ProtoClaw Runtime] add-session 失败 (session=${newSessionId}):`, err);
+      await newSession.remove();
+      sessions.delete(newSessionId);
+      process.send({ type: 'session-error', sessionId: newSessionId, error: String(err?.message || err) });
+      if (sessions.size === 0) process.exit(1);
+    }
+    return;
+  }
+
+  // ── remove-session: request process to remove a session ──
+  if (msg.type === 'remove-session') {
+    const targetId = sanitizeSessionFragment(msg.sessionId || '');
+    await closeHostedSession(targetId);
+    return;
+  }
+
+  // ── Session-scoped IPC: route by __targetSessionId ──
+  const targetSessionId = msg.__targetSessionId;
+  if (targetSessionId) {
+    const session = sessions.get(sanitizeSessionFragment(targetSessionId));
+    if (session) {
+      session.handleIPC(msg);
+    } else {
+      console.warn(`[ProtoClaw Runtime] IPC 路由失败：session ${targetSessionId} 不存在`);
+    }
+    return;
+  }
+
+  // ── Legacy fallback: single session mode ──
+  // When no __targetSessionId is specified and only one session exists,
+  // route to that session (backward compatibility with existing server-side IPC).
+  if (sessions.size === 1) {
+    const [onlySession] = sessions.values();
+    onlySession.handleIPC(msg);
+  } else if (sessions.size > 1) {
+    console.warn(`[ProtoClaw Runtime] IPC 消息缺少 __targetSessionId 且存在多个 session (${sessions.size})，已丢弃: ${msg.type}`);
+  }
+});
+
+// ── Helper for add-session handoff loading ────────────────────
+function loadRuntimeHandoffFromPath(handoffPath) {
+  if (!handoffPath || !existsSync(handoffPath)) return null;
+  try {
+    const fileContent = readFileSync(handoffPath, 'utf8');
+    return {
+      source: handoffPath,
+      handoff: parseHandoffContent(fileContent, handoffPath),
+    };
+  } catch (err) {
+    console.warn(`[ProtoClaw Runtime] 加载 handoff 失败 (${handoffPath}):`, err.message);
+    return null;
+  }
+}
+
+// ── Main: process host ────────────────────────────────────────
+async function main() {
+  const workspaceCwd = resolveWorkspaceCwd(agentId, sessionId);
+  const runtimeHandoff = loadRuntimeHandoff();
+
+  const initialSession = new SessionLifecycle({
+    sessionId,
+    agentName,
+    workspaceCwd,
+    runtimeHandoff,
+    announceOnStdout: true,
+    runtime: {
+      sessionType: process.env.PROTOCLAW_SESSION_TYPE || null,
+      gcChatId: process.env.PROTOCLAW_GC_CHAT_ID || null,
+      modelPresetRole: process.env.PROTOCLAW_MODEL_PRESET_ROLE || null,
+    },
+  });
+  sessions.set(sessionId, initialSession);
+  await initialSession.start();
+
+  // If the session uses passive mode (no UserInputFeature), start()
+  // returns and the process stays alive via DebugHub pending requests.
+  // If the session has an input loop, it runs async and the event loop
+  // stays alive via getUserInputEvent's pending request.
 }
 
 main().catch(async (error) => {
   console.error('[ProtoClaw Runtime] 启动失败:', error);
-  await disposeAgent(1);
+  await disposeAllSessions(1);
 });

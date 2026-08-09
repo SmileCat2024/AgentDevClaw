@@ -1,5 +1,5 @@
 import {
-  APP_PORT, VIEWER_PORT,
+  APP_PORT, VIEWER_PORT, RUNTIME_READY_WAIT_MS,
 } from '../shared/constants.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import {
@@ -32,6 +32,47 @@ export function createAgentLifecycleModule(ctx) {
   } = ctx;
 
   const _exitCallbacks = [];
+
+  async function removeSharedSession(runtime) {
+    const sessionId = runtime?.selectedSessionId;
+    const child = runtime?.process;
+    if (!sessionId || !child || typeof child.send !== 'function' || typeof child.on !== 'function') {
+      return false;
+    }
+    runtime.stopping = true;
+    try {
+      const exited = await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          child.removeListener?.('message', onMessage);
+          resolve(false);
+        }, RUNTIME_READY_WAIT_MS);
+        const onMessage = (message) => {
+          if (message?.type !== 'session-exited' || message.sessionId !== sessionId) return;
+          clearTimeout(timeout);
+          child.removeListener?.('message', onMessage);
+          resolve(true);
+        };
+        child.on('message', onMessage);
+        try {
+          child.send({ type: 'remove-session', sessionId });
+        } catch {
+          clearTimeout(timeout);
+          child.removeListener?.('message', onMessage);
+          resolve(false);
+        }
+      });
+      if (exited) {
+        runtime.stopped = true;
+        runtime.stopping = false;
+        return true;
+      }
+      runtime.stopping = false;
+      return false;
+    } catch {
+      runtime.stopping = false;
+      return false;
+    }
+  }
 
   // ── Connected agents query (delegated to agent-connected.js) ──
 
@@ -83,8 +124,22 @@ export function createAgentLifecycleModule(ctx) {
         }
         continue;
       }
-      runtime.stopped = true;
-      runtime.process.kill('SIGTERM');
+
+      // Shared-process mode: send IPC remove-session instead of killing the process.
+      // Only mark stopped after the host confirms that this session released
+      // its Agent and background resources. Killing on a failed acknowledgement
+      // would terminate unrelated sibling sessions.
+      if (runtime.processGroupKey && runtime.selectedSessionId) {
+        const removed = await removeSharedSession(runtime);
+        if (!removed) {
+          console.warn(`[agent-lifecycle] shared session stop not acknowledged: ${agentId}::${runtime.selectedSessionId}`);
+          continue;
+        }
+      } else {
+        runtime.stopped = true;
+        runtime.process.kill('SIGTERM');
+      }
+
       // Remove from open-sessions tracker (explicit stop)
       if (runtime.selectedSessionId) {
         removeOpenSession(agentId, runtime.selectedSessionId).catch(e => console.warn(e));
@@ -111,6 +166,7 @@ export function createAgentLifecycleModule(ctx) {
           category: agent.category,
           kind: agent.kind || 'agent',
           launchMode: agent.launchMode || null,
+          processMode: agent.processMode || 'isolated',
           ui: agent.ui || null,
           features: agent.features || [],
           workspace: agent.workspace || null,

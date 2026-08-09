@@ -226,7 +226,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     if (!entry?.runtimeId) return;
     if (seenRuntimeIds.has(entry.runtimeId)) return;
     seenRuntimeIds.add(entry.runtimeId);
-    if (sessionDirMap.size > 0) {
+    if (sessionDirMap.size > 0 && !entry.projectDir) {
       const dir = entry.sessionId ? (sessionDirMap.get(entry.sessionId) || '') : '';
       entry.projectDir = dir;
       entry.projectName = dir ? getPathLeaf(dir) : '';
@@ -313,6 +313,16 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       }
       continue;
     }
+
+    // Only operations that can create or start a target runtime get a synthetic
+    // sidebar item. Archive, unarchive, and history-only delete operations mutate
+    // existing records; rendering them as pending runtimes creates phantom sessions.
+    const createsTargetRuntime = operation.type === 'replacement' || operation.type === 'create' || operation.type === 'activate';
+    if (!createsTargetRuntime) continue;
+    // Programming-helper groups every runtime by project. Its operation creator
+    // must provide this identity explicitly; never infer it from a current or
+    // historical session, because either can belong to another project.
+    if (String(prebuiltAgent?.id || '').trim() === 'programming-helper' && !operation.projectDir) continue;
 
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
       addEntry({

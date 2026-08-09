@@ -89,7 +89,8 @@ function readProgrammingWorkspaceState() {
 export class ProgrammingHelperAgent extends BasicAgent {
   constructor(config = {}) {
     const workspaceDir = config.workspaceDir || process.cwd();
-    const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
+    const runtime = config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
+    const isExploration = runtime.sessionType === 'exploration' || process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
     const systemConfig = readSystemFeatureConfig();
 
     super({
@@ -121,16 +122,21 @@ export class ProgrammingHelperAgent extends BasicAgent {
     // 避免精简后会话内"先读后写"保护重置导致 write 工具被错误拦截。
     this.use(new ContinuityAwareOpencodeBasic({ workspaceDir }));
 
-    this.use(new ClawDispatchFeature());
-    this.use(new GroupChatBridgeFeature());
+    const runtimeIdentity = {
+      agentId: runtime.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'programming-helper',
+      sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
+      serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+    };
+    this.use(new ClawDispatchFeature(runtimeIdentity));
+    this.use(new GroupChatBridgeFeature(runtimeIdentity));
     this.contextGuard = new ContextGuardFeature({
       ...(systemConfig.contextGuard && typeof systemConfig.contextGuard === 'object'
         ? systemConfig.contextGuard : {}),
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
-      agentId: process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'programming-helper',
-      sessionId: process.env.PROTOCLAW_PREBUILT_SESSION_ID || '',
-      serverOrigin: process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
+      agentId: runtimeIdentity.agentId,
+      sessionId: runtimeIdentity.sessionId,
+      serverOrigin: runtimeIdentity.serverOrigin,
     });
     this.use(this.contextGuard);
 

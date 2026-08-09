@@ -5,7 +5,7 @@
  * enabled state at runtime (no restart). Mirrors the swap-model IPC pattern.
  */
 import express from 'express';
-import { sendIPCtoSession, sendIPCToAllSessions } from '../shared/ipc.js';
+import { sendIPCtoSession, sendIPCToAllSessions, sendIPCToRuntime } from '../shared/ipc.js';
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
 
 export function setupToolStateRoutes(app) {
@@ -34,8 +34,7 @@ export function setupToolStateRoutes(app) {
         const rt = getRuntimeByViewerAgentId(runtimeId);
         if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
           try {
-            rt.process.send(message);
-            delivered = 1;
+            delivered = sendIPCToRuntime(rt, message) ? 1 : 0;
           } catch (err) {
             console.warn(`[tool_state] IPC failed for runtimeId ${runtimeId}: ${err}`);
           }

@@ -1,19 +1,21 @@
 /**
- * ph-model-config.js — 编程小助手模型配置覆层（从 app-ui.js 域 D 提取）
+ * ph-model-config.js — 编程小助手项目设置面板
  *
- * 包含：
- *   - ensurePhModelConfigHost: 覆层宿主元素获取/创建
- *   - renderPhModelConfigOverlay: 模型配置覆层渲染（主代理双槽位 + 其他角色单槽位）
+ * IDE 式布局：左侧分类列表 + 右侧配置区域
+ * 分类页：模型配置、进程模式
  *
  * 外部依赖（通过全局作用域）：
  *   - escapeHtml (app-ui.js)
  *   - currentLanguage (app-core.js)
  *
- * 被 app-main.js 通过 window.phOpenModelConfig → renderPhModelConfigOverlay 调用。
- * onchange 调用 window.phAutoSaveModelConfig（定义在 ph-project-actions.js）。
- * 关闭按钮调用 window.phCloseModelConfig（定义在 ph-project-actions.js）。
+ * 入口：window.phOpenModelConfig() → renderPhModelConfigOverlay()
+ * 关闭：window.phCloseModelConfig()
+ * 模型自动保存：window.phAutoSaveModelConfig()
+ * 进程模式切换：window.phSetProcessMode()
  */
 'use strict';
+
+let _phSettingsTab = 'model'; // 'model' | 'process'
 
 function ensurePhModelConfigHost() {
   let host = document.getElementById('ph-model-config-host');
@@ -25,9 +27,9 @@ function ensurePhModelConfigHost() {
   return host;
 }
 
-function renderPhModelConfigOverlay(agent, presets) {
-  const host = ensurePhModelConfigHost();
-  if (!agent) { host.innerHTML = ''; return; }
+// ── Model config content ──────────────────────────────────────
+
+function _renderModelConfigContent(agent, presets) {
   const isZh = currentLanguage === 'zh';
   const current = agent.modelPresets || {};
   const roles = [
@@ -36,87 +38,176 @@ function renderPhModelConfigOverlay(agent, presets) {
     { key: 'sub', label: isZh ? '子代理' : 'Sub Agent', desc: isZh ? '派生执行子任务' : 'Spawned task execution' },
     { key: 'system', label: isZh ? '系统管理' : 'System', desc: isZh ? '系统自管理能力' : 'System self-management' },
   ];
+
+  const buildOptions = (selectedVal) => {
+    return presets.map(function(p) {
+      const sel = (p.name === selectedVal) ? ' selected' : '';
+      return '<option value="' + escapeHtml(p.name) + '"' + sel + '>' + escapeHtml(p.name) + '</option>';
+    }).join('');
+  };
+
+  const buildInfoHtml = (val) => {
+    const currentPreset = presets.find(function(p) { return p.name === val; });
+    return currentPreset
+      ? '<span class="ph-mc-info">' + escapeHtml(currentPreset.model || '') + (currentPreset.contextLength ? ' · ' + Math.round(currentPreset.contextLength / 1000) + 'K ctx' : '') + '</span>'
+      : '<span class="ph-mc-info">' + (isZh ? '跟随全局默认' : 'Follows global default') + '</span>';
+  };
+
   const rows = roles.map(function(role) {
-    // 支持双槽位格式：{ primary: 'model1', secondary: 'model2' } 或旧格式字符串
     const roleConfig = current[role.key] || {};
     const primaryVal = typeof roleConfig === 'string' ? roleConfig : (roleConfig.primary || '');
     const secondaryVal = typeof roleConfig === 'string' ? '' : (roleConfig.secondary || '');
-    const isDefaultRole = role.key === 'default'; // 只有主代理有双槽位
+    const isDefaultRole = role.key === 'default';
 
-    const buildOptions = (selectedVal) => {
-      return presets.map(function(p) {
-        const sel = (p.name === selectedVal) ? ' selected' : '';
-        return '<option value="' + escapeHtml(p.name) + '"' + sel + '>' + escapeHtml(p.name) + '</option>';
-      }).join('');
-    };
+    const primarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="primary" onchange="window.phAutoSaveModelConfig()">'
+      + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
+      + buildOptions(primaryVal)
+      + '</select>';
 
-    const buildInfoHtml = (val) => {
-      const currentPreset = presets.find(function(p) { return p.name === val; });
-      return currentPreset
-        ? '<span class="ph-mc-info">' + escapeHtml(currentPreset.model || '') + (currentPreset.contextLength ? ' · ' + Math.round(currentPreset.contextLength / 1000) + 'K ctx' : '') + '</span>'
-        : '<span class="ph-mc-info">' + (isZh ? '跟随全局默认' : 'Follows global default') + '</span>';
-    };
+    const labelCol = '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>';
 
-    // 主代理显示双槽位，其他角色只显示单槽位
     if (isDefaultRole) {
-      const primarySelect = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="primary" onchange="window.phAutoSaveModelConfig()">'
-        + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
-        + buildOptions(primaryVal)
-        + '</select>';
-
-      const secondarySelect = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="secondary" onchange="window.phAutoSaveModelConfig()">'
+      const secondarySelect = '<select class="ph-mc-select" data-claw-select data-preset-role="' + role.key + '" data-slot="secondary" onchange="window.phAutoSaveModelConfig()">'
         + '<option value=""' + (!secondaryVal ? ' selected' : '') + '>' + (isZh ? '(不设置)' : '(Not set)') + '</option>'
         + buildOptions(secondaryVal)
         + '</select>';
 
       return '<div class="ph-mc-row ph-mc-row-primary">'
-        + '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>'
-        + '<div class="ph-mc-control">'
-        + '<div class="ph-mc-slots">'
-        + '<div class="ph-mc-slot">'
-        + '<div class="ph-mc-slot-label">' + (isZh ? '主模型' : 'Primary') + '</div>'
-        + primarySelect
-        + buildInfoHtml(primaryVal)
-        + '</div>'
-        + '<div class="ph-mc-slot">'
-        + '<div class="ph-mc-slot-label">' + (isZh ? '备选模型' : 'Secondary') + '</div>'
-        + secondarySelect
-        + buildInfoHtml(secondaryVal)
-        + '</div>'
-        + '</div>'
-        + '</div>'
+        + labelCol
+        + '<div class="ph-mc-control"><div class="ph-mc-slot"><div class="ph-mc-slot-label">' + (isZh ? '主模型' : 'Primary') + '</div>' + primarySelect + buildInfoHtml(primaryVal) + '</div>'
+        + '<div class="ph-mc-slot"><div class="ph-mc-slot-label">' + (isZh ? '备选' : 'Secondary') + '</div>' + secondarySelect + buildInfoHtml(secondaryVal) + '</div></div>'
         + '</div>';
     } else {
-      // 其他角色只显示单槽位
-      const selectHtml = '<select class="ph-mc-select" data-preset-role="' + role.key + '" data-slot="primary" onchange="window.phAutoSaveModelConfig()">'
-        + '<option value=""' + (!primaryVal ? ' selected' : '') + '>' + (isZh ? '(默认)' : '(Default)') + '</option>'
-        + buildOptions(primaryVal)
-        + '</select>';
-
       return '<div class="ph-mc-row">'
-        + '<div class="ph-mc-role"><div class="ph-mc-role-name">' + escapeHtml(role.label) + '</div><div class="ph-mc-role-desc">' + escapeHtml(role.desc) + '</div></div>'
-        + '<div class="ph-mc-control">'
-        + selectHtml
+        + labelCol
+        + '<div class="ph-mc-single">'
+        + primarySelect
         + buildInfoHtml(primaryVal)
         + '</div>'
         + '</div>';
     }
   }).join('');
 
+  return '<div class="ph-mc-list">' + rows + '</div>';
+}
+
+// ── Process mode content ──────────────────────────────────────
+
+function _renderProcessModeContent(agent) {
+  const isZh = currentLanguage === 'zh';
+  const agentSupportsShared = agent?.processMode === 'shared-by-project';
+  const currentProject = window._phCurrentProject || null;
+  const phProcessModeKey = 'ph_process_mode_' + (currentProject?.openDirectory || '_default');
+  let phProcessMode = 'shared-by-project';
+  try { phProcessMode = localStorage.getItem(phProcessModeKey) || 'shared-by-project'; } catch {}
+
+  if (!agentSupportsShared) {
+    return '<div class="ph-settings-empty">' + escapeHtml(isZh
+      ? '此工作空间不支持共享进程模式。'
+      : 'This workspace does not support shared process mode.') + '</div>';
+  }
+
+  const isShared = phProcessMode !== 'isolated';
+
+  const optionCard = (mode, active, title, desc) => {
+    return [
+      '<div class="ph-pm-card' + (active ? ' active' : '') + '" onclick="window.phSetProcessMode(\'' + escapeHtml(phProcessModeKey) + '\', \'' + mode + '\')">',
+      '<div class="ph-pm-radio' + (active ? ' checked' : '') + '"></div>',
+      '<div class="ph-pm-card-body">',
+      '<div class="ph-pm-card-title">' + escapeHtml(title) + '</div>',
+      '<div class="ph-pm-card-desc">' + escapeHtml(desc) + '</div>',
+      '</div>',
+      '</div>',
+    ].join('');
+  };
+
+  return [
+    '<div class="ph-pm-body">',
+    optionCard('shared-by-project', isShared,
+      isZh ? '共享进程' : 'Shared Process',
+      isZh ? '同一项目下的会话共享进程，内存占用更低、启动更快。'
+      : 'Sessions in the same project share a process. Lower memory, faster startup.'),
+    optionCard('isolated', !isShared,
+      isZh ? '独立进程' : 'Isolated Process',
+      isZh ? '每个会话独占进程，完全隔离、最稳定。'
+      : 'Each session gets its own process. Full isolation, most stable.'),
+    '<div class="ph-pm-intro">' + escapeHtml(isZh
+      ? '仅影响新创建的会话，不会改变已运行会话的模式。'
+      : 'Only affects new sessions. Already running sessions are unaffected.') + '</div>',
+    '</div>',
+  ].join('');
+}
+
+// ── Main panel render ─────────────────────────────────────────
+
+function renderPhModelConfigOverlay(agent, presets) {
+  const host = ensurePhModelConfigHost();
+  if (!agent) { host.innerHTML = ''; return; }
+  const isZh = currentLanguage === 'zh';
+
+  // Store current project for process mode key
+  const projects = (typeof getFeatureCreatorProjects === 'function')
+    ? getFeatureCreatorProjects(agent) : [];
+  window._phCurrentProject = projects.find(p => p.openDirectory === agent?.workspace_state?.openDirectory) || projects[0] || null;
+
+  const tabs = [
+    { key: 'model', label: isZh ? '模型配置' : 'Model Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
+    { key: 'process', label: isZh ? '进程模式' : 'Process Mode', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>' },
+  ];
+
+  const tabItems = tabs.map(t => {
+    const active = _phSettingsTab === t.key;
+    return '<div class="ph-settings-tab' + (active ? ' active' : '') + '" onclick="window._phSwitchSettingsTab(\'' + t.key + '\')">'
+      + '<span class="ph-settings-tab-icon">' + t.icon + '</span>'
+      + '<span class="ph-settings-tab-label">' + escapeHtml(t.label) + '</span>'
+      + '</div>';
+  }).join('');
+
+  let contentHtml;
+  if (_phSettingsTab === 'model') {
+    contentHtml = _renderModelConfigContent(agent, presets);
+  } else {
+    contentHtml = _renderProcessModeContent(agent);
+  }
+
+  const subtitle = _phSettingsTab === 'model'
+    ? (isZh ? '为主代理设置主模型和备选模型，其他角色设置单个模型' : 'Set primary and secondary models for main agent, single model for other roles')
+    : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
+
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
-    '<div class="feature-detail-window" style="max-width:680px;">',
+    '<div class="feature-detail-window ph-settings-window">',
     '<div class="feature-detail-head">',
     '<div>',
-    '<div class="feature-detail-title">' + (isZh ? '模型配置' : 'Model Config') + '</div>',
-    '<div class="feature-detail-subtitle">' + (isZh ? '为主代理设置主模型和备选模型，其他角色设置单个模型' : 'Set primary and secondary models for main agent, single model for other roles') + '</div>',
+    '<div class="feature-detail-title">' + (isZh ? '工作空间设置' : 'Workspace Settings') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(subtitle) + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">×</button>',
+    '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">&times;</button>',
     '</div>',
-    '<div class="ph-mc-body">',
-    rows,
+    '<div class="ph-settings-layout">',
+    '<div class="ph-settings-sidebar">',
+    tabItems,
+    '</div>',
+    '<div class="ph-settings-content">',
+    contentHtml,
+    '</div>',
     '</div>',
     '</div>',
     '</div>',
   ].join('');
+
+  // Enhance native selects with custom dropdown
+  if (window.ClawSelect) {
+    requestAnimationFrame(function() {
+      window.ClawSelect.enhanceAll(host);
+    });
+  }
 }
+window._phSwitchSettingsTab = (tab) => {
+  _phSettingsTab = tab;
+  const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+  if (agent) {
+    const presets = window.ClawFW?._modelPresets || [];
+    renderPhModelConfigOverlay(agent, presets);
+  }
+};

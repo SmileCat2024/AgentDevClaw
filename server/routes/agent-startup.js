@@ -16,6 +16,7 @@ import {
   getManagedRuntimeKey, listAgentRuntimes,
   getAgentRuntime, getAssemblyRuntime, buildStatus,
   isChildProcessRunning, isManagedRuntimeRunning,
+  computeProcessGroupKey, findSharedProcessRuntime, listRuntimesByProcess,
 } from '../shared/agent-access.js';
 import {
   readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex,
@@ -169,13 +170,110 @@ export function createAgentStartupFns(deps) {
       await waitForProcessExit(existing.process);
     }
 
-    if (isChildProcessRunning(existing?.process) && existing.stopped) {
+    // A stopped shared-session entry can legitimately reference a process that
+    // remains alive for sibling sessions. Do not wait for that whole process
+    // before re-adding this session.
+    if (isChildProcessRunning(existing?.process) && existing.stopped && !existing.processGroupKey) {
       await waitForProcessExit(existing.process);
     }
 
     const runtimeDisplayName = await resolveRuntimeDisplayName(agent, resolvedSessionId);
 
     const isExplorationSession = runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE === 'exploration';
+
+    // ── Shared-process decision ──────────────────────────────
+    // When agent declares processMode=shared-by-project, check if there's
+    // already a running process for the same (agentId, projectDir) group.
+    // If so, send IPC add-session instead of spawning a new process.
+    let processMode = agent.processMode || 'isolated';
+    let processGroupKey = null;
+    let projectDir = '';
+    if (resolvedSessionId) {
+      try {
+        const idx = await readSessionIndex(agent.id);
+        const sessionRecord = (idx?.sessions || []).find(s => s.id === resolvedSessionId);
+        const sessionOverride = sessionRecord?.metadata?.processModeOverride;
+        if (sessionOverride === 'isolated' || sessionOverride === 'shared-by-project') {
+          processMode = sessionOverride;
+        }
+        projectDir = sessionRecord?.openDirectory || '';
+      } catch {
+        // Session index unreadable — retain the agent-level default.
+      }
+    }
+    if (processMode === 'shared-by-project' && !isExplorationSession && resolvedSessionId) {
+      processGroupKey = computeProcessGroupKey(agent.id, projectDir);
+
+      if (processGroupKey) {
+        const existingShared = findSharedProcessRuntime(processGroupKey);
+        if (existingShared) {
+          // ── Join existing shared process via IPC ──
+          const sharedRuntime = {
+            key: getManagedRuntimeKey(agent.id, resolvedSessionId),
+            agentId: agent.id,
+            id: agent.id,
+            process: existingShared.process,
+            startedAt: new Date().toISOString(),
+            exitCode: null,
+            stopped: false,
+            viewerAgentId: null,
+            selectedSessionId: resolvedSessionId || null,
+            ready: false,
+            sessionType: null,
+            gcChatId: null,
+            processGroupKey,
+          };
+          managedAgents.set(sharedRuntime.key, sharedRuntime);
+
+          // Wait for session-ready / session-error IPC reply
+          const readyResult = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              existingShared.process.removeListener('message', handler);
+              reject(new Error(`add-session timeout after ${RUNTIME_READY_WAIT_MS}ms`));
+            }, RUNTIME_READY_WAIT_MS);
+
+            const handler = (msg) => {
+              if (!msg || typeof msg !== 'object') return;
+              if (msg.sessionId !== resolvedSessionId) return;
+              if (msg.type === 'session-ready') {
+                clearTimeout(timeout);
+                existingShared.process.removeListener('message', handler);
+                resolve(msg);
+              } else if (msg.type === 'session-error') {
+                clearTimeout(timeout);
+                existingShared.process.removeListener('message', handler);
+                reject(new Error(msg.error || 'session-error'));
+              }
+            };
+            existingShared.process.on('message', handler);
+
+            existingShared.process.send({
+              type: 'add-session',
+              sessionId: resolvedSessionId,
+              agentName: runtimeDisplayName,
+              workspaceCwd: projectDir || null,
+              handoffPath: runtimeOptions?.extraEnv?.PROTOCLAW_HANDOFF_PATH || null,
+              runtime: {
+                sessionType: runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE || null,
+                gcChatId: runtimeOptions?.extraEnv?.PROTOCLAW_GC_CHAT_ID || null,
+                modelPresetRole: runtimeOptions?.extraEnv?.PROTOCLAW_MODEL_PRESET_ROLE || null,
+              },
+            });
+          }).catch(err => {
+            managedAgents.delete(sharedRuntime.key);
+            throw err;
+          });
+
+          sharedRuntime.viewerAgentId = readyResult.viewerAgentId;
+          sharedRuntime.ready = true;
+          notifyRuntimeReady(agent.id, resolvedSessionId || null);
+          if (resolvedSessionId) {
+            addOpenSession(agent.id, resolvedSessionId).catch(e => console.warn(e));
+          }
+          return buildStatus(agent.id, resolvedSessionId);
+        }
+      }
+    }
     const child = spawn(process.execPath, [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN], {
       cwd: PROJECT_ROOT,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -207,6 +305,7 @@ export function createAgentStartupFns(deps) {
       ready: false,
       sessionType: runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE || null,
       gcChatId: runtimeOptions?.extraEnv?.PROTOCLAW_GC_CHAT_ID || null,
+      processGroupKey: processGroupKey || null,
     };
 
     managedAgents.set(runtime.key, runtime);
@@ -234,20 +333,24 @@ export function createAgentStartupFns(deps) {
     });
 
     child.on('exit', (code, signal) => {
-      const current = managedAgents.get(runtime.key);
-      if (current && current === runtime) {
-        current.exitCode = code;
-        current.signalCode = signal || child.signalCode || null;
-        current.stopped = true;
+      // Mark ALL runtimes sharing this process as stopped
+      const sharedRuntimes = listRuntimesByProcess(child);
+      for (const rt of sharedRuntimes) {
+        rt.exitCode = code;
+        rt.signalCode = signal || child.signalCode || null;
+        rt.stopped = true;
       }
       log(agent.id, `process exited with code ${code ?? 'null'} signal ${signal || child.signalCode || 'none'}`);
 
       // 通知外部回调（如群聊模块需要在 agent 死亡时闭环）
-      for (const cb of exitCallbacks) {
-        try {
-          cb(agent.id, resolvedSessionId || null, code, runtime.key);
-        } catch (e) {
-          console.error('[agent-startup] exit callback error:', e);
+      // Notify for every session that was sharing this process
+      for (const rt of sharedRuntimes) {
+        for (const cb of exitCallbacks) {
+          try {
+            cb(rt.agentId || agent.id, rt.selectedSessionId || null, code, rt.key);
+          } catch (e) {
+            console.error('[agent-startup] exit callback error:', e);
+          }
         }
       }
     });

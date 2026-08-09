@@ -253,11 +253,10 @@ export function createIMBridge(ctx) {
   }
 
   /**
-   * Register the IPC message handler for dynamic carrier mounting,
-   * unmounting, and todo-control messages.
+   * Handle an IPC message for this session's IM bridge.
+   * Called by the central IPC dispatcher (not registered on process directly).
    */
-  function setupIPCMessageHandler() {
-    process.on('message', (msg) => {
+  function handleIPCMessage(msg) {
       if (!msg || typeof msg !== 'object') return;
 
       if (msg.type === 'mount-im-carrier' && msg.carrier) {
@@ -298,13 +297,12 @@ export function createIMBridge(ctx) {
           console.warn('[IPC] Todo feature not found or does not support setInterruptTarget');
         }
       }
-    });
   }
 
   return {
     dispatchIMCallFinish,
     mountCarrierFeature,
     mountIMLineCarrierIfBound,
-    setupIPCMessageHandler,
+    handleIPCMessage,
   };
 }

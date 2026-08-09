@@ -47,6 +47,7 @@ export function createConnectedAgentsQuery(deps) {
         description: agent.description,
         kind: agent.kind || 'agent',
         launchMode: agent.launchMode || null,
+        processMode: agent.processMode || 'isolated',
         ui: agent.ui || null,
         workspace: agent.workspace || null,
         workspace_sessions: workspaceSessions,

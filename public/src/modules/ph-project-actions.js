@@ -301,3 +301,17 @@ window.phToggleModelSlot = async () => {
     });
   }
 };
+
+/**
+ * 设置进程模式（共享 / 独立）
+ * 从项目设置面板的进程模式页调用
+ */
+window.phSetProcessMode = (storageKey, mode) => {
+  try { localStorage.setItem(storageKey, mode); } catch {}
+  // Re-render the settings panel to update active state
+  const agent = getCurrentAgentRecord();
+  if (agent) {
+    const presets = window.ClawFW?._modelPresets || [];
+    renderPhModelConfigOverlay(agent, presets);
+  }
+};

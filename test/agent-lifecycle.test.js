@@ -183,6 +183,24 @@ describe('agent-lifecycle', () => {
       assert.equal(status.status, 'stopped');
       assert.equal(status.signalCode, 'SIGTERM');
     });
+
+    it('waits for shared-session disposal acknowledgement without killing sibling process', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      const runtime = injectRuntime('shared-agent', 'shared-session', child);
+      runtime.processGroupKey = 'shared-agent::/project';
+      let killCalled = false;
+      child.kill = () => { killCalled = true; };
+      child.send = (message) => {
+        assert.deepEqual(message, { type: 'remove-session', sessionId: 'shared-session' });
+        queueMicrotask(() => child.emit('message', { type: 'session-exited', sessionId: 'shared-session' }));
+      };
+
+      const status = await mod.stopManagedAgent('shared-agent', 'shared-session');
+      assert.equal(status.status, 'stopped');
+      assert.equal(runtime.stopped, true);
+      assert.equal(killCalled, false);
+    });
   });
 
   // ── onAgentExit ──────────────────────────────────────────
