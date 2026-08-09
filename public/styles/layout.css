@@ -1429,6 +1429,31 @@ body[data-theme="light"] .feature-detail-window::before {
               rgba(80, 130, 220, 0.06) 0%, transparent 70%);
 }
 
+/* 底部渐变遮罩：工具列表滚动到底部时平滑渐隐 */
+.feature-detail-window::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 56px;
+  background: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(14, 14, 17, 0.5) 35%,
+    rgba(14, 14, 17, 0.92) 70%,
+    rgba(14, 14, 17, 1) 90%);
+  pointer-events: none;
+  z-index: 2;
+  border-radius: 0 0 20px 20px;
+}
+body[data-theme="light"] .feature-detail-window::after {
+  background: linear-gradient(to bottom,
+    transparent 0%,
+    rgba(248, 249, 251, 0.5) 35%,
+    rgba(248, 249, 251, 0.92) 70%,
+    rgba(248, 249, 251, 1) 90%);
+}
+
 /* ── Feature 详情弹窗内部布局 ───────────────────────────────────────────── */
 /* 复用 MCP 网关的 settings-section / settings-tab-content / gateway-detail-* 体系，
    工具卡片复用 feature-tool-card 系列，不再使用自定义 fdetail-tool-* 样式。 */
