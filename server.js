@@ -87,6 +87,7 @@ import { setupSessionRoutes } from './server/routes/session.js';
 import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnostics.js';
 import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
+import { setupToolStateRoutes } from './server/routes/tool-state.js';
 import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
@@ -419,6 +420,7 @@ app.post('/protoclaw/shutdown', async (_req, res) => {
 setupModelConfigRoutes(app, express);
 setupOAuthCodexRoutes(app, express);
 setupProxyConfigRoutes(app, express);
+setupToolStateRoutes(app);
 setupFeatureRepositoryRoutes(app, express);
 setupFlowRoutes(app, express, { readWorkspaceState, resolveAssemblyFeatureArchives });
 setupUsageRoutes(app, express);

@@ -57,16 +57,23 @@ function renderFeaturesPanel() {
     ? [
       '<section class="hooks-section">',
       '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(t('standalone_tools_title')) + '</div><div class="hooks-section-meta">' + String(currentHookInspector.standaloneTools.length) + '</div></div>',
-      '<div class="feature-tool-list">' + currentHookInspector.standaloneTools.map(tool => [
+      '<div class="feature-tool-list">' + currentHookInspector.standaloneTools.map(tool => {
+        const isSuper = tool.state === 'superseded';
+        const actionHtml = isSuper
+          ? '<div class="' + getStatusBadgeClass(tool.state || 'enabled') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>'
+          : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled');
+        return [
         '<div class="feature-tool-card">',
         '<div class="feature-tool-top">',
         '<div class="feature-tool-name">' + escapeHtml(tool.name) + '</div>',
-        '<div class="' + getStatusBadgeClass(tool.state || 'enabled') + '">' + escapeHtml(tool.state === 'superseded' ? t('feature_tool_superseded') : tool.state === 'removed' ? t('feature_tool_removed') : tool.state === 'disabled' ? t('feature_tool_disabled') : t('feature_tool_enabled')) + '</div>',
+        '<div class="feature-tool-actions">',
+        actionHtml,
+        '</div>',
         '</div>',
         '<div class="feature-tool-desc">' + escapeHtml(tool.description || '') + '</div>',
         tool.source ? '<div class="feature-tool-meta"><span class="feature-tool-pill">source: ' + escapeHtml(tool.source) + '</span></div>' : '',
         '</div>',
-      ].join('')).join('') + '</div>',
+      ].join('')}).join('') + '</div>',
       '</section>',
     ].join('')
     : '';
@@ -110,6 +117,57 @@ function toggleToolSchema(toolKey) {
 
 window.toggleToolSchema = toggleToolSchema;
 
+// ═══════════════════════════════════════════════════════════════
+// Tool / Feature enable-disable toggle
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 发送 enable/disable IPC 请求到 agent 子进程。
+ * checkbox.checked 决定 action — checked=enable, unchecked=disable。
+ * 轮询会在下一周期自动刷新 inspector 显示新状态。
+ */
+async function toggleToolState(scope, name, checkbox) {
+  const action = checkbox.checked ? 'enable' : 'disable';
+  const body = { agentId: currentAgentId, scope, name, action };
+  if (currentRuntimeAgentId) body.runtimeId = currentRuntimeAgentId;
+  try {
+    const resp = await fetch('/protoclaw/agent/tool_state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      console.warn('[toggleToolState] request failed:', resp.status);
+      // Revert checkbox on failure
+      checkbox.checked = !checkbox.checked;
+      return;
+    }
+    // Trigger inspector refresh — give the agent subprocess a moment to process
+    // the IPC message and push the updated snapshot.
+    if (window._scheduleInspectorRefresh) window._scheduleInspectorRefresh(300);
+  } catch (err) {
+    console.error('[toggleToolState] error:', err);
+    checkbox.checked = !checkbox.checked;
+  }
+}
+window.toggleToolState = toggleToolState;
+
+/**
+ * 生成 toggle switch HTML。
+ * @param scope 'tool' | 'feature'
+ * @param name 工具名或 feature 名
+ * @paramisChecked boolean — 当前是否启用
+ * @returns HTML string（空字符串如果不适用）
+ */
+function buildToolToggleHtml(scope, name, isChecked) {
+  return '<label class="tool-toggle" onclick="event.stopPropagation()" title="' + escapeHtml(t('feature_toggle_hint')) + '">'
+    + '<input type="checkbox" class="tool-toggle-input"'
+    + (isChecked ? ' checked' : '')
+    + ' onchange="window.toggleToolState(&quot;' + scope + '&quot;,&quot;' + escapeHtml(name) + '&quot;,this)" />'
+    + '<span class="tool-toggle-slider"></span>'
+    + '</label>';
+}
+
 function ensureFeatureDetailPortal() {
   let el = document.getElementById(FEATURE_DETAIL_PORTAL_ID);
   if (!el) {
@@ -140,10 +198,6 @@ function renderFeatureDetailOverlay(feature) {
 
   const toolRowsHtml = (feature.tools && feature.tools.length > 0)
     ? '<div class="gateway-tool-grid">' + feature.tools.map(tool => {
-        const stateLabel = tool.state === 'superseded' ? t('feature_tool_superseded')
-          : tool.state === 'removed' ? t('feature_tool_removed')
-          : tool.state === 'disabled' || tool.enabled === false ? t('feature_tool_disabled')
-          : t('feature_tool_enabled');
         const metaPills = [
           tool.renderCall ? '<span class="feature-tool-pill">call/' + escapeHtml(tool.renderCall) + '</span>' : '',
           tool.renderResult ? '<span class="feature-tool-pill">result/' + escapeHtml(tool.renderResult) + '</span>' : '',
@@ -162,11 +216,17 @@ function renderFeatureDetailOverlay(feature) {
         const schemaHtml = (hasSchema && isExpanded)
           ? '<div class="fdetail-schema-block"><pre>' + escapeHtml(JSON.stringify(tool.parameters, null, 2)) + '</pre></div>'
           : '';
+        const isSuper = tool.state === 'superseded';
+        const actionHtml = isSuper
+          ? '<div class="' + getStatusBadgeClass('superseded') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>'
+          : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled');
         return [
           '<div class="feature-tool-card">',
           '<div class="feature-tool-top">',
           '<div class="feature-tool-name">' + SVG_TOOL_ICON + escapeHtml(tool.name) + '</div>',
-          '<div class="' + getStatusBadgeClass(tool.state || (tool.enabled ? 'enabled' : 'disabled')) + '">' + escapeHtml(stateLabel) + '</div>',
+          '<div class="feature-tool-actions">',
+          actionHtml,
+          '</div>',
           '</div>',
           tool.description ? '<div class="feature-tool-desc">' + escapeHtml(tool.description) + '</div>' : '',
           paramsHtml,

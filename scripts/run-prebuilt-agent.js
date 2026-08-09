@@ -678,6 +678,33 @@ async function main() {
   // ── IPC: model/thinking hot-swap (no process restart) ──
   process.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return;
+
+    // ── IPC: tool / feature enable-disable (no process restart) ──
+    if (msg.type === 'tool-state') {
+      const { scope, name, action } = msg;
+      if (!name || (action !== 'enable' && action !== 'disable')) return;
+      try {
+        if (scope === 'feature') {
+          if (typeof agent?.[action] !== 'function') {
+            console.warn(`[ProtoClaw Runtime] tool-state: agent.${action} not available`);
+            return;
+          }
+          agent[action](name);
+          console.log(`[ProtoClaw Runtime] ✓ Feature '${name}' ${action}d`);
+        } else {
+          if (!agent?.tools || typeof agent.tools[action] !== 'function') {
+            console.warn(`[ProtoClaw Runtime] tool-state: tools.${action} not available`);
+            return;
+          }
+          agent.tools[action](name);
+          console.log(`[ProtoClaw Runtime] ✓ Tool '${name}' ${action}d`);
+        }
+      } catch (err) {
+        console.error(`[ProtoClaw Runtime] tool-state error:`, err);
+      }
+      return;
+    }
+
     if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
 
     if (typeof agent?.setLLM !== 'function') {

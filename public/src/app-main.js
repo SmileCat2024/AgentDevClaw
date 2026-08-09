@@ -761,6 +761,12 @@ async function poll() {
   }
 }
 
+// Exposed for feature panel toggle: after IPC tool-state change, trigger a
+// delayed poll so inspector refreshes from the agent subprocess.
+window._scheduleInspectorRefresh = function (delayMs) {
+  schedulePoll(delayMs || 300);
+};
+
 async function runPollCycle() {
   try {
     if (prebuiltSessionSwitchInFlight) {

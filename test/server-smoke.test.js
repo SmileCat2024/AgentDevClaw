@@ -198,6 +198,13 @@ describe('Route registration smoke test', () => {
     assert.ok(routes.some(r => r.method === 'put' && r.path === '/protoclaw/proxy_config'));
     assert.ok(routes.some(r => r.method === 'post' && r.path === '/protoclaw/proxy_test'));
   });
+
+  it('setupToolStateRoutes should register tool_state endpoint', async () => {
+    const { setupToolStateRoutes } = await import('../server/routes/tool-state.js');
+    const { app, routes } = createMockApp();
+    setupToolStateRoutes(app);
+    assert.ok(routes.some(r => r.method === 'post' && r.path === '/protoclaw/agent/tool_state'));
+  });
 });
 
 // ── Export contract smoke test ──
