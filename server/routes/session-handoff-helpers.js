@@ -22,6 +22,7 @@ import {
   exportSummarizedHandoffPackage,
   writeSummarizedHandoffPackage,
 } from '../context-continuity/summarized-handoff.js';
+import { runTrimAppendedSummary } from '../context-continuity/trim-appended-summary.js';
 import { extractDomainsFromText } from './session-helpers-pure.js';
 
 export function createSessionHandoffHelpers(deps) {
@@ -37,7 +38,7 @@ export function createSessionHandoffHelpers(deps) {
     setSessionHasSummary,
   } = deps;
 
-  async function exportContextHandoffForSession(sessionId, preferredAgentId = '', policy = {}) {
+  async function exportContextHandoffForSession(sessionId, preferredAgentId = '', policy = {}, options = {}) {
     const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, preferredAgentId);
     if (!ownerAgentId) {
       const error = new Error(`Unknown prebuilt session: ${sessionId}`);
@@ -54,6 +55,7 @@ export function createSessionHandoffHelpers(deps) {
     }
     const sessionPath = getPrebuiltSessionFilePath(ownerAgentId, sessionId);
     const normalizedStrategy = typeof policy?.strategy === 'string' ? policy.strategy.trim() : '';
+    const appendSummary = !!options.appendSummary;
     if (normalizedStrategy === 'summarized-nine-section') {
       const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
       const sourceSessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
@@ -78,6 +80,39 @@ export function createSessionHandoffHelpers(deps) {
       sourceRecord: record,
       policy,
     });
+
+    // Trim + appended summary: run the independent summary pipeline and append
+    // its seed message after the trimmed conversation history.
+    if (appendSummary) {
+      const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
+      console.log(`[trim_append_summary] running independent summary for session=${sessionId}`);
+      const { summarySeedMessage, summaryText, compactOutput } = await runTrimAppendedSummary({
+        agentRelativeDir: agent.relativeDir,
+        agentId: ownerAgentId,
+        sessionId,
+        sourceRecord: record,
+        projectRoot: PROJECT_ROOT,
+      });
+
+      // Append summary seed message after trimmed seed messages
+      result.handoff.seedMessages = [
+        ...(Array.isArray(result.handoff.seedMessages) ? result.handoff.seedMessages : []),
+        summarySeedMessage,
+      ];
+      result.handoff.mode = 'trim-transcript-with-summary';
+      result.handoff.appendedSummary = {
+        summaryText,
+        importantFiles: compactOutput.importantFiles,
+        importantSkills: compactOutput.importantSkills,
+        sessionTitle: compactOutput.sessionTitle,
+        fileRanges: compactOutput.fileRanges,
+      };
+
+      // Rewrite the handoff file with the combined seed messages
+      await fs.writeFile(result.handoffPath, `${JSON.stringify(result.handoff, null, 2)}\n`, 'utf8');
+      console.log(`[trim_append_summary] appended summary (${summaryText.length} chars) to trim handoff for session=${sessionId}`);
+    }
+
     await setSessionHasSummary(ownerAgentId, sessionId, true);
     return result;
   }
@@ -184,10 +219,11 @@ export function createSessionHandoffHelpers(deps) {
     sessionId = '',
     policy = {},
     startRuntime = true,
+    appendSummary = false,
     trace = null,
   }) {
     trace?.mark('handoff_export_started');
-    const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy);
+    const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy, { appendSummary });
     trace?.mark('handoff_exported');
     const handoffPath = cleanSessionText(exportResult?.handoffPath);
     const handoffId = cleanSessionText(exportResult?.handoff?.handoffId);

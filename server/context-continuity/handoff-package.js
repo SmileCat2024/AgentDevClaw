@@ -409,6 +409,18 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       }
     }
   }
+  if (skillProtectedIndices) {
+    rawMessages.forEach((message, index) => {
+      if (!skillProtectedIndices.has(index) || message?.role !== 'assistant') return;
+      const toolCalls = Array.isArray(message?.toolCalls) ? message.toolCalls : [];
+      for (const call of toolCalls) {
+        const id = cleanInlineText(call?.id);
+        if (id && cleanInlineText(call?.name) === 'invoke_skill') {
+          protectedToolCallIds.add(id);
+        }
+      }
+    });
+  }
   const fullPreserveFrom = policy.fullPreserveFromTurn;
   // preservedTurns: when set, only these specific turns get full-detail preserve.
   // This takes precedence over fullPreserveFromTurn and supports non-contiguous
@@ -504,42 +516,38 @@ export function buildTrimmedSeedMessages(rawMessages, policy) {
       return;
     }
 
-    const toolCalls = Array.isArray(message?.toolCalls) ? message.toolCalls : [];
+    let toolCalls = Array.isArray(message?.toolCalls) ? message.toolCalls : [];
     const protectedCalls = role === 'assistant'
-      ? toolCalls.filter((call) => protectedToolNames.has(cleanInlineText(call?.name)))
+      ? toolCalls.filter((call) => protectedToolCallIds.has(cleanInlineText(call?.id)))
       : [];
-    if (protectedCalls.length > 0) {
+    if (protectedCalls.length > 0 && shouldKeepDialogueMessage(role, policy, message?.tag)) {
       flushIfNeeded();
-      if (shouldKeepDialogueMessage(role, policy, message?.tag)) {
-        seedMessages.push({ ...message, turn });
-        stats.keptSeedMessageCount += 1;
-        stats.keptDialogueMessageCount += 1;
-        stats.keptProtectedToolCallCount += protectedCalls.length;
-      } else {
-        stats.droppedDialogueMessageCount += 1;
-        stats.droppedMessageCount += 1;
+      // A single assistant response may issue protected and foldable calls in
+      // parallel. Only replay the protected subset: Responses APIs require an
+      // output for every replayed call_id, while the other calls are summarized
+      // below together with their results.
+      seedMessages.push({ ...message, toolCalls: protectedCalls, turn });
+      stats.keptSeedMessageCount += 1;
+      stats.keptDialogueMessageCount += 1;
+      stats.keptProtectedToolCallCount += protectedCalls.length;
+
+      toolCalls = toolCalls.filter((call) => !protectedToolCallIds.has(cleanInlineText(call?.id)));
+      if (toolCalls.length === 0) {
+        return;
       }
-      return;
+      // Continue through the normal fold path with only the calls whose results
+      // are not being replayed. Clear content to avoid duplicating the assistant
+      // text already preserved with the protected call subset.
+      message = { ...message, content: '', toolCalls };
     }
 
     if (role === 'tool' && protectedToolCallIds.has(cleanInlineText(message?.toolCallId))) {
-      flushIfNeeded();
+      // Do not flush a pending fold before a protected output. A mixed parallel
+      // batch must replay its retained function calls and outputs contiguously;
+      // the fold note for omitted calls is emitted at the next dialogue boundary.
       seedMessages.push({ ...message, turn });
       stats.keptSeedMessageCount += 1;
       stats.keptProtectedToolMessageCount += 1;
-      return;
-    }
-
-    // Skill-protected messages: only the specific invoke_skill assistant
-    // messages and their tool results pass through intact. Other messages
-    // in the same turn are NOT protected here — they fall through to folding.
-    if (skillProtectedIndices && skillProtectedIndices.has(index)) {
-      flushIfNeeded();
-      seedMessages.push({ ...message, turn });
-      stats.keptSeedMessageCount += 1;
-      if (role !== 'tool') {
-        stats.keptDialogueMessageCount += 1;
-      }
       return;
     }
 

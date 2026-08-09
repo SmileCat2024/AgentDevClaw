@@ -1198,7 +1198,8 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     const archiveOriginal = req.body?.archiveOriginal === true;
     const lineageReason = req.body?.reason === 'trim' ? 'trim' : 'summary';
     const trimCutRounds = typeof req.body?.trimCutRounds === 'number' ? req.body.trimCutRounds : undefined;
-    console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached} archive=${archiveOriginal} reason=${lineageReason}`);
+    const appendSummary = req.body?.appendSummary === true;
+    console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached} archive=${archiveOriginal} reason=${lineageReason} appendSummary=${appendSummary}`);
 
     if (detached) {
       const jobId = `compact-resume-${Date.now()}-${randomUUID().slice(0, 8)}`;
@@ -1208,6 +1209,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
           sessionId,
           policy,
           startRuntime: req.body?.startRuntime !== false,
+          appendSummary,
         }).then(async (result) => {
           console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
           // 服务端归档原会话
@@ -1247,6 +1249,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       sessionId,
       policy,
       startRuntime: req.body?.startRuntime !== false,
+      appendSummary,
       trace,
     });
     trace.mark('resume_completed', { targetSessionId: result?.session?.id || '' });

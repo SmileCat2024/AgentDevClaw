@@ -15,7 +15,7 @@
  */
 
 /* ── Trim dialog state ── */
-let trimDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, loading: false, keepSkillInvokes: 5 };
+let trimDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, loading: false, keepSkillInvokes: 5, appendSummary: false };
 const trimDialog = document.getElementById('trim-dialog');
 const trimRoundList = document.getElementById('trim-round-list');
 const trimFooterInfo = document.getElementById('trim-footer-info');
@@ -24,6 +24,7 @@ const trimKeepSkillControl = document.getElementById('trim-keep-skill-control');
 const trimKeepSkillValue = document.getElementById('trim-keep-skill-value');
 const trimKeepSkillDec = document.getElementById('trim-keep-skill-dec');
 const trimKeepSkillInc = document.getElementById('trim-keep-skill-inc');
+const trimAppendSummaryToggle = document.getElementById('trim-append-summary-toggle');
 
 const SKILL_INVOKE_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, Infinity];
 
@@ -67,6 +68,7 @@ trimKeepSkillInc.addEventListener('click', () => {
 window.openTrimDialog = async (agentId, sessionId, archiveAfter = false) => {
   trimDialogState = { agentId, sessionId, rounds: [], preamblePercent: 0, loading: true, keepSkillInvokes: 5, archiveAfter };
   trimKeepSkillToggle.checked = true;
+  trimAppendSummaryToggle.checked = false;
   renderSkillStepper();
   closeCompactMenu();
   // Update title and submit button to reflect archive behavior
@@ -106,7 +108,7 @@ window.openTrimDialog = async (agentId, sessionId, archiveAfter = false) => {
 
 window.closeTrimDialog = () => {
   trimDialog.style.display = 'none';
-  trimDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, loading: false, keepSkillInvokes: 5, archiveAfter: false };
+  trimDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, loading: false, keepSkillInvokes: 5, archiveAfter: false, appendSummary: false };
 };
 
 function fmtPct(frac) {
@@ -207,6 +209,7 @@ trimRoundList.addEventListener('click', handleTrimToHere);
 
 window.submitTrimCompact = async () => {
   const { agentId, sessionId, rounds, keepSkillInvokes, archiveAfter } = trimDialogState;
+  const appendSummary = trimAppendSummaryToggle.checked;
   if (!agentId || !sessionId || !rounds.length) return;
   bumpNavigationGuard();
   const _navGuard = _navigationGuardEpoch;
@@ -261,6 +264,7 @@ window.submitTrimCompact = async () => {
       reason: 'trim',
       trimCutRounds: trimmedCount,
       archiveOriginal: archiveAfter,
+      appendSummary,
       operationId: trimOperation?.operationId || '',
     });
     if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {

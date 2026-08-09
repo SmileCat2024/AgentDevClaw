@@ -210,6 +210,21 @@ describe('trim-compact fixes', () => {
     });
   });
 
+  function assertReplayedToolCallsArePaired(seedMessages) {
+    const callIds = new Set();
+    const outputIds = new Set();
+    for (const message of seedMessages) {
+      for (const call of Array.isArray(message?.toolCalls) ? message.toolCalls : []) {
+        if (call?.id) callIds.add(call.id);
+      }
+      if (message?.role === 'tool' && message.toolCallId) {
+        outputIds.add(message.toolCallId);
+      }
+    }
+    assert.deepEqual([...callIds].sort(), [...outputIds].sort(),
+      'every replayed tool call must have exactly one replayed tool output');
+  }
+
   describe('Claw continuity protected tools', () => {
     it('preserves protected todo tool calls and their tool results outside the normal preserve window', () => {
       const messages = [
@@ -236,10 +251,43 @@ describe('trim-compact fixes', () => {
 
       const protectedAssistant = seedMessages.find(m => m.role === 'assistant' && m.toolCalls?.some(tc => tc.name === 'task_update'));
       assert.ok(protectedAssistant, 'assistant message containing task_update should survive trim');
+      assert.deepEqual(protectedAssistant.toolCalls.map(tc => tc.id), ['tc_todo'],
+        'mixed assistant batches must replay only calls whose outputs are preserved');
       assert.ok(seedMessages.some(m => m.role === 'tool' && m.toolCallId === 'tc_todo'), 'task_update tool result should survive trim');
       assert.ok(!seedMessages.some(m => m.role === 'tool' && m.toolCallId === 'tc_read'), 'unprotected read result should still be foldable/droppable');
+      assert.ok(seedMessages.some(m => m.tag === 'folded-tool-activity' && m.content.includes('read')),
+        'unprotected calls should be represented only by the fold note');
+      assertReplayedToolCallsArePaired(seedMessages);
       assert.equal(stats.keptProtectedToolCallCount, 1);
       assert.equal(stats.keptProtectedToolMessageCount, 1);
+    });
+
+    it('replays only protected calls from a mixed parallel batch', () => {
+      const messages = [
+        { role: 'user', content: 'inspect and plan', turn: 0 },
+        {
+          role: 'assistant',
+          content: 'I will set up the task and inspect the file.',
+          turn: 0,
+          toolCalls: [
+            { id: 'tc_create', name: 'task_create', arguments: { subject: 'Inspect file' } },
+            { id: 'tc_read', name: 'read', arguments: { filePath: 'app.js' } },
+            { id: 'tc_grep', name: 'grep', arguments: { pattern: 'TODO' } },
+          ],
+        },
+        { role: 'tool', toolCallId: 'tc_create', content: '{"success":true}', turn: 0 },
+        { role: 'tool', toolCallId: 'tc_read', content: '{"type":"file","content":"..."}', turn: 0 },
+        { role: 'tool', toolCallId: 'tc_grep', content: '{"matches":[]}', turn: 0 },
+      ];
+      const policy = normalizeExportPolicy({ preserveToolNames: ['task_create'] });
+      const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+
+      const replayedAssistant = seedMessages.find(message => message.role === 'assistant' && message.toolCalls?.length);
+      assert.deepEqual(replayedAssistant.toolCalls.map(call => call.id), ['tc_create']);
+      assertReplayedToolCallsArePaired(seedMessages);
+      assert.ok(seedMessages.some(message => message.tag === 'folded-tool-activity'
+        && message.content.includes('read') && message.content.includes('grep')),
+      'non-protected calls must remain only in the folded activity summary');
     });
   });
 
@@ -275,6 +323,9 @@ describe('trim-compact fixes', () => {
       // The skill tool result should be preserved in full detail
       const skillTool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc_skill');
       assert.ok(skillTool, 'invoke_skill tool result should be preserved');
+      assert.deepEqual(skillAssistant.toolCalls.map(tc => tc.id), ['tc_skill'],
+        'a mixed skill batch must not replay calls whose outputs were folded');
+      assertReplayedToolCallsArePaired(seedMessages);
 
       // BUT: the read/bash tool calls in the same turn should be folded
       const readTool = seedMessages.find(m => m.role === 'tool' && m.toolCallId === 'tc_read');

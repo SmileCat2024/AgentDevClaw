@@ -351,6 +351,7 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
         ...(options.archiveOriginal ? { archiveOriginal: true } : {}),
         ...(options.reason ? { reason: options.reason } : {}),
         ...(options.trimCutRounds != null ? { trimCutRounds: options.trimCutRounds } : {}),
+        ...(options.appendSummary ? { appendSummary: true } : {}),
         operationId,
         responseMode: 'delta',
       }),
