@@ -568,8 +568,9 @@ async function main() {
     contextGuardFeature.setCallArbiter(callArbiter);
   }
   imBridgeCtx.callArbiter = callArbiter;
-  DebugHub.getInstance().setInterruptHandler((targetAgentId, clearQueue) => {
-    if (!callArbiter || !agent?.agentId || targetAgentId !== agent.agentId) {
+  // Per-agent interrupt handler: DebugHub routes by agentId, so handler body is scoped to this agent only
+  DebugHub.getInstance().setInterruptHandler(agent?.agentId, (_targetAgentId, clearQueue) => {
+    if (!callArbiter) {
       return;
     }
     const result = callArbiter.interruptActive('cancelled by interrupt', { clearQueue });
