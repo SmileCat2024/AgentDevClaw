@@ -153,6 +153,32 @@ async function toggleToolState(scope, name, checkbox) {
 window.toggleToolState = toggleToolState;
 
 /**
+ * 发送 hook enable/disable IPC 请求。
+ */
+async function toggleHookState(lifecycle, featureName, methodName, checkbox) {
+  const action = checkbox.checked ? 'enable' : 'disable';
+  const body = { agentId: currentAgentId, scope: 'hook', lifecycle, featureName, methodName, action };
+  if (currentRuntimeAgentId) body.runtimeId = currentRuntimeAgentId;
+  try {
+    const resp = await fetch('/protoclaw/agent/tool_state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      console.warn('[toggleHookState] request failed:', resp.status);
+      checkbox.checked = !checkbox.checked;
+      return;
+    }
+    if (window._scheduleInspectorRefresh) window._scheduleInspectorRefresh(300);
+  } catch (err) {
+    console.error('[toggleHookState] error:', err);
+    checkbox.checked = !checkbox.checked;
+  }
+}
+window.toggleHookState = toggleHookState;
+
+/**
  * 生成 toggle switch HTML。
  * @param scope 'tool' | 'feature'
  * @param name 工具名或 feature 名
@@ -164,6 +190,19 @@ function buildToolToggleHtml(scope, name, isChecked) {
     + '<input type="checkbox" class="tool-toggle-input"'
     + (isChecked ? ' checked' : '')
     + ' onchange="window.toggleToolState(&quot;' + scope + '&quot;,&quot;' + escapeHtml(name) + '&quot;,this)" />'
+    + '<span class="tool-toggle-slider"></span>'
+    + '</label>';
+}
+
+/**
+ * 生成 hook toggle switch HTML。
+ * data 属性编码在 onchange 回调字符串中。
+ */
+function buildHookToggleHtml(lifecycle, featureName, methodName, isChecked) {
+  return '<label class="tool-toggle" onclick="event.stopPropagation()" title="' + escapeHtml(t('feature_toggle_hint')) + '">'
+    + '<input type="checkbox" class="tool-toggle-input"'
+    + (isChecked ? ' checked' : '')
+    + ' onchange="window.toggleHookState(&quot;' + escapeHtml(lifecycle) + '&quot;,&quot;' + escapeHtml(featureName) + '&quot;,&quot;' + escapeHtml(methodName) + '&quot;,this)" />'
     + '<span class="tool-toggle-slider"></span>'
     + '</label>';
 }
@@ -293,7 +332,10 @@ function renderReverseHooksPanel() {
         '<div class="hook-step-card">',
         '<div class="hook-step-row">',
         '<div class="hook-step-feature">' + escapeHtml(entry.featureName) + '</div>',
+        '<div class="hook-step-actions">',
         '<div class="hook-step-kind">' + escapeHtml(entry.kind) + '</div>',
+        buildHookToggleHtml(group.lifecycle, entry.featureName, entry.methodName, entry.enabled !== false),
+        '</div>',
         '</div>',
         '<div class="hook-step-method">' + escapeHtml(entry.methodName) + '()</div>',
         entry.source && entry.source.display ? '<div class="hook-step-location">' + escapeHtml(shortenSourcePath(entry.source.display)) + '</div>' : '',

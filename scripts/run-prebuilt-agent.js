@@ -383,12 +383,25 @@ class SessionLifecycle {
   handleIPC(msg) {
     if (!msg || typeof msg !== 'object') return;
 
-    // ── tool / feature enable-disable ──
+    // ── tool / feature / hook enable-disable ──
     if (msg.type === 'tool-state') {
-      const { scope, name, action } = msg;
-      if (!name || (action !== 'enable' && action !== 'disable')) return;
+      const { scope, action } = msg;
+      if (action !== 'enable' && action !== 'disable') return;
       try {
-        if (scope === 'feature') {
+        if (scope === 'hook') {
+          // hook 分支：不需要 name
+          const { lifecycle, featureName, methodName } = msg;
+          if (!lifecycle || !featureName || !methodName) return;
+
+          if (typeof this.agent?.[`${action}Hook`] !== 'function') {
+            console.warn(`[ProtoClaw Runtime] tool-state: agent.${action}Hook not available`);
+            return;
+          }
+          this.agent[`${action}Hook`](lifecycle, featureName, methodName);
+          console.log(`[ProtoClaw Runtime] ✓ Hook ${lifecycle}:${featureName}.${methodName} ${action}d`);
+        } else if (scope === 'feature') {
+          const { name } = msg;
+          if (!name) return;
           if (typeof this.agent?.[action] !== 'function') {
             console.warn(`[ProtoClaw Runtime] tool-state: agent.${action} not available`);
             return;
@@ -396,6 +409,9 @@ class SessionLifecycle {
           this.agent[action](name);
           console.log(`[ProtoClaw Runtime] ✓ Feature '${name}' ${action}d`);
         } else {
+          // scope='tool'（默认）
+          const { name } = msg;
+          if (!name) return;
           if (!this.agent?.tools || typeof this.agent.tools[action] !== 'function') {
             console.warn(`[ProtoClaw Runtime] tool-state: tools.${action} not available`);
             return;

@@ -13,20 +13,39 @@ export function setupToolStateRoutes(app) {
 
   app.post('/protoclaw/agent/tool_state', jsonMiddleware, async (req, res, next) => {
     try {
-      const { agentId, runtimeId, sessionId, scope, name, action } = req.body || {};
+      const { agentId, runtimeId, sessionId, scope, action } = req.body || {};
 
+      // 公共校验
       if (!agentId || typeof agentId !== 'string') {
         return res.status(400).json({ error: 'agentId is required' });
-      }
-      if (!name || typeof name !== 'string') {
-        return res.status(400).json({ error: 'name is required' });
       }
       if (action !== 'enable' && action !== 'disable') {
         return res.status(400).json({ error: 'action must be "enable" or "disable"' });
       }
-      const resolvedScope = scope === 'feature' ? 'feature' : 'tool';
 
-      const message = { type: 'tool-state', scope: resolvedScope, name, action };
+      // 按 scope 分支校验（discriminated union）
+      let message;
+      if (scope === 'hook') {
+        const { lifecycle, featureName, methodName } = req.body;
+        if (!lifecycle || typeof lifecycle !== 'string') {
+          return res.status(400).json({ error: 'lifecycle is required for scope="hook"' });
+        }
+        if (!featureName || typeof featureName !== 'string') {
+          return res.status(400).json({ error: 'featureName is required for scope="hook"' });
+        }
+        if (!methodName || typeof methodName !== 'string') {
+          return res.status(400).json({ error: 'methodName is required for scope="hook"' });
+        }
+        message = { type: 'tool-state', scope: 'hook', lifecycle, featureName, methodName, action };
+      } else {
+        // scope='tool' | 'feature'（默认 tool）
+        const { name } = req.body;
+        if (!name || typeof name !== 'string') {
+          return res.status(400).json({ error: 'name is required' });
+        }
+        const resolvedScope = scope === 'feature' ? 'feature' : 'tool';
+        message = { type: 'tool-state', scope: resolvedScope, name, action };
+      }
       let delivered = 0;
 
       // Priority 1: runtimeId (viewerAgentId)
@@ -55,7 +74,7 @@ export function setupToolStateRoutes(app) {
         return res.status(503).json({ error: 'No running agent process found' });
       }
 
-      res.json({ ok: true, agentId, scope: resolvedScope, name, action, delivered });
+      res.json({ ok: true, agentId, scope: message.scope, action, delivered });
     } catch (error) {
       next(error);
     }

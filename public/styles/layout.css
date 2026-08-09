@@ -4139,6 +4139,12 @@ body[data-theme="light"] .feature-upload-status.error {
   background: rgba(255,255,255,0.05);
 }
 
+.hook-step-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .hook-step-method {
   font-size: 14px;
   font-weight: 700;
