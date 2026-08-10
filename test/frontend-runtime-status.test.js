@@ -142,22 +142,22 @@ describe('runtime-status: sidebar operation projection', () => {
     assert.equal(entries.length, 0);
   });
 
-  it('keeps a target-readiness failure explicit after the source runtime disappears', () => {
+  it('labels a terminal runtime stop as startup failure rather than session-creation failure', () => {
     const ctx = loadRuntimeStatus();
     const entry = ctx.run(`(() => {
       const host = { id: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
       beginSidebarOperation({
         operationId: 'summary:degraded', type: 'replacement', kind: 'summary', phase: 'degraded',
         agentId: host.id, sourceSessionId: 'source-1', targetSessionId: 'target-1',
-        projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a',
-        errorCode: 'target_runtime_not_ready'
+        projectDir: 'D:\\\\\\\\code\\\\\\\\project-a', projectName: 'project-a',
+        errorCode: 'target_runtime_stopped'
       });
       return collectRuntimeEntriesForPrebuilt(host, [])[0];
     })()`);
     assert.equal(entry.source, 'operation-degraded');
     assert.equal(entry.projectName, 'project-a');
-    assert.equal(entry.name, '摘要会话创建未完成');
-    assert.equal(entry.sidebarOperation.errorCode, 'target_runtime_not_ready');
+    assert.equal(entry.name, '摘要会话启动失败');
+    assert.equal(entry.sidebarOperation.errorCode, 'target_runtime_stopped');
   });
 });
 

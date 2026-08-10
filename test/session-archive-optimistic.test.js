@@ -113,7 +113,7 @@ describe('session archive optimistic helper', () => {
     assert.equal(ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`), null);
   });
 
-  it('does not hide a target-readiness failure merely because the source stopped', async () => {
+  it('keeps a terminal target-start failure explicit while settling the source runtime', async () => {
     const ctx = createArchiveSandbox();
     ctx.fetch = async () => ({
       ok: true,
@@ -133,13 +133,13 @@ describe('session archive optimistic helper', () => {
       updateSessionReplacementMutation('programming-helper', 'session-1', {
         phase: 'source-stopping',
         targetSessionId: 'session-2',
-        errorCode: 'target_runtime_not_ready'
+        errorCode: 'target_runtime_stopped'
       });
       settleSessionReplacementMutation('programming-helper', 'session-1', 0, 1);
     `);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const operation = ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`);
     assert.equal(operation.phase, 'degraded');
-    assert.equal(operation.errorCode, 'target_runtime_not_ready');
+    assert.equal(operation.errorCode, 'target_runtime_stopped');
   });
 });

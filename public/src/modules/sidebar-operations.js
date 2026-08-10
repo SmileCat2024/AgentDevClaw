@@ -338,10 +338,10 @@ async function settleSidebarSourceOperation(operationId, options = {}) {
         const status = await response.json();
         if (status?.lifecycle === 'missing' || status?.lifecycle === 'stopped') {
           const latest = getSidebarOperation(operationId);
-          if (latest?.errorCode === 'target_runtime_not_ready' && !latest.targetRuntimeId) {
+          if (latest?.errorCode === 'target_runtime_stopped' && !latest.targetRuntimeId) {
             updateSidebarOperation(operationId, {
               phase: 'degraded',
-              errorCode: 'target_runtime_not_ready',
+              errorCode: 'target_runtime_stopped',
             });
             if (typeof loadAgents === 'function') loadAgents().catch(e => console.warn(e));
             return false;

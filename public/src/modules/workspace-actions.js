@@ -199,6 +199,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const isZh = currentLanguage === 'zh';
     const toastId = 'compact-resume-' + action.sessionId;
     const sourceSession = getWorkspaceSessionById(activeAgent, action.sessionId);
+    let compactSessionCommitted = false;
     const compactOperation = beginSidebarOperation({
       type: 'create',
       kind: 'summary',
@@ -225,27 +226,18 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         applySessionMutationDelta(activeAgent.id, result);
       }
       const targetSessionId = String(result?.session?.id || '').trim();
+      compactSessionCommitted = Boolean(targetSessionId);
       updateSidebarOperation(compactOperation.operationId, {
         phase: 'target-starting',
         targetSessionId,
         title: result?.session?.title || compactOperation.title,
         serverRevision: result?.revision ?? null,
       });
-      let readyAgent = null;
-      try {
-        readyAgent = await waitForSidebarTargetRuntime(
-          compactOperation.operationId,
-          activeAgent.id,
-          targetSessionId,
-          result,
-        );
-      } catch (error) {
-        console.error('Compacted resume session was created but its runtime is not ready:', error);
-        updateSidebarOperation(compactOperation.operationId, {
-          phase: 'degraded',
-          errorCode: 'target_runtime_not_ready',
-        });
-      }
+      // The server has already committed the session and performed the bounded
+      // runtime startup observation. Do not block the UI on a second readiness
+      // poll; a missing immediate runtime is a delayed startup, not a failure.
+      const readyAgent = result?.agent || null;
+      const targetStopped = false;
       const managedReadyAgent = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
       const nextRuntimeId = managedReadyAgent?.runtime_session_id
         || managedReadyAgent?.runtimeSessionId
@@ -260,6 +252,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         }
         finishSidebarOperation(compactOperation.operationId, 'settled');
       } else {
+        // The session commit succeeded; readiness observation is deliberately
+        // non-blocking and must not leave a synthetic sidebar operation behind.
+        if (!targetStopped) finishSidebarOperation(compactOperation.operationId, 'settled');
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
       }
@@ -270,13 +265,21 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       });
     } catch (error) {
       console.error('Failed to compact-resume session:', error);
-      finishSidebarOperation(compactOperation.operationId, 'failed', { errorCode: 'compact_resume_failed' });
+      if (!compactSessionCommitted) {
+        finishSidebarOperation(compactOperation.operationId, 'failed', { errorCode: 'compact_resume_failed' });
+        ClawToast.update(toastId, {
+          status: 'error',
+          title: isZh ? '轻量继续失败' : 'Compacted resume failed',
+          description: (error && error.message ? error.message : String(error)),
+        });
+      } else {
+        finishSidebarOperation(compactOperation.operationId, 'settled');
+        ClawToast.update(toastId, {
+          status: 'success',
+          title: isZh ? '轻量继续会话已创建' : 'Compacted resume session created',
+        });
+      }
       clearChatLoadingSession();
-      ClawToast.update(toastId, {
-        status: 'error',
-        title: isZh ? '轻量继续失败' : 'Compacted resume failed',
-        description: (error && error.message ? error.message : String(error)),
-      });
     }
     return;
   }
@@ -306,6 +309,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const _csIsZh = currentLanguage === 'zh';
     const _csToastId = 'compact-summary-' + action.sessionId;
     let _csArchiveRollback = null;
+    let _csSessionCommitted = false;
     if (action.archiveOriginal && typeof markSessionArchivedForMutation === 'function') {
       _csArchiveRollback = markSessionArchivedForMutation(activeAgent.id, action.sessionId, 'summary');
     }
@@ -364,23 +368,18 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         return;
       }
       const targetSessionId = String(result?.session?.id || '').trim();
+      _csSessionCommitted = Boolean(targetSessionId);
       updateSidebarOperation(_csOperation?.operationId, {
         phase: 'target-starting',
         targetSessionId,
         title: result?.session?.title || _csOperation?.title || '',
         serverRevision: result?.revision ?? null,
       });
-      let _csReadyAgent = null;
-      try {
-        _csReadyAgent = await waitForSidebarTargetRuntime(
-          _csOperation?.operationId,
-          activeAgent.id,
-          targetSessionId,
-          result,
-        );
-      } catch (error) {
-        console.error('Summary target runtime is not ready:', error);
-      }
+      // The response is authoritative for the committed session. Runtime
+      // readiness may arrive after this response; never block or downgrade the
+      // completed summary merely because it is not present yet.
+      const _csReadyAgent = result?.agent || null;
+      const _csTargetStopped = false;
       const _csConnectedTarget = _csReadyAgent ? (upsertConnectedAgent(_csReadyAgent) || _csReadyAgent) : null;
       const nextRuntimeId = _csConnectedTarget?.runtime_session_id
         || _csConnectedTarget?.runtimeSessionId
@@ -388,16 +387,18 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         || null;
       if (action.archiveOriginal && archiveSucceeded) {
         updateSessionReplacementMutation(activeAgent.id, action.sessionId, {
-          phase: nextRuntimeId ? 'target-ready' : 'degraded',
+          phase: nextRuntimeId ? 'target-ready' : (_csTargetStopped ? 'degraded' : 'target-starting'),
           targetSessionId: result?.session?.id || '',
           targetRuntimeId: nextRuntimeId || '',
           serverRevision: result?.revision ?? null,
-          ...(!nextRuntimeId ? { errorCode: 'target_runtime_not_ready' } : {}),
+          ...(_csTargetStopped ? { errorCode: 'target_runtime_stopped' } : {}),
         });
       } else if (nextRuntimeId) {
         updateSidebarOperation(_csOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
+      } else if (_csTargetStopped) {
+        updateSidebarOperation(_csOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
       } else {
-        updateSidebarOperation(_csOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_not_ready' });
+        finishSidebarOperation(_csOperation?.operationId, 'settled');
       }
       if (_csNavGuard !== _navigationGuardEpoch) {
         ClawToast.update(_csToastId, {
@@ -450,19 +451,28 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       _csArchiveRollback = null;
     } catch (error) {
       console.error('Failed to compact session:', error);
-      if (_csArchiveRollback) {
-        _csArchiveRollback();
+      if (!_csSessionCommitted) {
+        if (_csArchiveRollback) {
+          _csArchiveRollback();
+          _csArchiveRollback = null;
+        } else if (_csOperation?.operationId) {
+          finishSidebarOperation(_csOperation.operationId, 'failed', { errorCode: 'summary_failed' });
+        }
+        ClawToast.update(_csToastId, {
+          status: 'error',
+          title: _csIsZh ? '总结失败' : 'Summary failed',
+          description: (error?.message || String(error)),
+        });
+      } else {
+        finishSidebarOperation(_csOperation?.operationId, 'settled');
         _csArchiveRollback = null;
-      } else if (_csOperation?.operationId) {
-        finishSidebarOperation(_csOperation.operationId, 'failed', { errorCode: 'summary_failed' });
+        ClawToast.update(_csToastId, {
+          status: 'success',
+          title: _csIsZh ? '会话总结完成' : 'Session summary completed',
+        });
       }
       clearSessionLoading(activeAgent.id);
       clearChatLoadingSession();
-      ClawToast.update(_csToastId, {
-        status: 'error',
-        title: _csIsZh ? '总结失败' : 'Summary failed',
-        description: (error?.message || String(error)),
-      });
     }
     return;
   }
@@ -753,40 +763,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
           return;
         }
-        try {
-          const readyAgent = await waitForTargetRuntimeSession(activeAgent.id, targetSessionId, 50, {
-            operationId: sidebarOperation.operationId,
-          });
-          if (!readyAgent) return;
-          const managedReadyAgent = upsertConnectedAgent(readyAgent) || readyAgent;
-          const nextRuntimeId = readyAgent.runtime_session_id || readyAgent.runtimeSessionId || readyAgent.id;
-          if (!nextRuntimeId) return;
-          updateSidebarOperation(sidebarOperation.operationId, {
-            phase: 'target-ready',
-            targetRuntimeId: nextRuntimeId,
-          });
-          if (_navGuard !== _navigationGuardEpoch) {
-            finishSidebarOperation(sidebarOperation.operationId, 'settled');
-            return;
-          }
-          setPreferredUnitMode('chat', managedReadyAgent);
-          if (nextRuntimeId === currentRuntimeAgentId) {
-            beginFollowLatestEntryWindow();
-            renderCurrentMainView();
-          } else {
-            await requestSwitch(nextRuntimeId, 'session-open-wait');
-          }
-          finishSidebarOperation(sidebarOperation.operationId, 'settled');
-        } catch (error) {
-          console.error('Failed while waiting for prebuilt runtime session:', error);
-          updateSidebarOperation(sidebarOperation.operationId, {
-            phase: 'degraded',
-            errorCode: 'target_runtime_not_ready',
-          });
-          window.setTimeout(() => finishSidebarOperation(sidebarOperation?.operationId, 'expired'), 30000);
-        } finally {
-          loadAgents().catch((error) => console.error('Failed to refresh agents after waiting for prebuilt runtime:', error));
-        }
+        // The session is committed and its startup has been requested. Do not
+        // hold this user action open on Viewer registration; a later sidebar
+        // refresh will discover and activate the runtime when it becomes ready.
+        finishSidebarOperation(sidebarOperation.operationId, 'settled');
+        loadAgents().catch((error) => console.error('Failed to refresh agents after starting prebuilt runtime:', error));
       };
       const targetSession = sessionAction.type === 'open_session'
         ? getWorkspaceSessionById(activeAgent, sessionAction.sessionId)

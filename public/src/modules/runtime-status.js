@@ -158,16 +158,18 @@ function getSidebarOperationPendingName(operation) {
 }
 
 function getSidebarOperationFailureName(operation) {
+  // A degraded target operation is reached only after the session mutation has
+  // committed. Its failure describes the runtime startup, never session creation.
   if (operation?.kind === 'branch') {
-    return currentLanguage === 'zh' ? '分支会话创建未完成' : 'Branch creation incomplete';
+    return currentLanguage === 'zh' ? '分支会话启动失败' : 'Branch session failed to start';
   }
   if (operation?.kind === 'trim') {
-    return currentLanguage === 'zh' ? '精简会话创建未完成' : 'Trimmed session creation incomplete';
+    return currentLanguage === 'zh' ? '精简会话启动失败' : 'Trimmed session failed to start';
   }
   if (operation?.kind === 'summary') {
-    return currentLanguage === 'zh' ? '摘要会话创建未完成' : 'Summarized session creation incomplete';
+    return currentLanguage === 'zh' ? '摘要会话启动失败' : 'Summarized session failed to start';
   }
-  return currentLanguage === 'zh' ? '新会话启动未完成' : 'New session start incomplete';
+  return currentLanguage === 'zh' ? '新会话启动失败' : 'New session failed to start';
 }
 
 function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {

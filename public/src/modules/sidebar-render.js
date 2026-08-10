@@ -37,7 +37,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     const operationPending = entry.pendingOperation === true;
     const deleting = entry.deleting === true;
     const operationDegraded = entry.sidebarOperation?.phase === 'degraded';
-    const targetStartDegraded = operationDegraded && entry.sidebarOperation?.errorCode === 'target_runtime_not_ready';
+    const targetStartDegraded = operationDegraded && entry.sidebarOperation?.errorCode === 'target_runtime_stopped';
     const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
     const itemClass = [
       'agent-item',
@@ -254,20 +254,28 @@ async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {
 
 async function waitForTargetRuntimeSession(agentId, sessionId, attempts = 50, options = {}) {
   const operationId = String(options.operationId || '').trim();
+  // This is a bounded navigation wait, not an operation-success verdict. The
+  // session mutation has already committed before callers enter this function.
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const params = new URLSearchParams({ agentId, sessionId });
-    if (operationId) params.set('operationId', operationId);
-    const response = await fetch('/protoclaw/runtime_status?' + params.toString());
-    if (response.ok) {
-      const result = await response.json();
-      if (result?.ready === true && result?.agent) return result.agent;
-      if (result?.lifecycle === 'stopped' && attempt > 2) {
-        throw new Error(`Runtime stopped before becoming ready: ${agentId}/${sessionId}`);
+    try {
+      const params = new URLSearchParams({ agentId, sessionId });
+      if (operationId) params.set('operationId', operationId);
+      const response = await fetch('/protoclaw/runtime_status?' + params.toString());
+      if (response.ok) {
+        const result = await response.json();
+        if (result?.ready === true && result?.agent) return result.agent;
+        if (result?.lifecycle === 'stopped' || result?.lifecycle === 'missing') {
+          const error = new Error(`Runtime ${result.lifecycle} before becoming ready: ${agentId}/${sessionId}`);
+          error.code = 'target_runtime_stopped';
+          throw error;
+        }
       }
+    } catch {
+      // A polling transport error is neither a session-mutation nor startup failure.
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`Timed out waiting for runtime session: ${agentId}/${sessionId}`);
+  return null;
 }
 
 async function loadAgents() {

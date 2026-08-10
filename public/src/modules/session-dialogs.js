@@ -239,6 +239,7 @@ window.submitTrimCompact = async () => {
   markSessionLoading(agentId, sessionId);
   const _oldRuntimeId = currentRuntimeAgentId;
   let archiveRollback = null;
+  let trimSessionCommitted = false;
   if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
     archiveRollback = markSessionArchivedForMutation(agentId, sessionId, 'trim');
   }
@@ -278,18 +279,17 @@ window.submitTrimCompact = async () => {
       archiveRollback = null;
     }
     const targetSessionId = String(result?.session?.id || '').trim();
+    trimSessionCommitted = Boolean(targetSessionId);
     updateSidebarOperation(trimOperation?.operationId, {
       phase: 'target-starting',
       targetSessionId,
       title: result?.session?.title || trimOperation?.title || '',
       serverRevision: result?.revision ?? null,
     });
-    let readyAgent = null;
-    try {
-      readyAgent = await waitForSidebarTargetRuntime(trimOperation?.operationId, agentId, targetSessionId, result);
-    } catch (error) {
-      console.error('Trim target runtime is not ready:', error);
-    }
+    // The server has already committed the trimmed session and observed startup.
+    // Delayed Viewer registration must not block or downgrade this operation.
+    const readyAgent = result?.agent || null;
+    const targetStopped = false;
     const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
     const nextRuntimeId = connectedTarget?.runtime_session_id
       || connectedTarget?.runtimeSessionId
@@ -297,16 +297,18 @@ window.submitTrimCompact = async () => {
       || null;
     if (archiveAfter && archiveSucceeded) {
       updateSessionReplacementMutation(agentId, sessionId, {
-        phase: nextRuntimeId ? 'target-ready' : 'degraded',
+        phase: nextRuntimeId ? 'target-ready' : (targetStopped ? 'degraded' : 'target-starting'),
         targetSessionId: result?.session?.id || '',
         targetRuntimeId: nextRuntimeId || '',
         serverRevision: result?.revision ?? null,
-        ...(!nextRuntimeId ? { errorCode: 'target_runtime_not_ready' } : {}),
+        ...(targetStopped ? { errorCode: 'target_runtime_stopped' } : {}),
       });
     } else if (nextRuntimeId) {
       updateSidebarOperation(trimOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
+    } else if (targetStopped) {
+      updateSidebarOperation(trimOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
     } else {
-      updateSidebarOperation(trimOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_not_ready' });
+      finishSidebarOperation(trimOperation?.operationId, 'settled');
     }
     if (_navGuard !== _navigationGuardEpoch) {
       if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
@@ -347,15 +349,20 @@ window.submitTrimCompact = async () => {
     archiveRollback = null;
   } catch (error) {
     console.error('Failed to trim compact session:', error);
-    if (archiveRollback) {
-      archiveRollback();
+    if (!trimSessionCommitted) {
+      if (archiveRollback) {
+        archiveRollback();
+        archiveRollback = null;
+      } else if (trimOperation?.operationId) {
+        finishSidebarOperation(trimOperation.operationId, 'failed', { errorCode: 'trim_failed' });
+      }
+      window.alert((currentLanguage === 'zh' ? '精简失败：' : 'Trim failed: ') + (error?.message || error));
+    } else {
+      finishSidebarOperation(trimOperation?.operationId, 'settled');
       archiveRollback = null;
-    } else if (trimOperation?.operationId) {
-      finishSidebarOperation(trimOperation.operationId, 'failed', { errorCode: 'trim_failed' });
     }
     clearSessionLoading(agentId);
     clearChatLoadingSession();
-    window.alert((currentLanguage === 'zh' ? '精简失败：' : 'Trim failed: ') + (error?.message || error));
   }
 };
 
@@ -492,6 +499,7 @@ window.submitBranch = async () => {
   markSessionLoading(agentId, sessionId);
   const _oldRuntimeId = currentRuntimeAgentId;
   let archiveRollback = null;
+  let branchSessionCommitted = false;
   if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
     archiveRollback = markSessionArchivedForMutation(agentId, sessionId, 'branch');
   }
@@ -534,18 +542,17 @@ window.submitBranch = async () => {
     }
 
     const targetSessionId = String(result?.newSessionId || '').trim();
+    branchSessionCommitted = Boolean(targetSessionId);
     updateSidebarOperation(branchOperation?.operationId, {
       phase: 'target-starting',
       targetSessionId,
       title: result?.branchTitle || branchOperation?.title || '',
       serverRevision: result?.revision ?? null,
     });
-    let readyAgent = null;
-    try {
-      readyAgent = await waitForSidebarTargetRuntime(branchOperation?.operationId, agentId, targetSessionId, result);
-    } catch (error) {
-      console.error('Branch target runtime is not ready:', error);
-    }
+    // The server has already committed the branch and observed startup. Delayed
+    // Viewer registration must not block or downgrade the branch operation.
+    const readyAgent = result?.agent || null;
+    const targetStopped = false;
     const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
     const nextRuntimeId = connectedTarget?.runtime_session_id
       || connectedTarget?.runtimeSessionId
@@ -553,16 +560,18 @@ window.submitBranch = async () => {
       || null;
     if (archiveAfter && archiveSucceeded) {
       updateSessionReplacementMutation(agentId, sessionId, {
-        phase: nextRuntimeId ? 'target-ready' : 'degraded',
+        phase: nextRuntimeId ? 'target-ready' : (targetStopped ? 'degraded' : 'target-starting'),
         targetSessionId: result?.newSessionId || '',
         targetRuntimeId: nextRuntimeId || '',
         serverRevision: result?.revision ?? null,
-        ...(!nextRuntimeId ? { errorCode: 'target_runtime_not_ready' } : {}),
+        ...(targetStopped ? { errorCode: 'target_runtime_stopped' } : {}),
       });
     } else if (nextRuntimeId) {
       updateSidebarOperation(branchOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
+    } else if (targetStopped) {
+      updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
     } else {
-      updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_not_ready' });
+      finishSidebarOperation(branchOperation?.operationId, 'settled');
     }
     if (_navGuard !== _navigationGuardEpoch) {
       if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
@@ -603,15 +612,20 @@ window.submitBranch = async () => {
     archiveRollback = null;
   } catch (error) {
     console.error('Failed to branch session:', error);
-    if (archiveRollback) {
-      archiveRollback();
+    if (!branchSessionCommitted) {
+      if (archiveRollback) {
+        archiveRollback();
+        archiveRollback = null;
+      } else if (branchOperation?.operationId) {
+        finishSidebarOperation(branchOperation.operationId, 'failed', { errorCode: 'branch_failed' });
+      }
+      window.alert((currentLanguage === 'zh' ? '分支失败：' : 'Branch failed: ') + (error?.message || error));
+    } else {
+      finishSidebarOperation(branchOperation?.operationId, 'settled');
       archiveRollback = null;
-    } else if (branchOperation?.operationId) {
-      finishSidebarOperation(branchOperation.operationId, 'failed', { errorCode: 'branch_failed' });
     }
     clearSessionLoading(agentId);
     clearChatLoadingSession();
-    window.alert((currentLanguage === 'zh' ? '分支失败：' : 'Branch failed: ') + (error?.message || error));
   }
 };
 

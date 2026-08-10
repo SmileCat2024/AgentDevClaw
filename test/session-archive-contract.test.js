@@ -5,6 +5,7 @@ import fs from 'node:fs';
 const sessionRoutes = fs.readFileSync(new URL('../server/routes/session.js', import.meta.url), 'utf8');
 const appMain = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const workspaceActions = fs.readFileSync(new URL('../public/src/modules/workspace-actions.js', import.meta.url), 'utf8');
+const sidebarRender = fs.readFileSync(new URL('../public/src/modules/sidebar-render.js', import.meta.url), 'utf8');
 
 describe('archive-and-replace contract', () => {
   it('branches raw message objects so image attachments before the cut remain intact', () => {
@@ -64,8 +65,17 @@ describe('archive-and-replace contract', () => {
     const start = workspaceActions.indexOf('if (needsManagedSession)');
     const end = workspaceActions.indexOf("if (action.type === 'show_chat'", start);
     const managedFlow = workspaceActions.slice(start, end);
-    assert.match(managedFlow, /waitForTargetRuntimeSession\(activeAgent\.id, targetSessionId/);
-    assert.doesNotMatch(managedFlow, /await loadAgents\(\)/);
+    assert.match(managedFlow, /finishSidebarOperation\(sidebarOperation\.operationId, 'settled'\);/);
+    assert.doesNotMatch(managedFlow, /await waitForTargetRuntimeSession/);
     assert.doesNotMatch(managedFlow, /waitForPrebuiltRuntimeSession/);
+  });
+
+  it('keeps readiness observation bounded and separate from session-operation settlement', () => {
+    const start = sidebarRender.indexOf('async function waitForTargetRuntimeSession');
+    const end = sidebarRender.indexOf('\nasync function loadAgents()', start);
+    const readinessWait = sidebarRender.slice(start, end);
+    assert.match(readinessWait, /attempt < attempts/);
+    assert.match(readinessWait, /return null;/);
+    assert.doesNotMatch(readinessWait, /for \(;;\)/);
   });
 });
