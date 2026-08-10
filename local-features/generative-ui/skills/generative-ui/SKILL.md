@@ -45,7 +45,7 @@ description: AgentDevClaw 内置可视化交互面板的完整参考。当你需
 |------|------|------|------|
 | `schemaVersion` | `1` | 是 | 固定为 `1` |
 | `catalogVersion` | `"v1"` | 是 | 固定为 `"v1"` |
-| `title` | `string` | 是 | 面板标题 |
+| `title` | `string` | 是 | 面板标题（max 200 字符） |
 | `description` | `string` | 否 | 面板描述 |
 | `root` | `string` | 是 | `elements` 中作为根节点的 key |
 | `elements` | `Record<string, Element>` | 是 | id 到元素的映射 |
@@ -59,8 +59,10 @@ description: AgentDevClaw 内置可视化交互面板的完整参考。当你需
 ```
 
 - `type`：必须是下方组件目录中列出的组件名。
-- `props`：组件属性，必须符合该组件的 props 定义。
-- `children`：子元素 ID 列表。只有布局类组件（Stack / Row / Grid / Card）可以有 children。
+- `props`：组件属性。**必须严格匹配该组件在下文列出的 props——多余的 prop 会导致校验失败（fail closed）。**
+- `children`：子元素 ID 列表（字符串数组）。
+  - **容器组件**（Stack / Row / Grid / Card）的 `children` 是**必填的**，必须为数组（可以为空 `[]`）。
+  - **叶子组件**（所有非容器组件）的 `children` 可以省略或为空数组 `[]`；**不能包含任何元素 ID**。
 
 ### Action 结构
 
@@ -76,244 +78,135 @@ description: AgentDevClaw 内置可视化交互面板的完整参考。当你需
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `intent` | `"submit" \| "reset"` | `submit` = 交给 Agent 处理；`reset` = 本地重置表单 |
-| `label` | `string` | Action 标签 |
-| `includeFields` | `string[]` | 提交时包含的字段名白名单。省略时提交全部已声明字段 |
-| `confirm` | `object` | 提交前弹出本地确认对话框。用于破坏性或有副作用的操作 |
+| `label` | `string` | Action 标签（非空） |
+| `includeFields` | `string[]` | 提交时包含的字段名白名单。**引用的每个字段名必须真实存在于某个输入组件的 `name`。** 省略时提交全部已声明字段 |
+| `confirm` | `object` | 提交前弹出本地确认对话框。`title`（必填，max 200）、`description`（可选，max 1000）、`confirmLabel`（可选，max 100） |
 
 **submit 行为**：当用户点击绑定了 submit action 的按钮时，当前页面上各字段的值（含未被用户修改的 initialValues）会作为一条用户消息出现在聊天中。
 
 ---
 
-## 组件目录（catalogVersion: v1）
+## 严格校验规则
 
-### 布局类
+Spec 提交后会经过严格的运行时校验。以下规则**违反任何一条都会导致整个 Spec 被拒**，返回 `invalid_spec` 错误。这是 agent 最容易踩坑的地方，务必逐条阅读。
 
-#### Stack `[has children]`
-垂直布局容器。
+### 元素 ID 格式
 
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| gap | `xs\|sm\|md\|lg` | 否 | 子元素间距 |
-| align | `start\|center\|end\|stretch` | 否 | 交叉轴对齐 |
+所有 `elements` 的 key 和 `actions` 的 key 都必须匹配正则 **`/^[a-zA-Z][a-zA-Z0-9_-]*$/`**：
 
-#### Row `[has children]`
-水平布局容器。
+- **必须以字母开头**（`a-z` / `A-Z`），不能以数字开头
+- 只允许字母、数字、下划线 `_` 和连字符 `-`
+- 不允许点号 `.`、空格、斜杠 `/` 等特殊字符
+- 最大长度 64 字符
 
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| gap | `xs\|sm\|md\|lg` | 否 | 子元素间距 |
-| align | `start\|center\|end\|stretch` | 否 | 交叉轴对齐 |
-| wrap | `boolean` | 否 | 空间不足时是否换行。窄面板下默认 true |
+```
+合法：root, child1, my-element, btn_submit
+非法：1btn, my.text, btn-1 (数字开头), my element (空格)
+```
 
-#### Grid `[has children]`
-固定列数网格布局。
+### 图结构约束（elements 形成的树）
 
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| columns | `number` | 是 | 列数（1-4） |
-| gap | `xs\|sm\|md\|lg` | 否 | 子元素间距 |
+| 规则 | 说明 |
+|------|------|
+| **root 必须存在** | `root` 字段引用的 ID 必须在 `elements` 中 |
+| **children 引用完整** | 每个 children 中的 ID 必须存在于 `elements` |
+| **单父节点** | 一个元素**不能被多个父节点的 children 同时引用**。如果多个容器需要显示相同内容，必须创建多个独立元素 |
+| **无环** | 元素引用不能形成循环 |
+| **无孤立节点** | **所有元素都必须从 root 可达。** 在 `elements` 中添加了元素但忘记挂到树的某处，会报 `unreachable` |
 
-#### Card `[has children]`
-带边框的容器，可选标题。
+### Props 严格模式（fail closed）
 
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| title | `string` | 否 | 卡片标题 |
-| variant | `default\|subtle\|emphasis` | 否 | 视觉样式 |
+**不允许使用组件 Catalog 中未声明的 prop。** 这是最高频的错误来源：
 
-#### Divider
-水平分隔线。无 props，无 children。
+- 每个组件只接受下方组件目录中明确列出的 props
+- 添加任何未列出的 prop（即使看起来"合理"）都会导致 `unknown prop` 错误
+- **特别注意 `placeholder`**：在所有输入类组件中，**只有 `TextInput` 支持 `placeholder`**。`Textarea`、`NumberInput`、`Select`、`Slider`、`Switch`、`Checkbox`、`RadioGroup`、`DateInput`、`SegmentedControl` 均**不支持** `placeholder`
 
-### 展示类
+### initialValues 约束
 
-#### Text
-静态文本。
+- 每个 key **必须对应某个输入组件的 `name`**。引用不存在的字段名会报错
+- 值类型应为 `string | number | boolean | null`
 
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| content | `string` | 是 | 文本内容 |
-| variant | `body\|caption\|heading\|code` | 否 | 文本样式 |
-| tone | `default\|muted\|success\|warning\|danger\|info` | 否 | 语义色调 |
+### Action 引用约束
 
-#### Badge
-小标签。
+- Button 的 `actionId` **必须在 `spec.actions` 中有对应定义**。引用未定义的 action 会报错
+- action 的 `includeFields` 中每个字段名**必须对应某个输入组件的 `name`**
+- 不同的输入组件**不能使用相同的 `name`**（重复字段名会报错）
 
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| text | `string` | 是 | 标签文本 |
-| variant | `default\|success\|warning\|danger\|info` | 否 | 语义样式 |
+### 组件特定约束
 
-#### Table
-只读数据表。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| columns | `array` | 是 | 列定义，每项 `{ key, label }`，最多 20 列 |
-| rows | `array` | 是 | 行数据，最多 100 行 |
-
-**columns item 结构**：`{ key: string (required, max 64), label: string (required, max 100) }`
-
-**rows item 结构**：`{ [columnKey]: string | number | boolean | null }`
-
-#### Alert
-状态提示框。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| variant | `info\|success\|warning\|danger\|neutral` | 否 | 提示类型 |
-| title | `string` | 是 | 标题 |
-| description | `string` | 否 | 补充说明 |
-
-#### Progress
-进度条。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| value | `number` | 是 | 进度百分比（0-100） |
-| label | `string` | 否 | 标签 |
-| showValue | `boolean` | 否 | 显示百分比数值 |
-| tone | `default\|success\|warning\|danger` | 否 | 语义色调 |
-
-#### CodeBlock
-代码块（纯文本渲染，不执行不高亮）。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| code | `string` | 是 | 代码或预格式化文本 |
-| language | `string` | 否 | 语言标签（仅展示用） |
-| title | `string` | 否 | 标题 |
-
-### 输入类
-
-所有输入组件的 `name` prop 用于：
-- 在 `initialValues` 中设置初始值
-- 在 submit action 的 `includeFields` 中被引用
-- 在用户提交时作为字段 key 返回
-
-#### TextInput
-单行文本输入。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 否 | 标签 |
-| placeholder | `string` | 否 | 占位提示 |
-| required | `boolean` | 否 | 是否必填 |
-| minLength | `number` | 否 | 最小长度（0-10000） |
-| maxLength | `number` | 否 | 最大长度 |
-
-#### NumberInput
-数字输入。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 否 | 标签 |
-| min | `number` | 否 | 最小值 |
-| max | `number` | 否 | 最大值 |
-| step | `number` | 否 | 步进值（min: 0） |
-| required | `boolean` | 否 | 是否必填 |
-
-#### Textarea
-多行文本输入。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 否 | 标签 |
-| rows | `number` | 否 | 行数（2-12） |
-| maxLength | `number` | 否 | 最大长度 |
-| required | `boolean` | 否 | 是否必填 |
-
-#### Select
-下拉选择。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 否 | 标签 |
-| options | `array` | 是 | 选项列表，每项 `{ value, label }`，最多 100 项 |
-| required | `boolean` | 否 | 是否必填 |
-
-**options item 结构**：`{ value: string (required), label: string (required) }`
-
-#### Checkbox
-复选框。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 是 | 标签文本 |
-
-#### RadioGroup
-单选按钮组。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 否 | 标签 |
-| options | `array` | 是 | 选项列表，每项 `{ value, label }`，最多 100 项 |
-| required | `boolean` | 否 | 是否必填 |
-
-#### DateInput
-日期选择。提交 ISO 日期字符串（`YYYY-MM-DD`）或 null。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 否 | 标签 |
-| min | `string` | 否 | 最早日期（`YYYY-MM-DD`） |
-| max | `string` | 否 | 最晚日期（`YYYY-MM-DD`） |
-| required | `boolean` | 否 | 是否必填 |
-
-#### Slider
-数值滑块。提交有限数值。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 否 | 标签 |
-| min | `number` | 是 | 最小值 |
-| max | `number` | 是 | 最大值 |
-| step | `number` | 否 | 步进值，默认 1 |
-| showValue | `boolean` | 否 | 显示当前值 |
-
-#### Switch
-开关。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 是 | 标签文本 |
-| description | `string` | 否 | 补充说明 |
-
-#### SegmentedControl
-分段选择器。提交选中项的 value。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| name | `string` | 是 | 字段名 |
-| label | `string` | 否 | 标签 |
-| options | `array` | 是 | 选项列表，每项 `{ value, label }`，最多 100 项 |
-| required | `boolean` | 否 | 是否必填 |
-
-### 操作类
-
-#### Button
-按钮。点击时触发引用的 action。
-
-| Prop | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| label | `string` | 是 | 按钮文本 |
-| actionId | `string` | 是 | 引用 `spec.actions` 中定义的 action |
-| variant | `primary\|secondary\|ghost\|danger` | 否 | 按钮样式 |
-| disabled | `boolean` | 否 | 禁用状态 |
+| 组件 | 约束 |
+|------|------|
+| **Slider** | `min` 必须严格小于 `max`；`step`（如果提供）必须是正数 |
+| **Grid** | `columns` 必须是 1-4 的整数 |
+| **DateInput** | `min` / `max`（如果提供）必须是 `YYYY-MM-DD` 格式；`min` 不能晚于 `max` |
 
 ---
 
-## 完整示例
+## 组件速查表（catalogVersion: v1）
 
-### 表单提交
+共 31 个组件。下表标注了类型、是否可包含子元素、必填 props。**完整属性表和用法约定见同目录 `COMPONENT-REFERENCE.md`。**
+
+### 布局类
+
+| 组件 | 子元素 | 必填 props | 说明 |
+|------|:------:|-----------|------|
+| **Stack** | 是 | — | 垂直布局。gap, align |
+| **Row** | 是 | — | 水平布局。gap, align, wrap |
+| **Grid** | 是 | `columns`(1-4) | 固定列数网格。gap |
+| **Card** | 是 | — | 带边框容器。title, variant |
+| **Divider** | 否 | — | 水平分隔线。无 props |
+| **Tabs** | 是 | `items` | 选项卡。每个子元素 = 一个标签页内容（按索引对应）。defaultIndex |
+| **Accordion** | 是 | `items` | 折叠面板。每个子元素 = 一个折叠区内容（按索引对应）。defaultOpen, multiple |
+| **Carousel** | 是 | — | 水平轮播。每个子元素 = 一页。loop |
+
+### 展示类（均为叶子，无 children，无提交值）
+
+| 组件 | 必填 props | 说明 |
+|------|-----------|------|
+| **Text** | `content` | 静态文本。variant, tone |
+| **Badge** | `text` | 小标签。variant |
+| **Table** | `columns`, `rows` | 只读数据表 |
+| **Alert** | `title` | 状态提示。variant, description |
+| **Progress** | `value`(0-100) | 进度条。label, showValue, tone |
+| **CodeBlock** | `code` | 代码块。language, title |
+| **Steps** | `items`, `current` | 步骤进度。items: `[{title, description?}]` |
+| **Spinner** | — | 加载旋转。size, label |
+| **Image** | `src`, `alt` | 图片。width, height |
+| **Avatar** | `name` | 头像（src 或首字母）。size |
+| **Link** | `text`, `href` | 超链接（新标签打开） |
+| **Stat** | `label`, `value` | KPI 指标卡片。unit, tone |
+| **Skeleton** | — | 骨架屏。variant, width, height, rounded |
+| **Tooltip** | `text`, `content` | 行内文本 + 悬浮提示 |
+
+### 输入类（均为叶子，通过 name 提交值）
+
+> **placeholder 只在 TextInput 上可用。** 其他所有输入组件均不支持 placeholder。
+
+| 组件 | 必填 props | 提交类型 | 说明 |
+|------|-----------|---------|------|
+| **TextInput** | `name` | string | label, placeholder, required, minLength, maxLength |
+| **NumberInput** | `name` | number | label, min, max, step, required |
+| **Textarea** | `name` | string | label, rows, maxLength, required |
+| **Select** | `name`, `options` | string | label, required。options: `[{value, label}]` |
+| **Checkbox** | `name`, `label` | boolean | — |
+| **RadioGroup** | `name`, `options` | string | label, required |
+| **DateInput** | `name` | string\|null | label, min, max, required（ISO `YYYY-MM-DD`） |
+| **Slider** | `name`, `min`, `max` | number | label, step, showValue |
+| **Switch** | `name`, `label` | boolean | description |
+| **SegmentedControl** | `name`, `options` | string | label, required |
+
+### 操作类
+
+| 组件 | 必填 props | 说明 |
+|------|-----------|------|
+| **Button** | `label`, `actionId` | variant(primary\|secondary\|ghost\|danger), disabled |
+
+---
+
+## 关键示例
+
+一个涵盖表单、展示和操作的完整面板：
 
 ```json
 {
@@ -359,82 +252,7 @@ description: AgentDevClaw 内置可视化交互面板的完整参考。当你需
 }
 ```
 
-用户点击"部署"后，聊天中会收到一条消息，包含 `env` 和 `replicas` 的当前值。
-
-### 信息展示面板
-
-```json
-{
-  "schemaVersion": 1,
-  "catalogVersion": "v1",
-  "title": "任务进度",
-  "root": "root",
-  "elements": {
-    "root": {
-      "type": "Stack", "props": { "gap": "md" }, "children": ["alert", "table", "progress"]
-    },
-    "alert": {
-      "type": "Alert", "props": {
-        "variant": "info", "title": "3 个任务进行中", "description": "预计 10 分钟内完成"
-      }, "children": []
-    },
-    "table": {
-      "type": "Table", "props": {
-        "columns": [
-          { "key": "name", "label": "任务" },
-          { "key": "status", "label": "状态" },
-          { "key": "progress", "label": "进度" }
-        ],
-        "rows": [
-          { "name": "构建", "status": "进行中", "progress": "80%" },
-          { "name": "测试", "status": "等待中", "progress": "0%" },
-          { "name": "部署", "status": "等待中", "progress": "0%" }
-        ]
-      }, "children": []
-    },
-    "progress": {
-      "type": "Progress", "props": { "value": 27, "label": "总体进度", "showValue": true }
-      , "children": []
-    }
-  }
-}
-```
-
-### 多按钮选择面板
-
-```json
-{
-  "schemaVersion": 1,
-  "catalogVersion": "v1",
-  "title": "选择操作",
-  "root": "root",
-  "elements": {
-    "root": {
-      "type": "Stack", "props": { "gap": "sm" }, "children": ["label", "btns"]
-    },
-    "label": {
-      "type": "Text", "props": { "content": "请选择操作方式：" }, "children": []
-    },
-    "btns": {
-      "type": "Row", "props": { "gap": "sm" }, "children": ["btnA", "btnB", "btnC"]
-    },
-    "btnA": {
-      "type": "Button", "props": { "label": "方案 A", "actionId": "chooseA", "variant": "primary" }, "children": []
-    },
-    "btnB": {
-      "type": "Button", "props": { "label": "方案 B", "actionId": "chooseB", "variant": "secondary" }, "children": []
-    },
-    "btnC": {
-      "type": "Button", "props": { "label": "取消", "actionId": "cancel", "variant": "ghost" }, "children": []
-    }
-  },
-  "actions": {
-    "chooseA": { "intent": "submit", "label": "方案 A" },
-    "chooseB": { "intent": "submit", "label": "方案 B" },
-    "cancel": { "intent": "submit", "label": "取消" }
-  }
-}
-```
+> 更多示例（Tabs、Accordion、Steps、Stat 信息面板、多按钮选择等）见 `COMPONENT-REFERENCE.md`。
 
 ---
 
@@ -450,15 +268,73 @@ description: AgentDevClaw 内置可视化交互面板的完整参考。当你需
 | 表格最大列数 | 20 |
 | 表格最大行数 | 100 |
 | Select/RadioGroup/SegmentedControl 最大选项数 | 100 |
-| ID 最大长度 | 64 |
+| 元素 / Action ID 最大长度 | 64 |
+| 元素 / Action ID 格式 | `/^[a-zA-Z][a-zA-Z0-9_-]*$/`（字母开头，只含字母数字下划线连字符） |
+
+---
+
+## 高频错误与规避
+
+以下是 agent 生成 Spec 时**最常见的校验失败**，以及对应的规避方法：
+
+### 1. 给不支持 placeholder 的组件加了 placeholder
+
+**错误**：`Element "x" (Textarea) has unknown prop "placeholder".`
+
+**原因**：看到 TextInput 有 placeholder，就假设其他输入组件也有。
+
+**规避**：在所有输入类组件中，**只有 TextInput 支持 placeholder**。Textarea、NumberInput、Select、Slider、Switch、Checkbox、RadioGroup、DateInput、SegmentedControl 均不支持。如需提示信息，使用 `label` 或在上方放置 Text 组件。
+
+### 2. 元素 ID 以数字开头或含特殊字符
+
+**错误**：`Element ID "1btn" is invalid (must match /^[a-zA-Z][a-zA-Z0-9_-]*$/).`
+
+**规避**：ID 必须以字母开头，只允许 `[a-zA-Z0-9_-]`。用 `btn1` 而非 `1btn`，用 `myText` 而非 `my.text`。
+
+### 3. 同一元素被多个父节点引用
+
+**错误**：`Element "shared" has multiple parents: a, b.`
+
+**规避**：每个元素只能有一个父节点。如果两个容器需要显示相同内容，为每个容器创建独立的元素副本（不同 ID，相同 props）。
+
+### 4. 在 elements 中添加了元素但未挂到树中
+
+**错误**：`Element "orphan" is unreachable from root "root".`
+
+**规避**：每个元素都必须从 root 通过 children 链可达。添加元素后，确认它的 ID 出现在某个容器组件的 children 数组中。
+
+### 5. initialValues 或 includeFields 引用了不存在的字段名
+
+**错误**：`initialValues key "ghost" does not match any input field name.` 或 `Action "x" includeFields references unknown field "y".`
+
+**规避**：initialValues 的 key 和 includeFields 的值，都必须精确对应某个输入组件的 `name` prop。检查拼写一致性。
+
+### 6. Button 引用了未定义的 action
+
+**错误**：`Button references action "x" but it is not defined in spec.actions.`
+
+**规避**：每个 Button 的 `actionId` 都必须在 `spec.actions` 中有对应的 key。
+
+### 7. 容器组件缺少 children 字段
+
+**错误**：`Element "root" (Stack) children must be an array.`
+
+**规避**：Stack、Row、Grid、Card 的 children 字段是**必填的**，即使没有子元素也要写 `"children": []`。
+
+### 8. Slider 的 min >= max 或 step <= 0
+
+**错误**：`Element "x" (Slider) requires min to be less than max.`
+
+**规避**：min 必须严格小于 max；step 如果提供，必须是正数。
 
 ---
 
 ## 最佳实践
 
-1. **先规划元素树**：在写 Spec 之前，先想好布局结构（root → 容器 → 内容），确保 children 引用正确。
-2. **用 initialValues 预填**：合理设置初始值能让用户更快完成交互。
-3. **破坏性操作加 confirm**：删除、部署、发送等有副作用的 submit action，应设置 `confirm` 弹出确认框。
-4. **用 includeFields 精简提交**：如果一个面板有多个 action 但各自只需要部分字段，用 `includeFields` 指定白名单。
-5. **更新而非重建**：当面板内容需要变化时，用相同 `surfaceId` 调用 `ui_surface_upsert` 更新，而不是 close + 新建。
-6. **会话恢复**：上下文精简或会话切换后，用 `ui_surface_list` 和 `ui_surface_get` 恢复对当前 Surface 状态的感知。
+1. **先规划元素树**：在写 Spec 之前，先想好布局结构（root → 容器 → 内容），确保 children 引用正确、无孤立节点。
+2. **严格对照组件目录**：写每个元素的 props 时，回到上方组件目录逐项核对，不要添加目录中未列出的 prop。
+3. **用 initialValues 预填**：合理设置初始值能让用户更快完成交互。
+4. **破坏性操作加 confirm**：删除、部署、发送等有副作用的 submit action，应设置 `confirm` 弹出确认框。
+5. **用 includeFields 精简提交**：如果一个面板有多个 action 但各自只需要部分字段，用 `includeFields` 指定白名单。
+6. **更新而非重建**：当面板内容需要变化时，用相同 `surfaceId` 调用 `ui_surface_upsert` 更新，而不是 close + 新建。
+7. **会话恢复**：上下文精简或会话切换后，用 `ui_surface_list` 和 `ui_surface_get` 恢复对当前 Surface 状态的感知。

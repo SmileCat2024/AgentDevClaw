@@ -358,6 +358,164 @@ export const CATALOG: Record<string, ComponentSchema> = {
     },
   },
 
+  // ── 导航/折叠 ──
+
+  Tabs: {
+    type: 'Tabs',
+    category: 'layout',
+    acceptsChildren: true,
+    description: 'Tab navigation. Each child element is one tab panel, in the same order as items.',
+    props: {
+      items: {
+        type: 'array',
+        required: true,
+        description: 'Tab definitions. Each child element renders as the corresponding tab panel by index.',
+        itemSchema: {
+          label: { type: 'string', maxLength: 100, required: true },
+          value: { type: 'string', maxLength: 100, required: true },
+        },
+      },
+      defaultIndex: { type: 'number', min: 0, description: 'Index of the initially active tab (0-based). Defaults to 0.' },
+    },
+  },
+
+  Accordion: {
+    type: 'Accordion',
+    category: 'layout',
+    acceptsChildren: true,
+    description: 'Collapsible sections. Each child element is one section body, in the same order as items.',
+    props: {
+      items: {
+        type: 'array',
+        required: true,
+        description: 'Section headers. Each child element renders as the corresponding section body by index.',
+        itemSchema: {
+          title: { type: 'string', maxLength: 200, required: true },
+        },
+      },
+      defaultOpen: {
+        type: 'array',
+        description: 'Indices of sections open by default (0-based). Empty or omitted = all collapsed.',
+      },
+      multiple: { type: 'boolean', description: 'Allow multiple sections open at once. Defaults to true.' },
+    },
+  },
+
+  // ── 展示扩展 ──
+
+  Steps: {
+    type: 'Steps',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Horizontal step progress indicator.',
+    props: {
+      items: {
+        type: 'array',
+        required: true,
+        description: 'Step definitions.',
+        itemSchema: {
+          title: { type: 'string', maxLength: 100, required: true },
+          description: { type: 'string', maxLength: 500 },
+        },
+      },
+      current: { type: 'number', min: 0, required: true, description: 'Index of the current step (0-based).' },
+    },
+  },
+
+  Spinner: {
+    type: 'Spinner',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Loading spinner indicator.',
+    props: {
+      size: { type: 'enum', enumValues: ['sm', 'md', 'lg'] as const },
+      label: { type: 'string', maxLength: 200, description: 'Optional loading text.' },
+    },
+  },
+
+  Image: {
+    type: 'Image',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Image display.',
+    props: {
+      src: { type: 'string', maxLength: UI_LIMITS.maxTextPropChars, required: true, description: 'Image URL.' },
+      alt: { type: 'string', maxLength: 500, required: true, description: 'Alt text for accessibility.' },
+      width: { type: 'number', min: 1, max: 2000, description: 'Optional width in CSS pixels.' },
+      height: { type: 'number', min: 1, max: 2000, description: 'Optional height in CSS pixels.' },
+    },
+  },
+
+  Avatar: {
+    type: 'Avatar',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'User avatar. Shows an image when src is provided, otherwise falls back to initials from name.',
+    props: {
+      name: { type: 'string', maxLength: 200, required: true, description: 'Person name. Used for initials fallback.' },
+      src: { type: 'string', maxLength: UI_LIMITS.maxTextPropChars, description: 'Optional avatar image URL.' },
+      size: { type: 'enum', enumValues: ['sm', 'md', 'lg'] as const },
+    },
+  },
+
+  Link: {
+    type: 'Link',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Hyperlink that opens in a new tab.',
+    props: {
+      text: { type: 'string', maxLength: 500, required: true, description: 'Link display text.' },
+      href: { type: 'string', maxLength: UI_LIMITS.maxTextPropChars, required: true, description: 'Target URL.' },
+    },
+  },
+
+  Stat: {
+    type: 'Stat',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Key-value metric card for dashboards. Displays a label and a large value.',
+    props: {
+      label: { type: 'string', maxLength: 200, required: true, description: 'Metric label.' },
+      value: { type: 'string', maxLength: 200, required: true, description: 'Metric value.' },
+      unit: { type: 'string', maxLength: 50, description: 'Optional unit suffix displayed after value.' },
+      tone: { type: 'enum', enumValues: ['default', 'success', 'warning', 'danger', 'info'] as const },
+    },
+  },
+
+  Skeleton: {
+    type: 'Skeleton',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Loading placeholder skeleton.',
+    props: {
+      variant: { type: 'enum', enumValues: ['text', 'rect', 'circle'] as const },
+      width: { type: 'number', min: 1, max: 2000, description: 'CSS pixel width.' },
+      height: { type: 'number', min: 1, max: 2000, description: 'CSS pixel height.' },
+      rounded: { type: 'boolean', description: 'Use fully rounded corners. Defaults to false; circles always fully round.' },
+    },
+  },
+
+  Carousel: {
+    type: 'Carousel',
+    category: 'layout',
+    acceptsChildren: true,
+    description: 'Horizontally scrollable carousel of slides. Each child element is one slide.',
+    props: {
+      loop: { type: 'boolean', description: 'Loop back to the first slide after the last. Defaults to false.' },
+    },
+  },
+
+  Tooltip: {
+    type: 'Tooltip',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Inline text with a hover tooltip.',
+    props: {
+      text: { type: 'string', maxLength: 500, required: true, description: 'Visible inline text.' },
+      content: { type: 'string', maxLength: 1000, required: true, description: 'Tooltip content shown on hover.' },
+    },
+  },
+
   // ── 操作 ──
 
   Button: {

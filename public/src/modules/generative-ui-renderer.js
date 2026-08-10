@@ -680,6 +680,352 @@ function _renderSegmentedControl(def, ctx) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Navigation / collapsible layout components
+// ═══════════════════════════════════════════════════════════════
+
+function _renderTabs(def, ctx, visited) {
+  const p = def.props || {};
+  const items = p.items || [];
+  const defaultIdx = typeof p.defaultIndex === 'number' ? p.defaultIndex : 0;
+  const activeIdx = Math.max(0, Math.min(items.length - 1, defaultIdx));
+
+  const el = document.createElement('div');
+  el.className = 'gen-ui-tabs';
+
+  // Tab buttons
+  const tabBar = document.createElement('div');
+  tabBar.className = 'gen-ui-tabs-bar';
+  const tabButtons = [];
+  const panels = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'gen-ui-tab-button';
+    btn.textContent = items[i].label || items[i].value || ('Tab ' + (i + 1));
+    btn.classList.toggle('is-active', i === activeIdx);
+    btn.addEventListener('click', () => {
+      tabButtons.forEach((b, idx) => {
+        b.classList.toggle('is-active', idx === i);
+        if (panels[idx]) panels[idx].style.display = idx === i ? '' : 'none';
+      });
+    });
+    tabButtons.push(btn);
+    tabBar.appendChild(btn);
+  }
+  el.appendChild(tabBar);
+
+  // Tab panels from children
+  const contentWrap = document.createElement('div');
+  contentWrap.className = 'gen-ui-tabs-content';
+  const childIds = def.children || [];
+  const childVisited = new Set(visited);
+  for (let i = 0; i < childIds.length; i++) {
+    const childDef = ctx.elements[childIds[i]];
+    if (!childDef) continue;
+    const panel = _renderElement(childIds[i], childDef, ctx, childVisited);
+    panel.classList.add('gen-ui-tab-panel');
+    panel.style.display = i === activeIdx ? '' : 'none';
+    panels.push(panel);
+    contentWrap.appendChild(panel);
+  }
+  el.appendChild(contentWrap);
+  return el;
+}
+
+function _renderAccordion(def, ctx, visited) {
+  const p = def.props || {};
+  const items = p.items || [];
+  const multiple = p.multiple !== false;
+  const defaultOpen = Array.isArray(p.defaultOpen) ? new Set(p.defaultOpen) : new Set();
+
+  const el = document.createElement('div');
+  el.className = 'gen-ui-accordion';
+
+  const childIds = def.children || [];
+  const childVisited = new Set(visited);
+  const sections = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const section = document.createElement('div');
+    section.className = 'gen-ui-accordion-section';
+    const isOpen = defaultOpen.has(i);
+
+    const header = document.createElement('button');
+    header.type = 'button';
+    header.className = 'gen-ui-accordion-header';
+    header.classList.toggle('is-open', isOpen);
+    header.textContent = items[i].title || ('Section ' + (i + 1));
+
+    const chevron = document.createElement('span');
+    chevron.className = 'gen-ui-accordion-chevron';
+    chevron.textContent = '▸';
+    header.appendChild(chevron);
+
+    const body = document.createElement('div');
+    body.className = 'gen-ui-accordion-body';
+    body.style.display = isOpen ? '' : 'none';
+
+    // Render child as section content
+    if (i < childIds.length) {
+      const childDef = ctx.elements[childIds[i]];
+      if (childDef) {
+        body.appendChild(_renderElement(childIds[i], childDef, ctx, childVisited));
+      }
+    }
+
+    header.addEventListener('click', () => {
+      const willOpen = body.style.display === 'none';
+      if (willOpen && !multiple) {
+        sections.forEach((s) => {
+          s.body.style.display = 'none';
+          s.header.classList.remove('is-open');
+        });
+      }
+      body.style.display = willOpen ? '' : 'none';
+      header.classList.toggle('is-open', willOpen);
+    });
+
+    section.appendChild(header);
+    section.appendChild(body);
+    el.appendChild(section);
+    sections.push({ header, body });
+  }
+
+  return el;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Extended display components
+// ═══════════════════════════════════════════════════════════════
+
+function _renderSteps(def) {
+  const p = def.props || {};
+  const items = p.items || [];
+  const current = Math.max(0, Math.min(items.length - 1, Number(p.current) || 0));
+
+  const el = document.createElement('ol');
+  el.className = 'gen-ui-steps';
+
+  for (let i = 0; i < items.length; i++) {
+    const li = document.createElement('li');
+    li.className = 'gen-ui-step';
+    if (i < current) li.classList.add('step-completed');
+    else if (i === current) li.classList.add('step-current');
+    else li.classList.add('step-pending');
+
+    const marker = document.createElement('span');
+    marker.className = 'gen-ui-step-marker';
+    marker.textContent = String(i + 1);
+    li.appendChild(marker);
+
+    const text = document.createElement('div');
+    text.className = 'gen-ui-step-text';
+    const title = document.createElement('span');
+    title.className = 'gen-ui-step-title';
+    title.textContent = items[i].title || ('Step ' + (i + 1));
+    text.appendChild(title);
+    if (items[i].description) {
+      const desc = document.createElement('span');
+      desc.className = 'gen-ui-step-description';
+      desc.textContent = items[i].description;
+      text.appendChild(desc);
+    }
+    li.appendChild(text);
+    el.appendChild(li);
+  }
+  return el;
+}
+
+function _renderSpinner(def) {
+  const p = def.props || {};
+  const el = document.createElement('div');
+  el.className = 'gen-ui-spinner';
+  const size = p.size || 'md';
+  el.classList.add('spinner-' + size);
+
+  const icon = document.createElement('span');
+  icon.className = 'gen-ui-spinner-icon';
+  icon.setAttribute('role', 'status');
+  el.appendChild(icon);
+
+  if (p.label) {
+    const label = document.createElement('span');
+    label.className = 'gen-ui-spinner-label';
+    label.textContent = p.label;
+    el.appendChild(label);
+  }
+  return el;
+}
+
+function _renderImage(def) {
+  const p = def.props || {};
+  const el = document.createElement('img');
+  el.className = 'gen-ui-image';
+  el.src = p.src || '';
+  el.alt = p.alt || '';
+  if (p.width != null) el.style.width = p.width + 'px';
+  if (p.height != null) el.style.height = p.height + 'px';
+  el.loading = 'lazy';
+  return el;
+}
+
+function _renderAvatar(def) {
+  const p = def.props || {};
+  const size = p.size || 'md';
+  const el = document.createElement('div');
+  el.className = 'gen-ui-avatar avatar-' + size;
+
+  if (p.src) {
+    const img = document.createElement('img');
+    img.src = p.src;
+    img.alt = p.name || '';
+    el.appendChild(img);
+  } else {
+    // Initials fallback
+    el.classList.add('avatar-initials');
+    const name = p.name || '?';
+    const parts = name.trim().split(/\s+/);
+    const initials = (parts[0]?.[0] || '') + (parts[1]?.[0] || '');
+    el.textContent = initials.toUpperCase() || name.slice(0, 2);
+  }
+  return el;
+}
+
+function _renderLink(def) {
+  const p = def.props || {};
+  const el = document.createElement('a');
+  el.className = 'gen-ui-link';
+  el.href = p.href || '#';
+  el.textContent = p.text || p.href || '';
+  el.target = '_blank';
+  el.rel = 'noopener noreferrer';
+  return el;
+}
+
+function _renderStat(def) {
+  const p = def.props || {};
+  const el = document.createElement('div');
+  el.className = 'gen-ui-stat';
+  const tone = p.tone || 'default';
+  if (tone !== 'default') el.classList.add('stat-' + tone);
+
+  const label = document.createElement('div');
+  label.className = 'gen-ui-stat-label';
+  label.textContent = p.label || '';
+  el.appendChild(label);
+
+  const valueRow = document.createElement('div');
+  valueRow.className = 'gen-ui-stat-value-row';
+  const value = document.createElement('span');
+  value.className = 'gen-ui-stat-value';
+  value.textContent = p.value != null ? String(p.value) : '';
+  valueRow.appendChild(value);
+  if (p.unit) {
+    const unit = document.createElement('span');
+    unit.className = 'gen-ui-stat-unit';
+    unit.textContent = p.unit;
+    valueRow.appendChild(unit);
+  }
+  el.appendChild(valueRow);
+  return el;
+}
+
+function _renderSkeleton(def) {
+  const p = def.props || {};
+  const variant = p.variant || 'rect';
+  const el = document.createElement('div');
+  el.className = 'gen-ui-skeleton skeleton-' + variant;
+  if (p.width != null) el.style.width = p.width + 'px';
+  if (p.height != null) el.style.height = p.height + 'px';
+  if (p.rounded || variant === 'circle') el.classList.add('skeleton-rounded');
+  return el;
+}
+
+function _renderCarousel(def, ctx, visited) {
+  const p = def.props || {};
+  const loop = p.loop === true;
+  const el = document.createElement('div');
+  el.className = 'gen-ui-carousel';
+
+  const viewport = document.createElement('div');
+  viewport.className = 'gen-ui-carousel-viewport';
+
+  const track = document.createElement('div');
+  track.className = 'gen-ui-carousel-track';
+
+  const childIds = def.children || [];
+  const childVisited = new Set(visited);
+  const slides = [];
+
+  for (const childId of childIds) {
+    const childDef = ctx.elements[childId];
+    if (!childDef) continue;
+    const slide = document.createElement('div');
+    slide.className = 'gen-ui-carousel-slide';
+    slide.appendChild(_renderElement(childId, childDef, ctx, childVisited));
+    track.appendChild(slide);
+    slides.push(slide);
+  }
+  viewport.appendChild(track);
+  el.appendChild(viewport);
+
+  if (slides.length > 1) {
+    const prevBtn = document.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.className = 'gen-ui-carousel-btn carousel-btn-prev';
+    prevBtn.textContent = '‹';
+    prevBtn.setAttribute('aria-label', 'Previous');
+
+    const nextBtn = document.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.className = 'gen-ui-carousel-btn carousel-btn-next';
+    nextBtn.textContent = '›';
+    nextBtn.setAttribute('aria-label', 'Next');
+
+    const scroll = (dir) => {
+      const slideWidth = slides[0]?.offsetWidth || viewport.offsetWidth;
+      const current = Math.round(viewport.scrollLeft / slideWidth);
+      let next = current + dir;
+      if (loop) {
+        if (next < 0) next = slides.length - 1;
+        if (next >= slides.length) next = 0;
+      } else {
+        next = Math.max(0, Math.min(slides.length - 1, next));
+      }
+      viewport.scrollTo({ left: next * slideWidth, behavior: 'smooth' });
+    };
+
+    prevBtn.addEventListener('click', () => scroll(-1));
+    nextBtn.addEventListener('click', () => scroll(1));
+    el.appendChild(prevBtn);
+    el.appendChild(nextBtn);
+  }
+
+  return el;
+}
+
+function _renderTooltip(def) {
+  const p = def.props || {};
+  const el = document.createElement('span');
+  el.className = 'gen-ui-tooltip';
+  el.setAttribute('role', 'term');
+
+  const text = document.createElement('span');
+  text.className = 'gen-ui-tooltip-text';
+  text.textContent = p.text || '';
+  el.appendChild(text);
+
+  const tip = document.createElement('span');
+  tip.className = 'gen-ui-tooltip-content';
+  tip.setAttribute('role', 'definition');
+  tip.textContent = p.content || '';
+  el.appendChild(tip);
+
+  return el;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Action component
 // ═══════════════════════════════════════════════════════════════
 
@@ -799,6 +1145,19 @@ const _COMPONENT_HANDLERS = {
   Switch:      _renderSwitch,
   SegmentedControl: _renderSegmentedControl,
   Button:      _renderButton,
+  // Navigation / collapsible
+  Tabs:        _renderTabs,
+  Accordion:   _renderAccordion,
+  // Extended display
+  Steps:       _renderSteps,
+  Spinner:     _renderSpinner,
+  Image:       _renderImage,
+  Avatar:      _renderAvatar,
+  Link:        _renderLink,
+  Stat:        _renderStat,
+  Skeleton:    _renderSkeleton,
+  Carousel:    _renderCarousel,
+  Tooltip:     _renderTooltip,
 };
 
 // ═══════════════════════════════════════════════════════════════
