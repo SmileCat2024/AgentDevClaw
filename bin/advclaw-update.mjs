@@ -2,11 +2,11 @@
  * advclaw update — GitHub Release 自动更新模块
  *
  * 数据源：GitHub Releases API（公开仓库，匿名可读，60 次/小时限频）
- * 更新策略：git fetch --tags → git checkout <release-tag> → npm install → build local-features
+ * 更新策略：确认当前提交落后于 Release → git fetch --tags → git checkout <release-tag> → npm ci → build local-features
  * 配置持久化：<projectRoot>/.advclaw-config.json（已加入 .gitignore）
  */
 
-import { spawn, execSync } from 'child_process';
+import { spawn, execFileSync, execSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -57,6 +57,56 @@ function isNewer(remoteTag, localVersion) {
   return false;
 }
 
+function isGitAncestor(ancestor, descendant) {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+      cwd: PROJECT_ROOT,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasGitCommit(ref) {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${ref}^{commit}`], {
+      cwd: PROJECT_ROOT,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getReleaseCommit(release) {
+  const target = String(release.target_commitish || '').trim();
+  return /^[0-9a-f]{40}$/i.test(target) ? target : null;
+}
+
+function getGitReleaseRelation(ref) {
+  if (!ref || !hasGitCommit(ref)) return 'unknown';
+  if (isGitAncestor(ref, 'HEAD')) return 'release-included';
+  if (isGitAncestor('HEAD', ref)) return 'release-ahead';
+  return 'diverged';
+}
+
+export function getUpdateState({ release, localVersion, relation = 'unknown' }) {
+  if (!release) return { hasUpdate: false, state: 'no-release' };
+  if (relation === 'release-included') return { hasUpdate: false, state: relation };
+  if (relation === 'release-ahead') return { hasUpdate: true, state: relation };
+  if (relation === 'diverged') return { hasUpdate: false, state: relation };
+
+  return {
+    hasUpdate: isNewer(release.tag_name, localVersion),
+    state: 'version-fallback',
+  };
+}
+
 // ── 获取本地版本 ────────────────────────────────────────────────
 
 function getLocalVersion() {
@@ -97,9 +147,12 @@ export async function checkForUpdate() {
     return { hasUpdate: false, latestTag: null, latestVersion: null, localVersion, releaseNotes: null };
   }
   const latestTag = release.tag_name;
-  const hasUpdate = isNewer(latestTag, localVersion);
+  const releaseRef = getReleaseCommit(release) || latestTag;
+  const relation = getGitReleaseRelation(releaseRef);
+  const { hasUpdate, state } = getUpdateState({ release, localVersion, relation });
   return {
     hasUpdate,
+    state,
     latestTag,
     latestVersion: latestTag.replace(/^v/, ''),
     localVersion,
@@ -135,9 +188,9 @@ async function performUpdate(latestTag) {
   console.log(`  → git checkout ${latestTag}`);
   await run('git', ['checkout', latestTag]);
 
-  // 3. install dependencies
-  console.log(`  → npm install`);
-  await run('npm', ['install']);
+  // 3. install exactly what the release lockfile declares without rewriting it
+  console.log(`  → npm ci`);
+  await run('npm', ['ci']);
 
   // 4. build local features
   console.log(`  → npm run build:local-features`);
@@ -165,6 +218,16 @@ export async function cmdUpdate(args) {
   }
 
   console.log(`  最新版本: v${info.latestVersion}`);
+
+  if (info.state === 'release-included') {
+    console.log(`  ✓ 当前提交已包含 Release v${info.latestVersion}`);
+    return;
+  }
+
+  if (info.state === 'diverged') {
+    console.log(`  ! 当前分支与 Release v${info.latestVersion} 已分叉，不自动切换工作树`);
+    return;
+  }
 
   if (!info.hasUpdate) {
     console.log('  ✓ 已是最新版本');

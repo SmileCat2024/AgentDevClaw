@@ -100,10 +100,14 @@ backgroundCheck().catch(() => { /* 网络错误静默忽略 */ });
 const childEnv = { ...process.env };
 if (requestedPort !== null) childEnv.PORT = String(requestedPort);
 
-const child = spawn(process.execPath, ['server.js'], {
+// Use npm start rather than invoking server.js directly so the package's
+// prestart lifecycle (local Feature compilation) always runs first.
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const child = spawn(npmCommand, ['start'], {
   cwd: projectRoot,
   stdio: 'inherit',
   env: childEnv,
+  shell: false,
 });
 
 child.on('exit', (code) => {

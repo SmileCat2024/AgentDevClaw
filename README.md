@@ -51,6 +51,8 @@ advclaw            # 启动服务器
 advclaw --port 1600  # 使用指定的 Web UI 端口启动
 ```
 
+`advclaw` 等价于在项目根目录执行 `npm start`：会先运行 `prestart` 编译本地 Feature，再启动服务器。
+
 #### 自动更新
 
 `advclaw` 启动时会在后台检测 GitHub 上是否有新 Release。发现新版本时会打印通知，你可以随时执行更新：
@@ -60,7 +62,7 @@ advclaw update          # 更新到最新 GitHub Release
 advclaw update --check  # 仅检查是否有新版本
 ```
 
-更新过程会自动执行 `git checkout <release-tag>` + `npm install` + 编译，无需手动操作。只会拉取 Release 发布的版本，不会拉取中间提交。
+更新前会先比较当前 Git 提交与 Release 指向的提交：已包含该 Release 的开发版本不会被误报，也不会被切回旧标签；与 Release 分叉的分支会保留工作树并提示手动处理。确认本地落后时，更新过程会自动执行 `git checkout <release-tag>` + `npm ci` + 编译。`npm ci` 严格按 Release 的 `package-lock.json` 安装，不会在更新过程中重写 lock 文件。只会拉取 Release 发布的版本，不会拉取中间提交。
 
 如果你不想在启动时自动检测，有以下方式关闭：
 
