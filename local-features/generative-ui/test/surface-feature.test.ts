@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { GenerativeUISurfaceFeature } from '../src/surface-feature.js';
 import { CONTINUITY_FIELD_KEY } from '../../continuity-participant/src/index.js';
 
@@ -45,19 +47,27 @@ function createTransport() {
 }
 
 describe('GenerativeUISurfaceFeature tool descriptions', () => {
-  it('identifies the AgentDevClaw browser panel rather than an ambiguous right panel', () => {
+  it('declares a source beside its bundled skill for AgentDev discovery', () => {
+    const feature = new GenerativeUISurfaceFeature();
+    assert.equal(typeof feature.source, 'string');
+    assert.equal(feature.source.endsWith('/surface-feature.js'), true);
+    assert.equal(existsSync(join(dirname(feature.source), 'skills', 'generative-ui', 'SKILL.md')), true);
+  });
+
+  it('identifies the AgentDevClaw browser panel and directs to the skill', () => {
     const feature = new GenerativeUISurfaceFeature();
     const tools = feature.getTools();
     const upsert = tools.find(tool => tool.name === 'ui_surface_upsert');
     const close = tools.find(tool => tool.name === 'ui_surface_close');
 
     assert.ok(upsert);
-    assert.match(upsert.description, /AgentDevClaw browser client/);
-    assert.match(upsert.description, /right-side “交互页面” \(Interaction Pages\) panel/);
-    assert.match(upsert.description, /not a chat message, a new browser tab, or an external webpage/);
+    assert.match(upsert.description, /AgentDevClaw/);
+    assert.match(upsert.description, /generative-ui/);
+    // Skill reference should be prominent (not buried at the end only)
+    assert.match(upsert.description, /invoke the `generative-ui` skill/);
 
     assert.ok(close);
-    assert.match(close.description, /AgentDevClaw browser client/);
+    assert.match(close.description, /AgentDevClaw/);
   });
 
   it('captures published surfaces through Feature state and reprojects them after restore', async () => {

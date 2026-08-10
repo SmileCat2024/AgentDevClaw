@@ -13,6 +13,7 @@
 
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot } from 'agentdev';
 import { createTool, DebugHub } from 'agentdev';
+import { fileURLToPath } from 'node:url';
 import type {
   GenerativeUISpecV1,
   GenerativeUISurfaceFeatureConfig,
@@ -24,7 +25,7 @@ import type {
 } from './types.js';
 import { UI_LIMITS } from './types.js';
 import { validateGenerativeUISpec } from './validator.js';
-import { generateCatalogDescription } from './catalog.js';
+
 import { HttpSurfaceTransport } from './transport.js';
 import type { SurfaceStatus, SurfaceTransport } from './types.js';
 import { declareContinuity } from '../../continuity-participant/src/index.js';
@@ -33,19 +34,7 @@ import { declareContinuity } from '../../continuity-participant/src/index.js';
 // 工具参数描述（给 Agent 看的 JSON Schema）
 // ═══════════════════════════════════════════════════════════════
 
-const SPEC_SCHEMA_DESCRIPTION = [
-  'A declarative UI specification. Structure:',
-  '{ schemaVersion: 1, catalogVersion: "v1", title: string, root: elementId,',
-  '  elements: { id: { type: componentName, props: {...}, children: [childId, ...] } },',
-  '  initialValues?: { fieldName: value },',
-  '  actions?: { actionId: { intent: "submit"|"reset", label: string, includeFields?: [fieldName],',
-  '    confirm?: { title: string, description?: string, confirmLabel?: string } } } }',
-  'A submit action sends the current values shown by its fields, including untouched initialValues.',
-  'Omit includeFields to submit every declared input field; provide it only to submit a narrower whitelist.',
-  'Use confirm for destructive or consequential actions; it opens a local confirmation dialog before dispatch.',
-].join('\n');
-
-const BROWSER_SURFACE_LOCATION = 'the right-side “交互页面” (Interaction Pages) panel in the AgentDevClaw browser client';
+const BROWSER_SURFACE_LOCATION = 'the right-side "交互页面" (Interaction Pages) panel in the AgentDevClaw browser client';
 
 // ═══════════════════════════════════════════════════════════════
 // Feature 实现
@@ -74,11 +63,12 @@ const GENERATIVE_UI_CONTINUITY_PROTOCOL = 'claw.generative-ui-surface.v1';
  */
 export class GenerativeUISurfaceFeatureInner implements AgentFeature {
   readonly name = 'generative-ui-surface';
+  // AgentDev discovers Feature-owned skills from the source file's sibling skills/ directory.
+  readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
   readonly description = 'Create and manage persistent interactive UI surfaces in the AgentDevClaw browser client’s right-side “交互页面” (Interaction Pages) panel, independently from the chat.';
 
   private _transport: SurfaceTransport | null = null;
   private _config: Required<GenerativeUISurfaceFeatureConfig>;
-  private _catalogDescription: string;
   private _debugAgentId: string | null = null;
   private _logger?: FeatureInitContext['logger'];
   private _surfaces = new Map<string, PersistedSurfaceState>();
@@ -95,7 +85,6 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       // A default here would incorrectly shadow ctx.featureConfig and env.
       serverOrigin: config?.serverOrigin ?? '',
     };
-    this._catalogDescription = generateCatalogDescription();
   }
 
   async onInitiate(ctx?: any): Promise<void> {
@@ -216,21 +205,21 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       createTool({
         name: 'ui_surface_upsert',
         description: [
-          `Create or update a persistent interactive UI surface in ${BROWSER_SURFACE_LOCATION}.`,
-          'This is browser UI beside the conversation — not a chat message, a new browser tab, or an external webpage.',
-          'The surface lives independently from the chat — it survives context compaction,',
-          'message trimming, and session switching. Users can interact with it locally',
-          '(filling forms, selecting options) without triggering any Agent calls.',
+          'Deliver an interactive UI panel to the user — AgentDevClaw\'s built-in visualization area beside the chat.',
           '',
-          'Only when a user clicks a button with intent "submit" does a visible user message',
-          'appear in the chat, just like a normal user turn.',
+          'Reach for this when plain text in chat is not enough:',
+          '• Multiple options → clickable buttons instead of numbered lists',
+          '• Structured input → form fields instead of asking the user to reply in a specific format',
+          '• Status display → dashboard that stays visible while you continue working',
+          '• Consequential decisions → confirmation dialog before the user commits',
           '',
-          'Use the SAME surfaceId to update an existing surface (replaces the full Spec).',
-          'The tool returns immediately without waiting for user interaction.',
+          'You assemble the panel from a component catalog (Stack, Card, TextInput, Select, Slider, Button, Table, Progress, and more).',
+          'When the user clicks a submit button, their input arrives back to you as a normal chat message.',
+          'The panel persists across context compaction, message trimming, and session switching.',
           '',
-          SPEC_SCHEMA_DESCRIPTION,
+          'Use the SAME surfaceId to update an existing panel (replaces the full Spec). Returns immediately.',
           '',
-          this._catalogDescription,
+          '⚠ Before constructing a Spec, invoke the `generative-ui` skill for the complete component catalog, prop schemas, and examples.',
         ].join('\n'),
         parameters: {
           type: 'object',
@@ -244,7 +233,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
             },
             spec: {
               type: 'object',
-              description: SPEC_SCHEMA_DESCRIPTION,
+              description: 'Declarative UI specification. Invoke the `generative-ui` skill for the full format, component catalog, and examples.',
             },
             expectedRevision: {
               type: 'number',
@@ -317,9 +306,8 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
         name: 'ui_surface_get',
         parallelizable: true,
         description: [
-          'Get the full current Spec of an existing surface.',
-          'Useful after context compaction or when resuming a session to recover',
-          'knowledge of what surfaces exist and their current state.',
+          'Fetch the full Spec of an existing UI panel.',
+          'Use after context compaction or when resuming a session to recover what panels exist and their current state.',
         ].join('\n'),
         parameters: {
           type: 'object',
@@ -374,7 +362,7 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
         name: 'ui_surface_list',
         parallelizable: true,
         description: [
-          `List all active surfaces for the current agent that are published to ${BROWSER_SURFACE_LOCATION}.`,
+          `List all active UI panels published to ${BROWSER_SURFACE_LOCATION}.`,
           'Returns summaries (surfaceId, title, revision, status) without full Specs.',
         ].join('\n'),
         parameters: {
@@ -407,9 +395,8 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
       createTool({
         name: 'ui_surface_close',
         description: [
-          `Close a persistent surface. The surface becomes inactive and is removed from ${BROWSER_SURFACE_LOCATION}.`,
-          'This is idempotent: closing an already-closed surface returns ok.',
-          'Tool audit records in chat history are not deleted.',
+          `Close a UI panel. The panel becomes inactive and is removed from ${BROWSER_SURFACE_LOCATION}.`,
+          'Idempotent: closing an already-closed panel returns ok. Chat history is not affected.',
         ].join('\n'),
         parameters: {
           type: 'object',
