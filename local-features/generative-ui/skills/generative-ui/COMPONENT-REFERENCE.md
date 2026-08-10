@@ -54,7 +54,7 @@
 | items | `array` | 是 | 标签页定义，每项 `{ label, value }`。子元素按索引对应每个标签页的内容 |
 | defaultIndex | `number` | 否 | 初始激活的标签页索引（0-based），默认 0 |
 
-**children 约定**：第 N 个子元素渲染为第 N 个标签页的内容面板。例如 `items` 有 3 项，则 `children` 应有 3 个子元素 ID。
+**children 约定**：第 N 个子元素渲染为第 N 个标签页的内容面板。`children` 数量**必须**与 `items` 数量一致，否则多出的标签页点击后内容为空。
 
 ### Accordion `[has children]`
 可折叠面板。每个子元素是一个折叠区内容，按 `items` 数组顺序对应。
@@ -65,7 +65,7 @@
 | defaultOpen | `array` | 否 | 默认展开的折叠区索引数组（0-based），空或省略 = 全部折叠 |
 | multiple | `boolean` | 否 | 是否允许同时展开多个。默认 true |
 
-**children 约定**：第 N 个子元素渲染为第 N 个折叠区的内容。
+**children 约定**：第 N 个子元素渲染为第 N 个折叠区的内容。`children` 数量**必须**与 `items` 数量一致。
 
 ### Carousel `[has children]`
 水平滚动轮播。每个子元素是一个轮播页。
@@ -126,7 +126,7 @@
 | value | `number` | 是 | 进度百分比（0-100） |
 | label | `string` | 否 | 标签（max 200） |
 | showValue | `boolean` | 否 | 显示百分比数值 |
-| tone | `default\|success\|warning\|danger` | 否 | 语义色调 |
+| tone | `default\|success\|warning\|danger` | 否 | 语义色调（**不支持 info**） |
 
 ### CodeBlock
 代码块（纯文本渲染，不执行不高亮）。
@@ -162,6 +162,8 @@
 | alt | `string` | 是 | 替代文字（无障碍） |
 | width | `number` | 否 | CSS 像素宽度（1-2000） |
 | height | `number` | 否 | CSS 像素高度（1-2000） |
+
+> **Data URI 警告**：使用 SVG data URI 时，所有 `#` 必须编码为 `%23`，否则浏览器会将其解析为 URL fragment，导致 SVG 截断、图片不显示。包括 SVG 属性值（`fill="%23f00"`）和文本内容。
 
 ### Avatar
 用户头像。有 `src` 时显示图片，否则显示从 `name` 提取的首字母。

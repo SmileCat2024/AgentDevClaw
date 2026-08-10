@@ -140,6 +140,43 @@ Spec 提交后会经过严格的运行时校验。以下规则**违反任何一�
 | **Slider** | `min` 必须严格小于 `max`；`step`（如果提供）必须是正数 |
 | **Grid** | `columns` 必须是 1-4 的整数 |
 | **DateInput** | `min` / `max`（如果提供）必须是 `YYYY-MM-DD` 格式；`min` 不能晚于 `max` |
+| **Skeleton / Image** | `width` / `height` 为数字类型（CSS 像素），范围 1-2000，不接受字符串 |
+| **Tabs** | `items` 中每项必须有 `label` 和 `value`；`children` 数量应与 `items` 数量一致 |
+| **Accordion** | `items` 中每项必须有 `title`；`children` 数量应与 `items` 数量一致 |
+
+### tone / variant 兼容矩阵
+
+不同组件支持的 `tone` 值不同，混用会报错。**写 tone 前务必对照下表**：
+
+| tone 值 | Text | Badge | Progress | Stat |
+|---------|:----:|:-----:|:--------:|:----:|
+| `default` | OK | OK | OK | OK |
+| `muted` | OK | — | — | — |
+| `success` | OK | OK | OK | OK |
+| `warning` | OK | OK | OK | OK |
+| `danger` | OK | OK | OK | OK |
+| `info` | OK | OK | **FAIL** | OK |
+
+- **Text** 是唯一支持 `muted` 的组件
+- **Progress** 不支持 `info`（只有 `default/success/warning/danger`）
+- **Alert** 不使用 `tone`，使用 `variant`（`info/success/warning/danger/neutral`）
+- **Badge** 不使用 `tone`，也使用 `variant`（`default/success/warning/danger/info`）
+
+### Image data URI 陷阱
+
+使用 SVG data URI 作为 Image 的 `src` 时，**所有 `#` 字符必须 URL 编码为 `%23`**。
+
+未编码的 `#` 会被浏览器解析为 URL fragment 分隔符，导致 SVG 在 `#` 处截断，图片无法渲染。
+
+```
+// 错误 — SVG 文本中的 # 未编码，图片不显示
+src: "data:image/svg+xml,...<text>#6366f1</text>..."
+
+// 正确 — # 编码为 %23
+src: "data:image/svg+xml,...<text>%236366f1</text>..."
+```
+
+**规则：data URI 中出现的每一个 `#`（包括 SVG 属性值和文本内容）都要写成 `%23`。**
 
 ---
 
@@ -168,14 +205,14 @@ Spec 提交后会经过严格的运行时校验。以下规则**违反任何一�
 | **Badge** | `text` | 小标签。variant |
 | **Table** | `columns`, `rows` | 只读数据表 |
 | **Alert** | `title` | 状态提示。variant, description |
-| **Progress** | `value`(0-100) | 进度条。label, showValue, tone |
+| **Progress** | `value`(0-100) | 进度条。tone: `default\|success\|warning\|danger`（无 info） |
 | **CodeBlock** | `code` | 代码块。language, title |
 | **Steps** | `items`, `current` | 步骤进度。items: `[{title, description?}]` |
 | **Spinner** | — | 加载旋转。size, label |
-| **Image** | `src`, `alt` | 图片。width, height |
+| **Image** | `src`, `alt` | 图片。width, height（数字）。data URI 中 `#` 必须 `%23` 编码 |
 | **Avatar** | `name` | 头像（src 或首字母）。size |
 | **Link** | `text`, `href` | 超链接（新标签打开） |
-| **Stat** | `label`, `value` | KPI 指标卡片。unit, tone |
+| **Stat** | `label`, `value` | KPI 指标卡片。tone: `default\|success\|warning\|danger\|info`（无 muted） |
 | **Skeleton** | — | 骨架屏。variant, width, height, rounded |
 | **Tooltip** | `text`, `content` | 行内文本 + 悬浮提示 |
 
@@ -326,6 +363,30 @@ Spec 提交后会经过严格的运行时校验。以下规则**违反任何一�
 **错误**：`Element "x" (Slider) requires min to be less than max.`
 
 **规避**：min 必须严格小于 max；step 如果提供，必须是正数。
+
+### 9. 给 Progress 传了 `info` tone
+
+**错误**：`"x".tone has invalid value "info" (allowed: default, success, warning, danger).`
+
+**原因**：Progress 只支持 4 种 tone，不含 `info`。而 Text/Stat/Badge 支持 `info`。
+
+**规避**：写 `tone` 前对照上方「tone 兼容矩阵」。Progress 用 `default` 代替 `info`。
+
+### 10. Image data URI 中 `#` 未编码
+
+**现象**：校验通过，但渲染出空白/占位图。
+
+**原因**：SVG data URI 中的 `#` 被浏览器当作 URL fragment，SVG 在 `#` 处被截断。
+
+**规避**：data URI 中所有 `#` 都写成 `%23`。包括 SVG 属性值（`fill="%23f00"`）和文本内容（`%23ff0000`）。
+
+### 11. Tabs/Accordion 的 children 数量与 items 不一致
+
+**现象**：校验通过，但部分标签页/折叠区点击后内容为空。
+
+**原因**：验证器不强制 children 数量 = items 数量，但渲染器按索引对应。
+
+**规避**：确保 `children` 数组长度与 `items` 数组长度严格一致，第 N 个 child 就是第 N 个 tab/section 的内容。
 
 ---
 
