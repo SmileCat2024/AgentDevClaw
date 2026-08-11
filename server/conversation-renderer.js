@@ -91,7 +91,6 @@ const TOOL_DISPLAY_NAMES = {
   im_disconnect_line: 'Disconnect Line',
   task_create: 'Task Create',
   task_list: 'Task List',
-  task_get: 'Task Get',
   task_update: 'Task Update',
   task_clear: 'Task Clear',
   user_input: 'User Input',

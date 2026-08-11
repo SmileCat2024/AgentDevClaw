@@ -142,7 +142,6 @@ describe('FlowFeature', () => {
         ['complete_node', 'enabled'],
         ['exit_flow', 'enabled'],
         ['ask_user_choice', 'enabled'],
-        ['ask_user_choices', 'enabled'],
       ]);
       const mockToolRegistry = {
         getEntries() {
@@ -198,7 +197,6 @@ describe('FlowFeature', () => {
 
       assert.ok(recorder.messages.some(m => m.includes('不要直接调用 ask_user_choice')));
       assert.equal(helper.toolStates.get('ask_user_choice'), 'removed');
-      assert.equal(helper.toolStates.get('ask_user_choices'), 'removed');
     });
 
     it('should pass through interactive edge after confirmed choice', async () => {

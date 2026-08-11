@@ -30,11 +30,7 @@ function buildFullPlan() {
         id: 'task-1',
         subject: '已完成任务',
         description: '描述一',
-        activeForm: '正在完成任务一',
         status: 'completed',
-        owner: 'agent-A',
-        blocks: ['task-2'],
-        blockedBy: [],
         metadata: { finishedAt: 1700000001000 },
         createdAt: 1700000000000,
         updatedAt: 1700000001000,
@@ -43,11 +39,7 @@ function buildFullPlan() {
         id: 'task-2',
         subject: '进行中任务',
         description: '描述二',
-        activeForm: '正在执行任务二',
         status: 'in_progress',
-        owner: '',
-        blocks: [],
-        blockedBy: ['task-1'],
         metadata: {},
         createdAt: 1700000002000,
         updatedAt: 1700000002000,
@@ -59,7 +51,6 @@ function buildFullPlan() {
       inProgress: 1,
       completed: 1,
       cancelled: 0,
-      blocked: 0,
     },
     interruptTargetId: 'task-2',
   };
@@ -85,14 +76,10 @@ describe('frontend normalizeTodoPlan round-trip', () => {
     const task1 = output.tasks[0];
     assert.equal(task1.id, 'task-1');
     assert.equal(task1.status, 'completed');
-    assert.equal(task1.owner, 'agent-A');
-    assert.deepEqual(task1.blocks, ['task-2']);
     assert.deepEqual(task1.metadata, { finishedAt: 1700000001000 });
-    assert.equal(task1.activeForm, '正在完成任务一');
 
     const task2 = output.tasks[1];
     assert.equal(task2.status, 'in_progress');
-    assert.deepEqual(task2.blockedBy, ['task-1']);
   });
 
   it('preserves summary fields through normalize', () => {
@@ -104,7 +91,41 @@ describe('frontend normalizeTodoPlan round-trip', () => {
     assert.equal(output.summary.inProgress, 1);
     assert.equal(output.summary.completed, 1);
     assert.equal(output.summary.cancelled, 0);
-    assert.equal(output.summary.blocked, 0);
+  });
+
+  it('strips old schema fields (activeForm/owner/blocks/blockedBy) during normalize', () => {
+    const ctx = createTodoSandbox();
+    // Feed plan with old fields
+    const oldPlan = {
+      feature: 'todo',
+      updatedAt: 1700000000000,
+      counter: 1,
+      tasks: [{
+        id: 'task-old',
+        subject: 'Old',
+        description: 'desc',
+        activeForm: 'Doing old',
+        status: 'pending',
+        owner: 'agent-A',
+        blocks: ['task-2'],
+        blockedBy: ['task-3'],
+        metadata: {},
+        createdAt: 1700000000000,
+        updatedAt: 1700000000000,
+      }],
+      summary: { total: 1, pending: 1, inProgress: 0, completed: 0, cancelled: 0 },
+    };
+    ctx.run(`globalThis.__testInput = ${JSON.stringify(oldPlan)}`);
+    const output = ctx.run('normalizeTodoPlan(globalThis.__testInput)');
+
+    const task = output.tasks[0];
+    assert.equal(task.id, 'task-old');
+    assert.equal(task.subject, 'Old');
+    // Old fields should be gone
+    assert.equal(task.activeForm, undefined);
+    assert.equal(task.owner, undefined);
+    assert.equal(task.blocks, undefined);
+    assert.equal(task.blockedBy, undefined);
   });
 
   it('returns null interruptTargetId when input lacks it', () => {

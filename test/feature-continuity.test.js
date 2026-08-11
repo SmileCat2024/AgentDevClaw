@@ -71,7 +71,9 @@ describe('feature continuity protocol (descriptor-driven)', () => {
     assert.equal(continuity.states[0].state.tasks[0].subject, 'Keep the plan');
     // export adapter 应剥离 __claw_continuity__ 字段，state 内不应再见 descriptor
     assert.equal(continuity.states[0].state[CONTINUITY_FIELD_KEY], undefined);
-    assert.ok(continuity.toolPolicy.preserveToolNames.includes('task_update'));
+    assert.ok(continuity.toolPolicy.preserveToolNames.length === 0 ||
+      !continuity.toolPolicy.preserveToolNames.includes('task_update'),
+      'task_update should no longer be in protected tools');
   });
 
   it('merges protected tool names into an existing export policy', () => {
@@ -79,9 +81,10 @@ describe('feature continuity protocol (descriptor-driven)', () => {
       preserveToolNames: ['invoke_skill', 'task_update'],
     });
 
+    // Todo tools are no longer protected; only the caller's own list should remain
     assert.deepEqual(
       [...policy.preserveToolNames].sort(),
-      ['invoke_skill', 'task_clear', 'task_create', 'task_update'].sort(),
+      ['invoke_skill', 'task_update'].sort(),
     );
   });
 

@@ -36,7 +36,9 @@ const TODO_PROTOCOL = 'claw.todo-continuity.v1';
 const TODO_FEATURE_NAME = 'todo';
 const DEFAULT_IMPORT_MODE = 'replace';
 
-const TODO_PROTECTED_TOOLS = ['task_create', 'task_update', 'task_clear'];
+// 不再保护 Todo 工具历史重放：Todo state 完全由 continuity 恢复，
+// 旧的工具调用和结果不再需要跨 trim/compact 保留。
+const TODO_PROTECTED_TOOLS = [];
 
 function cleanText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -57,11 +59,7 @@ function normalizeTodoTask(task) {
     id,
     subject: cleanText(task.subject),
     description: cleanText(task.description),
-    activeForm: cleanText(task.activeForm),
     status,
-    owner: cleanText(task.owner) || undefined,
-    blocks: Array.isArray(task.blocks) ? task.blocks.map(String) : [],
-    blockedBy: Array.isArray(task.blockedBy) ? task.blockedBy.map(String) : [],
     metadata: task.metadata && typeof task.metadata === 'object' ? cloneJson(task.metadata) : undefined,
     createdAt: typeof task.createdAt === 'number' ? task.createdAt : 0,
     updatedAt: typeof task.updatedAt === 'number' ? task.updatedAt : 0,

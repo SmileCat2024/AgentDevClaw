@@ -654,7 +654,7 @@ export class FlowFeature implements AgentFeature {
     return [
       `当前从本节点进入 "${nextNodeName}" 前，Flow 正在等待你再次调用 complete_node。`,
       '你必须继续使用 flow feature 的 complete_node 工具，并在 interactionRequest 中补充本次用户决策的标题、说明和选项。',
-      '不要直接调用 ask_user_choice 或 ask_user_choices；这些只是底层 UI 实现，不负责本次状态转移。',
+      '不要直接调用 ask_user_choice；这些只是底层 UI 实现，不负责本次状态转移。',
       '重试时保持原本的 nextNodeId / nextNodeName 目标不变。',
     ].join('\n');
   }
@@ -1354,7 +1354,7 @@ export class FlowFeature implements AgentFeature {
 
   private applyPendingInteractionToolGuard(): void {
     if (!this.toolRegistry || !this.pendingInteractionRetry) return;
-    for (const toolName of ['ask_user_choice', 'ask_user_choices']) {
+    for (const toolName of ['ask_user_choice']) {
       if (typeof this.toolRegistry.remove === 'function') {
         this.toolRegistry.remove(toolName);
       } else {

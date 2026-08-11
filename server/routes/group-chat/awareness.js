@@ -347,7 +347,6 @@ export function createAwarenessModule(deps) {
         id: task.id,
         subject: task.subject || '',
         status: task.status || 'pending',
-        activeForm: task.activeForm || '',
         createdAt: Number(task.createdAt) || null,
         updatedAt: Number(task.updatedAt) || null,
         finishedAt: ['completed', 'deleted', 'cancelled', 'canceled'].includes(task.status)

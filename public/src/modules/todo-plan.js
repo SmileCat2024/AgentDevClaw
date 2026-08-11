@@ -24,7 +24,7 @@ function getEmptyTodoPlan() {
     updatedAt: 0,
     counter: 0,
     tasks: [],
-    summary: { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0, blocked: 0 },
+    summary: { total: 0, pending: 0, inProgress: 0, completed: 0, cancelled: 0 },
   };
 }
 
@@ -35,11 +35,7 @@ function normalizeTodoPlan(snapshot) {
     id: String(task?.id || ''),
     subject: String(task?.subject || ''),
     description: String(task?.description || ''),
-    activeForm: String(task?.activeForm || ''),
     status: ['pending', 'in_progress', 'completed', 'deleted'].includes(task?.status) ? task.status : 'pending',
-    owner: typeof task?.owner === 'string' ? task.owner : '',
-    blocks: Array.isArray(task?.blocks) ? task.blocks.map(String) : [],
-    blockedBy: Array.isArray(task?.blockedBy) ? task.blockedBy.map(String) : [],
     metadata: task?.metadata && typeof task.metadata === 'object' ? task.metadata : {},
     createdAt: typeof task?.createdAt === 'number' ? task.createdAt : 0,
     updatedAt: typeof task?.updatedAt === 'number' ? task.updatedAt : 0,
@@ -56,7 +52,6 @@ function normalizeTodoPlan(snapshot) {
       inProgress: typeof summary.inProgress === 'number' ? summary.inProgress : tasks.filter(task => task.status === 'in_progress').length,
       completed: typeof summary.completed === 'number' ? summary.completed : tasks.filter(task => task.status === 'completed').length,
       cancelled: typeof summary.cancelled === 'number' ? summary.cancelled : tasks.filter(task => task.status === 'deleted').length,
-      blocked: typeof summary.blocked === 'number' ? summary.blocked : tasks.filter(task => (task.status === 'pending' || task.status === 'in_progress') && task.blockedBy.length > 0).length,
     },
     interruptTargetId: typeof snapshot.interruptTargetId === 'string' ? snapshot.interruptTargetId : null,
   };
@@ -102,15 +97,13 @@ function getTodoStatusLabel(status) {
 function renderPlanTask(task) {
   const status = String(task?.status || 'pending');
   const isTerminal = status === 'completed' || status === 'deleted';
-  const blocked = !isTerminal && Array.isArray(task?.blockedBy) && task.blockedBy.length > 0;
   const taskId = String(task?.id || '');
   const isInterruptTarget = !isTerminal && getInterruptTargetId() === taskId;
   const meta = [
     '#' + escapeHtml(taskId),
     getTodoStatusLabel(status),
-    blocked ? t('plan_blocked') : '',
   ].filter(Boolean).join(' · ');
-  const detail = isTerminal ? '' : (task?.description || task?.activeForm || '');
+  const detail = isTerminal ? '' : (task?.description || '');
   const marker = status === 'in_progress'
     ? '<div class="plan-task-spinner"></div>'
     : '<div class="plan-task-dot"></div>';
@@ -119,7 +112,7 @@ function renderPlanTask(task) {
     : '<button class="plan-task-action" data-todo-interrupt data-action="set" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '完成后停止' : 'Stop after done') + '</button>');
   const interruptLabel = isInterruptTarget ? '<span class="plan-task-interrupt-label">' + (currentLanguage === 'zh' ? '停止点' : 'Stop point') + '</span>' : '';
   return [
-    '<article class="plan-task status-' + escapeHtml(status.replace(/[^a-z0-9_-]/gi, '-')) + (blocked ? ' is-blocked' : '') + (isTerminal ? ' is-terminal' : '') + (isInterruptTarget ? ' is-interrupt-target' : '') + '">',
+    '<article class="plan-task status-' + escapeHtml(status.replace(/[^a-z0-9_-]/gi, '-')) + (isTerminal ? ' is-terminal' : '') + (isInterruptTarget ? ' is-interrupt-target' : '') + '">',
     '<div class="plan-task-marker">' + marker + '</div>',
     '<div class="plan-task-main">',
     '<div class="plan-task-title">' + escapeHtml(task?.subject || '') + interruptLabel + '</div>',

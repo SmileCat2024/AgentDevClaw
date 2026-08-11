@@ -469,7 +469,7 @@ function _renderTask(task) {
   const status = task.status === 'completed' ? 'completed'
     : ['deleted', 'cancelled', 'canceled'].includes(task.status) ? 'cancelled'
       : task.status === 'in_progress' ? 'running' : 'pending';
-  const label = task.status === 'in_progress' ? (task.activeForm || task.subject) : task.subject;
+  const label = task.subject;
   const finished = task.finishedAt ? _formatRelativeTime(task.finishedAt) : '';
   const resultLabel = status === 'cancelled' ? '已取消' : status === 'completed' ? '已完成' : '';
   const suffix = resultLabel
