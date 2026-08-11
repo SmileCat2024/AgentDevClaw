@@ -282,11 +282,6 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       (operation.sourceRuntimeId && entry.runtimeId === operation.sourceRuntimeId)
       || (operation.sourceSessionId && entry.sessionId === operation.sourceSessionId)
     ));
-    if (sourceEntry && operation.type === 'replacement' && ['source-stopping', 'degraded'].includes(operation.phase)) {
-      sourceEntry.replacementMutation = operation;
-      sourceEntry.sidebarOperation = operation;
-    }
-
     if (operation.type === 'delete' || operation.type === 'archive-close') {
       if (sourceEntry) {
         sourceEntry.deleting = operation.type === 'delete';

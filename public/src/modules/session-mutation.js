@@ -9,9 +9,7 @@
  *   - _sidebarOperations: 统一侧栏操作状态
  *   - getSessionReplacementMutation: 获取当前 mutation
  *   - beginSessionReplacementMutation: 开始 mutation
- *   - updateSessionReplacementMutation: 更新 mutation 阶段
  *   - clearSessionReplacementMutation: 清除 mutation
- *   - settleSessionReplacementMutation: 轮询确认 runtime 已消失后清除
  *   - markSessionArchivedForMutation: 乐观归档 + 返回回滚函数
  *   - archiveSessionAfterMutation: 归档原会话 + 停止 runtime
  *
@@ -64,31 +62,30 @@ function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', o
   });
 }
 
-function updateSessionReplacementMutation(agentId, sessionId, updates = {}) {
-  const current = getSessionReplacementMutation(agentId, sessionId);
-  if (!current) return null;
-  return updateSidebarOperation(current.operationId, updates);
-}
-
 function clearSessionReplacementMutation(agentId, sessionId) {
   const current = getSessionReplacementMutation(agentId, sessionId);
   if (!current) return null;
   return finishSidebarOperation(current.operationId, 'settled');
 }
 
-function settleSessionReplacementMutation(agentId, sessionId, delayMs = 300, attemptsRemaining = 20) {
-  const current = getSessionReplacementMutation(agentId, sessionId);
-  if (!current) return;
-  window.setTimeout(() => {
-    void settleSidebarSourceOperation(current.operationId, {
-      agentId,
-      sessionId,
-      attempts: Math.max(1, Number(attemptsRemaining) || 20),
-      intervalMs: 300,
-      lateReconcileAttempts: 1,
-      lateReconcileDelayMs: 5000,
-    });
-  }, Math.max(0, delayMs));
+// Session replacement and source-runtime cleanup have different completion
+// contracts. A replacement succeeds when the server commits the successor and
+// reports the requested archive outcome. Releasing the old runtime is a
+// separate resource-lifecycle command; it must never rewrite that committed
+// session operation into a failure when process disposal takes longer.
+function requestArchivedSourceRuntimeCleanup(agentId, sessionId, sourceRuntimeId = '') {
+  if (!agentId || !sessionId) return;
+  if (sourceRuntimeId && typeof clearAgentRuntimeCache === 'function') {
+    clearAgentRuntimeCache(sourceRuntimeId);
+  }
+  void (async () => {
+    await invoke('stop_agent', { agentId, sessionId });
+    if (typeof refreshSidebarRuntimeAfterMutation === 'function') {
+      await refreshSidebarRuntimeAfterMutation(500);
+    }
+  })().catch((error) => {
+    console.warn('Failed to clean up archived session runtime:', error);
+  });
 }
 
 function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {

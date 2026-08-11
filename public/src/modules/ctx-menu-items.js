@@ -327,8 +327,7 @@ async function ctxArchiveAndStopRuntime(target) {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
-    updateSidebarOperation(archiveOperation.operationId, {
-      phase: 'source-stopping',
+    finishSidebarOperation(archiveOperation.operationId, 'settled', {
       serverRevision: result?.revision ?? null,
     });
   } catch (e) {
@@ -369,11 +368,10 @@ async function ctxArchiveAndStopRuntime(target) {
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       selectWorkspaceSurface(agentId);
     }
-    settleSidebarSourceOperation(archiveOperation.operationId, { agentId, sessionId }).catch(e => console.warn(e));
+    refreshSidebarRuntimeAfterMutation(500).catch(e => console.warn(e));
   } catch (e) {
-    // Session archived successfully but stop failed — still surface the error
-    updateSidebarOperation(archiveOperation.operationId, { phase: 'degraded', errorCode: 'source_stop_failed' });
-    settleSidebarSourceOperation(archiveOperation.operationId, { agentId, sessionId }).catch(e => console.warn(e));
+    // The archive itself is already committed. Runtime cleanup is independent
+    // and must not retroactively mark that session mutation as failed.
     refreshSidebarRuntimeAfterMutation(500).catch(e => console.warn(e));
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
   }

@@ -46,28 +46,6 @@ function loadRuntimeStatus(overrides = {}) {
 }
 
 describe('runtime-status: sidebar operation projection', () => {
-  it('keeps a deleting runtime in its project group until targeted settlement', () => {
-    const ctx = loadRuntimeStatus();
-    const entry = ctx.run(`(() => {
-      const host = {
-        id: 'programming-helper', name: 'Programming Helper', source: 'prebuilt',
-        workspace_sessions: {
-          sessions: [{ id: 'session-1', title: 'Drawing', openDirectory: 'D:\\\\code\\\\project-a' }]
-        }
-      };
-      beginSidebarOperation({
-        operationId: 'delete:projection', type: 'delete', kind: 'delete', phase: 'source-stopping',
-        agentId: host.id, sourceSessionId: 'session-1', sourceRuntimeId: 'runtime-1',
-        projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a', title: 'Drawing'
-      });
-      return collectRuntimeEntriesForPrebuilt(host, [] )[0];
-    })()`);
-    assert.equal(entry.source, 'operation-tombstone');
-    assert.equal(entry.deleting, true);
-    assert.equal(entry.projectName, 'project-a');
-    assert.equal(entry.sessionId, 'session-1');
-  });
-
   it('uses the operation kind for compact/trim pending text even without archival', () => {
     const ctx = loadRuntimeStatus();
     const name = ctx.run(`(() => {
@@ -896,14 +874,6 @@ describe('runtime-status: isRuntimeCalling', () => {
 });
 
 describe('runtime-status: sidebar disconnect semantics', () => {
-  it('does not mark a connected target disconnected because source cleanup degraded', () => {
-    const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run(`isSidebarRuntimeDisconnected({
-      status: 'connected',
-      sidebarOperation: { phase: 'degraded', errorCode: 'source_stop_timeout' }
-    })`), false);
-  });
-
   it('keeps an actually disconnected entry disconnected', () => {
     const ctx = loadRuntimeStatus();
     assert.equal(ctx.run(`isSidebarRuntimeDisconnected({

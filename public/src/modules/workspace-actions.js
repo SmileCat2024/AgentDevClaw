@@ -41,8 +41,7 @@
  *   getFeatureCreatorProjects, getAgentCreatorProjects,
  *   isAssemblySession, isAssemblySessionRunning,
  *   maybeWarnAssemblySessionDrift, markSessionArchivedForMutation,
- *   updateSessionReplacementMutation, settleSessionReplacementMutation,
- *   clearSessionReplacementMutation, clearAgentRuntimeCache,
+ *   requestArchivedSourceRuntimeCleanup, clearAgentRuntimeCache,
  *   refreshSidebarRuntimeAfterMutation, ctxArchiveSession,
  *   getAgentWorkspaceState, getIMWorkspaceDraft, ensureIMWorkspaceLoaded (app-main.js / app-ui.js)
  *   renderCurrentMainView, updateAgentRecord (app-ui.js)
@@ -356,13 +355,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           status: 'success',
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
-        // 服务端已原子完成归档，只需停止旧 runtime
-        if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
-          updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'source-stopping' });
-          clearAgentRuntimeCache(_csOldRuntimeId);
-          try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
-          refreshSidebarRuntimeAfterMutation();
-          settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
+        if (action.archiveOriginal && archiveSucceeded) {
+          requestArchivedSourceRuntimeCleanup(activeAgent.id, action.sessionId, _csOldRuntimeId);
         }
         _csArchiveRollback = null;
         return;
@@ -386,13 +380,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         || _csConnectedTarget?.id
         || null;
       if (action.archiveOriginal && archiveSucceeded) {
-        updateSessionReplacementMutation(activeAgent.id, action.sessionId, {
-          phase: nextRuntimeId ? 'target-ready' : (_csTargetStopped ? 'degraded' : 'target-starting'),
-          targetSessionId: result?.session?.id || '',
-          targetRuntimeId: nextRuntimeId || '',
-          serverRevision: result?.revision ?? null,
-          ...(_csTargetStopped ? { errorCode: 'target_runtime_stopped' } : {}),
-        });
+        // The successor and archive were committed by the server. Completing
+        // source-runtime disposal later must not turn this summary into a
+        // degraded session operation.
+        finishSidebarOperation(_csOperation?.operationId, 'settled');
       } else if (nextRuntimeId) {
         updateSidebarOperation(_csOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
       } else if (_csTargetStopped) {
@@ -405,20 +396,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           status: 'success',
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
-        if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
-          updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'source-stopping' });
-          clearAgentRuntimeCache(_csOldRuntimeId);
-          try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
-          refreshSidebarRuntimeAfterMutation();
-          settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
+        if (action.archiveOriginal && archiveSucceeded) {
+          requestArchivedSourceRuntimeCleanup(activeAgent.id, action.sessionId, _csOldRuntimeId);
         }
-        if (action.archiveOriginal && archiveSucceeded && !_csOldRuntimeId) clearSessionReplacementMutation(activeAgent.id, action.sessionId);
         if (!action.archiveOriginal && nextRuntimeId) finishSidebarOperation(_csOperation?.operationId, 'settled');
         _csArchiveRollback = null;
         return;
       }
       if (nextRuntimeId) {
-        if (action.archiveOriginal) updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'switching' });
         setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
         beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-summary');
@@ -431,16 +416,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         status: 'success',
         title: _csIsZh ? '会话总结完成' : 'Session summary completed',
       });
-      // 服务端已原子完成归档，只需停止旧 runtime
-      if (action.archiveOriginal && archiveSucceeded && _csOldRuntimeId) {
-        updateSessionReplacementMutation(activeAgent.id, action.sessionId, { phase: 'source-stopping' });
-        clearAgentRuntimeCache(_csOldRuntimeId);
-        try { await invoke('stop_agent', { agentId: activeAgent.id, sessionId: action.sessionId }); } catch {}
-        refreshSidebarRuntimeAfterMutation();
-        settleSessionReplacementMutation(activeAgent.id, action.sessionId, 700);
+      if (action.archiveOriginal && archiveSucceeded) {
+        requestArchivedSourceRuntimeCleanup(activeAgent.id, action.sessionId, _csOldRuntimeId);
       }
       loadAgents().catch(e => console.warn(e));
-      if (action.archiveOriginal && archiveSucceeded && !_csOldRuntimeId) clearSessionReplacementMutation(activeAgent.id, action.sessionId);
       if (action.archiveOriginal && !archiveSucceeded) {
         ClawToast.update(_csToastId, {
           status: 'error',
@@ -610,16 +589,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (result?.agent) {
         applyManagedPrebuiltAgent(activeAgent.id, result.agent);
       }
-      if (affectedRuntimeId) {
-        updateSidebarOperation(deleteOperation.operationId, {
-          phase: 'source-stopping',
-          serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
-        });
-        clearAgentRuntimeCache(affectedRuntimeId);
-        settleSidebarSourceOperation(deleteOperation.operationId).catch(e => console.warn(e));
-      } else {
-        finishSidebarOperation(deleteOperation.operationId, 'settled');
-      }
+      finishSidebarOperation(deleteOperation.operationId, 'settled', {
+        serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
+      });
+      if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
       // Refresh IM workspace draft in background — no re-render needed if DOM already updated
       if (isIMSession) {
         ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));

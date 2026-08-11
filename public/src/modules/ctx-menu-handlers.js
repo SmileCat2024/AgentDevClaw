@@ -309,15 +309,9 @@ deleteSessionAction.addEventListener('click', async () => {
     if (result?.agent) {
       applyManagedPrebuiltAgent(pendingAgentId, result.agent);
     }
-    if (affectedRuntimeId) {
-      updateSidebarOperation(deleteOperation.operationId, {
-        phase: 'source-stopping',
-        serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
-      });
-      settleSidebarSourceOperation(deleteOperation.operationId).catch(e => console.warn(e));
-    } else {
-      finishSidebarOperation(deleteOperation.operationId, 'settled');
-    }
+    finishSidebarOperation(deleteOperation.operationId, 'settled', {
+      serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
+    });
 
     const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
     if (nextRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {

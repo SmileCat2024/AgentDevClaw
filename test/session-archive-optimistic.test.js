@@ -113,33 +113,28 @@ describe('session archive optimistic helper', () => {
     assert.equal(ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`), null);
   });
 
-  it('keeps a terminal target-start failure explicit while settling the source runtime', async () => {
+  it('separates archived source cleanup from the committed replacement operation', async () => {
     const ctx = createArchiveSandbox();
-    ctx.fetch = async () => ({
-      ok: true,
-      json: async () => ({ lifecycle: 'missing', viewerConnected: false }),
-    });
-    ctx.loadAgents = async () => {};
-    ctx.window.setTimeout = (callback) => {
-      Promise.resolve().then(callback);
-      return 1;
+    let stopCalls = 0;
+    ctx.invoke = async (command, payload) => {
+      stopCalls += 1;
+      assert.equal(command, 'stop_agent');
+      assert.equal(payload.agentId, 'programming-helper');
+      assert.equal(payload.sessionId, 'session-1');
     };
+    ctx.clearAgentRuntimeCache = () => {};
+    ctx.refreshSidebarRuntimeAfterMutation = async () => {};
     ctx.run(`
       allAgents = [{
         id: 'programming-helper',
         workspace_sessions: { activeSessionId: 'session-1', sessions: [{ id: 'session-1' }] }
       }];
       beginSessionReplacementMutation('programming-helper', 'session-1', 'summary');
-      updateSessionReplacementMutation('programming-helper', 'session-1', {
-        phase: 'source-stopping',
-        targetSessionId: 'session-2',
-        errorCode: 'target_runtime_stopped'
-      });
-      settleSessionReplacementMutation('programming-helper', 'session-1', 0, 1);
+      finishSidebarOperation(getSessionReplacementMutation('programming-helper', 'session-1').operationId, 'settled');
+      requestArchivedSourceRuntimeCleanup('programming-helper', 'session-1', 'runtime-1');
     `);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const operation = ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`);
-    assert.equal(operation.phase, 'degraded');
-    assert.equal(operation.errorCode, 'target_runtime_stopped');
+    assert.equal(stopCalls, 1);
+    assert.equal(ctx.run(`getSessionReplacementMutation('programming-helper', 'session-1')`), null);
   });
 });

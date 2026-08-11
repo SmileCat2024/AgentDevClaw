@@ -296,13 +296,10 @@ window.submitTrimCompact = async () => {
       || connectedTarget?.id
       || null;
     if (archiveAfter && archiveSucceeded) {
-      updateSessionReplacementMutation(agentId, sessionId, {
-        phase: nextRuntimeId ? 'target-ready' : (targetStopped ? 'degraded' : 'target-starting'),
-        targetSessionId: result?.session?.id || '',
-        targetRuntimeId: nextRuntimeId || '',
-        serverRevision: result?.revision ?? null,
-        ...(targetStopped ? { errorCode: 'target_runtime_stopped' } : {}),
-      });
+      // The server has committed both the successor and source archive. This is
+      // the replacement operation's terminal success boundary; source runtime
+      // disposal is deliberately not part of this session mutation.
+      finishSidebarOperation(trimOperation?.operationId, 'settled');
     } else if (nextRuntimeId) {
       updateSidebarOperation(trimOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
     } else if (targetStopped) {
@@ -311,20 +308,14 @@ window.submitTrimCompact = async () => {
       finishSidebarOperation(trimOperation?.operationId, 'settled');
     }
     if (_navGuard !== _navigationGuardEpoch) {
-      if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
-        updateSessionReplacementMutation(agentId, sessionId, { phase: 'source-stopping' });
-        clearAgentRuntimeCache(_oldRuntimeId);
-        try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
-        refreshSidebarRuntimeAfterMutation(500);
-        settleSessionReplacementMutation(agentId, sessionId, 700);
+      if (archiveAfter && archiveSucceeded) {
+        requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
       }
-      if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
       if (!archiveAfter && nextRuntimeId) finishSidebarOperation(trimOperation?.operationId, 'settled');
       archiveRollback = null;
       return;
     }
     if (nextRuntimeId) {
-      if (archiveAfter) updateSessionReplacementMutation(agentId, sessionId, { phase: 'switching' });
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
       beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'trim');
@@ -333,15 +324,11 @@ window.submitTrimCompact = async () => {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
-    // 服务端已原子完成归档，只需停止旧 runtime
-    if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
-      updateSessionReplacementMutation(agentId, sessionId, { phase: 'source-stopping' });
-      clearAgentRuntimeCache(_oldRuntimeId);
-      try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
-      refreshSidebarRuntimeAfterMutation(500);
-      settleSessionReplacementMutation(agentId, sessionId, 700);
+    // The archive already committed. Resource cleanup must not alter the
+    // completed trim operation if this old runtime releases slowly.
+    if (archiveAfter && archiveSucceeded) {
+      requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
     }
-    if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新会话已创建，但原会话归档失败：' : 'The new session was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
@@ -559,13 +546,9 @@ window.submitBranch = async () => {
       || connectedTarget?.id
       || null;
     if (archiveAfter && archiveSucceeded) {
-      updateSessionReplacementMutation(agentId, sessionId, {
-        phase: nextRuntimeId ? 'target-ready' : (targetStopped ? 'degraded' : 'target-starting'),
-        targetSessionId: result?.newSessionId || '',
-        targetRuntimeId: nextRuntimeId || '',
-        serverRevision: result?.revision ?? null,
-        ...(targetStopped ? { errorCode: 'target_runtime_stopped' } : {}),
-      });
+      // The branch and source archive are committed together. Do not keep the
+      // successful branch operation open for unrelated source cleanup.
+      finishSidebarOperation(branchOperation?.operationId, 'settled');
     } else if (nextRuntimeId) {
       updateSidebarOperation(branchOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
     } else if (targetStopped) {
@@ -574,20 +557,14 @@ window.submitBranch = async () => {
       finishSidebarOperation(branchOperation?.operationId, 'settled');
     }
     if (_navGuard !== _navigationGuardEpoch) {
-      if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
-        updateSessionReplacementMutation(agentId, sessionId, { phase: 'source-stopping' });
-        clearAgentRuntimeCache(_oldRuntimeId);
-        try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
-        refreshSidebarRuntimeAfterMutation(500);
-        settleSessionReplacementMutation(agentId, sessionId, 700);
+      if (archiveAfter && archiveSucceeded) {
+        requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
       }
-      if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
       if (!archiveAfter && nextRuntimeId) finishSidebarOperation(branchOperation?.operationId, 'settled');
       archiveRollback = null;
       return;
     }
     if (nextRuntimeId) {
-      if (archiveAfter) updateSessionReplacementMutation(agentId, sessionId, { phase: 'switching' });
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
       beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'branch');
@@ -596,15 +573,9 @@ window.submitBranch = async () => {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();
     }
-    // 服务端已原子完成归档，只需停止旧 runtime
-    if (archiveAfter && archiveSucceeded && _oldRuntimeId) {
-      updateSessionReplacementMutation(agentId, sessionId, { phase: 'source-stopping' });
-      clearAgentRuntimeCache(_oldRuntimeId);
-      try { await invoke('stop_agent', { agentId, sessionId }); } catch {}
-      refreshSidebarRuntimeAfterMutation(500);
-      settleSessionReplacementMutation(agentId, sessionId, 700);
+    if (archiveAfter && archiveSucceeded) {
+      requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
     }
-    if (archiveAfter && archiveSucceeded && !_oldRuntimeId) clearSessionReplacementMutation(agentId, sessionId);
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新分支已创建，但原会话归档失败：' : 'The branch was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }

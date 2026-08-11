@@ -5,6 +5,9 @@ import fs from 'node:fs';
 const sessionRoutes = fs.readFileSync(new URL('../server/routes/session.js', import.meta.url), 'utf8');
 const appMain = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const workspaceActions = fs.readFileSync(new URL('../public/src/modules/workspace-actions.js', import.meta.url), 'utf8');
+const sessionDialogs = fs.readFileSync(new URL('../public/src/modules/session-dialogs.js', import.meta.url), 'utf8');
+const sessionMutation = fs.readFileSync(new URL('../public/src/modules/session-mutation.js', import.meta.url), 'utf8');
+const sidebarOperations = fs.readFileSync(new URL('../public/src/modules/sidebar-operations.js', import.meta.url), 'utf8');
 const sidebarRender = fs.readFileSync(new URL('../public/src/modules/sidebar-render.js', import.meta.url), 'utf8');
 
 describe('archive-and-replace contract', () => {
@@ -77,5 +80,16 @@ describe('archive-and-replace contract', () => {
     assert.match(readinessWait, /attempt < attempts/);
     assert.match(readinessWait, /return null;/);
     assert.doesNotMatch(readinessWait, /for \(;;\)/);
+  });
+
+  it('settles a committed replacement before independently cleaning up its source runtime', () => {
+    for (const client of [workspaceActions, sessionDialogs]) {
+      assert.match(client, /requestArchivedSourceRuntimeCleanup\(/);
+      assert.doesNotMatch(client, /settleSessionReplacementMutation/);
+      assert.doesNotMatch(client, /phase:\s*'source-stopping'/);
+    }
+    assert.match(sessionMutation, /function requestArchivedSourceRuntimeCleanup/);
+    assert.doesNotMatch(sidebarOperations, /source_stop_timeout/);
+    assert.doesNotMatch(sidebarOperations, /settleSidebarSourceOperation/);
   });
 });
