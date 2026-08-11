@@ -306,6 +306,31 @@ describe('Group Chat data layer', () => {
       assert.equal(read.messages[1].text, 'second');
     });
 
+    it('serializes concurrent appends for the same chat', async () => {
+      await store.writeGroupChat({ id: 'c1', name: 'C', createdAt: 0, messages: [] });
+
+      await Promise.all([
+        store.appendGroupChatMessage('c1', { id: 'm1', text: 'first', from: 'user', timestamp: 1000 }),
+        store.appendGroupChatMessage('c1', { id: 'm2', text: 'second', from: 'user', timestamp: 1001 }),
+      ]);
+
+      const read = await store.readGroupChat('c1');
+      assert.deepEqual(read.messages.map((message) => message.id), ['m1', 'm2']);
+    });
+
+    it('rejects a stale direct write instead of overwriting newer data', async () => {
+      await store.writeGroupChat({ id: 'c1', name: 'C', createdAt: 0, messages: [] });
+      const stale = await store.readGroupChat('c1');
+      await store.appendGroupChatMessage('c1', { id: 'm1', text: 'newer', from: 'user', timestamp: 1000 });
+
+      stale.name = 'stale overwrite';
+      await assert.rejects(store.writeGroupChat(stale), /Stale group chat write rejected/);
+
+      const read = await store.readGroupChat('c1');
+      assert.equal(read.name, 'C');
+      assert.equal(read.messages[0].id, 'm1');
+    });
+
     it('initializes messages array if missing', async () => {
       await store.writeGroupChat({ id: 'c1', name: 'C', createdAt: 0 });
       const chat = await store.appendGroupChatMessage('c1', { id: 'm1', text: 'x', from: 'user' });

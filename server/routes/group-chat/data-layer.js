@@ -1,9 +1,12 @@
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 
 import { GROUP_CHATS_ROOT } from '../../shared/constants.js';
 import { sanitizeSessionFragment } from '../../shared/string-helpers.js';
 import { normalizeGroupChatMembers } from './pure-functions.js';
+
+const CHAT_SNAPSHOT = Symbol('group-chat-snapshot');
 
 /**
  * 群聊文件存储工厂。接受 rootDir 参数，便于测试注入临时目录。
@@ -12,6 +15,8 @@ import { normalizeGroupChatMembers } from './pure-functions.js';
  * @returns {object} data layer 方法集
  */
 export function createGroupChatDataLayer(rootDir, hooks = {}) {
+  const writeChains = new Map();
+
   async function ensureDir() {
     await fs.mkdir(rootDir, { recursive: true });
   }
@@ -26,23 +31,53 @@ export function createGroupChatDataLayer(rootDir, hooks = {}) {
       const raw = await fs.readFile(filePath, 'utf8');
       const chat = JSON.parse(raw);
       chat.members = normalizeGroupChatMembers(chat.members);
+      Object.defineProperty(chat, CHAT_SNAPSHOT, {
+        value: raw,
+        configurable: true,
+      });
       return chat;
     } catch {
       return null;
     }
   }
 
-  async function writeGroupChat(chat) {
+  function withWriteLock(chatId, operation) {
+    const key = sanitizeSessionFragment(chatId);
+    const previous = writeChains.get(key) || Promise.resolve();
+    const next = previous.catch(() => {}).then(operation);
+    writeChains.set(key, next);
+    return next.finally(() => {
+      if (writeChains.get(key) === next) writeChains.delete(key);
+    });
+  }
+
+  async function writeGroupChatUnlocked(chat) {
     await ensureDir();
     const filePath = getGroupChatPath(chat.id);
     chat.updatedAt = Date.now();
-    // Atomic write: write to temp file then rename, prevents corruption
-    // from concurrent writes or process crash mid-write.
-    const tmpPath = filePath + '.tmp';
-    await fs.writeFile(tmpPath, JSON.stringify(chat, null, 2), 'utf8');
+    // Write to a unique temp file before rename so a process crash cannot leave
+    // a partial chat file behind.
+    const tmpPath = `${filePath}.${randomUUID()}.tmp`;
+    const serialized = JSON.stringify(chat, null, 2);
+    await fs.writeFile(tmpPath, serialized, 'utf8');
     await fs.rename(tmpPath, filePath);
+    Object.defineProperty(chat, CHAT_SNAPSHOT, {
+      value: serialized,
+      configurable: true,
+    });
     if (typeof hooks.onWrite === 'function') hooks.onWrite(chat.id);
     return chat;
+  }
+
+  async function writeGroupChat(chat) {
+    return withWriteLock(chat.id, async () => {
+      const current = await readGroupChat(chat.id);
+      const snapshot = chat?.[CHAT_SNAPSHOT];
+      if (current && snapshot && current[CHAT_SNAPSHOT] !== snapshot) {
+        throw new Error(`Stale group chat write rejected: ${chat.id}`);
+      }
+      return writeGroupChatUnlocked(chat);
+    });
   }
 
   async function listGroupChats() {
@@ -77,42 +112,54 @@ export function createGroupChatDataLayer(rootDir, hooks = {}) {
     return chats;
   }
 
+  async function updateGroupChat(chatId, mutator) {
+    return withWriteLock(chatId, async () => {
+      const chat = await readGroupChat(chatId);
+      if (!chat) return null;
+      const result = await mutator(chat);
+      if (result === null) return null;
+      await writeGroupChatUnlocked(chat);
+      return result;
+    });
+  }
+
   async function appendGroupChatMessage(chatId, message) {
-    const chat = await readGroupChat(chatId);
-    if (!chat) return null;
-    if (!Array.isArray(chat.messages)) chat.messages = [];
-    chat.messages.push(message);
-    await writeGroupChat(chat);
-    return chat;
+    return updateGroupChat(chatId, (chat) => {
+      if (!Array.isArray(chat.messages)) chat.messages = [];
+      chat.messages.push(message);
+      return chat;
+    });
   }
 
   async function updateMessageRouting(chatId, messageId, routingUpdate) {
-    const chat = await readGroupChat(chatId);
-    if (!chat || !Array.isArray(chat.messages)) return null;
-    const msg = chat.messages.find((m) => m.id === messageId);
-    if (!msg) return null;
-    msg.routing = { ...(msg.routing || {}), ...routingUpdate };
-    await writeGroupChat(chat);
-    return msg;
+    return updateGroupChat(chatId, (chat) => {
+      if (!Array.isArray(chat.messages)) return null;
+      const msg = chat.messages.find((m) => m.id === messageId);
+      if (!msg) return null;
+      msg.routing = { ...(msg.routing || {}), ...routingUpdate };
+      return msg;
+    });
   }
 
   async function updateMessageFields(chatId, messageId, fieldUpdate) {
-    const chat = await readGroupChat(chatId);
-    if (!chat || !Array.isArray(chat.messages)) return null;
-    const msg = chat.messages.find((m) => m.id === messageId);
-    if (!msg) return null;
-    Object.assign(msg, fieldUpdate);
-    await writeGroupChat(chat);
-    return msg;
+    return updateGroupChat(chatId, (chat) => {
+      if (!Array.isArray(chat.messages)) return null;
+      const msg = chat.messages.find((m) => m.id === messageId);
+      if (!msg) return null;
+      Object.assign(msg, fieldUpdate);
+      return msg;
+    });
   }
 
   async function deleteGroupChatFile(chatId) {
-    try {
-      await fs.unlink(getGroupChatPath(chatId));
-      return true;
-    } catch {
-      return false;
-    }
+    return withWriteLock(chatId, async () => {
+      try {
+        await fs.unlink(getGroupChatPath(chatId));
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
 
   return {
@@ -120,6 +167,7 @@ export function createGroupChatDataLayer(rootDir, hooks = {}) {
     getGroupChatPath,
     readGroupChat,
     writeGroupChat,
+    updateGroupChat,
     listGroupChats,
     appendGroupChatMessage,
     updateMessageRouting,

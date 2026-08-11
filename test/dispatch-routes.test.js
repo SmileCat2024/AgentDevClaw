@@ -112,6 +112,15 @@ function makeMockRes() {
   return res;
 }
 
+function makeMockReq(query = {}) {
+  const listeners = new Map();
+  return {
+    query,
+    once(event, listener) { listeners.set(event, listener); },
+    emit(event) { listeners.get(event)?.(); },
+  };
+}
+
 function makePendingSchedule(overrides = {}) {
   return {
     id: `sched-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -732,6 +741,40 @@ describe('Dispatch module — route handlers', () => {
     const key = state.dispatchRuntimeActivity.keys().next().value;
     assert.ok(key);
     assert.equal(state.dispatchRuntimeActivity.get(key).status, 'active');
+  });
+
+  it('GET /dispatch/poll replaces an older waiter without removing the newer one', () => {
+    const handlers = mockApp._routes['GET /protoclaw/dispatch/poll'];
+    const handler = handlers[handlers.length - 1];
+    const firstReq = makeMockReq({ agentId: 'poll-agent', sessionId: 'sess-1', timeout: '25' });
+    const firstRes = makeMockRes();
+    const secondReq = makeMockReq({ agentId: 'poll-agent', sessionId: 'sess-1', timeout: '25' });
+    const secondRes = makeMockRes();
+
+    handler(firstReq, firstRes);
+    handler(secondReq, secondRes);
+
+    assert.equal(firstRes.statusCode, 204);
+    assert.equal(firstRes.ended, true);
+
+    const runtimeKey = 'poll-agent::sess-1';
+    pushDispatchMessage(runtimeKey, 'delivered to newest waiter');
+    assert.equal(secondRes.body.text, 'delivered to newest waiter');
+    assert.ok(!getDispatchState().dispatchPendingPolls.has(runtimeKey));
+  });
+
+  it('GET /dispatch/poll removes its waiter when the request closes', () => {
+    const handlers = mockApp._routes['GET /protoclaw/dispatch/poll'];
+    const handler = handlers[handlers.length - 1];
+    const req = makeMockReq({ agentId: 'poll-agent', sessionId: 'sess-1', timeout: '25' });
+    const res = makeMockRes();
+
+    handler(req, res);
+    req.emit('close');
+
+    assert.ok(!getDispatchState().dispatchPendingPolls.has('poll-agent::sess-1'));
+    assert.equal(res.body, null);
+    assert.equal(res.ended, false);
   });
 
   it('POST /dispatch/agent_status returns 400 without agentId', () => {

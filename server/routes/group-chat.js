@@ -95,6 +95,7 @@ const {
   getGroupChatPath,
   readGroupChat,
   writeGroupChat,
+  updateGroupChat,
   listGroupChats,
   appendGroupChatMessage,
   updateMessageRouting,
@@ -208,16 +209,29 @@ app.get('/protoclaw/gc/inbox', async (req, res) => {
     return res.json(queue.shift());
   }
 
-  const timer = setTimeout(() => {
-    gcInboxPendingPolls.delete(runtimeKey);
-    res.status(204).end();
-  }, timeoutMs);
+  // One runtime has one polling consumer. Replace an older waiter explicitly
+  // so it cannot later delete or respond in place of this request.
+  const previous = gcInboxPendingPolls.get(runtimeKey);
+  previous?.cancel?.();
 
-  gcInboxPendingPolls.set(runtimeKey, (msg) => {
-    clearTimeout(timer);
-    gcInboxPendingPolls.delete(runtimeKey);
-    res.json(msg);
-  });
+  let settled = false;
+  let timer = null;
+  const settle = (send) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    if (gcInboxPendingPolls.get(runtimeKey) === resolver) {
+      gcInboxPendingPolls.delete(runtimeKey);
+    }
+    send?.();
+  };
+  const resolver = (msg) => settle(() => res.json(msg));
+  resolver.cancel = () => settle(() => res.status(204).end());
+
+  timer = setTimeout(() => settle(() => res.status(204).end()), timeoutMs);
+  gcInboxPendingPolls.set(runtimeKey, resolver);
+
+  req.once('close', () => settle());
 });
 
 app.post('/protoclaw/gc/writeback', express.json(), async (req, res, next) => {

@@ -472,17 +472,29 @@ export function setupDispatchRoutes(app, express, ctx) {
       return res.json(queue.shift());
     }
 
-    // long-poll: wait for message or timeout
-    const timer = setTimeout(() => {
-      dispatchPendingPolls.delete(runtimeKey);
-      res.status(204).end();
-    }, timeoutMs);
+    // One runtime has one polling consumer. Replace an older waiter explicitly
+    // so it cannot later delete or respond in place of this request.
+    const previous = dispatchPendingPolls.get(runtimeKey);
+    previous?.cancel?.();
 
-    dispatchPendingPolls.set(runtimeKey, (msg) => {
-      clearTimeout(timer);
-      dispatchPendingPolls.delete(runtimeKey);
-      res.json(msg);
-    });
+    let settled = false;
+    let timer = null;
+    const settle = (send) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (dispatchPendingPolls.get(runtimeKey) === resolver) {
+        dispatchPendingPolls.delete(runtimeKey);
+      }
+      send?.();
+    };
+    const resolver = (msg) => settle(() => res.json(msg));
+    resolver.cancel = () => settle(() => res.status(204).end());
+
+    timer = setTimeout(() => settle(() => res.status(204).end()), timeoutMs);
+    dispatchPendingPolls.set(runtimeKey, resolver);
+
+    req.once('close', () => settle());
   });
 
   app.post('/protoclaw/dispatch/respond', express.json(), (req, res) => {
