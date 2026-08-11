@@ -184,7 +184,7 @@ describe('agent-lifecycle', () => {
       assert.equal(status.signalCode, 'SIGTERM');
     });
 
-    it('waits for shared-session disposal acknowledgement without killing sibling process', async () => {
+    it('accepts shared-session cleanup without killing the sibling process', async () => {
       const mod = createAgentLifecycleModule(createMockCtx());
       const child = createMockChild();
       const runtime = injectRuntime('shared-agent', 'shared-session', child);
@@ -197,9 +197,44 @@ describe('agent-lifecycle', () => {
       };
 
       const status = await mod.stopManagedAgent('shared-agent', 'shared-session');
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(status.status, 'stopped');
       assert.equal(runtime.stopped, true);
       assert.equal(killCalled, false);
+    });
+
+    it('keeps the shared-session acknowledgement listener until a slow disposal finishes', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      const runtime = injectRuntime('shared-agent', 'slow-session', child);
+      runtime.processGroupKey = 'shared-agent::/project';
+      child.send = (message) => {
+        assert.deepEqual(message, { type: 'remove-session', sessionId: 'slow-session' });
+      };
+
+      const status = await mod.stopManagedAgent('shared-agent', 'slow-session');
+      assert.equal(status.status, 'stopped');
+      assert.equal(runtime.stopped, false);
+      assert.equal(runtime.stopping, true);
+
+      child.emit('message', { type: 'session-exited', sessionId: 'slow-session' });
+      assert.equal(runtime.stopped, true);
+      assert.equal(runtime.stopping, false);
+    });
+
+    it('settles a disposing shared session if the host process exits first', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const child = createMockChild();
+      const runtime = injectRuntime('shared-agent', 'exiting-session', child);
+      runtime.processGroupKey = 'shared-agent::/project';
+      child.send = () => {};
+
+      await mod.stopManagedAgent('shared-agent', 'exiting-session');
+      child.exitCode = 1;
+      child.emit('exit', 1);
+
+      assert.equal(runtime.stopped, true);
+      assert.equal(runtime.stopping, false);
     });
   });
 
@@ -321,6 +356,26 @@ describe('agent-lifecycle', () => {
       assert.ok(agent);
       assert.equal(agent.status, 'running');
       assert.ok(agent.pid);
+    });
+
+    it('hides a shared session while its disposal acknowledgement is pending', async () => {
+      const child = createMockChild();
+      const runtime = injectRuntime('stopping-agent', 'stopping-session', child);
+      runtime.ready = true;
+      runtime.viewerAgentId = 'viewer-stopping';
+      runtime.stopping = true;
+      const mod = createAgentLifecycleModule(createMockCtx({
+        getAgentsLight: async () => [
+          { id: 'stopping-agent', name: 'Stopping', description: '', kind: 'agent', status: { pid: 12345, viewerAgentId: 'viewer-stopping' } },
+        ],
+        readViewerJson: async () => ({
+          agents: [{ id: 'viewer-stopping', name: 'Stopping', connected: true }],
+          currentAgentId: 'viewer-stopping',
+        }),
+      }));
+
+      const agents = await mod.getConnectedAgents();
+      assert.equal(agents.some((agent) => agent.id === 'viewer-stopping'), false);
     });
 
     it('handles errors from readViewerJson gracefully', async () => {
@@ -456,6 +511,32 @@ describe('agent-lifecycle', () => {
       assert.equal(responseData.lifecycle, 'starting');
       assert.equal(responseData.agent, null);
       assert.equal(metadataReads, 0);
+    });
+
+    it('runtime_status reports a shared session awaiting disposal acknowledgement as stopping', async () => {
+      const runtime = injectRuntime('programming-helper', 'session-disposing', createMockChild());
+      runtime.stopping = true;
+      runtime.ready = true;
+      runtime.viewerAgentId = 'viewer-disposing';
+      const mod = createAgentLifecycleModule(createMockCtx({
+        readViewerJson: async () => ({ agents: [{ id: 'viewer-disposing', connected: true }] }),
+      }));
+      let handler = null;
+      const app = {
+        get: (path, routeHandler) => {
+          if (path === '/protoclaw/runtime_status') handler = routeHandler;
+        },
+        post: () => {}, put: () => {}, delete: () => {},
+      };
+      mod.setupRoutes(app, { json: () => (req, res, next) => next() });
+      let responseData = null;
+      await handler(
+        { query: { agentId: 'programming-helper', sessionId: 'session-disposing' } },
+        { status: () => ({ json: () => {} }), json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+      assert.equal(responseData.lifecycle, 'stopping');
+      assert.equal(responseData.ready, false);
     });
 
     it('runtime_status treats signal termination as stopped instead of stopping forever', async () => {

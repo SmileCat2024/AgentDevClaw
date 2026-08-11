@@ -1,5 +1,5 @@
 import {
-  APP_PORT, VIEWER_PORT, RUNTIME_READY_WAIT_MS,
+  APP_PORT, VIEWER_PORT,
 } from '../shared/constants.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import {
@@ -39,36 +39,36 @@ export function createAgentLifecycleModule(ctx) {
     if (!sessionId || !child || typeof child.send !== 'function' || typeof child.on !== 'function') {
       return false;
     }
+    if (runtime.stopping) return true;
+
     runtime.stopping = true;
-    try {
-      const exited = await new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          child.removeListener?.('message', onMessage);
-          resolve(false);
-        }, RUNTIME_READY_WAIT_MS);
-        const onMessage = (message) => {
-          if (message?.type !== 'session-exited' || message.sessionId !== sessionId) return;
-          clearTimeout(timeout);
-          child.removeListener?.('message', onMessage);
-          resolve(true);
-        };
-        child.on('message', onMessage);
-        try {
-          child.send({ type: 'remove-session', sessionId });
-        } catch {
-          clearTimeout(timeout);
-          child.removeListener?.('message', onMessage);
-          resolve(false);
-        }
-      });
-      if (exited) {
-        runtime.stopped = true;
-        runtime.stopping = false;
-        return true;
-      }
+    const clearAcknowledgementListeners = () => {
+      child.removeListener?.('message', onMessage);
+      child.removeListener?.('exit', onExit);
+    };
+    const onMessage = (message) => {
+      if (message?.type !== 'session-exited' || message.sessionId !== sessionId) return;
+      clearAcknowledgementListeners();
+      runtime.stopped = true;
       runtime.stopping = false;
-      return false;
+      removeOpenSession(runtime.agentId, sessionId).catch((error) => console.warn(error));
+    };
+    const onExit = () => {
+      clearAcknowledgementListeners();
+      runtime.stopped = true;
+      runtime.stopping = false;
+    };
+    child.on('message', onMessage);
+    child.once?.('exit', onExit);
+    try {
+      child.send({ type: 'remove-session', sessionId });
+      // `session-exited` is the authoritative acknowledgement. Do not detach
+      // its listener after an arbitrary wait: a long-running save/dispose may
+      // legitimately complete later, and the runtime must still be recorded as
+      // stopped when that acknowledgement arrives.
+      return true;
     } catch {
+      clearAcknowledgementListeners();
       runtime.stopping = false;
       return false;
     }
@@ -130,9 +130,9 @@ export function createAgentLifecycleModule(ctx) {
       // its Agent and background resources. Killing on a failed acknowledgement
       // would terminate unrelated sibling sessions.
       if (runtime.processGroupKey && runtime.selectedSessionId) {
-        const removed = await removeSharedSession(runtime);
-        if (!removed) {
-          console.warn(`[agent-lifecycle] shared session stop not acknowledged: ${agentId}::${runtime.selectedSessionId}`);
+        const accepted = await removeSharedSession(runtime);
+        if (!accepted) {
+          console.warn(`[agent-lifecycle] failed to request shared-session stop: ${agentId}::${runtime.selectedSessionId}`);
           continue;
         }
       } else {
@@ -140,8 +140,10 @@ export function createAgentLifecycleModule(ctx) {
         runtime.process.kill('SIGTERM');
       }
 
-      // Remove from open-sessions tracker (explicit stop)
-      if (runtime.selectedSessionId) {
+      // Isolated processes have been signalled and can be removed from recovery
+      // tracking now. Shared sessions are removed only by their later
+      // `session-exited` acknowledgement in removeSharedSession().
+      if (!runtime.processGroupKey && runtime.selectedSessionId) {
         removeOpenSession(agentId, runtime.selectedSessionId).catch(e => console.warn(e));
       }
     }
@@ -244,14 +246,14 @@ export function createAgentLifecycleModule(ctx) {
           : null;
         const viewerConnected = viewerAgent?.connected === true;
         const processRunning = isChildProcessRunning(runtime?.process);
-        const ready = !!(runtime?.ready && !runtime?.stopped && processRunning && viewerConnected);
+        const ready = !!(runtime?.ready && !runtime?.stopped && !runtime?.stopping && processRunning && viewerConnected);
         // The session index can be large. A starting/missing runtime has no
         // agent payload to decorate, so do not reread the index on every
         // readiness poll; resolve metadata only for the ready response.
         const meta = ready ? await readWorkspaceSessionMeta(agentId, sessionId) : null;
         const lifecycle = !runtime
           ? 'missing'
-          : runtime.stopped && processRunning
+          : runtime.stopping || (runtime.stopped && processRunning)
             ? 'stopping'
             : !processRunning
               ? 'stopped'

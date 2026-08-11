@@ -28,8 +28,17 @@ export function createConnectedAgentsQuery(deps) {
     const runtimeAgents = Array.isArray(viewerData.agents) ? viewerData.agents : [];
     const managedRuntimeByViewerId = new Map(
       Array.from(managedAgents.values())
-        .filter((runtime) => runtime?.viewerAgentId && runtime.process && runtime.process.exitCode === null && !runtime.stopped)
+        .filter((runtime) => runtime?.viewerAgentId
+          && runtime.process
+          && runtime.process.exitCode === null
+          && !runtime.stopped
+          && !runtime.stopping)
         .map((runtime) => [String(runtime.viewerAgentId), runtime])
+    );
+    const stoppingViewerRuntimeIds = new Set(
+      Array.from(managedAgents.values())
+        .filter((runtime) => runtime?.stopping && runtime?.viewerAgentId)
+        .map((runtime) => String(runtime.viewerAgentId))
     );
 
     // Pre-fetch group chat data for work-group sidebar grouping.
@@ -75,6 +84,7 @@ export function createConnectedAgentsQuery(deps) {
     }));
 
     for (const runtimeAgent of runtimeAgents) {
+      if (stoppingViewerRuntimeIds.has(String(runtimeAgent.id || ''))) continue;
       const managedRuntime = managedRuntimeByViewerId.get(String(runtimeAgent.id || '')) || null;
       if (managedRuntime) {
         const runtimeMeta = await readWorkspaceSessionMeta(managedRuntime.agentId, managedRuntime.selectedSessionId);

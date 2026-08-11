@@ -13,7 +13,9 @@ export function isChildProcessRunning(child) {
 }
 
 export function isManagedRuntimeRunning(runtime) {
-  return isChildProcessRunning(runtime?.process) && runtime?.stopped !== true;
+  return isChildProcessRunning(runtime?.process)
+    && runtime?.stopped !== true
+    && runtime?.stopping !== true;
 }
 
 export function getManagedRuntimeKey(agentId, sessionId = null) {

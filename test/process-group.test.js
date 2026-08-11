@@ -227,6 +227,14 @@ describe('isManagedRuntimeRunning with shared process', () => {
     });
     assert.equal(isManagedRuntimeRunning(rt), false);
   });
+
+  it('returns false while a shared session is disposing without stopping siblings', () => {
+    const rt = createRuntime({
+      processGroupKey: 'a::/proj',
+      stopping: true,
+    });
+    assert.equal(isManagedRuntimeRunning(rt), false);
+  });
 });
 
 describe('sendIPCToRuntime', () => {
