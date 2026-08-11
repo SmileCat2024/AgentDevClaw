@@ -101,13 +101,14 @@ const childEnv = { ...process.env };
 if (requestedPort !== null) childEnv.PORT = String(requestedPort);
 
 // Use npm start rather than invoking server.js directly so the package's
-// prestart lifecycle (local Feature compilation) always runs first.
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const child = spawn(npmCommand, ['start'], {
+// prestart lifecycle (local Feature compilation) always runs first. Running
+// npm's JavaScript entry point via Node works on every platform; in particular,
+// spawning npm.cmd with shell: false throws EINVAL on some Windows Node builds.
+const npmCliPath = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+const child = spawn(process.execPath, [npmCliPath, 'start'], {
   cwd: projectRoot,
   stdio: 'inherit',
   env: childEnv,
-  shell: false,
 });
 
 child.on('exit', (code) => {
