@@ -1,7 +1,7 @@
 /**
  * Generative UI Catalog 契约测试
  *
- * 验证：组件完备性（22个）、分类正确、JSON Schema 描述生成稳定、
+ * 验证：组件完备性（33个）、分类正确、JSON Schema 描述生成稳定、
  * helper 函数行为正确。
  */
 
@@ -19,19 +19,19 @@ import {
 describe('Catalog', () => {
 
   describe('组件完备性', () => {
-    it('包含全部 22 个 V1 组件', () => {
+    it('包含全部 33 个 V1 组件', () => {
       const types = getComponentTypes();
-      assert.equal(types.length, 22);
+      assert.equal(types.length, 33);
     });
 
     it('包含所有布局组件', () => {
-      for (const name of ['Stack', 'Row', 'Grid', 'Card', 'Divider']) {
+      for (const name of ['Stack', 'Row', 'Grid', 'Card', 'Divider', 'Tabs', 'Accordion', 'Carousel']) {
         assert.ok(isKnownComponent(name), `Missing layout component: ${name}`);
       }
     });
 
     it('包含所有展示组件', () => {
-      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock']) {
+      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip']) {
         assert.ok(isKnownComponent(name), `Missing display component: ${name}`);
       }
     });
@@ -47,7 +47,7 @@ describe('Catalog', () => {
     });
 
     it('不包含 V1 排除的组件', () => {
-      for (const name of ['Image', 'Markdown', 'HTML', 'Link', 'FileInput', 'PasswordInput', 'Chart', 'iframe']) {
+      for (const name of ['Markdown', 'HTML', 'FileInput', 'PasswordInput', 'Chart', 'iframe']) {
         assert.ok(!isKnownComponent(name), `Should not have component: ${name}`);
       }
     });
@@ -55,13 +55,13 @@ describe('Catalog', () => {
 
   describe('分类', () => {
     it('布局组件都是 layout 类', () => {
-      for (const name of ['Stack', 'Row', 'Grid', 'Card', 'Divider']) {
+      for (const name of ['Stack', 'Row', 'Grid', 'Card', 'Divider', 'Tabs', 'Accordion', 'Carousel']) {
         assert.equal(getComponentSchema(name)!.category, 'layout');
       }
     });
 
     it('展示组件都是 display 类', () => {
-      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock']) {
+      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip']) {
         assert.equal(getComponentSchema(name)!.category, 'display');
       }
     });
@@ -78,8 +78,8 @@ describe('Catalog', () => {
   });
 
   describe('children 能力', () => {
-    it('布局组件接受 children', () => {
-      for (const name of ['Stack', 'Row', 'Grid', 'Card']) {
+    it('容器组件接受 children', () => {
+      for (const name of ['Stack', 'Row', 'Grid', 'Card', 'Tabs', 'Accordion', 'Carousel']) {
         assert.ok(acceptsChildren(name), `${name} should accept children`);
       }
     });
@@ -89,7 +89,7 @@ describe('Catalog', () => {
     });
 
     it('展示组件不接受 children', () => {
-      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock']) {
+      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip']) {
         assert.ok(!acceptsChildren(name), `${name} should not accept children`);
       }
     });

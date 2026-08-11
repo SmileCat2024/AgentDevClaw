@@ -92,6 +92,9 @@ function rememberCurrentChoice(req, state) {
 function renderChoiceInputRequest(container, req) {
   if (_rejectedRequests.has(req.requestId)) return;
   const state = getChoiceState(req.requestId);
+  // The card is an answer to a specific runtime lease, not to whichever chat
+  // happens to be selected when its asynchronous submit finishes.
+  state.runtimeId = String(currentRuntimeAgentId || '');
   const questions = Array.isArray(req.questions) ? req.questions : [];
   if (state.collapsed) {
     container.classList.add('choice-collapsed');
@@ -240,7 +243,7 @@ window.rejectChoiceRequest = async function(requestId) {
   lastRenderedInputSignature = null;
   renderInputRequests();
   // Send interrupt in the background.
-  const targetRuntimeId = currentRuntimeAgentId;
+  const targetRuntimeId = getChoiceState(requestId).runtimeId || currentRuntimeAgentId;
   if (targetRuntimeId) {
     try {
       await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/interrupt`, {
@@ -369,7 +372,9 @@ window.confirmChoiceQuestion = async function(requestId) {
   }).join('\n');
 
   try {
-    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/input`, {
+    const targetRuntimeId = String(state.runtimeId || currentRuntimeAgentId || '').trim();
+    if (!targetRuntimeId) return;
+    const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

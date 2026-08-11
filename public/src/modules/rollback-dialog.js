@@ -103,6 +103,8 @@ window.requestRollbackEdit = async function(messageIndex) {
 function showRollbackActionDialog(request, callIndex, msg) {
   const container = document.getElementById('user-input-container');
   if (!container) return;
+  const boundRuntimeId = currentRuntimeAgentId;
+  const boundContextKey = _getSessionInputCacheKey();
 
   _rollbackDialogOpen = true;
 
@@ -169,20 +171,20 @@ function showRollbackActionDialog(request, callIndex, msg) {
     await submitInputAction(request.requestId, 'rollback_to_call', {
       callIndex,
       draftInput: msg.content,
-    });
+    }, boundRuntimeId);
   });
 
   card.querySelector('[data-mode="compact"]').addEventListener('click', async () => {
     close();
     _partialCompactInFlight = true;
-    _partialCompactRuntimeId = currentRuntimeAgentId;
-    _partialCompactContextKey = _getSessionInputCacheKey();
+    _partialCompactRuntimeId = boundRuntimeId;
+    _partialCompactContextKey = boundContextKey;
     writePartialCompactStartedAt(Date.now(), _partialCompactContextKey);
     applySessionViewPatch({ inputRequests: [] });
     lastRenderedInputSignature = '';
     renderInputRequests([]);
     await submitInputAction(request.requestId, 'compact_from_call', {
       callIndex,
-    });
+    }, boundRuntimeId);
   });
 }

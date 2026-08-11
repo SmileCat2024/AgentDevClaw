@@ -78,7 +78,7 @@ function autoResize(textarea) {
   textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
 }
 
-function handleInputKey(event, requestId) {
+function handleInputKey(event, requestId, boundRuntimeId = currentRuntimeAgentId) {
   if (event.key === 'Enter') {
     if (event.ctrlKey || event.shiftKey) {
       // Ctrl+Enter or Shift+Enter for new line
@@ -87,19 +87,21 @@ function handleInputKey(event, requestId) {
     } else {
       // Enter for submit
       event.preventDefault();
-      submitInput(requestId);
+      submitInput(requestId, boundRuntimeId);
     }
   }
 }
 
 // 提交输入
-async function submitInput(requestId) {
+async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   if (_voiceTranscribing) return;
   if (_voiceRecording) {
     _voicePendingSend = true;
     stopVoiceRecording();
     return;
   }
+  const targetRuntimeId = String(boundRuntimeId || '').trim();
+  if (!targetRuntimeId) return;
   const textarea = document.getElementById(`input-${requestId}`);
   const input = textarea ? textarea.value : '';
   const targetCacheKey = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
@@ -110,7 +112,7 @@ async function submitInput(requestId) {
   const images = typeof getPendingInputImages === 'function' ? getPendingInputImages() : [];
 
   try {
-    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/input`, {
+    const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -132,17 +134,20 @@ async function submitInput(requestId) {
         clearPendingInputImages();
       }
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
-      beginFollowLatestEntryWindow();
-      requestFollowLatest({ forceEnable: true, behavior: 'auto' });
-      // 乐观清空输入请求并立即重渲染，避免等待下一轮 poll 才归位
-      applySessionViewPatch({ inputRequests: [] });
-      lastRenderedInputSignature = '';
-      renderInputRequests([]);
+      // 输入卡绑定其渲染时的 runtime；若提交过程中切换了会话，绝不能
+      // 把旧 session 的成功结果写进新 session 的输入视图。
+      if (currentRuntimeAgentId === targetRuntimeId) {
+        beginFollowLatestEntryWindow();
+        requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+        applySessionViewPatch({ inputRequests: [] });
+        lastRenderedInputSignature = '';
+        renderInputRequests([]);
+      }
       // 乐观标记 agent 进入 calling 状态，使 action button 立即切换为 stop
-      if (currentRuntimeAgentId) {
-        clearInterruptSuppression(currentRuntimeAgentId);
-        _markAgentCallStartedForNotify(currentRuntimeAgentId);
-        _agentCallActive.set(currentRuntimeAgentId, true);
+      if (currentRuntimeAgentId === targetRuntimeId) {
+        clearInterruptSuppression(targetRuntimeId);
+        _markAgentCallStartedForNotify(targetRuntimeId);
+        _agentCallActive.set(targetRuntimeId, true);
         _syncPersistentActionButton();
         renderAgentList();
       }
@@ -342,9 +347,11 @@ window.toggleChatProcessVisibility = function() {
   });
 };
 
-async function submitInputAction(requestId, actionId, payload = {}) {
+async function submitInputAction(requestId, actionId, payload = {}, boundRuntimeId = currentRuntimeAgentId) {
   try {
-    const res = await fetch(`/api/agents/${currentRuntimeAgentId}/input`, {
+    const targetRuntimeId = String(boundRuntimeId || '').trim();
+    if (!targetRuntimeId) return;
+    const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -358,16 +365,15 @@ async function submitInputAction(requestId, actionId, payload = {}) {
       }),
     });
     if (res.ok) {
-      beginFollowLatestEntryWindow();
-      requestFollowLatest({ forceEnable: true, behavior: 'auto' });
-      // 乐观清空输入请求并立即重渲染
-      applySessionViewPatch({ inputRequests: [] });
-      lastRenderedInputSignature = '';
-      renderInputRequests([]);
-      if (currentRuntimeAgentId) {
-        clearInterruptSuppression(currentRuntimeAgentId);
-        _markAgentCallStartedForNotify(currentRuntimeAgentId);
-        _agentCallActive.set(currentRuntimeAgentId, true);
+      if (currentRuntimeAgentId === targetRuntimeId) {
+        beginFollowLatestEntryWindow();
+        requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+        applySessionViewPatch({ inputRequests: [] });
+        lastRenderedInputSignature = '';
+        renderInputRequests([]);
+        clearInterruptSuppression(targetRuntimeId);
+        _markAgentCallStartedForNotify(targetRuntimeId);
+        _agentCallActive.set(targetRuntimeId, true);
         _syncPersistentActionButton();
         renderAgentList();
       }

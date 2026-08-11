@@ -707,7 +707,7 @@ function _renderTabs(def, ctx, visited) {
     btn.addEventListener('click', () => {
       tabButtons.forEach((b, idx) => {
         b.classList.toggle('is-active', idx === i);
-        if (panels[idx]) panels[idx].style.display = idx === i ? '' : 'none';
+        if (panels[idx]) panels[idx].hidden = idx !== i;
       });
     });
     tabButtons.push(btn);
@@ -725,7 +725,7 @@ function _renderTabs(def, ctx, visited) {
     if (!childDef) continue;
     const panel = _renderElement(childIds[i], childDef, ctx, childVisited);
     panel.classList.add('gen-ui-tab-panel');
-    panel.style.display = i === activeIdx ? '' : 'none';
+    panel.hidden = i !== activeIdx;
     panels.push(panel);
     contentWrap.appendChild(panel);
   }
@@ -971,35 +971,63 @@ function _renderCarousel(def, ctx, visited) {
   el.appendChild(viewport);
 
   if (slides.length > 1) {
+    // Keep navigation outside the viewport so it never overlaps slide content.
+    const navigation = document.createElement('div');
+    navigation.className = 'gen-ui-carousel-navigation';
+    const position = document.createElement('span');
+    position.className = 'gen-ui-carousel-position';
+    position.setAttribute('aria-live', 'polite');
+
+    const controls = document.createElement('div');
+    controls.className = 'gen-ui-carousel-controls';
     const prevBtn = document.createElement('button');
     prevBtn.type = 'button';
-    prevBtn.className = 'gen-ui-carousel-btn carousel-btn-prev';
+    prevBtn.className = 'gen-ui-carousel-btn';
     prevBtn.textContent = '‹';
-    prevBtn.setAttribute('aria-label', 'Previous');
+    prevBtn.setAttribute('aria-label', 'Previous slide');
 
     const nextBtn = document.createElement('button');
     nextBtn.type = 'button';
-    nextBtn.className = 'gen-ui-carousel-btn carousel-btn-next';
+    nextBtn.className = 'gen-ui-carousel-btn';
     nextBtn.textContent = '›';
-    nextBtn.setAttribute('aria-label', 'Next');
+    nextBtn.setAttribute('aria-label', 'Next slide');
 
+    let activeIndex = 0;
+    const updateNavigation = () => {
+      position.textContent = `${activeIndex + 1} / ${slides.length}`;
+      prevBtn.disabled = !loop && activeIndex === 0;
+      nextBtn.disabled = !loop && activeIndex === slides.length - 1;
+    };
     const scroll = (dir) => {
-      const slideWidth = slides[0]?.offsetWidth || viewport.offsetWidth;
-      const current = Math.round(viewport.scrollLeft / slideWidth);
-      let next = current + dir;
+      let next = activeIndex + dir;
       if (loop) {
         if (next < 0) next = slides.length - 1;
         if (next >= slides.length) next = 0;
       } else {
         next = Math.max(0, Math.min(slides.length - 1, next));
       }
-      viewport.scrollTo({ left: next * slideWidth, behavior: 'smooth' });
+      if (next === activeIndex) return;
+      activeIndex = next;
+      const slideWidth = slides[0]?.offsetWidth || viewport.offsetWidth;
+      viewport.scrollTo({ left: activeIndex * slideWidth, behavior: 'smooth' });
+      updateNavigation();
+    };
+    const syncActiveIndex = () => {
+      const slideWidth = slides[0]?.offsetWidth || viewport.offsetWidth;
+      if (!slideWidth) return;
+      activeIndex = Math.max(0, Math.min(slides.length - 1, Math.round(viewport.scrollLeft / slideWidth)));
+      updateNavigation();
     };
 
     prevBtn.addEventListener('click', () => scroll(-1));
     nextBtn.addEventListener('click', () => scroll(1));
-    el.appendChild(prevBtn);
-    el.appendChild(nextBtn);
+    viewport.addEventListener('scroll', syncActiveIndex);
+    controls.appendChild(prevBtn);
+    controls.appendChild(nextBtn);
+    navigation.appendChild(position);
+    navigation.appendChild(controls);
+    el.appendChild(navigation);
+    updateNavigation();
   }
 
   return el;

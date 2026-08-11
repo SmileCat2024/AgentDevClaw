@@ -328,7 +328,7 @@ async function startVoiceRecording(btn) {
         } else if (targetId.startsWith('input-')) {
           const requestId = targetId.slice('input-'.length);
           if (_getSessionInputCacheKey() === _voiceCacheKey) {
-            submitInput(requestId);
+            submitInput(requestId, _voiceAgentId || currentRuntimeAgentId);
           } else {
             // Session switched — auto-submit to original agent's input request
             const originalCacheKey = _voiceCacheKey;

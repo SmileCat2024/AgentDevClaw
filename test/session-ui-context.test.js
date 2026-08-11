@@ -344,6 +344,13 @@ test('input renderer is a read-only consumer of session view state', () => {
   assert.match(renderBlock, /readCurrentSessionViewState\(\)\.inputRequests/);
 });
 
+test('request input controls keep the runtime they were rendered for', () => {
+  assert.ok(inputRenderSource.includes("submitInput('${req.requestId}', '${escapeHtml(boundRuntimeId)}')"));
+  assert.ok(inputRenderSource.includes('submitInputAction(\\\''));
+  assert.match(inputRenderSource, /visibleActions\.map[\s\S]*?escapeHtml\(boundRuntimeId\)/);
+  assert.ok(inputRenderSource.includes("handleInputKey(event, '${req.requestId}', '${escapeHtml(boundRuntimeId)}')"));
+});
+
 test('main render boundary consumes one captured session view', () => {
   const renderBlock = sourceBetween(
     uiSource,

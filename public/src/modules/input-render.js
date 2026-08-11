@@ -38,7 +38,13 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   const chatActive = isChatSurfaceActive();
   const renderMode = getInputSurfaceMode(requests);
   const signature = getInputRenderSignature(requests, renderMode);
-  const hasChoiceRequest = Array.isArray(requests) && requests.some(req => isChoiceInputRequest(req) && !isChoiceInputRejected(req.requestId));
+  // Runtime contract: one Agent instance owns at most one input lease.  Keep
+  // the renderer defensive as well, so a stale/mixed poll response can never
+  // turn into several independent answer portals for one chat surface.
+  const inputLease = Array.isArray(requests) && requests.length > 0 ? requests[0] : null;
+  const hasChoiceRequest = !!inputLease
+    && isChoiceInputRequest(inputLease)
+    && !isChoiceInputRejected(inputLease.requestId);
 
   if (signature === lastRenderedInputSignature && renderMode === lastRenderedInputMode) {
     return;
@@ -115,7 +121,7 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
 
   // 常驻输入框的显示条件一直是"当前正在查看某个 runtime 聊天面板"，
   // 而不是"runtime 此刻一定处于执行中"。
-  const hasRequests = Array.isArray(requests) && requests.length > 0;
+  const hasRequests = !!inputLease;
   const hasRuntimeSelected = !!currentRuntimeAgentId && chatActive;
 
   // 部分压缩进行中：显示压缩状态，禁止输入
@@ -171,7 +177,11 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   // 如果有 pending requests，正常渲染
   // 如果没有 pending requests 但当前有 runtime 聊天上下文，渲染常驻输入框（队列模式）
   if (renderMode === 'requests' && hasRequests) {
-    for (const req of requests) {
+    // `inputLease` is intentionally a single item.  The Worker makes this an
+    // invariant; retaining it here prevents legacy/stale payloads from
+    // violating the interaction model in the browser.
+    for (const req of [inputLease]) {
+      const boundRuntimeId = String(currentRuntimeAgentId || '');
       if (isChoiceInputRequest(req)) {
         renderChoiceInputRequest(inputContainer, req);
         continue;
@@ -184,7 +194,7 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
         : [];
       const actionsHtml = visibleActions.length > 0
         ? '<div class="user-input-actions">' + visibleActions.map(action =>
-            '<button class="user-input-action ' + escapeHtml(action.variant || 'secondary') + '" onclick="submitInputAction(\'' + req.requestId + '\', \'' + escapeHtml(action.id) + '\')">' + escapeHtml(action.label) + '</button>'
+            '<button class="user-input-action ' + escapeHtml(action.variant || 'secondary') + '" onclick="submitInputAction(\'' + req.requestId + '\', \'' + escapeHtml(action.id) + '\', {}, \'' + escapeHtml(boundRuntimeId) + '\')">' + escapeHtml(action.label) + '</button>'
           ).join('') + '</div>'
         : '';
       card.innerHTML = `
@@ -192,7 +202,7 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
         <div class="persistent-input-body">
           <div class="persistent-input-textarea-area">
             <textarea class="user-input-textarea" rows="1" id="input-${req.requestId}"
-              onkeydown="handleInputKey(event, '${req.requestId}')"
+              onkeydown="handleInputKey(event, '${req.requestId}', '${escapeHtml(boundRuntimeId)}')"
               oninput="autoResize(this); _cacheSessionInput(this)"
               onpaste="handleInputPaste(event)"
               placeholder="${escapeHtml(req.placeholder || t('input_placeholder'))}"></textarea>
@@ -217,7 +227,7 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
               <button class="voice-input-btn" data-target="input-${req.requestId}" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
                 <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
               </button>
-              <button class="persistent-action-btn" onclick="submitInput('${req.requestId}')" title="Send">
+              <button class="persistent-action-btn" onclick="submitInput('${req.requestId}', '${escapeHtml(boundRuntimeId)}')" title="Send">
                 <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
               </button>
             </div>

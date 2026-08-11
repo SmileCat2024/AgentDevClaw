@@ -560,7 +560,6 @@
         _syncQueueFromBackend();
       }
       if (typeof poll === 'function') poll();
-      _flashSubmitFeedback(surfaceId);
     } catch (e) {
       console.error('[GenUI] Submit error:', e);
       _showSubmitError(surfaceId, e?.message || String(e));
@@ -577,22 +576,6 @@
       status: 'error',
       description: message,
     });
-  }
-
-  function _flashSubmitFeedback(surfaceId) {
-    const surface = document.querySelector(`.gen-ui-surface-page[data-surface-id="${surfaceId}"]`);
-    if (!surface) return;
-    const btns = surface.querySelectorAll('.gen-ui-button');
-    for (const btn of btns) {
-      if (btn.disabled) continue;
-      const originalText = btn.textContent;
-      btn.textContent = '✓ 已提交';
-      btn.classList.add('gen-ui-submitted');
-      setTimeout(() => {
-        btn.textContent = originalText;
-        btn.classList.remove('gen-ui-submitted');
-      }, 2000);
-    }
   }
 
   function _resetAction(surfaceId) {

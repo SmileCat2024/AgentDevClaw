@@ -166,6 +166,62 @@ describe('Generative UI renderer submission values', () => {
     });
   });
 
+  it('places carousel navigation below the viewport instead of overlaying slide content', () => {
+    const dom = createDomHarness();
+    const ctx = createFrontendSandbox({ document: dom.document });
+    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+    const spec = {
+      schemaVersion: 1,
+      catalogVersion: 'v1',
+      title: 'Carousel navigation',
+      root: 'root',
+      elements: {
+        root: { type: 'Carousel', props: {}, children: ['first', 'second'] },
+        first: { type: 'Text', props: { content: 'First slide' }, children: [] },
+        second: { type: 'Text', props: { content: 'Second slide' }, children: [] },
+      },
+    };
+
+    const carousel = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const viewport = dom.findAll(carousel, '.gen-ui-carousel-viewport')[0];
+    const navigation = dom.findAll(carousel, '.gen-ui-carousel-navigation')[0];
+    const buttons = dom.findAll(carousel, '.gen-ui-carousel-btn');
+
+    assert.equal(navigation.parentNode, carousel);
+    assert.notEqual(navigation.parentNode, viewport);
+    assert.equal(dom.findAll(navigation, '.gen-ui-carousel-position')[0].textContent, '1 / 2');
+    assert.equal(buttons.length, 2);
+    assert.equal(buttons[0].disabled, true);
+    assert.equal(buttons[1].disabled, false);
+  });
+
+  it('hides inactive tab panels even when they are layout containers', () => {
+    const dom = createDomHarness();
+    const ctx = createFrontendSandbox({ document: dom.document });
+    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+    const spec = {
+      schemaVersion: 1,
+      catalogVersion: 'v1',
+      title: 'Tab visibility',
+      root: 'tabs',
+      elements: {
+        tabs: { type: 'Tabs', props: { items: [{ label: 'First', value: 'first' }, { label: 'Second', value: 'second' }] }, children: ['first', 'second'] },
+        first: { type: 'Stack', props: {}, children: ['firstText'] },
+        second: { type: 'Stack', props: {}, children: ['secondText'] },
+        firstText: { type: 'Text', props: { content: 'First content' }, children: [] },
+        secondText: { type: 'Text', props: { content: 'Second content' }, children: [] },
+      },
+    };
+
+    const tabs = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const panels = dom.findAll(tabs, '.gen-ui-tab-panel');
+    assert.equal(panels[0].hidden, false);
+    assert.equal(panels[1].hidden, true);
+    dom.findAll(tabs, '.gen-ui-tab-button')[1].dispatch('click');
+    assert.equal(panels[0].hidden, true);
+    assert.equal(panels[1].hidden, false);
+  });
+
   it('wraps rows by default and gives grids an overflow-safe column template for the narrow side panel', () => {
     const dom = createDomHarness();
     const ctx = createFrontendSandbox({ document: dom.document });
