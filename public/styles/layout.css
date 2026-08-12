@@ -1454,6 +1454,12 @@ body[data-theme="light"] .feature-detail-window::after {
     rgba(248, 249, 251, 1) 90%);
 }
 
+/* Settings overlay 自带 .settings-footer 渐变（含按钮），不需要额外的 ::after 遮罩，
+   否则 ::after（z-index:2，paint order 靠后）会盖住 footer 按钮 */
+.feature-detail-window:has(> .settings-footer)::after {
+  display: none;
+}
+
 /* ── Feature 详情弹窗内部布局 ───────────────────────────────────────────── */
 /* 复用 MCP 网关的 settings-section / settings-tab-content / gateway-detail-* 体系，
    工具卡片复用 feature-tool-card 系列，不再使用自定义 fdetail-tool-* 样式。 */
@@ -1574,18 +1580,18 @@ body[data-theme="light"] .settings-tab.active {
   height: 110px;
   background: linear-gradient(to bottom,
     transparent 0%,
-    rgba(14, 14, 17, 0.7) 30%,
-    rgba(14, 14, 17, 0.97) 55%,
-    rgba(14, 14, 17, 1) 70%);
+    rgba(14, 14, 17, 0.5) 20%,
+    rgba(14, 14, 17, 0.92) 38%,
+    rgba(14, 14, 17, 1) 50%);
   z-index: 2;
 }
 
 body[data-theme="light"] .settings-footer {
   background: linear-gradient(to bottom,
     transparent 0%,
-    rgba(238, 238, 240, 0.7) 30%,
-    rgba(238, 238, 240, 0.97) 55%,
-    rgba(238, 238, 240, 1) 70%);
+    rgba(238, 238, 240, 0.5) 20%,
+    rgba(238, 238, 240, 0.92) 38%,
+    rgba(238, 238, 240, 1) 50%);
 }
 
 .settings-section {

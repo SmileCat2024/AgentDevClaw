@@ -184,6 +184,9 @@ function renderSettingsOverlay() {
     }
   }
 
+  // 编辑具体预设时不显示文本/语音切换标签
+  var inEditMode = tabText ? (editing !== null) : (window.ClawFW._speechEditing != null);
+
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;">',
@@ -195,7 +198,7 @@ function renderSettingsOverlay() {
     '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeSettings()">×</button>',
     '</div>',
 
-    tabBar,
+    inEditMode ? '' : tabBar,
     fixedBanner ? '<div style="flex-shrink:0;">' + fixedBanner + '</div>' : '',
     '<div class="settings-tab-content">',
     scrollContent,
