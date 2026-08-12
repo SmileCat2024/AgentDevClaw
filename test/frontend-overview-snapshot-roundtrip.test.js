@@ -132,10 +132,13 @@ describe('normalizeOverviewSnapshot: agent-injected model fields', () => {
   });
 });
 
-// ── updateChatContextBar: overview vs session priority ────
+// ── updateChatContextBar: overview-only (no session fallback) ──
 
-describe('updateChatContextBar: contextLength/compressRatio priority', () => {
-  // Shared agent with session-level metadata (the old side-channel values).
+describe('updateChatContextBar: contextLength/compressRatio overview-only', () => {
+  // The context bar must read contextLength/compressRatio exclusively from
+  // the overview realtime snapshot. Session metadata is a stale side-channel
+  // (written at session creation, never updated on model hot-swap) and must
+  // NOT be consulted — even when present with plausible values.
   function makeAgent(sessionCl, sessionCr) {
     return {
       id: 'ph',
@@ -146,7 +149,7 @@ describe('updateChatContextBar: contextLength/compressRatio priority', () => {
     };
   }
 
-  it('overview values take priority over session metadata (hot-swap reflects immediately)', () => {
+  it('uses overview values directly, ignoring stale session metadata', () => {
     // Session says 128000/80 (old model), overview says 200000/70 (new model).
     const agent = makeAgent(128000, 80);
     const ctx = loadContextBar({
@@ -161,9 +164,10 @@ describe('updateChatContextBar: contextLength/compressRatio priority', () => {
     assert.equal(detail.compressRatio, 70, 'should use overview value, not session 80');
   });
 
-  it('falls back to session metadata when overview lacks values', () => {
-    // Overview has no contextLength/compressRatio (e.g. older framework version
-    // or preset without these fields). Must gracefully fall back to session.
+  it('overview without contextLength → progress bar not rendered (no session fallback)', () => {
+    // Overview has no contextLength. Session has 128000 — but that value is
+    // stale (pre-hot-swap) and must NOT be used. contextLength resolves to 0,
+    // so the bar is simply not shown.
     const agent = makeAgent(128000, 80);
     const ctx = loadContextBar({
       agent,
@@ -173,13 +177,12 @@ describe('updateChatContextBar: contextLength/compressRatio priority', () => {
     ctx.run(`updateChatContextBar()`);
     const detail = ctx.run(`window._ccbDetailData`);
 
-    assert.equal(detail.contextLength, 128000, 'should fall back to session value');
-    assert.equal(detail.compressRatio, 80, 'should fall back to session value');
+    assert.equal(detail.contextLength, 0, 'must not fall back to session 128000');
   });
 
-  it('overview with null contextLength falls back to session (not treated as valid)', () => {
+  it('null overview contextLength → 0, not session value', () => {
     // normalizeOverviewSnapshot converts missing/invalid → null.
-    // null must NOT win over session metadata.
+    // null must resolve to 0 (no bar), never to session metadata.
     const agent = makeAgent(128000, 80);
     const ctx = loadContextBar({
       agent,
@@ -189,13 +192,13 @@ describe('updateChatContextBar: contextLength/compressRatio priority', () => {
     ctx.run(`updateChatContextBar()`);
     const detail = ctx.run(`window._ccbDetailData`);
 
-    assert.equal(detail.contextLength, 128000, 'null overview → session fallback');
-    assert.equal(detail.compressRatio, 80, 'null overview → session fallback');
+    assert.equal(detail.contextLength, 0, 'null overview → 0, not session fallback');
   });
 
-  it('partial overview: contextLength present but compressRatio missing', () => {
-    // Some presets define contextLength but no compressRatio.
-    // Each field must be resolved independently.
+  it('partial overview: contextLength present, compressRatio absent → default 80', () => {
+    // compressRatio is a percentage config with a constant default of 80
+    // (same default used when creating a preset). This is a semantic default,
+    // not a stale-data fallback. contextLength comes from overview.
     const agent = makeAgent(128000, 80);
     const ctx = loadContextBar({
       agent,
@@ -205,19 +208,13 @@ describe('updateChatContextBar: contextLength/compressRatio priority', () => {
     ctx.run(`updateChatContextBar()`);
     const detail = ctx.run(`window._ccbDetailData`);
 
-    assert.equal(detail.contextLength, 200000, 'overview contextLength wins');
-    assert.equal(detail.compressRatio, 80, 'compressRatio falls back to session');
+    assert.equal(detail.contextLength, 200000, 'overview contextLength used');
+    assert.equal(detail.compressRatio, 80, 'compressRatio default 80, not session value');
   });
 
-  it('falls back to hardcoded defaults when neither overview nor session provide values', () => {
-    // No overview values, no session values, no cache → defaults 200000 / 80.
-    const agent = {
-      id: 'ph-fresh',
-      workspace_sessions: {
-        sessions: [{ id: 's1' }],  // no contextLength/compressRatio
-        activeSessionId: 's1',
-      },
-    };
+  it('session contextLength/compressRatio are never read even when overview is empty', () => {
+    // Decoy: session carries explicit values. They must be completely ignored.
+    const agent = makeAgent(999000, 99);
     const ctx = loadContextBar({
       agent,
       overview: {},
@@ -226,7 +223,8 @@ describe('updateChatContextBar: contextLength/compressRatio priority', () => {
     ctx.run(`updateChatContextBar()`);
     const detail = ctx.run(`window._ccbDetailData`);
 
-    assert.equal(detail.contextLength, 200000, 'default contextLength');
-    assert.equal(detail.compressRatio, 80, 'default compressRatio');
+    assert.equal(detail.contextLength, 0, 'session 999000 must not leak in');
+    assert.equal(detail.compressRatio, 80, 'session 99 must not leak in; default 80 used');
   });
 });
+

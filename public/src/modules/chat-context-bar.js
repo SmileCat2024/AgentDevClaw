@@ -11,7 +11,6 @@
  *   - notifyChatViewportMutation (app-ui.js 域 N)
  *   - getRuntimeAwareAgentRecord (app-ui.js 域 B)
  *   - getCurrentRuntimeRecord, getCurrentHostAgentRecord (app-main.js)
- *   - getSessionContextLength, getSessionCompressRatio, _cacheModelInfo (session-ui.js)
  *   - escapeHtml (app-ui.js 域 O)
  *   - formatRelativeTime, formatWorkspaceDate (app-core.js)
  *   - readCurrentSessionViewState (session-view-state.js)
@@ -102,15 +101,15 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
     }
   }
 
-  // context length / compressRatio: 优先使用 overview 实时数据（模型热切换后立即反映），
-  // 回退到 session 元数据 + 客户端缓存（getSessionContextLength/compressRatio）。
-  // 与上方 modelName 的取值优先级保持一致：overview 实时 > session 元数据 > 缓存默认值。
+  // contextLength / compressRatio 只走 overview 实时链路（模型热切换后立即反映）。
+  // 不回退到 session 元数据——该旁路读取的是会话创建时写入的旧值，热切换后不更新，
+  // 是历史上 context bar 显示不匹配的根源。overview 无 contextLength 时进度条不渲染。
   let contextLength = (overview.contextLength != null && overview.contextLength > 0)
     ? overview.contextLength
-    : getSessionContextLength(activeSession, agent);
+    : 0;
   let compressRatio = (overview.compressRatio != null && overview.compressRatio > 0)
     ? overview.compressRatio
-    : getSessionCompressRatio(activeSession, agent);
+    : 80;
 
   // 阈限占比：当前用量占压缩阈值的比例（而非全窗口）
   let thresholdTokens = contextLength > 0 ? Math.round(contextLength * compressRatio / 100) : 0;

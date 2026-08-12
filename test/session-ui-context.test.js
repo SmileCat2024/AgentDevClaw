@@ -389,8 +389,6 @@ test('context bar renders one supplied session view snapshot', () => {
       workspace_sessions: { sessions: [{}] },
     }),
     getCurrentRuntimeRecord: () => ({}),
-    getSessionContextLength: () => 100,
-    getSessionCompressRatio: () => 80,
     escapeHtml: (value) => String(value),
   };
   vm.createContext(context);
@@ -407,6 +405,8 @@ test('context bar renders one supplied session view snapshot', () => {
   context.__updateChatContextBar({
     overview: {
       modelName: 'snapshot-model',
+      contextLength: 100,
+      compressRatio: 80,
       usageStats: {
         lastRequestUsage: { inputTokens: 25 },
         totalUsage: { inputTokens: 40, outputTokens: 10 },
