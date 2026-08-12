@@ -102,9 +102,15 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
     }
   }
 
-  // context length
-  let contextLength = getSessionContextLength(activeSession, agent);
-  let compressRatio = getSessionCompressRatio(activeSession, agent);
+  // context length / compressRatio: 优先使用 overview 实时数据（模型热切换后立即反映），
+  // 回退到 session 元数据 + 客户端缓存（getSessionContextLength/compressRatio）。
+  // 与上方 modelName 的取值优先级保持一致：overview 实时 > session 元数据 > 缓存默认值。
+  let contextLength = (overview.contextLength != null && overview.contextLength > 0)
+    ? overview.contextLength
+    : getSessionContextLength(activeSession, agent);
+  let compressRatio = (overview.compressRatio != null && overview.compressRatio > 0)
+    ? overview.compressRatio
+    : getSessionCompressRatio(activeSession, agent);
 
   // 阈限占比：当前用量占压缩阈值的比例（而非全窗口）
   let thresholdTokens = contextLength > 0 ? Math.round(contextLength * compressRatio / 100) : 0;

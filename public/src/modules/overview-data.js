@@ -80,6 +80,8 @@ function getEmptyOverviewSnapshot() {
     modelName: '',
     presetName: '',
     thinkingEffort: null,
+    contextLength: null,
+    compressRatio: null,
   };
 }
 
@@ -140,6 +142,8 @@ function normalizeOverviewSnapshot(snapshot) {
     modelName: typeof snapshot.modelName === 'string' ? snapshot.modelName : '',
     presetName: typeof snapshot.presetName === 'string' ? snapshot.presetName : '',
     thinkingEffort: typeof snapshot.thinkingEffort === 'string' ? snapshot.thinkingEffort : null,
+    contextLength: typeof snapshot.contextLength === 'number' && snapshot.contextLength > 0 ? snapshot.contextLength : null,
+    compressRatio: typeof snapshot.compressRatio === 'number' && snapshot.compressRatio > 0 ? snapshot.compressRatio : null,
   };
 }
 
