@@ -738,9 +738,19 @@ describe('runtime-status: getCompactRuntimeLabel', () => {
     assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "completed" }, true)'), '已完成');
   });
 
-  it('callActive, toolCallCount>0, no active tools → 等待工具结果', () => {
+  it('callActive + pending tool calls in messages → 等待工具结果', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "idle", callActive: true, toolCallCount: 1, activeToolCount: 0 }, true)'), '等待工具结果');
+    ctx.run(`currentMessages = [{ role: "assistant", toolCalls: [{ id: "t1", name: "read" }] }]`);
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "awaiting_runtime", callActive: true, toolCallCount: 1, activeToolCount: 0 }, true)'), '等待工具结果');
+  });
+
+  it('callActive, toolCallCount>0 but all tool calls completed → runtime_status_waiting_model', () => {
+    const ctx = loadRuntimeStatus();
+    ctx.run(`currentMessages = [
+      { role: "assistant", toolCalls: [{ id: "t1", name: "read" }] },
+      { role: "tool", toolCallId: "t1" }
+    ]`);
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "awaiting_runtime", callActive: true, toolCallCount: 1, activeToolCount: 0 }, true)'), 'runtime_status_waiting_model');
   });
 
   it('callActive, no tools → runtime_status_waiting_model', () => {
@@ -792,6 +802,12 @@ describe('runtime-status: getRuntimeSummary', () => {
   it('callActive, no chars → runtime_status_waiting_model', () => {
     const ctx = loadRuntimeStatus();
     assert.equal(ctx.run('getRuntimeSummary({ stage: "idle", callActive: true, charCount: 0, contentChars: 0, thinkingChars: 0 }, true)'), 'runtime_status_waiting_model');
+  });
+
+  it('callActive + pending tool calls in messages → runtime_status_waiting_tool_results', () => {
+    const ctx = loadRuntimeStatus();
+    ctx.run(`currentMessages = [{ role: "assistant", toolCalls: [{ id: "t1", name: "read" }] }]`);
+    assert.equal(ctx.run('getRuntimeSummary({ stage: "awaiting_runtime", callActive: true, toolCallCount: 1, activeToolCount: 0 }, true)'), 'runtime_status_waiting_tool_results');
   });
 
   it('callActive, stale data → runtime_status_stale', () => {

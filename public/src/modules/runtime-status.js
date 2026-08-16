@@ -486,13 +486,17 @@ function getCompactRuntimeLabel(runtime, isConnected = true) {
     return currentLanguage === 'zh' ? '已完成' : 'Done';
   }
   if (runtime.callActive) {
-    if (runtime.toolCallCount > 0 || runtime.activeToolCount > 0) {
-      if (runtime.activeToolCount > 0) {
-        const toolSummary = summarizeRuntimeToolNames(runtime.activeToolNames);
-        return toolSummary
-          ? `${currentLanguage === 'zh' ? '执行工具' : 'Running Tools'} · ${toolSummary}`
-          : (currentLanguage === 'zh' ? '执行工具' : 'Running Tools');
-      }
+    // 判定与对话区指示器（buildRuntimeIndicatorContent）保持同一数据源：
+    // 只有消息视角确有未完成的 tool call 才显示"等待工具结果"。
+    // toolCallCount 是整个 call 期间的累计值（工具全部完成后也不清零），
+    // 用它判定会把"等下一轮模型响应"误显示为"等待工具结果"。
+    if (runtime.activeToolCount > 0) {
+      const toolSummary = summarizeRuntimeToolNames(runtime.activeToolNames);
+      return toolSummary
+        ? `${currentLanguage === 'zh' ? '执行工具' : 'Running Tools'} · ${toolSummary}`
+        : (currentLanguage === 'zh' ? '执行工具' : 'Running Tools');
+    }
+    if (getPendingToolCallsFromMessages().length > 0) {
       return currentLanguage === 'zh' ? '等待工具结果' : 'Waiting for Tools';
     }
     return t('runtime_status_waiting_model');
@@ -746,7 +750,9 @@ function getRuntimeSummary(runtime, isConnected = true) {
     return t('runtime_status_completed');
   }
   if (runtime.callActive) {
-    if ((runtime.toolCallCount > 0 || runtime.activeToolCount > 0) && runtime.activeToolCount === 0) {
+    // 与 getCompactRuntimeLabel / buildRuntimeIndicatorContent 相同的判定源：
+    // 消息视角确有未完成的 tool call 才算"等待工具结果"。
+    if (runtime.activeToolCount === 0 && getPendingToolCallsFromMessages().length > 0) {
       return t('runtime_status_waiting_tool_results');
     }
     if (runtime.charCount === 0 && runtime.contentChars === 0 && runtime.thinkingChars === 0) {
@@ -1180,7 +1186,9 @@ function ensureChatRuntimeIndicator() {
   let existing = chatContainer.querySelector('#' + INDICATOR_ID);
 
   // 判断是否应该显示
+  // 断连时上栏显示"已断开连接"，此处同步隐藏，避免继续展示过时的阶段文案
   const shouldShow = typeof showChatProcess !== 'undefined' && !showChatProcess
+    && currentRuntimeConnected
     && _lastRenderedNotificationRuntime
     && _lastRenderedNotificationRuntime.callActive
     && _lastRenderedNotificationRuntime.stage !== 'idle'
