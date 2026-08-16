@@ -50,6 +50,7 @@ import {
   ensureSearchIndex,
   searchInText,
   searchSessionsContent,
+  invalidateSearchIndex,
 } from './session-search-index.js';
 
 // Re-export pure functions for backward compatibility
@@ -1044,6 +1045,7 @@ async function deletePrebuiltSession(agentId, sessionId, options = {}) {
   });
 
   await fs.rm(getPrebuiltSessionFilePath(agentId, sessionId), { force: true }).catch(e => console.warn(e));
+  invalidateSearchIndex(agentId);
   // Remove from open-sessions tracker
   removeOpenSession(agentId, sessionId).catch(e => console.warn(e));
 
@@ -1249,6 +1251,9 @@ async function deletePrebuiltProject(agentId, projectId, options = {}) {
 
   for (const session of sessionsToDelete) {
     await fs.rm(getPrebuiltSessionFilePath(agentId, session.id), { force: true }).catch(e => console.warn(e));
+  }
+  if (sessionsToDelete.length > 0) {
+    invalidateSearchIndex(agentId);
   }
 
   const result = {

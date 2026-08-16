@@ -357,6 +357,19 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
       fileRanges,
     };
   } finally {
+    // Workaround for nodejs/node#56645 (Windows + Node 23+/24): closing undici
+    // keep-alive sockets BEFORE handle teardown avoids the libuv assertion
+    // "!(handle->flags & UV_HANDLE_CLOSING)" abort during dispose/exit.
+    // close() can hang forever on live SSE/keep-alive connections, so race it
+    // with a timeout and force-destroy afterwards.
+    try {
+      const { getGlobalDispatcher } = await import('undici');
+      await Promise.race([
+        getGlobalDispatcher().close(),
+        new Promise((resolve) => setTimeout(resolve, 2000)),
+      ]);
+      getGlobalDispatcher().destroy();
+    } catch {}
     if (typeof agent.dispose === 'function') {
       await agent.dispose().catch(e => console.warn(e));
     }
@@ -416,6 +429,9 @@ async function main() {
         gitMeta,
       };
       writeFileSync(resultPath, `${JSON.stringify(payload)}\n`, 'utf8');
+      // Same workaround as in runSingleAttempt: let libuv finish async handle
+      // teardown before exiting on Windows + Node 23+/24 (nodejs/node#56645).
+      await new Promise((resolve) => setTimeout(resolve, 150));
       process.exit(0);
     } catch (error) {
       lastFailure = error;

@@ -148,6 +148,16 @@ function renderFeaturePanel(options = {}) {
 }
 
 function toggleFeaturePanel(panelId) {
+  // 捕获滚动锚点：panel 开/关是一次重大宽度突变，需要在布局应用后
+  // 恢复阅读位置（跟随模式锁底 / 非跟随锚定到正在读的行）。
+  const _anchor = (typeof captureChatViewportAnchor === 'function')
+    ? captureChatViewportAnchor() : null;
+  let _suppressApplied = false;
+  if (_anchor && typeof suppressChatViewportObservers === 'function') {
+    suppressChatViewportObservers(500);
+    _suppressApplied = true;
+  }
+
   const wasOpen = activeFeaturePanel === panelId;
   const shouldDeferBody = !activeFeaturePanel && !wasOpen;
   const previousPanel = activeFeaturePanel;
@@ -177,5 +187,18 @@ function toggleFeaturePanel(panelId) {
   // 初始化钩子：threads 面板首次打开时拉取数据
   if (!wasOpen && panelId === 'threads' && window._wgThreadsInit) {
     window._wgThreadsInit();
+  }
+
+  // 面板 class 已切换（宽度变化写入样式），下一帧布局应用新宽度后恢复滚动位置。
+  if (_anchor && typeof applyChatViewportAnchor === 'function') {
+    requestAnimationFrame(() => {
+      applyChatViewportAnchor(_anchor);
+      if (_suppressApplied && typeof resumeChatViewportObservers === 'function') {
+        resumeChatViewportObservers();
+      }
+      if (_anchor.mode === 'follow' && typeof scheduleFollowLatestSettlePass === 'function') {
+        scheduleFollowLatestSettlePass();
+      }
+    });
   }
 }

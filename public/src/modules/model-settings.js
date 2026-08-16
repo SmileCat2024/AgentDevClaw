@@ -87,6 +87,7 @@ function renderSettingsOverlay() {
           '<div class="settings-preset-detail">' + escapeHtml((p.provider || '—') + ' · ' + (p.model || '—'))
             + (p.vision ? ' <span class="preset-tag preset-tag-vision">' + (isZh ? '视觉' : 'Vision') + '</span>' : '')
             + (p.authType === 'oauth-codex' ? ' <span class="preset-tag preset-tag-oauth">OAuth</span>' : '')
+            + (p.providerName === 'OpenCode Zen' || p.providerName === 'OpenCode Go' ? ' <span class="preset-tag preset-tag-opencode">' + (p.providerName === 'OpenCode Go' ? 'Go' : 'OpenCode') + '</span>' : '')
             + '</div>',
           '</div>',
           '<div class="settings-preset-actions">',
@@ -291,12 +292,20 @@ window.switchSettingsTab = function(tab) {
   renderSettingsOverlay();
 };
 
+const OPENCODE_ZEN_BASE_URL = 'https://opencode.ai/zen/v1';
+const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1';
+
 function renderSettingsEditForm(editIdx, presets, isZh) {
   const preset = presets[editIdx] || {};
+  let openCodeTier = preset.providerName === 'OpenCode Go' || preset.baseUrl === OPENCODE_GO_BASE_URL ? 'go' : 'zen';
+  let isOpenCodePreset = preset.providerName === 'OpenCode Zen' || preset.providerName === 'OpenCode Go'
+    || preset.baseUrl === OPENCODE_ZEN_BASE_URL || preset.baseUrl === OPENCODE_GO_BASE_URL;
   let dropdownVal = preset.authType === 'oauth-codex' ? 'openai-oauth'
+    : (isOpenCodePreset ? 'opencode'
     : (preset.provider === 'openai' && (preset.apiSurface || 'chat') === 'responses' ? 'openai-responses'
-    : (preset.provider || 'anthropic'));
+    : (preset.provider || 'anthropic')));
   let isOAuthMode = dropdownVal === 'openai-oauth';
+  let isOpenCodeMode = dropdownVal === 'opencode';
   return [
     '<div class="settings-section">',
 
@@ -312,6 +321,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<option value="anthropic"' + (dropdownVal === 'anthropic' ? ' selected' : '') + '>Anthropic</option>',
     '<option value="openai"' + (dropdownVal === 'openai' ? ' selected' : '') + '>OpenAI Chat</option>',
     '<option value="openai-responses"' + (dropdownVal === 'openai-responses' ? ' selected' : '') + '>OpenAI Responses</option>',
+    '<option value="opencode"' + (dropdownVal === 'opencode' ? ' selected' : '') + '>OpenCode</option>',
     '<option value="openai-oauth"' + (dropdownVal === 'openai-oauth' ? ' selected' : '') + '>' + (isZh ? 'OpenAI Auth (OAuth 设备码登录)' : 'OpenAI Auth (OAuth Device Login)') + '</option>',
     '</select>',
     '</div>',
@@ -322,7 +332,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '</div>',
     '<div class="settings-field">',
     '<label>Base URL</label>',
-    '<input class="settings-input" id="settings-preset-baseurl" type="text" value="' + escapeHtml(preset.baseUrl || (isOAuthMode ? 'https://chatgpt.com/backend-api/codex' : '')) + '" placeholder="https://open.bigmodel.cn/api/anthropic">',
+    '<input class="settings-input" id="settings-preset-baseurl" type="text" value="' + escapeHtml(preset.baseUrl || (isOAuthMode ? 'https://chatgpt.com/backend-api/codex' : (isOpenCodeMode ? (openCodeTier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL) : ''))) + '" placeholder="https://open.bigmodel.cn/api/anthropic"' + (isOpenCodeMode ? ' readonly' : '') + '>',
     '</div>',
     /* API Key section (hidden in OAuth mode) */
     '<div id="api-key-section"' + (isOAuthMode ? ' style="display:none;"' : '') + '>',
@@ -352,6 +362,29 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '</div>',
     '<div class="settings-field" id="oauth-login-area">',
     renderOAuthLoginArea(preset, isZh),
+    '</div>',
+    '</div>',
+    /* OpenCode section (visible only in OpenCode mode) */
+    '<div id="opencode-section"' + (isOpenCodeMode ? '' : ' style="display:none;"') + '>',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? 'OpenCode 服务' : 'OpenCode service') + '</label>',
+    '<select class="settings-input" data-claw-select id="settings-preset-opencode-tier" onchange="onOpenCodeTierChange()">',
+    '<option value="zen"' + (openCodeTier === 'zen' ? ' selected' : '') + '>Zen</option>',
+    '<option value="go"' + (openCodeTier === 'go' ? ' selected' : '') + '>Go</option>',
+    '</select>',
+    '</div>',
+    '<div class="settings-field">',
+    '<label>' + (isZh ? 'OpenCode 模型' : 'OpenCode model') + '</label>',
+    '<div style="display:flex;gap:6px;align-items:flex-start;">',
+    '<select class="settings-input" data-claw-select id="settings-preset-opencode-model" style="flex:1;min-width:0;" onchange="onOpenCodeModelSelect()">',
+    '<option value="">' + (isZh ? '— 点击加载模型列表 —' : '— Click Load Models —') + '</option>',
+    (preset.model ? '<option value="' + escapeHtml(preset.model) + '" selected>' + escapeHtml(preset.model) + '</option>' : ''),
+    '</select>',
+    '<button class="settings-btn settings-btn-secondary" type="button" style="flex-shrink:0;" onclick="fetchOpenCodeModels()">' + (isZh ? '加载' : 'Load') + '</button>',
+    '</div>',
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">' + (isZh
+      ? '在 OpenCode Console 创建 API Key；Go 订阅及其额度由 OpenCode 官方管理。'
+      : 'Create an API key in the OpenCode Console. OpenCode manages Go subscriptions and limits.') + '</div>',
     '</div>',
     '</div>',
 
@@ -590,16 +623,25 @@ async function saveSettingsPreset(idx) {
   }
   const protocolRaw = (el('settings-preset-provider')?.value || 'anthropic').trim();
   const isOAuth = protocolRaw === 'openai-oauth';
+  const isOpenCode = protocolRaw === 'opencode';
   const clientIdRaw = el('settings-preset-clientid')?.value?.trim() || '';
+  const openCodeTier = el('settings-preset-opencode-tier')?.value === 'go' ? 'go' : 'zen';
+  // In OpenCode mode, the model may come from its catalogue or the text input.
+  const openCodeModelVal = (el('settings-preset-opencode-model')?.value || '').trim();
+  const textModelVal = (el('settings-preset-model')?.value || '').trim();
+  const modelVal = isOpenCode ? (openCodeModelVal || textModelVal) : textModelVal;
+  const openCodeResolved = isOpenCode ? resolveOpenCodeProtocolClient(modelVal) : null;
   const preset = {
     name: (el('settings-preset-name')?.value || '').trim(),
-    providerName: presets[idx]?.providerName || '',
-    provider: isOAuth ? 'openai' : protocolRaw.replace(/^openai-responses$/, 'openai'),
-    apiSurface: (protocolRaw === 'openai-responses' || isOAuth) ? 'responses' : 'chat',
+    providerName: isOpenCode ? (openCodeTier === 'go' ? 'OpenCode Go' : 'OpenCode Zen') : (presets[idx]?.providerName || ''),
+    provider: isOAuth ? 'openai' : (isOpenCode ? openCodeResolved.protocol : protocolRaw.replace(/^openai-(responses|zen)$/, 'openai')),
+    apiSurface: isOAuth ? 'responses' : (isOpenCode ? openCodeResolved.apiSurface : (protocolRaw === 'openai-responses' ? 'responses' : 'chat')),
     authType: isOAuth ? 'oauth-codex' : '',
     clientId: isOAuth ? clientIdRaw : '',
-    model: (el('settings-preset-model')?.value || '').trim(),
-    baseUrl: (el('settings-preset-baseurl')?.value || '').trim(),
+    model: modelVal,
+    baseUrl: isOpenCode
+      ? (openCodeTier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL)
+      : (el('settings-preset-baseurl')?.value || '').trim(),
     apiKey: isOAuth ? '' : (el('settings-preset-apikey')?.value || '').trim(),
     thinkingEffort: thinkingEffort,
     thinkingBudgetTokens: thinkingBudgetTokens,
@@ -763,6 +805,7 @@ window.onProtocolChange = function() {
   let val = select.value;
   let apiKeySection = document.getElementById('api-key-section');
   let oauthSection = document.getElementById('oauth-section');
+  let openCodeSection = document.getElementById('opencode-section');
   let baseUrlInput = document.getElementById('settings-preset-baseurl');
   let isZh = currentLanguage === 'zh';
 
@@ -771,6 +814,7 @@ window.onProtocolChange = function() {
   if (val === 'openai-oauth') {
     if (apiKeySection) apiKeySection.style.display = 'none';
     if (oauthSection) oauthSection.style.display = '';
+    if (openCodeSection) openCodeSection.style.display = 'none';
     // Auto-fill Codex base URL if empty or still default anthropic placeholder
     if (baseUrlInput && (!baseUrlInput.value || baseUrlInput.value.indexOf('bigmodel') >= 0)) {
       baseUrlInput.value = 'https://chatgpt.com/backend-api/codex';
@@ -782,11 +826,24 @@ window.onProtocolChange = function() {
     checkOAuthProxy(isZh);
     // Load OAuth status
     refreshOAuthStatus();
+  } else if (val === 'opencode') {
+    if (apiKeySection) apiKeySection.style.display = '';
+    if (oauthSection) oauthSection.style.display = 'none';
+    if (openCodeSection) openCodeSection.style.display = '';
+    if (baseUrlInput) {
+      const tier = document.getElementById('settings-preset-opencode-tier')?.value;
+      baseUrlInput.value = tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL;
+    }
   } else {
     if (apiKeySection) apiKeySection.style.display = '';
     if (oauthSection) oauthSection.style.display = 'none';
+    if (openCodeSection) openCodeSection.style.display = 'none';
     // Clear Codex base URL if it was auto-filled
     if (baseUrlInput && baseUrlInput.value === 'https://chatgpt.com/backend-api/codex') {
+      baseUrlInput.value = '';
+    }
+    // Clear an OpenCode gateway URL if it was auto-filled.
+    if (baseUrlInput && (baseUrlInput.value === OPENCODE_ZEN_BASE_URL || baseUrlInput.value === OPENCODE_GO_BASE_URL)) {
       baseUrlInput.value = '';
     }
   }
@@ -798,6 +855,94 @@ function getEditingProviderName() {
   let presets = window.ClawFW.settingsData?.presets || [];
   return presets[editing]?.providerName || '';
 }
+
+// ── OpenCode model helpers ─────────────────────────────────────
+
+/**
+ * Client-side mirror of server/zen-helpers.js resolveZenModelProtocol.
+ * Zen and Go expose the same protocol surfaces.
+ */
+function resolveOpenCodeProtocolClient(modelId) {
+  var id = (typeof modelId === 'string' ? modelId : '').trim().toLowerCase();
+  if (!id) return { protocol: 'openai', apiSurface: 'chat' };
+  if (id.startsWith('gpt-') || id.startsWith('grok-')) return { protocol: 'openai', apiSurface: 'responses' };
+  if (id.startsWith('claude-')) return { protocol: 'anthropic', apiSurface: 'chat' };
+  return { protocol: 'openai', apiSurface: 'chat' };
+}
+
+window._openCodeModelsCache = null;
+
+window.onOpenCodeTierChange = function() {
+  var tier = document.getElementById('settings-preset-opencode-tier')?.value;
+  var baseUrlInput = document.getElementById('settings-preset-baseurl');
+  if (baseUrlInput) baseUrlInput.value = tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL;
+  var select = document.getElementById('settings-preset-opencode-model');
+  if (select) select.innerHTML = '<option value="">' + (currentLanguage === 'zh' ? '— 点击加载模型列表 —' : '— Click Load Models —') + '</option>';
+};
+
+window.fetchOpenCodeModels = function() {
+  var apiKeyInput = document.getElementById('settings-preset-apikey');
+  var apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+  var tier = document.getElementById('settings-preset-opencode-tier')?.value === 'go' ? 'go' : 'zen';
+  var isZh = currentLanguage === 'zh';
+  var select = document.getElementById('settings-preset-opencode-model');
+  if (!select) return;
+  if (!apiKey) {
+    select.innerHTML = '<option value="">' + (isZh ? '请先输入 API Key' : 'Enter API Key first') + '</option>';
+    return;
+  }
+  select.innerHTML = '<option value="">' + (isZh ? '加载中...' : 'Loading...') + '</option>';
+  select.disabled = true;
+  fetch('/protoclaw/opencode/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey: apiKey, tier: tier }),
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      select.disabled = false;
+      if (data.error) {
+        select.innerHTML = '<option value="">' + escapeHtml(isZh ? '加载失败: ' + data.error : 'Failed: ' + data.error) + '</option>';
+        return;
+      }
+      var models = Array.isArray(data.models) ? data.models : [];
+      if (!models.length) {
+        select.innerHTML = '<option value="">' + (isZh ? '无可用模型' : 'No models available') + '</option>';
+        return;
+      }
+      var currentModel = document.getElementById('settings-preset-model');
+      var currentVal = currentModel ? currentModel.value.trim() : '';
+      var html = '<option value="">' + (isZh ? '— 选择模型 —' : '— Select model —') + '</option>';
+      for (var i = 0; i < models.length; i++) {
+        var m = models[i];
+        var sel = (m.id === currentVal) ? ' selected' : '';
+        html += '<option value="' + escapeHtml(m.id) + '"' + sel + '>'
+          + escapeHtml(m.id)
+          + ' (' + m.protocol + (m.apiSurface ? '/' + m.apiSurface : '') + ')'
+          + '</option>';
+      }
+      select.innerHTML = html;
+      window._openCodeModelsCache = models;
+    })
+    .catch(function() {
+      select.disabled = false;
+      select.innerHTML = '<option value="">' + escapeHtml(isZh ? '网络错误' : 'Network error') + '</option>';
+    });
+};
+
+window.onOpenCodeModelSelect = function() {
+  var select = document.getElementById('settings-preset-opencode-model');
+  if (!select) return;
+  var modelId = select.value;
+  if (!modelId) return;
+  var modelInput = document.getElementById('settings-preset-model');
+  if (modelInput) modelInput.value = modelId;
+  var nameInput = document.getElementById('settings-preset-name');
+  if (nameInput && !nameInput.value.trim()) {
+    var tier = document.getElementById('settings-preset-opencode-tier')?.value === 'go' ? 'Go' : 'Zen';
+    nameInput.value = 'OpenCode ' + tier + ' ' + modelId;
+  }
+};
 
 window.startOAuthLogin = function() {
   let providerName = getEditingProviderName();

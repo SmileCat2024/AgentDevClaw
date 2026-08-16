@@ -112,11 +112,41 @@ export function createCallEnvelope(params = {}) {
  */
 const runtimeInboxes = new Map();
 const envelopeRegistry = new Map();
+const TERMINAL_ENVELOPE_RETENTION_MS = 5 * 60 * 1000;
+const MAX_RETAINED_TERMINAL_ENVELOPES = 500;
 const TERMINAL_ENVELOPE_STATUSES = new Set([
   EnvelopeStatus.COMPLETED,
   EnvelopeStatus.FAILED,
   EnvelopeStatus.CANCELLED,
 ]);
+
+/**
+ * Keep terminal envelopes briefly for the read-only diagnostics endpoints,
+ * then release their potentially large text/result/error payloads. Pending and
+ * active envelopes are never removed by this sweep.
+ */
+export function pruneTerminalEnvelopes(now = Date.now()) {
+  const retained = [];
+  for (const [id, envelope] of envelopeRegistry) {
+    if (!TERMINAL_ENVELOPE_STATUSES.has(envelope.status)) continue;
+    const terminalAt = Number(envelope.terminalAt) || Number(envelope.createdAt) || now;
+    if (now - terminalAt >= TERMINAL_ENVELOPE_RETENTION_MS) {
+      envelopeRegistry.delete(id);
+    } else {
+      retained.push([id, terminalAt]);
+    }
+  }
+
+  if (retained.length > MAX_RETAINED_TERMINAL_ENVELOPES) {
+    retained.sort((left, right) => left[1] - right[1]);
+    for (const [id] of retained.slice(0, retained.length - MAX_RETAINED_TERMINAL_ENVELOPES)) {
+      envelopeRegistry.delete(id);
+    }
+  }
+}
+
+const terminalEnvelopeSweep = setInterval(() => pruneTerminalEnvelopes(), TERMINAL_ENVELOPE_RETENTION_MS);
+terminalEnvelopeSweep.unref?.();
 
 /**
  * Ensure an inbox exists for the given runtimeKey.
@@ -227,7 +257,12 @@ export function getRuntimeInboxSnapshot(runtimeKey) {
 export function updateEnvelopeStatus(envelopeId, update = {}) {
   const registered = envelopeRegistry.get(envelopeId) || null;
   if (registered) {
-    if (update.status) registered.status = update.status;
+    if (update.status) {
+      registered.status = update.status;
+      if (TERMINAL_ENVELOPE_STATUSES.has(update.status)) {
+        registered.terminalAt = Date.now();
+      }
+    }
     if (update.result !== undefined) registered.result = update.result;
     if (update.error !== undefined) registered.error = update.error;
   }
@@ -326,6 +361,21 @@ export function refreshRuntimeExecutionState(runtimeKey) {
  */
 export function listRuntimeExecutionStates() {
   return Array.from(runtimeExecutionStates.values());
+}
+
+/**
+ * Release all transient inbox, execution and envelope state for a stopped
+ * runtime. Runtime identifiers are unique per session, including sessions
+ * hosted by a shared child process.
+ */
+export function releaseRuntimeState(runtimeKey) {
+  runtimeInboxes.delete(runtimeKey);
+  runtimeExecutionStates.delete(runtimeKey);
+  for (const [id, envelope] of envelopeRegistry) {
+    if (envelope.runtimeKey === runtimeKey) {
+      envelopeRegistry.delete(id);
+    }
+  }
 }
 
 // ── Lookup helpers ─────────────────────────────────────────────

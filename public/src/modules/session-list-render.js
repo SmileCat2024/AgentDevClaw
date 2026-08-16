@@ -362,9 +362,6 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
    const newChatAction = escapeHtml(JSON.stringify({
      type: 'create_session',
      openDirectory: currentProject?.openDirectory || '',
-     processModeOverride: agent?.processMode === 'shared-by-project'
-       ? (() => { try { return localStorage.getItem('ph_process_mode_' + (currentProject?.openDirectory || '_default')) || 'shared-by-project'; } catch { return 'shared-by-project'; } })()
-       : undefined,
    }));
 
    const headerBar = [
@@ -430,7 +427,6 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       renderSessionTodoBadge(session),
       renderSessionArchivedBadge(session),
       renderSessionTitleAiButton(session),
-      (agent?.processMode === 'shared-by-project' && session.metadata?.processModeOverride ? '<span class="session-process-badge ' + (session.metadata.processModeOverride === 'isolated' ? 'isolated' : 'shared') + '" title="' + escapeHtml(isZh ? '进程模式' : 'Process mode') + '">' + escapeHtml(isZh ? (session.metadata.processModeOverride === 'isolated' ? '独立' : '共享') : (session.metadata.processModeOverride === 'isolated' ? 'ISO' : 'SHR')) + '</span>' : ''),
       '</div>',
       '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + ' · ' + escapeHtml(String(session.messageCount ?? 0)) + ' ' + escapeHtml(isZh ? '条消息' : 'messages') + '</div>',
       sType !== 'exploration' && session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',

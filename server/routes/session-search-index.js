@@ -20,10 +20,85 @@ import {
 } from '../shared/session-access.js';
 
 // In-memory cache: agentId → Map<sessionId, { sessionId, title, openDirectory, fileMtimeMs, text }>
-const _searchIndexCache = new Map();
+//
+// The persistent index is the durable source; this cache is only an acceleration
+// layer. Keep it bounded so searching across many agents cannot retain every
+// session transcript in the server heap for the lifetime of the process.
+const SEARCH_INDEX_MEMORY_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+
+export function createSearchIndexMemoryCache(maxBytes = SEARCH_INDEX_MEMORY_CACHE_MAX_BYTES) {
+  const entriesByAgent = new Map();
+  let totalBytes = 0;
+
+  return {
+    get(agentId) {
+      const cached = entriesByAgent.get(agentId);
+      if (!cached) return null;
+      // Map insertion order is the LRU order.
+      entriesByAgent.delete(agentId);
+      entriesByAgent.set(agentId, cached);
+      return cached.entries;
+    },
+    set(agentId, entries, byteSize) {
+      const size = Math.max(0, Number(byteSize) || 0);
+      const previous = entriesByAgent.get(agentId);
+      if (previous) {
+        totalBytes -= previous.byteSize;
+        entriesByAgent.delete(agentId);
+      }
+
+      // A single oversized index remains searchable for the current request,
+      // but is not retained in memory. Its persistent copy is reused later.
+      if (size > maxBytes) return;
+
+      while (totalBytes + size > maxBytes && entriesByAgent.size > 0) {
+        const oldestAgentId = entriesByAgent.keys().next().value;
+        const oldest = entriesByAgent.get(oldestAgentId);
+        entriesByAgent.delete(oldestAgentId);
+        totalBytes -= oldest.byteSize;
+      }
+      entriesByAgent.set(agentId, { entries, byteSize: size });
+      totalBytes += size;
+    },
+    delete(agentId) {
+      const cached = entriesByAgent.get(agentId);
+      if (!cached) return false;
+      entriesByAgent.delete(agentId);
+      totalBytes -= cached.byteSize;
+      return true;
+    },
+    clear() {
+      entriesByAgent.clear();
+      totalBytes = 0;
+    },
+    getStats() {
+      return { size: entriesByAgent.size, totalBytes };
+    },
+  };
+}
+
+const _searchIndexCache = createSearchIndexMemoryCache();
 const _searchIndexBuilding = new Map();
 const SEARCH_INDEX_VERSION = 1;
 const SEARCH_SNIPPET_RADIUS = 40;
+
+function estimateSearchIndexBytes(entries) {
+  let chars = 0;
+  for (const entry of entries.values()) {
+    chars += String(entry.sessionId || '').length;
+    chars += String(entry.title || '').length;
+    chars += String(entry.openDirectory || '').length;
+    chars += String(entry.sessionType || '').length;
+    chars += String(entry.text || '').length;
+  }
+  // JavaScript strings use up to two bytes per UTF-16 code unit. The fixed
+  // allowance covers entry/Map metadata without pretending to be exact.
+  return chars * 2 + entries.size * 128;
+}
+
+export function invalidateSearchIndex(agentId) {
+  _searchIndexCache.delete(agentId);
+}
 
 export function getSearchIndexPath(agentId) {
   return path.join(getPrebuiltAgentSessionDir(agentId), 'search-index.json');
@@ -73,8 +148,11 @@ export async function ensureSearchIndex(agentId) {
     const memCache = _searchIndexCache.get(agentId);
     const persistent = memCache ? null : await loadPersistentSearchIndex(agentId);
 
-    // Source of truth for valid entries: index.json session IDs
+    // Source of truth for valid entries: index.json session IDs. Persisted
+    // entries for deleted sessions are pruned on the next search rebuild.
     const validIds = new Set(index.sessions.map(s => s.id));
+    const hasStalePersistentEntries = !!persistent
+      && Object.keys(persistent).some((sessionId) => !validIds.has(sessionId));
 
     // Build entries map: start from existing cache (in-memory or persistent)
     const entries = new Map();
@@ -127,8 +205,10 @@ export async function ensureSearchIndex(agentId) {
       }
     }
 
-    // Persist updated index (only if we actually read files)
-    if (toRead.length > 0) {
+    // Persist newly read entries and prune deleted entries from the durable
+    // index. Without the latter, removed session transcripts accumulate on disk
+    // and return to memory after an LRU eviction.
+    if (toRead.length > 0 || hasStalePersistentEntries) {
       const persistData = {};
       for (const [id, entry] of entries) {
         persistData[id] = {
@@ -144,8 +224,9 @@ export async function ensureSearchIndex(agentId) {
       await savePersistentSearchIndex(agentId, persistData);
     }
 
-    // Cache in memory
-    _searchIndexCache.set(agentId, entries);
+    // Cache in memory under a process-wide LRU budget. The persistent index
+    // remains available if this agent's entries are evicted.
+    _searchIndexCache.set(agentId, entries, estimateSearchIndexBytes(entries));
     return entries;
   })();
 
@@ -183,7 +264,7 @@ export async function searchSessionsContent(agentId, query, openDirectory) {
     ? String(openDirectory).replace(/\\/g, '/').toLowerCase()
     : null;
 
-  for (const [sessionId, entry] of entries) {
+  for (const [, entry] of entries) {
     // Filter by openDirectory
     if (normalizedDir) {
       const entryDir = String(entry.openDirectory || '').replace(/\\/g, '/').toLowerCase();

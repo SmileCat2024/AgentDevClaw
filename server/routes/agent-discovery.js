@@ -10,6 +10,9 @@ import { readSessionIndex } from '../shared/session-access.js';
 import { resolveWorkspaceData, readWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig, getPortalAgentDisplayName } from './im.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
+import { resolveAgentProcessMode } from '../shared/process-mode.js';
+
+export { resolveAgentProcessMode } from '../shared/process-mode.js';
 
 // ── Identity Registry (pure function, exported for testing) ────────
 
@@ -92,15 +95,26 @@ export function createAgentDiscoveryModule(ctx) {
     });
   }
 
+  async function readAgentUserConfig(agentId) {
+    const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
+    return await readJsonSafe(userConfigPath, null);
+  }
+
   async function getAgentsLight() {
     const agents = await discoverAgents(AGENTS_ROOT);
     const visibleAgents = agents.filter((agent) => !HIDDEN_PREBUILT_AGENT_IDS.has(sanitizeSessionFragment(agent.id)));
-    return visibleAgents.map((agent) => ({ ...agent, status: buildStatus(agent.id) }));
+    return Promise.all(visibleAgents.map(async (agent) => {
+      const userConfig = await readAgentUserConfig(agent.id);
+      return {
+        ...agent,
+        processMode: resolveAgentProcessMode(agent.id, userConfig?.processMode, agent.processMode),
+        status: buildStatus(agent.id),
+      };
+    }));
   }
 
   async function resolveAgentModelPresets(agentId, metaPresets = null) {
-    const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
-    const userConfig = await readJsonSafe(userConfigPath, null);
+    const userConfig = await readAgentUserConfig(agentId);
     const userPresets = userConfig?.modelPresets || null;
     if (!userPresets) return metaPresets || null;
     return {

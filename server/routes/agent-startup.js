@@ -23,6 +23,13 @@ import {
 } from '../shared/session-access.js';
 import { notifyRuntimeReady } from '../shared/runtime-hooks.js';
 import {
+  PROCESS_MODE_ISOLATED,
+  PROCESS_MODE_SHARED_BY_PROJECT,
+  PROCESS_MODE_SHARED_GLOBAL,
+  GLOBAL_SHARED_AGENT_ID,
+} from '../shared/process-mode.js';
+import { releaseRuntimeState } from '../runtime-call-envelope.js';
+import {
   ensureAssemblyWorkspaceBase, ensureAssemblyWorkspaceDependencies,
 } from './assembly-helpers.js';
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
@@ -33,6 +40,66 @@ import { addOpenSession } from '../shared/open-sessions-tracker.js';
 export const DEFAULT_UDS_PATH = process.platform === 'win32'
   ? '\\\\.\\pipe\\agentdev-viewer'
   : '/tmp/agentdev-viewer.sock';
+
+/**
+ * Resolve process placement without deriving a session workspace from the
+ * process host. Shared-global is deliberately restricted to programming-helper
+ * and still requires the session's explicit project directory: every hosted
+ * Agent must receive its own workspaceCwd through add-session.
+ */
+export function buildSessionWorkspaceEnv(agentId, sessionId, projectDir) {
+  if (sanitizeSessionFragment(agentId) !== GLOBAL_SHARED_AGENT_ID || !sessionId) return {};
+  const workspaceCwd = typeof projectDir === 'string' ? projectDir.trim() : '';
+  if (!workspaceCwd) {
+    throw new Error('Programming Helper sessions require an explicit session project directory');
+  }
+  return { PROTOCLAW_SESSION_WORKSPACE_CWD: workspaceCwd };
+}
+
+export function buildSharedSessionStartMessage({ sessionId, agentName, projectDir, handoffPath, runtime }) {
+  const workspaceCwd = typeof projectDir === 'string' ? projectDir.trim() : '';
+  if (!workspaceCwd) {
+    throw new Error('Shared sessions require an explicit session project directory');
+  }
+  return {
+    type: 'add-session',
+    sessionId,
+    agentName,
+    // Never substitute the host process cwd here. The SessionLifecycle must
+    // receive the exact directory owned by this logical session.
+    workspaceCwd,
+    handoffPath: handoffPath || null,
+    runtime: {
+      sessionType: runtime?.sessionType || null,
+      gcChatId: runtime?.gcChatId || null,
+      modelPresetRole: runtime?.modelPresetRole || null,
+    },
+  };
+}
+
+export function resolveManagedProcessPlacement(agent, sessionRecord, isExplorationSession = false) {
+  const agentId = sanitizeSessionFragment(agent?.id);
+  const projectDir = typeof sessionRecord?.openDirectory === 'string'
+    ? sessionRecord.openDirectory.trim()
+    : '';
+  const processMode = agent?.processMode || PROCESS_MODE_ISOLATED;
+
+  if (isExplorationSession || !projectDir) {
+    return { processMode, projectDir, processGroupKey: null };
+  }
+  if (processMode !== PROCESS_MODE_SHARED_BY_PROJECT && processMode !== PROCESS_MODE_SHARED_GLOBAL) {
+    return { processMode, projectDir, processGroupKey: null };
+  }
+  if (processMode === PROCESS_MODE_SHARED_GLOBAL && agentId !== GLOBAL_SHARED_AGENT_ID) {
+    return { processMode: PROCESS_MODE_ISOLATED, projectDir, processGroupKey: null };
+  }
+
+  return {
+    processMode,
+    projectDir,
+    processGroupKey: computeProcessGroupKey(agentId, projectDir, processMode),
+  };
+}
 
 // ── Agent Startup ────────────────────────────────────────────────
 // Factory that produces all process-spawning and runtime-readiness
@@ -182,30 +249,26 @@ export function createAgentStartupFns(deps) {
     const isExplorationSession = runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE === 'exploration';
 
     // ── Shared-process decision ──────────────────────────────
-    // When agent declares processMode=shared-by-project, check if there's
-    // already a running process for the same (agentId, projectDir) group.
-    // If so, send IPC add-session instead of spawning a new process.
-    let processMode = agent.processMode || 'isolated';
+    // `shared-by-project` groups sessions by project path; `shared-global`
+    // groups programming-helper sessions across projects. Both modes retain
+    // the target session's projectDir and pass it as workspaceCwd below.
+    let processMode = agent.processMode || PROCESS_MODE_ISOLATED;
     let processGroupKey = null;
     let projectDir = '';
     if (resolvedSessionId) {
       try {
         const idx = await readSessionIndex(agent.id);
         const sessionRecord = (idx?.sessions || []).find(s => s.id === resolvedSessionId);
-        const sessionOverride = sessionRecord?.metadata?.processModeOverride;
-        if (sessionOverride === 'isolated' || sessionOverride === 'shared-by-project') {
-          processMode = sessionOverride;
-        }
-        projectDir = sessionRecord?.openDirectory || '';
+        const placement = resolveManagedProcessPlacement(agent, sessionRecord, isExplorationSession);
+        processMode = placement.processMode;
+        projectDir = placement.projectDir;
+        processGroupKey = placement.processGroupKey;
       } catch {
         // Session index unreadable — retain the agent-level default.
       }
     }
-    if (processMode === 'shared-by-project' && !isExplorationSession && resolvedSessionId) {
-      processGroupKey = computeProcessGroupKey(agent.id, projectDir);
-
-      if (processGroupKey) {
-        const existingShared = findSharedProcessRuntime(processGroupKey);
+    if (processGroupKey && !isExplorationSession && resolvedSessionId) {
+      const existingShared = findSharedProcessRuntime(processGroupKey);
         if (existingShared) {
           // ── Join existing shared process via IPC ──
           const sharedRuntime = {
@@ -247,18 +310,17 @@ export function createAgentStartupFns(deps) {
             };
             existingShared.process.on('message', handler);
 
-            existingShared.process.send({
-              type: 'add-session',
+            existingShared.process.send(buildSharedSessionStartMessage({
               sessionId: resolvedSessionId,
               agentName: runtimeDisplayName,
-              workspaceCwd: projectDir || null,
-              handoffPath: runtimeOptions?.extraEnv?.PROTOCLAW_HANDOFF_PATH || null,
+              projectDir,
+              handoffPath: runtimeOptions?.extraEnv?.PROTOCLAW_HANDOFF_PATH,
               runtime: {
-                sessionType: runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE || null,
-                gcChatId: runtimeOptions?.extraEnv?.PROTOCLAW_GC_CHAT_ID || null,
-                modelPresetRole: runtimeOptions?.extraEnv?.PROTOCLAW_MODEL_PRESET_ROLE || null,
+                sessionType: runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE,
+                gcChatId: runtimeOptions?.extraEnv?.PROTOCLAW_GC_CHAT_ID,
+                modelPresetRole: runtimeOptions?.extraEnv?.PROTOCLAW_MODEL_PRESET_ROLE,
               },
-            });
+            }));
           }).catch(err => {
             managedAgents.delete(sharedRuntime.key);
             throw err;
@@ -271,7 +333,6 @@ export function createAgentStartupFns(deps) {
             addOpenSession(agent.id, resolvedSessionId).catch(e => console.warn(e));
           }
           return buildStatus(agent.id, resolvedSessionId);
-        }
       }
     }
     const child = spawn(process.execPath, [RUNTIME_SCRIPT, agent.relativeDir, agent.id, runtimeDisplayName, resolvedSessionId || NO_SESSION_TOKEN], {
@@ -288,6 +349,7 @@ export function createAgentStartupFns(deps) {
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
         PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
         ...(runtimeOptions?.extraEnv && typeof runtimeOptions.extraEnv === 'object' ? runtimeOptions.extraEnv : {}),
+        ...buildSessionWorkspaceEnv(agent.id, resolvedSessionId, projectDir),
       }),
       windowsHide: true,
     });
@@ -339,6 +401,7 @@ export function createAgentStartupFns(deps) {
         rt.exitCode = code;
         rt.signalCode = signal || child.signalCode || null;
         rt.stopped = true;
+        releaseRuntimeState(rt.key);
       }
       log(agent.id, `process exited with code ${code ?? 'null'} signal ${signal || child.signalCode || 'none'}`);
 
@@ -360,6 +423,7 @@ export function createAgentStartupFns(deps) {
       if (current) {
         current.exitCode = 1;
         current.stopped = true;
+        releaseRuntimeState(current.key);
       }
       log(agent.id, `failed to start: ${error.message}`, 'error');
     });

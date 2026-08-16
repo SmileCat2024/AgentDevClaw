@@ -1,5 +1,6 @@
 import { sanitizeSessionFragment } from './string-helpers.js';
 import { NO_SESSION_TOKEN, ASSEMBLY_EXIT_WAIT_MS } from './constants.js';
+import { PROCESS_MODE_SHARED_BY_PROJECT, PROCESS_MODE_SHARED_GLOBAL } from './process-mode.js';
 import { normalize, resolve } from 'path';
 
 export const managedAgents = new Map();
@@ -102,19 +103,30 @@ export function buildStatus(agentId, sessionId = undefined) {
 
 /**
  * Compute a process group key for shared-process mode.
- * Returns null when projectDir is empty (no sharing possible).
+ *
+ * `shared-global` intentionally ignores the project path, but callers must
+ * still require a session-owned project directory before selecting it. That
+ * preserves the runtime invariant that every hosted programming session has
+ * an explicit workspaceCwd rather than falling back to the host process CWD.
  *
  * @param {string} agentId - Prebuilt agent id (e.g. 'programming-helper')
  * @param {string|null|undefined} projectDir - Absolute project directory path
+ * @param {'shared-by-project'|'shared-global'} [processMode='shared-by-project']
  * @returns {string|null} Group key or null
  */
-export function computeProcessGroupKey(agentId, projectDir) {
+export function computeProcessGroupKey(agentId, projectDir, processMode = PROCESS_MODE_SHARED_BY_PROJECT) {
   if (!projectDir || typeof projectDir !== 'string') return null;
   const trimmed = projectDir.trim();
   if (!trimmed) return null;
+
+  const normalizedAgentId = sanitizeSessionFragment(agentId);
+  if (processMode === PROCESS_MODE_SHARED_GLOBAL) {
+    return `${normalizedAgentId}::__global__`;
+  }
+
   const canonical = normalize(resolve(trimmed)).replace(/\\/g, '/');
   const normalized = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
-  return `${sanitizeSessionFragment(agentId)}::${normalized}`;
+  return `${normalizedAgentId}::${normalized}`;
 }
 
 /**

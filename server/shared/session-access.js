@@ -259,7 +259,6 @@ export function normalizeSessionMetadata(raw = {}) {
     handoffPath: cleanSessionText(raw.handoffPath),
     handoffCreatedAt: cleanSessionText(raw.handoffCreatedAt),
     handoffSummaryKind: cleanSessionText(raw.handoffSummaryKind),
-    processModeOverride: cleanSessionText(raw.processModeOverride),
   };
 
   return Object.fromEntries(

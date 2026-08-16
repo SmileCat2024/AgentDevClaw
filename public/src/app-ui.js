@@ -1668,11 +1668,32 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
 
   event.preventDefault();
 
+  // ── 拖动期间滚动位置保持 ──
+  // 宽度变化时用行级锚定保持阅读位置（跟随模式锁底），实现见 chat-viewport.js。
+  // 时序关键：mousemove 只记录目标 clientX；改宽度样式 → forced layout 读
+  // offsetTop → 设 scrollTop 收敛进同一个 rAF 回调，paint 时布局与滚动一致。
+  // 拖动期间抑制 viewport observers，防止 settlement 的 preserveTop 与锚定打架。
+  const _anchor = (typeof captureChatViewportAnchor === 'function')
+    ? captureChatViewportAnchor() : null;
+  let _suppressApplied = false;
+  if (_anchor && typeof suppressChatViewportObservers === 'function') {
+    suppressChatViewportObservers(120000);
+    _suppressApplied = true;
+  }
+
   let shouldCollapse = false;
   let inCollapseZone = false;
+  let _pendingClientX = null;
+  let _dragRaf = 0;
 
-  const handleMouseMove = (moveEvent) => {
-    const nextWidth = window.innerWidth - moveEvent.clientX - 56;
+  const _dragFrame = () => {
+    _dragRaf = 0;
+    if (_pendingClientX == null) return;
+    const clientX = _pendingClientX;
+    _pendingClientX = null;
+
+    // 1) 宽度 + collapse 判定（写样式，标记 layout dirty）
+    const nextWidth = window.innerWidth - clientX - 56;
     const minWidth = window.innerWidth <= 1100 ? 300 : 400;
     const enterThreshold = minWidth - 60;
     const exitThreshold = minWidth - 10;
@@ -1694,12 +1715,32 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
       featurePanelWidth = Math.max(minWidth, Math.min(750, nextWidth));
       featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
     }
+
+    // 2) 同步锚定：样式已 dirty，读 offsetTop 触发 forced layout 拿到新宽度
+    //    下的位置，立即设 scrollTop，同帧 paint 一致。
+    if (_anchor && typeof applyChatViewportAnchor === 'function') {
+      applyChatViewportAnchor(_anchor);
+    }
+  };
+
+  const handleMouseMove = (moveEvent) => {
+    // 只记录目标位置，实际改动统一交给 rAF，避免与读位置产生相位差
+    _pendingClientX = moveEvent.clientX;
+    if (!_dragRaf) _dragRaf = requestAnimationFrame(_dragFrame);
   };
 
   const handleMouseUp = () => {
     window.removeEventListener('mousemove', handleMouseMove);
     window.removeEventListener('mouseup', handleMouseUp);
+    if (_dragRaf) { cancelAnimationFrame(_dragRaf); _dragRaf = 0; }
     featurePanel.classList.remove('drag-collapsing');
+    if (_suppressApplied && typeof resumeChatViewportObservers === 'function') {
+      resumeChatViewportObservers();
+    }
+    if (_anchor && _anchor.mode === 'follow' &&
+        typeof scheduleFollowLatestSettlePass === 'function') {
+      scheduleFollowLatestSettlePass();
+    }
     if (shouldCollapse) {
       activeFeaturePanel = null;
       renderFeaturePanel();

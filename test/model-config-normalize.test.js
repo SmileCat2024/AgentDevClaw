@@ -7,7 +7,22 @@ import {
   normalizeSpeechModel,
   normalizeSpeechPreset,
   DEFAULT_SPEECH_MODEL,
+  normalizeProgrammingHelperProcessMode,
 } from '../server/routes/model-config.js';
+
+describe('normalizeProgrammingHelperProcessMode', () => {
+  it('accepts only the three workspace process modes', () => {
+    assert.equal(normalizeProgrammingHelperProcessMode('isolated'), 'isolated');
+    assert.equal(normalizeProgrammingHelperProcessMode('shared-by-project'), 'shared-by-project');
+    assert.equal(normalizeProgrammingHelperProcessMode('shared-global'), 'shared-global');
+  });
+
+  it('rejects empty or unknown values instead of falling back silently', () => {
+    assert.equal(normalizeProgrammingHelperProcessMode(''), null);
+    assert.equal(normalizeProgrammingHelperProcessMode('global'), null);
+    assert.equal(normalizeProgrammingHelperProcessMode(null), null);
+  });
+});
 
 // ── normalizeModelPresetsData ───────────────────────────────────────
 

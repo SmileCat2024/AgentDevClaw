@@ -7,6 +7,10 @@ import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
 import { sendIPCToAllSessions, sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
+import { normalizeProgrammingHelperProcessMode } from '../shared/process-mode.js';
+import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.js';
+
+export { normalizeProgrammingHelperProcessMode } from '../shared/process-mode.js';
 
 // ── Model Config ──────────────────────────────────────────────────
 
@@ -518,6 +522,47 @@ export function setupModelConfigRoutes(app, express) {
     }
   });
 
+  // ── Agent Workspace Process Mode ──
+
+  app.get('/protoclaw/agent_process_mode', async (req, res, next) => {
+    try {
+      const agentId = cleanSessionText(req.query.agentId);
+      if (agentId !== 'programming-helper') {
+        return res.status(400).json({ error: 'agentId must be programming-helper' });
+      }
+      const metaPath = path.join(PROJECT_ROOT, 'prebuilt-agents', 'official', agentId, 'metadata.json');
+      const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
+      const [meta, userConfig] = await Promise.all([
+        readJsonSafe(metaPath, {}),
+        readJsonSafe(userConfigPath, {}),
+      ]);
+      const processMode = normalizeProgrammingHelperProcessMode(userConfig?.processMode)
+        || normalizeProgrammingHelperProcessMode(meta?.processMode)
+        || 'isolated';
+      res.json({ agentId, processMode });
+    } catch (error) { next(error); }
+  });
+
+  app.put('/protoclaw/agent_process_mode', express.json(), async (req, res, next) => {
+    try {
+      const agentId = cleanSessionText(req.body?.agentId);
+      const processMode = normalizeProgrammingHelperProcessMode(req.body?.processMode);
+      if (agentId !== 'programming-helper') {
+        return res.status(400).json({ error: 'agentId must be programming-helper' });
+      }
+      if (!processMode) {
+        return res.status(400).json({ error: 'processMode must be isolated, shared-by-project, or shared-global' });
+      }
+      const userConfigDir = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs');
+      await fs.mkdir(userConfigDir, { recursive: true });
+      const userConfigPath = path.join(userConfigDir, `${agentId}.json`);
+      const userConfig = await readJsonSafe(userConfigPath, {}) || {};
+      userConfig.processMode = processMode;
+      await fs.writeFile(userConfigPath, JSON.stringify(userConfig, null, 2), 'utf8');
+      res.json({ ok: true, agentId, processMode });
+    } catch (error) { next(error); }
+  });
+
   // ── Agent Model Presets ──
 
   app.get('/protoclaw/agent_model_presets', async (req, res, next) => {
@@ -657,6 +702,42 @@ export function setupModelConfigRoutes(app, express) {
 
       res.json({ ok: true, agentId, presetName, swapCount });
     } catch (error) { next(error); }
+  });
+
+  // ── OpenCode: list models from the selected official gateway ──
+  // The user manages their API key and any Go subscription in OpenCode.
+  // This route only proxies the fixed Zen or Go model catalogue.
+  app.post('/protoclaw/opencode/models', express.json(), async (req, res, next) => {
+    try {
+      const apiKey = cleanSessionText(req.body?.apiKey);
+      const tier = req.body?.tier === 'go' ? 'go' : 'zen';
+      if (!apiKey) {
+        return res.status(400).json({ error: 'apiKey is required' });
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000);
+      const baseUrl = resolveOpenCodeBaseUrl(tier);
+      const gatewayResp = await fetch(`${baseUrl}/models`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+        signal: controller.signal,
+      }).catch(() => null);
+
+      clearTimeout(timeout);
+
+      if (!gatewayResp || !gatewayResp.ok) {
+        const status = gatewayResp ? gatewayResp.status : 502;
+        const errText = gatewayResp ? await gatewayResp.text().catch(() => '') : 'network error';
+        return res.status(status).json({ error: `OpenCode ${tier} API request failed: ${status}`, detail: errText });
+      }
+
+      const raw = await gatewayResp.json().catch(() => ({ data: [] }));
+      const models = parseZenModelsResponse(raw);
+      res.json({ models });
+    } catch (error) {
+      next(error);
+    }
   });
 }
 

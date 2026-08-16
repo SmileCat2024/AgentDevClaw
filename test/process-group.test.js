@@ -76,6 +76,18 @@ describe('computeProcessGroupKey', () => {
     const key2 = computeProcessGroupKey('a', '/proj/');
     assert.equal(key1, key2);
   });
+
+  it('uses one stable key for shared-global across different projects', () => {
+    const keyA = computeProcessGroupKey('programming-helper', 'D:/code/project-a', 'shared-global');
+    const keyB = computeProcessGroupKey('programming-helper', 'D:/code/project-b', 'shared-global');
+    assert.equal(keyA, 'programming-helper::__global__');
+    assert.equal(keyA, keyB);
+  });
+
+  it('still requires an explicit project directory for shared-global', () => {
+    assert.equal(computeProcessGroupKey('programming-helper', '', 'shared-global'), null);
+    assert.equal(computeProcessGroupKey('programming-helper', null, 'shared-global'), null);
+  });
 });
 
 describe('findSharedProcessRuntime', () => {
@@ -127,6 +139,17 @@ describe('findSharedProcessRuntime', () => {
     managedAgents.set(rt.key, rt);
 
     assert.equal(findSharedProcessRuntime('a::/proj'), null);
+  });
+
+  it('finds a shared-global runtime regardless of another session project', () => {
+    const rt = createRuntime({
+      key: 'programming-helper::project-a-session',
+      agentId: 'programming-helper',
+      processGroupKey: 'programming-helper::__global__',
+    });
+    managedAgents.set(rt.key, rt);
+
+    assert.equal(findSharedProcessRuntime('programming-helper::__global__'), rt);
   });
 
   it('finds runtime among multiple entries', () => {

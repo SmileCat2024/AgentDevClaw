@@ -557,7 +557,12 @@ process.on('SIGTERM', () => {
 //  after postJson and all helpers are available in module scope.)
 
 SessionLifecycle.prototype.start = async function () {
-  const workspaceCwd = this.workspaceCwd || resolveWorkspaceCwd(agentId, this.sessionId);
+  const workspaceCwd = agentId === 'programming-helper' && this.sessionId
+    ? this.workspaceCwd
+    : (this.workspaceCwd || resolveWorkspaceCwd(agentId, this.sessionId));
+  if (agentId === 'programming-helper' && this.sessionId && !workspaceCwd) {
+    throw new Error(`Programming Helper session ${this.sessionId} requires an explicit workspace directory`);
+  }
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);
   const AgentClass = resolveAgentClass(agentModule);
@@ -1019,7 +1024,9 @@ function loadRuntimeHandoffFromPath(handoffPath) {
 
 // ── Main: process host ────────────────────────────────────────
 async function main() {
-  const workspaceCwd = resolveWorkspaceCwd(agentId, sessionId);
+  const workspaceCwd = agentId === 'programming-helper' && sessionId
+    ? cleanValue(process.env.PROTOCLAW_SESSION_WORKSPACE_CWD)
+    : resolveWorkspaceCwd(agentId, sessionId);
   const runtimeHandoff = loadRuntimeHandoff();
 
   const initialSession = new SessionLifecycle({

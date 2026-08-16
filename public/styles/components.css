@@ -5827,21 +5827,6 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ph-pm-card-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
 .ph-pm-card-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
 
-/* ── Session Process Badge ── */
-.session-process-badge {
-  display: inline-block; padding: 1px 6px; font-size: 10px; font-weight: 600;
-  border-radius: 4px; line-height: 1.4; vertical-align: middle;
-  margin-left: 4px;
-}
-.session-process-badge.shared {
-  background: rgba(99, 102, 241, 0.15);
-  color: rgb(165, 180, 252);
-}
-.session-process-badge.isolated {
-  background: rgba(148, 163, 184, 0.12);
-  color: rgb(203, 213, 225);
-}
-
 /* ── PH Model Config (form rows) ── */
 .ph-mc-list { display: flex; flex-direction: column; }
 .ph-mc-row {

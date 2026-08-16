@@ -156,6 +156,7 @@ describe('normalizeSessionMetadata', () => {
   it('returns empty object when all fields are empty', () => {
     assert.deepEqual(normalizeSessionMetadata({ resumeMode: '', sourceAgentId: '' }), {});
   });
+
 });
 
 describe('sanitizeProjectDocsetId', () => {

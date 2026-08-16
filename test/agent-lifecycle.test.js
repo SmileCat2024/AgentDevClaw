@@ -2,6 +2,7 @@ import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';
 import { createAgentLifecycleModule } from '../server/routes/agent-lifecycle.js';
+import { buildSessionWorkspaceEnv, buildSharedSessionStartMessage, resolveManagedProcessPlacement } from '../server/routes/agent-startup.js';
 import { managedAgents } from '../server/shared/agent-access.js';
 
 // ── Helpers ────────────────────────────────────────────────
@@ -70,6 +71,95 @@ function injectRuntime(agentId, sessionId, child) {
   managedAgents.set(runtime.key, runtime);
   return runtime;
 }
+
+describe('buildSessionWorkspaceEnv', () => {
+  it('passes the first programming-helper session workdir explicitly to the host', () => {
+    assert.deepEqual(buildSessionWorkspaceEnv(
+      'programming-helper',
+      'project-a-session',
+      'D:/code/project-a',
+    ), {
+      PROTOCLAW_SESSION_WORKSPACE_CWD: 'D:/code/project-a',
+    });
+  });
+
+  it('rejects a programming-helper session without an explicit workdir', () => {
+    assert.throws(
+      () => buildSessionWorkspaceEnv('programming-helper', 'missing-workdir', ''),
+      /explicit session project directory/,
+    );
+  });
+
+  it('does not add the programming workdir contract to other agents', () => {
+    assert.deepEqual(buildSessionWorkspaceEnv('qqbot', 'portal-session', ''), {});
+  });
+});
+
+describe('buildSharedSessionStartMessage', () => {
+  it('preserves the target session workdir for a cross-project shared host', () => {
+    const message = buildSharedSessionStartMessage({
+      sessionId: 'project-b-session',
+      agentName: 'Project B',
+      projectDir: 'D:/code/project-b',
+      runtime: { modelPresetRole: 'default' },
+    });
+    assert.deepEqual(message, {
+      type: 'add-session',
+      sessionId: 'project-b-session',
+      agentName: 'Project B',
+      workspaceCwd: 'D:/code/project-b',
+      handoffPath: null,
+      runtime: { sessionType: null, gcChatId: null, modelPresetRole: 'default' },
+    });
+  });
+
+  it('rejects shared-session startup without a target session workdir', () => {
+    assert.throws(
+      () => buildSharedSessionStartMessage({ sessionId: 'missing-workdir', agentName: 'Missing', projectDir: '' }),
+      /explicit session project directory/,
+    );
+  });
+});
+
+describe('resolveManagedProcessPlacement', () => {
+  const globalAgent = { id: 'programming-helper', processMode: 'shared-global' };
+
+  it('groups different project sessions globally while preserving each project directory', () => {
+    const first = resolveManagedProcessPlacement(globalAgent, { openDirectory: 'D:/code/project-a' });
+    const second = resolveManagedProcessPlacement(globalAgent, { openDirectory: 'D:/code/project-b' });
+
+    assert.deepEqual(first, {
+      processMode: 'shared-global',
+      projectDir: 'D:/code/project-a',
+      processGroupKey: 'programming-helper::__global__',
+    });
+    assert.deepEqual(second, {
+      processMode: 'shared-global',
+      projectDir: 'D:/code/project-b',
+      processGroupKey: 'programming-helper::__global__',
+    });
+  });
+
+  it('does not create a global host without a session-owned project directory', () => {
+    const placement = resolveManagedProcessPlacement(globalAgent, { openDirectory: '' });
+    assert.equal(placement.processMode, 'shared-global');
+    assert.equal(placement.projectDir, '');
+    assert.equal(placement.processGroupKey, null);
+  });
+
+  it('keeps exploration sessions out of every shared host', () => {
+    const placement = resolveManagedProcessPlacement(globalAgent, { openDirectory: 'D:/code/project-a' }, true);
+    assert.equal(placement.processGroupKey, null);
+  });
+
+  it('does not permit shared-global for another prebuilt agent', () => {
+    const placement = resolveManagedProcessPlacement({ id: 'qqbot', processMode: 'shared-global' }, {
+      openDirectory: 'D:/code/project-a',
+    });
+    assert.equal(placement.processMode, 'isolated');
+    assert.equal(placement.processGroupKey, null);
+  });
+});
 
 describe('agent-lifecycle', () => {
   let savedKeys;

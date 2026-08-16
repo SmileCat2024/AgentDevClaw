@@ -5904,6 +5904,16 @@ body[data-theme="light"] .preset-tag-oauth {
   color: #e65100;
 }
 
+.preset-tag-opencode {
+  background: rgba(124, 77, 255, 0.16);
+  color: #9d7bff;
+}
+
+body[data-theme="light"] .preset-tag-opencode {
+  background: rgba(81, 45, 168, 0.1);
+  color: #5d2ea8;
+}
+
 /* ── Chat Nav Timeline（用户消息导航时间线） ─────────────── */
 
 .chat-nav-timeline {

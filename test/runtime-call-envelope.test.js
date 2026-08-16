@@ -20,6 +20,8 @@ import {
   listRuntimeExecutionStates,
   findEnvelopeById,
   findEnvelopesBySourceRef,
+  pruneTerminalEnvelopes,
+  releaseRuntimeState,
   resetAllInboxes,
   EnvelopeStatus,
   EnvelopeSource,
@@ -180,6 +182,14 @@ describe('updateEnvelopeStatus', () => {
     assert.equal(inbox.activeEnvelopeId, null);
   });
 
+  it('prunes terminal envelopes after the diagnostic retention window', () => {
+    const env = createCallEnvelope({ runtimeKey: 'rt::1' });
+    updateEnvelopeStatus(env.id, { status: EnvelopeStatus.COMPLETED });
+
+    pruneTerminalEnvelopes(env.terminalAt + 5 * 60 * 1000);
+    assert.equal(findEnvelopeById(env.id), null);
+  });
+
   it('returns null for unknown envelope', () => {
     assert.equal(updateEnvelopeStatus('nonexistent'), null);
   });
@@ -230,6 +240,18 @@ describe('Execution state', () => {
     const keys = all.map(s => s.runtimeKey);
     assert.ok(keys.includes('rt::1'));
     assert.ok(keys.includes('rt::2'));
+  });
+
+  it('releases inbox, execution state, and envelopes when a runtime stops', () => {
+    const env = createCallEnvelope({ runtimeKey: 'rt::1' });
+    enqueueRuntimeEnvelope(env);
+    getRuntimeExecutionState('rt::1');
+
+    releaseRuntimeState('rt::1');
+
+    assert.equal(getRuntimeInboxSnapshot('rt::1').queueLength, 0);
+    assert.equal(findEnvelopeById(env.id), null);
+    assert.equal(listRuntimeExecutionStates().some((state) => state.runtimeKey === 'rt::1'), false);
   });
 });
 

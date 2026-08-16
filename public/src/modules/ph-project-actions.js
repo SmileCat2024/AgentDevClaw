@@ -306,12 +306,25 @@ window.phToggleModelSlot = async () => {
  * 设置进程模式（共享 / 独立）
  * 从项目设置面板的进程模式页调用
  */
-window.phSetProcessMode = (storageKey, mode) => {
-  try { localStorage.setItem(storageKey, mode); } catch {}
-  // Re-render the settings panel to update active state
+window.phSetProcessMode = async (processMode) => {
   const agent = getCurrentAgentRecord();
-  if (agent) {
+  if (!agent || agent.id !== 'programming-helper') return;
+  try {
+    const response = await fetch('/protoclaw/agent_process_mode', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: agent.id, processMode }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || 'Failed to save process mode');
+    }
+    agent.processMode = result.processMode;
     const presets = window.ClawFW?._modelPresets || [];
     renderPhModelConfigOverlay(agent, presets);
+    renderCurrentMainView();
+  } catch (error) {
+    console.error('Failed to save process mode:', error);
+    window.alert((currentLanguage === 'zh' ? '保存进程模式失败：' : 'Failed to save process mode: ') + (error?.message || error));
   }
 };

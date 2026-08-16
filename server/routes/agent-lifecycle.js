@@ -10,6 +10,7 @@ import { sendIPCtoSession } from '../shared/ipc.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createConnectedAgentsQuery } from './agent-connected.js';
 import { createAgentStartupFns } from './agent-startup.js';
+import { releaseRuntimeState } from '../runtime-call-envelope.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 
 // ── Agent Lifecycle (orchestration layer) ────────────────────────
@@ -51,6 +52,7 @@ export function createAgentLifecycleModule(ctx) {
       clearAcknowledgementListeners();
       runtime.stopped = true;
       runtime.stopping = false;
+      releaseRuntimeState(runtime.key);
       removeOpenSession(runtime.agentId, sessionId).catch((error) => console.warn(error));
     };
     const onExit = () => {

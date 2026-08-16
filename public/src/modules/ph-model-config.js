@@ -95,23 +95,21 @@ function _renderModelConfigContent(agent, presets) {
 
 function _renderProcessModeContent(agent) {
   const isZh = currentLanguage === 'zh';
-  const agentSupportsShared = agent?.processMode === 'shared-by-project';
-  const currentProject = window._phCurrentProject || null;
-  const phProcessModeKey = 'ph_process_mode_' + (currentProject?.openDirectory || '_default');
-  let phProcessMode = 'shared-by-project';
-  try { phProcessMode = localStorage.getItem(phProcessModeKey) || 'shared-by-project'; } catch {}
+  const supportsProcessModes = agent?.id === 'programming-helper';
+  const phProcessMode = agent?.processMode || 'isolated';
 
-  if (!agentSupportsShared) {
+  if (!supportsProcessModes) {
     return '<div class="ph-settings-empty">' + escapeHtml(isZh
       ? '此工作空间不支持共享进程模式。'
       : 'This workspace does not support shared process mode.') + '</div>';
   }
 
-  const isShared = phProcessMode !== 'isolated';
+  const isProjectShared = phProcessMode === 'shared-by-project';
+  const isGlobalShared = phProcessMode === 'shared-global';
 
   const optionCard = (mode, active, title, desc) => {
     return [
-      '<div class="ph-pm-card' + (active ? ' active' : '') + '" onclick="window.phSetProcessMode(\'' + escapeHtml(phProcessModeKey) + '\', \'' + mode + '\')">',
+      '<div class="ph-pm-card' + (active ? ' active' : '') + '" onclick="window.phSetProcessMode(\'' + mode + '\')">',
       '<div class="ph-pm-radio' + (active ? ' checked' : '') + '"></div>',
       '<div class="ph-pm-card-body">',
       '<div class="ph-pm-card-title">' + escapeHtml(title) + '</div>',
@@ -123,17 +121,21 @@ function _renderProcessModeContent(agent) {
 
   return [
     '<div class="ph-pm-body">',
-    optionCard('shared-by-project', isShared,
-      isZh ? '共享进程' : 'Shared Process',
+    optionCard('shared-by-project', isProjectShared,
+      isZh ? '按项目共享进程' : 'Shared by Project',
       isZh ? '同一项目下的会话共享进程，内存占用更低、启动更快。'
       : 'Sessions in the same project share a process. Lower memory, faster startup.'),
-    optionCard('isolated', !isShared,
+    optionCard('shared-global', isGlobalShared,
+      isZh ? '全局共享进程' : 'Shared Globally',
+      isZh ? '所有项目的主会话共享一个进程，内存占用最低。进程异常会中断所有项目中的运行会话。'
+      : 'Main sessions in all projects share one process. Lowest memory use, but a process failure interrupts every running project session.'),
+    optionCard('isolated', phProcessMode === 'isolated',
       isZh ? '独立进程' : 'Isolated Process',
       isZh ? '每个会话独占进程，完全隔离、最稳定。'
       : 'Each session gets its own process. Full isolation, most stable.'),
     '<div class="ph-pm-intro">' + escapeHtml(isZh
-      ? '仅影响新创建的会话，不会改变已运行会话的模式。'
-      : 'Only affects new sessions. Already running sessions are unaffected.') + '</div>',
+      ? '这是编程小助手工作空间的统一配置。已运行会话会在下次重启后使用所选模式。'
+      : 'This setting applies to the entire Programming Helper workspace. Running sessions use it after their next restart.') + '</div>',
     '</div>',
   ].join('');
 }

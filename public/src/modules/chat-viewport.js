@@ -514,3 +514,106 @@ function scheduleScrollToLatestWithVersion(behavior = 'smooth', requestVersion =
   void requestVersion;
   requestFollowLatest({ behavior, scroll: true });
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   宽度变化滚动锚定（面板拖动 / 面板开关）
+   ═══════════════════════════════════════════════════════════════
+   背景：中央区宽度变化 → 内容重排、行高变化；overflow-anchor:none
+   下浏览器保持 scrollTop 像素值，视口相对内容漂移（正在读的
+   板块滑走 / 跟随最新跳离底部）。
+
+   模式与 input-helpers.js 的 process-toggle 锚定一致：记录视口
+   顶部第一个可见行 + 偏移；布局变化后 scrollTop = row.offsetTop
+   + offset。与 windowing（cv-hidden 保留高度）无反馈循环。
+
+   诊断：console.debug('[chat-anchor]')，DevTools 中可过滤观察。 */
+
+const CHAT_ANCHOR_DEBUG = false; // 定位问题时置 true
+
+function _debugChatAnchor(...args) {
+  if (CHAT_ANCHOR_DEBUG) console.debug('[chat-anchor]', ...args);
+}
+
+function _isChatAnchorRowVisible(row) {
+  return !row.classList.contains('process-hidden') &&
+    !row.classList.contains('process-hidden-empty');
+}
+
+/** 捕获当前视口位置。必须在宽度变化（写样式）之前调用。 */
+function captureChatViewportAnchor() {
+  if (!container || typeof isChatSurfaceActive !== 'function' ||
+      typeof shouldRenderWorkspaceSurface !== 'function' ||
+      !isChatSurfaceActive() || shouldRenderWorkspaceSurface()) {
+    return null;
+  }
+
+  const scrollTop = container.scrollTop;
+
+  if (followLatestEnabled) {
+    _debugChatAnchor('capture follow mode, scrollTop=', scrollTop);
+    return { mode: 'follow', scrollTop };
+  }
+
+  const rows = container.querySelectorAll('.message-row');
+  let visibleSeen = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!_isChatAnchorRowVisible(row)) continue;
+    visibleSeen++;
+    const rowTop = row.offsetTop;
+    const rowBottom = rowTop + row.offsetHeight;
+    if (rowBottom > scrollTop) {
+      _debugChatAnchor('capture anchor: idx=', i, 'rowTop=', rowTop,
+        'offset=', scrollTop - rowTop, 'scrollTop=', scrollTop,
+        'totalRows=', rows.length, 'visibleSeen=', visibleSeen);
+      return { mode: 'anchor', row, offset: scrollTop - rowTop, scrollTop, rowIdx: i };
+    }
+  }
+
+  // 无可见行可锚定（空容器等），退化为像素保持
+  _debugChatAnchor('capture pixel fallback, scrollTop=', scrollTop, 'totalRows=', rows.length);
+  return { mode: 'pixel', scrollTop };
+}
+
+/** 应用锚点。必须在宽度变化已写入样式后、同一帧内调用（读 offsetTop 触发 forced layout 拿到新位置）。 */
+function applyChatViewportAnchor(anchor) {
+  if (!anchor || !container) return;
+
+  if (anchor.mode === 'follow') {
+    const target = container.scrollHeight;
+    if (container.scrollTop !== target) {
+      container.scrollTop = target;
+      _debugChatAnchor('apply follow → scrollTop=', target);
+    }
+    return;
+  }
+
+  if (anchor.mode === 'anchor') {
+    if (anchor.row && document.body.contains(anchor.row) && _isChatAnchorRowVisible(anchor.row)) {
+      const target = Math.max(0, anchor.row.offsetTop + anchor.offset);
+      if (container.scrollTop !== target) {
+        container.scrollTop = target;
+        _debugChatAnchor('apply anchor → scrollTop=', target,
+          'rowIdx=', anchor.rowIdx, 'rowTop=', anchor.row.offsetTop);
+      }
+      return;
+    }
+    // 锚点行失效（被隐藏 / DOM 重建），顺延到其后第一个可见行
+    _debugChatAnchor('anchor row stale, walking forward');
+    const rows = container.querySelectorAll('.message-row');
+    for (let i = (anchor.rowIdx || 0); i < rows.length; i++) {
+      const row = rows[i];
+      if (!_isChatAnchorRowVisible(row)) continue;
+      container.scrollTop = Math.max(0, row.offsetTop + anchor.offset);
+      _debugChatAnchor('apply stale→ idx=', i, 'rowTop=', row.offsetTop);
+      return;
+    }
+    return;
+  }
+
+  // pixel fallback
+  if (container.scrollTop !== anchor.scrollTop) {
+    container.scrollTop = anchor.scrollTop;
+    _debugChatAnchor('apply pixel → scrollTop=', anchor.scrollTop);
+  }
+}

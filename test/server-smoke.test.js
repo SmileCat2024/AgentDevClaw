@@ -144,6 +144,12 @@ describe('Route registration smoke test', () => {
     const express = expressFactory();
     setupModelConfigRoutes(app, express);
     assert.ok(routes.length > 0, 'Should register at least one route');
+    assert.ok(
+      routes.some(route => route.method === 'post' && route.path === '/protoclaw/opencode/models'),
+      'Should register the OpenCode model catalogue route',
+    );
+    assert.ok(routes.some(route => route.method === 'get' && route.path === '/protoclaw/agent_process_mode'));
+    assert.ok(routes.some(route => route.method === 'put' && route.path === '/protoclaw/agent_process_mode'));
   });
 
   it('setupFeatureRepositoryRoutes should register endpoints', async () => {

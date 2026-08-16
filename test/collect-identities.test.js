@@ -7,9 +7,24 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectIdentitiesFromAgents } from '../server/routes/agent-discovery.js';
+import { collectIdentitiesFromAgents, resolveAgentProcessMode } from '../server/routes/agent-discovery.js';
 
 // ── Tests ──
+
+describe('resolveAgentProcessMode', () => {
+  it('uses the programming-helper workspace configuration', () => {
+    assert.equal(resolveAgentProcessMode('programming-helper', 'shared-global', 'shared-by-project'), 'shared-global');
+    assert.equal(resolveAgentProcessMode('programming-helper', 'isolated', 'shared-by-project'), 'isolated');
+  });
+
+  it('does not apply unsupported configuration to other agents', () => {
+    assert.equal(resolveAgentProcessMode('qqbot', 'shared-global', 'isolated'), 'isolated');
+  });
+
+  it('uses the declared default when the configured value is invalid', () => {
+    assert.equal(resolveAgentProcessMode('programming-helper', 'unknown', 'shared-by-project'), 'shared-by-project');
+  });
+});
 
 describe('collectIdentities groupChat filter', () => {
 
