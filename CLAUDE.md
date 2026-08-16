@@ -687,14 +687,6 @@ npm run test:coverage # 运行 core 测试并输出覆盖率报告
 
 所有测试（core 和 feature）均使用 `node:test` 的 `describe/it/assert` 格式，由 `node --test` 统一驱动。
 
-### Pre-commit Hook
-
-项目配置了 `.githooks/pre-commit`，在每次 `git commit` 时自动运行 `npm run test:core`。
-
-- 首次 `npm install` 后，`prepare` 脚本会自动执行 `git config core.hooksPath .githooks`
-- 跳过方式：`git commit --no-verify`
-- 手动初始化：`node scripts/setup-hooks.mjs`
-
 ### 测试文件结构
 
 ```

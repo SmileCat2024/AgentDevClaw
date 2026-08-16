@@ -13,7 +13,6 @@
     "start": "node server.js",
     "agentdev:local": "node scripts/use-agentdev-local.mjs",
     "agentdev:published": "node scripts/use-agentdev-published.mjs",
-    "prepare": "node scripts/setup-hooks.mjs",
     "test": "npm run test:core && npm run test:features",
     "test:core": "node --test test/*.test.js",
     "test:coverage": "node --experimental-test-coverage --test test/*.test.js",
