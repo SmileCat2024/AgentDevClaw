@@ -37,7 +37,6 @@ var _winPixBottom = -1;
 var _cachedClientHeight = 0;
 var _rowCache = null;
 var _rowIdxMap = null;
-var _collapseTimer = null;
 var _scrollStopTimer = null;
 var _lastScrollTop = 0;
 var _largeDeltaPending = false;
@@ -128,26 +127,136 @@ function _findViewportTopRowIdx(rows) {
   return rows.length - 1;
 }
 
-/* ── debounced collapse ── */
+/* ── viewport-aware collapse ── */
 
-function _scheduleCollapseCheck() {
-  if (_collapseTimer) clearTimeout(_collapseTimer);
-  _collapseTimer = setTimeout(function() {
-    _collapseTimer = null;
-    if (!showChatProcess || !container) return;
-    var rows = _cachedRows;
-    if (!rows || rows.length === 0) return;
-    var topIdx = _findViewportTopRowIdx(rows);
-    var start = Math.max(0, topIdx - 5);
-    var end = Math.min(rows.length - 1, topIdx + 15);
-    runWithSuppressedChatViewportObservers(function() {
-      for (var i = start; i <= end; i++) {
-        if (typeof syncRowCollapseState === 'function') {
-          syncRowCollapseState(rows[i]);
-        }
+// COLLAPSE TIMING CONTRACT — three moments, nothing else folds rows:
+//
+// 1. Motion frames (small deltas: wheel / slow scroll) — fold only rows
+//    FULLY OUTSIDE the viewport (above: with scrollTop compensation so the
+//    view stays pixel-identical; below: invisible). Visible rows never
+//    change height mid-scroll — that is the "delayed fold" jolt.
+//
+// 2. Landing settles (drag / large-jump release, full render, mode toggle)
+//    — ONE comprehensive pass in the same task as the content reveal:
+//    every foldable row near the viewport folds in a single paint. Rows
+//    SPANNING the viewport top fold too, re-anchoring the viewport onto
+//    the stub (see _foldRowIfOutside). Incremental arrivals keep their
+//    state — they only ever run the conservative scan.
+//
+// 3. Background patches (streaming append / updateLastMessage) —
+//    conservative scan only. Settle powers here would fold and re-anchor
+//    rows under a user who scrolled up to read while the stream patches.
+//    New tail rows are folded at birth by the append path's
+//    applyCollapseLogic, so patches never need settle powers.
+//
+// Large-delta motion (scrollbar drag / fling) stays fully silent until
+// release: the window is frozen at the drag start (arrival rows are
+// cv-hidden — fold attempts are guarded no-ops), and a fold+compensation
+// write mid-drag would shift the scrollbar thumb under the user's hand.
+function _runCollapseScan(settleContext) {
+  if (!showChatProcess || !container) return;
+  if (typeof syncRowCollapseState !== 'function') return;
+  var rows = _cachedRows;
+  if (!rows || rows.length === 0) return;
+
+  var scrollTop = container.scrollTop;
+  var viewBottom = scrollTop + (container.clientHeight || 1);
+
+  // Rows are in document order (offsetTop monotonic): binary search for the
+  // first row whose bottom passes scrollTop, then walk forward. The row
+  // before it (last fully-above row) is processed too — it is the next row
+  // to re-enter the viewport when scrolling up, so it must fold first.
+  var lo = 0, hi = rows.length - 1, first = rows.length;
+  while (lo <= hi) {
+    var mid = (lo + hi) >> 1;
+    if (rows[mid].offsetTop + rows[mid].offsetHeight > scrollTop) { first = mid; hi = mid - 1; }
+    else lo = mid + 1;
+  }
+  runWithSuppressedChatViewportObservers(function() {
+    // Look back a few fully-above rows, not just the boundary row: a wheel
+    // step can jump past a row's entire "fully above" band in one frame,
+    // which would let a tall row enter the viewport still expanded. Rows
+    // before `first` are fully above by construction (binary search), so
+    // they can only hit the compensated above-branch.
+    var backStart = Math.max(0, first - 5);
+    for (var b = backStart; b < first; b++) _foldRowIfOutside(rows[b]);
+    // Walk intersecting rows plus a few fully-below rows (they are the next
+    // to enter when scrolling down — fold them before they become visible).
+    var belowRun = 0;
+    for (var i = first; i < rows.length; i++) {
+      var row = rows[i];
+      if (row.offsetTop >= viewBottom) {
+        if (++belowRun > 4) break;
       }
-    }, 300);
-  }, 200);
+      _foldRowIfOutside(row, settleContext);
+    }
+  }, 300);
+}
+
+function _foldRowIfOutside(row, settleContext) {
+  var scrollTop = container.scrollTop;
+  var viewBottom = scrollTop + (container.clientHeight || 1);
+  var rowTop = row.offsetTop;
+  var rowBottom = rowTop + row.offsetHeight;
+
+  if (rowBottom <= scrollTop) {
+    // Fully above the viewport. Folding shrinks the content above the view;
+    // compensate scrollTop by the height delta so the visible content stays
+    // pixel-identical (classic scroll anchoring).
+    var before = row.offsetHeight;
+    syncRowCollapseState(row);
+    var delta = before - row.offsetHeight;
+    if (delta !== 0 && container.scrollTop === scrollTop) {
+      container.scrollTop = scrollTop - delta;
+      // Keep the delta tracker in sync so the synthetic scroll event fired
+      // by this write is not misread as another large user jump.
+      _lastScrollTop = container.scrollTop;
+    }
+    return;
+  }
+
+  if (rowTop >= viewBottom) {
+    // Fully below the viewport: folding is invisible
+    syncRowCollapseState(row);
+    return;
+  }
+
+  // Row intersects the viewport — only settle contexts may fold it, never
+  // mid-scroll (that is the visible delayed-fold jolt).
+  if (!settleContext) return;
+
+  if (rowTop < scrollTop - 1 && rowBottom > scrollTop + 1) {
+    // The row SPANS the viewport top edge. For rows taller than the
+    // viewport this is not a transient state — it covers ~90% of the
+    // row's scroll range, and it is the FIRST visible state when the row
+    // arrives from below (upward scroll: its tail pokes in at the viewport
+    // top already spanning). Exempting it here made long blocks unfoldable
+    // after any fast upward drag: motion frames skip visible rows, so the
+    // release always landed "spanning" and nothing ever folded.
+    //
+    // A settle context means the user just ARRIVED here by a jump (drag
+    // release / render landing) — there is no reading continuity to
+    // protect. Fold and re-anchor the viewport onto the stub, so the
+    // landing shows the block collapsed in its conversational context
+    // instead of its interior. (Incremental arrivals run scan(false) and
+    // keep the exemption.) The height-delta guard leaves manually expanded
+    // and already-folded rows untouched: no fold → no re-anchor.
+    var beforeSpan = row.offsetHeight;
+    syncRowCollapseState(row);
+    if (beforeSpan - row.offsetHeight > 0) {
+      // Re-read offsetTop: folds of rows above (processed first) shift it.
+      var stubTop = row.offsetTop;
+      container.scrollTop = Math.max(0, stubTop - 120);
+      // Keep the delta tracker in sync so the synthetic scroll event fired
+      // by this write is not misread as another large user jump.
+      _lastScrollTop = container.scrollTop;
+    }
+    return;
+  }
+
+  // Intersecting with its top inside the viewport: the canonical fold —
+  // the stub stays where the row started, content below rises.
+  syncRowCollapseState(row);
 }
 
 /* ── scroll handler ── */
@@ -161,29 +270,22 @@ function _onScrollForWindowing() {
 
   if (!_cachedClientHeight) _cachedClientHeight = container.clientHeight;
 
-  // If in large-delta deferral mode, ignore until scroll-stop
-  if (_largeDeltaPending) {
-    if (_scrollStopTimer) clearTimeout(_scrollStopTimer);
-    _scrollStopTimer = setTimeout(_onScrollStop, 150);
-    return;
-  }
+  // Large delta (scrollbar drag / fast flick) — switch to deferral mode:
+  // total silence until release. One comprehensive settle (fresh window +
+  // full collapse pass) then lands in a single paint at the final position.
+  if (delta > _cachedClientHeight * 0.4) _largeDeltaPending = true;
 
-  // Large delta (scrollbar drag) — defer ALL work to scroll-stop.
-  // User sees cv-hidden placeholders scroll by (fast, zero layout work).
-  // When they release, one precise window update at the new position.
-  if (delta > _cachedClientHeight * 0.4) {
-    _largeDeltaPending = true;
-    if (_scrollStopTimer) clearTimeout(_scrollStopTimer);
-    _scrollStopTimer = setTimeout(_onScrollStop, 150);
-    return;
-  }
-
-  // Normal incremental scroll — update window via rAF
   if (!_scrollRafPending) {
     _scrollRafPending = true;
     requestAnimationFrame(function() {
       _scrollRafPending = false;
+      // Silent during drag/fling: the window is frozen at the drag start
+      // (arrival rows are cv-hidden — folds there are guarded no-ops), and
+      // a compensated scrollTop write mid-drag shifts the thumb under the
+      // user's hand. _onScrollStop does the full settle on release.
+      if (_largeDeltaPending) return;
       _applyWindow();
+      _runCollapseScan(false);
     });
   }
 
@@ -196,34 +298,30 @@ function _onScrollStop() {
   _scrollStopTimer = null;
 
   if (_largeDeltaPending) {
-    // Scrollbar drag / large jump — one full precise window update
+    // Scrollbar drag / large jump release — one full precise window update,
+    // then fold in the SAME task so reveal + collapse land in one paint
+    // (no delayed shift after the user has already stopped).
     _largeDeltaPending = false;
     _lastWindowStart = -1; // force fresh windowing
     _applyWindow();
-    // Synchronously collapse visible rows near viewport
-    if (_cachedRows && typeof syncRowCollapseState === 'function') {
-      var topIdx = _lastTopIdx;
-      var start = Math.max(0, topIdx - 5);
-      var end = Math.min(_cachedRows.length - 1, topIdx + 15);
-      runWithSuppressedChatViewportObservers(function() {
-        for (var i = start; i <= end; i++) {
-          syncRowCollapseState(_cachedRows[i]);
-        }
-      }, 500);
-    }
+    _runCollapseScan(true);
     return;
   }
 
-  // Normal scroll-stop — deferred collapse check
-  _scheduleCollapseCheck();
+  // Normal scroll-stop — rows intersecting the viewport keep their state;
+  // this only catches fully-outside rows a starved rAF may have missed.
+  _runCollapseScan(false);
 }
 
 function _applyWindow() {
   if (!showChatProcess || !container) return;
 
-  // Pixel fast-path: skip all work if scrollTop is safely within window
+  // Pixel fast-path: skip all work if scrollTop is safely within window.
+  // Must not fire when fresh windowing was forced (_lastWindowStart === -1):
+  // after a large jump the release point can still sit inside the old
+  // window's pixel bounds, which previously skipped the refresh entirely.
   var scrollTop = container.scrollTop;
-  if (_winPixTop >= 0) {
+  if (_winPixTop >= 0 && _lastWindowStart >= 0) {
     var halfView = container.clientHeight * 0.6;
     if (scrollTop >= _winPixTop + halfView && scrollTop <= _winPixBottom - halfView) {
       return;
@@ -323,6 +421,12 @@ function applyProcessDistance(root) {
   root = root || container;
   if (!showChatProcess) return;
 
+  // Landing = first windowing after a reset. Full renders, mode toggles and
+  // session switches all run clearProcessDistance first (which resets
+  // _lastWindowStart to -1); streaming patches (append / updateLastMessage)
+  // arrive with the previous window intact → background patch semantics.
+  var isLanding = _lastWindowStart < 0;
+
   _cachedRows = null;
   _lastTopIdx = 0;
 
@@ -354,6 +458,10 @@ function applyProcessDistance(root) {
 
   _lastWindowStart = Math.max(0, windowStart);
   _lastWindowEnd = Math.min(rows.length - 1, windowEnd);
+  // Repopulate the row cache BEFORE the scheduled collapse check below —
+  // otherwise it reads null and every post-render check silently no-ops
+  // until the first _applyWindow bypasses its pixel fast-path.
+  _cachedRows = rows;
   _updatePixBounds(rows, _lastWindowStart, _lastWindowEnd);
 
   if (!_scrollListenerAttached && container) {
@@ -361,7 +469,12 @@ function applyProcessDistance(root) {
     _scrollListenerAttached = true;
   }
 
-  _scheduleCollapseCheck();
+  // Landing settle: comprehensive fold in the same task as the reveal, so
+  // the first paint already shows stubs (folding 200ms later caused a
+  // visible jump every time a session opened). Background patches run the
+  // conservative scan only — see the collapse timing contract above.
+  if (isLanding) _runCollapseScan(true);
+  else _runCollapseScan(false);
 }
 
 function clearProcessDistance(root) {
@@ -377,11 +490,6 @@ function clearProcessDistance(root) {
   _lastScrollTop = 0;
   _largeDeltaPending = false;
   if (_scrollStopTimer) { clearTimeout(_scrollStopTimer); _scrollStopTimer = null; }
-
-  if (_collapseTimer) {
-    clearTimeout(_collapseTimer);
-    _collapseTimer = null;
-  }
 
   // Switch from cv-hidden to display:none (hide mode)
   root.querySelectorAll(
