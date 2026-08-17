@@ -25,6 +25,9 @@ async function loadAgentData(agentId) {
   const loadToken = captureSessionViewToken(agentId);
   try {
     currentRuntimeAgentId = agentId;
+    // 覆盖不经 switchAgent 的加载路径（如初始化恢复）；与 switchAgent 中的
+    // 调用幂等，确保旧会话状态显示不会残留到新会话。
+    resetRuntimeStatusForSwitch();
     activateUserCollapseStateForContext(getRuntimeContextKey(agentId));
     _lastCallFinishTime = 0;
     _currentRecapText = '';

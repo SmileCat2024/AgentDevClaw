@@ -636,6 +636,10 @@ window.switchAgent = async (newAgentId) => {
     _lastRenderedChatSig = '';
     // Reset process visibility: every session entry starts in hidden-process mode
     showChatProcess = false;
+    // 立即清空上一会话的运行状态显示（顶栏 + 对话区指示块）。
+    // 旧会话快照要等 loadAgentData 的 notification 刷新才会被替换，
+    // 期间渲染会把旧快照重建为新会话的"模型正在思考…"残留。
+    resetRuntimeStatusForSwitch();
     activateUserCollapseStateForContext(getRuntimeContextKey(runtimeAgentId));
     // Optimistic restore: show cached data immediately if available
     const _restored = restoreRuntimeFromCache(runtimeAgentId);

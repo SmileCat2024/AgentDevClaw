@@ -819,6 +819,38 @@ function shouldStatusUseQueueSync(runtime) {
 
 // ─── 通知状态更新主逻辑 ───
 
+/**
+ * 会话 / 运行时切换时立即清空运行状态显示。
+ *
+ * 旧会话的快照（_lastRenderedNotificationRuntime）与顶栏 DOM 在新会话的
+ * notification 数据到达前仍然存活（loadAgentData 需要等多个 fetch 完成），
+ * 期间 chat-renderer 每次渲染都会用旧快照重建对话区指示块，导致新会话里
+ * 残留上一会话的"模型正在思考…"文案，随后才被新数据替换/移除，并伴随
+ * 指示块出现/消失带来的高度抖动。切换瞬间直接清空，等新数据到达后再渲染。
+ */
+function resetRuntimeStatusForSwitch() {
+  _lastRenderedNotificationRuntime = null;
+  lastNotificationStatusPayload = null;
+  const statusEl = document.getElementById('notification-status');
+  if (statusEl) {
+    statusEl.style.display = 'none';
+    statusEl.className = 'notification-status';
+    const phaseEl = document.getElementById('notification-phase');
+    const summaryEl = document.getElementById('notification-summary');
+    const metricsEl = document.getElementById('notification-metrics');
+    if (phaseEl) phaseEl.textContent = '';
+    if (summaryEl) summaryEl.textContent = '';
+    if (metricsEl) metricsEl.innerHTML = '';
+  }
+  const chatContainer = document.getElementById('chat-container');
+  const existing = chatContainer ? chatContainer.querySelector('#runtime-indicator-row') : null;
+  if (existing) {
+    runWithSuppressedChatViewportObservers(function() {
+      existing.remove();
+    });
+  }
+}
+
 // 通知状态更新
 function updateNotificationStatus(notifData) {
   const payload = (notifData && typeof notifData === 'object') ? notifData : {};
@@ -895,6 +927,8 @@ function updateNotificationStatus(notifData) {
     metricsEl.innerHTML = '';
     _lastRenderedNotificationRuntime = null;
     _syncPersistentActionButton();
+    // 快照已清空，对话区指示块需同 tick 移除，不等 200ms 时钟
+    ensureChatRuntimeIndicator();
     return;
   }
 
@@ -936,6 +970,7 @@ function updateNotificationStatus(notifData) {
         lastRenderedInputSignature = '';
         renderInputRequests(currentInputRequests || []);
       }
+      ensureChatRuntimeIndicator();
       return;
     }
   } else if (!payload.state) {
@@ -946,6 +981,7 @@ function updateNotificationStatus(notifData) {
     metricsEl.innerHTML = '';
     _lastRenderedNotificationRuntime = null;
     _syncPersistentActionButton();
+    ensureChatRuntimeIndicator();
     return;
   }
 
@@ -956,11 +992,13 @@ function updateNotificationStatus(notifData) {
       lastRenderedInputSignature = '';
       renderInputRequests(currentInputRequests || []);
     }
+    ensureChatRuntimeIndicator();
     return;
   }
 
   if (type === 'call.start') {
     _syncPersistentActionButton();
+    ensureChatRuntimeIndicator();
     return;
   }
 
@@ -981,6 +1019,7 @@ function updateNotificationStatus(notifData) {
       metricsEl.innerHTML = '';
       _lastRenderedNotificationRuntime = null;
     }
+    ensureChatRuntimeIndicator();
     return;
   }
 
