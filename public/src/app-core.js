@@ -367,6 +367,7 @@ const currentAgentTitle = document.getElementById('current-agent-name');
 const sidebar = document.getElementById('sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
 const sidebarResizer = document.getElementById('sidebar-resizer');
+const sidebarCollapseHint = document.getElementById('sidebar-collapse-hint');
 const featurePanel = document.getElementById('feature-panel');
 const featurePanelTitle = document.getElementById('feature-panel-title');
 const featurePanelBody = document.getElementById('feature-panel-body');

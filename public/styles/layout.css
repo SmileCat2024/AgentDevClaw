@@ -10,6 +10,7 @@
   transition: border-right-color 0.15s ease;
   flex-shrink: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .sidebar.collapsed {
@@ -55,6 +56,40 @@ body[data-theme="light"] .sidebar-resizer.dragging::after {
 
 .sidebar.collapsed + .sidebar-resizer {
   display: none;
+}
+
+/* 拖拽进入收回区时隐藏侧栏内容，改由居中提示告知"松开收起"（与右侧面板机制一致） */
+.sidebar.drag-collapsing > *:not(.sidebar-collapse-hint) {
+  visibility: hidden;
+}
+
+/* 收回区拖拽把手高亮为强调色，提示当前处于待收起状态 */
+.sidebar.drag-collapsing + .sidebar-resizer::after {
+  background: color-mix(in srgb, var(--accent-text) 65%, transparent);
+}
+
+/* 收回区提示：单行居中文字，随收回区淡入 */
+.sidebar-collapse-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.sidebar.drag-collapsing .sidebar-collapse-hint {
+  opacity: 1;
+}
+
+.sidebar-collapse-hint-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 /* 固定子元素宽度，防止 snap 时内部文本回流 */
@@ -587,6 +622,7 @@ body[data-theme="light"] .agent-icon {
 .feature-panel-collapse-hint-title {
   font-size: 13px;
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .feature-panel-resizer {

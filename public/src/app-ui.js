@@ -1535,6 +1535,8 @@ window.addEventListener('resize', () => {
 (function initSidebarResizer() {
   const SIDEBAR_MIN = 200;
   const SIDEBAR_MAX = 480;
+  // 收回区硬下限：保证"松开以收起面板"提示单行显示，不被挤压换行（与右侧面板一致）
+  const SIDEBAR_COLLAPSE_FLOOR = 180;
   const STORAGE_KEY = 'agentdev-sidebar-width';
 
   // Restore saved width
@@ -1551,20 +1553,54 @@ window.addEventListener('resize', () => {
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
 
+    // 收回区提示文案随当前语言刷新（提示仅在拖拽期间可见）
+    if (sidebarCollapseHint) {
+      sidebarCollapseHint.querySelector('.sidebar-collapse-hint-title').textContent = t('panel_collapse_hint_title');
+    }
+
+    // 记录拖拽开始时的正常宽度：松手收起后恢复，避免重新展开时宽度异常
+    let lastStableWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX,
+      parseInt(getComputedStyle(sidebar).width) || 280));
+    let shouldCollapse = false;
+    let inCollapseZone = false;
+
     const handleMouseMove = (ev) => {
-      const w = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, ev.clientX));
-      document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+      const enterThreshold = SIDEBAR_MIN - 60;
+      const exitThreshold = SIDEBAR_MIN - 10;
+
+      // Hysteresis: 用不同阈值进出收回区，避免边界抖动（与右侧面板机制一致）
+      if (!inCollapseZone && ev.clientX < enterThreshold) {
+        inCollapseZone = true;
+      } else if (inCollapseZone && ev.clientX > exitThreshold) {
+        inCollapseZone = false;
+      }
+
+      if (inCollapseZone) {
+        shouldCollapse = true;
+        sidebar.classList.add('drag-collapsing');
+        document.documentElement.style.setProperty('--sidebar-width',
+          Math.max(ev.clientX, SIDEBAR_COLLAPSE_FLOOR) + 'px');
+      } else {
+        shouldCollapse = false;
+        sidebar.classList.remove('drag-collapsing');
+        const w = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, ev.clientX));
+        lastStableWidth = w;
+        document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+      }
     };
 
     const handleMouseUp = () => {
       sidebarResizer.classList.remove('dragging');
+      sidebar.classList.remove('drag-collapsing');
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
-      const val = getComputedStyle(document.documentElement)
-        .getPropertyValue('--sidebar-width').trim();
-      if (val) {
-        try { localStorage.setItem(STORAGE_KEY, val); } catch (_) { /* ignore */ }
+      if (shouldCollapse) {
+        sidebar.classList.add('collapsed');
+        _updateSidebarBackdrop();
       }
+      // 无论是否收起，宽度都回到最后一个正常值并持久化（收起时恢复，未收起时保持当前值）
+      document.documentElement.style.setProperty('--sidebar-width', lastStableWidth + 'px');
+      try { localStorage.setItem(STORAGE_KEY, lastStableWidth + 'px'); } catch (_) { /* ignore */ }
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
@@ -1718,7 +1754,8 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
     if (inCollapseZone) {
       shouldCollapse = true;
       featurePanel.classList.add('drag-collapsing');
-      featurePanel.style.setProperty('--feature-panel-width', Math.max(nextWidth, 80) + 'px');
+      // 硬下限：保证收回区提示文案单行显示，不被挤压换行
+      featurePanel.style.setProperty('--feature-panel-width', Math.max(nextWidth, 180) + 'px');
     } else {
       shouldCollapse = false;
       featurePanel.classList.remove('drag-collapsing');
