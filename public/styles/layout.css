@@ -5836,6 +5836,27 @@ body[data-theme="light"] .oauth-user-code {
   background: rgba(99, 145, 255, 0.08);
 }
 
+.oauth-code-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin: 8px 0;
+}
+
+.oauth-code-row .oauth-user-code {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.oauth-code-row .oauth-copy-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
 .oauth-status-text a {
   color: var(--accent-primary, #6391ff);
   text-decoration: none;

@@ -216,6 +216,9 @@ function renderSettingsOverlay() {
 
   // Enhance native <select> elements with custom dropdown
   if (window.ClawSelect) window.ClawSelect.enhanceAll(host);
+
+  // Show the saved OAuth login state as soon as an OAuth preset's edit form opens
+  if (tabText && editing !== null && presets[editing]?.authType === 'oauth-codex') refreshOAuthStatus();
 }
 
 const OPENAI_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
@@ -571,7 +574,8 @@ function toggleApiKeyVisibility() {
   }
 }
 
-async function saveSettingsPreset(idx) {
+async function saveSettingsPreset(idx, opts) {
+  const keepEditing = opts?.keepEditing === true;
   if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
   const presets = window.ClawFW.settingsData?.presets || [];
   const el = (id) => document.getElementById(id);
@@ -597,7 +601,7 @@ async function saveSettingsPreset(idx) {
           errEl.style.display = '';
         }
         if (budgetInput) budgetInput.classList.add('invalid');
-        return;
+        return '';
       }
       thinkingBudgetTokens = budgetVal;
     } else {
@@ -655,7 +659,7 @@ async function saveSettingsPreset(idx) {
   };
   presets[idx] = preset;
   window.ClawFW.settingsData.presets = presets;
-  window.ClawFW.settingsEditing = null;
+  if (!keepEditing) window.ClawFW.settingsEditing = null;
   // Check if no model is currently active — auto-select the first/newly saved preset
   let config = window.ClawFW.settingsData?.config || {};
   let dm = config.defaultModel || {};
@@ -665,6 +669,10 @@ async function saveSettingsPreset(idx) {
   await saveSettingsConfig();
   if (!hasActive) {
     await applySettingsPreset(idx);
+  }
+  if (keepEditing) {
+    // Server round-trip refreshed settingsData; surface the assigned provider name
+    return window.ClawFW.settingsData?.presets?.[idx]?.providerName || '';
   }
 }
 
@@ -783,18 +791,15 @@ function checkOAuthProxy(isZh) {
 
 function renderOAuthLoginArea(preset, isZh) {
   let providerName = preset.providerName || '';
-  if (!providerName) {
-    return '<div class="oauth-status-text" style="color:var(--text-secondary);padding:4px 0;">'
-      + (isZh ? '请先保存预设，再登录 OpenAI 账号' : 'Save the preset first, then login with OpenAI')
-      + '</div>';
-  }
   return [
     '<div id="oauth-status-display" class="oauth-status-text" style="padding:2px 0;"></div>',
     '<div class="oauth-action-row">',
     '<button class="settings-btn settings-btn-primary" type="button" onclick="startOAuthLogin()">'
       + (isZh ? '登录 OpenAI' : 'Login with OpenAI') + '</button>',
-    '<button class="settings-btn settings-btn-secondary" type="button" onclick="logoutOAuth()">'
-      + (isZh ? '登出' : 'Logout') + '</button>',
+    providerName
+      ? '<button class="settings-btn settings-btn-secondary" type="button" onclick="logoutOAuth()">'
+        + (isZh ? '登出' : 'Logout') + '</button>'
+      : '<div style="font-size:11px;color:var(--text-secondary);">' + (isZh ? '预设尚未保存，点击登录时会自动保存' : 'Preset not saved yet — it will be saved automatically on login') + '</div>',
     '</div>',
   ].join('');
 }
@@ -822,6 +827,9 @@ window.onProtocolChange = function() {
     // Auto-fill client_id default
     let cidInput = document.getElementById('settings-preset-clientid');
     if (cidInput && !cidInput.value) cidInput.value = 'app_EMoamEEZ73f0CkXaXp7hrann';
+    // Suggest a preset name so auto-save on login doesn't fall back to "Preset N"
+    let nameInput = document.getElementById('settings-preset-name');
+    if (nameInput && !nameInput.value.trim()) nameInput.value = 'OpenAI Codex';
     // Check proxy status and warn if not configured
     checkOAuthProxy(isZh);
     // Load OAuth status
@@ -944,15 +952,39 @@ window.onOpenCodeModelSelect = function() {
   }
 };
 
-window.startOAuthLogin = function() {
+// The OAuth token is stored server-side under the provider name assigned when
+// the preset is saved. Login is only consistent if the saved provider matches
+// the current form (auth mode, baseUrl, clientId), so detect mismatches.
+function oauthProviderNeedsSave() {
+  let idx = window.ClawFW.settingsEditing;
+  if (idx === null) return false;
+  let saved = (window.ClawFW.settingsData?.presets || [])[idx];
+  if (!saved) return false;
+  if (!saved.providerName || saved.authType !== 'oauth-codex') return true;
+  let baseUrlInput = document.getElementById('settings-preset-baseurl');
+  let cidInput = document.getElementById('settings-preset-clientid');
+  if (baseUrlInput && (baseUrlInput.value || '').trim() !== (saved.baseUrl || '')) return true;
+  if (cidInput && (cidInput.value || '').trim() !== (saved.clientId || '')) return true;
+  return false;
+}
+
+window.startOAuthLogin = async function() {
+  let isZh = currentLanguage === 'zh';
+  let idx = window.ClawFW.settingsEditing;
+  if (idx === null) return;
   let providerName = getEditingProviderName();
-  if (!providerName) {
-    alert(currentLanguage === 'zh' ? '请先保存预设，然后再登录' : 'Please save the preset first, then login');
-    return;
+
+  if (oauthProviderNeedsSave()) {
+    let display = document.getElementById('oauth-status-display');
+    if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在保存预设...' : 'Saving preset...') + '</span>';
+    // Auto-save (keeping the edit form open) so the server assigns the
+    // providerName the login token will be stored under.
+    providerName = await saveSettingsPreset(idx, { keepEditing: true });
+    if (!providerName) return;
   }
+
   let cidInput = document.getElementById('settings-preset-clientid');
   let clientId = cidInput ? cidInput.value.trim() : '';
-  let isZh = currentLanguage === 'zh';
 
   let display = document.getElementById('oauth-status-display');
   if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
@@ -983,6 +1015,18 @@ function pollOAuthLogin(sessionId) {
   let isZh = currentLanguage === 'zh';
   let display = document.getElementById('oauth-status-display');
 
+  let renderPending = function(sess) {
+    let html = sess.userCode
+      ? '<div class="oauth-code-row">'
+        + '<div class="oauth-user-code">' + escapeHtml(sess.userCode) + '</div>'
+        + '<button class="settings-btn settings-btn-secondary oauth-copy-btn" type="button" data-copy-code="' + escapeHtml(sess.userCode) + '" onclick="copyOAuthUserCode(this)" title="' + (isZh ? '复制设备码' : 'Copy device code') + '">' + (isZh ? '复制' : 'Copy') + '</button>'
+        + '</div>'
+        + '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '在浏览器打开 ' : 'Open ') + '<a href="' + escapeHtml(sess.verificationUrl) + '" target="_blank">' + escapeHtml(sess.verificationUrl) + '</a>' + (isZh ? ' 并输入上方代码，完成授权后自动继续' : ' and enter the code; login continues automatically after approval') + '</div>'
+      : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
+    // Skip unchanged renders so the copy button keeps its "copied" feedback
+    if (display && display.innerHTML !== html) display.innerHTML = html;
+  };
+
   let poll = function() {
     fetch('/protoclaw/oauth/codex/status/' + sessionId)
       .then(function(r) {
@@ -991,11 +1035,7 @@ function pollOAuthLogin(sessionId) {
       })
       .then(function(sess) {
         if (sess.status === 'pending' || sess.status === 'initiating') {
-          let codeHtml = sess.userCode
-            ? '<div class="oauth-user-code">' + escapeHtml(sess.userCode) + '</div>'
-              + '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '在浏览器打开 ' : 'Open ') + '<a href="' + escapeHtml(sess.verificationUrl) + '" target="_blank">' + escapeHtml(sess.verificationUrl) + '</a>' + (isZh ? ' 并输入上方代码' : ' and enter the code') + '</div>'
-            : '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在请求设备码...' : 'Requesting device code...') + '</span>';
-          if (display) display.innerHTML = codeHtml;
+          renderPending(sess);
         } else if (sess.status === 'approved') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           if (display) display.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
@@ -1022,6 +1062,34 @@ function pollOAuthLogin(sessionId) {
   _oauthPollTimer = setInterval(poll, 3000);
 }
 
+window.copyOAuthUserCode = async function(btn) {
+  let code = btn?.dataset?.copyCode || '';
+  if (!code) return;
+  let isZh = currentLanguage === 'zh';
+  let ok = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(code); ok = true; } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    // Fallback for non-secure contexts (e.g. accessing the UI via a LAN IP)
+    try {
+      let ta = document.createElement('textarea');
+      ta.value = code;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) { ok = false; }
+  }
+  let label = btn.textContent;
+  btn.textContent = ok ? (isZh ? '已复制' : 'Copied') : (isZh ? '复制失败' : 'Copy failed');
+  if (btn._copyTimer) clearTimeout(btn._copyTimer);
+  btn._copyTimer = setTimeout(function() { btn.textContent = label; }, 1500);
+};
+
 window.logoutOAuth = function() {
   let providerName = getEditingProviderName();
   if (!providerName) return;
@@ -1030,6 +1098,8 @@ window.logoutOAuth = function() {
 };
 
 function refreshOAuthStatus() {
+  // While a device-code login poll is running, it owns the status display
+  if (_oauthPollTimer) return;
   let providerName = getEditingProviderName();
   if (!providerName) return;
   let display = document.getElementById('oauth-status-display');
