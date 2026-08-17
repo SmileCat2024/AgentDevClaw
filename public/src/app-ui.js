@@ -1475,6 +1475,10 @@ const featurePanels = {
     title: () => t('panel_logs'),
     render: () => renderLogsPanel(),
   },
+  preflight: {
+    title: () => '装配预检',
+    render: () => renderPreflightPanel(),
+  },
   mcp: {
     title: () => t('panel_mcp'),
     render: () => renderMcpPanel(),
@@ -1586,6 +1590,9 @@ window.updateLogFilter = (key, value) => {
   logFilters[key] = value;
   renderFeaturePanel();
 };
+
+// [工作项 D] 装配预检面板动作（模块函数声明于 modules/debug-preflight.js）
+window.loadPreflight = loadPreflight;
 
 // Domain P (context-menu functions) → modules/context-menu.js
 

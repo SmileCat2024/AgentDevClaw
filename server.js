@@ -72,6 +72,7 @@ import {
 
 // ── Phase 1: domain route modules ────────────────────────────────
 import { setupSystemFeatureConfigRoutes } from './server/routes/system-feature-config.js';
+import { setupPreflightRoutes } from './server/routes/preflight.js';
 import { setupFsOperationsRoutes } from './server/routes/fs-operations.js';
 import {
   setupModelConfigRoutes,
@@ -262,6 +263,9 @@ const { cleanupOrphanedRouting, notifySessionLineage, notifySessionArchived } = 
 
 // ── System Feature Config API → server/routes/system-feature-config.js ──
 setupSystemFeatureConfigRoutes(app, express);
+
+// ── Assembly Preflight API → server/routes/preflight.js ──
+setupPreflightRoutes(app, express);
 
 // ── Dispatch API → server/routes/dispatch.js ──
 setupDispatchRoutes(app, express, {
