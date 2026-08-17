@@ -20,7 +20,7 @@
  *   requestRollbackEdit (modules/rollback-dialog.js)
  *   switchAgent (app-main.js — onclick 字符串引用)
  * 导出全局函数:
- *   renderMessage, appendNewMessages, updateLastMessage,
+ *   renderMessage, appendNewMessages, updateLastMessage, renderChatEmptyState,
  *   getCollapseThresholdForRow, syncRowCollapseState, syncCollapseStates,
  *   applyCollapseLogic, restoreUserCollapseState, render
  * 导出全局 window 函数:
@@ -44,6 +44,25 @@ function shouldShowChatWelcome(messages) {
     && Array.isArray(messages)
     && messages.length > 0
     && !messages.some(m => m.role === 'user');
+}
+
+// Cached empty-state render: skip the DOM rebuild when the empty-state HTML
+// hasn't changed and the container still shows it. Every innerHTML replacement
+// restarts the welcome page CSS animations — switching into an empty session
+// triggered this 2-3 times in quick succession (optimistic render, message
+// fetch, poll append), making the welcome page visibly flicker.
+let _lastRenderedChatEmptyHtml = null;
+
+function renderChatEmptyState() {
+  const emptyHtml = getEmptyStateHtml();
+  if (_lastRenderedChatEmptyHtml === emptyHtml && container.querySelector('.empty-state')) {
+    return;
+  }
+  _lastRenderedChatEmptyHtml = emptyHtml;
+  cancelChatScrollSettlement();
+  runWithSuppressedChatViewportObservers(() => {
+    container.innerHTML = emptyHtml;
+  }, 180);
 }
 
 // 生成单条消息的 HTML
@@ -509,8 +528,7 @@ function render(messages) {
   if (typeof clearTruncatedHighlightData === 'function') clearTruncatedHighlightData();
   if (messages.length === 0 || shouldShowChatWelcome(messages)) {
     _lastRenderedChatSig = '';
-    cancelChatScrollSettlement();
-    container.innerHTML = getEmptyStateHtml();
+    renderChatEmptyState();
     updateFollowLatestButton();
     return;
   }

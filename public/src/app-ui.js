@@ -1341,10 +1341,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   // Keep lastRenderedWorkspaceHtml intact so returning from chat to workspace
   // can skip re-render if workspace data hasn't changed.
   if (viewState.messages.length === 0) {
-    cancelChatScrollSettlement();
-    runWithSuppressedChatViewportObservers(() => {
-      container.innerHTML = getEmptyStateHtml();
-    }, 180);
+    renderChatEmptyState();
     updateProjectDocsetChrome(agent);
     updateChatContextBar(viewState);
     if (typeof updateChatProcessToggle === 'function') {
