@@ -59,16 +59,21 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
   <script src="./vendor/marked/lib/marked.umd.js"></script>
-  <script src="./vendor/openclaw/dist/export-html/vendor/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html.min.js"></script>
   <script>
+    // highlight.js 加载失败时的兜底：必须转义，否则工具结果中的源码
+    // 会被当作 HTML 解析，破坏消息列表结构（未闭合标签吞掉后续消息行）
     window.hljs = window.hljs || {
       getLanguage() { return false; },
-      highlight(code) { return { value: String(code ?? '') }; },
-      highlightAuto(code) { return { value: String(code ?? '') }; }
+      highlight(code) { return { value: escapeHtmlLite(code) }; },
+      highlightAuto(code) { return { value: escapeHtmlLite(code) }; }
     };
+    function escapeHtmlLite(text) {
+      return String(text ?? '').replace(/[&<>]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+    }
   </script>
   <script src="./src/tauri-bridge.js"></script>
   <link rel="stylesheet" href="./styles/base.css?v=1785050000">
