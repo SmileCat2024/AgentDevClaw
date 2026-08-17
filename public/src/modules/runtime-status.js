@@ -525,6 +525,33 @@ function formatRuntimeDuration(ms) {
   return `${hours}h ${restMinutes}m`;
 }
 
+// 中文语境下的口语化时长（"12 秒" / "1 分 5 秒" / "1 小时 5 分"）
+function formatRuntimeDurationZh(ms) {
+  const totalSeconds = Math.floor(Math.max(0, Number(ms) || 0) / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds} 秒`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return `${minutes} 分 ${seconds} 秒`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours} 小时 ${minutes % 60} 分`;
+}
+
+/**
+ * 当前步骤的用时（基于 stageStartedAt，与顶栏计时同口径）。
+ * 主行文案已包含阶段描述（思考/生成/执行…），这里只返回时长本身，避免重复。
+ */
+function getRuntimeStepElapsedLabel(runtime) {
+  if (!runtime || runtime.stageStartedAt <= 0) return '';
+  const elapsedMs = Date.now() - runtime.stageStartedAt;
+  return currentLanguage === 'zh'
+    ? formatRuntimeDurationZh(elapsedMs)
+    : formatRuntimeDuration(elapsedMs);
+}
+
 function summarizeRuntimeToolNames(toolNames) {
   const normalized = Array.isArray(toolNames)
     ? toolNames.map((item) => String(item || '').trim()).filter(Boolean)
@@ -1203,11 +1230,9 @@ function buildRuntimeIndicatorContent(runtime) {
 
   if (!mainText) return null;
 
-  // 耗时（inline 追加到主行末尾）
-  const elapsed = runtime.callStartedAt > 0
-    ? formatRuntimeDuration(Date.now() - runtime.callStartedAt)
-    : '';
-  if (elapsed) mainText += ' · ' + elapsed;
+  // 耗时（当前步骤用时，与顶栏计时同口径；不再显示整轮总时长）
+  const stepElapsed = getRuntimeStepElapsedLabel(runtime);
+  if (stepElapsed) mainText += ' · ' + stepElapsed;
 
   return { main: mainText, details: details };
 }

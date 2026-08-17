@@ -42,6 +42,10 @@ let _pendingImages = [];
 // ── 上次对话结束时间显示 ──────────────────────────────────────────
 let _lastCallFinishTime = 0;
 let _callFinishTimerInterval = null;
+let _runCapsuleStartAt = 0; // 运行期间胶囊使用的本轮 call 起始时间
+let _runCapsuleStartConfirmed = false; // 起始时间是否已由运行时快照确认（未确认前允许快照值回拨纠正）
+
+const _CAPSULE_CLOCK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
 
 function formatCallElapsed(finishTime) {
   const elapsed = Math.max(0, Date.now() - finishTime);
@@ -65,6 +69,23 @@ function formatCallElapsed(finishTime) {
     return zh ? h + ' 小时 ' + m + ' 分前' : h + 'h ' + m + 'm ago';
   }
   return zh ? h + ' 小时前' : h + 'h ago';
+}
+
+// 运行期间的整轮用时："已运行 12 秒" / "已运行 1 分 5 秒" / "已运行 1 小时 5 分"
+function formatRunningElapsed(startAt) {
+  const totalSeconds = Math.floor(Math.max(0, Date.now() - startAt) / 1000);
+  const zh = currentLanguage === 'zh';
+  if (totalSeconds < 60) {
+    return zh ? '已运行 ' + totalSeconds + ' 秒' : 'Running ' + totalSeconds + 's';
+  }
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  if (m < 60) {
+    return zh ? '已运行 ' + m + ' 分 ' + s + ' 秒' : 'Running ' + m + 'm ' + s + 's';
+  }
+  const h = Math.floor(m / 60);
+  const restM = m % 60;
+  return zh ? '已运行 ' + h + ' 小时 ' + restM + ' 分' : 'Running ' + h + 'h ' + restM + 'm';
 }
 
 function _ensureInputMetaBar(container) {
@@ -96,11 +117,16 @@ function _renderLastCallElapsed() {
   if (!container) return;
 
   let el = container.querySelector('.call-elapsed-capsule');
+  const calling = isRuntimeCalling(currentRuntimeAgentId);
 
-  if (!_lastCallFinishTime || isRuntimeCalling(currentRuntimeAgentId) || !isChatSurfaceActive()) {
+  if ((!calling && !_lastCallFinishTime) || !isChatSurfaceActive()) {
     if (el) {
       el.remove();
       _cleanupInputMetaBar(container);
+    }
+    if (!calling) {
+      _runCapsuleStartAt = 0;
+      _runCapsuleStartConfirmed = false;
     }
     return;
   }
@@ -113,7 +139,30 @@ function _renderLastCallElapsed() {
     bar.insertBefore(el, bar.firstChild); // always leftmost
   }
 
-  el.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg><span>${formatCallElapsed(_lastCallFinishTime)}</span>`;
+  if (calling) {
+    // 运行期间：显示整轮运行时长（已运行 X 分 Y 秒）
+    // callStartedAt 优先取运行时快照。快照未到达时（如刚刷新页面）用本地时间
+    // 兜底，之后的第一个有效快照值即使更早也直接采纳（服务器侧记录了真实
+    // 起始时间，刷新后应回拨纠正）；确认过快照后只接受更新的起始时间，
+    // 防止上一轮 call 的旧值把时钟拨回去。
+    const snapshotStart = Number(_lastRenderedNotificationRuntime?.callStartedAt) || 0;
+    if (snapshotStart > 0) {
+      if (!_runCapsuleStartConfirmed || snapshotStart > _runCapsuleStartAt) {
+        _runCapsuleStartAt = snapshotStart;
+      }
+      _runCapsuleStartConfirmed = true;
+    } else if (_runCapsuleStartAt <= 0) {
+      _runCapsuleStartAt = Date.now();
+    }
+    el.classList.add('is-running');
+    el.innerHTML = `${_CAPSULE_CLOCK_SVG}<span>${formatRunningElapsed(_runCapsuleStartAt)}</span>`;
+    return;
+  }
+
+  _runCapsuleStartAt = 0;
+  _runCapsuleStartConfirmed = false;
+  el.classList.remove('is-running');
+  el.innerHTML = `${_CAPSULE_CLOCK_SVG}<span>${formatCallElapsed(_lastCallFinishTime)}</span>`;
 }
 
 // ── Recap (离开摘要) → modules/recap-hint.js (Phase A-7, 2026-07-03) ──

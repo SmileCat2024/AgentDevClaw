@@ -4149,6 +4149,11 @@ body[data-theme="light"] .im-identity-session-item.active {
 }
 
 /* 通知状态指示器 */
+/* 顶部运行状态条暂时屏蔽（JS 逻辑保留，恢复显示时删除下面这条规则即可） */
+.notification-status {
+  display: none !important;
+}
+
 .notification-status {
   display: flex;
   align-items: center;
@@ -4406,11 +4411,11 @@ body[data-theme="light"] .notification-metric {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
+  gap: 6px;
+  padding: 4px 11px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.07);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary, #aaa);
   user-select: none;
@@ -4424,6 +4429,11 @@ body[data-theme="light"] .call-elapsed-capsule {
 
 .call-elapsed-capsule svg {
   opacity: 0.7;
+}
+
+.call-elapsed-capsule.is-running {
+  background: var(--accent-bg, rgba(99, 102, 241, 0.15));
+  color: var(--accent-text, #a5b4fc);
 }
 
 .recap-hint {
