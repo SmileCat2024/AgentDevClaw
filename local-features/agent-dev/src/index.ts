@@ -3,7 +3,8 @@ import { promises as fs } from 'fs';
 import { fileURLToPath } from 'url';
 import { join, dirname } from 'path';
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, PackageInfo, Tool } from 'agentdev';
-import { CallStart, createTool, Decision, getPackageInfoFromSource, ToolUse } from 'agentdev';
+import { CoreLifecycle, createTool, Decision, getPackageInfoFromSource } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 
 type AgentDevMode = 'plan' | 'code' | 'debug';
 
@@ -260,6 +261,11 @@ function buildWorkspaceMarkdown(state: WorkspaceState, cwd: string): string {
 }
 
 export class AgentDevFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    injectWorkspaceState: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    guardEditToolInPlanMode: { lifecycle: CoreLifecycle.ToolUse, kind: 'guard' as const, role: 'advisor' as const },
+  };
   readonly name = 'agent-dev';
   readonly dependencies: string[] = [];
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
@@ -588,7 +594,6 @@ export class AgentDevFeature implements AgentFeature {
     ];
   }
 
-  @CallStart
   async injectWorkspaceState(ctx: import('agentdev').CallStartContext): Promise<void> {
     const modePrompt = getModePrompt(this.mode);
     if (modePrompt) {
@@ -603,7 +608,6 @@ export class AgentDevFeature implements AgentFeature {
     }
   }
 
-  @ToolUse
   async guardEditToolInPlanMode(ctx: import('agentdev').ToolContext): Promise<import('agentdev').DecisionResult> {
     if (this.mode !== 'plan') {
       return Decision.Continue;

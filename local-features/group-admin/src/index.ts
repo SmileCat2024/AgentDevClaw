@@ -12,7 +12,8 @@
  */
 import { fileURLToPath } from 'url';
 import type { AgentFeature, Tool, DecisionResult } from 'agentdev';
-import { CallStart, StepStart, StepFinish, Decision } from 'agentdev';
+import { CoreLifecycle, Decision } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 
 const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 1420}`;
 const COORDINATOR_REMINDER_CALL_INTERVAL = 2;
@@ -26,6 +27,12 @@ const COORDINATOR_REMINDER_CONTENT = [
 ].join('\n');
 
 export class GroupAdminFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    injectIdentityReminder: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    injectStepReminder: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
+    checkStopRequest: { lifecycle: CoreLifecycle.StepFinish, kind: 'guard' as const, role: 'advisor' as const },
+  };
   readonly name = 'group-admin';
   readonly description = '以工作线程为核心观察群聊态势、派发增量指令并跟踪执行结果。';
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
@@ -34,10 +41,10 @@ export class GroupAdminFeature implements AgentFeature {
   private stepCount = 0;
   private identityReminderInjectedThisCall = false;
 
-  /** 当 gc_reply / gc_dispatch 以 done=true 或 gc_stop 执行后置位，@StepFinish 检查后消费 */
+  /** 当 gc_reply / gc_dispatch 以 done=true 或 gc_stop 执行后置位，StepFinish 检查后消费 */
   private stopRequested = false;
 
-  /** 当 Agent 尝试无工具调用结束时置位，@StepStart 注入提醒后消费 */
+  /** 当 Agent 尝试无工具调用结束时置位，StepStart 注入提醒后消费 */
   private stopReminderPending = false;
 
   /** 当前管理员绑定的群聊 ID（启动时从环境变量注入） */
@@ -45,7 +52,6 @@ export class GroupAdminFeature implements AgentFeature {
     return process.env.PROTOCLAW_GC_CHAT_ID || '';
   }
 
-  @CallStart
   async injectIdentityReminder(ctx: any): Promise<void> {
     this.callCount++;
     this.stepCount = 0;
@@ -55,7 +61,6 @@ export class GroupAdminFeature implements AgentFeature {
     this.identityReminderInjectedThisCall = true;
   }
 
-  @StepStart
   async injectStepReminder(ctx: any): Promise<void> {
     this.stepCount++;
 
@@ -105,7 +110,6 @@ export class GroupAdminFeature implements AgentFeature {
     return undefined;
   }
 
-  @StepFinish
   async checkStopRequest(ctx: any): Promise<DecisionResult> {
     // Case 1: Agent 显式请求停止（gc_stop 或 done=true）
     if (this.stopRequested) {

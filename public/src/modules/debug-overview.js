@@ -465,7 +465,7 @@ function renderStructurePanel() {
   const connected = activeAgent ? (activeAgent.connected !== false ? t('status_connected') : t('status_disconnected')) : t('status_no_agent');
   const totalHooks = currentHookInspector.hooks.reduce((sum, group) => sum + group.entries.length, 0);
   const decisionHooks = currentHookInspector.hooks.reduce(
-    (sum, group) => sum + group.entries.filter(entry => entry.kind === 'decision').length,
+    (sum, group) => sum + group.entries.filter(entry => entry.kind === 'guard').length,
     0
   );
   const featureStatusCounts = currentHookInspector.features.reduce((acc, feature) => {

@@ -8,13 +8,13 @@
  * - onFeatureToolsReady: runs during initial batch but not for individual mounts
  *
  * Uses the real Agent class imported from agentdev dist.
- * Hooks decorators are applied manually (legacy TS decorator signature) since
- * the test file is plain JS ESM.
+ * Hooks are declared via static hooks (computed property key supports dynamic
+ * method names), matching the static declaration contract.
  */
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { Agent, CallStart } from 'agentdev';
+import { Agent } from 'agentdev';
 
 // ── Helpers ──
 
@@ -26,16 +26,6 @@ function createMockLLM() {
       return { content: 'OK' };
     },
   };
-}
-
-/**
- * Apply a hooks decorator manually to a class method.
- * Works with legacy TypeScript decorator signature: (target, propertyKey, descriptor)
- */
-function applyDecorator(decoratorFn, ClassProto, methodName) {
-  const desc = Object.getOwnPropertyDescriptor(ClassProto, methodName);
-  decoratorFn(ClassProto, methodName, desc);
-  Object.defineProperty(ClassProto, methodName, desc);
 }
 
 /** Create a feature class with a CallStart hook and tools */
@@ -52,6 +42,11 @@ function createFeatureClass(opts = {}) {
       this.initiateCalled = false;
       this.hookCalled = false;
     }
+
+    // Static hook declaration: method name is dynamic, hence the computed key
+    static hooks = {
+      [hookMethod]: { lifecycle: 'CallStart', kind: 'observe' },
+    };
 
     async [hookMethod](_ctx) {
       this.hookCalled = true;
@@ -72,9 +67,6 @@ function createFeatureClass(opts = {}) {
 
     onDestroy() {}
   }
-
-  // Apply CallStart decorator to the hook method
-  applyDecorator(CallStart, FeatureClass.prototype, hookMethod);
 
   return FeatureClass;
 }

@@ -4,15 +4,16 @@
  * 长轮询 Claw server 取调度消息，支持两种注入模式：
  *
  * 1. Step 级注入（活跃 call 期间）：
- *    消息缓存到内部 buffer，在 @StepStart 时以 system-reminder 注入到当前 context。
- *    @CallFinish 时用本轮 call 的最终 response 顺带给 Claw server 回报。
+ *    消息缓存到内部 buffer，在 StepStart 时以 system-reminder 注入到当前 context。
+ *    CallFinish 时用本轮 call 的最终 response 顺带给 Claw server 回报。
  *
  * 2. Call 级注入（空闲时 fallback）：
  *    Agent 无活跃 call 时，通过 CallArbiter 起新 call 执行（兼容旧行为）。
  */
 
 import type { AgentFeature } from 'agentdev';
-import { CallStart, CallFinish, StepStart } from 'agentdev';
+import { CoreLifecycle } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 
 interface DispatchMessage {
   id: string;
@@ -43,6 +44,12 @@ async function waitForCallFinishSideEffects(task: Promise<void>, label: string):
 }
 
 export class ClawDispatchFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    onCallStartHook: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    onStepStartHook: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
+    onCallFinishHook: { lifecycle: CoreLifecycle.CallFinish, kind: 'observe' as const },
+  };
   readonly name = 'claw-dispatch';
 
   private agentRef: any = null;
@@ -75,13 +82,11 @@ export class ClawDispatchFeature implements AgentFeature {
 
   // ========== Hooks ==========
 
-  @CallStart
   async onCallStartHook(): Promise<void> {
     this.callActive = true;
     this.injectedThisCall = [];
   }
 
-  @StepStart
   async onStepStartHook(ctx: any): Promise<void> {
     if (this.pendingBuffer.length === 0) return;
 
@@ -101,7 +106,6 @@ export class ClawDispatchFeature implements AgentFeature {
     );
   }
 
-  @CallFinish
   async onCallFinishHook(ctx: any): Promise<void> {
     this.callActive = false;
 
@@ -180,8 +184,8 @@ export class ClawDispatchFeature implements AgentFeature {
 
   /**
    * 判断是否有真实的 onCall 正在进行。
-   * callActive 在 preInjectCallStart() 场景下不可靠（@CallStart 被触发
-   * 但 @CallFinish 不会被触发），用 CallArbiter 的真实状态做交叉校验。
+   * callActive 在 preInjectCallStart() 场景下不可靠（CallStart 被触发
+   * 但 CallFinish 不会被触发），用 CallArbiter 的真实状态做交叉校验。
    */
   private isTrulyBusy(): boolean {
     if (this.arbiterRef && typeof this.arbiterRef.getStatus === 'function') {
@@ -195,7 +199,7 @@ export class ClawDispatchFeature implements AgentFeature {
     serverOrigin: string,
   ): Promise<void> {
     if (this.isTrulyBusy()) {
-      // 活跃 call 期间 → 缓存，等 @StepStart 注入
+      // 活跃 call 期间 → 缓存，等 StepStart 注入
       this.pendingBuffer.push(msg);
       console.log(
         `[ClawDispatch] buffered for step injection: ${msg.id} (${msg.text.slice(0, 40)}...)`,

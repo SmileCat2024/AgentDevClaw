@@ -1,10 +1,13 @@
 /**
  * ControlledTodoFeature — 继承框架 TodoFeature，增加"完成后停止"中断控制能力。
  *
- * 设计原理：
- * - hooks registry 通过方法名调用 instance.recordToolUsage()，
- *   override 父类方法即可在 @StepFinish 决策点注入自定义逻辑。
- * - 不添加新的 @StepFinish 装饰器（唯一性约束下子类无法注册第二个）。
+ * 设计原理（static hooks 静态声明契约）：
+ * - TodoFeature 通过 static hooks 声明钩子（含 recordToolUsage → StepFinish guard/advisor）。
+ *   本类不声明自己的 static hooks，声明经原型链继承；
+ *   hooks registry 按声明中的方法名调用 instance 方法，
+ *   因此 override recordToolUsage 即可在 StepFinish 决策点注入自定义逻辑。
+ * - 注意：一旦子类声明自己的 static hooks，将完全 shadow 父类声明（非增量合并），
+ *   需声明全部钩子。本类刻意不声明。
  * - interruptTargetId 由前端通过 IPC 设置，下一次 StepFinish 检查到目标 task
  *   进入终态（completed/deleted）时返回 Decision.Deny，优雅结束当前 call。
  *
@@ -74,7 +77,7 @@ class ControlledTodoFeatureInner extends TodoFeature {
   }
 
   /**
-   * Override @StepFinish 钩子。
+   * Override recordToolUsage（经继承的 static hooks 声明挂载于 StepFinish guard）。
    *
    * 先执行父类逻辑（todo 工具使用统计 + reminder 计数），
    * 然后检查中断目标是否已进入终态。如果是，返回 Decision.Deny

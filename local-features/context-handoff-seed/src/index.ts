@@ -7,8 +7,9 @@ import type {
   FeatureInitContext,
   FeatureStateSnapshot,
 } from 'agentdev';
+import { CoreLifecycle } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 import type { CallStartContext } from 'agentdev';
-import { CallStart } from 'agentdev';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -138,6 +139,10 @@ function injectSeedMessage(
 }
 
 export class ContextHandoffSeedFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    injectHandoffSummary: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+  };
   readonly name = 'context-handoff-seed';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
@@ -200,7 +205,6 @@ export class ContextHandoffSeedFeature implements AgentFeature {
     this.injected = Boolean(state?.injected);
   }
 
-  @CallStart
   async injectHandoffSummary(ctx: CallStartContext): Promise<void> {
     if (this.injected || !ctx.isFirstCall) {
       return;

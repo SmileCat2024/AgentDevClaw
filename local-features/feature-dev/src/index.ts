@@ -4,7 +4,8 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, PackageInfo, Tool } from 'agentdev';
-import { CallStart, createTool, Decision, getPackageInfoFromSource, ToolUse } from 'agentdev';
+import { CoreLifecycle, createTool, Decision, getPackageInfoFromSource } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 
 export interface FeatureDevFeatureConfig {
   statePath?: string;
@@ -496,7 +497,7 @@ async function inferFeatureTypes(
     }
 
     // hooks: 检测生命周期装饰器 或 lifecycle methods
-    const hasReverseHooks = /@(CallStart|CallEnd|CallFinish|ToolUse|StepFinish)\b/.test(sourceCode);
+    const hasReverseHooks = /static\s+hooks\s*:/.test(sourceCode);
     const hasLifecycleMethods = /onInitiate\s*\(|onDestroy\s*\(/.test(sourceCode);
 
     if (hasReverseHooks || hasLifecycleMethods) {
@@ -789,6 +790,11 @@ async function injectManifestIntoArchive(archivePath: string, manifest: FeatureM
 }
 
 export class FeatureDevFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    injectWorkspaceState: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    guardEditToolInPlanMode: { lifecycle: CoreLifecycle.ToolUse, kind: 'guard' as const, role: 'advisor' as const },
+  };
   readonly name = 'feature-dev';
   readonly dependencies: string[] = [];
   readonly source = fileURLToPath(import.meta.url).replace(/\\/g, '/');
@@ -1364,7 +1370,7 @@ export class FeatureDevFeature implements AgentFeature {
       }),
       createTool({
         name: 'featuredev_package_to_repository',
-        description: '在当前 Feature 工作目录中自动补齐 agentdev-feature.json，执行构建与 npm pack，并将最终产物写入当前系统托管的 Feature 仓库。\n\nfeatureTypes 字段说明：\n- tools：自动推断。检测 getTools() 或 getAsyncTools() 方法\n- hooks：自动推断。检测反向钩子装饰器（@CallStart/@CallEnd/@CallFinish/@ToolUse/@StepFinish）或 lifecycle methods（onInitiate/onDestroy）\n- mcp：自动推断。检测 getMcpServers() 或 McpFeature 相关代码\n- rollback：自动推断。只有实现了 rollback 相关方法（captureState/restoreState/beforeRollback/afterRollback）时才标记\n- control：需手动选择。表示有流程控制功能（如阻断工具调用 Decision.Deny）或提供主动调用接口（适合在宿主 agent/复杂工作流中作为外部整体流程使用）',
+        description: '在当前 Feature 工作目录中自动补齐 agentdev-feature.json，执行构建与 npm pack，并将最终产物写入当前系统托管的 Feature 仓库。\n\nfeatureTypes 字段说明：\n- tools：自动推断。检测 getTools() 或 getAsyncTools() 方法\n- hooks：自动推断。检测 static hooks 静态声明或 lifecycle methods（onInitiate/onDestroy）\n- mcp：自动推断。检测 getMcpServers() 或 McpFeature 相关代码\n- rollback：自动推断。只有实现了 rollback 相关方法（captureState/restoreState/beforeRollback/afterRollback）时才标记\n- control：需手动选择。表示有流程控制功能（如阻断工具调用 Decision.Deny）或提供主动调用接口（适合在宿主 agent/复杂工作流中作为外部整体流程使用）',
         parameters: {
           type: 'object',
           properties: {
@@ -1513,7 +1519,6 @@ export class FeatureDevFeature implements AgentFeature {
     return buildWorkspaceMarkdown(state, cwd);
   }
 
-  @CallStart
   async injectWorkspaceState(ctx: import('agentdev').CallStartContext): Promise<void> {
     // 每轮对话都注入当前工作模式提示词
     const modePrompt = getModePrompt(this.mode);
@@ -1568,7 +1573,6 @@ export class FeatureDevFeature implements AgentFeature {
     }
   }
 
-  @ToolUse
   async guardEditToolInPlanMode(ctx: import('agentdev').ToolContext): Promise<import('agentdev').DecisionResult> {
     if (ctx.call.name === 'featuredev_package_to_repository' && this.mode !== 'package') {
       const message = [

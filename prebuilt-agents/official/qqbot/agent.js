@@ -542,7 +542,7 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
           return;
         }
 
-        // 设置 WeixinBot 的 turn context，使 @CallStart 和 upload_attachment 工具生效
+        // 设置 WeixinBot 的 turn context，使 CallStart 钩子和 upload_attachment 工具生效
         weixinBot._currentTurnCtx = {
           fromUserId: msg.from_user_id,
           contextToken: msg.context_token,

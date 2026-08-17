@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'url';
 import type { AgentFeature, FeatureInitContext, PackageInfo } from 'agentdev';
-import { CallStart, getPackageInfoFromSource } from 'agentdev';
+import { CoreLifecycle, getPackageInfoFromSource } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -29,6 +30,10 @@ export interface ContextGuardState {
  * or ReAct step. The Claw runtime persists this state into the session index.
  */
 export class ContextGuardFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    installUsageGuard: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+  };
   readonly name = 'context-guard';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
@@ -118,7 +123,6 @@ export class ContextGuardFeature implements AgentFeature {
     };
   }
 
-  @CallStart
   async installUsageGuard(ctx: any): Promise<void> {
     const agent = ctx?.agent;
     if (!agent || !this.enabled || !this.thresholdTokens || this.state.blocked) return;

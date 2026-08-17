@@ -36,6 +36,7 @@ const FULL_HOOK_LIFECYCLE_ORDER = [
   'StepFinish',
   'ToolUse',
   'ToolFinished',
+  'ToolResultTransform',
 ];
 
 function getHookInspectorSignature(snapshot) {
@@ -163,9 +164,12 @@ function normalizeHookInspector(snapshot) {
     hooks: FULL_HOOK_LIFECYCLE_ORDER.map((lifecycle) => {
       const existing = hookMap.get(lifecycle);
       if (existing) return existing;
+      // 空桶 kind 推导与框架侧 deriveKindForLifecycle 保持一致（三原语命名）
       return {
         lifecycle,
-        kind: lifecycle === 'StepFinish' || lifecycle === 'ToolUse' ? 'decision' : 'notify',
+        kind: lifecycle === 'ToolUse' || lifecycle === 'StepFinish'
+          ? 'guard'
+          : lifecycle === 'ToolResultTransform' ? 'transform' : 'observe',
         entries: [],
       };
     }),

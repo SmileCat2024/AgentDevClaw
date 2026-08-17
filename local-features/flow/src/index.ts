@@ -1,14 +1,15 @@
 /**
  * FlowFeature - Flow 编排层运行时核心
  *
- * 通过 @CallStart + @StepStart 钩子驱动 Flow 执行：
+ * 通过 CallStart + StepStart 钩子驱动 Flow 执行：
  * - 注入节点 prompt
  * - 过滤工具可见性
  * - 检测状态转换（手动 complete_node + 变量驱动自动切换）
  */
 
 import type { AgentFeature, ContextInjector, FeatureStateSnapshot, Tool } from 'agentdev';
-import { CallStart, StepStart, createTool } from 'agentdev';
+import { CoreLifecycle, createTool } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 import { readFileSync, existsSync } from 'fs';
 import type {
   FlowGraph, FlowNode, FlowEdge, ExitCondition, AutoAction,
@@ -106,6 +107,11 @@ const TEST_FLOW: FlowGraph = {
 // ========== FlowFeature ==========
 
 export class FlowFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    handleCallStart: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    handleStepStart: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
+  };
   readonly name = 'flow';
   readonly dependencies: string[] = [];
   readonly source = import.meta.url;
@@ -315,9 +321,8 @@ export class FlowFeature implements AgentFeature {
     ]);
   }
 
-  // ========== @CallStart ==========
+  // ========== CallStart ==========
 
-  @CallStart
   async handleCallStart(ctx: any): Promise<void> {
     if (ctx.agent) {
       this.currentAgentRef = ctx.agent;
@@ -355,9 +360,8 @@ export class FlowFeature implements AgentFeature {
     }
   }
 
-  // ========== @StepStart ==========
+  // ========== StepStart ==========
 
-  @StepStart
   async handleStepStart(ctx: any): Promise<void> {
     if (!this.activeFlow || !this.currentNodeId) return;
     this.currentAgentRef = ctx.agent || this.currentAgentRef;

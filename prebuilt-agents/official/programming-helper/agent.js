@@ -37,9 +37,9 @@ const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw
 const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
 // Audio feedback is presentation-only. Awaiting the OS media process inside
-// @CallFinish delays AgentDev's authoritative call.finish event and therefore
-// extends the visible interrupting interval. Keep the inherited hook metadata,
-// but let playback finish in the background.
+// the CallFinish hook delays AgentDev's authoritative call.finish event and
+// therefore extends the visible interrupting interval. Keep the inherited
+// static hooks declarations, but let playback finish in the background.
 class NonBlockingAudioFeedbackFeature extends AudioFeedbackFeature {
   async playAudioOnCallFinish(ctx) {
     void super.playAudioOnCallFinish(ctx).catch((error) => {

@@ -6,12 +6,13 @@
  *
  * - 轮询 /protoclaw/gc/inbox 获取群聊派发的消息
  * - Agent 空闲时通过 CallArbiter 起新 call 执行
- * - Agent 忙时 buffer，@StepStart 注入为 system-reminder
- * - @CallFinish 时取 ctx.response，POST /protoclaw/gc/writeback 写回群聊
+ * - Agent 忙时 buffer，StepStart 注入为 system-reminder
+ * - CallFinish 时取 ctx.response，POST /protoclaw/gc/writeback 写回群聊
  */
 
 import type { AgentFeature } from 'agentdev';
-import { CallStart, CallFinish, StepStart } from 'agentdev';
+import { CoreLifecycle } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 
 interface GcMessage {
   id: string;
@@ -49,6 +50,12 @@ async function waitForCallFinishSideEffects(task: Promise<void>, label: string):
 }
 
 export class GroupChatBridgeFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    onCallStartHook: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+    onStepStartHook: { lifecycle: CoreLifecycle.StepStart, kind: 'observe' as const },
+    onCallFinishHook: { lifecycle: CoreLifecycle.CallFinish, kind: 'observe' as const },
+  };
   readonly name = 'group-chat-bridge';
 
   private agentRef: any = null;
@@ -95,7 +102,6 @@ export class GroupChatBridgeFeature implements AgentFeature {
 
   // ========== Hooks ==========
 
-  @CallStart
   async onCallStartHook(ctx: any): Promise<void> {
     this.callActive = true;
     this.injectedThisCall = [];
@@ -126,7 +132,6 @@ export class GroupChatBridgeFeature implements AgentFeature {
     }
   }
 
-  @StepStart
   async onStepStartHook(ctx: any): Promise<void> {
     if (this.pendingBuffer.length === 0 && this.pendingAttachments.length === 0) return;
 
@@ -173,7 +178,6 @@ export class GroupChatBridgeFeature implements AgentFeature {
     }
   }
 
-  @CallFinish
   async onCallFinishHook(ctx: any): Promise<void> {
     this.callActive = false;
 
@@ -275,8 +279,8 @@ export class GroupChatBridgeFeature implements AgentFeature {
   /**
    * 判断是否有真实的 onCall 正在进行。
    *
-   * callActive（由 @CallStart/@CallFinish 维护）在 preInjectCallStart()
-   * 场景下不可靠：preInjectCallStart 触发 @CallStart 但不触发 @CallFinish，
+   * callActive（由 CallStart/CallFinish 维护）在 preInjectCallStart()
+   * 场景下不可靠：preInjectCallStart 触发 CallStart 但不触发 CallFinish，
    * 导致 callActive 永久卡在 true。
    * 因此用 CallArbiter 的真实状态做交叉校验。
    */
@@ -292,7 +296,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
     serverOrigin: string,
   ): Promise<void> {
     if (this.isTrulyBusy()) {
-      // 活跃 call 期间 → 缓存，等 @StepStart 注入
+      // 活跃 call 期间 → 缓存，等 StepStart 注入
       this.pendingBuffer.push(msg);
       console.log(
         `[GroupChatBridge] buffered for step injection: ${msg.id} (${msg.text.slice(0, 40)}...)`,

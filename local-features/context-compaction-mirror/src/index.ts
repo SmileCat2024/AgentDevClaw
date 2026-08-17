@@ -3,12 +3,17 @@ import type {
   AgentFeature,
   FeatureInitContext,
 } from 'agentdev';
+import { CoreLifecycle } from 'agentdev';
+import type { HookDeclarations } from 'agentdev';
 import type { CallStartContext } from 'agentdev';
-import { CallStart } from 'agentdev';
 
 const __filename = fileURLToPath(import.meta.url);
 
 export class ContextCompactionMirrorFeature implements AgentFeature {
+
+  static hooks: HookDeclarations = {
+    disableAllToolsOnFirstCall: { lifecycle: CoreLifecycle.CallStart, kind: 'observe' as const },
+  };
   readonly name = 'context-compaction-mirror';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
@@ -22,7 +27,6 @@ export class ContextCompactionMirrorFeature implements AgentFeature {
     this.logger?.info('Context compaction mirror feature initiated');
   }
 
-  @CallStart
   async disableAllToolsOnFirstCall(ctx: CallStartContext): Promise<void> {
     if (!this.armed || !ctx.isFirstCall) {
       return;
