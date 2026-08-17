@@ -83,9 +83,14 @@ function renderFeaturePanel(options = {}) {
   featurePanelBody.dataset.panel = panelId;
   const renderVersion = featurePanelRenderVersion + 1;
   featurePanelRenderVersion = renderVersion;
+  // 仅在面板打开转换时同步宽度变量：打开状态下的重渲染（如 poll 数据更新）
+  // 不得覆写宽度，否则拖动调整中会被闪回全局 featurePanelWidth（尤其收回区拖动）。
+  const wasOpen = featurePanel.classList.contains('open');
   featurePanel.classList.add('open');
   document.querySelector('.main-content')?.classList.add('panel-open');
-  featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
+  if (!wasOpen) {
+    featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
+  }
   featurePanelTitle.textContent = typeof panel.title === 'function' ? panel.title() : panel.title;
   railButtons.forEach(button => {
     button.classList.toggle('active', button.dataset.panel === activeFeaturePanel);

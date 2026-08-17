@@ -1173,6 +1173,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'launcher-grid') return renderWorkspaceLauncherGrid(agent, block);
   if (block.type === 'action-group') return renderWorkspaceActionGroup(block);
   if (block.type === 'session-list') return renderWorkspaceSessionList(agent, block);
+  if (block.type === 'studio-projects') return renderStudioProjectsBlock(agent, block);
   if (block.type === 'form') return renderWorkspaceForm(agent, block);
   if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);
   if (block.type === 'assembly-library') return renderAssemblyLibraryBlock(agent, block);
@@ -1671,6 +1672,11 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
   if (!featurePanel.classList.contains('open')) return;
 
   event.preventDefault();
+
+  // 收回区提示文案随当前语言刷新（提示仅在拖拽期间可见）
+  if (featurePanelCollapseHint) {
+    featurePanelCollapseHint.querySelector('.feature-panel-collapse-hint-title').textContent = t('panel_collapse_hint_title');
+  }
 
   // ── 拖动期间滚动位置保持 ──
   // 宽度变化时用行级锚定保持阅读位置（跟随模式锁底），实现见 chat-viewport.js。

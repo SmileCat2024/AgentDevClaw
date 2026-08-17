@@ -371,6 +371,7 @@ const featurePanel = document.getElementById('feature-panel');
 const featurePanelTitle = document.getElementById('feature-panel-title');
 const featurePanelBody = document.getElementById('feature-panel-body');
 const featurePanelResizer = document.getElementById('feature-panel-resizer');
+const featurePanelCollapseHint = document.getElementById('feature-panel-collapse-hint');
 const agentContextMenu = document.getElementById('agent-context-menu');
 const restartAgentAction = document.getElementById('restart-agent-action');
 const stopAgentAction = document.getElementById('stop-agent-action');
@@ -824,6 +825,7 @@ const I18N = {
     page_title: 'Agent 调试器',
     sidebar_toggle: '切换侧栏',
     resize_panel: '调整面板宽度',
+    panel_collapse_hint_title: '松开以收起面板',
     chars: '字符',
     status_connected: '已连接',
     status_disconnected: '已断开',
@@ -1173,6 +1175,7 @@ const I18N = {
     page_title: 'Agent Debugger',
     sidebar_toggle: 'Toggle Sidebar',
     resize_panel: 'Resize panel',
+    panel_collapse_hint_title: 'Release to collapse panel',
     chars: 'chars',
     status_connected: 'Connected',
     status_disconnected: 'Disconnected',
@@ -1854,7 +1857,7 @@ function isUiOnlyUnit(agent) {
 }
 
 function isWorkspaceHostUnit(agent) {
-  return !!(agent && agent.source === 'prebuilt' && (agent.id === 'agent-creator' || agent.id === 'feature-creator' || agent.id === 'qqbot' || agent.id === 'programming-helper' || agent.id === 'flow-workspace' || agent.id === 'work-group'));
+  return !!(agent && agent.source === 'prebuilt' && (agent.id === 'agent-creator' || agent.id === 'feature-creator' || agent.id === 'agent-studio' || agent.id === 'qqbot' || agent.id === 'programming-helper' || agent.id === 'flow-workspace' || agent.id === 'work-group'));
 }
 
 function isWorkspaceSurfaceUnit(agent) {
