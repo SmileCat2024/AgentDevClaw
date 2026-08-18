@@ -1,0 +1,356 @@
+#!/usr/bin/env node
+
+/**
+ * Plain agent runner — CLI-first, viewer-observable, workspace-free.
+ *
+ * 与 run-one-shot-agent.js 的区别：
+ * - agent 定义来自 agents/<name>/（plain agent 目录，不进 prebuilt-agents）
+ * - 默认连接 ViewerWorker 被监视（PROTOCLAW_HEADLESS=1 跳过；连接失败自动降级）
+ * - 会话落盘到 ~/.agentdev/AgentDevClaw/agents/<name>/sessions/ 并维护 index.json
+ * - 不依赖 Claw server 运行
+ *
+ * 用法:
+ *   node scripts/run-plain-agent.js <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless]
+ *                                          [--format result|text|json|quiet] [--keep-alive]
+ *
+ * 输出约定：
+ * - 过程日志一律走 stderr；stdout 只承载结果数据，可安全管道化
+ * - --format result  单行 PLAIN_AGENT_RESULT:<json>（默认，向后兼容）
+ * - --format text    人类可读：分隔线 + 响应全文 + 会话摘要
+ * - --format json    pretty-print 全量结果 JSON
+ * - --format quiet   stdout 仅响应正文本身（错误走 stderr，exit code 1）
+ * - --keep-alive     onCall 完成后不 dispose 不退出，保持 viewer 连接，Ctrl+C 结束
+ *
+ * 环境变量:
+ *   AGENTDEV_VIEWER_PORT       ViewerWorker 端口（默认 2026）
+ *   PROTOCLAW_HEADLESS=1       纯 headless，跳过 viewer 连接
+ *   PROTOCLAW_AGENT_CWD        agent 工作目录（默认当前目录）
+ *   PROTOCLAW_MODEL_PRESET_ROLE 模型角色（默认 default）
+ */
+
+// 无头日志契约前导：必须是第一个 import（env 设置 + console 桥须先于
+// 一切依赖模块顶层执行，详见 headless-log-preamble.js）。
+import './headless-log-preamble.js';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { dirname, join, resolve } from 'path';
+import os from 'os';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
+import { FileSessionStore } from 'agentdev';
+import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = resolve(__dirname, '..');
+const AGENTS_ROOT = join(PROJECT_ROOT, 'agents');
+const AGENTS_DATA_ROOT = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'agents');
+
+function cleanValue(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeFragment(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'default';
+}
+
+const OUTPUT_FORMATS = ['result', 'text', 'json', 'quiet'];
+
+function parseArgs(argv) {
+  const parsed = { agentName: null, goal: null, session: null, cwd: null, headless: false, format: 'result', keepAlive: false };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--goal' && argv[i + 1] !== undefined) { parsed.goal = argv[i + 1]; i++; }
+    else if (arg === '--session' && argv[i + 1] !== undefined) { parsed.session = argv[i + 1]; i++; }
+    else if (arg === '--cwd' && argv[i + 1] !== undefined) { parsed.cwd = argv[i + 1]; i++; }
+    else if (arg === '--format' && argv[i + 1] !== undefined) { parsed.format = argv[i + 1]; i++; }
+    else if (arg === '--headless') { parsed.headless = true; }
+    else if (arg === '--keep-alive') { parsed.keepAlive = true; }
+    else if (!arg.startsWith('-') && !parsed.agentName) { parsed.agentName = arg; }
+  }
+  if (!OUTPUT_FORMATS.includes(parsed.format)) {
+    console.error(`无效的 --format "${parsed.format}"，可选: ${OUTPUT_FORMATS.join(' | ')}`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
+function resolveAgentClass(agentModule) {
+  if (typeof agentModule.default === 'function') return agentModule.default;
+  for (const exported of Object.values(agentModule)) {
+    if (typeof exported === 'function') return exported;
+  }
+  return null;
+}
+
+// ── Session index（与 server 侧 index.json 格式对齐的文件协议）─────────
+
+function getSessionDir(agentId) {
+  return join(AGENTS_DATA_ROOT, sanitizeFragment(agentId), 'sessions');
+}
+
+function readSessionIndex(agentId) {
+  const indexPath = join(getSessionDir(agentId), 'index.json');
+  if (!existsSync(indexPath)) return { activeSessionId: null, sessions: [] };
+  try {
+    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
+    return {
+      activeSessionId: parsed.activeSessionId || null,
+      sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+    };
+  } catch {
+    return { activeSessionId: null, sessions: [] };
+  }
+}
+
+function writeSessionIndexAtomic(agentId, index) {
+  const dir = getSessionDir(agentId);
+  mkdirSync(dir, { recursive: true });
+  const indexPath = join(dir, 'index.json');
+  const tmpPath = join(dir, `.index-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(index, null, 2), 'utf8');
+  renameSync(tmpPath, indexPath);
+}
+
+function upsertSessionIndex(agentId, record) {
+  const index = readSessionIndex(agentId);
+  const existing = index.sessions.findIndex(s => s.id === record.id);
+  if (existing >= 0) {
+    index.sessions[existing] = { ...index.sessions[existing], ...record };
+  } else {
+    index.sessions.push(record);
+  }
+  index.activeSessionId = record.id;
+  writeSessionIndexAtomic(agentId, index);
+}
+
+// ── Main ────────────────────────────────────────────────────────────
+
+const args = parseArgs(process.argv.slice(2));
+const agentId = cleanValue(args.agentName);
+const goal = cleanValue(args.goal);
+const headless = args.headless || process.env.PROTOCLAW_HEADLESS === '1';
+
+if (!agentId || !goal) {
+  console.error('用法: node scripts/run-plain-agent.js <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet] [--keep-alive]');
+  process.exit(1);
+}
+
+const agentDir = join(AGENTS_ROOT, agentId);
+const agentJsPath = join(agentDir, 'agent.js');
+if (!existsSync(agentJsPath)) {
+  console.error(`Plain agent not found: ${agentJsPath}`);
+  console.error(`请在 agents/${agentId}/ 下提供 agent.js（参考 agents/hello/）`);
+  process.exit(1);
+}
+
+const VIEWER_PORT = parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
+const workspaceCwd = resolve(args.cwd || process.env.PROTOCLAW_AGENT_CWD || process.cwd());
+const sessionDir = getSessionDir(agentId);
+mkdirSync(sessionDir, { recursive: true });
+const sessionStore = new FileSessionStore(sessionDir);
+
+const sessionId = args.session
+  ? sanitizeFragment(args.session)
+  : `plain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+// quiet 模式在结果输出前独占 stdout：把 process.stdout.write 整体重定向到 stderr，
+// 拦截框架 logger / MCP SDK 等绕过 console 的直写；结果经 originalStdoutWrite 走真 stdout
+const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+if (args.format === 'quiet') {
+  process.stdout.write = (...writeArgs) => process.stderr.write(...writeArgs);
+}
+
+function writeStdout(text) {
+  originalStdoutWrite(text + '\n');
+}
+
+function outputResult(result, format) {
+  // stdout 只承载结果数据；错误始终落到 stderr 保证管道干净
+  if (result.error) {
+    console.error(`[PlainAgent] 输出格式 ${format} 下仍发生错误: ${result.error}`);
+  }
+  switch (format) {
+    case 'text': {
+      const line = '─'.repeat(60);
+      writeStdout(line);
+      writeStdout(result.response || '(空响应)');
+      writeStdout(line);
+      writeStdout(`# agent=${result.agentId} session=${result.sessionId} duration=${result.durationMs}ms ok=${result.ok}`);
+      break;
+    }
+    case 'json':
+      writeStdout(JSON.stringify(result, null, 2));
+      break;
+    case 'quiet':
+      if (result.response) writeStdout(result.response);
+      break;
+    case 'result':
+    default:
+      writeStdout('PLAIN_AGENT_RESULT:' + JSON.stringify(result));
+      break;
+  }
+}
+
+async function main() {
+  console.error(`[PlainAgent] agent=${agentId} session=${sessionId} cwd=${workspaceCwd} headless=${headless}`);
+  console.error(`[PlainAgent] goal="${goal.slice(0, 80)}"`);
+
+  // 1. 解析模型（metadata.json 的 modelPresets，可被 .agentdev/agent-configs/<id>.json 覆盖）
+  const modelPresetRole = cleanValue(process.env.PROTOCLAW_MODEL_PRESET_ROLE) || 'default';
+  const resolved = resolveAgentModelLLM(agentDir, modelPresetRole);
+  if (!resolved) {
+    console.error(`[PlainAgent] 未解析到模型 preset。请配置 agents/${agentId}/metadata.json 的 modelPresets.default，`);
+    console.error(`[PlainAgent] 或 .agentdev/agent-configs/${agentId}.json（推荐，不入库）。`);
+    process.exit(1);
+  }
+  console.error(`[PlainAgent] model preset => ${resolved.modelName}`);
+
+  // 2. 实例化 agent
+  const agentModule = await import(pathToFileURL(agentJsPath).href);
+  const AgentClass = resolveAgentClass(agentModule);
+  if (!AgentClass) {
+    throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
+  }
+  const agent = new AgentClass({
+    name: agentId,
+    projectRoot: PROJECT_ROOT,
+    workspaceDir: workspaceCwd,
+    llm: resolved.llm,
+    runtime: {
+      agentId,
+      sessionId,
+      sessionType: 'plain',
+      modelPresetRole,
+    },
+  });
+
+  // 3. 连接 ViewerWorker（被监视；失败降级为 headless 继续）
+  if (!headless) {
+    try {
+      await agent.withViewer(agentId, VIEWER_PORT, false, {
+        projectRoot: PROJECT_ROOT,
+        inputPolicy: 'none',
+      });
+      console.error(`[PlainAgent] ✓ 已连接 ViewerWorker (port ${VIEWER_PORT})，可在 Claw 面板监视`);
+    } catch (err) {
+      console.warn(`[PlainAgent] ViewerWorker 连接失败 (${err?.message || err})，降级为 headless 执行`);
+    }
+  }
+
+  // 4. 恢复会话（--session 续接时）
+  if (args.session) {
+    try {
+      await agent.loadSession(sessionId, sessionStore);
+      console.error(`[PlainAgent] ✓ 已恢复会话: ${sessionId}`);
+    } catch {
+      console.error(`[PlainAgent] 会话 ${sessionId} 不存在，将新建`);
+    }
+  }
+
+  // 5. 索引登记（运行前先入索引，面板/后续查询能看到进行中的痕迹）
+  const now = new Date().toISOString();
+  upsertSessionIndex(agentId, {
+    id: sessionId,
+    goal,
+    sessionType: 'plain',
+    source: 'cli',
+    openDirectory: workspaceCwd,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // 6. 执行单次 onCall
+  const startTime = Date.now();
+  let response = null;
+  let error = null;
+  try {
+    console.error('[PlainAgent] 开始执行 agent.onCall()...');
+    response = await agent.onCall(goal);
+    console.error(`[PlainAgent] agent.onCall() 完成，响应长度=${(response || '').length}`);
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    console.error(`[PlainAgent] agent.onCall() 失败: ${error}`);
+  }
+  const durationMs = Date.now() - startTime;
+
+  // 7. 落盘 + 更新索引
+  try {
+    await agent.saveSession(sessionId, sessionStore);
+    upsertSessionIndex(agentId, {
+      id: sessionId,
+      goal,
+      sessionType: 'plain',
+      source: 'cli',
+      openDirectory: workspaceCwd,
+      createdAt: now,
+      updatedAt: new Date().toISOString(),
+      lastError: error || undefined,
+    });
+    console.error(`[PlainAgent] ✓ 会话已保存: ${sessionId}`);
+  } catch (err) {
+    console.error('[PlainAgent] saveSession 失败:', err?.message || err);
+  }
+
+  const finalResult = {
+    ok: !error,
+    response: response || null,
+    error: error || null,
+    agentId,
+    sessionId,
+    durationMs,
+    timestamp: new Date().toISOString(),
+  };
+
+  outputResult(finalResult, args.format);
+
+  // --keep-alive：不 dispose 不退出，保持 agent 与 viewer 连接供面板事后查看，
+  // Ctrl+C 时再释放资源退出（会话已落盘，随时可 --session 续接）
+  if (args.keepAlive && !error) {
+    console.error(`[PlainAgent] --keep-alive：agent 保持运行（viewer 连接不断开），按 Ctrl+C 结束`);
+    // 显式保活：不依赖 audio/audit 等隐式句柄，事件循环空了进程也不退出
+    const keepAliveTimer = setInterval(() => {}, 1 << 30);
+    let interrupted = false;
+    const shutdown = async (signal) => {
+      if (interrupted) return;
+      interrupted = true;
+      console.error(`[PlainAgent] 收到 ${signal}，释放资源并退出...`);
+      clearInterval(keepAliveTimer);
+      try {
+        await agent.dispose();
+      } catch (err) {
+        console.error('[PlainAgent] dispose 失败:', err?.message || err);
+      }
+      process.exit(0);
+    };
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGBREAK', () => shutdown('SIGBREAK')); // Windows Ctrl+Break / taskkill
+    return;
+  }
+
+  // 8. 释放资源（含 viewer 连接）
+  try {
+    await agent.dispose();
+  } catch (err) {
+    console.error('[PlainAgent] dispose 失败:', err?.message || err);
+  }
+
+  process.exit(error ? 1 : 0);
+}
+
+main().catch((err) => {
+  console.error('[PlainAgent] Fatal:', err);
+  outputResult({
+    ok: false,
+    response: null,
+    error: err instanceof Error ? err.message : String(err),
+    agentId,
+    sessionId,
+    durationMs: 0,
+    timestamp: new Date().toISOString(),
+  }, args.format);
+  process.exit(1);
+});

@@ -1,0 +1,7 @@
+{
+  "name": "hello",
+  "description": "最小 plain agent 示例：无 workspace、CLI 启动、viewer 可监视",
+  "modelPresets": {
+    "default": "智谱GLM-4.7 Flash"
+  }
+}

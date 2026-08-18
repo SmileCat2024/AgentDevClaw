@@ -8,10 +8,91 @@
  * are aliases for the default workspace operations.
  */
 
+import { spawn } from 'child_process';
+import { join, resolve } from 'path';
+import { existsSync, readFileSync, readdirSync } from 'fs';
+import { fileURLToPath } from 'url';
+import process from 'process';
+
 import {
   loadProviders, listProviders, getProvider, getDefaultWorkspaceId,
   dispatch, cleanText, truncate, formatDate,
 } from '../server/claw-core.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = resolve(__filename, '..');
+const PROJECT_ROOT = resolve(__dirname, '..');
+const PLAIN_AGENT_RUNNER = join(PROJECT_ROOT, 'scripts', 'run-plain-agent.js');
+const PLAIN_AGENTS_ROOT = join(PROJECT_ROOT, 'agents');
+
+// ── Plain agents (workspace-free, CLI-first) ─────────────────────
+
+function listPlainAgents() {
+  if (!existsSync(PLAIN_AGENTS_ROOT)) return [];
+  const entries = readdirSync(PLAIN_AGENTS_ROOT, { withFileTypes: true });
+  const agents = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const agentJs = join(PLAIN_AGENTS_ROOT, entry.name, 'agent.js');
+    if (!existsSync(agentJs)) continue;
+    let meta = {};
+    try {
+      meta = JSON.parse(readFileSync(join(PLAIN_AGENTS_ROOT, entry.name, 'metadata.json'), 'utf8')) || {};
+    } catch {}
+    agents.push({
+      id: entry.name,
+      name: cleanText(meta.name) || entry.name,
+      description: cleanText(meta.description),
+    });
+  }
+  return agents;
+}
+
+function handleRun(args) {
+  const agentName = args.find(a => !a.startsWith('-'));
+  if (!agentName) {
+    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet] [--keep-alive]');
+    process.exit(1);
+  }
+
+  const hasGoal = args.includes('--goal');
+  if (!hasGoal) {
+    console.error('缺少 --goal 参数');
+    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet] [--keep-alive]');
+    process.exit(1);
+  }
+
+  const child = spawn(process.execPath, [PLAIN_AGENT_RUNNER, ...args], {
+    cwd: PROJECT_ROOT,
+    stdio: 'inherit',
+    env: { ...process.env },
+  });
+
+  child.on('error', (err) => {
+    console.error('Failed to start plain agent runner:', err.message);
+    process.exit(1);
+  });
+  child.on('exit', (code) => {
+    process.exit(code ?? 1);
+  });
+}
+
+function handleAgents() {
+  const agents = listPlainAgents();
+  if (agents.length === 0) {
+    console.log('No plain agents registered.');
+    console.log('Create one at agents/<name>/agent.js (see agents/README.md)');
+    return;
+  }
+  console.log(`Plain agents (${agents.length}):`);
+  console.log('');
+  for (const a of agents) {
+    console.log(`  ${a.id}`);
+    if (a.description) console.log(`    ${truncate(a.description, 100)}`);
+    console.log(`    usage: claw run ${a.id} --goal "..."`);
+    console.log('');
+  }
+}
 
 // ── Legacy command → operation name mapping ─────────────────────
 
@@ -54,6 +135,16 @@ async function main() {
     return;
   }
 
+  if (command === 'run') {
+    handleRun(args.slice(1));
+    return;
+  }
+
+  if (command === 'agents') {
+    handleAgents();
+    return;
+  }
+
   if (LEGACY_ALIASES[command]) {
     await handleLegacy(defaultWs, LEGACY_ALIASES[command], args.slice(1));
     return;
@@ -80,6 +171,8 @@ function printHelp() {
   console.log('  claw ws                                List all workspaces');
   console.log('  claw ws <id> [command] [args]          Workspace operation');
   console.log('  claw ws <id> help                      Workspace operations list');
+  console.log('  claw agents                            List plain agents (workspace-free)');
+  console.log('  claw run <name> --goal "..." [...]     Run a plain agent (viewer-observable)');
   console.log('');
   console.log('Legacy aliases (default workspace):');
   console.log('  claw exp [--limit N] [--file F] [--keyword K]');
