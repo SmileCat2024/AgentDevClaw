@@ -181,10 +181,10 @@ export default [
       'prebuilt-agents/official/flow-workspace/agent.js',
       'prebuilt-agents/official/programming-helper/.protoclaw-boot.mjs',
       'prebuilt-agents/official/programming-helper/agent.js',
-      'prebuilt-agents/official/programming-helper/controlled-todo-feature.js',
       'prebuilt-agents/official/qqbot/agent.js',
       'local-features/dispatch/src/index.ts',
       'local-features/feature-dev/src/index.ts',
+      'local-features/feature-wrappers/src/controlled-todo-feature.ts',
       'local-features/group-admin/src/bridge.ts',
     ],
     rules: {

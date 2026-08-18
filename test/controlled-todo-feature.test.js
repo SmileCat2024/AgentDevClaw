@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ControlledTodoFeature } from '../prebuilt-agents/official/programming-helper/controlled-todo-feature.js';
+import { ControlledTodoFeature } from '../local-features/dist/feature-wrappers/src/index.js';
 
 describe('ControlledTodoFeature terminal timestamps', () => {
   it('records a stable completion timestamp', () => {

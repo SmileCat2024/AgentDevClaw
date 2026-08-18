@@ -25,8 +25,8 @@ agents/<name>/
 | 依赖 | `agentdev` + `@agentdev/*` tgz 包与 `local-features/dist` |
 | 模型 | metadata.json 指定（`ZCode GLM-5.3`），可用 `.agentdev/agent-configs/coder.json` 覆盖 |
 
-`coder` 是交付时点的完整拷贝（agent.js、feature 包装类、提示词均为独立副本），
-不 import `prebuilt-agents` 下任何代码；上游编程小助手后续演进不影响它。
+`coder` 的装配与提示词是交付时点的独立拷贝（agent.js 不 import `prebuilt-agents` 下任何代码），
+feature 包装类与 local-features 为共享实现（上游修复自动生效）；上游编程小助手后续演进不影响其装配结构。
 
 ## 使用
 

@@ -156,6 +156,9 @@ Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里有多项依赖�
 - [local-features/context-compaction-mirror/src/index.ts](/D:/code/AgentDevClaw/local-features/context-compaction-mirror/src/index.ts) — 上下文精简
 - [local-features/context-handoff-seed/src/index.ts](/D:/code/AgentDevClaw/local-features/context-handoff-seed/src/index.ts) — 上下文交接
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
+- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层：框架 feature 的 Claw 协议薄包装（ControlledTodoFeature / ContinuityAwareOpencodeBasic），编程小助手与 agents/coder 共享
+
+local-features 的基础层/应用层分层约定见 [local-features/README.md](/D:/code/AgentDevClaw/local-features/README.md)。
 
 以下本地 feature 代码保留但已悬置：
 

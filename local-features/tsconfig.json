@@ -32,6 +32,8 @@
     "./checkpoint/test/**/*.ts",
     "./continuity-participant/src/**/*.ts",
     "./continuity-participant/test/**/*.ts",
+    "./feature-wrappers/src/**/*.ts",
+    "./feature-wrappers/test/**/*.ts",
     "./group-admin/src/**/*.ts",
     "./generative-ui/src/**/*.ts",
     "./generative-ui/test/**/*.ts",

@@ -1,9 +1,10 @@
 /**
  * coder — 编程小助手能力的独立 CLI 快照（plain agent）
  *
- * 完全独立：不 import prebuilt-agents 下任何代码，提示词与本目录内的
- * feature 包装类均为本仓库编程小助手（v2.0.0）交付时点的完整拷贝。
- * 上游 prebuilt-agents 后续演进不影响本 agent。
+ * 装配与提示词为本仓库编程小助手（v2.0.0）交付时点的独立副本（不 import
+ * prebuilt-agents 下任何代码）；feature 包装类（ControlledTodoFeature /
+ * ContinuityAwareOpencodeBasic 等）与 local-features 均为共享实现，
+ * 上游修复自动生效。
  *
  * 相对编程小助手的裁剪（CLI 单次调用场景不需要这些挂载）：
  * - 移除 GenerativeUISurfaceFeature / UserInputFeature（面板交互类）
@@ -19,8 +20,7 @@
  */
 
 import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature } from 'agentdev';
-import { ControlledTodoFeature } from './controlled-todo-feature.js';
-import { ContinuityAwareOpencodeBasic } from './continuity-aware-opencode-basic.js';
+import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../local-features/dist/feature-wrappers/src/index.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';
 import { ShellFeature } from '@agentdev/shell-feature';

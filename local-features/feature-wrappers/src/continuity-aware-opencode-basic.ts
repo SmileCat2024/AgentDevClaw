@@ -17,7 +17,7 @@ import { OpencodeBasicFeature } from 'agentdev';
 import {
   declareContinuity,
   GENERIC_CONTINUITY_PROTOCOL,
-} from '../../../local-features/dist/continuity-participant/src/index.js';
+} from '../../continuity-participant/src/index.js';
 
 export const ContinuityAwareOpencodeBasic = declareContinuity(OpencodeBasicFeature, {
   protocol: GENERIC_CONTINUITY_PROTOCOL,

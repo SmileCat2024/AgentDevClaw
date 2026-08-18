@@ -6,8 +6,7 @@
  */
 
 import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature } from 'agentdev';
-import { ControlledTodoFeature } from './controlled-todo-feature.js';
-import { ContinuityAwareOpencodeBasic } from './continuity-aware-opencode-basic.js';
+import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';

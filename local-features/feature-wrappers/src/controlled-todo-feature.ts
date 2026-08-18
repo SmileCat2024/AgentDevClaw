@@ -18,25 +18,25 @@
 import { TodoFeature, Decision } from 'agentdev';
 import {
   declareContinuity,
-} from '../../../local-features/dist/continuity-participant/src/index.js';
+} from '../../continuity-participant/src/index.js';
 
 const TODO_CONTINUITY_PROTOCOL = 'claw.todo-continuity.v1';
 
 class ControlledTodoFeatureInner extends TodoFeature {
   /** 当前中断目标 task ID（null = 无中断目标） */
-  _interruptTargetId = null;
+  _interruptTargetId: string | null = null;
 
   /**
    * 设置中断目标。taskId 为 null 或空字符串时取消中断。
    * 由 IPC 消息调用。
    */
-  setInterruptTarget(taskId) {
+  setInterruptTarget(taskId: string | null) {
     this._interruptTargetId = taskId || null;
     console.log(`[ControlledTodoFeature] Interrupt target set to: ${this._interruptTargetId || '(none)'}`);
     this.pushDebugSnapshot();
   }
 
-  getInterruptTarget() {
+  getInterruptTarget(): string | null {
     return this._interruptTargetId;
   }
 
@@ -44,7 +44,7 @@ class ControlledTodoFeatureInner extends TodoFeature {
    * 为 Task 终态记录稳定时间。TodoFeature 原有 updatedAt 会随任何后续编辑变化，
    * finishedAt / completedAt / cancelledAt 专门表达本次进入终态的时刻。
    */
-  updateTask(taskId, updates) {
+  updateTask(taskId: string, updates: Record<string, any> | undefined) {
     const current = this.getTask(taskId);
     if (!current) return undefined;
     const nextStatus = updates?.status || current.status;
@@ -67,13 +67,16 @@ class ControlledTodoFeatureInner extends TodoFeature {
     return super.updateTask(taskId, { ...updates, metadata });
   }
 
-  /** task_clear 也通过 updateTask 进入终态，保证取消时间被记录。 */
-  clearTasks() {
+  /** task_clear 也通过 updateTask 进入终态，保证取消时间被记录。返回进入终态的任务数。 */
+  clearTasks(): number {
+    let cleared = 0;
     for (const task of this.listTasks()) {
       if (task.status === 'pending' || task.status === 'in_progress') {
         this.updateTask(task.id, { status: 'deleted' });
+        cleared++;
       }
     }
+    return cleared;
   }
 
   /**
@@ -83,7 +86,7 @@ class ControlledTodoFeatureInner extends TodoFeature {
    * 然后检查中断目标是否已进入终态。如果是，返回 Decision.Deny
    * 优雅结束当前 call 循环。
    */
-  async recordToolUsage(ctx) {
+  async recordToolUsage(ctx: any) {
     const parentResult = await super.recordToolUsage(ctx);
 
     if (this._interruptTargetId) {
@@ -113,14 +116,15 @@ class ControlledTodoFeatureInner extends TodoFeature {
    * Override captureState，持久化中断目标。
    */
   captureState() {
-    const state = super.captureState();
+    // 框架 FeatureStateSnapshot 定义为 unknown（协议层透传），此处包装需展开为对象
+    const state = super.captureState() as Record<string, unknown>;
     return { ...state, interruptTargetId: this._interruptTargetId };
   }
 
   /**
    * Override restoreState，恢复中断目标。
    */
-  restoreState(snapshot) {
+  restoreState(snapshot: any) {
     super.restoreState(snapshot);
     this._interruptTargetId = snapshot?.interruptTargetId || null;
     // 如果目标 task 已终态或不存在，清除中断目标（防止僵尸断点在精简/压缩后意外触发）
