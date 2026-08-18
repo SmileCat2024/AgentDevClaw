@@ -20,12 +20,16 @@ const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
  * Resolve a preset name to { llm, modelName }.
  * @param {string} presetName
  * @param {{ thinkingEffort?: string | null }} [overrides] - Runtime overrides for this resolution only; does not mutate config/presets.json.
+ * @param {{ configPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
+ *   Test seam — production callers omit. configPath overrides config/presets.json;
+ *   resolveAccessToken replaces the OAuth token-store lookup.
  * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
-export function resolveModelPresetLLM(presetName, overrides) {
-  if (!presetName || !existsSync(PRESETS_PATH)) return null;
+export function resolveModelPresetLLM(presetName, overrides, options = {}) {
+  const configPath = options.configPath || PRESETS_PATH;
+  if (!presetName || !existsSync(configPath)) return null;
   try {
-    const raw = JSON.parse(readFileSync(PRESETS_PATH, 'utf8'));
+    const raw = JSON.parse(readFileSync(configPath, 'utf8'));
     const presets = Array.isArray(raw?.presets) ? raw.presets : [];
     const providers = Array.isArray(raw?.providers) ? raw.providers : [];
     const preset = presets.find((p) => p.name === presetName);
@@ -50,7 +54,7 @@ export function resolveModelPresetLLM(presetName, overrides) {
     const isOAuth = provider.authType === 'oauth-codex';
     let apiKey;
     if (isOAuth) {
-      apiKey = resolveAccessTokenSync(provider.name, provider.clientId) || '';
+      apiKey = (options.resolveAccessToken || resolveAccessTokenSync)(provider.name, provider.clientId) || '';
       if (!apiKey) {
         console.warn(`[ModelPreset] OAuth provider "${provider.name}" has no stored token — login required`);
         return null;
@@ -114,9 +118,12 @@ export function resolveModelPresetLLM(presetName, overrides) {
  * Read agent metadata.json and user config to resolve the model preset for a given role.
  * @param {string} agentDir - Absolute path to the agent directory
  * @param {'default'|'exploration'|'sub'|'system'} role
+ * @param {{ configPath?: string, userConfigPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
+ *   Test seam — production callers omit. Threaded through to resolveModelPresetLLM;
+ *   userConfigPath overrides the per-agent user config location.
  * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string, presetRole: string } | null}
  */
-export function resolveAgentModelLLM(agentDir, role = 'default') {
+export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
   const metaPath = join(agentDir, 'metadata.json');
   if (!existsSync(metaPath)) return null;
   try {
@@ -126,7 +133,8 @@ export function resolveAgentModelLLM(agentDir, role = 'default') {
     const agentId = agentDir.split(/[\\/]/).pop();
     
     // 读取用户配置文件（如果存在）
-    const userConfigPath = join(PROTOCLAW_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
+    const userConfigPath = options.userConfigPath
+      || join(PROTOCLAW_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
     let userConfig = {};
     if (existsSync(userConfigPath)) {
       try {
@@ -163,7 +171,7 @@ export function resolveAgentModelLLM(agentDir, role = 'default') {
     }
     
     if (!presetName) return null;
-    const resolved = resolveModelPresetLLM(presetName);
+    const resolved = resolveModelPresetLLM(presetName, undefined, options);
     return resolved ? { ...resolved, presetRole: role } : null;
   } catch (error) {
     console.warn(`[ModelPreset] Failed to read agent metadata from ${metaPath}:`, error.message);
