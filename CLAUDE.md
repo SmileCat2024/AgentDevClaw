@@ -454,6 +454,80 @@ IM 门户代理，支持 QQ/微信/企业微信/飞书的多渠道消息接入�
 
 全局 Feature 参数配置面板，自动发现所有 Feature 暴露的 manifest 配置项。纯 UI（无 Agent 进程），配置写入后对所有工作空间生效。当前主要消费方是编程小助手。
 
+## Plain Agent 与 claw CLI（无工作空间运行模式）
+
+Plain agent 是不建立工作空间、不进 `prebuilt-agents`、不依赖 Claw server 运行的轻量 agent 体系，通过全局命令 `claw` 直接调用。实现入口：[bin/claw.mjs](/D:/code/AgentDevClaw/bin/claw.mjs)（薄壳，转发执行）→ [scripts/run-plain-agent.js](/D:/code/AgentDevClaw/scripts/run-plain-agent.js)（运行器）。详细目录约定见 [agents/README.md](/D:/code/AgentDevClaw/agents/README.md)。
+
+### 基本命令
+
+```bash
+claw agents                        # 列出已注册的 plain agent
+claw run <name> --goal "..."       # 单次调用（agent 定义在 agents/<name>/agent.js）
+```
+
+当前内置 `coder`：编程小助手能力的独立快照（CLI 裁剪版），不 import `prebuilt-agents` 下任何代码。新增自己的 agent 只需建目录 `agents/<name>/agent.js`（export default 一个 Agent 类）+ 可选 `metadata.json`。
+
+### 监视模式 vs 无头模式
+
+| | 默认（监视模式） | `--headless` |
+|---|---|---|
+| ViewerWorker 连接 | 连接（Claw 面板"已连接"里可实时监视该会话） | 完全不连（CI / 纯脚本场景） |
+| 连接失败行为 | 自动降级为 headless 继续执行，不报错 | 无此环节 |
+| stdio 输出协议 | 不受影响，与 headless 完全一致 | 同左 |
+| 等效环境变量 | — | `PROTOCLAW_HEADLESS=1` |
+
+关键认知：**监视可见性与 stdio 数据协议不互斥**。连不连 viewer 只影响 Web UI 里能否看到，stdout/stderr 的输出契约（见下）两种模式下完全一致。
+
+### 五种输出格式（`--format`）
+
+所有格式的通用契约：**过程信息（reasoning / 工具执行 human 渲染 + 运行日志）一律走 stderr；stdout 只承载结果数据，任何格式下都可安全管道化**；错误信息永远在 stderr，exit code 失败为 1。PowerShell 下丢弃 stderr 用 `2>$null`（`2>/dev/null` 是 bash 语法）。
+
+| 格式 | stdout 内容 | 适用场景 |
+|---|---|---|
+| `result`（默认） | 单行 `PLAIN_AGENT_RESULT:<json>`，字段 `ok / response / error / agentId / sessionId / durationMs / timestamp` | 程序化消费（server 派生调用走此协议），向后兼容 |
+| `text` | 分隔线 + 响应全文 + 分隔线 + 摘要行（agent/session/duration/ok） | 人看的一次性结果 |
+| `json` | pretty-print 全量结果 JSON（同 result 字段） | 调试结果结构 |
+| `quiet` | 仅响应正文本身 | 管道接续（如 `\| jq`、写文件）；stdout 整体重定向到 stderr 以拦截绕过 console 的直写 |
+| `jsonl` | codex exec `--json` 风格会话事件 JSONL 流（见下） | 机器实时消费全过程 |
+
+`jsonl` 事件流形态（每行一个 JSON，顺序即生命周期）：
+
+```json
+{"type":"thread.started","threadId":"plain-..."}      // threadId 即 sessionId
+{"type":"turn.started","turn":0}
+{"type":"item.completed","item":{"type":"reasoning","text":"..."}}
+{"type":"item.started","item":{"id":"call_...","type":"tool_call","tool":"read","arguments":{...},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"call_...","type":"tool_call","status":"completed","result":"...(≤1000 字符)"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"最终回复全文"}}   // 不截断
+{"type":"turn.completed","turn":0,"usage":{"inputTokens":...,"outputTokens":...}}
+{"type":"turn.failed",...} / {"type":"error","message":"..."}
+```
+
+- `tool_call` 靠 `id`（call.id）配对 started/completed
+- 工具 `result` 截断到 1000 字符，超限时带 `resultTruncated:true, fullLength:N`——事件流是推送渠道不是全量存储，完整结果已随会话落盘，用 `threadId` 回查
+- jsonl 模式**不输出** `PLAIN_AGENT_RESULT:` 行（事件流已含结果），成败由 exit code 表达
+- 事件 schema 与发射点见上文"会话事件流"小节
+
+非 jsonl 格式下，同样的事件流会以 human 可读行渲染到 stderr（`tool: read {"filePath":...}` / `succeeded: <preview>` / 缩进的 reasoning / `agent:` 回复块 / `tokens:` 汇总），对齐 codex exec 默认形态。
+
+### 会话续接与落盘
+
+```bash
+claw run coder --goal "..." --session plain-1787-xxxx   # 续接既有会话（--session 传 sessionId）
+```
+
+会话与索引写入用户目录（不污染仓库）：`~/.agentdev/AgentDevClaw/agents/<name>/sessions/`（`index.json` + `<sessionId>.json`）。运行前先入索引，面板可看到进行中的痕迹。
+
+### 其他参数
+
+- `--cwd <dir>`：agent 工作目录（默认当前目录；等效 `PROTOCLAW_AGENT_CWD`）
+- `--keep-alive`：onCall 完成后不退出，保持 viewer 连接供面板事后查看，Ctrl+C 优雅退出（会话已先落盘）
+- 模型配置：`agents/<name>/metadata.json` 的 `modelPresets`，推荐用 `.agentdev/agent-configs/<name>.json` 覆盖（不入库）
+
+### 与 run-one-shot-agent 的区别
+
+[scripts/run-one-shot-agent.js](/D:/code/AgentDevClaw/scripts/run-one-shot-agent.js) 是 **prebuilt agent**（工作空间体系）的单次调用入口，由 server 派生；run-plain-agent 是 **plain agent**（agents/ 目录体系）的入口，不依赖 server。两者共享同一套无头日志契约与 [scripts/headless-session-renderer.js](/D:/code/AgentDevClaw/scripts/headless-session-renderer.js)（one-shot 也支持 `--format jsonl`）。
+
 ## 关键数据流
 
 ### 1. 编程小助手的会话生命周期
