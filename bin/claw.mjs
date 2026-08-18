@@ -51,14 +51,14 @@ function listPlainAgents() {
 function handleRun(args) {
   const agentName = args.find(a => !a.startsWith('-'));
   if (!agentName) {
-    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet] [--keep-alive]');
+    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet|jsonl] [--keep-alive]');
     process.exit(1);
   }
 
   const hasGoal = args.includes('--goal');
   if (!hasGoal) {
     console.error('缺少 --goal 参数');
-    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet] [--keep-alive]');
+    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet|jsonl] [--keep-alive]');
     process.exit(1);
   }
 

@@ -17,13 +17,13 @@ agents/<name>/
 
 ## 内置 plain agents
 
-| | hello | coder |
-|---|---|---|
-| 定位 | 最小示例（裸 BasicAgent） | 编程小助手能力的独立快照（CLI 裁剪版） |
-| 提示词 | 无（默认） | 本目录 `.agentdev/prompts/`（system.md / explore.md / reminder） |
-| feature | 无 | 编程小助手 v2.0.0 裁剪：保留 todo / shell / lsp / memory / websearch / github / context-guard / audio-feedback / image-reader / opencode-basic；移除 audit / user-input / generative-ui / claw-dispatch / group-chat-bridge / subagent |
-| 依赖 | 仅 `agentdev` | 另依赖 `@agentdev/*` tgz 包与 `local-features/dist` |
-| 模型 | metadata.json 指定 | metadata.json 指定（`ZCode GLM-5.3`），可用 `.agentdev/agent-configs/coder.json` 覆盖 |
+| | coder |
+|---|---|
+| 定位 | 编程小助手能力的独立快照（CLI 裁剪版） |
+| 提示词 | 本目录 `.agentdev/prompts/`（system.md / explore.md / reminder） |
+| feature | 编程小助手 v2.0.0 裁剪：保留 todo / shell / lsp / memory / websearch / github / context-guard / audio-feedback / image-reader / opencode-basic；移除 audit / user-input / generative-ui / claw-dispatch / group-chat-bridge / subagent |
+| 依赖 | `agentdev` + `@agentdev/*` tgz 包与 `local-features/dist` |
+| 模型 | metadata.json 指定（`ZCode GLM-5.3`），可用 `.agentdev/agent-configs/coder.json` 覆盖 |
 
 `coder` 是交付时点的完整拷贝（agent.js、feature 包装类、提示词均为独立副本），
 不 import `prebuilt-agents` 下任何代码；上游编程小助手后续演进不影响它。
@@ -32,21 +32,21 @@ agents/<name>/
 
 ```bash
 # 启动（默认连接 ViewerWorker，可在 Claw 面板"已连接"中监视）
-claw run hello --goal "介绍一下你自己"
+claw run coder --goal "介绍一下你自己"
 
 # 纯 headless（CI / 脚本场景）
-claw run hello --goal "..." --headless
+claw run coder --goal "..." --headless
 
 # 指定工作目录 / 续接会话
-claw run hello --goal "..." --cwd D:/code/some-project --session <sessionId>
+claw run coder --goal "..." --cwd D:/code/some-project --session <sessionId>
 
 # 输出格式（默认 result）
-claw run hello --goal "..." --format text    # 分隔线 + 响应全文 + 会话摘要（人类可读）
-claw run hello --goal "..." --format json    # pretty-print 全量结果 JSON
-claw run hello --goal "..." --format quiet   # stdout 仅响应正文，可安全管道化（日志全走 stderr）
+claw run coder --goal "..." --format text    # 分隔线 + 响应全文 + 会话摘要（人类可读）
+claw run coder --goal "..." --format json    # pretty-print 全量结果 JSON
+claw run coder --goal "..." --format quiet   # stdout 仅响应正文，可安全管道化（日志全走 stderr）
 
 # 运行结束后不自动关闭 agent（保持 viewer 连接，Ctrl+C 结束）
-claw run hello --goal "..." --keep-alive
+claw run coder --goal "..." --keep-alive
 
 # 列出已注册的 plain agent
 claw agents

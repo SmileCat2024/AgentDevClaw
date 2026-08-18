@@ -11,7 +11,7 @@
  *
  * 用法:
  *   node scripts/run-plain-agent.js <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless]
- *                                          [--format result|text|json|quiet] [--keep-alive]
+ *                                          [--format result|text|json|quiet|jsonl] [--keep-alive]
  *
  * 输出约定：
  * - 过程日志一律走 stderr；stdout 只承载结果数据，可安全管道化
@@ -19,6 +19,7 @@
  * - --format text    人类可读：分隔线 + 响应全文 + 会话摘要
  * - --format json    pretty-print 全量结果 JSON
  * - --format quiet   stdout 仅响应正文本身（错误走 stderr，exit code 1）
+ * - --format jsonl   stdout 输出 codex exec 风格会话事件 JSONL 流（thread/turn/item 事件）
  * - --keep-alive     onCall 完成后不 dispose 不退出，保持 viewer 连接，Ctrl+C 结束
  *
  * 环境变量:
@@ -37,6 +38,7 @@ import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { FileSessionStore } from 'agentdev';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -56,7 +58,7 @@ function sanitizeFragment(value) {
     .replace(/^-|-$/g, '') || 'default';
 }
 
-const OUTPUT_FORMATS = ['result', 'text', 'json', 'quiet'];
+const OUTPUT_FORMATS = ['result', 'text', 'json', 'quiet', 'jsonl'];
 
 function parseArgs(argv) {
   const parsed = { agentName: null, goal: null, session: null, cwd: null, headless: false, format: 'result', keepAlive: false };
@@ -134,7 +136,7 @@ const goal = cleanValue(args.goal);
 const headless = args.headless || process.env.PROTOCLAW_HEADLESS === '1';
 
 if (!agentId || !goal) {
-  console.error('用法: node scripts/run-plain-agent.js <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet] [--keep-alive]');
+  console.error('用法: node scripts/run-plain-agent.js <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet|jsonl] [--keep-alive]');
   process.exit(1);
 }
 
@@ -142,7 +144,7 @@ const agentDir = join(AGENTS_ROOT, agentId);
 const agentJsPath = join(agentDir, 'agent.js');
 if (!existsSync(agentJsPath)) {
   console.error(`Plain agent not found: ${agentJsPath}`);
-  console.error(`请在 agents/${agentId}/ 下提供 agent.js（参考 agents/hello/）`);
+  console.error(`请在 agents/${agentId}/ 下提供 agent.js（参考 agents/coder/）`);
   process.exit(1);
 }
 
@@ -187,6 +189,10 @@ function outputResult(result, format) {
     case 'quiet':
       if (result.response) writeStdout(result.response);
       break;
+    case 'jsonl':
+      // 事件流模式：stdout 只承载会话事件 JSONL（thread/turn/item 已由
+      // headless-session-renderer 输出），不追加结果行；成败由 exit code 表达
+      break;
     case 'result':
     default:
       writeStdout('PLAIN_AGENT_RESULT:' + JSON.stringify(result));
@@ -197,6 +203,13 @@ function outputResult(result, format) {
 async function main() {
   console.error(`[PlainAgent] agent=${agentId} session=${sessionId} cwd=${workspaceCwd} headless=${headless}`);
   console.error(`[PlainAgent] goal="${goal.slice(0, 80)}"`);
+
+  // 会话事件流输出：jsonl 模式写 stdout（codex exec --json 形态），
+  // 其余模式渲染 human 可读行到 stderr（codex exec 默认形态）
+  attachSessionEventOutput({
+    format: args.format === 'jsonl' ? 'jsonl' : 'human',
+    threadId: sessionId,
+  });
 
   // 1. 解析模型（metadata.json 的 modelPresets，可被 .agentdev/agent-configs/<id>.json 覆盖）
   const modelPresetRole = cleanValue(process.env.PROTOCLAW_MODEL_PRESET_ROLE) || 'default';
@@ -343,6 +356,7 @@ async function main() {
 
 main().catch((err) => {
   console.error('[PlainAgent] Fatal:', err);
+  emitFatalSessionError(err instanceof Error ? err.message : String(err));
   outputResult({
     ok: false,
     response: null,

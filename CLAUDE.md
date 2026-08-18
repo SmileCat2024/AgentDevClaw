@@ -521,6 +521,15 @@ IM 门户代理，支持 QQ/微信/企业微信/飞书的多渠道消息接入�
 - 无头入口必须以 `import './headless-log-preamble.js'` 作为**第一个 import**（现成范例：run-one-shot-agent.js、run-plain-agent.js）。它设置 env 并安装简版 console 分流补丁，覆盖"框架 console 桥（Agent 构造时才装）生效之前"的模块顶层窗口。两个坑：静态 import 会提升，入口模块体里再设 env 已经太晚；agentdev 依赖图含 top-level await，会异步化依赖它的前导模块，因此 preamble 严禁依赖 agentdev。
 - Claw 侧 `CLAW_LOG_LEVEL` 可过滤非 agent 日志的 stdio 冗长度（默认全量）。
 
+### 会话事件流（无头模式的 stdout 数据协议）
+
+无头模式 stdout 的主要数据形态是 codex exec 风格的会话事件 JSONL 流，与运行日志（stderr）严格分离：
+
+- 事件模型（对齐 `codex exec --json`）：`thread.started` / `turn.started` / `item.started|completed`（item 类型：`agent_message` / `reasoning` / `tool_call`，tool_call 通过 call.id 配对 started/completed）/ `turn.completed`（含 token 用量）/ `turn.failed` / `error`。
+- 框架侧实现：`AgentDev/src/core/session-events.ts`（进程内订阅 API `subscribeSessionEvents`，无订阅者零开销）。发射点：`context.addAssistantMessage` / `context.addToolMessage`（消息变更单点）+ `agent.ts` 的 call start/finish。与通知系统（notification.ts）的分工：通知是节流的 UI 状态信号；会话事件是不节流的审计数据。
+- Claw 侧渲染：`scripts/headless-session-renderer.js`。`--format jsonl` → 事件流写 stdout（机器消费）；其余格式 → human 可读行写 stderr（对齐 codex exec 默认形态：过程信息全走 stderr，stdout 干净）。
+- 入口：`run-plain-agent.js` 的 `--format jsonl`；`run-one-shot-agent.js` 的 `--format jsonl` flag。`PLAIN_AGENT_RESULT:` / `ONE_SHOT_RESULT:` 协议行在 jsonl 模式下不输出（事件流已含结果），其他格式保持不变。
+
 ### 修改注意事项
 
 - 框架日志实现在 `AgentDev/src/core/logging.ts`；改动后需在 AgentDev 仓库 `npm run build` 并重启整个 Claw 服务。

@@ -23,6 +23,7 @@ import os from 'os';
 import { mkdirSync, existsSync, readFileSync } from 'fs';
 import { FileSessionStore } from 'agentdev';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -215,7 +216,14 @@ function resolveWorkspaceCwd(agentId, sessionId = '') {
 
 // ========== Main ==========
 
-const [agentDir, agentId, sessionIdArg, ...goalParts] = process.argv.slice(2);
+// --format jsonl：stdout 输出会话事件 JSONL 流（替代 ONE_SHOT_RESULT 行）
+const rawArgs = process.argv.slice(2);
+const hasJsonlFlag = rawArgs.includes('--format') && rawArgs[rawArgs.indexOf('--format') + 1] === 'jsonl';
+const positionalArgs = hasJsonlFlag
+  ? rawArgs.filter((arg, i) => arg !== '--format' && rawArgs[i - 1] !== '--format')
+  : rawArgs;
+
+const [agentDir, agentId, sessionIdArg, ...goalParts] = positionalArgs;
 const goal = goalParts.join(' ');
 
 if (!agentDir || !agentId || !sessionIdArg || !goal) {
@@ -236,11 +244,19 @@ const sessionId = sessionIdArg && sessionIdArg !== '__protoclaw-no-session__'
   : null;
 
 function outputResult(result) {
+  // jsonl 模式下 stdout 只承载会话事件流，不追加结果行；成败由 exit code 表达
+  if (hasJsonlFlag) return;
   console.log('ONE_SHOT_RESULT:' + JSON.stringify(result));
 }
 
 async function main() {
   console.error(`[OneShot] Starting agent=${agentId} session=${sessionId || '(new)'} goal="${goal.slice(0, 80)}"`);
+
+  // 会话事件流输出：jsonl 模式写 stdout，其余模式渲染 human 可读行到 stderr
+  attachSessionEventOutput({
+    format: hasJsonlFlag ? 'jsonl' : 'human',
+    threadId: sessionId || agentId,
+  });
 
   // 1. Resolve workspace
   const workspaceCwd = resolveWorkspaceCwd(agentId, sessionId);
@@ -354,6 +370,7 @@ async function main() {
 
 main().catch((error) => {
   console.error('[OneShot] Fatal:', error);
+  emitFatalSessionError(error instanceof Error ? error.message : String(error));
   outputResult({
     ok: false,
     response: null,
