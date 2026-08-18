@@ -68,7 +68,13 @@ describe('computeProcessGroupKey', () => {
   it('includes agentId and normalized path in the key', () => {
     const key = computeProcessGroupKey('ph', 'D:\\Code\\MyProject');
     assert.ok(key.startsWith('ph::'));
-    assert.ok(key.includes('d:/code/myproject'));
+    if (process.platform === 'win32') {
+      // Windows folds drive-letter path casing
+      assert.ok(key.includes('d:/code/myproject'));
+    } else {
+      // Non-Windows keeps original casing (see computeProcessGroupKey impl)
+      assert.ok(key.includes('D:/Code/MyProject'));
+    }
   });
 
   it('handles trailing slashes consistently', () => {
