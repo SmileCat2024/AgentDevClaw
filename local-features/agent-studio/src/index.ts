@@ -13,35 +13,73 @@ export interface AgentStudioFeatureConfig {
   statePath?: string;
 }
 
-type TestRuntimeMode = 'shared' | 'workspace-copy' | 'restricted';
 type TestRuntimeStatus = 'not-provisioned' | 'running' | 'stopped';
 type StudioFeatureStatus = 'implemented' | 'mounted' | 'verified';
+export type SessionPolicy = 'fresh' | 'stateful' | 'checkpointed';
 
-interface StudioFeatureEntry {
-  name: string;
-  modulePath: string;
-  status: StudioFeatureStatus;
+const ASSERTION_KINDS = ['tool-executed', 'tool-denied', 'tool-result-path', 'reply-includes', 'hook-observed'] as const;
+export type AssertionKind = (typeof ASSERTION_KINDS)[number];
+
+/** 可执行断言：测试通过的判定依据，全部由运行证据机器判定。 */
+export interface StudioAssertion {
+  kind: AssertionKind;
+  /** tool-executed / tool-denied / tool-result-path 必填 */
+  tool?: string;
+  /** tool-executed：最少执行次数（缺省 1） */
+  count?: number;
+  /** tool-denied：拒绝原因需包含的子串 */
+  reasonIncludes?: string;
+  /** tool-result-path：匹配第几次调用（从 1 开始；缺省取最后一次） */
+  occurrence?: number;
+  /** tool-result-path：结果 JSON 路径，如 $.openCount、$.tickets[0].title */
+  path?: string;
+  /** tool-result-path：期望值（深度比较） */
+  equals?: unknown;
+  /** reply-includes 必填 */
+  text?: string;
+  /** hook-observed 过滤条件（lifecycle 必填，其余可选） */
+  feature?: string;
+  lifecycle?: string;
+  method?: string;
+  /** hook-observed：关联工具名 */
+  subject?: string;
 }
 
-interface StudioTestCase {
+export interface StudioTestCase {
   id: string;
   title: string;
   input: string;
-  expectedEvidence: string;
-  expectedToolCalls: string[];
+  /** 供人读的测试意图说明（不参与判定） */
+  description?: string;
+  sessionPolicy: SessionPolicy;
+  /** sessionPolicy='checkpointed' 时必填 */
+  checkpoint?: string;
+  assertions: StudioAssertion[];
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface StudioFeatureVerification {
+  lastVerifiedRunId: string;
+  verifiedAt: string;
+  coverage: StudioFeatureCoverage;
+}
+
+export interface StudioFeatureEntry {
+  name: string;
+  modulePath: string;
+  status: StudioFeatureStatus;
+  verification?: StudioFeatureVerification;
+}
+
 interface AgentStudioProject {
-  schemaVersion: 1;
+  schemaVersion: 2;
   name: string;
   goal: string;
   targetAgent: string;
   features: StudioFeatureEntry[];
   testRuntime: {
-    mode: TestRuntimeMode;
     status: TestRuntimeStatus;
   };
   tests: StudioTestCase[];
@@ -64,13 +102,40 @@ interface StudioProjectEntry {
 
 export interface StudioToolCallEvidence {
   tool: string;
+  /** 拥有该工具的 feature（证据归属） */
+  feature?: string;
   ok: boolean;
   durationMs: number;
-  result?: string;
+  /** 最终投递结果（ToolResultTransform 之后、模型实际收到的值） */
+  result?: unknown;
   error?: string;
   at: string;
   /** true = 调用被拦截（guard Deny / 工具禁用），execute 从未执行 */
   denied?: boolean;
+}
+
+export interface StudioHookEvidence {
+  feature: string;
+  method: string;
+  lifecycle: string;
+  kind: string;
+  subject?: string;
+  decision?: string;
+  durationMs?: number;
+  at: string;
+}
+
+export interface StudioFeatureCoverage {
+  tools: string[];
+  hooks: string[];
+  deniedTools: string[];
+}
+
+export interface AssertionEvaluation {
+  assertion: StudioAssertion;
+  ok: boolean;
+  actual?: unknown;
+  detail?: string;
 }
 
 export interface StudioRunRecord {
@@ -80,15 +145,22 @@ export interface StudioRunRecord {
   finishedAt: string;
   phase: 'reload' | 'test';
   ok: boolean;
-  /** true = 期望工具全部观察到；false = 有缺失；null = 本次运行没有可机检的期望 */
+  /** true = 全部断言通过；false = 有断言失败或运行出错；null = 本次运行没有断言（仅取证） */
   passed: boolean | null;
-  expectedToolCalls: string[];
-  matchedToolCalls: string[];
-  missingToolCalls: string[];
-  /** 本次运行中被拦截（未真实执行）的期望外工具名，供拒绝路径取证 */
-  deniedToolCalls?: string[];
+  assertionResults: AssertionEvaluation[];
+  /** 本次运行实际覆盖到的 Feature 与证据面 */
+  featureCoverage: Record<string, StudioFeatureCoverage>;
+  /** 运行时各 Feature 的源指纹（size-mtimeMs） */
+  featureRevisions: Record<string, string>;
+  session: {
+    policy: SessionPolicy;
+    checkpoint?: string;
+    restoredFrom?: string | null;
+    saved?: string | null;
+  };
   reply?: string;
   toolCalls: StudioToolCallEvidence[];
+  hooks: StudioHookEvidence[];
   reloadSummary: Array<{
     featureName: string;
     action: 'reloaded' | 'unchanged' | 'ensure-mounted' | 'failed';
@@ -102,16 +174,233 @@ export interface StudioRunRecord {
   error?: { name: string; message: string; stack?: string };
 }
 
-/** 评估工具调用证据是否覆盖期望（纯函数，测试直接覆盖）。 */
-export function evaluateToolCalls(
-  evidenceToolNames: string[],
-  expectedToolCalls: string[],
-): { matchedToolCalls: string[]; missingToolCalls: string[] } {
-  const present = new Set(evidenceToolNames);
-  const matchedToolCalls = expectedToolCalls.filter((name) => present.has(name));
-  const missingToolCalls = expectedToolCalls.filter((name) => !present.has(name));
-  return { matchedToolCalls, missingToolCalls };
+// ── 断言求值（纯函数） ─────────────────────────────────────────
+
+/** 解析 $ 路径：$.a.b、$.list[0].name */
+export function getPathValue(target: unknown, path: string): unknown {
+  if (!path.startsWith('$')) {
+    throw new Error(`path 必须以 $ 开头：${path}`);
+  }
+  const tokens = path
+    .slice(1)
+    .replace(/\[(\d+)\]/g, '.$1')
+    .split('.')
+    .filter(Boolean);
+  let current = target;
+  for (const token of tokens) {
+    if (current === null || current === undefined) return undefined;
+    current = (current as Record<string, unknown>)[token];
+  }
+  return current;
 }
+
+export function deepEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((item, index) => deepEqual(item, right[index]));
+  }
+  if (left && right && typeof left === 'object' && typeof right === 'object') {
+    const leftKeys = Object.keys(left as Record<string, unknown>);
+    const rightKeys = Object.keys(right as Record<string, unknown>);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) =>
+      deepEqual((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]),
+    );
+  }
+  return false;
+}
+
+function parseEvidenceResult(raw: unknown): { value?: unknown; error?: string } {
+  if (raw === undefined || raw === null) return { error: '结果为空' };
+  if (typeof raw === 'string') {
+    try {
+      return { value: JSON.parse(raw) };
+    } catch {
+      return { error: `结果不是合法 JSON：${raw.slice(0, 200)}` };
+    }
+  }
+  return { value: raw };
+}
+
+export function evaluateAssertions(
+  assertions: StudioAssertion[],
+  input: { reply?: string; toolCalls: StudioToolCallEvidence[]; hooks: StudioHookEvidence[] },
+): AssertionEvaluation[] {
+  const results: AssertionEvaluation[] = [];
+  for (const assertion of assertions) {
+    results.push(evaluateAssertion(assertion, input));
+  }
+  return results;
+}
+
+function evaluateAssertion(
+  assertion: StudioAssertion,
+  input: { reply?: string; toolCalls: StudioToolCallEvidence[]; hooks: StudioHookEvidence[] },
+): AssertionEvaluation {
+  const { reply, toolCalls, hooks } = input;
+  switch (assertion.kind) {
+    case 'tool-executed': {
+      const required = assertion.count && assertion.count > 0 ? assertion.count : 1;
+      const executed = toolCalls.filter((entry) => !entry.denied && entry.tool === assertion.tool);
+      const denied = toolCalls.filter((entry) => entry.denied && entry.tool === assertion.tool);
+      const ok = executed.length >= required;
+      return {
+        assertion,
+        ok,
+        actual: executed.length,
+        detail: ok
+          ? undefined
+          : `工具 ${assertion.tool} 实际执行 ${executed.length} 次（要求 >= ${required}）${denied.length > 0 ? `；另有 ${denied.length} 次被拦截（denied）` : ''}`,
+      };
+    }
+    case 'tool-denied': {
+      const deniedEntries = toolCalls.filter((entry) => entry.denied && entry.tool === assertion.tool);
+      const executed = toolCalls.filter((entry) => !entry.denied && entry.tool === assertion.tool);
+      let matched = deniedEntries;
+      if (assertion.reasonIncludes) {
+        matched = deniedEntries.filter((entry) => (entry.error || '').includes(assertion.reasonIncludes!));
+      }
+      const ok = matched.length > 0;
+      return {
+        assertion,
+        ok,
+        actual: matched.length,
+        detail: ok
+          ? undefined
+          : `工具 ${assertion.tool} 未观察到满足条件的被拒调用（被拒 ${deniedEntries.length} 次，实际执行 ${executed.length} 次）${assertion.reasonIncludes ? `；要求拒绝原因包含「${assertion.reasonIncludes}」` : ''}`,
+      };
+    }
+    case 'tool-result-path': {
+      const executed = toolCalls.filter((entry) => !entry.denied && entry.tool === assertion.tool);
+      if (executed.length === 0) {
+        return { assertion, ok: false, detail: `工具 ${assertion.tool} 未执行，无法取结果` };
+      }
+      const index = assertion.occurrence && assertion.occurrence > 0
+        ? assertion.occurrence - 1
+        : executed.length - 1;
+      if (index >= executed.length) {
+        return { assertion, ok: false, actual: executed.length, detail: `工具 ${assertion.tool} 仅执行 ${executed.length} 次，无法取第 ${assertion.occurrence} 次结果` };
+      }
+      const parsed = parseEvidenceResult(executed[index].result);
+      if (parsed.error) {
+        return { assertion, ok: false, detail: parsed.error };
+      }
+      let value: unknown;
+      try {
+        value = getPathValue(parsed.value, assertion.path || '$');
+      } catch (error) {
+        return { assertion, ok: false, detail: error instanceof Error ? error.message : String(error) };
+      }
+      const ok = deepEqual(value, assertion.equals);
+      return {
+        assertion,
+        ok,
+        actual: value,
+        detail: ok
+          ? undefined
+          : `路径 ${assertion.path} 实际值为 ${JSON.stringify(value) ?? String(value)}，期望 ${JSON.stringify(assertion.equals) ?? String(assertion.equals)}`,
+      };
+    }
+    case 'reply-includes': {
+      const ok = typeof reply === 'string' && reply.includes(assertion.text || '');
+      return {
+        assertion,
+        ok,
+        detail: ok ? undefined : `最终回复未包含「${assertion.text}」${typeof reply === 'string' ? `（回复长度 ${reply.length}）` : '（无回复）'}`,
+      };
+    }
+    case 'hook-observed': {
+      const matched = hooks.filter((entry) =>
+        entry.lifecycle === assertion.lifecycle
+        && (!assertion.feature || entry.feature === assertion.feature)
+        && (!assertion.method || entry.method === assertion.method)
+        && (!assertion.subject || entry.subject === assertion.subject),
+      );
+      const ok = matched.length > 0;
+      return {
+        assertion,
+        ok,
+        actual: matched.length,
+        detail: ok
+          ? undefined
+          : `未观察到匹配的钩子调用（lifecycle=${assertion.lifecycle}${assertion.feature ? `, feature=${assertion.feature}` : ''}${assertion.method ? `, method=${assertion.method}` : ''}；实际观察到 ${hooks.length} 次钩子调用）`,
+      };
+    }
+    default:
+      return { assertion, ok: false, detail: `未知断言类型：${assertion.kind}` };
+  }
+}
+
+/** 把运行证据归属到 Feature：工具按 feature 字段、钩子按 feature 字段。 */
+export function computeFeatureCoverage(
+  toolCalls: StudioToolCallEvidence[],
+  hooks: StudioHookEvidence[],
+): Record<string, StudioFeatureCoverage> {
+  const coverage: Record<string, StudioFeatureCoverage> = {};
+  const ensure = (feature: string): StudioFeatureCoverage => {
+    if (!coverage[feature]) coverage[feature] = { tools: [], hooks: [], deniedTools: [] };
+    return coverage[feature];
+  };
+  for (const entry of toolCalls) {
+    if (!entry.feature) continue;
+    const bucket = ensure(entry.feature);
+    if (entry.denied) {
+      if (!bucket.deniedTools.includes(entry.tool)) bucket.deniedTools.push(entry.tool);
+    } else if (!bucket.tools.includes(entry.tool)) {
+      bucket.tools.push(entry.tool);
+    }
+  }
+  for (const hook of hooks) {
+    if (!hook.feature) continue;
+    const bucket = ensure(hook.feature);
+    const signature = `${hook.lifecycle}:${hook.method}`;
+    if (!bucket.hooks.includes(signature)) bucket.hooks.push(signature);
+  }
+  // 账本与事件顺序无关：统一排序保证持久化形态稳定
+  for (const bucket of Object.values(coverage)) {
+    bucket.tools.sort();
+    bucket.hooks.sort();
+    bucket.deniedTools.sort();
+  }
+  return coverage;
+}
+
+function isCovered(coverage: StudioFeatureCoverage | undefined): boolean {
+  if (!coverage) return false;
+  return coverage.tools.length + coverage.hooks.length + coverage.deniedTools.length > 0;
+}
+
+/**
+ * Feature 状态推进：
+ * - reloaded / ensure-mounted → mounted（源码已变，旧验证失效）
+ * - 本次 passed 且该 Feature 有覆盖证据 → verified（记录验证账本）
+ * - unchanged → 保持原状（verified 不因未变更而降级）
+ */
+export function advanceFeatureStatuses(
+  features: StudioFeatureEntry[],
+  reloadSummary: StudioRunRecord['reloadSummary'],
+  coverage: Record<string, StudioFeatureCoverage>,
+  passed: boolean | null,
+  runId: string,
+  timestamp: string,
+): StudioFeatureEntry[] {
+  return features.map((feature) => {
+    const summaryEntry = reloadSummary.find((item) => item.featureName === feature.name);
+    let status = feature.status;
+    let verification = feature.verification;
+    if (summaryEntry && (summaryEntry.action === 'reloaded' || summaryEntry.action === 'ensure-mounted')) {
+      status = 'mounted';
+      verification = undefined;
+    }
+    if (passed === true && isCovered(coverage[feature.name])) {
+      status = 'verified';
+      verification = { lastVerifiedRunId: runId, verifiedAt: timestamp, coverage: coverage[feature.name] };
+    }
+    return verification ? { ...feature, status, verification } : { name: feature.name, modulePath: feature.modulePath, status };
+  });
+}
+
+// ── 常量 ──────────────────────────────────────────────────────
 
 const PROJECT_FILE_NAME = 'agent-studio.json';
 const REGISTRY_FILE_NAME = 'projects.json';
@@ -119,10 +408,11 @@ const RUNS_DIR_NAME = '.agent-studio';
 const RUNS_FILE_NAME = 'runs.json';
 const RUNS_KEEP_COUNT = 30;
 const READY_TIMEOUT_MS = 60_000;
-const RELOAD_TIMEOUT_MS = 30_000;
+const SYNC_TIMEOUT_MS = 120_000;
 const RUN_TEST_TIMEOUT_MS = 300_000;
 const INSPECT_TIMEOUT_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+const RUNS_RESULT_TRUNCATE = 2000;
 
 // ── Test Runtime 进程管理（module 级：feature 热载后子进程不丢） ──────────
 
@@ -325,74 +615,73 @@ async function stopRuntimeProcess(projectDir: string): Promise<{ stopped: boolea
   return { stopped: true, wasRunning: true };
 }
 
-// run-test 前把项目 features 同步进 runtime：未挂载的 ensure，变更的 reload。
-// runTag 透传给子进程打日志标签（runId 或 'startup'），供日志流按运行批次过滤。
+/**
+ * run-test 前把项目 features 同步进 runtime：一次 sync 请求完成
+ * ensure（按 static inject 拓扑序自动挂载）与 reload（状态迁移/失败回退）。
+ */
 async function syncFeaturesToRuntime(
   projectDir: string,
   handle: RuntimeHandle,
   project: AgentStudioProject,
   runTag = 'startup',
 ): Promise<StudioRunRecord['reloadSummary']> {
-  const summary: StudioRunRecord['reloadSummary'] = [];
   const inspectResult = await runtimeRequest(projectDir, handle, {
     type: 'studio-inspect',
   }, INSPECT_TIMEOUT_MS).catch(() => null);
   const mountedFeatures = inspectResult && Array.isArray(inspectResult.features)
     ? new Set(inspectResult.features as string[])
     : new Set<string>();
+
+  const ensure: Array<{ name: string; modulePath: string }> = [];
+  const reload: Array<{ name: string; modulePath: string }> = [];
+  const unchanged: string[] = [];
   for (const feature of project.features) {
     const currentFingerprint = await fingerprintModule(feature.modulePath);
     if (!mountedFeatures.has(feature.name)) {
-      const ensured = await runtimeRequest(projectDir, handle, {
-        type: 'studio-ensure-feature',
-        featureName: feature.name,
-        modulePath: feature.modulePath,
-        runId: runTag,
-      }, RELOAD_TIMEOUT_MS);
-      if (ensured.ok) {
-        handle.fingerprints.set(feature.name, currentFingerprint);
-        summary.push({ featureName: feature.name, action: 'ensure-mounted', ok: true });
-      } else {
-        const error = ensured.error as { message?: string } | undefined;
+      ensure.push({ name: feature.name, modulePath: feature.modulePath });
+    } else if (handle.fingerprints.get(feature.name) === currentFingerprint) {
+      unchanged.push(feature.name);
+    } else {
+      reload.push({ name: feature.name, modulePath: feature.modulePath });
+    }
+  }
+
+  const summary: StudioRunRecord['reloadSummary'] = [];
+  if (ensure.length > 0 || reload.length > 0) {
+    const synced = await runtimeRequest(projectDir, handle, {
+      type: 'studio-sync-features',
+      runId: runTag,
+      ensure: ensure.map((entry) => ({ featureName: entry.name, modulePath: entry.modulePath })),
+      reload: reload.map((entry) => ({ featureName: entry.name, modulePath: entry.modulePath })),
+    }, SYNC_TIMEOUT_MS);
+    const perFeature = Array.isArray(synced.perFeature) ? synced.perFeature as Array<Record<string, unknown>> : [];
+    const byName = new Map(perFeature.map((entry) => [String(entry.featureName || ''), entry]));
+    for (const feature of project.features) {
+      const entry = byName.get(feature.name);
+      if (entry) {
+        const action = entry.action === 'reloaded' || entry.action === 'ensure-mounted' || entry.action === 'failed'
+          ? entry.action
+          : 'unchanged';
+        if (entry.ok !== false) {
+          handle.fingerprints.set(feature.name, await fingerprintModule(feature.modulePath));
+        }
         summary.push({
           featureName: feature.name,
-          action: 'failed',
-          ok: false,
-          stage: typeof ensured.stage === 'string' ? ensured.stage : undefined,
-          error: error?.message || 'ensure 失败',
+          action,
+          ok: entry.ok !== false,
+          ...(typeof entry.durationMs === 'number' ? { durationMs: entry.durationMs } : {}),
+          ...(entry.stateTransferred === true ? { stateTransferred: true } : {}),
+          ...(typeof entry.stage === 'string' ? { stage: entry.stage } : {}),
+          ...(entry.reverted === true ? { reverted: true } : {}),
+          ...(typeof entry.error === 'string' ? { error: entry.error } : {}),
         });
+      } else {
+        summary.push({ featureName: feature.name, action: 'unchanged', ok: true });
       }
-      continue;
     }
-    if (handle.fingerprints.get(feature.name) === currentFingerprint) {
+  } else {
+    for (const feature of project.features) {
       summary.push({ featureName: feature.name, action: 'unchanged', ok: true });
-      continue;
-    }
-    const reloaded = await runtimeRequest(projectDir, handle, {
-      type: 'studio-reload-feature',
-      featureName: feature.name,
-      modulePath: feature.modulePath,
-      runId: runTag,
-    }, RELOAD_TIMEOUT_MS);
-    if (reloaded.ok) {
-      handle.fingerprints.set(feature.name, currentFingerprint);
-      summary.push({
-        featureName: feature.name,
-        action: 'reloaded',
-        ok: true,
-        durationMs: typeof reloaded.durationMs === 'number' ? reloaded.durationMs : undefined,
-        stateTransferred: reloaded.stateTransferred === true,
-      });
-    } else {
-      const error = reloaded.error as { message?: string } | undefined;
-      summary.push({
-        featureName: feature.name,
-        action: 'failed',
-        ok: false,
-        stage: typeof reloaded.stage === 'string' ? reloaded.stage : undefined,
-        reverted: reloaded.reverted === true,
-        error: error?.message || 'reload 失败',
-      });
     }
   }
   return summary;
@@ -408,11 +697,31 @@ function normalizeFeatureStatus(value: unknown): StudioFeatureStatus {
   return value === 'mounted' || value === 'verified' ? value : 'implemented';
 }
 
+function normalizeVerification(raw: unknown): StudioFeatureVerification | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const coverageRaw = record.coverage && typeof record.coverage === 'object' ? record.coverage : {};
+  const coverage = coverageRaw as Record<string, unknown>;
+  const list = (value: unknown): string[] => (Array.isArray(value) ? value.map(String).filter(Boolean) : []);
+  return {
+    lastVerifiedRunId: cleanValue(record.lastVerifiedRunId),
+    verifiedAt: cleanValue(record.verifiedAt),
+    coverage: {
+      tools: list(coverage.tools),
+      hooks: list(coverage.hooks),
+      deniedTools: list(coverage.deniedTools),
+    },
+  };
+}
+
 function normalizeFeatureEntry(raw: Partial<StudioFeatureEntry>): StudioFeatureEntry | null {
   const name = cleanValue(raw.name);
   const modulePath = cleanValue(raw.modulePath);
   if (!name || !modulePath) return null;
-  return { name, modulePath, status: normalizeFeatureStatus(raw.status) };
+  const entry: StudioFeatureEntry = { name, modulePath, status: normalizeFeatureStatus(raw.status) };
+  const verification = normalizeVerification(raw.verification);
+  if (verification && verification.lastVerifiedRunId) entry.verification = verification;
+  return entry;
 }
 
 function normalizeTestRuntimeStatus(value: unknown): TestRuntimeStatus {
@@ -427,27 +736,87 @@ function getProjectPath(projectDir: string): string {
   return join(projectDir, PROJECT_FILE_NAME);
 }
 
-function normalizeTestRuntimeMode(value: unknown): TestRuntimeMode {
-  return value === 'workspace-copy' || value === 'restricted' ? value : 'shared';
+export function normalizeAssertion(raw: unknown): StudioAssertion {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('断言必须是对象，形如 { kind, ... }。五种 kind：tool-executed / tool-denied / tool-result-path / reply-includes / hook-observed。');
+  }
+  const record = raw as Record<string, unknown>;
+  const kind = cleanValue(record.kind) as AssertionKind;
+  if (!ASSERTION_KINDS.includes(kind)) {
+    throw new Error(`断言 kind 「${kind || '(空)'}」不合法。可选：${ASSERTION_KINDS.join(' / ')}。`);
+  }
+  const assertion: StudioAssertion = { kind };
+  const tool = cleanValue(record.tool);
+  const assign = (key: keyof StudioAssertion, value: unknown) => {
+    (assertion as unknown as Record<string, unknown>)[key] = value;
+  };
+  switch (kind) {
+    case 'tool-executed':
+    case 'tool-denied':
+    case 'tool-result-path': {
+      if (!tool) throw new Error(`断言 kind=${kind} 需要非空 tool 字段（工具名）。`);
+      assign('tool', tool);
+      if (kind === 'tool-executed' && typeof record.count === 'number' && record.count > 0) assign('count', record.count);
+      if (kind === 'tool-denied' && cleanValue(record.reasonIncludes)) assign('reasonIncludes', cleanValue(record.reasonIncludes));
+      if (kind === 'tool-result-path') {
+        const path = cleanValue(record.path);
+        if (!path.startsWith('$')) {
+          throw new Error(`tool-result-path 需要 path 字段且以 $ 开头（如 $.openCount、$.items[0].title），收到：${path || '(空)'}`);
+        }
+        assign('path', path);
+        if (typeof record.occurrence === 'number' && record.occurrence > 0) assign('occurrence', record.occurrence);
+        if (Object.prototype.hasOwnProperty.call(record, 'equals')) assign('equals', record.equals);
+        else throw new Error('tool-result-path 需要 equals 字段（期望值，深度比较）。');
+      }
+      break;
+    }
+    case 'reply-includes': {
+      const text = cleanValue(record.text);
+      if (!text) throw new Error('reply-includes 需要非空 text 字段。');
+      assign('text', text);
+      break;
+    }
+    case 'hook-observed': {
+      const lifecycle = cleanValue(record.lifecycle);
+      if (!lifecycle) throw new Error('hook-observed 需要 lifecycle 字段（如 ToolUse / ToolResultTransform / CallStart）。');
+      assign('lifecycle', lifecycle);
+      if (cleanValue(record.feature)) assign('feature', cleanValue(record.feature));
+      if (cleanValue(record.method)) assign('method', cleanValue(record.method));
+      if (cleanValue(record.subject)) assign('subject', cleanValue(record.subject));
+      break;
+    }
+  }
+  return assertion;
 }
 
-function normalizeTestCase(raw: Partial<StudioTestCase>): StudioTestCase | null {
+function normalizeSessionPolicy(value: unknown): SessionPolicy {
+  return value === 'stateful' || value === 'checkpointed' ? value : 'fresh';
+}
+
+export function normalizeTestCase(raw: Partial<StudioTestCase>): StudioTestCase | null {
   const id = cleanValue(raw.id);
   const title = cleanValue(raw.title);
   const input = cleanValue(raw.input);
   if (!id || !title || !input) return null;
-  return {
+  const sessionPolicy = normalizeSessionPolicy(raw.sessionPolicy);
+  const checkpoint = cleanValue(raw.checkpoint);
+  if (sessionPolicy === 'checkpointed' && !checkpoint) return null;
+  const assertions = Array.isArray(raw.assertions)
+    ? raw.assertions.map((item) => normalizeAssertion(item))
+    : [];
+  const test: StudioTestCase = {
     id,
     title,
     input,
-    expectedEvidence: cleanValue(raw.expectedEvidence),
-    expectedToolCalls: Array.isArray(raw.expectedToolCalls)
-      ? raw.expectedToolCalls.map(cleanValue).filter(Boolean)
-      : [],
+    sessionPolicy,
+    ...(checkpoint ? { checkpoint } : {}),
+    assertions,
     enabled: raw.enabled !== false,
     createdAt: cleanValue(raw.createdAt),
     updatedAt: cleanValue(raw.updatedAt),
   };
+  if (cleanValue(raw.description)) test.description = cleanValue(raw.description);
+  return test;
 }
 
 function normalizeProject(raw: Partial<AgentStudioProject>): AgentStudioProject | null {
@@ -460,19 +829,26 @@ function normalizeProject(raw: Partial<AgentStudioProject>): AgentStudioProject 
     ? raw.features.map((item) => normalizeFeatureEntry(item || {})).filter(Boolean) as StudioFeatureEntry[]
     : [];
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     name,
     goal: cleanValue(raw.goal),
     targetAgent: cleanValue(raw.targetAgent),
     features,
     testRuntime: {
-      mode: normalizeTestRuntimeMode(raw.testRuntime?.mode),
       status: normalizeTestRuntimeStatus(raw.testRuntime?.status),
     },
     tests,
     createdAt: cleanValue(raw.createdAt),
     updatedAt: cleanValue(raw.updatedAt),
   };
+}
+
+function describeCoverage(coverage: StudioFeatureCoverage): string {
+  const parts: string[] = [];
+  if (coverage.tools.length > 0) parts.push(`工具 ${coverage.tools.join('/')}`);
+  if (coverage.hooks.length > 0) parts.push(`钩子 ${coverage.hooks.join('/')}`);
+  if (coverage.deniedTools.length > 0) parts.push(`被拒工具 ${coverage.deniedTools.join('/')}`);
+  return parts.join('，');
 }
 
 function buildProjectMarkdown(
@@ -491,13 +867,26 @@ function buildProjectMarkdown(
   }
 
   const featureLines = project.features.length > 0
-    ? project.features.map((feature) => `  - ${feature.name}：${feature.status}（${feature.modulePath}）`)
+    ? project.features.flatMap((feature) => {
+        const line = `  - ${feature.name}：${feature.status}（${feature.modulePath}）`;
+        if (feature.status === 'verified' && feature.verification) {
+          return [line, `    验证证据：${describeCoverage(feature.verification.coverage)}（${feature.verification.lastVerifiedRunId}）`];
+        }
+        return [line];
+      })
     : ['  （尚未注册开发中的 Feature）'];
   const testLines = project.tests.length > 0
-    ? project.tests.map((test) => `  - ${test.id}${test.enabled ? '' : '（已停用）'}：${test.title}${test.expectedToolCalls.length > 0 ? `，期望工具：${test.expectedToolCalls.join(', ')}` : ''}`)
+    ? project.tests.map((test) => `  - ${test.id}${test.enabled ? '' : '（已停用）'}：${test.title}，策略 ${test.sessionPolicy}${test.checkpoint ? `（${test.checkpoint}）` : ''}，断言 ${test.assertions.length} 条`)
     : ['  （尚未定义测试）'];
   const runLine = lastRun
-    ? `- 最近一次运行（${lastRun.runId}）：phase=${lastRun.phase} ok=${lastRun.ok} passed=${lastRun.passed}${lastRun.missingToolCalls?.length ? `，缺失工具：${lastRun.missingToolCalls.join(', ')}` : ''}${lastRun.deniedToolCalls?.length ? `，被拦截工具：${lastRun.deniedToolCalls.join(', ')}（未真实执行）` : ''}`
+    ? (() => {
+        const passedCount = lastRun.assertionResults.filter((item) => item.ok).length;
+        const base = `- 最近一次运行（${lastRun.runId}）：phase=${lastRun.phase} ok=${lastRun.ok} passed=${lastRun.passed}`;
+        if (lastRun.assertionResults.length > 0) {
+          return `${base}，断言 ${passedCount}/${lastRun.assertionResults.length} 通过`;
+        }
+        return base;
+      })()
     : '- 尚无运行记录';
 
   return [
@@ -513,7 +902,7 @@ function buildProjectMarkdown(
     ...testLines,
     runLine,
     '',
-    '注意事项：feature 状态为 implemented 时只代表代码存在；只有经过 Test Runtime 挂载/运行产生的结果才可称为 mounted/verified。修改 Feature 源码后调用 studio_run_test 会自动完成重新挂载与测试。',
+    '注意事项：implemented 只代表代码存在；Feature 状态由运行证据推进——挂载成功为 mounted，测试断言全部通过且证据归属到该 Feature 才是 verified。装配顺序由 static inject 自动拓扑排序，注册顺序无关。修改源码后 studio_run_test 自动热载并重验。',
   ].join('\n');
 }
 
@@ -532,9 +921,19 @@ async function readRuns(projectDir: string): Promise<StudioRunRecord[]> {
   }
 }
 
+function truncateRunEvidence(record: StudioRunRecord): StudioRunRecord {
+  const toolCalls = record.toolCalls.map((entry) => ({
+    ...entry,
+    ...(entry.result !== undefined
+      ? { result: typeof entry.result === 'string' && entry.result.length > RUNS_RESULT_TRUNCATE ? `${entry.result.slice(0, RUNS_RESULT_TRUNCATE)}…` : entry.result }
+      : {}),
+  }));
+  return { ...record, toolCalls };
+}
+
 async function appendRun(projectDir: string, record: StudioRunRecord): Promise<void> {
   const existing = await readRuns(projectDir);
-  const next = [record, ...existing].slice(0, RUNS_KEEP_COUNT);
+  const next = [truncateRunEvidence(record), ...existing].slice(0, RUNS_KEEP_COUNT);
   await fs.mkdir(join(projectDir, RUNS_DIR_NAME), { recursive: true });
   await fs.writeFile(getRunsPath(projectDir), `${JSON.stringify(next, null, 2)}\n`, 'utf8');
 }
@@ -552,7 +951,28 @@ async function markRuntimeStopped(projectDir: string): Promise<void> {
   }
 }
 
-// ── Feature 主体 ─────────────────────────────────────────────
+// ── 工具参数 schema 片段 ──────────────────────────────────────
+
+const assertionParameterSchema = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: [...ASSERTION_KINDS], description: '断言类型。' },
+    tool: { type: 'string', description: '工具名（tool-executed / tool-denied / tool-result-path 必填）。' },
+    count: { type: 'number', description: 'tool-executed：最少执行次数，缺省 1。' },
+    reasonIncludes: { type: 'string', description: 'tool-denied：拒绝原因需包含的子串。' },
+    occurrence: { type: 'number', description: 'tool-result-path：匹配第几次调用（从 1 开始），缺省取最后一次。' },
+    path: { type: 'string', description: 'tool-result-path：结果 JSON 路径，如 $.openCount、$.items[0].title。' },
+    equals: { description: 'tool-result-path：期望值（深度比较）。' },
+    text: { type: 'string', description: 'reply-includes：回复需包含的文本。' },
+    feature: { type: 'string', description: 'hook-observed：feature 名过滤。' },
+    lifecycle: { type: 'string', description: 'hook-observed：生命周期名（ToolUse / ToolResultTransform 等）。' },
+    method: { type: 'string', description: 'hook-observed：钩子方法名过滤。' },
+    subject: { type: 'string', description: 'hook-observed：关联工具名过滤。' },
+  },
+  required: ['kind'],
+};
+
+// ── Feature 主体 ──────────────────────────────────────────────
 
 export class AgentStudioFeature implements AgentFeature {
   static hooks: HookDeclarations = {
@@ -561,7 +981,7 @@ export class AgentStudioFeature implements AgentFeature {
 
   readonly name = 'agent-studio';
   readonly source = import.meta.url;
-  readonly description = 'Agent Studio 控制面：统一项目模型、Test Runtime 生命周期、热载与可归因测试运行。';
+  readonly description = 'Agent Studio 控制面：统一项目模型、Test Runtime 生命周期、装配拓扑、结构化断言测试与 Feature 级验证账本。';
 
   private readonly workspaceDir: string;
   private readonly statePath: string;
@@ -666,7 +1086,7 @@ export class AgentStudioFeature implements AgentFeature {
     return [
       createTool({
         name: 'studio_get_project',
-        description: '读取当前 Agent Studio 项目的配置、开发中 Feature、Test Runtime 实时状态和最近运行记录。',
+        description: '读取当前 Agent Studio 项目的配置、开发中 Feature（含验证证据）、Test Runtime 实时状态和最近运行记录。',
         parameters: { type: 'object', properties: {} },
         execute: async () => {
           const projectDir = await this.resolveProjectDirectory();
@@ -708,7 +1128,6 @@ export class AgentStudioFeature implements AgentFeature {
             targetAgent: hasOwn('targetAgent') ? cleanValue(args.targetAgent) : existing?.targetAgent,
             features: existing?.features || [],
             testRuntime: {
-              mode: 'shared',
               status: existing?.testRuntime?.status || 'not-provisioned',
             },
             tests: existing?.tests || [],
@@ -724,7 +1143,7 @@ export class AgentStudioFeature implements AgentFeature {
       }),
       createTool({
         name: 'studio_add_feature',
-        description: '注册一个开发中的 Feature：给出 feature 名与 ESM 模块文件路径。模块需导出 feature 类且 name 属性与注册名一致。先写好模块文件再调用。',
+        description: '注册一个开发中的 Feature：给出 feature 名与 ESM 模块文件路径。模块需导出 feature 类且 name 属性与注册名一致。装配顺序按 static inject 自动拓扑排序，注册顺序无关。先写好模块文件再调用。',
         parameters: {
           type: 'object',
           properties: {
@@ -752,8 +1171,44 @@ export class AgentStudioFeature implements AgentFeature {
         },
       }),
       createTool({
+        name: 'studio_remove_feature',
+        description: '从项目中移除一个 Feature 注册。若 Test Runtime 正在运行，同时从运行时卸载。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '要移除的 feature 名。' },
+          },
+          required: ['name'],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const { projectDir, project } = await this.requireProject();
+          const name = cleanValue(args.name);
+          if (!name) throw new Error('name 不能为空。');
+          const existing = project.features.find((item) => item.name === name);
+          if (!existing) throw new Error(`Feature ${name} 不在项目注册表中。`);
+          const handle = getRuntimeHandle(projectDir);
+          let runtimeUpdated = false;
+          if (handle) {
+            const removed = await runtimeRequest(projectDir, handle, {
+              type: 'studio-remove-feature',
+              featureName: name,
+            }, SYNC_TIMEOUT_MS);
+            if (removed.ok !== true) {
+              const error = removed.error as { message?: string } | undefined;
+              throw new Error(`从 Test Runtime 卸载失败：${error?.message || '未知错误'}`);
+            }
+            handle.fingerprints.delete(name);
+            runtimeUpdated = true;
+          }
+          const timestamp = new Date().toISOString();
+          const features = project.features.filter((item) => item.name !== name);
+          await this.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
+          return { projectDir, removed: name, runtimeUpdated, featureCount: features.length };
+        },
+      }),
+      createTool({
         name: 'studio_start_runtime',
-        description: '启动当前项目的 Test Runtime：独立进程加载最小被测 Agent 与全部开发中 Feature，初始化失败会直接报错。会话目录为项目内 .agent-studio/runtime-sessions。',
+        description: '启动当前项目的 Test Runtime：独立进程加载最小被测 Agent 与全部开发中 Feature（按 static inject 拓扑排序挂载，依赖缺失/循环会直接报错）。会话目录为项目内 .agent-studio/runtime-sessions。',
         parameters: {
           type: 'object',
           properties: {
@@ -778,7 +1233,7 @@ export class AgentStudioFeature implements AgentFeature {
             handle.fingerprints.set(feature.name, await fingerprintModule(feature.modulePath));
           }
           const timestamp = new Date().toISOString();
-          const nextProject = { ...project, testRuntime: { ...project.testRuntime, status: 'running' as const }, updatedAt: timestamp };
+          const nextProject = { ...project, testRuntime: { status: 'running' as const }, updatedAt: timestamp };
           await this.writeProject(projectDir, nextProject);
           return {
             projectDir,
@@ -792,189 +1247,37 @@ export class AgentStudioFeature implements AgentFeature {
       }),
       createTool({
         name: 'studio_stop_runtime',
-        description: '停止当前项目的 Test Runtime。测试会话已持久化，下次启动自动恢复。',
+        description: '停止当前项目的 Test Runtime。stateful 测试会话已持久化，下次启动自动恢复。',
         parameters: { type: 'object', properties: {} },
         execute: async () => {
           const { projectDir, project } = await this.requireProject();
           const result = await stopRuntimeProcess(projectDir);
           const timestamp = new Date().toISOString();
-          const nextProject = { ...project, testRuntime: { ...project.testRuntime, status: 'stopped' as const }, updatedAt: timestamp };
+          const nextProject = { ...project, testRuntime: { status: 'stopped' as const }, updatedAt: timestamp };
           await this.writeProject(projectDir, nextProject);
           return { projectDir, ...result };
         },
       }),
       createTool({
-        name: 'studio_run_test',
-        description: '在 Test Runtime 上运行测试：自动检测 Feature 源码变更并热载（失败自动回退上一版本），然后发送测试输入，返回回复全文、逐工具执行证据与期望比对结果。运行记录持久化，可用 studio_get_run 查询。',
-        parameters: {
-          type: 'object',
-          properties: {
-            testId: { type: 'string', description: '运行 studio_define_test 已定义的测试。' },
-            input: { type: 'string', description: '临时测试输入（与 testId 二选一）。' },
-            expectedToolCalls: {
-              type: 'array',
-              items: { type: 'string' },
-              description: '临时期望的工具名列表；全部被观察到才算通过。临时运行不写回测试定义。',
-            },
-            title: { type: 'string', description: '临时测试的标题（仅记录用）。' },
-          },
-        },
-        execute: async (args: Record<string, unknown>) => {
-          const { projectDir, project } = await this.requireProject();
-          const handle = getRuntimeHandle(projectDir);
-          if (!handle) {
-            throw new Error('Test Runtime 未运行。请先调用 studio_start_runtime。');
-          }
-
-          const testId = cleanValue(args.testId);
-          const input = cleanValue(args.input);
-          let testInput = input;
-          let expectedToolCalls: string[];
-          let recordedTestId = testId;
-          let title = cleanValue(args.title);
-          if (testId) {
-            const defined = project.tests.find((item) => item.id === testId);
-            if (!defined) throw new Error(`测试 ${testId} 不存在。请先调用 studio_define_test 定义。`);
-            testInput = defined.input;
-            expectedToolCalls = Array.isArray(args.expectedToolCalls)
-              ? (args.expectedToolCalls as unknown[]).map(cleanValue).filter(Boolean)
-              : defined.expectedToolCalls;
-            title = title || defined.title;
-          } else {
-            if (!testInput) throw new Error('请提供 testId（运行已定义测试）或 input（临时测试）。');
-            recordedTestId = 'ad-hoc';
-            expectedToolCalls = Array.isArray(args.expectedToolCalls)
-              ? (args.expectedToolCalls as unknown[]).map(cleanValue).filter(Boolean)
-              : [];
-            title = title || 'ad-hoc';
-          }
-
-          const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-          const startedAt = new Date().toISOString();
-
-          // 1) 同步 Feature 源码到 runtime（ensure/reload），runId 随消息透传打日志标签
-          const reloadSummary = await syncFeaturesToRuntime(projectDir, handle, project, runId);
-          const failedReload = reloadSummary.filter((item) => !item.ok);
-          if (failedReload.length > 0) {
-            const record: StudioRunRecord = {
-              runId,
-              testId: recordedTestId,
-              startedAt,
-              finishedAt: new Date().toISOString(),
-              phase: 'reload',
-              ok: false,
-              passed: false,
-              expectedToolCalls,
-              matchedToolCalls: [],
-              // 测试未执行，不产生行为证据；缺失列表保持为空，由 phase 表达"未运行"
-              missingToolCalls: [],
-              toolCalls: [],
-              reloadSummary,
-            };
-            await appendRun(projectDir, record);
-            return { run: record, guidance: 'Feature 热载失败，运行未执行；runtime 已回退到上一可用版本，修复源码后重试。' };
-          }
-
-          // 2) 发送测试输入
-          const result = await runtimeRequest(projectDir, handle, {
-            type: 'studio-run-test',
-            testId: recordedTestId,
-            input: testInput,
-            runId,
-          }, RUN_TEST_TIMEOUT_MS);
-
-          const toolCalls = Array.isArray(result.toolCalls) ? result.toolCalls as StudioToolCallEvidence[] : [];
-          // 被拦截的调用（denied）未真实执行，不算 invoked
-          const evidenceToolNames = toolCalls.filter((entry) => !entry.denied).map((entry) => entry.tool);
-          const { matchedToolCalls, missingToolCalls } = evaluateToolCalls(evidenceToolNames, expectedToolCalls);
-          const deniedToolCalls = [...new Set(toolCalls.filter((entry) => entry.denied).map((entry) => entry.tool))];
-          const callOk = result.ok === true;
-          const hasExpectation = expectedToolCalls.length > 0;
-          const passed = hasExpectation ? callOk && missingToolCalls.length === 0 : null;
-          const error = result.error as { name?: string; message?: string; stack?: string } | undefined;
-
-          const record: StudioRunRecord = {
-            runId,
-            testId: recordedTestId,
-            startedAt,
-            finishedAt: new Date().toISOString(),
-            phase: 'test',
-            ok: callOk,
-            passed,
-            expectedToolCalls,
-            matchedToolCalls,
-            missingToolCalls,
-            ...(deniedToolCalls.length > 0 ? { deniedToolCalls } : {}),
-            reply: typeof result.reply === 'string' ? result.reply : undefined,
-            toolCalls,
-            reloadSummary,
-            ...(error ? { error: { name: error.name || 'Error', message: error.message || '', stack: error.stack } } : {}),
-          };
-          await appendRun(projectDir, record);
-
-          // 3) 状态推进：本次重新挂载 → mounted；期望全部观察到 → verified
-          //    （测试通过必然以挂载为前提，verified 蕴含 mounted）
-          const timestamp = new Date().toISOString();
-          const features = project.features.map((feature) => {
-            const summaryEntry = reloadSummary.find((item) => item.featureName === feature.name);
-            let status = feature.status;
-            if (summaryEntry && (summaryEntry.action === 'reloaded' || summaryEntry.action === 'ensure-mounted')) {
-              status = 'mounted';
-            }
-            if (passed === true) {
-              status = 'verified';
-            }
-            return { ...feature, status };
-          });
-          const nextProject = { ...project, features, updatedAt: timestamp };
-          await this.writeProject(projectDir, nextProject);
-
-          const deniedMissing = missingToolCalls.filter((name) => deniedToolCalls.includes(name));
-          const runTestGuidance = deniedMissing.length > 0
-            ? `期望工具 ${deniedMissing.join(', ')} 被调用但被拦截（denied，真实执行 0 次）。被拒调用不算 invoked：若这是 guard 拒绝路径，请改为断言可观察的下游证据（如拒绝记录查询工具）而非被拒工具本身；若不应被拒，请检查 guard 逻辑。`
-            : undefined;
-          return {
-            run: record,
-            featureStatuses: features.map((feature) => ({ name: feature.name, status: feature.status })),
-            ...(runTestGuidance ? { guidance: runTestGuidance } : {}),
-          };
-        },
-      }),
-      createTool({
-        name: 'studio_get_run',
-        description: '查询运行记录：带 runId 返回完整记录（含逐工具证据），不带参数返回最近记录列表。',
-        parameters: {
-          type: 'object',
-          properties: {
-            runId: { type: 'string', description: '要查看的运行 ID。' },
-          },
-        },
-        execute: async (args: Record<string, unknown>) => {
-          const { projectDir } = await this.requireProject();
-          const runs = await readRuns(projectDir);
-          const runId = cleanValue(args.runId);
-          if (runId) {
-            const record = runs.find((item) => item.runId === runId) || null;
-            if (!record) throw new Error(`运行记录 ${runId} 不存在。`);
-            return { projectDir, run: record };
-          }
-          return { projectDir, runs: runs.map(({ runId: id, testId, phase, ok, passed, startedAt }) => ({ runId: id, testId, phase, ok, passed, startedAt })) };
-        },
-      }),
-      createTool({
         name: 'studio_define_test',
-        description: '为当前项目定义测试用例并保存到 agent-studio.json：测试输入 + 期望观察到的工具名（可机检）。之后用 studio_run_test { testId } 运行。',
+        description: '定义测试用例并保存到 agent-studio.json：输入 + 会话策略 + 可执行断言（由运行证据机器判定）。之后用 studio_run_test { testId } 运行。',
         parameters: {
           type: 'object',
           properties: {
             id: { type: 'string', description: '稳定测试 ID，例如 create-release-issue。' },
             title: { type: 'string' },
             input: { type: 'string', description: '发送给 Test Runtime 的测试输入。' },
-            expectedEvidence: { type: 'string', description: '期望观察到的现象描述（供人读）。' },
-            expectedToolCalls: {
+            description: { type: 'string', description: '测试意图说明（供人读，不参与判定）。' },
+            sessionPolicy: {
+              type: 'string',
+              enum: ['fresh', 'stateful', 'checkpointed'],
+              description: 'fresh=空上下文+空 Feature 状态（默认，确定性单场景）；stateful=接续 default 会话（多步流程）；checkpointed=从命名检查点恢复且不写回。',
+            },
+            checkpoint: { type: 'string', description: 'sessionPolicy=checkpointed 时必填：检查点名（studio_save_checkpoint 保存）。' },
+            assertions: {
               type: 'array',
-              items: { type: 'string' },
-              description: '期望被调用的工具名列表；测试通过要求全部观察到。',
+              items: assertionParameterSchema,
+              description: '可执行断言列表。五种 kind：tool-executed（工具真实执行次数）/ tool-denied（guard 拒绝）/ tool-result-path（投递结果 JSON 路径取值）/ reply-includes（回复包含文本）/ hook-observed（钩子真实触发）。',
             },
           },
           required: ['id', 'title', 'input'],
@@ -983,14 +1286,27 @@ export class AgentStudioFeature implements AgentFeature {
           const { projectDir, project } = await this.requireProject();
           const testId = cleanValue(args.id);
           const timestamp = new Date().toISOString();
+          let assertions: StudioAssertion[];
+          try {
+            assertions = Array.isArray(args.assertions)
+              ? (args.assertions as unknown[]).map((item) => normalizeAssertion(item))
+              : [];
+          } catch (error) {
+            throw new Error(`测试 ${testId} 的断言定义不合法：${error instanceof Error ? error.message : String(error)}`);
+          }
+          const sessionPolicy = normalizeSessionPolicy(args.sessionPolicy);
+          const checkpoint = cleanValue(args.checkpoint);
+          if (sessionPolicy === 'checkpointed' && !checkpoint) {
+            throw new Error(`测试 ${testId} 使用 checkpointed 策略，必须提供 checkpoint 名称（先用 studio_save_checkpoint 保存）。`);
+          }
           const nextTest = normalizeTestCase({
             id: testId,
             title: cleanValue(args.title),
             input: cleanValue(args.input),
-            expectedEvidence: cleanValue(args.expectedEvidence),
-            expectedToolCalls: Array.isArray(args.expectedToolCalls)
-              ? (args.expectedToolCalls as unknown[]).map(cleanValue).filter(Boolean)
-              : [],
+            ...(cleanValue(args.description) ? { description: cleanValue(args.description) } : {}),
+            sessionPolicy,
+            ...(checkpoint ? { checkpoint } : {}),
+            assertions,
             enabled: true,
             createdAt: timestamp,
             updatedAt: timestamp,
@@ -1009,11 +1325,250 @@ export class AgentStudioFeature implements AgentFeature {
       }),
       createTool({
         name: 'studio_list_tests',
-        description: '列出当前项目已定义的测试用例。',
+        description: '列出当前项目已定义的测试用例（含会话策略与断言）。',
         parameters: { type: 'object', properties: {} },
         execute: async () => {
           const { projectDir, project } = await this.requireProject();
           return { projectDir, tests: project.tests, runtimeStatus: this.liveRuntimeStatus(projectDir, project) };
+        },
+      }),
+      createTool({
+        name: 'studio_save_checkpoint',
+        description: '把当前 stateful 会话（default）保存为命名检查点，供 checkpointed 策略的测试从此恢复。检查点不会被测试运行写回。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '检查点名称（存储为 cp-<name>）。' },
+          },
+          required: ['name'],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const { projectDir } = await this.requireProject();
+          const handle = getRuntimeHandle(projectDir);
+          if (!handle) {
+            throw new Error('Test Runtime 未运行。请先调用 studio_start_runtime，并以 stateful 策略至少运行一次建立 default 会话。');
+          }
+          const name = cleanValue(args.name);
+          if (!name) throw new Error('检查点名称不能为空。');
+          const saved = await runtimeRequest(projectDir, handle, {
+            type: 'studio-save-checkpoint',
+            name,
+          }, SYNC_TIMEOUT_MS);
+          if (saved.ok !== true) {
+            const error = saved.error as { message?: string } | undefined;
+            throw new Error(error?.message || '保存检查点失败。');
+          }
+          return {
+            projectDir,
+            checkpoint: String(saved.checkpoint || `cp-${name}`),
+            checkpoints: Array.isArray(saved.checkpoints) ? saved.checkpoints : [],
+          };
+        },
+      }),
+      createTool({
+        name: 'studio_run_test',
+        description: '在 Test Runtime 上运行测试：自动检测 Feature 源码变更并热载（按 static inject 拓扑装配，失败自动回退），然后按会话策略准备上下文、发送输入，返回回复全文、逐工具投递结果证据、钩子触发证据与断言判定。运行记录持久化，可用 studio_get_run 查询。',
+        parameters: {
+          type: 'object',
+          properties: {
+            testId: { type: 'string', description: '运行 studio_define_test 已定义的测试。' },
+            input: { type: 'string', description: '临时测试输入（与 testId 二选一）。' },
+            title: { type: 'string', description: '临时测试的标题（仅记录用）。' },
+            assertions: {
+              type: 'array',
+              items: assertionParameterSchema,
+              description: '临时断言（仅本次运行生效，不写回测试定义）。' },
+            sessionPolicy: {
+              type: 'string',
+              enum: ['fresh', 'stateful', 'checkpointed'],
+              description: '临时运行覆盖会话策略；运行已定义测试时缺省用测试定义的策略。',
+            },
+            checkpoint: { type: 'string', description: 'checkpointed 策略的检查点名。' },
+          },
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const { projectDir, project } = await this.requireProject();
+          const handle = getRuntimeHandle(projectDir);
+          if (!handle) {
+            throw new Error('Test Runtime 未运行。请先调用 studio_start_runtime。');
+          }
+
+          const testId = cleanValue(args.testId);
+          const input = cleanValue(args.input);
+          let testInput = input;
+          let assertions: StudioAssertion[];
+          let sessionPolicy: SessionPolicy;
+          let checkpoint: string;
+          let recordedTestId = testId;
+          let title = cleanValue(args.title);
+          if (testId) {
+            const defined = project.tests.find((item) => item.id === testId);
+            if (!defined) throw new Error(`测试 ${testId} 不存在。请先调用 studio_define_test 定义。`);
+            testInput = defined.input;
+            assertions = Array.isArray(args.assertions)
+              ? (args.assertions as unknown[]).map((item) => normalizeAssertion(item))
+              : defined.assertions;
+            sessionPolicy = args.sessionPolicy ? normalizeSessionPolicy(args.sessionPolicy) : defined.sessionPolicy;
+            checkpoint = cleanValue(args.checkpoint) || defined.checkpoint || '';
+            title = title || defined.title;
+          } else {
+            if (!testInput) throw new Error('请提供 testId（运行已定义测试）或 input（临时测试）。');
+            recordedTestId = 'ad-hoc';
+            assertions = Array.isArray(args.assertions)
+              ? (args.assertions as unknown[]).map((item) => normalizeAssertion(item))
+              : [];
+            sessionPolicy = normalizeSessionPolicy(args.sessionPolicy);
+            checkpoint = cleanValue(args.checkpoint);
+            title = title || 'ad-hoc';
+          }
+          if (sessionPolicy === 'checkpointed' && !checkpoint) {
+            throw new Error('checkpointed 策略需要 checkpoint 名称（先用 studio_save_checkpoint 保存）。');
+          }
+
+          const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          const startedAt = new Date().toISOString();
+
+          // 1) 同步 Feature 源码到 runtime（ensure 按拓扑序 + reload），runId 透传打日志标签
+          const reloadSummary = await syncFeaturesToRuntime(projectDir, handle, project, runId);
+          const failedReload = reloadSummary.filter((item) => !item.ok);
+          const featureRevisions: Record<string, string> = {};
+          for (const feature of project.features) {
+            featureRevisions[feature.name] = handle.fingerprints.get(feature.name) || 'unknown';
+          }
+          const sessionBase = {
+            policy: sessionPolicy,
+            ...(checkpoint ? { checkpoint } : {}),
+          };
+          if (failedReload.length > 0) {
+            const record: StudioRunRecord = {
+              runId,
+              testId: recordedTestId,
+              startedAt,
+              finishedAt: new Date().toISOString(),
+              phase: 'reload',
+              ok: false,
+              passed: false,
+              assertionResults: [],
+              featureCoverage: {},
+              featureRevisions,
+              session: sessionBase,
+              toolCalls: [],
+              hooks: [],
+              reloadSummary,
+            };
+            await appendRun(projectDir, record);
+            return { run: record, guidance: 'Feature 热载失败，运行未执行；runtime 已回退到上一可用版本，修复源码后重试。' };
+          }
+
+          // 2) 发送测试输入（含会话策略）
+          const result = await runtimeRequest(projectDir, handle, {
+            type: 'studio-run-test',
+            testId: recordedTestId,
+            input: testInput,
+            runId,
+            sessionPolicy,
+            ...(checkpoint ? { checkpoint } : {}),
+          }, RUN_TEST_TIMEOUT_MS);
+
+          const error = result.error as { name?: string; message?: string; stack?: string } | undefined;
+          const sessionInfo = (result.session && typeof result.session === 'object' ? result.session : {}) as Record<string, unknown>;
+          const session: StudioRunRecord['session'] = {
+            ...sessionBase,
+            restoredFrom: typeof sessionInfo.restoredFrom === 'string' ? sessionInfo.restoredFrom : (sessionInfo.restoredFrom === null ? null : undefined),
+            saved: typeof sessionInfo.saved === 'string' ? sessionInfo.saved : (sessionInfo.saved === null ? null : undefined),
+          };
+
+          if (result.ok !== true && !Array.isArray(result.toolCalls)) {
+            // 运行前失败（如检查点不存在）：无行为证据
+            const record: StudioRunRecord = {
+              runId,
+              testId: recordedTestId,
+              startedAt,
+              finishedAt: new Date().toISOString(),
+              phase: 'test',
+              ok: false,
+              passed: false,
+              assertionResults: [],
+              featureCoverage: {},
+              featureRevisions,
+              session,
+              toolCalls: [],
+              hooks: [],
+              reloadSummary,
+              ...(error ? { error: { name: error.name || 'Error', message: error.message || '', stack: error.stack } } : {}),
+            };
+            await appendRun(projectDir, record);
+            return { run: record };
+          }
+
+          // 3) 断言判定（针对完整投递结果，落盘时才截断）
+          const toolCalls = Array.isArray(result.toolCalls) ? result.toolCalls as StudioToolCallEvidence[] : [];
+          const hooks = Array.isArray(result.hooks) ? result.hooks as StudioHookEvidence[] : [];
+          const reply = typeof result.reply === 'string' ? result.reply : undefined;
+          const assertionResults = evaluateAssertions(assertions, { reply, toolCalls, hooks });
+          const callOk = result.ok === true;
+          const hasAssertions = assertions.length > 0;
+          const passed = hasAssertions ? callOk && assertionResults.every((item) => item.ok) : null;
+          const featureCoverage = computeFeatureCoverage(toolCalls, hooks);
+
+          const record: StudioRunRecord = {
+            runId,
+            testId: recordedTestId,
+            startedAt,
+            finishedAt: new Date().toISOString(),
+            phase: 'test',
+            ok: callOk,
+            passed,
+            assertionResults,
+            featureCoverage,
+            featureRevisions,
+            session,
+            ...(reply !== undefined ? { reply } : {}),
+            toolCalls,
+            hooks,
+            reloadSummary,
+            ...(error ? { error: { name: error.name || 'Error', message: error.message || '', stack: error.stack } } : {}),
+          };
+          await appendRun(projectDir, record);
+
+          // 4) Feature 状态推进：按 reloadSummary 与覆盖证据独立推进每个 Feature
+          const timestamp = new Date().toISOString();
+          const features = advanceFeatureStatuses(project.features, reloadSummary, featureCoverage, passed, runId, timestamp);
+          await this.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
+
+          const deniedTools = [...new Set(toolCalls.filter((entry) => entry.denied).map((entry) => entry.tool))];
+          const deniedMissing = assertionResults
+            .filter((item) => !item.ok && item.assertion.kind === 'tool-executed' && deniedTools.includes(item.assertion.tool || ''))
+            .map((item) => item.assertion.tool || '');
+          const guidance = deniedMissing.length > 0
+            ? `期望工具 ${[...new Set(deniedMissing)].join(', ')} 被调用但被拦截（denied，真实执行 0 次）。被拒调用不算 executed：若这是 guard 拒绝路径，请用 tool-denied 断言拒绝本身、或断言可观察的下游证据；若不应被拒，请检查 guard 逻辑。`
+            : undefined;
+          return {
+            run: record,
+            featureStatuses: features.map((feature) => ({ name: feature.name, status: feature.status })),
+            ...(guidance ? { guidance } : {}),
+          };
+        },
+      }),
+      createTool({
+        name: 'studio_get_run',
+        description: '查询运行记录：带 runId 返回完整记录（断言判定、逐工具投递证据、钩子证据、覆盖归属），不带参数返回最近记录列表。',
+        parameters: {
+          type: 'object',
+          properties: {
+            runId: { type: 'string', description: '要查看的运行 ID。' },
+          },
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const { projectDir } = await this.requireProject();
+          const runs = await readRuns(projectDir);
+          const runId = cleanValue(args.runId);
+          if (runId) {
+            const record = runs.find((item) => item.runId === runId) || null;
+            if (!record) throw new Error(`运行记录 ${runId} 不存在。`);
+            return { projectDir, run: record };
+          }
+          return { projectDir, runs: runs.map(({ runId: id, testId, phase, ok, passed, startedAt }) => ({ runId: id, testId, phase, ok, passed, startedAt })) };
         },
       }),
     ];
