@@ -4840,6 +4840,37 @@ body[data-theme="light"] .plan-summary {
   padding: 2px 0 4px;
 }
 
+.plan-fold {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin: 2px 0 4px;
+  padding: 5px 8px;
+  border: 1px dashed rgba(255,255,255,0.16);
+  border-radius: 8px;
+  background: none;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.plan-fold:hover {
+  color: var(--text-primary);
+  border-color: rgba(88,166,255,0.55);
+  background: rgba(88,166,255,0.08);
+}
+
+body[data-theme="light"] .plan-fold {
+  border-color: rgba(0,0,0,0.14);
+}
+
+body[data-theme="light"] .plan-fold:hover {
+  background: rgba(88,166,255,0.10);
+}
+
 .plan-task {
   position: relative;
   display: grid;
