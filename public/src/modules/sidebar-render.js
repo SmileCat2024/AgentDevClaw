@@ -124,6 +124,7 @@ const AGENT_ICONS = {
   'flow-workspace': 'flow-workspace.svg',
   'feature-repository': 'feature-repository.svg',
   'feature-creator': 'feature-creator.svg',
+  'agent-studio': 'programming-helper.svg',
   'qqbot': 'qqbot.svg',
   'dispatch-console': 'dispatch-console.svg',
   'programming-helper': 'programming-helper.svg',

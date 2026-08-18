@@ -149,6 +149,7 @@ export function createConnectedAgentsQuery(deps) {
         matched.created_at = runtimeAgent.createdAt ?? null;
         matched.connected = runtimeAgent.connected ?? false;
         matched.pending_input_count = await getPendingInputCount(runtimeAgent.id);
+        matched.input_accepted = runtimeAgent.inputAccepted !== false;
         continue;
       }
 
@@ -175,6 +176,7 @@ export function createConnectedAgentsQuery(deps) {
         pending_input_count: await getPendingInputCount(runtimeAgent.id),
         created_at: runtimeAgent.createdAt ?? null,
         connected: runtimeAgent.connected ?? false,
+        input_accepted: runtimeAgent.inputAccepted !== false,
       });
     }
 

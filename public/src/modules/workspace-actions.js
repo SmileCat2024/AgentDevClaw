@@ -652,6 +652,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             formId: action.formId,
             featureName: action.featureName,
             agentName: action.agentName,
+            projectName: action.projectName,
             openDirectory: action.openDirectory,
             targetDir: action.targetDir,
       };

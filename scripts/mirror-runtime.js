@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { Agent, FileSessionStore } from 'agentdev';
 
-export const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
+export const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace']);
 
 export function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';

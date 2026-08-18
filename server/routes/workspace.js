@@ -4,7 +4,7 @@ import path from 'path';
 
 import { PROJECT_ROOT, USER_FEATURE_REPOSITORY_ROOT, WORKSPACE_CACHE_TTL_MS } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, parseListField } from '../shared/string-helpers.js';
-import { readJson, ensureDir } from '../shared/fs-helpers.js';
+import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
 import {
   getPrebuiltWorkspaceDir,
   getPrebuiltWorkspaceStatePath,
@@ -144,8 +144,9 @@ export async function readWorkspaceState(agentId) {
   const key = sanitizeSessionFragment(agentId);
   const cached = _wsCache.get(key);
   if (cached && Date.now() - cached.ts < WORKSPACE_CACHE_TTL_MS) return cached.data;
+  let data;
   try {
-    let data = normalizeWorkspaceState(await readJson(getPrebuiltWorkspaceStatePath(key)));
+    data = normalizeWorkspaceState(await readJson(getPrebuiltWorkspaceStatePath(key)));
     if (key === 'programming-helper' && data.forms && data.forms['startup-form']) {
       delete data.forms['startup-form'];
       writeWorkspaceState(key, data).catch(e => console.warn(e));
@@ -182,13 +183,17 @@ export async function readWorkspaceState(agentId) {
         _wsCache.delete(key);
       }
     }
-    _wsCache.set(key, { data, ts: Date.now() });
-    return data;
   } catch {
-    const data = normalizeWorkspaceState({});
-    _wsCache.set(key, { data, ts: Date.now() });
-    return data;
+    data = normalizeWorkspaceState({});
   }
+  // Agent Studio: surface the project registry (written by the runtime feature) for the home view.
+  // Read even when state.json is missing, so a fresh install still serves an empty list.
+  if (key === 'agent-studio') {
+    const registry = await readJsonSafe(path.join(path.dirname(getPrebuiltWorkspaceStatePath(key)), 'projects.json'), []);
+    data.studioProjects = Array.isArray(registry) ? registry : [];
+  }
+  _wsCache.set(key, { data, ts: Date.now() });
+  return data;
 }
 
 export async function writeWorkspaceState(agentId, rawState) {

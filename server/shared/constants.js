@@ -28,8 +28,9 @@ export const FEATURE_REPOSITORY_ROOT = path.join(PROJECT_ROOT, 'resources', 'fea
 export const USER_FEATURE_REPOSITORY_ROOT = path.join(USER_DATA_ROOT, 'user-features');
 export const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
 export const GROUP_CHATS_ROOT = path.join(USER_DATA_ROOT, 'group-chats');
-export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
-export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'flow-test']);
+export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace']);
+// Hidden workspaces remain discoverable by their stable ID for historical sessions and explicit routes.
+export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'feature-creator', 'flow-test']);
 export const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
 export const MODEL_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'default.json');
 export const MODEL_PRESETS_PATH = path.join(PROJECT_ROOT, 'config', 'presets.json');

@@ -27,7 +27,7 @@ const PROTOCLAW_ROOT = resolve(__dirname, '..');
 const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:1420';
 const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
-const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'programming-helper', 'flow-workspace']);
+const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace']);
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';

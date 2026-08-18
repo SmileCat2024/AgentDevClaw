@@ -21,6 +21,8 @@
     "./context-handoff-seed/test/**/*.ts",
     "./feature-dev/src/**/*.ts",
     "./agent-dev/src/**/*.ts",
+    "./agent-studio/src/**/*.ts",
+    "./agent-studio/test/**/*.ts",
     "./flow/src/**/*.ts",
     "./flow/test/**/*.ts",
     "./dispatch/src/**/*.ts",

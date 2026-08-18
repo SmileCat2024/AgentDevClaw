@@ -224,6 +224,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
   const featureName = cleanSessionText(record.featureName) || cleanSessionText(sourceForm.feature_name) || cleanSessionText(startupForm.feature_name);
   const agentName = cleanSessionText(record.agentName) || cleanSessionText(sourceForm.agent_name || sourceForm.assembly_name) || cleanSessionText(startupForm.agent_name);
   const taskTitle = cleanSessionText(record.taskTitle) || cleanSessionText(sourceForm.task_title) || cleanSessionText(startupForm.task_title);
+  const projectName = cleanSessionText(record.projectName);
   const taskType = cleanSessionText(record.taskType) || cleanSessionText(sourceForm.task_type) || cleanSessionText(startupForm.task_type);
   const goal = cleanSessionText(record.goal) || cleanSessionText(sourceForm.goal) || cleanSessionText(startupForm.goal);
   const constraints = cleanSessionText(record.constraints) || cleanSessionText(sourceForm.constraints) || cleanSessionText(startupForm.constraints);
@@ -242,7 +243,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
     : cleanSessionText(record.openDirectory);
   const displayName = (normalizedAgentId === 'agent-creator' || (normalizedAgentId === 'flow-workspace' && formId === 'assembly-form'))
     ? agentName
-    : (normalizedAgentId === 'programming-helper' ? taskTitle : featureName);
+    : (normalizedAgentId === 'programming-helper' ? taskTitle : (normalizedAgentId === 'agent-studio' ? (projectName || goal) : featureName));
   try {
     const stat = await fs.stat(sessionPath);
 
@@ -271,6 +272,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         title: cleanSessionText(record.title) || compactTitle || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
         featureName,
         agentName,
+        projectName,
         taskTitle,
         taskType,
         goal,
@@ -324,6 +326,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       title: cleanSessionText(record.title) || compactTitle || buildNamedSessionTitle(displayName, record.createdAt || stat.mtime.toISOString()),
       featureName,
       agentName,
+      projectName,
       taskTitle,
       taskType,
       goal,
@@ -375,6 +378,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       title: record.title || buildNamedSessionTitle(displayName, record.createdAt || new Date().toISOString()),
       featureName,
       agentName,
+      projectName,
       taskTitle,
       taskType,
       goal,
@@ -782,6 +786,9 @@ async function createPrebuiltSession(agentId, options = {}) {
     || cleanSessionText(sourceSession?.goal)
     || cleanSessionText(sourceForm.goal)
     || cleanSessionText(startupForm.goal);
+  const nextProjectName =
+    cleanSessionText(options.projectName)
+    || cleanSessionText(sourceSession?.projectName);
   const nextConstraints =
     cleanSessionText(options.constraints)
     || cleanSessionText(sourceSession?.constraints)
@@ -804,7 +811,7 @@ async function createPrebuiltSession(agentId, options = {}) {
     || cleanSessionText(startupForm.reference_materials);
   const sessionDisplayName = normalizedAgentId === 'agent-creator'
     ? nextAgentName
-    : (normalizedAgentId === 'programming-helper' ? '' : nextFeatureName);
+    : (normalizedAgentId === 'agent-studio' ? (nextProjectName || nextGoal) : (normalizedAgentId === 'programming-helper' ? '' : nextFeatureName));
   const explicitTitle = cleanSessionText(options.title);
   const nextTitle = explicitTitle || nextTaskTitle || (isProgrammingHelper
     ? await getNextNewSessionTitle(agentId, nextOpenDirectory)
@@ -819,6 +826,7 @@ async function createPrebuiltSession(agentId, options = {}) {
     title: nextTitle,
     featureName: nextFeatureName,
     agentName: nextAgentName,
+    projectName: nextProjectName,
     taskTitle: nextTaskTitle,
     taskType: nextTaskType,
     goal: nextGoal,
@@ -909,6 +917,12 @@ async function createPrebuiltSession(agentId, options = {}) {
             : { agent_name: agentName }),
         },
       },
+      openDirectory,
+    });
+  } else if (normalizedAgentId === 'agent-studio') {
+    const openDirectory = nextOpenDirectory || cleanSessionText(currentState.openDirectory);
+    await writeWorkspaceState(agentId, {
+      forms: currentState.forms,
       openDirectory,
     });
   } else if (normalizedAgentId === 'programming-helper') {
@@ -1009,6 +1023,13 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
           target_dir: targetDir,
         },
       },
+      openDirectory,
+    });
+  } else if (sanitizeSessionFragment(agentId) === 'agent-studio') {
+    const currentState = await readWorkspaceState(agentId);
+    const openDirectory = cleanSessionText(existing.openDirectory) || cleanSessionText(currentState.openDirectory);
+    await writeWorkspaceState(agentId, {
+      forms: currentState.forms,
       openDirectory,
     });
   } else if (sanitizeSessionFragment(agentId) === 'programming-helper') {

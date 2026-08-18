@@ -225,6 +225,7 @@ async function openPrebuiltWorkspaceSession(agentId, rawAction) {
         sourceSessionId: action.sessionId || null,
         featureName: action.featureName || '',
         agentName: action.agentName || '',
+        projectName: action.projectName || '',
         openDirectory: action.openDirectory || '',
         targetDir: action.targetDir || '',
         operationId: action.operationId || '',
@@ -625,7 +626,8 @@ window.switchAgent = async (newAgentId) => {
     currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
     currentRuntimeAgentId = runtimeAgentId;
     _recentlyFinishedRuntimes.delete(runtimeAgentId);
-    readOnlyMode = false;
+    // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开
+    readOnlyMode = targetAgent?.input_accepted === false;
     currentWorkspaceArtifactDetail = null;
     currentWorkspaceDocsetDetail = null;
     currentProjectDocsetOpen = false;

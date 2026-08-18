@@ -137,6 +137,60 @@ function renderWorkspaceLauncherGrid(agent, block) {
 }
 
 
+function renderStudioProjectsBlock(agent, block) {
+  const workspaceState = getAgentWorkspaceState(agent);
+  const projects = Array.isArray(workspaceState?.studioProjects) ? workspaceState.studioProjects : [];
+  const title = localizeWorkspaceValue(block.title, '');
+  const desc = localizeWorkspaceValue(block.description, '');
+  const emptyHtml = [
+    '<div class="workspace-history-list">',
+    '<div class="workspace-history-item"><div>' + escapeHtml(currentLanguage === 'zh' ? '还没有沉淀的项目。在对话中初始化的项目会出现在这里。' : 'No projects yet. Projects initialized in conversation will appear here.') + '</div></div>',
+    '</div>',
+  ].join('');
+
+  const bodyHtml = projects.length > 0
+    ? '<div class="feature-project-list">' + projects.map((project) => {
+        const continueAction = escapeHtml(JSON.stringify({
+          type: 'create_session',
+          projectName: String(project.name || ''),
+          openDirectory: String(project.projectDir || ''),
+        }));
+        const projectPreview = String(project.goal || '');
+        return [
+          '<div class="feature-project-card">',
+          '<div class="feature-project-row">',
+          '<div class="feature-project-summary">',
+          '<div class="feature-project-titlebar">',
+          '<div class="workspace-history-title">' + escapeHtml(String(project.name || project.projectDir || '')) + '</div>',
+          '</div>',
+          project.updatedAt ? '<div class="feature-project-meta-line"><span>' + escapeHtml(formatWorkspaceDate(project.updatedAt)) + '</span></div>' : '',
+          projectPreview ? '<div class="workspace-history-preview">' + escapeHtml(projectPreview) + '</div>' : '',
+          project.projectDir ? '<div class="workspace-history-meta">' + escapeHtml(project.projectDir) + '</div>' : '',
+          '</div>',
+          '<div class="feature-project-side">',
+          '<div class="feature-project-head-actions">',
+          '<button class="workspace-action" type="button" data-workspace-action="' + continueAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(currentLanguage === 'zh' ? '继续开发' : 'Continue') + '</button>',
+          '</div>',
+          '</div>',
+          '</div>',
+          '</div>',
+        ].join('');
+      }).join('') + '</div>'
+    : emptyHtml;
+
+  return [
+    '<section class="workspace-section">',
+    '<div class="workspace-section-header">',
+    '<div>',
+    '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
+    '<div class="workspace-section-desc">' + escapeHtml(desc) + '</div>',
+    '</div>',
+    '</div>',
+    bodyHtml,
+    '</section>',
+  ].join('');
+}
+
 function renderWorkspaceField(agent, field, draft, formId) {
   const name = String(field.name || '').trim();
   if (!name) return '';

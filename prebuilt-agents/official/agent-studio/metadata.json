@@ -1,0 +1,95 @@
+{
+  "id": "agent-studio",
+  "kind": "agent",
+  "name": "Agent Studio",
+  "description": "在对话中统一开发 Feature、装配目标 Agent，并通过 Test Runtime 形成可追溯的运行验证闭环",
+  "version": "0.1.0",
+  "icon": "bot",
+  "category": "development",
+  "sortOrder": 30,
+  "enabled": true,
+  "features": [
+    "todo",
+    "audit",
+    "websearch",
+    "shell",
+    "agent-studio",
+    "user-input",
+    "mcp",
+    "skill",
+    "subagent"
+  ],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "项目",
+          "en": "Projects"
+        }
+      },
+      {
+        "id": "chat",
+        "label": {
+          "zh": "对话",
+          "en": "Chat"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "launcher",
+          "type": "launcher-grid",
+          "visibility": "home-default",
+          "cards": [
+            {
+              "title": {
+                "zh": "开始对话",
+                "en": "Start a Conversation"
+              },
+              "body": {
+                "zh": "直接说要做的东西：一个 Feature、一个目标 Agent，或两者一起。目录和名称在对话中确认。",
+                "en": "Say what to build: a feature, a target agent, or both. Directory and naming are confirmed in conversation."
+              },
+              "actionLabel": {
+                "zh": "新对话",
+                "en": "New Chat"
+              },
+              "action": {
+                "type": "create_session"
+              }
+            }
+          ]
+        },
+        {
+          "id": "studio-projects",
+          "type": "studio-projects",
+          "visibility": "home-default",
+          "title": {
+            "zh": "项目",
+            "en": "Projects"
+          },
+          "description": {
+            "zh": "对话中沉淀的 Feature 与 Agent 项目，元数据保存在各自目录的 agent-studio.json。",
+            "en": "Feature and agent projects accumulated from conversations; metadata lives in each project's agent-studio.json."
+          }
+        },
+        {
+          "id": "session-list",
+          "type": "session-list",
+          "visibility": "home-default",
+          "title": {
+            "zh": "对话",
+            "en": "Conversations"
+          },
+          "description": {
+            "zh": "所有历史对话，与项目并列陈列。",
+            "en": "All past conversations, listed alongside projects."
+          }
+        }
+      ]
+    }
+  }
+}

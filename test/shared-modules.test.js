@@ -50,11 +50,13 @@ describe('constants', () => {
     assert.ok(WORKSPACE_SESSION_AGENT_IDS.has('programming-helper'));
     assert.ok(WORKSPACE_SESSION_AGENT_IDS.has('feature-creator'));
     assert.ok(WORKSPACE_SESSION_AGENT_IDS.has('agent-creator'));
+    assert.ok(WORKSPACE_SESSION_AGENT_IDS.has('agent-studio'));
     assert.ok(!WORKSPACE_SESSION_AGENT_IDS.has('qqbot'));
   });
 
   it('HIDDEN_PREBUILT_AGENT_IDS should include expected agents', () => {
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('agent-creator'));
+    assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('feature-creator'));
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('flow-test'));
     assert.ok(!HIDDEN_PREBUILT_AGENT_IDS.has('qqbot'));
   });

@@ -666,6 +666,7 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       formId: req.body.formId,
       featureName: req.body.featureName,
       agentName: req.body.agentName,
+      projectName: req.body.projectName,
       openDirectory: req.body.openDirectory,
       targetDir: req.body.targetDir,
     });
