@@ -213,6 +213,16 @@ claw compact <sessionId>      # 精简会话上下文
 claw resume <sessionId> "继续分析"  # 恢复子代理对话
 ```
 
+**`claw run`** — 直接调用 plain agent（无工作空间、不依赖 server 运行的轻量 agent，定义在 [`agents/`](agents/) 目录，默认可被 Web UI 实时监视）：
+
+```bash
+claw agents                          # 列出可用的 plain agent（内置 coder）
+claw run coder --goal "修复这个 bug"  # 单次调用
+claw run coder --goal "..." --format jsonl   # codex exec 风格会话事件流（机器消费）
+```
+
+> 完整用法（监视/无头模式、五种输出格式、会话续接与落盘）见 **[agents/README.md](agents/README.md)**。
+
 > `claw` 也可通过 `npx claw` 使用。
 
 ## 目录结构
