@@ -23,6 +23,12 @@
 
 let featurePanelRenderVersion = 0;
 
+// 顶部渐隐遮罩：面板 body 向上滚动（上方有滚走的内容）时显示，与底部
+// scrollable 渐隐对称。程序设置 scrollTop 同样触发 scroll 事件，class 自动同步。
+featurePanelBody.addEventListener('scroll', () => {
+  featurePanel.classList.toggle('scrolled', featurePanelBody.scrollTop > 4);
+}, { passive: true });
+
 // 面板内容签名缓存：panelId → 上次提交的 HTML。
 // 轮询携带相同数据时跳过 innerHTML 替换，保住滚动位置、details 展开、
 // ClawSelect 增强层与输入焦点（防打断的关键）。

@@ -709,6 +709,27 @@ body[data-theme="light"] .feature-panel::after {
   background: linear-gradient(to bottom, transparent 0%, rgba(240, 240, 242, 0.9) 90%);
 }
 
+/* 顶部渐变遮罩：向上滚动查看更早内容时平滑渐隐（与底部遮罩对称） */
+.feature-panel::before {
+  content: '';
+  position: absolute;
+  top: 64px; /* = .feature-panel-header 高度，窄屏断点同步为 48px */
+  left: 0;
+  right: 0;
+  height: 32px;
+  background: linear-gradient(to top, transparent 0%, var(--glass-bg) 90%);
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.feature-panel.open.scrolled::before {
+  opacity: 1;
+}
+body[data-theme="light"] .feature-panel::before {
+  background: linear-gradient(to top, transparent 0%, rgba(240, 240, 242, 0.9) 90%);
+}
+
 .feature-panel-empty {
   display: flex;
   flex-direction: column;
@@ -6373,6 +6394,7 @@ body[data-theme="light"] .preset-tag-opencode {
     padding-right: 16px;
   }
   .feature-panel-header { height: 48px; }
+  .feature-panel::before { top: 48px; }
 
   /* Follow-latest button: reposition */
   .follow-latest-btn { right: 16px; bottom: 120px; }
