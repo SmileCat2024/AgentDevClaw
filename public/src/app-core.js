@@ -564,8 +564,8 @@ function setInterruptTargetId(taskId) {
 }
 let currentLogs = [];
 let currentLogsSignature = '';
+let currentLogsTruncation = null;
 let currentMcpInfo = null;
-let logPanelScope = 'current';
 let lastFeatureTemplateReloadAt = 0;
 let lastAgentListRefreshAt = 0;
 let lastCallStateRefreshAt = 0;
@@ -598,6 +598,7 @@ let logFilters = {
   level: 'all',
   feature: 'all',
   lifecycle: 'all',
+  call: 'all',
 };
 let selectedOverviewLifecycle = 'StepFinish';
 let selectedFeatureName = null;
@@ -968,7 +969,7 @@ const I18N = {
     panel_close: '关闭',
     panel_no_hook_data: '没有 Hook 数据',
     panel_no_hook_data_desc: '当前 Agent 尚未上报 feature / hook 监视信息。',
-    panel_all_lifecycle_slots: '完整 8 个生命周期槽位',
+
     panel_attached: '已挂载',
     panel_no_handlers: '当前没有挂载任何处理函数。',
     stat_active_agent: '当前 Agent',
@@ -1098,12 +1099,10 @@ const I18N = {
     mcp_resource_list: '资源一览',
     mcp_prompt_list: '提示模板一览',
     mcp_loading: '正在加载 MCP 信息...',
-    logs_scope: '范围',
-    logs_scope_current: '只看当前 Agent',
-    logs_scope_all: '全部',
-    logs_search: '搜索',
+    logf_call_all: '全部轮次',
+    logf_round_title: '第 {call} 轮 · 第 {step} 步',
+    logf_round_only: '第 {call} 轮',
     logs_search_placeholder: '按消息、namespace、feature、hook 检索',
-    logs_level: '级别',
     logs_level_all: '全部级别',
     logs_level_debug: 'Debug 及以上',
     logs_level_info: 'Info 及以上',
@@ -1116,6 +1115,8 @@ const I18N = {
     logs_empty: '当前筛选条件下没有日志。',
     logs_total: '日志',
     logs_details: '查看结构化数据',
+    logs_truncated: '已显示最近 {returned} 条 · 共 {available} 条',
+    logs_json_truncated: 'JSON 共 {total} 字符，已截断显示',
     plan_empty: '当前还没有任务。',
     plan_empty_desc: '当 Agent 使用 todo 工具组织工作时，任务会在这里同步显示。',
     plan_total: '总计',
@@ -1318,7 +1319,6 @@ const I18N = {
     panel_close: 'Close',
     panel_no_hook_data: 'No Hook Data',
     panel_no_hook_data_desc: 'The current agent has not reported any feature / hook inspector data yet.',
-    panel_all_lifecycle_slots: 'All 8 lifecycle slots',
     panel_attached: 'attached',
     panel_no_handlers: 'No attached handlers.',
     stat_active_agent: 'Active Agent',
@@ -1448,12 +1448,10 @@ const I18N = {
     mcp_resource_list: 'Resource Catalog',
     mcp_prompt_list: 'Prompt Catalog',
     mcp_loading: 'Loading MCP info...',
-    logs_scope: 'Scope',
-    logs_scope_current: 'Current agent',
-    logs_scope_all: 'All agents',
-    logs_search: 'Search',
+    logf_call_all: 'All rounds',
+    logf_round_title: 'Round {call} · Step {step}',
+    logf_round_only: 'Round {call}',
     logs_search_placeholder: 'Search message, namespace, feature, hook',
-    logs_level: 'Level',
     logs_level_all: 'All levels',
     logs_level_debug: 'Debug and up',
     logs_level_info: 'Info and up',
@@ -1466,6 +1464,8 @@ const I18N = {
     logs_empty: 'No logs match the current filters.',
     logs_total: 'logs',
     logs_details: 'Structured payload',
+    logs_truncated: 'Showing latest {returned} of {available} logs',
+    logs_json_truncated: 'JSON is {total} chars, truncated for display',
     plan_empty: 'No tasks yet.',
     plan_empty_desc: 'Tasks appear here when the agent uses todo tools to organize work.',
     plan_total: 'Total',

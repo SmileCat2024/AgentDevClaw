@@ -23,6 +23,11 @@
 
 let featurePanelRenderVersion = 0;
 
+// 面板内容签名缓存：panelId → 上次提交的 HTML。
+// 轮询携带相同数据时跳过 innerHTML 替换，保住滚动位置、details 展开、
+// ClawSelect 增强层与输入焦点（防打断的关键）。
+const _panelBodyHtmlCache = new Map();
+
 function runAfterPanelOpenFrame(callback) {
   const raf = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
     ? window.requestAnimationFrame.bind(window)
@@ -60,6 +65,7 @@ function renderFeaturePanel(options = {}) {
 
   if (!activeFeaturePanel || !featurePanels[activeFeaturePanel]) {
     featurePanelRenderVersion += 1;
+    _panelBodyHtmlCache.clear();
     featurePanel.classList.remove('open');
     featurePanel.classList.remove('body-ready');
     document.querySelector('.main-content')?.classList.remove('panel-open');
@@ -111,15 +117,38 @@ function renderFeaturePanel(options = {}) {
     }
 
     // ── 滚动位置保持：innerHTML 替换会重置所有 scrollTop ──
+    // 日志面板等使用内部滚动容器（.logf-list）的面板，body 本身不滚，
+    // 必须一并保存/恢复内层滚动位置，否则全量重建后视图跳回顶部。
     const _savedBodyScrollTop = featurePanelBody.scrollTop;
+    const _prevInnerScroll = featurePanelBody.querySelector('.logf-list');
+    const _savedInnerScrollTop = _prevInnerScroll ? _prevInnerScroll.scrollTop : null;
 
-    featurePanelBody.innerHTML = panel.render();
+    const nextHtml = panel.render();
+
+    // 内容签名去重：同面板、HTML 未变且 body 非空时跳过 DOM 替换。
+    // 面板切换（prevPanelId !== panelId）与 deferBody 清空（children 为 0）不适用。
+    if (prevPanelId === panelId && featurePanelBody.children.length > 0 && _panelBodyHtmlCache.get(panelId) === nextHtml) {
+      featurePanel.classList.add('body-ready');
+      return;
+    }
+    _panelBodyHtmlCache.set(panelId, nextHtml);
+
+    featurePanelBody.innerHTML = nextHtml;
     if (featurePanelBody.querySelector('.markdown-body')) {
       enhanceMathInElement(featurePanelBody);
     }
 
+    // ClawSelect 增强：渲染后接管 data-claw-select 下拉
+    if (window.ClawSelect && featurePanelBody.querySelector('select[data-claw-select]')) {
+      window.ClawSelect.enhanceAll(featurePanelBody);
+    }
+
     // 恢复滚动位置
     featurePanelBody.scrollTop = _savedBodyScrollTop;
+    if (_savedInnerScrollTop != null) {
+      const innerScroll = featurePanelBody.querySelector('.logf-list');
+      if (innerScroll) innerScroll.scrollTop = _savedInnerScrollTop;
+    }
 
     if (focusRestore) {
       const el = featurePanelBody.querySelector(focusRestore.selector);
@@ -137,9 +166,12 @@ function renderFeaturePanel(options = {}) {
 
     featurePanel.classList.add('body-ready');
 
-    // 底部渐变：内容溢出时显示渐隐遮罩
+    // 底部渐变：内容溢出时显示渐隐遮罩。
+    // 日志面板使用内部滚动容器（.logf-list），body 本身不再溢出，需一并检查内层。
+    const innerScroll = featurePanelBody.querySelector('.logf-list');
     featurePanel.classList.toggle('scrollable',
-      featurePanelBody.scrollHeight > featurePanelBody.clientHeight + 4);
+      featurePanelBody.scrollHeight > featurePanelBody.clientHeight + 4
+      || (innerScroll && innerScroll.scrollHeight > innerScroll.clientHeight + 4));
   };
 
   if (options.deferBody === true) {

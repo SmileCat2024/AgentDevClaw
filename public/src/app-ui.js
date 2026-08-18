@@ -1614,14 +1614,18 @@ window.addEventListener('resize', () => {
 
 // [Phase 2f-2] renderFeaturePanel / toggleFeaturePanel → modules/debug-panels.js
 
-window.setLogPanelScope = async (scope) => {
-  logPanelScope = scope === 'all' ? 'all' : 'current';
-  await loadLogs(true);
-  renderFeaturePanel();
-};
-
+let _logSearchRenderTimer = 0;
 window.updateLogFilter = (key, value) => {
   logFilters[key] = value;
+  if (key === 'search') {
+    // 搜索输入防抖：避免每个键程触发整列表重渲染
+    clearTimeout(_logSearchRenderTimer);
+    _logSearchRenderTimer = setTimeout(() => {
+      _logSearchRenderTimer = 0;
+      renderFeaturePanel();
+    }, 180);
+    return;
+  }
   renderFeaturePanel();
 };
 

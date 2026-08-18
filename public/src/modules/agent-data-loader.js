@@ -9,7 +9,7 @@
  *   loadAgentData, refreshCurrentRuntimeStatus
  *
  * Dependencies (global state from app-core.js):
- *   currentRuntimeAgentId, currentAgentId, activeFeaturePanel, logPanelScope
+ *   currentRuntimeAgentId, currentAgentId, activeFeaturePanel
  */
 
 async function loadAgentData(agentId) {

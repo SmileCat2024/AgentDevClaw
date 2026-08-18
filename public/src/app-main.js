@@ -843,9 +843,6 @@ async function runPollCycle() {
           } catch {}
         }
       }
-      if (activeFeaturePanel === 'logs' && logPanelScope === 'all') {
-        await loadLogs();
-      }
       schedulePoll(POLL_INTERVAL_MS);
       return;
     }
@@ -1167,8 +1164,6 @@ async function runPollCycle() {
           hookInspectorChanged ? { hookInspector: nextHookInspector } : {},
           () => {
             if (hookInspectorChanged) {
-              renderFeaturePanel();
-            } else if (activeFeaturePanel === 'inspector') {
               renderFeaturePanel();
             }
           },
