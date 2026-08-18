@@ -16,13 +16,13 @@ describe('feature-wrappers smoke', () => {
     assert.equal(descriptor?.protocol, 'claw.todo-continuity.v1');
   });
 
-  it('ContinuityAwareOpencodeBasic 是 OpencodeBasicFeature 的通用协议包装', () => {
+  it('ContinuityAwareOpencodeBasic 是 OpencodeBasicFeature 的专用接续协议包装', () => {
     const feature = new ContinuityAwareOpencodeBasic();
     assert.ok(feature instanceof OpencodeBasicFeature);
     const state = feature.captureState();
     const descriptor = (state as Record<string, unknown>).__claw_continuity__ as
       | { protocol?: string }
       | undefined;
-    assert.equal(descriptor?.protocol, 'claw.feature-continuity.v1');
+    assert.equal(descriptor?.protocol, 'claw.opencode-basic-continuity.v1');
   });
 });

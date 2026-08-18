@@ -8,6 +8,7 @@ import {
 import {
   declareContinuity,
   GENERIC_CONTINUITY_PROTOCOL,
+  OPENCODE_BASIC_CONTINUITY_PROTOCOL,
   CONTINUITY_FIELD_KEY,
 } from '../local-features/dist/continuity-participant/src/index.js';
 
@@ -126,51 +127,43 @@ describe('feature continuity protocol (descriptor-driven)', () => {
     assert.equal(restored.metadata.sourceSessionId, 'session-source');
   });
 
-  it('end-to-end: opencode-basic readFiles survives export → import via declareContinuity', async () => {
-    // 用真实 declareContinuity 包装的 mock feature 验证完整链路
+  it('end-to-end: opencode-basic preserves write authorization but resets read deduplication on resume', async () => {
+    // 模拟真实 OpencodeBasic 快照：readFiles 是修改授权，readDedupState 则依赖旧工具结果。
     const ContinuityAwareMock = declareContinuity(
       createMockBase({ featureName: 'opencode-basic', initialState: { readFiles: [] } }),
-      { protocol: GENERIC_CONTINUITY_PROTOCOL, importMode: 'replace' },
+      { protocol: OPENCODE_BASIC_CONTINUITY_PROTOCOL, importMode: 'replace' },
     );
 
-    // 模拟源 runtime 中的 feature 实例（已有一些 readFiles）
     const sourceFeature = new ContinuityAwareMock();
     sourceFeature._state.readFiles = ['D:/repo/a.ts', 'D:/repo/b.ts'];
-
-    // 框架 captureFeatureSnapshots 的效果：调 captureState 拿到带 descriptor 的 snapshot
-    const sourceSnapshot = sourceFeature.captureState();
-    assert.equal(sourceSnapshot[CONTINUITY_FIELD_KEY].protocol, GENERIC_CONTINUITY_PROTOCOL);
-    assert.deepEqual(sourceSnapshot.readFiles, ['D:/repo/a.ts', 'D:/repo/b.ts']);
-
-    const sessionSnapshot = {
-      runtime: {
-        featureStates: [
-          { featureName: 'opencode-basic', snapshot: sourceSnapshot },
-        ],
-      },
+    sourceFeature._state.readDedupState = {
+      'D:/repo/a.ts': { mtimeMs: 123, offset: 1, limit: undefined },
     };
 
-    const continuity = exportFeatureContinuity(sessionSnapshot, { mode: 'trim-transcript' });
+    const sourceSnapshot = sourceFeature.captureState();
+    assert.equal(sourceSnapshot[CONTINUITY_FIELD_KEY].protocol, OPENCODE_BASIC_CONTINUITY_PROTOCOL);
+
+    const continuity = exportFeatureContinuity({
+      runtime: {
+        featureStates: [{ featureName: 'opencode-basic', snapshot: sourceSnapshot }],
+      },
+    }, { mode: 'summarized-nine-section' });
 
     assert.equal(continuity.states.length, 1);
     assert.equal(continuity.states[0].featureName, 'opencode-basic');
-    assert.equal(continuity.states[0].protocol, GENERIC_CONTINUITY_PROTOCOL);
-    // state 内的 __claw_continuity__ 应被剥离（通用透传也走 stripContinuityField）
-    assert.equal(continuity.states[0].state[CONTINUITY_FIELD_KEY], undefined);
-    assert.deepEqual(continuity.states[0].state.readFiles, ['D:/repo/a.ts', 'D:/repo/b.ts']);
+    assert.equal(continuity.states[0].protocol, OPENCODE_BASIC_CONTINUITY_PROTOCOL);
+    assert.deepEqual(continuity.states[0].state, {
+      readFiles: ['D:/repo/a.ts', 'D:/repo/b.ts'],
+    });
 
-    // 模拟新 runtime 启动：装配一个未恢复过 readFiles 的包装类实例
     const targetFeature = new ContinuityAwareMock();
-    assert.deepEqual(targetFeature._state.readFiles, []);
-
-    const agent = {
-      features: new Map([['opencode-basic', targetFeature]]),
-    };
-
+    const agent = { features: new Map([['opencode-basic', targetFeature]]) };
     const imported = await importFeatureContinuity(agent, continuity, { sourceSessionId: 'src' });
 
     assert.deepEqual(imported, ['opencode-basic']);
-    assert.deepEqual(targetFeature._state.readFiles, ['D:/repo/a.ts', 'D:/repo/b.ts']);
+    assert.deepEqual(targetFeature._state, {
+      readFiles: ['D:/repo/a.ts', 'D:/repo/b.ts'],
+    });
   });
 
   it('skips features whose snapshot lacks continuity descriptor', () => {

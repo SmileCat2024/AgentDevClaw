@@ -33,6 +33,14 @@ export const CONTINUITY_FIELD_KEY = '__claw_continuity__';
 export const GENERIC_CONTINUITY_PROTOCOL = 'claw.feature-continuity.v1';
 
 /**
+ * OpencodeBasic 的专用 continuity 协议。
+ *
+ * 接续时保留“先读后写”校验需要的 readFiles，
+ * 但不继承依赖旧上下文内容的 readDedupState。
+ */
+export const OPENCODE_BASIC_CONTINUITY_PROTOCOL = 'claw.opencode-basic-continuity.v1';
+
+/**
  * Claw continuity descriptor：feature 自声明参与 continuity 的合约。
  *
  * protocol    —— 协议标识符。Claw 协议层维护一张 protocol → adapter 的

@@ -26,6 +26,7 @@
 import {
   CONTINUITY_FIELD_KEY,
   GENERIC_CONTINUITY_PROTOCOL,
+  OPENCODE_BASIC_CONTINUITY_PROTOCOL,
   readContinuityDescriptor,
   stripContinuityField,
 } from '../../local-features/dist/continuity-participant/src/index.js';
@@ -105,6 +106,18 @@ function decorateTodoImportState(state, options) {
 }
 
 /**
+ * OpencodeBasic 的接续状态只保留“先读后写”授权。
+ * readDedupState 指向旧上下文的 Read 工具结果；新会话看不到该结果，
+ * 因此必须丢弃，确保首次 read 能重新返回文件内容。
+ */
+function normalizeOpencodeBasicExportState(rawSnapshot) {
+  const stripped = stripContinuityField(rawSnapshot) || {};
+  return {
+    readFiles: Array.isArray(stripped.readFiles) ? [...stripped.readFiles] : [],
+  };
+}
+
+/**
  * Protocol Adapter 合约：
  *   exportAdapter?(rawSnapshot) => state | null    返回 null/undefined 表示丢弃
  *   importAdapter?(state, options) => state        注入 metadata 等
@@ -119,6 +132,9 @@ const PROTOCOL_ADAPTERS = new Map([
   [TODO_PROTOCOL, {
     exportAdapter: normalizeTodoExportState,
     importAdapter: decorateTodoImportState,
+  }],
+  [OPENCODE_BASIC_CONTINUITY_PROTOCOL, {
+    exportAdapter: normalizeOpencodeBasicExportState,
   }],
 ]);
 
