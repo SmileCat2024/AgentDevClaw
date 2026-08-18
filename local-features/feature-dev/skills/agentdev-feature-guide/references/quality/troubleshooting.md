@@ -272,16 +272,11 @@ manifest 只声明配置形状，不会自动写入 Feature 字段。
 
 ## 测试写法与仓库不一致
 
-AgentDev 源码仓库使用 Vitest：
+先检查目标项目实际使用的测试运行器、断言库和执行脚本。AgentDevClaw 的本地 Feature 使用：
 
 ```ts
-import { describe, expect, it } from 'vitest';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 ```
 
-Feature 测试位于：
-
-```text
-src/features/<feature>/test/**/*.test.ts
-```
-
-不要套用独立脚本式 `main().catch()` 测试模板。独立 npm Feature 包使用该包自己的测试配置，并确保测试命令能在干净安装后运行。
+不要把一个项目的测试框架、目录结构或构建命令复制到另一个项目。AgentDevClaw 本地 Feature 不要引入 Vitest/Jest 或套用独立脚本式 `main().catch()` 模板；独立 npm 包及框架内 Feature 则遵循各自项目的测试配置。

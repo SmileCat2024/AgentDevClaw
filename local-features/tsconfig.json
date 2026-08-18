@@ -35,6 +35,7 @@
     "./feature-wrappers/src/**/*.ts",
     "./feature-wrappers/test/**/*.ts",
     "./group-admin/src/**/*.ts",
+    "./group-admin/test/**/*.ts",
     "./generative-ui/src/**/*.ts",
     "./generative-ui/test/**/*.ts",
     "./github/src/**/*.ts"

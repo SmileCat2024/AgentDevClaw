@@ -739,15 +739,16 @@ npm run agentdev:published
 ### 命令
 
 ```bash
-npm test              # 运行全部测试（core + features）
-npm run test:core     # 只跑 test/*.test.js（无需构建）
-npm run test:features # 只跑 local-features 的 smoke test（pretest 自动构建 dist）
-npm run test:coverage # 运行 core 测试并输出覆盖率报告
+npm test                                  # 运行全部测试（core + features）
+npm run test:core                         # 运行 test/*.test.js（无需构建）
+npm run test:file -- test/call-arbiter.test.js # 运行单个核心测试文件
+npm run test:features                     # 编译并运行全部 local-features 测试
+npm run test:coverage                     # 运行 core 测试并输出覆盖率报告
 ```
 
 ### 统一测试格式
 
-所有测试（core 和 feature）均使用 `node:test` 的 `describe/it/assert` 格式，由 `node --test` 统一驱动。
+本仓库所有测试（core 和 local-features）均使用 Node 内置的 `node:test` 与 `node:assert/strict`，由 `node --test` 驱动。不要在本仓库新增 Vitest/Jest 导入或 `expect` / `vi` 写法；它们属于 `AgentDev` 框架仓库的独立测试体系。
 
 ### 测试文件结构
 
@@ -772,7 +773,7 @@ local-features/                                ← 本地 Feature 功能测试�
 
 ### 何时跑测试
 
-- 修改 `server.js`、`server/` 目录、`scripts/` 目录中的逻辑后 → `npm run test:core`
+- 修改某个核心测试覆盖的逻辑后，先运行 `npm run test:file -- test/<相关文件>.test.js`；涉及多个模块或提交前再运行 `npm run test:core`
 - 修改 `local-features/` 下的 TS 源码后 → `npm run test:features`（会自动先构建）
 - 提交前、合并前 → `npm test` 确保全绿
 - 想看覆盖率 → `npm run test:coverage`
@@ -781,8 +782,8 @@ local-features/                                ← 本地 Feature 功能测试�
 
 - 服务端纯逻辑（server.js 中的决策函数、工具函数）→ 新建 `test/xxx.test.js`，用 `node:test` 格式
 - local-feature 功能 → 新建 `local-features/<name>/test/xxx.test.ts`，用 `node:test` 格式（`describe/it/assert`）
-- local-feature 测试需要在 `local-features/tsconfig.json` 的 `include` 中添加路径才能被编译
-- local-feature 测试的产物路径需加入 `package.json` 的 `test:features` 脚本
+- local-feature 测试需要在 `local-features/tsconfig.json` 的 `include` 中添加 `./<feature>/test/**/*.ts` 才能被编译
+- `test:features` 自动发现 `local-features/dist/*/test/*.test.js`，不为单个测试维护脚本路径
 - 前端 JS 目前仅有 `frontend-vm.js` 沙箱测试覆盖 `app-core.js` 纯函数
 
 ### 重要注意事项

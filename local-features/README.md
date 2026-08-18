@@ -39,5 +39,5 @@ Claw 仓库自有的 feature 与包装层源码（TypeScript，编译产物在 `
 
 1. 判断归属：通用包装/协议 → 基础层；Claw 场景专属 → 应用层；在上表登记
 2. `local-features/tsconfig.json` 的 `include` 添加 `./<pkg>/src/**/*.ts`（及 `test/**/*.ts`）
-3. 有测试时在 `package.json` 的 `test:features` 脚本追加产物路径
+3. 有测试时在 `local-features/tsconfig.json` 的 `include` 添加 `./<pkg>/test/**/*.ts`；`test:features` 会自动发现已编译的测试产物
 4. 遵循统一日志契约（agent 侧禁 console，用 createLogger），存量 console 进 eslint ratchet 清单

@@ -261,19 +261,20 @@ src/features/my-feature/
     └── smoke.test.ts
 ```
 
-AgentDev 源码仓库使用 Vitest，并发现 `src/features/*/test/**/*.test.ts`：
+测试目录、编译配置和执行命令由目标项目决定。下面以 Node 内置测试工具为例：
 
 ```ts
-import { describe, expect, it } from 'vitest';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { NotesFeature } from '../index.js';
 
 describe('NotesFeature', () => {
   it('restores notes from a value snapshot', () => {
     const feature = new NotesFeature();
     feature.restoreState({ notes: ['a'] });
-    expect(feature.captureState()).toEqual({ notes: ['a'] });
+    assert.deepEqual(feature.captureState(), { notes: ['a'] });
   });
 });
 ```
 
-独立 Feature 包沿用包自身的测试配置；至少覆盖工具 schema、关键执行路径、决策 hooks、配置解析和快照往返。
+创建或修改 Feature 前，先检查目标项目的测试运行器、测试目录和构建脚本。AgentDevClaw 的本地 Feature 使用 `node:test`、`node:assert/strict` 和 `npm run test:features`；独立 npm 包及框架内 Feature 应遵循各自项目的测试配置。至少覆盖工具 schema、关键执行路径、决策 hooks、配置解析和快照往返。

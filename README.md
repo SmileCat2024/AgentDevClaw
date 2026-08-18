@@ -309,7 +309,10 @@ npm test
 # 仅核心测试（无需编译）
 npm run test:core
 
-# 仅 feature 测试（需先编译）
+# 单个核心测试文件（用于改动后的快速验证）
+npm run test:file -- test/call-arbiter.test.js
+
+# 仅 feature 测试（会先编译 local-features）
 npm run test:features
 ```
 

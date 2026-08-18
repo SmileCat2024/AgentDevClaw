@@ -15,8 +15,9 @@
     "agentdev:published": "node scripts/use-agentdev-published.mjs",
     "test": "npm run test:core && npm run test:features",
     "test:core": "node --test test/*.test.js",
+    "test:file": "node --test",
     "test:coverage": "node --experimental-test-coverage --test test/*.test.js",
-    "test:features": "node --test local-features/dist/checkpoint/test/smoke.test.js local-features/dist/context-compaction-mirror/test/smoke.test.js local-features/dist/context-guard/test/smoke.test.js local-features/dist/dispatch/test/smoke.test.js local-features/dist/context-handoff-seed/test/smoke.test.js local-features/dist/continuity-participant/test/oninitiate-protection.test.js local-features/dist/feature-wrappers/test/wrappers.test.js local-features/dist/flow/test/flow-feature.test.js local-features/dist/generative-ui/test/catalog.test.js local-features/dist/generative-ui/test/validator.test.js local-features/dist/generative-ui/test/surface-feature.test.js local-features/dist/group-admin/test/bridge-runtime-identity.test.js local-features/dist/agent-studio/test/studio-feature.test.js",
+    "test:features": "node --test \"local-features/dist/*/test/*.test.js\"",
     "pretest:features": "npm run build:local-features",
     "lint": "eslint .",
     "adv-docs:sync": "node scripts/sync-adv-docs.mjs"

@@ -3,7 +3,7 @@
 ## 目录
 
 - [测试层级](#测试层级)
-- [Vitest 结构](#vitest-结构)
+- [Node 测试结构](#node-测试结构)
 - [测试工具契约](#测试工具契约)
 - [测试上下文注入](#测试上下文注入)
 - [测试 Hooks](#测试-hooks)
@@ -32,17 +32,14 @@
 
 从构建产物 import Feature，检查模板、skills 和非 TS 资源都进入发布包。
 
-## Vitest 结构
+## Node 测试结构
 
-AgentDev 源码仓库使用：
-
-```text
-src/features/my-feature/test/*.test.ts
-```
+先检查目标项目采用的测试运行器、测试目录和构建脚本。AgentDevClaw 本地 Feature 使用 Node 内置测试工具：
 
 ```ts
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MyFeature } from '../index.js';
+import { beforeEach, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { MyFeature } from '../src/index.js';
 
 describe('MyFeature', () => {
   let feature: MyFeature;
@@ -52,24 +49,24 @@ describe('MyFeature', () => {
   });
 
   it('exposes its expected tools', () => {
-    expect(feature.getTools().map(tool => tool.name)).toEqual(['my_action']);
+    assert.deepEqual(feature.getTools().map(tool => tool.name), ['my_action']);
   });
 });
 ```
 
-使用项目配置的测试运行器。不要把测试文件写成自行启动的 `main().catch()` 脚本。
+不要把一个项目的测试框架或执行方式复制到另一个项目。AgentDevClaw 本地 Feature 不要引入 Vitest/Jest，也不要把测试文件写成自行启动的 `main().catch()` 脚本；独立 npm 包及框架内 Feature 应遵循各自项目的测试配置。
 
 ## 测试工具契约
 
 ```ts
 it('defines a narrow schema and returns structured success', async () => {
   const tool = feature.getTools().find(item => item.name === 'my_action');
-  expect(tool).toBeDefined();
-  expect(tool?.description).toContain('何时');
-  expect(tool?.parameters?.required).toContain('value');
+  assert.ok(tool);
+  assert.match(tool.description, /何时/);
+  assert.ok(tool.parameters?.required?.includes('value'));
 
-  const result = await tool!.execute({ value: 'x' });
-  expect(result).toEqual({ ok: true, value: 'x' });
+  const result = await tool.execute({ value: 'x' });
+  assert.deepEqual(result, { ok: true, value: 'x' });
 });
 ```
 
@@ -89,9 +86,9 @@ it('injects feature state for matching tools only', () => {
   const injectors = feature.getContextInjectors();
   const injector = injectors.get('my_action');
 
-  expect(injector).toBeTypeOf('function');
-  expect(injector!({ id: '1', name: 'my_action', arguments: {} } as any))
-    .toEqual({ myFeature: { enabled: true } });
+  assert.equal(typeof injector, 'function');
+  assert.deepEqual(injector!({ id: '1', name: 'my_action', arguments: {} } as any),
+    { myFeature: { enabled: true } });
 });
 ```
 
@@ -113,20 +110,26 @@ it('injects a reminder when pending work exists', async () => {
     context: { add: (message: unknown) => messages.push(message) },
   } as any);
 
-  expect(messages).toHaveLength(1);
+  assert.equal(messages.length, 1);
 });
 ```
 
-决策 hook 测试每个出口：
+决策 hook 覆盖每个出口：
 
 ```ts
-it.each([
-  ['blocked', Decision.Deny],
-  ['pending', Decision.Approve],
-  ['idle', Decision.Continue],
-])('returns the expected decision for %s', async (state, expected) => {
-  feature.setMode(state as any);
-  expect(await feature.decideNextStep(makeStepContext())).toBe(expected);
+it('denies blocked work', async () => {
+  feature.setMode('blocked');
+  assert.equal(await feature.decideNextStep(makeStepContext()), Decision.Deny);
+});
+
+it('approves pending work', async () => {
+  feature.setMode('pending');
+  assert.equal(await feature.decideNextStep(makeStepContext()), Decision.Approve);
+});
+
+it('continues when idle', async () => {
+  feature.setMode('idle');
+  assert.equal(await feature.decideNextStep(makeStepContext()), Decision.Continue);
 });
 ```
 
@@ -138,6 +141,7 @@ it.each([
 
 ```ts
 function makeInitContext(featureConfig?: unknown): FeatureInitContext {
+  const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return logger; } };
   return {
     agentId: 'test-agent',
     config: {
@@ -145,13 +149,10 @@ function makeInitContext(featureConfig?: unknown): FeatureInitContext {
       workspaceDir: 'D:/workspace',
       features: { 'my-feature': featureConfig },
     },
-    logger: {
-      trace: vi.fn(), debug: vi.fn(), info: vi.fn(),
-      warn: vi.fn(), error: vi.fn(), child: vi.fn(),
-    } as any,
+    logger: logger as any,
     featureConfig,
     getFeature: () => undefined,
-    registerTool: vi.fn(),
+    registerTool() {},
   };
 }
 ```
@@ -178,7 +179,7 @@ it('round-trips logical state', () => {
   const restored = new MyFeature();
   restored.restoreState(snapshot);
 
-  expect(restored.captureState()).toEqual(snapshot);
+  assert.deepEqual(restored.captureState(), snapshot);
 });
 ```
 
@@ -188,7 +189,7 @@ it('round-trips logical state', () => {
 it('does not expose mutable state references', () => {
   const snapshot = feature.captureState() as { items: string[] };
   snapshot.items.push('outside');
-  expect(feature.captureState()).not.toEqual(snapshot);
+  assert.notDeepEqual(feature.captureState(), snapshot);
 });
 ```
 
@@ -206,15 +207,17 @@ it('does not expose mutable state references', () => {
 
 ```ts
 it('connects and closes its client', async () => {
-  const close = vi.fn().mockResolvedValue(undefined);
-  const connect = vi.fn().mockResolvedValue({ close });
+  let connectCalls = 0;
+  let closeCalls = 0;
+  const close = async () => { closeCalls++; };
+  const connect = async () => { connectCalls++; return { close }; };
   const feature = new MyFeature({ connect });
 
   await feature.onInitiate(makeInitContext());
   await feature.onDestroy(makeFeatureContext());
 
-  expect(connect).toHaveBeenCalledOnce();
-  expect(close).toHaveBeenCalledOnce();
+  assert.equal(connectCalls, 1);
+  assert.equal(closeCalls, 1);
 });
 ```
 
@@ -239,7 +242,7 @@ it('maps discovered actions to deterministic tools', async () => {
   });
 
   const tools = await feature.getAsyncTools(makeInitContext());
-  expect(tools.map(tool => tool.name)).toEqual(['domain_read', 'domain_write']);
+  assert.deepEqual(tools.map(tool => tool.name), ['domain_read', 'domain_write']);
 });
 ```
 
@@ -250,9 +253,9 @@ it('maps discovered actions to deterministic tools', async () => {
 单元测试先检查声明：
 
 ```ts
-expect(checkpointTool.executionMode).toBe('exclusive');
-expect(readTool.parallelizable).toBe(true);
-expect(writeTool.parallelizable).not.toBe(true);
+assert.equal(checkpointTool.executionMode, 'exclusive');
+assert.equal(readTool.parallelizable, true);
+assert.notEqual(writeTool.parallelizable, true);
 ```
 
 集成测试再验证：
