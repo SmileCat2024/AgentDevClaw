@@ -9,6 +9,7 @@ AgentDevClaw 充分发挥 AgentDev 框架的 **Feature 机制**：每个 Agent �
 - **浏览器对话** —— 在 Web UI 中直接与 Agent 对话，支持精美的 Markdown 渲染和实时的工具调用可视化，提供接近原生 IDE 的交互体验
 - **IM 渠道** —— 已适配微信、QQ、企业微信、飞书四种渠道。在 IM 渠道工作空间中配置好线路后，IM 消息会被路由到内部 Agent 会话，Agent 的回复也会传回 IM
 - **工作群（Beta）** —— 一种探索性的协作模式。创建多个群聊（每个群聊相当于一个话题空间），将多个 Agent 加入其中，在管理员 Agent 的协调下指挥多 Agent 协作。
+- **CLI 直接调用** —— 通过全局命令 `claw run <name> --goal "..."` 单次调用轻量 agent（无需 server 运行），过程日志与结果严格分流、可安全管道化，默认可被 Web UI 实时监视。详见 [agents/README.md](agents/README.md)
 
 AgentDevClaw 是一个以 Agent 为中心的，可扩展的工作台架构，整合配置、会话、调度、协作等多重职责，目标是让agent搭建与管理更加灵活，构建完全透明与可信任的运行过程。它本身也是一个持续迭代的项目，我们会充分发挥其架构优势，不断测试、推出新的 Agent 交互范式。
 
