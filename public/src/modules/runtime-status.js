@@ -1239,7 +1239,7 @@ function buildRuntimeIndicatorContent(runtime) {
 
 /**
  * 创建 / 更新 / 移除对话区域临时状态块。
- * 在隐藏过程模式下，Agent 活跃时显示，完成后消失。
+ * Agent 活跃时显示，完成后消失（无论过程处于显示还是隐藏模式）。
  * 使用 DOM diff 更新文本，避免重建元素导致 CSS 动画重置。
  */
 function ensureChatRuntimeIndicator() {
@@ -1251,8 +1251,7 @@ function ensureChatRuntimeIndicator() {
 
   // 判断是否应该显示
   // 断连时上栏显示"已断开连接"，此处同步隐藏，避免继续展示过时的阶段文案
-  const shouldShow = typeof showChatProcess !== 'undefined' && !showChatProcess
-    && currentRuntimeConnected
+  const shouldShow = currentRuntimeConnected
     && _lastRenderedNotificationRuntime
     && _lastRenderedNotificationRuntime.callActive
     && _lastRenderedNotificationRuntime.stage !== 'idle'
