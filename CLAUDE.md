@@ -495,6 +495,37 @@ IM 门户代理，支持 QQ/微信/企业微信/飞书的多渠道消息接入�
 4. 摘要导出：将会话导出为结构化摘要
 5. Checkpoint / Rollback：保存与恢复会话状态
 
+## 统一日志契约（重要）
+
+两套日志系统的边界与分流契约，改动日志相关代码前必读。
+
+### 边界：agent 内 vs agent 外
+
+| 范围 | 正当通道 | 约束 |
+|------|---------|------|
+| agent 运行时内部（feature 提供、agent.js 装配层） | `agentdev` 的 `createLogger()` → DebugHub → Web UI（query_logs / debugger MCP） | ESLint `no-console: error`（存量文件在 ratchet 清单中降为 warn） |
+| 非 agent 运行（server.js 进程、scripts/、bin/） | console / stdio（没有前端显示载体） | `no-console: off`；推荐 `server/shared/claw-logger.js` 的 `createClawLogger()` 获得等级与分流纪律 |
+| 前端 public/ | 浏览器 console | 不在此约束范围 |
+
+关键事实：
+
+- 无头运行（无 ViewerWorker 连接，如 run-one-shot-agent.js）时框架日志自动 fallback 到 stdio，审计不丢失。
+- 框架 emitLog 在 hub 连接时默认只推 hub（`npm start` 前台终端保持安静）；`AGENTDEV_LOG_CONSOLE_MIRROR=on` 可开启 stdio 镜像用于 CLI 调试。
+- agent 侧绕过 logger 直接 `console.log` 会丢失等级与命名空间（console 桥只在 log scope 内生效），这就是 lint 强制的理由。
+
+### stdio 分流契约（CLI 审计接口）
+
+- 等级：trace/debug/info/warn/error —— 所有日志必须带等级，这是审计前提。
+- `AGENTDEV_LOG_STREAM=auto`（默认）：trace/debug/info → stdout，warn/error → stderr。
+- `AGENTDEV_LOG_STREAM=stderr`（无头模式）：全部日志 → stderr，stdout 只承载结果输出（如 `ONE_SHOT_RESULT:`、`PLAIN_AGENT_RESULT:` 协议行），保证可安全管道化。无头入口脚本负责设置此环境变量。
+- 无头入口必须以 `import './headless-log-preamble.js'` 作为**第一个 import**（现成范例：run-one-shot-agent.js、run-plain-agent.js）。它设置 env 并安装简版 console 分流补丁，覆盖"框架 console 桥（Agent 构造时才装）生效之前"的模块顶层窗口。两个坑：静态 import 会提升，入口模块体里再设 env 已经太晚；agentdev 依赖图含 top-level await，会异步化依赖它的前导模块，因此 preamble 严禁依赖 agentdev。
+- Claw 侧 `CLAW_LOG_LEVEL` 可过滤非 agent 日志的 stdio 冗长度（默认全量）。
+
+### 修改注意事项
+
+- 框架日志实现在 `AgentDev/src/core/logging.ts`；改动后需在 AgentDev 仓库 `npm run build` 并重启整个 Claw 服务。
+- ESLint 边界与 ratchet 清单在 `eslint.config.js` 末尾两个 block；agent 侧文件迁移到 logger 后应从清单移除。
+
 ## 前端结构现状
 
 ### index.html 已经瘦身

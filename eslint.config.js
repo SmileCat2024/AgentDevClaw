@@ -155,4 +155,40 @@ export default [
       },
     }
   ),
+
+  // ── Agent-side logging boundary ──────────────────────────────
+  // Agent 运行时内部（feature 提供）的日志必须走 claw 日志体系：
+  //   import { createLogger } from 'agentdev' → DebugHub → Web UI，
+  //   无头运行时自动 fallback 到 stdio（分级 + stdout/stderr 分流）。
+  // 进程内 console 桥只在 log scope 内生效，绕过 logger 的 console.*
+  // 会丢失等级与命名空间，因此在此范围内禁止。
+  // 非 agent 运行的日志（server/、scripts/、bin/、test/、public/）没有
+  // 前端显示载体，console.log 是正当通道，保持 'no-console': 'off'。
+  {
+    files: ['prebuilt-agents/**/*.js', 'prebuilt-agents/**/*.mjs', 'local-features/**/*.ts'],
+    rules: {
+      'no-console': 'error',
+    },
+  },
+
+  // Ratchet 清单：agent 侧仍含存量 console 的文件。迁移到 createLogger /
+  // feature logger 后从此清单移除；清单外新增 console 直接报 error。
+  // 注：.protoclaw-boot.mjs 属启动关键节点脚本，console 输出符合豁免原则，
+  // 可长期保留在清单中。
+  {
+    files: [
+      'prebuilt-agents/official/agent-creator/agent.js',
+      'prebuilt-agents/official/flow-workspace/agent.js',
+      'prebuilt-agents/official/programming-helper/.protoclaw-boot.mjs',
+      'prebuilt-agents/official/programming-helper/agent.js',
+      'prebuilt-agents/official/programming-helper/controlled-todo-feature.js',
+      'prebuilt-agents/official/qqbot/agent.js',
+      'local-features/dispatch/src/index.ts',
+      'local-features/feature-dev/src/index.ts',
+      'local-features/group-admin/src/bridge.ts',
+    ],
+    rules: {
+      'no-console': 'warn',
+    },
+  },
 ];

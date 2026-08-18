@@ -1,6 +1,7 @@
 import path from 'path';
 import os from 'os';
 import { WORKSPACE_SESSION_AGENT_IDS } from './constants.js';
+import { createClawLogger } from './claw-logger.js';
 
 export function sanitizeSessionFragment(value) {
   return String(value || '')
@@ -18,8 +19,27 @@ export function isWorkspaceSessionAgent(agentId) {
   return WORKSPACE_SESSION_AGENT_IDS.has(sanitizeSessionFragment(agentId));
 }
 
+// 兼容包装：旧 stream 语义映射到统一日志等级。
+// info/debug/trace → stdout，warn/error → stderr（审计分流契约）。
+const STREAM_TO_LEVEL = {
+  log: 'info',
+  info: 'info',
+  trace: 'trace',
+  debug: 'debug',
+  warn: 'warn',
+  error: 'error',
+};
+
+const prefixLoggers = new Map();
+
 export function log(prefix, message, stream = 'log') {
-  console[stream](`[${prefix}] ${message}`);
+  const level = STREAM_TO_LEVEL[stream] || 'info';
+  let logger = prefixLoggers.get(prefix);
+  if (!logger) {
+    logger = createClawLogger(prefix);
+    prefixLoggers.set(prefix, logger);
+  }
+  logger[level](message);
 }
 
 export function getAssemblyWorkspaceDir(assemblyName) {

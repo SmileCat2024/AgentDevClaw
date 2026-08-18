@@ -14,6 +14,9 @@
  *   PROTOCLAW_SERVER_ORIGIN   - server URL for API calls
  */
 
+// 无头日志契约前导：必须是第一个 import（env 设置 + console 桥须先于
+// 一切依赖模块顶层执行，详见 headless-log-preamble.js）。
+import './headless-log-preamble.js';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
@@ -237,7 +240,7 @@ function outputResult(result) {
 }
 
 async function main() {
-  console.log(`[OneShot] Starting agent=${agentId} session=${sessionId || '(new)'} goal="${goal.slice(0, 80)}"`);
+  console.error(`[OneShot] Starting agent=${agentId} session=${sessionId || '(new)'} goal="${goal.slice(0, 80)}"`);
 
   // 1. Resolve workspace
   const workspaceCwd = resolveWorkspaceCwd(agentId, sessionId);
@@ -261,7 +264,7 @@ async function main() {
     ...(resolved ? { llm: resolved.llm } : {}),
   });
   if (resolved) {
-    console.log(`[OneShot] Using model preset role="${modelPresetRole}" => ${resolved.modelName}`);
+    console.error(`[OneShot] Using model preset role="${modelPresetRole}" => ${resolved.modelName}`);
     try {
       const ctx = typeof agent.getSystemContext === 'function' ? agent.getSystemContext() : agent._systemContext;
       if (ctx) ctx.SYSTEM_CURRENT_MODEL = resolved.modelName;
@@ -279,7 +282,7 @@ async function main() {
     agent.use(new localFeatures.ContextHandoffSeedFeature({
       handoff: runtimeHandoff.handoff,
     }));
-    console.log(`[OneShot] 已挂载 context handoff seed (${runtimeHandoff.source})`);
+    console.error(`[OneShot] 已挂载 context handoff seed (${runtimeHandoff.source})`);
   }
 
   // 5. prepareRuntime hook
@@ -288,17 +291,17 @@ async function main() {
   }
 
   if (workspaceCwd) {
-    console.log(`[OneShot] Workspace-bound agent environment => ${workspaceCwd}`);
+    console.error(`[OneShot] Workspace-bound agent environment => ${workspaceCwd}`);
   }
-  console.log(`[OneShot] Agent 实例已创建: ${agentId}`);
+  console.error(`[OneShot] Agent 实例已创建: ${agentId}`);
 
   // 6. Load or create session
   if (sessionId) {
     try {
       await agent.loadSession(sessionId, sessionStore);
-      console.log(`[OneShot] 已恢复会话: ${sessionId}`);
+      console.error(`[OneShot] 已恢复会话: ${sessionId}`);
     } catch {
-      console.log(`[OneShot] 创建新会话: ${sessionId}`);
+      console.error(`[OneShot] 创建新会话: ${sessionId}`);
     }
   }
 
@@ -308,9 +311,9 @@ async function main() {
   let error = null;
 
   try {
-    console.log('[OneShot] 开始执行 agent.onCall()...');
+    console.error('[OneShot] 开始执行 agent.onCall()...');
     response = await agent.onCall(goal);
-    console.log(`[OneShot] agent.onCall() 完成，响应长度=${(response || '').length}`);
+    console.error(`[OneShot] agent.onCall() 完成，响应长度=${(response || '').length}`);
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     console.error(`[OneShot] agent.onCall() 失败: ${error}`);
@@ -322,7 +325,7 @@ async function main() {
   if (sessionId) {
     try {
       await agent.saveSession(sessionId, sessionStore);
-      console.log(`[OneShot] 会话已保存: ${sessionId}`);
+      console.error(`[OneShot] 会话已保存: ${sessionId}`);
     } catch (err) {
       console.error('[OneShot] saveSession 失败:', err);
     }
