@@ -126,9 +126,12 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
       })
     });
     if (res.ok) {
-      if (textarea) {
-        textarea.value = '';
-        autoResize(textarea);
+      // await 期间输入面可能重建，提交前抓取的 textarea 可能已脱离 DOM；
+      // 清空 live 元素，避免已提交文本经重建前的草稿写回"复活"。
+      const liveTextarea = document.getElementById(`input-${requestId}`);
+      if (liveTextarea) {
+        liveTextarea.value = '';
+        autoResize(liveTextarea);
       }
       if (typeof clearPendingInputImages === 'function') {
         clearPendingInputImages();

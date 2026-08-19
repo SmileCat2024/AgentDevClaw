@@ -1375,7 +1375,9 @@ function resetRuntimeBackedSurfaceState() {
   renderInputRequests([]);
   setCurrentLogs([]);
   setConnectionStatus(false);
-  updateNotificationStatus({});
+  // 传 null（而非 {}）：updateNotificationStatus 只对 falsy 入参清空
+  // _lastCallFinishTime，空对象会让上一个会话的"X 秒前"胶囊残留。
+  updateNotificationStatus(null);
   lastRenderedWorkspaceHtml = '';
   _lastRenderedChatSig = '';
   clearChatLoadingSession();

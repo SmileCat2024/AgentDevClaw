@@ -625,6 +625,13 @@ window.switchAgent = async (newAgentId) => {
     // This lets the user see cached data without waiting for a network round trip.
     currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
     currentRuntimeAgentId = runtimeAgentId;
+    // 用户主动切换：立即冻结 viewer 侧会话身份。必须在此之前用 allAgents
+    // 派生值（此时绑定尚未写入，读到的是用户点击时刻列表展示的会话），
+    // 之后 getRuntimeContextKey 不再随外部入口抢占的 host activeSessionId 漂移。
+    setViewerSessionBinding(
+      runtimeAgentId,
+      _deriveRuntimeSessionIdFromAgents(runtimeAgentId) || getActiveWorkspaceSessionId(targetAgent),
+    );
     _recentlyFinishedRuntimes.delete(runtimeAgentId);
     // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开
     readOnlyMode = targetAgent?.input_accepted === false;

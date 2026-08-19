@@ -728,7 +728,34 @@ function getActiveWorkspaceSessionId(agent = typeof getCurrentAgentRecord === 'f
   ).trim();
 }
 
-function getRuntimeWorkspaceSessionId(runtimeId) {
+// ── Viewer-local session binding ────────────────────────────────────────────
+// 会话身份的 viewer 侧真相：用户主动切换时冻结的 runtimeId → sessionId 绑定。
+// Server 端 host 级 activeSessionId 会被外部入口（IM 转接 / CLI / 调度 /
+// 其他标签页的 create+activate）改写；若 getRuntimeContextKey 被动跟随
+// allAgents 里的该值派生，正在查看的会话的草稿 key / 录音归属 / 输入签名
+// 会在用户毫无操作时整体漂移（输入面重建、录音被取消、草稿写错槽）。
+// 绑定只在用户主动切换（switchAgent / 会话打开与创建）时写入。
+var _viewerSessionBindings = new Map();
+
+function setViewerSessionBinding(runtimeId, sessionId) {
+  const normalizedRuntimeId = String(runtimeId || '').trim();
+  if (!normalizedRuntimeId) return;
+  const normalizedSessionId = String(sessionId || '').trim();
+  if (normalizedSessionId) {
+    _viewerSessionBindings.set(normalizedRuntimeId, normalizedSessionId);
+  } else {
+    _viewerSessionBindings.delete(normalizedRuntimeId);
+  }
+}
+
+function getViewerSessionBinding(runtimeId) {
+  const normalizedRuntimeId = String(runtimeId || '').trim();
+  if (!normalizedRuntimeId) return '';
+  return String(_viewerSessionBindings.get(normalizedRuntimeId) || '').trim();
+}
+
+// 从 allAgents 派生 runtime 当前关联的会话（server 侧视角，可被外部入口改写）。
+function _deriveRuntimeSessionIdFromAgents(runtimeId) {
   const normalizedRuntimeId = String(runtimeId || '').trim();
   if (!normalizedRuntimeId || !Array.isArray(allAgents)) return '';
   const runtimeRecord = allAgents.find((item) => {
@@ -737,6 +764,14 @@ function getRuntimeWorkspaceSessionId(runtimeId) {
     return itemId === normalizedRuntimeId || itemRuntimeId === normalizedRuntimeId;
   });
   return String(runtimeRecord?.active_workspace_session_id || '').trim();
+}
+
+function getRuntimeWorkspaceSessionId(runtimeId) {
+  // Viewer 绑定优先：它代表用户正在查看的会话。仅在尚未建立绑定
+  // （初始恢复、未经 switchAgent 的路径）时回退到 server 派生值。
+  const viewerSessionId = getViewerSessionBinding(runtimeId);
+  if (viewerSessionId) return viewerSessionId;
+  return _deriveRuntimeSessionIdFromAgents(runtimeId);
 }
 
 function getRuntimeContextKey(runtimeId = currentRuntimeAgentId, agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {

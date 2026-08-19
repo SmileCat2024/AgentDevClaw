@@ -711,6 +711,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           && action.type === 'create_session'
           && String(action.formId || '') === 'assembly-form';
         const nextAgent = result?.agent ? (upsertConnectedAgent(result.agent) || result.agent) : null;
+        // 用户主动打开/创建会话：立即冻结 viewer 绑定。同 runtime 的会话
+        // 切换不经过 switchAgent；若不在此绑定，乐观更新与服务器确认之间
+        // contextKey 会沿 allAgents 的 activeSessionId 出现瞬时漂移。
+        if (targetSessionId) {
+          const bindRuntimeId = String(
+            nextAgent?.runtime_session_id || nextAgent?.runtimeSessionId || previousRuntimeId || '',
+          ).trim();
+          if (bindRuntimeId) setViewerSessionBinding(bindRuntimeId, targetSessionId);
+        }
         if (isAssemblyLaunch) {
           finishSidebarOperation(sidebarOperation.operationId, 'settled');
           if (_navGuard !== _navigationGuardEpoch) return;

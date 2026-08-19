@@ -1055,8 +1055,15 @@ async function submitQueuedInput() {
     });
     if (res.ok) {
       const delivery = await res.json().catch(() => ({}));
-      textarea.value = '';
-      autoResize(textarea);
+      // await 期间输入面可能整块重建，提交前抓取的 textarea 可能已脱离
+      // DOM。必须清空当前 live 元素（校验仍属同一会话）：否则已发送文本
+      // 残留在输入框，且后续重建前的草稿写回会让它作为暂存"复活"。
+      const liveTextarea = document.getElementById('input-persistent');
+      if (liveTextarea
+        && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
+        liveTextarea.value = '';
+        autoResize(liveTextarea);
+      }
       clearPendingInputImages();
       if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
       _clearRecapForNewMessage();

@@ -53,6 +53,17 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   lastRenderedInputSignature = signature;
   lastRenderedInputMode = renderMode;
 
+  // ── 焦点保持：签名变化意味着输入面即将整块重建，先记录焦点与光标 ──
+  // （重建会销毁 textarea，焦点/IME/选中态是 DOM 局部状态，必然丢失；
+  //  仅当焦点原本就在输入 textarea 内才恢复，避免抢占用户在他处的焦点）
+  const prevActiveEl = document.activeElement;
+  const hadInputFocus = prevActiveEl instanceof HTMLTextAreaElement
+    && inputContainer.contains(prevActiveEl)
+    && prevActiveEl.classList.contains('user-input-textarea');
+  const prevInputSelection = hadInputFocus
+    ? { start: prevActiveEl.selectionStart, end: prevActiveEl.selectionEnd }
+    : null;
+
   // MediaRecorder / ASR 属于语音操作本身，不属于某个短命 DOM 节点。
   // 同一会话的 persistent ↔ requests 重绘只重绑 UI；切换会话或离开输入面
   // 时才取消仍在采集的录音。已经开始的 ASR 由其异步所有者自行收尾。
@@ -283,6 +294,24 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
 
   // Inject any pending voice ASR result that arrived while viewing another session
   _injectPendingVoiceResult();
+
+  // 恢复重建前的输入焦点与光标（requests/persistent 两种输入面均适用；
+  // request 模式自带的 50ms autofocus 会再次聚焦自身，与此不冲突）
+  if (hadInputFocus) {
+    const nextTa = inputContainer.querySelector('.user-input-textarea:not([disabled])');
+    if (nextTa) {
+      nextTa.focus();
+      try {
+        const pos = Number.isInteger(prevInputSelection?.start)
+          ? prevInputSelection.start
+          : nextTa.value.length;
+        const end = Number.isInteger(prevInputSelection?.end)
+          ? prevInputSelection.end
+          : pos;
+        nextTa.setSelectionRange(pos, end);
+      } catch { /* 个别 input 类型 setSelectionRange 会抛错，忽略 */ }
+    }
+  }
 
   _renderLastCallElapsed();
   _renderRecapHint();

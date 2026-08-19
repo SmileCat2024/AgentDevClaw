@@ -33,6 +33,11 @@ async function loadAgentData(agentId) {
     resetRuntimeStatusForSwitch();
     activateUserCollapseStateForContext(getRuntimeContextKey(agentId));
     _lastCallFinishTime = 0;
+    // 运行胶囊的计时起点是会话级数据，必须随切换清零：残留的旧会话起点
+    // 会让新会话显示错误时长，且 confirmed 标志会拒绝更早的正确快照值，
+    // 导致错误时长一直无法纠正。
+    _runCapsuleStartAt = 0;
+    _runCapsuleStartConfirmed = false;
     _currentRecapText = '';
     _recapPendingTrigger = false;
     const [msgsRes, toolsRes, hooksRes, overviewRes, todoRes, inputRes] = await Promise.all([

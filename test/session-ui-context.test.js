@@ -80,6 +80,8 @@ ${cacheBlock}
 globalThis.__uiContext = {
   getActiveWorkspaceSessionId,
   getRuntimeContextKey,
+  getRuntimeWorkspaceSessionId,
+  setViewerSessionBinding,
   saveCurrentRuntimeToCache,
   restoreRuntimeFromCache,
 };`,
@@ -100,6 +102,56 @@ test('runtime context key isolates sessions sharing one runtime', () => {
   assert.notEqual(sessionAKey, sessionBKey);
   assert.equal(sessionAKey, 'host:flow-workspace|session:session-a');
   assert.equal(sessionBKey, 'host:flow-workspace|session:session-b');
+});
+
+test('viewer session binding freezes context key against host active drift', () => {
+  const context = createCoreContext();
+  const api = context.__uiContext;
+  context.allAgents = [{ id: 'runtime-1', active_workspace_session_id: 'session-a' }];
+
+  assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-a');
+
+  // 用户主动切换时刻冻结 viewer 绑定
+  api.setViewerSessionBinding('runtime-1', 'session-a');
+
+  // 外部入口（IM 转接/CLI/调度/其他标签页）创建并激活新会话：
+  // allAgents 刷新后 host 与 runtime 记录的 active 均被抢占
+  context.allAgents[0].active_workspace_session_id = 'session-hijacked';
+  context.currentAgent.workspace_sessions.activeSessionId = 'session-hijacked';
+
+  // 正在查看的会话身份不漂移：草稿 key / 录音归属 / 输入签名全部稳定
+  assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-a');
+  assert.equal(api.getRuntimeWorkspaceSessionId('runtime-1'), 'session-a');
+
+  // 用户主动切到新会话后绑定更新，contextKey 跟随
+  api.setViewerSessionBinding('runtime-1', 'session-hijacked');
+  assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-hijacked');
+
+  // 绑定清除（空 sessionId）后回退 server 派生值（初始恢复路径）
+  api.setViewerSessionBinding('runtime-1', '');
+  assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-hijacked');
+});
+
+test('submit success clears the live textarea, not a detached reference', () => {
+  // await fetch 期间输入面可能整块重建；提交前抓取的 textarea 会脱离 DOM。
+  // 成功分支必须重新解析 live 元素，否则已发送文本经草稿写回"复活"。
+  const persistentInputSource = fs.readFileSync(
+    new URL('../public/src/modules/persistent-input.js', import.meta.url),
+    'utf8',
+  );
+  assert.ok(
+    persistentInputSource.includes("const liveTextarea = document.getElementById('input-persistent')"),
+    'submitQueuedInput should resolve the live textarea after await',
+  );
+
+  const inputHelpersSource = fs.readFileSync(
+    new URL('../public/src/modules/input-helpers.js', import.meta.url),
+    'utf8',
+  );
+  assert.ok(
+    inputHelpersSource.includes('const liveTextarea = document.getElementById(`input-${requestId}`)'),
+    'submitInput should resolve the live textarea after await',
+  );
 });
 
 test('optimistic runtime cache restores data by session context', () => {
