@@ -4190,7 +4190,7 @@ body[data-theme="light"] .rh-group {
 .rh-item:not(:last-child)::before {
   content: '';
   position: absolute;
-  left: 7.5px;
+  left: 22.5px;
   top: 26px;
   bottom: -2px;
   width: 1px;
