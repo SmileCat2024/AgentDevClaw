@@ -3,10 +3,10 @@ import {
 } from '../shared/constants.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import {
-  listAgentRuntimes, getAgentRuntime, buildStatus, isChildProcessRunning,
+  listAgentRuntimes, getAgentRuntime, getRuntimeByViewerAgentId, buildStatus, isChildProcessRunning,
 } from '../shared/agent-access.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
-import { sendIPCtoSession } from '../shared/ipc.js';
+import { sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createConnectedAgentsQuery } from './agent-connected.js';
 import { createAgentStartupFns } from './agent-startup.js';
@@ -510,7 +510,7 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/todo_control', express.json(), async (req, res, next) => {
       try {
-        const { agentId, sessionId, taskId, forceContinue } = req.body || {};
+        const { agentId, sessionId, taskId, forceContinue, runtimeId } = req.body || {};
         if (!agentId) {
           return res.status(400).json({ error: 'agentId is required' });
         }
@@ -520,25 +520,49 @@ export function createAgentLifecycleModule(ctx) {
         if (forceContinue !== undefined && typeof forceContinue !== 'boolean') {
           return res.status(400).json({ error: 'forceContinue must be a boolean' });
         }
-        // Route to exact (agentId, sessionId) only.
-        // Do NOT fall back to pickPrimaryAgentRuntime — that would silently
-        // deliver the interrupt to a different session (cross-session contamination).
-        let sent = false;
-        if (sessionId) {
+        const hasControlPayload = taskId !== undefined || forceContinue !== undefined;
+        if (!hasControlPayload) {
+          return res.status(400).json({ error: 'taskId or forceContinue is required' });
+        }
+
+        const deliver = (send) => {
+          let sent = false;
           if (forceContinue !== undefined) {
-            sent = sendIPCtoSession(agentId, sessionId, {
-              type: 'todo-force-continue',
-              enabled: forceContinue,
-            });
+            sent = send({ type: 'todo-force-continue', enabled: forceContinue });
           }
           if (taskId !== undefined) {
-            sent = sendIPCtoSession(agentId, sessionId, {
-              type: 'todo-control',
-              taskId: taskId || null,
-            }) || sent;
+            sent = send({ type: 'todo-control', taskId: taskId || null }) || sent;
+          }
+          return sent;
+        };
+
+        // Priority 1: runtimeId (viewerAgentId) — same id space as the frontend's
+        // poll source (GET /api/agents/:id/todo), so the toggle always targets
+        // the exact runtime whose snapshot the UI is displaying. Mirrors the
+        // swap_model / tool_state IPC resolution pattern.
+        if (runtimeId && typeof runtimeId === 'string') {
+          const rt = getRuntimeByViewerAgentId(runtimeId);
+          if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
+            try {
+              if (deliver((message) => sendIPCToRuntime(rt, message))) {
+                return res.json({ ok: true, agentId, via: 'runtimeId' });
+              }
+            } catch (err) {
+              console.warn(`[todo_control] IPC via runtimeId ${runtimeId} failed: ${err}`);
+            }
           }
         }
-        res.json({ ok: sent });
+
+        // Priority 2: agentId + sessionId exact routing.
+        // Do NOT fall back to pickPrimaryAgentRuntime — that would silently
+        // deliver the interrupt to a different session (cross-session contamination).
+        if (sessionId) {
+          if (deliver((message) => sendIPCtoSession(agentId, sessionId, message))) {
+            return res.json({ ok: true, agentId, via: 'sessionId' });
+          }
+        }
+
+        res.json({ ok: false });
       } catch (error) {
         next(error);
       }

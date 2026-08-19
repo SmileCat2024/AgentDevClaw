@@ -277,31 +277,53 @@ function renderPlanPanel() {
 
 async function sendTodoControl(taskId) {
   if (!currentRuntimeAgentId) return;
-  // 用 runtime_session_id 精确匹配当前 session 条目，
-  // 不再用 OR find（会误匹配 workspace host 条目，拿到错误的 active session）
+  // runtimeId 优先（与轮询数据源 /api/agents/:id/todo 同一 id 空间，不会错位）；
+  // sessionId 作为 fallback（getRuntimeWorkspaceSessionId 精确匹配当前 session 条目，
+  // 不用 OR find —— 会误匹配 workspace host 条目拿到错误的 active session）
   const sessionId = getRuntimeWorkspaceSessionId(currentRuntimeAgentId) || undefined;
   try {
     await fetch('/protoclaw/todo_control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: currentAgentId, sessionId, taskId }),
+      body: JSON.stringify({ agentId: currentAgentId, runtimeId: currentRuntimeAgentId, sessionId, taskId }),
     });
   } catch (e) {
     console.error('[TodoControl] request failed:', e);
   }
 }
 
-async function sendTodoForceContinue(enabled) {
-  if (!currentRuntimeAgentId) return;
+async function sendTodoForceContinue(enabled, { attempt = 0 } = {}) {
+  if (!currentRuntimeAgentId) return false;
   const sessionId = getRuntimeWorkspaceSessionId(currentRuntimeAgentId) || undefined;
   try {
-    await fetch('/protoclaw/todo_control', {
+    const response = await fetch('/protoclaw/todo_control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: currentAgentId, sessionId, forceContinue: enabled }),
+      // runtimeId 是主定位 id：与轮询数据源 /api/agents/:id/todo 的 :id 相同，
+      // 开关显示哪个 runtime 的快照，控制就发往哪个 runtime，天然一致。
+      // sessionId 仅作 runtimeId 失效时的 fallback。
+      body: JSON.stringify({ agentId: currentAgentId, runtimeId: currentRuntimeAgentId, sessionId, forceContinue: enabled }),
     });
+    const payload = await response.json().catch(() => null);
+    if (response.ok && payload?.ok === true) return true;
+    // IPC 未送达：runtime 已停止/重启中，或 sessionId 暂态错位（会话切换后
+    // allAgents 尚未刷新的窗口）。续期用户操作时间戳防止轮询快照覆盖乐观
+    // 状态，刷新 agent 列表后重试一次（runtime 重启后 id 可能已更新）。
+    _lastTodoForceContinueUserActionAt = Date.now();
+    if (attempt === 0 && typeof loadAgents === 'function') {
+      await loadAgents();
+      return sendTodoForceContinue(enabled, { attempt: attempt + 1 });
+    }
+    // 重试仍失败：回滚乐观状态，让 UI 回到 server 真实状态（否则
+    // 3 秒宽限期后轮询快照会把开关"悄悄"弹回，表现为按钮自动关回）。
+    setTodoForceContinue(!enabled);
+    _lastTodoForceContinueUserActionAt = Date.now();
+    if (activeFeaturePanel === 'plan') renderFeaturePanel();
+    console.warn('[TodoControl] force-continue not delivered (runtime not reachable), rolled back to', !enabled);
+    return false;
   } catch (e) {
     console.error('[TodoControl] force-continue request failed:', e);
+    return false;
   }
 }
 

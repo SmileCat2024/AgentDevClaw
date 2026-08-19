@@ -22,6 +22,17 @@ export function sendIPCToRuntime(runtime, message) {
   }
 }
 
+/**
+ * Session-scoped IPC delivery by (agentId, sessionId) key.
+ *
+ * ⚠ Frontend-originated control IPC (toggles / interrupts / hot swaps) should
+ * resolve the runtime by viewerAgentId FIRST (getRuntimeByViewerAgentId +
+ * sendIPCToRuntime) and use this as fallback only — the frontend's sessionId
+ * comes from an async allAgents cache and can transiently mismatch the
+ * managedAgents entry key (silent {ok:false}). Never add a cross-session
+ * fallback here. See docs/frontend-rendering-patterns.md §8d and the
+ * todo_control / swap_model reference implementations.
+ */
 export function sendIPCtoSession(targetAgentId, targetSessionId, message) {
   const runtime = getAgentRuntime(targetAgentId, targetSessionId);
   if (!runtime?.process || runtime.process.exitCode !== null || runtime.stopped) {

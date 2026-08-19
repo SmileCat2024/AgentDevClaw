@@ -795,5 +795,93 @@ describe('agent-lifecycle', () => {
       assert.equal(statusCode, 400);
       assert.equal(messages.length, 0);
     });
+
+    it('delivers via runtimeId even when sessionId is stale (frontend id-space mismatch)', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      const child = createMockChild();
+      const messages = [];
+      child.send = (msg) => { messages.push(msg); return true; };
+      const rt = injectRuntime('test-agent', 'session-real', child);
+      rt.viewerAgentId = 'viewer-agent-1';
+
+      let responseData = null;
+      await handler(
+        // sessionId intentionally references a session that has no runtime entry —
+        // this is the stale-cache window that previously caused {ok:false}
+        { body: { agentId: 'test-agent', runtimeId: 'viewer-agent-1', sessionId: 'session-stale', forceContinue: true } },
+        { json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+
+      assert.equal(responseData.ok, true);
+      assert.equal(responseData.via, 'runtimeId');
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0].type, 'todo-force-continue');
+      assert.equal(messages[0].enabled, true);
+      assert.equal(messages[0].__targetSessionId, 'session-real', 'runtime targetSessionId is authoritative');
+    });
+
+    it('falls back to sessionId when runtimeId does not resolve', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      const child = createMockChild();
+      const messages = [];
+      child.send = (msg) => { messages.push(msg); return true; };
+      injectRuntime('test-agent', 'session-A', child);
+
+      let responseData = null;
+      await handler(
+        { body: { agentId: 'test-agent', runtimeId: 'viewer-unknown', sessionId: 'session-A', taskId: '3' } },
+        { json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+
+      assert.equal(responseData.ok, true);
+      assert.equal(responseData.via, 'sessionId');
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0].type, 'todo-control');
+      assert.equal(messages[0].taskId, '3');
+    });
+
+    it('returns ok=false when neither runtimeId nor sessionId resolves', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      const child = createMockChild();
+      const messages = [];
+      child.send = (msg) => { messages.push(msg); return true; };
+      injectRuntime('test-agent', 'session-B', child);
+
+      let responseData = null;
+      await handler(
+        { body: { agentId: 'test-agent', runtimeId: 'viewer-unknown', sessionId: 'session-A', taskId: '3' } },
+        { json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+
+      assert.equal(responseData.ok, false, 'must not fall back to a different session (no cross-session contamination)');
+      assert.equal(messages.length, 0);
+    });
+
+    it('rejects a request without taskId or forceContinue payload', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      let statusCode = null;
+      const res = {
+        status: (code) => { statusCode = code; return res; },
+        json: () => {},
+      };
+      await handler(
+        { body: { agentId: 'test-agent', sessionId: 'session-A' } },
+        res,
+        (error) => { throw error; },
+      );
+
+      assert.equal(statusCode, 400);
+    });
   });
 });
