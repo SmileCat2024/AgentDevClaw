@@ -963,10 +963,11 @@ Agent 进程: buildHookInspectorSnapshot()
 
 ## 会话切换与异步渲染的关键约束
 
-会话切换链路（`switchAgent` → `loadAgentData` → `poll`）的详细渲染契约、去重策略和自检清单见 [docs/frontend-rendering-patterns.md](/D:/code/AgentDevClaw/docs/frontend-rendering-patterns.md)。以下是最容易踩坑的两条不变量：
+会话切换链路（`switchAgent` → `loadAgentData` → `poll`）的详细渲染契约、去重策略和自检清单见 [docs/frontend-rendering-patterns.md](/D:/code/AgentDevClaw/docs/frontend-rendering-patterns.md)。以下是最容易踩坑的三条不变量：
 
 1. **`getRuntimeContextKey` 不是 stable 的**：它依赖 `allAgents`（由 `loadAgents()` 异步更新），在 `await` 前后会返回不同值。**不能用于 stale check**，只能用于 cache key（miss 无害）。stale check 只用 `currentRuntimeAgentId`。
 2. **PUT 不阻塞渲染**：`switchAgent` 先设全局状态 + optimistic 渲染，PUT `/api/agents/current` 与 `loadAgentData` 并行。`loadAgentData` 所有 URL 用显式 `agentId`，不依赖服务端 "current" 状态。
+3. **控制投递的 id 空间**：前端→agent 运行时控制 IPC（开关 / 中断 / 热切换类）**必须优先用 `runtimeId`（viewerAgentId，即 `currentRuntimeAgentId`，与轮询数据源 `/api/agents/:id/...` 的 `:id` 同空间）定位**；`allAgents` 缓存派生的 sessionId 会暂态错位，只能作 fallback，且 server 端禁止跨 session fallback 投递 session 级状态。前端必须检查 `payload.ok`，失败要回滚乐观态。参考实现：`todo_control`（agent-lifecycle.js）与 `swap_model`（model-config.js）。详见 frontend-rendering-patterns.md §8d。
 
 ## 进程架构与重启范围
 
