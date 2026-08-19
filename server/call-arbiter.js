@@ -372,6 +372,19 @@ export class CallArbiter {
         : null;
 
       if (!continuation) {
+        // A framework step-limit is a Call-level event: StepFinish can no
+        // longer approve another step. Give the session Feature one bounded,
+        // opt-in chance to request the next envelope segment.
+        const forceContinuation = this._agent?.features?.get?.('force-continuation');
+        const forcedInput = typeof forceContinuation?.requestFrameworkLimitContinuation === 'function'
+          ? forceContinuation.requestFrameworkLimitContinuation(outcome)
+          : null;
+        if (typeof forcedInput === 'string' && forcedInput) {
+          console.log(`[CallArbiter] force continuation after framework limit (envelope=${envelope.id})`);
+          input = forcedInput;
+          continue;
+        }
+
         // Normal completion — no continuation requested
         envelope.status = 'completed';
         return;

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "force-continuation",
+  "name": "force-continuation",
+  "version": "0.1.1",
+  "description": "force-continuation feature for AgentDev",
+  "tags": [
+    "agentdev",
+    "feature",
+    "force-continuation"
+  ],
+  "entry": "dist/index.js",
+  "homepage": "",
+  "repository": "",
+  "agentdev": {
+    "compatible": ">=0.1.0"
+  },
+  "featureTypes": [],
+  "compatibility": {
+    "rollback": false,
+    "tags": [
+      "no-rollback"
+    ]
+  },
+  "requirements": {
+    "platforms": [],
+    "node": "",
+    "external": [],
+    "services": []
+  }
+}

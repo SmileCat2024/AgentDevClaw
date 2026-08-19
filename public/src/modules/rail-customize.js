@@ -26,7 +26,7 @@
   /** 可自定义的面板 ID（顺序 = 默认顺序） */
   var CUSTOMIZABLE_IDS = [
     'workspace', 'monitor', 'plan', 'hooks',
-    'inspector', 'logs', 'mcp', 'genui',
+    'inspector', 'force-continuation', 'logs', 'mcp', 'genui',
   ];
 
   /** 面板名称（i18n） */
@@ -36,6 +36,7 @@
     plan:      { zh: '计划',      en: 'Plan' },
     hooks:     { zh: '功能',      en: 'Features' },
     inspector: { zh: '反向钩子',  en: 'Reverse Hooks' },
+    'force-continuation': { zh: '强制继续', en: 'Force Continuation' },
     logs:      { zh: '日志',      en: 'Logs' },
     mcp:       { zh: 'MCP',       en: 'MCP' },
     genui:     { zh: '交互页面',  en: 'Interactive Pages' },
@@ -48,6 +49,7 @@
     plan:      { zh: '任务与计划列表',   en: 'Tasks and plan list' },
     hooks:     { zh: 'Feature 功能面板', en: 'Feature panel' },
     inspector: { zh: 'Hook 检查器',      en: 'Hook inspector' },
+    'force-continuation': { zh: '中断后继续控制', en: 'Resume after truncation control' },
     logs:      { zh: '运行日志',         en: 'Runtime logs' },
     mcp:       { zh: 'MCP 服务端',       en: 'MCP servers' },
     genui:     { zh: 'UI 交互页面',      en: 'Interactive UI pages' },

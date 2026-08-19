@@ -1486,6 +1486,13 @@ const featurePanels = {
     render: () => window.GenUIPanel ? window.GenUIPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
     preserveOnReRender: true,
   },
+  'force-continuation': {
+    title: () => currentLanguage === 'zh' ? '强制继续' : 'Force Continuation',
+    render: () => window.ForceContinuationPanel
+      ? window.ForceContinuationPanel.render()
+      : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+  },
+
   settings: {
     title: () => '群聊设置',
     render: () => window._wgGetSettingsHtml ? window._wgGetSettingsHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',

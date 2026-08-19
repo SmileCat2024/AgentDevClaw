@@ -11053,3 +11053,161 @@ body[data-theme="light"] .rail-cust-reset:hover {
   opacity: 0.6;
   padding-bottom: 10px;
 }
+
+/* ── Force continuation panel（对齐 Plan 面板的扁平分区风格）───────── */
+/* 容器：与 .plan-panel 同构（flex column + gap，外层 .feature-panel-body 已有 padding） */
+.force-continuation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+}
+
+/* 主开关行：与 .plan-force-continue 同构（左标题/说明，右侧 .tool-toggle） */
+.force-continuation-master {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 2px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+body[data-theme="light"] .force-continuation-master {
+  border-bottom-color: rgba(0,0,0,0.08);
+}
+
+.force-continuation-master-main {
+  min-width: 0;
+}
+
+.force-continuation-master-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.force-continuation-master-help {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* 候选列表：轻量分组标签（参数对齐 .settings-subsection-label，不喧宾夺主），行结构同主开关行 */
+.force-continuation-candidates {
+  position: relative;
+  padding: 2px 0 4px;
+}
+
+.force-continuation-candidates.is-master-off {
+  opacity: 0.6;
+}
+
+/* 分组标签刻意低于主开关（13px text-primary）一级：小号、次要色、低透明度 */
+.force-continuation-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.7;
+  padding: 0 2px 2px;
+}
+
+.force-continuation-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+body[data-theme="light"] .force-continuation-candidate {
+  border-bottom-color: rgba(0,0,0,0.08);
+}
+
+.force-continuation-candidate:last-child {
+  padding-bottom: 4px;
+  border-bottom: none;
+}
+
+.force-continuation-candidate-main {
+  min-width: 0;
+}
+
+.force-continuation-candidate-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.force-continuation-candidate-desc {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.force-continuation-candidate .tool-toggle {
+  margin-left: 10px;
+  flex-shrink: 0;
+}
+
+/* 上限输入行：右侧数字输入框（贴合面板的中性色阶） */
+.force-continuation-limit-row .force-continuation-limit-input {
+  width: 64px;
+  margin-left: 10px;
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.force-continuation-limit-row .force-continuation-limit-input:focus {
+  outline: none;
+  border-color: rgba(124,140,255,0.55);
+  background: rgba(255,255,255,0.06);
+}
+
+.force-continuation-limit-row .force-continuation-limit-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.force-continuation-limit-row .force-continuation-limit-input::-webkit-outer-spin-button,
+.force-continuation-limit-row .force-continuation-limit-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+body[data-theme="light"] .force-continuation-limit-row .force-continuation-limit-input {
+  border-color: rgba(0,0,0,0.14);
+  background: rgba(0,0,0,0.03);
+}
+
+.force-continuation-candidate .tool-toggle-input:disabled + .tool-toggle-slider,
+.force-continuation-master .tool-toggle-input:disabled + .tool-toggle-slider {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 底部说明：无标题的灰色解释性小字（与 .plan-empty-desc 同一视觉级别） */
+.force-continuation-note {
+  padding: 2px 2px 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.55;
+  opacity: 0.85;
+}
+

@@ -431,6 +431,42 @@ class SessionLifecycle {
       return;
     }
 
+    // ── Force-continuation session control (request/ack) ──
+    // The server route waits for a force-continuation-result reply carrying the
+    // same requestId + sessionId, so the panel can render the authoritative
+    // Feature state from this session runtime.
+    if (msg.type === 'force-continuation-control' || msg.type === 'force-continuation-status') {
+      const reply = (payload) => {
+        try {
+          process.send({
+            type: 'force-continuation-result',
+            requestId: msg.requestId,
+            sessionId: this.sessionId,
+            ...payload,
+          });
+        } catch {}
+      };
+      const feature = (this.agent?.features?.get?.('force-continuation'))
+        || (typeof this.agent?.getFeature === 'function' ? this.agent.getFeature('force-continuation') : null);
+      if (!feature) {
+        reply({ ok: false, error: 'force-continuation feature not mounted in this session' });
+        return;
+      }
+      try {
+        if (msg.type === 'force-continuation-control') {
+          if (typeof msg.enabled === 'boolean') feature.setEnabled(msg.enabled);
+          if (msg.triggers && typeof msg.triggers === 'object') feature.setTriggers(msg.triggers);
+          if (typeof msg.maxConsecutiveContinuations === 'number' && typeof feature.setMaxConsecutive === 'function') {
+            feature.setMaxConsecutive(msg.maxConsecutiveContinuations);
+          }
+        }
+        reply({ ok: true, status: feature.getStatus() });
+      } catch (err) {
+        reply({ ok: false, error: String(err?.message || err) });
+      }
+      return;
+    }
+
     // ── model / thinking hot-swap ──
     if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
 

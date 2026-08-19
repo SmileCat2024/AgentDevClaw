@@ -405,6 +405,109 @@ export function createAgentLifecycleModule(ctx) {
       }
     });
 
+    // ── Force-continuation session control (request/ack over session IPC) ──
+    // The Feature instance lives inside the runtime process; the browser panel
+    // talks to it through these routes. Every request carries a requestId and
+    // waits for a matching force-continuation-result message, so the panel
+    // always renders the runtime-confirmed state instead of an optimistic guess.
+    function requestForceContinuationState(agentId, sessionId, message) {
+      return new Promise((resolve) => {
+        const runtime = getAgentRuntime(agentId, sessionId);
+        const child = runtime?.process;
+        if (!runtime || runtime.stopped || !child || child.exitCode !== null
+          || typeof child.send !== 'function' || typeof child.on !== 'function') {
+          resolve({ ok: false, error: 'session runtime not connected' });
+          return;
+        }
+        const requestId = `force-continuation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        let settled = false;
+        const finish = (result) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          child.removeListener?.('message', onMessage);
+          resolve(result);
+        };
+        const timer = setTimeout(
+          () => finish({ ok: false, error: 'force-continuation IPC timeout' }),
+          3000,
+        );
+        // Triple match (type + requestId + sessionId): a shared child process
+        // multiplexes sessions, so answers for another session must not leak in.
+        const onMessage = (msg) => {
+          if (!msg || msg.type !== 'force-continuation-result') return;
+          if (msg.requestId !== requestId || msg.sessionId !== sessionId) return;
+          if (msg.ok === true) finish({ ok: true, status: msg.status || null });
+          else finish({ ok: false, error: msg.error || 'force-continuation request rejected' });
+        };
+        child.on('message', onMessage);
+        let sent = false;
+        try {
+          sent = child.send({ ...message, requestId, __targetSessionId: sessionId });
+        } catch {
+          sent = false;
+        }
+        if (!sent) finish({ ok: false, error: 'failed to deliver force-continuation IPC' });
+      });
+    }
+
+    app.get('/protoclaw/force_continuation_status', async (req, res, next) => {
+      try {
+        const agentId = req.query?.agentId ? String(req.query.agentId) : '';
+        const sessionId = req.query?.sessionId ? String(req.query.sessionId) : '';
+        if (!agentId || !sessionId) {
+          return res.status(400).json({ ok: false, error: 'agentId and sessionId are required' });
+        }
+        const result = await requestForceContinuationState(agentId, sessionId, { type: 'force-continuation-status' });
+        if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
+        res.json({ ok: true, agentId, sessionId, status: result.status });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post('/protoclaw/force_continuation_control', express.json(), async (req, res, next) => {
+      try {
+        const { agentId, sessionId, enabled, triggers, maxConsecutiveContinuations } = req.body || {};
+        if (!agentId) {
+          return res.status(400).json({ ok: false, error: 'agentId is required' });
+        }
+        if (!sessionId) {
+          return res.status(400).json({ ok: false, error: 'sessionId is required' });
+        }
+        if (enabled !== undefined && typeof enabled !== 'boolean') {
+          return res.status(400).json({ ok: false, error: 'enabled must be a boolean' });
+        }
+        if (triggers !== undefined && (typeof triggers !== 'object' || triggers === null || Array.isArray(triggers))) {
+          return res.status(400).json({ ok: false, error: 'triggers must be an object' });
+        }
+        if (maxConsecutiveContinuations !== undefined
+          && (typeof maxConsecutiveContinuations !== 'number' || !Number.isFinite(maxConsecutiveContinuations)
+            || Math.floor(maxConsecutiveContinuations) !== maxConsecutiveContinuations
+            || maxConsecutiveContinuations < 1 || maxConsecutiveContinuations > 10)) {
+          return res.status(400).json({ ok: false, error: 'maxConsecutiveContinuations must be an integer between 1 and 10' });
+        }
+        // Route to the exact (agentId, sessionId) runtime only — no primary-runtime
+        // fallback: a shared process must never toggle another session's feature.
+        const result = await requestForceContinuationState(agentId, sessionId, {
+          type: 'force-continuation-control',
+          ...(enabled !== undefined ? { enabled } : {}),
+          ...(triggers !== undefined ? { triggers } : {}),
+          ...(maxConsecutiveContinuations !== undefined ? { maxConsecutiveContinuations } : {}),
+        });
+        if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
+        res.json({
+          ok: true,
+          agentId,
+          sessionId,
+          enabled: typeof enabled === 'boolean' ? enabled : (result.status?.enabled ?? false),
+          status: result.status,
+        });
+      } catch (error) {
+        next(error);
+      }
+    });
+
     app.post('/protoclaw/todo_control', express.json(), async (req, res, next) => {
       try {
         const { agentId, sessionId, taskId, forceContinue } = req.body || {};

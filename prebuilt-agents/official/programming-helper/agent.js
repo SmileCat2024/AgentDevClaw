@@ -7,6 +7,7 @@
 
 import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature } from 'agentdev';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
+import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';
@@ -155,6 +156,12 @@ export class ProgrammingHelperAgent extends BasicAgent {
         reminderTemplate: TODO_REMINDER_PROMPT_PATH,
         reminderThresholdWithTasks: config.reminderThresholdWithTasks,
         reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
+      }));
+      this.use(new ForceContinuation({
+        ...(systemConfig['force-continuation'] && typeof systemConfig['force-continuation'] === 'object'
+          ? systemConfig['force-continuation'] : {}),
+        ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
+          ? config.features['force-continuation'] : {}),
       }));
 
       this.use(new AuditFeature());

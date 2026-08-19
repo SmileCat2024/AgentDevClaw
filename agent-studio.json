@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 3,
+  "name": "force-continuation",
+  "goal": "为编程小助手开发可通过 stop reason 感知异常中断并在启用时请求持续执行的强制继续 Feature，同时扩展 Claw 右侧控制面进行会话级开关与状态展示。",
+  "targetAgent": "编程小助手（prebuilt-agents/official/programming-helper）",
+  "features": [
+    {
+      "name": "force-continuation",
+      "modulePath": "D:\\code\\AgentDevClaw\\features\\force-continuation\\dist\\index.js",
+      "status": "snapshotted",
+      "package": "@agentdev/force-continuation",
+      "source": {
+        "kind": "project",
+        "projectDir": "D:\\code\\AgentDevClaw\\features\\force-continuation",
+        "entry": "D:\\code\\AgentDevClaw\\features\\force-continuation\\dist\\index.js",
+        "buildCommand": [
+          "npm",
+          "run",
+          "build"
+        ]
+      },
+      "verification": {
+        "lastVerifiedRunId": "run-1787134156624-ecxo",
+        "verifiedAt": "2026-08-19T10:09:19.750Z",
+        "coverage": {
+          "tools": [],
+          "hooks": [
+            "CallFinish:recordCallFinish",
+            "StepFinish:decideContinuation"
+          ],
+          "deniedTools": []
+        },
+        "sourceDigest": "sha256:6883dfc045270dff81f6ace620e74ae4e45160be17afb5a3612732017d8bcb75"
+      }
+    }
+  ],
+  "testRuntime": {
+    "status": "stopped"
+  },
+  "tests": [
+    {
+      "id": "observe-step-and-finish",
+      "title": "强制继续 Feature 观察 step 与 call 终态",
+      "input": "请仅回复 READY，不调用工具。",
+      "sessionPolicy": "fresh",
+      "assertions": [
+        {
+          "kind": "hook-observed",
+          "lifecycle": "StepFinish",
+          "feature": "force-continuation",
+          "method": "decideContinuation"
+        },
+        {
+          "kind": "hook-observed",
+          "lifecycle": "CallFinish",
+          "feature": "force-continuation",
+          "method": "recordCallFinish"
+        },
+        {
+          "kind": "reply-includes",
+          "text": "READY"
+        }
+      ],
+      "enabled": true,
+      "createdAt": "2026-08-19T04:28:43.129Z",
+      "updatedAt": "2026-08-19T04:28:43.129Z",
+      "description": "在默认关闭状态下，确认 Feature 的 StepFinish 与 CallFinish 钩子均真实接收到一次正常 call 的生命周期。"
+    },
+    {
+      "id": "status-tool-and-lifecycle",
+      "title": "强制继续为纯自动策略（无工具暴露）",
+      "input": "请仅回复 DONE。",
+      "sessionPolicy": "fresh",
+      "assertions": [
+        {
+          "kind": "hook-observed",
+          "lifecycle": "StepFinish",
+          "feature": "force-continuation",
+          "method": "decideContinuation"
+        },
+        {
+          "kind": "hook-observed",
+          "lifecycle": "CallFinish",
+          "feature": "force-continuation",
+          "method": "recordCallFinish"
+        },
+        {
+          "kind": "reply-includes",
+          "text": "DONE"
+        }
+      ],
+      "enabled": true,
+      "createdAt": "2026-08-19T04:35:42.297Z",
+      "updatedAt": "2026-08-19T06:05:47.493Z",
+      "description": "移除 force_continuation_status 工具后，Feature 成为纯自动策略：钩子照常触发，且不再向 Agent 暴露任何可调用工具。"
+    }
+  ],
+  "createdAt": "2026-08-19T04:22:48.571Z",
+  "updatedAt": "2026-08-19T10:09:29.970Z"
+}
