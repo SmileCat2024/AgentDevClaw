@@ -412,16 +412,33 @@ describe('AgentStudioFeature', () => {
       assert.equal(feature.source?.kind, 'project');
     });
 
-    it('registers a real Agent definition without changing its source', async () => {
+    it('registers a standalone Agent definition without changing its source', async () => {
       const agentDir = join(projectDir, 'agent-under-test');
       await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({ id: 'debug-agent', entry: './agent.js' }));
+      await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({
+        id: 'debug-agent', entry: './agent.js', deployment: { kind: 'standalone' }, features: [],
+      }));
       await fs.writeFile(join(agentDir, 'agent.js'), 'export default class DebugAgent {}\\n');
       await exec('studio_initialize_project', { projectDir, name: 'debug-project' });
       const result = await exec('studio_register_agent', { agentDir: './agent-under-test' });
       assert.equal((result as { agentId: string }).agentId, 'debug-agent');
       const loaded = await exec('studio_get_project');
       assert.equal((loaded as { project: { agent?: { metadataPath: string } } }).project.agent?.metadataPath, join(agentDir, 'metadata.json'));
+    });
+
+    it('rejects built-in metadata before attempting an agent-debug runtime', async () => {
+      const agentDir = join(projectDir, 'built-in-agent');
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({
+        id: 'built-in-agent', entry: './agent.js', features: ['todo'],
+      }));
+      await fs.writeFile(join(agentDir, 'agent.js'), 'export default class BuiltInAgent {}\\n');
+      await exec('studio_initialize_project', { projectDir, name: 'built-in-project' });
+
+      await assert.rejects(
+        () => exec('studio_register_agent', { agentDir: './built-in-agent' }),
+        /仅支持 standalone metadata 驱动装配.*built-in \/ prebuilt Agent/s,
+      );
     });
 
     it('rejects invalid assertion definitions with precise errors', async () => {

@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import { dirname, join, relative, resolve } from 'path';
 import { existsSync } from 'fs';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import type { AgentFeature, CallStartContext, FeatureInitContext, FeatureStateSnapshot, HookDeclarations, PackageInfo, Tool } from 'agentdev';
 import { CoreLifecycle, createTool } from 'agentdev';
 
@@ -507,6 +507,27 @@ function findCreateFeatureCliPath(): string {
 
 function findPrepareRuntimeScriptPath(): string {
   return findProjectScript(join('scripts', 'prepare-agent-runtime.js'));
+}
+
+/**
+ * Keep Studio registration on the same metadata schema as runtime-plan
+ * preparation without embedding an incorrect path in local-features/dist.
+ */
+async function normalizeStandaloneAgentMetadata(raw: unknown): Promise<{
+  id: string;
+  entry: string;
+  deployment: { kind: string };
+}> {
+  const clawRoot = dirname(dirname(findRuntimeScriptPath()));
+  const schemaPath = join(clawRoot, 'server', 'feature-runtime', 'schemas.js');
+  const { normalizeAgentMetadata } = await import(pathToFileURL(schemaPath).href) as {
+    normalizeAgentMetadata: (value: unknown, options: { requireFeatureVersions: boolean }) => {
+      id: string;
+      entry: string;
+      deployment: { kind: string };
+    };
+  };
+  return normalizeAgentMetadata(raw, { requireFeatureVersions: true });
 }
 
 function getRuntimePlanPath(projectDir: string): string {
@@ -1497,16 +1518,28 @@ export class AgentStudioFeature implements AgentFeature {
             ? resolve(projectDir, cleanValue(args.metadataPath))
             : join(agentDir, 'metadata.json');
           if (!existsSync(metadataPath)) throw new Error(`Agent metadata 不存在：${metadataPath}`);
-          let metadata: Record<string, unknown>;
-          try { metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as Record<string, unknown>; }
+          let rawMetadata: unknown;
+          try { rawMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')); }
           catch { throw new Error(`Agent metadata 不是合法 JSON：${metadataPath}`); }
-          if (!cleanValue(metadata.id) || !cleanValue(metadata.entry)) {
-            throw new Error('Agent metadata 至少需要 id 与相对 entry；Feature 依赖使用 metadata.features 声明。');
+          let metadata: Awaited<ReturnType<typeof normalizeStandaloneAgentMetadata>>;
+          try {
+            metadata = await normalizeStandaloneAgentMetadata(rawMetadata);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            throw new Error(
+              `Agent Debug 仅支持 standalone metadata 驱动装配：${detail}。built-in / prebuilt Agent 会在 agent.js 中静态 use() Feature，不能通过 studio_register_agent 进入 agent-debug；请改为 feature-harness 验证开发中的 Feature。`,
+              { cause: error },
+            );
           }
+          if (metadata.deployment.kind !== 'standalone') {
+            throw new Error(`Agent Debug 仅支持 deployment.kind=standalone；${metadata.id} 当前为 ${metadata.deployment.kind}。workspace、built-in 与 prebuilt Agent 请使用 feature-harness 验证 Feature 本身。`);
+          }
+          const entryPath = resolve(agentDir, metadata.entry);
+          if (!existsSync(entryPath)) throw new Error(`Agent entry 不存在：${entryPath}`);
           const timestamp = new Date().toISOString();
           const agent = { projectDir: agentDir, metadataPath };
-          await this.writeProject(projectDir, { ...project, agent, targetAgent: cleanValue(metadata.id), updatedAt: timestamp });
-          return { projectDir, agent, agentId: cleanValue(metadata.id) };
+          await this.writeProject(projectDir, { ...project, agent, targetAgent: metadata.id, updatedAt: timestamp });
+          return { projectDir, agent, agentId: metadata.id };
         },
       }),
       createTool({
