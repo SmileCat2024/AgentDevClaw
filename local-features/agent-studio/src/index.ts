@@ -12,6 +12,8 @@ import { CoreLifecycle, createTool } from 'agentdev';
 export interface AgentStudioFeatureConfig {
   workspaceDir?: string;
   statePath?: string;
+  /** 覆盖全局 Agent 注册表路径（默认用户目录 agent-registry.json；测试用） */
+  agentRegistryPath?: string;
 }
 
 type TestRuntimeStatus = 'not-provisioned' | 'running' | 'stopped';
@@ -66,6 +68,8 @@ export interface StudioFeatureVerification {
   verifiedAt: string;
   coverage: StudioFeatureCoverage;
   sourceDigest?: string;
+  /** 传递覆盖：本 Feature 无直接证据，凭依赖它的 Feature 本次验证通过而推进；值为提供覆盖的依赖方 Feature 名 */
+  transitiveVia?: string[];
 }
 
 interface StudioFeatureSource {
@@ -91,6 +95,8 @@ export interface StudioFeatureEntry {
   status: StudioFeatureStatus;
   verification?: StudioFeatureVerification;
   snapshot?: StudioFeatureSnapshot;
+  /** 装配时从 static inject 读取的依赖 Feature 名（运行时同步回写，传递覆盖判定用） */
+  staticInject?: string[];
 }
 
 interface StudioAgentDefinition {
@@ -248,6 +254,26 @@ function parseEvidenceResult(raw: unknown): { value?: unknown; error?: string } 
   return { value: raw };
 }
 
+/** 模型端生成工具参数时可能把 number / boolean 字符串化（如 4 → "4"、true → "true"）。
+ * deepEqual 前做单边类型反缩放：一边为字符串、另一边为 number/boolean 时，
+ * 尝试把字符串侧解析回原始类型，避免严格深度比较因类型不一致必败。 */
+function descaleComparable(actual: unknown, expected: unknown): { actual: unknown; expected: unknown; descaled: boolean } {
+  const parsePrimitive = (text: string): { value: unknown } | null => {
+    if (text === 'true') return { value: true };
+    if (text === 'false') return { value: false };
+    if (text.trim() !== '' && Number.isFinite(Number(text))) return { value: Number(text) };
+    return null;
+  };
+  if (typeof expected === 'string' && (typeof actual === 'number' || typeof actual === 'boolean')) {
+    const parsed = parsePrimitive(expected);
+    if (parsed) return { actual, expected: parsed.value, descaled: true };
+  } else if (typeof actual === 'string' && (typeof expected === 'number' || typeof expected === 'boolean')) {
+    const parsed = parsePrimitive(actual);
+    if (parsed) return { actual: parsed.value, expected, descaled: true };
+  }
+  return { actual, expected, descaled: false };
+}
+
 export function evaluateAssertions(
   assertions: StudioAssertion[],
   input: { reply?: string; toolCalls: StudioToolCallEvidence[]; hooks: StudioHookEvidence[] },
@@ -317,14 +343,15 @@ function evaluateAssertion(
       } catch (error) {
         return { assertion, ok: false, detail: error instanceof Error ? error.message : String(error) };
       }
-      const ok = deepEqual(value, assertion.equals);
+      const compared = descaleComparable(value, assertion.equals);
+      const ok = deepEqual(compared.actual, compared.expected);
       return {
         assertion,
         ok,
         actual: value,
         detail: ok
-          ? undefined
-          : `路径 ${assertion.path} 实际值为 ${JSON.stringify(value) ?? String(value)}，期望 ${JSON.stringify(assertion.equals) ?? String(assertion.equals)}`,
+          ? compared.descaled ? `通过（期望值 ${JSON.stringify(assertion.equals)} 经类型反缩放为 ${JSON.stringify(compared.expected)} 后匹配）` : undefined
+          : `路径 ${assertion.path} 实际值为 ${JSON.stringify(value) ?? String(value)}（类型 ${typeof value}），期望 ${JSON.stringify(assertion.equals) ?? String(assertion.equals)}（类型 ${typeof assertion.equals}）`,
       };
     }
     case 'reply-includes': {
@@ -400,6 +427,9 @@ function isCovered(coverage: StudioFeatureCoverage | undefined): boolean {
  * Feature 状态推进：
  * - reloaded / ensure-mounted → mounted（源码已变，旧验证失效）
  * - 本次 passed 且该 Feature 有覆盖证据 → verified（记录验证账本）
+ * - 传递覆盖：纯库型 Feature（无工具无钩子，永远拿不到直接证据）在本次 passed
+ *   且依赖它的 Feature 已 verified（直接或传递）时一并推进 verified，verification 标注
+ *   transitiveVia。传播到不动点，覆盖 A→B→C 链式依赖。
  * - unchanged → 保持原状（verified 不因未变更而降级）
  */
 export function advanceFeatureStatuses(
@@ -411,7 +441,7 @@ export function advanceFeatureStatuses(
   timestamp: string,
   featureRevisions: Record<string, string> = {},
 ): StudioFeatureEntry[] {
-  return features.map((feature) => {
+  const advanced = features.map((feature) => {
     const summaryEntry = reloadSummary.find((item) => item.featureName === feature.name);
     let status = feature.status;
     let verification = feature.verification;
@@ -432,6 +462,32 @@ export function advanceFeatureStatuses(
     }
     return verification ? { ...feature, status, verification, ...(snapshot ? { snapshot } : {}) } : { ...feature, status, verification: undefined, ...(snapshot ? { snapshot } : {}) };
   });
+
+  if (passed !== true) return advanced;
+
+  // 传递覆盖：依赖方（static inject 声明）本次 verified 时，被依赖的库型 Feature 一并推进。
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const entry of advanced) {
+      if (entry.status === 'verified' || entry.status === 'snapshotted') continue;
+      const dependents = advanced.filter((other) => (other.staticInject || []).includes(entry.name));
+      const verifiedDependents = dependents
+        .filter((other) => other.status === 'verified' || other.status === 'snapshotted')
+        .map((other) => other.name);
+      if (verifiedDependents.length === 0) continue;
+      entry.status = entry.snapshot ? 'snapshotted' : 'verified';
+      entry.verification = {
+        lastVerifiedRunId: runId,
+        verifiedAt: timestamp,
+        coverage: { tools: [], hooks: [], deniedTools: [] },
+        transitiveVia: verifiedDependents,
+        ...(featureRevisions[entry.name] ? { sourceDigest: featureRevisions[entry.name] } : {}),
+      };
+      progressed = true;
+    }
+  }
+  return advanced;
 }
 
 // ── 常量 ──────────────────────────────────────────────────────
@@ -475,6 +531,8 @@ interface RuntimeHandle {
   agentFingerprint: string | null;
   model: string | null;
   viewerAgentId: string | null;
+  /** 最近一次 inspect 拿到的 Feature 依赖图（static inject），供传递覆盖判定用 */
+  featureInject: Map<string, string[]>;
 }
 
 const runtimeHandles = new Map<string, RuntimeHandle>();
@@ -498,10 +556,27 @@ function findRuntimeScriptPath(): string {
   return runtimeScriptPath;
 }
 
+let agentRegistryModuleUrl: string | null = null;
+
+/** 定位 server/feature-runtime/agent-registry.js，与消费端（claw run / server）共用同一注册实现。 */
+function findAgentRegistryModuleUrl(): string {
+  if (agentRegistryModuleUrl) return agentRegistryModuleUrl;
+  const registryPath = findProjectScript(join('server', 'feature-runtime', 'agent-registry.js'));
+  agentRegistryModuleUrl = pathToFileURL(registryPath).href;
+  return agentRegistryModuleUrl;
+}
+
 function findCreateFeatureCliPath(): string {
   const clawRoot = dirname(dirname(findRuntimeScriptPath()));
-  const candidate = join(dirname(clawRoot), 'AgentDev', 'dist', 'create-feature-cli.js');
-  if (!existsSync(candidate)) throw new Error(`找不到 AgentDev Feature 脚手架：${candidate}`);
+  const agentDevRoot = dirname(clawRoot);
+  const candidate = join(agentDevRoot, 'AgentDev', 'dist', 'create-feature-cli.js');
+  if (!existsSync(candidate)) {
+    throw new Error(
+      `AgentDev 框架构建产物缺失，无法创建 Feature 脚手架：${candidate}。`
+      + ` 请先在框架仓库完成构建（${join(agentDevRoot, 'AgentDev')} 目录下执行 npm install && npm run build），`
+      + ` 构建完成后重试本工具；不要手工补建该文件。`,
+    );
+  }
   return candidate;
 }
 
@@ -757,7 +832,7 @@ async function startRuntimeProcess(
     cwd: projectDir,
     env: { ...process.env, STUDIO_MODEL_PRESET: modelPreset, STUDIO_VIEWER_PORT: String(viewerPort) },
   });
-  const handle: RuntimeHandle = { child, pending: new Map(), fingerprints: new Map(), mode, agentFingerprint: null, model: null, viewerAgentId: null };
+  const handle: RuntimeHandle = { child, pending: new Map(), fingerprints: new Map(), mode, agentFingerprint: null, model: null, viewerAgentId: null, featureInject: new Map() };
   runtimeHandles.set(projectDir, handle);
 
   // 子进程接入 DebugHub 后日志走结构化流；这里只保留环形缓冲，
@@ -861,6 +936,12 @@ async function syncFeaturesToRuntime(
   const mountedFeatures = inspectResult && Array.isArray(inspectResult.features)
     ? new Set(inspectResult.features as string[])
     : new Set<string>();
+  if (inspectResult && inspectResult.featureInject && typeof inspectResult.featureInject === 'object') {
+    handle.featureInject = new Map(
+      Object.entries(inspectResult.featureInject as Record<string, unknown>)
+        .map(([name, deps]) => [name, Array.isArray(deps) ? deps.map(String) : []]),
+    );
+  }
 
   const ensure: Array<{ name: string; modulePath: string }> = [];
   const reload: Array<{ name: string; modulePath: string }> = [];
@@ -943,6 +1024,9 @@ function normalizeVerification(raw: unknown): StudioFeatureVerification | undefi
       deniedTools: list(coverage.deniedTools),
     },
     ...(cleanValue(record.sourceDigest) ? { sourceDigest: cleanValue(record.sourceDigest) } : {}),
+    ...(Array.isArray(record.transitiveVia) && record.transitiveVia.length > 0
+      ? { transitiveVia: record.transitiveVia.map(String).filter(Boolean) }
+      : {}),
   };
 }
 
@@ -966,6 +1050,10 @@ function normalizeFeatureEntry(raw: Partial<StudioFeatureEntry>): StudioFeatureE
   }
   const verification = normalizeVerification(raw.verification);
   if (verification && verification.lastVerifiedRunId) entry.verification = verification;
+  const rawStaticInject = raw.staticInject;
+  if (Array.isArray(rawStaticInject) && rawStaticInject.length > 0) {
+    entry.staticInject = rawStaticInject.map(String).filter(Boolean);
+  }
   const rawSnapshot = raw.snapshot as unknown as Record<string, unknown> | undefined;
   if (rawSnapshot) {
     const version = cleanValue(rawSnapshot.version);
@@ -1222,7 +1310,7 @@ const assertionParameterSchema = {
     reasonIncludes: { type: 'string', description: 'tool-denied：拒绝原因需包含的子串。' },
     occurrence: { type: 'number', description: 'tool-result-path：匹配第几次调用（从 1 开始），缺省取最后一次。' },
     path: { type: 'string', description: 'tool-result-path：结果 JSON 路径，如 $.openCount、$.items[0].title。' },
-    equals: { description: 'tool-result-path：期望值（深度比较）。' },
+    equals: { type: ['string', 'number', 'boolean', 'object', 'array'], description: 'tool-result-path：期望值（深度比较）。按目标字段的真实类型传值：数值传 number（4 不要写成 "4"），布尔传 boolean（true 不要写成 "true"）。' },
     text: { type: 'string', description: 'reply-includes：回复需包含的文本。' },
     feature: { type: 'string', description: 'hook-observed：feature 名过滤。' },
     lifecycle: { type: 'string', description: 'hook-observed：生命周期名（ToolUse / ToolResultTransform 等）。' },
@@ -1245,16 +1333,54 @@ export class AgentStudioFeature implements AgentFeature {
 
   private readonly workspaceDir: string;
   private readonly statePath: string;
+  private readonly agentRegistryPath?: string;
   private packageInfo: PackageInfo | null = null;
   private activeProjectDir: string | null = null;
 
   constructor(config: AgentStudioFeatureConfig = {}) {
     this.workspaceDir = config.workspaceDir || process.cwd();
     this.statePath = config.statePath || getDefaultStatePath();
+    this.agentRegistryPath = config.agentRegistryPath;
   }
 
   getPackageInfo(): PackageInfo | null {
     return this.packageInfo;
+  }
+
+  /**
+   * 把 Studio 登记的 Agent 同步进全局注册表（claw run 的消费入口）。
+   * 注册失败不阻塞项目内登记（agent-debug 只依赖项目档案），但显式返回原因与修复指引，
+   * 保证"消费端收口"始终可见而非静默丢失。
+   */
+  private async syncGlobalAgentRegistration(
+    agentDir: string,
+    metadataPath: string,
+    projectDir: string,
+  ): Promise<{ ok: true; id: string } | { ok: false; error: string; hint: string }> {
+    type AgentRegistryModule = {
+      registerAgentProject: (input: {
+        projectDir: string;
+        metadataPath: string;
+        studioProjectDir?: string;
+        registryPath?: string;
+      }) => Promise<{ id: string }>;
+    };
+    try {
+      const module = await import(findAgentRegistryModuleUrl()) as AgentRegistryModule;
+      const record = await module.registerAgentProject({
+        projectDir: agentDir,
+        metadataPath,
+        studioProjectDir: projectDir,
+        ...(this.agentRegistryPath ? { registryPath: this.agentRegistryPath } : {}),
+      });
+      return { ok: true, id: record.id };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        hint: '全局注册未完成，claw run 暂不能消费该 Agent；项目内登记与 agent-debug 不受影响。按 error 修复后重新执行 studio_register_agent 即可补齐。',
+      };
+    }
   }
 
   getTemplateNames(): string[] {
@@ -1501,7 +1627,7 @@ export class AgentStudioFeature implements AgentFeature {
       }),
       createTool({
         name: 'studio_register_agent',
-        description: '登记当前 Studio 项目要在真实装配条件下调试的 Agent。Agent metadata 负责声明精确 Feature 包版本；Studio 的开发中标准 Feature 会以源码覆盖这些声明。',
+        description: '登记当前 Studio 项目要在真实装配条件下调试的 Agent，并同步写入全局注册表（claw run 的消费入口）。Agent metadata 负责声明精确 Feature 包版本；Studio 的开发中标准 Feature 会以源码覆盖这些声明。全局注册失败时返回 globalRegistration 说明原因与修复指引，不影响项目内登记与 agent-debug。',
         parameters: {
           type: 'object',
           properties: {
@@ -1539,7 +1665,8 @@ export class AgentStudioFeature implements AgentFeature {
           const timestamp = new Date().toISOString();
           const agent = { projectDir: agentDir, metadataPath };
           await this.writeProject(projectDir, { ...project, agent, targetAgent: metadata.id, updatedAt: timestamp });
-          return { projectDir, agent, agentId: metadata.id };
+          const globalRegistration = await this.syncGlobalAgentRegistration(agentDir, metadataPath, projectDir);
+          return { projectDir, agent, agentId: metadata.id, globalRegistration };
         },
       }),
       createTool({
@@ -1886,9 +2013,14 @@ export class AgentStudioFeature implements AgentFeature {
           };
           await appendRun(projectDir, record);
 
-          // 4) Feature 状态推进：按 reloadSummary 与覆盖证据独立推进每个 Feature
+          // 4) Feature 状态推进：按 reloadSummary 与覆盖证据独立推进每个 Feature；
+          //    依赖图（static inject）随本次同步回写进项目档案，供传递覆盖判定
           const timestamp = new Date().toISOString();
-          const features = advanceFeatureStatuses(project.features, reloadSummary, featureCoverage, passed, runId, timestamp, featureRevisions);
+          const featuresWithInject = project.features.map((feature) => ({
+            ...feature,
+            staticInject: handle.featureInject.get(feature.name) ?? feature.staticInject,
+          }));
+          const features = advanceFeatureStatuses(featuresWithInject, reloadSummary, featureCoverage, passed, runId, timestamp, featureRevisions);
           await this.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
 
           const deniedTools = [...new Set(toolCalls.filter((entry) => entry.denied).map((entry) => entry.tool))];

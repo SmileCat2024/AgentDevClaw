@@ -68,7 +68,7 @@ describe('AgentStudioFeature', () => {
     const temp = await makeTempWorkspace();
     workspaceDir = temp.workspaceDir;
     projectDir = temp.projectDir;
-    const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json') });
+    const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json'), agentRegistryPath: join(workspaceDir, 'agent-registry.json') });
     exec = bindTools(feature);
   });
 
@@ -153,6 +153,40 @@ describe('AgentStudioFeature', () => {
       assert.equal(outcomes[3].ok, true);
       assert.equal(outcomes[4].ok, false);
       assert.ok(outcomes[4].detail?.includes('仅执行'));
+    });
+
+    it('tool-result-path: stringified number/boolean expected values are descaled before comparison', () => {
+      const outcomes = evaluateAssertions(
+        [
+          // 模型端把数值/布尔字符串化的常见形态：equals 传 "2" / "true"，实际值为 2 / true
+          { kind: 'tool-result-path', tool: 'ticket_list', path: '$.openCount', equals: '2' },
+          { kind: 'tool-result-path', tool: 'ticket_list', path: '$.openCount', equals: '3' },
+          { kind: 'tool-result-path', tool: 'bool_tool', path: '$.active', equals: 'true' },
+          // 反方向：实际值为字符串、期望为 number/boolean 也应反缩放
+          { kind: 'tool-result-path', tool: 'obj_tool', path: '$.flag', equals: true },
+          // 无法反缩放的普通字符串仍按原值比较
+          { kind: 'tool-result-path', tool: 'ticket_list', path: '$.tickets[0].contactEmail', equals: 'a***@example.com' },
+          // 实际值为字符串、期望数值但解析不出来 → 仍失败
+          { kind: 'tool-result-path', tool: 'obj_tool', path: '$.text', equals: 5 },
+        ],
+        {
+          reply: 'ok',
+          toolCalls: [
+            ...EVIDENCE_TOOL_CALLS,
+            { tool: 'obj_tool', feature: 'f', ok: true, durationMs: 1, at: 't', result: { flag: 'true', text: 'hello' } },
+            { tool: 'bool_tool', feature: 'f', ok: true, durationMs: 1, at: 't', result: '{"active":true}' },
+          ] as unknown as StudioToolCallEvidence[],
+          hooks: [],
+        },
+      );
+      assert.equal(outcomes[0].ok, true);
+      assert.ok(outcomes[0].detail?.includes('类型反缩放'));
+      assert.equal(outcomes[1].ok, false);
+      assert.ok(outcomes[1].detail?.includes('类型 number'));
+      assert.equal(outcomes[2].ok, true);
+      assert.equal(outcomes[3].ok, true);
+      assert.equal(outcomes[4].ok, true);
+      assert.equal(outcomes[5].ok, false);
     });
 
     it('tool-result-path: object results and non-JSON strings', () => {
@@ -273,6 +307,52 @@ describe('AgentStudioFeature', () => {
       const next = advanceFeatureStatuses(features, reloadSummary('unchanged', 'ticket-board'), {}, null, 'run-5', 't5');
       assert.equal(next[0].status, 'verified');
       assert.equal(next[0].verification?.lastVerifiedRunId, 'run-0');
+    });
+
+    it('library feature without direct evidence is transitively verified via dependent (chained)', () => {
+      // audit-scanner 依赖 audit-core，audit-core 又依赖 base-utils：纯库型链
+      const features: StudioFeatureEntry[] = [
+        { name: 'audit-scanner', modulePath: 'a.mjs', status: 'mounted', staticInject: ['audit-core'] },
+        { name: 'audit-core', modulePath: 'b.mjs', status: 'mounted', staticInject: ['base-utils'] },
+        { name: 'base-utils', modulePath: 'c.mjs', status: 'mounted' },
+      ];
+      const coverage = {
+        'audit-scanner': { tools: ['audit_scan'], hooks: [], deniedTools: [] },
+      };
+      const next = advanceFeatureStatuses(features, [], coverage, true, 'run-6', 't6', {
+        'audit-scanner': 'rev-s',
+        'audit-core': 'rev-c',
+        'base-utils': 'rev-u',
+      });
+      assert.equal(next[0].status, 'verified');
+      assert.equal(next[0].verification?.transitiveVia, undefined);
+      // 库型无直接证据 → 凭依赖方传递推进，账本标注来源
+      assert.equal(next[1].status, 'verified');
+      assert.deepEqual(next[1].verification?.transitiveVia, ['audit-scanner']);
+      assert.equal(next[1].verification?.sourceDigest, 'rev-c');
+      // 链式传播到不动点：base-utils 也随传递链推进
+      assert.equal(next[2].status, 'verified');
+      assert.deepEqual(next[2].verification?.transitiveVia, ['audit-core']);
+    });
+
+    it('transitive verification does not fire when run failed or no dependent verified', () => {
+      const features: StudioFeatureEntry[] = [
+        { name: 'scanner', modulePath: 'a.mjs', status: 'mounted', staticInject: ['core'] },
+        { name: 'core', modulePath: 'b.mjs', status: 'mounted' },
+        { name: 'lonely-lib', modulePath: 'c.mjs', status: 'mounted' },
+      ];
+      const failed = advanceFeatureStatuses(features, [], { scanner: { tools: ['s'], hooks: [], deniedTools: [] } }, false, 'run-7', 't7');
+      assert.equal(failed[1].status, 'mounted');
+      // 无依赖方的库型 Feature 即使整体 passed 也不推进
+      const noDep = advanceFeatureStatuses(features, [], { scanner: { tools: ['s'], hooks: [], deniedTools: [] } }, true, 'run-8', 't8');
+      assert.equal(noDep[1].status, 'verified');
+      assert.equal(noDep[2].status, 'mounted');
+      // 依赖方未 verified（仅 mounted）时不传递
+      const idleDep = advanceFeatureStatuses(
+        [{ name: 'scanner', modulePath: 'a.mjs', status: 'mounted', staticInject: ['core'] }, { name: 'core', modulePath: 'b.mjs', status: 'mounted' }],
+        [], {}, null, 'run-9', 't9',
+      );
+      assert.equal(idleDep[1].status, 'mounted');
     });
   });
 
@@ -422,8 +502,34 @@ describe('AgentStudioFeature', () => {
       await exec('studio_initialize_project', { projectDir, name: 'debug-project' });
       const result = await exec('studio_register_agent', { agentDir: './agent-under-test' });
       assert.equal((result as { agentId: string }).agentId, 'debug-agent');
+      // 全局注册收口：claw run 消费的注册表同步生成记录
+      const globalRegistration = (result as { globalRegistration?: { ok: boolean; id?: string } }).globalRegistration;
+      assert.equal(globalRegistration?.ok, true);
+      assert.equal(globalRegistration?.id, 'debug-agent');
+      const registryRaw = JSON.parse(await fs.readFile(join(workspaceDir, 'agent-registry.json'), 'utf8')) as { agents: Array<{ id: string; studioProjectDir?: string }> };
+      const record = registryRaw.agents.find((entry) => entry.id === 'debug-agent');
+      assert.ok(record, 'global registry contains debug-agent');
+      assert.equal(record?.studioProjectDir, projectDir);
       const loaded = await exec('studio_get_project');
       assert.equal((loaded as { project: { agent?: { metadataPath: string } } }).project.agent?.metadataPath, join(agentDir, 'metadata.json'));
+    });
+
+    it('reports global registration failure without blocking project-level registration', async () => {
+      const agentDir = join(projectDir, 'builtin-id-agent');
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({
+        id: 'coder', entry: './agent.js', deployment: { kind: 'standalone' }, features: [],
+      }));
+      await fs.writeFile(join(agentDir, 'agent.js'), 'export default class Coder {}\\n');
+      await exec('studio_initialize_project', { projectDir, name: 'builtin-id-project' });
+      const result = await exec('studio_register_agent', { agentDir: './builtin-id-agent' });
+      // 项目内登记不受影响
+      assert.equal((result as { agentId: string }).agentId, 'coder');
+      // 全局注册显式失败并给出指引（ID 与内建 plain Agent 冲突）
+      const globalRegistration = (result as { globalRegistration?: { ok: boolean; error?: string; hint?: string } }).globalRegistration;
+      assert.equal(globalRegistration?.ok, false);
+      assert.ok(globalRegistration?.error?.includes('冲突'), `conflict error surfaced: ${globalRegistration?.error}`);
+      assert.ok(globalRegistration?.hint?.includes('claw run'));
     });
 
     it('rejects built-in metadata before attempting an agent-debug runtime', async () => {
