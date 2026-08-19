@@ -7,6 +7,16 @@ description: 用于把需求收敛成 standalone 或 workspace Agent 的装配�
 
 这个技能服务于 Agent 项目装配，不限于 chatbot。当前已落地的部署类型是 `standalone`（独立调用）；`workspace` 保留在协议中，但自定义工作空间运行宿主尚未接入。
 
+## 先判断 Agent 形态
+
+| 形态 | metadata / 装配方式 | Studio 支持 |
+|---|---|---|
+| standalone | `deployment.kind: "standalone"`，`features` 为 `{ package, version, export?, config? }` 对象数组 | 可登记并用 `agent-debug` 验证 |
+| built-in / prebuilt 静态装配 | `agent.js` 自己 import + `use()` Feature；metadata 可能是字符串 feature 列表或 UI 声明 | 不能登记为 standalone，改用 `feature-harness` 验证开发中的 Feature |
+| workspace | metadata 允许 `deployment.kind: "workspace"`，但自定义 workspace 宿主未接入 | 不能进入 standalone `agent-debug` |
+
+不要从内建 Agent 的 `agent.js` 或 metadata 推导 standalone 模板。`studio_register_agent` 会在登记阶段拒绝不是 standalone metadata 驱动装配的项目；这是为了在启动隔离 runtime 前暴露不兼容性。
+
 ## 基本原则
 
 - Agent 项目声明部署目标：`standalone` 或 `workspace`；两者未来共用 Agent 源码和 Feature 装配声明。
@@ -63,9 +73,11 @@ export default class TicketAgent extends BasicAgent {
 
 ## 验证与注册顺序
 
-1. `studio_register_agent` 登记 Agent 项目，`studio_start_runtime { mode: "agent-debug" }` 验证真实装配（tgz 底座 + Studio 源码覆盖）。
-2. `claw agents register <agent-project-dir> --studio <studio-project-dir>` 注册。
-3. `claw run <id> --debug` 走源码覆盖；验证通过后 `claw run <id>` 走 release tgz。
+1. `studio_register_agent` 只登记符合上表 standalone 形态的项目；它会校验相对 entry、精确 Feature version、对象形态的 `features` 与 entry 存在性。
+2. `studio_start_runtime { mode: \"agent-debug\" }` 验证 standalone metadata → resolver → repository tgz + Studio 标准 Feature 源码覆盖 → Agent 构造与挂载。它**不**验证 built-in/prebuilt 宿主、HTTP、前端或 session IPC。
+3. 仅 Feature 实现代码变更可使用 `studio_run_test` 热载。只要改动 package 名、`package.json.main`、export、`static inject` 依赖、metadata Feature 声明或 Agent 源码/metadata，必须先 `studio_stop_runtime`，再 `studio_start_runtime { mode: "agent-debug" }`，以重算 runtime plan；不要把这类装配变化当作普通热载。
+4. `claw agents register <agent-project-dir> --studio <studio-project-dir>` 注册。
+5. `claw run <id> --debug` 走源码覆盖；验证通过后 `claw run <id>` 走 release tgz。
 
 ## 你需要先做的事
 

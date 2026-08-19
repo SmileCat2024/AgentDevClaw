@@ -9,6 +9,19 @@ description: Use when developing a Feature, defining its tests, or running Test 
 
 The injected "Agent Studio 项目状态" block shows the current project each turn. When a project is already active, continue with it; do not re-ask for directory or name. When there is none, confirm in conversation what to build, which directory it lives in, and whether a target Agent is involved. Call `studio_initialize_project` once clear, then keep working.
 
+## Choose the verification level first
+
+Use the manuals as the first contract for ordinary Feature and standalone assembly work. If the manuals do not cover a needed behavior, a version differs, or Runtime evidence conflicts with them, inspect the relevant source and preserve the evidence; then treat the gap as documentation and regression-test work rather than a one-off discovery.
+
+| Goal | Mode | What the result proves |
+|---|---|---|
+| Develop a Feature's tools, hooks, state and configuration | `feature-harness` | The isolated minimal Agent mounted the Feature and produced the asserted Runtime evidence |
+| Validate a standalone Agent's declared package assembly | `agent-debug` | standalone metadata resolved to repository tgz packages plus matching Studio source overrides, then constructed and mounted |
+
+`agent-debug` accepts only a registered `deployment.kind: "standalone"` Agent whose `metadata.features` is an object array with exact package versions. Built-in/prebuilt static Agents and `workspace` metadata are intentionally rejected at registration; keep validating their new Feature through `feature-harness`.
+
+Neither mode validates HTTP routes, front-end panels, session IPC, or a prebuilt runtime host. Do not claim those layers passed based on a Studio Runtime run.
+
 ## Development loop
 
 Standard order:
@@ -28,7 +41,9 @@ studio_save_checkpoint      persist the stateful session as a named checkpoint (
 studio_stop_runtime         stop; sessions persist and restore on next start
 ```
 
-For a real assembly check, call `studio_register_agent`, then `studio_start_runtime { mode: "agent-debug" }`. The Runtime reads the Agent metadata's exact Feature versions, replaces only matching Studio standard Feature projects with their built source entries, and keeps the remaining dependencies as repository tgz packages. Agent source/metadata changes restart the isolated Debug Runtime; Feature source changes retain the existing hot-reload path.
+For a standalone assembly check, call `studio_register_agent`, then `studio_start_runtime { mode: \"agent-debug\" }`. Registration validates the same standalone metadata contract used by Runtime-plan preparation: relative `entry`, `deployment.kind: "standalone"`, object-form `features`, exact Feature versions, and an existing entry file. The Runtime replaces only matching Studio standard Feature projects with their built source entries and keeps remaining dependencies as repository tgz packages.
+
+Only an implementation-only Feature edit is eligible for `studio_run_test` hot reload. If package name, `package.json.main`, export, `static inject`, Agent metadata, or Agent source changes, call `studio_stop_runtime` and start `agent-debug` again to rebuild the Runtime plan. Do not treat an assembly-shape change as a normal reload.
 
 `studio_add_feature { projectDir }` registers an existing standard Feature project. `studio_add_feature { name, modulePath }` remains for legacy ESM modules only; legacy modules can be tested but cannot create a Snapshot. Auxiliary: `studio_get_project`, `studio_remove_feature`, `studio_list_tests`.
 

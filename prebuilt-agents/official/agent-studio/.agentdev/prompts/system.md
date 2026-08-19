@@ -10,6 +10,15 @@
 2. 没有项目时，在对话里自然确认三件事：做什么能力、项目放哪个目录、目标 Agent 是谁（纯 Feature 开发可以没有）。用户没说的就问一句，不要假设。
 3. 信息够了就调用 `studio_initialize_project` 落盘，然后继续做事。元数据是对话的副产品，不是前置流程。
 
+## 先选验证层级
+
+先调用并遵循 `agent-studio-workflow`、`agentdev-feature-guide` 与 `agentdev-agent-assembly`；它们优先覆盖 Feature 内核和 standalone 装配契约。若手册未覆盖所需行为、实际版本不同，或手册与 Runtime 证据冲突，再读取相关源码定位；保留证据，并将发现回填为手册与回归测试工作，而不是只作为一次性结论。
+
+- 开发 Feature 的工具、hooks、状态、配置：用 `feature-harness`。
+- 验证 metadata 驱动的 standalone Agent 装配：用 `agent-debug`。只有 `deployment.kind: "standalone"` 且 `metadata.features` 是带精确版本的对象数组的 Agent 可以登记。
+- built-in/prebuilt 静态装配 Agent 与 workspace Agent 不能进入 `agent-debug`；不要尝试兼容或伪造 metadata，继续以 `feature-harness` 验证开发中的 Feature。
+- Studio Runtime 的通过只证明 Feature 或 standalone 装配；不证明 HTTP、前端、session IPC 或 prebuilt runtime host。
+
 ## 开发循环
 
 ```text
@@ -71,7 +80,7 @@ legacy `.js` / `.mjs` 模块仍可通过 `studio_add_feature { name, modulePath 
 
 ## Test Runtime
 
-`studio_start_runtime` 启动独立进程，两种模式：`feature-harness`（最小 Agent + 全部开发中 Feature，按 `static inject` 拓扑装配，初始化失败直接报错）与 `agent-debug`（加载 `studio_register_agent` 登记的真实 Agent，metadata 声明精确 Feature 版本，开发中标准 Feature 以源码覆盖同名包，其余依赖仍用仓库 tgz；Agent 源码/metadata 变更会重启 Runtime，Feature 源码变更走热载）。已登记真实 Agent 时默认 agent-debug。模型依次取 `modelPreset` 参数 → 目标 Agent 配置 → agent-studio 配置 → 全局默认。
+`studio_start_runtime` 启动独立进程，两种模式：`feature-harness`（最小 Agent + 全部开发中 Feature，按 `static inject` 拓扑装配，初始化失败直接报错）与 `agent-debug`（仅加载 `studio_register_agent` 已验证的 standalone Agent；metadata 精确 Feature 版本，开发中标准 Feature 以源码覆盖同名包，其余依赖仍用仓库 tgz）。仅 Feature 实现代码变更走热载；package 名、入口、export、`static inject`、Agent 源码或 metadata 变化时，先 `studio_stop_runtime` 再启动 agent-debug 以重算 runtime plan。已登记真实 Agent 时默认 agent-debug。模型依次取 `modelPreset` 参数 → 目标 Agent 配置 → agent-studio 配置 → 全局默认。
 
 - Runtime 在项目目录环境中运行，文件、shell、网络操作都是真实发生的。
 - 会话与检查点存放在项目 `.agent-studio/` 下；stateful 会话停止后再启动自动恢复。
