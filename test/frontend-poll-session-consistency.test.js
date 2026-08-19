@@ -460,6 +460,10 @@ test('loadAgentData discards response bodies that finish after a newer switch', 
     window: { lastInputRequests: [] },
     isUiOnlyAgentId: () => false,
     normalizeAgentIdentity: (value) => String(value || '').trim(),
+    // loadAgentData calls this early (agent-data-loader.js); without the stub
+    // a ReferenceError aborts the function inside its try/catch and the test
+    // silently stops exercising the load path it claims to cover.
+    resetRuntimeStatusForSwitch: () => {},
     activateUserCollapseStateForContext: () => {},
     getRuntimeContextKey: (value) => `runtime:${value}`,
     fetch: async (url) => {

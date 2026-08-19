@@ -4,18 +4,20 @@
  * 包含：
  *   - updateAssemblySideRailPosition: assembly side rail 定位
  *   - getToggleButtonLabel: 消息折叠/展开按钮 label（纯 UI 工具）
- *   - Viewport scroll 核心逻辑（28 个函数）：
+ *   - Viewport scroll 核心逻辑（32 个函数）：
  *     isNearBottom, updateFollowLatestButton, markManualScrollIntent,
  *     getChatViewportMetrics, getChatViewportBottomTop, setChatViewportTop,
  *     lockChatViewportToBottomNow,
  *     suppressChatViewportObservers, resumeChatViewportObservers,
  *     shouldIgnoreChatViewportObserverEvent, runWithSuppressedChatViewportObservers,
  *     cancelFollowLatestAnimation, startFollowLatestAnimation,
+ *     isFollowLatestAnimationCruising, shouldKeepFollowAnimationForMutation,
  *     ensureChatViewportObservers,
  *     interruptFollowLatest, registerManualScrollIntent, hasRecentManualScrollIntent,
  *     beginFollowLatestCooldown, isFollowLatestCooldownActive,
  *     beginFollowLatestEntryWindow, isFollowLatestEntryWindowActive,
  *     cancelChatScrollSettlement, notifyChatViewportMutation,
+ *     setPendingChatScrollRestore, consumePendingChatScrollRestore,
  *     scrollToLatest, setFollowLatest, scheduleFollowLatestSettlePass,
  *     requestFollowLatest, scheduleScrollToLatest, scheduleScrollToLatestWithVersion
  *
@@ -213,6 +215,23 @@ function startFollowLatestAnimation() {
   chatViewportFollowRaf = requestAnimationFrame(step);
 }
 
+// ── F1 决策（2026-08-19）：跟随动画 smooth 巡航中的增量更新不打断动画 ──
+// 流式 append / patch / observer 事件到达时，若跟随动画正在 smooth 巡航，
+// 不再同步硬锁底（旧行为：单帧大跳 = 闪跳），改由动画逐帧追新底部；
+// 动画自带的 distance>360 硬跳兜底保证流式过快时仍能追上。
+// render-full / process-toggle / input-render 与 forceSnap 仍立即对齐。
+function isFollowLatestAnimationCruising() {
+  return chatViewportFollowRaf !== 0 && chatViewportFollowTransition === 'smooth';
+}
+
+function shouldKeepFollowAnimationForMutation(reason, forceSnap) {
+  if (!isFollowLatestAnimationCruising()) return false;
+  if (forceSnap) return false;
+  return reason !== 'render-full'
+    && reason !== 'process-toggle'
+    && reason !== 'input-render';
+}
+
 function ensureChatViewportObservers() {
   if (chatViewportObserversReady) return;
 
@@ -309,6 +328,24 @@ function cancelChatScrollSettlement() {
   chatViewportSettlementContext = null;
 }
 
+// ── 阅读位置恢复传递（switchAgent → render-full 的 preserveTop）──
+// switchAgent 缓存了目标会话的 scrollTop，期望下一次聊天全量渲染把它作为
+// preserveTop 保持。恢复值不能在切换时直接写进容器：那一刻容器里还是上一个
+// 会话（可能更短）的 DOM，浏览器会把超出的 scrollTop 钳制掉，render 随后
+// 读到的是钳制值并把它保持住 —— 从短会话切回长会话时阅读位置被永久销毁。
+// 因此恢复值经由此处一次性传递，由下一次全量渲染消费。
+let pendingChatScrollRestoreTop = null;
+
+function setPendingChatScrollRestore(top) {
+  pendingChatScrollRestoreTop = Number.isFinite(top) ? top : null;
+}
+
+function consumePendingChatScrollRestore() {
+  const value = pendingChatScrollRestoreTop;
+  pendingChatScrollRestoreTop = null;
+  return value;
+}
+
 function notifyChatViewportMutation(options = {}) {
   ensureChatViewportObservers();
 
@@ -353,7 +390,8 @@ function notifyChatViewportMutation(options = {}) {
     && followLatestEnabled
     && isChatSurfaceActive()
     && !context.preferSmooth
-    && !shouldRenderWorkspaceSurface();
+    && !shouldRenderWorkspaceSurface()
+    && !shouldKeepFollowAnimationForMutation(reason, options.forceSnap === true);
   if (shouldLockBottomImmediately) {
     lockChatViewportToBottomNow();
   }
@@ -400,6 +438,20 @@ function notifyChatViewportMutation(options = {}) {
       const targetTop = getChatViewportBottomTop(metrics);
       const delta = targetTop - metrics.top;
       const distance = Math.abs(delta);
+      // F1：动画仍在 smooth 巡航时，纯增量 context 不抢锁 —— 动画每帧重读
+      // 目标并自带 360px 兜底；settle 此刻抢锁会造成单帧大跳（闪跳）。
+      const hasLayoutRebuildReason =
+        activeContext.reasons.has('render-full')
+        || activeContext.reasons.has('process-toggle')
+        || activeContext.reasons.has('input-render');
+      if (
+        isFollowLatestAnimationCruising()
+        && !activeContext.forceSnap
+        && !isFollowLatestEntryWindowActive()
+        && !hasLayoutRebuildReason
+      ) {
+        return;
+      }
       const shouldAnimateExplicitFollow =
         activeContext.preferSmooth
         && chatViewportFollowTransition === 'smooth'

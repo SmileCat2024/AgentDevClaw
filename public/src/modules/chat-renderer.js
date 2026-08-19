@@ -14,7 +14,8 @@
  *   getToolDisplayName, getToolRenderTemplate (modules/markdown-utils.js)
  *   canRollbackMessage, applyConversationProcessState, updateRollbackActionVisibility (modules/input-helpers.js)
  *   runWithSuppressedChatViewportObservers, notifyChatViewportMutation,
- *   cancelChatScrollSettlement, updateFollowLatestButton, getToggleButtonLabel (modules/chat-viewport.js)
+ *   cancelChatScrollSettlement, updateFollowLatestButton, getToggleButtonLabel,
+ *   consumePendingChatScrollRestore (modules/chat-viewport.js)
  *   getEmptyStateHtml, escapeHtml, t (app-core.js)
  *   renderCurrentMainView, isChatSurfaceActive (app-ui.js)
  *   requestRollbackEdit (modules/rollback-dialog.js)
@@ -702,7 +703,10 @@ function render(messages) {
     `;
   }).join('');
 
-  const savedScrollTop = container.scrollTop;
+  // Prefer a pending switch-restore value over the live scrollTop: during
+  // switchAgent the container still holds the outgoing session's DOM, so the
+  // live value may be a browser-clamped remainder of the intended restore.
+  const savedScrollTop = consumePendingChatScrollRestore() ?? container.scrollTop;
   runWithSuppressedChatViewportObservers(() => {
     container.innerHTML = html;
     // Pre-hide ALL process elements before any layout read.
