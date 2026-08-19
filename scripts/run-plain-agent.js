@@ -38,6 +38,12 @@ import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { FileSessionStore } from 'agentdev';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+import { normalizeAgentMetadata } from '../server/feature-runtime/schemas.js';
+import { scanFeatureCatalog } from '../server/feature-runtime/catalog.js';
+import { resolveAgentRuntimePlan } from '../server/feature-runtime/resolver.js';
+import { provisionRuntimeEnvironment } from '../server/feature-runtime/provisioner.js';
+import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
+import { getRegisteredAgent } from '../server/feature-runtime/agent-registry.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -61,7 +67,7 @@ function sanitizeFragment(value) {
 const OUTPUT_FORMATS = ['result', 'text', 'json', 'quiet', 'jsonl'];
 
 function parseArgs(argv) {
-  const parsed = { agentName: null, goal: null, session: null, cwd: null, headless: false, format: 'result', keepAlive: false };
+  const parsed = { agentName: null, goal: null, session: null, cwd: null, headless: false, debug: false, format: 'result', keepAlive: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--goal' && argv[i + 1] !== undefined) { parsed.goal = argv[i + 1]; i++; }
@@ -69,6 +75,7 @@ function parseArgs(argv) {
     else if (arg === '--cwd' && argv[i + 1] !== undefined) { parsed.cwd = argv[i + 1]; i++; }
     else if (arg === '--format' && argv[i + 1] !== undefined) { parsed.format = argv[i + 1]; i++; }
     else if (arg === '--headless') { parsed.headless = true; }
+    else if (arg === '--debug') { parsed.debug = true; }
     else if (arg === '--keep-alive') { parsed.keepAlive = true; }
     else if (!arg.startsWith('-') && !parsed.agentName) { parsed.agentName = arg; }
   }
@@ -81,10 +88,54 @@ function parseArgs(argv) {
 
 function resolveAgentClass(agentModule) {
   if (typeof agentModule.default === 'function') return agentModule.default;
-  for (const exported of Object.values(agentModule)) {
-    if (typeof exported === 'function') return exported;
+  const classes = Object.values(agentModule).filter((exported) => typeof exported === 'function');
+  return classes.length === 1 ? classes[0] : null;
+}
+
+function readJsonIfPresent(filePath) {
+  try { return JSON.parse(readFileSync(filePath, 'utf8')); }
+  catch { return null; }
+}
+
+async function resolvePlainAgentDefinition(requestedId) {
+  const builtInDir = join(AGENTS_ROOT, requestedId);
+  const builtInAgentPath = join(builtInDir, 'agent.js');
+  if (existsSync(builtInAgentPath)) {
+    return { id: requestedId, agentDir: builtInDir, agentPath: builtInAgentPath, metadataPath: join(builtInDir, 'metadata.json'), source: 'built-in' };
   }
-  return null;
+  const registered = await getRegisteredAgent(requestedId);
+  if (!registered) return null;
+  const agentPath = join(registered.projectDir, 'agent.js');
+  const rawMetadata = readJsonIfPresent(registered.metadataPath);
+  const metadata = rawMetadata ? normalizeAgentMetadata(rawMetadata, { requireFeatureVersions: true }) : null;
+  if (!metadata) throw new Error(`无法读取已注册 Agent 的 metadata：${registered.metadataPath}`);
+  return {
+    id: metadata.id,
+    agentDir: registered.projectDir,
+    agentPath: join(registered.projectDir, metadata.entry),
+    metadataPath: registered.metadataPath,
+    source: 'registered',
+    registered,
+    metadata,
+  };
+}
+
+function getStudioSourceOverrides(studioProjectDir) {
+  const project = readJsonIfPresent(join(studioProjectDir, 'agent-studio.json'));
+  const features = Array.isArray(project?.features) ? project.features : [];
+  return features.map((feature) => {
+    if (!feature?.package || feature?.source?.kind !== 'project') return null;
+    return {
+      package: String(feature.package),
+      runtimeName: String(feature.name || ''),
+      ...(feature.export ? { export: String(feature.export) } : {}),
+      source: {
+        kind: 'project',
+        projectDir: String(feature.source.projectDir || ''),
+        entry: String(feature.source.entry || ''),
+      },
+    };
+  }).filter(Boolean);
 }
 
 // ── Session index（与 server 侧 index.json 格式对齐的文件协议）─────────
@@ -136,17 +187,11 @@ const goal = cleanValue(args.goal);
 const headless = args.headless || process.env.PROTOCLAW_HEADLESS === '1';
 
 if (!agentId || !goal) {
-  console.error('用法: node scripts/run-plain-agent.js <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet|jsonl] [--keep-alive]');
+  console.error('用法: node scripts/run-plain-agent.js <agent-name> --goal \"...\" [--session <id>] [--cwd <dir>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
   process.exit(1);
 }
 
-const agentDir = join(AGENTS_ROOT, agentId);
-const agentJsPath = join(agentDir, 'agent.js');
-if (!existsSync(agentJsPath)) {
-  console.error(`Plain agent not found: ${agentJsPath}`);
-  console.error(`请在 agents/${agentId}/ 下提供 agent.js（参考 agents/coder/）`);
-  process.exit(1);
-}
+const plainDefinitionPromise = resolvePlainAgentDefinition(agentId);
 
 const VIEWER_PORT = parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
 const workspaceCwd = resolve(args.cwd || process.env.PROTOCLAW_AGENT_CWD || process.cwd());
@@ -201,7 +246,12 @@ function outputResult(result, format) {
 }
 
 async function main() {
-  console.error(`[PlainAgent] agent=${agentId} session=${sessionId} cwd=${workspaceCwd} headless=${headless}`);
+  const definition = await plainDefinitionPromise;
+  if (!definition || !existsSync(definition.agentPath)) {
+    throw new Error(`未找到独立 Agent：${agentId}。内建 Agent 位于 agents/<name>/；用户 Agent 请先执行 claw agents register <project-dir>。`);
+  }
+  const agentDir = definition.agentDir;
+  console.error(`[PlainAgent] agent=${definition.id} source=${definition.source} session=${sessionId} cwd=${workspaceCwd} headless=${headless} debug=${args.debug}`);
   console.error(`[PlainAgent] goal="${goal.slice(0, 80)}"`);
 
   // 会话事件流输出：jsonl 模式写 stdout（codex exec --json 形态），
@@ -213,38 +263,64 @@ async function main() {
 
   // 1. 解析模型（metadata.json 的 modelPresets，可被 .agentdev/agent-configs/<id>.json 覆盖）
   const modelPresetRole = cleanValue(process.env.PROTOCLAW_MODEL_PRESET_ROLE) || 'default';
-  const resolved = resolveAgentModelLLM(agentDir, modelPresetRole);
+  const resolved = resolveAgentModelLLM(agentDir, modelPresetRole, {
+    userConfigPath: join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${definition.id}.json`),
+  });
   if (!resolved) {
-    console.error(`[PlainAgent] 未解析到模型 preset。请配置 agents/${agentId}/metadata.json 的 modelPresets.default，`);
+    console.error(`[PlainAgent] 未解析到模型 preset。请配置 ${definition.metadataPath} 的 modelPresets.default，`);
     console.error(`[PlainAgent] 或 .agentdev/agent-configs/${agentId}.json（推荐，不入库）。`);
     process.exit(1);
   }
   console.error(`[PlainAgent] model preset => ${resolved.modelName}`);
 
-  // 2. 实例化 agent
-  const agentModule = await import(pathToFileURL(agentJsPath).href);
+  // 2. 现代 metadata Agent 先解析并 provision Feature；遗留内建 Agent 保持静态装配。
+  let runtimePlan = null;
+  let runtimeEnvironment = null;
+  let runtimeAgentPath = definition.agentPath;
+  if (definition.metadata?.features) {
+    const sourceOverrides = args.debug
+      ? (definition.registered?.studioProjectDir ? getStudioSourceOverrides(definition.registered.studioProjectDir) : (() => { throw new Error('--debug 只支持通过 Studio 注册、且带 studioProjectDir 的 Agent。'); })())
+      : [];
+    const catalog = await scanFeatureCatalog();
+    runtimePlan = resolveAgentRuntimePlan({
+      agentRoot: definition.agentDir,
+      metadata: definition.metadata,
+      catalog,
+      sourceOverrides,
+      mode: args.debug ? 'debug' : 'release',
+    });
+    runtimeEnvironment = await provisionRuntimeEnvironment({ plan: runtimePlan });
+    runtimeAgentPath = runtimeEnvironment.agentEntry;
+  }
+  const agentModule = await import(pathToFileURL(runtimeAgentPath).href);
   const AgentClass = resolveAgentClass(agentModule);
   if (!AgentClass) {
-    throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
+    throw new Error(`无法在 ${runtimeAgentPath} 中找到唯一 Agent 类导出`);
   }
   const agent = new AgentClass({
-    name: agentId,
-    projectRoot: PROJECT_ROOT,
+    name: definition.id,
+    projectRoot: definition.agentDir,
     workspaceDir: workspaceCwd,
     llm: resolved.llm,
+    features: runtimePlan ? Object.fromEntries(runtimePlan.features.map((feature) => [feature.runtimeName || feature.package, feature.config || {}])) : undefined,
     runtime: {
-      agentId,
+      agentId: definition.id,
       sessionId,
       sessionType: 'plain',
       modelPresetRole,
+      ...(runtimeEnvironment ? { runtimeEnvironment: runtimeEnvironment.environmentDir } : {}),
     },
   });
+  if (runtimePlan) {
+    await mountResolvedFeatures(agent, runtimePlan, { environmentDir: runtimeEnvironment.environmentDir });
+    console.error(`[PlainAgent] runtime plan=${runtimePlan.mode} features=${runtimePlan.features.length} env=${runtimeEnvironment.environmentDir}`);
+  }
 
   // 3. 连接 ViewerWorker（被监视；失败降级为 headless 继续）
   if (!headless) {
     try {
-      await agent.withViewer(agentId, VIEWER_PORT, false, {
-        projectRoot: PROJECT_ROOT,
+      await agent.withViewer(definition.id, VIEWER_PORT, false, {
+        projectRoot: definition.agentDir,
         inputPolicy: 'none',
       });
       console.error(`[PlainAgent] ✓ 已连接 ViewerWorker (port ${VIEWER_PORT})，可在 Claw 面板监视`);
@@ -265,7 +341,7 @@ async function main() {
 
   // 5. 索引登记（运行前先入索引，面板/后续查询能看到进行中的痕迹）
   const now = new Date().toISOString();
-  upsertSessionIndex(agentId, {
+  upsertSessionIndex(definition.id, {
     id: sessionId,
     goal,
     sessionType: 'plain',
@@ -292,7 +368,7 @@ async function main() {
   // 7. 落盘 + 更新索引
   try {
     await agent.saveSession(sessionId, sessionStore);
-    upsertSessionIndex(agentId, {
+    upsertSessionIndex(definition.id, {
       id: sessionId,
       goal,
       sessionType: 'plain',
@@ -311,7 +387,7 @@ async function main() {
     ok: !error,
     response: response || null,
     error: error || null,
-    agentId,
+    agentId: definition.id,
     sessionId,
     durationMs,
     timestamp: new Date().toISOString(),

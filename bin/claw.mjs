@@ -18,6 +18,11 @@ import {
   loadProviders, listProviders, getProvider, getDefaultWorkspaceId,
   dispatch, cleanText, truncate, formatDate,
 } from '../server/claw-core.mjs';
+import {
+  listRegisteredAgents,
+  registerAgentProject,
+  unregisterAgentProject,
+} from '../server/feature-runtime/agent-registry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, '..');
@@ -27,10 +32,9 @@ const PLAIN_AGENTS_ROOT = join(PROJECT_ROOT, 'agents');
 
 // ── Plain agents (workspace-free, CLI-first) ─────────────────────
 
-function listPlainAgents() {
-  if (!existsSync(PLAIN_AGENTS_ROOT)) return [];
-  const entries = readdirSync(PLAIN_AGENTS_ROOT, { withFileTypes: true });
+async function listPlainAgents() {
   const agents = [];
+  const entries = existsSync(PLAIN_AGENTS_ROOT) ? readdirSync(PLAIN_AGENTS_ROOT, { withFileTypes: true }) : [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const agentJs = join(PLAIN_AGENTS_ROOT, entry.name, 'agent.js');
@@ -45,20 +49,33 @@ function listPlainAgents() {
       description: cleanText(meta.description),
     });
   }
-  return agents;
+  const registered = await listRegisteredAgents();
+  for (const record of registered) {
+    if (agents.some((agent) => agent.id === record.id)) continue;
+    let meta = {};
+    try { meta = JSON.parse(readFileSync(record.metadataPath, 'utf8')) || {}; } catch {}
+    agents.push({
+      id: record.id,
+      name: cleanText(meta.name) || record.id,
+      description: cleanText(meta.description),
+      source: 'registered',
+      projectDir: record.projectDir,
+    });
+  }
+  return agents.sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function handleRun(args) {
   const agentName = args.find(a => !a.startsWith('-'));
   if (!agentName) {
-    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet|jsonl] [--keep-alive]');
+    console.error('用法: claw run <agent-name> --goal \"...\" [--session <id>] [--cwd <dir>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
     process.exit(1);
   }
 
   const hasGoal = args.includes('--goal');
   if (!hasGoal) {
     console.error('缺少 --goal 参数');
-    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--format result|text|json|quiet|jsonl] [--keep-alive]');
+    console.error('用法: claw run <agent-name> --goal \"...\" [--session <id>] [--cwd <dir>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
     process.exit(1);
   }
 
@@ -77,18 +94,44 @@ function handleRun(args) {
   });
 }
 
-function handleAgents() {
-  const agents = listPlainAgents();
+async function handleAgents(args = []) {
+  const [subcommand, value] = args;
+  if (subcommand === 'register') {
+    if (!value) throw new Error('用法: claw agents register <agent-project-dir> [--studio <studio-project-dir>]');
+    const studioIndex = args.indexOf('--studio');
+    const studioProjectDir = studioIndex >= 0 ? args[studioIndex + 1] || '' : '';
+    const record = await registerAgentProject({ projectDir: value, studioProjectDir });
+    console.log(`Registered standalone agent: ${record.id}`);
+    console.log(`  project: ${record.projectDir}`);
+    return;
+  }
+  if (subcommand === 'unregister') {
+    if (!value) throw new Error('用法: claw agents unregister <agent-id>');
+    const record = await unregisterAgentProject(value);
+    console.log(`Unregistered standalone agent: ${record.id}`);
+    return;
+  }
+  if (subcommand === 'inspect') {
+    if (!value) throw new Error('用法: claw agents inspect <agent-id>');
+    const agents = await listPlainAgents();
+    const agent = agents.find((entry) => entry.id === value);
+    if (!agent) throw new Error(`Plain agent not found: ${value}`);
+    console.log(JSON.stringify(agent, null, 2));
+    return;
+  }
+  if (subcommand) throw new Error(`未知 agents 子命令: ${subcommand}（可用: register / unregister / inspect）`);
+  const agents = await listPlainAgents();
   if (agents.length === 0) {
     console.log('No plain agents registered.');
-    console.log('Create one at agents/<name>/agent.js (see agents/README.md)');
+    console.log('Create one at agents/<name>/agent.js or run claw agents register <project-dir>.');
     return;
   }
   console.log(`Plain agents (${agents.length}):`);
   console.log('');
   for (const a of agents) {
-    console.log(`  ${a.id}`);
+    console.log(`  ${a.id}${a.source === 'registered' ? ' (registered)' : ''}`);
     if (a.description) console.log(`    ${truncate(a.description, 100)}`);
+    if (a.projectDir) console.log(`    project: ${a.projectDir}`);
     console.log(`    usage: claw run ${a.id} --goal "..."`);
     console.log('');
   }
@@ -141,7 +184,7 @@ async function main() {
   }
 
   if (command === 'agents') {
-    handleAgents();
+    await handleAgents(args.slice(1));
     return;
   }
 
@@ -172,7 +215,10 @@ function printHelp() {
   console.log('  claw ws <id> [command] [args]          Workspace operation');
   console.log('  claw ws <id> help                      Workspace operations list');
   console.log('  claw agents                            List plain agents (workspace-free)');
-  console.log('  claw run <name> --goal "..." [...]     Run a plain agent (viewer-observable)');
+  console.log('  claw agents register <project-dir>     Register a metadata-based standalone Agent');
+  console.log('  claw agents unregister <agent-id>      Remove a registered Agent');
+  console.log('  claw agents inspect <agent-id>         Show Agent source and project metadata');
+  console.log('  claw run <name> --goal \"...\" [...]     Run a plain agent (viewer-observable; --debug uses Studio source overrides)');
   console.log('');
   console.log('Legacy aliases (default workspace):');
   console.log('  claw exp [--limit N] [--file F] [--keyword K]');

@@ -8,6 +8,11 @@
 agents/<name>/
   agent.js        # 必须：export default 一个 Agent 类（extends BasicAgent）
   metadata.json   # 可选：name / description / modelPresets
+
+# 或者：任意 Agent 项目目录（通过注册表接入）
+my-agent/
+  agent.js
+  metadata.json   # id / entry / deployment.kind=standalone / modelPresets / features[]
 ```
 
 模型配置优先级（与 prebuilt agent 一致）：
@@ -49,8 +54,24 @@ claw run coder --goal "..." --format jsonl   # stdout 输出 codex exec 风格�
 # 运行结束后不自动关闭 agent（保持 viewer 连接，Ctrl+C 结束）
 claw run coder --goal "..." --keep-alive
 
-# 列出已注册的 plain agent
+# 列出内建与用户注册的 plain agent
 claw agents
+
+# 注册 Studio/用户开发的独立 Agent（项目源码不复制进 Claw）
+claw agents register D:/code/my-agent
+
+# 如果该 Agent 项目由 Studio 管理，关联 Studio 项目以允许 --debug 源码覆盖
+claw agents register D:/code/my-agent --studio D:/code/my-agent-studio
+
+# 查看或移除注册
+claw agents inspect my-agent
+claw agents unregister my-agent
+
+# release 默认从 Feature 仓库使用 metadata.features 的精确 tgz 版本
+claw run my-agent --goal "..."
+
+# 只对带 --studio 注册的 Agent：开发中 Feature 从 Studio 构建产物加载
+claw run my-agent --goal "..." --debug
 ```
 
 ### 监视模式 vs 无头模式
@@ -98,7 +119,10 @@ claw agents
 ### 其他约定
 
 - `--keep-alive` 下会话已先落盘，Ctrl+C 优雅退出，之后可用 `--session <id>` 续接
-- 模型配置：`agents/<name>/metadata.json` 的 `modelPresets`，推荐用 `.agentdev/agent-configs/<name>.json` 覆盖（不入库）
+- 模型配置：`metadata.json` 的 `modelPresets`，推荐用 `.agentdev/agent-configs/<id>.json` 覆盖（不入库）
+- 现代独立 Agent 的 `metadata.json` 必须提供 `id`、相对 `entry`、`deployment.kind: "standalone"`；正式运行的 `features[]` 每项必须是精确版本的包名。
+- `claw run` 为现代 Agent 在 `~/.agentdev/AgentDevClaw/runtime-envs/<id>/<dependency-hash>/` 准备隔离依赖环境。Agent 源码不被修改；现代 metadata Agent 会复制到该生成环境，以便其 ESM import 与 Feature 包解析同一份 `node_modules`。
+- `--debug` 只接受与 Studio 项目关联的注册 Agent，且只将 Studio 中同包名的标准 Feature 项目覆盖为源码 `dist`；未覆盖依赖仍使用仓库 tgz。
 
 ## 数据落盘
 
@@ -114,7 +138,7 @@ claw agents
 
 | | prebuilt agent | plain agent |
 |---|---|---|
-| 位置 | `prebuilt-agents/*/*/` | `agents/<name>/` |
+| 位置 | `prebuilt-agents/*/*/` | `agents/<name>/` 或用户 Agent registry |
 | workspace 列表 | 出现 | 不出现 |
 | UI 声明 | metadata.json 的 ui 字段 | 不需要 |
 | 启动方式 | server 托管（start_agent / 面板） | CLI 直接 spawn |
