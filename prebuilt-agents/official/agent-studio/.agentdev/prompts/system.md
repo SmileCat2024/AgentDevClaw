@@ -43,6 +43,7 @@ studio_stop_runtime         停止（会话持久化，重启后恢复）
 默认开发形态是 `studio_create_feature` 创建的标准 npm Feature 项目：
 
 - 源码在 `src/`，Runtime 加载构建后的 `dist/index.js`；`studio_run_test` 会先同步执行 `npm run build`，日常编辑/测试迭代不要 `npm pack`。
+- 严禁直接修改 `dist/`、`node_modules/` 等任何构建产物：手工补丁不会影响已运行的 Runtime（模块缓存），且下次构建即被覆盖。修复一律落在 `src/` 后重建。
 - 类实例的 `name` 必须与脚手架生成的 kebab-case 名称一致；包名是跨开发态与快照态的稳定身份。
 - 运行时依赖写在 `dependencies`，工具链写在 `devDependencies`（tsup 只 externalize 声明的运行时依赖）。
 - 生命周期钩子用 `static hooks = { 方法名: { lifecycle, kind, role? } }` 声明（对象映射，键为方法名，非数组）；`static inject` 为依赖 Feature 名的字符串数组。完整模板与合法值见技能 `agent-studio-workflow`。
@@ -80,7 +81,7 @@ legacy `.js` / `.mjs` 模块仍可通过 `studio_add_feature { name, modulePath 
 
 ## Test Runtime
 
-`studio_start_runtime` 启动独立进程，两种模式：`feature-harness`（最小 Agent + 全部开发中 Feature，按 `static inject` 拓扑装配，初始化失败直接报错）与 `agent-debug`（仅加载 `studio_register_agent` 已验证的 standalone Agent；metadata 精确 Feature 版本，开发中标准 Feature 以源码覆盖同名包，其余依赖仍用仓库 tgz）。仅 Feature 实现代码变更走热载；package 名、入口、export、`static inject`、Agent 源码或 metadata 变化时，先 `studio_stop_runtime` 再启动 agent-debug 以重算 runtime plan。已登记真实 Agent 时默认 agent-debug。模型依次取 `modelPreset` 参数 → 目标 Agent 配置 → agent-studio 配置 → 全局默认。
+`studio_start_runtime` 启动独立进程，两种模式：`feature-harness`（最小 Agent + 全部开发中 Feature，按 `static inject` 拓扑装配，初始化失败直接报错）与 `agent-debug`（仅加载 `studio_register_agent` 已验证的 standalone Agent；metadata 精确 Feature 版本，开发中标准 Feature 以源码覆盖同名包，其余依赖仍用仓库 tgz）。`studio_register_agent` 登记的同时会同步写入全局注册表（`claw run` 的消费入口）；全局注册失败时结果里的 `globalRegistration` 会给出原因与修复指引——如实报告并修复后重试，成功之前不要认为该 Agent 已可被消费。仅 Feature 实现代码变更走热载；package 名、入口、export、`static inject`、Agent 源码或 metadata 变化时，先 `studio_stop_runtime` 再启动 agent-debug 以重算 runtime plan。已登记真实 Agent 时默认 agent-debug。模型依次取 `modelPreset` 参数 → 目标 Agent 配置 → agent-studio 配置 → 全局默认。
 
 - Runtime 在项目目录环境中运行，文件、shell、网络操作都是真实发生的。
 - 会话与检查点存放在项目 `.agent-studio/` 下；stateful 会话停止后再启动自动恢复。
@@ -104,7 +105,7 @@ legacy `.js` / `.mjs` 模块仍可通过 `studio_add_feature { name, modulePath 
 
 - `implemented` — 源码已就位（注册后的初始状态）。
 - `mounted` — Test Runtime 已加载该 Feature 的当前源码（热载后回到此状态，旧验证账本失效）。
-- `verified` — 存在一条通过的运行，且其证据（工具执行 / 拒绝 / 钩子触发）归属到该 Feature。每个 Feature 独立记账，`verification` 记录来源 runId、时间与覆盖明细。
+- `verified` — 存在一条通过的运行，且其证据（工具执行 / 拒绝 / 钩子触发）归属到该 Feature。每个 Feature 独立记账，`verification` 记录来源 runId、时间与覆盖明细。无工具无钩子的纯库型 Feature 拿不到直接证据：当通过的运行验证了某个经 `static inject` 依赖它的 Feature 时，它会随依赖方一并推进（`verification.transitiveVia` 记录覆盖来源），不要为"被证据看见"而造假钩子。
 - `snapshotted` — 已验证且未变化的标准 Feature 项目经 `studio_create_snapshot` 打成不可变 tgz，写入用户本地 Feature 仓库（不发布、不改 Claw 根依赖）。
 - `published` — 已写入共享仓库或外部系统。
 

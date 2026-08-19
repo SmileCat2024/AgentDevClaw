@@ -821,6 +821,13 @@ async function main() {
     const features = agent.features ? Array.from(agent.features.keys()) : [];
     const tools = agent.tools ? agent.tools.getAll().map((tool) => tool.name) : [];
     const messages = typeof agent.getContext === 'function' ? agent.getContext().getAll() : [];
+    const featureInject = {};
+    if (agent.features) {
+      for (const [name, feature] of agent.features) {
+        if (name === 'studio-evidence') continue;
+        featureInject[name] = readInject(feature?.constructor);
+      }
+    }
     let checkpoints = [];
     try {
       checkpoints = (await store.list()).filter((id) => id.startsWith('cp-'));
@@ -828,6 +835,7 @@ async function main() {
     send({
       type: 'studio-result', requestId: msg.requestId, operation: 'inspect', ok: true,
       features, toolNames: tools, messageCount: messages.length,
+      featureInject,
       model: resolvedLLM.modelName, sessionRestored: startupSessionRestored,
       checkpoints,
     });
