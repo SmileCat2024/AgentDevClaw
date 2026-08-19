@@ -30,21 +30,29 @@
  *   closeCtxMenu (via window), showCtxMenu (via window)
  * 依赖 session-dialogs.js:
  *   openTrimDialog (via window), openBranchDialog (via window)
+ * 依赖 assembly-data.js:
+ *   isAssemblySession
  */
 /* ══════════════════════════════════════
    Generic ctx-menu: declaration table + dispatcher
    ══════════════════════════════════════ */
 
+// Agents whose session items get the full session-ops ctx menu
+// (summary / trim / branch). Server routes are agentId-parameterized;
+// this list only gates the frontend menu surface.
+const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio']);
+
 function getCtxMenuItems(role, ns, variant, id) {
-  if (role === 'runtime' && ns === 'programming-helper') {
+  if (role === 'runtime' && CTX_SESSION_OPS_AGENTS.has(ns)) {
     const isZh = currentLanguage === 'zh';
     const agent = allAgents.find((item) => item.id === ns) || null;
     const activeSessionId = agent?.workspace_sessions?.activeSessionId;
     const activeSession = activeSessionId ? getWorkspaceSessionById(agent, activeSessionId) : null;
     const isArchived = activeSession?.archived === true;
-    return [
-      { label: isZh ? '重命名' : 'Rename', action: 'rename' },
-      { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
+    // Assembly sessions (agent-studio) are excluded from summary/trim/branch,
+    // same as exploration/sub sessions for programming-helper session items.
+    const isOpsExcluded = isAssemblySession(activeSession);
+    const historyItems = isOpsExcluded ? [] : [
       { label: isZh ? '总结历史（摘要）' : 'Summary', submenu: [
         { label: isZh ? '仅摘要' : 'Summary Only', action: 'summary' },
         { label: isZh ? '摘要并归档原会话' : 'Summary & Archive', action: 'summary-and-archive' },
@@ -57,6 +65,11 @@ function getCtxMenuItems(role, ns, variant, id) {
         { label: isZh ? '仅分支' : 'Branch Only', action: 'branch' },
         { label: isZh ? '分支并归档原会话' : 'Branch & Archive', action: 'branch-and-archive' },
       ]},
+    ];
+    return [
+      { label: isZh ? '重命名' : 'Rename', action: 'rename' },
+      { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
+      ...historyItems,
       { type: 'separator' },
       { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive Session'), action: 'archive-and-stop' },
       { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
@@ -64,13 +77,15 @@ function getCtxMenuItems(role, ns, variant, id) {
       { label: isZh ? '删除会话' : 'Delete Session', action: 'delete-session-runtime', danger: true },
     ];
   }
-  if (role === 'session' && ns === 'programming-helper') {
+  if (role === 'session' && CTX_SESSION_OPS_AGENTS.has(ns)) {
     const agent = allAgents.find((item) => item.id === ns) || null;
     const session = getWorkspaceSessionById(agent, id);
     const sType = variant || 'main';
     const isArchived = sType === 'archived' || session?.archived === true;
     const isTodo = session?.todo === true;
-    const isExplorationOrSub = sType === 'exploration' || sType === 'sub';
+    // Sessions excluded from summary/trim/branch:
+    // exploration/sub (programming-helper), assembly (agent-studio test-runtime).
+    const isOpsExcluded = sType === 'exploration' || sType === 'sub' || sType === 'assembly';
     const isZh = currentLanguage === 'zh';
 
     const items = [];
@@ -79,7 +94,7 @@ function getCtxMenuItems(role, ns, variant, id) {
     items.push({ label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' });
 
     // Summary / Trim / Branch — only for main/archived sessions
-    if (!isExplorationOrSub) {
+    if (!isOpsExcluded) {
       if (isArchived) {
         // Archived: no need for "archive original" option, flatten to direct items
         items.push({ label: isZh ? '总结历史（摘要）' : 'Summary', action: 'summary' });
@@ -688,13 +703,13 @@ function dispatchCtxAction(action, target) {
 
     case 'summary':
       if (ns && sid) {
-        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', sessionId: sid, compactType: 'summary' }));
+        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', agentId: ns, sessionId: sid, compactType: 'summary' }));
       }
       break;
 
     case 'summary-and-archive':
       if (ns && sid) {
-        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', sessionId: sid, compactType: 'summary', archiveOriginal: true }));
+        window.runWorkspaceAction(JSON.stringify({ type: 'compact_session_menu', agentId: ns, sessionId: sid, compactType: 'summary', archiveOriginal: true }));
       }
       break;
 

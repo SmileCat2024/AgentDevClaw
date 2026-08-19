@@ -284,11 +284,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   }
 
   if (action.type === 'compact_session_menu') {
-    if (!activeAgent?.id || !action.sessionId) return;
+    // Target agent may differ from the currently active one when triggered
+    // from another agent's sidebar runtime ctx-menu — prefer explicit agentId.
+    const _csAgent = (action.agentId && allAgents.find((a) => a.id === action.agentId)) || activeAgent;
+    if (!_csAgent?.id || !action.sessionId) return;
     const compactType = action.compactType || 'summary';
 
     if (compactType === 'trim') {
-      window.openTrimDialog(activeAgent.id, action.sessionId);
+      window.openTrimDialog(_csAgent.id, action.sessionId);
       return;
     }
 
@@ -302,7 +305,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       return;
     }
 
-    markSessionLoading(activeAgent.id, action.sessionId);
+    markSessionLoading(_csAgent.id, action.sessionId);
     const _csNavGuard = _navigationGuardEpoch;
     const _csOldRuntimeId = currentRuntimeAgentId;
     const _csIsZh = currentLanguage === 'zh';
@@ -310,16 +313,16 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     let _csArchiveRollback = null;
     let _csSessionCommitted = false;
     if (action.archiveOriginal && typeof markSessionArchivedForMutation === 'function') {
-      _csArchiveRollback = markSessionArchivedForMutation(activeAgent.id, action.sessionId, 'summary');
+      _csArchiveRollback = markSessionArchivedForMutation(_csAgent.id, action.sessionId, 'summary');
     }
-    const _csSourceSession = getWorkspaceSessionById(activeAgent, action.sessionId);
+    const _csSourceSession = getWorkspaceSessionById(_csAgent, action.sessionId);
     const _csOperation = _csArchiveRollback?.operationId
       ? getSidebarOperation(_csArchiveRollback.operationId)
       : beginSidebarOperation({
           type: 'create',
           kind: 'summary',
           phase: 'generating',
-          agentId: activeAgent.id,
+          agentId: _csAgent.id,
           sourceSessionId: action.sessionId,
           sourceRuntimeId: _csOldRuntimeId || '',
           projectDir: _csSourceSession?.openDirectory || '',
@@ -332,14 +335,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       status: 'loading',
     });
     try {
-      const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, strategy, null, null, null, {
+      const result = await createCompactedResumeSession(_csAgent.id, action.sessionId, strategy, null, null, null, {
         archiveOriginal: action.archiveOriginal,
         operationId: _csOperation?.operationId || '',
       });
       if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {
-        applySidebarMutationDeltaWithDiagnostics(_csOperation?.operationId, activeAgent.id, result);
+        applySidebarMutationDeltaWithDiagnostics(_csOperation?.operationId, _csAgent.id, result);
       } else if (typeof applySessionMutationDelta === 'function') {
-        applySessionMutationDelta(activeAgent.id, result);
+        applySessionMutationDelta(_csAgent.id, result);
       }
       const archiveSucceeded = !action.archiveOriginal || result?.archive?.succeeded === true;
       if (!archiveSucceeded && _csArchiveRollback) {
@@ -350,13 +353,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         // Live-runtime shortcut path: session switch was already handled
         // inside createCompactedResumeSession — skip normal agent/runtime logic
         loadAgents().catch(e => console.warn(e));
-        clearSessionLoading(activeAgent.id);
+        clearSessionLoading(_csAgent.id);
         ClawToast.update(_csToastId, {
           status: 'success',
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
         if (action.archiveOriginal && archiveSucceeded) {
-          requestArchivedSourceRuntimeCleanup(activeAgent.id, action.sessionId, _csOldRuntimeId);
+          requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
         }
         _csArchiveRollback = null;
         return;
@@ -397,14 +400,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
         if (action.archiveOriginal && archiveSucceeded) {
-          requestArchivedSourceRuntimeCleanup(activeAgent.id, action.sessionId, _csOldRuntimeId);
+          requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
         }
         if (!action.archiveOriginal && nextRuntimeId) finishSidebarOperation(_csOperation?.operationId, 'settled');
         _csArchiveRollback = null;
         return;
       }
       if (nextRuntimeId) {
-        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === activeAgent.id) || activeAgent);
+        setPreferredUnitMode('chat', _csAgent);
         beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-summary');
         if (!action.archiveOriginal) finishSidebarOperation(_csOperation?.operationId, 'settled');
@@ -417,7 +420,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         title: _csIsZh ? '会话总结完成' : 'Session summary completed',
       });
       if (action.archiveOriginal && archiveSucceeded) {
-        requestArchivedSourceRuntimeCleanup(activeAgent.id, action.sessionId, _csOldRuntimeId);
+        requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
       }
       loadAgents().catch(e => console.warn(e));
       if (action.archiveOriginal && !archiveSucceeded) {
@@ -450,7 +453,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           title: _csIsZh ? '会话总结完成' : 'Session summary completed',
         });
       }
-      clearSessionLoading(activeAgent.id);
+      clearSessionLoading(_csAgent.id);
       clearChatLoadingSession();
     }
     return;
@@ -773,7 +776,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         clearChatLoadingSession();
         renderCurrentMainView();
       }
-      if (shouldMarkLoading) clearSessionLoading(activeAgent.id);
+      if (shouldMarkLoading) clearSessionLoading(_csAgent.id);
       else if (triggerButton) triggerButton.classList.remove('action-loading');
     }
   }

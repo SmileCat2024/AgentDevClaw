@@ -528,9 +528,14 @@ function _renderGenericSessionList(agent, block, ctx) {
       const primaryTitle = isFeatureCreator
         ? getFeatureSessionDisplayName(session, agent)
         : (session.title || session.id);
-      const allowCompactedResume = !isAssemblySession(session);
+      const isAssembly = isAssemblySession(session);
+      const allowCompactedResume = !isAssembly;
+      // data-ctx-* enables the declarative ctx-menu (summary/trim/branch)
+      // for agents listed in CTX_SESSION_OPS_AGENTS; agents outside that
+      // set get an empty item list and fall through to the legacy menu.
+      const ctxVariant = isAssembly ? 'assembly' : 'default';
       return [
-        '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '">',
+        '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(ctxVariant) + '">',
         '<div class="workspace-history-main">',
         '<div class="workspace-history-title-row">',
         '<div class="workspace-history-title" ondblclick="window.handleSessionTitleDoubleClick(event)" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(primaryTitle) + '</div>',
