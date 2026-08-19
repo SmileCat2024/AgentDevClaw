@@ -160,7 +160,7 @@ describe('ForceContinuationPanel', () => {
     assert.match(html, /data-force-continuation-limit[^>]*value="8"/);
   });
 
-  it('keeps the control unavailable outside a connected programming-helper session', () => {
+  it('keeps the control unavailable for agents without the feature mounted', () => {
     const { ctx } = panelSandbox({ currentAgentId: 'qqbot', currentRuntimeAgentId: null });
     const html = ctx.run('window.ForceContinuationPanel.render()');
 
@@ -168,6 +168,19 @@ describe('ForceContinuationPanel', () => {
     assert.match(html, /feature-panel-empty/);
     assert.match(html, /feature-panel-section-title/);
     assert.doesNotMatch(html, /data-force-continuation-toggle/);
-    assert.match(html, /此控制仅适用于编程小助手/);
+    assert.match(html, /此控制在当前工作空间不可用/);
+  });
+
+  it('serves the panel for the agent-studio workspace', async () => {
+    const { ctx, fetchCalls } = panelSandbox({
+      currentAgentId: 'agent-studio',
+      currentRuntimeAgentId: 'runtime-studio',
+    });
+
+    await ctx.run('window.ForceContinuationPanel.refreshStatus({ renderWhenDone: false })');
+    const html = ctx.run('window.ForceContinuationPanel.render()');
+
+    assert.match(fetchCalls[0].url, /agentId=agent-studio/);
+    assert.match(html, /data-force-continuation-toggle/);
   });
 });

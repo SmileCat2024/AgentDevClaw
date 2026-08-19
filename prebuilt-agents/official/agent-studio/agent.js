@@ -6,6 +6,7 @@ import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import os from 'os';
 import { AgentStudioFeature } from '../../../local-features/dist/index.js';
+import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,6 +49,12 @@ export class AgentStudioAgent extends BasicAgent {
     this.use(new TodoFeature({
       reminderThresholdWithTasks: config.reminderThresholdWithTasks,
       reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
+    }));
+    this.use(new ForceContinuation({
+      ...(systemFeatureConfig['force-continuation'] && typeof systemFeatureConfig['force-continuation'] === 'object'
+        ? systemFeatureConfig['force-continuation'] : {}),
+      ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
+        ? config.features['force-continuation'] : {}),
     }));
     this.use(new AuditFeature({ workspaceDir }));
     this.use(new WebSearchFeature({ workspaceDir }));

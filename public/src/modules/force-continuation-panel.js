@@ -1,9 +1,10 @@
 /**
  * force-continuation-panel.js — session-local control plane for ForceContinuation.
  *
- * The server routes an explicit IPC message to the selected programming-helper
- * session. Browser state is only an optimistic UI cache; the Feature remains
- * the authoritative state holder in the session runtime.
+ * The server routes an explicit IPC message to the selected session runtime
+ * of agents that mount the ForceContinuation Feature. Browser state is only
+ * an optimistic UI cache; the Feature remains the authoritative state holder
+ * in the session runtime.
  *
  * Visual language follows the Todo Plan panel: flat sections separated by
  * hairlines (no hero header, no card stack), a strong/label summary line,
@@ -20,8 +21,11 @@
       : String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
 
-  function isProgrammingHelper() {
-    return String(currentAgentId || '') === 'programming-helper';
+  /** Agents whose runtime mounts the ForceContinuation Feature. */
+  const SUPPORTED_AGENTS = ['programming-helper', 'agent-studio'];
+
+  function isSupportedAgent() {
+    return SUPPORTED_AGENTS.includes(String(currentAgentId || ''));
   }
 
   function currentSessionId() {
@@ -127,10 +131,10 @@
     const sessionId = currentSessionId();
     const item = getState();
 
-    if (!isProgrammingHelper() || !currentRuntimeAgentId || !sessionId) {
-      const message = !isProgrammingHelper()
-        ? (zh ? '此控制仅适用于编程小助手。' : 'This control is available only for Programming Helper.')
-        : (zh ? '请先打开并连接一个编程小助手会话。' : 'Open and connect a Programming Helper session first.');
+    if (!isSupportedAgent() || !currentRuntimeAgentId || !sessionId) {
+      const message = !isSupportedAgent()
+        ? (zh ? '此控制在当前工作空间不可用。' : 'This control is not available in the current workspace.')
+        : (zh ? '请先打开并连接一个会话。' : 'Open and connect a session first.');
       return renderEmpty(message, zh);
     }
 
@@ -195,7 +199,7 @@
   }
 
   async function refreshStatus({ renderWhenDone = true } = {}) {
-    if (!isProgrammingHelper()) return null;
+    if (!isSupportedAgent()) return null;
     const sessionId = currentSessionId();
     const key = runtimeKey();
     if (!sessionId || !currentAgentId || !key) return null;
@@ -220,7 +224,7 @@
   }
 
   async function updateControl(patch) {
-    if (!isProgrammingHelper()) return;
+    if (!isSupportedAgent()) return;
     const sessionId = currentSessionId();
     const key = runtimeKey();
     if (!sessionId || !currentAgentId || !key) return;
@@ -285,6 +289,6 @@
     updateTrigger,
     updateLimit,
     refreshStatus,
-    isAvailable: () => isProgrammingHelper(),
+    isAvailable: () => isSupportedAgent(),
   };
 }());

@@ -10,6 +10,7 @@
   "enabled": true,
   "features": [
     "todo",
+    "force-continuation",
     "audit",
     "websearch",
     "shell",
