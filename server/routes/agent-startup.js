@@ -118,10 +118,16 @@ export function createAgentStartupFns(deps) {
 
   async function waitForProcessExit(child, timeoutMs = PROCESS_EXIT_WAIT_MS) {
     if (!isChildProcessRunning(child)) return;
-    await Promise.race([
-      new Promise((resolve) => child.once('exit', resolve)),
-      new Promise((resolve) => setTimeout(resolve, timeoutMs)),
-    ]);
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        child.removeListener('exit', resolve);
+        resolve();
+      }, timeoutMs);
+      child.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   async function waitForManagedRuntimeReady(agentId, timeoutMs = RUNTIME_READY_WAIT_MS, sessionId = undefined) {
