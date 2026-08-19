@@ -54,6 +54,14 @@ npm install
 npm start
 ```
 
+`npm start` 的 prestart 会依次自动完成（`dev` 同）：
+
+1. `check:agentdev` — 校验 `node_modules/agentdev` 的 dist 存在且含 `local-features` 所需导出；若链接被 `npm install` 冲掉而相邻 `../AgentDev` 仓库构建可用，会自动重建本地链接；否则给出可执行的修复指引后退出
+2. `build:local-features` — 编译 `local-features/`
+3. `build:features` — 构建 `features/` 下被预制 agent 按源码路径引用的 feature 包（当前为 `force-continuation`），其 dist 不入库
+
+注意：相邻 AgentDev 框架仓库的 `npm install && npm run build` 仍需手动完成（首次克隆与框架源码更新后），prestart 不会跨仓库构建。
+
 默认端口：
 
 - Web UI: `http://127.0.0.1:1420`
@@ -80,7 +88,7 @@ npm start
 ### 2. `agentdev` 本体如何接入 Claw
 
 - Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里，`agentdev` 依赖应保持为发布版 semver，例如 `^0.2.3`。
-- 本机联动开发时，先正常 `npm install`，再运行 `npm run agentdev:local`，把 [node_modules/agentdev](/D:/code/AgentDevClaw/node_modules/agentdev) 替换成指向相邻 `../AgentDev` 仓库的 junction。
+- 本机联动开发时，先正常 `npm install`，再运行 `npm run agentdev:local`，把 [node_modules/agentdev](/D:/code/AgentDevClaw/node_modules/agentdev) 替换成指向相邻 `../AgentDev` 仓库的 junction。若忘记顺序（install 冲掉了链接），`npm start` 的预检会自动重建链接。
 - [package-lock.json](/D:/code/AgentDevClaw/package-lock.json) 也应保持 registry 解析结果，不要提交 `node_modules/agentdev` 的本地 link 条目。
 - 不要用 `npm link` 做这件事。`npm link` 会触发 npm 重新整理/prune 依赖树，可能把 Claw 运行时需要的顶层依赖移走；这里需要的是纯文件系统 junction。
 - 需要切回发布版依赖时，运行 `npm run agentdev:published`。这个命令会移除本地 junction，并按 `package.json` / `package-lock.json` 恢复 npm 发布包。
