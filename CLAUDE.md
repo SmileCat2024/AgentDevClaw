@@ -846,6 +846,39 @@ local-features/                                ← 本地 Feature 功能测试�
 - 提交前、合并前 → `npm test` 确保全绿
 - 想看覆盖率 → `npm run test:coverage`
 
+### 测试时长预算与超时标准
+
+测试慢几乎从来不是断言慢，而是卡住或句柄泄漏。**超过预算就当 bug 排查，不要调大预算。** node --test 按文件并行，全量墙钟 ≈ 最慢单文件，所以单文件墙钟是最重要的控制指标。
+
+| 层级 | 常规预算 | 超过即异常 |
+|------|---------|-----------|
+| 单用例（it） | < 100ms | 2s（真实 IO / 子进程用例可放宽到此） |
+| 单文件墙钟（test:file） | < 1.5s | 10s 硬上限 |
+| 全量 test:core | ~13-15s | 30s |
+
+（基线为 2026-08 实测，24 核机器，2176 用例）
+
+已知合理慢文件——生产语义决定，不要"修复"：
+
+- `test/oauth-codex.test.js`（~7s）：`requestDeviceCode` 有 `interval >= 3s` 生产下限 + 300ms 网络重试退避，测试必须真实等待
+- `test/feature-runtime.test.js`（~7s）：真实子进程生命周期
+- `test/session-summary.test.js`（~8s）：慢路径每次扫描真实用户 `context-handoffs` 目录，耗时随用户历史增长（已知待办：注入 summaryMap 隔离）
+
+**慢测试三步排查法**：
+
+1. 逐文件计时定位：`for f in test/*.test.js; do s=$(date +%s%3N); node --test "$f" >/dev/null 2>&1; e=$(date +%s%3N); echo "$((e-s))ms $f"; done | sort -rn | head`
+2. 残留句柄探针（断言毫秒级完成但墙钟秒级时必做）：用 `node -e` 直接 import 测试文件，`setInterval` 周期打印 `process.getActiveResourcesInfo()`。`Timeout` = 未清理的 setTimeout；`PipeWrap`×2 = 一个未退出的子进程/socket；`ProcessWrap` = 活着的子进程
+3. 定时器来源定位：在 import 前包一层 `setTimeout` 补丁，打印 ≥100ms 调用的创建堆栈
+
+历史案例：`waitForProcessExit` 的 `Promise.race` 忘了 `clearTimeout`，测试断言 0.8s 完成但进程被残留定时器挂住 15s，独占全量套件墙钟（2026-08 已修复，16.3s → 1.4s）。
+
+写测试时的规则：
+
+- 模拟等待优先用最小 interval 值或 `node:test` 的 `mock.timers`，测试内禁止真实 sleep > 500ms
+- `Promise.race` 竞速的 fallback 定时器，胜出分支必须 `clearTimeout`
+- `after()` / `finally` 必须杀掉 spawn 的子进程、restore 全局补丁（fetch 等）
+- 不读取真实用户数据目录（`USER_DATA_ROOT` 下的内容），耗时随用户数据量增长且不可复现
+
 ### 新增测试的约定
 
 - 服务端纯逻辑（server.js 中的决策函数、工具函数）→ 新建 `test/xxx.test.js`，用 `node:test` 格式
