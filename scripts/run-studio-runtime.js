@@ -26,6 +26,7 @@ import { dirname, join, resolve } from 'path';
 import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { Agent, FileSessionStore, createLLM, runWithLogScope } from 'agentdev';
 import { resolveAgentModelLLM, resolveModelPresetLLM } from '../server/model-preset-resolver.js';
+import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -136,6 +137,13 @@ function resolveRuntimeLLM() {
 }
 
 /** Locate the feature class export: sole class export, or class default export. */
+function resolveAgentClass(moduleExports) {
+  if (typeof moduleExports.default === 'function') return moduleExports.default;
+  const classes = Object.values(moduleExports).filter((value) => typeof value === 'function');
+  if (classes.length === 1) return classes[0];
+  throw new Error('无法唯一确定 Agent 类导出；请使用 default export 或只导出一个 Agent class。');
+}
+
 function resolveFeatureClass(moduleExports) {
   const classExports = Object.entries(moduleExports).filter(
     ([, value]) => typeof value === 'function' && /^\s*class\s+/.test(Function.prototype.toString.call(value)),
@@ -342,6 +350,14 @@ function planAssemblyOrder(pending, mountedNames, injectOf) {
 
 async function main() {
   const projectDir = clean(process.argv[2]);
+  const flagIndex = process.argv.indexOf('--mode');
+  const mode = flagIndex >= 0 ? clean(process.argv[flagIndex + 1]) : 'feature-harness';
+  const planFlagIndex = process.argv.indexOf('--plan');
+  const runtimePlanPath = planFlagIndex >= 0 ? clean(process.argv[planFlagIndex + 1]) : '';
+  if (mode !== 'feature-harness' && mode !== 'agent-debug') {
+    failReady(`不支持的 runtime mode: ${mode}`);
+    return;
+  }
   if (!projectDir || !existsSync(projectDir)) {
     failReady(`projectDir 无效: ${process.argv[2] || '(empty)'}`);
     return;
@@ -356,23 +372,54 @@ async function main() {
     return;
   }
 
-  const featureEntries = (Array.isArray(project.features) ? project.features : [])
-    .map((entry) => ({ name: clean(entry?.name), modulePath: clean(entry?.modulePath) }))
-    .filter((entry) => entry.name && entry.modulePath);
+  let runtimePlan = null;
+  if (mode === 'agent-debug') {
+    if (!runtimePlanPath || !existsSync(runtimePlanPath)) {
+      failReady(`agent-debug 缺少运行计划：${runtimePlanPath || '(empty)'}`);
+      return;
+    }
+    try { runtimePlan = JSON.parse(readFileSync(runtimePlanPath, 'utf8')); }
+    catch (error) { failReady(`无法读取 runtime plan: ${error?.message || error}`); return; }
+  }
+  const featureEntries = mode === 'agent-debug'
+    ? (runtimePlan?.features || []).filter((entry) => entry.resolvedFrom === 'source').map((entry) => ({ name: clean(entry.runtimeName), modulePath: clean(entry.entry) })).filter((entry) => entry.name && entry.modulePath)
+    : (Array.isArray(project.features) ? project.features : []).map((entry) => ({ name: clean(entry?.name), modulePath: clean(entry?.modulePath) })).filter((entry) => entry.name && entry.modulePath);
 
-  const resolvedLLM = resolveRuntimeLLM();
+  const resolvedLLM = runtimePlan?.metadataPath
+    ? (resolveAgentModelLLM(dirname(runtimePlan.metadataPath), 'default') || resolveRuntimeLLM())
+    : resolveRuntimeLLM();
   if (!resolvedLLM) {
     failReady('没有可用的模型预设：请为 agent-studio 配置模型预设，或设置 config/default.json 的全局默认模型。');
     return;
   }
 
-  const agent = new Agent({
-    llm: resolvedLLM.llm,
-    name: 'studio-test-runtime',
-    systemMessage: buildSystemMessage(project),
-    workspaceDir: projectDir,
-    projectRoot: PROTOCLAW_ROOT,
-  });
+  let agent;
+  if (mode === 'agent-debug') {
+    try {
+      const agentModule = await import(pathToFileURL(runtimePlan.agent.entry).href);
+      const AgentClass = resolveAgentClass(agentModule);
+      const featureConfig = Object.fromEntries((runtimePlan.features || []).map((entry) => [entry.runtimeName || entry.package, entry.config || {}]));
+      agent = new AgentClass({
+        llm: resolvedLLM.llm,
+        name: runtimePlan.agent.id,
+        workspaceDir: projectDir,
+        projectRoot: runtimePlan.agent.projectRoot || PROTOCLAW_ROOT,
+        features: featureConfig,
+        runtime: { agentId: runtimePlan.agent.id, sessionType: 'studio-debug' },
+      });
+    } catch (error) {
+      failReady(`真实 Agent 加载失败: ${error?.message || error}`, undefined, error);
+      return;
+    }
+  } else {
+    agent = new Agent({
+      llm: resolvedLLM.llm,
+      name: 'studio-test-runtime',
+      systemMessage: buildSystemMessage(project),
+      workspaceDir: projectDir,
+      projectRoot: PROTOCLAW_ROOT,
+    });
+  }
 
   const evidence = { executed: [], finished: [], hooks: [] };
   patchToolRegistry(agent, evidence);
@@ -431,9 +478,19 @@ async function main() {
     return { FeatureClass, instance };
   }
 
-  // 启动装配：读 static inject → 拓扑排序 → 按序挂载
+  // 启动装配：agent-debug 根据冻结 plan 动态挂载源码与仓库 Feature；
+  // feature-harness 继续保留既有项目源码装配协议。
   const mounted = [];
-  {
+  if (mode === 'agent-debug') {
+    try {
+      mounted.push(...await mountResolvedFeatures(agent, runtimePlan, {
+        environmentDir: runtimePlan.environment?.environmentDir,
+      }).then((items) => items.map((item) => ({ name: item.name, mounted: true, package: item.package, resolvedFrom: item.resolvedFrom }))));
+    } catch (error) {
+      failReady(`真实 Agent Feature 装配失败: ${error?.message || error}`, undefined, error);
+      return;
+    }
+  } else {
     const pending = [];
     for (const entry of featureEntries) {
       if (!existsSync(entry.modulePath)) {
@@ -564,6 +621,8 @@ async function main() {
     sessionRestored: startupSessionRestored,
     observability,
     viewerAgentId,
+    mode,
+    ...(runtimePlan ? { runtimePlanPath } : {}),
     features: mounted,
     featureCount: mounted.length,
   });
@@ -807,7 +866,7 @@ async function main() {
     process.exit(0);
   });
 
-  console.log(`[StudioRuntime] ready: model=${resolvedLLM.modelName} features=${mounted.length} sessionRestored=${startupSessionRestored}`);
+  console.log(`[StudioRuntime] ready: mode=${mode} model=${resolvedLLM.modelName} features=${mounted.length} sessionRestored=${startupSessionRestored}`);
 }
 
 main().catch((error) => {

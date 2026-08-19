@@ -2,7 +2,7 @@
  * AgentStudioFeature test (node:test format)
  *
  * Validates:
- * 1. Tool registration (11 tools, names)
+ * 1. Tool registration (14 tools, names)
  * 2. evaluateAssertions: five assertion kinds, pass/fail semantics
  * 3. computeFeatureCoverage: evidence attribution to features
  * 4. advanceFeatureStatuses: per-feature verified ledger, reload resets verification
@@ -77,9 +77,9 @@ describe('AgentStudioFeature', () => {
   });
 
   describe('Tool registration', () => {
-    it('should expose exactly 11 tools', () => {
+    it('should expose exactly 14 tools', () => {
       const feature = new AgentStudioFeature({ workspaceDir, statePath: join(workspaceDir, 'state.json') });
-      assert.equal(feature.getTools().length, 11);
+      assert.equal(feature.getTools().length, 14);
     });
 
     it('should have expected tool names', () => {
@@ -87,11 +87,14 @@ describe('AgentStudioFeature', () => {
       const names = feature.getTools().map((tool: Tool) => tool.name);
       assert.deepEqual(names.sort(), [
         'studio_add_feature',
+        'studio_create_feature',
+        'studio_create_snapshot',
         'studio_define_test',
         'studio_get_project',
         'studio_get_run',
         'studio_initialize_project',
         'studio_list_tests',
+        'studio_register_agent',
         'studio_remove_feature',
         'studio_run_test',
         'studio_save_checkpoint',
@@ -347,13 +350,78 @@ describe('AgentStudioFeature', () => {
       assert.equal(tests[0].assertions.length, 2);
 
       const project = await exec('studio_get_project');
-      assert.equal((project as { project: { schemaVersion: number } }).project.schemaVersion, 2);
+      assert.equal((project as { project: { schemaVersion: number } }).project.schemaVersion, 3);
     });
 
     it('re-initialize keeps tests and features', async () => {
       await exec('studio_initialize_project', { projectDir, name: 'demo-2' });
       const listed = await exec('studio_list_tests');
       assert.equal((listed as { tests: unknown[] }).tests.length, 1);
+    });
+
+    it('normalizes legacy schema as schema 3 without losing module registration', async () => {
+      const legacyDir = join(workspaceDir, 'legacy-project');
+      await fs.mkdir(legacyDir, { recursive: true });
+      await fs.writeFile(join(legacyDir, 'legacy.mjs'), 'export default class { name = "legacy"; getTools() { return []; } }\n');
+      await fs.writeFile(join(legacyDir, 'agent-studio.json'), JSON.stringify({
+        schemaVersion: 2,
+        name: 'legacy',
+        goal: '',
+        targetAgent: '',
+        features: [{ name: 'legacy', modulePath: join(legacyDir, 'legacy.mjs'), status: 'implemented' }],
+        testRuntime: { status: 'stopped' },
+        tests: [],
+        createdAt: 't',
+        updatedAt: 't',
+      }));
+      await exec('studio_initialize_project', { projectDir: legacyDir, name: 'legacy' });
+      const loaded = await exec('studio_get_project');
+      const project = (loaded as { project: { schemaVersion: number; features: Array<{ name: string; modulePath: string }> } }).project;
+      assert.equal(project.schemaVersion, 3);
+      assert.equal(project.features[0].name, 'legacy');
+      assert.equal(project.features[0].modulePath, join(legacyDir, 'legacy.mjs'));
+    });
+
+    it('rejects a nonstandard persisted build command before it reaches a shell', async () => {
+      const invalidDir = join(workspaceDir, 'invalid-build-project');
+      await fs.mkdir(invalidDir, { recursive: true });
+      await fs.writeFile(join(invalidDir, 'agent-studio.json'), JSON.stringify({
+        schemaVersion: 3, name: 'invalid', goal: '', targetAgent: '',
+        features: [{ name: 'bad', modulePath: join(invalidDir, 'bad.mjs'), source: { kind: 'project', projectDir: invalidDir, entry: join(invalidDir, 'bad.mjs'), buildCommand: ['npm', 'run', 'build; malicious'] }, status: 'implemented' }],
+        testRuntime: { status: 'stopped' }, tests: [], createdAt: 't', updatedAt: 't',
+      }));
+      await fs.writeFile(join(invalidDir, 'bad.mjs'), 'export default class { name = "bad"; }\\n');
+      await exec('studio_initialize_project', { projectDir: invalidDir, name: 'invalid' });
+      await assert.rejects(() => exec('studio_start_runtime'), /仅支持 buildCommand/);
+    });
+
+    it('registers a standard Feature project through projectDir', async () => {
+      const featureDir = join(projectDir, 'features', 'ticket-feature');
+      await fs.mkdir(join(featureDir, 'dist'), { recursive: true });
+      await fs.writeFile(join(featureDir, 'package.json'), JSON.stringify({
+        name: '@agentdev/ticket-feature',
+        main: 'dist/index.js',
+      }));
+      await fs.writeFile(join(featureDir, 'dist', 'index.js'), 'export default class { name = "ticket-feature"; getTools() { return []; } }\n');
+      await exec('studio_initialize_project', { projectDir, name: 'standard-project' });
+      const registered = await exec('studio_add_feature', { projectDir: './features/ticket-feature' });
+      const feature = (registered as { feature: { name: string; package?: string; modulePath: string; source?: { kind: string } } }).feature;
+      assert.equal(feature.name, 'ticket-feature');
+      assert.equal(feature.package, '@agentdev/ticket-feature');
+      assert.equal(feature.modulePath, join(featureDir, 'dist', 'index.js'));
+      assert.equal(feature.source?.kind, 'project');
+    });
+
+    it('registers a real Agent definition without changing its source', async () => {
+      const agentDir = join(projectDir, 'agent-under-test');
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({ id: 'debug-agent', entry: './agent.js' }));
+      await fs.writeFile(join(agentDir, 'agent.js'), 'export default class DebugAgent {}\\n');
+      await exec('studio_initialize_project', { projectDir, name: 'debug-project' });
+      const result = await exec('studio_register_agent', { agentDir: './agent-under-test' });
+      assert.equal((result as { agentId: string }).agentId, 'debug-agent');
+      const loaded = await exec('studio_get_project');
+      assert.equal((loaded as { project: { agent?: { metadataPath: string } } }).project.agent?.metadataPath, join(agentDir, 'metadata.json'));
     });
 
     it('rejects invalid assertion definitions with precise errors', async () => {

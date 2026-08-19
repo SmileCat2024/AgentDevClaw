@@ -1,8 +1,9 @@
 import os from 'os';
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
+import crypto from 'crypto';
 import { promises as fs } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { dirname, join, relative, resolve } from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import type { AgentFeature, CallStartContext, FeatureInitContext, FeatureStateSnapshot, HookDeclarations, PackageInfo, Tool } from 'agentdev';
@@ -14,7 +15,7 @@ export interface AgentStudioFeatureConfig {
 }
 
 type TestRuntimeStatus = 'not-provisioned' | 'running' | 'stopped';
-type StudioFeatureStatus = 'implemented' | 'mounted' | 'verified';
+type StudioFeatureStatus = 'implemented' | 'mounted' | 'verified' | 'snapshotted';
 export type SessionPolicy = 'fresh' | 'stateful' | 'checkpointed';
 
 const ASSERTION_KINDS = ['tool-executed', 'tool-denied', 'tool-result-path', 'reply-includes', 'hook-observed'] as const;
@@ -64,20 +65,45 @@ export interface StudioFeatureVerification {
   lastVerifiedRunId: string;
   verifiedAt: string;
   coverage: StudioFeatureCoverage;
+  sourceDigest?: string;
+}
+
+interface StudioFeatureSource {
+  kind: 'project';
+  projectDir: string;
+  entry: string;
+  buildCommand: string[];
+}
+
+interface StudioFeatureSnapshot {
+  version: string;
+  archivePath: string;
+  archiveDigest: string;
+  createdAt: string;
 }
 
 export interface StudioFeatureEntry {
   name: string;
   modulePath: string;
+  package?: string;
+  export?: string;
+  source?: StudioFeatureSource;
   status: StudioFeatureStatus;
   verification?: StudioFeatureVerification;
+  snapshot?: StudioFeatureSnapshot;
+}
+
+interface StudioAgentDefinition {
+  projectDir: string;
+  metadataPath: string;
 }
 
 interface AgentStudioProject {
-  schemaVersion: 2;
+  schemaVersion: 3;
   name: string;
   goal: string;
   targetAgent: string;
+  agent?: StudioAgentDefinition;
   features: StudioFeatureEntry[];
   testRuntime: {
     status: TestRuntimeStatus;
@@ -383,20 +409,28 @@ export function advanceFeatureStatuses(
   passed: boolean | null,
   runId: string,
   timestamp: string,
+  featureRevisions: Record<string, string> = {},
 ): StudioFeatureEntry[] {
   return features.map((feature) => {
     const summaryEntry = reloadSummary.find((item) => item.featureName === feature.name);
     let status = feature.status;
     let verification = feature.verification;
+    let snapshot = feature.snapshot;
     if (summaryEntry && (summaryEntry.action === 'reloaded' || summaryEntry.action === 'ensure-mounted')) {
       status = 'mounted';
       verification = undefined;
+      snapshot = undefined;
     }
     if (passed === true && isCovered(coverage[feature.name])) {
-      status = 'verified';
-      verification = { lastVerifiedRunId: runId, verifiedAt: timestamp, coverage: coverage[feature.name] };
+      status = snapshot ? 'snapshotted' : 'verified';
+      verification = {
+        lastVerifiedRunId: runId,
+        verifiedAt: timestamp,
+        coverage: coverage[feature.name],
+        ...(featureRevisions[feature.name] ? { sourceDigest: featureRevisions[feature.name] } : {}),
+      };
     }
-    return verification ? { ...feature, status, verification } : { name: feature.name, modulePath: feature.modulePath, status };
+    return verification ? { ...feature, status, verification, ...(snapshot ? { snapshot } : {}) } : { ...feature, status, verification: undefined, ...(snapshot ? { snapshot } : {}) };
   });
 }
 
@@ -437,6 +471,8 @@ interface RuntimeHandle {
   child: ChildProcess;
   pending: Map<string, RuntimePendingRequest>;
   fingerprints: Map<string, string>;
+  mode: 'feature-harness' | 'agent-debug';
+  agentFingerprint: string | null;
   model: string | null;
   viewerAgentId: string | null;
 }
@@ -444,20 +480,41 @@ interface RuntimeHandle {
 const runtimeHandles = new Map<string, RuntimeHandle>();
 let runtimeScriptPath: string | null = null;
 
-function findRuntimeScriptPath(): string {
-  if (runtimeScriptPath) return runtimeScriptPath;
+function findProjectScript(relativePath: string): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 8; depth += 1) {
-    const candidate = join(dir, 'scripts', 'run-studio-runtime.js');
-    if (existsSync(candidate)) {
-      runtimeScriptPath = candidate;
-      return candidate;
-    }
+    const candidate = join(dir, relativePath);
+    if (existsSync(candidate)) return candidate;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  throw new Error('找不到 scripts/run-studio-runtime.js；请确认在 AgentDevClaw 仓库环境中运行。');
+  throw new Error(`找不到 ${relativePath}；请确认在 AgentDevClaw 仓库环境中运行。`);
+}
+
+function findRuntimeScriptPath(): string {
+  if (runtimeScriptPath) return runtimeScriptPath;
+  runtimeScriptPath = findProjectScript(join('scripts', 'run-studio-runtime.js'));
+  return runtimeScriptPath;
+}
+
+function findCreateFeatureCliPath(): string {
+  const clawRoot = dirname(dirname(findRuntimeScriptPath()));
+  const candidate = join(dirname(clawRoot), 'AgentDev', 'dist', 'create-feature-cli.js');
+  if (!existsSync(candidate)) throw new Error(`找不到 AgentDev Feature 脚手架：${candidate}`);
+  return candidate;
+}
+
+function findPrepareRuntimeScriptPath(): string {
+  return findProjectScript(join('scripts', 'prepare-agent-runtime.js'));
+}
+
+function getRuntimePlanPath(projectDir: string): string {
+  return join(projectDir, RUNS_DIR_NAME, 'runtime-plan.json');
+}
+
+function getRuntimeOverridesPath(projectDir: string): string {
+  return join(projectDir, RUNS_DIR_NAME, 'source-overrides.json');
 }
 
 function getRuntimeHandle(projectDir: string): RuntimeHandle | null {
@@ -477,11 +534,159 @@ function failPendingRequests(handle: RuntimeHandle, error: Error): void {
 
 async function fingerprintModule(modulePath: string): Promise<string> {
   try {
-    const stat = await fs.stat(modulePath);
-    return `${stat.size}-${Math.trunc(stat.mtimeMs)}`;
+    const content = await fs.readFile(modulePath);
+    return `sha256:${crypto.createHash('sha256').update(content).digest('hex')}`;
   } catch {
     return 'missing';
   }
+}
+
+async function fingerprintAgentDefinition(project: AgentStudioProject): Promise<string> {
+  if (!project.agent) return 'none';
+  const hash = crypto.createHash('sha256');
+  for (const filePath of [project.agent.metadataPath, join(project.agent.projectDir, 'agent.js')]) {
+    hash.update(filePath);
+    hash.update('\\0');
+    try { hash.update(await fs.readFile(filePath)); } catch { hash.update('missing'); }
+    hash.update('\\0');
+  }
+  return `sha256:${hash.digest('hex')}`;
+}
+
+async function fingerprintFeatureSource(feature: StudioFeatureEntry): Promise<string> {
+  if (!feature.source) return fingerprintModule(feature.modulePath);
+  const root = feature.source.projectDir;
+  const ignored = new Set(['node_modules', 'dist', '.agent-studio']);
+  const files: string[] = [];
+  const visit = async (dir: string): Promise<void> => {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!ignored.has(entry.name)) await visit(join(dir, entry.name));
+      } else if (entry.isFile() && !entry.name.endsWith('.tgz')) {
+        files.push(join(dir, entry.name));
+      }
+    }
+  };
+  try {
+    await visit(root);
+    const hash = crypto.createHash('sha256');
+    for (const filePath of files.sort()) {
+      hash.update(relative(root, filePath).replace(/\\/g, '/'));
+      hash.update('\0');
+      hash.update(await fs.readFile(filePath));
+      hash.update('\0');
+    }
+    return `sha256:${hash.digest('hex')}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+async function runProjectCommand(projectDir: string, command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((promiseResolve, promiseReject) => {
+    // Node on this Windows runtime cannot spawn npm.cmd with shell:false. The
+    // only npm operations Studio issues are fixed lifecycle commands; reject
+    // every other token sequence before using cmd.exe as a compatibility shim.
+    const isNpm = command === 'npm';
+    const allowedNpmArgs = args.join(' ') === 'run build' || args.join(' ') === 'install --no-fund --no-audit';
+    if (isNpm && !allowedNpmArgs) {
+      promiseReject(new Error(`Studio 不允许执行未声明的 npm 命令：npm ${args.join(' ')}`));
+      return;
+    }
+    const executable = process.platform === 'win32' && isNpm ? (process.env.ComSpec || 'cmd.exe') : command;
+    const executableArgs = process.platform === 'win32' && isNpm
+      ? ['/d', '/s', '/c', `npm.cmd ${args.join(' ')}`]
+      : args;
+    const child = spawn(executable, executableArgs, { cwd: projectDir, shell: false, windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    child.on('error', promiseReject);
+    child.on('exit', (code) => {
+      if (code === 0) promiseResolve({ stdout, stderr });
+      else promiseReject(new Error(stderr.trim() || stdout.trim() || `${command} exited with code ${code}`));
+    });
+  });
+}
+
+async function runFeatureBuild(feature: StudioFeatureEntry): Promise<void> {
+  if (!feature.source) return;
+  const [command, ...args] = feature.source.buildCommand;
+  if (command !== 'npm' || args.join(' ') !== 'run build') {
+    throw new Error(`标准 Feature 项目仅支持 buildCommand=["npm","run","build"]：${feature.name}`);
+  }
+  await runProjectCommand(feature.source.projectDir, command, args);
+}
+
+async function readFeatureProjectEntry(projectDir: string, studioProjectDir: string): Promise<StudioFeatureEntry> {
+  const packageJson = JSON.parse(await fs.readFile(join(projectDir, 'package.json'), 'utf8')) as Record<string, unknown>;
+  const packageName = cleanValue(packageJson.name);
+  const main = cleanValue(packageJson.main) || 'dist/index.js';
+  if (!packageName) throw new Error(`Feature 项目缺少 package.json name：${projectDir}`);
+  const entryPath = resolve(projectDir, main);
+  const name = packageName.replace(/^@[^/]+\//, '');
+  return {
+    name,
+    modulePath: entryPath,
+    package: packageName,
+    source: {
+      kind: 'project',
+      projectDir,
+      entry: entryPath,
+      buildCommand: ['npm', 'run', 'build'],
+    },
+    status: 'implemented',
+  };
+}
+
+async function runSnapshotScript(projectDir: string): Promise<StudioFeatureSnapshot> {
+  const scriptPath = findProjectScript(join('scripts', 'package-feature-project.js'));
+  const { stdout } = await runProjectCommand(dirname(scriptPath), process.execPath, [scriptPath, '--project-dir', projectDir]);
+  const line = stdout.trim().split(/\r?\n/).find((item) => item.startsWith('{')) || '';
+  const result = JSON.parse(line) as { ok?: boolean; snapshot?: StudioFeatureSnapshot; error?: string };
+  if (!result.ok || !result.snapshot) throw new Error(result.error || '创建本地 Snapshot 失败。');
+  return result.snapshot;
+}
+
+async function prepareAgentDebugPlan(projectDir: string, project: AgentStudioProject): Promise<string> {
+  if (!project.agent) throw new Error('当前项目没有注册真实 Agent。请先调用 studio_register_agent，或以 feature-harness 模式启动。');
+  const agentRoot = resolve(projectDir, project.agent.projectDir);
+  const metadataPath = resolve(projectDir, project.agent.metadataPath);
+  if (!existsSync(metadataPath)) throw new Error(`Agent metadata 不存在：${metadataPath}`);
+  const overrides = project.features.map((feature) => {
+    if (!feature.package || !feature.source) {
+      throw new Error(`Agent Debug 只支持标准 Feature 项目；${feature.name} 仍是 legacy 模块。`);
+    }
+    return {
+      package: feature.package,
+      runtimeName: feature.name,
+      ...(feature.export ? { export: feature.export } : {}),
+      source: {
+        kind: 'project',
+        projectDir: feature.source.projectDir,
+        entry: feature.source.entry,
+      },
+    };
+  });
+  const overridesPath = getRuntimeOverridesPath(projectDir);
+  const planPath = getRuntimePlanPath(projectDir);
+  await fs.mkdir(dirname(planPath), { recursive: true });
+  await fs.writeFile(overridesPath, `${JSON.stringify(overrides, null, 2)}\n`, 'utf8');
+  const scriptPath = findPrepareRuntimeScriptPath();
+  const { stdout } = await runProjectCommand(dirname(scriptPath), process.execPath, [
+    scriptPath,
+    '--agent-root', agentRoot,
+    '--metadata', metadataPath,
+    '--output', planPath,
+    '--mode', 'debug',
+    '--source-overrides', overridesPath,
+  ]);
+  const line = stdout.trim().split(/\r?\n/).find((item) => item.startsWith('{')) || '';
+  const result = JSON.parse(line) as { ok?: boolean; error?: string };
+  if (!result.ok) throw new Error(result.error || 'Agent Debug 运行计划准备失败。');
+  return planPath;
 }
 
 function runtimeRequest(
@@ -519,15 +724,19 @@ function runtimeRequest(
 async function startRuntimeProcess(
   projectDir: string,
   modelPreset: string,
+  mode: 'feature-harness' | 'agent-debug' = 'feature-harness',
+  runtimePlanPath = '',
 ): Promise<{ ready: StudioReadyPayload; handle: RuntimeHandle }> {
   const scriptPath = findRuntimeScriptPath();
   const viewerPort = Number(process.env.AGENTDEV_VIEWER_PORT || 2026);
-  const child = spawn(process.execPath, [scriptPath, projectDir], {
+  const childArgs = [scriptPath, projectDir, '--mode', mode];
+  if (runtimePlanPath) childArgs.push('--plan', runtimePlanPath);
+  const child = spawn(process.execPath, childArgs, {
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     cwd: projectDir,
     env: { ...process.env, STUDIO_MODEL_PRESET: modelPreset, STUDIO_VIEWER_PORT: String(viewerPort) },
   });
-  const handle: RuntimeHandle = { child, pending: new Map(), fingerprints: new Map(), model: null, viewerAgentId: null };
+  const handle: RuntimeHandle = { child, pending: new Map(), fingerprints: new Map(), mode, agentFingerprint: null, model: null, viewerAgentId: null };
   runtimeHandles.set(projectDir, handle);
 
   // 子进程接入 DebugHub 后日志走结构化流；这里只保留环形缓冲，
@@ -636,6 +845,7 @@ async function syncFeaturesToRuntime(
   const reload: Array<{ name: string; modulePath: string }> = [];
   const unchanged: string[] = [];
   for (const feature of project.features) {
+    await runFeatureBuild(feature);
     const currentFingerprint = await fingerprintModule(feature.modulePath);
     if (!mountedFeatures.has(feature.name)) {
       ensure.push({ name: feature.name, modulePath: feature.modulePath });
@@ -694,7 +904,7 @@ function cleanValue(value: unknown): string {
 }
 
 function normalizeFeatureStatus(value: unknown): StudioFeatureStatus {
-  return value === 'mounted' || value === 'verified' ? value : 'implemented';
+  return value === 'mounted' || value === 'verified' || value === 'snapshotted' ? value : 'implemented';
 }
 
 function normalizeVerification(raw: unknown): StudioFeatureVerification | undefined {
@@ -711,6 +921,7 @@ function normalizeVerification(raw: unknown): StudioFeatureVerification | undefi
       hooks: list(coverage.hooks),
       deniedTools: list(coverage.deniedTools),
     },
+    ...(cleanValue(record.sourceDigest) ? { sourceDigest: cleanValue(record.sourceDigest) } : {}),
   };
 }
 
@@ -719,8 +930,29 @@ function normalizeFeatureEntry(raw: Partial<StudioFeatureEntry>): StudioFeatureE
   const modulePath = cleanValue(raw.modulePath);
   if (!name || !modulePath) return null;
   const entry: StudioFeatureEntry = { name, modulePath, status: normalizeFeatureStatus(raw.status) };
+  const packageName = cleanValue(raw.package);
+  if (packageName) entry.package = packageName;
+  const exportName = cleanValue(raw.export);
+  if (exportName) entry.export = exportName;
+  const rawSource = raw.source as unknown as Record<string, unknown> | undefined;
+  if (rawSource?.kind === 'project') {
+    const projectDir = cleanValue(rawSource.projectDir);
+    const sourceEntry = cleanValue(rawSource.entry);
+    const buildCommand = Array.isArray(rawSource.buildCommand) ? rawSource.buildCommand.map(String).filter(Boolean) : [];
+    if (projectDir && sourceEntry && buildCommand.length > 0) {
+      entry.source = { kind: 'project', projectDir, entry: sourceEntry, buildCommand };
+    }
+  }
   const verification = normalizeVerification(raw.verification);
   if (verification && verification.lastVerifiedRunId) entry.verification = verification;
+  const rawSnapshot = raw.snapshot as unknown as Record<string, unknown> | undefined;
+  if (rawSnapshot) {
+    const version = cleanValue(rawSnapshot.version);
+    const archivePath = cleanValue(rawSnapshot.archivePath);
+    const archiveDigest = cleanValue(rawSnapshot.archiveDigest);
+    const createdAt = cleanValue(rawSnapshot.createdAt);
+    if (version && archivePath && archiveDigest && createdAt) entry.snapshot = { version, archivePath, archiveDigest, createdAt };
+  }
   return entry;
 }
 
@@ -828,11 +1060,18 @@ function normalizeProject(raw: Partial<AgentStudioProject>): AgentStudioProject 
   const features = Array.isArray(raw.features)
     ? raw.features.map((item) => normalizeFeatureEntry(item || {})).filter(Boolean) as StudioFeatureEntry[]
     : [];
+  const rawAgent = raw.agent as unknown as Record<string, unknown> | undefined;
+  const agentProjectDir = cleanValue(rawAgent?.projectDir);
+  const agentMetadataPath = cleanValue(rawAgent?.metadataPath);
+  const agent = agentProjectDir && agentMetadataPath
+    ? { projectDir: agentProjectDir, metadataPath: agentMetadataPath }
+    : undefined;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     name,
     goal: cleanValue(raw.goal),
     targetAgent: cleanValue(raw.targetAgent),
+    ...(agent ? { agent } : {}),
     features,
     testRuntime: {
       status: normalizeTestRuntimeStatus(raw.testRuntime?.status),
@@ -1142,31 +1381,64 @@ export class AgentStudioFeature implements AgentFeature {
         },
       }),
       createTool({
-        name: 'studio_add_feature',
-        description: '注册一个开发中的 Feature：给出 feature 名与 ESM 模块文件路径。模块需导出 feature 类且 name 属性与注册名一致。装配顺序按 static inject 自动拓扑排序，注册顺序无关。先写好模块文件再调用。',
+        name: 'studio_create_feature',
+        description: '在当前 Studio 项目下创建、安装并注册一个标准 AgentDev Feature npm 项目。传入小写 kebab-case 名称；之后直接编辑 src 并运行测试。',
         parameters: {
           type: 'object',
           properties: {
-            name: { type: 'string', description: 'feature 名（与模块内实例的 name 属性一致）。' },
-            modulePath: { type: 'string', description: 'feature 模块文件的绝对路径或相对项目目录的路径（ESM JS，如 features/demo/index.mjs）。' },
+            name: { type: 'string', description: 'Feature 名称，仅允许小写字母、数字和连字符，例如 ticket-feature。' },
+            parentDir: { type: 'string', description: '父目录，相对 Studio 项目根目录；默认 features。' },
           },
-          required: ['name', 'modulePath'],
+          required: ['name'],
         },
         execute: async (args: Record<string, unknown>) => {
           const { projectDir, project } = await this.requireProject();
           const name = cleanValue(args.name);
-          const rawModulePath = cleanValue(args.modulePath);
-          if (!name || !rawModulePath) throw new Error('name 和 modulePath 均不能为空。');
-          const modulePath = resolve(projectDir, rawModulePath);
-          if (!existsSync(modulePath)) {
-            throw new Error(`模块文件不存在：${modulePath}。请先创建模块文件再注册。`);
+          if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) {
+            throw new Error('Feature 名称仅允许小写字母、数字和连字符，且必须以字母开头。');
+          }
+          const parentDir = resolve(projectDir, cleanValue(args.parentDir) || 'features');
+          const cliPath = findCreateFeatureCliPath();
+          await fs.mkdir(parentDir, { recursive: true });
+          await runProjectCommand(parentDir, process.execPath, [cliPath, name]);
+          const featureProjectDir = join(parentDir, name);
+          await runProjectCommand(featureProjectDir, 'npm', ['install', '--no-fund', '--no-audit']);
+          const entry = await readFeatureProjectEntry(featureProjectDir, projectDir);
+          const timestamp = new Date().toISOString();
+          const features = [...project.features.filter((item) => item.name !== entry.name), entry];
+          await this.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
+          return { projectDir, featureProjectDir, feature: entry, featureCount: features.length };
+        },
+      }),
+      createTool({
+        name: 'studio_add_feature',
+        description: '注册一个开发中的 Feature。推荐传 projectDir（标准 npm Feature 项目）；legacy 模块可继续传 name + modulePath。',
+        parameters: {
+          type: 'object',
+          properties: {
+            projectDir: { type: 'string', description: '标准 Feature npm 项目目录；自动读取 package.json 和 dist 入口。' },
+            name: { type: 'string', description: 'legacy 模块的 feature 名（与实例 name 属性一致）。' },
+            modulePath: { type: 'string', description: 'legacy ESM 模块路径。' },
+          },
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const { projectDir, project } = await this.requireProject();
+          const sourceProjectDir = cleanValue(args.projectDir);
+          let entry: StudioFeatureEntry;
+          if (sourceProjectDir) {
+            entry = await readFeatureProjectEntry(resolve(projectDir, sourceProjectDir), projectDir);
+          } else {
+            const name = cleanValue(args.name);
+            const rawModulePath = cleanValue(args.modulePath);
+            if (!name || !rawModulePath) throw new Error('请传 projectDir，或同时传 name 和 modulePath。');
+            const modulePath = resolve(projectDir, rawModulePath);
+            if (!existsSync(modulePath)) throw new Error(`模块文件不存在：${modulePath}。请先创建模块文件再注册。`);
+            entry = { name, modulePath, status: 'implemented' };
           }
           const timestamp = new Date().toISOString();
-          const entry: StudioFeatureEntry = { name, modulePath, status: 'implemented' };
-          const rest = project.features.filter((item) => item.name !== name);
+          const rest = project.features.filter((item) => item.name !== entry.name);
           const features = [...rest, entry];
-          const nextProject = { ...project, features, updatedAt: timestamp };
-          await this.writeProject(projectDir, nextProject);
+          await this.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
           return { projectDir, feature: entry, featureCount: features.length };
         },
       }),
@@ -1207,12 +1479,44 @@ export class AgentStudioFeature implements AgentFeature {
         },
       }),
       createTool({
+        name: 'studio_register_agent',
+        description: '登记当前 Studio 项目要在真实装配条件下调试的 Agent。Agent metadata 负责声明精确 Feature 包版本；Studio 的开发中标准 Feature 会以源码覆盖这些声明。',
+        parameters: {
+          type: 'object',
+          properties: {
+            agentDir: { type: 'string', description: 'Agent 项目目录，相对 Studio 项目根目录或绝对路径。' },
+            metadataPath: { type: 'string', description: 'metadata.json 路径；缺省为 <agentDir>/metadata.json。' },
+          },
+          required: ['agentDir'],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const { projectDir, project } = await this.requireProject();
+          const agentDir = resolve(projectDir, cleanValue(args.agentDir));
+          if (!existsSync(agentDir)) throw new Error(`Agent 项目目录不存在：${agentDir}`);
+          const metadataPath = cleanValue(args.metadataPath)
+            ? resolve(projectDir, cleanValue(args.metadataPath))
+            : join(agentDir, 'metadata.json');
+          if (!existsSync(metadataPath)) throw new Error(`Agent metadata 不存在：${metadataPath}`);
+          let metadata: Record<string, unknown>;
+          try { metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as Record<string, unknown>; }
+          catch { throw new Error(`Agent metadata 不是合法 JSON：${metadataPath}`); }
+          if (!cleanValue(metadata.id) || !cleanValue(metadata.entry)) {
+            throw new Error('Agent metadata 至少需要 id 与相对 entry；Feature 依赖使用 metadata.features 声明。');
+          }
+          const timestamp = new Date().toISOString();
+          const agent = { projectDir: agentDir, metadataPath };
+          await this.writeProject(projectDir, { ...project, agent, targetAgent: cleanValue(metadata.id), updatedAt: timestamp });
+          return { projectDir, agent, agentId: cleanValue(metadata.id) };
+        },
+      }),
+      createTool({
         name: 'studio_start_runtime',
-        description: '启动当前项目的 Test Runtime：独立进程加载最小被测 Agent 与全部开发中 Feature（按 static inject 拓扑排序挂载，依赖缺失/循环会直接报错）。会话目录为项目内 .agent-studio/runtime-sessions。',
+        description: '启动隔离 Test Runtime。feature-harness 使用最小 Agent；agent-debug 加载 studio_register_agent 登记的真实 Agent，并混装开发源码 Feature 与仓库 Snapshot Feature。会话目录为项目内 .agent-studio/runtime-sessions。',
         parameters: {
           type: 'object',
           properties: {
             modelPreset: { type: 'string', description: '指定模型预设名；缺省依次使用 agent-studio 配置与全局默认模型。' },
+            mode: { type: 'string', enum: ['feature-harness', 'agent-debug'], description: 'feature-harness=最小 Agent；agent-debug=真实 Agent。已注册真实 Agent 时默认 agent-debug。' },
           },
         },
         execute: async (args: Record<string, unknown>) => {
@@ -1221,17 +1525,22 @@ export class AgentStudioFeature implements AgentFeature {
           if (existingHandle) {
             return { projectDir, alreadyRunning: true, model: existingHandle.model };
           }
-          if (project.features.length === 0) {
-            throw new Error('项目尚未注册任何开发中 Feature。请先用 studio_add_feature 注册至少一个模块。');
+          const mode = cleanValue(args.mode) || (project.agent ? 'agent-debug' : 'feature-harness');
+          if (mode !== 'feature-harness' && mode !== 'agent-debug') throw new Error('mode 只能是 feature-harness 或 agent-debug。');
+          if (mode === 'feature-harness' && project.features.length === 0) {
+            throw new Error('feature-harness 至少需要注册一个开发中 Feature。');
           }
+          for (const feature of project.features) await runFeatureBuild(feature);
           const missing = project.features.filter((feature) => !existsSync(feature.modulePath));
           if (missing.length > 0) {
             throw new Error(`以下 Feature 模块文件不存在：${missing.map((feature) => `${feature.name} (${feature.modulePath})`).join('；')}`);
           }
-          const { ready, handle } = await startRuntimeProcess(projectDir, cleanValue(args.modelPreset));
+          const runtimePlanPath = mode === 'agent-debug' ? await prepareAgentDebugPlan(projectDir, project) : '';
+          const { ready, handle } = await startRuntimeProcess(projectDir, cleanValue(args.modelPreset), mode, runtimePlanPath);
           for (const feature of project.features) {
             handle.fingerprints.set(feature.name, await fingerprintModule(feature.modulePath));
           }
+          if (mode === 'agent-debug') handle.agentFingerprint = await fingerprintAgentDefinition(project);
           const timestamp = new Date().toISOString();
           const nextProject = { ...project, testRuntime: { status: 'running' as const }, updatedAt: timestamp };
           await this.writeProject(projectDir, nextProject);
@@ -1241,6 +1550,8 @@ export class AgentStudioFeature implements AgentFeature {
             sessionRestored: ready.sessionRestored === true,
             observability: ready.observability || 'local-only',
             viewerAgentId: handle.viewerAgentId,
+            mode,
+            runtimePlanPath: runtimePlanPath || null,
             features: ready.features || [],
           };
         },
@@ -1388,9 +1699,20 @@ export class AgentStudioFeature implements AgentFeature {
         },
         execute: async (args: Record<string, unknown>) => {
           const { projectDir, project } = await this.requireProject();
-          const handle = getRuntimeHandle(projectDir);
+          let handle = getRuntimeHandle(projectDir);
           if (!handle) {
             throw new Error('Test Runtime 未运行。请先调用 studio_start_runtime。');
+          }
+          if (handle.mode === 'agent-debug') {
+            const currentAgentFingerprint = await fingerprintAgentDefinition(project);
+            if (currentAgentFingerprint !== handle.agentFingerprint) {
+              await stopRuntimeProcess(projectDir);
+              const runtimePlanPath = await prepareAgentDebugPlan(projectDir, project);
+              const restarted = await startRuntimeProcess(projectDir, '', 'agent-debug', runtimePlanPath);
+              handle = restarted.handle;
+              handle.agentFingerprint = currentAgentFingerprint;
+              for (const feature of project.features) handle.fingerprints.set(feature.name, await fingerprintModule(feature.modulePath));
+            }
           }
 
           const testId = cleanValue(args.testId);
@@ -1433,7 +1755,7 @@ export class AgentStudioFeature implements AgentFeature {
           const failedReload = reloadSummary.filter((item) => !item.ok);
           const featureRevisions: Record<string, string> = {};
           for (const feature of project.features) {
-            featureRevisions[feature.name] = handle.fingerprints.get(feature.name) || 'unknown';
+            featureRevisions[feature.name] = await fingerprintFeatureSource(feature);
           }
           const sessionBase = {
             policy: sessionPolicy,
@@ -1533,7 +1855,7 @@ export class AgentStudioFeature implements AgentFeature {
 
           // 4) Feature 状态推进：按 reloadSummary 与覆盖证据独立推进每个 Feature
           const timestamp = new Date().toISOString();
-          const features = advanceFeatureStatuses(project.features, reloadSummary, featureCoverage, passed, runId, timestamp);
+          const features = advanceFeatureStatuses(project.features, reloadSummary, featureCoverage, passed, runId, timestamp, featureRevisions);
           await this.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
 
           const deniedTools = [...new Set(toolCalls.filter((entry) => entry.denied).map((entry) => entry.tool))];
@@ -1548,6 +1870,39 @@ export class AgentStudioFeature implements AgentFeature {
             featureStatuses: features.map((feature) => ({ name: feature.name, status: feature.status })),
             ...(guidance ? { guidance } : {}),
           };
+        },
+      }),
+      createTool({
+        name: 'studio_create_snapshot',
+        description: '为已验证且未变化的标准 Feature 项目创建不可变本地 tgz Snapshot，并写入用户 Feature 仓库。不会发布到外部系统，也不会修改 Claw 根依赖。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '要创建快照的 Studio Feature 名。' },
+          },
+          required: ['name'],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const { projectDir, project } = await this.requireProject();
+          const name = cleanValue(args.name);
+          const feature = project.features.find((item) => item.name === name);
+          if (!feature) throw new Error(`Feature ${name} 不在项目注册表中。`);
+          if (!feature.source) throw new Error(`Feature ${name} 是 legacy 模块；请先升级为标准 npm Feature 项目后再创建 Snapshot。`);
+          if (feature.status !== 'verified' || !feature.verification?.sourceDigest) {
+            throw new Error(`Feature ${name} 尚未通过当前源码的验证。请先运行带可执行断言且覆盖该 Feature 的 studio_run_test。`);
+          }
+          await runFeatureBuild(feature);
+          const currentDigest = await fingerprintFeatureSource(feature);
+          if (currentDigest !== feature.verification.sourceDigest) {
+            throw new Error(`Feature ${name} 的构建产物已变化，之前验证已失效。请重新运行测试后再创建 Snapshot。`);
+          }
+          const snapshot = await runSnapshotScript(feature.source.projectDir);
+          const timestamp = new Date().toISOString();
+          const features = project.features.map((item) => item.name === name
+            ? { ...item, status: 'snapshotted' as const, snapshot }
+            : item);
+          await this.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
+          return { projectDir, feature: name, snapshot };
         },
       }),
       createTool({
