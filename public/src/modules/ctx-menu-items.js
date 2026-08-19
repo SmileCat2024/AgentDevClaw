@@ -345,6 +345,10 @@ async function ctxArchiveAndStopRuntime(target) {
     finishSidebarOperation(archiveOperation.operationId, 'settled', {
       serverRevision: result?.revision ?? null,
     });
+    const targetSessionId = String(result?.targetSessionId || '').trim();
+    if (targetSessionId) {
+      await navigateToSessionMutationTarget(agentId, result, runtimeId);
+    }
   } catch (e) {
     // Revert optimistic archive on failure, then alert
     if (agent) {
@@ -379,8 +383,10 @@ async function ctxArchiveAndStopRuntime(target) {
       const sId = sessionId || externalAgent?.active_workspace_session_id || null;
       await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
     }
-    // 3. Switch to workspace surface so user sees the updated session list
-    if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
+    // The archive response has already switched to the replacement session when
+    // available. Only fall back to the workspace surface when no replacement
+    // exists (for example, the project has no remaining active conversations).
+    if (!result?.targetSessionId && affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       selectWorkspaceSurface(agentId);
     }
     refreshSidebarRuntimeAfterMutation(500).catch(e => console.warn(e));
@@ -549,6 +555,7 @@ async function ctxArchiveSession(target) {
 
   const agent = allAgents.find((item) => item.id === agentId) || null;
   const session = getWorkspaceSessionById(agent, sessionId);
+  const sourceRuntimeId = currentRuntimeAgentId;
   const nextArchived = !(session?.archived === true);
   const archiveOperation = beginSidebarOperation({
     type: nextArchived ? 'archive' : 'unarchive',
@@ -595,6 +602,10 @@ async function ctxArchiveSession(target) {
         workspace_sessions: result.sessions,
         active_workspace_session_id: result.activeSessionId || null,
       });
+    }
+    const targetSessionId = String(result?.targetSessionId || '').trim();
+    if (targetSessionId) {
+      await navigateToSessionMutationTarget(agentId, result, sourceRuntimeId);
     }
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();

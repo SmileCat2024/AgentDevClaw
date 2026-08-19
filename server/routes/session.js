@@ -686,6 +686,8 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
         remove: [],
       },
       status,
+      targetSessionId: session.id,
+      targetStatus: status,
       agent: null,
     });
     trace.mark('response_sent');
@@ -1435,6 +1437,8 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
         remove: [],
       },
       status,
+      targetSessionId: session.id,
+      targetStatus: status,
       agent: null,
     });
     trace.mark('response_sent');
@@ -1478,10 +1482,23 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
       await stopManagedAgent(agent.id, req.body.sessionId);
     }
 
+    const targetSessionId = deleted.wasActiveSession ? (deleted.activeSessionId || null) : null;
+    let targetStatus = null;
+    let targetStartupError = null;
+    if (targetSessionId) {
+      try {
+        targetStatus = await startManagedAgent(agent, targetSessionId);
+      } catch (error) {
+        targetStartupError = String(error?.message || error);
+      }
+    }
     res.json({
       deleted,
       agent: connected,
       assemblyRuntime,
+      targetSessionId,
+      targetStatus,
+      targetStartupError,
       operationId: trace.operationId,
     });
     trace.mark('response_sent');
@@ -1510,7 +1527,19 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
       includeSessions: req.body.responseMode !== 'delta',
     });
     trace.mark('index_committed', { revision: result.revision });
-    res.json({ ...result, operationId: trace.operationId });
+    const targetSessionId = archived && result.activeSessionId !== req.body.sessionId
+      ? result.activeSessionId
+      : null;
+    let targetStatus = null;
+    let targetStartupError = null;
+    if (targetSessionId) {
+      try {
+        targetStatus = await startManagedAgent(agent, targetSessionId);
+      } catch (error) {
+        targetStartupError = String(error?.message || error);
+      }
+    }
+    res.json({ ...result, targetSessionId, targetStatus, targetStartupError, operationId: trace.operationId });
     trace.mark('response_sent');
 
     // 归档状态变化通知关联群聊；线程投影仍以 session index 的实时状态为准。

@@ -52,7 +52,7 @@ describe('archive-and-replace contract', () => {
     assert.match(compactClient, /beginSidebarOperationMainThreadObservation\(operationId\)/);
   });
 
-  it('uses delta responses for delete/archive mutations while preserving legacy full responses', () => {
+  it('uses delta responses and starts the replacement runtime for active delete/archive mutations', () => {
     const deleteStart = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/delete'");
     const archiveStart = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/archive'", deleteStart);
     const todoStart = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/todo'", archiveStart);
@@ -60,8 +60,19 @@ describe('archive-and-replace contract', () => {
     const archiveRoute = sessionRoutes.slice(archiveStart, todoStart);
     assert.match(deleteRoute, /includeSessions:\s*req\.body\.responseMode !== 'delta'/);
     assert.match(archiveRoute, /includeSessions:\s*req\.body\.responseMode !== 'delta'/);
+    assert.match(deleteRoute, /deleted\.wasActiveSession/);
+    assert.match(deleteRoute, /await startManagedAgent\(agent, targetSessionId\)/);
+    assert.match(archiveRoute, /archived && result\.activeSessionId !== req\.body\.sessionId/);
+    assert.match(archiveRoute, /await startManagedAgent\(agent, targetSessionId\)/);
     assert.match(deleteRoute, /operationId:\s*trace\.operationId/);
     assert.match(archiveRoute, /operationId:\s*trace\.operationId/);
+  });
+
+  it('continues active-session mutations into the exact replacement runtime', () => {
+    assert.match(sessionMutation, /async function navigateToSessionMutationTarget/);
+    assert.match(sessionMutation, /waitForTargetRuntimeSession\(agentId, targetSessionId, 50/);
+    assert.match(sessionMutation, /await requestSwitch\(targetRuntimeId, 'session-mutation-target'\)/);
+    assert.match(workspaceActions, /void navigateToSessionMutationTarget\(activeAgent\.id/);
   });
 
   it('waits for the exact target runtime without a blocking full-list refresh', () => {

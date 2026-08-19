@@ -313,9 +313,9 @@ deleteSessionAction.addEventListener('click', async () => {
       serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
     });
 
-    const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
-    if (nextRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-      await requestSwitch(nextRuntimeId, 'stop-handler');
+    const targetSessionId = String(result?.targetSessionId || '').trim();
+    if (targetSessionId) {
+      await navigateToSessionMutationTarget(pendingAgentId, result, affectedRuntimeId);
     } else if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
       const fallbackAgent = applyManagedPrebuiltAgent(pendingAgentId, null, { uiOnlyWhenStopped: true });
       setPreferredUnitMode('home', fallbackAgent || targetAgent || { id: pendingAgentId, source: 'prebuilt' });

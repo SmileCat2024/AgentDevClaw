@@ -1049,6 +1049,29 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
   return summarizePrebuiltSession(agentId, existing);
 }
 
+function getSessionRecencyValue(session) {
+  return String(session?.updatedAt || session?.createdAt || '');
+}
+
+function selectFallbackSession(agentId, sessions, sourceSession) {
+  const candidates = sessions.filter((session) => (
+    session?.archived !== true
+    && session?.sessionType !== 'exploration'
+    && session?.sessionType !== 'sub'
+  ));
+  if (sanitizeSessionFragment(agentId) === 'programming-helper') {
+    const sourceDirectory = String(sourceSession?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
+    if (!sourceDirectory) return null;
+    candidates.splice(0, candidates.length, ...candidates.filter((session) => (
+      String(session?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase() === sourceDirectory
+    )));
+  }
+  return candidates.sort((left, right) => (
+    getSessionRecencyValue(right).localeCompare(getSessionRecencyValue(left))
+    || String(right?.id || '').localeCompare(String(left?.id || ''))
+  ))[0] || null;
+}
+
 async function deletePrebuiltSession(agentId, sessionId, options = {}) {
   const newIndex = await updateSessionIndex(agentId, (index) => {
     const existing = index.sessions.find((session) => session.id === sessionId);
@@ -1058,11 +1081,12 @@ async function deletePrebuiltSession(agentId, sessionId, options = {}) {
       throw error;
     }
 
+    const wasActiveSession = index.activeSessionId === sessionId;
     const remainingSessions = index.sessions.filter((session) => session.id !== sessionId);
-    const nextActiveSessionId = index.activeSessionId === sessionId
-      ? (remainingSessions[0]?.id ?? null)
+    const nextActiveSessionId = wasActiveSession
+      ? (selectFallbackSession(agentId, remainingSessions, existing)?.id ?? null)
       : index.activeSessionId;
-    return { activeSessionId: nextActiveSessionId, sessions: remainingSessions };
+    return { activeSessionId: nextActiveSessionId, sessions: remainingSessions, wasActiveSession };
   });
 
   await fs.rm(getPrebuiltSessionFilePath(agentId, sessionId), { force: true }).catch(e => console.warn(e));
@@ -1073,6 +1097,7 @@ async function deletePrebuiltSession(agentId, sessionId, options = {}) {
   const result = {
     protocolVersion: 2,
     deletedSessionId: sessionId,
+    wasActiveSession: newIndex.wasActiveSession === true,
     activeSessionId: newIndex.activeSessionId,
     revision: Number(newIndex.revision) || 0,
     sessionDelta: {
@@ -1099,7 +1124,10 @@ async function archivePrebuiltSession(agentId, sessionId, archived, options = {}
     const sessions = index.sessions.map((session) =>
       session.id === sessionId ? { ...session, archived: !!archived, todo: archived ? false : session.todo } : session,
     );
-    return { activeSessionId: index.activeSessionId, sessions };
+    const activeSessionId = archived && index.activeSessionId === sessionId
+      ? (selectFallbackSession(agentId, sessions, existing)?.id ?? null)
+      : index.activeSessionId;
+    return { activeSessionId, sessions };
   });
 
   const updatedSession = newIndex.sessions.find((session) => session.id === sessionId) || null;

@@ -88,6 +88,28 @@ function requestArchivedSourceRuntimeCleanup(agentId, sessionId, sourceRuntimeId
   });
 }
 
+async function navigateToSessionMutationTarget(agentId, result, sourceRuntimeId) {
+  const targetSessionId = String(result?.targetSessionId || '').trim();
+  if (!agentId || !targetSessionId || (sourceRuntimeId && currentRuntimeAgentId !== sourceRuntimeId)) return false;
+
+  const navigationEpoch = _navigationGuardEpoch;
+  const targetAgent = await waitForTargetRuntimeSession(agentId, targetSessionId, 50, {
+    operationId: result?.operationId || '',
+  });
+  if (!targetAgent || navigationEpoch !== _navigationGuardEpoch || (sourceRuntimeId && currentRuntimeAgentId !== sourceRuntimeId)) {
+    return false;
+  }
+
+  const connectedTarget = upsertConnectedAgent(targetAgent) || targetAgent;
+  const targetRuntimeId = connectedTarget.runtime_session_id || connectedTarget.runtimeSessionId || connectedTarget.id;
+  if (!targetRuntimeId) return false;
+
+  setPreferredUnitMode('chat', connectedTarget);
+  beginChatLoadingSession();
+  await requestSwitch(targetRuntimeId, 'session-mutation-target');
+  return true;
+}
+
 function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
   if (!agentId || !sessionId) return;
 

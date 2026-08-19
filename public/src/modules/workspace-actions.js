@@ -596,6 +596,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         serverRevision: result?.deleted?.revision ?? result?.revision ?? null,
       });
       if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
+      const targetSessionId = String(result?.targetSessionId || '').trim();
+      if (targetSessionId) {
+        await navigateToSessionMutationTarget(activeAgent.id, result, affectedRuntimeId);
+      }
       // Refresh IM workspace draft in background — no re-render needed if DOM already updated
       if (isIMSession) {
         ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
@@ -749,10 +753,17 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
           return;
         }
-        // The session is committed and its startup has been requested. Do not
-        // hold this user action open on Viewer registration; a later sidebar
-        // refresh will discover and activate the runtime when it becomes ready.
+        // The session is committed and its startup has been requested. Keep the
+        // operation settled, but continue the user-initiated navigation as soon
+        // as the exact target runtime appears instead of leaving the workspace
+        // surface selected indefinitely.
         finishSidebarOperation(sidebarOperation.operationId, 'settled');
+        if (targetSessionId && _navGuard === _navigationGuardEpoch) {
+          void navigateToSessionMutationTarget(activeAgent.id, {
+            targetSessionId,
+            operationId: sidebarOperation.operationId,
+          }, previousRuntimeId);
+        }
         loadAgents().catch((error) => console.error('Failed to refresh agents after starting prebuilt runtime:', error));
       };
       const targetSession = sessionAction.type === 'open_session'
