@@ -99,7 +99,7 @@ function getTodoStatusLabel(status) {
   return labels[status] || status || t('metric_unavailable');
 }
 
-function renderPlanTask(task, fromExpandedRun = false) {
+function renderPlanTask(task) {
   const status = String(task?.status || 'pending');
   const isTerminal = status === 'completed' || status === 'deleted';
   const taskId = String(task?.id || '');
@@ -109,12 +109,10 @@ function renderPlanTask(task, fromExpandedRun = false) {
     getTodoStatusLabel(status),
   ].filter(Boolean).join(' · ');
   const desc = task?.description || '';
-  // 终态任务详情默认态按来源区分：平铺可见的默认展开（可点击收起），
-  // 从折叠段展开出来的历史任务默认收起（可点击查看）。手动操作记录在
+  // 所有终态任务默认收起详情，手动操作记录在
   // _planTerminalDetailState 中覆盖默认态（有描述才可交互）。
-  const detailDefaultOpen = isTerminal ? !fromExpandedRun : true;
   const detailOpen = isTerminal
-    ? (_planTerminalDetailState.has(taskId) ? _planTerminalDetailState.get(taskId) : detailDefaultOpen)
+    ? (_planTerminalDetailState.has(taskId) ? _planTerminalDetailState.get(taskId) : false)
     : true;
   const canToggleDetail = isTerminal && desc;
   const detail = detailOpen ? desc : '';
@@ -188,9 +186,8 @@ function renderPlanTaskList(tasks) {
         const expanded = _planExpandedRuns.has(run.start);
         html.push(renderPlanFoldButton(expanded ? 0 : foldCount, run.start, expanded));
         // 折叠态只渲染段尾保留项；展开态整段平铺。按钮固定在段首，位置不随展开移动。
-        // 从展开段出来的历史任务标记 fromExpandedRun：详情默认收起
         const visibleFrom = expanded ? run.start : run.end - KEEP_VISIBLE_TERMINAL;
-        for (let j = visibleFrom; j < run.end; j++) html.push(renderPlanTask(tasks[j], expanded && j < run.end - KEEP_VISIBLE_TERMINAL));
+        for (let j = visibleFrom; j < run.end; j++) html.push(renderPlanTask(tasks[j]));
         i = run.end - 1;
         runIdx++;
         continue;
@@ -360,8 +357,7 @@ featurePanelBody.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     const runStart = Number(foldBtn.dataset.planToggleRun);
-    // 收起动作 = 段内任务统一折叠：清除该段的单条详情覆盖态，
-    // 段再次展开时全部回到默认折叠（首次加载语义）
+    // 收起动作清除该段的单条详情覆盖态，段再次展开时回到默认折叠。
     if (_planExpandedRuns.has(runStart)) {
       const tasks = Array.isArray(currentTodoPlan?.tasks) ? currentTodoPlan.tasks : [];
       const run = getTerminalRuns(tasks).find(r => r.start === runStart);

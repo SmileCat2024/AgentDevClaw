@@ -239,38 +239,31 @@ describe('frontend terminal task detail expansion', () => {
     return { id, subject: 'T' + id, description: desc, status, metadata: {}, createdAt: 0, updatedAt: 0 };
   }
 
-  it('shows description by default for visible (non-fold-run) terminal tasks', () => {
+  it('hides description by default for every terminal task', () => {
     const ctx = createTodoSandbox();
     const html = ctx.run(`renderPlanTask(${JSON.stringify(mkTask('a', 'completed', 'D-a'))})`);
 
-    // 平铺可见的终态任务：详情直接展开，可点击收起
-    assert.ok(html.includes('data-plan-task-detail="a"'));
-    assert.ok(html.includes('D-a'));
-    assert.ok(html.includes('is-open'));
-  });
-
-  it('hides description by default for tasks revealed from an expanded fold run', () => {
-    const ctx = createTodoSandbox();
-    const html = ctx.run(`renderPlanTask(${JSON.stringify(mkTask('a', 'completed', 'D-a'))}, true)`);
-
-    // 历史任务（fromExpandedRun）：首次加载折叠态
     assert.ok(html.includes('data-plan-task-detail="a"'));
     assert.ok(!html.includes('D-a'));
     assert.ok(!html.includes('is-open'));
   });
 
-  it('honors manual override state over both defaults', () => {
+  it('hides description by default for cancelled terminal tasks too', () => {
     const ctx = createTodoSandbox();
-    // 平铺任务被手动收起
-    ctx.run(`_planTerminalDetailState.set("a", false)`);
-    const flat = ctx.run(`renderPlanTask(${JSON.stringify(mkTask('a', 'completed', 'D-a'))})`);
-    assert.ok(!flat.includes('D-a'));
+    const html = ctx.run(`renderPlanTask(${JSON.stringify(mkTask('a', 'deleted', 'D-a'))})`);
 
-    // 展开段内任务被手动点开
-    ctx.run('_planTerminalDetailState.set("b", true)');
-    const fromRun = ctx.run(`renderPlanTask(${JSON.stringify(mkTask('b', 'completed', 'D-b'))}, true)`);
-    assert.ok(fromRun.includes('D-b'));
-    assert.ok(fromRun.includes('is-open'));
+    assert.ok(html.includes('data-plan-task-detail="a"'));
+    assert.ok(!html.includes('D-a'));
+    assert.ok(!html.includes('is-open'));
+  });
+
+  it('honors manual detail expansion over the default collapsed state', () => {
+    const ctx = createTodoSandbox();
+    ctx.run('_planTerminalDetailState.set("a", true)');
+    const html = ctx.run(`renderPlanTask(${JSON.stringify(mkTask('a', 'completed', 'D-a'))})`);
+
+    assert.ok(html.includes('D-a'));
+    assert.ok(html.includes('is-open'));
   });
 
   it('is not interactive for terminal tasks without description', () => {
@@ -289,7 +282,7 @@ describe('frontend terminal task detail expansion', () => {
     assert.ok(!html.includes('data-plan-task-detail'));
   });
 
-  it('renderPlanTaskList marks fold-run history as collapsed but keeps tail visible flat', () => {
+  it('keeps every terminal task detail collapsed when a fold run is expanded', () => {
     const ctx = createTodoSandbox();
     ctx.run('_planExpandedRuns.add(0)');
     const tasks = [
@@ -303,11 +296,8 @@ describe('frontend terminal task detail expansion', () => {
     ];
     const html = ctx.run(`renderPlanTaskList(${JSON.stringify(tasks)})`);
 
-    // 展开段内的历史任务（T1、T2）：折叠态
-    assert.ok(html.includes('T1'));
+    assert.ok(html.includes('T1') && html.includes('T6'));
     assert.ok(!html.includes('D1'));
-    assert.ok(!html.includes('D2'));
-    // 段尾保留任务（T3-T6）：平铺语义，详情直接显示
-    assert.ok(html.includes('D3') && html.includes('D6'));
+    assert.ok(!html.includes('D6'));
   });
 });
