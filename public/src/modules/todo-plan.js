@@ -54,6 +54,11 @@ function normalizeTodoPlan(snapshot) {
       cancelled: typeof summary.cancelled === 'number' ? summary.cancelled : tasks.filter(task => task.status === 'deleted').length,
     },
     interruptTargetId: typeof snapshot.interruptTargetId === 'string' ? snapshot.interruptTargetId : null,
+    forceContinue: snapshot.forceContinue && typeof snapshot.forceContinue === 'object' ? {
+      enabled: snapshot.forceContinue.enabled === true,
+      consecutive: typeof snapshot.forceContinue.consecutive === 'number' ? snapshot.forceContinue.consecutive : 0,
+      max: typeof snapshot.forceContinue.max === 'number' ? snapshot.forceContinue.max : 3,
+    } : null,
   };
 }
 
@@ -94,7 +99,7 @@ function getTodoStatusLabel(status) {
   return labels[status] || status || t('metric_unavailable');
 }
 
-function renderPlanTask(task) {
+function renderPlanTask(task, fromExpandedRun = false) {
   const status = String(task?.status || 'pending');
   const isTerminal = status === 'completed' || status === 'deleted';
   const taskId = String(task?.id || '');
@@ -103,7 +108,16 @@ function renderPlanTask(task) {
     '#' + escapeHtml(taskId),
     getTodoStatusLabel(status),
   ].filter(Boolean).join(' · ');
-  const detail = isTerminal ? '' : (task?.description || '');
+  const desc = task?.description || '';
+  // 终态任务详情默认态按来源区分：平铺可见的默认展开（可点击收起），
+  // 从折叠段展开出来的历史任务默认收起（可点击查看）。手动操作记录在
+  // _planTerminalDetailState 中覆盖默认态（有描述才可交互）。
+  const detailDefaultOpen = isTerminal ? !fromExpandedRun : true;
+  const detailOpen = isTerminal
+    ? (_planTerminalDetailState.has(taskId) ? _planTerminalDetailState.get(taskId) : detailDefaultOpen)
+    : true;
+  const canToggleDetail = isTerminal && desc;
+  const detail = detailOpen ? desc : '';
   const marker = status === 'in_progress'
     ? '<div class="plan-task-spinner"></div>'
     : '<div class="plan-task-dot"></div>';
@@ -111,34 +125,101 @@ function renderPlanTask(task) {
     ? '<button class="plan-task-action" data-todo-interrupt data-action="cancel" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '取消停止' : 'Cancel stop') + '</button>'
     : '<button class="plan-task-action" data-todo-interrupt data-action="set" data-task-id="' + escapeHtml(taskId) + '">' + (currentLanguage === 'zh' ? '完成后停止' : 'Stop after done') + '</button>');
   const interruptLabel = isInterruptTarget ? '<span class="plan-task-interrupt-label">' + (currentLanguage === 'zh' ? '停止点' : 'Stop point') + '</span>' : '';
+  const detailChev = canToggleDetail
+    ? '<span class="plan-task-detail-chev' + (detailOpen ? ' is-open' : '') + '" aria-hidden="true">▸</span>'
+    : '';
   return [
-    '<article class="plan-task status-' + escapeHtml(status.replace(/[^a-z0-9_-]/gi, '-')) + (isTerminal ? ' is-terminal' : '') + (isInterruptTarget ? ' is-interrupt-target' : '') + '">',
+    '<article class="plan-task status-' + escapeHtml(status.replace(/[^a-z0-9_-]/gi, '-')) + (isTerminal ? ' is-terminal' : '') + (isInterruptTarget ? ' is-interrupt-target' : '') + '"'
+    + (canToggleDetail ? ' data-plan-task-detail="' + escapeHtml(taskId) + '"' : '') + '>',
     '<div class="plan-task-marker">' + marker + '</div>',
     '<div class="plan-task-main">',
-    '<div class="plan-task-title">' + escapeHtml(task?.subject || '') + interruptLabel + '</div>',
+    '<div class="plan-task-title">' + escapeHtml(task?.subject || '') + interruptLabel + detailChev + '</div>',
     detail ? '<div class="plan-task-desc">' + escapeHtml(detail) + '</div>' : '',
-    isTerminal ? '' : '<div class="plan-task-meta">' + escapeHtml(meta) + '</div>',
+    (isTerminal && !detailOpen) ? '' : '<div class="plan-task-meta">' + escapeHtml(meta) + '</div>',
     actionBtn,
     '</div>',
     '</article>',
   ].join('');
 }
 
-// ── 头部已完成任务折叠 ──────────────────────────────────────────
-// 列表顶部连续的终态任务（已完成/已取消）过多时，默认只露出最近
-// MAX_VISIBLE_COMPLETED 个，更早的折叠为一行按钮，可手动展开。
-const MAX_VISIBLE_COMPLETED = 5;
-let planCompletedExpanded = false;
+// ── 已完成任务折叠 ──────────────────────────────────────────
+// 任意位置的连续终态任务段（已完成/已取消）默认收起为一行按钮，
+// 仅保留段尾最近 KEEP_VISIBLE_TERMINAL 个可见（刚完成的任务仍能看到）。
+// 段长不足以产生折叠量时整段平铺。
+const KEEP_VISIBLE_TERMINAL = 4;
+// 已展开段的起始索引集合 + 终态任务详情手动覆盖态（taskId -> open）；
+// 会话/运行时切换（_switchEpoch 递增）后回到默认态
+let _planExpandedRuns = new Set();
+let _planTerminalDetailState = new Map();
 let _planFoldSwitchEpoch = null;
 
-function getLeadingTerminalCount(tasks) {
-  let count = 0;
-  for (const task of tasks) {
-    const status = String(task?.status || 'pending');
-    if (status === 'completed' || status === 'deleted') count += 1;
-    else break;
+// 扫描连续终态段，返回 [{start, end}]（end exclusive）
+function getTerminalRuns(tasks) {
+  const runs = [];
+  let start = -1;
+  for (let i = 0; i < tasks.length; i++) {
+    const status = String(tasks[i]?.status || 'pending');
+    const terminal = status === 'completed' || status === 'deleted';
+    if (terminal && start < 0) start = i;
+    if (start >= 0 && (!terminal || i === tasks.length - 1)) {
+      runs.push({ start, end: terminal ? i + 1 : i });
+      start = -1;
+    }
   }
-  return count;
+  return runs;
+}
+
+function renderPlanFoldButton(foldCount, runStart, expanded) {
+  return '<button class="plan-fold' + (expanded ? ' is-open' : '') + '" data-plan-toggle-run="' + String(runStart) + '">'
+    + '<span class="plan-fold-chev" aria-hidden="true">▸</span>'
+    + '<span>' + escapeHtml(t(expanded ? 'plan_fold_collapse' : 'plan_fold_expand').replace('{n}', String(foldCount))) + '</span>'
+    + '</button>';
+}
+
+function renderPlanTaskList(tasks) {
+  const runs = getTerminalRuns(tasks);
+  const html = [];
+  let runIdx = 0;
+  for (let i = 0; i < tasks.length; i++) {
+    const run = runs[runIdx];
+    if (run && run.start === i) {
+      const foldCount = run.end - run.start - KEEP_VISIBLE_TERMINAL;
+      if (foldCount > 0) {
+        const expanded = _planExpandedRuns.has(run.start);
+        html.push(renderPlanFoldButton(expanded ? 0 : foldCount, run.start, expanded));
+        // 折叠态只渲染段尾保留项；展开态整段平铺。按钮固定在段首，位置不随展开移动。
+        // 从展开段出来的历史任务标记 fromExpandedRun：详情默认收起
+        const visibleFrom = expanded ? run.start : run.end - KEEP_VISIBLE_TERMINAL;
+        for (let j = visibleFrom; j < run.end; j++) html.push(renderPlanTask(tasks[j], expanded && j < run.end - KEEP_VISIBLE_TERMINAL));
+        i = run.end - 1;
+        runIdx++;
+        continue;
+      }
+    }
+    html.push(renderPlanTask(tasks[i]));
+    if (run && i === run.end - 1) runIdx++;
+  }
+  return html.join('');
+}
+
+// ── 任务未完自动继续开关 ─────────────────────────────────────────
+// 状态以 app-core 的会话级缓存为准（乐观更新，app-main.js 从 server snapshot 同步），
+// 开关复用 feature 面板的 .tool-toggle 组件样式。
+
+function renderPlanForceContinueToggle() {
+  const enabled = getTodoForceContinue();
+  return [
+    '<section class="plan-force-continue">',
+    '<div class="plan-force-continue-main">',
+    '<div class="plan-force-continue-label">' + escapeHtml(t('plan_force_continue')) + '</div>',
+    '<div class="plan-force-continue-help">' + escapeHtml(t(enabled ? 'plan_force_continue_on' : 'plan_force_continue_off')) + '</div>',
+    '</div>',
+    '<label class="tool-toggle" title="' + escapeHtml(t('plan_force_continue_help')) + '">',
+    '<input type="checkbox" class="tool-toggle-input" data-todo-force-continue' + (enabled ? ' checked' : '') + '>',
+    '<span class="tool-toggle-slider"></span>',
+    '</label>',
+    '</section>',
+  ].join('');
 }
 
 function renderPlanPanel() {
@@ -161,6 +242,7 @@ function renderPlanPanel() {
       stats.map(([label, value]) => '<span><strong>' + escapeHtml(String(value)) + '</strong> ' + escapeHtml(label) + '</span>').join(''),
       '</div>',
       '</section>',
+      renderPlanForceContinueToggle(),
       '<div class="plan-empty">',
       '<div class="plan-empty-title">' + escapeHtml(t('plan_empty')) + '</div>',
       '<div class="plan-empty-desc">' + escapeHtml(t('plan_empty_desc')) + '</div>',
@@ -172,26 +254,8 @@ function renderPlanPanel() {
   // 会话/运行时切换（_switchEpoch 递增）后回到默认折叠
   if (_planFoldSwitchEpoch !== _switchEpoch) {
     _planFoldSwitchEpoch = _switchEpoch;
-    planCompletedExpanded = false;
-  }
-  const headTerminalCount = getLeadingTerminalCount(tasks);
-  const foldCount = planCompletedExpanded ? 0 : Math.max(0, headTerminalCount - MAX_VISIBLE_COMPLETED);
-  const foldButton = headTerminalCount <= MAX_VISIBLE_COMPLETED ? '' : (
-    '<button class="plan-fold" data-plan-toggle-completed>'
-    + escapeHtml(t(planCompletedExpanded ? 'plan_fold_collapse' : 'plan_fold_expand').replace('{n}', String(foldCount)))
-    + '</button>'
-  );
-  // 展开态：全部头部终态任务平铺渲染（click handler 会补偿 scrollTop，视口内容
-  // 不动、上方多出可滚动空间），收起按钮放在头部块末尾，收起时无需上滚。
-  // 折叠态：只渲染最近 MAX_VISIBLE_COMPLETED 个，按钮置顶。
-  let taskListHtml;
-  if (headTerminalCount > MAX_VISIBLE_COMPLETED && planCompletedExpanded) {
-    taskListHtml = tasks.slice(0, headTerminalCount).map(task => renderPlanTask(task)).join('')
-      + foldButton
-      + tasks.slice(headTerminalCount).map(task => renderPlanTask(task)).join('');
-  } else {
-    taskListHtml = foldButton
-      + (foldCount > 0 ? tasks.slice(foldCount) : tasks).map(task => renderPlanTask(task)).join('');
+    _planExpandedRuns = new Set();
+    _planTerminalDetailState = new Map();
   }
 
   return [
@@ -201,8 +265,9 @@ function renderPlanPanel() {
     stats.map(([label, value]) => '<span><strong>' + escapeHtml(String(value)) + '</strong> ' + escapeHtml(label) + '</span>').join(''),
     '</div>',
     '</section>',
+    renderPlanForceContinueToggle(),
     '<section class="plan-task-list">',
-    taskListHtml,
+    renderPlanTaskList(tasks),
     '</section>',
     '</div>',
   ].join('');
@@ -226,25 +291,73 @@ async function sendTodoControl(taskId) {
   }
 }
 
+async function sendTodoForceContinue(enabled) {
+  if (!currentRuntimeAgentId) return;
+  const sessionId = getRuntimeWorkspaceSessionId(currentRuntimeAgentId) || undefined;
+  try {
+    await fetch('/protoclaw/todo_control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: currentAgentId, sessionId, forceContinue: enabled }),
+    });
+  } catch (e) {
+    console.error('[TodoControl] force-continue request failed:', e);
+  }
+}
+
+featurePanelBody.addEventListener('change', (e) => {
+  const toggle = e.target?.closest?.('input[data-todo-force-continue]');
+  if (!toggle) return;
+  const enabled = toggle.checked === true;
+  // 乐观更新本地缓存并重渲染；server 侧由 app-main 轮询同步兜底
+  setTodoForceContinue(enabled);
+  _lastTodoForceContinueUserActionAt = Date.now();
+  if (activeFeaturePanel === 'plan') {
+    renderFeaturePanel();
+  }
+  sendTodoForceContinue(enabled);
+});
+
 featurePanelBody.addEventListener('click', (e) => {
-  const foldBtn = e.target.closest('[data-plan-toggle-completed]');
+  const detailTarget = e.target.closest('[data-plan-task-detail]');
+  if (detailTarget) {
+    e.preventDefault();
+    e.stopPropagation();
+    const taskId = detailTarget.dataset.planTaskDetail;
+    // 切换详情开合：记录与当前渲染态相反的覆盖值
+    const article = detailTarget.closest('.plan-task');
+    const nowOpen = !article?.querySelector('.plan-task-detail-chev')?.classList.contains('is-open');
+    _planTerminalDetailState.set(taskId, nowOpen);
+    if (activeFeaturePanel === 'plan') {
+      renderFeaturePanel();
+    }
+    return;
+  }
+  const foldBtn = e.target.closest('[data-plan-toggle-run]');
   if (foldBtn) {
     e.preventDefault();
     e.stopPropagation();
-    planCompletedExpanded = !planCompletedExpanded;
-    if (activeFeaturePanel === 'plan') {
-      if (planCompletedExpanded) {
-        // 展开后更早的任务渲染在当前视口内容上方：把内容高度差补回 scrollTop，
-        // 视口内内容不动，面板整体多出可向上滚动的空间（顶部有渐隐遮罩提示）。
-        const heightBefore = featurePanelBody.scrollHeight;
-        renderFeaturePanel();
-        featurePanelBody.scrollTop += featurePanelBody.scrollHeight - heightBefore;
-      } else {
-        renderFeaturePanel();
-        // 收起后内容变短，把展开按钮滚回视口顶，阅读位置保持连续
-        const btn = featurePanelBody.querySelector('[data-plan-toggle-completed]');
-        if (btn) btn.scrollIntoView({ block: 'start' });
+    const runStart = Number(foldBtn.dataset.planToggleRun);
+    // 收起动作 = 段内任务统一折叠：清除该段的单条详情覆盖态，
+    // 段再次展开时全部回到默认折叠（首次加载语义）
+    if (_planExpandedRuns.has(runStart)) {
+      const tasks = Array.isArray(currentTodoPlan?.tasks) ? currentTodoPlan.tasks : [];
+      const run = getTerminalRuns(tasks).find(r => r.start === runStart);
+      if (run) {
+        for (let j = run.start; j < run.end; j++) {
+          const tid = String(tasks[j]?.id || '');
+          if (tid) _planTerminalDetailState.delete(tid);
+        }
       }
+      _planExpandedRuns.delete(runStart);
+    } else {
+      _planExpandedRuns.add(runStart);
+    }
+    if (activeFeaturePanel === 'plan') {
+      renderFeaturePanel();
+      // 展开态按钮固定在段首：锚定回按钮位置，阅读位置连续
+      const btn = featurePanelBody.querySelector('[data-plan-toggle-run="' + String(runStart) + '"]');
+      if (btn) btn.scrollIntoView({ block: 'start' });
     }
     return;
   }

@@ -749,5 +749,51 @@ describe('agent-lifecycle', () => {
       assert.equal(responseData.ok, false, 'should not send without sessionId');
       assert.equal(messages.length, 0);
     });
+
+    it('sends todo-force-continue IPC for forceContinue without taskId', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      const child = createMockChild();
+      const messages = [];
+      child.send = (msg) => { messages.push(msg); return true; };
+      injectRuntime('test-agent', 'session-A', child);
+
+      let responseData = null;
+      await handler(
+        { body: { agentId: 'test-agent', sessionId: 'session-A', forceContinue: true } },
+        { json: (data) => { responseData = data; } },
+        (error) => { throw error; },
+      );
+
+      assert.equal(responseData.ok, true);
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0].type, 'todo-force-continue');
+      assert.equal(messages[0].enabled, true);
+    });
+
+    it('rejects invalid forceContinue type', async () => {
+      const mod = createAgentLifecycleModule(createMockCtx());
+      const handler = captureTodoControlHandler(mod);
+
+      const child = createMockChild();
+      const messages = [];
+      child.send = (msg) => { messages.push(msg); return true; };
+      injectRuntime('test-agent', 'session-A', child);
+
+      let statusCode = null;
+      const res = {
+        status: (code) => { statusCode = code; return res; },
+        json: () => {},
+      };
+      await handler(
+        { body: { agentId: 'test-agent', sessionId: 'session-A', forceContinue: 'yes' } },
+        res,
+        (error) => { throw error; },
+      );
+
+      assert.equal(statusCode, 400);
+      assert.equal(messages.length, 0);
+    });
   });
 });

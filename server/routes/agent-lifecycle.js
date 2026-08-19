@@ -407,19 +407,33 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/todo_control', express.json(), async (req, res, next) => {
       try {
-        const { agentId, sessionId, taskId } = req.body || {};
+        const { agentId, sessionId, taskId, forceContinue } = req.body || {};
         if (!agentId) {
           return res.status(400).json({ error: 'agentId is required' });
+        }
+        if (taskId !== undefined && typeof taskId !== 'string' && taskId !== null) {
+          return res.status(400).json({ error: 'taskId must be a string or null' });
+        }
+        if (forceContinue !== undefined && typeof forceContinue !== 'boolean') {
+          return res.status(400).json({ error: 'forceContinue must be a boolean' });
         }
         // Route to exact (agentId, sessionId) only.
         // Do NOT fall back to pickPrimaryAgentRuntime — that would silently
         // deliver the interrupt to a different session (cross-session contamination).
         let sent = false;
         if (sessionId) {
-          sent = sendIPCtoSession(agentId, sessionId, {
-            type: 'todo-control',
-            taskId: taskId || null,
-          });
+          if (forceContinue !== undefined) {
+            sent = sendIPCtoSession(agentId, sessionId, {
+              type: 'todo-force-continue',
+              enabled: forceContinue,
+            });
+          }
+          if (taskId !== undefined) {
+            sent = sendIPCtoSession(agentId, sessionId, {
+              type: 'todo-control',
+              taskId: taskId || null,
+            }) || sent;
+          }
         }
         res.json({ ok: sent });
       } catch (error) {

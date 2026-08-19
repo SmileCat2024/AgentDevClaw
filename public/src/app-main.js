@@ -1018,6 +1018,14 @@ async function runPollCycle() {
             interruptSynced = true;
           }
         }
+
+        // 从 server 同步"任务未完自动继续"开关到本地缓存（同样遵循用户操作宽限期）。
+        if ((Date.now() - _lastTodoForceContinueUserActionAt) > 3000) {
+          const serverForceContinue = nextTodoPlan.forceContinue?.enabled === true;
+          if (serverForceContinue !== getTodoForceContinue()) {
+            setTodoForceContinue(serverForceContinue);
+          }
+        }
       }
 
       // All logical values are assigned before any renderer observes them.

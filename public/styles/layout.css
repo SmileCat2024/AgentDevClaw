@@ -4859,40 +4859,85 @@ body[data-theme="light"] .plan-summary {
   font-weight: 650;
 }
 
+/* 开关行：左侧标题/说明，右侧复用 feature 面板的 .tool-toggle 组件 */
+.plan-force-continue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 2px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+body[data-theme="light"] .plan-force-continue {
+  border-bottom-color: rgba(0,0,0,0.08);
+}
+
+.plan-force-continue-main {
+  min-width: 0;
+}
+
+.plan-force-continue-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.35;
+}
+
+.plan-force-continue-help {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .plan-task-list {
   position: relative;
   padding: 2px 0 4px;
 }
 
+/* 折叠按钮：无边框胶囊、中性色阶（默认低调、hover 微升一档），无彩色 */
 .plan-fold {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 100%;
-  margin: 2px 0 4px;
-  padding: 5px 8px;
-  border: 1px dashed rgba(255,255,255,0.16);
-  border-radius: 8px;
-  background: none;
-  font-size: 12px;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 2px auto 6px;
+  padding: 4px 14px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  font-size: 11.5px;
   line-height: 1.35;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  user-select: none;
+  transition: background 0.16s ease, color 0.16s ease;
 }
 
 .plan-fold:hover {
+  background: rgba(255,255,255,0.1);
   color: var(--text-primary);
-  border-color: rgba(88,166,255,0.55);
-  background: rgba(88,166,255,0.08);
+}
+
+.plan-fold-chev {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.18s ease;
+}
+
+.plan-fold.is-open .plan-fold-chev {
+  transform: rotate(90deg);
 }
 
 body[data-theme="light"] .plan-fold {
-  border-color: rgba(0,0,0,0.14);
+  background: rgba(0,0,0,0.045);
 }
 
 body[data-theme="light"] .plan-fold:hover {
-  background: rgba(88,166,255,0.10);
+  background: rgba(0,0,0,0.08);
 }
 
 .plan-task {
@@ -4963,11 +5008,11 @@ body[data-theme="light"] .plan-task-marker::after {
 }
 
 .plan-task.status-pending .plan-task-dot {
-  background: #3fb950;
+  background: var(--text-secondary);
 }
 
 .plan-task.status-completed .plan-task-dot {
-  background: #58a6ff;
+  background: #3fb950;
 }
 
 .plan-task.status-deleted .plan-task-dot {
@@ -5022,6 +5067,34 @@ body[data-theme="light"] .plan-task-marker::after {
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.2;
+}
+
+/* ── 已完成任务：点击展开详情 ── */
+
+.plan-task.is-terminal[data-plan-task-detail] {
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.plan-task.is-terminal[data-plan-task-detail]:hover {
+  margin: 0 -6px;
+  padding-left: 6px;
+  padding-right: 6px;
+  background: var(--hover-bg);
+}
+
+.plan-task-detail-chev {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  transition: transform 0.18s ease;
+}
+
+.plan-task-detail-chev.is-open {
+  transform: rotate(90deg);
 }
 
 /* ── 完成后停止：hover 高亮 + 中断目标标记 ── */

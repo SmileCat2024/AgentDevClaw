@@ -562,6 +562,22 @@ function setInterruptTargetId(taskId) {
     _interruptTargetCache.delete(key);
   }
 }
+let _todoForceContinueCache = new Map(); // key: runtimeContextKey, value: boolean
+let _lastTodoForceContinueUserActionAt = 0; // timestamp of last user click on force-continue toggle
+function getTodoForceContinue() {
+  const key = getRuntimeContextKey();
+  if (!key) return false;
+  return _todoForceContinueCache.get(key) === true;
+}
+function setTodoForceContinue(enabled) {
+  const key = getRuntimeContextKey();
+  if (!key) return;
+  if (enabled) {
+    _todoForceContinueCache.set(key, true);
+  } else {
+    _todoForceContinueCache.delete(key);
+  }
+}
 let currentLogs = [];
 let currentLogsSignature = '';
 let currentLogsTruncation = null;
@@ -1127,6 +1143,10 @@ const I18N = {
     plan_blocked: '受阻',
     plan_fold_expand: '展开 {n} 个已完成任务',
     plan_fold_collapse: '收起已完成任务',
+    plan_force_continue: '任务未完自动继续',
+    plan_force_continue_help: '会话试图结束时若有未完成任务，注入提醒并继续；"完成后停止"断点优先生效。',
+    plan_force_continue_on: '已开启：任务未完时会自动继续',
+    plan_force_continue_off: '已关闭：任务未完时自然停止',
     phase_thinking: '思考中',
     phase_content: '生成内容',
     phase_tool_calling: '工具调用',
@@ -1480,6 +1500,10 @@ const I18N = {
     plan_blocked: 'Blocked',
     plan_fold_expand: 'Show {n} completed tasks',
     plan_fold_collapse: 'Hide completed tasks',
+    plan_force_continue: 'Auto-continue until done',
+    plan_force_continue_help: 'If the session tries to end with unfinished tasks, inject a reminder and continue. "Stop after done" breakpoints take priority.',
+    plan_force_continue_on: 'On: auto-continues while tasks are unfinished',
+    plan_force_continue_off: 'Off: ends naturally when tasks are unfinished',
     phase_thinking: 'Thinking',
     phase_content: 'Streaming',
     phase_tool_calling: 'Tool Calling',

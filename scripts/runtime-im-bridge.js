@@ -296,6 +296,14 @@ export function createIMBridge(ctx) {
         } else {
           console.warn('[IPC] Todo feature not found or does not support setInterruptTarget');
         }
+      } else if (msg.type === 'todo-force-continue') {
+        // 设置/取消"任务未完强制继续"开关
+        const todoFeature = ctx.agent?.features?.get?.('todo');
+        if (todoFeature && typeof todoFeature.setForceContinue === 'function') {
+          todoFeature.setForceContinue(msg.enabled === true);
+        } else {
+          console.warn('[IPC] Todo feature not found or does not support setForceContinue');
+        }
       }
   }
 
