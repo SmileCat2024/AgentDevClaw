@@ -103,7 +103,10 @@ export function createSummaryHandlers(ctx) {
 
     const toolRegistry = typeof agent?.getTools === 'function' ? agent.getTools() : null;
     const allTools = toolRegistry?.getAll?.() || [];
-    const compactTool = allTools.find(t => t.name === 'record_compaction_context');
+    // record_compaction_context 可能已被 remove（不暴露给 LLM 主动调用）；
+    // registry.get() 不受 enabled/disabled/removed 状态影响，进程内摘要仍可编程式取用。
+    const compactTool = toolRegistry?.get?.('record_compaction_context')
+      || allTools.find(t => t.name === 'record_compaction_context');
     let tools = shouldPreserveSummaryTools(agent) ? allTools : [];
     if (compactTool && !tools.includes(compactTool)) {
       tools = [compactTool];
@@ -300,7 +303,9 @@ export function createSummaryHandlers(ctx) {
 
     const toolRegistry = typeof agent?.getTools === 'function' ? agent.getTools() : null;
     const allTools = toolRegistry?.getAll?.() || [];
-    const compactTool = allTools.find(t => t.name === 'record_compaction_context');
+    // 同上：record_compaction_context 可能处于 removed 状态，用 registry.get() 编程式获取。
+    const compactTool = toolRegistry?.get?.('record_compaction_context')
+      || allTools.find(t => t.name === 'record_compaction_context');
     let tools = shouldPreserveSummaryTools(agent) ? allTools : [];
     if (compactTool && !tools.includes(compactTool)) {
       tools = [compactTool];

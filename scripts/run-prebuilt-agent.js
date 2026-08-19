@@ -656,7 +656,19 @@ SessionLifecycle.prototype.start = async function () {
       agentId,
       sessionId: this.sessionId,
     }));
-    console.log('[ProtoClaw Runtime] 已挂载 context compaction control feature');
+    // 暂时屏蔽 compaction 控制工具：这三个工具只应通过后台流程触发，不暴露给 agent 主动调用。
+    // remove() 在工具注册前调用会进入 pendingRemoved，后续 ensureFeatureTools() 注册时仍保持 removed 状态（LLM 不可见）。
+    // 注意：record_compaction_context 仍被 runtime-summary.js 的进程内摘要通过 registry.get() 编程式获取。
+    // 恢复方法：删除下方 remove 循环即可。
+    const compactionToolRegistry = this.agent.getTools();
+    for (const toolName of [
+      'request_summary_compaction',
+      'request_summary_compaction_resume',
+      'record_compaction_context',
+    ]) {
+      compactionToolRegistry.remove(toolName);
+    }
+    console.log('[ProtoClaw Runtime] 已挂载 context compaction control feature（工具已屏蔽，不暴露给 LLM）');
   }
 
   if (this.runtimeHandoff?.handoff && (this.runtimeHandoff.handoff.sourceSummary || this.runtimeHandoff.handoff.seedMessages?.length)) {
