@@ -149,8 +149,11 @@ function renderMessage(msg, index) {
             </div>
           </div>
       `;
-    } else if (msg.content && (msg.content.startsWith('[Error:') || msg.content.startsWith('[API Error:'))) {
-      // 错误消息使用红色样式
+    } else if (msg.execution?.status === 'failed'
+      || (msg.content && (msg.content.startsWith('[Error:') || msg.content.startsWith('[API Error:')))) {
+      // 错误消息使用红色样式。
+      // 优先读结构化 execution 元数据（随会话持久化，重渲染后仍在）；
+      // 文本前缀匹配仅作为旧会话（无 execution 字段）的回退。
       innerContent += `<div class="tool-error">${escapeHtml(msg.content)}</div>`;
     } else {
       innerContent += `<div class="markdown-body">${renderMarkdown(msg.content)}</div>`;

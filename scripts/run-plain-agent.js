@@ -355,15 +355,31 @@ async function main() {
   const startTime = Date.now();
   let response = null;
   let error = null;
+  let callOutcome = null;
   try {
     console.error('[PlainAgent] 开始执行 agent.onCall()...');
-    response = await agent.onCall(goal);
+    if (typeof agent.onCallDetailed === 'function') {
+      callOutcome = await agent.onCallDetailed(goal);
+      response = callOutcome.response;
+    } else {
+      response = await agent.onCall(goal);
+    }
     console.error(`[PlainAgent] agent.onCall() 完成，响应长度=${(response || '').length}`);
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     console.error(`[PlainAgent] agent.onCall() 失败: ${error}`);
   }
   const durationMs = Date.now() - startTime;
+
+  // 终态判定：CLI 成功 == call outcome.status === 'completed'。
+  // 模型请求失败 / 用户中断 / 步数上限等终态不会抛异常，只体现在
+  // outcome.status 中——不能以"onCall 没有抛异常"当作成功。
+  const status = error ? 'failed' : (callOutcome?.status || 'completed');
+  if (!error && status !== 'completed') {
+    error = callOutcome?.error?.message
+      || `call terminated: ${callOutcome?.reason || status}`;
+    console.error(`[PlainAgent] call 未完成: status=${status} reason=${callOutcome?.reason || ''} ${error}`);
+  }
 
   // 7. 落盘 + 更新索引
   try {
@@ -384,9 +400,12 @@ async function main() {
   }
 
   const finalResult = {
-    ok: !error,
+    ok: status === 'completed',
+    status,
+    ...(callOutcome?.reason ? { reason: callOutcome.reason } : {}),
     response: response || null,
     error: error || null,
+    ...(callOutcome?.error ? { errorDetail: callOutcome.error } : {}),
     agentId: definition.id,
     sessionId,
     durationMs,
@@ -397,7 +416,7 @@ async function main() {
 
   // --keep-alive：不 dispose 不退出，保持 agent 与 viewer 连接供面板事后查看，
   // Ctrl+C 时再释放资源退出（会话已落盘，随时可 --session 续接）
-  if (args.keepAlive && !error) {
+  if (args.keepAlive && status === 'completed') {
     console.error(`[PlainAgent] --keep-alive：agent 保持运行（viewer 连接不断开），按 Ctrl+C 结束`);
     // 显式保活：不依赖 audio/audit 等隐式句柄，事件循环空了进程也不退出
     const keepAliveTimer = setInterval(() => {}, 1 << 30);
@@ -427,7 +446,7 @@ async function main() {
     console.error('[PlainAgent] dispose 失败:', err?.message || err);
   }
 
-  process.exit(error ? 1 : 0);
+  process.exit(status === 'completed' ? 0 : 1);
 }
 
 main().catch((err) => {
@@ -435,6 +454,7 @@ main().catch((err) => {
   emitFatalSessionError(err instanceof Error ? err.message : String(err));
   outputResult({
     ok: false,
+    status: 'failed',
     response: null,
     error: err instanceof Error ? err.message : String(err),
     agentId,

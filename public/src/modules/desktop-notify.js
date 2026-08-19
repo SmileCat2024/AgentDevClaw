@@ -85,7 +85,7 @@ function _getFinishObservedTimestamp(notifData) {
   }
   const runtime = notifData?.runtime && typeof notifData.runtime === 'object' ? notifData.runtime : null;
   const runtimeSettled = runtime && runtime.callActive === false
-    && ['completed', 'failed'].includes(String(runtime.stage || '').trim());
+    && ['completed', 'failed', 'cancelled'].includes(String(runtime.stage || '').trim());
   if (runtimeSettled) {
     const updatedAt = _normalizeNotifyTimestamp(runtime.updatedAt);
     if (updatedAt) return updatedAt;

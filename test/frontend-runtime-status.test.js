@@ -275,6 +275,7 @@ describe('runtime-status: normalizeNotificationRuntimeSnapshot', () => {
       updatedAt: 0,
       lastErrorType: null,
       lastErrorMessage: null,
+      lastOutcome: null,
     });
   });
 
@@ -382,6 +383,16 @@ describe('runtime-status: getDerivedStageFromState', () => {
   it('call.finish → completed', () => {
     const ctx = loadRuntimeStatus();
     assert.equal(ctx.run('getDerivedStageFromState("call.finish", null, "idle")'), 'completed');
+  });
+
+  it('call.finish outcome failed → failed', () => {
+    const ctx = loadRuntimeStatus();
+    assert.equal(ctx.run('getDerivedStageFromState("call.finish", { status: "failed", reason: "error" }, "idle")'), 'failed');
+  });
+
+  it('call.finish outcome cancelled → cancelled', () => {
+    const ctx = loadRuntimeStatus();
+    assert.equal(ctx.run('getDerivedStageFromState("call.finish", { status: "cancelled", reason: "cancelled" }, "idle")'), 'cancelled');
   });
 
   it('tool.start → tool_executing', () => {

@@ -101,8 +101,14 @@ export function renderSessionEventHuman(event) {
         ? [`tokens: input=${usage.inputTokens} output=${usage.outputTokens}`]
         : [];
     }
-    case 'turn.failed':
-      return [`failed: ${event.error.message}`];
+    case 'turn.failed': {
+      // error: TurnFailure { message, reason?, category?, statusCode?, retryable? }
+      const parts = ['failed:'];
+      if (event.error.reason) parts.push(`[${event.error.reason}]`);
+      if (event.error.category) parts.push(`(${event.error.category}${event.error.retryable ? ', retryable' : ''})`);
+      parts.push(event.error.message);
+      return [parts.join(' ')];
+    }
     case 'error':
       return [`error: ${event.message}`];
     case 'item.started': {

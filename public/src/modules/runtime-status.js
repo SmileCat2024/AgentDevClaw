@@ -417,6 +417,7 @@ function normalizeNotificationRuntimeSnapshot(runtime) {
     updatedAt: typeof runtime?.updatedAt === 'number' ? runtime.updatedAt : 0,
     lastErrorType: typeof runtime?.lastErrorType === 'string' ? runtime.lastErrorType : null,
     lastErrorMessage: typeof runtime?.lastErrorMessage === 'string' ? runtime.lastErrorMessage : null,
+    lastOutcome: runtime?.lastOutcome && typeof runtime.lastOutcome === 'object' ? runtime.lastOutcome : null,
   };
 }
 
@@ -440,6 +441,8 @@ function getRuntimeStageLabel(runtime) {
       return t('phase_completed');
     case 'failed':
       return t('phase_failed');
+    case 'cancelled':
+      return t('phase_cancelled');
     default:
       return runtime.callActive ? t('phase_processing') : '';
   }
@@ -481,6 +484,9 @@ function getCompactRuntimeLabel(runtime, isConnected = true) {
   }
   if (runtime.stage === 'failed') {
     return currentLanguage === 'zh' ? '请求失败' : 'Failed';
+  }
+  if (runtime.stage === 'cancelled') {
+    return currentLanguage === 'zh' ? '已停止' : 'Stopped';
   }
   if (runtime.stage === 'completed') {
     return currentLanguage === 'zh' ? '已完成' : 'Done';
@@ -591,7 +597,13 @@ function getPendingToolCallsFromMessages(messages = currentMessages) {
 
 function getDerivedStageFromState(stateType = '', stateData = null, currentStage = 'idle') {
   if (stateType === 'call.start') return 'awaiting_runtime';
-  if (stateType === 'call.finish') return 'completed';
+  if (stateType === 'call.finish') {
+    // 结构化终态：failed / cancelled / completed（continued 由续接机制继续跑）
+    const status = String(stateData?.status || '').trim();
+    if (status === 'failed') return 'failed';
+    if (status === 'cancelled') return 'cancelled';
+    return 'completed';
+  }
   if (stateType === 'tool.start') return 'tool_executing';
   if (stateType === 'tool.complete') return currentStage === 'tool_executing' ? 'awaiting_runtime' : currentStage;
   if (stateType === 'llm.char_count') {
@@ -657,7 +669,8 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
   const derivedStage = getDerivedStageFromState(stateType, stateData, runtime.stage);
   const runtimeAlreadyExpressive = runtime.stage !== 'idle'
     && runtime.stage !== 'completed'
-    && runtime.stage !== 'failed';
+    && runtime.stage !== 'failed'
+    && runtime.stage !== 'cancelled';
   const shouldUseDerivedStage = !runtimeAlreadyExpressive
     || runtime.stage === 'awaiting_runtime'
     || runtime.updatedAt <= 0;
@@ -665,7 +678,7 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
     runtime.stage = derivedStage;
   }
 
-  if (runtime.callActive && (runtime.stage === 'idle' || runtime.stage === 'completed' || runtime.stage === 'failed')) {
+  if (runtime.callActive && (runtime.stage === 'idle' || runtime.stage === 'completed' || runtime.stage === 'failed' || runtime.stage === 'cancelled')) {
     runtime.stage = 'awaiting_runtime';
   }
 
@@ -719,7 +732,9 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
   }
 
   if (!runtime.callActive && stateType === 'call.finish') {
-    runtime.stage = runtime.stage === 'failed' ? 'failed' : 'completed';
+    // 结构化终态为权威事实：按 outcome.status 落定，而非默认 completed
+    const status = String(stateData?.status || '').trim();
+    runtime.stage = status === 'failed' || status === 'cancelled' ? status : 'completed';
   }
 
   if (runtime.callActive) {
@@ -729,7 +744,7 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
       stageStartedAt: runtime.stageStartedAt,
       toolCallCount: runtime.toolCallCount,
     });
-  } else if (runtime.stage === 'completed' || runtime.stage === 'failed') {
+  } else if (runtime.stage === 'completed' || runtime.stage === 'failed' || runtime.stage === 'cancelled') {
     _runtimeStatusMemory.set(runtimeId, {
       callStartedAt: runtime.callStartedAt || remembered?.callStartedAt || Date.now(),
       stage: runtime.stage,
@@ -772,6 +787,9 @@ function getRuntimeSummary(runtime, isConnected = true) {
   }
   if (runtime.stage === 'failed') {
     return runtime.lastErrorMessage || t('runtime_status_failed');
+  }
+  if (runtime.stage === 'cancelled') {
+    return t('runtime_status_cancelled');
   }
   if (runtime.stage === 'completed') {
     return t('runtime_status_completed');
@@ -830,11 +848,11 @@ function getRuntimeStageClass(runtime) {
 }
 
 function shouldShowRuntimeStatus(runtime, stateType = '') {
-  if (runtime.callActive && runtime.stage !== 'idle' && runtime.stage !== 'completed' && runtime.stage !== 'failed') {
+  if (runtime.callActive && runtime.stage !== 'idle' && runtime.stage !== 'completed' && runtime.stage !== 'failed' && runtime.stage !== 'cancelled') {
     return true;
   }
-  const settledRecently = runtime.updatedAt > 0 && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' ? 8000 : 800);
-  return ((runtime.stage === 'completed' || runtime.stage === 'failed') && settledRecently)
+  const settledRecently = runtime.updatedAt > 0 && (Date.now() - runtime.updatedAt) < (runtime.stage === 'failed' || runtime.stage === 'cancelled' ? 8000 : 800);
+  return ((runtime.stage === 'completed' || runtime.stage === 'failed' || runtime.stage === 'cancelled') && settledRecently)
     || stateType === 'llm.char_count';
 }
 
@@ -1222,6 +1240,8 @@ function buildRuntimeIndicatorContent(runtime) {
     mainText = isZh ? '正在重新请求…' : 'Retrying…';
   } else if (stage === 'failed') {
     mainText = isZh ? '请求失败' : 'Failed';
+  } else if (stage === 'cancelled') {
+    mainText = isZh ? '已停止' : 'Stopped';
   } else {
     if (runtime.callActive) {
       mainText = isZh ? '处理中…' : 'Working…';

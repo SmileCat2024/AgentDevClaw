@@ -331,9 +331,40 @@ export class CallArbiter {
       const result = await this._agent.onCall(input, envelope.images);
       envelope.result = typeof result === 'string' ? result : '';
 
+      // ── Observe the structured call outcome ──
+      // onCall() does not throw for in-call terminal states (model request
+      // failure, user interrupt, step limit reached). The structured
+      // CallOutcome from the framework is the authoritative terminal fact;
+      // record it on the envelope instead of assuming completion whenever
+      // onCall() returns without throwing.
+      const outcome = typeof this._agent.getLastCallOutcome === 'function'
+        ? this._agent.getLastCallOutcome()
+        : null;
+      if (outcome) {
+        envelope.outcome = {
+          status: outcome.status,
+          reason: outcome.reason,
+          steps: outcome.steps,
+          ...(outcome.error ? { error: outcome.error } : {}),
+          ...(outcome.model ? { model: outcome.model } : {}),
+        };
+      }
+
       // AgentDev's abort and onCall completion are intentionally asynchronous.
       // Re-check the logical envelope before observing/starting continuation.
       if (this._finishInterruptedEnvelope(envelope)) return;
+
+      if (outcome && (outcome.status === 'failed' || outcome.status === 'cancelled')) {
+        // Terminal segment state that did not throw: discard any continuation
+        // registered just before termination so it cannot leak into a later
+        // envelope (mirrors the guard in _finishInterruptedEnvelope).
+        if (typeof this._agent.consumeContinuationRequest === 'function') {
+          try { this._agent.consumeContinuationRequest(); } catch {}
+        }
+        envelope.status = outcome.status;
+        envelope.error = outcome.error?.message || envelope.error || `call terminated: ${outcome.reason}`;
+        return;
+      }
 
       // ── Check for continuation request ──
       const continuation = typeof this._agent.consumeContinuationRequest === 'function'

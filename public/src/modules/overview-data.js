@@ -104,6 +104,7 @@ function normalizeRuntimeSnapshot(snapshot) {
     updatedAt: typeof snapshot?.updatedAt === 'number' ? snapshot.updatedAt : 0,
     lastErrorType: typeof snapshot?.lastErrorType === 'string' ? snapshot.lastErrorType : null,
     lastErrorMessage: typeof snapshot?.lastErrorMessage === 'string' ? snapshot.lastErrorMessage : null,
+    lastOutcome: snapshot?.lastOutcome && typeof snapshot.lastOutcome === 'object' ? snapshot.lastOutcome : null,
   };
 }
 

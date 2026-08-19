@@ -184,6 +184,87 @@ describe('CallArbiter', () => {
     assert.equal(finished.error, 'boom');
   });
 
+  // ── Structured call outcome consumption ──
+  // onCall() returning without throwing does NOT imply completion: model
+  // request failures / interrupts / step limits surface only via the
+  // structured CallOutcome. The envelope must honor it.
+
+  function makeOutcomeAgent(outcome, continuation = null) {
+    let _continuation = continuation;
+    return {
+      onCall: async (text) => `result:${text}`,
+      getLastCallOutcome: () => outcome,
+      consumeContinuationRequest: () => {
+        const req = _continuation;
+        _continuation = null;
+        return req;
+      },
+    };
+  }
+
+  it('marks envelope failed when the call outcome reports a model failure', async () => {
+    const agent = makeOutcomeAgent({
+      status: 'failed',
+      reason: 'error',
+      response: 'result:hello',
+      steps: 3,
+      error: { category: 'rate_limit', message: 'rate limited', retryable: true },
+    }, { kind: 'checkpoint', checkpointId: 'cp-leak' });
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'hello' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'failed');
+    assert.equal(finished.error, 'rate limited');
+    assert.equal(finished.outcome.status, 'failed');
+    assert.equal(finished.outcome.reason, 'error');
+    assert.equal(finished.outcome.error.category, 'rate_limit');
+    // A continuation registered just before termination must not leak
+    assert.equal(agent.consumeContinuationRequest(), null);
+  });
+
+  it('marks envelope cancelled when the call outcome reports a user interrupt', async () => {
+    const agent = makeOutcomeAgent({
+      status: 'cancelled',
+      reason: 'cancelled',
+      response: 'result:hello',
+      steps: 2,
+    });
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'hello' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'cancelled');
+    assert.equal(finished.outcome.status, 'cancelled');
+  });
+
+  it('records the outcome summary on normally completed envelopes', async () => {
+    const agent = makeOutcomeAgent({
+      status: 'completed',
+      reason: 'completed',
+      response: 'result:hello',
+      steps: 5,
+      model: { providerStopReason: 'end_turn' },
+    });
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'hello' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'completed');
+    assert.equal(finished.outcome.status, 'completed');
+    assert.equal(finished.outcome.steps, 5);
+    assert.deepEqual(finished.outcome.model, { providerStopReason: 'end_turn' });
+  });
+
+  it('falls back to completed for agents without structured outcomes', async () => {
+    const agent = makeSlowAgent(5);
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'hello' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+    assert.equal(finished.status, 'completed');
+    assert.equal(finished.outcome, undefined);
+  });
+
   it('emits callStarted and callFinished events', async () => {
     const agent = makeSlowAgent(10);
     const arbiter = new CallArbiter(agent);

@@ -325,10 +325,16 @@ async function main() {
   const startTime = Date.now();
   let response;
   let error = null;
+  let callOutcome = null;
 
   try {
     console.error('[OneShot] 开始执行 agent.onCall()...');
-    response = await agent.onCall(goal);
+    if (typeof agent.onCallDetailed === 'function') {
+      callOutcome = await agent.onCallDetailed(goal);
+      response = callOutcome.response;
+    } else {
+      response = await agent.onCall(goal);
+    }
     console.error(`[OneShot] agent.onCall() 完成，响应长度=${(response || '').length}`);
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
@@ -336,6 +342,16 @@ async function main() {
   }
 
   const durationMs = Date.now() - startTime;
+
+  // 终态判定：CLI 成功 == call outcome.status === 'completed'。
+  // 模型请求失败 / 用户中断 / 步数上限等终态不会抛异常，只体现在
+  // outcome.status 中——不能以"onCall 没有抛异常"当作成功。
+  const status = error ? 'failed' : (callOutcome?.status || 'completed');
+  if (!error && status !== 'completed') {
+    error = callOutcome?.error?.message
+      || `call terminated: ${callOutcome?.reason || status}`;
+    console.error(`[OneShot] call 未完成: status=${status} reason=${callOutcome?.reason || ''} ${error}`);
+  }
 
   // 8. Save session
   if (sessionId) {
@@ -356,16 +372,19 @@ async function main() {
 
   // 10. Output structured result
   const result = {
-    ok: !error,
+    ok: status === 'completed',
+    status,
+    ...(callOutcome?.reason ? { reason: callOutcome.reason } : {}),
     response: response || null,
     error: error || null,
+    ...(callOutcome?.error ? { errorDetail: callOutcome.error } : {}),
     sessionId: sessionId || null,
     durationMs,
     timestamp: new Date().toISOString(),
   };
 
   outputResult(result);
-  process.exit(error ? 1 : 0);
+  process.exit(status === 'completed' ? 0 : 1);
 }
 
 main().catch((error) => {
@@ -373,6 +392,7 @@ main().catch((error) => {
   emitFatalSessionError(error instanceof Error ? error.message : String(error));
   outputResult({
     ok: false,
+    status: 'failed',
     response: null,
     error: error instanceof Error ? error.message : String(error),
     sessionId: sessionId || null,
