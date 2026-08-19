@@ -7,6 +7,9 @@ node_modules/
 *docs/
 config/
 
+# Agent Studio runtime records (runs.json / runtime-sessions)
+.agent-studio/
+
 # Local feature build output
 local-features/dist/
 
