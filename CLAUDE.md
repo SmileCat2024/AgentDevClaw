@@ -33,15 +33,16 @@
 当前主要维护的工作空间（★）：
 
 1. **编程小助手**（`programming-helper`）— 核心工作空间，对标 Claude Code 的 AI 编程 Agent，拥有完整的可视化交互层和强大的会话管理能力
-2. **IM 渠道**（`qqbot`）— IM 门户代理，支持 QQ/微信/企业微信/飞书的多渠道消息接入与路由
-3. **工作群**（`work-group`，Beta）— 多 Agent 协作模式，以群聊形式指挥和协调多个 Agent
-4. **Runtime 配置**（`feature-setup`）— 全局 Feature 参数配置面板
+2. **Agent Studio**（`agent-studio`）— 上游制造端：在对话中开发 Feature、装配目标 Agent，经隔离 Test Runtime 形成证据驱动的验证闭环（见「Agent 制造 → 消费链路」一节）
+3. **IM 渠道**（`qqbot`）— IM 门户代理，支持 QQ/微信/企业微信/飞书的多渠道消息接入与路由
+4. **工作群**（`work-group`，Beta）— 多 Agent 协作模式，以群聊形式指挥和协调多个 Agent
+5. **Runtime 配置**（`feature-setup`）— 全局 Feature 参数配置面板
 
 以下预制 agent 代码保留但已悬置，不再积极迭代：
 
 - `flow-workspace`（Flow 工作空间）
-- `feature-creator`（Feature 开发工具）
-- `agent-creator`（Agent 装配工具）
+- `feature-creator`（Feature 开发工具，能力已由 `agent-studio` 接替）
+- `agent-creator`（Agent 装配工具，能力已由 `agent-studio` 接替）
 - `dispatch-console`（调度台）
 
 > 悬置 agent 的代码、路由和前端逻辑仍然存在于项目中，但产品重心已不在此。涉及这些区域时，以"读懂现有代码、不引入新复杂度"为原则。
@@ -157,6 +158,7 @@ Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里有多项依赖�
 - [local-features/context-handoff-seed/src/index.ts](/D:/code/AgentDevClaw/local-features/context-handoff-seed/src/index.ts) — 上下文交接
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
 - [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层：框架 feature 的 Claw 协议薄包装（ControlledTodoFeature / ContinuityAwareOpencodeBasic），编程小助手与 agents/coder 共享
+- [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts) — Agent Studio 控制面 feature（studio_* 工具集、Test Runtime 生命周期、结构化断言测试）
 
 local-features 的基础层/应用层分层约定见 [local-features/README.md](/D:/code/AgentDevClaw/local-features/README.md)。
 
@@ -209,6 +211,7 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 | 预制 agent | 从 `agentdev` 导入（走框架 dist） | 从 `@agentdev/*` 导入（走 tgz 包） |
 |-----------|--------------------------------|----------------------------------|
 | `programming-helper` ★ | BasicAgent, TemplateComposer, TodoFeature, UserInputFeature, LspFeature | AudioFeedbackFeature, AuditFeature, MemoryFeature, ShellFeature, WebSearchFeature |
+| `agent-studio` ★ | BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature | AuditFeature, WebSearchFeature（AgentStudioFeature 从 `local-features/dist` 导入） |
 | `qqbot` ★ | BasicAgent, TemplateComposer, TodoFeature | QQBotFeature, WeixinBot, ShellFeature, WebSearchFeature |
 | `work-group` ★ | BasicAgent, TemplateComposer, TodoFeature | （按需装配） |
 | `feature-setup` ★ | （纯 UI，无 Agent 进程） | （无） |
@@ -389,6 +392,8 @@ npm install
 - [local-features/context-compaction-mirror/src/index.ts](/D:/code/AgentDevClaw/local-features/context-compaction-mirror/src/index.ts) — 上下文精简
 - [local-features/context-handoff-seed/src/index.ts](/D:/code/AgentDevClaw/local-features/context-handoff-seed/src/index.ts) — 上下文交接
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
+- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层，编程小助手与 agents/coder 共享
+- [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts) — Agent Studio 控制面（studio_* 工具、Test Runtime、结构化测试）
 
 悬置的本地 feature（代码保留，不再积极迭代）：
 
@@ -419,6 +424,22 @@ npm run build:local-features
 - AI 生成会话标题
 - 支持语音输入与声音反馈（需在全局设置中配置语音模型）
 - 探索会话与子代理（只读分析，不修改文件）
+
+### Agent Studio（agent-studio）★
+
+上游制造端：在对话中统一开发 Feature、装配目标 Agent，并通过 Test Runtime 形成可追溯的运行验证闭环。
+
+定义位于：
+
+- [prebuilt-agents/official/agent-studio/metadata.json](/D:/code/AgentDevClaw/prebuilt-agents/official/agent-studio/metadata.json)
+- [prebuilt-agents/official/agent-studio/agent.js](/D:/code/AgentDevClaw/prebuilt-agents/official/agent-studio/agent.js)
+- feature 本体：[local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts)
+
+核心角色分工：dev agent（AgentStudioAgent）只做控制面，持有 14 个 `studio_*` 工具；被测 Feature 跑在隔离的 Test Runtime 子进程（[scripts/run-studio-runtime.js](/D:/code/AgentDevClaw/scripts/run-studio-runtime.js)），以 `studio-sandbox:<项目名>` 出现在左侧 Agent 列表（可看不可输入）。Test Runtime 有两种模式：`feature-harness`（最小 Agent + 全部开发中 Feature）与 `agent-debug`（真实 Agent + "仓库 tgz 底座 + 开发源码覆盖"混装）。
+
+Feature 状态机由运行证据推进：`implemented → mounted → verified → snapshotted`，源码一变热载后降回 mounted。验证通过的 Feature 经 `studio_create_snapshot` 打成不可变 tgz 写入用户 Feature 仓库，成为下游消费的交接物。
+
+dev agent 注入四个配套技能（位于 [local-features/agent-studio/skills](/D:/code/AgentDevClaw/local-features/agent-studio/skills)）：`agent-studio-workflow`（权威工作流）、`agentdev-feature-guide` 与 `agentdev-feature-packaging`（权威源在 AgentDev 框架仓库，经 `npm run adv-docs:sync` 同步）、`agentdev-agent-assembly`（Claw 本地维护）。
 
 ### IM 渠道（qqbot）★
 
@@ -475,6 +496,49 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 - 输出契约遵循"统一日志契约"章节：过程信息走 stderr，stdout 只承载结果数据（`--format result|text|json|quiet|jsonl`）
 
 **完整用法文档（五种格式输出形态、jsonl 事件 schema、监视/无头对照、会话续接、落盘位置）在 [agents/README.md](/D:/code/AgentDevClaw/agents/README.md)，修改 CLI 行为时必须同步更新该文档。**
+
+## Agent 制造 → 消费链路（agent-studio → claw CLI）
+
+上游（agent-studio 工作空间）制造 Feature 与 Agent，下游（`claw` CLI / plain agent runner）消费它们。交接物与解析链如下。
+
+### 交接物
+
+| 交接物 | 位置 | 说明 |
+|--------|------|------|
+| Feature 快照 tgz | `~/.agentdev/AgentDevClaw/user-features/` | `studio_create_snapshot` 产出，不可变（同版本不同字节会被拒绝） |
+| 独立 Agent 项目 | 任意目录（用户在对话中确认） | `agent.js` + `metadata.json`（`deployment.kind: "standalone"`，`features[]` 声明精确版本的包名） |
+| Agent 注册表 | `~/.agentdev/AgentDevClaw/agent-registry.json` | `claw agents register <dir> [--studio <studio-dir>]` 写入；`--studio` 关联后 `claw run <id> --debug` 才可用源码覆盖 |
+
+### 消费端共享解析链（server/feature-runtime/）
+
+`claw run`（release/debug）、Studio agent-debug 模式、server 侧共用同一条链，保证"Studio 验证过的装配 = 消费端运行的装配"：
+
+1. `schemas.js` — 校验 metadata（release 与注册时强制 `features[].version` 为精确 semver）
+2. `catalog.js` — 扫描两个 tgz 仓库：`resources/features/`（官方）+ `~/.agentdev/AgentDevClaw/user-features/`（用户，同版本时优先）
+3. `resolver.js` — 生成 runtime plan：release 全部解析为仓库 tgz；debug 允许 Studio 同名包源码覆盖（`resolvedFrom: 'source'`）
+4. `provisioner.js` — 内容寻址环境 `~/.agentdev/AgentDevClaw/runtime-envs/<agentId>/<depHash>/`（npm install `file:` tgz + agentdev junction，依赖不变则复用；Agent 源码复制进 `agent-source/`，排除 node_modules/.agent-studio/.git）
+5. `loader.js` — 动态 import Feature 类 → `static inject` 拓扑排序 → `mountFeature`（重名/环/缺失依赖直接报错）
+
+### Studio 项目的落盘布局
+
+```
+<projectDir>/                        ← 用户任意目录，agent-studio.json 为项目档案
+  agent-studio.json                  ← goal / features 注册表 / tests / 状态机 / agent 登记
+  features/<name>/                   ← 标准 npm Feature 项目（src/ + dist/）
+  .agent-studio/
+    runs.json                        ← 运行记录（保留 30 条，含断言判定与证据）
+    runtime-sessions/                ← default 会话 + cp-* 检查点
+    runtime-plan.json / source-overrides.json   ← agent-debug 模式运行计划
+~/.agentdev/AgentDevClaw/workspaces/agent-studio/
+  state.json                         ← openDirectory 等工作空间状态
+  projects.json                      ← 项目索引（前端首页 studio-projects block 数据源）
+```
+
+### 修改注意事项
+
+- Studio feature 源码（`local-features/agent-studio`）改动后：`npm run build:local-features` + 重启 agent-studio runtime。
+- `agent-studio-workflow` SKILL 是 dev agent 行为的权威描述；新增/改名 `studio_*` 工具、调整状态机或会话策略时，必须同步更新 [local-features/agent-studio/skills/agent-studio-workflow/SKILL.md](/D:/code/AgentDevClaw/local-features/agent-studio/skills/agent-studio-workflow/SKILL.md) 与 [prebuilt-agents/official/agent-studio/.agentdev/prompts/system.md](/D:/code/AgentDevClaw/prebuilt-agents/official/agent-studio/.agentdev/prompts/system.md)（两处都注入给 dev agent）。
+- feature-guide / feature-packaging 两个技能的权威源在 AgentDev 框架仓库，Claw 侧副本由 `npm run adv-docs:sync` 同步，不要直接改 Claw 副本。
 
 ## 关键数据流
 
@@ -664,6 +728,10 @@ IM 线路管理相关：
 - `GET /protoclaw/dispatch/poll`
 - `POST /protoclaw/dispatch/respond`
 - `POST /protoclaw/dispatch/agent_status`
+
+装配预检（假设性装配检查，见 [server/routes/preflight.js](/D:/code/AgentDevClaw/server/routes/preflight.js)）：
+
+- `POST /protoclaw/preflight` — body `{ features?, modulePaths? }`，返回 issues（policy 唯一性等）+ 装配预览（拓扑序、工具归属、钩子清单）
 
 运行时信封与状态：
 
