@@ -16,6 +16,57 @@ description: 用于把需求收敛成 standalone 或 workspace Agent 的装配�
 - 独立 Agent 使用 `claw agents register <agent-project-dir> [--studio <studio-project-dir>]` 注册；默认 `claw run <id>` 只解析 release tgz，`claw run <id> --debug` 才允许关联 Studio 项目的源码覆盖。
 - Feature 是装配单元；对话形式、UI 和调用入口是运行宿主责任。
 
+## standalone Agent 入口（agent.js）怎么写
+
+metadata 声明装配，入口只承担"壳"：构造参数透传、系统提示词、装配外的少量框架内置能力。以最小模板为基准：
+
+```js
+import { BasicAgent, TemplateComposer } from 'agentdev';
+
+export default class TicketAgent extends BasicAgent {
+  constructor(options) {
+    super(options); // 运行宿主传入 { name, projectRoot, workspaceDir, llm, features, runtime }
+  }
+
+  async onInitiate(ctx) {
+    await super.onInitiate(ctx);
+    this.setSystemPrompt(new TemplateComposer().add({ file: PROMPT_PATH }));
+  }
+}
+```
+
+硬性规则（违反即运行时失败）：
+
+- **不要在 constructor 里 `use()` metadata.features 声明的任何 Feature。** 消费端装载器按 metadata 动态挂载，遇到 Agent 已静态挂载的同名 Feature 会直接报错终止。入口只允许 `use()` 未声明进 metadata 的框架内置能力（如 `LspFeature`）。
+- **不要自行 createLLM。** 模型由运行宿主从 `metadata.modelPresets` 解析后经构造参数 `llm` 注入；本机可用 `.agentdev/agent-configs/<agentId>.json` 覆盖（不入库）。
+- Feature 的 config 写在 `metadata.features[].config`，由宿主注入，入口不处理。
+- 顶层 `import { BasicAgent } from 'agentdev'` 是合法且预期的：消费端会把 Agent 源码复制进隔离运行环境（agent-source/），依赖在该环境内解析，Agent 项目本身不需要 node_modules。
+- 导出形式用 `export default class`（宿主按 default 导出或唯一函数导出解析 Agent 类）。
+
+参照警告：`agents/coder` 是 built-in 静态装配形态（自己 import 并 use() 全部 Feature、metadata 不含 features 字段），**不能**作为 standalone 模板照抄。
+
+## standalone metadata 模板
+
+```json
+{
+  "id": "ticket-agent",
+  "entry": "agent.js",
+  "deployment": { "kind": "standalone" },
+  "modelPresets": { "default": "<模型 preset 名>" },
+  "features": [
+    { "package": "<npm 包名>", "version": "0.1.0", "export": "可选，多 class 导出时必填", "config": {} }
+  ]
+}
+```
+
+校验规则（注册与消费前强制）：`entry` 必须是相对 Agent 项目根的路径；`features[].package` 是精确 npm 包名且不可重复声明；`features[].version` 是精确 semver；`modelPresets.default` 必须可解析，否则启动即失败。
+
+## 验证与注册顺序
+
+1. `studio_register_agent` 登记 Agent 项目，`studio_start_runtime { mode: "agent-debug" }` 验证真实装配（tgz 底座 + Studio 源码覆盖）。
+2. `claw agents register <agent-project-dir> --studio <studio-project-dir>` 注册。
+3. `claw run <id> --debug` 走源码覆盖；验证通过后 `claw run <id>` 走 release tgz。
+
 ## 你需要先做的事
 
 1. 判断 Agent 是独立调用还是自定义工作空间。
