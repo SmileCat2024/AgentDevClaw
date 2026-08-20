@@ -317,6 +317,7 @@ async function ctxArchiveAndStopRuntime(target) {
     renderCurrentMainView();
   }
 
+  let result = null;
   try {
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
       method: 'POST',
@@ -332,7 +333,7 @@ async function ctxArchiveAndStopRuntime(target) {
     if (!response.ok) {
       throw new Error(await response.text().catch(() => 'archive session failed'));
     }
-    const result = await response.json();
+    result = await response.json();
     if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
     if (result?.sessions) {
       updateAgentRecord(agentId, {

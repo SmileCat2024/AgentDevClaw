@@ -816,7 +816,10 @@ app.post('/api/agents/:agentId/input', (req, res, next) => {
 // 用户输入统一网关：线程交接窗口（coder 宿主）转入 Thread Inbox 暂存，
 // 其余原样直投 viewer（含排队语义）。所有输入源（聊天框 / 语音 / 交互
 // 面板 / 未来 IM 路由）的 user-turn 投递必经此点。
-app.post('/api/agents/:agentId/user-turn', async (req, res, next) => {
+// body 必须在此解析：本文件无全局 express.json()，漏挂会让 req.body 恒为
+// undefined（text 归一为空串）——直投路径报 text must be a non-empty string，
+// 交接路径误报 image-only。
+app.post('/api/agents/:agentId/user-turn', express.json(), async (req, res, next) => {
   try {
     const result = await deliverUserInput({
       viewerAgentId: req.params.agentId,

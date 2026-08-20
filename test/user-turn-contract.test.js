@@ -256,4 +256,19 @@ describe('Claw user-turn contract', () => {
       assert.doesNotMatch(source, /\/queue-input\b/, `${file} must not bypass user-turn arbitration`);
     }
   });
+
+  it('server user-turn gateway route parses JSON bodies before delivery', () => {
+    // server.js has no global express.json(); the user-turn route must mount its
+    // own body parser. Without it req.body is undefined, text normalizes to ''
+    // and every runtime-period message dies with "text must be a non-empty
+    // string" (direct path) or a bogus "image-only input" rejection (handoff path).
+    const source = fs.readFileSync('server.js', 'utf8');
+    const registration = source.match(/app\.post\('\/api\/agents\/:agentId\/user-turn'[^{]*/);
+    assert.ok(registration, 'user-turn gateway route should be registered in server.js');
+    assert.match(
+      registration[0],
+      /express\.json\(\)/,
+      'user-turn gateway route must mount express.json() (server.js has no global body parser)',
+    );
+  });
 });
