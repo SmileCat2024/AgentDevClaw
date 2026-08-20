@@ -231,7 +231,13 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
       goal: parsed.goal || null,
       messages: messages.map(m => ({
         role: m.role,
+        turn: Number.isInteger(m.turn) ? m.turn : null,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        ...(Array.isArray(m.toolCalls) ? { toolCalls: m.toolCalls } : {}),
+        ...(typeof m.reasoning === 'string' && m.reasoning ? { reasoning: m.reasoning } : {}),
+        ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+        ...(m.usage ? { usage: m.usage } : {}),
+        ...(m.execution ? { execution: m.execution } : {}),
       })),
     });
   } catch (error) {

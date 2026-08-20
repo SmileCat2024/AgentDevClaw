@@ -68,7 +68,7 @@ describe('ThreadStore', () => {
       workspaceId: 'programming-helper',
       title: 'demo',
       mode: 'interactive',
-      status: 'active',
+      status: 'idle',
       rootSessionId: 'sess-1',
       headSessionId: 'sess-1',
       sessionChain: [
@@ -101,7 +101,7 @@ describe('ThreadStore', () => {
       workspaceId: 'coder',
       title: '',
       mode: 'interactive',
-      status: 'active',
+      status: 'idle',
       rootSessionId: 's1',
       headSessionId: 's3',
       sessionChain: [
@@ -134,7 +134,7 @@ describe('ThreadStore', () => {
       workspaceId: 'a',
       title: '',
       mode: 'interactive',
-      status: 'active',
+      status: 'idle',
       rootSessionId: 's1',
       headSessionId: 's1',
       sessionChain: [{ sessionId: 's1', role: 'head', startedAt: 1, endedAt: null, endKind: null, successorSessionId: null }],
@@ -186,7 +186,7 @@ describe('ThreadStore', () => {
       workspaceId: 'a',
       title: '',
       mode: 'interactive',
-      status: 'active',
+      status: 'idle',
       rootSessionId: 's1',
       headSessionId: 's1',
       sessionChain: [{ sessionId: 's1', role: 'head', startedAt: 1, endedAt: null, endKind: null, successorSessionId: null }],
@@ -208,6 +208,47 @@ describe('ThreadStore', () => {
     // 两次串行写都不丢失
     assert.equal(final.title, 'first');
     assert.equal(final.mode, 'autonomous');
+  });
+
+  test('legacy thread statuses are normalized on read and on create', async () => {
+    const store = new ThreadStore({ rootDir: root });
+    const base = {
+      agentId: 'a',
+      workspaceId: 'a',
+      title: '',
+      mode: 'interactive',
+      rootSessionId: 's1',
+      headSessionId: 's1',
+      sessionChain: [{ sessionId: 's1', role: 'head', startedAt: 1, endedAt: null, endKind: null, successorSessionId: null }],
+      commands: [],
+      revision: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    // 盘上旧值（旧状态空间）读时归一，不允许半僵尸态流入控制器
+    const cases = [
+      ['wt-legacy-active', 'active', 'idle'],
+      ['wt-legacy-completed', 'completed', 'closed'],
+      ['wt-legacy-cancelled', 'cancelled', 'closed'],
+      ['wt-legacy-blocked', 'blocked', 'failed'],
+    ];
+    for (const [threadId, written, expected] of cases) {
+      await fs.mkdir(path.join(root, 'threads'), { recursive: true });
+      await fs.writeFile(
+        path.join(root, 'threads', `${threadId}.json`),
+        JSON.stringify({ ...base, threadId, status: written }),
+        'utf8',
+      );
+      assert.equal((await store.get(threadId)).status, expected);
+    }
+
+    // create 入口同样归一：旧值不落新盘、不进 index
+    await store.create({ ...base, threadId: 'wt-create-legacy', status: 'active' });
+    const created = await store.get('wt-create-legacy');
+    assert.equal(created.status, 'idle');
+    const indexEntry = (await store.list()).find((t) => t.threadId === 'wt-create-legacy');
+    assert.equal(indexEntry.status, 'idle');
   });
 });
 
@@ -239,6 +280,106 @@ describe('ThreadController', () => {
     const { controller } = makeController(root);
     await assert.rejects(() => controller.createThread({ agentId: '', sessionId: 's' }));
     await assert.rejects(() => controller.createThread({ agentId: 'a', sessionId: 'bad id with spaces' }));
+  });
+
+  test('recordRuntimeEvent drives idle/running/failed from the session turn stream', async () => {
+    const { controller } = makeController(root);
+    const thread = await controller.createThread({ agentId: 'event-agent', sessionId: 'event-session' });
+
+    const started = await controller.recordRuntimeEvent({
+      agentId: 'event-agent',
+      sessionId: 'event-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.started', turn: 1 },
+    });
+    assert.equal(started.applied, true);
+    assert.equal(started.thread.status, 'running');
+
+    const completed = await controller.recordRuntimeEvent({
+      agentId: 'event-agent',
+      sessionId: 'event-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.completed', turn: 1, usage: { inputTokens: 2, outputTokens: 3 } },
+    });
+    assert.equal(completed.thread.status, 'idle');
+    assert.equal(completed.thread.lastLifecycleEvent.type, 'turn.completed');
+
+    const failed = await controller.recordRuntimeEvent({
+      agentId: 'event-agent',
+      sessionId: 'event-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.failed', turn: 2, error: { message: 'API unavailable', retryable: true } },
+    });
+    assert.equal(failed.thread.status, 'failed');
+    assert.equal(failed.thread.lastLifecycleEvent.error.message, 'API unavailable');
+    assert.equal((await controller.getThread(thread.threadId)).status, 'failed');
+  });
+
+  test('turn.cancelled is a lifecycle signal: event recorded, status unchanged', async () => {
+    const { controller } = makeController(root);
+    const cancelThread = await controller.createThread({ agentId: 'cancel-agent', sessionId: 'cancel-session' });
+    await controller.recordRuntimeEvent({
+      agentId: 'cancel-agent',
+      sessionId: 'cancel-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.started', turn: 1 },
+    });
+
+    // guard 轮换打断：cancelled 不得把线程打成 failed（轮换由 context_guard_event 驱动）
+    const cancelled = await controller.recordRuntimeEvent({
+      agentId: 'cancel-agent',
+      sessionId: 'cancel-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.cancelled', turn: 1, error: { message: 'Session blocked by the context guard', reason: 'cancelled' } },
+    });
+    assert.equal(cancelled.applied, true);
+    assert.equal(cancelled.thread.status, 'running');
+
+    const { events: storedEvents } = await controller.getExecutionEvents(cancelThread.threadId);
+    const recorded = storedEvents.some((event) => event.type === 'turn.cancelled');
+    assert.equal(recorded, true);
+
+    // 轮换接续：head 推进到 successor，新 turn 自然完成，线程回 idle
+    await controller.advanceHead({
+      threadId: cancelThread.threadId,
+      toSessionId: 'cancel-session-2',
+      fromSessionId: 'cancel-session',
+      expectedRevision: cancelled.thread.revision,
+      endKind: 'context_rotation',
+    });
+    await controller.recordRuntimeEvent({
+      agentId: 'cancel-agent',
+      sessionId: 'cancel-session-2',
+      runtimeInstanceId: 'runtime-2',
+      event: { type: 'turn.started', turn: 2 },
+    });
+    const resumed = await controller.recordRuntimeEvent({
+      agentId: 'cancel-agent',
+      sessionId: 'cancel-session-2',
+      runtimeInstanceId: 'runtime-2',
+      event: { type: 'turn.completed', turn: 2 },
+    });
+    assert.equal(resumed.thread.status, 'idle');
+  });
+
+  test('recordRuntimeEvent ignores unsupported events and sessions outside a thread', async () => {
+    const { controller } = makeController(root);
+    await controller.createThread({ agentId: 'event-agent-2', sessionId: 'event-session-2' });
+    assert.deepEqual(
+      await controller.recordRuntimeEvent({
+        agentId: 'other-agent',
+        sessionId: 'unknown-session',
+        event: { type: 'turn.started', turn: 1 },
+      }),
+      { applied: false, reason: 'no_thread_for_session' },
+    );
+    const itemEvent = await controller.recordRuntimeEvent({
+      agentId: 'event-agent-2',
+      sessionId: 'event-session-2',
+      event: { type: 'item.completed', item: { type: 'agent_message' } },
+    });
+    assert.equal(itemEvent.applied, true);
+    assert.equal(itemEvent.thread.executionEvents.length, 1);
   });
 
   test('appendCommand is idempotent by idempotencyKey', async () => {
@@ -318,22 +459,22 @@ describe('ThreadController', () => {
       (err) => err.code === 'duplicate_session',
     );
 
-    await controller.cancelThread(thread.threadId);
+    await controller.closeThread(thread.threadId);
     await assert.rejects(
       () => controller.advanceHead({ threadId: thread.threadId, toSessionId: 's3' }),
-      (err) => err.code === 'thread_not_active',
+      (err) => err.code === 'thread_closed',
     );
-    assert.equal(advanced.status, 'active'); // cancel 前的返回值不受影响
+    assert.equal(advanced.status, 'idle'); // close 前的返回值不受影响
   });
 
-  test('cancelThread cancels pending commands', async () => {
+  test('closeThread closes and cancels pending commands', async () => {
     const { controller } = makeController(root);
     const thread = await controller.createThread({ agentId: 'a', sessionId: 's1' });
     await controller.appendCommand({ threadId: thread.threadId, text: 'x', idempotencyKey: 'k1' });
 
-    const cancelled = await controller.cancelThread(thread.threadId, { reason: 'user' });
-    assert.equal(cancelled.status, 'cancelled');
-    assert.equal(cancelled.commands[0].status, ThreadCommandStatus.CANCELLED);
+    const closed = await controller.closeThread(thread.threadId, { reason: 'user' });
+    assert.equal(closed.status, 'closed');
+    assert.equal(closed.commands[0].status, ThreadCommandStatus.CANCELLED);
   });
 
   test('cancelCommand only affects pending', async () => {
@@ -359,6 +500,200 @@ describe('ThreadController', () => {
 
     const record = await controller.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
+  });
+});
+
+describe('thread state machine (执行层契约锁死)', () => {
+  let root;
+  before(async () => { root = await makeTempRoot(); });
+  after(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  // 设计的转换矩阵。任何一行改动都是状态机语义变更，必须显式同步这里。
+  const EXPECTED_TRANSITIONS = {
+    idle: ['running', 'rotating', 'waiting_input', 'failed', 'closed'],
+    running: ['idle', 'rotating', 'waiting_input', 'failed', 'closed'],
+    rotating: ['idle', 'running', 'rotation_failed', 'closed'],
+    rotation_failed: ['running', 'rotating', 'failed', 'closed', 'idle'],
+    failed: ['running', 'rotating', 'closed'],
+    waiting_input: ['running', 'idle', 'closed'],
+    closed: [],
+  };
+
+  test('transition matrix matches the designed state space exactly', () => {
+    const { controller } = makeController(root);
+    const states = Object.keys(EXPECTED_TRANSITIONS);
+    for (const from of states) {
+      const allowed = new Set(EXPECTED_TRANSITIONS[from]);
+      for (const to of states) {
+        assert.equal(
+          controller._canTransition(from, to),
+          from === to || allowed.has(to),
+          `${from} -> ${to} 违反设计矩阵`,
+        );
+      }
+    }
+  });
+
+  test('rotation failure path: running → rotating → rotation_failed → resume → running', async () => {
+    const { controller } = makeController(root);
+    const thread = await controller.createThread({ agentId: 'coder', sessionId: 'rot-s1' });
+
+    await controller.recordRuntimeEvent({ agentId: 'coder', sessionId: 'rot-s1', event: { type: 'turn.started', turn: 1 } });
+    assert.equal((await controller.getThread(thread.threadId)).status, 'running');
+
+    // guard 触发交接 → rotating（含生命周期事件与交接意图 stage）
+    const begun = await controller.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'rot-s1', reason: 'context_guard' });
+    assert.equal(begun.status, 'rotating');
+    assert.equal(begun.pendingSuccession.fromSessionId, 'rot-s1');
+    assert.equal(begun.lastLifecycleEvent.type, 'handoff_started');
+
+    // 压缩失败 → rotation_failed；pendingSuccession 保留供恢复收拾残局
+    const failed = await controller.failSessionHandoff(thread.threadId, {
+      reason: 'compact_crashed',
+      stage: 'compact_or_successor',
+      error: 'mirror timeout',
+    });
+    assert.equal(failed.status, 'rotation_failed');
+    assert.equal(failed.pendingSuccession.fromSessionId, 'rot-s1', '交接意图必须保留在盘上');
+    assert.equal(failed.lastLifecycleEvent.reason, 'compact_crashed');
+    assert.equal(failed.lastLifecycleEvent.stage, 'compact_or_successor');
+
+    // resume → running（回归锁：此步曾因转移表缺 running 而断裂）
+    const resumed = await controller.resumeThread(thread.threadId, { source: 'cli' });
+    assert.equal(resumed.status, 'running');
+    assert.equal(resumed.lastLifecycleEvent.type, 'resumed');
+  });
+
+  test('resumeThread admits failed / waiting_input and rejects non-resumable states', async () => {
+    const { controller, store } = makeController(root);
+
+    // failed → running：经真实 turn.failed 进入后 resume
+    const t1 = await controller.createThread({ agentId: 'a', sessionId: 'rs-s1' });
+    await controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'rs-s1', event: { type: 'turn.started', turn: 1 } });
+    await controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'rs-s1', event: { type: 'turn.failed', turn: 1, error: { message: 'api down' } } });
+    assert.equal((await controller.resumeThread(t1.threadId)).status, 'running');
+
+    // waiting_input → running（暂无事件源，直接落盘播种该状态）
+    const t2 = await controller.createThread({ agentId: 'a', sessionId: 'rs-s2' });
+    await store.update(t2.threadId, (draft) => { draft.status = 'waiting_input'; return draft; });
+    assert.equal((await controller.resumeThread(t2.threadId)).status, 'running');
+
+    // idle / rotating / closed 一律拒绝
+    const seeds = [
+      ['rs-s3', null],
+      ['rs-s4', 'rotating'],
+      ['rs-s5', 'closed'],
+    ];
+    for (const [sessionId, seed] of seeds) {
+      const t = await controller.createThread({ agentId: 'a', sessionId });
+      if (seed) {
+        await store.update(t.threadId, (draft) => {
+          draft.status = seed;
+          if (seed === 'rotating') {
+            draft.pendingSuccession = { fromSessionId: sessionId, reason: 'trim', startedAt: Date.now() };
+          }
+          return draft;
+        });
+      }
+      await assert.rejects(
+        () => controller.resumeThread(t.threadId),
+        (err) => err.code === 'thread_not_resumable',
+        `${seed || 'idle'} 不允许 resume`,
+      );
+    }
+  });
+
+  test('closed is terminal: idempotent close, no resume, no events, no handoff', async () => {
+    const { controller } = makeController(root);
+    const thread = await controller.createThread({ agentId: 'a', sessionId: 'cl-s1' });
+
+    const first = await controller.closeThread(thread.threadId, { reason: 'user' });
+    assert.equal(first.status, 'closed');
+    assert.equal(first.closeReason, 'user');
+
+    const second = await controller.closeThread(thread.threadId, { reason: 'again' });
+    assert.equal(second.status, 'closed');
+    assert.equal(second.closeReason, 'user', '重复 close 幂等，不改写首个 closeReason');
+
+    await assert.rejects(
+      () => controller.resumeThread(thread.threadId),
+      (err) => err.code === 'thread_not_resumable',
+    );
+    assert.deepEqual(
+      await controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'cl-s1', event: { type: 'turn.started', turn: 1 } }),
+      { applied: false, reason: 'thread_closed' },
+    );
+    assert.deepEqual(
+      await controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'cl-s1', event: { type: 'item.completed', item: { type: 'agent_message' } } }),
+      { applied: false, reason: 'thread_closed' },
+    );
+    await assert.rejects(
+      () => controller.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'cl-s1', reason: 'trim' }),
+      (err) => err.code === 'thread_closed',
+    );
+  });
+
+  test('delivery is gated by every non-idle/running status with a definite reason', async () => {
+    const { controller, store } = makeController(root);
+    const cases = [
+      ['gg-s1', 'rotating', 'handoff_in_progress'],
+      ['gg-s2', 'failed', 'thread_waiting'],
+      ['gg-s3', 'rotation_failed', 'thread_waiting'],
+      ['gg-s4', 'waiting_input', 'thread_waiting'],
+      ['gg-s5', 'closed', 'thread_closed'],
+    ];
+    for (const [sessionId, status, reason] of cases) {
+      const thread = await controller.createThread({ agentId: 'a', sessionId });
+      await store.update(thread.threadId, (draft) => {
+        draft.status = status;
+        if (status === 'rotating') {
+          draft.pendingSuccession = { fromSessionId: sessionId, reason: 'trim', startedAt: Date.now() };
+        }
+        return draft;
+      });
+      await controller.appendCommand({ threadId: thread.threadId, text: 'x' });
+      const result = await controller.deliverPendingCommands(thread.threadId);
+      assert.equal(result.delivered, 0);
+      assert.equal(result.reason, reason, `${status} 必须挡住投递并给出确定 reason`);
+      const record = await controller.getThread(thread.threadId);
+      assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
+    }
+  });
+
+  test('execution events: cursor slicing and eventId dedup', async () => {
+    const { controller } = makeController(root);
+    const thread = await controller.createThread({ agentId: 'a', sessionId: 'ev-s1' });
+
+    const emit = (event) =>
+      controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'ev-s1', runtimeInstanceId: 'rt-1', event });
+    await emit({ type: 'turn.started', turn: 1, eventId: 'e1' });
+    await emit({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hi' }, eventId: 'e2' });
+    await emit({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hi' }, eventId: 'e2' });
+    await emit({ type: 'turn.completed', turn: 1, eventId: 'e3' });
+
+    const all = await controller.getExecutionEvents(thread.threadId);
+    assert.equal(all.events.length, 3, '重复 eventId 必须去重');
+    assert.equal(all.cursor, 3);
+
+    const tail = await controller.getExecutionEvents(thread.threadId, { after: 2 });
+    assert.equal(tail.events.length, 1);
+    assert.equal(tail.events[0].type, 'turn.completed');
+  });
+
+  test('advanceHead lands on idle with pendingSuccession cleared atomically', async () => {
+    const { controller } = makeController(root);
+    const thread = await controller.createThread({ agentId: 'a', sessionId: 'ah-s1' });
+    await controller.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'ah-s1', reason: 'context_guard' });
+
+    const advanced = await controller.advanceHead({
+      threadId: thread.threadId,
+      toSessionId: 'ah-s2',
+      fromSessionId: 'ah-s1',
+      endKind: 'trim',
+    });
+    assert.equal(advanced.status, 'idle');
+    assert.equal(advanced.pendingSuccession, null);
+    assert.equal(advanced.lastLifecycleEvent.type, 'handoff_completed');
   });
 });
 
@@ -626,8 +961,8 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(outcome.applied, true);
     assert.equal(outcome.threadId, thread.threadId);
     const record = await controller.getThread(thread.threadId);
-    assert.equal(record.status, 'cancelled');
-    assert.equal(record.cancelReason, 'head_session_deleted');
+    assert.equal(record.status, 'closed');
+    assert.equal(record.closeReason, 'head_session_deleted');
     assert.equal(record.commands[0].status, ThreadCommandStatus.CANCELLED);
   });
 });

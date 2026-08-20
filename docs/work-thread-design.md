@@ -403,7 +403,46 @@ no-op 返回——纯会话（PH 等）的 compact/summary 流程与未接入线
 
 ---
 
-## 9. 关键实现位置速查
+## 9. 无头调度接口与两层 CLI
+
+Thread 的 HTTP 控制面本身就是无头调度接口；它不依赖工单，也不判断业务任务是否完成。当前可直接调用：
+
+```text
+GET  /protoclaw/threads[?agentId=...]                 列表
+POST /protoclaw/threads                              创建
+GET  /protoclaw/threads/:threadId                   详情
+GET  /protoclaw/threads/:threadId/events?after=N     执行事件审计
+POST /protoclaw/thread_events                        runtime 事件上报
+POST /protoclaw/threads/:threadId/commands           追加 Thread Inbox 指令
+POST /protoclaw/threads/:threadId/deliver            重试 pending 投递
+POST /protoclaw/threads/:threadId/head               推进 session head
+POST /protoclaw/threads/:threadId/handoff-failed     记录交接失败
+POST /protoclaw/threads/:threadId/resume             恢复调度
+POST /protoclaw/threads/:threadId/close              关闭调度对象
+```
+
+通用 CLI 是这些接口的无头入口，Thread 为主、工单为辅：
+
+```bash
+claw threads list [--agent <agentId>] [--format text|json]
+claw threads create --agent <agentId> --session <sessionId> [--title T] [--mode interactive|autonomous]
+claw threads show <threadId> [--format text|json]
+claw threads events <threadId> [--after N] [--format text|json|jsonl]
+claw threads send <threadId> --text "..." [--kind K] [--source S] [--idempotency-key K]
+claw threads deliver <threadId> [--format text|json]
+claw threads advance <threadId> --to-session <sessionId> [--from-session ID] [--expected-revision N] [--end-kind K]
+claw threads handoff-failed <threadId> [--reason R] [--stage S] [--error E]
+claw threads resume <threadId> [--source S]
+claw threads close <threadId> [--reason R]
+```
+
+`claw threads` 只操作 Thread 的调度事实：head、Inbox、投递、接力和执行事件；不读取 ticket、不判断任务验收、不产生产品完成状态。当前 Thread 记录在 `~/.agentdev/AgentDevClaw/threads/`，runtime 消失不会让已创建的 Thread 从列表中消失；若 runtime 在事件上报前硬崩，查询结果是最后一次持久化状态。
+
+`claw tickets` 是 coder 的特化适配器，继续负责外部工单目录、项目目录、完成策略、工单恢复和 `done` 语义。它可以引用并驱动 Thread，但 Thread 层不反向依赖 ticket。
+
+---
+
+## 10. 关键实现位置速查
 
 ```
 服务端

@@ -72,6 +72,33 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
     }
   });
 
+  // ── runtime session events ───────────────────────────────────────
+  // The payload uses the same turn.* event shape consumed by the headless
+  // single-session CLI. Only the thread controller interprets state changes.
+  app.post('/protoclaw/thread_events', jsonMiddleware, async (req, res) => {
+    try {
+      const { agentId, sessionId, runtimeInstanceId, event } = req.body || {};
+      const result = await controller.recordRuntimeEvent({
+        agentId,
+        sessionId,
+        runtimeInstanceId,
+        event,
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  app.get('/protoclaw/threads/:threadId/events', async (req, res) => {
+    try {
+      const result = await controller.getExecutionEvents(req.params.threadId, { after: req.query.after });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
   // ── 指令追加 ─────────────────────────────────────────────────────
 
   app.post('/protoclaw/threads/:threadId/commands', jsonMiddleware, async (req, res) => {
@@ -125,12 +152,35 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
     }
   });
 
-  // ── 取消 ─────────────────────────────────────────────────────────
+  // ── 交接失败 / 恢复 ───────────────────────────────────────────────
 
-  app.post('/protoclaw/threads/:threadId/cancel', jsonMiddleware, async (req, res) => {
+  app.post('/protoclaw/threads/:threadId/handoff-failed', jsonMiddleware, async (req, res) => {
+    try {
+      const { reason, stage, error } = req.body || {};
+      const thread = await controller.failSessionHandoff(req.params.threadId, { reason, stage, error });
+      res.json({ ok: true, thread });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  app.post('/protoclaw/threads/:threadId/resume', jsonMiddleware, async (req, res) => {
+    try {
+      const thread = await controller.resumeThread(req.params.threadId, {
+        source: req.body?.source || 'api',
+      });
+      res.json({ ok: true, thread });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  // ── 关闭 ─────────────────────────────────────────────────────────
+
+  app.post('/protoclaw/threads/:threadId/close', jsonMiddleware, async (req, res) => {
     try {
       const { reason } = req.body || {};
-      const thread = await controller.cancelThread(req.params.threadId, { reason });
+      const thread = await controller.closeThread(req.params.threadId, { reason });
       res.json({ ok: true, thread });
     } catch (err) {
       _errorResponse(res, err);

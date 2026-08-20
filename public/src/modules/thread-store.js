@@ -152,7 +152,7 @@ function _handoffFresh(thread) {
 
 window.renderSessionThreadBadge = (agentId, session) => {
   const thread = window.getThreadForSession(agentId, session?.id);
-  if (!thread || thread.status === 'cancelled') return '';
+  if (!thread) return '';
 
   const isZh = _isZh();
   if (session.id === thread.headSessionId) {
@@ -195,7 +195,7 @@ window.updateThreadHeaderIndicator = () => {
   const active = _currentActiveSession();
   const thread = active ? window.getThreadForSession(active.agentId, active.sessionId) : null;
 
-  if (!thread || thread.status === 'cancelled') {
+  if (!thread) {
     if (el) el.remove();
     return;
   }
@@ -273,7 +273,7 @@ window.resolveThreadInputRoute = () => {
   const active = _currentActiveSession();
   if (!active || !active.agentId || !active.sessionId) return { route: 'direct' };
   const thread = window.getThreadForSession(active.agentId, active.sessionId);
-  if (!thread || thread.status !== 'active') return { route: 'direct' };
+  if (!thread || thread.status === 'closed') return { route: 'direct' };
   if (active.sessionId !== thread.headSessionId) {
     return { route: 'thread', thread, reason: 'session_not_head' };
   }
@@ -308,7 +308,7 @@ window.getThreadPendingTexts = () => {
  */
 window.getThreadRelayEdge = (agentId, sessionId) => {
   const thread = window.getThreadForSession(agentId, sessionId);
-  if (!thread || thread.status === 'cancelled') return null;
+  if (!thread) return null;
   const edges = Array.isArray(thread.chainEdges) ? thread.chainEdges : [];
   const edge = edges.find((e) => e?.sessionId === sessionId);
   if (!edge || !edge.fromSessionId) return null;

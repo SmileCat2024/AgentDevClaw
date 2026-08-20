@@ -47,6 +47,22 @@ function _threadContentSignature(record) {
   return JSON.stringify(rest);
 }
 
+// 旧状态空间（active/completed/cancelled/blocked）的读时归一：
+// 盘上旧值不允许流入控制器，下次写盘会自动落成新值。
+const LEGACY_THREAD_STATUS_MAP = {
+  active: 'idle',
+  completed: 'closed',
+  cancelled: 'closed',
+  blocked: 'failed',
+};
+
+function _normalizeThreadRecord(record) {
+  if (record && typeof record === 'object' && LEGACY_THREAD_STATUS_MAP[record.status]) {
+    record.status = LEGACY_THREAD_STATUS_MAP[record.status];
+  }
+  return record;
+}
+
 export class ThreadStore {
   /**
    * @param {object} options
@@ -123,7 +139,7 @@ export class ThreadStore {
         workspaceId: record.workspaceId || '',
         title: record.title || '',
         mode: record.mode || 'interactive',
-        status: record.status || 'active',
+        status: LEGACY_THREAD_STATUS_MAP[record.status] || record.status || 'idle',
         rootSessionId: record.rootSessionId || '',
         headSessionId: record.headSessionId || '',
         // 链成员 id 列表（轻量，供前端徽标判定「会话是否属于线程」）
@@ -152,6 +168,8 @@ export class ThreadStore {
         })(),
         // 交接意图原始时间戳（0 = 无）；fresh 与否由读取方按统一规则派生
         handoffStartedAt: Number(record.pendingSuccession?.startedAt) || 0,
+        handoffStage: record.pendingSuccession?.stage || null,
+        lastLifecycleEvent: record.lastLifecycleEvent || null,
         // pending 指令文本预览（轻量，供前端暂存气泡渲染；上限 5 条）
         pendingTexts: (Array.isArray(record.commands) ? record.commands : [])
           .filter((c) => c?.status === 'pending')
@@ -184,7 +202,7 @@ export class ThreadStore {
   async get(threadId) {
     if (!threadId || typeof threadId !== 'string') return null;
     try {
-      return JSON.parse(await fs.readFile(this._threadFilePath(threadId), 'utf8'));
+      return _normalizeThreadRecord(JSON.parse(await fs.readFile(this._threadFilePath(threadId), 'utf8')));
     } catch {
       return null;
     }
@@ -203,9 +221,10 @@ export class ThreadStore {
     if (existing) {
       throw new Error(`Thread "${threadId}" already exists`);
     }
-    await this._atomicWriteJson(this._threadFilePath(threadId), record);
-    await this._updateIndexEntry(record);
-    return record;
+    const normalized = _normalizeThreadRecord(record);
+    await this._atomicWriteJson(this._threadFilePath(threadId), normalized);
+    await this._updateIndexEntry(normalized);
+    return normalized;
   }
 
   /**

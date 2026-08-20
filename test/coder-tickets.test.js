@@ -4,8 +4,11 @@
  * 覆盖：
  * - handleContextGuard：压缩阈值命中后的混合精简接力（trim + appendSummary）、
  *   succession 调用顺序、"继续"指令注入、旧 runtime 退役与持久化阻断标志清理
- * - handleContextGuard 失败路径：工单转 blocked + 同样退役旧 runtime
- * - start()：runtime 就绪后清理残留的守卫阻断标志
+ * - handleContextGuard 失败路径：线程显式落 rotation_failed、工单转 blocked、
+ *   旧 runtime 退役
+ * - start()：runtime 就绪后清理残留的守卫阻断标志；failed / rotation_failed /
+ *   waiting_input 线程先恢复线程状态、后投递指令
+ * - markDone：ticket 置 done 且执行线程同步收口（closed，不携带完成语义）
  */
 
 import { test, describe, before, after } from 'node:test';
@@ -32,6 +35,7 @@ async function seedTicket(root, ticket) {
 function makeHarness(root, overrides = {}) {
   const calls = { order: [] };
   const sessionIndexes = new Map();
+  const threadState = { status: overrides.threadStatus || 'idle' };
 
   const sessionApi = {
     updateSessionIndex: async (agentId, fn) => {
@@ -51,6 +55,7 @@ function makeHarness(root, overrides = {}) {
   const harness = {
     calls,
     sessionIndexes,
+    threadState,
     service: createCoderTicketService({
       rootDir: root,
       sessionApi,
@@ -75,6 +80,10 @@ function makeHarness(root, overrides = {}) {
           calls.order.push(['apply_succession', args]);
           return { applied: true };
         },
+        failSessionSuccession: async (args) => {
+          calls.order.push(['fail_succession', args]);
+          return { applied: true };
+        },
         tryDeliver: async (threadId) => {
           calls.order.push(['deliver', threadId]);
           return { attempted: 1, delivered: 1 };
@@ -83,9 +92,19 @@ function makeHarness(root, overrides = {}) {
       threadController: {
         getThread: async () => ({
           threadId: 'thread-1',
-          status: 'active',
+          status: threadState.status,
           headSessionId: 'head-session',
         }),
+        resumeThread: async (threadId, args) => {
+          calls.order.push(['resume_thread', threadId, args]);
+          threadState.status = 'running';
+          return { threadId, status: 'running' };
+        },
+        closeThread: async (threadId, args) => {
+          calls.order.push(['close_thread', threadId, args]);
+          threadState.status = 'closed';
+          return { threadId, status: 'closed', closeReason: args?.reason || 'closed' };
+        },
         appendCommand: async (args) => {
           calls.order.push(['append_command', args]);
           return { id: 'cmd-1' };
@@ -196,6 +215,14 @@ describe('handleContextGuard — 压缩阈值命中的混合精简接力', () =>
       assert.match(summary.blockedReason, /mirror compaction timed out/);
       const kinds = calls.order.map((entry) => entry[0]);
       assert.ok(kinds.includes('stop_runtime'), 'wedged runtime must be retired on failure so resume() works');
+      // 交接失败必须显式持久化到线程（rotation_failed），不许吞成普通失败
+      const failCall = calls.order.find((entry) => entry[0] === 'fail_succession');
+      assert.ok(failCall, 'rotation failure must be persisted on the thread');
+      assert.equal(failCall[1].reason, 'context_rotation_failed');
+      assert.equal(failCall[1].sessionId, 'head-session');
+      const stopIdx = kinds.indexOf('stop_runtime');
+      const failIdx = kinds.indexOf('fail_succession');
+      assert.ok(stopIdx >= 0 && stopIdx < failIdx, '旧 runtime 退役必须先于失败状态落盘');
       const record = sessionIndexes.get('coder').sessions.find((s) => s.id === 'head-session');
       assert.equal(record.contextGuard, null);
     } finally {
@@ -244,6 +271,47 @@ describe('start — runtime 换代后的残留标志清理', () => {
       assert.equal(summary.status, 'running');
       const record = sessionIndexes.get('coder').sessions.find((s) => s.id === 'head-session');
       assert.equal(record.contextGuard, null, 'stale persisted guard flag must be cleared after runtime restart');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('markDone / resume — 编排适配器与线程状态的衔接', () => {
+  test('markDone: ticket 置 done，执行线程同步收口（closed，不携带完成语义）', async () => {
+    const root = await makeTempRoot();
+    try {
+      await seedTicket(root, RUNNING_TICKET);
+      const { service, calls } = makeHarness(root);
+
+      const ticket = await service.markDone('ticket-1');
+
+      assert.equal(ticket.status, 'done');
+      const closeCall = calls.order.find((entry) => entry[0] === 'close_thread');
+      assert.ok(closeCall, 'markDone must close the execution thread');
+      assert.equal(closeCall[1], 'thread-1');
+      assert.equal(closeCall[2].reason, 'ticket_done');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('start() 对 failed / rotation_failed / waiting_input 线程先恢复状态、后投递指令', async () => {
+    const root = await makeTempRoot();
+    try {
+      await seedTicket(root, RUNNING_TICKET);
+      for (const status of ['failed', 'rotation_failed', 'waiting_input']) {
+        const { service, calls } = makeHarness(root, { threadStatus: status });
+
+        const summary = await service.resume('ticket-1');
+
+        assert.equal(summary.status, 'running', `${status} 恢复后工单必须回到 running`);
+        const resumeIdx = calls.order.findIndex((entry) => entry[0] === 'resume_thread');
+        assert.ok(resumeIdx >= 0, `${status} 线程必须先 resumeThread`);
+        assert.equal(calls.order[resumeIdx][2].source, 'coder-recovery');
+        const appendIdx = calls.order.findIndex((entry) => entry[0] === 'append_command');
+        assert.ok(appendIdx > resumeIdx, '线程状态恢复必须先于指令追加');
+      }
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

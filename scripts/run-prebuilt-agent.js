@@ -18,6 +18,7 @@ import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM, resolveModelPresetLLM } from '../server/model-preset-resolver.js';
 import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
+import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
 import { createSummaryHandlers } from './runtime-summary.js';
@@ -310,7 +311,6 @@ async function postJson(pathname, payload) {
     },
     body: JSON.stringify(payload),
   });
-
   const bodyText = await response.text();
   const data = bodyText ? JSON.parse(bodyText) : {};
   if (!response.ok) {
@@ -347,6 +347,7 @@ class SessionLifecycle {
     this.resolvedUsageModel = null;
     this.disposed = false;
     this.inputLoopRunning = false;
+    this.lastReportedMessageCount = 0;
 
     // Per-session bridge contexts (shared by reference with extracted modules)
     this.imBridgeCtx = {
@@ -377,6 +378,71 @@ class SessionLifecycle {
       ...action,
       data: { availableCallIndices },
     }));
+  }
+
+  async reportThreadEvent(event) {
+    if (!this.sessionId || !event || typeof event !== 'object') return;
+    try {
+      await postJson('/protoclaw/thread_events', {
+        agentId,
+        sessionId: this.sessionId,
+        runtimeInstanceId,
+        event,
+      });
+    } catch {
+      // Lifecycle reporting is observability only and must not change the call result.
+    }
+  }
+
+  async reportSessionItemsForTurn() {
+    if (!this.sessionId) return;
+    const messages = Array.isArray(this.agent?.getContext?.()?.getAll?.())
+      ? this.agent.getContext().getAll()
+      : [];
+    const pending = messages.slice(this.lastReportedMessageCount);
+    for (const message of pending) {
+      const turn = Number.isInteger(message?.turn) ? message.turn : null;
+      if (message?.role === 'assistant') {
+        if (typeof message.reasoning === 'string' && message.reasoning.trim()) {
+          await this.reportThreadEvent({
+            type: 'item.completed',
+            eventId: `${runtimeInstanceId}:reasoning:${turn}:${this.lastReportedMessageCount}`,
+            item: { id: `reasoning-${runtimeInstanceId}-${this.lastReportedMessageCount}`, turn, type: 'reasoning', text: message.reasoning },
+          });
+        }
+        if (typeof message.content === 'string' && message.content.trim()) {
+          await this.reportThreadEvent({
+            type: 'item.completed',
+            eventId: `${runtimeInstanceId}:message:${turn}:${this.lastReportedMessageCount}`,
+            item: { id: `message-${runtimeInstanceId}-${this.lastReportedMessageCount}`, turn, type: 'agent_message', text: message.content },
+          });
+        }
+        for (const call of Array.isArray(message.toolCalls) ? message.toolCalls : []) {
+          await this.reportThreadEvent({
+            type: 'item.started',
+            eventId: `${runtimeInstanceId}:tool-started:${call.id || this.lastReportedMessageCount}`,
+            item: { id: call.id || `tool-${this.lastReportedMessageCount}`, turn, type: 'tool_call', tool: call.name, arguments: call.arguments, status: 'in_progress' },
+          });
+        }
+      } else if (message?.role === 'tool') {
+        let parsed = null;
+        try { parsed = JSON.parse(message.content); } catch {}
+        const success = parsed?.success !== false;
+        await this.reportThreadEvent({
+          type: 'item.completed',
+          eventId: `${runtimeInstanceId}:tool-completed:${message.toolCallId || this.lastReportedMessageCount}`,
+          item: {
+            id: message.toolCallId || `tool-${this.lastReportedMessageCount}`,
+            turn,
+            type: 'tool_call',
+            tool: parsed?.tool || 'tool',
+            status: success ? 'completed' : 'failed',
+            ...(success ? { result: parsed?.result ?? message.content } : { error: parsed?.error || message.content }),
+          },
+        });
+      }
+      this.lastReportedMessageCount += 1;
+    }
   }
 
   // ── IPC handler for this session ────────────────────────────
@@ -713,6 +779,8 @@ SessionLifecycle.prototype.start = async function () {
     try {
       await this.agent.loadSession(this.sessionId, sessionStore);
       sessionLoaded = true;
+      const restoredMessages = this.agent.getContext?.()?.getAll?.();
+      this.lastReportedMessageCount = Array.isArray(restoredMessages) ? restoredMessages.length : 0;
       console.log('[ProtoClaw Runtime] ✓ 已恢复会话: ' + this.sessionId);
     } catch {
       console.log('[ProtoClaw Runtime] 创建新会话: ' + this.sessionId);
@@ -783,7 +851,29 @@ SessionLifecycle.prototype.start = async function () {
     }
   });
 
-  this.callArbiter.on('callFinished', (_envelope) => {
+  this.callArbiter.on('callStarted', (envelope) => {
+    void self.reportThreadEvent({
+      type: 'turn.started',
+      turn: typeof self.agent?._callIndex === 'number' ? self.agent._callIndex + 1 : null,
+      source: envelope?.source || null,
+    });
+  });
+
+  this.callArbiter.on('callFinished', (envelope) => {
+    void (async () => {
+      await self.reportSessionItemsForTurn();
+      const usage = typeof self.agent.getUsage === 'function'
+        ? self.agent.getUsage().toSnapshot()?.lastRequestUsage || null
+        : null;
+      // envelope → turn.* 的映射契约集中在 turn-event-mapping.js（宿主策略：
+      // completed+content_filter/refusal 改判不可重试失败；cancelled 是生命周期信号）
+      await self.reportThreadEvent(
+        mapEnvelopeToTurnEvent(envelope, {
+          turn: typeof self.agent?._callIndex === 'number' ? self.agent._callIndex : null,
+          usage,
+        }),
+      );
+    })();
     if (!self.sessionId) return;
     self.agent.saveSession(self.sessionId, sessionStore).then(async () => {
       try {

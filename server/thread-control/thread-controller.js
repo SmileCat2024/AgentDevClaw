@@ -39,9 +39,29 @@ import { listAgentRuntimes, isManagedRuntimeRunning } from '../shared/agent-acce
 export { ThreadNotFoundError };
 
 export const THREAD_MODES = new Set(['interactive', 'autonomous']);
-export const THREAD_STATUSES = new Set(['active', 'completed', 'cancelled', 'blocked']);
-export const THREAD_COMMAND_KINDS = new Set(Object.values(ThreadCommandKind));
 
+export const THREAD_STATUSES = new Set([
+  'idle',
+  'running',
+  'rotating',
+  'rotation_failed',
+  'failed',
+  'waiting_input',
+  'closed',
+]);
+export const THREAD_COMMAND_KINDS = new Set(Object.values(ThreadCommandKind));
+export const THREAD_TERMINAL_STATUSES = new Set(['closed']);
+export const THREAD_OPEN_STATUSES = new Set([
+  'idle',
+  'running',
+  'rotating',
+  'rotation_failed',
+  'failed',
+  'waiting_input',
+]);
+
+const MAX_LIFECYCLE_EVENTS = 200;
+const MAX_EXECUTION_EVENTS = 500;
 const VALID_ID_RE = /^[\w.-]{1,200}$/;
 
 /**
@@ -91,6 +111,158 @@ export class ThreadController {
     return record;
   }
 
+  async getExecutionEvents(threadId, { after = 0 } = {}) {
+    const record = await this.store.get(threadId);
+    if (!record) throw new ThreadNotFoundError(threadId);
+    const events = Array.isArray(record.executionEvents) ? record.executionEvents : [];
+    const cursor = Math.max(0, Number(after) || 0);
+    const selected = events.slice(cursor);
+    return {
+      events: selected.map((entry) => entry.event),
+      cursor: events.length,
+    };
+  }
+
+  isOpen(record) {
+    return Boolean(record && THREAD_OPEN_STATUSES.has(record.status));
+  }
+
+  isTerminal(record) {
+    return Boolean(record && THREAD_TERMINAL_STATUSES.has(record.status));
+  }
+
+  _canTransition(from, to) {
+    if (from === to) return true;
+    const allowed = {
+      idle: new Set(['running', 'rotating', 'waiting_input', 'failed', 'closed']),
+      running: new Set(['idle', 'rotating', 'waiting_input', 'failed', 'closed']),
+      rotating: new Set(['idle', 'running', 'rotation_failed', 'closed']),
+      rotation_failed: new Set(['running', 'rotating', 'failed', 'closed', 'idle']),
+      failed: new Set(['running', 'rotating', 'closed']),
+      waiting_input: new Set(['running', 'idle', 'closed']),
+    };
+    return Boolean(allowed[from]?.has(to));
+  }
+
+  async _transition(threadId, status, event, details = {}) {
+    if (!THREAD_STATUSES.has(status)) {
+      throw Object.assign(new Error(`Invalid thread status: ${status}`), { code: 'invalid_thread_status', status: 400 });
+    }
+    const { record } = await this.store.update(threadId, (draft) => {
+      if (this.isTerminal(draft) && status !== draft.status) {
+        throw Object.assign(new Error(`Thread "${threadId}" is closed`), { code: 'thread_closed', status: 409 });
+      }
+      if (!this._canTransition(draft.status, status)) {
+        throw Object.assign(new Error(`Invalid thread transition: ${draft.status} -> ${status}`), {
+          code: 'invalid_thread_transition',
+          status: 409,
+        });
+      }
+      draft.status = status;
+      const lifecycleEvent = {
+        type: cleanSessionText(event) || 'state_changed',
+        status,
+        at: Date.now(),
+        ...details,
+      };
+      draft.lifecycleEvents = Array.isArray(draft.lifecycleEvents) ? draft.lifecycleEvents : [];
+      draft.lifecycleEvents.push(lifecycleEvent);
+      if (draft.lifecycleEvents.length > MAX_LIFECYCLE_EVENTS) {
+        draft.lifecycleEvents.splice(0, draft.lifecycleEvents.length - MAX_LIFECYCLE_EVENTS);
+      }
+      draft.lastLifecycleEvent = lifecycleEvent;
+      return draft;
+    });
+    return record;
+  }
+
+  /**
+   * Apply a runtime session event to the thread head. The event schema is the
+   * same turn.started/completed/failed stream used by the single-session CLI.
+   */
+  async recordRuntimeEvent({ agentId, sessionId, event, runtimeInstanceId = null } = {}) {
+    const thread = await this.findThreadByHeadSession(agentId, sessionId);
+    if (!thread) return { applied: false, reason: 'no_thread_for_session' };
+    // closed 线程不再接受任何 runtime 事件（含 item.*），迟到的观测事件显式忽略
+    if (this.isTerminal(thread)) return { applied: false, reason: 'thread_closed' };
+    const type = cleanSessionText(event?.type);
+    if (!type) return { applied: false, reason: 'invalid_event' };
+    const details = {
+      sessionId: cleanSessionText(sessionId),
+      runtimeInstanceId: cleanSessionText(runtimeInstanceId) || null,
+      turn: Number.isInteger(event?.turn) ? event.turn : null,
+    };
+    const executionEventId = cleanSessionText(event?.eventId)
+      || `${runtimeInstanceId || 'runtime'}:${type}:${details.turn ?? 'none'}:${event?.item?.id || Date.now()}`;
+    const appendExecutionEvent = async (threadId) => {
+      const { record } = await this.store.update(threadId, (draft) => {
+        draft.executionEvents = Array.isArray(draft.executionEvents) ? draft.executionEvents : [];
+        if (draft.executionEvents.some((entry) => entry.eventId === executionEventId)) return draft;
+        draft.executionEvents.push({
+          eventId: executionEventId,
+          receivedAt: Date.now(),
+          sessionId: details.sessionId,
+          runtimeInstanceId: details.runtimeInstanceId,
+          event: { ...event },
+        });
+        if (draft.executionEvents.length > MAX_EXECUTION_EVENTS) {
+          draft.executionEvents.splice(0, draft.executionEvents.length - MAX_EXECUTION_EVENTS);
+        }
+        return draft;
+      });
+      return record;
+    };
+    if (type === 'item.started' || type === 'item.completed') {
+      return { applied: true, thread: await appendExecutionEvent(thread.threadId) };
+    }
+    if (type === 'turn.started') {
+      await this._transition(thread.threadId, 'running', type, details);
+      return { applied: true, thread: await appendExecutionEvent(thread.threadId) };
+    }
+    if (type === 'turn.completed') {
+      await this._transition(thread.threadId, 'idle', type, { ...details, usage: event.usage || null });
+      return { applied: true, thread: await appendExecutionEvent(thread.threadId) };
+    }
+    if (type === 'turn.cancelled') {
+      // 生命周期信号（guard 轮换 / 宿主中断）：只记录，不做状态转换。
+      // 轮换由 context_guard_event 驱动进入 rotating；宿主中断由宿主流程收口。
+      return { applied: true, thread: await appendExecutionEvent(thread.threadId) };
+    }
+    if (type === 'turn.failed') {
+      await this._transition(thread.threadId, 'failed', type, { ...details, error: event.error || null });
+      return { applied: true, thread: await appendExecutionEvent(thread.threadId) };
+    }
+    return { applied: false, reason: 'unsupported_event' };
+  }
+
+  /**
+   * Mark a context handoff as failed without collapsing it into a generic
+   * execution failure. The pending handoff stays on disk so a later resume
+   * can inspect the exact interrupted stage.
+   */
+  async failSessionHandoff(threadId, { reason = 'handoff_failed', stage = 'unknown', error = null } = {}) {
+    const thread = await this.getThread(threadId);
+    if (!thread) throw new ThreadNotFoundError(threadId);
+    const failed = await this._transition(threadId, 'rotation_failed', 'handoff_failed', {
+      reason: cleanSessionText(reason) || 'handoff_failed',
+      stage: cleanSessionText(stage) || 'unknown',
+      error: error ? String(error) : null,
+    });
+    return failed;
+  }
+
+  async resumeThread(threadId, { source = 'api' } = {}) {
+    const thread = await this.getThread(threadId);
+    if (!thread) throw new ThreadNotFoundError(threadId);
+    if (!['failed', 'rotation_failed', 'waiting_input'].includes(thread.status)) {
+      throw Object.assign(new Error(`Thread "${threadId}" cannot be resumed from ${thread.status}`), {
+        code: 'thread_not_resumable',
+        status: 409,
+      });
+    }
+    return this._transition(threadId, 'running', 'resumed', { source: cleanSessionText(source) || 'api' });
+  }
+
   /**
    * 按会话查线程：sessionId 是某线程的当前承接会话（head）时返回该线程。
    * 用于会话生命周期钩子（compact / summary 接力）与输入网关定位所属线程。
@@ -125,7 +297,7 @@ export class ThreadController {
       workspaceId: cleanSessionText(workspaceId) || normalizedAgentId,
       title: cleanSessionText(title),
       mode: normalizedMode,
-      status: 'active',
+      status: 'idle',
       rootSessionId: normalizedSessionId,
       headSessionId: normalizedSessionId,
       sessionChain: [
@@ -140,6 +312,9 @@ export class ThreadController {
       ],
       commands: [],
       pendingSuccession: null,
+      lifecycleEvents: [],
+      lastLifecycleEvent: null,
+      executionEvents: [],
       revision: 1,
       createdAt: now,
       updatedAt: now,
@@ -171,12 +346,41 @@ export class ThreadController {
   async beginSessionHandoff({ threadId, fromSessionId, reason = 'manual' } = {}) {
     _validateId(threadId, 'threadId');
     const normalizedFrom = _validateId(fromSessionId, 'fromSessionId');
+    const normalizedReason = cleanSessionText(reason) || 'manual';
     const { record } = await this.store.update(threadId, (draft) => {
+      if (draft.status === 'closed') {
+        throw Object.assign(new Error(`Thread "${threadId}" is closed`), { code: 'thread_closed', status: 409 });
+      }
+      if (!this.isOpen(draft)) {
+        throw Object.assign(new Error(`Thread "${threadId}" is not open`), { code: 'thread_not_open', status: 409 });
+      }
+      if (draft.headSessionId !== normalizedFrom) {
+        throw Object.assign(new Error(`Handoff source is not the current head of thread "${threadId}"`), {
+          code: 'head_mismatch',
+          status: 409,
+        });
+      }
+      const now = Date.now();
+      draft.status = 'rotating';
       draft.pendingSuccession = {
         fromSessionId: normalizedFrom,
-        reason: cleanSessionText(reason) || 'manual',
-        startedAt: Date.now(),
+        reason: normalizedReason,
+        stage: 'started',
+        startedAt: now,
       };
+      const lifecycleEvent = {
+        type: 'handoff_started',
+        status: 'rotating',
+        at: now,
+        fromSessionId: normalizedFrom,
+        reason: normalizedReason,
+      };
+      draft.lifecycleEvents = Array.isArray(draft.lifecycleEvents) ? draft.lifecycleEvents : [];
+      draft.lifecycleEvents.push(lifecycleEvent);
+      if (draft.lifecycleEvents.length > MAX_LIFECYCLE_EVENTS) {
+        draft.lifecycleEvents.splice(0, draft.lifecycleEvents.length - MAX_LIFECYCLE_EVENTS);
+      }
+      draft.lastLifecycleEvent = lifecycleEvent;
       return draft;
     });
     return record;
@@ -187,7 +391,14 @@ export class ThreadController {
    */
   async _clearStaleHandoff(threadId) {
     await this.store.update(threadId, (draft) => {
-      if (draft.pendingSuccession) draft.pendingSuccession = null;
+      if (!draft.pendingSuccession) return draft;
+      draft.pendingSuccession = null;
+      if (draft.status === 'rotating') draft.status = 'idle';
+      const lifecycleEvent = { type: 'handoff_stale', status: draft.status, at: Date.now() };
+      draft.lifecycleEvents = Array.isArray(draft.lifecycleEvents) ? draft.lifecycleEvents : [];
+      draft.lifecycleEvents.push(lifecycleEvent);
+      if (draft.lifecycleEvents.length > MAX_LIFECYCLE_EVENTS) draft.lifecycleEvents.shift();
+      draft.lastLifecycleEvent = lifecycleEvent;
       return draft;
     });
   }
@@ -269,8 +480,14 @@ export class ThreadController {
 
     const thread = await this.store.get(threadId);
     if (!thread) throw new ThreadNotFoundError(threadId);
-    if (thread.status !== 'active') {
-      return { attempted: 0, delivered: 0, reason: 'thread_not_active', results: [] };
+    if (thread.status === 'closed') {
+      return { attempted: 0, delivered: 0, reason: 'thread_closed', results: [] };
+    }
+    if (thread.status === 'rotating') {
+      return { attempted: 0, delivered: 0, reason: 'handoff_in_progress', results: [] };
+    }
+    if (thread.status === 'failed' || thread.status === 'rotation_failed' || thread.status === 'waiting_input') {
+      return { attempted: 0, delivered: 0, reason: 'thread_waiting', results: [] };
     }
 
     // 交接进行中：指令保持 pending，等 advanceHead 后由 applySessionSuccession
@@ -367,9 +584,9 @@ export class ThreadController {
     const { record } = await this.store.update(
       threadId,
       (draft) => {
-        if (draft.status !== 'active') {
-          throw Object.assign(new Error(`Thread "${threadId}" is not active (status: ${draft.status})`), {
-            code: 'thread_not_active',
+        if (draft.status === 'closed') {
+          throw Object.assign(new Error(`Thread "${threadId}" is closed`), {
+            code: 'thread_closed',
             status: 409,
           });
         }
@@ -414,8 +631,23 @@ export class ThreadController {
           successorSessionId: null,
         });
         draft.headSessionId = normalizedTo;
-        // 交接完成：同一次落盘内清除交接意图（与 head 推进原子成对）
+        // 交接完成：同一次落盘内清除交接意图（与 head 推进原子成对）。
         draft.pendingSuccession = null;
+        draft.status = 'idle';
+        const lifecycleEvent = {
+          type: 'handoff_completed',
+          status: 'idle',
+          at: now,
+          fromSessionId: normalizedFrom || currentHead?.sessionId || null,
+          toSessionId: normalizedTo,
+          reason: cleanSessionText(endKind) || 'manual',
+        };
+        draft.lifecycleEvents = Array.isArray(draft.lifecycleEvents) ? draft.lifecycleEvents : [];
+        draft.lifecycleEvents.push(lifecycleEvent);
+        if (draft.lifecycleEvents.length > MAX_LIFECYCLE_EVENTS) {
+          draft.lifecycleEvents.splice(0, draft.lifecycleEvents.length - MAX_LIFECYCLE_EVENTS);
+        }
+        draft.lastLifecycleEvent = lifecycleEvent;
         return draft;
       },
       { expectedRevision: Number.isInteger(expectedRevision) ? expectedRevision : undefined },
@@ -427,21 +659,30 @@ export class ThreadController {
   // ── 状态迁移 ─────────────────────────────────────────────────────
 
   /**
-   * 取消线程：active → cancelled；pending 指令一并取消（意图不再投递）。
+   * 关闭线程只表示执行载体收口，不表示编排层任务完成。
    */
-  async cancelThread(threadId, { reason = '' } = {}) {
+  async closeThread(threadId, { reason = 'closed' } = {}) {
     _validateId(threadId, 'threadId');
     const { record } = await this.store.update(threadId, (draft) => {
-      if (draft.status === 'active') {
-        draft.status = 'cancelled';
-        draft.cancelledAt = Date.now();
-        draft.cancelReason = cleanSessionText(reason);
-      }
+      if (this.isTerminal(draft)) return draft;
+      draft.status = 'closed';
+      draft.closedAt = Date.now();
+      draft.closeReason = cleanSessionText(reason) || 'closed';
+      const lifecycleEvent = {
+        type: 'closed',
+        status: 'closed',
+        at: draft.closedAt,
+        reason: draft.closeReason,
+      };
+      draft.lifecycleEvents = Array.isArray(draft.lifecycleEvents) ? draft.lifecycleEvents : [];
+      draft.lifecycleEvents.push(lifecycleEvent);
+      if (draft.lifecycleEvents.length > MAX_LIFECYCLE_EVENTS) draft.lifecycleEvents.shift();
+      draft.lastLifecycleEvent = lifecycleEvent;
       const now = Date.now();
       for (const c of draft.commands || []) {
         if (c.status === ThreadCommandStatus.PENDING) {
           c.status = ThreadCommandStatus.CANCELLED;
-          c.lastReason = 'thread_cancelled';
+          c.lastReason = 'thread_closed';
           c.updatedAt = now;
         }
       }

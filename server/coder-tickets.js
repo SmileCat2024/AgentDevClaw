@@ -48,6 +48,8 @@ function toTicketSummary(ticket, thread = null) {
     ...ticket,
     headSessionId: cleanSessionText(thread?.headSessionId) || null,
     threadStatus: cleanSessionText(thread?.status) || null,
+    threadLifecycle: thread?.lastLifecycleEvent || null,
+    threadEventCursor: Array.isArray(thread?.executionEvents) ? thread.executionEvents.length : 0,
   };
 }
 
@@ -190,7 +192,7 @@ export function createCoderTicketService({
 
       const agent = await requireAgentLight(CODER_AGENT_ID);
       let thread = ticket.threadId ? await threadController.getThread(ticket.threadId) : null;
-      if (!thread || thread.status !== 'active') {
+      if (!thread || thread.status === 'closed') {
         const session = await sessionApi.createPrebuiltSession(CODER_AGENT_ID, {
           openDirectory: ticket.projectDir,
           title: ticket.instruction.slice(0, 80),
@@ -233,6 +235,9 @@ export function createCoderTicketService({
       // runtime 刚换代的会话不再处于守卫阻断态；清掉 index 里可能残留的
       // 旧标志（如 rotation 失败或进程崩溃后重启的场景），否则 UI 永远禁用输入。
       await clearPersistedGuardState(thread.headSessionId);
+      if (['failed', 'rotation_failed', 'waiting_input'].includes(thread.status)) {
+        thread = await threadController.resumeThread(thread.threadId, { source: 'coder-recovery' });
+      }
       const instruction = shouldResume
         ? `恢复工单「${ticket.instruction}」。${RECOVERY_INSTRUCTION}`
         : [
@@ -288,7 +293,14 @@ export function createCoderTicketService({
   }
 
   async function markDone(ticketId) {
-    return updateTicket(ticketId, { status: 'done', blockedReason: null });
+    const ticket = await updateTicket(ticketId, { status: 'done', blockedReason: null });
+    // ticket 完成是编排层语义；对应的执行载体同步收口（closed 不携带完成含义）。
+    if (ticket.threadId) {
+      await threadController.closeThread(ticket.threadId, { reason: 'ticket_done' }).catch((failure) => {
+        console.error(`[coder-tickets] close thread on done failed: ${failure?.message || failure}`);
+      });
+    }
+    return ticket;
   }
 
   async function handleContextGuard(agentId, sessionId) {
@@ -352,6 +364,15 @@ export function createCoderTicketService({
         // 不退役的话，后续 resume() 会把恢复指令投给一个永远拒绝输入的 runtime。
         await stopManagedAgent(CODER_AGENT_ID, sessionId).catch(() => {});
         await clearPersistedGuardState(sessionId);
+        await threadIntegration.failSessionSuccession({
+          agentId,
+          sessionId,
+          reason: 'context_rotation_failed',
+          stage: 'compact_or_successor',
+          error: error instanceof Error ? error.message : String(error),
+        }).catch((failure) => {
+          console.error('[coder-tickets] failed to persist rotation_failed:', failure?.message || failure);
+        });
         const next = normalizeTicket({
           ...current,
           status: 'blocked',
@@ -400,6 +421,16 @@ export function setupCoderTicketRoutes(app, express, { service } = {}) {
   app.get('/protoclaw/coder/tickets', async (_req, res) => {
     try {
       res.json({ ok: true, tickets: await service.list() });
+    } catch (error) {
+      handleError(res, error);
+    }
+  });
+
+  app.get('/protoclaw/coder/tickets/:ticketId', async (req, res) => {
+    try {
+      const ticket = await service.getTicket(req.params.ticketId);
+      if (!ticket) return res.status(404).json({ ok: false, code: 'ticket_not_found', error: 'Ticket not found' });
+      res.json({ ok: true, ticket });
     } catch (error) {
       handleError(res, error);
     }

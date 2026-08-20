@@ -428,6 +428,72 @@ describe('CallArbiter', () => {
     assert.equal(finished._segmentCount, 4, 'should have tried 4 segments (3 max + 1 check)');
   });
 
+  it('continues the same envelope after framework limit when force-continuation allows', async () => {
+    // 框架步数预算耗尽以 status=failed + reason=limit_reached 到达；
+    // force-continuation 必须有机会在同 envelope 内续跑，而不是直接收口 failed
+    const calls = [];
+    let outcome = null;
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        if (calls.length === 1) {
+          outcome = { status: 'failed', reason: 'limit_reached', response: '', steps: 40 };
+          return '';
+        }
+        outcome = { status: 'completed', reason: 'completed', response: 'done', steps: 2 };
+        return 'done';
+      },
+      getLastCallOutcome: () => outcome,
+      consumeContinuationRequest: () => null,
+      features: {
+        get: (name) => {
+          if (name !== 'force-continuation') return null;
+          let asked = 0;
+          return {
+            requestFrameworkLimitContinuation: (o) => {
+              asked += 1;
+              if (o.reason === 'limit_reached' && asked === 1) {
+                return '[系统] 因步数上限中断，请继续完成当前任务';
+              }
+              return null;
+            },
+          };
+        },
+      },
+    };
+
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'long task' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'completed', 'continued envelope should finish naturally');
+    assert.equal(calls.length, 2, 'force continuation runs a second segment in the same envelope');
+    assert.match(calls[1], /步数上限/, 'second segment starts with the forced continuation input');
+  });
+
+  it('closes envelope as failed on framework limit when force-continuation declines', async () => {
+    const calls = [];
+    let outcome = null;
+    const agent = {
+      onCall: async (text) => {
+        calls.push(text);
+        outcome = { status: 'failed', reason: 'limit_reached', response: '', steps: 40 };
+        return '';
+      },
+      getLastCallOutcome: () => outcome,
+      consumeContinuationRequest: () => null,
+      features: { get: () => null },
+    };
+
+    const arbiter = new CallArbiter(agent);
+    const entry = arbiter.enqueue({ source: 'test', text: 'long task' });
+    const finished = await arbiter.waitForCompletion(entry.id);
+
+    assert.equal(finished.status, 'failed', 'no continuation → envelope fails honestly');
+    assert.equal(calls.length, 1, 'no extra segment without continuation approval');
+    assert.match(finished.error, /limit_reached/);
+  });
+
   it('enforces maxCheckpoints budget', async () => {
     let _continuation = null;
     let segmentIdx = 0;

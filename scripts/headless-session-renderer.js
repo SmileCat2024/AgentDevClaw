@@ -32,6 +32,10 @@ const JSONL_RESULT_LIMIT = 1000;
  * @param {import('agentdev').SessionEvent} event
  * @returns {import('agentdev').SessionEvent}
  */
+export function formatSessionEventJsonl(event) {
+  return truncateEventForJsonl(event);
+}
+
 function truncateEventForJsonl(event) {
   if (event.type !== 'item.completed' || event.item.type !== 'tool_call') return event;
   const item = event.item;
@@ -100,6 +104,11 @@ export function renderSessionEventHuman(event) {
       return usage
         ? [`tokens: input=${usage.inputTokens} output=${usage.outputTokens}`]
         : [];
+    }
+    case 'turn.cancelled': {
+      // 生命周期信号（guard 轮换 / 宿主中断），非执行失败
+      const reason = event.error?.message || event.error?.reason || 'interrupted';
+      return [`cancelled: ${reason}`];
     }
     case 'turn.failed': {
       // error: TurnFailure { message, reason?, category?, statusCode?, retryable? }

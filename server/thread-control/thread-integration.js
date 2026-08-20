@@ -20,7 +20,7 @@
 import { getThreadController } from './thread-controller.js';
 import { ThreadNotFoundError } from './thread-store.js';
 
-/** 开启线程化会话的工作空间（演示阶段仅 coder） */
+/** 开启线程化会话的工作空间；任何挂载线程机制的 agent 都可加入。 */
 export const THREAD_HOST_AGENT_IDS = new Set(['coder']);
 
 export function createThreadIntegration({ controller = null } = {}) {
@@ -75,8 +75,6 @@ export function createThreadIntegration({ controller = null } = {}) {
         });
         return { applied: true, threadId: thread.threadId };
       } catch (error) {
-        // 标记失败不阻断 compact 主流程：最坏情况是交接期间指令被投向旧
-        // head（与未接入线程时的行为一致），不产生新故障模式。
         console.error(`[thread-integration] beginSessionSuccession failed for session=${from}:`, error?.message || error);
         return { applied: false, reason: 'error', error: error?.message || String(error) };
       }
@@ -95,8 +93,9 @@ export function createThreadIntegration({ controller = null } = {}) {
       const to = String(toSessionId || '').trim();
       if (!from || !to || from === to) return { applied: false, reason: 'invalid_succession' };
 
+      let thread = null;
       try {
-        const thread = await threadController.findThreadByHeadSession(normalizedAgentId, from);
+        thread = await threadController.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
 
         const advanced = await threadController.advanceHead({
@@ -115,7 +114,32 @@ export function createThreadIntegration({ controller = null } = {}) {
           return { applied: false, reason: 'thread_not_found' };
         }
         console.error(`[thread-integration] succession failed ${from} -> ${to}:`, error?.message || error);
-        return { applied: false, reason: 'error', error: error?.message || String(error) };
+        const failed = await threadController.failSessionHandoff(thread.threadId, {
+          reason: 'handoff_failed',
+          stage: 'advance_head',
+          error: error?.message || String(error),
+        }).catch(() => null);
+        return { applied: false, reason: 'handoff_failed', error: error?.message || String(error), thread: failed };
+      }
+    },
+
+    /**
+     * 交接失败钩子：把上下文交接停在明确的 rotation_failed，保留
+     * pendingSuccession 和失败阶段，供恢复入口收拾残局。
+     */
+    async failSessionSuccession({ agentId, sessionId, reason = 'handoff_failed', stage = 'unknown', error = null }) {
+      const normalizedAgentId = String(agentId || '').trim();
+      if (!THREAD_HOST_AGENT_IDS.has(normalizedAgentId)) return { applied: false, reason: 'not_thread_host' };
+      const from = String(sessionId || '').trim();
+      if (!from) return { applied: false, reason: 'invalid_session' };
+      try {
+        const thread = await threadController.findThreadByHeadSession(normalizedAgentId, from);
+        if (!thread) return { applied: false, reason: 'no_thread_for_session' };
+        const failed = await threadController.failSessionHandoff(thread.threadId, { reason, stage, error });
+        return { applied: true, thread: failed, threadId: thread.threadId };
+      } catch (failure) {
+        console.error(`[thread-integration] failSessionSuccession failed for session=${from}:`, failure?.message || failure);
+        return { applied: false, reason: 'error', error: failure?.message || String(failure) };
       }
     },
 
@@ -135,8 +159,8 @@ export function createThreadIntegration({ controller = null } = {}) {
       try {
         const thread = await threadController.findThreadByHeadSession(normalizedAgentId, deleted);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
-        await threadController.cancelThread(thread.threadId, { reason: 'head_session_deleted' });
-        console.log(`[thread-integration] thread cancelled (head session deleted): ${thread.threadId}`);
+        await threadController.closeThread(thread.threadId, { reason: 'head_session_deleted' });
+        console.log(`[thread-integration] thread closed (head session deleted): ${thread.threadId}`);
         return { applied: true, threadId: thread.threadId };
       } catch (error) {
         // 善后失败不阻断删除主流程：最坏情况是线程悬空 active，后续删除
