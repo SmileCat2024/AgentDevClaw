@@ -80,6 +80,10 @@ function loadCtxMenuItems(overrides = {}) {
 
   ctx.loadSource('public/src/modules/sidebar-operations.js');
   ctx.loadSource('public/src/modules/session-mutation.js');
+  // ctx-menu-items.js 依赖 assembly-data.js 的 isAssemblySession（见该文件
+  // 头部「依赖 assembly-data.js」注释）——缺失会导致 getCtxMenuItems 抛
+  // ReferenceError: isAssemblySession is not defined。
+  ctx.loadSource('public/src/modules/assembly-data.js');
   ctx.loadSource('public/src/modules/ctx-menu-items.js');
   return { ctx, calls };
 }
