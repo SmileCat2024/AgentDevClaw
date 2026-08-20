@@ -11,6 +11,7 @@
   "features": [
     "todo",
     "force-continuation",
+    "tickets-build-flow",
     "audit",
     "audio-feedback",
     "user-input",

@@ -6,6 +6,8 @@
  *   audio-feedback / user-input / generative-ui / websearch / memory / shell /
  *   image-reader / lsp / context-guard / github），保证与编程小助手同等的
  *   功能体验和右侧面板通讯。
+ * - 增挂 tickets-build-flow（拿到工单之后的 implement / tdd / code-review
+ *   构建流程规范），与本 agent 的工单看板衔接。
  * - 相对编程小助手的裁剪：ClawDispatchFeature（server 侧调度桥）与
  *   GroupChatBridgeFeature（群聊桥）不挂载——本工作空间以线程为执行承接
  *   单位，不参与调度与群聊路由。
@@ -19,6 +21,7 @@
 import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature } from 'agentdev';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
+import { TicketsBuildFlow } from '../../../features/tickets-build-flow/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';
@@ -146,6 +149,10 @@ export class CoderAgent extends BasicAgent {
         ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
           ? config.features['force-continuation'] : {}),
       }));
+
+      // 「拿到 tickets 之后」的构建流程规范：implement / tdd / code-review 三个
+      // 自带 skill（经 SkillFeature 自动发现注入）+ 便携读取工具。
+      this.use(new TicketsBuildFlow());
 
       this.use(new AuditFeature());
       this.use(new NonBlockingAudioFeedbackFeature());
