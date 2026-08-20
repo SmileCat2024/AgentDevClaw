@@ -4218,14 +4218,20 @@ body[data-theme="light"] .rh-group {
   min-width: 0;
 }
 
-.rh-row {
+/* 主行：函数名（主）+ toggle（推右）。函数名是本条目的视觉焦点。 */
+.rh-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 元信息行：feature + kind 徽标，降级为次要小胶囊。 */
+.rh-row-meta {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  border-radius: 6px;
-  margin: 0 -6px;
-  padding: 3px 6px;
+  gap: 6px;
+  margin-top: 3px;
 }
 
 .rh-item:hover {
@@ -4234,20 +4240,18 @@ body[data-theme="light"] .rh-group {
 
 .rh-method {
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text-primary);
   word-break: break-all;
+  min-width: 0;
 }
 
 .rh-feature {
   font-size: 11px;
   color: var(--text-secondary);
-}
-
-.rh-feature::before {
-  content: '·';
-  margin-right: 8px;
-  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* kind 徽标打在每个函数条目上：observe 中性 / guard 琥珀 / transform 蓝 */
