@@ -181,11 +181,13 @@ async function runSingleAttempt({ agentJsPath, agentName, agentId, sessionId, se
   const workspaceDir = resolveWorkspaceCwd(agentId, sessionId);
   const sessionStore = new FileSessionStore(getSessionStoreDir(agentId));
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
+  // 摘要属于辅助任务，走 system 角色模型（与 run-title-mirror 同一约定）；
+  // 未配置 system 角色时 resolver 回退 default，行为与旧版一致。
   const modelPresetRole = sessionType === 'exploration'
     ? 'exploration'
     : sessionType === 'sub'
       ? 'sub'
-      : 'default';
+      : 'system';
   const agentDir = resolve(dirname(agentJsPath));
   const resolvedModel = resolveAgentModelLLM(agentDir, modelPresetRole);
 
