@@ -40,7 +40,7 @@
 // Agents whose session items get the full session-ops ctx menu
 // (summary / trim / branch). Server routes are agentId-parameterized;
 // this list only gates the frontend menu surface.
-const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio']);
+const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio', 'coder']);
 
 function getCtxMenuItems(role, ns, variant, id) {
   if (role === 'runtime' && CTX_SESSION_OPS_AGENTS.has(ns)) {

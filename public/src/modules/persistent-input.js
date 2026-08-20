@@ -974,21 +974,34 @@ function _syncPersistentActionButton() {
 }
 
 function _renderQueueBubbles(container) {
-  const signature = JSON.stringify(_queuedTexts);
+  // 线程暂存（Thread Inbox pending）与 viewer 排队同栈渲染：
+  // 前者意图归属是「工作」（交接窗口/非 head 暂存，新会话就绪后投递），
+  // 后者归属是「runtime」（call 间排队）。样式变体区分，语义不混。
+  const threadPending = (typeof window.getThreadPendingTexts === 'function')
+    ? window.getThreadPendingTexts()
+    : [];
+  const signature = JSON.stringify({ q: _queuedTexts, t: threadPending });
   const existingStack = container.querySelector('.queue-bubbles-stack');
   if (signature === _lastQueueBubbleSignature && (
-    (_queuedTexts.length === 0 && !existingStack)
-    || (_queuedTexts.length > 0 && existingStack)
+    (_queuedTexts.length === 0 && threadPending.length === 0 && !existingStack)
+    || ((_queuedTexts.length > 0 || threadPending.length > 0) && existingStack)
   )) {
     return;
   }
   _lastQueueBubbleSignature = signature;
 
   container.querySelectorAll('.queue-bubbles-stack').forEach(el => el.remove());
-  if (_queuedTexts.length === 0) return;
+  if (_queuedTexts.length === 0 && threadPending.length === 0) return;
 
   const stack = document.createElement('div');
   stack.className = 'queue-bubbles-stack';
+  for (const txt of threadPending) {
+    const b = document.createElement('div');
+    b.className = 'queue-bubble thread-staged';
+    b.textContent = txt.length > 80 ? txt.substring(0, 80) + '...' : txt;
+    b.title = txt;
+    stack.appendChild(b);
+  }
   for (const txt of _queuedTexts) {
     const b = document.createElement('div');
     b.className = 'queue-bubble';
@@ -1044,6 +1057,39 @@ async function submitQueuedInput() {
   const images = getPendingInputImages();
 
   try {
+    // 线程路由快路径（coder 宿主）：交接窗口 / 非 head 会话时输入改走
+    // Thread Inbox（服务端 input-gateway 是兜底真相，此处拦截只为即时
+    // 暂存气泡反馈）。viewer 排队语义只对健康 runtime 有意义，不适用。
+    const threadRoute = (typeof window.resolveThreadInputRoute === 'function')
+      ? window.resolveThreadInputRoute()
+      : { route: 'direct' };
+    if (threadRoute.route === 'thread') {
+      if (images.length > 0) {
+        throw new Error(currentLanguage === 'zh'
+          ? '会话交接进行中：暂不支持图片输入，请在新会话就绪后重发'
+          : 'Session handoff in progress: image input is not supported yet');
+      }
+      if (!text) throw new Error('empty input');
+      await window.submitThreadCommand(threadRoute.thread.threadId, text);
+      const liveTextarea0 = document.getElementById('input-persistent');
+      if (liveTextarea0
+        && (liveTextarea0.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
+        liveTextarea0.value = '';
+        autoResize(liveTextarea0);
+      }
+      if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
+      _clearRecapForNewMessage();
+      window.refreshThreads?.(true);
+      updateQueueIndicator();
+      window.ClawToast?.show?.({
+        id: `thread-staged-${threadRoute.thread.threadId}`,
+        status: 'info',
+        title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
+        autoDismiss: 5000,
+      });
+      return;
+    }
+
     const res = await fetch(`/api/agents/${targetRuntimeId}/user-turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1071,7 +1117,18 @@ async function submitQueuedInput() {
       requestFollowLatest({ forceEnable: true, behavior: 'auto' });
       // 只有当 agent 正在 calling 时才显示排队气泡。
       // agent 空闲时后端会立即消费输入，不需要排队指示。
-      if (delivery.delivery === 'queued') {
+      if (delivery.delivery === 'thread_queued') {
+        // 服务端网关兜底拦截（快路径未命中但交接已开始）：输入已进
+        // Thread Inbox，刷新线程数据即可渲染暂存气泡
+        window.refreshThreads?.(true);
+        updateQueueIndicator();
+        window.ClawToast?.show?.({
+          id: `thread-staged-gw-${targetRuntimeId}`,
+          status: 'info',
+          title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
+          autoDismiss: 5000,
+        });
+      } else if (delivery.delivery === 'queued') {
         _localQueuedInputPending = true;
         _pendingQueuedCount++;
         _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');

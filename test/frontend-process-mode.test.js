@@ -21,6 +21,8 @@ describe('programming-helper workspace process mode UI', () => {
     const agent = { id: 'programming-helper', processMode: 'shared-by-project' };
     const ctx = createFrontendSandbox({
       getCurrentAgentRecord: () => agent,
+      // app-core.js 全局（本用例仅加载 ph-project-actions.js）
+      isPhStyleWorkspaceAgent: (candidate) => candidate?.id === 'programming-helper',
       fetch: async (url, options) => {
         requests.push({ url, options });
         return {

@@ -1925,7 +1925,14 @@ function isUiOnlyUnit(agent) {
 }
 
 function isWorkspaceHostUnit(agent) {
-  return !!(agent && agent.source === 'prebuilt' && (agent.id === 'agent-creator' || agent.id === 'feature-creator' || agent.id === 'agent-studio' || agent.id === 'qqbot' || agent.id === 'programming-helper' || agent.id === 'flow-workspace' || agent.id === 'work-group'));
+  return !!(agent && agent.source === 'prebuilt' && (agent.id === 'agent-creator' || agent.id === 'feature-creator' || agent.id === 'agent-studio' || agent.id === 'qqbot' || agent.id === 'programming-helper' || agent.id === 'flow-workspace' || agent.id === 'work-group' || agent.id === 'coder'));
+}
+
+// PH 风格工作区（项目列表 / 会话列表首页）：programming-helper 与 coder（线程版编程助手）
+const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper', 'coder']);
+
+function isPhStyleWorkspaceAgent(agent = getCurrentAgentRecord()) {
+  return !!(agent && agent.source === 'prebuilt' && PH_STYLE_WORKSPACE_AGENT_IDS.has(agent.id));
 }
 
 function isWorkspaceSurfaceUnit(agent) {

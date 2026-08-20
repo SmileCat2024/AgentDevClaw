@@ -21,6 +21,7 @@ import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
 import { createSummaryHandlers } from './runtime-summary.js';
+import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
 
 // Inject DebugHub into the extracted CallArbiter module
 setDebugHubClass(DebugHub);
@@ -33,7 +34,8 @@ const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http:/
 const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
-const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace']);
+// 权威集合来自 server/shared/constants.js（服务端与子进程必须同源）
+const WORKSPACE_BOUND_AGENT_IDS = WORKSPACE_SESSION_AGENT_IDS;
 const PREBUILT_AGENT_MAX_TOKENS_CAP = 8000; // 预制 agent maxTokens 上限（应与 server/shared/constants.js 保持一致）
 const runtimeInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const reportedUsageEventIds = new Set();

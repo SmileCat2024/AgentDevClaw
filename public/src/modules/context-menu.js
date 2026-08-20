@@ -130,7 +130,7 @@ function openSessionContextMenu(agentId, sessionId, x, y) {
   }
   if (archiveSessionAction) {
     const isArchived = session?.archived === true;
-    const showArchive = agentId === 'programming-helper';
+    const showArchive = agentId === 'programming-helper' || agentId === 'coder';
     archiveSessionAction.style.display = showArchive ? '' : 'none';
     archiveSessionAction.disabled = !showArchive;
     if (showArchive) {

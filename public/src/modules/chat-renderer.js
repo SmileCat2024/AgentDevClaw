@@ -548,7 +548,19 @@ function render(messages) {
   _lastRenderedChatSig = _sig;
 
   const shouldFollowAfterMutation = followLatestEnabled && isChatSurfaceActive();
-  const html = messages.map((msg, index) => {
+  // 线程接力分隔条（coder 宿主：非 root 棒在首条消息前显示来源与方式；
+  // 无线程 / root 棒 / 模块缺席时为空串，零影响）
+  let relaySeparatorHtml = '';
+  try {
+    if (typeof window.renderThreadRelaySeparatorHtml === 'function' && typeof getCurrentHostAgentRecord === 'function') {
+      const hostAgent = getCurrentHostAgentRecord();
+      const activeSessionId = hostAgent?.active_workspace_session_id || hostAgent?.workspace_sessions?.activeSessionId || '';
+      if (hostAgent?.id && activeSessionId) {
+        relaySeparatorHtml = window.renderThreadRelaySeparatorHtml(hostAgent.id, activeSessionId);
+      }
+    }
+  } catch { /* 分隔条是增强显示，任何失败都不影响消息渲染 */ }
+  const html = relaySeparatorHtml + messages.map((msg, index) => {
     const role = msg.role;
     const msgId = `msg-${index}`;
     let contentHtml = '';

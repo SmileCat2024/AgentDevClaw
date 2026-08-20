@@ -2,12 +2,12 @@ import path from 'path';
 import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
 
-import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO } from '../shared/constants.js';
+import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
 import { sendIPCToAllSessions, sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
-import { normalizeProgrammingHelperProcessMode } from '../shared/process-mode.js';
+import { normalizeProgrammingHelperProcessMode, GLOBAL_SHARED_AGENT_ID } from '../shared/process-mode.js';
 import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.js';
 
 export { normalizeProgrammingHelperProcessMode } from '../shared/process-mode.js';
@@ -527,8 +527,8 @@ export function setupModelConfigRoutes(app, express) {
   app.get('/protoclaw/agent_process_mode', async (req, res, next) => {
     try {
       const agentId = cleanSessionText(req.query.agentId);
-      if (agentId !== 'programming-helper') {
-        return res.status(400).json({ error: 'agentId must be programming-helper' });
+      if (!PH_STYLE_WORKSPACE_AGENT_IDS.has(agentId)) {
+        return res.status(400).json({ error: 'agentId is not supported for process mode config' });
       }
       const metaPath = path.join(PROJECT_ROOT, 'prebuilt-agents', 'official', agentId, 'metadata.json');
       const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
@@ -547,8 +547,12 @@ export function setupModelConfigRoutes(app, express) {
     try {
       const agentId = cleanSessionText(req.body?.agentId);
       const processMode = normalizeProgrammingHelperProcessMode(req.body?.processMode);
-      if (agentId !== 'programming-helper') {
-        return res.status(400).json({ error: 'agentId must be programming-helper' });
+      if (!PH_STYLE_WORKSPACE_AGENT_IDS.has(agentId)) {
+        return res.status(400).json({ error: 'agentId is not supported for process mode config' });
+      }
+      // shared-global 进程宿主仍限定 programming-helper（见 agent-startup.js 设计注释）
+      if (processMode === 'shared-global' && agentId !== GLOBAL_SHARED_AGENT_ID) {
+        return res.status(400).json({ error: 'shared-global process mode is only available for programming-helper' });
       }
       if (!processMode) {
         return res.status(400).json({ error: 'processMode must be isolated, shared-by-project, or shared-global' });

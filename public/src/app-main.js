@@ -83,7 +83,7 @@ function getCurrentAgentRecord() {
 }
 
 function groupConnectedAgents(agents) {
-  const TOOL_AGENT_IDS = new Set(['programming-helper']);
+  const TOOL_AGENT_IDS = new Set(['programming-helper', 'coder']);
   const WORK_GROUP_IDS = new Set(['work-group']);
   const prebuiltIds = new Set(
     agents
@@ -372,6 +372,11 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
       bodyParseMs: sidebarDiagnosticNow() - headersReceivedAt,
       responseBytes,
     });
+    // 线程宿主（coder）：compact 接力在服务端响应前已完成 head 推进，
+    // 强制刷新线程状态，使导航落地时徽标/承接指示器立即就位。
+    if (typeof window.refreshThreads === 'function') {
+      window.refreshThreads(true).catch(() => {});
+    }
     return result;
   } finally {
     stopMainThreadObservation();

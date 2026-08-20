@@ -111,6 +111,26 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   }
   const images = typeof getPendingInputImages === 'function' ? getPendingInputImages() : [];
 
+  // ── 线程路由守卫（coder 工作空间）─────────────────────────────
+  // 当前会话已被 successor 接续（非线程 head）时，槽位提交会「成功但
+  // 投错目标」：消息被旧 runtime 消费，留在接续前的会话里。此时改走
+  // Thread Inbox，由服务端投递给线程当前承接会话。其余情况（head /
+  // 无线程 / 其他工作空间）完全走下方现有槽位路径，零行为变化。
+  const threadRoute = typeof window.resolveThreadInputRoute === 'function'
+    ? window.resolveThreadInputRoute()
+    : { route: 'direct' };
+  // Thread Inbox 只承载纯文本：带图片的槽位提交显式拒绝（保留输入，
+  // 用户可去掉图片或等新会话就绪后重发），绝不静默丢弃附件。
+  const hasImages = images.length > 0;
+  if (threadRoute.route === 'thread' && input.trim()) {
+    if (hasImages) {
+      _notifyThreadImageUnsupported();
+      return;
+    }
+    await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey });
+    return;
+  }
+
   try {
     const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
@@ -123,7 +143,7 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
           text: input,
           ...(images.length > 0 ? { payload: { images } } : {}),
         },
-      })
+      }),
     });
     if (res.ok) {
       // await 期间输入面可能重建，提交前抓取的 textarea 可能已脱离 DOM；
@@ -156,10 +176,73 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
       }
       // 后台刷新
       poll();
+      return;
+    }
+    // 槽位投递失败（runtime 停止/切换中）且当前会话属于活跃线程：
+    // 兜底落 Thread Inbox，指令不丢，head 就绪后由服务端投递。
+    // 带图片时不兜底（inbox 不支持附件），保留输入供用户重试。
+    if ((threadRoute.route === 'direct' && threadRoute.thread) && input.trim() && !hasImages) {
+      await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey });
     }
   } catch (e) {
     console.error('提交输入失败:', e);
+    // 网络层失败的同款兜底：活跃线程的指令改走 Thread Inbox
+    if ((threadRoute.route === 'direct' && threadRoute.thread) && input.trim() && !hasImages) {
+      try {
+        await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey });
+      } catch {
+        // Thread Inbox 也不可用：保留输入文本，用户可重试
+      }
+    }
   }
+}
+
+/**
+ * Thread Inbox 不支持附件的显式提示（与主聊天入口 persistent-input 的
+ * 拒绝语义一致）：保留输入与图片，不做任何清理。
+ */
+function _notifyThreadImageUnsupported() {
+  const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+    ClawToast.show({
+      id: `thread-img-unsupported-${Date.now()}`,
+      title: isZh
+        ? '会话交接进行中：暂不支持图片输入，请在新会话就绪后重发'
+        : 'Session handoff in progress: image input is not supported yet',
+      status: 'error',
+      autoDismiss: 5000,
+    });
+  }
+}
+
+/**
+ * 经 Thread Inbox 提交：消息持久化到线程，由服务端投递给当前承接会话。
+ * 成功后清空输入（与槽位路径一致），并给出明确反馈，避免「发出去没反应」。
+ */
+async function _submitInputViaThread(thread, { input, textarea, targetCacheKey }) {
+  const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  const result = await window.submitThreadCommand(thread.threadId, input);
+  const delivered = result?.delivery?.delivered > 0;
+  // 清空输入（复用槽位路径的清理语义）
+  if (textarea) {
+    textarea.value = '';
+    autoResize(textarea);
+  }
+  if (typeof clearPendingInputImages === 'function') {
+    clearPendingInputImages();
+  }
+  if (targetCacheKey) delete _sessionInputCache[targetCacheKey];
+  if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+    ClawToast.show({
+      id: `thread-cmd-${Date.now()}`,
+      title: isZh
+        ? (delivered ? '已投递到线程当前会话' : '已暂存到线程，将在会话接续后投递')
+        : (delivered ? 'Delivered to the current thread session' : 'Queued in thread; will deliver after handover'),
+      status: 'success',
+      autoDismiss: 3200,
+    });
+  }
+  poll();
 }
 
 function getPrimaryInputRequest() {

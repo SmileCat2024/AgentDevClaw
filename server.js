@@ -92,6 +92,7 @@ import { setupToolStateRoutes } from './server/routes/tool-state.js';
 import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
 import { getThreadController } from './server/thread-control/thread-controller.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
+import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
   setupFeatureRepositoryRoutes,
@@ -120,6 +121,7 @@ import { setupWorkspaceCreatorRoutes } from './server/routes/workspace-creators.
 import { createAgentDiscoveryModule } from './server/routes/agent-discovery.js';
 import { createAgentLifecycleModule } from './server/routes/agent-lifecycle.js';
 import { startEmbeddedRemoteClawConnector } from './server/remote-claw/embedded-connector.js';
+import { PH_STYLE_WORKSPACE_AGENT_IDS } from './server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -432,7 +434,7 @@ setupFlowRoutes(app, express, { readWorkspaceState, resolveAssemblyFeatureArchiv
 setupUsageRoutes(app, express);
 setupUISurfaceRoutes(app, express);
 
-// ── Work Threads（悬置地基：注册即休眠，无既有流程调用）→ server/thread-control/ ──
+// ── Work Threads → server/thread-control/（coder 宿主已启用线程承接）──
 setupThreadRoutes(app, express, { controller: getThreadController() });
 
 
@@ -553,6 +555,10 @@ app.post('/protoclaw/assembly_runtime/stop', express.json(), async (req, res, ne
 
 app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) => {
   try {
+    const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim() : 'programming-helper';
+    if (!PH_STYLE_WORKSPACE_AGENT_IDS.has(agentId)) {
+      return res.status(400).json({ error: `agentId is not supported for ph_project: ${agentId}` });
+    }
     const rawDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
     if (!rawDirectory) {
       return res.status(400).json({ error: 'openDirectory is required' });
@@ -561,12 +567,12 @@ app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) =>
     // On Windows the directory picker may return a lowercased path.
     const openDirectory = await normalizePathCasing(rawDirectory);
     const timestamp = new Date().toISOString();
-    const state = await readWorkspaceState('programming-helper');
+    const state = await readWorkspaceState(agentId);
     // Add to phProjects if not already there
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
     // Set as active project
     nextState.openDirectory = openDirectory;
-    await writeWorkspaceState('programming-helper', nextState);
+    await writeWorkspaceState(agentId, nextState);
     res.json({ ok: true, state: nextState });
   } catch (error) {
     next(error);
@@ -575,13 +581,17 @@ app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) =>
 
 app.post('/protoclaw/ph_project/switch', express.json(), async (req, res, next) => {
   try {
+    const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim() : 'programming-helper';
+    if (!PH_STYLE_WORKSPACE_AGENT_IDS.has(agentId)) {
+      return res.status(400).json({ error: `agentId is not supported for ph_project: ${agentId}` });
+    }
     const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
     if (!projectId || !projectId.startsWith('dir:')) {
       return res.status(400).json({ error: 'Valid projectId (dir:...) is required' });
     }
     const rawDirectory = projectId.slice(4);
     const timestamp = new Date().toISOString();
-    const state = await readWorkspaceState('programming-helper');
+    const state = await readWorkspaceState(agentId);
     // Prefer the stored openDirectory (preserves original casing) over the
     // ID-derived path (which is always lowercased).
     const stored = Array.isArray(state.phProjects)
@@ -593,7 +603,7 @@ app.post('/protoclaw/ph_project/switch', express.json(), async (req, res, next) 
     // Ensure the project exists in phProjects
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
     nextState.openDirectory = openDirectory;
-    await writeWorkspaceState('programming-helper', nextState);
+    await writeWorkspaceState(agentId, nextState);
     res.json({ ok: true, state: nextState });
   } catch (error) {
     next(error);
@@ -602,15 +612,19 @@ app.post('/protoclaw/ph_project/switch', express.json(), async (req, res, next) 
 
 app.post('/protoclaw/ph_project/add', express.json(), async (req, res, next) => {
   try {
+    const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim() : 'programming-helper';
+    if (!PH_STYLE_WORKSPACE_AGENT_IDS.has(agentId)) {
+      return res.status(400).json({ error: `agentId is not supported for ph_project: ${agentId}` });
+    }
     const rawDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
     if (!rawDirectory) {
       return res.status(400).json({ error: 'openDirectory is required' });
     }
     const openDirectory = await normalizePathCasing(rawDirectory);
     const timestamp = new Date().toISOString();
-    const state = await readWorkspaceState('programming-helper');
+    const state = await readWorkspaceState(agentId);
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
-    await writeWorkspaceState('programming-helper', nextState);
+    await writeWorkspaceState(agentId, nextState);
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -799,19 +813,25 @@ app.post('/api/agents/:agentId/input', (req, res, next) => {
   proxyToViewer(req, res).catch(next);
 });
 
-app.post('/api/agents/:agentId/user-turn', (req, res, next) => {
-  proxyToViewer(req, res).catch(next);
-});
-
-app.post('/api/agents/:agentId/queue-input', (req, res, next) => {
-  proxyToViewer(req, res).catch(next);
+// 用户输入统一网关：线程交接窗口（coder 宿主）转入 Thread Inbox 暂存，
+// 其余原样直投 viewer（含排队语义）。所有输入源（聊天框 / 语音 / 交互
+// 面板 / 未来 IM 路由）的 user-turn 投递必经此点。
+app.post('/api/agents/:agentId/user-turn', async (req, res, next) => {
+  try {
+    const result = await deliverUserInput({
+      viewerAgentId: req.params.agentId,
+      text: typeof req.body?.text === 'string' ? req.body.text : '',
+      images: Array.isArray(req.body?.images) ? req.body.images : undefined,
+      source: typeof req.body?.source === 'string' ? req.body.source : undefined,
+      sourceRef: typeof req.body?.sourceRef === 'string' ? req.body.sourceRef : undefined,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.get('/api/agents/:agentId/queued-inputs', (req, res, next) => {
-  proxyToViewer(req, res).catch(next);
-});
-
-app.post('/api/agents/:agentId/dequeue-input', (req, res, next) => {
   proxyToViewer(req, res).catch(next);
 });
 
@@ -1046,7 +1066,9 @@ app.use(express.static(path.join(__dirname, 'public'), {
 }));
 
 app.use((error, _req, res, _next) => {
-  res.status(error.statusCode || 500).json({ error: error.message || 'Internal Server Error' });
+  // error.statusCode: http-errors 系；error.status: UserTurnDeliveryError 等
+  // 本仓库自定义错误（如 user-turn 的 409 input_mode_conflict）。
+  res.status(error.statusCode || error.status || 500).json({ error: error.message || 'Internal Server Error' });
 });
 
 async function readRemoteClawConfig() {

@@ -1,0 +1,88 @@
+{
+  "id": "coder",
+  "kind": "agent",
+  "name": "自动化编码智能体",
+  "description": "线程版编程小助手：会话在线程内接续，trim/摘要后自动接力，切换期间指令不丢失",
+  "version": "0.1.0",
+  "icon": "code",
+  "category": "development",
+  "processMode": "shared-by-project",
+  "enabled": true,
+  "features": [
+    "todo",
+    "force-continuation",
+    "audit",
+    "audio-feedback",
+    "user-input",
+    "websearch",
+    "memory",
+    "shell",
+    "lsp",
+    "context-guard",
+    "mcp",
+    "skill"
+  ],
+  "identities": [
+    {
+      "id": "main",
+      "displayName": "自动化编码智能体",
+      "description": "线程化编码执行：与编程小助手同套工具链，会话以线程为承接单位",
+      "sessionModel": "persistent",
+      "qualifierLabel": "项目",
+      "operations": [
+        "status",
+        "sessions",
+        "send",
+        "interrupt",
+        "create",
+        "overview"
+      ]
+    }
+  ],
+  "ui": {
+    "entry": "sessions",
+    "tabs": [
+      {
+        "id": "sessions",
+        "label": {
+          "zh": "项目",
+          "en": "Projects"
+        }
+      },
+      {
+        "id": "chat",
+        "label": {
+          "zh": "对话",
+          "en": "Chat"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "session-list",
+          "type": "session-list",
+          "visibility": "tab:sessions",
+          "title": {
+            "zh": "项目记录",
+            "en": "Project Sessions"
+          },
+          "description": {
+            "zh": "继续之前的线程，或开始一段新的编码会话。trim 与摘要都会在线程内自动接续。",
+            "en": "Resume a prior thread or start a new coding session. Trim and summary continue within the same thread."
+          },
+          "headerAction": {
+            "label": {
+              "zh": "新对话",
+              "en": "New Chat"
+            },
+            "action": {
+              "type": "create_session",
+              "openDirectory": ""
+            }
+          }
+        }
+      ]
+    }
+  }
+}

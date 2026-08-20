@@ -51,7 +51,7 @@ function renderWorkspaceSessionList(agent, block) {
     return _renderAgentCreatorSessionList(agent, block, ctx);
   }
 
-  if (agent?.id === 'programming-helper') {
+  if (agent?.id === 'programming-helper' || agent?.id === 'coder') {
     return _renderProgrammingHelperSessionList(agent, block, ctx);
   }
 

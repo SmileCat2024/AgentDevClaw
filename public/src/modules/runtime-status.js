@@ -145,13 +145,18 @@ function buildChildRuntimeEntry(runtimeAgent) {
 }
 
 function getSidebarOperationPendingName(operation) {
+  // 线程宿主（coder）：trim / summary 是线程内上下文接力，不是「创建新会话」
+  const isThreadHost = typeof window.isThreadHostAgentId === 'function'
+    && window.isThreadHostAgentId(operation?.agentId);
   if (operation?.kind === 'branch') {
     return currentLanguage === 'zh' ? '正在创建分支…' : 'Creating branch…';
   }
   if (operation?.kind === 'trim') {
+    if (isThreadHost) return currentLanguage === 'zh' ? '上下文接力中 · 精简…' : 'Relaying context · trim…';
     return currentLanguage === 'zh' ? '正在生成精简会话…' : 'Creating trimmed session…';
   }
   if (operation?.kind === 'summary') {
+    if (isThreadHost) return currentLanguage === 'zh' ? '上下文接力中 · 摘要…' : 'Relaying context · summary…';
     return currentLanguage === 'zh' ? '正在生成摘要会话…' : 'Creating summarized session…';
   }
   return currentLanguage === 'zh' ? '正在启动新会话…' : 'Starting new session…';
@@ -160,13 +165,17 @@ function getSidebarOperationPendingName(operation) {
 function getSidebarOperationFailureName(operation) {
   // A degraded target operation is reached only after the session mutation has
   // committed. Its failure describes the runtime startup, never session creation.
+  const isThreadHost = typeof window.isThreadHostAgentId === 'function'
+    && window.isThreadHostAgentId(operation?.agentId);
   if (operation?.kind === 'branch') {
     return currentLanguage === 'zh' ? '分支会话启动失败' : 'Branch session failed to start';
   }
   if (operation?.kind === 'trim') {
+    if (isThreadHost) return currentLanguage === 'zh' ? '接力会话启动失败' : 'Relay session failed to start';
     return currentLanguage === 'zh' ? '精简会话启动失败' : 'Trimmed session failed to start';
   }
   if (operation?.kind === 'summary') {
+    if (isThreadHost) return currentLanguage === 'zh' ? '接力会话启动失败' : 'Relay session failed to start';
     return currentLanguage === 'zh' ? '摘要会话启动失败' : 'Summarized session failed to start';
   }
   return currentLanguage === 'zh' ? '新会话启动失败' : 'New session failed to start';
@@ -182,7 +191,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // We also cross-reference phProjects to pick up the correct-cased directory
   // path (sessions may store a lowercased path on Windows).
   const sessionDirMap = new Map();
-  if (String(prebuiltAgent?.id || '').trim() === 'programming-helper') {
+  if (String(prebuiltAgent?.id || '').trim() === 'programming-helper' || String(prebuiltAgent?.id || '').trim() === 'coder') {
     const phProjects = Array.isArray(prebuiltAgent?.workspace_state?.phProjects)
       ? prebuiltAgent.workspace_state.phProjects
       : [];
@@ -319,7 +328,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // Programming-helper groups every runtime by project. Its operation creator
     // must provide this identity explicitly; never infer it from a current or
     // historical session, because either can belong to another project.
-    if (String(prebuiltAgent?.id || '').trim() === 'programming-helper' && !operation.projectDir) continue;
+    if ((String(prebuiltAgent?.id || '').trim() === 'programming-helper' || String(prebuiltAgent?.id || '').trim() === 'coder') && !operation.projectDir) continue;
 
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
       addEntry({

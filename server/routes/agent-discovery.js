@@ -1,7 +1,7 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 import {
-  AGENTS_ROOT, HIDDEN_PREBUILT_AGENT_IDS, VIEWER_ORIGIN, PROJECT_ROOT,
+  AGENTS_ROOT, HIDDEN_PREBUILT_AGENT_IDS, VIEWER_ORIGIN, PROJECT_ROOT, PH_STYLE_WORKSPACE_AGENT_IDS,
 } from '../shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe } from '../shared/fs-helpers.js';
@@ -232,7 +232,7 @@ export function createAgentDiscoveryModule(ctx) {
   }
 
   async function readWorkspaceSessionSnapshot(agentId) {
-    if (sanitizeSessionFragment(agentId) === 'programming-helper') {
+    if (PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
       return sessionApi.listPrebuiltSessions(agentId, {
         recordDiagnostics: false,
         includeModelDefaults: false,

@@ -130,6 +130,33 @@ export class ThreadStore {
         sessionIds: (Array.isArray(record.sessionChain) ? record.sessionChain : []).map(
           (entry) => entry?.sessionId || '',
         ).filter(Boolean),
+        // 每棒接力边（轻量，供前端接力分隔条渲染）：非 root 会话的来源与方式
+        chainEdges: (() => {
+          const chain = Array.isArray(record.sessionChain) ? record.sessionChain : [];
+          const bySuccessor = new Map();
+          for (const entry of chain) {
+            if (entry?.successorSessionId && entry?.sessionId) {
+              bySuccessor.set(entry.successorSessionId, entry);
+            }
+          }
+          return chain
+            .filter((entry) => entry?.sessionId && entry.sessionId !== record.rootSessionId)
+            .map((entry) => {
+              const pred = bySuccessor.get(entry.sessionId);
+              return {
+                sessionId: entry.sessionId,
+                fromSessionId: pred?.sessionId || '',
+                relayKind: pred?.endKind || '',
+              };
+            });
+        })(),
+        // 交接意图原始时间戳（0 = 无）；fresh 与否由读取方按统一规则派生
+        handoffStartedAt: Number(record.pendingSuccession?.startedAt) || 0,
+        // pending 指令文本预览（轻量，供前端暂存气泡渲染；上限 5 条）
+        pendingTexts: (Array.isArray(record.commands) ? record.commands : [])
+          .filter((c) => c?.status === 'pending')
+          .slice(0, 5)
+          .map((c) => String(c?.text || '').slice(0, 120)),
         revision: record.revision,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,

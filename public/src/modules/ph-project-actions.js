@@ -120,8 +120,8 @@ window.phAutoSaveModelConfig = async () => {
 
 window.phOpenProject = async () => {
   const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || currentAgent.id !== 'programming-helper') {
-    console.error('Not in programming-helper workspace');
+  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) {
+    console.error('Not in a PH-style workspace');
     return;
   }
 
@@ -136,7 +136,7 @@ window.phOpenProject = async () => {
     const openRes = await fetch('/protoclaw/ph_project/open', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ openDirectory: chosenPath }),
+      body: JSON.stringify({ agentId: currentAgent.id, openDirectory: chosenPath }),
     });
     if (!openRes.ok) {
       throw new Error(await openRes.text().catch(() => 'Failed to open project'));
@@ -144,8 +144,8 @@ window.phOpenProject = async () => {
 
     const openResult = await openRes.json();
     // Use returned state directly — no extra fetch
-    const freshState = openResult.state || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent('programming-helper'))).json();
-    updateAgentWorkspaceState('programming-helper', freshState);
+    const freshState = openResult.state || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent(currentAgent.id))).json();
+    updateAgentWorkspaceState(currentAgent.id, freshState);
 
     lastRenderedWorkspaceHtml = '';
     renderCurrentMainView();
@@ -159,7 +159,7 @@ window.phOpenProject = async () => {
 
 window.phSwitchProject = async (projectId) => {
   const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || currentAgent.id !== 'programming-helper') {
+  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) {
     return;
   }
 
@@ -167,7 +167,7 @@ window.phSwitchProject = async (projectId) => {
     const switchRes = await fetch('/protoclaw/ph_project/switch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId }),
+      body: JSON.stringify({ agentId: currentAgent.id, projectId }),
     });
     if (!switchRes.ok) {
       throw new Error(await switchRes.text().catch(() => 'Failed to switch project'));
@@ -175,8 +175,8 @@ window.phSwitchProject = async (projectId) => {
 
     const switchResult = await switchRes.json();
     // Use returned state directly — no extra fetch
-    const freshState = switchResult.state || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent('programming-helper'))).json();
-    updateAgentWorkspaceState('programming-helper', freshState);
+    const freshState = switchResult.state || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent(currentAgent.id))).json();
+    updateAgentWorkspaceState(currentAgent.id, freshState);
 
     // Close dropdown
     const dropdown = document.querySelector('.ph-project-dropdown');
@@ -230,7 +230,7 @@ window.phOpenInExplorer = async (dirPath) => {
  */
 window.phToggleModelSlot = async () => {
   const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || currentAgent.id !== 'programming-helper') {
+  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) {
     return;
   }
   
@@ -271,9 +271,9 @@ window.phToggleModelSlot = async () => {
     const resp = await fetch('/protoclaw/agent_model_presets', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        agentId: 'programming-helper', 
-        modelPresets: newModelPresets 
+      body: JSON.stringify({
+        agentId: currentAgent.id,
+        modelPresets: newModelPresets
       }),
     });
     const result = await resp.json();
@@ -308,7 +308,7 @@ window.phToggleModelSlot = async () => {
  */
 window.phSetProcessMode = async (processMode) => {
   const agent = getCurrentAgentRecord();
-  if (!agent || agent.id !== 'programming-helper') return;
+  if (!agent || !isPhStyleWorkspaceAgent(agent)) return;
   try {
     const response = await fetch('/protoclaw/agent_process_mode', {
       method: 'PUT',

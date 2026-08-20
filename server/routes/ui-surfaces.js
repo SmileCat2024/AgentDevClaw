@@ -9,7 +9,7 @@
  */
 
 import { UISurfaceStore } from '../ui-surface-store.js';
-import { submitUserTurn, UserTurnDeliveryError } from '../shared/user-turn.js';
+import { deliverUserInput, UserTurnDeliveryError } from '../thread-control/input-gateway.js';
 import { validateGenerativeUISpec } from '../../local-features/dist/generative-ui/src/validator.js';
 import { UI_LIMITS } from '../../local-features/dist/generative-ui/src/types.js';
 
@@ -267,10 +267,11 @@ export function setupUISurfaceRoutes(app, express) {
       JSON.stringify(fieldValues, null, 2),
     ].join('\n');
 
-    // 与聊天输入框保持相同投递语义：空闲时响应 input request，运行中才排队。
+    // 与聊天输入框保持相同投递语义：空闲时响应 input request，运行中排队；
+    // 线程交接窗口（coder 宿主）经统一网关转入 Thread Inbox 暂存。
     try {
-      const delivery = await submitUserTurn({
-        agentId,
+      const delivery = await deliverUserInput({
+        viewerAgentId: agentId,
         text: messageText,
         source: 'generative-ui',
         sourceRef: eventId,
@@ -278,6 +279,7 @@ export function setupUISurfaceRoutes(app, express) {
 
       const responseBody = {
         ok: true,
+        // delivery 判别含 'thread_queued'（交接窗口内已暂存到 Thread Inbox）
         delivery: delivery.delivery,
         queued: delivery.delivery === 'queued',
         requestId: delivery.delivery === 'input' ? delivery.requestId : null,

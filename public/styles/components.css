@@ -1541,6 +1541,59 @@ body[data-theme="light"] .workspace-docset-row {
   color: #8b949e;
 }
 
+/* 交接窗口内的 head 徽标：进行中状态（脉动） */
+.workspace-history-thread.handoffing {
+  border-color: rgba(255, 163, 71, 0.45);
+  background: rgba(255, 163, 71, 0.12);
+  color: #ffa347;
+  animation: thread-handoff-pulse 1.4s ease-in-out infinite;
+}
+
+.thread-header-indicator.relaying {
+  border-color: rgba(255, 163, 71, 0.45);
+  background: rgba(255, 163, 71, 0.1);
+  color: #ffa347;
+  animation: thread-handoff-pulse 1.4s ease-in-out infinite;
+}
+
+/* 接力分隔条：非 root 棒的聊天区顶部来源提示 */
+.thread-relay-separator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 14px;
+  user-select: none;
+}
+
+.thread-relay-separator .thread-relay-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(126, 231, 135, 0.35), transparent);
+}
+
+.thread-relay-separator .thread-relay-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid rgba(126, 231, 135, 0.3);
+  background: rgba(126, 231, 135, 0.08);
+  color: #7ee787;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+@keyframes thread-handoff-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 .thread-header-indicator {
   flex-shrink: 0;
   border: 1px solid rgba(126, 231, 135, 0.3);
@@ -5141,6 +5194,19 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: auto;
+  opacity: 0.8;
+}
+
+/* 线程暂存（Thread Inbox）：交接窗口/非 head 会话的输入暂存，
+   意图归属是工作而非 runtime，等新会话就绪后自动投递 */
+.queue-bubble.thread-staged {
+  border-style: dashed;
+  border-color: var(--accent-color, #4a9eff);
+  opacity: 0.65;
+}
+
+.queue-bubble.thread-staged::before {
+  content: '⏸ ';
   opacity: 0.8;
 }
 

@@ -31,7 +31,9 @@ export const USER_AGENT_REGISTRY_PATH = path.join(USER_DATA_ROOT, 'agent-registr
 export const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
 export const GROUP_CHATS_ROOT = path.join(USER_DATA_ROOT, 'group-chats');
 export const THREADS_ROOT = path.join(USER_DATA_ROOT, 'threads');
-export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace']);
+export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace', 'coder']);
+// PH 风格工作区（项目列表 / 会话列表首页 / 空表单会话）：programming-helper 与 coder（线程版编程助手）
+export const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper', 'coder']);
 // Hidden workspaces remain discoverable by their stable ID for historical sessions and explicit routes.
 export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'feature-creator', 'flow-test']);
 export const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');

@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
-import { USER_DATA_ROOT, AGENTS_ROOT } from '../shared/constants.js';
+import { USER_DATA_ROOT, AGENTS_ROOT, PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import {
   sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent,
@@ -217,10 +217,10 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
   const workspaceState = isWorkspaceSessionAgent(agentId)
     ? await readWorkspaceState(agentId)
     : null;
-  const isProgrammingHelper = normalizedAgentId === 'programming-helper';
-  const formId = cleanSessionText(record.formId) || (isProgrammingHelper ? '' : 'startup-form');
+  const isPhStyleWorkspace = PH_STYLE_WORKSPACE_AGENT_IDS.has(normalizedAgentId);
+  const formId = cleanSessionText(record.formId) || (isPhStyleWorkspace ? '' : 'startup-form');
   const sourceForm = workspaceState?.forms?.[formId] || {};
-  const startupForm = isProgrammingHelper ? {} : (workspaceState?.forms?.['startup-form'] || {});
+  const startupForm = isPhStyleWorkspace ? {} : (workspaceState?.forms?.['startup-form'] || {});
   const featureName = cleanSessionText(record.featureName) || cleanSessionText(sourceForm.feature_name) || cleanSessionText(startupForm.feature_name);
   const agentName = cleanSessionText(record.agentName) || cleanSessionText(sourceForm.agent_name || sourceForm.assembly_name) || cleanSessionText(startupForm.agent_name);
   const taskTitle = cleanSessionText(record.taskTitle) || cleanSessionText(sourceForm.task_title) || cleanSessionText(startupForm.task_title);
@@ -243,7 +243,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
     : cleanSessionText(record.openDirectory);
   const displayName = (normalizedAgentId === 'agent-creator' || (normalizedAgentId === 'flow-workspace' && formId === 'assembly-form'))
     ? agentName
-    : (normalizedAgentId === 'programming-helper' ? taskTitle : (normalizedAgentId === 'agent-studio' ? (projectName || goal) : featureName));
+    : (isPhStyleWorkspace ? taskTitle : (normalizedAgentId === 'agent-studio' ? (projectName || goal) : featureName));
   try {
     const stat = await fs.stat(sessionPath);
 
@@ -693,7 +693,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
 }
 
 async function listPrebuiltSessions(agentId, options = {}) {
-  const useIndexReadModel = sanitizeSessionFragment(agentId) === 'programming-helper'
+  const useIndexReadModel = PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))
     && options.forceRich !== true;
   if (!useIndexReadModel) return listPrebuiltSessionsRich(agentId);
   const retryAfter = Number(sidebarReadModelRetryAfter.get(agentId)) || 0;
@@ -734,9 +734,9 @@ async function createPrebuiltSession(agentId, options = {}) {
   const currentState = isWorkspaceSessionAgent(agentId)
     ? await readWorkspaceState(agentId)
     : null;
-  const isProgrammingHelper = normalizedAgentId === 'programming-helper';
-  const requestedFormId = cleanSessionText(options.formId) || (isProgrammingHelper ? '' : 'startup-form');
-  const startupForm = isProgrammingHelper ? {} : (currentState?.forms?.['startup-form'] || {});
+  const isPhStyleWorkspace = PH_STYLE_WORKSPACE_AGENT_IDS.has(normalizedAgentId);
+  const requestedFormId = cleanSessionText(options.formId) || (isPhStyleWorkspace ? '' : 'startup-form');
+  const startupForm = isPhStyleWorkspace ? {} : (currentState?.forms?.['startup-form'] || {});
   const sourceForm = currentState?.forms?.[requestedFormId] || startupForm;
   const sourceSessionId = cleanSessionText(options.sourceSessionId);
   const preIndex = await readSessionIndex(agentId);
@@ -811,9 +811,9 @@ async function createPrebuiltSession(agentId, options = {}) {
     || cleanSessionText(startupForm.reference_materials);
   const sessionDisplayName = normalizedAgentId === 'agent-creator'
     ? nextAgentName
-    : (normalizedAgentId === 'agent-studio' ? (nextProjectName || nextGoal) : (normalizedAgentId === 'programming-helper' ? '' : nextFeatureName));
+    : (normalizedAgentId === 'agent-studio' ? (nextProjectName || nextGoal) : (isPhStyleWorkspace ? '' : nextFeatureName));
   const explicitTitle = cleanSessionText(options.title);
-  const nextTitle = explicitTitle || nextTaskTitle || (isProgrammingHelper
+  const nextTitle = explicitTitle || nextTaskTitle || (isPhStyleWorkspace
     ? await getNextNewSessionTitle(agentId, nextOpenDirectory)
     : buildNamedSessionTitle(sessionDisplayName, createdAt));
   // 解析当前模型配置，持久化到 session index record
@@ -1032,7 +1032,7 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
       forms: currentState.forms,
       openDirectory,
     });
-  } else if (sanitizeSessionFragment(agentId) === 'programming-helper') {
+  } else if (PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
     const currentState = await readWorkspaceState(agentId);
     const openDirectory = cleanSessionText(existing.openDirectory) || cleanSessionText(currentState.openDirectory);
     const cleanedForms = { ...currentState.forms };
@@ -1059,7 +1059,7 @@ function selectFallbackSession(agentId, sessions, sourceSession) {
     && session?.sessionType !== 'exploration'
     && session?.sessionType !== 'sub'
   ));
-  if (sanitizeSessionFragment(agentId) === 'programming-helper') {
+  if (PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
     const sourceDirectory = String(sourceSession?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
     if (!sourceDirectory) return null;
     candidates.splice(0, candidates.length, ...candidates.filter((session) => (
@@ -1256,7 +1256,7 @@ async function deletePrebuiltProject(agentId, projectId, options = {}) {
   const state = await readWorkspaceState(agentId);
   const projectsKey = normalizedAgentId === 'feature-creator'
     ? 'featureProjects'
-    : normalizedAgentId === 'programming-helper'
+    : PH_STYLE_WORKSPACE_AGENT_IDS.has(normalizedAgentId)
       ? 'phProjects'
       : 'agentProjects';
   const projects = Array.isArray(state[projectsKey]) ? [...state[projectsKey]] : [];

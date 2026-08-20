@@ -39,6 +39,19 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     const operationDegraded = entry.sidebarOperation?.phase === 'degraded';
     const targetStartDegraded = operationDegraded && entry.sidebarOperation?.errorCode === 'target_runtime_stopped';
     const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
+    // 线程宿主的 replacement：源会话不是「正在关闭」，而是「正在交接」给接力会话；
+    // archive-close / delete 仍是真实关闭，保持原文案。
+    const isThreadRelay = retiring
+      && !deleting
+      && !!entry.replacementMutation
+      && typeof window.isThreadHostAgentId === 'function'
+      && window.isThreadHostAgentId(ownerAgentId);
+    const zh = currentLanguage === 'zh';
+    const retiringLabel = targetStartDegraded
+      ? (isThreadRelay ? (zh ? '接力会话启动未完成' : 'Relay session start incomplete') : (zh ? '新会话启动未完成' : 'New session start incomplete'))
+      : operationDegraded
+        ? (isThreadRelay ? (zh ? '交接收尾未完成' : 'Relay close incomplete') : (zh ? '关闭未完成' : 'Close incomplete'))
+        : (isThreadRelay ? (zh ? '正在交接' : 'Relaying') : (zh ? '正在关闭' : 'Closing'));
     const itemClass = [
       'agent-item',
       'agent-runtime-item',
@@ -63,7 +76,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
       >
         <div class="agent-line">
           <span class="agent-status-dot"></span>
-          <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(targetStartDegraded ? (currentLanguage === 'zh' ? '新会话启动未完成' : 'New session start incomplete') : operationDegraded ? (currentLanguage === 'zh' ? '关闭未完成' : 'Close incomplete') : (currentLanguage === 'zh' ? '正在关闭' : 'Closing'))}</span>` : deleting ? `<span class="agent-runtime-transition-label">${escapeHtml(operationDegraded ? (currentLanguage === 'zh' ? '删除未完成' : 'Delete incomplete') : (currentLanguage === 'zh' ? '正在删除' : 'Deleting'))}</span>` : ''}</div>
+          <div class="agent-name">${escapeHtml(entry.name || entry.runtimeId)}${retiring ? `<span class="agent-runtime-transition-label">${escapeHtml(retiringLabel)}</span>` : deleting ? `<span class="agent-runtime-transition-label">${escapeHtml(operationDegraded ? (currentLanguage === 'zh' ? '删除未完成' : 'Delete incomplete') : (currentLanguage === 'zh' ? '正在删除' : 'Deleting'))}</span>` : ''}</div>
         </div>
       </div>
     `;

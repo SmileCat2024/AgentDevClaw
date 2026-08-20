@@ -32,6 +32,7 @@ import { createOperationTrace } from '../shared/operation-trace.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
+import { getThreadIntegration } from '../thread-control/thread-integration.js';
 
 // server.js lives at project root; this module is at server/routes/session.js
 const __filename = fileURLToPath(import.meta.url);
@@ -475,6 +476,10 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     });
     trace.mark('index_committed', { revision: nextIndex.revision });
 
+    // 线程宿主（coder）：分支即新线程（不在原线程内分叉）。新会话成为
+    // 一条独立线程的 root 与初始 head；非宿主工作空间 no-op，失败不阻断。
+    await getThreadIntegration().onSessionCreated(agentId, branchRecord);
+
     const agent = await requirePrebuiltAgentForRuntime(agentId);
     await startManagedAgent(agent, newSessionId);
     trace.mark('target_runtime_started');
@@ -674,6 +679,9 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
     trace.mark('index_committed', { revision: committedIndex.revision, sessionCount: committedIndex.sessions.length });
     const status = await startManagedAgent(agent, session.id);
     trace.mark('target_runtime_started');
+    // 线程宿主工作空间（coder）：新会话自动成为一条新线程的初始 head。
+    // 非 host 工作空间为 no-op；失败不阻断会话创建。
+    await getThreadIntegration().onSessionCreated(agent.id, session);
     res.json({
       protocolVersion: 2,
       operationId: trace.operationId,
@@ -1204,6 +1212,15 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     const appendSummary = req.body?.appendSummary === true;
     console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached} archive=${archiveOriginal} reason=${lineageReason} appendSummary=${appendSummary}`);
 
+    // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
+    // 投向即将退役的旧 head。公共入口一处标记，detached / 同步分支共用；
+    // applySessionSuccession 推进 head 时原子清除。非线程宿主 no-op。
+    await getThreadIntegration().beginSessionSuccession({
+      agentId: preferredAgentId,
+      sessionId,
+      reason: lineageReason,
+    });
+
     if (detached) {
       const jobId = `compact-resume-${Date.now()}-${randomUUID().slice(0, 8)}`;
       setTimeout(() => {
@@ -1215,6 +1232,13 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
           appendSummary,
         }).then(async (result) => {
           console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
+          // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）
+          await getThreadIntegration().applySessionSuccession({
+            agentId: preferredAgentId,
+            fromSessionId: sessionId,
+            toSessionId: result?.session?.id,
+            reason: lineageReason,
+          });
           // 服务端归档原会话
           let didArchive = false;
           if (archiveOriginal && preferredAgentId) {
@@ -1258,6 +1282,16 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     trace.mark('resume_completed', { targetSessionId: result?.session?.id || '' });
     console.log(`[compact_and_resume] completed session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
 
+    // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）。
+    // 放在响应前：前端拿到响应即导航到新会话并刷新线程状态，需保证
+    // head 已推进，避免徽标短暂指向旧会话。
+    const threadSuccession = await getThreadIntegration().applySessionSuccession({
+      agentId: preferredAgentId,
+      fromSessionId: sessionId,
+      toSessionId: result?.session?.id,
+      reason: lineageReason,
+    });
+
     // 服务端归档原会话
     let didArchive = false;
     let archiveError = '';
@@ -1285,6 +1319,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       operationId: trace.operationId,
       revision: finalRevision,
       ...result,
+      threadSuccession,
       sessionDelta: {
         revision: finalRevision,
         activeSessionId: finalIndex?.activeSessionId || targetSessionId || null,
@@ -1326,6 +1361,14 @@ app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (re
     const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
     const archiveOriginal = req.body?.archiveOriginal === true;
     console.log(`[summary_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId}`);
+
+    // 线程交接意图（coder 宿主）：同 compact_and_resume 入口的标记
+    await getThreadIntegration().beginSessionSuccession({
+      agentId: preferredAgentId,
+      sessionId,
+      reason: 'summary',
+    });
+
     const result = await compactAndResumeFromProvidedSummary({
       preferredAgentId,
       sessionId,
@@ -1339,6 +1382,14 @@ app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (re
       startRuntime: req.body?.startRuntime !== false,
     });
     console.log(`[summary_resume] completed session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
+
+    // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）
+    const threadSuccession = await getThreadIntegration().applySessionSuccession({
+      agentId: preferredAgentId,
+      fromSessionId: sessionId,
+      toSessionId: result?.session?.id,
+      reason: 'summary',
+    });
 
     // 服务端归档原会话
     let didArchive = false;
@@ -1355,6 +1406,7 @@ app.post('/protoclaw/context_handoffs/summary_resume', express.json(), async (re
 
     res.json({
       ...result,
+      threadSuccession,
       archive: {
         requested: archiveOriginal,
         succeeded: archiveOriginal ? didArchive : null,
@@ -1471,6 +1523,9 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
     const deleted = await deletePrebuiltSession(agent.id, req.body.sessionId, {
       includeSessions: req.body.responseMode !== 'delta',
     });
+    // 线程宿主（coder）：被删会话是线程 head 时取消该线程（pending 指令
+    // 一并取消）。非宿主 / 非 head / 无线程：no-op。
+    await getThreadIntegration().onSessionDeleted(agent.id, req.body.sessionId);
     if (deletedRuntime?.viewerAgentId && clearUISurfaces) {
       clearUISurfaces(deletedRuntime.viewerAgentId);
     }

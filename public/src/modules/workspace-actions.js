@@ -690,6 +690,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId, activeAgent));
         }
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
+        // 线程宿主（coder）：新会话在服务端已建线程，刷新使徽标立即可见
+        if (typeof window.refreshThreads === 'function') {
+          window.refreshThreads(true).catch(() => {});
+        }
         if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
         const optimisticAgent = result?.session
           ? (applyOptimisticWorkspaceSession(activeAgent.id, result.session) || activeAgent)

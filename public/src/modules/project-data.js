@@ -255,7 +255,7 @@ function getAgentProjectDisplayName(project) {
 }
 
 function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
-  if (agent?.id !== 'programming-helper') return [];
+  if (!isPhStyleWorkspaceAgent(agent)) return [];
 
   const workspaceState = getAgentWorkspaceState(agent);
   const sessions = getWorkspaceSessions(agent);

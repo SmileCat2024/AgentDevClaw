@@ -11,12 +11,14 @@ import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { execSync } from 'child_process';
 import { tuneMirrorLLM } from './mirror-runtime.js';
 import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
+import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = resolve(__dirname, '..');
 const SERVER_ORIGIN = cleanValue(process.env.PROTOCLAW_SERVER_ORIGIN) || 'http://127.0.0.1:1420';
-const WORKSPACE_BOUND_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace']);
+// 权威集合来自 server/shared/constants.js（服务端与所有脚本必须同源）
+const WORKSPACE_BOUND_AGENT_IDS = WORKSPACE_SESSION_AGENT_IDS;
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';

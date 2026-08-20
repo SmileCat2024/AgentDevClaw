@@ -1,9 +1,9 @@
 /**
- * Thread Routes — 工作线程 HTTP API（悬置地基）
+ * Thread Routes — 工作线程 HTTP API
  *
  * 提供线程的创建 / 查询 / 指令追加 / head 推进 / 投递尝试 / 取消。
- * 地基阶段无任何前端入口或自动流程调用这些接口——它们是未来
- * 「连续工作」产品化的接线点，注册即休眠。
+ * 当前由 coder（自动化编码智能体）工作空间消费；其他工作空间不创建
+ * 线程，本组接口对其不可见。
  *
  * 错误约定：not_found → 404；revision/head 冲突 → 409；参数问题 → 400。
  */
@@ -84,7 +84,13 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
         source,
         idempotencyKey,
       });
-      res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result });
+      // head runtime 已就绪时即时投递（successor 已接棒的场景）；
+      // 未就绪保持 pending，等 head 推进时投递。
+      let delivery = null;
+      if (!result.duplicate) {
+        delivery = await controller.deliverPendingCommands(req.params.threadId);
+      }
+      res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result, delivery });
     } catch (err) {
       _errorResponse(res, err);
     }
@@ -108,7 +114,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
     }
   });
 
-  // ── 投递尝试（地基阶段恒返回 bridge_disabled）────────────────────
+  // ── 投递尝试（显式触发；交接中 / runtime 未就绪时指令保持 pending）──
 
   app.post('/protoclaw/threads/:threadId/deliver', jsonMiddleware, async (req, res) => {
     try {
