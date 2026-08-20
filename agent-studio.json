@@ -7,7 +7,7 @@
     {
       "name": "force-continuation",
       "modulePath": "D:\\code\\AgentDevClaw\\features\\force-continuation\\dist\\index.js",
-      "status": "snapshotted",
+      "status": "verified",
       "package": "@agentdev/force-continuation",
       "source": {
         "kind": "project",
@@ -20,8 +20,8 @@
         ]
       },
       "verification": {
-        "lastVerifiedRunId": "run-1787134156624-ecxo",
-        "verifiedAt": "2026-08-19T10:09:19.750Z",
+        "lastVerifiedRunId": "run-1787200089920-qaxh",
+        "verifiedAt": "2026-08-20T04:28:25.901Z",
         "coverage": {
           "tools": [],
           "hooks": [
@@ -30,7 +30,35 @@
           ],
           "deniedTools": []
         },
-        "sourceDigest": "sha256:6883dfc045270dff81f6ace620e74ae4e45160be17afb5a3612732017d8bcb75"
+        "sourceDigest": "sha256:e0ca4bd63411092b65431a07c8f70690e8480d0e13bb89c9fb36a8cb0cb1d2b9"
+      }
+    },
+    {
+      "name": "tickets-build-flow",
+      "modulePath": "D:\\code\\AgentDevClaw\\features\\tickets-build-flow\\dist\\index.js",
+      "status": "snapshotted",
+      "package": "@agentdev/tickets-build-flow",
+      "source": {
+        "kind": "project",
+        "projectDir": "D:\\code\\AgentDevClaw\\features\\tickets-build-flow",
+        "entry": "D:\\code\\AgentDevClaw\\features\\tickets-build-flow\\dist\\index.js",
+        "buildCommand": [
+          "npm",
+          "run",
+          "build"
+        ]
+      },
+      "verification": {
+        "lastVerifiedRunId": "run-1787200089920-qaxh",
+        "verifiedAt": "2026-08-20T04:28:25.901Z",
+        "coverage": {
+          "tools": [
+            "tickets_flow_skill"
+          ],
+          "hooks": [],
+          "deniedTools": []
+        },
+        "sourceDigest": "sha256:07e8bd3c031e298e0bb15a9ab28bbbe0a3cef52cb8905fb53474889f2a27331f"
       }
     }
   ],
@@ -93,8 +121,58 @@
       "createdAt": "2026-08-19T04:35:42.297Z",
       "updatedAt": "2026-08-19T06:05:47.493Z",
       "description": "移除 force_continuation_status 工具后，Feature 成为纯自动策略：钩子照常触发，且不再向 Agent 暴露任何可调用工具。"
+    },
+    {
+      "id": "tickets-flow-list-skills",
+      "title": "票据构建流程规范清单（harness 无 SkillFeature 时的便携入口）",
+      "input": "我准备开始按工单做事了。请调用 tickets_flow_skill 工具（不带参数）查看 tickets-build-flow 提供的流程规范清单，然后告诉我一共有哪几个规范、各自适用什么场景。",
+      "sessionPolicy": "fresh",
+      "assertions": [
+        {
+          "kind": "tool-executed",
+          "tool": "tickets_flow_skill"
+        },
+        {
+          "kind": "tool-result-path",
+          "tool": "tickets_flow_skill",
+          "path": "$.count",
+          "equals": 3
+        },
+        {
+          "kind": "reply-includes",
+          "text": "implement"
+        }
+      ],
+      "enabled": true,
+      "createdAt": "2026-08-20T04:27:35.967Z",
+      "updatedAt": "2026-08-20T04:27:35.967Z"
+    },
+    {
+      "id": "tickets-flow-read-tdd",
+      "title": "读取 tdd 规范全文（SKILL.md 从构建产物分发）",
+      "input": "请调用 tickets_flow_skill 工具，参数 skill=tdd，读取 TDD 规范全文，然后用中文总结它的循环规则。",
+      "sessionPolicy": "fresh",
+      "assertions": [
+        {
+          "kind": "tool-executed",
+          "tool": "tickets_flow_skill"
+        },
+        {
+          "kind": "tool-result-path",
+          "tool": "tickets_flow_skill",
+          "path": "$.skill",
+          "equals": "tdd"
+        },
+        {
+          "kind": "reply-includes",
+          "text": "red"
+        }
+      ],
+      "enabled": true,
+      "createdAt": "2026-08-20T04:27:39.097Z",
+      "updatedAt": "2026-08-20T04:27:39.097Z"
     }
   ],
   "createdAt": "2026-08-19T04:22:48.571Z",
-  "updatedAt": "2026-08-19T10:09:29.970Z"
+  "updatedAt": "2026-08-20T04:31:20.686Z"
 }

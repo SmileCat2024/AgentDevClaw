@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "tickets-build-flow",
+  "name": "tickets-build-flow",
+  "version": "0.1.0",
+  "description": "tickets-build-flow feature for AgentDev",
+  "tags": [
+    "agentdev",
+    "feature",
+    "tickets-build-flow"
+  ],
+  "entry": "dist/index.js",
+  "homepage": "",
+  "repository": "",
+  "agentdev": {
+    "compatible": "^0.2.11"
+  },
+  "featureTypes": [],
+  "compatibility": {
+    "rollback": false,
+    "tags": [
+      "no-rollback"
+    ]
+  },
+  "requirements": {
+    "platforms": [],
+    "node": "",
+    "external": [],
+    "services": []
+  }
+}
