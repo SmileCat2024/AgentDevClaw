@@ -293,6 +293,7 @@ body[data-theme="light"] .agent-entry.has-active-runtime > .agent-item:not(.acti
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  opacity: 0.7;
 }
 
 .project-enter-btn {
