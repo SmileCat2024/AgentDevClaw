@@ -1928,6 +1928,19 @@ function isWorkspaceHostUnit(agent) {
   return !!(agent && agent.source === 'prebuilt' && (agent.id === 'agent-creator' || agent.id === 'feature-creator' || agent.id === 'agent-studio' || agent.id === 'qqbot' || agent.id === 'programming-helper' || agent.id === 'flow-workspace' || agent.id === 'work-group' || agent.id === 'coder'));
 }
 
+// 声明多 tab 并走通用 tab 栏的 host unit（coder 工单看板式首页）：
+// surface 层（tab 栏 / mode 解析）按通用 mode 驱动渲染，
+// 但 sidebar 导航与 runtime 解析仍按 host 处理（isWorkspaceHostUnit 语义不变）。
+const GENERIC_TAB_HOST_UNIT_IDS = new Set(['coder']);
+
+function usesGenericWorkspaceTabs(agent) {
+  return !!(agent && agent.source === 'prebuilt' && GENERIC_TAB_HOST_UNIT_IDS.has(agent.id));
+}
+
+function isTablessHostSurface(agent) {
+  return isWorkspaceHostUnit(agent) && !usesGenericWorkspaceTabs(agent);
+}
+
 // PH 风格工作区（项目列表 / 会话列表首页）：programming-helper 与 coder（线程版编程助手）
 const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper', 'coder']);
 

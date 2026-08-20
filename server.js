@@ -95,6 +95,8 @@ import { getThreadIntegration } from './server/thread-control/thread-integration
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
+import { createCoderTicketService, setupCoderTicketRoutes } from './server/coder-tickets.js';
+import { createCoderTicketIntake, setupCoderTicketIntakeRoutes } from './server/coder-ticket-intake.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
   setupFeatureRepositoryRoutes,
@@ -252,6 +254,23 @@ Object.assign(sessionApi, {
   buildLightPrebuiltSessionRecord,
 });
 
+const coderTicketService = createCoderTicketService({
+  sessionApi: sessionHelpers,
+  requireAgentLight,
+  startManagedAgent,
+  waitForManagedRuntimeReady,
+  getAgentRuntime,
+  threadIntegration: getThreadIntegration(),
+  threadController: getThreadController(),
+});
+
+agentLifecycle.onAgentExit((agentId) => {
+  if (agentId !== 'coder') return;
+  setTimeout(() => {
+    coderTicketService.recoverAll().catch((error) => console.warn('[coder-tickets] runtime exit recovery failed:', error.message));
+  }, 1000);
+});
+
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──
 
 // ── Group Chat API → server/routes/group-chat.js ──
@@ -342,6 +361,7 @@ setupSessionRoutes(app, express, {
   notifySessionLineage,
   notifySessionArchived,
   clearUISurfaces: (viewerAgentId) => getUISurfaceStore().clearAgent(viewerAgentId),
+  coderTickets: coderTicketService,
 });
 
 // ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
@@ -438,6 +458,9 @@ setupUISurfaceRoutes(app, express);
 
 // ── Work Threads → server/thread-control/（coder 宿主已启用线程承接）──
 setupThreadRoutes(app, express, { controller: getThreadController() });
+setupCoderTicketRoutes(app, express, { service: coderTicketService });
+const coderTicketIntake = createCoderTicketIntake({ ticketService: coderTicketService });
+setupCoderTicketIntakeRoutes(app, express, { intake: coderTicketIntake });
 // runtime 就绪补投：succession 时刻 runtime 未就绪而保持 pending 的指令，
 // 在 head runtime 真正 ready 时重试（设计 §5 的最后一个投递触发点）。
 onRuntimeReady((agentId, sessionId) => {
@@ -1256,6 +1279,11 @@ async function main() {
 
   // Apply global proxy before listening (affects all fetch + child processes)
   applyProxy();
+
+  // 工单是 coder 的长期真相；服务重启后按线程当前 head 恢复，而不重放原始请求。
+  coderTicketService.recoverAll().catch((err) => {
+    console.warn('[coder-tickets] startup recovery failed:', err.message);
+  });
 
   app.listen(APP_PORT, () => {
     log('server', `product ui: http://127.0.0.1:${APP_PORT}`);

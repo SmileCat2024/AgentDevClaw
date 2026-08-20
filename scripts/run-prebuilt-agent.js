@@ -616,7 +616,7 @@ SessionLifecycle.prototype.start = async function () {
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
     runtime: this.runtime,
-    ...(agentId === 'programming-helper' ? {
+    ...((agentId === 'programming-helper' || agentId === 'coder') ? {
       contextGuard: {
         contextLength: this.resolved?.contextLength ?? null,
         compressRatio: this.resolved?.compressRatio ?? 80,

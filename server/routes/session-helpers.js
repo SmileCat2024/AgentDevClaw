@@ -1366,6 +1366,7 @@ async function resolveContextLength(agentId) {
     cleanupEmptySessions,
     listPrebuiltSessions,
     buildSessionModelInfoMap,
+    updateSessionIndex,
     createPrebuiltSession,
     activatePrebuiltSession,
     deletePrebuiltSession,

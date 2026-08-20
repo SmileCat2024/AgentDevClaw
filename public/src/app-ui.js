@@ -76,7 +76,7 @@ function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
     return;
   }
   unitModePreferences[key] = mode;
-  if (mode && mode !== 'chat' && !isWorkspaceHostUnit(agent)) {
+  if (mode && mode !== 'chat' && !isTablessHostSurface(agent)) {
     workspaceSurfaceModePreferences[key] = mode;
   }
   currentWorkspaceTab = mode;
@@ -95,7 +95,7 @@ function getPassiveWorkspaceSurfaceMode(agent = getCurrentAgentRecord()) {
 function getDefaultUnitMode(agent = getCurrentAgentRecord()) {
   const ui = getCurrentUnitUi(agent);
   if (!ui) return 'chat';
-  if (isWorkspaceHostUnit(agent)) {
+  if (isTablessHostSurface(agent)) {
     if (readOnlyMode || currentRuntimeAgentId) {
       return 'chat';
     }
@@ -135,7 +135,7 @@ function ensureUnitMode(agent = getCurrentAgentRecord()) {
     return null;
   }
 
-  if (isWorkspaceHostUnit(agent)) {
+  if (isTablessHostSurface(agent)) {
     currentWorkspaceTab = (readOnlyMode || currentRuntimeAgentId)
       ? 'chat'
       : getPassiveWorkspaceSurfaceMode(agent);
@@ -320,7 +320,7 @@ function shouldRenderWorkspaceSurface(agent = getCurrentAgentRecord()) {
     return false;
   }
 
-  if (isWorkspaceHostUnit(agent)) {
+  if (isTablessHostSurface(agent)) {
     return !(readOnlyMode || currentRuntimeAgentId);
   }
 
@@ -331,7 +331,7 @@ function shouldRenderWorkspaceSurface(agent = getCurrentAgentRecord()) {
 function isChatSurfaceActive(agent = getCurrentAgentRecord()) {
   const ui = getCurrentUnitUi(agent);
   if (!ui) return true;
-  if (isWorkspaceHostUnit(agent)) {
+  if (isTablessHostSurface(agent)) {
     return !!(readOnlyMode || currentRuntimeAgentId);
   }
   return ensureUnitMode(agent) === 'chat';
@@ -1174,6 +1174,8 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'action-group') return renderWorkspaceActionGroup(block);
   if (block.type === 'session-list') return renderWorkspaceSessionList(agent, block);
   if (block.type === 'studio-projects') return renderStudioProjectsBlock(agent, block);
+  if (block.type === 'coder-tickets') return window.CoderTicketsUI?.render?.() || '';
+  if (block.type === 'coder-settings') return window.CoderSettingsUI?.render?.() || '';
   if (block.type === 'form') return renderWorkspaceForm(agent, block);
   if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);
   if (block.type === 'assembly-library') return renderAssemblyLibraryBlock(agent, block);
@@ -1392,7 +1394,7 @@ function resetRuntimeBackedSurfaceState() {
 
 function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
   if (!workspaceTabsBar) return;
-  if (isWorkspaceHostUnit(agent)) {
+  if (isTablessHostSurface(agent)) {
     workspaceTabsBar.classList.add('hidden');
     workspaceTabsBar.innerHTML = '';
     return;

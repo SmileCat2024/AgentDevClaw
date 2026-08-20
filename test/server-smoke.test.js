@@ -105,6 +105,8 @@ describe('Server module imports', () => {
       '../server/usage-ledger.js',
       '../server/claw-mcp.js',
       '../server/oauth-codex.js',
+      '../server/coder-tickets.js',
+      '../server/coder-ticket-intake.js',
     ];
 
     for (const mod of modules) {

@@ -18,8 +18,7 @@ const CONTEXT_GUARD_MANIFEST = {
       enabled: {
         type: 'boolean',
         default: true,
-        title: '达到压缩阈值时强制停止会话',
-        description: '仅作用于编程小助手。开启后，会话达到模型的压缩阈值将中断当前调用，并拒绝后续派发；关闭后可手动继续。',
+        title: '上下文保护',
       },
     },
   },

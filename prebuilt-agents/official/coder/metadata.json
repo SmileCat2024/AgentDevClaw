@@ -40,47 +40,41 @@
     }
   ],
   "ui": {
-    "entry": "sessions",
+    "entry": "tickets",
     "tabs": [
       {
-        "id": "sessions",
+        "id": "tickets",
         "label": {
-          "zh": "项目",
-          "en": "Projects"
+          "zh": "工单",
+          "en": "Tickets"
         }
       },
       {
         "id": "chat",
         "label": {
-          "zh": "对话",
-          "en": "Chat"
+          "zh": "执行明细",
+          "en": "Run Details"
+        }
+      },
+      {
+        "id": "settings",
+        "label": {
+          "zh": "设置",
+          "en": "Settings"
         }
       }
     ],
     "home": {
       "blocks": [
         {
-          "id": "session-list",
-          "type": "session-list",
-          "visibility": "tab:sessions",
-          "title": {
-            "zh": "项目记录",
-            "en": "Project Sessions"
-          },
-          "description": {
-            "zh": "继续之前的线程，或开始一段新的编码会话。trim 与摘要都会在线程内自动接续。",
-            "en": "Resume a prior thread or start a new coding session. Trim and summary continue within the same thread."
-          },
-          "headerAction": {
-            "label": {
-              "zh": "新对话",
-              "en": "New Chat"
-            },
-            "action": {
-              "type": "create_session",
-              "openDirectory": ""
-            }
-          }
+          "id": "ticket-board",
+          "type": "coder-tickets",
+          "visibility": "tab:tickets"
+        },
+        {
+          "id": "coder-settings",
+          "type": "coder-settings",
+          "visibility": "tab:settings"
         }
       ]
     }

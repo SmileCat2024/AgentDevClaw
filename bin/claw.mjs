@@ -137,6 +137,82 @@ async function handleAgents(args = []) {
   }
 }
 
+// ── coder ticket intake (external tickets directory) ────────────
+
+const CLAW_SERVER_BASE = `http://127.0.0.1:${process.env.PORT || 1420}`;
+
+async function clawServerFetch(pathname, options = {}) {
+  let response;
+  try {
+    response = await fetch(`${CLAW_SERVER_BASE}${pathname}`, options);
+  } catch {
+    throw new Error(`Claw server not reachable at ${CLAW_SERVER_BASE} — start it with \`npm start\` first`);
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function handleTickets(args = []) {
+  const [sub, ticketsDir, ticketId] = args;
+  const cwdIndex = args.indexOf('--cwd');
+  const projectDir = cwdIndex >= 0 ? (args[cwdIndex + 1] || '') : '';
+
+  if (sub === 'list') {
+    if (!ticketsDir) throw new Error('用法: claw tickets list <tickets-dir>');
+    const payload = await clawServerFetch(`/protoclaw/coder/ticket_intake?dir=${encodeURIComponent(ticketsDir)}`);
+    const tickets = payload.tickets || [];
+    if (tickets.length === 0) {
+      console.log('该目录下没有 JSON 工单。');
+      return;
+    }
+    console.log(`Tickets (${tickets.length}) in ${ticketsDir}:`);
+    console.log('');
+    for (const t of tickets) {
+      const status = t.parseError ? '!! 无效 JSON'
+        : t.dispatched ? (t.status || 'dispatched')
+        : '未派发';
+      console.log(`  ${t.id}   [${status}]`);
+      console.log(`    ${truncate(t.title || '', 90)}`);
+      if (t.parseError) console.log('    (缺少有效 instruction 或 JSON 解析失败)');
+      console.log('');
+    }
+    console.log('派发: claw tickets run <tickets-dir> <id> --cwd <project-dir>');
+    return;
+  }
+
+  if (sub === 'run') {
+    if (!ticketsDir || !ticketId) {
+      throw new Error('用法: claw tickets run <tickets-dir> <ticket-id> [--cwd <project-dir>]');
+    }
+    const payload = await clawServerFetch('/protoclaw/coder/ticket_intake/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticketsDir, ticketId, projectDir }),
+    });
+    const ticket = payload.ticket || {};
+    const actionLabels = {
+      dispatched: '已派发，coder 开始执行',
+      resumed: '工单已存在，已恢复执行',
+      'already-running': '工单正在执行中，未重复投递',
+      'already-done': '工单已完成，跳过',
+    };
+    console.log(actionLabels[payload.action] || payload.action);
+    console.log(`  ticket: ${ticket.id}`);
+    console.log(`  status: ${ticket.status || '?'}`);
+    if (ticket.threadId) console.log(`  thread: ${ticket.threadId}`);
+    if (ticket.headSessionId) console.log(`  session: ${ticket.headSessionId}`);
+    console.log('  可在 Claw Web UI 的「自动化编码智能体 → 工单」查看执行明细。');
+    return;
+  }
+
+  console.error('用法: claw tickets list <tickets-dir>');
+  console.error('      claw tickets run <tickets-dir> <ticket-id> [--cwd <project-dir>]');
+  process.exit(sub ? 1 : 0);
+}
+
 // ── Legacy command → operation name mapping ─────────────────────
 
 const LEGACY_ALIASES = {
@@ -188,6 +264,11 @@ async function main() {
     return;
   }
 
+  if (command === 'tickets') {
+    await handleTickets(args.slice(1));
+    return;
+  }
+
   if (LEGACY_ALIASES[command]) {
     await handleLegacy(defaultWs, LEGACY_ALIASES[command], args.slice(1));
     return;
@@ -218,7 +299,9 @@ function printHelp() {
   console.log('  claw agents register <project-dir>     Register a metadata-based standalone Agent');
   console.log('  claw agents unregister <agent-id>      Remove a registered Agent');
   console.log('  claw agents inspect <agent-id>         Show Agent source and project metadata');
-  console.log('  claw run <name> --goal \"...\" [...]     Run a plain agent (viewer-observable; --debug uses Studio source overrides)');
+  console.log('  claw run <name> --goal \\"...\\" [...]     Run a plain agent (viewer-observable; --debug uses Studio source overrides)');
+  console.log('  claw tickets list <tickets-dir>         List JSON tickets from an external directory');
+  console.log('  claw tickets run <dir> <id> [--cwd DIR] Dispatch one ticket to the coder agent');
   console.log('');
   console.log('Legacy aliases (default workspace):');
   console.log('  claw exp [--limit N] [--file F] [--keyword K]');
