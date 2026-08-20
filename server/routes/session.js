@@ -79,7 +79,7 @@ export function setupSessionRoutes(app, express, ctx) {
     notifySessionLineage,
     notifySessionArchived,
     clearUISurfaces,
-    coderTickets,
+    threadRotation,
   } = ctx;
 
 function normalizeContextGuardState(value) {
@@ -120,9 +120,9 @@ app.post('/protoclaw/context_guard_event', express.json(), async (req, res, next
       res.status(404).json({ error: 'session not found' });
       return;
     }
-    if (agentId === 'coder' && coderTickets) {
-      void coderTickets.handleContextGuard(agentId, sessionId).catch((error) => {
-        console.error('[coder-tickets] context rotation failed:', error.message);
+    if (threadRotation) {
+      void threadRotation.handleContextGuard(agentId, sessionId).catch((error) => {
+        console.error('[thread-rotation] context rotation failed:', error.message);
       });
     }
     res.json({ ok: true, contextGuard });

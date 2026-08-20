@@ -139,7 +139,7 @@ async function handleAgents(args = []) {
   }
 }
 
-// ── coder ticket intake (external tickets directory) ────────────
+// ── Claw server API access (threads control plane) ─────────────
 
 const CLAW_SERVER_BASE = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
@@ -379,188 +379,6 @@ async function handleThreads(args = []) {
   throw new Error(`未知 threads 子命令: ${subcommand || '(空)'}（可用: list / create / show / events / send / deliver / advance / handoff-failed / resume / close）`);
 }
 
-async function handleTickets(args = []) {
-  const [sub, ticketsDir, ticketId] = args;
-  const cwdIndex = args.indexOf('--cwd');
-  const projectDir = cwdIndex >= 0 ? (args[cwdIndex + 1] || '') : '';
-  const wait = args.includes('--wait');
-  const formatIndex = args.indexOf('--format');
-  const format = formatIndex >= 0 ? (args[formatIndex + 1] || 'result') : 'result';
-  const intervalIndex = args.indexOf('--interval');
-  const intervalMs = intervalIndex >= 0 ? Math.max(250, Number(args[intervalIndex + 1]) || 1000) : 1000;
-
-  if (sub === 'list' || sub === 'ls') {
-    if (!ticketsDir) throw new Error('用法: claw tickets list <tickets-dir>');
-    const payload = await clawServerFetch(`/protoclaw/coder/ticket_intake?dir=${encodeURIComponent(ticketsDir)}`);
-    const tickets = payload.tickets || [];
-    if (tickets.length === 0) {
-      console.log('该目录下没有 JSON 工单。');
-      return;
-    }
-    console.log(`Tickets (${tickets.length}) in ${ticketsDir}:`);
-    console.log('');
-    for (const t of tickets) {
-      const status = t.parseError ? '!! 无效 JSON'
-        : t.dispatched ? (t.status || 'dispatched')
-        : '未派发';
-      console.log(`  ${t.id}   [${status}]`);
-      console.log(`    ${truncate(t.title || '', 90)}`);
-      if (t.parseError) console.log('    (缺少有效 instruction 或 JSON 解析失败)');
-      console.log('');
-    }
-    console.log('派发: claw tickets run <tickets-dir> <id> --cwd <project-dir>');
-    return;
-  }
-
-  if (sub === 'run') {
-    if (!ticketsDir || !ticketId) {
-      throw new Error('用法: claw tickets run <tickets-dir> <ticket-id> [--cwd <project-dir>] [--wait] [--format result|text|json|quiet|jsonl]');
-    }
-    const payload = await clawServerFetch('/protoclaw/coder/ticket_intake/dispatch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticketsDir, ticketId, projectDir }),
-    });
-    const ticket = payload.ticket || {};
-    writeTicketLifecycle(`dispatch: action=${payload.action || 'unknown'} ticket=${ticket.id || ticketId} thread=${ticket.threadId || 'pending'}`);
-    if (!wait) {
-      writeTicketResult(ticket, format);
-      return;
-    }
-    await waitForTicket(ticket.id || ticketId, { format, intervalMs });
-    return;
-  }
-
-  if (sub === 'show') {
-    if (!ticketsDir) throw new Error('用法: claw tickets show <ticket-id>');
-    const payload = await clawServerFetch(`/protoclaw/coder/tickets/${encodeURIComponent(ticketsDir)}`);
-    writeTicketResult(payload.ticket || {}, format);
-    return;
-  }
-
-  if (sub === 'resume' || sub === 'close') {
-    if (!ticketsDir) throw new Error(`用法: claw tickets ${sub} <ticket-id>`);
-    const endpoint = sub === 'resume' ? 'resume' : 'done';
-    const payload = sub === 'close'
-      ? await closeTicketThread(ticketsDir)
-      : await clawServerFetch(`/protoclaw/coder/tickets/${encodeURIComponent(ticketsDir)}/${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-    const ticket = payload.ticket || {};
-    writeTicketLifecycle(`${sub}: ticket=${ticket.id || ticketsDir} status=${ticket.threadStatus || ticket.status || 'unknown'}`);
-    writeTicketResult(ticket, format);
-    return;
-  }
-
-  console.error('用法: claw tickets list <tickets-dir>');
-  console.error('      claw tickets run <tickets-dir> <ticket-id> [--cwd <project-dir>] [--wait] [--format result|text|json|quiet|jsonl]');
-  console.error('      claw tickets show <ticket-id>');
-  console.error('      claw tickets resume <ticket-id>');
-  console.error('      claw tickets close <ticket-id>');
-}
-
-async function closeTicketThread(ticketId) {
-  const ticketPayload = await clawServerFetch(`/protoclaw/coder/tickets/${encodeURIComponent(ticketId)}`);
-  const ticket = ticketPayload.ticket || {};
-  if (!ticket.threadId) throw new Error(`Ticket has no thread: ${ticketId}`);
-  const closed = await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(ticket.threadId)}/close`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reason: 'cli' }),
-  });
-  return { ticket: { ...ticket, threadStatus: closed.thread?.status || 'closed' } };
-}
-
-function writeTicketLifecycle(message) {
-  process.stderr.write(`[thread] ${message}\n`);
-}
-
-// 非 --wait 场景本轮尚无 turn 结果：result/quiet 保持 stdout 安静
-// （对齐单 agent CLI「stdout 只承载结果」），确认信息走 stderr 生命周期行；
-// json / text 供数据检查。
-function writeTicketResult(ticket, format = 'result') {
-  if (format === 'json') {
-    process.stdout.write(JSON.stringify(ticket, null, 2) + '\n');
-    return;
-  }
-  if (format === 'text') {
-    process.stdout.write(`${ticket.status || 'unknown'}\n`);
-  }
-}
-
-function writeAgentResult(ticket, events, format = 'result') {
-  const message = [...events].reverse().find((event) => event.type === 'item.completed' && event.item?.type === 'agent_message');
-  // ok 由最后一个 turn 终态事件决定：guard 轮换中段的 turn.cancelled /
-  // 被打断 turn 不影响最终判定，接力后的自然完成即成功
-  const turnTerminals = events.filter((event) => event.type === 'turn.completed' || event.type === 'turn.failed');
-  const lastTurn = turnTerminals[turnTerminals.length - 1] || null;
-  const ok = lastTurn?.type === 'turn.completed';
-  const result = {
-    ok,
-    status: ok ? 'completed' : (lastTurn ? 'failed' : 'unknown'),
-    response: message?.item?.text || null,
-    error: lastTurn?.type === 'turn.failed' ? lastTurn.error?.message : null,
-    agentId: ticket.agentId || 'coder',
-    sessionId: ticket.headSessionId || null,
-    durationMs: null,
-    timestamp: new Date().toISOString(),
-  };
-  if (format === 'json') {
-    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-  } else if (format === 'quiet') {
-    if (result.response) process.stdout.write(result.response + '\n');
-  } else if (format === 'text') {
-    process.stdout.write(`${result.response || result.error || ''}\n`);
-  } else {
-    process.stdout.write(`PLAIN_AGENT_RESULT:${JSON.stringify(result)}\n`);
-  }
-}
-
-async function waitForTicket(ticketId, { format = 'result', intervalMs = 1000 } = {}) {
-  const initial = await clawServerFetch(`/protoclaw/coder/tickets/${encodeURIComponent(ticketId)}`);
-  const threadId = initial.ticket?.threadId;
-  if (!threadId) throw new Error(`Ticket has no thread after dispatch: ${ticketId}`);
-  let cursor = Math.max(0, Number(initial.ticket?.threadEventCursor) || 0);
-  let previousStatus = '';
-  const outputEvents = [];
-  while (true) {
-    const events = await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events?after=${cursor}`);
-    for (const event of events.events || []) {
-      cursor += 1;
-      outputEvents.push(event);
-      if (format === 'jsonl') {
-        process.stdout.write(JSON.stringify(event) + '\\n');
-      } else {
-        for (const line of renderSessionEventHuman(event)) process.stderr.write(line + '\\n');
-      }
-    }
-    const payload = await clawServerFetch(`/protoclaw/coder/tickets/${encodeURIComponent(ticketId)}`);
-    const ticket = payload.ticket || {};
-    const threadStatus = ticket.threadStatus || 'unknown';
-    if (threadStatus !== previousStatus) {
-      const lifecycle = ticket.threadLifecycle?.type || threadStatus;
-      writeTicketLifecycle(`ticket=${ticket.id} status=${threadStatus} lifecycle=${lifecycle} head=${ticket.headSessionId || 'none'}`);
-      previousStatus = threadStatus;
-    }
-    // 退出条件：
-    // 1) turn.completed —— 自然完成（guard 打断产生的 turn.cancelled 不是退出信号）
-    // 2) 线程进入不可继续态 —— failed / rotation_failed / closed / waiting_input
-    // 期间 turn.failed 若是真实错误，线程状态会随后转为 failed，由条件 2 收口
-    const naturalFinish = outputEvents.some((event) => event.type === 'turn.completed');
-    if (naturalFinish || ['closed', 'failed', 'rotation_failed', 'waiting_input'].includes(threadStatus)) {
-      if (format !== 'jsonl') writeAgentResult(ticket, outputEvents, format);
-      if (threadStatus === 'failed' || threadStatus === 'rotation_failed') process.exitCode = 2;
-      if (threadStatus === 'waiting_input') process.exitCode = 3;
-      return;
-    }
-    await sleep(intervalMs);
-  }
-}
-
-// ── Legacy command → operation name mapping ─────────────────────
-
 const LEGACY_ALIASES = {
   'exp': 'explorations',
   'explorations': 'explorations',
@@ -615,11 +433,6 @@ async function main() {
     return;
   }
 
-  if (command === 'tickets') {
-    await handleTickets(args.slice(1));
-    return;
-  }
-
   if (LEGACY_ALIASES[command]) {
     await handleLegacy(defaultWs, LEGACY_ALIASES[command], args.slice(1));
     return;
@@ -661,12 +474,6 @@ function printHelp() {
   console.log('  claw threads resume <thread-id> [--source S]');
   console.log('  claw threads close <thread-id> [--reason R]');
   console.log('  claw run <name> --goal "..." [...]     Run a plain agent (viewer-observable; --debug uses Studio source overrides)');
-  console.log('  claw tickets list <tickets-dir>         List JSON tickets from an external directory');
-  console.log('  claw tickets run <dir> <id> [--cwd DIR] Dispatch one ticket to the coder agent');
-  console.log('  claw tickets run <dir> <id> --wait       Wait while forwarding lifecycle to stderr');
-  console.log('  claw tickets show <id>                   Show the current ticket/thread state');
-  console.log('  claw tickets resume <id>                 Resume a blocked ticket');
-  console.log('  claw tickets close <id>                  Close the execution thread');
   console.log('');
   console.log('Legacy aliases (default workspace):');
   console.log('  claw exp [--limit N] [--file F] [--keyword K]');

@@ -41,13 +41,13 @@
     }
   ],
   "ui": {
-    "entry": "tickets",
+    "entry": "threads",
     "tabs": [
       {
-        "id": "tickets",
+        "id": "threads",
         "label": {
-          "zh": "工单",
-          "en": "Tickets"
+          "zh": "线程",
+          "en": "Threads"
         }
       },
       {
@@ -68,9 +68,9 @@
     "home": {
       "blocks": [
         {
-          "id": "ticket-board",
-          "type": "coder-tickets",
-          "visibility": "tab:tickets"
+          "id": "thread-board",
+          "type": "coder-threads",
+          "visibility": "tab:threads"
         },
         {
           "id": "coder-settings",

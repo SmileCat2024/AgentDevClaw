@@ -55,19 +55,19 @@ window.CoderSettingsUI = (() => {
     const zh = currentLanguage === 'zh';
     const title = zh ? '设置' : 'Settings';
     const description = zh
-      ? '配置保存到本地 agent 配置文件；对之后派发与新建的工单会话生效，正在执行的会话不受影响。'
-      : 'Saved to the local agent config; applies to tickets dispatched afterwards. Running sessions are not affected.';
+      ? '配置保存到本地 agent 配置文件；对之后新建的线程会话生效，正在执行的会话不受影响。'
+      : 'Saved to the local agent config; applies to newly created thread sessions. Running sessions are not affected.';
 
     return [
       '<section class="coder-settings">',
-      '<div class="coder-ticket-heading"><div><div class="coder-ticket-kicker">24H CODER</div><h2>' + title + '</h2><p>' + description + '</p></div></div>',
+      '<div class="coder-panel-heading"><div><div class="coder-panel-kicker">24H CODER</div><h2>' + title + '</h2><p>' + description + '</p></div></div>',
       '<div class="coder-settings-card">',
       '<h3>' + (zh ? '模型' : 'Model') + '</h3>',
       '<div class="coder-settings-row">',
       '<select id="coder-settings-model">',
       presets.length === 0 ? `<option value="">${zh ? '（无可用预设）' : '(no presets)'}</option>` : presetOptions(currentPreset),
       '</select>',
-      '<button class="coder-ticket-btn" type="button" onclick="window.CoderSettingsUI.save()">' + (zh ? '保存' : 'Save') + '</button>',
+      '<button class="coder-btn" type="button" onclick="window.CoderSettingsUI.save()">' + (zh ? '保存' : 'Save') + '</button>',
       '</div>',
       '<p class="coder-settings-hint">',
       loading && !loaded ? (zh ? '正在读取…' : 'Loading…')

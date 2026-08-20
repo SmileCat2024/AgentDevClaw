@@ -6,8 +6,8 @@
  *   audio-feedback / user-input / generative-ui / websearch / memory / shell /
  *   image-reader / lsp / context-guard / github），保证与编程小助手同等的
  *   功能体验和右侧面板通讯。
- * - 增挂 tickets-build-flow（拿到工单之后的 implement / tdd / code-review
- *   构建流程规范），与本 agent 的工单看板衔接。
+ * - 增挂 tickets-build-flow（implement / tdd / code-review 构建流程规范），
+ *   为线程内执行提供流程技能。
  * - 相对编程小助手的裁剪：ClawDispatchFeature（server 侧调度桥）与
  *   GroupChatBridgeFeature（群聊桥）不挂载——本工作空间以线程为执行承接
  *   单位，不参与调度与群聊路由。
@@ -86,7 +86,7 @@ export class CoderAgent extends BasicAgent {
 
     // 不挂载 MCP feature：mcp_* 工具会占据 tools 数组头部，把 read/ls 等
     // 核心工具挤到 14 位之后——Lite 级小模型对此敏感，实测会退化为只输出计划
-    // 文本而不发起工具调用。工单执行依赖的是内置工具链，不需要外部 MCP 接入。
+    // 文本而不发起工具调用。线程执行依赖的是内置工具链，不需要外部 MCP 接入。
     super({
       ...config,
       features: {

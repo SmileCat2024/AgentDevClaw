@@ -421,7 +421,7 @@ POST /protoclaw/threads/:threadId/resume             恢复调度
 POST /protoclaw/threads/:threadId/close              关闭调度对象
 ```
 
-通用 CLI 是这些接口的无头入口，Thread 为主、工单为辅：
+通用 CLI 是这些接口的无头入口：
 
 ```bash
 claw threads list [--agent <agentId>] [--format text|json]
@@ -436,9 +436,9 @@ claw threads resume <threadId> [--source S]
 claw threads close <threadId> [--reason R]
 ```
 
-`claw threads` 只操作 Thread 的调度事实：head、Inbox、投递、接力和执行事件；不读取 ticket、不判断任务验收、不产生产品完成状态。当前 Thread 记录在 `~/.agentdev/AgentDevClaw/threads/`，runtime 消失不会让已创建的 Thread 从列表中消失；若 runtime 在事件上报前硬崩，查询结果是最后一次持久化状态。
+`claw threads` 只操作 Thread 的调度事实：head、Inbox、投递、接力和执行事件；不判断任务验收、不产生产品完成状态。当前 Thread 记录在 `~/.agentdev/AgentDevClaw/threads/`，runtime 消失不会让已创建的 Thread 从列表中消失；若 runtime 在事件上报前硬崩，查询结果是最后一次持久化状态。
 
-`claw tickets` 是 coder 的特化适配器，继续负责外部工单目录、项目目录、完成策略、工单恢复和 `done` 语义。它可以引用并驱动 Thread，但 Thread 层不反向依赖 ticket。
+历史上存在的 coder 工单适配层（`claw tickets`、`/protoclaw/coder/tickets`、ticket intake、工单状态机与 done 语义）已整体移除：context guard 触发的上下文接力收敛为 `server/thread-control/thread-rotation.js`（Thread 驱动，不含产品语义），coder 工作空间 UI 也只保留线程看板（`coder-threads` block）与设置。
 
 ---
 
@@ -458,15 +458,21 @@ claw threads close <threadId> [--reason R]
                                 applySessionSuccession / onSessionDeleted /
                                 tryDeliver）
     thread-routes.js           HTTP API（GET/POST /protoclaw/threads…）
+    thread-rotation.js         context guard 触发的上下文接力执行器
+                                （beginSuccession → 退役旧 head → trim+摘要
+                                → advanceHead → 恢复指令投递；失败置
+                                rotation_failed）
     input-gateway.js           统一输入网关 deliverUserInput
   server/shared/constants.js   WORKSPACE_SESSION_AGENT_IDS（权威集合）
   server/routes/session.js     compact/summary succession + branch 建线程
                                 + delete 线程善后的接线点
   scripts/mirror-runtime.js 等 三个 mirror 脚本统一 import 权威集合
 
-前端
- public/src/modules/thread-store.js   线程状态 + 徽标 + 指示器 + 守卫 +
+ 前端
+  public/src/modules/thread-store.js   线程状态 + 徽标 + 指示器 + 守卫 +
                                       暂存气泡数据源 + 接力分隔条
+  public/src/modules/coder-threads-ui.js  coder 工作空间线程看板
+                                          （列表 / 状态徽章 / 接力链 / 恢复与关闭）
  public/src/modules/persistent-input.js  主聊天入口守卫 + 暂存气泡渲染
  public/src/modules/input-helpers.js     槽位应答守卫（非 head 拦截）
  public/src/modules/chat-renderer.js     分隔条渲染点
