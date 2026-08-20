@@ -258,6 +258,7 @@ const coderTicketService = createCoderTicketService({
   sessionApi: sessionHelpers,
   requireAgentLight,
   startManagedAgent,
+  stopManagedAgent,
   waitForManagedRuntimeReady,
   getAgentRuntime,
   threadIntegration: getThreadIntegration(),

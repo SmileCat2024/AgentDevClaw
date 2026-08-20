@@ -36,7 +36,6 @@ import { ContextGuardFeature } from '../../../local-features/dist/context-guard/
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
 
-const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
@@ -45,7 +44,6 @@ const EXPLORE_PROMPT_PATH = join(PROMPTS_DIR, 'explore.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
 const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
-const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
 // Audio feedback is presentation-only. Awaiting the OS media process inside
 // the CallFinish hook delays AgentDev's authoritative call.finish event and
@@ -86,6 +84,9 @@ export class CoderAgent extends BasicAgent {
     const isExploration = runtime.sessionType === 'exploration' || process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
     const systemConfig = readSystemFeatureConfig();
 
+    // 不挂载 MCP feature：mcp_* 工具会占据 tools 数组头部，把 read/ls 等
+    // 核心工具挤到 14 位之后——Lite 级小模型对此敏感，实测会退化为只输出计划
+    // 文本而不发起工具调用。工单执行依赖的是内置工具链，不需要外部 MCP 接入。
     super({
       ...config,
       features: {
@@ -93,10 +94,7 @@ export class CoderAgent extends BasicAgent {
         ...systemConfig,
       },
       skillConfig: systemConfig.skill || undefined,
-      excludeMcpServers: Array.from(new Set([
-        ...(config.excludeMcpServers ?? []),
-        ...(isExploration ? EXCLUDED_MCP_SERVERS_EXPLORE : DEFAULT_EXCLUDED_MCP_SERVERS),
-      ])),
+      mcpServer: false,
     });
 
     this._isExploration = isExploration;
@@ -185,9 +183,7 @@ export class CoderAgent extends BasicAgent {
     composer
       .add('\n\n## 技能（Skills）\n\n')
       .add('当用户要求你执行任务时，检查是否有任何可用的技能匹配。技能提供专门的能力和领域知识。你拥有如下技能，可使用 invoke_skill 工具激活，以展开技能的详细介绍。\n')
-      .add({ skills: '- **{{name}}**: {{description}}' })
-      .add('\n\n## MCP 工具\n\n')
-      .add('除了标准工具外，你还可以使用通过 MCP (Model Context Protocol) 接入的外部工具。默认自动挂载的工具通常以 `mcp_` 开头，而业务功能内部封装的工具可能使用业务前缀命名。\n');
+      .add({ skills: '- **{{name}}**: {{description}}' });
 
     this.setSystemPrompt(composer);
   }

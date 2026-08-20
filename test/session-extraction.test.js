@@ -105,7 +105,7 @@ const EXPECTED_HELPER_KEYS = [
   'compactAndResumeCurrentSession', 'compactAndResumeFromProvidedSummary',
   'exportProvidedSummaryHandoff', 'deletePrebuiltProject', 'resolveContextLength',
   'lockExplorationSession', 'extractDomainsFromText',
-  'buildExplorationHandoffPayload', 'writeSyntheticHandoff',
+  'buildExplorationHandoffPayload', 'writeSyntheticHandoff', 'updateSessionIndex',
 ];
 
 describe('createSessionHelpers', () => {

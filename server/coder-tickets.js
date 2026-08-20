@@ -97,17 +97,37 @@ export function createCoderTicketService({
   sessionApi,
   requireAgentLight,
   startManagedAgent,
+  stopManagedAgent,
   waitForManagedRuntimeReady,
   getAgentRuntime,
   threadIntegration,
   threadController,
   stat = fs.stat,
 } = {}) {
-  if (!sessionApi || typeof sessionApi.updateSessionIndex !== 'function' || !requireAgentLight || !startManagedAgent || !waitForManagedRuntimeReady || typeof getAgentRuntime !== 'function' || !threadIntegration || !threadController) {
+  if (!sessionApi || typeof sessionApi.updateSessionIndex !== 'function' || !requireAgentLight || !startManagedAgent
+    || typeof stopManagedAgent !== 'function' || !waitForManagedRuntimeReady || typeof getAgentRuntime !== 'function' || !threadIntegration || !threadController) {
     throw new Error('createCoderTicketService requires session and thread dependencies');
   }
 
   const ticketLocks = new Map();
+
+  /**
+   * 清除 session index 里持久化的守卫阻断标志。
+   * 守卫阻断标志只在 runtime 内存里成立；runtime 停止或重启后它就变成
+   * 谎言（UI 会一直显示输入被禁用）。在 runtime 换代/退役时同步清掉。
+   */
+  async function clearPersistedGuardState(sessionId) {
+    try {
+      await sessionApi.updateSessionIndex(CODER_AGENT_ID, (index) => ({
+        ...index,
+        sessions: index.sessions.map((record) => record.id === sessionId && record.contextGuard
+          ? { ...record, contextGuard: null, updatedAt: new Date().toISOString() }
+          : record),
+      }));
+    } catch (error) {
+      console.warn(`[coder-tickets] failed to clear persisted guard state for session=${sessionId}:`, error?.message || error);
+    }
+  }
 
   async function withTicketLock(ticketId, operation) {
     const previous = ticketLocks.get(ticketId) || Promise.resolve();
@@ -210,6 +230,9 @@ export function createCoderTicketService({
       }
 
       const shouldResume = recovery || wasAlreadyReady;
+      // runtime 刚换代的会话不再处于守卫阻断态；清掉 index 里可能残留的
+      // 旧标志（如 rotation 失败或进程崩溃后重启的场景），否则 UI 永远禁用输入。
+      await clearPersistedGuardState(thread.headSessionId);
       const instruction = shouldResume
         ? `恢复工单「${ticket.instruction}」。${RECOVERY_INSTRUCTION}`
         : [
@@ -286,21 +309,33 @@ export function createCoderTicketService({
       const thread = current?.threadId ? await threadController.getThread(current.threadId) : null;
       if (!current || current.status !== 'running' || !thread || thread.headSessionId !== sessionId) return null;
       try {
-        await threadIntegration.beginSessionSuccession({ agentId, sessionId, reason: 'summary' });
+        await threadIntegration.beginSessionSuccession({ agentId, sessionId, reason: 'trim' });
+        // 先退役旧 head 再摘要：guard 已将其置于阻断态（内存仲裁拒绝一切输入），
+        // 留着只是僵尸会话；更重要的是 remove-session 会让 runtime 把最新会话
+        // 状态 flush 落盘——摘要 mirror 读的是 session 文件，若不先 flush，
+        // 会基于过期快照生成"没有实质性工作"的失真摘要（实测两轮轮换均复现）。
+        await stopManagedAgent(CODER_AGENT_ID, sessionId).catch((error) => {
+          console.warn(`[coder-tickets] failed to retire pre-rotation runtime for session=${sessionId}:`, error?.message || error);
+        });
         const result = await sessionApi.compactAndResumeCurrentSession({
           preferredAgentId: CODER_AGENT_ID,
           sessionId,
-          policy: { strategy: 'summarized-nine-section' },
+          // 混合精简：trim-transcript 保留裁剪后的对话主干（工具记录折叠），
+          // appendSummary 走 run-compact-mirror 独立摘要管线，把摘要 system
+          // message 追加到 seed 尾部（mode: trim-transcript-with-summary）。
+          policy: { strategy: 'trim-transcript' },
+          appendSummary: true,
           startRuntime: true,
         });
         const nextSessionId = cleanSessionText(result?.session?.id);
-        if (!nextSessionId) throw new Error('Summary compaction did not create a successor session');
+        if (!nextSessionId) throw new Error('Trim compaction did not create a successor session');
         await threadIntegration.applySessionSuccession({
           agentId,
           fromSessionId: sessionId,
           toSessionId: nextSessionId,
-          reason: 'summary',
+          reason: 'trim',
         });
+        await clearPersistedGuardState(sessionId);
         await threadController.appendCommand({
           threadId: current.threadId,
           kind: 'system_continuation',
@@ -313,6 +348,10 @@ export function createCoderTicketService({
         await writeTicket(rootDir, next);
         return toTicketSummary(next, await threadController.getThread(next.threadId));
       } catch (error) {
+        // 接力失败时旧 runtime 仍卡在守卫阻断态（内存仲裁拒绝一切输入）。
+        // 不退役的话，后续 resume() 会把恢复指令投给一个永远拒绝输入的 runtime。
+        await stopManagedAgent(CODER_AGENT_ID, sessionId).catch(() => {});
+        await clearPersistedGuardState(sessionId);
         const next = normalizeTicket({
           ...current,
           status: 'blocked',
