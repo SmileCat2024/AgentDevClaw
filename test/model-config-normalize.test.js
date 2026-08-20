@@ -167,6 +167,35 @@ describe('flattenModelPresets', () => {
     assert.deepStrictEqual(flattenModelPresets(null), []);
     assert.deepStrictEqual(flattenModelPresets(undefined), []);
   });
+
+  it('carries starred flag through flattening', () => {
+    const flat = flattenModelPresets({
+      presets: [
+        { name: 'A', model: 'a' },
+        { name: 'B', model: 'b', starred: true },
+        { name: 'C', model: 'c', starred: 'yes' },
+      ],
+    });
+    // B is starred and floats to the top
+    assert.deepStrictEqual(flat.map(p => p.name), ['B', 'A', 'C']);
+    assert.strictEqual(flat[0].starred, true);
+    assert.strictEqual(flat[1].starred, false);
+    // non-boolean truthy values are normalized to false
+    assert.strictEqual(flat[2].starred, false);
+  });
+
+  it('sorts starred presets to the top while keeping relative order stable', () => {
+    const flat = flattenModelPresets({
+      presets: [
+        { name: 'A', model: 'a' },
+        { name: 'B', model: 'b', starred: true },
+        { name: 'C', model: 'c' },
+        { name: 'D', model: 'd', starred: true },
+        { name: 'E', model: 'e' },
+      ],
+    });
+    assert.deepStrictEqual(flat.map(p => p.name), ['B', 'D', 'A', 'C', 'E']);
+  });
 });
 
 // ── buildStructuredModelPresets ─────────────────────────────────────
@@ -239,6 +268,20 @@ describe('buildStructuredModelPresets', () => {
     ]);
     assert.strictEqual(result.providers[0].apiKey, '');
     assert.deepStrictEqual(result.providers[0].endpoints, {});
+  });
+
+  it('presets starred flag through structured write and flatten round-trip', () => {
+    const structured = buildStructuredModelPresets([
+      { name: 'A', provider: 'anthropic', model: 'a', starred: true },
+      { name: 'B', provider: 'anthropic', model: 'b' },
+    ]);
+    assert.strictEqual(structured.presets.find(p => p.name === 'A').starred, true);
+    assert.strictEqual(structured.presets.find(p => p.name === 'B').starred, false);
+    // Round-trip: flatten of the written file keeps star + ordering
+    const flat = flattenModelPresets(structured);
+    assert.deepStrictEqual(flat.map(p => p.name), ['A', 'B']);
+    assert.strictEqual(flat[0].starred, true);
+    assert.strictEqual(flat[1].starred, false);
   });
 });
 

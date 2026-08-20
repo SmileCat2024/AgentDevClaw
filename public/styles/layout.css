@@ -2747,6 +2747,22 @@ body[data-theme="light"] .settings-icon-btn.danger:hover {
   color: #e04040;
 }
 
+.settings-icon-btn.star-btn:hover {
+  color: #f0b429;
+}
+
+.settings-icon-btn.star-btn.starred {
+  color: #f0b429;
+}
+
+body[data-theme="light"] .settings-icon-btn.star-btn:hover {
+  background: rgba(240, 180, 41, 0.12);
+}
+
+body[data-theme="light"] .settings-icon-btn.star-btn.starred {
+  color: #d99a09;
+}
+
 .settings-actions {
   display: flex;
   gap: 10px;
