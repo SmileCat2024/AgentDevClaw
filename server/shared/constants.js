@@ -30,6 +30,7 @@ export const AGENT_RUNTIME_ENVS_ROOT = path.join(USER_DATA_ROOT, 'runtime-envs')
 export const USER_AGENT_REGISTRY_PATH = path.join(USER_DATA_ROOT, 'agent-registry.json');
 export const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
 export const GROUP_CHATS_ROOT = path.join(USER_DATA_ROOT, 'group-chats');
+export const THREADS_ROOT = path.join(USER_DATA_ROOT, 'threads');
 export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace']);
 // Hidden workspaces remain discoverable by their stable ID for historical sessions and explicit routes.
 export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'feature-creator', 'flow-test']);

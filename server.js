@@ -90,6 +90,8 @@ import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
 import { setupToolStateRoutes } from './server/routes/tool-state.js';
 import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
+import { getThreadController } from './server/thread-control/thread-controller.js';
+import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
   setupFeatureRepositoryRoutes,
@@ -429,6 +431,9 @@ setupFeatureRepositoryRoutes(app, express);
 setupFlowRoutes(app, express, { readWorkspaceState, resolveAssemblyFeatureArchives });
 setupUsageRoutes(app, express);
 setupUISurfaceRoutes(app, express);
+
+// ── Work Threads（悬置地基：注册即休眠，无既有流程调用）→ server/thread-control/ ──
+setupThreadRoutes(app, express, { controller: getThreadController() });
 
 
 

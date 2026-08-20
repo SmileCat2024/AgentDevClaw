@@ -43,6 +43,9 @@ export const EnvelopeSource = Object.freeze({
   // this constant. Kept for backward compatibility; safe to remove.
   QUEUED_INPUT: 'queued-input',
   SYSTEM:       'system',
+  // Thread Inbox 下沉的指令（thread-control）。地基阶段仅由
+  // ThreadRuntimeBridge 在启用时创建，无既有消费方。
+  THREAD:       'thread',
 });
 
 // ── Delivery mode constants ────────────────────────────────────
@@ -73,6 +76,8 @@ export const ReplyPolicy = Object.freeze({
  * @param {string} [params.sessionId] - session identifier
  * @param {string} params.source      - one of EnvelopeSource
  * @param {string} [params.sourceRef] - opaque ref from the source (e.g. scheduleId)
+ * @param {string} [params.threadId]  - owning work thread (thread-control bridge only)
+ * @param {string} [params.commandId] - originating Thread Inbox command (bridge only)
  * @param {string} params.text        - the message / prompt text
  * @param {string} [params.deliveryMode] - default 'poll'
  * @param {string} [params.replyPolicy]  - default 'none'
@@ -88,6 +93,10 @@ export function createCallEnvelope(params = {}) {
     sessionId: params.sessionId || '',
     source: params.source || EnvelopeSource.SYSTEM,
     sourceRef: params.sourceRef || '',
+    // Thread 关联（可选透传）：由 ThreadRuntimeBridge 下沉 inbox 指令时
+    // 填写。现有投递路径不设置这两个字段，行为完全不变。
+    threadId: params.threadId || '',
+    commandId: params.commandId || '',
     text: typeof params.text === 'string' ? params.text : '',
     createdAt: now,
     status: EnvelopeStatus.PENDING,
@@ -234,6 +243,8 @@ export function getRuntimeInboxSnapshot(runtimeKey) {
       id: e.id,
       source: e.source,
       sourceRef: e.sourceRef,
+      threadId: e.threadId || '',
+      commandId: e.commandId || '',
       text: e.text ? (e.text.length > 80 ? e.text.slice(0, 80) + '...' : e.text) : '',
       status: e.status,
       createdAt: e.createdAt,

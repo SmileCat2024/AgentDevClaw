@@ -1521,6 +1521,50 @@ body[data-theme="light"] .workspace-docset-row {
   letter-spacing: 0.03em;
 }
 
+/* 工作线程徽标（悬置地基：无线程数据时不渲染） */
+.workspace-history-thread {
+  flex-shrink: 0;
+  border: 1px solid rgba(126, 231, 135, 0.3);
+  background: rgba(126, 231, 135, 0.12);
+  color: #7ee787;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+}
+
+.workspace-history-thread.continued {
+  border-color: rgba(139, 148, 158, 0.35);
+  background: rgba(139, 148, 158, 0.12);
+  color: #8b949e;
+}
+
+.thread-header-indicator {
+  flex-shrink: 0;
+  border: 1px solid rgba(126, 231, 135, 0.3);
+  background: rgba(126, 231, 135, 0.1);
+  color: #7ee787;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-header-indicator.clickable {
+  border-color: rgba(100, 180, 255, 0.35);
+  background: rgba(100, 180, 255, 0.12);
+  color: #64b4ff;
+  cursor: pointer;
+}
+
 .workspace-history-todo {
   flex-shrink: 0;
   border: 1px solid rgba(100, 180, 255, 0.3);
