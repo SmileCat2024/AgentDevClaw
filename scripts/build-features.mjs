@@ -6,7 +6,7 @@ import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
 
-const FEATURE_DIRS = ['force-continuation'];
+const FEATURE_DIRS = ['force-continuation', 'tickets-build-flow'];
 const root = resolve(import.meta.dirname, '..');
 const IS_WIN = process.platform === 'win32';
 
