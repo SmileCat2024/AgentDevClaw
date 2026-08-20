@@ -18,7 +18,7 @@
  */
 
 import { spawn } from 'child_process';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { backgroundCheck, cmdUpdate } from './advclaw-update.mjs';
@@ -104,12 +104,33 @@ if (requestedPort !== null) childEnv.PORT = String(requestedPort);
 // prestart lifecycle (local Feature compilation) always runs first. Running
 // npm's JavaScript entry point via Node works on every platform; in particular,
 // spawning npm.cmd with shell: false throws EINVAL on some Windows Node builds.
-const npmCliPath = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-const child = spawn(process.execPath, [npmCliPath, 'start'], {
-  cwd: projectRoot,
-  stdio: 'inherit',
-  env: childEnv,
-});
+// npm's install layout differs by installer: Windows official installs keep it
+// next to node.exe, while nvm / system installs on Linux & macOS keep it under
+// <prefix>/lib/node_modules.
+function resolveNpmCliPath() {
+  const nodeDir = dirname(process.execPath);
+  const candidates = [
+    join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ];
+  if (process.env.npm_execpath) candidates.push(process.env.npm_execpath);
+  return candidates.find((candidate) => existsSync(candidate)) || null;
+}
+
+const npmCliPath = resolveNpmCliPath();
+const child = npmCliPath
+  ? spawn(process.execPath, [npmCliPath, 'start'], {
+      cwd: projectRoot,
+      stdio: 'inherit',
+      env: childEnv,
+    })
+  : // Path resolution failed (exotic install): fall back to PATH lookup.
+    spawn('npm', ['start'], {
+      cwd: projectRoot,
+      stdio: 'inherit',
+      env: childEnv,
+      shell: process.platform === 'win32',
+    });
 
 child.on('exit', (code) => {
   process.exit(code ?? 1);
