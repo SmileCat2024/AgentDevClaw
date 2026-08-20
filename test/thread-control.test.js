@@ -39,7 +39,7 @@ import {
   pruneCommands,
   ThreadCommandStatus,
 } from '../server/thread-control/thread-inbox.js';
-import { UserTurnDeliveryError } from '../server/shared/user-turn.js';
+import { UserTurnDeliveryError, submitUserTurn } from '../server/shared/user-turn.js';
 
 function makeTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'claw-thread-test-'));
@@ -402,7 +402,7 @@ describe('ThreadRuntimeBridge (enabled) + user-turn integration', () => {
     assert.equal(result.reason, null);
 
     assert.equal(turns.length, 1);
-    assert.equal(turns[0].viewerAgentId, 'viewer-abc');
+    assert.equal(turns[0].agentId, 'viewer-abc');
     assert.equal(turns[0].text, '请继续');
     assert.equal(turns[0].source, 'thread');
     assert.equal(turns[0].sourceRef, command.commandId);
@@ -429,6 +429,36 @@ describe('ThreadRuntimeBridge (enabled) + user-turn integration', () => {
     const record = await controller.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.FAILED);
     assert.equal(record.commands[0].lastReason, 'invalid_input');
+  });
+
+  // 契约回归：bridge 传给 submitUserTurn 的参数名必须是 agentId。
+  // 历史事故：bridge 传 viewerAgentId（被客户端忽略）→ agentId undefined →
+  // 客户端预校验抛 invalid_input（不可重试）→ 接力指令全部被误判 failed。
+  // 用真实 submitUserTurn + fetchImpl mock 而非哑 stub，参数漂移当场炸出。
+  test('bridge passes contract-valid params to the real submitUserTurn client', async () => {
+    const seen = [];
+    const fetchImpl = async (url, init) => {
+      seen.push({ url, body: JSON.parse(init.body) });
+      return { ok: true, status: 200, json: async () => ({ success: true, delivery: 'queued' }) };
+    };
+    const { controller } = makeController(root, {
+      enabled: true,
+      resolveRuntimeViewerId: () => 'viewer-contract',
+      submitTurn: (params) => submitUserTurn(params, { fetchImpl }),
+    });
+    const thread = await controller.createThread({ agentId: 'agent-c', sessionId: 'cs-1' });
+    const { command } = await controller.appendCommand({ threadId: thread.threadId, text: '契约校验' });
+
+    const result = await controller.deliverPendingCommands(thread.threadId);
+    assert.equal(result.delivered, 1);
+    assert.equal(seen.length, 1);
+    assert.match(seen[0].url, /\/api\/agents\/viewer-contract\/user-turn$/);
+    assert.equal(seen[0].body.text, '契约校验');
+    assert.equal(seen[0].body.source, 'thread');
+    assert.equal(seen[0].body.sourceRef, command.commandId);
+
+    const record = await controller.getThread(thread.threadId);
+    assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
   });
 });
 
@@ -494,8 +524,56 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(record.sessionChain[0].successorSessionId, 'coder-s2');
   });
 
-  test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {
-    const { controller, integration } = makeIntegration();
+  // runtime-ready 补投：succession 时刻 runtime 未就绪（runtime_not_accepting）
+  // 保持 pending 的指令，在 head runtime 就绪时经 handleRuntimeReady 送达。
+  test('handleRuntimeReady delivers pending commands when head runtime becomes ready', async () => {
+    const turns = [];
+    let ready = false;
+    const { controller, integration } = makeIntegration({
+      enabled: true,
+      // succession 时刻新 head 的 runtime 尚未就绪
+      resolveRuntimeViewerId: (agentId, sessionId) =>
+        (ready && sessionId === 'coder-s2' ? 'viewer-s2' : null),
+      submitTurn: async (params) => {
+        turns.push(params);
+        return { success: true };
+      },
+    });
+
+    const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
+    await controller.appendCommand({ threadId: thread.threadId, text: '等 runtime 的指令' });
+
+    const outcome = await integration.applySessionSuccession({
+      agentId: 'coder',
+      fromSessionId: 'coder-s1',
+      toSessionId: 'coder-s2',
+      reason: 'summary',
+    });
+    assert.equal(outcome.applied, true);
+    assert.equal(outcome.delivery.delivered, 0);
+    assert.equal(outcome.delivery.reason, 'runtime_not_accepting');
+    assert.equal(turns.length, 0);
+
+    let record = await controller.getThread(thread.threadId);
+    assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
+
+    // runtime 就绪 → 补投送达
+    ready = true;
+    const readyOutcome = await integration.handleRuntimeReady('coder', 'coder-s2');
+    assert.equal(readyOutcome.applied, true);
+    assert.equal(readyOutcome.delivery.delivered, 1);
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].text, '等 runtime 的指令');
+
+    record = await controller.getThread(thread.threadId);
+    assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
+
+    // 非线程宿主 / 就绪会话不是任何线程 head：no-op
+    assert.equal((await integration.handleRuntimeReady('programming-helper', 'x')).reason, 'not_thread_host');
+    assert.equal((await integration.handleRuntimeReady('coder', 'coder-s1')).reason, 'no_thread_for_session');
+  });
+
+  test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {    const { controller, integration } = makeIntegration();
 
     const phOutcome = await integration.applySessionSuccession({
       agentId: 'programming-helper',
@@ -791,7 +869,7 @@ describe('InputGateway (unified user input routing)', () => {
     assert.equal(result.delivery, 'thread_queued');
     assert.equal(result.deliveryAttempt?.delivered, 1);
     assert.equal(turns.length, 1);
-    assert.equal(turns[0].viewerAgentId, 'viewer-ig-2');
+    assert.equal(turns[0].agentId, 'viewer-ig-2');
     assert.equal(turns[0].text, '请继续');
     assert.equal(turns[0].sourceRef, result.commandId);
 

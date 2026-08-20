@@ -9,7 +9,9 @@
  *   3. applySessionSuccession：successor 会话就绪后推进线程 head 并投递
  *      接力期间暂存的指令；
  *   4. onSessionDeleted：被删会话是线程 head 时取消该线程；
- *   5. tryDeliver：appendCommand 后的即时投递尝试（head runtime 已就绪时）。
+ *   5. tryDeliver：appendCommand 后的即时投递尝试（head runtime 已就绪时）；
+ *   6. handleRuntimeReady：head runtime 就绪时补投 pending 指令（经
+ *      shared/runtime-hooks 的 onRuntimeReady 订阅接入）。
  *
  * 兼容性边界：THREAD_HOST_AGENT_IDS 之外的工作空间（编程小助手等）
  * 在本层被直接跳过，会话流程行为与未接入线程时完全一致。
@@ -156,6 +158,29 @@ export function createThreadIntegration({ controller = null } = {}) {
           return { attempted: 0, delivered: 0, reason: 'thread_not_found', results: [] };
         }
         return { attempted: 0, delivered: 0, reason: 'error', error: error?.message || String(error) };
+      }
+    },
+
+    /**
+     * runtime 就绪钩子（server.js 经 onRuntimeReady 订阅接入）。
+     * succession 时刻 runtime 未就绪（waitForManagedRuntimeReady 超时等）
+     * 而保持 pending 的指令，在 head runtime 真正 ready 时补投——
+     * 这是「runtime 未就绪保持 pending，ready 后重试」的最后一个触发点。
+     * 就绪会话不是任何线程 head 时 no-op（启动期常态，非错误）。
+     */
+    async handleRuntimeReady(agentId, sessionId) {
+      const normalizedAgentId = String(agentId || '').trim();
+      if (!THREAD_HOST_AGENT_IDS.has(normalizedAgentId)) return { applied: false, reason: 'not_thread_host' };
+      const readySession = String(sessionId || '').trim();
+      if (!readySession) return { applied: false, reason: 'invalid_session' };
+      try {
+        const thread = await threadController.findThreadByHeadSession(normalizedAgentId, readySession);
+        if (!thread) return { applied: false, reason: 'no_thread_for_session' };
+        const delivery = await this.tryDeliver(thread.threadId);
+        return { applied: true, threadId: thread.threadId, delivery };
+      } catch (error) {
+        console.error(`[thread-integration] runtime-ready delivery failed for session=${readySession}:`, error?.message || error);
+        return { applied: false, reason: 'error', error: error?.message || String(error) };
       }
     },
   };

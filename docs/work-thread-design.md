@@ -206,6 +206,12 @@ deliverUserInput({ viewerAgentId, text, images, source, sourceRef })
   之间 succession 可能已完成（advanceHead 清挡板 + applySessionSuccession
   投递过一轮）——补一次投递尝试，交接仍在进行时它是 no-op
   （handoff_in_progress），已完成时当场送达，不留无触发点的 pending。
+- **runtime-ready 补投（最后一个触发点）**：succession 时刻 head runtime
+  未就绪（waitForManagedRuntimeReady 超时等）而保持 pending 的指令，在
+  runtime 真正就绪时经 shared/runtime-hooks 的 onRuntimeReady →
+  handleRuntimeReady 补投（就绪会话不是任何线程 head 时 no-op）。
+  pending 指令的完整触发点集合：append（tryDeliver）、succession
+  （applySessionSuccession）、runtime-ready（handleRuntimeReady）。
 - **接入点**：
   - `server.js` `/api/agents/:agentId/user-turn`（聊天 / 语音输入必经）；
   - `server/routes/ui-surfaces.js` 面板 action 提交。

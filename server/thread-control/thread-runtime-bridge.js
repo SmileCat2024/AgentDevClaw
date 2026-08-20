@@ -71,8 +71,11 @@ export class ThreadRuntimeBridge {
     }
 
     try {
+      // 契约对齐：submitUserTurn 的参数是 agentId（viewerAgentId 只是本层
+      // 的解析产物名）。参数名漂移会让客户端预校验抛 invalid_input（不可
+      // 重试），指令被误判 failed——契约测试覆盖此点。
       await this.submitTurn({
-        viewerAgentId,
+        agentId: viewerAgentId,
         text: command.text,
         source: 'thread',
         sourceRef: command.commandId,

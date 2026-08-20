@@ -91,6 +91,8 @@ import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
 import { setupToolStateRoutes } from './server/routes/tool-state.js';
 import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
 import { getThreadController } from './server/thread-control/thread-controller.js';
+import { getThreadIntegration } from './server/thread-control/thread-integration.js';
+import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
@@ -436,6 +438,11 @@ setupUISurfaceRoutes(app, express);
 
 // ── Work Threads → server/thread-control/（coder 宿主已启用线程承接）──
 setupThreadRoutes(app, express, { controller: getThreadController() });
+// runtime 就绪补投：succession 时刻 runtime 未就绪而保持 pending 的指令，
+// 在 head runtime 真正 ready 时重试（设计 §5 的最后一个投递触发点）。
+onRuntimeReady((agentId, sessionId) => {
+  getThreadIntegration().handleRuntimeReady(agentId, sessionId);
+});
 
 
 
