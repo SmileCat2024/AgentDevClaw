@@ -6,11 +6,13 @@ import { createThreadRotationService } from '../server/thread-control/thread-rot
 function buildDeps({ thread = null, compactResult = null, compactError = null } = {}) {
   const calls = { stop: [], begin: [], apply: [], fail: [], command: [], deliver: [], updateIndex: [] };
 
-  const threadController = {
-    findThreadByHeadSession: async () => thread,
-    appendCommand: async (input) => {
-      calls.command.push(input);
-      return { commandId: 'cmd-1', status: 'pending' };
+  const threadControl = {
+    core: {
+      findThreadByHeadSession: async () => thread,
+      appendCommand: async (input) => {
+        calls.command.push(input);
+        return { commandId: 'cmd-1', status: 'pending' };
+      },
     },
   };
 
@@ -34,7 +36,7 @@ function buildDeps({ thread = null, compactResult = null, compactError = null } 
     },
     stopManagedAgent: async (agentId, sessionId) => { calls.stop.push({ agentId, sessionId }); },
     threadIntegration,
-    threadController,
+    threadControl,
   });
 
   return { service, calls };
@@ -115,9 +117,11 @@ describe('thread rotation (context guard relay)', () => {
     let releaseCompact;
     const gate = new Promise((resolve) => { releaseCompact = resolve; });
 
-    const threadController = {
-      findThreadByHeadSession: async () => ({ threadId: 'wt-1', status: 'running', headSessionId: 'session-1' }),
-      appendCommand: async () => ({}),
+    const threadControl = {
+      core: {
+        findThreadByHeadSession: async () => ({ threadId: 'wt-1', status: 'running', headSessionId: 'session-1' }),
+        appendCommand: async () => ({}),
+      },
     };
     const beginCalls = [];
     const service = createThreadRotationService({
@@ -135,7 +139,7 @@ describe('thread rotation (context guard relay)', () => {
         failSessionSuccession: async () => ({ applied: true }),
         tryDeliver: async () => ({}),
       },
-      threadController,
+      threadControl,
     });
 
     const first = service.handleContextGuard('coder', 'session-1');

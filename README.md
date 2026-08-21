@@ -258,7 +258,6 @@ local-features/                本地 Feature 源码（TypeScript）
   feature-dev/                 Feature Creator 后端
   checkpoint/                  会话检查点
   context-compaction-mirror/   上下文精简
-  context-handoff-seed/        上下文交接
   conversation-export/         对话导出
 
 resources/features/            Feature tgz 包（自包含，随仓库分发）

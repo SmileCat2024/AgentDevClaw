@@ -401,6 +401,41 @@ describe('todo continuity export adapter field contract', () => {
     assert.equal(state[CONTINUITY_FIELD_KEY], undefined);
   });
 
+  it('recognizes legacy __claw_continuity__ snapshots (read-old write-new)', () => {
+    // 切换前持久化的会话快照：descriptor 挂在旧字段 key 下。
+    // exportFeatureContinuity 仍应识别它、按 protocol 应用 adapter，并剥离旧 key。
+    const legacySnapshot = {
+      runtime: {
+        featureStates: [
+          {
+            featureName: 'todo',
+            snapshot: {
+              tasks: [{
+                id: '1',
+                subject: 'Legacy snapshot task',
+                description: '',
+                status: 'pending',
+                createdAt: 1,
+                updatedAt: 2,
+              }],
+              counter: 1,
+              __claw_continuity__: { protocol: TODO_PROTOCOL, importMode: 'replace' },
+            },
+          },
+        ],
+      },
+    };
+
+    const continuity = exportFeatureContinuity(legacySnapshot, { mode: 'trim-transcript' });
+
+    assert.equal(continuity.states.length, 1, 'legacy-key descriptor should still be exported');
+    assert.equal(continuity.states[0].protocol, TODO_PROTOCOL);
+    assert.equal(continuity.states[0].state.tasks[0].subject, 'Legacy snapshot task');
+    // 旧 key 与新 key 都不应出现在转移后的 state 里
+    assert.equal(continuity.states[0].state.__claw_continuity__, undefined);
+    assert.equal(continuity.states[0].state[CONTINUITY_FIELD_KEY], undefined);
+  });
+
   it('skips entry entirely when tasks are empty (returns null)', () => {
     const snapshot = buildTodoSnapshotWithAllFields();
     snapshot.tasks = [];

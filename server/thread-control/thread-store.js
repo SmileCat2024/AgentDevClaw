@@ -1,278 +1,43 @@
 /**
- * ThreadStore — 工作线程持久化存储
+ * Thread Store 薄壳 — 框架 WorkThreadStore 的 Claw 数据兼容层
  *
- * 设计要点（与 session-access.js 的 index 模式对齐）：
- * - 每个线程一个 JSON 文件（含 thread 记录与 inbox commands），
- *   保证「head 推进 + 指令状态变更」可以在同一次原子写内完成。
- * - index.json 仅保存列表摘要（threadId / agentId / title / status /
- *   headSessionId / updatedAt），供轻量列举。
- * - 所有写操作走 per-thread 串行锁 + revision 自增 + tmp/rename 原子写。
- * - 支持 expectedRevision 乐观并发控制（head 推进等关键事务使用）。
+ * 目录布局与框架逐字节一致（threads/ 子目录 + index.json，ticket 008：
+ * 数据目录指向不变，历史线程记录无需迁移）。本壳只补一件事：把切换前
+ * Claw 自持状态机的旧状态值（idle / running / waiting_input / failed，
+ * 007 拆分前的锚点+执行混合域）读时归一为框架锚点域的 'open'，下次写盘
+ * 自动落成新值。更古老的状态（active / completed / cancelled / blocked）
+ * 由框架 store 自带的 LEGACY_STATUS_MAP 归一。
  *
- * 该模块只负责持久化与并发安全，不理解线程语义（head 推进规则、
- * 指令幂等等由 thread-controller.js 负责）。
+ * 旧记录中的 executionEvents / mode 字段切到 WorkThreadBoard 后成为惰性
+ * 字段（不再读写，看板事件自 boards/ 目录重新累积）——已知语义变化。
  */
 
-import path from 'path';
-import { randomUUID } from 'crypto';
-import { promises as fs } from 'fs';
-import { ensureDir } from '../shared/fs-helpers.js';
-import { sanitizeSessionFragment } from '../shared/string-helpers.js';
+import {
+  WorkThreadStore,
+  WorkThreadNotFoundError,
+  WorkThreadRevisionConflictError,
+  generateWorkThreadId,
+} from 'agentdev';
 
-export class ThreadNotFoundError extends Error {
-  constructor(threadId) {
-    super(`Thread "${threadId}" not found`);
-    this.name = 'ThreadNotFoundError';
-    this.code = 'thread_not_found';
-  }
-}
+export { WorkThreadNotFoundError as ThreadNotFoundError };
+export { WorkThreadRevisionConflictError as ThreadRevisionConflictError };
+export { generateWorkThreadId as generateThreadId };
 
-export class ThreadRevisionConflictError extends Error {
-  constructor(threadId, expected, actual) {
-    super(`Revision conflict on thread "${threadId}": expected ${expected}, current ${actual}`);
-    this.name = 'ThreadRevisionConflictError';
-    this.code = 'revision_conflict';
-    this.expected = expected;
-    this.actual = actual;
-  }
-}
-
-export function generateThreadId() {
-  return `wt-${randomUUID()}`;
-}
-
-function _threadContentSignature(record) {
-  // revision 与 updatedAt 不参与签名：纯元数据更新（如重复幂等追加）不落盘
-  const { revision: _revision, updatedAt: _updatedAt, ...rest } = record || {};
-  return JSON.stringify(rest);
-}
-
-// 旧状态空间（active/completed/cancelled/blocked）的读时归一：
-// 盘上旧值不允许流入控制器，下次写盘会自动落成新值。
-const LEGACY_THREAD_STATUS_MAP = {
-  active: 'idle',
-  completed: 'closed',
-  cancelled: 'closed',
-  blocked: 'failed',
+// 切换前 Claw 锚点记录携带的执行域状态 → 框架锚点域 open（存活）。
+// 执行态判定归看板（boards/*.board.json），锚点层只关心 closed 与否。
+const CLAW_LEGACY_STATUS_MAP = {
+  idle: 'open',
+  running: 'open',
+  waiting_input: 'open',
+  failed: 'open',
 };
 
-function _normalizeThreadRecord(record) {
-  if (record && typeof record === 'object' && LEGACY_THREAD_STATUS_MAP[record.status]) {
-    record.status = LEGACY_THREAD_STATUS_MAP[record.status];
-  }
-  return record;
-}
-
-export class ThreadStore {
-  /**
-   * @param {object} options
-   * @param {string} options.rootDir - 线程数据根目录（默认由调用方注入 THREADS_ROOT）
-   */
-  constructor({ rootDir } = {}) {
-    if (!rootDir || typeof rootDir !== 'string') {
-      throw new Error('ThreadStore requires a rootDir');
-    }
-    this.rootDir = rootDir;
-    this.threadsDir = path.join(rootDir, 'threads');
-    this.indexPath = path.join(rootDir, 'index.json');
-    this._threadLocks = new Map();
-    this._indexLock = Promise.resolve();
-  }
-
-  // ── 路径 ──────────────────────────────────────────────────────────
-
-  _threadFilePath(threadId) {
-    return path.join(this.threadsDir, `${sanitizeSessionFragment(threadId)}.json`);
-  }
-
-  // ── 原子写（对齐 session-access.writeSessionIndex 模式）─────────
-
-  async _atomicWriteJson(filePath, data) {
-    const tmpPath = filePath + '.tmp';
-    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
-    try {
-      await fs.rename(tmpPath, filePath);
-    } catch (err) {
-      if (err.code === 'EPERM' || err.code === 'EACCES') {
-        await fs.unlink(filePath).catch(() => {});
-        await fs.rename(tmpPath, filePath);
-      } else if (err.code === 'EXDEV') {
-        await fs.copyFile(tmpPath, filePath);
-        await fs.unlink(tmpPath).catch(() => {});
-      } else {
-        throw err;
-      }
-    }
-  }
-
-  // ── index（列表摘要）─────────────────────────────────────────────
-
-  async _readIndex() {
-    try {
-      const raw = JSON.parse(await fs.readFile(this.indexPath, 'utf8'));
-      const threads = Array.isArray(raw.threads) ? raw.threads : [];
-      return {
-        revision: Number.isSafeInteger(Number(raw.revision)) && Number(raw.revision) >= 0 ? Number(raw.revision) : 0,
-        threads,
-      };
-    } catch {
-      return { revision: 0, threads: [] };
-    }
-  }
-
-  async _writeIndex(index) {
-    await ensureDir(this.rootDir);
-    await this._atomicWriteJson(this.indexPath, index);
-  }
-
-  async _updateIndexEntry(record) {
-    const prev = this._indexLock;
-    let release;
-    const next = new Promise((r) => (release = r));
-    this._indexLock = next;
-    await prev.catch(() => {});
-    try {
-      const index = await this._readIndex();
-      const entry = {
-        threadId: record.threadId,
-        agentId: record.agentId,
-        workspaceId: record.workspaceId || '',
-        title: record.title || '',
-        mode: record.mode || 'interactive',
-        status: LEGACY_THREAD_STATUS_MAP[record.status] || record.status || 'idle',
-        rootSessionId: record.rootSessionId || '',
-        headSessionId: record.headSessionId || '',
-        // 链成员 id 列表（轻量，供前端徽标判定「会话是否属于线程」）
-        sessionIds: (Array.isArray(record.sessionChain) ? record.sessionChain : []).map(
-          (entry) => entry?.sessionId || '',
-        ).filter(Boolean),
-        // 每棒接力边（轻量，供前端接力分隔条渲染）：非 root 会话的来源与方式
-        chainEdges: (() => {
-          const chain = Array.isArray(record.sessionChain) ? record.sessionChain : [];
-          const bySuccessor = new Map();
-          for (const entry of chain) {
-            if (entry?.successorSessionId && entry?.sessionId) {
-              bySuccessor.set(entry.successorSessionId, entry);
-            }
-          }
-          return chain
-            .filter((entry) => entry?.sessionId && entry.sessionId !== record.rootSessionId)
-            .map((entry) => {
-              const pred = bySuccessor.get(entry.sessionId);
-              return {
-                sessionId: entry.sessionId,
-                fromSessionId: pred?.sessionId || '',
-                relayKind: pred?.endKind || '',
-              };
-            });
-        })(),
-        // 交接意图原始时间戳（0 = 无）；fresh 与否由读取方按统一规则派生
-        handoffStartedAt: Number(record.pendingSuccession?.startedAt) || 0,
-        handoffStage: record.pendingSuccession?.stage || null,
-        lastLifecycleEvent: record.lastLifecycleEvent || null,
-        // pending 指令文本预览（轻量，供前端暂存气泡渲染；上限 5 条）
-        pendingTexts: (Array.isArray(record.commands) ? record.commands : [])
-          .filter((c) => c?.status === 'pending')
-          .slice(0, 5)
-          .map((c) => String(c?.text || '').slice(0, 120)),
-        revision: record.revision,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-      };
-      const existingIdx = index.threads.findIndex((t) => t.threadId === record.threadId);
-      if (existingIdx >= 0) {
-        index.threads[existingIdx] = entry;
-      } else {
-        index.threads.push(entry);
-      }
-      index.revision = (Number(index.revision) || 0) + 1;
-      await this._writeIndex(index);
-    } finally {
-      release();
-    }
-  }
-
-  // ── 读 ───────────────────────────────────────────────────────────
-
-  async list() {
-    const index = await this._readIndex();
-    return index.threads;
-  }
-
+export class ThreadStore extends WorkThreadStore {
   async get(threadId) {
-    if (!threadId || typeof threadId !== 'string') return null;
-    try {
-      return _normalizeThreadRecord(JSON.parse(await fs.readFile(this._threadFilePath(threadId), 'utf8')));
-    } catch {
-      return null;
+    const record = await super.get(threadId);
+    if (record && CLAW_LEGACY_STATUS_MAP[record.status]) {
+      record.status = CLAW_LEGACY_STATUS_MAP[record.status];
     }
-  }
-
-  // ── 写 ───────────────────────────────────────────────────────────
-
-  /**
-   * 创建线程记录。要求调用方（controller）已构建完整初始记录。
-   */
-  async create(record) {
-    const threadId = record?.threadId;
-    if (!threadId) throw new Error('ThreadStore.create requires record.threadId');
-    await ensureDir(this.threadsDir);
-    const existing = await this.get(threadId);
-    if (existing) {
-      throw new Error(`Thread "${threadId}" already exists`);
-    }
-    const normalized = _normalizeThreadRecord(record);
-    await this._atomicWriteJson(this._threadFilePath(threadId), normalized);
-    await this._updateIndexEntry(normalized);
-    return normalized;
-  }
-
-  /**
-   * 串行化更新单个线程记录。
-   *
-   * @param {string} threadId
-   * @param {(record: object) => object} mutFn - 返回（可能被修改的）记录
-   * @param {object} [options]
-   * @param {number} [options.expectedRevision] - 乐观并发检查
-   * @returns {Promise<{record: object, changed: boolean}>}
-   */
-  async update(threadId, mutFn, options = {}) {
-    const prev = this._threadLocks.get(threadId) || Promise.resolve();
-    let release;
-    const next = new Promise((r) => (release = r));
-    this._threadLocks.set(threadId, next);
-    await prev.catch(() => {});
-    try {
-      const record = await this.get(threadId);
-      if (!record) {
-        throw new ThreadNotFoundError(threadId);
-      }
-      if (Number.isInteger(options.expectedRevision) && record.revision !== options.expectedRevision) {
-        throw new ThreadRevisionConflictError(threadId, options.expectedRevision, record.revision);
-      }
-
-      const before = _threadContentSignature(record);
-      const proposed = await mutFn(record);
-      if (!proposed || typeof proposed !== 'object') {
-        throw new Error('ThreadStore.update mutFn must return the record');
-      }
-      const after = _threadContentSignature(proposed);
-
-      if (after === before) {
-        return { record, changed: false };
-      }
-
-      const nextRecord = {
-        ...proposed,
-        revision: (Number(record.revision) || 0) + 1,
-        updatedAt: Date.now(),
-      };
-      await this._atomicWriteJson(this._threadFilePath(threadId), nextRecord);
-      await this._updateIndexEntry(nextRecord);
-      return { record: nextRecord, changed: true };
-    } finally {
-      release();
-      if (this._threadLocks.get(threadId) === next) this._threadLocks.delete(threadId);
-    }
+    return record;
   }
 }

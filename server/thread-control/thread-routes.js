@@ -12,12 +12,13 @@
  * @param {import('express').Express} app
  * @param {typeof import('express').json} express
  * @param {object} options
- * @param {import('./thread-controller.js').ThreadController} options.controller
+ * @param {{ core: import('agentdev').WorkThread, board: import('agentdev').WorkThreadBoard }} options.control
  */
-export function setupThreadRoutes(app, express, { controller } = {}) {
-  if (!controller) {
-    throw new Error('setupThreadRoutes requires a controller');
+export function setupThreadRoutes(app, express, { control } = {}) {
+  if (!control?.core || !control?.board) {
+    throw new Error('setupThreadRoutes requires a control ({core, board})');
   }
+  const { core, board } = control;
 
   const jsonMiddleware = express.json({ limit: '256kb' });
 
@@ -28,7 +29,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
       code: err?.code || 'internal_error',
       message: err instanceof Error ? err.message : String(err),
     };
-    if (err?.code === 'thread_not_found') {
+    if (err?.code === 'thread_not_found' || err?.code === 'workthread_not_found') {
       return res.status(404).json(body);
     }
     return res.status(status).json(body);
@@ -39,7 +40,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
   app.get('/protoclaw/threads', async (req, res) => {
     try {
       const agentId = String(req.query.agentId || '').trim();
-      const threads = await controller.listThreads({ agentId: agentId || undefined });
+      const threads = await core.listThreads({ agentId: agentId || undefined });
       res.json({ ok: true, threads });
     } catch (err) {
       _errorResponse(res, err);
@@ -51,7 +52,16 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
   app.post('/protoclaw/threads', jsonMiddleware, async (req, res) => {
     try {
       const { agentId, sessionId, title, mode, workspaceId } = req.body || {};
-      const thread = await controller.createThread({ agentId, sessionId, title, mode, workspaceId });
+      // 锚点创建走 core.start（sessionRef 重组，Q6 清单第 1 项）；
+      // mode 归看板（board.setMode）。
+      const thread = await core.start({
+        sessionRef: { agentId, sessionId },
+        title,
+        workspaceId,
+      });
+      if (mode) {
+        await board.setMode(thread.threadId, mode);
+      }
       res.status(201).json({ ok: true, thread });
     } catch (err) {
       _errorResponse(res, err);
@@ -62,7 +72,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
 
   app.get('/protoclaw/threads/:threadId', async (req, res) => {
     try {
-      const thread = await controller.getThread(req.params.threadId);
+      const thread = await core.getThread(req.params.threadId);
       if (!thread) {
         return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
       }
@@ -74,11 +84,12 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
 
   // ── runtime session events ───────────────────────────────────────
   // The payload uses the same turn.* event shape consumed by the headless
-  // single-session CLI. Only the thread controller interprets state changes.
+  // single-session CLI. Only the board interprets state changes (Q6 第 3 项：
+  // recordRuntimeEvent 移层看板)。
   app.post('/protoclaw/thread_events', jsonMiddleware, async (req, res) => {
     try {
       const { agentId, sessionId, runtimeInstanceId, event } = req.body || {};
-      const result = await controller.recordRuntimeEvent({
+      const result = await board.recordRuntimeEvent({
         agentId,
         sessionId,
         runtimeInstanceId,
@@ -92,7 +103,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
 
   app.get('/protoclaw/threads/:threadId/events', async (req, res) => {
     try {
-      const result = await controller.getExecutionEvents(req.params.threadId, { after: req.query.after });
+      const result = await board.getExecutionEvents(req.params.threadId, { after: req.query.after });
       res.json({ ok: true, ...result });
     } catch (err) {
       _errorResponse(res, err);
@@ -104,7 +115,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
   app.post('/protoclaw/threads/:threadId/commands', jsonMiddleware, async (req, res) => {
     try {
       const { kind, text, source, idempotencyKey } = req.body || {};
-      const result = await controller.appendCommand({
+      const result = await core.appendCommand({
         threadId: req.params.threadId,
         kind,
         text,
@@ -115,7 +126,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
       // 未就绪保持 pending，等 head 推进时投递。
       let delivery = null;
       if (!result.duplicate) {
-        delivery = await controller.deliverPendingCommands(req.params.threadId);
+        delivery = await core.deliverPendingCommands(req.params.threadId);
       }
       res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result, delivery });
     } catch (err) {
@@ -128,7 +139,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
   app.post('/protoclaw/threads/:threadId/head', jsonMiddleware, async (req, res) => {
     try {
       const { toSessionId, fromSessionId, expectedRevision, endKind } = req.body || {};
-      const thread = await controller.advanceHead({
+      const thread = await core.advanceHead({
         threadId: req.params.threadId,
         toSessionId,
         fromSessionId,
@@ -145,7 +156,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
 
   app.post('/protoclaw/threads/:threadId/deliver', jsonMiddleware, async (req, res) => {
     try {
-      const result = await controller.deliverPendingCommands(req.params.threadId);
+      const result = await core.deliverPendingCommands(req.params.threadId);
       res.json({ ok: true, ...result });
     } catch (err) {
       _errorResponse(res, err);
@@ -157,19 +168,21 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
   app.post('/protoclaw/threads/:threadId/handoff-failed', jsonMiddleware, async (req, res) => {
     try {
       const { reason, stage, error } = req.body || {};
-      const thread = await controller.failSessionHandoff(req.params.threadId, { reason, stage, error });
+      const thread = await core.failSessionHandoff(req.params.threadId, { reason, stage, error });
       res.json({ ok: true, thread });
     } catch (err) {
       _errorResponse(res, err);
     }
   });
 
+  // 恢复（Q6 第 2 项：移层看板，board 只允许 failed / waiting_input 恢复；
+  // 锚点域 rotation_failed 的残局收拾由宿主接力路径负责，不经此端点）
   app.post('/protoclaw/threads/:threadId/resume', jsonMiddleware, async (req, res) => {
     try {
-      const thread = await controller.resumeThread(req.params.threadId, {
+      const boardState = await board.resume(req.params.threadId, {
         source: req.body?.source || 'api',
       });
-      res.json({ ok: true, thread });
+      res.json({ ok: true, board: boardState });
     } catch (err) {
       _errorResponse(res, err);
     }
@@ -180,7 +193,7 @@ export function setupThreadRoutes(app, express, { controller } = {}) {
   app.post('/protoclaw/threads/:threadId/close', jsonMiddleware, async (req, res) => {
     try {
       const { reason } = req.body || {};
-      const thread = await controller.closeThread(req.params.threadId, { reason });
+      const thread = await core.closeThread(req.params.threadId, { reason });
       res.json({ ok: true, thread });
     } catch (err) {
       _errorResponse(res, err);

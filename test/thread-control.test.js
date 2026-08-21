@@ -1,10 +1,12 @@
 /**
- * 工作线程（thread-control）测试
+ * 工作线程（thread-control）测试 — 框架 WorkThread + WorkThreadBoard 装配（ticket 008）
  *
  * 覆盖：
- * - ThreadStore：持久化、revision 自增、乐观并发、串行锁、无变更跳写
- * - ThreadController：创建、幂等指令、head 推进事务、取消语义
- * - ThreadRuntimeBridge：休眠默认、启用后 user-turn 投递、runtime 未就绪重试
+ * - ThreadStore 薄壳：持久化、revision 自增、乐观并发、串行锁、无变更跳写、
+ *   历史状态词汇读时归一（古老空间 + 切换前 Claw 词汇）
+ * - 装配（core=WorkThread）：创建、幂等指令、head 推进事务、取消语义
+ * - 看板（board=WorkThreadBoard）：turn 事件流状态机、resume、executionEvents
+ * - WorkThreadRuntimeBridge：休眠默认、启用后 user-turn 投递、runtime 未就绪重试
  * - ThreadIntegration：coder 宿主建线程（含 branch）/ 接力推进 / 删除善后，
  *   非宿主 no-op
  * - InputGateway：交接窗口转 Thread Inbox、纯图片显式拒绝、
@@ -17,16 +19,13 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { WorkThreadRuntimeBridge, WorkThreadNotFoundError } from 'agentdev';
 import {
   ThreadStore,
   ThreadNotFoundError,
   ThreadRevisionConflictError,
 } from '../server/thread-control/thread-store.js';
-import {
-  ThreadController,
-  ThreadNotFoundError as ControllerThreadNotFound,
-} from '../server/thread-control/thread-controller.js';
-import { ThreadRuntimeBridge } from '../server/thread-control/thread-runtime-bridge.js';
+import { createThreadControl } from '../server/thread-control/thread-controller.js';
 import {
   createThreadIntegration,
   THREAD_HOST_AGENT_IDS,
@@ -45,13 +44,11 @@ function makeTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'claw-thread-test-'));
 }
 
-function makeController(root, bridgeOptions = {}) {
-  const store = new ThreadStore({ rootDir: root });
-  const bridge = new ThreadRuntimeBridge(bridgeOptions);
-  return { store, bridge, controller: new ThreadController({ store, bridge }) };
+function makeControl(root, bridgeOptions = {}) {
+  return createThreadControl({ rootDir: root, bridge: new WorkThreadRuntimeBridge(bridgeOptions) });
 }
 
-describe('ThreadStore', () => {
+describe('ThreadStore (framework WorkThreadStore + Claw legacy shell)', () => {
   let root;
   before(async () => {
     root = await makeTempRoot();
@@ -67,14 +64,14 @@ describe('ThreadStore', () => {
       agentId: 'programming-helper',
       workspaceId: 'programming-helper',
       title: 'demo',
-      mode: 'interactive',
-      status: 'idle',
+      status: 'open',
       rootSessionId: 'sess-1',
       headSessionId: 'sess-1',
       sessionChain: [
         { sessionId: 'sess-1', role: 'head', startedAt: 1, endedAt: null, endKind: null, successorSessionId: null },
       ],
       commands: [],
+      hold: false,
       revision: 1,
       createdAt: 1,
       updatedAt: 1,
@@ -100,8 +97,7 @@ describe('ThreadStore', () => {
       agentId: 'coder',
       workspaceId: 'coder',
       title: '',
-      mode: 'interactive',
-      status: 'idle',
+      status: 'open',
       rootSessionId: 's1',
       headSessionId: 's3',
       sessionChain: [
@@ -110,6 +106,7 @@ describe('ThreadStore', () => {
         { sessionId: 's3', role: 'head', startedAt: 3, endedAt: null, endKind: null, successorSessionId: null },
       ],
       commands: [],
+      hold: false,
       revision: 3,
       createdAt: 1,
       updatedAt: 3,
@@ -133,12 +130,12 @@ describe('ThreadStore', () => {
       agentId: 'a',
       workspaceId: 'a',
       title: '',
-      mode: 'interactive',
-      status: 'idle',
+      status: 'open',
       rootSessionId: 's1',
       headSessionId: 's1',
       sessionChain: [{ sessionId: 's1', role: 'head', startedAt: 1, endedAt: null, endKind: null, successorSessionId: null }],
       commands: [],
+      hold: false,
       revision: 1,
       createdAt: 1,
       updatedAt: 1,
@@ -185,12 +182,12 @@ describe('ThreadStore', () => {
       agentId: 'a',
       workspaceId: 'a',
       title: '',
-      mode: 'interactive',
-      status: 'idle',
+      status: 'open',
       rootSessionId: 's1',
       headSessionId: 's1',
       sessionChain: [{ sessionId: 's1', role: 'head', startedAt: 1, endedAt: null, endKind: null, successorSessionId: null }],
       commands: [],
+      hold: false,
       revision: 1,
       createdAt: 1,
       updatedAt: 1,
@@ -199,15 +196,14 @@ describe('ThreadStore', () => {
 
     await Promise.all([
       store.update('wt-conc', (d) => { d.title = 'first'; return d; }),
-      store.update('wt-conc', (d) => { d.mode = 'autonomous'; return d; }),
+      store.update('wt-conc', (d) => { d.hold = true; return d; }),
     ]);
 
     const final = await store.get('wt-conc');
     assert.equal(final.revision, 3);
-    assert.ok(final.title === 'first' || final.mode === 'autonomous');
     // 两次串行写都不丢失
     assert.equal(final.title, 'first');
-    assert.equal(final.mode, 'autonomous');
+    assert.equal(final.hold, true);
   });
 
   test('legacy thread statuses are normalized on read and on create', async () => {
@@ -216,22 +212,29 @@ describe('ThreadStore', () => {
       agentId: 'a',
       workspaceId: 'a',
       title: '',
-      mode: 'interactive',
       rootSessionId: 's1',
       headSessionId: 's1',
       sessionChain: [{ sessionId: 's1', role: 'head', startedAt: 1, endedAt: null, endKind: null, successorSessionId: null }],
       commands: [],
+      hold: false,
       revision: 1,
       createdAt: 1,
       updatedAt: 1,
     };
 
-    // 盘上旧值（旧状态空间）读时归一，不允许半僵尸态流入控制器
+    // 盘上旧值读时归一，不允许半僵尸态流入控制器：
+    // 古老状态空间由框架 LEGACY_STATUS_MAP 归一；
+    // 切换前 Claw 自持状态机词汇（idle/running/waiting_input/failed）
+    // 由本壳归一到锚点域 open（ticket 008，历史线程原地兼容）。
     const cases = [
-      ['wt-legacy-active', 'active', 'idle'],
+      ['wt-legacy-active', 'active', 'open'],
       ['wt-legacy-completed', 'completed', 'closed'],
       ['wt-legacy-cancelled', 'cancelled', 'closed'],
-      ['wt-legacy-blocked', 'blocked', 'failed'],
+      ['wt-legacy-blocked', 'blocked', 'open'],
+      ['wt-legacy-idle', 'idle', 'open'],
+      ['wt-legacy-running', 'running', 'open'],
+      ['wt-legacy-waiting', 'waiting_input', 'open'],
+      ['wt-legacy-failed', 'failed', 'open'],
     ];
     for (const [threadId, written, expected] of cases) {
       await fs.mkdir(path.join(root, 'threads'), { recursive: true });
@@ -246,13 +249,13 @@ describe('ThreadStore', () => {
     // create 入口同样归一：旧值不落新盘、不进 index
     await store.create({ ...base, threadId: 'wt-create-legacy', status: 'active' });
     const created = await store.get('wt-create-legacy');
-    assert.equal(created.status, 'idle');
+    assert.equal(created.status, 'open');
     const indexEntry = (await store.list()).find((t) => t.threadId === 'wt-create-legacy');
-    assert.equal(indexEntry.status, 'idle');
+    assert.equal(indexEntry.status, 'open');
   });
 });
 
-describe('ThreadController', () => {
+describe('thread control assembly (core = WorkThread)', () => {
   let root;
   before(async () => {
     root = await makeTempRoot();
@@ -261,11 +264,10 @@ describe('ThreadController', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  test('createThread seeds root/head and chain', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({
-      agentId: 'programming-helper',
-      sessionId: 'sess-a',
+  test('core.start seeds root/head and chain', async () => {
+    const { core } = makeControl(root);
+    const thread = await core.start({
+      sessionRef: { agentId: 'programming-helper', sessionId: 'sess-a' },
       title: '修复登录',
     });
     assert.match(thread.threadId, /^wt-/);
@@ -273,125 +275,26 @@ describe('ThreadController', () => {
     assert.equal(thread.rootSessionId, 'sess-a');
     assert.equal(thread.sessionChain.length, 1);
     assert.equal(thread.sessionChain[0].role, 'head');
-    assert.equal(thread.mode, 'interactive');
+    assert.equal(thread.status, 'open');
+    assert.equal(thread.hold, false);
   });
 
-  test('createThread rejects invalid identifiers', async () => {
-    const { controller } = makeController(root);
-    await assert.rejects(() => controller.createThread({ agentId: '', sessionId: 's' }));
-    await assert.rejects(() => controller.createThread({ agentId: 'a', sessionId: 'bad id with spaces' }));
-  });
-
-  test('recordRuntimeEvent drives idle/running/failed from the session turn stream', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'event-agent', sessionId: 'event-session' });
-
-    const started = await controller.recordRuntimeEvent({
-      agentId: 'event-agent',
-      sessionId: 'event-session',
-      runtimeInstanceId: 'runtime-1',
-      event: { type: 'turn.started', turn: 1 },
-    });
-    assert.equal(started.applied, true);
-    assert.equal(started.thread.status, 'running');
-
-    const completed = await controller.recordRuntimeEvent({
-      agentId: 'event-agent',
-      sessionId: 'event-session',
-      runtimeInstanceId: 'runtime-1',
-      event: { type: 'turn.completed', turn: 1, usage: { inputTokens: 2, outputTokens: 3 } },
-    });
-    assert.equal(completed.thread.status, 'idle');
-    assert.equal(completed.thread.lastLifecycleEvent.type, 'turn.completed');
-
-    const failed = await controller.recordRuntimeEvent({
-      agentId: 'event-agent',
-      sessionId: 'event-session',
-      runtimeInstanceId: 'runtime-1',
-      event: { type: 'turn.failed', turn: 2, error: { message: 'API unavailable', retryable: true } },
-    });
-    assert.equal(failed.thread.status, 'failed');
-    assert.equal(failed.thread.lastLifecycleEvent.error.message, 'API unavailable');
-    assert.equal((await controller.getThread(thread.threadId)).status, 'failed');
-  });
-
-  test('turn.cancelled is a lifecycle signal: event recorded, status unchanged', async () => {
-    const { controller } = makeController(root);
-    const cancelThread = await controller.createThread({ agentId: 'cancel-agent', sessionId: 'cancel-session' });
-    await controller.recordRuntimeEvent({
-      agentId: 'cancel-agent',
-      sessionId: 'cancel-session',
-      runtimeInstanceId: 'runtime-1',
-      event: { type: 'turn.started', turn: 1 },
-    });
-
-    // guard 轮换打断：cancelled 不得把线程打成 failed（轮换由 context_guard_event 驱动）
-    const cancelled = await controller.recordRuntimeEvent({
-      agentId: 'cancel-agent',
-      sessionId: 'cancel-session',
-      runtimeInstanceId: 'runtime-1',
-      event: { type: 'turn.cancelled', turn: 1, error: { message: 'Session blocked by the context guard', reason: 'cancelled' } },
-    });
-    assert.equal(cancelled.applied, true);
-    assert.equal(cancelled.thread.status, 'running');
-
-    const { events: storedEvents } = await controller.getExecutionEvents(cancelThread.threadId);
-    const recorded = storedEvents.some((event) => event.type === 'turn.cancelled');
-    assert.equal(recorded, true);
-
-    // 轮换接续：head 推进到 successor，新 turn 自然完成，线程回 idle
-    await controller.advanceHead({
-      threadId: cancelThread.threadId,
-      toSessionId: 'cancel-session-2',
-      fromSessionId: 'cancel-session',
-      expectedRevision: cancelled.thread.revision,
-      endKind: 'context_rotation',
-    });
-    await controller.recordRuntimeEvent({
-      agentId: 'cancel-agent',
-      sessionId: 'cancel-session-2',
-      runtimeInstanceId: 'runtime-2',
-      event: { type: 'turn.started', turn: 2 },
-    });
-    const resumed = await controller.recordRuntimeEvent({
-      agentId: 'cancel-agent',
-      sessionId: 'cancel-session-2',
-      runtimeInstanceId: 'runtime-2',
-      event: { type: 'turn.completed', turn: 2 },
-    });
-    assert.equal(resumed.thread.status, 'idle');
-  });
-
-  test('recordRuntimeEvent ignores unsupported events and sessions outside a thread', async () => {
-    const { controller } = makeController(root);
-    await controller.createThread({ agentId: 'event-agent-2', sessionId: 'event-session-2' });
-    assert.deepEqual(
-      await controller.recordRuntimeEvent({
-        agentId: 'other-agent',
-        sessionId: 'unknown-session',
-        event: { type: 'turn.started', turn: 1 },
-      }),
-      { applied: false, reason: 'no_thread_for_session' },
-    );
-    const itemEvent = await controller.recordRuntimeEvent({
-      agentId: 'event-agent-2',
-      sessionId: 'event-session-2',
-      event: { type: 'item.completed', item: { type: 'agent_message' } },
-    });
-    assert.equal(itemEvent.applied, true);
-    assert.equal(itemEvent.thread.executionEvents.length, 1);
+  test('core.start rejects invalid identifiers', async () => {
+    const { core } = makeControl(root);
+    await assert.rejects(() => core.start({ sessionRef: { agentId: '', sessionId: 's' } }));
+    await assert.rejects(() => core.start({ sessionRef: { agentId: 'a', sessionId: 'bad id with spaces' } }));
   });
 
   test('appendCommand is idempotent by idempotencyKey', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 's1' });
+    const { core } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
 
-    const first = await controller.appendCommand({
+    const first = await core.appendCommand({
       threadId: thread.threadId,
       text: '请继续',
       idempotencyKey: 'ui-1',
     });
-    const second = await controller.appendCommand({
+    const second = await core.appendCommand({
       threadId: thread.threadId,
       text: '请继续',
       idempotencyKey: 'ui-1',
@@ -401,25 +304,25 @@ describe('ThreadController', () => {
     assert.equal(second.duplicate, true);
     assert.equal(first.command.commandId, second.command.commandId);
 
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.commands.length, 1);
   });
 
   test('appendCommand rejects empty text and unknown thread', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 's1' });
-    await assert.rejects(() => controller.appendCommand({ threadId: thread.threadId, text: '   ' }));
+    const { core } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
+    await assert.rejects(() => core.appendCommand({ threadId: thread.threadId, text: '   ' }));
     await assert.rejects(
-      () => controller.appendCommand({ threadId: 'wt-none', text: 'x' }),
-      ControllerThreadNotFound,
+      () => core.appendCommand({ threadId: 'wt-none', text: 'x' }),
+      WorkThreadNotFoundError,
     );
   });
 
   test('advanceHead closes old chain entry and moves head atomically', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 's1' });
+    const { core } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
 
-    const advanced = await controller.advanceHead({
+    const advanced = await core.advanceHead({
       threadId: thread.threadId,
       toSessionId: 's2',
       fromSessionId: 's1',
@@ -436,268 +339,373 @@ describe('ThreadController', () => {
     assert.equal(advanced.sessionChain[1].role, 'head');
   });
 
-  test('advanceHead guards: stale revision / wrong from / duplicate target / non-active', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 's1' });
+  test('advanceHead guards: stale revision / wrong from / duplicate target / closed', async () => {
+    const { core } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
 
     await assert.rejects(
-      () => controller.advanceHead({ threadId: thread.threadId, toSessionId: 's2', expectedRevision: 999 }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', expectedRevision: 999 }),
       ThreadRevisionConflictError,
     );
     await assert.rejects(
-      () => controller.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 'wrong' }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 'wrong' }),
       (err) => err.code === 'head_mismatch',
     );
 
-    const advanced = await controller.advanceHead({ threadId: thread.threadId, toSessionId: 's2' });
+    const advanced = await core.advanceHead({ threadId: thread.threadId, toSessionId: 's2' });
     await assert.rejects(
-      () => controller.advanceHead({ threadId: thread.threadId, toSessionId: 's2' }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2' }),
       (err) => err.code === 'already_head',
     );
     await assert.rejects(
-      () => controller.advanceHead({ threadId: thread.threadId, toSessionId: 's1' }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's1' }),
       (err) => err.code === 'duplicate_session',
     );
 
-    await controller.closeThread(thread.threadId);
+    await core.closeThread(thread.threadId);
     await assert.rejects(
-      () => controller.advanceHead({ threadId: thread.threadId, toSessionId: 's3' }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's3' }),
       (err) => err.code === 'thread_closed',
     );
-    assert.equal(advanced.status, 'idle'); // close 前的返回值不受影响
+    assert.equal(advanced.status, 'open'); // close 前的返回值不受影响
   });
 
   test('closeThread closes and cancels pending commands', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 's1' });
-    await controller.appendCommand({ threadId: thread.threadId, text: 'x', idempotencyKey: 'k1' });
+    const { core } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
+    await core.appendCommand({ threadId: thread.threadId, text: 'x', idempotencyKey: 'k1' });
 
-    const closed = await controller.closeThread(thread.threadId, { reason: 'user' });
+    const closed = await core.closeThread(thread.threadId, { reason: 'user' });
     assert.equal(closed.status, 'closed');
     assert.equal(closed.commands[0].status, ThreadCommandStatus.CANCELLED);
   });
 
   test('cancelCommand only affects pending', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 's1' });
-    const { command } = await controller.appendCommand({ threadId: thread.threadId, text: 'x' });
+    const { core } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
+    const { command } = await core.appendCommand({ threadId: thread.threadId, text: 'x' });
 
-    await controller.cancelCommand(thread.threadId, command.commandId);
-    await controller.cancelCommand(thread.threadId, command.commandId); // 二次取消幂等
+    await core.cancelCommand(thread.threadId, command.commandId);
+    await core.cancelCommand(thread.threadId, command.commandId); // 二次取消幂等
 
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.CANCELLED);
   });
 
   test('deliverPendingCommands with dormant bridge keeps commands pending', async () => {
-    const { controller } = makeController(root); // bridge enabled=false
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 's1' });
-    await controller.appendCommand({ threadId: thread.threadId, text: '请继续' });
+    const { core } = makeControl(root); // bridge enabled=false
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
+    await core.appendCommand({ threadId: thread.threadId, text: '请继续' });
 
-    const result = await controller.deliverPendingCommands(thread.threadId);
+    const result = await core.deliverPendingCommands(thread.threadId);
     assert.equal(result.reason, 'bridge_disabled');
     assert.equal(result.delivered, 0);
 
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
   });
 });
 
-describe('thread state machine (执行层契约锁死)', () => {
+describe('board (WorkThreadBoard 执行看板)', () => {
   let root;
   before(async () => { root = await makeTempRoot(); });
   after(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
-  // 设计的转换矩阵。任何一行改动都是状态机语义变更，必须显式同步这里。
-  const EXPECTED_TRANSITIONS = {
-    idle: ['running', 'rotating', 'waiting_input', 'failed', 'closed'],
-    running: ['idle', 'rotating', 'waiting_input', 'failed', 'closed'],
-    rotating: ['idle', 'running', 'rotation_failed', 'closed'],
-    rotation_failed: ['running', 'rotating', 'failed', 'closed', 'idle'],
-    failed: ['running', 'rotating', 'closed'],
-    waiting_input: ['running', 'idle', 'closed'],
-    closed: [],
-  };
+  test('recordRuntimeEvent drives idle/running/failed from the session turn stream', async () => {
+    const { core, board } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'event-agent', sessionId: 'event-session' } });
 
-  test('transition matrix matches the designed state space exactly', () => {
-    const { controller } = makeController(root);
-    const states = Object.keys(EXPECTED_TRANSITIONS);
-    for (const from of states) {
-      const allowed = new Set(EXPECTED_TRANSITIONS[from]);
-      for (const to of states) {
-        assert.equal(
-          controller._canTransition(from, to),
-          from === to || allowed.has(to),
-          `${from} -> ${to} 违反设计矩阵`,
-        );
-      }
-    }
+    const started = await board.recordRuntimeEvent({
+      agentId: 'event-agent',
+      sessionId: 'event-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.started', turn: 1 },
+    });
+    assert.equal(started.applied, true);
+    assert.equal(started.state.status, 'running');
+
+    const completed = await board.recordRuntimeEvent({
+      agentId: 'event-agent',
+      sessionId: 'event-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.completed', turn: 1, usage: { inputTokens: 2, outputTokens: 3 } },
+    });
+    assert.equal(completed.state.status, 'idle');
+    assert.equal(completed.state.lastLifecycleEvent.type, 'turn.completed');
+
+    const failed = await board.recordRuntimeEvent({
+      agentId: 'event-agent',
+      sessionId: 'event-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.failed', turn: 2, error: { message: 'API unavailable', retryable: true } },
+    });
+    assert.equal(failed.state.status, 'failed');
+    assert.equal(failed.state.lastLifecycleEvent.error.message, 'API unavailable');
+    assert.equal((await board.getState(thread.threadId)).status, 'failed');
   });
 
-  test('rotation failure path: running → rotating → rotation_failed → resume → running', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'coder', sessionId: 'rot-s1' });
+  test('turn.cancelled is a lifecycle signal: event recorded, board status unchanged', async () => {
+    const { core, board } = makeControl(root);
+    const cancelThread = await core.start({ sessionRef: { agentId: 'cancel-agent', sessionId: 'cancel-session' } });
+    await board.recordRuntimeEvent({
+      agentId: 'cancel-agent',
+      sessionId: 'cancel-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.started', turn: 1 },
+    });
 
-    await controller.recordRuntimeEvent({ agentId: 'coder', sessionId: 'rot-s1', event: { type: 'turn.started', turn: 1 } });
-    assert.equal((await controller.getThread(thread.threadId)).status, 'running');
+    // guard 轮换打断：cancelled 不得把看板打成 failed（轮换由 context_guard_event 驱动）
+    const cancelled = await board.recordRuntimeEvent({
+      agentId: 'cancel-agent',
+      sessionId: 'cancel-session',
+      runtimeInstanceId: 'runtime-1',
+      event: { type: 'turn.cancelled', turn: 1, error: { message: 'Session blocked by the context guard', reason: 'cancelled' } },
+    });
+    assert.equal(cancelled.applied, true);
+    assert.equal(cancelled.state.status, 'running');
+
+    const { events: storedEvents } = await board.getExecutionEvents(cancelThread.threadId);
+    const recorded = storedEvents.some((event) => event.type === 'turn.cancelled');
+    assert.equal(recorded, true);
+
+    // 轮换接续：head 推进到 successor，新 turn 自然完成，看板回 idle
+    await core.advanceHead({
+      threadId: cancelThread.threadId,
+      toSessionId: 'cancel-session-2',
+      fromSessionId: 'cancel-session',
+      expectedRevision: (await core.getThread(cancelThread.threadId)).revision,
+      endKind: 'context_rotation',
+    });
+    await board.recordRuntimeEvent({
+      agentId: 'cancel-agent',
+      sessionId: 'cancel-session-2',
+      runtimeInstanceId: 'runtime-2',
+      event: { type: 'turn.started', turn: 2 },
+    });
+    const resumed = await board.recordRuntimeEvent({
+      agentId: 'cancel-agent',
+      sessionId: 'cancel-session-2',
+      runtimeInstanceId: 'runtime-2',
+      event: { type: 'turn.completed', turn: 2 },
+    });
+    assert.equal(resumed.state.status, 'idle');
+  });
+
+  test('recordRuntimeEvent ignores unsupported events and sessions outside a thread', async () => {
+    const { core, board } = makeControl(root);
+    await core.start({ sessionRef: { agentId: 'event-agent-2', sessionId: 'event-session-2' } });
+    assert.deepEqual(
+      await board.recordRuntimeEvent({
+        agentId: 'other-agent',
+        sessionId: 'unknown-session',
+        event: { type: 'turn.started', turn: 1 },
+      }),
+      { applied: false, reason: 'no_thread_for_session' },
+    );
+    const itemEvent = await board.recordRuntimeEvent({
+      agentId: 'event-agent-2',
+      sessionId: 'event-session-2',
+      event: { type: 'item.completed', item: { type: 'agent_message' } },
+    });
+    assert.equal(itemEvent.applied, true);
+    assert.equal(itemEvent.state.executionEvents.length, 1);
+  });
+
+  test('execution events: cursor slicing and eventId dedup', async () => {
+    const { core, board } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 'ev-s1' } });
+
+    const emit = (event) =>
+      board.recordRuntimeEvent({ agentId: 'a', sessionId: 'ev-s1', runtimeInstanceId: 'rt-1', event });
+    await emit({ type: 'turn.started', turn: 1, eventId: 'e1' });
+    await emit({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hi' }, eventId: 'e2' });
+    await emit({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hi' }, eventId: 'e2' });
+    await emit({ type: 'turn.completed', turn: 1, eventId: 'e3' });
+
+    const all = await board.getExecutionEvents(thread.threadId);
+    assert.equal(all.events.length, 3, '重复 eventId 必须去重');
+    assert.equal(all.cursor, 3);
+
+    const tail = await board.getExecutionEvents(thread.threadId, { after: 2 });
+    assert.equal(tail.events.length, 1);
+    assert.equal(tail.events[0].type, 'turn.completed');
+  });
+
+  test('resume admits failed / waiting_input and rejects non-resumable board states', async () => {
+    const { core, board } = makeControl(root);
+
+    // failed → running：经真实 turn.failed 进入后 resume
+    const t1 = await core.start({ sessionRef: { agentId: 'a', sessionId: 'rs-s1' } });
+    await board.recordRuntimeEvent({ agentId: 'a', sessionId: 'rs-s1', event: { type: 'turn.started', turn: 1 } });
+    await board.recordRuntimeEvent({ agentId: 'a', sessionId: 'rs-s1', event: { type: 'turn.failed', turn: 1, error: { message: 'api down' } } });
+    const resumed = await board.resume(t1.threadId);
+    assert.equal(resumed.status, 'running');
+    assert.equal(resumed.lastLifecycleEvent.type, 'resumed');
+
+    // waiting_input → running（无事件源场景，看板手动播种后 resume）
+    const t2 = await core.start({ sessionRef: { agentId: 'a', sessionId: 'rs-s2' } });
+    await board.setStatus(t2.threadId, 'waiting_input');
+    assert.equal((await board.resume(t2.threadId)).status, 'running');
+
+    // idle（未观测到任何事件）/ running / closed 一律拒绝
+    const t3 = await core.start({ sessionRef: { agentId: 'a', sessionId: 'rs-s3' } });
+    await assert.rejects(
+      () => board.resume(t3.threadId),
+      (err) => err.code === 'board_not_resumable',
+      'idle 不允许 resume',
+    );
+
+    const t4 = await core.start({ sessionRef: { agentId: 'a', sessionId: 'rs-s4' } });
+    await board.recordRuntimeEvent({ agentId: 'a', sessionId: 'rs-s4', event: { type: 'turn.started', turn: 1 } });
+    await assert.rejects(
+      () => board.resume(t4.threadId),
+      (err) => err.code === 'board_not_resumable',
+      'running 不允许 resume',
+    );
+
+    const t5 = await core.start({ sessionRef: { agentId: 'a', sessionId: 'rs-s5' } });
+    await board.closeBoard(t5.threadId);
+    await assert.rejects(
+      () => board.resume(t5.threadId),
+      (err) => err.code === 'thread_closed',
+    );
+  });
+
+  test('closed anchor is terminal: idempotent close, no events, no handoff', async () => {
+    const { core, board } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 'cl-s1' } });
+
+    const first = await core.closeThread(thread.threadId, { reason: 'user' });
+    assert.equal(first.status, 'closed');
+    assert.equal(first.closeReason, 'user');
+
+    const second = await core.closeThread(thread.threadId, { reason: 'again' });
+    assert.equal(second.status, 'closed');
+    assert.equal(second.closeReason, 'user', '重复 close 幂等，不改写首个 closeReason');
+
+    assert.deepEqual(
+      await board.recordRuntimeEvent({ agentId: 'a', sessionId: 'cl-s1', event: { type: 'turn.started', turn: 1 } }),
+      { applied: false, reason: 'thread_closed' },
+    );
+    assert.deepEqual(
+      await board.recordRuntimeEvent({ agentId: 'a', sessionId: 'cl-s1', event: { type: 'item.completed', item: { type: 'agent_message' } } }),
+      { applied: false, reason: 'thread_closed' },
+    );
+    await assert.rejects(
+      () => core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'cl-s1', reason: 'trim' }),
+      (err) => err.code === 'thread_closed',
+    );
+  });
+});
+
+describe('anchor handoff orchestration (锚点接续编排)', () => {
+  let root;
+  before(async () => { root = await makeTempRoot(); });
+  after(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  test('rotation failure path: rotating → rotation_failed 保留交接意图；advanceHead 恢复 open', async () => {
+    const { core } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'rot-s1' } });
 
     // guard 触发交接 → rotating（含生命周期事件与交接意图 stage）
-    const begun = await controller.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'rot-s1', reason: 'context_guard' });
+    const begun = await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'rot-s1', reason: 'context_guard' });
     assert.equal(begun.status, 'rotating');
     assert.equal(begun.pendingSuccession.fromSessionId, 'rot-s1');
     assert.equal(begun.lastLifecycleEvent.type, 'handoff_started');
 
     // 压缩失败 → rotation_failed；pendingSuccession 保留供恢复收拾残局
-    const failed = await controller.failSessionHandoff(thread.threadId, {
+    const failed = await core.failSessionHandoff(thread.threadId, {
       reason: 'compact_crashed',
       stage: 'compact_or_successor',
       error: 'mirror timeout',
     });
     assert.equal(failed.status, 'rotation_failed');
     assert.equal(failed.pendingSuccession.fromSessionId, 'rot-s1', '交接意图必须保留在盘上');
+    assert.equal(failed.pendingSuccession.stage, 'compact_or_successor');
     assert.equal(failed.lastLifecycleEvent.reason, 'compact_crashed');
-    assert.equal(failed.lastLifecycleEvent.stage, 'compact_or_successor');
 
-    // resume → running（回归锁：此步曾因转移表缺 running 而断裂）
-    const resumed = await controller.resumeThread(thread.threadId, { source: 'cli' });
-    assert.equal(resumed.status, 'running');
-    assert.equal(resumed.lastLifecycleEvent.type, 'resumed');
+    // 残局收拾：宿主推进 head（清挡板）后锚点回 open、可继续投递
+    const advanced = await core.advanceHead({
+      threadId: thread.threadId,
+      toSessionId: 'rot-s2',
+      fromSessionId: 'rot-s1',
+      endKind: 'manual_recovery',
+    });
+    assert.equal(advanced.status, 'open');
+    assert.equal(advanced.pendingSuccession, null);
+    assert.equal(advanced.lastLifecycleEvent.type, 'handoff_completed');
   });
 
-  test('resumeThread admits failed / waiting_input and rejects non-resumable states', async () => {
-    const { controller, store } = makeController(root);
+  test('delivery is gated by closed / fresh handoff / hold with definite reasons', async () => {
+    const { core } = makeControl(root);
 
-    // failed → running：经真实 turn.failed 进入后 resume
-    const t1 = await controller.createThread({ agentId: 'a', sessionId: 'rs-s1' });
-    await controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'rs-s1', event: { type: 'turn.started', turn: 1 } });
-    await controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'rs-s1', event: { type: 'turn.failed', turn: 1, error: { message: 'api down' } } });
-    assert.equal((await controller.resumeThread(t1.threadId)).status, 'running');
+    // fresh 交接 → handoff_in_progress
+    const t1 = await core.start({ sessionRef: { agentId: 'a', sessionId: 'gg-s1' } });
+    await core.beginSessionHandoff({ threadId: t1.threadId, fromSessionId: 'gg-s1', reason: 'trim' });
+    await core.appendCommand({ threadId: t1.threadId, text: 'x' });
+    const r1 = await core.deliverPendingCommands(t1.threadId);
+    assert.equal(r1.delivered, 0);
+    assert.equal(r1.reason, 'handoff_in_progress');
+    assert.equal((await core.getThread(t1.threadId)).commands[0].status, ThreadCommandStatus.PENDING);
 
-    // waiting_input → running（暂无事件源，直接落盘播种该状态）
-    const t2 = await controller.createThread({ agentId: 'a', sessionId: 'rs-s2' });
-    await store.update(t2.threadId, (draft) => { draft.status = 'waiting_input'; return draft; });
-    assert.equal((await controller.resumeThread(t2.threadId)).status, 'running');
+    // closed → thread_closed（pending 指令随关闭取消）
+    const t2 = await core.start({ sessionRef: { agentId: 'a', sessionId: 'gg-s2' } });
+    await core.appendCommand({ threadId: t2.threadId, text: 'x' });
+    await core.closeThread(t2.threadId);
+    const r2 = await core.deliverPendingCommands(t2.threadId);
+    assert.equal(r2.reason, 'thread_closed');
+    assert.equal((await core.getThread(t2.threadId)).commands[0].status, ThreadCommandStatus.CANCELLED);
 
-    // idle / rotating / closed 一律拒绝
-    const seeds = [
-      ['rs-s3', null],
-      ['rs-s4', 'rotating'],
-      ['rs-s5', 'closed'],
-    ];
-    for (const [sessionId, seed] of seeds) {
-      const t = await controller.createThread({ agentId: 'a', sessionId });
-      if (seed) {
-        await store.update(t.threadId, (draft) => {
-          draft.status = seed;
-          if (seed === 'rotating') {
-            draft.pendingSuccession = { fromSessionId: sessionId, reason: 'trim', startedAt: Date.now() };
-          }
-          return draft;
-        });
-      }
-      await assert.rejects(
-        () => controller.resumeThread(t.threadId),
-        (err) => err.code === 'thread_not_resumable',
-        `${seed || 'idle'} 不允许 resume`,
-      );
-    }
+    // hold（宿主级暂停投递开关）→ thread_held；解除后恢复
+    const t3 = await core.start({ sessionRef: { agentId: 'a', sessionId: 'gg-s3' } });
+    await core.appendCommand({ threadId: t3.threadId, text: 'x' });
+    await core.setHold(t3.threadId, true);
+    const r3 = await core.deliverPendingCommands(t3.threadId);
+    assert.equal(r3.reason, 'thread_held');
+    await core.setHold(t3.threadId, false);
+    const r4 = await core.deliverPendingCommands(t3.threadId);
+    assert.equal(r4.reason, 'bridge_disabled', 'hold 解除后投递能力恢复（此处桥休眠）');
   });
 
-  test('closed is terminal: idempotent close, no resume, no events, no handoff', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 'cl-s1' });
+  test('stale handoff intent no longer blocks delivery (failure-path self-healing)', async () => {
+    const { core } = makeControl(root, {
+      enabled: true,
+      resolveRuntimeViewerId: () => 'viewer-x',
+      submitTurn: async ({ text }) => ({ success: true, delivery: 'delivered', text }),
+    });
+    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'hd-stale' } });
+    await core.appendCommand({ threadId: thread.threadId, text: 'later' });
 
-    const first = await controller.closeThread(thread.threadId, { reason: 'user' });
-    assert.equal(first.status, 'closed');
-    assert.equal(first.closeReason, 'user');
+    // 直接写一个 10 分钟前的交接意图（模拟 compact 崩溃后残留）
+    await core.store.update(thread.threadId, (draft) => {
+      draft.pendingSuccession = { fromSessionId: 'hd-stale', reason: 'trim', stage: 'started', startedAt: Date.now() - 10 * 60 * 1000 };
+      return draft;
+    });
 
-    const second = await controller.closeThread(thread.threadId, { reason: 'again' });
-    assert.equal(second.status, 'closed');
-    assert.equal(second.closeReason, 'user', '重复 close 幂等，不改写首个 closeReason');
-
-    await assert.rejects(
-      () => controller.resumeThread(thread.threadId),
-      (err) => err.code === 'thread_not_resumable',
-    );
-    assert.deepEqual(
-      await controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'cl-s1', event: { type: 'turn.started', turn: 1 } }),
-      { applied: false, reason: 'thread_closed' },
-    );
-    assert.deepEqual(
-      await controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'cl-s1', event: { type: 'item.completed', item: { type: 'agent_message' } } }),
-      { applied: false, reason: 'thread_closed' },
-    );
-    await assert.rejects(
-      () => controller.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'cl-s1', reason: 'trim' }),
-      (err) => err.code === 'thread_closed',
-    );
+    const result = await core.deliverPendingCommands(thread.threadId);
+    assert.equal(result.delivered, 1);
+    const record = await core.getThread(thread.threadId);
+    assert.equal(record.pendingSuccession, null); // 惰性清除落盘
   });
 
-  test('delivery is gated by every non-idle/running status with a definite reason', async () => {
-    const { controller, store } = makeController(root);
-    const cases = [
-      ['gg-s1', 'rotating', 'handoff_in_progress'],
-      ['gg-s2', 'failed', 'thread_waiting'],
-      ['gg-s3', 'rotation_failed', 'thread_waiting'],
-      ['gg-s4', 'waiting_input', 'thread_waiting'],
-      ['gg-s5', 'closed', 'thread_closed'],
-    ];
-    for (const [sessionId, status, reason] of cases) {
-      const thread = await controller.createThread({ agentId: 'a', sessionId });
-      await store.update(thread.threadId, (draft) => {
-        draft.status = status;
-        if (status === 'rotating') {
-          draft.pendingSuccession = { fromSessionId: sessionId, reason: 'trim', startedAt: Date.now() };
-        }
-        return draft;
-      });
-      await controller.appendCommand({ threadId: thread.threadId, text: 'x' });
-      const result = await controller.deliverPendingCommands(thread.threadId);
-      assert.equal(result.delivered, 0);
-      assert.equal(result.reason, reason, `${status} 必须挡住投递并给出确定 reason`);
-      const record = await controller.getThread(thread.threadId);
-      assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
-    }
-  });
+  test('advanceHead lands on open with pendingSuccession cleared atomically', async () => {
+    const { core } = makeControl(root);
+    const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 'ah-s1' } });
+    await core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'ah-s1', reason: 'context_guard' });
 
-  test('execution events: cursor slicing and eventId dedup', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 'ev-s1' });
-
-    const emit = (event) =>
-      controller.recordRuntimeEvent({ agentId: 'a', sessionId: 'ev-s1', runtimeInstanceId: 'rt-1', event });
-    await emit({ type: 'turn.started', turn: 1, eventId: 'e1' });
-    await emit({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hi' }, eventId: 'e2' });
-    await emit({ type: 'item.completed', item: { id: 'i1', type: 'agent_message', text: 'hi' }, eventId: 'e2' });
-    await emit({ type: 'turn.completed', turn: 1, eventId: 'e3' });
-
-    const all = await controller.getExecutionEvents(thread.threadId);
-    assert.equal(all.events.length, 3, '重复 eventId 必须去重');
-    assert.equal(all.cursor, 3);
-
-    const tail = await controller.getExecutionEvents(thread.threadId, { after: 2 });
-    assert.equal(tail.events.length, 1);
-    assert.equal(tail.events[0].type, 'turn.completed');
-  });
-
-  test('advanceHead lands on idle with pendingSuccession cleared atomically', async () => {
-    const { controller } = makeController(root);
-    const thread = await controller.createThread({ agentId: 'a', sessionId: 'ah-s1' });
-    await controller.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'ah-s1', reason: 'context_guard' });
-
-    const advanced = await controller.advanceHead({
+    const advanced = await core.advanceHead({
       threadId: thread.threadId,
       toSessionId: 'ah-s2',
       fromSessionId: 'ah-s1',
       endKind: 'trim',
     });
-    assert.equal(advanced.status, 'idle');
+    assert.equal(advanced.status, 'open');
     assert.equal(advanced.pendingSuccession, null);
     assert.equal(advanced.lastLifecycleEvent.type, 'handoff_completed');
   });
 });
 
-describe('ThreadRuntimeBridge (enabled) + user-turn integration', () => {
+describe('WorkThreadRuntimeBridge (enabled) + user-turn integration', () => {
   let root;
   before(async () => {
     root = await makeTempRoot();
@@ -709,7 +717,7 @@ describe('ThreadRuntimeBridge (enabled) + user-turn integration', () => {
   test('delivers pending command to head runtime via user-turn after head advance', async () => {
     const liveRuntimes = new Map(); // `${agentId}::${sessionId}` -> viewerAgentId
     const turns = [];
-    const { controller } = makeController(root, {
+    const { core } = makeControl(root, {
       enabled: true,
       resolveRuntimeViewerId: (agentId, sessionId) =>
         liveRuntimes.get(`${agentId}::${sessionId}`) || null,
@@ -719,22 +727,22 @@ describe('ThreadRuntimeBridge (enabled) + user-turn integration', () => {
       },
     });
 
-    const thread = await controller.createThread({ agentId: 'agent-x', sessionId: 'old-1' });
-    const { command } = await controller.appendCommand({ threadId: thread.threadId, text: '请继续', idempotencyKey: 'k1' });
+    const thread = await core.start({ sessionRef: { agentId: 'agent-x', sessionId: 'old-1' } });
+    const { command } = await core.appendCommand({ threadId: thread.threadId, text: '请继续', idempotencyKey: 'k1' });
 
     // 旧 head 无 runtime → 指令保持 pending（等待 head 推进）
-    let result = await controller.deliverPendingCommands(thread.threadId);
+    let result = await core.deliverPendingCommands(thread.threadId);
     assert.equal(result.delivered, 0);
     assert.equal(result.reason, 'runtime_not_accepting');
-    let record = await controller.getThread(thread.threadId);
+    let record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
 
     // head 推进到新会话且 runtime 就绪 → user-turn 投递成功
-    await controller.advanceHead({ threadId: thread.threadId, toSessionId: 'head-2', fromSessionId: 'old-1' });
+    await core.advanceHead({ threadId: thread.threadId, toSessionId: 'head-2', fromSessionId: 'old-1' });
     liveRuntimes.set('agent-x::head-2', 'viewer-abc');
-    result = await controller.deliverPendingCommands(thread.threadId);
+    result = await core.deliverPendingCommands(thread.threadId);
     assert.equal(result.delivered, 1);
-    assert.equal(result.reason, null);
+    assert.equal(result.reason, undefined);
 
     assert.equal(turns.length, 1);
     assert.equal(turns[0].agentId, 'viewer-abc');
@@ -742,26 +750,26 @@ describe('ThreadRuntimeBridge (enabled) + user-turn integration', () => {
     assert.equal(turns[0].source, 'thread');
     assert.equal(turns[0].sourceRef, command.commandId);
 
-    record = await controller.getThread(thread.threadId);
+    record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
     assert.equal(record.commands[0].deliveryRef, 'viewer-abc');
   });
 
   test('non-retryable delivery failure marks command failed', async () => {
-    const { controller } = makeController(root, {
+    const { core } = makeControl(root, {
       enabled: true,
       resolveRuntimeViewerId: () => 'viewer-live',
       submitTurn: async () => {
         throw new UserTurnDeliveryError('bad input', { code: 'invalid_input', status: 400, retryable: false });
       },
     });
-    const thread = await controller.createThread({ agentId: 'agent-y', sessionId: 's1' });
-    await controller.appendCommand({ threadId: thread.threadId, text: 'x' });
+    const thread = await core.start({ sessionRef: { agentId: 'agent-y', sessionId: 's1' } });
+    await core.appendCommand({ threadId: thread.threadId, text: 'x' });
 
-    const result = await controller.deliverPendingCommands(thread.threadId);
+    const result = await core.deliverPendingCommands(thread.threadId);
     assert.equal(result.delivered, 0);
 
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.FAILED);
     assert.equal(record.commands[0].lastReason, 'invalid_input');
   });
@@ -776,15 +784,15 @@ describe('ThreadRuntimeBridge (enabled) + user-turn integration', () => {
       seen.push({ url, body: JSON.parse(init.body) });
       return { ok: true, status: 200, json: async () => ({ success: true, delivery: 'queued' }) };
     };
-    const { controller } = makeController(root, {
+    const { core } = makeControl(root, {
       enabled: true,
       resolveRuntimeViewerId: () => 'viewer-contract',
       submitTurn: (params) => submitUserTurn(params, { fetchImpl }),
     });
-    const thread = await controller.createThread({ agentId: 'agent-c', sessionId: 'cs-1' });
-    const { command } = await controller.appendCommand({ threadId: thread.threadId, text: '契约校验' });
+    const thread = await core.start({ sessionRef: { agentId: 'agent-c', sessionId: 'cs-1' } });
+    const { command } = await core.appendCommand({ threadId: thread.threadId, text: '契约校验' });
 
-    const result = await controller.deliverPendingCommands(thread.threadId);
+    const result = await core.deliverPendingCommands(thread.threadId);
     assert.equal(result.delivered, 1);
     assert.equal(seen.length, 1);
     assert.match(seen[0].url, /\/api\/agents\/viewer-contract\/user-turn$/);
@@ -792,7 +800,7 @@ describe('ThreadRuntimeBridge (enabled) + user-turn integration', () => {
     assert.equal(seen[0].body.source, 'thread');
     assert.equal(seen[0].body.sourceRef, command.commandId);
 
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
   });
 });
@@ -807,10 +815,11 @@ describe('ThreadIntegration (coder host gating)', () => {
   });
 
   function makeIntegration(bridgeOptions = {}) {
-    const store = new ThreadStore({ rootDir: path.join(root, `it-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`) });
-    const bridge = new ThreadRuntimeBridge(bridgeOptions);
-    const controller = new ThreadController({ store, bridge });
-    return { controller, integration: createThreadIntegration({ controller }) };
+    const control = makeControl(
+      path.join(root, `it-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+      bridgeOptions,
+    );
+    return { control, core: control.core, integration: createThreadIntegration({ control }) };
   }
 
   test('onSessionCreated creates thread for coder host only', async () => {
@@ -828,7 +837,7 @@ describe('ThreadIntegration (coder host gating)', () => {
 
   test('applySessionSuccession advances head and delivers pending commands', async () => {
     const turns = [];
-    const { controller, integration } = makeIntegration({
+    const { core, integration } = makeIntegration({
       enabled: true,
       resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'coder-s2' ? 'viewer-s2' : null),
       submitTurn: async (params) => {
@@ -838,7 +847,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     });
 
     const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
-    await controller.appendCommand({ threadId: thread.threadId, text: '接力期间补充的指令' });
+    await core.appendCommand({ threadId: thread.threadId, text: '接力期间补充的指令' });
 
     const outcome = await integration.applySessionSuccession({
       agentId: 'coder',
@@ -853,7 +862,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(turns[0].text, '接力期间补充的指令');
 
     // 链结构：旧 head 转 predecessor，记录 endKind 与 successor
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.sessionChain.length, 2);
     assert.equal(record.sessionChain[0].endKind, 'trim');
     assert.equal(record.sessionChain[0].successorSessionId, 'coder-s2');
@@ -864,7 +873,7 @@ describe('ThreadIntegration (coder host gating)', () => {
   test('handleRuntimeReady delivers pending commands when head runtime becomes ready', async () => {
     const turns = [];
     let ready = false;
-    const { controller, integration } = makeIntegration({
+    const { core, integration } = makeIntegration({
       enabled: true,
       // succession 时刻新 head 的 runtime 尚未就绪
       resolveRuntimeViewerId: (agentId, sessionId) =>
@@ -876,7 +885,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     });
 
     const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
-    await controller.appendCommand({ threadId: thread.threadId, text: '等 runtime 的指令' });
+    await core.appendCommand({ threadId: thread.threadId, text: '等 runtime 的指令' });
 
     const outcome = await integration.applySessionSuccession({
       agentId: 'coder',
@@ -889,7 +898,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(outcome.delivery.reason, 'runtime_not_accepting');
     assert.equal(turns.length, 0);
 
-    let record = await controller.getThread(thread.threadId);
+    let record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
 
     // runtime 就绪 → 补投送达
@@ -900,7 +909,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(turns.length, 1);
     assert.equal(turns[0].text, '等 runtime 的指令');
 
-    record = await controller.getThread(thread.threadId);
+    record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
 
     // 就绪会话不是任何线程 head（纯 session，含非宿主 workspace）：no-op
@@ -908,7 +917,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal((await integration.handleRuntimeReady('coder', 'coder-s1')).reason, 'no_thread_for_session');
   });
 
-  test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {    const { controller, integration } = makeIntegration();
+  test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {    const { core, integration } = makeIntegration();
 
     const phOutcome = await integration.applySessionSuccession({
       agentId: 'programming-helper',
@@ -929,7 +938,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(noThread.reason, 'no_thread_for_session');
 
     // head 不匹配（from 不是当前 head）时不动线程
-    const thread = await controller.getThread((await controller.listThreads({ agentId: 'coder' }))[0].threadId);
+    const thread = await core.getThread((await core.listThreads({ agentId: 'coder' }))[0].threadId);
     const stale = await integration.applySessionSuccession({
       agentId: 'coder',
       fromSessionId: 'c1',
@@ -941,10 +950,10 @@ describe('ThreadIntegration (coder host gating)', () => {
   });
 
   test('onSessionDeleted cancels the thread when its head is deleted; no-op otherwise', async () => {
-    const { controller, integration } = makeIntegration();
+    const { core, integration } = makeIntegration();
     const thread = await integration.onSessionCreated('coder', { id: 'del-1', title: 'A' });
-    await controller.appendCommand({ threadId: thread.threadId, text: 'staged' });
-    await controller.advanceHead({ threadId: thread.threadId, toSessionId: 'del-2', fromSessionId: 'del-1', endKind: 'trim' });
+    await core.appendCommand({ threadId: thread.threadId, text: 'staged' });
+    await core.advanceHead({ threadId: thread.threadId, toSessionId: 'del-2', fromSessionId: 'del-1', endKind: 'trim' });
 
     // 删除非 head 棒次：不动线程
     const nonHead = await integration.onSessionDeleted('coder', 'del-1');
@@ -960,7 +969,7 @@ describe('ThreadIntegration (coder host gating)', () => {
     const outcome = await integration.onSessionDeleted('coder', 'del-2');
     assert.equal(outcome.applied, true);
     assert.equal(outcome.threadId, thread.threadId);
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.status, 'closed');
     assert.equal(record.closeReason, 'head_session_deleted');
     assert.equal(record.commands[0].status, ThreadCommandStatus.CANCELLED);
@@ -1016,29 +1025,30 @@ describe('pendingSuccession handoff guard', () => {
   after(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
   function makeFixture(bridgeOptions = {}) {
-    const store = new ThreadStore({ rootDir: path.join(root, `hg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`) });
-    const bridge = new ThreadRuntimeBridge(bridgeOptions);
-    const controller = new ThreadController({ store, bridge });
-    return { controller, integration: createThreadIntegration({ controller }) };
+    const control = makeControl(
+      path.join(root, `hg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+      bridgeOptions,
+    );
+    return { control, core: control.core, integration: createThreadIntegration({ control }) };
   }
 
   test('beginSessionHandoff blocks delivery; advanceHead clears atomically and resumes', async () => {
-    const { controller, integration } = makeFixture({
+    const { core, integration } = makeFixture({
       enabled: true,
       resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'hd-s2' ? 'viewer-s2' : null),
       submitTurn: async ({ text }) => ({ success: true, delivery: 'delivered', text }),
     });
-    const thread = await controller.createThread({ agentId: 'coder', sessionId: 'hd-s1' });
-    await controller.appendCommand({ threadId: thread.threadId, text: '请继续' });
+    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'hd-s1' } });
+    await core.appendCommand({ threadId: thread.threadId, text: '请继续' });
 
     // 交接标记：integration 入口（host + head 匹配才生效）
     const begun = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'hd-s1', reason: 'trim' });
     assert.equal(begun.applied, true);
 
-    const blocked = await controller.deliverPendingCommands(thread.threadId);
+    const blocked = await core.deliverPendingCommands(thread.threadId);
     assert.equal(blocked.delivered, 0);
     assert.equal(blocked.reason, 'handoff_in_progress');
-    let record = await controller.getThread(thread.threadId);
+    let record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
     assert.equal(record.pendingSuccession.fromSessionId, 'hd-s1');
 
@@ -1049,14 +1059,14 @@ describe('pendingSuccession handoff guard', () => {
     assert.equal(outcome.applied, true);
     assert.equal(outcome.delivery.delivered, 1);
 
-    record = await controller.getThread(thread.threadId);
+    record = await core.getThread(thread.threadId);
     assert.equal(record.pendingSuccession, null);
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
   });
 
   test('beginSessionSuccession is a no-op for non-host agents and orphan sessions', async () => {
-    const { controller, integration } = makeFixture();
-    const thread = await controller.createThread({ agentId: 'coder', sessionId: 'hd-a' });
+    const { core, integration } = makeFixture();
+    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'hd-a' } });
 
     const nonHost = await integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 'hd-a', reason: 'trim' });
     assert.equal(nonHost.applied, false);
@@ -1066,29 +1076,8 @@ describe('pendingSuccession handoff guard', () => {
     assert.equal(orphan.applied, false);
     assert.equal(orphan.reason, 'no_thread_for_session');
 
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.pendingSuccession, null);
-  });
-
-  test('stale handoff intent no longer blocks delivery (failure-path self-healing)', async () => {
-    const { controller } = makeFixture({
-      enabled: true,
-      resolveRuntimeViewerId: () => 'viewer-x',
-      submitTurn: async ({ text }) => ({ success: true, delivery: 'delivered', text }),
-    });
-    const thread = await controller.createThread({ agentId: 'coder', sessionId: 'hd-stale' });
-    await controller.appendCommand({ threadId: thread.threadId, text: 'later' });
-
-    // 直接写一个 10 分钟前的交接意图（模拟 compact 崩溃后残留）
-    await controller.store.update(thread.threadId, (draft) => {
-      draft.pendingSuccession = { fromSessionId: 'hd-stale', reason: 'trim', startedAt: Date.now() - 10 * 60 * 1000 };
-      return draft;
-    });
-
-    const result = await controller.deliverPendingCommands(thread.threadId);
-    assert.equal(result.delivered, 1);
-    const record = await controller.getThread(thread.threadId);
-    assert.equal(record.pendingSuccession, null); // 惰性清除落盘
   });
 });
 
@@ -1098,10 +1087,11 @@ describe('InputGateway (unified user input routing)', () => {
   after(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
   function makeFixture(bridgeOptions = {}) {
-    const store = new ThreadStore({ rootDir: path.join(root, `ig-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`) });
-    const bridge = new ThreadRuntimeBridge(bridgeOptions);
-    const controller = new ThreadController({ store, bridge });
-    return { controller, integration: createThreadIntegration({ controller }) };
+    const control = makeControl(
+      path.join(root, `ig-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+      bridgeOptions,
+    );
+    return { control, core: control.core, integration: createThreadIntegration({ control }) };
   }
 
   const VIEWER_KEY = 'coder::ig-s1';
@@ -1118,8 +1108,8 @@ describe('InputGateway (unified user input routing)', () => {
   });
 
   test('handoff in progress reroutes to Thread Inbox with explicit thread_queued result', async () => {
-    const { controller, integration } = makeFixture();
-    const thread = await controller.createThread({ agentId: 'coder', sessionId: 'ig-s1' });
+    const { core, integration } = makeFixture();
+    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
     await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'ig-s1', reason: 'summary' });
 
     const result = await deliverUserInput(
@@ -1130,14 +1120,14 @@ describe('InputGateway (unified user input routing)', () => {
     assert.equal(result.threadId, thread.threadId);
     assert.ok(result.commandId);
 
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
     assert.equal(record.commands[0].text, '请继续');
   });
 
   test('no handoff: passthrough delivery to viewer user-turn', async () => {
-    const { controller, integration } = makeFixture();
-    await controller.createThread({ agentId: 'coder', sessionId: 'ig-s1' });
+    const { core, integration } = makeFixture();
+    await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
 
     // direct 路径验证网关透传契约：stub fetch 模拟 viewer 原生结果
     const fetchImpl = async (_url, init) => ({
@@ -1157,8 +1147,8 @@ describe('InputGateway (unified user input routing)', () => {
   });
 
   test('image-only input during handoff fails explicitly instead of being lost', async () => {
-    const { controller, integration } = makeFixture();
-    await controller.createThread({ agentId: 'coder', sessionId: 'ig-s1' });
+    const { core, integration } = makeFixture();
+    await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
     await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'ig-s1', reason: 'trim' });
 
     await assert.rejects(
@@ -1169,7 +1159,7 @@ describe('InputGateway (unified user input routing)', () => {
 
   test('race closure: delivers immediately when succession lands between route resolution and append', async () => {
     const turns = [];
-    const { controller, integration } = makeFixture({
+    const { core, integration } = makeFixture({
       enabled: true,
       resolveRuntimeViewerId: (agentId, sessionId) => (sessionId === 'ig-s2' ? 'viewer-ig-2' : null),
       submitTurn: async (params) => {
@@ -1177,20 +1167,20 @@ describe('InputGateway (unified user input routing)', () => {
         return { success: true };
       },
     });
-    const thread = await controller.createThread({ agentId: 'coder', sessionId: 'ig-s1' });
+    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
     await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'ig-s1', reason: 'trim' });
 
     // 模拟竞态：网关路由判定（读到 fresh 交接）之后、appendCommand 落盘
     // 之前，succession 完成（advanceHead 清挡板 + 投递过一轮空投递）。
-    const realAppend = controller.appendCommand.bind(controller);
-    const racingController = Object.create(controller);
-    racingController.appendCommand = async (params) => {
-      await controller.advanceHead({ threadId: thread.threadId, toSessionId: 'ig-s2', fromSessionId: 'ig-s1', endKind: 'trim' });
+    const realAppend = core.appendCommand.bind(core);
+    const racingCore = Object.create(core);
+    racingCore.appendCommand = async (params) => {
+      await core.advanceHead({ threadId: thread.threadId, toSessionId: 'ig-s2', fromSessionId: 'ig-s1', endKind: 'trim' });
       return realAppend(params);
     };
     const racingIntegration = {
       ...integration,
-      controller: racingController,
+      core: racingCore,
       tryDeliver: integration.tryDeliver.bind(integration),
     };
 
@@ -1208,7 +1198,7 @@ describe('InputGateway (unified user input routing)', () => {
     assert.equal(turns[0].text, '请继续');
     assert.equal(turns[0].sourceRef, result.commandId);
 
-    const record = await controller.getThread(thread.threadId);
+    const record = await core.getThread(thread.threadId);
     assert.equal(record.headSessionId, 'ig-s2');
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
   });

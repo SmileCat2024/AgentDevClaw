@@ -7,7 +7,8 @@
  * 设计理念（descriptor 驱动）：
  * - 协议不依赖 Claw 中心注册表。Feature 通过包装类（见 continuity-participant）
  *   自声明参与 continuity：在 captureState 的返回值里注入
- *   __claw_continuity__ = { protocol, importMode }。
+ *   __agentdev_continuity__ = { protocol, importMode }（读旧写新兼容
+ *   __claw_continuity__，见 continuity-participant）。
  * - export 端从 sessionSnapshot.runtime.featureStates[*].snapshot 读取 descriptor，
  *   凡是声明了 descriptor 的 feature 都会被采集，未声明一律不参与。
  * - import 端通过 agent 实例的 getContinuityDescriptor() 校验当前 runtime 的 feature

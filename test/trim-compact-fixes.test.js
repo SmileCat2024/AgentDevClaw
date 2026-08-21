@@ -387,7 +387,7 @@ describe('trim-compact fixes', () => {
         { role: 'assistant', content: 'reply2', turn: 2 },
       ];
 
-      // Simulate seed feature logic (from context-handoff-seed/src/index.ts)
+      // Simulate seed feature logic (framework HandoffSeedFeature; formerly local context-handoff-seed)
       let fallbackTurn = 0; // agent._callIndex at hook time (already set to nextCallIndex)
       let injectionTurn = fallbackTurn;
       for (const message of seedMessages) {

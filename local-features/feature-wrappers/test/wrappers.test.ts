@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../src/index.js';
 import { TodoFeature, OpencodeBasicFeature, Decision } from 'agentdev';
+import { CONTINUITY_FIELD_KEY } from '../../continuity-participant/src/index.js';
 
 function makeStepCtx(toolCallsCount: number) {
   const injected: Array<{ role: string; content: string }> = [];
@@ -26,7 +27,7 @@ describe('feature-wrappers smoke', () => {
     assert.equal(typeof feature.setInterruptTarget, 'function');
     // continuity descriptor 随包装导出
     const state = feature.captureState();
-    const descriptor = (state as Record<string, unknown>).__claw_continuity__ as
+    const descriptor = (state as Record<string, unknown>)[CONTINUITY_FIELD_KEY] as
       | { protocol?: string }
       | undefined;
     assert.equal(descriptor?.protocol, 'claw.todo-continuity.v1');
@@ -36,7 +37,7 @@ describe('feature-wrappers smoke', () => {
     const feature = new ContinuityAwareOpencodeBasic();
     assert.ok(feature instanceof OpencodeBasicFeature);
     const state = feature.captureState();
-    const descriptor = (state as Record<string, unknown>).__claw_continuity__ as
+    const descriptor = (state as Record<string, unknown>)[CONTINUITY_FIELD_KEY] as
       | { protocol?: string }
       | undefined;
     assert.equal(descriptor?.protocol, 'claw.opencode-basic-continuity.v1');

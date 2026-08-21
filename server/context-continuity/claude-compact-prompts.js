@@ -66,27 +66,6 @@ export function scanFilesAndSkills(rawMessages) {
   return { files: [...files], skills: [...skills], fileRanges };
 }
 
-const EXPLORATION_SUMMARY_PREAMBLE = `你必须调用 record_compaction_context 工具，将所有结果作为参数传入。
-
-参数说明：
-- summary：完整三段式探索摘要文本
-- important_files：探索中发现的重要文件路径列表
-- important_skills：探索中使用invoke_skill工具激活的技能名称列表
-
-不要调用其他工具。`;
-
-const EXPLORATION_SUMMARY_PROMPT = `你的任务是为一次代码探索生成一份精炼的探索摘要，帮助读者快速判断"这条探索记录跟我的当前任务相关吗"。
-
-摘要面向主代理（Main Agent），用于一览列表中的快速扫描和相关度评估，不注入子代理上下文。
-
-使用以下三段式结构：
-
-1. **探索目标与范围**：本次探索被派去查什么，探索了哪些模块/目录/子系统
-2. **关键发现与结论**：发现了什么，核心结论是什么，有什么值得注意的设计模式或架构特征
-3. **重要的代码位置与文件**：对后续工作最有参考价值的文件路径和代码位置
-
-摘要控制在 800 个英文单词以内（中文对应压缩），优先使用要点而非段落。`;
-
 const PARTIAL_COMPACT_PROMPT = `你的任务是为当前对话的最近部分创建一份详细摘要——即从用户选定的某条消息开始、到对话结束之间的内容。更早的消息已被保留，不需要被摘要。
 
 你可能会看到一个系统边界标记：[PARTIAL_COMPACT_START]。该标记之前的消息是保留上下文，只用于帮助你理解最近部分与先前工作的关系；不要摘要这些保留消息。该标记之后的消息才是需要被摘要并替换的内容。
@@ -122,16 +101,6 @@ export function buildClaudeCompactPrompt(options = {}) {
   const extraInstructions = typeof options.additionalInstructions === 'string'
     ? options.additionalInstructions.trim()
     : '';
-  const isExploration = options.sessionType === 'exploration';
-
-  if (isExploration) {
-    return [
-      EXPLORATION_SUMMARY_PREAMBLE,
-      '',
-      EXPLORATION_SUMMARY_PROMPT,
-      extraInstructions ? `## 额外压缩指令\n${extraInstructions}` : '',
-    ].filter(Boolean).join('\n');
-  }
 
   if (options.partial === true) {
     return [

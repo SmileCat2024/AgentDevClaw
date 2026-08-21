@@ -28,6 +28,7 @@ import {
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
 import { renderConversationHtml } from '../conversation-renderer.js';
 import { readHandoffPackage } from '../context-continuity/handoff-package.js';
+import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
 import { createOperationTrace } from '../shared/operation-trace.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION } from './session-helpers.js';
@@ -600,62 +601,32 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
       const remainingSummary = await findSessionSummary(agentId, sessionId);
       await setSessionHasSummary(agentId, sessionId, !!remainingSummary);
     }
-    const agentDir = path.join('prebuilt-agents', 'official', agentId);
-    const resultPath = path.join(os.tmpdir(), `compact-mirror-${Date.now()}.json`);
+    const agentRelativeDir = path.join('prebuilt-agents', 'official', agentId);
 
     // Resolve sessionType from the workspace session index first; session files may not carry the product-level type.
     const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
 
-    const args = [
-      path.join(PROJECT_ROOT, 'scripts', 'run-compact-mirror.js'),
-      agentDir,
+    console.log(`[generate_summary] in-process summary begin agent=${agentId} session=${sessionId}`);
+    const result = await runInProcessSummary({
+      agentRelativeDir,
+      projectRoot: PROJECT_ROOT,
       agentId,
       sessionId,
-      JSON.stringify({ sessionType, maxAttempts: 1 }),
-      resultPath,
-    ];
-    const output = await new Promise((resolve, reject) => {
-      const child = spawn('node', args, { cwd: PROJECT_ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-      const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill('SIGTERM');
-      }, timeoutMs);
-      child.stdout.on('data', (d) => { stdout += d; });
-      child.stderr.on('data', (d) => { stderr += d; });
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (timedOut) {
-          reject(new Error(`Compact mirror timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
-          return;
-        }
-        if (code !== 0) reject(new Error(stderr || stdout || `compact mirror exited with code ${code}`));
-        else resolve(stdout);
-      });
-      child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
+      sessionType,
+      maxAttempts: 1,
+      timeoutMs: MIRROR_SCRIPT_TIMEOUT_MS,
     });
-    console.log('[generate_summary] compact mirror output:', output?.slice(0, 200));
-    const result = await fs.readFile(resultPath, 'utf8').then(JSON.parse).catch(() => null);
-    if (!result?.ok || !result.summaryText) {
-      res.status(500).json({ error: 'Compact mirror did not produce a valid summary' });
+    if (!result?.summaryText) {
+      res.status(500).json({ error: 'In-process summary did not produce a valid summary' });
       return;
     }
     await exportProvidedSummaryHandoff({
       preferredAgentId: agentId,
       sessionId,
       summaryText: result.summaryText,
-      rawResponse: result.rawResponse || '',
       importantFiles: result.importantFiles || [],
       importantSkills: result.importantSkills || [],
-      sessionTitle: result.sessionTitle || '',
     });
-    try { await fs.unlink(resultPath); } catch {}
     res.json({ ok: true });
   } catch (error) {
     next(error);

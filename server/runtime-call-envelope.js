@@ -45,7 +45,8 @@ export const EnvelopeSource = Object.freeze({
   SYSTEM:       'system',
   // 预留位：未来 autonomous 派发经 RuntimeInbox 时的来源标识。当前无
   // 生产方、无消费方——Thread Inbox 的投递经 viewer user-turn 直达
-  // runtime（thread-runtime-bridge.js），不经过 envelope 通道。
+  // runtime（框架 WorkThreadRuntimeBridge，宿主注入 submitTurn），
+  // 不经过 envelope 通道。
   THREAD:       'thread',
 });
 

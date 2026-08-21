@@ -21,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync } from 'fs';
-import { FileSessionStore } from 'agentdev';
+import { FileSessionStore, HandoffSeedFeature } from 'agentdev';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
@@ -290,17 +290,14 @@ async function main() {
   }
 
   // 4. Mount handoff seed feature (same as run-prebuilt-agent.js)
-  const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
+  // 框架标准 handoff seed feature（原 Claw context-handoff-seed 已下沉，见 docs/tickets/008）
 
   // Only mount handoff seed if handoff data exists
   if (runtimeHandoff?.handoff && (runtimeHandoff.handoff.sourceSummary || runtimeHandoff.handoff.seedMessages?.length)) {
-    if (typeof localFeatures.ContextHandoffSeedFeature !== 'function') {
-      throw new Error('local ContextHandoffSeedFeature 未构建，无法挂载 handoff seed');
-    }
-    agent.use(new localFeatures.ContextHandoffSeedFeature({
+    agent.use(new HandoffSeedFeature({
       handoff: runtimeHandoff.handoff,
     }));
-    console.error(`[OneShot] 已挂载 context handoff seed (${runtimeHandoff.source})`);
+    console.error(`[OneShot] 已挂载 handoff seed (${runtimeHandoff.source})`);
   }
 
   // 5. prepareRuntime hook

@@ -244,10 +244,10 @@ class ControlledTodoFeatureInner extends TodoFeature {
  *     → ControlledTodoFeatureInner.captureState() → super.captureState()
  *       → TodoFeature 原生 captureState()
  *     → 加 interruptTargetId
- *   → 加 __claw_continuity__ descriptor
+ *   → 加 __agentdev_continuity__ descriptor
  *
  * 包装链（restoreState）：
- *   declareContinuity 子类 → 剥离 __claw_continuity__ → super.restoreState()
+ *   declareContinuity 子类 → 剥离 __agentdev_continuity__ → super.restoreState()
  *     → ControlledTodoFeatureInner.restoreState() → super.restoreState() + 恢复 interruptTargetId
  */
 export const ControlledTodoFeature = declareContinuity(ControlledTodoFeatureInner, {

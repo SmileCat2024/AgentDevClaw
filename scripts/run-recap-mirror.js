@@ -6,13 +6,13 @@ import { tmpdir } from 'os';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { fileURLToPath } from 'url';
 import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
+import { tuneMirrorLLM } from '../server/shared/llm-tuning.js';
 import {
   cleanValue,
   sanitizeSessionFragment,
   resolveWorkspaceCwd,
   createTextOnlyMirrorAgent,
   loadMirrorSession,
-  tuneMirrorLLM,
 } from './mirror-runtime.js';
 
 const __filename = fileURLToPath(import.meta.url);

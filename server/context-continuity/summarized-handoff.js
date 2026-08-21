@@ -1,18 +1,19 @@
 import path from 'path';
-import os from 'os';
-import process from 'process';
 import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
-import { spawn } from 'child_process';
 import {
   getContextHandoffFilePath,
 } from './handoff-package.js';
 import {
   exportFeatureContinuity,
 } from './feature-continuity.js';
-import { childProcessEnv } from '../shared/string-helpers.js';
+import { runInProcessSummary } from './inprocess-summary.js';
+import {
+  HANDOFF_SCHEMA_VERSION,
+  normalizeSummaryPolicy,
+  buildSummarySeedMessage,
+} from 'agentdev';
 
-const HANDOFF_SCHEMA_VERSION = 1;
 const HANDOFF_COMPILER_VERSION = 'summarized-nine-section-v1';
 
 function sanitizeFragment(value) {
@@ -78,88 +79,6 @@ function buildCompactOverview(sourceRecord = {}) {
   if (constraints) lines.push(`Constraints: ${constraints}`);
   if (openDirectory) lines.push(`Working directory: ${openDirectory}`);
   return lines.join('\n');
-}
-
-function normalizeSummaryPolicy(rawPolicy = {}) {
-  return {
-    strategy: 'summarized-nine-section',
-    summaryShape: 'claude-nine-section-v1',
-    maxAttempts: Number.isFinite(rawPolicy?.maxAttempts)
-      ? Math.max(1, Math.min(5, Number(rawPolicy.maxAttempts)))
-      : 3,
-    additionalInstructions: cleanMultilineText(rawPolicy?.additionalInstructions),
-  };
-}
-
-function buildSummarySeedMessage(summaryText) {
-  const body = cleanMultilineText(summaryText);
-  return {
-    role: 'system',
-    content: [
-      '以下是前一会话的工作摘要，用于延续同一任务上下文。',
-      '摘要涵盖前一轮对话的关键内容。',
-      '',
-      '摘要：',
-      body,
-      '',
-      '请基于此摘要继续工作，无需要求用户重复陈述背景。',
-    ].join('\n'),
-    turn: 0,
-  };
-}
-
-async function runMirrorCompaction(scriptPath, args, cwd, timeoutMs = 600000) {
-  const resultDir = path.join(os.tmpdir(), `compact-mirror-${Date.now()}-${randomUUID().slice(0, 8)}`);
-  const resultPath = path.join(resultDir, 'result.json');
-  await fs.mkdir(resultDir, { recursive: true });
-
-  return new Promise((resolve, reject) => {
-    console.log(`[summarized_handoff] spawning child resultPath=${resultPath}`);
-
-    const child = spawn(process.execPath, [scriptPath, ...args, resultPath], {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      env: {
-        ...childProcessEnv(),
-      },
-    });
-
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error(`Mirror compaction timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.stderr.on('data', (chunk) => {
-      const text = String(chunk);
-      stderr += text;
-      for (const line of text.split('\n')) {
-        if (line.trim()) console.log(`[compact-mirror] ${line.trimEnd()}`);
-      }
-    });
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      console.error(`[summarized_handoff] child spawn error: ${err.message}`);
-      reject(err);
-    });
-    child.on('exit', async (code) => {
-      clearTimeout(timer);
-      console.log(`[summarized_handoff] child exited code=${code}`);
-      if (code !== 0) {
-        reject(new Error(stderr.trim() || `run-compact-mirror exited with code ${code}`));
-        return;
-      }
-      try {
-        const raw = await fs.readFile(resultPath, 'utf8');
-        resolve(JSON.parse(raw.trim()));
-      } catch (error) {
-        reject(new Error(`Failed to read mirror compaction result file: ${error instanceof Error ? error.message : String(error)}`));
-      } finally {
-        await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
-      }
-    });
-  });
 }
 
 async function ensureDir(dirPath) {
@@ -266,32 +185,26 @@ export async function exportSummarizedHandoffPackage({
   sourceSessionSnapshot = null,
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
-  const mirrorScriptPath = path.join(path.resolve(String(projectRoot || '').trim()), 'scripts', 'run-compact-mirror.js');
-  console.log(`[summarized_handoff] mirror compaction begin agent=${agentId} session=${sessionId}`);
-
-  // Extract sessionType from sourceRecord to determine the correct prompt format
-  // exploration sessions use three-section format, other sessions use nine-section format
+  // Extract sessionType from sourceRecord to determine prompt format and model role:
+  // exploration sessions use the three-section exploration prompt, others use nine-section
   const sessionType = typeof sourceRecord.sessionType === 'string' ? sourceRecord.sessionType : '';
 
-  const mirrorResult = await runMirrorCompaction(
-    mirrorScriptPath,
-    [
-      agentRelativeDir,
-      agentId,
-      sessionId,
-      JSON.stringify({
-        maxAttempts: policy.maxAttempts,
-        additionalInstructions: policy.additionalInstructions,
-        sessionType,  // Pass sessionType to mirror script for prompt selection
-      }),
-    ],
-    path.resolve(String(projectRoot || '').trim()),
-  );
-  console.log(`[summarized_handoff] mirror compaction done agent=${agentId} session=${sessionId} attempts=${mirrorResult?.attemptCount ?? 'unknown'}`);
+  console.log(`[summarized_handoff] in-process summary begin agent=${agentId} session=${sessionId}`);
+  const summaryResult = await runInProcessSummary({
+    agentRelativeDir,
+    projectRoot,
+    agentId,
+    sessionId,
+    sourceSessionSnapshot,
+    sessionType,
+    maxAttempts: policy.maxAttempts,
+    additionalInstructions: policy.additionalInstructions,
+  });
+  console.log(`[summarized_handoff] in-process summary done agent=${agentId} session=${sessionId} attempts=${summaryResult.attemptCount}`);
 
-  const summaryText = cleanMultilineText(mirrorResult?.summaryText);
+  const summaryText = cleanMultilineText(summaryResult?.summaryText);
   if (!summaryText) {
-    throw new Error('Mirror compaction returned an empty summary');
+    throw new Error('In-process summary returned an empty summary');
   }
   return writeSummarizedHandoffPackage({
     userDataRoot,
@@ -300,12 +213,10 @@ export async function exportSummarizedHandoffPackage({
     sourceRecord,
     policy,
     summaryText,
-    rawResponse: typeof mirrorResult?.rawResponse === 'string' ? mirrorResult.rawResponse : '',
-    attemptCount: mirrorResult?.attemptCount,
-    importantFiles: Array.isArray(mirrorResult?.importantFiles) ? mirrorResult.importantFiles : [],
-    importantSkills: Array.isArray(mirrorResult?.importantSkills) ? mirrorResult.importantSkills : [],
-    sessionTitle: typeof mirrorResult?.sessionTitle === 'string' ? mirrorResult.sessionTitle : '',
-    fileRanges: typeof mirrorResult?.fileRanges === 'object' && mirrorResult.fileRanges !== null ? mirrorResult.fileRanges : {},
+    attemptCount: summaryResult?.attemptCount,
+    importantFiles: Array.isArray(summaryResult?.importantFiles) ? summaryResult.importantFiles : [],
+    importantSkills: Array.isArray(summaryResult?.importantSkills) ? summaryResult.importantSkills : [],
+    fileRanges: typeof summaryResult?.fileRanges === 'object' && summaryResult.fileRanges !== null ? summaryResult.fileRanges : {},
     sourceSessionSnapshot,
   });
 }

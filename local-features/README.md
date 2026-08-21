@@ -12,7 +12,7 @@ Claw 仓库自有的 feature 与包装层源码（TypeScript，编译产物在 `
 
 | 包 | 职责 |
 |---|---|
-| `continuity-participant/` | continuity 协议基础设施：`declareContinuity` 高阶函数与通用协议常量，让 feature 状态可跨 trim/summary/分支迁移 |
+| `continuity-participant/` | continuity 协议消费层：`declareContinuity` 从框架 `agentdev` 消费，保留 Claw 协议命名空间（`claw.*`）与字段 key 读旧写新兼容（`__agentdev_continuity__` / 旧 `__claw_continuity__`），让 feature 状态可跨 trim/summary/分支迁移 |
 | `feature-wrappers/` | 框架自带 feature 的薄包装（继承 + declareContinuity 叠加 Claw 协议，不复制实现）。当前含 `ControlledTodoFeature`（todo 中断控制 + 状态迁移）、`ContinuityAwareOpencodeBasic`（先读后写保护状态迁移）。消费方：编程小助手、`agents/coder` |
 
 ### 应用层（Claw 应用化 feature）
@@ -27,7 +27,6 @@ Claw 仓库自有的 feature 与包装层源码（TypeScript，编译产物在 `
 | `context-compaction-mirror/` | 上下文精简镜像 | 活跃 |
 | `context-compaction-control/` | 上下文精简控制 | 活跃 |
 | `context-guard/` | 上下文防护 | 活跃 |
-| `context-handoff-seed/` | 上下文交接种子注入 | 活跃 |
 | `conversation-export/` | 对话导出 | 活跃 |
 | `generative-ui/` | 可视化交互面板 feature | 活跃 |
 | `github/` | GitHub 工具集 | 活跃 |

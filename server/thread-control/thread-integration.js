@@ -21,7 +21,7 @@
  * 与 agent 归属哪个工作空间无关。
  */
 
-import { getThreadController } from './thread-controller.js';
+import { getThreadControl } from './thread-controller.js';
 import { ThreadNotFoundError } from './thread-store.js';
 import { THREAD_HOST_AGENT_IDS } from './host-agents.js';
 
@@ -29,11 +29,12 @@ import { THREAD_HOST_AGENT_IDS } from './host-agents.js';
 // 引用）；此处 re-export 维持 server 侧既有消费方（input-gateway 等）不变。
 export { THREAD_HOST_AGENT_IDS };
 
-export function createThreadIntegration({ controller = null } = {}) {
-  const threadController = controller || getThreadController();
+export function createThreadIntegration({ control = null } = {}) {
+  const { core, board } = control || getThreadControl();
 
   return {
-    controller: threadController,
+    core,
+    board,
 
     /**
      * 会话创建钩子：线程宿主工作空间的新会话自动成为一条新线程。
@@ -44,9 +45,8 @@ export function createThreadIntegration({ controller = null } = {}) {
       const sessionId = String(session?.id || '').trim();
       if (!sessionId) return null;
       try {
-        const thread = await threadController.createThread({
-          agentId,
-          sessionId,
+        const thread = await core.start({
+          sessionRef: { agentId, sessionId },
           title: String(session?.title || '').trim(),
         });
         console.log(`[thread-integration] thread created: ${thread.threadId} head=${sessionId}`);
@@ -69,9 +69,9 @@ export function createThreadIntegration({ controller = null } = {}) {
       const from = String(sessionId || '').trim();
       if (!from) return { applied: false, reason: 'invalid_session' };
       try {
-        const thread = await threadController.findThreadByHeadSession(normalizedAgentId, from);
+        const thread = await core.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
-        await threadController.beginSessionHandoff({
+        await core.beginSessionHandoff({
           threadId: thread.threadId,
           fromSessionId: from,
           reason,
@@ -97,10 +97,10 @@ export function createThreadIntegration({ controller = null } = {}) {
 
       let thread = null;
       try {
-        thread = await threadController.findThreadByHeadSession(normalizedAgentId, from);
+        thread = await core.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
 
-        const advanced = await threadController.advanceHead({
+        const advanced = await core.advanceHead({
           threadId: thread.threadId,
           toSessionId: to,
           fromSessionId: from,
@@ -109,14 +109,14 @@ export function createThreadIntegration({ controller = null } = {}) {
         console.log(`[thread-integration] head advanced: ${thread.threadId} ${from} -> ${to} (${reason})`);
 
         // successor runtime 已在 compact 流程内等待 ready；投递暂存指令
-        const delivery = await threadController.deliverPendingCommands(thread.threadId);
+        const delivery = await core.deliverPendingCommands(thread.threadId);
         return { applied: true, thread: advanced, delivery };
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {
           return { applied: false, reason: 'thread_not_found' };
         }
         console.error(`[thread-integration] succession failed ${from} -> ${to}:`, error?.message || error);
-        const failed = await threadController.failSessionHandoff(thread.threadId, {
+        const failed = await core.failSessionHandoff(thread.threadId, {
           reason: 'handoff_failed',
           stage: 'advance_head',
           error: error?.message || String(error),
@@ -135,9 +135,9 @@ export function createThreadIntegration({ controller = null } = {}) {
       const from = String(sessionId || '').trim();
       if (!from) return { applied: false, reason: 'invalid_session' };
       try {
-        const thread = await threadController.findThreadByHeadSession(normalizedAgentId, from);
+        const thread = await core.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
-        const failed = await threadController.failSessionHandoff(thread.threadId, { reason, stage, error });
+        const failed = await core.failSessionHandoff(thread.threadId, { reason, stage, error });
         return { applied: true, thread: failed, threadId: thread.threadId };
       } catch (failure) {
         console.error(`[thread-integration] failSessionSuccession failed for session=${from}:`, failure?.message || failure);
@@ -156,9 +156,9 @@ export function createThreadIntegration({ controller = null } = {}) {
       const deleted = String(sessionId || '').trim();
       if (!deleted) return { applied: false, reason: 'invalid_session' };
       try {
-        const thread = await threadController.findThreadByHeadSession(normalizedAgentId, deleted);
+        const thread = await core.findThreadByHeadSession(normalizedAgentId, deleted);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
-        await threadController.closeThread(thread.threadId, { reason: 'head_session_deleted' });
+        await core.closeThread(thread.threadId, { reason: 'head_session_deleted' });
         console.log(`[thread-integration] thread closed (head session deleted): ${thread.threadId}`);
         return { applied: true, threadId: thread.threadId };
       } catch (error) {
@@ -175,7 +175,7 @@ export function createThreadIntegration({ controller = null } = {}) {
      */
     async tryDeliver(threadId) {
       try {
-        return await threadController.deliverPendingCommands(threadId);
+        return await core.deliverPendingCommands(threadId);
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {
           return { attempted: 0, delivered: 0, reason: 'thread_not_found', results: [] };
@@ -196,7 +196,7 @@ export function createThreadIntegration({ controller = null } = {}) {
       const readySession = String(sessionId || '').trim();
       if (!readySession) return { applied: false, reason: 'invalid_session' };
       try {
-        const thread = await threadController.findThreadByHeadSession(normalizedAgentId, readySession);
+        const thread = await core.findThreadByHeadSession(normalizedAgentId, readySession);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
         const delivery = await this.tryDeliver(thread.threadId);
         return { applied: true, threadId: thread.threadId, delivery };

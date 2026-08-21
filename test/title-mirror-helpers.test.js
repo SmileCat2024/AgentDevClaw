@@ -1,18 +1,19 @@
 /**
  * Tests for title-mirror pure functions.
  *
- * Covers the core decision logic from scripts/mirror-runtime.js:
+ * Covers the core decision logic from scripts/mirror-runtime.js and
+ * server/shared/llm-tuning.js:
  * 1. sanitizeGeneratedTitle — cleans raw model output into a usable title
  * 2. buildTitleMessages — selects conversational context and appends the title prompt
  * 3. tuneMirrorLLM — caps output and clears configured reasoning options
  *
- * Directly imports the real exported functions from mirror-runtime.js.
+ * Directly imports the real exported functions.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { tuneMirrorLLM } from '../server/shared/llm-tuning.js';
 import {
-  tuneMirrorLLM,
   sanitizeGeneratedTitle,
   buildTitleMessages,
   TITLE_RULES,

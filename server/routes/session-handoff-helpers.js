@@ -85,13 +85,14 @@ export function createSessionHandoffHelpers(deps) {
     // its seed message after the trimmed conversation history.
     if (appendSummary) {
       const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
+      const sourceSessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
       console.log(`[trim_append_summary] running independent summary for session=${sessionId}`);
       const { summarySeedMessage, summaryText, compactOutput } = await runTrimAppendedSummary({
         agentRelativeDir: agent.relativeDir,
         agentId: ownerAgentId,
         sessionId,
-        sourceRecord: record,
         projectRoot: PROJECT_ROOT,
+        sourceSessionSnapshot,
       });
 
       // Append summary seed message after trimmed seed messages

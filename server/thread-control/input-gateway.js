@@ -66,7 +66,7 @@ export async function deliverUserInput(
     );
   }
 
-  const { command, duplicate } = await integration.controller.appendCommand({
+  const { command, duplicate } = await integration.core.appendCommand({
     threadId: route.thread.threadId,
     kind: 'user_message',
     text: normalizedText,
@@ -107,12 +107,12 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
     return { route: 'direct' };
   }
 
-  const thread = await integration.controller.findThreadByHeadSession(agentId, sessionId);
+  const thread = await integration.core.findThreadByHeadSession(agentId, sessionId);
   if (!thread) return { route: 'direct' };
 
-  // 与 controller.deliverPendingCommands 的派生规则同源（fresh 判定），
+  // 与 core.deliverPendingCommands 的派生规则同源（fresh 判定），
   // 但此处只读不写：stale 交接不构成拦截理由。
-  if (!integration.controller.isHandoffActive(thread)) {
+  if (!integration.core.isHandoffActive(thread)) {
     return { route: 'direct' };
   }
 

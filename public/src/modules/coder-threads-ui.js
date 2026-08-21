@@ -6,6 +6,9 @@ window.CoderThreadsUI = (() => {
   let refreshTimer = null;
 
   const STATUS_META = {
+    // 锚点域（框架 WorkThread）：open / rotating / rotation_failed / closed。
+    // idle / running / failed / waiting_input 为切换前索引条目的旧词，保留兼容。
+    open: { zh: '空闲', en: 'Idle' },
     idle: { zh: '空闲', en: 'Idle' },
     running: { zh: '执行中', en: 'Running' },
     rotating: { zh: '接力中', en: 'Relaying' },
@@ -16,7 +19,7 @@ window.CoderThreadsUI = (() => {
   };
 
   // 活动线程排前（执行/接力优先于失败与空闲），closed 沉底；同组按更新时间倒序
-  const STATUS_ORDER = ['running', 'rotating', 'waiting_input', 'failed', 'rotation_failed', 'idle', 'closed'];
+  const STATUS_ORDER = ['running', 'rotating', 'waiting_input', 'failed', 'rotation_failed', 'open', 'idle', 'closed'];
   const RESUMABLE = new Set(['failed', 'rotation_failed', 'waiting_input']);
 
   function isZh() { return typeof currentLanguage !== 'undefined' && currentLanguage === 'zh'; }

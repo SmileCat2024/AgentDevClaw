@@ -21,7 +21,8 @@
  * 由线程恢复入口收拾残局（不重放原始指令）。
  *
  * 依赖由 server.js 注入（sessionApi / stopManagedAgent）；线程侧只依赖
- * threadController 与 threadIntegration，不含任何上层产品语义。
+ * threadControl（core + board 装配，见 thread-controller.js）与
+ * threadIntegration，不含任何上层产品语义。
  */
 
 import { cleanSessionText } from '../shared/string-helpers.js';
@@ -36,13 +37,14 @@ export function createThreadRotationService({
   sessionApi,
   stopManagedAgent,
   threadIntegration,
-  threadController,
+  threadControl,
 } = {}) {
   if (!sessionApi || typeof sessionApi.updateSessionIndex !== 'function'
     || typeof sessionApi.compactAndResumeCurrentSession !== 'function'
-    || typeof stopManagedAgent !== 'function' || !threadIntegration || !threadController) {
+    || typeof stopManagedAgent !== 'function' || !threadIntegration || !threadControl) {
     throw new Error('createThreadRotationService requires session and thread dependencies');
   }
+  const threadCore = threadControl.core;
 
   /** 同一 session 的接力防重入（guard 事件可能随 call 结束多次上报） */
   const inflight = new Map();
@@ -65,7 +67,7 @@ export function createThreadRotationService({
   }
 
   async function rotate(agentId, sessionId) {
-    const thread = await threadController.findThreadByHeadSession(agentId, sessionId);
+    const thread = await threadCore.findThreadByHeadSession(agentId, sessionId);
     if (!thread || thread.status === 'closed') return null;
 
     try {
@@ -77,8 +79,8 @@ export function createThreadRotationService({
         preferredAgentId: agentId,
         sessionId,
         // 混合精简：trim-transcript 保留裁剪后的对话主干（工具记录折叠），
-        // appendSummary 走 run-compact-mirror 独立摘要管线，把摘要 system
-        // message 追加到 seed 尾部（mode: trim-transcript-with-summary）。
+        // appendSummary 走官方 summary 进程内实现，把摘要 system message
+        // 追加到 seed 尾部（mode: trim-transcript-with-summary）。
         policy: { strategy: 'trim-transcript' },
         appendSummary: true,
         startRuntime: true,
@@ -92,7 +94,7 @@ export function createThreadRotationService({
         reason: 'trim',
       });
       await clearPersistedGuardState(agentId, sessionId);
-      await threadController.appendCommand({
+      await threadCore.appendCommand({
         threadId: thread.threadId,
         kind: 'system_continuation',
         text: ROTATION_RESUME_INSTRUCTION,

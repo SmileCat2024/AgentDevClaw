@@ -163,7 +163,7 @@ Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里有多项依赖�
 - [local-features/group-admin/src/index.ts](/D:/code/AgentDevClaw/local-features/group-admin/src/index.ts) — 群聊管理员工具集
 - [local-features/checkpoint/src/index.ts](/D:/code/AgentDevClaw/local-features/checkpoint/src/index.ts) — 会话检查点
 - [local-features/context-compaction-mirror/src/index.ts](/D:/code/AgentDevClaw/local-features/context-compaction-mirror/src/index.ts) — 上下文精简
-- [local-features/context-handoff-seed/src/index.ts](/D:/code/AgentDevClaw/local-features/context-handoff-seed/src/index.ts) — 上下文交接
+- [local-features/continuity-participant/src/index.ts](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts) — 连续性参与方协议（框架 declareContinuity 薄封装，CONTINUITY_FIELD_KEY 读旧写新）
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
 - [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层：框架 feature 的 Claw 协议薄包装（ControlledTodoFeature / ContinuityAwareOpencodeBasic），编程小助手与 agents/coder 共享
 - [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts) — Agent Studio 控制面 feature（studio_* 工具集、Test Runtime 生命周期、结构化断言测试）
@@ -398,7 +398,7 @@ npm install
 - [local-features/group-admin/src/index.ts](/D:/code/AgentDevClaw/local-features/group-admin/src/index.ts) — 群聊管理员工具集
 - [local-features/checkpoint/src/index.ts](/D:/code/AgentDevClaw/local-features/checkpoint/src/index.ts) — 会话检查点
 - [local-features/context-compaction-mirror/src/index.ts](/D:/code/AgentDevClaw/local-features/context-compaction-mirror/src/index.ts) — 上下文精简
-- [local-features/context-handoff-seed/src/index.ts](/D:/code/AgentDevClaw/local-features/context-handoff-seed/src/index.ts) — 上下文交接
+- [local-features/continuity-participant/src/index.ts](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts) — 连续性参与方协议（框架 declareContinuity 薄封装，CONTINUITY_FIELD_KEY 读旧写新）
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
 - [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层，编程小助手与 agents/coder 共享
 - [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts) — Agent Studio 控制面（studio_* 工具、Test Runtime、结构化测试）
@@ -588,6 +588,35 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 3. 精简：裁剪早期历史（Trim）或压缩为摘要（Compact）
 4. 摘要导出：将会话导出为结构化摘要
 5. Checkpoint / Rollback：保存与恢复会话状态
+
+## 会话连续性三层模型（消费框架 continuity，ticket 008）
+
+权威设计与决策记录：[docs/adr/0002-session-continuity-as-transformation.md](/D:/code/AgentDevClaw/docs/adr/0002-session-continuity-as-transformation.md)。Claw 不再自带连续性引擎实现，全部消费 `agentdev` 框架导出；理解三层概念是改动任何 trim / compact / 摘要 / 线程代码的前提。
+
+### 三层概念
+
+| 层 | 概念 | 说明 |
+|----|------|------|
+| Session | 会话快照 / SuccessorSeed | 源会话的可变换快照（`runtime.context.messages`）与变换产物（seedMessages + importantFiles 等元数据），落盘为 handoff 包 |
+| Transformation | 官方变换 | 框架实现的 `TrimTranscriptTransformation` / `SummaryTransformation` / `TrimTranscriptWithSummaryTransformation`（`agentdev.summary.*` / `agentdev.trim-transcript.*`），LLM 经 `TransformContext.llm` 进程内注入 |
+| WorkThread | 线程核心 + 看板 | `WorkThread`（线程状态机、命令、接力）/ `WorkThreadBoard`（模式、执行事件、resume）/ `WorkThreadStore`（持久化）/ `WorkThreadRuntimeBridge`（runtime 接线），替代 Claw 原 ThreadController |
+
+### Claw 消费路径表（官方实现 → Claw 装配点）
+
+| 能力 | agentdev 导出 | Claw 装配点（薄封装/装配层） |
+|------|--------------|---------------------------|
+| trim 引擎 | `buildTrimmedSeedMessages` / `normalizeExportPolicy` / `DEFAULT_EXPORT_POLICY` / `HANDOFF_SCHEMA_VERSION` / `HANDOFF_COMPILER_VERSION` | [server/context-continuity/handoff-package.js](/D:/code/AgentDevClaw/server/context-continuity/handoff-package.js)（薄封装 + Claw 落盘格式） |
+| 摘要生成 | `generateSummaryText` / `buildSummaryPrompt` / `stripCompactAnalysis` / `scanFilesAndSkills` / `buildSummarySeedMessage` / `normalizeSummaryPolicy` | [server/context-continuity/inprocess-summary.js](/D:/code/AgentDevClaw/server/context-continuity/inprocess-summary.js)（模型角色解析 system/exploration/sub + 重试/超时）；summarized-handoff.js / trim-appended-summary.js / session.js 的 `session_generate_summary` 路由均经此调用 |
+| seed feature | `HandoffSeedFeature` | [scripts/run-prebuilt-agent.js](/D:/code/AgentDevClaw/scripts/run-prebuilt-agent.js) 与 [scripts/run-one-shot-agent.js](/D:/code/AgentDevClaw/scripts/run-one-shot-agent.js) 装配（原 local-features/context-handoff-seed 已删除，不留薄壳） |
+| 连续性字段 | `CONTINUITY_FIELD_KEY`（`__agentdev_continuity__`） | [local-features/continuity-participant](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts)：读旧写新（兼容 `__claw_continuity__`），协议字符串保留 `claw.*` 命名空间 |
+| 线程控制 | `WorkThread` / `WorkThreadBoard` / `WorkThreadStore` / `WorkThreadRuntimeBridge` | [server/thread-control/thread-controller.js](/D:/code/AgentDevClaw/server/thread-control/thread-controller.js)：`createThreadControl()` 返回 `{core, board, store}` 双对象装配；store 数据目录不变（`~/.agentdev/AgentDevClaw/workspaces/<agentId>/threads/`） |
+
+### 已知边界与注意
+
+- exploration 三段式摘要提示词是 Claw 本地变体（框架 `buildSummaryPrompt` 声明了 exploration 选项但未实现），见 inprocess-summary.js；框架补齐后应切回官方。
+- 旧 mirror 子进程管线（scripts/run-compact-mirror.js）已删除；title/recap mirror 子进程仍在（不同管线，不在本层）。
+- 旧 thread record 中 `executionEvents` / `mode` 字段为惰性数据，看板事件从 `boards/` 重新累积；旧状态词（idle/running/waiting_input/failed）在 store 读取时归一为 `open`。
+- 重启范围：框架 dist（`AgentDev/dist/*`）变更高于以上任何消费点时，必须重启整个 Claw 服务（见「进程架构与重启范围」）。
 
 ## 统一日志契约（重要）
 
@@ -844,7 +873,7 @@ local-features/                                ← 本地 Feature 功能测试�
   context-compaction-mirror/test/smoke.test.ts ← ContextCompactionMirror（工具禁用）
   dispatch/test/smoke.test.ts                  ← ClawDispatchFeature（双模式注入状态机）
   checkpoint/test/smoke.test.ts                ← CheckpointFeature（checkpoint/rollback）
-  context-handoff-seed/test/smoke.test.ts      ← ContextHandoffSeedFeature（seed 注入）
+  continuity-participant/test/*.test.ts        ← 连续性参与方（OnInitiate 防护 + legacy key 读旧兼容）
 ```
 
 ### 何时跑测试

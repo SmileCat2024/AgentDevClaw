@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
-import { DebugHub, FileSessionStore } from 'agentdev';
+import { DebugHub, FileSessionStore, HandoffSeedFeature } from 'agentdev';
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM, resolveModelPresetLLM } from '../server/model-preset-resolver.js';
@@ -751,13 +751,11 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   if (this.runtimeHandoff?.handoff && (this.runtimeHandoff.handoff.sourceSummary || this.runtimeHandoff.handoff.seedMessages?.length)) {
-    if (typeof localFeatures.ContextHandoffSeedFeature !== 'function') {
-      throw new Error('local ContextHandoffSeedFeature 未构建，无法挂载 handoff seed');
-    }
-    this.agent.use(new localFeatures.ContextHandoffSeedFeature({
+    // 框架标准 handoff seed feature（原 Claw context-handoff-seed 已下沉，见 docs/tickets/008）
+    this.agent.use(new HandoffSeedFeature({
       handoff: this.runtimeHandoff.handoff,
     }));
-    console.log(`[ProtoClaw Runtime] 已挂载 context handoff seed (${this.runtimeHandoff.source})`);
+    console.log(`[ProtoClaw Runtime] 已挂载 handoff seed (${this.runtimeHandoff.source})`);
   }
 
   if (typeof this.agent.prepareRuntime === 'function') {
