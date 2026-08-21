@@ -105,6 +105,12 @@ export async function provisionRuntimeEnvironment({ plan, root } = {}) {
   const lockPath = path.join(environmentDir, 'runtime-lock.json');
   const dependencies = {
     agentdev: toFileDependencySpec(AGENTDEV_ROOT),
+    // 拆分后（ADR-0003 / 票 011）生态包 peer 依赖 @agentdev/core（websearch 另需 @agentdev/mcp），
+    // 这些新包尚未发布 npm，宿主 env 以本地源码目录满足 peer，保证 core 单例。
+    '@agentdev/core': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'core')),
+    ...(plan.features.some((f) => f.package === '@agentdev/websearch-feature')
+      ? { '@agentdev/mcp': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'mcp')) }
+      : {}),
     ...Object.fromEntries(dependencyEntries(plan).map((entry) => [entry.package, toFileDependencySpec(entry.archivePath)])),
   };
   const lock = {

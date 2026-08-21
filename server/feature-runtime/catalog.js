@@ -6,12 +6,20 @@ import {
   FEATURE_REPOSITORY_ROOT,
   FEATURE_MANIFEST_NAME,
   USER_FEATURE_REPOSITORY_ROOT,
+  PROJECT_ROOT,
 } from '../shared/constants.js';
 import { compareSemver } from '../shared/feature-utils.js';
 import { runCommand } from '../routes/fs-operations.js';
 
 async function readArchiveJson(archivePath, archiveEntryPath) {
-  const { stdout } = await runCommand('tar', ['-xOf', archivePath, archiveEntryPath]);
+  // Windows 下 GNU tar 把 "D:\..." 的盘符冒号当作远程主机分隔符（"Cannot connect to D:"），
+  // 经 cmd /s /c 包装后带引号的绝对路径同样触发该解析。runCommand 以 PROJECT_ROOT 为 cwd，
+  // 仓库内归档改传 POSIX 风格相对路径绕开；仓库外归档退回正斜杠绝对路径。
+  const relative = path.relative(PROJECT_ROOT, archivePath).replace(/\\/g, '/');
+  const target = relative.startsWith('..')
+    ? archivePath.replace(/\\/g, '/')
+    : relative;
+  const { stdout } = await runCommand('tar', ['-xOf', target, archiveEntryPath]);
   const raw = stdout.trim();
   if (!raw) throw new Error(`Archive entry is empty: ${archiveEntryPath}`);
   return JSON.parse(raw);
