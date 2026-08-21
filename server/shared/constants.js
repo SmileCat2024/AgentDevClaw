@@ -35,7 +35,7 @@ export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-cr
 // PH 风格工作区（项目列表 / 会话列表首页 / 空表单会话）：programming-helper 与 coder（线程版编程助手）
 export const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper', 'coder']);
 // Hidden workspaces remain discoverable by their stable ID for historical sessions and explicit routes.
-export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'feature-creator', 'flow-test']);
+export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'feature-creator', 'flow-test', 'work-group']);
 export const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
 export const MODEL_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'default.json');
 export const MODEL_PRESETS_PATH = path.join(PROJECT_ROOT, 'config', 'presets.json');
