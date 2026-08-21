@@ -505,6 +505,10 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 
 **完整用法文档（五种格式输出形态、jsonl 事件 schema、监视/无头对照、会话续接、落盘位置）在 [agents/README.md](/D:/code/AgentDevClaw/agents/README.md)，修改 CLI 行为时必须同步更新该文档。**
 
+### ACP 适配层
+
+ACP coder 适配层是独立 stdio 进程（`claw acp coder`），只做协议转换与本机 HTTP 调用，执行权威留在 Claw server；详见 [coder-acp-adapter-design.md](/D:/code/AgentDevClaw/docs/coder-acp-adapter-design.md) 与 [ADR-0004](/D:/code/AgentDevClaw/docs/adr/0004-acp-adapter-external-stdio-process.md)。适配器改动只需新起子进程；018 类 server 路由改动需要重启整个 Claw 服务。
+
 ## Agent 制造 → 消费链路（agent-studio → claw CLI）
 
 上游（agent-studio 工作空间）制造 Feature 与 Agent，下游（`claw` CLI / plain agent runner）消费它们。交接物与解析链如下。

@@ -116,6 +116,77 @@ claw run my-agent --goal "..." --debug
 
 非 jsonl 格式下，同样的事件流会以 human 可读行渲染到 stderr（`tool: read {"filePath":...}` / `succeeded: <preview>` / 缩进的 reasoning / `agent:` 回复块 / `tokens:` 汇总），对齐 codex exec 默认形态。
 
+## ACP coder 适配器
+
+ACP 适配器是一个独立的 stdio 子进程：它只做 ACP JSON-RPC 与 Claw 本机 HTTP 的协议转换，实际 session、WorkThread、runtime 和 interrupt 执行权威仍在已运行的 Claw server。完整设计见 [`docs/coder-acp-adapter-design.md`](../docs/coder-acp-adapter-design.md) §10 / §11 / §13，架构决策见 [`docs/adr/0004-acp-adapter-external-stdio-process.md`](../docs/adr/0004-acp-adapter-external-stdio-process.md)，本次 CLI 与文档收尾对应 [`docs/tickets/020-claw-acp-cli-and-docs.md`](../docs/tickets/020-claw-acp-cli-and-docs.md)。Claw server 必须先通过 `npm start` 启动；适配器不会自动拉起它。
+
+### 启动配置
+
+ACP client 的 agent 启动项配置为调用 `claw acp coder`，例如：
+
+```json
+{
+  "command": "claw",
+  "args": ["acp", "coder"]
+}
+```
+
+如果 client 不继承包含 `claw` 的 PATH，也可以直接配置 Node 与仓库脚本：
+
+```json
+{
+  "command": "node",
+  "args": ["D:/code/AgentDevClaw/scripts/run-coder-acp.js"]
+}
+```
+
+CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON-RPC 帧外增加包装层。
+
+### 能力边界
+
+支持的 client → agent 方法只有：
+
+- `initialize`：返回 ACP v1 握手与 coder 能力声明，不访问 Claw server。
+- `session/new`：要求 `cwd` 为非空字符串；`mcpServers` 必须为空（可省略，非空拒绝）；`additionalDirectories` 与 `sessionModes` 必须为空或省略（非空拒绝）；由 server 原子创建 coder session 与 WorkThread。
+- `session/prompt`：只接受一个或多个 `type: "text"` block，按顺序以两个换行符分隔并合并为一条 user message；同一 ACP session 只允许一个 active prompt。
+- `session/cancel`：notification；与请求级取消汇入同一状态机，最多对对应 Claw session 触发一次精确 interrupt。
+
+出站只发送 `session/update`，包括整段 `agent_message_chunk`、tool call 开始与完成更新。未声明或不支持的能力包括：
+
+- `session/load`、`session/resume`、`session/close`
+- `authenticate`、`requestPermission`
+- `session/set_mode` 与 session modes
+- 非空 `mcpServers`
+- 非空 `additionalDirectories`
+- ACP v2、HTTP / WebSocket 传输
+- token 级流式输出
+- image、resource、resource_link、embedded context 等非文本 prompt block
+
+非法参数会返回 `-32602`；未实现方法返回 `-32601`。Claw server 不可达时，触网方法返回 `-32000`，不会静默降级。
+
+### stdout / stderr 契约
+
+- **stdout 只承载 JSON-RPC**：ACP ndjson 输入输出中的每一行都应是可解析的 JSON；CLI 和适配器不向 stdout 写启动提示、human 日志或诊断。
+- **stderr 承载诊断**：启动、连接、轮询、取消和错误诊断均走 stderr，带等级与 `coder-acp` 命名空间；排障 trace 能力见票 [021](../docs/tickets/021-claw-acp-adapter-observability.md)。
+- client 应分别消费两条流；不要把 stderr 当作协议输入，也不要从 stdout 中过滤日志来恢复 JSON-RPC。
+
+### 配置项
+
+| 环境变量 | 默认值 | 作用 |
+|---|---:|---|
+| `CLAW_ACP_BASE_URL` | `http://127.0.0.1:1420` | Claw server 本机 HTTP 地址 |
+| `CLAW_ACP_PROMPT_TIMEOUT_MS` | `1800000` | 等待 prompt 终态事件的超时（30 分钟）；`0` 表示禁用，不自动 interrupt |
+| `CLAW_ACP_POLL_INTERVAL_MS` | `500` | 事件增量轮询间隔（毫秒） |
+| `CLAW_ACP_READY_TIMEOUT_MS` | `30000` | server 侧 `session/new` 等待 runtime READY 的超时（毫秒） |
+
+### v1 已知限制
+
+1. **整段消息粒度**：`agent_message_chunk` 是 runtime 批量事件中的整段文本，不是 token 级实时流。
+2. **轮询延迟**：更新到达 client 的粒度受轮询间隔影响，默认约 500ms。
+3. **UI 并发输入误归因**：ACP prompt 执行期间，若同一 Claw session 同时从 Web UI 输入，交织事件可能被归入当前 ACP prompt；精确 command-id 关联属于后续框架改进。
+4. **无 close/load**：没有 `session/close`、`session/load` 或 `session/resume`；client 断开不会删除 Claw session、WorkThread 或 runtime，重连需新建 ACP session。
+5. **仅文本输入**：image、resource、resource_link 和 embedded context 均不支持。
+
 ### 其他约定
 
 - `--keep-alive` 下会话已先落盘，Ctrl+C 优雅退出，之后可用 `--session <id>` 续接

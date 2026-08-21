@@ -30,7 +30,30 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, '..');
 const PROJECT_ROOT = resolve(__dirname, '..');
 const PLAIN_AGENT_RUNNER = join(PROJECT_ROOT, 'scripts', 'run-plain-agent.js');
+const CODER_ACP_RUNNER = join(PROJECT_ROOT, 'scripts', 'run-coder-acp.js');
 const PLAIN_AGENTS_ROOT = join(PROJECT_ROOT, 'agents');
+
+function handleAcp(args = []) {
+  const [agentName] = args;
+  if (agentName !== 'coder' || args.length !== 1) {
+    console.error('用法: claw acp coder');
+    process.exit(1);
+  }
+
+  const child = spawn(process.execPath, [CODER_ACP_RUNNER], {
+    cwd: PROJECT_ROOT,
+    stdio: 'inherit',
+    env: { ...process.env },
+  });
+
+  child.on('error', (err) => {
+    console.error('Failed to start coder ACP adapter:', err.message);
+    process.exit(1);
+  });
+  child.on('exit', (code) => {
+    process.exit(code ?? 1);
+  });
+}
 
 // ── Plain agents (workspace-free, CLI-first) ─────────────────────
 
@@ -423,6 +446,11 @@ async function main() {
     return;
   }
 
+  if (command === 'acp') {
+    handleAcp(args.slice(1));
+    return;
+  }
+
   if (command === 'agents') {
     await handleAgents(args.slice(1));
     return;
@@ -474,6 +502,7 @@ function printHelp() {
   console.log('  claw threads resume <thread-id> [--source S]');
   console.log('  claw threads close <thread-id> [--reason R]');
   console.log('  claw run <name> --goal "..." [...]     Run a plain agent (viewer-observable; --debug uses Studio source overrides)');
+  console.log('  claw acp coder                         Start the coder ACP stdio adapter');
   console.log('');
   console.log('Legacy aliases (default workspace):');
   console.log('  claw exp [--limit N] [--file F] [--keyword K]');
