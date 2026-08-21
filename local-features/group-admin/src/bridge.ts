@@ -10,9 +10,9 @@
  * - CallFinish 时取 ctx.response，POST /protoclaw/gc/writeback 写回群聊
  */
 
-import type { AgentFeature } from 'agentdev';
-import { CoreLifecycle } from 'agentdev';
-import type { HookDeclarations } from 'agentdev';
+import type { AgentFeature } from '@agentdev/core';
+import { CoreLifecycle } from '@agentdev/core';
+import type { HookDeclarations } from '@agentdev/core';
 
 interface GcMessage {
   id: string;

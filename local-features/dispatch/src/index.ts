@@ -11,9 +11,9 @@
  *    Agent 无活跃 call 时，通过 CallArbiter 起新 call 执行（兼容旧行为）。
  */
 
-import type { AgentFeature } from 'agentdev';
-import { CoreLifecycle } from 'agentdev';
-import type { HookDeclarations } from 'agentdev';
+import type { AgentFeature } from '@agentdev/core';
+import { CoreLifecycle } from '@agentdev/core';
+import type { HookDeclarations } from '@agentdev/core';
 
 interface DispatchMessage {
   id: string;

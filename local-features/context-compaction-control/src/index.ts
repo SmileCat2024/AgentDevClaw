@@ -3,9 +3,9 @@ import type {
   AgentFeature,
   FeatureInitContext,
   PackageInfo,
-} from 'agentdev';
-import type { Tool } from 'agentdev';
-import { createTool, getPackageInfoFromSource } from 'agentdev';
+} from '@agentdev/core';
+import type { Tool } from '@agentdev/core';
+import { createTool, getPackageInfoFromSource } from '@agentdev/core';
 
 const __filename = fileURLToPath(import.meta.url);
 

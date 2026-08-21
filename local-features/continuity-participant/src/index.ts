@@ -14,7 +14,7 @@
  *    的 descriptor 仍可被识别与剥离（docs/tickets/008）。
  */
 
-import { CONTINUITY_FIELD_KEY, declareContinuity } from 'agentdev';
+import { CONTINUITY_FIELD_KEY, declareContinuity } from '@agentdev/core';
 
 export { CONTINUITY_FIELD_KEY, declareContinuity };
 

@@ -2,9 +2,9 @@ import os from 'os';
 import { promises as fs } from 'fs';
 import { fileURLToPath } from 'url';
 import { join, dirname } from 'path';
-import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, PackageInfo, Tool } from 'agentdev';
-import { CoreLifecycle, createTool, Decision, getPackageInfoFromSource } from 'agentdev';
-import type { HookDeclarations } from 'agentdev';
+import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, PackageInfo, Tool } from '@agentdev/core';
+import { CoreLifecycle, createTool, Decision, getPackageInfoFromSource } from '@agentdev/core';
+import type { HookDeclarations } from '@agentdev/core';
 
 type AgentDevMode = 'plan' | 'code' | 'debug';
 
@@ -594,7 +594,7 @@ export class AgentDevFeature implements AgentFeature {
     ];
   }
 
-  async injectWorkspaceState(ctx: import('agentdev').CallStartContext): Promise<void> {
+  async injectWorkspaceState(ctx: import('@agentdev/core').CallStartContext): Promise<void> {
     const modePrompt = getModePrompt(this.mode);
     if (modePrompt) {
       ctx.context.add({ role: 'system', content: modePrompt });
@@ -608,7 +608,7 @@ export class AgentDevFeature implements AgentFeature {
     }
   }
 
-  async guardEditToolInPlanMode(ctx: import('agentdev').ToolContext): Promise<import('agentdev').DecisionResult> {
+  async guardEditToolInPlanMode(ctx: import('@agentdev/core').ToolContext): Promise<import('@agentdev/core').DecisionResult> {
     if (this.mode !== 'plan') {
       return Decision.Continue;
     }

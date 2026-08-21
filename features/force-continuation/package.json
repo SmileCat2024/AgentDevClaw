@@ -17,13 +17,13 @@
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
-    "agentdev": ">=0.1.0"
+    "@agentdev/core": ">=0.1.0"
   },
   "devDependencies": {
+    "@agentdev/core": "file:../../../AgentDev/packages/core",
     "@types/node": "^20.11.0",
     "tsup": "^8.3.5",
-    "typescript": "^5.3.3",
-    "agentdev": "^0.2.11"
+    "typescript": "^5.3.3"
   },
   "keywords": [
     "agentdev",

@@ -22,7 +22,7 @@
  * 让 trim/summary 后任务列表能完整转移到新 runtime。
  */
 
-import { TodoFeature, Decision } from 'agentdev';
+import { TodoFeature, Decision } from '@agentdev/core';
 import {
   declareContinuity,
 } from '../../continuity-participant/src/index.js';

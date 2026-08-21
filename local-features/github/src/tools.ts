@@ -7,7 +7,7 @@
  * 工具按领域分组，可通过 manifest 配置选择性启用。
  */
 
-import type { Tool } from 'agentdev';
+import type { Tool } from '@agentdev/core';
 import { GitHubClient } from './client.js';
 
 // ── 辅助类型 ───────────────────────────────────────────────

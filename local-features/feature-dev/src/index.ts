@@ -3,9 +3,9 @@ import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, PackageInfo, Tool } from 'agentdev';
-import { CoreLifecycle, createTool, Decision, getPackageInfoFromSource } from 'agentdev';
-import type { HookDeclarations } from 'agentdev';
+import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, PackageInfo, Tool } from '@agentdev/core';
+import { CoreLifecycle, createTool, Decision, getPackageInfoFromSource } from '@agentdev/core';
+import type { HookDeclarations } from '@agentdev/core';
 
 export interface FeatureDevFeatureConfig {
   statePath?: string;
@@ -1519,7 +1519,7 @@ export class FeatureDevFeature implements AgentFeature {
     return buildWorkspaceMarkdown(state, cwd);
   }
 
-  async injectWorkspaceState(ctx: import('agentdev').CallStartContext): Promise<void> {
+  async injectWorkspaceState(ctx: import('@agentdev/core').CallStartContext): Promise<void> {
     // 每轮对话都注入当前工作模式提示词
     const modePrompt = getModePrompt(this.mode);
     if (modePrompt) {
@@ -1573,7 +1573,7 @@ export class FeatureDevFeature implements AgentFeature {
     }
   }
 
-  async guardEditToolInPlanMode(ctx: import('agentdev').ToolContext): Promise<import('agentdev').DecisionResult> {
+  async guardEditToolInPlanMode(ctx: import('@agentdev/core').ToolContext): Promise<import('@agentdev/core').DecisionResult> {
     if (ctx.call.name === 'featuredev_package_to_repository' && this.mode !== 'package') {
       const message = [
         '当前不在 PACKAGE 模式，不能直接执行打包入库。',

@@ -6,8 +6,8 @@ import { promises as fs } from 'fs';
 import { dirname, join, relative, resolve } from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
-import type { AgentFeature, CallStartContext, FeatureInitContext, FeatureStateSnapshot, HookDeclarations, PackageInfo, Tool } from 'agentdev';
-import { CoreLifecycle, createTool } from 'agentdev';
+import type { AgentFeature, CallStartContext, FeatureInitContext, FeatureStateSnapshot, HookDeclarations, PackageInfo, Tool } from '@agentdev/core';
+import { CoreLifecycle, createTool } from '@agentdev/core';
 
 export interface AgentStudioFeatureConfig {
   workspaceDir?: string;

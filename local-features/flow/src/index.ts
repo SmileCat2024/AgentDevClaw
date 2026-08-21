@@ -7,9 +7,9 @@
  * - 检测状态转换（手动 complete_node + 变量驱动自动切换）
  */
 
-import type { AgentFeature, ContextInjector, FeatureStateSnapshot, Tool } from 'agentdev';
-import { CoreLifecycle, createTool } from 'agentdev';
-import type { HookDeclarations } from 'agentdev';
+import type { AgentFeature, ContextInjector, FeatureStateSnapshot, Tool } from '@agentdev/core';
+import { CoreLifecycle, createTool } from '@agentdev/core';
+import type { HookDeclarations } from '@agentdev/core';
 import { readFileSync, existsSync } from 'fs';
 import type {
   FlowGraph, FlowNode, FlowEdge, ExitCondition, AutoAction,

@@ -11,8 +11,8 @@
  * 简化模型：同时只能存在一个 checkpoint（固定 ID "__active__"）。
  */
 
-import type { AgentFeature, FeatureStateSnapshot, InlineRenderTemplate } from 'agentdev';
-import { createTool } from 'agentdev';
+import type { AgentFeature, FeatureStateSnapshot, InlineRenderTemplate } from '@agentdev/core';
+import { createTool } from '@agentdev/core';
 
 /** 固定 checkpoint ID（单 checkpoint 模型） */
 const ACTIVE_CHECKPOINT_ID = '__active__';

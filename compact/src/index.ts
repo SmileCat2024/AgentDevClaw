@@ -7,9 +7,9 @@ import type {
   AgentFeature,
   FeatureInitContext,
   PackageInfo,
-} from 'agentdev';
-import type { Tool } from 'agentdev';
-import { getPackageInfoFromSource } from 'agentdev';
+} from '@agentdev/core';
+import type { Tool } from '@agentdev/core';
+import { getPackageInfoFromSource } from '@agentdev/core';
 
 export interface CompactConfig {
   /** 配置选项 */

@@ -30,7 +30,7 @@ import {
   type StudioFeatureEntry,
   type StudioRunRecord,
 } from '../src/index.js';
-import type { Tool } from 'agentdev';
+import type { Tool } from '@agentdev/core';
 
 async function makeTempWorkspace(): Promise<{ workspaceDir: string; projectDir: string }> {
   const base = await fs.mkdtemp(join(tmpdir(), 'agent-studio-test-'));
