@@ -3,7 +3,7 @@
  *
  * 装配以编程小助手（programming-helper）为执行能力底座，但按「无人值守、
  * 任务精准、直接执行完」的自主场景裁剪：
- * - 保留执行类工具链（todo / force-continuation / audit / websearch /
+ * - 保留执行类工具链（todo / force-continuation / websearch /
  *   memory / shell / image-reader / lsp / context-guard / github），
  *   与线程接力（context-guard）机制协同。
  * - 增挂 tickets-build-flow（拿到指令之后的 implement / tdd / code-review
@@ -28,7 +28,6 @@ import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature } from 'ag
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { TicketsBuildFlow } from '../../../features/tickets-build-flow/dist/index.js';
-import { AuditFeature } from '@agentdev/audit-feature';
 import { MemoryFeature } from '@agentdev/memory-feature';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
@@ -133,7 +132,6 @@ export class CoderAgent extends BasicAgent {
     // 自带 skill（经 SkillFeature 自动发现注入）+ 便携读取工具。
     this.use(new TicketsBuildFlow());
 
-    this.use(new AuditFeature());
     this.use(new WebSearchFeature());
     this.use(new MemoryFeature({ workspaceDir }));
     this.use(new ShellFeature({ workspaceDir }));
