@@ -103,8 +103,30 @@ export function setupThreadRoutes(app, express, { control } = {}) {
 
   app.get('/protoclaw/threads/:threadId/events', async (req, res) => {
     try {
-      const result = await board.getExecutionEvents(req.params.threadId, { after: req.query.after });
-      res.json({ ok: true, ...result });
+      // 加法式附加 eventId / receivedAt（ticket 018）：board 查询 API 只返回
+      // 裸事件（信封字段被剥掉），这里直接读看板状态并按与
+      // board.getExecutionEvents 相同的绝对游标窗口语义（ticket 017：
+      // cursor = baseOffset + 窗口长度；after 落后于窗口起点时 clamp 到 0）
+      // 切片，逐事件附加上信封字段。单次读状态，避免两次查询间的竞态；
+      // 游标语义变更时与 board.getExecutionEvents 同步。
+      const state = await board.getState(req.params.threadId);
+      if (!state) {
+        res.json({ ok: true, events: [], cursor: 0 });
+        return;
+      }
+      const entries = Array.isArray(state.executionEvents) ? state.executionEvents : [];
+      const baseOffset = Math.max(0, Number(state.executionEventBaseOffset) || 0);
+      const after = Math.max(0, Number(req.query.after) || 0);
+      const from = after < baseOffset ? 0 : after - baseOffset;
+      res.json({
+        ok: true,
+        events: entries.slice(from).map((entry) => ({
+          ...(entry?.event || {}),
+          eventId: entry?.eventId,
+          receivedAt: entry?.receivedAt,
+        })),
+        cursor: baseOffset + entries.length,
+      });
     } catch (err) {
       _errorResponse(res, err);
     }
