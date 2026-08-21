@@ -265,6 +265,13 @@ function _onBarClick(barIndex) {
   var row = el.closest('.message-row');
   if (!row) return;
 
+  // 导航点击是用户主动改变阅读位置，语义上等同于手动滚轮/拖动。
+  // 先中断跟随动画和未完成的 settlement，再写入目标位置；否则
+  // 距离较小时 follow-latest 会把这次跳转重新拉回底部。
+  if (typeof registerManualScrollIntent === 'function') {
+    registerManualScrollIntent({ interrupt: true });
+  }
+
   // 暴力切：直接设置 scrollTop，不做平滑动画
   var cRect = container.getBoundingClientRect();
   var rRect = row.getBoundingClientRect();

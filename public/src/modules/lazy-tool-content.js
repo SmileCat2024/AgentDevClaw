@@ -206,7 +206,7 @@ function _foldRowIfOutside(row, settleContext) {
     var before = row.offsetHeight;
     syncRowCollapseState(row);
     var delta = before - row.offsetHeight;
-    if (delta !== 0 && container.scrollTop === scrollTop) {
+    if (delta !== 0 && !followLatestEnabled && container.scrollTop === scrollTop) {
       container.scrollTop = scrollTop - delta;
       // Keep the delta tracker in sync so the synthetic scroll event fired
       // by this write is not misread as another large user jump.
@@ -245,11 +245,13 @@ function _foldRowIfOutside(row, settleContext) {
     syncRowCollapseState(row);
     if (beforeSpan - row.offsetHeight > 0) {
       // Re-read offsetTop: folds of rows above (processed first) shift it.
-      var stubTop = row.offsetTop;
-      container.scrollTop = Math.max(0, stubTop - 120);
-      // Keep the delta tracker in sync so the synthetic scroll event fired
-      // by this write is not misread as another large user jump.
-      _lastScrollTop = container.scrollTop;
+      if (!followLatestEnabled) {
+        var stubTop = row.offsetTop;
+        container.scrollTop = Math.max(0, stubTop - 120);
+        // Keep the delta tracker in sync so the synthetic scroll event fired
+        // by this write is not misread as another large user jump.
+        _lastScrollTop = container.scrollTop;
+      }
     }
     return;
   }

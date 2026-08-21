@@ -322,20 +322,33 @@ function syncAssistantProcessOnlyRows(root = container) {
     const content = row.querySelector('.message-content');
     if (!content) return;
 
+    const hasProcessChild = Array.from(content.children).some((child) =>
+      child.classList.contains('reasoning-block')
+      || child.classList.contains('tool-call-container')
+    );
     const visibleContent = Array.from(content.children).some((child) => {
       if (child.classList.contains('markdown-body')) {
         return String(child.textContent || '').trim().length > 0;
       }
       if (child.classList.contains('reasoning-block')) {
-        return !child.classList.contains('process-hidden');
+        return !child.classList.contains('process-hidden')
+          && !child.classList.contains('process-cv-hidden');
       }
       if (child.classList.contains('tool-call-container')) {
-        return !child.classList.contains('process-hidden');
+        return !child.classList.contains('process-hidden')
+          && !child.classList.contains('process-cv-hidden');
       }
       return child.offsetParent !== null;
     });
 
-    row.classList.toggle('process-hidden-empty', !visibleContent);
+    // In show-process mode, a far process-only row is still a real layout
+    // row: its children use content-visibility and retain intrinsic height.
+    // Treating those children as invisible here adds process-hidden-empty and
+    // removes the row from layout, which invalidates the viewport model.
+    const shouldHideEmptyRow = showChatProcess
+      ? !hasProcessChild && !visibleContent
+      : !visibleContent;
+    row.classList.toggle('process-hidden-empty', shouldHideEmptyRow);
   });
 }
 
@@ -409,17 +422,17 @@ window.toggleChatProcessVisibility = function() {
     applyConversationProcessState(container);
   }
 
-  // Restore scroll position based on the anchor row.
-  // If the anchor itself got hidden (e.g. it was a process-only assistant
-  // row), walk forward to the next visible row.
-  if (anchorIdx >= 0) {
+  // Follow mode has one authoritative scroll operation: the viewport
+  // mutation settlement below. Restoring the old anchor first creates a
+  // visible intermediate position, which is immediately overwritten by the
+  // process-toggle follow snap. Anchor restoration is only for readers who
+  // are intentionally not following the latest message.
+  if (!followLatestEnabled && anchorIdx >= 0) {
     const rows = container.querySelectorAll('.message-row');
     for (let i = anchorIdx; i < rows.length; i++) {
       const row = rows[i];
       if (row.classList.contains('process-hidden') ||
           row.classList.contains('process-hidden-empty')) continue;
-      // Accessing offsetTop forces synchronous layout, giving us the
-      // post-toggle position.
       container.scrollTop = row.offsetTop + anchorOffsetInViewport;
       break;
     }

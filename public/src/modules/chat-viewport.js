@@ -232,8 +232,20 @@ function shouldKeepFollowAnimationForMutation(reason, forceSnap) {
     && reason !== 'input-render';
 }
 
+function observeChatViewportRows() {
+  if (!chatViewportResizeObserver || !container) return;
+  // ResizeObserver.observe() is idempotent for an already observed target.
+  // Re-scan after each DOM render so newly inserted message rows are covered.
+  container.querySelectorAll('.message-row').forEach((row) => {
+    chatViewportResizeObserver.observe(row);
+  });
+}
+
 function ensureChatViewportObservers() {
-  if (chatViewportObserversReady) return;
+  if (chatViewportObserversReady) {
+    observeChatViewportRows();
+    return;
+  }
 
   if (typeof MutationObserver === 'function') {
     chatViewportMutationObserver = new MutationObserver(() => {
@@ -255,10 +267,20 @@ function ensureChatViewportObservers() {
   }
 
   if (typeof ResizeObserver === 'function') {
-    chatViewportResizeObserver = new ResizeObserver(() => {
-      if (shouldIgnoreChatViewportObserverEvent() || shouldRenderWorkspaceSurface()) return;
+    chatViewportResizeObserver = new ResizeObserver((entries) => {
+      const hasChatRowResize = entries.some((entry) =>
+        entry.target?.classList?.contains('message-row')
+        || entry.target?.closest?.('.message-row')
+      );
+      // A row resize is the layout signal we are observing for
+      // content-visibility realization. It must not be discarded by the
+      // quiet window created by the mutation that caused the realization;
+      // only observer noise from unrelated DOM/input changes is quieted.
+      if ((chatViewportObserverSuppressDepth > 0
+        || (!hasChatRowResize && Date.now() < (chatViewportObserverQuietUntil || 0)))
+        || shouldRenderWorkspaceSurface()) return;
       notifyChatViewportMutation({
-        reason: 'resize-observer',
+        reason: hasChatRowResize ? 'message-row-resize' : 'resize-observer',
         shouldFollow: followLatestEnabled && isChatSurfaceActive(),
         preserveTop: followLatestEnabled ? null : container.scrollTop,
         forceSnap: isFollowLatestEntryWindowActive(),
@@ -271,6 +293,10 @@ function ensureChatViewportObservers() {
     if (inputContainer) {
       chatViewportResizeObserver.observe(inputContainer);
     }
+    // content-visibility may realize a row's intrinsic height without
+    // changing the container's own box. Observe rows so that a height change
+    // participates in the same settlement cycle as the original mutation.
+    observeChatViewportRows();
   }
 
   chatViewportObserversReady = true;
