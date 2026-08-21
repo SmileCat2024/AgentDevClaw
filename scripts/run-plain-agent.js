@@ -36,7 +36,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
-import { FileSessionStore } from 'agentdev';
+import { FileSessionStore } from '@agentdev/core';
 import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
 import { normalizeAgentMetadata } from '../server/feature-runtime/schemas.js';
 import { scanFeatureCatalog } from '../server/feature-runtime/catalog.js';

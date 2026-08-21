@@ -11,7 +11,7 @@
  * 回复）全部走 stderr，stdout 保持干净；JSONL 模式下 stdout 只承载事件流。
  */
 
-import { subscribeSessionEvents, emitSessionEvent } from 'agentdev';
+import { subscribeSessionEvents, emitSessionEvent } from '@agentdev/core';
 
 /**
  * 订阅会话事件流并渲染输出。
@@ -29,8 +29,8 @@ const JSONL_RESULT_LIMIT = 1000;
 
 /**
  * 截断 JSONL 事件中的工具结果，超限时替换为 preview 并标记。
- * @param {import('agentdev').SessionEvent} event
- * @returns {import('agentdev').SessionEvent}
+ * @param {import('@agentdev/core').SessionEvent} event
+ * @returns {import('@agentdev/core').SessionEvent}
  */
 export function formatSessionEventJsonl(event) {
   return truncateEventForJsonl(event);
@@ -92,7 +92,7 @@ export function emitFatalSessionError(message) {
 /**
  * 把单个会话事件渲染为 human 可读行（无 ANSI 转义，纯文本）。
  * 风格对齐 codex exec：reasoning 淡化、工具带状态、回复以 agent: 开头。
- * @param {import('agentdev').SessionEvent} event
+ * @param {import('@agentdev/core').SessionEvent} event
  * @returns {string[]}
  */
 export function renderSessionEventHuman(event) {

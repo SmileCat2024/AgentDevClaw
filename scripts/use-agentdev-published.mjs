@@ -1,26 +1,26 @@
 #!/usr/bin/env node
-import { existsSync, lstatSync, rmSync } from 'fs';
+// 说明：@agentdev/* 四包尚未发布 npm，Claw 依赖以 file:../AgentDev/packages/* junction
+// 形态运行，不存在"切回 npm 发布版"的可用路径。本脚本保留命令占位并给出指引，
+// 待四包发版后应改写为：移除 file: 依赖、写入 semver、npm install。
+import { existsSync } from 'fs';
 import { resolve, join } from 'path';
-import { spawnSync } from 'child_process';
 
 const projectRoot = resolve(import.meta.dirname, '..');
-const modulePath = join(projectRoot, 'node_modules', 'agentdev');
+const pkg = JSON.parse(await import('fs').then((m) => m.readFileSync(join(projectRoot, 'package.json'), 'utf8')));
+const fileDeps = Object.entries(pkg.dependencies || {}).filter(([, spec]) => String(spec).startsWith('file:../'));
+const published = Object.entries(pkg.dependencies || {}).filter(([name]) => name.startsWith('@agentdev/') && !String(pkg.dependencies[name]).startsWith('file:'));
 
-if (existsSync(modulePath)) {
-  const stat = lstatSync(modulePath);
-  rmSync(modulePath, { recursive: stat.isDirectory() || stat.isSymbolicLink(), force: true });
-  console.log('[agentdev:published] 已移除 node_modules/agentdev');
+console.log('[agentdev:published] @agentdev/core|llm|viewer|mcp 尚未发布 npm。');
+if (fileDeps.length > 0) {
+  console.log('[agentdev:published] 当前本地源码依赖（junction 形态）：');
+  for (const [name, spec] of fileDeps) console.log(`  ${name}: ${spec}`);
 }
-
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const result = spawnSync(npmCommand, ['install', '--ignore-scripts'], {
-  cwd: projectRoot,
-  stdio: 'inherit',
-  shell: false,
-});
-
-if (result.status !== 0) {
-  process.exit(result.status ?? 1);
+if (published.length > 0) {
+  console.log('[agentdev:published] 已按 semver 声明的生态包（tgz 安装）：');
+  for (const [name] of published) console.log(`  ${name}`);
 }
-
-console.log('[agentdev:published] 已按 package.json/package-lock.json 恢复 npm 发布版 agentdev。');
+if (existsSync(join(projectRoot, 'node_modules', 'agentdev'))) {
+  console.warn('[agentdev:published] 警告：node_modules/agentdev 存在残留目录（旧单包），可手动删除。');
+}
+console.log('[agentdev:published] 发版后请将上述 file:../AgentDev/packages/* 依赖改为 semver 并重新 npm install。');
+process.exit(0);

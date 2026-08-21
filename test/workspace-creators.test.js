@@ -161,7 +161,7 @@ describe('buildAgentWorkspaceAgentSource', () => {
 
   it('includes all required imports', () => {
     const src = buildAgentWorkspaceAgentSource('test', 'goal');
-    assert.ok(src.includes("from 'agentdev'"), 'should import from agentdev');
+    assert.ok(src.includes("from '@agentdev/core'"), 'should import from @agentdev/core');
     assert.ok(src.includes("from '@agentdev/audit-feature'"));
     assert.ok(src.includes("from '@agentdev/shell-feature'"));
     assert.ok(src.includes("from '@agentdev/websearch-feature'"));

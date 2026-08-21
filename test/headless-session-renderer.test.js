@@ -138,7 +138,7 @@ describe('headless-session-renderer', () => {
     });
 
     it('jsonl 模式截断超限的工具结果并标记，agent_message 不截断', async () => {
-      const { emitSessionEvent } = await import('agentdev');
+      const { emitSessionEvent } = await import('@agentdev/core');
       const out = capture();
       detach = attachSessionEventOutput({
         format: 'jsonl',

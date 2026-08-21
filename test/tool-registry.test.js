@@ -10,7 +10,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { ToolRegistry } from 'agentdev';
+import { ToolRegistry } from '@agentdev/core';
 
 function makeTool(name, description = '') {
   return {
