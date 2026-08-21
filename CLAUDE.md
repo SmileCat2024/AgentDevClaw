@@ -47,20 +47,24 @@
 
 > 悬置 agent 的代码、路由和前端逻辑仍然存在于项目中，但产品重心已不在此。涉及这些区域时，以"读懂现有代码、不引入新复杂度"为原则。
 
-## 启动方式
+## 启动方式（install → build → start 三段式）
 
 ```bash
-npm install
-npm start
+npm install   # 物化全部 file: 依赖为 junction（开发态）/ 安装正式包（发布态）
+npm run build # 一次完成当前形态下全部构建与链接修复（见下）
+npm start     # 纯净启动（prestart 只做轻量校验）
 ```
 
-`npm start` 的 prestart 会依次自动完成（`dev` 同）：
+`npm run build`（`scripts/build-all.mjs`）按**依赖形态**自动分流：
 
-1. `check:agentdev` — 校验 `node_modules/@agentdev/{core,llm,viewer,mcp}` 四包的 dist 存在且含 `local-features` 所需导出；若链接被 `npm install` 冲掉而相邻 `../AgentDev` 仓库构建可用，会自动重建本地链接；否则给出可执行的修复指引后退出
-2. `build:local-features` — 编译 `local-features/`
-3. `build:features` — 构建 `features/` 下被预制 agent 按源码路径引用的 feature 包（当前为 `force-continuation`），其 dist 不入库
+- **开发态**（`@agentdev/core` 为 `file:../AgentDev/packages/*`，node_modules 是 junction）：
+  1. `check:agentdev` — 校验/修复全部 18 条 `@agentdev/*` 链接（4 框架包 + 14 生态包）；链接被 `npm install` 冲掉而相邻 `../AgentDev` 仓库构建可用时自动重建
+  2. 框架仓库构建 — 若相邻 `../AgentDev` 存在，`npm run build`（其 build 统一为 `scripts/build-all.mjs`，一次产出全部 18 包 dist）
+  3. `build:local-features` — 编译 `local-features/`
+  4. `build:features` — 构建 `features/` 下被预制 agent 按源码路径引用的 feature 包（当前为 `force-continuation`、`tickets-build-flow`），其 dist 不入库
+- **发布态**（`@agentdev/core` 为 semver，node_modules 是 npm 正式包自带 dist）：跳过 1/2，只做 3/4
 
-注意：相邻 AgentDev 框架仓库的 `npm install && npm run build` 仍需手动完成（首次克隆与框架源码更新后），prestart 不会跨仓库构建。
+`npm start` / `npm run dev` 的 prestart 只跑 `scripts/preflight.mjs`：开发态校验 18 条链接，发布态直接放行。真正的构建工作都在 `npm run build` 里。
 
 默认端口：
 
@@ -87,9 +91,9 @@ npm start
 
 ### 2. `@agentdev/*` 框架包如何接入 Claw
 
-- npm 上的旧单包 `agentdev` 已退役。Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 以四个包声明框架依赖：`@agentdev/core` + `@agentdev/llm` + `@agentdev/viewer` + `@agentdev/mcp`。
-- 四包尚未发布 npm，当前依赖形态为 `file:../AgentDev/packages/<name>`：`npm install` 会将其物化为 junction（Windows 实测为 Junction 链接），指向相邻框架仓库的包目录。
-- 本机联动开发时，正常 `npm install` 即可建立链接；若链接异常或相邻仓库不在默认位置，运行 `npm run agentdev:local`（可传路径参数或设 `AGENTDEV_LOCAL_PATH`）手动重建四包 junction。若链接不可用，`npm start` 的预检会自动重建。
+- npm 上的旧单包 `agentdev` 已退役。Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 以四个框架包 `@agentdev/core` + `@agentdev/llm` + `@agentdev/viewer` + `@agentdev/mcp` 加 14 个生态包（`@agentdev/shell-feature`、`@agentdev/qqbot-feature` 等）声明依赖。
+- 全部 18 个包尚未发布 npm，当前依赖形态为 `file:../AgentDev/packages/<name>`：`npm install` 会将其物化为 junction（Windows 实测为 Junction 链接），指向相邻框架仓库的包目录。
+- 本机联动开发时，正常 `npm install` 即可建立链接；链接被冲掉或相邻仓库不在默认位置时，`npm run build` 会先自动校验/修复全部 18 条链接（`check:agentdev`），无需手动干预。仅当相邻仓库路径非常规时需要显式指定：`AGENTDEV_LOCAL_PATH=... npm run build` 或 `npm run agentdev:local <路径>`。
 - 不要用 `npm link` 做这件事。`npm link` 会触发 npm 重新整理/prune 依赖树，可能把 Claw 运行时需要的顶层依赖移走；这里需要的是纯文件系统 junction。
 - `npm run agentdev:published` 当前是占位命令：四包发版前不存在"切回发布版"路径；发版后应把 `file:` 依赖改为 semver 并重写该脚本。
 - 结论：
@@ -224,14 +228,14 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 
 ### 7. feature 构建与消费更新流程
 
-**开发态（2026-08-21 起）：全部 18 个 `@agentdev/*` 依赖（4 框架包 + 14 生态包）均为 `file:../AgentDev/packages/*` junction。开发过程没有任何 tgz 拷贝环节**——改框架或生态包源码 → 在对应包 `npm run build` → 重启 Claw 服务/agent 即生效。
-
-#### 开发：改生态包（shell/websearch/weixin-bot 等 14 个）
+**开发态（2026-08-21 起）：全部 18 个 `@agentdev/*` 依赖（4 框架包 + 14 生态包）均为 `file:../AgentDev/packages/*` junction。开发过程没有任何 tgz 拷贝环节**——改框架或生态包源码 → 在 AgentDev 根目录跑 `npm run build`（统一为 `scripts/build-all.mjs`，一次产出全部 18 包 dist）→ 重启 Claw 服务/agent 即生效。只改个别包可用 `cd packages/<name> && npm run build` 提速。
 
 ```bash
-# 1. 修改 AgentDev/packages/<name>/src/
+# 框架侧任一改动（core/llm/viewer/mcp 或 14 生态包）后：
+cd D:/code/AgentDev && npm run build     # 全部 18 包 dist
+# 或只构建单个包提速：
 cd D:/code/AgentDev/packages/<name> && npm run build
-# 2. 重启 Claw 服务（或对应 agent）
+# 然后重启 Claw 服务（或对应 agent）
 ```
 
 #### 发布：产出 tgz 到 resources/features/
@@ -711,30 +715,23 @@ IM 线路管理相关：
 
 ### AgentDev 依赖
 
-当前依赖形态（四包尚未发布 npm，走本地 junction）：
-
-```json
-"@agentdev/core":   "file:../AgentDev/packages/core",
-"@agentdev/llm":    "file:../AgentDev/packages/llm",
-"@agentdev/mcp":    "file:../AgentDev/packages/mcp",
-"@agentdev/viewer": "file:../AgentDev/packages/viewer"
-```
+当前依赖形态（18 个 @agentdev 包尚未发布 npm，走本地 junction）：4 框架包 + 14 生态包均为 `file:../AgentDev/packages/<name>`。
 
 这意味着：
 
-- `npm install` 会把四个 `file:` 目录依赖物化为 junction，指向相邻框架仓库的包目录
-- 本机框架联动开发时：
+- `npm install` 会把全部 `file:` 目录依赖物化为 junction，指向相邻框架仓库的包目录
+- 本机框架联动开发的标准流程是 install → build → start 三段式：
 
 ```bash
-npm install        # 正常情况即可建立链接
-npm run agentdev:local   # 链接异常或相邻仓库不在默认位置时手动重建
+npm install        # 全部 18 条链接物化
+npm run build      # 自动校验/修复链接 + 构建框架（若相邻仓库存在）+ local-features + features
+npm start          # 纯净启动
 ```
 
-- 四包发版前不存在"切回发布版"路径；`npm run agentdev:published` 目前是占位指引命令
-
-- 如果本地 AgentDev 仓库不在默认相邻目录 `../AgentDev`，使用 `AGENTDEV_LOCAL_PATH` 或直接传路径：`node scripts/use-agentdev-local.mjs <path>`
+- 链接被冲掉或异常时，`npm run build` 的 `check:agentdev` 会自动重建（无需手动）；仅相邻仓库路径非常规时才需要 `AGENTDEV_LOCAL_PATH` 或 `node scripts/use-agentdev-local.mjs <path>`
+- 发版后切回 npm 正式包时，`@agentdev/*` 改为 semver 依赖；`npm run agentdev:published` 目前仍是占位指引命令。build/preflight 会按依赖形态自动分流（`file:` → 开发态，semver → 发布态）
 - 可用 `Get-Item node_modules/@agentdev/core | Format-List LinkType,Target` 验证是否指向期望的本地 AgentDev 仓库
-- 修改框架后通常需要在 AgentDev 仓库重建各包 `dist`，再重启当前项目
+- 修改框架后：`cd D:/code/AgentDev && npm run build`（统一脚本产出全部 18 包 dist），再重启 Claw 服务/agent 生效
 - 任何"这是 Claw 问题还是 AgentDev 问题"的判断，都要考虑两个仓库一起看
 
 ### Feature 包资源

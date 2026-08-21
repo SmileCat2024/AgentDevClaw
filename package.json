@@ -10,9 +10,9 @@
     "build:features": "node scripts/build-features.mjs",
     "pack:features": "node scripts/pack-features.mjs",
     "enrich:features": "node scripts/enrich-feature-packages.mjs",
-    "predev": "npm run check:agentdev && npm run build:local-features && npm run build:features",
+    "predev": "node scripts/preflight.mjs",
     "dev": "node server.js",
-    "prestart": "npm run check:agentdev && npm run build:local-features && npm run build:features",
+    "prestart": "node scripts/preflight.mjs",
     "start": "node server.js",
     "agentdev:local": "node scripts/use-agentdev-local.mjs",
     "agentdev:published": "node scripts/use-agentdev-published.mjs",
@@ -23,7 +23,8 @@
     "test:features": "node --test \"local-features/dist/*/test/*.test.js\"",
     "pretest:features": "npm run build:local-features",
     "lint": "eslint .",
-    "adv-docs:sync": "node scripts/sync-adv-docs.mjs"
+    "adv-docs:sync": "node scripts/sync-adv-docs.mjs",
+    "build": "node scripts/build-all.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
