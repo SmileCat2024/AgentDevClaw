@@ -41,7 +41,7 @@ function buildDeps({ thread = null, compactResult = null, compactError = null } 
 }
 
 describe('thread rotation (context guard relay)', () => {
-  it('no-ops for non thread host agents', async () => {
+  it('no-ops for pure session environments (blocked session has no thread)', async () => {
     const { service, calls } = buildDeps();
     const result = await service.handleContextGuard('programming-helper', 'session-1');
     assert.equal(result, null);
@@ -53,6 +53,21 @@ describe('thread rotation (context guard relay)', () => {
     const result = await service.handleContextGuard('coder', 'session-1');
     assert.equal(result, null);
     assert.equal(calls.begin.length, 0);
+  });
+
+  it('rotates a thread-head session regardless of host workspace whitelist', async () => {
+    // 判定基准是会话的线程归属，不是 agentId 白名单：任何工作空间的会话
+    // 只要是活跃线程的 head，guard 触发即接力（白名单只管线程环境的创建）。
+    const { service, calls } = buildDeps({
+      thread: { threadId: 'wt-1', status: 'running', headSessionId: 'session-1' },
+    });
+
+    const result = await service.handleContextGuard('programming-helper', 'session-1');
+
+    assert.deepEqual(result, { applied: true, threadId: 'wt-1', headSessionId: 'session-next' });
+    assert.equal(calls.begin.length, 1);
+    assert.equal(calls.apply.length, 1);
+    assert.equal(calls.fail.length, 0);
   });
 
   it('runs the full succession pipeline for a blocked head session', async () => {

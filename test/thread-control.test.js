@@ -903,8 +903,8 @@ describe('ThreadIntegration (coder host gating)', () => {
     record = await controller.getThread(thread.threadId);
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
 
-    // 非线程宿主 / 就绪会话不是任何线程 head：no-op
-    assert.equal((await integration.handleRuntimeReady('programming-helper', 'x')).reason, 'not_thread_host');
+    // 就绪会话不是任何线程 head（纯 session，含非宿主 workspace）：no-op
+    assert.equal((await integration.handleRuntimeReady('programming-helper', 'x')).reason, 'no_thread_for_session');
     assert.equal((await integration.handleRuntimeReady('coder', 'coder-s1')).reason, 'no_thread_for_session');
   });
 
@@ -951,10 +951,10 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(nonHead.applied, false);
     assert.equal(nonHead.reason, 'no_thread_for_session');
 
-    // 非线程宿主：no-op
+    // 纯 session 会话（无线程，含非宿主 workspace）：no-op
     const nonHost = await integration.onSessionDeleted('programming-helper', 'del-2');
     assert.equal(nonHost.applied, false);
-    assert.equal(nonHost.reason, 'not_thread_host');
+    assert.equal(nonHost.reason, 'no_thread_for_session');
 
     // 删除 head：线程取消，pending 指令一并取消
     const outcome = await integration.onSessionDeleted('coder', 'del-2');
@@ -1060,7 +1060,7 @@ describe('pendingSuccession handoff guard', () => {
 
     const nonHost = await integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 'hd-a', reason: 'trim' });
     assert.equal(nonHost.applied, false);
-    assert.equal(nonHost.reason, 'not_thread_host');
+    assert.equal(nonHost.reason, 'no_thread_for_session');
 
     const orphan = await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'hd-unknown', reason: 'trim' });
     assert.equal(orphan.applied, false);

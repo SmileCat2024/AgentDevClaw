@@ -13,14 +13,18 @@
  *   6. handleRuntimeReady：head runtime 就绪时补投 pending 指令（经
  *      shared/runtime-hooks 的 onRuntimeReady 订阅接入）。
  *
- * 兼容性边界：THREAD_HOST_AGENT_IDS 之外的工作空间（编程小助手等）
- * 在本层被直接跳过，会话流程行为与未接入线程时完全一致。
+ * 判定基准：THREAD_HOST_AGENT_IDS 只回答「哪些工作空间的新会话自动建立
+ * 线程环境」（环境的存在性开关，消费点：onSessionCreated 与 input-gateway
+ * 的指令路由闸）。其余事件响应钩子（succession / 删除清理 / runtime 就绪
+ * 补投 / guard 触发的 rotation）一律以「该会话是否为某活跃线程的 head」
+ * 为唯一判定——处于线程环境（thread）则生效，纯 session 会话天然 no-op，
+ * 与 agent 归属哪个工作空间无关。
  */
 
 import { getThreadController } from './thread-controller.js';
 import { ThreadNotFoundError } from './thread-store.js';
 
-/** 开启线程化会话的工作空间；任何挂载线程机制的 agent 都可加入。 */
+/** 自动建立线程环境的工作空间集合；仅决定环境创建与指令入线程路由。 */
 export const THREAD_HOST_AGENT_IDS = new Set(['coder']);
 
 export function createThreadIntegration({ controller = null } = {}) {
@@ -56,13 +60,10 @@ export function createThreadIntegration({ controller = null } = {}) {
      * 在线程记录里写入 pendingSuccession（交接意图），使接力期间追加的
      * inbox 指令保持 pending、不被投向即将退役的旧 head；advanceHead
      * 推进时原子清除并统一投递给新 head。
-     * 非线程宿主 / 会话无线程：no-op（纯会话语义，行为与未接入线程一致）。
+     * 纯 session 会话（无线程）：no-op（纯会话语义，行为与未接入线程一致）。
      */
     async beginSessionSuccession({ agentId, sessionId, reason = 'manual' }) {
       const normalizedAgentId = String(agentId || '').trim();
-      if (!THREAD_HOST_AGENT_IDS.has(normalizedAgentId)) {
-        return { applied: false, reason: 'not_thread_host' };
-      }
       const from = String(sessionId || '').trim();
       if (!from) return { applied: false, reason: 'invalid_session' };
       try {
@@ -84,11 +85,10 @@ export function createThreadIntegration({ controller = null } = {}) {
      * 会话接力钩子：compact / summary 成功创建 successor 后调用。
      * fromSessionId 是线程当前 head 时推进 head（endKind 记录接力原因），
      * 随后尝试把接力期间暂存的 pending 指令投递给新 head runtime。
-     * 非 head / 无线程 / 非线程宿主：静默跳过（no-op）。
+     * 非 head / 无线程（纯 session）：静默跳过（no-op）。
      */
     async applySessionSuccession({ agentId, fromSessionId, toSessionId, reason = 'manual' }) {
       const normalizedAgentId = String(agentId || '').trim();
-      if (!THREAD_HOST_AGENT_IDS.has(normalizedAgentId)) return { applied: false, reason: 'not_thread_host' };
       const from = String(fromSessionId || '').trim();
       const to = String(toSessionId || '').trim();
       if (!from || !to || from === to) return { applied: false, reason: 'invalid_succession' };
@@ -126,10 +126,10 @@ export function createThreadIntegration({ controller = null } = {}) {
     /**
      * 交接失败钩子：把上下文交接停在明确的 rotation_failed，保留
      * pendingSuccession 和失败阶段，供恢复入口收拾残局。
+     * 纯 session 会话（无线程）：no-op。
      */
     async failSessionSuccession({ agentId, sessionId, reason = 'handoff_failed', stage = 'unknown', error = null }) {
       const normalizedAgentId = String(agentId || '').trim();
-      if (!THREAD_HOST_AGENT_IDS.has(normalizedAgentId)) return { applied: false, reason: 'not_thread_host' };
       const from = String(sessionId || '').trim();
       if (!from) return { applied: false, reason: 'invalid_session' };
       try {
@@ -146,14 +146,11 @@ export function createThreadIntegration({ controller = null } = {}) {
     /**
      * 会话删除钩子：被删会话是某线程当前 head 时取消该线程——工作已无
      * 承接点，pending 指令一并取消（继续保留只会形成永远投不出去的
-     * 悬空线程）。删除非 head 会话 / 无线程 / 非线程宿主：no-op（线程
+     * 悬空线程）。删除非 head 会话 / 无线程（纯 session）：no-op（线程
      * 历史链对已删棒次的引用由前端标题解析退化为短 id，无需清理）。
      */
     async onSessionDeleted(agentId, sessionId) {
       const normalizedAgentId = String(agentId || '').trim();
-      if (!THREAD_HOST_AGENT_IDS.has(normalizedAgentId)) {
-        return { applied: false, reason: 'not_thread_host' };
-      }
       const deleted = String(sessionId || '').trim();
       if (!deleted) return { applied: false, reason: 'invalid_session' };
       try {
@@ -190,11 +187,10 @@ export function createThreadIntegration({ controller = null } = {}) {
      * succession 时刻 runtime 未就绪（waitForManagedRuntimeReady 超时等）
      * 而保持 pending 的指令，在 head runtime 真正 ready 时补投——
      * 这是「runtime 未就绪保持 pending，ready 后重试」的最后一个触发点。
-     * 就绪会话不是任何线程 head 时 no-op（启动期常态，非错误）。
+     * 就绪会话不是任何线程 head（纯 session，启动期常态）时 no-op，非错误。
      */
     async handleRuntimeReady(agentId, sessionId) {
       const normalizedAgentId = String(agentId || '').trim();
-      if (!THREAD_HOST_AGENT_IDS.has(normalizedAgentId)) return { applied: false, reason: 'not_thread_host' };
       const readySession = String(sessionId || '').trim();
       if (!readySession) return { applied: false, reason: 'invalid_session' };
       try {
