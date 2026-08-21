@@ -12,7 +12,7 @@
  * @param {import('express').Express} app
  * @param {typeof import('express').json} express
  * @param {object} options
- * @param {{ core: import('agentdev').WorkThread, board: import('agentdev').WorkThreadBoard }} options.control
+ * @param {{ core: import('@agentdev/core').WorkThread, board: import('@agentdev/core').WorkThreadBoard }} options.control
  */
 export function setupThreadRoutes(app, express, { control } = {}) {
   if (!control?.core || !control?.board) {

@@ -20,7 +20,7 @@ import {
   buildSummaryPrompt,
   generateSummaryText,
   scanFilesAndSkills,
-} from 'agentdev';
+} from '@agentdev/core';
 import { resolveAgentModelLLM } from '../model-preset-resolver.js';
 import { tuneMirrorLLM } from '../shared/llm-tuning.js';
 import { getPrebuiltSessionFilePath } from '../shared/session-access.js';

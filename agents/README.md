@@ -27,7 +27,7 @@ my-agent/
 | 定位 | 编程小助手能力的独立快照（CLI 裁剪版） |
 | 提示词 | 本目录 `.agentdev/prompts/`（system.md / explore.md / reminder） |
 | feature | 编程小助手 v2.0.0 裁剪：保留 todo / shell / lsp / memory / websearch / github / context-guard / audio-feedback / image-reader / opencode-basic；移除 audit / user-input / generative-ui / claw-dispatch / group-chat-bridge / subagent |
-| 依赖 | `agentdev` + `@agentdev/*` tgz 包与 `local-features/dist` |
+| 依赖 | `@agentdev/core|llm|viewer|mcp`（本地 junction）+ `@agentdev/*` tgz 包与 `local-features/dist` |
 | 模型 | metadata.json 指定（`ZCode GLM-5.3`），可用 `.agentdev/agent-configs/coder.json` 覆盖 |
 
 `coder` 的装配与提示词是交付时点的独立拷贝（agent.js 不 import `prebuilt-agents` 下任何代码），

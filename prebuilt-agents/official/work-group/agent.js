@@ -4,7 +4,7 @@
  * 群聊工作空间的运行时 agent。
  * 通过 GroupAdminFeature 暴露 gc_* 工具集，为 @管理员 提供协调能力。
  */
-import { BasicAgent, TemplateComposer } from 'agentdev';
+import { BasicAgent, TemplateComposer } from '@agentdev/core';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { GroupAdminFeature } from '../../../local-features/dist/group-admin/src/index.js';

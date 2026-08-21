@@ -24,7 +24,7 @@
  *   完成，runtime 只按普通会话运行。
  */
 
-import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature } from '@agentdev/core';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { TicketsBuildFlow } from '../../../features/tickets-build-flow/dist/index.js';

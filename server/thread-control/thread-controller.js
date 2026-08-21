@@ -25,7 +25,7 @@ import {
   WorkThread,
   WorkThreadBoard,
   WorkThreadRuntimeBridge,
-} from 'agentdev';
+} from '@agentdev/core';
 import { ThreadStore } from './thread-store.js';
 import { THREADS_ROOT } from '../shared/constants.js';
 import { submitUserTurn } from '../shared/user-turn.js';

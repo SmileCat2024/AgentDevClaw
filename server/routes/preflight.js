@@ -11,7 +11,7 @@
  * （拓扑序 + 工具归属 + 钩子清单）。供装配 UI 亮红与 agent HTTP 消费。
  */
 
-import { preflightAssembly } from 'agentdev';
+import { preflightAssembly } from '@agentdev/core';
 import { pathToFileURL } from 'url';
 
 /** 可实例化的 feature 类注册表（与 system-feature-config 相同的发现面） */

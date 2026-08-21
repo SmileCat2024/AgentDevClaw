@@ -9,7 +9,7 @@
  * 由 inprocess-summary.js 负责模型装配、重试与超时。
  */
 
-import { buildSummarySeedMessage } from 'agentdev';
+import { buildSummarySeedMessage } from '@agentdev/core';
 import { runInProcessSummary } from './inprocess-summary.js';
 
 function cleanMultilineText(value) {

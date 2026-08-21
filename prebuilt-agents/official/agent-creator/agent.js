@@ -1,4 +1,5 @@
-import { BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdev/core';
+import { ShellFeature } from '@agentdev/shell-feature';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
 import { fileURLToPath, pathToFileURL } from 'url';

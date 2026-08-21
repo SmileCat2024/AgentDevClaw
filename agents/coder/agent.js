@@ -21,7 +21,7 @@
  * - runtime 配置仍读全局 ~/.agentdev/AgentDevClaw/feature-setup.json（与编程小助手一致）
  */
 
-import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature } from '@agentdev/core';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../features/force-continuation/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';

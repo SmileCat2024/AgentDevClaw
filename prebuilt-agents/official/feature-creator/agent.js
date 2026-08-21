@@ -5,7 +5,8 @@
  * 依赖 feature-dev 自带 skills，并允许当前 Feature 项目通过 .agentdev/skills 追加覆盖。
  */
 
-import { BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdev/core';
+import { ShellFeature } from '@agentdev/shell-feature';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
 import { fileURLToPath } from 'url';

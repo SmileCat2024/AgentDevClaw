@@ -7,7 +7,7 @@ import {
   HANDOFF_COMPILER_VERSION,
   normalizeExportPolicy,
   buildTrimmedSeedMessages,
-} from 'agentdev';
+} from '@agentdev/core';
 import {
   applyContinuityToolPolicy,
   exportFeatureContinuity,

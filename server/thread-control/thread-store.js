@@ -17,7 +17,7 @@ import {
   WorkThreadNotFoundError,
   WorkThreadRevisionConflictError,
   generateWorkThreadId,
-} from 'agentdev';
+} from '@agentdev/core';
 
 export { WorkThreadNotFoundError as ThreadNotFoundError };
 export { WorkThreadRevisionConflictError as ThreadRevisionConflictError };

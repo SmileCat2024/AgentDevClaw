@@ -6,7 +6,8 @@
  * 2. 装配会话模式（对话）：加载用户选择的 Features + Agent 配套编排图
  */
 
-import { BasicAgent, TemplateComposer, UserInputFeature, createLLM } from 'agentdev';
+import { BasicAgent, TemplateComposer, UserInputFeature } from '@agentdev/core';
+import { createLLM } from '@agentdev/llm';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';

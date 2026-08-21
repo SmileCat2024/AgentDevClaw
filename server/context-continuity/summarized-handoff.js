@@ -12,7 +12,7 @@ import {
   HANDOFF_SCHEMA_VERSION,
   normalizeSummaryPolicy,
   buildSummarySeedMessage,
-} from 'agentdev';
+} from '@agentdev/core';
 
 const HANDOFF_COMPILER_VERSION = 'summarized-nine-section-v1';
 

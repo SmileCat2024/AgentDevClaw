@@ -5,7 +5,7 @@
  * 通过 QQ/微信等渠道与用户交互，可将线路动态转接到任意工作空间会话。
  */
 
-import { BasicAgent, TemplateComposer, TodoFeature } from 'agentdev';
+import { BasicAgent, TemplateComposer, TodoFeature } from '@agentdev/core';
 import { QQBotFeature } from '@agentdev/qqbot-feature';
 import { WeixinBot, WeixinApiClient } from '@agentdev/weixin-bot';
 import { FeishuBot } from '@agentdev/feishu-bot';

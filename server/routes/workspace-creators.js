@@ -160,7 +160,7 @@ export function buildAgentWorkspaceMetadata(agentName, goal) {
 export function buildAgentWorkspaceAgentSource(agentName, goal) {
   const className = `${buildGeneratedAgentClassName(agentName)}Agent`;
 
-  return `import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from 'agentdev';
+  return `import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdev/core';
 import { AuditFeature } from '@agentdev/audit-feature';
 import { ShellFeature } from '@agentdev/shell-feature';
 import { WebSearchFeature } from '@agentdev/websearch-feature';
