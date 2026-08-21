@@ -9,7 +9,7 @@
 
 ```
 D:\code\AgentDev          框架（TypeScript npm 包）
-  ↓ 依赖方式: "agentdev": "file:../AgentDev"
+  ↓ 依赖方式: "@agentdev/core|llm|viewer|mcp": "file:../AgentDev/packages/*"
 D:\code\AgentDevClaw      产品（JavaScript 运行时 + Web UI）
 ```
 
@@ -21,8 +21,8 @@ D:\code\AgentDevClaw      产品（JavaScript 运行时 + Web UI）
 ```
 AgentDev (框架) → 编译 → dist/
                          ↓
-AgentDevClaw (产品) → require('agentdev') → 使用框架的 Agent/Feature/Tool 类型
-                   → local-features/feature-dev/ → 本地 Feature，也 import agentdev
+AgentDevClaw (产品) → import '@agentdev/core|llm|viewer' → 使用框架的 Agent/Feature/Tool 类型
+                   → local-features/* → 本地 Feature，也 import @agentdev/core
 ```
 
 ---
@@ -48,14 +48,16 @@ AgentDevClaw (产品) → require('agentdev') → 使用框架的 Agent/Feature/
 
 ### 框架核心类型导出路径
 ```
-agentdev  →  Agent, BasicAgent, AgentConfig
-          →  AgentFeature, FeatureInitContext, FeatureStateSnapshot
-          →  Tool, createTool, ToolRenderConfig
-          →  Context, Message, EnrichedMessage
-          →  CallStart, CallFinish, StepFinish, ToolUse, ToolFinished  (装饰器)
-          →  Decision, DecisionResult, HookResult
-          →  FileSessionStore, getDefaultSessionStore
-          →  TemplateComposer, getPackageInfoFromSource
+@agentdev/core    →  Agent, BasicAgent, AgentConfig
+                  →  AgentFeature, FeatureInitContext, FeatureStateSnapshot
+                  →  Tool, createTool, ToolRenderConfig
+                  →  Context, Message, EnrichedMessage
+                  →  CallStart, CallFinish, StepFinish, ToolUse, ToolFinished  (装饰器)
+                  →  Decision, DecisionResult, HookResult
+                  →  FileSessionStore, getDefaultSessionStore
+                  →  TemplateComposer, getPackageInfoFromSource
+@agentdev/llm     →  createLLM, OpenAILLM, AnthropicLLM
+@agentdev/viewer  →  ViewerWorker, DebuggerMCPServer
 ```
 
 ---
@@ -69,7 +71,7 @@ agentdev  →  Agent, BasicAgent, AgentConfig
 | `scripts/run-prebuilt-agent.js` | 预制 agent runtime：加载 agent.js、挂到 ViewerWorker、管理会话 |
 | `local-features/feature-dev/src/index.ts` | FeatureDevFeature：模式切换、文档集管理、打包入库 |
 | `local-features/dist/index.js` | 上述 TS 的编译产物，被预制 agent 直接引用 |
-| `package.json` | 依赖框架 `file:../AgentDev` + 内置 Feature tgz |
+| `package.json` | 依赖框架四包 `file:../AgentDev/packages/*` + 内置 Feature tgz |
 
 ### 预制 agent 结构
 ```

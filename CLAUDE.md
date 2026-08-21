@@ -56,7 +56,7 @@ npm start
 
 `npm start` 的 prestart 会依次自动完成（`dev` 同）：
 
-1. `check:agentdev` — 校验 `node_modules/agentdev` 的 dist 存在且含 `local-features` 所需导出；若链接被 `npm install` 冲掉而相邻 `../AgentDev` 仓库构建可用，会自动重建本地链接；否则给出可执行的修复指引后退出
+1. `check:agentdev` — 校验 `node_modules/@agentdev/{core,llm,viewer,mcp}` 四包的 dist 存在且含 `local-features` 所需导出；若链接被 `npm install` 冲掉而相邻 `../AgentDev` 仓库构建可用，会自动重建本地链接；否则给出可执行的修复指引后退出
 2. `build:local-features` — 编译 `local-features/`
 3. `build:features` — 构建 `features/` 下被预制 agent 按源码路径引用的 feature 包（当前为 `force-continuation`），其 dist 不入库
 
@@ -81,20 +81,20 @@ npm start
 ### 1. 两个仓库的角色
 
 - [D:\code\AgentDevClaw](D:/code/AgentDevClaw) 是产品壳层仓库。
-  这里负责 Web UI、预制 agent、runtime 托管、ProtoClaw 服务端、以及对外消费 `agentdev` 与若干 feature 包。
-- [D:\code\AgentDev](D:/code/AgentDev) 是 `agentdev` 框架仓库。
-  这里负责框架本体、ViewerWorker、DebugHub、核心通知系统，以及部分独立 feature 包源码。
+  这里负责 Web UI、预制 agent、runtime 托管、ProtoClaw 服务端、以及对外消费 `@agentdev/*` 框架包与若干 feature 包。
+- [D:\code\AgentDev](D:/code/AgentDev) 是框架仓库（npm workspace monorepo）。
+  这里负责框架本体（`packages/core|llm|viewer|mcp`）、ViewerWorker、DebugHub、核心通知系统，以及部分独立 feature 包源码。
 
-### 2. `agentdev` 本体如何接入 Claw
+### 2. `@agentdev/*` 框架包如何接入 Claw
 
-- Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里，`agentdev` 依赖应保持为发布版 semver，例如 `^0.2.3`。
-- 本机联动开发时，先正常 `npm install`，再运行 `npm run agentdev:local`，把 [node_modules/agentdev](/D:/code/AgentDevClaw/node_modules/agentdev) 替换成指向相邻 `../AgentDev` 仓库的 junction。若忘记顺序（install 冲掉了链接），`npm start` 的预检会自动重建链接。
-- [package-lock.json](/D:/code/AgentDevClaw/package-lock.json) 也应保持 registry 解析结果，不要提交 `node_modules/agentdev` 的本地 link 条目。
+- npm 上的旧单包 `agentdev` 已退役。Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 以四个包声明框架依赖：`@agentdev/core` + `@agentdev/llm` + `@agentdev/viewer` + `@agentdev/mcp`。
+- 四包尚未发布 npm，当前依赖形态为 `file:../AgentDev/packages/<name>`：`npm install` 会将其物化为 junction（Windows 实测为 Junction 链接），指向相邻框架仓库的包目录。
+- 本机联动开发时，正常 `npm install` 即可建立链接；若链接异常或相邻仓库不在默认位置，运行 `npm run agentdev:local`（可传路径参数或设 `AGENTDEV_LOCAL_PATH`）手动重建四包 junction。若链接不可用，`npm start` 的预检会自动重建。
 - 不要用 `npm link` 做这件事。`npm link` 会触发 npm 重新整理/prune 依赖树，可能把 Claw 运行时需要的顶层依赖移走；这里需要的是纯文件系统 junction。
-- 需要切回发布版依赖时，运行 `npm run agentdev:published`。这个命令会移除本地 junction，并按 `package.json` / `package-lock.json` 恢复 npm 发布包。
+- `npm run agentdev:published` 当前是占位命令：四包发版前不存在"切回发布版"路径；发版后应把 `file:` 依赖改为 semver 并重写该脚本。
 - 结论：
   任何"框架本体"改动都必须在 [D:\code\AgentDev](D:/code/AgentDev) 的源码里改。
-  不能把修复只留在 Claw 侧的 `node_modules/agentdev/dist`。
+  不能把修复只留在 Claw 侧的 `node_modules/@agentdev/*/dist`。
   正确流程是：改 [D:\code\AgentDev](D:/code/AgentDev) 源码，然后在那边重建 `dist`，再让 Claw 侧消费同步后的结果。
 
 ### 3. feature 的三种来源必须严格区分
@@ -151,7 +151,7 @@ Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里有多项依赖�
 
 #### C. Claw 仓库自己的本地 feature 与 feature 仓库内容
 
-这类内容不是 `agentdev` npm 依赖包本身，要和上面两类区分开。
+这类内容不是 `@agentdev/*` 框架包依赖本身，要和上面两类区分开。
 
 1. Claw 自带本地 feature
 
@@ -193,7 +193,7 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 | 位置 | 说明 | 被 Claw 消费方式 |
 |------|------|-----------------|
 | `AgentDev/packages/<name>-feature/` | 独立 npm 包源码，`npm pack` 后成为 tgz | `@agentdev/<name>-feature`（从 Claw 的 `resources/features/*.tgz` 安装） |
-| `AgentDev/src/features/<name>/` | 框架内部副本，被 tsup bundle 进框架 dist | 发布安装走 `agentdev` npm 包；本机开发可通过 junction 直接消费 `AgentDev/dist` |
+| `AgentDev/src/features/<name>/` | 框架内部副本，被 tsup bundle 进框架 dist | 发布安装走 `@agentdev/core` 等框架包；本机开发通过 junction 直接消费 `AgentDev/packages/*` |
 
 当前已知存在双路径的 feature：
 
@@ -209,25 +209,25 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 
 **踩坑场景**：你修改了 `packages/shell-feature/src/tools.ts`，在 package 侧构建成功，以为已经搞定。但实际上：
 
-- `agent-creator` 和 `feature-creator` 通过 `import { ShellFeature } from 'agentdev'` 消费的是 **框架 dist** 中的 bundle，不经过 tgz
+- `agent-creator` 和 `feature-creator` 通过 `import { ShellFeature } from '@agentdev/core'` 消费的是 **框架 core 包**（bundle 内含 shell 副本），不经过 tgz
 - `qqbot` 和 `programming-helper` 通过 `import { ShellFeature } from '@agentdev/shell-feature'` 消费的是 **Claw 安装的 tgz 包**，不经过框架 dist
 
 因此修改这类 feature 时，**两侧源码都要改，两个构建都要做，两条消费路径都要更新**。
 
 #### E. Claw 预制 agent 的 feature 消费路径速查
 
-| 预制 agent | 从 `agentdev` 导入（走框架 dist） | 从 `@agentdev/*` 导入（走 tgz 包） |
+| 预制 agent | 从 `@agentdev/core` 导入（走框架包） | 从 `@agentdev/llm` / `@agentdev/viewer` / tgz 包导入 |
 |-----------|--------------------------------|----------------------------------|
 | `programming-helper` ★ | BasicAgent, TemplateComposer, TodoFeature, UserInputFeature, LspFeature | AudioFeedbackFeature, AuditFeature, MemoryFeature, ShellFeature, WebSearchFeature |
 | `agent-studio` ★ | BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature | AuditFeature, WebSearchFeature（AgentStudioFeature 从 `local-features/dist` 导入） |
 | `qqbot` ★ | BasicAgent, TemplateComposer, TodoFeature | QQBotFeature, WeixinBot, ShellFeature, WebSearchFeature |
 | `work-group` ★ | BasicAgent, TemplateComposer, TodoFeature | （按需装配） |
 | `feature-setup` ★ | （纯 UI，无 Agent 进程） | （无） |
-| `flow-workspace`（悬置） | BasicAgent, TemplateComposer, UserInputFeature, createLLM | （无） |
+| `flow-workspace`（悬置） | BasicAgent, TemplateComposer, UserInputFeature | createLLM（从 `@agentdev/llm`） |
 | `agent-creator`（悬置） | BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature | AuditFeature, WebSearchFeature |
 | `feature-creator`（悬置） | BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature | AuditFeature, WebSearchFeature |
 
-注意 `ShellFeature` 同时出现在两条路径中：`agent-creator` / `feature-creator` 从框架导入，`qqbot` / `programming-helper` 从 tgz 包导入。
+注意 `ShellFeature` 同时出现在两条路径中：`agent-creator` / `feature-creator` 从框架 core 包导入，`qqbot` / `programming-helper` 从 tgz 包导入。
 
 ### 4. 预制 agent 与 feature 实现不要混为一谈
 
@@ -245,7 +245,7 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 
 ### 5. 禁止的做法
 
-- 不要把框架修复只留在 Claw 侧的 `node_modules/agentdev/dist`。
+- 不要把框架修复只留在 Claw 侧的 `node_modules/@agentdev/*/dist`。
 - 不要把 feature 修复只留在 Claw 侧的 `node_modules/@agentdev/*`。
 - 不要因为 Claw 当前能跑起来，就把安装产物误当成权威源码。
 - 不要混淆"Claw 自带本地 feature""Claw 依赖的 tgz feature""AgentDev/packages 下的 feature 源码""feature 仓库里的可安装 feature"这四层。
@@ -277,7 +277,7 @@ cd D:/code/AgentDev && npm run build
 # 3. 重启 Claw 服务（本机 junction 生效）
 ```
 
-无需 tgz 操作。本机联动开发时，Claw 通过 `node_modules/agentdev` junction 直接消费 `AgentDev/dist`；发布安装时仍走 npm 上的 `agentdev` semver。
+无需 tgz 操作。本机联动开发时，Claw 通过 `node_modules/@agentdev/core` junction 直接消费 `AgentDev/packages/core`；发布安装时走 npm 上的 `@agentdev/*` semver（发版后）。
 
 #### 情况 B：只走 tgz 路径的 feature（仅存在于 `packages/*`，无框架副本）
 
@@ -524,7 +524,7 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 1. `schemas.js` — 校验 metadata（release 与注册时强制 `features[].version` 为精确 semver）
 2. `catalog.js` — 扫描两个 tgz 仓库：`resources/features/`（官方）+ `~/.agentdev/AgentDevClaw/user-features/`（用户，同版本时优先）
 3. `resolver.js` — 生成 runtime plan：release 全部解析为仓库 tgz；debug 允许 Studio 同名包源码覆盖（`resolvedFrom: 'source'`）
-4. `provisioner.js` — 内容寻址环境 `~/.agentdev/AgentDevClaw/runtime-envs/<agentId>/<depHash>/`（npm install `file:` tgz + agentdev junction，依赖不变则复用；Agent 源码复制进 `agent-source/`，排除 node_modules/.agent-studio/.git）
+4. `provisioner.js` — 内容寻址环境 `~/.agentdev/AgentDevClaw/runtime-envs/<agentId>/<depHash>/`（npm install `file:` tgz + `@agentdev/core|llm|viewer` 本地目录依赖，依赖不变则复用；Agent 源码复制进 `agent-source/`，排除 node_modules/.agent-studio/.git）
 5. `loader.js` — 动态 import Feature 类 → `static inject` 拓扑排序 → `mountFeature`（重名/环/缺失依赖直接报错）
 
 ### Studio 项目的落盘布局
@@ -591,7 +591,7 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 
 ## 会话连续性三层模型（消费框架 continuity，ticket 008）
 
-权威设计与决策记录：[docs/adr/0002-session-continuity-as-transformation.md](/D:/code/AgentDevClaw/docs/adr/0002-session-continuity-as-transformation.md)。Claw 不再自带连续性引擎实现，全部消费 `agentdev` 框架导出；理解三层概念是改动任何 trim / compact / 摘要 / 线程代码的前提。
+权威设计与决策记录：[docs/adr/0002-session-continuity-as-transformation.md](/D:/code/AgentDevClaw/docs/adr/0002-session-continuity-as-transformation.md)。Claw 不再自带连续性引擎实现，全部消费 `@agentdev/core` 框架导出；理解三层概念是改动任何 trim / compact / 摘要 / 线程代码的前提。
 
 ### 三层概念
 
@@ -603,7 +603,7 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 
 ### Claw 消费路径表（官方实现 → Claw 装配点）
 
-| 能力 | agentdev 导出 | Claw 装配点（薄封装/装配层） |
+| 能力 | @agentdev/core 导出 | Claw 装配点（薄封装/装配层） |
 |------|--------------|---------------------------|
 | trim 引擎 | `buildTrimmedSeedMessages` / `normalizeExportPolicy` / `DEFAULT_EXPORT_POLICY` / `HANDOFF_SCHEMA_VERSION` / `HANDOFF_COMPILER_VERSION` | [server/context-continuity/handoff-package.js](/D:/code/AgentDevClaw/server/context-continuity/handoff-package.js)（薄封装 + Claw 落盘格式） |
 | 摘要生成 | `generateSummaryText` / `buildSummaryPrompt` / `stripCompactAnalysis` / `scanFilesAndSkills` / `buildSummarySeedMessage` / `normalizeSummaryPolicy` | [server/context-continuity/inprocess-summary.js](/D:/code/AgentDevClaw/server/context-continuity/inprocess-summary.js)（模型角色解析 system/exploration/sub + 重试/超时）；summarized-handoff.js / trim-appended-summary.js / session.js 的 `session_generate_summary` 路由均经此调用 |
@@ -626,7 +626,7 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 
 | 范围 | 正当通道 | 约束 |
 |------|---------|------|
-| agent 运行时内部（feature 提供、agent.js 装配层） | `agentdev` 的 `createLogger()` → DebugHub → Web UI（query_logs / debugger MCP） | ESLint `no-console: error`（存量文件在 ratchet 清单中降为 warn） |
+| agent 运行时内部（feature 提供、agent.js 装配层） | `@agentdev/core` 的 `createLogger()` → DebugHub → Web UI（query_logs / debugger MCP） | ESLint `no-console: error`（存量文件在 ratchet 清单中降为 warn） |
 | 非 agent 运行（server.js 进程、scripts/、bin/） | console / stdio（没有前端显示载体） | `no-console: off`；推荐 `server/shared/claw-logger.js` 的 `createClawLogger()` 获得等级与分流纪律 |
 | 前端 public/ | 浏览器 console | 不在此约束范围 |
 
@@ -641,7 +641,7 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 - 等级：trace/debug/info/warn/error —— 所有日志必须带等级，这是审计前提。
 - `AGENTDEV_LOG_STREAM=auto`（默认）：trace/debug/info → stdout，warn/error → stderr。
 - `AGENTDEV_LOG_STREAM=stderr`（无头模式）：全部日志 → stderr，stdout 只承载结果输出（如 `ONE_SHOT_RESULT:`、`PLAIN_AGENT_RESULT:` 协议行），保证可安全管道化。无头入口脚本负责设置此环境变量。
-- 无头入口必须以 `import './headless-log-preamble.js'` 作为**第一个 import**（现成范例：run-one-shot-agent.js、run-plain-agent.js）。它设置 env 并安装简版 console 分流补丁，覆盖"框架 console 桥（Agent 构造时才装）生效之前"的模块顶层窗口。两个坑：静态 import 会提升，入口模块体里再设 env 已经太晚；agentdev 依赖图含 top-level await，会异步化依赖它的前导模块，因此 preamble 严禁依赖 agentdev。
+- 无头入口必须以 `import './headless-log-preamble.js'` 作为**第一个 import**（现成范例：run-one-shot-agent.js、run-plain-agent.js）。它设置 env 并安装简版 console 分流补丁，覆盖"框架 console 桥（Agent 构造时才装）生效之前"的模块顶层窗口。两个坑：静态 import 会提升，入口模块体里再设 env 已经太晚；@agentdev/core 依赖图含 top-level await，会异步化依赖它的前导模块，因此 preamble 严禁依赖框架包。
 - Claw 侧 `CLAW_LOG_LEVEL` 可过滤非 agent 日志的 stdio 冗长度（默认全量）。
 
 ### 会话事件流（无头模式的 stdout 数据协议）
@@ -798,29 +798,30 @@ IM 线路管理相关：
 
 ### AgentDev 依赖
 
-当前提交形态依赖发布版 AgentDev 包：
+当前依赖形态（四包尚未发布 npm，走本地 junction）：
 
-`agentdev: ^0.2.3`
+```json
+"@agentdev/core":   "file:../AgentDev/packages/core",
+"@agentdev/llm":    "file:../AgentDev/packages/llm",
+"@agentdev/mcp":    "file:../AgentDev/packages/mcp",
+"@agentdev/viewer": "file:../AgentDev/packages/viewer"
+```
 
 这意味着：
 
-- 普通安装会从 npm 拉取发布版 `agentdev`
+- `npm install` 会把四个 `file:` 目录依赖物化为 junction，指向相邻框架仓库的包目录
 - 本机框架联动开发时：
 
 ```bash
-npm install
-npm run agentdev:local
+npm install        # 正常情况即可建立链接
+npm run agentdev:local   # 链接异常或相邻仓库不在默认位置时手动重建
 ```
 
-- 切回发布版依赖：
-
-```bash
-npm run agentdev:published
-```
+- 四包发版前不存在"切回发布版"路径；`npm run agentdev:published` 目前是占位指引命令
 
 - 如果本地 AgentDev 仓库不在默认相邻目录 `../AgentDev`，使用 `AGENTDEV_LOCAL_PATH` 或直接传路径：`node scripts/use-agentdev-local.mjs <path>`
-- 可用 `Get-Item node_modules/agentdev | Format-List LinkType,Target` 验证是否指向期望的本地 AgentDev 仓库
-- 修改框架后通常需要在 AgentDev 仓库重建 `dist`，再重启当前项目
+- 可用 `Get-Item node_modules/@agentdev/core | Format-List LinkType,Target` 验证是否指向期望的本地 AgentDev 仓库
+- 修改框架后通常需要在 AgentDev 仓库重建各包 `dist`，再重启当前项目
 - 任何"这是 Claw 问题还是 AgentDev 问题"的判断，都要考虑两个仓库一起看
 
 ### Feature 包资源
