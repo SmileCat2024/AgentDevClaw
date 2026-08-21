@@ -24,8 +24,8 @@
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import { existsSync, readFileSync, mkdirSync } from 'fs';
-import { Agent, FileSessionStore, createLLM, runWithLogScope } from 'agentdev';
-import { resolveAgentModelLLM, resolveModelPresetLLM } from '../server/model-preset-resolver.js';
+import { Agent, FileSessionStore, runWithLogScope } from '@agentdev/core';
+import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
 import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -104,36 +104,7 @@ function resolveRuntimeLLM() {
   );
   if (perAgent) return perAgent;
 
-  try {
-    const raw = JSON.parse(readFileSync(join(PROTOCLAW_ROOT, 'config', 'default.json'), 'utf8'));
-    const dm = raw?.defaultModel;
-    if (dm?.model && dm?.baseUrl && dm?.apiKey) {
-      const llm = createLLM({ defaultModel: dm });
-      console.log(`[StudioRuntime] global default model (inline) => ${dm.model}`);
-      return { llm, modelName: dm.model, presetName: '' };
-    }
-  } catch (error) {
-    console.warn('[StudioRuntime] global default model resolution skipped:', error?.message || error);
-  }
-
-  try {
-    const config = JSON.parse(readFileSync(join(PROTOCLAW_ROOT, 'config', 'default.json'), 'utf8'));
-    const defaultModel = config?.defaultModel;
-    if (defaultModel?.model) {
-      const raw = JSON.parse(readFileSync(join(PROTOCLAW_ROOT, 'config', 'presets.json'), 'utf8'));
-      const presets = Array.isArray(raw?.presets) ? raw.presets : [];
-      const candidates = presets.filter((p) => p.model === defaultModel.model);
-      const preset = candidates.find((p) => (p.protocol || 'anthropic') === (defaultModel.protocol || 'anthropic'))
-        || candidates[0];
-      if (preset) {
-        const resolved = resolveModelPresetLLM(preset.name);
-        if (resolved) return resolved;
-      }
-    }
-  } catch (error) {
-    console.warn('[StudioRuntime] preset-by-model-name fallback skipped:', error?.message || error);
-  }
-  return null;
+  return resolveGlobalDefaultLLM();
 }
 
 /** Locate the feature class export: sole class export, or class default export. */

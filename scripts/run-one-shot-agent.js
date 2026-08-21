@@ -21,8 +21,8 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync } from 'fs';
-import { FileSessionStore, HandoffSeedFeature } from 'agentdev';
-import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+import { FileSessionStore, HandoffSeedFeature } from '@agentdev/core';
+import { resolveAgentModelLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
 
@@ -274,7 +274,7 @@ async function main() {
   }
 
   const modelPresetRole = cleanValue(process.env.PROTOCLAW_MODEL_PRESET_ROLE) || 'sub';
-  const resolved = resolveAgentModelLLM(agentPath, modelPresetRole);
+  const resolved = resolveAgentModelLLM(agentPath, modelPresetRole) || resolveGlobalDefaultLLM();
   const agent = new AgentClass({
     name: agentId,
     projectRoot: PROTOCLAW_ROOT,

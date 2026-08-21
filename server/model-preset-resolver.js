@@ -8,7 +8,7 @@
 import { join, resolve, dirname } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { createLLM } from 'agentdev';
+import { createLLM } from '@agentdev/llm';
 import { buildCodexOAuthHeaders, resolveAccessTokenSync } from './oauth-codex.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +23,7 @@ const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
  * @param {{ configPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
  *   Test seam — production callers omit. configPath overrides config/presets.json;
  *   resolveAccessToken replaces the OAuth token-store lookup.
- * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
+ * @returns {{ llm: import('@agentdev/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
 export function resolveModelPresetLLM(presetName, overrides, options = {}) {
   const configPath = options.configPath || PRESETS_PATH;
@@ -121,7 +121,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
  * @param {{ configPath?: string, userConfigPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
  *   Test seam — production callers omit. Threaded through to resolveModelPresetLLM;
  *   userConfigPath overrides the per-agent user config location.
- * @returns {{ llm: import('agentdev').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string, presetRole: string } | null}
+ * @returns {{ llm: import('@agentdev/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string, presetRole: string } | null}
  */
 export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
   const metaPath = join(agentDir, 'metadata.json');
@@ -177,4 +177,51 @@ export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
     console.warn(`[ModelPreset] Failed to read agent metadata from ${metaPath}:`, error.message);
     return null;
   }
+}
+
+/**
+ * Fallback chain when an agent has no model preset configured:
+ *   1. config/default.json 的 defaultModel（内联完整配置）
+ *   2. config/default.json 的 defaultModel.model 在 config/presets.json 中匹配同名 preset
+ *
+ * 新框架 BasicAgent 的 llm 为必传（票 009 纯基类化），无 preset 的 agent
+ * （如 qqbot / agent-studio）依赖此兜底完成构造。
+ * @returns {{ llm: import('@agentdev/llm').LLMClient, modelName: string, presetName: string } | null}
+ */
+export function resolveGlobalDefaultLLM() {
+  const configPath = join(PROTOCLAW_ROOT, 'config', 'default.json');
+  try {
+    const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+    const dm = raw?.defaultModel;
+    if (dm?.model && dm?.baseUrl && dm?.apiKey) {
+      const llm = createLLM({ defaultModel: dm });
+      console.log(`[ModelPreset] global default model (inline) => ${dm.model}`);
+      return { llm, modelName: dm.model, presetName: '' };
+    }
+  } catch (error) {
+    console.warn(`[ModelPreset] global default model resolution skipped:`, error?.message || error);
+    return null;
+  }
+
+  try {
+    const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+    const defaultModel = raw?.defaultModel;
+    if (defaultModel?.model) {
+      const presetsRaw = JSON.parse(readFileSync(PRESETS_PATH, 'utf8'));
+      const presets = Array.isArray(presetsRaw?.presets) ? presetsRaw.presets : [];
+      const candidates = presets.filter((p) => p.model === defaultModel.model);
+      const preset = candidates.find((p) => (p.protocol || 'anthropic') === (defaultModel.protocol || 'anthropic'))
+        || candidates[0];
+      if (preset) {
+        const resolved = resolveModelPresetLLM(preset.name);
+        if (resolved) {
+          console.log(`[ModelPreset] global default model via preset "${preset.name}" => ${preset.model}`);
+          return resolved;
+        }
+      }
+    }
+  } catch (error) {
+    console.warn(`[ModelPreset] preset-by-model-name fallback skipped:`, error?.message || error);
+  }
+  return null;
 }

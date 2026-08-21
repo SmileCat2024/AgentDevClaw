@@ -13,10 +13,10 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
-import { DebugHub, FileSessionStore, HandoffSeedFeature } from 'agentdev';
+import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdev/core';
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
-import { resolveAgentModelLLM, resolveModelPresetLLM } from '../server/model-preset-resolver.js';
+import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
 import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
@@ -680,7 +680,7 @@ SessionLifecycle.prototype.start = async function () {
     throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
   }
 
-  this.resolved = resolveAgentModelLLM(agentPath, 'default');
+  this.resolved = resolveAgentModelLLM(agentPath, 'default') || resolveGlobalDefaultLLM();
   this.resolvedUsageModel = this.resolved || null;
   this.agent = new AgentClass({
     name: this.agentName,
