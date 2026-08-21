@@ -24,6 +24,9 @@ import { createIMBridge } from './runtime-im-bridge.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
+// 线程宿主集合：唯一定义在 server/thread-control/host-agents.js（零依赖轻量
+// 模块，不拉起 thread-controller 初始化链），与 server 侧消费方同源。
+import { THREAD_HOST_AGENT_IDS } from '../server/thread-control/host-agents.js';
 
 // Inject DebugHub into the extracted CallArbiter module
 setDebugHubClass(DebugHub);
@@ -720,7 +723,13 @@ SessionLifecycle.prototype.start = async function () {
 
   const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
 
-  if (typeof localFeatures.ContextCompactionControlFeature === 'function') {
+  // 线程宿主（coder）不挂载主动精简控制：上下文管理已收敛为单一路径
+  // （ContextGuard 强制启用 → thread-rotation 自动轮换），该 feature 对宿主
+  // 是零调用死代码（docs/tickets/015，决策 B 卸载）。非宿主（编程小助手等）
+  // 保持现状：挂载 + 工具屏蔽。
+  if (THREAD_HOST_AGENT_IDS.has(String(agentId || '').trim())) {
+    console.log('[ProtoClaw Runtime] 线程宿主工作空间，跳过 context compaction control feature 挂载');
+  } else if (typeof localFeatures.ContextCompactionControlFeature === 'function') {
     this.agent.use(new localFeatures.ContextCompactionControlFeature({
       serverOrigin: SERVER_ORIGIN,
       agentId,

@@ -23,9 +23,11 @@
 
 import { getThreadController } from './thread-controller.js';
 import { ThreadNotFoundError } from './thread-store.js';
+import { THREAD_HOST_AGENT_IDS } from './host-agents.js';
 
-/** 自动建立线程环境的工作空间集合；仅决定环境创建与指令入线程路由。 */
-export const THREAD_HOST_AGENT_IDS = new Set(['coder']);
+// 集合的唯一定义在 ./host-agents.js（无副作用轻量模块，供 agent 子进程同源
+// 引用）；此处 re-export 维持 server 侧既有消费方（input-gateway 等）不变。
+export { THREAD_HOST_AGENT_IDS };
 
 export function createThreadIntegration({ controller = null } = {}) {
   const threadController = controller || getThreadController();
