@@ -115,39 +115,23 @@ npm start
 - 改完后应在该源码包或框架侧完成构建，再由 Claw 消费结果。
 - 不要直接把补丁只打在 Claw 侧安装出来的 `node_modules/@agentdev/*` 上。
 
-#### B. Claw 仓库直接依赖的 tgz feature 包
+#### B. Claw 依赖的生态 feature 包（源码在框架仓库，tgz 仅为发布产物）
 
-Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 里有多项依赖来自：
+Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 中 14 个生态包依赖（`@agentdev/qqbot-feature`、`@agentdev/weixin-bot`、`@agentdev/audit-feature`、`@agentdev/websearch-feature` 等）自 2026-08-21 起全部为 `file:../AgentDev/packages/<name>` junction，开发态直接消费框架仓库源码。
 
-- [resources/features](/D:/code/AgentDevClaw/resources/features)
+[resources/features](/D:/code/AgentDevClaw/resources/features) 下的 tgz **只是发布产物**（供 Feature Repository UI 与独立消费方安装），经 `npm run pack:features` 统一产出，不参与本机开发解析。
 
-例如：
+需要注意的一层现实情况：
 
-- `@agentdev/qqbot-feature`
-- `@agentdev/weixin-bot`
-- `@agentdev/audit-feature`
-- `@agentdev/websearch-feature`
-
-这些 tgz 包在 Claw 仓库里承担"可直接安装、可直接发布消费"的角色。
-
-当前还要额外注意一层现实情况：
-
-- Claw 运行时确实会真实加载这些 tgz 包，它们不是"只放在仓库里但没用上"的摆设。
-- 但某些预制 agent 的最终行为，不一定完全等于 tgz 包内部的默认实现。
-- 例如 `qqbot-feature` / `weixin-bot` 当前在 Claw 中是"tgz 包作为底座 + Claw 项目层运行时包装"的组合关系。
+- 某些预制 agent 的最终行为，不一定完全等于生态包内部的默认实现。
+- 例如 `qqbot-feature` / `weixin-bot` 当前在 Claw 中是"生态包底座 + Claw 项目层运行时包装"的组合关系。
 - 典型位置见 [prebuilt-agents/official/qqbot/agent.js](/D:/code/AgentDevClaw/prebuilt-agents/official/qqbot/agent.js)：这里会在创建 `QQBotFeature` / `WeixinBot` 实例后，再补一层项目侧接线，例如把消息入口重新导向 Claw 当前的 runtime 协调逻辑。
-- 因此，不要简单把"当前 Claw 表现出来的行为"直接等同于"tgz 包本体已经升级到相同行为"。
-- 更准确地说，当前可接受的事实是：
-  Claw 已经真实引用这些 tgz 包；
-  同时，Claw 也可能在项目层对它们做运行时包装、覆写或补接线；
-  所以最终运行效果可能是"tgz 底座 + 项目层适配"共同产生的。
+- 因此，不要简单把"当前 Claw 表现出来的行为"直接等同于"生态包本体已经升级到相同行为"。
 
 规则：
 
-- Claw 侧可以继续依赖 tgz 包。
-- 但凡进入 Claw 仓库并被当作内建依赖使用的 feature，应该具有直接面向发布的形态。
-- 同时，这些 feature 如果属于框架侧维护资产，必须在 [D:\code\AgentDev\packages](D:/code/AgentDev/packages) 或等价源码目录中留存一份源码版本，不能只剩 tgz 和安装产物。
-- 如果你要判断"某个行为到底是 tgz 包原生提供的，还是 Claw 项目层后包了一层才得到的"，不要只看 `resources/features/*.tgz`，还要一起检查对应预制 agent 的装配入口。
+- 生态包的权威源码在 [D:\code\AgentDev\packages](D:/code/AgentDev/packages)，修改在那里进行并构建。
+- 如果你要判断"某个行为到底是生态包原生提供的，还是 Claw 项目层后包了一层才得到的"，要一起检查对应预制 agent 的装配入口。
 
 #### C. Claw 仓库自己的本地 feature 与 feature 仓库内容
 
@@ -184,39 +168,17 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 
 这类内容更多是"被管理、被分发、被装配"的对象，不等同于当前 Claw 运行时直接维护的源码包。
 
-#### D. 同一 feature 的双路径问题（高频踩坑点）
+#### D. 双路径问题（历史坑，已随四包拆分收敛）
 
-**这是一个容易被忽略、但已经真实踩过多次坑的问题。**
+**历史上这是高频踩坑点，2026-08-21 四包拆分后已结构性消除。**
 
-许多 feature 同时存在于 AgentDev 仓库的两个位置：
+旧形态下许多 feature 同时存在于 AgentDev 仓库的两个位置（`packages/<name>-feature/` 独立包 + `src/features/<name>/` 框架内部副本），修改时必须两侧同步。四包拆分提交（框架 `f5c19eb` 系列）已删除 `src/features/*` 中的生态包副本，当前每个生态 feature 的唯一权威源码在 `AgentDev/packages/<name>/`。
 
-| 位置 | 说明 | 被 Claw 消费方式 |
-|------|------|-----------------|
-| `AgentDev/packages/<name>-feature/` | 独立 npm 包源码，`npm pack` 后成为 tgz | `@agentdev/<name>-feature`（从 Claw 的 `resources/features/*.tgz` 安装） |
-| `AgentDev/src/features/<name>/` | 框架内部副本，被 tsup bundle 进框架 dist | 发布安装走 `@agentdev/core` 等框架包；本机开发通过 junction 直接消费 `AgentDev/packages/*` |
-
-当前已知存在双路径的 feature：
-
-- `shell`：`packages/shell-feature/` + `src/features/shell/`
-- `audit`：`packages/audit-feature/` + `src/features/audit/`
-- `audio-feedback`：`packages/audio-feedback-feature/` + `src/features/audio-feedback/`
-- `memory`：`packages/memory-feature/` + `src/features/memory/`
-- `qqbot`：`packages/qqbot-feature/` + `src/features/qqbot/`
-- `tts`：`packages/tts-feature/` + `src/features/tts/`
-- `visual`：`packages/visual-feature/` + `src/features/visual/`
-- `websearch`：`packages/websearch-feature/` + `src/features/websearch/`
-- `plugin-compat`：`packages/plugin-compat-feature/` + `src/features/plugin-compat/`
-
-**踩坑场景**：你修改了 `packages/shell-feature/src/tools.ts`，在 package 侧构建成功，以为已经搞定。但实际上：
-
-- `agent-creator` 和 `feature-creator` 通过 `import { ShellFeature } from '@agentdev/core'` 消费的是 **框架 core 包**（bundle 内含 shell 副本），不经过 tgz
-- `qqbot` 和 `programming-helper` 通过 `import { ShellFeature } from '@agentdev/shell-feature'` 消费的是 **Claw 安装的 tgz 包**，不经过框架 dist
-
-因此修改这类 feature 时，**两侧源码都要改，两个构建都要做，两条消费路径都要更新**。
+若发现代码仍从 `@agentdev/core` 导入 `ShellFeature` / `AuditFeature` 等生态包符号，属于待清理残留（悬置 agent 的旧引用可能存在），应改为从对应独立包导入。
 
 #### E. Claw 预制 agent 的 feature 消费路径速查
 
-| 预制 agent | 从 `@agentdev/core` 导入（走框架包） | 从 `@agentdev/llm` / `@agentdev/viewer` / tgz 包导入 |
+| 预制 agent | 从 `@agentdev/core` 导入（走框架包） | 从 `@agentdev/llm` / `@agentdev/viewer` / 生态包导入 |
 |-----------|--------------------------------|----------------------------------|
 | `programming-helper` ★ | BasicAgent, TemplateComposer, TodoFeature, UserInputFeature, LspFeature | AudioFeedbackFeature, AuditFeature, MemoryFeature, ShellFeature, WebSearchFeature |
 | `agent-studio` ★ | BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature | AuditFeature, WebSearchFeature（AgentStudioFeature 从 `local-features/dist` 导入） |
@@ -227,7 +189,7 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 | `agent-creator`（悬置） | BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature | AuditFeature, WebSearchFeature |
 | `feature-creator`（悬置） | BasicAgent, ShellFeature, TemplateComposer, TodoFeature, UserInputFeature | AuditFeature, WebSearchFeature |
 
-注意 `ShellFeature` 同时出现在两条路径中：`agent-creator` / `feature-creator` 从框架 core 包导入，`qqbot` / `programming-helper` 从 tgz 包导入。
+注意：悬置 agent 若仍从 core 包导入生态 feature 符号，属于双路径残留；活跃 agent 均从独立生态包导入。
 
 ### 4. 预制 agent 与 feature 实现不要混为一谈
 
@@ -248,98 +210,45 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 - 不要把框架修复只留在 Claw 侧的 `node_modules/@agentdev/*/dist`。
 - 不要把 feature 修复只留在 Claw 侧的 `node_modules/@agentdev/*`。
 - 不要因为 Claw 当前能跑起来，就把安装产物误当成权威源码。
-- 不要混淆"Claw 自带本地 feature""Claw 依赖的 tgz feature""AgentDev/packages 下的 feature 源码""feature 仓库里的可安装 feature"这四层。
-- **不要只改了 `packages/*` 就以为全部搞定**——如果该 feature 在 `src/features/*` 也有副本（双路径），走框架导入的 agent 仍会消费旧代码。
-- **不要只构建了 framework dist 就以为 tgz 也更新了**——tgz 包是独立打包的，需要单独 `npm pack` 并同步到 Claw。
+- 不要混淆"Claw 自带本地 feature""AgentDev/packages 下的生态 feature 源码""resources/features 发布 tgz""feature 仓库里的可安装 feature"这几层。
+- **不要在开发流程中手工 pack/拷贝 tgz**——开发态全部走 junction；tgz 只经 `npm run pack:features` 在发布时产出。
 
 ### 6. 推荐修改流程
 
 1. 先判断问题属于哪一层：
-   框架本体 / 框架侧源码 feature / Claw 本地 feature / Claw 预制 agent 装配 / Claw 消费的 tgz 包。
-2. **如果是双路径 feature（见上方 3D 节），两侧源码都要改。**
-3. 在权威源码位置修改。
-4. 在对应仓库完成构建或打包（具体步骤见下方 7 节）。
-5. 再回到 Claw 验证消费结果。
-6. 如果 Claw 侧只是消费方，避免在消费层留下无法回溯到源码的临时补丁。
+   框架本体 / 框架侧生态包 feature / Claw 本地 feature / Claw 预制 agent 装配。
+2. 在权威源码位置修改（框架与生态包都在 `AgentDev/packages/`）。
+3. 在对应包完成构建（具体步骤见下方 7 节）。
+4. 重启 Claw 服务或对应 agent，回到 Claw 验证消费结果。
+5. 如果 Claw 侧只是消费方，避免在消费层留下无法回溯到源码的临时补丁。
 
-### 7. feature 构建与 tgz 更新标准流程
+### 7. feature 构建与消费更新流程
 
-不同来源的 feature 有不同的构建和消费更新路径。以下是每种情况的具体操作步骤。
+**开发态（2026-08-21 起）：全部 18 个 `@agentdev/*` 依赖（4 框架包 + 14 生态包）均为 `file:../AgentDev/packages/*` junction。开发过程没有任何 tgz 拷贝环节**——改框架或生态包源码 → 在对应包 `npm run build` → 重启 Claw 服务/agent 即生效。
 
-#### 情况 A：只走框架路径的 feature（仅存在于 `src/features/*`）
-
-例如：`lsp`、`todo`、`user-input`、`skill`、`subagent`、`mcp`、`file-history` 等。
+#### 开发：改生态包（shell/websearch/weixin-bot 等 14 个）
 
 ```bash
-# 1. 修改 AgentDev/src/features/<name>/ 下的源码
-# 2. 构建框架 dist
-cd D:/code/AgentDev && npm run build
-# 3. 重启 Claw 服务（本机 junction 生效）
-```
-
-无需 tgz 操作。本机联动开发时，Claw 通过 `node_modules/@agentdev/core` junction 直接消费 `AgentDev/packages/core`；发布安装时走 npm 上的 `@agentdev/*` semver（发版后）。
-
-#### 情况 B：只走 tgz 路径的 feature（仅存在于 `packages/*`，无框架副本）
-
-例如：`weixin-bot`、`create-feature`。
-
-```bash
-# 1. 修改 AgentDev/packages/<name>/ 下的源码
-# 2. 构建 package dist
+# 1. 修改 AgentDev/packages/<name>/src/
 cd D:/code/AgentDev/packages/<name> && npm run build
-# 3. 打包 tgz
-npm pack
-# 4. 复制到 Claw resources（注意替换旧文件）
-cp <name>-<version>.tgz D:/code/AgentDevClaw/resources/features/
-# 5. 更新 Claw 中安装的包（见下方"tgz 安装注意"）
-# 6. 重启对应 agent
+# 2. 重启 Claw 服务（或对应 agent）
 ```
 
-#### 情况 C：双路径 feature（同时存在于 `packages/*` 和 `src/features/*`）
+#### 发布：产出 tgz 到 resources/features/
 
-例如：`shell`、`audit`、`qqbot`、`websearch` 等（完整列表见 3D 节）。
-
-```bash
-# 1. 修改 packages/<name>-feature/src/ 下的源码
-# 2. 同步修改到 src/features/<name>/（import 路径可能不同，注意适配）
-# 3. 构建 package dist
-cd D:/code/AgentDev/packages/<name>-feature && npm run build
-# 4. 打包并复制 tgz 到 Claw
-npm pack
-cp <name>-<version>.tgz D:/code/AgentDevClaw/resources/features/
-# 5. 构建 framework dist
-cd D:/code/AgentDev && npm run build
-# 6. 更新 Claw 中安装的 tgz 包（见下方"tgz 安装注意"）
-# 7. 重启整个 Claw 服务（框架 dist 变更需要完整重启）
-```
-
-#### tgz 安装注意：integrity hash 问题
-
-当 tgz 文件内容变更但文件名不变时（版本号未升级），npm 会因为 `package-lock.json` 中记录的旧 integrity hash 不匹配而拒绝安装，报 `EINTEGRITY` 错误。`npm install --force` 也无法绕过此检查。
-
-正确处理方式：
+`resources/features/*.tgz` 只是发布产物（供 Feature Repository UI 与独立消费方安装），不参与本机开发解析。
 
 ```bash
-# 方案 1（推荐）：用新 tgz 重新计算 hash 并更新 lock
 cd D:/code/AgentDevClaw
-# 获取新 tgz 的 hash
-npm cache verify  # 或直接看 npm install 报错信息中 "got" 后面的值
-# 编辑 package-lock.json，找到对应包的 "integrity" 字段，替换为新 hash
-# 然后清理安装
-rm -rf node_modules/@agentdev/<name>
-npm install
-
-# 方案 2：直接删掉 lock 中的 integrity 字段，让 npm 重新计算
-# 编辑 package-lock.json，删除对应包条目的 "integrity" 行
-# 然后 npm install 会重新计算并填充
+npm run pack:features              # 全部生态包 build + pack + 写入 resources/features/
+npm run pack:features shell-feature weixin-bot   # 只打包指定包
 ```
 
-验证安装结果：
+注意：tgz 文件名含版本号，发布前先在框架仓库推进版本；同版本重打包会因 lock integrity 变化报 `EINTEGRITY`，此时删除 lock 中该包条目的 `integrity` 字段后重新 `npm install` 即可。
 
-```bash
-# 确认 node_modules 中已包含新代码（用 Claw 内置的 grep 工具，不要用 bash grep）
-# bash grep 在 Windows 上可能因编码问题给出假阴性
-```
+#### 双路径 feature（同时存在于 `packages/*` 和旧 `src/features/*` 副本）
+
+历史上 shell/audit/qqbot/websearch 等存在双路径副本。四包拆分后框架内 `src/features/*` 副本已随单包退役，当前唯一权威源码在 `AgentDev/packages/<name>/`。若发现仍从 `@agentdev/core` 导入某生态包的旧引用，属于待清理残留。
 
 ## 系统总览
 
@@ -830,7 +739,7 @@ npm run agentdev:local   # 链接异常或相邻仓库不在默认位置时手�
 
 ### Feature 包资源
 
-内置 feature 包目录：
+发布产物目录（tgz，经 `npm run pack:features` 产出）：
 
 - [resources/features](/D:/code/AgentDevClaw/resources/features)
 
