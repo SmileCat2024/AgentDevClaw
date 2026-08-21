@@ -1,9 +1,13 @@
 /**
- * Tests for ViewerWorker queued-input / dequeue-input HTTP endpoints.
+ * Tests for ViewerWorker user-turn queued delivery / dequeue-input HTTP endpoints.
+ *
+ * The mailbox (queuedInputs) has a single production write path:
+ * POST /user-turn → submitUserTurn → no inputLease → enqueueQueuedInput.
+ * (The legacy standalone queue-input endpoint was removed 2026-08; every
+ * new-turn producer must go through user-turn arbitration.)
  *
  * Validates the fix for the "useArbiterQueue dead zone" bug:
- * - handleQueueInput must NOT set session.useArbiterQueue
- * - handleQueueInput must NOT forward to UDS
+ * - queued delivery must NOT set session.useArbiterQueue
  * - handleDequeueInput must NOT gate on useArbiterQueue
  * - dequeue always returns queued items in FIFO order
  * - image inputs survive the round-trip
@@ -18,6 +22,7 @@ import assert from 'node:assert/strict';
 const TEST_PORT = 18000 + Math.floor(Math.random() * 1000);
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
 const AGENT_ID = 'test-queued-input-agent';
+const CLIENT_ID = 'fake-client-id';
 
 let viewerWorker = null;
 
@@ -35,89 +40,95 @@ async function httpGet(path) {
   return { status: res.status, data: await res.json() };
 }
 
-describe('ViewerWorker queued-input HTTP endpoints', () => {
+/** Enqueue one item through the real user-turn endpoint (queued delivery). */
+async function queueViaUserTurn(text, images) {
+  return httpPost(`/api/agents/${AGENT_ID}/user-turn`, images ? { text, images } : { text });
+}
+
+describe('ViewerWorker user-turn queued mailbox', () => {
   before(async () => {
     const { ViewerWorker } = await import('agentdev');
     viewerWorker = new ViewerWorker(TEST_PORT, false);
     await viewerWorker.start();
 
-    // Register a fake agent session directly so queue/dequeue routes find it
+    // Register a fake agent session directly so user-turn/dequeue routes find
+    // it. submitUserTurn requires a connected session (isSessionConnected
+    // checks udsClients.has(clientId)), so also register a stub UDS entry —
+    // queued delivery never touches the socket itself.
     viewerWorker.agentSessions.set(AGENT_ID, {
       agentId: AGENT_ID,
       messages: [],
       logs: [],
       queuedInputs: [],
-      clientId: 'fake-client-id',
+      clientId: CLIENT_ID,
     });
+    viewerWorker.udsClients.set(CLIENT_ID, { write() {} });
   });
 
   after(async () => {
     if (viewerWorker) {
+      viewerWorker.udsClients.delete(CLIENT_ID);
       await viewerWorker.stop();
     }
   });
 
-  // ── handleQueueInput ──
+  // ── user-turn queued delivery ──
 
-  it('handleQueueInput stores text input and returns success', async () => {
+  it('user-turn queues text input when no lease is held', async () => {
     const session = viewerWorker.agentSessions.get(AGENT_ID);
     session.queuedInputs = [];
 
-    const { status, data } = await httpPost(
-      `/api/agents/${AGENT_ID}/queue-input`,
-      { text: 'hello world' },
-    );
+    const { status, data } = await queueViaUserTurn('hello world');
     assert.equal(status, 200);
     assert.equal(data.success, true);
+    assert.equal(data.delivery, 'queued', 'no lease held → delivery must be queued');
     assert.ok(data.id, 'should return an id');
     assert.equal(data.queueLength, 1);
   });
 
-  it('handleQueueInput stores input with images', async () => {
+  it('user-turn queues input with images', async () => {
     const session = viewerWorker.agentSessions.get(AGENT_ID);
     session.queuedInputs = [];
 
-    const { status, data } = await httpPost(
-      `/api/agents/${AGENT_ID}/queue-input`,
-      {
-        text: 'look at this',
-        images: [{ base64: 'iVBOR...', mediaType: 'image/png' }],
-      },
-    );
+    const { status, data } = await queueViaUserTurn('look at this', [
+      { base64: 'iVBOR...', mediaType: 'image/png' },
+    ]);
     assert.equal(status, 200);
     assert.equal(data.success, true);
+    assert.equal(data.delivery, 'queued');
     assert.equal(data.queueLength, 1);
   });
 
-  it('handleQueueInput rejects missing text', async () => {
+  it('user-turn rejects missing text', async () => {
     const { status, data } = await httpPost(
-      `/api/agents/${AGENT_ID}/queue-input`,
+      `/api/agents/${AGENT_ID}/user-turn`,
       { images: [] },
     );
     assert.equal(status, 400);
-    assert.ok(data.error);
+    assert.equal(data.code, 'invalid_input');
   });
 
-  it('handleQueueInput returns 404 for unknown agent', async () => {
-    const { status } = await httpPost(
-      `/api/agents/nonexistent-agent/queue-input`,
+  it('user-turn returns 404 for unknown agent', async () => {
+    const { status, data } = await httpPost(
+      `/api/agents/nonexistent-agent/user-turn`,
       { text: 'test' },
     );
     assert.equal(status, 404);
+    assert.equal(data.code, 'agent_not_found');
   });
 
-  it('handleQueueInput does NOT set session.useArbiterQueue', async () => {
+  it('queued delivery does NOT set session.useArbiterQueue', async () => {
     // Clear queue and add a fresh input
     const session = viewerWorker.agentSessions.get(AGENT_ID);
     session.queuedInputs = [];
     session.useArbiterQueue = undefined; // reset
 
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'trigger' });
+    await queueViaUserTurn('trigger');
 
     assert.equal(
       session.useArbiterQueue,
       undefined,
-      'useArbiterQueue must NOT be set by handleQueueInput',
+      'useArbiterQueue must NOT be set by queued delivery',
     );
   });
 
@@ -141,8 +152,8 @@ describe('ViewerWorker queued-input HTTP endpoints', () => {
     session.queuedInputs = [];
 
     // Queue two items
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'first' });
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'second' });
+    await queueViaUserTurn('first');
+    await queueViaUserTurn('second');
 
     // Dequeue first
     const r1 = await httpPost(`/api/agents/${AGENT_ID}/dequeue-input`, {});
@@ -169,10 +180,7 @@ describe('ViewerWorker queued-input HTTP endpoints', () => {
       { base64: 'abc123', mediaType: 'image/png' },
       { base64: 'def456', mediaType: 'image/jpeg' },
     ];
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, {
-      text: 'image test',
-      images,
-    });
+    await queueViaUserTurn('image test', images);
 
     const { status, data } = await httpPost(
       `/api/agents/${AGENT_ID}/dequeue-input`,
@@ -200,8 +208,8 @@ describe('ViewerWorker queued-input HTTP endpoints', () => {
     const session = viewerWorker.agentSessions.get(AGENT_ID);
     session.queuedInputs = [];
 
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'item-a' });
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'item-b' });
+    await queueViaUserTurn('item-a');
+    await queueViaUserTurn('item-b');
 
     const { status, data } = await httpGet(
       `/api/agents/${AGENT_ID}/queued-inputs`,
@@ -217,16 +225,16 @@ describe('ViewerWorker queued-input HTTP endpoints', () => {
 
   it('dequeue works even when session.clientId is set (simulates UDS connection)', async () => {
     // This is the core regression test:
-    // Before the fix, handleQueueInput would set useArbiterQueue=true when
+    // Before the fix, the queue write path would set useArbiterQueue=true when
     // clientId pointed to a connected UDS client, and handleDequeueInput
     // would then always return { input: null }, blocking the HTTP dequeue path.
     const session = viewerWorker.agentSessions.get(AGENT_ID);
     session.queuedInputs = [];
-    session.clientId = 'fake-client-id';
+    session.clientId = CLIENT_ID;
     session.useArbiterQueue = undefined;
 
     // Queue an input (this used to set useArbiterQueue=true)
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'regression test' });
+    await queueViaUserTurn('regression test');
 
     // Verify useArbiterQueue was NOT set
     assert.equal(
@@ -252,9 +260,9 @@ describe('ViewerWorker queued-input HTTP endpoints', () => {
     const session = viewerWorker.agentSessions.get(AGENT_ID);
     session.queuedInputs = [];
 
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'msg-1' });
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'msg-2' });
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'msg-3' });
+    await queueViaUserTurn('msg-1');
+    await queueViaUserTurn('msg-2');
+    await queueViaUserTurn('msg-3');
 
     const drained = [];
     for (;;) {
@@ -271,11 +279,10 @@ describe('ViewerWorker queued-input HTTP endpoints', () => {
     const session = viewerWorker.agentSessions.get(AGENT_ID);
     session.queuedInputs = [];
 
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, {
-      text: 'with image',
-      images: [{ type: 'image', source_type: 'base64', media_type: 'image/png', data: 'AAAA' }],
-    });
-    await httpPost(`/api/agents/${AGENT_ID}/queue-input`, { text: 'no image' });
+    await queueViaUserTurn('with image', [
+      { type: 'image', source_type: 'base64', media_type: 'image/png', data: 'AAAA' },
+    ]);
+    await queueViaUserTurn('no image');
 
     const { data: first } = await httpPost(`/api/agents/${AGENT_ID}/dequeue-input`, {});
     assert.ok(first.input.images, 'first item must have images');

@@ -13,7 +13,9 @@
  * - 彻底移除 SubAgentFeature（编程小助手仅 remove 其工具，本 agent 连 feature 一起摘除）
  *
  * 与编程小助手的其余差异仅在运行载体：
- * - 单次 onCall，不接入 Claw server 的会话管理
+ * - CLI 单次调用（claw run）直接 onCall，不接入 Claw server 的会话管理
+ * - workspace 线程宿主模式：由 run-prebuilt-agent.js 托管常驻会话（无
+ *   UserInputFeature，外部投递经 viewer 邮箱由被动消费循环驱动）
  * - 会话落盘到 ~/.agentdev/AgentDevClaw/agents/coder/sessions/（独立，不共享）
  * - 模型 preset 来自本目录 metadata.json，可被 .agentdev/agent-configs/coder.json 覆盖
  * - runtime 配置仍读全局 ~/.agentdev/AgentDevClaw/feature-setup.json（与编程小助手一致）

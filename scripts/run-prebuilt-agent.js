@@ -22,6 +22,7 @@ import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
 import { createSummaryHandlers } from './runtime-summary.js';
+import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
 
 // Inject DebugHub into the extracted CallArbiter module
@@ -347,6 +348,7 @@ class SessionLifecycle {
     this.resolvedUsageModel = null;
     this.disposed = false;
     this.inputLoopRunning = false;
+    this.passiveMailboxLoop = null;
     this.lastReportedMessageCount = 0;
 
     // Per-session bridge contexts (shared by reference with extracted modules)
@@ -1022,6 +1024,22 @@ SessionLifecycle.prototype.start = async function () {
   if (!hasUserInput) {
     console.log('');
     console.log('当前 Agent 不使用 UserInputFeature，运行在被动事件模式。');
+    // 被动模式永不开 input lease，外部 user-turn 只能进 viewer 邮箱；
+    // react-loop / arbiter 安全网仅在 call 期间消费邮箱，空闲时无人消费
+    // 会导致投递成功但会话卡住（thread 指令）。此循环把邮箱作为又一个
+    // 外部事件源接进 arbiter，与 dispatch / IM 桥接同构。
+    if (!this.isExploration) {
+      this.passiveMailboxLoop = createPassiveMailboxLoop({
+        agent: this.agent,
+        callArbiter: this.callArbiter,
+        isDisposed: () => this.disposed,
+        viewerPort: VIEWER_PORT,
+      });
+      this.passiveMailboxLoop.run().catch(err => {
+        console.error(`[ProtoClaw Runtime] 被动邮箱消费循环异常退出 (session=${this.sessionId}):`, err);
+      });
+      console.log('[ProtoClaw Runtime] ✓ 已启动被动邮箱消费循环 (viewer mailbox → arbiter)');
+    }
     // Keep the session alive without an input loop.
     // The process stays alive as long as pending IPC / DebugHub requests exist.
     return;
