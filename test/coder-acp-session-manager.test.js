@@ -1,0 +1,456 @@
+/**
+ * Tests for scripts/coder-acp/session-manager.js (+ protocol.js request
+ * validation) — ticket 019, design §12.
+ *
+ * Covers:
+ * - ID mapping established on session/new (Claw IDs stored, not exposed)
+ * - serial constraint: second prompt while one is active → -32001 with generation
+ * - prompt happy path: baseline capture → command → updates in order → end_turn
+ * - turn.failed → -32003 with failure payload
+ * - stale terminal replay (turn <= baseline.maxTurn) → warn only, keep waiting
+ * - cancel before turn.started → immediate cancelled, exactly one interrupt,
+ *   no updates sent
+ * - late events after cancel are dropped (no update, no further polls)
+ * - $/cancel_request (ctx.signal) funnels into the same cancel state machine
+ *   (both paths together → still exactly one interrupt)
+ * - prompt timeout → -32002 with waitedMs, no auto interrupt
+ * - server errors: creation failure → -32003, unreachable poll → -32000
+ * - dispose clears memory only (no server calls)
+ * - protocol.js validation: non-text block / mcpServers / additionalDirectories
+ *
+ * Uses node:test per project convention; mock claw client injected directly,
+ * no real model, no real server.
+ */
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { createSessionManager } from '../scripts/coder-acp/session-manager.js';
+import { createClawClient, ClawUnreachableError, ClawHttpError } from '../scripts/coder-acp/claw-client.js';
+import {
+  validateNewSessionParams,
+  mergePromptText,
+  ERROR_CODES,
+} from '../scripts/coder-acp/protocol.js';
+
+// ── mock claw client（脚本式：pages 逐页消费） ─────────────────────
+
+function makeMockClawClient(overrides = {}) {
+  const calls = { createSessions: [], commands: [], events: [], interrupts: [] };
+  const state = {
+    sessionResponse: {
+      ok: true,
+      clawSessionId: 'claw-s1',
+      threadId: 'thread-1',
+      viewerAgentId: 'viewer-1',
+      cwd: 'C:/work',
+    },
+    createError: null,
+    commandError: null,
+    eventsError: null,
+    interruptError: null,
+    /** 每次 getThreadEvents 弹出一页；耗尽后回落 defaultPage（空轮询） */
+    pages: [],
+    defaultPage: { events: [], cursor: 0 },
+    ...overrides,
+  };
+  return {
+    calls,
+    state,
+    async createCoderSession(cwd) {
+      calls.createSessions.push(cwd);
+      if (state.createError) throw state.createError;
+      return state.sessionResponse;
+    },
+    async appendUserMessage(threadId, payload) {
+      calls.commands.push({ threadId, payload });
+      if (state.commandError) throw state.commandError;
+      return { ok: true, delivery: { delivered: true } };
+    },
+    async getThreadEvents(threadId, after) {
+      calls.events.push({ threadId, after });
+      if (state.eventsError) throw state.eventsError;
+      return state.pages.length > 0 ? state.pages.shift() : state.defaultPage;
+    },
+    async interruptSession(clawSessionId) {
+      calls.interrupts.push(clawSessionId);
+      if (state.interruptError) throw state.interruptError;
+      return { ok: true, clawSessionId };
+    },
+  };
+}
+
+function makeManager(claw, config = {}) {
+  const logs = [];
+  return {
+    logs,
+    manager: createSessionManager({
+      clawClient: claw,
+      log: {
+        info: () => {},
+        warn: (m) => logs.push(m),
+        error: (m) => logs.push(m),
+      },
+      pollIntervalMs: 5,
+      promptTimeoutMs: 0, // 默认禁用，超时用例单独配置
+      ...config,
+    }),
+  };
+}
+
+/** 事件页构造（018 响应形状：event + eventId/receivedAt）。 */
+function page(events, cursor) {
+  return {
+    events: events.map((event, i) => ({ ...event, eventId: `ev-${cursor}-${i}`, receivedAt: 1 })),
+    cursor,
+  };
+}
+
+async function makeSession(claw, config) {
+  const { manager } = makeManager(claw, config);
+  const { sessionId } = await manager.createSession('C:/work');
+  return { manager, sessionId };
+}
+
+describe('session mapping', () => {
+  it('creates a session via the 018 atomic route and stores the mapping', async () => {
+    const claw = makeMockClawClient();
+    const { manager } = makeManager(claw);
+    const { sessionId } = await manager.createSession('C:/work');
+    assert.equal(typeof sessionId, 'string');
+    assert.match(sessionId, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(claw.calls.createSessions, ['C:/work']);
+
+    const internal = manager.getSession(sessionId);
+    assert.equal(internal.clawSessionId, 'claw-s1');
+    assert.equal(internal.threadId, 'thread-1');
+    assert.equal(internal.viewerAgentId, 'viewer-1');
+  });
+
+  it('maps creation HTTP failure to -32003 with the server error body', async () => {
+    const claw = makeMockClawClient({
+      createError: new ClawHttpError(400, { ok: false, code: 'invalid_cwd', message: 'cwd does not exist' }),
+    });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.createSession('C:/nope'), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
+      assert.equal(error.data.server.code, 'invalid_cwd');
+      return true;
+    });
+  });
+
+  it('maps creation network failure to -32000 with the start hint', async () => {
+    const claw = makeMockClawClient({ createError: new ClawUnreachableError(new Error('ECONNREFUSED')) });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.createSession('C:/work'), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
+      assert.equal(error.data.hint, '先启动 Claw server（npm start）');
+      return true;
+    });
+  });
+});
+
+describe('prompt pipeline', () => {
+  it('happy path: updates in event order, then end_turn; command carries source+idempotencyKey', async () => {
+    const claw = makeMockClawClient({
+      pages: [
+        { events: [], cursor: 0 }, // 基线（空）
+        page([
+          { type: 'turn.started', turn: 1 },
+          {
+            type: 'item.started',
+            item: { id: 'call_1', turn: 1, type: 'tool_call', tool: 'bash', arguments: { command: 'ls' }, status: 'in_progress' },
+          },
+          {
+            type: 'item.completed',
+            item: { id: 'call_1', turn: 1, type: 'tool_call', tool: 'bash', status: 'completed', result: 'ok' },
+          },
+        ], 4),
+        page([
+          { type: 'item.completed', item: { id: 'm1', turn: 1, type: 'agent_message', text: 'done' } },
+          { type: 'turn.completed', turn: 1 },
+        ], 6),
+      ],
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    const updates = [];
+    const result = await manager.runPrompt(sessionId, 'do it', {
+      onUpdate: (update) => updates.push(update),
+    });
+    assert.deepEqual(result, { stopReason: 'end_turn' });
+    assert.equal(updates.length, 3);
+    assert.equal(updates[0].sessionUpdate, 'tool_call');
+    assert.equal(updates[1].sessionUpdate, 'tool_call_update');
+    assert.equal(updates[2].sessionUpdate, 'agent_message_chunk');
+
+    assert.equal(claw.calls.commands.length, 1);
+    assert.equal(claw.calls.commands[0].threadId, 'thread-1');
+    // session-manager 只传文本与幂等键；kind/source 由 claw-client HTTP 层组装
+    assert.deepEqual(
+      { ...claw.calls.commands[0].payload, idempotencyKey: '<uuid>' },
+      { text: 'do it', idempotencyKey: '<uuid>' },
+    );
+    assert.match(claw.calls.commands[0].payload.idempotencyKey, /^acp-[0-9a-f-]{36}$/);
+  });
+
+  it('baseline capture precedes command delivery and seeds dedup + maxTurn', async () => {
+    const claw = makeMockClawClient({
+      pages: [
+        { events: [], cursor: 0 }, // 基线
+        page([{ type: 'turn.completed', turn: 2 }], 3), // prompt 后第一轮：新终态
+      ],
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    const result = await manager.runPrompt(sessionId, 'hi', { onUpdate: () => {} });
+    assert.deepEqual(result, { stopReason: 'end_turn' });
+    // 第一次 events 调用 = 基线（在 commands 之前），第二次 = 轮询
+    assert.equal(claw.calls.events.length, 2);
+    assert.ok(claw.calls.events[0].after === 0);
+  });
+
+  it('turn.failed → -32003 carrying the failure payload', async () => {
+    const claw = makeMockClawClient({
+      pages: [
+        { events: [], cursor: 0 }, // 基线
+        page([{ type: 'turn.failed', turn: 1, error: { message: 'boom', category: 'runtime' } }], 2),
+      ],
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    await assert.rejects(manager.runPrompt(sessionId, 'hi', { onUpdate: () => {} }), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
+      assert.equal(error.data.turnFailed.message, 'boom');
+      return true;
+    });
+  });
+
+  it('serial constraint: concurrent prompt → -32001 with the active generation', async () => {
+    const claw = makeMockClawClient({ defaultPage: { events: [], cursor: 1 } });
+    const { manager, sessionId } = await makeSession(claw);
+
+    const first = manager.runPrompt(sessionId, 'first', { onUpdate: () => {} });
+    // 等第一轮轮询真正开始（activePrompt 已登记）
+    await new Promise((r) => setTimeout(r, 20));
+    await assert.rejects(manager.runPrompt(sessionId, 'second', { onUpdate: () => {} }), (error) => {
+      assert.equal(error.code, ERROR_CODES.SESSION_BUSY);
+      assert.equal(typeof error.data.generation, 'number');
+      return true;
+    });
+    manager.cancel(sessionId);
+    assert.deepEqual(await first, { stopReason: 'cancelled' });
+  });
+
+  it('unknown sessionId → -32602', async () => {
+    const claw = makeMockClawClient();
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.runPrompt('nope', 'hi', { onUpdate: () => {} }), (error) => {
+      assert.equal(error.code, ERROR_CODES.INVALID_PARAMS);
+      assert.equal(error.data.field, 'sessionId');
+      return true;
+    });
+  });
+});
+
+describe('stale terminal replay (design §9.3 layer 3)', () => {
+  it('terminal with turn <= baseline.maxTurn warns and keeps waiting for the real one', async () => {
+    const claw = makeMockClawClient({
+      pages: [
+        page([{ type: 'turn.completed', turn: 2 }], 2), // 基线（maxTurn=2）
+        page([{ type: 'turn.completed', turn: 2 }], 3), // 旧回放终态（新 eventId）
+        page([{ type: 'turn.completed', turn: 3 }], 4), // 真终态
+      ],
+    });
+    const { logs, manager } = makeManager(claw);
+    const { sessionId } = await manager.createSession('C:/work');
+    const updates = [];
+    const result = await manager.runPrompt(sessionId, 'hi', { onUpdate: (u) => updates.push(u) });
+    assert.deepEqual(result, { stopReason: 'end_turn' });
+    // 基线与回放的终态均不产生 update、不判定；只有真终态收尾
+    assert.deepEqual(updates, []);
+    assert.ok(logs.some((m) => m.includes('stale replay')), 'expected stale-replay warning log');
+  });
+});
+
+describe('cancel semantics (design §8)', () => {
+  it('cancel before turn.started returns cancelled immediately, interrupts exactly once, sends no updates', async () => {
+    const claw = makeMockClawClient({ defaultPage: { events: [], cursor: 0 } });
+    const { manager, sessionId } = await makeSession(claw);
+    const updates = [];
+    const promptPromise = manager.runPrompt(sessionId, 'long task', {
+      onUpdate: (u) => updates.push(u),
+    });
+    await new Promise((r) => setTimeout(r, 20)); // 进入轮询循环
+    manager.cancel(sessionId);
+    assert.deepEqual(await promptPromise, { stopReason: 'cancelled' });
+    assert.equal(claw.calls.interrupts.length, 1);
+    assert.equal(claw.calls.interrupts[0], 'claw-s1');
+    assert.deepEqual(updates, []);
+  });
+
+  it('late events after cancel are dropped: no updates, no further polls', async () => {
+    const claw = makeMockClawClient({ defaultPage: { events: [], cursor: 0 } });
+    const { manager, sessionId } = await makeSession(claw);
+    const updates = [];
+    const promptPromise = manager.runPrompt(sessionId, 'x', { onUpdate: (u) => updates.push(u) });
+    await new Promise((r) => setTimeout(r, 20));
+    manager.cancel(sessionId);
+    await promptPromise;
+    const pollsAtCancel = claw.calls.events.length;
+    // 迟到事件进入后续页——不再被消费（该代 prompt 已返回）
+    claw.state.pages.push(page([
+      { type: 'item.completed', item: { id: 'late', turn: 1, type: 'agent_message', text: 'late' } },
+    ], 5));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(claw.calls.events.length, pollsAtCancel);
+    assert.deepEqual(updates, []);
+    assert.equal(claw.calls.interrupts.length, 1);
+  });
+
+  it('ctx.signal ($/cancel_request) funnels into the same state machine: exactly one interrupt across both paths', async () => {
+    const claw = makeMockClawClient({ defaultPage: { events: [], cursor: 0 } });
+    const { manager, sessionId } = await makeSession(claw);
+    const controller = new AbortController();
+    const promptPromise = manager.runPrompt(sessionId, 'x', {
+      onUpdate: () => {},
+      signal: controller.signal,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    controller.abort(); // $/cancel_request 路径
+    manager.cancel(sessionId); // session/cancel 通知路径（双层汇流）
+    assert.deepEqual(await promptPromise, { stopReason: 'cancelled' });
+    assert.equal(claw.calls.interrupts.length, 1);
+  });
+
+  it('cancel with no active prompt is a logged no-op (no interrupt)', async () => {
+    const claw = makeMockClawClient();
+    const { manager, sessionId } = await makeSession(claw);
+    manager.cancel(sessionId);
+    manager.cancel('unknown');
+    assert.deepEqual(claw.calls.interrupts, []);
+  });
+
+  it('interrupt failure does not change the cancelled outcome', async () => {
+    const claw = makeMockClawClient({
+      defaultPage: { events: [], cursor: 0 },
+      interruptError: new ClawHttpError(404, { ok: false, code: 'runtime_not_found' }),
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    const promptPromise = manager.runPrompt(sessionId, 'x', { onUpdate: () => {} });
+    await new Promise((r) => setTimeout(r, 20));
+    manager.cancel(sessionId);
+    assert.deepEqual(await promptPromise, { stopReason: 'cancelled' });
+    await new Promise((r) => setTimeout(r, 10)); // 等 interrupt 的异步拒绝落到日志
+  });
+});
+
+describe('prompt timeout (design §6 / Q25)', () => {
+  it('times out with -32002 waitedMs and never interrupts', async () => {
+    const claw = makeMockClawClient({ defaultPage: { events: [], cursor: 0 } });
+    const { manager, sessionId } = await makeSession(claw, { promptTimeoutMs: 40 });
+    await assert.rejects(manager.runPrompt(sessionId, 'x', { onUpdate: () => {} }), (error) => {
+      assert.equal(error.code, ERROR_CODES.PROMPT_TIMEOUT);
+      assert.ok(error.data.waitedMs >= 40);
+      return true;
+    });
+    assert.deepEqual(claw.calls.interrupts, []);
+  });
+});
+
+describe('poll failure mapping', () => {
+  it('unreachable event poll → -32000', async () => {
+    const claw = makeMockClawClient();
+    const { manager, sessionId } = await makeSession(claw);
+    claw.state.eventsError = new ClawUnreachableError(new Error('fetch failed'));
+    await assert.rejects(manager.runPrompt(sessionId, 'x', { onUpdate: () => {} }), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
+      return true;
+    });
+  });
+
+  it('command delivery HTTP failure → -32003', async () => {
+    const claw = makeMockClawClient({
+      commandError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'nope' }),
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    await assert.rejects(manager.runPrompt(sessionId, 'x', { onUpdate: () => {} }), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
+      return true;
+    });
+  });
+});
+
+describe('dispose (design §5 / Q12)', () => {
+  it('clears the in-memory map only; no server calls', async () => {
+    const claw = makeMockClawClient();
+    const { manager } = makeManager(claw);
+    const { sessionId } = await manager.createSession('C:/work');
+    assert.equal(manager.size, 1);
+    const callsBefore = {
+      create: claw.calls.createSessions.length,
+      commands: claw.calls.commands.length,
+      events: claw.calls.events.length,
+      interrupts: claw.calls.interrupts.length,
+    };
+    manager.dispose();
+    assert.equal(manager.size, 0);
+    assert.equal(manager.getSession(sessionId), null);
+    assert.equal(claw.calls.createSessions.length, callsBefore.create);
+    assert.equal(claw.calls.commands.length, callsBefore.commands);
+    assert.equal(claw.calls.events.length, callsBefore.events);
+    assert.equal(claw.calls.interrupts.length, callsBefore.interrupts);
+  });
+});
+
+describe('claw-client request assembly (HTTP layer)', () => {
+  it('appendUserMessage assembles kind/source; createCoderSession sends agentId=coder', async () => {
+    const sent = [];
+    const claw = createClawClient({
+      baseUrl: 'http://127.0.0.1:1',
+      fetchImpl: async (url, init) => {
+        sent.push({ url: String(url), method: init?.method, body: init?.body ? JSON.parse(init.body) : null });
+        return new Response(JSON.stringify({ ok: true }), { status: 201, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    await claw.createCoderSession('C:/work');
+    await claw.appendUserMessage('thread-1', { text: 'hi', idempotencyKey: 'acp-x' });
+
+    assert.deepEqual(sent[0], {
+      url: 'http://127.0.0.1:1/protoclaw/acp/coder/sessions',
+      method: 'POST',
+      body: { agentId: 'coder', cwd: 'C:/work' },
+    });
+    assert.deepEqual(sent[1], {
+      url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/commands',
+      method: 'POST',
+      body: { kind: 'user_message', text: 'hi', source: 'acp', idempotencyKey: 'acp-x' },
+    });
+  });
+});
+
+describe('protocol.js request validation', () => {
+  it('validateNewSessionParams accepts minimal params and returns cwd', () => {
+    assert.deepEqual(validateNewSessionParams({ cwd: 'C:/work', mcpServers: [] }), { cwd: 'C:/work' });
+    assert.deepEqual(validateNewSessionParams({ cwd: 'C:/work' }), { cwd: 'C:/work' });
+  });
+
+  it('validateNewSessionParams rejects bad cwd / non-empty mcpServers / additionalDirectories', () => {
+    assert.throws(() => validateNewSessionParams({}), (e) => e.code === ERROR_CODES.INVALID_PARAMS && e.data.field === 'cwd');
+    assert.throws(() => validateNewSessionParams({ cwd: '' }), (e) => e.data.field === 'cwd');
+    assert.throws(
+      () => validateNewSessionParams({ cwd: 'C:/w', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
+      (e) => e.data.field === 'mcpServers',
+    );
+    assert.throws(
+      () => validateNewSessionParams({ cwd: 'C:/w', additionalDirectories: ['C:/other'] }),
+      (e) => e.data.field === 'additionalDirectories',
+    );
+  });
+
+  it('mergePromptText joins text blocks with blank lines and rejects non-text', () => {
+    assert.equal(mergePromptText([{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }]), 'a\n\nb');
+    assert.equal(mergePromptText([{ type: 'text', text: 'solo' }]), 'solo');
+    assert.throws(() => mergePromptText([{ type: 'image', data: 'x', mimeType: 'image/png' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
+    assert.throws(() => mergePromptText([{ type: 'resource_link', uri: 'x', name: 'y' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
+    assert.throws(() => mergePromptText([]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
+    assert.throws(() => mergePromptText([{ type: 'text' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
+  });
+});
