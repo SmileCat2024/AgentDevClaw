@@ -107,6 +107,11 @@ export class CoderAgent extends BasicAgent {
         ? systemConfig.contextGuard : {}),
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
+      // 线程宿主的 guard 是 thread-rotation（trim+summary 自动接力）的唯一触发器，
+      // 必须始终启用：全局 feature-setup 面板误关 contextGuard 时，coder 的线程
+      // 轮换会静默失效（会话顶着超阈值上下文继续跑且无人轮换）。阈值等参数仍可
+      // 由全局配置覆盖，只有 enabled 强制为 true。
+      enabled: true,
       agentId: runtimeIdentity.agentId,
       sessionId: runtimeIdentity.sessionId,
       serverOrigin: runtimeIdentity.serverOrigin,
