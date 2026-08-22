@@ -5136,35 +5136,65 @@ body[data-theme="light"] .plan-task.is-interrupt-target {
   color: var(--warning-color);
 }
 
+/* 按钮位于描述/元信息下方（原位置）、文档流内，不预留空白。
+   hover 时出现，卡片随之向下扩展（底部下移）。 */
 .plan-task-action {
   display: none;
+  align-items: center;
+  width: fit-content;
   margin-top: 6px;
-  padding: 0;
-  border: none;
-  background: none;
+  padding: 3px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.3;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: color 0.12s;
+  white-space: nowrap;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
 
 .plan-task-action:hover {
-  color: var(--code-accent);
+  background: rgba(255,255,255,0.09);
+  border-color: rgba(255,255,255,0.25);
+  color: var(--text-primary);
 }
 
 .plan-task.is-interrupt-target .plan-task-action {
-  display: inline-block;
+  display: inline-flex;
+  border-color: rgba(255,193,7,0.4);
+  background: rgba(255,193,7,0.08);
   color: var(--warning-color);
 }
 
 .plan-task.is-interrupt-target .plan-task-action:hover {
+  background: rgba(255,193,7,0.15);
   color: var(--warning-color);
-  opacity: 0.7;
 }
 
 .plan-task:not(.is-terminal):hover .plan-task-action {
-  display: inline-block;
+  display: inline-flex;
+}
+
+body[data-theme="light"] .plan-task-action {
+  background: #ffffff;
+  border-color: #d0d0d0;
+}
+
+body[data-theme="light"] .plan-task-action:hover {
+  background: #f0f0f0;
+  border-color: #b0b0b0;
+}
+
+body[data-theme="light"] .plan-task.is-interrupt-target .plan-task-action {
+  border-color: rgba(210, 153, 34, 0.45);
+  background: rgba(210, 153, 34, 0.08);
+  color: var(--warning-color);
+}
+
+body[data-theme="light"] .plan-task.is-interrupt-target .plan-task-action:hover {
+  background: rgba(210, 153, 34, 0.16);
 }
 
 .plan-empty {
