@@ -375,8 +375,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '</div>',
       '<div class="ph-project-bar-right">',
       modelSwitchHtml,
-      (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
       dirConfigBtn,
+      (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
       '</div>',
       '</div>',
     ].join('');

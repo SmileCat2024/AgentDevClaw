@@ -7864,6 +7864,11 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   justify-content: flex-end;
 }
 
+/* 长文本约束：标题列可收缩 + 长 token 换行，防止字段行向右溢出弹窗 */
+.fs-row .ph-mc-role { flex: 0 1 auto; min-width: 120px; }
+.fs-row .ph-mc-role-name,
+.fs-row .ph-mc-role-desc { overflow-wrap: anywhere; word-break: break-word; }
+
 .fs-row-ctrl .fs-select,
 .fs-row-ctrl .fs-input,
 .fs-row-ctrl .fs-list { flex: 1; min-width: 0; }
@@ -7979,10 +7984,6 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
 /* List-type controls (directory / file-list) */
 .fs-row:has(.fs-list) {
   align-items: flex-start;
-}
-
-.fs-row-ctrl:has(.fs-list) {
-  width: 320px;
 }
 
 .fs-list {
