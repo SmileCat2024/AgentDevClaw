@@ -167,15 +167,24 @@ function renderPhModelConfigOverlay(agent, presets) {
       _phSettingsTab = 'model';
     } else {
       _closePhFeatureEditor();
+      // 返回一级页（head 左侧返回按钮）
+      window._phFeatureBack = () => {
+        _closePhFeatureEditor();
+        _phSettingsTab = 'model';
+        renderPhModelConfigOverlay(agent, presets);
+      };
       host.innerHTML = [
         '<div class="feature-detail-overlay">',
         '<div class="feature-detail-window ph-settings-window">',
         '<div class="feature-detail-head">',
+        '<div style="display:flex;align-items:center;gap:4px;">',
+        '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" onclick="window._phFeatureBack()" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
         '<div>',
         '<div class="feature-detail-title">' + escapeHtml(isZh ? '工作空间设置 · Feature' : 'Workspace Settings · Feature') + '</div>',
         '<div class="feature-detail-subtitle">' + escapeHtml(isZh
           ? '编程小助手整体的 Feature 配置，对所有项目目录生效'
           : 'Feature config for the whole Programming Helper workspace') + '</div>',
+        '</div>',
         '</div>',
         '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">&times;</button>',
         '</div>',
@@ -186,11 +195,6 @@ function renderPhModelConfigOverlay(agent, presets) {
       _phFeatureEditor = createFeatureConfigEditor({
         host: document.getElementById('ph-feature-config-host'),
         scopeId: 'agent',
-        onBack: () => {
-          _closePhFeatureEditor();
-          _phSettingsTab = 'model';
-          renderPhModelConfigOverlay(agent, presets);
-        },
       });
       _phFeatureEditor.open();
       return;

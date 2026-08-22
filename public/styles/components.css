@@ -5881,7 +5881,12 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ph-banner-btn.secondary:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.16); }
 
 /* ── PH Project Settings Panel (IDE-style) ── */
-.ph-settings-window { max-width: 1400px !important; min-height: 600px !important; height: 76vh !important; max-height: 76vh !important; }
+/* 尺寸对标用量信息卡片（usage-info-window：1040 × 820） */
+.ph-settings-window {
+  width: min(100%, 1040px) !important;
+  height: min(100%, 820px) !important;
+  max-height: min(100%, 820px) !important;
+}
 
 /* Feature 设置二级页：编辑器填满弹窗剩余空间 */
 .ph-settings-feature-wrap {
@@ -5897,7 +5902,9 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ph-settings-sidebar {
   width: 190px; flex-shrink: 0;
   border-right: 1px solid var(--border-color);
-  padding: 8px 0; overflow-y: auto;
+  padding: 8px 4px 8px 0; overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .ph-settings-tab {
   display: flex; align-items: center; gap: 10px;
@@ -5915,7 +5922,9 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .ph-settings-tab-icon { display: flex; flex-shrink: 0; }
 .ph-settings-tab.active .ph-settings-tab-icon { opacity: 1; }
 .ph-settings-content {
-  flex: 1; overflow-y: auto; padding: 0;
+  flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .ph-settings-content-header {
   font-size: 13px; font-weight: 600; color: var(--text-primary);
@@ -7796,89 +7805,7 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   border-color: rgba(88,166,255,0.4);
 }
 
-/* ── Feature Setup ────────────────────────────────────────── */
-
 /* ── Feature Setup: shared config editor (ph-settings 对齐) ── */
-
-/* workspace 壳：标题头 + 编辑器撑满主区域 */
-.fs-workspace-wrap {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-}
-
-/* Make parent containers pass height through, remove their own padding */
-.workspace-surface:has(.fs-workspace-wrap) {
-  height: 100%;
-  max-width: none;
-  overflow: hidden;
-  padding: 0;
-  gap: 0;
-  box-sizing: border-box;
-}
-
-.main-content:has(.fs-workspace-wrap),
-#chat-container:has(.fs-workspace-wrap) {
-  height: 100%;
-  overflow: hidden;
-}
-
-#chat-container:has(.fs-workspace-wrap) {
-  padding: 0;
-}
-
-.fs-workspace-head {
-  flex-shrink: 0;
-  padding: 20px 28px 16px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.fs-workspace-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.fs-workspace-subtitle {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 3px;
-}
-
-.fs-editor-mount {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-/* 二级页返回行（工作空间设置 → Feature 设置） */
-.fs-back-row {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  padding: 6px 12px 0;
-}
-
-/* 对齐 fw-back-btn 圆形图标按钮惯例 */
-.fs-back-btn {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  display: inline-grid;
-  place-items: center;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: 17px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.12s;
-}
-
-.fs-back-btn:hover { background: var(--hover-bg); }
 
 .fs-nav-loading {
   padding: 16px;
@@ -7931,8 +7858,9 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
-  width: 260px;
+  flex: 1;
+  min-width: 0;
+  max-width: 380px;
   justify-content: flex-end;
 }
 

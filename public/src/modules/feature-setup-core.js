@@ -140,6 +140,19 @@ function fsControlValue(state, prop) {
   return prop?.default;
 }
 
+/**
+ * 重置按钮显示条件（语义按层区分）：
+ *   - agent / 目录层：接管即显示（"恢复为上级配置"，值相同也存在锁定需解除）；
+ *   - 全局层："恢复默认值"；接管值已等于出厂默认时按钮无意义，不显示。
+ */
+function fsShowReset(scopeId, state, prop) {
+  if (!state || state.status !== 'takeover') return false;
+  if (scopeId === 'global') {
+    return JSON.stringify(state.layerValue) !== JSON.stringify(prop?.default);
+  }
+  return true;
+}
+
 // ── 即时保存（单字段写入）────────────────────────────────────
 
 /**

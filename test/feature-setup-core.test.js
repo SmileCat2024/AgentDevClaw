@@ -251,6 +251,28 @@ describe('feature-setup-core: fsControlValue', () => {
   });
 });
 
+// ── 重置按钮显示条件（语义按层区分）───────────────────────────
+
+describe('feature-setup-core: fsShowReset', () => {
+  const ctx = loadCore();
+
+  it('follow 态一律不显示', () => {
+    assert.equal(ctx.run(`fsShowReset('global', { status: 'follow' }, { default: 1 })`), false);
+    assert.equal(ctx.run(`fsShowReset('dir:/p', { status: 'follow' }, {})`), false);
+    assert.equal(ctx.run(`fsShowReset('agent', null, {})`), false);
+  });
+
+  it('全局层：接管值等于出厂默认时不显示（按钮无意义）', () => {
+    assert.equal(ctx.run(`fsShowReset('global', { status: 'takeover', layerValue: 5 }, { default: 5 })`), false);
+    assert.equal(ctx.run(`fsShowReset('global', { status: 'takeover', layerValue: ['a','b'] }, { default: ['b','a'] })`), true);
+  });
+
+  it('agent / 目录层：接管即显示（值相同也存在锁定需解除）', () => {
+    assert.equal(ctx.run(`fsShowReset('agent', { status: 'takeover', layerValue: 5 }, { default: 5 })`), true);
+    assert.equal(ctx.run(`fsShowReset('dir:/p', { status: 'takeover', layerValue: 5 }, {})`), true);
+  });
+});
+
 // ── 即时保存（单字段写入稀疏核心）─────────────────────────────
 
 describe('feature-setup-core: fsWithField', () => {

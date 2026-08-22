@@ -14,7 +14,7 @@
  *   - 所有改动即时保存（input 防抖 / change 立即），失败仅行内红边。
  *
  * 实例化使用（事件委托，多实例互不干扰）：
- *   const editor = createFeatureConfigEditor({ host, scopeId, onBack });
+ *   const editor = createFeatureConfigEditor({ host, scopeId });
  *   editor.open(); editor.close();
  */
 
@@ -35,7 +35,6 @@ function createFeatureConfigEditor(options = {}) {
     throw new Error('createFeatureConfigEditor: host element required');
   }
   const scopeId = String(options.scopeId || 'global');
-  const onBack = typeof options.onBack === 'function' ? options.onBack : null;
 
   const FS_SCOPE_AGENT_ID = 'programming-helper';
   const SAVE_DEBOUNCE_MS = 500;
@@ -140,11 +139,7 @@ function createFeatureConfigEditor(options = {}) {
   // ── 渲染（复用工作空间设置页 ph-settings 布局类）────────────
 
   function renderShell() {
-    const backRow = onBack
-      ? `<div class="fs-back-row"><button type="button" class="fs-back-btn" data-fce-action="back" title="${_fceT('返回', 'Back')}">&lt;</button></div>`
-      : '';
     host.innerHTML = `
-      ${backRow}
       <div class="ph-settings-layout fs-editor-body">
         <div class="ph-settings-sidebar" data-fce-nav><div class="fs-nav-loading">...</div></div>
         <div class="ph-settings-content" data-fce-main>
@@ -218,14 +213,19 @@ function createFeatureConfigEditor(options = {}) {
 
   // ── 字段行（ph-mc-row 套路：左标题列 + 右控件列）────────────
 
+  // 重置按钮语义按层区分：全局层=恢复默认值；agent/目录层=恢复为上级配置
   function resetBtnHtml(fullKey) {
-    return `<button type="button" class="fs-reset-btn" data-fce-action="reset" data-key="${escapeHtml(fullKey)}" title="${_fceT('重置为跟随', 'Reset to follow')}">&#8634;</button>`;
+    const title = scopeId === 'global'
+      ? _fceT('恢复默认值', 'Reset to default')
+      : _fceT('恢复为上级配置', 'Reset to upstream value');
+    return `<button type="button" class="fs-reset-btn" data-fce-action="reset" data-key="${escapeHtml(fullKey)}" title="${title}">&#8634;</button>`;
   }
 
   function renderRow(prop, fullKey, rowState, disabled) {
     const sw = prop.showWhen ? ` style="display:none;" data-showwhen='${JSON.stringify(prop.showWhen)}'` : '';
     const status = rowState?.status === 'takeover' ? 'takeover' : 'follow';
     const value = fsControlValue(rowState, prop);
+    const showReset = fsShowReset(scopeId, rowState, prop);
 
     return `
       <div class="ph-mc-row fs-row fs-state-${status}"${sw} data-prop-key="${escapeHtml(fullKey)}">
@@ -235,7 +235,7 @@ function createFeatureConfigEditor(options = {}) {
         </div>
         <div class="fs-row-ctrl">
           ${renderInput(fullKey, prop, value, disabled)}
-          ${status === 'takeover' ? resetBtnHtml(fullKey) : ''}
+          ${showReset ? resetBtnHtml(fullKey) : ''}
         </div>
       </div>
     `;
@@ -669,9 +669,6 @@ function createFeatureConfigEditor(options = {}) {
         break;
       case 'browse':
         browseDir(actionEl);
-        break;
-      case 'back':
-        if (onBack) onBack();
         break;
     }
   }
