@@ -12,7 +12,7 @@
  * 绑定的那一层（scopeId = 'global' | 'agent' | 'dir:<path>'），
  * 上游生效值与 merged 全部来自 resolved API，前端不自算合并。
  *
- * 从 feature-setup-ui.js 提取的无 DOM / 无全局状态依赖部分：
+ * 无 DOM / 无全局状态依赖部分（原 feature-setup-ui.js 内联实现提取而来）：
  *   - 点路径原语（fsGetPathValue / fsHasField / fsSetPath / fsDeletePath）
  *   - 两态分类（fsUpstreamInfo / fsClassifyField / fsFieldStates）
  *   - 控件取值（fsControlValue）

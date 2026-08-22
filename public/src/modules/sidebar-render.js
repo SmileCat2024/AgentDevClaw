@@ -142,7 +142,6 @@ const AGENT_ICONS = {
   'dispatch-console': 'dispatch-console.svg',
   'programming-helper': 'programming-helper.svg',
   'coder': 'programming-helper.svg',
-  'feature-setup': 'feature-setup.svg',
   'work-group': 'work-group.svg',
 };
 

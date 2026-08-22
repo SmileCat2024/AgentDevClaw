@@ -425,7 +425,6 @@ function renderHomeDashboard() {
         '</div>' +
         '<div class="hd-hero-actions">' +
           '<button class="primary" type="button" onclick="hdOpenSettings()">模型配置</button>' +
-          '<button type="button" onclick="hdNavigate(\'feature-setup\')">Runtime 配置</button>' +
         '</div>' +
       '</section>' +
 

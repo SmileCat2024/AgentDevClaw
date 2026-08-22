@@ -5891,14 +5891,6 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   min-height: 0;
   overflow: hidden;
 }
-
-/* 编辑器 host（返回行 + ph-settings-layout）在弹窗内撑满剩余空间 */
-.ph-settings-feature-wrap > * {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
 .ph-settings-layout {
   display: flex; flex: 1; min-height: 0; overflow: hidden;
 }
@@ -7864,22 +7856,29 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
 /* 二级页返回行（工作空间设置 → Feature 设置） */
 .fs-back-row {
   flex-shrink: 0;
-  padding: 6px 16px;
-  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  padding: 6px 12px 0;
 }
 
+/* 对齐 fw-back-btn 圆形图标按钮惯例 */
 .fs-back-btn {
-  background: transparent;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
   border: none;
-  color: var(--text-secondary);
-  font-size: 12px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1;
   cursor: pointer;
-  padding: 5px 10px;
-  border-radius: 6px;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.12s;
 }
 
-.fs-back-btn:hover { background: var(--hover-bg); color: var(--text-primary); }
+.fs-back-btn:hover { background: var(--hover-bg); }
 
 .fs-nav-loading {
   padding: 16px;

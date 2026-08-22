@@ -1185,7 +1185,6 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'workspace-artifacts') return renderWorkspaceArtifactsBlock(agent, block);
   if (block.type === 'project-docset') return renderProjectDocsetBlock(agent, block);
   if (block.type === 'config-editor') return isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : '';
-  if (block.type === 'system-feature-config') return isSystemFeatureConfigBlock(block) ? renderSystemFeatureConfigBlock(block) : '';
   if (block.type === 'flow-editor') return renderFlowEditorBlock(agent, block);
   if (block.type === 'work-group-chat') return renderWorkGroupChatBlock(agent, block);
   return '';
@@ -1400,10 +1399,7 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
     return;
   }
   const tabs = getUnitTabs(agent);
-  // 目录设置按钮（编程小助手且绑定了项目目录时提供；tabs<=1 也保留整条栏）
-  const dirConfigBtn = (typeof phDirConfigButtonHtml === 'function')
-    ? phDirConfigButtonHtml(agent) : '';
-  if (tabs.length <= 1 && !dirConfigBtn) {
+  if (tabs.length <= 1) {
     workspaceTabsBar.classList.add('hidden');
     workspaceTabsBar.innerHTML = '';
     return;
@@ -1422,7 +1418,7 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
     )) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (tab.id === 'chat' && !canOpenChat ? ' disabled' : '') + '>' +
     escapeHtml(getUnitTabLabel(tab)) +
     '</button>'
-  )).join('') + dirConfigBtn;
+  )).join('');
 }
 
 // --- chat-viewport functions extracted to modules/chat-viewport.js ---
@@ -1685,6 +1681,13 @@ document.getElementById('settings-flyout-config').addEventListener('click', () =
     closeSettings();
   } else {
     openSettings();
+  }
+});
+
+document.getElementById('settings-flyout-feature-config')?.addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof window.phOpenGlobalFeatureConfig === 'function') {
+    window.phOpenGlobalFeatureConfig();
   }
 });
 

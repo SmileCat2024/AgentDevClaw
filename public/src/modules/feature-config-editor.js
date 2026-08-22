@@ -141,7 +141,7 @@ function createFeatureConfigEditor(options = {}) {
 
   function renderShell() {
     const backRow = onBack
-      ? `<div class="fs-back-row"><button type="button" class="fs-back-btn" data-fce-action="back">&larr; ${_fceT('返回', 'Back')}</button></div>`
+      ? `<div class="fs-back-row"><button type="button" class="fs-back-btn" data-fce-action="back" title="${_fceT('返回', 'Back')}">&lt;</button></div>`
       : '';
     host.innerHTML = `
       ${backRow}

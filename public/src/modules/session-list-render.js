@@ -359,22 +359,27 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     '</div>',
   ].join('') : '';
 
-   const newChatAction = escapeHtml(JSON.stringify({
-     type: 'create_session',
-     openDirectory: currentProject?.openDirectory || '',
-   }));
+    const newChatAction = escapeHtml(JSON.stringify({
+      type: 'create_session',
+      openDirectory: currentProject?.openDirectory || '',
+    }));
 
-   const headerBar = [
-     '<div class="ph-project-bar">',
-     '<div class="ph-project-bar-left">',
-     dropdownHtml,
-     '</div>',
-     '<div class="ph-project-bar-right">',
-     modelSwitchHtml,
-     (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
-     '</div>',
-     '</div>',
-   ].join('');
+    // 目录设置按钮（共享配置编辑器，编辑当前目录的目录层）
+    const dirConfigBtn = (typeof phDirConfigButtonHtml === 'function')
+      ? phDirConfigButtonHtml(agent) : '';
+
+    const headerBar = [
+      '<div class="ph-project-bar">',
+      '<div class="ph-project-bar-left">',
+      dropdownHtml,
+      '</div>',
+      '<div class="ph-project-bar-right">',
+      modelSwitchHtml,
+      (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
+      dirConfigBtn,
+      '</div>',
+      '</div>',
+    ].join('');
 
   // No project state
   if (!currentProject) {
