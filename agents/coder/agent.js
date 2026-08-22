@@ -18,10 +18,14 @@
  *   UserInputFeature，外部投递经 viewer 邮箱由被动消费循环驱动）
  * - 会话落盘到 ~/.agentdev/AgentDevClaw/agents/coder/sessions/（独立，不共享）
  * - 模型 preset 来自本目录 metadata.json，可被 .agentdev/agent-configs/coder.json 覆盖
- * - runtime 配置仍读全局 ~/.agentdev/AgentDevClaw/feature-setup.json（与编程小助手一致）
+ * - 运行时配置走配置队列模型（tickets 00/04）：队列 = [全局层(feature-setup.json),
+ *   当前选中配置组]，经 @agentdev/core 的 resolveFeatureConfig 合并。配置组为
+ *   稀疏 FeatureConfig 文件（~/.agentdev/AgentDevClaw/workspaces/coder/
+ *   feature-config/groups/<name>.json），选中状态来自 CLI --config-group（临时，
+ *   经 run-plain-agent 传入）或 selected.json（持久）；两者皆无时仅全局层。
  */
 
-import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature } from '@agentdev/core';
+import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdev/core';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../features/force-continuation/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
@@ -32,7 +36,7 @@ import { ImageReaderFeature } from '@agentdev/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { ContextGuardFeature } from '../../local-features/dist/context-guard/src/index.js';
 import { GitHubFeature } from '../../local-features/dist/github/src/index.js';
 
@@ -44,6 +48,10 @@ const EXPLORE_PROMPT_PATH = join(PROMPTS_DIR, 'explore.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
 const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
+// 配置组目录（ticket 04）：组名即文件名（<name>.json），每组一个稀疏 FeatureConfig
+const FEATURE_CONFIG_DIR = join(
+  os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'coder', 'feature-config',
+);
 
 // Audio feedback is presentation-only. Awaiting the OS media process inside
 // the CallFinish hook delays AgentDev's authoritative call.finish event and
@@ -74,6 +82,81 @@ function readSystemFeatureConfig() {
   }
 }
 
+// ── 配置组层（ticket 04：coder N 组配置可切换）────────────────────
+
+/**
+ * 列出可用配置组（组名 = groups/<name>.json 的文件名去扩展名）。
+ * 目录不存在 = 尚无任何配置组（正常态）。
+ * featureConfigDir 仅测试用，默认为标准用户态目录。
+ */
+export function listConfigGroups(featureConfigDir = FEATURE_CONFIG_DIR) {
+  const groupsDir = join(featureConfigDir, 'groups');
+  if (!existsSync(groupsDir)) return [];
+  try {
+    return readdirSync(groupsDir)
+      .filter((entry) => entry.endsWith('.json'))
+      .map((entry) => entry.slice(0, -'.json'.length))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 解析当前生效的配置组名。优先级：
+ *   CLI 显式参数（options.configGroup，临时覆盖）> selected.json 持久状态 > 无组。
+ * 组名不存在时抛错（不静默回退，避免掩盖拼写错误）。
+ * featureConfigDir 仅测试用，默认为标准用户态目录。
+ */
+export function resolveSelectedConfigGroup(options = {}, featureConfigDir = FEATURE_CONFIG_DIR) {
+  const cliGroup = typeof options.configGroup === 'string' ? options.configGroup.trim() : '';
+  let selectedGroup = cliGroup;
+  const selectedPath = join(featureConfigDir, 'selected.json');
+  if (!selectedGroup && existsSync(selectedPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(selectedPath, 'utf8'));
+      if (typeof parsed?.group === 'string') selectedGroup = parsed.group.trim();
+    } catch {
+      // selected.json 损坏视为未选择（无组层），与文件不存在一致
+    }
+  }
+  if (!selectedGroup) return null;
+  if (!listConfigGroups(featureConfigDir).includes(selectedGroup)) {
+    throw new Error(
+      `配置组不存在: "${selectedGroup}"。可用组: ${
+        listConfigGroups(featureConfigDir).join(', ') || '(无 — 请先在 feature-config/groups/ 下创建 <name>.json)'
+      }`,
+    );
+  }
+  return selectedGroup;
+}
+
+/** 读取指定配置组的稀疏 FeatureConfig 层。 */
+function readGroupLayer(groupName, featureConfigDir = FEATURE_CONFIG_DIR) {
+  const groupPath = join(featureConfigDir, 'groups', `${groupName}.json`);
+  try {
+    const parsed = JSON.parse(readFileSync(groupPath, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    throw new Error(`读取配置组 "${groupName}" 失败 (${groupPath}): ${error?.message || error}`, { cause: error });
+  }
+}
+
+/**
+ * 组装配置队列并合并：[全局层(feature-setup.json), 当前选中配置组]。
+ * 未选中任何组时队列只有全局层（单元素，合法）。
+ * 队列在构造函数内组装，禁止进程级缓存。
+ */
+function resolveCoderFeatureConfig(options = {}) {
+  const queue = [readSystemFeatureConfig()];
+  const selectedGroup = resolveSelectedConfigGroup(options);
+  if (selectedGroup) queue.push(readGroupLayer(selectedGroup));
+  const { merged, warnings } = resolveFeatureConfig(queue);
+  for (const warning of warnings) {
+    console.warn(`[CoderAgent] 配置合并警告(${warning.fieldPath}, 第 ${warning.layerIndex} 层): ${warning.message}`);
+  }
+  return { merged, selectedGroup };
+}
 /**
  * Coder Agent — 编程小助手能力的独立快照
  */
@@ -82,7 +165,9 @@ export class CoderAgent extends BasicAgent {
     const workspaceDir = config.workspaceDir || process.cwd();
     const runtime = config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
     const isExploration = runtime.sessionType === 'exploration' || process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
-    const systemConfig = readSystemFeatureConfig();
+    // 配置队列（ticket 04）：[全局层, 当前选中配置组]，configGroup 来自 CLI
+    // --config-group 经 run-plain-agent 传入（临时覆盖）；无参时读 selected.json。
+    const { merged: systemConfig } = resolveCoderFeatureConfig({ configGroup: config.configGroup });
 
     // BasicAgent 已纯基类化（a5fe117 / ticket 009），不再内置装配任何 feature，
     // MCP/Skill/SubAgent 等装配权在宿主。本 agent 刻意排除 MCP（mcp_* 工具会占据

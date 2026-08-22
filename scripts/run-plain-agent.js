@@ -11,7 +11,7 @@
  *
  * 用法:
  *   node scripts/run-plain-agent.js <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless]
- *                                          [--format result|text|json|quiet|jsonl] [--keep-alive]
+ *                                          [--config-group <name>] [--format result|text|json|quiet|jsonl] [--keep-alive]
  *
  * 输出约定：
  * - 过程日志一律走 stderr；stdout 只承载结果数据，可安全管道化
@@ -67,12 +67,13 @@ function sanitizeFragment(value) {
 const OUTPUT_FORMATS = ['result', 'text', 'json', 'quiet', 'jsonl'];
 
 function parseArgs(argv) {
-  const parsed = { agentName: null, goal: null, session: null, cwd: null, headless: false, debug: false, format: 'result', keepAlive: false };
+  const parsed = { agentName: null, goal: null, session: null, cwd: null, configGroup: null, headless: false, debug: false, format: 'result', keepAlive: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--goal' && argv[i + 1] !== undefined) { parsed.goal = argv[i + 1]; i++; }
     else if (arg === '--session' && argv[i + 1] !== undefined) { parsed.session = argv[i + 1]; i++; }
     else if (arg === '--cwd' && argv[i + 1] !== undefined) { parsed.cwd = argv[i + 1]; i++; }
+    else if (arg === '--config-group' && argv[i + 1] !== undefined) { parsed.configGroup = argv[i + 1]; i++; }
     else if (arg === '--format' && argv[i + 1] !== undefined) { parsed.format = argv[i + 1]; i++; }
     else if (arg === '--headless') { parsed.headless = true; }
     else if (arg === '--debug') { parsed.debug = true; }
@@ -302,6 +303,9 @@ async function main() {
     projectRoot: definition.agentDir,
     workspaceDir: workspaceCwd,
     llm: resolved.llm,
+    // 配置组临时覆盖（ticket 04）：--config-group <name>，仅本次运行生效；
+    // 不支持的 agent 忽略该字段（构造函数只读取自己认识的 config 键）。
+    ...(args.configGroup ? { configGroup: args.configGroup } : {}),
     features: runtimePlan ? Object.fromEntries(runtimePlan.features.map((feature) => [feature.runtimeName || feature.package, feature.config || {}])) : undefined,
     runtime: {
       agentId: definition.id,

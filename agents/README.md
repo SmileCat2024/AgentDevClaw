@@ -45,6 +45,10 @@ claw run coder --goal "..." --headless
 # 指定工作目录 / 续接会话
 claw run coder --goal "..." --cwd D:/code/some-project --session <sessionId>
 
+# 配置组（ticket 04）：临时覆盖当前选中的 feature 配置组，仅本次运行生效
+claw run coder --goal "..." --config-group no-memory
+claw config-groups coder    # 只读列出可用配置组与持久选中项
+
 # 输出格式（默认 result）
 claw run coder --goal "..." --format text    # 分隔线 + 响应全文 + 会话摘要（人类可读）
 claw run coder --goal "..." --format json    # pretty-print 全量结果 JSON
@@ -205,6 +209,20 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
   index.json          # 会话索引（与 server 侧格式对齐）
   <sessionId>.json    # 会话文件
 ```
+
+## 配置组（coder，ticket 04）
+
+coder 的运行时配置走配置队列模型（[tickets 00](../docs/tickets/00-feature-config-queue-overview.md) /
+[04](../docs/tickets/04-coder-config-groups.md)）：队列 = `[全局层, 当前选中配置组]`，
+经 `@agentdev/core` 的 `resolveFeatureConfig` 按序 deep merge。
+
+- **全局层**：`~/.agentdev/AgentDevClaw/feature-setup.json`
+- **配置组**：`~/.agentdev/AgentDevClaw/workspaces/coder/feature-config/groups/<name>.json`，
+  组名即文件名，每组一个稀疏 FeatureConfig（顶层按 featureName 分桶，只写显式覆盖字段）
+- **选中状态优先级**：CLI `--config-group <name>`（临时覆盖）>
+  `feature-config/selected.json` 的 `{"group": "<name>"}`（持久）> 无组层
+- 组名不存在时报错退出（不静默回退）；无组 / 无 selected.json 时行为与仅全局层一致
+- 列出可用组：`claw config-groups coder`（只读；增删改靠直接管理文件）
 
 ## 与 prebuilt agent 的区别
 

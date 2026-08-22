@@ -12,9 +12,10 @@ import { spawn } from 'child_process';
 import { setTimeout as sleep } from 'timers/promises';
 import { join, resolve } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
-import { fileURLToPath } from 'url';
+import os from 'os';
 import process from 'process';
 
+import { fileURLToPath } from 'url';
 import {
   loadProviders, listProviders, getProvider, getDefaultWorkspaceId,
   dispatch, cleanText, truncate, formatDate,
@@ -32,6 +33,14 @@ const PROJECT_ROOT = resolve(__dirname, '..');
 const PLAIN_AGENT_RUNNER = join(PROJECT_ROOT, 'scripts', 'run-plain-agent.js');
 const CODER_ACP_RUNNER = join(PROJECT_ROOT, 'scripts', 'run-coder-acp.js');
 const PLAIN_AGENTS_ROOT = join(PROJECT_ROOT, 'agents');
+
+function sanitizeFragment(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'default';
+}
 
 function handleAcp(args = []) {
   const [agentName] = args;
@@ -93,14 +102,14 @@ async function listPlainAgents() {
 function handleRun(args) {
   const agentName = args.find(a => !a.startsWith('-'));
   if (!agentName) {
-    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
+    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--config-group <name>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
     process.exit(1);
   }
 
   const hasGoal = args.includes('--goal');
   if (!hasGoal) {
     console.error('缺少 --goal 参数');
-    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
+    console.error('用法: claw run <agent-name> --goal "..." [--session <id>] [--cwd <dir>] [--config-group <name>] [--headless] [--debug] [--format result|text|json|quiet|jsonl] [--keep-alive]');
     process.exit(1);
   }
 
@@ -159,6 +168,36 @@ async function handleAgents(args = []) {
     if (a.projectDir) console.log(`    project: ${a.projectDir}`);
     console.log(`    usage: claw run ${a.id} --goal "..."`);
     console.log('');
+  }
+}
+
+// ── Config groups (ticket 04: read-only listing) ────────────────
+
+// 配置组目录约定（ticket 00/04）：~/.agentdev/AgentDevClaw/workspaces/<agentId>/feature-config/groups/<name>.json
+// 组名即文件名（去扩展名）；每组一个稀疏 FeatureConfig。管理靠文件，这里只读。
+async function handleConfigGroups(args = []) {
+  const agentId = args.find(a => !a.startsWith('-'));
+  if (!agentId) throw new Error('用法: claw config-groups <agent-id>');
+  const groupsDir = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', sanitizeFragment(agentId), 'feature-config', 'groups');
+  const groups = existsSync(groupsDir)
+    ? readdirSync(groupsDir).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -5)).sort()
+    : [];
+  let selected = null;
+  const selectedPath = join(groupsDir, '..', 'selected.json');
+  if (existsSync(selectedPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(selectedPath, 'utf8'));
+      if (typeof parsed?.group === 'string') selected = parsed.group;
+    } catch {
+      // 损坏的 selected.json 不影响只读列表展示，视为未选中
+    }
+  }
+  console.log(`Config groups for ${agentId} (${groups.length}):`);
+  for (const group of groups) {
+    console.log(`  ${group}${group === selected ? '  (selected)' : ''}`);
+  }
+  if (groups.length === 0) {
+    console.log(`  (无 — 在 ${groupsDir}/ 下创建 <name>.json 即可新增配置组)`);
   }
 }
 
@@ -456,6 +495,11 @@ async function main() {
     return;
   }
 
+  if (command === 'config-groups') {
+    await handleConfigGroups(args.slice(1));
+    return;
+  }
+
   if (command === 'threads') {
     await handleThreads(args.slice(1));
     return;
@@ -488,6 +532,7 @@ function printHelp() {
   console.log('  claw ws <id> [command] [args]          Workspace operation');
   console.log('  claw ws <id> help                      Workspace operations list');
   console.log('  claw agents                            List plain agents (workspace-free)');
+  console.log('  claw config-groups <agent-id>          List feature config groups of an agent (ticket 04, read-only)');
   console.log('  claw agents register <project-dir>     Register a metadata-based standalone Agent');
   console.log('  claw agents unregister <agent-id>      Remove a registered Agent');
   console.log('  claw agents inspect <agent-id>         Show Agent source and project metadata');

@@ -5,7 +5,7 @@
  * 基于 ProtoClaw 当前内置的 npm agentdev 兼容层运行
  */
 
-import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature, SkillFeature } from '@agentdev/core';
+import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdev/core';
 import { MCPFeature } from '@agentdev/mcp';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
@@ -24,6 +24,10 @@ import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin
 import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
+import {
+  readGlobalLayer,
+  readDirLayer,
+} from '../../../server/shared/feature-config-layers.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -34,7 +38,6 @@ const EXPLORE_PROMPT_PATH = join(PROMPTS_DIR, 'explore.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'programming-helper', 'state.json');
 const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
-const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
 const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
 // Audio feedback is presentation-only. Awaiting the OS media process inside
@@ -51,23 +54,6 @@ class NonBlockingAudioFeedbackFeature extends AudioFeedbackFeature {
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function readSystemFeatureConfig() {
-  if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
-  try {
-    const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    const config = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
-    // Backward compat: migrate top-level runtimes into lsp.runtimes
-    if (config.runtimes && typeof config.runtimes === 'object') {
-      config.lsp = { ...(config.lsp || {}), runtimes: config.runtimes };
-      delete config.runtimes;
-    }
-    return config;
-  } catch {
-    return {};
-  }
 }
 
 function readProgrammingWorkspaceState() {
@@ -92,7 +78,16 @@ export class ProgrammingHelperAgent extends BasicAgent {
     const workspaceDir = config.workspaceDir || process.cwd();
     const runtime = config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
     const isExploration = runtime.sessionType === 'exploration' || process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
-    const systemConfig = readSystemFeatureConfig();
+
+    // 配置队列（ticket 00/03）：[全局层, 目录层(构造时 cwd), 会话注入]。
+    // 队列在构造函数内组装——同进程多 session 可能对应不同 cwd，禁止进程级缓存；
+    // exploration 子代理走同一构造路径，行为一致。会话注入（featureOverrides）不落盘。
+    const queue = [
+      readGlobalLayer(),
+      readDirLayer(workspaceDir),
+      runtime.config && typeof runtime.config === 'object' ? (runtime.config.featureOverrides || {}) : {},
+    ];
+    const { merged } = resolveFeatureConfig(queue);
 
     const excludeMcpServers = Array.from(new Set([
       ...(config.excludeMcpServers ?? []),
@@ -101,10 +96,7 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
     super({
       ...config,
-      features: {
-        ...(config.features || {}),
-        ...systemConfig,
-      },
+      features: merged,
     });
 
     this._isExploration = isExploration;
@@ -119,8 +111,8 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
     // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
     // feature-setup.json 中的 skill 配置（scanAgentdevDir/scanClaudeDir/extraDirs 等）会覆盖默认值。
-    const skillInput = systemConfig.skill && typeof systemConfig.skill === 'object' ? systemConfig.skill : undefined;
-    this.use(new SkillFeature(skillInput));
+    const skillConfig = merged.skill && typeof merged.skill === 'object' ? merged.skill : undefined;
+    this.use(new SkillFeature(skillConfig));
 
     // 替换原 BasicAgent 默认挂载的 OpencodeBasicFeature 为带 Claw continuity 声明的包装版。
     // OpencodeBasicFeature 尚未 onInitiate，也未注册工具/钩子/注入器（其工具注册发生在首次
@@ -137,8 +129,8 @@ export class ProgrammingHelperAgent extends BasicAgent {
     this.use(new ClawDispatchFeature(runtimeIdentity));
     this.use(new GroupChatBridgeFeature(runtimeIdentity));
     this.contextGuard = new ContextGuardFeature({
-      ...(systemConfig.contextGuard && typeof systemConfig.contextGuard === 'object'
-        ? systemConfig.contextGuard : {}),
+      ...(merged.contextGuard && typeof merged.contextGuard === 'object'
+        ? merged.contextGuard : {}),
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
       agentId: runtimeIdentity.agentId,
@@ -165,8 +157,8 @@ export class ProgrammingHelperAgent extends BasicAgent {
         reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
       }));
       this.use(new ForceContinuation({
-        ...(systemConfig['force-continuation'] && typeof systemConfig['force-continuation'] === 'object'
-          ? systemConfig['force-continuation'] : {}),
+        ...(merged['force-continuation'] && typeof merged['force-continuation'] === 'object'
+          ? merged['force-continuation'] : {}),
         ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
           ? config.features['force-continuation'] : {}),
       }));
