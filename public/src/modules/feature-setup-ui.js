@@ -15,6 +15,9 @@
  *   "清除本层覆盖（继承）" / "保留锁定（pin）"
  * - warnings 透出：面板顶部提示条
  *
+ * 三态分类 / dirty 叠加 / 保存 payload / 值同判定等纯逻辑提取在
+ * feature-setup-core.js（先于本文件加载，测试见 test/feature-setup-core.test.js）。
+ *
  * 导出: isSystemFeatureConfigBlock, renderSystemFeatureConfigBlock
  */
 
@@ -128,29 +131,8 @@ function _fsCollectDirs() {
   return [...dirs.values()].sort((a, b) => a.localeCompare(b));
 }
 
-function _fsBaseName(dir) {
-  const parts = String(dir || '').split(/[\\/]+/).filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : String(dir || '');
-}
-
 function _fsBuildScopes(resolved) {
-  const scopes = [{ id: 'global', label: _fsT('全局', 'Global') }];
-  const dirs = _fsCollectDirs();
-  // resolved 里出现的目录层（可能来自层文件而 agent 记录里暂无）也纳入
-  for (const layer of (Array.isArray(resolved?.layers) ? resolved.layers : [])) {
-    if (typeof layer?.id === 'string' && layer.id.startsWith('dir:')) {
-      const dir = layer.id.slice(4);
-      if (!dirs.some((d) => d.toLowerCase() === dir.toLowerCase())) dirs.push(dir);
-    }
-  }
-  for (const dir of dirs) {
-    scopes.push({
-      id: `dir:${dir}`,
-      label: `${_fsT('目录', 'Directory')} · ${_fsBaseName(dir)}`,
-      dir,
-    });
-  }
-  return scopes;
+  return fsBuildScopes(resolved, _fsCollectDirs(), _fsT);
 }
 
 // ── Scope switch ─────────────────────────────────────────────
@@ -252,111 +234,22 @@ function _renderNav(sections) {
 }
 
 // ── Three-state classification（判定数据全部来自 resolved，前端不自算合并）──
+// 纯逻辑在 feature-setup-core.js（fsClassifyField / fsFieldStates / fsApplyDirty）。
 
-function _fsGetPathValue(obj, segs) {
-  let cur = obj;
-  for (const seg of segs) {
-    if (!cur || typeof cur !== 'object' || !(seg in cur)) return undefined;
-    cur = cur[seg];
-  }
-  return cur;
-}
-
-function _fsHasField(obj, segs) {
-  let cur = obj;
-  for (let i = 0; i < segs.length - 1; i++) {
-    if (!cur || typeof cur !== 'object' || !(segs[i] in cur)) return false;
-    cur = cur[segs[i]];
-  }
-  return !!cur && typeof cur === 'object' && (segs[segs.length - 1] in cur);
-}
-
-/** 上游信息：早于本层、最后包含该字段的层；都没有则是出厂默认（manifest default，虚拟第 0 层）。 */
-function _fsUpstreamInfo(fullKey, layerIndex, layers) {
-  for (let i = layerIndex - 1; i >= 0; i--) {
-    const segs = fullKey.split('.');
-    if (_fsHasField(layers[i]?.sparse, segs)) {
-      return {
-        kind: 'layer',
-        value: _fsGetPathValue(layers[i].sparse, segs),
-        label: layers[i].label || `#${i + 1}`,
-        layerId: layers[i].id,
-      };
-    }
-  }
-  return { kind: 'default', value: undefined, label: null, layerId: null };
-}
-
-/** 基于层稀疏内容的三态分类（不含本次会话的 dirty 修正）。 */
-function _fsClassifyField(fullKey, layerIndex, layers) {
-  const local = layers[layerIndex];
-  if (!local) return { status: 'default' };
-  const segs = fullKey.split('.');
-  const inLocal = _fsHasField(local.sparse, segs);
-  const upstream = _fsUpstreamInfo(fullKey, layerIndex, layers);
-  if (inLocal) {
-    return { status: 'override', layerValue: _fsGetPathValue(local.sparse, segs), upstream };
-  }
-  if (upstream.kind === 'layer') {
-    return { status: 'inherit', upstream };
-  }
-  return { status: 'default' };
+function _fsLayers() {
+  const layers = window._featureSetupData.resolved?.layers;
+  return Array.isArray(layers) ? layers : [];
 }
 
 /** 全部 manifest 字段的三态表（不含 dirty）。 */
 function _fsFieldStates() {
   const st = window._featureSetupData;
-  const layers = Array.isArray(st.resolved?.layers) ? st.resolved.layers : [];
-  const idx = layers.findIndex((l) => l.id === st.activeScopeId);
-  const map = new Map();
-  if (idx < 0) return map;
-  for (const sec of st.sections) {
-    const props = sec.props || {};
-    for (const key of sec.propKeys) {
-      const prop = props[key];
-      if (!prop) continue;
-      if (prop.type === 'group') {
-        for (const sk of Object.keys(prop.properties || {})) {
-          const fullKey = `${sec.featureName}.${key}.${sk}`;
-          map.set(fullKey, _fsClassifyField(fullKey, idx, layers));
-        }
-      } else {
-        const fullKey = `${sec.featureName}.${key}`;
-        map.set(fullKey, _fsClassifyField(fullKey, idx, layers));
-      }
-    }
-  }
-  return map;
+  return fsFieldStates(st.sections, _fsLayers(), st.activeScopeId);
 }
 
 /** 叠加本次会话 dirty 后的渲染用三态表。 */
 function _fsEffectiveStates() {
-  const st = window._featureSetupData;
-  const base = _fsFieldStates();
-  for (const [fullKey, entry] of st.dirty) {
-    const cur = base.get(fullKey);
-    if (!cur) continue;
-    if (entry.value === null) {
-      // 本会话已重置 → 按继承/出厂默认显示
-      base.set(fullKey, cur.upstream?.kind === 'layer'
-        ? { status: 'inherit', upstream: cur.upstream }
-        : { status: 'default' });
-    } else {
-      base.set(fullKey, { ...cur, status: 'override', pendingValue: entry.value });
-    }
-  }
-  return base;
-}
-
-/** 控件初值：覆盖→本层（或待保存）值；继承→上游生效值；出厂默认→manifest default。 */
-function _fsControlValue(state, prop) {
-  if (state?.status === 'override') {
-    return state.pendingValue !== undefined ? state.pendingValue : state.layerValue;
-  }
-  if (state?.status === 'inherit') {
-    return state.upstream?.value;
-  }
-  return prop?.default;
+  return fsApplyDirty(_fsFieldStates(), window._featureSetupData.dirty);
 }
 
 // ── Select section → render right panel ──────────────────────
@@ -466,7 +359,7 @@ function _fsDisplayValue(v) {
 function _renderRow(prop, fullKey, state, disabled) {
   const sw = prop.showWhen ? ` style="display:none;" data-showwhen='${JSON.stringify(prop.showWhen)}'` : '';
   const status = state?.status || 'default';
-  const value = _fsControlValue(state, prop);
+  const value = fsControlValue(state, prop);
 
   let noteHtml;
   if (status === 'inherit') {
@@ -662,73 +555,12 @@ window._fsResetField = function (fullKey) {
 };
 
 // ── Save = diff only（D9）：套用 dirty 到原始 sparse 后整层提交 ──
-
-function _fsSetPath(obj, segs, value) {
-  let cur = obj;
-  for (let i = 0; i < segs.length - 1; i++) {
-    if (cur[segs[i]] == null || typeof cur[segs[i]] !== 'object') cur[segs[i]] = {};
-    cur = cur[segs[i]];
-  }
-  cur[segs[segs.length - 1]] = value;
-}
-
-function _fsDeletePath(obj, segs) {
-  const del = (cur, i) => {
-    if (!cur || typeof cur !== 'object') return;
-    const seg = segs[i];
-    if (i === segs.length - 1) {
-      delete cur[seg];
-      return;
-    }
-    if (!(seg in cur)) return;
-    del(cur[seg], i + 1);
-    if (Object.keys(cur[seg]).length === 0) delete cur[seg];
-  };
-  del(obj, 0);
-}
+// payload 构造在 feature-setup-core.js（fsBuildLayerContent / fsValuesEqual）。
 
 /** 该层稀疏内容 = 原始 sparse 为底，仅套用本次会话碰过的字段。 */
 function _fsBuildLayerContent() {
   const st = window._featureSetupData;
-  const layers = Array.isArray(st.resolved?.layers) ? st.resolved.layers : [];
-  const idx = layers.findIndex((l) => l.id === st.activeScopeId);
-  if (idx < 0) return null;
-  const content = JSON.parse(JSON.stringify(layers[idx].sparse || {}));
-  for (const [fullKey, entry] of st.dirty) {
-    const segs = fullKey.split('.');
-    if (entry.value === null) {
-      _fsDeletePath(content, segs);
-    } else {
-      _fsSetPath(content, segs, entry.value);
-    }
-  }
-  return content;
-}
-
-function _fsNormVal(v) {
-  if (Array.isArray(v)) {
-    return v.map((x) => String(x ?? '').trim()).filter(Boolean).sort().join('\u0001');
-  }
-  if (typeof v === 'boolean') return v ? 'true' : 'false';
-  return String(v ?? '').trim();
-}
-
-function _fsValuesEqual(a, b) {
-  return _fsNormVal(a) === _fsNormVal(b);
-}
-
-function _fsPropFor(fullKey) {
-  const segs = String(fullKey || '').split('.');
-  if (segs.length < 2) return null;
-  for (const sec of window._featureSetupData.sections) {
-    if (sec.featureName !== segs[0]) continue;
-    const prop = sec.props?.[segs[1]];
-    if (!prop) continue;
-    if (segs.length === 2) return prop.type === 'group' ? null : prop;
-    if (prop.type === 'group') return prop.properties?.[segs[2]] || null;
-    return null;
-  }
-  return null;
+  return fsBuildLayerContent(_fsLayers(), st.activeScopeId, st.dirty);
 }
 
 window._fsSave = async function () {
@@ -745,7 +577,7 @@ window._fsSave = async function () {
     if (entry.value === null) continue; // 重置无需检测
     const state = baseStates.get(fullKey);
     if (!state) continue;
-    const prop = _fsPropFor(fullKey);
+    const prop = fsPropFor(st.sections, fullKey);
     let upstreamVal;
     let upstreamLabel;
     if (state.upstream?.kind === 'layer') {
@@ -755,7 +587,7 @@ window._fsSave = async function () {
       upstreamVal = prop ? prop.default : undefined;
       upstreamLabel = _fsT('出厂默认', 'factory default');
     }
-    if (_fsValuesEqual(entry.value, upstreamVal)) {
+    if (fsValuesEqual(entry.value, upstreamVal)) {
       sameKeys.push({ fullKey, upstreamLabel, upstreamVal });
     }
   }
