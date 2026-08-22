@@ -834,10 +834,6 @@ app.get(/^\/(chunk-|BasicAgent-|ExplorerAgent-|notification-|resolver-|types-|in
   proxyToViewer(req, res).catch(next);
 });
 
-app.put('/api/agents/current', (req, res, next) => {
-  proxyToViewer(req, res).catch(next);
-});
-
 app.post('/api/agents/:agentId/input', (req, res, next) => {
   proxyToViewer(req, res).catch(next);
 });

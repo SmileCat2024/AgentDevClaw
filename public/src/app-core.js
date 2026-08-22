@@ -2,9 +2,15 @@
 let FEATURE_TEMPLATE_MAP = {};
 
 // 加载 Feature 模板映射
+// 模板映射按 runtime agent 区分（多 projectRoot 场景下同名模板指向不同文件），
+// 服务端要求显式 agentId；尚无焦点 runtime 时跳过，待焦点确立后由
+// agent-data-loader.js / 轮询重试触发。
 async function loadFeatureTemplateMap() {
+  if (!currentRuntimeAgentId) {
+    return false;
+  }
   try {
-    const response = await fetch('/api/templates/feature');
+    const response = await fetch('/api/templates/feature?agentId=' + encodeURIComponent(currentRuntimeAgentId));
     if (!response.ok) {
       return false;
     }

@@ -307,7 +307,7 @@ async function loadAgents() {
       invoke('get_connected_agents'),
       fetch('/api/agents'),
     ]);
-    const data = res.ok ? await res.json().catch(() => ({ agents: [], currentAgentId: null })) : { agents: [], currentAgentId: null };
+    const data = res.ok ? await res.json().catch(() => ({ agents: [] })) : { agents: [] };
     if (sidebarSnapshotToken && typeof isSidebarSnapshotTokenCurrent === 'function' && !isSidebarSnapshotTokenCurrent(sidebarSnapshotToken)) {
       window.setTimeout(() => loadAgents().catch(e => console.warn(e)), 25);
       return { stale: true };
@@ -426,18 +426,31 @@ async function loadAgents() {
         selectWorkspaceSurface(homeAgent.id, { skipFeaturePanel: true });
         return;
       }
-      if (data.currentAgentId) {
-        const runtimeCurrent = allAgents.find((agent) => (
-          agent.connected !== false
-          && (
-            agent.id === data.currentAgentId
-            || normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId) === normalizeAgentIdentity(data.currentAgentId)
-          )
-        )) || null;
-        if (runtimeCurrent) {
-          currentAgentId = runtimeCurrent.parent_id || runtimeCurrent.id;
-          await loadAgentData(getAgentRuntimeId(runtimeCurrent));
-          
+      if (!currentAgentId) {
+        // 焦点恢复（前端自持，服务端 current agent 语义已移除）：
+        // 1. 有待处理输入请求的 agent 优先；2. localStorage 记忆的上次焦点；
+        // 3. 兜底选中列表第一个已连接 agent。
+        const isConnected = (agent) => agent.connected !== false;
+        const hasPendingInput = (agent) =>
+          (agent.pending_input_count ?? agent.pendingInputCount ?? 0) > 0;
+        const pendingAgent = allAgents.find((agent) => isConnected(agent) && hasPendingInput(agent));
+        let rememberedId = null;
+        try { rememberedId = localStorage.getItem('claw:lastFocusedRuntimeId'); } catch { /* ignore */ }
+        const rememberedAgent = rememberedId
+          ? allAgents.find((agent) => (
+            isConnected(agent)
+            && (
+              agent.id === rememberedId
+              || getAgentRuntimeId(agent) === rememberedId
+              || normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId) === normalizeAgentIdentity(rememberedId)
+            )
+          ))
+          : null;
+        const restoreAgent = pendingAgent || rememberedAgent || allAgents.find(isConnected) || null;
+        if (restoreAgent) {
+          currentAgentId = restoreAgent.parent_id || restoreAgent.id;
+          await loadAgentData(getAgentRuntimeId(restoreAgent));
+
         }
       }
     }

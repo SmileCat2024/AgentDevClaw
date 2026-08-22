@@ -36,6 +36,13 @@ const RENDER_TEMPLATES = {
 // 模板缓存
 const templateCache = new Map();
 
+// 焦点 runtime 切换时清空模板缓存（agent-data-loader.js 调用）：
+// 模板 URL 携带 ?agent= 编码后按 agent 区分，旧缓存的同名模板可能指向
+// 上一个 agent 的 projectRoot。内置模板（RENDER_TEMPLATES）随后按需重建，无副作用。
+function clearFeatureTemplateCache() {
+  templateCache.clear();
+}
+
 // DOM node budget: each line generates 3 nodes (div + 2 spans). For 500-line tool
 // results that's 1500 nodes, most invisible (collapsed to 160px). Cap at 200 lines
 // and offer "click to expand" to keep the DOM lean while preserving data access.

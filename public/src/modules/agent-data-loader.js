@@ -12,6 +12,9 @@
  *   currentRuntimeAgentId, currentAgentId, activeFeaturePanel
  */
 
+// 上一次已加载模板映射的 runtime id（焦点切换时触发按 agent 重载）
+let _lastTemplateRuntimeId = null;
+
 async function loadAgentData(agentId) {
   if (isUiOnlyAgentId(agentId)) {
     currentRuntimeAgentId = null;
@@ -25,6 +28,17 @@ async function loadAgentData(agentId) {
   const loadToken = captureSessionViewToken(agentId);
   try {
     currentRuntimeAgentId = agentId;
+    // 模板映射按 runtime agent 区分（URL 携带 ?agent= 编码）：焦点 runtime
+    // 变化时清空映射与模板缓存并按新 agent 重载，避免上一个 agent 的
+    // projectRoot 模板串染到当前 agent 的渲染。
+    if (agentId !== _lastTemplateRuntimeId) {
+      _lastTemplateRuntimeId = agentId;
+      FEATURE_TEMPLATE_MAP = {};
+      if (typeof clearFeatureTemplateCache === 'function') {
+        clearFeatureTemplateCache();
+      }
+      loadFeatureTemplateMap().catch((e) => console.warn('[Viewer] Template map reload on switch failed:', e));
+    }
     // GenUI badge 不在主轮询管线内（自管 3s 定时器），切换 runtime 时
     // 立即触发一次 poll，让红点数字与 todo badge 一样及时出现。
     if (window.GenUIPanel) window.GenUIPanel.forceRefresh();

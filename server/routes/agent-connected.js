@@ -24,7 +24,7 @@ export function createConnectedAgentsQuery(deps) {
 
   async function getConnectedAgents() {
     const prebuiltAgents = await getAgentsLight();
-    const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [], currentAgentId: null }));
+    const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [] }));
     const runtimeAgents = Array.isArray(viewerData.agents) ? viewerData.agents : [];
     const managedRuntimeByViewerId = new Map(
       Array.from(managedAgents.values())
