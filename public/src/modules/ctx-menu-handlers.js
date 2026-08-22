@@ -206,23 +206,9 @@ deleteAgentAction.addEventListener('click', async () => {
       if (fallbackId) {
         selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
       }
-    } else if (!data.currentAgentId) {
-      currentAgentId = null;
-      currentRuntimeAgentId = null;
-      currentWorkspaceTab = null;
-      applySessionViewPatch({
-        messages: [],
-        inputRequests: [],
-        hookInspector: { lifecycleOrder: [], features: [], hooks: [] },
-        overview: getEmptyOverviewSnapshot(),
-        todoPlan: getEmptyTodoPlan(),
-      });
-      renderInputRequests([]);
-      setCurrentLogs([]);
-      renderCurrentMainView();
-      setFollowLatest(true);
-      currentAgentTitle.textContent = t('page_title');
     }
+    // 非焦点 agent 被删除时无需视图操作：服务端 current agent 语义已移除，
+    // 旧代码据此重置视图的补偿分支随之删除。
   } catch (e) {
     closeAgentContextMenu();
     window.alert(t('delete_failed') + (e && e.message ? e.message : e));

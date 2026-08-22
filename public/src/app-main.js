@@ -715,25 +715,16 @@ window.switchAgent = async (newAgentId) => {
       })
       .catch(e => console.warn(e));
 
-    // Fire PUT in parallel with loadAgentData — loadAgentData uses explicit
-    // agentId in all fetch URLs, so it doesn't depend on the PUT completing.
-    const _putPromise = fetch('/api/agents/current', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: runtimeAgentId })
-    }).then((res) => {
-      if (!res.ok && res.status !== 404) {
-        console.warn(`Switch PUT returned ${res.status} ${res.statusText}`);
-      }
-    }).catch((e) => {
-      console.warn('Switch PUT failed:', e?.message || e);
-    });
+    // 焦点已前端化（服务端 current agent 语义已移除）：持久化记忆本次焦点，
+    // 供下次打开页面时恢复（sidebar-render.js 读取）。
+    try {
+      localStorage.setItem('claw:lastFocusedRuntimeId', runtimeAgentId);
+    } catch { /* localStorage 不可用时静默忽略 */ }
 
     await loadAgentData(runtimeAgentId);
-    await _putPromise;
     // Only refresh the agent list if no newer switch has happened — a stale
     // switchAgent continuation could otherwise trigger loadAgentData for the
-    // wrong agent via the loadAgents() initialization path (PUT race).
+    // wrong agent via the loadAgents() initialization path.
     if (epoch === _switchEpoch) {
       loadAgents().catch((error) => console.error('Failed to refresh agents after switch:', error));
     }
