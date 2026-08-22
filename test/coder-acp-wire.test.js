@@ -91,6 +91,10 @@ function startMockClawServer() {
         send(200, { ok: true, clawSessionId: 'claw-wire-1', viewerAgentId: 'vw-1' });
         return;
       }
+      if (req.method === 'POST' && req.url === '/protoclaw/threads/thread-wire/close') {
+        send(200, { ok: true, thread: { threadId: 'thread-wire', status: 'closed' } });
+        return;
+      }
       send(404, { ok: false, code: 'not_found', message: req.url });
     });
   });
@@ -229,6 +233,7 @@ describe('coder ACP adapter wire protocol', () => {
       assert.equal(init.error, undefined);
       assert.equal(init.result.agentCapabilities.loadSession, false);
       assert.equal(init.result.agentCapabilities.promptCapabilities.image, false);
+      assert.deepEqual(init.result.agentCapabilities.close, {});
       assert.equal(init.result.agentInfo.name, 'agentdevclaw-coder-acp');
       assert.equal(typeof init.result.agentInfo.version, 'string');
 
@@ -251,6 +256,10 @@ describe('coder ACP adapter wire protocol', () => {
         (n) => n.method === 'session/update' && n.params?.update?.sessionUpdate === 'agent_message_chunk',
       );
       assert.equal(messageChunk.params.update.content.text, 'all done');
+      // 用户消息回显在最前（codex-acp 风格）
+      const echo = adapter.notifications[0];
+      assert.equal(echo.params.update.sessionUpdate, 'user_message_chunk');
+      assert.deepEqual(echo.params.update.content, { type: 'text', text: 'run something' });
       // updates 都标对了 session
       for (const n of adapter.notifications) {
         assert.equal(n.params.sessionId, created.result.sessionId);
@@ -259,6 +268,17 @@ describe('coder ACP adapter wire protocol', () => {
       const prompt = await promptPromise;
       assert.equal(prompt.error, undefined);
       assert.equal(prompt.result.stopReason, 'end_turn');
+
+      // session/close：转发 Claw 归档 thread，响应 {}
+      const closed = await adapter.request({
+        jsonrpc: '2.0', id: 4, method: 'session/close',
+        params: { sessionId: created.result.sessionId },
+      });
+      assert.equal(closed.error, undefined);
+      assert.deepEqual(closed.result, {});
+      const closeReq = claw.record.requests.find((r) => r.url === '/protoclaw/threads/thread-wire/close');
+      assert.ok(closeReq, 'close request missing');
+      assert.equal(closeReq.body.reason, 'acp session/close');
 
       // stdout 纯度：每行都是 JSON-RPC 帧（jsonrpc === '2.0'），无日志混入
       assert.deepEqual(adapter.parseFailures, []);
@@ -323,8 +343,10 @@ describe('coder ACP adapter wire protocol', () => {
         (r) => r.url === '/protoclaw/acp/coder/sessions/claw-wire-1/interrupt',
       );
       assert.equal(interrupts.length, 1);
-      // 取消后不再有 session/update
-      assert.equal(adapter.notifications.filter((n) => n.method === 'session/update').length, 0);
+      // 取消后除用户消息回显外无其他 session/update
+      const updates = adapter.notifications.filter((n) => n.method === 'session/update');
+      assert.equal(updates.length, 1);
+      assert.equal(updates[0].params.update.sessionUpdate, 'user_message_chunk');
     } finally {
       await adapter.end();
     }

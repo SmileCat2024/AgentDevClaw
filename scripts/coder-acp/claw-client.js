@@ -10,6 +10,7 @@
  *   POST /protoclaw/acp/coder/sessions/:id/interrupt      018 精确中断
  *   POST /protoclaw/threads/:threadId/commands            prompt 投递（现有）
  *   GET  /protoclaw/threads/:threadId/events?after=N      事件增量读取（现有）
+ *   POST /protoclaw/threads/:threadId/close               session/close 归档（现有）
  *
  * 错误归一为两种：
  *   ClawUnreachableError — 网络层失败（server 未启动 / 连接被拒）
@@ -167,6 +168,17 @@ export function createClawClient(options = {}) {
         `/protoclaw/acp/coder/sessions/${encodeURIComponent(clawSessionId)}/interrupt`,
         undefined,
         { ...context, clawSessionId },
+      );
+      return body;
+    },
+
+    /** session/close：归档 thread（现有 close 路由，body { reason }）。 */
+    async closeThread(threadId, context = {}) {
+      const { body } = await requestJson(
+        'POST',
+        `/protoclaw/threads/${encodeURIComponent(threadId)}/close`,
+        { reason: 'acp session/close' },
+        { ...context, threadId },
       );
       return body;
     },

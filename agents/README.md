@@ -148,12 +148,13 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
 
 - `initialize`：返回 ACP v1 握手与 coder 能力声明，不访问 Claw server。
 - `session/new`：要求 `cwd` 为非空字符串；`mcpServers` 必须为空（可省略，非空拒绝）；`additionalDirectories` 与 `sessionModes` 必须为空或省略（非空拒绝）；由 server 原子创建 coder session 与 WorkThread。
-- `session/prompt`：只接受一个或多个 `type: "text"` block，按顺序以两个换行符分隔并合并为一条 user message；同一 ACP session 只允许一个 active prompt。
+- `session/prompt`：只接受一个或多个 `type: "text"` block，按顺序以两个换行符分隔并合并为一条 user message；同一 ACP session 只允许一个 active prompt。受理后先回显 `user_message_chunk`（client 转录完整性）；正常结束返回 `stopReason: "end_turn"`，turn 事件携带用量时随响应返回 `usage`；turn 失败同样返回 `end_turn` 并以 `_meta.claw.terminalFailure` 携带结构化失败（codex-acp 风格，不抛 JSON-RPC error，对话保持连续）。
 - `session/cancel`：notification；与请求级取消汇入同一状态机，最多对对应 Claw session 触发一次精确 interrupt。
+- `session/close`：显式归档——转发 Claw 关闭对应 WorkThread 并释放映射；有 active prompt 时拒绝（先 cancel）。client 断开不会自动触发（断开只清 adapter 内存，Claw 对象保留）。
 
-出站只发送 `session/update`，包括整段 `agent_message_chunk`、tool call 开始与完成更新。未声明或不支持的能力包括：
+出站只发送 `session/update`，包括用户消息回显、整段 `agent_message_chunk`、reasoning 的 `agent_thought_chunk`（thinking 折叠区）、tool call 开始与完成更新。未声明或不支持的能力包括：
 
-- `session/load`、`session/resume`、`session/close`
+- `session/load`、`session/resume`
 - `authenticate`、`requestPermission`
 - `session/set_mode` 与 session modes
 - 非空 `mcpServers`
@@ -184,7 +185,7 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
 1. **整段消息粒度**：`agent_message_chunk` 是 runtime 批量事件中的整段文本，不是 token 级实时流。
 2. **轮询延迟**：更新到达 client 的粒度受轮询间隔影响，默认约 500ms。
 3. **UI 并发输入误归因**：ACP prompt 执行期间，若同一 Claw session 同时从 Web UI 输入，交织事件可能被归入当前 ACP prompt；精确 command-id 关联属于后续框架改进。
-4. **无 close/load**：没有 `session/close`、`session/load` 或 `session/resume`；client 断开不会删除 Claw session、WorkThread 或 runtime，重连需新建 ACP session。
+4. **无 load/resume**：没有 `session/load` 或 `session/resume`；client 断开不会删除 Claw session、WorkThread 或 runtime，重连需新建 ACP session；显式归档用 `session/close`。轮询期间 thread 已在 Claw 侧被关闭/删除时，prompt 以结构化 `CLAW_THREAD_LOST` 错误（`-32003`，data 含 threadId 与 hint）终止。
 5. **仅文本输入**：image、resource、resource_link 和 embedded context 均不支持。
 
 ### 其他约定
