@@ -15,10 +15,9 @@
  * 从 feature-setup-ui.js 提取的无 DOM / 无全局状态依赖部分：
  *   - 点路径原语（fsGetPathValue / fsHasField / fsSetPath / fsDeletePath）
  *   - 两态分类（fsUpstreamInfo / fsClassifyField / fsFieldStates）
- *   - dirty 叠加（fsApplyDirty）：value === null 表示"重置为跟随"
  *   - 控件取值（fsControlValue）
- *   - 保存 payload 构造（fsBuildLayerContent，diff only）：
- *     以原始 sparse 为底仅套用本次会话碰过的字段，未碰字段绝不写入
+ *   - 即时保存（fsWithField）：以层 sparse 为底写入/删除单个字段，
+ *     编辑器每次改动即构造新层内容 PUT，无 dirty / 保存按钮概念
  *   - manifest 属性查找（fsPropFor）与目录名（fsBaseName）
  *
  * UI 模块持有状态并调用这些函数；测试见 test/feature-setup-core.test.js
@@ -130,27 +129,10 @@ function fsFieldStates(sections, layers, scopeId) {
   return map;
 }
 
-/** 叠加本次会话 dirty 后的渲染用两态表（就地修改 base Map）。 */
-function fsApplyDirty(baseStates, dirty) {
-  for (const [fullKey, entry] of dirty) {
-    const cur = baseStates.get(fullKey);
-    if (!cur) continue;
-    if (entry.value === null) {
-      // 本会话已重置 → 回到跟随（保留 upstream 供生效值显示）
-      const upstream = cur.upstream
-        || { kind: 'default', value: undefined, label: null, layerId: null };
-      baseStates.set(fullKey, { status: 'follow', upstream });
-    } else {
-      baseStates.set(fullKey, { ...cur, status: 'takeover', pendingValue: entry.value });
-    }
-  }
-  return baseStates;
-}
-
-/** 控件值：接管→本层（或待保存）值；跟随→上游最近层值，无则 manifest default。 */
+/** 控件值：接管→本层值；跟随→上游最近层值，无则 manifest default。 */
 function fsControlValue(state, prop) {
   if (state?.status === 'takeover') {
-    return state.pendingValue !== undefined ? state.pendingValue : state.layerValue;
+    return state.layerValue;
   }
   if (state?.upstream?.kind === 'layer') {
     return state.upstream.value;
@@ -158,20 +140,19 @@ function fsControlValue(state, prop) {
   return prop?.default;
 }
 
-// ── 保存 payload 构造（diff only）─────────────────────────────
+// ── 即时保存（单字段写入）────────────────────────────────────
 
-/** 该层稀疏内容 = 原始 sparse 为底（深拷贝），仅套用本次会话碰过的字段。 */
-function fsBuildLayerContent(layers, scopeId, dirty) {
-  const idx = layers.findIndex((l) => l.id === scopeId);
-  if (idx < 0) return null;
-  const content = JSON.parse(JSON.stringify(layers[idx].sparse || {}));
-  for (const [fullKey, entry] of dirty) {
-    const segs = fullKey.split('.');
-    if (entry.value === null) {
-      fsDeletePath(content, segs);
-    } else {
-      fsSetPath(content, segs, entry.value);
-    }
+/**
+ * 以层 sparse 为底（深拷贝，不变异输入）写入/删除单个字段。
+ * value === null 表示删除该字段（重置为跟随），删除后递归剪枝空容器。
+ */
+function fsWithField(layerSparse, fullKey, value) {
+  const content = JSON.parse(JSON.stringify(layerSparse || {}));
+  const segs = fullKey.split('.');
+  if (value === null) {
+    fsDeletePath(content, segs);
+  } else {
+    fsSetPath(content, segs, value);
   }
   return content;
 }

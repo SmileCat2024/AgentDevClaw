@@ -4,8 +4,8 @@
  * 覆盖两态配置编辑器（跟随 / 接管）的纯逻辑：
  *   - 点路径原语（fsGetPathValue / fsHasField / fsSetPath / fsDeletePath）
  *   - 两态分类（fsClassifyField / fsFieldStates）：接管（存在即接管）/ 跟随
- *   - dirty 叠加（fsApplyDirty）与控件取值（fsControlValue）
- *   - 保存 payload（fsBuildLayerContent，diff-only 稀疏核心）
+ *   - 控件取值（fsControlValue）
+ *   - 即时保存（fsWithField，单字段 set/delete 稀疏核心）
  *   - manifest 查找（fsPropFor）与目录名（fsBaseName）
  *
  * 对象断言走 JSON.parse + JSON.stringify，避免跨 VM realm 比较；
@@ -231,76 +231,12 @@ describe('feature-setup-core: fsFieldStates', () => {
   });
 });
 
-// ── dirty 叠加与控件取值 ─────────────────────────────────────
-
-describe('feature-setup-core: fsApplyDirty', () => {
-  const ctx = loadCore();
-
-  const BASE_STATES = `new Map([
-    ['a.over', { status: 'takeover', layerValue: 1, upstream: { kind: 'layer', value: 0, label: 'Global', layerId: 'global' } }],
-    ['a.inh', { status: 'follow', upstream: { kind: 'layer', value: 2, label: 'Global', layerId: 'global' } }],
-    ['a.def', { status: 'follow', upstream: { kind: 'default', value: undefined, label: null, layerId: null } }],
-  ])`;
-
-  it('null（重置为跟随）+ 有上游 → follow（保留 upstream 显示生效值）', () => {
-    const r = runBlock(ctx, `
-      const dirty = new Map([['a.over', { value: null }]]);
-      return JSON.stringify(fsApplyDirty(${BASE_STATES}, dirty).get('a.over'));
-    `);
-    assert.deepEqual(JSON.parse(r), {
-      status: 'follow',
-      upstream: { kind: 'layer', value: 0, label: 'Global', layerId: 'global' },
-    });
-  });
-
-  it('null + 无上游 → follow（出厂默认虚拟上游）', () => {
-    const r = runBlock(ctx, `
-      const dirty = new Map([['a.def', { value: null }]]);
-      return JSON.stringify(fsApplyDirty(${BASE_STATES}, dirty).get('a.def'));
-    `);
-    assert.deepEqual(JSON.parse(r), {
-      status: 'follow',
-      upstream: { kind: 'default', label: null, layerId: null },
-    });
-  });
-
-  it('null 重置 takeover 缺 upstream 时补默认虚拟上游', () => {
-    const r = runBlock(ctx, `
-      const base = new Map([['a.raw', { status: 'takeover', layerValue: 7 }]]);
-      return JSON.stringify(fsApplyDirty(base, new Map([['a.raw', { value: null }]])).get('a.raw'));
-    `);
-    assert.deepEqual(JSON.parse(r), {
-      status: 'follow',
-      upstream: { kind: 'default', label: null, layerId: null },
-    });
-  });
-
-  it('新值 → takeover + pendingValue（与上游相同也照写，无值同特判）', () => {
-    const r = runBlock(ctx, `
-      const dirty = new Map([['a.inh', { value: 2 }]]);
-      return JSON.stringify(fsApplyDirty(${BASE_STATES}, dirty).get('a.inh'));
-    `);
-    assert.deepEqual(JSON.parse(r), {
-      status: 'takeover',
-      upstream: { kind: 'layer', value: 2, label: 'Global', layerId: 'global' },
-      pendingValue: 2,
-    });
-  });
-
-  it('base 中不存在的 key 被跳过', () => {
-    const size = runBlock(ctx, `
-      const dirty = new Map([['a.unknown', { value: 1 }]]);
-      return fsApplyDirty(${BASE_STATES}, dirty).size;
-    `);
-    assert.equal(size, 3);
-  });
-});
+// ── 控件取值与即时保存 ───────────────────────────────────────
 
 describe('feature-setup-core: fsControlValue', () => {
   const ctx = loadCore();
 
-  it('takeover 优先 pendingValue，其次 layerValue', () => {
-    assert.equal(ctx.run(`fsControlValue({ status: 'takeover', pendingValue: 5, layerValue: 1 })`), 5);
+  it('takeover 取本层值', () => {
     assert.equal(ctx.run(`fsControlValue({ status: 'takeover', layerValue: 1 })`), 1);
   });
 
@@ -315,15 +251,16 @@ describe('feature-setup-core: fsControlValue', () => {
   });
 });
 
-// ── 保存 payload（diff-only 稀疏核心）─────────────────────────
+// ── 即时保存（单字段写入稀疏核心）─────────────────────────────
 
-describe('feature-setup-core: fsBuildLayerContent', () => {
+describe('feature-setup-core: fsWithField', () => {
   const ctx = loadCore();
 
-  it('未碰字段原样保留（以原始 sparse 为底）', () => {
+  const DIR_SPARSE = `${TYPED_LAYERS}[1].sparse`;
+
+  it('set 新字段：未碰字段原样保留（以层 sparse 为底）', () => {
     const r = runBlock(ctx, `
-      const dirty = new Map([['shell.bashEnabled', { value: false }]]);
-      return JSON.stringify(fsBuildLayerContent(${TYPED_LAYERS}, 'dir:/proj/a', dirty));
+      return JSON.stringify(fsWithField(${DIR_SPARSE}, 'shell.bashEnabled', false));
     `);
     assert.deepEqual(JSON.parse(r), {
       lsp: { typescript: { mode: 'runtime' } },
@@ -333,61 +270,45 @@ describe('feature-setup-core: fsBuildLayerContent', () => {
 
   it('set 覆盖本层已有字段', () => {
     const r = runBlock(ctx, `
-      const dirty = new Map([['lsp.typescript.mode', { value: 'auto' }]]);
-      return JSON.stringify(fsBuildLayerContent(${TYPED_LAYERS}, 'dir:/proj/a', dirty));
+      return JSON.stringify(fsWithField(${DIR_SPARSE}, 'lsp.typescript.mode', 'auto'));
     `);
     assert.deepEqual(JSON.parse(r), { lsp: { typescript: { mode: 'auto' } } });
   });
 
   it('delete（null 重置）移除字段并剪枝空容器', () => {
     const r = runBlock(ctx, `
-      const dirty = new Map([['lsp.typescript.mode', { value: null }]]);
-      return JSON.stringify(fsBuildLayerContent(${TYPED_LAYERS}, 'dir:/proj/a', dirty));
+      return JSON.stringify(fsWithField(${DIR_SPARSE}, 'lsp.typescript.mode', null));
     `);
     assert.deepEqual(JSON.parse(r), {});
   });
 
-  it('稀疏性：只碰一个字段 → diff 恰好只有该字段', () => {
+  it('delete 不存在的字段：无异常、内容不变', () => {
     const r = runBlock(ctx, `
-      const layers = [
-        { id: 'global', sparse: { lsp: { a: 1, b: 2, c: 3 } } },
-        { id: 'dir:/p', sparse: { shell: { x: 'keep' }, other: { y: 1 } } },
-      ];
-      const dirty = new Map([['shell.x', { value: 'touched' }]]);
-      return JSON.stringify(fsBuildLayerContent(layers, 'dir:/p', dirty));
+      return JSON.stringify(fsWithField({ shell: { x: 1 } }, 'lsp.ghost', null));
     `);
-    // 未碰的 other.* 与 shell 兄弟结构原样保留；唯一的值变化是 shell.x
-    assert.deepEqual(JSON.parse(r), { shell: { x: 'touched' }, other: { y: 1 } });
+    assert.deepEqual(JSON.parse(r), { shell: { x: 1 } });
   });
 
-  it('层无 sparse（层文件不存在）从空对象构造', () => {
+  it('值等于上游也照写（存在即接管，无值同特判）', () => {
     const r = runBlock(ctx, `
-      const layers = [{ id: 'global', sparse: { a: 1 } }, { id: 'dir:/new' }];
-      const dirty = new Map([['b.c', { value: 2 }]]);
-      return JSON.stringify(fsBuildLayerContent(layers, 'dir:/new', dirty));
+      return JSON.stringify(fsWithField({}, 'shell.bashEnabled', true));
     `);
+    assert.deepEqual(JSON.parse(r), { shell: { bashEnabled: true } });
+  });
+
+  it('sparse 缺失（层文件不存在）从空对象构造', () => {
+    const r = runBlock(ctx, `return JSON.stringify(fsWithField(undefined, 'b.c', 2));`);
     assert.deepEqual(JSON.parse(r), { b: { c: 2 } });
   });
 
-  it('scopeId 找不到返回 null', () => {
-    assert.equal(
-      runBlock(ctx, `return fsBuildLayerContent(${TYPED_LAYERS}, 'dir:/ghost', new Map());`),
-      null
-    );
-  });
-
   it('不变异原始层 sparse', () => {
-    ctx.run(`globalThis.__snap = JSON.stringify((${TYPED_LAYERS})[0].sparse);`);
+    ctx.run(`globalThis.__snap = JSON.stringify((${TYPED_LAYERS})[1].sparse);`);
     runBlock(ctx, `
-      const layers = ${TYPED_LAYERS};
-      fsBuildLayerContent(layers, 'dir:/proj/a', new Map([['lsp.nodePath', { value: '/x' }]]));
+      fsWithField(${TYPED_LAYERS}[1].sparse, 'lsp.nodePath', '/x');
       return null;
     `);
     const after = JSON.parse(ctx.run(`globalThis.__snap`));
-    assert.deepEqual(after, {
-      lsp: { typescript: { mode: 'exec' }, nodePath: '/usr/bin/node' },
-      shell: { bashEnabled: true },
-    });
+    assert.deepEqual(after, { lsp: { typescript: { mode: 'runtime' } } });
   });
 });
 

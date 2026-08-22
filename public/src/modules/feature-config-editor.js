@@ -1,37 +1,29 @@
 /**
- * feature-config-editor.js — 共享 Feature 配置编辑器（跟随 / 接管两态）
+ * feature-config-editor.js — 共享 Feature 配置编辑器（即时保存）
  *
- * 一个可复用组件，三个容器使用同一套路（左侧配置组导航 + 右侧字段 +
- * 可选返回头）：
+ * 一个可复用组件，三个容器使用同一套路（工作空间设置页的
+ * ph-settings 布局：左侧分类导航 + 右侧配置区）：
  *   - Runtime 配置 workspace（scopeId='global'，占主区域）
- *   - 工作空间设置弹窗子页面（scopeId='agent'，二级页带返回）
+ *   - 工作空间设置弹窗子页面（scopeId='agent'，带返回）
  *   - 目录会话配置弹窗（scopeId='dir:<path>'）
  *
- * 字段两态模型（纯逻辑在 feature-setup-core.js）：
- *   - 跟随（follow）= 本层无该字段 → 控件灰显生效值（上游最近层值或
- *     manifest default），可直接编辑，一编辑即接管；
- *   - 接管（takeover）= 本层有该字段（或本次会话已改待保存）→ 值完全
- *     跟本层走，旁边"重置为跟随"一键删条目；
- *   - 保存 = diff only：以原始 sparse 为底仅套用本次碰过的字段，
- *     PUT /protoclaw/feature_config/layer。
+ * 交互模型（对齐模型配置页的自动保存范式，无保存按钮 / 无表单感）：
+ *   - 跟随 = 本层无该字段 → 控件半透明显示生效值，直接编辑即接管；
+ *   - 接管 = 本层有该字段 → 控件正常显示，旁有一个小重置按钮（↺），
+ *     点击删除本层条目回到跟随；
+ *   - 所有改动即时保存（input 防抖 / change 立即），失败仅行内红边。
  *
- * 实例化使用（事件委托，无全局单例，多实例互不干扰）：
- *   const editor = createFeatureConfigEditor({ host, scopeId, title, onBack });
- *   editor.open(); editor.close(); editor.hasDirty();
+ * 实例化使用（事件委托，多实例互不干扰）：
+ *   const editor = createFeatureConfigEditor({ host, scopeId, onBack });
+ *   editor.open(); editor.close();
  */
 
 let _fceSeq = 0;
 
+const _FCE_GEAR_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+
 function _fceT(zh, en) {
   return (typeof currentLanguage !== 'undefined' && currentLanguage === 'zh') ? zh : en;
-}
-
-function _fceDisplayValue(v) {
-  if (v === undefined) return _fceT('（未设置）', '(unset)');
-  if (v === null) return 'null';
-  if (Array.isArray(v)) return v.length ? v.join(', ') : _fceT('（空）', '(empty)');
-  if (v === '') return _fceT('（空串）', '""');
-  return String(v);
 }
 
 // ── 实例工厂 ──────────────────────────────────────────────────
@@ -44,9 +36,9 @@ function createFeatureConfigEditor(options = {}) {
   }
   const scopeId = String(options.scopeId || 'global');
   const onBack = typeof options.onBack === 'function' ? options.onBack : null;
-  const title = options.title || '';
 
   const FS_SCOPE_AGENT_ID = 'programming-helper';
+  const SAVE_DEBOUNCE_MS = 500;
 
   const state = {
     manifests: null,
@@ -55,10 +47,12 @@ function createFeatureConfigEditor(options = {}) {
     activeId: null,
     resolved: null,
     resolvedError: null,
-    dirty: new Map(),
-    loading: false,
+    pending: new Map(), // fullKey -> value | null（null = 重置为跟随）
+    saving: false,
+    flushQueued: false,
     destroyed: false,
   };
+  let _saveTimer = null;
 
   // ── 数据加载 ────────────────────────────────────────────────
 
@@ -87,7 +81,6 @@ function createFeatureConfigEditor(options = {}) {
   }
 
   async function reloadResolved() {
-    state.resolved = null;
     state.resolvedError = null;
     try {
       state.resolved = await fetchResolved();
@@ -110,7 +103,6 @@ function createFeatureConfigEditor(options = {}) {
           sections.push({
             id: `${featureName}__${sec.id}`,
             title: sec.title,
-            icon: sec.id === 'runtimes' ? '⚙' : '▣',
             featureName,
             propKeys: sec.properties,
             props,
@@ -120,7 +112,6 @@ function createFeatureConfigEditor(options = {}) {
         sections.push({
           id: featureName,
           title: featureName,
-          icon: '⚙',
           featureName,
           propKeys: Object.keys(props),
           props,
@@ -130,36 +121,35 @@ function createFeatureConfigEditor(options = {}) {
     state.sections = sections;
   }
 
-  // ── 两态表（判定数据全部来自 resolved，前端不自算合并）──────
+  // ── 层访问与两态表（判定数据全部来自 resolved）──────────────
 
   function layers() {
     const arr = state.resolved?.layers;
     return Array.isArray(arr) ? arr : [];
   }
 
-  function effectiveStates() {
-    const base = fsFieldStates(state.sections, layers(), scopeId);
-    return fsApplyDirty(base, state.dirty);
+  function targetSparse() {
+    const own = layers().find((l) => l.id === scopeId);
+    return own?.sparse || {};
   }
 
-  // ── 渲染 ────────────────────────────────────────────────────
+  function effectiveStates() {
+    return fsFieldStates(state.sections, layers(), scopeId);
+  }
+
+  // ── 渲染（复用工作空间设置页 ph-settings 布局类）────────────
 
   function renderShell() {
-    const backBtn = onBack
-      ? `<button type="button" class="fs-back-btn" data-fce-action="back">← ${_fceT('返回', 'Back')}</button>`
-      : '';
-    const headRow = (onBack || title)
-      ? `<div class="fs-editor-head">${backBtn}${title ? `<span class="fs-editor-title">${escapeHtml(title)}</span>` : ''}</div>`
+    const backRow = onBack
+      ? `<div class="fs-back-row"><button type="button" class="fs-back-btn" data-fce-action="back">&larr; ${_fceT('返回', 'Back')}</button></div>`
       : '';
     host.innerHTML = `
-      ${headRow}
-      <div class="fs-app">
-        <div class="fs-side">
-          <nav class="fs-nav" data-fce-nav><div class="fs-nav-loading">...</div></nav>
-        </div>
-        <main class="fs-main" data-fce-main>
+      ${backRow}
+      <div class="ph-settings-layout fs-editor-body">
+        <div class="ph-settings-sidebar" data-fce-nav><div class="fs-nav-loading">...</div></div>
+        <div class="ph-settings-content" data-fce-main>
           <div class="fs-spinner-wrap"><div class="fs-spinner"></div></div>
-        </main>
+        </div>
       </div>
     `;
     renderNav();
@@ -169,16 +159,16 @@ function createFeatureConfigEditor(options = {}) {
     const navEl = host.querySelector('[data-fce-nav]');
     if (!navEl) return;
     navEl.innerHTML = state.sections.map(s =>
-      `<div class="fs-nav-item" data-fce-action="nav" data-id="${escapeHtml(s.id)}">
-        <span class="fs-nav-icon">${s.icon}</span>
-        <span class="fs-nav-text">${escapeHtml(s.title)}</span>
+      `<div class="ph-settings-tab" data-fce-action="nav" data-id="${escapeHtml(s.id)}">
+        <span class="ph-settings-tab-icon">${_FCE_GEAR_SVG}</span>
+        <span class="ph-settings-tab-label">${escapeHtml(s.title)}</span>
       </div>`
     ).join('');
   }
 
   function selectSection(id) {
     state.activeId = id;
-    host.querySelectorAll('.fs-nav-item').forEach(el =>
+    host.querySelectorAll('.ph-settings-tab[data-fce-action="nav"]').forEach(el =>
       el.classList.toggle('active', el.getAttribute('data-id') === id)
     );
     const sec = state.sections.find(s => s.id === id);
@@ -190,14 +180,18 @@ function createFeatureConfigEditor(options = {}) {
     const states = effectiveStates();
     const disabled = !!state.resolvedError || !state.resolved;
 
-    let cardsHtml = '';
+    let rowsHtml = '';
     for (const key of sec.propKeys) {
       const prop = sec.props[key];
       if (!prop) continue;
       if (prop.type === 'group') {
-        cardsHtml += renderGroupCard(key, prop, sec.featureName, states, disabled);
+        for (const sk of Object.keys(prop.properties || {})) {
+          const fullKey = `${sec.featureName}.${key}.${sk}`;
+          rowsHtml += renderRow(prop.properties[sk], fullKey, states.get(fullKey), disabled);
+        }
       } else {
-        cardsHtml += renderSingleCard(key, prop, sec.featureName, states, disabled);
+        const fullKey = `${sec.featureName}.${key}`;
+        rowsHtml += renderRow(prop, fullKey, states.get(fullKey), disabled);
       }
     }
 
@@ -212,43 +206,20 @@ function createFeatureConfigEditor(options = {}) {
       : '';
 
     mainEl.innerHTML = `
-      <div class="fs-content">
-        ${errHtml}
-        ${warnHtml}
-        <div class="fs-cards">${cardsHtml}</div>
-        <div class="fs-savebar">
-          <span class="fs-save-count"></span>
-          <button type="button" class="fs-save-btn" data-fce-action="save"${disabled ? ' disabled' : ''}>${_fceT('保存', 'Save')}</button>
-        </div>
-      </div>
-      <div class="fs-auto-save-status"></div>
+      <div class="ph-settings-content-header">${escapeHtml(sec.title)}</div>
+      ${errHtml}
+      ${warnHtml}
+      <div class="ph-mc-list">${rowsHtml}</div>
     `;
     mainEl.scrollTop = 0;
     attachShowWhen(mainEl);
-    updateSaveBar();
     applyShellAvailability();
   }
 
-  // ── 卡片与字段行（两态）─────────────────────────────────────
+  // ── 字段行（ph-mc-row 套路：左标题列 + 右控件列）────────────
 
-  function renderGroupCard(key, prop, featureName, states, disabled) {
-    const subProps = prop.properties || {};
-    let rowsHtml = '';
-    for (const [sk, sp] of Object.entries(subProps)) {
-      const fullKey = `${featureName}.${key}.${sk}`;
-      rowsHtml += renderRow(sp, fullKey, states.get(fullKey), disabled);
-    }
-    return `
-      <div class="fs-group">
-        <div class="fs-group-title">${escapeHtml(prop.title || key)}</div>
-        <div class="fs-card">${rowsHtml}</div>
-      </div>
-    `;
-  }
-
-  function renderSingleCard(key, prop, featureName, states, disabled) {
-    const fullKey = `${featureName}.${key}`;
-    return `<div class="fs-card">${renderRow(prop, fullKey, states.get(fullKey), disabled)}</div>`;
+  function resetBtnHtml(fullKey) {
+    return `<button type="button" class="fs-reset-btn" data-fce-action="reset" data-key="${escapeHtml(fullKey)}" title="${_fceT('重置为跟随', 'Reset to follow')}">&#8634;</button>`;
   }
 
   function renderRow(prop, fullKey, rowState, disabled) {
@@ -256,30 +227,32 @@ function createFeatureConfigEditor(options = {}) {
     const status = rowState?.status === 'takeover' ? 'takeover' : 'follow';
     const value = fsControlValue(rowState, prop);
 
-    // 跟随态：小字显示当前生效值（透明度，不标注来源层）；
-    // 接管态：标记点 + 一键重置为跟随。
-    let noteHtml;
-    if (status === 'takeover') {
-      noteHtml = `
-        <div class="fs-state-note fs-note-takeover">
-          <span class="fs-takeover-dot"></span>${_fceT('本层接管', 'Managed here')}
-          <button type="button" class="fs-reset-btn" data-fce-action="reset" data-key="${escapeHtml(fullKey)}">${_fceT('重置为跟随', 'Reset to follow')}</button>
-        </div>
-      `;
-    } else {
-      noteHtml = `<div class="fs-state-note fs-note-follow">${_fceT('当前生效', 'Effective')}: ${escapeHtml(_fceDisplayValue(value))}</div>`;
-    }
-
     return `
-      <div class="fs-row fs-state-${status}"${sw} data-prop-key="${escapeHtml(fullKey)}">
-        <div class="fs-row-main">
-          <div class="fs-row-title">${escapeHtml(prop.title || '')}</div>
-          ${prop.description ? `<div class="fs-row-desc">${escapeHtml(prop.description)}</div>` : ''}
-          ${noteHtml}
+      <div class="ph-mc-row fs-row fs-state-${status}"${sw} data-prop-key="${escapeHtml(fullKey)}">
+        <div class="ph-mc-role">
+          <div class="ph-mc-role-name">${escapeHtml(prop.title || '')}</div>
+          ${prop.description ? `<div class="ph-mc-role-desc">${escapeHtml(prop.description)}</div>` : ''}
         </div>
-        <div class="fs-row-ctrl">${renderInput(fullKey, prop, value, disabled)}</div>
+        <div class="fs-row-ctrl">
+          ${renderInput(fullKey, prop, value, disabled)}
+          ${status === 'takeover' ? resetBtnHtml(fullKey) : ''}
+        </div>
       </div>
     `;
+  }
+
+  // 局部重建单个字段行（重置为跟随后调用，避免全量重渲染打断输入）
+  function rerenderRow(fullKey) {
+    const row = host.querySelector(`[data-prop-key="${CSS.escape(fullKey)}"]`);
+    const prop = fsPropFor(state.sections, fullKey);
+    if (!row || !prop) return;
+    const states = effectiveStates();
+    const disabled = !!state.resolvedError || !state.resolved;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = renderRow(prop, fullKey, states.get(fullKey), disabled);
+    row.replaceWith(tmp.firstElementChild);
+    attachShowWhen(host.querySelector('[data-fce-main]'));
+    applyShellAvailability();
   }
 
   // ── 控件 ────────────────────────────────────────────────────
@@ -340,10 +313,11 @@ function createFeatureConfigEditor(options = {}) {
   // ── showWhen 联动 ────────────────────────────────────────────
 
   function attachShowWhen(container) {
-    const fields = container.querySelectorAll('[data-showwhen]');
+    const fields = container.querySelectorAll('[data-showwhen]:not([data-sw-bound])');
     if (!fields.length) return;
     const watchMap = new Map();
     for (const field of fields) {
+      field.dataset.swBound = '1';
       const sw = JSON.parse(field.getAttribute('data-showwhen'));
       if (!sw?.property) continue;
       const fk = field.getAttribute('data-prop-key');
@@ -364,11 +338,52 @@ function createFeatureConfigEditor(options = {}) {
     }
   }
 
-  // ── dirty 跟踪（碰过 = 改过值 / 显式点了重置）────────────────
+  // ── 即时保存管道（防抖合并，失败行内红边）────────────────────
 
-  function markDirty(fullKey, value) {
-    state.dirty.set(fullKey, { value });
-    updateSaveBar();
+  function scheduleSave() {
+    clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+  }
+
+  async function flushSave() {
+    clearTimeout(_saveTimer);
+    if (state.saving) { state.flushQueued = true; return; }
+    if (!state.pending.size || !state.resolved || state.destroyed) return;
+
+    const batch = state.pending;
+    state.pending = new Map();
+    state.saving = true;
+    try {
+      let content = targetSparse();
+      for (const [k, v] of batch) content = fsWithField(content, k, v);
+      const res = await fetch('/protoclaw/feature_config/layer', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: FS_SCOPE_AGENT_ID, layerId: scopeId, content }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || `${res.status} ${res.statusText}`);
+      // 静默刷新基底，不重渲染（不打断输入）
+      await reloadResolved();
+    } catch (err) {
+      // 失败：pending 回填（保留未保存语义），行标红提示
+      for (const [k, v] of batch) if (!state.pending.has(k)) state.pending.set(k, v);
+      for (const k of batch.keys()) markRowError(k);
+      console.error('[feature-config-editor] save failed:', err);
+    } finally {
+      state.saving = false;
+      if (state.flushQueued) {
+        state.flushQueued = false;
+        flushSave();
+      }
+    }
+  }
+
+  function markRowError(fullKey) {
+    const row = host.querySelector(`[data-prop-key="${CSS.escape(fullKey)}"]`);
+    if (!row) return;
+    row.classList.add('fs-save-error');
+    setTimeout(() => row.classList.remove('fs-save-error'), 3000);
   }
 
   function readInputValue(input) {
@@ -386,72 +401,26 @@ function createFeatureConfigEditor(options = {}) {
     return values;
   }
 
-  function markDirtyFromInput(input) {
+  function recordChange(input) {
     const key = input.getAttribute('data-config-key');
     if (!key) return;
     if (input.classList.contains('fs-list-input')) {
       const listEl = input.closest('.fs-list');
-      if (listEl) markDirty(key, collectListValue(listEl, key));
+      if (listEl) state.pending.set(key, collectListValue(listEl, key));
     } else {
-      markDirty(key, readInputValue(input));
+      state.pending.set(key, readInputValue(input));
     }
-    // 一编辑即接管：行视觉立刻切换（不重渲染，避免打断输入焦点）
-    const row = input.closest('.fs-row');
-    if (row) {
-      row.classList.remove('fs-state-follow');
-      row.classList.add('fs-state-takeover');
-      const note = row.querySelector('.fs-note-follow');
-      if (note) note.remove();
-    }
+    rowTakeover(key);
   }
 
-  function updateSaveBar() {
-    const bar = host.querySelector('.fs-savebar');
-    const cnt = host.querySelector('.fs-save-count');
-    const n = state.dirty.size;
-    if (bar) bar.classList.toggle('visible', n > 0);
-    if (cnt) {
-      cnt.textContent = n > 0
-        ? _fceT(`未保存修改 ${n} 项`, `${n} unsaved change${n > 1 ? 's' : ''}`)
-        : '';
-    }
-  }
-
-  // ── 保存（diff only：以原始 sparse 为底套用 dirty）────────────
-
-  async function save() {
-    if (!state.resolved || !state.dirty.size) return;
-    const content = fsBuildLayerContent(layers(), scopeId, state.dirty);
-    if (!content) return;
-
-    const statusEl = host.querySelector('.fs-auto-save-status');
-    const saveBtn = host.querySelector('.fs-save-btn');
-    if (saveBtn) saveBtn.disabled = true;
-    if (statusEl) { statusEl.textContent = _fceT('Saving...', 'Saving...'); statusEl.classList.add('visible'); }
-
-    try {
-      const res = await fetch('/protoclaw/feature_config/layer', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: FS_SCOPE_AGENT_ID, layerId: scopeId, content }),
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload.error || `${res.status} ${res.statusText}`);
-
-      state.dirty = new Map();
-      if (statusEl) statusEl.textContent = _fceT('Saved', 'Saved');
-      await refreshShellAvailability();
-      await reloadResolved();
-      selectSection(state.activeId);
-    } catch (err) {
-      if (saveBtn) saveBtn.disabled = false;
-      if (statusEl) statusEl.textContent = _fceT('Failed', 'Failed');
-      window.alert(_fceT('保存失败：', 'Failed to save: ') + (err?.message || err));
-    }
-
-    setTimeout(() => {
-      if (statusEl && !state.destroyed) statusEl.classList.remove('visible');
-    }, 1500);
+  // 编辑即接管：行视觉立刻切换（局部 DOM，不重渲染，不打断输入）
+  function rowTakeover(fullKey) {
+    const row = host.querySelector(`[data-prop-key="${CSS.escape(fullKey)}"]`);
+    if (!row || row.classList.contains('fs-state-takeover')) return;
+    row.classList.remove('fs-state-follow');
+    row.classList.add('fs-state-takeover');
+    const ctrl = row.querySelector('.fs-row-ctrl');
+    if (ctrl) ctrl.insertAdjacentHTML('beforeend', resetBtnHtml(fullKey));
   }
 
   // ── 列表项增删 / 目录选择器 ──────────────────────────────────
@@ -474,9 +443,7 @@ function createFeatureConfigEditor(options = {}) {
       + `<button type="button" class="fs-list-remove" data-fce-action="list-remove" title="${_fceT('移除', 'Remove')}">&times;</button>`;
 
     container.insertBefore(item, btn);
-    const newInput = item.querySelector('input');
-    newInput.focus();
-    markDirty(fullKey, collectListValue(container, fullKey));
+    item.querySelector('input').focus();
     if (container.querySelectorAll('.fs-list-item').length >= max) btn.disabled = true;
   }
 
@@ -488,7 +455,9 @@ function createFeatureConfigEditor(options = {}) {
     item.remove();
     const addBtn = container.querySelector('.fs-list-add');
     if (addBtn) addBtn.disabled = false;
-    markDirty(fullKey, collectListValue(container, fullKey));
+    state.pending.set(fullKey, collectListValue(container, fullKey));
+    rowTakeover(fullKey);
+    scheduleSave();
   }
 
   function browseDir(btn) {
@@ -497,7 +466,8 @@ function createFeatureConfigEditor(options = {}) {
     if (!input) return;
     openDirPicker(input.value || '', (selectedPath) => {
       input.value = selectedPath;
-      markDirtyFromInput(input);
+      recordChange(input);
+      scheduleSave();
     });
   }
 
@@ -608,7 +578,7 @@ function createFeatureConfigEditor(options = {}) {
       const fullKey = `shell.${s.key}`;
       const row = host.querySelector(`[data-prop-key="${CSS.escape(fullKey)}"]`);
       if (!row) continue;
-      const titleEl = row.querySelector('.fs-row-title');
+      const titleEl = row.querySelector('.ph-mc-role-name');
       if (!titleEl) continue;
 
       const oldBadge = titleEl.querySelector('.fs-shell-badge');
@@ -662,7 +632,18 @@ function createFeatureConfigEditor(options = {}) {
 
   function onHostInput(e) {
     const input = e.target.closest('[data-config-key]');
-    if (input) markDirtyFromInput(input);
+    if (input) {
+      recordChange(input);
+      scheduleSave();
+    }
+  }
+
+  function onHostChange(e) {
+    const input = e.target.closest('[data-config-key]');
+    if (input) {
+      recordChange(input);
+      flushSave(); // change（选中/勾选/失焦）立即落盘
+    }
   }
 
   function onHostClick(e) {
@@ -673,13 +654,11 @@ function createFeatureConfigEditor(options = {}) {
       case 'nav':
         selectSection(actionEl.getAttribute('data-id'));
         break;
-      case 'save':
-        save();
-        break;
       case 'reset': {
         const fullKey = actionEl.getAttribute('data-key');
-        markDirty(fullKey, null);
-        selectSection(state.activeId);
+        state.pending.set(fullKey, null);
+        // 保存完成（层 sparse 已刷新）后再重渲染行，避免闪回旧接管态
+        flushSave().then(() => rerenderRow(fullKey));
         break;
       }
       case 'list-add':
@@ -698,14 +677,13 @@ function createFeatureConfigEditor(options = {}) {
   }
 
   host.addEventListener('input', onHostInput);
-  host.addEventListener('change', onHostInput);
+  host.addEventListener('change', onHostChange);
   host.addEventListener('click', onHostClick);
 
   // ── 生命周期 ─────────────────────────────────────────────────
 
   async function open() {
     state.destroyed = false;
-    state.loading = true;
     renderShell();
     try {
       await loadStaticData();
@@ -716,22 +694,29 @@ function createFeatureConfigEditor(options = {}) {
     } catch (err) {
       const mainEl = host.querySelector('[data-fce-main]');
       if (mainEl) mainEl.innerHTML = `<div class="fs-main-error">${_fceT('加载失败', 'Failed to load')}: ${escapeHtml(String(err?.message || err))}</div>`;
-    } finally {
-      state.loading = false;
     }
   }
 
   function close() {
     state.destroyed = true;
+    clearTimeout(_saveTimer);
+    // 未落盘的改动直接发起保存（fire-and-forget），不阻塞关闭
+    if (state.pending.size && state.resolved) {
+      const batch = state.pending;
+      state.pending = new Map();
+      let content = targetSparse();
+      for (const [k, v] of batch) content = fsWithField(content, k, v);
+      fetch('/protoclaw/feature_config/layer', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: FS_SCOPE_AGENT_ID, layerId: scopeId, content }),
+      }).catch((err) => console.error('[feature-config-editor] save on close failed:', err));
+    }
     host.removeEventListener('input', onHostInput);
-    host.removeEventListener('change', onHostInput);
+    host.removeEventListener('change', onHostChange);
     host.removeEventListener('click', onHostClick);
     host.innerHTML = '';
   }
 
-  function hasDirty() {
-    return state.dirty.size > 0;
-  }
-
-  return { open, close, hasDirty, instanceId };
+  return { open, close, instanceId };
 }

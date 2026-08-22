@@ -55,12 +55,6 @@ window.phOpenDirConfig = function () {
   if (!dir) return;
   if (typeof createFeatureConfigEditor !== 'function') return;
   if (_dirConfigEditor) {
-    if (_dirConfigEditor.hasDirty()) {
-      const isZh = currentLanguage === 'zh';
-      if (!window.confirm(isZh
-        ? '当前目录配置有未保存的修改，重新打开将丢弃这些修改。继续吗？'
-        : 'The directory config has unsaved changes. Reopening discards them. Continue?')) return;
-    }
     _dirConfigEditor.close();
     _dirConfigEditor = null;
   }
@@ -83,19 +77,12 @@ window.phOpenDirConfig = function () {
   _dirConfigEditor = createFeatureConfigEditor({
     host: document.getElementById('ph-dir-config-mount'),
     scopeId: 'dir:' + dir,
-    title: isZh ? 'Feature 配置' : 'Feature Config',
   });
   _dirConfigEditor.open();
 };
 
 window.phCloseDirConfig = function () {
   if (_dirConfigEditor) {
-    if (_dirConfigEditor.hasDirty()) {
-      const isZh = currentLanguage === 'zh';
-      if (!window.confirm(isZh
-        ? '有未保存的修改，关闭将丢弃。确定关闭吗？'
-        : 'There are unsaved changes. Closing discards them. Continue?')) return;
-    }
     _dirConfigEditor.close();
     _dirConfigEditor = null;
   }

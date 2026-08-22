@@ -186,7 +186,6 @@ function renderPhModelConfigOverlay(agent, presets) {
       _phFeatureEditor = createFeatureConfigEditor({
         host: document.getElementById('ph-feature-config-host'),
         scopeId: 'agent',
-        title: isZh ? 'Feature 设置' : 'Feature Config',
         onBack: () => {
           _closePhFeatureEditor();
           _phSettingsTab = 'model';

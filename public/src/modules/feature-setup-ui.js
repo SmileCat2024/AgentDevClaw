@@ -1,15 +1,12 @@
 /**
  * Feature Setup UI 模块 — Runtime 配置 workspace 壳
  *
- * 只负责一件事：把共享配置编辑器（feature-config-editor.js）挂到
- * feature-setup workspace 的主区域，绑定全局层（scopeId='global'）。
+ * 只负责一件事：标题头 + 把共享配置编辑器（feature-config-editor.js）
+ * 挂到 feature-setup workspace 的主区域，绑定全局层（scopeId='global'）。
  *
  * 共享编辑器同样被另外两个容器复用：
  *   - 工作空间设置弹窗子页面（ph-model-config.js，scopeId='agent'）
- *   - 目录会话配置弹窗（chat-tabs-bar.js，scopeId='dir:<path>'）
- *
- * 两态字段模型（跟随 / 接管）与 diff-only 保存逻辑见
- * feature-setup-core.js；组件实现见 feature-config-editor.js。
+ *   - 目录会话配置弹窗（dir-config-dialog.js，scopeId='dir:<path>'）
  *
  * 导出: isSystemFeatureConfigBlock, renderSystemFeatureConfigBlock
  */
@@ -27,6 +24,7 @@ let _fsEditor = null;
 let _fsToken = 0;
 
 function renderSystemFeatureConfigBlock(_block) {
+  const isZh = (typeof currentLanguage !== 'undefined' && currentLanguage === 'zh');
   const token = ++_fsToken;
   // block 渲染返回 HTML 字符串，挂载点入 DOM 在下一帧；用 token 丢弃过期回调
   requestAnimationFrame(() => {
@@ -40,5 +38,13 @@ function renderSystemFeatureConfigBlock(_block) {
     _fsEditor = createFeatureConfigEditor({ host, scopeId: 'global' });
     _fsEditor.open();
   });
-  return '<div id="fs-editor-mount" class="fs-editor-mount"></div>';
+  return `
+    <div class="fs-workspace-wrap">
+      <div class="fs-workspace-head">
+        <div class="fs-workspace-title">${isZh ? 'Runtime 配置' : 'Runtime Config'}</div>
+        <div class="fs-workspace-subtitle">${isZh ? '全局 Feature 配置，对所有工作空间生效' : 'Global feature config applied to all workspaces'}</div>
+      </div>
+      <div id="fs-editor-mount" class="fs-editor-mount"></div>
+    </div>
+  `;
 }
