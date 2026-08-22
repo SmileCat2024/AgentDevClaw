@@ -8,10 +8,13 @@
  *   - 双层取消汇流：session/cancel 通知与 $/cancel_request（ctx.signal）
  *     进入同一 cancel()；每次取消只调一次 interrupt（018 路由）
  *   - 终态判定只看事件流（turn.completed / turn.failed / turn.cancelled），
- *     不看看板状态；turn <= baseline.maxTurn 的终态视为旧事件回放，仅告警
+ *     不看看板状态；旧事件识别以 eventId 为主判定（018 起事件必带 eventId，
+ *     board 落盘事件的 eventId 固定，重放必同 ID 被 mapper 去重拦截）。
+ *     不做 turn 号比较——runtime 的 turn 号是 session 级 0-based 计数，
+ *     thread 接力后新 session 从 0 重新计数，跨 runtime 不单调，比较会误杀。
  *
  * prompt 执行管线（设计 §6）：
- *   基线捕获（cursor + knownEventIds + maxTurn）
+ *   基线捕获（cursor + knownEventIds）
  *   → POST threads/:id/commands（source: "acp" + idempotencyKey）
  *   → 轮询 GET threads/:id/events?after=cursor
  *   → 新事件经 event-mapper 映射为 session/update
@@ -79,24 +82,14 @@ export function createSessionManager(options = {}) {
     });
   }
 
-  /** 基线捕获（设计 §9.3 主判定）：已知 eventId 集合 + 已观测最大 turn。 */
+  /** 基线捕获（设计 §9.3 主判定）：已知 eventId 集合。 */
   async function captureBaseline(session, context = {}) {
     const after = session.eventCursor ?? 0;
     const body = await clawClient.getThreadEvents(session.threadId, after, context);
     const events = Array.isArray(body?.events) ? body.events : [];
-    // turn 号是 0-based（runtime _callIndex）：空基线必须为 -1，否则第一个
-    // turn 的终态（turn=0 <= maxTurn=0）会被 stale replay 判定丢弃，prompt 永挂。
-    let maxTurn = -1;
-    for (const event of events) {
-      const turn = typeof event?.turn === 'number'
-        ? event.turn
-        : (typeof event?.item?.turn === 'number' ? event.item.turn : 0);
-      if (turn > maxTurn) maxTurn = turn;
-    }
     return {
       cursor: Number(body?.cursor) || 0,
       knownEventIds: events.map((event) => event?.eventId).filter((id) => id !== undefined),
-      maxTurn,
     };
   }
 
@@ -260,7 +253,7 @@ export function createSessionManager(options = {}) {
         promptGeneration: prompt.generation,
         prompt: text,
       });
-      // 基线捕获（投递前）：cursor + knownEventIds + maxTurn（设计 §9.3）
+      // 基线捕获（投递前）：cursor + knownEventIds（设计 §9.3）
       let baseline;
       try {
         baseline = await captureBaseline(session, {
@@ -282,7 +275,6 @@ export function createSessionManager(options = {}) {
         promptGeneration: prompt.generation,
         after: baseline.cursor,
         knownEventCount: baseline.knownEventIds.length,
-        maxTurn: baseline.maxTurn,
       });
       prompt.mapper = createPromptEventMapper(baseline.knownEventIds);
       session.eventCursor = baseline.cursor;
@@ -398,20 +390,10 @@ export function createSessionManager(options = {}) {
           });
         }
 
-        // 终态 sanity check（设计 §9.3 第 3 层）：turn <= baseline.maxTurn 视为
-        // 旧事件回放，仅告警不判定，继续等待。turn 为 null 的终态无从比较，
-        // 按正常终态处理（事件不在基线 knownEventIds 中，是命令接受后新出现的）。
-        let resolvedTerminal = terminal;
-        if (
-          terminal
-          && typeof terminal.turn === 'number'
-          && terminal.turn <= baseline.maxTurn
-        ) {
-          log.warn?.(
-            `acp prompt: terminal ${terminal.kind} turn=${terminal.turn} <= baseline.maxTurn=${baseline.maxTurn}; treating as stale replay, keep waiting`,
-          );
-          resolvedTerminal = null;
-        }
+        // 终态判定不做 turn 号比较（见文件头注释）：能到达此处的事件必然
+        // 携带基线未见的新 eventId（同 eventId 重放已在 mapper 去重拦截），
+        // 即命令接受后新出现的终态。
+        const resolvedTerminal = terminal;
 
         if (resolvedTerminal) {
           // 终态前的 update 仍按序发送；取消优先于终态判定

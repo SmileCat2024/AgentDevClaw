@@ -7,7 +7,7 @@
  * - serial constraint: second prompt while one is active → -32001 with generation
  * - prompt happy path: baseline capture → command → updates in order → end_turn
  * - turn.failed → -32003 with failure payload
- * - stale terminal replay (turn <= baseline.maxTurn) → warn only, keep waiting
+ * - stale terminal replay is caught by eventId dedup → skipped, keep waiting
  * - cancel before turn.started → immediate cancelled, exactly one interrupt,
  *   no updates sent
  * - late events after cancel are dropped (no update, no further polls)
@@ -193,9 +193,10 @@ describe('prompt pipeline', () => {
     assert.match(claw.calls.commands[0].payload.idempotencyKey, /^acp-[0-9a-f-]{36}$/);
   });
 
-  it('0-based first turn (turn=0) on an empty baseline resolves end_turn, not stale replay', async () => {
-    // 回归：runtime turn 号是 0-based（_callIndex），空基线 maxTurn 必须为 -1；
-    // 旧实现 maxTurn=0 会把 turn=0 的终态当旧回放丢弃，prompt 永挂。
+  it('0-based first turn (turn=0) on an empty baseline resolves end_turn', async () => {
+    // runtime turn 号是 0-based（_callIndex）：turn=0 是合法首个终态。
+    // 旧实现以 turn 号比较做 stale replay 防护，曾把 turn=0 误判为旧回放
+    // 导致 prompt 永挂；现行判定只认 eventId，turn 号不参与。
     const claw = makeMockClawClient({
       pages: [
         { events: [], cursor: 0 }, // 基线（空）
@@ -215,7 +216,7 @@ describe('prompt pipeline', () => {
     assert.equal(updates[0].sessionUpdate, 'agent_message_chunk');
   });
 
-  it('baseline capture precedes command delivery and seeds dedup + maxTurn', async () => {
+  it('baseline capture precedes command delivery and seeds eventId dedup', async () => {
     const claw = makeMockClawClient({
       pages: [
         { events: [], cursor: 0 }, // 基线
@@ -272,23 +273,40 @@ describe('prompt pipeline', () => {
   });
 });
 
-describe('stale terminal replay (design §9.3 layer 3)', () => {
-  it('terminal with turn <= baseline.maxTurn warns and keeps waiting for the real one', async () => {
+describe('stale terminal replay is caught by eventId dedup (design §9.3)', () => {
+  it('baseline-known eventId replayed in the increment is skipped; waits for the real terminal', async () => {
+    // board 落盘事件的 eventId 固定，旧事件重放必带基线已见的 eventId：
+    // mapper 去重直接跳过，终态判定只认新 eventId 的事件。
+    const staleEvent = { type: 'turn.completed', turn: 2, eventId: 'evt-old', receivedAt: 1 };
     const claw = makeMockClawClient({
       pages: [
-        page([{ type: 'turn.completed', turn: 2 }], 2), // 基线（maxTurn=2）
-        page([{ type: 'turn.completed', turn: 2 }], 3), // 旧回放终态（新 eventId）
-        page([{ type: 'turn.completed', turn: 3 }], 4), // 真终态
+        { events: [staleEvent], cursor: 1 }, // 基线含旧终态（eventId=evt-old）
+        { events: [{ ...staleEvent }], cursor: 2 }, // 增量重现同 eventId
+        page([{ type: 'turn.completed', turn: 3 }], 3), // 真终态（新 eventId）
       ],
     });
-    const { logs, manager } = makeManager(claw);
+    const { manager } = makeManager(claw);
     const { sessionId } = await manager.createSession('C:/work');
     const updates = [];
     const result = await manager.runPrompt(sessionId, 'hi', { onUpdate: (u) => updates.push(u) });
     assert.deepEqual(result, { stopReason: 'end_turn' });
-    // 基线与回放的终态均不产生 update、不判定；只有真终态收尾
     assert.deepEqual(updates, []);
-    assert.ok(logs.some((m) => m.includes('stale replay')), 'expected stale-replay warning log');
+  });
+
+  it('terminal with a turn number below a previous turn still resolves (turn numbers are not monotonic across runtimes)', async () => {
+    // thread 接力后新 session 的 turn 号从 0 重新计数：新 eventId 的低 turn
+    // 号终态是合法新终态，不得因 turn 号比较被丢弃（曾经的第二个永挂路径）。
+    const claw = makeMockClawClient({
+      pages: [
+        page([{ type: 'turn.completed', turn: 5 }], 2), // 基线：接力前最后一轮 turn=5
+        page([{ type: 'turn.completed', turn: 0 }], 3), // 接力后新 runtime 首轮 turn=0（新 eventId）
+      ],
+    });
+    const { logs, manager } = makeManager(claw);
+    const { sessionId } = await manager.createSession('C:/work');
+    const result = await manager.runPrompt(sessionId, 'hi', { onUpdate: () => {} });
+    assert.deepEqual(result, { stopReason: 'end_turn' });
+    assert.ok(!logs.some((m) => String(m).includes('stale replay')), 'no stale-replay misjudgement expected');
   });
 });
 
