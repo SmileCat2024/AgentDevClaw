@@ -37,8 +37,9 @@ const RENDER_TEMPLATES = {
 const templateCache = new Map();
 
 // 焦点 runtime 切换时清空模板缓存（agent-data-loader.js 调用）：
-// 模板 URL 携带 ?agent= 编码后按 agent 区分，旧缓存的同名模板可能指向
-// 上一个 agent 的 projectRoot。内置模板（RENDER_TEMPLATES）随后按需重建，无副作用。
+// FEATURE_TEMPLATE_MAP 按焦点 agent 重新拉取，同名模板可能指向不同 mount。
+// /tpl/ URL 本身按注册事实寻址（跨 agent 同 mount 的 URL 相同），此清空属防御性，
+// 避免任何残留映射错误。内置模板（RENDER_TEMPLATES）随后按需重建，无副作用。
 function clearFeatureTemplateCache() {
   templateCache.clear();
 }
@@ -170,60 +171,20 @@ function parseToolResult(content, display) {
 
 /**
  * 根据模板名解析文件路径
- * 优先级：Feature 模板 > 系统模板 > 兜底
+ * 模板 URL 由 ViewerWorker 从注册事实生成（/tpl/{mountId}/{rel}），不透明、不含布局知识。
+ * 未注册的模板名一律等待 FEATURE_TEMPLATE_MAP 加载，不做任何本地路径推断。
  */
 const self = this;
 
-// 系统默认模板映射（兜底）
-// 格式：featureName/templateName
-// 注意：这些映射仅在 FEATURE_TEMPLATE_MAP 中没有找到时使用
-// 新增 feature 时应确保 feature 正确实现了 getPackageInfo() 和 getTemplateNames()
-const SYSTEM_TEMPLATE_MAP = {
-  // SubAgent Feature
-  'agent-spawn': 'subagent/agent-spawn',
-  'agent-list': 'subagent/agent-list',
-  'agent-send': 'subagent/agent-send',
-  'agent-close': 'subagent/agent-close',
-  'wait': 'subagent/wait',
-  // Skill Feature
-  'skill': 'skill/skill',
-  'invoke_skill': 'skill/skill',
-  // OpencodeBasic Feature
-  'read': 'opencode-basic/read',
-  'write': 'opencode-basic/write',
-  'edit': 'opencode-basic/edit',
-  'ls': 'opencode-basic/ls',
-  'glob': 'opencode-basic/glob',
-  'grep': 'opencode-basic/grep',
-  // Todo Feature
-  'task-create': 'todo/task-create',
-  'task-list': 'todo/task-list',
-  'task-get': 'todo/task-get',
-  'task-update': 'todo/task-update',
-  'task-clear': 'todo/task-clear',
-  // MCP Feature
-  'mcp-tool': 'mcp/mcp-tool',
-  'mcp-result': 'mcp/mcp-tool',
-  // UserInput Feature
-  'user-input': 'user-input/user-input',
-};
-
 function resolveTemplatePath(templateName) {
-  // 1. 优先查找 Feature 模板（从后端注入的动态数据）
+  // 1. 查找 Feature 模板（从后端注入的动态数据）
   if (FEATURE_TEMPLATE_MAP[templateName]) {
     return FEATURE_TEMPLATE_MAP[templateName];
   }
 
-  // 2. 使用系统默认映射（统一 URL 格式）
-  if (SYSTEM_TEMPLATE_MAP[templateName]) {
-    const mapped = SYSTEM_TEMPLATE_MAP[templateName];
-    // 系统内置模板使用 /template/agentdev/{feature}/{template}.render.js
-    return '/template/agentdev/' + mapped + '.render.js';
-  }
-
-  // 3. 兜底：返回 null，让调用者等待或使用默认模板
-  // 不再盲目生成错误的URL，而是等待 FEATURE_TEMPLATE_MAP 加载完成
-  console.warn('[Viewer] Template "' + templateName + '" not found in FEATURE_TEMPLATE_MAP or SYSTEM_TEMPLATE_MAP, waiting...');
+  // 2. 兜底：返回 null，让调用者等待或使用默认模板
+  // 模板缺失本质是装配缺陷，应被看见而不是被本地猜测掩盖
+  console.warn('[Viewer] Template "' + templateName + '" not found in FEATURE_TEMPLATE_MAP, waiting...');
   return null;
 }
 
@@ -257,15 +218,11 @@ async function loadTemplate(templateName, retryCount = 0) {
         return loadTemplate(templateName, retryCount + 1);
       }
       console.warn('[Viewer] Template "' + templateName + '" not found after retries');
-      const fallback = getTemplateFallback(templateName);
-      if (fallback) {
-        templateCache.set(templateName, fallback);
-      }
-      return fallback;
+      // 回退到内置模板但不写入缓存，下次渲染重试真实模板
+      return getTemplateFallback(templateName);
     }
 
-    // 统一使用 URL 方式加载模板
-    // Feature 模板: /template/agentdev/shell/bash.render.js
+    // 统一使用 URL 方式加载模板（URL 由服务端注册事实生成，不透明）
     const module = await import(window.__PROTOCLAW_APP_URL__?.(path) || path);
 
     // 1. 优先使用 default export（Feature 模板）
@@ -286,11 +243,8 @@ async function loadTemplate(templateName, retryCount = 0) {
     return null;
   } catch (e) {
     console.warn('[Viewer Worker] 加载模板失败: ' + templateName, e);
-    const fallback = getTemplateFallback(templateName);
-    if (fallback) {
-      templateCache.set(templateName, fallback);
-    }
-    return fallback;
+    // 回退到内置模板但不写入缓存，下次渲染重试真实模板
+    return getTemplateFallback(templateName);
   }
 }
 
