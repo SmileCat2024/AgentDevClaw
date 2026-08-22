@@ -109,4 +109,15 @@ describe('mapEnvelopeToTurnEvent', () => {
     assert.equal(event.type, 'turn.completed');
     assert.equal(event.turn, null);
   });
+
+  it('turn=0 is a valid first turn, not coerced to null (0-based contract)', () => {
+    // turn 号 = Agent._callIndex，0-based：首个 turn 为 0，不得把 0 当 falsy
+    // 误判为"无 turn 号"。跨 runtime 接力后低 turn 号会再次出现，是合法值。
+    const event = mapEnvelopeToTurnEvent(
+      { status: 'completed', outcome: { model: { providerStopReason: 'stop' } } },
+      { turn: 0 },
+    );
+    assert.equal(event.type, 'turn.completed');
+    assert.equal(event.turn, 0);
+  });
 });

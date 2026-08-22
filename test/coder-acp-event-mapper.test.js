@@ -6,8 +6,8 @@
  *   item.completed(agent_message) → agent_message_chunk (whole message, messageId)
  *   item.started(tool_call)       → tool_call (in_progress, rawInput only if present)
  *   item.completed(tool_call)     → tool_call_update (failed→failed, rawOutput only if present)
- *   turn.completed/failed/cancelled → terminal (no update)
- *   turn.started / reasoning item  → not mapped
+ *   item.completed(reasoning)     → agent_thought_chunk (codex-acp style, empty text skipped)
+ *   turn.completed/failed/cancelled → terminal (no update; completed/failed carry usage)
  * - missing-field rules: missing item.id → fallback `tool:<name>:<turn>:<seq>`;
  *   completed-only tool call → minimal tool_call emitted first; rawInput/rawOutput
  *   omitted when absent (never fabricated)
@@ -180,13 +180,25 @@ describe('createPromptEventMapper — §7 mapping table', () => {
     });
   });
 
-  it('does not map turn.started, thread.started, or reasoning items', () => {
+  it('maps item.completed(reasoning) to agent_thought_chunk; empty text skipped; item.started(reasoning) not mapped', () => {
+    const mapper = createPromptEventMapper();
+    const { updates } = mapper.mapBatch([
+      { type: 'item.completed', item: { id: 'r1', turn: 1, type: 'reasoning', text: 'thinking...' }, eventId: 'c' },
+      { type: 'item.completed', item: { id: 'r2', turn: 1, type: 'reasoning', text: '' }, eventId: 'c2' },
+      { type: 'item.started', item: { id: 'r3', turn: 1, type: 'reasoning', text: 'hmm' }, eventId: 'd' },
+    ]);
+    assert.deepEqual(updates, [{
+      sessionUpdate: 'agent_thought_chunk',
+      content: { type: 'text', text: 'thinking...' },
+      messageId: 'r1',
+    }]);
+  });
+
+  it('does not map turn.started or thread.started', () => {
     const mapper = createPromptEventMapper();
     const { updates, terminal } = mapper.mapBatch([
       { type: 'thread.started', threadId: 't', eventId: 'a' },
       { type: 'turn.started', turn: 1, eventId: 'b' },
-      { type: 'item.completed', item: { id: 'r1', turn: 1, type: 'reasoning', text: 'hmm' }, eventId: 'c' },
-      { type: 'item.started', item: { id: 'r2', turn: 1, type: 'reasoning', text: 'hmm' }, eventId: 'd' },
     ]);
     assert.deepEqual(updates, []);
     assert.equal(terminal, null);
@@ -195,14 +207,18 @@ describe('createPromptEventMapper — §7 mapping table', () => {
   it('returns terminal for turn.completed / turn.failed / turn.cancelled without updates', () => {
     const mapper = createPromptEventMapper();
     const completed = mapper.mapBatch([{ type: 'turn.completed', turn: 5, usage: { totalTokens: 1 }, eventId: 'x' }]);
-    assert.deepEqual(completed.terminal, { kind: 'completed', turn: 5 });
+    assert.deepEqual(completed.terminal, { kind: 'completed', turn: 5, usage: { totalTokens: 1 } });
     assert.deepEqual(completed.updates, []);
 
+    const noUsage = mapper.mapBatch([{ type: 'turn.completed', turn: 5, eventId: 'x2' }]);
+    assert.equal(noUsage.terminal.usage, null);
+
     const failed = mapper.mapBatch([
-      { type: 'turn.failed', turn: 6, error: { message: 'boom', category: 'runtime' }, eventId: 'y' },
+      { type: 'turn.failed', turn: 6, error: { message: 'boom', category: 'runtime' }, usage: { totalTokens: 2 }, eventId: 'y' },
     ]);
     assert.equal(failed.terminal.kind, 'failed');
     assert.equal(failed.terminal.error.message, 'boom');
+    assert.deepEqual(failed.terminal.usage, { totalTokens: 2 });
 
     const cancelled = mapper.mapBatch([
       { type: 'turn.cancelled', turn: null, error: { message: 'interrupted' }, eventId: 'z' },

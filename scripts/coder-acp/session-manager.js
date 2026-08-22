@@ -8,10 +8,13 @@
  *   - 双层取消汇流：session/cancel 通知与 $/cancel_request（ctx.signal）
  *     进入同一 cancel()；每次取消只调一次 interrupt（018 路由）
  *   - 终态判定只看事件流（turn.completed / turn.failed / turn.cancelled），
- *     不看看板状态；turn <= baseline.maxTurn 的终态视为旧事件回放，仅告警
+ *     不看看板状态；旧事件识别以 eventId 为主判定（018 起事件必带 eventId，
+ *     board 落盘事件的 eventId 固定，重放必同 ID 被 mapper 去重拦截）。
+ *     不做 turn 号比较——runtime 的 turn 号是 session 级 0-based 计数，
+ *     thread 接力后新 session 从 0 重新计数，跨 runtime 不单调，比较会误杀。
  *
  * prompt 执行管线（设计 §6）：
- *   基线捕获（cursor + knownEventIds + maxTurn）
+ *   基线捕获（cursor + knownEventIds）
  *   → POST threads/:id/commands（source: "acp" + idempotencyKey）
  *   → 轮询 GET threads/:id/events?after=cursor
  *   → 新事件经 event-mapper 映射为 session/update
@@ -50,6 +53,25 @@ function diagnosticErrorCode(error) {
 }
 
 /**
+ * runtime UsageInfo（{ inputTokens, outputTokens, totalTokens, cacheReadTokens?,
+ * cacheCreationTokens?, reasoningTokens? }）→ ACP Usage（camelCase，字段名见
+ * SDK types.gen.d.ts）。缺省字段省略，不构造假值；无任何可用字段 → null
+ * （PromptResponse 省略 usage）。缓存字段映射：cacheReadTokens→cachedReadTokens，
+ * cacheCreationTokens→cachedWriteTokens，reasoningTokens→thoughtTokens。
+ */
+export function toAcpUsage(usage) {
+  if (!usage || typeof usage !== 'object') return null;
+  const out = {};
+  if (Number.isFinite(usage.totalTokens)) out.totalTokens = usage.totalTokens;
+  if (Number.isFinite(usage.inputTokens)) out.inputTokens = usage.inputTokens;
+  if (Number.isFinite(usage.outputTokens)) out.outputTokens = usage.outputTokens;
+  if (Number.isFinite(usage.cacheReadTokens)) out.cachedReadTokens = usage.cacheReadTokens;
+  if (Number.isFinite(usage.cacheCreationTokens)) out.cachedWriteTokens = usage.cacheCreationTokens;
+  if (Number.isFinite(usage.reasoningTokens)) out.thoughtTokens = usage.reasoningTokens;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
  * @param {object} options
  * @param {import('./claw-client.js').ReturnType<typeof import('./claw-client.js').createClawClient>} options.clawClient
  * @param {{ warn: Function, info: Function, error: Function }} [options.log]
@@ -79,22 +101,14 @@ export function createSessionManager(options = {}) {
     });
   }
 
-  /** 基线捕获（设计 §9.3 主判定）：已知 eventId 集合 + 已观测最大 turn。 */
+  /** 基线捕获（设计 §9.3 主判定）：已知 eventId 集合。 */
   async function captureBaseline(session, context = {}) {
     const after = session.eventCursor ?? 0;
     const body = await clawClient.getThreadEvents(session.threadId, after, context);
     const events = Array.isArray(body?.events) ? body.events : [];
-    let maxTurn = 0;
-    for (const event of events) {
-      const turn = typeof event?.turn === 'number'
-        ? event.turn
-        : (typeof event?.item?.turn === 'number' ? event.item.turn : 0);
-      if (turn > maxTurn) maxTurn = turn;
-    }
     return {
       cursor: Number(body?.cursor) || 0,
       knownEventIds: events.map((event) => event?.eventId).filter((id) => id !== undefined),
-      maxTurn,
     };
   }
 
@@ -258,7 +272,11 @@ export function createSessionManager(options = {}) {
         promptGeneration: prompt.generation,
         prompt: text,
       });
-      // 基线捕获（投递前）：cursor + knownEventIds + maxTurn（设计 §9.3）
+      // 用户消息回显（codex-acp 风格）：client 转录完整性依赖 agent 侧回显，
+      // 在任何管线步骤前发出
+      await onUpdate({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text } });
+
+      // 基线捕获（投递前）：cursor + knownEventIds（设计 §9.3）
       let baseline;
       try {
         baseline = await captureBaseline(session, {
@@ -280,7 +298,6 @@ export function createSessionManager(options = {}) {
         promptGeneration: prompt.generation,
         after: baseline.cursor,
         knownEventCount: baseline.knownEventIds.length,
-        maxTurn: baseline.maxTurn,
       });
       prompt.mapper = createPromptEventMapper(baseline.knownEventIds);
       session.eventCursor = baseline.cursor;
@@ -359,6 +376,20 @@ export function createSessionManager(options = {}) {
             errorCode: diagnosticErrorCode(error),
             errorMessage: error?.message,
           }, { level: 'error' });
+          if (error instanceof ClawHttpError && error.status === 404) {
+            // thread 已在 Claw 侧不存在（被关闭/删除）：转结构化 thread_lost 诊断，
+            // 用户明确知道需要新建 session 而非继续等待
+            throw new AcpError(
+              ERROR_CODES.CLAW_ERROR,
+              `Claw error: thread ${session.threadId} no longer exists on the Claw server`,
+              {
+                code: 'CLAW_THREAD_LOST',
+                threadId: session.threadId,
+                lastKnownState: prompt.lastKnownState,
+                hint: 'thread 已在 Claw 侧关闭或删除；请新建 ACP session',
+              },
+            );
+          }
           throw toAcpError(error);
         }
         const returnedCursor = Number(body?.cursor);
@@ -396,20 +427,10 @@ export function createSessionManager(options = {}) {
           });
         }
 
-        // 终态 sanity check（设计 §9.3 第 3 层）：turn <= baseline.maxTurn 视为
-        // 旧事件回放，仅告警不判定，继续等待。turn 为 null 的终态无从比较，
-        // 按正常终态处理（事件不在基线 knownEventIds 中，是命令接受后新出现的）。
-        let resolvedTerminal = terminal;
-        if (
-          terminal
-          && typeof terminal.turn === 'number'
-          && terminal.turn <= baseline.maxTurn
-        ) {
-          log.warn?.(
-            `acp prompt: terminal ${terminal.kind} turn=${terminal.turn} <= baseline.maxTurn=${baseline.maxTurn}; treating as stale replay, keep waiting`,
-          );
-          resolvedTerminal = null;
-        }
+        // 终态判定不做 turn 号比较（见文件头注释）：能到达此处的事件必然
+        // 携带基线未见的新 eventId（同 eventId 重放已在 mapper 去重拦截），
+        // 即命令接受后新出现的终态。
+        const resolvedTerminal = terminal;
 
         if (resolvedTerminal) {
           // 终态前的 update 仍按序发送；取消优先于终态判定
@@ -419,7 +440,11 @@ export function createSessionManager(options = {}) {
           }
           if (isCancelled()) return await returnCancelled();
           if (resolvedTerminal.kind === 'failed') {
+            // 终态失败不抛 JSON-RPC error（codex-acp terminalFailurePromptResponse
+            // 风格）：返回 end_turn + _meta.claw.terminalFailure 结构化失败，client
+            // 保持对话连续性（可追问/重试）而非弹错误框
             const failure = resolvedTerminal.error ?? {};
+            const failureMessage = failure?.message || 'unknown failure';
             prompt.lastKnownState = 'terminal_failed';
             trace?.record('acp.prompt.terminal', {
               acpSessionId,
@@ -430,14 +455,15 @@ export function createSessionManager(options = {}) {
               turn: resolvedTerminal.turn,
               terminalEvent: resolvedTerminal.kind,
               lastEventType: events.at(-1)?.type,
-              errorCode: ERROR_CODES.CLAW_ERROR,
+              errorCode: 'TURN_FAILED',
               durationMs: Date.now() - prompt.startedAt,
             }, { level: 'error' });
-            throw new AcpError(
-              ERROR_CODES.CLAW_ERROR,
-              `Claw error: turn failed: ${failure?.message || 'unknown failure'}`,
-              { code: 'CLAW_ERROR', turnFailed: failure },
-            );
+            const failureUsage = toAcpUsage(resolvedTerminal.usage);
+            return {
+              stopReason: 'end_turn',
+              ...(failureUsage ? { usage: failureUsage } : {}),
+              _meta: { claw: { terminalFailure: { message: failureMessage, error: failure } } },
+            };
           }
           if (resolvedTerminal.kind === 'cancelled') {
             prompt.lastKnownState = 'terminal_cancelled';
@@ -464,7 +490,8 @@ export function createSessionManager(options = {}) {
             terminalEvent: resolvedTerminal.kind,
             durationMs: Date.now() - prompt.startedAt,
           });
-          return { stopReason: 'end_turn' };
+          const completedUsage = toAcpUsage(resolvedTerminal.usage);
+          return { stopReason: 'end_turn', ...(completedUsage ? { usage: completedUsage } : {}) };
         }
 
         for (const update of updates) {
@@ -475,33 +502,19 @@ export function createSessionManager(options = {}) {
         await interruptibleSleep(pollIntervalMs, prompt.wakeup.signal);
       }
     } catch (error) {
-      if (error instanceof AcpError && error.code === ERROR_CODES.CLAW_ERROR && error.data?.turnFailed) {
-        prompt.lastKnownState = 'terminal_failed';
-        trace?.record('acp.prompt.error', {
-          acpSessionId,
-          clawSessionId: session.clawSessionId,
-          threadId: session.threadId,
-          commandId: prompt.commandId,
-          promptGeneration: prompt.generation,
-          durationMs: Date.now() - prompt.startedAt,
-          lastKnownState: prompt.lastKnownState,
-          errorCode: error.data.code,
-          errorMessage: error.message,
-        }, { level: 'error' });
-      }
-      if (!(error instanceof AcpError) || error.code !== ERROR_CODES.CLAW_ERROR || error.data?.turnFailed) {
-        trace?.record('acp.prompt.error', {
-          acpSessionId,
-          clawSessionId: session.clawSessionId,
-          threadId: session.threadId,
-          commandId: prompt.commandId,
-          promptGeneration: prompt.generation,
-          durationMs: Date.now() - prompt.startedAt,
-          lastKnownState: prompt.lastKnownState,
-          errorCode: error?.data?.code ?? error?.code,
-          errorMessage: error?.message,
-        }, { level: 'error' });
-      }
+      // 终态失败已改为正常返回（end_turn + _meta，见上）；此处只剩管线基础设施
+      // 错误（网络 / server 业务错误 / 超时），统一记一条 trace 后上抛
+      trace?.record('acp.prompt.error', {
+        acpSessionId,
+        clawSessionId: session.clawSessionId,
+        threadId: session.threadId,
+        commandId: prompt.commandId,
+        promptGeneration: prompt.generation,
+        durationMs: Date.now() - prompt.startedAt,
+        lastKnownState: prompt.lastKnownState,
+        errorCode: error?.data?.code ?? error?.code,
+        errorMessage: error?.message,
+      }, { level: 'error' });
       throw error;
     } finally {
       signal?.removeEventListener('abort', onSignalAbort);
@@ -512,8 +525,45 @@ export function createSessionManager(options = {}) {
   }
 
   /**
+   * session/close（协议 v1 正式方法）：转发 Claw 归档 thread 并释放映射。
+   * 有 in-flight prompt 时拒绝（先 session/cancel）；thread 已在 server 侧
+   * 关闭（404 / thread_closed）视为幂等成功。adapter 断开不触发本方法
+   * （dispose 只清内存）——归档只在 client 显式请求时发生。
+   */
+  async function closeSession(acpSessionId) {
+    const session = sessions.get(acpSessionId);
+    if (!session) {
+      throw invalidParamsError('sessionId', `unknown sessionId: ${acpSessionId}`);
+    }
+    if (session.activePrompt) {
+      throw sessionBusyError(session.activePrompt.generation);
+    }
+    try {
+      await clawClient.closeThread(session.threadId, {
+        method: 'session/close',
+        acpSessionId,
+        clawSessionId: session.clawSessionId,
+      });
+    } catch (error) {
+      const alreadyGone = error instanceof ClawHttpError
+        && (error.status === 404
+          || error.body?.code === 'thread_closed'
+          || error.body?.code === 'thread_not_found');
+      if (!alreadyGone) throw toAcpError(error);
+    }
+    sessions.delete(acpSessionId);
+    trace?.record('acp.session.closed', {
+      acpSessionId,
+      clawSessionId: session.clawSessionId,
+      threadId: session.threadId,
+    });
+    return {};
+  }
+
+  /**
    * 断开清理：仅释放内存映射（设计 §5 / Q12）。Claw session / thread /
-   * runtime 按 Claw 自身持久化机制保留，v1 无 session/close。
+   * runtime 按 Claw 自身持久化机制保留；显式归档走 closeSession
+   * （session/close），不与断开挂钩。
    */
   function dispose() {
     sessions.clear();
@@ -523,6 +573,7 @@ export function createSessionManager(options = {}) {
     createSession,
     runPrompt,
     cancel,
+    closeSession,
     dispose,
     /** 测试与诊断用：当前 session 数量。 */
     get size() {

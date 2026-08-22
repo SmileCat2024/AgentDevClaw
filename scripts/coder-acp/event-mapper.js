@@ -7,10 +7,14 @@
  *
  * 映射表：
  *   item.completed(type=agent_message) → agent_message_chunk（整段发送，不切分）
+ *   item.completed(type=reasoning)     → agent_thought_chunk（codex-acp 风格，
+ *                                        client 渲染 thinking 折叠区）
  *   item.started(type=tool_call)       → tool_call（status: in_progress）
  *   item.completed(type=tool_call)     → tool_call_update（failed→failed 其余→completed）
- *   turn.completed / turn.failed / turn.cancelled → 终态（不产生 update）
- *   turn.started / thread.started / item.*(type=reasoning) → 不映射
+ *   turn.completed / turn.failed / turn.cancelled → 终态（不产生 update；
+ *                                        completed/failed 附带 event.usage 供
+ *                                        PromptResponse 使用）
+ *   turn.started / thread.started → 不映射
  *   未知事件类型 → 忽略（不产生 update，不报错）
  *
  * 缺失字段规则（设计 §7：runtime 经 reportSessionItemsForTurn 批量写事件，
@@ -92,7 +96,8 @@ export function createPromptEventMapper(baselineKnownEventIds = []) {
    * @param {Array<object>} events
    * @returns {{
    *   updates: Array<object>,
-   *   terminal: null | { kind: 'completed'|'failed'|'cancelled', turn: number|null, error?: object },
+   *   terminal: null | { kind: 'completed'|'failed'|'cancelled', turn: number|null,
+   *     error?: object, usage?: object|null },
    *   duplicatesSkipped: number,
    * }}
    */
@@ -144,8 +149,18 @@ export function createPromptEventMapper(baselineKnownEventIds = []) {
               status: item.status === 'failed' ? 'failed' : 'completed',
               ...(rawOutput !== undefined ? { rawOutput } : {}),
             });
+          } else if (item?.type === 'reasoning') {
+            // reasoning → agent_thought_chunk（codex-acp 风格）：client 渲染
+            // thinking 折叠区；空文本跳过（不产生空 chunk）
+            const thought = String(item.text ?? '');
+            if (thought) {
+              updates.push({
+                sessionUpdate: 'agent_thought_chunk',
+                content: { type: 'text', text: thought },
+                ...(typeof item.id === 'string' && item.id ? { messageId: item.id } : {}),
+              });
+            }
           }
-          // reasoning：不映射
           break;
         }
         case 'item.started': {
@@ -165,11 +180,11 @@ export function createPromptEventMapper(baselineKnownEventIds = []) {
           break;
         }
         case 'turn.completed': {
-          terminal = { kind: 'completed', turn: event.turn ?? null };
+          terminal = { kind: 'completed', turn: event.turn ?? null, usage: event.usage ?? null };
           break;
         }
         case 'turn.failed': {
-          terminal = { kind: 'failed', turn: event.turn ?? null, error: event.error ?? null };
+          terminal = { kind: 'failed', turn: event.turn ?? null, error: event.error ?? null, usage: event.usage ?? null };
           break;
         }
         case 'turn.cancelled': {

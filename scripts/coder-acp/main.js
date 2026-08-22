@@ -6,8 +6,10 @@
  *                   仍成功，连接类错误在首个触网方法报告）
  *   session/new     调 018 原子路由；mcpServers/additionalDirectories/sessionModes
  *                   非空一律 -32602
- *   session/prompt  仅 text block；管线见 session-manager
+ *   session/prompt  仅 text block；管线见 session-manager；受理后先回显
+ *                   user_message_chunk（client 转录完整性）
  *   session/cancel  notification，与 ctx.signal 汇入同一取消状态机
+ *   session/close   转发 Claw 归档 thread；断开不触发（dispose 只清内存）
  * 出站通知：session/update（event-mapper 产物）
  *
  * stdout 纪律：本模块不向 stdout 写任何内容；SDK 的 ndJsonStream 是唯一
@@ -72,6 +74,7 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
     agentCapabilities: {
       loadSession: false,
       promptCapabilities: { image: false, embeddedContext: false },
+      close: {},
     },
     agentInfo: { name: AGENT_NAME, title: AGENT_TITLE, version },
     };
@@ -110,6 +113,14 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
   agent.onNotification(acp.methods.agent.session.cancel, (ctx) => {
     trace?.record('acp.cancel.received', { method: 'session/cancel', acpSessionId: ctx.params?.sessionId });
     sessionManager.cancel(ctx.params?.sessionId);
+  });
+
+  agent.onRequest(acp.methods.agent.session.close, async (ctx) => {
+    const { sessionId } = ctx.params ?? {};
+    trace?.record('acp.session.close.request', { method: 'session/close', acpSessionId: sessionId });
+    const result = await sessionManager.closeSession(sessionId);
+    trace?.record('acp.session.close.response', { method: 'session/close', acpSessionId: sessionId });
+    return result;
   });
 
   agent.onConnect((connection) => {

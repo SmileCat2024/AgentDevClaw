@@ -6,8 +6,13 @@
  * - ID mapping established on session/new (Claw IDs stored, not exposed)
  * - serial constraint: second prompt while one is active → -32001 with generation
  * - prompt happy path: baseline capture → command → updates in order → end_turn
- * - turn.failed → -32003 with failure payload
- * - stale terminal replay (turn <= baseline.maxTurn) → warn only, keep waiting
+ *   （受理后先回显 user_message_chunk；turn.completed 携带 usage 时随
+ *   PromptResponse 返回）
+ * - turn.failed → end_turn + _meta.claw.terminalFailure（codex-acp 风格，
+ *   不抛 JSON-RPC error）
+ * - session/close：转发 Claw 归档、幂等（404/thread_closed）、busy 拒绝
+ * - 轮询 404（thread 已不存在）→ 结构化 CLAW_THREAD_LOST 诊断
+ * - stale terminal replay is caught by eventId dedup → skipped, keep waiting
  * - cancel before turn.started → immediate cancelled, exactly one interrupt,
  *   no updates sent
  * - late events after cancel are dropped (no update, no further polls)
@@ -36,7 +41,7 @@ import {
 // ── mock claw client（脚本式：pages 逐页消费） ─────────────────────
 
 function makeMockClawClient(overrides = {}) {
-  const calls = { createSessions: [], commands: [], events: [], interrupts: [] };
+  const calls = { createSessions: [], commands: [], events: [], interrupts: [], closes: [] };
   const state = {
     sessionResponse: {
       ok: true,
@@ -49,6 +54,7 @@ function makeMockClawClient(overrides = {}) {
     commandError: null,
     eventsError: null,
     interruptError: null,
+    closeError: null,
     /** 每次 getThreadEvents 弹出一页；耗尽后回落 defaultPage（空轮询） */
     pages: [],
     defaultPage: { events: [], cursor: 0 },
@@ -76,6 +82,11 @@ function makeMockClawClient(overrides = {}) {
       calls.interrupts.push(clawSessionId);
       if (state.interruptError) throw state.interruptError;
       return { ok: true, clawSessionId };
+    },
+    async closeThread(threadId) {
+      calls.closes.push(threadId);
+      if (state.closeError) throw state.closeError;
+      return { ok: true, thread: { threadId, status: 'closed' } };
     },
   };
 }
@@ -151,7 +162,7 @@ describe('session mapping', () => {
 });
 
 describe('prompt pipeline', () => {
-  it('happy path: updates in event order, then end_turn; command carries source+idempotencyKey', async () => {
+  it('happy path: echo + updates in event order, then end_turn with usage; command carries source+idempotencyKey', async () => {
     const claw = makeMockClawClient({
       pages: [
         { events: [], cursor: 0 }, // 基线（空）
@@ -168,7 +179,11 @@ describe('prompt pipeline', () => {
         ], 4),
         page([
           { type: 'item.completed', item: { id: 'm1', turn: 1, type: 'agent_message', text: 'done' } },
-          { type: 'turn.completed', turn: 1 },
+          {
+            type: 'turn.completed',
+            turn: 1,
+            usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18, cacheReadTokens: 3, reasoningTokens: 2 },
+          },
         ], 6),
       ],
     });
@@ -177,11 +192,16 @@ describe('prompt pipeline', () => {
     const result = await manager.runPrompt(sessionId, 'do it', {
       onUpdate: (update) => updates.push(update),
     });
-    assert.deepEqual(result, { stopReason: 'end_turn' });
-    assert.equal(updates.length, 3);
-    assert.equal(updates[0].sessionUpdate, 'tool_call');
-    assert.equal(updates[1].sessionUpdate, 'tool_call_update');
-    assert.equal(updates[2].sessionUpdate, 'agent_message_chunk');
+    assert.deepEqual(result, {
+      stopReason: 'end_turn',
+      usage: { totalTokens: 18, inputTokens: 11, outputTokens: 7, cachedReadTokens: 3, thoughtTokens: 2 },
+    });
+    // 回显在最前（codex-acp 风格：client 转录完整性依赖 agent 侧回显）
+    assert.equal(updates.length, 4);
+    assert.deepEqual(updates[0], { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'do it' } });
+    assert.equal(updates[1].sessionUpdate, 'tool_call');
+    assert.equal(updates[2].sessionUpdate, 'tool_call_update');
+    assert.equal(updates[3].sessionUpdate, 'agent_message_chunk');
 
     assert.equal(claw.calls.commands.length, 1);
     assert.equal(claw.calls.commands[0].threadId, 'thread-1');
@@ -193,7 +213,31 @@ describe('prompt pipeline', () => {
     assert.match(claw.calls.commands[0].payload.idempotencyKey, /^acp-[0-9a-f-]{36}$/);
   });
 
-  it('baseline capture precedes command delivery and seeds dedup + maxTurn', async () => {
+  it('0-based first turn (turn=0) on an empty baseline resolves end_turn', async () => {
+    // runtime turn 号是 0-based（_callIndex）：turn=0 是合法首个终态。
+    // 旧实现以 turn 号比较做 stale replay 防护，曾把 turn=0 误判为旧回放
+    // 导致 prompt 永挂；现行判定只认 eventId，turn 号不参与。
+    const claw = makeMockClawClient({
+      pages: [
+        { events: [], cursor: 0 }, // 基线（空）
+        page([
+          { type: 'item.completed', item: { id: 'm0', turn: 0, type: 'agent_message', text: 'hi back' } },
+          { type: 'turn.completed', turn: 0 },
+        ], 2),
+      ],
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    const updates = [];
+    const result = await manager.runPrompt(sessionId, 'hi', {
+      onUpdate: (update) => updates.push(update),
+    });
+    assert.deepEqual(result, { stopReason: 'end_turn' });
+    assert.equal(updates.length, 2);
+    assert.equal(updates[0].sessionUpdate, 'user_message_chunk');
+    assert.equal(updates[1].sessionUpdate, 'agent_message_chunk');
+  });
+
+  it('baseline capture precedes command delivery and seeds eventId dedup', async () => {
     const claw = makeMockClawClient({
       pages: [
         { events: [], cursor: 0 }, // 基线
@@ -208,7 +252,7 @@ describe('prompt pipeline', () => {
     assert.ok(claw.calls.events[0].after === 0);
   });
 
-  it('turn.failed → -32003 carrying the failure payload', async () => {
+  it('turn.failed → end_turn + _meta.claw.terminalFailure (codex-acp style, no JSON-RPC error)', async () => {
     const claw = makeMockClawClient({
       pages: [
         { events: [], cursor: 0 }, // 基线
@@ -216,11 +260,14 @@ describe('prompt pipeline', () => {
       ],
     });
     const { manager, sessionId } = await makeSession(claw);
-    await assert.rejects(manager.runPrompt(sessionId, 'hi', { onUpdate: () => {} }), (error) => {
-      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
-      assert.equal(error.data.turnFailed.message, 'boom');
-      return true;
-    });
+    const updates = [];
+    const result = await manager.runPrompt(sessionId, 'hi', { onUpdate: (u) => updates.push(u) });
+    assert.equal(result.stopReason, 'end_turn');
+    assert.equal(result._meta.claw.terminalFailure.message, 'boom');
+    assert.deepEqual(result._meta.claw.terminalFailure.error, { message: 'boom', category: 'runtime' });
+    assert.equal(result.usage, undefined); // 无 usage 数据时省略，不构造假值
+    assert.equal(updates.length, 1); // 仅用户消息回显
+    assert.equal(updates[0].sessionUpdate, 'user_message_chunk');
   });
 
   it('serial constraint: concurrent prompt → -32001 with the active generation', async () => {
@@ -250,28 +297,47 @@ describe('prompt pipeline', () => {
   });
 });
 
-describe('stale terminal replay (design §9.3 layer 3)', () => {
-  it('terminal with turn <= baseline.maxTurn warns and keeps waiting for the real one', async () => {
+describe('stale terminal replay is caught by eventId dedup (design §9.3)', () => {
+  it('baseline-known eventId replayed in the increment is skipped; waits for the real terminal', async () => {
+    // board 落盘事件的 eventId 固定，旧事件重放必带基线已见的 eventId：
+    // mapper 去重直接跳过，终态判定只认新 eventId 的事件。
+    const staleEvent = { type: 'turn.completed', turn: 2, eventId: 'evt-old', receivedAt: 1 };
     const claw = makeMockClawClient({
       pages: [
-        page([{ type: 'turn.completed', turn: 2 }], 2), // 基线（maxTurn=2）
-        page([{ type: 'turn.completed', turn: 2 }], 3), // 旧回放终态（新 eventId）
-        page([{ type: 'turn.completed', turn: 3 }], 4), // 真终态
+        { events: [staleEvent], cursor: 1 }, // 基线含旧终态（eventId=evt-old）
+        { events: [{ ...staleEvent }], cursor: 2 }, // 增量重现同 eventId
+        page([{ type: 'turn.completed', turn: 3 }], 3), // 真终态（新 eventId）
       ],
     });
-    const { logs, manager } = makeManager(claw);
+    const { manager } = makeManager(claw);
     const { sessionId } = await manager.createSession('C:/work');
     const updates = [];
     const result = await manager.runPrompt(sessionId, 'hi', { onUpdate: (u) => updates.push(u) });
     assert.deepEqual(result, { stopReason: 'end_turn' });
-    // 基线与回放的终态均不产生 update、不判定；只有真终态收尾
-    assert.deepEqual(updates, []);
-    assert.ok(logs.some((m) => m.includes('stale replay')), 'expected stale-replay warning log');
+    // 旧终态重放被去重跳过：除用户消息回显外无任何 item/terminal update
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].sessionUpdate, 'user_message_chunk');
+  });
+
+  it('terminal with a turn number below a previous turn still resolves (turn numbers are not monotonic across runtimes)', async () => {
+    // thread 接力后新 session 的 turn 号从 0 重新计数：新 eventId 的低 turn
+    // 号终态是合法新终态，不得因 turn 号比较被丢弃（曾经的第二个永挂路径）。
+    const claw = makeMockClawClient({
+      pages: [
+        page([{ type: 'turn.completed', turn: 5 }], 2), // 基线：接力前最后一轮 turn=5
+        page([{ type: 'turn.completed', turn: 0 }], 3), // 接力后新 runtime 首轮 turn=0（新 eventId）
+      ],
+    });
+    const { logs, manager } = makeManager(claw);
+    const { sessionId } = await manager.createSession('C:/work');
+    const result = await manager.runPrompt(sessionId, 'hi', { onUpdate: () => {} });
+    assert.deepEqual(result, { stopReason: 'end_turn' });
+    assert.ok(!logs.some((m) => String(m).includes('stale replay')), 'no stale-replay misjudgement expected');
   });
 });
 
 describe('cancel semantics (design §8)', () => {
-  it('cancel before turn.started returns cancelled immediately, interrupts exactly once, sends no updates', async () => {
+  it('cancel before turn.started returns cancelled immediately, interrupts exactly once, sends only the echo', async () => {
     const claw = makeMockClawClient({ defaultPage: { events: [], cursor: 0 } });
     const { manager, sessionId } = await makeSession(claw);
     const updates = [];
@@ -283,7 +349,9 @@ describe('cancel semantics (design §8)', () => {
     assert.deepEqual(await promptPromise, { stopReason: 'cancelled' });
     assert.equal(claw.calls.interrupts.length, 1);
     assert.equal(claw.calls.interrupts[0], 'claw-s1');
-    assert.deepEqual(updates, []);
+    // 回显已发出（用户消息确实被受理），但无任何 item/terminal update
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].sessionUpdate, 'user_message_chunk');
   });
 
   it('late events after cancel are dropped: no updates, no further polls', async () => {
@@ -301,7 +369,9 @@ describe('cancel semantics (design §8)', () => {
     ], 5));
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(claw.calls.events.length, pollsAtCancel);
-    assert.deepEqual(updates, []);
+    // 回显之外无迟到 update
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].sessionUpdate, 'user_message_chunk');
     assert.equal(claw.calls.interrupts.length, 1);
   });
 
@@ -376,6 +446,71 @@ describe('poll failure mapping', () => {
       return true;
     });
   });
+
+  it('thread gone (poll 404) → structured CLAW_THREAD_LOST diagnostic', async () => {
+    const claw = makeMockClawClient({ pages: [{ events: [], cursor: 0 }] });
+    const { manager, sessionId } = await makeSession(claw);
+    const promptPromise = manager.runPrompt(sessionId, 'x', { onUpdate: () => {} });
+    await new Promise((r) => setTimeout(r, 10)); // 基线已完成，进入轮询
+    claw.state.eventsError = new ClawHttpError(404, { ok: false, code: 'thread_not_found' });
+    await assert.rejects(promptPromise, (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
+      assert.equal(error.data.code, 'CLAW_THREAD_LOST');
+      assert.equal(error.data.threadId, 'thread-1');
+      assert.equal(error.data.lastKnownState, 'command_accepted');
+      return true;
+    });
+  });
+});
+
+describe('session/close', () => {
+  it('forwards thread close to Claw, removes the mapping, returns {}', async () => {
+    const claw = makeMockClawClient();
+    const { manager, sessionId } = await makeSession(claw);
+    assert.deepEqual(await manager.closeSession(sessionId), {});
+    assert.deepEqual(claw.calls.closes, ['thread-1']);
+    assert.equal(manager.getSession(sessionId), null);
+    assert.equal(manager.size, 0);
+  });
+
+  it('unknown sessionId → -32602; busy session → -32001', async () => {
+    const claw = makeMockClawClient();
+    const { manager, sessionId } = await makeSession(claw);
+    await assert.rejects(manager.closeSession('nope'), (error) => {
+      assert.equal(error.code, ERROR_CODES.INVALID_PARAMS);
+      assert.equal(error.data.field, 'sessionId');
+      return true;
+    });
+    const first = manager.runPrompt(sessionId, 'x', { onUpdate: () => {} });
+    await new Promise((r) => setTimeout(r, 20));
+    await assert.rejects(manager.closeSession(sessionId), (error) => {
+      assert.equal(error.code, ERROR_CODES.SESSION_BUSY);
+      return true;
+    });
+    manager.cancel(sessionId);
+    assert.deepEqual(await first, { stopReason: 'cancelled' });
+  });
+
+  it('already-closed thread (404 / thread_closed) is idempotent success', async () => {
+    for (const closeError of [
+      new ClawHttpError(404, { ok: false, code: 'thread_not_found' }),
+      new ClawHttpError(409, { ok: false, code: 'thread_closed' }),
+    ]) {
+      const claw = makeMockClawClient({ closeError });
+      const { manager, sessionId } = await makeSession(claw);
+      assert.deepEqual(await manager.closeSession(sessionId), {});
+      assert.equal(manager.size, 0);
+    }
+  });
+
+  it('other close failures map to -32003 and keep the mapping', async () => {
+    const claw = makeMockClawClient({
+      closeError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'x' }),
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    await assert.rejects(manager.closeSession(sessionId), (error) => error.code === ERROR_CODES.CLAW_ERROR);
+    assert.equal(manager.size, 1);
+  });
 });
 
 describe('dispose (design §5 / Q12)', () => {
@@ -412,6 +547,7 @@ describe('claw-client request assembly (HTTP layer)', () => {
     });
     await claw.createCoderSession('C:/work');
     await claw.appendUserMessage('thread-1', { text: 'hi', idempotencyKey: 'acp-x' });
+    await claw.closeThread('thread-1');
 
     assert.deepEqual(sent[0], {
       url: 'http://127.0.0.1:1/protoclaw/acp/coder/sessions',
@@ -422,6 +558,11 @@ describe('claw-client request assembly (HTTP layer)', () => {
       url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/commands',
       method: 'POST',
       body: { kind: 'user_message', text: 'hi', source: 'acp', idempotencyKey: 'acp-x' },
+    });
+    assert.deepEqual(sent[2], {
+      url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/close',
+      method: 'POST',
+      body: { reason: 'acp session/close' },
     });
   });
 });

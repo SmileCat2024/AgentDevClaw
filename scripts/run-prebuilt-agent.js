@@ -860,6 +860,11 @@ SessionLifecycle.prototype.start = async function () {
     }
   });
 
+  // turn 号契约（完整定义见 turn-event-mapping.js 头注释）：0-based，
+  // = Agent._callIndex。callStarted 由 CallArbiter._kick() 同步 emit、
+  // envelope 实际执行（executeCall 内 _callIndex 递增）在其后异步发生，
+  // 故此处读到的 _callIndex 尚未递增，+1 对齐本次 call 号；callFinished
+  // 时递增已完成，直接用 _callIndex。同一 turn 两事件同号。
   this.callArbiter.on('callStarted', (envelope) => {
     void self.reportThreadEvent({
       type: 'turn.started',

@@ -88,6 +88,8 @@ describe('coder ACP prompt observability', () => {
       onUpdate() { throw new Error('client notification failed'); },
     }), /client notification failed/);
     const adapterError = adapterTrace.records.find((record) => record.event === 'acp.prompt.error');
-    assert.equal(adapterError.lastKnownState, 'command_accepted');
+    // 回显（首个 onUpdate）现在发生在 prompt_received 阶段：client 通知通道
+    // 故障在回显时即 surfaced，早于命令投递
+    assert.equal(adapterError.lastKnownState, 'prompt_received');
   });
 });
