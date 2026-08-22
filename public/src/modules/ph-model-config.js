@@ -2,11 +2,12 @@
  * ph-model-config.js — 编程小助手项目设置面板
  *
  * IDE 式布局：左侧分类列表 + 右侧配置区域
- * 分类页：模型配置、进程模式
+ * 分类页：模型配置、进程模式、Feature 设置（二级页：agent 层配置编辑器）
  *
  * 外部依赖（通过全局作用域）：
  *   - escapeHtml (app-ui.js)
  *   - currentLanguage (app-core.js)
+ *   - createFeatureConfigEditor (feature-config-editor.js)
  *
  * 入口：window.phOpenModelConfig() → renderPhModelConfigOverlay()
  * 关闭：window.phCloseModelConfig()
@@ -15,7 +16,15 @@
  */
 'use strict';
 
-let _phSettingsTab = 'model'; // 'model' | 'process'
+let _phSettingsTab = 'model'; // 'model' | 'process' | 'feature'
+let _phFeatureEditor = null;
+
+function _closePhFeatureEditor() {
+  if (_phFeatureEditor) {
+    _phFeatureEditor.close();
+    _phFeatureEditor = null;
+  }
+}
 
 function ensurePhModelConfigHost() {
   let host = document.getElementById('ph-model-config-host');
@@ -144,7 +153,7 @@ function _renderProcessModeContent(agent) {
 
 function renderPhModelConfigOverlay(agent, presets) {
   const host = ensurePhModelConfigHost();
-  if (!agent) { host.innerHTML = ''; return; }
+  if (!agent) { host.innerHTML = ''; _closePhFeatureEditor(); return; }
   const isZh = currentLanguage === 'zh';
 
   // Store current project for process mode key
@@ -152,9 +161,48 @@ function renderPhModelConfigOverlay(agent, presets) {
     ? getFeatureCreatorProjects(agent) : [];
   window._phCurrentProject = projects.find(p => p.openDirectory === agent?.workspace_state?.openDirectory) || projects[0] || null;
 
+  // ── Feature 设置二级页：共享配置编辑器（agent 层）──────────
+  if (_phSettingsTab === 'feature') {
+    if (typeof createFeatureConfigEditor !== 'function') {
+      _phSettingsTab = 'model';
+    } else {
+      _closePhFeatureEditor();
+      host.innerHTML = [
+        '<div class="feature-detail-overlay">',
+        '<div class="feature-detail-window ph-settings-window">',
+        '<div class="feature-detail-head">',
+        '<div>',
+        '<div class="feature-detail-title">' + escapeHtml(isZh ? '工作空间设置 · Feature' : 'Workspace Settings · Feature') + '</div>',
+        '<div class="feature-detail-subtitle">' + escapeHtml(isZh
+          ? '编程小助手整体的 Feature 配置，对所有项目目录生效'
+          : 'Feature config for the whole Programming Helper workspace') + '</div>',
+        '</div>',
+        '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">&times;</button>',
+        '</div>',
+        '<div class="ph-settings-feature-wrap" id="ph-feature-config-host"></div>',
+        '</div>',
+        '</div>',
+      ].join('');
+      _phFeatureEditor = createFeatureConfigEditor({
+        host: document.getElementById('ph-feature-config-host'),
+        scopeId: 'agent',
+        title: isZh ? 'Feature 设置' : 'Feature Config',
+        onBack: () => {
+          _closePhFeatureEditor();
+          _phSettingsTab = 'model';
+          renderPhModelConfigOverlay(agent, presets);
+        },
+      });
+      _phFeatureEditor.open();
+      return;
+    }
+  }
+  _closePhFeatureEditor();
+
   const tabs = [
     { key: 'model', label: isZh ? '模型配置' : 'Model Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
     { key: 'process', label: isZh ? '进程模式' : 'Process Mode', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>' },
+    { key: 'feature', label: isZh ? 'Feature 设置' : 'Feature Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M2 14h4"/><path d="M10 8h4"/><path d="M18 16h4"/></svg>' },
   ];
 
   const tabItems = tabs.map(t => {

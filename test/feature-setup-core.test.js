@@ -1,13 +1,12 @@
 /**
  * Tests for public/src/modules/feature-setup-core.js
  *
- * 覆盖 ticket 06 三态编辑器的纯逻辑（从 feature-setup-ui.js 提取）：
+ * 覆盖两态配置编辑器（跟随 / 接管）的纯逻辑：
  *   - 点路径原语（fsGetPathValue / fsHasField / fsSetPath / fsDeletePath）
- *   - 三态分类（fsClassifyField / fsFieldStates）：覆盖 / 继承 / 出厂默认 / pin
+ *   - 两态分类（fsClassifyField / fsFieldStates）：接管（存在即接管）/ 跟随
  *   - dirty 叠加（fsApplyDirty）与控件取值（fsControlValue）
- *   - 保存 payload（fsBuildLayerContent，diff-only 稀疏核心 D9）
- *   - 值同判定（fsValuesEqual，D8）
- *   - 作用域构建（fsBuildScopes / fsBaseName）与 manifest 查找（fsPropFor）
+ *   - 保存 payload（fsBuildLayerContent，diff-only 稀疏核心）
+ *   - manifest 查找（fsPropFor）与目录名（fsBaseName）
  *
  * 对象断言走 JSON.parse + JSON.stringify，避免跨 VM realm 比较；
  * 多语句用例经 runBlock（IIFE）执行，隔离词法作用域避免重复 const 声明。
@@ -28,7 +27,7 @@ function runBlock(ctx, code) {
   return ctx.run(`(() => { ${code} })()`);
 }
 
-/** 典型两层配置（全局 + 目录），用于三态分类测试。 */
+/** 典型两层配置（全局 + 目录），用于两态分类测试。 */
 const TYPED_LAYERS = `[
   { id: 'global', label: 'Global', sparse: {
       lsp: { typescript: { mode: 'exec' }, nodePath: '/usr/bin/node' },
@@ -60,7 +59,7 @@ describe('feature-setup-core: fsGetPathValue', () => {
 describe('feature-setup-core: fsHasField', () => {
   const ctx = loadCore();
 
-  it('returns true for existing key (存在即覆盖)', () => {
+  it('returns true for existing key (存在即接管)', () => {
     assert.equal(ctx.run(`fsHasField({ a: { b: 0 } }, ['a','b'])`), true);
   });
 
@@ -110,68 +109,79 @@ describe('feature-setup-core: fsDeletePath', () => {
   });
 });
 
-// ── 三态分类 ─────────────────────────────────────────────────
+// ── 两态分类 ─────────────────────────────────────────────────
 
 describe('feature-setup-core: fsClassifyField', () => {
   const ctx = loadCore();
 
-  it('override: 本层存在该字段（存在即覆盖）', () => {
+  it('takeover: 本层存在该字段（存在即接管）', () => {
     const r = runBlock(ctx, `
       const layers = ${TYPED_LAYERS};
       return JSON.stringify(fsClassifyField('lsp.typescript.mode', 1, layers));
     `);
     assert.deepEqual(JSON.parse(r), {
-      status: 'override',
+      status: 'takeover',
       layerValue: 'runtime',
       upstream: { kind: 'layer', value: 'exec', label: 'Global', layerId: 'global' },
     });
   });
 
-  it('pin: 本层值与上游相同仍为 override（D8）', () => {
+  it('接管值与上游相同仍为 takeover（无值同特判）', () => {
     const r = runBlock(ctx, `
       const layers = ${TYPED_LAYERS};
       layers[1].sparse.lsp.typescript.mode = 'exec';
       return fsClassifyField('lsp.typescript.mode', 1, layers).status;
     `);
-    assert.equal(r, 'override');
+    assert.equal(r, 'takeover');
   });
 
-  it('inherit: 本层无 + 上游有', () => {
+  it('follow: 本层无 + 上游有（携带上游层信息）', () => {
     const r = runBlock(ctx, `
       const layers = ${TYPED_LAYERS};
       return JSON.stringify(fsClassifyField('lsp.nodePath', 1, layers));
     `);
     assert.deepEqual(JSON.parse(r), {
-      status: 'inherit',
+      status: 'follow',
       upstream: { kind: 'layer', value: '/usr/bin/node', label: 'Global', layerId: 'global' },
     });
   });
 
-  it('default: 本层无 + 上游无', () => {
+  it('follow: 本层无 + 上游无（出厂默认虚拟上游）', () => {
     const r = runBlock(ctx, `return JSON.stringify(fsClassifyField('shell.missing', 1, ${TYPED_LAYERS}));`);
-    assert.deepEqual(JSON.parse(r), { status: 'default' });
+    assert.deepEqual(JSON.parse(r), {
+      status: 'follow',
+      upstream: { kind: 'default', label: null, layerId: null },
+    });
   });
 
-  it('global 层自身字段（无更早层）→ 存在即 override', () => {
+  it('global 层自身字段（无更早层）→ 存在即 takeover', () => {
     const r = runBlock(ctx, `return fsClassifyField('shell.bashEnabled', 0, ${TYPED_LAYERS}).status;`);
-    assert.equal(r, 'override');
+    assert.equal(r, 'takeover');
   });
 
-  it('层越界返回 default', () => {
+  it('takeover 态携带 upstream（供重置后显示生效值）', () => {
+    const r = runBlock(ctx, `return fsClassifyField('shell.bashEnabled', 0, ${TYPED_LAYERS}).upstream.kind;`);
+    assert.equal(r, 'default');
+  });
+
+  it('层越界返回 follow + 默认上游', () => {
     const r = runBlock(ctx, `return JSON.stringify(fsClassifyField('lsp.typescript.mode', 5, ${TYPED_LAYERS}));`);
-    assert.deepEqual(JSON.parse(r), { status: 'default' });
+    assert.deepEqual(JSON.parse(r), {
+      status: 'follow',
+      upstream: { kind: 'default', label: null, layerId: null },
+    });
   });
 
   it('多层命中时取最近上游层（索引最大）', () => {
     const r = runBlock(ctx, `
       const layers = [
         { id: 'global', sparse: { a: { x: 1 } } },
-        { id: 'dir:/m', sparse: { a: { x: 2 } } },
+        { id: 'agent', sparse: { a: { x: 2 } } },
         { id: 'dir:/top', sparse: {} },
       ];
       return fsClassifyField('a.x', 2, layers).upstream.layerId;
     `);
-    assert.equal(r, 'dir:/m');
+    assert.equal(r, 'agent');
   });
 
   it('无 label 的上游层回退 #N', () => {
@@ -206,7 +216,7 @@ describe('feature-setup-core: fsFieldStates', () => {
     ]);
   });
 
-  it('activeScopeId 不在 layers 中返回空表', () => {
+  it('scopeId 不在 layers 中返回空表', () => {
     const size = runBlock(ctx, `return fsFieldStates(${SECTIONS}, ${TYPED_LAYERS}, 'dir:/nope').size;`);
     assert.equal(size, 0);
   });
@@ -227,39 +237,53 @@ describe('feature-setup-core: fsApplyDirty', () => {
   const ctx = loadCore();
 
   const BASE_STATES = `new Map([
-    ['a.over', { status: 'override', layerValue: 1, upstream: { kind: 'layer', value: 0, label: 'Global', layerId: 'global' } }],
-    ['a.inh', { status: 'inherit', upstream: { kind: 'layer', value: 2, label: 'Global', layerId: 'global' } }],
-    ['a.def', { status: 'default' }],
+    ['a.over', { status: 'takeover', layerValue: 1, upstream: { kind: 'layer', value: 0, label: 'Global', layerId: 'global' } }],
+    ['a.inh', { status: 'follow', upstream: { kind: 'layer', value: 2, label: 'Global', layerId: 'global' } }],
+    ['a.def', { status: 'follow', upstream: { kind: 'default', value: undefined, label: null, layerId: null } }],
   ])`;
 
-  it('null（重置为继承）+ 有上游 → inherit', () => {
+  it('null（重置为跟随）+ 有上游 → follow（保留 upstream 显示生效值）', () => {
     const r = runBlock(ctx, `
       const dirty = new Map([['a.over', { value: null }]]);
       return JSON.stringify(fsApplyDirty(${BASE_STATES}, dirty).get('a.over'));
     `);
     assert.deepEqual(JSON.parse(r), {
-      status: 'inherit',
+      status: 'follow',
       upstream: { kind: 'layer', value: 0, label: 'Global', layerId: 'global' },
     });
   });
 
-  it('null + 无上游 → default', () => {
+  it('null + 无上游 → follow（出厂默认虚拟上游）', () => {
     const r = runBlock(ctx, `
       const dirty = new Map([['a.def', { value: null }]]);
       return JSON.stringify(fsApplyDirty(${BASE_STATES}, dirty).get('a.def'));
     `);
-    assert.deepEqual(JSON.parse(r), { status: 'default' });
+    assert.deepEqual(JSON.parse(r), {
+      status: 'follow',
+      upstream: { kind: 'default', label: null, layerId: null },
+    });
   });
 
-  it('新值 → override + pendingValue，upstream 保留供对照', () => {
+  it('null 重置 takeover 缺 upstream 时补默认虚拟上游', () => {
     const r = runBlock(ctx, `
-      const dirty = new Map([['a.inh', { value: 9 }]]);
+      const base = new Map([['a.raw', { status: 'takeover', layerValue: 7 }]]);
+      return JSON.stringify(fsApplyDirty(base, new Map([['a.raw', { value: null }]])).get('a.raw'));
+    `);
+    assert.deepEqual(JSON.parse(r), {
+      status: 'follow',
+      upstream: { kind: 'default', label: null, layerId: null },
+    });
+  });
+
+  it('新值 → takeover + pendingValue（与上游相同也照写，无值同特判）', () => {
+    const r = runBlock(ctx, `
+      const dirty = new Map([['a.inh', { value: 2 }]]);
       return JSON.stringify(fsApplyDirty(${BASE_STATES}, dirty).get('a.inh'));
     `);
     assert.deepEqual(JSON.parse(r), {
-      status: 'override',
+      status: 'takeover',
       upstream: { kind: 'layer', value: 2, label: 'Global', layerId: 'global' },
-      pendingValue: 9,
+      pendingValue: 2,
     });
   });
 
@@ -275,22 +299,23 @@ describe('feature-setup-core: fsApplyDirty', () => {
 describe('feature-setup-core: fsControlValue', () => {
   const ctx = loadCore();
 
-  it('override 优先 pendingValue，其次 layerValue', () => {
-    assert.equal(ctx.run(`fsControlValue({ status: 'override', pendingValue: 5, layerValue: 1 })`), 5);
-    assert.equal(ctx.run(`fsControlValue({ status: 'override', layerValue: 1 })`), 1);
+  it('takeover 优先 pendingValue，其次 layerValue', () => {
+    assert.equal(ctx.run(`fsControlValue({ status: 'takeover', pendingValue: 5, layerValue: 1 })`), 5);
+    assert.equal(ctx.run(`fsControlValue({ status: 'takeover', layerValue: 1 })`), 1);
   });
 
-  it('inherit 取上游生效值', () => {
-    assert.equal(ctx.run(`fsControlValue({ status: 'inherit', upstream: { value: 'exec' } })`), 'exec');
+  it('follow + 上游层 → 上游生效值', () => {
+    assert.equal(ctx.run(`fsControlValue({ status: 'follow', upstream: { kind: 'layer', value: 'exec' } })`), 'exec');
   });
 
-  it('default 取 manifest default', () => {
+  it('follow + 出厂默认 → manifest default', () => {
+    assert.equal(ctx.run(`fsControlValue({ status: 'follow' }, { default: 'x' })`), 'x');
     assert.equal(ctx.run(`fsControlValue(null, { default: 'x' })`), 'x');
     assert.equal(ctx.run(`fsControlValue(undefined, {})`), undefined);
   });
 });
 
-// ── 保存 payload（diff-only 稀疏核心，D9）────────────────────
+// ── 保存 payload（diff-only 稀疏核心）─────────────────────────
 
 describe('feature-setup-core: fsBuildLayerContent', () => {
   const ctx = loadCore();
@@ -322,7 +347,7 @@ describe('feature-setup-core: fsBuildLayerContent', () => {
     assert.deepEqual(JSON.parse(r), {});
   });
 
-  it('验收剧本 5：只碰一个字段 → diff 恰好只有该字段（稀疏性）', () => {
+  it('稀疏性：只碰一个字段 → diff 恰好只有该字段', () => {
     const r = runBlock(ctx, `
       const layers = [
         { id: 'global', sparse: { lsp: { a: 1, b: 2, c: 3 } } },
@@ -344,7 +369,7 @@ describe('feature-setup-core: fsBuildLayerContent', () => {
     assert.deepEqual(JSON.parse(r), { b: { c: 2 } });
   });
 
-  it('activeScopeId 找不到返回 null', () => {
+  it('scopeId 找不到返回 null', () => {
     assert.equal(
       runBlock(ctx, `return fsBuildLayerContent(${TYPED_LAYERS}, 'dir:/ghost', new Map());`),
       null
@@ -366,60 +391,7 @@ describe('feature-setup-core: fsBuildLayerContent', () => {
   });
 });
 
-// ── 值同判定（D8）────────────────────────────────────────────
-
-describe('feature-setup-core: fsValuesEqual', () => {
-  const ctx = loadCore();
-
-  it('数组顺序无关（排序归一）', () => {
-    assert.equal(ctx.run(`fsValuesEqual(['a','b','c'], ['c','a','b'])`), true);
-    assert.equal(ctx.run(`fsValuesEqual(['a','b'], ['a','c'])`), false);
-  });
-
-  it('数组元素 trim 且空串过滤', () => {
-    assert.equal(ctx.run(`fsValuesEqual([' a ',''], ['a'])`), true);
-  });
-
-  it('布尔与字符串形式等价', () => {
-    assert.equal(ctx.run(`fsValuesEqual(true, 'true')`), true);
-    assert.equal(ctx.run(`fsValuesEqual(false, 'false')`), true);
-    assert.equal(ctx.run(`fsValuesEqual(true, 'false')`), false);
-  });
-
-  it('标量 trim 后比较', () => {
-    assert.equal(ctx.run(`fsValuesEqual(' exec ', 'exec')`), true);
-    assert.equal(ctx.run(`fsValuesEqual(1, '1')`), true);
-  });
-});
-
-// ── 作用域构建与 manifest 查找 ────────────────────────────────
-
-describe('feature-setup-core: fsBuildScopes', () => {
-  const ctx = loadCore();
-  const t = `(zh, en) => en`;
-
-  it('global 恒在，dirs 依次映射为 dir:<path>', () => {
-    const r = runBlock(ctx, `return JSON.stringify(fsBuildScopes(null, ['/a', '/b'], ${t}));`);
-    assert.deepEqual(JSON.parse(r), [
-      { id: 'global', label: 'Global' },
-      { id: 'dir:/a', label: 'Directory · a', dir: '/a' },
-      { id: 'dir:/b', label: 'Directory · b', dir: '/b' },
-    ]);
-  });
-
-  it('resolved 中出现的目录层纳入且大小写去重', () => {
-    const r = runBlock(ctx, `
-      const resolved = { layers: [{ id: 'dir:/Proj/A' }, { id: 'dir:/new' }] };
-      return JSON.stringify(fsBuildScopes(resolved, ['/proj/a'], ${t}).map((s) => s.id));
-    `);
-    assert.deepEqual(JSON.parse(r), ['global', 'dir:/proj/a', 'dir:/new']);
-  });
-
-  it('label 经 t 回调本地化', () => {
-    const r = runBlock(ctx, `return JSON.stringify(fsBuildScopes(null, [], (zh) => zh));`);
-    assert.deepEqual(JSON.parse(r), [{ id: 'global', label: '全局' }]);
-  });
-});
+// ── manifest 查找与目录名 ─────────────────────────────────────
 
 describe('feature-setup-core: fsBaseName', () => {
   const ctx = loadCore();

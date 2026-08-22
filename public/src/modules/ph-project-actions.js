@@ -50,6 +50,8 @@ window.phOpenModelConfig = async () => {
 };
 
 window.phCloseModelConfig = () => {
+  // Feature 设置二级页持有共享配置编辑器实例，关闭弹窗时一并释放
+  if (typeof _closePhFeatureEditor === 'function') _closePhFeatureEditor();
   const host = document.getElementById('ph-model-config-host');
   if (host) host.innerHTML = '';
 };

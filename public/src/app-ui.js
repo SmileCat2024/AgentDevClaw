@@ -1400,7 +1400,10 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
     return;
   }
   const tabs = getUnitTabs(agent);
-  if (tabs.length <= 1) {
+  // 目录设置按钮（编程小助手且绑定了项目目录时提供；tabs<=1 也保留整条栏）
+  const dirConfigBtn = (typeof phDirConfigButtonHtml === 'function')
+    ? phDirConfigButtonHtml(agent) : '';
+  if (tabs.length <= 1 && !dirConfigBtn) {
     workspaceTabsBar.classList.add('hidden');
     workspaceTabsBar.innerHTML = '';
     return;
@@ -1419,7 +1422,7 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
     )) + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"' + (tab.id === 'chat' && !canOpenChat ? ' disabled' : '') + '>' +
     escapeHtml(getUnitTabLabel(tab)) +
     '</button>'
-  )).join('');
+  )).join('') + dirConfigBtn;
 }
 
 // --- chat-viewport functions extracted to modules/chat-viewport.js ---

@@ -5882,6 +5882,15 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 
 /* ── PH Project Settings Panel (IDE-style) ── */
 .ph-settings-window { max-width: 1400px !important; min-height: 600px !important; height: 76vh !important; max-height: 76vh !important; }
+
+/* Feature 设置二级页：编辑器填满弹窗剩余空间 */
+.ph-settings-feature-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
 .ph-settings-layout {
   display: flex; flex: 1; min-height: 0; overflow: hidden;
 }
@@ -8375,55 +8384,53 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   opacity: 1;
 }
 
-/* ── Scope selector（ticket 06 作用域选择器）───────────────── */
-.fs-scopebar {
-  padding: 18px 14px 12px;
+/* ── Editor head（弹窗二级页返回头）───────────────────────── */
+.fs-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.06));
 }
 
-.fs-scopebar-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary, #9aa3b2);
-  margin-bottom: 6px;
-}
-
-.fs-scope-select {
-  width: 100%;
-  padding: 5px 8px;
-  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+.fs-back-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.15));
   border-radius: 6px;
-  background: var(--input-bg, rgba(255,255,255,0.06));
-  color: var(--text-primary);
-  font-size: 12.5px;
-  outline: none;
+  background: transparent;
+  color: var(--text-secondary, #9aa3b2);
+  font-size: 12px;
   cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
 }
 
-.fs-scope-select:focus { border-color: var(--accent, #5b8def); }
-
-.fs-scopebar-hint {
-  margin-top: 6px;
-  font-size: 10.5px;
-  line-height: 1.4;
-  color: var(--text-tertiary, rgba(150,150,160,0.6));
-  word-break: break-all;
+.fs-back-btn:hover {
+  border-color: var(--accent, #5b8def);
+  color: var(--accent, #5b8def);
 }
 
-/* ── Three-state rows（出厂默认 / 继承 / 覆盖）────────────── */
+.fs-editor-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
 
-/* 出厂默认：灰显 */
-.fs-state-default .fs-row-title,
-.fs-state-default .fs-row-desc {
+.fs-editor-mount { height: 100%; }
+
+/* ── Two-state rows（跟随 / 接管）──────────────────────────── */
+
+/* 跟随：控件灰显生效值，可直接编辑（一编辑即接管） */
+.fs-state-follow .fs-row-title,
+.fs-state-follow .fs-row-desc {
   color: var(--text-secondary, #9aa3b2);
 }
 
-.fs-state-default .fs-row-ctrl { opacity: 0.65; }
+.fs-state-follow .fs-row-ctrl { opacity: 0.65; }
 
-/* 覆盖：VS Code 式左侧标记条 */
-.fs-state-override {
+.fs-state-follow .fs-row-ctrl:focus-within { opacity: 1; }
+
+/* 接管：左侧标记条 */
+.fs-state-takeover {
   box-shadow: inset 3px 0 0 var(--accent, #5b8def);
 }
 
@@ -8438,12 +8445,11 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   line-height: 1.4;
 }
 
-.fs-note-inherit { color: var(--text-tertiary, rgba(150,150,160,0.75)); }
-.fs-note-default { color: var(--text-tertiary, rgba(150,150,160,0.6)); }
+.fs-note-follow { color: var(--text-tertiary, rgba(150,150,160,0.65)); }
 
-.fs-note-override { color: var(--accent, #5b8def); }
-.fs-note-override::before {
-  content: '';
+.fs-note-takeover { color: var(--accent, #5b8def); }
+
+.fs-takeover-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -8543,10 +8549,6 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
     width: 100%;
     border-right: none;
     border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.06));
-  }
-  .fs-scopebar {
-    padding: 10px 12px 6px;
-    border-bottom: none;
   }
   .fs-nav {
     padding: 6px 0;

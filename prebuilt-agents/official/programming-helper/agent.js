@@ -26,6 +26,7 @@ import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generat
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
 import {
   readGlobalLayer,
+  readAgentLayer,
   readDirLayer,
 } from '../../../server/shared/feature-config-layers.js';
 
@@ -79,11 +80,12 @@ export class ProgrammingHelperAgent extends BasicAgent {
     const runtime = config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
     const isExploration = runtime.sessionType === 'exploration' || process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
 
-    // 配置队列（ticket 00/03）：[全局层, 目录层(构造时 cwd), 会话注入]。
+    // 配置队列（ticket 00/03）：[全局层, agent 层, 目录层(构造时 cwd), 会话注入]。
     // 队列在构造函数内组装——同进程多 session 可能对应不同 cwd，禁止进程级缓存；
     // exploration 子代理走同一构造路径，行为一致。会话注入（featureOverrides）不落盘。
     const queue = [
       readGlobalLayer(),
+      readAgentLayer(),
       readDirLayer(workspaceDir),
       runtime.config && typeof runtime.config === 'object' ? (runtime.config.featureOverrides || {}) : {},
     ];

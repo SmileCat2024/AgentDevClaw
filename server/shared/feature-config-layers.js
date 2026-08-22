@@ -37,6 +37,15 @@ export function dirLayerPath(workspaceDir, agentId = 'programming-helper') {
   return join(featureConfigDirFor(agentId), encodeDirConfigFile(workspaceDir));
 }
 
+/**
+ * agent 层文件：workspaces/<agentId>/feature-config/agent.json。
+ * agent 层覆盖该 agent 的所有目录（工作空间整体级），位于全局层与目录层之间；
+ * 从空开始，稀疏存储。
+ */
+export function agentLayerPath(agentId = 'programming-helper') {
+  return join(featureConfigDirFor(agentId), 'agent.json');
+}
+
 function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -72,4 +81,9 @@ export function readGlobalLayer(globalPath = GLOBAL_LAYER_PATH) {
 /** 编程小助手目录层读取（按目录定位，文件不存在返回 {}）。 */
 export function readDirLayer(workspaceDir, agentId = 'programming-helper') {
   return readLayerFile(dirLayerPath(workspaceDir, agentId));
+}
+
+/** agent 层读取（该 agent 整体级，文件不存在返回 {}）。 */
+export function readAgentLayer(agentId = 'programming-helper') {
+  return readLayerFile(agentLayerPath(agentId));
 }

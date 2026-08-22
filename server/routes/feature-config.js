@@ -18,6 +18,7 @@ import { resolveFeatureConfig } from '@agentdev/core';
 
 import {
   GLOBAL_LAYER_PATH,
+  agentLayerPath,
   dirLayerPath,
   readGlobalLayer,
   readLayerFile,
@@ -56,6 +57,7 @@ const PROGRAMMING_HELPER_ID = 'programming-helper';
 registerScopeResolver(PROGRAMMING_HELPER_ID, ({ dir } = {}) => {
   const layers = [
     { id: 'global', label: '全局', path: GLOBAL_LAYER_PATH },
+    { id: 'agent', label: '编程小助手', path: agentLayerPath(PROGRAMMING_HELPER_ID) },
   ];
   if (dir) {
     layers.push({

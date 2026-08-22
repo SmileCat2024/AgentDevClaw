@@ -117,6 +117,24 @@ describe('buildScopeLayers / resolveScopeConfig', () => {
     assert.deepEqual(result.sensitiveFields, []);
   });
 
+  it('declares agent layer between global and dir (real programming-helper resolver)', () => {
+    // 真实注册表：只断言声明的层结构与顺序（id/label/path 文件名），
+    // sparse 读取无写入副作用，与用户目录实际内容无关。
+    const dir = join(tempDir, 'proj');
+    const { layers } = buildScopeLayers({ agentId: 'programming-helper', dir });
+    assert.deepEqual(layers.map((layer) => layer.id), ['global', 'agent', `dir:${dir}`]);
+    assert.equal(layers[1].label, '编程小助手');
+    assert.ok(layers[1].path.endsWith(join('workspaces', 'programming-helper', 'feature-config', 'agent.json')));
+
+    const noDir = buildScopeLayers({ agentId: 'programming-helper' });
+    assert.deepEqual(noDir.layers.map((layer) => layer.id), ['global', 'agent']);
+  });
+
+  it('resolves agent layer as a write target (real programming-helper resolver)', () => {
+    const target = resolveWriteTarget({ agentId: 'programming-helper', layerId: 'agent' });
+    assert.ok(target.endsWith(join('workspaces', 'programming-helper', 'feature-config', 'agent.json')));
+  });
+
   it('surfaces null warnings from layer files', () => {
     writeFileSync(join(tempDir, 'global.json'), JSON.stringify({
       shell: { bashPath: null },

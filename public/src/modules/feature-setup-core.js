@@ -1,19 +1,28 @@
 /**
- * feature-setup-core.js — Feature 配置三态编辑器纯逻辑（ticket 06）
+ * feature-setup-core.js — Feature 配置两态编辑器纯逻辑
+ *
+ * 字段级模型（跟随 / 接管）：
+ *   - 跟随（follow）= 本层 sparse 无该字段 → 控件灰显生效值（上游最近层值，
+ *     无则 manifest default），不写库；
+ *   - 接管（takeover）= 本层 sparse 有该字段（或本次会话已编辑待保存）→
+ *     值完全跟本层走，即使与上游相同也照写（存在即接管）；
+ *   - 重置为跟随 = 删除本层该字段条目（null 语义，仅存在于 dirty 会话内）。
+ *
+ * 配置队列：出厂默认 → 全局层 → agent 层 → 目录层；编辑器只编辑调用方
+ * 绑定的那一层（scopeId = 'global' | 'agent' | 'dir:<path>'），
+ * 上游生效值与 merged 全部来自 resolved API，前端不自算合并。
  *
  * 从 feature-setup-ui.js 提取的无 DOM / 无全局状态依赖部分：
  *   - 点路径原语（fsGetPathValue / fsHasField / fsSetPath / fsDeletePath）
- *   - 三态分类（fsUpstreamInfo / fsClassifyField / fsFieldStates）：
- *     覆盖 = 本层 sparse 存在该字段（存在即覆盖，D8）；
- *     继承 = 本层无 + 上游层有；出厂默认 = 本层无 + 上游无（manifest default 虚拟第 0 层）
- *   - dirty 叠加（fsApplyDirty）：value === null 表示"重置为继承"
- *   - 保存 payload 构造（fsBuildLayerContent，diff only D9）：
+ *   - 两态分类（fsUpstreamInfo / fsClassifyField / fsFieldStates）
+ *   - dirty 叠加（fsApplyDirty）：value === null 表示"重置为跟随"
+ *   - 控件取值（fsControlValue）
+ *   - 保存 payload 构造（fsBuildLayerContent，diff only）：
  *     以原始 sparse 为底仅套用本次会话碰过的字段，未碰字段绝不写入
- *   - 值同判定（fsValuesEqual，D8）：数组排序归一 / 布尔字符串化 / trim
- *   - 作用域构建（fsBuildScopes / fsBaseName / fsPropFor）
+ *   - manifest 属性查找（fsPropFor）与目录名（fsBaseName）
  *
- * UI 模块（feature-setup-ui.js）持有状态并调用这些函数；
- * 测试见 test/feature-setup-core.test.js（frontend-vm 沙箱）。
+ * UI 模块持有状态并调用这些函数；测试见 test/feature-setup-core.test.js
+ * （frontend-vm 沙箱）。
  */
 
 // ── 点路径原语 ────────────────────────────────────────────────
@@ -60,9 +69,9 @@ function fsDeletePath(obj, segs) {
   del(obj, 0);
 }
 
-// ── 三态分类（判定数据全部来自 resolved layers，前端不自算合并）──
+// ── 两态分类（判定数据全部来自 resolved layers，前端不自算合并）──
 
-/** 上游信息：早于本层、最后包含该字段的层；都没有则是出厂默认（虚拟第 0 层）。 */
+/** 上游信息：早于本层、最后包含该字段的层；都没有则出厂默认（虚拟第 0 层）。 */
 function fsUpstreamInfo(fullKey, layerIndex, layers) {
   for (let i = layerIndex - 1; i >= 0; i--) {
     const segs = fullKey.split('.');
@@ -78,25 +87,28 @@ function fsUpstreamInfo(fullKey, layerIndex, layers) {
   return { kind: 'default', value: undefined, label: null, layerId: null };
 }
 
-/** 基于层稀疏内容的三态分类（不含本次会话的 dirty 修正）。 */
+/**
+ * 基于层稀疏内容的两态分类（不含本次会话的 dirty 修正）：
+ * 接管 = 本层 sparse 存在该字段（存在即接管）；跟随 = 本层无（生效值经
+ * fsControlValue 由 upstream / manifest default 决定）。
+ * 接管态也携带 upstream（"重置为跟随"后据此显示生效值）。
+ */
 function fsClassifyField(fullKey, layerIndex, layers) {
   const local = layers[layerIndex];
-  if (!local) return { status: 'default' };
+  if (!local) {
+    return { status: 'follow', upstream: { kind: 'default', value: undefined, label: null, layerId: null } };
+  }
   const segs = fullKey.split('.');
-  const inLocal = fsHasField(local.sparse, segs);
   const upstream = fsUpstreamInfo(fullKey, layerIndex, layers);
-  if (inLocal) {
-    return { status: 'override', layerValue: fsGetPathValue(local.sparse, segs), upstream };
+  if (fsHasField(local.sparse, segs)) {
+    return { status: 'takeover', layerValue: fsGetPathValue(local.sparse, segs), upstream };
   }
-  if (upstream.kind === 'layer') {
-    return { status: 'inherit', upstream };
-  }
-  return { status: 'default' };
+  return { status: 'follow', upstream };
 }
 
-/** 全部 manifest 字段的三态表（不含 dirty）。sections 为 UI 侧 _buildSections 产物。 */
-function fsFieldStates(sections, layers, activeScopeId) {
-  const idx = layers.findIndex((l) => l.id === activeScopeId);
+/** 全部 manifest 字段的两态表（不含 dirty）。sections 为 UI 侧 _buildSections 产物。 */
+function fsFieldStates(sections, layers, scopeId) {
+  const idx = layers.findIndex((l) => l.id === scopeId);
   const map = new Map();
   if (idx < 0) return map;
   for (const sec of sections) {
@@ -118,39 +130,39 @@ function fsFieldStates(sections, layers, activeScopeId) {
   return map;
 }
 
-/** 叠加本次会话 dirty 后的渲染用三态表（就地修改 base Map）。 */
+/** 叠加本次会话 dirty 后的渲染用两态表（就地修改 base Map）。 */
 function fsApplyDirty(baseStates, dirty) {
   for (const [fullKey, entry] of dirty) {
     const cur = baseStates.get(fullKey);
     if (!cur) continue;
     if (entry.value === null) {
-      // 本会话已重置 → 按继承/出厂默认显示
-      baseStates.set(fullKey, cur.upstream?.kind === 'layer'
-        ? { status: 'inherit', upstream: cur.upstream }
-        : { status: 'default' });
+      // 本会话已重置 → 回到跟随（保留 upstream 供生效值显示）
+      const upstream = cur.upstream
+        || { kind: 'default', value: undefined, label: null, layerId: null };
+      baseStates.set(fullKey, { status: 'follow', upstream });
     } else {
-      baseStates.set(fullKey, { ...cur, status: 'override', pendingValue: entry.value });
+      baseStates.set(fullKey, { ...cur, status: 'takeover', pendingValue: entry.value });
     }
   }
   return baseStates;
 }
 
-/** 控件初值：覆盖→本层（或待保存）值；继承→上游生效值；出厂默认→manifest default。 */
+/** 控件值：接管→本层（或待保存）值；跟随→上游最近层值，无则 manifest default。 */
 function fsControlValue(state, prop) {
-  if (state?.status === 'override') {
+  if (state?.status === 'takeover') {
     return state.pendingValue !== undefined ? state.pendingValue : state.layerValue;
   }
-  if (state?.status === 'inherit') {
-    return state.upstream?.value;
+  if (state?.upstream?.kind === 'layer') {
+    return state.upstream.value;
   }
   return prop?.default;
 }
 
-// ── 保存 payload 构造（diff only，D9）─────────────────────────
+// ── 保存 payload 构造（diff only）─────────────────────────────
 
 /** 该层稀疏内容 = 原始 sparse 为底（深拷贝），仅套用本次会话碰过的字段。 */
-function fsBuildLayerContent(layers, activeScopeId, dirty) {
-  const idx = layers.findIndex((l) => l.id === activeScopeId);
+function fsBuildLayerContent(layers, scopeId, dirty) {
+  const idx = layers.findIndex((l) => l.id === scopeId);
   if (idx < 0) return null;
   const content = JSON.parse(JSON.stringify(layers[idx].sparse || {}));
   for (const [fullKey, entry] of dirty) {
@@ -164,45 +176,11 @@ function fsBuildLayerContent(layers, activeScopeId, dirty) {
   return content;
 }
 
-// ── 值同判定（D8：值 == 上游生效值时 UI 提示二选一）──────────
-
-function fsNormVal(v) {
-  if (Array.isArray(v)) {
-    return v.map((x) => String(x ?? '').trim()).filter(Boolean).sort().join('\u0001');
-  }
-  if (typeof v === 'boolean') return v ? 'true' : 'false';
-  return String(v ?? '').trim();
-}
-
-function fsValuesEqual(a, b) {
-  return fsNormVal(a) === fsNormVal(b);
-}
-
-// ── 作用域构建与字段查找 ──────────────────────────────────────
+// ── 杂项 ──────────────────────────────────────────────────────
 
 function fsBaseName(dir) {
   const parts = String(dir || '').split(/[\\/]+/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : String(dir || '');
-}
-
-/** 作用域列表：全局 + 各目录（dirs 由 UI 侧采集；resolved 层目录也纳入，大小写去重）。 */
-function fsBuildScopes(resolved, dirs, t) {
-  const scopes = [{ id: 'global', label: t('全局', 'Global') }];
-  const list = [...dirs];
-  for (const layer of (Array.isArray(resolved?.layers) ? resolved.layers : [])) {
-    if (typeof layer?.id === 'string' && layer.id.startsWith('dir:')) {
-      const dir = layer.id.slice(4);
-      if (!list.some((d) => d.toLowerCase() === dir.toLowerCase())) list.push(dir);
-    }
-  }
-  for (const dir of list) {
-    scopes.push({
-      id: `dir:${dir}`,
-      label: `${t('目录', 'Directory')} · ${fsBaseName(dir)}`,
-      dir,
-    });
-  }
-  return scopes;
 }
 
 /** 按 fullKey（feature[.group].prop）在 sections 中找 manifest 属性定义。 */
