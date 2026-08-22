@@ -68,6 +68,7 @@ describe('Server module imports', () => {
   it('should import all route modules without error', async () => {
     const modules = [
       '../server/routes/system-feature-config.js',
+      '../server/routes/feature-config.js',
       '../server/routes/fs-operations.js',
       '../server/routes/model-config.js',
       '../server/routes/group-chat.js',
@@ -137,6 +138,15 @@ describe('Route registration smoke test', () => {
     const express = expressFactory();
     setupSystemFeatureConfigRoutes(app, express);
     assert.ok(routes.length > 0, 'Should register at least one route');
+  });
+
+  it('setupFeatureConfigRoutes should register resolved and layer endpoints', async () => {
+    const { setupFeatureConfigRoutes } = await import('../server/routes/feature-config.js');
+    const { app, routes } = createMockApp();
+    const express = expressFactory();
+    setupFeatureConfigRoutes(app, express);
+    assert.ok(routes.some(r => r.method === 'get' && r.path === '/protoclaw/feature_config/resolved'));
+    assert.ok(routes.some(r => r.method === 'put' && r.path === '/protoclaw/feature_config/layer'));
   });
 
   it('setupModelConfigRoutes should register endpoints', async () => {
