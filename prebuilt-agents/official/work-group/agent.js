@@ -18,13 +18,9 @@ const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 
 export class WorkGroupAgent extends BasicAgent {
   constructor(config = {}) {
-    super({ ...config, mcpServer: false });
-
-    // 移除 BasicAgent 自动挂载的 SubAgentFeature 工具
-    const tools = this.getTools();
-    tools.remove('spawn_agent');
-    tools.remove('send_to_agent');
-    tools.remove('wait');
+    // BasicAgent 已纯基类化（a5fe117 / ticket 009），不再自动挂载任何 feature，
+    // 也不再消费 mcpServer/skillConfig 等项；本 agent 不启用 SubAgent/MCP。
+    super(config);
 
     this.use(new GroupAdminFeature());
     this.use(new GroupChatBridgeFeature());

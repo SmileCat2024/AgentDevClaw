@@ -24,7 +24,7 @@
  *   完成，runtime 只按普通会话运行。
  */
 
-import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature } from '@agentdev/core';
+import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature } from '@agentdev/core';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { TicketsBuildFlow } from '../../../features/tickets-build-flow/dist/index.js';
@@ -76,21 +76,20 @@ export class CoderAgent extends BasicAgent {
     // 不挂载 MCP feature：mcp_* 工具会占据 tools 数组头部，把 read/ls 等
     // 核心工具挤到 14 位之后——Lite 级小模型对此敏感，实测会退化为只输出计划
     // 文本而不发起工具调用。线程执行依赖的是内置工具链，不需要外部 MCP 接入。
+    // BasicAgent 已纯基类化（a5fe117 / ticket 009），不再内置装配任何 feature，
+    // 这里无需再向 super 传 mcpServer/skillConfig，MCP 与 Skill 由本 agent 显式装配。
     super({
       ...config,
       features: {
         ...(config.features || {}),
         ...systemConfig,
       },
-      skillConfig: systemConfig.skill || undefined,
-      mcpServer: false,
     });
 
-    // 移除 BasicAgent 自动挂载的 SubAgentFeature 工具
-    const tools = this.getTools();
-    tools.remove('spawn_agent');
-    tools.remove('send_to_agent');
-    tools.remove('wait');
+    // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
+    // feature-setup.json 中的 skill 配置会覆盖默认值。MCP 按上述注释刻意排除，不挂 MCPFeature。
+    const skillInput = systemConfig.skill && typeof systemConfig.skill === 'object' ? systemConfig.skill : undefined;
+    this.use(new SkillFeature(skillInput));
 
     // 替换 BasicAgent 默认挂载的 OpencodeBasicFeature 为带 Claw continuity 声明的包装版。
     // 这样包装类会让 readFiles 状态在 trim/summary 时随 continuity 协议转移到新 runtime，

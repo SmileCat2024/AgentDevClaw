@@ -5,7 +5,8 @@
  * 基于 ProtoClaw 当前内置的 npm agentdev 兼容层运行
  */
 
-import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature } from '@agentdev/core';
+import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature, SkillFeature } from '@agentdev/core';
+import { MCPFeature } from '@agentdev/mcp';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
@@ -93,31 +94,37 @@ export class ProgrammingHelperAgent extends BasicAgent {
     const isExploration = runtime.sessionType === 'exploration' || process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
     const systemConfig = readSystemFeatureConfig();
 
+    const excludeMcpServers = Array.from(new Set([
+      ...(config.excludeMcpServers ?? []),
+      ...(isExploration ? EXCLUDED_MCP_SERVERS_EXPLORE : DEFAULT_EXCLUDED_MCP_SERVERS),
+    ]));
+
     super({
       ...config,
       features: {
         ...(config.features || {}),
         ...systemConfig,
       },
-      skillConfig: systemConfig.skill || undefined,
-      excludeMcpServers: Array.from(new Set([
-        ...(config.excludeMcpServers ?? []),
-        ...(isExploration ? EXCLUDED_MCP_SERVERS_EXPLORE : DEFAULT_EXCLUDED_MCP_SERVERS),
-      ])),
     });
 
     this._isExploration = isExploration;
 
-    // 移除 BasicAgent 自动挂载的 SubAgentFeature 工具
-    const tools = this.getTools();
-    tools.remove('spawn_agent');
-    tools.remove('send_to_agent');
-    tools.remove('wait');
+    // BasicAgent 已纯基类化（框架 a5fe117 / ticket 009），不再内置装配任何 feature。
+    // 原由 BasicAgent 挂载的 MCP/Skill/SubAgent/OpencodeBasic 等，现在装配权在宿主：
+    // - SubAgentFeature 本 agent 明确不启用，不再挂载；
+    // - MCP / Skill / OpencodeBasic 在此显式补装，恢复被框架移除的能力。
 
-    // 替换 BasicAgent 默认挂载的 OpencodeBasicFeature 为带 Claw continuity 声明的包装版。
-    // OpencodeBasicFeature 在 BasicAgent constructor 里通过 this.use() 挂载，还未 onInitiate，
-    // 也未注册工具/钩子/注入器（其工具注册发生在首次 onCall 的 ensureFeatureTools），
-    // 因此直接 use 覆盖同名 feature 即可，无需 removeFeature。
+    // MCPFeature：连接 Claw 共享 MCP 网关 + 扫描 .agentdev/mcps，排除 crawl4ai 等系统 server。
+    this.use(new MCPFeature(undefined, { excludeServers: excludeMcpServers }));
+
+    // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
+    // feature-setup.json 中的 skill 配置（scanAgentdevDir/scanClaudeDir/extraDirs 等）会覆盖默认值。
+    const skillInput = systemConfig.skill && typeof systemConfig.skill === 'object' ? systemConfig.skill : undefined;
+    this.use(new SkillFeature(skillInput));
+
+    // 替换原 BasicAgent 默认挂载的 OpencodeBasicFeature 为带 Claw continuity 声明的包装版。
+    // OpencodeBasicFeature 尚未 onInitiate，也未注册工具/钩子/注入器（其工具注册发生在首次
+    // onCall 的 ensureFeatureTools），因此直接 use 覆盖同名 feature 即可，无需 removeFeature。
     // 这样包装类会让 readFiles 状态在 trim/summary 时随 continuity 协议转移到新 runtime，
     // 避免精简后会话内"先读后写"保护重置导致 write 工具被错误拦截。
     this.use(new ContinuityAwareOpencodeBasic({ workspaceDir }));

@@ -21,7 +21,7 @@
  * - runtime 配置仍读全局 ~/.agentdev/AgentDevClaw/feature-setup.json（与编程小助手一致）
  */
 
-import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature } from '@agentdev/core';
+import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature } from '@agentdev/core';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../features/force-continuation/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
@@ -36,7 +36,6 @@ import { existsSync, readFileSync } from 'fs';
 import { ContextGuardFeature } from '../../local-features/dist/context-guard/src/index.js';
 import { GitHubFeature } from '../../local-features/dist/github/src/index.js';
 
-const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
@@ -45,7 +44,6 @@ const EXPLORE_PROMPT_PATH = join(PROMPTS_DIR, 'explore.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
 const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
-const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
 // Audio feedback is presentation-only. Awaiting the OS media process inside
 // the CallFinish hook delays AgentDev's authoritative call.finish event and
@@ -86,23 +84,23 @@ export class CoderAgent extends BasicAgent {
     const isExploration = runtime.sessionType === 'exploration' || process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
     const systemConfig = readSystemFeatureConfig();
 
+    // BasicAgent 已纯基类化（a5fe117 / ticket 009），不再内置装配任何 feature，
+    // MCP/Skill/SubAgent 等装配权在宿主。本 agent 刻意排除 MCP（mcp_* 工具会占据
+    // tools 数组头部，Lite 级小模型对此敏感），只补 SkillFeature，不挂 MCPFeature。
     super({
       ...config,
       features: {
         ...(config.features || {}),
         ...systemConfig,
       },
-      skillConfig: systemConfig.skill || undefined,
-      excludeMcpServers: Array.from(new Set([
-        ...(config.excludeMcpServers ?? []),
-        ...(isExploration ? EXCLUDED_MCP_SERVERS_EXPLORE : DEFAULT_EXCLUDED_MCP_SERVERS),
-      ])),
     });
 
     this._isExploration = isExploration;
 
-    // 彻底移除 BasicAgent 自动挂载的 SubAgentFeature（含其全部工具/钩子）
-    this.removeFeature('subagent');
+    // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
+    // feature-setup.json 中的 skill 配置会覆盖默认值。
+    const skillInput = systemConfig.skill && typeof systemConfig.skill === 'object' ? systemConfig.skill : undefined;
+    this.use(new SkillFeature(skillInput));
 
     // 替换 BasicAgent 默认挂载的 OpencodeBasicFeature 为带 Claw continuity 声明的包装版。
     // OpencodeBasicFeature 在 BasicAgent constructor 里通过 this.use() 挂载，还未 onInitiate，

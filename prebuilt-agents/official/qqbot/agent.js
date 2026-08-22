@@ -388,8 +388,8 @@ export class QQBotProgrammingHelperAgent extends BasicAgent {
     const isExploration = process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
     this.imWorkspaceConfigPath = resolveIMWorkspaceConfigPath(config.imWorkspaceConfigPath);
 
-    // 移除 BasicAgent 自动挂载的 SubAgentFeature
-    this.removeFeature('subagent');
+    // BasicAgent 已纯基类化（a5fe117 / ticket 009），不再自动挂载 SubAgentFeature，
+    // 无需再 removeFeature('subagent')。
 
     // ClawDispatchFeature 始终挂载，主模式与探索模式都需要接收调度消息
     this.use(new ClawDispatchFeature());
