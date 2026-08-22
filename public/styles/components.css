@@ -7881,7 +7881,7 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
 .fs-row-ctrl .fs-input,
 .fs-row-ctrl .fs-list { flex: 1 1 auto; min-width: 0; }
 
-.fs-row-ctrl .fs-checkbox { flex: 0 0 auto; }
+.fs-row-ctrl .fs-checkbox { flex: 0 0 auto; margin-left: auto; }
 
 /* 接管字段的重置按钮（↺）：常驻槽位 */
 .fs-reset-btn {
