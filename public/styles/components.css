@@ -7854,30 +7854,38 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
 .fs-row.fs-state-follow .fs-select:focus,
 .fs-row.fs-state-follow .fs-input:focus { opacity: 1; }
 
+/* 字段行布局：左标题列固定比例（上限约束、强制换行），右控件列统一固定宽右贴，
+   垂直居中；重置按钮固定槽位（visibility 占位，出现/消失不推动布局） */
+.fs-row { align-items: center; }
+
+.fs-row .ph-mc-role {
+  flex: 1 1 40%;
+  min-width: 0;
+  max-width: 440px;
+  padding-top: 0;
+}
+
+.fs-row .ph-mc-role-name,
+.fs-row .ph-mc-role-desc { overflow-wrap: anywhere; word-break: break-word; }
+
 .fs-row-ctrl {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 1;
+  flex: 0 0 300px;
   min-width: 0;
-  max-width: 380px;
-  justify-content: flex-end;
+  margin-left: auto;
 }
-
-/* 长文本约束：标题列可收缩 + 长 token 换行，防止字段行向右溢出弹窗 */
-.fs-row .ph-mc-role { flex: 0 1 auto; min-width: 120px; }
-.fs-row .ph-mc-role-name,
-.fs-row .ph-mc-role-desc { overflow-wrap: anywhere; word-break: break-word; }
 
 .fs-row-ctrl .fs-select,
 .fs-row-ctrl .fs-input,
-.fs-row-ctrl .fs-list { flex: 1; min-width: 0; }
+.fs-row-ctrl .fs-list { flex: 1 1 auto; min-width: 0; }
 
 .fs-row-ctrl .fs-checkbox { flex: 0 0 auto; }
 
-/* 接管字段的重置按钮（↺） */
+/* 接管字段的重置按钮（↺）：常驻槽位 */
 .fs-reset-btn {
-  flex-shrink: 0;
+  flex: 0 0 26px;
   width: 26px;
   height: 26px;
   border: 1px solid var(--border-color, rgba(255,255,255,0.12));
@@ -7892,6 +7900,8 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   justify-content: center;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
+
+.fs-reset-btn.is-hidden { visibility: hidden; }
 
 .fs-reset-btn:hover {
   border-color: var(--accent, #5b8def);
@@ -7985,6 +7995,8 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
 .fs-row:has(.fs-list) {
   align-items: flex-start;
 }
+
+.fs-row:has(.fs-list) .fs-row-ctrl { align-items: flex-start; }
 
 .fs-list {
   display: flex;

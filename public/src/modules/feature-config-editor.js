@@ -214,11 +214,21 @@ function createFeatureConfigEditor(options = {}) {
   // ── 字段行（ph-mc-row 套路：左标题列 + 右控件列）────────────
 
   // 重置按钮语义按层区分：全局层=恢复默认值；agent/目录层=恢复为上级配置
-  function resetBtnHtml(fullKey) {
+  function resetBtnHtml(fullKey, visible) {
     const title = scopeId === 'global'
       ? _fceT('恢复默认值', 'Reset to default')
       : _fceT('恢复为上级配置', 'Reset to upstream value');
-    return `<button type="button" class="fs-reset-btn" data-fce-action="reset" data-key="${escapeHtml(fullKey)}" title="${title}">&#8634;</button>`;
+    // 常驻槽位：visibility 占位，出现/消失不推动布局
+    return `<button type="button" class="fs-reset-btn${visible ? '' : ' is-hidden'}" data-fce-action="reset" data-key="${escapeHtml(fullKey)}" title="${title}">&#8634;</button>`;
+  }
+
+  // 保存成功后按最新基底刷新按钮显隐（不重建行，不打断输入）
+  function updateResetVisibility(fullKey) {
+    const btn = host.querySelector(`.fs-reset-btn[data-key="${CSS.escape(fullKey)}"]`);
+    if (!btn) return;
+    const prop = fsPropFor(state.sections, fullKey);
+    const show = fsShowReset(scopeId, effectiveStates().get(fullKey), prop);
+    btn.classList.toggle('is-hidden', !show);
   }
 
   function renderRow(prop, fullKey, rowState, disabled) {
@@ -235,7 +245,7 @@ function createFeatureConfigEditor(options = {}) {
         </div>
         <div class="fs-row-ctrl">
           ${renderInput(fullKey, prop, value, disabled)}
-          ${showReset ? resetBtnHtml(fullKey) : ''}
+          ${resetBtnHtml(fullKey, showReset)}
         </div>
       </div>
     `;
@@ -363,8 +373,9 @@ function createFeatureConfigEditor(options = {}) {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || `${res.status} ${res.statusText}`);
-      // 静默刷新基底，不重渲染（不打断输入）
+      // 静默刷新基底，不重渲染（不打断输入）；刷新按钮显隐（如全局层值改回默认时按钮应消失）
       await reloadResolved();
+      for (const k of batch.keys()) updateResetVisibility(k);
     } catch (err) {
       // 失败：pending 回填（保留未保存语义），行标红提示
       for (const [k, v] of batch) if (!state.pending.has(k)) state.pending.set(k, v);
@@ -416,11 +427,10 @@ function createFeatureConfigEditor(options = {}) {
   // 编辑即接管：行视觉立刻切换（局部 DOM，不重渲染，不打断输入）
   function rowTakeover(fullKey) {
     const row = host.querySelector(`[data-prop-key="${CSS.escape(fullKey)}"]`);
-    if (!row || row.classList.contains('fs-state-takeover')) return;
+    if (!row) return;
     row.classList.remove('fs-state-follow');
     row.classList.add('fs-state-takeover');
-    const ctrl = row.querySelector('.fs-row-ctrl');
-    if (ctrl) ctrl.insertAdjacentHTML('beforeend', resetBtnHtml(fullKey));
+    row.querySelector('.fs-reset-btn')?.classList.remove('is-hidden');
   }
 
   // ── 列表项增删 / 目录选择器 ──────────────────────────────────
