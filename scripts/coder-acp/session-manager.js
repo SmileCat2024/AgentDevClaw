@@ -84,7 +84,9 @@ export function createSessionManager(options = {}) {
     const after = session.eventCursor ?? 0;
     const body = await clawClient.getThreadEvents(session.threadId, after, context);
     const events = Array.isArray(body?.events) ? body.events : [];
-    let maxTurn = 0;
+    // turn 号是 0-based（runtime _callIndex）：空基线必须为 -1，否则第一个
+    // turn 的终态（turn=0 <= maxTurn=0）会被 stale replay 判定丢弃，prompt 永挂。
+    let maxTurn = -1;
     for (const event of events) {
       const turn = typeof event?.turn === 'number'
         ? event.turn

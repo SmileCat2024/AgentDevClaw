@@ -193,6 +193,28 @@ describe('prompt pipeline', () => {
     assert.match(claw.calls.commands[0].payload.idempotencyKey, /^acp-[0-9a-f-]{36}$/);
   });
 
+  it('0-based first turn (turn=0) on an empty baseline resolves end_turn, not stale replay', async () => {
+    // 回归：runtime turn 号是 0-based（_callIndex），空基线 maxTurn 必须为 -1；
+    // 旧实现 maxTurn=0 会把 turn=0 的终态当旧回放丢弃，prompt 永挂。
+    const claw = makeMockClawClient({
+      pages: [
+        { events: [], cursor: 0 }, // 基线（空）
+        page([
+          { type: 'item.completed', item: { id: 'm0', turn: 0, type: 'agent_message', text: 'hi back' } },
+          { type: 'turn.completed', turn: 0 },
+        ], 2),
+      ],
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    const updates = [];
+    const result = await manager.runPrompt(sessionId, 'hi', {
+      onUpdate: (update) => updates.push(update),
+    });
+    assert.deepEqual(result, { stopReason: 'end_turn' });
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].sessionUpdate, 'agent_message_chunk');
+  });
+
   it('baseline capture precedes command delivery and seeds dedup + maxTurn', async () => {
     const claw = makeMockClawClient({
       pages: [
