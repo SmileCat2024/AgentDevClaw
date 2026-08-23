@@ -270,62 +270,6 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
   const currentAgent = getCurrentAgentRecord();
   const activeSessionId = String(currentAgent?.active_workspace_session_id || currentAgent?.workspace_sessions?.activeSessionId || '').trim();
   const runtimeAgentId = currentRuntimeAgentId || currentAgent?.runtime_session_id || currentAgent?.runtimeSessionId || '';
-  const isLiveCurrentSession = !!runtimeAgentId
-    && String(currentAgent?.id || '').trim() === String(agentId || '').trim()
-    && activeSessionId
-    && activeSessionId === String(sessionId || '').trim();
-
-  // Only use live-runtime shortcut for summary; trim (empty strategy) goes server-side
-  // Archive-and-replace requires the synchronous server response because it
-  // carries the authoritative archive outcome. The live command path only
-  // reports that a successor appeared and cannot safely confirm archive state.
-  // The live command path has no operation-correlated target session id and
-  // historically polled the entire agent/session projection once per second.
-  // Keep it as an explicit compatibility escape hatch; normal UI actions use
-  // the synchronous, operation-correlated endpoint below.
-  if (isLiveCurrentSession && strategy && !options.archiveOriginal && options.useLiveCommand === true) {
-    const inputReqRes = await fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/input-requests`);
-    const inputRequests = inputReqRes.ok ? await inputReqRes.json().catch(() => []) : [];
-    const primaryRequest = Array.isArray(inputRequests) ? inputRequests[0] : null;
-    if (!primaryRequest?.requestId) {
-      throw new Error('当前运行中的对话没有可用输入槽位，无法触发压缩续接');
-    }
-    const submitRes = await fetch(`/api/agents/${encodeURIComponent(runtimeAgentId)}/input`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        requestId: primaryRequest.requestId,
-        input: '/compact-summary-resume',
-        response: {
-          kind: 'text',
-          text: '/compact-summary-resume',
-        },
-      }),
-    });
-    if (!submitRes.ok) {
-      throw new Error(await submitRes.text().catch(() => 'failed to submit compact summary command'));
-    }
-    const _liveNavGuard = _navigationGuardEpoch;
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await loadAgents();
-      const refreshed = allAgents.find((item) => String(item?.id || '').trim() === String(agentId || '').trim()) || null;
-      const nextSessionId = String(refreshed?.active_workspace_session_id || refreshed?.workspace_sessions?.activeSessionId || '').trim();
-      const nextRuntimeId = refreshed?.runtime_session_id || refreshed?.runtimeSessionId || null;
-      if (nextSessionId && nextSessionId !== String(sessionId || '').trim() && nextRuntimeId) {
-        if (_liveNavGuard !== _navigationGuardEpoch) {
-          return { scheduled: true, liveRuntime: true, switched: false };
-        }
-        beginChatLoadingSession();
-        await requestSwitch(nextRuntimeId, 'compact-resume-live');
-        return { scheduled: true, liveRuntime: true, switched: true };
-      }
-    }
-    throw new Error(currentLanguage === 'zh'
-      ? '摘要压缩超时：新会话在 120 秒内未创建成功。摘要可能仍在后台运行，请稍后在会话列表中检查，或重试。'
-      : 'Summary compaction timed out: new session was not created within 120 seconds. The summary may still be running in the background — check the session list later or retry.');
-  }
-
   const policy = strategy ? { strategy } : {};
   if (keepRecentTurns != null && keepRecentTurns >= 1) {
     policy.keepRecentTurns = keepRecentTurns;

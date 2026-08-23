@@ -1,11 +1,10 @@
 /**
- * Runtime Summary / Compact / Rollback — extracted from run-prebuilt-agent.js (L643-1177).
+ * Runtime Partial Compact / Rollback — extracted from run-prebuilt-agent.js.
  *
- * Contains all context-compaction logic:
- *  - Full summary compaction (export + resume)
- *  - Partial compact (from a specific call index)
+ * Contains:
+ *  - Partial compact ("从此处压缩", from a specific call index)
  *  - Rollback to a specific call
- *  - Input response handler (routes /compact-summary commands and actions)
+ *  - Input response handler (routes rollback / partial-compact actions)
  *
  * The factory receives a mutable context object whose `agent` property is
  * populated later by the main runtime. `postJson` and `sessionStore`
@@ -73,176 +72,6 @@ export function createSummaryHandlers(ctx) {
       || '',
     ).toLowerCase();
     return modelName.includes('claude');
-  }
-
-  async function generateInProcessSummary(extraInstructions = '') {
-    const agent = ctx.agent;
-    const context = typeof agent?.getContext === 'function' ? agent.getContext() : null;
-    const rawMessages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
-    if (rawMessages.length === 0) {
-      throw new Error('当前上下文为空，无法生成摘要');
-    }
-
-    const prompt = buildClaudeCompactPrompt({
-      additionalInstructions: extraInstructions,
-    });
-    const messages = rawMessages.map((message, index) => ({
-      role: message.role,
-      content: typeof message?.content === 'string' ? message.content : '',
-      turn: Number.isFinite(message?.turn) ? Number(message.turn) : index,
-      toolCallId: message?.toolCallId,
-      toolCalls: Array.isArray(message?.toolCalls) ? message.toolCalls : undefined,
-      reasoning: typeof message?.reasoning === 'string' ? message.reasoning : undefined,
-      thinkingBlocks: Array.isArray(message?.thinkingBlocks) ? message.thinkingBlocks : undefined,
-    }));
-    messages.push({
-      role: 'user',
-      content: prompt,
-      turn: typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : messages.length,
-    });
-
-    const toolRegistry = typeof agent?.getTools === 'function' ? agent.getTools() : null;
-    const allTools = toolRegistry?.getAll?.() || [];
-    // record_compaction_context 可能已被 remove（不暴露给 LLM 主动调用）；
-    // registry.get() 不受 enabled/disabled/removed 状态影响，进程内摘要仍可编程式取用。
-    const compactTool = toolRegistry?.get?.('record_compaction_context')
-      || allTools.find(t => t.name === 'record_compaction_context');
-    let tools = shouldPreserveSummaryTools(agent) ? allTools : [];
-    if (compactTool && !tools.includes(compactTool)) {
-      tools = [compactTool];
-    }
-    const restoreLLM = tuneSummaryLLM(agent?.llm);
-    try {
-      console.log(`[ProtoClaw Runtime] 开始进程内摘要压缩 messages=${messages.length} tools=${tools.length}`);
-      const response = await agent.llm.chat(messages, tools, { noStream: true });
-      if (response?.stopReason === 'max_tokens') {
-        throw new Error('摘要因 max_tokens 限制被截断（stopReason=max_tokens），拒绝接受不完整结果');
-      }
-      const rawResponse = typeof response?.content === 'string' ? response.content : '';
-      const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
-      if (toolCalls.some(tc => tc?.name !== 'record_compaction_context')) {
-        throw new Error('摘要模型错误地触发了工具调用');
-      }
-      const compactCall = toolCalls.find(tc => tc?.name === 'record_compaction_context');
-
-      let importantFiles = [];
-      let importantSkills = [];
-      let summaryText = '';
-
-      if (compactCall && compactCall.arguments) {
-        const args = typeof compactCall.arguments === 'string'
-          ? (() => { try { return JSON.parse(compactCall.arguments); } catch { return {}; } })()
-          : compactCall.arguments;
-        summaryText = typeof args.summary === 'string' ? args.summary.trim() : '';
-        importantFiles = Array.isArray(args.important_files)
-          ? args.important_files.filter(f => typeof f === 'string')
-          : [];
-        importantSkills = Array.isArray(args.important_skills)
-          ? args.important_skills.filter(s => typeof s === 'string')
-          : [];
-      }
-
-      if (!summaryText) {
-        summaryText = stripCompactAnalysis(rawResponse);
-      }
-
-      if (!summaryText.trim()) {
-        throw new Error('摘要模型返回了空结果');
-      }
-      const { fileRanges } = scanFilesAndSkills(rawMessages);
-      return {
-        rawResponse,
-        summaryText,
-        importantFiles,
-        importantSkills,
-        fileRanges,
-      };
-    } finally {
-      restoreLLM();
-    }
-  }
-
-  async function triggerSummaryCompaction(extraInstructions = '') {
-    if (compactSummaryInFlight) {
-      console.warn('[ProtoClaw Runtime] 已有 compact summary 正在进行，本次请求已忽略。');
-      return;
-    }
-    if (!ctx.sessionId) {
-      console.warn('[ProtoClaw Runtime] 当前 runtime 未绑定 session，无法触发 compact summary。');
-      return;
-    }
-
-    compactSummaryInFlight = true;
-    try {
-      await ctx.agent.saveSession(ctx.sessionId, ctx.sessionStore);
-      console.log('[ProtoClaw Runtime] 已保存当前 session，开始进程内摘要压缩...');
-      const summaryResult = await generateInProcessSummary(extraInstructions);
-
-      const result = await ctx.postJson('/protoclaw/context_handoffs/summary_export', {
-        agentId: ctx.agentId,
-        sessionId: ctx.sessionId,
-        summaryText: summaryResult.summaryText,
-        rawResponse: summaryResult.rawResponse,
-        importantFiles: summaryResult.importantFiles || [],
-        importantSkills: summaryResult.importantSkills || [],
-        fileRanges: summaryResult.fileRanges || {},
-        policy: {
-          strategy: 'summarized-nine-section',
-          additionalInstructions: extraInstructions || '',
-        },
-      });
-
-      const handoffId = cleanValue(result?.handoff?.handoffId);
-      const handoffPath = cleanValue(result?.handoffPath);
-      const mode = cleanValue(result?.handoff?.mode);
-      console.log(`[ProtoClaw Runtime] Compact summary 已生成: mode=${mode || 'summarized-nine-section'} handoffId=${handoffId || '(none)'}`);
-      if (handoffPath) {
-        console.log(`[ProtoClaw Runtime] Handoff path: ${handoffPath}`);
-      }
-    } catch (error) {
-      console.error('[ProtoClaw Runtime] Compact summary 失败:', error);
-    } finally {
-      compactSummaryInFlight = false;
-    }
-  }
-
-  async function triggerSummaryCompactionResume(extraInstructions = '') {
-    if (compactSummaryInFlight) {
-      console.warn('[ProtoClaw Runtime] 已有 compact summary 正在进行，本次请求已忽略。');
-      return;
-    }
-    if (!ctx.sessionId) {
-      console.warn('[ProtoClaw Runtime] 当前 runtime 未绑定 session，无法触发 compact summary resume。');
-      return;
-    }
-
-    compactSummaryInFlight = true;
-    try {
-      await ctx.agent.saveSession(ctx.sessionId, ctx.sessionStore);
-      console.log('[ProtoClaw Runtime] 已保存当前 session，开始进程内摘要并创建新的 resume 会话...');
-      const summaryResult = await generateInProcessSummary(extraInstructions);
-
-      const result = await ctx.postJson('/protoclaw/context_handoffs/summary_resume', {
-        agentId: ctx.agentId,
-        sessionId: ctx.sessionId,
-        summaryText: summaryResult.summaryText,
-        rawResponse: summaryResult.rawResponse,
-        importantFiles: summaryResult.importantFiles || [],
-        importantSkills: summaryResult.importantSkills || [],
-        fileRanges: summaryResult.fileRanges || {},
-        policy: {
-          strategy: 'summarized-nine-section',
-          additionalInstructions: extraInstructions || '',
-        },
-      });
-
-      const nextSessionId = cleanValue(result?.session?.id);
-      console.log(`[ProtoClaw Runtime] 摘要 resume 已创建: newSession=${nextSessionId || '(none)'}`);
-    } catch (error) {
-      console.error('[ProtoClaw Runtime] compact summary resume 失败:', error);
-    } finally {
-      compactSummaryInFlight = false;
-    }
   }
 
   function buildPartialCompactSummaryContent(summaryText, { messagesSummarized = 0, feedback = '' } = {}) {
@@ -529,16 +358,6 @@ export function createSummaryHandlers(ctx) {
       }
       if (text === '/exit') {
         return { kind: 'exit' };
-      }
-      if (text.startsWith('/compact-summary-resume')) {
-        const extraInstructions = text.slice('/compact-summary-resume'.length).trim();
-        void triggerSummaryCompactionResume(extraInstructions);
-        return { kind: 'continue' };
-      }
-      if (text.startsWith('/compact-summary')) {
-        const extraInstructions = text.slice('/compact-summary'.length).trim();
-        void triggerSummaryCompaction(extraInstructions);
-        return { kind: 'continue' };
       }
       return {
         kind: 'text',

@@ -32,14 +32,17 @@ describe('archive-and-replace contract', () => {
 
   it('returns the authoritative archive outcome from compact_and_resume', () => {
     const start = sessionRoutes.indexOf("app.post('/protoclaw/context_handoffs/compact_and_resume'");
-    const end = sessionRoutes.indexOf("app.post('/protoclaw/context_handoffs/summary_resume'", start);
+    const end = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/activate'", start);
     const route = sessionRoutes.slice(start, end);
     assert.match(route, /res\.json\(\{[\s\S]*\.\.\.result,[\s\S]*archive:\s*\{/);
     assert.match(route, /succeeded:\s*archiveOriginal\s*\?\s*didArchive\s*:\s*null/);
   });
 
   it('does not use the unverifiable live shortcut for archive-and-replace', () => {
-    assert.match(appMain, /if \(isLiveCurrentSession && strategy && !options\.archiveOriginal && options\.useLiveCommand === true\)/);
+    // live 命令捷径（/compact-summary-resume 进程内路径）已整体移除：
+    // 所有压缩续接（含归档替换）一律走 server 同步端点。
+    assert.doesNotMatch(appMain, /useLiveCommand/);
+    assert.doesNotMatch(appMain, /compact-summary-resume/);
   });
 
   it('correlates compact response timing on both sides of JSON parsing', () => {

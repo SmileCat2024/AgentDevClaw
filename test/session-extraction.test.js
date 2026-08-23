@@ -164,8 +164,6 @@ const EXPECTED_ROUTES = [
   'POST /protoclaw/spawn_one_shot',
   'POST /protoclaw/resume_sub',
   'POST /protoclaw/context_handoffs/compact_and_resume',
-  'POST /protoclaw/context_handoffs/summary_resume',
-  'POST /protoclaw/context_handoffs/summary_export',
   'POST /protoclaw/prebuilt_sessions/activate',
   'POST /protoclaw/prebuilt_sessions/delete',
   'POST /protoclaw/prebuilt_sessions/archive',
