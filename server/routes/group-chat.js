@@ -129,7 +129,6 @@ const {
   withAdminSessionLock,
   resolveGroupChatSession,
   _resolveGroupChatSessionInner,
-  resolveGroupChatSessionSync,
   readGroupChatSync,
   ensureAdminRuntime,
 } = sessionResolver;
@@ -322,12 +321,10 @@ app.post('/protoclaw/gc/control', express.json(), async (req, res, next) => {
     }
 
     const workspaceId = identityRef.split(':')[0];
-    // 优先使用传入的 sessionId，否则回退到从群聊配置查找
-    const resolvedSessionId = sessionId || resolveGroupChatSessionSync(chatId, identityRef);
-
-    if (!resolvedSessionId) {
-      return res.status(404).json({ error: 'No active session found for this identity' });
+    if (typeof sessionId !== 'string' || !sessionId.trim()) {
+      return res.status(400).json({ error: 'sessionId is required' });
     }
+    const resolvedSessionId = sessionId.trim();
 
     const runtime = getAgentRuntime(workspaceId, resolvedSessionId);
     if (!runtime) {

@@ -12,7 +12,7 @@
  *   getAgentListRenderSignature, renderAgentList
  *
  * Dependencies (global state from app-core.js):
- *   allAgents, currentAgentId, currentRuntimeAgentId, currentLanguage,
+ *   allAgents, focusedAgentId, currentRuntimeAgentId, currentLanguage,
  *   suppressSidebarRerender, _navigationGuardEpoch, ...
  */
 
@@ -160,8 +160,8 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
     const connected = agent.connected !== false;
     const pending = pendingPrebuiltAgentIds.has(agent.id);
     const workspaceSurface = isWorkspaceSurfaceUnit(agent);
-    const idle = prebuilt && !pending && !(agent.runtime_session_id || agent.runtimeSessionId);
-    const runtimeId = agent.runtime_session_id || agent.runtimeSessionId || agent.id;
+    const runtimeId = getAgentRuntimeId(agent);
+    const idle = prebuilt && !pending && !runtimeId;
     const calling = !prebuilt
       && connected
       && !pending
@@ -177,10 +177,10 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
       calling ? 'calling' : '',
       justFinished ? 'just-finished' : '',
     ].filter(Boolean).join(' ');
-    const hasRuntime = !!(agent.runtime_session_id || agent.runtimeSessionId);
+    const hasRuntime = !!runtimeId;
     const contextMenuEnabled = prebuilt
       ? (!workspaceSurface && hasRuntime)
-      : !!(agent.runtime_session_id || agent.runtimeSessionId || agent.id);
+      : !!runtimeId;
     const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
     const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
     if (prebuilt) {
@@ -225,14 +225,14 @@ async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const agents = await invoke('get_connected_agents');
     const findConnectedChild = (list) => list.find((agent) => {
-      if (agent.source !== 'child' || agent.parent_id !== agentId) return false;
-      const runtimeId = normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId || agent.id);
+      if (agent.source !== 'child' || getParentAgentId(agent) !== agentId) return false;
+      const runtimeId = normalizeAgentIdentity(getAgentRuntimeId(agent));
       if (!runtimeId) return false;
       if (expectedRuntimeId && runtimeId === expectedRuntimeId) return false;
       // When we know the target session ID, require the child to either
       // match it or have no session set yet (still initializing).
       if (expectedSessionId) {
-        const childSessionId = String(agent.active_workspace_session_id || '').trim();
+        const childSessionId = String(getActiveSessionId(agent) || '').trim();
         if (childSessionId && childSessionId !== expectedSessionId) return false;
       }
       return agent.connected === true;
@@ -292,6 +292,27 @@ async function waitForTargetRuntimeSession(agentId, sessionId, attempts = 50, op
   return null;
 }
 
+function resolveFocusedAgentAfterRefresh(agents = allAgents) {
+  const list = Array.isArray(agents) ? agents : [];
+  const isConnected = (agent) => agent.connected !== false;
+  const hasPendingInput = (agent) =>
+    (agent.pending_input_count ?? agent.pendingInputCount ?? 0) > 0;
+  const pendingAgent = list.find((agent) => isConnected(agent) && hasPendingInput(agent));
+  let rememberedId = null;
+  try { rememberedId = localStorage.getItem('claw:lastFocusedRuntimeId'); } catch { /* ignore */ }
+  const rememberedAgent = rememberedId
+    ? list.find((agent) => (
+      isConnected(agent)
+      && (
+        agent.id === rememberedId
+        || getAgentRuntimeId(agent) === rememberedId
+        || normalizeAgentIdentity(getRuntimeId(agent)) === normalizeAgentIdentity(rememberedId)
+      )
+    ))
+    : null;
+  return pendingAgent || rememberedAgent || list.find(isConnected) || null;
+}
+
 async function loadAgents() {
   if (loadAgentsInFlight) {
     return loadAgentsInFlight;
@@ -332,7 +353,7 @@ async function loadAgents() {
       }));
     } else {
       allAgents = connectedAgents.map((agent) => {
-        const runtimeSessionId = agent.runtime_session_id || agent.runtimeSessionId;
+        const runtimeSessionId = getRuntimeId(agent);
         const runtimeAgent = runtimeSessionId ? runtimeById.get(runtimeSessionId) : runtimeById.get(agent.id);
         const resolvedConnected = runtimeAgent?.connected ?? agent.connected ?? false;
         const prev = prevByAgentId.get(agent.id);
@@ -390,7 +411,7 @@ async function loadAgents() {
     }
 
     // 清理已断开 agent 的 call 状态
-    const activeRuntimeIds = new Set(allAgents.filter((a) => a.connected).map((a) => a.runtime_session_id || a.runtimeSessionId || a.id));
+    const activeRuntimeIds = new Set(allAgents.filter((a) => a.connected).map((a) => getAgentRuntimeId(a)).filter(Boolean));
     for (const key of _agentCallActive.keys()) {
       if (!activeRuntimeIds.has(key)) _agentCallActive.delete(key);
     }
@@ -408,7 +429,7 @@ async function loadAgents() {
 
     await refreshAgentCallStates(allAgents);
 
-    if (currentAgentId && !allAgents.some((agent) => agent.id === currentAgentId || getAgentRuntimeId(agent) === currentAgentId)) {
+    if (focusedAgentId && !allAgents.some((agent) => agent.id === focusedAgentId || getAgentRuntimeId(agent) === focusedAgentId)) {
       const fallbackId = resolveWorkspaceFallbackAgentId();
       if (fallbackId) {
         await loadAgentDetail(fallbackId);
@@ -417,7 +438,7 @@ async function loadAgents() {
       }
     }
 
-    if (!currentAgentId) {
+    if (!focusedAgentId) {
       const homeAgent = allAgents.find((agent) => agent.id === 'home' && agent.source === 'prebuilt');
       if (homeAgent) {
         setPreferredUnitMode('home', homeAgent);
@@ -425,29 +446,13 @@ async function loadAgents() {
         selectWorkspaceSurface(homeAgent.id, { skipFeaturePanel: true });
         return;
       }
-      if (!currentAgentId) {
+      if (!focusedAgentId) {
         // 焦点恢复（前端自持，服务端 current agent 语义已移除）：
         // 1. 有待处理输入请求的 agent 优先；2. localStorage 记忆的上次焦点；
         // 3. 兜底选中列表第一个已连接 agent。
-        const isConnected = (agent) => agent.connected !== false;
-        const hasPendingInput = (agent) =>
-          (agent.pending_input_count ?? agent.pendingInputCount ?? 0) > 0;
-        const pendingAgent = allAgents.find((agent) => isConnected(agent) && hasPendingInput(agent));
-        let rememberedId = null;
-        try { rememberedId = localStorage.getItem('claw:lastFocusedRuntimeId'); } catch { /* ignore */ }
-        const rememberedAgent = rememberedId
-          ? allAgents.find((agent) => (
-            isConnected(agent)
-            && (
-              agent.id === rememberedId
-              || getAgentRuntimeId(agent) === rememberedId
-              || normalizeAgentIdentity(agent.runtime_session_id || agent.runtimeSessionId) === normalizeAgentIdentity(rememberedId)
-            )
-          ))
-          : null;
-        const restoreAgent = pendingAgent || rememberedAgent || allAgents.find(isConnected) || null;
+        const restoreAgent = resolveFocusedAgentAfterRefresh(allAgents);
         if (restoreAgent) {
-          currentAgentId = restoreAgent.parent_id || restoreAgent.id;
+          focusedAgentId = getLogicalAgentId(restoreAgent) || null;
           await loadAgentData(getAgentRuntimeId(restoreAgent));
 
         }
@@ -485,7 +490,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
     const runtimeIds = Array.from(new Set(
       (Array.isArray(agents) ? agents : [])
         .filter((agent) => agent?.connected)
-        .map((agent) => agent.runtime_session_id || agent.runtimeSessionId || agent.id)
+        .map((agent) => getAgentRuntimeId(agent))
         .filter(Boolean)
     ));
     if (runtimeIds.length === 0) {
@@ -561,7 +566,7 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
         }
         continue;
       }
-      const runtimeId = agent.runtime_session_id || agent.runtimeSessionId || agent.id;
+      const runtimeId = getAgentRuntimeId(agent);
       if (!runtimeId) continue;
       const notificationPayload = nextNotificationPayloads.get(runtimeId) || null;
       const nextCalling = nextCallStates.get(runtimeId) === true
@@ -584,7 +589,7 @@ let lastAgentListRenderSignature = '';
 
 function getAgentListRenderSignature() {
   return JSON.stringify({
-    currentAgentId: normalizeAgentIdentity(currentAgentId),
+    focusedAgentId: normalizeAgentIdentity(focusedAgentId),
     currentRuntimeAgentId: normalizeAgentIdentity(currentRuntimeAgentId),
     pending: Array.from(pendingPrebuiltAgentIds || []).sort(),
     restarting: Array.from(restartingRuntimeIds || []).sort(),
@@ -599,12 +604,12 @@ function getAgentListRenderSignature() {
         id: normalizeAgentIdentity(agent?.id),
         runtimeId: rid,
         source: agent?.source || '',
-        parentId: normalizeAgentIdentity(agent?.parent_id),
+        parentId: normalizeAgentIdentity(getParentAgentId(agent)),
         connected: agent?.connected !== false,
         status: agent?.status || '',
         callActive: agent?.callActive === true,
         calling: rid !== '' && _agentCallActive.get(rid) === true,
-        activeSessionId: normalizeAgentIdentity(agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId),
+        activeSessionId: normalizeAgentIdentity(getActiveSessionId(agent)),
         workspaceRevision: Number(agent?.workspace_sessions?.revision) || 0,
         displayName: agent?.active_workspace_display_name || '',
         sessionTitle: agent?.active_workspace_session_title || '',

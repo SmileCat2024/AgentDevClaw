@@ -142,6 +142,8 @@ export function extractLspServerConfig(systemConfig) {
   return result;
 }
 
+// Global host-scoped routes: these files and capability probes belong to the
+// current Claw process/user installation. They deliberately ignore page focus.
 export function setupSystemFeatureConfigRoutes(app, express) {
   app.get('/protoclaw/system_feature_config', (_req, res) => {
     res.json(readSystemFeatureConfigFile());

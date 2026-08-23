@@ -580,6 +580,7 @@ async function submitQueuedInput() {
         text: text || ' ',
         images: images.length > 0 ? images : undefined,
         source: 'chat-composer',
+        operationId: `user-turn:${Date.now()}`,
       })
     });
     if (res.ok) {

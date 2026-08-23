@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { recordSidebarDiagnosticEvent } from './sidebar-diagnostics.js';
+import { createOperationMetadata, normalizeOperationMetadata } from './operation-contract.js';
 
 const MAX_OPERATION_ID_LENGTH = 128;
 const RESERVED_TRACE_FIELDS = new Set([
-  'operationId', 'operation', 'phase', 'agentId', 'sessionId',
+  'operationId', 'requestId', 'sourceRef', 'idempotencyKey', 'traceId',
+  'operation', 'phase', 'agentId', 'sessionId',
   'elapsedMs', 'phaseDurationMs',
 ]);
 
@@ -30,17 +32,25 @@ function safeTraceFields(fields = {}) {
   return result;
 }
 
-export function createOperationTrace({ operationId, operation, agentId, sessionId, diagnosticWriter } = {}) {
-  const id = normalizeOperationId(operationId, operation || 'sidebar');
+export function createOperationTrace({ operationId, operation, agentId, sessionId, requestId, sourceRef, idempotencyKey, traceId, diagnosticWriter } = {}) {
+  const metadata = createOperationMetadata({
+    operationId: normalizeOperationId(operationId, operation || 'sidebar'),
+    requestId,
+    sourceRef,
+    idempotencyKey,
+    traceId,
+  }, { prefix: operation || 'sidebar' });
+  const id = metadata.operationId;
   const startedAt = Date.now();
   let lastAt = startedAt;
 
   return {
-    operationId: id,
+    ...normalizeOperationMetadata(metadata),
+
     mark(phase, fields = {}) {
       const now = Date.now();
       const payload = {
-        operationId: id,
+        ...normalizeOperationMetadata(metadata),
         operation: String(operation || 'sidebar').slice(0, 64),
         phase: String(phase || 'unknown').slice(0, 64),
         agentId: String(agentId || '').slice(0, 128),

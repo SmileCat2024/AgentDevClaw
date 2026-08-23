@@ -128,8 +128,9 @@ window.toggleToolSchema = toggleToolSchema;
  */
 async function toggleToolState(scope, name, checkbox) {
   const action = checkbox.checked ? 'enable' : 'disable';
-  const body = { agentId: currentAgentId, scope, name, action };
-  if (currentRuntimeAgentId) body.runtimeId = currentRuntimeAgentId;
+  const body = { agentId: getLogicalAgentId(getCurrentAgentRecord()), scope, name, action };
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+  if (runtimeId) body.runtimeId = runtimeId;
   try {
     const resp = await fetch('/protoclaw/agent/tool_state', {
       method: 'POST',
@@ -157,8 +158,9 @@ window.toggleToolState = toggleToolState;
  */
 async function toggleHookState(lifecycle, featureName, methodName, checkbox) {
   const action = checkbox.checked ? 'enable' : 'disable';
-  const body = { agentId: currentAgentId, scope: 'hook', lifecycle, featureName, methodName, action };
-  if (currentRuntimeAgentId) body.runtimeId = currentRuntimeAgentId;
+  const body = { agentId: getLogicalAgentId(getCurrentAgentRecord()), scope: 'hook', lifecycle, featureName, methodName, action };
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+  if (runtimeId) body.runtimeId = runtimeId;
   try {
     const resp = await fetch('/protoclaw/agent/tool_state', {
       method: 'POST',

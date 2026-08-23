@@ -20,12 +20,27 @@ import {
 } from '../server/routes/workspace.js';
 
 import {
+  resolveHostTarget,
+} from '../server/shared/operation-target.js';
+
+import {
   normalizeWorkspaceFeatureProject,
   normalizeWorkspaceAgentProject,
   normalizeWorkspacePhProject,
   upsertWorkspacePhProject,
   removeWorkspacePhProject,
 } from '../server/routes/workspace-projects.js';
+
+// Host workspace state is local to the named workspace record; a page focus
+// value is not a substitute for that host-owned target.
+describe('workspace host target boundary', () => {
+  it('does not derive workspace ownership from focusedAgentId', () => {
+    assert.deepStrictEqual(resolveHostTarget({ focusedAgentId: 'agent-a' }), {
+      scope: 'local-host',
+      agentId: null,
+    });
+  });
+});
 
 // ── normalizeFeatureConfigs ──────────────────────────────────────────────────
 

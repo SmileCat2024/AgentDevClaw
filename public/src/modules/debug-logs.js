@@ -323,9 +323,16 @@ async function loadLogs(forceRender = false) {
     const params = new URLSearchParams({
       scope: 'current',
     });
-    if (currentRuntimeAgentId) {
-      params.set('agentId', currentRuntimeAgentId);
+    const runtimeId = getRuntimeId(currentRuntimeAgentId);
+    if (!runtimeId) {
+      if (forceRender && activeFeaturePanel === 'logs') {
+        currentLogsTruncation = null;
+        setCurrentLogs([]);
+        renderFeaturePanel();
+      }
+      return;
     }
+    params.set('agentId', runtimeId);
 
     const res = await fetch('/api/logs?' + params.toString());
     if (!res.ok) {

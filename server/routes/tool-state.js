@@ -1,24 +1,30 @@
 /**
  * Tool / Feature enable-disable control routes.
  *
- * Sends IPC messages to the agent child process to toggle tool or feature
- * enabled state at runtime (no restart). Mirrors the swap-model IPC pattern.
+ * Sends IPC messages to the explicitly targeted agent runtime to toggle tool
+ * or feature enabled state at runtime (no restart). It never broadcasts to
+ * another session or derives a target from page focus.
  */
 import express from 'express';
-import { sendIPCtoSession, sendIPCToAllSessions, sendIPCToRuntime } from '../shared/ipc.js';
+import { sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
+import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 
 export function setupToolStateRoutes(app) {
   const jsonMiddleware = express.json();
 
   app.post('/protoclaw/agent/tool_state', jsonMiddleware, async (req, res, next) => {
     try {
-      const { agentId, runtimeId, sessionId, scope, action } = req.body || {};
+      const { scope, action } = req.body || {};
+      let target;
+      try {
+        target = resolveRuntimeControlTarget(req.body);
+      } catch (error) {
+        return res.status(error.status || 400).json({ error: error.message, code: error.code });
+      }
+      const { agentId, runtimeId, sessionId } = target;
 
       // 公共校验
-      if (!agentId || typeof agentId !== 'string') {
-        return res.status(400).json({ error: 'agentId is required' });
-      }
       if (action !== 'enable' && action !== 'disable') {
         return res.status(400).json({ error: 'action must be "enable" or "disable"' });
       }
@@ -65,10 +71,8 @@ export function setupToolStateRoutes(app) {
         delivered = sendIPCtoSession(agentId, sessionId, message) ? 1 : 0;
       }
 
-      // Last resort: broadcast
-      if (!delivered) {
-        delivered = sendIPCToAllSessions(agentId, message);
-      }
+      // No broadcast fallback: runtime controls must not affect another
+      // session when the explicitly named runtime is unavailable.
 
       if (!delivered) {
         return res.status(503).json({ error: 'No running agent process found' });

@@ -15,6 +15,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { resolveSessionTarget } from '../server/shared/operation-target.js';
 import path from 'node:path';
 import os from 'node:os';
 
@@ -140,6 +141,18 @@ describe('createSessionHelpers', () => {
     await helpers.createPrebuiltSession('flow-workspace', {});
     assert.ok(wsRead === 'flow-workspace',
       'readWorkspaceState should have been called with flow-workspace');
+  });
+});
+
+describe('session mutation target boundary', () => {
+  it('requires the caller to name both Agent and Session', () => {
+    assert.deepEqual(resolveSessionTarget({ agentId: 'agent-a', sessionId: 'session-a' }), {
+      scope: 'session',
+      agentId: 'agent-a',
+      sessionId: 'session-a',
+    });
+    assert.throws(() => resolveSessionTarget({ sessionId: 'session-a', focusedAgentId: 'agent-a' }), /agentId is required/);
+    assert.throws(() => resolveSessionTarget({ agentId: 'agent-a', focusedSessionId: 'session-a' }), /sessionId is required/);
   });
 });
 

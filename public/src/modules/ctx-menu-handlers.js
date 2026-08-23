@@ -20,7 +20,7 @@
  *   contextMenuSessionId, contextMenuSessionMode, contextMenuCompactAction,
  *   contextMenuProjectAgentId, contextMenuProjectId,
  *   contextMenuFeatureRepoPackageId, featurePanelWidth, allAgents,
- *   currentAgentId, currentRuntimeAgentId, currentWorkspaceTab,
+ *   focusedAgentId, currentRuntimeAgentId, currentWorkspaceTab,
  *   currentLanguage, suppressSidebarRerender
  */
 
@@ -182,6 +182,10 @@ compactBranchAction.addEventListener('click', () => {
   window.openBranchDialog(activeAgent.id, sessionId);
 });
 
+function isDeletedAgentFocused(agentId, focusedId, runtimeId) {
+  return agentId === focusedId || agentId === runtimeId;
+}
+
 deleteAgentAction.addEventListener('click', async () => {
   if (!contextMenuAgentId || contextMenuAgentMode !== 'delete-only') return;
 
@@ -201,7 +205,7 @@ deleteAgentAction.addEventListener('click', async () => {
     closeAgentContextMenu();
     await loadAgents();
 
-    if (currentAgentId === contextMenuAgentId || currentRuntimeAgentId === contextMenuAgentId) {
+    if (isDeletedAgentFocused(contextMenuAgentId, focusedAgentId, currentRuntimeAgentId)) {
       const fallbackId = resolveWorkspaceFallbackAgentId(agent);
       if (fallbackId) {
         selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });

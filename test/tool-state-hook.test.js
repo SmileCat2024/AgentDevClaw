@@ -70,6 +70,7 @@ describe('tool-state 路由 — hook scope 校验', () => {
   it('scope=hook 且字段齐全 → 不返回 name required 错误', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       scope: 'hook',
       lifecycle: 'ToolUse',
       featureName: 'audit',
@@ -88,6 +89,7 @@ describe('tool-state 路由 — hook scope 校验', () => {
   it('scope=hook 缺少 lifecycle → 返回 400', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       scope: 'hook',
       featureName: 'audit',
       methodName: 'onToolUse',
@@ -104,6 +106,7 @@ describe('tool-state 路由 — hook scope 校验', () => {
   it('scope=hook 缺少 featureName → 返回 400', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       scope: 'hook',
       lifecycle: 'ToolUse',
       methodName: 'onToolUse',
@@ -120,6 +123,7 @@ describe('tool-state 路由 — hook scope 校验', () => {
   it('scope=hook 缺少 methodName → 返回 400', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       scope: 'hook',
       lifecycle: 'ToolUse',
       featureName: 'audit',
@@ -136,6 +140,7 @@ describe('tool-state 路由 — hook scope 校验', () => {
   it('scope=hook 不携带 name → 不报 "name is required" 错误', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       scope: 'hook',
       lifecycle: 'CallStart',
       featureName: 'memory',
@@ -157,6 +162,7 @@ describe('tool-state 路由 — hook scope 校验', () => {
   it('action 非法 → 返回 400', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       scope: 'hook',
       lifecycle: 'ToolUse',
       featureName: 'audit',
@@ -199,6 +205,7 @@ describe('tool-state 路由 — tool/feature scope 回归', () => {
   it('scope=tool 缺少 name → 仍返回 400', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       scope: 'tool',
       action: 'disable',
     });
@@ -213,6 +220,7 @@ describe('tool-state 路由 — tool/feature scope 回归', () => {
   it('scope=feature 缺少 name → 仍返回 400', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       scope: 'feature',
       action: 'enable',
     });
@@ -227,6 +235,7 @@ describe('tool-state 路由 — tool/feature scope 回归', () => {
   it('scope 未指定（默认 tool）缺少 name → 返回 400', async () => {
     const req = createMockReq({
       agentId: 'test-agent',
+      sessionId: 'test-session',
       action: 'disable',
     });
     const res = createMockRes();

@@ -15,7 +15,6 @@ import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
 import {
   cleanSessionText,
-  normalizeClientAgentId,
   childProcessEnv,
 } from '../shared/string-helpers.js';
 import {
@@ -30,6 +29,8 @@ import { renderConversationHtml } from '../conversation-renderer.js';
 import { readHandoffPackage } from '../context-continuity/handoff-package.js';
 import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
 import { createOperationTrace } from '../shared/operation-trace.js';
+import { resolveAgentTarget, resolveSessionTarget } from '../shared/operation-target.js';
+import { attachOperationMetadata, readOperationMetadata } from '../shared/operation-contract.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
@@ -41,6 +42,10 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
 /**
+ * Session-scoped routes. Every session file/index mutation must name both the
+ * logical Agent and the Session; no page focus or cross-Agent owner scan may
+ * repair a missing target.
+ *
  * Registers all session-related protoclaw routes.
  *
  * @param {object} app     Express app instance
@@ -248,12 +253,8 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
 
 app.post('/protoclaw/render_conversation', express.json(), async (req, res, next) => {
   try {
-    const { sessionId, agentId, lastNCalls } = req.body || {};
-    if (!sessionId || typeof sessionId !== 'string') {
-      res.status(400).json({ error: 'sessionId is required' });
-      return;
-    }
-    const resolvedAgentId = (typeof agentId === 'string' && agentId) || 'qqbot';
+    const { agentId: resolvedAgentId, sessionId } = resolveSessionTarget(req.body);
+    const { lastNCalls } = req.body || {};
     const sessionPath = getPrebuiltSessionFilePath(resolvedAgentId, sessionId);
     const raw = await fs.readFile(sessionPath, 'utf8');
     const parsed = JSON.parse(raw);
@@ -321,8 +322,10 @@ app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
 });
 
 app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) => {
+  const requestMetadata = readOperationMetadata(req);
   const trace = createOperationTrace({
-    operationId: req.body?.operationId,
+    ...requestMetadata,
+    operationId: requestMetadata.operationId,
     operation: 'branch_session',
     agentId: req.body?.agentId,
     sessionId: req.body?.sourceSessionId,
@@ -549,6 +552,7 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
         .catch((err) => console.error('[branch] lineage notification failed:', err));
     }
   } catch (error) {
+    attachOperationMetadata(error, requestMetadata);
     trace.mark('failed', { errorCode: error?.code || 'branch_failed' });
     next(error);
   }
@@ -640,14 +644,17 @@ setupTokenRefreshRoute(app, express);
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
 app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) => {
+  const requestMetadata = readOperationMetadata(req);
   const trace = createOperationTrace({
-    operationId: req.body?.operationId,
+    ...requestMetadata,
+    operationId: requestMetadata.operationId,
     operation: 'create_session',
     agentId: req.body?.agentId,
   });
   trace.mark('server_received');
   try {
-    const agent = await requireAgentLight(req.body.agentId);
+    const { agentId } = resolveAgentTarget(req.body);
+    const agent = await requireAgentLight(agentId);
     const session = await createPrebuiltSession(agent.id, {
       returnSummary: false,
       sourceSessionId: req.body.sourceSessionId,
@@ -683,6 +690,7 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
     });
     trace.mark('response_sent');
   } catch (error) {
+    attachOperationMetadata(error, requestMetadata);
     trace.mark('failed', { errorCode: error?.code || 'create_failed' });
     next(error);
   }
@@ -927,13 +935,7 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
 
 app.post('/protoclaw/context_handoffs/export', express.json(), async (req, res, next) => {
   try {
-    const sessionId = cleanSessionText(req.body?.sessionId);
-    if (!sessionId) {
-      res.status(400).json({ error: 'sessionId is required' });
-      return;
-    }
-
-    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    const { agentId: preferredAgentId, sessionId } = resolveSessionTarget(req.body);
     const result = await exportContextHandoffForSession(sessionId, preferredAgentId, req.body?.policy || {});
     res.json(result);
   } catch (error) {
@@ -950,7 +952,9 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
       return;
     }
 
-    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
+    // A handoff path carries its own source identity. Handoff-id lookup is
+    // still explicitly scoped by agentId; page focus is never consulted.
+    const preferredAgentId = resolveAgentTarget(req.body).agentId;
     const archiveOriginal = req.body?.archiveOriginal === true;
     const result = await createCompactedResumeFromHandoff({
       preferredAgentId,
@@ -1017,8 +1021,7 @@ app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => 
 
     req.setTimeout(timeoutMs + REQ_TIMEOUT_BUFFER_MS);
 
-    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
-    const agentId = preferredAgentId || 'programming-helper';
+    const agentId = resolveAgentTarget(req.body).agentId;
 
     const isExploration = explorationIds.length === 0 && !handoffId && !handoffPath;
     const sessionType = isExploration ? 'exploration' : 'sub';
@@ -1114,7 +1117,7 @@ app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => 
 
 app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
   try {
-    const subSessionId = cleanSessionText(req.body?.sessionId);
+    const { agentId, sessionId: subSessionId } = resolveSessionTarget(req.body);
     const message = cleanSessionText(req.body?.message);
     const timeoutMs = Number(req.body?.timeoutMs) || SPAWN_AGENT_TIMEOUT_MS;
 
@@ -1125,7 +1128,6 @@ app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
 
     req.setTimeout(timeoutMs + REQ_TIMEOUT_BUFFER_MS);
 
-    const agentId = 'programming-helper';
     const agent = await requirePrebuiltAgentForRuntime(agentId);
 
     await updateSessionIndex(agentId, (index) => {
@@ -1172,21 +1174,29 @@ app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
 });
 
 app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async (req, res, next) => {
+  const target = (() => {
+    try {
+      return resolveSessionTarget({ agentId: req.body?.agentId, sessionId: req.body?.sessionId });
+    } catch (error) {
+      return { error };
+    }
+  })();
+  if (target.error) {
+    res.status(target.error.status || 400).json({ error: target.error.message, code: target.error.code });
+    return;
+  }
+  const requestMetadata = readOperationMetadata(req);
   const trace = createOperationTrace({
-    operationId: req.body?.operationId,
+    ...requestMetadata,
+    operationId: requestMetadata.operationId,
     operation: req.body?.reason === 'trim' ? 'trim_session' : 'compact_session',
     agentId: req.body?.agentId,
     sessionId: req.body?.sessionId,
   });
   trace.mark('server_received');
   try {
-    const sessionId = cleanSessionText(req.body?.sessionId);
-    if (!sessionId) {
-      res.status(400).json({ error: 'sessionId is required' });
-      return;
-    }
+    const { agentId: preferredAgentId, sessionId } = target;
 
-    const preferredAgentId = normalizeClientAgentId(req.body?.agentId);
     const detached = req.body?.detached !== false;
     const policy = req.body?.policy || {};
     const archiveOriginal = req.body?.archiveOriginal === true;
@@ -1323,26 +1333,26 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
         .catch((err) => console.error('[compact_and_resume] lineage notification failed:', err));
     }
   } catch (error) {
+    attachOperationMetadata(error, requestMetadata);
     trace.mark('failed', { errorCode: error?.code || 'compact_failed' });
     next(error);
   }
 });
 
 app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, res, next) => {
+  const requestMetadata = readOperationMetadata(req);
   const trace = createOperationTrace({
-    operationId: req.body?.operationId,
+    ...requestMetadata,
+    operationId: requestMetadata.operationId,
     operation: 'activate_session',
     agentId: req.body?.agentId,
     sessionId: req.body?.sessionId,
   });
   trace.mark('server_received');
   try {
-    const agent = await requireAgentLight(req.body.agentId);
-    if (typeof req.body.sessionId !== 'string' || !req.body.sessionId) {
-      res.status(400).json({ error: 'sessionId is required' });
-      return;
-    }
-    const session = await activatePrebuiltSession(agent.id, req.body.sessionId, { returnSummary: false });
+    const { agentId, sessionId } = resolveSessionTarget(req.body);
+    const agent = await requireAgentLight(agentId);
+    const session = await activatePrebuiltSession(agent.id, sessionId, { returnSummary: false });
     const committedIndex = await readSessionIndex(agent.id);
     trace.mark('index_committed', { revision: committedIndex.revision });
     const status = await startManagedAgent(agent, session.id);
@@ -1366,37 +1376,37 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
     });
     trace.mark('response_sent');
   } catch (error) {
+    attachOperationMetadata(error, requestMetadata);
     trace.mark('failed', { errorCode: error?.code || 'activate_failed' });
     next(error);
   }
 });
 
 app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res, next) => {
+  const requestMetadata = readOperationMetadata(req);
   const trace = createOperationTrace({
-    operationId: req.body?.operationId,
+    ...requestMetadata,
+    operationId: requestMetadata.operationId,
     operation: 'delete_session',
     agentId: req.body?.agentId,
     sessionId: req.body?.sessionId,
   });
   trace.mark('server_received');
   try {
-    const agent = await requireAgentLight(req.body.agentId);
-    if (typeof req.body.sessionId !== 'string' || !req.body.sessionId) {
-      res.status(400).json({ error: 'sessionId is required' });
-      return;
-    }
+    const { agentId, sessionId } = resolveSessionTarget(req.body);
+    const agent = await requireAgentLight(agentId);
 
     let assemblyRuntime = null;
     if (agent.id === 'agent-creator' || agent.id === 'flow-workspace') {
-      assemblyRuntime = await stopAssemblyRuntime(req.body.sessionId);
+      assemblyRuntime = await stopAssemblyRuntime(sessionId);
     }
-    const deletedRuntime = getAgentRuntime(agent.id, req.body.sessionId);
-    const deleted = await deletePrebuiltSession(agent.id, req.body.sessionId, {
+    const deletedRuntime = getAgentRuntime(agent.id, sessionId);
+    const deleted = await deletePrebuiltSession(agent.id, sessionId, {
       includeSessions: req.body.responseMode !== 'delta',
     });
     // 线程宿主（coder）：被删会话是线程 head 时取消该线程（pending 指令
     // 一并取消）。非宿主 / 非 head / 无线程：no-op。
-    await getThreadIntegration().onSessionDeleted(agent.id, req.body.sessionId);
+    await getThreadIntegration().onSessionDeleted(agent.id, sessionId);
     if (deletedRuntime?.viewerAgentId && clearUISurfaces) {
       clearUISurfaces(deletedRuntime.viewerAgentId);
     }
@@ -1405,7 +1415,7 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
 
     if (deletedRuntime?.process && deletedRuntime.process.exitCode === null && !deletedRuntime.stopped) {
       trace.mark('source_stop_requested');
-      await stopManagedAgent(agent.id, req.body.sessionId);
+      await stopManagedAgent(agent.id, sessionId);
     }
 
     const targetSessionId = deleted.wasActiveSession ? (deleted.activeSessionId || null) : null;
@@ -1435,25 +1445,24 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
 });
 
 app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res, next) => {
+  const requestMetadata = readOperationMetadata(req);
   const trace = createOperationTrace({
-    operationId: req.body?.operationId,
+    ...requestMetadata,
+    operationId: requestMetadata.operationId,
     operation: 'archive_session',
     agentId: req.body?.agentId,
     sessionId: req.body?.sessionId,
   });
   trace.mark('server_received');
   try {
-    const agent = await requireAgentLight(req.body.agentId);
-    if (typeof req.body.sessionId !== 'string' || !req.body.sessionId) {
-      res.status(400).json({ error: 'sessionId is required' });
-      return;
-    }
+    const { agentId, sessionId } = resolveSessionTarget(req.body);
+    const agent = await requireAgentLight(agentId);
     const archived = req.body.archived !== false;
-    const result = await archivePrebuiltSession(agent.id, req.body.sessionId, archived, {
+    const result = await archivePrebuiltSession(agent.id, sessionId, archived, {
       includeSessions: req.body.responseMode !== 'delta',
     });
     trace.mark('index_committed', { revision: result.revision });
-    const targetSessionId = archived && result.activeSessionId !== req.body.sessionId
+    const targetSessionId = archived && result.activeSessionId !== sessionId
       ? result.activeSessionId
       : null;
     let targetStatus = null;
@@ -1470,7 +1479,7 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
 
     // 归档状态变化通知关联群聊；线程投影仍以 session index 的实时状态为准。
     if (notifySessionArchived) {
-      notifySessionArchived({ agentId: agent.id, sessionId: req.body.sessionId, archived })
+      notifySessionArchived({ agentId: agent.id, sessionId, archived })
         .catch((err) => console.error('[archive] notification failed:', err));
     }
   } catch (error) {
@@ -1481,13 +1490,10 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
 
 app.post('/protoclaw/prebuilt_sessions/todo', express.json(), async (req, res, next) => {
   try {
-    const agent = await requireAgentLight(req.body.agentId);
-    if (typeof req.body.sessionId !== 'string' || !req.body.sessionId) {
-      res.status(400).json({ error: 'sessionId is required' });
-      return;
-    }
+    const { agentId, sessionId } = resolveSessionTarget(req.body);
+    const agent = await requireAgentLight(agentId);
     const todo = req.body.todo !== false;
-    const result = await tagPrebuiltSessionTodo(agent.id, req.body.sessionId, todo, {
+    const result = await tagPrebuiltSessionTodo(agent.id, sessionId, todo, {
       includeSessions: req.body.responseMode !== 'delta',
     });
     res.json(result);

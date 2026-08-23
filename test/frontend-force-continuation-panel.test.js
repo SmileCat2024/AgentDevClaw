@@ -5,7 +5,7 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 function panelSandbox(overrides = {}) {
   const fetchCalls = [];
   const ctx = createFrontendSandbox({
-    currentAgentId: 'programming-helper',
+    focusedAgentId: 'programming-helper',
     currentRuntimeAgentId: 'runtime-a',
     currentLanguage: 'zh',
     URLSearchParams,
@@ -161,7 +161,7 @@ describe('ForceContinuationPanel', () => {
   });
 
   it('keeps the control unavailable for agents without the feature mounted', () => {
-    const { ctx } = panelSandbox({ currentAgentId: 'qqbot', currentRuntimeAgentId: null });
+    const { ctx } = panelSandbox({ focusedAgentId: 'qqbot', currentRuntimeAgentId: null });
     const html = ctx.run('window.ForceContinuationPanel.render()');
 
     // 不可用时返回与 hooks 面板一致的通用空态（无开关控件）
@@ -173,7 +173,7 @@ describe('ForceContinuationPanel', () => {
 
   it('serves the panel for the agent-studio workspace', async () => {
     const { ctx, fetchCalls } = panelSandbox({
-      currentAgentId: 'agent-studio',
+      focusedAgentId: 'agent-studio',
       currentRuntimeAgentId: 'runtime-studio',
     });
 

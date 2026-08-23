@@ -79,7 +79,7 @@ function applyLanguage() {
 
   if (typeof updateCurrentAgentChrome === 'function') {
     updateCurrentAgentChrome();
-  } else if (!currentAgentId) {
+  } else if (!focusedAgentId) {
     currentAgentTitle.textContent = t('page_title');
     statusBadge.textContent = t('status_no_agent');
   }

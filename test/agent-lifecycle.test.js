@@ -740,13 +740,18 @@ describe('agent-lifecycle', () => {
       injectRuntime('test-agent', 'session-X', child);
 
       let responseData = null;
+      let responseStatus = null;
       await handler(
         { body: { agentId: 'test-agent', taskId: '3' } },
-        { json: (data) => { responseData = data; } },
+        {
+          status: (status) => { responseStatus = status; return { json: (data) => { responseData = data; } }; },
+          json: (data) => { responseData = data; },
+        },
         (error) => { throw error; },
       );
 
-      assert.equal(responseData.ok, false, 'should not send without sessionId');
+      assert.equal(responseStatus, 400, 'should reject without an explicit runtime target');
+      assert.equal(responseData.code, 'invalid_target');
       assert.equal(messages.length, 0);
     });
 

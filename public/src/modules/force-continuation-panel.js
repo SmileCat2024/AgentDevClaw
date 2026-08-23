@@ -25,7 +25,7 @@
   const SUPPORTED_AGENTS = ['programming-helper', 'agent-studio'];
 
   function isSupportedAgent() {
-    return SUPPORTED_AGENTS.includes(String(currentAgentId || ''));
+    return SUPPORTED_AGENTS.includes(String(focusedAgentId || ''));
   }
 
   function currentSessionId() {
@@ -36,7 +36,7 @@
   }
 
   function runtimeKey() {
-    return String(currentRuntimeAgentId || '') || `${currentAgentId || ''}::${currentSessionId()}`;
+    return String(currentRuntimeAgentId || '') || `${focusedAgentId || ''}::${currentSessionId()}`;
   }
 
   function getState(key = runtimeKey()) {
@@ -202,13 +202,13 @@
     if (!isSupportedAgent()) return null;
     const sessionId = currentSessionId();
     const key = runtimeKey();
-    if (!sessionId || !currentAgentId || !key) return null;
+    if (!sessionId || !focusedAgentId || !key) return null;
     const current = getState(key);
     if (current.refreshing || current.pending) return null;
 
     setState({ refreshing: true, error: '' }, key);
     try {
-      const params = new URLSearchParams({ agentId: currentAgentId, sessionId });
+      const params = new URLSearchParams({ agentId: focusedAgentId, sessionId });
       const response = await fetch(`/protoclaw/force_continuation_status?${params.toString()}`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
@@ -227,14 +227,14 @@
     if (!isSupportedAgent()) return;
     const sessionId = currentSessionId();
     const key = runtimeKey();
-    if (!sessionId || !currentAgentId || !key) return;
+    if (!sessionId || !focusedAgentId || !key) return;
     setState({ pending: true, error: '' }, key);
     if (activeFeaturePanel === 'force-continuation') renderFeaturePanel();
     try {
       const response = await fetch('/protoclaw/force_continuation_control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: currentAgentId, sessionId, ...patch }),
+        body: JSON.stringify({ agentId: focusedAgentId, sessionId, ...patch }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);

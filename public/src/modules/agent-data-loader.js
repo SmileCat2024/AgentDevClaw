@@ -9,7 +9,7 @@
  *   loadAgentData, refreshCurrentRuntimeStatus
  *
  * Dependencies (global state from app-core.js):
- *   currentRuntimeAgentId, currentAgentId, activeFeaturePanel
+ *   currentRuntimeAgentId, focusedAgentId, activeFeaturePanel
  */
 
 // 上一次已加载模板映射的 runtime id（焦点切换时触发按 agent 重载）
@@ -65,7 +65,7 @@ async function loadAgentData(agentId) {
       // compressRatio, per-session model info) before the first render.
       // Without this, updateChatContextBar falls back to hardcoded defaults
       // because getConnectedAgents only returns light session records.
-      loadAgentDetail(currentAgentId),
+      loadAgentDetail(focusedAgentId),
     ]);
 
     // Stale guard: if the user switched to a different agent during the
@@ -168,8 +168,8 @@ async function refreshCurrentRuntimeStatus(
 
   try {
     const guardOwnerRecord = getCurrentRuntimeRecord() || getCurrentAgentRecord();
-    const guardAgentId = String(guardOwnerRecord?.parent_id || currentAgentId || guardOwnerRecord?.id || '').trim();
-    const guardSessionId = String(guardOwnerRecord?.active_workspace_session_id || getActiveWorkspaceSessionId(guardOwnerRecord) || '').trim();
+    const guardAgentId = String(getLogicalAgentId(guardOwnerRecord) || '').trim();
+    const guardSessionId = String(getActiveSessionId(guardOwnerRecord) || '').trim();
     const guardStatusUrl = guardAgentId && guardSessionId
       ? `/protoclaw/context_guard_status?agentId=${encodeURIComponent(guardAgentId)}&sessionId=${encodeURIComponent(guardSessionId)}`
       : null;

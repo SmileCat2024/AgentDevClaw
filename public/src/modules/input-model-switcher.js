@@ -14,7 +14,7 @@
  *
  * 依赖（全局符号，由先于本文件加载的脚本提供，加载序见 index.html）：
  * - escapeHtml, currentLanguage, ClawToast, window.ClawFW._modelPresets (app-core.js)
- * - currentAgentId (app-core.js / app-main.js)
+ * - focusedAgentId (app-core.js / app-main.js)
  * - currentRuntimeAgentId, currentOverviewSnapshot, getActiveWorkspaceSessionId,
  *   getRuntimeAwareAgentRecord, getCurrentHostAgentRecord, getCurrentAgentRecord (app-main.js)
  * - _cacheModelInfo, getCachedThinkingEffort (session-ui.js)
@@ -29,8 +29,8 @@ function _getInputAgentId() {
   // not the ViewerWorker child UUID. The config file
   // (.agentdev/agent-configs/{agentId}.json) and IPC delivery
   // (sendIPCToAllSessions → listAgentRuntimes) both use the host ID.
-  // currentAgentId is set to the host ID by switchAgent().
-  if (typeof currentAgentId !== 'undefined' && currentAgentId) return currentAgentId;
+  // focusedAgentId is set to the host ID by switchAgent().
+  if (typeof focusedAgentId !== 'undefined' && focusedAgentId) return focusedAgentId;
   // Fallback: resolve via host record
   if (typeof getCurrentHostAgentRecord === 'function') {
     let host = getCurrentHostAgentRecord();

@@ -6,7 +6,7 @@
  * 当前状态：RECAP_DISABLED = true，所有函数入口提前返回。
  *
  * 依赖全局状态（定义在 app-core.js）:
- *   currentAgentId, currentRuntimeAgentId, currentMessages, currentLanguage
+ *   focusedAgentId, currentRuntimeAgentId, currentMessages, currentLanguage
  * 依赖全局函数:
  *   getCurrentAgentRecord (app-main.js)
  *   getActiveWorkspaceSessionId (app-ui.js)
@@ -43,7 +43,7 @@ const RECAP_AWAY_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 function _getRecapAgentAndSession() {
   const agent = getCurrentAgentRecord();
-  const agentId = String(agent?.parent_id || agent?.id || currentAgentId || '').trim();
+  const agentId = String(agent?.parent_id || agent?.id || focusedAgentId || '').trim();
   const sessionId = getActiveWorkspaceSessionId(agent);
   return { agentId, sessionId };
 }

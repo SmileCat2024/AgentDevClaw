@@ -370,7 +370,7 @@ function _getCurrentAgentIdForSwap() {
   // Model swap is keyed on the HOST agent ID (e.g. 'programming-helper'),
   // not the ViewerWorker child UUID. Config file and IPC delivery both
   // use the host ID. See _getInputAgentId() for full rationale.
-  if (typeof currentAgentId !== 'undefined' && currentAgentId) return currentAgentId;
+  if (typeof focusedAgentId !== 'undefined' && focusedAgentId) return focusedAgentId;
   if (typeof getCurrentHostAgentRecord === 'function') {
     let host = getCurrentHostAgentRecord();
     if (host && host.id) return host.id;

@@ -21,6 +21,7 @@ import {
 import { USER_DATA_ROOT, LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC, DISPATCH_IDLE_THRESHOLD_DEFAULT_SEC, DISPATCH_IDLE_POLL_MIN_MS } from '../shared/constants.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
+import { resolveSessionTarget } from '../shared/operation-target.js';
 import {
   getManagedRuntimeKey,
 } from '../shared/agent-access.js';
@@ -306,6 +307,8 @@ export function setupDispatchRoutes(app, express, ctx) {
   onRuntimeReady((agentId, sessionId) => emitDispatchReadyEvent(agentId, sessionId));
 
   // ── Dispatch API routes ──────────────────────────────────────────
+  // Host-scoped scheduler registry. A schedule's target is carried by its
+  // explicit targetAgentId/targetSessionId fields; page focus is irrelevant.
 
   app.get('/protoclaw/dispatch/projects', async (_req, res) => {
     const agentId = String(_req.query.agentId || '').trim();
@@ -395,6 +398,9 @@ export function setupDispatchRoutes(app, express, ctx) {
         }
       }
 
+      // Dispatch is a host scheduler. Its historical default target remains
+      // programming-helper; when supplied, targetAgentId/targetSessionId are
+      // explicit schedule data and never come from page focus.
       const agentId = targetAgentId || 'programming-helper';
       const fireAt = triggerType === 'timer'
         ? new Date(Date.now() + Number(secondsFromNow) * 1000).toISOString()
@@ -461,9 +467,13 @@ export function setupDispatchRoutes(app, express, ctx) {
   });
 
   app.get('/protoclaw/dispatch/poll', async (req, res) => {
-    const agentId = req.query.agentId;
-    const sessionId = req.query.sessionId || null;
-    if (!agentId) return res.status(400).json({ error: 'agentId required' });
+    let target;
+    try {
+      target = resolveSessionTarget(req.query);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message, code: error.code });
+    }
+    const { agentId, sessionId } = target;
     const timeoutMs = Math.min(Number(req.query.timeout) || LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC) * 1000;
     const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
 
@@ -563,9 +573,15 @@ export function setupDispatchRoutes(app, express, ctx) {
   });
 
   app.post('/protoclaw/dispatch/agent_status', express.json(), (req, res) => {
-    const { agentId, sessionId, status } = req.body || {};
-    if (!agentId) return res.status(400).json({ error: 'agentId required' });
-    const runtimeKey = getManagedRuntimeKey(agentId, sessionId || null);
+    let target;
+    try {
+      target = resolveSessionTarget(req.body);
+    } catch (error) {
+      return res.status(error.status || 400).json({ error: error.message, code: error.code });
+    }
+    const { agentId, sessionId } = target;
+    const { status } = req.body || {};
+    const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
     dispatchRuntimeActivity.set(runtimeKey, { lastActiveAt: Date.now(), status: status || 'idle' });
     res.json({ ok: true });
   });

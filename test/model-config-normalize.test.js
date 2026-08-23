@@ -1,5 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { resolveHostTarget } from '../server/shared/operation-target.js';
+
 import {
   normalizeModelPresetsData,
   flattenModelPresets,
@@ -9,6 +11,15 @@ import {
   DEFAULT_SPEECH_MODEL,
   normalizeProgrammingHelperProcessMode,
 } from '../server/routes/model-config.js';
+
+describe('model config host target boundary', () => {
+  it('keeps global model configuration independent of page focus', () => {
+    assert.deepEqual(resolveHostTarget({ focusedAgentId: 'agent-a' }), {
+      scope: 'local-host',
+      agentId: null,
+    });
+  });
+});
 
 describe('normalizeProgrammingHelperProcessMode', () => {
   it('accepts only the three workspace process modes', () => {

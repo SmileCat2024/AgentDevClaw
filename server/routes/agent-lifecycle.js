@@ -12,6 +12,7 @@ import { createConnectedAgentsQuery } from './agent-connected.js';
 import { createAgentStartupFns } from './agent-startup.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
+import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 
 // ── Agent Lifecycle (orchestration layer) ────────────────────────
 // This module wires together three concerns:
@@ -453,10 +454,15 @@ export function createAgentLifecycleModule(ctx) {
 
     app.get('/protoclaw/force_continuation_status', async (req, res, next) => {
       try {
-        const agentId = req.query?.agentId ? String(req.query.agentId) : '';
-        const sessionId = req.query?.sessionId ? String(req.query.sessionId) : '';
-        if (!agentId || !sessionId) {
-          return res.status(400).json({ ok: false, error: 'agentId and sessionId are required' });
+        let target;
+        try {
+          target = resolveRuntimeControlTarget(req.query);
+        } catch (error) {
+          return res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code });
+        }
+        const { agentId, sessionId } = target;
+        if (!sessionId) {
+          return res.status(400).json({ ok: false, error: 'sessionId is required' });
         }
         const result = await requestForceContinuationState(agentId, sessionId, { type: 'force-continuation-status' });
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
@@ -468,10 +474,14 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/force_continuation_control', express.json(), async (req, res, next) => {
       try {
-        const { agentId, sessionId, enabled, triggers, maxConsecutiveContinuations } = req.body || {};
-        if (!agentId) {
-          return res.status(400).json({ ok: false, error: 'agentId is required' });
+        const { enabled, triggers, maxConsecutiveContinuations } = req.body || {};
+        let target;
+        try {
+          target = resolveRuntimeControlTarget(req.body);
+        } catch (error) {
+          return res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code });
         }
+        const { agentId, sessionId } = target;
         if (!sessionId) {
           return res.status(400).json({ ok: false, error: 'sessionId is required' });
         }
@@ -510,10 +520,14 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/todo_control', express.json(), async (req, res, next) => {
       try {
-        const { agentId, sessionId, taskId, forceContinue, runtimeId } = req.body || {};
-        if (!agentId) {
-          return res.status(400).json({ error: 'agentId is required' });
+        const { taskId, forceContinue } = req.body || {};
+        let target;
+        try {
+          target = resolveRuntimeControlTarget(req.body);
+        } catch (error) {
+          return res.status(error.status || 400).json({ error: error.message, code: error.code });
         }
+        const { agentId, sessionId, runtimeId } = target;
         if (taskId !== undefined && typeof taskId !== 'string' && taskId !== null) {
           return res.status(400).json({ error: 'taskId must be a string or null' });
         }

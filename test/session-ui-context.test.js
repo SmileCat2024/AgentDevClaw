@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
+const i18nSource = fs.readFileSync(new URL('../public/src/i18n.js', import.meta.url), 'utf8');
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const inputRenderSource = fs.readFileSync(
   new URL('../public/src/modules/input-render.js', import.meta.url),
@@ -31,7 +32,7 @@ function sourceBetween(source, startMarker, endMarker) {
 
 function createCoreContext() {
   const context = {
-    currentAgentId: 'flow-workspace',
+    focusedAgentId: 'flow-workspace',
     currentRuntimeAgentId: 'runtime-1',
     currentMessages: [],
     currentInputRequests: [],
@@ -72,10 +73,11 @@ function createCoreContext() {
   const cacheBlock = sourceBetween(
     coreSource,
     'const _agentRuntimeCache = new Map();',
-    '\nconst I18N =',
+    '\nfunction getFeatureStatus',
   );
   vm.runInContext(
-    `${sessionViewStateSource}
+    `${i18nSource}
+${sessionViewStateSource}
 ${cacheBlock}
 globalThis.__uiContext = {
   getActiveWorkspaceSessionId,

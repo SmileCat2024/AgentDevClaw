@@ -257,7 +257,7 @@ describe('model-info: full agent-switch round-trip', () => {
 // ── Tests: swap agentId must resolve to HOST agent ID ──────
 
 describe('model swap: agentId resolution', () => {
-  it('currentAgentId is the host agent ID, not the runtime child UUID', () => {
+  it('focusedAgentId is the host agent ID, not the runtime child UUID', () => {
     // This test documents the invariant that swap_model must receive
     // the host agent ID (e.g. 'programming-helper'), because:
     //   1. Config file: .agentdev/agent-configs/{hostId}.json
@@ -269,13 +269,13 @@ describe('model swap: agentId resolution', () => {
     const childUuid = 'viewer-session-abc-123';
 
     // Simulate the switchAgent() assignment
-    // currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
+    // focusedAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
     // For a prebuilt host: targetAgent.id = 'programming-helper', no parent_id
-    const currentAgentId = hostId;
+    const focusedAgentId = hostId;
 
     // The swap agentId must NOT be the child UUID
-    assert.notEqual(currentAgentId, childUuid);
-    assert.equal(currentAgentId, 'programming-helper');
+    assert.notEqual(focusedAgentId, childUuid);
+    assert.equal(focusedAgentId, 'programming-helper');
   });
 
   it('getRuntimeAwareAgentRecord().id can be child UUID — swap must NOT use it', () => {
@@ -302,7 +302,7 @@ describe('model swap: agentId resolution', () => {
     assert.notEqual(record.id, 'programming-helper');
 
     // This is exactly why _getInputAgentId / _getCurrentAgentIdForSwap
-    // must use currentAgentId (host ID) instead of record.id.
+    // must use focusedAgentId (host ID) instead of record.id.
   });
 });
 

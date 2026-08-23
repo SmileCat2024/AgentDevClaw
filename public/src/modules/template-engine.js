@@ -336,7 +336,7 @@ function getToolDisplayName(toolName) {
 }
 
 function getAgentRuntimeId(agent) {
-  return agent.runtime_session_id || agent.runtimeSessionId || agent.id;
+  return typeof getRuntimeId === 'function' ? (getRuntimeId(agent) || '') : '';
 }
 
 function getAgentDisplayId(agent) {

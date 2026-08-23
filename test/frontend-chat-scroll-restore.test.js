@@ -195,7 +195,7 @@ function createHandoffHarness({ cache = {} } = {}) {
     assemblySideRailRevealTimer: null,
 
     // ── app-main.js module state ──
-    currentAgentId: 'hostA',
+    focusedAgentId: 'hostA',
     currentRuntimeAgentId: 'A',
     readOnlyMode: false,
     currentWorkspaceArtifactDetail: null,
@@ -218,6 +218,7 @@ function createHandoffHarness({ cache = {} } = {}) {
     bumpNavigationGuard: () => {},
     closeAgentContextMenu: () => {},
     findAgentByIdentity: () => null,
+    getLogicalAgentId: (agent) => agent?.parent_id || agent?.id || null,
     isWorkspaceSurfaceUnit: () => false,
     isWorkspaceHostUnit: () => false,
     _storeVisibleSessionInputDraft: () => {},

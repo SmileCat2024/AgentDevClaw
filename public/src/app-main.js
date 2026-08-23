@@ -3,7 +3,7 @@ function normalizeAgentIdentity(value) {
 }
 
 function getCurrentHostAgentRecord() {
-  const hostId = normalizeAgentIdentity(currentAgentId);
+  const hostId = normalizeAgentIdentity(focusedAgentId);
   if (!hostId) return null;
   return allAgents.find((agent) => normalizeAgentIdentity(agent?.id) === hostId) || null;
 }
@@ -20,7 +20,7 @@ function getCurrentRuntimeRecord() {
     return runtimeRecord;
   }
   const hostRecord = getCurrentHostAgentRecord();
-  const hostRuntimeId = normalizeAgentIdentity(hostRecord?.runtime_session_id || hostRecord?.runtimeSessionId);
+  const hostRuntimeId = normalizeAgentIdentity(getRuntimeId(hostRecord));
   if (hostRecord && hostRuntimeId && hostRuntimeId === runtimeId) {
     return hostRecord;
   }
@@ -45,7 +45,7 @@ function getCurrentVisualAgentTitle() {
 
 function updateCurrentAgentChrome() {
   if (!currentAgentTitle || !statusBadge) return;
-  const hasSelection = normalizeAgentIdentity(currentAgentId) || normalizeAgentIdentity(currentRuntimeAgentId);
+  const hasSelection = normalizeAgentIdentity(focusedAgentId) || normalizeAgentIdentity(currentRuntimeAgentId);
   if (!hasSelection) {
     currentAgentTitle.textContent = t('page_title');
     statusBadge.textContent = t('status_no_agent');
@@ -67,7 +67,7 @@ function updateCurrentAgentChrome() {
 function isAgentActive(agent) {
   const agentId = normalizeAgentIdentity(agent?.id);
   const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId);
-  const hostId = normalizeAgentIdentity(currentAgentId);
+  const hostId = normalizeAgentIdentity(focusedAgentId);
   if (!agentId) return false;
   if (runtimeId) {
     if (agent?.source === 'prebuilt' && agentId === hostId) {
@@ -93,7 +93,7 @@ function groupConnectedAgents(agents) {
   );
   const orphanRuntimeAgents = agents.filter((agent) => {
     if (agent.source === 'prebuilt') return false;
-    const parentId = String(agent.parent_id || '').trim();
+    const parentId = String(getParentAgentId(agent) || '').trim();
     return !parentId || !prebuiltIds.has(parentId);
   });
   const allPrebuilt = agents.filter((agent) => agent.source === 'prebuilt');
@@ -160,7 +160,7 @@ window.handlePrebuiltAgentClick = async (agentId) => {
   }
 
   if (isWorkspaceHostUnit(prebuiltAgent)) {
-    currentAgentId = agentId;
+    focusedAgentId = agentId;
     renderAgentList();
     if (!loadedAgentDetailIds.has(agentId)) {
       container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
@@ -171,7 +171,7 @@ window.handlePrebuiltAgentClick = async (agentId) => {
   }
 
   if (isWorkspaceSurfaceUnit(prebuiltAgent)) {
-    currentAgentId = agentId;
+    focusedAgentId = agentId;
     renderAgentList();
     if (!loadedAgentDetailIds.has(agentId)) {
       container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
@@ -268,8 +268,8 @@ function applyOptimisticWorkspaceSession(agentId, session) {
 
 async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null, extraPolicy = null, options = {}) {
   const currentAgent = getCurrentAgentRecord();
-  const activeSessionId = String(currentAgent?.active_workspace_session_id || currentAgent?.workspace_sessions?.activeSessionId || '').trim();
-  const runtimeAgentId = currentRuntimeAgentId || currentAgent?.runtime_session_id || currentAgent?.runtimeSessionId || '';
+  const activeSessionId = String(getActiveSessionId(currentAgent) || '').trim();
+  const runtimeAgentId = getRuntimeId(currentRuntimeAgentId) || getRuntimeId(currentAgent) || '';
   const policy = strategy ? { strategy } : {};
   if (keepRecentTurns != null && keepRecentTurns >= 1) {
     policy.keepRecentTurns = keepRecentTurns;
@@ -359,7 +359,7 @@ window.navigateToWorkspaceSession = async (agentId, sessionId, options = {}) => 
     || (sessionId ? { type: 'open_session', sessionId } : null);
 
   // Already in the target workspace — delegate directly to runWorkspaceAction.
-  if (currentAgentId === agentId) {
+  if (focusedAgentId === agentId) {
     if (action) {
       await window.runWorkspaceAction(JSON.stringify(action));
     }
@@ -380,7 +380,7 @@ window.navigateToWorkspaceSession = async (agentId, sessionId, options = {}) => 
     saveCurrentRuntimeToCache(currentRuntimeAgentId, getRuntimeContextKey(currentRuntimeAgentId));
   }
 
-  currentAgentId = agentId;
+  focusedAgentId = agentId;
   currentRuntimeAgentId = null;
   readOnlyMode = false;
   currentWorkspaceArtifactDetail = null;
@@ -550,18 +550,18 @@ window.switchAgent = async (newAgentId) => {
     && isWorkspaceHostUnit(targetAgent)
     && newAgentId
     && newAgentId !== targetAgent.id
-    && (targetAgent.runtime_session_id === newAgentId || targetAgent.runtimeSessionId === newAgentId)
+    && getRuntimeId(targetAgent) === newAgentId
   );
   const runtimeAgentId = requestedRuntimeOfWorkspaceHost
     ? newAgentId
     : (targetAgent ? getAgentRuntimeId(targetAgent) : newAgentId);
   if (!runtimeAgentId) return;
   if (isWorkspaceSurfaceUnit(targetAgent) && !requestedRuntimeOfWorkspaceHost) {
-    if (targetAgent?.id === currentAgentId && !currentRuntimeAgentId) return;
+    if (targetAgent?.id === focusedAgentId && !currentRuntimeAgentId) return;
     selectWorkspaceSurface(targetAgent.id);
     return;
   }
-  if (targetAgent?.id === currentAgentId && runtimeAgentId === currentRuntimeAgentId) return;
+  if (targetAgent?.id === focusedAgentId && runtimeAgentId === currentRuntimeAgentId) return;
   _storeVisibleSessionInputDraft();
   if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
     saveCurrentWorkspaceSurfaceScroll();
@@ -572,7 +572,7 @@ window.switchAgent = async (newAgentId) => {
   try {
     // Set global state and do optimistic render IMMEDIATELY — before the PUT.
     // This lets the user see cached data without waiting for a network round trip.
-    currentAgentId = targetAgent?.parent_id || targetAgent?.id || runtimeAgentId;
+    focusedAgentId = getLogicalAgentId(targetAgent) || runtimeAgentId;
     currentRuntimeAgentId = runtimeAgentId;
     // 用户主动切换：立即冻结 viewer 侧会话身份。必须在此之前用 allAgents
     // 派生值（此时绑定尚未写入，读到的是用户点击时刻列表展示的会话），
@@ -761,7 +761,7 @@ async function runPollCycle() {
       await refreshAgentCallStates(allAgents);
       // Incrementally refresh workspace session data when viewing workspace surface.
       if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
-        const wsHostAgent = allAgents.find((a) => a.id === currentAgentId && isWorkspaceHostUnit(a));
+        const wsHostAgent = allAgents.find((a) => a.id === focusedAgentId && isWorkspaceHostUnit(a));
         if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
           window._lastWsSessionRefreshAt = Date.now();
           try {
@@ -859,7 +859,7 @@ async function runPollCycle() {
           if (fallbackId) {
             selectWorkspaceSurface(fallbackId, { skipFeaturePanel: true });
           } else {
-            currentAgentId = null;
+            focusedAgentId = null;
             currentWorkspaceTab = null;
             renderCurrentMainView();
             renderInputRequests(current.inputRequests);
@@ -1059,7 +1059,7 @@ async function runPollCycle() {
     // Incrementally refresh workspace session data for the active workspace host.
     // This keeps the UI in sync when sessions are created/deleted via CLI.
     if (Date.now() - (window._lastWsSessionRefreshAt || 0) > 3000) {
-      const wsHostAgent = allAgents.find((a) => a.id === currentAgentId && isWorkspaceHostUnit(a));
+      const wsHostAgent = allAgents.find((a) => a.id === focusedAgentId && isWorkspaceHostUnit(a));
       if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
         window._lastWsSessionRefreshAt = Date.now();
         try {

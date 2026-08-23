@@ -119,7 +119,7 @@ export function createFrontendSandbox(overrides = {}) {
     },
     // State defaults
     currentLanguage: 'zh',
-    currentAgentId: null,
+    focusedAgentId: null,
     currentRuntimeAgentId: null,
     currentMessages: [],
     allAgents: [],

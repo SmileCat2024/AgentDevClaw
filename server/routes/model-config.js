@@ -5,8 +5,9 @@ import { spawn } from 'child_process';
 import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
-import { sendIPCToAllSessions, sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
+import { sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
+import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 import { normalizeProgrammingHelperProcessMode, GLOBAL_SHARED_AGENT_ID } from '../shared/process-mode.js';
 import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.js';
 
@@ -379,6 +380,10 @@ export function convertAudioToWav(inputBuffer) {
 }
 
 // ── Routes ────────────────────────────────────────────────────────
+// Host/Global boundary: model_config and speech_model_config persist in the
+// local user configuration files. They intentionally have no Agent target and
+// never derive one from page focus. Agent-specific preset routes below require
+// their explicit agentId and only write that Agent's user config file.
 
 export function setupModelConfigRoutes(app, express) {
   app.get('/protoclaw/model_config', async (_req, res, next) => {
@@ -618,7 +623,7 @@ export function setupModelConfigRoutes(app, express) {
     } catch (error) { next(error); }
   });
 
-  // ── Hot-swap: switch thinking effort for a running agent ──
+  // ── Hot-swap: switch thinking effort for one explicit runtime ──
   // Runtime-only: updates the in-memory LLM instance without touching the
   // preset definition in config/presets.json. The preset's thinkingEffort is
   // the authoritative default at launch and must not be mutated by a
@@ -627,10 +632,14 @@ export function setupModelConfigRoutes(app, express) {
   // session's runtime — not broadcast to all sessions of the agent.
   app.post('/protoclaw/swap_thinking_effort', express.json(), async (req, res, next) => {
     try {
-      const { agentId, thinkingEffort, sessionId, runtimeId } = req.body || {};
-      if (!agentId || typeof agentId !== 'string') {
-        return res.status(400).json({ error: 'agentId is required' });
+      const { thinkingEffort } = req.body || {};
+      let target;
+      try {
+        target = resolveRuntimeControlTarget(req.body);
+      } catch (error) {
+        return res.status(error.status || 400).json({ error: error.message, code: error.code });
       }
+      const { agentId, sessionId, runtimeId } = target;
       // thinkingEffort is null (clear → vendor default) or a non-empty string
       const normalized = thinkingEffort === null
         ? null
@@ -652,15 +661,11 @@ export function setupModelConfigRoutes(app, express) {
       if (!swapCount && sessionId && typeof sessionId === 'string') {
         swapCount = sendIPCtoSession(agentId, sessionId, message) ? 1 : 0;
       }
-      if (!swapCount) {
-        swapCount = sendIPCToAllSessions(agentId, message);
-      }
-
-      res.json({ ok: true, agentId, thinkingEffort: normalized, swapCount });
+      res.json({ ok: swapCount > 0, agentId, thinkingEffort: normalized, swapCount });
     } catch (error) { next(error); }
   });
 
-  // ── Hot-swap: switch active model for a running agent ──
+  // ── Hot-swap: switch active model for one explicit runtime ──
   // Runtime-only: updates the in-memory LLM instance without touching the
   // agent's startup preset (.agentdev/agent-configs). The preset file is the
   // authoritative source for "what model to use at launch" and must not be
@@ -669,10 +674,14 @@ export function setupModelConfigRoutes(app, express) {
   // session's runtime — not broadcast to all sessions of the agent.
   app.post('/protoclaw/swap_model', express.json(), async (req, res, next) => {
     try {
-      const { agentId, presetName, sessionId, runtimeId } = req.body || {};
-      if (!agentId || typeof agentId !== 'string') {
-        return res.status(400).json({ error: 'agentId is required' });
+      const { presetName } = req.body || {};
+      let target;
+      try {
+        target = resolveRuntimeControlTarget(req.body);
+      } catch (error) {
+        return res.status(error.status || 400).json({ error: error.message, code: error.code });
       }
+      const { agentId, sessionId, runtimeId } = target;
       if (!presetName || typeof presetName !== 'string') {
         return res.status(400).json({ error: 'presetName is required' });
       }
@@ -699,12 +708,10 @@ export function setupModelConfigRoutes(app, express) {
         swapCount = sendIPCtoSession(agentId, sessionId, message) ? 1 : 0;
       }
 
-      // Last resort: broadcast (should rarely happen)
-      if (!swapCount) {
-        swapCount = sendIPCToAllSessions(agentId, message);
-      }
+      // No broadcast fallback: an explicit runtime/session request must not
+      // change another session's in-memory model.
 
-      res.json({ ok: true, agentId, presetName, swapCount });
+      res.json({ ok: swapCount > 0, agentId, presetName, swapCount });
     } catch (error) { next(error); }
   });
 

@@ -1211,15 +1211,20 @@ async function resolvePrebuiltSessionOwner(sessionId, preferredAgentId = '') {
     if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
   };
 
-  addCandidate(preferredAgentId);
-  addCandidate('flow-workspace');
-  addCandidate('agent-creator');
-  addCandidate('feature-creator');
-  addCandidate('programming-helper');
-  try {
-    const discovered = await discoverAgents(AGENTS_ROOT);
-    discovered.forEach((agent) => addCandidate(agent?.id));
-  } catch {}
+  // An explicit agentId is authoritative. Never scan another Agent's session
+  // index to repair a mismatched or missing request target.
+  if (preferredAgentId) {
+    addCandidate(preferredAgentId);
+  } else {
+    addCandidate('flow-workspace');
+    addCandidate('agent-creator');
+    addCandidate('feature-creator');
+    addCandidate('programming-helper');
+    try {
+      const discovered = await discoverAgents(AGENTS_ROOT);
+      discovered.forEach((agent) => addCandidate(agent?.id));
+    } catch {}
+  }
 
   for (const agentId of candidates) {
     try {

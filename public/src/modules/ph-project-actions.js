@@ -45,7 +45,7 @@ window.phOpenModelConfig = async () => {
       console.error('Failed to load presets:', e);
     }
   }
-  window.phModelConfigAgentId = agent.id;
+  window.phModelConfigAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
   renderPhModelConfigOverlay(agent, presets);
 };
 
@@ -315,7 +315,7 @@ window.phSetProcessMode = async (processMode) => {
     const response = await fetch('/protoclaw/agent_process_mode', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: agent.id, processMode }),
+      body: JSON.stringify({ agentId: getLogicalAgentId(agent), processMode }),
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {

@@ -12,7 +12,8 @@
  *   - currentTodoPlan, currentTodoPlanSignature (app-core.js)
  *   - getInterruptTargetId, setInterruptTargetId (app-core.js)
  *   - featurePanelBody (app-core.js)
- *   - currentRuntimeAgentId, currentAgentId, allAgents (app-core.js / app-main.js)
+ *   - currentRuntimeAgentId, focusedAgentId, allAgents (app-core.js / app-main.js)
+ *   - getLogicalAgentId, getRuntimeId (app-core.js identity contract)
  *   - activeFeaturePanel (app-core.js)
  *   - renderFeaturePanel (debug-panel-host.js)
  *   - escapeHtml, t, currentLanguage (app-core.js)
@@ -273,16 +274,16 @@ function renderPlanPanel() {
 // ── TODO 中断控制（完成后停止）──────────────────────────────────
 
 async function sendTodoControl(taskId) {
-  if (!currentRuntimeAgentId) return;
-  // runtimeId 优先（与轮询数据源 /api/agents/:id/todo 同一 id 空间，不会错位）；
-  // sessionId 作为 fallback（getRuntimeWorkspaceSessionId 精确匹配当前 session 条目，
-  // 不用 OR find —— 会误匹配 workspace host 条目拿到错误的 active session）
-  const sessionId = getRuntimeWorkspaceSessionId(currentRuntimeAgentId) || undefined;
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+  if (!runtimeId) return;
+  // runtimeId 与轮询数据源 /api/agents/:id/todo 共用同一身份空间；sessionId
+  // 仅表达当前绑定会话，不从页面焦点或 parentId 猜测。
+  const sessionId = getRuntimeWorkspaceSessionId(runtimeId) || undefined;
   try {
     await fetch('/protoclaw/todo_control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: currentAgentId, runtimeId: currentRuntimeAgentId, sessionId, taskId }),
+      body: JSON.stringify({ agentId: getLogicalAgentId(getCurrentAgentRecord()), runtimeId, sessionId, taskId }),
     });
   } catch (e) {
     console.error('[TodoControl] request failed:', e);
@@ -290,8 +291,9 @@ async function sendTodoControl(taskId) {
 }
 
 async function sendTodoForceContinue(enabled, { attempt = 0 } = {}) {
-  if (!currentRuntimeAgentId) return false;
-  const sessionId = getRuntimeWorkspaceSessionId(currentRuntimeAgentId) || undefined;
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+  if (!runtimeId) return false;
+  const sessionId = getRuntimeWorkspaceSessionId(runtimeId) || undefined;
   try {
     const response = await fetch('/protoclaw/todo_control', {
       method: 'POST',
@@ -299,7 +301,7 @@ async function sendTodoForceContinue(enabled, { attempt = 0 } = {}) {
       // runtimeId 是主定位 id：与轮询数据源 /api/agents/:id/todo 的 :id 相同，
       // 开关显示哪个 runtime 的快照，控制就发往哪个 runtime，天然一致。
       // sessionId 仅作 runtimeId 失效时的 fallback。
-      body: JSON.stringify({ agentId: currentAgentId, runtimeId: currentRuntimeAgentId, sessionId, forceContinue: enabled }),
+      body: JSON.stringify({ agentId: getLogicalAgentId(getCurrentAgentRecord()), runtimeId, sessionId, forceContinue: enabled }),
     });
     const payload = await response.json().catch(() => null);
     if (response.ok && payload?.ok === true) return true;

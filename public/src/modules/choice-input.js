@@ -243,16 +243,23 @@ window.rejectChoiceRequest = async function(requestId) {
   lastRenderedInputSignature = null;
   renderInputRequests();
   // Send interrupt in the background.
-  const targetRuntimeId = getChoiceState(requestId).runtimeId || currentRuntimeAgentId;
-  if (targetRuntimeId) {
-    try {
-      await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/interrupt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-    } catch (e) {
-      console.error('[Choice] interrupt request failed:', e);
+  const targetRuntimeId = String(getChoiceState(requestId).runtimeId || currentRuntimeAgentId || '').trim();
+  if (!targetRuntimeId) {
+    console.error('[Choice] Cannot interrupt without an explicit runtime target');
+    delete choiceInputState[requestId];
+    poll();
+    return;
+  }
+  try {
+    const response = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/interrupt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      console.error('[Choice] interrupt request failed:', response.status);
     }
+  } catch (e) {
+    console.error('[Choice] interrupt request failed:', e);
   }
   delete choiceInputState[requestId];
   poll();

@@ -4,7 +4,7 @@
  * 拆出日期：2026-07-03
  *
  * 依赖全局状态（定义在 app-core.js）:
- *   currentRuntimeAgentId, currentAgentId, currentLanguage,
+ *   currentRuntimeAgentId, focusedAgentId, currentLanguage,
  *   allAgents, _autoTitleTriggered, _seenChoiceAlertIds, _lastChoiceAlertCheckAt
  * 依赖全局函数:
  *   getCurrentAgentRecord (app-main.js)
@@ -230,7 +230,7 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
 }
 
 function tryAutoTitleGeneration(messages) {
-  if (!currentRuntimeAgentId || !currentAgentId) return;
+  if (!currentRuntimeAgentId || !focusedAgentId) return;
 
   // [DEBUG-AUTO-TITLE]
   if (_autoTitlePending.size > 0) {

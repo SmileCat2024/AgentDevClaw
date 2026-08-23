@@ -53,6 +53,31 @@ describe('Claw user-turn contract', () => {
     });
   });
 
+  it('rejects malformed or missing runtime targets before fetch', async () => {
+    let calls = 0;
+    await assert.rejects(
+      submitUserTurn({ agentId: 'agent%2', text: 'new turn' }, {
+        viewerOrigin: 'http://viewer.test',
+        fetchImpl: async () => { calls += 1; return jsonResponse({ success: true }); },
+      }),
+      (error) => {
+        assert.ok(error instanceof UserTurnDeliveryError);
+        assert.equal(error.code, 'invalid_target');
+        assert.equal(error.status, 400);
+        assert.equal(error.retryable, false);
+        return true;
+      },
+    );
+    await assert.rejects(
+      submitUserTurn({ text: 'new turn' }, {
+        viewerOrigin: 'http://viewer.test',
+        fetchImpl: async () => { calls += 1; return jsonResponse({ success: true }); },
+      }),
+      (error) => error.code === 'invalid_target',
+    );
+    assert.equal(calls, 0);
+  });
+
   it('exposes framework delivery failures as a stable Claw error contract', async () => {
     const fetchImpl = async () => jsonResponse({
       success: false,

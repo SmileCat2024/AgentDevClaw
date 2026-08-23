@@ -724,9 +724,10 @@ async function applySettingsPreset(idx) {
     renderSettingsOverlay();
     // Refresh session data to reflect updated model config
     let _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
-    if (_agent && _agent.id) {
+    const logicalAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(_agent) : _agent?.id;
+    if (logicalAgentId) {
       try {
-        let freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(_agent.id));
+        let freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(logicalAgentId));
         if (freshRes.ok) { _agent.workspace_sessions = await freshRes.json(); }
       } catch {}
     }
@@ -758,9 +759,10 @@ async function saveSettingsConfig() {
     renderSettingsOverlay();
     // Refresh session data to reflect updated model config
     let _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
-    if (_agent && _agent.id) {
+    const logicalAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(_agent) : _agent?.id;
+    if (logicalAgentId) {
       try {
-        let freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(_agent.id));
+        let freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(logicalAgentId));
         if (freshRes.ok) { _agent.workspace_sessions = await freshRes.json(); }
       } catch {}
     }

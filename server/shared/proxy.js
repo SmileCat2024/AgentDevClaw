@@ -1,4 +1,6 @@
 import { VIEWER_ORIGIN } from './constants.js';
+import { resolveProxyTarget } from './request-target.js';
+import { buildLocalFailureResponse, readOperationMetadata } from './operation-contract.js';
 
 // These headers describe one transport hop, not the end-to-end request. In
 // particular, forwarding the browser's Content-Length into undici's
@@ -18,7 +20,9 @@ const HOP_BY_HOP_REQUEST_HEADERS = new Set([
 ]);
 
 export async function proxyToViewer(req, res) {
-  const targetUrl = `${VIEWER_ORIGIN}${req.originalUrl}`;
+  const metadata = readOperationMetadata(req);
+  const target = resolveProxyTarget(req, { viewerOrigin: VIEWER_ORIGIN });
+  const targetUrl = `${target?.viewerOrigin || VIEWER_ORIGIN}${req.originalUrl}`;
   const headers = new Headers();
 
   for (const [key, value] of Object.entries(req.headers)) {
@@ -38,7 +42,21 @@ export async function proxyToViewer(req, res) {
     init.body = Buffer.concat(chunks);
   }
 
-  const response = await fetch(targetUrl, init);
+  let response;
+  try {
+    response = await fetch(targetUrl, init);
+  } catch (error) {
+    const failure = buildLocalFailureResponse({
+      ...error,
+      message: 'Local Viewer transport is unavailable',
+      code: 'transport_unavailable',
+      status: 503,
+      retryable: true,
+      transport: true,
+    }, metadata);
+    res.status(503).json(failure);
+    return;
+  }
   res.status(response.status);
 
   response.headers.forEach((value, key) => {

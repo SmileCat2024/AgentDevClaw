@@ -354,6 +354,8 @@ export async function resolveWorkspaceData(agent) {
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
+// Host-scoped: workspace state/artifacts belong to the explicit local Agent
+// workspace file, not to page focus. The route never reads focusedAgentId.
 
 export function setupWorkspaceRoutes(app, express) {
   app.get('/protoclaw/workspace_state', async (req, res, next) => {

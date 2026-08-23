@@ -18,14 +18,14 @@ function selectWorkspaceSurface(agentId, options = {}) {
       nextWorkspaceTab = fallbackWorkspaceTab;
     }
   }
-  const prevAgentId = currentAgentId;
+  const prevAgentId = focusedAgentId;
   const previousRuntimeId = currentRuntimeAgentId;
   const previousRuntimeContextKey = getRuntimeContextKey(previousRuntimeId);
   saveCurrentWorkspaceSurfaceScroll();
   if (previousRuntimeId && !readOnlyMode) {
     saveCurrentRuntimeToCache(previousRuntimeId, previousRuntimeContextKey);
   }
-  currentAgentId = agentId || null;
+  focusedAgentId = agentId || null;
   currentRuntimeAgentId = null;
   readOnlyMode = false;
   currentWorkspaceArtifactDetail = null;

@@ -44,8 +44,8 @@ function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', o
     : null;
   const sourceRuntime = Array.isArray(allAgents) ? allAgents.find((item) => (
     item?.source !== 'prebuilt'
-    && String(item?.parent_id || '').trim() === String(agentId).trim()
-    && String(item?.active_workspace_session_id || '').trim() === String(sessionId).trim()
+    && String(getParentAgentId(item) || '').trim() === String(agentId).trim()
+    && String(getActiveSessionId(item) || '').trim() === String(sessionId).trim()
   )) : null;
   const projectDir = String(options.projectDir || session?.openDirectory || '').trim();
   return beginSidebarOperation({
@@ -55,7 +55,7 @@ function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', o
     phase: 'generating',
     agentId,
     sourceSessionId: sessionId,
-    sourceRuntimeId: options.sourceRuntimeId || sourceRuntime?.runtime_session_id || sourceRuntime?.runtimeSessionId || sourceRuntime?.id || '',
+    sourceRuntimeId: options.sourceRuntimeId || getRuntimeId(sourceRuntime) || '',
     projectDir,
     projectName: options.projectName || (projectDir && typeof getPathLeaf === 'function' ? getPathLeaf(projectDir) : ''),
     title: session?.title || '',
@@ -101,7 +101,7 @@ async function navigateToSessionMutationTarget(agentId, result, sourceRuntimeId)
   }
 
   const connectedTarget = upsertConnectedAgent(targetAgent) || targetAgent;
-  const targetRuntimeId = connectedTarget.runtime_session_id || connectedTarget.runtimeSessionId || connectedTarget.id;
+  const targetRuntimeId = getRuntimeId(connectedTarget);
   if (!targetRuntimeId) return false;
 
   setPreferredUnitMode('chat', connectedTarget);
@@ -129,7 +129,7 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
     workspace_sessions: {
       ...(agent?.workspace_sessions || {}),
       sessions: nextSessions,
-      activeSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || null,
+      activeSessionId: getActiveSessionId(agent),
     },
   });
   lastRenderedWorkspaceHtml = '';
@@ -147,7 +147,7 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
       workspace_sessions: {
         ...(latestAgent?.workspace_sessions || {}),
         sessions: revertedSessions,
-        activeSessionId: latestAgent?.workspace_sessions?.activeSessionId || latestAgent?.active_workspace_session_id || null,
+        activeSessionId: getActiveSessionId(latestAgent),
       },
     });
     lastRenderedWorkspaceHtml = '';
@@ -179,7 +179,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
       workspace_sessions: {
         ...(agent?.workspace_sessions || {}),
         sessions: updatedSessions,
-        activeSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || null,
+        activeSessionId: getActiveSessionId(agent),
       },
     });
     // Render immediately so the user sees the archive without waiting for the
@@ -222,7 +222,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
         s.id === sessionId ? { ...s, archived: false } : s,
       );
       updateAgentRecord(agentId, {
-        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || null },
+        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: getActiveSessionId(agent) },
       });
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();

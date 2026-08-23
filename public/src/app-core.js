@@ -421,7 +421,7 @@ if (projectDocsetOverlay) {
   });
 }
 
-let currentAgentId = null;
+let focusedAgentId = null;
 let currentRuntimeAgentId = null;
 let readOnlyMode = false;
 let loadAgentsInFlight = null;
@@ -695,7 +695,7 @@ const _userCollapseStateByContext = new Map();
 function getUserCollapseStateContextKey(runtimeId = currentRuntimeAgentId) {
   const runtimeKey = typeof getRuntimeContextKey === 'function' ? getRuntimeContextKey(runtimeId) : null;
   if (runtimeKey) return runtimeKey;
-  const agentKey = String(currentAgentId || '').trim();
+  const agentKey = String(focusedAgentId || '').trim();
   return agentKey ? `agent:${agentKey}` : 'global';
 }
 
@@ -726,12 +726,105 @@ function resetUserCollapseStateForContext(contextKey = getUserCollapseStateConte
   activateUserCollapseStateForContext(key);
 }
 
+// Local resource identity contract.
+// agentId is the stable logical Agent / workspace owner; sessionId is a
+// persisted conversation identity; runtimeId is one ViewerWorker instance;
+// parentId is only the child-runtime -> host relationship; focusedAgentId is
+// page display state and is not read here. A stopped runtime resolves to null;
+// no identity is guessed from focus, name, PID, list position, or parentId.
+function normalizeResourceIdentity(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function hasIdentityAlias(record, aliases) {
+  return !!(record && typeof record === 'object' && !Array.isArray(record)
+    && aliases.some((key) => record[key] !== undefined && record[key] !== null));
+}
+
+function resolveIdentityAliases(record, aliases) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const values = aliases
+    .map((key) => normalizeResourceIdentity(record[key]))
+    .filter(Boolean);
+  if (new Set(values).size > 1) return null;
+  return values[0] || null;
+}
+
+function getParentAgentId(record) {
+  return resolveIdentityAliases(record, ['parentId', 'parent_id']);
+}
+
+function getLogicalAgentId(record) {
+  if (typeof record === 'string' || typeof record === 'number') {
+    return normalizeResourceIdentity(record) || null;
+  }
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const explicitAgentId = resolveIdentityAliases(record, ['agentId', 'logicalAgentId']);
+  if (hasIdentityAlias(record, ['agentId', 'logicalAgentId'])) {
+    return explicitAgentId;
+  }
+  const parentId = getParentAgentId(record);
+  if (parentId) return parentId;
+  // A host record owns its own logical identity. A child without parentId is
+  // intentionally unresolved rather than guessed from its display fields.
+  if (record.source === 'prebuilt' || record.source === 'host' || record.source === 'workspace') {
+    return normalizeResourceIdentity(record.id) || null;
+  }
+  if (!record.source && !hasIdentityAlias(record, ['runtimeId', 'runtime_session_id', 'runtimeSessionId'])) {
+    return normalizeResourceIdentity(record.id) || null;
+  }
+  return null;
+}
+
+function getRuntimeId(record) {
+  if (typeof record === 'string' || typeof record === 'number') {
+    return normalizeResourceIdentity(record) || null;
+  }
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const explicitRuntimeId = resolveIdentityAliases(record, ['runtimeId', 'runtime_session_id', 'runtimeSessionId']);
+  if (hasIdentityAlias(record, ['runtimeId', 'runtime_session_id', 'runtimeSessionId'])) {
+    return explicitRuntimeId;
+  }
+  // Child/external records use their own record id as the runtime identity.
+  // A host record with no live runtime has no runtimeId; parentId is never a
+  // substitute for a missing runtime.
+  if (record.source === 'child' || record.source === 'external' || getParentAgentId(record)) {
+    return normalizeResourceIdentity(record.id) || null;
+  }
+  return null;
+}
+
+function getActiveSessionId(record = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
+  // workspace_sessions.activeSessionId is the current canonical nested field;
+  // the top-level fields are legacy/API aliases and are only consulted when
+  // the canonical field is absent. This makes stale legacy data deterministic.
+  const hasNestedSession = hasIdentityAlias(record?.workspace_sessions, ['sessionId', 'activeSessionId']);
+  const nestedSessionId = resolveIdentityAliases(record?.workspace_sessions, ['sessionId', 'activeSessionId']);
+  if (hasNestedSession) return nestedSessionId;
+  if (hasIdentityAlias(record, ['sessionId', 'active_workspace_session_id'])) {
+    return resolveIdentityAliases(record, ['sessionId', 'active_workspace_session_id']);
+  }
+  return null;
+}
+
+function getAgentRuntimeId(agent) {
+  return getRuntimeId(agent) || '';
+}
+
+function buildLocalResourceRef(input) {
+  const record = input && typeof input === 'object' ? input : {};
+  return {
+    scope: 'local',
+    agentId: getLogicalAgentId(record),
+    parentId: getParentAgentId(record),
+    sessionId: getActiveSessionId(record),
+    runtimeId: getRuntimeId(record),
+  };
+}
+
 function getActiveWorkspaceSessionId(agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
-  return String(
-    agent?.workspace_sessions?.activeSessionId
-    || agent?.active_workspace_session_id
-    || ''
-  ).trim();
+  return getActiveSessionId(agent) || '';
 }
 
 // ── Viewer-local session binding ────────────────────────────────────────────
@@ -783,7 +876,7 @@ function getRuntimeWorkspaceSessionId(runtimeId) {
 function getRuntimeContextKey(runtimeId = currentRuntimeAgentId, agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
   const normalizedRuntimeId = String(runtimeId || '').trim();
   if (!normalizedRuntimeId) return null;
-  const hostId = String(agent?.parent_id || agent?.id || currentAgentId || '').trim();
+  const hostId = String(agent?.parent_id || agent?.id || focusedAgentId || '').trim();
   const sessionId = getRuntimeWorkspaceSessionId(normalizedRuntimeId) || getActiveWorkspaceSessionId(agent);
   if (hostId && sessionId) {
     return `host:${hostId}|session:${sessionId}`;
@@ -1260,8 +1353,8 @@ function findAgentByIdentity(agentId) {
 }
 
 function resolveWorkspaceFallbackAgentId(agent = getCurrentAgentRecord()) {
-  if (currentAgentId && allAgents.some((item) => item.id === currentAgentId)) {
-    return currentAgentId;
+  if (focusedAgentId && allAgents.some((item) => item.id === focusedAgentId)) {
+    return focusedAgentId;
   }
   const parentId = String(agent?.parent_id || '').trim();
   if (parentId && allAgents.some((item) => item.id === parentId)) {

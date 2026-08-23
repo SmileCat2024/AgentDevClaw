@@ -10,6 +10,7 @@
 
 import { UISurfaceStore } from '../ui-surface-store.js';
 import { deliverUserInput, UserTurnDeliveryError } from '../thread-control/input-gateway.js';
+import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
 import { validateGenerativeUISpec } from '../../local-features/dist/generative-ui/src/validator.js';
 import { UI_LIMITS } from '../../local-features/dist/generative-ui/src/types.js';
 
@@ -270,11 +271,17 @@ export function setupUISurfaceRoutes(app, express) {
     // 与聊天输入框保持相同投递语义：空闲时响应 input request，运行中排队；
     // 线程交接窗口（coder 宿主）经统一网关转入 Thread Inbox 暂存。
     try {
+      const operationMetadata = readOperationMetadata({
+        body: req.body,
+        operationId: req.body?.operationId || `ui-surface:${eventId}`,
+        sourceRef: eventId,
+      });
       const delivery = await deliverUserInput({
         viewerAgentId: agentId,
         text: messageText,
         source: 'generative-ui',
         sourceRef: eventId,
+        ...operationMetadata,
       });
 
       const responseBody = {
@@ -290,12 +297,10 @@ export function setupUISurfaceRoutes(app, express) {
     } catch (err) {
       store.releaseEvent(eventKey);
       const status = err instanceof UserTurnDeliveryError ? err.status : 502;
-      res.status(status).json({
-        ok: false,
-        code: err instanceof UserTurnDeliveryError ? err.code : 'delivery_failed',
-        message: err instanceof Error ? err.message : String(err),
-        retryable: err instanceof UserTurnDeliveryError ? err.retryable : true,
-      });
+      res.status(status).json(buildLocalFailureResponse(err, {
+        operationId: req.body?.operationId || `ui-surface:${eventId}`,
+        sourceRef: eventId,
+      }));
     }
   });
 }

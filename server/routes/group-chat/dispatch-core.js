@@ -942,8 +942,18 @@ export function createDispatchCoreModule(deps) {
           return;
         }
   
-        // 检查 ViewerWorker 的 running 状态
-        const currentViewerId = runtime.viewerAgentId || viewerAgentId;
+        // 检查 ViewerWorker 的 running 状态。Runtime-scoped Viewer 请求必须
+        // 使用当前 managed runtime 的显式 viewerAgentId，不能回退到派发时的旧 ID。
+        const currentViewerId = runtime.viewerAgentId;
+        if (!currentViewerId) {
+          clearInterval(interval);
+          await updateMessageRouting(chatId, messageId, {
+            status: 'failed',
+            error: 'Runtime has no viewerAgentId',
+            completedAt: Date.now(),
+          });
+          return;
+        }
         const res = await fetch(
           `${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(currentViewerId)}/running`
         );
