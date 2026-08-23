@@ -523,7 +523,8 @@ ACP coder 适配层是独立 stdio 进程（`claw acp coder`），只做协议�
 | 能力 | @agentdev/core 导出 | Claw 装配点（薄封装/装配层） |
 |------|--------------|---------------------------|
 | trim 引擎 | `buildTrimmedSeedMessages` / `normalizeExportPolicy` / `DEFAULT_EXPORT_POLICY` / `HANDOFF_SCHEMA_VERSION` / `HANDOFF_COMPILER_VERSION` | [server/context-continuity/handoff-package.js](/D:/code/AgentDevClaw/server/context-continuity/handoff-package.js)（薄封装 + Claw 落盘格式） |
-| 摘要生成 | `generateSummaryText` / `buildSummaryPrompt` / `stripCompactAnalysis` / `scanFilesAndSkills` / `buildSummarySeedMessage` / `normalizeSummaryPolicy` | [server/context-continuity/inprocess-summary.js](/D:/code/AgentDevClaw/server/context-continuity/inprocess-summary.js)（模型角色解析 system/exploration/sub + 重试/超时）；summarized-handoff.js / trim-appended-summary.js / session.js 的 `session_generate_summary` 路由均经此调用 |
+| trim+summary 组合 | `TrimTranscriptWithSummaryTransformation`（组合语义唯一权威，thread 接力与手动精简共用） | [server/context-continuity/trim-appended-summary.js](/D:/code/AgentDevClaw/server/context-continuity/trim-appended-summary.js)（装配器：快照读取 + llm 注入 + 重试/超时）；落盘经 handoff-package.js 的 `writeTrimWithSummaryHandoffPackage`（handoff JSON v1 格式化） |
+| 摘要生成 | `generateSummaryText` / `buildSummaryPrompt` / `stripCompactAnalysis` / `scanFilesAndSkills` / `buildSummarySeedMessage` / `normalizeSummaryPolicy` | [server/context-continuity/inprocess-summary.js](/D:/code/AgentDevClaw/server/context-continuity/inprocess-summary.js)（模型角色解析 system/exploration/sub + 重试/超时，`resolveSummaryLLM` 供各装配层共用）；summarized-handoff.js / session.js 的 `session_generate_summary` 路由经此调用 |
 | seed feature | `HandoffSeedFeature` | [scripts/run-prebuilt-agent.js](/D:/code/AgentDevClaw/scripts/run-prebuilt-agent.js) 与 [scripts/run-one-shot-agent.js](/D:/code/AgentDevClaw/scripts/run-one-shot-agent.js) 装配（原 local-features/context-handoff-seed 已删除，不留薄壳） |
 | 连续性字段 | `CONTINUITY_FIELD_KEY`（`__agentdev_continuity__`） | [local-features/continuity-participant](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts)：读旧写新（兼容 `__claw_continuity__`），协议字符串保留 `claw.*` 命名空间 |
 | 线程控制 | `WorkThread` / `WorkThreadBoard` / `WorkThreadStore` / `WorkThreadRuntimeBridge` | [server/thread-control/thread-controller.js](/D:/code/AgentDevClaw/server/thread-control/thread-controller.js)：`createThreadControl()` 返回 `{core, board, store}` 双对象装配；store 数据目录不变（`~/.agentdev/AgentDevClaw/workspaces/<agentId>/threads/`） |
@@ -595,20 +596,21 @@ ACP coder 适配层是独立 stdio 进程（`claw acp coder`），只做协议�
   - 基础常量、i18n、fetch/invoke、公共 DOM 引用、初始化底座
   - `getRuntimeContextKey()`、optimistic runtime cache (`_agentRuntimeCache`)、session input cache
 - [public/src/app-ui.js](/D:/code/AgentDevClaw/public/src/app-ui.js)
-  - workspace surface 渲染、block 渲染
-  - IM 渠道配置面板、群聊管理 UI、模型预设管理 UI
-  - `renderCurrentMainView()`、`renderWorkspaceSurface()` 等核心入口
-  - 注意：此文件已从 ~9700 行拆分至 ~3980 行（已完成 Phase 1 ~ 2f-2），后续继续模块化拆分
+  - workspace surface 渲染骨架、block 分发
+  - `renderCurrentMainView()`、`renderWorkspaceSurface()`、`selectWorkspaceSurface()` 等核心入口
+  - 注意：已拆分至 ~1890 行，具体功能域由 `modules/` 下 80 个模块承接（加载顺序见 index.html）
 - [public/src/app-main.js](/D:/code/AgentDevClaw/public/src/app-main.js)
-  - agent 加载、轮询、session / runtime 切换
-  - `switchAgent()`、`loadAgentData()`、`poll()` 核心循环
-  - `render(messages)` 聊天消息渲染（含 `_lastRenderedChatSig` 去重）
-  - 输入队列与中断处理、会话分支与精简
-  - 注意：此文件已膨胀至 ~6600 行，后续需要模块化拆分
+  - agent 切换与轮询核心：`switchAgent()`、`requestSwitch()`、`handlePrebuiltAgentClick()`、`navigateToWorkspaceSession()`、`poll()` 主循环
+  - 会话创建与压缩续接：`openPrebuiltWorkspaceSession()`、`createCompactedResumeSession()`
+  - 注意：已拆分收口至 ~1270 行（commit a406168）。原属 main 的功能已模块化：`loadAgentData` → modules/agent-data-loader.js，`loadAgents`/`renderAgentList` → modules/sidebar-render.js，`render()` → modules/chat-renderer.js，`renderInputRequests` → modules/input-render.js，`runWorkspaceAction` → modules/workspace-actions.js
 
 ### 一个重要经验
 
 `renderCurrentMainView()` 是主视图状态机入口，很多 workspace 问题最终都会回到这里。
+
+### app-core.js 全局状态纪律（ticket 021）
+
+app-core.js 的全局状态区只减不增：新增前端状态默认放入所属 modules 文件的局部作用域，确需跨模块共享时使用 `window.ClawFW` 命名空间（先例：modules/fw-config-panel.js），不再向 app-core.js 追加顶层 `let` 声明。
 
 ## 预制 agent 与 workspace 首页模型
 
@@ -745,9 +747,12 @@ npm start          # 纯净启动
 这些边界不是遗漏，而是当前阶段的真实状态：
 
 - 工作群（Beta）基础闭环已初步可用，深度功能仍在开发中
-- `app-ui.js`（~3980 行，已从 ~9700 行拆分）和 `app-main.js`（~6600 行）极度膨胀，是当前技术债最大的风险点
-  - 完整拆分计划：[docs/plans/2026-06-04-frontend-split-plan.md](/D:/code/AgentDevClaw/docs/plans/2026-06-04-frontend-split-plan.md)
-  - 包含：功能域划分（11域）、耦合地图、分 3 Phase 拆分顺序、风险缓解策略
+- 前端 `app-ui.js`（~1890 行）/ `app-main.js`（~1270 行）模块化拆分已完成，`modules/` 下共 80 个模块。当前新的膨胀风险点：
+  - `modules/work-group-ui.js`（~4360 行）与 `modules/wg-core.js`（~3030 行）——工作群（★ Beta）前端主体，最大的待拆分对象
+  - [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts)（~2120 行）——活跃域单文件
+  - `app-core.js`（~2000 行，6 月以来 +50%）——共享全局状态持续堆积，新增状态时注意约束
+  - 悬置域的大文件（`public/flow-editor.js` ~3690 行、`local-features/feature-dev`、`local-features/flow`）按约定不再投入拆分
+  - 拆分历史与规范：[docs/plans/2026-07-03-app-main-split-plan.md](/D:/code/AgentDevClaw/docs/plans/2026-07-03-app-main-split-plan.md)（含收口复核）、[docs/plans/2026-06-29-app-ui-split-plan-v2.md](/D:/code/AgentDevClaw/docs/plans/2026-06-29-app-ui-split-plan-v2.md)
 - 项目中保留了若干悬置工作空间（flow-workspace、feature-creator、agent-creator、dispatch-console）的代码，这些代码仍可运行但不再积极迭代
 
 ## 测试体系
@@ -868,7 +873,8 @@ local-features/                                ← 本地 Feature 功能测试�
 |------|------|
 | `public/src/app-core.js` | i18n、基础常量、公共函数 |
 | `public/src/app-ui.js` | Feature 面板渲染（`renderFeaturesPanel`）、workspace surface、面板状态管理 |
-| `public/src/app-main.js` | 轮询、数据获取、`normalizeHookInspector`、`setCurrentHookInspector` |
+| `public/src/app-main.js` | 轮询主循环（`poll`）、agent 切换（`switchAgent`）、会话导航与 bootstrap |
+| `public/src/modules/overview-data.js` | `normalizeHookInspector`、`setCurrentHookInspector` |
 | `public/styles/layout.css` | 所有面板样式（包括 `.feature-badge.status-*` 系列） |
 
 这些文件是静态 JS/CSS，由 server.js 直接 serve，**不需要编译**。修改后重启 Claw 服务即可生效。
@@ -888,7 +894,7 @@ local-features/                                ← 本地 Feature 功能测试�
 Agent 进程: buildHookInspectorSnapshot()
   → IPC → ViewerWorker: 存储 hookInspector
   → API: GET /api/agents/:id/hooks
-  → Claw 前端: app-main.js fetch → normalizeHookInspector() → currentHookInspector
+  → Claw 前端: app-main.js poll 发起 fetch → normalizeHookInspector()（modules/overview-data.js）→ currentHookInspector
   → app-ui.js: renderFeaturesPanel() 渲染
 ```
 
@@ -896,7 +902,7 @@ Agent 进程: buildHookInspectorSnapshot()
 
 `normalizeHookInspector()` 函数**存在于两个地方**，作用是把 API 返回的 inspector snapshot 重构为前端使用的标准化对象。新增 inspector snapshot 字段时，**必须同时更新两处**，否则字段会在重构时被丢弃：
 
-1. **Claw 前端**：`public/src/app-ui.js` — 影响**用户日常看到**的面板
+1. **Claw 前端**：`public/src/modules/overview-data.js` — 影响**用户日常看到**的面板
 2. **框架侧**：`AgentDev/src/core/viewer-html.ts` — 影响 DebugHub 查看器（端口 2026）
 
 历史上真实踩过的坑：在框架 `agent.ts` 的 `buildHookInspectorSnapshot()` 中新增了 `standaloneTools` 字段，框架和 API 都正确返回了数据，但 `normalizeHookInspector()` 在重构时没有透传这个字段，导致前端始终看不到。
@@ -906,7 +912,7 @@ Agent 进程: buildHookInspectorSnapshot()
 会话切换链路（`switchAgent` → `loadAgentData` → `poll`）的详细渲染契约、去重策略和自检清单见 [docs/frontend-rendering-patterns.md](/D:/code/AgentDevClaw/docs/frontend-rendering-patterns.md)。以下是最容易踩坑的三条不变量：
 
 1. **`getRuntimeContextKey` 不是 stable 的**：它依赖 `allAgents`（由 `loadAgents()` 异步更新），在 `await` 前后会返回不同值。**不能用于 stale check**，只能用于 cache key（miss 无害）。stale check 只用 `currentRuntimeAgentId`。
-2. **PUT 不阻塞渲染**：`switchAgent` 先设全局状态 + optimistic 渲染，PUT `/api/agents/current` 与 `loadAgentData` 并行。`loadAgentData` 所有 URL 用显式 `agentId`，不依赖服务端 "current" 状态。
+2. **切换不依赖服务端 current 状态**：`switchAgent` 先设全局状态 + optimistic 渲染，再 `await loadAgentData(runtimeId)`（所有 URL 用显式 `agentId`）；焦点仅持久化到 `localStorage['claw:lastFocusedRuntimeId']`（服务端 current agent 语义已移除，commit 99e0245）。
 3. **控制投递的 id 空间**：前端→agent 运行时控制 IPC（开关 / 中断 / 热切换类）**必须优先用 `runtimeId`（viewerAgentId，即 `currentRuntimeAgentId`，与轮询数据源 `/api/agents/:id/...` 的 `:id` 同空间）定位**；`allAgents` 缓存派生的 sessionId 会暂态错位，只能作 fallback，且 server 端禁止跨 session fallback 投递 session 级状态。前端必须检查 `payload.ok`，失败要回滚乐观态。参考实现：`todo_control`（agent-lifecycle.js）与 `swap_model`（model-config.js）。详见 frontend-rendering-patterns.md §8d。
 
 ## 进程架构与重启范围

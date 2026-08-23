@@ -15,6 +15,8 @@ function createTodoSandbox() {
   const ctx = createFrontendSandbox();
   // todo-plan.js 依赖 app-core.js 中定义的全局变量和函数（featurePanelBody、
   // getRuntimeContextKey、getInterruptTargetId 等）
+  // t()/I18N 已拆分至 i18n.js（ticket 021），须先于 app-core.js 加载（与 index.html 一致）
+  ctx.loadSource('public/src/i18n.js');
   ctx.loadSource('public/src/app-core.js');
   ctx.loadSource('public/src/modules/todo-plan.js');
   return ctx;
