@@ -540,6 +540,37 @@ class SessionLifecycle {
       return;
     }
 
+    // ── Context-guard session control (interactive fuse, request/ack) ──
+    // 会话控制面板的「上下文拦截」开关：与 force-continuation 同构的
+    // request/ack 链路，feature 仍是权威状态持有者。
+    if (msg.type === 'context-guard-control' || msg.type === 'context-guard-status') {
+      const reply = (payload) => {
+        try {
+          process.send({
+            type: 'context-guard-result',
+            requestId: msg.requestId,
+            sessionId: this.sessionId,
+            ...payload,
+          });
+        } catch {}
+      };
+      const feature = (this.agent?.features?.get?.('context-guard'))
+        || (typeof this.agent?.getFeature === 'function' ? this.agent.getFeature('context-guard') : null);
+      if (!feature) {
+        reply({ ok: false, error: 'context-guard feature not mounted in this session' });
+        return;
+      }
+      try {
+        if (msg.type === 'context-guard-control' && typeof msg.armed === 'boolean') {
+          feature.setArmed(msg.armed);
+        }
+        reply({ ok: true, status: feature.getStatus() });
+      } catch (err) {
+        reply({ ok: false, error: String(err?.message || err) });
+      }
+      return;
+    }
+
     // ── model / thinking hot-swap ──
     if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
 
@@ -687,7 +718,7 @@ SessionLifecycle.prototype.start = async function () {
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
     runtime: this.runtime,
-    ...((agentId === 'programming-helper' || agentId === 'coder') ? {
+    ...((agentId === 'programming-helper' || agentId === 'coder' || agentId === 'agent-studio') ? {
       contextGuard: {
         contextLength: this.resolved?.contextLength ?? null,
         compressRatio: this.resolved?.compressRatio ?? 80,
@@ -719,35 +750,6 @@ SessionLifecycle.prototype.start = async function () {
       this.resolvedUsageModel = { modelName: fallbackModelName };
       console.log(`[ProtoClaw Runtime] No model preset found, using agent LLM model => ${fallbackModelName}`);
     }
-  }
-
-  const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
-
-  // 线程宿主（coder）不挂载主动精简控制：上下文管理已收敛为单一路径
-  // （ContextGuard 强制启用 → thread-rotation 自动轮换），该 feature 对宿主
-  // 是零调用死代码（docs/tickets/015，决策 B 卸载）。非宿主（编程小助手等）
-  // 保持现状：挂载 + 工具屏蔽。
-  if (THREAD_HOST_AGENT_IDS.has(String(agentId || '').trim())) {
-    console.log('[ProtoClaw Runtime] 线程宿主工作空间，跳过 context compaction control feature 挂载');
-  } else if (typeof localFeatures.ContextCompactionControlFeature === 'function') {
-    this.agent.use(new localFeatures.ContextCompactionControlFeature({
-      serverOrigin: SERVER_ORIGIN,
-      agentId,
-      sessionId: this.sessionId,
-    }));
-    // 暂时屏蔽 compaction 控制工具：这三个工具只应通过后台流程触发，不暴露给 agent 主动调用。
-    // remove() 在工具注册前调用会进入 pendingRemoved，后续 ensureFeatureTools() 注册时仍保持 removed 状态（LLM 不可见）。
-    // 注意：record_compaction_context 仍被 runtime-summary.js 的进程内摘要通过 registry.get() 编程式获取。
-    // 恢复方法：删除下方 remove 循环即可。
-    const compactionToolRegistry = this.agent.getTools();
-    for (const toolName of [
-      'request_summary_compaction',
-      'request_summary_compaction_resume',
-      'record_compaction_context',
-    ]) {
-      compactionToolRegistry.remove(toolName);
-    }
-    console.log('[ProtoClaw Runtime] 已挂载 context compaction control feature（工具已屏蔽，不暴露给 LLM）');
   }
 
   if (this.runtimeHandoff?.handoff && (this.runtimeHandoff.handoff.sourceSummary || this.runtimeHandoff.handoff.seedMessages?.length)) {
@@ -844,9 +846,12 @@ SessionLifecycle.prototype.start = async function () {
 
   // ── CallArbiter ──
   this.callArbiter = new CallArbiter(this.agent);
-  const contextGuardFeature = this.agent.features?.get?.('context-guard');
-  if (contextGuardFeature && typeof contextGuardFeature.setCallArbiter === 'function') {
-    contextGuardFeature.setCallArbiter(this.callArbiter);
+  // 上下文过界的两个策略壳都需要仲裁器执行「打断当前轮 + 退回排队消息」。
+  for (const guardFeatureName of ['context-guard', 'context-rotation-trigger']) {
+    const guardFeature = this.agent.features?.get?.(guardFeatureName);
+    if (guardFeature && typeof guardFeature.setCallArbiter === 'function') {
+      guardFeature.setCallArbiter(this.callArbiter);
+    }
   }
   this.imBridgeCtx.callArbiter = this.callArbiter;
 
@@ -948,8 +953,6 @@ SessionLifecycle.prototype.start = async function () {
               totalTokens: totalUsage?.totalTokens || 0,
               lastRequestUsage: usageStats?.lastRequestUsage || null,
             },
-            contextGuard: typeof contextGuardFeature?.getState === 'function'
-              ? contextGuardFeature.getState() : null,
             modelName: self.resolved?.modelName || self.resolvedUsageModel?.modelName || undefined,
             contextLength: self.resolved?.contextLength ?? undefined,
             compressRatio: self.resolved?.compressRatio ?? undefined,

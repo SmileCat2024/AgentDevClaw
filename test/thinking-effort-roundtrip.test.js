@@ -28,7 +28,7 @@ const PROJECT_ROOT = join(__dirname, '..');
 // ── Source helpers ──────────────────────────────────────────
 
 const persistentInputSource = fs.readFileSync(
-  join(PROJECT_ROOT, 'public/src/modules/persistent-input.js'),
+  join(PROJECT_ROOT, 'public/src/modules/input-model-switcher.js'),
   'utf8',
 );
 

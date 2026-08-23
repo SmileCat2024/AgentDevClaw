@@ -115,6 +115,9 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   let thresholdTokens = contextLength > 0 ? Math.round(contextLength * compressRatio / 100) : 0;
   let thresholdPct = thresholdTokens > 0 ? Math.round((used / thresholdTokens) * 100) : 0;
 
+  // 过界提示 chip（压力驱动：≥100% 出现，回落消失），与下方进度条同源。
+  if (typeof syncContextPressureChip === 'function') syncContextPressureChip(thresholdPct);
+
   let html = '';
   if (modelName) {
     html += '<span class="ccb-model">' + escapeHtml(modelName) + '</span>';

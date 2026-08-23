@@ -4,8 +4,8 @@
  * 装配以编程小助手（programming-helper）为执行能力底座，但按「无人值守、
  * 任务精准、直接执行完」的自主场景裁剪：
  * - 保留执行类工具链（todo / force-continuation / websearch /
- *   memory / shell / image-reader / lsp / context-guard / github），
- *   与线程接力（context-guard）机制协同。
+ *   memory / shell / image-reader / lsp / context-rotation-trigger / github），
+ *   与线程接力（context-rotation-trigger）机制协同。
  * - 增挂 tickets-build-flow（拿到指令之后的 implement / tdd / code-review
  *   构建流程规范），与线程看板衔接（thread-board）。
  * - 相对编程小助手的裁剪：
@@ -36,7 +36,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';
 import { existsSync, readFileSync } from 'fs';
-import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
+import { ContextRotationTriggerFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -101,21 +101,16 @@ export class CoderAgent extends BasicAgent {
       sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
       serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
     };
-    this.contextGuard = new ContextGuardFeature({
-      ...(systemConfig.contextGuard && typeof systemConfig.contextGuard === 'object'
-        ? systemConfig.contextGuard : {}),
+    // 上下文过界 → 自动线程接力：过界时打断并上报，由服务端 thread-rotation
+    // 执行 trim+摘要接力。装配即确定、零配置——线程宿主的上下文管理方式
+    // （自动接力）不依赖 Runtime 配置面板的交互式拦截开关。
+    this.use(new ContextRotationTriggerFeature({
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
-      // 线程宿主的 guard 是 thread-rotation（trim+summary 自动接力）的唯一触发器，
-      // 必须始终启用：全局 feature-setup 面板误关 contextGuard 时，coder 的线程
-      // 轮换会静默失效（会话顶着超阈值上下文继续跑且无人轮换）。阈值等参数仍可
-      // 由全局配置覆盖，只有 enabled 强制为 true。
-      enabled: true,
       agentId: runtimeIdentity.agentId,
       sessionId: runtimeIdentity.sessionId,
       serverOrigin: runtimeIdentity.serverOrigin,
-    });
-    this.use(this.contextGuard);
+    }));
 
     // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
     this.use(new OutputGuardFeature({ workdir: workspaceDir }));

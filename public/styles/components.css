@@ -4695,42 +4695,24 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   border-color: transparent;
 }
 
-.context-guard-input {
-  border-color: rgba(239, 68, 68, 0.55);
-}
-
-.context-guard-input .user-input-textarea {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.context-guard-input button:disabled {
-  cursor: not-allowed;
-  opacity: 0.38;
-}
-
-.context-guard-input-notice {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-  color: #f87171;
-  font-size: 13px;
+/* 过界提示 chip：压力驱动（用量 ≥ 压缩阈值时出现，回落消失） */
+.context-pressure-chip {
+  margin-bottom: 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  align-self: flex-start;
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  font-size: 12px;
   line-height: 1.4;
 }
 
-.context-guard-input-icon {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  color: #fff;
-  background: #ef4444;
+/* 会话控制面板：上下文拦截 section 的 trip 事实行 */
+.session-controls-guard-fact {
+  padding: 6px 12px 10px;
+  color: var(--text-secondary);
   font-size: 12px;
-  font-weight: 800;
+  line-height: 1.5;
 }
 
 .user-input-footer {

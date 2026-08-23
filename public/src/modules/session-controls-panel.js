@@ -1,10 +1,13 @@
 /**
- * force-continuation-panel.js — session-local control plane for ForceContinuation.
+ * session-controls-panel.js — 会话控制面板（session-local control plane）
  *
- * The server routes an explicit IPC message to the selected session runtime
- * of agents that mount the ForceContinuation Feature. Browser state is only
- * an optimistic UI cache; the Feature remains the authoritative state holder
- * in the session runtime.
+ * 两个 section，均以 runtime 内 Feature 为权威状态持有者，浏览器只是
+ * 乐观 UI 缓存（请求-应答式 IPC，经 /protoclaw/*_status / *_control 路由）：
+ *   - 自动接续：ForceContinuation Feature 的开关 / 触发条件 / 上限
+ *   - 上下文拦截：ContextGuardFeature 的一次性过界保险丝
+ *
+ * 保险丝的实时性：它会被 runtime 内真实的过界事件消耗，面板打开期间
+ * 每 3s 静默刷新一次，保证「用掉了立刻显示为关闭」。
  *
  * Visual language follows the Todo Plan panel: flat sections separated by
  * hairlines (no hero header, no card stack), a strong/label summary line,
@@ -21,11 +24,15 @@
       : String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
 
-  /** Agents whose runtime mounts the ForceContinuation Feature. */
+  /** Agents whose runtime mounts ForceContinuation + ContextGuard. */
   const SUPPORTED_AGENTS = ['programming-helper', 'agent-studio'];
 
   function isSupportedAgent() {
     return SUPPORTED_AGENTS.includes(String(focusedAgentId || ''));
+  }
+
+  function isGuardAvailable() {
+    return isSupportedAgent();
   }
 
   function currentSessionId() {
@@ -46,6 +53,13 @@
       refreshing: false,
       error: '',
       initialized: false,
+      guardArmed: false,
+      guardTrip: null,
+      guardThresholdTokens: null,
+      guardRefreshing: false,
+      guardPending: false,
+      guardInitialized: false,
+      guardError: '',
       updatedAt: 0,
     };
   }
@@ -69,6 +83,19 @@
     return {
       outputTruncation: raw.providerMaxTokens !== false && raw.providerLength !== false,
       frameworkLimitReached: raw.frameworkLimitReached !== false,
+    };
+  }
+
+  function normalizeGuardTrip(trip) {
+    if (!trip || typeof trip !== 'object') return null;
+    const at = Number(trip.at);
+    const inputTokens = Number(trip.inputTokens);
+    const thresholdTokens = Number(trip.thresholdTokens);
+    return {
+      at: Number.isFinite(at) && at > 0 ? Math.round(at) : null,
+      inputTokens: Number.isFinite(inputTokens) && inputTokens > 0 ? Math.round(inputTokens) : null,
+      thresholdTokens: Number.isFinite(thresholdTokens) && thresholdTokens > 0 ? Math.round(thresholdTokens) : null,
+      reason: typeof trip.reason === 'string' ? trip.reason : '',
     };
   }
 
@@ -119,9 +146,63 @@
     ].join('');
   }
 
+  function formatTokens(n) {
+    if (!Number.isFinite(n) || n <= 0) return '—';
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(Math.round(n));
+  }
+
+  function renderGuardSection({ item, zh }) {
+    const disabled = item.guardPending;
+    const armed = item.guardArmed === true;
+    const trip = item.guardTrip;
+    const threshold = item.guardThresholdTokens;
+
+    const rows = [];
+    if (trip) {
+      const fact = trip.inputTokens && trip.thresholdTokens
+        ? `${formatTokens(trip.inputTokens)} / ${formatTokens(trip.thresholdTokens)} tokens`
+        : '';
+      rows.push([
+        '<div class="session-controls-guard-fact">',
+        esc(zh ? '最近一次过界' : 'Last crossing'),
+        fact ? ` · ${esc(fact)}` : '',
+        '</div>',
+      ].join(''));
+    } else if (threshold) {
+      rows.push([
+        '<div class="session-controls-guard-fact">',
+        esc(zh ? `当前阈值约 ${formatTokens(threshold)} tokens` : `Threshold ≈ ${formatTokens(threshold)} tokens`),
+        '</div>',
+      ].join(''));
+    }
+
+    return [
+      '<section class="force-continuation-candidates session-controls-guard">',
+      '<div class="force-continuation-group-label">', zh ? '上下文拦截' : 'CONTEXT INTERCEPT', '</div>',
+      '<div class="force-continuation-candidate">',
+      '<div class="force-continuation-candidate-main">',
+      '<div class="force-continuation-candidate-label">', zh ? '过界一次性拦截' : 'One-shot threshold intercept', '</div>',
+      '<div class="force-continuation-candidate-desc">', zh
+        ? '开启后，下一次上下文过界将打断该轮并提醒精简；触发一次后自动关闭，可重新装填。仅当前会话生效。'
+        : 'When armed, the next threshold crossing interrupts the turn and suggests trimming; it disarms after one trip and can be re-armed. Applies to this session only.', '</div>',
+      '</div>',
+      renderSwitch({
+        checked: armed,
+        disabled,
+        title: zh ? '切换过界一次性拦截' : 'Toggle one-shot threshold intercept',
+        attribute: 'data-guard-armed',
+      }),
+      '</div>',
+      ...rows,
+      '</section>',
+    ].join('');
+  }
+
   function renderEmpty(message, zh) {
     return '<div class="feature-panel-empty"><div class="feature-panel-section">'
-      + '<div class="feature-panel-section-title">' + esc(zh ? '强制继续' : 'Force Continuation') + '</div>'
+      + '<div class="feature-panel-section-title">' + esc(zh ? '会话控制' : 'Session Controls') + '</div>'
       + '<div>' + esc(message) + '</div>'
       + '</div></div>';
   }
@@ -143,12 +224,16 @@
       // browser cache as a source of truth (important after reopen/reload).
       void refreshStatus({ renderWhenDone: true });
     }
+    if (!item.guardInitialized && !item.guardRefreshing && !item.guardPending) {
+      void refreshGuardStatus({ renderWhenDone: true });
+    }
+    ensureGuardPolling();
 
     const disabled = item.pending;
     const triggers = getTriggers(item);
 
     return [
-      '<div class="force-continuation-panel">',
+      '<div class="force-continuation-panel session-controls-panel">',
       '<section class="force-continuation-master">',
       '<div class="force-continuation-master-main">',
       '<div class="force-continuation-master-label">', zh ? '保持任务继续' : 'Keep task moving', '</div>',
@@ -187,9 +272,10 @@
         zh,
       }),
       '</section>',
+      renderGuardSection({ item, zh }),
       '<div class="force-continuation-note">', zh
-        ? '手动停止与服务错误不会触发自动接续；自动接续次数受上限约束；关闭开关立即生效。'
-        : 'Manual stops and service errors never trigger auto-resume; auto-resume is capped; turning it off takes effect immediately.', '</div>',
+        ? '手动停止与服务错误不会触发自动接续；自动接续次数受上限约束；过界拦截触发一次后自动关闭。'
+        : 'Manual stops and service errors never trigger auto-resume; auto-resume is capped; the threshold intercept disarms after one trip.', '</div>',
       '</div>',
     ].join('');
   }
@@ -219,7 +305,7 @@
       setState({ refreshing: false, initialized: true, error: String(error?.message || error) }, key);
       return null;
     } finally {
-      if (renderWhenDone && activeFeaturePanel === 'force-continuation') renderFeaturePanel();
+      if (renderWhenDone && activeFeaturePanel === 'session-controls') renderFeaturePanel();
     }
   }
 
@@ -229,7 +315,7 @@
     const key = runtimeKey();
     if (!sessionId || !focusedAgentId || !key) return;
     setState({ pending: true, error: '' }, key);
-    if (activeFeaturePanel === 'force-continuation') renderFeaturePanel();
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
     try {
       const response = await fetch('/protoclaw/force_continuation_control', {
         method: 'POST',
@@ -244,7 +330,7 @@
     } catch (error) {
       setState({ pending: false, error: String(error?.message || error) }, key);
     }
-    if (activeFeaturePanel === 'force-continuation') renderFeaturePanel();
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
   }
 
   async function updateEnabled(enabled) {
@@ -268,6 +354,88 @@
     return updateControl({ maxConsecutiveContinuations: next });
   }
 
+  // ── 上下文拦截（保险丝）─────────────────────────────────────────
+
+  async function refreshGuardStatus({ renderWhenDone = true, silent = false } = {}) {
+    if (!isGuardAvailable()) return null;
+    const sessionId = currentSessionId();
+    const key = runtimeKey();
+    if (!sessionId || !focusedAgentId || !key) return null;
+    const current = getState(key);
+    if (current.guardRefreshing || current.guardPending) return null;
+
+    setState({ guardRefreshing: true, guardError: '' }, key);
+    try {
+      const params = new URLSearchParams({ agentId: focusedAgentId, sessionId });
+      const response = await fetch(`/protoclaw/context_guard_status?${params.toString()}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
+      const status = normalizeStatus(payload.status);
+      setState({
+        guardArmed: status.armed === true,
+        guardTrip: normalizeGuardTrip(status.trip),
+        guardThresholdTokens: Number.isFinite(Number(status.thresholdTokens)) && Number(status.thresholdTokens) > 0
+          ? Math.round(Number(status.thresholdTokens)) : null,
+        guardRefreshing: false,
+        guardInitialized: true,
+        guardError: '',
+      }, key);
+      return status;
+    } catch (error) {
+      if (!silent) setState({ guardRefreshing: false, guardInitialized: true, guardError: String(error?.message || error) }, key);
+      else setState({ guardRefreshing: false }, key);
+      return null;
+    } finally {
+      if (renderWhenDone && activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    }
+  }
+
+  async function updateGuardArmed(armed) {
+    if (!isGuardAvailable()) return;
+    const sessionId = currentSessionId();
+    const key = runtimeKey();
+    if (!sessionId || !focusedAgentId || !key) return;
+    setState({ guardPending: true, guardError: '' }, key);
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    try {
+      const response = await fetch('/protoclaw/context_guard_control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: focusedAgentId, sessionId, armed: armed === true }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
+      const status = normalizeStatus(payload.status);
+      setState({
+        guardArmed: status.armed === true,
+        guardTrip: normalizeGuardTrip(status.trip),
+        guardThresholdTokens: Number.isFinite(Number(status.thresholdTokens)) && Number(status.thresholdTokens) > 0
+          ? Math.round(Number(status.thresholdTokens)) : null,
+        guardPending: false,
+        guardInitialized: true,
+        guardError: '',
+      }, key);
+    } catch (error) {
+      setState({ guardPending: false, guardError: String(error?.message || error) }, key);
+    }
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+  }
+
+  // 面板打开期间的保险丝实时刷新：保险丝会被 runtime 内真实的过界事件
+  // 消耗，轮询保证「用掉了立刻显示为关闭」。tick 在面板关闭时 no-op。
+  let _guardPollTimer = null;
+
+  function ensureGuardPolling() {
+    if (_guardPollTimer || typeof setInterval !== 'function') return;
+    const timer = setInterval(() => {
+      if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'session-controls') return;
+      if (!isGuardAvailable() || !currentRuntimeAgentId || !currentSessionId()) return;
+      void refreshGuardStatus({ renderWhenDone: true, silent: true });
+    }, 3000);
+    if (typeof timer?.unref === 'function') timer.unref();
+    _guardPollTimer = timer;
+  }
+
   featurePanelBody.addEventListener('change', (event) => {
     const toggle = event.target?.closest?.('[data-force-continuation-toggle]');
     if (toggle) {
@@ -281,14 +449,19 @@
     }
     const limit = event.target?.closest?.('[data-force-continuation-limit]');
     if (limit) updateLimit(limit.value);
+    const guardToggle = event.target?.closest?.('[data-guard-armed]');
+    if (guardToggle) updateGuardArmed(guardToggle.checked);
   });
 
-  window.ForceContinuationPanel = {
+  window.SessionControlsPanel = {
     render,
     updateEnabled,
     updateTrigger,
     updateLimit,
     refreshStatus,
+    refreshGuardStatus,
+    updateGuardArmed,
     isAvailable: () => isSupportedAgent(),
+    isGuardAvailable,
   };
 }());

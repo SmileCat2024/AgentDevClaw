@@ -910,15 +910,36 @@ describe('runtime-status: sidebar disconnect semantics', () => {
   });
 });
 
-describe('runtime-status: context guard state', () => {
-  it('blocks only the runtime that reported the guard event', () => {
+describe('runtime-status: context guard trip toast', () => {
+  function loadWithToastSpy() {
     const ctx = loadRuntimeStatus({ currentRuntimeAgentId: 'rt-1' });
-    ctx.run(`applyContextGuardStatus({ contextGuard: {
-      blocked: true, blockedAt: 123, thresholdTokens: 800, inputTokens: 820,
-    } }, 'rt-1')`);
-    assert.equal(ctx.run('isCurrentContextGuardBlocked()'), true);
-    assert.match(ctx.run('getCurrentContextGuardMessage()'), /820/);
-    ctx.run('currentRuntimeAgentId = "rt-2"');
-    assert.equal(ctx.run('isCurrentContextGuardBlocked()'), false);
+    ctx.run(`window.ClawToast = { shown: [], show(o) { this.shown.push(o); } }`);
+    return ctx;
+  }
+
+  it('toasts once for a fresh trip and stays silent for repeats', () => {
+    const ctx = loadWithToastSpy();
+    const trip = { at: Date.now() + 5000, thresholdTokens: 800, inputTokens: 820, reason: 'x' };
+    ctx.run(`applyContextGuardStatus({ status: { armed: false, trip: ${JSON.stringify(trip)} } }, 'rt-1')`);
+    ctx.run(`applyContextGuardStatus({ status: { armed: false, trip: ${JSON.stringify(trip)} } }, 'rt-1')`);
+    const shown = ctx.run('window.ClawToast.shown');
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0].status, 'warning');
+    assert.match(shown[0].description, /820/);
+  });
+
+  it('ignores trips from before the page loaded (reload / session switch back)', () => {
+    const ctx = loadWithToastSpy();
+    ctx.run(`applyContextGuardStatus({ status: { armed: false, trip: {
+      at: 123, thresholdTokens: 800, inputTokens: 820, reason: 'x',
+    } } }, 'rt-1')`);
+    assert.equal(ctx.run('window.ClawToast.shown.length'), 0);
+  });
+
+  it('ignores payloads without a trip and foreign runtimes', () => {
+    const ctx = loadWithToastSpy();
+    ctx.run(`applyContextGuardStatus({ status: { armed: true, trip: null } }, 'rt-1')`);
+    ctx.run(`applyContextGuardStatus({ status: { trip: { at: Date.now() + 5000 } } }, 'rt-other')`);
+    assert.equal(ctx.run('window.ClawToast.shown.length'), 0);
   });
 });

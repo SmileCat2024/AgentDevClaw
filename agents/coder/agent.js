@@ -200,16 +200,12 @@ export class CoderAgent extends BasicAgent {
       sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
       serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:1420',
     };
-    this.contextGuard = new ContextGuardFeature({
-      ...(systemConfig.contextGuard && typeof systemConfig.contextGuard === 'object'
-        ? systemConfig.contextGuard : {}),
+    this.use(new ContextGuardFeature({
+      ...(systemConfig['context-guard'] && typeof systemConfig['context-guard'] === 'object'
+        ? systemConfig['context-guard'] : {}),
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
-      agentId: runtimeIdentity.agentId,
-      sessionId: runtimeIdentity.sessionId,
-      serverOrigin: runtimeIdentity.serverOrigin,
-    });
-    this.use(this.contextGuard);
+    }));
 
     // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
     // 放在所有业务 feature 之前挂载，确保 ToolResultTransform 钩子

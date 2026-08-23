@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import os from 'os';
 import { AgentStudioFeature } from '../../../local-features/dist/index.js';
+import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -56,6 +57,13 @@ export class AgentStudioAgent extends BasicAgent {
         ? systemFeatureConfig['force-continuation'] : {}),
       ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
         ? config.features['force-continuation'] : {}),
+    }));
+    // 一次性过界拦截：manifest 决定会话启动初值，会话控制面板可实时装填。
+    this.use(new ContextGuardFeature({
+      ...(systemFeatureConfig['context-guard'] && typeof systemFeatureConfig['context-guard'] === 'object'
+        ? systemFeatureConfig['context-guard'] : {}),
+      ...(config.contextGuard && typeof config.contextGuard === 'object'
+        ? config.contextGuard : {}),
     }));
     this.use(new AuditFeature({ workspaceDir }));
     this.use(new WebSearchFeature({ workspaceDir }));

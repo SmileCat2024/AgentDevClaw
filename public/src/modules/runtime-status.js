@@ -27,73 +27,43 @@ let lastNotificationStatusPayload = null;
 const _runtimeStatusMemory = new Map();
 let _lastRenderedNotificationRuntime = null;
 let _notificationClockTimer = null;
-let _contextGuardRuntimeId = '';
-let _contextGuardState = null;
-let _lastContextGuardToastKey = '';
+let _contextGuardToastKey = '';
+const _contextGuardPageLoadedAt = Date.now();
 
-function normalizeContextGuardState(raw) {
-  if (!raw || typeof raw !== 'object' || raw.blocked !== true) return null;
-  const thresholdTokens = Number(raw.thresholdTokens);
-  const inputTokens = Number(raw.inputTokens);
-  const blockedAt = Number(raw.blockedAt);
-  return {
-    blocked: true,
-    thresholdTokens: Number.isFinite(thresholdTokens) && thresholdTokens > 0 ? Math.round(thresholdTokens) : null,
-    inputTokens: Number.isFinite(inputTokens) && inputTokens > 0 ? Math.round(inputTokens) : null,
-    blockedAt: Number.isFinite(blockedAt) && blockedAt > 0 ? Math.round(blockedAt) : null,
-    reason: typeof raw.reason === 'string' ? raw.reason.trim() : '',
-  };
-}
-
-function isCurrentContextGuardBlocked() {
-  return _contextGuardState?.blocked === true
-    && _contextGuardRuntimeId === normalizeAgentIdentity(currentRuntimeAgentId);
-}
-
-function getCurrentContextGuardMessage() {
-  const state = _contextGuardState;
-  if (!state?.blocked) return '';
-  if (currentLanguage === 'zh') {
-    if (state.inputTokens && state.thresholdTokens) {
-      return `本轮上下文已达到限制（${state.inputTokens.toLocaleString()} / ${state.thresholdTokens.toLocaleString()} tokens），会话已被中断。`;
-    }
-    return '本轮上下文已达到限制，会话已被中断。';
-  }
-  if (state.inputTokens && state.thresholdTokens) {
-    return `This session reached its context limit (${state.inputTokens.toLocaleString()} / ${state.thresholdTokens.toLocaleString()} tokens) and was interrupted.`;
-  }
-  return 'This session reached its context limit and was interrupted.';
-}
-
+/**
+ * 消费 /protoclaw/context_guard_status（session IPC）的返回体。保险丝的
+ * 拦截动作（打断 + 退回排队消息）发生在 runtime 内；前端唯一的职责是在
+ * trip 发生时给出一次 toast 提醒。输入框不禁用——过界后继续发送的开销
+ * 由用户自负。
+ */
 function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
   const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
   if (!normalizedRuntimeId || normalizedRuntimeId !== normalizeAgentIdentity(currentRuntimeAgentId)) return;
-  const nextState = normalizeContextGuardState(payload?.contextGuard);
-  const wasBlocked = isCurrentContextGuardBlocked();
-  _contextGuardRuntimeId = normalizedRuntimeId;
-  _contextGuardState = nextState;
-  const isBlocked = isCurrentContextGuardBlocked();
+  const trip = payload && typeof payload === 'object' && payload.status && typeof payload.status === 'object'
+    ? payload.status.trip : null;
+  if (!trip || typeof trip !== 'object') return;
+  // 只提醒页面加载之后发生的 trip：刷新页面或切回已触发过的会话不再打扰。
+  const tripAt = Number(trip.at);
+  if (Number.isFinite(tripAt) && tripAt > 0 && tripAt < _contextGuardPageLoadedAt) return;
+  const toastKey = `${normalizedRuntimeId}:${Number.isFinite(tripAt) && tripAt > 0 ? Math.round(tripAt) : 'trip'}`;
+  if (_contextGuardToastKey === toastKey) return;
+  _contextGuardToastKey = toastKey;
 
-  if (isBlocked) {
-    // [临时屏蔽] 上下文保护 Toast 通知 — 需要恢复时移除此注释块
-    /*
-    const toastKey = `${normalizedRuntimeId}:${nextState.blockedAt || nextState.thresholdTokens || 'blocked'}`;
-    if (_lastContextGuardToastKey !== toastKey) {
-      _lastContextGuardToastKey = toastKey;
-      window.ClawToast?.show?.({
-        id: `context-guard-${normalizedRuntimeId}`,
-        status: 'error',
-        title: currentLanguage === 'zh' ? '上下文限制已达到，已中断会话' : 'Context limit reached — session interrupted',
-        description: getCurrentContextGuardMessage(),
-      });
-    }
-    */
-  }
-
-  if (wasBlocked !== isBlocked && typeof renderInputRequests === 'function') {
-    lastRenderedInputSignature = '';
-    renderInputRequests(currentInputRequests || []);
-  }
+  const inputTokens = Number(trip.inputTokens);
+  const thresholdTokens = Number(trip.thresholdTokens);
+  const zh = currentLanguage === 'zh';
+  const usage = Number.isFinite(inputTokens) && inputTokens > 0 && Number.isFinite(thresholdTokens) && thresholdTokens > 0
+    ? `${inputTokens.toLocaleString()} / ${thresholdTokens.toLocaleString()} tokens`
+    : '';
+  window.ClawToast?.show?.({
+    id: `context-guard-${normalizedRuntimeId}`,
+    status: 'warning',
+    title: zh ? '上下文已过界，本轮会话已中断' : 'Context threshold reached — turn interrupted',
+    description: zh
+      ? `用量 ${usage}。建议通过精简 / 摘要 / 分支降低上下文后继续；也可以直接继续发送（开销自负）。`
+      : `Usage ${usage}. Consider trimming, summarizing, or branching before continuing; sending anyway is at your own cost.`,
+    autoDismiss: 8000,
+  });
 }
 
 // ─── 运行时快照构建 ───

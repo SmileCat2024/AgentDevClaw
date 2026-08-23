@@ -130,16 +130,14 @@ export class ProgrammingHelperAgent extends BasicAgent {
     };
     this.use(new ClawDispatchFeature(runtimeIdentity));
     this.use(new GroupChatBridgeFeature(runtimeIdentity));
-    this.contextGuard = new ContextGuardFeature({
-      ...(merged.contextGuard && typeof merged.contextGuard === 'object'
-        ? merged.contextGuard : {}),
+    // 一次性过界拦截：manifest（Runtime 配置面板）决定会话启动初值，
+    // 会话控制面板可实时装填/卸下。触发一次即消耗，之后输入完全放行。
+    this.use(new ContextGuardFeature({
+      ...(merged['context-guard'] && typeof merged['context-guard'] === 'object'
+        ? merged['context-guard'] : {}),
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
-      agentId: runtimeIdentity.agentId,
-      sessionId: runtimeIdentity.sessionId,
-      serverOrigin: runtimeIdentity.serverOrigin,
-    });
-    this.use(this.contextGuard);
+    }));
 
     // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
     // 放在所有业务 feature 之前挂载，确保 ToolResultTransform 钩子

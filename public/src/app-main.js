@@ -1124,9 +1124,9 @@ async function runPollCycle() {
     if (activeFeaturePanel) {
       if (activeFeaturePanel === 'logs') {
         await loadLogs();
-      } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan' && activeFeaturePanel !== 'force-continuation') {
+      } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan' && activeFeaturePanel !== 'session-controls') {
         // resources/viewer 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
-        // force-continuation 面板状态由模块自身的请求-应答链路维护，轮询重渲染会打断开关交互
+        // session-controls 面板状态由模块自身的请求-应答链路维护，轮询重渲染会打断开关交互
         const hooksRes = await fetch(`/api/agents/${pollRuntimeId}/hooks`);
         const nextHookInspector = normalizeHookInspector(await hooksRes.json());
         const nextSignature = getHookInspectorSignature(nextHookInspector);

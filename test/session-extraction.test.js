@@ -182,7 +182,6 @@ const EXPECTED_ROUTES = [
   'POST /protoclaw/prebuilt_sessions/archive',
   'POST /protoclaw/prebuilt_sessions/todo',
   'POST /protoclaw/context_guard_event',
-  'GET /protoclaw/context_guard_status',
   'POST /protoclaw/session_meta_sync',
 ];
 

@@ -70,21 +70,6 @@ export class CallArbiter {
     * @returns {object} The envelope with assigned id and status
     */
   enqueue(envelope) {
-    const contextGuard = this._agent?.contextGuard;
-    if (contextGuard && typeof contextGuard.isBlocked === 'function' && contextGuard.isBlocked()) {
-      const entry = {
-        id: envelope.id || `arbiter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        source: envelope.source || 'unknown',
-        sourceRef: envelope.sourceRef || '',
-        text: envelope.text,
-        status: 'failed',
-        createdAt: Date.now(),
-        result: '',
-        error: contextGuard.getBlockReason?.() || 'Session is blocked by the context guard.',
-      };
-      this._terminalEnvelopes.set(entry.id, entry);
-      return entry;
-    }
     const hasImages = Array.isArray(envelope.images) && envelope.images.length > 0;
 
     const entry = {
@@ -184,10 +169,6 @@ export class CallArbiter {
     }
     const cleared = clearQueue ? this.clearQueued(reason) : 0;
     return { active: Boolean(envelope), cleared };
-  }
-
-  blockQueued(reason = 'Session blocked by the context guard') {
-    return this.clearQueued(reason);
   }
 
   // -- Internal --

@@ -317,50 +317,35 @@ function renderPersistentInput(container) {
   // 先渲染队列气泡
   _renderQueueBubbles(container);
 
-  const contextGuardBlocked = typeof isCurrentContextGuardBlocked === 'function'
-    && isCurrentContextGuardBlocked();
-  const contextGuardMessage = contextGuardBlocked && typeof getCurrentContextGuardMessage === 'function'
-    ? getCurrentContextGuardMessage()
-    : '';
-  const disabledAttr = contextGuardBlocked ? ' disabled' : '';
-  const disabledPlaceholder = currentLanguage === 'zh'
-    ? '已达到上下文限制，输入已禁用'
-    : 'Context limit reached — input disabled';
   const card = document.createElement('div');
-  card.className = 'user-input-card persistent-input' + (contextGuardBlocked ? ' context-guard-input' : '');
+  card.className = 'user-input-card persistent-input';
   card.innerHTML = `
     <div class="persistent-attachment-preview" id="attachment-preview" data-attachment-preview style="display:none;"></div>
-    ${contextGuardBlocked ? `
-      <div class="context-guard-input-notice" role="alert">
-        <span class="context-guard-input-icon">!</span>
-        <span>${escapeHtml(contextGuardMessage)}</span>
-      </div>
-    ` : ''}
     <div class="persistent-input-body">
       <div class="persistent-input-textarea-area">
-        <textarea class="user-input-textarea" rows="1" id="input-persistent"${disabledAttr}\n        onkeydown="handlePersistentInputKey(event)"\n        oninput="autoResize(this); _cacheSessionInput(this)"\n        onpaste="handleInputPaste(event)"\n        placeholder="${escapeHtml(contextGuardBlocked ? disabledPlaceholder : t('input_placeholder'))}"${contextGuardBlocked ? ` aria-label="${escapeHtml(contextGuardMessage)}"` : ''}></textarea>
+        <textarea class="user-input-textarea" rows="1" id="input-persistent"\n        onkeydown="handlePersistentInputKey(event)"\n        oninput="autoResize(this); _cacheSessionInput(this)"\n        onpaste="handleInputPaste(event)"\n        placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
       </div>
       <div class="persistent-input-toolbar">
         <div class="persistent-input-toolbar-left">
-          <input type="file" id="image-file-input" accept="image/*" multiple style="display:none;" onchange="onImageFilesSelected(this)"${disabledAttr}>
-          <button class="persistent-icon-btn" id="attach-image-btn" onclick="document.getElementById('image-file-input').click()" title="${currentLanguage === 'zh' ? '添加图片' : 'Attach Image'}"${disabledAttr}>
+          <input type="file" id="image-file-input" accept="image/*" multiple style="display:none;" onchange="onImageFilesSelected(this)">
+          <button class="persistent-icon-btn" id="attach-image-btn" onclick="document.getElementById('image-file-input').click()" title="${currentLanguage === 'zh' ? '添加图片' : 'Attach Image'}">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
           </button>
         </div>
         <div class="persistent-input-toolbar-right">
-          <button class="input-model-switch-btn" id="input-model-switch-btn" onclick="toggleInputModelDropdown(event)"${disabledAttr}>
+          <button class="input-model-switch-btn" id="input-model-switch-btn" onclick="toggleInputModelDropdown(event)">
             <span class="input-model-name">${currentLanguage === 'zh' ? '模型' : 'Model'}</span>
             <svg class="input-model-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </button>
-          <button class="input-thinking-btn" id="input-thinking-btn" onclick="toggleThinkingEffortDropdown(event)"${disabledAttr}>
+          <button class="input-thinking-btn" id="input-thinking-btn" onclick="toggleThinkingEffortDropdown(event)">
             <svg class="input-thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"></path></svg>
             <span class="input-thinking-name">${currentLanguage === 'zh' ? '思考强度' : 'Thinking'}</span>
             <svg class="input-thinking-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </button>
-          <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}"${disabledAttr}>
+          <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
             <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
           </button>
-          <button class="persistent-action-btn" id="persistent-action-btn" onclick="onPersistentBtnClick()"${disabledAttr}>
+          <button class="persistent-action-btn" id="persistent-action-btn" onclick="onPersistentBtnClick()">
             <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
             <svg class="icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="4" y="4" width="16" height="16" rx="3"></rect></svg>
           </button>
@@ -383,6 +368,32 @@ function renderPersistentInput(container) {
   updateInputModelSwitcher();
   // Update thinking effort switcher button
   updateThinkingEffortSwitcher();
+}
+
+/**
+ * 压力驱动的过界提示 chip：当前用量占压缩阈值的比例 ≥100% 时出现在
+ * 输入框顶部，压力回落自动消失。数据来自 updateChatContextBar 每轮
+ * poll 的计算（与 context bar 进度条同源），不做独立状态机。
+ */
+function syncContextPressureChip(thresholdPct) {
+  const card = document.querySelector('.user-input-card.persistent-input');
+  if (!card) return;
+  const chip = card.querySelector(':scope > .context-pressure-chip');
+  const over = Number.isFinite(thresholdPct) && thresholdPct >= 100;
+  if (!over) {
+    if (chip) chip.remove();
+    return;
+  }
+  const zh = currentLanguage === 'zh';
+  if (chip) {
+    chip.textContent = zh ? '上下文已过界 — 建议精简后继续' : 'Context over threshold — consider trimming';
+    return;
+  }
+  const el = document.createElement('div');
+  el.className = 'context-pressure-chip';
+  el.setAttribute('role', 'status');
+  el.textContent = zh ? '上下文已过界 — 建议精简后继续' : 'Context over threshold — consider trimming';
+  card.prepend(el);
 }
 
 function onPersistentBtnClick() {

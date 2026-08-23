@@ -11,6 +11,7 @@
  * are stable values available at factory call time.
  */
 
+import { createTool } from '@agentdev/core';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 
 function cleanValue(value) {
@@ -18,6 +19,34 @@ function cleanValue(value) {
 }
 
 const PARTIAL_COMPACT_BOUNDARY_MARKER = '[PARTIAL_COMPACT_START]';
+
+// 摘要模型的结构化输出通道：约定「所有摘要内容只能经此工具返回」，execute 为
+// no-op（此工具从不真正执行，仅作为 LLM 输出 schema 与结果载体）。
+const RECORD_COMPACTION_CONTEXT_TOOL = createTool({
+  name: 'record_compaction_context',
+  description: 'Record the summary, important files and skills for context handoff. This is the ONLY output method — put ALL content into this tool call, do not write summary as plain text.',
+  parameters: {
+    type: 'object',
+    properties: {
+      summary: {
+        type: 'string',
+        description: 'The complete summary text. For exploration sessions: three-section format (goals, findings, important files). For regular sessions: nine-section format. Must not be empty.',
+      },
+      important_files: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'File paths that are important for continuing the task.',
+      },
+      important_skills: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Skill names that were used and are important for continuing the task.',
+      },
+    },
+    required: ['summary'],
+  },
+  execute: async () => ({ ok: true }),
+}, new URL(import.meta.url).pathname);
 
 /**
  * @param {object} ctx - mutable runtime context
@@ -130,14 +159,12 @@ export function createSummaryHandlers(ctx) {
       turn: typeof agent?._callIndex === 'number' ? Number(agent._callIndex) + 1 : messages.length,
     });
 
+    // 摘要工具集：Claude 系模型保留全部工具，其余只给结构化输出通道。
     const toolRegistry = typeof agent?.getTools === 'function' ? agent.getTools() : null;
     const allTools = toolRegistry?.getAll?.() || [];
-    // 同上：record_compaction_context 可能处于 removed 状态，用 registry.get() 编程式获取。
-    const compactTool = toolRegistry?.get?.('record_compaction_context')
-      || allTools.find(t => t.name === 'record_compaction_context');
     let tools = shouldPreserveSummaryTools(agent) ? allTools : [];
-    if (compactTool && !tools.includes(compactTool)) {
-      tools = [compactTool];
+    if (!tools.includes(RECORD_COMPACTION_CONTEXT_TOOL)) {
+      tools = [RECORD_COMPACTION_CONTEXT_TOOL, ...tools];
     }
     const restoreLLM = tuneSummaryLLM(agent?.llm);
     try {

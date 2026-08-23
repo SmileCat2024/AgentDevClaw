@@ -25,8 +25,7 @@ Claw 仓库自有的 feature 与包装层源码（TypeScript，编译产物在 `
 | `group-admin/` | 工作群管理员工具集 | 活跃 |
 | `checkpoint/` | 会话检查点与回滚 | 活跃 |
 | `context-compaction-mirror/` | 上下文精简镜像 | 活跃 |
-| `context-compaction-control/` | 上下文精简控制 | 活跃 |
-| `context-guard/` | 上下文防护 | 活跃 |
+| `context-guard/` | 上下文过界检测核心 + 两个策略壳：`ContextGuardFeature`（交互式一次性拦截，编程小助手/agent-studio/`agents/coder`）、`ContextRotationTriggerFeature`（线程宿主自动接力触发器，official coder） | 活跃 |
 | `conversation-export/` | 对话导出 | 活跃 |
 | `generative-ui/` | 可视化交互面板 feature | 活跃 |
 | `github/` | GitHub 工具集 | 活跃 |
