@@ -25,7 +25,7 @@ import { resolveAgentModelLLM } from '../model-preset-resolver.js';
 import { tuneMirrorLLM } from '../shared/llm-tuning.js';
 import { getPrebuiltSessionFilePath } from '../shared/session-access.js';
 
-const SUMMARY_MAX_TOKENS = 8000;
+const SUMMARY_MAX_TOKENS = 16000;
 
 // exploration 三段式提示词为 Claw 本地变体：框架 buildSummaryPrompt 声明了
 // exploration 选项但尚未实现（AgentDev 006 未覆盖该分支）。行为等价要求
@@ -106,7 +106,7 @@ export function resolveSummaryLLM({
     throw new Error(`No model preset resolved for in-process summary (agentDir=${agentRelativeDir}, role=${modelPresetRole}) — configure model presets for this agent`);
   }
   console.log(`[inprocess_summary] using model preset role=${modelPresetRole} model=${resolvedModel.modelName} agent=${agentId} session=${sessionId}`);
-  tuneMirrorLLM(resolvedModel.llm, SUMMARY_MAX_TOKENS);
+  tuneMirrorLLM(resolvedModel.llm, SUMMARY_MAX_TOKENS, { forceMaxTokens: true });
   return { llm: resolvedModel.llm, modelName: resolvedModel.modelName };
 }
 

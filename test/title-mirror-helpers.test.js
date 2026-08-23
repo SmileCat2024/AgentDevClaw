@@ -171,6 +171,18 @@ describe('tuneTitleLLM', () => {
     assert.equal(llm.maxTokens, 1024);
   });
 
+  it('forces the requested maxTokens for summary-style calls', () => {
+    const llm = { maxTokens: 4096 };
+    tuneMirrorLLM(llm, 16000, { forceMaxTokens: true });
+    assert.equal(llm.maxTokens, 16000);
+  });
+
+  it('installs the forced maxTokens when the client has no own value', () => {
+    const llm = {};
+    tuneMirrorLLM(llm, 16000, { forceMaxTokens: true });
+    assert.equal(llm.maxTokens, 16000);
+  });
+
   it('clears configured reasoning options', () => {
     const llm = {
       thinkingBudgetTokens: 8192,

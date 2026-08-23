@@ -6,7 +6,7 @@
  * from scripts/ (scripts importing server/ is the sanctioned direction).
  */
 
-export function tuneMirrorLLM(llm, maxTokens) {
+export function tuneMirrorLLM(llm, maxTokens, { forceMaxTokens = false } = {}) {
   if (!llm || typeof llm !== 'object') return;
 
   try {
@@ -35,11 +35,13 @@ export function tuneMirrorLLM(llm, maxTokens) {
   } catch {}
 
   try {
-    if (Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
+    if (forceMaxTokens || Object.prototype.hasOwnProperty.call(llm, 'maxTokens')) {
       const current = Number(llm.maxTokens);
-      llm.maxTokens = Number.isFinite(current) && current > 0
-        ? Math.min(current, maxTokens)
-        : maxTokens;
+      llm.maxTokens = forceMaxTokens
+        ? maxTokens
+        : Number.isFinite(current) && current > 0
+          ? Math.min(current, maxTokens)
+          : maxTokens;
     }
   } catch {}
 }
