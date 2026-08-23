@@ -849,6 +849,8 @@ function ensureNotificationClockTimer() {
     refreshNotificationTimerDisplay();
     // 同步对话区域临时状态块（处理 early-return 路径和耗时刷新）
     if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
+    // 工具进度卡片走秒刷新（ticket 025）：startedAt 本地插值，两次 poll 之间平滑增长
+    if (typeof syncToolProgressDom === 'function') syncToolProgressDom();
   }, 200);
 }
 
@@ -903,12 +905,18 @@ function resetRuntimeStatusForSwitch() {
       existing.remove();
     });
   }
+  // 工具进度卡片随会话/运行时切换整体复位（ticket 025）
+  if (typeof clearToolProgressState === 'function') clearToolProgressState();
 }
 
 // 通知状态更新
 function updateNotificationStatus(notifData) {
   const payload = (notifData && typeof notifData === 'object') ? notifData : {};
   if (!notifData) _lastCallFinishTime = 0;
+  // 工具执行中进度（ticket 025）：tool.progress 入表 / 终态信号清除
+  if (typeof applyToolProgressNotification === 'function') {
+    applyToolProgressNotification(payload);
+  }
   const statusEl = document.getElementById('notification-status');
   const phaseEl = document.getElementById('notification-phase');
   const summaryEl = document.getElementById('notification-summary');

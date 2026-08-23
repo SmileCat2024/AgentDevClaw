@@ -164,16 +164,21 @@ function renderMessage(msg, index) {
       const toolsHtml = msg.toolCalls.map(call => {
         const displayName = getToolDisplayName(call.name);
         const template = getToolRenderTemplate(call.name);
+        // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
+        const callIdAttr = call.id ? ` data-tool-call-id="${escapeHtml(String(call.id))}"` : '';
+        const progressCtx = typeof resolveToolProgressForCall === 'function'
+          ? resolveToolProgressForCall(call)
+          : null;
         let innerHtml;
 
         if (template.call) {
-          innerHtml = applyTemplate(template.call, call.arguments);
+          innerHtml = applyTemplate(template.call, call.arguments, true, progressCtx);
         } else {
           innerHtml = renderJsonHighlight(call.arguments);
         }
 
         return `
-          <div class="tool-call-container">
+          <div class="tool-call-container"${callIdAttr}>
             <div class="tool-header">
               <span class="tool-header-name">${displayName}</span>
             </div>
@@ -643,16 +648,21 @@ function render(messages) {
         const toolsHtml = msg.toolCalls.map(call => {
           const displayName = getToolDisplayName(call.name);
           const template = getToolRenderTemplate(call.name);
+          // 工具执行中进度（ticket 025）：callId 配对 + 进度数据经模板第三参传入
+          const callIdAttr = call.id ? ` data-tool-call-id="${escapeHtml(String(call.id))}"` : '';
+          const progressCtx = typeof resolveToolProgressForCall === 'function'
+            ? resolveToolProgressForCall(call)
+            : null;
           let innerHtml;
 
           if (template.call) {
-            innerHtml = applyTemplate(template.call, call.arguments);
+            innerHtml = applyTemplate(template.call, call.arguments, true, progressCtx);
           } else {
             innerHtml = renderJsonHighlight(call.arguments);
           }
 
           return `
-            <div class="tool-call-container">
+            <div class="tool-call-container"${callIdAttr}>
               <div class="tool-header">
                 <span class="tool-header-name">${displayName}</span>
               </div>
