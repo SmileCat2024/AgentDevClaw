@@ -17,12 +17,14 @@ import {
 import {
   readHandoffPackage,
   exportHistoryOnlyHandoffPackage,
+  writeTrimWithSummaryHandoffPackage,
 } from '../context-continuity/handoff-package.js';
 import {
   exportSummarizedHandoffPackage,
   writeSummarizedHandoffPackage,
 } from '../context-continuity/summarized-handoff.js';
-import { runTrimAppendedSummary } from '../context-continuity/trim-appended-summary.js';
+import { runTrimTranscriptWithSummary } from '../context-continuity/trim-appended-summary.js';
+import { applyContinuityToolPolicy } from '../context-continuity/feature-continuity.js';
 import { extractDomainsFromText } from './session-helpers-pure.js';
 
 export function createSessionHandoffHelpers(deps) {
@@ -72,6 +74,35 @@ export function createSessionHandoffHelpers(deps) {
       await setSessionHasSummary(ownerAgentId, sessionId, true);
       return result;
     }
+    // Trim + appended summary: 组合语义（裁剪 + 摘要追加到 seed 尾部）的
+    // 权威实现是框架 TrimTranscriptWithSummaryTransformation；Claw 只做
+    // 装配（快照、模型预设、continuity 装饰）与 handoff JSON v1 落盘。
+    if (appendSummary) {
+      const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
+      const sessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
+      const seed = await runTrimTranscriptWithSummary({
+        agentRelativeDir: agent.relativeDir,
+        agentId: ownerAgentId,
+        sessionId,
+        projectRoot: PROJECT_ROOT,
+        sourceSessionSnapshot: sessionSnapshot,
+        policy: applyContinuityToolPolicy(policy),
+      });
+      const result = await writeTrimWithSummaryHandoffPackage({
+        userDataRoot: USER_DATA_ROOT,
+        agentId: ownerAgentId,
+        sessionId,
+        sessionPath,
+        sourceRecord: record,
+        sessionSnapshot,
+        seed,
+      });
+      const summaryChars = seed?.meta?.summaryText?.length ?? 0;
+      console.log(`[trim_with_summary] combined handoff written (${summaryChars} chars summary) for session=${sessionId}`);
+      await setSessionHasSummary(ownerAgentId, sessionId, true);
+      return result;
+    }
+
     const result = await exportHistoryOnlyHandoffPackage({
       userDataRoot: USER_DATA_ROOT,
       agentId: ownerAgentId,
@@ -80,39 +111,6 @@ export function createSessionHandoffHelpers(deps) {
       sourceRecord: record,
       policy,
     });
-
-    // Trim + appended summary: run the independent summary pipeline and append
-    // its seed message after the trimmed conversation history.
-    if (appendSummary) {
-      const agent = await requirePrebuiltAgentForRuntime(ownerAgentId);
-      const sourceSessionSnapshot = await readSessionSnapshotForContinuity(ownerAgentId, sessionId);
-      console.log(`[trim_append_summary] running independent summary for session=${sessionId}`);
-      const { summarySeedMessage, summaryText, compactOutput } = await runTrimAppendedSummary({
-        agentRelativeDir: agent.relativeDir,
-        agentId: ownerAgentId,
-        sessionId,
-        projectRoot: PROJECT_ROOT,
-        sourceSessionSnapshot,
-      });
-
-      // Append summary seed message after trimmed seed messages
-      result.handoff.seedMessages = [
-        ...(Array.isArray(result.handoff.seedMessages) ? result.handoff.seedMessages : []),
-        summarySeedMessage,
-      ];
-      result.handoff.mode = 'trim-transcript-with-summary';
-      result.handoff.appendedSummary = {
-        summaryText,
-        importantFiles: compactOutput.importantFiles,
-        importantSkills: compactOutput.importantSkills,
-        sessionTitle: compactOutput.sessionTitle,
-        fileRanges: compactOutput.fileRanges,
-      };
-
-      // Rewrite the handoff file with the combined seed messages
-      await fs.writeFile(result.handoffPath, `${JSON.stringify(result.handoff, null, 2)}\n`, 'utf8');
-      console.log(`[trim_append_summary] appended summary (${summaryText.length} chars) to trim handoff for session=${sessionId}`);
-    }
 
     await setSessionHasSummary(ownerAgentId, sessionId, true);
     return result;

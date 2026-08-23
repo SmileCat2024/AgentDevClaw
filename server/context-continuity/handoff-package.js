@@ -156,6 +156,62 @@ export async function exportHistoryOnlyHandoffPackage({
   };
 }
 
+/**
+ * 落盘框架 trim-transcript-with-summary 组合变换的产物（SuccessorSeed）。
+ *
+ * 组合语义（裁剪 + 摘要追加）由框架 TrimTranscriptWithSummaryTransformation
+ * 产出；本函数只做 Claw 落盘格式化（handoff JSON v1），字段与
+ * exportHistoryOnlyHandoffPackage 保持同构，消费方（compacted resume、
+ * HandoffSeedFeature、exploration payload）不感知差异。
+ */
+export async function writeTrimWithSummaryHandoffPackage({
+  userDataRoot,
+  agentId,
+  sessionId,
+  sessionPath,
+  sourceRecord = {},
+  sessionSnapshot,
+  seed,
+}) {
+  const meta = seed?.meta ?? {};
+  const appended = meta.appendedSummary ?? {};
+  const handoffId = `handoff-${Date.now()}-${randomUUID().slice(0, 8)}`;
+
+  const handoff = {
+    schemaVersion: HANDOFF_SCHEMA_VERSION,
+    handoffId,
+    createdAt: new Date().toISOString(),
+    compilerVersion: meta.compilerVersion || HANDOFF_COMPILER_VERSION,
+    seedKind: meta.seedKind || 'message-replay',
+    mode: meta.mode || 'trim-transcript-with-summary',
+    sourceAgentId: sanitizeFragment(agentId),
+    sourceSessionId: sanitizeFragment(sessionId),
+    sourceSessionPath: path.resolve(String(sessionPath || '').trim()),
+    sourceRecord: buildSourceRecord(sourceRecord),
+    policy: meta.trimPolicy ?? {},
+    stats: meta.trimStats ?? {},
+    featureContinuity: exportFeatureContinuity(sessionSnapshot, { mode: 'trim-transcript' }),
+    sourceSummary: buildCompactOverview(sourceRecord),
+    seedMessages: seed.seedMessages,
+    appendedSummary: {
+      summaryText: appended.summaryText ?? meta.summaryText ?? '',
+      importantFiles: appended.importantFiles ?? seed.importantFiles ?? [],
+      importantSkills: appended.importantSkills ?? seed.importantSkills ?? [],
+      sessionTitle: '',
+      fileRanges: appended.fileRanges ?? seed.fileRanges ?? {},
+    },
+  };
+
+  const handoffPath = getContextHandoffFilePath(userDataRoot, agentId, handoffId);
+  await ensureDir(path.dirname(handoffPath));
+  await fs.writeFile(handoffPath, `${JSON.stringify(handoff, null, 2)}\n`, 'utf8');
+
+  return {
+    handoff,
+    handoffPath,
+  };
+}
+
 export async function readHandoffPackage({ userDataRoot, agentId, handoffId, handoffPath }) {
   const resolvedPath = handoffPath
     ? path.resolve(String(handoffPath || '').trim())

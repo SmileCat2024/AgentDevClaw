@@ -63,13 +63,51 @@ function resolveModelRole(sessionType) {
   return 'system';
 }
 
-async function loadSessionSnapshot(agentId, sessionId) {
+export async function loadSessionSnapshot(agentId, sessionId) {
   try {
     const raw = await fs.readFile(getPrebuiltSessionFilePath(agentId, sessionId), 'utf8');
     return JSON.parse(raw);
   } catch {
     return null;
   }
+}
+
+/**
+ * 读取会话快照的消息列表；空快照直接抛错（摘要/组合变换都要求非空输入）。
+ */
+export function extractSummaryMessages(snapshot, agentId, sessionId) {
+  const messages = Array.isArray(snapshot?.runtime?.context?.messages)
+    ? snapshot.runtime.context.messages
+    : [];
+  if (messages.length === 0) {
+    throw new Error(`Session snapshot has no messages for in-process summary: agent=${agentId} session=${sessionId}`);
+  }
+  return messages;
+}
+
+/**
+ * 装配摘要类调用的 TransformContext.llm：模型预设解析 + mirror 调优。
+ * runInProcessSummary 与框架组合变换装配器（trim-appended-summary.js）共用，
+ * 保证两条链路的模型角色与调优参数一致。
+ *
+ * @returns {{ llm: object, modelName: string }}
+ */
+export function resolveSummaryLLM({
+  agentRelativeDir,
+  projectRoot,
+  agentId,
+  sessionId,
+  sessionType = '',
+}) {
+  const agentDir = path.resolve(String(projectRoot || '').trim(), agentRelativeDir);
+  const modelPresetRole = resolveModelRole(sessionType);
+  const resolvedModel = resolveAgentModelLLM(agentDir, modelPresetRole);
+  if (!resolvedModel) {
+    throw new Error(`No model preset resolved for in-process summary (agentDir=${agentRelativeDir}, role=${modelPresetRole}) — configure model presets for this agent`);
+  }
+  console.log(`[inprocess_summary] using model preset role=${modelPresetRole} model=${resolvedModel.modelName} agent=${agentId} session=${sessionId}`);
+  tuneMirrorLLM(resolvedModel.llm, SUMMARY_MAX_TOKENS);
+  return { llm: resolvedModel.llm, modelName: resolvedModel.modelName };
 }
 
 /**
@@ -104,21 +142,15 @@ export async function runInProcessSummary({
   if (!snapshot) {
     throw new Error(`Session snapshot not found for in-process summary: agent=${agentId} session=${sessionId}`);
   }
-  const messages = Array.isArray(snapshot?.runtime?.context?.messages)
-    ? snapshot.runtime.context.messages
-    : [];
-  if (messages.length === 0) {
-    throw new Error(`Session snapshot has no messages for in-process summary: agent=${agentId} session=${sessionId}`);
-  }
+  const messages = extractSummaryMessages(snapshot, agentId, sessionId);
 
-  const agentDir = path.resolve(String(projectRoot || '').trim(), agentRelativeDir);
-  const modelPresetRole = resolveModelRole(sessionType);
-  const resolvedModel = resolveAgentModelLLM(agentDir, modelPresetRole);
-  if (!resolvedModel) {
-    throw new Error(`No model preset resolved for in-process summary (agentDir=${agentRelativeDir}, role=${modelPresetRole}) — configure model presets for this agent`);
-  }
-  console.log(`[inprocess_summary] using model preset role=${modelPresetRole} model=${resolvedModel.modelName} agent=${agentId} session=${sessionId}`);
-  tuneMirrorLLM(resolvedModel.llm, SUMMARY_MAX_TOKENS);
+  const { llm } = resolveSummaryLLM({
+    agentRelativeDir,
+    projectRoot,
+    agentId,
+    sessionId,
+    sessionType,
+  });
 
   const prompt = buildSummaryPromptForSession({ sessionType, trimAppended, additionalInstructions });
   const attempts = Number.isFinite(maxAttempts) ? Math.max(1, Math.min(5, Number(maxAttempts))) : 3;
@@ -127,7 +159,7 @@ export async function runInProcessSummary({
     let lastFailure = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        const summaryText = await generateSummaryText({ llm: resolvedModel.llm }, snapshot, prompt);
+        const summaryText = await generateSummaryText({ llm }, snapshot, prompt);
         const scanned = scanFilesAndSkills(messages);
         return {
           summaryText,
