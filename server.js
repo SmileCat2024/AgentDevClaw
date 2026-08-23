@@ -63,6 +63,8 @@ import {
 } from './server/shared/session-access.js';
 import { sendIPCtoSession } from './server/shared/ipc.js';
 import { proxyToViewer } from './server/shared/proxy.js';
+import { resolveRuntimeObservationTarget } from './server/shared/operation-target.js';
+import { buildLocalFailureResponse, readOperationMetadata } from './server/shared/operation-contract.js';
 import {
   initRecoveryCache,
   getRecoverySessions,
@@ -302,19 +304,23 @@ setupDispatchRoutes(app, express, {
 // ── Runtime Inbox observation API (read-only) ──────────────────
 
 app.get('/protoclaw/runtime/inbox', (req, res) => {
-  const agentId = req.query.agentId;
-  const sessionId = req.query.sessionId || null;
-  if (!agentId) return res.status(400).json({ error: 'agentId required' });
-  const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
-  res.json(getRuntimeInboxSnapshot(runtimeKey));
+  try {
+    const { agentId, sessionId } = resolveRuntimeObservationTarget(req.query);
+    const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
+    res.json(getRuntimeInboxSnapshot(runtimeKey));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code });
+  }
 });
 
 app.get('/protoclaw/runtime/execution_state', (req, res) => {
-  const agentId = req.query.agentId;
-  const sessionId = req.query.sessionId || null;
-  if (!agentId) return res.status(400).json({ error: 'agentId required' });
-  const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
-  res.json(getRuntimeExecutionState(runtimeKey));
+  try {
+    const { agentId, sessionId } = resolveRuntimeObservationTarget(req.query);
+    const runtimeKey = getManagedRuntimeKey(agentId, sessionId);
+    res.json(getRuntimeExecutionState(runtimeKey));
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code });
+  }
 });
 
 app.get('/protoclaw/runtime/execution_states', (_req, res) => {
@@ -334,6 +340,9 @@ app.get('/protoclaw/runtime/envelopes_by_source', (req, res) => {
   if (!sourceRef) return res.status(400).json({ error: 'sourceRef required' });
   res.json({ envelopes: findEnvelopesBySourceRef(sourceRef) });
 });
+
+// Runtime observation routes are session-scoped; collection diagnostics remain
+// separate and do not derive a target from the page's focused Agent.
 
 // ── End Runtime Inbox observation API ───────────────────────────
 
@@ -544,10 +553,10 @@ app.post('/protoclaw/assembly_runtime/start', express.json(), async (req, res, n
   try {
     const requestedSessionId = cleanSessionText(req.body?.sessionId);
     const requestedAgentId = normalizeClientAgentId(req.body?.agentId);
-    const resolvedOwnerId = requestedSessionId
-      ? (await resolvePrebuiltSessionOwner(requestedSessionId, requestedAgentId) || requestedAgentId || 'flow-workspace')
-      : (requestedAgentId || 'flow-workspace');
-    const agent = await requirePrebuiltAgentForRuntime(resolvedOwnerId);
+    if (!requestedAgentId) {
+      return res.status(400).json({ error: 'agentId is required' });
+    }
+    const agent = await requirePrebuiltAgentForRuntime(requestedAgentId);
     console.log(`[PERF] /assembly_runtime/start BEGIN agentId=${agent.id} sessionId=${requestedSessionId || '(new)'}`);
     const session = requestedSessionId
       ? await activatePrebuiltSession(agent.id, requestedSessionId)
@@ -779,6 +788,8 @@ function playSoundOnServer(soundFile) {
  * Plays a terminal bell for any newly seen requests and returns the
  * full list of active choice alerts so the frontend can show toasts.
  */
+// Global collection query: scans all connected Viewer runtimes; it is not a
+// focused-Agent read and must not be narrowed by page state.
 app.get('/protoclaw/choice_alerts', async (_req, res, next) => {
   try {
     const agentsRes = await fetch(`${VIEWER_ORIGIN}/api/agents`);
@@ -847,16 +858,19 @@ app.post('/api/agents/:agentId/input', (req, res, next) => {
 // 交接路径误报 image-only。
 app.post('/api/agents/:agentId/user-turn', express.json(), async (req, res, next) => {
   try {
+    const metadata = readOperationMetadata(req);
     const result = await deliverUserInput({
       viewerAgentId: req.params.agentId,
       text: typeof req.body?.text === 'string' ? req.body.text : '',
       images: Array.isArray(req.body?.images) ? req.body.images : undefined,
       source: typeof req.body?.source === 'string' ? req.body.source : undefined,
       sourceRef: typeof req.body?.sourceRef === 'string' ? req.body.sourceRef : undefined,
+      ...metadata,
     });
-    res.json(result);
+    res.json({ ...result, ...metadata, operationId: metadata.operationId || null });
   } catch (err) {
-    next(err);
+    const failure = buildLocalFailureResponse(err, readOperationMetadata(req));
+    res.status(err?.status || 502).json(failure);
   }
 });
 
@@ -878,6 +892,8 @@ app.delete('/api/agents/:agentId', (req, res, next) => {
 });
 
 // ── Image attachment storage ───────────────────────────────────────
+// Host-scoped global resource: images are persisted under the local user data
+// root and never selected by page focus or an Agent identity.
 // Images are persisted to ~/.agentdev/AgentDevClaw/images/ and referenced by
 // absolute path in messages. This avoids bloating session JSON with inline base64.
 const IMAGES_DIR = path.join(USER_DATA_ROOT, 'images');
@@ -1094,10 +1110,11 @@ app.use(express.static(path.join(__dirname, 'public'), {
   },
 }));
 
-app.use((error, _req, res, _next) => {
-  // error.statusCode: http-errors 系；error.status: UserTurnDeliveryError 等
-  // 本仓库自定义错误（如 user-turn 的 409 input_mode_conflict）。
-  res.status(error.statusCode || error.status || 500).json({ error: error.message || 'Internal Server Error' });
+app.use((error, req, res, _next) => {
+  // Local failures expose a stable machine contract while retaining `error` for
+  // existing clients. The server never retries or queues an uncertain write.
+  const status = error.statusCode || error.status || 500;
+  res.status(status).json(buildLocalFailureResponse(error, readOperationMetadata(req)));
 });
 
 async function readRemoteClawConfig() {

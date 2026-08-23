@@ -855,7 +855,7 @@ local-features/                                ← 本地 Feature 功能测试�
 2. 当前数据的真相在前端草稿、服务端 workspace state，还是 session index？
 3. 当前行为是预制 agent 首页行为，还是运行时行为？
 4. **用户看到的是哪个前端管线？** 如果涉及面板显示、inspector 渲染，先确认该面板是 Claw 前端（`app-ui.js`，端口 1420）还是 DebugHub 查看器（`viewer-html.ts`，端口 2026）渲染的。改错管线 = 白改。
-5. **stale check 依赖的全局变量在 `await` 期间会变吗？** `allAgents`、`currentAgentId` 等全局状态会被 poll / `loadAgents()` 异步修改。在 `await fetch()` 前后比较基于这些变量计算的值（如 `getRuntimeContextKey`）会产生虚假判定。stale check 只能用同步设置的 `currentRuntimeAgentId`。
+5. **stale check 依赖的全局变量在 `await` 期间会变吗？** `allAgents`、`focusedAgentId` 等全局状态会被 poll / `loadAgents()` 异步修改。在 `await fetch()` 前后比较基于这些变量计算的值（如 `getRuntimeContextKey`）会产生虚假判定。stale check 只能用同步设置的 `currentRuntimeAgentId`。
 
 把这些问题先想清楚，通常就能避免在错误层面下手。
 
