@@ -12,7 +12,7 @@
  */
 
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot } from '@agentdev/core';
-import { createTool, DebugHub } from '@agentdev/core';
+import { createTool } from '@agentdev/core';
 import { fileURLToPath } from 'node:url';
 import type {
   GenerativeUISpecV1,
@@ -118,18 +118,12 @@ export class GenerativeUISurfaceFeatureInner implements AgentFeature {
   }
 
   private _getAgentId(): string | null {
-    // 优先使用框架传入的 agentId
+    // 身份自持（与 TodoFeature 同一模式）：只用框架传入的 agentId 或
+    // 宿主注入的环境变量，不依赖已移除的 DebugHub current agent 全局状态。
     if (this._debugAgentId) return this._debugAgentId;
     const configuredAgentId = process.env.PROTOCLAW_PREBUILT_AGENT_ID?.trim();
     if (configuredAgentId) return configuredAgentId;
-    // 回退：通过 DebugHub 获取
-    try {
-      const hub = DebugHub?.getInstance?.();
-      const id = hub?.getCurrentAgentId?.();
-      return typeof id === 'string' && id.length > 0 ? id : null;
-    } catch {
-      return null;
-    }
+    return null;
   }
 
   private _makeError(code: string, message: string): UIToolError {
