@@ -7620,3 +7620,89 @@ body[data-theme="light"] .git-branch-row:hover {
   white-space: nowrap;
   font-size: 12px;
 }
+
+/* 不可切换的分支行（当前分支 / 远程只读）：去掉手型与悬停背景 */
+.git-branch-row:not([data-gp-action]) {
+  cursor: default;
+}
+
+.git-branch-row:not([data-gp-action]):hover {
+  background: transparent;
+}
+
+/* 分支行右侧：ahead/behind 徽标 + 最后活动时间 + 操作 */
+.git-branch-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+}
+
+.git-branch-time {
+  color: rgba(255,255,255,0.35);
+  white-space: nowrap;
+}
+
+body[data-theme="light"] .git-branch-time {
+  color: rgba(0,0,0,0.4);
+}
+
+.git-branch-flag {
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.git-branch-flag.is-ahead {
+  background: rgba(115,201,145,0.14);
+  color: var(--git-c1);
+}
+
+.git-branch-flag.is-behind {
+  background: rgba(105,164,255,0.16);
+  color: var(--git-c0);
+}
+
+/* 远程分支折叠区：默认收起为一行计数，展开才罗列 */
+.git-remote-fold {
+  margin-top: 4px;
+}
+
+.git-remote-fold summary {
+  padding: 3px 6px;
+  margin: 0 -6px;
+  border-radius: 5px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.45);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.git-remote-fold summary::before {
+  content: '\25B8';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.12s ease;
+}
+
+.git-remote-fold[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.git-remote-fold summary:hover {
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.6);
+}
+
+body[data-theme="light"] .git-remote-fold summary {
+  color: rgba(0,0,0,0.45);
+}
+
+body[data-theme="light"] .git-remote-fold summary:hover {
+  background: rgba(0,0,0,0.045);
+  color: rgba(0,0,0,0.6);
+}

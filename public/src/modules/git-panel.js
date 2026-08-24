@@ -34,6 +34,7 @@
     branches: null,     // { locals, remotes, current }
     stash: [],          // [{ ref, desc }]
     error: '',
+    errors: {},         // 分端点错误：{ graph, branches, stash }——失败必须可见，禁止静默
     notice: '',         // 上一次操作的成功提示（如提交哈希）
     loading: false,
     busy: false,
@@ -84,7 +85,10 @@
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok !== true) {
-      throw new Error(String(data?.error || ('HTTP ' + res.status)));
+      const detail = String(data?.error || ('HTTP ' + res.status));
+      // 失败留痕：UI 呈现之外，Console 同步记录便于定位环境问题
+      console.warn('[GitPanel] ' + op + ' failed: ' + detail + ' (dir=' + String(body?.dir || '') + ')');
+      throw new Error(detail);
     }
     return data;
   }
@@ -104,20 +108,25 @@
     state.loading = true;
     state.error = '';
     try {
+      // 各端点独立容错：一个失败不清空整个面板，错误落到对应分区展示
+      const errors = {};
+      const safe = (key, p) => p.catch((e) => { errors[key] = String(e?.message || e); return null; });
       const [status, graph, branches, stash] = await Promise.all([
-        api('status', { dir }),
-        api('graph', { dir, limit: 120 }).catch(() => null),
-        api('branches', { dir }).catch(() => null),
-        api('stash', { dir, op: 'list' }).catch(() => null),
+        safe('status', api('status', { dir })),
+        safe('graph', api('graph', { dir, limit: 120 })),
+        safe('branches', api('branches', { dir })),
+        safe('stash', api('stash', { dir, op: 'list' })),
       ]);
       // 响应返回时会话可能已切走：丢弃过期结果
       if ((state.dir || currentSessionDir()) !== dir) return;
-      state.isRepo = status.isRepo !== false;
-      state.root = status.root || '';
-      state.status = status.status || null;
+      state.isRepo = status ? status.isRepo !== false : true;
+      state.root = status?.root || '';
+      state.status = status?.status || null;
       state.graph = Array.isArray(graph?.commits) ? graph.commits : [];
       state.branches = branches || null;
       state.stash = Array.isArray(stash?.entries) ? stash.entries : [];
+      state.errors = errors;
+      state.error = errors.status || '';
       state.expandedCommit = state.expandedCommit
         && state.graph.some((c) => c.hash === state.expandedCommit)
         ? state.expandedCommit : '';
@@ -142,6 +151,7 @@
     state.branches = null;
     state.stash = [];
     state.error = '';
+    state.errors = {};
     state.notice = '';
     state.isRepo = true;
     state.commitMessage = '';
@@ -290,7 +300,13 @@
 
   function renderHistory() {
     const commits = state.graph;
-    if (!commits.length) return '';
+    // 分区恒在：无数据/加载失败时给出可见状态，而不是让整个分区消失
+    if (state.errors.graph) {
+      return '<div class="git-empty-desc">' + esc(zh('提交历史加载失败：', 'Failed to load history: ')) + esc(state.errors.graph) + '</div>';
+    }
+    if (!commits.length) {
+      return '<div class="git-empty-desc">' + esc(zh('暂无提交', 'No commits yet')) + '</div>';
+    }
 
     const lanes = window.GitGraph.computeLanes(commits);
     const headRow = 0; // log 新→旧，第一行即 HEAD
@@ -347,19 +363,33 @@
 
   function renderBranchRow(b) {
     const current = !!b.current;
+    const tracking = current && state.status && state.status.tracking;
+    const aheadBehind = tracking
+      ? (state.status.ahead ? '<span class="git-branch-flag is-ahead" title="' + esc(zh('领先远程', 'ahead of remote')) + '">&#8593;' + state.status.ahead + '</span>' : '')
+        + (state.status.behind ? '<span class="git-branch-flag is-behind" title="' + esc(zh('落后远程', 'behind remote')) + '">&#8595;' + state.status.behind + '</span>' : '')
+      : '';
+    // 远程分支只读展示（检出会造成 detached HEAD），本地分支可点击切换
+    const clickable = current || b.remote ? '' : ' data-gp-action="branch-switch" data-gp-name="' + esc(b.name) + '"';
     const actions = current || b.remote ? '' : [
       '<button class="git-file-action is-danger" data-gp-action="branch-delete" data-gp-name="' + esc(b.name) + '" title="' + esc(zh('删除分支', 'Delete branch')) + '">&#10005;</button>',
     ].join('');
     return [
-      '<div class="git-branch-row' + (current ? ' is-current' : '') + '" data-gp-action="branch-switch" data-gp-name="' + esc(b.name) + '" title="' + esc(b.subject) + '">',
+      '<div class="git-branch-row' + (current ? ' is-current' : '') + '"' + clickable + ' title="' + esc(b.subject) + '">',
       '<span class="git-file-badge">' + (current ? '&#10003;' : '') + '</span>',
       '<span class="git-branch-name">' + esc(b.name) + '</span>',
+      '<span class="git-branch-right">',
+      aheadBehind,
+      b.relTime ? '<span class="git-branch-time">' + esc(b.relTime) + '</span>' : '',
       '<span class="git-file-actions">' + actions + '</span>',
+      '</span>',
       '</div>',
     ].join('');
   }
 
   function renderBranches() {
+    if (state.errors.branches) {
+      return '<div class="git-empty-desc">' + esc(zh('分支加载失败：', 'Failed to load branches: ')) + esc(state.errors.branches) + '</div>';
+    }
     const b = state.branches;
     if (!b) return '';
     const locals = (b.locals || []).map(renderBranchRow).join('');
@@ -367,12 +397,16 @@
       .filter((r) => r.name !== 'origin/HEAD')
       .map(renderBranchRow).join('');
     return [
-      locals ? '<div class="git-group-head"><span class="git-group-title">' + esc(zh('本地', 'Local')) + '</span>'
-        + '<span class="git-group-count">' + (b.locals || []).length + '</span>'
-        + '<button class="git-group-action" data-gp-action="branch-create">' + esc(zh('新建', 'New')) + '</button></div>' + locals : '',
-      remotes ? '<div class="git-group-head"><span class="git-group-title">' + esc(zh('远程', 'Remote')) + '</span>'
-        + '<span class="git-group-count">' + (b.remotes || []).length + '</span></div>' + remotes : '',
-      (!locals && !remotes) ? '<div class="git-empty-desc">' + esc(zh('无分支', 'No branches')) + '</div>' : '',
+      locals
+        ? '<div class="git-group-head"><span class="git-group-title">' + esc(zh('本地', 'Local')) + '</span>'
+          + '<span class="git-group-count">' + (b.locals || []).length + '</span>'
+          + '<button class="git-group-action" data-gp-action="branch-create">' + esc(zh('新建', 'New')) + '</button></div>' + locals
+        : '<div class="git-empty-desc">' + esc(zh('无本地分支', 'No local branches')) + '</div>',
+      remotes
+        // 远程分支默认折叠成一行计数，展开才罗列——避免整屏 origin/* 刷屏
+        ? '<details class="git-remote-fold"><summary>' + esc(zh('远程', 'Remotes'))
+          + ' · ' + (b.remotes || []).filter((r) => r.name !== 'origin/HEAD').length + '</summary>' + remotes + '</details>'
+        : '',
     ].join('');
   }
 

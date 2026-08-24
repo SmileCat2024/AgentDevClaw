@@ -294,6 +294,17 @@ describe('git graph / commit_files', () => {
     }
   });
 
+  it('returns empty commits for a repository without any commit', async () => {
+    const { dir } = await makeRepo();
+    try {
+      const { code, data } = await api('/protoclaw/git/graph', { dir, limit: 10 });
+      assert.equal(code, 200);
+      assert.deepEqual(data.commits, []);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('commit_files lists changed files with add/remove counts', async () => {
     const { dir, git } = await makeRepo();
     try {
@@ -330,6 +341,9 @@ describe('git branch operations', () => {
       assert.equal(r.code, 200);
       assert.equal(r.data.locals.length, 1);
       assert.equal(r.data.current, 'master');
+      // for-each-ref 格式：带最后提交相对时间与当前标记
+      assert.ok(typeof r.data.locals[0].relTime === 'string' && r.data.locals[0].relTime.length > 0);
+      assert.equal(r.data.locals[0].current, true);
 
       r = await api('/protoclaw/git/branch', { dir, op: 'create', name: 'feature/x' });
       assert.equal(r.code, 200);

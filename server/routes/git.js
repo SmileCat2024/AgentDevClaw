@@ -603,7 +603,17 @@ export function setupGitRoutes(app, express) {
       }
       const limit = Math.min(Math.max(Number(req.body?.limit) || 100, 1), 1000);
       const format = '%H%x1f%P%x1f%an%x1f%ar%x1f%D%x1f%s';
-      const text = await runGit(['log', `-n${limit}`, `--pretty=format:${format}`, '--date=relative'], root);
+      let text;
+      try {
+        text = await runGit(['log', `-n${limit}`, `--pretty=format:${format}`, '--date=relative'], root);
+      } catch (error) {
+        // 空仓库（尚无任何提交）不是错误：返回空历史
+        if (/does not have any commits yet|ambiguous argument 'HEAD'/i.test(String(error?.message || error))) {
+          res.json({ ok: true, root, commits: [] });
+          return;
+        }
+        throw error;
+      }
       const commits = [];
       // format 输出按行分隔；%s subject 恒为单行，字段用 \x1f 分隔
       for (const raw of text.split('\n')) {
@@ -667,8 +677,10 @@ export function setupGitRoutes(app, express) {
         res.status(400).json({ error: 'not a git repository' });
         return;
       }
-      const localText = await runGit(['branch', '-v', '--no-abbrev'], root);
-      const remoteText = await runGit(['branch', '-r', '-v', '--no-abbrev'], root);
+      // for-each-ref：按最近提交时间倒序，一次拿到名称/短哈希/相对时间/主题/HEAD 标记
+      const fmt = '%(refname:short)\x1f%(objectname:short)\x1f%(committerdate:relative)\x1f%(subject)\x1f%(HEAD)';
+      const localText = await runGit(['for-each-ref', '--sort=-committerdate', `--format=${fmt}`, 'refs/heads'], root);
+      const remoteText = await runGit(['for-each-ref', '--sort=-committerdate', `--format=${fmt}`, 'refs/remotes'], root);
       const locals = parseBranchLines(localText, false);
       const remotes = parseBranchLines(remoteText, true);
       res.json({ ok: true, root, current: getCurrentBranchName(locals), locals, remotes });
@@ -764,22 +776,19 @@ export function setupGitRoutes(app, express) {
   });
 }
 
-/** 解析 `git branch -v` 输出行为结构化分支 */
+/** 解析 `git for-each-ref --format=...` 输出行（\x1f 分隔：name/hash/relTime/subject/HEAD标记） */
 function parseBranchLines(text, isRemote) {
   const out = [];
   for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const current = trimmed.startsWith('*');
-    const rest = trimmed.replace(/^\*+\s*/, '');
-    // name + 40位哈希 + subject；远程名可能含 "origin/feature"
-    const m = rest.match(/^(\S+)\s+([0-9a-f]{40})\s+(.*)$/);
-    if (!m) continue;
+    if (!line.trim()) continue;
+    const [name, hash, relTime, subject, headMark] = line.split('\x1f');
+    if (!name) continue;
     out.push({
-      name: m[1],
-      hash: m[2],
-      subject: m[3] || '',
-      current,
+      name,
+      hash: hash || '',
+      relTime: relTime || '',
+      subject: subject || '',
+      current: headMark === '*',
       remote: isRemote,
     });
   }
