@@ -1,19 +1,21 @@
 /**
- * git-panel.js — Git 源代码管理面板（VS Code SCM 风格）
+ * git-panel.js — Git 源代码管理面板（VS Code SCM 交互 × Claw 面板语言）
  *
  * feature 无关的产品 Chrome 层面板：跟随当前查看的 workspace 会话的项目
  * 目录，经 /protoclaw/git/* 路由展示 git 状态，并提供 stage / unstage /
  * commit / discard / branch / stash 简单操作与图形化提交历史（SVG 泳道，
  * 算法在 git-graph.js）。
  *
- * 分区（可折叠 details，默认全展开）：
- *   更改   — 暂存/提交/discard（VS Code SCM 交互）
- *   历史   — SVG 提交图 + 行文本；点行展开该提交的文件清单（懒加载）
- *   分支   — 本地/远程列表；点击切换、新建、删除
- *   贮藏   — stash 列表；save/pop/drop
+ * 布局（上下双区，均可独立折叠 + 中间分隔条拖拽调高）：
+ *   ┌────────────────────────────┐
+ *   │ 更改与暂存  [概况条] [⟳]   │ ← 上区：概况（目录/远程关系/总数）
+ *   │  提交框 + 可折叠分区        │    （暂存的更改 / 更改 / 冲突 / Stash / 分支）
+ *   ├───── ⟂ 可拖拽分隔条 ───────┤
+ *   │ 图形  [分支选择▾] [加载更多]│ ← 下区：SVG 提交历史（分支过滤）
+ *   └────────────────────────────┘
  *
- * 刷新时机 = 进入面板 / 会话目录变化 / 手动刷新 / 任一写操作后（统一
- * loadAll 全量拉取，端点轻量，逻辑单点）。
+ * 刷新时机 = 进入面板 / 会话目录就绪（含重试，修复首次切入不加载）/
+ * 会话目录变化 / 手动刷新 / 任一写操作后（统一 loadAll 单点拉取）。
  *
  * 交互模式对齐 todo-plan.js：featurePanelBody 事件委托 + data-gp-* 属性。
  *
@@ -42,7 +44,37 @@
     commitMessage: '',
     expandedCommit: '', // 展开文件清单的提交 hash
     commitFiles: {},    // hash -> [{path, added, removed}] 懒加载缓存
+    branch: '',         // 图形区分支过滤（'' = 当前分支）
+    graphLimit: 120,    // 图形区加载条数（「加载更多」递增）
+    // 布局状态（localStorage 持久化）
+    zoneFold: { changes: false, graph: false },
+    subFold: { staged: true, changes: true, conflict: false, stash: false, branches: false },
+    topH: 0,            // 上区像素高度（0 = 默认比例）
+    changesScroll: 0,
+    graphScroll: 0,
   };
+
+  const LS_KEY = 'claw:git:layout';
+
+  function saveLayout() {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        zoneFold: state.zoneFold, subFold: state.subFold, topH: state.topH,
+      }));
+    } catch (_) { /* 隐私模式等场景忽略 */ }
+  }
+
+  function loadLayout() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw) || {};
+      if (d.zoneFold) state.zoneFold = { ...state.zoneFold, ...d.zoneFold };
+      if (d.subFold) state.subFold = { ...state.subFold, ...d.subFold };
+      if (typeof d.topH === 'number' && d.topH > 0) state.topH = d.topH;
+    } catch (_) { /* 损坏数据忽略 */ }
+  }
+  loadLayout();
 
   function esc(value) {
     return typeof escapeHtml === 'function'
@@ -55,8 +87,6 @@
   }
 
   // ── 会话目录解析（跟随当前查看的 workspace 会话）─────────────────
-  // 与 force-continuation-panel 相同的身份链：viewer 绑定优先，
-  // 回退 host 记录的 activeSessionId，再从 sessions 数组取 openDirectory。
 
   function currentSessionId() {
     return typeof getRuntimeWorkspaceSessionId === 'function' && currentRuntimeAgentId
@@ -102,7 +132,7 @@
     }
   }
 
-  /** 全量拉取：status + graph + branches + stash 并行 */
+  /** 全量拉取：status + graph + branches + stash 并行（graph 按当前分支过滤） */
   async function loadAll() {
     const dir = state.dir || currentSessionDir();
     if (!dir || state.loading) return;
@@ -114,7 +144,7 @@
       const safe = (key, p) => p.catch((e) => { errors[key] = String(e?.message || e); return null; });
       const [status, graph, branches, stash] = await Promise.all([
         safe('status', api('status', { dir })),
-        safe('graph', api('graph', { dir, limit: 120 })),
+        safe('graph', api('graph', { dir, limit: state.graphLimit, branch: state.branch })),
         safe('branches', api('branches', { dir })),
         safe('stash', api('stash', { dir, op: 'list' })),
       ]);
@@ -142,6 +172,28 @@
 
   const refresh = loadAll;
 
+  /**
+   * 首次切入不加载的修复：切入面板时会话数据（agent record 的
+   * workspace_sessions）可能尚未就绪，currentSessionDir() 暂时返回空。
+   * 这里带退避重试轮询目录就绪，面板切走即停。
+   */
+  let retryTimer = null;
+  function ensureLoaded(attempt) {
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'git') return;
+    const dir = currentSessionDir();
+    if (dir) {
+      if (state.dir !== dir) {
+        watchDir();
+      } else if (!state.status && !state.loading) {
+        loadAll();
+      }
+      return;
+    }
+    if (attempt >= 12) return; // ~6s 后放弃，显示空态指引
+    retryTimer = setTimeout(() => ensureLoaded(attempt + 1), 500);
+  }
+
   /** render 周期里的目录监视：会话切换（dir 变化）触发一次异步刷新 */
   function watchDir() {
     const dir = currentSessionDir();
@@ -160,6 +212,8 @@
     state.commitMessage = '';
     state.expandedCommit = '';
     state.commitFiles = {};
+    state.branch = '';
+    state.graphLimit = 120;
     if (dir) loadAll();
   }
 
@@ -199,7 +253,7 @@
     return file?.from ? `${file.path} ← ${file.from}` : String(file?.path || '');
   }
 
-  /** 文件类型图标（VS Code 风格的短文本徽标）：json 用 {}，其余取扩展名大写 */
+  /** 文件类型图标（短文本徽标）：json 用 {}，其余取扩展名大写 */
   function fileTypeIcon(path) {
     const base = String(path || '').split('/').pop() || '';
     const dot = base.lastIndexOf('.');
@@ -211,7 +265,7 @@
     return { label, known: true };
   }
 
-  // ── 渲染：更改区 ─────────────────────────────────────────────────
+  // ── 渲染：文件行 / 分组 ───────────────────────────────────────────
 
   function renderFileRow(file, group) {
     const badge = badgeFor(file, group);
@@ -221,7 +275,7 @@
     const name = slash >= 0 ? path.slice(slash + 1) : path;
     const dir = slash >= 0 ? path.slice(0, slash) : '';
     const icon = fileTypeIcon(path);
-    // 行内操作：悬停显隐的图标按钮（+ 暂存 / − 取消暂存 / ↺ 丢弃），悬停时遮住状态字母
+    // 行内操作：悬停显隐的图标按钮（+ 暂存 / − 取消暂存 / ↺ 丢弃）
     const actions = inConflict ? '' : [
       group === 'staged'
         ? '<button class="git-file-action" data-gp-action="unstage" data-gp-file="' + esc(file.path) + '" title="' + esc(zh('取消暂存', 'Unstage')) + '">&#8722;</button>'
@@ -239,35 +293,63 @@
     ].join('');
   }
 
-  function renderChangesGroup(title, files, group, headerAction) {
-    if (!files || files.length === 0) return '';
+  function renderFilesList(files, group) {
+    return files.map((f) => renderFileRow(f, group)).join('');
+  }
+
+  /** 上区内部可折叠分区（summary 点击 → subFold 状态 → 重绘，不经原生 details） */
+  function subSection(key, title, count, bodyHtml, toolsHtml, open) {
     return [
-      '<div class="git-group-head">',
-      '<span class="git-group-title">' + esc(title) + '</span>',
-      headerAction || '',
-      '<span class="git-group-count">' + files.length + '</span>',
+      '<div class="git-sub' + (open ? ' is-open' : '') + '" data-gp-sub="' + key + '">',
+      '<div class="git-sub-head">',
+      '<span class="git-sub-chev" aria-hidden="true"></span>',
+      '<span class="git-sub-title">' + esc(title) + '</span>',
+      (count > 0 ? '<span class="git-sub-count">' + count + '</span>' : ''),
+      '<span class="git-sub-tools">' + (toolsHtml || '') + '</span>',
       '</div>',
-      files.map((f) => renderFileRow(f, group)).join(''),
+      (open ? '<div class="git-sub-body">' + (bodyHtml || '') + '</div>' : ''),
+      '</div>',
     ].join('');
   }
 
-  function renderHead(status) {
-    const branch = status?.detached
-      ? esc(zh('分离头指针', 'Detached HEAD'))
-      : esc(status?.current || '—');
-    const arrows = [];
-    if (status?.ahead > 0) arrows.push('↑' + status.ahead);
-    if (status?.behind > 0) arrows.push('↓' + status.behind);
+  // ── 渲染：概况条（目录 / 总体 / 远程关系）─────────────────────────
+
+  function renderOverview(status) {
+    const files = status?.files || [];
+    const { staged, changes, conflicts } = splitGroups(files);
     const rootLeaf = state.root ? state.root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
+    const branch = status?.detached ? zh('分离头指针', 'detached') : (status?.current || '—');
+    // 远程关系：ahead/behind + 跟踪分支；无跟踪时明示
+    let sync;
+    if (status?.tracking) {
+      const parts = [];
+      if (status.ahead > 0) parts.push('↑' + status.ahead);
+      if (status.behind > 0) parts.push('↓' + status.behind);
+      sync = parts.length
+        ? '<span class="git-ov-sync is-dirty">' + esc(parts.join(' ')) + '</span>'
+        : '<span class="git-ov-sync is-clean">' + esc(zh('与远程一致', 'in sync')) + '</span>';
+    } else {
+      sync = '<span class="git-ov-sync is-none">' + esc(zh('无远程跟踪', 'no upstream')) + '</span>';
+    }
+    const dirtyCount = changes.length + conflicts.length;
+    const summary = files.length === 0
+      ? '<span class="git-ov-count is-clean">' + esc(zh('工作区干净', 'clean')) + '</span>'
+      : '<span class="git-ov-count">' + esc(
+        zh(
+          (staged.length ? staged.length + ' 暂存' : '')
+          + (staged.length && dirtyCount ? ' · ' : '')
+          + (dirtyCount ? dirtyCount + ' 更改' : ''),
+          (staged.length ? staged.length + ' staged' : '')
+          + (staged.length && dirtyCount ? ' · ' : '')
+          + (dirtyCount ? dirtyCount + ' changed' : '')
+        )) + '</span>';
     return [
-      '<section class="git-head">',
-      '<div class="git-head-line">',
-      '<span class="git-branch" title="' + esc(status?.tracking ? status.current + ' · ' + status.tracking : '') + '">' + branch + '</span>',
-      arrows.length ? '<span class="git-arrows">' + esc(arrows.join(' ')) + '</span>' : '',
-      '<button class="git-head-refresh' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="' + esc(zh('刷新', 'Refresh')) + '" ' + (state.loading || state.busy ? 'disabled' : '') + '>&#8635;</button>',
+      '<div class="git-overview">',
+      '<span class="git-ov-dir" title="' + esc(state.root || state.dir) + '">' + esc(rootLeaf || '—') + '</span>',
+      '<span class="git-ov-branch" title="' + esc(status?.tracking ? branch + ' · ' + status.tracking : branch) + '">&#10262; ' + esc(branch) + '</span>',
+      sync,
+      summary,
       '</div>',
-      rootLeaf ? '<div class="git-root" title="' + esc(state.root) + '">' + esc(rootLeaf) + '</div>' : '',
-      '</section>',
     ].join('');
   }
 
@@ -281,11 +363,11 @@
       ? '&#10003; ' + esc(zh('提交', 'Commit')) + ' (' + stagedCount + ')'
       : '&#10003; ' + esc(zh('提交', 'Commit'));
     return [
-      '<section class="git-commit-box">',
+      '<div class="git-commit-box">',
       '<textarea id="git-commit-message" class="git-commit-input" data-gp-message rows="2" placeholder="'
         + esc(placeholder) + '">' + esc(state.commitMessage) + '</textarea>',
       '<button class="git-commit-btn" data-gp-action="commit" ' + (disabled ? 'disabled' : '') + '>' + label + '<span class="git-commit-kbd">Ctrl+&#9166;</span></button>',
-      '</section>',
+      '</div>',
     ].join('');
   }
 
@@ -299,17 +381,15 @@
     return '';
   }
 
-  // ── 渲染：提交历史（SVG 泳道 + 行文本叠加）────────────────────────
+  // ── 渲染：图形区（SVG 泳道 + 行文本叠加 + 分支过滤）───────────────
 
   function refLabel(ref) {
     const name = String(ref?.name || '');
     if (!name) return '';
     if (ref.type === 'head') {
-      // HEAD 分支：实心蓝底胶囊 + ◎ 靶心图标（VS Code 当前分支形制）
       return '<span class="git-ref is-head"><span class="git-ref-icon">&#9678;</span>' + esc(name) + '</span>';
     }
     if (ref.type === 'remote') {
-      // 远程分支：紫底胶囊 + 云图标
       return '<span class="git-ref is-remote"><span class="git-ref-icon">&#972;</span>' + esc(name) + '</span>';
     }
     if (ref.type === 'tag') {
@@ -331,20 +411,19 @@
     }
   }
 
-  function renderHistory() {
+  function renderGraphBody() {
     const commits = state.graph;
-    // 分区恒在：无数据/加载失败时给出可见状态，而不是让整个分区消失
     if (state.errors.graph) {
-      return '<div class="git-empty-desc">' + esc(zh('提交历史加载失败：', 'Failed to load history: ')) + esc(state.errors.graph) + '</div>';
+      return '<div class="git-empty-desc">' + esc(zh('历史加载失败：', 'Failed to load history: ')) + esc(state.errors.graph) + '</div>';
     }
     if (!commits.length) {
       return '<div class="git-empty-desc">' + esc(zh('暂无提交', 'No commits yet')) + '</div>';
     }
 
     const lanes = window.GitGraph.computeLanes(commits);
-    const headRow = 0; // log 新→旧，第一行即 HEAD
-    const aheadSet = new Set(state.aheadHashes);
-    // 「传出的更改」= 未推送提交的连续头部区段；虚线圈节点由 aheadHashes 驱动
+    const headRow = 0; // log 新→旧，第一行即所选分支顶端
+    // 「传出的更改」虚线节点仅在查看当前分支（branch 未过滤）时有意义
+    const aheadSet = state.branch ? new Set() : new Set(state.aheadHashes);
     const svg = window.GitGraph.buildGraphSvg(lanes, headRow, aheadSet);
 
     // 头部区段里第一个「已推送」提交的行号（传出的更改分组行的插入点）
@@ -355,7 +434,6 @@
     const rows = commits.map((c, row) => {
       const isHead = row === headRow;
       const refs = (c.refs || []).map(refLabel).join('');
-      // 分组行插在传出区段之后（VS Code「传出的更改 main」形制）
       const outgoingRow = hasOutgoing && row === outgoingEnd
         ? '<div class="git-outgoing-row"><span class="git-outgoing-ring"></span>'
           + '<span class="git-outgoing-label">' + esc(zh('传出的更改', 'Outgoing Changes')) + '</span>'
@@ -376,10 +454,15 @@
       ].join('');
     }).join('');
 
+    const loadMore = commits.length >= state.graphLimit
+      ? '<div class="git-load-more"><button class="git-load-more-btn" data-gp-action="load-more" '
+        + (state.loading ? 'disabled' : '') + '>' + esc(zh('加载更早的提交', 'Load older commits')) + '</button></div>'
+      : '';
+
     return [
       '<div class="git-history" style="--git-canvas-w:' + svg.width + 'px">',
       '<div class="git-history-canvas">' + svg.svg + '</div>',
-      '<div class="git-history-rows">' + rows + '</div>',
+      '<div class="git-history-rows">' + rows + loadMore + '</div>',
       '</div>',
     ].join('');
   }
@@ -405,7 +488,29 @@
     ].join('');
   }
 
-  // ── 渲染：分支与贮藏 ──────────────────────────────────────────────
+  /** 图形区分支选择器（过滤查看历史，不是 checkout） */
+  function renderBranchSelect() {
+    const b = state.branches;
+    if (!b) return '';
+    const locals = b.locals || [];
+    const remotes = (b.remotes || []).filter((r) => r.name !== 'origin/HEAD');
+    if (!locals.length && !remotes.length) return '';
+    const currentName = b.current || state.status?.current || '';
+    const headOption = '<option value="">' + esc(zh('当前分支', 'Current') + (currentName ? ' · ' + currentName : '')) + '</option>';
+    const localOptions = locals.map((x) =>
+      '<option value="' + esc(x.name) + '"' + (state.branch === x.name ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('');
+    const remoteOptions = remotes.map((x) =>
+      '<option value="' + esc(x.name) + '"' + (state.branch === x.name ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('');
+    return [
+      '<select class="git-branch-select" data-gp-branch-select title="' + esc(zh('按分支查看历史', 'Filter history by branch')) + '">',
+      headOption,
+      locals.length ? '<optgroup label="' + esc(zh('本地', 'Local')) + '">' + localOptions + '</optgroup>' : '',
+      remotes.length ? '<optgroup label="' + esc(zh('远程', 'Remote')) + '">' + remoteOptions + '</optgroup>' : '',
+      '</select>',
+    ].join('');
+  }
+
+  // ── 渲染：分支与 Stash（上区内部可折叠分区）───────────────────────
 
   function renderBranchRow(b) {
     const current = !!b.current;
@@ -432,7 +537,7 @@
     ].join('');
   }
 
-  function renderBranches() {
+  function renderBranchesBody() {
     if (state.errors.branches) {
       return '<div class="git-empty-desc">' + esc(zh('分支加载失败：', 'Failed to load branches: ')) + esc(state.errors.branches) + '</div>';
     }
@@ -443,47 +548,36 @@
       .filter((r) => r.name !== 'origin/HEAD')
       .map(renderBranchRow).join('');
     return [
-      locals
-        ? '<div class="git-group-head"><span class="git-group-title">' + esc(zh('本地', 'Local')) + '</span>'
-          + '<span class="git-group-count">' + (b.locals || []).length + '</span>'
-          + '<button class="git-group-action" data-gp-action="branch-create">' + esc(zh('新建', 'New')) + '</button></div>' + locals
-        : '<div class="git-empty-desc">' + esc(zh('无本地分支', 'No local branches')) + '</div>',
-      remotes
-        // 远程分支默认折叠成一行计数，展开才罗列——避免整屏 origin/* 刷屏
-        ? '<details class="git-remote-fold"><summary>' + esc(zh('远程', 'Remotes'))
-          + ' · ' + (b.remotes || []).filter((r) => r.name !== 'origin/HEAD').length + '</summary>' + remotes + '</details>'
-        : '',
+      locals || '<div class="git-empty-desc">' + esc(zh('无本地分支', 'No local branches')) + '</div>',
+      remotes ? '<div class="git-sub-group-title">' + esc(zh('远程', 'Remotes')) + '</div>' + remotes : '',
     ].join('');
   }
 
-  function renderStash() {
+  function renderStashBody() {
     const entries = state.stash || [];
-    const head = '<div class="git-group-head"><span class="git-group-title">' + esc(zh('贮藏', 'Stash')) + '</span>'
-      + (entries.length ? '<span class="git-group-count">' + entries.length + '</span>' : '')
-      + '<button class="git-group-action" data-gp-action="stash-save">' + esc(zh('贮藏全部', 'Stash All')) + '</button></div>';
     if (!entries.length) {
-      return head + '<div class="git-empty-desc">' + esc(zh('无贮藏条目', 'No stash entries')) + '</div>';
+      return '<div class="git-empty-desc">' + esc(zh('无 Stash 条目', 'No stash entries')) + '</div>';
     }
-    return head + entries.map((s) => [
+    return entries.map((s) => [
       '<div class="git-branch-row" title="' + esc(s.desc) + '">',
       '<span class="git-branch-name">' + esc(s.desc) + '</span>',
       '<span class="git-file-actions">',
       '<button class="git-file-action" data-gp-action="stash-pop" data-gp-ref="' + esc(s.ref) + '" title="' + esc(zh('恢复并删除', 'Pop')) + '">&#8635;</button>',
-      '<button class="git-file-action is-danger" data-gp-action="stash-drop" data-gp-ref="' + esc(s.ref) + '" title="' + esc(zh('丢弃贮藏', 'Drop stash')) + '">&#10005;</button>',
+      '<button class="git-file-action is-danger" data-gp-action="stash-drop" data-gp-ref="' + esc(s.ref) + '" title="' + esc(zh('丢弃 Stash', 'Drop stash')) + '">&#10005;</button>',
       '</span>',
       '</div>',
     ].join('')).join('');
   }
 
-  // ── 渲染：分区壳与主入口 ─────────────────────────────────────────
+  // ── 渲染：双区骨架 ────────────────────────────────────────────────
 
-  function section(id, title, bodyHtml, open, titleExtra) {
-    if (!bodyHtml) return '';
+  function zoneBar(zone, titleHtml, toolsHtml, folded) {
     return [
-      '<details class="git-section" data-gp-section="' + id + '"' + (open ? ' open' : '') + '>',
-      '<summary class="git-section-title">' + esc(title) + (titleExtra || '') + '</summary>',
-      '<div class="git-section-body">' + bodyHtml + '</div>',
-      '</details>',
+      '<div class="git-zone-bar" data-gp-zone-bar="' + zone + '">',
+      '<span class="git-zone-chev' + (folded ? '' : ' is-open') + '" aria-hidden="true"></span>',
+      '<span class="git-zone-title">' + titleHtml + '</span>',
+      '<span class="git-zone-tools">' + (toolsHtml || '') + '</span>',
+      '</div>',
     ].join('');
   }
 
@@ -510,35 +604,88 @@
 
     const status = state.status || { files: [] };
     const { staged, changes, conflicts } = splitGroups(status.files || []);
-    const clean = (status.files || []).length === 0;
 
-    const changesBody = [
-      (staged.length > 0 || state.commitMessage) ? renderCommitBox(staged.length) : '',
-      renderChangesGroup(zh('暂存的更改', 'Staged Changes'), staged, 'staged',
-        staged.length > 0 ? '<button class="git-group-action" data-gp-action="unstage-all">' + esc(zh('全部取消', 'Unstage All')) + '</button>' : ''),
-      renderChangesGroup(zh('合并冲突', 'Merge Conflicts'), conflicts, 'conflict', ''),
-      renderChangesGroup(zh('更改', 'Changes'), changes, 'changes',
-        changes.length > 0 ? '<button class="git-group-action" data-gp-action="stage-all">' + esc(zh('全部暂存', 'Stage All')) + '</button>' : ''),
-      clean ? '<div class="git-clean">' + esc(zh('工作区干净', 'Working tree clean')) + '</div>' : '',
+    // ── 上区：更改与暂存 ──
+    const refreshBtn = '<button class="git-zone-btn' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="'
+      + esc(zh('刷新', 'Refresh')) + '" ' + (state.loading || state.busy ? 'disabled' : '') + '>&#8635;</button>';
+    const changesTools = refreshBtn;
+
+    const changesBodyHtml = [
+      renderMessage(),
+      renderOverview(status),
+      renderCommitBox(staged.length),
+      subSection('staged', zh('暂存的更改', 'Staged Changes'), staged.length,
+        renderFilesList(staged, 'staged'),
+        staged.length ? '<button class="git-group-action" data-gp-action="unstage-all">' + esc(zh('全部取消', 'Unstage All')) + '</button>' : '',
+        state.subFold.staged),
+      conflicts.length ? subSection('conflict', zh('合并冲突', 'Merge Conflicts'), conflicts.length,
+        renderFilesList(conflicts, 'conflict'), '', state.subFold.conflict) : '',
+      subSection('changes', zh('更改', 'Changes'), changes.length,
+        renderFilesList(changes, 'changes'),
+        changes.length ? '<button class="git-group-action" data-gp-action="stage-all">' + esc(zh('全部暂存', 'Stage All')) + '</button>' : '',
+        state.subFold.changes),
+      subSection('stash', 'Stash', state.stash.length,
+        renderStashBody(),
+        '<button class="git-group-action" data-gp-action="stash-save">' + esc(zh('Stash 全部', 'Stash All')) + '</button>',
+        state.subFold.stash),
+      state.branches ? subSection('branches', zh('分支', 'Branches'),
+        (state.branches.locals || []).length + (state.branches.remotes || []).filter((r) => r.name !== 'origin/HEAD').length,
+        renderBranchesBody(),
+        '<button class="git-group-action" data-gp-action="branch-create">' + esc(zh('新建', 'New')) + '</button>',
+        state.subFold.branches) : '',
     ].join('');
 
-    const historyRefresh = '<button class="git-section-action' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="'
-      + esc(zh('刷新', 'Refresh')) + '" ' + (state.loading || state.busy ? 'disabled' : '') + '>&#8635;</button>';
+    // ── 下区：图形 ──
+    const graphTools = renderBranchSelect()
+      + '<button class="git-zone-btn' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="'
+        + esc(zh('刷新', 'Refresh')) + '" ' + (state.loading || state.busy ? 'disabled' : '') + '>&#8635;</button>';
+
+    const topFolded = state.zoneFold.changes;
+    const graphFolded = state.zoneFold.graph;
+
     return [
-      '<div class="git-panel">',
-      renderHead(status),
-      renderMessage(),
-      section('changes', zh('更改', 'Changes'), changesBody, true),
-      section('history', zh('图形', 'Graph'), renderHistory(), true, historyRefresh),
-      section('branches', zh('分支', 'Branches'), renderBranches(), false),
-      section('stash', zh('贮藏', 'Stash'), renderStash(), false),
+      '<div class="git-panel" style="' + (state.topH ? '--git-top-h:' + state.topH + 'px' : '') + '">',
+      '<section class="git-zone' + (topFolded ? ' is-folded' : '') + '" data-zone="changes">',
+      zoneBar('changes', esc(zh('更改与暂存', 'Changes')), changesTools, topFolded),
+      topFolded ? '' : '<div class="git-zone-body" data-zone-body="changes">' + changesBodyHtml + '</div>',
+      '</section>',
+      topFolded || graphFolded ? '' : '<div class="git-splitter" data-gp-splitter title="' + esc(zh('拖拽调整高度', 'Drag to resize')) + '"></div>',
+      '<section class="git-zone' + (graphFolded ? ' is-folded' : '') + '" data-zone="graph">',
+      zoneBar('graph', esc(zh('图形', 'Graph')), graphTools, graphFolded),
+      graphFolded ? '' : '<div class="git-zone-body git-graph-scroll" data-zone-body="graph">' + renderGraphBody() + '</div>',
+      '</section>',
       '</div>',
     ].join('');
   }
 
+  // ── 滚动位置保持（repaint 重建 DOM 后恢复各区滚动）────────────────
+
+  function captureScroll() {
+    const c = document.querySelector('.git-zone-body[data-zone-body="changes"]');
+    const g = document.querySelector('.git-zone-body[data-zone-body="graph"]');
+    if (c) state.changesScroll = c.scrollTop;
+    if (g) state.graphScroll = g.scrollTop;
+  }
+
+  function restoreScroll() {
+    requestAnimationFrame(() => {
+      const c = document.querySelector('.git-zone-body[data-zone-body="changes"]');
+      const g = document.querySelector('.git-zone-body[data-zone-body="graph"]');
+      if (c) c.scrollTop = state.changesScroll || 0;
+      if (g) g.scrollTop = state.graphScroll || 0;
+    });
+  }
+
   function render() {
+    captureScroll();
     watchDir();
-    return buildHtml();
+    // 首次切入时会话数据可能未就绪：启动带退避的目录就绪轮询
+    if (!state.dir || (!state.status && !state.loading && !state.error)) {
+      ensureLoaded(0);
+    }
+    const html = buildHtml();
+    restoreScroll();
+    return html;
   }
 
   // ── 操作 ─────────────────────────────────────────────────────────
@@ -658,12 +805,12 @@
 
   async function doStashSave() {
     const confirmed = window.confirm(
-      zh('将当前全部未提交改动贮藏？', 'Stash all uncommitted changes?')
+      zh('将当前全部未提交改动存入 Stash？', 'Stash all uncommitted changes?')
     );
     if (!confirmed) return;
     await runAction(async () => {
       await api('stash', { dir: state.dir, op: 'save' });
-      state.notice = zh('已贮藏', 'Stashed');
+      state.notice = zh('已存入 Stash', 'Stashed');
       await loadAll();
     });
   }
@@ -671,7 +818,7 @@
   async function doStashOp(op, ref) {
     const labels = { pop: zh('恢复', 'Pop'), drop: zh('丢弃', 'Drop') };
     const confirmed = window.confirm(
-      zh(labels[op] + '贮藏 ' + ref + '？', labels[op] + ' stash ' + ref + '?')
+      zh(labels[op] + ' Stash ' + ref + '？', labels[op] + ' stash ' + ref + '?')
     );
     if (!confirmed) return;
     await runAction(async () => {
@@ -690,9 +837,59 @@
     repaint();
   }
 
+  // ── 分隔条拖拽（上下区高度调节）───────────────────────────────────
+
+  function onSplitterDown(e) {
+    const splitter = e.target.closest('[data-gp-splitter]');
+    if (!splitter) return;
+    const panel = document.querySelector('.git-panel');
+    if (!panel) return;
+    e.preventDefault();
+    const rect = panel.getBoundingClientRect();
+    const minY = 140;
+    const maxY = Math.max(minY + 100, rect.height - 160);
+    function move(ev) {
+      const h = Math.max(minY, Math.min(maxY, ev.clientY - rect.top));
+      state.topH = Math.round(h);
+      panel.style.setProperty('--git-top-h', state.topH + 'px');
+    }
+    function up() {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      saveLayout();
+    }
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
+
   // ── 事件委托（对齐 todo-plan.js 的 featurePanelBody 模式）────────
 
+  featurePanelBody.addEventListener('mousedown', onSplitterDown);
+
   featurePanelBody.addEventListener('click', (e) => {
+    // 分区头折叠（自管状态，不经原生 details）
+    const subHead = e.target.closest('.git-sub-head');
+    if (subHead && !e.target.closest('button')) {
+      const key = subHead.closest('[data-gp-sub]')?.dataset.gpSub || '';
+      if (key in state.subFold) {
+        state.subFold[key] = !state.subFold[key];
+        saveLayout();
+        repaint();
+      }
+      return;
+    }
+    // 大区标题栏折叠（点工具按钮/选择器除外）
+    const zoneBarEl = e.target.closest('[data-gp-zone-bar]');
+    if (zoneBarEl && !e.target.closest('button, select')) {
+      const zone = zoneBarEl.dataset.gpZoneBar || '';
+      if (zone in state.zoneFold) {
+        state.zoneFold[zone] = !state.zoneFold[zone];
+        saveLayout();
+        repaint();
+      }
+      return;
+    }
+
     const btn = e.target.closest('[data-gp-action]');
     if (!btn) {
       const commitRow = e.target.closest('[data-gp-commit]');
@@ -707,6 +904,9 @@
     if (action === 'refresh') {
       state.error = '';
       state.notice = '';
+      loadAll();
+    } else if (action === 'load-more') {
+      state.graphLimit += 120;
       loadAll();
     } else if (action === 'stage') {
       doStage([file]);
@@ -736,6 +936,17 @@
     }
   });
 
+  // 图形区分支切换（过滤历史视图）
+  featurePanelBody.addEventListener('change', (e) => {
+    const select = e.target.closest('[data-gp-branch-select]');
+    if (!select) return;
+    state.branch = select.value || '';
+    state.graphLimit = 120;
+    state.graphScroll = 0;
+    state.expandedCommit = '';
+    loadAll();
+  });
+
   featurePanelBody.addEventListener('input', (e) => {
     const ta = e.target.closest('textarea[data-gp-message]');
     if (!ta) return;
@@ -753,8 +964,8 @@
   window.GitPanel = {
     render,
     onOpen() {
-      watchDir();
-      if (state.dir) loadAll();
+      ensureLoaded(0);
+      if (state.dir && !state.loading) loadAll();
     },
     refresh,
   };

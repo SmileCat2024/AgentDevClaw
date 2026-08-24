@@ -24,10 +24,10 @@
 (function () {
   'use strict';
 
-  const ROW_H = 24;      // 每行高度（与 CSS .git-history-row 严格对齐）
+  const ROW_H = 26;      // 每行高度（与 CSS .git-history-row 严格对齐）
   const LANE_W = 12;     // 泳道列宽
   const PAD_X = 8;       // 左内边距
-  const PAD_TOP = 12;    // 首行圆心 y = ROW_H / 2
+  const PAD_TOP = 13;    // 首行圆心 y = ROW_H / 2
   const DOT_R = 4;       // 普通节点半径
   const HEAD_R = 6;      // HEAD 节点外环半径
   const EDGE_W = 1.5;    // 连线线宽

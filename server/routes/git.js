@@ -602,12 +602,17 @@ export function setupGitRoutes(app, express) {
         return;
       }
       const limit = Math.min(Math.max(Number(req.body?.limit) || 100, 1), 1000);
+      // 可指定分支/引用查看其历史（图形区分支选择器）；默认当前分支 HEAD
+      const branch = String(req.body?.branch || '').trim();
+      const branchArgs = branch ? [branch, '--'] : [];
       const format = '%H%x1f%P%x1f%an%x1f%ar%x1f%D%x1f%s';
       let text;
       try {
         // --topo-order：保证父提交恒在子提交之后输出（lane 算法的前提，
         // 与 VS Code Git Graph 行为一致；默认时间序在 rebase 历史上会乱序）
-        text = await runGit(['log', `-n${limit}`, '--topo-order', `--pretty=format:${format}`, '--date=relative'], root);
+        const args = ['log', `-n${limit}`, '--topo-order', '--pretty=format:' + format, '--date=relative'];
+        args.push(...branchArgs);
+        text = await runGit(args, root);
       } catch (error) {
         // 空仓库（尚无任何提交）不是错误：返回空历史
         if (/does not have any commits yet|ambiguous argument 'HEAD'/i.test(String(error?.message || error))) {
