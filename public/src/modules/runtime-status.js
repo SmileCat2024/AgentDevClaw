@@ -171,8 +171,16 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   const sessionDirMap = new Map();
   const hostAgentId = String(prebuiltAgent?.agentId || prebuiltAgent?.id || '').trim();
   if (hostAgentId === 'programming-helper') {
-    const phProjects = Array.isArray(prebuiltAgent?.workspace_state?.phProjects)
-      ? prebuiltAgent.workspace_state.phProjects
+    // 投影条目（coder）被服务端剥离会话级字段，目录映射改从全局列表中的
+    // 宿主记录读取——宿主的 workspace_sessions 覆盖工作空间全部会话身份。
+    // 无宿主记录可用时（极端时序/测试沙箱）映射为空，退回 open_directory 兜底。
+    const hostRecord = String(prebuiltAgent?.id || '').trim() === hostAgentId
+      ? prebuiltAgent
+      : (typeof allAgents !== 'undefined' && Array.isArray(allAgents)
+        ? allAgents.find((item) => item?.id === hostAgentId) || null
+        : null);
+    const phProjects = Array.isArray(hostRecord?.workspace_state?.phProjects)
+      ? hostRecord.workspace_state.phProjects
       : [];
     const projectIdToDir = new Map();
     for (const project of phProjects) {
@@ -180,8 +188,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       const pdir = String(project?.openDirectory || '').trim();
       if (pid && pdir) projectIdToDir.set(pid, pdir);
     }
-    const sessions = Array.isArray(prebuiltAgent?.workspace_sessions?.sessions)
-      ? prebuiltAgent.workspace_sessions.sessions
+    const sessions = Array.isArray(hostRecord?.workspace_sessions?.sessions)
+      ? hostRecord.workspace_sessions.sessions
       : [];
     for (const session of sessions) {
       const sid = String(session?.id || '').trim();

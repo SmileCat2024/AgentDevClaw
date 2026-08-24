@@ -322,6 +322,64 @@ describe('runtime-status: sidebar operation identity routing', () => {
   });
 });
 
+// ── coder projection project directory fallback ────────────────
+
+describe('runtime-status: coder projection project directory fallback', () => {
+  const PROJECTION = `
+    const projection = {
+      id: 'programming-helper:coder', agentId: 'programming-helper',
+      sessionType: 'coder', source: 'prebuilt',
+      workspace_sessions: { sessions: [] }
+    };
+    const child = {
+      id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
+      sessionType: 'coder', sidebar_entry_id: 'programming-helper:coder',
+      runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session-1',
+      connected: true
+    };
+  `;
+
+  it('resolves a coder child project directory from the host session map when open_directory is missing', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      allAgents = [{
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_state: { phProjects: [] },
+        workspace_sessions: { sessions: [{ id: 'coder-session-1', openDirectory: 'D:\\\\code\\\\project-a' }] }
+      }];
+      ${PROJECTION}
+      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
+    })()`);
+    assert.equal(entry.projectDir, 'D:\\code\\project-a');
+    assert.equal(entry.projectName, 'project-a');
+  });
+
+  it('prefers the case-corrected directory from the host phProjects map', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      allAgents = [{
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_state: { phProjects: [{ id: 'dir:d:/code/projecta', openDirectory: 'D:\\\\Code\\\\ProjectA' }] },
+        workspace_sessions: { sessions: [{ id: 'coder-session-1', openDirectory: 'd:\\\\code\\\\projecta' }] }
+      }];
+      ${PROJECTION}
+      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
+    })()`);
+    assert.equal(entry.projectDir, 'D:\\Code\\ProjectA');
+  });
+
+  it('falls back to the runtime open_directory when no host record is available', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      ${PROJECTION}
+      child.open_directory = 'D:\\\\code\\\\project-b';
+      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
+    })()`);
+    assert.equal(entry.projectDir, 'D:\\code\\project-b');
+    assert.equal(entry.projectName, 'project-b');
+  });
+});
+
 // ── formatRuntimeDuration ───────────────────────────────────
 
 describe('runtime-status: formatRuntimeDuration', () => {
