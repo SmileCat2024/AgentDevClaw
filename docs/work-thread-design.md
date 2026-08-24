@@ -1,8 +1,8 @@
 # 工作线程（Work Thread）设计与输入链路统一
 
-> 状态：实施中（第二阶段：coder 线程版编程助手演示）
-> 前置：`docs/plans/` 无相关计划文档；本文是该方向的第一份权威设计记录。
-> 关联提交：`cd175ae`（悬置地基）、coder 工作空间移植与输入链路统一（未提交）。
+> 状态：历史设计记录；现行生命周期规范见 [`work-thread-lifecycle.md`](work-thread-lifecycle.md)
+> 前置：`docs/plans/` 无相关计划文档；本文保留线程接入与输入链路的设计背景。
+> 关联实现：`server/thread-control/`、AgentDev `packages/core/src/core/workthread/`。
 
 ---
 
@@ -181,12 +181,16 @@ Claw 服务端（`server/thread-control/`），Agent / Feature 对它零感知�
 
 ### 4.2 服务端 InputGateway：单一真相
 
+> 本节保留历史设计背景；现行输入语义以 [`work-thread-lifecycle.md`](work-thread-lifecycle.md) §5 为准。特别是：历史非-head Session 现在明确只读并返回 `session_not_head`，不会静默转投当前 head。
+
 `server/thread-control/input-gateway.js` 的 `deliverUserInput()` 是所有
 服务端用户输入投递的必经点：
 
 ```
 deliverUserInput({ viewerAgentId, text, images, source, sourceRef })
   ├─ runtime 反查（getRuntimeByViewerAgentId）
+  ├─ agentId 是线程宿主 且 selectedSessionId 不是线程 head
+  │    → 明确拒绝（session_not_head，409），历史 Session 只读
   ├─ agentId 是线程宿主 且 selectedSessionId 是线程 head 且交接 fresh
   │    → Thread Inbox 暂存，返回 { delivery: 'thread_queued', threadId, commandId }
   ├─ 交接窗口收到纯图片 → 显式 409（thread_handoff_images_unsupported）
@@ -195,9 +199,7 @@ deliverUserInput({ viewerAgentId, text, images, source, sourceRef })
 
 设计要点：
 
-- **网关只拦「交接窗口」这一个客观事实**。「非 head」是调用方 UI 路由
-  问题（用户停留在旧会话页），由前端守卫负责——否则网关会吞掉合法的
-  历史会话查看场景的错误报告路径。边界必须可解释。
+- **网关同时保护两个边界**：交接窗口内的 head 输入进入 Inbox；历史非-head Session 明确只读并返回 `session_not_head`。查看历史仍然合法，但写入必须回到当前 head；不得静默转投，避免用户误以为自己编辑了历史现场。
 - **投递响应显式化**：`delivery: 'thread_queued'` 让任何调用方（聊天框、
   面板、未来 IM）都能正确渲染"已暂存"反馈，而不是各自猜测投递结果。
 - **幂等**：idempotencyKey = `gw-${sourceRef}`（有 sourceRef 时），网络
@@ -225,9 +227,11 @@ deliverUserInput({ viewerAgentId, text, images, source, sourceRef })
 
 ```
 'direct'  → 会话是 head（或无线程）且无交接 → 现有输入契约，零改动
-'thread'  → 非 head（session_not_head）或交接窗口（handoff_in_progress）
-            → submitThreadCommand() → Thread Inbox
+'thread'  → head 处于交接窗口 → submitThreadCommand() → Thread Inbox
+'readonly' → 非 head 历史 Session → 引导打开当前 head，不提交输入
 ```
+
+前端的 `readonly` 只是即时 UX 提示；服务端 `input-gateway` 的 `session_not_head` 是最终保护。
 
 前端守卫的价值是**即时气泡反馈**（不等网络往返）；服务端网关是兜底真相
 （前端预判 direct 但实际已进入交接窗口 → 响应 delivery=thread_queued →
@@ -261,7 +265,8 @@ viewer 队列保持原语义：同一个 runtime 活着时的 call 间排队。�
 语义上是"当前 call 的一部分"。线程宿主上它遵循与主聊天相同的输入
 三分工（意图归属决定通道），不做特殊例外：
 
-- route = 'thread'（非 head / 交接窗口）：改走 Thread Inbox。直投会
+- route = 'readonly'（非 head）：拒绝写入并引导打开当前 head，返回 `session_not_head`；不得静默转投。
+- route = 'thread'（head + 交接窗口）：改走 Thread Inbox。直投会
   「成功但投错目标」——消息被旧 runtime 消费、留在即将退役的会话里；
   转 inbox 后经 bridge → user-turn 落到当前 head，若 head runtime 恰有
   活跃 input lease，viewer 以 delivery='input' 应答，回答语义保留；
@@ -417,8 +422,10 @@ POST /protoclaw/threads/:threadId/commands           追加 Thread Inbox 指令
 POST /protoclaw/threads/:threadId/deliver            重试 pending 投递
 POST /protoclaw/threads/:threadId/head               推进 session head
 POST /protoclaw/threads/:threadId/handoff-failed     记录交接失败
-POST /protoclaw/threads/:threadId/resume             恢复调度
-POST /protoclaw/threads/:threadId/close              关闭调度对象
+POST /protoclaw/threads/:threadId/resume             恢复看板观察状态
+POST /protoclaw/threads/:threadId/archive            归档 Thread 并清理执行资源
+POST /protoclaw/threads/:threadId/unarchive          取消归档，不自动启动 Runtime
+POST /protoclaw/threads/:threadId/close              系统硬关闭终态
 ```
 
 通用 CLI 是这些接口的无头入口：
@@ -500,10 +507,10 @@ claw threads close <threadId> [--reason R]
   外部副作用原则一致；
 - 线程链严格线性；branch 在线程宿主上创建独立新线程（branch 路由已接
   onSessionCreated，分支会话成为新线程的 root），不在线程内分叉；
-- 会话删除善后：被删会话是线程 head 时线程随之取消（pending 指令一并
-  取消，避免悬空 active 线程累积）；删除非 head 棒次不动线程（历史链
-  对已删会话的引用由前端标题解析退化为短 id）；归档不动线程（取消
-  归档即恢复承接）。
+- 会话删除善后：被删会话是线程 head 时线程随之关闭（pending 指令一并
+  取消，避免悬空 active 线程累积）；coder Session 不支持单独删除；
+  归档是 Thread 级清理事务（暂停、 中断、停止链上 Runtime、关闭 Board），
+  取消归档只恢复可调度资格，不自动启动 Runtime。
 
 **未来方向（本阶段不做，架构已预留）**：
 

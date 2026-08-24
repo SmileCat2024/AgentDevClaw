@@ -97,8 +97,6 @@ describe('Session model metadata resolution', () => {
 
     const modelInfoMap = {
       default: { modelName: 'glm-5.1', contextLength: 200000 },
-      exploration: { modelName: 'glm-5-turbo', contextLength: 128000 },
-      sub: { modelName: 'glm-4.7', contextLength: 128000 },
     };
 
     it('maps main sessionType to default role', () => {
@@ -107,33 +105,15 @@ describe('Session model metadata resolution', () => {
       assert.equal(result.modelName, 'glm-5.1');
     });
 
-    it('maps exploration sessionType to exploration role', () => {
-      const record = {};
-      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'exploration', {});
-      assert.equal(result.modelName, 'glm-5-turbo');
-    });
-
-    it('maps sub sessionType to sub role', () => {
-      const record = {};
-      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'sub', {});
-      assert.equal(result.modelName, 'glm-4.7');
-    });
-
     it('defaults to main when sessionType is empty', () => {
       const record = {};
       const result = resolveSessionModelFromRecord(record, modelInfoMap, '', {});
       assert.equal(result.modelName, 'glm-5.1');
     });
 
-    it('uses sub role when metadata has resumeMode one-shot', () => {
-      const record = {};
-      const result = resolveSessionModelFromRecord(record, modelInfoMap, '', { resumeMode: 'one-shot' });
-      assert.equal(result.modelName, 'glm-4.7');
-    });
-
-    it('persisted record overrides even for exploration role', () => {
+    it('persisted record overrides modelInfoMap', () => {
       const record = { modelName: 'persisted-model', contextLength: 50000 };
-      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'exploration', {});
+      const result = resolveSessionModelFromRecord(record, modelInfoMap, 'main', {});
       assert.equal(result.modelName, 'persisted-model');
       assert.equal(result.contextLength, 50000);
     });

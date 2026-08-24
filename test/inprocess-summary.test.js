@@ -27,20 +27,7 @@ describe('buildSummaryPromptForSession', () => {
     assert.ok(prompt.includes('保留迁移细节'));
   });
 
-  it('uses the Claw-local exploration prompt for exploration sessions', () => {
-    const prompt = buildSummaryPromptForSession({ sessionType: 'exploration', trimAppended: false });
-    assert.ok(prompt.includes('三段式结构'));
-    assert.ok(prompt.includes('探索目标与范围'));
-    assert.ok(!prompt.includes('十段式结构'));
-    assert.ok(!prompt.includes('record_compaction_context'));
-  });
-
-  it('trimAppended wins over exploration sessionType', () => {
-    const prompt = buildSummaryPromptForSession({ sessionType: 'exploration', trimAppended: true });
-    assert.equal(prompt, buildSummaryPrompt({ trimAppended: true }));
-  });
-
-  it('sub sessions use the official base prompt', () => {
+  it('non-main sessionTypes use the official base prompt', () => {
     const prompt = buildSummaryPromptForSession({ sessionType: 'sub', trimAppended: false });
     assert.equal(prompt, buildSummaryPrompt({}));
   });

@@ -13,6 +13,7 @@ import {
   normalizeSummaryPolicy,
   buildSummarySeedMessage,
 } from '@agentdev/core';
+import { SESSION_TRANSFORMATION_TIMEOUT_MS } from '../shared/constants.js';
 
 const HANDOFF_COMPILER_VERSION = 'summarized-nine-section-v1';
 
@@ -183,11 +184,10 @@ export async function exportSummarizedHandoffPackage({
   agentRelativeDir,
   projectRoot,
   sourceSessionSnapshot = null,
+  timeoutMs = SESSION_TRANSFORMATION_TIMEOUT_MS,
+  signal = null,
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
-  // Extract sessionType from sourceRecord to determine prompt format and model role:
-  // exploration sessions use the three-section exploration prompt, others use nine-section
-  const sessionType = typeof sourceRecord.sessionType === 'string' ? sourceRecord.sessionType : '';
 
   console.log(`[summarized_handoff] in-process summary begin agent=${agentId} session=${sessionId}`);
   const summaryResult = await runInProcessSummary({
@@ -196,9 +196,10 @@ export async function exportSummarizedHandoffPackage({
     agentId,
     sessionId,
     sourceSessionSnapshot,
-    sessionType,
     maxAttempts: policy.maxAttempts,
     additionalInstructions: policy.additionalInstructions,
+    timeoutMs,
+    signal,
   });
   console.log(`[summarized_handoff] in-process summary done agent=${agentId} session=${sessionId} attempts=${summaryResult.attemptCount}`);
 

@@ -3,7 +3,20 @@ import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 function createArchiveSandbox() {
-  const ctx = createFrontendSandbox({ renderCount: 0, currentLanguage: 'zh', URLSearchParams });
+  const ctx = createFrontendSandbox({
+    renderCount: 0,
+    currentLanguage: 'zh',
+    URLSearchParams,
+    // app-core.js 资源身份 helper（tickets 026-032 引入）：session-mutation.js
+    // 直接调用这些 helper，而本测试仅加载 session-mutation.js 不加载 app-core.js
+    getParentAgentId: (record) => record?.parent_id || record?.parentId || null,
+    getRuntimeId: (record) => (record && (record.source === 'child' || record.source === 'external') ? record.id : null) || null,
+    getActiveSessionId: (record) =>
+      record?.workspace_sessions?.activeSessionId
+      ?? record?.active_workspace_session_id
+      ?? record?.sessionId
+      ?? null,
+  });
   ctx.console = { ...console, error() {} };
   ctx.getWorkspaceSessions = (agent) => (
     Array.isArray(agent?.workspace_sessions?.sessions) ? agent.workspace_sessions.sessions : []

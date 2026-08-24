@@ -171,20 +171,6 @@ describe('resolveSessionModelFromRecord — fast-path regression guard', () => {
     assert.equal(result.contextLength, 200000);
   });
 
-  it('correctly resolves sessionType for exploration sessions', () => {
-    const record = {};
-    const map = { exploration: { modelName: 'explore-model', contextLength: 128000 } };
-    const result = resolveSessionModelFromRecord(record, map, 'exploration', {});
-    assert.equal(result.modelName, 'explore-model');
-  });
-
-  it('correctly resolves sessionType for sub sessions via metadata', () => {
-    const record = {};
-    const map = { sub: { modelName: 'sub-model', contextLength: 64000 } };
-    const result = resolveSessionModelFromRecord(record, map, '', { resumeMode: 'one-shot' });
-    assert.equal(result.modelName, 'sub-model');
-  });
-
   it('defaults to main role when sessionType is empty and no metadata hint', () => {
     const record = {};
     const map = { default: { modelName: 'default-model', contextLength: 200000 } };
@@ -303,31 +289,6 @@ describe('summarizePrebuiltSession integration', () => {
       assert.equal(result.tokenUsage.outputTokens, 200);
       assert.equal(result.modelName, 'glm-5.1');
       assert.equal(result.bytes, stat.size);
-    });
-
-    it('handles exploration sessionType in fast path', async () => {
-      writeFileSync(SESSION_PATH, makeSessionFileContent({ messages: [] }), 'utf8');
-      const stat = statSync(SESSION_PATH);
-
-      const record = {
-        id: TEST_SESSION_ID,
-        title: 'Exploration Session',
-        sessionType: 'exploration',
-        openDirectory: '',
-        createdAt: '2026-01-01T00:00:00.000Z',
-        fileMtimeMs: stat.mtimeMs,
-        fileSize: stat.size,
-        metaVersion: META_VERSION,
-        messageCount: 0,
-        preview: '',
-        tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
-
-      const result = await helpers.summarizePrebuiltSession(TEST_AGENT_ID, record);
-
-      assert.equal(result.exists, true);
-      assert.equal(result.sessionType, 'exploration');
-      assert.equal(result.status, 'locked');
     });
   });
 
@@ -467,7 +428,7 @@ describe('summarizePrebuiltSession integration', () => {
       const record = {
         id: TEST_SESSION_ID,
         title: 'Ghost Session',
-        sessionType: 'exploration',
+        sessionType: 'main',
         openDirectory: 'D:/code/ghost',
         createdAt: '2026-02-01T00:00:00.000Z',
       };
@@ -477,7 +438,7 @@ describe('summarizePrebuiltSession integration', () => {
       assert.equal(result.exists, false);
       assert.equal(result.id, TEST_SESSION_ID);
       assert.equal(result.title, 'Ghost Session');
-      assert.equal(result.sessionType, 'exploration');
+      assert.equal(result.sessionType, 'main');
       assert.equal(result.openDirectory, 'D:/code/ghost');
     });
 

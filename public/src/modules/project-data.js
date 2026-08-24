@@ -289,16 +289,20 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
   const stateProjects = Array.isArray(workspaceState?.phProjects) ? workspaceState.phProjects : [];
   stateProjects.forEach((project) => upsertProject(project));
 
-  sessions.forEach((session) => {
-    const project = upsertProject({
-      openDirectory: session.openDirectory,
-      updatedAt: session.updatedAt,
-      createdAt: session.createdAt,
+  // coder 会话（sessionType='coder'）归属线程视图（coder 投影入口），
+  // 不进入编程小助手入口的项目 / 会话列表。
+  sessions
+    .filter((session) => String(session?.sessionType || '').trim() !== 'coder')
+    .forEach((session) => {
+      const project = upsertProject({
+        openDirectory: session.openDirectory,
+        updatedAt: session.updatedAt,
+        createdAt: session.createdAt,
+      });
+      if (project) {
+        project.sessions.push(session);
+      }
     });
-    if (project) {
-      project.sessions.push(session);
-    }
-  });
 
   return Array.from(projects.values())
     .map((project) => ({

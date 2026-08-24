@@ -39,6 +39,7 @@ function buildSidebarDiagnosticPhaseEvent(operation, phase, fields = {}) {
     operation: operation?.kind || operation?.type || 'sidebar',
     phase: String(phase || operation?.phase || 'unknown'),
     agentId: operation?.agentId || '',
+    sessionType: operation?.sessionType || '',
     sessionId: operation?.sourceSessionId || '',
     targetSessionId: operation?.targetSessionId || '',
     elapsedMs: Number(fields.elapsedMs) || 0,
@@ -126,18 +127,49 @@ function createSidebarOperationId(kind = 'sidebar') {
   return `${String(kind || 'sidebar').replace(/[^a-z0-9_-]/gi, '').slice(0, 32) || 'sidebar'}:${randomPart}`;
 }
 
+// 会话身份解析：多身份工作空间（programming-helper 的 main / coder）共享
+// 同一个宿主 agentId，operation 必须携带 sessionType 才能在侧栏按身份路由
+// （宿主条目 vs 投影条目），否则占位会在两个条目下镜像。
+// 优先级：显式传入 > allAgents 中该会话运行时的 sessionType（server 权威）>
+// 线程宿主索引（coder 会话必有线程）> 默认 main。
+function resolveSidebarOperationSessionType(agentId, sessionId, explicit = '') {
+  const direct = String(explicit || '').trim();
+  if (direct) return direct;
+  const ownerAgentId = String(agentId || '').trim();
+  const sourceSessionId = String(sessionId || '').trim();
+  if (!ownerAgentId || !sourceSessionId) return 'main';
+  if (typeof allAgents !== 'undefined' && Array.isArray(allAgents)) {
+    const runtime = allAgents.find((item) => (
+      item
+      && item.source !== 'prebuilt'
+      && String(item.parent_id || '').trim() === ownerAgentId
+      && String(item.active_workspace_session_id || '').trim() === sourceSessionId
+    ));
+    const runtimeType = String(runtime?.sessionType || '').trim();
+    if (runtimeType) return runtimeType;
+  }
+  if (typeof window !== 'undefined'
+    && typeof window.isThreadHostAgentId === 'function'
+    && window.isThreadHostAgentId(ownerAgentId, sourceSessionId)) {
+    return 'coder';
+  }
+  return 'main';
+}
+
 function normalizeSidebarOperation(raw = {}) {
   const now = Date.now();
   const kind = String(raw.kind || raw.type || 'sidebar').trim() || 'sidebar';
   const operationId = String(raw.operationId || '').trim() || createSidebarOperationId(kind);
   const sourceSessionId = String(raw.sourceSessionId || raw.sessionId || '').trim();
+  const agentId = String(raw.agentId || raw.ownerAgentId || '').trim();
   return {
     schemaVersion: 1,
     operationId,
     type: String(raw.type || (['summary', 'trim', 'branch'].includes(kind) ? 'replacement' : kind)).trim() || 'sidebar',
     kind,
     phase: String(raw.phase || 'requested').trim() || 'requested',
-    agentId: String(raw.agentId || raw.ownerAgentId || '').trim(),
+    agentId,
+    sessionType: resolveSidebarOperationSessionType(agentId, sourceSessionId, raw.sessionType),
     sourceSessionId,
     sessionId: sourceSessionId,
     sourceRuntimeId: String(raw.sourceRuntimeId || '').trim(),

@@ -26,7 +26,7 @@
   /** 可自定义的面板 ID（顺序 = 默认顺序） */
   var CUSTOMIZABLE_IDS = [
     'workspace', 'monitor', 'plan', 'git', 'hooks',
-    'inspector', 'force-continuation', 'logs', 'mcp', 'genui',
+    'inspector', 'session-controls', 'force-continuation', 'logs', 'mcp', 'genui',
   ];
 
   /** 面板名称（i18n） */
@@ -37,7 +37,7 @@
     git:       { zh: '源代码管理', en: 'Source Control' },
     hooks:     { zh: '功能',      en: 'Features' },
     inspector: { zh: '反向钩子',  en: 'Reverse Hooks' },
-    'force-continuation': { zh: '强制继续', en: 'Force Continuation' },
+    'session-controls': { zh: '会话控制', en: 'Session Controls' },
     logs:      { zh: '日志',      en: 'Logs' },
     mcp:       { zh: 'MCP',       en: 'MCP' },
     genui:     { zh: '交互页面',  en: 'Interactive Pages' },
@@ -51,7 +51,7 @@
     git:       { zh: 'Git 状态与操作',   en: 'Git status and actions' },
     hooks:     { zh: 'Feature 功能面板', en: 'Feature panel' },
     inspector: { zh: 'Hook 检查器',      en: 'Hook inspector' },
-    'force-continuation': { zh: '中断后继续控制', en: 'Resume after truncation control' },
+    'session-controls': { zh: '自动接续与上下文拦截', en: 'Auto-resume and context intercept' },
     logs:      { zh: '运行日志',         en: 'Runtime logs' },
     mcp:       { zh: 'MCP 服务端',       en: 'MCP servers' },
     genui:     { zh: 'UI 交互页面',      en: 'Interactive UI pages' },
@@ -77,19 +77,34 @@
     return CUSTOMIZABLE_IDS.map(function (id) { return { id: id, visible: true }; });
   }
 
+  /** 旧面板 ID → 新面板 ID（重命名时保留用户已有排序与可见性） */
+  var LEGACY_ID_MAP = {
+    'force-continuation': 'session-controls',
+  };
+
   function loadConfig() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return getDefaultConfig();
       var parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return getDefaultConfig();
+      parsed = parsed.map(function (item) {
+        if (item && LEGACY_ID_MAP[item.id]) {
+          return { id: LEGACY_ID_MAP[item.id], visible: item.visible !== false };
+        }
+        return item;
+      });
       var known = {};
       CUSTOMIZABLE_IDS.forEach(function (id) { known[id] = true; });
-      var valid = parsed.filter(function (item) { return item && known[item.id]; });
-      var present = {};
-      valid.forEach(function (i) { present[i.id] = true; });
+      var valid = [];
+      var seen = {};
+      parsed.forEach(function (item) {
+        if (!item || !known[item.id] || seen[item.id]) return;
+        seen[item.id] = true;
+        valid.push({ id: item.id, visible: item.visible !== false });
+      });
       CUSTOMIZABLE_IDS.forEach(function (id) {
-        if (!present[id]) valid.push({ id: id, visible: true });
+        if (!seen[id]) valid.push({ id: id, visible: true });
       });
       return valid;
     } catch (e) {

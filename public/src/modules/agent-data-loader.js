@@ -167,10 +167,13 @@ async function refreshCurrentRuntimeStatus(
   if (!expectedRuntimeId) return null;
 
   try {
+    // 上下文拦截状态拉取（session IPC）：仅在挂载了 ContextGuard 的工作空间
+    // 进行，否则每个 poll 都会对不支持的 runtime 产生 503 噪音。
+    const guardSupported = window.SessionControlsPanel?.isGuardAvailable?.() === true;
     const guardOwnerRecord = getCurrentRuntimeRecord() || getCurrentAgentRecord();
     const guardAgentId = String(getLogicalAgentId(guardOwnerRecord) || '').trim();
     const guardSessionId = String(getActiveSessionId(guardOwnerRecord) || '').trim();
-    const guardStatusUrl = guardAgentId && guardSessionId
+    const guardStatusUrl = guardSupported && guardAgentId && guardSessionId
       ? `/protoclaw/context_guard_status?agentId=${encodeURIComponent(guardAgentId)}&sessionId=${encodeURIComponent(guardSessionId)}`
       : null;
     const [notifRes, connectionRes, guardRes] = await Promise.all([

@@ -85,6 +85,23 @@ describe('runTrimTranscriptWithSummary', () => {
     );
   });
 
+  it('cancels an in-flight LLM call when the transformation timeout expires', async () => {
+    let aborted = false;
+    const hanging = {
+      chat: async (_messages, _tools, options) => new Promise((resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          aborted = true;
+          reject(options.signal.reason || new Error('aborted'));
+        }, { once: true });
+      }),
+    };
+    await assert.rejects(
+      runWith(buildSnapshot(), { llm: hanging, maxAttempts: 1, timeoutMs: 20 }),
+      /timed out|aborted/i,
+    );
+    assert.equal(aborted, true);
+  });
+
   it('fails overall after exhausting retries', async () => {
     let calls = 0;
     const failing = {

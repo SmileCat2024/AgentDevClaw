@@ -45,6 +45,37 @@ function loadRuntimeStatus(overrides = {}) {
   return ctx;
 }
 
+describe('runtime-status: sidebar identity ownership', () => {
+  it('routes a coder child runtime to the coder sidebar projection, not the PH host row', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      const host = {
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_sessions: { sessions: [] }
+      };
+      const projection = {
+        id: 'programming-helper:coder', agentId: 'programming-helper',
+        sessionType: 'coder', source: 'prebuilt',
+        workspace_sessions: { sessions: [] }
+      };
+      const child = {
+        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
+        sessionType: 'coder', sidebar_entry_id: 'programming-helper:coder',
+        runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session',
+        connected: true
+      };
+      return {
+        host: collectRuntimeEntriesForPrebuilt(host, [child]),
+        coder: collectRuntimeEntriesForPrebuilt(projection, [child])
+      };
+    })()`);
+    assert.equal(result.host.length, 0);
+    assert.equal(result.coder.length, 1);
+    assert.equal(result.coder[0].sessionType, 'coder');
+    assert.equal(result.coder[0].sidebarEntryId, 'programming-helper:coder');
+  });
+});
+
 describe('runtime-status: sidebar operation projection', () => {
   it('uses the operation kind for compact/trim pending text even without archival', () => {
     const ctx = loadRuntimeStatus();
@@ -127,7 +158,7 @@ describe('runtime-status: sidebar operation projection', () => {
       beginSidebarOperation({
         operationId: 'summary:degraded', type: 'replacement', kind: 'summary', phase: 'degraded',
         agentId: host.id, sourceSessionId: 'source-1', targetSessionId: 'target-1',
-        projectDir: 'D:\\\\\\\\code\\\\\\\\project-a', projectName: 'project-a',
+        projectDir: 'D:\\\\\\\\\\\\\\\\code\\\\\\\\\\\\\\\\project-a', projectName: 'project-a',
         errorCode: 'target_runtime_stopped'
       });
       return collectRuntimeEntriesForPrebuilt(host, [])[0];
@@ -136,6 +167,216 @@ describe('runtime-status: sidebar operation projection', () => {
     assert.equal(entry.projectName, 'project-a');
     assert.equal(entry.name, '摘要会话启动失败');
     assert.equal(entry.sidebarOperation.errorCode, 'target_runtime_stopped');
+  });
+});
+
+// ── sidebar operation identity routing（宿主/投影条目归属） ────
+
+describe('runtime-status: sidebar operation identity routing', () => {
+  const PH_HOST = `
+    const host = {
+      id: 'programming-helper', source: 'prebuilt',
+      workspace_sessions: { sessions: [] }
+    };
+    const projection = {
+      id: 'programming-helper:coder', agentId: 'programming-helper',
+      sessionType: 'coder', source: 'prebuilt',
+      workspace_sessions: { sessions: [] }
+    };
+  `;
+
+  it('renders a main-session pending placeholder on the host row only, never on the coder projection', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      ${PH_HOST}
+      beginSidebarOperation({
+        operationId: 'summary:main-1', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: 'programming-helper', sourceSessionId: 'main-session-1',
+        projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a'
+      });
+      return {
+        host: collectRuntimeEntriesForPrebuilt(host, []),
+        coder: collectRuntimeEntriesForPrebuilt(projection, [])
+      };
+    })()`);
+    assert.equal(result.host.length, 1);
+    assert.equal(result.host[0].source, 'operation-pending');
+    assert.equal(result.coder.length, 0);
+  });
+
+  it('routes a coder-session operation placeholder to the projection row only', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      ${PH_HOST}
+      beginSidebarOperation({
+        operationId: 'summary:coder-1', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: 'programming-helper', sourceSessionId: 'coder-session-1', sessionType: 'coder',
+        projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a'
+      });
+      return {
+        host: collectRuntimeEntriesForPrebuilt(host, []),
+        coder: collectRuntimeEntriesForPrebuilt(projection, [])
+      };
+    })()`);
+    assert.equal(result.host.length, 0);
+    assert.equal(result.coder.length, 1);
+    assert.equal(result.coder[0].source, 'operation-pending');
+    assert.equal(result.coder[0].sidebarOperation.sessionType, 'coder');
+  });
+
+  it('marks a coder delete operation on its own child entry and never tombstones it on the host row', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      ${PH_HOST}
+      const child = {
+        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
+        sessionType: 'coder', sidebar_entry_id: 'programming-helper:coder',
+        runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session-1',
+        connected: true
+      };
+      beginSidebarOperation({
+        operationId: 'delete:coder-1', type: 'delete', kind: 'delete', phase: 'committing',
+        agentId: 'programming-helper', sourceSessionId: 'coder-session-1',
+        sourceRuntimeId: 'coder-runtime', sessionType: 'coder'
+      });
+      return {
+        host: collectRuntimeEntriesForPrebuilt(host, [child]),
+        coder: collectRuntimeEntriesForPrebuilt(projection, [child])
+      };
+    })()`);
+    // 宿主条目：child 被身份排除，operation 也被过滤 → 无 tombstone 镜像
+    assert.equal(result.host.length, 0);
+    // 投影条目：child entry 保留并挂上删除标记
+    assert.equal(result.coder.length, 1);
+    assert.equal(result.coder[0].deleting, true);
+  });
+
+  it('applies the programming-helper projectDir guard to the projection row as well', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      ${PH_HOST}
+      beginSidebarOperation({
+        operationId: 'summary:coder-no-dir', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: 'programming-helper', sourceSessionId: 'coder-session-1', sessionType: 'coder'
+      });
+      return {
+        host: collectRuntimeEntriesForPrebuilt(host, []),
+        coder: collectRuntimeEntriesForPrebuilt(projection, [])
+      };
+    })()`);
+    assert.equal(result.host.length, 0);
+    assert.equal(result.coder.length, 0);
+  });
+
+  it('resolves operation sessionType from the child runtime snapshot, thread index, or default main', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      allAgents = [{
+        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
+        sessionType: 'coder',
+        active_workspace_session_id: 'coder-session-live'
+      }];
+      window.isThreadHostAgentId = (agentId, sessionId) => sessionId === 'coder-session-threaded';
+      return {
+        runtime: beginSidebarOperation({
+          operationId: 'resolve:runtime', type: 'create', kind: 'summary',
+          agentId: 'programming-helper', sourceSessionId: 'coder-session-live'
+        }).sessionType,
+        thread: beginSidebarOperation({
+          operationId: 'resolve:thread', type: 'create', kind: 'summary',
+          agentId: 'programming-helper', sourceSessionId: 'coder-session-threaded'
+        }).sessionType,
+        main: beginSidebarOperation({
+          operationId: 'resolve:main', type: 'create', kind: 'summary',
+          agentId: 'programming-helper', sourceSessionId: 'main-session-x'
+        }).sessionType,
+        explicit: beginSidebarOperation({
+          operationId: 'resolve:explicit', type: 'create', kind: 'summary',
+          agentId: 'programming-helper', sourceSessionId: 'coder-session-live',
+          sessionType: 'main'
+        }).sessionType
+      };
+    })()`);
+    assert.equal(result.runtime, 'coder');
+    assert.equal(result.thread, 'coder');
+    assert.equal(result.main, 'main');
+    assert.equal(result.explicit, 'main');
+  });
+
+  it('keeps sessionType stable across updateSidebarOperation re-normalization', () => {
+    const ctx = loadRuntimeStatus();
+    const sessionType = ctx.run(`(() => {
+      allAgents = [{
+        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
+        sessionType: 'coder', active_workspace_session_id: 'coder-session-live'
+      }];
+      const operation = beginSidebarOperation({
+        operationId: 'update:keep-type', type: 'create', kind: 'summary', phase: 'generating',
+        agentId: 'programming-helper', sourceSessionId: 'coder-session-live'
+      });
+      allAgents = [];
+      updateSidebarOperation('update:keep-type', { phase: 'target-starting', targetSessionId: 'next' });
+      return getSidebarOperation('update:keep-type').sessionType;
+    })()`);
+    assert.equal(sessionType, 'coder');
+  });
+});
+
+// ── coder projection project directory fallback ────────────────
+
+describe('runtime-status: coder projection project directory fallback', () => {
+  const PROJECTION = `
+    const projection = {
+      id: 'programming-helper:coder', agentId: 'programming-helper',
+      sessionType: 'coder', source: 'prebuilt',
+      workspace_sessions: { sessions: [] }
+    };
+    const child = {
+      id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
+      sessionType: 'coder', sidebar_entry_id: 'programming-helper:coder',
+      runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session-1',
+      connected: true
+    };
+  `;
+
+  it('resolves a coder child project directory from the host session map when open_directory is missing', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      allAgents = [{
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_state: { phProjects: [] },
+        workspace_sessions: { sessions: [{ id: 'coder-session-1', openDirectory: 'D:\\\\code\\\\project-a' }] }
+      }];
+      ${PROJECTION}
+      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
+    })()`);
+    assert.equal(entry.projectDir, 'D:\\code\\project-a');
+    assert.equal(entry.projectName, 'project-a');
+  });
+
+  it('prefers the case-corrected directory from the host phProjects map', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      allAgents = [{
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_state: { phProjects: [{ id: 'dir:d:/code/projecta', openDirectory: 'D:\\\\Code\\\\ProjectA' }] },
+        workspace_sessions: { sessions: [{ id: 'coder-session-1', openDirectory: 'd:\\\\code\\\\projecta' }] }
+      }];
+      ${PROJECTION}
+      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
+    })()`);
+    assert.equal(entry.projectDir, 'D:\\Code\\ProjectA');
+  });
+
+  it('falls back to the runtime open_directory when no host record is available', () => {
+    const ctx = loadRuntimeStatus();
+    const entry = ctx.run(`(() => {
+      ${PROJECTION}
+      child.open_directory = 'D:\\\\code\\\\project-b';
+      return collectRuntimeEntriesForPrebuilt(projection, [child])[0];
+    })()`);
+    assert.equal(entry.projectDir, 'D:\\code\\project-b');
+    assert.equal(entry.projectName, 'project-b');
   });
 });
 
@@ -910,15 +1151,36 @@ describe('runtime-status: sidebar disconnect semantics', () => {
   });
 });
 
-describe('runtime-status: context guard state', () => {
-  it('blocks only the runtime that reported the guard event', () => {
+describe('runtime-status: context guard trip toast', () => {
+  function loadWithToastSpy() {
     const ctx = loadRuntimeStatus({ currentRuntimeAgentId: 'rt-1' });
-    ctx.run(`applyContextGuardStatus({ contextGuard: {
-      blocked: true, blockedAt: 123, thresholdTokens: 800, inputTokens: 820,
-    } }, 'rt-1')`);
-    assert.equal(ctx.run('isCurrentContextGuardBlocked()'), true);
-    assert.match(ctx.run('getCurrentContextGuardMessage()'), /820/);
-    ctx.run('currentRuntimeAgentId = "rt-2"');
-    assert.equal(ctx.run('isCurrentContextGuardBlocked()'), false);
+    ctx.run(`window.ClawToast = { shown: [], show(o) { this.shown.push(o); } }`);
+    return ctx;
+  }
+
+  it('toasts once for a fresh trip and stays silent for repeats', () => {
+    const ctx = loadWithToastSpy();
+    const trip = { at: Date.now() + 5000, thresholdTokens: 800, inputTokens: 820, reason: 'x' };
+    ctx.run(`applyContextGuardStatus({ status: { armed: false, trip: ${JSON.stringify(trip)} } }, 'rt-1')`);
+    ctx.run(`applyContextGuardStatus({ status: { armed: false, trip: ${JSON.stringify(trip)} } }, 'rt-1')`);
+    const shown = ctx.run('window.ClawToast.shown');
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0].status, 'warning');
+    assert.match(shown[0].description, /820/);
+  });
+
+  it('ignores trips from before the page loaded (reload / session switch back)', () => {
+    const ctx = loadWithToastSpy();
+    ctx.run(`applyContextGuardStatus({ status: { armed: false, trip: {
+      at: 123, thresholdTokens: 800, inputTokens: 820, reason: 'x',
+    } } }, 'rt-1')`);
+    assert.equal(ctx.run('window.ClawToast.shown.length'), 0);
+  });
+
+  it('ignores payloads without a trip and foreign runtimes', () => {
+    const ctx = loadWithToastSpy();
+    ctx.run(`applyContextGuardStatus({ status: { armed: true, trip: null } }, 'rt-1')`);
+    ctx.run(`applyContextGuardStatus({ status: { trip: { at: Date.now() + 5000 } } }, 'rt-other')`);
+    assert.equal(ctx.run('window.ClawToast.shown.length'), 0);
   });
 });

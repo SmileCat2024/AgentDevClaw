@@ -92,7 +92,7 @@ export async function readSessionIndex(agentId) {
           targetFiles: cleanSessionText(session.targetFiles),
           referenceMaterials: cleanSessionText(session.referenceMaterials),
           openDirectory: cleanSessionText(session.openDirectory),
-          sessionType: cleanSessionText(session.sessionType) || (session.metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
+          sessionType: cleanSessionText(session.sessionType) || 'main',
           archived: session.archived === true,
           todo: session.todo === true,
           metadata: normalizeSessionMetadata(session.metadata),
@@ -127,10 +127,6 @@ export async function resolvePrebuiltSessionType(agentId, sessionId) {
     if (indexedType) {
       return indexedType;
     }
-    const indexedResumeMode = cleanSessionText(record?.metadata?.resumeMode);
-    if (indexedResumeMode === 'one-shot') {
-      return 'sub';
-    }
   } catch {}
 
   try {
@@ -139,10 +135,6 @@ export async function resolvePrebuiltSessionType(agentId, sessionId) {
     const fileType = cleanSessionText(sessionRecord?.sessionType);
     if (fileType) {
       return fileType;
-    }
-    const fileResumeMode = cleanSessionText(sessionRecord?.metadata?.resumeMode);
-    if (fileResumeMode === 'one-shot') {
-      return 'sub';
     }
   } catch {}
 

@@ -31,9 +31,9 @@ export const USER_AGENT_REGISTRY_PATH = path.join(USER_DATA_ROOT, 'agent-registr
 export const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
 export const GROUP_CHATS_ROOT = path.join(USER_DATA_ROOT, 'group-chats');
 export const THREADS_ROOT = path.join(USER_DATA_ROOT, 'threads');
-export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace', 'coder']);
+export const WORKSPACE_SESSION_AGENT_IDS = new Set(['feature-creator', 'agent-creator', 'agent-studio', 'programming-helper', 'flow-workspace']);
 // PH 风格工作区（项目列表 / 会话列表首页 / 空表单会话）：programming-helper 与 coder（线程版编程助手）
-export const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper', 'coder']);
+export const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper']);
 // Hidden workspaces remain discoverable by their stable ID for historical sessions and explicit routes.
 export const HIDDEN_PREBUILT_AGENT_IDS = new Set(['agent-creator', 'feature-creator', 'flow-test', 'work-group']);
 export const PROJECT_DOCSET_SUBPATH = path.join('.agentdev', 'claw-workspace');
@@ -43,7 +43,8 @@ export const MCP_GATEWAY_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'mcp
 export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
 
 // ── Timeout / Wait (ms) ──────────────────────────────────────────
-export const MIRROR_SCRIPT_TIMEOUT_MS   = 120000;   // summary / title / recap mirror 进程超时
+export const MIRROR_SCRIPT_TIMEOUT_MS   = 120000;   // title / recap mirror 进程超时
+export const SESSION_TRANSFORMATION_TIMEOUT_MS = 300000; // in-process summary / trim+summary overall timeout
 export const SPAWN_AGENT_TIMEOUT_MS     = 300000;   // spawn one-shot / resume sub-agent 默认超时
 export const CALL_EXECUTION_TIMEOUT_MS  = 300000;   // call 执行默认超时
 export const SHELL_DEFAULT_TIMEOUT_MS   = 5 * 60 * 1000; // Shell 命令默认超时

@@ -7,10 +7,12 @@
  *
  * 消费的端点契约：
  *   POST /protoclaw/acp/coder/sessions                    018 原子创建
+ *   GET  /protoclaw/acp/coder/sessions?cwd=...            线程视角会话发现
+ *   POST /protoclaw/acp/coder/sessions/:id/resume         成员/head → head 续接
  *   POST /protoclaw/acp/coder/sessions/:id/interrupt      018 精确中断
  *   POST /protoclaw/threads/:threadId/commands            prompt 投递（现有）
  *   GET  /protoclaw/threads/:threadId/events?after=N      事件增量读取（现有）
- *   POST /protoclaw/threads/:threadId/close               session/close 归档（现有）
+ *   POST /protoclaw/threads/:threadId/archive              session/close 归档
  *
  * 错误归一为两种：
  *   ClawUnreachableError — 网络层失败（server 未启动 / 连接被拒）
@@ -138,6 +140,55 @@ export function createClawClient(options = {}) {
       return body;
     },
 
+    /**
+     * 线程视角会话发现（每活跃线程一条，head 视角）。
+     * @param {{ cwd?: string }} [query] 可选 cwd 过滤（server 侧归一化比较）
+     * @returns {Promise<{ threads: Array<{ threadId, sessionId, cwd, title, updatedAt }> }>}
+     */
+    async listCoderSessions(query = {}, context = {}) {
+      const params = new URLSearchParams();
+      if (query?.cwd) params.set('cwd', String(query.cwd));
+      const qs = params.toString();
+      const { body } = await requestJson(
+        'GET',
+        `/protoclaw/acp/coder/sessions${qs ? `?${qs}` : ''}`,
+        undefined,
+        { ...context, cwd: query?.cwd },
+      );
+      return body;
+    },
+
+    /**
+     * 会话续接：把成员或 head 会话解析到其线程当前 head，急切挂载 runtime。
+     * @param {string} clawSessionId 成员或 head 的 Claw sessionId
+     * @param {{ cwd?: string }} [body] 可选 cwd 校验（与持久化记录一致才放行）
+     * @returns {Promise<{ ok, clawSessionId, threadId, viewerAgentId, cwd }>} clawSessionId 为 head
+     */
+    async resumeCoderSession(clawSessionId, body = {}, context = {}) {
+      const { body: payload } = await requestJson(
+        'POST',
+        `/protoclaw/acp/coder/sessions/${encodeURIComponent(clawSessionId)}/resume`,
+        body,
+        { ...context, clawSessionId },
+      );
+      return payload;
+    },
+
+    /**
+     * 会话历史读取（session/load 的数据面；控制面 = resume）。
+     * @param {string} clawSessionId 一般为 resume 解析出的 head sessionId
+     * @returns {Promise<{ ok, sessionId, messages: Array<{role, content, toolCalls?, toolCallId?}> }>}
+     */
+    async getCoderSessionHistory(clawSessionId, context = {}) {
+      const { body: payload } = await requestJson(
+        'GET',
+        `/protoclaw/acp/coder/sessions/${encodeURIComponent(clawSessionId)}/history`,
+        undefined,
+        { ...context, clawSessionId },
+      );
+      return payload;
+    },
+
     /** prompt 投递（kind 固定 user_message，source 固定 acp）。 */
     async appendUserMessage(threadId, { text, idempotencyKey }, context = {}) {
       const { body } = await requestJson(
@@ -172,12 +223,16 @@ export function createClawClient(options = {}) {
       return body;
     },
 
-    /** session/close：归档 thread（现有 close 路由，body { reason }）。 */
-    async closeThread(threadId, context = {}) {
+    /**
+     * session/close：归档 thread（archive 路由，线程层标记收纳语义；
+     * 运行中会被 409 thread_busy 拒绝——adapter 层已先拒绝 in-flight
+     * prompt，正常路径不会触发）。
+     */
+    async archiveThread(threadId, context = {}) {
       const { body } = await requestJson(
         'POST',
-        `/protoclaw/threads/${encodeURIComponent(threadId)}/close`,
-        { reason: 'acp session/close' },
+        `/protoclaw/threads/${encodeURIComponent(threadId)}/archive`,
+        undefined,
         { ...context, threadId },
       );
       return body;

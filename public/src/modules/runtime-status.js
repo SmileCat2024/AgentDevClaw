@@ -27,73 +27,43 @@ let lastNotificationStatusPayload = null;
 const _runtimeStatusMemory = new Map();
 let _lastRenderedNotificationRuntime = null;
 let _notificationClockTimer = null;
-let _contextGuardRuntimeId = '';
-let _contextGuardState = null;
-let _lastContextGuardToastKey = '';
+let _contextGuardToastKey = '';
+const _contextGuardPageLoadedAt = Date.now();
 
-function normalizeContextGuardState(raw) {
-  if (!raw || typeof raw !== 'object' || raw.blocked !== true) return null;
-  const thresholdTokens = Number(raw.thresholdTokens);
-  const inputTokens = Number(raw.inputTokens);
-  const blockedAt = Number(raw.blockedAt);
-  return {
-    blocked: true,
-    thresholdTokens: Number.isFinite(thresholdTokens) && thresholdTokens > 0 ? Math.round(thresholdTokens) : null,
-    inputTokens: Number.isFinite(inputTokens) && inputTokens > 0 ? Math.round(inputTokens) : null,
-    blockedAt: Number.isFinite(blockedAt) && blockedAt > 0 ? Math.round(blockedAt) : null,
-    reason: typeof raw.reason === 'string' ? raw.reason.trim() : '',
-  };
-}
-
-function isCurrentContextGuardBlocked() {
-  return _contextGuardState?.blocked === true
-    && _contextGuardRuntimeId === normalizeAgentIdentity(currentRuntimeAgentId);
-}
-
-function getCurrentContextGuardMessage() {
-  const state = _contextGuardState;
-  if (!state?.blocked) return '';
-  if (currentLanguage === 'zh') {
-    if (state.inputTokens && state.thresholdTokens) {
-      return `本轮上下文已达到限制（${state.inputTokens.toLocaleString()} / ${state.thresholdTokens.toLocaleString()} tokens），会话已被中断。`;
-    }
-    return '本轮上下文已达到限制，会话已被中断。';
-  }
-  if (state.inputTokens && state.thresholdTokens) {
-    return `This session reached its context limit (${state.inputTokens.toLocaleString()} / ${state.thresholdTokens.toLocaleString()} tokens) and was interrupted.`;
-  }
-  return 'This session reached its context limit and was interrupted.';
-}
-
+/**
+ * 消费 /protoclaw/context_guard_status（session IPC）的返回体。保险丝的
+ * 拦截动作（打断 + 退回排队消息）发生在 runtime 内；前端唯一的职责是在
+ * trip 发生时给出一次 toast 提醒。输入框不禁用——过界后继续发送的开销
+ * 由用户自负。
+ */
 function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
   const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
   if (!normalizedRuntimeId || normalizedRuntimeId !== normalizeAgentIdentity(currentRuntimeAgentId)) return;
-  const nextState = normalizeContextGuardState(payload?.contextGuard);
-  const wasBlocked = isCurrentContextGuardBlocked();
-  _contextGuardRuntimeId = normalizedRuntimeId;
-  _contextGuardState = nextState;
-  const isBlocked = isCurrentContextGuardBlocked();
+  const trip = payload && typeof payload === 'object' && payload.status && typeof payload.status === 'object'
+    ? payload.status.trip : null;
+  if (!trip || typeof trip !== 'object') return;
+  // 只提醒页面加载之后发生的 trip：刷新页面或切回已触发过的会话不再打扰。
+  const tripAt = Number(trip.at);
+  if (Number.isFinite(tripAt) && tripAt > 0 && tripAt < _contextGuardPageLoadedAt) return;
+  const toastKey = `${normalizedRuntimeId}:${Number.isFinite(tripAt) && tripAt > 0 ? Math.round(tripAt) : 'trip'}`;
+  if (_contextGuardToastKey === toastKey) return;
+  _contextGuardToastKey = toastKey;
 
-  if (isBlocked) {
-    // [临时屏蔽] 上下文保护 Toast 通知 — 需要恢复时移除此注释块
-    /*
-    const toastKey = `${normalizedRuntimeId}:${nextState.blockedAt || nextState.thresholdTokens || 'blocked'}`;
-    if (_lastContextGuardToastKey !== toastKey) {
-      _lastContextGuardToastKey = toastKey;
-      window.ClawToast?.show?.({
-        id: `context-guard-${normalizedRuntimeId}`,
-        status: 'error',
-        title: currentLanguage === 'zh' ? '上下文限制已达到，已中断会话' : 'Context limit reached — session interrupted',
-        description: getCurrentContextGuardMessage(),
-      });
-    }
-    */
-  }
-
-  if (wasBlocked !== isBlocked && typeof renderInputRequests === 'function') {
-    lastRenderedInputSignature = '';
-    renderInputRequests(currentInputRequests || []);
-  }
+  const inputTokens = Number(trip.inputTokens);
+  const thresholdTokens = Number(trip.thresholdTokens);
+  const zh = currentLanguage === 'zh';
+  const usage = Number.isFinite(inputTokens) && inputTokens > 0 && Number.isFinite(thresholdTokens) && thresholdTokens > 0
+    ? `${inputTokens.toLocaleString()} / ${thresholdTokens.toLocaleString()} tokens`
+    : '';
+  window.ClawToast?.show?.({
+    id: `context-guard-${normalizedRuntimeId}`,
+    status: 'warning',
+    title: zh ? '上下文已超过阈值，本轮已打断' : 'Context threshold exceeded — turn interrupted',
+    description: zh
+      ? `用量 ${usage}。建议通过精简 / 摘要 / 分支降低上下文后继续；也可以直接继续发送（开销自负）。`
+      : `Usage ${usage}. Consider trimming, summarizing, or branching before continuing; sending anyway is at your own cost.`,
+    autoDismiss: 8000,
+  });
 }
 
 // ─── 运行时快照构建 ───
@@ -130,6 +100,11 @@ function buildChildRuntimeEntry(runtimeAgent) {
     ownerId,
     runtimeId,
     sessionId: runtimeAgent.active_workspace_session_id || '',
+    sessionType: String(runtimeAgent.sessionType || 'main'),
+    sidebarEntryId: String(runtimeAgent.sidebar_entry_id || '').trim()
+      || (String(runtimeAgent.sessionType || 'main').trim() === 'main'
+        ? ownerId
+        : `${ownerId}:${String(runtimeAgent.sessionType || 'main').trim()}`),
     name: runtimeAgent.active_workspace_display_name
       || runtimeAgent.active_workspace_agent_name
       || runtimeAgent.active_workspace_session_title
@@ -141,13 +116,16 @@ function buildChildRuntimeEntry(runtimeAgent) {
     contextMenuEnabled: true,
     createdAt: runtimeAgent.created_at || null,
     replacementMutation: mutation,
+    // 会话绑定的项目目录（server 从 session index 附带）。投影条目（coder）
+    // 不继承宿主 workspace_sessions，靠此字段参与目录分组。
+    openDirectory: String(runtimeAgent.open_directory || '').trim(),
   };
 }
 
 function getSidebarOperationPendingName(operation) {
-  // 线程宿主（coder）：trim / summary 是线程内上下文接力，不是「创建新会话」
+  // 线程宿主会话（coder）：trim / summary 是线程内上下文接力，不是「创建新会话」
   const isThreadHost = typeof window.isThreadHostAgentId === 'function'
-    && window.isThreadHostAgentId(operation?.agentId);
+    && window.isThreadHostAgentId(operation?.agentId, operation?.sessionId);
   if (operation?.kind === 'branch') {
     return currentLanguage === 'zh' ? '正在创建分支…' : 'Creating branch…';
   }
@@ -166,7 +144,7 @@ function getSidebarOperationFailureName(operation) {
   // A degraded target operation is reached only after the session mutation has
   // committed. Its failure describes the runtime startup, never session creation.
   const isThreadHost = typeof window.isThreadHostAgentId === 'function'
-    && window.isThreadHostAgentId(operation?.agentId);
+    && window.isThreadHostAgentId(operation?.agentId, operation?.sessionId);
   if (operation?.kind === 'branch') {
     return currentLanguage === 'zh' ? '分支会话启动失败' : 'Branch session failed to start';
   }
@@ -191,9 +169,18 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // We also cross-reference phProjects to pick up the correct-cased directory
   // path (sessions may store a lowercased path on Windows).
   const sessionDirMap = new Map();
-  if (String(prebuiltAgent?.id || '').trim() === 'programming-helper' || String(prebuiltAgent?.id || '').trim() === 'coder') {
-    const phProjects = Array.isArray(prebuiltAgent?.workspace_state?.phProjects)
-      ? prebuiltAgent.workspace_state.phProjects
+  const hostAgentId = String(prebuiltAgent?.agentId || prebuiltAgent?.id || '').trim();
+  if (hostAgentId === 'programming-helper') {
+    // 投影条目（coder）被服务端剥离会话级字段，目录映射改从全局列表中的
+    // 宿主记录读取——宿主的 workspace_sessions 覆盖工作空间全部会话身份。
+    // 无宿主记录可用时（极端时序/测试沙箱）映射为空，退回 open_directory 兜底。
+    const hostRecord = String(prebuiltAgent?.id || '').trim() === hostAgentId
+      ? prebuiltAgent
+      : (typeof allAgents !== 'undefined' && Array.isArray(allAgents)
+        ? allAgents.find((item) => item?.id === hostAgentId) || null
+        : null);
+    const phProjects = Array.isArray(hostRecord?.workspace_state?.phProjects)
+      ? hostRecord.workspace_state.phProjects
       : [];
     const projectIdToDir = new Map();
     for (const project of phProjects) {
@@ -201,8 +188,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       const pdir = String(project?.openDirectory || '').trim();
       if (pid && pdir) projectIdToDir.set(pid, pdir);
     }
-    const sessions = Array.isArray(prebuiltAgent?.workspace_sessions?.sessions)
-      ? prebuiltAgent.workspace_sessions.sessions
+    const sessions = Array.isArray(hostRecord?.workspace_sessions?.sessions)
+      ? hostRecord.workspace_sessions.sessions
       : [];
     for (const session of sessions) {
       const sid = String(session?.id || '').trim();
@@ -237,14 +224,21 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     if (!entry?.runtimeId) return;
     if (seenRuntimeIds.has(entry.runtimeId)) return;
     seenRuntimeIds.add(entry.runtimeId);
-    if (sessionDirMap.size > 0 && !entry.projectDir) {
-      const dir = entry.sessionId ? (sessionDirMap.get(entry.sessionId) || '') : '';
-      entry.projectDir = dir;
-      entry.projectName = dir ? getPathLeaf(dir) : '';
+    if (!entry.projectDir) {
+      // PH 宿主走 workspace_sessions 映射（大小写已校正）；其余条目
+      // （coder 投影等）用 server 附带的 open_directory 兜底。
+      let dir = entry.openDirectory || '';
+      if (sessionDirMap.size > 0 && entry.sessionId) {
+        dir = sessionDirMap.get(entry.sessionId) || dir;
+      }
+      if (dir) {
+        entry.projectDir = dir;
+        entry.projectName = getPathLeaf(dir);
+      }
     }
     if (typeof findSidebarOperation === 'function') {
       const operation = findSidebarOperation((item) => (
-        item.agentId === String(prebuiltAgent?.id || '').trim()
+        item.agentId === hostAgentId
         && !['settled', 'failed'].includes(item.phase)
         && ((item.targetRuntimeId && item.targetRuntimeId === entry.runtimeId)
           || (item.targetSessionId && item.targetSessionId === entry.sessionId)
@@ -276,14 +270,56 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // a child entry (which happens when pickPrimaryAgentRuntime selects the same
   // runtime as the prebuilt's primary), the child entry wins and its createdAt
   // is preserved instead of being shadowed by the synthetic's null createdAt.
+  //
+  // 会话级身份路由：投影条目（agentId ≠ id，如 programming-helper:coder）只收集
+  // sessionType='coder' 的子项，且不合成镜像条目（宿主 runtime 是 main 会话的）；
+  // 宿主条目排除 coder 会话子项（它们归投影条目）。
+  const isProjectionEntry = String(prebuiltAgent?.agentId || '').trim()
+    && String(prebuiltAgent.agentId).trim() !== String(prebuiltAgent.id || '').trim();
+  const childSessionType = isProjectionEntry
+    ? String(prebuiltAgent.sessionType || '').trim() || 'main'
+    : null;
+  const childRuntimeIds = new Set();
+  const expectedSidebarEntryId = String(prebuiltAgent?.id || '').trim();
   agents
-    .filter((agent) => agent.source !== 'prebuilt' && String(agent.parent_id || '').trim() === String(prebuiltAgent.id || '').trim())
-    .forEach((agent) => addEntry(buildChildRuntimeEntry(agent)));
+    .filter((agent) => {
+      if (agent.source === 'prebuilt') return false;
+      if (String(agent.parent_id || '').trim() !== hostAgentId) return false;
+      // sidebar_entry_id is the explicit presentation owner. Keep the
+      // sessionType fallback for older runtime snapshots during a refresh.
+      const sidebarEntryId = String(agent.sidebar_entry_id || '').trim();
+      if (sidebarEntryId && sidebarEntryId !== expectedSidebarEntryId) return false;
+      if (childSessionType && String(agent.sessionType || 'main') !== childSessionType) return false;
+      if (!childSessionType && String(agent.sessionType || '') === 'coder') return false;
+      return true;
+    })
+    .forEach((agent) => {
+      const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
+      if (runtimeId) childRuntimeIds.add(runtimeId);
+      addEntry(buildChildRuntimeEntry(agent));
+    });
 
-  addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+  // The host snapshot may point at whichever session was most recently started.
+  // If that runtime is already represented by a child entry, do not synthesize it
+  // again under the host row; otherwise a coder runtime appears as a PH mirror.
+  if (!isProjectionEntry) {
+    const syntheticRuntimeId = String(
+      prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || ''
+    ).trim();
+    if (!syntheticRuntimeId || !childRuntimeIds.has(syntheticRuntimeId)) {
+      addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+    }
+  }
 
+  // 会话身份路由：宿主与投影条目共享 hostAgentId，operation 必须再按
+  // sessionType 分流——宿主条目只收 main 会话的 operation，投影条目只收
+  // 自身份（coder）的。否则同一占位会在两个条目下镜像。
+  const expectedOperationSessionType = isProjectionEntry ? (childSessionType || 'main') : 'main';
   const operations = typeof listSidebarOperations === 'function'
-    ? listSidebarOperations((operation) => operation.agentId === prebuiltAgent.id)
+    ? listSidebarOperations((operation) => (
+      operation.agentId === hostAgentId
+      && String(operation.sessionType || 'main') === expectedOperationSessionType
+    ))
     : [];
   for (const operation of operations) {
     if (['settled', 'failed'].includes(operation.phase)) continue;
@@ -303,7 +339,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       } else if (operation.sourceRuntimeId && !['degraded'].includes(operation.phase)) {
         addEntry({
           id: `operation:${operation.operationId}`,
-          ownerId: prebuiltAgent.id,
+          ownerId: hostAgentId,
           runtimeId: operation.sourceRuntimeId,
           sessionId: operation.sourceSessionId,
           name: operation.title || operation.sourceSessionId,
@@ -328,12 +364,13 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // Programming-helper groups every runtime by project. Its operation creator
     // must provide this identity explicitly; never infer it from a current or
     // historical session, because either can belong to another project.
-    if ((String(prebuiltAgent?.id || '').trim() === 'programming-helper' || String(prebuiltAgent?.id || '').trim() === 'coder') && !operation.projectDir) continue;
+    // Guard by hostAgentId so the coder projection entry is covered too.
+    if (hostAgentId === 'programming-helper' && !operation.projectDir) continue;
 
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
       addEntry({
         id: `operation:${operation.operationId}`,
-        ownerId: prebuiltAgent.id,
+        ownerId: hostAgentId,
         runtimeId: `operation:${operation.operationId}`,
         sessionId: operation.targetSessionId || operation.sourceSessionId,
         name: getSidebarOperationFailureName(operation),
@@ -355,7 +392,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     const pendingName = getSidebarOperationPendingName(operation);
     addEntry({
       id: `operation:${operation.operationId}`,
-      ownerId: prebuiltAgent.id,
+      ownerId: hostAgentId,
       runtimeId: `operation:${operation.operationId}`,
       sessionId: operation.targetSessionId || operation.sourceSessionId,
       name: pendingName,

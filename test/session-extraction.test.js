@@ -44,10 +44,9 @@ function makeMockHelpersCtx() {
 function makeMockRoutesCtx() {
   const noop = async () => {};
   const ctx = {
-    // 21 session-helper functions
+    // 18 session-helper functions
     activatePrebuiltSession: noop,
     archivePrebuiltSession: noop,
-    buildExplorationHandoffPayload: noop,
     buildSessionTrimPreview: noop,
     compactAndResumeCurrentSession: noop,
     compactAndResumeFromProvidedSummary: noop,
@@ -59,17 +58,15 @@ function makeMockRoutesCtx() {
     findSessionSummary: noop,
     findSessionSummaryPath: noop,
     listPrebuiltSessions: noop,
-    lockExplorationSession: noop,
     requirePrebuiltAgentForRuntime: noop,
     requirePrebuiltSessionRecord: noop,
     resolvePrebuiltSessionOwner: noop,
     searchSessionsContent: noop,
     tagPrebuiltSessionTodo: noop,
     writeSyntheticHandoff: noop,
-    // 5 server.js lifecycle functions
+    // 4 server.js lifecycle functions
     requireAgentLight: noop,
     startManagedAgent: noop,
-    startOneShotAgent: noop,
     stopManagedAgent: noop,
     waitForManagedRuntimeReady: noop,
   };
@@ -105,8 +102,7 @@ const EXPECTED_HELPER_KEYS = [
   'exportContextHandoffForSession', 'createCompactedResumeFromHandoff',
   'compactAndResumeCurrentSession', 'compactAndResumeFromProvidedSummary',
   'exportProvidedSummaryHandoff', 'deletePrebuiltProject', 'resolveContextLength',
-  'lockExplorationSession', 'extractDomainsFromText',
-  'buildExplorationHandoffPayload', 'writeSyntheticHandoff', 'updateSessionIndex',
+  'updateSessionIndex',
 ];
 
 describe('createSessionHelpers', () => {
@@ -174,15 +170,12 @@ const EXPECTED_ROUTES = [
   'POST /protoclaw/generate_recap',
   'POST /protoclaw/context_handoffs/export',
   'POST /protoclaw/context_handoffs/compacted_resume',
-  'POST /protoclaw/spawn_one_shot',
-  'POST /protoclaw/resume_sub',
   'POST /protoclaw/context_handoffs/compact_and_resume',
   'POST /protoclaw/prebuilt_sessions/activate',
   'POST /protoclaw/prebuilt_sessions/delete',
   'POST /protoclaw/prebuilt_sessions/archive',
   'POST /protoclaw/prebuilt_sessions/todo',
   'POST /protoclaw/context_guard_event',
-  'GET /protoclaw/context_guard_status',
   'POST /protoclaw/session_meta_sync',
 ];
 

@@ -1175,7 +1175,6 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'session-list') return renderWorkspaceSessionList(agent, block);
   if (block.type === 'studio-projects') return renderStudioProjectsBlock(agent, block);
   if (block.type === 'coder-threads') return window.CoderThreadsUI?.render?.() || '';
-  if (block.type === 'coder-settings') return window.CoderSettingsUI?.render?.() || '';
   if (block.type === 'form') return renderWorkspaceForm(agent, block);
   if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);
   if (block.type === 'assembly-library') return renderAssemblyLibraryBlock(agent, block);
@@ -1493,10 +1492,10 @@ const featurePanels = {
     render: () => window.GenUIPanel ? window.GenUIPanel.getHtml() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
     preserveOnReRender: true,
   },
-  'force-continuation': {
-    title: () => currentLanguage === 'zh' ? '强制继续' : 'Force Continuation',
-    render: () => window.ForceContinuationPanel
-      ? window.ForceContinuationPanel.render()
+  'session-controls': {
+    title: () => currentLanguage === 'zh' ? '会话控制' : 'Session Controls',
+    render: () => window.SessionControlsPanel
+      ? window.SessionControlsPanel.render()
       : '<div class="feature-panel-empty"><div>加载中...</div></div>',
   },
 

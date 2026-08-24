@@ -117,7 +117,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
 /**
  * Read agent metadata.json and user config to resolve the model preset for a given role.
  * @param {string} agentDir - Absolute path to the agent directory
- * @param {'default'|'exploration'|'sub'|'system'} role
+ * @param {'default'|'system'} role
  * @param {{ configPath?: string, userConfigPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
  *   Test seam — production callers omit. Threaded through to resolveModelPresetLLM;
  *   userConfigPath overrides the per-agent user config location.

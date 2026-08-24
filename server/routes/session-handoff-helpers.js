@@ -25,7 +25,6 @@ import {
 } from '../context-continuity/summarized-handoff.js';
 import { runTrimTranscriptWithSummary } from '../context-continuity/trim-appended-summary.js';
 import { applyContinuityToolPolicy } from '../context-continuity/feature-continuity.js';
-import { extractDomainsFromText } from './session-helpers-pure.js';
 
 export function createSessionHandoffHelpers(deps) {
   const {
@@ -70,6 +69,8 @@ export function createSessionHandoffHelpers(deps) {
         agentRelativeDir: agent.relativeDir,
         projectRoot: PROJECT_ROOT,
         sourceSessionSnapshot,
+        signal: options.signal || null,
+        timeoutMs: options.timeoutMs,
       });
       await setSessionHasSummary(ownerAgentId, sessionId, true);
       return result;
@@ -87,6 +88,8 @@ export function createSessionHandoffHelpers(deps) {
         projectRoot: PROJECT_ROOT,
         sourceSessionSnapshot: sessionSnapshot,
         policy: applyContinuityToolPolicy(policy),
+        signal: options.signal || null,
+        timeoutMs: options.timeoutMs,
       });
       const result = await writeTrimWithSummaryHandoffPackage({
         userDataRoot: USER_DATA_ROOT,
@@ -220,9 +223,13 @@ export function createSessionHandoffHelpers(deps) {
     startRuntime = true,
     appendSummary = false,
     trace = null,
+    signal = null,
   }) {
     trace?.mark('handoff_export_started');
-    const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy, { appendSummary });
+    const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy, {
+      appendSummary,
+      signal,
+    });
     trace?.mark('handoff_exported');
     const handoffPath = cleanSessionText(exportResult?.handoffPath);
     const handoffId = cleanSessionText(exportResult?.handoff?.handoffId);
@@ -322,138 +329,11 @@ export function createSessionHandoffHelpers(deps) {
     return result;
   }
 
-  async function lockExplorationSession(agentId, sessionId, goal, response) {
-    try {
-      const domains = extractDomainsFromText(response || goal || '');
-      await updateSessionIndex(agentId, (index) => {
-        const record = index.sessions.find(s => s.id === sessionId);
-        if (!record) return index;
-        record.sessionType = 'exploration';
-        record.status = 'locked';
-        record.lockedAt = new Date().toISOString();
-        if (goal) record.goal = goal;
-        record.domains = domains;
-        record.updatedAt = new Date().toISOString();
-        return { ...index };
-      });
-      console.log(`[lockExploration] Locked session=${sessionId} domains=${domains.join(',') || '(none)'}`);
-    } catch (err) {
-      console.error(`[lockExploration] Failed for session=${sessionId}:`, err.message);
-    }
-  }
-
-  async function buildExplorationHandoffPayload(agentId, explorationIds, goal) {
-    const handoffsDir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
-
-    // --- Phase 1: Read handoff files for 交接班信息 (sourceSummary + importantFiles/Skills) ---
-    let handoffFiles = [];
-    try {
-      handoffFiles = (await fs.readdir(handoffsDir)).filter(f => f.startsWith('handoff-') && !f.startsWith('handoff-synthetic-') && f.endsWith('.json'));
-    } catch {}
-
-    const allImportantFiles = [];
-    const allImportantSkills = [];
-    const allFileRanges = {};
-    const summaryParts = [];
-
-    for (const expId of explorationIds) {
-      let bestParsed = null;
-      let bestCreatedAt = '';
-      for (const fname of handoffFiles) {
-        try {
-          const raw = await fs.readFile(path.join(handoffsDir, fname), 'utf8');
-          const parsed = JSON.parse(raw);
-          if (parsed.sourceSessionId !== expId) continue;
-          const ca = parsed.createdAt || '';
-          if (ca > bestCreatedAt) {
-            bestParsed = parsed;
-            bestCreatedAt = ca;
-          }
-        } catch {}
-      }
-      if (bestParsed) {
-        // sourceSummary (老版摘要) is part of 交接班信息
-        const summary = bestParsed.sourceSummary || bestParsed.summaryText || '';
-        if (summary) {
-          summaryParts.push(`## 探索记录 ${expId}\n${summary}`);
-        }
-        if (Array.isArray(bestParsed.compactOutput?.importantFiles)) {
-          allImportantFiles.push(...bestParsed.compactOutput.importantFiles);
-        }
-        if (Array.isArray(bestParsed.compactOutput?.importantSkills)) {
-          allImportantSkills.push(...bestParsed.compactOutput.importantSkills);
-        }
-        if (bestParsed.compactOutput?.fileRanges && typeof bestParsed.compactOutput.fileRanges === 'object') {
-          Object.assign(allFileRanges, bestParsed.compactOutput.fileRanges);
-        }
-      }
-    }
-
-    const combinedSummary = summaryParts.join('\n\n');
-
-    // --- Phase 2: Read session files for full conversation history (全量历史) ---
-    const sessionsDir = path.join(USER_DATA_ROOT, 'workspaces', sanitizeSessionFragment(agentId || 'programming-helper'), 'sessions');
-    const allSeedMessages = [];
-
-    for (const expId of explorationIds) {
-      try {
-        const sessionPath = path.join(sessionsDir, `${expId}.json`);
-        const rawSession = await fs.readFile(sessionPath, 'utf8');
-        const sessionData = JSON.parse(rawSession);
-        const messages = sessionData?.runtime?.context?.messages;
-        if (!Array.isArray(messages)) continue;
-
-        // Include user, assistant, tool messages (skip system prompts — sub-agent has its own)
-        const conversationMessages = messages
-          .filter(m => m && m.role && m.role !== 'system' && (m.content || Array.isArray(m.toolCalls)))
-          .map(m => {
-            const msg = { role: m.role, content: typeof m.content === 'string' ? m.content : '' };
-            if (typeof m.turn === 'number') msg.turn = m.turn;
-            if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) msg.toolCalls = m.toolCalls;
-            if (m.toolCallId) msg.toolCallId = m.toolCallId;
-            return msg;
-          });
-
-        if (conversationMessages.length > 0) {
-          allSeedMessages.push(...conversationMessages);
-        }
-      } catch (err) {
-        console.warn(`[buildExplorationHandoffPayload] Failed to read session ${expId}: ${err.message}`);
-      }
-    }
-
-    return {
-      packageId: `synthetic-exploration-${Date.now()}`,
-      sourceSessionId: explorationIds[0] || 'unknown',
-      sourceSummary: combinedSummary,
-      seedMessages: allSeedMessages,
-      mode: 'summary',
-      stats: { synthetic: true },
-      compactOutput: {
-        importantFiles: [...new Set(allImportantFiles)],
-        importantSkills: [...new Set(allImportantSkills)],
-        fileRanges: allFileRanges,
-      },
-    };
-  }
-
-  async function writeSyntheticHandoff(agentId, payload) {
-    const dir = path.join(USER_DATA_ROOT, 'context-handoffs', sanitizeSessionFragment(agentId || 'programming-helper'));
-    await fs.mkdir(dir, { recursive: true });
-    const fileName = `handoff-synthetic-${Date.now()}.json`;
-    const filePath = path.join(dir, fileName);
-    await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
-    return filePath;
-  }
-
   return {
     exportContextHandoffForSession,
     createCompactedResumeFromHandoff,
     compactAndResumeCurrentSession,
     compactAndResumeFromProvidedSummary,
     exportProvidedSummaryHandoff,
-    lockExplorationSession,
-    buildExplorationHandoffPayload,
-    writeSyntheticHandoff,
   };
 }

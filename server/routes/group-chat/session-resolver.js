@@ -87,20 +87,7 @@ export function createSessionResolverModule(deps) {
       (typeof options.openDirectory === 'string' && options.openDirectory.trim())
       || chat.workDir
       || undefined;
-  
-    // one-shot: 总是创建新 session（resolveOnly 模式下不创建）
-    if (sessionModel === 'one-shot') {
-      if (options.resolveOnly) return null;
-      const agent = await requireAgentLight(workspaceId);
-      const taskTitle = explicitTitle || adminSessionTitle;
-      const session = await createPrebuiltSession(agent.id, {
-        sessionType: 'exploration',
-        ...(sessionOpenDir ? { openDirectory: sessionOpenDir } : {}),
-        ...(taskTitle ? { taskTitle } : {}),
-      });
-      return { sessionId: session.id, isNew: true };
-    }
-  
+
     // 指定会话：管理员或用户通过 targetSessionId 精准路由
     if (options.targetSessionId) {
       const index = await readSessionIndex(workspaceId);

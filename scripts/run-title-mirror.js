@@ -46,6 +46,15 @@ const TITLE_TOOL = {
 const LLM_RETRY_BASE_MS = 1000;
 const LLM_MAX_RETRIES = 3;
 
+// Windows 上 process.exit 的 libuv 清理阶段会与 undici keep-alive socket 的
+// 关闭竞态触发 fail-fast 断言（uv_async.c，两个空闲连接即确定性复现）。
+// 结果已同步落盘，设置退出码后让事件循环自然排空退出（空闲 socket 不阻止
+// 退出）；残留句柄未清理时由兜底定时器强制退出，此时退出码已无业务含义。
+function exitGracefully(code) {
+  process.exitCode = code;
+  setTimeout(() => process.exit(code), 5000).unref();
+}
+
 function _isTransientLLMError(error) {
   const msg = String(error?.message || error || '').toLowerCase();
   if (/\b(429|rate.?limit|too many requests)\b/.test(msg)) return true;
@@ -187,7 +196,8 @@ async function main() {
         source: result.source || 'model',
       };
       writeFileSync(resultPath, `${JSON.stringify(payload)}\n`, 'utf8');
-      process.exit(0);
+      exitGracefully(0);
+      return;
     } catch (error) {
       lastFailure = error;
       logPhase(`attempt ${attempt}/${maxAttempts} failed: ${error?.message || error}`);
@@ -205,5 +215,5 @@ async function main() {
 main().catch((error) => {
   const message = error instanceof Error ? error.stack || error.message : String(error);
   process.stderr.write(`[title-mirror] fatal: ${message}\n`);
-  process.exit(1);
+  exitGracefully(1);
 });

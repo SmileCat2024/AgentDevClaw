@@ -51,7 +51,7 @@ function renderWorkspaceSessionList(agent, block) {
     return _renderAgentCreatorSessionList(agent, block, ctx);
   }
 
-  if (agent?.id === 'programming-helper' || agent?.id === 'coder') {
+  if (agent?.id === 'programming-helper') {
     return _renderProgrammingHelperSessionList(agent, block, ctx);
   }
 
@@ -252,7 +252,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const wsState = getAgentWorkspaceState(agent);
   const currentOpenDir = String(wsState?.openDirectory || '').trim();
   const isZh = currentLanguage === 'zh';
-  const agentName = isZh ? '编程小助手' : 'Programming Helper';
+  const agentName = isZh ? '智能编码空间' : 'Intelligent Coding Space';
 
   // Determine current project — match by normalized id, not raw openDirectory,
   // because workspace_state.openDirectory and project.openDirectory may use
@@ -364,9 +364,10 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       openDirectory: currentProject?.openDirectory || '',
     }));
 
-    // 目录设置按钮（共享配置编辑器，编辑当前目录的目录层）
-    const dirConfigBtn = (typeof phDirConfigButtonHtml === 'function')
-      ? phDirConfigButtonHtml(agent) : '';
+    // 目录设置按钮（共享配置编辑器，编辑当前目录的目录层）；
+    // 目录由当前项目显式传入，避免运行时二次查询 workspace_state 失效
+    const dirConfigBtn = (currentProject && typeof phDirConfigButtonHtml === 'function')
+      ? phDirConfigButtonHtml(agent, currentProject.openDirectory) : '';
 
     const headerBar = [
       '<div class="ph-project-bar">',
@@ -389,31 +390,22 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-welcome">',
       '<div class="ph-welcome-icon">&#128193;</div>',
       '<div class="ph-welcome-title">' + (isZh ? '打开一个项目开始编程' : 'Open a project to start coding') + '</div>',
-      '<div class="ph-welcome-desc">' + (isZh ? '选择一个本地文件夹作为工作目录，编程小助手将在该项目中协助你。' : 'Select a local folder as your workspace. The assistant will help you code within the project.') + '</div>',
+      '<div class="ph-welcome-desc">' + (isZh ? '选择一个本地文件夹作为工作目录，智能编码空间将在该项目中协助你。' : 'Select a local folder as your workspace. The assistant will help you code within the project.') + '</div>',
       '</div>',
       '</section>',
     ].join('');
   }
 
   // Project is active - show its sessions with tabs
-  const mainSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.sessionType !== 'exploration' && s.sessionType !== 'sub' && s.archived !== true));
+  const mainSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.archived !== true));
   const archivedSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.archived === true));
-  const explorationSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.sessionType === 'exploration'));
-  const subSessions = sortPhSessionsByMode(currentProject.sessions.filter(s => s.sessionType === 'sub'));
   const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
 
   const renderPhSessionItem = (session, type) => {
     const sType = type || session.sessionType || 'main';
-    const isExplorationOrSub = sType === 'exploration' || sType === 'sub';
     // Primary action button + ⋯ more menu button (equivalent to right-click ctx-menu)
-    let primaryBtn = '';
-    if (isExplorationOrSub) {
-      const viewAction = escapeHtml(JSON.stringify({ type: 'view_session_record', sessionId: session.id, agentId: agent.id, sessionType: sType }));
-      primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + viewAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_view_record')) + '</button>';
-    } else {
-      const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
-      primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>';
-    }
+    const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
+    const primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>';
     const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" onclick="window.phShowSessionCtxMenu(event, this, \'' + escapeHtml(agent.id) + '\', \'' + escapeHtml(session.id) + '\', \'' + escapeHtml(sType) + '\')"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
     const buttonsHtml = [primaryBtn, moreBtn].join('');
     // Build compact time indicator for title-row left side (only within this week)
@@ -435,7 +427,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       renderSessionTitleAiButton(session),
       '</div>',
       '<div class="workspace-history-meta">' + escapeHtml(formatWorkspaceDate(session.updatedAt)) + ' · ' + escapeHtml(String(session.messageCount ?? 0)) + ' ' + escapeHtml(isZh ? '条消息' : 'messages') + '</div>',
-      sType !== 'exploration' && session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
+      session.preview ? '<div class="workspace-history-preview">' + escapeHtml(session.preview) + '</div>' : '',
       renderSessionTokenBar(session, agent),
       '</div>',
       '<div class="workspace-history-side">',
@@ -467,13 +459,13 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     const tabId = 'ph-tab-' + escapeHtml(agent.id) + '-' + escapeHtml(currentProject.id);
     const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
     const isSearching = phSearchQuery.trim().length > 0;
+    const coderCount = (typeof window.CoderThreadsUI?.countFor === 'function') ? window.CoderThreadsUI.countFor(currentProject.openDirectory) : 0;
     sessionsHtml += '<div class="ph-session-tabs' + (isSearching ? ' searching' : '') + '" data-tab-group="' + tabId + '">';
     sessionsHtml += '<div class="ph-session-tab-bar">';
     sessionsHtml += '<div class="ph-session-tabs-row">';
     sessionsHtml += '<button class="ph-session-tab' + (isSearching ? '' : ' active') + '" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainSessions.length)) + '</span></button>';
     sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedSessions.length)) + '</span></button>';
-    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="exploration" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_exploration_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(explorationSessions.length)) + '</span></button>';
-    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="sub" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_sub_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(subSessions.length)) + '</span></button>';
+    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="coder" onclick="window.switchPhSessionTab(this)">Coder <span class="ph-tab-count">' + escapeHtml(String(coderCount)) + '</span></button>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-toolbar">';
     sessionsHtml += '<div class="ph-session-search-inline">';
@@ -487,8 +479,10 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<div class="ph-session-tab-panels">';
     sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? renderPhSessionsWithGroups(mainSessions, 'main') : mainEmptyNote) + '</div></div>';
     sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="archived"><div class="feature-project-session-list">' + (archivedSessions.length > 0 ? renderPhSessionsWithGroups(archivedSessions, 'archived') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
-    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="exploration"><div class="feature-project-session-list">' + (explorationSessions.length > 0 ? renderPhSessionsWithGroups(explorationSessions, 'exploration') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
-    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="sub"><div class="feature-project-session-list">' + (subSessions.length > 0 ? renderPhSessionsWithGroups(subSessions, 'sub') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+    const coderPanelHtml = (typeof window.CoderThreadsUI?.render === 'function')
+      ? window.CoderThreadsUI.render({ projectDir: currentProject.openDirectory })
+      : '';
+    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="coder">' + coderPanelHtml + '</div>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-search-panel">';
     sessionsHtml += (typeof window._buildPhSearchPanelHtml === 'function' ? window._buildPhSearchPanelHtml(agent.id) : '');

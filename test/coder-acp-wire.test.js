@@ -73,6 +73,39 @@ function startMockClawServer() {
         }
         return;
       }
+      if (req.method === 'GET' && /\/protoclaw\/acp\/coder\/sessions\/[^/]+\/history$/.test(req.url || '')) {
+        // head 会话的投影历史（server 已过滤 system / reasoning / 内部字段）
+        send(200, {
+          ok: true,
+          sessionId: 'claw-wire-1',
+          messages: [
+            { role: 'user', content: 'wire replay task' },
+            { role: 'assistant', content: '', toolCalls: [{ id: 'wcall-1', name: 'bash', arguments: { command: 'ls' } }] },
+            { role: 'tool', toolCallId: 'wcall-1', content: 'file-a\nfile-b' },
+            { role: 'assistant', content: 'replayed answer' },
+          ],
+        });
+        return;
+      }
+      if (req.method === 'GET' && req.url?.startsWith('/protoclaw/acp/coder/sessions')) {
+        send(200, {
+          ok: true,
+          threads: [
+            { threadId: 'thread-wire', sessionId: 'claw-wire-1', cwd: 'D:/work', title: 'wire task', updatedAt: '2026-08-24T00:00:00.000Z' },
+            { threadId: 'thread-wire-2', sessionId: 'claw-wire-2', cwd: 'D:/work2', title: null, updatedAt: null },
+          ],
+        });
+        return;
+      }
+      if (req.method === 'POST' && /^\/protoclaw\/acp\/coder\/sessions\/[^/]+\/resume$/.test(req.url || '')) {
+        if (body?.cwd && body.cwd !== 'D:/work') {
+          send(403, { ok: false, code: 'cwd_mismatch', message: `session belongs to D:/work, not ${body.cwd}` });
+          return;
+        }
+        // 成员会话 claw-wire-old → head claw-wire-1（线程视角解析）
+        send(200, { ok: true, clawSessionId: 'claw-wire-1', threadId: 'thread-wire', viewerAgentId: 'vw-1', cwd: 'D:/work' });
+        return;
+      }
       if (req.method === 'POST' && req.url === '/protoclaw/threads/thread-wire/commands') {
         send(201, { ok: true, duplicate: false, delivery: { delivered: true } });
         return;
@@ -91,8 +124,8 @@ function startMockClawServer() {
         send(200, { ok: true, clawSessionId: 'claw-wire-1', viewerAgentId: 'vw-1' });
         return;
       }
-      if (req.method === 'POST' && req.url === '/protoclaw/threads/thread-wire/close') {
-        send(200, { ok: true, thread: { threadId: 'thread-wire', status: 'closed' } });
+      if (req.method === 'POST' && req.url === '/protoclaw/threads/thread-wire/archive') {
+        send(200, { ok: true, threadId: 'thread-wire', archivedAt: 1 });
         return;
       }
       send(404, { ok: false, code: 'not_found', message: req.url });
@@ -231,7 +264,10 @@ describe('coder ACP adapter wire protocol', () => {
         params: { protocolVersion: 1, clientCapabilities: {} },
       });
       assert.equal(init.error, undefined);
-      assert.equal(init.result.agentCapabilities.loadSession, false);
+      assert.equal(init.result.agentCapabilities.loadSession, true);
+      assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.resume, {});
+      assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.list, {});
+      assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.close, {});
       assert.equal(init.result.agentCapabilities.promptCapabilities.image, false);
       assert.deepEqual(init.result.agentCapabilities.close, {});
       assert.equal(init.result.agentInfo.name, 'agentdevclaw-coder-acp');
@@ -276,9 +312,8 @@ describe('coder ACP adapter wire protocol', () => {
       });
       assert.equal(closed.error, undefined);
       assert.deepEqual(closed.result, {});
-      const closeReq = claw.record.requests.find((r) => r.url === '/protoclaw/threads/thread-wire/close');
-      assert.ok(closeReq, 'close request missing');
-      assert.equal(closeReq.body.reason, 'acp session/close');
+      const closeReq = claw.record.requests.find((r) => r.url === '/protoclaw/threads/thread-wire/archive');
+      assert.ok(closeReq, 'archive request missing');
 
       // stdout 纯度：每行都是 JSON-RPC 帧（jsonrpc === '2.0'），无日志混入
       assert.deepEqual(adapter.parseFailures, []);
@@ -347,6 +382,149 @@ describe('coder ACP adapter wire protocol', () => {
       const updates = adapter.notifications.filter((n) => n.method === 'session/update');
       assert.equal(updates.length, 1);
       assert.equal(updates[0].params.update.sessionUpdate, 'user_message_chunk');
+    } finally {
+      await adapter.end();
+    }
+    assert.equal(adapter.exitCode, 0);
+  });
+
+  it('session/list returns thread-view sessions; session/resume rebinds to the thread head and prompts land on it', { timeout: 15_000 }, async () => {
+    const adapter = new AdapterProcess(`http://127.0.0.1:${port}`);
+    try {
+      await adapter.request({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: 1, clientCapabilities: {} },
+      });
+
+      // list：返回 server 线程视角 payload，sessionId 即持久 Claw sessionId
+      const listed = await adapter.request({
+        jsonrpc: '2.0', id: 2, method: 'session/list',
+        params: {},
+      });
+      assert.equal(listed.error, undefined);
+      assert.equal(listed.result.sessions.length, 2);
+      assert.deepEqual(
+        listed.result.sessions[0],
+        {
+          sessionId: 'claw-wire-1',
+          cwd: 'D:/work',
+          title: 'wire task',
+          updatedAt: '2026-08-24T00:00:00.000Z',
+          _meta: { claw: { threadId: 'thread-wire' } },
+        },
+      );
+      // 无标题 / 无更新时间的条目省略可选字段
+      assert.equal(listed.result.sessions[1].sessionId, 'claw-wire-2');
+      assert.ok(!('title' in listed.result.sessions[1]));
+      assert.ok(!('updatedAt' in listed.result.sessions[1]));
+
+      // resume 成员旧会话 → 协议 ID 解析为线程 head 的持久 ID
+      const resumed = await adapter.request({
+        jsonrpc: '2.0', id: 3, method: 'session/resume',
+        params: { sessionId: 'claw-wire-old', cwd: 'D:/work' },
+      });
+      assert.equal(resumed.error, undefined);
+      assert.deepEqual(resumed.result, { sessionId: 'claw-wire-1' });
+
+      // resume 后 prompt 直接落在解析出的 head 上：命令投递到 thread-wire
+      const promptPromise = adapter.request({
+        jsonrpc: '2.0', id: 4, method: 'session/prompt',
+        params: { sessionId: resumed.result.sessionId, prompt: [{ type: 'text', text: 'continue after resume' }] },
+      });
+      await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          if (claw.record.requests.some((r) => r.url === '/protoclaw/threads/thread-wire/commands' && r.body?.text === 'continue after resume')) {
+            clearInterval(poll);
+            resolve();
+          }
+        }, 10);
+      });
+      // 用户回显标的是 resume 返回的协议 ID
+      const echo = await adapter.waitForUpdate((n) => n.method === 'session/update');
+      assert.equal(echo.params.sessionId, 'claw-wire-1');
+
+      // cancel 掉这个 prompt（mock 不产终态事件），避免用例悬挂
+      adapter.notify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 'claw-wire-1' } });
+      const prompt = await promptPromise;
+      assert.equal(prompt.error, undefined);
+      assert.equal(prompt.result.stopReason, 'cancelled');
+
+      // cwd 不一致 → -32003（server 403 cwd_mismatch 透传）
+      const mismatch = await adapter.request({
+        jsonrpc: '2.0', id: 5, method: 'session/resume',
+        params: { sessionId: 'claw-wire-1', cwd: 'D:/elsewhere' },
+      });
+      assert.equal(mismatch.error.code, -32003);
+      assert.equal(mismatch.error.data.server.code, 'cwd_mismatch');
+    } finally {
+      await adapter.end();
+    }
+    assert.equal(adapter.exitCode, 0);
+  });
+
+  it('session/load replays head history as ordered session/update notifications and lands prompts on the head', { timeout: 15_000 }, async () => {
+    const adapter = new AdapterProcess(`http://127.0.0.1:${port}`);
+    try {
+      const init = await adapter.request({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: 1, clientCapabilities: {} },
+      });
+      // 能力声明：历史回放开门
+      assert.equal(init.result.agentCapabilities.loadSession, true);
+
+      // load 成员旧会话：控制面 resume 解析 head，数据面回放 head 历史
+      // （协议要求 load 请求必带 mcpServers——空数组）
+      const loaded = await adapter.request({
+        jsonrpc: '2.0', id: 2, method: 'session/load',
+        params: { sessionId: 'claw-wire-old', cwd: 'D:/work', mcpServers: [] },
+      });
+      assert.equal(loaded.error, undefined);
+      assert.deepEqual(loaded.result, { sessionId: 'claw-wire-1' });
+
+      // 历史读取请求的是 head（不是请求 ID）
+      assert.ok(claw.record.requests.some(
+        (r) => r.method === 'GET' && r.url === '/protoclaw/acp/coder/sessions/claw-wire-1/history',
+      ));
+
+      // 回放通知按序到达，sessionId 均为 head 协议 ID
+      const replay = [];
+      for (let i = 0; i < 4; i += 1) {
+        const n = await adapter.waitForUpdate(
+          (x) => x.method === 'session/update' && x.params.sessionId === 'claw-wire-1'
+            && !replay.some((r) => r === x),
+        );
+        replay.push(n);
+      }
+      assert.deepEqual(replay.map((n) => n.params.update.sessionUpdate), [
+        'user_message_chunk',
+        'tool_call',
+        'tool_call_update',
+        'agent_message_chunk',
+      ]);
+      assert.deepEqual(replay[0].params.update.content, { type: 'text', text: 'wire replay task' });
+      assert.equal(replay[1].params.update.toolCallId, 'wcall-1');
+      assert.equal(replay[1].params.update.kind, 'execute');
+      assert.equal(replay[2].params.update.status, 'completed');
+      assert.deepEqual(replay[2].params.update.content, [{ type: 'text', text: 'file-a\nfile-b' }]);
+      assert.deepEqual(replay[3].params.update.content, { type: 'text', text: 'replayed answer' });
+
+      // load 后 prompt 落在 head 上
+      const promptPromise = adapter.request({
+        jsonrpc: '2.0', id: 3, method: 'session/prompt',
+        params: { sessionId: 'claw-wire-1', prompt: [{ type: 'text', text: 'continue after load' }] },
+      });
+      await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          if (claw.record.requests.some((r) => r.url === '/protoclaw/threads/thread-wire/commands' && r.body?.text === 'continue after load')) {
+            clearInterval(poll);
+            resolve();
+          }
+        }, 10);
+      });
+      adapter.notify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 'claw-wire-1' } });
+      const prompt = await promptPromise;
+      assert.equal(prompt.error, undefined);
+      assert.equal(prompt.result.stopReason, 'cancelled');
     } finally {
       await adapter.end();
     }

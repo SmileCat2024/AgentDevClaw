@@ -46,6 +46,20 @@ window.phOpenModelConfig = async () => {
     }
   }
   window.phModelConfigAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
+  // coder 身份的模型配置存 agent-configs/coder.json（运行时同源读取），
+  // 与主身份分开拉取；面板渲染与保存共用这份缓存。
+  if (window.phModelConfigAgentId === 'programming-helper'
+    && !(window.ClawFW && window.ClawFW._coderModelPresets)) {
+    try {
+      const resp = await fetch('/protoclaw/agent_model_presets?agentId=coder');
+      const data = resp.ok ? await resp.json() : null;
+      if (window.ClawFW) {
+        window.ClawFW._coderModelPresets = (data && data.modelPresets) || {};
+      }
+    } catch (e) {
+      console.error('Failed to load coder presets:', e);
+    }
+  }
   renderPhModelConfigOverlay(agent, presets);
 };
 
@@ -60,8 +74,8 @@ window.phAutoSaveModelConfig = async () => {
   const agentId = window.phModelConfigAgentId;
   if (!agentId) return;
   const selects = document.querySelectorAll('#ph-model-config-host .ph-mc-select');
-  const modelPresets = { default: null, exploration: null, sub: null, system: null };
-  
+  const modelPresets = { default: null, system: null };
+
   // 收集所有select的值
   const collected = {};
   selects.forEach(function(sel) {
@@ -71,7 +85,7 @@ window.phAutoSaveModelConfig = async () => {
     if (!collected[role]) collected[role] = {};
     collected[role][slot || 'primary'] = sel.value || null;
   });
-  
+
   // 构建最终格式：default用双槽位，其他角色用单值
   for (const role of Object.keys(modelPresets)) {
     const data = collected[role] || {};
@@ -89,7 +103,11 @@ window.phAutoSaveModelConfig = async () => {
       modelPresets[role] = data.primary || null;
     }
   }
-  
+
+  // coder 行单独保存到 agent-configs/coder.json 的 default 角色
+  // （运行时按 sessionType=coder 读取该文件）；面板无 coder 行时跳过
+  const hasCoderRow = Object.prototype.hasOwnProperty.call(collected, 'coder');
+
   try {
     const resp = await fetch('/protoclaw/agent_model_presets', {
       method: 'PUT',
@@ -100,9 +118,6 @@ window.phAutoSaveModelConfig = async () => {
     if (result.ok) {
       const agent = getCurrentAgentRecord();
       if (agent) agent.modelPresets = modelPresets;
-      // 刷新覆层以更新 info 文本
-      const presets = window.ClawFW?._modelPresets || [];
-      if (agent) renderPhModelConfigOverlay(agent, presets);
       try {
         const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(agentId));
         if (freshRes.ok) {
@@ -113,8 +128,24 @@ window.phAutoSaveModelConfig = async () => {
           });
         }
       } catch (e) { /* ignore refresh error */ }
-      renderCurrentMainView();
     }
+    if (hasCoderRow) {
+      const coderPreset = collected.coder.primary || null;
+      const coderResp = await fetch('/protoclaw/agent_model_presets', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId: 'coder', modelPresets: { default: coderPreset } }),
+      });
+      const coderResult = await coderResp.json();
+      if (coderResult.ok && window.ClawFW) {
+        window.ClawFW._coderModelPresets = { default: coderPreset };
+      }
+    }
+    // 刷新覆层以更新 info 文本
+    const presets = window.ClawFW?._modelPresets || [];
+    const agent = getCurrentAgentRecord();
+    if (agent) renderPhModelConfigOverlay(agent, presets);
+    renderCurrentMainView();
   } catch (e) {
     console.error('Failed to save model preset:', e);
   }

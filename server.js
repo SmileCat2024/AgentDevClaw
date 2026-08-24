@@ -98,6 +98,7 @@ import { getThreadControl } from './server/thread-control/thread-controller.js';
 import { getThreadIntegration } from './server/thread-control/thread-integration.js';
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
+import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
 import { setupAcpRoutes } from './server/routes/acp.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { createThreadRotationService } from './server/thread-control/thread-rotation.js';
@@ -173,7 +174,7 @@ const agentLifecycle = createAgentLifecycleModule({
 const {
   getConnectedAgents, waitForProcessExit,
   waitForManagedRuntimeReady, waitForAssemblyRuntimeReady,
-  startManagedAgent, startOneShotAgent, startAssemblyRuntime,
+  startManagedAgent, startAssemblyRuntime,
   stopManagedAgent,
 } = agentLifecycle;
 
@@ -242,13 +243,12 @@ const {
   cleanupEmptySessions, listPrebuiltSessions, buildSessionModelInfoMap,
   createPrebuiltSession, activatePrebuiltSession, deletePrebuiltSession,
   archivePrebuiltSession, tagPrebuiltSessionTodo, requirePrebuiltSessionRecord,
+  readSessionSnapshotForContinuity,
   resolvePrebuiltSessionOwner, requirePrebuiltAgentForRuntime,
   exportContextHandoffForSession, createCompactedResumeFromHandoff,
   compactAndResumeCurrentSession, compactAndResumeFromProvidedSummary,
   exportProvidedSummaryHandoff, deletePrebuiltProject,
   resolveContextLength,
-  lockExplorationSession, extractDomainsFromText,
-  buildExplorationHandoffPayload, writeSyntheticHandoff,
 } = sessionHelpers;
 
 // 打破 agent-discovery ↔ session-helpers 循环依赖
@@ -258,11 +258,25 @@ Object.assign(sessionApi, {
   buildLightPrebuiltSessionRecord,
 });
 
+const threadControl = getThreadControl();
+const threadIntegration = getThreadIntegration();
+const threadLifecycle = createThreadLifecycleService({
+  control: threadControl,
+  interruptSession: async (agentId, sessionId) => {
+    const runtime = getAgentRuntime(agentId, sessionId);
+    const viewerAgentId = runtime?.viewerAgentId;
+    if (!viewerAgentId) return { status: 'not_running' };
+    const response = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/interrupt`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Viewer interrupt returned ${response.status}`);
+    return { status: 'interrupted', viewerAgentId };
+  },
+  stopSession: stopManagedAgent,
+});
 const threadRotation = createThreadRotationService({
   sessionApi: sessionHelpers,
   stopManagedAgent,
-  threadIntegration: getThreadIntegration(),
-  threadControl: getThreadControl(),
+  threadIntegration,
+  threadControl,
 });
 
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──
@@ -358,7 +372,6 @@ setupSessionRoutes(app, express, {
   // Agent lifecycle
   requireAgentLight,
   startManagedAgent,
-  startOneShotAgent,
   stopManagedAgent,
   waitForManagedRuntimeReady,
   // Group chat lineage callback
@@ -366,6 +379,7 @@ setupSessionRoutes(app, express, {
   notifySessionArchived,
   clearUISurfaces: (viewerAgentId) => getUISurfaceStore().clearAgent(viewerAgentId),
   threadRotation,
+  threadLifecycle,
 });
 
 // ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
@@ -461,9 +475,17 @@ setupUsageRoutes(app, express);
 setupUISurfaceRoutes(app, express);
 
 // ── Work Threads → server/thread-control/（coder 宿主已启用线程承接）──
-setupThreadRoutes(app, express, { control: getThreadControl() });
+setupThreadRoutes(app, express, {
+  control: threadControl,
+  lifecycle: threadLifecycle,
+  // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null
+  resolveSessionOpenDirectory: async (agentId, sessionId) => {
+    const record = await requirePrebuiltSessionRecord(agentId, sessionId);
+    return cleanSessionText(record?.openDirectory) || null;
+  },
+});
 
-// ── ACP 支撑路由（coder 原子创建 + 精确中断，ticket 018）──
+// ── ACP 支撑路由（coder 原子创建 + 精确中断 + list/resume，ticket 018）──
 setupAcpRoutes(app, express, {
   requireAgentLight,
   createPrebuiltSession,
@@ -471,8 +493,10 @@ setupAcpRoutes(app, express, {
   startManagedAgent,
   stopManagedAgent,
   waitForManagedRuntimeReady,
-  threadIntegration: getThreadIntegration(),
-  threadControl: getThreadControl(),
+  threadIntegration,
+  threadControl,
+  requirePrebuiltSessionRecord,
+  readSessionSnapshotForContinuity,
 });
 // runtime 就绪补投：succession 时刻 runtime 未就绪而保持 pending 的指令，
 // 在 head runtime 真正 ready 时重试（设计 §5 的最后一个投递触发点）。

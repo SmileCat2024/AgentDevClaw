@@ -162,7 +162,7 @@ export async function exportHistoryOnlyHandoffPackage({
  * 组合语义（裁剪 + 摘要追加）由框架 TrimTranscriptWithSummaryTransformation
  * 产出；本函数只做 Claw 落盘格式化（handoff JSON v1），字段与
  * exportHistoryOnlyHandoffPackage 保持同构，消费方（compacted resume、
- * HandoffSeedFeature、exploration payload）不感知差异。
+ * HandoffSeedFeature）不感知差异。
  */
 export async function writeTrimWithSummaryHandoffPackage({
   userDataRoot,

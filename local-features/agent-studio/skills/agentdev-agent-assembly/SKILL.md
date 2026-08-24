@@ -53,7 +53,7 @@ export default class TicketAgent extends BasicAgent {
 - 顶层 `import { BasicAgent } from 'agentdev'` 是合法且预期的：消费端会把 Agent 源码复制进隔离运行环境（agent-source/），依赖在该环境内解析，Agent 项目本身不需要 node_modules。
 - 导出形式用 `export default class`（宿主按 default 导出或唯一函数导出解析 Agent 类）。
 
-参照警告：`agents/coder` 是 built-in 静态装配形态（自己 import 并 use() 全部 Feature、metadata 不含 features 字段），**不能**作为 standalone 模板照抄。
+参照警告：prebuilt agent（`prebuilt-agents/*/*/agent.js`）是静态装配形态——自己 import 并 use() 全部 Feature、metadata 不含 features 字段，**不能**作为 standalone 模板照抄。
 
 ## standalone metadata 模板
 

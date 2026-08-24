@@ -83,7 +83,8 @@ function getCurrentAgentRecord() {
 }
 
 function groupConnectedAgents(agents) {
-  const TOOL_AGENT_IDS = new Set(['programming-helper', 'coder']);
+  // 左侧分类使用 sidebarGroup；agentId 只描述真实运行宿主。
+  const TOOL_AGENT_IDS = new Set(['programming-helper']);
   const WORK_GROUP_IDS = new Set(['work-group']);
   const prebuiltIds = new Set(
     agents
@@ -97,10 +98,19 @@ function groupConnectedAgents(agents) {
     return !parentId || !prebuiltIds.has(parentId);
   });
   const allPrebuilt = agents.filter((agent) => agent.source === 'prebuilt');
+  // 投影条目（id 形如 'programming-helper:coder'）按宿主 agentId 归组
+  const groupKeyOf = (agent) => String(agent.sidebarGroup || '').trim();
+  const legacyGroupKeyOf = (agent) => String(agent.agentId || agent.id || '').trim();
   return {
-    prebuilt: allPrebuilt.filter((agent) => !TOOL_AGENT_IDS.has(String(agent.id || '').trim()) && !WORK_GROUP_IDS.has(String(agent.id || '').trim())),
-    workGroup: allPrebuilt.filter((agent) => WORK_GROUP_IDS.has(String(agent.id || '').trim())),
-    tool: allPrebuilt.filter((agent) => TOOL_AGENT_IDS.has(String(agent.id || '').trim())),
+    prebuilt: allPrebuilt.filter((agent) => {
+      const group = groupKeyOf(agent);
+      const legacyGroup = legacyGroupKeyOf(agent);
+      return !['tool', 'work-group'].includes(group)
+        && !TOOL_AGENT_IDS.has(legacyGroup)
+        && !WORK_GROUP_IDS.has(legacyGroup);
+    }),
+    workGroup: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'work-group' || WORK_GROUP_IDS.has(legacyGroupKeyOf(agent))),
+    tool: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'tool' || TOOL_AGENT_IDS.has(legacyGroupKeyOf(agent))),
     external: orphanRuntimeAgents,
   };
 }
@@ -160,12 +170,19 @@ window.handlePrebuiltAgentClick = async (agentId) => {
   }
 
   if (isWorkspaceHostUnit(prebuiltAgent)) {
+    // 投影条目（如 programming-helper:coder）：详情数据挂宿主命名空间，
+    // surface 键挂条目自身（entry id），侧栏高亮与记忆也按条目记录。
+    const hostAgentId = prebuiltAgent.agentId || prebuiltAgent.id;
     focusedAgentId = agentId;
     renderAgentList();
-    if (!loadedAgentDetailIds.has(agentId)) {
+    if (!loadedAgentDetailIds.has(hostAgentId)) {
       container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
     }
-    await loadAgentDetail(prebuiltAgent.id);
+    await loadAgentDetail(hostAgentId);
+    loadedAgentDetailIds.add(agentId);
+    if (prebuiltAgent.agentId) {
+      try { localStorage.setItem('claw:lastFocusedEntryId', agentId); } catch { /* ignore */ }
+    }
     selectWorkspaceSurface(prebuiltAgent.id, { skipFeaturePanel: true });
     return;
   }
@@ -660,9 +677,11 @@ window.switchAgent = async (newAgentId) => {
       .catch(e => console.warn(e));
 
     // 焦点已前端化（服务端 current agent 语义已移除）：持久化记忆本次焦点，
-    // 供下次打开页面时恢复（sidebar-render.js 读取）。
+    // 供下次打开页面时恢复（sidebar-render.js 读取）。进入会话浏览时投影
+    // 入口记忆让位（claw:lastFocusedEntryId 只保留「停留在入口首页」的语义）。
     try {
       localStorage.setItem('claw:lastFocusedRuntimeId', runtimeAgentId);
+      localStorage.removeItem('claw:lastFocusedEntryId');
     } catch { /* localStorage 不可用时静默忽略 */ }
 
     await loadAgentData(runtimeAgentId);
@@ -1124,9 +1143,9 @@ async function runPollCycle() {
     if (activeFeaturePanel) {
       if (activeFeaturePanel === 'logs') {
         await loadLogs();
-      } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan' && activeFeaturePanel !== 'force-continuation') {
+      } else if (activeFeaturePanel !== 'resources' && activeFeaturePanel !== 'viewer' && activeFeaturePanel !== 'settings' && activeFeaturePanel !== 'plan' && activeFeaturePanel !== 'session-controls') {
         // resources/viewer 面板数据独立管理，不需要 hooks 数据，跳过以避免无谓渲染
-        // force-continuation 面板状态由模块自身的请求-应答链路维护，轮询重渲染会打断开关交互
+        // session-controls 面板状态由模块自身的请求-应答链路维护，轮询重渲染会打断开关交互
         const hooksRes = await fetch(`/api/agents/${pollRuntimeId}/hooks`);
         const nextHookInspector = normalizeHookInspector(await hooksRes.json());
         const nextSignature = getHookInspectorSignature(nextHookInspector);

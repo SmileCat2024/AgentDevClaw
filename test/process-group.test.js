@@ -83,6 +83,16 @@ describe('computeProcessGroupKey', () => {
     assert.equal(key1, key2);
   });
 
+  it('splits process groups by non-main sessionType within one agent', () => {
+    const main = computeProcessGroupKey('programming-helper', '/proj');
+    const coder = computeProcessGroupKey('programming-helper', '/proj', 'shared-by-project', 'coder');
+    const mainExplicit = computeProcessGroupKey('programming-helper', '/proj', 'shared-by-project', 'main');
+    const mainNull = computeProcessGroupKey('programming-helper', '/proj', 'shared-by-project', null);
+    assert.notEqual(main, coder);
+    assert.equal(main, mainExplicit);
+    assert.equal(main, mainNull);
+  });
+
   it('uses one stable key for shared-global across different projects', () => {
     const keyA = computeProcessGroupKey('programming-helper', 'D:/code/project-a', 'shared-global');
     const keyB = computeProcessGroupKey('programming-helper', 'D:/code/project-b', 'shared-global');

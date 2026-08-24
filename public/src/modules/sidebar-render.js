@@ -39,13 +39,13 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     const operationDegraded = entry.sidebarOperation?.phase === 'degraded';
     const targetStartDegraded = operationDegraded && entry.sidebarOperation?.errorCode === 'target_runtime_stopped';
     const justFinished = !calling && !disconnected && !restarting && _recentlyFinishedRuntimes.has(entry.runtimeId);
-    // 线程宿主的 replacement：源会话不是「正在关闭」，而是「正在交接」给接力会话；
-    // archive-close / delete 仍是真实关闭，保持原文案。
+    // 线程宿主会话（coder）的 replacement：源会话不是「正在关闭」，而是
+    // 「正在交接」给接力会话；archive-close / delete 仍是真实关闭，保持原文案。
     const isThreadRelay = retiring
       && !deleting
       && !!entry.replacementMutation
       && typeof window.isThreadHostAgentId === 'function'
-      && window.isThreadHostAgentId(ownerAgentId);
+      && window.isThreadHostAgentId(ownerAgentId, entry.sessionId);
     const zh = currentLanguage === 'zh';
     const retiringLabel = targetStartDegraded
       ? (isThreadRelay ? (zh ? '接力会话启动未完成' : 'Relay session start incomplete') : (zh ? '新会话启动未完成' : 'New session start incomplete'))
@@ -141,7 +141,7 @@ const AGENT_ICONS = {
   'qqbot': 'qqbot.svg',
   'dispatch-console': 'dispatch-console.svg',
   'programming-helper': 'programming-helper.svg',
-  'coder': 'programming-helper.svg',
+  'programming-helper:coder': 'programming-helper.svg',
   'work-group': 'work-group.svg',
 };
 
@@ -298,6 +298,14 @@ function resolveFocusedAgentAfterRefresh(agents = allAgents) {
   const hasPendingInput = (agent) =>
     (agent.pending_input_count ?? agent.pendingInputCount ?? 0) > 0;
   const pendingAgent = list.find((agent) => isConnected(agent) && hasPendingInput(agent));
+  // 投影入口（如 programming-helper:coder）停留在入口首页时按条目记忆恢复；
+  // 进入过会话浏览则该键已被清除，回落到 runtime 记忆（既有行为）。
+  let rememberedEntryId = null;
+  try { rememberedEntryId = localStorage.getItem('claw:lastFocusedEntryId'); } catch { /* ignore */ }
+  if (rememberedEntryId) {
+    const rememberedEntry = list.find((agent) => isConnected(agent) && agent.id === rememberedEntryId);
+    if (rememberedEntry) return rememberedEntry;
+  }
   let rememberedId = null;
   try { rememberedId = localStorage.getItem('claw:lastFocusedRuntimeId'); } catch { /* ignore */ }
   const rememberedAgent = rememberedId
@@ -452,8 +460,14 @@ async function loadAgents() {
         // 3. 兜底选中列表第一个已连接 agent。
         const restoreAgent = resolveFocusedAgentAfterRefresh(allAgents);
         if (restoreAgent) {
-          focusedAgentId = getLogicalAgentId(restoreAgent) || null;
-          await loadAgentData(getAgentRuntimeId(restoreAgent));
+          // 投影入口条目走完整入口流程（宿主详情 + 条目 surface），
+          // 不能按宿主逻辑 id 直落（那会恢复成宿主首页）。
+          if (restoreAgent.agentId && restoreAgent.source === 'prebuilt') {
+            void window.handlePrebuiltAgentClick(restoreAgent.id);
+          } else {
+            focusedAgentId = getLogicalAgentId(restoreAgent) || null;
+            await loadAgentData(getAgentRuntimeId(restoreAgent));
+          }
 
         }
       }

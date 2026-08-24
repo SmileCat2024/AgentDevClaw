@@ -155,7 +155,7 @@ export function createAwarenessModule(deps) {
       for (const sid of Array.from(sessionIds)) {
         const meta = metaMap.get(sid) || {};
         const sessionType = cleanSessionText(meta.sessionType) || 'main';
-        const modelInfo = await resolveSessionModelInfo(workspaceId, sessionType);
+        const modelInfo = await resolveSessionModelInfo(workspaceId);
         const tokenUsage = meta.tokenUsage || null;
         const contextTokens = getUsageContextTokens(tokenUsage);
         const contextLength = Number.isFinite(meta.contextLength) && meta.contextLength > 0
@@ -507,8 +507,7 @@ export function createAwarenessModule(deps) {
   
     if (mem.limitMode === 'ratio') {
       const ratioVal = mem.ratioLimit ?? mem.limitValue ?? ADMIN_DEFAULT_RATIO_LIMIT;
-      const modelInfo = await resolveSessionModelInfo(workspaceId, 'default');
-      const contextLength = modelInfo?.contextLength || ADMIN_DEFAULT_CONTEXT_LENGTH;
+      const modelInfo = await resolveSessionModelInfo(workspaceId);      const contextLength = modelInfo?.contextLength || ADMIN_DEFAULT_CONTEXT_LENGTH;
       contextLimit = Math.floor(contextLength * ratioVal / 100);
       if (available && contextLength > 0) {
         const actualRatio = contextTokens / contextLength;

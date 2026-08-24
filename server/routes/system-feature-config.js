@@ -19,6 +19,7 @@ const CONTEXT_GUARD_MANIFEST = {
         type: 'boolean',
         default: true,
         title: '上下文保护',
+        description: '开启后，上下文超过压缩阈值时自动打断当前会话并提醒精简；触发后自动关闭，可在会话控制面板重新开启。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
       },
     },
   },

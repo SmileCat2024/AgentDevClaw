@@ -29,17 +29,16 @@ import {
   readAgentLayer,
   readDirLayer,
 } from '../../../server/shared/feature-config-layers.js';
+import { CoderAgent } from './coder-agent.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
-const EXPLORE_PROMPT_PATH = join(PROMPTS_DIR, 'explore.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'programming-helper', 'state.json');
 const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
-const EXCLUDED_MCP_SERVERS_EXPLORE = ['crawl4ai-official'];
 
 // Audio feedback is presentation-only. Awaiting the OS media process inside
 // the CallFinish hook delays AgentDev's authoritative call.finish event and
@@ -78,11 +77,10 @@ export class ProgrammingHelperAgent extends BasicAgent {
   constructor(config = {}) {
     const workspaceDir = config.workspaceDir || process.cwd();
     const runtime = config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
-    const isExploration = runtime.sessionType === 'exploration' || process.env.PROTOCLAW_SESSION_TYPE === 'exploration';
 
     // 配置队列（ticket 00/03）：[全局层, agent 层, 目录层(构造时 cwd), 会话注入]。
-    // 队列在构造函数内组装——同进程多 session 可能对应不同 cwd，禁止进程级缓存；
-    // exploration 子代理走同一构造路径，行为一致。会话注入（featureOverrides）不落盘。
+    // 队列在构造函数内组装——同进程多 session 可能对应不同 cwd，禁止进程级缓存。
+    // 会话注入（featureOverrides）不落盘。
     const queue = [
       readGlobalLayer(),
       readAgentLayer(),
@@ -93,15 +91,13 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
     const excludeMcpServers = Array.from(new Set([
       ...(config.excludeMcpServers ?? []),
-      ...(isExploration ? EXCLUDED_MCP_SERVERS_EXPLORE : DEFAULT_EXCLUDED_MCP_SERVERS),
+      ...DEFAULT_EXCLUDED_MCP_SERVERS,
     ]));
 
     super({
       ...config,
       features: merged,
     });
-
-    this._isExploration = isExploration;
 
     // BasicAgent 已纯基类化（框架 a5fe117 / ticket 009），不再内置装配任何 feature。
     // 原由 BasicAgent 挂载的 MCP/Skill/SubAgent/OpencodeBasic 等，现在装配权在宿主：
@@ -130,65 +126,48 @@ export class ProgrammingHelperAgent extends BasicAgent {
     };
     this.use(new ClawDispatchFeature(runtimeIdentity));
     this.use(new GroupChatBridgeFeature(runtimeIdentity));
-    this.contextGuard = new ContextGuardFeature({
-      ...(merged.contextGuard && typeof merged.contextGuard === 'object'
-        ? merged.contextGuard : {}),
+    // 一次性过界拦截：manifest（Runtime 配置面板）决定会话启动初值，
+    // 会话控制面板可实时装填/卸下。触发一次即消耗，之后输入完全放行。
+    this.use(new ContextGuardFeature({
+      ...(merged['context-guard'] && typeof merged['context-guard'] === 'object'
+        ? merged['context-guard'] : {}),
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
-      agentId: runtimeIdentity.agentId,
-      sessionId: runtimeIdentity.sessionId,
-      serverOrigin: runtimeIdentity.serverOrigin,
-    });
-    this.use(this.contextGuard);
+    }));
 
     // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
     // 放在所有业务 feature 之前挂载，确保 ToolResultTransform 钩子
     // 在 feature 注册顺序中靠前（但执行顺序由 hooks registry 决定）。
     this.use(new OutputGuardFeature({ workdir: workspaceDir }));
 
-    if (isExploration) {
-      this.use(new ShellFeature({ workspaceDir }));
-      this.use(new WebSearchFeature());
-      this.use(new MemoryFeature({ workspaceDir }));
-      this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
-      this.use(new GitHubFeature());
-    } else {
-      this.use(new ControlledTodoFeature({
-        reminderTemplate: TODO_REMINDER_PROMPT_PATH,
-        reminderThresholdWithTasks: config.reminderThresholdWithTasks,
-        reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
-      }));
-      this.use(new ForceContinuation({
-        ...(merged['force-continuation'] && typeof merged['force-continuation'] === 'object'
-          ? merged['force-continuation'] : {}),
-        ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
-          ? config.features['force-continuation'] : {}),
-      }));
+    this.use(new ControlledTodoFeature({
+      reminderTemplate: TODO_REMINDER_PROMPT_PATH,
+      reminderThresholdWithTasks: config.reminderThresholdWithTasks,
+      reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
+    }));
+    this.use(new ForceContinuation({
+      ...(merged['force-continuation'] && typeof merged['force-continuation'] === 'object'
+        ? merged['force-continuation'] : {}),
+      ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
+        ? config.features['force-continuation'] : {}),
+    }));
 
-      this.use(new AuditFeature());
-      this.use(new NonBlockingAudioFeedbackFeature());
-      this.use(new WebSearchFeature());
-      this.use(new MemoryFeature({ workspaceDir }));
-      this.use(new ShellFeature({ workspaceDir }));
-      this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
+    this.use(new AuditFeature());
+    this.use(new NonBlockingAudioFeedbackFeature());
+    this.use(new WebSearchFeature());
+    this.use(new MemoryFeature({ workspaceDir }));
+    this.use(new ShellFeature({ workspaceDir }));
+    this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
 
-      this.use(new LspFeature({ workdir: workspaceDir }));
+    this.use(new LspFeature({ workdir: workspaceDir }));
 
-      this.use(new UserInputFeature());
-      this.use(new GenerativeUISurfaceFeature());
-      this.use(new GitHubFeature());
-    }
+    this.use(new UserInputFeature());
+    this.use(new GenerativeUISurfaceFeature());
+    this.use(new GitHubFeature());
   }
 
   async onInitiate(ctx) {
     await super.onInitiate(ctx);
-
-    if (this._isExploration) {
-      const composer = new TemplateComposer()
-        .add({ file: EXPLORE_PROMPT_PATH });
-      this.setSystemPrompt(composer);
-      return;
-    }
 
     const workspaceState = readProgrammingWorkspaceState();
     const openDirectory = cleanValue(workspaceState?.openDirectory);
@@ -205,4 +184,12 @@ export class ProgrammingHelperAgent extends BasicAgent {
 
     this.setSystemPrompt(composer);
   }
+}
+
+/**
+ * 按会话类型分派 Agent 类。run-prebuilt-agent.js 优先调用本函数；
+ * sessionType='coder' 的会话装配为自主编码身份（线程宿主），其余为主身份。
+ */
+export function resolveAgentClass({ runtime } = {}) {
+  return runtime?.sessionType === 'coder' ? CoderAgent : ProgrammingHelperAgent;
 }

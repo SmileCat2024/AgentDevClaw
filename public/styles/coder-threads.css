@@ -58,8 +58,6 @@
   gap: 10px;
 }
 
-.coder-thread-card.closed { opacity: .62; }
-
 .coder-thread-card-head,
 .coder-thread-actions {
   display: flex;
@@ -79,14 +77,14 @@
 }
 
 .coder-thread-status { background: rgba(88, 166, 255, .16); color: #79c0ff; }
-.coder-thread-status.status-open { background: rgba(139, 148, 158, .16); color: #c9d1d9; }
 .coder-thread-status.status-idle { background: rgba(139, 148, 158, .16); color: #c9d1d9; }
-.coder-thread-status.status-running { background: rgba(163, 113, 247, .16); color: #d2a8ff; }
-.coder-thread-status.status-rotating { background: rgba(210, 153, 34, .18); color: #e3b341; }
-.coder-thread-status.status-rotation_failed { background: rgba(219, 116, 43, .18); color: #ffa657; }
-.coder-thread-status.status-failed { background: rgba(248, 81, 73, .18); color: #ff7b72; }
-.coder-thread-status.status-waiting_input { background: rgba(88, 166, 255, .18); color: #79c0ff; }
-.coder-thread-status.status-closed { background: rgba(139, 148, 158, .12); color: var(--text-secondary, #8b949e); }
+.coder-thread-status.status-executing { background: rgba(163, 113, 247, .16); color: #d2a8ff; }
+.coder-thread-status.status-pending-commands { background: rgba(210, 153, 34, .18); color: #e3b341; }
+.coder-thread-status.status-archived { background: rgba(139, 148, 158, .12); color: var(--text-secondary, #8b949e); }
+.coder-thread-status.is-failed { background: rgba(248, 81, 73, .18); color: #ff7b72; }
+
+.coder-thread-card.archived { opacity: .62; }
+.coder-thread-card .coder-thread-actions { position: relative; z-index: 1; }
 
 .coder-thread-chain {
   border: 1px solid var(--border-color);
@@ -137,6 +135,35 @@
   text-align: center;
 }
 
+/* ── Tabs（线程 / 已归档） ───────────────────────────────────── */
+
+.coder-threads-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0;
+}
+
+.coder-threads-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary, #8b949e);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+  transition: color .15s ease, border-color .15s ease;
+}
+
+.coder-threads-tab:hover { color: var(--text-primary); }
+.coder-threads-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--code-accent, #58a6ff);
+  font-weight: 600;
+}
+
 /* ── Buttons（面板通用） ─────────────────────────────────────── */
 
 .coder-btn {
@@ -171,58 +198,19 @@
 .coder-btn.secondary:hover { background: #30363d; color: #fff; }
 .coder-btn.secondary:active { background: #1c2128; }
 
+.coder-btn.danger {
+  background: #da3633;
+  border-color: rgba(240, 246, 252, .1);
+  color: #fff;
+}
+
+.coder-btn.danger:hover { background: #b62324; }
+
+body[data-theme="light"] .coder-btn.danger { background: #cf222e; }
+body[data-theme="light"] .coder-btn.danger:hover { background: #a40e26; }
+
 body[data-theme="light"] .coder-btn { background: #1f883d; border-color: rgba(31, 35, 40, .15); }
 body[data-theme="light"] .coder-btn:hover { background: #1a7f37; }
 body[data-theme="light"] .coder-btn.secondary { background: #f6f8fa; border-color: rgba(31, 35, 40, .15); color: #24292f; }
 body[data-theme="light"] .coder-btn.secondary:hover { background: #eef1f4; color: #24292f; }
 
-/* ── Settings（模型配置） ───────────────────────────────────── */
-
-.coder-settings {
-  display: grid;
-  gap: 14px;
-  max-width: 640px;
-}
-
-.coder-settings input,
-.coder-settings select {
-  min-width: 0;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--input-bg, rgba(0, 0, 0, .16));
-  color: var(--text-primary);
-  font: inherit;
-  padding: 9px 10px;
-}
-
-.coder-settings-card {
-  border: 1px solid var(--border-color);
-  border-radius: 14px;
-  background: var(--panel-bg);
-  padding: 16px;
-  display: grid;
-  gap: 12px;
-}
-
-.coder-settings-card h3 {
-  margin: 0;
-  font-size: 15px;
-}
-
-.coder-settings-row {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) auto;
-  gap: 10px;
-}
-
-.coder-settings-hint {
-  color: var(--text-secondary, #8b949e);
-  font-size: 12px;
-  line-height: 1.5;
-  margin: 0;
-}
-
-@media (max-width: 640px) {
-  .coder-settings-row { grid-template-columns: 1fr; }
-}

@@ -40,15 +40,17 @@ function _dirConfigCurrentDir() {
 
 /**
  * 编程小助手项目栏（ph-project-bar）上的"目录设置"按钮 HTML。
- * 仅编程小助手且当前绑定了项目目录时返回按钮，否则返回空串。
+ * 仅编程小助手且传入了项目目录时返回按钮，否则返回空串。
+ * 目录由渲染方显式传入（currentProject.openDirectory），不在此处
+ * 二次查询 workspace_state——投影/焦点态下该查询不可靠。
  */
-function phDirConfigButtonHtml(agent) {
+function phDirConfigButtonHtml(agent, dir) {
   if (agent?.id !== 'programming-helper') return '';
-  const dir = _dirConfigCurrentDir();
+  dir = (typeof dir === 'string' && dir.trim()) ? dir.trim() : '';
   if (!dir) return '';
   const isZh = currentLanguage === 'zh';
   return '<button class="ph-banner-btn secondary" type="button"'
-    + ' onclick="window.phOpenDirConfig()"'
+    + ' onclick="window.phOpenDirConfig(\'' + escapeHtml(dir) + '\')"'
     + ' title="' + escapeHtml(dir) + '">'
     + escapeHtml(isZh ? '目录设置' : 'Dir Config')
     + '</button>';
@@ -72,8 +74,8 @@ function _featureConfigDialogShell(hostId, titleHtml, subtitleHtml, closeFnName)
   ].join('');
 }
 
-window.phOpenDirConfig = function () {
-  const dir = _dirConfigCurrentDir();
+window.phOpenDirConfig = function (dir) {
+  dir = (typeof dir === 'string' && dir.trim()) ? dir.trim() : _dirConfigCurrentDir();
   if (!dir) return;
   if (typeof createFeatureConfigEditor !== 'function') return;
   if (_dirConfigEditor) {

@@ -109,12 +109,18 @@ export function buildStatus(agentId, sessionId = undefined) {
  * preserves the runtime invariant that every hosted programming session has
  * an explicit workspaceCwd rather than falling back to the host process CWD.
  *
+ * A non-main sessionType (e.g. 'coder') inserts its own segment so different
+ * identities of one workspace never share a process: an autonomous coder
+ * session restart (thread rotation/succession) must not take down interactive
+ * sessions of the same project.
+ *
  * @param {string} agentId - Prebuilt agent id (e.g. 'programming-helper')
  * @param {string|null|undefined} projectDir - Absolute project directory path
  * @param {'shared-by-project'|'shared-global'} [processMode='shared-by-project']
+ * @param {string|null} [sessionType] - Session identity within the workspace ('main'|'coder'|null)
  * @returns {string|null} Group key or null
  */
-export function computeProcessGroupKey(agentId, projectDir, processMode = PROCESS_MODE_SHARED_BY_PROJECT) {
+export function computeProcessGroupKey(agentId, projectDir, processMode = PROCESS_MODE_SHARED_BY_PROJECT, sessionType = null) {
   if (!projectDir || typeof projectDir !== 'string') return null;
   const trimmed = projectDir.trim();
   if (!trimmed) return null;
@@ -126,7 +132,8 @@ export function computeProcessGroupKey(agentId, projectDir, processMode = PROCES
 
   const canonical = normalize(resolve(trimmed)).replace(/\\/g, '/');
   const normalized = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
-  return `${normalizedAgentId}::${normalized}`;
+  const scope = sessionType && sessionType !== 'main' ? `${normalizedAgentId}::${sessionType}` : normalizedAgentId;
+  return `${scope}::${normalized}`;
 }
 
 /**

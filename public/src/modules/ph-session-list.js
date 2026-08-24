@@ -39,7 +39,8 @@ window.switchPhSessionTab = (btn) => {
   }
   // If currently searching, update tab filter and re-render search panel
   if (phSearchQuery.trim()) {
-    phSearchTab = targetTab;
+    // coder 线程不参与会话搜索：搜索态下点击 coder tab 按主会话过滤
+    phSearchTab = targetTab === 'coder' ? 'main' : targetTab;
     const activeAgent = getCurrentAgentRecord();
     _updatePhSearchPanelDom(activeAgent?.id || 'programming-helper');
     return;
@@ -63,13 +64,9 @@ window._buildPhSearchPanelHtml = (agentId) => {
   }
   // Filter results by current tab
   const filtered = phSearchResults.filter((r) => {
-    const st = r.sessionType || 'main';
     const isArchived = r.archived === true;
     if (phSearchTab === 'archived') return isArchived;
-    if (phSearchTab === 'exploration') return st === 'exploration' && !isArchived;
-    if (phSearchTab === 'sub') return st === 'sub' && !isArchived;
-    // 'main' tab: non-archived, non-exploration, non-sub
-    return !isArchived && st !== 'exploration' && st !== 'sub';
+    return !isArchived;
   });
   if (filtered.length === 0) {
     return '<div class="ph-search-status">' + escapeHtml(isZh ? '未找到匹配的对话' : 'No matching conversations found') + '</div>';
@@ -155,7 +152,13 @@ window.phOnSearchInput = (value) => {
       const data = await resp.json();
       // Guard against stale results
       if (phSearchQuery.trim() !== trimmed) return;
-      phSearchResults = data.results || [];
+      // coder 会话不进入编程小助手入口的搜索结果（线程视图承接它们）
+      const coderSessionIds = new Set(
+        (activeAgent?.workspace_sessions?.sessions || [])
+          .filter((s) => String(s?.sessionType || '').trim() === 'coder')
+          .map((s) => String(s?.id || '')),
+      );
+      phSearchResults = (data.results || []).filter((r) => !coderSessionIds.has(String(r?.sessionId || '')));
       phSearchLoading = false;
       _updatePhSearchPanelDom(agentId);
     } catch (err) {

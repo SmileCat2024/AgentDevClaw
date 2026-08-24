@@ -52,12 +52,6 @@ describe('ClawMCPServer', () => {
       const expectedTools = [
         'overview',
         'workspace_list',
-        'list_explorations',
-        'list_sub_agents',
-        'show',
-        'spawn',
-        'compact',
-        'resume',
         'create_session',
       ];
 
@@ -95,25 +89,14 @@ describe('ClawMCPServer', () => {
       assert.ok('workspaces' in parsed);
     });
 
-    it('list_explorations should pass limit, file, and keyword params', async () => {
+    it('create_session should require a path', async () => {
       const clawMcp = new ClawMCPServer();
       const mock = createMockServer();
       clawMcp.registerTools(mock);
 
-      const tool = mock.tools.find(t => t.name === 'list_explorations');
-      // Just verify it doesn't throw with default params
-      const result = await tool.handler({ limit: 5 });
-      assert.ok(result.content);
-    });
-
-    it('spawn should join explorationIds into from param', async () => {
-      const clawMcp = new ClawMCPServer();
-      const mock = createMockServer();
-      clawMcp.registerTools(mock);
-
-      const tool = mock.tools.find(t => t.name === 'spawn');
-      // This will call dispatch which may fail, but the error should be wrapped
-      const result = await tool.handler({ goal: 'test goal', explorationIds: ['exp-1', 'exp-2'] });
+      const tool = mock.tools.find(t => t.name === 'create_session');
+      // Missing path -> dispatch error wrapped as content
+      const result = await tool.handler({});
       assert.ok(result.content);
     });
   });
@@ -124,49 +107,11 @@ describe('ClawMCPServer', () => {
       const mock = createMockServer();
       clawMcp.registerResources(mock);
 
-      const expectedResources = ['explorations', 'sub-agents', 'session-detail'];
+      const expectedResources = ['session-detail'];
       for (const name of expectedResources) {
         const found = mock.resources.find(r => r.name === name);
         assert.ok(found, `Resource "${name}" should be registered`);
       }
-    });
-  });
-
-  describe('registerPrompts', () => {
-    it('should register all expected prompts', () => {
-      const clawMcp = new ClawMCPServer();
-      const mock = createMockServer();
-      clawMcp.registerPrompts(mock);
-
-      const expectedPrompts = ['explore_codebase', 'delegate_task'];
-      for (const name of expectedPrompts) {
-        const found = mock.prompts.find(p => p.name === name);
-        assert.ok(found, `Prompt "${name}" should be registered`);
-      }
-    });
-
-    it('explore_codebase prompt should return guidance messages', async () => {
-      const clawMcp = new ClawMCPServer();
-      const mock = createMockServer();
-      clawMcp.registerPrompts(mock);
-
-      const prompt = mock.prompts.find(p => p.name === 'explore_codebase');
-      const result = await prompt.handler();
-      assert.ok(result.messages);
-      assert.ok(result.messages.length > 0);
-      assert.equal(result.messages[0].content.type, 'text');
-      assert.ok(result.messages[0].content.text.includes('list_explorations'));
-    });
-
-    it('delegate_task prompt should return guidance messages', async () => {
-      const clawMcp = new ClawMCPServer();
-      const mock = createMockServer();
-      clawMcp.registerPrompts(mock);
-
-      const prompt = mock.prompts.find(p => p.name === 'delegate_task');
-      const result = await prompt.handler();
-      assert.ok(result.messages);
-      assert.ok(result.messages[0].content.text.includes('spawn'));
     });
   });
 
@@ -176,9 +121,9 @@ describe('ClawMCPServer', () => {
       const mock = createMockServer();
       clawMcp.registerTools(mock);
 
-      // show tool with non-existent sessionId should return error content
-      const showTool = mock.tools.find(t => t.name === 'show');
-      const result = await showTool.handler({ sessionId: 'non-existent-id' });
+      // create_session tool with missing path should return error content
+      const createTool = mock.tools.find(t => t.name === 'create_session');
+      const result = await createTool.handler({});
 
       // Either isError: true or content with error
       if (result.isError) {

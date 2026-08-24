@@ -14,7 +14,6 @@ import {
   extractToolCallLabel,
   buildSessionTrimPreview,
   estimatePreambleCharCount,
-  extractDomainsFromText,
   buildLightPrebuiltSessionRecord,
   compareSidebarSessionReadModels,
   SIDEBAR_SESSION_META_VERSION,
@@ -356,45 +355,6 @@ describe('extractLastMessagePreview', () => {
   });
 });
 
-// ── extractDomainsFromText ────────────────────────────────────────
-
-describe('extractDomainsFromText', () => {
-  it('extracts known technology domain keywords from text', () => {
-    const text = 'This session explored the Runtime and Hook system of the Agent framework. It also touched on ToolRegistry and Session management.';
-    const result = extractDomainsFromText(text);
-    assert.ok(result.includes('Runtime'));
-    assert.ok(result.includes('Hook'));
-    assert.ok(result.includes('Agent'));
-    assert.ok(result.includes('ToolRegistry'));
-    assert.ok(result.includes('Session'));
-  });
-
-  it('returns empty array for null or non-string input', () => {
-    assert.deepEqual(extractDomainsFromText(null), []);
-    assert.deepEqual(extractDomainsFromText(undefined), []);
-    assert.deepEqual(extractDomainsFromText(123), []);
-    assert.deepEqual(extractDomainsFromText(''), []);
-  });
-
-  it('returns empty array when no domain keywords are found', () => {
-    assert.deepEqual(extractDomainsFromText('Just some random text without keywords'), []);
-  });
-
-  it('limits results to 8 unique keywords', () => {
-    const text = 'Flow Feature Hook ToolRegistry Node Edge Workflow Assembly Session Workspace Runtime Context Prompt';
-    const result = extractDomainsFromText(text);
-    assert.ok(result.length <= 8, `Expected at most 8, got ${result.length}`);
-  });
-
-  it('deduplicates identical keywords (exact match)', () => {
-    const text = 'The Session class manages state. Each Session is independent.';
-    const result = extractDomainsFromText(text);
-    // "Session" (capital S) matches multiple times but Set deduplicates exact strings
-    const sessionCount = result.filter(w => w === 'Session').length;
-    assert.equal(sessionCount, 1, 'Session (exact case) should appear only once');
-  });
-});
-
 // ── buildLightPrebuiltSessionRecord ───────────────────────────────
 
 describe('buildLightPrebuiltSessionRecord', () => {
@@ -451,22 +411,6 @@ describe('buildLightPrebuiltSessionRecord', () => {
     assert.equal(result.bytes, 0);
     assert.equal(result.hasSummary, false);
     assert.equal(result.tokenUsage.inputTokens, 0);
-  });
-
-  it('defaults sessionType to sub when metadata.resumeMode is one-shot', () => {
-    const result = buildLightPrebuiltSessionRecord('programming-helper', {
-      id: 's1',
-      metadata: { resumeMode: 'one-shot' },
-    });
-    assert.equal(result.sessionType, 'sub');
-  });
-
-  it('defaults status to locked for exploration sessions', () => {
-    const result = buildLightPrebuiltSessionRecord('programming-helper', {
-      id: 's1',
-      sessionType: 'exploration',
-    });
-    assert.equal(result.status, 'locked');
   });
 
   it('fills createdAt/updatedAt with current time when missing', () => {

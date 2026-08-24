@@ -95,7 +95,6 @@ export function createAgentLifecycleModule(ctx) {
     waitForManagedRuntimeReady,
     waitForAssemblyRuntimeReady,
     startManagedAgent,
-    startOneShotAgent,
     startAssemblyRuntime,
   } = createAgentStartupFns({
     sessionApi,
@@ -163,7 +162,11 @@ export function createAgentLifecycleModule(ctx) {
     app.get('/protoclaw/get_prebuilt_agents', async (_req, res, next) => {
       try {
         const agents = await getAgents();
-        res.json(agents.map((agent) => ({
+        // 注意：这里不展开 sidebar 投影身份。本路由的 id 被消费方
+        //（dispatch 下拉等）直接用作会话创建的 agentId，投影 id
+        //（host:identity）不是合法工作空间；投影只属于 sidebar 数据源
+        //（agent-connected 的 get_connected_agents）。
+        const entries = agents.map((agent) => ({
           id: agent.id,
           name: agent.name,
           description: agent.description,
@@ -181,7 +184,8 @@ export function createAgentLifecycleModule(ctx) {
           active_workspace_session_id: agent.workspace_sessions?.activeSessionId || null,
           modelPresets: agent.modelPresets || null,
           entry_point: agent.relativeDir,
-        })));
+        }));
+        res.json(entries);
       } catch (error) {
         next(error);
       }
@@ -406,12 +410,12 @@ export function createAgentLifecycleModule(ctx) {
       }
     });
 
-    // ── Force-continuation session control (request/ack over session IPC) ──
-    // The Feature instance lives inside the runtime process; the browser panel
-    // talks to it through these routes. Every request carries a requestId and
-    // waits for a matching force-continuation-result message, so the panel
-    // always renders the runtime-confirmed state instead of an optimistic guess.
-    function requestForceContinuationState(agentId, sessionId, message) {
+    // ── Session-scoped feature control (request/ack over session IPC) ──
+    // The Feature instance lives inside the runtime process; browser panels
+    // talk to it through these routes. Every request carries a requestId and
+    // waits for a matching result message, so a panel always renders the
+    // runtime-confirmed state instead of an optimistic guess.
+    function requestSessionRuntimeState(agentId, sessionId, message, resultType) {
       return new Promise((resolve) => {
         const runtime = getAgentRuntime(agentId, sessionId);
         const child = runtime?.process;
@@ -420,7 +424,7 @@ export function createAgentLifecycleModule(ctx) {
           resolve({ ok: false, error: 'session runtime not connected' });
           return;
         }
-        const requestId = `force-continuation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const requestId = `${resultType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         let settled = false;
         const finish = (result) => {
           if (settled) return;
@@ -430,16 +434,16 @@ export function createAgentLifecycleModule(ctx) {
           resolve(result);
         };
         const timer = setTimeout(
-          () => finish({ ok: false, error: 'force-continuation IPC timeout' }),
+          () => finish({ ok: false, error: `${resultType} IPC timeout` }),
           3000,
         );
         // Triple match (type + requestId + sessionId): a shared child process
         // multiplexes sessions, so answers for another session must not leak in.
         const onMessage = (msg) => {
-          if (!msg || msg.type !== 'force-continuation-result') return;
+          if (!msg || msg.type !== resultType) return;
           if (msg.requestId !== requestId || msg.sessionId !== sessionId) return;
           if (msg.ok === true) finish({ ok: true, status: msg.status || null });
-          else finish({ ok: false, error: msg.error || 'force-continuation request rejected' });
+          else finish({ ok: false, error: msg.error || `${resultType} request rejected` });
         };
         child.on('message', onMessage);
         let sent = false;
@@ -448,8 +452,12 @@ export function createAgentLifecycleModule(ctx) {
         } catch {
           sent = false;
         }
-        if (!sent) finish({ ok: false, error: 'failed to deliver force-continuation IPC' });
+        if (!sent) finish({ ok: false, error: 'failed to deliver session IPC' });
       });
+    }
+
+    function requestForceContinuationState(agentId, sessionId, message) {
+      return requestSessionRuntimeState(agentId, sessionId, message, 'force-continuation-result');
     }
 
     app.get('/protoclaw/force_continuation_status', async (req, res, next) => {
@@ -513,6 +521,57 @@ export function createAgentLifecycleModule(ctx) {
           enabled: typeof enabled === 'boolean' ? enabled : (result.status?.enabled ?? false),
           status: result.status,
         });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    // ── Context-guard session control (interactive shell fuse) ──
+    // Mirrors the force-continuation request/ack pattern: the fuse state lives
+    // in the runtime's ContextGuardFeature; the session control panel reads
+    // and toggles it through these routes.
+    app.get('/protoclaw/context_guard_status', async (req, res, next) => {
+      try {
+        let target;
+        try {
+          target = resolveRuntimeControlTarget(req.query);
+        } catch (error) {
+          return res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code });
+        }
+        const { agentId, sessionId } = target;
+        if (!sessionId) {
+          return res.status(400).json({ ok: false, error: 'sessionId is required' });
+        }
+        const result = await requestSessionRuntimeState(agentId, sessionId, { type: 'context-guard-status' }, 'context-guard-result');
+        if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
+        res.json({ ok: true, agentId, sessionId, status: result.status });
+      } catch (error) {
+        next(error);
+      }
+    });
+
+    app.post('/protoclaw/context_guard_control', express.json(), async (req, res, next) => {
+      try {
+        const { armed } = req.body || {};
+        if (armed !== undefined && typeof armed !== 'boolean') {
+          return res.status(400).json({ ok: false, error: 'armed must be a boolean' });
+        }
+        let target;
+        try {
+          target = resolveRuntimeControlTarget(req.body);
+        } catch (error) {
+          return res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code });
+        }
+        const { agentId, sessionId } = target;
+        if (!sessionId) {
+          return res.status(400).json({ ok: false, error: 'sessionId is required' });
+        }
+        const result = await requestSessionRuntimeState(agentId, sessionId, {
+          type: 'context-guard-control',
+          ...(armed !== undefined ? { armed } : {}),
+        }, 'context-guard-result');
+        if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
+        res.json({ ok: true, agentId, sessionId, status: result.status });
       } catch (error) {
         next(error);
       }
@@ -586,7 +645,7 @@ export function createAgentLifecycleModule(ctx) {
   return {
     getConnectedAgents, waitForProcessExit,
     waitForManagedRuntimeReady, waitForAssemblyRuntimeReady,
-    startManagedAgent, startOneShotAgent, startAssemblyRuntime,
+    startManagedAgent, startAssemblyRuntime,
     stopManagedAgent,
     setupRoutes,
     onAgentExit: (cb) => { _exitCallbacks.push(cb); },

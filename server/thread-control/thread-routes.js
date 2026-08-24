@@ -1,24 +1,71 @@
 /**
  * Thread Routes — 工作线程 HTTP API
  *
- * 提供线程的创建 / 查询 / 指令追加 / head 推进 / 投递尝试 / 取消。
- * 当前由 coder（自动化编码智能体）工作空间消费；其他工作空间不创建
- * 线程，本组接口对其不可见。
+ * 提供线程的创建 / 查询 / 指令追加 / head 推进 / 投递尝试 / 取消，
+ * 以及归档（收纳语义：线程层标记，成员会话不动，拒绝新投递）。
  *
- * 错误约定：not_found → 404；revision/head 冲突 → 409；参数问题 → 400。
+ * 宿主判定是会话级的（host-agents.js：agent + sessionType 组合）；
+ * 生命状态为推导值（thread-life-state.js 四态合成），随列表/详情响应附带。
+ *
+ * 错误约定：not_found → 404；revision/head 冲突 → 409；参数问题 → 400；
+ * 已归档线程收新指令 → 409 thread_archived；运行中归档 → 409 thread_busy。
  */
+
+import { synthesizeThreadLifeState } from './thread-life-state.js';
 
 /**
  * @param {import('express').Express} app
  * @param {typeof import('express').json} express
  * @param {object} options
- * @param {{ core: import('@agentdev/core').WorkThread, board: import('@agentdev/core').WorkThreadBoard }} options.control
+ * @param {{ core: import('@agentdev/core').WorkThread, board: import('@agentdev/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
+ * @param {{ archiveThread: Function, unarchiveThread: Function }} options.lifecycle
  */
-export function setupThreadRoutes(app, express, { control } = {}) {
-  if (!control?.core || !control?.board) {
-    throw new Error('setupThreadRoutes requires a control ({core, board})');
+export function setupThreadRoutes(app, express, { control, lifecycle, resolveSessionOpenDirectory } = {}) {
+  if (!control?.core || !control?.board || !control?.archive) {
+    throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
-  const { core, board } = control;
+  const { core, board, archive } = control;
+  const lifecycleService = lifecycle || {
+    archiveThread: async (threadId) => {
+      const thread = await core.getThread(threadId);
+      if (!thread) throw Object.assign(new Error('Thread not found'), { code: 'thread_not_found', status: 404 });
+      const boardState = await board.getState(threadId).catch(() => null);
+      const life = synthesizeThreadLifeState({ thread, boardState });
+      if (life.lifeState === 'executing' || life.lifeState === 'pending-commands') {
+        throw Object.assign(new Error(`线程当前状态为 ${life.lifeState}，请先中断再归档`), { code: 'thread_busy', status: 409 });
+      }
+      const entry = await archive.archive(threadId);
+      return { threadId, archivedAt: entry.archivedAt };
+    },
+    unarchiveThread: async (threadId) => {
+      const thread = await core.getThread(threadId);
+      if (!thread) throw Object.assign(new Error('Thread not found'), { code: 'thread_not_found', status: 404 });
+      await archive.unarchive(threadId);
+      return { threadId, archivedAt: null, runtimeStarted: false };
+    },
+  };
+
+  /** 为线程附带合成生命状态（归档标记 + 看板状态 + 锚点指令拼装）。 */
+  const _attachLifeState = async (thread, archiveEntries) => {
+    const boardState = await board.getState(thread.threadId).catch(() => null);
+    const life = synthesizeThreadLifeState({
+      thread,
+      boardState,
+      archiveEntry: archiveEntries?.[thread.threadId] || null,
+    });
+    return { ...thread, ...life };
+  };
+
+  const _getArchiveEntries = () => archive.list().catch(() => ({}));
+
+  const _assertNotArchived = async (threadId) => {
+    if (await archive.isArchived(threadId)) {
+      const err = new Error('线程已归档，拒绝新投递（如需继续请新建线程或先取消归档）');
+      err.status = 409;
+      err.code = 'thread_archived';
+      throw err;
+    }
+  };
 
   const jsonMiddleware = express.json({ limit: '256kb' });
 
@@ -41,7 +88,23 @@ export function setupThreadRoutes(app, express, { control } = {}) {
     try {
       const agentId = String(req.query.agentId || '').trim();
       const threads = await core.listThreads({ agentId: agentId || undefined });
-      res.json({ ok: true, threads });
+      const archiveEntries = await _getArchiveEntries();
+      const withLife = await Promise.all(
+        threads.map(async (thread) => {
+          const withState = await _attachLifeState(thread, archiveEntries);
+          // head 会话的 viewer runtime id：前端「中断此线程」的路由目标
+          //（runtime 未运行时为 null，中断入口据此置灰）。
+          const headViewerAgentId = typeof control.resolveSessionViewerId === 'function'
+            ? control.resolveSessionViewerId(withState.agentId, withState.headSessionId)
+            : null;
+          // head 会话的项目目录：PH 项目卡片的 coder tab 按此归属线程
+          const headProjectDir = typeof resolveSessionOpenDirectory === 'function'
+            ? (await resolveSessionOpenDirectory(withState.agentId, withState.headSessionId).catch(() => null)) || null
+            : null;
+          return { ...withState, headViewerAgentId, headProjectDir };
+        }),
+      );
+      res.json({ ok: true, threads: withLife });
     } catch (err) {
       _errorResponse(res, err);
     }
@@ -76,7 +139,7 @@ export function setupThreadRoutes(app, express, { control } = {}) {
       if (!thread) {
         return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
       }
-      res.json({ ok: true, thread });
+      res.json({ ok: true, thread: await _attachLifeState(thread, await _getArchiveEntries()) });
     } catch (err) {
       _errorResponse(res, err);
     }
@@ -137,6 +200,7 @@ export function setupThreadRoutes(app, express, { control } = {}) {
   app.post('/protoclaw/threads/:threadId/commands', jsonMiddleware, async (req, res) => {
     try {
       const { kind, text, source, idempotencyKey } = req.body || {};
+      await _assertNotArchived(req.params.threadId);
       const result = await core.appendCommand({
         threadId: req.params.threadId,
         kind,
@@ -178,6 +242,7 @@ export function setupThreadRoutes(app, express, { control } = {}) {
 
   app.post('/protoclaw/threads/:threadId/deliver', jsonMiddleware, async (req, res) => {
     try {
+      await _assertNotArchived(req.params.threadId);
       const result = await core.deliverPendingCommands(req.params.threadId);
       res.json({ ok: true, ...result });
     } catch (err) {
@@ -210,7 +275,28 @@ export function setupThreadRoutes(app, express, { control } = {}) {
     }
   });
 
-  // ── 关闭 ─────────────────────────────────────────────────────────
+  // ── 归档（跨 Thread / Board / Runtime 的生命周期事务）────────────
+  app.post('/protoclaw/threads/:threadId/archive', jsonMiddleware, async (req, res) => {
+    try {
+      const result = await lifecycleService.archiveThread(req.params.threadId, {
+        reason: req.body?.reason || 'user_archive',
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  app.post('/protoclaw/threads/:threadId/unarchive', jsonMiddleware, async (req, res) => {
+    try {
+      const result = await lifecycleService.unarchiveThread(req.params.threadId);
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  // ── 关闭（锚点终态：调度侧清理，如 ACP 创建回滚 / head 会话删除）──
 
   app.post('/protoclaw/threads/:threadId/close', jsonMiddleware, async (req, res) => {
     try {

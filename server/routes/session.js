@@ -6,10 +6,8 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
 import {
-  USER_DATA_ROOT,
   MIRROR_SCRIPT_TIMEOUT_MS,
-  SPAWN_AGENT_TIMEOUT_MS,
-  REQ_TIMEOUT_BUFFER_MS,
+  SESSION_TRANSFORMATION_TIMEOUT_MS,
 } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
@@ -26,7 +24,6 @@ import {
 } from '../shared/session-access.js';
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
 import { renderConversationHtml } from '../conversation-renderer.js';
-import { readHandoffPackage } from '../context-continuity/handoff-package.js';
 import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
 import { createOperationTrace } from '../shared/operation-trace.js';
 import { resolveAgentTarget, resolveSessionTarget } from '../shared/operation-target.js';
@@ -56,7 +53,6 @@ export function setupSessionRoutes(app, express, ctx) {
   const {
     activatePrebuiltSession,
     archivePrebuiltSession,
-    buildExplorationHandoffPayload,
     buildSessionTrimPreview,
     estimatePreambleCharCount,
     compactAndResumeCurrentSession,
@@ -69,61 +65,33 @@ export function setupSessionRoutes(app, express, ctx) {
     findSessionSummary,
     findSessionSummaryPath,
     listPrebuiltSessions,
-    lockExplorationSession,
     requirePrebuiltAgentForRuntime,
     requirePrebuiltSessionRecord,
     resolvePrebuiltSessionOwner,
     searchSessionsContent,
     setSessionHasSummary,
     tagPrebuiltSessionTodo,
-    writeSyntheticHandoff,
     requireAgentLight,
     startManagedAgent,
-    startOneShotAgent,
     stopManagedAgent,
     waitForManagedRuntimeReady,
     notifySessionLineage,
     notifySessionArchived,
     clearUISurfaces,
     threadRotation,
+    threadLifecycle,
   } = ctx;
 
-function normalizeContextGuardState(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const thresholdTokens = Number(value.thresholdTokens);
-  const inputTokens = Number(value.inputTokens);
-  const blockedAt = Number(value.blockedAt);
-  return {
-    blocked: value.blocked === true,
-    blockedAt: Number.isFinite(blockedAt) && blockedAt > 0 ? Math.round(blockedAt) : null,
-    thresholdTokens: Number.isFinite(thresholdTokens) && thresholdTokens > 0 ? Math.round(thresholdTokens) : null,
-    inputTokens: Number.isFinite(inputTokens) && inputTokens > 0 ? Math.round(inputTokens) : null,
-    reason: cleanSessionText(value.reason).slice(0, 1000) || null,
-  };
-}
-
-// The runtime reports this event before its interrupted call has completed.
-// Keeping it separate from session_meta_sync makes the UI feedback immediate.
+// Automation trigger from thread-host runtimes (ContextRotationTriggerFeature):
+// the event is ephemeral and thread-rotation is its only consumer. Interactive
+// fuse state never flows through here — the session control panel reads it via
+// runtime IPC (/protoclaw/context_guard_status in agent-lifecycle.js).
 app.post('/protoclaw/context_guard_event', express.json(), async (req, res, next) => {
   try {
     const agentId = cleanSessionText(req.body?.agentId);
     const sessionId = cleanSessionText(req.body?.sessionId);
-    const contextGuard = normalizeContextGuardState(req.body?.contextGuard);
-    if (!agentId || !sessionId || !contextGuard?.blocked) {
-      res.status(400).json({ error: 'agentId, sessionId, and blocked contextGuard state are required' });
-      return;
-    }
-    let found = false;
-    await updateSessionIndex(agentId, (index) => {
-      const sessions = index.sessions.map((session) => {
-        if (session.id !== sessionId) return session;
-        found = true;
-        return { ...session, contextGuard, updatedAt: new Date().toISOString() };
-      });
-      return { ...index, sessions };
-    });
-    if (!found) {
-      res.status(404).json({ error: 'session not found' });
+    if (!agentId || !sessionId) {
+      res.status(400).json({ error: 'agentId and sessionId are required' });
       return;
     }
     if (threadRotation) {
@@ -131,33 +99,7 @@ app.post('/protoclaw/context_guard_event', express.json(), async (req, res, next
         console.error('[thread-rotation] context rotation failed:', error.message);
       });
     }
-    res.json({ ok: true, contextGuard });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// A Claw-owned read endpoint: ViewerWorker notification data does not include
-// local Feature state, so the client reads the persisted guard state alongside it.
-app.get('/protoclaw/context_guard_status', async (req, res, next) => {
-  try {
-    const agentId = cleanSessionText(req.query.agentId);
-    const sessionId = cleanSessionText(req.query.sessionId);
-    if (!agentId || !sessionId) {
-      res.status(400).json({ error: 'agentId and sessionId are required' });
-      return;
-    }
-    const index = await readSessionIndex(agentId);
-    const session = index.sessions.find((item) => item.id === sessionId);
-    if (!session) {
-      res.status(404).json({ error: 'session not found' });
-      return;
-    }
-    res.json({
-      agentId,
-      sessionId,
-      contextGuard: normalizeContextGuardState(session.contextGuard),
-    });
+    res.json({ ok: true });
   } catch (error) {
     next(error);
   }
@@ -607,18 +549,14 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
     }
     const agentRelativeDir = path.join('prebuilt-agents', 'official', agentId);
 
-    // Resolve sessionType from the workspace session index first; session files may not carry the product-level type.
-    const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
-
     console.log(`[generate_summary] in-process summary begin agent=${agentId} session=${sessionId}`);
     const result = await runInProcessSummary({
       agentRelativeDir,
       projectRoot: PROJECT_ROOT,
       agentId,
       sessionId,
-      sessionType,
       maxAttempts: 1,
-      timeoutMs: MIRROR_SCRIPT_TIMEOUT_MS,
+      timeoutMs: SESSION_TRANSFORMATION_TIMEOUT_MS,
     });
     if (!result?.summaryText) {
       res.status(500).json({ error: 'In-process summary did not produce a valid summary' });
@@ -655,8 +593,16 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
   try {
     const { agentId } = resolveAgentTarget(req.body);
     const agent = await requireAgentLight(agentId);
+    // sessionType 限定已知值：main 是用户会话缺省形态；coder 是线程宿主
+    // 会话，仅由调度面（ACP / dispatch / CLI）显式创建，前端不传此字段。
+    const requestedSessionType = cleanSessionText(req.body?.sessionType);
+    if (requestedSessionType && !['main', 'coder'].includes(requestedSessionType)) {
+      res.status(400).json({ error: `unsupported sessionType: ${requestedSessionType}` });
+      return;
+    }
     const session = await createPrebuiltSession(agent.id, {
       returnSummary: false,
+      sessionType: requestedSessionType || undefined,
       sourceSessionId: req.body.sourceSessionId,
       formId: req.body.formId,
       featureName: req.body.featureName,
@@ -783,6 +729,7 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
     let stderr = '';
     const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
     let timedOut = false;
+    let exitCode = null;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
@@ -803,21 +750,27 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
       });
       child.on('exit', (code) => {
         clearTimeout(timer);
-        if (timedOut) {
-          reject(new Error(`Title generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
-          return;
-        }
-        if (code !== 0) {
-          reject(new Error(stderr.trim() || `run-title-mirror exited with code ${code}`));
-          return;
-        }
+        exitCode = code;
         resolve();
       });
     });
 
-    const raw = await fs.readFile(resultPath, 'utf8');
-    const result = JSON.parse(raw.trim());
-    await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
+    // 成败以落盘的 result.json 为准：writeFileSync 在子进程任何退出路径之前
+    // 同步完成。Windows 上进程退出阶段可能因 libuv 与 keep-alive socket 的
+    // 竞态 fail-fast（uv_async 断言，退出码非零），但标题结果此时已完整写盘，
+    // 不能按退出码判失败。
+    let result;
+    try {
+      const raw = await fs.readFile(resultPath, 'utf8');
+      result = JSON.parse(raw.trim());
+    } catch {
+      if (timedOut) {
+        throw new Error(`Title generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`);
+      }
+      throw new Error(stderr.trim() || `run-title-mirror exited with code ${exitCode}`);
+    } finally {
+      await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
+    }
 
     const title = typeof result?.title === 'string' ? result.title.trim() : '';
     if (!title) {
@@ -886,6 +839,7 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
     let stderr = '';
     const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
     let timedOut = false;
+    let exitCode = null;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
@@ -906,21 +860,26 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
       });
       child.on('exit', (code) => {
         clearTimeout(timer);
-        if (timedOut) {
-          reject(new Error(`Recap generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
-          return;
-        }
-        if (code !== 0) {
-          reject(new Error(stderr.trim() || `run-recap-mirror exited with code ${code}`));
-          return;
-        }
+        exitCode = code;
         resolve();
       });
     });
 
-    const raw = await fs.readFile(resultPath, 'utf8');
-    const result = JSON.parse(raw.trim());
-    await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
+    // 成败以落盘的 result.json 为准，与 generate_session_title 同理：
+    // Windows 上退出码非零可能只是退出阶段的 libuv fail-fast，结果文件
+    // 已在此之前同步写盘。
+    let result;
+    try {
+      const raw = await fs.readFile(resultPath, 'utf8');
+      result = JSON.parse(raw.trim());
+    } catch {
+      if (timedOut) {
+        throw new Error(`Recap generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`);
+      }
+      throw new Error(stderr.trim() || `run-recap-mirror exited with code ${exitCode}`);
+    } finally {
+      await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
+    }
 
     const recap = typeof result?.recap === 'string' ? result.recap.trim() : '';
     if (!recap) {
@@ -1003,175 +962,6 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
     next(error);
   }
 });
-// ── Exploration helpers extracted to server/routes/session-helpers.js ──
-app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => {
-  try {
-    const handoffId = cleanSessionText(req.body?.handoffId);
-    const handoffPath = cleanSessionText(req.body?.handoffPath);
-    const goal = cleanSessionText(req.body?.goal);
-    const timeoutMs = Number(req.body?.timeoutMs) || SPAWN_AGENT_TIMEOUT_MS;
-    const explorationIds = Array.isArray(req.body?.explorationIds)
-      ? req.body.explorationIds.map(id => cleanSessionText(id)).filter(Boolean)
-      : [];
-
-    if (!goal) {
-      res.status(400).json({ error: 'goal is required for one-shot spawn' });
-      return;
-    }
-
-    req.setTimeout(timeoutMs + REQ_TIMEOUT_BUFFER_MS);
-
-    const agentId = resolveAgentTarget(req.body).agentId;
-
-    const isExploration = explorationIds.length === 0 && !handoffId && !handoffPath;
-    const sessionType = isExploration ? 'exploration' : 'sub';
-
-    let resolvedHandoffPath = null;
-    let sourceSessionId = null;
-    let handoff = null;
-
-    if (isExploration) {
-      sourceSessionId = `__protoclaw-exploration-${Date.now()}__`;
-      console.log(`[spawn_one_shot] Exploration mode: no parent context`);
-    } else {
-      if (explorationIds.length > 0) {
-        const handoffPayload = await buildExplorationHandoffPayload(agentId, explorationIds, goal);
-        const syntheticPath = await writeSyntheticHandoff(agentId, handoffPayload);
-        resolvedHandoffPath = syntheticPath;
-        sourceSessionId = explorationIds[0];
-        console.log(`[spawn_one_shot] Sub-agent mode: from explorations ${explorationIds.join(',')}`);
-      } else {
-        if (!handoffId && !handoffPath) {
-          res.status(400).json({ error: 'handoffId, handoffPath, or explorationIds required' });
-          return;
-        }
-        const handoffResult = await readHandoffPackage({
-          userDataRoot: USER_DATA_ROOT,
-          agentId: agentId || '',
-          handoffId,
-          handoffPath,
-        });
-        handoff = handoffResult.handoff;
-        resolvedHandoffPath = handoffResult.handoffPath;
-        const hSourceAgentId = cleanSessionText(handoff?.sourceAgentId);
-        sourceSessionId = cleanSessionText(handoff?.sourceSessionId);
-        if (!hSourceAgentId || !sourceSessionId) {
-          res.status(400).json({ error: 'Invalid handoff: sourceAgentId/sourceSessionId required' });
-          return;
-        }
-      }
-    }
-
-    const agent = await requirePrebuiltAgentForRuntime(agentId);
-    if (!isExploration && !handoff?.stats?.synthetic && explorationIds.length === 0) {
-      await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
-    }
-
-    const session = await createPrebuiltSession(agent.id, {
-      sourceSessionId,
-      goal,
-      sessionType,
-      metadata: {
-        resumeMode: 'one-shot',
-        ...(isExploration ? {} : {
-          handoffId: cleanSessionText(handoff?.handoffId) || cleanSessionText(handoffId),
-          handoffPath: resolvedHandoffPath,
-          handoffCreatedAt: cleanSessionText(handoff?.createdAt),
-          handoffMode: cleanSessionText(handoff?.mode),
-          sourceExplorationIds: explorationIds.length > 0 ? explorationIds : undefined,
-        }),
-      },
-    });
-
-    console.log(`[spawn_one_shot] Starting agent=${agent.id} session=${session.id} type=${sessionType} goal="${goal.slice(0, 80)}"`);
-
-    const { exitCode, result } = await startOneShotAgent(agent, session.id, goal, {
-      timeoutMs,
-      extraEnv: {
-        PROTOCLAW_SESSION_TYPE: sessionType,
-        PROTOCLAW_MODEL_PRESET_ROLE: sessionType === 'exploration' ? 'exploration' : 'sub',
-        ...(resolvedHandoffPath ? { PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath } : {}),
-      },
-    });
-
-    console.log(`[spawn_one_shot] Completed agent=${agent.id} session=${session.id} type=${sessionType} ok=${result.ok} duration=${result.durationMs}ms`);
-
-    if (isExploration && result.ok) {
-      await lockExplorationSession(agent.id, session.id, goal, result.response);
-    }
-
-    res.json({
-      session: { id: session.id, title: session.title || null, sessionType },
-      result: {
-        ok: result.ok,
-        response: result.response,
-        error: result.error,
-        durationMs: result.durationMs,
-      },
-      exitCode,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
-  try {
-    const { agentId, sessionId: subSessionId } = resolveSessionTarget(req.body);
-    const message = cleanSessionText(req.body?.message);
-    const timeoutMs = Number(req.body?.timeoutMs) || SPAWN_AGENT_TIMEOUT_MS;
-
-    if (!subSessionId || !message) {
-      res.status(400).json({ error: 'sessionId and message are required' });
-      return;
-    }
-
-    req.setTimeout(timeoutMs + REQ_TIMEOUT_BUFFER_MS);
-
-    const agent = await requirePrebuiltAgentForRuntime(agentId);
-
-    await updateSessionIndex(agentId, (index) => {
-      const record = index.sessions.find(s => s.id === subSessionId);
-      if (!record) {
-        throw Object.assign(new Error(`Session ${subSessionId} not found`), { statusCode: 404 });
-      }
-      if (record.sessionType === 'exploration') {
-        throw Object.assign(new Error('Cannot resume an exploration session (it is locked)'), { statusCode: 400 });
-      }
-      if (record.sessionType !== 'sub') {
-        throw Object.assign(new Error(`Session ${subSessionId} is not a sub-agent session (type=${record.sessionType})`), { statusCode: 400 });
-      }
-
-      record.sessionType = 'sub';
-      record.updatedAt = new Date().toISOString();
-      return { ...index };
-    });
-
-    console.log(`[resume_sub] Resuming sub-agent session=${subSessionId} message="${message.slice(0, 80)}"`);
-
-    const { exitCode, result } = await startOneShotAgent(agent, subSessionId, message, {
-      timeoutMs,
-      extraEnv: {
-        PROTOCLAW_MODEL_PRESET_ROLE: 'sub',
-      },
-    });
-
-    console.log(`[resume_sub] Completed session=${subSessionId} ok=${result.ok} duration=${result.durationMs}ms`);
-
-    res.json({
-      session: { id: subSessionId },
-      result: {
-        ok: result.ok,
-        response: result.response,
-        error: result.error,
-        durationMs: result.durationMs,
-      },
-      exitCode,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
 
 app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async (req, res, next) => {
   const target = (() => {
@@ -1194,6 +984,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     sessionId: req.body?.sessionId,
   });
   trace.mark('server_received');
+  let onClientClosed = null;
   try {
     const { agentId: preferredAgentId, sessionId } = target;
 
@@ -1203,6 +994,18 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     const lineageReason = req.body?.reason === 'trim' ? 'trim' : 'summary';
     const trimCutRounds = typeof req.body?.trimCutRounds === 'number' ? req.body.trimCutRounds : undefined;
     const appendSummary = req.body?.appendSummary === true;
+    const requestAbortController = detached ? null : new AbortController();
+    onClientClosed = requestAbortController
+      ? () => {
+          if (!res.writableEnded) {
+            requestAbortController.abort(new Error('Compacted resume request was aborted by the client'));
+          }
+        }
+      : null;
+    if (onClientClosed) {
+      req.once('aborted', onClientClosed);
+      res.once('close', onClientClosed);
+    }
     console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached} archive=${archiveOriginal} reason=${lineageReason} appendSummary=${appendSummary}`);
 
     // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
@@ -1223,7 +1026,12 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
           policy,
           startRuntime: req.body?.startRuntime !== false,
           appendSummary,
+          trace,
         }).then(async (result) => {
+          trace.mark('resume_completed', {
+            targetSessionId: result?.session?.id || '',
+            jobId,
+          });
           console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
           // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）
           await getThreadIntegration().applySessionSuccession({
@@ -1249,6 +1057,11 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
           }
         }).catch((error) => {
           console.error(`[compact_and_resume] job ${jobId} failed for session=${sessionId}:`, error);
+          trace.mark('failed', {
+            errorCode: error?.code || 'compact_failed',
+            errorMessage: error instanceof Error ? error.message : String(error),
+            jobId,
+          });
         });
       }, 10);
 
@@ -1265,6 +1078,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     }
 
     const result = await compactAndResumeCurrentSession({
+      signal: requestAbortController?.signal || null,
       preferredAgentId,
       sessionId,
       policy,
@@ -1334,8 +1148,16 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     }
   } catch (error) {
     attachOperationMetadata(error, requestMetadata);
-    trace.mark('failed', { errorCode: error?.code || 'compact_failed' });
+    trace.mark('failed', {
+      errorCode: error?.code || 'compact_failed',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     next(error);
+  } finally {
+    if (onClientClosed) {
+      req.off('aborted', onClientClosed);
+      res.off('close', onClientClosed);
+    }
   }
 });
 
@@ -1400,12 +1222,18 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
     if (agent.id === 'agent-creator' || agent.id === 'flow-workspace') {
       assemblyRuntime = await stopAssemblyRuntime(sessionId);
     }
+    const deletedRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
+    if (deletedRecord.sessionType === 'coder') {
+      const error = new Error('Coder sessions are managed by their thread and cannot be deleted individually');
+      error.statusCode = 409;
+      error.code = 'coder_session_delete_forbidden';
+      throw error;
+    }
     const deletedRuntime = getAgentRuntime(agent.id, sessionId);
     const deleted = await deletePrebuiltSession(agent.id, sessionId, {
       includeSessions: req.body.responseMode !== 'delta',
     });
-    // 线程宿主（coder）：被删会话是线程 head 时取消该线程（pending 指令
-    // 一并取消）。非宿主 / 非 head / 无线程：no-op。
+    // 线程宿主：被删会话是线程 head 时收口该线程；非宿主 / 非 head / 无线程：no-op。
     await getThreadIntegration().onSessionDeleted(agent.id, sessionId);
     if (deletedRuntime?.viewerAgentId && clearUISurfaces) {
       clearUISurfaces(deletedRuntime.viewerAgentId);
@@ -1457,7 +1285,37 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
   try {
     const { agentId, sessionId } = resolveSessionTarget(req.body);
     const agent = await requireAgentLight(agentId);
+    const sessionRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
     const archived = req.body.archived !== false;
+    if (sessionRecord.sessionType === 'coder' && threadLifecycle) {
+      const thread = await threadLifecycle.findThreadBySession(agent.id, sessionId);
+      if (!thread) {
+        const error = new Error('Coder session is not attached to a thread');
+        error.statusCode = 409;
+        error.code = 'coder_thread_missing';
+        throw error;
+      }
+      if (archived) {
+        const threadResult = await threadLifecycle.archiveThread(thread.threadId, { reason: 'session_archive_redirect' });
+        res.json({
+          ...threadResult,
+          archivedSessionId: sessionId,
+          archived: true,
+          operationId: trace.operationId,
+        });
+        trace.mark('response_sent');
+        return;
+      }
+      const threadResult = await threadLifecycle.unarchiveThread(thread.threadId);
+      res.json({
+        ...threadResult,
+        archivedSessionId: sessionId,
+        archived: false,
+        operationId: trace.operationId,
+      });
+      trace.mark('response_sent');
+      return;
+    }
     const result = await archivePrebuiltSession(agent.id, sessionId, archived, {
       includeSessions: req.body.responseMode !== 'delta',
     });
@@ -1523,8 +1381,6 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
     const messageCount = typeof req.body.messageCount === 'number' ? req.body.messageCount : 0;
     const preview = cleanSessionText(req.body.preview);
     const tokenUsage = req.body.tokenUsage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    const contextGuard = req.body.contextGuard && typeof req.body.contextGuard === 'object'
-      ? req.body.contextGuard : null;
     const savedAt = typeof req.body.savedAt === 'number' ? req.body.savedAt : stat.mtimeMs;
     const modelPatch = {};
     const modelName = cleanSessionText(req.body.modelName);
@@ -1544,7 +1400,6 @@ app.post('/protoclaw/session_meta_sync', express.json(), async (req, res, next) 
           messageCount,
           preview,
           tokenUsage,
-          ...(contextGuard ? { contextGuard } : {}),
           ...modelPatch,
           savedAt,
           metaVersion: META_VERSION,

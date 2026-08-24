@@ -35,8 +35,14 @@ function createFeatureConfigEditor(options = {}) {
     throw new Error('createFeatureConfigEditor: host element required');
   }
   const scopeId = String(options.scopeId || 'global');
+  // scope 所属的注册身份（server 侧 scope→queue 注册表的 agentId）。
+  // 主身份层用缺省 'programming-helper'；coder 层传 'coder'。
+  const scopeAgentId = String(options.scopeAgentId || 'programming-helper');
+  // 白名单：只显示这些 feature 的配置项（如 coder 层仅列其实际挂载的 feature）。
+  const includeFeatures = Array.isArray(options.includeFeatures) && options.includeFeatures.length
+    ? new Set(options.includeFeatures)
+    : null;
 
-  const FS_SCOPE_AGENT_ID = 'programming-helper';
   const SAVE_DEBOUNCE_MS = 500;
 
   const state = {
@@ -56,7 +62,7 @@ function createFeatureConfigEditor(options = {}) {
   // ── 数据加载 ────────────────────────────────────────────────
 
   async function fetchResolved() {
-    const params = new URLSearchParams({ agentId: FS_SCOPE_AGENT_ID });
+    const params = new URLSearchParams({ agentId: scopeAgentId });
     if (scopeId.startsWith('dir:')) params.set('dir', scopeId.slice(4));
     const res = await fetch(`/protoclaw/feature_config/resolved?${params.toString()}`);
     if (!res.ok) {
@@ -93,6 +99,7 @@ function createFeatureConfigEditor(options = {}) {
   function buildSections() {
     const sections = [];
     for (const feature of state.manifests) {
+      if (includeFeatures && !includeFeatures.has(feature.featureName)) continue;
       const featureName = feature.featureName;
       const manifest = feature.manifest;
       const props = manifest.settings?.properties || {};
@@ -369,7 +376,7 @@ function createFeatureConfigEditor(options = {}) {
       const res = await fetch('/protoclaw/feature_config/layer', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: FS_SCOPE_AGENT_ID, layerId: scopeId, content }),
+        body: JSON.stringify({ agentId: scopeAgentId, layerId: scopeId, content }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || `${res.status} ${res.statusText}`);
@@ -716,7 +723,7 @@ function createFeatureConfigEditor(options = {}) {
       fetch('/protoclaw/feature_config/layer', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: FS_SCOPE_AGENT_ID, layerId: scopeId, content }),
+        body: JSON.stringify({ agentId: scopeAgentId, layerId: scopeId, content }),
       }).catch((err) => console.error('[feature-config-editor] save on close failed:', err));
     }
     host.removeEventListener('input', onHostInput);

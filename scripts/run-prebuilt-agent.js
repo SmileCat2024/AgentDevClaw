@@ -24,9 +24,6 @@ import { createIMBridge } from './runtime-im-bridge.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
-// 线程宿主集合：唯一定义在 server/thread-control/host-agents.js（零依赖轻量
-// 模块，不拉起 thread-controller 初始化链），与 server 侧消费方同源。
-import { THREAD_HOST_AGENT_IDS } from '../server/thread-control/host-agents.js';
 
 // Inject DebugHub into the extracted CallArbiter module
 setDebugHubClass(DebugHub);
@@ -342,7 +339,6 @@ class SessionLifecycle {
       gcChatId: opts.runtime?.gcChatId || null,
       modelPresetRole: opts.runtime?.modelPresetRole || null,
     };
-    this.isExploration = this.runtime.sessionType === 'exploration';
 
     // Populated during start()
     this.agent = null;
@@ -358,7 +354,6 @@ class SessionLifecycle {
     this.imBridgeCtx = {
       agentId,
       sessionId: this.sessionId,
-      IS_EXPLORATION: this.isExploration,
       SERVER_ORIGIN,
       agent: null,
       callArbiter: null,
@@ -540,6 +535,37 @@ class SessionLifecycle {
       return;
     }
 
+    // ── Context-guard session control (interactive fuse, request/ack) ──
+    // 会话控制面板的「上下文拦截」开关：与 force-continuation 同构的
+    // request/ack 链路，feature 仍是权威状态持有者。
+    if (msg.type === 'context-guard-control' || msg.type === 'context-guard-status') {
+      const reply = (payload) => {
+        try {
+          process.send({
+            type: 'context-guard-result',
+            requestId: msg.requestId,
+            sessionId: this.sessionId,
+            ...payload,
+          });
+        } catch {}
+      };
+      const feature = (this.agent?.features?.get?.('context-guard'))
+        || (typeof this.agent?.getFeature === 'function' ? this.agent.getFeature('context-guard') : null);
+      if (!feature) {
+        reply({ ok: false, error: 'context-guard feature not mounted in this session' });
+        return;
+      }
+      try {
+        if (msg.type === 'context-guard-control' && typeof msg.armed === 'boolean') {
+          feature.setArmed(msg.armed);
+        }
+        reply({ ok: true, status: feature.getStatus() });
+      } catch (err) {
+        reply({ ok: false, error: String(err?.message || err) });
+      }
+      return;
+    }
+
     // ── model / thinking hot-swap ──
     if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
 
@@ -674,20 +700,32 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);
-  const AgentClass = resolveAgentClass(agentModule);
+  // Agent module can export a session-type-aware dispatcher; fall back to the
+  // default-export heuristic for single-class agents.
+  const AgentClass = typeof agentModule.resolveAgentClass === 'function'
+    ? agentModule.resolveAgentClass({ runtime: this.runtime })
+    : resolveAgentClass(agentModule);
 
   if (!AgentClass) {
     throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
   }
 
-  this.resolved = resolveAgentModelLLM(agentPath, 'default') || resolveGlobalDefaultLLM();
+  // coder sessions keep a standalone model config under agent-configs/coder.json
+  // even though they now live inside the programming-helper workspace.
+  const modelOptions = this.runtime.sessionType === 'coder'
+    ? { userConfigPath: join(PROTOCLAW_ROOT, '.agentdev', 'agent-configs', 'coder.json') }
+    : {};
+  this.resolved = resolveAgentModelLLM(agentPath, 'default', modelOptions) || resolveGlobalDefaultLLM();
   this.resolvedUsageModel = this.resolved || null;
   this.agent = new AgentClass({
     name: this.agentName,
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
     runtime: this.runtime,
-    ...((agentId === 'programming-helper' || agentId === 'coder') ? {
+    // contextGuard 只是首轮调用前的兜底种子（启动预设的窗口期快照）；
+    // 阈值真相是会话当前模型的 live meta，feature 每轮 CallStart /
+    // onLLMSwap 都会重算，不依赖这里的快照。
+    ...((agentId === 'programming-helper' || agentId === 'agent-studio') ? {
       contextGuard: {
         contextLength: this.resolved?.contextLength ?? null,
         compressRatio: this.resolved?.compressRatio ?? 80,
@@ -721,35 +759,6 @@ SessionLifecycle.prototype.start = async function () {
     }
   }
 
-  const localFeatures = await import(pathToFileURL(join(PROTOCLAW_ROOT, 'local-features', 'dist', 'index.js')).href);
-
-  // 线程宿主（coder）不挂载主动精简控制：上下文管理已收敛为单一路径
-  // （ContextGuard 强制启用 → thread-rotation 自动轮换），该 feature 对宿主
-  // 是零调用死代码（docs/tickets/015，决策 B 卸载）。非宿主（编程小助手等）
-  // 保持现状：挂载 + 工具屏蔽。
-  if (THREAD_HOST_AGENT_IDS.has(String(agentId || '').trim())) {
-    console.log('[ProtoClaw Runtime] 线程宿主工作空间，跳过 context compaction control feature 挂载');
-  } else if (typeof localFeatures.ContextCompactionControlFeature === 'function') {
-    this.agent.use(new localFeatures.ContextCompactionControlFeature({
-      serverOrigin: SERVER_ORIGIN,
-      agentId,
-      sessionId: this.sessionId,
-    }));
-    // 暂时屏蔽 compaction 控制工具：这三个工具只应通过后台流程触发，不暴露给 agent 主动调用。
-    // remove() 在工具注册前调用会进入 pendingRemoved，后续 ensureFeatureTools() 注册时仍保持 removed 状态（LLM 不可见）。
-    // 注意：record_compaction_context 仍被 runtime-summary.js 的进程内摘要通过 registry.get() 编程式获取。
-    // 恢复方法：删除下方 remove 循环即可。
-    const compactionToolRegistry = this.agent.getTools();
-    for (const toolName of [
-      'request_summary_compaction',
-      'request_summary_compaction_resume',
-      'record_compaction_context',
-    ]) {
-      compactionToolRegistry.remove(toolName);
-    }
-    console.log('[ProtoClaw Runtime] 已挂载 context compaction control feature（工具已屏蔽，不暴露给 LLM）');
-  }
-
   if (this.runtimeHandoff?.handoff && (this.runtimeHandoff.handoff.sourceSummary || this.runtimeHandoff.handoff.seedMessages?.length)) {
     // 框架标准 handoff seed feature（原 Claw context-handoff-seed 已下沉，见 docs/tickets/008）
     this.agent.use(new HandoffSeedFeature({
@@ -769,18 +778,13 @@ SessionLifecycle.prototype.start = async function () {
   console.log(`[ProtoClaw Runtime] Host workdir => ${process.cwd()}`);
   console.log(`[ProtoClaw Runtime] Agent 实例已创建: ${this.agentName}`);
 
-  // Exploration agents run headlessly — no ViewerWorker, no IM gateway.
-  if (this.isExploration) {
-    console.log('[ProtoClaw Runtime] Exploration mode — skipping ViewerWorker connection');
-  } else {
-    console.log(`[ProtoClaw Runtime] 正在连接到 ViewerWorker (端口 ${VIEWER_PORT})...`);
-    await this.agent.withViewer(this.agentName, VIEWER_PORT, false, {
-      projectRoot: PROTOCLAW_ROOT,
-    });
-    console.log('[ProtoClaw Runtime] ✓ 已连接到 ViewerWorker');
-    if (this.announceOnStdout) {
-      console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${this.agent.agentId ?? 'unknown'}`);
-    }
+  console.log(`[ProtoClaw Runtime] 正在连接到 ViewerWorker (端口 ${VIEWER_PORT})...`);
+  await this.agent.withViewer(this.agentName, VIEWER_PORT, false, {
+    projectRoot: PROTOCLAW_ROOT,
+  });
+  console.log('[ProtoClaw Runtime] ✓ 已连接到 ViewerWorker');
+  if (this.announceOnStdout) {
+    console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${this.agent.agentId ?? 'unknown'}`);
   }
 
   if (this.sessionId) {
@@ -826,16 +830,14 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   // Push restored state to Viewer
-  if (!this.isExploration) {
-    try {
-      const messages = typeof this.agent.getContext === 'function' ? this.agent.getContext().getAll() : [];
-      this.agent['pushToDebug']?.(messages);
-      this.agent['syncRegisteredToolsToDebug']?.();
-      this.agent['pushInspectorSnapshot']?.();
-      this.agent['pushOverviewSnapshot']?.();
-    } catch (error) {
-      console.warn('[ProtoClaw Runtime] 恢复会话后同步调试状态失败:', error);
-    }
+  try {
+    const messages = typeof this.agent.getContext === 'function' ? this.agent.getContext().getAll() : [];
+    this.agent['pushToDebug']?.(messages);
+    this.agent['syncRegisteredToolsToDebug']?.();
+    this.agent['pushInspectorSnapshot']?.();
+    this.agent['pushOverviewSnapshot']?.();
+  } catch (error) {
+    console.warn('[ProtoClaw Runtime] 恢复会话后同步调试状态失败:', error);
   }
 
   if (this.announceOnStdout) {
@@ -844,9 +846,12 @@ SessionLifecycle.prototype.start = async function () {
 
   // ── CallArbiter ──
   this.callArbiter = new CallArbiter(this.agent);
-  const contextGuardFeature = this.agent.features?.get?.('context-guard');
-  if (contextGuardFeature && typeof contextGuardFeature.setCallArbiter === 'function') {
-    contextGuardFeature.setCallArbiter(this.callArbiter);
+  // 上下文过界的两个策略壳都需要仲裁器执行「打断当前轮 + 退回排队消息」。
+  for (const guardFeatureName of ['context-guard', 'context-rotation-trigger']) {
+    const guardFeature = this.agent.features?.get?.(guardFeatureName);
+    if (guardFeature && typeof guardFeature.setCallArbiter === 'function') {
+      guardFeature.setCallArbiter(this.callArbiter);
+    }
   }
   this.imBridgeCtx.callArbiter = this.callArbiter;
 
@@ -915,14 +920,14 @@ SessionLifecycle.prototype.start = async function () {
             const usageResult = await reportUsageEvent(SERVER_ORIGIN, {
               eventId: usageEventId,
               timestamp: callSummary.endTime || Date.now(),
-              source: self.isExploration ? 'exploration-call' : 'agent-call',
+              source: 'agent-call',
               agentId,
               sessionId: self.sessionId,
               runtimeInstanceId,
               callIndex,
               requestCount: callSummary.stepCount || 1,
               cacheHitRequests: callSummary.cacheHitRequests || 0,
-              model: buildModelUsageMeta(self.resolvedUsageModel, self.isExploration ? 'exploration' : 'default'),
+              model: buildModelUsageMeta(self.resolvedUsageModel, 'default'),
               usage: callSummary.totalUsage,
               context: {
                 contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
@@ -948,8 +953,6 @@ SessionLifecycle.prototype.start = async function () {
               totalTokens: totalUsage?.totalTokens || 0,
               lastRequestUsage: usageStats?.lastRequestUsage || null,
             },
-            contextGuard: typeof contextGuardFeature?.getState === 'function'
-              ? contextGuardFeature.getState() : null,
             modelName: self.resolved?.modelName || self.resolvedUsageModel?.modelName || undefined,
             contextLength: self.resolved?.contextLength ?? undefined,
             compressRatio: self.resolved?.compressRatio ?? undefined,
@@ -981,29 +984,27 @@ SessionLifecycle.prototype.start = async function () {
 
   console.log('[ProtoClaw Runtime] ✓ CallArbiter 已初始化');
 
-  // ── IM Gateway (only for non-exploration sessions) ──
-  if (!this.isExploration) {
-    try {
-      if (typeof this.agent.startSelectedIMGateway === 'function') {
-        const channel = await this.agent.startSelectedIMGateway();
-        if (channel === 'none') {
-          console.log('[ProtoClaw Runtime] • IM Gateway 未启动（未选择渠道），仅调试模式运行');
-        } else {
-          console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
-        }
-      } else if (typeof this.agent.startQQBotGateway === 'function') {
-        await this.agent.startQQBotGateway();
-        console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+  // ── IM Gateway ──
+  try {
+    if (typeof this.agent.startSelectedIMGateway === 'function') {
+      const channel = await this.agent.startSelectedIMGateway();
+      if (channel === 'none') {
+        console.log('[ProtoClaw Runtime] • IM Gateway 未启动（未选择渠道），仅调试模式运行');
       } else {
-        const qqbotFeature = this.agent.features?.get?.('qqbot');
-        if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
-          await qqbotFeature.startGateway(this.agent);
-          console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
-        }
+        console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
       }
-    } catch (error) {
-      console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
+    } else if (typeof this.agent.startQQBotGateway === 'function') {
+      await this.agent.startQQBotGateway();
+      console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+    } else {
+      const qqbotFeature = this.agent.features?.get?.('qqbot');
+      if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
+        await qqbotFeature.startGateway(this.agent);
+        console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+      }
     }
+  } catch (error) {
+    console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
   }
 
   // If this session is bound to an IM line, mount the carrier feature + gateway
@@ -1040,18 +1041,16 @@ SessionLifecycle.prototype.start = async function () {
     // react-loop / arbiter 安全网仅在 call 期间消费邮箱，空闲时无人消费
     // 会导致投递成功但会话卡住（thread 指令）。此循环把邮箱作为又一个
     // 外部事件源接进 arbiter，与 dispatch / IM 桥接同构。
-    if (!this.isExploration) {
-      this.passiveMailboxLoop = createPassiveMailboxLoop({
-        agent: this.agent,
-        callArbiter: this.callArbiter,
-        isDisposed: () => this.disposed,
-        viewerPort: VIEWER_PORT,
-      });
-      this.passiveMailboxLoop.run().catch(err => {
-        console.error(`[ProtoClaw Runtime] 被动邮箱消费循环异常退出 (session=${this.sessionId}):`, err);
-      });
-      console.log('[ProtoClaw Runtime] ✓ 已启动被动邮箱消费循环 (viewer mailbox → arbiter)');
-    }
+    this.passiveMailboxLoop = createPassiveMailboxLoop({
+      agent: this.agent,
+      callArbiter: this.callArbiter,
+      isDisposed: () => this.disposed,
+      viewerPort: VIEWER_PORT,
+    });
+    this.passiveMailboxLoop.run().catch(err => {
+      console.error(`[ProtoClaw Runtime] 被动邮箱消费循环异常退出 (session=${this.sessionId}):`, err);
+    });
+    console.log('[ProtoClaw Runtime] ✓ 已启动被动邮箱消费循环 (viewer mailbox → arbiter)');
     // Keep the session alive without an input loop.
     // The process stays alive as long as pending IPC / DebugHub requests exist.
     return;

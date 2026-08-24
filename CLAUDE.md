@@ -153,7 +153,7 @@ Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 中 14 个生态包�
 - [local-features/context-compaction-mirror/src/index.ts](/D:/code/AgentDevClaw/local-features/context-compaction-mirror/src/index.ts) — 上下文精简
 - [local-features/continuity-participant/src/index.ts](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts) — 连续性参与方协议（框架 declareContinuity 薄封装，CONTINUITY_FIELD_KEY 读旧写新）
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
-- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层：框架 feature 的 Claw 协议薄包装（ControlledTodoFeature / ContinuityAwareOpencodeBasic），编程小助手与 agents/coder 共享
+- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层：框架 feature 的 Claw 协议薄包装（ControlledTodoFeature / ContinuityAwareOpencodeBasic），编程小助手与 official coder 共享
 - [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts) — Agent Studio 控制面 feature（studio_* 工具集、Test Runtime 生命周期、结构化断言测试）
 
 local-features 的基础层/应用层分层约定见 [local-features/README.md](/D:/code/AgentDevClaw/local-features/README.md)。
@@ -313,7 +313,7 @@ npm run pack:features shell-feature weixin-bot   # 只打包指定包
 - [local-features/context-compaction-mirror/src/index.ts](/D:/code/AgentDevClaw/local-features/context-compaction-mirror/src/index.ts) — 上下文精简
 - [local-features/continuity-participant/src/index.ts](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts) — 连续性参与方协议（框架 declareContinuity 薄封装，CONTINUITY_FIELD_KEY 读旧写新）
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
-- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层，编程小助手与 agents/coder 共享
+- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层，编程小助手与 official coder 共享
 - [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts) — Agent Studio 控制面（studio_* 工具、Test Runtime、结构化测试）
 
 悬置的本地 feature（代码保留，不再积极迭代）：
@@ -338,13 +338,17 @@ npm run build:local-features
 - [prebuilt-agents/official/programming-helper/metadata.json](/D:/code/AgentDevClaw/prebuilt-agents/official/programming-helper/metadata.json)
 - [prebuilt-agents/official/programming-helper/agent.js](/D:/code/AgentDevClaw/prebuilt-agents/official/programming-helper/agent.js)
 
-核心能力：
+该工作空间含两个会话身份，runtime 按 `sessionType` 分派 Agent 类：
+
+- **编程小助手（main，缺省）**：用户交互式编程 Agent。
+- **coder（`sessionType=coder`）**：无人值守自主编码身份，装配 [prebuilt-agents/official/programming-helper/coder-agent.js](/D:/code/AgentDevClaw/prebuilt-agents/official/programming-helper/coder-agent.js)，配置独立于主身份（`.agentdev/agent-configs/coder.json`）。coder 会话是线程宿主（自动建 WorkThread，trim/摘要后自动接力），只能由调度面创建（ACP / `claw threads` / workspace-coder-dispatch 技能），用户不能在 UI 创建。Web UI 左侧「coder」是同一工作空间的独立投影入口（线程列表视图）。归档宾语是线程（先中断再归档，已归档线程拒绝新指令）。旧 `prebuilt-agents/official/coder/` 独立工作空间已移除，其数据留在原地废弃。
+
+核心能力（main 身份）：
 
 - 集成 Shell（命令执行）、LSP（符号跳转 / 类型查看 / 引用查找）、Web 搜索等完整工具链
 - 会话分支、上下文精简（trim / compact / summary）、checkpoint / rollback
 - AI 生成会话标题
 - 支持语音输入与声音反馈（需在全局设置中配置语音模型）
-- 探索会话与子代理（只读分析，不修改文件）
 
 ### Agent Studio（agent-studio）★
 
@@ -411,7 +415,7 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 
 结构与关键文件：
 
-- agent 定义：`agents/<name>/agent.js`（export default Agent 类）+ 可选 `metadata.json`；内置 `coder`（编程小助手 CLI 裁剪版独立快照，不 import prebuilt-agents）
+- agent 定义：`agents/<name>/agent.js`（export default Agent 类）+ 可选 `metadata.json`；或任意独立 Agent 项目目录（经 `claw agents register` 注册接入）
 - 入口链路：[bin/claw.mjs](/D:/code/AgentDevClaw/bin/claw.mjs)（薄壳）→ [scripts/run-plain-agent.js](/D:/code/AgentDevClaw/scripts/run-plain-agent.js)（运行器：模型解析、viewer 连接/降级、会话落盘与索引）
 - 会话事件渲染：[scripts/headless-session-renderer.js](/D:/code/AgentDevClaw/scripts/headless-session-renderer.js)，与 [scripts/run-one-shot-agent.js](/D:/code/AgentDevClaw/scripts/run-one-shot-agent.js)（prebuilt agent 的 server 派生单次调用入口）共用；事件发射点在框架 `AgentDev/src/core/session-events.ts`（见上文"会话事件流"小节）
 - 输出契约遵循"统一日志契约"章节：过程信息走 stderr，stdout 只承载结果数据（`--format result|text|json|quiet|jsonl`）
@@ -524,14 +528,13 @@ ACP coder 适配层是独立 stdio 进程（`claw acp coder`），只做协议�
 |------|--------------|---------------------------|
 | trim 引擎 | `buildTrimmedSeedMessages` / `normalizeExportPolicy` / `DEFAULT_EXPORT_POLICY` / `HANDOFF_SCHEMA_VERSION` / `HANDOFF_COMPILER_VERSION` | [server/context-continuity/handoff-package.js](/D:/code/AgentDevClaw/server/context-continuity/handoff-package.js)（薄封装 + Claw 落盘格式） |
 | trim+summary 组合 | `TrimTranscriptWithSummaryTransformation`（组合语义唯一权威，thread 接力与手动精简共用） | [server/context-continuity/trim-appended-summary.js](/D:/code/AgentDevClaw/server/context-continuity/trim-appended-summary.js)（装配器：快照读取 + llm 注入 + 重试/超时）；落盘经 handoff-package.js 的 `writeTrimWithSummaryHandoffPackage`（handoff JSON v1 格式化） |
-| 摘要生成 | `generateSummaryText` / `buildSummaryPrompt` / `stripCompactAnalysis` / `scanFilesAndSkills` / `buildSummarySeedMessage` / `normalizeSummaryPolicy` | [server/context-continuity/inprocess-summary.js](/D:/code/AgentDevClaw/server/context-continuity/inprocess-summary.js)（模型角色解析 system/exploration/sub + 重试/超时，`resolveSummaryLLM` 供各装配层共用）；summarized-handoff.js / session.js 的 `session_generate_summary` 路由经此调用 |
+| 摘要生成 | `generateSummaryText` / `buildSummaryPrompt` / `stripCompactAnalysis` / `scanFilesAndSkills` / `buildSummarySeedMessage` / `normalizeSummaryPolicy` | [server/context-continuity/inprocess-summary.js](/D:/code/AgentDevClaw/server/context-continuity/inprocess-summary.js)（`system` 角色模型解析 + 重试/超时，`resolveSummaryLLM` 供各装配层共用）；summarized-handoff.js / session.js 的 `session_generate_summary` 路由经此调用 |
 | seed feature | `HandoffSeedFeature` | [scripts/run-prebuilt-agent.js](/D:/code/AgentDevClaw/scripts/run-prebuilt-agent.js) 与 [scripts/run-one-shot-agent.js](/D:/code/AgentDevClaw/scripts/run-one-shot-agent.js) 装配（原 local-features/context-handoff-seed 已删除，不留薄壳） |
 | 连续性字段 | `CONTINUITY_FIELD_KEY`（`__agentdev_continuity__`） | [local-features/continuity-participant](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts)：读旧写新（兼容 `__claw_continuity__`），协议字符串保留 `claw.*` 命名空间 |
-| 线程控制 | `WorkThread` / `WorkThreadBoard` / `WorkThreadStore` / `WorkThreadRuntimeBridge` | [server/thread-control/thread-controller.js](/D:/code/AgentDevClaw/server/thread-control/thread-controller.js)：`createThreadControl()` 返回 `{core, board, store}` 双对象装配；store 数据目录不变（`~/.agentdev/AgentDevClaw/workspaces/<agentId>/threads/`） |
+| 线程控制 | `WorkThread` / `WorkThreadBoard` / `WorkThreadStore` / `WorkThreadRuntimeBridge` | [server/thread-control/thread-controller.js](/D:/code/AgentDevClaw/server/thread-control/thread-controller.js)：`createThreadControl()` 返回 `{core, board, store}` 双对象装配；数据目录为全局 `~/.agentdev/AgentDevClaw/threads/`（含 boards/ 与 archive-index.json）；宿主判定为会话级（programming-helper + sessionType=coder） |
 
 ### 已知边界与注意
 
-- exploration 三段式摘要提示词是 Claw 本地变体（框架 `buildSummaryPrompt` 声明了 exploration 选项但未实现），见 inprocess-summary.js；框架补齐后应切回官方。
 - 旧 mirror 子进程管线（scripts/run-compact-mirror.js）已删除；title/recap mirror 子进程仍在（不同管线，不在本层）。
 - 旧 thread record 中 `executionEvents` / `mode` 字段为惰性数据，看板事件从 `boards/` 重新累积；旧状态词（idle/running/waiting_input/failed）在 store 读取时归一为 `open`。
 - 重启范围：框架 dist（`AgentDev/dist/*`）变更高于以上任何消费点时，必须重启整个 Claw 服务（见「进程架构与重启范围」）。

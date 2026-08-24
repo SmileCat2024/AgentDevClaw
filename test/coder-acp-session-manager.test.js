@@ -10,7 +10,7 @@
  *   PromptResponse 返回）
  * - turn.failed → end_turn + _meta.claw.terminalFailure（codex-acp 风格，
  *   不抛 JSON-RPC error）
- * - session/close：转发 Claw 归档、幂等（404/thread_closed）、busy 拒绝
+ * - session/close：转发 Claw 归档（archive 路由）、幂等（404）、busy 拒绝
  * - 轮询 404（thread 已不存在）→ 结构化 CLAW_THREAD_LOST 诊断
  * - stale terminal replay is caught by eventId dedup → skipped, keep waiting
  * - cancel before turn.started → immediate cancelled, exactly one interrupt,
@@ -30,10 +30,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createSessionManager } from '../scripts/coder-acp/session-manager.js';
+import { createSessionManager, buildSessionReplayNotifications } from '../scripts/coder-acp/session-manager.js';
 import { createClawClient, ClawUnreachableError, ClawHttpError } from '../scripts/coder-acp/claw-client.js';
 import {
   validateNewSessionParams,
+  validateResumeSessionParams,
+  validateLoadSessionParams,
   mergePromptText,
   ERROR_CODES,
 } from '../scripts/coder-acp/protocol.js';
@@ -41,7 +43,7 @@ import {
 // ── mock claw client（脚本式：pages 逐页消费） ─────────────────────
 
 function makeMockClawClient(overrides = {}) {
-  const calls = { createSessions: [], commands: [], events: [], interrupts: [], closes: [] };
+  const calls = { createSessions: [], commands: [], events: [], interrupts: [], archives: [] };
   const state = {
     sessionResponse: {
       ok: true,
@@ -68,6 +70,37 @@ function makeMockClawClient(overrides = {}) {
       if (state.createError) throw state.createError;
       return state.sessionResponse;
     },
+    async listCoderSessions(query = {}) {
+      calls.lists = calls.lists || [];
+      calls.lists.push(query);
+      if (state.listError) throw state.listError;
+      return {
+        ok: true,
+        threads: [
+          { threadId: 'thread-1', sessionId: 'claw-s1', cwd: 'C:/work', title: 't', updatedAt: '2026-08-24T00:00:00.000Z' },
+          { threadId: 'thread-2', sessionId: 'claw-s2', cwd: 'D:/other', title: null, updatedAt: null },
+        ],
+      };
+    },
+    async resumeCoderSession(clawSessionId, body = {}) {
+      calls.resumes = calls.resumes || [];
+      calls.resumes.push({ clawSessionId, body });
+      if (state.resumeError) throw state.resumeError;
+      if (state.resumeResponse) return state.resumeResponse;
+      return {
+        ok: true,
+        clawSessionId: 'claw-s1',
+        threadId: 'thread-1',
+        viewerAgentId: 'viewer-1',
+        cwd: body.cwd ?? 'C:/work',
+      };
+    },
+    async getCoderSessionHistory(clawSessionId) {
+      calls.histories = calls.histories || [];
+      calls.histories.push(clawSessionId);
+      if (state.historyError) throw state.historyError;
+      return state.historyResponse || { ok: true, sessionId: clawSessionId, messages: [] };
+    },
     async appendUserMessage(threadId, payload) {
       calls.commands.push({ threadId, payload });
       if (state.commandError) throw state.commandError;
@@ -83,10 +116,10 @@ function makeMockClawClient(overrides = {}) {
       if (state.interruptError) throw state.interruptError;
       return { ok: true, clawSessionId };
     },
-    async closeThread(threadId) {
-      calls.closes.push(threadId);
-      if (state.closeError) throw state.closeError;
-      return { ok: true, thread: { threadId, status: 'closed' } };
+    async archiveThread(threadId) {
+      calls.archives.push(threadId);
+      if (state.archiveError) throw state.archiveError;
+      return { ok: true, threadId, archivedAt: 1 };
     },
   };
 }
@@ -156,6 +189,164 @@ describe('session mapping', () => {
     await assert.rejects(manager.createSession('C:/work'), (error) => {
       assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
       assert.equal(error.data.hint, '先启动 Claw server（npm start）');
+      return true;
+    });
+  });
+});
+
+describe('session resume + list', () => {
+  it('resumeSession uses the request sessionId as the ACP session id (stable across restarts)', async () => {
+    const claw = makeMockClawClient({
+      resumeResponse: { ok: true, clawSessionId: 'claw-s1', threadId: 'thread-1', viewerAgentId: 'viewer-1', cwd: 'C:/work' },
+    });
+    const { manager } = makeManager(claw);
+    const result = await manager.resumeSession('claw-s1', { cwd: 'C:/work' });
+
+    // 协议 ID 即请求的 Claw sessionId（Q2 决策：零回填，跨重启可恢复）
+    assert.deepEqual(result, { sessionId: 'claw-s1' });
+    const internal = manager.getSession('claw-s1');
+    assert.equal(internal.clawSessionId, 'claw-s1');
+    assert.equal(internal.threadId, 'thread-1');
+    assert.equal(internal.cwd, 'C:/work');
+  });
+
+  it('resume maps HTTP errors through the standard taxonomy', async () => {
+    const claw = makeMockClawClient({
+      resumeError: new ClawHttpError(409, { ok: false, code: 'thread_archived', message: 'archived' }),
+    });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.resumeSession('claw-x', {}), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
+      assert.equal(error.data.server.code, 'thread_archived');
+      return true;
+    });
+  });
+
+  it('resume on an already-mapped session refreshes the mapping instead of duplicating', async () => {
+    const claw = makeMockClawClient();
+    const { manager, sessionId } = await makeSession(claw);
+    // createSession 生成的随机 UUID ≠ claw-s1；对同一 Claw 会话再次 resume
+    await manager.resumeSession('claw-s1', {});
+    assert.equal(manager.size, 2); // 两条独立映射并存（不同协议 ID）
+    assert.ok(manager.getSession(sessionId));
+    assert.ok(manager.getSession('claw-s1'));
+  });
+
+  it('listSessions passes the cwd filter through and returns the server payload', async () => {
+    const claw = makeMockClawClient();
+    const { manager } = makeManager(claw);
+    const result = await manager.listSessions({ cwd: 'C:/work' });
+    assert.deepEqual(claw.calls.lists, [{ cwd: 'C:/work' }]);
+    assert.equal(result.threads.length, 2);
+    assert.equal(result.threads[0].sessionId, 'claw-s1');
+  });
+
+  it('listSessions maps network failure to -32000', async () => {
+    const claw = makeMockClawClient({ listError: new ClawUnreachableError(new Error('ECONNREFUSED')) });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.listSessions(), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
+      return true;
+    });
+  });
+});
+
+describe('session load (history replay)', () => {
+  const projectedMessages = [
+    { role: 'user', content: 'fix the bug' },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'call-1', name: 'read', arguments: { filePath: 'a.ts' } }],
+    },
+    { role: 'tool', toolCallId: 'call-1', content: 'file content here' },
+    { role: 'assistant', content: 'done' },
+    // 孤儿 tool 结果（无对应 tool_call）：跳过
+    { role: 'tool', toolCallId: 'call-orphan', content: 'stale' },
+  ];
+
+  it('buildSessionReplayNotifications maps messages to ordered ACP notifications', () => {
+    const notifications = buildSessionReplayNotifications(projectedMessages);
+    assert.deepEqual(notifications, [
+      { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fix the bug' } },
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call-1',
+        title: 'read {"filePath":"a.ts"}',
+        kind: 'read',
+      },
+      {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call-1',
+        status: 'completed',
+        content: [{ type: 'text', text: 'file content here' }],
+      },
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } },
+    ]);
+  });
+
+  it('maps well-known tool names onto ACP tool kinds', () => {
+    const notifications = buildSessionReplayNotifications([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 't1', name: 'bash', arguments: { command: 'ls' } },
+          { id: 't2', name: 'write', arguments: {} },
+          { id: 't3', name: 'grep', arguments: {} },
+          { id: 't4', name: 'web_search', arguments: {} },
+          { id: 't5', name: 'lsp_hover', arguments: {} },
+        ],
+      },
+    ]);
+    const kinds = notifications.map((n) => n.kind).filter(Boolean);
+    assert.deepEqual(kinds, ['execute', 'edit', 'search', 'fetch', 'other']);
+  });
+
+  it('loadSession resumes to head, replays head history via notify, and registers the head mapping', async () => {
+    const claw = makeMockClawClient({
+      resumeResponse: { ok: true, clawSessionId: 'claw-head', threadId: 'thread-1', viewerAgentId: 'viewer-1', cwd: 'C:/work' },
+      historyResponse: { ok: true, sessionId: 'claw-head', messages: projectedMessages },
+    });
+    const { manager } = makeManager(claw);
+    const sent = [];
+    const result = await manager.loadSession('claw-old', { cwd: 'C:/work' }, (n) => sent.push(n));
+
+    // 历史= head 的历史（与实际上下文一致，Q3 线程语义）
+    assert.deepEqual(claw.calls.resumes, [{ clawSessionId: 'claw-old', body: { cwd: 'C:/work' } }]);
+    assert.deepEqual(claw.calls.histories, ['claw-head']);
+    // 回放通知带协议 sessionId（= head），顺序与转换器一致
+    assert.equal(sent.length, 4);
+    for (const n of sent) {
+      assert.equal(n.method, 'session/update');
+      assert.equal(n.params.sessionId, 'claw-head');
+    }
+    assert.equal(sent[0].params.update.sessionUpdate, 'user_message_chunk');
+    // 映射登记在 head（协议 ID = head，与 resume 一致）
+    assert.equal(manager.getSession('claw-head').clawSessionId, 'claw-head');
+    assert.equal(manager.getSession('claw-head').threadId, 'thread-1');
+    assert.deepEqual(result, { sessionId: 'claw-head' });
+  });
+
+  it('loadSession maps resume-phase server errors through the standard taxonomy', async () => {
+    const claw = makeMockClawClient({
+      resumeError: new ClawHttpError(403, { ok: false, code: 'cwd_mismatch', message: 'nope' }),
+    });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.loadSession('claw-x', {}, () => {}), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
+      assert.equal(error.data.server.code, 'cwd_mismatch');
+      return true;
+    });
+  });
+
+  it('loadSession maps history-phase network failure to CLAW_SERVER_UNREACHABLE', async () => {
+    const claw = makeMockClawClient({
+      historyError: new ClawUnreachableError(new Error('ECONNREFUSED')),
+    });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.loadSession('claw-x', {}, () => {}), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
       return true;
     });
   });
@@ -464,11 +655,11 @@ describe('poll failure mapping', () => {
 });
 
 describe('session/close', () => {
-  it('forwards thread close to Claw, removes the mapping, returns {}', async () => {
+  it('forwards thread archive to Claw, removes the mapping, returns {}', async () => {
     const claw = makeMockClawClient();
     const { manager, sessionId } = await makeSession(claw);
     assert.deepEqual(await manager.closeSession(sessionId), {});
-    assert.deepEqual(claw.calls.closes, ['thread-1']);
+    assert.deepEqual(claw.calls.archives, ['thread-1']);
     assert.equal(manager.getSession(sessionId), null);
     assert.equal(manager.size, 0);
   });
@@ -491,21 +682,20 @@ describe('session/close', () => {
     assert.deepEqual(await first, { stopReason: 'cancelled' });
   });
 
-  it('already-closed thread (404 / thread_closed) is idempotent success', async () => {
-    for (const closeError of [
+  it('already-gone thread (404) is idempotent success', async () => {
+    for (const archiveError of [
       new ClawHttpError(404, { ok: false, code: 'thread_not_found' }),
-      new ClawHttpError(409, { ok: false, code: 'thread_closed' }),
     ]) {
-      const claw = makeMockClawClient({ closeError });
+      const claw = makeMockClawClient({ archiveError });
       const { manager, sessionId } = await makeSession(claw);
       assert.deepEqual(await manager.closeSession(sessionId), {});
       assert.equal(manager.size, 0);
     }
   });
 
-  it('other close failures map to -32003 and keep the mapping', async () => {
+  it('other archive failures map to -32003 and keep the mapping', async () => {
     const claw = makeMockClawClient({
-      closeError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'x' }),
+      archiveError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'x' }),
     });
     const { manager, sessionId } = await makeSession(claw);
     await assert.rejects(manager.closeSession(sessionId), (error) => error.code === ERROR_CODES.CLAW_ERROR);
@@ -547,7 +737,7 @@ describe('claw-client request assembly (HTTP layer)', () => {
     });
     await claw.createCoderSession('C:/work');
     await claw.appendUserMessage('thread-1', { text: 'hi', idempotencyKey: 'acp-x' });
-    await claw.closeThread('thread-1');
+    await claw.archiveThread('thread-1');
 
     assert.deepEqual(sent[0], {
       url: 'http://127.0.0.1:1/protoclaw/acp/coder/sessions',
@@ -560,9 +750,9 @@ describe('claw-client request assembly (HTTP layer)', () => {
       body: { kind: 'user_message', text: 'hi', source: 'acp', idempotencyKey: 'acp-x' },
     });
     assert.deepEqual(sent[2], {
-      url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/close',
+      url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/archive',
       method: 'POST',
-      body: { reason: 'acp session/close' },
+      body: null,
     });
   });
 });
@@ -586,6 +776,25 @@ describe('protocol.js request validation', () => {
     );
   });
 
+  it('validateLoadSessionParams mirrors resume validation rules', () => {
+    assert.deepEqual(validateLoadSessionParams({ sessionId: 'claw-s1' }), { sessionId: 'claw-s1' });
+    assert.deepEqual(
+      validateLoadSessionParams({ sessionId: 'claw-s1', cwd: 'C:/work', mcpServers: [] }),
+      { sessionId: 'claw-s1', cwd: 'C:/work' },
+    );
+    assert.throws(() => validateLoadSessionParams({}), (e) => e.data.field === 'sessionId');
+    assert.throws(() => validateLoadSessionParams({ sessionId: '' }), (e) => e.data.field === 'sessionId');
+    assert.throws(() => validateLoadSessionParams({ sessionId: 's', cwd: 123 }), (e) => e.data.field === 'cwd');
+    assert.throws(
+      () => validateLoadSessionParams({ sessionId: 's', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
+      (e) => e.data.field === 'mcpServers',
+    );
+    assert.throws(
+      () => validateLoadSessionParams({ sessionId: 's', additionalDirectories: ['C:/other'] }),
+      (e) => e.data.field === 'additionalDirectories',
+    );
+  });
+
   it('mergePromptText joins text blocks with blank lines and rejects non-text', () => {
     assert.equal(mergePromptText([{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }]), 'a\n\nb');
     assert.equal(mergePromptText([{ type: 'text', text: 'solo' }]), 'solo');
@@ -593,5 +802,28 @@ describe('protocol.js request validation', () => {
     assert.throws(() => mergePromptText([{ type: 'resource_link', uri: 'x', name: 'y' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
     assert.throws(() => mergePromptText([]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
     assert.throws(() => mergePromptText([{ type: 'text' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
+  });
+
+  it('validateResumeSessionParams accepts minimal params, rejects bad sessionId / mcpServers / additionalDirectories', () => {
+    // 最小合法：仅 sessionId
+    assert.deepEqual(validateResumeSessionParams({ sessionId: 'claw-s1' }), { sessionId: 'claw-s1' });
+    assert.deepEqual(
+      validateResumeSessionParams({ sessionId: 'claw-s1', cwd: 'C:/work', mcpServers: [] }),
+      { sessionId: 'claw-s1', cwd: 'C:/work' },
+    );
+    // sessionId 必填非空
+    assert.throws(() => validateResumeSessionParams({}), (e) => e.data.field === 'sessionId');
+    assert.throws(() => validateResumeSessionParams({ sessionId: '' }), (e) => e.data.field === 'sessionId');
+    // cwd 若提供必须为字符串（存在性与一致性由 server 校验）
+    assert.throws(() => validateResumeSessionParams({ sessionId: 's', cwd: 123 }), (e) => e.data.field === 'cwd');
+    // MCP / additionalDirectories 沿用 session/new 的拒绝语义
+    assert.throws(
+      () => validateResumeSessionParams({ sessionId: 's', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
+      (e) => e.data.field === 'mcpServers',
+    );
+    assert.throws(
+      () => validateResumeSessionParams({ sessionId: 's', additionalDirectories: ['C:/other'] }),
+      (e) => e.data.field === 'additionalDirectories',
+    );
   });
 });

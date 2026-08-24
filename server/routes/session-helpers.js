@@ -39,7 +39,6 @@ import {
   SIDEBAR_SESSION_META_VERSION,
   isSidebarSessionReadModelReady,
   sortSidebarSessions,
-  extractDomainsFromText,
 } from './session-helpers-pure.js';
 
 import {
@@ -70,7 +69,6 @@ export {
   SIDEBAR_SESSION_META_VERSION,
   isSidebarSessionReadModelReady,
   sortSidebarSessions,
-  extractDomainsFromText,
 };
 
 export function createSessionHelpers(ctx) {
@@ -259,12 +257,11 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       // Fast path: file unchanged since last read, so the persisted values
       // (captured at creation or updated on last file change) are authoritative.
       // Ensure modelInfoMap has the needed role before delegating to the pure resolver.
-      const sTypeFP = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
-      const modelRoleFP = sTypeFP === 'exploration' ? 'exploration' : sTypeFP === 'sub' ? 'sub' : 'default';
-      const effectiveMap = (modelInfoMap && modelInfoMap[modelRoleFP])
+      const sTypeFP = cleanSessionText(record.sessionType) || 'main';
+      const effectiveMap = (modelInfoMap && modelInfoMap.default)
         ? modelInfoMap
-        : { ...(modelInfoMap || {}), [modelRoleFP]: await resolveSessionModelInfo(agentId, sTypeFP) };
-      const sessionModelInfo = resolveSessionModelFromRecord(record, effectiveMap, record.sessionType, metadata);
+        : { ...(modelInfoMap || {}), default: await resolveSessionModelInfo(agentId) };
+      const sessionModelInfo = resolveSessionModelFromRecord(record, effectiveMap);
       const summaryInfo = summaryMap ? summaryMap.get(record.id) : null;
       const compactTitle = summaryInfo?.sessionTitle || '';
       return {
@@ -281,7 +278,7 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
         targetFiles,
         referenceMaterials,
         sessionType: sTypeFP,
-        status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
+        status: cleanSessionText(record.status),
         archived: record.archived === true,
         todo: record.todo === true,
         metadata,
@@ -309,10 +306,8 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
     const summaryInfo = summaryMap ? summaryMap.get(record.id) : null;
     const compactTitle = summaryInfo?.sessionTitle || '';
     const tokenUsage = extractTokenUsage(parsed);
-    const sType = cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
-    const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
-    const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole])
-      || await resolveSessionModelInfo(agentId, sType);
+    const fallbackModelInfo = (modelInfoMap && modelInfoMap.default)
+      || await resolveSessionModelInfo(agentId);
     // When the session file has changed (new activity), the session is running
     // with the current model configuration. Use the live config values for both
     // display and writeback so the index stays fresh.
@@ -334,8 +329,8 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       expectedOutput,
       targetFiles,
       referenceMaterials,
-      sessionType: cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
-      status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
+      sessionType: cleanSessionText(record.sessionType) || 'main',
+      status: cleanSessionText(record.status),
       archived: record.archived === true,
       todo: record.todo === true,
       metadata,
@@ -386,8 +381,8 @@ async function summarizePrebuiltSession(agentId, record, summaryMap, modelInfoMa
       expectedOutput,
       targetFiles,
       referenceMaterials,
-      sessionType: cleanSessionText(record.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main'),
-      status: cleanSessionText(record.status) || (record.sessionType === 'exploration' ? 'locked' : ''),
+      sessionType: cleanSessionText(record.sessionType) || 'main',
+      status: cleanSessionText(record.status),
       archived: record.archived === true,
       todo: record.todo === true,
       metadata,
@@ -662,7 +657,7 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     buildLightPrebuiltSessionRecord(agentId, record)));
   const defaultModelInfo = options.includeModelDefaults === false
     ? null
-    : await resolveSessionModelInfo(agentId, 'default');
+    : await resolveSessionModelInfo(agentId);
   const readModelMs = Date.now() - readModelStartedAt;
   if (options.recordDiagnostics !== false) {
     void recordSidebarDiagnosticEvent({
@@ -720,11 +715,7 @@ async function listPrebuiltSessions(agentId, options = {}) {
 }
 
 async function buildSessionModelInfoMap(agentId) {
-  const roles = ['default', 'exploration', 'sub'];
-  const map = {};
-  await Promise.all(roles.map(async (role) => {
-    map[role] = await resolveSessionModelInfo(agentId, role);
-  }));
+  const map = { default: await resolveSessionModelInfo(agentId) };
   return map;
 }
 
@@ -818,8 +809,7 @@ async function createPrebuiltSession(agentId, options = {}) {
     : buildNamedSessionTitle(sessionDisplayName, createdAt));
   // 解析当前模型配置，持久化到 session index record
   const sessionType = cleanSessionText(options.sessionType) || 'main';
-  const modelRole = sessionType === 'exploration' ? 'exploration' : sessionType === 'sub' ? 'sub' : 'default';
-  const currentModelInfo = await resolveSessionModelInfo(agentId, modelRole);
+  const currentModelInfo = await resolveSessionModelInfo(agentId);
 
   const record = {
     id: sessionId,
@@ -1056,8 +1046,6 @@ function getSessionRecencyValue(session) {
 function selectFallbackSession(agentId, sessions, sourceSession) {
   const candidates = sessions.filter((session) => (
     session?.archived !== true
-    && session?.sessionType !== 'exploration'
-    && session?.sessionType !== 'sub'
   ));
   if (PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
     const sourceDirectory = String(sourceSession?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
@@ -1331,7 +1319,7 @@ async function deletePrebuiltProject(agentId, projectId, options = {}) {
 
 
 async function resolveContextLength(agentId) {
-  const info = await resolveSessionModelInfo(agentId, 'default');
+  const info = await resolveSessionModelInfo(agentId);
   return info.contextLength;
 }
 
@@ -1378,11 +1366,11 @@ async function resolveContextLength(agentId) {
     archivePrebuiltSession,
     tagPrebuiltSessionTodo,
     requirePrebuiltSessionRecord,
+    readSessionSnapshotForContinuity,
     resolvePrebuiltSessionOwner,
     requirePrebuiltAgentForRuntime,
     ...handoffHelpers,
     deletePrebuiltProject,
     resolveContextLength,
-    extractDomainsFromText,
   };
 }

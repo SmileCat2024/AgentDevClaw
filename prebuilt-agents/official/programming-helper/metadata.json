@@ -1,7 +1,7 @@
 {
   "id": "programming-helper",
   "kind": "agent",
-  "name": "编程小助手",
+  "name": "智能编码空间",
   "description": "面向真实编码任务的编程工作空间，支持理解代码、实现功能、排障和重构",
   "version": "2.0.0",
   "icon": "code",
@@ -36,21 +36,52 @@
         "send",
         "interrupt",
         "create",
-        "overview",
-        "explorations"
+        "overview"
       ]
     },
     {
-      "id": "explorer",
-      "displayName": "探索代理",
-      "description": "只读分析、知识收集，不可修改文件",
-      "sessionModel": "one-shot",
-      "groupChat": true,
+      "id": "coder",
+      "displayName": "Coder",
+      "description": "自主编码智能体：线程化无人值守执行，会话由调度面（ACP / threads CLI / dispatch）创建，不接受用户直接创建",
+      "sessionModel": "persistent",
+      "sessionType": "coder",
+      "qualifierLabel": "项目",
+      "sidebarEntry": true,
+      "sidebarGroup": "tool",
       "operations": [
         "status",
-        "spawn",
-        "compact"
-      ]
+        "sessions",
+        "interrupt",
+        "overview"
+      ],
+      "ui": {
+        "entry": "sessions",
+        "tabs": [
+          {
+            "id": "sessions",
+            "label": {
+              "zh": "线程",
+              "en": "Threads"
+            }
+          },
+          {
+            "id": "chat",
+            "label": {
+              "zh": "对话",
+              "en": "Chat"
+            }
+          }
+        ],
+        "home": {
+          "blocks": [
+            {
+              "id": "coder-threads",
+              "type": "coder-threads",
+              "visibility": "tab:sessions"
+            }
+          ]
+        }
+      }
     }
   ],
   "ui": {

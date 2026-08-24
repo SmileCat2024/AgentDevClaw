@@ -92,28 +92,6 @@ export function readSessionIndex(workspaceId) {
   return { activeSessionId: index.activeSessionId, sessions };
 }
 
-export function getExplorations(workspaceId) {
-  const index = readSessionIndex(workspaceId);
-  return index.sessions.filter(s => {
-    const st = cleanText(s.sessionType);
-    if (st === 'exploration') return true;
-    if (st === 'sub' && s.metadata?.clean === true) return true;
-    if (st === 'sub' && s.metadata?.sourceSessionId?.startsWith('__protoclaw-clean-')) return true;
-    return false;
-  });
-}
-
-export function getSubs(workspaceId) {
-  const index = readSessionIndex(workspaceId);
-  return index.sessions.filter(s => {
-    const st = cleanText(s.sessionType);
-    if (st === 'sub' && s.metadata?.clean === true) return false;
-    if (st === 'sub' && s.metadata?.sourceSessionId?.startsWith('__protoclaw-clean-')) return false;
-    if (st === 'sub' && s.metadata?.resumeMode === 'one-shot') return true;
-    return false;
-  });
-}
-
 export function loadSessionDetail(workspaceId, sessionId) {
   const filePath = join(getSessionsDir(workspaceId), `${sessionId}.json`);
   if (!existsSync(filePath)) return null;
@@ -292,8 +270,6 @@ export function createContext(workspaceId, provider = null) {
     // 数据读取
     readWorkspaceState: () => readWorkspaceState(workspaceId),
     readSessionIndex: () => readSessionIndex(workspaceId),
-    getExplorations: () => getExplorations(workspaceId),
-    getSubs: () => getSubs(workspaceId),
     loadSessionDetail: (sessionId) => loadSessionDetail(workspaceId, sessionId),
     loadFinalOutput: (sessionId) => loadFinalOutput(workspaceId, sessionId),
     findHandoffSummary: (sessionId) => findHandoffSummary(workspaceId, sessionId),

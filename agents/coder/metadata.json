@@ -1,7 +1,0 @@
-{
-  "name": "coder",
-  "description": "编程小助手的独立 CLI 形态：能力/提示词/feature 与编程小助手一致，单次调用，viewer 可监视",
-  "modelPresets": {
-    "default": "ZCode GLM-5.3"
-  }
-}
