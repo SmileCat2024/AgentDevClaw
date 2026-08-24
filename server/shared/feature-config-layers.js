@@ -46,6 +46,15 @@ export function agentLayerPath(agentId = 'programming-helper') {
   return join(featureConfigDirFor(agentId), 'agent.json');
 }
 
+/**
+ * coder 身份层文件：workspaces/programming-helper/feature-config/coder.json。
+ * coder 是编程小助手工作空间内的平行身份（sessionType=coder），不是独立工作空间，
+ * 层文件与主身份 agent.json 同目录；队列语义为 [全局层, coder 层]，无目录层。
+ */
+export function coderLayerPath(agentId = 'programming-helper') {
+  return join(featureConfigDirFor(agentId), 'coder.json');
+}
+
 function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

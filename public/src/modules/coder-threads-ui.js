@@ -236,7 +236,7 @@ window.CoderThreadsUI = (() => {
       const merged = [...active, ...archived];
       const mergedHtml = merged.length
         ? merged.map(renderThread).join('')
-        : '<div class="coder-thread-empty">' + (zh ? '本项目暂无 coder 线程。' : 'No coder threads in this project yet.') + '</div>';
+        : '<div class="coder-thread-empty">' + (zh ? '本项目暂无 Coder 线程。' : 'No Coder threads in this project yet.') + '</div>';
       return '<div class="coder-threads embedded">' + mergedHtml + '</div>';
     }
 
@@ -247,7 +247,7 @@ window.CoderThreadsUI = (() => {
         ? '<div class="coder-thread-empty">' + (zh ? '暂无已归档线程。' : 'No archived threads.') + '</div>'
         : '<div class="coder-thread-empty">'
           + (zh
-            ? '暂无线程。coder 线程由调度面创建：<br>ACP 编辑器集成（<code>claw acp coder</code>）、CLI（<code>claw threads</code>）或 dispatch 调度技能。'
+            ? '暂无线程。Coder 线程由调度面创建：<br>ACP 编辑器集成（<code>claw acp coder</code>）、CLI（<code>claw threads</code>）或 dispatch 调度技能。'
             : 'No threads yet. Coder threads are created by the dispatch plane:<br>ACP editor integration (<code>claw acp coder</code>), CLI (<code>claw threads</code>), or the dispatch skill.')
           + '</div>';
     } else {

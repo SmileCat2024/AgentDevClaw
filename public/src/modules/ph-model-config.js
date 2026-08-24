@@ -2,7 +2,8 @@
  * ph-model-config.js — 编程小助手项目设置面板
  *
  * IDE 式布局：左侧分类列表 + 右侧配置区域
- * 分类页：模型配置、进程模式、Feature 设置（二级页：agent 层配置编辑器）
+ * 分类页：模型配置（含 coder 身份行）、进程模式、Feature 设置
+ * （一级：身份入口列表；二级：编程小助手 agent 层 / coder 层配置编辑器）
  *
  * 外部依赖（通过全局作用域）：
  *   - escapeHtml (app-ui.js)
@@ -16,7 +17,7 @@
  */
 'use strict';
 
-let _phSettingsTab = 'model'; // 'model' | 'process' | 'feature'
+let _phSettingsTab = 'model'; // 'model' | 'process' | 'feature' | 'feature-main' | 'feature-coder'
 let _phFeatureEditor = null;
 
 function _closePhFeatureEditor() {
@@ -41,8 +42,20 @@ function ensurePhModelConfigHost() {
 function _renderModelConfigContent(agent, presets) {
   const isZh = currentLanguage === 'zh';
   const current = agent.modelPresets || {};
+  // coder 身份（编程小助手工作空间内 sessionType=coder）的模型配置存
+  // agent-configs/coder.json，与主身份分文件；打开面板时单独 fetch 缓存。
+  const showCoderRow = window.phModelConfigAgentId === 'programming-helper';
+  const coderCurrent = (window.ClawFW && window.ClawFW._coderModelPresets) || {};
   const roles = [
-    { key: 'default', label: isZh ? '主代理' : 'Main Agent', desc: isZh ? '对话和编码任务' : 'Chat & coding tasks' },
+    { key: 'default', label: isZh ? '编程小助手' : 'Programming Helper', desc: isZh ? '对话和编码任务' : 'Chat & coding tasks' },
+    ...(showCoderRow ? [{
+      key: 'coder',
+      label: 'Coder',
+      desc: isZh
+        ? '高效的自主编码智能体'
+        : 'Efficient autonomous coding agent',
+      roleConfig: coderCurrent.default,
+    }] : []),
     { key: 'system', label: isZh ? '系统管理' : 'System', desc: isZh ? '系统自管理能力' : 'System self-management' },
   ];
 
@@ -61,7 +74,7 @@ function _renderModelConfigContent(agent, presets) {
   };
 
   const rows = roles.map(function(role) {
-    const roleConfig = current[role.key] || {};
+    const roleConfig = role.roleConfig !== undefined ? role.roleConfig : (current[role.key] || {});
     const primaryVal = typeof roleConfig === 'string' ? roleConfig : (roleConfig.primary || '');
     const secondaryVal = typeof roleConfig === 'string' ? '' : (roleConfig.secondary || '');
     const isDefaultRole = role.key === 'default';
@@ -96,6 +109,65 @@ function _renderModelConfigContent(agent, presets) {
   }).join('');
 
   return '<div class="ph-mc-list">' + rows + '</div>';
+}
+
+// ── Feature 设置：身份入口列表 + 二级编辑器页 ─────────────────
+//
+// coder 白名单与 coder-agent.js 的挂载清单对齐（有配置 manifest 的部分）：
+// shell / memory / skill / lsp / github。coder 不挂 mcp、audio-feedback、
+// context-guard（其上下文接力 ContextRotationTriggerFeature 为零配置装配）。
+const PH_CODER_INCLUDE_FEATURES = ['shell', 'memory', 'skill', 'lsp', 'github'];
+
+const PH_FEATURE_PAGES = {
+  'feature-main': {
+    scopeId: 'agent',
+    subtitleZh: '编程小助手整体的 Feature 配置，对所有项目目录生效；目录级配置可以覆盖',
+    subtitleEn: 'Feature config for the whole Programming Helper workspace; per-directory config can override it',
+  },
+  'feature-coder': {
+    scopeId: 'coder',
+    scopeAgentId: 'coder',
+    includeFeatures: PH_CODER_INCLUDE_FEATURES,
+    subtitleZh: 'Coder 自主编码身份的 Feature 配置，仅含其实际挂载的 Feature',
+    subtitleEn: 'Feature config for the Coder identity, limited to its mounted features',
+  },
+};
+
+function _renderFeatureEntryList() {
+  const isZh = currentLanguage === 'zh';
+  const chevron = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-left:12px;"><path d="m9 18 6-6-6-6"></path></svg>';
+  const showCoder = window.phModelConfigAgentId === 'programming-helper';
+  const entries = [
+    {
+      key: 'feature-main',
+      title: isZh ? '编程小助手 Feature 配置' : 'Programming Helper Feature Config',
+      desc: isZh ? '对所有项目目录生效；目录级配置可以覆盖' : 'Applies to all project directories; per-directory config can override it',
+    },
+  ];
+  if (showCoder) {
+    entries.push({
+      key: 'feature-coder',
+      title: isZh ? 'Coder Feature 配置' : 'Coder Feature Config',
+      desc: isZh ? 'Coder 自主编码身份的 Feature 配置层，仅含其实际挂载的 Feature' : 'Feature layer for the Coder identity, limited to its mounted features',
+    });
+  }
+
+  const cards = entries.map(function(entry) {
+    return '<div class="ph-pm-card" onclick="window._phSwitchSettingsTab(\'' + entry.key + '\')">'
+      + '<div class="ph-pm-card-body">'
+      + '<div class="ph-pm-card-title">' + escapeHtml(entry.title) + '</div>'
+      + '<div class="ph-pm-card-desc">' + escapeHtml(entry.desc) + '</div>'
+      + '</div>'
+      + '<span style="display:flex;align-items:center;color:var(--text-secondary);">' + chevron + '</span>'
+      + '</div>';
+  }).join('');
+
+  return '<div class="ph-pm-body">' + cards
+    + '<div class="ph-pm-intro">' + escapeHtml(isZh
+      ? '按身份分别配置 Feature 参数；Coder 层覆盖同名全局配置项。'
+      : 'Configure feature parameters per identity; the Coder layer overrides global values of the same keys.')
+    + '</div>'
+    + '</div>';
 }
 
 // ── Process mode content ──────────────────────────────────────
@@ -159,8 +231,9 @@ function renderPhModelConfigOverlay(agent, presets) {
     ? getFeatureCreatorProjects(agent) : [];
   window._phCurrentProject = projects.find(p => p.openDirectory === agent?.workspace_state?.openDirectory) || projects[0] || null;
 
-  // ── Feature 设置二级页：共享配置编辑器（agent 层）──────────
-  if (_phSettingsTab === 'feature') {
+  // ── Feature 设置二级页：共享配置编辑器（按身份分页）────────
+  const featurePage = PH_FEATURE_PAGES[_phSettingsTab];
+  if (featurePage) {
     if (typeof createFeatureConfigEditor !== 'function') {
       _phSettingsTab = 'model';
     } else {
@@ -168,7 +241,7 @@ function renderPhModelConfigOverlay(agent, presets) {
       // 返回一级页（head 左侧返回按钮）
       window._phFeatureBack = () => {
         _closePhFeatureEditor();
-        _phSettingsTab = 'model';
+        _phSettingsTab = 'feature';
         renderPhModelConfigOverlay(agent, presets);
       };
       host.innerHTML = [
@@ -178,10 +251,8 @@ function renderPhModelConfigOverlay(agent, presets) {
         '<div style="display:flex;align-items:center;gap:4px;">',
         '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" onclick="window._phFeatureBack()" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>',
         '<div>',
-        '<div class="feature-detail-title">' + escapeHtml(isZh ? '工作空间设置 · Feature' : 'Workspace Settings · Feature') + '</div>',
-        '<div class="feature-detail-subtitle">' + escapeHtml(isZh
-          ? '编程小助手整体的 Feature 配置，对所有项目目录生效'
-          : 'Feature config for the whole Programming Helper workspace') + '</div>',
+        '<div class="feature-detail-title">' + escapeHtml((isZh ? '工作空间设置 · ' : 'Workspace Settings · ') + (featurePage.scopeId === 'coder' ? 'Coder Feature' : 'Feature')) + '</div>',
+        '<div class="feature-detail-subtitle">' + escapeHtml(isZh ? featurePage.subtitleZh : featurePage.subtitleEn) + '</div>',
         '</div>',
         '</div>',
         '<button class="feature-detail-close" type="button" onclick="window.phCloseModelConfig()">&times;</button>',
@@ -192,7 +263,9 @@ function renderPhModelConfigOverlay(agent, presets) {
       ].join('');
       _phFeatureEditor = createFeatureConfigEditor({
         host: document.getElementById('ph-feature-config-host'),
-        scopeId: 'agent',
+        scopeId: featurePage.scopeId,
+        ...(featurePage.scopeAgentId ? { scopeAgentId: featurePage.scopeAgentId } : {}),
+        ...(featurePage.includeFeatures ? { includeFeatures: featurePage.includeFeatures } : {}),
       });
       _phFeatureEditor.open();
       return;
@@ -217,13 +290,17 @@ function renderPhModelConfigOverlay(agent, presets) {
   let contentHtml;
   if (_phSettingsTab === 'model') {
     contentHtml = _renderModelConfigContent(agent, presets);
+  } else if (_phSettingsTab === 'feature') {
+    contentHtml = _renderFeatureEntryList();
   } else {
     contentHtml = _renderProcessModeContent(agent);
   }
 
   const subtitle = _phSettingsTab === 'model'
     ? (isZh ? '为主代理设置主模型和备选模型，其他角色设置单个模型' : 'Set primary and secondary models for main agent, single model for other roles')
-    : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
+    : _phSettingsTab === 'feature'
+      ? (isZh ? '选择身份的 Feature 配置层' : 'Choose the feature config layer for an identity')
+      : (isZh ? '选择新会话的进程运行方式' : 'Choose how new sessions run');
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',

@@ -580,9 +580,19 @@ export function setupModelConfigRoutes(app, express) {
         return res.status(400).json({ error: 'agentId is required' });
       }
       const metaPath = path.join(PROJECT_ROOT, 'prebuilt-agents', 'official', agentId, 'metadata.json');
-      const meta = await readJson(metaPath);
+      let meta = await readJson(metaPath);
       if (!meta) {
-        return res.status(404).json({ error: 'Agent metadata not found' });
+        // 工作空间内身份（如 programming-helper 的 coder）没有独立 agent 目录：
+        // 校验宿主 metadata 的 identities 后按无 meta 后备处理，用户配置仍读
+        // .agentdev/agent-configs/<identityId>.json（与 PUT / 运行时读取同一约定）。
+        const hostMeta = await readJson(path.join(PROJECT_ROOT, 'prebuilt-agents', 'official', 'programming-helper', 'metadata.json'));
+        const identity = Array.isArray(hostMeta?.identities)
+          ? hostMeta.identities.find((entry) => entry.id === agentId)
+          : null;
+        if (!identity) {
+          return res.status(404).json({ error: 'Agent metadata not found' });
+        }
+        meta = {};
       }
 
       const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);

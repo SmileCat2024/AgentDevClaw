@@ -252,7 +252,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const wsState = getAgentWorkspaceState(agent);
   const currentOpenDir = String(wsState?.openDirectory || '').trim();
   const isZh = currentLanguage === 'zh';
-  const agentName = isZh ? '编程小助手' : 'Programming Helper';
+  const agentName = isZh ? '智能编码空间' : 'Intelligent Coding Space';
 
   // Determine current project — match by normalized id, not raw openDirectory,
   // because workspace_state.openDirectory and project.openDirectory may use
@@ -364,9 +364,10 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       openDirectory: currentProject?.openDirectory || '',
     }));
 
-    // 目录设置按钮（共享配置编辑器，编辑当前目录的目录层）
-    const dirConfigBtn = (typeof phDirConfigButtonHtml === 'function')
-      ? phDirConfigButtonHtml(agent) : '';
+    // 目录设置按钮（共享配置编辑器，编辑当前目录的目录层）；
+    // 目录由当前项目显式传入，避免运行时二次查询 workspace_state 失效
+    const dirConfigBtn = (currentProject && typeof phDirConfigButtonHtml === 'function')
+      ? phDirConfigButtonHtml(agent, currentProject.openDirectory) : '';
 
     const headerBar = [
       '<div class="ph-project-bar">',
@@ -389,7 +390,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-welcome">',
       '<div class="ph-welcome-icon">&#128193;</div>',
       '<div class="ph-welcome-title">' + (isZh ? '打开一个项目开始编程' : 'Open a project to start coding') + '</div>',
-      '<div class="ph-welcome-desc">' + (isZh ? '选择一个本地文件夹作为工作目录，编程小助手将在该项目中协助你。' : 'Select a local folder as your workspace. The assistant will help you code within the project.') + '</div>',
+      '<div class="ph-welcome-desc">' + (isZh ? '选择一个本地文件夹作为工作目录，智能编码空间将在该项目中协助你。' : 'Select a local folder as your workspace. The assistant will help you code within the project.') + '</div>',
       '</div>',
       '</section>',
     ].join('');
@@ -464,7 +465,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<div class="ph-session-tabs-row">';
     sessionsHtml += '<button class="ph-session-tab' + (isSearching ? '' : ' active') + '" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainSessions.length)) + '</span></button>';
     sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedSessions.length)) + '</span></button>';
-    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="coder" onclick="window.switchPhSessionTab(this)">coder <span class="ph-tab-count">' + escapeHtml(String(coderCount)) + '</span></button>';
+    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="coder" onclick="window.switchPhSessionTab(this)">Coder <span class="ph-tab-count">' + escapeHtml(String(coderCount)) + '</span></button>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-toolbar">';
     sessionsHtml += '<div class="ph-session-search-inline">';

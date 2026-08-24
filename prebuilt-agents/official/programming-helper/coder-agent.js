@@ -26,7 +26,7 @@
  *   完成，runtime 只按普通会话运行。
  */
 
-import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature } from '@agentdev/core';
+import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdev/core';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { TicketsBuildFlow } from '../../../features/tickets-build-flow/dist/index.js';
@@ -37,9 +37,13 @@ import { ImageReaderFeature } from '@agentdev/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';
-import { existsSync, readFileSync } from 'fs';
 import { ContextRotationTriggerFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
+import {
+  readGlobalLayer,
+  readLayerFile,
+  coderLayerPath,
+} from '../../../server/shared/feature-config-layers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -47,24 +51,6 @@ const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts', 'coder');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
-const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
-
-function readSystemFeatureConfig() {
-  if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};
-  try {
-    const raw = readFileSync(SYSTEM_FEATURE_CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    const config = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : {};
-    // Backward compat: migrate top-level runtimes into lsp.runtimes
-    if (config.runtimes && typeof config.runtimes === 'object') {
-      config.lsp = { ...(config.lsp || {}), runtimes: config.runtimes };
-      delete config.runtimes;
-    }
-    return config;
-  } catch {
-    return {};
-  }
-}
 
 /**
  * 自动化编码智能体（coder）Agent
@@ -73,7 +59,13 @@ export class CoderAgent extends BasicAgent {
   constructor(config = {}) {
     const workspaceDir = config.workspaceDir || process.cwd();
     const runtime = config.runtime && typeof config.runtime === 'object' ? config.runtime : {};
-    const systemConfig = readSystemFeatureConfig();
+    // 配置队列：[全局层(feature-setup.json), coder 层(feature-config/coder.json)]。
+    // coder 层由工作空间设置的「coder Feature 配置」编辑，覆盖全局层同名项；
+    // 队列在构造函数内组装（同进程多 session 场景禁止进程级缓存）。
+    const { merged: systemConfig } = resolveFeatureConfig([
+      readGlobalLayer(),
+      readLayerFile(coderLayerPath()),
+    ]);
 
     // 不挂载 MCP feature：mcp_* 工具会占据 tools 数组头部，把 read/ls 等
     // 核心工具挤到 14 位之后——Lite 级小模型对此敏感，实测会退化为只输出计划
@@ -89,7 +81,7 @@ export class CoderAgent extends BasicAgent {
     });
 
     // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
-    // feature-setup.json 中的 skill 配置会覆盖默认值。MCP 按上述注释刻意排除，不挂 MCPFeature。
+    // 配置队列中的 skill 配置（全局层或 coder 层）会覆盖默认值。MCP 按上述注释刻意排除，不挂 MCPFeature。
     const skillInput = systemConfig.skill && typeof systemConfig.skill === 'object' ? systemConfig.skill : undefined;
     this.use(new SkillFeature(skillInput));
 

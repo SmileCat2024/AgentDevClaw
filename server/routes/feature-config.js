@@ -19,6 +19,7 @@ import { resolveFeatureConfig } from '@agentdev/core';
 import {
   GLOBAL_LAYER_PATH,
   agentLayerPath,
+  coderLayerPath,
   dirLayerPath,
   readGlobalLayer,
   readLayerFile,
@@ -68,6 +69,17 @@ registerScopeResolver(PROGRAMMING_HELPER_ID, ({ dir } = {}) => {
   }
   return { layers };
 });
+
+// coder 身份（编程小助手工作空间内 sessionType=coder 的平行身份）：
+// 队列为 [全局, coder]，无目录层。coder-agent.js 装配时按同一队列读取合并。
+const CODER_SCOPE_ID = 'coder';
+
+registerScopeResolver(CODER_SCOPE_ID, () => ({
+  layers: [
+    { id: 'global', label: '全局', path: GLOBAL_LAYER_PATH },
+    { id: 'coder', label: 'coder', path: coderLayerPath(PROGRAMMING_HELPER_ID) },
+  ],
+}));
 
 // ── 敏感字段清单（脱敏另立 ticket，本版原样返回，仅留锚点） ────────────
 
