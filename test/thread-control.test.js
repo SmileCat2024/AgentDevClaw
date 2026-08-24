@@ -1167,6 +1167,17 @@ describe('InputGateway (unified user input routing)', () => {
     assert.equal(result.text, 'hello');
   });
 
+  test('historical thread sessions reject writes instead of silently targeting the head', async () => {
+    const { core, integration } = makeFixture();
+    await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
+    await core.advanceHead({ threadId: (await core.findThreadByHeadSession('programming-helper', 'ig-s1')).threadId, toSessionId: 'ig-s2', fromSessionId: 'ig-s1', endKind: 'trim' });
+
+    await assert.rejects(
+      deliverUserInput({ viewerAgentId: 'viewer-ig-1', text: '不要写入历史分片' }, { integration }),
+      (err) => err.code === 'session_not_head' && err.status === 409,
+    );
+  });
+
   test('image-only input during handoff fails explicitly instead of being lost', async () => {
     const { core, integration } = makeFixture();
     await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });

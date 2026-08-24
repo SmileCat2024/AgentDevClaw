@@ -97,6 +97,7 @@ import { getThreadControl } from './server/thread-control/thread-controller.js';
 import { getThreadIntegration } from './server/thread-control/thread-integration.js';
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
+import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
 import { setupAcpRoutes } from './server/routes/acp.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { createThreadRotationService } from './server/thread-control/thread-rotation.js';
@@ -255,11 +256,25 @@ Object.assign(sessionApi, {
   buildLightPrebuiltSessionRecord,
 });
 
+const threadControl = getThreadControl();
+const threadIntegration = getThreadIntegration();
+const threadLifecycle = createThreadLifecycleService({
+  control: threadControl,
+  interruptSession: async (agentId, sessionId) => {
+    const runtime = getAgentRuntime(agentId, sessionId);
+    const viewerAgentId = runtime?.viewerAgentId;
+    if (!viewerAgentId) return { status: 'not_running' };
+    const response = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/interrupt`, { method: 'POST' });
+    if (!response.ok) throw new Error(`Viewer interrupt returned ${response.status}`);
+    return { status: 'interrupted', viewerAgentId };
+  },
+  stopSession: stopManagedAgent,
+});
 const threadRotation = createThreadRotationService({
   sessionApi: sessionHelpers,
   stopManagedAgent,
-  threadIntegration: getThreadIntegration(),
-  threadControl: getThreadControl(),
+  threadIntegration,
+  threadControl,
 });
 
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──
@@ -362,6 +377,7 @@ setupSessionRoutes(app, express, {
   notifySessionArchived,
   clearUISurfaces: (viewerAgentId) => getUISurfaceStore().clearAgent(viewerAgentId),
   threadRotation,
+  threadLifecycle,
 });
 
 // ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
@@ -458,7 +474,8 @@ setupUISurfaceRoutes(app, express);
 
 // ── Work Threads → server/thread-control/（coder 宿主已启用线程承接）──
 setupThreadRoutes(app, express, {
-  control: getThreadControl(),
+  control: threadControl,
+  lifecycle: threadLifecycle,
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null
   resolveSessionOpenDirectory: async (agentId, sessionId) => {
     const record = await requirePrebuiltSessionRecord(agentId, sessionId);
@@ -474,8 +491,8 @@ setupAcpRoutes(app, express, {
   startManagedAgent,
   stopManagedAgent,
   waitForManagedRuntimeReady,
-  threadIntegration: getThreadIntegration(),
-  threadControl: getThreadControl(),
+  threadIntegration,
+  threadControl,
   requirePrebuiltSessionRecord,
 });
 // runtime 就绪补投：succession 时刻 runtime 未就绪而保持 pending 的指令，

@@ -22,8 +22,8 @@ const PENDING_COMMAND_STATUSES = new Set(['pending', 'in_flight']);
  * @param {object} params
  * @param {import('@agentdev/core').WorkThreadRecord} params.thread
  * @param {import('@agentdev/core').WorkThreadBoardState | null} [params.boardState]
- * @param {{ archivedAt: number } | null} [params.archiveEntry]
- * @returns {{ lifeState: 'archived'|'executing'|'pending-commands'|'idle'|'closed', archivedAt: number | null, failed: boolean, lastEventAt: number | null }}
+ * @param {{ archivedAt: number, cleanup?: object } | null} [params.archiveEntry]
+ * @returns {{ lifeState: 'archived'|'executing'|'pending-commands'|'idle'|'closed', archivedAt: number | null, archiveCleanup: object | null, failed: boolean, lastEventAt: number | null }}
  */
 export function synthesizeThreadLifeState({ thread, boardState = null, archiveEntry = null }) {
   const lastEventAt = Math.max(
@@ -32,7 +32,13 @@ export function synthesizeThreadLifeState({ thread, boardState = null, archiveEn
   ) || null;
 
   if (archiveEntry?.archivedAt) {
-    return { lifeState: 'archived', archivedAt: archiveEntry.archivedAt, failed: false, lastEventAt };
+    return {
+      lifeState: 'archived',
+      archivedAt: archiveEntry.archivedAt,
+      ...(archiveEntry.cleanup ? { archiveCleanup: archiveEntry.cleanup } : {}),
+      failed: false,
+      lastEventAt,
+    };
   }
 
   const failed = boardState?.status === 'failed' || thread?.status === 'rotation_failed';

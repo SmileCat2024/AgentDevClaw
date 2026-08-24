@@ -79,6 +79,7 @@ export function setupSessionRoutes(app, express, ctx) {
     notifySessionArchived,
     clearUISurfaces,
     threadRotation,
+    threadLifecycle,
   } = ctx;
 
 // Automation trigger from thread-host runtimes (ContextRotationTriggerFeature):
@@ -1221,12 +1222,18 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
     if (agent.id === 'agent-creator' || agent.id === 'flow-workspace') {
       assemblyRuntime = await stopAssemblyRuntime(sessionId);
     }
+    const deletedRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
+    if (deletedRecord.sessionType === 'coder') {
+      const error = new Error('Coder sessions are managed by their thread and cannot be deleted individually');
+      error.statusCode = 409;
+      error.code = 'coder_session_delete_forbidden';
+      throw error;
+    }
     const deletedRuntime = getAgentRuntime(agent.id, sessionId);
     const deleted = await deletePrebuiltSession(agent.id, sessionId, {
       includeSessions: req.body.responseMode !== 'delta',
     });
-    // 线程宿主（coder）：被删会话是线程 head 时取消该线程（pending 指令
-    // 一并取消）。非宿主 / 非 head / 无线程：no-op。
+    // 线程宿主：被删会话是线程 head 时收口该线程；非宿主 / 非 head / 无线程：no-op。
     await getThreadIntegration().onSessionDeleted(agent.id, sessionId);
     if (deletedRuntime?.viewerAgentId && clearUISurfaces) {
       clearUISurfaces(deletedRuntime.viewerAgentId);
@@ -1278,7 +1285,37 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
   try {
     const { agentId, sessionId } = resolveSessionTarget(req.body);
     const agent = await requireAgentLight(agentId);
+    const sessionRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
     const archived = req.body.archived !== false;
+    if (sessionRecord.sessionType === 'coder' && threadLifecycle) {
+      const thread = await threadLifecycle.findThreadBySession(agent.id, sessionId);
+      if (!thread) {
+        const error = new Error('Coder session is not attached to a thread');
+        error.statusCode = 409;
+        error.code = 'coder_thread_missing';
+        throw error;
+      }
+      if (archived) {
+        const threadResult = await threadLifecycle.archiveThread(thread.threadId, { reason: 'session_archive_redirect' });
+        res.json({
+          ...threadResult,
+          archivedSessionId: sessionId,
+          archived: true,
+          operationId: trace.operationId,
+        });
+        trace.mark('response_sent');
+        return;
+      }
+      const threadResult = await threadLifecycle.unarchiveThread(thread.threadId);
+      res.json({
+        ...threadResult,
+        archivedSessionId: sessionId,
+        archived: false,
+        operationId: trace.operationId,
+      });
+      trace.mark('response_sent');
+      return;
+    }
     const result = await archivePrebuiltSession(agent.id, sessionId, archived, {
       includeSessions: req.body.responseMode !== 'delta',
     });

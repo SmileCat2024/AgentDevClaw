@@ -60,15 +60,15 @@ export class ThreadArchiveIndex {
     return Boolean(entries[threadId]);
   }
 
-  /** 幂等：已归档时返回既有标记。 */
-  async archive(threadId) {
+  /** 幂等：已归档时保留时间戳，并允许更新清理结果。 */
+  async archive(threadId, options = {}) {
     return this._mutate(async () => {
       const entries = await this._read();
-      if (!entries[threadId]) {
-        entries[threadId] = { archivedAt: Date.now() };
-        await this._write(entries);
-      }
-      return entries[threadId];
+      const existing = entries[threadId] || { archivedAt: Date.now() };
+      if (options.cleanup !== undefined) existing.cleanup = options.cleanup;
+      entries[threadId] = existing;
+      await this._write(entries);
+      return existing;
     });
   }
 

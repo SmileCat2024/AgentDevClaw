@@ -18,12 +18,32 @@ import { synthesizeThreadLifeState } from './thread-life-state.js';
  * @param {typeof import('express').json} express
  * @param {object} options
  * @param {{ core: import('@agentdev/core').WorkThread, board: import('@agentdev/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
+ * @param {{ archiveThread: Function, unarchiveThread: Function }} options.lifecycle
  */
-export function setupThreadRoutes(app, express, { control, resolveSessionOpenDirectory } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, resolveSessionOpenDirectory } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
   const { core, board, archive } = control;
+  const lifecycleService = lifecycle || {
+    archiveThread: async (threadId) => {
+      const thread = await core.getThread(threadId);
+      if (!thread) throw Object.assign(new Error('Thread not found'), { code: 'thread_not_found', status: 404 });
+      const boardState = await board.getState(threadId).catch(() => null);
+      const life = synthesizeThreadLifeState({ thread, boardState });
+      if (life.lifeState === 'executing' || life.lifeState === 'pending-commands') {
+        throw Object.assign(new Error(`线程当前状态为 ${life.lifeState}，请先中断再归档`), { code: 'thread_busy', status: 409 });
+      }
+      const entry = await archive.archive(threadId);
+      return { threadId, archivedAt: entry.archivedAt };
+    },
+    unarchiveThread: async (threadId) => {
+      const thread = await core.getThread(threadId);
+      if (!thread) throw Object.assign(new Error('Thread not found'), { code: 'thread_not_found', status: 404 });
+      await archive.unarchive(threadId);
+      return { threadId, archivedAt: null, runtimeStarted: false };
+    },
+  };
 
   /** 为线程附带合成生命状态（归档标记 + 看板状态 + 锚点指令拼装）。 */
   const _attachLifeState = async (thread, archiveEntries) => {
@@ -255,28 +275,13 @@ export function setupThreadRoutes(app, express, { control, resolveSessionOpenDir
     }
   });
 
-  // ── 归档（收纳语义，Q11/Q5/Q14/Q15）────────────────────────────
-  // 先中断再归档：executing / pending-commands 状态下拒绝（409 thread_busy），
-  // UI 侧对应入口置灰；归档 = 线程层标记，成员会话数据不动，此后拒收新指令。
-  // 取消归档为幂等翻转，对称提供。
-
+  // ── 归档（跨 Thread / Board / Runtime 的生命周期事务）────────────
   app.post('/protoclaw/threads/:threadId/archive', jsonMiddleware, async (req, res) => {
     try {
-      const thread = await core.getThread(req.params.threadId);
-      if (!thread) {
-        return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
-      }
-      const boardState = await board.getState(req.params.threadId).catch(() => null);
-      const life = synthesizeThreadLifeState({ thread, boardState });
-      if (life.lifeState === 'executing' || life.lifeState === 'pending-commands') {
-        return res.status(409).json({
-          ok: false,
-          code: 'thread_busy',
-          message: `线程当前状态为 ${life.lifeState}，请先中断再归档`,
-        });
-      }
-      const entry = await archive.archive(req.params.threadId);
-      res.json({ ok: true, threadId: req.params.threadId, archivedAt: entry.archivedAt });
+      const result = await lifecycleService.archiveThread(req.params.threadId, {
+        reason: req.body?.reason || 'user_archive',
+      });
+      res.json({ ok: true, ...result });
     } catch (err) {
       _errorResponse(res, err);
     }
@@ -284,12 +289,8 @@ export function setupThreadRoutes(app, express, { control, resolveSessionOpenDir
 
   app.post('/protoclaw/threads/:threadId/unarchive', jsonMiddleware, async (req, res) => {
     try {
-      const thread = await core.getThread(req.params.threadId);
-      if (!thread) {
-        return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
-      }
-      await archive.unarchive(req.params.threadId);
-      res.json({ ok: true, threadId: req.params.threadId, archivedAt: null });
+      const result = await lifecycleService.unarchiveThread(req.params.threadId);
+      res.json({ ok: true, ...result });
     } catch (err) {
       _errorResponse(res, err);
     }

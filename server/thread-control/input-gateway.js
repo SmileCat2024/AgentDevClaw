@@ -9,8 +9,11 @@
  *   收件会话是线程 head 且交接意图 fresh（pendingSuccession）
  *     → Thread Inbox 暂存（head 即将退役，直投的执行结果会留在旧会话、
  *       不被 successor 带走）；交接完成后由 applySessionSuccession 投给新 head。
- *   其余一切情况（无线程 / 非 host / 非 head / 无交接）
+ *   其余一切情况（无线程 / 非 host / 无交接）
  *     → 原样直投 viewer user-turn，行为与未接入线程时完全一致。
+ *   历史 thread session（非 head）
+ *     → 明确拒绝写入；历史 session 只读，调用方应切换到当前 head。
+
  *
  * 「非 head」不在此拦截：那是调用方 UI 上下文的路由问题（前端守卫
  * resolveThreadInputRoute 负责）；网关只拦「交接窗口」这一客观事实。
@@ -107,8 +110,20 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
     return { route: 'direct' };
   }
 
-  const thread = await integration.core.findThreadByHeadSession(agentId, sessionId);
+  let thread = await integration.core.findThreadByHeadSession(agentId, sessionId);
+  if (!thread && typeof integration.findThreadBySession === 'function') {
+    thread = await integration.findThreadBySession(agentId, sessionId);
+  }
   if (!thread) return { route: 'direct' };
+
+  // 非 head Session 仍可查看，但不能把新输入写入历史分片；不要静默转投
+  // 当前 head，避免用户误以为自己仍在编辑历史现场。
+  if (thread.headSessionId !== sessionId) {
+    throw new UserTurnDeliveryError(
+      'Historical thread sessions are read-only; open the current head session to continue',
+      { code: 'session_not_head', status: 409, retryable: false },
+    );
+  }
 
   // 与 core.deliverPendingCommands 的派生规则同源（fresh 判定），
   // 但此处只读不写：stale 交接不构成拦截理由。

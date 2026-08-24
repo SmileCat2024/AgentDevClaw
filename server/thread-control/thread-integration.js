@@ -31,11 +31,28 @@ import { isThreadHostSession } from './host-agents.js';
 export { isThreadHostSession };
 
 export function createThreadIntegration({ control = null } = {}) {
-  const { core, board } = control || getThreadControl();
+  const { core, board, archive } = control || getThreadControl();
+
+  async function findThreadBySession(agentId, sessionId) {
+    const normalizedAgentId = String(agentId || '').trim();
+    const normalizedSessionId = String(sessionId || '').trim();
+    if (!normalizedAgentId || !normalizedSessionId) return null;
+    const summaries = await core.listThreads({ agentId: normalizedAgentId });
+    for (const summary of summaries) {
+      if (!summary?.threadId) continue;
+      const candidate = await core.getThread(summary.threadId);
+      if (Array.isArray(candidate?.sessionChain)
+        && candidate.sessionChain.some((entry) => entry?.sessionId === normalizedSessionId)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
 
   return {
     core,
     board,
+    findThreadBySession,
 
     /**
      * 会话创建钩子：线程宿主工作空间的新会话自动成为一条新线程。
@@ -160,6 +177,8 @@ export function createThreadIntegration({ control = null } = {}) {
         const thread = await core.findThreadByHeadSession(normalizedAgentId, deleted);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
         await core.closeThread(thread.threadId, { reason: 'head_session_deleted' });
+        await board.closeBoard(thread.threadId, { reason: 'head_session_deleted' }).catch(() => {});
+        await archive?.unarchive(thread.threadId).catch(() => {});
         console.log(`[thread-integration] thread closed (head session deleted): ${thread.threadId}`);
         return { applied: true, threadId: thread.threadId };
       } catch (error) {
