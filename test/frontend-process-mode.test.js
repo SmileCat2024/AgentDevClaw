@@ -23,6 +23,7 @@ describe('programming-helper workspace process mode UI', () => {
       getCurrentAgentRecord: () => agent,
       // app-core.js 全局（本用例仅加载 ph-project-actions.js）
       isPhStyleWorkspaceAgent: (candidate) => candidate?.id === 'programming-helper',
+      getLogicalAgentId: (record) => record?.parent_id || record?.id || null,
       fetch: async (url, options) => {
         requests.push({ url, options });
         return {

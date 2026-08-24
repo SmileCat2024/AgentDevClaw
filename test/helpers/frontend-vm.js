@@ -69,6 +69,8 @@ export function createFrontendSandbox(overrides = {}) {
   const windowStub = {
     document: documentStub,
     localStorage: localStorageStub,
+    // 浏览器全局；部分生产模块（如 ph-project-actions.js）失败路径会调用 alert
+    alert() {},
     location: { href: 'http://127.0.0.1:1420', pathname: '/', search: '' },
     addEventListener() {},
     removeEventListener() {},

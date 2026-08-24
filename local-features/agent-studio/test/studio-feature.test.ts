@@ -515,21 +515,33 @@ describe('AgentStudioFeature', () => {
     });
 
     it('reports global registration failure without blocking project-level registration', async () => {
-      const agentDir = join(projectDir, 'builtin-id-agent');
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({
-        id: 'coder', entry: './agent.js', deployment: { kind: 'standalone' }, features: [],
-      }));
-      await fs.writeFile(join(agentDir, 'agent.js'), 'export default class Coder {}\\n');
-      await exec('studio_initialize_project', { projectDir, name: 'builtin-id-project' });
-      const result = await exec('studio_register_agent', { agentDir: './builtin-id-agent' });
-      // 项目内登记不受影响
-      assert.equal((result as { agentId: string }).agentId, 'coder');
-      // 全局注册显式失败并给出指引（ID 与内建 plain Agent 冲突）
-      const globalRegistration = (result as { globalRegistration?: { ok: boolean; error?: string; hint?: string } }).globalRegistration;
-      assert.equal(globalRegistration?.ok, false);
-      assert.ok(globalRegistration?.error?.includes('冲突'), `conflict error surfaced: ${globalRegistration?.error}`);
-      assert.ok(globalRegistration?.hint?.includes('claw run'));
+      // 内建 plain Agent 冲突判定 = PROJECT_ROOT/agents/<id>/agent.js 存在（server/feature-runtime/agent-registry.js）。
+      // 与 test/feature-runtime.test.js 同一规范：用临时内建目录验证，不依赖任何具体内建 agent 存在。
+      // 用 process.cwd() 定位仓库根：test:features 与 node --test 均在仓库根运行，绕开 src/dist 编译深度的差异。
+      const builtinId = 'agent-studio-test-conflict';
+      const builtinDir = join(process.cwd(), 'agents', builtinId);
+      await fs.mkdir(builtinDir, { recursive: true });
+      try {
+        await fs.writeFile(join(builtinDir, 'agent.js'), 'export default class BuiltinConflict {}\n');
+
+        const agentDir = join(projectDir, 'builtin-id-agent');
+        await fs.mkdir(agentDir, { recursive: true });
+        await fs.writeFile(join(agentDir, 'metadata.json'), JSON.stringify({
+          id: builtinId, entry: './agent.js', deployment: { kind: 'standalone' }, features: [],
+        }));
+        await fs.writeFile(join(agentDir, 'agent.js'), 'export default class Coder {}\n');
+        await exec('studio_initialize_project', { projectDir, name: 'builtin-id-project' });
+        const result = await exec('studio_register_agent', { agentDir: './builtin-id-agent' });
+        // 项目内登记不受影响
+        assert.equal((result as { agentId: string }).agentId, builtinId);
+        // 全局注册显式失败并给出指引（ID 与内建 plain Agent 冲突）
+        const globalRegistration = (result as { globalRegistration?: { ok: boolean; error?: string; hint?: string } }).globalRegistration;
+        assert.equal(globalRegistration?.ok, false);
+        assert.ok(globalRegistration?.error?.includes('冲突'), `conflict error surfaced: ${globalRegistration?.error}`);
+        assert.ok(globalRegistration?.hint?.includes('claw run'));
+      } finally {
+        await fs.rm(builtinDir, { recursive: true, force: true });
+      }
     });
 
     it('rejects built-in metadata before attempting an agent-debug runtime', async () => {
