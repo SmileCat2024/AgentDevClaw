@@ -1,5 +1,5 @@
 /**
- * ACP Support Routes — coder 工作空间的原子创建 + 精确中断（ticket 018）
+ * ACP Support Routes — coder 会话的原子创建 + 精确中断（ticket 018）
  *
  * 为外部 ACP adapter（scripts/run-coder-acp.js，独立 stdio 进程）提供两条
  * 进程内编排路由，替代 adapter 自行组合既有端点（会留下孤儿 session /
@@ -7,9 +7,9 @@
  * 见 ADR-0004 决策 3）：
  *
  *   POST /protoclaw/acp/coder/sessions
- *     单事务完成「校验 cwd → 创建 coder session（sessionType: main）→
- *     启动精确 session runtime → 等待 READY → 解析 threadId → 取
- *     viewerAgentId」。任一步失败按设计 §5 回滚阶梯回滚：
+ *     单事务完成「校验 cwd → 创建 coder session → 启动精确 session
+ *     runtime → 等待 READY → 解析 threadId → 取 viewerAgentId」。
+ *     任一步失败按设计 §5 回滚阶梯回滚：
  *       runtime 已启动 → 精确 stop；thread 已创建 → 关闭；
  *       session 已写入 → 从 index 删除。
  *     回滚失败不掩盖：错误响应附各步骤状态与遗留对象 ID，供手动清理。
@@ -19,8 +19,9 @@
  *     定位，绝不回退到 primary runtime），走现有 /api/agents/:id/interrupt
  *     同链路（ViewerWorker → UDS interrupt-agent + clearQueue: true）。
  *
- * 仅接受 agentId=coder（硬编码）：其他工作空间的会话创建走既有
- * /protoclaw/prebuilt_sessions。
+ * 外部契约仍以 agentId="coder" 调用（编辑器集成零感知）；coder 已并入
+ * programming-helper 工作空间，内部实现落在该工作空间的 coder 会话身份
+ * 上（sessionType='coder'，线程宿主）。
  */
 
 import path from 'path';
@@ -34,7 +35,12 @@ import {
 } from '../shared/agent-access.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 
+/** 对外契约 ID：ACP adapter 请求体仍传 agentId="coder"。 */
 export const ACP_AGENT_ID = 'coder';
+/** 内部实现：coder 会话宿主在 programming-helper 工作空间。 */
+export const ACP_WORKSPACE_AGENT_ID = 'programming-helper';
+/** coder 身份会话类型（线程宿主判定与 CoderAgent 分派键）。 */
+export const ACP_SESSION_TYPE = 'coder';
 export const ACP_READY_TIMEOUT_DEFAULT_MS = 30_000;
 
 export function resolveAcpReadyTimeoutMs() {
@@ -189,7 +195,7 @@ export function setupAcpRoutes(app, express, ctx) {
 
       let agent;
       try {
-        agent = await requireAgentLight(ACP_AGENT_ID);
+        agent = await requireAgentLight(ACP_WORKSPACE_AGENT_ID);
       } catch (error) {
         res.status(Number(error?.statusCode) || 500).json({
           ok: false,
@@ -202,7 +208,7 @@ export function setupAcpRoutes(app, express, ctx) {
       const state = { session: null, runtimeStartAttempted: false };
       try {
         const session = await createPrebuiltSession(agent.id, {
-          sessionType: 'main',
+          sessionType: ACP_SESSION_TYPE,
           openDirectory: cwd,
           returnSummary: false,
         });
@@ -263,7 +269,7 @@ export function setupAcpRoutes(app, express, ctx) {
   app.post('/protoclaw/acp/coder/sessions/:clawSessionId/interrupt', express.json(), async (req, res) => {
     const clawSessionId = sanitizeSessionFragment(req.params.clawSessionId);
     try {
-      const viewerAgentId = resolveSessionViewerAgentId(ACP_AGENT_ID, clawSessionId);
+      const viewerAgentId = resolveSessionViewerAgentId(ACP_WORKSPACE_AGENT_ID, clawSessionId);
       if (!viewerAgentId) {
         res.status(404).json({
           ok: false,

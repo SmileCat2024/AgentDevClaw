@@ -3,7 +3,8 @@
  *
  * Covers:
  * 1. POST /protoclaw/acp/coder/sessions
- *    - agentId guard: only "coder" accepted, others rejected with zero side effects
+ *    - agentId guard: the external contract still only accepts "coder"; the internal
+ *      implementation now targets programming-helper sessions with sessionType=coder
  *    - cwd validation: non-absolute / nonexistent / file → 400, zero side effects
  *    - happy path returns { clawSessionId, threadId, viewerAgentId, cwd }
  *    - CLAW_ACP_READY_TIMEOUT_MS is honoured
@@ -73,12 +74,12 @@ function makeMockCtx(overrides = {}) {
   };
   const ctx = {
     requireAgentLight: async (agentId) => {
-      if (agentId !== 'coder') {
+      if (agentId !== 'programming-helper') {
         const error = new Error(`Unknown agent: ${agentId}`);
         error.statusCode = 404;
         throw error;
       }
-      return { id: 'coder' };
+      return { id: 'programming-helper' };
     },
     createPrebuiltSession: async (agentId, opts) => {
       record('createPrebuiltSession', { agentId, opts });
@@ -154,7 +155,7 @@ async function callInterrupt(app, clawSessionId) {
   return res;
 }
 
-function seedRuntime({ agentId = 'coder', sessionId, viewerAgentId, running = true }) {
+function seedRuntime({ agentId = 'programming-helper', sessionId, viewerAgentId, running = true }) {
   const runtime = {
     key: `${agentId}::${sessionId}`,
     agentId,
@@ -301,15 +302,15 @@ describe('ACP create — happy path', () => {
 
     // session 以 main 类型 + 校验后的 cwd 创建
     const created = ctx._calls.createPrebuiltSession[0];
-    assert.equal(created.agentId, 'coder');
-    assert.equal(created.opts.sessionType, 'main');
+    assert.equal(created.agentId, 'programming-helper');
+    assert.equal(created.opts.sessionType, 'coder');
     assert.equal(created.opts.openDirectory, validCwd());
 
     // runtime 以精确 session 启动并等待 READY（默认超时）
     assert.equal(ctx._calls.startManagedAgent[0].sessionId, 'sess-acp-1');
     assert.deepEqual(
       ctx._calls.waitForManagedRuntimeReady[0],
-      { agentId: 'coder', timeoutMs: ACP_READY_TIMEOUT_DEFAULT_MS, sessionId: 'sess-acp-1' },
+      { agentId: 'programming-helper', timeoutMs: ACP_READY_TIMEOUT_DEFAULT_MS, sessionId: 'sess-acp-1' },
     );
 
     // thread 经宿主钩子建立，并按 headSessionId 从 store 解析
@@ -370,7 +371,7 @@ describe('ACP create — rollback ladder', () => {
     assert.deepEqual(res.body.rollback.leftover, {});
 
     // runtime 精确 stop（agentId + sessionId，不扩大范围）
-    assert.deepEqual(ctx._calls.stopManagedAgent[0], { agentId: 'coder', sessionId: 'sess-acp-1' });
+    assert.deepEqual(ctx._calls.stopManagedAgent[0], { agentId: 'programming-helper', sessionId: 'sess-acp-1' });
     // thread 按 headSessionId 重新解析后关闭（兜底中间态），带回滚原因
     assert.equal(ctx._calls.closeThread[0].threadId, 'thread-acp-1');
     assert.equal(ctx._calls.closeThread[0].opts.reason, 'acp_session_creation_rollback');
@@ -514,14 +515,14 @@ describe('ACP interrupt', () => {
   it('resolveSessionViewerAgentId falls back to selectedSessionId scan (shared-process key drift)', () => {
     // 注册键与请求键不同（shared-by-project 漂移），但 selectedSessionId 是绑定事实
     managedAgents.set('coder::other-key', {
-      agentId: 'coder',
-      id: 'coder',
+      agentId: 'programming-helper',
+      id: 'programming-helper',
       process: { exitCode: null, signalCode: null },
       stopped: false,
       viewerAgentId: 'viewer-drifted',
       selectedSessionId: 'sess-a',
     });
-    assert.equal(resolveSessionViewerAgentId('coder', 'sess-a'), 'viewer-drifted');
+    assert.equal(resolveSessionViewerAgentId('programming-helper', 'sess-a'), 'viewer-drifted');
   });
 });
 
