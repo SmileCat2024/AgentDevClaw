@@ -77,6 +77,7 @@ import { setupSystemFeatureConfigRoutes } from './server/routes/system-feature-c
 import { setupFeatureConfigRoutes } from './server/routes/feature-config.js';
 import { setupPreflightRoutes } from './server/routes/preflight.js';
 import { setupFsOperationsRoutes } from './server/routes/fs-operations.js';
+import { setupGitRoutes } from './server/routes/git.js';
 import {
   setupModelConfigRoutes,
   readModelConfig, writeModelConfig,
@@ -733,6 +734,8 @@ app.post('/protoclaw/prebuilt_project/delete', express.json(), async (req, res, 
 
 
 setupFsOperationsRoutes(app);
+
+setupGitRoutes(app, express);
 
 setupWorkspaceCreatorRoutes(app, express);
 

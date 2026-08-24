@@ -132,6 +132,20 @@ describe('Route registration smoke test', () => {
     assert.ok(postRoutes.some(r => r.path === '/protoclaw/validate_empty_directory'));
   });
 
+  it('setupGitRoutes should register 5 git endpoints', async () => {
+    const { setupGitRoutes } = await import('../server/routes/git.js');
+    const { app, routes } = createMockApp();
+    setupGitRoutes(app, expressFactory());
+
+    const postRoutes = routes.filter(r => r.method === 'post');
+    assert.equal(postRoutes.length, 5);
+    assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/status'));
+    assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/stage'));
+    assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/unstage'));
+    assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/commit'));
+    assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/discard'));
+  });
+
   it('setupSystemFeatureConfigRoutes should register endpoints', async () => {
     const { setupSystemFeatureConfigRoutes } = await import('../server/routes/system-feature-config.js');
     const { app, routes } = createMockApp();

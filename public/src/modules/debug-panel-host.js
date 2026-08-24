@@ -231,6 +231,10 @@ function toggleFeaturePanel(panelId) {
   if (!wasOpen && panelId === 'threads' && window._wgThreadsInit) {
     window._wgThreadsInit();
   }
+  // 初始化钩子：git 面板每次打开时刷新当前会话目录的仓库状态
+  if (!wasOpen && panelId === 'git' && window.GitPanel) {
+    window.GitPanel.onOpen();
+  }
 
   // 面板 class 已切换（宽度变化写入样式），下一帧布局应用新宽度后恢复滚动位置。
   if (_anchor && typeof applyChatViewportAnchor === 'function') {

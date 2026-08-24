@@ -25,7 +25,7 @@
 
   /** 可自定义的面板 ID（顺序 = 默认顺序） */
   var CUSTOMIZABLE_IDS = [
-    'workspace', 'monitor', 'plan', 'hooks',
+    'workspace', 'monitor', 'plan', 'git', 'hooks',
     'inspector', 'force-continuation', 'logs', 'mcp', 'genui',
   ];
 
@@ -34,6 +34,7 @@
     workspace: { zh: '文件结构',  en: 'Structure' },
     monitor:   { zh: '监控',      en: 'Monitor' },
     plan:      { zh: '计划',      en: 'Plan' },
+    git:       { zh: '源代码管理', en: 'Source Control' },
     hooks:     { zh: '功能',      en: 'Features' },
     inspector: { zh: '反向钩子',  en: 'Reverse Hooks' },
     'force-continuation': { zh: '强制继续', en: 'Force Continuation' },
@@ -47,6 +48,7 @@
     workspace: { zh: '项目文件树',       en: 'Project file tree' },
     monitor:   { zh: '运行状态监控',     en: 'Runtime status monitor' },
     plan:      { zh: '任务与计划列表',   en: 'Tasks and plan list' },
+    git:       { zh: 'Git 状态与操作',   en: 'Git status and actions' },
     hooks:     { zh: 'Feature 功能面板', en: 'Feature panel' },
     inspector: { zh: 'Hook 检查器',      en: 'Hook inspector' },
     'force-continuation': { zh: '中断后继续控制', en: 'Resume after truncation control' },

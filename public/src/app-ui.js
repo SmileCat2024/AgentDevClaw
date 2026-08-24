@@ -1460,6 +1460,10 @@ const featurePanels = {
     title: () => t('panel_plan'),
     render: () => renderPlanPanel(),
   },
+  git: {
+    title: () => currentLanguage === 'zh' ? '源代码管理' : 'Source Control',
+    render: () => window.GitPanel ? window.GitPanel.render() : '<div class="feature-panel-empty"><div>加载中...</div></div>',
+  },
   monitor: {
     title: () => t('panel_monitor'),
     render: () => renderMonitorPanel(),
