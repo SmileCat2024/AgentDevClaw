@@ -174,6 +174,21 @@ export function createClawClient(options = {}) {
       return payload;
     },
 
+    /**
+     * 会话历史读取（session/load 的数据面；控制面 = resume）。
+     * @param {string} clawSessionId 一般为 resume 解析出的 head sessionId
+     * @returns {Promise<{ ok, sessionId, messages: Array<{role, content, toolCalls?, toolCallId?}> }>}
+     */
+    async getCoderSessionHistory(clawSessionId, context = {}) {
+      const { body: payload } = await requestJson(
+        'GET',
+        `/protoclaw/acp/coder/sessions/${encodeURIComponent(clawSessionId)}/history`,
+        undefined,
+        { ...context, clawSessionId },
+      );
+      return payload;
+    },
+
     /** prompt 投递（kind 固定 user_message，source 固定 acp）。 */
     async appendUserMessage(threadId, { text, idempotencyKey }, context = {}) {
       const { body } = await requestJson(

@@ -150,6 +150,13 @@ function makeMockCtx(overrides = {}) {
         },
       },
     },
+    // 完整会话快照（history 端点的消息来源）；键为 sessionId，值 null 表示文件缺失
+    sessionSnapshots: overrides.sessionSnapshots || {},
+    readSessionSnapshotForContinuity: async (agentId, sessionId) => {
+      record('readSessionSnapshotForContinuity', { agentId, sessionId });
+      if (!(sessionId in ctx.sessionSnapshots)) return null;
+      return ctx.sessionSnapshots[sessionId];
+    },
     archiveEntries: overrides.archiveEntries || {},
   };
   ctx._calls = calls;
@@ -772,6 +779,88 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
     // server 层不感知 mcpServers；该字段由 adapter 校验（见 protocol 测试）
     const res = await callResume(app, 'sess-g', { mcpServers: [{ type: 'stdio', command: 'x' }] });
     assert.equal(res.statusCode, 200);
+  });
+});
+
+// ── ACP history: GET /protoclaw/acp/coder/sessions/:clawSessionId/history ──
+
+async function callHistory(app, clawSessionId) {
+  const handlers = app._routes['GET /protoclaw/acp/coder/sessions/:clawSessionId/history'];
+  assert.ok(handlers, 'history route must be registered');
+  const res = makeMockRes();
+  await handlers[handlers.length - 1]({ params: { clawSessionId } }, res);
+  return res;
+}
+
+describe('ACP history — GET /protoclaw/acp/coder/sessions/:clawSessionId/history', () => {
+  const fullSnapshot = {
+    sessionId: 'sess-h1',
+    runtime: {
+      context: {
+        messages: [
+          { role: 'system', content: 'internal system prompt', turn: '0' },
+          { role: 'user', content: 'fix the bug', turn: '0' },
+          {
+            role: 'assistant',
+            content: '',
+            turn: '0',
+            toolCalls: [{ id: 'call-1', name: 'read', arguments: { filePath: 'a.ts' } }],
+            reasoning: 'internal reasoning must not leak',
+          },
+          { role: 'tool', turn: '0', toolCallId: 'call-1', content: 'file content here' },
+          { role: 'assistant', content: 'done', turn: '0', reasoning: 'internal' },
+        ],
+      },
+    },
+  };
+
+  it('returns the replayable message projection (no system / reasoning / internal fields)', async () => {
+    const { ctx, app } = setupAcpHarness({
+      sessionRecords: { 'sess-h1': { id: 'sess-h1', openDirectory: validCwd() } },
+      sessionSnapshots: { 'sess-h1': fullSnapshot },
+    });
+    const res = await callHistory(app, 'sess-h1');
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.sessionId, 'sess-h1');
+    assert.deepEqual(res.body.messages, [
+      { role: 'user', content: 'fix the bug' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'call-1', name: 'read', arguments: { filePath: 'a.ts' } }],
+      },
+      { role: 'tool', toolCallId: 'call-1', content: 'file content here' },
+      { role: 'assistant', content: 'done' },
+    ]);
+    assert.equal(ctx._calls.readSessionSnapshotForContinuity[0].agentId, 'programming-helper');
+  });
+
+  it('404 for an unknown session id', async () => {
+    const { app } = setupAcpHarness({});
+    const res = await callHistory(app, 'sess-nope');
+    assert.equal(res.statusCode, 404);
+    assert.equal(res.body.ok, false);
+  });
+
+  it('404 session_snapshot_missing when index has the record but the file is gone', async () => {
+    const { app } = setupAcpHarness({
+      sessionRecords: { 'sess-gone': { id: 'sess-gone', openDirectory: validCwd() } },
+      sessionSnapshots: { 'sess-gone': null },
+    });
+    const res = await callHistory(app, 'sess-gone');
+    assert.equal(res.statusCode, 404);
+    assert.equal(res.body.code, 'session_snapshot_missing');
+  });
+
+  it('returns an empty message list for a snapshot without messages', async () => {
+    const { app } = setupAcpHarness({
+      sessionRecords: { 'sess-empty': { id: 'sess-empty', openDirectory: validCwd() } },
+      sessionSnapshots: { 'sess-empty': { sessionId: 'sess-empty', runtime: {} } },
+    });
+    const res = await callHistory(app, 'sess-empty');
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.messages, []);
   });
 });
 

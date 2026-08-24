@@ -71,6 +71,80 @@ export function toAcpUsage(usage) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+// ── session/load 历史回放（设计 §4.8）──────────────────────────────
+
+/** Claw 工具名 → ACP ToolKind（client 图标/呈现分类；未知工具归 other）。 */
+const TOOL_KIND_BY_NAME = new Map([
+  ['read', 'read'],
+  ['edit', 'edit'], ['write', 'edit'], ['multi_edit', 'edit'],
+  ['bash', 'execute'], ['shell', 'execute'], ['powershell', 'execute'],
+  ['grep', 'search'], ['glob', 'search'], ['search', 'search'],
+  ['web_search', 'fetch'], ['web_fetch', 'fetch'], ['fetch', 'fetch'],
+  ['delete', 'delete'], ['trash', 'delete'],
+]);
+
+function mapToolKind(name) {
+  return TOOL_KIND_BY_NAME.get(String(name || '').toLowerCase()) ?? 'other';
+}
+
+/** tool_call 人类可读标题：`name {json参数}`，超长截断（client 列表呈现）。 */
+function buildToolCallTitle(toolCall) {
+  const name = String(toolCall?.name || 'tool');
+  const args = toolCall?.arguments && typeof toolCall.arguments === 'object'
+    ? JSON.stringify(toolCall.arguments)
+    : '{}';
+  const title = `${name} ${args}`;
+  return title.length > 200 ? `${title.slice(0, 197)}...` : title;
+}
+
+/**
+ * Claw 历史投影消息 → ACP session/update 回放通知序列（纯函数）。
+ *
+ * 映射（grill Q3 方案 2：reasoning 与内部元数据不外放）：
+ *   user        → user_message_chunk
+ *   assistant   → 每个工具调用 tool_call（先），文本 agent_message_chunk（后）
+ *   tool        → tool_call_update（status: completed + 结果文本块）；
+ *                 孤儿结果（无对应 tool_call）跳过
+ */
+export function buildSessionReplayNotifications(messages) {
+  const updates = [];
+  const seenToolCallIds = new Set();
+  for (const msg of Array.isArray(messages) ? messages : []) {
+    if (!msg || typeof msg !== 'object') continue;
+    if (msg.role === 'user') {
+      if (typeof msg.content === 'string' && msg.content) {
+        updates.push({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: msg.content } });
+      }
+    } else if (msg.role === 'assistant') {
+      for (const toolCall of Array.isArray(msg.toolCalls) ? msg.toolCalls : []) {
+        if (!toolCall?.id) continue;
+        const toolCallId = String(toolCall.id);
+        seenToolCallIds.add(toolCallId);
+        updates.push({
+          sessionUpdate: 'tool_call',
+          toolCallId,
+          title: buildToolCallTitle(toolCall),
+          kind: mapToolKind(toolCall.name),
+        });
+      }
+      if (typeof msg.content === 'string' && msg.content) {
+        updates.push({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: msg.content } });
+      }
+    } else if (msg.role === 'tool') {
+      const toolCallId = typeof msg.toolCallId === 'string' ? msg.toolCallId : '';
+      if (!toolCallId || !seenToolCallIds.has(toolCallId)) continue;
+      const text = typeof msg.content === 'string' ? msg.content : '';
+      updates.push({
+        sessionUpdate: 'tool_call_update',
+        toolCallId,
+        status: 'completed',
+        content: text ? [{ type: 'text', text }] : [],
+      });
+    }
+  }
+  return updates;
+}
+
 /**
  * @param {object} options
  * @param {import('./claw-client.js').ReturnType<typeof import('./claw-client.js').createClawClient>} options.clawClient
@@ -215,6 +289,50 @@ export function createSessionManager(options = {}) {
     } catch (error) {
       throw toAcpError(error);
     }
+  }
+
+  /**
+   * session/load（协议 v1 正式方法，带历史回放）= resume（控制面）+
+   * head 历史读取（数据面）+ 回放通知。
+   *
+   * 复用 resumeSession 的全部校验与解析（cwd 一致性、head/成员链、归档
+   * 拒绝、急切挂载）；历史回放的是 **head** 的历史——与实际上下文一致
+   * （请求成员会话时，compact 接力后 head 上下文才是 prompt 的落点）。
+   * 通知的 sessionId 与映射登记均为 head（协议 ID 策略同 resume）。
+   *
+   * @param {string} clawSessionId client 记录的（成员或 head）Claw sessionId
+   * @param {{ cwd?: string }} [params]
+   * @param {(notification: {method: 'session/update', params: {sessionId, update}}) => void} notify
+   * @returns {{ sessionId: string }} 协议响应扩展字段（协议本体为 void）
+   */
+  async function loadSession(clawSessionId, params = {}, notify) {
+    const resumed = await resumeSession(clawSessionId, params);
+    const headSessionId = resumed.sessionId;
+
+    let history;
+    try {
+      history = await clawClient.getCoderSessionHistory(headSessionId, {
+        method: 'session/load',
+        requestedSessionId: clawSessionId,
+      });
+    } catch (error) {
+      throw toAcpError(error);
+    }
+    if (!history?.ok || !Array.isArray(history?.messages)) {
+      throw clawServerError(200, history ?? null);
+    }
+
+    const updates = buildSessionReplayNotifications(history.messages);
+    for (const update of updates) {
+      notify?.({ method: 'session/update', params: { sessionId: headSessionId, update } });
+    }
+    trace?.record('acp.session.loaded', {
+      acpSessionId: headSessionId,
+      clawSessionId: headSessionId,
+      requestedSessionId: clawSessionId,
+      replayUpdates: updates.length,
+    });
+    return { sessionId: headSessionId };
   }
 
   /**
@@ -639,6 +757,7 @@ export function createSessionManager(options = {}) {
     createSession,
     resumeSession,
     listSessions,
+    loadSession,
     runPrompt,
     cancel,
     closeSession,

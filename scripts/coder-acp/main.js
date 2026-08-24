@@ -28,6 +28,7 @@ import * as acp from '@agentclientprotocol/sdk';
 import {
   validateNewSessionParams,
   validateResumeSessionParams,
+  validateLoadSessionParams,
   mergePromptText,
   guardSessionModesMessage,
 } from './protocol.js';
@@ -70,14 +71,14 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
   const agent = acp.agent({ name: AGENT_NAME });
 
   // initialize 不触网（设计 §4.1）：不声明 fs / terminal / recentEvents /
-  // MCP / sessionModes / authMethods。loadSession 明确 false（不做历史回放）；
-  // 会话恢复走 resume + list 组合（sessionCapabilities）。
+  // MCP / sessionModes / authMethods。会话恢复三件套：load（历史回放）+
+  // resume（不回放续接）+ list（发现），见 sessionCapabilities。
   agent.onRequest(acp.methods.agent.initialize, () => {
     trace?.record('acp.initialize.response', { method: 'initialize', protocolVersion: acp.PROTOCOL_VERSION });
     return {
     protocolVersion: acp.PROTOCOL_VERSION,
     agentCapabilities: {
-      loadSession: false,
+      loadSession: true,
       promptCapabilities: { image: false, embeddedContext: false },
       sessionCapabilities: {
         resume: {},
@@ -125,6 +126,28 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
     trace?.record('acp.session.resume.validate', { method: 'session/resume', requestedSessionId: sessionId, cwd });
     const result = await sessionManager.resumeSession(sessionId, { ...(cwd !== undefined ? { cwd } : {}) });
     trace?.record('acp.session.resume.response', { method: 'session/resume', acpSessionId: result.sessionId });
+    return result;
+  });
+
+  // session/load：resume（控制面）+ head 历史回放（数据面）。回放通知的
+  // sessionId 即 head（协议 ID 策略与 resume 一致，client 据此续接 prompt）。
+  agent.onRequest(acp.methods.agent.session.load, async (ctx) => {
+    const { sessionId, cwd } = validateLoadSessionParams(ctx.params);
+    trace?.record('acp.session.load.validate', { method: 'session/load', requestedSessionId: sessionId, cwd });
+    const result = await sessionManager.loadSession(
+      sessionId,
+      { ...(cwd !== undefined ? { cwd } : {}) },
+      (notification) => {
+        trace?.record('acp.session_update.outbound', {
+          method: 'session/update',
+          acpSessionId: notification.params.sessionId,
+          updateType: notification.params.update?.sessionUpdate,
+          replay: true,
+        });
+        return ctx.client.notify(acp.methods.client.session.update, notification.params);
+      },
+    );
+    trace?.record('acp.session.load.response', { method: 'session/load', acpSessionId: result.sessionId });
     return result;
   });
 

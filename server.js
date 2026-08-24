@@ -242,6 +242,7 @@ const {
   cleanupEmptySessions, listPrebuiltSessions, buildSessionModelInfoMap,
   createPrebuiltSession, activatePrebuiltSession, deletePrebuiltSession,
   archivePrebuiltSession, tagPrebuiltSessionTodo, requirePrebuiltSessionRecord,
+  readSessionSnapshotForContinuity,
   resolvePrebuiltSessionOwner, requirePrebuiltAgentForRuntime,
   exportContextHandoffForSession, createCompactedResumeFromHandoff,
   compactAndResumeCurrentSession, compactAndResumeFromProvidedSummary,
@@ -494,6 +495,7 @@ setupAcpRoutes(app, express, {
   threadIntegration,
   threadControl,
   requirePrebuiltSessionRecord,
+  readSessionSnapshotForContinuity,
 });
 // runtime 就绪补投：succession 时刻 runtime 未就绪而保持 pending 的指令，
 // 在 head runtime 真正 ready 时重试（设计 §5 的最后一个投递触发点）。

@@ -112,6 +112,7 @@ export async function validateAcpCwd(rawCwd) {
  * @param {object} ctx.threadIntegration - getThreadIntegration()（onSessionCreated 宿主钩子）
  * @param {object} ctx.threadControl - getThreadControl()（{core, archive}；list/resume 需要）
  * @param {Function} [ctx.requirePrebuiltSessionRecord] - 会话索引记录读取（resume cwd 校验 / list 标题来源）
+ * @param {Function} [ctx.readSessionSnapshotForContinuity] - 完整会话快照读取（history 端点消息来源）
  */
 export function setupAcpRoutes(app, express, ctx) {
   const {
@@ -124,6 +125,7 @@ export function setupAcpRoutes(app, express, ctx) {
     threadIntegration,
     threadControl,
     requirePrebuiltSessionRecord,
+    readSessionSnapshotForContinuity,
   } = ctx;
 
   /**
@@ -404,6 +406,65 @@ export function setupAcpRoutes(app, express, ctx) {
       res.status(Number(error?.statusCode) || 500).json({
         ok: false,
         code: error?.code || 'acp_resume_failed',
+        message: String(error?.message || error),
+      });
+    }
+  });
+
+  // ── 会话历史读取（session/load 的数据面；控制面 = resume）────────
+
+  /**
+   * 把快照消息投影为可回放形态：user/assistant/tool 三类，只保留回放
+   * 所需字段。system 提示、reasoning、turn/usage 等内部字段一律不外放
+   * （设计 §4.8 回放粒度：grill Q3 方案 2）。
+   */
+  function projectSessionMessagesForReplay(messages) {
+    const out = [];
+    for (const msg of Array.isArray(messages) ? messages : []) {
+      if (!msg || typeof msg !== 'object') continue;
+      if (msg.role === 'user') {
+        const content = typeof msg.content === 'string' ? msg.content : '';
+        if (content) out.push({ role: 'user', content });
+      } else if (msg.role === 'assistant') {
+        const content = typeof msg.content === 'string' ? msg.content : '';
+        const toolCalls = Array.isArray(msg.toolCalls)
+          ? msg.toolCalls
+            .filter((tc) => tc && typeof tc === 'object' && tc.id)
+            .map((tc) => ({
+              id: String(tc.id),
+              name: typeof tc.name === 'string' ? tc.name : '',
+              arguments: tc.arguments && typeof tc.arguments === 'object' ? tc.arguments : {},
+            }))
+          : [];
+        if (content || toolCalls.length) {
+          out.push(toolCalls.length ? { role: 'assistant', content, toolCalls } : { role: 'assistant', content });
+        }
+      } else if (msg.role === 'tool') {
+        const toolCallId = typeof msg.toolCallId === 'string' ? msg.toolCallId : '';
+        const content = typeof msg.content === 'string' ? msg.content : '';
+        if (toolCallId) out.push({ role: 'tool', toolCallId, content });
+      }
+    }
+    return out;
+  }
+
+  app.get('/protoclaw/acp/coder/sessions/:clawSessionId/history', async (req, res) => {
+    const clawSessionId = sanitizeSessionFragment(req.params.clawSessionId);
+    try {
+      if (!clawSessionId) {
+        throw acpError(400, 'invalid_params', 'clawSessionId is required');
+      }
+      await requirePrebuiltSessionRecord(ACP_WORKSPACE_AGENT_ID, clawSessionId);
+      const snapshot = await readSessionSnapshotForContinuity(ACP_WORKSPACE_AGENT_ID, clawSessionId);
+      if (!snapshot) {
+        throw acpError(404, 'session_snapshot_missing', `session file for ${clawSessionId} is missing or unreadable`);
+      }
+      const messages = projectSessionMessagesForReplay(snapshot?.runtime?.context?.messages);
+      res.json({ ok: true, sessionId: clawSessionId, messages });
+    } catch (error) {
+      res.status(Number(error?.statusCode) || 500).json({
+        ok: false,
+        code: error?.code || 'acp_history_failed',
         message: String(error?.message || error),
       });
     }

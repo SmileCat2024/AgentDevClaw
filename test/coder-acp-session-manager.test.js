@@ -30,11 +30,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createSessionManager } from '../scripts/coder-acp/session-manager.js';
+import { createSessionManager, buildSessionReplayNotifications } from '../scripts/coder-acp/session-manager.js';
 import { createClawClient, ClawUnreachableError, ClawHttpError } from '../scripts/coder-acp/claw-client.js';
 import {
   validateNewSessionParams,
   validateResumeSessionParams,
+  validateLoadSessionParams,
   mergePromptText,
   ERROR_CODES,
 } from '../scripts/coder-acp/protocol.js';
@@ -93,6 +94,12 @@ function makeMockClawClient(overrides = {}) {
         viewerAgentId: 'viewer-1',
         cwd: body.cwd ?? 'C:/work',
       };
+    },
+    async getCoderSessionHistory(clawSessionId) {
+      calls.histories = calls.histories || [];
+      calls.histories.push(clawSessionId);
+      if (state.historyError) throw state.historyError;
+      return state.historyResponse || { ok: true, sessionId: clawSessionId, messages: [] };
     },
     async appendUserMessage(threadId, payload) {
       calls.commands.push({ threadId, payload });
@@ -238,6 +245,107 @@ describe('session resume + list', () => {
     const claw = makeMockClawClient({ listError: new ClawUnreachableError(new Error('ECONNREFUSED')) });
     const { manager } = makeManager(claw);
     await assert.rejects(manager.listSessions(), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
+      return true;
+    });
+  });
+});
+
+describe('session load (history replay)', () => {
+  const projectedMessages = [
+    { role: 'user', content: 'fix the bug' },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'call-1', name: 'read', arguments: { filePath: 'a.ts' } }],
+    },
+    { role: 'tool', toolCallId: 'call-1', content: 'file content here' },
+    { role: 'assistant', content: 'done' },
+    // 孤儿 tool 结果（无对应 tool_call）：跳过
+    { role: 'tool', toolCallId: 'call-orphan', content: 'stale' },
+  ];
+
+  it('buildSessionReplayNotifications maps messages to ordered ACP notifications', () => {
+    const notifications = buildSessionReplayNotifications(projectedMessages);
+    assert.deepEqual(notifications, [
+      { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fix the bug' } },
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call-1',
+        title: 'read {"filePath":"a.ts"}',
+        kind: 'read',
+      },
+      {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call-1',
+        status: 'completed',
+        content: [{ type: 'text', text: 'file content here' }],
+      },
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } },
+    ]);
+  });
+
+  it('maps well-known tool names onto ACP tool kinds', () => {
+    const notifications = buildSessionReplayNotifications([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 't1', name: 'bash', arguments: { command: 'ls' } },
+          { id: 't2', name: 'write', arguments: {} },
+          { id: 't3', name: 'grep', arguments: {} },
+          { id: 't4', name: 'web_search', arguments: {} },
+          { id: 't5', name: 'lsp_hover', arguments: {} },
+        ],
+      },
+    ]);
+    const kinds = notifications.map((n) => n.kind).filter(Boolean);
+    assert.deepEqual(kinds, ['execute', 'edit', 'search', 'fetch', 'other']);
+  });
+
+  it('loadSession resumes to head, replays head history via notify, and registers the head mapping', async () => {
+    const claw = makeMockClawClient({
+      resumeResponse: { ok: true, clawSessionId: 'claw-head', threadId: 'thread-1', viewerAgentId: 'viewer-1', cwd: 'C:/work' },
+      historyResponse: { ok: true, sessionId: 'claw-head', messages: projectedMessages },
+    });
+    const { manager } = makeManager(claw);
+    const sent = [];
+    const result = await manager.loadSession('claw-old', { cwd: 'C:/work' }, (n) => sent.push(n));
+
+    // 历史= head 的历史（与实际上下文一致，Q3 线程语义）
+    assert.deepEqual(claw.calls.resumes, [{ clawSessionId: 'claw-old', body: { cwd: 'C:/work' } }]);
+    assert.deepEqual(claw.calls.histories, ['claw-head']);
+    // 回放通知带协议 sessionId（= head），顺序与转换器一致
+    assert.equal(sent.length, 4);
+    for (const n of sent) {
+      assert.equal(n.method, 'session/update');
+      assert.equal(n.params.sessionId, 'claw-head');
+    }
+    assert.equal(sent[0].params.update.sessionUpdate, 'user_message_chunk');
+    // 映射登记在 head（协议 ID = head，与 resume 一致）
+    assert.equal(manager.getSession('claw-head').clawSessionId, 'claw-head');
+    assert.equal(manager.getSession('claw-head').threadId, 'thread-1');
+    assert.deepEqual(result, { sessionId: 'claw-head' });
+  });
+
+  it('loadSession maps resume-phase server errors through the standard taxonomy', async () => {
+    const claw = makeMockClawClient({
+      resumeError: new ClawHttpError(403, { ok: false, code: 'cwd_mismatch', message: 'nope' }),
+    });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.loadSession('claw-x', {}, () => {}), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
+      assert.equal(error.data.server.code, 'cwd_mismatch');
+      return true;
+    });
+  });
+
+  it('loadSession maps history-phase network failure to CLAW_SERVER_UNREACHABLE', async () => {
+    const claw = makeMockClawClient({
+      historyError: new ClawUnreachableError(new Error('ECONNREFUSED')),
+    });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.loadSession('claw-x', {}, () => {}), (error) => {
       assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
       return true;
     });
@@ -664,6 +772,25 @@ describe('protocol.js request validation', () => {
     );
     assert.throws(
       () => validateNewSessionParams({ cwd: 'C:/w', additionalDirectories: ['C:/other'] }),
+      (e) => e.data.field === 'additionalDirectories',
+    );
+  });
+
+  it('validateLoadSessionParams mirrors resume validation rules', () => {
+    assert.deepEqual(validateLoadSessionParams({ sessionId: 'claw-s1' }), { sessionId: 'claw-s1' });
+    assert.deepEqual(
+      validateLoadSessionParams({ sessionId: 'claw-s1', cwd: 'C:/work', mcpServers: [] }),
+      { sessionId: 'claw-s1', cwd: 'C:/work' },
+    );
+    assert.throws(() => validateLoadSessionParams({}), (e) => e.data.field === 'sessionId');
+    assert.throws(() => validateLoadSessionParams({ sessionId: '' }), (e) => e.data.field === 'sessionId');
+    assert.throws(() => validateLoadSessionParams({ sessionId: 's', cwd: 123 }), (e) => e.data.field === 'cwd');
+    assert.throws(
+      () => validateLoadSessionParams({ sessionId: 's', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
+      (e) => e.data.field === 'mcpServers',
+    );
+    assert.throws(
+      () => validateLoadSessionParams({ sessionId: 's', additionalDirectories: ['C:/other'] }),
       (e) => e.data.field === 'additionalDirectories',
     );
   });

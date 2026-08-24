@@ -153,6 +153,39 @@ export function validateResumeSessionParams(params) {
 }
 
 /**
+ * session/load 参数校验（协议 v1 正式方法，带历史回放）。
+ *
+ * 校验规则与 resume 同构：sessionId 必填非空字符串；cwd 可选字符串
+ * （一致性与存在性由 server 校验）；mcpServers / additionalDirectories
+ * 非空一律拒绝。
+ *
+ * @returns {{ sessionId: string, cwd?: string }}
+ */
+export function validateLoadSessionParams(params) {
+  const sessionId = params?.sessionId;
+  if (typeof sessionId !== 'string' || sessionId.trim() === '') {
+    throw invalidParamsError('sessionId', 'sessionId must be a non-empty string');
+  }
+  const cwd = params?.cwd;
+  if (cwd !== undefined && typeof cwd !== 'string') {
+    throw invalidParamsError('cwd', 'cwd must be a string when provided');
+  }
+  if (Array.isArray(params.mcpServers) && params.mcpServers.length > 0) {
+    throw invalidParamsError(
+      'mcpServers',
+      'mcpServers must be an empty array; MCP is not supported by this agent',
+    );
+  }
+  if (Array.isArray(params.additionalDirectories) && params.additionalDirectories.length > 0) {
+    throw invalidParamsError(
+      'additionalDirectories',
+      'additionalDirectories must be empty; additional directories are not supported',
+    );
+  }
+  return { sessionId: sessionId.trim(), ...(cwd !== undefined ? { cwd } : {}) };
+}
+
+/**
  * session/prompt 输入规则（设计 §4.3）：prompt[] 仅允许 type: "text" 的
  * block，多块按顺序合并为一条消息（\n\n 连接）。image / resource /
  * resource_link / context 等非文本 block 一律拒绝。

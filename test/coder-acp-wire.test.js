@@ -73,6 +73,20 @@ function startMockClawServer() {
         }
         return;
       }
+      if (req.method === 'GET' && /\/protoclaw\/acp\/coder\/sessions\/[^/]+\/history$/.test(req.url || '')) {
+        // head 会话的投影历史（server 已过滤 system / reasoning / 内部字段）
+        send(200, {
+          ok: true,
+          sessionId: 'claw-wire-1',
+          messages: [
+            { role: 'user', content: 'wire replay task' },
+            { role: 'assistant', content: '', toolCalls: [{ id: 'wcall-1', name: 'bash', arguments: { command: 'ls' } }] },
+            { role: 'tool', toolCallId: 'wcall-1', content: 'file-a\nfile-b' },
+            { role: 'assistant', content: 'replayed answer' },
+          ],
+        });
+        return;
+      }
       if (req.method === 'GET' && req.url?.startsWith('/protoclaw/acp/coder/sessions')) {
         send(200, {
           ok: true,
@@ -250,7 +264,7 @@ describe('coder ACP adapter wire protocol', () => {
         params: { protocolVersion: 1, clientCapabilities: {} },
       });
       assert.equal(init.error, undefined);
-      assert.equal(init.result.agentCapabilities.loadSession, false);
+      assert.equal(init.result.agentCapabilities.loadSession, true);
       assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.resume, {});
       assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.list, {});
       assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.close, {});
@@ -442,6 +456,75 @@ describe('coder ACP adapter wire protocol', () => {
       });
       assert.equal(mismatch.error.code, -32003);
       assert.equal(mismatch.error.data.server.code, 'cwd_mismatch');
+    } finally {
+      await adapter.end();
+    }
+    assert.equal(adapter.exitCode, 0);
+  });
+
+  it('session/load replays head history as ordered session/update notifications and lands prompts on the head', { timeout: 15_000 }, async () => {
+    const adapter = new AdapterProcess(`http://127.0.0.1:${port}`);
+    try {
+      const init = await adapter.request({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: 1, clientCapabilities: {} },
+      });
+      // 能力声明：历史回放开门
+      assert.equal(init.result.agentCapabilities.loadSession, true);
+
+      // load 成员旧会话：控制面 resume 解析 head，数据面回放 head 历史
+      // （协议要求 load 请求必带 mcpServers——空数组）
+      const loaded = await adapter.request({
+        jsonrpc: '2.0', id: 2, method: 'session/load',
+        params: { sessionId: 'claw-wire-old', cwd: 'D:/work', mcpServers: [] },
+      });
+      assert.equal(loaded.error, undefined);
+      assert.deepEqual(loaded.result, { sessionId: 'claw-wire-1' });
+
+      // 历史读取请求的是 head（不是请求 ID）
+      assert.ok(claw.record.requests.some(
+        (r) => r.method === 'GET' && r.url === '/protoclaw/acp/coder/sessions/claw-wire-1/history',
+      ));
+
+      // 回放通知按序到达，sessionId 均为 head 协议 ID
+      const replay = [];
+      for (let i = 0; i < 4; i += 1) {
+        const n = await adapter.waitForUpdate(
+          (x) => x.method === 'session/update' && x.params.sessionId === 'claw-wire-1'
+            && !replay.some((r) => r === x),
+        );
+        replay.push(n);
+      }
+      assert.deepEqual(replay.map((n) => n.params.update.sessionUpdate), [
+        'user_message_chunk',
+        'tool_call',
+        'tool_call_update',
+        'agent_message_chunk',
+      ]);
+      assert.deepEqual(replay[0].params.update.content, { type: 'text', text: 'wire replay task' });
+      assert.equal(replay[1].params.update.toolCallId, 'wcall-1');
+      assert.equal(replay[1].params.update.kind, 'execute');
+      assert.equal(replay[2].params.update.status, 'completed');
+      assert.deepEqual(replay[2].params.update.content, [{ type: 'text', text: 'file-a\nfile-b' }]);
+      assert.deepEqual(replay[3].params.update.content, { type: 'text', text: 'replayed answer' });
+
+      // load 后 prompt 落在 head 上
+      const promptPromise = adapter.request({
+        jsonrpc: '2.0', id: 3, method: 'session/prompt',
+        params: { sessionId: 'claw-wire-1', prompt: [{ type: 'text', text: 'continue after load' }] },
+      });
+      await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          if (claw.record.requests.some((r) => r.url === '/protoclaw/threads/thread-wire/commands' && r.body?.text === 'continue after load')) {
+            clearInterval(poll);
+            resolve();
+          }
+        }, 10);
+      });
+      adapter.notify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 'claw-wire-1' } });
+      const prompt = await promptPromise;
+      assert.equal(prompt.error, undefined);
+      assert.equal(prompt.result.stopReason, 'cancelled');
     } finally {
       await adapter.end();
     }
