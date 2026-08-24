@@ -476,6 +476,98 @@ describe('agent-lifecycle', () => {
       assert.ok(Array.isArray(agents));
       assert.ok(agents.length > 0);
     });
+
+    // ── coder projection visibility & identity routing ──────
+
+    const PH_LIGHT_WITH_CODER = {
+      id: 'programming-helper',
+      name: 'Programming Helper',
+      description: '',
+      kind: 'agent',
+      status: { pid: null, viewerAgentId: null },
+      identities: [{
+        id: 'coder',
+        sessionType: 'coder',
+        sidebarEntry: true,
+        displayName: 'coder',
+        sidebarGroup: 'tool',
+      }],
+    };
+
+    it('keeps the coder projection visible while its runtime is spawned but not yet registered with the viewer', async () => {
+      const child = createMockChild();
+      const runtime = injectRuntime('programming-helper', 'coder-session', child);
+      runtime.sessionType = 'coder';
+      runtime.ready = false;
+      runtime.viewerAgentId = null; // viewer registration pending
+
+      const mod = createAgentLifecycleModule(createMockCtx({
+        getAgentsLight: async () => [PH_LIGHT_WITH_CODER],
+        readActiveWorkspaceSessionMeta: async () => ({
+          workspaceSessions: { sessions: [] },
+          sessionMeta: { ...EMPTY_SESSION_META },
+        }),
+        readViewerJson: async () => ({ agents: [], currentAgentId: null }),
+      }));
+
+      const agents = await mod.getConnectedAgents();
+      const projection = agents.find((a) => a.id === 'programming-helper:coder');
+      assert.ok(projection, 'projection entry should survive the startup window');
+      assert.equal(projection.sessionType, 'coder');
+      assert.equal(projection.agentId, 'programming-helper');
+      // No session-level fields inherited from the host
+      assert.equal(projection.runtime_session_id, undefined);
+      assert.equal(projection.workspace_sessions, undefined);
+    });
+
+    it('drops the coder projection once no live process of that identity remains', async () => {
+      const child = createMockChild();
+      const runtime = injectRuntime('programming-helper', 'coder-session', child);
+      runtime.sessionType = 'coder';
+      runtime.stopping = true;
+
+      const mod = createAgentLifecycleModule(createMockCtx({
+        getAgentsLight: async () => [PH_LIGHT_WITH_CODER],
+        readViewerJson: async () => ({ agents: [], currentAgentId: null }),
+      }));
+
+      const agents = await mod.getConnectedAgents();
+      assert.equal(agents.some((a) => a.id === 'programming-helper:coder'), false);
+    });
+
+    it('routes a coder child by the spawn-time sessionType snapshot when the session index misses', async () => {
+      const child = createMockChild();
+      const runtime = injectRuntime('programming-helper', 'coder-session', child);
+      runtime.sessionType = 'coder';
+      runtime.ready = true;
+      runtime.viewerAgentId = 'viewer-coder';
+
+      const mod = createAgentLifecycleModule(createMockCtx({
+        getAgentsLight: async () => [PH_LIGHT_WITH_CODER],
+        // Session index returns no sessions → sessionTypeByAgentAndId is empty
+        readActiveWorkspaceSessionMeta: async () => ({
+          workspaceSessions: { sessions: [] },
+          sessionMeta: { ...EMPTY_SESSION_META },
+        }),
+        readViewerJson: async (url) => {
+          if (url.includes('/api/agents')) {
+            return {
+              agents: [{ id: 'viewer-coder', name: 'coder', connected: true, createdAt: '2026-01-01T00:00:00Z' }],
+              currentAgentId: 'viewer-coder',
+            };
+          }
+          if (url.includes('/notification')) return { callActive: false };
+          return {};
+        },
+      }));
+
+      const agents = await mod.getConnectedAgents();
+      const coderChild = agents.find((a) => a.id === 'viewer-coder');
+      assert.ok(coderChild, 'coder runtime should be listed as a child');
+      assert.equal(coderChild.sessionType, 'coder');
+      assert.equal(coderChild.sidebar_entry_id, 'programming-helper:coder');
+      assert.equal(coderChild.parent_id, 'programming-helper');
+    });
   });
 
   // ── setupRoutes ──────────────────────────────────────────

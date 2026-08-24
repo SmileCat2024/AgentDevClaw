@@ -96,7 +96,13 @@ export function createConnectedAgentsQuery(deps) {
       const managedRuntime = managedRuntimeByViewerId.get(String(runtimeAgent.id || '')) || null;
       if (managedRuntime) {
         const runtimeMeta = await readWorkspaceSessionMeta(managedRuntime.agentId, managedRuntime.selectedSessionId);
-        const sessionType = sessionTypeByAgentAndId.get(`${managedRuntime.agentId} ${managedRuntime.selectedSessionId}`) || 'main';
+        // sessionType fallback: the runtime record carries the authoritative
+        // snapshot resolved at spawn time. The session index read can miss
+        // during successor-commit / index-write races; falling straight back
+        // to 'main' misroutes a coder session onto the host row.
+        const sessionType = sessionTypeByAgentAndId.get(`${managedRuntime.agentId} ${managedRuntime.selectedSessionId}`)
+          || managedRuntime.sessionType
+          || 'main';
         connectedAgents.push({
           id: runtimeAgent.id,
           sessionType,
@@ -266,9 +272,23 @@ export function createConnectedAgentsQuery(deps) {
       if (!host) continue;
       const projected = (await Promise.all(identities.map(async (identity) => {
         const identitySessionType = identity.sessionType || identity.id;
+        // Live-session detection keeps the projection visible across the
+        // relay window (old runtime exiting → new runtime spawning): a
+        // spawned-but-not-yet-registered runtime is still a live process in
+        // managedAgents, so the projection does not vanish for the whole
+        // startup stretch. The spawn-time sessionType snapshot is
+        // authoritative here — coder runtimes always carry it.
         const hasLiveSession = connectedAgents.some((a) => a.source === 'child'
           && a.parent_id === host.id
-          && a.sessionType === identitySessionType);
+          && a.sessionType === identitySessionType)
+          || Array.from(managedAgents.values()).some((runtime) => (
+            runtime.agentId === host.id
+            && runtime.process
+            && runtime.process.exitCode === null
+            && !runtime.stopped
+            && !runtime.stopping
+            && (runtime.sessionType || 'main') === identitySessionType
+          ));
         if (!hasLiveSession) return null;
         const {
           workspace_sessions: _ws,
