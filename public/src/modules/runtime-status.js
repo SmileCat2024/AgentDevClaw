@@ -100,6 +100,7 @@ function buildChildRuntimeEntry(runtimeAgent) {
     ownerId,
     runtimeId,
     sessionId: runtimeAgent.active_workspace_session_id || '',
+    sessionType: String(runtimeAgent.sessionType || 'main'),
     name: runtimeAgent.active_workspace_display_name
       || runtimeAgent.active_workspace_agent_name
       || runtimeAgent.active_workspace_session_title
@@ -246,11 +247,29 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // a child entry (which happens when pickPrimaryAgentRuntime selects the same
   // runtime as the prebuilt's primary), the child entry wins and its createdAt
   // is preserved instead of being shadowed by the synthetic's null createdAt.
+  //
+  // 会话级身份路由：投影条目（agentId ≠ id，如 programming-helper:coder）只收集
+  // sessionType='coder' 的子项，且不合成镜像条目（宿主 runtime 是 main 会话的）；
+  // 宿主条目排除 coder 会话子项（它们归投影条目）。
+  const isProjectionEntry = String(prebuiltAgent?.agentId || '').trim()
+    && String(prebuiltAgent.agentId).trim() !== String(prebuiltAgent.id || '').trim();
+  const childSessionType = isProjectionEntry
+    ? String(prebuiltAgent.sessionType || '').trim() || 'main'
+    : null;
   agents
     .filter((agent) => agent.source !== 'prebuilt' && String(agent.parent_id || '').trim() === String(prebuiltAgent.id || '').trim())
-    .forEach((agent) => addEntry(buildChildRuntimeEntry(agent)));
+    .forEach((agent) => {
+      if (childSessionType) {
+        if (String(agent.sessionType || 'main') !== childSessionType) return;
+      } else if (String(agent.sessionType || '') === 'coder') {
+        return;
+      }
+      addEntry(buildChildRuntimeEntry(agent));
+    });
 
-  addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+  if (!isProjectionEntry) {
+    addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+  }
 
   const operations = typeof listSidebarOperations === 'function'
     ? listSidebarOperations((operation) => operation.agentId === prebuiltAgent.id)

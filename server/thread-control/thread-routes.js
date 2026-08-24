@@ -19,7 +19,7 @@ import { synthesizeThreadLifeState } from './thread-life-state.js';
  * @param {object} options
  * @param {{ core: import('@agentdev/core').WorkThread, board: import('@agentdev/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
  */
-export function setupThreadRoutes(app, express, { control } = {}) {
+export function setupThreadRoutes(app, express, { control, resolveSessionOpenDirectory } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -77,7 +77,11 @@ export function setupThreadRoutes(app, express, { control } = {}) {
           const headViewerAgentId = typeof control.resolveSessionViewerId === 'function'
             ? control.resolveSessionViewerId(withState.agentId, withState.headSessionId)
             : null;
-          return { ...withState, headViewerAgentId };
+          // head 会话的项目目录：PH 项目卡片的 coder tab 按此归属线程
+          const headProjectDir = typeof resolveSessionOpenDirectory === 'function'
+            ? (await resolveSessionOpenDirectory(withState.agentId, withState.headSessionId).catch(() => null)) || null
+            : null;
+          return { ...withState, headViewerAgentId, headProjectDir };
         }),
       );
       res.json({ ok: true, threads: withLife });

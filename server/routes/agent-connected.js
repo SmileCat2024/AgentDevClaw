@@ -47,9 +47,16 @@ export function createConnectedAgentsQuery(deps) {
     const hasWorkGroup = prebuiltAgents.some((agent) => sanitizeSessionFragment(agent.id) === 'work-group');
     const gcChats = hasWorkGroup ? await getGroupChatsForSidebar() : [];
 
+    // 会话级身份索引：managed child runtime 条目按 sessionId 解析 sessionType，
+    // 前端据此把 coder 会话 runtime 归到 coder 投影条目（而非宿主 main 条目）下。
+    const sessionTypeByAgentAndId = new Map();
     const connectedAgents = await Promise.all(prebuiltAgents.map(async (agent) => {
       const { workspaceSessions, sessionMeta } = await readActiveWorkspaceSessionMeta(agent);
       const isWorkGroup = sanitizeSessionFragment(agent.id) === 'work-group';
+      for (const session of Array.isArray(workspaceSessions?.sessions) ? workspaceSessions.sessions : []) {
+        const sid = String(session?.id || '').trim();
+        if (sid) sessionTypeByAgentAndId.set(`${agent.id} ${sid}`, session.sessionType || 'main');
+      }
       return {
         id: agent.id,
         name: agent.name,
@@ -91,6 +98,7 @@ export function createConnectedAgentsQuery(deps) {
         const runtimeMeta = await readWorkspaceSessionMeta(managedRuntime.agentId, managedRuntime.selectedSessionId);
         connectedAgents.push({
           id: runtimeAgent.id,
+          sessionType: sessionTypeByAgentAndId.get(`${managedRuntime.agentId} ${managedRuntime.selectedSessionId}`) || 'main',
           name: runtimeMeta.active_workspace_display_name
             || runtimeMeta.active_workspace_agent_name
             || runtimeMeta.active_workspace_session_title
@@ -218,24 +226,56 @@ export function createConnectedAgentsQuery(deps) {
     // 必须在状态/callActive 全部落定后拷贝宿主字段（共享 runtime 状态），
     // 并紧邻宿主插入以保持侧栏分组顺序。runtime 匹配循环不会看到投影条目
     //（id 含 ':'，且 name 匹配时宿主条目在前），不会误绑外部 runtime。
+    //
+    // 投影条目仅在该身份存在存活 runtime 会话时出现（coder 会话进程在线）；
+    // 身份闲置时左侧不出现面板，浏览入口在工作空间内部的项目卡片 coder tab。
+    //
+    // 会话级字段（runtime_session_id / active_workspace_* / workspace_sessions /
+    // message_count 等）不继承：那是宿主 main 会话的内容，继承会在投影条目
+    // 下合成出 main 会话的镜像。coder 的运行信号来自线程 lifeState，
+    // coder 会话 runtime 由 sessionType 路由到投影条目下。
     const projectionsByHostId = new Map();
     for (const light of prebuiltAgents) {
       const identities = collectSidebarIdentityEntries(light);
       if (!identities.length) continue;
       const host = connectedAgents.find((a) => a.source === 'prebuilt' && a.id === light.id);
       if (!host) continue;
-      projectionsByHostId.set(light.id, await Promise.all(identities.map(async (identity) => ({
-        ...host,
-        id: `${host.id}:${identity.id}`,
-        agentId: host.id,
-        sessionType: identity.sessionType || identity.id,
-        name: identity.displayName || identity.id,
-        base_name: identity.displayName || identity.id,
-        description: identity.description || host.description,
-        icon: identity.icon || host.icon || null,
-        ui: identity.ui || null,
-        modelPresets: await resolveAgentModelPresets(identity.id, identity.modelPresets),
-      }))));
+      const projected = (await Promise.all(identities.map(async (identity) => {
+        const identitySessionType = identity.sessionType || identity.id;
+        const hasLiveSession = connectedAgents.some((a) => a.source === 'child'
+          && a.parent_id === host.id
+          && a.sessionType === identitySessionType);
+        if (!hasLiveSession) return null;
+        const {
+          workspace_sessions: _ws,
+          workspace_state: _wstate,
+          active_workspace_session_id: _awsid,
+          active_workspace_session_form_id: _awsfid,
+          active_workspace_session_title: _awst,
+          active_workspace_agent_name: _awgn,
+          active_workspace_display_name: _awdn,
+          runtime_session_id: _rsid,
+          message_count: _mc,
+          pending_input_count: _pic,
+          callActive: _ca,
+          pid: _pid,
+          created_at: _cat,
+          ...hostBase
+        } = host;
+        return {
+          ...hostBase,
+          id: `${host.id}:${identity.id}`,
+          agentId: host.id,
+          sessionType: identitySessionType,
+          name: identity.displayName || identity.id,
+          base_name: identity.displayName || identity.id,
+          description: identity.description || host.description,
+          icon: identity.icon || host.icon || null,
+          ui: identity.ui || null,
+          modelPresets: await resolveAgentModelPresets(identity.id, identity.modelPresets),
+        };
+      }))).filter(Boolean);
+      if (projected.length) projectionsByHostId.set(light.id, projected);
     }
     if (projectionsByHostId.size === 0) {
       return connectedAgents;

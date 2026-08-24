@@ -185,7 +185,14 @@ window.CoderThreadsUI = (() => {
 
   // ── 面板渲染 ────────────────────────────────────────────────────
 
-  function render() {
+  /** 目录归一化：项目归属比较统一小写正斜杠 */
+  function normalizeDir(dir) {
+    return String(dir || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  }
+
+  function render(options = {}) {
+    const projectDir = options.projectDir ? normalizeDir(options.projectDir) : '';
+    const embedded = !!projectDir; // 项目卡片内嵌模式：无二级 tab、无标题栏
     scheduleAutoRefresh();
     // thread-store 首拉（2s 延迟）可能尚未发生：主动补一次，异步返回后由
     // 下一次渲染呈现（refreshThreads(true) 恒返回 Promise，节流路径仅出现在 force=false）
@@ -197,9 +204,11 @@ window.CoderThreadsUI = (() => {
     const all = (typeof window.ClawThreads !== 'undefined' && Array.isArray(window.ClawThreads.threads))
       ? window.ClawThreads.threads
       : [];
-    // 生命状态 closed = 系统清理残迹，不出列表；旧宿主（agentId 不匹配）不展示
+    // 生命状态 closed = 系统清理残迹，不出列表；旧宿主（agentId 不匹配）不展示；
+    // 项目内嵌模式按 head 会话的项目目录归属过滤
     const threads = all
       .filter((thread) => thread?.agentId === hostAgentId && thread.lifeState !== 'closed')
+      .filter((thread) => !projectDir || normalizeDir(thread.headProjectDir) === projectDir)
       .slice()
       .sort((left, right) => {
         const lifeLeft = LIFE_ORDER.indexOf(left.lifeState);
@@ -222,6 +231,15 @@ window.CoderThreadsUI = (() => {
         + ' onclick="window.CoderThreadsUI.switchTab(\'' + tab.id + '\')">' + esc(tab.label) + '</button>'
       )).join('')
       + '</div>';
+
+    if (embedded) {
+      // 项目卡片内嵌：合并展示（活跃在前，已归档弱化在后），无二级 tab 与标题栏
+      const merged = [...active, ...archived];
+      const mergedHtml = merged.length
+        ? merged.map(renderThread).join('')
+        : '<div class="coder-thread-empty">' + (zh ? '本项目暂无 coder 线程。' : 'No coder threads in this project yet.') + '</div>';
+      return '<div class="coder-threads embedded">' + mergedHtml + '</div>';
+    }
 
     const rows = activeTab === 'archived' ? archived : active;
     let listHtml;
@@ -256,7 +274,11 @@ window.CoderThreadsUI = (() => {
     refreshTimer = setInterval(() => {
       if (typeof document === 'undefined' || document.hidden) return;
       // 只在 coder 线程视图实际可见时轮询重渲染，避免全局后台空转
-      if (!document.querySelector('.coder-threads')) return;
+      const visible = document.querySelector('.coder-threads');
+      if (!visible) return;
+      // 项目卡片内嵌模式：面板未激活（停留在主会话/已归档 tab）时不轮询
+      const hostPanel = visible.closest('.ph-session-tab-panel');
+      if (hostPanel && !hostPanel.classList.contains('active')) return;
       if (typeof window.refreshThreads !== 'function') return;
       Promise.resolve(window.refreshThreads(true))
         .then(() => {
@@ -340,10 +362,24 @@ window.CoderThreadsUI = (() => {
     }
   }
 
+  /** 项目内嵌视图的 tab 计数：归属该项目且未归档的线程数 */
+  function countFor(projectDir) {
+    const dir = normalizeDir(projectDir);
+    if (!dir) return 0;
+    const hostAgentId = currentHostAgentId();
+    const all = (typeof window.ClawThreads !== 'undefined' && Array.isArray(window.ClawThreads.threads))
+      ? window.ClawThreads.threads
+      : [];
+    return all.filter((thread) => thread?.agentId === hostAgentId
+      && thread.lifeState !== 'closed'
+      && thread.lifeState !== 'archived'
+      && normalizeDir(thread.headProjectDir) === dir).length;
+  }
+
   function switchTab(tab) {
     activeTab = tab === 'archived' ? 'archived' : 'threads';
     if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
   }
 
-  return { render, refresh, openHead, interrupt, archive, unarchive, resume, switchTab };
+  return { render, refresh, openHead, interrupt, archive, unarchive, resume, switchTab, countFor };
 })();

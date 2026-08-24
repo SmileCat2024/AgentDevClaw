@@ -457,7 +457,14 @@ setupUsageRoutes(app, express);
 setupUISurfaceRoutes(app, express);
 
 // ── Work Threads → server/thread-control/（coder 宿主已启用线程承接）──
-setupThreadRoutes(app, express, { control: getThreadControl() });
+setupThreadRoutes(app, express, {
+  control: getThreadControl(),
+  // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null
+  resolveSessionOpenDirectory: async (agentId, sessionId) => {
+    const record = await requirePrebuiltSessionRecord(agentId, sessionId);
+    return cleanSessionText(record?.openDirectory) || null;
+  },
+});
 
 // ── ACP 支撑路由（coder 原子创建 + 精确中断，ticket 018）──
 setupAcpRoutes(app, express, {

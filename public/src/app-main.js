@@ -83,7 +83,9 @@ function getCurrentAgentRecord() {
 }
 
 function groupConnectedAgents(agents) {
-  const TOOL_AGENT_IDS = new Set(['programming-helper', 'coder']);
+  // 投影条目（如 programming-helper:coder）按宿主 agentId 归入 tool 组；
+  // 旧独立 coder 工作空间已移除，此处只保留现存宿主。
+  const TOOL_AGENT_IDS = new Set(['programming-helper']);
   const WORK_GROUP_IDS = new Set(['work-group']);
   const prebuiltIds = new Set(
     agents

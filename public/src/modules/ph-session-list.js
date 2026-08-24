@@ -39,7 +39,8 @@ window.switchPhSessionTab = (btn) => {
   }
   // If currently searching, update tab filter and re-render search panel
   if (phSearchQuery.trim()) {
-    phSearchTab = targetTab;
+    // coder 线程不参与会话搜索：搜索态下点击 coder tab 按主会话过滤
+    phSearchTab = targetTab === 'coder' ? 'main' : targetTab;
     const activeAgent = getCurrentAgentRecord();
     _updatePhSearchPanelDom(activeAgent?.id || 'programming-helper');
     return;
