@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 
@@ -15,6 +15,7 @@ import { packageFeatureProject } from '../server/feature-runtime/packager.js';
 import { computeRuntimeDependencyHash, getRuntimeEnvironmentRoot, provisionRuntimeEnvironment } from '../server/feature-runtime/provisioner.js';
 import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 import { getRegisteredAgent, listRegisteredAgents, registerAgentProject, unregisterAgentProject } from '../server/feature-runtime/agent-registry.js';
+import { PROJECT_ROOT } from '../server/shared/constants.js';
 import { spawnSync } from 'child_process';
 
 describe('feature runtime schemas', () => {
@@ -130,8 +131,17 @@ describe('user Agent registry', () => {
     assert.equal(registered.id, 'demo-agent');
     assert.equal((await listRegisteredAgents({ registryPath })).length, 1);
     assert.equal((await getRegisteredAgent('demo-agent', { registryPath })).projectDir, agentDir);
-    await writeFile(path.join(agentDir, 'metadata.json'), JSON.stringify({ id: 'coder', entry: './agent.js', deployment: { kind: 'standalone' }, features: [] }));
-    await assert.rejects(() => registerAgentProject({ projectDir: agentDir, registryPath }), /内建 plain Agent/);
+    // 内建 plain Agent id 守卫：注册 id 不得与仓库 agents/<id>/agent.js 内建目录冲突。
+    // 用临时内建目录验证（不依赖任何具体内建 agent 的存在）。
+    const builtinDir = path.join(PROJECT_ROOT, 'agents', 'builtin-guard-probe-agent');
+    await mkdir(builtinDir, { recursive: true });
+    try {
+      await writeFile(path.join(builtinDir, 'agent.js'), 'export default class BuiltinProbeAgent {}\n');
+      await writeFile(path.join(agentDir, 'metadata.json'), JSON.stringify({ id: 'builtin-guard-probe-agent', entry: './agent.js', deployment: { kind: 'standalone' }, features: [] }));
+      await assert.rejects(() => registerAgentProject({ projectDir: agentDir, registryPath }), /内建 plain Agent/);
+    } finally {
+      await rm(builtinDir, { recursive: true, force: true });
+    }
     await writeFile(path.join(agentDir, 'metadata.json'), JSON.stringify({ id: 'demo-agent', entry: './agent.js', deployment: { kind: 'standalone' }, features: [] }));
     assert.equal((await unregisterAgentProject('demo-agent', { registryPath })).id, 'demo-agent');
     assert.equal((await listRegisteredAgents({ registryPath })).length, 0);

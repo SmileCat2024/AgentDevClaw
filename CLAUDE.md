@@ -153,7 +153,7 @@ Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 中 14 个生态包�
 - [local-features/context-compaction-mirror/src/index.ts](/D:/code/AgentDevClaw/local-features/context-compaction-mirror/src/index.ts) — 上下文精简
 - [local-features/continuity-participant/src/index.ts](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts) — 连续性参与方协议（框架 declareContinuity 薄封装，CONTINUITY_FIELD_KEY 读旧写新）
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
-- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层：框架 feature 的 Claw 协议薄包装（ControlledTodoFeature / ContinuityAwareOpencodeBasic），编程小助手与 agents/coder 共享
+- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层：框架 feature 的 Claw 协议薄包装（ControlledTodoFeature / ContinuityAwareOpencodeBasic），编程小助手与 official coder 共享
 - [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts) — Agent Studio 控制面 feature（studio_* 工具集、Test Runtime 生命周期、结构化断言测试）
 
 local-features 的基础层/应用层分层约定见 [local-features/README.md](/D:/code/AgentDevClaw/local-features/README.md)。
@@ -313,7 +313,7 @@ npm run pack:features shell-feature weixin-bot   # 只打包指定包
 - [local-features/context-compaction-mirror/src/index.ts](/D:/code/AgentDevClaw/local-features/context-compaction-mirror/src/index.ts) — 上下文精简
 - [local-features/continuity-participant/src/index.ts](/D:/code/AgentDevClaw/local-features/continuity-participant/src/index.ts) — 连续性参与方协议（框架 declareContinuity 薄封装，CONTINUITY_FIELD_KEY 读旧写新）
 - [local-features/conversation-export/src/index.ts](/D:/code/AgentDevClaw/local-features/conversation-export/src/index.ts) — 对话导出
-- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层，编程小助手与 agents/coder 共享
+- [local-features/feature-wrappers/src/index.ts](/D:/code/AgentDevClaw/local-features/feature-wrappers/src/index.ts) — 基础包装层，编程小助手与 official coder 共享
 - [local-features/agent-studio/src/index.ts](/D:/code/AgentDevClaw/local-features/agent-studio/src/index.ts) — Agent Studio 控制面（studio_* 工具、Test Runtime、结构化测试）
 
 悬置的本地 feature（代码保留，不再积极迭代）：
@@ -411,7 +411,7 @@ claw run <name> --goal "..." --headless --format jsonl   # 纯无头 + 会话事
 
 结构与关键文件：
 
-- agent 定义：`agents/<name>/agent.js`（export default Agent 类）+ 可选 `metadata.json`；内置 `coder`（编程小助手 CLI 裁剪版独立快照，不 import prebuilt-agents）
+- agent 定义：`agents/<name>/agent.js`（export default Agent 类）+ 可选 `metadata.json`；或任意独立 Agent 项目目录（经 `claw agents register` 注册接入）
 - 入口链路：[bin/claw.mjs](/D:/code/AgentDevClaw/bin/claw.mjs)（薄壳）→ [scripts/run-plain-agent.js](/D:/code/AgentDevClaw/scripts/run-plain-agent.js)（运行器：模型解析、viewer 连接/降级、会话落盘与索引）
 - 会话事件渲染：[scripts/headless-session-renderer.js](/D:/code/AgentDevClaw/scripts/headless-session-renderer.js)，与 [scripts/run-one-shot-agent.js](/D:/code/AgentDevClaw/scripts/run-one-shot-agent.js)（prebuilt agent 的 server 派生单次调用入口）共用；事件发射点在框架 `AgentDev/src/core/session-events.ts`（见上文"会话事件流"小节）
 - 输出契约遵循"统一日志契约"章节：过程信息走 stderr，stdout 只承载结果数据（`--format result|text|json|quiet|jsonl`）
