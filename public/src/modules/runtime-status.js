@@ -303,8 +303,15 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     }
   }
 
+  // 会话身份路由：宿主与投影条目共享 hostAgentId，operation 必须再按
+  // sessionType 分流——宿主条目只收 main 会话的 operation，投影条目只收
+  // 自身份（coder）的。否则同一占位会在两个条目下镜像。
+  const expectedOperationSessionType = isProjectionEntry ? (childSessionType || 'main') : 'main';
   const operations = typeof listSidebarOperations === 'function'
-    ? listSidebarOperations((operation) => operation.agentId === hostAgentId)
+    ? listSidebarOperations((operation) => (
+      operation.agentId === hostAgentId
+      && String(operation.sessionType || 'main') === expectedOperationSessionType
+    ))
     : [];
   for (const operation of operations) {
     if (['settled', 'failed'].includes(operation.phase)) continue;
@@ -349,7 +356,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // Programming-helper groups every runtime by project. Its operation creator
     // must provide this identity explicitly; never infer it from a current or
     // historical session, because either can belong to another project.
-    if (String(prebuiltAgent?.id || '').trim() === 'programming-helper' && !operation.projectDir) continue;
+    // Guard by hostAgentId so the coder projection entry is covered too.
+    if (hostAgentId === 'programming-helper' && !operation.projectDir) continue;
 
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
       addEntry({
