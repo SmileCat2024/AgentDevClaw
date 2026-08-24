@@ -7078,15 +7078,24 @@ body[data-theme="light"] .gateway-detail-row {
 }
 
 .git-commit-btn {
-  align-self: flex-end;
-  padding: 5px 14px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 14px;
   border: none;
   border-radius: 6px;
   background: rgba(255,255,255,0.14);
   color: rgba(255,255,255,0.9);
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   cursor: pointer;
+}
+
+.git-commit-kbd {
+  font-size: 10px;
+  color: rgba(255,255,255,0.45);
 }
 
 .git-commit-btn:hover:not(:disabled) {
@@ -7105,7 +7114,7 @@ body[data-theme="light"] .gateway-detail-row {
 
 .git-group-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   padding: 4px 0 2px;
   font-size: 11px;
@@ -7115,9 +7124,17 @@ body[data-theme="light"] .gateway-detail-row {
   color: rgba(255,255,255,0.5);
 }
 
+/* 圆形计数徽标（VS Code SCM 形制） */
 .git-group-count {
-  color: rgba(255,255,255,0.35);
-  font-size: 10.5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.6);
+  font-size: 10px;
+  line-height: 17px;
+  text-align: center;
 }
 
 .git-group-action {
@@ -7150,8 +7167,43 @@ body[data-theme="light"] .gateway-detail-row {
   background: rgba(255,255,255,0.05);
 }
 
-.git-file.is-conflict .git-file-path {
+.git-file.is-conflict .git-file-name {
   color: #c58fe0;
+}
+
+/* 文件行：类型图标 + 文件名 + 暗色目录 + 右侧状态字母（VS Code SCM 排布） */
+.git-file-icon {
+  flex: none;
+  width: 24px;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.45);
+}
+
+.git-file-name {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.git-file-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+  text-align: right;
+}
+
+/* 悬停时操作按钮遮住状态字母（VS Code 同款行为） */
+.git-file:hover .git-file-badge {
+  display: none;
 }
 
 .git-file-badge {
@@ -7176,6 +7228,15 @@ body[data-theme="light"] .gateway-detail-row {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+}
+
+/* 浅色主题：文件行 */
+body[data-theme="light"] .git-file-icon {
+  color: rgba(0,0,0,0.45);
+}
+
+body[data-theme="light"] .git-file-dir {
+  color: rgba(0,0,0,0.38);
 }
 
 .git-file-actions {
@@ -7270,6 +7331,10 @@ body[data-theme="light"] .git-commit-btn {
   color: rgba(0,0,0,0.8);
 }
 
+body[data-theme="light"] .git-commit-kbd {
+  color: rgba(0,0,0,0.4);
+}
+
 body[data-theme="light"] .git-commit-btn:hover:not(:disabled) {
   background: rgba(0,0,0,0.18);
 }
@@ -7279,7 +7344,8 @@ body[data-theme="light"] .git-group-title {
 }
 
 body[data-theme="light"] .git-group-count {
-  color: rgba(0,0,0,0.38);
+  background: rgba(0,0,0,0.07);
+  color: rgba(0,0,0,0.45);
 }
 
 body[data-theme="light"] .git-group-action {
@@ -7487,30 +7553,38 @@ body[data-theme="light"] .git-history-meta {
 .git-ref {
   display: inline-block;
   margin-right: 5px;
-  padding: 0 6px;
+  padding: 0 7px;
   border-radius: 999px;
   font-size: 10px;
-  line-height: 15px;
+  line-height: 16px;
   vertical-align: middle;
-  max-width: 110px;
+  max-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.git-ref-icon {
+  margin-right: 3px;
+  font-size: 9px;
+}
+
+/* HEAD 分支：实心蓝底胶囊（VS Code 当前分支形制） */
 .git-ref.is-head {
-  background: rgba(105,164,255,0.18);
-  color: var(--git-c0);
-  border: 1px solid rgba(105,164,255,0.4);
+  background: #4DA3F5;
+  color: #0d1117;
+  font-weight: 600;
 }
 
 .git-ref.is-local {
   background: rgba(115,201,145,0.14);
-  color: var(--git-c1);
+  color: #73c991;
 }
 
+/* 远程分支：紫底胶囊 */
 .git-ref.is-remote {
-  background: rgba(255,255,255,0.07);
-  color: rgba(255,255,255,0.55);
+  background: rgba(149,117,205,0.85);
+  color: #fff;
 }
 
 .git-ref.is-tag {
@@ -7519,8 +7593,85 @@ body[data-theme="light"] .git-history-meta {
 }
 
 body[data-theme="light"] .git-ref.is-remote {
-  background: rgba(0,0,0,0.06);
-  color: rgba(0,0,0,0.55);
+  background: #8d5bd0;
+  color: #fff;
+}
+
+/* 「传出的更改」分组行（虚线圈 + 标签 + 分支名） */
+.git-outgoing-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;                /* 与 ROW_H 对齐 */
+  padding-left: var(--git-canvas-w, 30px);
+  padding-right: 4px;
+  margin: 0 -4px;
+  font-size: 11.5px;
+}
+
+.git-outgoing-ring {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-left: -1px;
+  border: 1.5px dashed var(--git-c0, #4DA3F5);
+  border-radius: 50%;
+}
+
+.git-outgoing-label {
+  color: rgba(255,255,255,0.75);
+  font-weight: 600;
+}
+
+.git-outgoing-branch {
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.4);
+}
+
+body[data-theme="light"] .git-outgoing-label {
+  color: rgba(0,0,0,0.75);
+}
+
+body[data-theme="light"] .git-outgoing-branch {
+  color: rgba(0,0,0,0.45);
+}
+
+/* 分区标题行内操作按钮（如「图形」区的刷新） */
+.git-section-action {
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(255,255,255,0.45);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.git-section-action:hover:not(:disabled) {
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.9);
+}
+
+.git-section-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.git-section-action.is-loading {
+  animation: git-spin 0.9s linear infinite;
+}
+
+body[data-theme="light"] .git-section-action {
+  color: rgba(0,0,0,0.45);
+}
+
+body[data-theme="light"] .git-section-action:hover:not(:disabled) {
+  background: rgba(0,0,0,0.08);
+  color: rgba(0,0,0,0.85);
 }
 
 /* ── 展开的提交文件清单：绝对定位浮层 ── */

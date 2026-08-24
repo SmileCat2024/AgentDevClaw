@@ -31,6 +31,7 @@
     isRepo: true,
     status: null,       // 序列化后的 StatusResult
     graph: [],          // 提交历史（新→旧，含 lane）
+    aheadHashes: [],    // 未推送提交哈希集合（「传出的更改」分组依据）
     branches: null,     // { locals, remotes, current }
     stash: [],          // [{ ref, desc }]
     error: '',
@@ -123,6 +124,7 @@
       state.root = status?.root || '';
       state.status = status?.status || null;
       state.graph = Array.isArray(graph?.commits) ? graph.commits : [];
+      state.aheadHashes = Array.isArray(graph?.aheadHashes) ? graph.aheadHashes : [];
       state.branches = branches || null;
       state.stash = Array.isArray(stash?.entries) ? stash.entries : [];
       state.errors = errors;
@@ -148,6 +150,7 @@
     state.root = '';
     state.status = null;
     state.graph = [];
+    state.aheadHashes = [];
     state.branches = null;
     state.stash = [];
     state.error = '';
@@ -196,13 +199,29 @@
     return file?.from ? `${file.path} ← ${file.from}` : String(file?.path || '');
   }
 
+  /** 文件类型图标（VS Code 风格的短文本徽标）：json 用 {}，其余取扩展名大写 */
+  function fileTypeIcon(path) {
+    const base = String(path || '').split('/').pop() || '';
+    const dot = base.lastIndexOf('.');
+    if (dot < 0 || dot === base.length - 1) return { label: '—', known: false };
+    const ext = base.slice(dot + 1).toLowerCase();
+    if (ext === 'json') return { label: '{}', known: true };
+    if (ext === 'md') return { label: 'M↓', known: true };
+    const label = ext.slice(0, 4).toUpperCase();
+    return { label, known: true };
+  }
+
   // ── 渲染：更改区 ─────────────────────────────────────────────────
 
   function renderFileRow(file, group) {
     const badge = badgeFor(file, group);
     const path = displayPath(file);
     const inConflict = group === 'conflict';
-    // 行内操作：悬停显隐的图标按钮（+ 暂存 / − 取消暂存 / ↺ 丢弃），语义靠 tooltip
+    const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+    const name = slash >= 0 ? path.slice(slash + 1) : path;
+    const dir = slash >= 0 ? path.slice(0, slash) : '';
+    const icon = fileTypeIcon(path);
+    // 行内操作：悬停显隐的图标按钮（+ 暂存 / − 取消暂存 / ↺ 丢弃），悬停时遮住状态字母
     const actions = inConflict ? '' : [
       group === 'staged'
         ? '<button class="git-file-action" data-gp-action="unstage" data-gp-file="' + esc(file.path) + '" title="' + esc(zh('取消暂存', 'Unstage')) + '">&#8722;</button>'
@@ -210,10 +229,12 @@
       '<button class="git-file-action is-danger" data-gp-action="discard" data-gp-file="' + esc(file.path) + '" title="' + esc(zh('丢弃改动（不可恢复）', 'Discard changes (cannot be undone)')) + '">&#8634;</button>',
     ].join('');
     return [
-      '<div class="git-file' + (inConflict ? ' is-conflict' : '') + '">',
-      '<span class="git-file-badge st-' + esc(badge.cls) + '">' + esc(badge.letter) + '</span>',
-      '<span class="git-file-path" title="' + esc(path) + '">' + esc(path) + '</span>',
+      '<div class="git-file' + (inConflict ? ' is-conflict' : '') + '" title="' + esc(path) + '">',
+      '<span class="git-file-icon">' + esc(icon.label) + '</span>',
+      '<span class="git-file-name">' + esc(name) + '</span>',
+      (dir ? '<span class="git-file-dir">' + esc(dir) + '</span>' : ''),
       '<span class="git-file-actions">' + actions + '</span>',
+      '<span class="git-file-badge st-' + esc(badge.cls) + '">' + esc(badge.letter) + '</span>',
       '</div>',
     ].join('');
   }
@@ -223,8 +244,8 @@
     return [
       '<div class="git-group-head">',
       '<span class="git-group-title">' + esc(title) + '</span>',
-      '<span class="git-group-count">' + files.length + '</span>',
       headerAction || '',
+      '<span class="git-group-count">' + files.length + '</span>',
       '</div>',
       files.map((f) => renderFileRow(f, group)).join(''),
     ].join('');
@@ -252,14 +273,18 @@
 
   function renderCommitBox(stagedCount) {
     const disabled = stagedCount === 0 || state.busy;
+    const branch = state.status?.current || '';
+    const placeholder = branch
+      ? zh('提交信息 (Ctrl+Enter 在 "' + branch + '" 上提交)', 'Commit message (Ctrl+Enter to commit on "' + branch + '")')
+      : zh('提交信息', 'Commit message');
     const label = stagedCount > 0
-      ? zh('提交', 'Commit') + ' (' + stagedCount + ')'
-      : zh('提交', 'Commit');
+      ? '&#10003; ' + esc(zh('提交', 'Commit')) + ' (' + stagedCount + ')'
+      : '&#10003; ' + esc(zh('提交', 'Commit'));
     return [
       '<section class="git-commit-box">',
       '<textarea id="git-commit-message" class="git-commit-input" data-gp-message rows="2" placeholder="'
-        + esc(zh('提交信息', 'Commit message')) + '">' + esc(state.commitMessage) + '</textarea>',
-      '<button class="git-commit-btn" data-gp-action="commit" ' + (disabled ? 'disabled' : '') + '>' + esc(label) + '</button>',
+        + esc(placeholder) + '">' + esc(state.commitMessage) + '</textarea>',
+      '<button class="git-commit-btn" data-gp-action="commit" ' + (disabled ? 'disabled' : '') + '>' + label + '<span class="git-commit-kbd">Ctrl+&#9166;</span></button>',
       '</section>',
     ].join('');
   }
@@ -279,10 +304,18 @@
   function refLabel(ref) {
     const name = String(ref?.name || '');
     if (!name) return '';
-    const cls = ref.type === 'head' ? 'is-head' : ref.type === 'tag' ? 'is-tag'
-      : ref.type === 'remote' ? 'is-remote' : 'is-local';
-    const label = ref.type === 'head' ? name : ref.type === 'tag' ? 'tag: ' + name : name;
-    return '<span class="git-ref ' + cls + '">' + esc(label) + '</span>';
+    if (ref.type === 'head') {
+      // HEAD 分支：实心蓝底胶囊 + ◎ 靶心图标（VS Code 当前分支形制）
+      return '<span class="git-ref is-head"><span class="git-ref-icon">&#9678;</span>' + esc(name) + '</span>';
+    }
+    if (ref.type === 'remote') {
+      // 远程分支：紫底胶囊 + 云图标
+      return '<span class="git-ref is-remote"><span class="git-ref-icon">&#972;</span>' + esc(name) + '</span>';
+    }
+    if (ref.type === 'tag') {
+      return '<span class="git-ref is-tag">' + esc(name) + '</span>';
+    }
+    return '<span class="git-ref is-local">' + esc(name) + '</span>';
   }
 
   async function ensureCommitFiles(hash) {
@@ -310,21 +343,34 @@
 
     const lanes = window.GitGraph.computeLanes(commits);
     const headRow = 0; // log 新→旧，第一行即 HEAD
-    const svg = window.GitGraph.buildGraphSvg(lanes, headRow);
+    const aheadSet = new Set(state.aheadHashes);
+    // 「传出的更改」= 未推送提交的连续头部区段；虚线圈节点由 aheadHashes 驱动
+    const svg = window.GitGraph.buildGraphSvg(lanes, headRow, aheadSet);
+
+    // 头部区段里第一个「已推送」提交的行号（传出的更改分组行的插入点）
+    let outgoingEnd = 0;
+    while (outgoingEnd < commits.length && aheadSet.has(commits[outgoingEnd].hash)) outgoingEnd++;
+    const hasOutgoing = outgoingEnd > 0 && outgoingEnd < commits.length;
 
     const rows = commits.map((c, row) => {
       const isHead = row === headRow;
       const refs = (c.refs || []).map(refLabel).join('');
+      // 分组行插在传出区段之后（VS Code「传出的更改 main」形制）
+      const outgoingRow = hasOutgoing && row === outgoingEnd
+        ? '<div class="git-outgoing-row"><span class="git-outgoing-ring"></span>'
+          + '<span class="git-outgoing-label">' + esc(zh('传出的更改', 'Outgoing Changes')) + '</span>'
+          + '<span class="git-outgoing-branch">' + esc(state.status?.current || '') + '</span></div>'
+        : '';
       const files = state.expandedCommit === c.hash
         ? renderCommitFiles(c.hash)
         : '';
       return [
-        '<div class="git-history-row' + (isHead ? ' is-head' : '') + (state.expandedCommit === c.hash ? ' is-expanded' : '') + '" data-gp-commit="' + esc(c.hash) + '">',
+        outgoingRow,
+        '<div class="git-history-row' + (isHead ? ' is-head' : '') + (state.expandedCommit === c.hash ? ' is-expanded' : '') + '" data-gp-commit="' + esc(c.hash) + '" title="' + esc(c.author + ' · ' + c.relTime) + '">',
         '<span class="git-history-text">',
         refs,
-        '<span class="git-history-subject" title="' + esc(c.subject) + '">' + esc(c.subject) + '</span>',
+        '<span class="git-history-subject">' + esc(c.subject) + '</span>',
         '</span>',
-        '<span class="git-history-meta">' + esc(c.author) + ' · ' + esc(c.relTime) + '</span>',
         '</div>',
         files,
       ].join('');
@@ -431,11 +477,11 @@
 
   // ── 渲染：分区壳与主入口 ─────────────────────────────────────────
 
-  function section(id, title, bodyHtml, open) {
+  function section(id, title, bodyHtml, open, titleExtra) {
     if (!bodyHtml) return '';
     return [
       '<details class="git-section" data-gp-section="' + id + '"' + (open ? ' open' : '') + '>',
-      '<summary class="git-section-title">' + esc(title) + '</summary>',
+      '<summary class="git-section-title">' + esc(title) + (titleExtra || '') + '</summary>',
       '<div class="git-section-body">' + bodyHtml + '</div>',
       '</details>',
     ].join('');
@@ -476,12 +522,14 @@
       clean ? '<div class="git-clean">' + esc(zh('工作区干净', 'Working tree clean')) + '</div>' : '',
     ].join('');
 
+    const historyRefresh = '<button class="git-section-action' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="'
+      + esc(zh('刷新', 'Refresh')) + '" ' + (state.loading || state.busy ? 'disabled' : '') + '>&#8635;</button>';
     return [
       '<div class="git-panel">',
       renderHead(status),
       renderMessage(),
       section('changes', zh('更改', 'Changes'), changesBody, true),
-      section('history', zh('提交历史', 'Commit History'), renderHistory(), true),
+      section('history', zh('图形', 'Graph'), renderHistory(), true, historyRefresh),
       section('branches', zh('分支', 'Branches'), renderBranches(), false),
       section('stash', zh('贮藏', 'Stash'), renderStash(), false),
       '</div>',
@@ -692,6 +740,14 @@
     const ta = e.target.closest('textarea[data-gp-message]');
     if (!ta) return;
     state.commitMessage = ta.value;
+  });
+
+  // Ctrl+Enter 快捷提交（VS Code SCM 同款）
+  featurePanelBody.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && e.target.closest('textarea[data-gp-message]')) {
+      e.preventDefault();
+      doCommit();
+    }
   });
 
   window.GitPanel = {

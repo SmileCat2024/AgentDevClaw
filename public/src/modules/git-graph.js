@@ -114,8 +114,10 @@
    * 便于省略号与悬停交互）。
    * @param {{commits:Array, edges:Array, laneCount:number}} lanes computeLanes 结果
    * @param {number} headRow HEAD 所在行
+   * @param {Set<string>} [aheadSet] 未推送提交哈希集合——命中者画虚线空心圈
+   *   （VS Code「传出的更改」形制：实线=已推送，虚线=仅本地）
    */
-  function buildGraphSvg(lanes, headRow) {
+  function buildGraphSvg(lanes, headRow, aheadSet) {
     const rows = lanes.commits.length;
     const width = PAD_X * 2 + Math.max(1, lanes.laneCount) * LANE_W;
     const height = rows * ROW_H;
@@ -146,16 +148,20 @@
       }
     });
 
-    // ── 再画节点：普通实心 / merge 空心 / HEAD 靶心 ──
+    // ── 再画节点：普通实心 / merge 空心 / HEAD 靶心 / 未推送虚线圈 ──
     lanes.commits.forEach(function (c, row) {
       const x = xOf(c.lane);
       const y = yOf(row);
       const color = laneColor(c.lane);
       const isMerge = (c.parents || []).length > 1;
+      const isAhead = aheadSet instanceof Set && aheadSet.has(c.hash);
       if (row === headRow) {
-        // HEAD：加大空心环 + 中心实心点（◎ 靶心形制）
-        dotParts.push('<circle class="git-dot git-dot-head" cx="' + x + '" cy="' + y + '" r="' + HEAD_R + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="2"/>');
+        // HEAD：加大空心环 + 中心实心点（◎ 靶心形制）；未推送时外环虚线
+        dotParts.push('<circle class="git-dot git-dot-head' + (isAhead ? ' git-dot-ahead' : '') + '" cx="' + x + '" cy="' + y + '" r="' + HEAD_R + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="2"' + (isAhead ? ' stroke-dasharray="2.5 2.5"' : '') + '/>');
         dotParts.push('<circle class="git-dot git-dot-head-core" cx="' + x + '" cy="' + y + '" r="' + (DOT_R - 1.5) + '" fill="' + color + '"/>');
+      } else if (isAhead && !isMerge) {
+        // 未推送提交：虚线空心圈（露出面板底色遮断穿线）
+        dotParts.push('<circle class="git-dot git-dot-ahead" cx="' + x + '" cy="' + y + '" r="' + (DOT_R + 0.5) + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="1.5" stroke-dasharray="2.5 2.5"/>');
       } else if (isMerge) {
         // merge 提交：空心圆，内部为面板底色（遮断从下方穿过的线）
         dotParts.push('<circle class="git-dot git-dot-merge" cx="' + x + '" cy="' + y + '" r="' + (DOT_R + 0.5) + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="2"/>');

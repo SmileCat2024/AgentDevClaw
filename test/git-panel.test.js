@@ -289,7 +289,41 @@ describe('git graph / commit_files', () => {
       // HEAD -> master 装饰 + tag
       assert.ok(head.refs.some((r) => r.type === 'head'));
       assert.ok(head.refs.some((r) => r.type === 'tag' && r.name === 'v1.0'));
+      // 无上游时 aheadHashes 为空集（装饰性信息，不拖垮端点）
+      assert.deepEqual(data.aheadHashes, []);
     } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns aheadHashes for unpushed commits when upstream exists', async () => {
+    // 用真实 bare remote + clone 建立 upstream（update-ref 手写 remote-tracking 不满足
+    // Git 对 upstream 的校验，@{upstream} 会解析失败）
+    const bare = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-git-bare-'));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'claw-git-clone-'));
+    try {
+      execSync('git init -q --bare ' + bare, { cwd: os.tmpdir() });
+      const git = (cmd) => execSync(`git ${cmd}`, { cwd: dir }).toString();
+      git('init -q');
+      git('config user.email test@local');
+      git('config user.name test');
+      git('config commit.gpgsign false');
+      git('remote add origin ' + bare);
+      await fs.writeFile(path.join(dir, 'a.txt'), 'v1');
+      git('add -A');
+      git('commit -q -m pushed');
+      git('push -q -u origin master');  // -u 建立 branch.master 的 upstream
+      await fs.writeFile(path.join(dir, 'a.txt'), 'v2');
+      git('add -A');
+      git('commit -q -m unpushed');
+
+      const { code, data } = await api('/protoclaw/git/graph', { dir, limit: 10 });
+      assert.equal(code, 200);
+      assert.equal(data.aheadHashes.length, 1);
+      assert.equal(data.commits[0].subject, 'unpushed');
+      assert.equal(data.aheadHashes[0], data.commits[0].hash);
+    } finally {
+      await fs.rm(bare, { recursive: true, force: true });
       await fs.rm(dir, { recursive: true, force: true });
     }
   });

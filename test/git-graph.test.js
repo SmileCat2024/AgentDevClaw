@@ -131,6 +131,35 @@ describe('buildGraphSvg', () => {
     assert.ok(out.svg.includes('var(--git-node-bg'));
   });
 
+  it('ahead (unpushed) commits render as dashed rings, pushed ones solid', () => {
+    // Set 必须在 VM 同一 realm 内创建（跨 realm 的 instanceof Set 会为 false）
+    const out = run(`(function(){
+      const commits = [
+        {hash:'head1',parents:['mid1'],refs:[]},
+        {hash:'mid1',parents:['base1'],refs:[]},
+        {hash:'base1',parents:[],refs:[]}
+      ];
+      const ahead = new Set(['head1','mid1']);
+      const lanes = window.GitGraph.computeLanes(commits);
+      return window.GitGraph.buildGraphSvg(lanes, 0, ahead);
+    })()`);
+    // ahead 的 HEAD + 普通提交 → 虚线空心圈；base1 已推送 → 实心小圆
+    assert.ok(out.svg.includes('stroke-dasharray="2.5 2.5"'));
+    // 两个 ahead 节点都带虚线
+    assert.equal((out.svg.match(/stroke-dasharray="2.5 2.5"/g) || []).length, 2);
+    // base1 为已推送普通提交 —— 实心（git-dot 无 dasharray 且非 merge/head）
+    assert.ok(out.svg.includes('git-dot git-dot"') === false); // 无该形态，普通节点 class 为 git-dot
+  });
+
+  it('no ahead set (or non-Set) falls back to solid nodes', () => {
+    const out = run(`(function(){
+      const commits = [{hash:'a',parents:[]}];
+      const lanes = window.GitGraph.computeLanes(commits);
+      return window.GitGraph.buildGraphSvg(lanes, 0, undefined);
+    })()`);
+    assert.ok(!out.svg.includes('stroke-dasharray'));
+  });
+
   // 回归：服务端 hash 与 parents 统一为 12 位短哈希后，边的 toRow 必须能
   // 命中行号（历史上 40 位 parents 匹配 12 位 hash 失败，全图退化为截断线）
   it('edges resolve toRow for 12-char short-hash form (server payload shape)', () => {

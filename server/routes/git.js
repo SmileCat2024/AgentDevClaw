@@ -634,7 +634,18 @@ export function setupGitRoutes(app, express) {
           subject: subject || '',
         });
       }
-      res.json({ ok: true, root, commits });
+      // 未推送提交（@{upstream}..HEAD）：供前端画「传出的更改」分组与虚线节点。
+      // 无上游/失败时为空集——这只是装饰性信息，不应拖垮整个图。
+      let aheadHashes = [];
+      try {
+        // 完整哈希 %H 再截 12 位，与 commits[].hash 严格一致（短哈希不匹配
+        // 会导致前端 aheadSet 全部脱靶、虚线节点画不出来）
+        const aheadText = await runGit(['rev-list', '--pretty=format:%H', '@{upstream}..HEAD'], root);
+        aheadHashes = aheadText.split('\n')
+          .map((l) => l.trim().slice(0, 12))
+          .filter((l) => l && !l.startsWith('commit '));
+      } catch (e) { /* 无上游等情况：保持空集 */ }
+      res.json({ ok: true, root, commits, aheadHashes });
     } catch (error) {
       routeError(res, error);
     }
