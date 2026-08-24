@@ -28,7 +28,7 @@ import {
 import { createThreadControl } from '../server/thread-control/thread-controller.js';
 import {
   createThreadIntegration,
-  THREAD_HOST_AGENT_IDS,
+  isThreadHostSession,
 } from '../server/thread-control/thread-integration.js';
 import { deliverUserInput } from '../server/thread-control/input-gateway.js';
 import { managedAgents } from '../server/shared/agent-access.js';
@@ -822,16 +822,21 @@ describe('ThreadIntegration (coder host gating)', () => {
     return { control, core: control.core, integration: createThreadIntegration({ control }) };
   }
 
-  test('onSessionCreated creates thread for coder host only', async () => {
+  test('onSessionCreated creates thread for host sessions only', async () => {
     const { integration } = makeIntegration();
-    assert.ok(THREAD_HOST_AGENT_IDS.has('coder'));
+    // 宿主判定是会话级的：programming-helper 工作空间内只有 coder 类型
+    // 会话自动建线程，main 会话与其它工作空间均为 no-op。
+    assert.ok(isThreadHostSession('programming-helper', 'coder'));
+    assert.equal(isThreadHostSession('programming-helper', 'main'), false);
+    assert.equal(isThreadHostSession('coder', 'coder'), false);
+    assert.equal(isThreadHostSession('coder', 'main'), false);
 
-    const coderThread = await integration.onSessionCreated('coder', { id: 'cs-1', title: '修复登录' });
+    const coderThread = await integration.onSessionCreated('programming-helper', { id: 'cs-1', sessionType: 'coder', title: '修复登录' });
     assert.ok(coderThread);
     assert.equal(coderThread.headSessionId, 'cs-1');
     assert.equal(coderThread.title, '修复登录');
 
-    const phThread = await integration.onSessionCreated('programming-helper', { id: 'ph-1' });
+    const phThread = await integration.onSessionCreated('programming-helper', { id: 'ph-1', sessionType: 'main' });
     assert.equal(phThread, null);
   });
 
@@ -846,11 +851,11 @@ describe('ThreadIntegration (coder host gating)', () => {
       },
     });
 
-    const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
+    const thread = await integration.onSessionCreated('programming-helper', { id: 'coder-s1', sessionType: 'coder', title: 'T' });
     await core.appendCommand({ threadId: thread.threadId, text: '接力期间补充的指令' });
 
     const outcome = await integration.applySessionSuccession({
-      agentId: 'coder',
+      agentId: 'programming-helper',
       fromSessionId: 'coder-s1',
       toSessionId: 'coder-s2',
       reason: 'trim',
@@ -884,11 +889,11 @@ describe('ThreadIntegration (coder host gating)', () => {
       },
     });
 
-    const thread = await integration.onSessionCreated('coder', { id: 'coder-s1', title: 'T' });
+    const thread = await integration.onSessionCreated('programming-helper', { id: 'coder-s1', sessionType: 'coder', title: 'T' });
     await core.appendCommand({ threadId: thread.threadId, text: '等 runtime 的指令' });
 
     const outcome = await integration.applySessionSuccession({
-      agentId: 'coder',
+      agentId: 'programming-helper',
       fromSessionId: 'coder-s1',
       toSessionId: 'coder-s2',
       reason: 'summary',
@@ -903,7 +908,7 @@ describe('ThreadIntegration (coder host gating)', () => {
 
     // runtime 就绪 → 补投送达
     ready = true;
-    const readyOutcome = await integration.handleRuntimeReady('coder', 'coder-s2');
+    const readyOutcome = await integration.handleRuntimeReady('programming-helper', 'coder-s2');
     assert.equal(readyOutcome.applied, true);
     assert.equal(readyOutcome.delivery.delivered, 1);
     assert.equal(turns.length, 1);
@@ -914,7 +919,7 @@ describe('ThreadIntegration (coder host gating)', () => {
 
     // 就绪会话不是任何线程 head（纯 session，含非宿主 workspace）：no-op
     assert.equal((await integration.handleRuntimeReady('programming-helper', 'x')).reason, 'no_thread_for_session');
-    assert.equal((await integration.handleRuntimeReady('coder', 'coder-s1')).reason, 'no_thread_for_session');
+    assert.equal((await integration.handleRuntimeReady('programming-helper', 'coder-s1')).reason, 'no_thread_for_session');
   });
 
   test('applySessionSuccession is no-op for non-host agents and non-head sessions', async () => {    const { core, integration } = makeIntegration();
@@ -927,9 +932,9 @@ describe('ThreadIntegration (coder host gating)', () => {
     });
     assert.equal(phOutcome.applied, false);
 
-    await integration.onSessionCreated('coder', { id: 'c1' });
+    await integration.onSessionCreated('programming-helper', { id: 'c1', sessionType: 'coder' });
     const noThread = await integration.applySessionSuccession({
-      agentId: 'coder',
+      agentId: 'programming-helper',
       fromSessionId: 'unknown-session',
       toSessionId: 'c2',
       reason: 'trim',
@@ -938,9 +943,9 @@ describe('ThreadIntegration (coder host gating)', () => {
     assert.equal(noThread.reason, 'no_thread_for_session');
 
     // head 不匹配（from 不是当前 head）时不动线程
-    const thread = await core.getThread((await core.listThreads({ agentId: 'coder' }))[0].threadId);
+    const thread = await core.getThread((await core.listThreads({ agentId: 'programming-helper' }))[0].threadId);
     const stale = await integration.applySessionSuccession({
-      agentId: 'coder',
+      agentId: 'programming-helper',
       fromSessionId: 'c1',
       toSessionId: 'c1', // same session → invalid
       reason: 'trim',
@@ -951,22 +956,22 @@ describe('ThreadIntegration (coder host gating)', () => {
 
   test('onSessionDeleted cancels the thread when its head is deleted; no-op otherwise', async () => {
     const { core, integration } = makeIntegration();
-    const thread = await integration.onSessionCreated('coder', { id: 'del-1', title: 'A' });
+    const thread = await integration.onSessionCreated('programming-helper', { id: 'del-1', sessionType: 'coder', title: 'A' });
     await core.appendCommand({ threadId: thread.threadId, text: 'staged' });
     await core.advanceHead({ threadId: thread.threadId, toSessionId: 'del-2', fromSessionId: 'del-1', endKind: 'trim' });
 
     // 删除非 head 棒次：不动线程
-    const nonHead = await integration.onSessionDeleted('coder', 'del-1');
+    const nonHead = await integration.onSessionDeleted('programming-helper', 'del-1');
     assert.equal(nonHead.applied, false);
     assert.equal(nonHead.reason, 'no_thread_for_session');
 
     // 纯 session 会话（无线程，含非宿主 workspace）：no-op
-    const nonHost = await integration.onSessionDeleted('programming-helper', 'del-2');
+    const nonHost = await integration.onSessionDeleted('programming-helper', 'not-in-any-thread');
     assert.equal(nonHost.applied, false);
     assert.equal(nonHost.reason, 'no_thread_for_session');
 
     // 删除 head：线程取消，pending 指令一并取消
-    const outcome = await integration.onSessionDeleted('coder', 'del-2');
+    const outcome = await integration.onSessionDeleted('programming-helper', 'del-2');
     assert.equal(outcome.applied, true);
     assert.equal(outcome.threadId, thread.threadId);
     const record = await core.getThread(thread.threadId);
@@ -1094,11 +1099,12 @@ describe('InputGateway (unified user input routing)', () => {
     return { control, core: control.core, integration: createThreadIntegration({ control }) };
   }
 
-  const VIEWER_KEY = 'coder::ig-s1';
+  const VIEWER_KEY = 'programming-helper::ig-s1';
   before(async () => {
     managedAgents.set(VIEWER_KEY, {
-      agentId: 'coder',
+      agentId: 'programming-helper',
       selectedSessionId: 'ig-s1',
+      sessionType: 'coder',
       viewerAgentId: 'viewer-ig-1',
       process: null,
     });
@@ -1109,8 +1115,8 @@ describe('InputGateway (unified user input routing)', () => {
 
   test('handoff in progress reroutes to Thread Inbox with explicit thread_queued result', async () => {
     const { core, integration } = makeFixture();
-    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
-    await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'ig-s1', reason: 'summary' });
+    const thread = await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
+    await integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 'ig-s1', reason: 'summary' });
 
     const result = await deliverUserInput(
       { viewerAgentId: 'viewer-ig-1', text: '请继续', source: 'chat-composer' },
@@ -1127,7 +1133,7 @@ describe('InputGateway (unified user input routing)', () => {
 
   test('no handoff: passthrough delivery to viewer user-turn', async () => {
     const { core, integration } = makeFixture();
-    await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
+    await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
 
     // direct 路径验证网关透传契约：stub fetch 模拟 viewer 原生结果
     const fetchImpl = async (_url, init) => ({
@@ -1148,8 +1154,8 @@ describe('InputGateway (unified user input routing)', () => {
 
   test('image-only input during handoff fails explicitly instead of being lost', async () => {
     const { core, integration } = makeFixture();
-    await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
-    await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'ig-s1', reason: 'trim' });
+    await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
+    await integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 'ig-s1', reason: 'trim' });
 
     await assert.rejects(
       deliverUserInput({ viewerAgentId: 'viewer-ig-1', text: ' ', images: ['/tmp/a.png'] }, { integration }),
@@ -1167,8 +1173,8 @@ describe('InputGateway (unified user input routing)', () => {
         return { success: true };
       },
     });
-    const thread = await core.start({ sessionRef: { agentId: 'coder', sessionId: 'ig-s1' } });
-    await integration.beginSessionSuccession({ agentId: 'coder', sessionId: 'ig-s1', reason: 'trim' });
+    const thread = await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
+    await integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 'ig-s1', reason: 'trim' });
 
     // 模拟竞态：网关路由判定（读到 fresh 交接）之后、appendCommand 落盘
     // 之前，succession 完成（advanceHead 清挡板 + 投递过一轮空投递）。

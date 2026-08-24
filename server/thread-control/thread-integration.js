@@ -2,8 +2,9 @@
  * Thread Integration — 工作线程与 Claw 会话生命周期的接线层
  *
  * 把 thread-control 控制面挂到既有会话生命周期的钩子上：
- *   1. onSessionCreated：coder 工作空间新建会话（含 branch 产生的新会话）
- *      时自动创建线程（会话成为线程 root 与初始 head）；
+ *   1. onSessionCreated：线程宿主会话（如 programming-helper 工作空间的
+ *      coder 类型会话，含 branch 产生的新会话）自动创建线程（会话成为
+ *      线程 root 与初始 head）；
  *   2. beginSessionSuccession：compact / summary 接力开始时写入交接意图
  *      （pendingSuccession 挡板）；
  *   3. applySessionSuccession：successor 会话就绪后推进线程 head 并投递
@@ -13,21 +14,21 @@
  *   6. handleRuntimeReady：head runtime 就绪时补投 pending 指令（经
  *      shared/runtime-hooks 的 onRuntimeReady 订阅接入）。
  *
- * 判定基准：THREAD_HOST_AGENT_IDS 只回答「哪些工作空间的新会话自动建立
- * 线程环境」（环境的存在性开关，消费点：onSessionCreated 与 input-gateway
- * 的指令路由闸）。其余事件响应钩子（succession / 删除清理 / runtime 就绪
- * 补投 / guard 触发的 rotation）一律以「该会话是否为某活跃线程的 head」
- * 为唯一判定——处于线程环境（thread）则生效，纯 session 会话天然 no-op，
- * 与 agent 归属哪个工作空间无关。
+ * 判定基准：isThreadHostSession 只回答「哪个 (工作空间, 会话类型) 组合的
+ * 新会话自动建立线程环境」（环境的存在性开关，消费点：onSessionCreated
+ * 与 input-gateway 的指令路由闸）。其余事件响应钩子（succession / 删除
+ * 清理 / runtime 就绪补投 / guard 触发的 rotation）一律以「该会话是否为
+ * 某活跃线程的 head」为唯一判定——处于线程环境（thread）则生效，纯
+ * session 会话天然 no-op，与 agent 归属哪个工作空间无关。
  */
 
 import { getThreadControl } from './thread-controller.js';
 import { ThreadNotFoundError } from './thread-store.js';
-import { THREAD_HOST_AGENT_IDS } from './host-agents.js';
+import { isThreadHostSession } from './host-agents.js';
 
-// 集合的唯一定义在 ./host-agents.js（无副作用轻量模块，供 agent 子进程同源
+// 判定的唯一定义在 ./host-agents.js（无副作用轻量模块，供 agent 子进程同源
 // 引用）；此处 re-export 维持 server 侧既有消费方（input-gateway 等）不变。
-export { THREAD_HOST_AGENT_IDS };
+export { isThreadHostSession };
 
 export function createThreadIntegration({ control = null } = {}) {
   const { core, board } = control || getThreadControl();
@@ -41,7 +42,7 @@ export function createThreadIntegration({ control = null } = {}) {
      * 失败不阻断会话创建（线程是承接增强，不是会话存在的前提）。
      */
     async onSessionCreated(agentId, session) {
-      if (!THREAD_HOST_AGENT_IDS.has(String(agentId || '').trim())) return null;
+      if (!isThreadHostSession(agentId, session?.sessionType)) return null;
       const sessionId = String(session?.id || '').trim();
       if (!sessionId) return null;
       try {

@@ -22,7 +22,7 @@
 
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
 import { submitUserTurn, UserTurnDeliveryError } from '../shared/user-turn.js';
-import { getThreadIntegration, THREAD_HOST_AGENT_IDS } from './thread-integration.js';
+import { getThreadIntegration, isThreadHostSession } from './thread-integration.js';
 
 export { UserTurnDeliveryError };
 
@@ -103,7 +103,7 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
   const runtime = getRuntimeByViewerAgentId(viewerAgentId);
   const agentId = String(runtime?.agentId || '').trim();
   const sessionId = String(runtime?.selectedSessionId || '').trim();
-  if (!agentId || !sessionId || !THREAD_HOST_AGENT_IDS.has(agentId)) {
+  if (!agentId || !sessionId || !isThreadHostSession(agentId, runtime?.sessionType)) {
     return { route: 'direct' };
   }
 
