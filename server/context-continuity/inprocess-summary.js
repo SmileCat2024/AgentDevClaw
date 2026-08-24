@@ -3,9 +3,8 @@
  *
  * 框架 `generateSummaryText({llm}, snapshot, prompt)` 是摘要生成的唯一官方
  * 实现（空工具集、非流式、stripCompactAnalysis 清洗）。本模块只做 Claw 侧
- * 装配：模型预设解析（system/exploration/sub 角色，复用 run-compact-mirror
- * 的装配约定）、LLM 调优（关 thinking、限 maxTokens）、提示词选择、重试与
- * 超时。替代已删除的 run-compact-mirror 子进程管线。
+ * 装配：模型预设解析（system 角色）、LLM 调优（关 thinking、限 maxTokens）、
+ * 提示词选择、重试与超时。替代已删除的 run-compact-mirror 子进程管线。
  *
  * 已知接受的官方语义差异（相对旧 mirror 管线）：
  * - importantFiles/importantSkills/fileRanges 来自确定性扫描
@@ -27,40 +26,11 @@ import { getPrebuiltSessionFilePath } from '../shared/session-access.js';
 
 const SUMMARY_MAX_TOKENS = 16000;
 
-// exploration 三段式提示词为 Claw 本地变体：框架 buildSummaryPrompt 声明了
-// exploration 选项但尚未实现（AgentDev 006 未覆盖该分支）。行为等价要求
-// 保留这段提示词，待框架补齐后改回 buildSummaryPrompt({ exploration: true })。
-const EXPLORATION_SUMMARY_PROMPT = `你的任务是为一次代码探索生成一份精炼的探索摘要，帮助读者快速判断"这条探索记录跟我的当前任务相关吗"。
-
-摘要面向主代理（Main Agent），用于一览列表中的快速扫描和相关度评估，不注入子代理上下文。
-
-使用以下三段式结构：
-
-1. **探索目标与范围**：本次探索被派去查什么，探索了哪些模块/目录/子系统
-2. **关键发现与结论**：发现了什么，核心结论是什么，有什么值得注意的设计模式或架构特征
-3. **重要的代码位置与文件**：对后续工作最有参考价值的文件路径和代码位置
-
-摘要控制在 800 个英文单词以内（中文对应压缩），优先使用要点而非段落。`;
-
-export function buildSummaryPromptForSession({ sessionType, trimAppended, additionalInstructions }) {
-  if (!trimAppended && sessionType === 'exploration') {
-    const extra = typeof additionalInstructions === 'string' && additionalInstructions.trim()
-      ? `## 额外压缩指令\n${additionalInstructions.trim()}`
-      : '';
-    return [EXPLORATION_SUMMARY_PROMPT, extra].filter(Boolean).join('\n');
-  }
+export function buildSummaryPromptForSession({ trimAppended, additionalInstructions }) {
   return buildSummaryPrompt({
     additionalInstructions,
     ...(trimAppended ? { trimAppended: true } : {}),
   });
-}
-
-// 模型角色映射复用 run-compact-mirror 的装配约定：exploration/sub 会话走
-// 对应角色，其余走 system；未配置该角色时 resolver 回退 default。
-function resolveModelRole(sessionType) {
-  if (sessionType === 'exploration') return 'exploration';
-  if (sessionType === 'sub') return 'sub';
-  return 'system';
 }
 
 export async function loadSessionSnapshot(agentId, sessionId) {
@@ -97,10 +67,9 @@ export function resolveSummaryLLM({
   projectRoot,
   agentId,
   sessionId,
-  sessionType = '',
 }) {
   const agentDir = path.resolve(String(projectRoot || '').trim(), agentRelativeDir);
-  const modelPresetRole = resolveModelRole(sessionType);
+  const modelPresetRole = 'system';
   const resolvedModel = resolveAgentModelLLM(agentDir, modelPresetRole);
   if (!resolvedModel) {
     throw new Error(`No model preset resolved for in-process summary (agentDir=${agentRelativeDir}, role=${modelPresetRole}) — configure model presets for this agent`);
@@ -119,7 +88,6 @@ export function resolveSummaryLLM({
  * @param {string} params.agentId
  * @param {string} params.sessionId
  * @param {object|null} [params.sourceSessionSnapshot] - 会话快照；未提供时从会话文件读取
- * @param {string} [params.sessionType] - 会话类型（exploration/sub/其他）
  * @param {boolean} [params.trimAppended] - true 时用 trim-appended 提示词
  * @param {number} [params.maxAttempts=3] - 空摘要/调用失败时的重试次数
  * @param {string} [params.additionalInstructions]
@@ -132,7 +100,6 @@ export async function runInProcessSummary({
   agentId,
   sessionId,
   sourceSessionSnapshot = null,
-  sessionType = '',
   trimAppended = false,
   maxAttempts = 3,
   additionalInstructions = '',
@@ -149,10 +116,9 @@ export async function runInProcessSummary({
     projectRoot,
     agentId,
     sessionId,
-    sessionType,
   });
 
-  const prompt = buildSummaryPromptForSession({ sessionType, trimAppended, additionalInstructions });
+  const prompt = buildSummaryPromptForSession({ trimAppended, additionalInstructions });
   const attempts = Number.isFinite(maxAttempts) ? Math.max(1, Math.min(5, Number(maxAttempts))) : 3;
 
   const work = (async () => {

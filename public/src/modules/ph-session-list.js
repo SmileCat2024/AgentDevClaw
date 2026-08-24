@@ -63,13 +63,9 @@ window._buildPhSearchPanelHtml = (agentId) => {
   }
   // Filter results by current tab
   const filtered = phSearchResults.filter((r) => {
-    const st = r.sessionType || 'main';
     const isArchived = r.archived === true;
     if (phSearchTab === 'archived') return isArchived;
-    if (phSearchTab === 'exploration') return st === 'exploration' && !isArchived;
-    if (phSearchTab === 'sub') return st === 'sub' && !isArchived;
-    // 'main' tab: non-archived, non-exploration, non-sub
-    return !isArchived && st !== 'exploration' && st !== 'sub';
+    return !isArchived;
   });
   if (filtered.length === 0) {
     return '<div class="ph-search-status">' + escapeHtml(isZh ? '未找到匹配的对话' : 'No matching conversations found') + '</div>';

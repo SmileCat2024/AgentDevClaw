@@ -451,14 +451,7 @@ export function setupIMRoutes(app, express, ctx) {
         );
 
         // Resolve model info once per agent
-        const modelInfoCache = new Map();
-        const getAgentModelInfo = async (sessionType) => {
-          const key = sessionType || 'default';
-          if (!modelInfoCache.has(key)) {
-            modelInfoCache.set(key, await resolveSessionModelInfo(agent.id, key));
-          }
-          return modelInfoCache.get(key);
-        };
+        const agentModelInfo = await resolveSessionModelInfo(agent.id);
 
         for (const project of projects) {
           const projectSessionIds = project.sessionIds || [];
@@ -466,8 +459,6 @@ export function setupIMRoutes(app, express, ctx) {
 
           const buildSessionEntry = async (sid) => {
             const meta = sessionMetaMap.get(sid);
-            const sessionType = meta?.sessionType || 'main';
-            const agentModelInfo = await getAgentModelInfo(sessionType);
             const tokenUsage = meta?.tokenUsage || null;
             const contextTokens = getUsageContextTokens(tokenUsage);
             const contextLength = agentModelInfo.contextLength || null;
@@ -555,7 +546,7 @@ export function setupIMRoutes(app, express, ctx) {
             const match = (idx?.sessions || []).find(s => s.id === bound.sessionId);
             const sessionTitle = match?.title || bound.sessionId;
             const tokenUsage = match?.tokenUsage || null;
-            const boundModelInfo = await resolveSessionModelInfo(bound.agentId, 'default');
+            const boundModelInfo = await resolveSessionModelInfo(bound.agentId);
             const contextLength = boundModelInfo.contextLength || null;
             const contextTokens = getUsageContextTokens(tokenUsage);
             const contextUsagePct = (contextTokens && contextLength)

@@ -147,11 +147,6 @@ describe('resolveManagedProcessPlacement', () => {
     assert.equal(placement.processGroupKey, null);
   });
 
-  it('keeps exploration sessions out of every shared host', () => {
-    const placement = resolveManagedProcessPlacement(globalAgent, { openDirectory: 'D:/code/project-a' }, true);
-    assert.equal(placement.processGroupKey, null);
-  });
-
   it('does not permit shared-global for another prebuilt agent', () => {
     const placement = resolveManagedProcessPlacement({ id: 'qqbot', processMode: 'shared-global' }, {
       openDirectory: 'D:/code/project-a',

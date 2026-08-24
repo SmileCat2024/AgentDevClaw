@@ -200,10 +200,9 @@ async function writeModelPresets(flatPresets) {
   return flattenModelPresets(nextData);
 }
 
-async function resolveSessionModelInfo(agentId, sessionType) {
+async function resolveSessionModelInfo(agentId) {
   const presets = flattenModelPresets(await readModelPresets());
   const config = await readModelConfig();
-  const role = sessionType === 'exploration' ? 'exploration' : sessionType === 'sub' ? 'sub' : 'default';
 
   let presetName = null;
   if (agentId) {
@@ -221,7 +220,7 @@ async function resolveSessionModelInfo(agentId, sessionType) {
           }
           return null;
         };
-        presetName = resolvePresetName(mp[role]) || resolvePresetName(mp.default) || null;
+        presetName = resolvePresetName(mp.default) || null;
       }
     } catch {}
   }

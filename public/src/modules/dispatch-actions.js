@@ -276,7 +276,6 @@ window.selectDispatchMode = (mode) => {
   const TRIGGER_AVAIL = {
     'continue':        ['timer', 'on-idle'],
     'new-main':        ['timer', 'on-ready'],
-    'new-exploration': ['timer', 'on-ready'],
   };
   const available = TRIGGER_AVAIL[mode] || ['timer'];
   if (!available.includes(window._dispatchTriggerType)) {
@@ -379,11 +378,6 @@ window.createDispatchSchedule = async () => {
     } else if (sessionVal) {
       body.targetSessionId = sessionVal;
     }
-  } else if (mode === 'new-exploration') {
-    body.newSessionType = 'exploration';
-    body.targetSessionId = null;
-    const projectVal = projectEl ? projectEl.value : '';
-    if (projectVal) body.projectId = projectVal;
   } else if (mode === 'new-main') {
     body.newSessionType = null;
     body.targetSessionId = null;

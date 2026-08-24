@@ -76,8 +76,7 @@ function renderDispatchConfigEditor(_block) {
       : s.trigger?.type === 'on-ready' ? '\u{26A1}'
       : s.repeatInterval ? '\u{1F501}'
       : '\u{23F0}';
-    const modeLabel = s.newSessionType === 'exploration' ? (isZh ? '探索' : 'explore')
-      : s.targetSessionId ? (s.targetSessionId === '__latest__' ? (isZh ? '最新对话' : 'latest') : (isZh ? '续接' : 'continue'))
+    const modeLabel = s.targetSessionId ? (s.targetSessionId === '__latest__' ? (isZh ? '最新对话' : 'latest') : (isZh ? '续接' : 'continue'))
       : (isZh ? '新建' : 'new');
     const loopInfo = s.repeatInterval ? (s.loopMaxCount ? (s.loopFiredCount || 0) + '/' + s.loopMaxCount : '') : '';
 
@@ -171,8 +170,7 @@ function renderDispatchDetailModal(scheduleId, isZh, schedules) {
   const triggerIcon = s.trigger?.type === 'on-idle' ? '\u{23F3}'
     : s.trigger?.type === 'on-ready' ? '\u{26A1}'
     : '\u{23F0}';
-  const modeLabel = s.newSessionType === 'exploration' ? (isZh ? '新建探索' : 'New exploration')
-    : s.targetSessionId ? (s.targetSessionId === '__latest__' ? (isZh ? '最新对话' : 'Latest session') : (isZh ? '续接对话' : 'Continue'))
+  const modeLabel = s.targetSessionId ? (s.targetSessionId === '__latest__' ? (isZh ? '最新对话' : 'Latest session') : (isZh ? '续接对话' : 'Continue'))
     : (isZh ? '新建会话' : 'New session');
   const statusLabel = { pending: isZh ? '已部署' : 'Armed', fired: isZh ? '已触发' : 'Triggered', completed: isZh ? '已完成' : 'Completed', failed: isZh ? '失败' : 'Failed', cancelled: isZh ? '已取消' : 'Cancelled' }[s.status] || s.status;
   const statusIcon = { pending: '\u{23F3}', fired: '\u{26A1}', completed: '\u{2705}', failed: '\u{274C}', cancelled: '\u{1F6AB}' }[s.status] || '';
@@ -294,12 +292,10 @@ function renderDispatchModal(isZh) {
   const agentName = agents.find(a => a.id === selectedAgent)?.name || selectedAgent;
 
   // ── Mode definitions per workspace ──
-  // NOTE: new-main before new-exploration (per user request)
   const MODE_DEFS = {
     'programming-helper': [
       { id: 'continue', icon: '\u{1F504}', zh: '续接对话', en: 'Continue', desc: '向已有主对话注入消息' },
       { id: 'new-main', icon: '\u{1F4AC}', zh: '新建主对话', en: 'New Session', desc: '前台可交互的主代理' },
-      { id: 'new-exploration', icon: '\u{1F50D}', zh: '新建探索', en: 'Explore', desc: '后台运行的探索代理' },
     ],
     'qqbot': [
       { id: 'continue', icon: '\u{1F504}', zh: '续接对话', en: 'Continue', desc: '向已有会话注入消息' },
@@ -312,7 +308,6 @@ function renderDispatchModal(isZh) {
   const TRIGGER_AVAIL = {
     'continue':        ['timer', 'on-idle'],
     'new-main':        ['timer', 'on-ready'],
-    'new-exploration': ['timer', 'on-ready'],
   };
   const availableTriggers = TRIGGER_AVAIL[currentMode] || ['timer'];
   let triggerType = window._dispatchTriggerType || 'timer';
@@ -368,9 +363,9 @@ function renderDispatchModal(isZh) {
     ].join('');
   }
 
-  // ── Loop config (timer + on-idle, NOT for exploration mode) ──
+  // ── Loop config (timer + on-idle) ──
   let loopSection = '';
-  if (triggerSupportsLoop && currentMode !== 'new-exploration') {
+  if (triggerSupportsLoop) {
     const intervalRow = triggerType === 'on-idle'
       ? [
         '<div class="dispatch-loop-row">',
@@ -472,7 +467,6 @@ function renderDispatchModal(isZh) {
     // Session picker: filtered by selected project, with "latest" option
     const selectedProject = window._dispatchContinueProject || (projects[0]?.id || '');
     const filteredSessions = sessions.filter(s => {
-      if (selectedAgent === 'programming-helper' && s.sessionType === 'exploration') return false;
       if (selectedProject && s.projectId && s.projectId !== selectedProject) return false;
       return true;
     });
@@ -490,7 +484,7 @@ function renderDispatchModal(isZh) {
       '</div>',
     ].join('');
   } else {
-    // new-exploration / new-main: show project picker if workspace has multiple projects
+    // new-main: show project picker if workspace has multiple projects
     if (selectedAgent !== 'qqbot' && projects.length > 0) {
       const projOpts = projects.map(p =>
         '<option value="' + escapeHtml(p.id) + '">' + escapeHtml(p.name || 'Unnamed') + '</option>'

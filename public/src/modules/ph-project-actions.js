@@ -60,7 +60,7 @@ window.phAutoSaveModelConfig = async () => {
   const agentId = window.phModelConfigAgentId;
   if (!agentId) return;
   const selects = document.querySelectorAll('#ph-model-config-host .ph-mc-select');
-  const modelPresets = { default: null, exploration: null, sub: null, system: null };
+  const modelPresets = { default: null, system: null };
   
   // 收集所有select的值
   const collected = {};

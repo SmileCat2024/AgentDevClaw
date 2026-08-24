@@ -645,8 +645,6 @@ function _buildTitlePopupHtml(meta) {
   if (sType) {
     let typeLabels = {
       main: isZh ? '主对话' : 'Main',
-      sub: isZh ? '子代理' : 'Sub-agent',
-      exploration: isZh ? '探索' : 'Exploration',
       archived: isZh ? '已归档' : 'Archived',
     };
     let typeLabel = typeLabels[sType] || sType;

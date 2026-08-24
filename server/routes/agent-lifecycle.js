@@ -95,7 +95,6 @@ export function createAgentLifecycleModule(ctx) {
     waitForManagedRuntimeReady,
     waitForAssemblyRuntimeReady,
     startManagedAgent,
-    startOneShotAgent,
     startAssemblyRuntime,
   } = createAgentStartupFns({
     sessionApi,
@@ -641,7 +640,7 @@ export function createAgentLifecycleModule(ctx) {
   return {
     getConnectedAgents, waitForProcessExit,
     waitForManagedRuntimeReady, waitForAssemblyRuntimeReady,
-    startManagedAgent, startOneShotAgent, startAssemblyRuntime,
+    startManagedAgent, startAssemblyRuntime,
     stopManagedAgent,
     setupRoutes,
     onAgentExit: (cb) => { _exitCallbacks.push(cb); },

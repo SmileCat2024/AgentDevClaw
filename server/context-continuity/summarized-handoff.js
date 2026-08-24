@@ -185,9 +185,6 @@ export async function exportSummarizedHandoffPackage({
   sourceSessionSnapshot = null,
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
-  // Extract sessionType from sourceRecord to determine prompt format and model role:
-  // exploration sessions use the three-section exploration prompt, others use nine-section
-  const sessionType = typeof sourceRecord.sessionType === 'string' ? sourceRecord.sessionType : '';
 
   console.log(`[summarized_handoff] in-process summary begin agent=${agentId} session=${sessionId}`);
   const summaryResult = await runInProcessSummary({
@@ -196,7 +193,6 @@ export async function exportSummarizedHandoffPackage({
     agentId,
     sessionId,
     sourceSessionSnapshot,
-    sessionType,
     maxAttempts: policy.maxAttempts,
     additionalInstructions: policy.additionalInstructions,
   });

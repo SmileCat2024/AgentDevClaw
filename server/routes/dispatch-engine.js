@@ -64,18 +64,14 @@ async function fireSingleTarget(s, target) {
     try {
       const sessionsResult = await _ctx.listPrebuiltSessions(agentId);
       const allSessions = sessionsResult?.sessions || [];
-      // Filter: main only for programming-helper, all for others
-      const filtered = agentId === 'programming-helper'
-        ? allSessions.filter(ss => ss.sessionType !== 'exploration')
-        : allSessions;
       // Further filter by project if specified
       const projId = s.projectId;
       const byProject = projId
-        ? filtered.filter(ss => {
+        ? allSessions.filter(ss => {
             const adapter = getProjectAdapter(agentId);
             return adapter ? adapter.extractProjectId(ss) === projId : true;
           })
-        : filtered;
+        : allSessions;
       const latest = byProject[0]; // already sorted by updatedAt desc
       if (latest) {
         sessionId = latest.id;
@@ -138,14 +134,7 @@ async function fireSingleTarget(s, target) {
       const session = await _ctx.createPrebuiltSession(agentId, createOpts);
       sessionId = session.id;
       if (!s.targets) { s.targetSessionId = sessionId; saveDispatchSchedules(); }
-      const runtimeOpts = {};
-      if (sessionType !== 'main') {
-        runtimeOpts.extraEnv = {
-          PROTOCLAW_SESSION_TYPE: sessionType,
-          PROTOCLAW_MODEL_PRESET_ROLE: sessionType === 'exploration' ? 'exploration' : 'sub',
-        };
-      }
-      await _ctx.startManagedAgent(agent, sessionId, runtimeOpts);
+      await _ctx.startManagedAgent(agent, sessionId);
       const connected = await _ctx.waitForManagedRuntimeReady(agent.id, 15000, sessionId);
       console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} type=${sessionType} connected=${connected}`);
     } else {
@@ -153,19 +142,9 @@ async function fireSingleTarget(s, target) {
       if (!runtime || runtime.stopped || runtime.process?.exitCode !== null) {
         const agent = await _ctx.requirePrebuiltAgentForRuntime(agentId);
         await _ctx.activatePrebuiltSession(agentId, sessionId);
-        const idx = await readSessionIndex(agentId);
-        const record = idx.sessions.find(r => r.id === sessionId);
-        const resolvedType = record?.sessionType || sessionType;
-        const runtimeOpts = {};
-        if (resolvedType !== 'main') {
-          runtimeOpts.extraEnv = {
-            PROTOCLAW_SESSION_TYPE: resolvedType,
-            PROTOCLAW_MODEL_PRESET_ROLE: resolvedType === 'exploration' ? 'exploration' : 'sub',
-          };
-        }
-        await _ctx.startManagedAgent(agent, sessionId, runtimeOpts);
+        await _ctx.startManagedAgent(agent, sessionId);
         const connected = await _ctx.waitForManagedRuntimeReady(agent.id, 15000, sessionId);
-        console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} type=${resolvedType} connected=${connected}`);
+        console.log(`[Dispatch] auto-started ${agentId} session=${sessionId} connected=${connected}`);
       }
     }
   } catch (err) {

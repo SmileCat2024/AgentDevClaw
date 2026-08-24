@@ -49,8 +49,7 @@ function getCtxMenuItems(role, ns, variant, id) {
     const activeSessionId = agent?.workspace_sessions?.activeSessionId;
     const activeSession = activeSessionId ? getWorkspaceSessionById(agent, activeSessionId) : null;
     const isArchived = activeSession?.archived === true;
-    // Assembly sessions (agent-studio) are excluded from summary/trim/branch,
-    // same as exploration/sub sessions for programming-helper session items.
+    // Assembly sessions (agent-studio) are excluded from summary/trim/branch.
     const isOpsExcluded = isAssemblySession(activeSession);
     const historyItems = isOpsExcluded ? [] : [
       { label: isZh ? '总结历史（摘要）' : 'Summary', submenu: [
@@ -83,9 +82,8 @@ function getCtxMenuItems(role, ns, variant, id) {
     const sType = variant || 'main';
     const isArchived = sType === 'archived' || session?.archived === true;
     const isTodo = session?.todo === true;
-    // Sessions excluded from summary/trim/branch:
-    // exploration/sub (programming-helper), assembly (agent-studio test-runtime).
-    const isOpsExcluded = sType === 'exploration' || sType === 'sub' || sType === 'assembly';
+    // Assembly sessions (agent-studio test-runtime) are excluded from summary/trim/branch.
+    const isOpsExcluded = sType === 'assembly';
     const isZh = currentLanguage === 'zh';
 
     const items = [];

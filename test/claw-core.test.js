@@ -16,7 +16,7 @@ import {
   dispatch, createContext,
   cleanText, truncate, formatDate, readJson,
   getWorkspaceDir, getSessionsDir, getHandoffsDir,
-  readSessionIndex, getExplorations, getSubs,
+  readSessionIndex,
 } from '../server/claw-core.mjs';
 import { join } from 'path';
 import { existsSync } from 'fs';
@@ -99,18 +99,6 @@ describe('数据读取按 workspaceId 参数化', () => {
     assert.ok(Array.isArray(index.sessions), 'sessions 应为数组');
     assert.strictEqual(index.sessions.length, 0);
   });
-
-  it('getExplorations 对不存在的 workspace 应返回空数组', () => {
-    const exps = getExplorations('definitely-nonexistent-ws-12345');
-    assert.ok(Array.isArray(exps));
-    assert.strictEqual(exps.length, 0);
-  });
-
-  it('getSubs 对不存在的 workspace 应返回空数组', () => {
-    const subs = getSubs('definitely-nonexistent-ws-12345');
-    assert.ok(Array.isArray(subs));
-    assert.strictEqual(subs.length, 0);
-  });
 });
 
 // ── 3. dispatch 操作分发 ───────────────────────────────────────
@@ -133,10 +121,10 @@ describe('dispatch 操作分发', () => {
 
   it('缺少必填参数应返回错误', async () => {
     await loadProviders();
-    const { ok, error } = await dispatch('programming-helper', 'show', {});
+    const { ok, error } = await dispatch('programming-helper', 'create_session', {});
     assert.strictEqual(ok, false);
     assert.ok(error.includes('Missing required parameter'));
-    assert.ok(error.includes('sessionId'));
+    assert.ok(error.includes('path'));
   });
 
   it('overview 操作应成功执行', async () => {
@@ -145,38 +133,6 @@ describe('dispatch 操作分发', () => {
     assert.strictEqual(ok, true);
     assert.ok(result, '应返回结果对象');
     assert.ok(typeof result.workingDirectory !== 'undefined', '应有 workingDirectory');
-    assert.ok(typeof result.explorationCount !== 'undefined', '应有 explorationCount');
-    assert.ok(typeof result.subAgentCount !== 'undefined', '应有 subAgentCount');
-  });
-
-  it('explorations 操作应成功执行', async () => {
-    await loadProviders();
-    const { ok, result } = await dispatch('programming-helper', 'explorations', { limit: 5 });
-    assert.strictEqual(ok, true);
-    assert.ok(result, '应返回结果');
-    assert.ok(typeof result.total !== 'undefined', '应有 total');
-    assert.ok(Array.isArray(result.records), 'records 应为数组');
-    assert.ok(result.records.length <= 5, '不应超过 limit');
-  });
-
-  it('subs 操作应成功执行', async () => {
-    await loadProviders();
-    const { ok, result } = await dispatch('programming-helper', 'subs');
-    assert.strictEqual(ok, true);
-    assert.ok(result, '应返回结果');
-    assert.ok(typeof result.total !== 'undefined', '应有 total');
-    assert.ok(Array.isArray(result.records), 'records 应为数组');
-  });
-
-  it('show 对不存在的 session 应返回错误结果', async () => {
-    await loadProviders();
-    const { ok, result } = await dispatch('programming-helper', 'show', {
-      sessionId: 'nonexistent-session-12345',
-    });
-    // dispatch 本身成功 (ok=true)，但 result 包含 error
-    assert.strictEqual(ok, true);
-    assert.ok(result.error, '结果应包含 error');
-    assert.ok(result.error.includes('not found'), '错误信息应说明未找到');
   });
 });
 
@@ -188,8 +144,6 @@ describe('createContext 上下文对象', () => {
     assert.strictEqual(ctx.workspaceId, 'programming-helper');
     assert.ok(typeof ctx.readWorkspaceState === 'function');
     assert.ok(typeof ctx.readSessionIndex === 'function');
-    assert.ok(typeof ctx.getExplorations === 'function');
-    assert.ok(typeof ctx.getSubs === 'function');
     assert.ok(typeof ctx.loadSessionDetail === 'function');
     assert.ok(typeof ctx.loadFinalOutput === 'function');
     assert.ok(typeof ctx.findHandoffSummary === 'function');
@@ -263,7 +217,7 @@ describe('Provider 接口约定', () => {
     const opNames = ph.operations.map(op => op.name);
     
     // 核心操作必须存在
-    const required = ['overview', 'explorations', 'subs', 'show', 'spawn', 'compact', 'resume'];
+    const required = ['overview', 'create_session'];
     for (const name of required) {
       assert.ok(opNames.includes(name), `应包含操作: ${name}`);
     }
@@ -284,9 +238,9 @@ describe('Provider 接口约定', () => {
 
   it('有必填参数的操作应在缺少参数时被 dispatch 拦截', async () => {
     await loadProviders();
-    // spawn 需要 goal
-    const { ok, error } = await dispatch('programming-helper', 'spawn', {});
+    // create_session 需要 path
+    const { ok, error } = await dispatch('programming-helper', 'create_session', {});
     assert.strictEqual(ok, false);
-    assert.ok(error.includes('goal'));
+    assert.ok(error.includes('path'));
   });
 });

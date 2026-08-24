@@ -166,17 +166,6 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
     assert.ok(!items.find((i) => i.action === 'todo-session'));
   });
 
-  it('session exploration → no summary/trim/branch', () => {
-    const { ctx } = loadCtxMenuItems();
-    const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'exploration', 'sess-active')`);
-    // Expected: generate-title, separator, todo-session, archive-session, delete-session
-    assert.equal(items.length, 5);
-    assert.equal(items[0].action, 'generate-title');
-    assert.ok(!items.find((i) => i.action === 'summary'));
-    assert.ok(!items.find((i) => i.action === 'trim'));
-    assert.ok(!items.find((i) => i.action === 'branch'));
-  });
-
   it('session todo=true → "取消待办" label', () => {
     const { ctx } = loadCtxMenuItems();
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-todo')`);

@@ -58,15 +58,11 @@ export function extractLastMessagePreview(messages) {
  * directly without spinning up the full session helper factory.
  *
  * @param {object} record - session index record (may have modelName, contextLength, compressRatio)
- * @param {object} modelInfoMap - { default: {...}, exploration: {...}, sub: {...} }
- * @param {string} sessionType - raw sessionType from the record
- * @param {object} [metadata] - normalized session metadata
+ * @param {object} modelInfoMap - { default: {...} }
  * @returns {{ modelName: string, contextLength: number|null, compressRatio: number }}
  */
-export function resolveSessionModelFromRecord(record, modelInfoMap, sessionType, metadata) {
-  const sType = cleanSessionText(sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
-  const modelRole = sType === 'exploration' ? 'exploration' : sType === 'sub' ? 'sub' : 'default';
-  const fallbackModelInfo = (modelInfoMap && modelInfoMap[modelRole]) || {};
+export function resolveSessionModelFromRecord(record, modelInfoMap) {
+  const fallbackModelInfo = (modelInfoMap && modelInfoMap.default) || {};
   const persistedModelName = cleanSessionText(record.modelName);
   const persistedCL = Number.isFinite(record.contextLength) && record.contextLength > 0
     ? record.contextLength : null;
@@ -321,7 +317,7 @@ export function buildSessionTrimPreview(messages) {
  */
 export function buildLightPrebuiltSessionRecord(agentId, record) {
   const metadata = normalizeSessionMetadata(record?.metadata);
-  const sessionType = cleanSessionText(record?.sessionType) || (metadata?.resumeMode === 'one-shot' ? 'sub' : 'main');
+  const sessionType = cleanSessionText(record?.sessionType) || 'main';
   return {
     id: cleanSessionText(record?.id),
     title: cleanSessionText(record?.title),
@@ -335,7 +331,7 @@ export function buildLightPrebuiltSessionRecord(agentId, record) {
     targetFiles: cleanSessionText(record?.targetFiles),
     referenceMaterials: cleanSessionText(record?.referenceMaterials),
     sessionType,
-    status: cleanSessionText(record?.status) || (sessionType === 'exploration' ? 'locked' : ''),
+    status: cleanSessionText(record?.status),
     archived: record?.archived === true,
     todo: record?.todo === true,
     metadata,
@@ -457,26 +453,3 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
   };
 }
 
-/**
- * Extract technology domain keywords from text (for exploration session locking).
- *
- * Pure function — no closure dependencies.
- *
- * @param {string} text
- * @returns {string[]} up to 8 unique domain keywords
- */
-export function extractDomainsFromText(text) {
-  if (!text || typeof text !== 'string') return [];
-  const techPatterns = [
-    /\b(Flow|Feature|Hook|ToolRegistry|Node|Edge|Workflow|Assembly|Session|Workspace|Runtime|Context|Prompt|Compaction|Mirror|Handoff|Seed|Inspector|Editor|Surface|Block|State|Config|Form|Agent|Message|Chunk|Template|Variable|Skill|Tool|Permission)\b/gi,
-  ];
-  const found = new Set();
-  for (const pattern of techPatterns) {
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const word = match[1];
-      if (word.length >= 3) found.add(word);
-    }
-  }
-  return [...found].slice(0, 8);
-}

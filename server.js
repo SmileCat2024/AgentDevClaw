@@ -172,7 +172,7 @@ const agentLifecycle = createAgentLifecycleModule({
 const {
   getConnectedAgents, waitForProcessExit,
   waitForManagedRuntimeReady, waitForAssemblyRuntimeReady,
-  startManagedAgent, startOneShotAgent, startAssemblyRuntime,
+  startManagedAgent, startAssemblyRuntime,
   stopManagedAgent,
 } = agentLifecycle;
 
@@ -246,8 +246,6 @@ const {
   compactAndResumeCurrentSession, compactAndResumeFromProvidedSummary,
   exportProvidedSummaryHandoff, deletePrebuiltProject,
   resolveContextLength,
-  lockExplorationSession, extractDomainsFromText,
-  buildExplorationHandoffPayload, writeSyntheticHandoff,
 } = sessionHelpers;
 
 // 打破 agent-discovery ↔ session-helpers 循环依赖
@@ -357,7 +355,6 @@ setupSessionRoutes(app, express, {
   // Agent lifecycle
   requireAgentLight,
   startManagedAgent,
-  startOneShotAgent,
   stopManagedAgent,
   waitForManagedRuntimeReady,
   // Group chat lineage callback
