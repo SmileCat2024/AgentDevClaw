@@ -4,9 +4,9 @@
  * 两个 section，均以 runtime 内 Feature 为权威状态持有者，浏览器只是
  * 乐观 UI 缓存（请求-应答式 IPC，经 /protoclaw/*_status / *_control 路由）：
  *   - 自动接续：ForceContinuation Feature 的开关 / 触发条件 / 上限
- *   - 上下文拦截：ContextGuardFeature 的一次性过界保险丝
+ *   - 上下文保护：ContextGuardFeature 的超阈值打断开关
  *
- * 保险丝的实时性：它会被 runtime 内真实的过界事件消耗，面板打开期间
+ * 开关的实时性：它会被 runtime 内真实的超阈值事件消耗，面板打开期间
  * 每 3s 静默刷新一次，保证「用掉了立刻显示为关闭」。
  *
  * Visual language follows the Todo Plan panel: flat sections separated by
@@ -160,13 +160,16 @@
     const threshold = item.guardThresholdTokens;
 
     const rows = [];
+    if (item.guardError) {
+      rows.push('<div class="session-controls-guard-error">' + esc(item.guardError) + '</div>');
+    }
     if (trip) {
       const fact = trip.inputTokens && trip.thresholdTokens
         ? `${formatTokens(trip.inputTokens)} / ${formatTokens(trip.thresholdTokens)} tokens`
         : '';
       rows.push([
         '<div class="session-controls-guard-fact">',
-        esc(zh ? '最近一次过界' : 'Last crossing'),
+        esc(zh ? '最近一次触发' : 'Last trigger'),
         fact ? ` · ${esc(fact)}` : '',
         '</div>',
       ].join(''));
@@ -180,18 +183,18 @@
 
     return [
       '<section class="force-continuation-candidates session-controls-guard">',
-      '<div class="force-continuation-group-label">', zh ? '上下文拦截' : 'CONTEXT INTERCEPT', '</div>',
+      '<div class="force-continuation-group-label">', zh ? '上下文保护' : 'CONTEXT PROTECTION', '</div>',
       '<div class="force-continuation-candidate">',
       '<div class="force-continuation-candidate-main">',
-      '<div class="force-continuation-candidate-label">', zh ? '过界一次性拦截' : 'One-shot threshold intercept', '</div>',
+      '<div class="force-continuation-candidate-label">', zh ? '超阈值自动打断' : 'Auto-interrupt at threshold', '</div>',
       '<div class="force-continuation-candidate-desc">', zh
-        ? '开启后，下一次上下文过界将打断该轮并提醒精简；触发一次后自动关闭，可重新装填。仅当前会话生效。'
-        : 'When armed, the next threshold crossing interrupts the turn and suggests trimming; it disarms after one trip and can be re-armed. Applies to this session only.', '</div>',
+        ? '开启后，上下文超过阈值时自动打断当前会话并提醒精简；触发后自动关闭，可重新开启。仅当前会话生效。'
+        : 'When armed, exceeding the threshold interrupts the session and suggests trimming; it disarms after one trip and can be re-armed. Applies to this session only.', '</div>',
       '</div>',
       renderSwitch({
         checked: armed,
         disabled,
-        title: zh ? '切换过界一次性拦截' : 'Toggle one-shot threshold intercept',
+        title: zh ? '切换超阈值自动打断' : 'Toggle auto-interrupt at threshold',
         attribute: 'data-guard-armed',
       }),
       '</div>',
@@ -274,7 +277,7 @@
       '</section>',
       renderGuardSection({ item, zh }),
       '<div class="force-continuation-note">', zh
-        ? '手动停止与服务错误不会触发自动接续；自动接续次数受上限约束；过界拦截触发一次后自动关闭。'
+        ? '手动停止与服务错误不会触发自动接续；自动接续次数受上限约束；超阈值打断触发后自动关闭。'
         : 'Manual stops and service errors never trigger auto-resume; auto-resume is capped; the threshold intercept disarms after one trip.', '</div>',
       '</div>',
     ].join('');
@@ -354,7 +357,7 @@
     return updateControl({ maxConsecutiveContinuations: next });
   }
 
-  // ── 上下文拦截（保险丝）─────────────────────────────────────────
+  // ── 上下文保护（超阈值打断开关）────────────────────────────────
 
   async function refreshGuardStatus({ renderWhenDone = true, silent = false } = {}) {
     if (!isGuardAvailable()) return null;
@@ -379,11 +382,20 @@
         guardRefreshing: false,
         guardInitialized: true,
         guardError: '',
+        guardPollFails: 0,
       }, key);
       return status;
     } catch (error) {
-      if (!silent) setState({ guardRefreshing: false, guardInitialized: true, guardError: String(error?.message || error) }, key);
-      else setState({ guardRefreshing: false }, key);
+      if (!silent) {
+        setState({ guardRefreshing: false, guardInitialized: true, guardError: String(error?.message || error) }, key);
+      } else {
+        // 静默轮询失败：容忍一次瞬时抖动，连续失败则明确提示数据可能过期，
+        // 不再无限期展示旧值（否则面板会显示早已失效的阈值/开关状态）。
+        const fails = (current.guardPollFails || 0) + 1;
+        const patch = { guardRefreshing: false, guardPollFails: fails };
+        if (fails >= 2) patch.guardError = currentLanguage !== 'en' ? '状态获取失败，显示的可能不是最新值' : 'Failed to refresh — data may be stale';
+        setState(patch, key);
+      }
       return null;
     } finally {
       if (renderWhenDone && activeFeaturePanel === 'session-controls') renderFeaturePanel();
@@ -421,7 +433,7 @@
     if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
   }
 
-  // 面板打开期间的保险丝实时刷新：保险丝会被 runtime 内真实的过界事件
+  // 面板打开期间的开关实时刷新：开关会被 runtime 内真实的超阈值事件
   // 消耗，轮询保证「用掉了立刻显示为关闭」。tick 在面板关闭时 no-op。
   let _guardPollTimer = null;
 

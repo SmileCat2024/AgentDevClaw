@@ -4707,10 +4707,18 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   line-height: 1.4;
 }
 
-/* 会话控制面板：上下文拦截 section 的 trip 事实行 */
+/* 会话控制面板：上下文保护 section 的触发事实行 */
 .session-controls-guard-fact {
   padding: 6px 12px 10px;
   color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 上下文保护 section 的状态获取失败提示行 */
+.session-controls-guard-error {
+  padding: 6px 12px 10px;
+  color: var(--danger, #f87171);
   font-size: 12px;
   line-height: 1.5;
 }

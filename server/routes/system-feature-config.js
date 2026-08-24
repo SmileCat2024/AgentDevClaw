@@ -11,15 +11,15 @@ const CONTEXT_GUARD_MANIFEST = {
   settings: {
     sections: [{
       id: 'context-guard',
-      title: '上下文过界拦截',
+      title: '上下文保护',
       properties: ['enabled'],
     }],
     properties: {
       enabled: {
         type: 'boolean',
         default: true,
-        title: '上下文过界拦截',
-        description: '会话启动时装填一次性拦截：上下文首次达到压缩阈值时打断该轮并提醒精简，触发一次后消耗，可在会话控制面板重新装填。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
+        title: '上下文保护',
+        description: '开启后，上下文超过压缩阈值时自动打断当前会话并提醒精简；触发后自动关闭，可在会话控制面板重新开启。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
       },
     },
   },

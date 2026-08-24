@@ -249,10 +249,10 @@ describe('SessionControlsPanel: context guard fuse', () => {
 
     await ctx.run('window.SessionControlsPanel.refreshGuardStatus({ renderWhenDone: false })');
     let html = ctx.run('window.SessionControlsPanel.render()');
-    // 保险丝已消耗：开关为关，同时展示最近一次过界事实
+    // 开关已触发关闭：开关为关，同时展示最近一次触发事实
     assert.doesNotMatch(html, /data-guard-armed checked/);
-    assert.match(html, /过界一次性拦截/);
-    assert.match(html, /最近一次过界/);
+    assert.match(html, /超阈值自动打断/);
+    assert.match(html, /最近一次触发/);
     assert.match(html, /8\.3K \/ 8\.0K/);
 
     await ctx.run('window.SessionControlsPanel.updateGuardArmed(true)');
@@ -273,6 +273,6 @@ describe('SessionControlsPanel: context guard fuse', () => {
     const html = ctx.run('window.SessionControlsPanel.render()');
     assert.match(html, /data-guard-armed checked/);
     assert.match(html, /当前阈值约 160\.0K tokens/);
-    assert.doesNotMatch(html, /最近一次过界/);
+    assert.doesNotMatch(html, /最近一次触发/);
   });
 });

@@ -718,6 +718,9 @@ SessionLifecycle.prototype.start = async function () {
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
     runtime: this.runtime,
+    // contextGuard 只是首轮调用前的兜底种子（启动预设的窗口期快照）；
+    // 阈值真相是会话当前模型的 live meta，feature 每轮 CallStart /
+    // onLLMSwap 都会重算，不依赖这里的快照。
     ...((agentId === 'programming-helper' || agentId === 'coder' || agentId === 'agent-studio') ? {
       contextGuard: {
         contextLength: this.resolved?.contextLength ?? null,

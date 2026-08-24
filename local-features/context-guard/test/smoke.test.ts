@@ -73,6 +73,34 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.equal(feature.observeUsage({ inputTokens: 8000 }, agent), true);
   });
 
+  it('re-syncs the threshold from live LLM meta on every CallStart', async () => {
+    // 挂载注入值来自 runtime 启动预设（1000×80%=800），但会话实际 LLM 是
+    // 512×50%=256 —— 首个 CallStart 就应以活元数据为准（覆盖首轮调用前
+    // 热切换模型、启动预设与会话模型不一致两类漂移）。
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = {
+      ...makeAgent(),
+      getLLMMeta: () => ({ contextLength: 512, compressRatio: 50 }),
+    };
+    await feature.installUsageGuard({ agent });
+    assert.equal(feature.getStatus().thresholdTokens, 256);
+    assert.equal(feature.observeUsage({ inputTokens: 300 }, agent), true);
+
+    // swap 到大模型：下一个 CallStart 重算，阈值不再冻结在旧模型
+    feature.setArmed(true);
+    agent.getLLMMeta = () => ({ contextLength: 10_000, compressRatio: 80 });
+    await feature.installUsageGuard({ agent });
+    assert.equal(feature.getStatus().thresholdTokens, 8000);
+    assert.equal(feature.observeUsage({ inputTokens: 300 }, agent), false);
+  });
+
+  it('keeps the injected threshold when live meta lacks contextLength', async () => {
+    const feature = new ContextGuardFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = { ...makeAgent(), getLLMMeta: () => ({}) };
+    await feature.installUsageGuard({ agent });
+    assert.equal(feature.getStatus().thresholdTokens, 800);
+  });
+
   it('exposes the manifest for the runtime config panel', () => {
     const feature = new ContextGuardFeature({});
     const manifest = feature.getFeatureManifest();
@@ -125,5 +153,12 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     assert.equal(feature.observeUsage({ inputTokens: 950 }, agent), false);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(posted.length, 1);
+  });
+
+  it('re-syncs the threshold from live LLM meta on CallStart', async () => {
+    const feature = new ContextRotationTriggerFeature({ contextLength: 1000, compressRatio: 80 });
+    const agent = { ...makeAgent(), getLLMMeta: () => ({ contextLength: 512, compressRatio: 50 }) };
+    await feature.installUsageObserver({ agent });
+    assert.equal(feature.observeUsage({ inputTokens: 300 }, agent), true);
   });
 });

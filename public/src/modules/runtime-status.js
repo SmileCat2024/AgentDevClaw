@@ -58,7 +58,7 @@ function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
   window.ClawToast?.show?.({
     id: `context-guard-${normalizedRuntimeId}`,
     status: 'warning',
-    title: zh ? '上下文已过界，本轮会话已中断' : 'Context threshold reached — turn interrupted',
+    title: zh ? '上下文已超过阈值，本轮已打断' : 'Context threshold exceeded — turn interrupted',
     description: zh
       ? `用量 ${usage}。建议通过精简 / 摘要 / 分支降低上下文后继续；也可以直接继续发送（开销自负）。`
       : `Usage ${usage}. Consider trimming, summarizing, or branching before continuing; sending anyway is at your own cost.`,

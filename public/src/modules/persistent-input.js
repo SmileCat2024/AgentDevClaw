@@ -371,7 +371,7 @@ function renderPersistentInput(container) {
 }
 
 /**
- * 压力驱动的过界提示 chip：当前用量占压缩阈值的比例 ≥100% 时出现在
+ * 压力驱动的超阈值提示 chip：当前用量占压缩阈值的比例 ≥100% 时出现在
  * 输入框顶部，压力回落自动消失。数据来自 updateChatContextBar 每轮
  * poll 的计算（与 context bar 进度条同源），不做独立状态机。
  */
@@ -386,13 +386,13 @@ function syncContextPressureChip(thresholdPct) {
   }
   const zh = currentLanguage === 'zh';
   if (chip) {
-    chip.textContent = zh ? '上下文已过界 — 建议精简后继续' : 'Context over threshold — consider trimming';
+    chip.textContent = zh ? '上下文已超阈值 — 建议精简后继续' : 'Context over threshold — consider trimming';
     return;
   }
   const el = document.createElement('div');
   el.className = 'context-pressure-chip';
   el.setAttribute('role', 'status');
-  el.textContent = zh ? '上下文已过界 — 建议精简后继续' : 'Context over threshold — consider trimming';
+  el.textContent = zh ? '上下文已超阈值 — 建议精简后继续' : 'Context over threshold — consider trimming';
   card.prepend(el);
 }
 

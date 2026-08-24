@@ -142,12 +142,12 @@ export class ContextGuardFeature implements AgentFeature {
         properties: {
           enabled: {
             type: 'boolean',
-            title: '上下文过界拦截',
-            description: '会话启动时装填一次性拦截：上下文首次达到压缩阈值时打断该轮并提醒精简，触发一次后消耗，可在会话控制面板重新装填。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
+            title: '上下文保护',
+            description: '开启后，上下文超过压缩阈值时自动打断当前会话并提醒精简；触发后自动关闭，可在会话控制面板重新开启。仅交互式工作空间；coder 线程自动接力不受此配置影响。',
             default: true,
           },
         },
-        sections: [{ id: 'guard', title: '上下文过界拦截', properties: ['enabled'] }],
+        sections: [{ id: 'guard', title: '上下文保护', properties: ['enabled'] }],
       },
     };
   }
@@ -177,10 +177,26 @@ export class ContextGuardFeature implements AgentFeature {
     this.armed = armed === true;
   }
 
+  /**
+   * 阈值锚定到当前 LLM 的活元数据：挂载注入值只是初值，每个 CallStart
+   * 重算一次。这覆盖两类漂移——会话首轮调用前热切换模型（onLLMSwap 时
+   * _agent 尚未捕获）、以及 runtime 启动预设与会话实际模型不一致。
+   * meta 缺 contextLength 时保留现值（不做破坏性清空）。
+   */
+  private syncThresholdFromLiveMeta(agent: any): void {
+    const meta = agent?.getLLMMeta?.();
+    const cl = Number(meta?.contextLength);
+    const cr = Number(meta?.compressRatio);
+    if (Number.isFinite(cl) && cl > 0) {
+      this.updateThreshold(cl, Number.isFinite(cr) && cr > 0 ? cr : null);
+    }
+  }
+
   async installUsageGuard(ctx: any): Promise<void> {
     const agent = ctx?.agent;
     if (!agent) return;
     if (!this._agent) this._agent = agent;
+    this.syncThresholdFromLiveMeta(agent);
     if (!this.armed) return;
     installChatObserver(agent, (usage) => this.observeUsage(usage, agent));
     this.logger?.info('Context guard is observing LLM usage', {
@@ -290,10 +306,21 @@ export class ContextRotationTriggerFeature implements AgentFeature {
     this.callArbiter = arbiter;
   }
 
+  /** 阈值锚定到当前 LLM 的活元数据，语义同交互壳的 syncThresholdFromLiveMeta。 */
+  private syncThresholdFromLiveMeta(agent: any): void {
+    const meta = agent?.getLLMMeta?.();
+    const cl = Number(meta?.contextLength);
+    const cr = Number(meta?.compressRatio);
+    if (Number.isFinite(cl) && cl > 0) {
+      this.updateThreshold(cl, Number.isFinite(cr) && cr > 0 ? cr : null);
+    }
+  }
+
   async installUsageObserver(ctx: any): Promise<void> {
     const agent = ctx?.agent;
     if (!agent) return;
     if (!this._agent) this._agent = agent;
+    this.syncThresholdFromLiveMeta(agent);
     if (this.triggered) return;
     installChatObserver(agent, (usage) => this.observeUsage(usage, agent));
     this.logger?.info('Context rotation trigger is observing LLM usage', {
