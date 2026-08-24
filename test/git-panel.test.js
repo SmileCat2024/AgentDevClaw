@@ -265,3 +265,135 @@ describe('git route input validation', () => {
     assert.equal((await api('/protoclaw/git/stage', { dir: process.cwd(), files: 'a.txt' })).code, 400);
   });
 });
+
+describe('git graph / commit_files', () => {
+  it('returns commits with parents, refs and subject in new-to-old order', async () => {
+    const { dir, git } = await makeRepo();
+    try {
+      await fs.writeFile(path.join(dir, 'a.txt'), 'v1');
+      git('add -A');
+      git('commit -q -m first');
+      await fs.writeFile(path.join(dir, 'a.txt'), 'v2');
+      git('add -A');
+      git('commit -q -m second');
+      git('tag v1.0');
+
+      const { code, data } = await api('/protoclaw/git/graph', { dir, limit: 10 });
+      assert.equal(code, 200);
+      assert.equal(data.commits.length, 2);
+      const [head, first] = data.commits;
+      assert.equal(head.subject, 'second');
+      assert.equal(first.subject, 'first');
+      assert.equal(head.parents.length, 1);
+      assert.equal(head.parents[0].slice(0, 7), first.hash.slice(0, 7));
+      // HEAD -> master 装饰 + tag
+      assert.ok(head.refs.some((r) => r.type === 'head'));
+      assert.ok(head.refs.some((r) => r.type === 'tag' && r.name === 'v1.0'));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('commit_files lists changed files with add/remove counts', async () => {
+    const { dir, git } = await makeRepo();
+    try {
+      await fs.writeFile(path.join(dir, 'a.txt'), 'line1\nline2\nline3\n');
+      git('add -A');
+      git('commit -q -m init');
+      await fs.writeFile(path.join(dir, 'a.txt'), 'line1\nline2 changed\nline3\nline4\n');
+      await fs.writeFile(path.join(dir, 'b.txt'), 'new');
+      git('add -A');
+      git('commit -q -m second');
+
+      const { code, data } = await api('/protoclaw/git/commit_files', { dir, hash: 'HEAD' });
+      assert.equal(code, 200);
+      const byPath = new Map(data.files.map((f) => [f.path, f]));
+      assert.ok(byPath.has('a.txt'));
+      assert.equal(byPath.get('a.txt').added, 2);   // line2 改写 + line4 新增
+      assert.equal(byPath.get('a.txt').removed, 1); // line2 被替换
+      assert.ok(byPath.has('b.txt'));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('git branch operations', () => {
+  it('lists branches, creates, switches, and deletes', async () => {
+    const { dir, git } = await makeRepo();
+    try {
+      await fs.writeFile(path.join(dir, 'a.txt'), 'v1');
+      git('add -A');
+      git('commit -q -m init');
+
+      let r = await api('/protoclaw/git/branches', { dir });
+      assert.equal(r.code, 200);
+      assert.equal(r.data.locals.length, 1);
+      assert.equal(r.data.current, 'master');
+
+      r = await api('/protoclaw/git/branch', { dir, op: 'create', name: 'feature/x' });
+      assert.equal(r.code, 200);
+      r = await api('/protoclaw/git/branches', { dir });
+      assert.equal(r.data.locals.length, 2);
+
+      r = await api('/protoclaw/git/branch', { dir, op: 'switch', name: 'feature/x' });
+      assert.equal(r.code, 200);
+      r = await api('/protoclaw/git/branches', { dir });
+      assert.equal(r.data.current, 'feature/x');
+
+      // 删除当前分支应失败
+      r = await api('/protoclaw/git/branch', { dir, op: 'delete', name: 'feature/x' });
+      assert.equal(r.code, 500);
+      // 切回后删除成功
+      await api('/protoclaw/git/branch', { dir, op: 'switch', name: 'master' });
+      r = await api('/protoclaw/git/branch', { dir, op: 'delete', name: 'feature/x' });
+      assert.equal(r.code, 200);
+      r = await api('/protoclaw/git/branches', { dir });
+      assert.equal(r.data.locals.length, 1);
+
+      r = await api('/protoclaw/git/branch', { dir, op: 'unknown' });
+      assert.equal(r.code, 400);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('git stash operations', () => {
+  it('saves, lists, pops and drops stashes', async () => {
+    const { dir, git } = await makeRepo();
+    try {
+      await fs.writeFile(path.join(dir, 'a.txt'), 'v1');
+      git('add -A');
+      git('commit -q -m init');
+
+      let r = await api('/protoclaw/git/stash', { dir, op: 'list' });
+      assert.equal(r.data.entries.length, 0);
+
+      await fs.writeFile(path.join(dir, 'a.txt'), 'dirty');
+      r = await api('/protoclaw/git/stash', { dir, op: 'save' });
+      assert.equal(r.code, 200);
+      assert.equal(await fs.readFile(path.join(dir, 'a.txt'), 'utf8'), 'v1'); // 贮藏后工作区恢复
+
+      r = await api('/protoclaw/git/stash', { dir, op: 'list' });
+      assert.equal(r.data.entries.length, 1);
+      const ref = r.data.entries[0].ref;
+      assert.match(ref, /^stash@\{0\}$/);
+
+      r = await api('/protoclaw/git/stash', { dir, op: 'pop', ref });
+      assert.equal(r.code, 200);
+      assert.equal(await fs.readFile(path.join(dir, 'a.txt'), 'utf8'), 'dirty'); // pop 恢复改动
+      r = await api('/protoclaw/git/stash', { dir, op: 'list' });
+      assert.equal(r.data.entries.length, 0);
+
+      // drop 路径
+      await api('/protoclaw/git/stash', { dir, op: 'save' });
+      r = await api('/protoclaw/git/stash', { dir, op: 'drop', ref: 'stash@{0}' });
+      assert.equal(r.code, 200);
+      r = await api('/protoclaw/git/stash', { dir, op: 'list' });
+      assert.equal(r.data.entries.length, 0);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});

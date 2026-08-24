@@ -3,14 +3,23 @@
  *
  * feature 无关的产品 Chrome 层面板：跟随当前查看的 workspace 会话的项目
  * 目录，经 /protoclaw/git/* 路由展示 git 状态，并提供 stage / unstage /
- * commit / discard 简单操作。刷新时机 = 进入面板 / 会话目录变化 / 手动刷新。
+ * commit / discard / branch / stash 简单操作与图形化提交历史（SVG 泳道，
+ * 算法在 git-graph.js）。
  *
- * 交互模式对齐 todo-plan.js：featurePanelBody 事件委托 + data-gp-* 属性，
- * 操作完成后直连 fetch 并 renderFeaturePanel() 重绘。
+ * 分区（可折叠 details，默认全展开）：
+ *   更改   — 暂存/提交/discard（VS Code SCM 交互）
+ *   历史   — SVG 提交图 + 行文本；点行展开该提交的文件清单（懒加载）
+ *   分支   — 本地/远程列表；点击切换、新建、删除
+ *   贮藏   — stash 列表；save/pop/drop
  *
- * 依赖（全局，声明于 app-core.js / app-main.js / debug-panel-host.js）：
+ * 刷新时机 = 进入面板 / 会话目录变化 / 手动刷新 / 任一写操作后（统一
+ * loadAll 全量拉取，端点轻量，逻辑单点）。
+ *
+ * 交互模式对齐 todo-plan.js：featurePanelBody 事件委托 + data-gp-* 属性。
+ *
+ * 依赖（全局，声明于 app-core.js / app-main.js / debug-panel-host.js / git-graph.js）：
  *   - featurePanelBody, activeFeaturePanel, currentRuntimeAgentId, currentLanguage
- *   - renderFeaturePanel, escapeHtml
+ *   - renderFeaturePanel, escapeHtml, GitGraph
  *   - getRuntimeWorkspaceSessionId, getActiveWorkspaceSessionId, getCurrentAgentRecord
  */
 (function () {
@@ -21,12 +30,16 @@
     root: '',           // 仓库根（服务端 rev-parse 解析）
     isRepo: true,
     status: null,       // 序列化后的 StatusResult
+    graph: [],          // 提交历史（新→旧，含 lane）
+    branches: null,     // { locals, remotes, current }
+    stash: [],          // [{ ref, desc }]
     error: '',
     notice: '',         // 上一次操作的成功提示（如提交哈希）
     loading: false,
     busy: false,
     commitMessage: '',
-    fetchedAt: 0,
+    expandedCommit: '', // 展开文件清单的提交 hash
+    commitFiles: {},    // hash -> [{path, added, removed}] 懒加载缓存
   };
 
   function esc(value) {
@@ -84,19 +97,30 @@
     }
   }
 
-  async function refresh() {
+  /** 全量拉取：status + graph + branches + stash 并行 */
+  async function loadAll() {
     const dir = state.dir || currentSessionDir();
     if (!dir || state.loading) return;
     state.loading = true;
     state.error = '';
     try {
-      const data = await api('status', { dir });
+      const [status, graph, branches, stash] = await Promise.all([
+        api('status', { dir }),
+        api('graph', { dir, limit: 120 }).catch(() => null),
+        api('branches', { dir }).catch(() => null),
+        api('stash', { dir, op: 'list' }).catch(() => null),
+      ]);
       // 响应返回时会话可能已切走：丢弃过期结果
       if ((state.dir || currentSessionDir()) !== dir) return;
-      state.isRepo = data.isRepo !== false;
-      state.root = data.root || '';
-      state.status = data.status || null;
-      state.fetchedAt = Date.now();
+      state.isRepo = status.isRepo !== false;
+      state.root = status.root || '';
+      state.status = status.status || null;
+      state.graph = Array.isArray(graph?.commits) ? graph.commits : [];
+      state.branches = branches || null;
+      state.stash = Array.isArray(stash?.entries) ? stash.entries : [];
+      state.expandedCommit = state.expandedCommit
+        && state.graph.some((c) => c.hash === state.expandedCommit)
+        ? state.expandedCommit : '';
     } catch (e) {
       state.error = String(e?.message || e || 'status failed');
     } finally {
@@ -105,6 +129,8 @@
     }
   }
 
+  const refresh = loadAll;
+
   /** render 周期里的目录监视：会话切换（dir 变化）触发一次异步刷新 */
   function watchDir() {
     const dir = currentSessionDir();
@@ -112,13 +138,19 @@
     state.dir = dir;
     state.root = '';
     state.status = null;
+    state.graph = [];
+    state.branches = null;
+    state.stash = [];
     state.error = '';
     state.notice = '';
     state.isRepo = true;
-    if (dir) refresh();
+    state.commitMessage = '';
+    state.expandedCommit = '';
+    state.commitFiles = {};
+    if (dir) loadAll();
   }
 
-  // ── 分组与徽标 ────────────────────────────────────────────────────
+  // ── 更改分组与徽标 ────────────────────────────────────────────────
   // VS Code SCM 模型：文件按「暂存的更改 / 更改 / 合并冲突」三组展示。
   // 重命名（R）属于暂存侧；未跟踪（??）归入更改组，徽标显示 U。
 
@@ -154,7 +186,7 @@
     return file?.from ? `${file.path} ← ${file.from}` : String(file?.path || '');
   }
 
-  // ── 渲染 ─────────────────────────────────────────────────────────
+  // ── 渲染：更改区 ─────────────────────────────────────────────────
 
   function renderFileRow(file, group) {
     const badge = badgeFor(file, group);
@@ -176,32 +208,30 @@
     ].join('');
   }
 
-  function renderGroup(title, files, group, headerAction) {
+  function renderChangesGroup(title, files, group, headerAction) {
     if (!files || files.length === 0) return '';
     return [
-      '<section class="git-group">',
       '<div class="git-group-head">',
       '<span class="git-group-title">' + esc(title) + '</span>',
       '<span class="git-group-count">' + files.length + '</span>',
       headerAction || '',
       '</div>',
       files.map((f) => renderFileRow(f, group)).join(''),
-      '</section>',
     ].join('');
   }
 
   function renderHead(status) {
-    const branch = status.detached
+    const branch = status?.detached
       ? esc(zh('分离头指针', 'Detached HEAD'))
-      : esc(status.current || '—');
+      : esc(status?.current || '—');
     const arrows = [];
-    if (status.ahead > 0) arrows.push('↑' + status.ahead);
-    if (status.behind > 0) arrows.push('↓' + status.behind);
+    if (status?.ahead > 0) arrows.push('↑' + status.ahead);
+    if (status?.behind > 0) arrows.push('↓' + status.behind);
     const rootLeaf = state.root ? state.root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
     return [
       '<section class="git-head">',
       '<div class="git-head-line">',
-      '<span class="git-branch" title="' + esc(status.tracking ? status.current + ' · ' + status.tracking : '') + '">' + branch + '</span>',
+      '<span class="git-branch" title="' + esc(status?.tracking ? status.current + ' · ' + status.tracking : '') + '">' + branch + '</span>',
       arrows.length ? '<span class="git-arrows">' + esc(arrows.join(' ')) + '</span>' : '',
       '<button class="git-head-refresh' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="' + esc(zh('刷新', 'Refresh')) + '" ' + (state.loading || state.busy ? 'disabled' : '') + '>&#8635;</button>',
       '</div>',
@@ -234,6 +264,149 @@
     return '';
   }
 
+  // ── 渲染：提交历史（SVG 泳道 + 行文本叠加）────────────────────────
+
+  function refLabel(ref) {
+    const name = String(ref?.name || '');
+    if (!name) return '';
+    const cls = ref.type === 'head' ? 'is-head' : ref.type === 'tag' ? 'is-tag'
+      : ref.type === 'remote' ? 'is-remote' : 'is-local';
+    const label = ref.type === 'head' ? name : ref.type === 'tag' ? 'tag: ' + name : name;
+    return '<span class="git-ref ' + cls + '">' + esc(label) + '</span>';
+  }
+
+  async function ensureCommitFiles(hash) {
+    if (state.commitFiles[hash]) return;
+    try {
+      const data = await api('commit_files', { dir: state.dir, hash });
+      state.commitFiles[hash] = Array.isArray(data.files) ? data.files : [];
+      repaint();
+    } catch (e) {
+      state.commitFiles[hash] = [];
+      state.error = String(e?.message || e);
+      repaint();
+    }
+  }
+
+  function renderHistory() {
+    const commits = state.graph;
+    if (!commits.length) return '';
+
+    const lanes = window.GitGraph.computeLanes(commits);
+    const headRow = 0; // log 新→旧，第一行即 HEAD
+    const svg = window.GitGraph.buildGraphSvg(lanes, headRow);
+
+    const rows = commits.map((c, row) => {
+      const isHead = row === headRow;
+      const refs = (c.refs || []).map(refLabel).join('');
+      const files = state.expandedCommit === c.hash
+        ? renderCommitFiles(c.hash)
+        : '';
+      return [
+        '<div class="git-history-row' + (isHead ? ' is-head' : '') + (state.expandedCommit === c.hash ? ' is-expanded' : '') + '" data-gp-commit="' + esc(c.hash) + '">',
+        '<span class="git-history-text">',
+        refs,
+        '<span class="git-history-subject" title="' + esc(c.subject) + '">' + esc(c.subject) + '</span>',
+        '</span>',
+        '<span class="git-history-meta">' + esc(c.author) + ' · ' + esc(c.relTime) + '</span>',
+        '</div>',
+        files,
+      ].join('');
+    }).join('');
+
+    return [
+      '<div class="git-history" style="--git-canvas-w:' + svg.width + 'px">',
+      '<div class="git-history-canvas">' + svg.svg + '</div>',
+      '<div class="git-history-rows">' + rows + '</div>',
+      '</div>',
+    ].join('');
+  }
+
+  function renderCommitFiles(hash) {
+    const cached = state.commitFiles[hash];
+    if (!cached) {
+      return '<div class="git-commit-files"><div class="git-commit-files-loading">' + esc(zh('加载中…', 'Loading…')) + '</div></div>';
+    }
+    if (!cached.length) {
+      return '<div class="git-commit-files"><div class="git-commit-files-loading">' + esc(zh('无文件变更', 'No file changes')) + '</div></div>';
+    }
+    return [
+      '<div class="git-commit-files">',
+      cached.map((f) => [
+        '<div class="git-commit-file" title="' + esc(f.path) + '">',
+        '<span class="git-commit-file-path">' + esc(f.path) + '</span>',
+        (f.added ? '<span class="git-num is-add">+' + f.added + '</span>' : ''),
+        (f.removed ? '<span class="git-num is-del">-' + f.removed + '</span>' : ''),
+        '</div>',
+      ].join('')).join(''),
+      '</div>',
+    ].join('');
+  }
+
+  // ── 渲染：分支与贮藏 ──────────────────────────────────────────────
+
+  function renderBranchRow(b) {
+    const current = !!b.current;
+    const actions = current || b.remote ? '' : [
+      '<button class="git-file-action is-danger" data-gp-action="branch-delete" data-gp-name="' + esc(b.name) + '" title="' + esc(zh('删除分支', 'Delete branch')) + '">&#10005;</button>',
+    ].join('');
+    return [
+      '<div class="git-branch-row' + (current ? ' is-current' : '') + '" data-gp-action="branch-switch" data-gp-name="' + esc(b.name) + '" title="' + esc(b.subject) + '">',
+      '<span class="git-file-badge">' + (current ? '&#10003;' : '') + '</span>',
+      '<span class="git-branch-name">' + esc(b.name) + '</span>',
+      '<span class="git-file-actions">' + actions + '</span>',
+      '</div>',
+    ].join('');
+  }
+
+  function renderBranches() {
+    const b = state.branches;
+    if (!b) return '';
+    const locals = (b.locals || []).map(renderBranchRow).join('');
+    const remotes = (b.remotes || [])
+      .filter((r) => r.name !== 'origin/HEAD')
+      .map(renderBranchRow).join('');
+    return [
+      locals ? '<div class="git-group-head"><span class="git-group-title">' + esc(zh('本地', 'Local')) + '</span>'
+        + '<span class="git-group-count">' + (b.locals || []).length + '</span>'
+        + '<button class="git-group-action" data-gp-action="branch-create">' + esc(zh('新建', 'New')) + '</button></div>' + locals : '',
+      remotes ? '<div class="git-group-head"><span class="git-group-title">' + esc(zh('远程', 'Remote')) + '</span>'
+        + '<span class="git-group-count">' + (b.remotes || []).length + '</span></div>' + remotes : '',
+      (!locals && !remotes) ? '<div class="git-empty-desc">' + esc(zh('无分支', 'No branches')) + '</div>' : '',
+    ].join('');
+  }
+
+  function renderStash() {
+    const entries = state.stash || [];
+    const head = '<div class="git-group-head"><span class="git-group-title">' + esc(zh('贮藏', 'Stash')) + '</span>'
+      + (entries.length ? '<span class="git-group-count">' + entries.length + '</span>' : '')
+      + '<button class="git-group-action" data-gp-action="stash-save">' + esc(zh('贮藏全部', 'Stash All')) + '</button></div>';
+    if (!entries.length) {
+      return head + '<div class="git-empty-desc">' + esc(zh('无贮藏条目', 'No stash entries')) + '</div>';
+    }
+    return head + entries.map((s) => [
+      '<div class="git-branch-row" title="' + esc(s.desc) + '">',
+      '<span class="git-branch-name">' + esc(s.desc) + '</span>',
+      '<span class="git-file-actions">',
+      '<button class="git-file-action" data-gp-action="stash-pop" data-gp-ref="' + esc(s.ref) + '" title="' + esc(zh('恢复并删除', 'Pop')) + '">&#8635;</button>',
+      '<button class="git-file-action is-danger" data-gp-action="stash-drop" data-gp-ref="' + esc(s.ref) + '" title="' + esc(zh('丢弃贮藏', 'Drop stash')) + '">&#10005;</button>',
+      '</span>',
+      '</div>',
+    ].join('')).join('');
+  }
+
+  // ── 渲染：分区壳与主入口 ─────────────────────────────────────────
+
+  function section(id, title, bodyHtml, open) {
+    if (!bodyHtml) return '';
+    return [
+      '<details class="git-section" data-gp-section="' + id + '"' + (open ? ' open' : '') + '>',
+      '<summary class="git-section-title">' + esc(title) + '</summary>',
+      '<div class="git-section-body">' + bodyHtml + '</div>',
+      '</details>',
+    ].join('');
+  }
+
   function renderEmpty(title, desc) {
     return '<div class="feature-panel-empty"><div>' + esc(title) + '</div>' + (desc ? '<div class="git-empty-desc">' + esc(desc) + '</div>' : '') + '</div>';
   }
@@ -259,22 +432,26 @@
     const { staged, changes, conflicts } = splitGroups(status.files || []);
     const clean = (status.files || []).length === 0;
 
-    const out = ['<div class="git-panel">'];
-    out.push(renderHead(status));
-    out.push(renderMessage());
-    if (staged.length > 0 || state.commitMessage) {
-      out.push(renderCommitBox(staged.length));
-    }
-    out.push(renderGroup(zh('暂存的更改', 'Staged Changes'), staged, 'staged',
-      staged.length > 0 ? '<button class="git-group-action" data-gp-action="unstage-all">' + esc(zh('全部取消', 'Unstage All')) + '</button>' : ''));
-    out.push(renderGroup(zh('合并冲突', 'Merge Conflicts'), conflicts, 'conflict', ''));
-    out.push(renderGroup(zh('更改', 'Changes'), changes, 'changes',
-      changes.length > 0 ? '<button class="git-group-action" data-gp-action="stage-all">' + esc(zh('全部暂存', 'Stage All')) + '</button>' : ''));
-    if (clean) {
-      out.push('<div class="git-clean">' + esc(zh('工作区干净', 'Working tree clean')) + '</div>');
-    }
-    out.push('</div>');
-    return out.join('');
+    const changesBody = [
+      (staged.length > 0 || state.commitMessage) ? renderCommitBox(staged.length) : '',
+      renderChangesGroup(zh('暂存的更改', 'Staged Changes'), staged, 'staged',
+        staged.length > 0 ? '<button class="git-group-action" data-gp-action="unstage-all">' + esc(zh('全部取消', 'Unstage All')) + '</button>' : ''),
+      renderChangesGroup(zh('合并冲突', 'Merge Conflicts'), conflicts, 'conflict', ''),
+      renderChangesGroup(zh('更改', 'Changes'), changes, 'changes',
+        changes.length > 0 ? '<button class="git-group-action" data-gp-action="stage-all">' + esc(zh('全部暂存', 'Stage All')) + '</button>' : ''),
+      clean ? '<div class="git-clean">' + esc(zh('工作区干净', 'Working tree clean')) + '</div>' : '',
+    ].join('');
+
+    return [
+      '<div class="git-panel">',
+      renderHead(status),
+      renderMessage(),
+      section('changes', zh('更改', 'Changes'), changesBody, true),
+      section('history', zh('提交历史', 'Commit History'), renderHistory(), true),
+      section('branches', zh('分支', 'Branches'), renderBranches(), false),
+      section('stash', zh('贮藏', 'Stash'), renderStash(), false),
+      '</div>',
+    ].join('');
   }
 
   function render() {
@@ -308,14 +485,14 @@
   async function doStage(files) {
     await runAction(async () => {
       await api('stage', files ? { dir: state.dir, files } : { dir: state.dir });
-      await refresh();
+      await loadAll();
     });
   }
 
   async function doUnstage(files) {
     await runAction(async () => {
       await api('unstage', files ? { dir: state.dir, files } : { dir: state.dir });
-      await refresh();
+      await loadAll();
     });
   }
 
@@ -337,7 +514,7 @@
       state.commitMessage = '';
       const hash = String(data?.commit?.commit || '').slice(0, 8);
       state.notice = hash ? zh('已提交 ' + hash, 'Committed ' + hash) : zh('已提交', 'Committed');
-      await refresh();
+      await loadAll();
     });
   }
 
@@ -348,23 +525,107 @@
     if (!confirmed) return;
     await runAction(async () => {
       await api('discard', { dir: state.dir, files: [path] });
-      await refresh();
+      await loadAll();
     });
+  }
+
+  async function doBranchSwitch(name) {
+    const confirmed = window.confirm(
+      zh('切换到分支「' + name + '」？\n\n未提交的改动若与目标分支冲突将阻止切换。', 'Switch to branch "' + name + '"?\n\nUncommitted changes conflicting with the target will block the switch.')
+    );
+    if (!confirmed) return;
+    await runAction(async () => {
+      await api('branch', { dir: state.dir, op: 'switch', name });
+      state.notice = zh('已切换到 ' + name, 'Switched to ' + name);
+      await loadAll();
+    });
+  }
+
+  async function doBranchCreate() {
+    const name = window.prompt(zh('新分支名称：', 'New branch name:'));
+    if (!name || !name.trim()) return;
+    await runAction(async () => {
+      await api('branch', { dir: state.dir, op: 'create', name: name.trim() });
+      state.notice = zh('已创建分支 ' + name.trim(), 'Created branch ' + name.trim());
+      await loadAll();
+    });
+  }
+
+  async function doBranchDelete(name) {
+    const confirmed = window.confirm(
+      zh('删除分支「' + name + '」？', 'Delete branch "' + name + '"?')
+    );
+    if (!confirmed) return;
+    await runAction(async () => {
+      try {
+        await api('branch', { dir: state.dir, op: 'delete', name });
+      } catch (e) {
+        // -d 对未合并分支失败：二次确认后强制删除
+        const msg = String(e?.message || '');
+        if (/not fully merged|未合并/i.test(msg)
+          && window.confirm(zh('分支「' + name + '」未完全合并，强制删除？\n\n未合并的提交将不可恢复。', 'Branch "' + name + '" is not fully merged. Force delete?\n\nUnmerged commits cannot be recovered.'))) {
+          await api('branch', { dir: state.dir, op: 'delete', name, force: true });
+        } else {
+          throw e;
+        }
+      }
+      state.notice = zh('已删除分支 ' + name, 'Deleted branch ' + name);
+      await loadAll();
+    });
+  }
+
+  async function doStashSave() {
+    const confirmed = window.confirm(
+      zh('将当前全部未提交改动贮藏？', 'Stash all uncommitted changes?')
+    );
+    if (!confirmed) return;
+    await runAction(async () => {
+      await api('stash', { dir: state.dir, op: 'save' });
+      state.notice = zh('已贮藏', 'Stashed');
+      await loadAll();
+    });
+  }
+
+  async function doStashOp(op, ref) {
+    const labels = { pop: zh('恢复', 'Pop'), drop: zh('丢弃', 'Drop') };
+    const confirmed = window.confirm(
+      zh(labels[op] + '贮藏 ' + ref + '？', labels[op] + ' stash ' + ref + '?')
+    );
+    if (!confirmed) return;
+    await runAction(async () => {
+      await api('stash', { dir: state.dir, op, ref });
+      await loadAll();
+    });
+  }
+
+  function toggleCommit(hash) {
+    if (state.expandedCommit === hash) {
+      state.expandedCommit = '';
+    } else {
+      state.expandedCommit = hash;
+      ensureCommitFiles(hash);
+    }
+    repaint();
   }
 
   // ── 事件委托（对齐 todo-plan.js 的 featurePanelBody 模式）────────
 
   featurePanelBody.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-gp-action]');
-    if (!btn) return;
-    e.preventDefault();
-    e.stopPropagation();
+    if (!btn) {
+      const commitRow = e.target.closest('[data-gp-commit]');
+      if (commitRow && !e.target.closest('.git-commit-files')) {
+        e.preventDefault();
+        toggleCommit(commitRow.dataset.gpCommit || '');
+      }
+      return;
+    }
     const action = btn.dataset.gpAction || '';
     const file = btn.dataset.gpFile || '';
     if (action === 'refresh') {
       state.error = '';
       state.notice = '';
-      refresh();
+      loadAll();
     } else if (action === 'stage') {
       doStage([file]);
     } else if (action === 'stage-all') {
@@ -377,6 +638,19 @@
       doCommit();
     } else if (action === 'discard') {
       doDiscard(file);
+    } else if (action === 'branch-switch') {
+      doBranchSwitch(btn.dataset.gpName || '');
+    } else if (action === 'branch-create') {
+      doBranchCreate();
+    } else if (action === 'branch-delete') {
+      e.stopPropagation();
+      doBranchDelete(btn.dataset.gpName || '');
+    } else if (action === 'stash-save') {
+      doStashSave();
+    } else if (action === 'stash-pop') {
+      doStashOp('pop', btn.dataset.gpRef || '');
+    } else if (action === 'stash-drop') {
+      doStashOp('drop', btn.dataset.gpRef || '');
     }
   });
 
@@ -390,7 +664,7 @@
     render,
     onOpen() {
       watchDir();
-      if (state.dir) refresh();
+      if (state.dir) loadAll();
     },
     refresh,
   };

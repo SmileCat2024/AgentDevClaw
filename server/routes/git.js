@@ -589,4 +589,224 @@ export function setupGitRoutes(app, express) {
       routeError(res, error);
     }
   });
+
+  // ── 提交历史图（供前端 SVG lane 绘制，非字符画）─────────────────
+  // 输出：[{ hash, parents:[], author, relTime, subject, refs:[] }]，refs 含
+  // 本地/远程分支、HEAD、tag。解析用 NUL 分隔，避免 subject 含空格/引号问题。
+  app.post('/protoclaw/git/graph', express.json(), async (req, res) => {
+    try {
+      const dir = await validateDir(req.body?.dir);
+      const root = await resolveGitRoot(dir);
+      if (!root) {
+        res.status(400).json({ error: 'not a git repository' });
+        return;
+      }
+      const limit = Math.min(Math.max(Number(req.body?.limit) || 100, 1), 1000);
+      const format = '%H%x1f%P%x1f%an%x1f%ar%x1f%D%x1f%s';
+      const text = await runGit(['log', `-n${limit}`, `--pretty=format:${format}`, '--date=relative'], root);
+      const commits = [];
+      // format 输出按行分隔；%s subject 恒为单行，字段用 \x1f 分隔
+      for (const raw of text.split('\n')) {
+        if (!raw.trim()) continue;
+        const [hash, parents, author, relTime, refs, subject] = raw.split('\x1f');
+        if (!hash) continue;
+        commits.push({
+          hash: hash.slice(0, 12),
+          fullHash: hash,
+          parents: (parents || '').split(' ').map((s) => s.trim()).filter(Boolean),
+          author: author || '',
+          relTime: relTime || '',
+          refs: parseRefs(refs || ''),
+          subject: subject || '',
+        });
+      }
+      res.json({ ok: true, root, commits });
+    } catch (error) {
+      routeError(res, error);
+    }
+  });
+
+  // ── 某次提交改了哪些文件（点节点展开）────────────────────────────
+  app.post('/protoclaw/git/commit_files', express.json(), async (req, res) => {
+    try {
+      const dir = await validateDir(req.body?.dir);
+      const root = await resolveGitRoot(dir);
+      if (!root) {
+        res.status(400).json({ error: 'not a git repository' });
+        return;
+      }
+      const ref = String(req.body?.hash || '').trim();
+      if (!ref) {
+        res.status(400).json({ error: 'hash is required' });
+        return;
+      }
+      const text = await runGit(['show', '--stat', '--pretty=format:', '--no-color', ref], root);
+      // --stat 行形如： path | 12 ++++++----
+      const files = [];
+      for (const line of text.split('\n')) {
+        const m = line.match(/^(.+?)\s*\|\s*(\d+)\s*([+-]*)\s*$/);
+        if (!m) continue;
+        const name = m[1].trim();
+        if (name === 'Bin' || name.startsWith('/')) continue;
+        const added = (m[3].match(/\+/g) || []).length;
+        const removed = (m[3].match(/-/g) || []).length;
+        files.push({ path: name, added, removed });
+      }
+      res.json({ ok: true, hash: ref, files });
+    } catch (error) {
+      routeError(res, error);
+    }
+  });
+
+  // ── 分支列表（本地 / 远程 / HEAD）──────────────────────────────
+  app.post('/protoclaw/git/branches', express.json(), async (req, res) => {
+    try {
+      const dir = await validateDir(req.body?.dir);
+      const root = await resolveGitRoot(dir);
+      if (!root) {
+        res.status(400).json({ error: 'not a git repository' });
+        return;
+      }
+      const localText = await runGit(['branch', '-v', '--no-abbrev'], root);
+      const remoteText = await runGit(['branch', '-r', '-v', '--no-abbrev'], root);
+      const locals = parseBranchLines(localText, false);
+      const remotes = parseBranchLines(remoteText, true);
+      res.json({ ok: true, root, current: getCurrentBranchName(locals), locals, remotes });
+    } catch (error) {
+      routeError(res, error);
+    }
+  });
+
+  // ── 分支操作：create / switch / delete ─────────────────────────
+  app.post('/protoclaw/git/branch', express.json(), async (req, res) => {
+    try {
+      const dir = await validateDir(req.body?.dir);
+      const root = await resolveGitRoot(dir);
+      if (!root) {
+        res.status(400).json({ error: 'not a git repository' });
+        return;
+      }
+      const op = String(req.body?.op || '').trim();
+      const name = String(req.body?.name || '').trim();
+      const target = String(req.body?.target || '').trim();
+
+      if (op === 'create') {
+        if (!name) {
+          res.status(400).json({ error: 'name is required' });
+          return;
+        }
+        await runGit(target ? ['branch', name, target] : ['branch', name], root);
+        res.json({ ok: true, branch: name });
+      } else if (op === 'switch') {
+        const ref = name || target;
+        if (!ref) {
+          res.status(400).json({ error: 'name or target is required' });
+          return;
+        }
+        await runGit(['checkout', ref], root);
+        res.json({ ok: true, branch: ref });
+      } else if (op === 'delete') {
+        if (!name) {
+          res.status(400).json({ error: 'name is required' });
+          return;
+        }
+        // -D 强制删除（含未合并），操作前由前端强确认
+        await runGit(req.body?.force ? ['branch', '-D', name] : ['branch', '-d', name], root);
+        res.json({ ok: true, branch: name });
+      } else {
+        res.status(400).json({ error: 'op must be create|switch|delete' });
+      }
+    } catch (error) {
+      routeError(res, error);
+    }
+  });
+
+  // ── 贮藏 stash：save / pop / drop / list ───────────────────────
+  app.post('/protoclaw/git/stash', express.json(), async (req, res) => {
+    try {
+      const dir = await validateDir(req.body?.dir);
+      const root = await resolveGitRoot(dir);
+      if (!root) {
+        res.status(400).json({ error: 'not a git repository' });
+        return;
+      }
+      const op = String(req.body?.op || 'list').trim();
+
+      if (op === 'list') {
+        const text = await runGit(['stash', 'list', '--pretty=format:%gd %cr %gs'], root);
+        const entries = text.split('\n').map((l) => l.trim()).filter(Boolean)
+          .map((l) => {
+            const sp = l.indexOf(' ');
+            return { ref: l.slice(0, sp), desc: l.slice(sp + 1) };
+          });
+        res.json({ ok: true, entries });
+        return;
+      }
+      if (op === 'save') {
+        const msg = String(req.body?.message || '').trim();
+        await runGit(msg ? ['stash', 'push', '-m', msg] : ['stash', 'push'], root);
+        res.json({ ok: true });
+        return;
+      }
+      const ref = String(req.body?.ref || '').trim() || 'stash@{0}';
+      if (op === 'pop') {
+        await runGit(['stash', 'pop', ref], root);
+        res.json({ ok: true });
+      } else if (op === 'drop') {
+        await runGit(['stash', 'drop', ref], root);
+        res.json({ ok: true });
+      } else {
+        res.status(400).json({ error: 'op must be list|save|pop|drop' });
+      }
+    } catch (error) {
+      routeError(res, error);
+    }
+  });
+}
+
+/** 解析 `git branch -v` 输出行为结构化分支 */
+function parseBranchLines(text, isRemote) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const current = trimmed.startsWith('*');
+    const rest = trimmed.replace(/^\*+\s*/, '');
+    // name + 40位哈希 + subject；远程名可能含 "origin/feature"
+    const m = rest.match(/^(\S+)\s+([0-9a-f]{40})\s+(.*)$/);
+    if (!m) continue;
+    out.push({
+      name: m[1],
+      hash: m[2],
+      subject: m[3] || '',
+      current,
+      remote: isRemote,
+    });
+  }
+  return out;
+}
+
+function getCurrentBranchName(locals) {
+  const cur = locals.find((b) => b.current);
+  return cur ? cur.name : '';
+}
+
+/** 解析 `git log --format=%D` 的 ref 装饰串：HEAD -> master, origin/main, tag: v1.0 */
+function parseRefs(decoration) {
+  if (!decoration) return [];
+  const refs = [];
+  for (const token of decoration.split(',')) {
+    const t = token.trim();
+    if (!t) continue;
+    if (t.startsWith('HEAD ->')) {
+      refs.push({ type: 'head', name: t.slice('HEAD ->'.length).trim() });
+    } else if (t.startsWith('tag: ')) {
+      refs.push({ type: 'tag', name: t.slice('tag: '.length).trim() });
+    } else if (t.includes('/') && !t.startsWith('HEAD')) {
+      refs.push({ type: 'remote', name: t.trim() });
+    } else {
+      refs.push({ type: 'local', name: t.trim() });
+    }
+  }
+  return refs;
 }

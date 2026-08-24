@@ -7327,3 +7327,296 @@ body[data-theme="light"] .git-clean {
 body[data-theme="light"] .git-empty-desc {
   color: rgba(0,0,0,0.45);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Git 面板：分区壳 / 提交历史图（SVG 泳道）/ 分支与贮藏
+   历史行高 26px 必须与 git-graph.js 的 ROW_H 严格对齐；
+   展开的文件清单为绝对定位浮层（不占文档流，避免泳道错位）。
+   ═══════════════════════════════════════════════════════════════ */
+
+/* lane 色板（深色主题） */
+:root {
+  --git-c0: #69a4ff;
+  --git-c1: #73c991;
+  --git-c2: #e2c08d;
+  --git-c3: #c58fe0;
+  --git-c4: #e06c60;
+  --git-c5: #56b6c2;
+}
+
+body[data-theme="light"] {
+  --git-c0: #3d78c9;
+  --git-c1: #3d9e63;
+  --git-c2: #a97e3f;
+  --git-c3: #8d5bd0;
+  --git-c4: #c44a3a;
+  --git-c5: #2f8a96;
+}
+
+/* ── 可折叠分区 ── */
+.git-section {
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+body[data-theme="light"] .git-section {
+  border-top-color: rgba(0,0,0,0.08);
+}
+
+.git-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.git-section-title::-webkit-details-marker {
+  display: none;
+}
+
+.git-section-title::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 4px solid rgba(255,255,255,0.35);
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform 0.12s ease;
+}
+
+.git-section[open] > .git-section-title::before {
+  transform: rotate(90deg);
+}
+
+body[data-theme="light"] .git-section-title {
+  color: rgba(0,0,0,0.5);
+}
+
+.git-section-body {
+  padding: 0 14px 10px;
+}
+
+/* ── 提交历史：SVG 泳道 + 行文本叠加 ── */
+.git-history {
+  position: relative;
+}
+
+.git-history-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+}
+
+.git-history-canvas svg {
+  display: block;
+}
+
+.git-edge {
+  stroke-width: 1.5;
+  opacity: 0.85;
+}
+
+.git-edge-trunc {
+  opacity: 0.3;
+  stroke-dasharray: 2 3;
+}
+
+.git-dot {
+  stroke: var(--glass-bg, #1e2227);
+  stroke-width: 1.5;
+}
+
+.git-history-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;                /* 与 git-graph.js ROW_H 严格对齐 */
+  line-height: 26px;
+  padding-left: var(--git-canvas-w, 30px);
+  padding-right: 4px;
+  margin: 0 -4px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.git-history-row:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+body[data-theme="light"] .git-history-row:hover {
+  background: rgba(0,0,0,0.045);
+}
+
+.git-history-row.is-head .git-history-subject {
+  font-weight: 600;
+}
+
+.git-history-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.git-history-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-history-meta {
+  flex: none;
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.35);
+}
+
+body[data-theme="light"] .git-history-meta {
+  color: rgba(0,0,0,0.4);
+}
+
+/* 分支/标签胶囊 */
+.git-ref {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 15px;
+  vertical-align: middle;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-ref.is-head {
+  background: rgba(105,164,255,0.18);
+  color: var(--git-c0);
+  border: 1px solid rgba(105,164,255,0.4);
+}
+
+.git-ref.is-local {
+  background: rgba(115,201,145,0.14);
+  color: var(--git-c1);
+}
+
+.git-ref.is-remote {
+  background: rgba(255,255,255,0.07);
+  color: rgba(255,255,255,0.55);
+}
+
+.git-ref.is-tag {
+  background: rgba(226,192,141,0.14);
+  color: var(--git-c2);
+}
+
+body[data-theme="light"] .git-ref.is-remote {
+  background: rgba(0,0,0,0.06);
+  color: rgba(0,0,0,0.55);
+}
+
+/* ── 展开的提交文件清单：绝对定位浮层 ── */
+.git-history-row.is-expanded {
+  z-index: 10;
+}
+
+.git-commit-files {
+  position: absolute;
+  top: 100%;
+  left: var(--git-canvas-w, 30px);
+  z-index: 20;
+  min-width: 260px;
+  max-width: 92%;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: var(--glass-bg, #23272d);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  white-space: normal;
+}
+
+body[data-theme="light"] .git-commit-files {
+  border-color: rgba(0,0,0,0.12);
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.14);
+}
+
+.git-commit-files-loading {
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+}
+
+body[data-theme="light"] .git-commit-files-loading {
+  color: rgba(0,0,0,0.45);
+}
+
+.git-commit-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 11.5px;
+}
+
+.git-commit-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-num {
+  flex: none;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.git-num.is-add { color: var(--git-c1); }
+.git-num.is-del { color: var(--git-c4); }
+
+/* ── 分支 / 贮藏行（复用 git-file 视觉语言）── */
+.git-branch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  margin: 0 -6px;
+  border-radius: 5px;
+  cursor: pointer;
+  min-height: 24px;
+}
+
+.git-branch-row:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+body[data-theme="light"] .git-branch-row:hover {
+  background: rgba(0,0,0,0.045);
+}
+
+.git-branch-row.is-current .git-branch-name {
+  color: var(--git-c0);
+  font-weight: 600;
+}
+
+.git-branch-row .git-file-badge {
+  color: var(--git-c0);
+}
+
+.git-branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
