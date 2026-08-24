@@ -731,6 +731,7 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
     let stderr = '';
     const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
     let timedOut = false;
+    let exitCode = null;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
@@ -751,21 +752,27 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
       });
       child.on('exit', (code) => {
         clearTimeout(timer);
-        if (timedOut) {
-          reject(new Error(`Title generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
-          return;
-        }
-        if (code !== 0) {
-          reject(new Error(stderr.trim() || `run-title-mirror exited with code ${code}`));
-          return;
-        }
+        exitCode = code;
         resolve();
       });
     });
 
-    const raw = await fs.readFile(resultPath, 'utf8');
-    const result = JSON.parse(raw.trim());
-    await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
+    // 成败以落盘的 result.json 为准：writeFileSync 在子进程任何退出路径之前
+    // 同步完成。Windows 上进程退出阶段可能因 libuv 与 keep-alive socket 的
+    // 竞态 fail-fast（uv_async 断言，退出码非零），但标题结果此时已完整写盘，
+    // 不能按退出码判失败。
+    let result;
+    try {
+      const raw = await fs.readFile(resultPath, 'utf8');
+      result = JSON.parse(raw.trim());
+    } catch {
+      if (timedOut) {
+        throw new Error(`Title generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`);
+      }
+      throw new Error(stderr.trim() || `run-title-mirror exited with code ${exitCode}`);
+    } finally {
+      await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
+    }
 
     const title = typeof result?.title === 'string' ? result.title.trim() : '';
     if (!title) {
@@ -834,6 +841,7 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
     let stderr = '';
     const timeoutMs = MIRROR_SCRIPT_TIMEOUT_MS;
     let timedOut = false;
+    let exitCode = null;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
@@ -854,21 +862,26 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
       });
       child.on('exit', (code) => {
         clearTimeout(timer);
-        if (timedOut) {
-          reject(new Error(`Recap generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
-          return;
-        }
-        if (code !== 0) {
-          reject(new Error(stderr.trim() || `run-recap-mirror exited with code ${code}`));
-          return;
-        }
+        exitCode = code;
         resolve();
       });
     });
 
-    const raw = await fs.readFile(resultPath, 'utf8');
-    const result = JSON.parse(raw.trim());
-    await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
+    // 成败以落盘的 result.json 为准，与 generate_session_title 同理：
+    // Windows 上退出码非零可能只是退出阶段的 libuv fail-fast，结果文件
+    // 已在此之前同步写盘。
+    let result;
+    try {
+      const raw = await fs.readFile(resultPath, 'utf8');
+      result = JSON.parse(raw.trim());
+    } catch {
+      if (timedOut) {
+        throw new Error(`Recap generation timed out after ${timeoutMs}ms${stderr.trim() ? `\n${stderr.trim()}` : ''}`);
+      }
+      throw new Error(stderr.trim() || `run-recap-mirror exited with code ${exitCode}`);
+    } finally {
+      await fs.rm(resultDir, { recursive: true, force: true }).catch(e => console.warn(e));
+    }
 
     const recap = typeof result?.recap === 'string' ? result.recap.trim() : '';
     if (!recap) {
