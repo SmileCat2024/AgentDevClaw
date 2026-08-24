@@ -24,9 +24,6 @@ import { createIMBridge } from './runtime-im-bridge.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
-// 线程宿主集合：唯一定义在 server/thread-control/host-agents.js（零依赖轻量
-// 模块，不拉起 thread-controller 初始化链），与 server 侧消费方同源。
-import { THREAD_HOST_AGENT_IDS } from '../server/thread-control/host-agents.js';
 
 // Inject DebugHub into the extracted CallArbiter module
 setDebugHubClass(DebugHub);
@@ -342,7 +339,6 @@ class SessionLifecycle {
       gcChatId: opts.runtime?.gcChatId || null,
       modelPresetRole: opts.runtime?.modelPresetRole || null,
     };
-    this.isExploration = this.runtime.sessionType === 'exploration';
 
     // Populated during start()
     this.agent = null;
@@ -358,7 +354,6 @@ class SessionLifecycle {
     this.imBridgeCtx = {
       agentId,
       sessionId: this.sessionId,
-      IS_EXPLORATION: this.isExploration,
       SERVER_ORIGIN,
       agent: null,
       callArbiter: null,
@@ -705,13 +700,22 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   const agentModule = await import(pathToFileURL(agentJsPath).href);
-  const AgentClass = resolveAgentClass(agentModule);
+  // Agent module can export a session-type-aware dispatcher; fall back to the
+  // default-export heuristic for single-class agents.
+  const AgentClass = typeof agentModule.resolveAgentClass === 'function'
+    ? agentModule.resolveAgentClass({ runtime: this.runtime })
+    : resolveAgentClass(agentModule);
 
   if (!AgentClass) {
     throw new Error(`无法在 ${agentJsPath} 中找到 Agent 类导出`);
   }
 
-  this.resolved = resolveAgentModelLLM(agentPath, 'default') || resolveGlobalDefaultLLM();
+  // coder sessions keep a standalone model config under agent-configs/coder.json
+  // even though they now live inside the programming-helper workspace.
+  const modelOptions = this.runtime.sessionType === 'coder'
+    ? { userConfigPath: join(PROTOCLAW_ROOT, '.agentdev', 'agent-configs', 'coder.json') }
+    : {};
+  this.resolved = resolveAgentModelLLM(agentPath, 'default', modelOptions) || resolveGlobalDefaultLLM();
   this.resolvedUsageModel = this.resolved || null;
   this.agent = new AgentClass({
     name: this.agentName,
@@ -721,7 +725,7 @@ SessionLifecycle.prototype.start = async function () {
     // contextGuard 只是首轮调用前的兜底种子（启动预设的窗口期快照）；
     // 阈值真相是会话当前模型的 live meta，feature 每轮 CallStart /
     // onLLMSwap 都会重算，不依赖这里的快照。
-    ...((agentId === 'programming-helper' || agentId === 'coder' || agentId === 'agent-studio') ? {
+    ...((agentId === 'programming-helper' || agentId === 'agent-studio') ? {
       contextGuard: {
         contextLength: this.resolved?.contextLength ?? null,
         compressRatio: this.resolved?.compressRatio ?? 80,
@@ -774,18 +778,13 @@ SessionLifecycle.prototype.start = async function () {
   console.log(`[ProtoClaw Runtime] Host workdir => ${process.cwd()}`);
   console.log(`[ProtoClaw Runtime] Agent 实例已创建: ${this.agentName}`);
 
-  // Exploration agents run headlessly — no ViewerWorker, no IM gateway.
-  if (this.isExploration) {
-    console.log('[ProtoClaw Runtime] Exploration mode — skipping ViewerWorker connection');
-  } else {
-    console.log(`[ProtoClaw Runtime] 正在连接到 ViewerWorker (端口 ${VIEWER_PORT})...`);
-    await this.agent.withViewer(this.agentName, VIEWER_PORT, false, {
-      projectRoot: PROTOCLAW_ROOT,
-    });
-    console.log('[ProtoClaw Runtime] ✓ 已连接到 ViewerWorker');
-    if (this.announceOnStdout) {
-      console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${this.agent.agentId ?? 'unknown'}`);
-    }
+  console.log(`[ProtoClaw Runtime] 正在连接到 ViewerWorker (端口 ${VIEWER_PORT})...`);
+  await this.agent.withViewer(this.agentName, VIEWER_PORT, false, {
+    projectRoot: PROTOCLAW_ROOT,
+  });
+  console.log('[ProtoClaw Runtime] ✓ 已连接到 ViewerWorker');
+  if (this.announceOnStdout) {
+    console.log(`[ProtoClaw Runtime] Viewer Agent ID: ${this.agent.agentId ?? 'unknown'}`);
   }
 
   if (this.sessionId) {
@@ -831,16 +830,14 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   // Push restored state to Viewer
-  if (!this.isExploration) {
-    try {
-      const messages = typeof this.agent.getContext === 'function' ? this.agent.getContext().getAll() : [];
-      this.agent['pushToDebug']?.(messages);
-      this.agent['syncRegisteredToolsToDebug']?.();
-      this.agent['pushInspectorSnapshot']?.();
-      this.agent['pushOverviewSnapshot']?.();
-    } catch (error) {
-      console.warn('[ProtoClaw Runtime] 恢复会话后同步调试状态失败:', error);
-    }
+  try {
+    const messages = typeof this.agent.getContext === 'function' ? this.agent.getContext().getAll() : [];
+    this.agent['pushToDebug']?.(messages);
+    this.agent['syncRegisteredToolsToDebug']?.();
+    this.agent['pushInspectorSnapshot']?.();
+    this.agent['pushOverviewSnapshot']?.();
+  } catch (error) {
+    console.warn('[ProtoClaw Runtime] 恢复会话后同步调试状态失败:', error);
   }
 
   if (this.announceOnStdout) {
@@ -923,14 +920,14 @@ SessionLifecycle.prototype.start = async function () {
             const usageResult = await reportUsageEvent(SERVER_ORIGIN, {
               eventId: usageEventId,
               timestamp: callSummary.endTime || Date.now(),
-              source: self.isExploration ? 'exploration-call' : 'agent-call',
+              source: 'agent-call',
               agentId,
               sessionId: self.sessionId,
               runtimeInstanceId,
               callIndex,
               requestCount: callSummary.stepCount || 1,
               cacheHitRequests: callSummary.cacheHitRequests || 0,
-              model: buildModelUsageMeta(self.resolvedUsageModel, self.isExploration ? 'exploration' : 'default'),
+              model: buildModelUsageMeta(self.resolvedUsageModel, 'default'),
               usage: callSummary.totalUsage,
               context: {
                 contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
@@ -987,29 +984,27 @@ SessionLifecycle.prototype.start = async function () {
 
   console.log('[ProtoClaw Runtime] ✓ CallArbiter 已初始化');
 
-  // ── IM Gateway (only for non-exploration sessions) ──
-  if (!this.isExploration) {
-    try {
-      if (typeof this.agent.startSelectedIMGateway === 'function') {
-        const channel = await this.agent.startSelectedIMGateway();
-        if (channel === 'none') {
-          console.log('[ProtoClaw Runtime] • IM Gateway 未启动（未选择渠道），仅调试模式运行');
-        } else {
-          console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
-        }
-      } else if (typeof this.agent.startQQBotGateway === 'function') {
-        await this.agent.startQQBotGateway();
-        console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+  // ── IM Gateway ──
+  try {
+    if (typeof this.agent.startSelectedIMGateway === 'function') {
+      const channel = await this.agent.startSelectedIMGateway();
+      if (channel === 'none') {
+        console.log('[ProtoClaw Runtime] • IM Gateway 未启动（未选择渠道），仅调试模式运行');
       } else {
-        const qqbotFeature = this.agent.features?.get?.('qqbot');
-        if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
-          await qqbotFeature.startGateway(this.agent);
-          console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
-        }
+        console.log(`[ProtoClaw Runtime] ✓ 已启动 IM Gateway (${channel || 'unknown'})`);
       }
-    } catch (error) {
-      console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
+    } else if (typeof this.agent.startQQBotGateway === 'function') {
+      await this.agent.startQQBotGateway();
+      console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+    } else {
+      const qqbotFeature = this.agent.features?.get?.('qqbot');
+      if (qqbotFeature && typeof qqbotFeature.startGateway === 'function') {
+        await qqbotFeature.startGateway(this.agent);
+        console.log('[ProtoClaw Runtime] ✓ 已启动 QQBot Gateway');
+      }
     }
+  } catch (error) {
+    console.error('[ProtoClaw Runtime] IM Gateway 启动失败，已降级为仅调试运行:', error);
   }
 
   // If this session is bound to an IM line, mount the carrier feature + gateway
@@ -1046,18 +1041,16 @@ SessionLifecycle.prototype.start = async function () {
     // react-loop / arbiter 安全网仅在 call 期间消费邮箱，空闲时无人消费
     // 会导致投递成功但会话卡住（thread 指令）。此循环把邮箱作为又一个
     // 外部事件源接进 arbiter，与 dispatch / IM 桥接同构。
-    if (!this.isExploration) {
-      this.passiveMailboxLoop = createPassiveMailboxLoop({
-        agent: this.agent,
-        callArbiter: this.callArbiter,
-        isDisposed: () => this.disposed,
-        viewerPort: VIEWER_PORT,
-      });
-      this.passiveMailboxLoop.run().catch(err => {
-        console.error(`[ProtoClaw Runtime] 被动邮箱消费循环异常退出 (session=${this.sessionId}):`, err);
-      });
-      console.log('[ProtoClaw Runtime] ✓ 已启动被动邮箱消费循环 (viewer mailbox → arbiter)');
-    }
+    this.passiveMailboxLoop = createPassiveMailboxLoop({
+      agent: this.agent,
+      callArbiter: this.callArbiter,
+      isDisposed: () => this.disposed,
+      viewerPort: VIEWER_PORT,
+    });
+    this.passiveMailboxLoop.run().catch(err => {
+      console.error(`[ProtoClaw Runtime] 被动邮箱消费循环异常退出 (session=${this.sessionId}):`, err);
+    });
+    console.log('[ProtoClaw Runtime] ✓ 已启动被动邮箱消费循环 (viewer mailbox → arbiter)');
     // Keep the session alive without an input loop.
     // The process stays alive as long as pending IPC / DebugHub requests exist.
     return;

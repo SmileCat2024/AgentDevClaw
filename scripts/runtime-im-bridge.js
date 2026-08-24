@@ -38,7 +38,6 @@ function truncateForIM(text, maxLength) {
  * @param {object} ctx - mutable runtime context
  * @param {string} ctx.agentId
  * @param {string|null} ctx.sessionId
- * @param {boolean} ctx.IS_EXPLORATION
  * @param {string} ctx.SERVER_ORIGIN
  * @param {object|null} ctx.agent - set during main()
  * @param {object|null} ctx.callArbiter - set during main()
@@ -134,7 +133,7 @@ export function createIMBridge(ctx) {
    */
   async function mountCarrierFeature(carrier) {
     const agent = ctx.agent;
-    if (!agent || ctx.IS_EXPLORATION) return;
+    if (!agent) return;
 
     if (_mountedCarrierFeature === carrier) {
       console.log(`[IM-Line] Carrier "${carrier}" already mounted, skipping`);
@@ -238,7 +237,7 @@ export function createIMBridge(ctx) {
    * Check at startup if this session is bound to an IM line.
    */
   async function mountIMLineCarrierIfBound() {
-    if (!ctx.sessionId || ctx.IS_EXPLORATION) return;
+    if (!ctx.sessionId) return;
 
     try {
       const resp = await fetch(`${ctx.SERVER_ORIGIN}/protoclaw/im_line_binding?agentId=${ctx.agentId}&sessionId=${ctx.sessionId}`);

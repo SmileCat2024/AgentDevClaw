@@ -6,10 +6,7 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
 import {
-  USER_DATA_ROOT,
   MIRROR_SCRIPT_TIMEOUT_MS,
-  SPAWN_AGENT_TIMEOUT_MS,
-  REQ_TIMEOUT_BUFFER_MS,
 } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
@@ -26,7 +23,6 @@ import {
 } from '../shared/session-access.js';
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
 import { renderConversationHtml } from '../conversation-renderer.js';
-import { readHandoffPackage } from '../context-continuity/handoff-package.js';
 import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
 import { createOperationTrace } from '../shared/operation-trace.js';
 import { resolveAgentTarget, resolveSessionTarget } from '../shared/operation-target.js';
@@ -56,7 +52,6 @@ export function setupSessionRoutes(app, express, ctx) {
   const {
     activatePrebuiltSession,
     archivePrebuiltSession,
-    buildExplorationHandoffPayload,
     buildSessionTrimPreview,
     estimatePreambleCharCount,
     compactAndResumeCurrentSession,
@@ -69,17 +64,14 @@ export function setupSessionRoutes(app, express, ctx) {
     findSessionSummary,
     findSessionSummaryPath,
     listPrebuiltSessions,
-    lockExplorationSession,
     requirePrebuiltAgentForRuntime,
     requirePrebuiltSessionRecord,
     resolvePrebuiltSessionOwner,
     searchSessionsContent,
     setSessionHasSummary,
     tagPrebuiltSessionTodo,
-    writeSyntheticHandoff,
     requireAgentLight,
     startManagedAgent,
-    startOneShotAgent,
     stopManagedAgent,
     waitForManagedRuntimeReady,
     notifySessionLineage,
@@ -555,16 +547,12 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
     }
     const agentRelativeDir = path.join('prebuilt-agents', 'official', agentId);
 
-    // Resolve sessionType from the workspace session index first; session files may not carry the product-level type.
-    const sessionType = await resolvePrebuiltSessionType(agentId, sessionId);
-
     console.log(`[generate_summary] in-process summary begin agent=${agentId} session=${sessionId}`);
     const result = await runInProcessSummary({
       agentRelativeDir,
       projectRoot: PROJECT_ROOT,
       agentId,
       sessionId,
-      sessionType,
       maxAttempts: 1,
       timeoutMs: MIRROR_SCRIPT_TIMEOUT_MS,
     });
@@ -603,8 +591,16 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
   try {
     const { agentId } = resolveAgentTarget(req.body);
     const agent = await requireAgentLight(agentId);
+    // sessionType 限定已知值：main 是用户会话缺省形态；coder 是线程宿主
+    // 会话，仅由调度面（ACP / dispatch / CLI）显式创建，前端不传此字段。
+    const requestedSessionType = cleanSessionText(req.body?.sessionType);
+    if (requestedSessionType && !['main', 'coder'].includes(requestedSessionType)) {
+      res.status(400).json({ error: `unsupported sessionType: ${requestedSessionType}` });
+      return;
+    }
     const session = await createPrebuiltSession(agent.id, {
       returnSummary: false,
+      sessionType: requestedSessionType || undefined,
       sourceSessionId: req.body.sourceSessionId,
       formId: req.body.formId,
       featureName: req.body.featureName,
@@ -960,175 +956,6 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
         archived: didArchive,
       }).catch((err) => console.error('[compacted_resume] lineage notification failed:', err));
     }
-  } catch (error) {
-    next(error);
-  }
-});
-// ── Exploration helpers extracted to server/routes/session-helpers.js ──
-app.post('/protoclaw/spawn_one_shot', express.json(), async (req, res, next) => {
-  try {
-    const handoffId = cleanSessionText(req.body?.handoffId);
-    const handoffPath = cleanSessionText(req.body?.handoffPath);
-    const goal = cleanSessionText(req.body?.goal);
-    const timeoutMs = Number(req.body?.timeoutMs) || SPAWN_AGENT_TIMEOUT_MS;
-    const explorationIds = Array.isArray(req.body?.explorationIds)
-      ? req.body.explorationIds.map(id => cleanSessionText(id)).filter(Boolean)
-      : [];
-
-    if (!goal) {
-      res.status(400).json({ error: 'goal is required for one-shot spawn' });
-      return;
-    }
-
-    req.setTimeout(timeoutMs + REQ_TIMEOUT_BUFFER_MS);
-
-    const agentId = resolveAgentTarget(req.body).agentId;
-
-    const isExploration = explorationIds.length === 0 && !handoffId && !handoffPath;
-    const sessionType = isExploration ? 'exploration' : 'sub';
-
-    let resolvedHandoffPath = null;
-    let sourceSessionId = null;
-    let handoff = null;
-
-    if (isExploration) {
-      sourceSessionId = `__protoclaw-exploration-${Date.now()}__`;
-      console.log(`[spawn_one_shot] Exploration mode: no parent context`);
-    } else {
-      if (explorationIds.length > 0) {
-        const handoffPayload = await buildExplorationHandoffPayload(agentId, explorationIds, goal);
-        const syntheticPath = await writeSyntheticHandoff(agentId, handoffPayload);
-        resolvedHandoffPath = syntheticPath;
-        sourceSessionId = explorationIds[0];
-        console.log(`[spawn_one_shot] Sub-agent mode: from explorations ${explorationIds.join(',')}`);
-      } else {
-        if (!handoffId && !handoffPath) {
-          res.status(400).json({ error: 'handoffId, handoffPath, or explorationIds required' });
-          return;
-        }
-        const handoffResult = await readHandoffPackage({
-          userDataRoot: USER_DATA_ROOT,
-          agentId: agentId || '',
-          handoffId,
-          handoffPath,
-        });
-        handoff = handoffResult.handoff;
-        resolvedHandoffPath = handoffResult.handoffPath;
-        const hSourceAgentId = cleanSessionText(handoff?.sourceAgentId);
-        sourceSessionId = cleanSessionText(handoff?.sourceSessionId);
-        if (!hSourceAgentId || !sourceSessionId) {
-          res.status(400).json({ error: 'Invalid handoff: sourceAgentId/sourceSessionId required' });
-          return;
-        }
-      }
-    }
-
-    const agent = await requirePrebuiltAgentForRuntime(agentId);
-    if (!isExploration && !handoff?.stats?.synthetic && explorationIds.length === 0) {
-      await requirePrebuiltSessionRecord(agent.id, sourceSessionId);
-    }
-
-    const session = await createPrebuiltSession(agent.id, {
-      sourceSessionId,
-      goal,
-      sessionType,
-      metadata: {
-        resumeMode: 'one-shot',
-        ...(isExploration ? {} : {
-          handoffId: cleanSessionText(handoff?.handoffId) || cleanSessionText(handoffId),
-          handoffPath: resolvedHandoffPath,
-          handoffCreatedAt: cleanSessionText(handoff?.createdAt),
-          handoffMode: cleanSessionText(handoff?.mode),
-          sourceExplorationIds: explorationIds.length > 0 ? explorationIds : undefined,
-        }),
-      },
-    });
-
-    console.log(`[spawn_one_shot] Starting agent=${agent.id} session=${session.id} type=${sessionType} goal="${goal.slice(0, 80)}"`);
-
-    const { exitCode, result } = await startOneShotAgent(agent, session.id, goal, {
-      timeoutMs,
-      extraEnv: {
-        PROTOCLAW_SESSION_TYPE: sessionType,
-        PROTOCLAW_MODEL_PRESET_ROLE: sessionType === 'exploration' ? 'exploration' : 'sub',
-        ...(resolvedHandoffPath ? { PROTOCLAW_HANDOFF_PATH: resolvedHandoffPath } : {}),
-      },
-    });
-
-    console.log(`[spawn_one_shot] Completed agent=${agent.id} session=${session.id} type=${sessionType} ok=${result.ok} duration=${result.durationMs}ms`);
-
-    if (isExploration && result.ok) {
-      await lockExplorationSession(agent.id, session.id, goal, result.response);
-    }
-
-    res.json({
-      session: { id: session.id, title: session.title || null, sessionType },
-      result: {
-        ok: result.ok,
-        response: result.response,
-        error: result.error,
-        durationMs: result.durationMs,
-      },
-      exitCode,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post('/protoclaw/resume_sub', express.json(), async (req, res, next) => {
-  try {
-    const { agentId, sessionId: subSessionId } = resolveSessionTarget(req.body);
-    const message = cleanSessionText(req.body?.message);
-    const timeoutMs = Number(req.body?.timeoutMs) || SPAWN_AGENT_TIMEOUT_MS;
-
-    if (!subSessionId || !message) {
-      res.status(400).json({ error: 'sessionId and message are required' });
-      return;
-    }
-
-    req.setTimeout(timeoutMs + REQ_TIMEOUT_BUFFER_MS);
-
-    const agent = await requirePrebuiltAgentForRuntime(agentId);
-
-    await updateSessionIndex(agentId, (index) => {
-      const record = index.sessions.find(s => s.id === subSessionId);
-      if (!record) {
-        throw Object.assign(new Error(`Session ${subSessionId} not found`), { statusCode: 404 });
-      }
-      if (record.sessionType === 'exploration') {
-        throw Object.assign(new Error('Cannot resume an exploration session (it is locked)'), { statusCode: 400 });
-      }
-      if (record.sessionType !== 'sub') {
-        throw Object.assign(new Error(`Session ${subSessionId} is not a sub-agent session (type=${record.sessionType})`), { statusCode: 400 });
-      }
-
-      record.sessionType = 'sub';
-      record.updatedAt = new Date().toISOString();
-      return { ...index };
-    });
-
-    console.log(`[resume_sub] Resuming sub-agent session=${subSessionId} message="${message.slice(0, 80)}"`);
-
-    const { exitCode, result } = await startOneShotAgent(agent, subSessionId, message, {
-      timeoutMs,
-      extraEnv: {
-        PROTOCLAW_MODEL_PRESET_ROLE: 'sub',
-      },
-    });
-
-    console.log(`[resume_sub] Completed session=${subSessionId} ok=${result.ok} duration=${result.durationMs}ms`);
-
-    res.json({
-      session: { id: subSessionId },
-      result: {
-        ok: result.ok,
-        response: result.response,
-        error: result.error,
-        durationMs: result.durationMs,
-      },
-      exitCode,
-    });
   } catch (error) {
     next(error);
   }

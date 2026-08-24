@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import {
-  RUNTIME_SCRIPT, ONE_SHOT_SCRIPT,
+  RUNTIME_SCRIPT,
   VIEWER_PORT, APP_ORIGIN, PROJECT_ROOT,
   NO_SESSION_TOKEN,
   PROCESS_EXIT_WAIT_MS, RUNTIME_READY_WAIT_MS,
@@ -77,14 +77,14 @@ export function buildSharedSessionStartMessage({ sessionId, agentName, projectDi
   };
 }
 
-export function resolveManagedProcessPlacement(agent, sessionRecord, isExplorationSession = false) {
+export function resolveManagedProcessPlacement(agent, sessionRecord) {
   const agentId = sanitizeSessionFragment(agent?.id);
   const projectDir = typeof sessionRecord?.openDirectory === 'string'
     ? sessionRecord.openDirectory.trim()
     : '';
   const processMode = agent?.processMode || PROCESS_MODE_ISOLATED;
 
-  if (isExplorationSession || !projectDir) {
+  if (!projectDir) {
     return { processMode, projectDir, processGroupKey: null };
   }
   if (processMode !== PROCESS_MODE_SHARED_BY_PROJECT && processMode !== PROCESS_MODE_SHARED_GLOBAL) {
@@ -97,7 +97,10 @@ export function resolveManagedProcessPlacement(agent, sessionRecord, isExplorati
   return {
     processMode,
     projectDir,
-    processGroupKey: computeProcessGroupKey(agentId, projectDir, processMode),
+    processGroupKey: computeProcessGroupKey(
+      agentId, projectDir, processMode,
+      sessionRecord?.sessionType && sessionRecord.sessionType !== 'main' ? sessionRecord.sessionType : null,
+    ),
   };
 }
 
@@ -134,18 +137,13 @@ export function createAgentStartupFns(deps) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const runtime = getAgentRuntime(agentId, sessionId);
-      // Exploration agents run headlessly (no ViewerWorker) — just check ready flag
-      if (runtime?.sessionType === 'exploration') {
-        if (runtime.ready) return runtime;
-      } else {
-        const status = buildStatus(agentId, sessionId);
-        if (status.viewerAgentId && runtime?.ready) {
-          const agents = await getConnectedAgents();
-          const viewerAgentId = cleanSessionText(status.viewerAgentId);
-          const connected = agents.find((agent) => cleanSessionText(agent.id) === viewerAgentId || cleanSessionText(agent.runtime_session_id || agent.runtimeSessionId) === viewerAgentId);
-          if (connected) {
-            return connected;
-          }
+      const status = buildStatus(agentId, sessionId);
+      if (status.viewerAgentId && runtime?.ready) {
+        const agents = await getConnectedAgents();
+        const viewerAgentId = cleanSessionText(status.viewerAgentId);
+        const connected = agents.find((agent) => cleanSessionText(agent.id) === viewerAgentId || cleanSessionText(agent.runtime_session_id || agent.runtimeSessionId) === viewerAgentId);
+        if (connected) {
+          return connected;
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -252,8 +250,6 @@ export function createAgentStartupFns(deps) {
 
     const runtimeDisplayName = await resolveRuntimeDisplayName(agent, resolvedSessionId);
 
-    const isExplorationSession = runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE === 'exploration';
-
     // ── Shared-process decision ──────────────────────────────
     // `shared-by-project` groups sessions by project path; `shared-global`
     // groups programming-helper sessions across projects. Both modes retain
@@ -261,19 +257,34 @@ export function createAgentStartupFns(deps) {
     let processMode = agent.processMode || PROCESS_MODE_ISOLATED;
     let processGroupKey = null;
     let projectDir = '';
+    let sessionRecordType = null;
     if (resolvedSessionId) {
       try {
         const idx = await readSessionIndex(agent.id);
         const sessionRecord = (idx?.sessions || []).find(s => s.id === resolvedSessionId);
-        const placement = resolveManagedProcessPlacement(agent, sessionRecord, isExplorationSession);
+        const placement = resolveManagedProcessPlacement(agent, sessionRecord);
         processMode = placement.processMode;
         projectDir = placement.projectDir;
         processGroupKey = placement.processGroupKey;
+        sessionRecordType = cleanSessionText(sessionRecord?.sessionType) || null;
       } catch {
         // Session index unreadable — retain the agent-level default.
       }
     }
-    if (processGroupKey && !isExplorationSession && resolvedSessionId) {
+    // Runtime startup is session-type aware (coder sessions dispatch to the
+    // coder assembly). When the caller does not pass an explicit type, fall
+    // back to the session index record so every path (restart, activate,
+    // resume) carries it consistently.
+    if (sessionRecordType && !runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE) {
+      runtimeOptions = {
+        ...runtimeOptions,
+        extraEnv: {
+          ...(runtimeOptions?.extraEnv || {}),
+          PROTOCLAW_SESSION_TYPE: sessionRecordType,
+        },
+      };
+    }
+    if (processGroupKey && resolvedSessionId) {
       const existingShared = findSharedProcessRuntime(processGroupKey);
         if (existingShared) {
           // ── Join existing shared process via IPC ──
@@ -288,7 +299,7 @@ export function createAgentStartupFns(deps) {
             viewerAgentId: null,
             selectedSessionId: resolvedSessionId || null,
             ready: false,
-            sessionType: null,
+            sessionType: runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE || null,
             gcChatId: null,
             processGroupKey,
           };
@@ -346,11 +357,9 @@ export function createAgentStartupFns(deps) {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: sanitizeSpawnEnv({
         ...childProcessEnv(),
-        ...(isExplorationSession ? {} : {
-          AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
-          AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
-          AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || DEFAULT_UDS_PATH,
-        }),
+        AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
+        AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
+        AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || DEFAULT_UDS_PATH,
         PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
         PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
@@ -435,90 +444,6 @@ export function createAgentStartupFns(deps) {
     });
 
     return buildStatus(agent.id, resolvedSessionId);
-  }
-
-  /**
-   * 启动一次性子代理（阻塞式）。
-   *
-   * 与 startManagedAgent 不同：
-   * - 使用 run-one-shot-agent.js 而非 run-prebuilt-agent.js
-   * - 不连接 ViewerWorker
-   * - 只执行一次 onCall(goal) 后退出
-   * - 返回 Promise，在进程退出时 resolve
-   */
-  async function startOneShotAgent(agent, sessionId, goal, options = {}) {
-    const resolvedSessionId = sanitizeSessionFragment(sessionId);
-    const timeoutMs = options.timeoutMs || CALL_EXECUTION_TIMEOUT_MS;
-
-    return new Promise((resolve, reject) => {
-      let resultLine = null;
-      const stdoutChunks = [];
-
-      const timeout = setTimeout(() => {
-        child.kill('SIGTERM');
-        reject(new Error(`One-shot agent timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      const child = spawn(process.execPath, [
-        ONE_SHOT_SCRIPT,
-        agent.relativeDir,
-        agent.id,
-        resolvedSessionId,
-        goal,
-      ], {
-        cwd: PROJECT_ROOT,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: sanitizeSpawnEnv({
-          ...childProcessEnv(),
-          PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
-          PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
-          PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
-          ...(options.extraEnv && typeof options.extraEnv === 'object' ? options.extraEnv : {}),
-        }),
-        windowsHide: true,
-      });
-
-      child.stdout.on('data', (chunk) => {
-        const text = String(chunk);
-        stdoutChunks.push(text);
-        const lines = text.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('ONE_SHOT_RESULT:')) {
-            resultLine = line;
-          }
-        }
-        log(agent.id, text.trim());
-      });
-
-      child.stderr.on('data', (chunk) => {
-        log(agent.id, String(chunk).trim(), 'error');
-      });
-
-      child.on('exit', (code) => {
-        clearTimeout(timeout);
-        log(agent.id, `one-shot process exited with code ${code ?? 'null'}`);
-
-        if (resultLine) {
-          try {
-            const jsonStr = resultLine.slice('ONE_SHOT_RESULT:'.length);
-            const result = JSON.parse(jsonStr);
-            resolve({ exitCode: code, result, stdout: stdoutChunks.join('') });
-          } catch (err) {
-            reject(new Error(`Failed to parse one-shot result: ${err.message}`));
-          }
-        } else {
-          reject(new Error(
-            `One-shot agent exited (code ${code}) without producing a result. ` +
-            `stdout: ${stdoutChunks.join('').slice(-500)}`,
-          ));
-        }
-      });
-
-      child.on('error', (error) => {
-        clearTimeout(timeout);
-        reject(new Error(`One-shot agent failed to start: ${error.message}`));
-      });
-    });
   }
 
   async function startAssemblyRuntime(sessionId, agentId = 'agent-creator', preActivatedSession = null, preloadedWorkspaceState = null) {
@@ -660,7 +585,6 @@ export function createAgentStartupFns(deps) {
     waitForManagedRuntimeReady,
     waitForAssemblyRuntimeReady,
     startManagedAgent,
-    startOneShotAgent,
     startAssemblyRuntime,
   };
 }

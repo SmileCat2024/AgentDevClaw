@@ -36,20 +36,22 @@
         "send",
         "interrupt",
         "create",
-        "overview",
-        "explorations"
+        "overview"
       ]
     },
     {
-      "id": "explorer",
-      "displayName": "探索代理",
-      "description": "只读分析、知识收集，不可修改文件",
-      "sessionModel": "one-shot",
-      "groupChat": true,
+      "id": "coder",
+      "displayName": "coder",
+      "description": "自主编码智能体：线程化无人值守执行，会话由调度面（ACP / threads CLI / dispatch）创建，不接受用户直接创建",
+      "sessionModel": "persistent",
+      "sessionType": "coder",
+      "qualifierLabel": "项目",
+      "sidebarEntry": true,
       "operations": [
         "status",
-        "spawn",
-        "compact"
+        "sessions",
+        "interrupt",
+        "overview"
       ]
     }
   ],
