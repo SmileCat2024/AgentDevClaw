@@ -115,9 +115,9 @@ function buildChildRuntimeEntry(runtimeAgent) {
 }
 
 function getSidebarOperationPendingName(operation) {
-  // 线程宿主（coder）：trim / summary 是线程内上下文接力，不是「创建新会话」
+  // 线程宿主会话（coder）：trim / summary 是线程内上下文接力，不是「创建新会话」
   const isThreadHost = typeof window.isThreadHostAgentId === 'function'
-    && window.isThreadHostAgentId(operation?.agentId);
+    && window.isThreadHostAgentId(operation?.agentId, operation?.sessionId);
   if (operation?.kind === 'branch') {
     return currentLanguage === 'zh' ? '正在创建分支…' : 'Creating branch…';
   }
@@ -136,7 +136,7 @@ function getSidebarOperationFailureName(operation) {
   // A degraded target operation is reached only after the session mutation has
   // committed. Its failure describes the runtime startup, never session creation.
   const isThreadHost = typeof window.isThreadHostAgentId === 'function'
-    && window.isThreadHostAgentId(operation?.agentId);
+    && window.isThreadHostAgentId(operation?.agentId, operation?.sessionId);
   if (operation?.kind === 'branch') {
     return currentLanguage === 'zh' ? '分支会话启动失败' : 'Branch session failed to start';
   }
@@ -161,7 +161,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // We also cross-reference phProjects to pick up the correct-cased directory
   // path (sessions may store a lowercased path on Windows).
   const sessionDirMap = new Map();
-  if (String(prebuiltAgent?.id || '').trim() === 'programming-helper' || String(prebuiltAgent?.id || '').trim() === 'coder') {
+  if (String(prebuiltAgent?.id || '').trim() === 'programming-helper') {
     const phProjects = Array.isArray(prebuiltAgent?.workspace_state?.phProjects)
       ? prebuiltAgent.workspace_state.phProjects
       : [];
@@ -298,7 +298,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     // Programming-helper groups every runtime by project. Its operation creator
     // must provide this identity explicitly; never infer it from a current or
     // historical session, because either can belong to another project.
-    if ((String(prebuiltAgent?.id || '').trim() === 'programming-helper' || String(prebuiltAgent?.id || '').trim() === 'coder') && !operation.projectDir) continue;
+    if (String(prebuiltAgent?.id || '').trim() === 'programming-helper' && !operation.projectDir) continue;
 
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
       addEntry({

@@ -1300,25 +1300,23 @@ function isUiOnlyUnit(agent) {
   return !!(agent && agent.source === 'prebuilt' && agent.launchMode === 'ui-only');
 }
 
+const WORKSPACE_HOST_UNIT_IDS = new Set(['agent-creator', 'feature-creator', 'agent-studio', 'qqbot', 'programming-helper', 'flow-workspace', 'work-group']);
+
 function isWorkspaceHostUnit(agent) {
-  return !!(agent && agent.source === 'prebuilt' && (agent.id === 'agent-creator' || agent.id === 'feature-creator' || agent.id === 'agent-studio' || agent.id === 'qqbot' || agent.id === 'programming-helper' || agent.id === 'flow-workspace' || agent.id === 'work-group' || agent.id === 'coder'));
-}
-
-// 声明多 tab 并走通用 tab 栏的 host unit（coder 工单看板式首页）：
-// surface 层（tab 栏 / mode 解析）按通用 mode 驱动渲染，
-// 但 sidebar 导航与 runtime 解析仍按 host 处理（isWorkspaceHostUnit 语义不变）。
-const GENERIC_TAB_HOST_UNIT_IDS = new Set(['coder']);
-
-function usesGenericWorkspaceTabs(agent) {
-  return !!(agent && agent.source === 'prebuilt' && GENERIC_TAB_HOST_UNIT_IDS.has(agent.id));
+  if (!agent || agent.source !== 'prebuilt') return false;
+  // 投影条目（identities[].sidebarEntry 展开的独立入口，id 形如
+  // 'programming-helper:coder'）按其宿主 agentId 归入 host 语义。
+  if (agent.agentId) return WORKSPACE_HOST_UNIT_IDS.has(agent.agentId);
+  return WORKSPACE_HOST_UNIT_IDS.has(agent.id);
 }
 
 function isTablessHostSurface(agent) {
-  return isWorkspaceHostUnit(agent) && !usesGenericWorkspaceTabs(agent);
+  return isWorkspaceHostUnit(agent);
 }
 
-// PH 风格工作区（项目列表 / 会话列表首页）：programming-helper 与 coder（线程版编程助手）
-const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper', 'coder']);
+// PH 风格工作区（项目列表 / 会话列表首页）：编程小助手本体。
+// 投影身份（coder）不在此列——其首页是线程视图（coder-threads-ui.js）。
+const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper']);
 
 function isPhStyleWorkspaceAgent(agent = getCurrentAgentRecord()) {
   return !!(agent && agent.source === 'prebuilt' && PH_STYLE_WORKSPACE_AGENT_IDS.has(agent.id));

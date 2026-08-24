@@ -27,6 +27,7 @@ import {
   WorkThreadRuntimeBridge,
 } from '@agentdev/core';
 import { ThreadStore } from './thread-store.js';
+import { ThreadArchiveIndex } from './thread-archive.js';
 import { THREADS_ROOT } from '../shared/constants.js';
 import { submitUserTurn } from '../shared/user-turn.js';
 import { listAgentRuntimes, isManagedRuntimeRunning } from '../shared/agent-access.js';
@@ -38,10 +39,22 @@ import { sanitizeSessionFragment } from '../shared/string-helpers.js';
  * @param {object} [options]
  * @param {string} [options.rootDir] - 数据根目录（默认 THREADS_ROOT，测试注入临时目录）
  * @param {object} [options.bridge] - 桥实例（测试 stub）；缺省按生产装配构建
- * @returns {{ core: WorkThread, board: WorkThreadBoard, store: ThreadStore }}
+ * @returns {{ core: WorkThread, board: WorkThreadBoard, store: ThreadStore, archive: ThreadArchiveIndex }}
  */
 export function createThreadControl({ rootDir = THREADS_ROOT, bridge } = {}) {
   const store = new ThreadStore({ rootDir });
+  const archive = new ThreadArchiveIndex({ rootDir });
+  // runtime 真相：扫描该 host 的 managed runtimes，找「运行中且当前
+  // 绑定会话 === 目标会话」的进程（shared-by-project 模式下注册键可能
+  // 漂移，selectedSessionId 才是当前绑定事实）。routes 侧用它解析
+  // head 会话的 viewer runtime id（供前端中断等操作路由）。
+  const resolveSessionViewerId = (agentId, sessionId) => {
+    const runtime = listAgentRuntimes(agentId).find(
+      (r) => isManagedRuntimeRunning(r)
+        && sanitizeSessionFragment(r.selectedSessionId) === sanitizeSessionFragment(sessionId),
+    );
+    return runtime?.viewerAgentId ?? null;
+  };
   const core = new WorkThread({
     store,
     bridge: bridge
@@ -50,20 +63,11 @@ export function createThreadControl({ rootDir = THREADS_ROOT, bridge } = {}) {
         // 框架桥不带 HTTP 客户端：真实投递必须由宿主注入（viewer 原子
         // user-turn 契约，排队语义由 runtime 侧 CallArbiter 串行消费）。
         submitTurn: submitUserTurn,
-        // runtime 真相：扫描该 host 的 managed runtimes，找「运行中且当前
-        // 绑定会话 === head」的进程（shared-by-project 模式下注册键可能
-        // 漂移，selectedSessionId 才是当前绑定事实）。
-        resolveRuntimeViewerId: (agentId, sessionId) => {
-          const runtime = listAgentRuntimes(agentId).find(
-            (r) => isManagedRuntimeRunning(r)
-              && sanitizeSessionFragment(r.selectedSessionId) === sanitizeSessionFragment(sessionId),
-          );
-          return runtime?.viewerAgentId ?? null;
-        },
+        resolveRuntimeViewerId: resolveSessionViewerId,
       }),
   });
   const board = new WorkThreadBoard({ core, rootDir });
-  return { core, board, store };
+  return { core, board, store, archive, resolveSessionViewerId };
 }
 
 // ── 默认单例（server.js 装配）────────────────────────────────────

@@ -10,7 +10,7 @@
  *   PromptResponse 返回）
  * - turn.failed → end_turn + _meta.claw.terminalFailure（codex-acp 风格，
  *   不抛 JSON-RPC error）
- * - session/close：转发 Claw 归档、幂等（404/thread_closed）、busy 拒绝
+ * - session/close：转发 Claw 归档（archive 路由）、幂等（404）、busy 拒绝
  * - 轮询 404（thread 已不存在）→ 结构化 CLAW_THREAD_LOST 诊断
  * - stale terminal replay is caught by eventId dedup → skipped, keep waiting
  * - cancel before turn.started → immediate cancelled, exactly one interrupt,
@@ -41,7 +41,7 @@ import {
 // ── mock claw client（脚本式：pages 逐页消费） ─────────────────────
 
 function makeMockClawClient(overrides = {}) {
-  const calls = { createSessions: [], commands: [], events: [], interrupts: [], closes: [] };
+  const calls = { createSessions: [], commands: [], events: [], interrupts: [], archives: [] };
   const state = {
     sessionResponse: {
       ok: true,
@@ -83,10 +83,10 @@ function makeMockClawClient(overrides = {}) {
       if (state.interruptError) throw state.interruptError;
       return { ok: true, clawSessionId };
     },
-    async closeThread(threadId) {
-      calls.closes.push(threadId);
-      if (state.closeError) throw state.closeError;
-      return { ok: true, thread: { threadId, status: 'closed' } };
+    async archiveThread(threadId) {
+      calls.archives.push(threadId);
+      if (state.archiveError) throw state.archiveError;
+      return { ok: true, threadId, archivedAt: 1 };
     },
   };
 }
@@ -464,11 +464,11 @@ describe('poll failure mapping', () => {
 });
 
 describe('session/close', () => {
-  it('forwards thread close to Claw, removes the mapping, returns {}', async () => {
+  it('forwards thread archive to Claw, removes the mapping, returns {}', async () => {
     const claw = makeMockClawClient();
     const { manager, sessionId } = await makeSession(claw);
     assert.deepEqual(await manager.closeSession(sessionId), {});
-    assert.deepEqual(claw.calls.closes, ['thread-1']);
+    assert.deepEqual(claw.calls.archives, ['thread-1']);
     assert.equal(manager.getSession(sessionId), null);
     assert.equal(manager.size, 0);
   });
@@ -491,21 +491,20 @@ describe('session/close', () => {
     assert.deepEqual(await first, { stopReason: 'cancelled' });
   });
 
-  it('already-closed thread (404 / thread_closed) is idempotent success', async () => {
-    for (const closeError of [
+  it('already-gone thread (404) is idempotent success', async () => {
+    for (const archiveError of [
       new ClawHttpError(404, { ok: false, code: 'thread_not_found' }),
-      new ClawHttpError(409, { ok: false, code: 'thread_closed' }),
     ]) {
-      const claw = makeMockClawClient({ closeError });
+      const claw = makeMockClawClient({ archiveError });
       const { manager, sessionId } = await makeSession(claw);
       assert.deepEqual(await manager.closeSession(sessionId), {});
       assert.equal(manager.size, 0);
     }
   });
 
-  it('other close failures map to -32003 and keep the mapping', async () => {
+  it('other archive failures map to -32003 and keep the mapping', async () => {
     const claw = makeMockClawClient({
-      closeError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'x' }),
+      archiveError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'x' }),
     });
     const { manager, sessionId } = await makeSession(claw);
     await assert.rejects(manager.closeSession(sessionId), (error) => error.code === ERROR_CODES.CLAW_ERROR);
@@ -547,7 +546,7 @@ describe('claw-client request assembly (HTTP layer)', () => {
     });
     await claw.createCoderSession('C:/work');
     await claw.appendUserMessage('thread-1', { text: 'hi', idempotencyKey: 'acp-x' });
-    await claw.closeThread('thread-1');
+    await claw.archiveThread('thread-1');
 
     assert.deepEqual(sent[0], {
       url: 'http://127.0.0.1:1/protoclaw/acp/coder/sessions',
@@ -560,9 +559,9 @@ describe('claw-client request assembly (HTTP layer)', () => {
       body: { kind: 'user_message', text: 'hi', source: 'acp', idempotencyKey: 'acp-x' },
     });
     assert.deepEqual(sent[2], {
-      url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/close',
+      url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/archive',
       method: 'POST',
-      body: { reason: 'acp session/close' },
+      body: null,
     });
   });
 });

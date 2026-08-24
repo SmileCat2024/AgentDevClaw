@@ -48,6 +48,21 @@ function makeControl(root, bridgeOptions = {}) {
   return createThreadControl({ rootDir: root, bridge: new WorkThreadRuntimeBridge(bridgeOptions) });
 }
 
+test('production assembly (no injected bridge) constructs without reference errors', async () => {
+  // thread-control 测试全部注入 bridge stub，曾让生产装配路径里的
+  // 未定义标识符（resolveRuntimeViewerId 重命名漏改）溜过全量回归。
+  // 这里走真实装配：createThreadControl 不带 bridge。
+  const root = await makeTempRoot();
+  try {
+    const control = createThreadControl({ rootDir: root });
+    assert.equal(typeof control.resolveSessionViewerId, 'function');
+    assert.equal(typeof control.archive.isArchived, 'function');
+    assert.equal(control.resolveSessionViewerId('no-such-agent', 'no-such-session'), null);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 describe('ThreadStore (framework WorkThreadStore + Claw legacy shell)', () => {
   let root;
   before(async () => {

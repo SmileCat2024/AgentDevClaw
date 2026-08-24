@@ -542,7 +542,13 @@ describe('thread events — additive eventId / receivedAt', () => {
       getState: async () => state,
       recordRuntimeEvent: async () => ({ applied: true }),
     };
-    setupThreadRoutes(app, makeMockExpress(), { control: { core: {}, board } });
+    setupThreadRoutes(app, makeMockExpress(), {
+      control: {
+        core: {},
+        board,
+        archive: { list: async () => ({}), isArchived: async () => false, archive: async () => ({ archivedAt: 1 }), unarchive: async () => null },
+      },
+    });
     return app;
   }
 

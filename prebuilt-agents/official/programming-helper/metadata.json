@@ -52,7 +52,35 @@
         "sessions",
         "interrupt",
         "overview"
-      ]
+      ],
+      "ui": {
+        "entry": "sessions",
+        "tabs": [
+          {
+            "id": "sessions",
+            "label": {
+              "zh": "线程",
+              "en": "Threads"
+            }
+          },
+          {
+            "id": "chat",
+            "label": {
+              "zh": "对话",
+              "en": "Chat"
+            }
+          }
+        ],
+        "home": {
+          "blocks": [
+            {
+              "id": "coder-threads",
+              "type": "coder-threads",
+              "visibility": "tab:sessions"
+            }
+          ]
+        }
+      }
     }
   ],
   "ui": {

@@ -6,6 +6,7 @@ import {
   sanitizeSessionFragment, cleanSessionText,
 } from '../shared/string-helpers.js';
 import { getGroupChatsForSidebar } from './group-chat.js';
+import { collectSidebarIdentityEntries } from './agent-discovery.js';
 
 // ── Connected Agents Query ───────────────────────────────────────
 // Pure query logic: assembles the full connected-agents list from
@@ -213,7 +214,39 @@ export function createConnectedAgentsQuery(deps) {
       })
     );
 
-    return connectedAgents;
+    // Sidebar 投影：identities[].sidebarEntry=true 的身份展开为独立侧栏条目。
+    // 必须在状态/callActive 全部落定后拷贝宿主字段（共享 runtime 状态），
+    // 并紧邻宿主插入以保持侧栏分组顺序。runtime 匹配循环不会看到投影条目
+    //（id 含 ':'，且 name 匹配时宿主条目在前），不会误绑外部 runtime。
+    const projectionsByHostId = new Map();
+    for (const light of prebuiltAgents) {
+      const identities = collectSidebarIdentityEntries(light);
+      if (!identities.length) continue;
+      const host = connectedAgents.find((a) => a.source === 'prebuilt' && a.id === light.id);
+      if (!host) continue;
+      projectionsByHostId.set(light.id, await Promise.all(identities.map(async (identity) => ({
+        ...host,
+        id: `${host.id}:${identity.id}`,
+        agentId: host.id,
+        sessionType: identity.sessionType || identity.id,
+        name: identity.displayName || identity.id,
+        base_name: identity.displayName || identity.id,
+        description: identity.description || host.description,
+        icon: identity.icon || host.icon || null,
+        ui: identity.ui || null,
+        modelPresets: await resolveAgentModelPresets(identity.id, identity.modelPresets),
+      }))));
+    }
+    if (projectionsByHostId.size === 0) {
+      return connectedAgents;
+    }
+    const withProjections = [];
+    for (const entry of connectedAgents) {
+      withProjections.push(entry);
+      const projections = entry.source === 'prebuilt' ? projectionsByHostId.get(entry.id) : null;
+      if (projections) withProjections.push(...projections);
+    }
+    return withProjections;
   }
 
   return { getConnectedAgents };

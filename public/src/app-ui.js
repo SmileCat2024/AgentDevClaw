@@ -1175,7 +1175,6 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'session-list') return renderWorkspaceSessionList(agent, block);
   if (block.type === 'studio-projects') return renderStudioProjectsBlock(agent, block);
   if (block.type === 'coder-threads') return window.CoderThreadsUI?.render?.() || '';
-  if (block.type === 'coder-settings') return window.CoderSettingsUI?.render?.() || '';
   if (block.type === 'form') return renderWorkspaceForm(agent, block);
   if (block.type === 'status-grid') return renderWorkspaceStatusGrid(agent, block);
   if (block.type === 'assembly-library') return renderAssemblyLibraryBlock(agent, block);

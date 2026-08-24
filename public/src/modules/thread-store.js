@@ -139,10 +139,17 @@ function _currentActiveSession() {
 // ── 会话列表徽标（渲染点由 session-list-render.js 调用）──────────
 
 /**
- * 线程宿主工作空间判定（与服务端 THREAD_HOST_AGENT_IDS 对应）。
- * 侧栏占位 / 过渡标签据此切换为「线程接力」文案；其他工作空间不受影响。
+ * 线程宿主判定（会话级）：给定会话属于某条线程（即 coder 会话）时为真。
+ * 线程宿主已从独立工作空间并入编程小助手（sessionType=coder），宿主级
+ * 判定无法区分 main 会话与 coder 会话，调用方必须传 sessionId。
+ * 线程索引未就绪（首拉前）时保守返回 false。
  */
-window.isThreadHostAgentId = (agentId) => String(agentId || '').trim() === 'coder';
+window.isThreadHostAgentId = (agentId, sessionId) => {
+  const id = String(agentId || '').trim();
+  if (!id || !sessionId) return false;
+  return !!(window.ClawThreads?.sessionIndex
+    && window.ClawThreads.sessionIndex[`${id}::${sessionId}`]);
+};
 
 /** 交接意图是否仍在窗口内（与服务端 isHandoffActive 同一派生规则） */
 function _handoffFresh(thread) {

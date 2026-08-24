@@ -525,10 +525,11 @@ export function createSessionManager(options = {}) {
   }
 
   /**
-   * session/close（协议 v1 正式方法）：转发 Claw 归档 thread 并释放映射。
-   * 有 in-flight prompt 时拒绝（先 session/cancel）；thread 已在 server 侧
-   * 关闭（404 / thread_closed）视为幂等成功。adapter 断开不触发本方法
-   * （dispose 只清内存）——归档只在 client 显式请求时发生。
+   * session/close（协议 v1 正式方法）：转发 Claw 归档 thread（archive 标记
+   * 收纳语义，成员会话保留）并释放映射。有 in-flight prompt 时拒绝（先
+   * session/cancel——即先中断再归档）；thread 已消失或已归档视为幂等成功。
+   * adapter 断开不触发本方法（dispose 只清内存）——归档只在 client
+   * 显式请求时发生。
    */
   async function closeSession(acpSessionId) {
     const session = sessions.get(acpSessionId);
@@ -539,7 +540,7 @@ export function createSessionManager(options = {}) {
       throw sessionBusyError(session.activePrompt.generation);
     }
     try {
-      await clawClient.closeThread(session.threadId, {
+      await clawClient.archiveThread(session.threadId, {
         method: 'session/close',
         acpSessionId,
         clawSessionId: session.clawSessionId,
@@ -547,7 +548,6 @@ export function createSessionManager(options = {}) {
     } catch (error) {
       const alreadyGone = error instanceof ClawHttpError
         && (error.status === 404
-          || error.body?.code === 'thread_closed'
           || error.body?.code === 'thread_not_found');
       if (!alreadyGone) throw toAcpError(error);
     }

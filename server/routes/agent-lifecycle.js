@@ -9,6 +9,7 @@ import { readProjectIMWorkspaceConfig } from './im.js';
 import { sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createConnectedAgentsQuery } from './agent-connected.js';
+import { collectSidebarIdentityEntries } from './agent-discovery.js';
 import { createAgentStartupFns } from './agent-startup.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
@@ -162,7 +163,7 @@ export function createAgentLifecycleModule(ctx) {
     app.get('/protoclaw/get_prebuilt_agents', async (_req, res, next) => {
       try {
         const agents = await getAgents();
-        res.json(agents.map((agent) => ({
+        const baseEntries = agents.map((agent) => ({
           id: agent.id,
           name: agent.name,
           description: agent.description,
@@ -180,7 +181,29 @@ export function createAgentLifecycleModule(ctx) {
           active_workspace_session_id: agent.workspace_sessions?.activeSessionId || null,
           modelPresets: agent.modelPresets || null,
           entry_point: agent.relativeDir,
-        })));
+        }));
+        // Sidebar 投影：identities[].sidebarEntry=true 的身份展开为独立条目
+        //（共享宿主字段 + agentId/sessionType 视图上下文），与 agent-connected
+        // 的投影语义一致。
+        const entries = [];
+        for (let i = 0; i < baseEntries.length; i += 1) {
+          const base = baseEntries[i];
+          entries.push(base);
+          for (const identity of collectSidebarIdentityEntries(agents[i])) {
+            entries.push({
+              ...base,
+              id: `${base.id}:${identity.id}`,
+              agentId: base.id,
+              sessionType: identity.sessionType || identity.id,
+              name: identity.displayName || identity.id,
+              description: identity.description || base.description,
+              icon: identity.icon || base.icon,
+              ui: identity.ui || null,
+              modelPresets: await resolveAgentModelPresets(identity.id, identity.modelPresets),
+            });
+          }
+        }
+        res.json(entries);
       } catch (error) {
         next(error);
       }

@@ -91,8 +91,8 @@ function startMockClawServer() {
         send(200, { ok: true, clawSessionId: 'claw-wire-1', viewerAgentId: 'vw-1' });
         return;
       }
-      if (req.method === 'POST' && req.url === '/protoclaw/threads/thread-wire/close') {
-        send(200, { ok: true, thread: { threadId: 'thread-wire', status: 'closed' } });
+      if (req.method === 'POST' && req.url === '/protoclaw/threads/thread-wire/archive') {
+        send(200, { ok: true, threadId: 'thread-wire', archivedAt: 1 });
         return;
       }
       send(404, { ok: false, code: 'not_found', message: req.url });
@@ -276,9 +276,8 @@ describe('coder ACP adapter wire protocol', () => {
       });
       assert.equal(closed.error, undefined);
       assert.deepEqual(closed.result, {});
-      const closeReq = claw.record.requests.find((r) => r.url === '/protoclaw/threads/thread-wire/close');
-      assert.ok(closeReq, 'close request missing');
-      assert.equal(closeReq.body.reason, 'acp session/close');
+      const closeReq = claw.record.requests.find((r) => r.url === '/protoclaw/threads/thread-wire/archive');
+      assert.ok(closeReq, 'archive request missing');
 
       // stdout 纯度：每行都是 JSON-RPC 帧（jsonrpc === '2.0'），无日志混入
       assert.deepEqual(adapter.parseFailures, []);

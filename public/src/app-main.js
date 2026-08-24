@@ -97,10 +97,12 @@ function groupConnectedAgents(agents) {
     return !parentId || !prebuiltIds.has(parentId);
   });
   const allPrebuilt = agents.filter((agent) => agent.source === 'prebuilt');
+  // 投影条目（id 形如 'programming-helper:coder'）按宿主 agentId 归组
+  const groupKeyOf = (agent) => String(agent.agentId || agent.id || '').trim();
   return {
-    prebuilt: allPrebuilt.filter((agent) => !TOOL_AGENT_IDS.has(String(agent.id || '').trim()) && !WORK_GROUP_IDS.has(String(agent.id || '').trim())),
-    workGroup: allPrebuilt.filter((agent) => WORK_GROUP_IDS.has(String(agent.id || '').trim())),
-    tool: allPrebuilt.filter((agent) => TOOL_AGENT_IDS.has(String(agent.id || '').trim())),
+    prebuilt: allPrebuilt.filter((agent) => !TOOL_AGENT_IDS.has(groupKeyOf(agent)) && !WORK_GROUP_IDS.has(groupKeyOf(agent))),
+    workGroup: allPrebuilt.filter((agent) => WORK_GROUP_IDS.has(groupKeyOf(agent))),
+    tool: allPrebuilt.filter((agent) => TOOL_AGENT_IDS.has(groupKeyOf(agent))),
     external: orphanRuntimeAgents,
   };
 }
@@ -160,12 +162,19 @@ window.handlePrebuiltAgentClick = async (agentId) => {
   }
 
   if (isWorkspaceHostUnit(prebuiltAgent)) {
+    // 投影条目（如 programming-helper:coder）：详情数据挂宿主命名空间，
+    // surface 键挂条目自身（entry id），侧栏高亮与记忆也按条目记录。
+    const hostAgentId = prebuiltAgent.agentId || prebuiltAgent.id;
     focusedAgentId = agentId;
     renderAgentList();
-    if (!loadedAgentDetailIds.has(agentId)) {
+    if (!loadedAgentDetailIds.has(hostAgentId)) {
       container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
     }
-    await loadAgentDetail(prebuiltAgent.id);
+    await loadAgentDetail(hostAgentId);
+    loadedAgentDetailIds.add(agentId);
+    if (prebuiltAgent.agentId) {
+      try { localStorage.setItem('claw:lastFocusedEntryId', agentId); } catch { /* ignore */ }
+    }
     selectWorkspaceSurface(prebuiltAgent.id, { skipFeaturePanel: true });
     return;
   }
@@ -660,9 +669,11 @@ window.switchAgent = async (newAgentId) => {
       .catch(e => console.warn(e));
 
     // 焦点已前端化（服务端 current agent 语义已移除）：持久化记忆本次焦点，
-    // 供下次打开页面时恢复（sidebar-render.js 读取）。
+    // 供下次打开页面时恢复（sidebar-render.js 读取）。进入会话浏览时投影
+    // 入口记忆让位（claw:lastFocusedEntryId 只保留「停留在入口首页」的语义）。
     try {
       localStorage.setItem('claw:lastFocusedRuntimeId', runtimeAgentId);
+      localStorage.removeItem('claw:lastFocusedEntryId');
     } catch { /* localStorage 不可用时静默忽略 */ }
 
     await loadAgentData(runtimeAgentId);

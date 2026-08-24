@@ -54,6 +54,23 @@ export function collectIdentitiesFromAgents(agents) {
   return identities;
 }
 
+/**
+ * 提取声明了独立侧栏入口的身份（identities[].sidebarEntry: true）。
+ * 这些身份在 agent 列表响应中展开为独立条目：共享宿主 runtime 状态，
+ * 各自携带 agentId / sessionType 视图上下文。缺省（main）身份由宿主
+ * 基础条目承载，不重复投影。纯函数，可直接 import 测试。
+ */
+export function collectSidebarIdentityEntries(agent) {
+  const declared = Array.isArray(agent?.identities) ? agent.identities : [];
+  const entries = [];
+  for (const identity of declared) {
+    if (!identity?.sidebarEntry) continue;
+    if (!identity.id || identity.id === 'main') continue;
+    entries.push(identity);
+  }
+  return entries;
+}
+
 // ── Agent Discovery + Identity ─────────────────────────────────────
 // Factory pattern: sessionApi is a mutable reference object that gets
 // filled after session-helpers is created, breaking the circular

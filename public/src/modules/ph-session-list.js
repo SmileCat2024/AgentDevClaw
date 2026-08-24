@@ -151,7 +151,13 @@ window.phOnSearchInput = (value) => {
       const data = await resp.json();
       // Guard against stale results
       if (phSearchQuery.trim() !== trimmed) return;
-      phSearchResults = data.results || [];
+      // coder 会话不进入编程小助手入口的搜索结果（线程视图承接它们）
+      const coderSessionIds = new Set(
+        (activeAgent?.workspace_sessions?.sessions || [])
+          .filter((s) => String(s?.sessionType || '').trim() === 'coder')
+          .map((s) => String(s?.id || '')),
+      );
+      phSearchResults = (data.results || []).filter((r) => !coderSessionIds.has(String(r?.sessionId || '')));
       phSearchLoading = false;
       _updatePhSearchPanelDom(agentId);
     } catch (err) {
