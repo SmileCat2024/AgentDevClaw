@@ -35,6 +35,7 @@ import {
   ACP_READY_TIMEOUT_DEFAULT_MS,
 } from '../server/routes/acp.js';
 import { setupThreadRoutes } from '../server/thread-control/thread-routes.js';
+import { createSessionHelpers } from '../server/routes/session-helpers.js';
 import { managedAgents } from '../server/shared/agent-access.js';
 import { VIEWER_ORIGIN } from '../server/shared/constants.js';
 
@@ -947,5 +948,22 @@ describe('thread events — additive eventId / receivedAt', () => {
     const app = setupEventsRoute(null);
     const res = await callEvents(app, 'missing', { after: '0' });
     assert.deepEqual(res.body, { ok: true, events: [], cursor: 0 });
+  });
+});
+
+// ── Server 接线契约（回归：session/load 曾因工厂未导出快照读取而运行时报错）──
+
+describe('server wiring contract for ACP routes', () => {
+  it('createSessionHelpers 导出 setupAcpRoutes 的无条件依赖', () => {
+    const helpers = createSessionHelpers({});
+    assert.equal(typeof helpers.requirePrebuiltSessionRecord, 'function');
+    assert.equal(typeof helpers.readSessionSnapshotForContinuity, 'function');
+  });
+
+  it('setupAcpRoutes 对缺失的无条件依赖启动即报错', () => {
+    assert.throws(
+      () => setupAcpRoutes(makeMockApp(), makeMockExpress(), {}),
+      /missing required ctx dependency "requirePrebuiltSessionRecord"/,
+    );
   });
 });

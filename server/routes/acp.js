@@ -128,6 +128,14 @@ export function setupAcpRoutes(app, express, ctx) {
     readSessionSnapshotForContinuity,
   } = ctx;
 
+  // 无条件依赖做启动时校验：接线遗漏（如工厂未导出）立即暴露在 server 启动，
+  // 而不是等到请求时报 "xxx is not a function"。
+  for (const dep of ['requirePrebuiltSessionRecord', 'readSessionSnapshotForContinuity']) {
+    if (typeof ctx[dep] !== 'function') {
+      throw new Error(`setupAcpRoutes: missing required ctx dependency "${dep}"`);
+    }
+  }
+
   /**
    * 失败回滚阶梯（设计 §5）。每步独立 best-effort：前步失败不阻断后步，
    * 失败步骤与遗留对象 ID 全部如实上报。

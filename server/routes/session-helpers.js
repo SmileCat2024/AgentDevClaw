@@ -1366,6 +1366,7 @@ async function resolveContextLength(agentId) {
     archivePrebuiltSession,
     tagPrebuiltSessionTodo,
     requirePrebuiltSessionRecord,
+    readSessionSnapshotForContinuity,
     resolvePrebuiltSessionOwner,
     requirePrebuiltAgentForRuntime,
     ...handoffHelpers,
