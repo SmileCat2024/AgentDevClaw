@@ -358,22 +358,46 @@ async function runGit(args, cwd) {
   return stdout;
 }
 
-/** 解析目录所属 git 仓库根；非仓库返回 null（stderr 特征判别） */
-async function resolveGitRoot(dir) {
-  try {
-    const stdout = await runGit(['rev-parse', '--show-toplevel'], dir);
-    const root = stdout.trim();
-    // 空输出属于异常（并发/瞬时故障），不能静默当作非仓库——
-    // 抛错走 500，前端保留旧数据重试，避免"不是 git 仓库"误报闪现
-    if (!root) throw new Error('git rev-parse returned empty output');
-    return root;
-  } catch (error) {
-    const message = String(error?.message || error || '');
-    if (/not a git repository|no git repository/i.test(message)) {
-      return null;
+/**
+ * 解析目录所属 git 仓库根；非仓库返回 null（stderr 特征判别）。
+ *
+ * 结果缓存：仓库根几乎不变，命中缓存后正常刷新路径不再跑 rev-parse，
+ * 把该命令的失败面压缩到趋零（仅首次解析）；非仓库负结果短 TTL 缓存，
+ * 不阻碍 git init 后的重新识别。空输出属异常（瞬时故障），原地重试
+ * 一次后仍空才报错。
+ */
+const rootCache = new Map(); // dir → { root: string|null, at: number }
+const ROOT_TTL_MS = 10 * 60 * 1000; // 仓库根缓存有效期（过期后重验一次）
+const ROOT_NEG_TTL_MS = 30 * 1000;  // 非仓库负结果有效期
+
+async function resolveGitRootUncached(dir) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const stdout = await runGit(['rev-parse', '--show-toplevel'], dir);
+      const root = stdout.trim();
+      if (root) return root;
+      // 空输出属异常（stdout 未收齐/瞬时故障），重试一次
+    } catch (error) {
+      const message = String(error?.message || error || '');
+      if (/not a git repository|no git repository/i.test(message)) {
+        return null;
+      }
+      throw error;
     }
-    throw error;
   }
+  throw new Error('git rev-parse returned empty output');
+}
+
+async function resolveGitRoot(dir) {
+  const now = Date.now();
+  const hit = rootCache.get(dir);
+  if (hit) {
+    const ttl = hit.root === null ? ROOT_NEG_TTL_MS : ROOT_TTL_MS;
+    if (now - hit.at < ttl) return hit.root;
+  }
+  const root = await resolveGitRootUncached(dir);
+  rootCache.set(dir, { root, at: now });
+  return root;
 }
 
 /** 校验请求目录并归一化；非法时抛 statusCode=400 错误 */

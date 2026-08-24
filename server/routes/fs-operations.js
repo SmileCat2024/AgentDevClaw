@@ -40,7 +40,10 @@ export function runCommand(command, args, options = {}) {
       stderr += String(chunk);
     });
     child.on('error', reject);
-    child.on('exit', (code) => {
+    // 用 close 而非 exit：exit 触发时 stdio 流可能尚未 drain，stdout
+    // 会偶发丢尾巴甚至为空（git rev-parse 空输出的根源）；close 保证
+    // stdio 全部关闭、数据收完。Promise 幂等，error 后的 close 无害。
+    child.on('close', (code) => {
       if (code === 0) {
         resolve({ stdout, stderr });
         return;

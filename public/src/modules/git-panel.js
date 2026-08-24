@@ -242,8 +242,15 @@
       }
       state.status = status.status || state.status;
       state.root = status.root || state.root;
+      // 错误自愈：status 恢复成功即清除顶部错误与 status 分区错误，
+      // 瞬时故障的提示最多挂一个轮询周期（~5s），无需手动刷新
+      if (state.error) state.error = '';
+      if (state.errors.status) delete state.errors.status;
     }
-    if (branches && branches.ok) state.branches = branches;
+    if (branches && branches.ok) {
+      state.branches = branches;
+      if (state.errors.branches) delete state.errors.branches;
+    }
     if (wantGraph && graph && graph.ok) {
       state.graph = Array.isArray(graph.commits) ? graph.commits : [];
       state.aheadHashes = Array.isArray(graph.aheadHashes) ? graph.aheadHashes : [];

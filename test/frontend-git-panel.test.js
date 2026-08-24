@@ -165,4 +165,30 @@ describe('git-panel 刷新链路稳定性', () => {
       ctx.__disposeTimers();
     }
   });
+
+  it('status 端点瞬时失败后恢复，顶部错误自动清除', async () => {
+    let statusFail = true;
+    const fetchImpl = async (url) => {
+      const op = url.split('/').pop();
+      if (op === 'status' && statusFail) return { ok: false, status: 500, json: async () => ({ error: 'git rev-parse returned empty output' }) };
+      return { ok: true, json: async () => ({ status: okStatus('/repo'), graph: okGraph, branches: okBranches }[op]) };
+    };
+    const ctx = makeSandbox({ fetchImpl });
+    try {
+      ctx.window.GitPanel.onOpen();
+      await tick(); await tick();
+      let html = ctx.window.GitPanel.render();
+      assert.ok(html.includes('rev-parse') || html.includes('失败'), 'status 失败时顶部错误可见');
+
+      // 恢复后刷新（与 silentRefresh 清错为同一状态路径）
+      statusFail = false;
+      ctx.window.GitPanel.refresh();
+      await tick(); await tick();
+      html = ctx.window.GitPanel.render();
+      assert.ok(!html.includes('rev-parse'), '恢复后顶部错误清除');
+      assert.ok(html.includes('git-panel'), '面板正常');
+    } finally {
+      ctx.__disposeTimers();
+    }
+  });
 });
