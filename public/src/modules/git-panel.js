@@ -133,9 +133,11 @@
   }
 
   /** 全量拉取：status + graph + branches 并行（graph 按当前分支过滤） */
+  let loadSeq = 0;
   async function loadAll() {
     const dir = state.dir || currentSessionDir();
     if (!dir || state.loading) return;
+    const seq = ++loadSeq;
     state.loading = true;
     state.error = '';
     try {
@@ -147,14 +149,17 @@
         safe('graph', api('graph', { dir, limit: state.graphLimit, branch: state.branch })),
         safe('branches', api('branches', { dir })),
       ]);
-      // 响应返回时会话可能已切走：丢弃过期结果
-      if ((state.dir || currentSessionDir()) !== dir) return;
-      state.isRepo = status ? status.isRepo !== false : true;
-      state.root = status?.root || '';
-      state.status = status?.status || null;
-      state.graph = Array.isArray(graph?.commits) ? graph.commits : [];
-      state.aheadHashes = Array.isArray(graph?.aheadHashes) ? graph.aheadHashes : [];
-      state.branches = branches || null;
+      // 过期响应丢弃：会话已切走或又有更新的加载发起时，不应用本次结果
+      if (seq !== loadSeq || (state.dir || currentSessionDir()) !== dir) return;
+      state.isRepo = status ? status.isRepo !== false : state.isRepo;
+      state.root = status?.root || state.root;
+      // 端点本次失败（null）时保留上次成功值，避免刷新一次失败就把记录图/状态清空
+      state.status = status?.status || state.status;
+      if (graph) {
+        state.graph = Array.isArray(graph.commits) ? graph.commits : [];
+        state.aheadHashes = Array.isArray(graph.aheadHashes) ? graph.aheadHashes : [];
+      }
+      if (branches) state.branches = branches;
       state.errors = errors;
       state.error = errors.status || '';
       state.expandedCommit = state.expandedCommit
@@ -169,6 +174,46 @@
   }
 
   const refresh = loadAll;
+
+  /**
+   * 静默自动刷新：面板打开期间周期性地轻量重拉 status + branches（graph
+   * 较重且只在写操作后变化，不纳入轮询）。不触碰 loading/busy/错误态，
+   * 不打断输入；数据未变时 renderFeaturePanel 的 HTML 签名缓存会跳过 DOM
+   * 替换，无闪烁。
+   */
+  const AUTO_MS = 5000;
+  const autoOk = (p) => p.then((d) => d).catch(() => null);
+  let autoTimer = null;
+  async function silentRefresh() {
+    const dir = currentSessionDir();
+    if (!dir || state.loading || state.busy || state.dir !== dir) return;
+    const [status, branches] = await Promise.all([
+      autoOk(api('status', { dir })),
+      autoOk(api('branches', { dir })),
+    ]);
+    if (state.dir !== dir || state.loading) return;
+    if (status && status.ok) {
+      state.status = status.status || state.status;
+      state.isRepo = status.isRepo !== false;
+      state.root = status.root || state.root;
+    }
+    if (branches && branches.ok) state.branches = branches;
+    repaint();
+  }
+  function stopAutoRefresh() {
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  }
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    autoTimer = setInterval(() => {
+      if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'git') {
+        stopAutoRefresh();
+        return;
+      }
+      silentRefresh();
+    }, AUTO_MS);
+  }
+
 
   /**
    * 首次切入不加载的修复：切入面板时会话数据（agent record 的
@@ -409,6 +454,27 @@
     }
   }
 
+  // 展开提交详情时，泳道必须跟随文字列一起下移（否则错位）。
+  // 这里在渲染前按"每行 ROW_H + 展开详情高度"算出每行圆心的绝对 y。
+  const DATASET_ROW_H = 26;  // 与 git-graph.js ROW_H 严格一致
+  const FILE_LINE_H = 23;     // 与 CSS .git-commit-file 行高一致
+  const DETAIL_FLOW_V = 8;   // 详情容器垂直留白（padding-top 2 + padding-bottom 6）
+  function commitDetailHeight(hash) {
+    const files = state.commitFiles[hash];
+    const n = Array.isArray(files) ? files.length : 0;
+    return DETAIL_FLOW_V + Math.max(1, n) * FILE_LINE_H;
+  }
+  function computeRowTops(commits) {
+    const tops = [];
+    let cursor = 0;
+    commits.forEach((c) => {
+      tops.push(cursor);
+      cursor += DATASET_ROW_H;
+      if (state.expandedCommit === c.hash) cursor += commitDetailHeight(c.hash);
+    });
+    return tops;
+  }
+
   function renderGraphBody() {
     const commits = state.graph;
     if (state.errors.graph) {
@@ -418,11 +484,21 @@
       return '<div class="git-empty-desc">' + esc(zh('暂无提交', 'No commits yet')) + '</div>';
     }
 
-    const lanes = window.GitGraph.computeLanes(commits);
-    const headRow = 0; // log 新→旧，第一行即所选分支顶端
     // 「传出的更改」虚线节点仅在查看当前分支（branch 未过滤）时有意义
     const aheadSet = state.branch ? new Set() : new Set(state.aheadHashes);
-    const svg = window.GitGraph.buildGraphSvg(lanes, headRow, aheadSet);
+
+    // 泳道算法与 SVG 构建受保护：任何异常都降级为错误提示，绝不让整个
+    // 面板空白（刷新/展开等场景偶发异常不应清空视图）。
+    let lanes;
+    let svg;
+    try {
+      lanes = window.GitGraph.computeLanes(commits);
+      const rowTops = computeRowTops(commits);
+      svg = window.GitGraph.buildGraphSvg(lanes, 0, aheadSet, rowTops);
+    } catch (err) {
+      return '<div class="git-empty-desc">' + esc(zh('历史渲染失败：', 'Failed to render history: ')) + esc(String(err?.message || err)) + '</div>';
+    }
+    const headRow = 0; // log 新→旧，第一行即所选分支顶端
 
     // 头部区段里第一个「已推送」提交的行号（传出的更改分组行的插入点）
     let outgoingEnd = 0;
@@ -556,53 +632,6 @@
     document.addEventListener('mousedown', onBranchMenuOutside, true);
   }
 
-  // ── 渲染：分支（上区内部可折叠分区）──────────────────────────────
-
-  function renderBranchRow(b) {
-    const current = !!b.current;
-    const tracking = current && state.status && state.status.tracking;
-    const aheadBehind = tracking
-      ? (state.status.ahead ? '<span class="git-branch-flag is-ahead" title="' + esc(zh('领先远程', 'ahead of remote')) + '">&#8593;' + state.status.ahead + '</span>' : '')
-        + (state.status.behind ? '<span class="git-branch-flag is-behind" title="' + esc(zh('落后远程', 'behind remote')) + '">&#8595;' + state.status.behind + '</span>' : '')
-      : '';
-    // 远程分支只读展示（检出会造成 detached HEAD），本地分支可点击切换
-    const clickable = current || b.remote ? '' : ' data-gp-action="branch-switch" data-gp-name="' + esc(b.name) + '"';
-    const actions = current || b.remote ? '' : [
-      '<button class="git-file-action is-danger" data-gp-action="branch-delete" data-gp-name="' + esc(b.name) + '" title="' + esc(zh('删除分支', 'Delete branch')) + '">&#10005;</button>',
-    ].join('');
-    return [
-      '<div class="git-branch-row' + (current ? ' is-current' : '') + '"' + clickable + ' title="' + esc(b.subject) + '">',
-      '<span class="git-file-badge">' + (current ? '&#10003;' : '') + '</span>',
-      '<span class="git-branch-name">' + esc(b.name) + '</span>',
-      '<span class="git-branch-right">',
-      aheadBehind,
-      b.relTime ? '<span class="git-branch-time">' + esc(b.relTime) + '</span>' : '',
-      '<span class="git-file-actions">' + actions + '</span>',
-      '</span>',
-      '</div>',
-    ].join('');
-  }
-
-  function renderBranchesBody() {
-    if (state.errors.branches) {
-      return '<div class="git-empty-desc">' + esc(zh('分支加载失败：', 'Failed to load branches: ')) + esc(state.errors.branches) + '</div>';
-    }
-    const b = state.branches;
-    if (!b) return '';
-    const locals = (b.locals || []).map(renderBranchRow).join('');
-    const remotes = (b.remotes || [])
-      .filter((r) => r.name !== 'origin/HEAD')
-      .map(renderBranchRow).join('');
-    return [
-      locals || '<div class="git-empty-desc">' + esc(zh('无本地分支', 'No local branches')) + '</div>',
-      remotes ? '<div class="git-sub-group-title">' + esc(zh('远程', 'Remotes')) + '</div>' + remotes : '',
-    ].join('');
-  }
-
-  function renderStashBody() {
-    return '';
-  }
-
   // ── 渲染：双区骨架 ────────────────────────────────────────────────
 
   function zoneBar(zone, titleHtml, toolsHtml, folded) {
@@ -658,11 +687,6 @@
         renderFilesList(changes, 'changes'),
         changes.length ? '<button class="git-group-action" data-gp-action="stage-all">' + esc(zh('全部暂存', 'Stage All')) + '</button>' : '',
         state.subFold.changes),
-      state.branches ? subSection('branches', zh('分支', 'Branches'),
-        (state.branches.locals || []).length + (state.branches.remotes || []).filter((r) => r.name !== 'origin/HEAD').length,
-        renderBranchesBody(),
-        '<button class="git-group-action" data-gp-action="branch-create">' + esc(zh('新建', 'New')) + '</button>',
-        state.subFold.branches) : '',
     ].join('');
 
     // ── 下区：图形 ──
@@ -788,51 +812,6 @@
     });
   }
 
-  async function doBranchSwitch(name) {
-    const confirmed = window.confirm(
-      zh('切换到分支「' + name + '」？\n\n未提交的改动若与目标分支冲突将阻止切换。', 'Switch to branch "' + name + '"?\n\nUncommitted changes conflicting with the target will block the switch.')
-    );
-    if (!confirmed) return;
-    await runAction(async () => {
-      await api('branch', { dir: state.dir, op: 'switch', name });
-      state.notice = zh('已切换到 ' + name, 'Switched to ' + name);
-      await loadAll();
-    });
-  }
-
-  async function doBranchCreate() {
-    const name = window.prompt(zh('新分支名称：', 'New branch name:'));
-    if (!name || !name.trim()) return;
-    await runAction(async () => {
-      await api('branch', { dir: state.dir, op: 'create', name: name.trim() });
-      state.notice = zh('已创建分支 ' + name.trim(), 'Created branch ' + name.trim());
-      await loadAll();
-    });
-  }
-
-  async function doBranchDelete(name) {
-    const confirmed = window.confirm(
-      zh('删除分支「' + name + '」？', 'Delete branch "' + name + '"?')
-    );
-    if (!confirmed) return;
-    await runAction(async () => {
-      try {
-        await api('branch', { dir: state.dir, op: 'delete', name });
-      } catch (e) {
-        // -d 对未合并分支失败：二次确认后强制删除
-        const msg = String(e?.message || '');
-        if (/not fully merged|未合并/i.test(msg)
-          && window.confirm(zh('分支「' + name + '」未完全合并，强制删除？\n\n未合并的提交将不可恢复。', 'Branch "' + name + '" is not fully merged. Force delete?\n\nUnmerged commits cannot be recovered.'))) {
-          await api('branch', { dir: state.dir, op: 'delete', name, force: true });
-        } else {
-          throw e;
-        }
-      }
-      state.notice = zh('已删除分支 ' + name, 'Deleted branch ' + name);
-      await loadAll();
-    });
-  }
-
   function toggleCommit(hash) {
     if (state.expandedCommit === hash) {
       state.expandedCommit = '';
@@ -926,13 +905,6 @@
       doCommit();
     } else if (action === 'discard') {
       doDiscard(file);
-    } else if (action === 'branch-switch') {
-      doBranchSwitch(btn.dataset.gpName || '');
-    } else if (action === 'branch-create') {
-      doBranchCreate();
-    } else if (action === 'branch-delete') {
-      e.stopPropagation();
-      doBranchDelete(btn.dataset.gpName || '');
     } else if (action === 'branch-menu') {
       toggleBranchMenu(e);
     }
@@ -969,6 +941,7 @@
     render,
     onOpen() {
       ensureLoaded(0);
+      startAutoRefresh();
       if (state.dir && !state.loading) loadAll();
     },
     refresh,

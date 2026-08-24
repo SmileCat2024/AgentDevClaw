@@ -7118,18 +7118,14 @@ body[data-theme="light"] .git-splitter:hover::after {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 7px 10px;
-  margin-bottom: 8px;
-  border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 10px;
-  background: rgba(255,255,255,0.03);
+  padding: 2px 4px 10px;
   font-size: 12px;
   color: var(--text-secondary);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 
 body[data-theme="light"] .git-overview {
-  border-color: #e4e4e4;
-  background: rgba(0,0,0,0.02);
+  border-bottom-color: rgba(0,0,0,0.06);
 }
 
 .git-ov-dir {
@@ -7738,20 +7734,18 @@ body[data-theme="light"] .git-outgoing-ring {
 
 .git-commit-files {
   position: relative;
-  margin: 2px 0 4px calc(var(--git-canvas-w, 36px) + 10px);
-  padding: 6px 8px;
-  border-left: 2px solid rgba(255,255,255,0.12);
-  border-radius: 4px;
-  background: rgba(0,0,0,0.12);
+  margin: 0 0 6px calc(var(--git-canvas-w, 36px) + 8px);
+  padding: 2px 0 6px 6px;
+  border-left: 2px solid rgba(255,255,255,0.14);
 }
 
 body[data-theme="light"] .git-commit-files {
-  border-left-color: rgba(0,0,0,0.12);
-  background: rgba(0,0,0,0.03);
+  border-left-color: rgba(0,0,0,0.16);
 }
 
 .git-commit-files-loading {
-  font-size: 11.5px;
+  font-size: 12px;
+  line-height: 23px;
   color: var(--text-secondary);
 }
 
@@ -7759,8 +7753,9 @@ body[data-theme="light"] .git-commit-files {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 2px 0;
-  font-size: 12px;
+  line-height: 23px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
 }
 
 .git-commit-file-path {
@@ -7778,30 +7773,6 @@ body[data-theme="light"] .git-commit-files {
 
 .git-num.is-add { color: #73c991; }
 .git-num.is-del { color: #e06c60; }
-
-/* ── 分支行 / Stash 行（上区分支与 Stash 分区复用）── */
-.git-branch-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 28px;
-  padding: 0 6px 0 2px;
-  border-radius: 7px;
-  white-space: nowrap;
-}
-
-.git-branch-row[data-gp-action] {
-  cursor: pointer;
-}
-
-.git-branch-row[data-gp-action]:hover {
-  background: rgba(255,255,255,0.05);
-}
-
-body[data-theme="light"] .git-branch-row[data-gp-action]:hover {
-  background: rgba(0,0,0,0.045);
-}
-
 .git-branch-row.is-current .git-branch-name {
   font-weight: 600;
 }

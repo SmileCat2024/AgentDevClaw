@@ -66,28 +66,34 @@
       }
 
       const parents = Array.isArray(c.parents) ? c.parents : [];
+      let mergeInLane = null;
       parents.forEach(function (p, j) {
+        let toLane;
         if (tracking.has(p)) {
           // 父提交已被其他泳道追踪：画合并曲线
-          edges.push({ row: row, fromLane: lane, toLane: tracking.get(p), toRow: rowOf.has(p) ? rowOf.get(p) : null });
+          toLane = tracking.get(p);
+          edges.push({ row: row, fromLane: lane, toLane: toLane, toRow: rowOf.has(p) ? rowOf.get(p) : null });
         } else {
-          let target;
           if (j === 0) {
-            target = lane; // 第一父提交继承当前泳道
+            toLane = lane; // 第一父提交继承当前泳道
           } else {
-            target = firstFreeLane(tracking, laneCount);
-            if (target === laneCount) laneCount++;
+            toLane = firstFreeLane(tracking, laneCount);
+            if (toLane === laneCount) laneCount++;
           }
-          tracking.set(p, target);
-          edges.push({ row: row, fromLane: lane, toLane: target, toRow: rowOf.has(p) ? rowOf.get(p) : null });
+          tracking.set(p, toLane);
+          edges.push({ row: row, fromLane: lane, toLane: toLane, toRow: rowOf.has(p) ? rowOf.get(p) : null });
         }
+        // merge 提交的"被合并进来"分支色 = 非第一父所在泳道
+        if (j > 0 && mergeInLane === null) mergeInLane = toLane;
       });
 
-      nodes.push({ hash: c.hash, lane: lane });
+      nodes.push({ hash: c.hash, lane: lane, mergeInLane: mergeInLane });
     });
 
     return {
-      commits: commits.map(function (c, i) { return Object.assign({}, c, { lane: nodes[i].lane }); }),
+      commits: commits.map(function (c, i) {
+        return Object.assign({}, c, { lane: nodes[i].lane, mergeInLane: nodes[i].mergeInLane });
+      }),
       edges: edges,
       laneCount: laneCount,
     };
@@ -116,34 +122,36 @@
    * @param {number} headRow HEAD 所在行
    * @param {Set<string>} [aheadSet] 未推送提交哈希集合——命中者画虚线空心圈
    *   （VS Code「传出的更改」形制：实线=已推送，虚线=仅本地）
+   * @param {Array<number>} [rowTops] 每行圆心的纵向绝对 y（已累加展开详情偏移）。
+   *   缺省退化为等距行（不展开时）。展开提交详情后必须传入，否则泳道不跟随
+   *   文字列下移而错位。
    */
-  function buildGraphSvg(lanes, headRow, aheadSet) {
+  function buildGraphSvg(lanes, headRow, aheadSet, rowTops) {
     const rows = lanes.commits.length;
     const width = PAD_X * 2 + Math.max(1, lanes.laneCount) * LANE_W;
-    const height = rows * ROW_H;
+    const height = rowTops ? (rowTops[rows - 1] + DOT_R) : rows * ROW_H;
     if (rows === 0) return { width: 0, height: 0, svg: '' };
+    const Y = (row) => (Array.isArray(rowTops) && rowTops[row] != null ? rowTops[row] : yOf(row));
 
     const edgeParts = [];
     const dotParts = [];
 
     // ── 先画全部连线（节点随后覆盖在线上） ──
     lanes.edges.forEach(function (e) {
-      const x1 = xOf(e.fromLane);
-      const y1 = yOf(e.row);
+      const y1 = Y(e.row);
       if (e.toRow === null) {
         // 父提交在窗口外：淡出截断线
-        edgeParts.push('<line class="git-edge git-edge-trunc" x1="' + x1 + '" y1="' + y1 + '" x2="' + x1 + '" y2="' + (height - 4) + '" stroke="' + laneColor(e.toLane) + '" stroke-width="' + EDGE_W + '"/>');
+        edgeParts.push('<line class="git-edge git-edge-trunc" x1="' + xOf(e.fromLane) + '" y1="' + y1 + '" x2="' + xOf(e.fromLane) + '" y2="' + (height - 4) + '" stroke="' + laneColor(e.toLane) + '" stroke-width="' + EDGE_W + '"/>');
         return;
       }
-      const x2 = xOf(e.toLane);
-      const y2 = yOf(e.toRow);
+      const y2 = Y(e.toRow);
       if (e.fromLane === e.toLane) {
-        edgeParts.push('<line class="git-edge" x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke="' + laneColor(e.fromLane) + '" stroke-width="' + EDGE_W + '"/>');
+        edgeParts.push('<line class="git-edge" x1="' + xOf(e.fromLane) + '" y1="' + y1 + '" x2="' + xOf(e.toLane) + '" y2="' + y2 + '" stroke="' + laneColor(e.fromLane) + '" stroke-width="' + EDGE_W + '"/>');
       } else {
         // 合并/分叉：三次 Bézier——起点竖直出发，中段平滑横移，终点竖直接入
         const k = Math.min(ROW_H * 0.6, (y2 - y1) / 2);
-        edgeParts.push('<path class="git-edge git-edge-merge" d="M ' + x1 + ' ' + y1
-          + ' C ' + x1 + ' ' + (y1 + k) + ', ' + x2 + ' ' + (y2 - k) + ', ' + x2 + ' ' + y2
+        edgeParts.push('<path class="git-edge git-edge-merge" d="M ' + xOf(e.fromLane) + ' ' + y1
+          + ' C ' + xOf(e.fromLane) + ' ' + (y1 + k) + ', ' + xOf(e.toLane) + ' ' + (y2 - k) + ', ' + xOf(e.toLane) + ' ' + y2
           + '" fill="none" stroke="' + laneColor(e.fromLane) + '" stroke-width="' + EDGE_W + '"/>');
       }
     });
@@ -151,19 +159,18 @@
     // ── 再画节点：普通实心 / merge 空心 / HEAD 靶心 / 未推送虚线圈 ──
     lanes.commits.forEach(function (c, row) {
       const x = xOf(c.lane);
-      const y = yOf(row);
-      const color = laneColor(c.lane);
-      const isMerge = (c.parents || []).length > 1;
+      const y = Y(row);
+      const color = isMerge(c) && c.mergeInLane != null ? laneColor(c.mergeInLane) : laneColor(c.lane);
       const isAhead = aheadSet instanceof Set && aheadSet.has(c.hash);
       if (row === headRow) {
         // HEAD：加大空心环 + 中心实心点（◎ 靶心形制）；未推送时外环虚线
         dotParts.push('<circle class="git-dot git-dot-head' + (isAhead ? ' git-dot-ahead' : '') + '" cx="' + x + '" cy="' + y + '" r="' + HEAD_R + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="2"' + (isAhead ? ' stroke-dasharray="2.5 2.5"' : '') + '/>');
         dotParts.push('<circle class="git-dot git-dot-head-core" cx="' + x + '" cy="' + y + '" r="' + (DOT_R - 1.5) + '" fill="' + color + '"/>');
-      } else if (isAhead && !isMerge) {
+      } else if (isAhead && !isMerge(c)) {
         // 未推送提交：虚线空心圈（露出面板底色遮断穿线）
         dotParts.push('<circle class="git-dot git-dot-ahead" cx="' + x + '" cy="' + y + '" r="' + (DOT_R + 0.5) + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="1.5" stroke-dasharray="2.5 2.5"/>');
-      } else if (isMerge) {
-        // merge 提交：空心圆，内部为面板底色（遮断从下方穿过的线）
+      } else if (isMerge(c)) {
+        // merge 提交：空心圆，内部为面板底色（遮断从下方穿过的线）；色取被并入分支
         dotParts.push('<circle class="git-dot git-dot-merge" cx="' + x + '" cy="' + y + '" r="' + (DOT_R + 0.5) + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="2"/>');
       } else {
         dotParts.push('<circle class="git-dot" cx="' + x + '" cy="' + y + '" r="' + DOT_R + '" fill="' + color + '"/>');
@@ -175,6 +182,10 @@
       height: height,
       svg: '<svg class="git-graph-svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">' + edgeParts.join('') + dotParts.join('') + '</svg>',
     };
+  }
+
+  function isMerge(c) {
+    return (c.parents || []).length > 1;
   }
 
   window.GitGraph = {

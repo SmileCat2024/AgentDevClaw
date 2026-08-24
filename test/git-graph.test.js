@@ -180,4 +180,45 @@ describe('buildGraphSvg', () => {
     // 第二提交是 merge：应有跨泳道曲线边
     assert.ok(r.edges.some((e) => e.fromLane !== e.toLane));
   });
+
+  // merge 提交节点色应取「被合并进来」分支（非第一父所在泳道）的颜色，
+  // 而不是 merge 提交自身延续的主线泳道色。
+  it('merge node color follows the merged-in branch lane', () => {
+    const C = constants();
+    const out = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([
+        {hash:'o',parents:['p1','p2']},
+        {hash:'p1',parents:[]},
+        {hash:'p2',parents:[]}
+      ]);
+      return { commit: lanes.commits[0], svg: window.GitGraph.buildGraphSvg(lanes, 3).svg };
+    })()`);
+    // o 自身在 lane0；被合并进来的 p2 占 lane1 → mergeInLane 应为 1
+    assert.equal(out.commit.lane, 0);
+    assert.equal(out.commit.mergeInLane, 1);
+    // merge 节点 stroke 用 lane1 的颜色而非 lane0
+    const lane1Color = C.PALETTE[1 % C.PALETTE.length];
+    const mergeDot = out.svg.match(/<circle[^>]*git-dot-merge[^>]*>/)?.[0] || '';
+    assert.ok(mergeDot.includes('stroke="' + lane1Color + '"'), 'merge node should use merged-in branch color');
+  });
+
+  // 展开提交详情后泳道必须跟随文字下移：rowTops 传入后节点 y 应整体偏移
+  it('rowTops shifts nodes down to leave room for expanded details', () => {
+    const { ROW_H } = constants();
+    const top3 = 14 + ROW_H * 2 + 40;
+    const out = run(`(function(){
+      const commits = [
+        {hash:'a',parents:['b']},
+        {hash:'b',parents:['c']},
+        {hash:'c',parents:[]}
+      ];
+      const lanes = window.GitGraph.computeLanes(commits);
+      const tops = [14, 14 + ${ROW_H}, ${top3}];
+      return window.GitGraph.buildGraphSvg(lanes, 0, undefined, tops);
+    })()`);
+    // 第三行圆心应等于 rowTops[2]（因上方详情被推下 40px）
+    assert.ok(out.svg.includes('cy="' + top3 + '"'), 'third node shifted down by expanded height');
+    // 总高 = 最后一行圆心 + DOT_R（4）
+    assert.equal(out.height, top3 + 4);
+  });
 });
