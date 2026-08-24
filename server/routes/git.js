@@ -362,7 +362,11 @@ async function runGit(args, cwd) {
 async function resolveGitRoot(dir) {
   try {
     const stdout = await runGit(['rev-parse', '--show-toplevel'], dir);
-    return stdout.trim() || null;
+    const root = stdout.trim();
+    // 空输出属于异常（并发/瞬时故障），不能静默当作非仓库——
+    // 抛错走 500，前端保留旧数据重试，避免"不是 git 仓库"误报闪现
+    if (!root) throw new Error('git rev-parse returned empty output');
+    return root;
   } catch (error) {
     const message = String(error?.message || error || '');
     if (/not a git repository|no git repository/i.test(message)) {

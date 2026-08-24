@@ -31,6 +31,7 @@
     dir: '',            // 当前会话绑定目录（面板视图身份）
     root: '',           // 仓库根（服务端 rev-parse 解析）
     isRepo: true,
+    repoMiss: 0,        // isRepo=false 的连续确认计数（防偶发误判）
     status: null,       // 序列化后的 StatusResult
     graph: [],          // 提交历史（新→旧，含 lane）
     aheadHashes: [],    // 未推送提交哈希集合（「传出的更改」分组依据）
@@ -41,6 +42,8 @@
     notice: '',         // 上一次操作的成功提示（如提交哈希）
     loading: false,
     busy: false,
+    loadTried: false,     // 当前目录身份是否已发起过加载（防 render 周期兜底自激励）
+    ensureAttempts: 0,    // 目录就绪重试累计（render 周期调用不重置）
     commitMessage: '',
     expandedCommit: '', // 展开文件清单的提交 hash
     commitFiles: {},    // hash -> [{path, added, removed}] 懒加载缓存
@@ -108,20 +111,31 @@
 
   // ── 服务端调用 ────────────────────────────────────────────────────
 
+  // 请求超时：git 在大仓库上偶发挂起（无超时会让 loading 永久卡死，
+  // 后续刷新全部被守卫吞掉，表现为"狂点刷新没反应"）
+  const TIMEOUT_MS = { graph: 20000, default: 10000 };
+
   async function api(op, body) {
-    const res = await fetch('/protoclaw/git/' + op, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data || data.ok !== true) {
-      const detail = String(data?.error || ('HTTP ' + res.status));
-      // 失败留痕：UI 呈现之外，Console 同步记录便于定位环境问题
-      console.warn('[GitPanel] ' + op + ' failed: ' + detail + ' (dir=' + String(body?.dir || '') + ')');
-      throw new Error(detail);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS[op] || TIMEOUT_MS.default);
+    try {
+      const res = await fetch('/protoclaw/git/' + op, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || data.ok !== true) {
+        const detail = String(data?.error || ('HTTP ' + res.status));
+        // 失败留痕：UI 呈现之外，Console 同步记录便于定位环境问题
+        console.warn('[GitPanel] ' + op + ' failed: ' + detail + ' (dir=' + String(body?.dir || '') + ')');
+        throw new Error(detail);
+      }
+      return data;
+    } finally {
+      clearTimeout(timer);
     }
-    return data;
   }
 
   function repaint() {
@@ -132,11 +146,21 @@
     }
   }
 
-  /** 全量拉取：status + graph + branches 并行（graph 按当前分支过滤） */
+  /**
+   * 全量拉取：status + graph + branches 并行（graph 按当前分支过滤）。
+   *
+   * 并发策略：loading 期间的新请求不是丢弃而是标记 pending，完成后自动
+   * 补跑一次——狂点刷新不会"没反应"，也不会产生响应错序。
+   * isRepo 粘性：true→false 需连续两次确认，防止 rev-parse 偶发失败
+   * 把仓库误判成"不是 git 仓库"闪空态。
+   */
   let loadSeq = 0;
+  let pendingLoad = false;
   async function loadAll() {
     const dir = state.dir || currentSessionDir();
-    if (!dir || state.loading) return;
+    if (!dir) return;
+    if (state.loading) { pendingLoad = true; return; }
+    state.loadTried = true;
     const seq = ++loadSeq;
     state.loading = true;
     state.error = '';
@@ -151,10 +175,18 @@
       ]);
       // 过期响应丢弃：会话已切走或又有更新的加载发起时，不应用本次结果
       if (seq !== loadSeq || (state.dir || currentSessionDir()) !== dir) return;
-      state.isRepo = status ? status.isRepo !== false : state.isRepo;
-      state.root = status?.root || state.root;
+      if (status) {
+        if (status.isRepo === false) {
+          state.repoMiss = (state.repoMiss || 0) + 1;
+          if (state.repoMiss >= 2) state.isRepo = false;
+        } else {
+          state.repoMiss = 0;
+          state.isRepo = true;
+        }
+        state.root = status.root || state.root;
+        state.status = status.status || state.status;
+      }
       // 端点本次失败（null）时保留上次成功值，避免刷新一次失败就把记录图/状态清空
-      state.status = status?.status || state.status;
       if (graph) {
         state.graph = Array.isArray(graph.commits) ? graph.commits : [];
         state.aheadHashes = Array.isArray(graph.aheadHashes) ? graph.aheadHashes : [];
@@ -169,7 +201,12 @@
       state.error = String(e?.message || e || 'status failed');
     } finally {
       state.loading = false;
-      repaint();
+      if (pendingLoad) {
+        pendingLoad = false;
+        loadAll();
+      } else {
+        repaint();
+      }
     }
   }
 
@@ -177,9 +214,12 @@
 
   /**
    * 静默自动刷新：面板打开期间周期性地轻量重拉 status + branches（graph
-   * 较重且只在写操作后变化，不纳入轮询）。不触碰 loading/busy/错误态，
+   * 较重且只在写操作后变化，不纳入常规轮询）。不触碰 loading/busy/错误态，
    * 不打断输入；数据未变时 renderFeaturePanel 的 HTML 签名缓存会跳过 DOM
    * 替换，无闪烁。
+   *
+   * graph 自愈：上次 graph 端点失败（errors.graph 粘滞）时，本轮顺带重拉
+   * graph，失败提示最多挂一个轮询周期后自动恢复，不再常驻。
    */
   const AUTO_MS = 5000;
   const autoOk = (p) => p.then((d) => d).catch(() => null);
@@ -187,17 +227,28 @@
   async function silentRefresh() {
     const dir = currentSessionDir();
     if (!dir || state.loading || state.busy || state.dir !== dir) return;
-    const [status, branches] = await Promise.all([
-      autoOk(api('status', { dir })),
-      autoOk(api('branches', { dir })),
-    ]);
+    const wantGraph = Boolean(state.errors.graph) && state.graph.length > 0;
+    const jobs = [autoOk(api('status', { dir })), autoOk(api('branches', { dir }))];
+    if (wantGraph) jobs.push(autoOk(api('graph', { dir, limit: state.graphLimit, branch: state.branch })));
+    const [status, branches, graph] = await Promise.all(jobs);
     if (state.dir !== dir || state.loading) return;
     if (status && status.ok) {
+      if (status.isRepo === false) {
+        state.repoMiss = (state.repoMiss || 0) + 1;
+        if (state.repoMiss >= 2) state.isRepo = false;
+      } else {
+        state.repoMiss = 0;
+        state.isRepo = true;
+      }
       state.status = status.status || state.status;
-      state.isRepo = status.isRepo !== false;
       state.root = status.root || state.root;
     }
     if (branches && branches.ok) state.branches = branches;
+    if (wantGraph && graph && graph.ok) {
+      state.graph = Array.isArray(graph.commits) ? graph.commits : [];
+      state.aheadHashes = Array.isArray(graph.aheadHashes) ? graph.aheadHashes : [];
+      delete state.errors.graph;
+    }
     repaint();
   }
   function stopAutoRefresh() {
@@ -219,6 +270,11 @@
    * 首次切入不加载的修复：切入面板时会话数据（agent record 的
    * workspace_sessions）可能尚未就绪，currentSessionDir() 暂时返回空。
    * 这里带退避重试轮询目录就绪，面板切走即停。
+   *
+   * 防自激励：render() 每个轮询周期都会调到这里——若无条件兜底
+   * loadAll，会形成 loadAll→repaint→render→loadAll 的无限循环（git
+   * 命令风暴打满服务端）。loadTried 保证每个目录身份只兜底一次；
+   * 重试计数用 state 持续累计，不被周期调用重置。
    */
   let retryTimer = null;
   function ensureLoaded(attempt) {
@@ -226,22 +282,34 @@
     if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'git') return;
     const dir = currentSessionDir();
     if (dir) {
+      state.ensureAttempts = 0;
       if (state.dir !== dir) {
         watchDir();
-      } else if (!state.status && !state.loading) {
+      } else if (!state.loadTried && !state.loading) {
         loadAll();
       }
       return;
     }
     if (attempt >= 12) return; // ~6s 后放弃，显示空态指引
-    retryTimer = setTimeout(() => ensureLoaded(attempt + 1), 500);
+    const next = state.ensureAttempts + 1;
+    state.ensureAttempts = next;
+    retryTimer = setTimeout(() => ensureLoaded(next), 500);
   }
 
-  /** render 周期里的目录监视：会话切换（dir 变化）触发一次异步刷新 */
+  /**
+   * render 周期里的目录监视：会话切换（dir 变化）触发一次异步刷新。
+   *
+   * 目录粘性：agent record 在每次轮询中被整体替换，workspace_sessions
+   * 存在暂态为空的瞬间——空目录直接忽略，保留已加载的状态，否则面板
+   * 会周期性崩到空态再恢复（"刷新几次全页面炸了、过几秒又好了"）。
+   * 只有解析到确认的新非空目录才切换视图身份。
+   */
   function watchDir() {
     const dir = currentSessionDir();
-    if (dir === state.dir) return;
+    if (!dir || dir === state.dir) return;
     state.dir = dir;
+    state.loadTried = false;
+    state.ensureAttempts = 0;
     state.root = '';
     state.status = null;
     state.graph = [];
@@ -252,12 +320,13 @@
     state.errors = {};
     state.notice = '';
     state.isRepo = true;
+    state.repoMiss = 0;
     state.commitMessage = '';
     state.expandedCommit = '';
     state.commitFiles = {};
     state.branch = '';
     state.graphLimit = 120;
-    if (dir) loadAll();
+    loadAll();
   }
 
   // ── 更改分组与徽标 ────────────────────────────────────────────────
@@ -655,14 +724,14 @@
         zh('打开一个绑定了项目目录的会话后，这里会显示它的 git 状态。', 'Open a session bound to a project directory to see its git status here.')
       );
     }
-    if (!state.status && !state.error) {
-      return renderEmpty(zh('读取中…', 'Loading…'));
-    }
     if (!state.isRepo) {
       return renderEmpty(
         zh('不是 git 仓库', 'Not a git repository'),
         zh('当前会话目录未纳入 git 管理。', 'The current session directory is not under git.')
       );
+    }
+    if (!state.status && !state.error) {
+      return renderEmpty(zh('读取中…', 'Loading…'));
     }
 
     const status = state.status || { files: [] };
