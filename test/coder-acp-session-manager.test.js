@@ -34,6 +34,7 @@ import { createSessionManager } from '../scripts/coder-acp/session-manager.js';
 import { createClawClient, ClawUnreachableError, ClawHttpError } from '../scripts/coder-acp/claw-client.js';
 import {
   validateNewSessionParams,
+  validateResumeSessionParams,
   mergePromptText,
   ERROR_CODES,
 } from '../scripts/coder-acp/protocol.js';
@@ -67,6 +68,31 @@ function makeMockClawClient(overrides = {}) {
       calls.createSessions.push(cwd);
       if (state.createError) throw state.createError;
       return state.sessionResponse;
+    },
+    async listCoderSessions(query = {}) {
+      calls.lists = calls.lists || [];
+      calls.lists.push(query);
+      if (state.listError) throw state.listError;
+      return {
+        ok: true,
+        threads: [
+          { threadId: 'thread-1', sessionId: 'claw-s1', cwd: 'C:/work', title: 't', updatedAt: '2026-08-24T00:00:00.000Z' },
+          { threadId: 'thread-2', sessionId: 'claw-s2', cwd: 'D:/other', title: null, updatedAt: null },
+        ],
+      };
+    },
+    async resumeCoderSession(clawSessionId, body = {}) {
+      calls.resumes = calls.resumes || [];
+      calls.resumes.push({ clawSessionId, body });
+      if (state.resumeError) throw state.resumeError;
+      if (state.resumeResponse) return state.resumeResponse;
+      return {
+        ok: true,
+        clawSessionId: 'claw-s1',
+        threadId: 'thread-1',
+        viewerAgentId: 'viewer-1',
+        cwd: body.cwd ?? 'C:/work',
+      };
     },
     async appendUserMessage(threadId, payload) {
       calls.commands.push({ threadId, payload });
@@ -156,6 +182,63 @@ describe('session mapping', () => {
     await assert.rejects(manager.createSession('C:/work'), (error) => {
       assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
       assert.equal(error.data.hint, '先启动 Claw server（npm start）');
+      return true;
+    });
+  });
+});
+
+describe('session resume + list', () => {
+  it('resumeSession uses the request sessionId as the ACP session id (stable across restarts)', async () => {
+    const claw = makeMockClawClient({
+      resumeResponse: { ok: true, clawSessionId: 'claw-s1', threadId: 'thread-1', viewerAgentId: 'viewer-1', cwd: 'C:/work' },
+    });
+    const { manager } = makeManager(claw);
+    const result = await manager.resumeSession('claw-s1', { cwd: 'C:/work' });
+
+    // 协议 ID 即请求的 Claw sessionId（Q2 决策：零回填，跨重启可恢复）
+    assert.deepEqual(result, { sessionId: 'claw-s1' });
+    const internal = manager.getSession('claw-s1');
+    assert.equal(internal.clawSessionId, 'claw-s1');
+    assert.equal(internal.threadId, 'thread-1');
+    assert.equal(internal.cwd, 'C:/work');
+  });
+
+  it('resume maps HTTP errors through the standard taxonomy', async () => {
+    const claw = makeMockClawClient({
+      resumeError: new ClawHttpError(409, { ok: false, code: 'thread_archived', message: 'archived' }),
+    });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.resumeSession('claw-x', {}), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
+      assert.equal(error.data.server.code, 'thread_archived');
+      return true;
+    });
+  });
+
+  it('resume on an already-mapped session refreshes the mapping instead of duplicating', async () => {
+    const claw = makeMockClawClient();
+    const { manager, sessionId } = await makeSession(claw);
+    // createSession 生成的随机 UUID ≠ claw-s1；对同一 Claw 会话再次 resume
+    await manager.resumeSession('claw-s1', {});
+    assert.equal(manager.size, 2); // 两条独立映射并存（不同协议 ID）
+    assert.ok(manager.getSession(sessionId));
+    assert.ok(manager.getSession('claw-s1'));
+  });
+
+  it('listSessions passes the cwd filter through and returns the server payload', async () => {
+    const claw = makeMockClawClient();
+    const { manager } = makeManager(claw);
+    const result = await manager.listSessions({ cwd: 'C:/work' });
+    assert.deepEqual(claw.calls.lists, [{ cwd: 'C:/work' }]);
+    assert.equal(result.threads.length, 2);
+    assert.equal(result.threads[0].sessionId, 'claw-s1');
+  });
+
+  it('listSessions maps network failure to -32000', async () => {
+    const claw = makeMockClawClient({ listError: new ClawUnreachableError(new Error('ECONNREFUSED')) });
+    const { manager } = makeManager(claw);
+    await assert.rejects(manager.listSessions(), (error) => {
+      assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
       return true;
     });
   });
@@ -592,5 +675,28 @@ describe('protocol.js request validation', () => {
     assert.throws(() => mergePromptText([{ type: 'resource_link', uri: 'x', name: 'y' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
     assert.throws(() => mergePromptText([]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
     assert.throws(() => mergePromptText([{ type: 'text' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
+  });
+
+  it('validateResumeSessionParams accepts minimal params, rejects bad sessionId / mcpServers / additionalDirectories', () => {
+    // 最小合法：仅 sessionId
+    assert.deepEqual(validateResumeSessionParams({ sessionId: 'claw-s1' }), { sessionId: 'claw-s1' });
+    assert.deepEqual(
+      validateResumeSessionParams({ sessionId: 'claw-s1', cwd: 'C:/work', mcpServers: [] }),
+      { sessionId: 'claw-s1', cwd: 'C:/work' },
+    );
+    // sessionId 必填非空
+    assert.throws(() => validateResumeSessionParams({}), (e) => e.data.field === 'sessionId');
+    assert.throws(() => validateResumeSessionParams({ sessionId: '' }), (e) => e.data.field === 'sessionId');
+    // cwd 若提供必须为字符串（存在性与一致性由 server 校验）
+    assert.throws(() => validateResumeSessionParams({ sessionId: 's', cwd: 123 }), (e) => e.data.field === 'cwd');
+    // MCP / additionalDirectories 沿用 session/new 的拒绝语义
+    assert.throws(
+      () => validateResumeSessionParams({ sessionId: 's', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
+      (e) => e.data.field === 'mcpServers',
+    );
+    assert.throws(
+      () => validateResumeSessionParams({ sessionId: 's', additionalDirectories: ['C:/other'] }),
+      (e) => e.data.field === 'additionalDirectories',
+    );
   });
 });

@@ -73,6 +73,25 @@ function startMockClawServer() {
         }
         return;
       }
+      if (req.method === 'GET' && req.url?.startsWith('/protoclaw/acp/coder/sessions')) {
+        send(200, {
+          ok: true,
+          threads: [
+            { threadId: 'thread-wire', sessionId: 'claw-wire-1', cwd: 'D:/work', title: 'wire task', updatedAt: '2026-08-24T00:00:00.000Z' },
+            { threadId: 'thread-wire-2', sessionId: 'claw-wire-2', cwd: 'D:/work2', title: null, updatedAt: null },
+          ],
+        });
+        return;
+      }
+      if (req.method === 'POST' && /^\/protoclaw\/acp\/coder\/sessions\/[^/]+\/resume$/.test(req.url || '')) {
+        if (body?.cwd && body.cwd !== 'D:/work') {
+          send(403, { ok: false, code: 'cwd_mismatch', message: `session belongs to D:/work, not ${body.cwd}` });
+          return;
+        }
+        // 成员会话 claw-wire-old → head claw-wire-1（线程视角解析）
+        send(200, { ok: true, clawSessionId: 'claw-wire-1', threadId: 'thread-wire', viewerAgentId: 'vw-1', cwd: 'D:/work' });
+        return;
+      }
       if (req.method === 'POST' && req.url === '/protoclaw/threads/thread-wire/commands') {
         send(201, { ok: true, duplicate: false, delivery: { delivered: true } });
         return;
@@ -232,6 +251,9 @@ describe('coder ACP adapter wire protocol', () => {
       });
       assert.equal(init.error, undefined);
       assert.equal(init.result.agentCapabilities.loadSession, false);
+      assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.resume, {});
+      assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.list, {});
+      assert.deepEqual(init.result.agentCapabilities.sessionCapabilities.close, {});
       assert.equal(init.result.agentCapabilities.promptCapabilities.image, false);
       assert.deepEqual(init.result.agentCapabilities.close, {});
       assert.equal(init.result.agentInfo.name, 'agentdevclaw-coder-acp');
@@ -346,6 +368,80 @@ describe('coder ACP adapter wire protocol', () => {
       const updates = adapter.notifications.filter((n) => n.method === 'session/update');
       assert.equal(updates.length, 1);
       assert.equal(updates[0].params.update.sessionUpdate, 'user_message_chunk');
+    } finally {
+      await adapter.end();
+    }
+    assert.equal(adapter.exitCode, 0);
+  });
+
+  it('session/list returns thread-view sessions; session/resume rebinds to the thread head and prompts land on it', { timeout: 15_000 }, async () => {
+    const adapter = new AdapterProcess(`http://127.0.0.1:${port}`);
+    try {
+      await adapter.request({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: 1, clientCapabilities: {} },
+      });
+
+      // list：返回 server 线程视角 payload，sessionId 即持久 Claw sessionId
+      const listed = await adapter.request({
+        jsonrpc: '2.0', id: 2, method: 'session/list',
+        params: {},
+      });
+      assert.equal(listed.error, undefined);
+      assert.equal(listed.result.sessions.length, 2);
+      assert.deepEqual(
+        listed.result.sessions[0],
+        {
+          sessionId: 'claw-wire-1',
+          cwd: 'D:/work',
+          title: 'wire task',
+          updatedAt: '2026-08-24T00:00:00.000Z',
+          _meta: { claw: { threadId: 'thread-wire' } },
+        },
+      );
+      // 无标题 / 无更新时间的条目省略可选字段
+      assert.equal(listed.result.sessions[1].sessionId, 'claw-wire-2');
+      assert.ok(!('title' in listed.result.sessions[1]));
+      assert.ok(!('updatedAt' in listed.result.sessions[1]));
+
+      // resume 成员旧会话 → 协议 ID 解析为线程 head 的持久 ID
+      const resumed = await adapter.request({
+        jsonrpc: '2.0', id: 3, method: 'session/resume',
+        params: { sessionId: 'claw-wire-old', cwd: 'D:/work' },
+      });
+      assert.equal(resumed.error, undefined);
+      assert.deepEqual(resumed.result, { sessionId: 'claw-wire-1' });
+
+      // resume 后 prompt 直接落在解析出的 head 上：命令投递到 thread-wire
+      const promptPromise = adapter.request({
+        jsonrpc: '2.0', id: 4, method: 'session/prompt',
+        params: { sessionId: resumed.result.sessionId, prompt: [{ type: 'text', text: 'continue after resume' }] },
+      });
+      await new Promise((resolve) => {
+        const poll = setInterval(() => {
+          if (claw.record.requests.some((r) => r.url === '/protoclaw/threads/thread-wire/commands' && r.body?.text === 'continue after resume')) {
+            clearInterval(poll);
+            resolve();
+          }
+        }, 10);
+      });
+      // 用户回显标的是 resume 返回的协议 ID
+      const echo = await adapter.waitForUpdate((n) => n.method === 'session/update');
+      assert.equal(echo.params.sessionId, 'claw-wire-1');
+
+      // cancel 掉这个 prompt（mock 不产终态事件），避免用例悬挂
+      adapter.notify({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: 'claw-wire-1' } });
+      const prompt = await promptPromise;
+      assert.equal(prompt.error, undefined);
+      assert.equal(prompt.result.stopReason, 'cancelled');
+
+      // cwd 不一致 → -32003（server 403 cwd_mismatch 透传）
+      const mismatch = await adapter.request({
+        jsonrpc: '2.0', id: 5, method: 'session/resume',
+        params: { sessionId: 'claw-wire-1', cwd: 'D:/elsewhere' },
+      });
+      assert.equal(mismatch.error.code, -32003);
+      assert.equal(mismatch.error.data.server.code, 'cwd_mismatch');
     } finally {
       await adapter.end();
     }

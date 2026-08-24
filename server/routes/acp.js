@@ -1,23 +1,24 @@
 /**
- * ACP Support Routes — coder 会话的原子创建 + 精确中断（ticket 018）
+ * ACP Support Routes — coder 会话的原子创建 + 精确中断 + 会话发现与续接（ticket 018）
  *
- * 为外部 ACP adapter（scripts/run-coder-acp.js，独立 stdio 进程）提供两条
- * 进程内编排路由，替代 adapter 自行组合既有端点（会留下孤儿 session /
- * runtime / thread，且需要理解 viewerAgentId 等 ViewerWorker 内部概念，
- * 见 ADR-0004 决策 3）：
+ * 为外部 ACP adapter（scripts/run-coder-acp.js，独立 stdio 进程）提供进程内
+ * 编排路由，替代 adapter 自行组合既有端点（会留下孤儿 session / runtime /
+ * thread，且需要理解 viewerAgentId 等 ViewerWorker 内部概念，见 ADR-0004 决策 3）：
  *
  *   POST /protoclaw/acp/coder/sessions
- *     单事务完成「校验 cwd → 创建 coder session → 启动精确 session
- *     runtime → 等待 READY → 解析 threadId → 取 viewerAgentId」。
- *     任一步失败按设计 §5 回滚阶梯回滚：
- *       runtime 已启动 → 精确 stop；thread 已创建 → 关闭；
- *       session 已写入 → 从 index 删除。
- *     回滚失败不掩盖：错误响应附各步骤状态与遗留对象 ID，供手动清理。
+ *     （原子创建，见下）
+ *
+ *   GET  /protoclaw/acp/coder/sessions?cwd=...
+ *     线程视角会话发现：每个活跃（未归档）线程出一条，以 head 会话为视角。
+ *     可选 cwd 过滤按会话 openDirectory 归一化比较（Windows 大小写不敏感）。
+ *
+ *   POST /protoclaw/acp/coder/sessions/:clawSessionId/resume
+ *     把成员或 head 会话解析到其线程的当前 head，急切挂载 runtime 并等待
+ *     READY 后返回 { clawSessionId, threadId, viewerAgentId, cwd }。归档线程
+ *     拒绝（409），无线程锚定 404，cwd 与持久化记录不一致 403。
  *
  *   POST /protoclaw/acp/coder/sessions/:clawSessionId/interrupt
- *     server 内解析该 session 当前 runtime 的 viewerAgentId（精确 session
- *     定位，绝不回退到 primary runtime），走现有 /api/agents/:id/interrupt
- *     同链路（ViewerWorker → UDS interrupt-agent + clearQueue: true）。
+ *     （精确中断，见下）
  *
  * 外部契约仍以 agentId="coder" 调用（编辑器集成零感知）；coder 已并入
  * programming-helper 工作空间，内部实现落在该工作空间的 coder 会话身份
@@ -42,7 +43,6 @@ export const ACP_WORKSPACE_AGENT_ID = 'programming-helper';
 /** coder 身份会话类型（线程宿主判定与 CoderAgent 分派键）。 */
 export const ACP_SESSION_TYPE = 'coder';
 export const ACP_READY_TIMEOUT_DEFAULT_MS = 30_000;
-
 export function resolveAcpReadyTimeoutMs() {
   const raw = Number(process.env.CLAW_ACP_READY_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : ACP_READY_TIMEOUT_DEFAULT_MS;
@@ -50,6 +50,11 @@ export function resolveAcpReadyTimeoutMs() {
 
 function acpError(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
+}
+
+/** 路径比较键：归一化分隔符 + 小写（Windows 大小写不敏感语义）。 */
+export function acpPathKey(rawPath) {
+  return String(rawPath || '').trim().replace(/[\\/]+/g, '\\').toLowerCase();
 }
 
 /**
@@ -105,7 +110,8 @@ export async function validateAcpCwd(rawCwd) {
  * @param {typeof import('express').json} express
  * @param {object} ctx
  * @param {object} ctx.threadIntegration - getThreadIntegration()（onSessionCreated 宿主钩子）
- * @param {{ core: import('@agentdev/core').WorkThread }} ctx.threadControl - getThreadControl()
+ * @param {object} ctx.threadControl - getThreadControl()（{core, archive}；list/resume 需要）
+ * @param {Function} [ctx.requirePrebuiltSessionRecord] - 会话索引记录读取（resume cwd 校验 / list 标题来源）
  */
 export function setupAcpRoutes(app, express, ctx) {
   const {
@@ -117,6 +123,7 @@ export function setupAcpRoutes(app, express, ctx) {
     waitForManagedRuntimeReady,
     threadIntegration,
     threadControl,
+    requirePrebuiltSessionRecord,
   } = ctx;
 
   /**
@@ -259,6 +266,144 @@ export function setupAcpRoutes(app, express, ctx) {
       res.status(Number(error?.statusCode) || 500).json({
         ok: false,
         code: error?.code || 'acp_session_creation_failed',
+        message: String(error?.message || error),
+      });
+    }
+  });
+
+  // ── 会话发现（线程视角，head 出口）────────────────────────────────
+
+  app.get('/protoclaw/acp/coder/sessions', async (req, res) => {
+    try {
+      // 可选 cwd 过滤：必须是已存在的目录（与 create/resume 同一校验语义）
+      let cwdFilter = null;
+      if (req.query.cwd) {
+        cwdFilter = acpPathKey(await validateAcpCwd(req.query.cwd));
+      }
+
+      const threads = await threadControl.core.listThreads({
+        agentId: ACP_WORKSPACE_AGENT_ID,
+      });
+      const archiveEntries = await threadControl.archive.list().catch(() => ({}));
+
+      const sessions = [];
+      for (const thread of Array.isArray(threads) ? threads : []) {
+        // 归档是线程层收纳标记：归档线程不出现在 ACP 会话发现中
+        if (archiveEntries[thread.threadId]) continue;
+        const headSessionId = sanitizeSessionFragment(thread.headSessionId);
+        if (!headSessionId) continue;
+
+        // head 会话的持久化记录提供 cwd / 标题；缺失时 cwd 为 null（仍列出，
+        // 但 resume 会因无线程锚定或记录缺失而失败——如实暴露数据状态）
+        let record = null;
+        try {
+          record = await requirePrebuiltSessionRecord(ACP_WORKSPACE_AGENT_ID, headSessionId);
+        } catch (error) {
+          if (error?.statusCode !== 404) throw error;
+        }
+        const openDirectory = record?.openDirectory ? String(record.openDirectory) : null;
+        if (cwdFilter && (!openDirectory || acpPathKey(openDirectory) !== cwdFilter)) continue;
+
+        sessions.push({
+          threadId: thread.threadId,
+          sessionId: headSessionId,
+          cwd: openDirectory,
+          title: thread.title || record?.title || null,
+          updatedAt: Number(thread.updatedAt)
+            ? new Date(Number(thread.updatedAt)).toISOString()
+            : (record?.updatedAt || null),
+        });
+      }
+
+      res.json({ ok: true, threads: sessions });
+    } catch (error) {
+      res.status(Number(error?.statusCode) || 500).json({
+        ok: false,
+        code: error?.code || 'acp_list_failed',
+        message: String(error?.message || error),
+      });
+    }
+  });
+
+  // ── 会话续接（成员/head → 线程 head，急切挂载）────────────────────
+
+  app.post('/protoclaw/acp/coder/sessions/:clawSessionId/resume', express.json(), async (req, res) => {
+    try {
+      const requestedSessionId = sanitizeSessionFragment(req.params.clawSessionId);
+      if (!requestedSessionId) {
+        throw acpError(400, 'invalid_params', 'clawSessionId is required');
+      }
+
+      // 可选 cwd 校验：与该会话持久化的 openDirectory 一致才允许续接
+      // （防止客户端拿错目录续接另一个项目的上下文）。大小写/分隔符不敏感。
+      let requestCwd = null;
+      if (req.body?.cwd !== undefined) {
+        requestCwd = await validateAcpCwd(req.body.cwd);
+      }
+      const sessionRecord = await requirePrebuiltSessionRecord(ACP_WORKSPACE_AGENT_ID, requestedSessionId);
+      if (
+        requestCwd
+        && (!sessionRecord?.openDirectory || acpPathKey(sessionRecord.openDirectory) !== acpPathKey(requestCwd))
+      ) {
+        throw acpError(403, 'cwd_mismatch', `session ${requestedSessionId} belongs to ${sessionRecord?.openDirectory || '(unknown)'}, not ${requestCwd}`);
+      }
+
+      // 成员会话 → 线程 → 当前 head（compact 接力后旧会话自动落到最新上下文）。
+      // 先按 head 命中（快路径）；未命中再经 thread-integration 的成员链扫描
+      // （sessionChain 全成员匹配，与 input-gateway 非 head 投递路由同源语义）。
+      let threadRecord = await threadControl.core.findThreadByHeadSession(
+        ACP_WORKSPACE_AGENT_ID,
+        requestedSessionId,
+      );
+      if (!threadRecord && typeof threadIntegration?.findThreadBySession === 'function') {
+        threadRecord = await threadIntegration.findThreadBySession(
+          ACP_WORKSPACE_AGENT_ID,
+          requestedSessionId,
+        );
+      }
+      if (!threadRecord) {
+        throw acpError(404, 'thread_not_found', `no thread holds session ${requestedSessionId} as member or head`);
+      }
+      const headSessionId = sanitizeSessionFragment(threadRecord.headSessionId);
+      if (!headSessionId) {
+        throw acpError(500, 'thread_head_missing', `thread ${threadRecord.threadId} has no head session`);
+      }
+
+      // 归档线程拒绝续接（先取消归档才能继续）
+      if (await threadControl.archive.isArchived(threadRecord.threadId)) {
+        throw acpError(409, 'thread_archived', `thread ${threadRecord.threadId} is archived; unarchive it first`);
+      }
+
+      // 急切挂载：runtime 已运行则幂等复用，否则启动并等 READY（错误前置，
+      // 不把失败拖到第一次 prompt）
+      let agent;
+      try {
+        agent = await requireAgentLight(ACP_WORKSPACE_AGENT_ID);
+      } catch (error) {
+        throw Object.assign(error, { statusCode: Number(error?.statusCode) || 500 });
+      }
+      await startManagedAgent(agent, headSessionId);
+      const readyTimeoutMs = resolveAcpReadyTimeoutMs();
+      const ready = await waitForManagedRuntimeReady(ACP_WORKSPACE_AGENT_ID, readyTimeoutMs, headSessionId);
+      if (!ready) {
+        throw acpError(504, 'runtime_ready_timeout', `coder runtime not READY within ${readyTimeoutMs}ms (session=${headSessionId})`);
+      }
+      const viewerAgentId = resolveSessionViewerAgentId(ACP_WORKSPACE_AGENT_ID, headSessionId);
+      if (!viewerAgentId) {
+        throw acpError(500, 'viewer_agent_missing', `READY runtime has no viewerAgentId (session=${headSessionId})`);
+      }
+
+      res.json({
+        ok: true,
+        clawSessionId: headSessionId,
+        threadId: threadRecord.threadId,
+        viewerAgentId,
+        cwd: sessionRecord?.openDirectory ? String(sessionRecord.openDirectory) : null,
+      });
+    } catch (error) {
+      res.status(Number(error?.statusCode) || 500).json({
+        ok: false,
+        code: error?.code || 'acp_resume_failed',
         message: String(error?.message || error),
       });
     }

@@ -152,6 +152,72 @@ export function createSessionManager(options = {}) {
   }
 
   /**
+   * session/resume（协议 v1 正式方法，不回放历史）：把请求的 Claw sessionId
+   * （成员或 head）解析到其线程当前 head 并登记映射。
+   *
+   * 协议 ID 策略：resume 场景下 ACP sessionId === 请求的 Claw sessionId
+   * （server 已把 head 解析结果作为 clawSessionId 返回）。与 session/new 的
+   * 随机 UUID 不同，这个 ID 持久稳定——client 重启后凭上次记录的 sessionId
+   * 即可续接；同一 Claw 会话经 createSession 与 resumeSession 各持一条映射
+   * 时互不干扰（不同协议 ID，同一 Claw 目标）。
+   *
+   * @param {string} clawSessionId 成员或 head 的 Claw sessionId
+   * @param {{ cwd?: string }} [params] cwd 由 server 校验（不一致 → -32003）
+   * @returns {{ sessionId: string }} ACP 响应（即请求 ID）
+   */
+  async function resumeSession(clawSessionId, params = {}) {
+    if (typeof clawSessionId !== 'string' || !clawSessionId.trim()) {
+      throw invalidParamsError('sessionId', 'sessionId must be a non-empty string');
+    }
+    let body;
+    try {
+      body = await clawClient.resumeCoderSession(clawSessionId.trim(), params, {
+        method: 'session/resume',
+        requestedSessionId: clawSessionId,
+      });
+    } catch (error) {
+      throw toAcpError(error);
+    }
+    if (!body?.ok || !body?.clawSessionId || !body?.threadId) {
+      throw clawServerError(200, body ?? null);
+    }
+    sessions.set(body.clawSessionId, {
+      acpSessionId: body.clawSessionId,
+      clawSessionId: body.clawSessionId,
+      threadId: body.threadId,
+      viewerAgentId: body.viewerAgentId ?? null, // 仅存映射，不用于请求路径
+      cwd: body.cwd ?? null,
+      eventCursor: 0,
+      activePrompt: null,
+      cancelGeneration: 0,
+    });
+    trace?.registerSession(body.clawSessionId, {
+      clawSessionId: body.clawSessionId,
+      threadId: body.threadId,
+      runtimeInstanceId: body.viewerAgentId ?? undefined,
+    });
+    trace?.record('acp.session.resumed', {
+      acpSessionId: body.clawSessionId,
+      clawSessionId: body.clawSessionId,
+      threadId: body.threadId,
+      runtimeInstanceId: body.viewerAgentId ?? undefined,
+    });
+    return { sessionId: body.clawSessionId };
+  }
+
+  /**
+   * session/list（协议 v1 正式方法）：线程视角会话发现。cwd 过滤原样透传
+   * （server 侧做归一化比较），响应直接返回 server payload。
+   */
+  async function listSessions(params = {}) {
+    try {
+      return await clawClient.listCoderSessions({ cwd: params?.cwd }, { method: 'session/list' });
+    } catch (error) {
+      throw toAcpError(error);
+    }
+  }
+
+  /**
    * 取消状态机（设计 §8）：session/cancel 通知与 ctx.signal 汇入此处。
    * 标记 cancelled → cancelGeneration++ → interrupt 恰好一次（异步，失败仅
    * stderr）→ 唤醒 in-flight prompt 立即返回 cancelled（不等 turn.cancelled
@@ -571,6 +637,8 @@ export function createSessionManager(options = {}) {
 
   return {
     createSession,
+    resumeSession,
+    listSessions,
     runPrompt,
     cancel,
     closeSession,

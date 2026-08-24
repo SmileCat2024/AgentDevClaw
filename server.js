@@ -466,7 +466,7 @@ setupThreadRoutes(app, express, {
   },
 });
 
-// ── ACP 支撑路由（coder 原子创建 + 精确中断，ticket 018）──
+// ── ACP 支撑路由（coder 原子创建 + 精确中断 + list/resume，ticket 018）──
 setupAcpRoutes(app, express, {
   requireAgentLight,
   createPrebuiltSession,
@@ -476,6 +476,7 @@ setupAcpRoutes(app, express, {
   waitForManagedRuntimeReady,
   threadIntegration: getThreadIntegration(),
   threadControl: getThreadControl(),
+  requirePrebuiltSessionRecord,
 });
 // runtime 就绪补投：succession 时刻 runtime 未就绪而保持 pending 的指令，
 // 在 head runtime 真正 ready 时重试（设计 §5 的最后一个投递触发点）。
