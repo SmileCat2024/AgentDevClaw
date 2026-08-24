@@ -23,6 +23,11 @@ function run(expr) {
   return JSON.parse(ctx.run('JSON.stringify(' + expr + ')'));
 }
 
+// 常量经沙箱导出（避免测试硬编码 ROW_H/LANE_W，改视觉参数不破坏断言）
+function constants() {
+  return run('window.GitGraph.constants');
+}
+
 describe('computeLanes topology', () => {
   it('linear history stays on lane 0', () => {
     const r = run(`window.GitGraph.computeLanes([
@@ -101,17 +106,49 @@ describe('buildGraphSvg', () => {
       const lanes = window.GitGraph.computeLanes([{hash:'a',parents:['b']},{hash:'b',parents:[]}]);
       return window.GitGraph.buildGraphSvg(lanes, 0);
     })()`);
+    const C = constants();
     assert.ok(out.svg.startsWith('<svg'));
     assert.ok(out.svg.includes('circle'));
-    assert.equal(out.height, 2 * 26);      // ROW_H = 26
-    assert.equal(out.width, 8 * 2 + 1 * 14); // PAD_X*2 + laneCount*LANE_W
+    assert.equal(out.height, 2 * C.ROW_H);
+    assert.equal(out.width, 8 * 2 + 1 * C.LANE_W); // PAD_X*2 + laneCount*LANE_W
   });
 
-  it('HEAD row gets the highlight ring', () => {
+  it('HEAD row gets the bullseye node and merge commits render hollow', () => {
     const out = run(`(function(){
-      const lanes = window.GitGraph.computeLanes([{hash:'a',parents:['b']},{hash:'b',parents:[]}]);
+      const lanes = window.GitGraph.computeLanes([
+        {hash:'h',parents:['m']},
+        {hash:'m',parents:['a','b']},
+        {hash:'a',parents:[]},
+        {hash:'b',parents:[]}
+      ]);
       return window.GitGraph.buildGraphSvg(lanes, 0);
     })()`);
-    assert.ok(out.svg.includes('git-dot-head-ring'));
+    // HEAD：加大空心环 + 中心实心点
+    assert.ok(out.svg.includes('git-dot-head"'));
+    assert.ok(out.svg.includes('git-dot-head-core'));
+    // merge 提交：空心圆（fill 为面板底色变量）
+    assert.ok(out.svg.includes('git-dot-merge'));
+    assert.ok(out.svg.includes('var(--git-node-bg'));
+  });
+
+  // 回归：服务端 hash 与 parents 统一为 12 位短哈希后，边的 toRow 必须能
+  // 命中行号（历史上 40 位 parents 匹配 12 位 hash 失败，全图退化为截断线）
+  it('edges resolve toRow for 12-char short-hash form (server payload shape)', () => {
+    const h = (n) => String(n).padStart(12, '0');
+    const r = run(`(function(){
+      return window.GitGraph.computeLanes([
+        {hash:'${h(1)}',parents:['${h(2)}']},
+        {hash:'${h(2)}',parents:['${h(3)}','${h(4)}']},
+        {hash:'${h(3)}',parents:['${h(5)}']},
+        {hash:'${h(4)}',parents:['${h(5)}']},
+        {hash:'${h(5)}',parents:[]}
+      ]);
+    })()`);
+    assert.equal(r.edges.length, 5);
+    for (const e of r.edges) {
+      assert.notEqual(e.toRow, null, 'edge must resolve to a row, got truncation');
+    }
+    // 第二提交是 merge：应有跨泳道曲线边
+    assert.ok(r.edges.some((e) => e.fromLane !== e.toLane));
   });
 });

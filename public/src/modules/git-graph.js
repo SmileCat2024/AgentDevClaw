@@ -1,28 +1,39 @@
 /**
  * git-graph.js — 提交历史泳道算法与 SVG 构建（纯函数，无 DOM 依赖）
  *
- * computeLanes：把 git log 输出（新→旧，含 parents）分配到泳道，
- * 产出节点 lane 与连线（直线/合并曲线/截断线），供渲染层直接绘制。
+ * computeLanes：把 git log --topo-order 输出（新→旧，含 parents）分配到
+ * 泳道，产出节点 lane 与连线（直线/合并曲线/截断线），供渲染层绘制。
  *
  * 算法为经典槽位泳道模型（参考 gitgraph.js / gitx 的 lane 思路）：
  *   - 每条泳道任一时刻最多追踪一个"下一个待绘制提交"的哈希
  *   - 节点到来时消费掉追踪自己的泳道；第一父提交优先继承当前泳道，
  *     其余父提交开新泳道（形成分叉线）；若父提交已被其他泳道追踪，
  *     则画合并曲线而不重复占用
+ *   - 前提：parents 与 hash 必须同为 12 位短哈希（服务端已统一截断），
+ *     长度不一致会导致 rowOf 匹配全部失败、边全部退化为截断线
  *
- * buildGraphSvg：把结果画成纵向 SVG。行高/列宽为常量，节点圆 + 连线
- * 用 lane 色板（CSS 变量 --git-c0..5，深浅主题在 layout.css 定义）。
+ * buildGraphSvg：纵向 SVG，视觉对齐 VS Code Git Graph——
+ *   - lane 色为固定色板（不随主题切换，深浅底均保证可读）
+ *   - 普通提交：实心小圆；merge 提交：空心圆（露出面板底色遮断穿线）
+ *   - HEAD：加大空心环 + 中心实心点（靶心形制）
+ *   - 合并/分叉：三次 Bézier，起点竖直出发、终点竖直接入，无尖锐折角
+ *   - 绘制顺序：先全部连线，再全部节点（线从节点下方穿过）
  *
  * 模块无 DOM 依赖，window 只作挂载点（测试沙箱可直接提取纯函数）。
  */
 (function () {
   'use strict';
 
-  const ROW_H = 26;      // 每行高度（与 CSS .git-history-row 严格对齐）
-  const LANE_W = 14;     // 泳道列宽
+  const ROW_H = 24;      // 每行高度（与 CSS .git-history-row 严格对齐）
+  const LANE_W = 12;     // 泳道列宽
   const PAD_X = 8;       // 左内边距
-  const PAD_TOP = 13;    // 首行圆心 y
-  const DOT_R = 4;       // 节点半径
+  const PAD_TOP = 12;    // 首行圆心 y = ROW_H / 2
+  const DOT_R = 4;       // 普通节点半径
+  const HEAD_R = 6;      // HEAD 节点外环半径
+  const EDGE_W = 1.5;    // 连线线宽
+
+  /** VS Code Git Graph 风格 lane 色板（固定色，不随主题变） */
+  const PALETTE = ['#4DA3F5', '#F0B000', '#E91E78', '#42B9B2', '#C56B00', '#8E7CC3'];
 
   /**
    * 计算泳道分配。
@@ -92,7 +103,7 @@
   }
 
   function laneColor(lane) {
-    return 'var(--git-c' + (lane % 6) + ')';
+    return PALETTE[lane % PALETTE.length];
   }
 
   function xOf(lane) { return PAD_X + lane * LANE_W + DOT_R; }
@@ -110,47 +121,59 @@
     const height = rows * ROW_H;
     if (rows === 0) return { width: 0, height: 0, svg: '' };
 
-    const parts = [];
-    // 连线在节点下层
+    const edgeParts = [];
+    const dotParts = [];
+
+    // ── 先画全部连线（节点随后覆盖在线上） ──
     lanes.edges.forEach(function (e) {
       const x1 = xOf(e.fromLane);
       const y1 = yOf(e.row);
       if (e.toRow === null) {
         // 父提交在窗口外：淡出截断线
-        parts.push('<line class="git-edge git-edge-trunc" x1="' + x1 + '" y1="' + y1 + '" x2="' + x1 + '" y2="' + (height - 4) + '" stroke="' + laneColor(e.toLane) + '"/>');
+        edgeParts.push('<line class="git-edge git-edge-trunc" x1="' + x1 + '" y1="' + y1 + '" x2="' + x1 + '" y2="' + (height - 4) + '" stroke="' + laneColor(e.toLane) + '" stroke-width="' + EDGE_W + '"/>');
         return;
       }
       const x2 = xOf(e.toLane);
       const y2 = yOf(e.toRow);
       if (e.fromLane === e.toLane) {
-        parts.push('<line class="git-edge" x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke="' + laneColor(e.fromLane) + '"/>');
+        edgeParts.push('<line class="git-edge" x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke="' + laneColor(e.fromLane) + '" stroke-width="' + EDGE_W + '"/>');
       } else {
-        // 合并/分叉：二次贝塞尔，控制点取中点 y，形成平滑 S 曲线
-        const my = (y1 + y2) / 2;
-        parts.push('<path class="git-edge git-edge-merge" d="M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + my + ', ' + x2 + ' ' + my + ', ' + x2 + ' ' + y2 + '" fill="none" stroke="' + laneColor(e.fromLane) + '"/>');
+        // 合并/分叉：三次 Bézier——起点竖直出发，中段平滑横移，终点竖直接入
+        const k = Math.min(ROW_H * 0.6, (y2 - y1) / 2);
+        edgeParts.push('<path class="git-edge git-edge-merge" d="M ' + x1 + ' ' + y1
+          + ' C ' + x1 + ' ' + (y1 + k) + ', ' + x2 + ' ' + (y2 - k) + ', ' + x2 + ' ' + y2
+          + '" fill="none" stroke="' + laneColor(e.fromLane) + '" stroke-width="' + EDGE_W + '"/>');
       }
     });
 
-    // 节点圆（HEAD 双环高亮）
+    // ── 再画节点：普通实心 / merge 空心 / HEAD 靶心 ──
     lanes.commits.forEach(function (c, row) {
       const x = xOf(c.lane);
       const y = yOf(row);
+      const color = laneColor(c.lane);
+      const isMerge = (c.parents || []).length > 1;
       if (row === headRow) {
-        parts.push('<circle class="git-dot git-dot-head-ring" cx="' + x + '" cy="' + y + '" r="' + (DOT_R + 3) + '" fill="none" stroke="' + laneColor(c.lane) + '"/>');
+        // HEAD：加大空心环 + 中心实心点（◎ 靶心形制）
+        dotParts.push('<circle class="git-dot git-dot-head" cx="' + x + '" cy="' + y + '" r="' + HEAD_R + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="2"/>');
+        dotParts.push('<circle class="git-dot git-dot-head-core" cx="' + x + '" cy="' + y + '" r="' + (DOT_R - 1.5) + '" fill="' + color + '"/>');
+      } else if (isMerge) {
+        // merge 提交：空心圆，内部为面板底色（遮断从下方穿过的线）
+        dotParts.push('<circle class="git-dot git-dot-merge" cx="' + x + '" cy="' + y + '" r="' + (DOT_R + 0.5) + '" fill="var(--git-node-bg, #1E1E1E)" stroke="' + color + '" stroke-width="2"/>');
+      } else {
+        dotParts.push('<circle class="git-dot" cx="' + x + '" cy="' + y + '" r="' + DOT_R + '" fill="' + color + '"/>');
       }
-      parts.push('<circle class="git-dot" cx="' + x + '" cy="' + y + '" r="' + DOT_R + '" fill="' + laneColor(c.lane) + '"/>');
     });
 
     return {
       width: width,
       height: height,
-      svg: '<svg class="git-graph-svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">' + parts.join('') + '</svg>',
+      svg: '<svg class="git-graph-svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">' + edgeParts.join('') + dotParts.join('') + '</svg>',
     };
   }
 
   window.GitGraph = {
     computeLanes: computeLanes,
     buildGraphSvg: buildGraphSvg,
-    constants: { ROW_H: ROW_H, LANE_W: LANE_W },
+    constants: { ROW_H: ROW_H, LANE_W: LANE_W, PALETTE: PALETTE },
   };
 })();

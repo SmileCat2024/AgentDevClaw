@@ -7330,11 +7330,12 @@ body[data-theme="light"] .git-empty-desc {
 
 /* ═══════════════════════════════════════════════════════════════
    Git 面板：分区壳 / 提交历史图（SVG 泳道）/ 分支与贮藏
-   历史行高 26px 必须与 git-graph.js 的 ROW_H 严格对齐；
+   历史行高 24px 必须与 git-graph.js 的 ROW_H 严格对齐；
    展开的文件清单为绝对定位浮层（不占文档流，避免泳道错位）。
    ═══════════════════════════════════════════════════════════════ */
 
-/* lane 色板（深色主题） */
+/* lane 色板（胶囊/数字等 HTML 层语义色；SVG 泳道色板内置于 git-graph.js，
+   为固定色不随主题变——VS Code Git Graph 同款做法） */
 :root {
   --git-c0: #69a4ff;
   --git-c1: #73c991;
@@ -7342,6 +7343,8 @@ body[data-theme="light"] .git-empty-desc {
   --git-c3: #c58fe0;
   --git-c4: #e06c60;
   --git-c5: #56b6c2;
+  /* merge/HEAD 空心节点的内部底色（遮断从下方穿过的连线） */
+  --git-node-bg: #1e1e1e;
 }
 
 body[data-theme="light"] {
@@ -7351,6 +7354,7 @@ body[data-theme="light"] {
   --git-c3: #8d5bd0;
   --git-c4: #c44a3a;
   --git-c5: #2f8a96;
+  --git-node-bg: #ffffff;
 }
 
 /* ── 可折叠分区 ── */
@@ -7432,12 +7436,10 @@ body[data-theme="light"] .git-section-title {
 }
 
 .git-history-row {
-  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 26px;                /* 与 git-graph.js ROW_H 严格对齐 */
-  line-height: 26px;
+  gap: 10px;
+  height: 24px;                /* 与 git-graph.js ROW_H 严格对齐 */
   padding-left: var(--git-canvas-w, 30px);
   padding-right: 4px;
   margin: 0 -4px;

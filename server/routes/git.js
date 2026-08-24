@@ -605,7 +605,9 @@ export function setupGitRoutes(app, express) {
       const format = '%H%x1f%P%x1f%an%x1f%ar%x1f%D%x1f%s';
       let text;
       try {
-        text = await runGit(['log', `-n${limit}`, `--pretty=format:${format}`, '--date=relative'], root);
+        // --topo-order：保证父提交恒在子提交之后输出（lane 算法的前提，
+        // 与 VS Code Git Graph 行为一致；默认时间序在 rebase 历史上会乱序）
+        text = await runGit(['log', `-n${limit}`, '--topo-order', `--pretty=format:${format}`, '--date=relative'], root);
       } catch (error) {
         // 空仓库（尚无任何提交）不是错误：返回空历史
         if (/does not have any commits yet|ambiguous argument 'HEAD'/i.test(String(error?.message || error))) {
@@ -623,7 +625,9 @@ export function setupGitRoutes(app, express) {
         commits.push({
           hash: hash.slice(0, 12),
           fullHash: hash,
-          parents: (parents || '').split(' ').map((s) => s.trim()).filter(Boolean),
+          // parents 与 hash 统一截断 12 位：lane 算法靠哈希等值匹配定位行号，
+          // 长度不一致会导致所有边匹配失败、图形全乱
+          parents: (parents || '').split(' ').map((s) => s.trim().slice(0, 12)).filter(Boolean),
           author: author || '',
           relTime: relTime || '',
           refs: parseRefs(refs || ''),
