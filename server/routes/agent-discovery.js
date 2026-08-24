@@ -331,21 +331,22 @@ export function createAgentDiscoveryModule(ctx) {
 
   async function readWorkspaceSessionMeta(agentId, sessionId) {
     const selectedSessionId = cleanSessionText(sessionId);
-    if (!selectedSessionId) {
-      return {
-        active_workspace_session_id: null,
-        active_workspace_session_form_id: null,
-        active_workspace_session_title: '',
-        active_workspace_agent_name: '',
-        active_workspace_display_name: '',
-      };
-    }
+    const emptyMeta = {
+      active_workspace_session_id: selectedSessionId || null,
+      active_workspace_session_form_id: null,
+      active_workspace_session_title: '',
+      active_workspace_agent_name: '',
+      active_workspace_display_name: '',
+      open_directory: '',
+    };
+    if (!selectedSessionId) return emptyMeta;
 
     try {
       const index = await readSessionIndex(agentId);
       const record = Array.isArray(index?.sessions)
         ? index.sessions.find((session) => cleanSessionText(session?.id) === selectedSessionId) || null
         : null;
+      if (!record) return emptyMeta;
       const title = cleanSessionText(record?.title);
       const agentName = cleanSessionText(record?.agentName);
       const formId = cleanSessionText(record?.formId);
@@ -362,15 +363,10 @@ export function createAgentDiscoveryModule(ctx) {
         active_workspace_session_title: title,
         active_workspace_agent_name: agentName,
         active_workspace_display_name: displayName,
+        open_directory: cleanSessionText(record?.openDirectory),
       };
     } catch {
-      return {
-        active_workspace_session_id: selectedSessionId,
-        active_workspace_session_form_id: null,
-        active_workspace_session_title: '',
-        active_workspace_agent_name: '',
-        active_workspace_display_name: '',
-      };
+      return emptyMeta;
     }
   }
 

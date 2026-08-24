@@ -47,6 +47,7 @@
       "sessionType": "coder",
       "qualifierLabel": "项目",
       "sidebarEntry": true,
+      "sidebarGroup": "tool",
       "operations": [
         "status",
         "sessions",

@@ -141,9 +141,8 @@ window.CoderThreadsUI = (() => {
       );
     }
     if (!archived) {
-      // 先中断再归档：busy 时置灰（后端同样拒绝，双保险）
       actions.push(
-        '<button class="coder-btn secondary" type="button"' + (busy ? ' disabled title="' + esc(zh ? '线程执行中，先中断再归档' : 'Thread is busy; interrupt first, then archive') + '"' : '') + ' onclick="window.CoderThreadsUI.archive(\'' + esc(thread.threadId) + '\')">'
+        '<button class="coder-btn secondary" type="button" onclick="window.CoderThreadsUI.archive(\'' + esc(thread.threadId) + '\')">'
         + (zh ? '归档' : 'Archive') + '</button>',
       );
     } else {

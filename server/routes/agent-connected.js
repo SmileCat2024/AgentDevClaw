@@ -96,9 +96,13 @@ export function createConnectedAgentsQuery(deps) {
       const managedRuntime = managedRuntimeByViewerId.get(String(runtimeAgent.id || '')) || null;
       if (managedRuntime) {
         const runtimeMeta = await readWorkspaceSessionMeta(managedRuntime.agentId, managedRuntime.selectedSessionId);
+        const sessionType = sessionTypeByAgentAndId.get(`${managedRuntime.agentId} ${managedRuntime.selectedSessionId}`) || 'main';
         connectedAgents.push({
           id: runtimeAgent.id,
-          sessionType: sessionTypeByAgentAndId.get(`${managedRuntime.agentId} ${managedRuntime.selectedSessionId}`) || 'main',
+          sessionType,
+          sidebar_entry_id: sessionType === 'main'
+            ? managedRuntime.agentId
+            : `${managedRuntime.agentId}:${sessionType}`,
           name: runtimeMeta.active_workspace_display_name
             || runtimeMeta.active_workspace_agent_name
             || runtimeMeta.active_workspace_session_title
@@ -112,6 +116,7 @@ export function createConnectedAgentsQuery(deps) {
           active_workspace_session_title: runtimeMeta.active_workspace_session_title,
           active_workspace_agent_name: runtimeMeta.active_workspace_agent_name,
           active_workspace_display_name: runtimeMeta.active_workspace_display_name,
+          open_directory: runtimeMeta.open_directory || '',
           connection_info: runtimeAgent.connectionInfo || 'viewer://127.0.0.1:2026',
           pid: runtimeAgent.pid || managedRuntime.process?.pid || null,
           runtime_session_id: runtimeAgent.id,
@@ -190,7 +195,26 @@ export function createConnectedAgentsQuery(deps) {
     }
 
     for (const managed of connectedAgents) {
-      const status = buildStatus(managed.id);
+      let status = buildStatus(managed.id);
+      // The workspace row represents the main identity. A coder session shares
+      // the workspace host but belongs to the separate sidebar projection; do
+      // not let primary-runtime selection attach that child to the PH row.
+      if (managed.source === 'prebuilt'
+        && status.status === 'running'
+        && sessionTypeByAgentAndId.get(`${managed.id} ${status.selectedSessionId}`) === 'coder') {
+        const mainRuntime = Array.from(managedRuntimeByViewerId.values())
+          .find((runtime) => runtime.agentId === managed.id
+            && sessionTypeByAgentAndId.get(`${managed.id} ${runtime.selectedSessionId}`) !== 'coder');
+        status = mainRuntime
+          ? buildStatus(managed.id, mainRuntime.selectedSessionId)
+          : {
+            ...status,
+            status: 'stopped',
+            pid: null,
+            viewerAgentId: null,
+            selectedSessionId: null,
+          };
+      }
       if (status.status === 'running') {
         managed.status = 'running';
         managed.pid = status.pid;
@@ -272,6 +296,7 @@ export function createConnectedAgentsQuery(deps) {
           description: identity.description || host.description,
           icon: identity.icon || host.icon || null,
           ui: identity.ui || null,
+          sidebarGroup: identity.sidebarGroup || null,
           modelPresets: await resolveAgentModelPresets(identity.id, identity.modelPresets),
         };
       }))).filter(Boolean);

@@ -101,6 +101,10 @@ function buildChildRuntimeEntry(runtimeAgent) {
     runtimeId,
     sessionId: runtimeAgent.active_workspace_session_id || '',
     sessionType: String(runtimeAgent.sessionType || 'main'),
+    sidebarEntryId: String(runtimeAgent.sidebar_entry_id || '').trim()
+      || (String(runtimeAgent.sessionType || 'main').trim() === 'main'
+        ? ownerId
+        : `${ownerId}:${String(runtimeAgent.sessionType || 'main').trim()}`),
     name: runtimeAgent.active_workspace_display_name
       || runtimeAgent.active_workspace_agent_name
       || runtimeAgent.active_workspace_session_title
@@ -112,6 +116,9 @@ function buildChildRuntimeEntry(runtimeAgent) {
     contextMenuEnabled: true,
     createdAt: runtimeAgent.created_at || null,
     replacementMutation: mutation,
+    // 会话绑定的项目目录（server 从 session index 附带）。投影条目（coder）
+    // 不继承宿主 workspace_sessions，靠此字段参与目录分组。
+    openDirectory: String(runtimeAgent.open_directory || '').trim(),
   };
 }
 
@@ -162,7 +169,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   // We also cross-reference phProjects to pick up the correct-cased directory
   // path (sessions may store a lowercased path on Windows).
   const sessionDirMap = new Map();
-  if (String(prebuiltAgent?.id || '').trim() === 'programming-helper') {
+  const hostAgentId = String(prebuiltAgent?.agentId || prebuiltAgent?.id || '').trim();
+  if (hostAgentId === 'programming-helper') {
     const phProjects = Array.isArray(prebuiltAgent?.workspace_state?.phProjects)
       ? prebuiltAgent.workspace_state.phProjects
       : [];
@@ -208,14 +216,21 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     if (!entry?.runtimeId) return;
     if (seenRuntimeIds.has(entry.runtimeId)) return;
     seenRuntimeIds.add(entry.runtimeId);
-    if (sessionDirMap.size > 0 && !entry.projectDir) {
-      const dir = entry.sessionId ? (sessionDirMap.get(entry.sessionId) || '') : '';
-      entry.projectDir = dir;
-      entry.projectName = dir ? getPathLeaf(dir) : '';
+    if (!entry.projectDir) {
+      // PH 宿主走 workspace_sessions 映射（大小写已校正）；其余条目
+      // （coder 投影等）用 server 附带的 open_directory 兜底。
+      let dir = entry.openDirectory || '';
+      if (sessionDirMap.size > 0 && entry.sessionId) {
+        dir = sessionDirMap.get(entry.sessionId) || dir;
+      }
+      if (dir) {
+        entry.projectDir = dir;
+        entry.projectName = getPathLeaf(dir);
+      }
     }
     if (typeof findSidebarOperation === 'function') {
       const operation = findSidebarOperation((item) => (
-        item.agentId === String(prebuiltAgent?.id || '').trim()
+        item.agentId === hostAgentId
         && !['settled', 'failed'].includes(item.phase)
         && ((item.targetRuntimeId && item.targetRuntimeId === entry.runtimeId)
           || (item.targetSessionId && item.targetSessionId === entry.sessionId)
@@ -256,23 +271,40 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   const childSessionType = isProjectionEntry
     ? String(prebuiltAgent.sessionType || '').trim() || 'main'
     : null;
+  const childRuntimeIds = new Set();
+  const expectedSidebarEntryId = String(prebuiltAgent?.id || '').trim();
   agents
-    .filter((agent) => agent.source !== 'prebuilt' && String(agent.parent_id || '').trim() === String(prebuiltAgent.id || '').trim())
+    .filter((agent) => {
+      if (agent.source === 'prebuilt') return false;
+      if (String(agent.parent_id || '').trim() !== hostAgentId) return false;
+      // sidebar_entry_id is the explicit presentation owner. Keep the
+      // sessionType fallback for older runtime snapshots during a refresh.
+      const sidebarEntryId = String(agent.sidebar_entry_id || '').trim();
+      if (sidebarEntryId && sidebarEntryId !== expectedSidebarEntryId) return false;
+      if (childSessionType && String(agent.sessionType || 'main') !== childSessionType) return false;
+      if (!childSessionType && String(agent.sessionType || '') === 'coder') return false;
+      return true;
+    })
     .forEach((agent) => {
-      if (childSessionType) {
-        if (String(agent.sessionType || 'main') !== childSessionType) return;
-      } else if (String(agent.sessionType || '') === 'coder') {
-        return;
-      }
+      const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
+      if (runtimeId) childRuntimeIds.add(runtimeId);
       addEntry(buildChildRuntimeEntry(agent));
     });
 
+  // The host snapshot may point at whichever session was most recently started.
+  // If that runtime is already represented by a child entry, do not synthesize it
+  // again under the host row; otherwise a coder runtime appears as a PH mirror.
   if (!isProjectionEntry) {
-    addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+    const syntheticRuntimeId = String(
+      prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || ''
+    ).trim();
+    if (!syntheticRuntimeId || !childRuntimeIds.has(syntheticRuntimeId)) {
+      addEntry(buildSyntheticRuntimeEntry(prebuiltAgent));
+    }
   }
 
   const operations = typeof listSidebarOperations === 'function'
-    ? listSidebarOperations((operation) => operation.agentId === prebuiltAgent.id)
+    ? listSidebarOperations((operation) => operation.agentId === hostAgentId)
     : [];
   for (const operation of operations) {
     if (['settled', 'failed'].includes(operation.phase)) continue;
@@ -292,7 +324,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       } else if (operation.sourceRuntimeId && !['degraded'].includes(operation.phase)) {
         addEntry({
           id: `operation:${operation.operationId}`,
-          ownerId: prebuiltAgent.id,
+          ownerId: hostAgentId,
           runtimeId: operation.sourceRuntimeId,
           sessionId: operation.sourceSessionId,
           name: operation.title || operation.sourceSessionId,
@@ -322,7 +354,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     if (operation.phase === 'degraded' && (!sourceEntry || operation.type !== 'replacement')) {
       addEntry({
         id: `operation:${operation.operationId}`,
-        ownerId: prebuiltAgent.id,
+        ownerId: hostAgentId,
         runtimeId: `operation:${operation.operationId}`,
         sessionId: operation.targetSessionId || operation.sourceSessionId,
         name: getSidebarOperationFailureName(operation),
@@ -344,7 +376,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     const pendingName = getSidebarOperationPendingName(operation);
     addEntry({
       id: `operation:${operation.operationId}`,
-      ownerId: prebuiltAgent.id,
+      ownerId: hostAgentId,
       runtimeId: `operation:${operation.operationId}`,
       sessionId: operation.targetSessionId || operation.sourceSessionId,
       name: pendingName,

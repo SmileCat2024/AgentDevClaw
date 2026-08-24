@@ -45,6 +45,37 @@ function loadRuntimeStatus(overrides = {}) {
   return ctx;
 }
 
+describe('runtime-status: sidebar identity ownership', () => {
+  it('routes a coder child runtime to the coder sidebar projection, not the PH host row', () => {
+    const ctx = loadRuntimeStatus();
+    const result = ctx.run(`(() => {
+      const host = {
+        id: 'programming-helper', source: 'prebuilt',
+        workspace_sessions: { sessions: [] }
+      };
+      const projection = {
+        id: 'programming-helper:coder', agentId: 'programming-helper',
+        sessionType: 'coder', source: 'prebuilt',
+        workspace_sessions: { sessions: [] }
+      };
+      const child = {
+        id: 'coder-runtime', source: 'child', parent_id: 'programming-helper',
+        sessionType: 'coder', sidebar_entry_id: 'programming-helper:coder',
+        runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session',
+        connected: true
+      };
+      return {
+        host: collectRuntimeEntriesForPrebuilt(host, [child]),
+        coder: collectRuntimeEntriesForPrebuilt(projection, [child])
+      };
+    })()`);
+    assert.equal(result.host.length, 0);
+    assert.equal(result.coder.length, 1);
+    assert.equal(result.coder[0].sessionType, 'coder');
+    assert.equal(result.coder[0].sidebarEntryId, 'programming-helper:coder');
+  });
+});
+
 describe('runtime-status: sidebar operation projection', () => {
   it('uses the operation kind for compact/trim pending text even without archival', () => {
     const ctx = loadRuntimeStatus();

@@ -83,8 +83,7 @@ function getCurrentAgentRecord() {
 }
 
 function groupConnectedAgents(agents) {
-  // 投影条目（如 programming-helper:coder）按宿主 agentId 归入 tool 组；
-  // 旧独立 coder 工作空间已移除，此处只保留现存宿主。
+  // 左侧分类使用 sidebarGroup；agentId 只描述真实运行宿主。
   const TOOL_AGENT_IDS = new Set(['programming-helper']);
   const WORK_GROUP_IDS = new Set(['work-group']);
   const prebuiltIds = new Set(
@@ -100,11 +99,18 @@ function groupConnectedAgents(agents) {
   });
   const allPrebuilt = agents.filter((agent) => agent.source === 'prebuilt');
   // 投影条目（id 形如 'programming-helper:coder'）按宿主 agentId 归组
-  const groupKeyOf = (agent) => String(agent.agentId || agent.id || '').trim();
+  const groupKeyOf = (agent) => String(agent.sidebarGroup || '').trim();
+  const legacyGroupKeyOf = (agent) => String(agent.agentId || agent.id || '').trim();
   return {
-    prebuilt: allPrebuilt.filter((agent) => !TOOL_AGENT_IDS.has(groupKeyOf(agent)) && !WORK_GROUP_IDS.has(groupKeyOf(agent))),
-    workGroup: allPrebuilt.filter((agent) => WORK_GROUP_IDS.has(groupKeyOf(agent))),
-    tool: allPrebuilt.filter((agent) => TOOL_AGENT_IDS.has(groupKeyOf(agent))),
+    prebuilt: allPrebuilt.filter((agent) => {
+      const group = groupKeyOf(agent);
+      const legacyGroup = legacyGroupKeyOf(agent);
+      return !['tool', 'work-group'].includes(group)
+        && !TOOL_AGENT_IDS.has(legacyGroup)
+        && !WORK_GROUP_IDS.has(legacyGroup);
+    }),
+    workGroup: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'work-group' || WORK_GROUP_IDS.has(legacyGroupKeyOf(agent))),
+    tool: allPrebuilt.filter((agent) => groupKeyOf(agent) === 'tool' || TOOL_AGENT_IDS.has(legacyGroupKeyOf(agent))),
     external: orphanRuntimeAgents,
   };
 }
