@@ -23,6 +23,7 @@ import {
 import { resolveAgentModelLLM } from '../model-preset-resolver.js';
 import { tuneMirrorLLM } from '../shared/llm-tuning.js';
 import { getPrebuiltSessionFilePath } from '../shared/session-access.js';
+import { SESSION_TRANSFORMATION_TIMEOUT_MS } from '../shared/constants.js';
 
 const SUMMARY_MAX_TOKENS = 16000;
 
@@ -91,7 +92,7 @@ export function resolveSummaryLLM({
  * @param {boolean} [params.trimAppended] - true 时用 trim-appended 提示词
  * @param {number} [params.maxAttempts=3] - 空摘要/调用失败时的重试次数
  * @param {string} [params.additionalInstructions]
- * @param {number} [params.timeoutMs=600000] - 整体超时（超时后底层调用自然终止，结果被丢弃）
+ * @param {number} [params.timeoutMs=SESSION_TRANSFORMATION_TIMEOUT_MS] - 整体超时；超时会取消底层 LLM 调用
  * @returns {Promise<{summaryText: string, attemptCount: number, importantFiles: string[], importantSkills: string[], fileRanges: Object}>}
  */
 export async function runInProcessSummary({
@@ -103,7 +104,8 @@ export async function runInProcessSummary({
   trimAppended = false,
   maxAttempts = 3,
   additionalInstructions = '',
-  timeoutMs = 600000,
+  timeoutMs = SESSION_TRANSFORMATION_TIMEOUT_MS,
+  signal = null,
 }) {
   const snapshot = sourceSessionSnapshot || await loadSessionSnapshot(agentId, sessionId);
   if (!snapshot) {
@@ -121,11 +123,22 @@ export async function runInProcessSummary({
   const prompt = buildSummaryPromptForSession({ trimAppended, additionalInstructions });
   const attempts = Number.isFinite(maxAttempts) ? Math.max(1, Math.min(5, Number(maxAttempts))) : 3;
 
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) {
+    abortFromCaller();
+  } else if (signal) {
+    signal.addEventListener('abort', abortFromCaller, { once: true });
+  }
+
   const work = (async () => {
     let lastFailure = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason || new DOMException('Aborted', 'AbortError');
+      }
       try {
-        const summaryText = await generateSummaryText({ llm }, snapshot, prompt);
+        const summaryText = await generateSummaryText({ llm, signal: controller.signal }, snapshot, prompt);
         const scanned = scanFilesAndSkills(messages);
         return {
           summaryText,
@@ -135,6 +148,7 @@ export async function runInProcessSummary({
           fileRanges: scanned.fileRanges,
         };
       } catch (error) {
+        if (controller.signal.aborted) throw error;
         lastFailure = error;
         console.warn(`[inprocess_summary] attempt ${attempt}/${attempts} failed: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -143,7 +157,11 @@ export async function runInProcessSummary({
   })();
 
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return work;
+    try {
+      return await work;
+    } finally {
+      signal?.removeEventListener('abort', abortFromCaller);
+    }
   }
 
   let timer = null;
@@ -151,10 +169,14 @@ export async function runInProcessSummary({
     return await Promise.race([
       work,
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`In-process summary timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer = setTimeout(() => {
+          controller.abort(new Error(`In-process summary timed out after ${timeoutMs}ms`));
+          reject(new Error(`In-process summary timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
 }

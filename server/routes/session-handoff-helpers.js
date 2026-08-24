@@ -69,6 +69,8 @@ export function createSessionHandoffHelpers(deps) {
         agentRelativeDir: agent.relativeDir,
         projectRoot: PROJECT_ROOT,
         sourceSessionSnapshot,
+        signal: options.signal || null,
+        timeoutMs: options.timeoutMs,
       });
       await setSessionHasSummary(ownerAgentId, sessionId, true);
       return result;
@@ -86,6 +88,8 @@ export function createSessionHandoffHelpers(deps) {
         projectRoot: PROJECT_ROOT,
         sourceSessionSnapshot: sessionSnapshot,
         policy: applyContinuityToolPolicy(policy),
+        signal: options.signal || null,
+        timeoutMs: options.timeoutMs,
       });
       const result = await writeTrimWithSummaryHandoffPackage({
         userDataRoot: USER_DATA_ROOT,
@@ -219,9 +223,13 @@ export function createSessionHandoffHelpers(deps) {
     startRuntime = true,
     appendSummary = false,
     trace = null,
+    signal = null,
   }) {
     trace?.mark('handoff_export_started');
-    const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy, { appendSummary });
+    const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy, {
+      appendSummary,
+      signal,
+    });
     trace?.mark('handoff_exported');
     const handoffPath = cleanSessionText(exportResult?.handoffPath);
     const handoffId = cleanSessionText(exportResult?.handoff?.handoffId);

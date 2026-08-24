@@ -12,6 +12,7 @@
  */
 
 import { TrimTranscriptWithSummaryTransformation } from '@agentdev/core';
+import { SESSION_TRANSFORMATION_TIMEOUT_MS } from '../shared/constants.js';
 import {
   loadSessionSnapshot,
   extractSummaryMessages,
@@ -30,7 +31,7 @@ import {
  * @param {object} [params.policy] - trim 策略面（调用方负责 continuity 装饰，如 applyContinuityToolPolicy）
  * @param {object|null} [params.llm] - 显式注入的 LLM 基座；缺省走模型预设解析（system 角色）
  * @param {number} [params.maxAttempts=3] - 变换失败时的重试次数
- * @param {number} [params.timeoutMs=600000] - 整体超时
+ * @param {number} [params.timeoutMs=SESSION_TRANSFORMATION_TIMEOUT_MS] - 整体超时；超时会取消底层 LLM 调用
  * @returns {Promise<import('@agentdev/core').SuccessorSeed>}
  */
 export async function runTrimTranscriptWithSummary({
@@ -42,7 +43,8 @@ export async function runTrimTranscriptWithSummary({
   policy = {},
   llm = null,
   maxAttempts = 3,
-  timeoutMs = 600000,
+  timeoutMs = SESSION_TRANSFORMATION_TIMEOUT_MS,
+  signal = null,
 }) {
   const snapshot = sourceSessionSnapshot || await loadSessionSnapshot(agentId, sessionId);
   if (!snapshot) {
@@ -62,17 +64,29 @@ export async function runTrimTranscriptWithSummary({
 
   console.log(`[trim_with_summary] begin agent=${agentId} session=${sessionId}`);
 
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) {
+    abortFromCaller();
+  } else if (signal) {
+    signal.addEventListener('abort', abortFromCaller, { once: true });
+  }
+
   const work = (async () => {
     let lastFailure = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason || new DOMException('Aborted', 'AbortError');
+      }
       try {
         const seed = await transformation.transform(
           { sourceSnapshot: snapshot, policy },
-          { llm: resolvedLLM },
+          { llm: resolvedLLM, signal: controller.signal },
         );
         console.log(`[trim_with_summary] done agent=${agentId} session=${sessionId} attempt=${attempt}`);
         return seed;
       } catch (error) {
+        if (controller.signal.aborted) throw error;
         lastFailure = error;
         console.warn(`[trim_with_summary] attempt ${attempt}/${attempts} failed: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -81,7 +95,11 @@ export async function runTrimTranscriptWithSummary({
   })();
 
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return work;
+    try {
+      return await work;
+    } finally {
+      signal?.removeEventListener('abort', abortFromCaller);
+    }
   }
 
   let timer = null;
@@ -89,10 +107,14 @@ export async function runTrimTranscriptWithSummary({
     return await Promise.race([
       work,
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Trim-with-summary timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer = setTimeout(() => {
+          controller.abort(new Error(`Trim-with-summary timed out after ${timeoutMs}ms`));
+          reject(new Error(`Trim-with-summary timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
 }

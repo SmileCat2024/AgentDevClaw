@@ -13,6 +13,7 @@ import {
   normalizeSummaryPolicy,
   buildSummarySeedMessage,
 } from '@agentdev/core';
+import { SESSION_TRANSFORMATION_TIMEOUT_MS } from '../shared/constants.js';
 
 const HANDOFF_COMPILER_VERSION = 'summarized-nine-section-v1';
 
@@ -183,6 +184,8 @@ export async function exportSummarizedHandoffPackage({
   agentRelativeDir,
   projectRoot,
   sourceSessionSnapshot = null,
+  timeoutMs = SESSION_TRANSFORMATION_TIMEOUT_MS,
+  signal = null,
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
 
@@ -195,6 +198,8 @@ export async function exportSummarizedHandoffPackage({
     sourceSessionSnapshot,
     maxAttempts: policy.maxAttempts,
     additionalInstructions: policy.additionalInstructions,
+    timeoutMs,
+    signal,
   });
   console.log(`[summarized_handoff] in-process summary done agent=${agentId} session=${sessionId} attempts=${summaryResult.attemptCount}`);
 

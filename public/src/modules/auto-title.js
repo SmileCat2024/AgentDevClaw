@@ -6,6 +6,7 @@
  * 依赖全局状态（定义在 app-core.js）:
  *   currentRuntimeAgentId, focusedAgentId, currentLanguage,
  *   allAgents, _autoTitleTriggered, _seenChoiceAlertIds, _lastChoiceAlertCheckAt
+ *   getLogicalAgentId (app-core.js)
  * 依赖全局函数:
  *   getCurrentAgentRecord (app-main.js)
  *   ClawToast (modules/toast-notify.js)
@@ -36,14 +37,21 @@ function getAutoTitleSessionInfo() {
     });
     if (runtimeAgent) {
       const sessionId = String(runtimeAgent.active_workspace_session_id || '').trim();
-      if (sessionId) return { agent: runtimeAgent, sessionId: sessionId };
+      if (sessionId) {
+        // Runtime child records own the live session projection, but server
+        // session routes are scoped by the logical workspace agent.
+        const logicalAgentId = typeof getLogicalAgentId === 'function'
+          ? getLogicalAgentId(runtimeAgent)
+          : String(runtimeAgent.parent_id || '').trim();
+        return { agent: runtimeAgent, agentId: logicalAgentId || runtimeAgent.id, sessionId };
+      }
     }
   }
   // Fallback: 使用 host agent
   const agent = getCurrentAgentRecord();
   if (!agent) return null;
   const sessionId = String(agent.active_workspace_session_id || agent.workspace_sessions?.activeSessionId || '').trim();
-  return sessionId ? { agent, sessionId } : null;
+  return sessionId ? { agent, agentId: agent.id, sessionId } : null;
 }
 
 function markAutoTitleCandidate(previousMessages, nextMessages) {
@@ -226,7 +234,10 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, messages) {
   console.log('[AutoTitle][FIRE] → autoGenerateSessionTitle for session:', sessionId, 'agent:', agent.id);
 
   // Fire and forget — don't block the poll loop
-  autoGenerateSessionTitle(agent.id, sessionId, !!messages);
+  const logicalAgentId = typeof getLogicalAgentId === 'function'
+    ? getLogicalAgentId(agent)
+    : String(agent.parent_id || '').trim();
+  autoGenerateSessionTitle(logicalAgentId || agent.id, sessionId, !!messages);
 }
 
 function tryAutoTitleGeneration(messages) {

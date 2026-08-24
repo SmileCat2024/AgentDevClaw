@@ -800,7 +800,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         clearChatLoadingSession();
         renderCurrentMainView();
       }
-      if (shouldMarkLoading) clearSessionLoading(_csAgent.id);
+      if (shouldMarkLoading) clearSessionLoading(activeAgent.id);
       else if (triggerButton) triggerButton.classList.remove('action-loading');
     }
   }

@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto';
 
 import {
   MIRROR_SCRIPT_TIMEOUT_MS,
+  SESSION_TRANSFORMATION_TIMEOUT_MS,
 } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
@@ -554,7 +555,7 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
       agentId,
       sessionId,
       maxAttempts: 1,
-      timeoutMs: MIRROR_SCRIPT_TIMEOUT_MS,
+      timeoutMs: SESSION_TRANSFORMATION_TIMEOUT_MS,
     });
     if (!result?.summaryText) {
       res.status(500).json({ error: 'In-process summary did not produce a valid summary' });
@@ -982,6 +983,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     sessionId: req.body?.sessionId,
   });
   trace.mark('server_received');
+  let onClientClosed = null;
   try {
     const { agentId: preferredAgentId, sessionId } = target;
 
@@ -991,6 +993,18 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     const lineageReason = req.body?.reason === 'trim' ? 'trim' : 'summary';
     const trimCutRounds = typeof req.body?.trimCutRounds === 'number' ? req.body.trimCutRounds : undefined;
     const appendSummary = req.body?.appendSummary === true;
+    const requestAbortController = detached ? null : new AbortController();
+    onClientClosed = requestAbortController
+      ? () => {
+          if (!res.writableEnded) {
+            requestAbortController.abort(new Error('Compacted resume request was aborted by the client'));
+          }
+        }
+      : null;
+    if (onClientClosed) {
+      req.once('aborted', onClientClosed);
+      res.once('close', onClientClosed);
+    }
     console.log(`[compact_and_resume] requested agent=${preferredAgentId || '(auto)'} session=${sessionId} detached=${detached} archive=${archiveOriginal} reason=${lineageReason} appendSummary=${appendSummary}`);
 
     // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
@@ -1011,7 +1025,12 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
           policy,
           startRuntime: req.body?.startRuntime !== false,
           appendSummary,
+          trace,
         }).then(async (result) => {
+          trace.mark('resume_completed', {
+            targetSessionId: result?.session?.id || '',
+            jobId,
+          });
           console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
           // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）
           await getThreadIntegration().applySessionSuccession({
@@ -1037,6 +1056,11 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
           }
         }).catch((error) => {
           console.error(`[compact_and_resume] job ${jobId} failed for session=${sessionId}:`, error);
+          trace.mark('failed', {
+            errorCode: error?.code || 'compact_failed',
+            errorMessage: error instanceof Error ? error.message : String(error),
+            jobId,
+          });
         });
       }, 10);
 
@@ -1053,6 +1077,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     }
 
     const result = await compactAndResumeCurrentSession({
+      signal: requestAbortController?.signal || null,
       preferredAgentId,
       sessionId,
       policy,
@@ -1122,8 +1147,16 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     }
   } catch (error) {
     attachOperationMetadata(error, requestMetadata);
-    trace.mark('failed', { errorCode: error?.code || 'compact_failed' });
+    trace.mark('failed', {
+      errorCode: error?.code || 'compact_failed',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
     next(error);
+  } finally {
+    if (onClientClosed) {
+      req.off('aborted', onClientClosed);
+      res.off('close', onClientClosed);
+    }
   }
 });
 
