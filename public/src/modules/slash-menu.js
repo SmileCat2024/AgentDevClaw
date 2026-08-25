@@ -50,6 +50,10 @@ let _formCmd = null;
 let _dirtyKeys = new Set();
 // 动态清单拉取去重键（agentId::sessionId），菜单每次从隐藏转可见时重拉
 let _lastFetchKey = null;
+// prompt 型命令的待发 pill（激活暂存）：选中不执行，发送 Enter 时统一
+// invoke（成功后命令短名并入消息文本原样发出，注入由 feature 在 CallStart 完成）。
+// 触发由该状态驱动，不做字符串解析；输入框切换/会话切换时清空（防跨会话误投）
+let _pendingPrompts = [];
 
 function _isInputTextarea(el) {
   return !!(el && el.tagName === 'TEXTAREA' && el.classList.contains('user-input-textarea'));
@@ -107,6 +111,7 @@ function _maybeFetchSessionCommands() {
         title: c.title || '',
         description: c.description || '',
         destination: 'session',
+        kind: c.kind === 'prompt' ? 'prompt' : 'invoke',
         parameters: c.parameters && typeof c.parameters === 'object' ? c.parameters : undefined,
         currentValues: c.currentValues && typeof c.currentValues === 'object' ? c.currentValues : undefined,
       };
@@ -243,6 +248,9 @@ function _syncFromInput(ta) {
     if (_visible) _hide();
     return;
   }
+  // 输入框归属变化（idle↔常驻条切换 / 会话重建）：prompt pill 不跨输入框
+  // 迁移——invoke 目标是"输入框所属会话"，换了框旧 pill 语义失效
+  if (_activeTa && _activeTa !== ta) _clearPrompts();
   _activeTa = ta;
   const value = ta.value;
   if (typeof value !== 'string' || !value.startsWith('/')) {
@@ -261,6 +269,21 @@ function _syncFromInput(ta) {
 
 async function _execute(cmd, ta) {
   if (!cmd) return;
+  // prompt 型：选中不执行——挂 pill，用户补充说明后随 Enter 发送时统一触发
+  if (cmd.kind === 'prompt' && cmd.destination === 'session') {
+    if (ta) {
+      ta.value = '';
+      autoResize(ta);
+      _cacheSessionInput(ta);
+    }
+    if (!_pendingPrompts.some(function (p) { return p.name === cmd.name; })) {
+      _pendingPrompts.push(cmd);
+    }
+    _hide();
+    _renderPillBar();
+    ta?.focus();
+    return;
+  }
   // 消费语义：命令执行吃掉整条输入（含同步草稿缓存，防切换会话后复活）
   if (ta) {
     ta.value = '';
@@ -303,17 +326,11 @@ function _completeCommand(ta) {
 
 // ── 会话命令投递（capability registry 传输面消费端）─────────────
 
-async function _invokeSessionCommand(cmd, args) {
+// 底层 invoke（无 UI 副作用）：成功返回 {ok:true,result}，失败 {ok:false,error}
+async function _postCapabilityInvoke(cmd, args) {
   const { agentId, runtimeId, sessionId } = _currentTarget();
   if (!runtimeId || !sessionId) {
-    window.ClawToast?.show?.({
-      id: 'slash-no-session',
-      status: 'error',
-      title: currentLanguage === 'zh' ? '无可用会话' : 'No active session',
-      description: cmd.name,
-      autoDismiss: 5000,
-    });
-    return;
+    return { ok: false, error: currentLanguage === 'zh' ? '无可用会话' : 'No active session' };
   }
   try {
     const res = await fetch('/protoclaw/capability_invoke', {
@@ -323,31 +340,107 @@ async function _invokeSessionCommand(cmd, args) {
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok !== true) {
-      throw new Error((data && data.error) || ('HTTP ' + res.status));
+      return { ok: false, error: (data && data.error) || ('HTTP ' + res.status) };
     }
-    window.ClawToast?.show?.({
-      id: 'slash-capability-ok',
-      status: 'success',
-      title: currentLanguage === 'zh' ? '命令已执行' : 'Command executed',
-      description: cmd.name,
-      autoDismiss: 3500,
-    });
-    // 广播事实（不含结果语义）：关心该 capability 的面板（如会话控制）
-    // 自行决定刷新。Slash 菜单保持邮差定位，不认识具体 feature。
-    window.dispatchEvent(new CustomEvent('claw:capability-invoked', {
-      detail: { ref: cmd.name, agentId, runtimeId, sessionId },
-    }));
-    if (typeof window._scheduleInspectorRefresh === 'function') window._scheduleInspectorRefresh(120);
+    return { ok: true, result: data.result, target: { agentId, runtimeId, sessionId } };
   } catch (e) {
-    console.error('[SlashMenu] capability invoke failed:', cmd.name, e);
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function _invokeSessionCommand(cmd, args) {
+  const r = await _postCapabilityInvoke(cmd, args);
+  if (!r.ok) {
+    console.error('[SlashMenu] capability invoke failed:', cmd.name, r.error);
     window.ClawToast?.show?.({
       id: 'slash-capability-failed',
       status: 'error',
       title: currentLanguage === 'zh' ? '命令执行失败' : 'Command failed',
-      description: (e instanceof Error ? e.message : String(e)) + ' — ' + cmd.name,
+      description: r.error + ' — ' + cmd.name,
       autoDismiss: 6000,
     });
+    return;
   }
+  window.ClawToast?.show?.({
+    id: 'slash-capability-ok',
+    status: 'success',
+    title: currentLanguage === 'zh' ? '命令已执行' : 'Command executed',
+    description: cmd.name,
+    autoDismiss: 3500,
+  });
+  // 广播事实（不含结果语义）：关心该 capability 的面板（如会话控制）
+  // 自行决定刷新。Slash 菜单保持邮差定位，不认识具体 feature。
+  window.dispatchEvent(new CustomEvent('claw:capability-invoked', {
+    detail: { ref: cmd.name, ...r.target },
+  }));
+  if (typeof window._scheduleInspectorRefresh === 'function') window._scheduleInspectorRefresh(120);
+}
+
+// ── prompt pill（激活暂存条）────────────────────────────────────
+
+function _shortName(cmd) {
+  const full = cmd.name || '';
+  return full.slice(full.lastIndexOf('.') + 1);
+}
+
+function _clearPrompts() {
+  _pendingPrompts = [];
+  const bar = document.getElementById('slash-prompt-bar');
+  if (bar) bar.remove();
+}
+
+function _renderPillBar() {
+  const ta = _currentTa();
+  if (!ta || _pendingPrompts.length === 0) {
+    _clearPrompts();
+    return;
+  }
+  let bar = document.getElementById('slash-prompt-bar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'slash-prompt-bar';
+    bar.className = 'slash-prompt-bar';
+    // 挂在 textarea 紧前（两类输入框同构：textarea 都在
+    // .persistent-input-textarea-area 内），不嵌入输入模块逻辑
+    ta.parentNode.insertBefore(bar, ta);
+  } else if (bar.parentNode !== ta.parentNode) {
+    ta.parentNode.insertBefore(bar, ta);
+  }
+  bar.innerHTML = _pendingPrompts.map(function (cmd, i) {
+    const nm = escapeHtml(_shortName(cmd));
+    const desc = cmd.description ? ' title="' + escapeHtml(cmd.description) + '"' : '';
+    return '<span class="slash-prompt-pill"' + desc + '>'
+      + '<span class="slash-prompt-pill-name">/' + nm + '</span>'
+      + '<button type="button" class="slash-prompt-pill-x" data-idx="' + i + '"'
+      + ' title="' + escapeHtml(t('slash_pill_remove')) + '">×</button>'
+      + '</span>';
+  }).join('');
+}
+
+// 发送时统一触发：逐个 invoke（全部成功才发消息；任一失败 pill 保留供重试）。
+// 消息文本 = 各 pill 短名前缀 + 用户补充说明，作为普通 user 消息原样发出
+async function _dispatchPrompts(ta) {
+  const pills = _pendingPrompts.slice();
+  const rest = (typeof ta.value === 'string' ? ta.value : '').trim();
+  for (const cmd of pills) {
+    const r = await _postCapabilityInvoke(cmd, {});
+    if (!r.ok) {
+      window.ClawToast?.show?.({
+        id: 'slash-prompt-failed',
+        status: 'error',
+        title: currentLanguage === 'zh' ? '技能激活失败，消息未发送' : 'Skill activation failed, message not sent',
+        description: r.error + ' — ' + cmd.name,
+        autoDismiss: 6000,
+      });
+      return;
+    }
+  }
+  const prefix = pills.map(function (c) { return '/' + _shortName(c); }).join(' ');
+  ta.value = prefix + (rest ? ' ' + rest : '');
+  autoResize(ta);
+  _clearPrompts();
+  // 合成 Enter 走原生发送路径（此刻 pill 已清、菜单已关，capture 放行）
+  ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
 }
 
 // ── 参数表单（FeatureManifestSettingProperty 渲染）───────────────
@@ -509,7 +602,21 @@ document.addEventListener('input', function (e) {
 }, true);
 
 document.addEventListener('keydown', function (e) {
-  if (!_visible) return;
+  if (!_visible) {
+    // 菜单关闭但存在 prompt pill：Enter = 统一触发后发送；Esc = 清空 pill
+    if (_pendingPrompts.length > 0 && _isInputTextarea(e.target)) {
+      if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        void _dispatchPrompts(e.target);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        _clearPrompts();
+      }
+    }
+    return;
+  }
   if (!_isInputTextarea(e.target)) {
     // 表单态下，焦点在表单控件内：Enter 提交、Esc 取消
     if (_formCmd && _menuEl && _menuEl.contains(e.target)) {
@@ -531,8 +638,16 @@ document.addEventListener('keydown', function (e) {
     _hide();
     return;
   }
-  // 空态时键盘归输入框：/ 开头文本回车即普通消息发送
-  if (!_formCmd && _filtered.length === 0) return;
+  // 空态时键盘归输入框：/ 开头文本回车即普通消息发送（但有 prompt pill
+  // 时 Enter 归 pill 派发——命令前缀需并入消息，且 pill 触发先于发送）
+  if (!_formCmd && _filtered.length === 0) {
+    if (_pendingPrompts.length > 0 && e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      void _dispatchPrompts(e.target);
+    }
+    return;
+  }
   if (_formCmd) {
     // 输入框聚焦但表单打开（焦点曾在表单后回到输入框）：Esc 已处理，Enter 提交
     if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
@@ -565,6 +680,15 @@ document.addEventListener('keydown', function (e) {
 
 // 点击菜单外（非输入框）时关闭
 document.addEventListener('mousedown', function (e) {
+  // pill 删除按钮（mousedown 抢在 textarea blur 前处理，不丢焦点）
+  const x = e.target.closest?.('.slash-prompt-pill-x');
+  if (x) {
+    e.preventDefault();
+    e.stopPropagation();
+    _pendingPrompts.splice(parseInt(x.dataset.idx, 10) || 0, 1);
+    _renderPillBar();
+    return;
+  }
   if (!_visible) return;
   if (_menuEl && _menuEl.contains(e.target)) return;
   if (_isInputTextarea(e.target)) return;

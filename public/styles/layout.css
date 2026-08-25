@@ -8109,5 +8109,59 @@ body[data-theme="light"] .slash-menu {
   background: var(--accent-bg);
 }
 
+/* prompt pill 条：激活暂存的技能标签，挂在 textarea 上方（对齐 ccb/fs 配方） */
+.slash-prompt-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  border-radius: 10px 10px 0 0;
+}
+
+.slash-prompt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px 2px 10px;
+  border: 1px solid var(--accent-color, #5b8def);
+  border-radius: 999px;
+  background: var(--accent-bg);
+  font-size: 12px;
+  color: var(--accent-text, var(--accent-color, #5b8def));
+  cursor: default;
+  user-select: none;
+}
+
+.slash-prompt-pill-name {
+  font-weight: 600;
+  font-family: var(--mono-font, monospace);
+  white-space: nowrap;
+}
+
+.slash-prompt-pill-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.slash-prompt-pill-x:hover {
+  opacity: 1;
+  background: var(--hover-bg);
+}
+
+
 
 
