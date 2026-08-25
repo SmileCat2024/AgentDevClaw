@@ -66,6 +66,7 @@ function buildSourceRecord(sourceRecord = {}) {
     openDirectory: cleanInlineText(sourceRecord?.openDirectory),
     createdAt: cleanInlineText(sourceRecord?.createdAt),
     updatedAt: cleanInlineText(sourceRecord?.updatedAt),
+    sessionType: cleanInlineText(sourceRecord?.sessionType),
   };
 }
 

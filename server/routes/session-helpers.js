@@ -807,8 +807,12 @@ async function createPrebuiltSession(agentId, options = {}) {
   const nextTitle = explicitTitle || nextTaskTitle || (isPhStyleWorkspace
     ? await getNextNewSessionTitle(agentId, nextOpenDirectory)
     : buildNamedSessionTitle(sessionDisplayName, createdAt));
-  // 解析当前模型配置，持久化到 session index record
-  const sessionType = cleanSessionText(options.sessionType) || 'main';
+  // 派生会话默认继承来源会话的身份；只有没有来源时才创建 main。
+  // 这样 compact/summary 等 successor 路径即使未重复传参，也不会把 coder
+  // 静默降级成普通用户会话。
+  const sessionType = cleanSessionText(options.sessionType)
+    || cleanSessionText(sourceSession?.sessionType)
+    || 'main';
   const currentModelInfo = await resolveSessionModelInfo(agentId);
 
   const record = {

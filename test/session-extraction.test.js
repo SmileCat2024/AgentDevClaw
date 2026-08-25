@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { resolveSessionTarget } from '../server/shared/operation-target.js';
 import path from 'node:path';
 import os from 'node:os';
+import { promises as fs } from 'node:fs';
 
 import {
   getAssemblyWorkspaceDir,
@@ -25,6 +26,8 @@ import {
 } from '../server/shared/string-helpers.js';
 import { createSessionHelpers, META_VERSION } from '../server/routes/session-helpers.js';
 import { setupSessionRoutes } from '../server/routes/session.js';
+import { createSessionHandoffHelpers } from '../server/routes/session-handoff-helpers.js';
+import { HANDOFF_SCHEMA_VERSION } from '@agentdev/core';
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
@@ -102,7 +105,7 @@ const EXPECTED_HELPER_KEYS = [
   'exportContextHandoffForSession', 'createCompactedResumeFromHandoff',
   'compactAndResumeCurrentSession', 'compactAndResumeFromProvidedSummary',
   'exportProvidedSummaryHandoff', 'deletePrebuiltProject', 'resolveContextLength',
-  'updateSessionIndex',
+  'readSessionSnapshotForContinuity', 'updateSessionIndex',
 ];
 
 describe('createSessionHelpers', () => {
@@ -137,6 +140,46 @@ describe('createSessionHelpers', () => {
     await helpers.createPrebuiltSession('flow-workspace', {});
     assert.ok(wsRead === 'flow-workspace',
       'readWorkspaceState should have been called with flow-workspace');
+  });
+});
+
+describe('compacted resume identity continuity', () => {
+  it('passes the source coder identity to the successor session', async () => {
+    let createdOptions = null;
+    const helpers = createSessionHandoffHelpers({
+      startManagedAgent: async () => ({ ok: true }),
+      waitForManagedRuntimeReady: async () => true,
+      resolvePrebuiltSessionOwner: async () => 'programming-helper',
+      requirePrebuiltSessionRecord: async () => ({ id: 'source', sessionType: 'coder' }),
+      summarizePrebuiltSession: async () => ({ exists: true }),
+      requirePrebuiltAgentForRuntime: async () => ({ id: 'programming-helper' }),
+      createPrebuiltSession: async (_agentId, options) => {
+        createdOptions = options;
+        return { id: 'successor', sessionType: options.sessionType };
+      },
+      readSessionSnapshotForContinuity: async () => ({}),
+      setSessionHasSummary: async () => {},
+    });
+
+    const handoffPath = path.join(os.tmpdir(), `handoff-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    await fs.writeFile(handoffPath, JSON.stringify({
+      schemaVersion: HANDOFF_SCHEMA_VERSION,
+      sourceAgentId: 'programming-helper',
+      sourceSessionId: 'source',
+      sourceRecord: { sessionType: 'coder' },
+      stats: { synthetic: true },
+    }));
+    try {
+      const result = await helpers.createCompactedResumeFromHandoff({
+        handoffPath,
+        startRuntime: false,
+      });
+
+      assert.equal(result.session.sessionType, 'coder');
+      assert.equal(createdOptions.sessionType, 'coder');
+    } finally {
+      await fs.rm(handoffPath, { force: true });
+    }
   });
 });
 
