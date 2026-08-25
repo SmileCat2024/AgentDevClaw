@@ -353,6 +353,7 @@ const I18N = {
     subagent_view_messages: '查看消息 >',
     delete_failed_generic: '删除失败',
     overview_subtitle: '查看上下文、Token 消耗和缓存命中等信息',
+    slash_menu_empty: '无匹配命令 — Enter 将作为消息发送',
   },
   en: {
     page_title: 'Agent Debugger',
@@ -707,6 +708,7 @@ const I18N = {
     subagent_view_messages: 'View messages >',
     delete_failed_generic: 'Delete failed',
     overview_subtitle: 'Separate current context, current-turn usage, session totals, and request-level cache hits so each metric means exactly one thing.',
+    slash_menu_empty: 'No matching command — Enter will send as message',
   },
 };
 

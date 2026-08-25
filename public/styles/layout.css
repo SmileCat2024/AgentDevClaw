@@ -7808,3 +7808,51 @@ body[data-theme="light"] .git-commit-files {
 .git-branch-flag.is-ahead { color: #73c991; }
 .git-branch-flag.is-behind { color: #e2c08d; }
 
+/* ── Slash 命令菜单（modules/slash-menu.js）────────────────────── */
+.slash-menu {
+  position: fixed;
+  z-index: 1200;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.slash-menu-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.slash-menu-item.is-active,
+.slash-menu-item:hover {
+  background: var(--bg-secondary);
+}
+
+.slash-menu-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.slash-menu-item-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-menu-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+
