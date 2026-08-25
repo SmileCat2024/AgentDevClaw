@@ -8137,7 +8137,6 @@ body[data-theme="light"] .slash-menu {
 }
 
 .slash-prompt-pill-name {
-  font-family: var(--mono-font, monospace);
   white-space: nowrap;
 }
 
