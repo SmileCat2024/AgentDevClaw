@@ -51,7 +51,12 @@ function requestCapabilityState(agentId, sessionId, message, { timeoutMs = 15000
         ok: msg.ok === true,
         ...(msg.ok === true
           ? { commands: msg.commands, result: msg.result }
-          : { error: msg.error || 'capability request rejected' }),
+          // registry 结果的错误在 message(+code) 字段；capability-ipc 的
+          // 传输层错误在 error 字段。两者都透传，避免只剩 fallback 文案。
+          : {
+            error: [msg.code, msg.message || msg.error]
+              .filter(Boolean).join(': ') || 'capability request rejected',
+          }),
       });
     };
     child.on('message', onMessage);

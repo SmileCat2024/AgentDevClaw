@@ -100,7 +100,9 @@ function _maybeFetchSessionCommands() {
       return c && typeof c.name === 'string' && c.name;
     }).map(function (c) {
       return {
-        name: c.name,
+        // 寻址用完整 ref（registry 的 ref 字段，feature.command）；
+        // 裸 name（如 configure）不唯一，invoke 会 not_found
+        name: c.ref || c.name,
         title: c.title || '',
         description: c.description || '',
         destination: 'session',
