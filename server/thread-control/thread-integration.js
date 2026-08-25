@@ -45,6 +45,9 @@ export function createThreadIntegration({ control = null } = {}) {
   return {
     core,
     board,
+    // T004：input-gateway 入口层拒绝归档线程新 send 需要归档标记事实
+    // （routes 的 _assertNotArchived 同源）；暴露给网关消费。
+    archive,
     findThreadBySession,
 
     /**
@@ -86,6 +89,12 @@ export function createThreadIntegration({ control = null } = {}) {
       try {
         const thread = await core.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
+        // T004：归档线程拒绝新的上下文变换派发（与 thread_archived 的
+        // send / deliver 拒绝同源）——归档表达取消意图，不再发起接力。
+        if (archive && typeof archive.isArchived === 'function'
+          && await archive.isArchived(thread.threadId)) {
+          return { applied: false, reason: 'thread_archived', threadId: thread.threadId };
+        }
         await core.beginSessionHandoff({
           threadId: thread.threadId,
           fromSessionId: from,

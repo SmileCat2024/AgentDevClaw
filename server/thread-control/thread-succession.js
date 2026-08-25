@@ -107,6 +107,16 @@ export function createThreadSuccessionService({
   const core = threadControl.core;
 
   /**
+   * 定位提交目标线程（T004 归档预检用）：from 是 head 时命中快路径；
+   * head 已被并发推进时按成员链兜底。纯 session（无线程）返回 null。
+   */
+  async function findThreadForSuccession(agentId, fromSessionId) {
+    const byHead = await core.findThreadByHeadSession(agentId, fromSessionId).catch(() => null);
+    if (byHead) return byHead;
+    return core.findThreadBySession(agentId, fromSessionId).catch(() => null);
+  }
+
+  /**
    * 提交点：successor 生成成功后调用，决定是否推进 Thread head。
    *
    * 门禁（实施要求 1）：successorReady 为假（runtime 未达 READY）时拒绝
@@ -131,6 +141,33 @@ export function createThreadSuccessionService({
     const to = String(toSessionId || '').trim();
     if (!normalizedAgentId || !from || !to || from === to) {
       return { applied: false, reason: 'invalid_succession' };
+    }
+
+    // T004 冲突响应（与归档并发）：归档标记先落时，succession 提交被拒绝——
+    // head 不推进、旧 Inbox 不投递（seal 事务已取消全部 pending + hold
+    // 阻塞补投），失败 successor 退役，挡板收敛并留 rotation_failed 审计。
+    // 两种时序都收敛：commit 在前则归档 seal 取消剩余 pending；归档在前
+    // 则此处预检拒绝，successor 不会消费旧 Inbox。
+    if (threadControl.archive && typeof threadControl.archive.isArchived === 'function') {
+      const threadForCommit = await findThreadForSuccession(normalizedAgentId, from);
+      if (threadForCommit && await threadControl.archive.isArchived(threadForCommit.threadId)) {
+        const failure = await failSuccession({
+          agentId: normalizedAgentId,
+          fromSessionId: from,
+          reason: 'thread_archived',
+          stage: 'thread_archived',
+          error: `thread ${threadForCommit.threadId} is archived; succession commit refused`,
+          successorSessionId: to,
+          retireSuccessorRuntime: true,
+        });
+        return {
+          applied: false,
+          reason: 'thread_archived',
+          stage: 'thread_archived',
+          thread: failure.thread || null,
+          error: failure.error || `thread ${threadForCommit.threadId} is archived; succession commit refused`,
+        };
+      }
     }
 
     if (!successorReady) {

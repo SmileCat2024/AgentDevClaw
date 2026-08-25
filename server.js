@@ -278,14 +278,10 @@ const threadRecovery = createThreadRecoveryService({
 });
 const threadLifecycle = createThreadLifecycleService({
   control: threadControl,
-  interruptSession: async (agentId, sessionId) => {
-    const runtime = getAgentRuntime(agentId, sessionId);
-    const viewerAgentId = runtime?.viewerAgentId;
-    if (!viewerAgentId) return { status: 'not_running' };
-    const response = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/interrupt`, { method: 'POST' });
-    if (!response.ok) throw new Error(`Viewer interrupt returned ${response.status}`);
-    return { status: 'interrupted', viewerAgentId };
-  },
+  // T004：归档不再预先 interrupt head——已经开始的调用允许自然完成
+  // （inflight drain），runtime 经 stopSession graceful 退役（remove-session
+  // / SIGTERM → agent dispose 收敛），由归档的 hold 保证收尾后不再消费
+  // 下一条 Inbox command。
   stopSession: stopManagedAgent,
 });
 const threadRotation = createThreadRotationService({

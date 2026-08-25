@@ -116,6 +116,18 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
   }
   if (!thread) return { route: 'direct' };
 
+  // T004：归档线程拒绝新 send（与 routes 的 _assertNotArchived / ACP
+  // thread_resume 的 thread_archived 同源）。归档是取消性操作：新输入
+  // 不应落进已被取消的 Inbox；归档的 hold 只挡投递，挡不住 append，
+  // 入口层显式拒绝才是「拒绝新派发」的第一道门。
+  if (integration.archive && typeof integration.archive.isArchived === 'function'
+    && await integration.archive.isArchived(thread.threadId)) {
+    throw new UserTurnDeliveryError(
+      'Thread is archived: new input is rejected until it is unarchived',
+      { code: 'thread_archived', status: 409, retryable: false },
+    );
+  }
+
   // 非 head Session 仍可查看，但不能把新输入写入历史分片；不要静默转投
   // 当前 head，避免用户误以为自己仍在编辑历史现场。
   if (thread.headSessionId !== sessionId) {
