@@ -163,7 +163,7 @@ window.CoderThreadsUI = (() => {
 
     return [
       '<article class="coder-thread-card' + (archived ? ' archived' : '') + '" data-thread-id="' + esc(thread.threadId) + '"'
-      + (!archived && thread.headSessionId ? ' style="cursor:pointer" onclick="window.CoderThreadsUI.openHead(\'' + esc(thread.threadId) + '\')"' : '')
+      + (!archived && thread.headSessionId ? ' style="cursor:pointer" onclick="if(event.target.closest(\'.coder-btn\'))return;window.CoderThreadsUI.openHead(\'' + esc(thread.threadId) + '\')"' : '')
       + ' title="' + esc(thread.threadId) + '">',
       '<div class="coder-thread-card-head">',
       '<span class="' + statusClasses.join(' ') + '">' + esc(lifeLabel(lifeState)) + '</span>',
