@@ -16,6 +16,7 @@ import {
   Decision,
   getPackageInfoFromSource,
   type AgentFeature,
+  type CapabilityDefinition,
   type FeatureInitContext,
   type FeatureManifestDefinition,
   type PackageInfo,
@@ -178,6 +179,67 @@ export class ForceContinuation implements AgentFeature {
     // the model would give model output a way to interact with a mode that can
     // loop, so no tools are declared on purpose.
     return [];
+  }
+
+  /**
+   * Capability 控制面声明：同一份 configure 命令同时服务 slash 菜单（用户
+   * 显式调用）与进程内 Feature 调用（如调度面自动配置）。triggers 拆平为
+   * 三个 boolean 参数，保持参数词汇表（FeatureManifestSettingProperty）内
+   * 的类型；未出现的字段不修改，仅应用显式传入的值。
+   *
+   * 注：手动触发一次继续（continue）需要会话输入队列原语，属 P2 Bridge
+   * 范畴，见 ADR。
+   */
+  getCapabilities(): CapabilityDefinition[] {
+    return [
+      {
+        name: 'configure',
+        title: '配置强制继续',
+        description: '调整强制继续的总开关、触发候选与连续次数上限，返回调整后的完整状态。',
+        parameters: {
+          enabled: {
+            type: 'boolean',
+            title: '保持任务继续',
+            description: '总开关。关闭后不请求任何受限继续。',
+          },
+          providerMaxTokens: {
+            type: 'boolean',
+            title: 'Provider max_tokens 截断',
+            description: 'Provider 报告 max_tokens 时，在当前 step 内请求继续。',
+          },
+          providerLength: {
+            type: 'boolean',
+            title: 'Provider length 截断',
+            description: 'Provider 报告 length 时，在当前 step 内请求继续。',
+          },
+          frameworkLimitReached: {
+            type: 'boolean',
+            title: '框架执行 step 上限耗尽',
+            description: '框架 Call 因 ReAct step 上限结束后，由宿主在预算内开始下一段。',
+          },
+          maxConsecutive: {
+            type: 'number',
+            title: '最大连续继续次数',
+            description: '同一次 call 中允许的最大连续继续次数（1–10）。',
+            min: 1,
+            max: 10,
+            step: 1,
+          },
+        },
+        entryPoints: ['slash', 'feature'],
+        execute: (args) => {
+          const input = args && typeof args === 'object' ? args as Record<string, unknown> : {};
+          if (typeof input.enabled === 'boolean') this.setEnabled(input.enabled);
+          const triggers: Partial<ForceContinuationTriggers> = {};
+          if (typeof input.providerMaxTokens === 'boolean') triggers.providerMaxTokens = input.providerMaxTokens;
+          if (typeof input.providerLength === 'boolean') triggers.providerLength = input.providerLength;
+          if (typeof input.frameworkLimitReached === 'boolean') triggers.frameworkLimitReached = input.frameworkLimitReached;
+          if (Object.keys(triggers).length > 0) this.setTriggers(triggers);
+          if (typeof input.maxConsecutive === 'number') this.setMaxConsecutive(input.maxConsecutive);
+          return Promise.resolve(this.getStatus());
+        },
+      },
+    ];
   }
 
   /** Public control API for the Claw session IPC bridge and other Features. */

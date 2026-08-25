@@ -172,4 +172,39 @@ describe('ForceContinuation', () => {
       lastAction: 'idle',
     });
   });
+
+  describe('capabilities (control plane)', () => {
+    it('declares a configure command open to slash and feature entry points', () => {
+      const feature = new ForceContinuation();
+      const caps = feature.getCapabilities();
+
+      assert.equal(caps.length, 1);
+      assert.equal(caps[0].name, 'configure');
+      assert.deepEqual(caps[0].entryPoints, ['slash', 'feature']);
+      // 参数词汇表全部在 FeatureManifestSettingProperty 类型内
+      for (const prop of Object.values(caps[0].parameters)) {
+        assert.ok(['boolean', 'number'].includes(prop.type), prop.type);
+      }
+    });
+
+    it('applies only explicitly passed fields and returns the status', async () => {
+      const feature = new ForceContinuation({ enabled: false, maxConsecutiveContinuations: 3 });
+      const execute = feature.getCapabilities()[0].execute;
+
+      const status = await execute({ enabled: true, providerLength: false, maxConsecutive: 99 }, {});
+
+      assert.equal(status.enabled, true);
+      assert.equal(status.maxConsecutiveContinuations, 10); // clamped
+      assert.deepEqual(status.triggers, {
+        providerMaxTokens: true,
+        providerLength: false,
+        frameworkLimitReached: true,
+      });
+
+      // 空参数：不改任何字段
+      const unchanged = await execute({}, {});
+      assert.equal(unchanged.enabled, true);
+      assert.equal(unchanged.maxConsecutiveContinuations, 10);
+    });
+  });
 });
