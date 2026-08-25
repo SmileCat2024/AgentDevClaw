@@ -970,3 +970,18 @@ server.js 主进程
 - source 为 undefined → 用 `'__no_source__'` 作为 key，归入 standaloneTools
 
 这意味着直接通过 `this.tools.register(tool, 'custom-source')` 注册的工具，只要 source 不等于任何 feature name，就会自动出现在 inspector 的 `standaloneTools` 中。
+
+## Capability 控制面与 slash 命令系统（ticket 0007）
+
+权威设计与全部裁决记录：[docs/adr/0007-capability-registry-as-control-plane.md](/D:/code/AgentDevClaw/docs/adr/0007-capability-registry-as-control-plane.md)。改 capability / slash / 跨 feature 通讯相关代码前必读。
+
+核心模型：feature 通过 `getCapabilities()` 声明能力（command），框架 `CapabilityRegistry` 提供进程内 invoke（哑注册表，无依赖图、无状态共享）；slash 菜单是人机入口，`GET /protoclaw/commands` 聚合宿主域 + 动态命令，`POST /protoclaw/capability_invoke` 投递（三元组 agentId/runtimeId/sessionId 寻址，runtimeId 优先——镜像 todo_control 模式）。命令分 `kind: invoke`（表单+执行+toast）与 `kind: prompt`（挂 pill、发送时以结构化 `capabilityActivations` 随消息流动，经 viewer 队列/线程交接到达任意后继会话，由 feature 的 `onCapabilityActivations` 消费注入）。
+
+关键边界：
+
+- 注册表是进程内语义，跨进程投递归宿主层（server + IPC 通用分支 `capability-invoke` / `capability-list-request`，位于 scripts/capability-ipc.js）
+- 永不提供 bind/reactive/watch-state；共享权威状态与跨 feature 事务是负面清单（上移宿主或重构）
+- entryPoints 是契约约束兼访问控制（缺省 `['feature']`），不是安全边界
+- capability 收集发生在 feature `onInitiate` 成功之后（skill 类动态能力依赖初始化后的状态）
+- 前端 slash 系统（modules/slash-menu.js）与输入框解耦：document 级 capture 监听，双输入框（idle `input-<requestId>` / 运行中 `input-persistent`）经 `.user-input-textarea` class 统一触发，删掉该模块系统照常工作
+- invoke 生命周期日志由框架兜底（namespace `capability`），不依赖 feature 自觉
