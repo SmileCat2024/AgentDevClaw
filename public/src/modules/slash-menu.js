@@ -417,8 +417,26 @@ function _renderPillBar() {
   }).join('');
 }
 
-// 发送时统一触发：逐个 invoke（全部成功才发消息；任一失败 pill 保留供重试）。
-// 消息文本 = 各 pill 短名前缀 + 用户补充说明，作为普通 user 消息原样发出
+// 发送时统一触发：逐个 invoke（选中校验 + 审计），成功后把激活 refs 移交
+// 发送管线（consumeActivations），消息文本仍写短名前缀保持会话流可读。
+// 消息真正触发技能注入的是随 user-turn 流动的结构化通知，不是文本解析
+let _handoffActivations = null;
+
+window.ClawSlash = {
+  /** 发送管线取走并清空本次发送携带的激活 refs（无则返回 null） */
+  consumeActivations() {
+    const refs = _handoffActivations;
+    _handoffActivations = null;
+    return refs;
+  },
+  /** 发送失败时归还激活 refs，重试发送仍携带 */
+  restoreActivations(refs) {
+    if (Array.isArray(refs) && refs.length > 0) {
+      _handoffActivations = refs;
+    }
+  },
+};
+
 async function _dispatchPrompts(ta) {
   const pills = _pendingPrompts.slice();
   const rest = (typeof ta.value === 'string' ? ta.value : '').trim();
@@ -436,10 +454,13 @@ async function _dispatchPrompts(ta) {
     }
   }
   const prefix = pills.map(function (c) { return '/' + _shortName(c); }).join(' ');
+  const refs = pills.map(function (c) { return c.ref || c.name; }).filter(Boolean);
+  _handoffActivations = refs.length > 0 ? refs : null;
   ta.value = prefix + (rest ? ' ' + rest : '');
   autoResize(ta);
   _clearPrompts();
-  // 合成 Enter 走原生发送路径（此刻 pill 已清、菜单已关，capture 放行）
+  // 合成 Enter 走原生发送路径（此刻 pill 已清、菜单已关，capture 放行）；
+  // 发送函数经 ClawSlash.consumeActivations() 取走 refs 附加到 user-turn
   ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
 }
 

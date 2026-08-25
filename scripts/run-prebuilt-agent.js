@@ -1121,6 +1121,9 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
         source: 'viewer-input',
         text: handled.text,
         ...(Array.isArray(handled.images) && handled.images.length > 0 ? { images: handled.images } : {}),
+        ...(Array.isArray(handled.capabilityActivations) && handled.capabilityActivations.length > 0
+          ? { capabilityActivations: handled.capabilityActivations }
+          : {}),
       });
       await this.callArbiter.waitForCompletion(entry.id);
     } catch (error) {

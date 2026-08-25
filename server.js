@@ -896,6 +896,9 @@ app.post('/api/agents/:agentId/user-turn', express.json(), async (req, res, next
       images: Array.isArray(req.body?.images) ? req.body.images : undefined,
       source: typeof req.body?.source === 'string' ? req.body.source : undefined,
       sourceRef: typeof req.body?.sourceRef === 'string' ? req.body.sourceRef : undefined,
+      ...(Array.isArray(req.body?.capabilityActivations)
+        ? { capabilityActivations: req.body.capabilityActivations.filter((a) => typeof a === 'string') }
+        : {}),
       ...metadata,
     });
     res.json({ ...result, ...metadata, operationId: metadata.operationId || null });

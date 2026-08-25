@@ -550,6 +550,7 @@ async function submitQueuedInput() {
   await _awaitPendingImageUploads();
   const images = getPendingInputImages();
 
+  let capabilityActivations = null;
   try {
     // 线程路由快路径（coder 宿主）：交接窗口 / 非 head 会话时输入改走
     // Thread Inbox（服务端 input-gateway 是兜底真相，此处拦截只为即时
@@ -564,7 +565,10 @@ async function submitQueuedInput() {
           : 'Session handoff in progress: image input is not supported yet');
       }
       if (!text) throw new Error('empty input');
-      await window.submitThreadCommand(threadRoute.thread.threadId, text);
+      capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
+      await window.submitThreadCommand(threadRoute.thread.threadId, text, {
+        ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+      });
       const liveTextarea0 = document.getElementById('input-persistent');
       if (liveTextarea0
         && (liveTextarea0.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
@@ -584,6 +588,7 @@ async function submitQueuedInput() {
       return;
     }
 
+    capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
     const res = await fetch(`/api/agents/${targetRuntimeId}/user-turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -591,6 +596,7 @@ async function submitQueuedInput() {
         text: text || ' ',
         images: images.length > 0 ? images : undefined,
         source: 'chat-composer',
+        ...(capabilityActivations?.length ? { capabilityActivations } : {}),
         operationId: `user-turn:${Date.now()}`,
       })
     });
@@ -646,7 +652,11 @@ async function submitQueuedInput() {
     }
   } catch (e) {
     console.error('排队输入提交失败:', e);
-    window.ClawToast?.show?.({
+    // 消息未发出：归还激活 refs，输入框重试发送时仍携带
+    if (capabilityActivations?.length) {
+      window.ClawSlash?.restoreActivations?.(capabilityActivations);
+    }
+    window.ClawToast?.show({
       id: `user-turn-failed-${targetRuntimeId}`,
       status: 'error',
       title: currentLanguage === 'zh' ? '消息发送失败' : 'Failed to send message',

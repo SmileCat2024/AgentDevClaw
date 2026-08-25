@@ -52,6 +52,7 @@ export async function submitUserTurn({
   images,
   source,
   sourceRef,
+  capabilityActivations,
   operationId,
   requestId,
   idempotencyKey,
@@ -97,6 +98,9 @@ export async function submitUserTurn({
           ...(Array.isArray(images) && images.length > 0 ? { images } : {}),
           ...(source ? { source } : {}),
           ...(sourceRef ? { sourceRef } : {}),
+          ...(Array.isArray(capabilityActivations) && capabilityActivations.length > 0
+            ? { capabilityActivations }
+            : {}),
         }),
       },
     );
