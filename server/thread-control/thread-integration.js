@@ -33,20 +33,12 @@ export { isThreadHostSession };
 export function createThreadIntegration({ control = null } = {}) {
   const { core, board, archive } = control || getThreadControl();
 
+  // T001：成员查询的权威实现在框架 WorkThread.findThreadBySession——
+  // 归属事实唯一取自 sessionChain 链记录（root / predecessor / head 一致），
+  // 不用 UI 投影或运行时扫描推导。此处保留 Claw 侧入口签名，消费方
+  // （acp / input-gateway / 前端投影）不变。
   async function findThreadBySession(agentId, sessionId) {
-    const normalizedAgentId = String(agentId || '').trim();
-    const normalizedSessionId = String(sessionId || '').trim();
-    if (!normalizedAgentId || !normalizedSessionId) return null;
-    const summaries = await core.listThreads({ agentId: normalizedAgentId });
-    for (const summary of summaries) {
-      if (!summary?.threadId) continue;
-      const candidate = await core.getThread(summary.threadId);
-      if (Array.isArray(candidate?.sessionChain)
-        && candidate.sessionChain.some((entry) => entry?.sessionId === normalizedSessionId)) {
-        return candidate;
-      }
-    }
-    return null;
+    return core.findThreadBySession(agentId, sessionId);
   }
 
   return {
@@ -66,6 +58,10 @@ export function createThreadIntegration({ control = null } = {}) {
         const thread = await core.start({
           sessionRef: { agentId, sessionId },
           title: String(session?.title || '').trim(),
+          // T001：身份归属取自 root Session 记录自身（sessionType 即产品身份
+          // 事实）。字段缺失（undefined / 空串）时框架回退 identitySource
+          // （session index）解析；解析不到记为 null（未知），绝不默认 main。
+          identity: session?.sessionType,
         });
         console.log(`[thread-integration] thread created: ${thread.threadId} head=${sessionId}`);
         return thread;

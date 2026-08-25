@@ -28,19 +28,12 @@ export function createThreadLifecycleService({
   }
 
   async function findThreadBySession(agentId, sessionId) {
+    // T001：成员归属事实统一取自框架 WorkThread.findThreadBySession
+    // （sessionChain 链记录），与 integration / input-gateway 同源。
     const normalizedAgentId = cleanId(agentId);
     const normalizedSessionId = cleanId(sessionId);
     if (!normalizedAgentId || !normalizedSessionId) return null;
-    const summaries = await core.listThreads({ agentId: normalizedAgentId });
-    for (const summary of summaries) {
-      if (!summary?.threadId) continue;
-      const thread = await core.getThread(summary.threadId);
-      if (Array.isArray(thread?.sessionChain)
-        && thread.sessionChain.some((entry) => entry?.sessionId === normalizedSessionId)) {
-        return thread;
-      }
-    }
-    return null;
+    return core.findThreadBySession(normalizedAgentId, normalizedSessionId);
   }
 
   async function archiveThread(threadId, { reason = 'user_archive' } = {}) {

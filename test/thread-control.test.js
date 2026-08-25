@@ -44,8 +44,23 @@ function makeTempRoot() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'claw-thread-test-'));
 }
 
-function makeControl(root, bridgeOptions = {}) {
-  return createThreadControl({ rootDir: root, bridge: new WorkThreadRuntimeBridge(bridgeOptions) });
+function makeControl(root, bridgeOptions = {}, sub = `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`) {
+  // T001：测试用会话身份真相源（hermetic，不依赖真实 Runtime / 用户数据目录）。
+  // 默认约定：session 文件名以 -main 结尾 → main 身份，否则 coder——与下方
+  // 各用例的 sessionRef 命名一致（s1/coder-s1/ig-s1/... 均为 coder 宿主会话）。
+  const identitySource = async (agentId, sessionId) => {
+    const id = String(sessionId || '').trim();
+    if (!id) return null;
+    return id.endsWith('-main') ? 'main' : 'coder';
+  };
+  // 每个 control 独立子目录：线程成员全库唯一（T001 成员不变量）意味着
+  // 跨 control 复用 session id 会被 session_already_in_thread 拦截，
+  // 子目录隔离保证各用例的数据互不干扰。
+  return createThreadControl({
+    rootDir: path.join(root, sub),
+    bridge: new WorkThreadRuntimeBridge(bridgeOptions),
+    identitySource,
+  });
 }
 
 test('production assembly (no injected bridge) constructs without reference errors', async () => {

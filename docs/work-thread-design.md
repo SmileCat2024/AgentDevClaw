@@ -113,10 +113,11 @@ Session 还携带运行身份。当前 programming-helper 有两个产品角色�
 
 ```
 Host / Workspace
- └─ Work Thread       连续性锚点：把一组先后接力的 Session 认定为同一项工作
-     ├─ sessionChain  线性链：root → … → head（当前承接会话）
-     ├─ commands      Thread Inbox：持久化的待投递指令
-     └─ pendingSuccession  交接意图（第一等落盘状态，见 §5）
+  └─ Work Thread       连续性锚点：把一组先后接力的 Session 认定为同一项工作
+      ├─ identity      产品身份归属（root Session 解析，T001 落盘第一等字段）
+      ├─ sessionChain  线性链：root → … → head（当前承接会话）
+      ├─ commands      Thread Inbox：持久化的待投递指令
+      └─ pendingSuccession  交接意图（第一等落盘状态，见 §5）
 ```
 
 线程的四件事（全部职责）：
@@ -147,9 +148,29 @@ Runtime 可以在变换过程中停止并重建；上下文也可以从 A 变换
 coder Session A → coder Session B → coder Session C
 ```
 
-身份连续性是 Thread 的不变量，不是 UI 展示偏好。successor 创建、handoff
-落盘、runtime 启动和 Thread head 推进都必须共同维护它；任何一环发现身份
-不一致，都不得让错误 successor 成为 head。
+身份连续性是 Thread 的不变量，不是 UI 展示偏好。T001 把它从「隐含事实」
+提升为控制面的显式事实与事务内守卫：
+
+- **身份归属是线程记录字段**：新建线程时从 root Session 确定
+  （`identity`，经宿主注入的 identitySource 解析 sessionType）；root / head /
+  历史成员是同一记录，身份查询对三者恒等。
+- **successor 加入 head 前的事务内校验**（`advanceHead`，per-thread 锁保护，
+  失败时线程记录零变更、旧 head 保持有效）：
+  - `session_workspace_mismatch`：successor 不属于线程的工作空间宿主；
+  - `thread_identity_mismatch`：successor 身份与线程身份不一致；
+  - `thread_identity_missing`：线程身份未知且无法从 root Session 再推导
+    （旧数据缺字段的明确失败，不静默放行、不默认成 main）；
+  - `session_already_in_thread`：successor 已是其它线程的成员（本线程内的
+    重复由既有 `duplicate_session` 覆盖）。
+  旧记录缺身份字段时读时归一为 `null`（身份未知）；推进 head 时若 root
+  身份可从 Session 事实推导，则回填并与 head 推进同盘原子落盘。
+- **成员关系是生命周期所有权**：root / 历史成员 / head 的归属查询统一走
+  `WorkThread.findThreadBySession`（事实唯一来源是 sessionChain 链记录，
+  不用 UI 投影或运行时扫描推导）；非线程 Session 的创建、输入和生命周期
+  完全不受线程控制面影响（纯会话语义）。
+- **身份判定与宿主判定正交**：`isThreadHostSession` 只回答「新会话是否自动
+  建线程」（环境存在性开关），不承载身份词汇表；身份真相源按装配注入
+  （identitySource），不引入全局 coder/main 生命周期注册表。
 
 Thread 的生命周期所有权来自成员关系，而不是额外的全局“角色注册表”：
 
@@ -535,12 +556,15 @@ claw threads close <threadId> [--reason R]
 ```
 服务端
  server/thread-control/
-   thread-store.js            持久化（原子写 / per-thread 锁 / 索引摘要含 chainEdges）
-   thread-controller.js       唯一入口（createThread / appendCommand /
-                               beginSessionHandoff / advanceHead / deliverPendingCommands /
-                               isHandoffActive / findThreadBySession / findThreadByHeadSession）
-   thread-inbox.js            指令纯函数层（幂等入队 / 排序 / 终态裁剪）
-    thread-runtime-bridge.js   inbox → submitUserTurn 最后一跳
+    thread-store.js            持久化（原子写 / per-thread 锁 / 索引摘要含
+                                chainEdges + identity）
+    thread-controller.js       唯一入口（createThread / appendCommand /
+                                beginSessionHandoff / advanceHead / deliverPendingCommands /
+                                isHandoffActive / findThreadBySession / findThreadByHeadSession）
+    thread-identity.js         T001 会话身份真相源（identitySource 生产装配：
+                                session index / 会话文件 → sessionType）
+    thread-inbox.js            指令纯函数层（幂等入队 / 排序 / 终态裁剪）
+     thread-runtime-bridge.js   inbox → submitUserTurn 最后一跳
     thread-integration.js      会话生命周期接线（onSessionCreated（含
                                 branch 分支建线程）/ beginSessionSuccession /
                                 applySessionSuccession / onSessionDeleted /
