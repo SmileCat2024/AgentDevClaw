@@ -2,9 +2,10 @@
  * slash-menu.js — Slash 命令菜单
  *
  * 独立 UI 组件，与 user input 输入框解耦：
- * - 输入框只是触发源之一：内容以 / 开头时浮层出现（document 级 capture
- *   监听，只读 value，不修改 persistent-input.js 的任何行为；移除本模块
- *   系统照常工作）
+ * - 触发源是任一 .user-input-textarea（idle 主输入区 input-<requestId> 与
+ *   运行中常驻条 #input-persistent 皆可）：内容以 / 开头时浮层出现
+ *   （document 级 capture 监听，只读 value，不修改输入模块任何行为；
+ *   移除本模块系统照常工作）
  * - 键盘归属规则：菜单有可选项时 Enter/↑/↓/Tab/Esc 归菜单（capture 拦截，
  *   Enter = 执行 + 消费整条输入），空态或关闭时键盘归输入框 —— / 开头的
  *   文本此时作为普通消息正常发送，发送路径对 slash 零感知
@@ -39,10 +40,23 @@ let _filtered = [];
 let _highlightIdx = 0;
 let _visible = false;
 let _menuEl = null;
+// 当前触发菜单的输入框（两类：#input-persistent 常驻条 / input-<requestId> 主输入区，
+// 共同特征 class user-input-textarea）。定位、执行消费、键盘归属都跟随它
+let _activeTa = null;
 // 参数表单态：非 null 时菜单内容为该命令的参数表单
 let _formCmd = null;
 // 动态清单拉取去重键（agentId::sessionId），菜单每次从隐藏转可见时重拉
 let _lastFetchKey = null;
+
+function _isInputTextarea(el) {
+  return !!(el && el.tagName === 'TEXTAREA' && el.classList.contains('user-input-textarea'));
+}
+
+function _currentTa() {
+  // detached（输入区随会话切换重建）时回退到常驻条
+  if (_activeTa && _activeTa.isConnected) return _activeTa;
+  return document.getElementById('input-persistent');
+}
 
 function _allCommands() {
   return _hostCommands.concat(_sessionCommands);
@@ -80,8 +94,8 @@ function _maybeFetchSessionCommands() {
       };
     });
     if (_visible && !_formCmd) {
-      const ta = document.getElementById('input-persistent');
-      if (ta) _syncFromInput(ta.value);
+      const ta = _currentTa();
+      if (ta) _syncFromInput(ta);
     }
   }).catch(function () {
     // 拉取失败仅意味着本次会话命令缺席，宿主命令仍可用；下次唤起重试
@@ -115,7 +129,7 @@ function _ensureMenuEl() {
     if (!item) return;
     e.preventDefault();
     const cmd = _filtered[parseInt(item.dataset.idx, 10)];
-    void _execute(cmd, document.getElementById('input-persistent'));
+    void _execute(cmd, _currentTa());
   });
   return _menuEl;
 }
@@ -139,7 +153,7 @@ function _render() {
 }
 
 function _position() {
-  const ta = document.getElementById('input-persistent');
+  const ta = _currentTa();
   if (!ta) {
     _hide();
     return;
@@ -175,7 +189,13 @@ function _matches(cmd, query) {
   return tail.startsWith(query);
 }
 
-function _syncFromInput(value) {
+function _syncFromInput(ta) {
+  if (!_isInputTextarea(ta)) {
+    if (_visible) _hide();
+    return;
+  }
+  _activeTa = ta;
+  const value = ta.value;
   if (typeof value !== 'string' || !value.startsWith('/')) {
     if (_visible) _hide();
     return;
@@ -229,7 +249,7 @@ function _completeCommand(ta) {
   if (!cmd || !ta) return;
   ta.value = '/' + cmd.name + ' ';
   autoResize(ta);
-  _syncFromInput(ta.value);
+  _syncFromInput(ta);
 }
 
 // ── 会话命令投递（capability registry 传输面消费端）─────────────
@@ -391,13 +411,13 @@ function _cancelForm() {
 // ── document 级 capture 监听（零侵入 persistent-input.js）────────
 
 document.addEventListener('input', function (e) {
-  if (!e.target || e.target.id !== 'input-persistent') return;
-  _syncFromInput(e.target.value);
+  if (!_isInputTextarea(e.target)) return;
+  _syncFromInput(e.target);
 }, true);
 
 document.addEventListener('keydown', function (e) {
   if (!_visible) return;
-  if (!e.target || e.target.id !== 'input-persistent') {
+  if (!_isInputTextarea(e.target)) {
     // 表单态下，焦点在表单控件内：Enter 提交、Esc 取消
     if (_formCmd && _menuEl && _menuEl.contains(e.target)) {
       if (e.key === 'Enter') {
@@ -454,7 +474,7 @@ document.addEventListener('keydown', function (e) {
 document.addEventListener('mousedown', function (e) {
   if (!_visible) return;
   if (_menuEl && _menuEl.contains(e.target)) return;
-  if (e.target && e.target.id === 'input-persistent') return;
+  if (_isInputTextarea(e.target)) return;
   _hide();
 }, true);
 
@@ -473,8 +493,8 @@ window.SlashMenu = {
       return c && typeof c.name === 'string' && c.name;
     });
     if (_visible && !_formCmd) {
-      const ta = document.getElementById('input-persistent');
-      if (ta) _syncFromInput(ta.value);
+      const ta = _currentTa();
+      if (ta) _syncFromInput(ta);
       else _hide();
     }
   },
