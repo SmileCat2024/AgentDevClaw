@@ -469,9 +469,10 @@ describe('T004: 清理结果 complete / partial 区分', () => {
 // ─── 6. main Session 独立归档语义不受影响 ─────────────────────────
 
 describe('T004: main Session 独立归档语义', () => {
-  it('session archive route still redirects only coder members to thread archive', async () => {
-    // 源码级契约：session 归档路由中，coder 线程成员走线程归档
-    // （archiveThread），其余 sessionType 保持独立 session 归档
+  it('session archive route redirects thread members via lifecycle target resolution', async () => {
+    // 源码级契约：session 归档路由经统一目标解析（resolveLifecycleTarget），
+    // Thread 成员的归档 / 恢复定位所属 Thread 执行线程语义（archiveThread /
+    // unarchiveThread），非成员 Session 保持独立归档
     // （archivePrebuiltSession）——main 的独立归档语义不被线程归档接管。
     const fsSync = await import('node:fs');
     const sessionRoutes = fsSync.readFileSync(
@@ -480,8 +481,9 @@ describe('T004: main Session 独立归档语义', () => {
     const start = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/archive'");
     assert.ok(start >= 0, 'session archive route must exist');
     const route = sessionRoutes.slice(start, sessionRoutes.indexOf('app.post(', start + 10));
-    assert.match(route, /sessionRecord\.sessionType === 'coder' && threadLifecycle/);
-    assert.match(route, /threadLifecycle\.archiveThread\(thread\.threadId/);
+    assert.match(route, /resolveLifecycleTarget\(\{/);
+    assert.match(route, /lifecycleTarget\.actual\.type === 'thread'/);
+    assert.match(route, /threadLifecycle\.archiveThread\(lifecycleTarget\.actual\.id/);
     assert.match(route, /archivePrebuiltSession\(agent\.id, sessionId, archived/);
   });
 
