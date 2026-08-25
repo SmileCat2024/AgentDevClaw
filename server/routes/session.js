@@ -32,6 +32,7 @@ import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
 import { getThreadIntegration } from '../thread-control/thread-integration.js';
+import { resolveLifecycleTarget, resolveTransformationTarget, isBrowseOnlyMount } from '../thread-control/target-resolution.js';
 
 // server.js lives at project root; this module is at server/routes/session.js
 const __filename = fileURLToPath(import.meta.url);
@@ -82,6 +83,26 @@ export function setupSessionRoutes(app, express, ctx) {
     threadLifecycle,
     threadSuccession,
   } = ctx;
+
+  // T003：统一目标解析的成员归属真相源——经 threadLifecycle.findThreadBySession
+  // 绑定框架 WorkThread 的会话链记录（同源：input-gateway / acp），
+  // 所有 Session 路由共用同一解析结果，杜绝「按 sessionType 特判」的分叉。
+  const _memberLookup = async (agentId, sessionId) => {
+    if (typeof threadLifecycle?.findThreadBySession !== 'function') return null;
+    return threadLifecycle.findThreadBySession(agentId, sessionId).catch(() => null);
+  };
+
+  // T003：统一目标描述符 → 路由响应附加块（请求目标 + 实际生效对象 + 归属），
+  // 让调用方不会误以为「Session 成功、Thread 未变化」。
+  const _targetShape = (target) => ({
+    target: {
+      request: target.request,
+      actual: target.actual,
+      membership: target.membership,
+      threadId: target.threadId ?? null,
+      headSessionId: target.headSessionId ?? null,
+    },
+  });
 
 // Automation trigger from thread-host runtimes (ContextRotationTriggerFeature):
 // the event is ephemeral and thread-rotation is its only consumer. Interactive
@@ -536,6 +557,21 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
       return;
     }
     const force = !!req.body?.force;
+    // T003：summary 只能作用于 Thread 当前 head；历史 Session 返回
+    // stale_session（附 Thread ID 与当前 head），不静默改写目标。
+    const transformTarget = await resolveTransformationTarget({
+      agentId, sessionId, memberLookup: _memberLookup,
+    });
+    if (!transformTarget.ok && transformTarget.code === 'stale_session') {
+      // 直接以 409 统一形状返回（不经全局错误处理器——那里会丢弃 target 附加块）。
+      res.status(409).json({
+        ok: false,
+        code: 'stale_session',
+        message: transformTarget.message,
+        ..._targetShape(transformTarget),
+      });
+      return;
+    }
     const existingSummary = await findSessionSummary(agentId, sessionId);
     if (existingSummary && !force) {
       await setSessionHasSummary(agentId, sessionId, true);
@@ -989,6 +1025,28 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
   try {
     const { agentId: preferredAgentId, sessionId } = target;
 
+    // T003：上下文变换只能作用于 Thread 当前 head。目标是 Thread 历史 Session 时
+    // 返回明确的 stale_session 过期目标错误（附 Thread ID 与当前 head），不静默
+    // 改写成 head、不启动接力。非 Thread Session（standalone）保持原 Session 语义。
+    const transformTarget = await resolveTransformationTarget({
+      agentId: preferredAgentId,
+      sessionId,
+      memberLookup: _memberLookup,
+    });
+    if (!transformTarget.ok && transformTarget.code === 'stale_session') {
+      // 直接以 409 统一形状返回（不经全局错误处理器——那里会丢弃 target 附加块）：
+      // 调用方拿到 Thread ID 与当前 head，可据此重定向到当前 head 发起变换。
+      trace.mark('failed', { errorCode: 'stale_session' });
+      res.status(409).json({
+        ok: false,
+        code: 'stale_session',
+        message: transformTarget.message,
+        ..._targetShape(transformTarget),
+        operationId: trace.operationId,
+      });
+      return;
+    }
+
     const detached = req.body?.detached !== false;
     const policy = req.body?.policy || {};
     const archiveOriginal = req.body?.archiveOriginal === true;
@@ -1228,6 +1286,16 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
   try {
     const { agentId, sessionId } = resolveSessionTarget(req.body);
     const agent = await requireAgentLight(agentId);
+    // T003：历史 Session 的 activate 只允许浏览 / 挂载视角，不改变 head。
+    // 解析目标归属：Thread 成员时附统一目标形状（实际对象 = Thread）；
+    // 历史成员标记 browseOnly=true——挂载运行以便只读查看，但绝不推进
+    // Thread head（head 只由上下文变换的接力提交点推进，见 thread-succession）。
+    const activateTarget = await resolveLifecycleTarget({
+      agentId: agent.id,
+      sessionId,
+      memberLookup: _memberLookup,
+    });
+    const browseOnly = activateTarget.ok && isBrowseOnlyMount(activateTarget);
     const session = await activatePrebuiltSession(agent.id, sessionId, { returnSummary: false });
     const committedIndex = await readSessionIndex(agent.id);
     trace.mark('index_committed', { revision: committedIndex.revision });
@@ -1249,6 +1317,8 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
       targetSessionId: session.id,
       targetStatus: status,
       agent: null,
+      browseOnly: browseOnly || null,
+      ..._targetShape(activateTarget),
     });
     trace.mark('response_sent');
   } catch (error) {
@@ -1277,11 +1347,29 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
       assemblyRuntime = await stopAssemblyRuntime(sessionId);
     }
     const deletedRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
-    if (deletedRecord.sessionType === 'coder') {
-      const error = new Error('Coder sessions are managed by their thread and cannot be deleted individually');
-      error.statusCode = 409;
-      error.code = 'coder_session_delete_forbidden';
-      throw error;
+    // T003：删除按 Thread 成员关系解析，不再按 sessionType 特判。Thread 成员
+    // 删除的是工作容器（级联清理其 Session / handoff / Inbox / 执行记录），与
+    // 删除单个 Session 是不可安全翻译的破坏性操作——本票不改变 Thread 删除的
+    // 执行细节，故返回机器可判断错误（实际对象 = Thread），绝不悄悄降级为
+    // Session 级删除让调用方误以为「Session 成功、Thread 未变化」。
+    const lifecycleTarget = await resolveLifecycleTarget({
+      agentId: agent.id,
+      sessionId,
+      memberLookup: _memberLookup,
+    });
+    if (lifecycleTarget.ok && lifecycleTarget.actual.type === 'thread') {
+      // 直接以 409 统一形状返回（不经全局错误处理器——那里会丢弃 target 附加块）：
+      // 调用方拿到 Thread ID 与归属事实，可据此走 Thread 删除入口（带确认的
+      // 级联清理），而不是误以为 Session 删除成功。
+      trace.mark('failed', { errorCode: 'thread_managed_session_delete_forbidden' });
+      res.status(409).json({
+        ok: false,
+        code: 'thread_managed_session_delete_forbidden',
+        message: 'Thread members are managed by their thread and cannot be deleted individually; delete the thread instead',
+        ..._targetShape(lifecycleTarget),
+        operationId: trace.operationId,
+      });
+      return;
     }
     const deletedRuntime = getAgentRuntime(agent.id, sessionId);
     const deleted = await deletePrebuiltSession(agent.id, sessionId, {
@@ -1341,18 +1429,20 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
     const agent = await requireAgentLight(agentId);
     const sessionRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
     const archived = req.body.archived !== false;
-    if (sessionRecord.sessionType === 'coder' && threadLifecycle) {
-      const thread = await threadLifecycle.findThreadBySession(agent.id, sessionId);
-      if (!thread) {
-        const error = new Error('Coder session is not attached to a thread');
-        error.statusCode = 409;
-        error.code = 'coder_thread_missing';
-        throw error;
-      }
+    // T003：目标按 Thread 成员关系解析（统一入口），不再按 sessionType 特判——
+    // Thread 成员（head / 历史）的归档 / 恢复定位所属 Thread 执行 Thread 语义；
+    // 独立 Session 保持原语义。响应附统一目标形状，主体为实际生效对象。
+    const lifecycleTarget = await resolveLifecycleTarget({
+      agentId: agent.id,
+      sessionId,
+      memberLookup: _memberLookup,
+    });
+    if (lifecycleTarget.ok && lifecycleTarget.actual.type === 'thread') {
       if (archived) {
-        const threadResult = await threadLifecycle.archiveThread(thread.threadId, { reason: 'session_archive_redirect' });
+        const threadResult = await threadLifecycle.archiveThread(lifecycleTarget.actual.id, { reason: 'session_archive_redirect' });
         res.json({
           ...threadResult,
+          ..._targetShape(lifecycleTarget),
           archivedSessionId: sessionId,
           archived: true,
           operationId: trace.operationId,
@@ -1360,9 +1450,10 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
         trace.mark('response_sent');
         return;
       }
-      const threadResult = await threadLifecycle.unarchiveThread(thread.threadId);
+      const threadResult = await threadLifecycle.unarchiveThread(lifecycleTarget.actual.id);
       res.json({
         ...threadResult,
+        ..._targetShape(lifecycleTarget),
         archivedSessionId: sessionId,
         archived: false,
         operationId: trace.operationId,
@@ -1386,7 +1477,7 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
         targetStartupError = String(error?.message || error);
       }
     }
-    res.json({ ...result, targetSessionId, targetStatus, targetStartupError, operationId: trace.operationId });
+    res.json({ ...result, ..._targetShape(lifecycleTarget), targetSessionId, targetStatus, targetStartupError, operationId: trace.operationId });
     trace.mark('response_sent');
 
     // 归档状态变化通知关联群聊；线程投影仍以 session index 的实时状态为准。
