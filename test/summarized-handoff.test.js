@@ -86,8 +86,10 @@ describe('summarized-handoff pure functions', () => {
         title: '  My  Title ',
         goal: 'Fix\n\nthe\n\nbug',
         constraints: '  must be fast  ',
+        sessionType: 'coder',
       });
       assert.equal(rec.title, 'My Title');
+      assert.equal(rec.sessionType, 'coder');
       assert.equal(rec.goal, 'Fix\n\nthe\n\nbug');
       assert.equal(rec.constraints, 'must be fast');
     });
@@ -104,7 +106,7 @@ describe('summarized-handoff pure functions', () => {
       const expectedKeys = [
         'title', 'featureName', 'agentName', 'taskTitle', 'taskType',
         'goal', 'constraints', 'expectedOutput', 'targetFiles',
-        'referenceMaterials', 'openDirectory', 'createdAt', 'updatedAt',
+        'referenceMaterials', 'openDirectory', 'createdAt', 'updatedAt', 'sessionType',
       ];
       assert.deepEqual(Object.keys(rec).sort(), expectedKeys.sort());
     });

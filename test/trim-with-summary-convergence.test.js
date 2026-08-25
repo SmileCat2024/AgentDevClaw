@@ -137,7 +137,7 @@ describe('writeTrimWithSummaryHandoffPackage', () => {
       agentId: 'agent a/1',
       sessionId: 'sess 1',
       sessionPath: path.join(tmpRoot, 'sess-1.json'),
-      sourceRecord: { title: 'T', goal: 'G' },
+      sourceRecord: { title: 'T', goal: 'G', sessionType: 'coder' },
       sessionSnapshot: snapshot,
       seed,
     });
@@ -146,6 +146,7 @@ describe('writeTrimWithSummaryHandoffPackage', () => {
     assert.equal(handoff.compilerVersion, 'trim-transcript-v1');
     assert.equal(handoff.seedKind, 'message-replay');
     assert.equal(handoff.sourceAgentId, 'agent-a-1');
+    assert.equal(handoff.sourceRecord.sessionType, 'coder');
     assert.equal(handoff.appendedSummary.summaryText, 'MOCK_TRIM_APPENDED_SUMMARY');
     assert.equal(handoff.appendedSummary.sessionTitle, '');
     assert.deepEqual(handoff.appendedSummary.importantFiles, seed.importantFiles);

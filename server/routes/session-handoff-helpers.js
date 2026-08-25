@@ -175,6 +175,9 @@ export function createSessionHandoffHelpers(deps) {
 
     const session = await createPrebuiltSession(agent.id, {
       sourceSessionId,
+      // 新 handoff 自带身份；createPrebuiltSession 仍会从 sourceSessionId
+      // 回读旧 handoff 对应的 Session，兼容没有该字段的历史 handoff。
+      sessionType: cleanSessionText(handoff?.sourceRecord?.sessionType) || undefined,
       goal: goal || undefined,
       title: derivedTitle || undefined,
       metadata: {

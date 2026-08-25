@@ -1,8 +1,10 @@
 # 工作线程（Work Thread）设计与输入链路统一
 
-> 状态：历史设计记录；现行生命周期规范见 [`work-thread-lifecycle.md`](work-thread-lifecycle.md)
-> 前置：`docs/plans/` 无相关计划文档；本文保留线程接入与输入链路的设计背景。
+> 状态：现行产品语义与实现约束；具体生命周期接线见 [`work-thread-lifecycle.md`](work-thread-lifecycle.md)
+> 前置：`docs/plans/` 无相关计划文档；本文保留线程接入、输入链路与对象边界的设计背景。
 > 关联实现：`server/thread-control/`、AgentDev `packages/core/src/core/workthread/`。
+>
+> 本文区分“已经实现的机制”和“必须遵守的产品契约”。后续实现可以逐步补齐契约，但不得用 UI 层的临时特判绕过对象边界。
 
 ---
 
@@ -94,11 +96,18 @@ Claw 长期以「会话」为一等单位。会话的接续（trim / summary）�
 现有对象分层（保持不变）：
 
 ```
-Host / Workspace      一个产品工作空间（programming-helper / coder / …）
- └─ Session           一段可恢复、可审计的对话与状态（磁盘上的真相）
+Host / Workspace      一个产品工作空间（例如 programming-helper）
+ └─ Session           一次可恢复、可审计的对话与上下文快照（磁盘上的真相）
      └─ Runtime       承载 Session 的进程实例（可消失、可重建）
          └─ Call      Runtime 内一次串行的 Agent 调用（CallArbiter 仲裁）
 ```
+
+Session 还携带运行身份。当前 programming-helper 有两个产品角色：
+
+- `main`：面向用户的交互式编程小助手，会话中心；
+- `coder`：面向调度与持续工作的编程角色，Thread 中的每一棒都必须保持该身份。
+
+`coder` 不是独立工作空间，而是 programming-helper 工作空间中的独立身份投影。身份决定提示词、工具、运行时装配和前端分类；不能在普通上下文变换中悄然改变。
 
 新增的一层（仅线程宿主）：
 
@@ -115,10 +124,78 @@ Host / Workspace
 1. 这项工作当前由哪个 Session 承接（headSessionId + revision）；
 2. Session 更替时连续性如何不丢（advanceHead 原子推进 + handoff 材料）；
 3. 更替期间新指令如何不丢（Thread Inbox）;
-4. 对这条工作的操作入口（暂停 / 继续 / 接力 / 终止）。
+4. 对这条工作的操作入口（接力 / 归档 / 恢复 / 删除）。
 
 线程**不负责**：定义工单字段、判断任务完成、取代 Todo/Dispatch、驱动
 Agent 无限循环。上层产品语义（多变、脆弱）全部留在线程之上，不进地基。
+
+### 2.1 会话变换与身份连续性
+
+Claw 的核心不是一个长期持有全部状态的 Agent 实体，而是会话本身：
+
+```text
+Session A（当前 head）
+  -- trim / summary / compact 上下文变换 -->
+Session B（新的 head）
+```
+
+Runtime 可以在变换过程中停止并重建；上下文也可以从 A 变换成 B。但对
+同一条 Thread 来说，B 必须保持与 A 相同的产品身份。当前 coder 线程因此
+只能形成：
+
+```text
+coder Session A → coder Session B → coder Session C
+```
+
+身份连续性是 Thread 的不变量，不是 UI 展示偏好。successor 创建、handoff
+落盘、runtime 启动和 Thread head 推进都必须共同维护它；任何一环发现身份
+不一致，都不得让错误 successor 成为 head。
+
+Thread 的生命周期所有权来自成员关系，而不是额外的全局“角色注册表”：
+
+- 属于 Thread 的 Session，其接力、归档、恢复和删除由 Thread 协调；
+- 不属于 Thread 的 Session，继续使用独立 Session 生命周期；
+- `isThreadHostSession` 只决定新会话是否自动建立 Thread，不承担所有操作
+  的角色判定。
+
+历史 Session 是 Thread 的只读历史节点。只有当前 head 可以继续接收工作；
+历史节点可以查看消息、工具调用和变换记录，但不能单独写入、重新激活、
+归档或删除。
+
+### 2.2 Thread 的生命周期语义
+
+Thread 是线性工作容器，不在内部形成分叉：
+
+- **上下文变换**（trim、summary、compact）只作用于当前 head；成功后创建
+  同身份 successor，并原子推进 head。变换失败时旧 head 保持有效，Thread
+  不推进。
+- **从历史节点分支**会创建新的 Thread；原 Thread 的线性链不被改写。
+- **归档**是对 Thread 的取消操作：拒绝新的派发，取消 Inbox 中尚未开始
+  的指令；已经开始的调用允许自然完成，但完成后不得继续消费新的工作。
+  归档保留 Thread 与历史，恢复时只恢复当前 head，不自动恢复被取消的指令。
+- **删除**是带确认的破坏性操作：停止或等待运行资源后，级联删除 Thread、
+  其 Session、handoff、Inbox 和执行记录，不使用与产品语义不一致的回收站。
+- **恢复**不产生新的 successor；只有用户再次执行上下文变换，或明确要求
+  重建上下文时，才增加新的会话棒次。
+
+归档和删除都应先停止接受新的工作。删除遇到正在执行的调用时，优先等待
+其完成，必要时再强制中断；归档不强制中断已经开始的调用。
+
+### 2.3 操作对象与兼容入口
+
+产品和 API 的动作词应尽量统一。调用方不应为了区分“Thread 操作”和
+“独立 Session 操作”而记忆两套动作名称；服务端根据目标是否属于 Thread
+解析实际对象。
+
+兼容的 Session 入口按以下规则适配：
+
+- `archive`、`resume`、`delete` 等生命周期动作，从任意 Thread 成员定位到
+  Thread，响应以实际生效的 Thread 结果为主体，并保留请求目标信息；
+- `trim`、`summary`、`compact` 等上下文变换只能作用于当前 head；对历史
+  Session 请求时返回明确的过期目标错误，并告知所属 Thread 和当前 head，
+  不得静默改写目标；
+- 不允许通过旧 Session 入口绕过 Thread 的线性历史和 head 约束；新代码应
+  优先使用统一的对象解析与 Thread 控制面。
 
 **关键架构判断：Thread 不能是 Feature。** Feature 挂在 Runtime 内，
 Runtime 停止即消失；而线程恰恰要跨 Runtime 存续。线程控制面必须住在
@@ -370,7 +447,9 @@ no-op 返回——纯会话（PH 等）的 compact/summary 流程与未接入线
 ### 7.3 暂存气泡（persistent-input.js）
 
 - 提交快路径判定 `thread` → 文本走 `submitThreadCommand`，toast
-  "已暂存 · 新会话就绪后自动继续"，输入框即时清空（观感 = 进队列）；
+  "已暂存 · 接力完成后继续"，输入框即时清空（观感 = 进队列）；
+- 归档不是暂停：归档请求会拒绝新的派发并取消 Inbox 中尚未开始的指令；
+  已经开始的调用允许自然完成，但不会在归档后继续消费其它暂存工作。
 - 交接窗口收到图片 → 显式报错（inbox 不支持图片，不静默丢弃）；
 - 服务端兜底响应 `delivery === 'thread_queued'` → 同样渲染气泡；
 - 气泡渲染合并线程 pending（`_renderQueueBubbles` 签名纳入 thread pending，
@@ -397,8 +476,9 @@ no-op 返回——纯会话（PH 等）的 compact/summary 流程与未接入线
 
 ## 8. 兼容性边界（纯会话零影响）
 
-- **服务端**：THREAD_HOST_AGENT_IDS = {'coder'}，之外的工作空间在
-  integration 层直接跳过；InputGateway 对非宿主原样透传；
+- **服务端**：Thread 宿主判定只用于新会话是否自动建 Thread；Thread 生命周期
+  以成员关系为所有权边界，不新增全局角色注册表。非 Thread Session 继续走
+  独立会话路径；InputGateway 对非 Thread 会话原样透传。
 - **前端**：thread-store.js 所有入口在无线程数据时 no-op / 空输出；
   会话列表徽标、分隔条、指示器、守卫全部条件渲染；
 - **coder 也可能被当纯会话用**：会话不属于任何线程时与 PH 行为一致；
@@ -422,9 +502,10 @@ POST /protoclaw/threads/:threadId/commands           追加 Thread Inbox 指令
 POST /protoclaw/threads/:threadId/deliver            重试 pending 投递
 POST /protoclaw/threads/:threadId/head               推进 session head
 POST /protoclaw/threads/:threadId/handoff-failed     记录交接失败
-POST /protoclaw/threads/:threadId/resume             恢复看板观察状态
-POST /protoclaw/threads/:threadId/archive            归档 Thread 并清理执行资源
-POST /protoclaw/threads/:threadId/unarchive          取消归档，不自动启动 Runtime
+POST /protoclaw/threads/:threadId/resume             恢复已归档 Thread 的当前 head
+POST /protoclaw/threads/:threadId/archive            归档 Thread，取消未开始工作
+POST /protoclaw/threads/:threadId/unarchive          兼容别名：恢复已归档 Thread
+DELETE /protoclaw/threads/:threadId                  删除 Thread 及其关联数据
 POST /protoclaw/threads/:threadId/close              系统硬关闭终态
 ```
 
@@ -507,10 +588,14 @@ claw threads close <threadId> [--reason R]
   外部副作用原则一致；
 - 线程链严格线性；branch 在线程宿主上创建独立新线程（branch 路由已接
   onSessionCreated，分支会话成为新线程的 root），不在线程内分叉；
-- 会话删除善后：被删会话是线程 head 时线程随之关闭（pending 指令一并
-  取消，避免悬空 active 线程累积）；coder Session 不支持单独删除；
-  归档是 Thread 级清理事务（暂停、 中断、停止链上 Runtime、关闭 Board），
-  取消归档只恢复可调度资格，不自动启动 Runtime。
+- Thread 成员的历史 Session 只读，不能单独写入、重新激活、归档或删除；
+  兼容 Session 入口应按成员关系翻译为 Thread 操作，不能绕过 Thread 的 head
+  与线性历史约束。
+- 归档是 Thread 级取消操作：拒绝新的派发并取消尚未开始的 Inbox 指令，
+  允许当前已开始的调用自然完成，保留 Thread 与历史；恢复只恢复当前 head，
+  不自动恢复已取消的指令。
+- 删除 Thread 是带确认的直接级联删除：停止或等待运行资源后，删除 Thread
+  及其 Session、handoff、Inbox 和执行记录；失败时报告残留，不伪装成成功。
 
 **未来方向（本阶段不做，架构已预留）**：
 
