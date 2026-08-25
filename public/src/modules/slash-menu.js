@@ -29,7 +29,9 @@
  * 依赖（全局，由 app-core.js / 既有模块提供）：
  * - t, escapeHtml, currentLanguage (app-core.js / i18n.js)
  * - autoResize (input-helpers.js)、_cacheSessionInput (voice-input.js)
- * - currentRuntimeAgentId (app-core.js)、getActiveWorkspaceSessionId (ph-session-list.js)
+ * - currentRuntimeAgentId、getRuntimeId、getLogicalAgentId、
+ *   getRuntimeWorkspaceSessionId (app-core.js)
+ * - getCurrentRuntimeRecord、getCurrentAgentRecord (app-main.js)
  * - window.ClawToast (toast 组件)
  */
 
@@ -65,19 +67,31 @@ function _allCommands() {
 // ── 动态清单拉取（拉取式：唤起时取一次）────────────────────────
 
 function _currentTarget() {
-  const agentId = typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '';
-  const sessionId = typeof getActiveWorkspaceSessionId === 'function'
-    ? (getActiveWorkspaceSessionId() || '') : '';
-  return { agentId, sessionId };
+  // 控制投递三元组，对齐 todo_control 先例（todo-plan.js sendTodoControl）：
+  // - runtimeId 是主定位 id（与轮询数据源 /api/agents/:id 同空间），
+  //   currentRuntimeAgentId 同步设置、无 await 窗口，是唯一可靠的 stale 基准
+  // - agentId 是 workspace 逻辑 id，从 runtime 反查 agent record 提取，
+  //   不从页面焦点（focusedAgentId）猜测
+  // - sessionId 从 runtime 的 viewer 绑定派生（代表用户正在查看的会话），
+  //   allAgents 缓存派生值只在无绑定时兜底
+  const runtimeId = getRuntimeId(currentRuntimeAgentId)
+    || (typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '');
+  if (!runtimeId) return { agentId: '', runtimeId: '', sessionId: '' };
+  const record = (typeof getCurrentRuntimeRecord === 'function' && getCurrentRuntimeRecord())
+    || (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null);
+  const agentId = (record ? getLogicalAgentId(record) : '') || '';
+  const sessionId = getRuntimeWorkspaceSessionId(runtimeId) || '';
+  return { agentId, runtimeId, sessionId };
 }
 
 function _maybeFetchSessionCommands() {
-  const { agentId, sessionId } = _currentTarget();
-  if (!agentId || !sessionId) return;
-  const key = agentId + '::' + sessionId;
+  const { agentId, runtimeId, sessionId } = _currentTarget();
+  if (!runtimeId || !sessionId) return;
+  const key = agentId + '::' + runtimeId + '::' + sessionId;
   if (_lastFetchKey === key) return;
   _lastFetchKey = key;
   const url = '/protoclaw/commands?agentId=' + encodeURIComponent(agentId)
+    + '&runtimeId=' + encodeURIComponent(runtimeId)
     + '&sessionId=' + encodeURIComponent(sessionId);
   fetch(url).then(function (res) { return res.ok ? res.json() : null; }).then(function (data) {
     if (!data || data.ok !== true) return;
@@ -255,8 +269,8 @@ function _completeCommand(ta) {
 // ── 会话命令投递（capability registry 传输面消费端）─────────────
 
 async function _invokeSessionCommand(cmd, args) {
-  const { agentId, sessionId } = _currentTarget();
-  if (!agentId || !sessionId) {
+  const { agentId, runtimeId, sessionId } = _currentTarget();
+  if (!runtimeId || !sessionId) {
     window.ClawToast?.show?.({
       id: 'slash-no-session',
       status: 'error',
@@ -270,7 +284,7 @@ async function _invokeSessionCommand(cmd, args) {
     const res = await fetch('/protoclaw/capability_invoke', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ref: cmd.name, args, agentId, sessionId }),
+      body: JSON.stringify({ ref: cmd.name, args, agentId, runtimeId, sessionId }),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok !== true) {

@@ -192,6 +192,44 @@ describe('capability routes', () => {
     assert.equal(res.body.error, 'entry_point_denied');
   });
 
+  it('POST /capability_invoke accepts the todo_control-style triple (agentId+runtimeId+sessionId)', async () => {
+    // Frontend control delivery contract (CLAUDE.md §8d): runtimeId is the
+    // primary locator, agentId the workspace identity, sessionId the viewer
+    // binding. resolveRuntimeControlTarget must accept this shape and the
+    // route must still land on the exact (agentId, sessionId) runtime.
+    inject(makeReplyingChild((msg) => ({
+      type: 'capability-result',
+      requestId: msg.requestId,
+      sessionId: SESSION_ID,
+      ok: true,
+      result: { applied: true },
+    })));
+    const res = makeMockRes();
+    await app._routes['POST /protoclaw/capability_invoke'].at(-1)(
+      { body: { ref: 'force-continuation.configure', args: { enabled: true }, agentId: AGENT_ID, runtimeId: 'agent-abc123', sessionId: SESSION_ID } }, res,
+    );
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.result, { applied: true });
+    const runtime = Array.from(managedAgents.values()).find((r) => r.agentId === AGENT_ID);
+    assert.equal(runtime.process.sent[0].__targetSessionId, SESSION_ID);
+  });
+
+  it('GET /commands accepts the same triple for command listing', async () => {
+    inject(makeReplyingChild((msg) => ({
+      type: 'capability-result',
+      requestId: msg.requestId,
+      sessionId: msg.sessionId ?? SESSION_ID,
+      ok: true,
+      commands: [{ name: 'force-continuation.configure' }],
+    })));
+    const res = makeMockRes();
+    await app._routes['GET /protoclaw/commands'][0](
+      { query: { agentId: AGENT_ID, runtimeId: 'agent-abc123', sessionId: SESSION_ID } }, res,
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.commands.length, 1);
+  });
+
   it('POST /capability_invoke validates request shape', async () => {
     const cases = [
       { body: { agentId: AGENT_ID, sessionId: SESSION_ID }, status: 400, match: /ref is required/ },

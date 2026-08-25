@@ -13,15 +13,25 @@
  * 命令注册到 SlashMenu（基础设施见 slash-menu.js）；执行是控制动作，
  * 不构造 user-turn 消息。
  *
- * 依赖（全局）：SlashMenu (slash-menu.js)、currentLanguage (app-core.js)、
- * getCurrentAgentRecord (app-main.js)、getActiveWorkspaceSessionId (app-core.js)、
- * runWorkspaceAction (workspace-actions.js)
+ * 依赖（全局）：SlashMenu (slash-menu.js)、currentLanguage、getRuntimeId、
+ * getLogicalAgentId、getRuntimeWorkspaceSessionId (app-core.js)、
+ * getCurrentRuntimeRecord、getCurrentAgentRecord (app-main.js)、
+ * getActiveWorkspaceSessionId (app-core.js)、runWorkspaceAction (workspace-actions.js)
  */
 
 function _currentSessionContext() {
-  const agent = getCurrentAgentRecord();
-  const sessionId = agent ? getActiveWorkspaceSessionId(agent) : null;
-  if (!agent?.id || !sessionId) {
+  // 输入框属于当前 runtime 视图：agent record 从 runtime 反查（焦点派生的
+  // getCurrentAgentRecord 仅兜底），sessionId 用 viewer 绑定（用户正在查看
+  // 的会话），server 派生的 active 值仅在无绑定时兜底——与 slash-menu.js
+  // _currentTarget 同一不变量：命令作用于输入框所属的那个会话。
+  const runtimeId = getRuntimeId(currentRuntimeAgentId)
+    || (typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '');
+  const record = (typeof getCurrentRuntimeRecord === 'function' && getCurrentRuntimeRecord())
+    || (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null);
+  const agentId = record ? (getLogicalAgentId(record) || record.id || '') : '';
+  const sessionId = (runtimeId && getRuntimeWorkspaceSessionId(runtimeId))
+    || (record ? getActiveWorkspaceSessionId(record) : null);
+  if (!agentId || !sessionId) {
     window.ClawToast?.show?.({
       id: 'slash-no-session',
       status: 'error',
@@ -30,7 +40,7 @@ function _currentSessionContext() {
     });
     return null;
   }
-  return { agentId: agent.id, sessionId };
+  return { agentId, sessionId };
 }
 
 async function _handleSummary() {
