@@ -7808,45 +7808,85 @@ body[data-theme="light"] .git-commit-files {
 .git-branch-flag.is-ahead { color: #73c991; }
 .git-branch-flag.is-behind { color: #e2c08d; }
 
-/* ── Slash 命令菜单（modules/slash-menu.js）────────────────────── */
+/* ── Slash 命令菜单（modules/slash-menu.js）──────────────────────
+   容器与菜单项配方对齐输入框模型下拉（.ccb-model-dropdown × .ccb-md-item）。
+   宽度/高度上限由 slash-menu.js _position() 按输入框几何外部注入 */
 .slash-menu {
   position: fixed;
-  z-index: 1200;
-  background: var(--bg-color);
+  z-index: 9100;
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--dropdown-shadow);
   padding: 4px;
-  max-height: 280px;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.slash-menu::-webkit-scrollbar { width: 6px; }
+
+.slash-menu::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  border-right: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+body[data-theme="light"] .slash-menu {
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.15);
+}
+
+/* 表单态：容器不滚（padding 归零），由 .slash-form-body 管理滚动，footer 常驻 */
+.slash-menu.is-form {
+  overflow: hidden;
+  display: flex;
+  padding: 0;
 }
 
 .slash-menu-item {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  padding: 7px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
   cursor: pointer;
+  transition: background 0.1s;
 }
 
-.slash-menu-item.is-active,
 .slash-menu-item:hover {
-  background: var(--bg-secondary);
+  background: var(--hover-bg);
+}
+
+.slash-menu-item.is-active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.slash-menu-item.is-active .slash-menu-item-desc {
+  color: var(--accent-text);
+  opacity: 0.72;
 }
 
 .slash-menu-item-name {
-  font-size: 13px;
-  font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .slash-menu-item-desc {
-  font-size: 12px;
-  color: var(--text-secondary);
+  flex: 0 1 auto;
+  max-width: 55%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .slash-menu-empty {
@@ -7855,46 +7895,136 @@ body[data-theme="light"] .git-commit-files {
   color: var(--text-secondary);
 }
 
-/* ── Slash 参数表单（会话命令 capability 参数） ───────────────── */
-
+/* ── Slash 参数表单（会话命令 capability 参数）───────────────────
+   行布局对齐 feature 配置页（fs-row：左标题列弹性 + 右控件列固定宽右贴）；
+   控件配色对齐 fs-select / fs-input / fs-checkbox */
 .slash-form {
-  padding: 10px 12px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+}
+
+.slash-form-head {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .slash-form-title {
   font-size: 13px;
   font-weight: 600;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.slash-form-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.slash-form-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .slash-form-field {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 12px;
 }
 
 .slash-form-label {
-  font-size: 12px;
-  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
 }
 
-.slash-form-field input[type="text"],
-.slash-form-field input[type="number"],
-.slash-form-field select {
-  padding: 5px 8px;
-  font-size: 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-color);
-  color: inherit;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.slash-form-desc {
+.slash-form-hint {
+  margin-top: 2px;
   font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.slash-form-ctrl {
+  flex: 0 0 190px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slash-form-ctrl .slash-form-input,
+.slash-form-ctrl .slash-form-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  padding: 7px 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.slash-form-select {
+  padding-right: 28px;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%237078877'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.slash-form-ctrl .slash-form-input:hover,
+.slash-form-ctrl .slash-form-select:hover {
+  border-color: var(--hover-bg);
+  background: var(--hover-bg);
+}
+
+.slash-form-ctrl .slash-form-input:focus,
+.slash-form-ctrl .slash-form-select:focus {
+  border-color: var(--accent-text, var(--accent, #5b8def));
+  background: var(--panel-bg);
+}
+
+.slash-form-checkbox {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  cursor: pointer;
+  accent-color: var(--accent, #5b8def);
+}
+
+/* 有界数值（min+max）：滑条 + 右侧等宽数值读数 */
+.slash-form-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent, #5b8def);
+}
+
+.slash-form-range-val {
+  flex: 0 0 auto;
+  min-width: 4ch;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
 }
 
@@ -7902,21 +8032,33 @@ body[data-theme="light"] .git-commit-files {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-color);
 }
 
 .slash-form-btn {
-  padding: 4px 14px;
+  padding: 6px 16px;
   font-size: 12px;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--bg-color);
-  color: inherit;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
   cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.slash-form-btn:hover {
+  border-color: var(--hover-bg);
+  background: var(--hover-bg);
 }
 
 .slash-form-btn.is-primary {
-  border-color: var(--accent-color, #4f8cff);
-  color: var(--accent-color, #4f8cff);
+  border-color: var(--accent-color, #5b8def);
+  color: var(--accent-color, #5b8def);
+}
+
+.slash-form-btn.is-primary:hover {
+  background: var(--accent-bg);
 }
 
 

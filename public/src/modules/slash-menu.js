@@ -149,11 +149,30 @@ function _ensureMenuEl() {
     const cmd = _filtered[parseInt(item.dataset.idx, 10)];
     void _execute(cmd, _currentTa());
   });
+  // 表单交互（委托，挂载一次）：dirty 跟踪 / showWhen 重评估 / 滑条数值读数
+  _menuEl.addEventListener('input', function (e) {
+    if (!_formCmd) return;
+    const key = e.target?.dataset?.key;
+    if (key) _dirtyKeys.add(key);
+    if (e.target && e.target.type === 'range') {
+      const out = e.target.parentElement?.querySelector('.slash-form-range-val');
+      if (out) out.textContent = e.target.value;
+    }
+  }, true);
+  _menuEl.addEventListener('change', function (e) {
+    if (!_formCmd) return;
+    const key = e.target?.dataset?.key;
+    if (key) _dirtyKeys.add(key);
+    if (e.target && (e.target.tagName === 'SELECT' || e.target.type === 'checkbox' || e.target.type === 'range')) {
+      _applyShowWhen();
+    }
+  }, true);
   return _menuEl;
 }
 
 function _render() {
   const menu = _ensureMenuEl();
+  menu.classList.toggle('is-form', _formCmd !== null);
   if (_formCmd) {
     _renderForm(menu);
   } else if (_filtered.length === 0) {
@@ -177,10 +196,21 @@ function _position() {
     return;
   }
   const rect = ta.getBoundingClientRect();
-  _menuEl.style.left = Math.round(rect.left) + 'px';
+  const vw = window.innerWidth;
+  // 宽度外部定义：输入框宽 - 两侧收进（相对输入框居中、略窄），不随内容撑开
+  const inset = 20;
+  let width = Math.round(rect.width - inset * 2);
+  const minW = Math.min(240, vw - 24);
+  if (width < minW) width = minW;
+  let left = Math.round(rect.left + inset);
+  if (left + width > vw - 12) left = Math.max(12, vw - 12 - width);
+  _menuEl.style.left = left + 'px';
+  _menuEl.style.width = width + 'px';
   _menuEl.style.top = 'auto';
   _menuEl.style.bottom = Math.round(window.innerHeight - rect.top + 8) + 'px';
-  _menuEl.style.minWidth = Math.min(380, Math.round(rect.width)) + 'px';
+  // 高度上限 = 输入框上方可用空间：底部锚定 + maxHeight，表单永不向下侵入输入框
+  const avail = Math.round(rect.top) - 24;
+  _menuEl.style.maxHeight = Math.min(480, Math.max(160, avail)) + 'px';
 }
 
 function _show() {
@@ -328,25 +358,31 @@ function _fieldId(key) {
 function _renderFieldHtml(key, prop, initial) {
   const id = _fieldId(key);
   const title = escapeHtml(prop.title || key);
-  const desc = prop.description
-    ? '<div class="slash-form-desc">' + escapeHtml(prop.description) + '</div>' : '';
   // 回显优先级：capability 当前生效值 > 声明 default
   const init = initial !== undefined && initial !== null ? initial : prop.default;
   const initStr = init !== undefined && init !== null ? String(init) : '';
+  const keyAttr = ' id="' + id + '" data-key="' + escapeHtml(key) + '"';
   let control = '';
   if (prop.type === 'boolean') {
-    control = '<input type="checkbox" id="' + id + '" data-key="' + escapeHtml(key) + '"'
+    control = '<input type="checkbox" class="slash-form-checkbox"' + keyAttr
       + (init === true ? ' checked' : '') + '>';
   } else if (prop.type === 'select' && Array.isArray(prop.options) && prop.options.length > 0) {
-    control = '<select id="' + id + '" data-key="' + escapeHtml(key) + '">'
+    control = '<select class="slash-form-select"' + keyAttr + '>'
       + prop.options.map(function (opt) {
         const v = String(opt.value);
         const sel = initStr === v ? ' selected' : '';
         return '<option value="' + escapeHtml(v) + '"' + sel + '>'
           + escapeHtml(opt.label || v) + '</option>';
       }).join('') + '</select>';
+  } else if (prop.type === 'number' && typeof prop.min === 'number' && typeof prop.max === 'number') {
+    // 有界数值（音量/上限类配置）→ 滑条 + 右侧数值读数
+    const step = typeof prop.step === 'number' ? prop.step : 1;
+    control = '<input type="range" class="slash-form-range"' + keyAttr
+      + ' min="' + prop.min + '" max="' + prop.max + '" step="' + step + '"'
+      + (initStr !== '' ? ' value="' + escapeHtml(initStr) + '"' : '') + '>'
+      + '<span class="slash-form-range-val">' + escapeHtml(initStr !== '' ? initStr : String(prop.min)) + '</span>';
   } else if (prop.type === 'number') {
-    control = '<input type="number" id="' + id + '" data-key="' + escapeHtml(key) + '"'
+    control = '<input type="number" class="slash-form-input"' + keyAttr
       + (initStr !== '' ? ' value="' + escapeHtml(initStr) + '"' : '')
       + (prop.placeholder ? ' placeholder="' + escapeHtml(prop.placeholder) + '"' : '')
       + (typeof prop.min === 'number' ? ' min="' + prop.min + '"' : '')
@@ -354,45 +390,43 @@ function _renderFieldHtml(key, prop, initial) {
       + (typeof prop.step === 'number' ? ' step="' + prop.step + '"' : '') + '>';
   } else {
     // string / file / directory 及未知类型统一按文本输入（路径即文本）
-    control = '<input type="text" id="' + id + '" data-key="' + escapeHtml(key) + '"'
+    control = '<input type="text" class="slash-form-input"' + keyAttr
       + (initStr !== '' ? ' value="' + escapeHtml(initStr) + '"' : '')
       + (prop.placeholder ? ' placeholder="' + escapeHtml(prop.placeholder) + '"' : '') + '>';
   }
-  return '<label class="slash-form-field" data-key="' + escapeHtml(key) + '">'
-    + '<span class="slash-form-label">' + title + '</span>' + control + desc + '</label>';
+  // 行布局对齐 feature 配置页（fs-row）：左标题（+描述）列弹性，右控件列固定宽右贴
+  return '<div class="slash-form-field" data-key="' + escapeHtml(key) + '">'
+    + '<div class="slash-form-label">' + title
+    + (prop.description ? '<div class="slash-form-hint">' + escapeHtml(prop.description) + '</div>' : '')
+    + '</div>'
+    + '<div class="slash-form-ctrl">' + control + '</div>'
+    + '</div>';
 }
 
 function _renderForm(menu) {
   const cmd = _formCmd;
   const params = cmd.parameters || {};
   const current = cmd.currentValues && typeof cmd.currentValues === 'object' ? cmd.currentValues : {};
-  const html = Object.keys(params).map(function (key) {
+  const fieldsHtml = Object.keys(params).map(function (key) {
     return _renderFieldHtml(key, params[key], current[key]);
   }).join('');
   _dirtyKeys = new Set();
+  // 结构：head（命令名+描述）/ body（字段区，滚动）/ actions（常驻底部）。
+  // 高度上限由 _position 注入容器，body 内滚，表单永不向下侵入输入框
   menu.innerHTML =
-    '<div class="slash-form" role="form">' +
-    '<div class="slash-form-title">/' + escapeHtml(cmd.name) + '</div>' +
-    html +
-    '<div class="slash-form-actions">' +
-    '<button type="button" class="slash-form-btn" data-action="cancel">'
-    + escapeHtml(t('slash_form_cancel')) + '</button>' +
-    '<button type="button" class="slash-form-btn is-primary" data-action="submit">'
-    + escapeHtml(t('slash_form_submit')) + '</button>' +
-    '</div></div>';
-  // dirty 跟踪：只提交用户实际交互过的字段（回显值未动 = 不写）
-  menu.addEventListener('input', _markDirty, true);
-  menu.addEventListener('change', _markDirty, true);
-  // showWhen 条件可见性：依赖字段变化时重评估同级字段
-  menu.querySelectorAll('select, input[type="checkbox"]').forEach(function (el) {
-    el.addEventListener('change', _applyShowWhen);
-  });
+    '<div class="slash-form" role="form">'
+    + '<div class="slash-form-head">'
+    + '<div class="slash-form-title">/' + escapeHtml(cmd.name) + '</div>'
+    + (cmd.description ? '<div class="slash-form-subtitle">' + escapeHtml(cmd.description) + '</div>' : '')
+    + '</div>'
+    + '<div class="slash-form-body">' + fieldsHtml + '</div>'
+    + '<div class="slash-form-actions">'
+    + '<button type="button" class="slash-form-btn" data-action="cancel">'
+    + escapeHtml(t('slash_form_cancel')) + '</button>'
+    + '<button type="button" class="slash-form-btn is-primary" data-action="submit">'
+    + escapeHtml(t('slash_form_submit')) + '</button>'
+    + '</div></div>';
   _applyShowWhen();
-}
-
-function _markDirty(e) {
-  const key = e.target?.dataset?.key;
-  if (key) _dirtyKeys.add(key);
 }
 
 function _applyShowWhen() {
@@ -427,7 +461,7 @@ function _collectFormArgs() {
     const field = el.closest('.slash-form-field');
     if (field && field.style.display === 'none') return;
     if (el.type === 'checkbox') args[key] = el.checked;
-    else if (el.type === 'number') args[key] = el.value === '' ? undefined : Number(el.value);
+    else if (el.type === 'range' || el.type === 'number') args[key] = el.value === '' ? undefined : Number(el.value);
     else args[key] = el.value;
   });
   return args;
