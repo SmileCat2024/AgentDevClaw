@@ -21,6 +21,7 @@ import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
+import { handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
@@ -504,7 +505,7 @@ class SessionLifecycle {
     // 的子进程端点。宿主前端转发视为 slash 入口。后续可控 feature 的专用
     // IPC 分支（force-continuation / context-guard 同构模式）由这里收编。
     if (msg.type === 'capability-invoke' || msg.type === 'capability-list-request') {
-      const reply = (payload) => {
+      await handleCapabilityIPC(this, msg, (payload) => {
         try {
           process.send({
             type: 'capability-result',
@@ -513,22 +514,7 @@ class SessionLifecycle {
             ...payload,
           });
         } catch {}
-      };
-      if (typeof this.agent?.invokeCapability !== 'function') {
-        reply({ ok: false, error: 'capability registry not available in this session' });
-        return;
-      }
-      try {
-        if (msg.type === 'capability-list-request') {
-          const entryPoint = typeof msg.entryPoint === 'string' ? msg.entryPoint : 'slash';
-          reply({ ok: true, commands: this.agent.getCapabilitySnapshot(entryPoint) });
-        } else {
-          const result = await this.agent.invokeCapability(msg.ref, msg.args, 'slash');
-          reply(result);
-        }
-      } catch (err) {
-        reply({ ok: false, error: String(err?.message || err) });
-      }
+      });
       return;
     }
 
