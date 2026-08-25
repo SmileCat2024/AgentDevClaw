@@ -227,6 +227,13 @@ export class ForceContinuation implements AgentFeature {
           },
         },
         entryPoints: ['slash', 'feature'],
+        readCurrentValues: () => ({
+          enabled: this.config.enabled,
+          providerMaxTokens: this.config.triggers.providerMaxTokens,
+          providerLength: this.config.triggers.providerLength,
+          frameworkLimitReached: this.config.triggers.frameworkLimitReached,
+          maxConsecutive: this.config.maxConsecutiveContinuations,
+        }),
         execute: (args) => {
           const input = args && typeof args === 'object' ? args as Record<string, unknown> : {};
           if (typeof input.enabled === 'boolean') this.setEnabled(input.enabled);

@@ -47,6 +47,7 @@ let _menuEl = null;
 let _activeTa = null;
 // 参数表单态：非 null 时菜单内容为该命令的参数表单
 let _formCmd = null;
+let _dirtyKeys = new Set();
 // 动态清单拉取去重键（agentId::sessionId），菜单每次从隐藏转可见时重拉
 let _lastFetchKey = null;
 
@@ -107,6 +108,7 @@ function _maybeFetchSessionCommands() {
         description: c.description || '',
         destination: 'session',
         parameters: c.parameters && typeof c.parameters === 'object' ? c.parameters : undefined,
+        currentValues: c.currentValues && typeof c.currentValues === 'object' ? c.currentValues : undefined,
       };
     });
     if (_visible && !_formCmd) {
@@ -299,6 +301,12 @@ async function _invokeSessionCommand(cmd, args) {
       description: cmd.name,
       autoDismiss: 3500,
     });
+    // 广播事实（不含结果语义）：关心该 capability 的面板（如会话控制）
+    // 自行决定刷新。Slash 菜单保持邮差定位，不认识具体 feature。
+    window.dispatchEvent(new CustomEvent('claw:capability-invoked', {
+      detail: { ref: cmd.name, agentId, runtimeId, sessionId },
+    }));
+    if (typeof window._scheduleInspectorRefresh === 'function') window._scheduleInspectorRefresh(120);
   } catch (e) {
     console.error('[SlashMenu] capability invoke failed:', cmd.name, e);
     window.ClawToast?.show?.({
@@ -317,27 +325,29 @@ function _fieldId(key) {
   return 'slash-param-' + key.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-function _renderFieldHtml(key, prop) {
+function _renderFieldHtml(key, prop, initial) {
   const id = _fieldId(key);
   const title = escapeHtml(prop.title || key);
   const desc = prop.description
     ? '<div class="slash-form-desc">' + escapeHtml(prop.description) + '</div>' : '';
-  const def = prop.default !== undefined && prop.default !== null ? String(prop.default) : '';
+  // 回显优先级：capability 当前生效值 > 声明 default
+  const init = initial !== undefined && initial !== null ? initial : prop.default;
+  const initStr = init !== undefined && init !== null ? String(init) : '';
   let control = '';
   if (prop.type === 'boolean') {
     control = '<input type="checkbox" id="' + id + '" data-key="' + escapeHtml(key) + '"'
-      + (prop.default === true ? ' checked' : '') + '>';
+      + (init === true ? ' checked' : '') + '>';
   } else if (prop.type === 'select' && Array.isArray(prop.options) && prop.options.length > 0) {
     control = '<select id="' + id + '" data-key="' + escapeHtml(key) + '">'
       + prop.options.map(function (opt) {
         const v = String(opt.value);
-        const sel = String(prop.default) === v ? ' selected' : '';
+        const sel = initStr === v ? ' selected' : '';
         return '<option value="' + escapeHtml(v) + '"' + sel + '>'
           + escapeHtml(opt.label || v) + '</option>';
       }).join('') + '</select>';
   } else if (prop.type === 'number') {
     control = '<input type="number" id="' + id + '" data-key="' + escapeHtml(key) + '"'
-      + (def !== '' ? ' value="' + escapeHtml(def) + '"' : '')
+      + (initStr !== '' ? ' value="' + escapeHtml(initStr) + '"' : '')
       + (prop.placeholder ? ' placeholder="' + escapeHtml(prop.placeholder) + '"' : '')
       + (typeof prop.min === 'number' ? ' min="' + prop.min + '"' : '')
       + (typeof prop.max === 'number' ? ' max="' + prop.max + '"' : '')
@@ -345,7 +355,7 @@ function _renderFieldHtml(key, prop) {
   } else {
     // string / file / directory 及未知类型统一按文本输入（路径即文本）
     control = '<input type="text" id="' + id + '" data-key="' + escapeHtml(key) + '"'
-      + (def !== '' ? ' value="' + escapeHtml(def) + '"' : '')
+      + (initStr !== '' ? ' value="' + escapeHtml(initStr) + '"' : '')
       + (prop.placeholder ? ' placeholder="' + escapeHtml(prop.placeholder) + '"' : '') + '>';
   }
   return '<label class="slash-form-field" data-key="' + escapeHtml(key) + '">'
@@ -355,9 +365,11 @@ function _renderFieldHtml(key, prop) {
 function _renderForm(menu) {
   const cmd = _formCmd;
   const params = cmd.parameters || {};
+  const current = cmd.currentValues && typeof cmd.currentValues === 'object' ? cmd.currentValues : {};
   const html = Object.keys(params).map(function (key) {
-    return _renderFieldHtml(key, params[key]);
+    return _renderFieldHtml(key, params[key], current[key]);
   }).join('');
+  _dirtyKeys = new Set();
   menu.innerHTML =
     '<div class="slash-form" role="form">' +
     '<div class="slash-form-title">/' + escapeHtml(cmd.name) + '</div>' +
@@ -368,11 +380,19 @@ function _renderForm(menu) {
     '<button type="button" class="slash-form-btn is-primary" data-action="submit">'
     + escapeHtml(t('slash_form_submit')) + '</button>' +
     '</div></div>';
+  // dirty 跟踪：只提交用户实际交互过的字段（回显值未动 = 不写）
+  menu.addEventListener('input', _markDirty, true);
+  menu.addEventListener('change', _markDirty, true);
   // showWhen 条件可见性：依赖字段变化时重评估同级字段
   menu.querySelectorAll('select, input[type="checkbox"]').forEach(function (el) {
     el.addEventListener('change', _applyShowWhen);
   });
   _applyShowWhen();
+}
+
+function _markDirty(e) {
+  const key = e.target?.dataset?.key;
+  if (key) _dirtyKeys.add(key);
 }
 
 function _applyShowWhen() {
@@ -402,6 +422,8 @@ function _collectFormArgs() {
   _menuEl.querySelectorAll('[data-key]').forEach(function (el) {
     if (!el.id || !el.id.startsWith('slash-param-')) return;
     const key = el.dataset.key;
+    // dirty-only：未交互过的字段（含纯回显值）不提交，避免把 default 误写为配置
+    if (!_dirtyKeys.has(key)) return;
     const field = el.closest('.slash-form-field');
     if (field && field.style.display === 'none') return;
     if (el.type === 'checkbox') args[key] = el.checked;

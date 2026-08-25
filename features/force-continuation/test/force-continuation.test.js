@@ -185,6 +185,12 @@ describe('ForceContinuation', () => {
       for (const prop of Object.values(caps[0].parameters)) {
         assert.ok(['boolean', 'number'].includes(prop.type), prop.type);
       }
+      // 参数回显：readCurrentValues 反映当前生效配置
+      const feature2 = new ForceContinuation({ enabled: false, maxConsecutiveContinuations: 7 });
+      const current = feature2.getCapabilities()[0].readCurrentValues();
+      assert.equal(current.enabled, false);
+      assert.equal(current.maxConsecutive, 7);
+      assert.equal(typeof current.providerMaxTokens, 'boolean');
     });
 
     it('applies only explicitly passed fields and returns the status', async () => {
