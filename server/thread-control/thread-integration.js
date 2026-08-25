@@ -25,6 +25,7 @@
 import { getThreadControl } from './thread-controller.js';
 import { ThreadNotFoundError } from './thread-store.js';
 import { isThreadHostSession } from './host-agents.js';
+import { abortPendingSuccession } from './thread-succession.js';
 
 // 判定的唯一定义在 ./host-agents.js（无副作用轻量模块，供 agent 子进程同源
 // 引用）；此处 re-export 维持 server 侧既有消费方（input-gateway 等）不变。
@@ -98,10 +99,18 @@ export function createThreadIntegration({ control = null } = {}) {
     },
 
     /**
-     * 会话接力钩子：compact / summary 成功创建 successor 后调用。
+     * 会话接力钩子（提交点）：successor 生成且 Runtime READY 后调用。
      * fromSessionId 是线程当前 head 时推进 head（endKind 记录接力原因），
-     * 随后尝试把接力期间暂存的 pending 指令投递给新 head runtime。
+     * 随后把接力期间暂存的 pending 指令投递给新 head runtime。
      * 非 head / 无线程（纯 session）：静默跳过（no-op）。
+     *
+     * T002：applied=false 分两类——
+     *   - void（并发/幂等场景，线程状态已是权威，不记失败）：
+     *     head_mismatch / already_head / duplicate_session / thread_closed；
+     *   - 失败（T001 身份门：session_workspace_mismatch /
+     *     thread_identity_mismatch / thread_identity_missing /
+     *     session_already_in_thread，及其它异常）：记 rotation_failed +
+     *     错误 code 作 stage，并显式收敛挡板（不靠 stale TTL）。
      */
     async applySessionSuccession({ agentId, fromSessionId, toSessionId, reason = 'manual' }) {
       const normalizedAgentId = String(agentId || '').trim();
@@ -109,6 +118,9 @@ export function createThreadIntegration({ control = null } = {}) {
       const to = String(toSessionId || '').trim();
       if (!from || !to || from === to) return { applied: false, reason: 'invalid_succession' };
 
+      const VOID_ADVANCE_CODES = new Set([
+        'head_mismatch', 'already_head', 'duplicate_session', 'thread_closed',
+      ]);
       let thread = null;
       try {
         thread = await core.findThreadByHeadSession(normalizedAgentId, from);
@@ -122,27 +134,57 @@ export function createThreadIntegration({ control = null } = {}) {
         });
         console.log(`[thread-integration] head advanced: ${thread.threadId} ${from} -> ${to} (${reason})`);
 
-        // successor runtime 已在 compact 流程内等待 ready；投递暂存指令
+        // 投递暂存指令（successor READY 门禁在提交点上游，thread-succession.js）
         const delivery = await core.deliverPendingCommands(thread.threadId);
         return { applied: true, thread: advanced, delivery };
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {
           return { applied: false, reason: 'thread_not_found' };
         }
+        // void 判定先行：这些 code 意味着线程状态已是权威（并发操作已提交
+        // head_mismatch/already_head/duplicate_session，或线程已终态
+        // thread_closed）——本操作幂等作废，不记失败、不动挡板。
+        if (VOID_ADVANCE_CODES.has(error.code)) {
+          return { applied: false, reason: error.code };
+        }
+        if (!thread) {
+          // 无 thread 上下文的异常（理论不可达，findThreadByHeadSession
+          // 未命中已提前返回）：记录失败但不触碰线程记录。
+          console.error(`[thread-integration] succession failed ${from} -> ${to} (no thread):`, error?.message || error);
+          return { applied: false, reason: 'handoff_failed', stage: error.code || 'advance_head', error: error?.message || String(error) };
+        }
         console.error(`[thread-integration] succession failed ${from} -> ${to}:`, error?.message || error);
+        // T002：失败阶段取 T001 身份门错误 code（稳定词汇），stage 落盘供
+        // 审计与重启收敛透传；挡板显式收敛（旧 head 继续有效，见
+        // thread-succession.abortPendingSuccession）。
+        const stage = error.code || 'advance_head';
         const failed = await core.failSessionHandoff(thread.threadId, {
           reason: 'handoff_failed',
-          stage: 'advance_head',
+          stage,
           error: error?.message || String(error),
         }).catch(() => null);
-        return { applied: false, reason: 'handoff_failed', error: error?.message || String(error), thread: failed };
+        if (failed) {
+          await abortPendingSuccession(core, thread.threadId, {
+            stage,
+            reason: 'handoff_failed',
+            error: error?.message || String(error),
+          }).catch((failure) => {
+            console.error('[thread-integration] failed to converge handoff barrier:', failure?.message || failure);
+          });
+        }
+        return { applied: false, reason: 'handoff_failed', stage, error: error?.message || String(error), thread: failed };
       }
     },
 
     /**
-     * 交接失败钩子：把上下文交接停在明确的 rotation_failed，保留
-     * pendingSuccession 和失败阶段，供恢复入口收拾残局。
-     * 纯 session 会话（无线程）：no-op。
+     * 交接失败钩子：把上下文交接停在明确的 rotation_failed，落盘失败
+     * 阶段（stage）与原因，并显式收敛 pendingSuccession 挡板（T002）。
+     *
+     * 挡板收敛（abortPendingSuccession）：失败后交接窗口即结束，「旧 head
+     * 继续有效」（ADR-001 §2）——pending 指令回到正常投递判定（旧 head
+     * runtime 就绪时投递），不再被 handoff_in_progress 挡到 stale TTL
+     * 过期。失败阶段 / 原因保留在 lifecycleEvents（handoff_failed +
+     * handoff_aborted），审计不丢失。纯 session 会话（无线程）：no-op。
      */
     async failSessionSuccession({ agentId, sessionId, reason = 'handoff_failed', stage = 'unknown', error = null }) {
       const normalizedAgentId = String(agentId || '').trim();
@@ -151,7 +193,13 @@ export function createThreadIntegration({ control = null } = {}) {
       try {
         const thread = await core.findThreadByHeadSession(normalizedAgentId, from);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
+        // 已关闭线程不再写失败事实（closeThread 已取消 pending 指令，
+        // 翻回 rotation_failed 会「复活」终态线程）：直接 no-op。
+        if (thread.status === 'closed') {
+          return { applied: false, reason: 'thread_closed', threadId: thread.threadId };
+        }
         const failed = await core.failSessionHandoff(thread.threadId, { reason, stage, error });
+        await abortPendingSuccession(core, thread.threadId, { stage, reason, error });
         return { applied: true, thread: failed, threadId: thread.threadId };
       } catch (failure) {
         console.error(`[thread-integration] failSessionSuccession failed for session=${from}:`, failure?.message || failure);

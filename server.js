@@ -102,6 +102,11 @@ import { createThreadLifecycleService } from './server/thread-control/thread-lif
 import { setupAcpRoutes } from './server/routes/acp.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { createThreadRotationService } from './server/thread-control/thread-rotation.js';
+import {
+  createThreadSuccessionService,
+  createThreadRecoveryService,
+} from './server/thread-control/thread-succession.js';
+import { resolveSessionIdentity } from './server/thread-control/thread-identity.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
   setupFeatureRepositoryRoutes,
@@ -260,6 +265,17 @@ Object.assign(sessionApi, {
 
 const threadControl = getThreadControl();
 const threadIntegration = getThreadIntegration();
+// T002：接力共享提交点（compact / summary / trim / rotation 共用）——
+// successor READY 门禁 + T001 身份门 + 失败收敛 + 重启恢复。
+const threadSuccession = createThreadSuccessionService({
+  threadControl,
+  threadIntegration,
+  stopManagedAgent,
+});
+const threadRecovery = createThreadRecoveryService({
+  threadControl,
+  identitySource: resolveSessionIdentity,
+});
 const threadLifecycle = createThreadLifecycleService({
   control: threadControl,
   interruptSession: async (agentId, sessionId) => {
@@ -277,6 +293,7 @@ const threadRotation = createThreadRotationService({
   stopManagedAgent,
   threadIntegration,
   threadControl,
+  threadSuccession,
 });
 
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──
@@ -380,6 +397,7 @@ setupSessionRoutes(app, express, {
   clearUISurfaces: (viewerAgentId) => getUISurfaceStore().clearAgent(viewerAgentId),
   threadRotation,
   threadLifecycle,
+  threadSuccession,
 });
 
 // ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
@@ -1315,6 +1333,21 @@ async function main() {
     } catch (err) {
       console.warn(`[open-sessions] initRecoveryCache failed for ${agentId}:`, err.message);
     }
+  }
+
+  // T002 接力恢复：按落盘状态收敛上次进程崩溃时被打断的交接
+  // （pendingSuccession 非空 = prepare 完成、commit 未完成）。状态判定，
+  // 不依赖时间（TTL）；无残留时 no-op。
+  try {
+    const convergence = await threadRecovery.convergeInterruptedSuccessions();
+    if (convergence.converged.length > 0) {
+      console.log(`[thread-recovery] converged ${convergence.converged.length} interrupted succession(s):`, convergence.converged);
+    }
+    if (convergence.skipped.length > 0) {
+      console.warn(`[thread-recovery] ${convergence.skipped.length} thread(s) left unconverged:`, convergence.skipped);
+    }
+  } catch (err) {
+    console.warn('[thread-recovery] startup convergence failed:', err.message);
   }
 
   // Apply global proxy before listening (affects all fetch + child processes)

@@ -146,6 +146,8 @@ export function createSessionHandoffHelpers(deps) {
     if (!sourceAgentId || !sourceSessionId) {
       const error = new Error('Invalid handoff package: sourceAgentId/sourceSessionId is required');
       error.statusCode = 400;
+      // T002：接力材料校验失败的稳定错误 code（与 readHandoffPackage 同源）
+      error.code = 'handoff_invalid';
       throw error;
     }
 

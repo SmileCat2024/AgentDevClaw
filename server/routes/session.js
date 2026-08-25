@@ -80,6 +80,7 @@ export function setupSessionRoutes(app, express, ctx) {
     clearUISurfaces,
     threadRotation,
     threadLifecycle,
+    threadSuccession,
   } = ctx;
 
 // Automation trigger from thread-host runtimes (ContextRotationTriggerFeature):
@@ -1010,8 +1011,9 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
 
     // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
     // 投向即将退役的旧 head。公共入口一处标记，detached / 同步分支共用；
-    // applySessionSuccession 推进 head 时原子清除。非线程宿主 no-op。
-    await getThreadIntegration().beginSessionSuccession({
+    // 提交点（thread-succession）推进 head 时原子清除。非线程宿主 no-op。
+    // 返回值决定是否在本请求异常路径收敛挡板（applied=false 时无挡板可清）。
+    const successionBegun = await getThreadIntegration().beginSessionSuccession({
       agentId: preferredAgentId,
       sessionId,
       reason: lineageReason,
@@ -1033,13 +1035,26 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
             jobId,
           });
           console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
-          // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）
-          await getThreadIntegration().applySessionSuccession({
-            agentId: preferredAgentId,
-            fromSessionId: sessionId,
-            toSessionId: result?.session?.id,
-            reason: lineageReason,
-          });
+          // 线程接力（coder 宿主）：共享提交点（thread-succession）——
+          // successor READY 且身份一致才推进 head + 投递暂存指令（no-op for
+          // others）；未 READY / 身份失败记录阶段与原因，旧 head 保持有效。
+          const commit = threadSuccession
+            ? await threadSuccession.commitSuccession({
+              agentId: preferredAgentId,
+              fromSessionId: sessionId,
+              toSessionId: result?.session?.id,
+              reason: lineageReason,
+              successorReady: result?.agent != null,
+            })
+            : await getThreadIntegration().applySessionSuccession({
+              agentId: preferredAgentId,
+              fromSessionId: sessionId,
+              toSessionId: result?.session?.id,
+              reason: lineageReason,
+            });
+          if (!commit.applied && !['no_thread_for_session', 'thread_not_found', 'invalid_succession'].includes(commit.reason)) {
+            console.warn(`[compact_and_resume] job ${jobId} thread succession not committed for session=${sessionId}: ${commit.reason} (${commit.stage || ''})`);
+          }
           // 服务端归档原会话
           let didArchive = false;
           if (archiveOriginal && preferredAgentId) {
@@ -1062,6 +1077,20 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
             errorMessage: error instanceof Error ? error.message : String(error),
             jobId,
           });
+          // T002：detached 生成失败也要收敛线程交接——记录失败阶段（错误
+          // code，生成阶段缺省 compact_or_successor）+ 收敛挡板；旧 head
+          // 保持有效。非线程宿主 no-op。
+          if (threadSuccession && typeof threadSuccession.failSuccession === 'function') {
+            threadSuccession.failSuccession({
+              agentId: preferredAgentId,
+              fromSessionId: sessionId,
+              reason: 'compact_failed',
+              stage: error?.code || 'compact_or_successor',
+              error: error instanceof Error ? error.message : String(error),
+            }).catch((failure) => {
+              console.error('[compact_and_resume] failed to persist succession failure:', failure?.message || failure);
+            });
+          }
         });
       }, 10);
 
@@ -1089,15 +1118,25 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     trace.mark('resume_completed', { targetSessionId: result?.session?.id || '' });
     console.log(`[compact_and_resume] completed session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
 
-    // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）。
-    // 放在响应前：前端拿到响应即导航到新会话并刷新线程状态，需保证
-    // head 已推进，避免徽标短暂指向旧会话。
-    const threadSuccession = await getThreadIntegration().applySessionSuccession({
-      agentId: preferredAgentId,
-      fromSessionId: sessionId,
-      toSessionId: result?.session?.id,
-      reason: lineageReason,
-    });
+    // 线程接力（coder 宿主）：共享提交点（thread-succession）——successor
+    // READY 且身份一致才推进 head + 投递暂存指令（no-op for others）；
+    // 未 READY / 身份失败记录阶段与原因，旧 head 保持有效。放在响应前：
+    // 前端拿到响应即导航到新会话并刷新线程状态，需保证 head 已推进（或
+    // 失败已收敛），避免徽标短暂指向旧会话。
+    const successionOutcome = threadSuccession
+      ? await threadSuccession.commitSuccession({
+        agentId: preferredAgentId,
+        fromSessionId: sessionId,
+        toSessionId: result?.session?.id,
+        reason: lineageReason,
+        successorReady: result?.agent != null,
+      })
+      : await getThreadIntegration().applySessionSuccession({
+        agentId: preferredAgentId,
+        fromSessionId: sessionId,
+        toSessionId: result?.session?.id,
+        reason: lineageReason,
+      });
 
     // 服务端归档原会话
     let didArchive = false;
@@ -1126,7 +1165,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       operationId: trace.operationId,
       revision: finalRevision,
       ...result,
-      threadSuccession,
+      threadSuccession: successionOutcome,
       sessionDelta: {
         revision: finalRevision,
         activeSessionId: finalIndex?.activeSessionId || targetSessionId || null,
@@ -1152,6 +1191,21 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       errorCode: error?.code || 'compact_failed',
       errorMessage: error instanceof Error ? error.message : String(error),
     });
+    // T002：同步分支生成阶段抛错（handoff 导出 / successor 创建失败）且
+    // 挡板已写入时，收敛交接——记录失败阶段 + 清除挡板，旧 head 保持
+    // 有效。detached 分支在各自 catch 内收敛；begin 未生效时无挡板可清。
+    if (!detached && successionBegun?.applied && threadSuccession
+      && typeof threadSuccession.failSuccession === 'function') {
+      threadSuccession.failSuccession({
+        agentId: preferredAgentId,
+        fromSessionId: sessionId,
+        reason: 'compact_failed',
+        stage: error?.code || 'compact_or_successor',
+        error: error instanceof Error ? error.message : String(error),
+      }).catch((failure) => {
+        console.error('[compact_and_resume] failed to persist succession failure:', failure?.message || failure);
+      });
+    }
     next(error);
   } finally {
     if (onClientClosed) {

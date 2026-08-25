@@ -221,6 +221,8 @@ export async function readHandoffPackage({ userDataRoot, agentId, handoffId, han
   if (handoff?.schemaVersion !== HANDOFF_SCHEMA_VERSION) {
     const error = new Error(`Unsupported handoff schema version: ${handoff?.schemaVersion ?? 'unknown'}`);
     error.statusCode = 400;
+    // T002：接力材料校验失败的稳定错误 code——失败收敛按此记录阶段
+    error.code = 'handoff_invalid';
     throw error;
   }
   return {
