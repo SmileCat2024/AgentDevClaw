@@ -7855,4 +7855,69 @@ body[data-theme="light"] .git-commit-files {
   color: var(--text-secondary);
 }
 
+/* ── Slash 参数表单（会话命令 capability 参数） ───────────────── */
+
+.slash-form {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.slash-form-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.slash-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.slash-form-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.slash-form-field input[type="text"],
+.slash-form-field input[type="number"],
+.slash-form-field select {
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-color);
+  color: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.slash-form-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.slash-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.slash-form-btn {
+  padding: 4px 14px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-color);
+  color: inherit;
+  cursor: pointer;
+}
+
+.slash-form-btn.is-primary {
+  border-color: var(--accent-color, #4f8cff);
+  color: var(--accent-color, #4f8cff);
+}
+
+
 

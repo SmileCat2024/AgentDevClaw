@@ -448,7 +448,7 @@ class SessionLifecycle {
   // ── IPC handler for this session ────────────────────────────
   // Called by the central IPC dispatcher when __targetSessionId matches
   // this session, or as fallback when only one session exists.
-  handleIPC(msg) {
+  async handleIPC(msg) {
     if (!msg || typeof msg !== 'object') return;
 
     // ── tool / feature / hook enable-disable ──
@@ -496,6 +496,39 @@ class SessionLifecycle {
     // ── IM bridge messages (carrier mount/unmount, todo-control) ──
     if (msg.type === 'mount-im-carrier' || msg.type === 'unmount-im-carrier' || msg.type === 'todo-control' || msg.type === 'todo-force-continue') {
       this.imBridge.handleIPCMessage(msg);
+      return;
+    }
+
+    // ── Generic capability IPC (request/ack) ──────────────────
+    // Registry 传输面：server /protoclaw/capability_invoke 与 /protoclaw/commands
+    // 的子进程端点。宿主前端转发视为 slash 入口。后续可控 feature 的专用
+    // IPC 分支（force-continuation / context-guard 同构模式）由这里收编。
+    if (msg.type === 'capability-invoke' || msg.type === 'capability-list-request') {
+      const reply = (payload) => {
+        try {
+          process.send({
+            type: 'capability-result',
+            requestId: msg.requestId,
+            sessionId: this.sessionId,
+            ...payload,
+          });
+        } catch {}
+      };
+      if (typeof this.agent?.invokeCapability !== 'function') {
+        reply({ ok: false, error: 'capability registry not available in this session' });
+        return;
+      }
+      try {
+        if (msg.type === 'capability-list-request') {
+          const entryPoint = typeof msg.entryPoint === 'string' ? msg.entryPoint : 'slash';
+          reply({ ok: true, commands: this.agent.getCapabilitySnapshot(entryPoint) });
+        } else {
+          const result = await this.agent.invokeCapability(msg.ref, msg.args, 'slash');
+          reply(result);
+        }
+      } catch (err) {
+        reply({ ok: false, error: String(err?.message || err) });
+      }
       return;
     }
 

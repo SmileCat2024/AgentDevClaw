@@ -90,6 +90,7 @@ import { setupIMRoutes, readProjectIMWorkspaceConfig, getPortalAgentDisplayName 
 import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
 import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnostics.js';
+import { setupCapabilityRoutes } from './server/routes/capability.js';
 import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
 import { setupToolStateRoutes } from './server/routes/tool-state.js';
@@ -364,6 +365,9 @@ app.get('/protoclaw/runtime/envelopes_by_source', (req, res) => {
 // ── Agent Status & Lifecycle API → server/routes/agent-lifecycle.js ──
 agentLifecycle.setupRoutes(app, express);
 setupSidebarDiagnosticsRoutes(app, express);
+
+// ── Capability control plane (slash / feature command registry transport) ──
+setupCapabilityRoutes(app, express);
 
 // ── Sessions → server/routes/session.js ─────────────────────────────────────
 setupSessionRoutes(app, express, {
