@@ -8010,13 +8010,61 @@ body[data-theme="light"] .slash-menu {
   margin-left: auto;
   cursor: pointer;
   accent-color: var(--accent, #5b8def);
+  /* 清原生 focus ring（表单打开时 _focusFirstField 会程序化聚焦首个
+     控件，白边 ring 在暗色主题下非常突兀） */
+  outline: none;
 }
 
-/* 有界数值（min+max）：滑条 + 右侧等宽数值读数 */
+/* 有界数值（min+max）：自绘滑条（居中 4px 轨道 + 圆形拇指，已填充段
+   由 slash-menu.js _paintRange 以背景渐变绘制）+ 右侧等宽数值读数 */
 .slash-form-range {
   flex: 1 1 auto;
   min-width: 0;
-  accent-color: var(--accent, #5b8def);
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  background-color: transparent;
+  cursor: pointer;
+  outline: none;
+}
+
+.slash-form-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: transparent;
+}
+
+.slash-form-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--accent-color, #5b8def);
+  border: 2px solid var(--panel-bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  transition: transform 0.12s;
+}
+
+.slash-form-range:hover::-webkit-slider-thumb,
+.slash-form-range:active::-webkit-slider-thumb {
+  transform: scale(1.18);
+}
+
+.slash-form-range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: transparent;
+}
+
+.slash-form-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-color, #5b8def);
+  border: 2px solid var(--panel-bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 
 .slash-form-range-val {

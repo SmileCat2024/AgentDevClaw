@@ -155,6 +155,7 @@ function _ensureMenuEl() {
     const key = e.target?.dataset?.key;
     if (key) _dirtyKeys.add(key);
     if (e.target && e.target.type === 'range') {
+      _paintRange(e.target);
       const out = e.target.parentElement?.querySelector('.slash-form-range-val');
       if (out) out.textContent = e.target.value;
     }
@@ -355,6 +356,22 @@ function _fieldId(key) {
   return 'slash-param-' + key.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+// 滑条"已填充"轨道（accent → 当前值，其余为轨道底色），webkit 无
+// range-progress 伪元素，用居中 4px 渐变条统一实现
+function _paintRange(el) {
+  const min = Number(el.min) || 0;
+  const max = Number(el.max);
+  const span = max - min;
+  const pct = span > 0 ? Math.min(100, Math.max(0, ((Number(el.value) - min) / span) * 100)) : 0;
+  const accent = 'var(--accent-color, #5b8def)';
+  const track = 'var(--border-color, rgba(255, 255, 255, 0.14))';
+  el.style.background = 'linear-gradient(to right, ' + accent + ' 0%, ' + accent + ' ' + pct + '%, '
+    + track + ' ' + pct + '%, ' + track + ' 100%)';
+  el.style.backgroundSize = '100% 4px';
+  el.style.backgroundPosition = 'center';
+  el.style.backgroundRepeat = 'no-repeat';
+}
+
 function _renderFieldHtml(key, prop, initial) {
   const id = _fieldId(key);
   const title = escapeHtml(prop.title || key);
@@ -426,6 +443,7 @@ function _renderForm(menu) {
     + '<button type="button" class="slash-form-btn is-primary" data-action="submit">'
     + escapeHtml(t('slash_form_submit')) + '</button>'
     + '</div></div>';
+  _menuEl.querySelectorAll('.slash-form-range').forEach(_paintRange);
   _applyShowWhen();
 }
 
@@ -484,6 +502,9 @@ function _cancelForm() {
 
 document.addEventListener('input', function (e) {
   if (!_isInputTextarea(e.target)) return;
+  // 表单打开期间输入框打字不打断表单（否则 _formCmd 被销毁，勾选状态
+  // 静默丢失）；表单只经 Esc / 取消按钮 / 点击外部关闭
+  if (_formCmd && _visible) return;
   _syncFromInput(e.target);
 }, true);
 
