@@ -105,9 +105,173 @@ body[data-theme="light"] .sidebar-resizer.dragging::after {
   align-items: center;
   border-bottom: 1px solid var(--border-color);
   height: 56px;
+  position: relative;
 }
 
 .sidebar-title { font-weight: 700; font-size: 16px; }
+
+/* ── Brand version chip + hover card（标题右侧版本标签 / 悬停名片）── */
+
+.brand-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.brand-version-chip {
+  flex-shrink: 0;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  color: var(--accent-text);
+  background: var(--accent-bg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: filter 0.15s ease;
+}
+
+.sidebar-header:hover .brand-version-chip {
+  filter: brightness(1.2);
+}
+
+/* 名片紧贴 header 底部（不留间隙，保证 hover 从标题移入卡片不中断）；
+   left/right 收在 sidebar 内，避免被 .sidebar 的 overflow:hidden 裁剪 */
+.brand-card {
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 12px;
+  right: 12px;
+  z-index: 40;
+  padding: 15px 16px;
+  border-radius: 10px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--dropdown-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+}
+
+.sidebar-header:hover .brand-card:not([hidden]) {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.brand-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.brand-card-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.brand-card-desc {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+.brand-card-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.brand-card-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.brand-card-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.brand-card-value {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-card-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.brand-card-repo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+
+.brand-card-repo:hover {
+  background: var(--hover-bg);
+}
+
+.brand-card-repo-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.brand-card-repo:hover .brand-card-repo-icon {
+  color: var(--text-primary);
+}
+
+.brand-card-repo span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-card-repo-arrow {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  opacity: 0;
+  transform: translateX(-2px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.brand-card-repo:hover .brand-card-repo-arrow {
+  opacity: 1;
+  transform: translateX(0);
+  color: var(--text-secondary);
+}
 
 .agent-list {
   flex: 1;

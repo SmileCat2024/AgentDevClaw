@@ -1,6 +1,8 @@
+import path from 'path';
 import {
-  APP_PORT, VIEWER_PORT,
+  APP_PORT, VIEWER_PORT, PROJECT_ROOT,
 } from '../shared/constants.js';
+import { readJsonSafe } from '../shared/fs-helpers.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 import {
   listAgentRuntimes, getAgentRuntime, getRuntimeByViewerAgentId, buildStatus, isChildProcessRunning,
@@ -34,6 +36,34 @@ export function createAgentLifecycleModule(ctx) {
   } = ctx;
 
   const _exitCallbacks = [];
+
+  // ── App info (versions / repos for the sidebar brand card) ────
+  // 版本与仓库信息在进程生命周期内不变，读一次后缓存。
+  // @agentdevjs/core 的 exports 只暴露 "."，不能 require 其 package.json，用 fs 直读。
+  let _appInfoPromise = null;
+  function loadAppInfo() {
+    if (!_appInfoPromise) {
+      _appInfoPromise = (async () => {
+        const [clawPkg, corePkg] = await Promise.all([
+          readJsonSafe(path.join(PROJECT_ROOT, 'package.json'), {}),
+          readJsonSafe(path.join(PROJECT_ROOT, 'node_modules', '@agentdevjs', 'core', 'package.json'), {}),
+        ]);
+        return {
+          name: 'AgentDevClaw',
+          version: clawPkg?.version || null,
+          framework: {
+            name: '@agentdevjs/core',
+            version: corePkg?.version || null,
+          },
+          repos: {
+            app: 'https://github.com/SmileCat2024/AgentDevClaw',
+            framework: 'https://github.com/SmileCat2024/AgentDev',
+          },
+        };
+      })();
+    }
+    return _appInfoPromise;
+  }
 
   async function removeSharedSession(runtime) {
     const sessionId = runtime?.selectedSessionId;
@@ -157,6 +187,14 @@ export function createAgentLifecycleModule(ctx) {
   function setupRoutes(app, express) {
     app.get('/protoclaw/health', (_req, res) => {
       res.json({ ok: true, appPort: APP_PORT, viewerPort: VIEWER_PORT });
+    });
+
+    app.get('/protoclaw/app_info', async (_req, res) => {
+      try {
+        res.json({ ok: true, ...(await loadAppInfo()) });
+      } catch (error) {
+        res.status(500).json({ ok: false, error: error?.message || String(error) });
+      }
     });
 
     app.get('/protoclaw/get_prebuilt_agents', async (_req, res, next) => {
