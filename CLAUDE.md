@@ -59,7 +59,7 @@ npm start     # 纯净启动（prestart 只做轻量校验）
 
 - **开发态**（`@agentdevjs/core` 为 `file:../AgentDev/packages/*`，node_modules 是 junction）：
   1. `check:agentdev` — 校验/修复全部 18 条 `@agentdevjs/*` 链接（4 框架包 + 14 生态包）；链接被 `npm install` 冲掉而相邻 `../AgentDev` 仓库构建可用时自动重建
-  2. 框架仓库构建 — 若相邻 `../AgentDev` 存在，`npm run build`（其 build 统一为 `scripts/build-all.mjs`，一次产出全部 18 包 dist）
+  2. 框架仓库构建 — 若相邻 `../AgentDev` 存在，`npm run build`（其 build 统一为 `scripts/build-all.mjs`，一次产出全部 19 包 dist：4 框架 + 14 生态 + create-feature CLI）
   3. `build:local-features` — 编译 `local-features/`
   4. `build:features` — 构建 `features/` 下被预制 agent 按源码路径引用的 feature 包（当前为 `force-continuation`、`tickets-build-flow`），其 dist 不入库
 - **发布态**（`@agentdevjs/core` 为 semver，node_modules 是 npm 正式包自带 dist）：跳过 1/2，只做 3/4
@@ -92,7 +92,7 @@ npm start     # 纯净启动（prestart 只做轻量校验）
 ### 2. `@agentdevjs/*` 框架包如何接入 Claw
 
 - npm 上的旧单包 `agentdev` 已退役。Claw 的 [package.json](/D:/code/AgentDevClaw/package.json) 以四个框架包 `@agentdevjs/core` + `@agentdevjs/llm` + `@agentdevjs/viewer` + `@agentdevjs/mcp` 加 14 个生态包（`@agentdevjs/shell-feature`、`@agentdevjs/qqbot-feature` 等）声明依赖。
-- 全部 18 个包尚未发布 npm，当前依赖形态为 `file:../AgentDev/packages/<name>`：`npm install` 会将其物化为 junction（Windows 实测为 Junction 链接），指向相邻框架仓库的包目录。
+- 框架仓库 19 个包（4 框架 + 14 生态 + create-feature CLI）尚未发布 npm，当前依赖形态为 `file:../AgentDev/packages/<name>`（Claw 消费其中 18 个）：`npm install` 会将其物化为 junction（Windows 实测为 Junction 链接），指向相邻框架仓库的包目录。
 - 本机联动开发时，正常 `npm install` 即可建立链接；链接被冲掉或相邻仓库不在默认位置时，`npm run build` 会先自动校验/修复全部 18 条链接（`check:agentdev`），无需手动干预。仅当相邻仓库路径非常规时需要显式指定：`AGENTDEV_LOCAL_PATH=... npm run build` 或 `npm run agentdev:local <路径>`。
 - 不要用 `npm link` 做这件事。`npm link` 会触发 npm 重新整理/prune 依赖树，可能把 Claw 运行时需要的顶层依赖移走；这里需要的是纯文件系统 junction。
 - `npm run agentdev:published` 当前是占位命令：四包发版前不存在"切回发布版"路径；发版后应把 `file:` 依赖改为 semver 并重写该脚本。
@@ -228,11 +228,11 @@ local-features 的基础层/应用层分层约定见 [local-features/README.md](
 
 ### 7. feature 构建与消费更新流程
 
-**开发态（2026-08-21 起）：全部 18 个 `@agentdevjs/*` 依赖（4 框架包 + 14 生态包）均为 `file:../AgentDev/packages/*` junction。开发过程没有任何 tgz 拷贝环节**——改框架或生态包源码 → 在 AgentDev 根目录跑 `npm run build`（统一为 `scripts/build-all.mjs`，一次产出全部 18 包 dist）→ 重启 Claw 服务/agent 即生效。只改个别包可用 `cd packages/<name> && npm run build` 提速。
+**开发态（2026-08-21 起）：全部 18 个 `@agentdevjs/*` 依赖（4 框架包 + 14 生态包）均为 `file:../AgentDev/packages/*` junction。开发过程没有任何 tgz 拷贝环节**——改框架或生态包源码 → 在 AgentDev 根目录跑 `npm run build`（统一为 `scripts/build-all.mjs`，一次产出全部 19 包 dist）→ 重启 Claw 服务/agent 即生效。只改个别包可用 `cd packages/<name> && npm run build` 提速。
 
 ```bash
 # 框架侧任一改动（core/llm/viewer/mcp 或 14 生态包）后：
-cd D:/code/AgentDev && npm run build     # 全部 18 包 dist
+cd D:/code/AgentDev && npm run build     # 全部 19 包 dist
 # 或只构建单个包提速：
 cd D:/code/AgentDev/packages/<name> && npm run build
 # 然后重启 Claw 服务（或对应 agent）
@@ -720,7 +720,7 @@ IM 线路管理相关：
 
 ### AgentDev 依赖
 
-当前依赖形态（18 个 @agentdev 包尚未发布 npm，走本地 junction）：4 框架包 + 14 生态包均为 `file:../AgentDev/packages/<name>`。
+当前依赖形态（19 个 `@agentdevjs` 包尚未发布 npm，走本地 junction；Claw 消费其中 18 个）：4 框架包 + 14 生态包均为 `file:../AgentDev/packages/<name>`。
 
 这意味着：
 
