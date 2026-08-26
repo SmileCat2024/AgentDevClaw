@@ -117,10 +117,14 @@ async function _performInputModelSwap(agentId, presetName) {
         _cacheModelInfo(agent, null, null, null, null);
       }
       if (typeof ClawToast !== 'undefined') {
+        // __default__ 合成名 → 显示实际切换到的模型名（回执 meta 携带）
+        let swapDesc = presetName;
+        if (presetName === '__default__' && result?.meta?.modelName) swapDesc = result.meta.modelName;
+        else if (typeof formatPresetDisplayName === 'function') swapDesc = formatPresetDisplayName(presetName);
         ClawToast.update(toastId, {
           status: 'success',
           title: isZh ? '模型已切换' : 'Model switched',
-          description: presetName,
+          description: swapDesc,
           autoDismiss: 3000,
         });
       }
@@ -247,6 +251,12 @@ function updateInputModelSwitcher() {
   // _getInputDefaultPresetName already checks runtime cache first,
   // then falls back to the preset. No additional cache logic needed here.
   let displayName = _getInputDefaultPresetName() || '';
+  // __default__ 是合成名：runtime 实际在用的模型名就在 overview 里，优先显示它；
+  // overview 未推到时由 formatPresetDisplayName 兜底为"全局默认"占位。
+  if (displayName === '__default__' && typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot?.modelName) {
+    displayName = currentOverviewSnapshot.modelName;
+  }
+  if (typeof formatPresetDisplayName === 'function') displayName = formatPresetDisplayName(displayName);
   nameEl.textContent = displayName || (currentLanguage === 'zh' ? '模型' : 'Model');
 }
 
@@ -280,6 +290,12 @@ function _getCurrentPreset() {
 }
 
 function _getCurrentPresetProtocol() {
+  // Priority 1: overview.provider — runtime live meta（含 __default__ 全局默认，
+  // 它不在 presets.json 里，查表必然落空）
+  if (typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot) {
+    let p = currentOverviewSnapshot.provider;
+    if (p && typeof p === 'string') return p;
+  }
   let preset = _getCurrentPreset();
   return (preset && (preset.provider || preset.protocol)) || 'anthropic';
 }
@@ -316,8 +332,15 @@ function _getCurrentThinkingEffort() {
 
 function _currentModelSupportsThinking() {
   let preset = _getCurrentPreset();
-  if (!preset) return false;
-  return preset.thinkingEffort != null && preset.thinkingEffort !== '' && preset.thinkingEffort !== 'none';
+  if (preset) {
+    return preset.thinkingEffort != null && preset.thinkingEffort !== '' && preset.thinkingEffort !== 'none';
+  }
+  // preset 表查不到（如 __default__ 全局默认）时以 runtime live meta 判断
+  if (typeof currentOverviewSnapshot !== 'undefined' && currentOverviewSnapshot) {
+    let te = currentOverviewSnapshot.thinkingEffort;
+    return te != null && te !== '' && te !== 'none';
+  }
+  return false;
 }
 
 function _closeThinkingEffortDropdown() {

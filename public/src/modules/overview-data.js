@@ -146,6 +146,7 @@ function normalizeOverviewSnapshot(snapshot) {
     thinkingEffort: typeof snapshot.thinkingEffort === 'string' ? snapshot.thinkingEffort : null,
     contextLength: typeof snapshot.contextLength === 'number' && snapshot.contextLength > 0 ? snapshot.contextLength : null,
     compressRatio: typeof snapshot.compressRatio === 'number' && snapshot.compressRatio > 0 ? snapshot.compressRatio : null,
+    provider: typeof snapshot.provider === 'string' ? snapshot.provider : '',
   };
 }
 

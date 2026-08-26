@@ -512,6 +512,15 @@ let currentProjectDocsetPage = 'requirement';
 let featurePanelWidth = 500;
 let currentTheme = localStorage.getItem('agentdev-theme') || 'dark';
 let currentLanguage = localStorage.getItem('agentdev-language') || 'zh';
+/**
+ * preset 名 → 用户可见显示名。
+ * `__default__` 是 resolver 层的合成名（全局默认模型不在 presets.json 里），
+ * 协议合成名不进 UI；模型切换按钮、toast、用量列表等显示点统一过此函数。
+ */
+function formatPresetDisplayName(name) {
+  if (name === '__default__') return currentLanguage === 'zh' ? '全局默认' : 'Default';
+  return name;
+}
 const CHAT_PROCESS_VISIBILITY_KEY = 'agentdev-chat-show-process';
 function loadChatProcessVisibility() {
   try {

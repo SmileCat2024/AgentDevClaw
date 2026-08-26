@@ -513,10 +513,13 @@ async function _performModelSwap(agentId, presetName) {
     });
     const result = await resp.json();
     if (result.ok) {
+      let swapDesc = presetName;
+      if (presetName === '__default__' && result?.meta?.modelName) swapDesc = result.meta.modelName;
+      else if (typeof formatPresetDisplayName === 'function') swapDesc = formatPresetDisplayName(presetName);
       ClawToast.update(toastId, {
         status: 'success',
         title: isZh ? '模型已切换' : 'Model switched',
-        description: presetName,
+        description: swapDesc,
         autoDismiss: 3000,
       });
       // Context bar model name comes from overview poll — just refresh.

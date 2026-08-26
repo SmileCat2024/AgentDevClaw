@@ -286,7 +286,9 @@ function usageInfoBucketRows(daily, from, to, events) {
   (Array.isArray(events) ? events : []).forEach((event) => {
     const eventDate = usageInfoEventDate(event);
     const usage = event?.usage || {};
-    const model = event?.model?.presetName || event?.model?.modelName || 'unknown';
+    // __default__ 是 resolver 合成名（可能对应不同时期的模型），统计视图落到具体 modelName
+    const eventPreset = event?.model?.presetName;
+    const model = (eventPreset && eventPreset !== '__default__') ? eventPreset : (event?.model?.modelName || 'unknown');
     const bucketIndex = isSingleDay
       ? usageInfoEventHour(event)
       : rows.findIndex((item) => eventDate === item.date);
@@ -317,7 +319,8 @@ function usageInfoBucketRows(daily, from, to, events) {
 function usageInfoModelOptions(events) {
   return Array.from(
     (Array.isArray(events) ? events : []).reduce((map, event) => {
-      const label = event?.model?.presetName || event?.model?.modelName || 'unknown';
+      const optPreset = event?.model?.presetName;
+      const label = (optPreset && optPreset !== '__default__') ? optPreset : (event?.model?.modelName || 'unknown');
       map.set(label, (map.get(label) || 0) + (event?.usage?.totalTokens || 0));
       return map;
     }, new Map()).entries()
@@ -587,7 +590,9 @@ function renderUsageInfoGroups(groups, totals) {
       const pct = usageInfoPct(total, totals?.totalTokens || max);
       const width = max > 0 ? Math.max(2, Math.round((total / max) * 100)) : 2;
       const metaParts = [];
-      if (item.presetName && item.presetName !== item.label) metaParts.push(item.presetName);
+      if (item.presetName && item.presetName !== item.label) {
+        metaParts.push(typeof formatPresetDisplayName === 'function' ? formatPresetDisplayName(item.presetName) : item.presetName);
+      }
       if (item.provider) metaParts.push(item.provider);
       if (item.source && item.source !== item.label) metaParts.push(item.source);
       return [
@@ -618,7 +623,8 @@ function renderUsageInfoEvents(events) {
     '<div class="usage-info-events">',
     rows.map((event) => {
       const when = event.timestamp ? new Date(event.timestamp).toLocaleString() : '';
-      const model = event.model?.presetName || event.model?.modelName || (isZh ? '未知模型' : 'Unknown model');
+      const evPreset = event.model?.presetName;
+      const model = (evPreset && evPreset !== '__default__') ? evPreset : (event.model?.modelName || (isZh ? '未知模型' : 'Unknown model'));
       const usage = event.usage || {};
       const bits = [
         (event.source || 'unknown'),
