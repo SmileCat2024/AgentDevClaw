@@ -22,7 +22,7 @@ import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync } from 'fs';
 import { FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
-import { resolveAgentModelLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
+import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
 
@@ -280,6 +280,8 @@ async function main() {
     projectRoot: PROTOCLAW_ROOT,
     workspaceDir: workspaceCwd || PROTOCLAW_ROOT,
     ...(resolved ? { llm: resolved.llm } : {}),
+    // 装配同一批 Feature：运行时模型切换（agent.setModel）与主宿主同源
+    modelResolver: modelPresetResolver,
   });
   if (resolved) {
     console.error(`[OneShot] Using model preset role="${modelPresetRole}" => ${resolved.modelName}`);

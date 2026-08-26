@@ -17,6 +17,13 @@ const PROTOCLAW_ROOT = resolve(__dirname, '..');
 const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
 
 /**
+ * 全局默认模型的合成 preset 名。config/default.json 的内联 defaultModel 没有
+ * preset 身份；赋此名后，显示、切换、档位调整与普通 preset 走同一条链路，
+ * 下游无需为"匿名模型"做任何特判。
+ */
+export const GLOBAL_DEFAULT_PRESET_NAME = '__default__';
+
+/**
  * Resolve a preset name to { llm, modelName }.
  * @param {string} presetName
  * @param {{ thinkingEffort?: string | null }} [overrides] - Runtime overrides for this resolution only; does not mutate config/presets.json.
@@ -186,17 +193,60 @@ export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
  *
  * 新框架 BasicAgent 的 llm 为必传（票 009 纯基类化），无 preset 的 agent
  * （如 qqbot / agent-studio）依赖此兜底完成构造。
- * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string } | null}
+ *
+ * 返回携带合成 preset 名 GLOBAL_DEFAULT_PRESET_NAME：全局默认是"具名"模型，
+ * 档位重造（setThinkingEffort）与普通 preset 走同一链路。
+ *
+ * @param {{ thinkingEffort?: string | null }} [overrides] - 运行时档位覆盖；null 清除为厂商默认。
+ * @param {{ configPath?: string, presetsPath?: string }} [options] - Test seam — production callers omit.
+ *   configPath overrides config/default.json（inline 分支生效）；
+ *   presetsPath overrides config/presets.json（窗口元数据补齐）。
+ * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string, thinkingEffort: string | null, provider: string, protocol: string } | null}
  */
-export function resolveGlobalDefaultLLM() {
-  const configPath = join(PROTOCLAW_ROOT, 'config', 'default.json');
+export function resolveGlobalDefaultLLM(overrides, options = {}) {
+  const configPath = options.configPath || join(PROTOCLAW_ROOT, 'config', 'default.json');
   try {
     const raw = JSON.parse(readFileSync(configPath, 'utf8'));
     const dm = raw?.defaultModel;
     if (dm?.model && dm?.baseUrl && dm?.apiKey) {
-      const llm = createLLM({ defaultModel: dm });
+      // dm 本身是完整 ModelConfig；摊平传入以支持 thinkingEffort 运行时覆盖。
+      const effectiveThinkingEffort = (overrides && 'thinkingEffort' in overrides)
+        ? (overrides.thinkingEffort || undefined)
+        : (dm.thinkingEffort || undefined);
+      const llm = createLLM({ ...dm, thinkingEffort: effectiveThinkingEffort });
+      // inline 形态天然只携带连接字段（apiKey/baseUrl/…），窗口元数据缺失时按
+      // model 名从 presets.json 补齐——表条目是窗口元数据的权威来源。只补
+      // contextLength/compressRatio 展示元数据，不碰连接字段；查不到保持
+      // null（前端用量条不渲染，与改动前语义一致）。
+      let windowMeta = {};
+      if (!(Number.isFinite(Number(dm.contextLength)) && Number(dm.contextLength) > 0)) {
+        try {
+          const presetsPath = options.presetsPath || PRESETS_PATH;
+          const presetsRaw = JSON.parse(readFileSync(presetsPath, 'utf8'));
+          const presets = Array.isArray(presetsRaw?.presets) ? presetsRaw.presets : [];
+          const match = presets.find((p) => p.model === dm.model);
+          if (match) windowMeta = { contextLength: match.contextLength, compressRatio: match.compressRatio };
+        } catch { /* presets 表不可读时保持无窗口元数据 */ }
+      }
+      const rawContextLength = Number(dm.contextLength ?? windowMeta.contextLength);
+      const rawCompressRatio = Number(dm.compressRatio ?? windowMeta.compressRatio);
       console.log(`[ModelPreset] global default model (inline) => ${dm.model}`);
-      return { llm, modelName: dm.model, presetName: '' };
+      return {
+        llm,
+        modelName: dm.model,
+        presetName: GLOBAL_DEFAULT_PRESET_NAME,
+        thinkingEffort: effectiveThinkingEffort || null,
+        providerName: '',
+        provider: dm.provider || '',
+        protocol: dm.provider || '',
+        authType: '',
+        vision: dm.vision === true,
+        contextLength: Number.isFinite(rawContextLength) && rawContextLength > 0
+          ? rawContextLength : null,
+        compressRatio: Number.isFinite(rawCompressRatio)
+          ? Math.max(1, Math.min(100, rawCompressRatio)) : 80,
+        baseUrl: dm.baseUrl,
+      };
     }
   } catch (error) {
     console.warn(`[ModelPreset] global default model resolution skipped:`, error?.message || error);
@@ -210,10 +260,12 @@ export function resolveGlobalDefaultLLM() {
       const presetsRaw = JSON.parse(readFileSync(PRESETS_PATH, 'utf8'));
       const presets = Array.isArray(presetsRaw?.presets) ? presetsRaw.presets : [];
       const candidates = presets.filter((p) => p.model === defaultModel.model);
-      const preset = candidates.find((p) => (p.protocol || 'anthropic') === (defaultModel.protocol || 'anthropic'))
+      const preset = candidates.find((p) => (p.protocol || 'anthropic') === (defaultModel.protocol || defaultModel.provider || 'anthropic'))
         || candidates[0];
       if (preset) {
-        const resolved = resolveModelPresetLLM(preset.name);
+        // 注意不透传 options：本函数的 configPath 指 default.json，
+        // resolveModelPresetLLM 的 configPath 指 presets.json，语义不同。
+        const resolved = resolveModelPresetLLM(preset.name, overrides);
         if (resolved) {
           console.log(`[ModelPreset] global default model via preset "${preset.name}" => ${preset.model}`);
           return resolved;
@@ -225,3 +277,37 @@ export function resolveGlobalDefaultLLM() {
   }
   return null;
 }
+
+/**
+ * 符合框架 ModelPresetResolver 契约的适配对象（宿主装配时注入 Agent 构造参数）。
+ * '__default__' 别名在此层处理，resolveModelPresetLLM / resolveGlobalDefaultLLM
+ * 的公共签名保持不变。
+ */
+function toResolvedPreset(r) {
+  if (!r?.llm) return null;
+  return {
+    llm: r.llm,
+    meta: {
+      modelName: r.modelName,
+      contextLength: r.contextLength ?? null,
+      compressRatio: r.compressRatio,
+      presetName: r.presetName,
+      thinkingEffort: r.thinkingEffort ?? null,
+      provider: r.protocol || r.provider || '',
+    },
+  };
+}
+
+export const modelPresetResolver = {
+  /**
+   * @param {string} presetName
+   * @param {{ thinkingEffort?: string | null }} [overrides]
+   * @param {{ configPath?: string, presetsPath?: string }} [options] - Test seam — production callers omit.
+   */
+  resolve(presetName, overrides, options) {
+    const resolved = presetName === GLOBAL_DEFAULT_PRESET_NAME
+      ? resolveGlobalDefaultLLM(overrides, options)
+      : resolveModelPresetLLM(presetName, overrides, options);
+    return toResolvedPreset(resolved);
+  },
+};

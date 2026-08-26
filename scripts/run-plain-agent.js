@@ -37,7 +37,7 @@ import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { FileSessionStore } from '@agentdevjs/core';
-import { resolveAgentModelLLM } from '../server/model-preset-resolver.js';
+import { resolveAgentModelLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { normalizeAgentMetadata } from '../server/feature-runtime/schemas.js';
 import { scanFeatureCatalog } from '../server/feature-runtime/catalog.js';
 import { resolveAgentRuntimePlan } from '../server/feature-runtime/resolver.js';
@@ -314,6 +314,8 @@ async function main() {
       modelPresetRole,
       ...(runtimeEnvironment ? { runtimeEnvironment: runtimeEnvironment.environmentDir } : {}),
     },
+    // 装配同一批 Feature：运行时模型切换（agent.setModel）与主宿主同源
+    modelResolver: modelPresetResolver,
   });
   if (runtimePlan) {
     await mountResolvedFeatures(agent, runtimePlan, { environmentDir: runtimeEnvironment.environmentDir });

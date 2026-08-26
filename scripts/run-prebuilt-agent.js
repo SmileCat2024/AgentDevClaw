@@ -16,7 +16,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
-import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
+import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
@@ -344,8 +344,6 @@ class SessionLifecycle {
     // Populated during start()
     this.agent = null;
     this.callArbiter = null;
-    this.resolved = null;
-    this.resolvedUsageModel = null;
     this.disposed = false;
     this.inputLoopRunning = false;
     this.passiveMailboxLoop = null;
@@ -586,55 +584,71 @@ class SessionLifecycle {
     }
 
     // ── model / thinking hot-swap ──
+    // 消费框架官方 API（agent.setModel / setThinkingEffort）：resolver 已在构造时
+    // 注入，宿主不再查表、不再私记状态；当前模型以 agent.getLLMMeta() 为唯一权威。
+    // request/reply：server 带 requestId 等待回执，前端的 ok 才表示"切换生效"。
     if (msg.type !== 'swap-model' && msg.type !== 'swap-thinking') return;
 
-    if (typeof this.agent?.setLLM !== 'function') {
-      console.warn(`[ProtoClaw Runtime] ${msg.type}: agent.setLLM not available (framework too old)`);
+    const hasRequestId = typeof msg.requestId === 'string' && msg.requestId;
+    const reply = (payload) => {
+      if (!hasRequestId) return;
+      try {
+        process.send({
+          type: 'model-swap-result',
+          requestId: msg.requestId,
+          sessionId: this.sessionId,
+          ...payload,
+        });
+      } catch {}
+    };
+
+    if (typeof this.agent?.setModel !== 'function') {
+      reply({ ok: false, error: 'agent.setModel not available (framework too old)' });
       return;
-    }
-
-    let presetName;
-    let overrides;
-
-    if (msg.type === 'swap-model') {
-      presetName = msg.presetName;
-      if (!presetName || typeof presetName !== 'string') {
-        console.error('[ProtoClaw Runtime] swap-model: no presetName in IPC payload');
-        return;
-      }
-      overrides = undefined;
-    } else {
-      presetName = this.resolved?.presetName;
-      if (!presetName) {
-        console.error('[ProtoClaw Runtime] swap-thinking: cannot determine current presetName');
-        return;
-      }
-      overrides = { thinkingEffort: msg.thinkingEffort };
     }
 
     const isMidTurn = typeof this.agent.isRunning === 'function' && this.agent.isRunning();
-    const newResolved = resolveModelPresetLLM(presetName, overrides);
-    if (!newResolved?.llm) {
-      console.error(`[ProtoClaw Runtime] ${msg.type}: failed to resolve preset "${presetName}"`);
+    const oldName = this.agent.getLLMMeta()?.modelName || 'unknown';
+    let swapped;
+    let detail;
+
+    // IPC 处理纪律：切换失败（resolver 缺席、框架抛错）必须降级为失败回执，
+    // 绝不能让异常变成 uncaughtException 杀死进程——那会带走整个会话 runtime。
+    try {
+      if (msg.type === 'swap-model') {
+        if (!msg.presetName || typeof msg.presetName !== 'string') {
+          reply({ ok: false, error: 'no presetName in IPC payload' });
+          return;
+        }
+        swapped = this.agent.setModel(msg.presetName, { source: 'user' });
+        detail = msg.presetName;
+      } else {
+        if (typeof this.agent.setThinkingEffort !== 'function') {
+          reply({ ok: false, error: 'agent.setThinkingEffort not available (framework too old)' });
+          return;
+        }
+        swapped = this.agent.setThinkingEffort(msg.thinkingEffort ?? null, { source: 'user' });
+        detail = `effort: ${msg.thinkingEffort || 'default'}`;
+      }
+    } catch (err) {
+      const error = String(err?.message || err);
+      reply({ ok: false, error });
+      console.error(`[ProtoClaw Runtime] ${msg.type} failed: ${error}`);
       return;
     }
 
-    const oldName = this.resolved?.modelName || this.resolvedUsageModel?.modelName || 'unknown';
-    this.agent.setLLM(newResolved.llm, {
-      modelName: newResolved.modelName,
-      contextLength: newResolved.contextLength,
-      compressRatio: newResolved.compressRatio,
-      presetName: newResolved.presetName,
-      thinkingEffort: newResolved.thinkingEffort || null,
-    });
+    if (!swapped) {
+      const reason = msg.type === 'swap-model'
+        ? `failed to resolve preset "${msg.presetName}" (missing preset or credentials)`
+        : 'failed to resolve current preset for thinking effort';
+      reply({ ok: false, error: reason });
+      console.error(`[ProtoClaw Runtime] ${msg.type}: ${reason}`);
+      return;
+    }
 
-    this.resolved = newResolved;
-    this.resolvedUsageModel = newResolved;
-
-    const detail = msg.type === 'swap-thinking'
-      ? ` (effort: ${msg.thinkingEffort || 'default'})`
-      : '';
-    console.log(`[ProtoClaw Runtime] ✓ ${msg.type === 'swap-model' ? 'Model' : 'Thinking'} swapped: ${oldName}${detail}${isMidTurn ? ' (mid-turn)' : ''}`);
+    const meta = this.agent.getLLMMeta();
+    reply({ ok: true, meta });
+    console.log(`[ProtoClaw Runtime] ✓ ${msg.type === 'swap-model' ? 'Model' : 'Thinking'} swapped: ${oldName} -> ${meta?.modelName || 'unknown'} (${detail})${isMidTurn ? ' (mid-turn)' : ''}`);
   }
 
   // ── Dispose this session (does NOT exit the process) ────────
@@ -734,8 +748,9 @@ SessionLifecycle.prototype.start = async function () {
   const modelOptions = this.runtime.sessionType === 'coder'
     ? { userConfigPath: join(PROTOCLAW_ROOT, '.agentdev', 'agent-configs', 'coder.json') }
     : {};
-  this.resolved = resolveAgentModelLLM(agentPath, 'default', modelOptions) || resolveGlobalDefaultLLM();
-  this.resolvedUsageModel = this.resolved || null;
+  // 启动解析是构造期一次性注入（agent 尚未创建）；运行期切换统一走
+  // agent.setModel / setThinkingEffort，消费注入的 modelPresetResolver。
+  const resolved = resolveAgentModelLLM(agentPath, 'default', modelOptions) || resolveGlobalDefaultLLM();
   this.agent = new AgentClass({
     name: this.agentName,
     projectRoot: PROTOCLAW_ROOT,
@@ -746,34 +761,36 @@ SessionLifecycle.prototype.start = async function () {
     // onLLMSwap 都会重算，不依赖这里的快照。
     ...((agentId === 'programming-helper' || agentId === 'agent-studio') ? {
       contextGuard: {
-        contextLength: this.resolved?.contextLength ?? null,
-        compressRatio: this.resolved?.compressRatio ?? 80,
+        contextLength: resolved?.contextLength ?? null,
+        compressRatio: resolved?.compressRatio ?? 80,
       },
     } : {}),
-    ...(this.resolved ? { llm: this.resolved.llm } : {}),
+    ...(resolved ? { llm: resolved.llm } : {}),
+    modelResolver: modelPresetResolver,
   });
   // Propagate agent reference to extracted module contexts
   this.imBridgeCtx.agent = this.agent;
   this.summaryCtx.agent = this.agent;
-  if (this.resolved) {
+  if (resolved) {
     if (typeof this.agent.setLLM === 'function') {
-      this.agent.setLLM(this.resolved.llm, {
-        modelName: this.resolved.modelName,
-        contextLength: this.resolved.contextLength,
-        compressRatio: this.resolved.compressRatio,
-        presetName: this.resolved.presetName,
-        thinkingEffort: this.resolved.thinkingEffort || null,
+      this.agent.setLLM(resolved.llm, {
+        modelName: resolved.modelName,
+        contextLength: resolved.contextLength,
+        compressRatio: resolved.compressRatio,
+        presetName: resolved.presetName,
+        thinkingEffort: resolved.thinkingEffort || null,
+        ...(resolved.provider ? { provider: resolved.provider } : {}),
+        source: 'boot',
       });
     }
-    console.log(`[ProtoClaw Runtime] Using model preset from metadata.json => ${this.resolved.modelName}`);
+    console.log(`[ProtoClaw Runtime] Using model preset from metadata.json => ${resolved.modelName}`);
     try {
       const ctx = typeof this.agent.getSystemContext === 'function' ? this.agent.getSystemContext() : this.agent._systemContext;
-      if (ctx) ctx.SYSTEM_CURRENT_MODEL = this.resolved.modelName;
+      if (ctx) ctx.SYSTEM_CURRENT_MODEL = resolved.modelName;
     } catch {}
   } else {
     const fallbackModelName = this.agent?.llm?.modelName;
     if (fallbackModelName) {
-      this.resolvedUsageModel = { modelName: fallbackModelName };
       console.log(`[ProtoClaw Runtime] No model preset found, using agent LLM model => ${fallbackModelName}`);
     }
   }
@@ -925,6 +942,8 @@ SessionLifecycle.prototype.start = async function () {
         const callSummary = Array.isArray(usageStats?.calls)
           ? usageStats.calls.find((call) => call?.callIndex === callIndex)
           : null;
+        // 当前模型状态唯一权威在 agent meta（宿主小抄已退役）
+        const llmMeta = typeof self.agent?.getLLMMeta === 'function' ? self.agent.getLLMMeta() : {};
         if (callSummary?.totalUsage && callIndex !== null) {
           const usageEventId = [
             'agent-call',
@@ -946,7 +965,11 @@ SessionLifecycle.prototype.start = async function () {
               callIndex,
               requestCount: callSummary.stepCount || 1,
               cacheHitRequests: callSummary.cacheHitRequests || 0,
-              model: buildModelUsageMeta(self.resolvedUsageModel, 'default'),
+              // 模型归因读 agent meta（唯一权威）；provider 同时充当 protocol 字段
+              model: buildModelUsageMeta(
+                typeof self.agent?.getLLMMeta === 'function' ? self.agent.getLLMMeta() : null,
+                'default',
+              ),
               usage: callSummary.totalUsage,
               context: {
                 contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
@@ -972,9 +995,9 @@ SessionLifecycle.prototype.start = async function () {
               totalTokens: totalUsage?.totalTokens || 0,
               lastRequestUsage: usageStats?.lastRequestUsage || null,
             },
-            modelName: self.resolved?.modelName || self.resolvedUsageModel?.modelName || undefined,
-            contextLength: self.resolved?.contextLength ?? undefined,
-            compressRatio: self.resolved?.compressRatio ?? undefined,
+            ...(llmMeta.modelName ? { modelName: llmMeta.modelName } : {}),
+            contextLength: llmMeta.contextLength ?? undefined,
+            compressRatio: llmMeta.compressRatio ?? undefined,
             savedAt: Date.now(),
           }),
         });

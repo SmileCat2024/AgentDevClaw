@@ -25,7 +25,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { Agent, FileSessionStore, runWithLogScope } from '@agentdevjs/core';
-import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
+import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -377,6 +377,7 @@ async function main() {
         projectRoot: runtimePlan.agent.projectRoot || PROTOCLAW_ROOT,
         features: featureConfig,
         runtime: { agentId: runtimePlan.agent.id, sessionType: 'studio-debug' },
+        modelResolver: modelPresetResolver,
       });
     } catch (error) {
       failReady(`真实 Agent 加载失败: ${error?.message || error}`, undefined, error);
@@ -389,6 +390,9 @@ async function main() {
       systemMessage: buildSystemMessage(project),
       workspaceDir: projectDir,
       projectRoot: PROTOCLAW_ROOT,
+      // 被测 Feature 的运行时模型切换（agent.setModel）走注入的 resolver；
+      // 资产（presets.json / OAuth token）仍留在宿主进程内。
+      modelResolver: modelPresetResolver,
     });
   }
 

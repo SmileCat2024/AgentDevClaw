@@ -16,6 +16,8 @@
    - 0005 工具终止语义：中断即结果
    - 0006 本地显式资源寻址优先
    - 0007 Capability Registry as the Unified Control Plane
+   - 0008 远程 Claw 连接架构
+   - 0009 模型热切换框架 API：资产归应用层，状态由 agent 自持
 
 实现层真实入口：
 

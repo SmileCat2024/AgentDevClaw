@@ -6,6 +6,9 @@ import { tmpdir } from 'os';
 import {
   resolveModelPresetLLM,
   resolveAgentModelLLM,
+  resolveGlobalDefaultLLM,
+  modelPresetResolver,
+  GLOBAL_DEFAULT_PRESET_NAME,
 } from '../server/model-preset-resolver.js';
 
 describe('model-preset-resolver', () => {
@@ -249,6 +252,79 @@ describe('model-preset-resolver', () => {
         const result = resolveAgentModelLLM(agentDir, 'default', { configPath, userConfigPath });
         assert.ok(result);
         assert.equal(result.modelName, 'fixture-model-a');
+      });
+    });
+
+    describe('resolveGlobalDefaultLLM / modelPresetResolver (__default__ alias)', () => {
+      let defaultConfigPath;
+
+      before(() => {
+        defaultConfigPath = join(fixtureDir, 'default.json');
+        writeFileSync(defaultConfigPath, JSON.stringify({
+          defaultModel: {
+            provider: 'anthropic',
+            apiSurface: 'chat',
+            model: 'fixture-default-model',
+            baseUrl: 'https://fixture-default.example/api',
+            apiKey: 'fixture-key',
+            thinkingEffort: 'medium',
+          },
+        }));
+      });
+
+      it('inline defaultModel resolves with the synthetic __default__ preset name and full meta', () => {
+        const result = resolveGlobalDefaultLLM(undefined, { configPath: defaultConfigPath });
+        assert.ok(result);
+        assert.ok(result.llm);
+        assert.equal(result.modelName, 'fixture-default-model');
+        assert.equal(result.presetName, GLOBAL_DEFAULT_PRESET_NAME);
+        assert.equal(result.thinkingEffort, 'medium');
+        assert.equal(result.protocol, 'anthropic');
+      });
+
+      it('thinkingEffort override applies to the inline default (re-resolve for setThinkingEffort)', () => {
+        const result = resolveGlobalDefaultLLM({ thinkingEffort: 'high' }, { configPath: defaultConfigPath });
+        assert.ok(result);
+        assert.equal(result.thinkingEffort, 'high');
+        const cleared = resolveGlobalDefaultLLM({ thinkingEffort: null }, { configPath: defaultConfigPath });
+        assert.ok(cleared);
+        assert.equal(cleared.thinkingEffort, null);
+      });
+
+      it('modelPresetResolver.resolve maps __default__ through resolveGlobalDefaultLLM and returns contract shape', () => {
+        const resolved = modelPresetResolver.resolve(GLOBAL_DEFAULT_PRESET_NAME, undefined, { configPath: defaultConfigPath });
+        assert.ok(resolved);
+        assert.ok(resolved.llm);
+        assert.equal(resolved.meta.presetName, GLOBAL_DEFAULT_PRESET_NAME);
+        assert.equal(resolved.meta.modelName, 'fixture-default-model');
+        assert.equal(resolved.meta.thinkingEffort, 'medium');
+        assert.equal(resolved.meta.provider, 'anthropic');
+      });
+
+      it('modelPresetResolver.resolve maps unknown names to null (contract: no throw)', () => {
+        assert.equal(modelPresetResolver.resolve('definitely-not-a-preset-xyz'), null);
+      });
+
+      it('inline defaultModel without contextLength backfills window meta from presets.json by model name', () => {
+        const presetsFixturePath = join(fixtureDir, 'default-window-presets.json');
+        writeFileSync(presetsFixturePath, JSON.stringify({
+          presets: [
+            { name: 'Fixture Default (window)', model: 'fixture-default-model', contextLength: 999000, compressRatio: 60 },
+          ],
+        }));
+        const result = resolveGlobalDefaultLLM(undefined, { configPath: defaultConfigPath, presetsPath: presetsFixturePath });
+        assert.ok(result);
+        assert.equal(result.contextLength, 999000);
+        assert.equal(result.compressRatio, 60);
+      });
+
+      it('inline window meta stays null when no presets entry matches the model', () => {
+        const emptyPresetsPath = join(fixtureDir, 'default-empty-presets.json');
+        writeFileSync(emptyPresetsPath, JSON.stringify({ presets: [] }));
+        const result = resolveGlobalDefaultLLM(undefined, { configPath: defaultConfigPath, presetsPath: emptyPresetsPath });
+        assert.ok(result);
+        assert.equal(result.contextLength, null);
+        assert.equal(result.compressRatio, 80);
       });
     });
   });

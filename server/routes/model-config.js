@@ -5,8 +5,8 @@ import { spawn } from 'child_process';
 import { PROJECT_ROOT, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH, DEFAULT_COMPRESS_RATIO, PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
 import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
-import { sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
-import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
+import { requestRuntimeAck } from '../shared/ipc.js';
+import { getRuntimeByViewerAgentId, getAgentRuntime } from '../shared/agent-access.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 import { normalizeProgrammingHelperProcessMode, GLOBAL_SHARED_AGENT_ID } from '../shared/process-mode.js';
 import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.js';
@@ -632,6 +632,13 @@ export function setupModelConfigRoutes(app, express) {
     } catch (error) { next(error); }
   });
 
+  // ── Hot-swap request/ack ──
+  // swap 指令带 requestId 发送，等待 runtime 执行 setModel/setThinkingEffort 后的
+  // 回执（type 'model-swap-result'）再响应前端——ok 表示"切换已生效"而非"消息已
+  // 送达"。preset 不存在、OAuth token 缺失等失败对前端可见。requestId 全局唯一，
+  // type + requestId 足以匹配回执，无需 sessionId 三重匹配。
+  const requestModelSwapAck = (runtime, message) => requestRuntimeAck(runtime, message, 'model-swap-result');
+
   // ── Hot-swap: switch thinking effort for one explicit runtime ──
   // Runtime-only: updates the in-memory LLM instance without touching the
   // preset definition in config/presets.json. The preset's thinkingEffort is
@@ -655,22 +662,27 @@ export function setupModelConfigRoutes(app, express) {
         : (typeof thinkingEffort === 'string' && thinkingEffort ? thinkingEffort : null);
 
       const message = { type: 'swap-thinking', thinkingEffort: normalized };
-      let swapCount = 0;
+      let result = { ok: false, error: 'no reachable runtime for this target' };
 
+      // Priority 1: runtimeId (viewerAgentId) — the most precise identifier.
       if (runtimeId && typeof runtimeId === 'string') {
         const rt = getRuntimeByViewerAgentId(runtimeId);
         if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
-          try {
-            swapCount = sendIPCToRuntime(rt, message) ? 1 : 0;
-          } catch (err) {
-            console.warn(`[swap_thinking_effort] IPC failed for runtimeId ${runtimeId}: ${err}`);
-          }
+          result = await requestModelSwapAck(rt, message);
         }
       }
-      if (!swapCount && sessionId && typeof sessionId === 'string') {
-        swapCount = sendIPCtoSession(agentId, sessionId, message) ? 1 : 0;
+      // Priority 2: agentId + sessionId — fallback when runtimeId is unavailable
+      if (!result.ok && sessionId && typeof sessionId === 'string') {
+        const rt = getAgentRuntime(agentId, sessionId);
+        if (rt) result = await requestModelSwapAck(rt, message);
       }
-      res.json({ ok: swapCount > 0, agentId, thinkingEffort: normalized, swapCount });
+      // No broadcast fallback: an explicit runtime/session request must not
+      // change another session's in-memory model.
+
+      if (!result.ok) {
+        return res.status(502).json({ ok: false, agentId, thinkingEffort: normalized, error: result.error });
+      }
+      res.json({ ok: true, agentId, thinkingEffort: normalized, meta: result.meta });
     } catch (error) { next(error); }
   });
 
@@ -696,7 +708,7 @@ export function setupModelConfigRoutes(app, express) {
       }
 
       const message = { type: 'swap-model', presetName };
-      let swapCount = 0;
+      let result = { ok: false, error: 'no reachable runtime for this target' };
 
       // Priority 1: runtimeId (viewerAgentId) — the most precise identifier.
       // The frontend always knows currentRuntimeAgentId, which uniquely
@@ -704,23 +716,23 @@ export function setupModelConfigRoutes(app, express) {
       if (runtimeId && typeof runtimeId === 'string') {
         const rt = getRuntimeByViewerAgentId(runtimeId);
         if (rt && rt.process && rt.process.exitCode === null && !rt.stopped) {
-          try {
-            swapCount = sendIPCToRuntime(rt, message) ? 1 : 0;
-          } catch (err) {
-            console.warn(`[swap_model] IPC failed for runtimeId ${runtimeId}: ${err}`);
-          }
+          result = await requestModelSwapAck(rt, message);
         }
       }
 
       // Priority 2: agentId + sessionId — fallback when runtimeId is unavailable
-      if (!swapCount && sessionId && typeof sessionId === 'string') {
-        swapCount = sendIPCtoSession(agentId, sessionId, message) ? 1 : 0;
+      if (!result.ok && sessionId && typeof sessionId === 'string') {
+        const rt = getAgentRuntime(agentId, sessionId);
+        if (rt) result = await requestModelSwapAck(rt, message);
       }
 
       // No broadcast fallback: an explicit runtime/session request must not
       // change another session's in-memory model.
 
-      res.json({ ok: swapCount > 0, agentId, presetName, swapCount });
+      if (!result.ok) {
+        return res.status(502).json({ ok: false, agentId, presetName, error: result.error });
+      }
+      res.json({ ok: true, agentId, presetName, meta: result.meta });
     } catch (error) { next(error); }
   });
 
