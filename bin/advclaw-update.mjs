@@ -192,9 +192,12 @@ async function performUpdate(latestTag) {
   console.log(`  → npm ci`);
   await run('npm', ['ci']);
 
-  // 4. build local features
+  // 4. build local features + workspace features（agent 按源码路径 import 的
+  //    features/*/dist 也不入库，缺了会 import 失败）
   console.log(`  → npm run build:local-features`);
   await run('npm', ['run', 'build:local-features']);
+  console.log(`  → npm run build:features`);
+  await run('npm', ['run', 'build:features']);
 }
 
 // ── 命令入口 ────────────────────────────────────────────────────

@@ -302,6 +302,8 @@ npm run agentdev:local [AgentDev路径]
 
 开发态下的日常循环：改 `AgentDev/packages/*` 源码 → `AgentDev && npm run build` → 重启 Claw（`npm start` 的 prestart 会自动校验/修复链接）。
 
+> `npm start` 的 prestart 在两种形态下都会自动保证 `local-features/dist` 与 `features/*/dist` 可用且不过时（缺失或源码较新时自动编译）。因此 `git pull` + `npm install` + `npm start` 的升级路径无需手动执行 `npm run build`。
+
 ### 发布框架到 npm（维护者）
 
 ```bash
