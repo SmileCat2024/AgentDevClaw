@@ -131,6 +131,7 @@ import { setupWorkspaceCreatorRoutes } from './server/routes/workspace-creators.
 import { createAgentDiscoveryModule } from './server/routes/agent-discovery.js';
 import { createAgentLifecycleModule } from './server/routes/agent-lifecycle.js';
 import { startEmbeddedRemoteClawConnector } from './server/remote-claw/embedded-connector.js';
+import { createTunnelManager } from './server/remote-connections/tunnel-manager.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from './server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -139,6 +140,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const viewerWorker = new ViewerWorker(VIEWER_PORT, false, process.env.AGENTDEV_UDS_PATH);
 const clawMcp = new ClawMCPServer();
+const tunnelManager = createTunnelManager();
 let remoteClawConnector = null;
 let remoteClawContext = null;
 const PROJECT_REMOTE_CLAW_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'remote-claw.json');
@@ -1256,6 +1258,7 @@ function pickMobileRelayUrl(relayUrl) {
 
 async function shutdown(exitCode = 0) {
   remoteClawConnector?.stop?.();
+  await tunnelManager.stopAll();
 
   for (const runtime of managedAgents.values()) {
     if (runtime.process && runtime.process.exitCode === null && !runtime.stopped) {
