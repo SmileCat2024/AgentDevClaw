@@ -8,7 +8,7 @@
  * - 工具 scope 管理
  */
 
-import { BasicAgent, createTool, UserInputFeature } from '@agentdev/core';
+import { BasicAgent, createTool, UserInputFeature } from '@agentdevjs/core';
 import { FlowFeature } from '../../../local-features/dist/flow/src/index.js';
 
 // ========== MockCountingFeature ==========

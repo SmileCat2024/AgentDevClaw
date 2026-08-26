@@ -2,10 +2,10 @@ import { fileURLToPath } from 'url';
 import type {
   AgentFeature,
   FeatureInitContext,
-} from '@agentdev/core';
-import { CoreLifecycle } from '@agentdev/core';
-import type { HookDeclarations } from '@agentdev/core';
-import type { CallStartContext } from '@agentdev/core';
+} from '@agentdevjs/core';
+import { CoreLifecycle } from '@agentdevjs/core';
+import type { HookDeclarations } from '@agentdevjs/core';
+import type { CallStartContext } from '@agentdevjs/core';
 
 const __filename = fileURLToPath(import.meta.url);
 

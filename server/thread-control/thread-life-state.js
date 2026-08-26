@@ -20,8 +20,8 @@ const PENDING_COMMAND_STATUSES = new Set(['pending', 'in_flight']);
 
 /**
  * @param {object} params
- * @param {import('@agentdev/core').WorkThreadRecord} params.thread
- * @param {import('@agentdev/core').WorkThreadBoardState | null} [params.boardState]
+ * @param {import('@agentdevjs/core').WorkThreadRecord} params.thread
+ * @param {import('@agentdevjs/core').WorkThreadBoardState | null} [params.boardState]
  * @param {{ archivedAt: number, cleanup?: object } | null} [params.archiveEntry]
  * @returns {{ lifeState: 'archived'|'executing'|'pending-commands'|'idle'|'closed', archivedAt: number | null, archiveCleanup: object | null, failed: boolean, lastEventAt: number | null }}
  */

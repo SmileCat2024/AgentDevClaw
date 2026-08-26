@@ -11,8 +11,8 @@
  * 工具通过 HttpSurfaceTransport 与 Claw Server SurfaceStore 通信。
  */
 
-import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot } from '@agentdev/core';
-import { createTool } from '@agentdev/core';
+import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot } from '@agentdevjs/core';
+import { createTool } from '@agentdevjs/core';
 import { fileURLToPath } from 'node:url';
 import type {
   GenerativeUISpecV1,

@@ -6,7 +6,7 @@
  * stdio 子进程：ACP v1 协议端点，执行权威全部在 Claw server。
  *
  * 纪律（ADR-0004）：
- *   - 进程内零 @agentdev/* import、零 Agent 实例化；唯一对外依赖是 ACP SDK
+ *   - 进程内零 @agentdevjs/* import、零 Agent 实例化；唯一对外依赖是 ACP SDK
  *     与本机 HTTP
  *   - stdout 只承载 JSON-RPC（ndjson，每行可 JSON.parse），日志全走 stderr
  *   - Claw server 是前置运行时：未启动时报错，不自动拉起

@@ -24,7 +24,7 @@ import { promises as fs, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { WorkThreadRuntimeBridge } from '@agentdev/core';
+import { WorkThreadRuntimeBridge } from '@agentdevjs/core';
 import { ThreadStore } from '../server/thread-control/thread-store.js';
 import { createThreadControl } from '../server/thread-control/thread-controller.js';
 import { createThreadIntegration, isThreadHostSession } from '../server/thread-control/thread-integration.js';

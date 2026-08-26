@@ -1,7 +1,7 @@
-import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdev/core';
-import { ShellFeature } from '@agentdev/shell-feature';
-import { AuditFeature } from '@agentdev/audit-feature';
-import { WebSearchFeature } from '@agentdev/websearch-feature';
+import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdevjs/core';
+import { ShellFeature } from '@agentdevjs/shell-feature';
+import { AuditFeature } from '@agentdevjs/audit-feature';
+import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';

@@ -45,6 +45,7 @@ export async function deliverUserInput(
     images,
     source,
     sourceRef,
+    capabilityActivations,
   } = {},
   { integration = getThreadIntegration(), fetchImpl = fetch } = {},
 ) {
@@ -59,6 +60,7 @@ export async function deliverUserInput(
       images,
       source,
       sourceRef,
+      ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
     }, { fetchImpl });
   }
 
@@ -75,6 +77,7 @@ export async function deliverUserInput(
     text: normalizedText,
     source: String(source || '').trim() || 'gateway',
     idempotencyKey: sourceRef ? `gw-${sourceRef}` : '',
+    ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
   });
 
   // 竞态闭合：路由判定（fresh 交接）与 append 之间 succession 可能已完成

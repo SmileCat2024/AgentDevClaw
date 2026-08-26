@@ -244,11 +244,11 @@ export function setupSystemFeatureConfigRoutes(app, express) {
       const importPaths = [
         // 四包拆分后 `agentdev` 单包已退役：按权威来源分别导入框架 core 与各生态包，
         // 否则 features 的配置 manifest（shell/lsp/audio/memory/mcp/skill 等）会从配置面板消失。
-        '@agentdev/core',
-        '@agentdev/shell-feature',
-        '@agentdev/audio-feedback-feature',
-        '@agentdev/memory-feature',
-        '@agentdev/mcp',
+        '@agentdevjs/core',
+        '@agentdevjs/shell-feature',
+        '@agentdevjs/audio-feedback-feature',
+        '@agentdevjs/memory-feature',
+        '@agentdevjs/mcp',
         '../../local-features/dist/index.js',
       ];
       for (const importPath of importPaths) {

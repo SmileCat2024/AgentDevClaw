@@ -295,14 +295,18 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       return;
     }
 
-    const strategy = 'summarized-nine-section';
+    // trim_all：全量精简、不生成摘要（slash /trim 入口；确认已在入口完成）
+    const isTrimAll = compactType === 'trim_all';
+    const strategy = isTrimAll ? '' : 'summarized-nine-section';
+    const _csPolicy = isTrimAll ? { preservedTurns: [], preservedMsgRanges: [] } : null;
     const _csIsZh2 = currentLanguage === 'zh';
-    const confirmMsg = action.archiveOriginal
-      ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？\n\n原会话将被自动归档。' : 'Summarize session history and create a new session?\n\nThe original session will be archived.')
-      : t('workspace_compact_summary_confirm');
-    const confirmed = window.confirm(confirmMsg);
-    if (!confirmed) {
-      return;
+    if (!isTrimAll) {
+      const confirmMsg = action.archiveOriginal
+        ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？\n\n原会话将被自动归档。' : 'Summarize session history and create a new session?\n\nThe original session will be archived.')
+        : t('workspace_compact_summary_confirm');
+      if (!window.confirm(confirmMsg)) {
+        return;
+      }
     }
 
     markSessionLoading(_csAgent.id, action.sessionId);
@@ -320,7 +324,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       ? getSidebarOperation(_csArchiveRollback.operationId)
       : beginSidebarOperation({
           type: 'create',
-          kind: 'summary',
+          kind: isTrimAll ? 'trim' : 'summary',
           phase: 'generating',
           agentId: _csAgent.id,
           sourceSessionId: action.sessionId,
@@ -331,14 +335,22 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         });
     ClawToast.show({
       id: _csToastId,
-      title: _csIsZh ? '正在总结会话历史...' : 'Summarizing session history...',
+      title: _csIsZh ? (isTrimAll ? '正在精简会话...' : '正在总结会话历史...') : (isTrimAll ? 'Trimming session...' : 'Summarizing session history...'),
       status: 'loading',
     });
+    const _csDoneTitle = _csIsZh ? (isTrimAll ? '精简完成' : '会话总结完成') : (isTrimAll ? 'Trim completed' : 'Session summary completed');
+    const _csFailTitle = _csIsZh ? (isTrimAll ? '精简失败' : '总结失败') : (isTrimAll ? 'Trim failed' : 'Summary failed');
     try {
-      const result = await createCompactedResumeSession(_csAgent.id, action.sessionId, strategy, null, null, null, {
+      const _csOptions = {
         archiveOriginal: action.archiveOriginal,
         operationId: _csOperation?.operationId || '',
-      });
+      };
+      if (isTrimAll) {
+        _csOptions.appendSummary = false;
+        _csOptions.reason = 'trim';
+        _csOptions.trimCutRounds = Number(action.trimCutRounds) || 0;
+      }
+      const result = await createCompactedResumeSession(_csAgent.id, action.sessionId, strategy, null, null, _csPolicy, _csOptions);
       if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {
         applySidebarMutationDeltaWithDiagnostics(_csOperation?.operationId, _csAgent.id, result);
       } else if (typeof applySessionMutationDelta === 'function') {
@@ -356,7 +368,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         clearSessionLoading(_csAgent.id);
         ClawToast.update(_csToastId, {
           status: 'success',
-          title: _csIsZh ? '会话总结完成' : 'Session summary completed',
+          title: _csDoneTitle,
         });
         if (action.archiveOriginal && archiveSucceeded) {
           requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
@@ -397,7 +409,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (_csNavGuard !== _navigationGuardEpoch) {
         ClawToast.update(_csToastId, {
           status: 'success',
-          title: _csIsZh ? '会话总结完成' : 'Session summary completed',
+          title: _csDoneTitle,
         });
         if (action.archiveOriginal && archiveSucceeded) {
           requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
@@ -417,7 +429,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       }
       ClawToast.update(_csToastId, {
         status: 'success',
-        title: _csIsZh ? '会话总结完成' : 'Session summary completed',
+        title: _csDoneTitle,
       });
       if (action.archiveOriginal && archiveSucceeded) {
         requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
@@ -442,7 +454,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         }
         ClawToast.update(_csToastId, {
           status: 'error',
-          title: _csIsZh ? '总结失败' : 'Summary failed',
+          title: _csFailTitle,
           description: (error?.message || String(error)),
         });
       } else {
@@ -450,7 +462,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         _csArchiveRollback = null;
         ClawToast.update(_csToastId, {
           status: 'success',
-          title: _csIsZh ? '会话总结完成' : 'Session summary completed',
+          title: _csDoneTitle,
         });
       }
       clearSessionLoading(_csAgent.id);

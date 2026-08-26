@@ -6,7 +6,7 @@
  * 未来 Claw 侧的 Feature 继承此类即可向 Flow 暴露变量和模板。
  */
 
-import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, Tool, PackageInfo, ContextInjector } from '@agentdev/core';
+import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, Tool, PackageInfo, ContextInjector } from '@agentdevjs/core';
 import type {
   FlowVariable,
   FlowNodeTemplate,

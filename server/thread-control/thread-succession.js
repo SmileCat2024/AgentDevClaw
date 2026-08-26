@@ -51,7 +51,7 @@ const LIFECYCLE_EVENT_CAP = 200;
  *   - stage / reason / error 事实保留在 lifecycleEvents（handoff_failed +
  *     handoff_aborted），审计不丢失。
  *
- * @param {import('@agentdev/core').WorkThread} core
+ * @param {import('@agentdevjs/core').WorkThread} core
  * @param {string} threadId
  * @param {{ stage?: string, reason?: string, error?: unknown }} [meta]
  */
@@ -90,7 +90,7 @@ export async function abortPendingSuccession(core, threadId, {
  * 接力提交点与失败收敛服务（compact / summary / trim / rotation 共享）。
  *
  * @param {object} deps
- * @param {{ core: import('@agentdev/core').WorkThread }} deps.threadControl
+ * @param {{ core: import('@agentdevjs/core').WorkThread }} deps.threadControl
  * @param {{ applySessionSuccession: Function, failSessionSuccession: Function }} deps.threadIntegration
  * @param {Function} [deps.stopManagedAgent] - 退役失败 successor 的 runtime（生产装配注入）
  */
@@ -293,7 +293,7 @@ export function createThreadSuccessionService({
  *     （lastReason 留痕），不投向未知目标、不留永久挡板。
  *
  * @param {object} deps
- * @param {{ core: import('@agentdev/core').WorkThread }} deps.threadControl
+ * @param {{ core: import('@agentdevjs/core').WorkThread }} deps.threadControl
  * @param {Function} [deps.identitySource] - 会话身份真相源（与 control 装配同源）；
  *   缺省时所有 head 视为不可承接（保守收敛）
  */

@@ -12,7 +12,9 @@ export const AGENTS_ROOT = path.join(PROJECT_ROOT, 'prebuilt-agents');
 export const RUNTIME_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'run-prebuilt-agent.js');
 export const ONE_SHOT_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'run-one-shot-agent.js');
 export const AGENTDEV_ROOT = path.resolve(PROJECT_ROOT, '..', 'AgentDev');
-export const AGENTDEV_CREATE_FEATURE_CLI = path.join(AGENTDEV_ROOT, 'dist', 'create-feature-cli.js');
+export const AGENTDEV_CREATE_FEATURE_CLI = path.join(
+  PROJECT_ROOT, 'node_modules', '@agentdevjs', 'create-feature', 'dist', 'cli.js'
+);
 export const VIEWER_ORIGIN = `http://127.0.0.1:${VIEWER_PORT}`;
 export const USER_DATA_ROOT = path.join(os.homedir(), '.agentdev', 'AgentDevClaw');
 export const NO_SESSION_TOKEN = '__protoclaw-no-session__';

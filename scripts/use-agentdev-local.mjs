@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// 本地联动开发辅助：把相邻 AgentDev 仓库的全部 @agentdev/* 包
-// （4 框架包 + 14 生态包）以 junction 形式链接进 node_modules/@agentdev/。
+// 本地联动开发辅助：把相邻 AgentDev 仓库的全部 @agentdevjs/* 包
+// （4 框架包 + 14 生态包）以 junction 形式链接进 node_modules/@agentdevjs/。
 //
-// 背景：@agentdev/* 包尚未发布 npm，Claw 的 package.json 用
+// 背景：@agentdevjs/* 包尚未发布 npm，Claw 的 package.json 用
 // `file:../AgentDev/packages/*` 声明依赖。npm install 在 Windows 上会把
 // file: 目录依赖物化为 junction，通常无需手动运行本脚本；它只用于：
 //   1. 相邻仓库不在默认位置（../AgentDev）时手动指定路径；
@@ -12,7 +12,7 @@
 import { existsSync, lstatSync, rmSync, symlinkSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
 
-// @agentdev 包名 -> AgentDev/packages/ 下的目录名（唯一例外：rokid-bot -> rokid-feature）
+// @agentdevjs 包名 -> AgentDev/packages/ 下的目录名（唯一例外：rokid-bot -> rokid-feature）
 const PACKAGE_MAP = {
   core: 'core',
   llm: 'llm',
@@ -37,7 +37,7 @@ const PACKAGES = Object.keys(PACKAGE_MAP);
 
 const projectRoot = resolve(import.meta.dirname, '..');
 const target = resolve(process.argv[2] || process.env.AGENTDEV_LOCAL_PATH || join(projectRoot, '..', 'AgentDev'));
-const scopeDir = join(projectRoot, 'node_modules', '@agentdev');
+const scopeDir = join(projectRoot, 'node_modules', '@agentdevjs');
 
 const rootPackageJson = join(target, 'package.json');
 if (!existsSync(rootPackageJson)) {
@@ -55,12 +55,12 @@ for (const name of PACKAGES) {
   const dir = PACKAGE_MAP[name];
   const pkgJson = join(target, 'packages', dir, 'package.json');
   if (!existsSync(pkgJson)) {
-    console.warn(`[agentdev:local] 跳过 @agentdev/${name}：包不存在 ${pkgJson}`);
+    console.warn(`[agentdev:local] 跳过 @agentdevjs/${name}：包不存在 ${pkgJson}`);
     continue;
   }
   const pkg = JSON.parse(readFileSync(pkgJson, 'utf8'));
-  if (pkg.name !== `@agentdev/${name}`) {
-    console.warn(`[agentdev:local] 跳过 @agentdev/${name}：包名不匹配（${pkg.name}）`);
+  if (pkg.name !== `@agentdevjs/${name}`) {
+    console.warn(`[agentdev:local] 跳过 @agentdevjs/${name}：包名不匹配（${pkg.name}）`);
     continue;
   }
   const modulePath = join(scopeDir, name);
@@ -69,7 +69,7 @@ for (const name of PACKAGES) {
     rmSync(modulePath, { recursive: stat.isDirectory() || stat.isSymbolicLink(), force: true });
   }
   symlinkSync(join(target, 'packages', dir), modulePath, process.platform === 'win32' ? 'junction' : 'dir');
-  console.log(`[agentdev:local] node_modules/@agentdev/${name} -> ${join(target, 'packages', dir)}`);
+  console.log(`[agentdev:local] node_modules/@agentdevjs/${name} -> ${join(target, 'packages', dir)}`);
   linked += 1;
 }
 

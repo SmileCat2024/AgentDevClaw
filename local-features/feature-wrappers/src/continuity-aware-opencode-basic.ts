@@ -15,7 +15,7 @@
  * - 协议：claw.opencode-basic-continuity.v1（由 Claw 协议层投影 readFiles）
  */
 
-import { OpencodeBasicFeature } from '@agentdev/core';
+import { OpencodeBasicFeature } from '@agentdevjs/core';
 import {
   declareContinuity,
   OPENCODE_BASIC_CONTINUITY_PROTOCOL,

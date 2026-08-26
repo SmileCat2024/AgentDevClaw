@@ -2,7 +2,7 @@
 /**
  * Claw 聚合构建：一次 build 完成当前依赖形态下所需的全部本地构建。
  *
- * 依赖形态判定（package.json 中 @agentdev/core 的值）：
+ * 依赖形态判定（package.json 中 @agentdevjs/core 的值）：
  *   - 开发态（file:../AgentDev/packages/*）：node_modules 是 junction，
  *     链接可能被 npm install 冲掉，框架 dist 需现场构建。
  *     必做：check:agentdev（校验/修复 18 条链接）+ 相邻框架仓库构建
@@ -54,7 +54,7 @@ try {
     }
   } else {
     // 发布态：npm 正式包自带 dist，无需链接/框架构建
-    console.log('[build] 发布态：@agentdev/* 为 npm 正式包，跳过链接修复与框架构建');
+    console.log('[build] 发布态：@agentdevjs/* 为 npm 正式包，跳过链接修复与框架构建');
   }
 
   // 两种形态都必须构建的 Claw 本地部分

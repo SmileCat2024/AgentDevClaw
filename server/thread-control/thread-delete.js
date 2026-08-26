@@ -97,8 +97,8 @@ function memberSessionIds(thread) {
  * 组装线程删除服务。
  *
  * @param {object} deps
- * @param {{ core: import('@agentdev/core').WorkThread,
- *           board: import('@agentdev/core').WorkThreadBoard,
+ * @param {{ core: import('@agentdevjs/core').WorkThread,
+ *           board: import('@agentdevjs/core').WorkThreadBoard,
  *           archive: import('./thread-archive.js').ThreadArchiveIndex,
  *           store: import('./thread-store.js').ThreadStore }} deps.control
  * @param {(agentId: string, sessionId: string) => Promise<object|null>} [deps.locateBySession]

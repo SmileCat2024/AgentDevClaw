@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import { dirname, join } from 'path';
-import type { AgentFeature, CallStartContext, FeatureInitContext, FeatureStateSnapshot, HookDeclarations, PackageInfo } from '@agentdev/core';
-import { CoreLifecycle } from '@agentdev/core';
+import type { AgentFeature, CallStartContext, FeatureInitContext, FeatureStateSnapshot, HookDeclarations, PackageInfo } from '@agentdevjs/core';
+import { CoreLifecycle } from '@agentdevjs/core';
 import type { AgentStudioProject, WorkspaceState, StudioProjectEntry, TestRuntimeStatus } from './project-store.js';
 import {
   cleanValue,

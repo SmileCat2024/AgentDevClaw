@@ -443,6 +443,9 @@ window.submitThreadCommand = async (threadId, text, options = {}) => {
       text: String(text || ''),
       source: options.source || 'ui',
       idempotencyKey,
+      ...(Array.isArray(options.capabilityActivations) && options.capabilityActivations.length > 0
+        ? { capabilityActivations: options.capabilityActivations }
+        : {}),
     }),
   });
   const data = await res.json().catch(() => null);

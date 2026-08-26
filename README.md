@@ -252,15 +252,18 @@ prebuilt-agents/official/      预制 Agent
   dispatch-console/            调度台 (悬置)
 
 local-features/                本地 Feature 源码（TypeScript）
-  flow/                        Flow 运行时核心
   dispatch/                    调度系统
   group-admin/                 群聊管理员工具集
-  feature-dev/                 Feature Creator 后端
+  agent-studio/                Agent Studio 控制面（Feature/Agent 开发）
   checkpoint/                  会话检查点
   context-compaction-mirror/   上下文精简
+  continuity-participant/      会话连续性参与方协议
   conversation-export/         对话导出
+  feature-wrappers/            框架 Feature 的 Claw 协议包装层
+  flow/                        Flow 运行时核心 (悬置)
+  feature-dev/                 Feature Creator 后端 (悬置)
 
-resources/features/            Feature tgz 包（自包含，随仓库分发）
+resources/features/            生态 Feature 包 tgz 发布产物（Feature Repository 安装源）
 public/                        Web 前端（无构建步骤）
 scripts/                       运行时脚本与工具
 ```
@@ -269,13 +272,51 @@ scripts/                       运行时脚本与工具
 
 ## Feature 体系
 
-AgentDevClaw 的 Agent 能力建立在 agentdev 框架的 Feature 机制之上：
+AgentDevClaw 的 Agent 能力建立在 [AgentDev](https://github.com/SmileCat2024/AgentDev) 框架的 Feature 机制之上：
 
-- **框架内置 Feature**：TodoFeature、UserInputFeature、LspFeature、SkillFeature、MCPFeature 等，随 `agentdev` npm 包分发
-- **独立 Feature 包**：ShellFeature、WebSearchFeature、QQBotFeature、WeixinBot 等，以 tgz 包形式随仓库分发，位于 `resources/features/`
-- **本地 Feature**：项目自身的 TypeScript Feature（Flow、Dispatch、GroupAdmin 等），编译后通过 `prestart` 钩子自动构建
+- **框架包**：`@agentdevjs/core`、`@agentdevjs/llm`、`@agentdevjs/viewer`、`@agentdevjs/mcp`（锁步发版），内置 TodoFeature、UserInputFeature、LspFeature、SkillFeature、MCPFeature 等
+- **生态 Feature 包**：`@agentdevjs/shell-feature`、`@agentdevjs/websearch-feature`、`@agentdevjs/qqbot-feature`、`@agentdevjs/weixin-bot` 等独立 npm 包，按需引入
+- **本地 Feature**：项目自身的 TypeScript Feature（Dispatch、GroupAdmin、Checkpoint 等），位于 `local-features/`，编译后经 `prestart` 钩子自动构建
 
 预制 Agent 通过组合不同 Feature 获得不同能力。例如编程小助手集成了 Shell + LSP + WebSearch + GitHub + Memory + Audit，而 IM 渠道则集成 QQBot + WeixinBot + IMOperator。
+
+## 依赖形态：发布态与开发态
+
+Claw 对 `@agentdevjs/*` 框架包的依赖支持两种形态，由 `@agentdevjs/core` 的依赖声明自动判定（`scripts/is-dev-mode.mjs`），构建与启动脚本按形态分流，无需手动干预：
+
+**发布态（默认）** —— 依赖声明为 semver（`"^0.1.0"`），`npm install` 从 npm registry 拉取正式包（自带 dist），**不需要相邻的 AgentDev 仓库**。日常使用、CI、克隆即跑都是这个形态。
+
+**开发态** —— 依赖声明为 `file:../AgentDev/packages/*`，`npm install` 把相邻 AgentDev 仓库的包物化为 junction 链接，改框架源码后构建即可生效，用于框架联动开发。
+
+```bash
+# 切到开发态：把依赖改为 file: 形态（需相邻 ../AgentDev 仓库存在）
+npm run agentdev:local
+
+# 切回发布态：把依赖改回 semver（版本号取自相邻仓库，或 --version 显式指定）
+npm run agentdev:published
+npm install
+
+# 发布态下临时调试本地框架源码：不改声明，只重建 node_modules 链接（npm install 会冲回 registry 版）
+npm run agentdev:local [AgentDev路径]
+```
+
+开发态下的日常循环：改 `AgentDev/packages/*` 源码 → `AgentDev && npm run build` → 重启 Claw（`npm start` 的 prestart 会自动校验/修复链接）。
+
+> `npm start` 的 prestart 在两种形态下都会自动保证 `local-features/dist` 与 `features/*/dist` 可用且不过时（缺失或源码较新时自动编译）。因此 `git pull` + `npm install` + `npm start` 的升级路径无需手动执行 `npm run build`。
+
+### 发布框架到 npm（维护者）
+
+```bash
+cd AgentDev
+npm version <newversion> --workspaces   # 或手动收敛各包版本（4 个框架包锁步同版本）
+npm run build
+npm publish --workspaces --access public
+npm view @agentdevjs/core version       # 验证
+```
+
+发布后如遇 registry 最终一致性窗口（刚发布却 404 / cannot publish over），等待 1-2 分钟重试即可。Claw 侧拉取新版：切发布态后 `npm update @agentdevjs/*`。
+
+> 独立 Agent 运行环境（`claw run` 的 provisioner）当前仍优先注入相邻 AgentDev 仓库的框架包源码目录；仓库不在相邻位置时该链路不可用，属已知边界。
 
 ## 环境变量
 
@@ -290,10 +331,10 @@ AgentDevClaw 的 Agent 能力建立在 agentdev 框架的 Feature 机制之上�
 
 ## 技术栈
 
-- **Runtime**: Node.js, agentdev 框架
-- **Server**: Express, ViewerWorker (agentdev)
+- **Runtime**: Node.js, [@agentdevjs](https://www.npmjs.com/org/agentdevjs) 框架
+- **Server**: Express, ViewerWorker (@agentdevjs/viewer)
 - **Frontend**: 原生 JavaScript (ES Modules), 无框架依赖
-- **IM**: @sliverp/qqbot (QQ), WeixinBot (微信)
+- **IM**: @agentdevjs/qqbot-feature (QQ), @agentdevjs/weixin-bot (微信)
 - **Language**: JavaScript (服务端/前端) + TypeScript (local-features)
 
 ## 开发

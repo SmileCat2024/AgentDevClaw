@@ -476,7 +476,7 @@ export function setupFlowRoutes(app, express, ctx) {
       const capabilitySources = [
         ...archives.map((item) => ({
           featureMeta: {
-            id: String(item.packageName || item.token || '').replace(/^@agentdev\//, '') || String(item.token || ''),
+            id: String(item.packageName || item.token || '').replace(/^@agentdevjs\//, '') || String(item.token || ''),
             name: String(item.packageName || item.token || ''),
             packageName: String(item.packageName || item.token || ''),
             token: String(item.token || ''),

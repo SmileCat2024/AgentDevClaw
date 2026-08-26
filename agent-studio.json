@@ -8,7 +8,7 @@
       "name": "force-continuation",
       "modulePath": "D:\\code\\AgentDevClaw\\features\\force-continuation\\dist\\index.js",
       "status": "verified",
-      "package": "@agentdev/force-continuation",
+      "package": "@agentdevjs/force-continuation",
       "source": {
         "kind": "project",
         "projectDir": "D:\\code\\AgentDevClaw\\features\\force-continuation",
@@ -37,7 +37,7 @@
       "name": "tickets-build-flow",
       "modulePath": "D:\\code\\AgentDevClaw\\features\\tickets-build-flow\\dist\\index.js",
       "status": "snapshotted",
-      "package": "@agentdev/tickets-build-flow",
+      "package": "@agentdevjs/tickets-build-flow",
       "source": {
         "kind": "project",
         "projectDir": "D:\\code\\AgentDevClaw\\features\\tickets-build-flow",

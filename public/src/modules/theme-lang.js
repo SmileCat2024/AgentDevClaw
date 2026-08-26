@@ -60,6 +60,10 @@ function applyLanguage() {
     updateNotificationStatus(lastNotificationStatusPayload);
   }
 
+  if (typeof renderBrandCard === 'function') {
+    renderBrandCard();
+  }
+
   languageToggle.title = t('language_toggle');
   languageToggle.textContent = t('language_toggle_short');
   restartAgentAction.textContent = t('restart_agent_runtime');

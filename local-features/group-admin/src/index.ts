@@ -11,9 +11,9 @@
  * 内嵌 skill: generate-group-md — 引导管理员生成 GROUP.md 群聊背景文档。
  */
 import { fileURLToPath } from 'url';
-import type { AgentFeature, Tool, DecisionResult } from '@agentdev/core';
-import { CoreLifecycle, Decision } from '@agentdev/core';
-import type { HookDeclarations } from '@agentdev/core';
+import type { AgentFeature, Tool, DecisionResult } from '@agentdevjs/core';
+import { CoreLifecycle, Decision } from '@agentdevjs/core';
+import type { HookDeclarations } from '@agentdevjs/core';
 
 const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 1420}`;
 const COORDINATOR_REMINDER_CALL_INTERVAL = 2;

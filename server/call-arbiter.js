@@ -82,6 +82,9 @@ export class CallArbiter {
       result: null,
       error: null,
       ...(Array.isArray(envelope.images) && envelope.images.length > 0 ? { images: envelope.images } : {}),
+      ...(Array.isArray(envelope.capabilityActivations) && envelope.capabilityActivations.length > 0
+        ? { capabilityActivations: envelope.capabilityActivations }
+        : {}),
     };
     this._queue.push(entry);
     this._status = 'queued';
@@ -309,7 +312,10 @@ export class CallArbiter {
       }
 
       // ── Execute one onCall segment ──
-      const result = await this._agent.onCall(input, envelope.images);
+      // capabilityActivations 只随首段携带：续跑段（force-continuation 等）
+      // 的输入不是新用户消息，激活已由首段消费完毕
+      const activations = envelope._segmentCount === 1 ? envelope.capabilityActivations : undefined;
+      const result = await this._agent.onCall(input, envelope.images, activations);
       envelope.result = typeof result === 'string' ? result : '';
 
       // ── Observe the structured call outcome ──

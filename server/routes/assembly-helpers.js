@@ -64,7 +64,7 @@ export async function resolveAssemblyFeatureArchives(tokens) {
   const resolved = [];
 
   for (const token of requested) {
-    const normalized = token.replace(/^@agentdev\//, '').trim().toLowerCase();
+    const normalized = token.replace(/^@agentdevjs\//, '').trim().toLowerCase();
     let matched = null;
 
     for (const catalog of catalogs) {
@@ -72,7 +72,7 @@ export async function resolveAssemblyFeatureArchives(tokens) {
       const item = packages.find((pkg) => {
         const packageName = String(pkg?.packageName || '').trim().toLowerCase();
         const packageId = String(pkg?.id || '').trim().toLowerCase();
-        const packageNameShort = packageName.replace(/^@agentdev\//, '');
+        const packageNameShort = packageName.replace(/^@agentdevjs\//, '');
         return token.toLowerCase() === packageName
           || normalized === packageId
           || normalized === packageNameShort;

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Decision } from '@agentdev/core';
+import { Decision } from '@agentdevjs/core';
 import { ForceContinuation } from '../dist/index.js';
 
 function createStepContext({ stopReason = 'max_tokens', toolCallsCount = 0 } = {}) {
@@ -170,6 +170,47 @@ describe('ForceContinuation', () => {
       lastFinishReason: 'limit_reached',
       lastOutcomeStatus: 'continued',
       lastAction: 'idle',
+    });
+  });
+
+  describe('capabilities (control plane)', () => {
+    it('declares a configure command open to slash and feature entry points', () => {
+      const feature = new ForceContinuation();
+      const caps = feature.getCapabilities();
+
+      assert.equal(caps.length, 1);
+      assert.equal(caps[0].name, 'configure');
+      assert.deepEqual(caps[0].entryPoints, ['slash', 'feature']);
+      // 参数词汇表全部在 FeatureManifestSettingProperty 类型内
+      for (const prop of Object.values(caps[0].parameters)) {
+        assert.ok(['boolean', 'number'].includes(prop.type), prop.type);
+      }
+      // 参数回显：readCurrentValues 反映当前生效配置
+      const feature2 = new ForceContinuation({ enabled: false, maxConsecutiveContinuations: 7 });
+      const current = feature2.getCapabilities()[0].readCurrentValues();
+      assert.equal(current.enabled, false);
+      assert.equal(current.maxConsecutive, 7);
+      assert.equal(typeof current.providerMaxTokens, 'boolean');
+    });
+
+    it('applies only explicitly passed fields and returns the status', async () => {
+      const feature = new ForceContinuation({ enabled: false, maxConsecutiveContinuations: 3 });
+      const execute = feature.getCapabilities()[0].execute;
+
+      const status = await execute({ enabled: true, providerLength: false, maxConsecutive: 99 }, {});
+
+      assert.equal(status.enabled, true);
+      assert.equal(status.maxConsecutiveContinuations, 10); // clamped
+      assert.deepEqual(status.triggers, {
+        providerMaxTokens: true,
+        providerLength: false,
+        frameworkLimitReached: true,
+      });
+
+      // 空参数：不改任何字段
+      const unchanged = await execute({}, {});
+      assert.equal(unchanged.enabled, true);
+      assert.equal(unchanged.maxConsecutiveContinuations, 10);
     });
   });
 });

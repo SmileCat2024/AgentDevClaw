@@ -11,7 +11,7 @@
  * are stable values available at factory call time.
  */
 
-import { createTool } from '@agentdev/core';
+import { createTool } from '@agentdevjs/core';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 
 function cleanValue(value) {
@@ -380,6 +380,9 @@ export function createSummaryHandlers(ctx) {
       const images = Array.isArray(response.payload?.images)
         ? response.payload.images.filter((img) => img && typeof img === 'object')
         : [];
+      const capabilityActivations = Array.isArray(response.payload?.capabilityActivations)
+        ? response.payload.capabilityActivations.filter((a) => typeof a === 'string' && a)
+        : [];
       if (!text && images.length === 0) {
         return { kind: 'continue' };
       }
@@ -390,6 +393,7 @@ export function createSummaryHandlers(ctx) {
         kind: 'text',
         text: text || ' ',
         ...(images.length > 0 ? { images } : {}),
+        ...(capabilityActivations.length > 0 ? { capabilityActivations } : {}),
       };
     }
 

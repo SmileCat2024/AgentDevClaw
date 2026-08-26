@@ -374,7 +374,9 @@ async function resolveGitRootUncached(dir) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const stdout = await runGit(['rev-parse', '--show-toplevel'], dir);
-      const root = stdout.trim();
+      // --show-toplevel 的斜杠方向随 git 版本/调用环境不定（2.47 msys 输出
+      // 正斜杠），归一为平台原生分隔符，保证与 path.resolve 产物可比较
+      const root = path.normalize(stdout.trim());
       if (root) return root;
       // 空输出属异常（stdout 未收齐/瞬时故障），重试一次
     } catch (error) {

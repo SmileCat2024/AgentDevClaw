@@ -78,6 +78,9 @@ export function createPassiveMailboxLoop(ctx) {
         ...(typeof input.sourceRef === 'string' && input.sourceRef ? { sourceRef: input.sourceRef } : {}),
         text: input.text,
         ...(Array.isArray(input.images) && input.images.length > 0 ? { images: input.images } : {}),
+        ...(Array.isArray(input.capabilityActivations) && input.capabilityActivations.length > 0
+          ? { capabilityActivations: input.capabilityActivations.filter((a) => typeof a === 'string') }
+          : {}),
       });
       // Serial consumption: don't poll again until this envelope settles.
       await ctx.callArbiter.waitForCompletion(entry.id);

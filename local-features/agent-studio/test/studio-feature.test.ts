@@ -30,7 +30,7 @@ import {
   type StudioFeatureEntry,
   type StudioRunRecord,
 } from '../src/index.js';
-import type { Tool } from '@agentdev/core';
+import type { Tool } from '@agentdevjs/core';
 
 async function makeTempWorkspace(): Promise<{ workspaceDir: string; projectDir: string }> {
   const base = await fs.mkdtemp(join(tmpdir(), 'agent-studio-test-'));
@@ -479,7 +479,7 @@ describe('AgentStudioFeature', () => {
       const featureDir = join(projectDir, 'features', 'ticket-feature');
       await fs.mkdir(join(featureDir, 'dist'), { recursive: true });
       await fs.writeFile(join(featureDir, 'package.json'), JSON.stringify({
-        name: '@agentdev/ticket-feature',
+        name: '@agentdevjs/ticket-feature',
         main: 'dist/index.js',
       }));
       await fs.writeFile(join(featureDir, 'dist', 'index.js'), 'export default class { name = "ticket-feature"; getTools() { return []; } }\n');
@@ -487,7 +487,7 @@ describe('AgentStudioFeature', () => {
       const registered = await exec('studio_add_feature', { projectDir: './features/ticket-feature' });
       const feature = (registered as { feature: { name: string; package?: string; modulePath: string; source?: { kind: string } } }).feature;
       assert.equal(feature.name, 'ticket-feature');
-      assert.equal(feature.package, '@agentdev/ticket-feature');
+      assert.equal(feature.package, '@agentdevjs/ticket-feature');
       assert.equal(feature.modulePath, join(featureDir, 'dist', 'index.js'));
       assert.equal(feature.source?.kind, 'project');
     });

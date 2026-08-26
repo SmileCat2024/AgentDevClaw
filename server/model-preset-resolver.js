@@ -8,7 +8,7 @@
 import { join, resolve, dirname } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { createLLM } from '@agentdev/llm';
+import { createLLM } from '@agentdevjs/llm';
 import { buildCodexOAuthHeaders, resolveAccessTokenSync } from './oauth-codex.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +23,7 @@ const PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
  * @param {{ configPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
  *   Test seam — production callers omit. configPath overrides config/presets.json;
  *   resolveAccessToken replaces the OAuth token-store lookup.
- * @returns {{ llm: import('@agentdev/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
+ * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string } | null}
  */
 export function resolveModelPresetLLM(presetName, overrides, options = {}) {
   const configPath = options.configPath || PRESETS_PATH;
@@ -121,7 +121,7 @@ export function resolveModelPresetLLM(presetName, overrides, options = {}) {
  * @param {{ configPath?: string, userConfigPath?: string, resolveAccessToken?: (providerName: string, clientId?: string) => string | null }} [options]
  *   Test seam — production callers omit. Threaded through to resolveModelPresetLLM;
  *   userConfigPath overrides the per-agent user config location.
- * @returns {{ llm: import('@agentdev/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string, presetRole: string } | null}
+ * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string, providerName: string, provider: string, protocol: string, apiSurface?: string, baseUrl: string, presetRole: string } | null}
  */
 export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
   const metaPath = join(agentDir, 'metadata.json');
@@ -186,7 +186,7 @@ export function resolveAgentModelLLM(agentDir, role = 'default', options = {}) {
  *
  * 新框架 BasicAgent 的 llm 为必传（票 009 纯基类化），无 preset 的 agent
  * （如 qqbot / agent-studio）依赖此兜底完成构造。
- * @returns {{ llm: import('@agentdev/llm').LLMClient, modelName: string, presetName: string } | null}
+ * @returns {{ llm: import('@agentdevjs/llm').LLMClient, modelName: string, presetName: string } | null}
  */
 export function resolveGlobalDefaultLLM() {
   const configPath = join(PROTOCLAW_ROOT, 'config', 'default.json');

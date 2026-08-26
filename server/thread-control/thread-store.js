@@ -19,7 +19,7 @@ import {
   WorkThreadNotFoundError,
   WorkThreadRevisionConflictError,
   generateWorkThreadId,
-} from '@agentdev/core';
+} from '@agentdevjs/core';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 
 export { WorkThreadNotFoundError as ThreadNotFoundError };

@@ -7,7 +7,7 @@ import process from 'process';
 import { randomUUID, createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
-import { ViewerWorker } from '@agentdev/viewer';
+import { ViewerWorker } from '@agentdevjs/viewer';
 import {
   exportHistoryOnlyHandoffPackage,
   readHandoffPackage,
@@ -90,6 +90,7 @@ import { setupIMRoutes, readProjectIMWorkspaceConfig, getPortalAgentDisplayName 
 import { createSessionHelpers } from './server/routes/session-helpers.js';
 import { setupSessionRoutes } from './server/routes/session.js';
 import { setupSidebarDiagnosticsRoutes } from './server/routes/sidebar-diagnostics.js';
+import { setupCapabilityRoutes } from './server/routes/capability.js';
 import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
 import { setupToolStateRoutes } from './server/routes/tool-state.js';
@@ -389,6 +390,9 @@ app.get('/protoclaw/runtime/envelopes_by_source', (req, res) => {
 // ── Agent Status & Lifecycle API → server/routes/agent-lifecycle.js ──
 agentLifecycle.setupRoutes(app, express);
 setupSidebarDiagnosticsRoutes(app, express);
+
+// ── Capability control plane (slash / feature command registry transport) ──
+setupCapabilityRoutes(app, express);
 
 // ── Sessions → server/routes/session.js ─────────────────────────────────────
 setupSessionRoutes(app, express, {
@@ -920,6 +924,9 @@ app.post('/api/agents/:agentId/user-turn', express.json(), async (req, res, next
       images: Array.isArray(req.body?.images) ? req.body.images : undefined,
       source: typeof req.body?.source === 'string' ? req.body.source : undefined,
       sourceRef: typeof req.body?.sourceRef === 'string' ? req.body.sourceRef : undefined,
+      ...(Array.isArray(req.body?.capabilityActivations)
+        ? { capabilityActivations: req.body.capabilityActivations.filter((a) => typeof a === 'string') }
+        : {}),
       ...metadata,
     });
     res.json({ ...result, ...metadata, operationId: metadata.operationId || null });

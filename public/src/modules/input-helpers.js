@@ -122,12 +122,17 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   // Thread Inbox 只承载纯文本：带图片的槽位提交显式拒绝（保留输入，
   // 用户可去掉图片或等新会话就绪后重发），绝不静默丢弃附件。
   const hasImages = images.length > 0;
+  // 激活通知（skill pill 等）随消息流动：一次取用，槽位直投 / Thread
+  // Inbox 兜底共用；全部失败时归还，重试仍携带
+  let capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
+
   if (threadRoute.route === 'thread' && input.trim()) {
     if (hasImages) {
       _notifyThreadImageUnsupported();
+      window.ClawSlash?.restoreActivations?.(capabilityActivations);
       return;
     }
-    await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey });
+    await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey, capabilityActivations });
     return;
   }
 
@@ -141,7 +146,10 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
         response: {
           kind: 'text',
           text: input,
-          ...(images.length > 0 ? { payload: { images } } : {}),
+          payload: {
+            ...(images.length > 0 ? { images } : {}),
+            ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+          },
         },
       }),
     });
@@ -182,17 +190,23 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
     // 兜底落 Thread Inbox，指令不丢，head 就绪后由服务端投递。
     // 带图片时不兜底（inbox 不支持附件），保留输入供用户重试。
     if ((threadRoute.route === 'direct' && threadRoute.thread) && input.trim() && !hasImages) {
-      await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey });
+      await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey, capabilityActivations });
+    } else {
+      // 无兜底路径：归还激活，输入保留供重试
+      window.ClawSlash?.restoreActivations?.(capabilityActivations);
     }
   } catch (e) {
     console.error('提交输入失败:', e);
     // 网络层失败的同款兜底：活跃线程的指令改走 Thread Inbox
     if ((threadRoute.route === 'direct' && threadRoute.thread) && input.trim() && !hasImages) {
       try {
-        await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey });
+        await _submitInputViaThread(threadRoute.thread, { input, textarea, targetCacheKey, capabilityActivations });
       } catch {
-        // Thread Inbox 也不可用：保留输入文本，用户可重试
+        // Thread Inbox 也不可用：保留输入文本与激活，用户可重试
+        window.ClawSlash?.restoreActivations?.(capabilityActivations);
       }
+    } else {
+      window.ClawSlash?.restoreActivations?.(capabilityActivations);
     }
   }
 }
@@ -219,9 +233,11 @@ function _notifyThreadImageUnsupported() {
  * 经 Thread Inbox 提交：消息持久化到线程，由服务端投递给当前承接会话。
  * 成功后清空输入（与槽位路径一致），并给出明确反馈，避免「发出去没反应」。
  */
-async function _submitInputViaThread(thread, { input, textarea, targetCacheKey }) {
+async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, capabilityActivations }) {
   const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-  const result = await window.submitThreadCommand(thread.threadId, input);
+  const result = await window.submitThreadCommand(thread.threadId, input, {
+    ...(capabilityActivations?.length ? { capabilityActivations } : {}),
+  });
   const delivered = result?.delivery?.delivered > 0;
   // 清空输入（复用槽位路径的清理语义）
   if (textarea) {

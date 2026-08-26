@@ -158,7 +158,7 @@ export default [
 
   // ── Agent-side logging boundary ──────────────────────────────
   // Agent 运行时内部（feature 提供）的日志必须走 claw 日志体系：
-  //   import { createLogger } from '@agentdev/core' → DebugHub → Web UI，
+  //   import { createLogger } from '@agentdevjs/core' → DebugHub → Web UI，
   //   无头运行时自动 fallback 到 stdio（分级 + stdout/stderr 分流）。
   // 进程内 console 桥只在 log scope 内生效，绕过 logger 的 console.*
   // 会丢失等级与命名空间，因此在此范围内禁止。

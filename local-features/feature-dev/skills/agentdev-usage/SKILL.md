@@ -84,14 +84,14 @@ npx agentdev-server 2026 false
 
 | 包 | 功能 | 安装 |
 |---|------|------|
-| `@agentdev/shell-feature` | bash 命令、安全删除/恢复 | `npm install @agentdev/shell-feature` |
-| `@agentdev/visual-feature` | 视觉理解（需 Python） | `npm install @agentdev/visual-feature` |
-| `@agentdev/websearch-feature` | 网页抓取、crawl4ai | `npm install @agentdev/websearch-feature` |
-| `@agentdev/audio-feedback-feature` | 音频反馈通知 | `npm install @agentdev/audio-feedback-feature` |
-| `@agentdev/audit-feature` | 工具使用审计追踪 | `npm install @agentdev/audit-feature` |
-| `@agentdev/memory-feature` | CLAUDE.md 自动注入 | `npm install @agentdev/memory-feature` |
-| `@agentdev/plugin-compat-feature` | OpenClaw 插件兼容 | `npm install @agentdev/plugin-compat-feature` |
-| `@agentdev/tts-feature` | 文本朗读 | `npm install @agentdev/tts-feature` |
+| `@agentdevjs/shell-feature` | bash 命令、安全删除/恢复 | `npm install @agentdevjs/shell-feature` |
+| `@agentdevjs/visual-feature` | 视觉理解（需 Python） | `npm install @agentdevjs/visual-feature` |
+| `@agentdevjs/websearch-feature` | 网页抓取、crawl4ai | `npm install @agentdevjs/websearch-feature` |
+| `@agentdevjs/audio-feedback-feature` | 音频反馈通知 | `npm install @agentdevjs/audio-feedback-feature` |
+| `@agentdevjs/audit-feature` | 工具使用审计追踪 | `npm install @agentdevjs/audit-feature` |
+| `@agentdevjs/memory-feature` | CLAUDE.md 自动注入 | `npm install @agentdevjs/memory-feature` |
+| `@agentdevjs/plugin-compat-feature` | OpenClaw 插件兼容 | `npm install @agentdevjs/plugin-compat-feature` |
+| `@agentdevjs/tts-feature` | 文本朗读 | `npm install @agentdevjs/tts-feature` |
 
 ## 快速开始
 
@@ -212,7 +212,7 @@ agent.use(new TodoFeature()); // 添加待办事项功能
 使用独立 Feature 包：
 ```typescript
 import { BasicAgent } from 'agentdev';
-import { ShellFeature } from '@agentdev/shell-feature';
+import { ShellFeature } from '@agentdevjs/shell-feature';
 
 const agent = new BasicAgent();
 agent.use(new ShellFeature()); // 添加 bash 命令执行
@@ -316,7 +316,7 @@ agent.use(new TodoFeature());
 agent.use(new UserInputFeature());
 
 // 独立 Feature 包
-import { ShellFeature } from '@agentdev/shell-feature';
+import { ShellFeature } from '@agentdevjs/shell-feature';
 agent.use(new ShellFeature());
 
 // 自定义本地 Feature
@@ -711,7 +711,7 @@ await runWithLogScope({
 
 ```typescript
 import { BasicAgent, UserInputFeature, FileSessionStore } from 'agentdev';
-import { MemoryFeature } from '@agentdev/memory-feature';
+import { MemoryFeature } from '@agentdevjs/memory-feature';
 
 const agent = new BasicAgent({
   name: '编程助手',

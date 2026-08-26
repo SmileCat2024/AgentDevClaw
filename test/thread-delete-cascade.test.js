@@ -27,7 +27,7 @@ import { promises as fs, mkdtempSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { WorkThreadRuntimeBridge } from '@agentdev/core';
+import { WorkThreadRuntimeBridge } from '@agentdevjs/core';
 import { createThreadControl } from '../server/thread-control/thread-controller.js';
 import { createThreadLifecycleService } from '../server/thread-control/thread-lifecycle.js';
 import { createThreadDeleteService } from '../server/thread-control/thread-delete.js';

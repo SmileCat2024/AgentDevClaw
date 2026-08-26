@@ -184,8 +184,8 @@ describe('computeDependencyHash', () => {
   it('handles multiple dependencies', () => {
     const result = computeDependencyHash({
       agentdev: '^0.2.3',
-      '@agentdev/shell-feature': 'file:../shell',
-      '@agentdev/audit-feature': 'file:../audit',
+      '@agentdevjs/shell-feature': 'file:../shell',
+      '@agentdevjs/audit-feature': 'file:../audit',
     });
     assert.ok(typeof result === 'string');
     assert.ok(result.length > 0);
@@ -194,7 +194,7 @@ describe('computeDependencyHash', () => {
   it('produces deterministic hash for the same complex object', () => {
     const deps = {
       agentdev: '^0.2.3',
-      '@agentdev/shell-feature': 'file:../shell',
+      '@agentdevjs/shell-feature': 'file:../shell',
     };
     assert.strictEqual(computeDependencyHash(deps), computeDependencyHash(deps));
   });

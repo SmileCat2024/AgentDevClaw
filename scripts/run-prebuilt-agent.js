@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
-import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdev/core';
+import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
@@ -21,6 +21,7 @@ import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
+import { handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
@@ -448,7 +449,7 @@ class SessionLifecycle {
   // ── IPC handler for this session ────────────────────────────
   // Called by the central IPC dispatcher when __targetSessionId matches
   // this session, or as fallback when only one session exists.
-  handleIPC(msg) {
+  async handleIPC(msg) {
     if (!msg || typeof msg !== 'object') return;
 
     // ── tool / feature / hook enable-disable ──
@@ -496,6 +497,24 @@ class SessionLifecycle {
     // ── IM bridge messages (carrier mount/unmount, todo-control) ──
     if (msg.type === 'mount-im-carrier' || msg.type === 'unmount-im-carrier' || msg.type === 'todo-control' || msg.type === 'todo-force-continue') {
       this.imBridge.handleIPCMessage(msg);
+      return;
+    }
+
+    // ── Generic capability IPC (request/ack) ──────────────────
+    // Registry 传输面：server /protoclaw/capability_invoke 与 /protoclaw/commands
+    // 的子进程端点。宿主前端转发视为 slash 入口。后续可控 feature 的专用
+    // IPC 分支（force-continuation / context-guard 同构模式）由这里收编。
+    if (msg.type === 'capability-invoke' || msg.type === 'capability-list-request') {
+      await handleCapabilityIPC(this, msg, (payload) => {
+        try {
+          process.send({
+            type: 'capability-result',
+            requestId: msg.requestId,
+            sessionId: this.sessionId,
+            ...payload,
+          });
+        } catch {}
+      });
       return;
     }
 
@@ -1102,6 +1121,9 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
         source: 'viewer-input',
         text: handled.text,
         ...(Array.isArray(handled.images) && handled.images.length > 0 ? { images: handled.images } : {}),
+        ...(Array.isArray(handled.capabilityActivations) && handled.capabilityActivations.length > 0
+          ? { capabilityActivations: handled.capabilityActivations }
+          : {}),
       });
       await this.callArbiter.waitForCompletion(entry.id);
     } catch (error) {

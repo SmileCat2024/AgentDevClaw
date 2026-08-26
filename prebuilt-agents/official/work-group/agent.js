@@ -4,12 +4,12 @@
  * 群聊工作空间的运行时 agent。
  * 通过 GroupAdminFeature 暴露 gc_* 工具集，为 @管理员 提供协调能力。
  */
-import { BasicAgent, TemplateComposer } from '@agentdev/core';
+import { BasicAgent, TemplateComposer } from '@agentdevjs/core';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { GroupAdminFeature } from '../../../local-features/dist/group-admin/src/index.js';
 import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin/src/bridge.js';
-import { ShellFeature } from '@agentdev/shell-feature';
+import { ShellFeature } from '@agentdevjs/shell-feature';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

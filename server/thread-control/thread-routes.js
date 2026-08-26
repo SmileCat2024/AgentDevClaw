@@ -17,7 +17,7 @@ import { synthesizeThreadLifeState } from './thread-life-state.js';
  * @param {import('express').Express} app
  * @param {typeof import('express').json} express
  * @param {object} options
- * @param {{ core: import('@agentdev/core').WorkThread, board: import('@agentdev/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
+ * @param {{ core: import('@agentdevjs/core').WorkThread, board: import('@agentdevjs/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
  * @param {{ archiveThread: Function, unarchiveThread: Function }} options.lifecycle
  * @param {{ deleteThread: Function }} [options.threadDelete] - T005 删除级联服务
  */

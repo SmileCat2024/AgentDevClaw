@@ -589,7 +589,7 @@ Manifest 的 schema 用于组装页渲染 Feature 配置表单。
   "forms": {
     "assembly-form": { "selected_features": "..." },
     "feature-configs": {
-      "@agentdev/audio-feedback-feature": {
+      "@agentdevjs/audio-feedback-feature": {
         "audioPath": "C:/Users/me/alert.wav",
         "volume": 0.8
       }

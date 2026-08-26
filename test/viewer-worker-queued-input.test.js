@@ -47,7 +47,7 @@ async function queueViaUserTurn(text, images) {
 
 describe('ViewerWorker user-turn queued mailbox', () => {
   before(async () => {
-    const { ViewerWorker } = await import('@agentdev/viewer');
+    const { ViewerWorker } = await import('@agentdevjs/viewer');
     viewerWorker = new ViewerWorker(TEST_PORT, false);
     await viewerWorker.start();
 

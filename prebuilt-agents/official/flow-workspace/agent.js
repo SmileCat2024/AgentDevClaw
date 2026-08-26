@@ -6,8 +6,8 @@
  * 2. 装配会话模式（对话）：加载用户选择的 Features + Agent 配套编排图
  */
 
-import { BasicAgent, TemplateComposer, UserInputFeature } from '@agentdev/core';
-import { createLLM } from '@agentdev/llm';
+import { BasicAgent, TemplateComposer, UserInputFeature } from '@agentdevjs/core';
+import { createLLM } from '@agentdevjs/llm';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';
@@ -43,7 +43,7 @@ function parseList(value) {
 
 function formatFeatureLabel(token) {
   return cleanValue(token)
-    .replace(/^@agentdev\//, '')
+    .replace(/^@agentdevjs\//, '')
     .replace(/-feature$/, '')
     .split('-')
     .filter(Boolean)
@@ -53,7 +53,7 @@ function formatFeatureLabel(token) {
 
 function normalizeFeatureToken(value) {
   return cleanValue(value)
-    .replace(/^@agentdev\//, '')
+    .replace(/^@agentdevjs\//, '')
     .replace(/-feature$/, '');
 }
 
@@ -65,8 +65,8 @@ function getFeatureConfigFromWorkspace(featureConfigs, token) {
   if (rawToken) candidates.add(rawToken);
   if (normalized) {
     candidates.add(normalized);
-    candidates.add(`@agentdev/${normalized}`);
-    candidates.add(`@agentdev/${normalized}-feature`);
+    candidates.add(`@agentdevjs/${normalized}`);
+    candidates.add(`@agentdevjs/${normalized}-feature`);
   }
 
   for (const key of candidates) {
@@ -263,10 +263,10 @@ function graphToRuntimeFlows(graph) {
 }
 
 async function instantiateSelectableFeature(token, config, projectFeatureConfig = {}) {
-  const normalized = cleanValue(token).replace(/^@agentdev\//, '');
+  const normalized = cleanValue(token).replace(/^@agentdevjs\//, '');
   if (!normalized) return null;
 
-  const moduleName = `@agentdev/${normalized}`;
+  const moduleName = `@agentdevjs/${normalized}`;
   const featureConfig = {
     workspaceDir: config.workspaceDir,
     projectRoot: config.projectRoot,

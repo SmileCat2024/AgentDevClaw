@@ -139,8 +139,8 @@ package/agentdev-feature.json
 
 Feature 的稳定标识。当前通常取 npm 包名去掉 scope 后的尾部，例如：
 
-- `@agentdev/shell-feature` -> `shell-feature`
-- `@agentdev/qqbot-feature` -> `qqbot-feature`
+- `@agentdevjs/shell-feature` -> `shell-feature`
+- `@agentdevjs/qqbot-feature` -> `qqbot-feature`
 
 要求：
 

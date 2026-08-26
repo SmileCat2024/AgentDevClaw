@@ -27,7 +27,7 @@ import {
 import { createSessionHelpers, META_VERSION } from '../server/routes/session-helpers.js';
 import { setupSessionRoutes } from '../server/routes/session.js';
 import { createSessionHandoffHelpers } from '../server/routes/session-handoff-helpers.js';
-import { HANDOFF_SCHEMA_VERSION } from '@agentdev/core';
+import { HANDOFF_SCHEMA_VERSION } from '@agentdevjs/core';
 
 // ─── Helpers ───────────────────────────────────────────────────────
 

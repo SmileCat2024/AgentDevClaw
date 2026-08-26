@@ -14,7 +14,7 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { Agent } from '@agentdev/core';
+import { Agent } from '@agentdevjs/core';
 
 // ── Helpers ──
 

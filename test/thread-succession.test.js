@@ -23,7 +23,7 @@ import { promises as fs, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { WorkThreadRuntimeBridge, HANDOFF_SCHEMA_VERSION } from '@agentdev/core';
+import { WorkThreadRuntimeBridge, HANDOFF_SCHEMA_VERSION } from '@agentdevjs/core';
 import { createThreadControl } from '../server/thread-control/thread-controller.js';
 import { createThreadIntegration } from '../server/thread-control/thread-integration.js';
 import {

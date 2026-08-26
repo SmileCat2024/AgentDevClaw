@@ -104,13 +104,13 @@ export async function provisionRuntimeEnvironment({ plan, root } = {}) {
   const packageJsonPath = path.join(environmentDir, 'package.json');
   const lockPath = path.join(environmentDir, 'runtime-lock.json');
   const dependencies = {
-    // 拆分后（ADR-0003 / 票 011/012）框架以 @agentdev/core|llm|viewer|mcp 四包提供，
+    // 拆分后（ADR-0003 / 票 011/012）框架以 @agentdevjs/core|llm|viewer|mcp 四包提供，
     // 尚未发布 npm，宿主 env 以本地源码目录满足生态包 peer，保证 core 单例。
-    '@agentdev/core': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'core')),
-    '@agentdev/llm': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'llm')),
-    '@agentdev/viewer': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'viewer')),
-    ...(plan.features.some((f) => f.package === '@agentdev/websearch-feature')
-      ? { '@agentdev/mcp': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'mcp')) }
+    '@agentdevjs/core': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'core')),
+    '@agentdevjs/llm': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'llm')),
+    '@agentdevjs/viewer': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'viewer')),
+    ...(plan.features.some((f) => f.package === '@agentdevjs/websearch-feature')
+      ? { '@agentdevjs/mcp': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'mcp')) }
       : {}),
     ...Object.fromEntries(dependencyEntries(plan).map((entry) => [entry.package, toFileDependencySpec(entry.archivePath)])),
   };

@@ -79,18 +79,18 @@ describe('feature-config: buildFeatureConfigLookupKeys', () => {
     assert.ok(keys.has('shell'));
   });
 
-  it('strips @agentdev/ prefix and -feature suffix', () => {
-    const keys = fn('buildFeatureConfigLookupKeys("@agentdev/shell-feature")');
+  it('strips @agentdevjs/ prefix and -feature suffix', () => {
+    const keys = fn('buildFeatureConfigLookupKeys("@agentdevjs/shell-feature")');
     assert.ok(keys.has('shell'));
-    assert.ok(keys.has('@agentdev/shell'));
-    assert.ok(keys.has('@agentdev/shell-feature'));
+    assert.ok(keys.has('@agentdevjs/shell'));
+    assert.ok(keys.has('@agentdevjs/shell-feature'));
   });
 
   it('handles name without -feature suffix', () => {
-    const keys = fn('buildFeatureConfigLookupKeys("@agentdev/websearch")');
+    const keys = fn('buildFeatureConfigLookupKeys("@agentdevjs/websearch")');
     assert.ok(keys.has('websearch'));
-    assert.ok(keys.has('@agentdev/websearch'));
-    assert.ok(keys.has('@agentdev/websearch-feature'));
+    assert.ok(keys.has('@agentdevjs/websearch'));
+    assert.ok(keys.has('@agentdevjs/websearch-feature'));
   });
 
   it('trims whitespace', () => {
@@ -114,11 +114,11 @@ describe('feature-config: featureConfigKeyMatches', () => {
   });
 
   it('matches scoped vs unscoped', () => {
-    assert.equal(fn('featureConfigKeyMatches("@agentdev/shell-feature", "shell")'), true);
+    assert.equal(fn('featureConfigKeyMatches("@agentdevjs/shell-feature", "shell")'), true);
   });
 
   it('matches unscoped vs scoped', () => {
-    assert.equal(fn('featureConfigKeyMatches("shell", "@agentdev/shell-feature")'), true);
+    assert.equal(fn('featureConfigKeyMatches("shell", "@agentdevjs/shell-feature")'), true);
   });
 
   it('does not match different features', () => {
@@ -150,9 +150,9 @@ describe('feature-config: findFeatureConfigMapEntry', () => {
   });
 
   it('finds via alias match', () => {
-    const result = fn('findFeatureConfigMapEntry({ "@agentdev/shell-feature": { x: 1 } }, "shell")');
+    const result = fn('findFeatureConfigMapEntry({ "@agentdevjs/shell-feature": { x: 1 } }, "shell")');
     assert.ok(result);
-    assert.equal(result.key, '@agentdev/shell-feature');
+    assert.equal(result.key, '@agentdevjs/shell-feature');
   });
 
   it('returns null when no match found', () => {
@@ -172,10 +172,10 @@ describe('feature-config: removeMatchingFeatureConfigAliases', () => {
   const fn = ctx.run;
 
   it('removes alias keys that match the target', () => {
-    fn('var configs = { "@agentdev/shell-feature": { a: 1 }, "shell": { a: 1 } }');
+    fn('var configs = { "@agentdevjs/shell-feature": { a: 1 }, "shell": { a: 1 } }');
     fn('removeMatchingFeatureConfigAliases(configs, "shell")');
-    // "shell" is the target, alias "@agentdev/shell-feature" should be removed
-    assert.equal(fn('"@agentdev/shell-feature" in configs'), false);
+    // "shell" is the target, alias "@agentdevjs/shell-feature" should be removed
+    assert.equal(fn('"@agentdevjs/shell-feature" in configs'), false);
     assert.equal(fn('"shell" in configs'), true);
   });
 
@@ -233,9 +233,9 @@ describe('feature-config: resolveFeaturePackageRecord', () => {
   });
 
   it('finds by packageName', () => {
-    const result = fn('resolveFeaturePackageRecord([{ packageName: "@agentdev/shell-feature" }], "shell")');
+    const result = fn('resolveFeaturePackageRecord([{ packageName: "@agentdevjs/shell-feature" }], "shell")');
     assert.ok(result);
-    assert.equal(result.packageName, '@agentdev/shell-feature');
+    assert.equal(result.packageName, '@agentdevjs/shell-feature');
   });
 
   it('finds by name', () => {
@@ -287,11 +287,11 @@ describe('feature-config: getFeatureManifestDisplayName', () => {
   const fn = ctx.run;
 
   it('uses pkg.name first', () => {
-    assert.equal(fn('getFeatureManifestDisplayName("tok", { name: "@agentdev/shell-feature" }, null)'), 'shell');
+    assert.equal(fn('getFeatureManifestDisplayName("tok", { name: "@agentdevjs/shell-feature" }, null)'), 'shell');
   });
 
   it('falls back to manifest.featureName', () => {
-    assert.equal(fn('getFeatureManifestDisplayName("tok", null, { featureName: "@agentdev/audit-feature" })'), 'audit');
+    assert.equal(fn('getFeatureManifestDisplayName("tok", null, { featureName: "@agentdevjs/audit-feature" })'), 'audit');
   });
 
   it('falls back to token', () => {
@@ -552,7 +552,7 @@ describe('feature-config: featureControlDomId', () => {
   });
 
   it('replaces special characters with dashes', () => {
-    assert.equal(fn('featureControlDomId("@agentdev/shell-feature", "my.field")'), 'fw-manifest--agentdev-shell-feature__my-field');
+    assert.equal(fn('featureControlDomId("@agentdevjs/shell-feature", "my.field")'), 'fw-manifest--agentdevjs-shell-feature__my-field');
   });
 
   it('handles empty inputs', () => {

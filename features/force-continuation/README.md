@@ -1,4 +1,4 @@
-# @agentdev/force-continuation
+# @agentdevjs/force-continuation
 
 A session-local AgentDev Feature that keeps a task moving after recoverable interruptions: provider output truncation (`max_tokens` / `length`) and the framework-level ReAct step budget being exhausted (`CallOutcome.reason = limit_reached`).
 

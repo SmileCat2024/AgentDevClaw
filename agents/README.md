@@ -201,7 +201,7 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
 
 plain agent 的运行时配置走配置队列模型（[tickets 00](../docs/tickets/00-feature-config-queue-overview.md) /
 [04](../docs/tickets/04-coder-config-groups.md)）：队列 = `[全局层, 当前选中配置组]`，
-经 `@agentdev/core` 的 `resolveFeatureConfig` 按序 deep merge。是否消费配置组由 agent
+经 `@agentdevjs/core` 的 `resolveFeatureConfig` 按序 deep merge。是否消费配置组由 agent
 自身装配决定（CLI `--config-group` 会传入构造函数，不识别的 agent 忽略该字段）。
 
 - **全局层**：`~/.agentdev/AgentDevClaw/feature-setup.json`

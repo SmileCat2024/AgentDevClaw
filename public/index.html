@@ -77,7 +77,7 @@
   </script>
   <script src="./src/tauri-bridge.js"></script>
   <link rel="stylesheet" href="./styles/base.css?v=1785050000">
-  <link rel="stylesheet" href="./styles/layout.css?v=20260824b">
+  <link rel="stylesheet" href="./styles/layout.css?v=20260826b">
   <link rel="stylesheet" href="./styles/components.css?v=20260822c">
   <link rel="stylesheet" href="./styles/coder-threads.css?v=20260820a">
   <link rel="stylesheet" href="./styles/work-group.css">
@@ -89,7 +89,27 @@
 <body>
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <div class="sidebar-title">AgentDevClaw</div>
+      <div class="brand-area">
+        <div class="sidebar-title">AgentDevClaw</div>
+        <span class="brand-version-chip" id="brand-version-chip" hidden></span>
+      </div>
+      <div class="brand-card" id="brand-card" hidden>
+        <div class="brand-card-head">
+          <div class="brand-card-name">AgentDevClaw</div>
+          <div class="brand-card-desc" id="brand-card-desc"></div>
+        </div>
+        <div class="brand-card-rows">
+          <div class="brand-card-row">
+            <span class="brand-card-label" id="brand-card-version-label"></span>
+            <span class="brand-card-value" id="brand-card-version"></span>
+          </div>
+          <div class="brand-card-row">
+            <span class="brand-card-label" id="brand-card-framework-label"></span>
+            <span class="brand-card-value" id="brand-card-framework"></span>
+          </div>
+        </div>
+        <div class="brand-card-links" id="brand-card-links"></div>
+      </div>
     </div>
     <div class="agent-list" id="agent-list">
       <div class="agent-group" id="prebuilt-group">
@@ -459,6 +479,7 @@
   <script src="./src/modules/session-view-state.js?v=1784780000"></script>
   <script src="./src/modules/sidebar-operations.js?v=1784560000"></script>
   <script src="./src/modules/sidebar-render.js?v=20260820a"></script>
+  <script src="./src/modules/app-info.js?v=20260826a"></script>
   <script src="./src/modules/toast-notify.js?v=1783960000"></script>
   <script src="./src/modules/dispatch-ui.js?v=1783960000"></script>
   <script src="./src/modules/dispatch-actions.js?v=1783960000"></script>
@@ -537,6 +558,8 @@
   <script src="./src/modules/input-render.js?v=20260819a"></script>
   <script src="./src/modules/input-model-switcher.js?v=20260823a"></script>
   <script src="./src/modules/persistent-input.js?v=20260823a"></script>
+  <script src="./src/modules/slash-menu.js?v=20260825j"></script>
+  <script src="./src/modules/slash-commands.js?v=20260825c"></script>
   <!-- ↓↓↓ Phase C: assembly 生命周期操作 ↓↓↓ -->
   <script src="./src/modules/assembly-actions.js?v=1784480000"></script>
   <!-- ↓↓↓ Phase D: 聊天消息渲染（被 app-ui.js renderCurrentMainView 反向调用） ↓↓↓ -->

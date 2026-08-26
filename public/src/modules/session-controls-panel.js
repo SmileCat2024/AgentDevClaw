@@ -465,6 +465,15 @@
     if (guardToggle) updateGuardArmed(guardToggle.checked);
   });
 
+  // 外部入口（如 slash 菜单经 capability_invoke）修改了本面板对应的
+  // Feature 状态时，刷新本地缓存——面板自身只覆盖自己的开关操作闭环。
+  window.addEventListener('claw:capability-invoked', (event) => {
+    const detail = event.detail || {};
+    if (detail.ref !== 'force-continuation.configure') return;
+    if (!isSupportedAgent() || detail.agentId !== focusedAgentId || detail.sessionId !== currentSessionId()) return;
+    void refreshStatus({ renderWhenDone: true });
+  });
+
   window.SessionControlsPanel = {
     render,
     updateEnabled,

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 判定当前 Claw 的 @agentdev/* 依赖形态：
+ * 判定当前 Claw 的 @agentdevjs/* 依赖形态：
  *   - 开发态（file:../AgentDev/packages/*）：node_modules 是 junction，
  *     需要链接校验/修复与本地框架构建；
  *   - 发布态（semver）：node_modules 是 npm 正式包，自带 dist。
@@ -15,7 +15,7 @@ const root = resolve(import.meta.dirname, '..');
 
 try {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  const dep = (pkg.dependencies || {})['@agentdev/core'];
+  const dep = (pkg.dependencies || {})['@agentdevjs/core'];
   if (typeof dep === 'string' && dep.startsWith('file:')) {
     process.exit(0); // 开发态
   }

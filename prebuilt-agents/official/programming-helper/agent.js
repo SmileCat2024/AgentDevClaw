@@ -5,16 +5,16 @@
  * 基于 ProtoClaw 当前内置的 npm agentdev 兼容层运行
  */
 
-import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdev/core';
-import { MCPFeature } from '@agentdev/mcp';
+import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdevjs/core';
+import { MCPFeature } from '@agentdevjs/mcp';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
-import { AudioFeedbackFeature } from '@agentdev/audio-feedback-feature';
-import { AuditFeature } from '@agentdev/audit-feature';
-import { MemoryFeature } from '@agentdev/memory-feature';
-import { ShellFeature } from '@agentdev/shell-feature';
-import { WebSearchFeature } from '@agentdev/websearch-feature';
-import { ImageReaderFeature } from '@agentdev/image-reader-feature';
+import { AudioFeedbackFeature } from '@agentdevjs/audio-feedback-feature';
+import { AuditFeature } from '@agentdevjs/audit-feature';
+import { MemoryFeature } from '@agentdevjs/memory-feature';
+import { ShellFeature } from '@agentdevjs/shell-feature';
+import { WebSearchFeature } from '@agentdevjs/websearch-feature';
+import { ImageReaderFeature } from '@agentdevjs/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';
