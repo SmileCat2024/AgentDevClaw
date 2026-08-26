@@ -7,9 +7,9 @@ import type {
   AgentFeature,
   FeatureInitContext,
   PackageInfo,
-} from '@agentdev/core';
-import type { Tool } from '@agentdev/core';
-import { getPackageInfoFromSource } from '@agentdev/core';
+} from '@agentdevjs/core';
+import type { Tool } from '@agentdevjs/core';
+import { getPackageInfoFromSource } from '@agentdevjs/core';
 
 export interface CompactConfig {
   /** 配置选项 */

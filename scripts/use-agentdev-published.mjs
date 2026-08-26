@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 说明：@agentdev/* 四包尚未发布 npm，Claw 依赖以 file:../AgentDev/packages/* junction
+// 说明：@agentdevjs/* 四包尚未发布 npm，Claw 依赖以 file:../AgentDev/packages/* junction
 // 形态运行，不存在"切回 npm 发布版"的可用路径。本脚本保留命令占位并给出指引，
 // 待四包发版后应改写为：移除 file: 依赖、写入 semver、npm install。
 import { existsSync } from 'fs';
@@ -8,9 +8,9 @@ import { resolve, join } from 'path';
 const projectRoot = resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(await import('fs').then((m) => m.readFileSync(join(projectRoot, 'package.json'), 'utf8')));
 const fileDeps = Object.entries(pkg.dependencies || {}).filter(([, spec]) => String(spec).startsWith('file:../'));
-const published = Object.entries(pkg.dependencies || {}).filter(([name]) => name.startsWith('@agentdev/') && !String(pkg.dependencies[name]).startsWith('file:'));
+const published = Object.entries(pkg.dependencies || {}).filter(([name]) => name.startsWith('@agentdevjs/') && !String(pkg.dependencies[name]).startsWith('file:'));
 
-console.log('[agentdev:published] @agentdev/core|llm|viewer|mcp 尚未发布 npm。');
+console.log('[agentdev:published] @agentdevjs/core|llm|viewer|mcp 尚未发布 npm。');
 if (fileDeps.length > 0) {
   console.log('[agentdev:published] 当前本地源码依赖（junction 形态）：');
   for (const [name, spec] of fileDeps) console.log(`  ${name}: ${spec}`);

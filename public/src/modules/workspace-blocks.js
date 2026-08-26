@@ -565,7 +565,7 @@ function getAssemblyStageLabel(value) {
 function formatAssemblyFeatureToken(value) {
   return String(value || '')
     .trim()
-    .replace(/^@agentdev\//, '')
+    .replace(/^@agentdevjs\//, '')
     .replace(/-feature$/, '')
     .split('-')
     .filter(Boolean)

@@ -3,7 +3,7 @@
 - 依赖：无（本批的前置）
 - 仓库：**AgentDev**（框架仓库，权威源码位置，不是 Claw）
 - 涉及：`AgentDev/packages/core/src/`（建议新模块 `core/feature-config.ts`），
-  从 `@agentdev/core` 导出；构建后 Claw 侧消费需重启整个服务
+  从 `@agentdevjs/core` 导出；构建后 Claw 侧消费需重启整个服务
 
 ## 背景
 
@@ -55,7 +55,7 @@ export function resolveFeatureConfig(
 - `node --test` / vitest 单测覆盖：空队列、单层透传、多层标量覆盖、嵌套对象
   递归合并、数组替换（含长度不同的数组）、null 删除 + warning、值相同的 pin
   （sourceIndex 指向后层）、多级嵌套 provenance 路径正确性
-- `@agentdev/core` 导出该函数；`AgentDev` 根目录 `npm run build` 通过
+- `@agentdevjs/core` 导出该函数；`AgentDev` 根目录 `npm run build` 通过
 - 类型定义进 dist 的 .d.ts
 
 ## 边界说明

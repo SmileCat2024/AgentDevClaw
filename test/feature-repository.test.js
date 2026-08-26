@@ -171,7 +171,7 @@ describe('inferFeatureTypes', () => {
 describe('inferFeatureManifest', () => {
   it('infers manifest from package.json with name', () => {
     const manifest = inferFeatureManifest({
-      name: '@agentdev/shell-feature',
+      name: '@agentdevjs/shell-feature',
       version: '1.2.3',
       description: 'Shell execution feature',
       main: 'dist/index.js',

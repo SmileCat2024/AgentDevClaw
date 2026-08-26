@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'url';
-import type { AgentFeature, FeatureInitContext, FeatureManifestDefinition, PackageInfo } from '@agentdev/core';
-import { CoreLifecycle, getPackageInfoFromSource } from '@agentdev/core';
-import type { HookDeclarations } from '@agentdev/core';
+import type { AgentFeature, FeatureInitContext, FeatureManifestDefinition, PackageInfo } from '@agentdevjs/core';
+import { CoreLifecycle, getPackageInfoFromSource } from '@agentdevjs/core';
+import type { HookDeclarations } from '@agentdevjs/core';
 
 const __filename = fileURLToPath(import.meta.url);
 

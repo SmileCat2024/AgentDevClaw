@@ -4,7 +4,7 @@ import {
   buildSummaryPromptForSession,
   runInProcessSummary,
 } from '../server/context-continuity/inprocess-summary.js';
-import { buildSummaryPrompt } from '@agentdev/core';
+import { buildSummaryPrompt } from '@agentdevjs/core';
 
 describe('buildSummaryPromptForSession', () => {
   it('uses the official base prompt for ordinary sessions', () => {

@@ -64,8 +64,8 @@ FlowFeature 不替代 AgentDev 的 ReAct 主循环。它只在 Call / Step 生�
 ```typescript
 tools: {
   rules: [
-    { name: 'web_fetch', enabled: false, ref: { source: 'feature', packageName: '@agentdev/websearch-feature', name: 'web_fetch' } },
-    { name: 'safe_trash_list', enabled: true, ref: { source: 'feature', packageName: '@agentdev/shell-feature', name: 'safe_trash_list' } }
+    { name: 'web_fetch', enabled: false, ref: { source: 'feature', packageName: '@agentdevjs/websearch-feature', name: 'web_fetch' } },
+    { name: 'safe_trash_list', enabled: true, ref: { source: 'feature', packageName: '@agentdevjs/shell-feature', name: 'safe_trash_list' } }
   ]
 }
 ```

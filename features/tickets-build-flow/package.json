@@ -1,5 +1,5 @@
 {
-  "name": "@agentdev/tickets-build-flow",
+  "name": "@agentdevjs/tickets-build-flow",
   "version": "0.1.0",
   "description": "tickets-build-flow feature for AgentDev",
   "type": "module",
@@ -18,10 +18,10 @@
     "test": "node --test \"test/**/*.test.js\""
   },
   "peerDependencies": {
-    "@agentdev/core": ">=0.1.0"
+    "@agentdevjs/core": ">=0.1.0"
   },
   "devDependencies": {
-    "@agentdev/core": "file:../../../AgentDev/packages/core",
+    "@agentdevjs/core": "file:../../../AgentDev/packages/core",
     "@types/node": "^20.11.0",
     "tsup": "^8.3.5",
     "typescript": "^5.3.3"

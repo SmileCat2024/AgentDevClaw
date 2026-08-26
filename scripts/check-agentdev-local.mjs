@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// prestart 预检：node_modules/@agentdev/*（4 框架包 + 14 生态包）必须是"可用构建"
+// prestart 预检：node_modules/@agentdevjs/*（4 框架包 + 14 生态包）必须是"可用构建"
 // （dist 存在且含所需导出）。
-// 背景：@agentdev/* 包尚未发布 npm，依赖经 package.json 的 file:../AgentDev/packages/*
+// 背景：@agentdevjs/* 包尚未发布 npm，依赖经 package.json 的 file:../AgentDev/packages/*
 // 以 junction 形式提供。npm install 可能冲掉/未重建链接，本脚本把失败提前为一条
 // 可执行的修复指引；若当前链接不可用而相邻 AgentDev 仓库构建可用，则自动重建。
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'fs';
@@ -9,10 +9,10 @@ import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
 
 const projectRoot = resolve(import.meta.dirname, '..');
-const scopeDir = join(projectRoot, 'node_modules', '@agentdev');
+const scopeDir = join(projectRoot, 'node_modules', '@agentdevjs');
 const linkScript = join(projectRoot, 'scripts', 'use-agentdev-local.mjs');
 
-// @agentdev 包名 -> AgentDev/packages/ 下的目录名（唯一例外：rokid-bot -> rokid-feature）
+// @agentdevjs 包名 -> AgentDev/packages/ 下的目录名（唯一例外：rokid-bot -> rokid-feature）
 const PACKAGE_MAP = {
   core: 'core',
   llm: 'llm',
@@ -105,7 +105,7 @@ if (allOk) {
   for (const name of PACKAGES) {
     const state = states.get(name);
     const where = state.isLink ? `本地链接 -> ${realpathSync(join(scopeDir, name))}` : 'npm 安装';
-    console.log(`[agentdev:check] @agentdev/${name} 可用（${where}）`);
+    console.log(`[agentdev:check] @agentdevjs/${name} 可用（${where}）`);
   }
   process.exit(0);
 }
@@ -123,7 +123,7 @@ const siblingAllOk = [...siblingStates.values()].every((s) => s.status === 'ok')
 if (hasSibling && siblingAllOk) {
   for (const name of PACKAGES) {
     if (states.get(name).status !== 'ok') {
-      console.warn(`[agentdev:check] 当前 @agentdev/${name} 不可用：${reason(states.get(name))}`);
+      console.warn(`[agentdev:check] 当前 @agentdevjs/${name} 不可用：${reason(states.get(name))}`);
     }
   }
   console.warn(`[agentdev:check] 尝试重建本地链接 -> ${sibling}`);
@@ -143,7 +143,7 @@ if (hasSibling && siblingAllOk) {
 for (const name of PACKAGES) {
   const state = states.get(name);
   if (state.status !== 'ok') {
-    console.error(`[agentdev:check] @agentdev/${name} 不可用：${reason(state)}`);
+    console.error(`[agentdev:check] @agentdevjs/${name} 不可用：${reason(state)}`);
     if (hasSibling && siblingStates.get(name).status !== 'ok') {
       console.error(`[agentdev:check] 相邻框架仓库对应包也不可用：${reason(siblingStates.get(name))}`);
     }

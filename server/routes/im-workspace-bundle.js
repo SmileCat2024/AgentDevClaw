@@ -5,7 +5,7 @@
  * Extracted from server/routes/im.js during module split.
  */
 
-import { WeixinApiClient } from '@agentdev/weixin-bot';
+import { WeixinApiClient } from '@agentdevjs/weixin-bot';
 
 import {
   PROJECT_QQBOT_CONFIG_PATH,

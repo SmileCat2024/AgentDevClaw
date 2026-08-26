@@ -19,9 +19,9 @@ for (const feature of this.features.values()) {
     if (pkgInfo && templateNames.length > 0) {
       for (const templateName of templateNames) {
         // 构建统一的 URL 格式
-        // 独立 npm 包（@agentdev/*）不包含 feature.name
+        // 独立 npm 包（@agentdevjs/*）不包含 feature.name
         // 内置 feature 使用 /template/{packageName}/{featureName}/{templateName}.render.js
-        const isStandalonePackage = pkgInfo.name.startsWith('@agentdev/') && pkgInfo.name !== 'agentdev';
+        const isStandalonePackage = pkgInfo.name.startsWith('@agentdevjs/') && pkgInfo.name !== 'agentdev';
         const url = isStandalonePackage
           ? `/template/${pkgInfo.name}/${templateName}.render.js`
           : `/template/${pkgInfo.name}/${feature.name}/${templateName}.render.js`;
@@ -37,7 +37,7 @@ for (const feature of this.features.values()) {
 ```
 
 **关键判断条件**：
-- `pkgInfo.name.startsWith('@agentdev/')` - scope包前缀
+- `pkgInfo.name.startsWith('@agentdevjs/')` - scope包前缀
 - `pkgInfo.name !== 'agentdev'` - 排除框架主包
 
 ### 1.2 featureTemplates传递给DebugHub
@@ -58,8 +58,8 @@ this.agentId = this.debugHub.registerAgent(
 
 ```typescript
 {
-  "capture": "/template/@agentdev/visual-feature/capture.render.js",
-  "bash": "/template/@agentdev/shell-feature/bash.render.js"
+  "capture": "/template/@agentdevjs/visual-feature/capture.render.js",
+  "bash": "/template/@agentdevjs/shell-feature/bash.render.js"
 }
 ```
 
@@ -219,13 +219,13 @@ find dist/templates/ -name "*.ts" | grep -v ".d.ts"
 
 ```bash
 # 1. 检查node_modules链接
-ls -la node_modules/@agentdev/
+ls -la node_modules/@agentdevjs/
 
 # 2. 检查模板文件是否可访问
-ls -la node_modules/@agentdev/my-feature/dist/templates/
+ls -la node_modules/@agentdevjs/my-feature/dist/templates/
 
 # 3. 检查完整路径
-readlink -f node_modules/@agentdev/my-feature/dist/templates/my-tool.render.js
+readlink -f node_modules/@agentdevjs/my-feature/dist/templates/my-tool.render.js
 ```
 
 ### 4.3 运行时检查
@@ -247,7 +247,7 @@ for (const [name, url] of Object.entries(templates)) {
 
 **症状**：
 ```
-/template/@agentdev/visual-feature/visual/capture.render.js
+/template/@agentdevjs/visual-feature/visual/capture.render.js
                     ^^^^^^^ 多余
 ```
 
@@ -255,7 +255,7 @@ for (const [name, url] of Object.entries(templates)) {
 
 **修复**：确保判断条件为
 ```typescript
-const isStandalonePackage = pkgInfo.name.startsWith('@agentdev/') && pkgInfo.name !== 'agentdev';
+const isStandalonePackage = pkgInfo.name.startsWith('@agentdevjs/') && pkgInfo.name !== 'agentdev';
 ```
 
 ### 错误2：scope包URL解析失败
@@ -339,7 +339,7 @@ cd ../my-project
 npm install file:../packages/my-feature
 
 # 2. 在代码中使用
-import { MyFeature } from '@agentdev/my-feature';
+import { MyFeature } from '@agentdevjs/my-feature';
 
 const agent = new Agent({
   features: [new MyFeature()]

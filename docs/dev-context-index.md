@@ -9,7 +9,7 @@
 
 ```
 D:\code\AgentDev          框架（TypeScript npm 包）
-  ↓ 依赖方式: "@agentdev/core|llm|viewer|mcp": "file:../AgentDev/packages/*"
+  ↓ 依赖方式: "@agentdevjs/core|llm|viewer|mcp": "file:../AgentDev/packages/*"
 D:\code\AgentDevClaw      产品（JavaScript 运行时 + Web UI）
 ```
 
@@ -21,8 +21,8 @@ D:\code\AgentDevClaw      产品（JavaScript 运行时 + Web UI）
 ```
 AgentDev (框架) → 编译 → dist/
                          ↓
-AgentDevClaw (产品) → import '@agentdev/core|llm|viewer' → 使用框架的 Agent/Feature/Tool 类型
-                   → local-features/* → 本地 Feature，也 import @agentdev/core
+AgentDevClaw (产品) → import '@agentdevjs/core|llm|viewer' → 使用框架的 Agent/Feature/Tool 类型
+                   → local-features/* → 本地 Feature，也 import @agentdevjs/core
 ```
 
 ---
@@ -44,11 +44,11 @@ AgentDevClaw (产品) → import '@agentdev/core|llm|viewer' → 使用框架的
 | `src/skills/` | Skill 加载器 + 类型定义 |
 | `src/mcp/` | MCP 协议实现（client, mount, config, adapter） |
 | `src/llm/` | LLM 抽象层（OpenAI/Anthropic 兼容） |
-| `packages/create-feature/` | `npx @agentdev/create-feature` 脚手架 CLI |
+| `packages/create-feature/` | `npx @agentdevjs/create-feature` 脚手架 CLI |
 
 ### 框架核心类型导出路径
 ```
-@agentdev/core    →  Agent, BasicAgent, AgentConfig
+@agentdevjs/core    →  Agent, BasicAgent, AgentConfig
                   →  AgentFeature, FeatureInitContext, FeatureStateSnapshot
                   →  Tool, createTool, ToolRenderConfig
                   →  Context, Message, EnrichedMessage
@@ -56,8 +56,8 @@ AgentDevClaw (产品) → import '@agentdev/core|llm|viewer' → 使用框架的
                   →  Decision, DecisionResult, HookResult
                   →  FileSessionStore, getDefaultSessionStore
                   →  TemplateComposer, getPackageInfoFromSource
-@agentdev/llm     →  createLLM, OpenAILLM, AnthropicLLM
-@agentdev/viewer  →  ViewerWorker, DebuggerMCPServer
+@agentdevjs/llm     →  createLLM, OpenAILLM, AnthropicLLM
+@agentdevjs/viewer  →  ViewerWorker, DebuggerMCPServer
 ```
 
 ---

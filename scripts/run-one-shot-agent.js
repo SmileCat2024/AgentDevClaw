@@ -21,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync } from 'fs';
-import { FileSessionStore, HandoffSeedFeature } from '@agentdev/core';
+import { FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';

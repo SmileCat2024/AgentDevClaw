@@ -7,8 +7,8 @@
 import { promises as fs } from 'fs';
 import { join, resolve } from 'path';
 import { existsSync } from 'fs';
-import { createTool } from '@agentdev/core';
-import type { Tool } from '@agentdev/core';
+import { createTool } from '@agentdevjs/core';
+import type { Tool } from '@agentdevjs/core';
 import type {
   StudioAssertion,
   StudioToolCallEvidence,

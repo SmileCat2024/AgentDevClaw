@@ -1,7 +1,7 @@
-import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdev/core';
-import { ShellFeature } from '@agentdev/shell-feature';
-import { AuditFeature } from '@agentdev/audit-feature';
-import { WebSearchFeature } from '@agentdev/websearch-feature';
+import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdevjs/core';
+import { ShellFeature } from '@agentdevjs/shell-feature';
+import { AuditFeature } from '@agentdevjs/audit-feature';
+import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';
@@ -43,7 +43,7 @@ function parseList(value) {
 
 function formatFeatureLabel(token) {
   return cleanValue(token)
-    .replace(/^@agentdev\//, '')
+    .replace(/^@agentdevjs\//, '')
     .replace(/-feature$/, '')
     .split('-')
     .filter(Boolean)
@@ -53,7 +53,7 @@ function formatFeatureLabel(token) {
 
 function normalizeFeatureToken(value) {
   return cleanValue(value)
-    .replace(/^@agentdev\//, '')
+    .replace(/^@agentdevjs\//, '')
     .replace(/-feature$/, '');
 }
 
@@ -65,8 +65,8 @@ function getFeatureConfigFromWorkspace(featureConfigs, token) {
   if (rawToken) candidates.add(rawToken);
   if (normalized) {
     candidates.add(normalized);
-    candidates.add(`@agentdev/${normalized}`);
-    candidates.add(`@agentdev/${normalized}-feature`);
+    candidates.add(`@agentdevjs/${normalized}`);
+    candidates.add(`@agentdevjs/${normalized}-feature`);
   }
 
   for (const key of candidates) {
@@ -105,12 +105,12 @@ function readCurrentSessionFormId() {
 }
 
 async function instantiateSelectableFeature(token, config) {
-  const normalized = cleanValue(token).replace(/^@agentdev\//, '');
+  const normalized = cleanValue(token).replace(/^@agentdevjs\//, '');
   if (!normalized) {
     return null;
   }
 
-  const moduleName = `@agentdev/${normalized}`;
+  const moduleName = `@agentdevjs/${normalized}`;
   const featureConfig = {
     workspaceDir: config.workspaceDir,
     projectRoot: config.projectRoot,
@@ -204,7 +204,7 @@ export class AgentCreatorAgent extends BasicAgent {
 
     if (this._assemblyFeatureTokens.length > 0) {
       for (const token of this._assemblyFeatureTokens) {
-        const normalized = cleanValue(token).replace(/^@agentdev\//, '');
+        const normalized = cleanValue(token).replace(/^@agentdevjs\//, '');
         if (!normalized) {
           continue;
         }

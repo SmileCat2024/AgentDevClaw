@@ -19,7 +19,7 @@ description: AgentDev Feature的npm打包规范和模板引用系统。涵盖Fea
 ### 独立 npm 包
 
 ```
-@agentdev/my-feature/
+@agentdevjs/my-feature/
 ├── package.json          # npm包配置（包含tsup配置）
 ├── tsconfig.json
 ├── src/
@@ -68,7 +68,7 @@ agentdev/
 
 ```json
 {
-  "name": "@agentdev/my-feature",
+  "name": "@agentdevjs/my-feature",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
@@ -259,7 +259,7 @@ getPackageInfo(): PackageInfo | null {
 **返回值示例**：
 ```typescript
 {
-  name: '@agentdev/my-feature',
+  name: '@agentdevjs/my-feature',
   version: '0.1.0',
   root: 'D:/code/AgentDev/packages/my-feature'
 }
@@ -311,7 +311,7 @@ async onDestroy(ctx: FeatureContext): Promise<void> {
 在`agent.ts`中，根据`getPackageInfo()`和`getTemplateNames()`自动生成模板URL：
 
 ```typescript
-const isStandalonePackage = pkgInfo.name.startsWith('@agentdev/') && pkgInfo.name !== 'agentdev';
+const isStandalonePackage = pkgInfo.name.startsWith('@agentdevjs/') && pkgInfo.name !== 'agentdev';
 const url = isStandalonePackage
   ? `/template/${pkgInfo.name}/${templateName}.render.js`
   : `/template/${pkgInfo.name}/${feature.name}/${templateName}.render.js`;
@@ -321,7 +321,7 @@ const url = isStandalonePackage
 
 | Feature类型 | 包名示例 | 生成的URL |
 |------------|----------|-----------|
-| 独立npm包 | @agentdev/visual-feature | /template/@agentdev/visual-feature/capture.render.js |
+| 独立npm包 | @agentdevjs/visual-feature | /template/@agentdevjs/visual-feature/capture.render.js |
 | 框架内置 | agentdev | /template/agentdev/visual/capture.render.js |
 
 **关键差异**：
@@ -355,14 +355,14 @@ const match = url.match(/^\/template\/((?:@[^/]+\/)?[^/]+)\/(.+\.render\.js)$/);
 
 | URL | packageName | templateFile |
 |-----|-------------|--------------|
-| /template/@agentdev/visual-feature/capture.render.js | @agentdev/visual-feature | capture.render.js |
+| /template/@agentdevjs/visual-feature/capture.render.js | @agentdevjs/visual-feature | capture.render.js |
 | /template/agentdev/visual/capture.render.js | agentdev | visual/capture.render.js |
 
 ### 文件查找路径
 
-**Scope包（@agentdev/*）**：
+**Scope包（@agentdevjs/*）**：
 ```
-{projectRoot}/node_modules/@agentdev/visual-feature/dist/templates/capture.render.js
+{projectRoot}/node_modules/@agentdevjs/visual-feature/dist/templates/capture.render.js
 ```
 
 **框架内置（agentdev）**：
@@ -403,7 +403,7 @@ cd ../my-project
 npm install ../my-feature
 
 # 使用
-import { MyFeature } from '@agentdev/my-feature';
+import { MyFeature } from '@agentdevjs/my-feature';
 ```
 
 ## 常见问题排查
@@ -420,17 +420,17 @@ import { MyFeature } from '@agentdev/my-feature';
 
 2. **确认 node_modules 链接正确**
    ```bash
-   ls -la node_modules/@agentdev/
+   ls -la node_modules/@agentdevjs/
    ```
    应该看到符号链接指向 feature 包
 
 3. **确认 URL 格式**
-   - 独立npm包：`/template/@agentdev/my-feature/tool.render.js`
+   - 独立npm包：`/template/@agentdevjs/my-feature/tool.render.js`
    - 内置feature：`/template/agentdev/my-feature/tool.render.js`
 
 4. **确认模板文件存在**
    ```bash
-   ls -la node_modules/@agentdev/my-feature/dist/templates/
+   ls -la node_modules/@agentdevjs/my-feature/dist/templates/
    ```
 
 ### 资源文件没有被复制

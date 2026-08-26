@@ -16,7 +16,7 @@ const frameworkRoot = resolve(process.env.AGENTDEV_LOCAL_PATH || join(projectRoo
 const outDir = join(projectRoot, 'resources', 'features');
 
 // Claw 依赖的生态包清单（目录名）。与 package.json 的 file:../AgentDev/packages/*
-// 声明一一对应；rokid-bot 包的目录名是 rokid-feature（包名 @agentdev/rokid-bot）。
+// 声明一一对应；rokid-bot 包的目录名是 rokid-feature（包名 @agentdevjs/rokid-bot）。
 const ECO_PACKAGES = [
   'audio-feedback-feature',
   'audit-feature',

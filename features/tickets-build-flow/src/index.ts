@@ -19,8 +19,8 @@
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import type { AgentFeature, PackageInfo, Tool } from '@agentdev/core';
-import { getPackageInfoFromSource } from '@agentdev/core';
+import type { AgentFeature, PackageInfo, Tool } from '@agentdevjs/core';
+import { getPackageInfoFromSource } from '@agentdevjs/core';
 
 const SKILL_IDS = ['implement', 'tdd', 'code-review'] as const;
 type SkillId = (typeof SKILL_IDS)[number];

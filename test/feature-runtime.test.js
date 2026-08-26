@@ -23,20 +23,20 @@ describe('feature runtime schemas', () => {
     assert.equal(isExactSemver('1.2.3'), true);
     assert.equal(isExactSemver('1.2.3-dev.4'), true);
     assert.equal(isExactSemver('^1.2.3'), false);
-    assert.throws(() => normalizeFeatureRequirement({ package: '@agentdev/demo', version: '^1.0.0' }), /精确 semver/);
+    assert.throws(() => normalizeFeatureRequirement({ package: '@agentdevjs/demo', version: '^1.0.0' }), /精确 semver/);
   });
 
   it('normalizes standalone Agent metadata and rejects duplicate requirements', () => {
     const metadata = normalizeAgentMetadata({
       id: 'demo-agent',
       entry: './agent.js',
-      features: [{ package: '@agentdev/demo', version: '1.0.0', config: { enabled: true } }],
+      features: [{ package: '@agentdevjs/demo', version: '1.0.0', config: { enabled: true } }],
     }, { requireFeatureVersions: true });
     assert.equal(metadata.deployment.kind, 'standalone');
-    assert.deepEqual(metadata.features[0], { package: '@agentdev/demo', version: '1.0.0', config: { enabled: true } });
+    assert.deepEqual(metadata.features[0], { package: '@agentdevjs/demo', version: '1.0.0', config: { enabled: true } });
     assert.throws(() => normalizeAgentMetadata({
       id: 'demo-agent', entry: './agent.js',
-      features: [{ package: '@agentdev/demo', version: '1.0.0' }, { package: '@agentdev/demo', version: '1.0.0' }],
+      features: [{ package: '@agentdevjs/demo', version: '1.0.0' }, { package: '@agentdevjs/demo', version: '1.0.0' }],
     }), /重复/);
   });
 });
@@ -48,7 +48,7 @@ describe('feature snapshot packager', () => {
     const repositoryDir = path.join(base, 'repository');
     await mkdir(path.join(projectDir, 'dist'), { recursive: true });
     await writeFile(path.join(projectDir, 'package.json'), JSON.stringify({
-      name: '@agentdev/demo-feature',
+      name: '@agentdevjs/demo-feature',
       version: '1.0.0',
       type: 'module',
       main: 'dist/index.js',
@@ -58,7 +58,7 @@ describe('feature snapshot packager', () => {
     await writeFile(path.join(projectDir, 'README.md'), '# demo\n');
     await writeFile(path.join(projectDir, 'dist', 'index.js'), 'export class DemoFeature {}\n');
     const first = await packageFeatureProject({ projectDir, repositoryDir });
-    assert.equal(first.packageName, '@agentdev/demo-feature');
+    assert.equal(first.packageName, '@agentdevjs/demo-feature');
     assert.equal(first.reused, false);
     const second = await packageFeatureProject({ projectDir, repositoryDir });
     assert.equal(second.reused, true);
@@ -71,7 +71,7 @@ describe('feature runtime provisioner and loader', () => {
   it('derives a stable, archive-sensitive isolated environment path', () => {
     const plan = {
       agent: { id: 'demo-agent' },
-      features: [{ package: '@agentdev/released', version: '1.0.0', archivePath: '/tmp/released.tgz', archiveDigest: 'sha256:one', resolvedFrom: 'repository' }],
+      features: [{ package: '@agentdevjs/released', version: '1.0.0', archivePath: '/tmp/released.tgz', archiveDigest: 'sha256:one', resolvedFrom: 'repository' }],
     };
     const first = computeRuntimeDependencyHash(plan);
     assert.equal(first, computeRuntimeDependencyHash({ ...plan, features: [...plan.features] }));
@@ -108,8 +108,8 @@ describe('feature runtime provisioner and loader', () => {
     };
     const output = await mountResolvedFeatures(agent, {
       features: [
-        { package: '@agentdev/dependent', runtimeName: 'dependent', resolvedFrom: 'source', entry: dependentPath, config: { two: 2 } },
-        { package: '@agentdev/base', runtimeName: 'base', resolvedFrom: 'source', entry: basePath, config: { one: 1 } },
+        { package: '@agentdevjs/dependent', runtimeName: 'dependent', resolvedFrom: 'source', entry: dependentPath, config: { two: 2 } },
+        { package: '@agentdevjs/base', runtimeName: 'base', resolvedFrom: 'source', entry: basePath, config: { one: 1 } },
       ],
     });
     assert.deepEqual(mounted.map((item) => item.name), ['base', 'dependent']);
@@ -178,13 +178,13 @@ describe('feature runtime catalog and resolver', () => {
     await writeFile(invalidArchive, 'not-a-tar');
     const catalog = await scanFeatureCatalog({ officialRoot, userRoot });
     assert.equal(catalog.invalid.length, 1);
-    assert.throws(() => resolveCatalogPackage(catalog, { packageName: '@agentdev/demo', version: '1.0.0' }), /不存在/);
+    assert.throws(() => resolveCatalogPackage(catalog, { packageName: '@agentdevjs/demo', version: '1.0.0' }), /不存在/);
   });
 
   it('builds a mixed debug resolution plan from source overrides and a repository package', () => {
     const catalog = {
-      packages: new Map([['@agentdev/released', [{
-        packageName: '@agentdev/released', version: '1.0.0', archivePath: '/tmp/released.tgz', archiveDigest: 'sha256:x', entry: 'dist/index.js', source: 'official',
+      packages: new Map([['@agentdevjs/released', [{
+        packageName: '@agentdevjs/released', version: '1.0.0', archivePath: '/tmp/released.tgz', archiveDigest: 'sha256:x', entry: 'dist/index.js', source: 'official',
       }]]]),
     };
     const plan = resolveAgentRuntimePlan({
@@ -192,14 +192,14 @@ describe('feature runtime catalog and resolver', () => {
       metadata: {
         id: 'demo', entry: './agent.js', deployment: { kind: 'standalone' },
         features: [
-          { package: '@agentdev/developing', version: '1.0.0' },
-          { package: '@agentdev/released', version: '1.0.0' },
+          { package: '@agentdevjs/developing', version: '1.0.0' },
+          { package: '@agentdevjs/released', version: '1.0.0' },
         ],
       },
       catalog,
       mode: 'debug',
       sourceOverrides: [{
-        package: '@agentdev/developing', runtimeName: 'developing',
+        package: '@agentdevjs/developing', runtimeName: 'developing',
         source: { kind: 'project', projectDir: './features/developing', entry: './features/developing/dist/index.js' },
       }],
     });
@@ -210,11 +210,11 @@ describe('feature runtime catalog and resolver', () => {
       agentRoot: '/project',
       metadata: {
         id: 'demo', entry: './agent.js', deployment: { kind: 'standalone' },
-        features: [{ package: '@agentdev/developing', version: '1.0.0' }],
+        features: [{ package: '@agentdevjs/developing', version: '1.0.0' }],
       },
       catalog,
       mode: 'release',
-      sourceOverrides: [{ package: '@agentdev/developing', runtimeName: 'developing', source: { kind: 'project', projectDir: '.', entry: 'x.js' } }],
+      sourceOverrides: [{ package: '@agentdevjs/developing', runtimeName: 'developing', source: { kind: 'project', projectDir: '.', entry: 'x.js' } }],
     }), /source override/);
   });
 });

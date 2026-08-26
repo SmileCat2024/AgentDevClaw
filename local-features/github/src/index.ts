@@ -10,8 +10,8 @@
 
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
-import type { AgentFeature, FeatureInitContext, Tool, PackageInfo, FeatureManifestDefinition } from '@agentdev/core';
-import { getPackageInfoFromSource } from '@agentdev/core';
+import type { AgentFeature, FeatureInitContext, Tool, PackageInfo, FeatureManifestDefinition } from '@agentdevjs/core';
+import { getPackageInfoFromSource } from '@agentdevjs/core';
 import { GitHubClient } from './client.js';
 import { createGitHubTools, type GitHubToolDefaults } from './tools.js';
 

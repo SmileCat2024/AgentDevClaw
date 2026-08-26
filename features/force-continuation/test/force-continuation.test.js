@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Decision } from '@agentdev/core';
+import { Decision } from '@agentdevjs/core';
 import { ForceContinuation } from '../dist/index.js';
 
 function createStepContext({ stopReason = 'max_tokens', toolCallsCount = 0 } = {}) {

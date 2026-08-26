@@ -7,9 +7,9 @@
  * - 检测状态转换（手动 complete_node + 变量驱动自动切换）
  */
 
-import type { AgentFeature, ContextInjector, FeatureStateSnapshot, Tool } from '@agentdev/core';
-import { CoreLifecycle, createTool } from '@agentdev/core';
-import type { HookDeclarations } from '@agentdev/core';
+import type { AgentFeature, ContextInjector, FeatureStateSnapshot, Tool } from '@agentdevjs/core';
+import { CoreLifecycle, createTool } from '@agentdevjs/core';
+import type { HookDeclarations } from '@agentdevjs/core';
 import { readFileSync, existsSync } from 'fs';
 import type {
   FlowGraph, FlowNode, FlowEdge, ExitCondition, AutoAction,
@@ -1127,7 +1127,7 @@ export class FlowFeature implements AgentFeature {
     const raw = String(value || '').trim();
     if (!raw) return [];
     const variants = new Set<string>([raw]);
-    const withoutScope = raw.replace(/^@agentdev\//, '');
+    const withoutScope = raw.replace(/^@agentdevjs\//, '');
     variants.add(withoutScope);
     variants.add(withoutScope.replace(/-feature$/, ''));
     return [...variants].map(item => item.toLowerCase());

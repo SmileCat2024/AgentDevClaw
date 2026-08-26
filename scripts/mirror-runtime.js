@@ -1,7 +1,7 @@
 import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
-import { Agent, FileSessionStore } from '@agentdev/core';
+import { Agent, FileSessionStore } from '@agentdevjs/core';
 import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
 
 // 权威集合来自 server/shared/constants.js（服务端与所有脚本必须同源）

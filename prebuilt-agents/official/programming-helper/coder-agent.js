@@ -26,14 +26,14 @@
  *   完成，runtime 只按普通会话运行。
  */
 
-import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdev/core';
+import { BasicAgent, TemplateComposer, LspFeature, OutputGuardFeature, SkillFeature, resolveFeatureConfig } from '@agentdevjs/core';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { TicketsBuildFlow } from '../../../features/tickets-build-flow/dist/index.js';
-import { MemoryFeature } from '@agentdev/memory-feature';
-import { ShellFeature } from '@agentdev/shell-feature';
-import { WebSearchFeature } from '@agentdev/websearch-feature';
-import { ImageReaderFeature } from '@agentdev/image-reader-feature';
+import { MemoryFeature } from '@agentdevjs/memory-feature';
+import { ShellFeature } from '@agentdevjs/shell-feature';
+import { WebSearchFeature } from '@agentdevjs/websearch-feature';
+import { ImageReaderFeature } from '@agentdevjs/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';

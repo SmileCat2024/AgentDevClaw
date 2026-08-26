@@ -143,13 +143,13 @@ async function writeFeatureConfig(agent, featureKey, config) {
 
 function buildFeatureConfigLookupKeys(value) {
   const raw = String(value || '').trim();
-  const normalized = raw.toLowerCase().replace(/^@agentdev\//, '').replace(/-feature$/, '');
+  const normalized = raw.toLowerCase().replace(/^@agentdevjs\//, '').replace(/-feature$/, '');
   const keys = new Set();
   if (raw) keys.add(raw.toLowerCase());
   if (normalized) {
     keys.add(normalized);
-    keys.add(`@agentdev/${normalized}`);
-    keys.add(`@agentdev/${normalized}-feature`);
+    keys.add(`@agentdevjs/${normalized}`);
+    keys.add(`@agentdevjs/${normalized}-feature`);
   }
   return keys;
 }
@@ -188,7 +188,7 @@ function resolveFeaturePackageRecord(packages, token) {
       pkg?.packageName,
       pkg?.name,
       pkg?.id,
-      String(pkg?.name || '').replace(/^@agentdev\//, ''),
+      String(pkg?.name || '').replace(/^@agentdevjs\//, ''),
     ].filter(Boolean);
     return candidates.some((value) => {
       const keys = buildFeatureConfigLookupKeys(value);
@@ -227,7 +227,7 @@ function getFeatureManifestPropertyEntries(manifest) {
 
 function getFeatureManifestDisplayName(token, pkg, manifest) {
   const raw = String(pkg?.name || manifest?.featureName || manifest?.packageName || token || '').trim();
-  return raw.replace(/^@agentdev\//, '').replace(/-feature$/, '');
+  return raw.replace(/^@agentdevjs\//, '').replace(/-feature$/, '');
 }
 
 function formatManifestDefaultValue(property) {

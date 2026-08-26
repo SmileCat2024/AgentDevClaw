@@ -1,18 +1,18 @@
-# @agentdev/compact
+# @agentdevjs/compact
 
 compact feature for AgentDev.
 
 ## Installation
 
 ```bash
-npm install @agentdev/compact
+npm install @agentdevjs/compact
 ```
 
 ## Usage
 
 ```typescript
 import { Agent } from 'agentdev';
-import { Compact } from '@agentdev/compact';
+import { Compact } from '@agentdevjs/compact';
 
 const agent = new Agent().use(new Compact());
 ```

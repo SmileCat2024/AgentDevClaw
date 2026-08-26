@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../src/index.js';
-import { TodoFeature, OpencodeBasicFeature, Decision } from '@agentdev/core';
+import { TodoFeature, OpencodeBasicFeature, Decision } from '@agentdevjs/core';
 import { CONTINUITY_FIELD_KEY } from '../../continuity-participant/src/index.js';
 
 function makeStepCtx(toolCallsCount: number) {

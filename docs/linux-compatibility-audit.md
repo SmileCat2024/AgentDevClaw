@@ -433,7 +433,7 @@ Shell Feature 和 Audio Feedback Feature 是双路径 feature。本次修改已�
 1. 在 `packages/shell-feature/` 执行 `npm run build && npm pack`
 2. 在 `packages/audio-feedback-feature/` 执行 `npm run build && npm pack`
 3. 将新 tgz 复制到 `AgentDevClaw/resources/features/`
-4. 更新 Claw 的 `node_modules/@agentdev/*` 安装
+4. 更新 Claw 的 `node_modules/@agentdevjs/*` 安装
 
 ### 8.4 框架 dist 重建
 

@@ -25,5 +25,5 @@ if (dev) {
   // 开发态：只校验链接；修复交给 build（build-all 会先跑 check 自动重建）
   execSync('node scripts/check-agentdev-local.mjs', { cwd: root, stdio: 'inherit' });
 } else {
-  console.log('[preflight] 发布态：@agentdev/* 为 npm 正式包，跳过本地链接校验');
+  console.log('[preflight] 发布态：@agentdevjs/* 为 npm 正式包，跳过本地链接校验');
 }

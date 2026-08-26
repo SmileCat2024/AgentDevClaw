@@ -1,4 +1,4 @@
-# @agentdev/tickets-build-flow
+# @agentdevjs/tickets-build-flow
 
 「拿到 tickets 之后」的标准构建流程 Feature。封装 [skills-mattpocock](https://github.com/mattpocock/skills) 仓库中 tickets 下游的三个流程规范，为编码 Agent（coder）提供从工单到提交的完整工作流知识：
 
@@ -28,7 +28,7 @@ skill 通过 AgentDev 的 Feature 自带技能约定交付：构建时 `skills/`
 ## Mounting
 
 ```typescript
-import { TicketsBuildFlow } from '@agentdev/tickets-build-flow';
+import { TicketsBuildFlow } from '@agentdevjs/tickets-build-flow';
 
 agent.use(new TicketsBuildFlow()); // 无配置面，直接挂载
 ```

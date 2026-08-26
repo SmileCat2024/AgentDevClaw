@@ -11,7 +11,7 @@
  * （与旧 Claw trim-appended 提示词逐字一致），模型装配约定不变。
  */
 
-import { TrimTranscriptWithSummaryTransformation } from '@agentdev/core';
+import { TrimTranscriptWithSummaryTransformation } from '@agentdevjs/core';
 import { SESSION_TRANSFORMATION_TIMEOUT_MS } from '../shared/constants.js';
 import {
   loadSessionSnapshot,
@@ -32,7 +32,7 @@ import {
  * @param {object|null} [params.llm] - 显式注入的 LLM 基座；缺省走模型预设解析（system 角色）
  * @param {number} [params.maxAttempts=3] - 变换失败时的重试次数
  * @param {number} [params.timeoutMs=SESSION_TRANSFORMATION_TIMEOUT_MS] - 整体超时；超时会取消底层 LLM 调用
- * @returns {Promise<import('@agentdev/core').SuccessorSeed>}
+ * @returns {Promise<import('@agentdevjs/core').SuccessorSeed>}
  */
 export async function runTrimTranscriptWithSummary({
   agentRelativeDir,

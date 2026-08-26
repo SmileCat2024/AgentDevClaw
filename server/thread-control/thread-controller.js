@@ -25,7 +25,7 @@ import {
   WorkThread,
   WorkThreadBoard,
   WorkThreadRuntimeBridge,
-} from '@agentdev/core';
+} from '@agentdevjs/core';
 import { ThreadStore } from './thread-store.js';
 import { ThreadArchiveIndex } from './thread-archive.js';
 import { THREADS_ROOT } from '../shared/constants.js';

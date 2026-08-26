@@ -22,7 +22,7 @@ import {
   type PackageInfo,
   type StepFinishDecisionContext,
   type Tool,
-} from '@agentdev/core';
+} from '@agentdevjs/core';
 
 const PROVIDER_TRUNCATION_REASONS = new Set(['max_tokens', 'length']);
 const DEFAULT_MAX_CONSECUTIVE_CONTINUATIONS = 5;

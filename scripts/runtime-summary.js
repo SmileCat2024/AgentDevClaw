@@ -11,7 +11,7 @@
  * are stable values available at factory call time.
  */
 
-import { createTool } from '@agentdev/core';
+import { createTool } from '@agentdevjs/core';
 import { buildClaudeCompactPrompt, stripCompactAnalysis, scanFilesAndSkills } from '../server/context-continuity/claude-compact-prompts.js';
 
 function cleanValue(value) {

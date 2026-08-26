@@ -24,7 +24,7 @@
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import { existsSync, readFileSync, mkdirSync } from 'fs';
-import { Agent, FileSessionStore, runWithLogScope } from '@agentdev/core';
+import { Agent, FileSessionStore, runWithLogScope } from '@agentdevjs/core';
 import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';
 import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 

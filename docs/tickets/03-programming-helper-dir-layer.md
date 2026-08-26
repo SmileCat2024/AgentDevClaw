@@ -24,7 +24,7 @@
      readDirLayer(workspaceDir),             // 按构造时 cwd 定位，不存在则 {}
      runtime.config.featureOverrides || {},  // 会话/调用方注入，不落盘（D12）
    ];
-   const { merged } = resolveFeatureConfig(queue);   // @agentdev/core 导入
+   const { merged } = resolveFeatureConfig(queue);   // @agentdevjs/core 导入
    super({ ...config, features: merged, skillConfig: /* 由 merged.skill 派生 */ });
    ```
 

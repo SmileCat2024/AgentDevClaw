@@ -13,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
-import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdev/core';
+import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM, resolveModelPresetLLM, resolveGlobalDefaultLLM } from '../server/model-preset-resolver.js';

@@ -83,9 +83,9 @@ export function buildAgentWorkspacePackageJson(agentName) {
     },
     dependencies: {
       agentdev: '^0.1.0',
-      '@agentdev/audit-feature': '^0.1.0',
-      '@agentdev/shell-feature': '^0.1.0',
-      '@agentdev/websearch-feature': '^0.1.0',
+      '@agentdevjs/audit-feature': '^0.1.0',
+      '@agentdevjs/shell-feature': '^0.1.0',
+      '@agentdevjs/websearch-feature': '^0.1.0',
     },
     engines: {
       node: '>=20',
@@ -160,10 +160,10 @@ export function buildAgentWorkspaceMetadata(agentName, goal) {
 export function buildAgentWorkspaceAgentSource(agentName, goal) {
   const className = `${buildGeneratedAgentClassName(agentName)}Agent`;
 
-  return `import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdev/core';
-import { AuditFeature } from '@agentdev/audit-feature';
-import { ShellFeature } from '@agentdev/shell-feature';
-import { WebSearchFeature } from '@agentdev/websearch-feature';
+  return `import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdevjs/core';
+import { AuditFeature } from '@agentdevjs/audit-feature';
+import { ShellFeature } from '@agentdevjs/shell-feature';
+import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 

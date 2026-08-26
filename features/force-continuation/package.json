@@ -1,5 +1,5 @@
 {
-  "name": "@agentdev/force-continuation",
+  "name": "@agentdevjs/force-continuation",
   "version": "0.1.1",
   "description": "force-continuation feature for AgentDev",
   "type": "module",
@@ -17,10 +17,10 @@
     "prepublishOnly": "npm run build"
   },
   "peerDependencies": {
-    "@agentdev/core": ">=0.1.0"
+    "@agentdevjs/core": ">=0.1.0"
   },
   "devDependencies": {
-    "@agentdev/core": "file:../../../AgentDev/packages/core",
+    "@agentdevjs/core": "file:../../../AgentDev/packages/core",
     "@types/node": "^20.11.0",
     "tsup": "^8.3.5",
     "typescript": "^5.3.3"

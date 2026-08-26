@@ -517,7 +517,7 @@ function renderFWFeatures(agent, block, formId, draft) {
   const sourcePackages = packages
     .filter((pkg) => {
       const token = pkg.packageName || pkg.name || pkg.id || '';
-      const shortName = (pkg.name || token).replace(/^@agentdev\//, '');
+      const shortName = (pkg.name || token).replace(/^@agentdevjs\//, '');
       const enabled = selectedSet.has(token) || selectedSet.has(shortName) || selectedSet.has(pkg.id || '');
       if (sourceFilter === 'mounted') return enabled;
       if (sourceFilter === 'official') return pkg.source === 'official';
@@ -615,7 +615,7 @@ function renderFWFeatures(agent, block, formId, draft) {
   } else {
     sourcePackages.forEach(pkg => {
       const token = pkg.packageName || pkg.name || pkg.id || '';
-      const shortName = (pkg.name || token).replace(/^@agentdev\//, '');
+      const shortName = (pkg.name || token).replace(/^@agentdevjs\//, '');
       const enabled = selectedSet.has(token) || selectedSet.has(shortName) || selectedSet.has(pkg.id || '');
       const featureTypes = Array.isArray(pkg.featureTypes) ? pkg.featureTypes : [];
       const searchText = getFeatureSearchText(pkg);

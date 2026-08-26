@@ -14,7 +14,7 @@
 import { basename, dirname as pathDirname, join } from 'path';
 import { mkdirSync, writeFileSync, existsSync } from 'fs';
 
-import { resolveFeatureConfig } from '@agentdev/core';
+import { resolveFeatureConfig } from '@agentdevjs/core';
 
 import {
   GLOBAL_LAYER_PATH,

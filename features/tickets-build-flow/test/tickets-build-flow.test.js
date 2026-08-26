@@ -59,6 +59,6 @@ describe('TicketsBuildFlow', () => {
     assert.equal(feature.name, 'tickets-build-flow');
     assert.ok(feature.source.includes('dist'), 'source 应指向构建产物入口');
     const info = feature.getPackageInfo();
-    assert.equal(info.name, '@agentdev/tickets-build-flow');
+    assert.equal(info.name, '@agentdevjs/tickets-build-flow');
   });
 });

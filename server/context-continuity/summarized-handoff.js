@@ -12,7 +12,7 @@ import {
   HANDOFF_SCHEMA_VERSION,
   normalizeSummaryPolicy,
   buildSummarySeedMessage,
-} from '@agentdev/core';
+} from '@agentdevjs/core';
 import { SESSION_TRANSFORMATION_TIMEOUT_MS } from '../shared/constants.js';
 
 const HANDOFF_COMPILER_VERSION = 'summarized-nine-section-v1';

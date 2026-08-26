@@ -5,15 +5,15 @@
  * 通过 QQ/微信等渠道与用户交互，可将线路动态转接到任意工作空间会话。
  */
 
-import { BasicAgent, TemplateComposer, TodoFeature } from '@agentdev/core';
-import { QQBotFeature } from '@agentdev/qqbot-feature';
-import { WeixinBot, WeixinApiClient } from '@agentdev/weixin-bot';
-import { FeishuBot } from '@agentdev/feishu-bot';
-import { WecomBot } from '@agentdev/wecom-bot';
-import { RokidBot } from '@agentdev/rokid-bot';
-import { ShellFeature } from '@agentdev/shell-feature';
-import { WebSearchFeature } from '@agentdev/websearch-feature';
-import { ImageReaderFeature } from '@agentdev/image-reader-feature';
+import { BasicAgent, TemplateComposer, TodoFeature } from '@agentdevjs/core';
+import { QQBotFeature } from '@agentdevjs/qqbot-feature';
+import { WeixinBot, WeixinApiClient } from '@agentdevjs/weixin-bot';
+import { FeishuBot } from '@agentdevjs/feishu-bot';
+import { WecomBot } from '@agentdevjs/wecom-bot';
+import { RokidBot } from '@agentdevjs/rokid-bot';
+import { ShellFeature } from '@agentdevjs/shell-feature';
+import { WebSearchFeature } from '@agentdevjs/websearch-feature';
+import { ImageReaderFeature } from '@agentdevjs/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';

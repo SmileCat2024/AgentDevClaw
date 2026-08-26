@@ -7,7 +7,7 @@ import process from 'process';
 import { randomUUID, createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
-import { ViewerWorker } from '@agentdev/viewer';
+import { ViewerWorker } from '@agentdevjs/viewer';
 import {
   exportHistoryOnlyHandoffPackage,
   readHandoffPackage,

@@ -8,7 +8,7 @@
  * POST /protoclaw/render_conversation 端点调用。
  */
 
-import type { AgentFeature, Tool } from '@agentdev/core';
+import type { AgentFeature, Tool } from '@agentdevjs/core';
 
 export class ConversationExportFeature implements AgentFeature {
   readonly name = 'conversation-export';

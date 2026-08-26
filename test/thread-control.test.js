@@ -19,7 +19,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { WorkThreadRuntimeBridge, WorkThreadNotFoundError } from '@agentdev/core';
+import { WorkThreadRuntimeBridge, WorkThreadNotFoundError } from '@agentdevjs/core';
 import {
   ThreadStore,
   ThreadNotFoundError,

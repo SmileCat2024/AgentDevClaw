@@ -126,7 +126,7 @@ Viewer 根据包类型生成 URL：
 
 ```text
 独立 @agentdev 包:
-/template/@agentdev/record-feature/record-update.render.js
+/template/@agentdevjs/record-feature/record-update.render.js
 
 agentdev 内置 Feature:
 /template/agentdev/record/record-update.render.js

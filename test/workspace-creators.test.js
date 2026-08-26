@@ -78,9 +78,9 @@ describe('buildAgentWorkspacePackageJson', () => {
   it('includes core agent dependencies', () => {
     const pkg = buildAgentWorkspacePackageJson('test-bot');
     assert.ok(pkg.dependencies.agentdev, 'should depend on agentdev');
-    assert.ok(pkg.dependencies['@agentdev/audit-feature']);
-    assert.ok(pkg.dependencies['@agentdev/shell-feature']);
-    assert.ok(pkg.dependencies['@agentdev/websearch-feature']);
+    assert.ok(pkg.dependencies['@agentdevjs/audit-feature']);
+    assert.ok(pkg.dependencies['@agentdevjs/shell-feature']);
+    assert.ok(pkg.dependencies['@agentdevjs/websearch-feature']);
   });
 
   it('uses agent name in scoped package name', () => {
@@ -161,10 +161,10 @@ describe('buildAgentWorkspaceAgentSource', () => {
 
   it('includes all required imports', () => {
     const src = buildAgentWorkspaceAgentSource('test', 'goal');
-    assert.ok(src.includes("from '@agentdev/core'"), 'should import from @agentdev/core');
-    assert.ok(src.includes("from '@agentdev/audit-feature'"));
-    assert.ok(src.includes("from '@agentdev/shell-feature'"));
-    assert.ok(src.includes("from '@agentdev/websearch-feature'"));
+    assert.ok(src.includes("from '@agentdevjs/core'"), 'should import from @agentdevjs/core');
+    assert.ok(src.includes("from '@agentdevjs/audit-feature'"));
+    assert.ok(src.includes("from '@agentdevjs/shell-feature'"));
+    assert.ok(src.includes("from '@agentdevjs/websearch-feature'"));
     assert.ok(src.includes('BasicAgent'));
     assert.ok(src.includes('TemplateComposer'));
     assert.ok(src.includes('TodoFeature'));

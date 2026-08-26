@@ -1,5 +1,5 @@
 {
-  "name": "@agentdev/compact",
+  "name": "@agentdevjs/compact",
   "version": "0.1.0",
   "description": "compact feature for AgentDev",
   "type": "module",
