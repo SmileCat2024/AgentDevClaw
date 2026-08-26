@@ -1,4 +1,4 @@
-import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdevjs/core';
+import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature, SkillFeature } from '@agentdevjs/core';
 import { ShellFeature } from '@agentdevjs/shell-feature';
 import { AuditFeature } from '@agentdevjs/audit-feature';
 import { WebSearchFeature } from '@agentdevjs/websearch-feature';
@@ -69,6 +69,16 @@ export class AgentStudioAgent extends BasicAgent {
     this.use(new WebSearchFeature({ workspaceDir }));
     this.use(new ShellFeature({ workspaceDir, resourceRoot: projectRoot }));
     this.use(new AgentStudioFeature({ workspaceDir }));
+    // SkillFeature：dev agent 的权威技能（agent-studio-workflow / agentdev-agent-assembly /
+    // agentdev-feature-guide / agentdev-feature-packaging）随 AgentStudioFeature 构建产物携带，
+    // 由框架按"feature source 同级 skills/ 目录"约定经 collectFeatureSkills 自动投递；
+    // workspaceDir/.agentdev/skills（Studio 项目目录）可追加或同名覆盖。
+    // feature-setup.json 的 skill 配置（scanAgentdevDir/scanClaudeDir/extraDirs 等）可覆盖默认值。
+    this.use(new SkillFeature(
+      systemFeatureConfig.skill && typeof systemFeatureConfig.skill === 'object'
+        ? systemFeatureConfig.skill
+        : undefined
+    ));
     this.use(new UserInputFeature());
   }
 
