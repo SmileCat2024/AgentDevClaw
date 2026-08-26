@@ -1,26 +1,48 @@
 #!/usr/bin/env node
-// 说明：@agentdevjs/* 四包尚未发布 npm，Claw 依赖以 file:../AgentDev/packages/* junction
-// 形态运行，不存在"切回 npm 发布版"的可用路径。本脚本保留命令占位并给出指引，
-// 待四包发版后应改写为：移除 file: 依赖、写入 semver、npm install。
-import { existsSync } from 'fs';
+// 发布态切换：把 package.json 中的 `file:../AgentDev/packages/*` 本地依赖
+// 改写为 npm registry semver 依赖（@agentdevjs/* 已发布 npm），随后执行
+// npm install 即从 registry 拉取正式包（自带 dist，无需相邻仓库）。
+//
+// 与 agentdev:local 的关系：
+//   - 本脚本改写依赖声明（file: -> semver），是形态切换的正向通道；
+//   - agentdev:local 不改声明，只做 node_modules 手工 junction，用于
+//     发布态下临时调试本地源码（npm install 会将其冲回 registry 版）。
+//
+// 版本来源：优先读相邻 AgentDev 仓库各包的 version（即刚发布的内容）；
+// 相邻仓库不在时用 --version 显式指定，或采用默认 ^0.1.0。
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { resolve, join } from 'path';
 
 const projectRoot = resolve(import.meta.dirname, '..');
-const pkg = JSON.parse(await import('fs').then((m) => m.readFileSync(join(projectRoot, 'package.json'), 'utf8')));
-const fileDeps = Object.entries(pkg.dependencies || {}).filter(([, spec]) => String(spec).startsWith('file:../'));
-const published = Object.entries(pkg.dependencies || {}).filter(([name]) => name.startsWith('@agentdevjs/') && !String(pkg.dependencies[name]).startsWith('file:'));
+const pkgPath = join(projectRoot, 'package.json');
+const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 
-console.log('[agentdev:published] @agentdevjs/core|llm|viewer|mcp 尚未发布 npm。');
-if (fileDeps.length > 0) {
-  console.log('[agentdev:published] 当前本地源码依赖（junction 形态）：');
-  for (const [name, spec] of fileDeps) console.log(`  ${name}: ${spec}`);
+const fileDeps = Object.entries(pkg.dependencies || {}).filter(
+  ([, spec]) => String(spec).startsWith('file:../AgentDev/packages/')
+);
+
+if (fileDeps.length === 0) {
+  console.log('[agentdev:published] 当前已是发布态（无 file:../AgentDev 本地依赖），无需切换。');
+  process.exit(0);
 }
-if (published.length > 0) {
-  console.log('[agentdev:published] 已按 semver 声明的生态包（tgz 安装）：');
-  for (const [name] of published) console.log(`  ${name}`);
+
+const agentdevRoot = resolve(projectRoot, '..', 'AgentDev');
+const flagIdx = process.argv.indexOf('--version');
+const fallback = flagIdx >= 0 ? process.argv[flagIdx + 1] : '^0.1.0';
+
+let changed = 0;
+for (const [name] of fileDeps) {
+  // file:../AgentDev/packages/<dir> 的目录名从原 spec 中取
+  const dir = pkg.dependencies[name].slice('file:../AgentDev/packages/'.length);
+  const localPkg = join(agentdevRoot, 'packages', dir, 'package.json');
+  let version = fallback;
+  if (existsSync(localPkg)) {
+    version = `^${JSON.parse(readFileSync(localPkg, 'utf8')).version}`;
+  }
+  pkg.dependencies[name] = version;
+  console.log(`[agentdev:published] ${name}: file:../AgentDev/packages/${dir} -> ${version}`);
+  changed += 1;
 }
-if (existsSync(join(projectRoot, 'node_modules', 'agentdev'))) {
-  console.warn('[agentdev:published] 警告：node_modules/agentdev 存在残留目录（旧单包），可手动删除。');
-}
-console.log('[agentdev:published] 发版后请将上述 file:../AgentDev/packages/* 依赖改为 semver 并重新 npm install。');
-process.exit(0);
+
+writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+console.log(`[agentdev:published] 已改写 ${changed} 个依赖。接下来执行：npm install`);
