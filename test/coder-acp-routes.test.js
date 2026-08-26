@@ -615,7 +615,9 @@ describe('ACP list — GET /protoclaw/acp/coder/sessions', () => {
     const res = await callList(app);
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, true);
-    assert.deepEqual(res.body.threads.map((t) => t.threadId).sort(), ['thread-A', 'thread-C']);
+    // 缺持久化记录（cwd 未知）的线程被跳过：ACP SessionInfo.cwd 必填 string，
+    // 无法构造合法条目的线程不进入协议响应
+    assert.deepEqual(res.body.threads.map((t) => t.threadId), ['thread-A']);
     assert.deepEqual(
       res.body.threads.find((t) => t.threadId === 'thread-A'),
       {
@@ -626,9 +628,6 @@ describe('ACP list — GET /protoclaw/acp/coder/sessions', () => {
         updatedAt: new Date(1000).toISOString(),
       },
     );
-    // 缺会话记录的线程：cwd 为 null 但仍在列表中
-    const c = res.body.threads.find((t) => t.threadId === 'thread-C');
-    assert.equal(c.cwd, null);
   });
 
   it('filters by cwd (case-insensitive) via ?cwd=', async () => {

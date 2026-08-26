@@ -5,6 +5,10 @@
  *   - ACP session 与 Claw session/thread 的映射只存在于 adapter 内存；
  *     adapter 退出 / 断开仅释放内存（dispose），不动任何 Claw 持久化对象
  *   - 一 ACP session 一 active prompt（Q9）：并发 prompt → -32001，不排队
+ *   - 一条 Claw thread 至多一个内部消费状态（线程级唯一）：多条 ACP ID
+ *     （session/new 的随机 UUID 与 resume 的持久 Claw ID）可作别名指向同一
+ *     状态，但绝不允许建立第二个独立状态——双状态会各自消费同一线程事件流，
+ *     使终态归因与 cancel 失效（见 §7/§8 审计修复）
  *   - 双层取消汇流：session/cancel 通知与 $/cancel_request（ctx.signal）
  *     进入同一 cancel()；每次取消只调一次 interrupt（018 路由）
  *   - 终态判定只看事件流（turn.completed / turn.failed / turn.cancelled），
@@ -159,8 +163,21 @@ export function createSessionManager(options = {}) {
   const promptTimeoutMs = options.promptTimeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
-  /** @type {Map<string, object>} acpSessionId → session 状态（设计 §3） */
-  const sessions = new Map();
+  /** @type {Map<string, object>} threadId → session 状态（线程级唯一消费状态，设计 §3） */
+  const threadStates = new Map();
+  /** @type {Map<string, string>} acpSessionId → threadId 别名解析（多协议 ID 指向同一状态） */
+  const aliasToThread = new Map();
+
+  /**
+   * 按 ACP sessionId 解析内部状态：先走别名表，再按线程唯一键取状态。
+   * @returns {object|null}
+   */
+  function resolveSession(acpSessionId) {
+    if (typeof acpSessionId !== 'string' || !acpSessionId) return null;
+    const threadId = aliasToThread.get(acpSessionId);
+    if (!threadId) return null;
+    return threadStates.get(threadId) ?? null;
+  }
 
   /** 可中断 sleep：cancel 时立即唤醒，避免等满一个轮询间隔。 */
   function interruptibleSleep(ms, abortSignal) {
@@ -184,6 +201,47 @@ export function createSessionManager(options = {}) {
       cursor: Number(body?.cursor) || 0,
       knownEventIds: events.map((event) => event?.eventId).filter((id) => id !== undefined),
     };
+  }
+
+  /**
+   * 登记 thread 级状态 + ACP 别名。同 thread 已存在状态（session/new 与
+   * resume 落到同一线程）时复用并补别名，绝不建立第二个独立消费状态——
+   * 双状态会各自消费同一事件流，导致终态归因与 cancel 失效。
+   * @returns {object} thread 级状态
+   */
+  function registerThreadState(acpSessionId, { clawSessionId, threadId, viewerAgentId, cwd }) {
+    let state = threadStates.get(threadId);
+    if (!state) {
+      state = {
+        acpSessionId: acpSessionId, // 主别名（首次登记时建立协议 ID 的会话）
+        clawSessionId,
+        threadId,
+        viewerAgentId: viewerAgentId ?? null, // 仅存映射，不用于请求路径
+        cwd,
+        eventCursor: 0,
+        activePrompt: null,
+        cancelGeneration: 0,
+      };
+      threadStates.set(threadId, state);
+    } else if (!state.clawSessionId && clawSessionId) {
+      state.clawSessionId = clawSessionId;
+    }
+    aliasToThread.set(acpSessionId, threadId);
+    return state;
+  }
+
+  /** 清理某 thread 状态：先删别名（含状态主键），再删状态本身。 */
+  function removeThreadState(state) {
+    for (const [alias, threadId] of aliasToThread) {
+      if (threadId === state.threadId) aliasToThread.delete(alias);
+    }
+    aliasToThread.delete(state.acpSessionId);
+    threadStates.delete(state.threadId);
+  }
+
+  /** 按 thread 主键供测试/诊断读取内部状态。 */
+  function getThreadState(threadId) {
+    return threadStates.get(threadId) ?? null;
   }
 
   /**
@@ -212,17 +270,14 @@ export function createSessionManager(options = {}) {
       threadId: body.threadId,
       runtimeInstanceId: body.viewerAgentId ?? undefined,
     });
-    sessions.set(acpSessionId, {
-      acpSessionId,
+    const state = registerThreadState(acpSessionId, {
       clawSessionId: body.clawSessionId,
       threadId: body.threadId,
-      viewerAgentId: body.viewerAgentId ?? null, // 仅存映射，不用于请求路径
+      viewerAgentId: body.viewerAgentId ?? null,
       cwd: body.cwd ?? cwd,
-      eventCursor: 0,
-      activePrompt: null,
-      cancelGeneration: 0,
     });
-    return { sessionId: acpSessionId };
+    // 新线程必然新建状态；若复用（重复 create/竞态）返回既有主键而非新 UUID
+    return { sessionId: state.acpSessionId };
   }
 
   /**
@@ -232,11 +287,12 @@ export function createSessionManager(options = {}) {
    * 协议 ID 策略：resume 场景下 ACP sessionId === 请求的 Claw sessionId
    * （server 已把 head 解析结果作为 clawSessionId 返回）。与 session/new 的
    * 随机 UUID 不同，这个 ID 持久稳定——client 重启后凭上次记录的 sessionId
-   * 即可续接；同一 Claw 会话经 createSession 与 resumeSession 各持一条映射
-   * 时互不干扰（不同协议 ID，同一 Claw 目标）。
+   * 即可续接；同一 Claw 线程经 createSession 与 resumeSession 各持一条协议
+   * 别名（不同协议 ID，同一线程目标），但内部只有一个线程级消费状态。
    *
    * @param {string} clawSessionId 成员或 head 的 Claw sessionId
-   * @param {{ cwd?: string }} [params] cwd 由 server 校验（不一致 → -32003）
+   * @param {{ cwd: string }} params cwd 必填（SDK schema），server 校验
+   *   一致性（不一致 → -32003）
    * @returns {{ sessionId: string }} ACP 响应（即请求 ID）
    */
   async function resumeSession(clawSessionId, params = {}) {
@@ -255,16 +311,14 @@ export function createSessionManager(options = {}) {
     if (!body?.ok || !body?.clawSessionId || !body?.threadId) {
       throw clawServerError(200, body ?? null);
     }
-    sessions.set(body.clawSessionId, {
-      acpSessionId: body.clawSessionId,
+    const state = registerThreadState(body.clawSessionId, {
       clawSessionId: body.clawSessionId,
       threadId: body.threadId,
-      viewerAgentId: body.viewerAgentId ?? null, // 仅存映射，不用于请求路径
+      viewerAgentId: body.viewerAgentId ?? null,
       cwd: body.cwd ?? null,
-      eventCursor: 0,
-      activePrompt: null,
-      cancelGeneration: 0,
     });
+    // 重复 resume 同一线程：复用既有状态，绝不覆盖含 activePrompt 的状态
+    // （覆盖会让 session/cancel 失去目标；线程级唯一保证 cancel 命中）。
     trace?.registerSession(body.clawSessionId, {
       clawSessionId: body.clawSessionId,
       threadId: body.threadId,
@@ -272,10 +326,12 @@ export function createSessionManager(options = {}) {
     });
     trace?.record('acp.session.resumed', {
       acpSessionId: body.clawSessionId,
+      requestedSessionId: clawSessionId,
       clawSessionId: body.clawSessionId,
       threadId: body.threadId,
-      runtimeInstanceId: body.viewerAgentId ?? undefined,
+      reused: state.acpSessionId !== body.clawSessionId || state.lastResumedAt !== undefined,
     });
+    state.lastResumedAt = Date.now();
     return { sessionId: body.clawSessionId };
   }
 
@@ -332,7 +388,9 @@ export function createSessionManager(options = {}) {
       requestedSessionId: clawSessionId,
       replayUpdates: updates.length,
     });
-    return { sessionId: headSessionId };
+    // 协议响应本体不含会话标识（历史经 session/update 回放，其 sessionId 即
+    // head）；head 协议 ID 经 _meta.claw 扩展命名空间带给需要它的 client。
+    return { _meta: { claw: { sessionId: headSessionId } } };
   }
 
   /**
@@ -342,7 +400,7 @@ export function createSessionManager(options = {}) {
    * 事件——cancel 早于 turn.started 时 runtime 可能来不及产生事件）。
    */
   function cancel(acpSessionId) {
-    const session = sessions.get(acpSessionId);
+    const session = resolveSession(acpSessionId);
     if (!session) {
       log.warn?.(`acp cancel: unknown session ${acpSessionId}`);
       return;
@@ -409,7 +467,7 @@ export function createSessionManager(options = {}) {
    * @returns {Promise<{ stopReason: 'end_turn' | 'cancelled' }>}
    */
   async function runPrompt(acpSessionId, text, { onUpdate, signal }) {
-    const session = sessions.get(acpSessionId);
+    const session = resolveSession(acpSessionId);
     if (!session) {
       throw invalidParamsError('sessionId', `unknown sessionId: ${acpSessionId}`);
     }
@@ -709,19 +767,34 @@ export function createSessionManager(options = {}) {
   }
 
   /**
-   * session/close（协议 v1 正式方法）：转发 Claw 归档 thread（archive 标记
-   * 收纳语义，成员会话保留）并释放映射。有 in-flight prompt 时拒绝（先
-   * session/cancel——即先中断再归档）；thread 已消失或已归档视为幂等成功。
+   * session/close（协议 v1 正式方法）：ACP 要求 close 时必须先像
+   * session/cancel 一样取消进行中的工作（再释放资源）。当前实现：有
+   * in-flight prompt 时先走同一取消状态机（interrupt 恰好一次 + 唤醒），
+   * 等待其 settle 后再归档 thread；thread 已消失或已归档视为幂等成功。
    * adapter 断开不触发本方法（dispose 只清内存）——归档只在 client
    * 显式请求时发生。
    */
   async function closeSession(acpSessionId) {
-    const session = sessions.get(acpSessionId);
+    const session = resolveSession(acpSessionId);
     if (!session) {
       throw invalidParamsError('sessionId', `unknown sessionId: ${acpSessionId}`);
     }
+    // ACP §9.8：close = cancel + 释放资源。busy 不再拒绝，先取消。
     if (session.activePrompt) {
-      throw sessionBusyError(session.activePrompt.generation);
+      const prompt = session.activePrompt;
+      cancel(acpSessionId); // 与 session/cancel 同一状态机：interrupt 恰好一次
+      trace?.record('acp.session.close_cancelling', {
+        acpSessionId,
+        clawSessionId: session.clawSessionId,
+        threadId: session.threadId,
+        promptGeneration: prompt.generation,
+      });
+      // 等 prompt 彻底退出轮询（interrupt 送达 + finally 清 activePrompt）。
+      // 归档事务在 server 侧本身会 interrupt/stop runtime，这里只需等本地
+      // 消费状态收敛，避免归档后仍继续 GET events。
+      while (session.activePrompt === prompt) {
+        await interruptibleSleep(pollIntervalMs, new AbortController().signal);
+      }
     }
     try {
       await clawClient.archiveThread(session.threadId, {
@@ -735,7 +808,7 @@ export function createSessionManager(options = {}) {
           || error.body?.code === 'thread_not_found');
       if (!alreadyGone) throw toAcpError(error);
     }
-    sessions.delete(acpSessionId);
+    removeThreadState(session);
     trace?.record('acp.session.closed', {
       acpSessionId,
       clawSessionId: session.clawSessionId,
@@ -750,7 +823,8 @@ export function createSessionManager(options = {}) {
    * （session/close），不与断开挂钩。
    */
   function dispose() {
-    sessions.clear();
+    threadStates.clear();
+    aliasToThread.clear();
   }
 
   return {
@@ -762,13 +836,15 @@ export function createSessionManager(options = {}) {
     cancel,
     closeSession,
     dispose,
-    /** 测试与诊断用：当前 session 数量。 */
+    /** 测试与诊断用：当前线程级状态数量。 */
     get size() {
-      return sessions.size;
+      return threadStates.size;
     },
-    /** 测试与诊断用：按 ACP sessionId 取内部状态。 */
+    /** 测试与诊断用：按 ACP sessionId 取内部状态（别名解析到线程状态）。 */
     getSession(acpSessionId) {
-      return sessions.get(acpSessionId) ?? null;
+      return resolveSession(acpSessionId);
     },
+    /** 测试与诊断用：按 Claw threadId 直接取内部状态。 */
+    getThreadState,
   };
 }

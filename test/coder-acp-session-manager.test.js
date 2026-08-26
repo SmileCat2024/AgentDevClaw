@@ -215,21 +215,46 @@ describe('session resume + list', () => {
       resumeError: new ClawHttpError(409, { ok: false, code: 'thread_archived', message: 'archived' }),
     });
     const { manager } = makeManager(claw);
-    await assert.rejects(manager.resumeSession('claw-x', {}), (error) => {
+    await assert.rejects(manager.resumeSession('claw-x', { cwd: 'C:/work' }), (error) => {
       assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
       assert.equal(error.data.server.code, 'thread_archived');
       return true;
     });
   });
 
-  it('resume on an already-mapped session refreshes the mapping instead of duplicating', async () => {
+  it('resume on an already-mapped session reuses the single thread state instead of duplicating', async () => {
     const claw = makeMockClawClient();
     const { manager, sessionId } = await makeSession(claw);
-    // createSession 生成的随机 UUID ≠ claw-s1；对同一 Claw 会话再次 resume
-    await manager.resumeSession('claw-s1', {});
-    assert.equal(manager.size, 2); // 两条独立映射并存（不同协议 ID）
-    assert.ok(manager.getSession(sessionId));
-    assert.ok(manager.getSession('claw-s1'));
+    // createSession 生成随机 UUID（主别名）；对同一 Claw 会话再 resume（持久 ID 别名）
+    const resumed = await manager.resumeSession('claw-s1', { cwd: 'C:/work' });
+    assert.deepEqual(resumed, { sessionId: 'claw-s1' });
+    // 线程级唯一：两条 ACP ID 指向同一个内部状态，绝无第二个消费状态
+    assert.equal(manager.size, 1);
+    const viaCreate = manager.getSession(sessionId);
+    const viaResume = manager.getSession('claw-s1');
+    assert.ok(viaCreate && viaResume, 'both aliases must resolve');
+    assert.equal(viaCreate, viaResume, 'must be the same thread-level state object');
+    assert.equal(viaCreate.threadId, 'thread-1');
+  });
+
+  it('second resume while a prompt is active does not overwrite the state; cancel still targets the active prompt', async () => {
+    const claw = makeMockClawClient();
+    const { manager, sessionId } = await makeSession(claw);
+    const promptPromise = manager.runPrompt(sessionId, 'x', { onUpdate: () => {} });
+    await new Promise((r) => setTimeout(r, 20)); // 进入轮询，activePrompt 已登记
+    assert.ok(manager.getSession(sessionId).activePrompt, 'prompt active before second resume');
+
+    // 对同一 Claw 会话重复 resume：不得替换含 activePrompt 的状态
+    await manager.resumeSession('claw-s1', { cwd: 'C:/work' });
+    const state = manager.getSession(sessionId);
+    assert.ok(state.activePrompt, 'active prompt preserved across duplicate resume');
+    assert.equal(state, manager.getSession('claw-s1'));
+
+    // cancel 命中同一状态 → interrupt 恰好一次，prompt 以 cancelled 结束
+    manager.cancel(sessionId);
+    assert.deepEqual(await promptPromise, { stopReason: 'cancelled' });
+    assert.equal(claw.calls.interrupts.length, 1);
+    assert.deepEqual(claw.calls.interrupts, ['claw-s1']);
   });
 
   it('listSessions passes the cwd filter through and returns the server payload', async () => {
@@ -325,7 +350,8 @@ describe('session load (history replay)', () => {
     // 映射登记在 head（协议 ID = head，与 resume 一致）
     assert.equal(manager.getSession('claw-head').clawSessionId, 'claw-head');
     assert.equal(manager.getSession('claw-head').threadId, 'thread-1');
-    assert.deepEqual(result, { sessionId: 'claw-head' });
+    // 协议响应本体不含会话标识；head ID 走 _meta.claw 扩展命名空间
+    assert.deepEqual(result, { _meta: { claw: { sessionId: 'claw-head' } } });
   });
 
   it('loadSession maps resume-phase server errors through the standard taxonomy', async () => {
@@ -333,7 +359,7 @@ describe('session load (history replay)', () => {
       resumeError: new ClawHttpError(403, { ok: false, code: 'cwd_mismatch', message: 'nope' }),
     });
     const { manager } = makeManager(claw);
-    await assert.rejects(manager.loadSession('claw-x', {}, () => {}), (error) => {
+    await assert.rejects(manager.loadSession('claw-x', { cwd: 'C:/work' }, () => {}), (error) => {
       assert.equal(error.code, ERROR_CODES.CLAW_ERROR);
       assert.equal(error.data.server.code, 'cwd_mismatch');
       return true;
@@ -345,7 +371,7 @@ describe('session load (history replay)', () => {
       historyError: new ClawUnreachableError(new Error('ECONNREFUSED')),
     });
     const { manager } = makeManager(claw);
-    await assert.rejects(manager.loadSession('claw-x', {}, () => {}), (error) => {
+    await assert.rejects(manager.loadSession('claw-x', { cwd: 'C:/work' }, () => {}), (error) => {
       assert.equal(error.code, ERROR_CODES.CLAW_SERVER_UNREACHABLE);
       return true;
     });
@@ -664,22 +690,33 @@ describe('session/close', () => {
     assert.equal(manager.size, 0);
   });
 
-  it('unknown sessionId → -32602; busy session → -32001', async () => {
+  it('unknown sessionId → -32602', async () => {
     const claw = makeMockClawClient();
-    const { manager, sessionId } = await makeSession(claw);
+    const { manager } = await makeSession(claw);
     await assert.rejects(manager.closeSession('nope'), (error) => {
       assert.equal(error.code, ERROR_CODES.INVALID_PARAMS);
       assert.equal(error.data.field, 'sessionId');
       return true;
     });
-    const first = manager.runPrompt(sessionId, 'x', { onUpdate: () => {} });
-    await new Promise((r) => setTimeout(r, 20));
-    await assert.rejects(manager.closeSession(sessionId), (error) => {
-      assert.equal(error.code, ERROR_CODES.SESSION_BUSY);
-      return true;
-    });
-    manager.cancel(sessionId);
-    assert.deepEqual(await first, { stopReason: 'cancelled' });
+  });
+
+  it('close with an in-flight prompt cancels it first (ACP §9.8: cancel + free), then archives', async () => {
+    const claw = makeMockClawClient();
+    const { manager, sessionId } = await makeSession(claw);
+    const promptPromise = manager.runPrompt(sessionId, 'x', { onUpdate: () => {} });
+    await new Promise((r) => setTimeout(r, 20)); // 进入轮询，activePrompt 已登记
+    assert.ok(manager.getSession(sessionId).activePrompt, 'prompt should be active');
+
+    const closed = await manager.closeSession(sessionId);
+    assert.deepEqual(closed, {});
+    // 同一取消状态机：interrupt 恰好一次；prompt 以 cancelled 结束
+    assert.deepEqual(claw.calls.interrupts, ['claw-s1']);
+    const prompt = await promptPromise;
+    assert.deepEqual(prompt, { stopReason: 'cancelled' });
+    // 先取消后归档：两者都发生，且归档在 prompt 收敛之后
+    assert.deepEqual(claw.calls.archives, ['thread-1']);
+    assert.equal(manager.size, 0);
+    assert.equal(manager.getSession(sessionId), null);
   });
 
   it('already-gone thread (404) is idempotent success', async () => {
@@ -776,53 +813,65 @@ describe('protocol.js request validation', () => {
     );
   });
 
-  it('validateLoadSessionParams mirrors resume validation rules', () => {
-    assert.deepEqual(validateLoadSessionParams({ sessionId: 'claw-s1' }), { sessionId: 'claw-s1' });
+it('validateLoadSessionParams requires sessionId and cwd, rejects non-empty mcpServers / additionalDirectories', () => {
     assert.deepEqual(
       validateLoadSessionParams({ sessionId: 'claw-s1', cwd: 'C:/work', mcpServers: [] }),
       { sessionId: 'claw-s1', cwd: 'C:/work' },
     );
     assert.throws(() => validateLoadSessionParams({}), (e) => e.data.field === 'sessionId');
     assert.throws(() => validateLoadSessionParams({ sessionId: '' }), (e) => e.data.field === 'sessionId');
+    assert.throws(() => validateLoadSessionParams({ sessionId: 's' }), (e) => e.data.field === 'cwd');
+    assert.throws(() => validateLoadSessionParams({ sessionId: 's', cwd: '' }), (e) => e.data.field === 'cwd');
     assert.throws(() => validateLoadSessionParams({ sessionId: 's', cwd: 123 }), (e) => e.data.field === 'cwd');
     assert.throws(
-      () => validateLoadSessionParams({ sessionId: 's', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
+      () => validateLoadSessionParams({ sessionId: 's', cwd: 'C:/w', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
       (e) => e.data.field === 'mcpServers',
     );
     assert.throws(
-      () => validateLoadSessionParams({ sessionId: 's', additionalDirectories: ['C:/other'] }),
+      () => validateLoadSessionParams({ sessionId: 's', cwd: 'C:/w', additionalDirectories: ['C:/other'] }),
       (e) => e.data.field === 'additionalDirectories',
     );
   });
 
-  it('mergePromptText joins text blocks with blank lines and rejects non-text', () => {
+  it('mergePromptText joins text blocks with blank lines; resource_link becomes a text link; other blocks rejected', () => {
     assert.equal(mergePromptText([{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }]), 'a\n\nb');
     assert.equal(mergePromptText([{ type: 'text', text: 'solo' }]), 'solo');
+    // ACP baseline resource_link：不读取资源，转为可回显文本链接（codex formatUriAsLink）
+    assert.equal(
+      mergePromptText([{ type: 'resource_link', name: 'report.txt', uri: 'file:///tmp/report.txt' }]),
+      '[@report.txt](file:///tmp/report.txt)',
+    );
+    assert.equal(
+      mergePromptText([{ type: 'resource_link', uri: 'file:///tmp/report.txt' }]),
+      '[@report.txt](file:///tmp/report.txt)',
+    );
+    assert.equal(
+      mergePromptText([{ type: 'resource_link', uri: 'https://example.com/a' }]),
+      'https://example.com/a',
+    );
     assert.throws(() => mergePromptText([{ type: 'image', data: 'x', mimeType: 'image/png' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
-    assert.throws(() => mergePromptText([{ type: 'resource_link', uri: 'x', name: 'y' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
+    assert.throws(() => mergePromptText([{ type: 'resource', text: 'x', uri: 'file:///a', mimeType: 'text/plain' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
     assert.throws(() => mergePromptText([]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
     assert.throws(() => mergePromptText([{ type: 'text' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
+    assert.throws(() => mergePromptText([{ type: 'resource_link', uri: '' }]), (e) => e.code === ERROR_CODES.INVALID_PARAMS);
   });
 
-  it('validateResumeSessionParams accepts minimal params, rejects bad sessionId / mcpServers / additionalDirectories', () => {
-    // 最小合法：仅 sessionId
-    assert.deepEqual(validateResumeSessionParams({ sessionId: 'claw-s1' }), { sessionId: 'claw-s1' });
+  it('validateResumeSessionParams requires sessionId and cwd, rejects bad sessionId / mcpServers / additionalDirectories', () => {
     assert.deepEqual(
       validateResumeSessionParams({ sessionId: 'claw-s1', cwd: 'C:/work', mcpServers: [] }),
       { sessionId: 'claw-s1', cwd: 'C:/work' },
     );
-    // sessionId 必填非空
     assert.throws(() => validateResumeSessionParams({}), (e) => e.data.field === 'sessionId');
     assert.throws(() => validateResumeSessionParams({ sessionId: '' }), (e) => e.data.field === 'sessionId');
-    // cwd 若提供必须为字符串（存在性与一致性由 server 校验）
+    assert.throws(() => validateResumeSessionParams({ sessionId: 's' }), (e) => e.data.field === 'cwd');
+    assert.throws(() => validateResumeSessionParams({ sessionId: 's', cwd: '' }), (e) => e.data.field === 'cwd');
     assert.throws(() => validateResumeSessionParams({ sessionId: 's', cwd: 123 }), (e) => e.data.field === 'cwd');
-    // MCP / additionalDirectories 沿用 session/new 的拒绝语义
     assert.throws(
-      () => validateResumeSessionParams({ sessionId: 's', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
+      () => validateResumeSessionParams({ sessionId: 's', cwd: 'C:/w', mcpServers: [{ name: 'x', command: 'y', args: [], env: {} }] }),
       (e) => e.data.field === 'mcpServers',
     );
     assert.throws(
-      () => validateResumeSessionParams({ sessionId: 's', additionalDirectories: ['C:/other'] }),
+      () => validateResumeSessionParams({ sessionId: 's', cwd: 'C:/w', additionalDirectories: ['C:/other'] }),
       (e) => e.data.field === 'additionalDirectories',
     );
   });

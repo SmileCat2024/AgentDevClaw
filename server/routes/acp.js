@@ -303,8 +303,9 @@ export function setupAcpRoutes(app, express, ctx) {
         const headSessionId = sanitizeSessionFragment(thread.headSessionId);
         if (!headSessionId) continue;
 
-        // head 会话的持久化记录提供 cwd / 标题；缺失时 cwd 为 null（仍列出，
-        // 但 resume 会因无线程锚定或记录缺失而失败——如实暴露数据状态）
+        // head 会话的持久化记录提供 cwd / 标题。ACP v1 的 SessionInfo.cwd 是
+        // 必填 string；cwd 缺失的线程无法通过 resume/load 的 cwd 一致性校验，
+        // 对协议客户端不可用——直接跳过（不发送违反 schema 的 cwd:null 条目）。
         let record = null;
         try {
           record = await requirePrebuiltSessionRecord(ACP_WORKSPACE_AGENT_ID, headSessionId);
@@ -312,6 +313,7 @@ export function setupAcpRoutes(app, express, ctx) {
           if (error?.statusCode !== 404) throw error;
         }
         const openDirectory = record?.openDirectory ? String(record.openDirectory) : null;
+        if (!openDirectory) continue;
         if (cwdFilter && (!openDirectory || acpPathKey(openDirectory) !== cwdFilter)) continue;
 
         sessions.push({

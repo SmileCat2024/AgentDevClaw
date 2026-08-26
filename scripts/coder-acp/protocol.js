@@ -121,12 +121,14 @@ export function validateNewSessionParams(params) {
 /**
  * session/resume 参数校验（协议 v1 正式方法）。
  *
- * sessionId：必填非空字符串（即 client 记录的 Claw sessionId）；
- * cwd：可选；提供时必须为字符串（存在性 / 与持久化记录的一致性由 server
- *      校验，不一致返回 -32003 cwd_mismatch）；
+ * 与 SDK v1.4.0 的 zResumeSessionRequest 对齐：sessionId 与 cwd 均必填。
+ * sessionId：非空字符串（即 client 记录的 Claw sessionId）；
+ * cwd：必填字符串（存在性 / 与持久化记录的一致性由 server 校验，不一致返回
+ *      -32003 cwd_mismatch）；SDK schema 缺省即 -32602，本地校验保持同语义，
+ *      不做 wire 上无法到达的“可选”放宽。
  * mcpServers / additionalDirectories：与 session/new 同语义，非空一律拒绝。
  *
- * @returns {{ sessionId: string, cwd?: string }}
+ * @returns {{ sessionId: string, cwd: string }}
  */
 export function validateResumeSessionParams(params) {
   const sessionId = params?.sessionId;
@@ -134,8 +136,8 @@ export function validateResumeSessionParams(params) {
     throw invalidParamsError('sessionId', 'sessionId must be a non-empty string');
   }
   const cwd = params?.cwd;
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    throw invalidParamsError('cwd', 'cwd must be a string when provided');
+  if (typeof cwd !== 'string' || cwd.trim() === '') {
+    throw invalidParamsError('cwd', 'cwd must be a non-empty string');
   }
   if (Array.isArray(params.mcpServers) && params.mcpServers.length > 0) {
     throw invalidParamsError(
@@ -149,17 +151,17 @@ export function validateResumeSessionParams(params) {
       'additionalDirectories must be empty; additional directories are not supported',
     );
   }
-  return { sessionId: sessionId.trim(), ...(cwd !== undefined ? { cwd } : {}) };
+  return { sessionId: sessionId.trim(), cwd: cwd.trim() };
 }
 
 /**
  * session/load 参数校验（协议 v1 正式方法，带历史回放）。
  *
- * 校验规则与 resume 同构：sessionId 必填非空字符串；cwd 可选字符串
- * （一致性与存在性由 server 校验）；mcpServers / additionalDirectories
- * 非空一律拒绝。
+ * 校验规则与 resume 同构（SDK v1.4.0 zLoadSessionRequest）：sessionId 与
+ * cwd 均必填非空字符串（一致性由 server 校验）；mcpServers /
+ * additionalDirectories 非空一律拒绝。
  *
- * @returns {{ sessionId: string, cwd?: string }}
+ * @returns {{ sessionId: string, cwd: string }}
  */
 export function validateLoadSessionParams(params) {
   const sessionId = params?.sessionId;
@@ -167,8 +169,8 @@ export function validateLoadSessionParams(params) {
     throw invalidParamsError('sessionId', 'sessionId must be a non-empty string');
   }
   const cwd = params?.cwd;
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    throw invalidParamsError('cwd', 'cwd must be a string when provided');
+  if (typeof cwd !== 'string' || cwd.trim() === '') {
+    throw invalidParamsError('cwd', 'cwd must be a non-empty string');
   }
   if (Array.isArray(params.mcpServers) && params.mcpServers.length > 0) {
     throw invalidParamsError(
@@ -182,13 +184,16 @@ export function validateLoadSessionParams(params) {
       'additionalDirectories must be empty; additional directories are not supported',
     );
   }
-  return { sessionId: sessionId.trim(), ...(cwd !== undefined ? { cwd } : {}) };
+  return { sessionId: sessionId.trim(), cwd: cwd.trim() };
 }
 
 /**
- * session/prompt 输入规则（设计 §4.3）：prompt[] 仅允许 type: "text" 的
- * block，多块按顺序合并为一条消息（\n\n 连接）。image / resource /
- * resource_link / context 等非文本 block 一律拒绝。
+ * session/prompt 输入规则（设计 §4.3 + ACP baseline）：prompt[] 接受
+ * type: "text" 与 type: "resource_link" 两种 ACP baseline content block，
+ * 多块按顺序合并为一条消息（\n\n 连接）。resource_link 不读取被引资源，只
+ * 转为可回显的文本链接（codex-acp formatUriAsLink 同语义：有 name 用 name，
+ * file:// URI 取文件名，其余原样返回 URI）；image / resource / audio 等
+ * 额外能力 block 一律拒绝。
  *
  * @param {Array<{type: string}>} prompt
  * @returns {string} 合并后的文本
@@ -199,18 +204,36 @@ export function mergePromptText(prompt) {
   }
   const texts = [];
   for (const block of prompt) {
-    if (block?.type !== 'text') {
+    if (block?.type === 'text') {
+      if (typeof block.text !== 'string') {
+        throw invalidParamsError('prompt', 'text block is missing its text field');
+      }
+      texts.push(block.text);
+    } else if (block?.type === 'resource_link') {
+      if (typeof block.uri !== 'string' || !block.uri) {
+        throw invalidParamsError('prompt', 'resource_link block is missing its uri field');
+      }
+      texts.push(formatUriAsLink(block.name, block.uri));
+    } else {
       throw invalidParamsError(
         'prompt',
-        `unsupported content block type "${block?.type}"; only text blocks are accepted`,
+        `unsupported content block type "${block?.type}"; only text and resource_link blocks are accepted`,
       );
     }
-    if (typeof block.text !== 'string') {
-      throw invalidParamsError('prompt', 'text block is missing its text field');
-    }
-    texts.push(block.text);
   }
   return texts.join('\n\n');
+}
+
+/** resource_link → 可回显文本链接（codex-acp formatUriAsLink 同语义）。 */
+export function formatUriAsLink(name, uri) {
+  const linkUri = String(uri || '');
+  if (typeof name === 'string' && name) return `[@${name}](${linkUri})`;
+  if (linkUri.startsWith('file://')) {
+    const path = linkUri.replace('file://', '');
+    const fileName = path.split('/').pop() || path;
+    return `[@${fileName}](${linkUri})`;
+  }
+  return linkUri;
 }
 
 // ── sessionModes 消息层拦截 ─────────────────────────────────────────

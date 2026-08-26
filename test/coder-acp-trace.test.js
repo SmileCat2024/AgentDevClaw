@@ -58,7 +58,8 @@ describe('coder ACP trace logger', () => {
     await safe.flush();
     const safeText = await readFile(safeFile, 'utf8');
     assert.equal(safeText.includes('TOP-SECRET-A'), false);
-    assert.equal(safeText.includes('abc'), false);
+    // 用精确字段值断言（随机 UUID 的十六进制可能含有 "abc" 子串，不能用裸 includes）
+    assert.equal(safeText.includes('"abc"'), false);
 
     const contentFile = join(dir, 'content.jsonl');
     const content = createTraceLogger({

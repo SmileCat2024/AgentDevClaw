@@ -479,7 +479,8 @@ describe('coder ACP adapter wire protocol', () => {
         params: { sessionId: 'claw-wire-old', cwd: 'D:/work', mcpServers: [] },
       });
       assert.equal(loaded.error, undefined);
-      assert.deepEqual(loaded.result, { sessionId: 'claw-wire-1' });
+      // 协议响应本体不含会话标识；head ID 走 _meta.claw 扩展命名空间
+      assert.deepEqual(loaded.result, { _meta: { claw: { sessionId: 'claw-wire-1' } } });
 
       // 历史读取请求的是 head（不是请求 ID）
       assert.ok(claw.record.requests.some(

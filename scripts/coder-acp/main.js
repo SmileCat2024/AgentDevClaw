@@ -124,7 +124,7 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
   agent.onRequest(acp.methods.agent.session.resume, async (ctx) => {
     const { sessionId, cwd } = validateResumeSessionParams(ctx.params);
     trace?.record('acp.session.resume.validate', { method: 'session/resume', requestedSessionId: sessionId, cwd });
-    const result = await sessionManager.resumeSession(sessionId, { ...(cwd !== undefined ? { cwd } : {}) });
+    const result = await sessionManager.resumeSession(sessionId, { cwd });
     trace?.record('acp.session.resume.response', { method: 'session/resume', acpSessionId: result.sessionId });
     return result;
   });
@@ -136,7 +136,7 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
     trace?.record('acp.session.load.validate', { method: 'session/load', requestedSessionId: sessionId, cwd });
     const result = await sessionManager.loadSession(
       sessionId,
-      { ...(cwd !== undefined ? { cwd } : {}) },
+      { cwd },
       (notification) => {
         trace?.record('acp.session_update.outbound', {
           method: 'session/update',
@@ -147,7 +147,7 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
         return ctx.client.notify(acp.methods.client.session.update, notification.params);
       },
     );
-    trace?.record('acp.session.load.response', { method: 'session/load', acpSessionId: result.sessionId });
+    trace?.record('acp.session.load.response', { method: 'session/load', acpSessionId: result?._meta?.claw?.sessionId });
     return result;
   });
 
@@ -207,27 +207,29 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
  * @returns {typeof transport} guarded stream
  */
 export function applySessionModesGuard(transport, trace) {
-  // 与 SDK writeJson 相同的 getWriter/releaseLock 模式（WritableStream 的
-  // write 在 writer 上，且不能长期持锁——SDK 响应写入也要拿锁）
-  const writeRejection = async (rejection) => {
-    trace?.wire('outbound', rejection);
-    const writer = transport.writable.getWriter();
-    try {
-      await writer.write(rejection);
-    } finally {
-      writer.releaseLock();
-    }
-  };
-
-  const writable = new WritableStream({
-    async write(chunk) {
-      trace?.wire('outbound', chunk);
+  // 所有出站帧——SDK 的响应 / 通知（经下方 writable）与拦截器的拒绝——都经
+  // 同一 promise 队列串行写底层 transport.writable。WritableStream 锁不可
+  // 重入：并行 getWriter 会竞争同一把锁，后到的写直接被拒且被静默吞掉，
+  // 造成 JSON-RPC 请求-响应失配（client 永远等不到该 ID 的响应）。
+  let writeQueue = Promise.resolve();
+  const enqueueWrite = (chunk) => {
+    const done = writeQueue.then(async () => {
       const writer = transport.writable.getWriter();
       try {
         await writer.write(chunk);
       } finally {
         writer.releaseLock();
       }
+    });
+    // 队列前项失败不应中断后续写出；write 自身失败无法恢复，继续排队下一个。
+    writeQueue = done.catch(() => {});
+    return done;
+  };
+
+  const writable = new WritableStream({
+    write(chunk) {
+      trace?.wire('outbound', chunk);
+      return enqueueWrite(chunk);
     },
     close() {
       return transport.writable.close();
@@ -244,7 +246,8 @@ export function applySessionModesGuard(transport, trace) {
         trace?.wire('inbound', message);
         const rejection = guardSessionModesMessage(message);
         if (rejection) {
-          void writeRejection(rejection).catch(() => {});
+          trace?.wire('outbound', rejection);
+          void enqueueWrite(rejection).catch(() => {});
           return;
         }
         controller.enqueue(message);
