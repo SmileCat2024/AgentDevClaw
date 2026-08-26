@@ -144,6 +144,8 @@ window.CoderThreadsUI = (() => {
       actions.push(
         '<button class="coder-btn secondary" type="button" onclick="window.CoderThreadsUI.archive(\'' + esc(thread.threadId) + '\')">'
         + (zh ? '归档' : 'Archive') + '</button>',
+        '<button class="coder-btn danger" type="button" title="' + esc(zh ? '删除整个线程及其全部会话（不可撤销）' : 'Delete the whole thread and all its sessions (irreversible)') + '" onclick="window.CoderThreadsUI.remove(\'' + esc(thread.threadId) + '\')">'
+        + (zh ? '删除' : 'Delete') + '</button>',
       );
     } else {
       actions.push(
@@ -336,11 +338,107 @@ window.CoderThreadsUI = (() => {
 
   async function archive(threadId) {
     try {
-      await request('/protoclaw/threads/' + encodeURIComponent(threadId) + '/archive');
+      const payload = await request('/protoclaw/threads/' + encodeURIComponent(threadId) + '/archive');
+      showArchiveResult(payload);
       await refresh();
     } catch (error) {
       toastError(error);
     }
+  }
+
+  /**
+   * 归档取消结果文案（纯函数，可测）：T006——不得提示「恢复后自动继续
+   * 已取消指令」。以服务端 cleanup 事实构建展示文案。
+   */
+  function archiveResultText(cleanup, zh = false) {
+    const cancelled = Number(cleanup?.commandsCancelled) || 0;
+    const inflight = Number(cleanup?.inflightDrain?.count) || 0;
+    const converged = cleanup?.handoffConverged === true;
+    return [
+      converged ? (zh ? '新派发已拒绝，不再投往旧 head。' : 'New deliveries rejected; no longer routed to the old head.') : '',
+      cancelled > 0 ? (zh ? `${cancelled} 条未开始指令已取消。` : `${cancelled} pending command(s) cancelled.`) : (zh ? '无待投递指令。' : 'No queued commands.'),
+      inflight > 0 ? (zh ? `${inflight} 条运行中调用已收尾。` : `${inflight} running call(s) settled.`) : '',
+      (zh ? '恢复（取消归档）不复活已取消的指令。' : 'Unarchive will not revive cancelled commands.'),
+    ].filter(Boolean).join(zh ? '；' : ' ');
+  }
+
+  /**
+   * 删除确认文案（纯函数，可测）：T006——明确确认 + 展示级联影响范围。
+   * 该线程所有成员会话、handoff、执行记录一并删除，不可撤销。
+   */
+  function deleteConfirmText(thread, zh = false) {
+    const members = Array.isArray(thread?.sessionChain)
+      ? thread.sessionChain.map((e) => e?.sessionId).filter(Boolean)
+      : [];
+    if (thread?.headSessionId) members.push(thread.headSessionId);
+    if (thread?.rootSessionId) members.push(thread.rootSessionId);
+    const memberCount = new Set(members).size;
+    const pendingCount = (Array.isArray(thread?.commands)
+      ? thread.commands.filter((c) => c?.status === 'pending' || c?.status === 'in_flight').length : 0);
+    return zh
+      ? `确定要删除该线程吗？将删除其全部 ${memberCount} 个会话（含当前 head）、交接记录与执行记录，不可撤销。`
+        + (pendingCount > 0 ? `其中 ${pendingCount} 条待投递/运行中指令会被取消。` : '')
+        + '删除后无法恢复。'
+      : `Delete this thread? ${memberCount} session(s) (including the current head), handoff and execution records will be removed. This cannot be undone.`
+        + (pendingCount > 0 ? ` ${pendingCount} queued/running command(s) will be cancelled.` : '');
+  }
+
+  /**
+   * 归档取消结果展示（T006：不得提示「恢复后自动继续已取消指令」）。
+   * 服务端 cleanup 是归档事务事实（thread-lifecycle）：
+   *   - handoffConverged  交接挡板被收敛（后续新派发被拒绝，不再投往旧 head）；
+   *   - commandsCancelled  未开始指令已取消（count）；
+   *   - inflightDrain.count 已开始的调用数目（允许自然完成/收尾中）。
+   */
+  function showArchiveResult(payload) {
+    const cleanup = payload?.cleanup;
+    if (!cleanup) return; // 无取消结果可展示（老服务端/缺字段）——不编造
+    if (typeof ClawToast === 'undefined') return;
+    const zh = isZh();
+    const partial = cleanup.status === 'partial';
+    ClawToast.show({
+      id: 'thread-archive-' + (payload?.threadId || ''),
+      status: partial ? 'warning' : 'success',
+      title: zh ? (partial ? '归档完成（部分收尾未确认）' : '已归档') : (partial ? 'Archived (partial cleanup)' : 'Archived'),
+      description: archiveResultText(cleanup, zh),
+    });
+  }
+
+  /**
+   * 删除线程（T006：明确确认 + 展示级联影响范围，绝不经无确认路径）。
+   * 该线程的所有成员会话、handoff、执行记录、归档索引与 record 一并删除，
+   * 不可撤销；运行中调用会收尾（自然完成，超时强停）。确认文本把级联
+   * 影响范围讲清楚后再提交。
+   */
+  async function remove(threadId) {
+    const thread = getThread(threadId);
+    const zh = isZh();
+    const confirmed = window.confirm(deleteConfirmText(thread, zh));
+    if (!confirmed) return;
+    try {
+      const payload = await request('/protoclaw/threads/' + encodeURIComponent(threadId) + '/delete');
+      showDeleteResult(payload, threadId);
+      await refresh();
+    } catch (error) {
+      toastError(error);
+    }
+  }
+
+  function showDeleteResult(payload, threadId) {
+    if (typeof ClawToast === 'undefined') return;
+    const zh = isZh();
+    const partial = payload?.status === 'partial' || payload?.ok === false;
+    const cancelled = Number(payload?.cleanup?.commandsCancelled) || 0;
+    const desc = [
+      zh ? `已删除线程 ${threadId.slice(0, 10)} 的 ${(payload?.cleanup?.sessionIds || []).length} 个会话。` : `Deleted ${(payload?.cleanup?.sessionIds || []).length} session(s) of thread ${threadId.slice(0, 10)}.`,
+      cancelled > 0 ? (zh ? `${cancelled} 条指令已取消。` : `${cancelled} command(s) cancelled.`) : '',
+    ].filter(Boolean).join(' ');
+    ClawToast.show({
+      id: 'thread-delete-' + threadId,
+      status: partial ? 'warning' : 'success',
+      title: zh ? (partial ? '已删除（部分残留待清理）' : '已删除') : (partial ? 'Deleted (residual cleanup pending)' : 'Deleted'),
+      description: desc,
+    });
   }
 
   async function unarchive(threadId) {
@@ -380,5 +478,5 @@ window.CoderThreadsUI = (() => {
     if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
   }
 
-  return { render, refresh, openHead, interrupt, archive, unarchive, resume, switchTab, countFor };
+  return { render, refresh, openHead, interrupt, archive, unarchive, resume, remove, switchTab, countFor, archiveResultText, deleteConfirmText };
 })();

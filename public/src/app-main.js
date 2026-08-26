@@ -599,8 +599,11 @@ window.switchAgent = async (newAgentId) => {
       _deriveRuntimeSessionIdFromAgents(runtimeAgentId) || getActiveWorkspaceSessionId(targetAgent),
     );
     _recentlyFinishedRuntimes.delete(runtimeAgentId);
-    // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开
-    readOnlyMode = targetAgent?.input_accepted === false;
+    // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开。
+    // T006：Thread 历史成员只读挂载（browseOnly=true）同样保持只读——服务端
+    // 不推进 head、不投递指令，前端不以可写入口误导（ADR-001 历史=只读事实）。
+    readOnlyMode = targetAgent?.input_accepted === false
+      || window.ClawThreads?.browseOnly === true;
     currentWorkspaceArtifactDetail = null;
     currentWorkspaceDocsetDetail = null;
     currentProjectDocsetOpen = false;

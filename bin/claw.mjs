@@ -260,7 +260,8 @@ function printThreadText(thread) {
 }
 
 function printThreadsHelp() {
-  console.log('用法:');
+  console.log('用法（每行都是一个工作线程 Thread，operating key 一律是 thread-id；');
+  console.log('执行对象是线程而非会话，响应以 threadId/cleanup 等如实反映实际对象）:');
   console.log('  claw threads list [--agent ID] [--format text|json]');
   console.log('  claw threads create --agent ID --session ID [--title T] [--mode interactive|autonomous]');
   console.log('  claw threads show <thread-id> [--format text|json]');
@@ -269,10 +270,15 @@ function printThreadsHelp() {
   console.log('  claw threads deliver <thread-id> [--format text|json]');
   console.log('  claw threads advance <thread-id> --to-session ID [--from-session ID] [--expected-revision N] [--end-kind K]');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S] [--error E]');
-  console.log('  claw threads resume <thread-id> [--source S]');
-  console.log('  claw threads close <thread-id> [--reason R]');
-  console.log('  claw threads archive <thread-id>');
-  console.log('  claw threads unarchive <thread-id>');
+  console.log('  claw threads resume <thread-id> [--source S]        # 恢复 failed 线程的调度');
+  console.log('  claw threads close <thread-id> [--reason R]         # 关闭线程（清理残迹）');
+  console.log('  claw threads archive <thread-id>                     # 归档=取消性操作：取消未开始指令');
+  console.log('  claw threads unarchive <thread-id>                  # 恢复可调度资格；不复活已取消指令');
+  console.log('');
+  console.log('目标对象说明：archive/unarchive/close/resume 都作用于整个 Thread（其全部成员会话），');
+  console.log('不是单个 Session。归档响应携带 cleanup（commandsCancelled / inflightDrain / handoffConverged），');
+  console.log('足以让调用者从响应知道实际对象与取消结果。delete 不在 CLI 暴露：删除是带确认的破坏性');
+  console.log('操作（级联清理全部会话，见 threads delete 的 UI 面），脚本化 CLI 不绕过确认。');
 }
 
 function writeThreadPayload(payload, format = 'text') {

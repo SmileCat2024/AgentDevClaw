@@ -40,7 +40,10 @@
 // Agents whose session items get the full session-ops ctx menu
 // (summary / trim / branch). Server routes are agentId-parameterized;
 // this list only gates the frontend menu surface.
-const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio', 'coder']);
+// coder 不是独立 workspace agent：coder 会话并按 Thread 成员关系解析到宿主
+// (programming-helper)，线程视图的入口走 CoderThreadsUI（自带动作），
+// 不经过此处会话 ctx 菜单——因此不把 'coder' 列作会话操作 agent。
+const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio']);
 
 function getCtxMenuItems(role, ns, variant, id) {
   if (role === 'runtime' && CTX_SESSION_OPS_AGENTS.has(ns)) {

@@ -29,6 +29,11 @@ window.ClawThreads = {
   initialLoadDone: false,
   refreshInFlight: null,
   lastThreadsSig: '',
+  // 当前激活会话是否为「历史成员只读挂载」事实（activate 响应 browseOnly）。
+  // 由 workspace-actions 在 activate 落地时写入；只读横幅/输入守卫消费，
+  // 与成员关系（sessionIndex / headSessionId）一致：历史成员必然 browseOnly。
+  browseOnly: false,
+  browseOnlyThreadId: '',
 };
 
 const THREADS_REFRESH_INTERVAL_MS = 20000;
@@ -192,6 +197,35 @@ window.renderSessionThreadBadge = (agentId, session) => {
   );
 };
 
+/**
+ * 登记 activate 响应中的目标事实（T006 / T003 响应 shape）。
+ *
+ * 服务端 activate 已按 Thread 成员关系解析目标：历史成员返回
+ * `browseOnly:true` + `target`（实际生效对象 = Thread）。前端据此：
+ *   - 历史成员 → ClawThreads.browseOnly 置位（顶栏只读横幅 + 输入守卫）；
+ *   - 任何成员 → 刷新线程（Thread 是真实对象，不能只刷 Session）。
+ *
+ * @param {object} [activateResult] activate 路由的响应 JSON
+ */
+window.registerSessionActivateTarget = (activateResult) => {
+  const state = window.ClawThreads;
+  const target = activateResult?.target?.actual || activateResult?.target;
+  if (activateResult?.browseOnly === true) {
+    state.browseOnly = true;
+    state.browseOnlyThreadId = String(activateResult?.target?.threadId || target?.threadId || '').trim();
+  } else {
+    // 非 browse-only 的打开/创建：清除历史残留的只读事实
+    state.browseOnly = false;
+    state.browseOnlyThreadId = '';
+  }
+  // 兼容 Session 入口返回实际 Thread 结果时（T003 target shape）：
+  // UI 刷新 Thread 而不是只刷新 Session——head 推进 / 成员变化立即可见。
+  if (target?.type === 'thread' || activateResult?.browseOnly === true) {
+    void window.refreshThreads(true);
+  }
+  window.updateThreadHeaderIndicator();
+};
+
 // ── 顶栏指示器 ────────────────────────────────────────────────────
 
 window.updateThreadHeaderIndicator = () => {
@@ -230,11 +264,16 @@ window.updateThreadHeaderIndicator = () => {
       el.textContent = isZh ? `线程 ${shortId} · 承接中` : `Thread ${shortId} · head`;
     }
   } else {
-    el.className = 'thread-header-indicator clickable';
+    // 历史成员：只读查看（T006 / ADR-001）。成员关系（sessionIndex）是事实源，
+    // 不依赖 browseOnly 时序：非 head 即只读。明示「只读 + 前往当前 head」，
+    // 点击是显式动作——绝不静默跳转 / 静默转投（work-thread-design §2.2）。
+    const browseOnly = window.ClawThreads.browseOnly === true
+      && (window.ClawThreads.browseOnlyThreadId === '' || window.ClawThreads.browseOnlyThreadId === thread.threadId);
+    el.className = 'thread-header-indicator historical' + (browseOnly ? ' readonly' : '');
     el.title = isZh
-      ? `该会话已由工作线程接续至 ${thread.headSessionId}，点击前往当前承接会话`
-      : `Continued to ${thread.headSessionId}. Click to open the current head session.`;
-    el.textContent = isZh ? '已接续 · 前往当前会话' : 'Continued · open head';
+      ? `该会话已由工作线程接续至 ${thread.headSessionId}，当前为只读查看；点击前往当前承接会话`
+      : `Continued to ${thread.headSessionId}. Read-only view; click to open the current head session.`;
+    el.textContent = isZh ? '已接续 · 只读 · 前往当前会话' : 'Continued · read-only · open head';
     el.onclick = () => {
       window.jumpToThreadHead(thread.threadId);
     };
