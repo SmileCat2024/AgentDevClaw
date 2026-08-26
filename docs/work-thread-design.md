@@ -391,10 +391,11 @@ viewer 队列保持原语义：同一个 runtime 活着时的 call 间排队。�
 
 ```
 写入点唯一：beginSessionHandoff
-  由 integration.beginSessionSuccession 在两个路由入口各一处调用：
-  - compact_and_resume（L1209 后，公共入口覆盖 detached + 同步两分支）
-  - summary_resume（L1350 后）
-  记录 { fromSessionId, reason, startedAt } 落盘
+  由 integration.beginSessionSuccession 调用，生产接线两处：
+  - compact_and_resume（server/routes/session.js，公共入口覆盖
+    detached + 同步两分支）
+  - context guard 轮换（thread-rotation.js）
+  记录 { fromSessionId, reason, stage, startedAt } 落盘
 
 存活期：deliverPendingCommands 见 fresh → 返回 handoff_in_progress，
   指令保持 pending；InputGateway 见 fresh → 直投改暂存
@@ -503,9 +504,9 @@ no-op 返回——纯会话（PH 等）的 compact/summary 流程与未接入线
 - **前端**：thread-store.js 所有入口在无线程数据时 no-op / 空输出；
   会话列表徽标、分隔条、指示器、守卫全部条件渲染；
 - **coder 也可能被当纯会话用**：会话不属于任何线程时与 PH 行为一致；
-- **既有测试**：runtime-call-envelope 24 项、server-smoke 16 项、
-  thread-control 32 项全绿；全量 core 除 2 个已知既有失败
-  （frontend-ctx-menu-items isAssemblySession，与本工作无关）外全绿。
+- **回归矩阵**：16 个端到端场景的测试证据链见
+  `test/t007-*.test.js` 与 `.agentdev/tickets/acceptance-report-T007.md`
+  （场景 → 既有测试 / 新增测试的逐条映射）。
 
 ---
 
@@ -523,11 +524,11 @@ POST /protoclaw/threads/:threadId/commands           追加 Thread Inbox 指令
 POST /protoclaw/threads/:threadId/deliver            重试 pending 投递
 POST /protoclaw/threads/:threadId/head               推进 session head
 POST /protoclaw/threads/:threadId/handoff-failed     记录交接失败
-POST /protoclaw/threads/:threadId/resume             恢复已归档 Thread 的当前 head
+POST /protoclaw/threads/:threadId/resume             恢复 failed 看板的调度资格（board resume）
 POST /protoclaw/threads/:threadId/archive            归档 Thread，取消未开始工作
-POST /protoclaw/threads/:threadId/unarchive          兼容别名：恢复已归档 Thread
-DELETE /protoclaw/threads/:threadId                  删除 Thread 及其关联数据
-POST /protoclaw/threads/:threadId/close              系统硬关闭终态
+POST /protoclaw/threads/:threadId/unarchive          取消归档：恢复可调度资格，不复活已取消指令
+POST /protoclaw/threads/:threadId/delete             删除 Thread 及其关联数据（带确认的破坏性操作）
+POST /protoclaw/threads/:threadId/close              系统硬关闭终态（锚点终态：ACP 创建回滚 / head 会话删除）
 ```
 
 通用 CLI 是这些接口的无头入口：
@@ -543,9 +544,11 @@ claw threads advance <threadId> --to-session <sessionId> [--from-session ID] [--
 claw threads handoff-failed <threadId> [--reason R] [--stage S] [--error E]
 claw threads resume <threadId> [--source S]
 claw threads close <threadId> [--reason R]
+claw threads archive <threadId>
+claw threads unarchive <threadId>
 ```
 
-`claw threads` 只操作 Thread 的调度事实：head、Inbox、投递、接力和执行事件；不判断任务验收、不产生产品完成状态。当前 Thread 记录在 `~/.agentdev/AgentDevClaw/threads/`，runtime 消失不会让已创建的 Thread 从列表中消失；若 runtime 在事件上报前硬崩，查询结果是最后一次持久化状态。
+`claw threads` 只操作 Thread 的调度事实：head、Inbox、投递、接力和执行事件；不判断任务验收、不产生产品完成状态。删除不在 CLI 暴露：它是带确认的破坏性操作（级联清理全部会话，确认层在 UI 面），脚本化 CLI 不绕过确认。当前 Thread 记录在 `~/.agentdev/AgentDevClaw/threads/`，runtime 消失不会让已创建的 Thread 从列表中消失；若 runtime 在事件上报前硬崩，查询结果是最后一次持久化状态。
 
 历史上存在的 coder 工单适配层（`claw tickets`、`/protoclaw/coder/tickets`、ticket intake、工单状态机与 done 语义）已整体移除：context guard 触发的上下文接力收敛为 `server/thread-control/thread-rotation.js`（Thread 驱动，不含产品语义），coder 工作空间 UI 也只保留线程看板（`coder-threads` block）与设置。
 
@@ -556,48 +559,63 @@ claw threads close <threadId> [--reason R]
 ```
 服务端
  server/thread-control/
-    thread-store.js            持久化（原子写 / per-thread 锁 / 索引摘要含
-                                chainEdges + identity）
-    thread-controller.js       唯一入口（createThread / appendCommand /
-                                beginSessionHandoff / advanceHead / deliverPendingCommands /
-                                isHandoffActive / findThreadBySession / findThreadByHeadSession）
-    thread-identity.js         T001 会话身份真相源（identitySource 生产装配：
-                                session index / 会话文件 → sessionType）
-    thread-inbox.js            指令纯函数层（幂等入队 / 排序 / 终态裁剪）
-     thread-runtime-bridge.js   inbox → submitUserTurn 最后一跳
-    thread-integration.js      会话生命周期接线（onSessionCreated（含
-                                branch 分支建线程）/ beginSessionSuccession /
-                                applySessionSuccession / onSessionDeleted /
-                                tryDeliver）
-    thread-routes.js           HTTP API（GET/POST /protoclaw/threads…）
-    thread-rotation.js         context guard 触发的上下文接力执行器
-                                （beginSuccession → 退役旧 head → trim+摘要
-                                → advanceHead → 恢复指令投递；失败置
-                                rotation_failed）
-    input-gateway.js           统一输入网关 deliverUserInput
-  server/shared/constants.js   WORKSPACE_SESSION_AGENT_IDS（权威集合）
-  server/routes/session.js     compact/summary succession + branch 建线程
-                                + delete 线程善后的接线点
-  scripts/mirror-runtime.js 等 三个 mirror 脚本统一 import 权威集合
+     host-agents.js             线程宿主判定唯一权威（isThreadHostSession）
+     thread-store.js            持久化（原子写 / per-thread 锁 / 索引摘要含
+                                 chainEdges + identity）
+     thread-controller.js       唯一入口（createThread / appendCommand /
+                                 beginSessionHandoff / advanceHead / deliverPendingCommands /
+                                 isHandoffActive / findThreadBySession / findThreadByHeadSession）
+     thread-identity.js         T001 会话身份真相源（identitySource 生产装配：
+                                 session index / 会话文件 → sessionType）
+     thread-inbox.js            指令纯函数层（幂等入队 / 排序 / 终态裁剪）
+     thread-succession.js       T002 接力提交点（commitSuccession READY 门禁 +
+                                 失败收敛）+ 崩溃恢复收敛服务
+     thread-integration.js      会话生命周期接线（onSessionCreated（含
+                                 branch 分支建线程）/ beginSessionSuccession /
+                                 applySessionSuccession / onSessionDeleted /
+                                 tryDeliver）
+     target-resolution.js       T003 统一目标解析（生命周期动作 → Thread；
+                                 上下文变换 → 仅 head，历史 → stale_session）
+     thread-lifecycle.js        T004 归档事务（seal：hold + 取消 pending +
+                                 收敛挡板；inflight drain；cleanup complete/partial）
+     thread-archive.js          归档索引（跨实例持久化 / 幂等）
+     thread-delete.js           T005 删除编排（begin → 收尾 inflight → seal
+                                 closed → 级联清理，partial 结构化残留）
+     thread-delete-resources.js T005 删除的资源装配（sessions / handoffs /
+                                 runtimes 跨目录清理器生产绑定）
+     thread-routes.js           HTTP API（GET/POST /protoclaw/threads…）
+     thread-rotation.js         context guard 触发的上下文接力执行器
+                                 （beginSuccession → 退役旧 head → trim+摘要
+                                 → 共享提交点；失败置 rotation_failed）
+     input-gateway.js           统一输入网关 deliverUserInput
+   server/shared/constants.js   WORKSPACE_SESSION_AGENT_IDS（权威集合）
+   server/routes/session.js     compact_and_resume 接力接线（挡板 + 共享提交点）
+                                 + branch 建线程 + Session 兼容入口
+                                 （经 target-resolution 解析成员目标）
+   scripts/mirror-runtime.js 等 三个 mirror 脚本统一 import 权威集合
 
  前端
   public/src/modules/thread-store.js   线程状态 + 徽标 + 指示器 + 守卫 +
-                                      暂存气泡数据源 + 接力分隔条
+                                      暂存气泡数据源 + 接力分隔条 +
+                                      Session→Thread 目标登记（T006 只读事实）
   public/src/modules/coder-threads-ui.js  coder 工作空间线程看板
-                                          （列表 / 状态徽章 / 接力链 / 恢复与关闭）
- public/src/modules/persistent-input.js  主聊天入口守卫 + 暂存气泡渲染
- public/src/modules/input-helpers.js     槽位应答守卫（非 head 拦截）
- public/src/modules/chat-renderer.js     分隔条渲染点
- public/src/modules/session-list-render.js  徽标渲染点
- public/src/modules/runtime-status.js   占位名（线程风格）
- public/src/modules/sidebar-render.js   过渡标签（正在交接）
+                                          （列表 / 状态徽章 / 接力链 / 归档取消 /
+                                          删除确认 / 恢复与关闭）
+  public/src/modules/persistent-input.js  主聊天入口守卫 + 暂存气泡渲染
+  public/src/modules/input-helpers.js     槽位应答守卫（非 head 拦截）
+  public/src/modules/chat-renderer.js     分隔条渲染点
+  public/src/modules/session-list-render.js  徽标渲染点
+  public/src/modules/runtime-status.js   占位名（线程风格）
+  public/src/modules/sidebar-render.js   过渡标签（正在交接）
 
-会话生命周期（既有能力，线程复用而非重造）
- compact_and_resume / summary_resume
-   → beginSessionSuccession（挡板）
-   → handoff 导出 → successor session 创建 → runtime ready
-   → applySessionSuccession（advanceHead 原子推进 + 清挡板 + 投递暂存指令）
-   → 前端导航到新会话（既有 requestSwitch 链路）
+ 会话生命周期（既有能力，线程复用而非重造）
+  compact_and_resume（公共入口覆盖 compact / summary / trim+summary）
+    → beginSessionSuccession（挡板）
+    → handoff 导出 → successor session 创建（createCompactedResumeFromHandoff，
+      身份继承）→ runtime ready
+    → commitSuccession（advanceHead 原子推进 + 清挡板 + 投递暂存指令；
+      未 READY / 身份失败经 failSuccession 收敛，旧 head 保持有效）
+    → 前端导航到新会话（既有 requestSwitch 链路）
 ```
 
 ---
