@@ -128,6 +128,16 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
     );
   }
 
+  // T005：删除中的线程拒绝新 send（与 routes 的 _assertNotDeleting 同源）。
+  // deleting 窗口（begin 后 / seal 前）线程未 closed，框架 appendCommand 不
+  // 拒绝——入口层显式拒绝才是「停止新 command 写入」的第一道门。
+  if (thread.deleting === true) {
+    throw new UserTurnDeliveryError(
+      'Thread is being deleted: new input is rejected',
+      { code: 'thread_deleting', status: 409, retryable: false },
+    );
+  }
+
   // 非 head Session 仍可查看，但不能把新输入写入历史分片；不要静默转投
   // 当前 head，避免用户误以为自己仍在编辑历史现场。
   if (thread.headSessionId !== sessionId) {

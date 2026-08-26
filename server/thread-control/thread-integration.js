@@ -95,6 +95,14 @@ export function createThreadIntegration({ control = null } = {}) {
           && await archive.isArchived(thread.threadId)) {
           return { applied: false, reason: 'thread_archived', threadId: thread.threadId };
         }
+        // T005：删除中的线程拒绝新的上下文变换派发（与 routes 的
+        // _assertNotDeleting / input-gateway 的 thread_deleting 同源）。
+        // deleting 窗口（begin 后 / seal 前）线程未 closed，框架
+        // beginSessionHandoff 不拒绝——入口层显式拒绝，避免删除期间
+        // 启动接力产生孤儿 successor。
+        if (thread.deleting === true) {
+          return { applied: false, reason: 'thread_deleting', threadId: thread.threadId };
+        }
         await core.beginSessionHandoff({
           threadId: thread.threadId,
           fromSessionId: from,

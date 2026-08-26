@@ -82,6 +82,7 @@ export function setupSessionRoutes(app, express, ctx) {
     threadRotation,
     threadLifecycle,
     threadSuccession,
+    threadDelete,
   } = ctx;
 
   // T003：统一目标解析的成员归属真相源——经 threadLifecycle.findThreadBySession
@@ -1347,28 +1348,48 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
       assemblyRuntime = await stopAssemblyRuntime(sessionId);
     }
     const deletedRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
-    // T003：删除按 Thread 成员关系解析，不再按 sessionType 特判。Thread 成员
-    // 删除的是工作容器（级联清理其 Session / handoff / Inbox / 执行记录），与
-    // 删除单个 Session 是不可安全翻译的破坏性操作——本票不改变 Thread 删除的
-    // 执行细节，故返回机器可判断错误（实际对象 = Thread），绝不悄悄降级为
-    // Session 级删除让调用方误以为「Session 成功、Thread 未变化」。
+    // T005：删除按 Thread 成员关系解析（统一入口，复用 T003 的
+    // resolveLifecycleTarget）。Thread 成员（root / historical / head）不能
+    // 单独删除 Session——删除的是工作容器本身（级联清理其 Session / handoff /
+    // Inbox / 执行记录 / record）；独立 Session（如 main）保持原删除语义。
     const lifecycleTarget = await resolveLifecycleTarget({
       agentId: agent.id,
       sessionId,
       memberLookup: _memberLookup,
     });
     if (lifecycleTarget.ok && lifecycleTarget.actual.type === 'thread') {
-      // 直接以 409 统一形状返回（不经全局错误处理器——那里会丢弃 target 附加块）：
-      // 调用方拿到 Thread ID 与归属事实，可据此走 Thread 删除入口（带确认的
-      // 级联清理），而不是误以为 Session 删除成功。
-      trace.mark('failed', { errorCode: 'thread_managed_session_delete_forbidden' });
-      res.status(409).json({
-        ok: false,
-        code: 'thread_managed_session_delete_forbidden',
-        message: 'Thread members are managed by their thread and cannot be deleted individually; delete the thread instead',
+      if (!threadDelete || typeof threadDelete.deleteThread !== 'function') {
+        trace.mark('failed', { errorCode: 'thread_delete_not_wired' });
+        res.status(503).json({
+          ok: false,
+          code: 'thread_delete_not_wired',
+          message: 'Thread delete is not wired on this server; thread members cannot be deleted individually',
+          ..._targetShape(lifecycleTarget),
+          operationId: trace.operationId,
+        });
+        return;
+      }
+      // 历史 Session 发起删除 → 实际对象是所属 Thread（响应以 Thread 为主体，
+      // 保留原请求目标，调用方不会误以为「Session 成功、Thread 未变化」）。
+      // 部分失败返回结构化残留（cleanup.failures），不伪装成功。
+      const deleteResult = await threadDelete.deleteThread(lifecycleTarget.actual.id, {
+        reason: 'session_delete_redirect',
+      });
+      trace.mark('thread_delete_complete', { status: deleteResult.status });
+      res.json({
+        ok: deleteResult.status === 'complete',
+        code: deleteResult.status === 'complete' ? 'thread_deleted' : 'thread_delete_partial',
+        deleted: deleteResult.deleted,
+        idempotent: deleteResult.idempotent === true,
+        threadId: deleteResult.threadId,
+        status: deleteResult.status,
+        cleanup: deleteResult.cleanup,
+        failures: deleteResult.cleanup?.failures || [],
         ..._targetShape(lifecycleTarget),
+        deletedSessionId: sessionId,
         operationId: trace.operationId,
       });
+      trace.mark('response_sent');
       return;
     }
     const deletedRuntime = getAgentRuntime(agent.id, sessionId);

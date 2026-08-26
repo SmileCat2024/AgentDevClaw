@@ -65,6 +65,11 @@ export function createThreadRotationService({
   async function rotate(agentId, sessionId) {
     const thread = await threadCore.findThreadByHeadSession(agentId, sessionId);
     if (!thread || thread.status === 'closed') return null;
+    // T005：删除中的线程不启动接力（与 integration.beginSessionSuccession /
+    // succession.commitSuccession 的 thread_deleting 预检同源）。deleting
+    // 窗口（begin 后 / seal 前）线程未 closed，若此处放行会启动接力并
+    // 产生孤儿 successor。
+    if (thread.deleting === true) return null;
 
     try {
       await threadIntegration.beginSessionSuccession({ agentId, sessionId, reason: 'trim' });

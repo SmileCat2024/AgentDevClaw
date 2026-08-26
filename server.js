@@ -99,6 +99,8 @@ import { getThreadIntegration } from './server/thread-control/thread-integration
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
+import { createThreadDeleteService } from './server/thread-control/thread-delete.js';
+import { createThreadDeleteResources } from './server/thread-control/thread-delete-resources.js';
 import { setupAcpRoutes } from './server/routes/acp.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { createThreadRotationService } from './server/thread-control/thread-rotation.js';
@@ -284,6 +286,16 @@ const threadLifecycle = createThreadLifecycleService({
   // 下一条 Inbox command。
   stopSession: stopManagedAgent,
 });
+// T005：线程直接删除与级联清理（带确认的破坏性操作，服务端是最终安全边界）。
+// 运行中调用判定 = 锚点 in_flight 命令 + 看板 running（runtime turn 事件流
+// 的真相，turn.completed 回写 idle）；调用收尾后成员 runtime 无条件经
+// stopManagedAgent 幂等收敛（remove-session / SIGTERM，长活进程不绑已删会话）。
+const threadDelete = createThreadDeleteService({
+  control: threadControl,
+  locateBySession: (agentId, sessionId) => threadLifecycle.findThreadBySession(agentId, sessionId),
+  stopSession: stopManagedAgent,
+  ...createThreadDeleteResources(),
+});
 const threadRotation = createThreadRotationService({
   sessionApi: sessionHelpers,
   stopManagedAgent,
@@ -394,6 +406,7 @@ setupSessionRoutes(app, express, {
   threadRotation,
   threadLifecycle,
   threadSuccession,
+  threadDelete,
 });
 
 // ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
@@ -492,6 +505,7 @@ setupUISurfaceRoutes(app, express);
 setupThreadRoutes(app, express, {
   control: threadControl,
   lifecycle: threadLifecycle,
+  threadDelete,
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null
   resolveSessionOpenDirectory: async (agentId, sessionId) => {
     const record = await requirePrebuiltSessionRecord(agentId, sessionId);

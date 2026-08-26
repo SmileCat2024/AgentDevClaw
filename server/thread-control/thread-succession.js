@@ -148,26 +148,55 @@ export function createThreadSuccessionService({
     // 阻塞补投），失败 successor 退役，挡板收敛并留 rotation_failed 审计。
     // 两种时序都收敛：commit 在前则归档 seal 取消剩余 pending；归档在前
     // 则此处预检拒绝，successor 不会消费旧 Inbox。
-    if (threadControl.archive && typeof threadControl.archive.isArchived === 'function') {
-      const threadForCommit = await findThreadForSuccession(normalizedAgentId, from);
-      if (threadForCommit && await threadControl.archive.isArchived(threadForCommit.threadId)) {
-        const failure = await failSuccession({
-          agentId: normalizedAgentId,
-          fromSessionId: from,
-          reason: 'thread_archived',
-          stage: 'thread_archived',
-          error: `thread ${threadForCommit.threadId} is archived; succession commit refused`,
-          successorSessionId: to,
-          retireSuccessorRuntime: true,
-        });
-        return {
-          applied: false,
-          reason: 'thread_archived',
-          stage: 'thread_archived',
-          thread: failure.thread || null,
-          error: failure.error || `thread ${threadForCommit.threadId} is archived; succession commit refused`,
-        };
-      }
+    const threadForCommit = await findThreadForSuccession(normalizedAgentId, from);
+
+    // T004 冲突响应（与归档并发）：归档标记先落时，succession 提交被拒绝——
+    // head 不推进、旧 Inbox 不投递（seal 事务已取消全部 pending + hold
+    // 阻塞补投），失败 successor 退役，挡板收敛并留 rotation_failed 审计。
+    // 两种时序都收敛：commit 在前则归档 seal 取消剩余 pending；归档在前
+    // 则此处预检拒绝，successor 不会消费旧 Inbox。
+    if (threadForCommit && threadControl.archive && typeof threadControl.archive.isArchived === 'function'
+      && await threadControl.archive.isArchived(threadForCommit.threadId)) {
+      const failure = await failSuccession({
+        agentId: normalizedAgentId,
+        fromSessionId: from,
+        reason: 'thread_archived',
+        stage: 'thread_archived',
+        error: `thread ${threadForCommit.threadId} is archived; succession commit refused`,
+        successorSessionId: to,
+        retireSuccessorRuntime: true,
+      });
+      return {
+        applied: false,
+        reason: 'thread_archived',
+        stage: 'thread_archived',
+        thread: failure.thread || null,
+        error: failure.error || `thread ${threadForCommit.threadId} is archived; succession commit refused`,
+      };
+    }
+
+    // T005 冲突响应（与删除并发）：deleting 窗口（begin 后 / seal 前）线程
+    // 未 closed，框架 advanceHead 不拒绝——提交点显式拒绝，避免删除期间
+    // 提交新 successor 产生成员集合之外的孤儿会话。deleting 标记是入口层
+    // 事实（与 routes 的 _assertNotDeleting / input-gateway 的 thread_deleting
+    // 同源）；seal 后线程 closed，框架 terminal 判定天然拒绝。
+    if (threadForCommit && threadForCommit.deleting === true) {
+      const failure = await failSuccession({
+        agentId: normalizedAgentId,
+        fromSessionId: from,
+        reason: 'thread_deleting',
+        stage: 'thread_deleting',
+        error: `thread ${threadForCommit.threadId} is being deleted; succession commit refused`,
+        successorSessionId: to,
+        retireSuccessorRuntime: true,
+      });
+      return {
+        applied: false,
+        reason: 'thread_deleting',
+        stage: 'thread_deleting',
+        thread: failure.thread || null,
+        error: failure.error || `thread ${threadForCommit.threadId} is being deleted; succession commit refused`,
+      };
     }
 
     if (!successorReady) {
