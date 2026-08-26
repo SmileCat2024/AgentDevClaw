@@ -13,6 +13,10 @@ import { resolve } from 'path';
 
 const root = resolve(import.meta.dirname, '..');
 
+// 根依赖同步兜底：git pull 后未 npm install 时自动补装（含 install
+// 半途失败的场景——hidden lock 快照不更新会再次触发并透传真实错误）
+execSync('node scripts/ensure-root-deps.mjs', { cwd: root, stdio: 'inherit' });
+
 let dev = true;
 try {
   execSync('node scripts/is-dev-mode.mjs', { cwd: root, stdio: 'ignore' });
