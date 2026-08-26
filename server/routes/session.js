@@ -1320,8 +1320,10 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
       includeSessions: req.body.responseMode !== 'delta',
     });
     trace.mark('index_committed', { revision: result.revision });
-    const targetSessionId = archived && result.activeSessionId !== sessionId
-      ? result.activeSessionId
+    // 只有归档的是 active 会话才接力启动后继；归档非 active 会话不得
+    // 拉起一个用户从未要求运行的 activeSessionId（可能早已停止）。
+    const targetSessionId = archived && result.wasActiveSession
+      ? (result.activeSessionId || null)
       : null;
     let targetStatus = null;
     let targetStartupError = null;

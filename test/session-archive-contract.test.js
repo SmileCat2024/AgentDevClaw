@@ -65,7 +65,7 @@ describe('archive-and-replace contract', () => {
     assert.match(archiveRoute, /includeSessions:\s*req\.body\.responseMode !== 'delta'/);
     assert.match(deleteRoute, /deleted\.wasActiveSession/);
     assert.match(deleteRoute, /await startManagedAgent\(agent, targetSessionId\)/);
-    assert.match(archiveRoute, /archived && result\.activeSessionId !== sessionId/);
+    assert.match(archiveRoute, /archived && result\.wasActiveSession/);
     assert.match(archiveRoute, /await startManagedAgent\(agent, targetSessionId\)/);
     assert.match(deleteRoute, /operationId:\s*trace\.operationId/);
     assert.match(archiveRoute, /operationId:\s*trace\.operationId/);

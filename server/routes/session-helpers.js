@@ -18,6 +18,7 @@ import {
   getPrebuiltSessionFilePath,
   normalizeSessionMetadata, buildSessionTitle, computeNextSessionNumber,
 } from '../shared/session-access.js';
+import { getAgentRuntime, isManagedRuntimeRunning } from '../shared/agent-access.js';
 import { resolveSessionModelInfo } from './model-config.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
 import { createSessionHandoffHelpers } from './session-handoff-helpers.js';
@@ -70,6 +71,31 @@ export {
   isSidebarSessionReadModelReady,
   sortSidebarSessions,
 };
+
+// 归档/删除 active 会话后的后继选择。无 ctx 依赖，提为模块级纯函数以便单测。
+function getSessionRecencyValue(session) {
+  return String(session?.updatedAt || session?.createdAt || '');
+}
+
+export function selectFallbackSession(agentId, sessions, sourceSession) {
+  const candidates = sessions.filter((session) => (
+    session?.archived !== true
+  ));
+  if (PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
+    const sourceDirectory = String(sourceSession?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
+    if (!sourceDirectory) return null;
+    // PH 后继只选仍在运行的会话：目录下再无运行中会话时回退 null，
+    // 归档/删除路由据此跳过 startManagedAgent，而不是复活已停止的会话。
+    candidates.splice(0, candidates.length, ...candidates.filter((session) => (
+      String(session?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase() === sourceDirectory
+      && isManagedRuntimeRunning(getAgentRuntime(agentId, session.id))
+    )));
+  }
+  return candidates.sort((left, right) => (
+    getSessionRecencyValue(right).localeCompare(getSessionRecencyValue(left))
+    || String(right?.id || '').localeCompare(String(left?.id || ''))
+  ))[0] || null;
+}
 
 export function createSessionHelpers(ctx) {
   const {
@@ -1043,27 +1069,6 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
   return summarizePrebuiltSession(agentId, existing);
 }
 
-function getSessionRecencyValue(session) {
-  return String(session?.updatedAt || session?.createdAt || '');
-}
-
-function selectFallbackSession(agentId, sessions, sourceSession) {
-  const candidates = sessions.filter((session) => (
-    session?.archived !== true
-  ));
-  if (PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
-    const sourceDirectory = String(sourceSession?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase();
-    if (!sourceDirectory) return null;
-    candidates.splice(0, candidates.length, ...candidates.filter((session) => (
-      String(session?.openDirectory || '').trim().replace(/\\/g, '/').toLowerCase() === sourceDirectory
-    )));
-  }
-  return candidates.sort((left, right) => (
-    getSessionRecencyValue(right).localeCompare(getSessionRecencyValue(left))
-    || String(right?.id || '').localeCompare(String(left?.id || ''))
-  ))[0] || null;
-}
-
 async function deletePrebuiltSession(agentId, sessionId, options = {}) {
   const newIndex = await updateSessionIndex(agentId, (index) => {
     const existing = index.sessions.find((session) => session.id === sessionId);
@@ -1116,10 +1121,11 @@ async function archivePrebuiltSession(agentId, sessionId, archived, options = {}
     const sessions = index.sessions.map((session) =>
       session.id === sessionId ? { ...session, archived: !!archived, todo: archived ? false : session.todo } : session,
     );
-    const activeSessionId = archived && index.activeSessionId === sessionId
+    const wasActiveSession = index.activeSessionId === sessionId;
+    const activeSessionId = archived && wasActiveSession
       ? (selectFallbackSession(agentId, sessions, existing)?.id ?? null)
       : index.activeSessionId;
-    return { activeSessionId, sessions };
+    return { activeSessionId, sessions, wasActiveSession };
   });
 
   const updatedSession = newIndex.sessions.find((session) => session.id === sessionId) || null;
@@ -1127,6 +1133,7 @@ async function archivePrebuiltSession(agentId, sessionId, archived, options = {}
     protocolVersion: 2,
     archivedSessionId: sessionId,
     archived: !!archived,
+    wasActiveSession: newIndex.wasActiveSession === true,
     activeSessionId: newIndex.activeSessionId,
     revision: Number(newIndex.revision) || 0,
     sessionDelta: {
