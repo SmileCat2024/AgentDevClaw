@@ -8,6 +8,7 @@ export const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.
 export const rootRequire = createRequire(path.join(PROJECT_ROOT, 'package.json'));
 export const APP_PORT = Number.parseInt(process.env.PORT || '1420', 10);
 export const VIEWER_PORT = Number.parseInt(process.env.AGENTDEV_VIEWER_PORT || '2026', 10);
+export const REMOTE_CONNECTION_PORT_RANGE = Object.freeze({ min: 22100, max: 22199 });
 export const AGENTS_ROOT = path.join(PROJECT_ROOT, 'prebuilt-agents');
 export const RUNTIME_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'run-prebuilt-agent.js');
 export const ONE_SHOT_SCRIPT = path.join(PROJECT_ROOT, 'scripts', 'run-one-shot-agent.js');
@@ -17,6 +18,7 @@ export const AGENTDEV_CREATE_FEATURE_CLI = path.join(
 );
 export const VIEWER_ORIGIN = `http://127.0.0.1:${VIEWER_PORT}`;
 export const USER_DATA_ROOT = path.join(os.homedir(), '.agentdev', 'AgentDevClaw');
+export const REMOTE_CONNECTIONS_CONFIG_PATH = path.join(USER_DATA_ROOT, 'remote-connections.json');
 export const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 export const PREBUILT_SESSIONS_ROOT = path.join(USER_DATA_ROOT, 'prebuilt-sessions');
 export const PREBUILT_WORKSPACES_ROOT = path.join(USER_DATA_ROOT, 'workspaces');
