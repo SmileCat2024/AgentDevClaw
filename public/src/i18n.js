@@ -1,6 +1,6 @@
 const I18N = {
   zh: {
-    page_title: 'Agent 调试器',
+    page_title: 'Agent 工作台',
     sidebar_toggle: '切换侧栏',
     resize_panel: '调整面板宽度',
     panel_collapse_hint_title: '松开以收起面板',
@@ -359,7 +359,7 @@ const I18N = {
     slash_form_cancel: '取消',
   },
   en: {
-    page_title: 'Agent Debugger',
+    page_title: 'Agent Workbench',
     sidebar_toggle: 'Toggle Sidebar',
     resize_panel: 'Resize panel',
     panel_collapse_hint_title: 'Release to collapse panel',
