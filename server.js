@@ -62,7 +62,7 @@ import {
   buildSessionTitle, normalizeSessionMetadata, readSessionIndexSync,
 } from './server/shared/session-access.js';
 import { sendIPCtoSession } from './server/shared/ipc.js';
-import { proxyToViewer } from './server/shared/proxy.js';
+import { proxyToViewer, setProxyConnectionLookup } from './server/shared/proxy.js';
 import { resolveRuntimeObservationTarget } from './server/shared/operation-target.js';
 import { buildLocalFailureResponse, readOperationMetadata } from './server/shared/operation-contract.js';
 import {
@@ -1142,6 +1142,7 @@ app.delete('/protoclaw/remote_claw/registration', async (_req, res, next) => {
 
 // ── ADR-0008 远程连接：工作空间目录聚合（R1-05）──
 const connectionStore = createConnectionStore();
+setProxyConnectionLookup(connectionStore);
 const connectionHealth = createConnectionHealth({ tunnelManager });
 connectionHealth.start();
 void connectionStore.load()
