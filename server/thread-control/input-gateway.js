@@ -5,22 +5,32 @@
  *   - 外部直投：Claw 前端 POST /api/agents/:viewerAgentId/user-turn（server.js 代理）
  *   - 内部调用：交互面板提交（ui-surfaces）、未来的 IM 渠道路由
  *
- * 路由规则（单一真相，调用方无需感知线程）：
- *   收件会话是线程 head 且交接意图 fresh（pendingSuccession）
- *     → Thread Inbox 暂存（head 即将退役，直投的执行结果会留在旧会话、
- *       不被 successor 带走）；交接完成后由 applySessionSuccession 投给新 head。
- *   其余一切情况（无线程 / 非 host / 无交接）
+ * 路由规则（R6 队列化：域判定而非窗口判定）：
+ *   收件会话是某活跃线程的 head
+ *     → Thread Inbox 暂存 + 即时投递尝试。指令的去留时机（hold / 交接
+ *       / rotation_failed / runtime 未就绪）由 deliverPendingCommands 在
+ *       投递时按客观事实把关，网关不做第二重状态裁决——历史上「fresh
+ *       挡板才转 Inbox」的窗口判定会让 hold / failed / closed 态的输入
+ *       绕过全部行政检查直投旧 runtime（A11 旁路）。
+ *   线程已 close（硬终态）
+ *     → 显式拒绝 thread_closed；终态线程的指令入箱只会永久滞留。
+ *   收件会话是线程历史成员（非 head）
+ *     → 明确拒绝写入 session_not_head；历史 session 只读，调用方应切换
+ *       到当前 head。
+ *   其余一切情况（无线程 / 非 host / runtime 条目不存在）
  *     → 原样直投 viewer user-turn，行为与未接入线程时完全一致。
- *   历史 thread session（非 head）
- *     → 明确拒绝写入；历史 session 只读，调用方应切换到当前 head。
-
  *
  * 「非 head」不在此拦截：那是调用方 UI 上下文的路由问题（前端守卫
- * resolveThreadInputRoute 负责）；网关只拦「交接窗口」这一客观事实。
+ * resolveThreadInputRoute 负责）；网关只拦「线程域归属」这一客观事实。
  *
- * 边界记录：IM 渠道（qqbot）当前经 CallArbiter 在 runtime 内路由，不经
- * viewer user-turn。当 IM 线路绑定指向线程宿主（coder）时，应在 IM 的
- * 目标会话解析处改调本入口，而不是直投 runtime。
+ * 边界记录（A12 已知窗口）：runtime 条目被删除后（共享进程退出）网关
+ * 无法从 viewerAgentId 反查 (agentId, sessionId)——请求体不含会话事实，
+ * 只能回退直投，由 submitUserTurn 报出真实的运行时错误。窗口为毫秒级
+ * 竞态（successor runtime 注册前），不做请求体接口扩展。
+ *
+ * IM 渠道（qqbot）当前经 CallArbiter 在 runtime 内路由，不经 viewer
+ * user-turn。当 IM 线路绑定指向线程宿主（coder）时，应在 IM 的目标会话
+ * 解析处改调本入口，而不是直投 runtime。
  */
 
 import { getRuntimeByViewerAgentId } from '../shared/agent-access.js';
@@ -35,8 +45,8 @@ export { UserTurnDeliveryError };
  *   - 'thread_queued'：已转入 Thread Inbox 暂存（附带 threadId / commandId）
  *
  * @param {object} [deps] 测试注入（生产调用不传，走默认单例）
- * @throws UserTurnDeliveryError 直投失败（网络/校验），或交接窗口收到
- *   图片输入（Thread Inbox 暂不支持附件，显式失败优于静默丢失）。
+ * @throws UserTurnDeliveryError 直投失败（网络/校验）、线程已关闭
+ *   （thread_closed）或收件会话是历史成员（session_not_head）。
  */
 export async function deliverUserInput(
   {
@@ -51,24 +61,29 @@ export async function deliverUserInput(
 ) {
   const normalizedViewerId = String(viewerAgentId || '').trim();
   const normalizedText = typeof text === 'string' ? text : '';
+  const normalizedImages = Array.isArray(images) ? images : [];
 
   const route = await _resolveThreadRoute(normalizedViewerId, integration);
+  if (route.route === 'rejected') {
+    throw route.error;
+  }
   if (route.route !== 'thread') {
     return submitUserTurn({
       agentId: normalizedViewerId,
       text: normalizedText,
-      images,
+      ...(normalizedImages.length > 0 ? { images: normalizedImages } : {}),
       source,
       sourceRef,
       ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
     }, { fetchImpl });
   }
 
-  if (!normalizedText.trim()) {
-    throw new UserTurnDeliveryError(
-      'Thread handoff in progress: image-only input is not supported until the successor session is ready',
-      { code: 'thread_handoff_images_unsupported', status: 409, retryable: true },
-    );
+  if (!normalizedText.trim() && normalizedImages.length === 0) {
+    throw new UserTurnDeliveryError('text or images must be provided', {
+      code: 'invalid_input',
+      status: 400,
+      retryable: false,
+    });
   }
 
   const { command, duplicate } = await integration.core.appendCommand({
@@ -77,12 +92,13 @@ export async function deliverUserInput(
     text: normalizedText,
     source: String(source || '').trim() || 'gateway',
     idempotencyKey: sourceRef ? `gw-${sourceRef}` : '',
+    ...(normalizedImages.length > 0 ? { images: normalizedImages } : {}),
     ...(Array.isArray(capabilityActivations) ? { capabilityActivations } : {}),
   });
 
-  // 竞态闭合：路由判定（fresh 交接）与 append 之间 succession 可能已完成
-  // （advanceHead 已清挡板、applySessionSuccession 已投递过一轮）——补一次
-  // 投递尝试。交接仍在进行时它是 no-op（handoff_in_progress），已完成时
+  // 竞态闭合：路由判定与 append 之间 succession 可能已完成（advanceHead
+  // 已清挡板、applySessionSuccession 已投递过一轮）——补一次投递尝试。
+  // 交接仍在进行时它被 deliver 序列的客观检查拦下（no-op），已完成时
   // 正好把刚落入的指令当场送达，不留无触发点的 pending。
   let deliveryAttempt = null;
   if (!duplicate && typeof integration.tryDeliver === 'function') {
@@ -100,9 +116,11 @@ export async function deliverUserInput(
 }
 
 /**
- * 反查 runtime 归属并判定是否落入交接窗口。
- * 任何解析失败（runtime 不存在 / 非 host / 无线程 / 无 fresh 交接）
- * 一律 direct —— 网关的介入必须以确定的事实为前提。
+ * 反查 runtime 归属并判定线程域归属。
+ *   - { route:'thread', thread }：活跃线程的 head——指令入箱；
+ *   - { route:'rejected', error }：终态线程（closed）或历史成员——显式拒绝；
+ *   - { route:'direct' }：其余一切（无线程 / 非 host / 条目不存在）——直投。
+ * 网关的介入必须以确定的事实为前提；线程域内不做第二重状态裁决（R6）。
  */
 async function _resolveThreadRoute(viewerAgentId, integration) {
   if (!viewerAgentId) return { route: 'direct' };
@@ -122,16 +140,25 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
   // 非 head Session 仍可查看，但不能把新输入写入历史分片；不要静默转投
   // 当前 head，避免用户误以为自己仍在编辑历史现场。
   if (thread.headSessionId !== sessionId) {
-    throw new UserTurnDeliveryError(
-      'Historical thread sessions are read-only; open the current head session to continue',
-      { code: 'session_not_head', status: 409, retryable: false },
-    );
+    return {
+      route: 'rejected',
+      error: new UserTurnDeliveryError(
+        'Historical thread sessions are read-only; open the current head session to continue',
+        { code: 'session_not_head', status: 409, retryable: false },
+      ),
+    };
   }
 
-  // 与 core.deliverPendingCommands 的派生规则同源（fresh 判定），
-  // 但此处只读不写：stale 交接不构成拦截理由。
-  if (!integration.core.isHandoffActive(thread)) {
-    return { route: 'direct' };
+  // 终态线程禁入：closeThread 后 head 不变，历史链仍可查看，但工作已无
+  // 承接点——指令入箱只会在无投递触发的状态下永久滞留。
+  if (thread.status === 'closed') {
+    return {
+      route: 'rejected',
+      error: new UserTurnDeliveryError(
+        'This thread is closed; start a new session to continue the work',
+        { code: 'thread_closed', status: 409, retryable: false },
+      ),
+    };
   }
 
   return { route: 'thread', thread };

@@ -1025,6 +1025,27 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       throw error;
     }
 
+    // K14：线程历史棒次会话不是合法的 compact 源——begin/apply 对非 head
+    // 全部静默 no-op，会产生线程无感知的孤儿 successor。入口显式拒绝，
+    // 引导切到当前 head。
+    const memberThread = await getThreadIntegration().findThreadBySession(preferredAgentId, sessionId);
+    if (memberThread && memberThread.headSessionId !== sessionId) {
+      const error = new Error(`Session ${sessionId} is a historical thread generation; open the current head session to compact`);
+      error.code = 'session_not_head';
+      error.status = 409;
+      throw error;
+    }
+
+    // R8：线程域手动接力同样退役旧 head runtime——export 镜像读 session
+    // 文件，不先 stop/flush 会基于过期快照生成失真摘要，successor 接线也
+    // 不该与旧 runtime 并存。只在挡板立起后执行（纯 session 的手动 compact
+    // 不得被动停 runtime）；失败不阻断，与 rotation 的 stop 语义一致。
+    if (successionGate.applied) {
+      await stopManagedAgent(preferredAgentId, sessionId).catch((err) => {
+        console.warn(`[compact_and_resume] failed to retire pre-compact runtime for session=${sessionId}:`, err?.message || err);
+      });
+    }
+
     if (detached) {
       const jobId = `compact-resume-${Date.now()}-${randomUUID().slice(0, 8)}`;
       setTimeout(() => {
@@ -1042,15 +1063,18 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
           });
           console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
           // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）
-          await getThreadIntegration().applySessionSuccession({
+          const threadSuccession = await getThreadIntegration().applySessionSuccession({
             agentId: preferredAgentId,
             fromSessionId: sessionId,
             toSessionId: result?.session?.id,
             reason: lineageReason,
           });
+          // R8：推进失败时线程仍指向原会话，归档会挖掉线程的 head——跳过
+          const successionBlocked = threadSuccession?.applied === false
+            && threadSuccession?.reason === 'handoff_failed';
           // 服务端归档原会话
           let didArchive = false;
-          if (archiveOriginal && preferredAgentId) {
+          if (archiveOriginal && preferredAgentId && !successionBlocked) {
             try {
               await archivePrebuiltSession(preferredAgentId, sessionId, true, { includeSessions: false });
               didArchive = true;
@@ -1063,12 +1087,24 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
             notifySessionLineage({ agentId: preferredAgentId, fromSessionId: sessionId, toSessionId: result.session.id, reason: lineageReason, archived: didArchive, ...(trimCutRounds != null ? { trimCutRounds } : {}) })
               .catch((err) => console.error('[compact_and_resume] lineage notification failed:', err));
           }
-        }).catch((error) => {
+        }).catch(async (error) => {
           console.error(`[compact_and_resume] job ${jobId} failed for session=${sessionId}:`, error);
           trace.mark('failed', {
             errorCode: error?.code || 'compact_failed',
             errorMessage: error instanceof Error ? error.message : String(error),
             jobId,
+          });
+          // K2：detached job 失败必须把交接停在 rotation_failed——挡板留在
+          // 盘上只会滞留至 stale（5 分钟），期间线程域输入全部积压且用户
+          // 无感知。挡板未立的场景（begin 失败已被守卫拦成 no-op）。
+          await getThreadIntegration().failSessionSuccession({
+            agentId: preferredAgentId,
+            sessionId,
+            reason: 'manual_compact_failed',
+            stage: 'compact_or_successor',
+            error: error instanceof Error ? error.message : String(error),
+          }).catch((failure) => {
+            console.error('[compact_and_resume] failed to persist rotation_failed:', failure?.message || failure);
           });
         });
       }, 10);
@@ -1106,18 +1142,27 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       toSessionId: result?.session?.id,
       reason: lineageReason,
     });
+    // R8：推进失败（applied=false + handoff_failed）时线程仍指向原会话，
+    // 归档会挖掉线程的 head——跳过归档并写明原因。
+    const successionBlocked = threadSuccession?.applied === false
+      && threadSuccession?.reason === 'handoff_failed';
 
     // 服务端归档原会话
     let didArchive = false;
     let archiveError = '';
     let archiveResult = null;
     if (archiveOriginal && preferredAgentId) {
-      try {
-        archiveResult = await archivePrebuiltSession(preferredAgentId, sessionId, true, { includeSessions: false });
-        didArchive = true;
-      } catch (err) {
-        archiveError = err instanceof Error ? err.message : String(err);
-        console.error('[compact_and_resume] failed to archive original session:', err);
+      if (successionBlocked) {
+        archiveError = 'thread succession failed; archive skipped to keep the thread head';
+        console.warn(`[compact_and_resume] skipping archive for session=${sessionId}: ${archiveError}`);
+      } else {
+        try {
+          archiveResult = await archivePrebuiltSession(preferredAgentId, sessionId, true, { includeSessions: false });
+          didArchive = true;
+        } catch (err) {
+          archiveError = err instanceof Error ? err.message : String(err);
+          console.error('[compact_and_resume] failed to archive original session:', err);
+        }
       }
     }
 
@@ -1159,6 +1204,17 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     trace.mark('failed', {
       errorCode: error?.code || 'compact_failed',
       errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    // K2：同步分支失败同样落 rotation_failed（begin 已立挡板的场景；
+    // 挡板未立时 failSessionSuccession 在 K3 守卫下 no-op）
+    await getThreadIntegration().failSessionSuccession({
+      agentId: target?.agentId || '',
+      sessionId: target?.sessionId || '',
+      reason: 'manual_compact_failed',
+      stage: 'compact_or_successor',
+      error: error instanceof Error ? error.message : String(error),
+    }).catch((failure) => {
+      console.error('[compact_and_resume] failed to persist rotation_failed:', failure?.message || failure);
     });
     next(error);
   } finally {

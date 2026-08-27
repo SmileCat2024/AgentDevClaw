@@ -25,6 +25,7 @@
 import { getThreadControl } from './thread-controller.js';
 import { ThreadNotFoundError } from './thread-store.js';
 import { isThreadHostSession } from './host-agents.js';
+import { createDeliveryConsumer } from './delivery-consumer.js';
 
 // 判定的唯一定义在 ./host-agents.js（无副作用轻量模块，供 agent 子进程同源
 // 引用）；此处 re-export 维持 server 侧既有消费方（input-gateway 等）不变。
@@ -66,6 +67,9 @@ export function isSuccessionGateFailure(result) {
 export function createThreadIntegration({ control = null } = {}) {
   const { core, board, archive } = control || getThreadControl();
   const findThreadBySession = createFindThreadBySession(core);
+  // R6：投递统一经 delivery-consumer（退避 / 滞留水位告警 / FIFO 顺序），
+  // 三个触发点（apply 后 / runtime ready / gateway append 后）共享同一消费面
+  const deliveryConsumer = createDeliveryConsumer(core);
 
   return {
     core,
@@ -145,7 +149,8 @@ export function createThreadIntegration({ control = null } = {}) {
         console.log(`[thread-integration] head advanced: ${thread.threadId} ${from} -> ${to} (${reason})`);
 
         // successor runtime 已在 compact 流程内等待 ready；投递暂存指令
-        const delivery = await core.deliverPendingCommands(thread.threadId);
+        // （force：advance 换代是新权威事实，不受线程级退避约束）
+        const delivery = await deliveryConsumer.consume(thread.threadId, { force: true });
         return { applied: true, thread: advanced, delivery };
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {
@@ -210,10 +215,11 @@ export function createThreadIntegration({ control = null } = {}) {
     /**
      * 指令追加后的即时投递：head runtime 已就绪时当场送达，
      * 否则保持 pending 等待下一次 head 推进 / 显式 deliver。
+     * 经 delivery-consumer 消费（投递失败进入线程级退避）。
      */
     async tryDeliver(threadId) {
       try {
-        return await core.deliverPendingCommands(threadId);
+        return await deliveryConsumer.consume(threadId);
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {
           return { attempted: 0, delivered: 0, reason: 'thread_not_found', results: [] };
@@ -228,6 +234,7 @@ export function createThreadIntegration({ control = null } = {}) {
      * 而保持 pending 的指令，在 head runtime 真正 ready 时补投——
      * 这是「runtime 未就绪保持 pending，ready 后重试」的最后一个触发点。
      * 就绪会话不是任何线程 head（纯 session，启动期常态）时 no-op，非错误。
+     * force：runtime ready 是新事实，不受此前投递失败的退避约束。
      */
     async handleRuntimeReady(agentId, sessionId) {
       const normalizedAgentId = String(agentId || '').trim();
@@ -236,7 +243,7 @@ export function createThreadIntegration({ control = null } = {}) {
       try {
         const thread = await core.findThreadByHeadSession(normalizedAgentId, readySession);
         if (!thread) return { applied: false, reason: 'no_thread_for_session' };
-        const delivery = await this.tryDeliver(thread.threadId);
+        const delivery = await deliveryConsumer.consume(thread.threadId, { force: true });
         return { applied: true, threadId: thread.threadId, delivery };
       } catch (error) {
         console.error(`[thread-integration] runtime-ready delivery failed for session=${readySession}:`, error?.message || error);

@@ -3,18 +3,26 @@
  *
  * context-rotation-trigger 事件（会话上下文到达阈值并打断当前轮）后，
  * 由被触发的会话定位其所属线程并执行 trim+摘要接力：
- *   1. beginSessionSuccession：写入交接意图，接力期间新指令保持 pending；
+ *   1. beginSessionSuccession：原子写入交接挡板并播种接续恢复指令（R3，
+ *      框架 beginSessionHandoff 同笔事务，幂等键绑移交易）；接力期间
+ *      新指令保持 pending；
  *   2. 退役旧 head runtime：remove-session 会让 runtime 把最新会话状态
  *      flush 落盘——摘要 mirror 读的是 session 文件，若不先 flush，
  *      会基于过期快照生成「没有实质性工作」的失真摘要；
  *   3. compactAndResumeCurrentSession：trim-transcript + 摘要 + 启动 successor；
- *   4. applySessionSuccession：推进线程 head 并投递暂存指令；
- *   5. 追加接力恢复指令并投递给新 head。
+ *   4. applySessionSuccession：推进线程 head 并投递暂存指令（含 1 播种
+ *      的恢复指令）。
  *
  * 判定基准：被触发的会话是否为某活跃线程的 head（findThreadByHeadSession）。
  * 处于线程环境（thread）则触发接力；纯 session 会话无线程，天然 no-op。
  * 与 agent 归属哪个工作空间无关——「哪些 workspace 自动建线程」是
  * integration 层的环境策略（THREAD_HOST_AGENT_IDS），不在本层判定。
+ *
+ * 门禁消费（K11/A9）：begin 未立挡板（closed / held / 在办移交 / head 换代 /
+ * 存储失败）时零副作用退出——不退役 runtime、不写 rotation_failed；挡板
+ * 归在办移交或归档事务属主，本流程没有失败记录的立卷资格。apply 的
+ * applied:false 已由 integration 侧落 rotation_failed（K3 守卫拦截迟到失败），
+ * 此处只退役旧 runtime（触发器已一次性消耗）并如实上报。
  *
  * 失败路径：退役旧 runtime、线程标记 rotation_failed，
  * 由线程恢复入口收拾残局（不重放原始指令）。
@@ -24,14 +32,8 @@
  * threadIntegration，不含任何上层产品语义。
  */
 
-import { WorkThreadCommandKind } from '@agentdevjs/core';
+import { isSuccessionGateFailure } from './thread-integration.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
-
-const ROTATION_RESUME_INSTRUCTION = [
-  '上下文已精简接力。先检查当前工作树、已有变更、测试结果和上一棒摘要，',
-  '确认哪些步骤已经完成；不要重复可能已有副作用的操作，然后继续当前任务。',
-  '需要人工决策或无法安全判断时，明确说明原因。',
-].join('');
 
 export function createThreadRotationService({
   sessionApi,
@@ -53,8 +55,19 @@ export function createThreadRotationService({
     const thread = await threadCore.findThreadByHeadSession(agentId, sessionId);
     if (!thread || thread.status === 'closed') return null;
 
+    const begun = await threadIntegration.beginSessionSuccession({ agentId, sessionId, reason: 'trim' });
+    if (!begun?.applied) {
+      // 挡板未立（gate 拒绝 / 无线程竞态 / 存储失败）：本流程未开始，
+      // 零副作用退出。gate 场景在办状态归其属主，退役 runtime 或写
+      // rotation_failed 都是对别人的移交/归档事务的破坏。
+      return {
+        applied: false,
+        reason: isSuccessionGateFailure(begun) ? 'begin_rejected' : (begun?.reason || 'begin_rejected'),
+        error: begun?.error || null,
+      };
+    }
+
     try {
-      await threadIntegration.beginSessionSuccession({ agentId, sessionId, reason: 'trim' });
       await stopManagedAgent(agentId, sessionId).catch((error) => {
         console.warn(`[thread-rotation] failed to retire pre-rotation runtime for session=${sessionId}:`, error?.message || error);
       });
@@ -70,19 +83,21 @@ export function createThreadRotationService({
       });
       const nextSessionId = cleanSessionText(result?.session?.id);
       if (!nextSessionId) throw new Error('Trim compaction did not create a successor session');
-      await threadIntegration.applySessionSuccession({
+      const applied = await threadIntegration.applySessionSuccession({
         agentId,
         fromSessionId: sessionId,
         toSessionId: nextSessionId,
         reason: 'trim',
       });
-      await threadCore.appendCommand({
-        threadId: thread.threadId,
-        kind: WorkThreadCommandKind.SYSTEM_CONTINUATION,
-        text: ROTATION_RESUME_INSTRUCTION,
-        source: 'thread-context-rotation',
-        idempotencyKey: `thread-context-rotation-${thread.threadId}-${nextSessionId}`,
-      });
+      if (!applied?.applied) {
+        // advanceHead 失败 / head 已被并发推进：integration 侧已按 K3 守卫
+        // 语义落 rotation_failed（迟到失败 no-op），此处不重复写，只退役
+        // 旧 runtime 并如实上报。
+        await stopManagedAgent(agentId, sessionId).catch(() => {});
+        return { applied: false, reason: 'apply_failed', error: applied?.error || applied?.reason || 'unknown' };
+      }
+      // 投递兜底：apply 内部已尝试过一次（integration），此处幂等重试覆盖
+      // 「apply 时 runtime 未 ready、此刻已 ready」的窗口。
       await threadIntegration.tryDeliver(thread.threadId);
       return { applied: true, threadId: thread.threadId, headSessionId: nextSessionId };
     } catch (error) {

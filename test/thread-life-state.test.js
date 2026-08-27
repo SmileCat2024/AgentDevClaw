@@ -77,7 +77,7 @@ describe('synthesizeThreadLifeState (four-state model)', () => {
 
   it('executing: board running wins over pending commands', () => {
     const thread = makeThreadRecord({
-      commands: [{ status: 'pending' }, { status: 'in_flight' }],
+      commands: [{ status: 'pending' }],
     });
     const life = synthesizeThreadLifeState({ thread, boardState: makeBoardState({ status: 'running' }) });
     assert.equal(life.lifeState, 'executing');
@@ -91,9 +91,9 @@ describe('synthesizeThreadLifeState (four-state model)', () => {
     assert.equal(life.lifeState, 'executing');
   });
 
-  it('pending-commands: pending or in_flight commands without running board', () => {
+  it('pending-commands: pending commands without running board', () => {
     const life = synthesizeThreadLifeState({
-      thread: makeThreadRecord({ commands: [{ status: 'delivered' }, { status: 'in_flight' }] }),
+      thread: makeThreadRecord({ commands: [{ status: 'delivered' }, { status: 'pending' }] }),
       boardState: makeBoardState(),
     });
     assert.equal(life.lifeState, 'pending-commands');
@@ -188,7 +188,7 @@ describe('thread routes — lifeState attachment + archive semantics', () => {
     const makeThread = (id, overrides) => ({ threadId: id, agentId: 'programming-helper', status: 'open', commands: [], updatedAt: 1, ...overrides });
     const threads = new Map([
       ['wt-idle', makeThread('wt-idle')],
-      ['wt-busy', makeThread('wt-busy', { commands: [{ status: 'in_flight' }] })],
+      ['wt-busy', makeThread('wt-busy', { commands: [{ status: 'pending' }] })],
     ]);
     const boardStates = new Map([['wt-busy', { status: 'running', updatedAt: 5 }]]);
     control = {

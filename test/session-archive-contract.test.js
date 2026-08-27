@@ -38,6 +38,34 @@ describe('archive-and-replace contract', () => {
     assert.match(route, /succeeded:\s*archiveOriginal\s*\?\s*didArchive\s*:\s*null/);
   });
 
+  it('manual compact honors the thread succession lifecycle (R8 / K2 / K14)', () => {
+    const start = sessionRoutes.indexOf("app.post('/protoclaw/context_handoffs/compact_and_resume'");
+    const end = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/activate'", start);
+    const route = sessionRoutes.slice(start, end);
+
+    // K14：线程历史棒次会话显式拒绝 compact（静默 no-op 会产生孤儿 successor）
+    assert.match(route, /findThreadBySession[\s\S]*?session_not_head/);
+
+    // R8：线程域手动接力退役旧 head runtime（flush 语义），且只在挡板立起
+    // 后执行——纯 session 的手动 compact 不得被动停 runtime
+    assert.match(route, /successionGate\.applied[\s\S]*?stopManagedAgent\(preferredAgentId,\s*sessionId\)/);
+
+    // K2：detached job 失败必须落 rotation_failed（挡板不得滞留至 stale）
+    const detachedCatch = route.slice(route.indexOf('.catch(async (error) => {'));
+    assert.ok(detachedCatch.length > 1, 'detached job failure path must exist');
+    assert.match(detachedCatch, /failSessionSuccession/);
+  });
+
+  it('does not archive the original session when thread succession fails to land', () => {
+    const start = sessionRoutes.indexOf("app.post('/protoclaw/context_handoffs/compact_and_resume'");
+    const end = sessionRoutes.indexOf("app.post('/protoclaw/prebuilt_sessions/activate'", start);
+    const route = sessionRoutes.slice(start, end);
+    // 推进失败（applied=false + handoff_failed）时线程仍指向原会话，
+    // 归档会挖掉线程的 head——跳过归档并写明原因。
+    assert.match(route, /successionBlocked/);
+    assert.match(route, /thread succession failed[^']*archive skipped/);
+  });
+
   it('does not use the unverifiable live shortcut for archive-and-replace', () => {
     // live 命令捷径（/compact-summary-resume 进程内路径）已整体移除：
     // 所有压缩续接（含归档替换）一律走 server 同步端点。

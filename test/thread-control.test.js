@@ -359,8 +359,13 @@ describe('thread control assembly (core = WorkThread)', () => {
     const { core } = makeControl(root);
     const thread = await core.start({ sessionRef: { agentId: 'a', sessionId: 's1' } });
 
+    // K23：fromSessionId 必填——不携带来源指认的推进直接 400
     await assert.rejects(
-      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', expectedRevision: 999 }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2' }),
+      (err) => err.code === 'invalid_request',
+    );
+    await assert.rejects(
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1', expectedRevision: 999 }),
       ThreadRevisionConflictError,
     );
     await assert.rejects(
@@ -368,19 +373,19 @@ describe('thread control assembly (core = WorkThread)', () => {
       (err) => err.code === 'head_mismatch',
     );
 
-    const advanced = await core.advanceHead({ threadId: thread.threadId, toSessionId: 's2' });
+    const advanced = await core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's1' });
     await assert.rejects(
-      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2' }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's2', fromSessionId: 's2' }),
       (err) => err.code === 'already_head',
     );
     await assert.rejects(
-      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's1' }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's1', fromSessionId: 's2' }),
       (err) => err.code === 'duplicate_session',
     );
 
     await core.closeThread(thread.threadId);
     await assert.rejects(
-      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's3' }),
+      () => core.advanceHead({ threadId: thread.threadId, toSessionId: 's3', fromSessionId: 's2' }),
       (err) => err.code === 'thread_closed',
     );
     assert.equal(advanced.status, 'open'); // close 前的返回值不受影响
@@ -1083,19 +1088,24 @@ describe('pendingSuccession handoff guard', () => {
     assert.equal(blocked.delivered, 0);
     assert.equal(blocked.reason, 'handoff_in_progress');
     let record = await core.getThread(thread.threadId);
+    // R3：begin 挡板事务内播种接续恢复指令；本用例用户指令先于 begin 落入，
+    // 故播种指令排其后
+    assert.equal(record.commands[0].source, 'ui');
+    assert.equal(record.commands[1].source, 'thread-succession');
     assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
     assert.equal(record.pendingSuccession.fromSessionId, 'hd-s1');
 
-    // head 推进：同一次落盘清除交接意图，随后投递恢复
+    // head 推进：同一次落盘清除交接意图，随后投递恢复（用户指令 + 播种指令）
     const outcome = await integration.applySessionSuccession({
       agentId: 'coder', fromSessionId: 'hd-s1', toSessionId: 'hd-s2', reason: 'trim',
     });
     assert.equal(outcome.applied, true);
-    assert.equal(outcome.delivery.delivered, 1);
+    assert.equal(outcome.delivery.delivered, 2);
 
     record = await core.getThread(thread.threadId);
     assert.equal(record.pendingSuccession, null);
     assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
+    assert.equal(record.commands[1].status, ThreadCommandStatus.DELIVERED);
   });
 
   test('beginSessionSuccession is a no-op for non-host agents and orphan sessions', async () => {
@@ -1156,15 +1166,16 @@ describe('InputGateway (unified user input routing)', () => {
     assert.ok(result.commandId);
 
     const record = await core.getThread(thread.threadId);
-    assert.equal(record.commands[0].status, ThreadCommandStatus.PENDING);
-    assert.equal(record.commands[0].text, '请继续');
+    // R3：播种的恢复指令在 commands[0]，用户指令在其后
+    const userCommand = record.commands.find((c) => c.text === '请继续');
+    assert.equal(userCommand.status, ThreadCommandStatus.PENDING);
   });
 
-  test('no handoff: passthrough delivery to viewer user-turn', async () => {
-    const { core, integration } = makeFixture();
-    await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
+  test('no thread found: passthrough delivery to viewer user-turn', async () => {
+    const { integration } = makeFixture();
 
-    // direct 路径验证网关透传契约：stub fetch 模拟 viewer 原生结果
+    // direct 路径验证网关透传契约：stub fetch 模拟 viewer 原生结果。
+    // R6 后线程域一律入箱，direct 仅保留给纯 session（无线程 / 非 host）。
     const fetchImpl = async (_url, init) => ({
       ok: true,
       json: async () => ({
@@ -1192,15 +1203,21 @@ describe('InputGateway (unified user input routing)', () => {
     );
   });
 
-  test('image-only input during handoff fails explicitly instead of being lost', async () => {
+  test('image input during handoff is carried into the inbox (K8)', async () => {
     const { core, integration } = makeFixture();
-    await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
+    const thread = await core.start({ sessionRef: { agentId: 'programming-helper', sessionId: 'ig-s1' } });
     await integration.beginSessionSuccession({ agentId: 'programming-helper', sessionId: 'ig-s1', reason: 'trim' });
 
-    await assert.rejects(
-      deliverUserInput({ viewerAgentId: 'viewer-ig-1', text: ' ', images: ['/tmp/a.png'] }, { integration }),
-      (err) => err.code === 'thread_handoff_images_unsupported',
+    // R6/K8：交接窗口的图片随指令入箱，投递时经 bridge 转给 user-turn。
+    const result = await deliverUserInput(
+      { viewerAgentId: 'viewer-ig-1', text: ' ', images: ['/tmp/a.png'] },
+      { integration },
     );
+    assert.equal(result.delivery, 'thread_queued');
+    const record = await core.getThread(thread.threadId);
+    const imageCommand = record.commands.find((c) => Array.isArray(c.images) && c.images.length > 0);
+    assert.ok(imageCommand);
+    assert.deepEqual(imageCommand.images, ['/tmp/a.png']);
   });
 
   test('race closure: delivers immediately when succession lands between route resolution and append', async () => {
@@ -1238,14 +1255,16 @@ describe('InputGateway (unified user input routing)', () => {
     // 无补投递时该指令会永远 pending（applySessionSuccession 已投递过，
     // 之后无人触发）；补投递后当场送达新 head。
     assert.equal(result.delivery, 'thread_queued');
-    assert.equal(result.deliveryAttempt?.delivered, 1);
-    assert.equal(turns.length, 1);
-    assert.equal(turns[0].agentId, 'viewer-ig-2');
-    assert.equal(turns[0].text, '请继续');
-    assert.equal(turns[0].sourceRef, result.commandId);
+    // R3 播种指令已在 advanceHead 清挡板时投出；补投递把竞态期间落入的
+    // 用户指令和播种指令一并送出（两条 pending）。
+    assert.equal(result.deliveryAttempt?.delivered, 2);
+    assert.equal(turns.length, 2);
+    const userTurn = turns.find((t) => t.text === '请继续');
+    assert.equal(userTurn.agentId, 'viewer-ig-2');
+    assert.equal(userTurn.sourceRef, result.commandId);
 
     const record = await core.getThread(thread.threadId);
     assert.equal(record.headSessionId, 'ig-s2');
-    assert.equal(record.commands[0].status, ThreadCommandStatus.DELIVERED);
+    assert.equal(record.commands.filter((c) => c.status === ThreadCommandStatus.DELIVERED).length, 2);
   });
 });
