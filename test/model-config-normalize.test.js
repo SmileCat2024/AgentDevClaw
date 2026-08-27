@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { resolveHostTarget } from '../server/shared/operation-target.js';
 
 import {
@@ -10,6 +13,7 @@ import {
   normalizeSpeechPreset,
   DEFAULT_SPEECH_MODEL,
   normalizeProgrammingHelperProcessMode,
+  readAgentModelPresets,
 } from '../server/routes/model-config.js';
 
 describe('model config host target boundary', () => {
@@ -32,6 +36,37 @@ describe('normalizeProgrammingHelperProcessMode', () => {
     assert.equal(normalizeProgrammingHelperProcessMode(''), null);
     assert.equal(normalizeProgrammingHelperProcessMode('global'), null);
     assert.equal(normalizeProgrammingHelperProcessMode(null), null);
+  });
+});
+
+describe('readAgentModelPresets', () => {
+  it('reads a workspace identity override from its host metadata registry', async () => {
+    const rootDir = join(tmpdir(), `model-config-agent-${Date.now()}`);
+    const agentDir = join(rootDir, 'prebuilt-agents', 'official', 'programming-helper');
+    const configDir = join(rootDir, '.agentdev', 'agent-configs');
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(agentDir, 'metadata.json'), JSON.stringify({
+      identities: [{ id: 'coder', modelPresets: { default: 'host-default' } }],
+    }));
+    writeFileSync(join(configDir, 'coder.json'), JSON.stringify({
+      modelPresets: { default: 'user-coder' },
+    }));
+
+    try {
+      assert.deepEqual(await readAgentModelPresets('coder', rootDir), { default: 'user-coder' });
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null for an unknown identity instead of throwing on missing metadata', async () => {
+    const rootDir = join(tmpdir(), `model-config-agent-${Date.now()}`);
+    try {
+      assert.equal(await readAgentModelPresets('missing-agent', rootDir), null);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -384,6 +384,42 @@ export function convertAudioToWav(inputBuffer) {
 // never derive one from page focus. Agent-specific preset routes below require
 // their explicit agentId and only write that Agent's user config file.
 
+/**
+ * Read an agent's model preset overrides.
+ *
+ * Some workspace identities (currently `coder`) are declared inside their
+ * host's metadata.json and do not have a metadata file of their own. Missing
+ * identity metadata is therefore resolved through the host identity registry,
+ * rather than treated as an I/O error.
+ *
+ * @param {string} agentId
+ * @param {string} rootDir - Test seam; defaults to the project root.
+ * @returns {Promise<object|null>} merged metadata/user presets, or null when
+ *   the agent and its host identity are unknown.
+ */
+export async function readAgentModelPresets(agentId, rootDir = PROJECT_ROOT) {
+  const metaPath = path.join(rootDir, 'prebuilt-agents', 'official', agentId, 'metadata.json');
+  let meta = await readJsonSafe(metaPath, null);
+  if (!meta) {
+    const hostMeta = await readJsonSafe(
+      path.join(rootDir, 'prebuilt-agents', 'official', 'programming-helper', 'metadata.json'),
+      null,
+    );
+    const identity = Array.isArray(hostMeta?.identities)
+      ? hostMeta.identities.find((entry) => entry.id === agentId)
+      : null;
+    if (!identity) return null;
+    meta = identity;
+  }
+
+  const userConfigPath = path.join(rootDir, '.agentdev', 'agent-configs', `${agentId}.json`);
+  const userConfig = await readJsonSafe(userConfigPath, {}) || {};
+  return {
+    ...(meta.modelPresets || {}),
+    ...(userConfig.modelPresets || {}),
+  };
+}
+
 export function setupModelConfigRoutes(app, express) {
   app.get('/protoclaw/model_config', async (_req, res, next) => {
     try {
@@ -579,29 +615,10 @@ export function setupModelConfigRoutes(app, express) {
       if (!agentId || typeof agentId !== 'string') {
         return res.status(400).json({ error: 'agentId is required' });
       }
-      const metaPath = path.join(PROJECT_ROOT, 'prebuilt-agents', 'official', agentId, 'metadata.json');
-      let meta = await readJson(metaPath);
-      if (!meta) {
-        // 工作空间内身份（如 programming-helper 的 coder）没有独立 agent 目录：
-        // 校验宿主 metadata 的 identities 后按无 meta 后备处理，用户配置仍读
-        // .agentdev/agent-configs/<identityId>.json（与 PUT / 运行时读取同一约定）。
-        const hostMeta = await readJson(path.join(PROJECT_ROOT, 'prebuilt-agents', 'official', 'programming-helper', 'metadata.json'));
-        const identity = Array.isArray(hostMeta?.identities)
-          ? hostMeta.identities.find((entry) => entry.id === agentId)
-          : null;
-        if (!identity) {
-          return res.status(404).json({ error: 'Agent metadata not found' });
-        }
-        meta = {};
+      const modelPresets = await readAgentModelPresets(agentId);
+      if (!modelPresets) {
+        return res.status(404).json({ error: 'Agent metadata not found' });
       }
-
-      const userConfigPath = path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${agentId}.json`);
-      const userConfig = await readJsonSafe(userConfigPath, {}) || {};
-
-      const modelPresets = {
-        ...(meta.modelPresets || {}),
-        ...(userConfig.modelPresets || {})
-      };
 
       res.json({ agentId, modelPresets });
     } catch (error) { next(error); }
