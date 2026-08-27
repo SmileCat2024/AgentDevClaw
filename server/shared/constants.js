@@ -1,5 +1,6 @@
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 
@@ -23,6 +24,24 @@ export const VIEWER_ORIGIN = `http://127.0.0.1:${VIEWER_PORT}`;
 export function resolveUserDataDir(env = process.env) {
   const override = typeof env.AGENTDEV_DATA_DIR === 'string' ? env.AGENTDEV_DATA_DIR.trim() : '';
   return override ? path.resolve(override) : path.join(os.homedir(), '.agentdev', 'AgentDevClaw');
+}
+
+// 实例唯一的 ViewerWorker IPC 管道名。默认管道是全局固定名，同机多实例
+// （AGENTDEV_DATA_DIR 隔离数据目录时）必须各自派生独立管道，否则后启动实例的
+// 运行时会注册进先启动实例的 ViewerWorker（已实测发生）。仅在解析结果为
+// Claw 默认数据根时沿用历史全局名，保证既有单实例行为零变化。
+export function resolveInstanceUdsPath(env = process.env) {
+  const explicit = typeof env.AGENTDEV_UDS_PATH === 'string' ? env.AGENTDEV_UDS_PATH.trim() : '';
+  if (explicit) return explicit;
+  const legacy = process.platform === 'win32'
+    ? '\\\\.\\pipe\\agentdev-viewer'
+    : '/tmp/agentdev-viewer.sock';
+  const dataRoot = resolveUserDataDir(env);
+  if (dataRoot === path.join(os.homedir(), '.agentdev', 'AgentDevClaw')) return legacy;
+  const suffix = crypto.createHash('sha1').update(dataRoot).digest('hex').slice(0, 10);
+  return process.platform === 'win32'
+    ? `\\\\.\\pipe\\agentdev-viewer-${suffix}`
+    : `/tmp/agentdev-viewer-${suffix}.sock`;
 }
 
 export const USER_DATA_ROOT = resolveUserDataDir();

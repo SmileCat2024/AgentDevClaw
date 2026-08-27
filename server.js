@@ -39,7 +39,7 @@ import {
   FEATURE_MANIFEST_NAME, GROUP_CHATS_ROOT,
   WORKSPACE_SESSION_AGENT_IDS, HIDDEN_PREBUILT_AGENT_IDS,
   PROJECT_DOCSET_SUBPATH, MODEL_CONFIG_PATH, MODEL_PRESETS_PATH,
-  APP_ORIGIN,
+  APP_ORIGIN, resolveInstanceUdsPath,
 } from './server/shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log, getAssemblyWorkspaceDir, normalizeClientAgentId, parseListField } from './server/shared/string-helpers.js';
 import { compareSemver, uniqueStrings } from './server/shared/feature-utils.js';
@@ -141,7 +141,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const viewerWorker = new ViewerWorker(VIEWER_PORT, false, process.env.AGENTDEV_UDS_PATH);
+const viewerWorker = new ViewerWorker(VIEWER_PORT, false, resolveInstanceUdsPath());
 const clawMcp = new ClawMCPServer();
 const tunnelManager = createTunnelManager();
 let remoteClawConnector = null;

@@ -6,6 +6,7 @@ import {
   NO_SESSION_TOKEN,
   PROCESS_EXIT_WAIT_MS, RUNTIME_READY_WAIT_MS,
   CALL_EXECUTION_TIMEOUT_MS,
+  resolveInstanceUdsPath,
 } from '../shared/constants.js';
 import {
   sanitizeSessionFragment, cleanSessionText, sanitizeSpawnEnv, childProcessEnv,
@@ -35,11 +36,6 @@ import {
 import { readWorkspaceState, writeWorkspaceState } from './workspace.js';
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { addOpenSession } from '../shared/open-sessions-tracker.js';
-
-// Platform-aware default UDS path for ViewerWorker IPC
-export const DEFAULT_UDS_PATH = process.platform === 'win32'
-  ? '\\\\.\\pipe\\agentdev-viewer'
-  : '/tmp/agentdev-viewer.sock';
 
 /**
  * Resolve process placement without deriving a session workspace from the
@@ -359,7 +355,7 @@ export function createAgentStartupFns(deps) {
         ...childProcessEnv(),
         AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
         AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
-        AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || DEFAULT_UDS_PATH,
+        AGENTDEV_UDS_PATH: resolveInstanceUdsPath(),
         PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
         PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
@@ -528,7 +524,7 @@ export function createAgentStartupFns(deps) {
         ...childProcessEnv(),
         AGENTDEV_DEBUG_TRANSPORT: 'viewer-worker',
         AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
-        AGENTDEV_UDS_PATH: process.env.AGENTDEV_UDS_PATH || DEFAULT_UDS_PATH,
+        AGENTDEV_UDS_PATH: resolveInstanceUdsPath(),
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
         PROTOCLAW_PREBUILT_SESSION_ID: normalizedSessionId,
         PROTOCLAW_ASSEMBLY_RUNTIME: '1',
