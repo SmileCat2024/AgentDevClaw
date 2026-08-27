@@ -36,8 +36,8 @@ import {
   pendingCommands,
   appendCommand,
   pruneCommands,
-  ThreadCommandStatus,
-} from '../server/thread-control/thread-inbox.js';
+  WorkThreadCommandStatus as ThreadCommandStatus,
+} from '@agentdevjs/core';
 import { UserTurnDeliveryError, submitUserTurn } from '../server/shared/user-turn.js';
 
 function makeTempRoot() {
@@ -996,7 +996,7 @@ describe('ThreadIntegration (coder host gating)', () => {
   });
 });
 
-describe('thread-inbox helpers', () => {
+describe('WorkThread inbox helpers (framework @agentdevjs/core)', () => {
   test('pendingCommands sorts by createdAt then commandId', () => {
     const record = {
       commands: [
