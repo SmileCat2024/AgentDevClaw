@@ -16,7 +16,12 @@
  * 合成函数对 closed 返回 lifeState 'closed' 供调用方过滤。
  */
 
-const PENDING_COMMAND_STATUSES = new Set(['pending', 'in_flight']);
+import { WorkThreadCommandStatus } from '@agentdevjs/core';
+
+const PENDING_COMMAND_STATUSES = new Set([
+  WorkThreadCommandStatus.PENDING,
+  WorkThreadCommandStatus.IN_FLIGHT,
+]);
 
 /**
  * @param {object} params

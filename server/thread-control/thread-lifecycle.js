@@ -6,6 +6,9 @@
  * 关联 runtime 并停止后续执行。
  */
 
+import { WorkThreadCommandStatus } from '@agentdevjs/core';
+import { createFindThreadBySession } from './thread-integration.js';
+
 function cleanId(value) {
   return String(value || '').trim();
 }
@@ -27,21 +30,7 @@ export function createThreadLifecycleService({
     throw new Error('createThreadLifecycleService requires thread control');
   }
 
-  async function findThreadBySession(agentId, sessionId) {
-    const normalizedAgentId = cleanId(agentId);
-    const normalizedSessionId = cleanId(sessionId);
-    if (!normalizedAgentId || !normalizedSessionId) return null;
-    const summaries = await core.listThreads({ agentId: normalizedAgentId });
-    for (const summary of summaries) {
-      if (!summary?.threadId) continue;
-      const thread = await core.getThread(summary.threadId);
-      if (Array.isArray(thread?.sessionChain)
-        && thread.sessionChain.some((entry) => entry?.sessionId === normalizedSessionId)) {
-        return thread;
-      }
-    }
-    return null;
-  }
+  const findThreadBySession = createFindThreadBySession(core);
 
   async function archiveThread(threadId, { reason = 'user_archive' } = {}) {
     const normalizedThreadId = cleanId(threadId);
@@ -88,11 +77,11 @@ export function createThreadLifecycleService({
     }
 
     for (const command of Array.isArray(thread.commands) ? thread.commands : []) {
-      if (command?.status !== 'pending') continue;
+      if (command?.status !== WorkThreadCommandStatus.PENDING) continue;
       try {
         if (typeof core.cancelCommand !== 'function') continue;
         const cancelled = await core.cancelCommand(normalizedThreadId, command.commandId);
-        if (cancelled?.status === 'cancelled') cleanup.commandsCancelled += 1;
+        if (cancelled?.status === WorkThreadCommandStatus.CANCELLED) cleanup.commandsCancelled += 1;
       } catch (error) {
         cleanup.failures.push({ stage: 'cancel_command', commandId: command.commandId, error: String(error?.message || error) });
       }

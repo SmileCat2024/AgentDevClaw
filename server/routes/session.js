@@ -31,7 +31,7 @@ import { attachOperationMetadata, readOperationMetadata } from '../shared/operat
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
-import { getThreadIntegration } from '../thread-control/thread-integration.js';
+import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 
 // server.js lives at project root; this module is at server/routes/session.js
 const __filename = fileURLToPath(import.meta.url);
@@ -1011,11 +1011,19 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
     // 投向即将退役的旧 head。公共入口一处标记，detached / 同步分支共用；
     // applySessionSuccession 推进 head 时原子清除。非线程宿主 no-op。
-    await getThreadIntegration().beginSessionSuccession({
+    // 挡板写入失败即中断：放行会让交接窗口内的新指令直投即将退役的旧
+    // head 并随其退役丢失——显式失败优于静默丢失。
+    const successionGate = await getThreadIntegration().beginSessionSuccession({
       agentId: preferredAgentId,
       sessionId,
       reason: lineageReason,
     });
+    if (isSuccessionGateFailure(successionGate)) {
+      const error = new Error(`Thread handoff gate write failed for session=${sessionId}: ${successionGate.error || 'unknown error'}`);
+      error.code = 'thread_handoff_gate_failed';
+      error.status = 500;
+      throw error;
+    }
 
     if (detached) {
       const jobId = `compact-resume-${Date.now()}-${randomUUID().slice(0, 8)}`;

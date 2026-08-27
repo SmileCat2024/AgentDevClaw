@@ -30,10 +30,12 @@ import { isThreadHostSession } from './host-agents.js';
 // 引用）；此处 re-export 维持 server 侧既有消费方（input-gateway 等）不变。
 export { isThreadHostSession };
 
-export function createThreadIntegration({ control = null } = {}) {
-  const { core, board, archive } = control || getThreadControl();
-
-  async function findThreadBySession(agentId, sessionId) {
+/**
+ * 按会话全链匹配查找线程（遍历 sessionChain 而非仅 head）。
+ * thread-lifecycle 等消费方经此工厂共享同一实现，避免逐字复刻。
+ */
+export function createFindThreadBySession(core) {
+  return async function findThreadBySession(agentId, sessionId) {
     const normalizedAgentId = String(agentId || '').trim();
     const normalizedSessionId = String(sessionId || '').trim();
     if (!normalizedAgentId || !normalizedSessionId) return null;
@@ -47,7 +49,23 @@ export function createThreadIntegration({ control = null } = {}) {
       }
     }
     return null;
-  }
+  };
+}
+
+/**
+ * beginSessionSuccession 失败判定：applied=false 且 reason='error' 表示
+ * 交接挡板写入本身失败，消费方（compact / trim 接续入口）应据此中断流程；
+ * no_thread_for_session / invalid_session 是合法 no-op，不算失败。
+ */
+export function isSuccessionGateFailure(result) {
+  return Boolean(result)
+    && result.applied === false
+    && result.reason === 'error';
+}
+
+export function createThreadIntegration({ control = null } = {}) {
+  const { core, board, archive } = control || getThreadControl();
+  const findThreadBySession = createFindThreadBySession(core);
 
   return {
     core,

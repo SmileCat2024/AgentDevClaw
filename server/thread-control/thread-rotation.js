@@ -24,6 +24,7 @@
  * threadIntegration，不含任何上层产品语义。
  */
 
+import { WorkThreadCommandKind } from '@agentdevjs/core';
 import { cleanSessionText } from '../shared/string-helpers.js';
 
 const ROTATION_RESUME_INSTRUCTION = [
@@ -77,7 +78,7 @@ export function createThreadRotationService({
       });
       await threadCore.appendCommand({
         threadId: thread.threadId,
-        kind: 'system_continuation',
+        kind: WorkThreadCommandKind.SYSTEM_CONTINUATION,
         text: ROTATION_RESUME_INSTRUCTION,
         source: 'thread-context-rotation',
         idempotencyKey: `thread-context-rotation-${thread.threadId}-${nextSessionId}`,

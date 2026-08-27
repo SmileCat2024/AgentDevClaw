@@ -29,6 +29,7 @@ import { createThreadControl } from '../server/thread-control/thread-controller.
 import {
   createThreadIntegration,
   isThreadHostSession,
+  isSuccessionGateFailure,
 } from '../server/thread-control/thread-integration.js';
 import { deliverUserInput } from '../server/thread-control/input-gateway.js';
 import { managedAgents } from '../server/shared/agent-access.js';
@@ -1036,6 +1037,19 @@ describe('WorkThread inbox helpers (framework @agentdevjs/core)', () => {
     assert.equal(appendCommand(record, c1).duplicate, false);
     assert.equal(appendCommand(record, c2).duplicate, false);
     assert.equal(record.commands.length, 2);
+  });
+});
+
+describe('isSuccessionGateFailure (交接挡板失败判定)', () => {
+  test('only applied=false + reason=error counts as failure', () => {
+    assert.equal(isSuccessionGateFailure({ applied: false, reason: 'error', error: 'disk full' }), true);
+    // 合法 no-op 不是失败
+    assert.equal(isSuccessionGateFailure({ applied: false, reason: 'no_thread_for_session' }), false);
+    assert.equal(isSuccessionGateFailure({ applied: false, reason: 'invalid_session' }), false);
+    assert.equal(isSuccessionGateFailure({ applied: true, threadId: 't1' }), false);
+    // 异常形态防御
+    assert.equal(isSuccessionGateFailure(null), false);
+    assert.equal(isSuccessionGateFailure(undefined), false);
   });
 });
 
