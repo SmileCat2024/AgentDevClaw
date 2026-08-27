@@ -468,18 +468,17 @@
     // 模型轮转（capability_invoke 通用通路）
     const rotEnabled = event.target?.closest?.('[data-rotation-enabled]');
     if (rotEnabled) { void updateRotationConfig({ enabled: rotEnabled.checked }); return; }
-    const rotStrong = event.target?.closest?.('[data-rotation-strong]');
-    if (rotStrong && rotStrong.value !== '') { void updateRotationConfig({ strongPreset: rotStrong.value }); return; }
-    const rotStrongEffort = event.target?.closest?.('[data-rotation-strong-effort]');
-    if (rotStrongEffort) { void updateRotationConfig({ strongEffort: rotStrongEffort.value === '' ? null : rotStrongEffort.value }); return; }
-    const rotCheap = event.target?.closest?.('[data-rotation-cheap]');
-    if (rotCheap && rotCheap.value !== '') { void updateRotationConfig({ cheapPreset: rotCheap.value }); return; }
-    const rotCheapEffort = event.target?.closest?.('[data-rotation-cheap-effort]');
-    if (rotCheapEffort) { void updateRotationConfig({ cheapEffort: rotCheapEffort.value === '' ? null : rotCheapEffort.value }); return; }
     const rotStrongSteps = event.target?.closest?.('[data-rotation-strong-steps]');
     if (rotStrongSteps) { void updateRotationConfig({ strongSteps: Number(rotStrongSteps.value) }); return; }
     const rotCheapSteps = event.target?.closest?.('[data-rotation-cheap-steps]');
-    if (rotCheapSteps) { void updateRotationConfig({ cheapSteps: Number(rotCheapSteps.value) }); return; }
+    if (rotCheapSteps) { void updateRotationConfig({ cheapSteps: Number(rotCheapSteps.value) }); }
+  });
+
+  // 轮转模型/档位下拉：触发按钮打开 body 级浮层（ccb-model-dropdown 同款），
+  // 选中项在浮层内直接提交，见 openRotationMenu。
+  featurePanelBody.addEventListener('click', (event) => {
+    const menuBtn = event.target?.closest?.('[data-rotation-menu]');
+    if (menuBtn && !menuBtn.disabled) openRotationMenu(menuBtn);
   });
 
   // 外部入口（如 slash 菜单经 capability_invoke）修改了本面板对应的
@@ -530,15 +529,6 @@
     const values = protocol === 'anthropic' ? ROTATION_ANTHROPIC_EFFORTS : ROTATION_OPENAI_EFFORTS;
     return [{ label: zh ? '默认（跟随 preset）' : 'Default (preset)', value: '' }]
       .concat(values.map(function (v) { return { label: v, value: v }; }));
-  }
-
-  function rotationPresetOptions(zh) {
-    const r = getRotation();
-    return [{ label: zh ? '（选择模型）' : '(pick model)', value: '' }]
-      .concat(r.presets.map(function (p) {
-        const name = p.name || p.model;
-        return { label: String(name), value: String(name) };
-      }));
   }
 
   async function loadRotationPresets() {
@@ -621,12 +611,111 @@
     _rotationPollTimer = timer;
   }
 
-  function renderRotationSelect(attribute, value, options, disabled) {
-    const opts = options.map(function (o) {
-      return '<option value="' + esc(String(o.value)) + '"' + (String(o.value) === String(value) ? ' selected' : '') + '>'
-        + esc(String(o.label)) + '</option>';
-    }).join('');
-    return '<select class="session-controls-rotation-select" ' + attribute + (disabled ? ' disabled' : '') + '>' + opts + '</select>';
+  // 与输入框模型切换（input-model-switcher.js）同配方：触发按钮 + body 级
+  // .ccb-model-dropdown 浮层（fixed 定位、active 高亮、context 长度徽标）。
+  // preset 项来自 /protoclaw/model_config 活清单；effort 项按所选 preset 协议
+  // 出词表。选中即走 capability invoke，面板随后重渲染按钮标签。
+  let _rotationMenuEl = null;
+
+  const ROTATION_VISION_SVG = '<svg class="ccb-md-vision" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ROTATION_CHEVRON_SVG = '<svg class="scr-trigger-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+
+  function renderRotationTrigger(fieldKey, value, disabled, title, placeholder) {
+    return '<button type="button" class="session-controls-rotation-trigger" data-rotation-menu="' + fieldKey + '"'
+      + ' title="' + esc(title) + '"' + (disabled ? ' disabled' : '') + '>'
+      + '<span class="scr-trigger-label">' + esc(value || placeholder) + '</span>'
+      + ROTATION_CHEVRON_SVG
+      + '</button>';
+  }
+
+  function _rotationMenuItemHtml(value, label, active, vision, ctxText) {
+    return '<div class="ccb-md-item' + (active ? ' active' : '') + '" data-value="' + esc(String(value)) + '">'
+      + '<span class="ccb-md-left">'
+      + '<span class="ccb-md-name">' + esc(String(label)) + '</span>'
+      + (vision ? ROTATION_VISION_SVG : '')
+      + '</span>'
+      + '<span class="ccb-md-right">'
+      + (ctxText ? '<span class="ccb-md-ctx">' + esc(ctxText) + '</span>' : '')
+      + '</span>'
+      + '</div>';
+  }
+
+  function _closeRotationMenu() {
+    if (!_rotationMenuEl) return;
+    const el = _rotationMenuEl;
+    _rotationMenuEl = null;
+    el.classList.remove('visible');
+    setTimeout(function () { el.remove(); }, 150);
+  }
+
+  function _rotationMenuOutsideClick(event) {
+    if (!_rotationMenuEl) return;
+    if (!_rotationMenuEl.contains(event.target) && !event.target.closest?.('[data-rotation-menu]')) {
+      _closeRotationMenu();
+    } else {
+      document.addEventListener('click', _rotationMenuOutsideClick, { once: true });
+    }
+  }
+
+  function _placeRotationMenu(el, rect) {
+    document.body.appendChild(el);
+    el.style.left = rect.left + 'px';
+    el.style.top = '0px';
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - w - 8));
+    const top = rect.top - h - 4 >= 8
+      ? rect.top - h - 4
+      : Math.min(rect.bottom + 4, Math.max(8, window.innerHeight - h - 8));
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    requestAnimationFrame(function () { el.classList.add('visible'); });
+  }
+
+  function openRotationMenu(btn) {
+    _closeRotationMenu();
+    const fieldKey = btn.dataset.rotationMenu;
+    const isPreset = fieldKey === 'strongPreset' || fieldKey === 'cheapPreset';
+    const slot = fieldKey === 'strongPreset' || fieldKey === 'strongEffort' ? 'strong' : 'cheap';
+    const r = getRotation();
+    const st = r.status || {};
+    const zh = currentLanguage !== 'en';
+
+    let html = '';
+    if (isPreset) {
+      const presets = r.presets.length ? r.presets
+        : (st[slot + 'Preset'] ? [{ name: st[slot + 'Preset'] }] : []);
+      presets.forEach(function (p) {
+        const name = String(p.name || p.model || '');
+        if (!name) return;
+        const ctxText = p.contextLength && p.contextLength > 0 ? Math.round(p.contextLength / 1000) + 'K' : '';
+        html += _rotationMenuItemHtml(name, name, name === st[slot + 'Preset'], p.vision === true, ctxText);
+      });
+    } else {
+      rotationEffortOptions(st[slot + 'Preset'], zh).forEach(function (o) {
+        html += _rotationMenuItemHtml(o.value, o.label, String(o.value) === String(st[slot + 'Effort'] || ''), false, '');
+      });
+    }
+
+    const el = document.createElement('div');
+    el.className = 'ccb-model-dropdown';
+    el.innerHTML = '<div class="ccb-model-dropdown-list">' + html + '</div>';
+
+    el.addEventListener('click', function (event) {
+      const itemEl = event.target.closest && event.target.closest('.ccb-md-item');
+      if (!itemEl) return;
+      const value = itemEl.dataset.value;
+      _closeRotationMenu();
+      const patch = {};
+      patch[fieldKey] = isPreset ? value : (value === '' ? null : value);
+      void updateRotationConfig(patch);
+    });
+
+    _rotationMenuEl = el;
+    _placeRotationMenu(el, btn.getBoundingClientRect());
+    setTimeout(function () {
+      document.addEventListener('click', _rotationMenuOutsideClick, { once: true });
+    }, 0);
   }
 
   function renderRotationStepsInput(attribute, value, disabled) {
@@ -646,8 +735,20 @@
       '<div class="force-continuation-candidate-label">', esc(title), '</div>',
       '<div class="force-continuation-candidate-desc">', esc(help), '</div>',
       '<div class="session-controls-rotation-controls">',
-      renderRotationSelect('data-rotation-' + slot, presetName || '', rotationPresetOptions(zh), disabled),
-      renderRotationSelect('data-rotation-' + slot + '-effort', effort || '', rotationEffortOptions(presetName, zh), disabled),
+      renderRotationTrigger(
+        slot + 'Preset',
+        presetName || '',
+        disabled,
+        zh ? '选择模型' : 'Pick model',
+        zh ? '（选择模型）' : '(pick model)',
+      ),
+      renderRotationTrigger(
+        slot + 'Effort',
+        effort || (zh ? '默认档位' : 'Default'),
+        disabled,
+        zh ? '思考档位（默认 = 跟随 preset）' : 'Thinking effort (default = preset)',
+        zh ? '默认档位' : 'Default',
+      ),
       '</div>',
       '</div>',
     ].join('');

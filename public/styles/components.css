@@ -11245,22 +11245,32 @@ body[data-theme="light"] .force-continuation-limit-row .force-continuation-limit
 .session-controls-rotation-model { padding: 6px 2px 2px; }
 .session-controls-rotation-model .force-continuation-candidate-label { font-size: 12.5px; }
 .session-controls-rotation-controls { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
-.session-controls-rotation-select {
+/* 触发按钮：配 .ccb-model-dropdown 浮层（同输入框模型切换配方） */
+.session-controls-rotation-trigger {
   flex: 1 1 120px; min-width: 0;
-  padding: 5px 8px;
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 5px 10px;
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 8px;
   background: rgba(255,255,255,0.04);
   color: var(--text-primary);
   font-size: 12.5px;
+  font-family: inherit;
   line-height: 1.3;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
-.session-controls-rotation-select:focus {
+.session-controls-rotation-trigger:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(124,140,255,0.45);
+}
+.session-controls-rotation-trigger:focus-visible {
   outline: none;
   border-color: rgba(124,140,255,0.55);
-  background: rgba(255,255,255,0.06);
 }
-.session-controls-rotation-select:disabled { opacity: 0.45; cursor: not-allowed; }
+.session-controls-rotation-trigger:disabled { opacity: 0.45; cursor: not-allowed; }
+.scr-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scr-trigger-chevron { width: 14px; height: 14px; flex-shrink: 0; opacity: 0.7; }
 .session-controls-rotation-steps {
   width: 56px; flex-shrink: 0;
   padding: 5px 8px;
@@ -11278,8 +11288,9 @@ body[data-theme="light"] .force-continuation-limit-row .force-continuation-limit
 .session-controls-rotation-steps::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .session-controls-rotation-sep { color: var(--text-secondary); font-size: 13px; }
 .session-controls-rotation-body.is-master-off { opacity: 0.6; }
-body[data-theme="light"] .session-controls-rotation-select,
+body[data-theme="light"] .session-controls-rotation-trigger,
 body[data-theme="light"] .session-controls-rotation-steps {
   border-color: rgba(0,0,0,0.14);
   background: rgba(0,0,0,0.03);
 }
+body[data-theme="light"] .session-controls-rotation-trigger:hover { background: rgba(0,0,0,0.06); }

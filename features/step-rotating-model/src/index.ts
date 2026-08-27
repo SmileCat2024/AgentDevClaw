@@ -32,7 +32,8 @@ const SOURCE_TAG = 'feature:step-rotating-model';
 const EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 const DEFAULTS = {
-  enabled: true,
+  // 默认关闭：轮转是省 token 实验，装配后需用户显式打开才生效。
+  enabled: false,
   strongPreset: 'DeepSeek-V4-Pro',
   strongEffort: null as string | null,
   cheapPreset: 'DeepSeek-V4-flash',
