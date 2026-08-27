@@ -122,6 +122,43 @@ describe('input gateway thread-domain queueing (R6)', () => {
     assert.equal(integration.calls.append.length, 0);
   });
 
+  it('rejects input for an archived thread with thread_archived (archive verdict is shared)', async () => {
+    // A8 收口：归档拒收不再只挂在 HTTP 端点，网关主路径同样拦截——
+    // 归档后 runtime 已停，入箱只会在 unarchive 前永久滞留。
+    registerRuntime();
+    const integration = buildIntegration({
+      thread: { threadId: 'wt-1', status: 'open', headSessionId: 'session-1', hold: false, pendingSuccession: null },
+    });
+    const archived = new Set(['wt-1']);
+    integration.archive = {
+      resolveCommandRejection: async (threadId) => (archived.has(threadId)
+        ? { code: 'thread_archived', status: 409 }
+        : null),
+    };
+
+    await assert.rejects(
+      deliverUserInput({ viewerAgentId: 'viewer-1', text: '归档后输入' }, { integration }),
+      (error) => error instanceof UserTurnDeliveryError
+        && error.code === 'thread_archived'
+        && error.status === 409,
+    );
+    assert.equal(integration.calls.append.length, 0, '归档线程的指令不得入箱');
+  });
+
+  it('queues input when the archive verdict is clear (unarchived thread passes)', async () => {
+    registerRuntime();
+    const integration = buildIntegration({
+      thread: { threadId: 'wt-1', status: 'open', headSessionId: 'session-1', hold: false, pendingSuccession: null },
+    });
+    integration.archive = { resolveCommandRejection: async () => null };
+
+    const result = await deliverUserInput(
+      { viewerAgentId: 'viewer-1', text: '正常输入' },
+      { integration, fetchImpl: async () => { throw new Error('direct submit must not happen'); } },
+    );
+    assert.equal(result.delivery, 'thread_queued');
+  });
+
   it('carries images into the inbox (K8: handoff windows no longer bounce image input)', async () => {
     registerRuntime();
     const integration = buildIntegration({

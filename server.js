@@ -487,6 +487,8 @@ setupUISurfaceRoutes(app, express);
 setupThreadRoutes(app, express, {
   control: threadControl,
   lifecycle: threadLifecycle,
+  // commands 端点的即时投递走 integration 的 consumer 消费面（退避 / 水位同源）
+  tryDeliver: (threadId) => threadIntegration.tryDeliver(threadId),
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null
   resolveSessionOpenDirectory: async (agentId, sessionId) => {
     const record = await requirePrebuiltSessionRecord(agentId, sessionId);

@@ -166,6 +166,18 @@ describe('ThreadArchiveIndex', () => {
     assert.equal(await idx1.isArchived('wt-a'), false);
     assert.deepEqual(await idx1.list(), {});
   });
+
+  it('resolveCommandRejection is the single archive verdict shared by all command entries', async () => {
+    const idx = new ThreadArchiveIndex({ rootDir: root });
+    assert.deepEqual(await idx.resolveCommandRejection('wt-verdict'), null, '未归档无拒绝事实');
+
+    await idx.archive('wt-verdict');
+    const rejection = await idx.resolveCommandRejection('wt-verdict');
+    assert.deepEqual(rejection, { code: 'thread_archived', status: 409 });
+
+    await idx.unarchive('wt-verdict');
+    assert.deepEqual(await idx.resolveCommandRejection('wt-verdict'), null, 'unarchive 后恢复放行');
+  });
 });
 
 // ── 3. routes: attachment + archive guards ───────────────────────
@@ -174,6 +186,7 @@ describe('thread routes — lifeState attachment + archive semantics', () => {
   let root;
   let control;
   let app;
+  let deliveryCalls;
 
   async function call(method, routePath, { params = {}, query = {}, body } = {}) {
     const handlers = app._routes[`${method} ${routePath}`];
@@ -196,15 +209,23 @@ describe('thread routes — lifeState attachment + archive semantics', () => {
         listThreads: async () => [...threads.values()],
         getThread: async (id) => threads.get(id) || null,
         appendCommand: async () => ({ duplicate: false }),
-        deliverPendingCommands: async () => ({ delivered: 0 }),
       },
       board: {
         getState: async (id) => boardStates.get(id) || null,
       },
       archive: new ThreadArchiveIndex({ rootDir: root }),
     };
+    // commands 端点的即时投递经 consumer 消费面（tryDeliver），
+    // 不再直调 core.deliverPendingCommands——记录调用验证收编。
+    deliveryCalls = [];
     app = makeMockApp();
-    setupThreadRoutes(app, makeMockExpress(), { control });
+    setupThreadRoutes(app, makeMockExpress(), {
+      control,
+      tryDeliver: async (threadId) => {
+        deliveryCalls.push(threadId);
+        return { attempted: 1, delivered: 1, results: [] };
+      },
+    });
   });
   after(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
@@ -256,6 +277,17 @@ describe('thread routes — lifeState attachment + archive semantics', () => {
       body: { kind: 'user_message', text: 'hello' },
     });
     assert.equal(send2.statusCode, 201);
+  });
+
+  it('commands immediate delivery goes through the consumer facade (tryDeliver, not core)', async () => {
+    // C3 收编验证：即时投递统一经 delivery-consumer 消费面（退避 / 水位同源）
+    const send = await call('POST', '/protoclaw/threads/:threadId/commands', {
+      params: { threadId: 'wt-idle' },
+      body: { kind: 'user_message', text: 'deliver me' },
+    });
+    assert.equal(send.statusCode, 201);
+    assert.equal(deliveryCalls.at(-1), 'wt-idle', '即时投递调用 tryDeliver');
+    assert.deepEqual(send.body.delivery, { attempted: 1, delivered: 1, results: [] });
   });
 
   it('archive on unknown thread → 404', async () => {

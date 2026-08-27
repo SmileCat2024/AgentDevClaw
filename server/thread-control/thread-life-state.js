@@ -7,7 +7,7 @@
  * 数据源拼装（thread 是连接结构，状态从三个既有域合成，不新增状态存储）：
  *   - archived     ← archive-index（ThreadArchiveIndex）
  *   - executing    ← 看板 running，或锚点 rotating（交接中也是活跃工作）
- *   - pending-commands ← 锚点 commands 中 pending / in_flight
+ *   - pending-commands ← 锚点 commands 中 pending（K8 后唯一未决态）
  *   - idle         ← open 且无上述活动
  *
  * failed 不进四态（它是注意力信号而非生命位置）：单独以布尔暴露，
@@ -18,9 +18,9 @@
 
 import { WorkThreadCommandStatus } from '@agentdevjs/core';
 
+// K8 后指令状态只有 pending/delivered/failed/cancelled 四态，未决态唯一为 pending。
 const PENDING_COMMAND_STATUSES = new Set([
   WorkThreadCommandStatus.PENDING,
-  WorkThreadCommandStatus.IN_FLIGHT,
 ]);
 
 /**

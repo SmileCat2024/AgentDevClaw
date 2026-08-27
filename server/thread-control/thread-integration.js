@@ -74,6 +74,7 @@ export function createThreadIntegration({ control = null } = {}) {
   return {
     core,
     board,
+    archive,
     findThreadBySession,
 
     /**
@@ -157,11 +158,15 @@ export function createThreadIntegration({ control = null } = {}) {
           return { applied: false, reason: 'thread_not_found' };
         }
         console.error(`[thread-integration] succession failed ${from} -> ${to}:`, error?.message || error);
-        const failed = await core.failSessionHandoff(thread.threadId, {
-          reason: 'handoff_failed',
-          stage: 'advance_head',
-          error: error?.message || String(error),
-        }).catch(() => null);
+        // findThreadByHeadSession 自身抛错（存储故障）时 thread 为 null：
+        // 无卷宗可标失败，如实上报；上层 failSessionSuccession 会重新定位线程收口。
+        const failed = thread
+          ? await core.failSessionHandoff(thread.threadId, {
+              reason: 'handoff_failed',
+              stage: 'advance_head',
+              error: error?.message || String(error),
+            }).catch(() => null)
+          : null;
         return { applied: false, reason: 'handoff_failed', error: error?.message || String(error), thread: failed };
       }
     },

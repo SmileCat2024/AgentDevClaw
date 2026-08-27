@@ -19,8 +19,9 @@ import { synthesizeThreadLifeState } from './thread-life-state.js';
  * @param {object} options
  * @param {{ core: import('@agentdevjs/core').WorkThread, board: import('@agentdevjs/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
  * @param {{ archiveThread: Function, unarchiveThread: Function }} options.lifecycle
+ * @param {Function} [options.tryDeliver] 指令追加后的即时投递（经 delivery-consumer 消费面；不传则只入箱不投递）
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, resolveSessionOpenDirectory } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, resolveSessionOpenDirectory, tryDeliver } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -59,10 +60,12 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
   const _getArchiveEntries = () => archive.list().catch(() => ({}));
 
   const _assertNotArchived = async (threadId) => {
-    if (await archive.isArchived(threadId)) {
+    // 归档判定走 archive 单点（与 gateway / ACP resume 共享同一事实）
+    const rejection = await archive.resolveCommandRejection(threadId);
+    if (rejection) {
       const err = new Error('线程已归档，拒绝新投递（如需继续请新建线程或先取消归档）');
-      err.status = 409;
-      err.code = 'thread_archived';
+      err.status = rejection.status;
+      err.code = rejection.code;
       throw err;
     }
   };
@@ -209,10 +212,12 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
         idempotencyKey,
       });
       // head runtime 已就绪时即时投递（successor 已接棒的场景）；
-      // 未就绪保持 pending，等 head 推进时投递。
+      // 未就绪保持 pending，等 head 推进时投递。即时投递统一经
+      // delivery-consumer 消费面（线程级退避 / 水位检查同源），与
+      // gateway / runtime-ready / advance 后投递共享同一套行为。
       let delivery = null;
-      if (!result.duplicate) {
-        delivery = await core.deliverPendingCommands(req.params.threadId);
+      if (!result.duplicate && typeof tryDeliver === 'function') {
+        delivery = await tryDeliver(req.params.threadId);
       }
       res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result, delivery });
     } catch (err) {

@@ -174,6 +174,9 @@ function setupAcpHarness(overrides = {}) {
       archive: {
         list: async () => ctx.archiveEntries,
         isArchived: async (threadId) => Boolean(ctx.archiveEntries[threadId]),
+        resolveCommandRejection: async (threadId) => (ctx.archiveEntries[threadId]
+          ? { code: 'thread_archived', status: 409 }
+          : null),
       },
     },
   });

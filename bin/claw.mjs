@@ -226,9 +226,9 @@ function optionValue(args, name, fallback = '') {
   return index >= 0 && args[index + 1] !== undefined ? args[index + 1] : fallback;
 }
 
-function requireOption(args, name) {
+function requireOption(args, name, detail) {
   const value = optionValue(args, name);
-  if (!value) throw new Error(`缺少 ${name} 参数`);
+  if (!value) throw new Error(detail || `缺少 ${name} 参数`);
   return value;
 }
 
@@ -267,7 +267,7 @@ function printThreadsHelp() {
   console.log('  claw threads events <thread-id> [--after N] [--format text|json|jsonl]');
   console.log('  claw threads send <thread-id> --text TEXT [--kind K] [--source S] [--idempotency-key K]');
   console.log('  claw threads deliver <thread-id> [--format text|json]');
-  console.log('  claw threads advance <thread-id> --to-session ID [--from-session ID] [--expected-revision N] [--end-kind K]');
+  console.log('  claw threads advance <thread-id> --to-session ID --from-session ID [--expected-revision N] [--end-kind K]');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S] [--error E]');
   console.log('  claw threads resume <thread-id> [--source S]');
   console.log('  claw threads close <thread-id> [--reason R]');
@@ -390,7 +390,7 @@ async function handleThreads(args = []) {
 
   if (subcommand === 'advance') {
     const body = { toSessionId: requireOption(args, '--to-session') };
-    const fromSessionId = optionValue(args, '--from-session');
+    const fromSessionId = requireOption(args, '--from-session', '--from-session 必填（head CAS：K23 起 head 推进必须显式携带当前 head，可用 `claw threads show` 查看）');
     const expectedRevision = optionValue(args, '--expected-revision');
     const endKind = optionValue(args, '--end-kind');
     if (fromSessionId) body.fromSessionId = fromSessionId;
@@ -534,7 +534,7 @@ function printHelp() {
   console.log('  claw threads events <thread-id> [--after N] [--format jsonl]');
   console.log('  claw threads send <thread-id> --text TEXT [--idempotency-key KEY]');
   console.log('  claw threads deliver <thread-id>         Retry pending command delivery');
-  console.log('  claw threads advance <thread-id> --to-session ID [--from-session ID]');
+  console.log('  claw threads advance <thread-id> --to-session ID --from-session ID');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S]');
   console.log('  claw threads resume <thread-id> [--source S]');
   console.log('  claw threads close <thread-id> [--reason R]');

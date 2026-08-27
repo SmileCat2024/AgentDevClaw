@@ -381,9 +381,11 @@ export function setupAcpRoutes(app, express, ctx) {
         throw acpError(500, 'thread_head_missing', `thread ${threadRecord.threadId} has no head session`);
       }
 
-      // 归档线程拒绝续接（先取消归档才能继续）
-      if (await threadControl.archive.isArchived(threadRecord.threadId)) {
-        throw acpError(409, 'thread_archived', `thread ${threadRecord.threadId} is archived; unarchive it first`);
+      // 归档线程拒绝续接（先取消归档才能继续）；判定与 gateway / commands
+      // / deliver 四入口共享 archive 单点事实
+      const archiveRejection = await threadControl.archive.resolveCommandRejection(threadRecord.threadId);
+      if (archiveRejection) {
+        throw acpError(archiveRejection.status, archiveRejection.code, `thread ${threadRecord.threadId} is archived; unarchive it first`);
       }
 
       // 急切挂载：runtime 已运行则幂等复用，否则启动并等 READY（错误前置，

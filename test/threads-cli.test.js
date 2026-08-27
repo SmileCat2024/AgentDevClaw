@@ -116,8 +116,14 @@ test('claw threads validates required options without contacting the server', as
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /缺少 --session 参数/);
 
+  const missingFromSession = await runCli('1', [
+    'threads', 'advance', 'wt-1', '--to-session', 's-2',
+  ]);
+  assert.notEqual(missingFromSession.code, 0);
+  assert.match(missingFromSession.stderr, /--from-session 必填/, 'K23：head 推进必须显式携带当前 head');
+
   const invalidRevision = await runCli('1', [
-    'threads', 'advance', 'wt-1', '--to-session', 's-2', '--expected-revision', 'not-a-number',
+    'threads', 'advance', 'wt-1', '--to-session', 's-2', '--from-session', 's-1', '--expected-revision', 'not-a-number',
   ]);
   assert.notEqual(invalidRevision.code, 0);
   assert.match(invalidRevision.stderr, /--expected-revision 必须是非负整数/);

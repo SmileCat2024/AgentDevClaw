@@ -161,5 +161,22 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
     };
   }
 
+  // 归档线程禁入（与 closed 同理：runtime 已停，unarchive 前入箱只会滞留）。
+  // 归档事务窗口（hold 后、runtime 停止前）同样拦截，指令不落入 cancel
+  // 快照之外的盲区。判定经 archive 单点，与 commands / deliver / ACP
+  // resume 四入口共享同一事实。
+  if (typeof integration.archive?.resolveCommandRejection === 'function') {
+    const rejection = await integration.archive.resolveCommandRejection(thread.threadId);
+    if (rejection) {
+      return {
+        route: 'rejected',
+        error: new UserTurnDeliveryError(
+          'This thread is archived; unarchive it before sending new messages',
+          { code: rejection.code, status: rejection.status, retryable: false },
+        ),
+      };
+    }
+  }
+
   return { route: 'thread', thread };
 }
