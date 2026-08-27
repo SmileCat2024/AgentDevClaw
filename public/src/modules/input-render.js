@@ -112,9 +112,13 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
     inputContainer.classList.remove('choice-input-active', 'choice-collapsed');
     const card = document.createElement('div');
     card.className = 'user-input-card';
+    // 远程会话是 Phase 1 明确的只读面：整体替换为禁用提示，不是假交互输入框。
+    const readonlyPlaceholder = isRemoteNamespaceAgentId(currentRuntimeAgentId)
+      ? t('rcon_readonly_placeholder')
+      : t('workspace_readonly_mode');
     card.innerHTML = `
       <textarea class="user-input-textarea" rows="1" disabled
-        placeholder="${escapeHtml(t('workspace_readonly_mode'))}"
+        placeholder="${escapeHtml(readonlyPlaceholder)}"
         style="opacity:0.5;cursor:not-allowed;"></textarea>
     `;
     runWithSuppressedChatViewportObservers(() => {

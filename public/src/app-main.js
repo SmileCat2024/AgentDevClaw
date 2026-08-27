@@ -599,8 +599,11 @@ window.switchAgent = async (newAgentId) => {
       _deriveRuntimeSessionIdFromAgents(runtimeAgentId) || getActiveWorkspaceSessionId(targetAgent),
     );
     _recentlyFinishedRuntimes.delete(runtimeAgentId);
-    // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开
-    readOnlyMode = targetAgent?.input_accepted === false;
+    // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开；
+    // remote: 命名空间条目不在 allAgents 中，一律只读（Phase 1 远程面无写路径）。
+    readOnlyMode = targetAgent
+      ? targetAgent.input_accepted === false
+      : isRemoteNamespaceAgentId(runtimeAgentId);
     currentWorkspaceArtifactDetail = null;
     currentWorkspaceDocsetDetail = null;
     currentProjectDocsetOpen = false;
@@ -765,6 +768,11 @@ async function runPollCycle() {
     if (Date.now() - _lastChoiceAlertCheckAt > 3000) {
       _lastChoiceAlertCheckAt = Date.now();
       checkGlobalChoiceAlerts().catch(e => console.warn(e));
+    }
+
+    // 远程工作空间目录（ADR-0008 Phase 1）：复用 poll 调度，内部自带时间窗节流
+    if (typeof maybeRefreshRemoteCatalog === 'function') {
+      maybeRefreshRemoteCatalog();
     }
 
     // 定期检查并重新加载 Feature 模板映射（如果为空）

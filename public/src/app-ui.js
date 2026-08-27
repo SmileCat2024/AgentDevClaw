@@ -1708,6 +1708,13 @@ document.getElementById('settings-flyout-remote')?.addEventListener('click', () 
   }
 });
 
+document.getElementById('settings-flyout-remote-servers')?.addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof openRemoteConnectionsManager === 'function') {
+    openRemoteConnectionsManager();
+  }
+});
+
 document.getElementById('settings-flyout-usage').addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
   if (typeof openUsageInfo === 'function') {

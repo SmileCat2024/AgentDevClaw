@@ -79,7 +79,7 @@ function mockFetch(handler) {
 test('forwards whitelisted runtime reads to the remote origin with restored ids', async () => {
   const fetchMock = mockFetch();
   try {
-    const resources = ['messages', 'tools', 'hooks', 'overview', 'todo', 'notification', 'input-requests', 'running'];
+    const resources = ['messages', 'tools', 'hooks', 'overview', 'todo', 'notification', 'input-requests', 'running', 'connection'];
     for (const resource of resources) {
       const res = makeRes();
       await proxyToViewer(
@@ -95,6 +95,36 @@ test('forwards whitelisted runtime reads to the remote origin with restored ids'
       );
     }
     assert.equal(fetchMock.calls.length, resources.length);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test('forwards the whitelisted agent_detail query read to the remote origin', async () => {
+  const fetchMock = mockFetch();
+  try {
+    const res = makeRes();
+    await proxyToViewer(
+      makeReq(`/protoclaw/agent_detail?agentId=${ENCODED_NAMESPACE}`),
+      res,
+      { findConnection: FIND_CONNECTION },
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(
+      fetchMock.calls.at(-1).url,
+      `${REMOTE_ORIGIN}/protoclaw/agent_detail?agentId=agent-3-22040`,
+      'agent_detail forwarded with restored id',
+    );
+
+    // The whitelisting is GET-only: a write to the same path is still rejected.
+    const postRes = makeRes();
+    await proxyToViewer(
+      makeReq(`/protoclaw/agent_detail?agentId=${ENCODED_NAMESPACE}`, { method: 'POST' }),
+      postRes,
+      { findConnection: FIND_CONNECTION },
+    );
+    assert.equal(postRes.statusCode, 403);
+    assert.equal(fetchMock.calls.length, 1);
   } finally {
     fetchMock.restore();
   }

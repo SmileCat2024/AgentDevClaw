@@ -132,7 +132,7 @@ import { createAgentDiscoveryModule } from './server/routes/agent-discovery.js';
 import { createAgentLifecycleModule } from './server/routes/agent-lifecycle.js';
 import { startEmbeddedRemoteClawConnector } from './server/remote-claw/embedded-connector.js';
 import { createTunnelManager } from './server/remote-connections/tunnel-manager.js';
-import { createConnectionStore } from './server/remote-connections/connection-store.js';
+import { createConnectionStore, ConnectionConfigError } from './server/remote-connections/connection-store.js';
 import { createConnectionHealth } from './server/remote-connections/connection-health.js';
 import { createCatalogAggregator } from './server/remote-connections/catalog-aggregator.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from './server/shared/constants.js';
@@ -1145,8 +1145,16 @@ const connectionStore = createConnectionStore();
 setProxyConnectionLookup(connectionStore);
 const connectionHealth = createConnectionHealth({ tunnelManager });
 connectionHealth.start();
+
+// 健康探测与托管隧道共用同一份连接真值：幂等 diff 同步，增删改 / enable
+// 开关即时生效（managed 隧道随 enabled 自动起停，R1-02 生命周期接线）。
+async function syncRemoteConnectionInfrastructure(connections) {
+  connectionHealth.syncConnections(connections);
+  await tunnelManager.syncConnections(connections);
+}
+
 void connectionStore.load()
-  .then((connections) => connectionHealth.syncConnections(connections))
+  .then((connections) => syncRemoteConnectionInfrastructure(connections))
   .catch((error) => {
     console.warn('[remote-connections] 初始化失败，remote_catalog 将返回空列表：', error?.message || error);
   });
@@ -1155,7 +1163,7 @@ const remoteCatalogAggregator = createCatalogAggregator({
   listConnections: async () => {
     await connectionStore.ensureLoaded();
     const connections = connectionStore.listConnections();
-    connectionHealth.syncConnections(connections);
+    await syncRemoteConnectionInfrastructure(connections);
     return connections;
   },
   getStatus: (connectionId) => connectionHealth.getStatus(connectionId),
@@ -1164,6 +1172,77 @@ const remoteCatalogAggregator = createCatalogAggregator({
 app.get('/protoclaw/remote_catalog', async (_req, res, next) => {
   try {
     res.json(await remoteCatalogAggregator.aggregate());
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── ADR-0008 远程连接管理 API（R1-07 连接管理 UI 的宿主端点）──
+// 校验与持久化在 ConnectionStore（R1-01 schema），本层只做薄壳；
+// 写路径同步健康探测与隧道生命周期，全部不重启生效。
+
+function sendRemoteConnectionFailure(res, req, error, fallbackStatus = 500) {
+  const status = error instanceof ConnectionConfigError ? 400 : fallbackStatus;
+  res.status(status).json(buildLocalFailureResponse(error, readOperationMetadata(req)));
+}
+
+app.get('/protoclaw/remote_connections', async (_req, res, next) => {
+  try {
+    await connectionStore.ensureLoaded();
+    const connections = connectionStore.listConnections();
+    await syncRemoteConnectionInfrastructure(connections);
+    const tunnels = {};
+    for (const status of tunnelManager.listStatuses()) {
+      tunnels[status.id] = status;
+    }
+    res.json({
+      ok: true,
+      connections,
+      statuses: connectionHealth.listStatuses(),
+      tunnels,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/protoclaw/remote_connections', express.json(), async (req, res, next) => {
+  try {
+    const connection = await connectionStore.upsertConnection(req.body || {});
+    await syncRemoteConnectionInfrastructure(connectionStore.listConnections());
+    res.json({ ok: true, connection });
+  } catch (error) {
+    if (error instanceof ConnectionConfigError) {
+      sendRemoteConnectionFailure(res, req, error, 400);
+      return;
+    }
+    next(error);
+  }
+});
+
+app.delete('/protoclaw/remote_connections/:id', async (req, res, next) => {
+  try {
+    const removed = await connectionStore.deleteConnection(req.params.id);
+    await syncRemoteConnectionInfrastructure(connectionStore.listConnections());
+    res.json({ ok: true, removed });
+  } catch (error) {
+    if (error instanceof ConnectionConfigError) {
+      sendRemoteConnectionFailure(res, req, error, 404);
+      return;
+    }
+    next(error);
+  }
+});
+
+app.post('/protoclaw/remote_connections/:id/handshake', async (req, res, next) => {
+  try {
+    await connectionStore.ensureLoaded();
+    if (!connectionStore.getConnection(req.params.id)) {
+      res.status(404).json({ ok: false, error: '未找到远程连接' });
+      return;
+    }
+    const status = await connectionHealth.runHandshake(req.params.id);
+    res.json({ ok: true, status });
   } catch (error) {
     next(error);
   }

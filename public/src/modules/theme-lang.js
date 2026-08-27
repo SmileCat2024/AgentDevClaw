@@ -49,10 +49,12 @@ function applyLanguage() {
   if (viewerButton) viewerButton.title = '文档';
   const settingsConfigItem = document.getElementById('settings-flyout-config');
   const settingsRemoteItem = document.getElementById('settings-flyout-remote');
+  const settingsRemoteServersItem = document.getElementById('settings-flyout-remote-servers');
   const settingsUsageItem = document.getElementById('settings-flyout-usage');
   const settingsExitItem = document.getElementById('settings-flyout-exit');
   if (settingsConfigItem) settingsConfigItem.textContent = currentLanguage === 'zh' ? '模型配置' : 'Model settings';
   if (settingsRemoteItem) settingsRemoteItem.textContent = currentLanguage === 'zh' ? '远程连接' : 'Remote connection';
+  if (settingsRemoteServersItem) settingsRemoteServersItem.textContent = t('rcon_flyout_servers');
   if (settingsUsageItem) settingsUsageItem.textContent = currentLanguage === 'zh' ? '用量信息' : 'Usage';
   if (settingsExitItem) settingsExitItem.textContent = currentLanguage === 'zh' ? '退出程序' : 'Quit';
 

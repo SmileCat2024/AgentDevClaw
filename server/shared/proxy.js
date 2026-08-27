@@ -39,6 +39,8 @@ const REMOTE_READ_RESOURCES = new Set([
   'notification',
   'input-requests',
   'running',
+  // R1-07 只读主视图：轮询循环按 runtime 周期读取连接状态。
+  'connection',
 ]);
 
 // Template mount assets live under /tpl/{mountId}/… — the mount layout also
@@ -55,6 +57,7 @@ function isStaticAssetPath(pathname) {
 function isRemoteReadWhitelisted(method, pathname) {
   if (method !== 'GET') return false;
   if (pathname === '/api/templates/feature') return true;
+  if (pathname === '/protoclaw/agent_detail') return true;
   const match = pathname.match(/^\/api\/agents\/[^/]+\/([^/]+)$/);
   if (match && REMOTE_READ_RESOURCES.has(match[1])) return true;
   return isStaticAssetPath(pathname);

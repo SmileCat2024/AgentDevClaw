@@ -437,7 +437,10 @@ async function loadAgents() {
 
     await refreshAgentCallStates(allAgents);
 
-    if (focusedAgentId && !allAgents.some((agent) => agent.id === focusedAgentId || getAgentRuntimeId(agent) === focusedAgentId)) {
+    // remote: 命名空间的 agent 不在本机 allAgents 目录中（不参与本地目录
+    // 心跳），不能被本地 fallback 抢走焦点；焦点恢复由 remote_catalog 侧维持。
+    if (focusedAgentId && !isRemoteNamespaceAgentId(focusedAgentId)
+      && !allAgents.some((agent) => agent.id === focusedAgentId || getAgentRuntimeId(agent) === focusedAgentId)) {
       const fallbackId = resolveWorkspaceFallbackAgentId();
       if (fallbackId) {
         await loadAgentDetail(fallbackId);
