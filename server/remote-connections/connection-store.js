@@ -81,7 +81,7 @@ function normalizeId(value) {
 }
 
 function normalizeSsh(value, mode) {
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     if (mode === 'managed') {
       throw new ConnectionConfigError('managed 模式必须提供 ssh.host');
     }

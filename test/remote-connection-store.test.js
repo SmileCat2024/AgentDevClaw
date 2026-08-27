@@ -240,6 +240,18 @@ describe('connection mode and ssh validation', () => {
     assert.equal(conn.ssh, null);
   });
 
+  it('reloads a manual connection persisted with ssh:null (save/load round-trip)', async () => {
+    // 回归：upsert 将 manual 的缺省 ssh 序列化为 null，load 曾把 null 误判为非法对象，
+    // 导致重启后配置文件整体加载失败（所有已保存连接变砖）。
+    const first = createStore();
+    await first.upsertConnection(validManualConnection());
+    const second = createStore();
+    await second.load();
+    const conn = second.getConnection('server-a');
+    assert.ok(conn, 'persisted manual connection must survive restart');
+    assert.equal(conn.ssh, null);
+  });
+
   it('accepts manual mode with an ssh block (diagnostics info)', async () => {
     const store = createStore();
     await store.upsertConnection(validManualConnection({
