@@ -36,7 +36,6 @@ import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { ImageReaderFeature } from '@agentdevjs/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import os from 'os';
 import { ContextRotationTriggerFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
 import {
@@ -44,13 +43,15 @@ import {
   readLayerFile,
   coderLayerPath,
 } from '../../../server/shared/feature-config-layers.js';
+import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts', 'coder');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
-const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
+// 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
+const IMAGE_STORAGE_DIR = join(resolveUserDataDir(), 'images');
 
 /**
  * 自动化编码智能体（coder）Agent

@@ -9,16 +9,16 @@
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { join, dirname, resolve } from 'path';
-import os from 'os';
 import { execFileSync } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { resolveUserDataDir } from './shared/constants.js';
 
 // ── 常量 ────────────────────────────────────────────────────────────
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const USER_DATA_ROOT = join(os.homedir(), '.agentdev', 'AgentDevClaw');
+const USER_DATA_ROOT = resolveUserDataDir();
 const WORKSPACES_ROOT = join(USER_DATA_ROOT, 'workspaces');
 const HANDOFFS_ROOT = join(USER_DATA_ROOT, 'context-handoffs');
 const SERVER_URL = process.env.PROTOCLAW_SERVER_URL || 'http://127.0.0.1:1420';

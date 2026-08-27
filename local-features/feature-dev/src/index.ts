@@ -2,7 +2,7 @@ import os from 'os';
 import { promises as fs } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, PackageInfo, Tool } from '@agentdevjs/core';
 import { CoreLifecycle, createTool, Decision, getPackageInfoFromSource } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
@@ -92,12 +92,19 @@ interface SharedShellFeature {
 const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
 const FEATURE_TYPE_VALUES = ['tools', 'mcp', 'hooks', 'control', 'rollback'] as const;
 const FEATURE_REPOSITORY_SUBPATH = join('resources', 'features');
-const USER_FEATURE_REPOSITORY_SUBPATH = join('.agentdev', 'AgentDevClaw', 'user-features');
+// 与 server/shared/constants.js 的 resolveUserDataDir 同语义（TS 独立构建无法
+// 直接复用）：AGENTDEV_DATA_DIR 仅用于多实例/测试场景，未设置时保持默认布局。
+function resolveUserDataDir(): string {
+  const override = process.env.AGENTDEV_DATA_DIR?.trim();
+  return override ? resolve(override) : join(os.homedir(), '.agentdev', 'AgentDevClaw');
+}
+
+const USER_FEATURE_REPOSITORY_SUBPATH = 'user-features';
 const PROJECT_DOCSET_SUBPATH = join('.agentdev', 'claw-workspace');
 const VALIDATE_SCRIPT_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'validate-feature.mjs');
 
 function getDefaultStatePath(): string {
-  return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'feature-creator', 'state.json');
+  return join(resolveUserDataDir(), 'workspaces', 'feature-creator', 'state.json');
 }
 
 function getArtifactsDirFromStatePath(statePath: string): string {
@@ -813,7 +820,7 @@ export class FeatureDevFeature implements AgentFeature {
     this.statePath = config.statePath || getDefaultStatePath();
     this.workspaceDir = config.workspaceDir || process.cwd();
     this.projectRoot = config.projectRoot || process.cwd();
-    this.repositoryDir = config.repositoryDir || join(os.homedir(), USER_FEATURE_REPOSITORY_SUBPATH);
+    this.repositoryDir = config.repositoryDir || join(resolveUserDataDir(), USER_FEATURE_REPOSITORY_SUBPATH);
     this.artifactsDir = getArtifactsDirFromStatePath(this.statePath);
   }
 

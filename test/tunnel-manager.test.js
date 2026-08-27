@@ -163,6 +163,23 @@ describe('managed tunnel reconnect lifecycle', () => {
     assert.equal(harness.children.length, 1);
   });
 
+  it('classifies a spawn failure (e.g. ssh missing from PATH) as down with backoff, not a silent up', async () => {
+    await harness.manager.startConnection(connection());
+    assert.equal(harness.manager.getStatus('server-a').tunnel, 'up');
+
+    // spawn 成功后进程立即报错（ENOENT 场景走 child 'error' 事件）：
+    // 状态必须显式转为 down 并进入退避重连，绝不能停留在 up 造成假成功。
+    harness.children[0].emit('error', Object.assign(new Error('spawn ssh ENOENT'), { code: 'ENOENT' }));
+
+    const status = harness.manager.getStatus('server-a');
+    assert.equal(status.tunnel, 'down');
+    assert.ok(status.stderrTail.some((line) => line.includes('ENOENT')), 'diagnostics should capture the error');
+
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    assert.equal(harness.children.length, 2, 'reconnect should respawn after the backoff delay');
+    assert.equal(harness.manager.getStatus('server-a').tunnel, 'up');
+  });
+
   it('stops a running child when a connection is disabled or deleted', async () => {
     await harness.manager.startConnection(connection());
     const child = harness.children[0];

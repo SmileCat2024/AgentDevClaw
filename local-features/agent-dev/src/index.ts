@@ -1,7 +1,7 @@
 import os from 'os';
 import { promises as fs } from 'fs';
 import { fileURLToPath } from 'url';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import type { AgentFeature, FeatureInitContext, FeatureStateSnapshot, PackageInfo, Tool } from '@agentdevjs/core';
 import { CoreLifecycle, createTool, Decision, getPackageInfoFromSource } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
@@ -39,8 +39,15 @@ export interface AgentDevFeatureConfig {
   workspaceDir?: string;
 }
 
+// 与 server/shared/constants.js 的 resolveUserDataDir 同语义（TS 独立构建无法
+// 直接复用）：AGENTDEV_DATA_DIR 仅用于多实例/测试场景，未设置时保持默认布局。
+function resolveUserDataDir(): string {
+  const override = process.env.AGENTDEV_DATA_DIR?.trim();
+  return override ? resolve(override) : join(os.homedir(), '.agentdev', 'AgentDevClaw');
+}
+
 function getDefaultStatePath(): string {
-  return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'agent-creator', 'state.json');
+  return join(resolveUserDataDir(), 'workspaces', 'agent-creator', 'state.json');
 }
 
 function getArtifactsDirFromStatePath(statePath: string): string {

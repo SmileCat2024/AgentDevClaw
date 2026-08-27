@@ -17,18 +17,13 @@
  *   node scripts/migrate-feature-setup-sparse.mjs --dry-run  # 只预览
  */
 
-import { homedir } from 'os';
 import { join } from 'path';
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'fs';
+import { resolveUserDataDir } from '../server/shared/constants.js';
 
 const dryRun = process.argv.includes('--dry-run');
 
-const targetPath = join(
-  homedir(),
-  '.agentdev',
-  'AgentDevClaw',
-  'feature-setup.json'
-);
+const targetPath = join(resolveUserDataDir(), 'feature-setup.json');
 
 if (!existsSync(targetPath)) {
   console.error(`[migrate-feature-setup-sparse] 目标文件不存在: ${targetPath}`);

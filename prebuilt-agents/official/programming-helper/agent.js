@@ -30,6 +30,7 @@ import {
   readAgentLayer,
   readDirLayer,
 } from '../../../server/shared/feature-config-layers.js';
+import { resolveUserDataDir } from '../../../server/shared/constants.js';
 import { CoderAgent } from './coder-agent.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
@@ -38,8 +39,10 @@ const __dirname = dirname(__filename);
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
-const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'programming-helper', 'state.json');
-const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
+// 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
+const USER_DATA_ROOT = resolveUserDataDir();
+const WORKSPACE_STATE_PATH = join(USER_DATA_ROOT, 'workspaces', 'programming-helper', 'state.json');
+const IMAGE_STORAGE_DIR = join(USER_DATA_ROOT, 'images');
 
 // Audio feedback is presentation-only. Awaiting the OS media process inside
 // the CallFinish hook delays AgentDev's authoritative call.finish event and

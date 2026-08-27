@@ -10,19 +10,21 @@ import { BasicAgent, TemplateComposer, UserInputFeature } from '@agentdevjs/core
 import { createLLM } from '@agentdevjs/llm';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
-import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { createRequire } from 'module';
 import { FlowFeature } from '../../../local-features/dist/flow/src/index.js';
+import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = join(__dirname, '..', '..', '..');
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
-const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'flow-workspace', 'state.json');
-const SESSION_INDEX_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'flow-workspace', 'sessions', 'index.json');
-const FLOWS_ROOT = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'flows');
+// 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
+const USER_DATA_ROOT = resolveUserDataDir();
+const WORKSPACE_STATE_PATH = join(USER_DATA_ROOT, 'workspaces', 'flow-workspace', 'state.json');
+const SESSION_INDEX_PATH = join(USER_DATA_ROOT, 'workspaces', 'flow-workspace', 'sessions', 'index.json');
+const FLOWS_ROOT = join(USER_DATA_ROOT, 'flows');
 const AGENT_GRAPH_ID = 'agent-flow-graph';
 const MODEL_PRESETS_PATH = join(PROTOCLAW_ROOT, 'config', 'presets.json');
 

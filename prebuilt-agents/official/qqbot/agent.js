@@ -17,10 +17,10 @@ import { ImageReaderFeature } from '@agentdevjs/image-reader-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
-import * as os from 'os';
 import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/index.js';
 import { ConversationExportFeature } from '../../../local-features/dist/conversation-export/src/index.js';
 import { getIMChannelLabel } from '../../../server/shared/im-channels.js';
+import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -31,8 +31,10 @@ const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const PROTOCLAW_ROOT = join(__dirname, '..', '..', '..');
 const SERVER_ORIGIN = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
-const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
-const IMAGE_STORAGE_DIR = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'images');
+// 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
+const USER_DATA_ROOT = resolveUserDataDir();
+const SYSTEM_FEATURE_CONFIG_PATH = join(USER_DATA_ROOT, 'feature-setup.json');
+const IMAGE_STORAGE_DIR = join(USER_DATA_ROOT, 'images');
 
 function readSystemFeatureConfig() {
   if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};

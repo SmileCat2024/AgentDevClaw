@@ -12,7 +12,6 @@ import { spawn } from 'child_process';
 import { setTimeout as sleep } from 'timers/promises';
 import { join, resolve } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
-import os from 'os';
 import process from 'process';
 
 import { fileURLToPath } from 'url';
@@ -26,6 +25,7 @@ import {
   unregisterAgentProject,
 } from '../server/feature-runtime/agent-registry.js';
 import { renderSessionEventHuman } from '../scripts/headless-session-renderer.js';
+import { resolveUserDataDir } from '../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, '..');
@@ -178,7 +178,7 @@ async function handleAgents(args = []) {
 async function handleConfigGroups(args = []) {
   const agentId = args.find(a => !a.startsWith('-'));
   if (!agentId) throw new Error('用法: claw config-groups <agent-id>');
-  const groupsDir = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', sanitizeFragment(agentId), 'feature-config', 'groups');
+  const groupsDir = join(resolveUserDataDir(), 'workspaces', sanitizeFragment(agentId), 'feature-config', 'groups');
   const groups = existsSync(groupsDir)
     ? readdirSync(groupsDir).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -5)).sort()
     : [];

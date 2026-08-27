@@ -4,10 +4,10 @@ import { AuditFeature } from '@agentdevjs/audit-feature';
 import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
-import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { createRequire } from 'module';
 import { AgentDevFeature } from '../../../local-features/dist/index.js';
+import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -15,9 +15,11 @@ const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = join(__dirname, '..', '..', '..');
 const PROMPTS_DIR = join(__dirname, '.agentdev', 'prompts');
 const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
-const WORKSPACE_STATE_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'agent-creator', 'state.json');
-const SESSION_INDEX_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'agent-creator', 'sessions', 'index.json');
-const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
+// 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
+const USER_DATA_ROOT = resolveUserDataDir();
+const WORKSPACE_STATE_PATH = join(USER_DATA_ROOT, 'workspaces', 'agent-creator', 'state.json');
+const SESSION_INDEX_PATH = join(USER_DATA_ROOT, 'workspaces', 'agent-creator', 'sessions', 'index.json');
+const SYSTEM_FEATURE_CONFIG_PATH = join(USER_DATA_ROOT, 'feature-setup.json');
 
 function readSystemFeatureConfig() {
   if (!existsSync(SYSTEM_FEATURE_CONFIG_PATH)) return {};

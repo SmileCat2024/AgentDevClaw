@@ -1,11 +1,13 @@
-import os from 'os';
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { Agent, FileSessionStore } from '@agentdevjs/core';
-import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
+import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
 
 // 权威集合来自 server/shared/constants.js（服务端与所有脚本必须同源）
 export const WORKSPACE_BOUND_AGENT_IDS = WORKSPACE_SESSION_AGENT_IDS;
+
+// 会话数据根与 server/shared/constants.js 同源解析，支持 AGENTDEV_DATA_DIR 多实例隔离
+const USER_DATA_ROOT = resolveUserDataDir();
 
 export function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -76,9 +78,9 @@ export function sanitizeSessionFragment(value) {
 export function getSessionStoreDir(agentId) {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   if (WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)) {
-    return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'sessions');
+    return join(USER_DATA_ROOT, 'workspaces', normalizedAgentId, 'sessions');
   }
-  return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'prebuilt-sessions', normalizedAgentId);
+  return join(USER_DATA_ROOT, 'prebuilt-sessions', normalizedAgentId);
 }
 
 function resolveSessionWorkspaceCwd(agentId, sessionId) {
@@ -117,7 +119,7 @@ export function resolveWorkspaceCwd(agentId, projectRoot, sessionId = '') {
     return sessionCwd;
   }
 
-  const statePath = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'state.json');
+  const statePath = join(USER_DATA_ROOT, 'workspaces', normalizedAgentId, 'state.json');
   if (!existsSync(statePath)) {
     return projectRoot;
   }

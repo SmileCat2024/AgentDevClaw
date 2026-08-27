@@ -34,7 +34,6 @@
 import './headless-log-preamble.js';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
-import os from 'os';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { FileSessionStore } from '@agentdevjs/core';
 import { resolveAgentModelLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
@@ -45,12 +44,14 @@ import { provisionRuntimeEnvironment } from '../server/feature-runtime/provision
 import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 import { getRegisteredAgent } from '../server/feature-runtime/agent-registry.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
+import { resolveUserDataDir } from '../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROJECT_ROOT = resolve(__dirname, '..');
 const AGENTS_ROOT = join(PROJECT_ROOT, 'agents');
-const AGENTS_DATA_ROOT = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'agents');
+// 数据根同源解析，支持 AGENTDEV_DATA_DIR 多实例隔离
+const AGENTS_DATA_ROOT = join(resolveUserDataDir(), 'agents');
 
 function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';

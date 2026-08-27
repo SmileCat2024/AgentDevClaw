@@ -17,7 +17,15 @@ export const AGENTDEV_CREATE_FEATURE_CLI = path.join(
   PROJECT_ROOT, 'node_modules', '@agentdevjs', 'create-feature', 'dist', 'cli.js'
 );
 export const VIEWER_ORIGIN = `http://127.0.0.1:${VIEWER_PORT}`;
-export const USER_DATA_ROOT = path.join(os.homedir(), '.agentdev', 'AgentDevClaw');
+// 数据根目录解析：AGENTDEV_DATA_DIR 仅用于多实例/测试场景（如本地双实例验证），
+// 未设置时保持 ~/.agentdev/AgentDevClaw 不变。所有进程入口（server、scripts、
+// 预制 agent、claw CLI）一律经由本函数解析，保证同一环境变量语义全局一致。
+export function resolveUserDataDir(env = process.env) {
+  const override = typeof env.AGENTDEV_DATA_DIR === 'string' ? env.AGENTDEV_DATA_DIR.trim() : '';
+  return override ? path.resolve(override) : path.join(os.homedir(), '.agentdev', 'AgentDevClaw');
+}
+
+export const USER_DATA_ROOT = resolveUserDataDir();
 export const REMOTE_CONNECTIONS_CONFIG_PATH = path.join(USER_DATA_ROOT, 'remote-connections.json');
 export const NO_SESSION_TOKEN = '__protoclaw-no-session__';
 export const PREBUILT_SESSIONS_ROOT = path.join(USER_DATA_ROOT, 'prebuilt-sessions');

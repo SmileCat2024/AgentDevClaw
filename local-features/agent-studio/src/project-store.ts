@@ -5,7 +5,7 @@
 
 import os from 'os';
 import { promises as fs } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import type { StudioFeatureVerification, StudioTestCase, StudioRunRecord, SessionPolicy } from './assertions.js';
 import { normalizeAssertion, normalizeTestCase, ASSERTION_KINDS, type AssertionKind, type StudioAssertion, type StudioFeatureCoverage } from './assertions.js';
 
@@ -152,8 +152,15 @@ export function normalizeTestRuntimeStatus(value: unknown): TestRuntimeStatus {
   return value === 'running' || value === 'stopped' ? value : 'not-provisioned';
 }
 
+// 与 server/shared/constants.js 的 resolveUserDataDir 同语义（TS 独立构建无法
+// 直接复用）：AGENTDEV_DATA_DIR 仅用于多实例/测试场景，未设置时保持默认布局。
+export function resolveUserDataDir(): string {
+  const override = process.env.AGENTDEV_DATA_DIR?.trim();
+  return override ? resolve(override) : join(os.homedir(), '.agentdev', 'AgentDevClaw');
+}
+
 export function getDefaultStatePath(): string {
-  return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', 'agent-studio', 'state.json');
+  return join(resolveUserDataDir(), 'workspaces', 'agent-studio', 'state.json');
 }
 
 export function getProjectPath(projectDir: string): string {

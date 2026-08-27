@@ -24,7 +24,7 @@ import { createIMBridge } from './runtime-im-bridge.js';
 import { handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
-import { WORKSPACE_SESSION_AGENT_IDS } from '../server/shared/constants.js';
+import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
 
 // Inject DebugHub into the extracted CallArbiter module
 setDebugHubClass(DebugHub);
@@ -39,6 +39,8 @@ const HANDOFF_PATH_ENV = 'PROTOCLAW_HANDOFF_PATH';
 const HANDOFF_PAYLOAD_ENV = 'PROTOCLAW_HANDOFF_PAYLOAD';
 // 权威集合来自 server/shared/constants.js（服务端与子进程必须同源）
 const WORKSPACE_BOUND_AGENT_IDS = WORKSPACE_SESSION_AGENT_IDS;
+// 会话数据根同源解析，支持 AGENTDEV_DATA_DIR 多实例隔离
+const USER_DATA_ROOT = resolveUserDataDir();
 const PREBUILT_AGENT_MAX_TOKENS_CAP = 8000; // 预制 agent maxTokens 上限（应与 server/shared/constants.js 保持一致）
 const runtimeInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 const reportedUsageEventIds = new Set();
@@ -165,14 +167,14 @@ function resolveAgentClass(agentModule) {
 }
 
 function getWorkspaceStatePath(agentId) {
-  return join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', sanitizeSessionFragment(agentId), 'state.json');
+  return join(USER_DATA_ROOT, 'workspaces', sanitizeSessionFragment(agentId), 'state.json');
 }
 
 function getSessionIndexPath(agentId) {
   const normalizedAgentId = sanitizeSessionFragment(agentId);
   const sessionRoot = WORKSPACE_BOUND_AGENT_IDS.has(normalizedAgentId)
-    ? join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', normalizedAgentId, 'sessions')
-    : join(os.homedir(), '.agentdev', 'AgentDevClaw', 'prebuilt-sessions', normalizedAgentId);
+    ? join(USER_DATA_ROOT, 'workspaces', normalizedAgentId, 'sessions')
+    : join(USER_DATA_ROOT, 'prebuilt-sessions', normalizedAgentId);
   return join(sessionRoot, 'index.json');
 }
 
@@ -276,8 +278,8 @@ const agentPath = resolve(PROTOCLAW_ROOT, agentDir);
 const agentJsPath = join(agentPath, 'agent.js');
 const agentName = agentNameArg || agentId;
 const sessionStoreDir = WORKSPACE_BOUND_AGENT_IDS.has(sanitizeSessionFragment(agentId))
-  ? join(os.homedir(), '.agentdev', 'AgentDevClaw', 'workspaces', sanitizeSessionFragment(agentId), 'sessions')
-  : join(os.homedir(), '.agentdev', 'AgentDevClaw', 'prebuilt-sessions', sanitizeSessionFragment(agentId));
+  ? join(USER_DATA_ROOT, 'workspaces', sanitizeSessionFragment(agentId), 'sessions')
+  : join(USER_DATA_ROOT, 'prebuilt-sessions', sanitizeSessionFragment(agentId));
 mkdirSync(sessionStoreDir, { recursive: true });
 
 const sessionStore = new FileSessionStore(sessionStoreDir);

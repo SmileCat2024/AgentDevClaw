@@ -5,16 +5,17 @@ import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync } from 'fs';
-import os from 'os';
 import { AgentStudioFeature } from '../../../local-features/dist/index.js';
 import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
+import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROTOCLAW_ROOT = join(__dirname, '..', '..', '..');
 const SYSTEM_PROMPT_PATH = join(__dirname, '.agentdev', 'prompts', 'system.md');
-const SYSTEM_FEATURE_CONFIG_PATH = join(os.homedir(), '.agentdev', 'AgentDevClaw', 'feature-setup.json');
+// 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
+const SYSTEM_FEATURE_CONFIG_PATH = join(resolveUserDataDir(), 'feature-setup.json');
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 
 function readSystemFeatureConfig() {
