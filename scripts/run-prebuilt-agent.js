@@ -17,7 +17,7 @@ import { DebugHub, FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core
 import { setTimeout as sleep } from 'timers/promises';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
-import { buildModelUsageMeta, reportUsageEvent } from './usage-report.js';
+import { buildCallUsageEvents, reportUsageEvent } from './usage-report.js';
 import { mapEnvelopeToTurnEvent } from './turn-event-mapping.js';
 import { CallArbiter, setDebugHubClass } from '../server/call-arbiter.js';
 import { createIMBridge } from './runtime-im-bridge.js';
@@ -945,37 +945,22 @@ SessionLifecycle.prototype.start = async function () {
         // 当前模型状态唯一权威在 agent meta（宿主小抄已退役）
         const llmMeta = typeof self.agent?.getLLMMeta === 'function' ? self.agent.getLLMMeta() : {};
         if (callSummary?.totalUsage && callIndex !== null) {
-          const usageEventId = [
-            'agent-call',
+          const usageEvents = buildCallUsageEvents({
             agentId,
-            self.sessionId,
+            sessionId: self.sessionId,
             runtimeInstanceId,
             callIndex,
-            callSummary.endTime || Date.now(),
-          ].join(':');
-          if (!reportedUsageEventIds.has(usageEventId)) {
-            reportedUsageEventIds.add(usageEventId);
-            const usageResult = await reportUsageEvent(SERVER_ORIGIN, {
-              eventId: usageEventId,
-              timestamp: callSummary.endTime || Date.now(),
-              source: 'agent-call',
-              agentId,
-              sessionId: self.sessionId,
-              runtimeInstanceId,
-              callIndex,
-              requestCount: callSummary.stepCount || 1,
-              cacheHitRequests: callSummary.cacheHitRequests || 0,
-              // 模型归因读 agent meta（唯一权威）；provider 同时充当 protocol 字段
-              model: buildModelUsageMeta(
-                typeof self.agent?.getLLMMeta === 'function' ? self.agent.getLLMMeta() : null,
-                'default',
-              ),
-              usage: callSummary.totalUsage,
-              context: {
-                contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
-                messageCount: messages.length,
-              },
-            });
+            callSummary,
+            llmMeta,
+            context: {
+              contextInputTokens: usageStats?.lastRequestUsage?.inputTokens || 0,
+              messageCount: messages.length,
+            },
+          });
+          for (const event of usageEvents) {
+            if (reportedUsageEventIds.has(event.eventId)) continue;
+            reportedUsageEventIds.add(event.eventId);
+            const usageResult = await reportUsageEvent(SERVER_ORIGIN, event);
             if (usageResult?.ok === false) {
               console.warn('[ProtoClaw Runtime] usage event sync failed:', usageResult.error || usageResult.status);
             }
