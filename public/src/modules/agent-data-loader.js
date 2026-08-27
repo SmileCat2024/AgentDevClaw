@@ -82,6 +82,10 @@ async function loadAgentData(agentId) {
       todoRes.ok ? todoRes.json() : Promise.resolve(getEmptyTodoPlan()),
       inputRes.json(),
     ]);
+    // 目标不可用（远程条目未运行、转发失败等）时端点返回错误对象而非数组；
+    // 归一化为空集合，避免下游迭代崩溃污染整个加载流程。
+    const toolList = Array.isArray(tools) ? tools : [];
+    const inputRequestList = Array.isArray(inputRequests) ? inputRequests : [];
     // Response headers may have arrived before a switch while one or more
     // bodies were still streaming/parsing. Never commit that older batch.
     if (!isSessionViewTokenCurrent(loadToken)) {
@@ -112,7 +116,7 @@ async function loadAgentData(agentId) {
 
     const nextToolRenderConfigs = {};
     const nextToolNames = {};
-    for (const tool of tools) {
+    for (const tool of toolList) {
       nextToolRenderConfigs[tool.name] = tool;
       nextToolNames[tool.name] = DEFAULT_DISPLAY_NAMES[tool.name] || tool.name;
     }
@@ -122,7 +126,7 @@ async function loadAgentData(agentId) {
       overview: overviewSnapshot,
       todoPlan,
       messages: msgsData.messages || [],
-      inputRequests,
+      inputRequests: inputRequestList,
       toolRenderConfigs: nextToolRenderConfigs,
       toolNames: nextToolNames,
     }, ({ current }) => {

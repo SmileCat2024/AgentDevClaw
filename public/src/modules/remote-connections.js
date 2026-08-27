@@ -187,6 +187,25 @@ function isRemoteEntryOnline(namespacedId) {
   return false;
 }
 
+// 逻辑条目 ID → 命名空间运行时引用（目录条目的 runtimeId 字段）。远程 viewer
+// 只认运行时 ID：runtime 数据端点、模板映射等 /api 请求都应以它寻址。条目尚无
+// 运行时（未启动/连接降级）时返回 null，调用方保持原 ID 显式失败，不静默换目标。
+function resolveRuntimeRef(logicalAgentId) {
+  const wanted = typeof logicalAgentId === 'string' ? logicalAgentId : '';
+  if (!wanted) return null;
+  for (const section of _rcVisibleSections.values()) {
+    if (section.status !== 'connected') continue;
+    for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+      for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
+        if ((entry.agentId || entry.id) === wanted && typeof entry.runtimeId === 'string') {
+          return entry.runtimeId;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function tryRestoreRemoteFocus() {
   if (_rcBootstrapSeen) return;
   _rcBootstrapSeen = true;
@@ -372,6 +391,9 @@ function ensureManagerDom() {
   root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeRemoteConnectionsManager();
   });
+  // 列表条目动作（edit/delete/handshake/toggle-enabled）走事件委托：
+  // .rcm-list 元素跨 reloadManagerData 的 innerHTML 重建保持不变，绑定一次即可。
+  bindManagerListEvents(root);
   return root;
 }
 
@@ -680,4 +702,5 @@ async function reloadManagerData() {
 window.RemoteConnections = {
   refresh: refreshRemoteCatalog,
   openManager: openRemoteConnectionsManager,
+  resolveRuntimeRef,
 };

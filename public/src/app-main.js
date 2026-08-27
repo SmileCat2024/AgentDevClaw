@@ -117,7 +117,12 @@ function groupConnectedAgents(agents) {
 
 function isRuntimeItemActive(runtimeId) {
   const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
-  return normalizedRuntimeId !== '' && normalizeAgentIdentity(currentRuntimeAgentId) === normalizedRuntimeId;
+  if (normalizedRuntimeId === '') return false;
+  const normalizedCurrent = normalizeAgentIdentity(currentRuntimeAgentId);
+  if (normalizedCurrent === normalizedRuntimeId) return true;
+  // 远程分组条目以逻辑 ID 渲染，而 currentRuntimeAgentId 持有命名空间运行时
+  // 引用；把条目 ID 解析到同一引用再比较，未解析到则不亮。
+  return normalizeAgentIdentity(window.RemoteConnections?.resolveRuntimeRef?.(normalizedRuntimeId)) === normalizedCurrent;
 }
 
 function toEpochMs(value) {
@@ -571,7 +576,13 @@ window.switchAgent = async (newAgentId) => {
   );
   const runtimeAgentId = requestedRuntimeOfWorkspaceHost
     ? newAgentId
-    : (targetAgent ? getAgentRuntimeId(targetAgent) : newAgentId);
+    : (targetAgent
+      ? getAgentRuntimeId(targetAgent)
+      : (isRemoteNamespaceAgentId(newAgentId)
+        // 远程条目：本地列表查不到，向目录解析命名空间运行时引用——远程 viewer
+        // 只认运行时 ID。无运行时（未启动/降级）保持原 ID，让请求显式失败。
+        ? (window.RemoteConnections?.resolveRuntimeRef?.(newAgentId) || newAgentId)
+        : newAgentId));
   if (!runtimeAgentId) return;
   if (isWorkspaceSurfaceUnit(targetAgent) && !requestedRuntimeOfWorkspaceHost) {
     if (targetAgent?.id === focusedAgentId && !currentRuntimeAgentId) return;
@@ -589,7 +600,9 @@ window.switchAgent = async (newAgentId) => {
   try {
     // Set global state and do optimistic render IMMEDIATELY — before the PUT.
     // This lets the user see cached data without waiting for a network round trip.
-    focusedAgentId = getLogicalAgentId(targetAgent) || runtimeAgentId;
+    focusedAgentId = targetAgent
+      ? (getLogicalAgentId(targetAgent) || runtimeAgentId)
+      : (isRemoteNamespaceAgentId(newAgentId) ? newAgentId : runtimeAgentId);
     currentRuntimeAgentId = runtimeAgentId;
     // 用户主动切换：立即冻结 viewer 侧会话身份。必须在此之前用 allAgents
     // 派生值（此时绑定尚未写入，读到的是用户点击时刻列表展示的会话），
@@ -683,7 +696,12 @@ window.switchAgent = async (newAgentId) => {
     // 供下次打开页面时恢复（sidebar-render.js 读取）。进入会话浏览时投影
     // 入口记忆让位（claw:lastFocusedEntryId 只保留「停留在入口首页」的语义）。
     try {
-      localStorage.setItem('claw:lastFocusedRuntimeId', runtimeAgentId);
+      // 远程条目持久化逻辑 ID（目录恢复按 entry.agentId 比对），运行时引用随
+      // 远端重启换代，不可作为跨会话身份。
+      localStorage.setItem(
+        'claw:lastFocusedRuntimeId',
+        isRemoteNamespaceAgentId(newAgentId) ? newAgentId : runtimeAgentId,
+      );
       localStorage.removeItem('claw:lastFocusedEntryId');
     } catch { /* localStorage 不可用时静默忽略 */ }
 

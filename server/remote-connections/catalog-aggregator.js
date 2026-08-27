@@ -87,6 +87,22 @@ function collectAgents({ connected, prebuilt, viewer }) {
     agents.set(agentId, { ...previous, ...record, sessions });
   };
 
+  // 运行时身份贯通：connected 源的 child 条目携带宿主→viewer 运行时映射
+  // （parent_id → runtime_session_id）。Phase 1 只读视图据此寻址远程 runtime
+  // 数据端点——远程 viewer 只认运行时 ID，不认逻辑 ID。同宿主多运行时
+  // （main/coder）优先 main。
+  const runtimeByParent = new Map();
+  for (const raw of connected || []) {
+    if (!raw || typeof raw !== 'object' || raw.source !== 'child') continue;
+    const parentId = cleanText(raw.parent_id) || cleanText(raw.parentId);
+    const childRuntimeId = cleanText(raw.runtime_session_id) || cleanText(raw.id);
+    if (!parentId || !childRuntimeId) continue;
+    const previous = runtimeByParent.get(parentId);
+    if (!previous || cleanText(raw.sessionType) === 'main') {
+      runtimeByParent.set(parentId, childRuntimeId);
+    }
+  }
+
   for (const raw of prebuilt || []) {
     if (!raw || typeof raw !== 'object') continue;
     upsert(raw.id, {
@@ -101,7 +117,7 @@ function collectAgents({ connected, prebuilt, viewer }) {
   }
   for (const raw of connected || []) {
     // child/external/投影条目是运行态投影而非工作空间宿主，会话身份已由宿主的
-    // workspace_sessions 覆盖，不重复成条目。
+    // workspace_sessions 覆盖，不重复成条目（其运行时身份已在上面并入宿主）。
     if (!raw || typeof raw !== 'object' || (raw.source && raw.source !== 'prebuilt')) continue;
     upsert(raw.id, {
       id: cleanText(raw.id),
@@ -109,6 +125,10 @@ function collectAgents({ connected, prebuilt, viewer }) {
       status: raw.status === 'running' ? 'running' : 'stopped',
       sessions: Array.isArray(raw.workspace_sessions?.sessions) ? raw.workspace_sessions.sessions : [],
     });
+  }
+  for (const [parentId, childRuntimeId] of runtimeByParent) {
+    const host = agents.get(parentId);
+    if (host && !host.runtimeId) host.runtimeId = childRuntimeId;
   }
   if (agents.size === 0 && viewer && Array.isArray(viewer.agents)) {
     for (const raw of viewer.agents) {
@@ -135,6 +155,8 @@ function buildAgentEntry(connectionId, agent) {
     ...(agent.icon ? { icon: agent.icon } : {}),
     ...(agent.launchMode ? { launchMode: agent.launchMode } : {}),
     ...(agent.status ? { status: agent.status } : {}),
+    // 命名空间化的运行时引用：前端以逻辑 ID 定位条目，运行时数据请求改用此值。
+    ...(agent.runtimeId ? { runtimeId: namespaceId(connectionId, agent.runtimeId) } : {}),
   };
 }
 
