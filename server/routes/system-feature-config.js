@@ -278,6 +278,21 @@ export function setupSystemFeatureConfigRoutes(app, express) {
         features.push({ featureName: 'contextGuard', manifest: CONTEXT_GUARD_MANIFEST });
       }
 
+      // StepRotatingModel：类名不满足上面的 /Feature$/ 过滤，且属于 Claw 本地
+      // features/ 包（不在固定 importPaths 内），显式加载取其 manifest 单一权威。
+      if (!seen.has('step-rotating-model')) {
+        try {
+          const mod = await import('../../features/step-rotating-model/dist/index.js');
+          const instance = new mod.StepRotatingModel();
+          const manifest = typeof instance.getFeatureManifest === 'function'
+            ? instance.getFeatureManifest()
+            : null;
+          if (manifest?.settings?.properties) {
+            features.push({ featureName: instance.name, manifest });
+          }
+        } catch {}
+      }
+
       res.json({ features });
     } catch (err) {
       res.status(500).json({ error: err.message });

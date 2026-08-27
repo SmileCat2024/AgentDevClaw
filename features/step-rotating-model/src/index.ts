@@ -21,6 +21,7 @@ import {
   type CallStartContext,
   type CapabilityDefinition,
   type FeatureInitContext,
+  type FeatureManifestDefinition,
   type PackageInfo,
   type StepStartContext,
   type Tool,
@@ -144,6 +145,82 @@ export class StepRotatingModel implements AgentFeature {
 
   getTemplateNames(): string[] {
     return [];
+  }
+
+  /**
+   * Manifest 配置契约：声明轮转初值在全局层 / agent 层 / 目录层的三态
+   * 编辑器中可配（会话内 capability / 会话控制面板仍可实时覆盖）。
+   * preset 清单是宿主活数据，select 走 dynamicOptions（编辑器自拉清单）。
+   */
+  getFeatureManifest(): FeatureManifestDefinition {
+    const effortOptions = [
+      { label: '默认（跟随 preset）', value: '' },
+      ...EFFORT_VALUES.map((v) => ({ label: v, value: v })),
+    ];
+    return {
+      schemaVersion: 1 as const,
+      settings: {
+        properties: {
+          enabled: {
+            type: 'boolean' as const,
+            title: '默认开启轮转',
+            description: '新会话启动时轮转的初始开关。默认关闭；会话内可经会话控制面板实时开关。',
+            default: DEFAULTS.enabled,
+          },
+          strongPreset: {
+            type: 'select' as const,
+            dynamicOptions: 'model-presets',
+            title: '强模型 preset',
+            description: '轮转周期内先连续执行的模型，通常承担规划与关键决策 step。',
+            default: DEFAULTS.strongPreset,
+          },
+          strongEffort: {
+            type: 'select' as const,
+            title: '强模型思考档位',
+            description: '默认 = 跟随 preset 默认档位。此处为跨协议词表兜底，按协议生效的子集在会话面板中渲染。',
+            default: '',
+            options: effortOptions,
+          },
+          cheapPreset: {
+            type: 'select' as const,
+            dynamicOptions: 'model-presets',
+            title: '性价比模型 preset',
+            description: '承接轮转中低价值 step，压低整体成本。',
+            default: DEFAULTS.cheapPreset,
+          },
+          cheapEffort: {
+            type: 'select' as const,
+            title: '性价比模型思考档位',
+            description: '默认 = 跟随 preset 默认档位；通常选 none/minimal 压缩开销。',
+            default: '',
+            options: effortOptions,
+          },
+          strongSteps: {
+            type: 'number' as const,
+            title: '强模型连续步数',
+            description: '一个轮转周期内强模型连续执行的 step 数（1-10）。',
+            min: 1,
+            max: 10,
+            step: 1,
+            default: DEFAULTS.strongSteps,
+          },
+          cheapSteps: {
+            type: 'number' as const,
+            title: '性价比模型连续步数',
+            description: '一个轮转周期内性价比模型连续执行的 step 数（1-10）。',
+            min: 1,
+            max: 10,
+            step: 1,
+            default: DEFAULTS.cheapSteps,
+          },
+        },
+        sections: [{
+          id: 'rotation',
+          title: '模型轮转',
+          properties: ['enabled', 'strongPreset', 'strongEffort', 'cheapPreset', 'cheapEffort', 'strongSteps', 'cheapSteps'],
+        }],
+      },
+    };
   }
 
   getTools(): Tool[] {

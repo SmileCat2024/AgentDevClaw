@@ -48,6 +48,8 @@ function createFeatureConfigEditor(options = {}) {
   const state = {
     manifests: null,
     shellAvailability: null,
+    /** 宿主模型 preset 清单（dynamicOptions='model-presets' 的选项来源） */
+    modelPresets: [],
     sections: [],
     activeId: null,
     resolved: null,
@@ -73,15 +75,22 @@ function createFeatureConfigEditor(options = {}) {
   }
 
   async function loadStaticData() {
-    const [mRes, saRes] = await Promise.all([
+    const [mRes, saRes, mcRes] = await Promise.all([
       fetch('/protoclaw/system_feature_manifests'),
       fetch('/protoclaw/shell_availability').catch(() => null),
+      fetch('/protoclaw/model_config').catch(() => null),
     ]);
     state.manifests = (await mRes.json()).features || [];
     try {
       state.shellAvailability = saRes && saRes.ok ? await saRes.json() : null;
     } catch {
       state.shellAvailability = null;
+    }
+    try {
+      const data = mcRes && mcRes.ok ? await mcRes.json() : null;
+      state.modelPresets = Array.isArray(data?.presets) ? data.presets : [];
+    } catch {
+      state.modelPresets = [];
     }
   }
 
@@ -301,6 +310,22 @@ function createFeatureConfigEditor(options = {}) {
     `;
   }
 
+  // dynamicOptions 的选项来源（活数据，宿主运行时提供）。静态 options 优先。
+  // 清单拉取失败为空时，下拉仅含当前值（与会话面板的降级一致）。
+  function resolveSelectOptions(prop, value) {
+    if (Array.isArray(prop.options) && prop.options.length) return prop.options;
+    if (prop.dynamicOptions === 'model-presets') {
+      const list = state.modelPresets.map(p => ({
+        label: String(p.name || p.model || ''),
+        value: String(p.name || p.model || ''),
+      })).filter(o => o.value !== '');
+      const val = value != null ? String(value) : '';
+      if (!list.length && val) return [{ label: val, value: val }];
+      return list;
+    }
+    return [];
+  }
+
   function renderInput(fullKey, prop, value, disabled) {
     const dis = disabled ? ' disabled' : '';
     if (isListType(prop)) return renderListInput(fullKey, prop, value, dis);
@@ -309,10 +334,8 @@ function createFeatureConfigEditor(options = {}) {
     switch (prop.type) {
       case 'select': {
         let h = `<select class="fs-select" data-config-key="${escapeHtml(fullKey)}"${dis}>`;
-        if (prop.options) {
-          for (const o of prop.options) {
-            h += `<option value="${escapeHtml(String(o.value))}"${String(o.value) === val ? ' selected' : ''}>${escapeHtml(o.label)}</option>`;
-          }
+        for (const o of resolveSelectOptions(prop, value)) {
+          h += `<option value="${escapeHtml(String(o.value))}"${String(o.value) === val ? ' selected' : ''}>${escapeHtml(o.label)}</option>`;
         }
         return h + `</select>`;
       }
