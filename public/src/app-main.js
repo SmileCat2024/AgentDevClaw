@@ -120,9 +120,11 @@ function isRuntimeItemActive(runtimeId) {
   if (normalizedRuntimeId === '') return false;
   const normalizedCurrent = normalizeAgentIdentity(currentRuntimeAgentId);
   if (normalizedCurrent === normalizedRuntimeId) return true;
-  // 远程分组条目以逻辑 ID 渲染，而 currentRuntimeAgentId 持有命名空间运行时
-  // 引用；把条目 ID 解析到同一引用再比较，未解析到则不亮。
-  return normalizeAgentIdentity(window.RemoteConnections?.resolveRuntimeRef?.(normalizedRuntimeId)) === normalizedCurrent;
+  // 远程分组条目以命名空间运行时引用渲染，而 currentRuntimeAgentId 持有同一
+  // 引用的解析结果（switchAgent 解析后是裸运行时 id）。两者归一化后比较；
+  // 反向解析（裸 id → 命名空间引用）不可靠，直接比较原始值即可覆盖。
+  const resolved = window.RemoteConnections?.resolveRuntimeRef?.(normalizedRuntimeId);
+  return normalizeAgentIdentity(resolved) === normalizedCurrent;
 }
 
 function toEpochMs(value) {
@@ -613,10 +615,12 @@ window.switchAgent = async (newAgentId) => {
     );
     _recentlyFinishedRuntimes.delete(runtimeAgentId);
     // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开；
-    // remote: 命名空间条目不在 allAgents 中，一律只读（Phase 1 远程面无写路径）。
+    // 远程条目按用户点击的命名空间 id 判定只读（runtimeAgentId 可能已被
+    // resolveRuntimeRef 解析为裸运行时 id，丢失 remote: 前缀——远程面无写路径，
+    // 解析成功后同样必须只读）。
     readOnlyMode = targetAgent
       ? targetAgent.input_accepted === false
-      : isRemoteNamespaceAgentId(runtimeAgentId);
+      : (isRemoteNamespaceAgentId(newAgentId) || isRemoteNamespaceAgentId(runtimeAgentId));
     currentWorkspaceArtifactDetail = null;
     currentWorkspaceDocsetDetail = null;
     currentProjectDocsetOpen = false;

@@ -177,6 +177,13 @@ export function createConnectedAgentsQuery(deps) {
         continue;
       }
 
+      // Viewer-only child runtimes do not carry workspace metadata themselves.
+      // Resolve their selected session through the same session index used for
+      // managed runtimes, so the sidebar can project the real directory instead
+      // of falling back to an internal parent agent id.
+      const childWorkspaceMeta = !exposeAsSeparateAssemblyRuntime && runtimeAgent.parentAgentId
+        ? await readWorkspaceSessionMeta(runtimeAgent.parentAgentId, runtimeAgent.selectedSessionId)
+        : null;
       connectedAgents.push({
         id: runtimeAgent.id,
         name: runtimeAgent.name,
@@ -184,11 +191,31 @@ export function createConnectedAgentsQuery(deps) {
         status: runtimeAgent.connected ? 'running' : 'stopped',
         source: exposeAsSeparateAssemblyRuntime ? 'external' : (runtimeAgent.parentAgentId ? 'child' : 'external'),
         parent_id: exposeAsSeparateAssemblyRuntime ? matched.id : (runtimeAgent.parentAgentId || null),
-        active_workspace_session_id: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_session_id || null) : null,
-        active_workspace_session_form_id: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_session_form_id || null) : null,
-        active_workspace_session_title: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_session_title || null) : null,
-        active_workspace_agent_name: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_agent_name || null) : null,
-        active_workspace_display_name: exposeAsSeparateAssemblyRuntime ? (matched.active_workspace_display_name || null) : null,
+        sidebar_entry_id: exposeAsSeparateAssemblyRuntime
+          ? matched.id
+          : (runtimeAgent.parentAgentId
+            ? (String(runtimeAgent.sessionType || 'main') === 'main'
+              ? runtimeAgent.parentAgentId
+              : `${runtimeAgent.parentAgentId}:${String(runtimeAgent.sessionType || 'main')}`)
+            : ''),
+        active_workspace_session_id: exposeAsSeparateAssemblyRuntime
+          ? (matched.active_workspace_session_id || null)
+          : (childWorkspaceMeta?.active_workspace_session_id || null),
+        active_workspace_session_form_id: exposeAsSeparateAssemblyRuntime
+          ? (matched.active_workspace_session_form_id || null)
+          : (childWorkspaceMeta?.active_workspace_session_form_id || null),
+        active_workspace_session_title: exposeAsSeparateAssemblyRuntime
+          ? (matched.active_workspace_session_title || null)
+          : (childWorkspaceMeta?.active_workspace_session_title || null),
+        active_workspace_agent_name: exposeAsSeparateAssemblyRuntime
+          ? (matched.active_workspace_agent_name || null)
+          : (childWorkspaceMeta?.active_workspace_agent_name || null),
+        active_workspace_display_name: exposeAsSeparateAssemblyRuntime
+          ? (matched.active_workspace_display_name || null)
+          : (childWorkspaceMeta?.active_workspace_display_name || null),
+        open_directory: exposeAsSeparateAssemblyRuntime
+          ? ''
+          : (childWorkspaceMeta?.open_directory || ''),
         connection_info: runtimeAgent.connectionInfo || 'viewer://127.0.0.1:2026',
         pid: runtimeAgent.pid || null,
         runtime_session_id: runtimeAgent.id,

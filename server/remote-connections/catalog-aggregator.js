@@ -5,21 +5,29 @@ import { REMOTE_NAMESPACE_PREFIX } from '../shared/request-target.js';
 import { originFor } from './tunnel-manager.js';
 
 // R1-05：远程工作空间目录聚合（ADR-0008 第 4、8 条）。
+// 对象模型对齐本地"左侧叶子条目 = 运行中会话"的既有心智：
+//   - 叶子条目 = 远程 Claw 中每个存活 child runtime（get_connected_agents 的
+//     source==='child' 且 status==='running' 条目）。该条目自带运行中会话的完整
+//     身份：open_directory（会话工作目录）、active_workspace_session_id（会话 ID）、
+//     sessionType、显示名——不再拉取 prebuilt / workspace_sessions 历史索引，避免
+//     把"全部历史会话"伪装成可进入的条目。
+//   - 分组 = 工作空间目录：按 open_directory 完整路径分组（groupKey 含完整目录，
+//     防同名叶目录跨分组串组；displayName 仍为叶名）。无目录的 runtime 不生成
+//     项目组标题，直接作为对应 workspace 下的会话叶子，不暴露宿主 agent id。
+//   - Agent 只是叶子条目的归属元数据（agentId 字段），不作为可点击条目渲染。
+//   - 寻址：叶子条目的 id / runtimeId 即命名空间化的 viewer runtime ID，点击直接
+//     以它寻址远程 viewer（远程只认 runtime ID，不认逻辑 ID）。
 // 对每条 enabled 连接：
 //   - 健康状态非 connected（disconnected/degraded/configured/...）→ 保留连接身份与
 //     状态、workspaces 为空、不发起任何拉取——不删除分组、不伪装正常；"最后已知
 //     身份"由前端渲染层持有（本地零业务状态镜像，ADR-0008 第 2 条）。
-//   - connected → 经其 origin 并行拉取远程现有目录端点组合：get_connected_agents、
-//     get_prebuilt_agents、/api/agents，以远程实际返回为准组合（部分端点失败时用
-//     其余返回继续组合，全部失败才降级）。prebuilt_sessions 的会话明细已内嵌于前
-//     两者响应的 workspace_sessions，按 agent 逐个拉取属于会话详情面，不进入目录
-//     轮询路径（聚合节奏对齐 sidebar 轮询量级）。
-// 远程返回的 agent/session ID 一律加 remote:<connId>: 前缀（复用
-// REMOTE_NAMESPACE_PREFIX）后再返回，前端只处理不透明 ID。不缓存：每次聚合都透传
-// 拉取远程真值。每连接独立超时，一条连接挂起不阻塞整体响应（该连接降级返回）。
+//   - connected → 经其 origin 拉取 get_connected_agents（主源）；该端点不可用时以
+//     /api/agents 的在线 runtime 兜底（无目录信息 → 直属会话）。
+// 远程返回的 ID 一律加 remote:<connId>: 前缀（复用 REMOTE_NAMESPACE_PREFIX）后再
+// 返回，前端只处理不透明 ID。不缓存：每次聚合都透传拉取远程真值。每连接独立超时，
+// 一条连接挂起不阻塞整体响应（该连接降级返回）。
 
 const CONNECTED_AGENTS_PATH = '/protoclaw/get_connected_agents';
-const PREBUILT_AGENTS_PATH = '/protoclaw/get_prebuilt_agents';
 const VIEWER_AGENTS_PATH = '/api/agents';
 
 class CatalogTimeoutError extends Error {
@@ -47,6 +55,7 @@ function namespaceId(connectionId, id) {
 }
 
 // 与前端 project-data.js 的 getPathLeaf 同语义：取目录路径最后一段作为项目名。
+// 同时匹配正斜杠与反斜杠——远程 Windows 盘符路径（D:\code\project）同样适用。
 function directoryLeaf(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -73,175 +82,158 @@ function classifyCatalogFailure(error, timeoutMs) {
   };
 }
 
-// 以 agent 为单位归并目录源：prebuilt 提供元数据（icon/ui/launchMode...），
-// connected 覆盖运行态字段（status/workspace_sessions）。两者都不可用时才以
-// ViewerWorker runtime 目录成组（降级组合，无目录信息）。
-function collectAgents({ connected, prebuilt, viewer }) {
-  const agents = new Map();
+// 归并目录源：connected（get_connected_agents）提供运行中会话条目（主源）；
+// viewer（/api/agents 在线 runtime）在 connected 不可用时兜底（无目录信息）。
+// 两者都不提供可用的运行中 runtime 时返回空——不伪造条目。prebuilt 历史会话索引
+// 不进入目录（叶子必须是当前可进入的运行中会话）。
+function resolveSidebarEntryId(raw, parentId, sessionType) {
+  const explicit = cleanText(raw?.sidebar_entry_id) || cleanText(raw?.sidebarEntryId);
+  if (explicit) return explicit;
+  const owner = cleanText(parentId);
+  if (!owner) return '';
+  return sessionType === 'main' ? owner : `${owner}:${sessionType}`;
+}
+
+function collectRuntimes({ connected, viewer }) {
+  const runtimes = new Map();
+
   const upsert = (id, record) => {
-    const agentId = cleanText(id);
-    if (!agentId) return;
-    const previous = agents.get(agentId) || {};
-    // 会话列表取非空者：某端点返回缺字段时不把另一来源的会话清空。
-    const sessions = record.sessions.length > 0 ? record.sessions : (previous.sessions || []);
-    agents.set(agentId, { ...previous, ...record, sessions });
+    const runtimeId = cleanText(id);
+    if (!runtimeId) return;
+    const previous = runtimes.get(runtimeId) || {};
+    runtimes.set(runtimeId, { ...previous, ...record });
   };
 
-  // 运行时身份贯通：connected 源的 child 条目携带宿主→viewer 运行时映射
-  // （parent_id → runtime_session_id）。Phase 1 只读视图据此寻址远程 runtime
-  // 数据端点——远程 viewer 只认运行时 ID，不认逻辑 ID。同宿主多运行时
-  // （main/coder）优先 main。
-  const runtimeByParent = new Map();
   for (const raw of connected || []) {
     if (!raw || typeof raw !== 'object' || raw.source !== 'child') continue;
+    // 只取存活 runtime：死掉的 child（status 非 running / connected=false）不应以
+    // "运行中会话"的身份占住侧栏条目。
+    const alive = raw.status === 'running' || raw.connected === true;
+    if (!alive) continue;
     const parentId = cleanText(raw.parent_id) || cleanText(raw.parentId);
-    const childRuntimeId = cleanText(raw.runtime_session_id) || cleanText(raw.id);
-    if (!parentId || !childRuntimeId) continue;
-    const previous = runtimeByParent.get(parentId);
-    if (!previous || cleanText(raw.sessionType) === 'main') {
-      runtimeByParent.set(parentId, childRuntimeId);
-    }
+    const sessionType = cleanText(raw.sessionType) || 'main';
+    upsert(raw.runtime_session_id || raw.id, {
+      id: cleanText(raw.runtime_session_id) || cleanText(raw.id),
+      agentId: parentId,
+      sidebarEntryId: resolveSidebarEntryId(raw, parentId, sessionType),
+      sidebarEntryName: cleanText(raw.sidebar_entry_name) || cleanText(raw.sidebarEntryName),
+      sidebarEntryGroup: cleanText(raw.sidebar_entry_group) || cleanText(raw.sidebarEntryGroup),
+      name: cleanText(raw.name) || cleanText(raw.active_workspace_session_title)
+        || cleanText(raw.active_workspace_display_name) || cleanText(raw.id),
+      workspaceName: cleanText(raw.active_workspace_display_name)
+        || cleanText(raw.active_workspace_agent_name) || cleanText(raw.name),
+      sessionType,
+      openDirectory: cleanText(raw.open_directory) || cleanText(raw.openDirectory) || '',
+      sessionId: cleanText(raw.active_workspace_session_id) || cleanText(raw.activeWorkspaceSessionId) || '',
+      sessionTitle: cleanText(raw.active_workspace_session_title) || '',
+      updatedAt: cleanText(raw.updated_at) || cleanText(raw.updatedAt) || '',
+      messageCount: Number.isFinite(raw.message_count) ? raw.message_count : null,
+      connected: raw.connected !== false,
+    });
   }
 
-  for (const raw of prebuilt || []) {
-    if (!raw || typeof raw !== 'object') continue;
-    upsert(raw.id, {
-      id: cleanText(raw.id),
-      name: cleanText(raw.name),
-      description: cleanText(raw.description),
-      icon: cleanText(raw.icon) || null,
-      launchMode: cleanText(raw.launchMode) || null,
-      status: null,
-      sessions: Array.isArray(raw.workspace_sessions?.sessions) ? raw.workspace_sessions.sessions : [],
-    });
-  }
-  for (const raw of connected || []) {
-    // child/external/投影条目是运行态投影而非工作空间宿主，会话身份已由宿主的
-    // workspace_sessions 覆盖，不重复成条目（其运行时身份已在上面并入宿主）。
-    if (!raw || typeof raw !== 'object' || (raw.source && raw.source !== 'prebuilt')) continue;
-    upsert(raw.id, {
-      id: cleanText(raw.id),
-      name: cleanText(raw.name),
-      status: raw.status === 'running' ? 'running' : 'stopped',
-      sessions: Array.isArray(raw.workspace_sessions?.sessions) ? raw.workspace_sessions.sessions : [],
-    });
-  }
-  for (const [parentId, childRuntimeId] of runtimeByParent) {
-    const host = agents.get(parentId);
-    if (host && !host.runtimeId) host.runtimeId = childRuntimeId;
-  }
-  if (agents.size === 0 && viewer && Array.isArray(viewer.agents)) {
+  if (viewer && Array.isArray(viewer.agents)) {
     for (const raw of viewer.agents) {
       if (!raw || typeof raw !== 'object') continue;
-      upsert(raw.id, {
-        id: cleanText(raw.id),
+      if (raw.connected !== true) continue;
+      const runtimeId = cleanText(raw.id);
+      if (!runtimeId || runtimes.has(runtimeId)) continue;
+      const parentId = cleanText(raw.parentAgentId);
+      const sessionType = cleanText(raw.sessionType) || 'main';
+      upsert(runtimeId, {
+        id: runtimeId,
+        agentId: parentId,
         name: cleanText(raw.name),
-        status: raw.connected === true ? 'running' : 'stopped',
-        sessions: [],
+        workspaceName: cleanText(raw.name),
+        sessionType,
+        openDirectory: '',
+        sessionId: '',
+        sessionTitle: '',
+        updatedAt: '',
+        messageCount: null,
+        connected: true,
+        sidebarEntryId: resolveSidebarEntryId(raw, parentId, sessionType),
       });
     }
   }
-  return agents;
+
+  return runtimes;
 }
 
-function buildAgentEntry(connectionId, agent) {
-  const namespaced = namespaceId(connectionId, agent.id);
+function buildRuntimeEntry(connectionId, runtime) {
+  const namespacedRuntimeId = namespaceId(connectionId, runtime.id);
   return {
-    id: namespaced,
-    agentId: namespaced,
-    kind: 'agent',
-    name: agent.name || agent.id,
-    ...(agent.description ? { description: agent.description } : {}),
-    ...(agent.icon ? { icon: agent.icon } : {}),
-    ...(agent.launchMode ? { launchMode: agent.launchMode } : {}),
-    ...(agent.status ? { status: agent.status } : {}),
-    // 命名空间化的运行时引用：前端以逻辑 ID 定位条目，运行时数据请求改用此值。
-    ...(agent.runtimeId ? { runtimeId: namespaceId(connectionId, agent.runtimeId) } : {}),
+    id: namespacedRuntimeId,
+    agentId: runtime.agentId ? namespaceId(connectionId, runtime.agentId) : undefined,
+    kind: 'runtime',
+    name: runtime.name || runtime.id,
+    sessionType: runtime.sessionType,
+    runtimeId: namespacedRuntimeId,
+    openDirectory: runtime.openDirectory,
+    ...(runtime.sessionId ? { sessionId: namespaceId(connectionId, runtime.sessionId) } : {}),
+    ...(runtime.sessionTitle ? { sessionTitle: runtime.sessionTitle } : {}),
+    ...(runtime.updatedAt ? { updatedAt: runtime.updatedAt } : {}),
+    ...(runtime.messageCount !== null ? { messageCount: runtime.messageCount } : {}),
+    ...(runtime.sidebarEntryId ? { sidebarEntryId: runtime.sidebarEntryId } : {}),
+    ...(runtime.sidebarEntryName ? { sidebarEntryName: runtime.sidebarEntryName } : {}),
+    ...(runtime.sidebarEntryGroup ? { sidebarEntryGroup: runtime.sidebarEntryGroup } : {}),
+    ...(runtime.sidebarEntryIcon ? { sidebarEntryIcon: runtime.sidebarEntryIcon } : {}),
+    ...(runtime.workspaceName ? { workspaceName: runtime.workspaceName } : {}),
   };
 }
 
-function buildSessionEntry(connectionId, agentId, session) {
-  const sessionId = cleanText(session?.id);
-  if (!sessionId) return null;
-  const title = cleanText(session.title);
-  return {
-    id: namespaceId(connectionId, sessionId),
-    agentId: namespaceId(connectionId, agentId),
-    kind: 'session',
-    name: title || sessionId,
-    sessionType: cleanText(session.sessionType) || 'main',
-    ...(title ? { title } : {}),
-    ...(cleanText(session.updatedAt) ? { updatedAt: cleanText(session.updatedAt) } : {}),
-    ...(typeof session.archived === 'boolean' ? { archived: session.archived } : {}),
-    ...(typeof session.messageCount === 'number' ? { messageCount: session.messageCount } : {}),
-  };
-}
-
-// 分组规则：目录会话按 openDirectory 叶段分组；宿主 agent 条目归入其每个目录组。
-// 没有目录会话的 agent（qqbot/work-group 等）自身即工作空间，以 agentId 为分组名
-// 回退——与本地"工作空间通常代表一个 Agent"的心智一致。
+// 分组规则：叶子（运行中会话 runtime）按 openDirectory 完整路径分组；displayName
+// 取叶段。无目录的 runtime 保持为直属会话，不生成伪项目组。
+// groupKey 用完整目录身份（remote:<connId>:<agentId>:<encoded-dir>）防同名叶目录
+// 跨 agent / 跨连接串组；目录名本身不参与路由寻址，仅作分组键。
 function composeWorkspaces(connectionId, connectionName, sources) {
-  const agents = collectAgents(sources);
+  const runtimes = collectRuntimes(sources);
   const groups = new Map();
-  const groupOf = (projectName) => {
-    let group = groups.get(projectName);
+
+  const groupOf = (identity, displayName, projectDir = '') => {
+    let group = groups.get(identity);
     if (!group) {
-      group = { projectName, entries: new Map() };
-      groups.set(projectName, group);
+      group = { identity, displayName, projectDir, entries: new Map() };
+      groups.set(identity, group);
     }
     return group;
   };
+  const encodeDirKey = (dir) => {
+    try { return encodeURIComponent(dir); } catch { return 'dir'; }
+  };
 
-  for (const agent of agents.values()) {
-    const sessionsById = new Map();
-    for (const session of agent.sessions || []) {
-      const sessionId = cleanText(session?.id);
-      if (sessionId) sessionsById.set(sessionId, session);
-    }
-
-    const agentEntry = buildAgentEntry(connectionId, agent);
-    const directoryGroups = new Set();
-    for (const session of sessionsById.values()) {
-      const leaf = directoryLeaf(session.openDirectory);
-      if (!leaf) continue;
-      const entry = buildSessionEntry(connectionId, agent.id, session);
-      if (entry) groupOf(leaf).entries.set(entry.id, entry);
-      directoryGroups.add(leaf);
-    }
-
-    if (directoryGroups.size === 0) {
-      const fallback = groupOf(agent.id);
-      fallback.entries.set(agentEntry.id, agentEntry);
-      for (const session of sessionsById.values()) {
-        if (directoryLeaf(session.openDirectory)) continue;
-        const entry = buildSessionEntry(connectionId, agent.id, session);
-        if (entry) fallback.entries.set(entry.id, entry);
-      }
+  for (const runtime of runtimes.values()) {
+    const entry = buildRuntimeEntry(connectionId, runtime);
+    const dir = runtime.openDirectory;
+    if (dir) {
+      const identity = namespaceId(connectionId, `${runtime.agentId || runtime.id}:${encodeDirKey(dir)}`);
+      groupOf(identity, directoryLeaf(dir), dir).entries.set(entry.id, entry);
     } else {
-      for (const leaf of directoryGroups) {
-        groupOf(leaf).entries.set(agentEntry.id, agentEntry);
-      }
+      const fallbackName = runtime.workspaceName || runtime.name || '未命名工作空间';
+      const identity = namespaceId(connectionId, `no-dir:${encodeDirKey(runtime.agentId || runtime.id)}:${encodeDirKey(fallbackName)}`);
+      groupOf(identity, fallbackName, '').entries.set(entry.id, entry);
     }
   }
 
   return [...groups.values()]
     .map((group) => ({
-      groupKey: namespaceId(connectionId, group.projectName),
-      displayName: `${connectionName}：${group.projectName}`,
-      projectName: group.projectName,
+      groupKey: group.identity,
+      // 连接是传输元数据，不是用户可见的侧栏层级；主机名保留在
+      // 远程目录项目组标签中，用于区分同名目录，但不单独占一层。
+      displayName: group.projectDir ? `${connectionName}：${group.displayName}` : '',
+      // 无目录 runtime 没有项目层，直接作为 workspace 下的会话叶子。
+      projectName: group.projectDir ? `${connectionName}：${group.displayName}` : '',
+      projectDir: group.projectDir || '',
       entries: [...group.entries.values()].sort(compareEntries),
     }))
     .sort((left, right) => left.projectName.localeCompare(right.projectName));
 }
 
-// 排序确定性：agent 条目在前，会话按更新时间倒序（对齐本地 recency 心智），
-// 平局以 id 兜底，保证跨轮询顺序稳定。
+// 排序确定性：会话按更新时间倒序（对齐本地 recency 心智），平局以 id 兜底，
+// 保证跨轮询顺序稳定。
 function compareEntries(left, right) {
-  if (left.kind !== right.kind) return left.kind === 'agent' ? -1 : 1;
-  if (left.kind === 'session') {
-    const updatedDiff = String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''));
-    if (updatedDiff !== 0) return updatedDiff;
-  }
+  const updatedDiff = String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''));
+  if (updatedDiff !== 0) return updatedDiff;
   return String(left.id).localeCompare(String(right.id));
 }
 
@@ -318,11 +310,10 @@ export class CatalogAggregator {
 
     const usable = {
       connected: Array.isArray(sources.connected) ? sources.connected : null,
-      prebuilt: Array.isArray(sources.prebuilt) ? sources.prebuilt : null,
       viewer: sources.viewer && Array.isArray(sources.viewer.agents) ? sources.viewer : null,
     };
     const failed = sources.errors.map((error) => error.message).join('；');
-    if (!usable.connected && !usable.prebuilt && !usable.viewer) {
+    if (!usable.connected && !usable.viewer) {
       this.logger.warn(`远程连接 ${connection.id} 目录端点均未返回可用数据`, { failed });
       return {
         ...section,
@@ -344,7 +335,7 @@ export class CatalogAggregator {
     };
   }
 
-  // 每连接独立超时：三个端点共享一个 AbortController，超时即整体放弃该连接的
+  // 每连接独立超时：两个端点共享一个 AbortController，超时即整体放弃该连接的
   // 本轮目录拉取（Promise.all 随首个超时拒绝立即返回，不等待其余挂起请求）。
   async fetchConnectionSources(connection) {
     const controller = new AbortController();
@@ -386,12 +377,11 @@ export class CatalogAggregator {
     };
 
     try {
-      const [connected, prebuilt, viewer] = await Promise.all([
+      const [connected, viewer] = await Promise.all([
         readTolerant(CONNECTED_AGENTS_PATH),
-        readTolerant(PREBUILT_AGENTS_PATH),
         readTolerant(VIEWER_AGENTS_PATH),
       ]);
-      return { connected, prebuilt, viewer, errors };
+      return { connected, viewer, errors };
     } finally {
       this.clearTimeout(timer);
     }

@@ -2,9 +2,9 @@
  * remote-connections.js
  *
  * ADR-0008 Phase 1 用户可见面（R1-07）：
- *  - 左侧列表「远程工作空间」分组：消费 /protoclaw/remote_catalog（R1-05），
- *    与本地分组在渲染层合并；分组键为 groupKey（remote:<connId>:<project>），
- *    与本地同名项目天然隔离。
+ *  - 侧栏项目投影：消费 /protoclaw/remote_catalog（R1-05），将远程目录
+ *    投影到对应 workspace 的统一「项目 → 运行时」渲染模型中；连接只参与
+ *    内部寻址与状态，不单独占用用户可见层级。
  *  - 连接管理面板：走 /protoclaw/remote_connections 增删改与握手（server 同步
  *    健康探测 / 托管隧道生命周期，全程不重启生效）。
  *  - 远程条目进入只读主视图（switchAgent 按 remote: 命名空间强制 readOnlyMode）；
@@ -27,8 +27,7 @@ const REMOTE_CONN_STATUS_CLASSES = new Set([
 
 let _rcCatalogInFlight = false;
 let _rcLastCatalogFetchAt = 0;
-let _rcZoneEl = null;
-let _rcLastZoneHtml = '';
+let _rcSidebarProjectionVersion = 0;
 // 连接全集（含 disabled，来自 manager 的 CRUD 响应）：区分「删除」与「仅停用」。
 let _rcAllConnectionIds = new Set();
 
@@ -154,7 +153,8 @@ async function refreshRemoteCatalog() {
       // transport failure behaves like a 404: no remote UI this cycle
       ingestRemoteCatalog(null);
     }
-    renderRemoteSidebarZone(renderedSomething);
+    _rcSidebarProjectionVersion += 1;
+    if (typeof renderAgentList === 'function') renderAgentList();
     if (renderedSomething) tryRestoreRemoteFocus();
   } finally {
     _rcCatalogInFlight = false;
@@ -179,8 +179,7 @@ function isRemoteEntryOnline(namespacedId) {
     if (section.status !== 'connected') continue;
     for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
       for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
-        const target = entry.agentId || entry.id;
-        if (target === namespacedId) return true;
+        if (entry.runtimeId === namespacedId || entry.id === namespacedId || entry.agentId === namespacedId) return true;
       }
     }
   }
@@ -197,8 +196,11 @@ function resolveRuntimeRef(logicalAgentId) {
     if (section.status !== 'connected') continue;
     for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
       for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
-        if ((entry.agentId || entry.id) === wanted && typeof entry.runtimeId === 'string') {
-          return entry.runtimeId;
+        // 目录条目身份：runtimeId = 命名空间运行时引用（点击寻址目标），
+        // id 与 agentId（归属宿主）是额外身份。wanted 可能是其中任一。
+        if (entry.runtimeId === wanted || entry.id === wanted || entry.agentId === wanted) {
+          if (typeof entry.runtimeId === 'string') return entry.runtimeId;
+          return entry.id || null;
         }
       }
     }
@@ -226,118 +228,75 @@ function tryRestoreRemoteFocus() {
   void window.switchAgent(rememberedId).catch((e) => console.warn('[remote-connections] focus restore failed:', e));
 }
 
-// ── Sidebar zone rendering ────────────────────────────────────────────────
+// ── Sidebar projection ────────────────────────────────────────────────────
 
-function ensureRemoteSidebarZone(parent) {
-  if (!_rcZoneEl || !_rcZoneEl.isConnected) {
-    _rcZoneEl = document.createElement('div');
-    _rcZoneEl.id = 'remote-agent-zone';
-    parent.appendChild(_rcZoneEl);
-  }
-  return _rcZoneEl;
-}
+// Remote catalog is a data source, not a second sidebar tree. The renderer asks
+// for the projection belonging to one local workspace and renders it with the
+// same project-group/runtime components as local sessions.
+function getRemoteSidebarProjection(workspaceAgentId, sidebarEntryId = workspaceAgentId) {
+  const localAgentId = String(workspaceAgentId || '').trim();
+  const expectedSidebarEntryId = String(sidebarEntryId || localAgentId).trim();
+  if (!localAgentId || !expectedSidebarEntryId) return [];
 
-function teardownRemoteSidebarZone() {
-  if (_rcZoneEl) {
-    _rcZoneEl.remove();
-    _rcZoneEl = null;
-  }
-  _rcLastZoneHtml = '';
-}
-
-function remoteGroupEntryHtml(section, entry) {
-  // Phase 1 只读寻址以 agent 为单位：session 条目回到其宿主 agent 主视图
-  // （entry.agentId 即 namespaced host id）。
-  const targetId = typeof entry.agentId === 'string' && entry.agentId ? entry.agentId : entry.id;
-  if (!targetId || !isRemoteNamespaceAgentId(targetId)) return '';
-  const active = typeof isRuntimeItemActive === 'function'
-    ? (isRuntimeItemActive(targetId) ? ' active' : '')
-    : '';
-  const titleText = escapeHtml(entry.name);
-  return `
-    <div
-      class="agent-item agent-runtime-item${active}${section.isOnline ? '' : ' remote-entry-disabled'}"
-      data-agent-id="${escapeHtml(targetId)}"
-      data-agent-disabled="${section.isOnline ? 'false' : 'true'}"
-      data-agent-prebuilt="false"
-    >
-      <div class="agent-line">
-        <span class="agent-status-dot"></span>
-        <div class="agent-name">${titleText}</div>
-      </div>
-    </div>
-  `;
-}
-
-function remoteGroupEntriesHtml(section, entries) {
-  if (!Array.isArray(entries) || entries.length === 0) {
-    return currentLanguage === 'zh'
-      ? '<div class="remote-empty-hint">暂无远程工作空间</div>'
-      : '<div class="remote-empty-hint">No remote workspaces</div>';
-  }
-  return entries.map((entry) => remoteGroupEntryHtml(section, entry)).join('');
-}
-
-function buildRemoteSidebarHtml() {
-  const parts = [];
+  const groups = new Map();
   for (const section of _rcVisibleSections.values()) {
-    const workspaces = Array.isArray(section.workspaces) ? section.workspaces : [];
     const online = section.status === 'connected';
-    const sectionState = { ...section, isOnline: online };
-    const stateBadge = `<span class="remote-conn-state-dot ${rcStatusClass(section.status)}"
-      title="${escapeHtml(t(`rcon_state_${section.status}`))}"></span>`;
-    let banner = '';
-    if (!online) {
-      const key = section.status === 'degraded' ? 'rcon_banner_degraded' : 'rcon_banner_disconnected';
-      const suffix = section.disconnectedAt
-        ? `<span class="remote-offline-time">${escapeHtml(t('rcon_last_online'))} ${escapeHtml(formatRemoteClock(section.disconnectedAt))}</span>`
-        : '';
-      banner = `<div class="remote-group-banner">${escapeHtml(t(key))}${suffix}</div>`;
+    for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+      for (const rawEntry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
+        const remoteOwnerId = splitRemoteNamespaceId(rawEntry.agentId)?.innerId || '';
+        if (remoteOwnerId !== localAgentId) continue;
+        const runtimeSessionType = String(rawEntry.sessionType || 'main').trim() || 'main';
+        const entrySidebarId = String(rawEntry.sidebarEntryId || '').trim()
+          || (runtimeSessionType === 'main' ? localAgentId : `${localAgentId}:${runtimeSessionType}`);
+        if (entrySidebarId !== expectedSidebarEntryId) continue;
+
+        const projectName = String(workspace.displayName || workspace.projectName || '').trim();
+        const projectDir = String(workspace.projectDir || '').trim();
+        const groupKey = String(workspace.groupKey || `${section.connectionId}:${projectName}`);
+        let group = groups.get(groupKey);
+        if (!group) {
+          group = { projectName, projectDir, entries: [] };
+          groups.set(groupKey, group);
+        }
+        group.entries.push({
+          ...rawEntry,
+          ownerId: localAgentId,
+          sidebarEntryId: entrySidebarId,
+          source: 'remote',
+          contextMenuEnabled: false,
+          status: online ? 'connected' : 'disconnected',
+          ...(projectName ? {
+            projectName,
+            projectDir,
+            projectKey: groupKey,
+          } : {}),
+          remoteConnectionId: section.connectionId,
+          remoteConnectionName: section.name,
+        });
+      }
     }
-    parts.push(`
-      <div class="remote-sidebar-section">
-        <div class="remote-sidebar-section-head">
-          <span class="remote-sidebar-server-name">${escapeHtml(section.name)}</span>
-          ${stateBadge}
-        </div>
-        ${banner}
-        <div class="agent-runtime-list">${workspaces.map((workspace) => `
-          <div class="agent-runtime-project-group${_collapsedProjectGroups.has(workspace.groupKey) ? ' collapsed' : ''}"
-            data-project-key="${escapeHtml(workspace.groupKey)}">
-            <div class="agent-runtime-project-header" title="${escapeHtml(workspace.groupKey)}">
-              <span class="project-collapse-arrow"></span>
-              <span class="project-collapse-label">${escapeHtml(workspace.displayName)}</span>
-            </div>
-            <div class="agent-runtime-project-items">${remoteGroupEntriesHtml(sectionState, workspace.entries)}</div>
-          </div>`).join('')}
-        </div>
-      </div>
-    `);
   }
-  return parts.join('');
+
+  return [...groups.entries()]
+    .sort(([, left], [, right]) => String(left.projectName).localeCompare(String(right.projectName), undefined, {
+      sensitivity: 'base', numeric: true,
+    }))
+    .flatMap(([groupKey, group]) => group.entries.map((entry) => ({
+      ...entry,
+      ...(group.projectName ? {
+        projectName: group.projectName,
+        projectDir: group.projectDir,
+        projectKey: groupKey,
+      } : {}),
+    })));
 }
 
-function renderRemoteSidebarZone(force = false) {
-  const html = _rcVisibleSections.size > 0 ? buildRemoteSidebarHtml() : '';
-  if (!html) {
-    if (_rcLastZoneHtml !== '') {
-      teardownRemoteSidebarZone();
-    }
-    return;
-  }
-  if (!force && html === _rcLastZoneHtml) return;
-
-  const agentList = document.getElementById('agent-list');
-  if (!agentList) return;
-  const zone = ensureRemoteSidebarZone(agentList);
-  zone.innerHTML = html;
-  zone.style.display = '';
-  _rcLastZoneHtml = html;
+function getRemoteSidebarProjectionVersion() {
+  return _rcSidebarProjectionVersion;
 }
 
 // 断开条目点击：capture 阶段提示原因并阻断通用委托的静默 return。
 document.addEventListener('click', (event) => {
-  if (!_rcZoneEl || !_rcZoneEl.contains(event.target)) return;
   const item = event.target.closest('.agent-item.remote-entry-disabled');
   if (!item) return;
   window.ClawToast?.show?.({

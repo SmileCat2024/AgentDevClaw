@@ -16,20 +16,31 @@
  *   suppressSidebarRerender, _navigationGuardEpoch, ...
  */
 
-// Tracks collapsed state of project groups in the sidebar (programming-helper).
-// Keyed by projectDir||projectName so state persists across re-renders.
+// Tracks collapsed state of project groups in the sidebar.
+// Keys are stable project identities so state persists across re-renders.
 const _collapsedProjectGroups = new Set();
 
 // Tracks collapsed state of category groups in the sidebar (系统空间, 工作群, etc.).
 // Keyed by the .agent-group element id so state persists across re-renders.
 const _collapsedCategoryGroups = new Set();
 
-function renderSidebarChildItems(entries, ownerAgentId) {
-  if (!Array.isArray(entries) || entries.length === 0) return '';
+function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = ownerAgentId) {
+  const visibleEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  const remoteEntries = typeof getRemoteSidebarProjection === 'function'
+    ? getRemoteSidebarProjection(workspaceAgentId, ownerAgentId)
+    : [];
+  const projectedEntries = [...visibleEntries, ...remoteEntries];
+  if (projectedEntries.length === 0) return '';
+
+  // Local and remote runtimes share this projection. Their origin remains in
+  // entry metadata, while the default sidebar only renders workspace → project
+  // → running session.
+
 
   const renderItem = (entry) => {
     const active = isRuntimeItemActive(entry.runtimeId);
     const disconnected = isSidebarRuntimeDisconnected(entry);
+    const remoteDisabled = entry.source === 'remote' && disconnected;
     const calling = !disconnected && isRuntimeCalling(entry.runtimeId);
     const restarting = restartingRuntimeIds.has(entry.runtimeId);
     const retiring = !!entry.replacementMutation || entry.sidebarOperation?.type === 'archive-close';
@@ -57,6 +68,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
       'agent-runtime-item',
       active ? 'active' : '',
       disconnected ? 'disconnected' : '',
+      remoteDisabled ? 'remote-entry-disabled' : '',
       calling ? 'calling' : '',
       restarting ? 'restarting' : '',
       retiring ? 'retiring' : '',
@@ -69,7 +81,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
       <div
         class="${itemClass}"
         data-agent-id="${escapeHtml(entry.runtimeId)}"
-        data-agent-disabled="${replacementPending || operationPending || deleting ? 'true' : 'false'}"
+        data-agent-disabled="${replacementPending || operationPending || deleting || remoteDisabled ? 'true' : 'false'}"
         data-agent-prebuilt="false"
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
         data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
@@ -82,22 +94,31 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     `;
   };
 
-  // Group entries by projectName when present (programming-helper).
+  // Group entries by project identity when present.
   // Entries are already sorted by createdAt desc; group order follows
   // the first entry encountered, so the most recently active project appears first.
-  const hasProjects = entries.some((e) => e.projectName);
+  const hasProjects = projectedEntries.some((e) => e.projectName || e.projectDir || e.projectKey);
+  const directEntries = projectedEntries.filter((entry) =>
+    !entry.projectName && !entry.projectDir && !entry.projectKey
+  );
+  const projectEntries = projectedEntries.filter((entry) =>
+    entry.projectName || entry.projectDir || entry.projectKey
+  );
 
   if (!hasProjects) {
-    return `<div class="agent-runtime-list">${entries.map(renderItem).join('')}</div>`;
+    return `<div class="agent-runtime-list">${directEntries.map(renderItem).join('')}</div>`;
   }
 
   const groups = [];
   const groupIndex = new Map();
-  for (const entry of entries) {
-    const key = entry.projectName || '';
+  for (const entry of projectEntries) {
+    // projectKey is the stable identity; projectName is presentation only.
+    // This keeps same-named local and remote directories separate while
+    // allowing the renderer to remain unaware of their origin.
+    const key = entry.projectKey || entry.projectDir || entry.projectName || '';
     if (!groupIndex.has(key)) {
       groupIndex.set(key, groups.length);
-      groups.push({ projectName: key, projectDir: entry.projectDir || '', items: [] });
+      groups.push({ projectKey: key, projectName: entry.projectName || '', projectDir: entry.projectDir || '', items: [] });
     }
     groups[groupIndex.get(key)].items.push(entry);
   }
@@ -110,12 +131,13 @@ function renderSidebarChildItems(entries, ownerAgentId) {
     return la.localeCompare(lb, undefined, { sensitivity: 'base', numeric: true });
   });
 
-  return `<div class="agent-runtime-list">${groups.map((group) => {
+  return `<div class="agent-runtime-list">${directEntries.map(renderItem).join('')}${groups.map((group) => {
     const label = group.projectName || (currentLanguage === 'zh' ? '未分组' : 'Ungrouped');
-    const projectKey = group.projectDir || group.projectName || label;
+    const projectKey = group.projectKey || group.projectDir || group.projectName || label;
     const collapsed = _collapsedProjectGroups.has(projectKey);
     const enterLabel = currentLanguage === 'zh' ? '进入' : 'Enter';
     const isWorkGroup = ownerAgentId === 'work-group';
+    const canEnter = group.items.some((entry) => entry.source !== 'remote');
     // For work-group: enter navigates to the group chat by chatId.
     // For programming-helper: enter navigates to the workspace surface and
     // scrolls to / expands the corresponding project card.
@@ -125,7 +147,7 @@ function renderSidebarChildItems(entries, ownerAgentId) {
       `<div class="agent-runtime-project-header" title="${escapeHtml(group.projectDir || label)}">` +
         `<span class="project-collapse-arrow"></span>` +
         `<span class="project-collapse-label">${escapeHtml(label)}</span>` +
-        `<button class="project-enter-btn" data-enter-type="${enterType}" data-enter-target="${escapeHtml(enterTarget)}" title="${escapeHtml(enterLabel)}">${escapeHtml(enterLabel)}</button>` +
+        (canEnter ? `<button class="project-enter-btn" data-enter-type="${enterType}" data-enter-target="${escapeHtml(enterTarget)}" title="${escapeHtml(enterLabel)}">${escapeHtml(enterLabel)}</button>` : '') +
       `</div>` +
       `<div class="agent-runtime-project-items">${group.items.map(renderItem).join('')}</div>` +
     `</div>`;
@@ -182,9 +204,10 @@ function renderAgentGroup(listElement, groupElement, countElement, agents, optio
       ? (!workspaceSurface && hasRuntime)
       : !!runtimeId;
     const childEntries = prebuilt ? collectRuntimeEntriesForPrebuilt(agent, allAgents) : [];
+    const workspaceAgentId = String(agent.agentId || agent.id || '').trim();
     const hasActiveRuntime = prebuilt && childEntries.some((entry) => isRuntimeItemActive(entry.runtimeId));
     if (prebuilt) {
-      const childrenHtml = renderSidebarChildItems(childEntries, agent.id);
+      const childrenHtml = renderSidebarChildItems(childEntries, agent.id, workspaceAgentId);
       const entryClass = ['agent-entry', hasActiveRuntime ? 'has-active-runtime' : ''].filter(Boolean).join(' ');
       return `
         <div class="${entryClass}">
@@ -612,6 +635,9 @@ function getAgentListRenderSignature() {
     restarting: Array.from(restartingRuntimeIds || []).sort(),
     recentlyFinished: Array.from(_recentlyFinishedRuntimes).sort(),
     sidebarOperationVersion: typeof getSidebarOperationVersion === 'function' ? getSidebarOperationVersion() : 0,
+    remoteSidebarProjectionVersion: typeof getRemoteSidebarProjectionVersion === 'function'
+      ? getRemoteSidebarProjectionVersion()
+      : 0,
     sessionReplacements: typeof listSidebarOperations === 'function'
       ? listSidebarOperations().map((item) => ({ ...item }))
       : [],
