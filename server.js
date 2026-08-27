@@ -132,6 +132,9 @@ import { createAgentDiscoveryModule } from './server/routes/agent-discovery.js';
 import { createAgentLifecycleModule } from './server/routes/agent-lifecycle.js';
 import { startEmbeddedRemoteClawConnector } from './server/remote-claw/embedded-connector.js';
 import { createTunnelManager } from './server/remote-connections/tunnel-manager.js';
+import { createConnectionStore } from './server/remote-connections/connection-store.js';
+import { createConnectionHealth } from './server/remote-connections/connection-health.js';
+import { createCatalogAggregator } from './server/remote-connections/catalog-aggregator.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from './server/shared/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1132,6 +1135,34 @@ app.delete('/protoclaw/remote_claw/registration', async (_req, res, next) => {
     await writeRemoteClawConfig({ enabled: false, installationId: config?.installationId || `claw_${randomUUID()}` });
     restartRemoteClawConnector();
     res.json({ ok: true, removed: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── ADR-0008 远程连接：工作空间目录聚合（R1-05）──
+const connectionStore = createConnectionStore();
+const connectionHealth = createConnectionHealth({ tunnelManager });
+connectionHealth.start();
+void connectionStore.load()
+  .then((connections) => connectionHealth.syncConnections(connections))
+  .catch((error) => {
+    console.warn('[remote-connections] 初始化失败，remote_catalog 将返回空列表：', error?.message || error);
+  });
+
+const remoteCatalogAggregator = createCatalogAggregator({
+  listConnections: async () => {
+    await connectionStore.ensureLoaded();
+    const connections = connectionStore.listConnections();
+    connectionHealth.syncConnections(connections);
+    return connections;
+  },
+  getStatus: (connectionId) => connectionHealth.getStatus(connectionId),
+});
+
+app.get('/protoclaw/remote_catalog', async (_req, res, next) => {
+  try {
+    res.json(await remoteCatalogAggregator.aggregate());
   } catch (error) {
     next(error);
   }
