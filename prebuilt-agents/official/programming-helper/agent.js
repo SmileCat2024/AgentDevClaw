@@ -9,6 +9,7 @@ import { BasicAgent, TemplateComposer, UserInputFeature, LspFeature, OutputGuard
 import { MCPFeature } from '@agentdevjs/mcp';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
+import { StepRotatingModel } from '../../../features/step-rotating-model/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdevjs/audio-feedback-feature';
 import { AuditFeature } from '@agentdevjs/audit-feature';
 import { MemoryFeature } from '@agentdevjs/memory-feature';
@@ -152,6 +153,12 @@ export class ProgrammingHelperAgent extends BasicAgent {
         ? config.features['force-continuation'] : {}),
     }));
 
+    this.use(new StepRotatingModel({
+      ...(merged['step-rotating-model'] && typeof merged['step-rotating-model'] === 'object'
+        ? merged['step-rotating-model'] : {}),
+      ...(config.features?.['step-rotating-model'] && typeof config.features['step-rotating-model'] === 'object'
+        ? config.features['step-rotating-model'] : {}),
+    }));
     this.use(new AuditFeature());
     this.use(new NonBlockingAudioFeedbackFeature());
     this.use(new WebSearchFeature());

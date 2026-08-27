@@ -276,6 +276,7 @@
       }),
       '</section>',
       renderGuardSection({ item, zh }),
+      renderRotationSection({ zh }),
       '<div class="force-continuation-note">', zh
         ? '手动停止与服务错误不会触发自动接续；自动接续次数受上限约束；超阈值打断触发后自动关闭。'
         : 'Manual stops and service errors never trigger auto-resume; auto-resume is capped; the threshold intercept disarms after one trip.', '</div>',
@@ -463,16 +464,253 @@
     if (limit) updateLimit(limit.value);
     const guardToggle = event.target?.closest?.('[data-guard-armed]');
     if (guardToggle) updateGuardArmed(guardToggle.checked);
+
+    // 模型轮转（capability_invoke 通用通路）
+    const rotEnabled = event.target?.closest?.('[data-rotation-enabled]');
+    if (rotEnabled) { void updateRotationConfig({ enabled: rotEnabled.checked }); return; }
+    const rotStrong = event.target?.closest?.('[data-rotation-strong]');
+    if (rotStrong && rotStrong.value !== '') { void updateRotationConfig({ strongPreset: rotStrong.value }); return; }
+    const rotStrongEffort = event.target?.closest?.('[data-rotation-strong-effort]');
+    if (rotStrongEffort) { void updateRotationConfig({ strongEffort: rotStrongEffort.value === '' ? null : rotStrongEffort.value }); return; }
+    const rotCheap = event.target?.closest?.('[data-rotation-cheap]');
+    if (rotCheap && rotCheap.value !== '') { void updateRotationConfig({ cheapPreset: rotCheap.value }); return; }
+    const rotCheapEffort = event.target?.closest?.('[data-rotation-cheap-effort]');
+    if (rotCheapEffort) { void updateRotationConfig({ cheapEffort: rotCheapEffort.value === '' ? null : rotCheapEffort.value }); return; }
+    const rotStrongSteps = event.target?.closest?.('[data-rotation-strong-steps]');
+    if (rotStrongSteps) { void updateRotationConfig({ strongSteps: Number(rotStrongSteps.value) }); return; }
+    const rotCheapSteps = event.target?.closest?.('[data-rotation-cheap-steps]');
+    if (rotCheapSteps) { void updateRotationConfig({ cheapSteps: Number(rotCheapSteps.value) }); return; }
   });
 
   // 外部入口（如 slash 菜单经 capability_invoke）修改了本面板对应的
   // Feature 状态时，刷新本地缓存——面板自身只覆盖自己的开关操作闭环。
   window.addEventListener('claw:capability-invoked', (event) => {
     const detail = event.detail || {};
+    if (detail.ref === 'step-rotating-model.configure') {
+      if (isSupportedAgent() && detail.agentId === focusedAgentId && detail.sessionId === currentSessionId()) {
+        void refreshRotationStatus({ renderWhenDone: true });
+      }
+      return;
+    }
     if (detail.ref !== 'force-continuation.configure') return;
     if (!isSupportedAgent() || detail.agentId !== focusedAgentId || detail.sessionId !== currentSessionId()) return;
     void refreshStatus({ renderWhenDone: true });
   });
+
+  // == 模型轮转（step-rotating-model）====================================
+  // 走通用 capability_invoke 通路（ADR-0007 收编方向）：无专属 IPC 分支、
+  // 无专属路由；Feature 是权威状态持有者，浏览器只是乐观 UI 缓存。
+  // 模型下拉自拉 /protoclaw/model_config（活清单），档位词表按所选
+  // preset 的 protocol 切换（anthropic / openai 两套词）。
+
+  const ROTATION_REF = 'step-rotating-model.configure';
+  const ROTATION_OPENAI_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  const ROTATION_ANTHROPIC_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+  const rotationStateByRuntime = new Map();
+  function getRotation(key = runtimeKey()) {
+    if (!rotationStateByRuntime.has(key)) {
+      rotationStateByRuntime.set(key, {
+        status: null, presets: [], presetsLoaded: false,
+        pending: false, refreshing: false, error: '', initialized: false,
+      });
+    }
+    return rotationStateByRuntime.get(key);
+  }
+
+  function rotationProtocolOf(presetName) {
+    if (!presetName) return null;
+    const r = getRotation();
+    const p = r.presets.find(function (x) { return (x.name || x.model) === presetName; });
+    return (p && (p.protocol || p.provider)) || null;
+  }
+
+  function rotationEffortOptions(presetName, zh) {
+    const protocol = rotationProtocolOf(presetName);
+    const values = protocol === 'anthropic' ? ROTATION_ANTHROPIC_EFFORTS : ROTATION_OPENAI_EFFORTS;
+    return [{ label: zh ? '默认（跟随 preset）' : 'Default (preset)', value: '' }]
+      .concat(values.map(function (v) { return { label: v, value: v }; }));
+  }
+
+  function rotationPresetOptions(zh) {
+    const r = getRotation();
+    return [{ label: zh ? '（选择模型）' : '(pick model)', value: '' }]
+      .concat(r.presets.map(function (p) {
+        const name = p.name || p.model;
+        return { label: String(name), value: String(name) };
+      }));
+  }
+
+  async function loadRotationPresets() {
+    const r = getRotation();
+    if (r.presetsLoaded) return;
+    try {
+      const resp = await fetch('/protoclaw/model_config');
+      const data = await resp.json();
+      r.presets = Array.isArray(data && data.presets) ? data.presets : [];
+      r.presetsLoaded = true;
+    } catch { /* 清单拉取失败时下拉仅含当前值 */ }
+  }
+
+  async function invokeRotation(args) {
+    const sessionId = currentSessionId();
+    if (!sessionId || !focusedAgentId) throw new Error('session not connected');
+    const resp = await fetch('/protoclaw/capability_invoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: focusedAgentId,
+        sessionId,
+        runtimeId: currentRuntimeAgentId || undefined,
+        ref: ROTATION_REF,
+        args: args || {},
+      }),
+    });
+    const payload = await resp.json().catch(function () { return {}; });
+    if (!resp.ok || payload.ok !== true) throw new Error(payload.error || ('HTTP ' + resp.status));
+    return payload.result;
+  }
+
+  async function refreshRotationStatus({ renderWhenDone = true, silent = false } = {}) {
+    if (!isSupportedAgent() || !currentRuntimeAgentId || !currentSessionId()) return null;
+    const r = getRotation();
+    if (r.refreshing || r.pending) return null;
+    r.refreshing = true;
+    try {
+      await loadRotationPresets();
+      const status = normalizeStatus(await invokeRotation({}));
+      r.status = status;
+      r.initialized = true;
+      r.error = '';
+    } catch (error) {
+      r.error = String((error && error.message) || error);
+      r.initialized = true;
+    } finally {
+      r.refreshing = false;
+      if (renderWhenDone && activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    }
+    return r.status;
+  }
+
+  async function updateRotationConfig(partial) {
+    if (!isSupportedAgent()) return;
+    const r = getRotation();
+    if (r.pending) return;
+    r.pending = true;
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    try {
+      r.status = normalizeStatus(await invokeRotation(partial));
+      r.error = '';
+    } catch (error) {
+      r.error = String((error && error.message) || error);
+    } finally {
+      r.pending = false;
+      if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    }
+  }
+
+  let _rotationPollTimer = null;
+  function ensureRotationPolling() {
+    if (_rotationPollTimer || typeof setInterval !== 'function') return;
+    const timer = setInterval(() => {
+      if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'session-controls') return;
+      if (!isSupportedAgent() || !currentRuntimeAgentId || !currentSessionId()) return;
+      void refreshRotationStatus({ renderWhenDone: true, silent: true });
+    }, 3000);
+    if (typeof timer?.unref === 'function') timer.unref();
+    _rotationPollTimer = timer;
+  }
+
+  function renderRotationSelect(attribute, value, options, disabled) {
+    const opts = options.map(function (o) {
+      return '<option value="' + esc(String(o.value)) + '"' + (String(o.value) === String(value) ? ' selected' : '') + '>'
+        + esc(String(o.label)) + '</option>';
+    }).join('');
+    return '<select class="session-controls-rotation-select" ' + attribute + (disabled ? ' disabled' : '') + '>' + opts + '</select>';
+  }
+
+  function renderRotationStepsInput(attribute, value, disabled) {
+    const v = Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
+    return '<input type="number" class="session-controls-rotation-steps" ' + attribute
+      + ' min="1" max="10" step="1" value="' + String(v) + '"' + (disabled ? ' disabled' : '') + '>';
+  }
+
+  function renderRotationModelRow({ zh, slot, presetName, effort, disabled }) {
+    const isStrong = slot === 'strong';
+    const title = isStrong ? (zh ? '强模型' : 'Strong model') : (zh ? '性价比模型' : 'Budget model');
+    const help = isStrong
+      ? (zh ? '轮转周期内先连续执行的模型，通常承担规划与关键决策 step。' : 'Runs first in each rotation cycle; typically planning and key decisions.')
+      : (zh ? '承接轮转中低价值 step，压低整体成本。' : 'Absorbs low-value steps to cut overall cost.');
+    return [
+      '<div class="session-controls-rotation-model">',
+      '<div class="force-continuation-candidate-label">', esc(title), '</div>',
+      '<div class="force-continuation-candidate-desc">', esc(help), '</div>',
+      '<div class="session-controls-rotation-controls">',
+      renderRotationSelect('data-rotation-' + slot, presetName || '', rotationPresetOptions(zh), disabled),
+      renderRotationSelect('data-rotation-' + slot + '-effort', effort || '', rotationEffortOptions(presetName, zh), disabled),
+      '</div>',
+      '</div>',
+    ].join('');
+  }
+
+  function renderRotationSection({ zh }) {
+    const r = getRotation();
+    if (!r.initialized && !r.refreshing && !r.pending) {
+      void refreshRotationStatus({ renderWhenDone: true });
+    }
+    ensureRotationPolling();
+    const st = r.status || {};
+    const disabled = r.pending;
+
+    const facts = [];
+    if (st.currentPreset) facts.push((zh ? '当前 ' : 'now ') + String(st.currentPreset));
+    if (st.slotAtLastStep === 'strong') facts.push(zh ? '相位：强' : 'phase: strong');
+    else if (st.slotAtLastStep === 'cheap') facts.push(zh ? '相位：省' : 'phase: cheap');
+    if (Array.isArray(st.recentSwaps) && st.recentSwaps.length) {
+      facts.push((zh ? '本会话切换 ' : 'swaps ') + String(st.recentSwaps.length));
+    }
+
+    const rows = [];
+    if (r.error) rows.push('<div class="session-controls-guard-error">' + esc(r.error) + '</div>');
+    else if (st.lastError) rows.push('<div class="session-controls-guard-error">' + esc(String(st.lastError)) + '</div>');
+    if (facts.length) rows.push('<div class="session-controls-guard-fact">' + esc(facts.join(' · ')) + '</div>');
+
+    return [
+      '<section class="force-continuation-candidates session-controls-rotation">',
+      '<div class="force-continuation-group-label">', zh ? '模型轮转' : 'MODEL ROTATION', '</div>',
+      '<div class="force-continuation-candidate">',
+      '<div class="force-continuation-candidate-main">',
+      '<div class="force-continuation-candidate-label">', zh ? 'step 级模型轮转' : 'Step-level model rotation', '</div>',
+      '<div class="force-continuation-candidate-desc">', zh
+        ? '强模型连续 N 步后切性价比模型 M 步循环。仅当前会话生效。'
+        : 'Strong model runs N steps, then the budget model runs M steps, in a loop. This session only.', '</div>',
+      '</div>',
+      renderSwitch({
+        checked: st.enabled === true,
+        disabled,
+        title: zh ? '切换模型轮转' : 'Toggle model rotation',
+        attribute: 'data-rotation-enabled',
+      }),
+      '</div>',
+      '<div class="session-controls-rotation-body', st.enabled === true ? '' : ' is-master-off', '">',
+      renderRotationModelRow({ zh, slot: 'strong', presetName: st.strongPreset, effort: st.strongEffort, disabled }),
+      renderRotationModelRow({ zh, slot: 'cheap', presetName: st.cheapPreset, effort: st.cheapEffort, disabled }),
+      '<div class="session-controls-rotation-model">',
+      '<div class="force-continuation-candidate-label">', zh ? '轮转步数（强 : 省）' : 'Rotation steps (strong : cheap)', '</div>',
+      '<div class="force-continuation-candidate-desc">', zh
+        ? '一个周期内各自连续执行的 step 数（1–10）。'
+        : 'Consecutive steps per cycle for each model (1-10).', '</div>',
+      '<div class="session-controls-rotation-controls">',
+      renderRotationStepsInput('data-rotation-strong-steps', st.strongSteps, disabled),
+      '<span class="session-controls-rotation-sep">:</span>',
+      renderRotationStepsInput('data-rotation-cheap-steps', st.cheapSteps, disabled),
+      '</div>',
+      '</div>',
+      ...rows,
+      '</div>',
+      '</section>',
+    ].join('');
+  }
 
   window.SessionControlsPanel = {
     render,
@@ -481,6 +719,8 @@
     updateLimit,
     refreshStatus,
     refreshGuardStatus,
+    refreshRotationStatus,
+    updateRotationConfig,
     updateGuardArmed,
     isAvailable: () => isSupportedAgent(),
     isGuardAvailable,

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "step-rotating-model",
+  "name": "step-rotating-model",
+  "version": "0.1.0",
+  "description": "step-rotating-model feature for AgentDev: step 级模型轮转实验（ADR-0009 setModel 官方链路）",
+  "tags": [
+    "agentdev",
+    "feature",
+    "step-rotating-model",
+    "model-rotation"
+  ],
+  "entry": "dist/index.js",
+  "homepage": "",
+  "repository": "",
+  "agentdev": {
+    "compatible": ""
+  },
+  "featureTypes": [],
+  "compatibility": {
+    "rollback": false,
+    "tags": [
+      "no-rollback"
+    ]
+  },
+  "requirements": {
+    "platforms": [],
+    "node": "",
+    "external": [],
+    "services": []
+  }
+}

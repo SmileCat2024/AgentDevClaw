@@ -20,7 +20,8 @@
     "lsp",
     "context-guard",
     "mcp",
-    "skill"
+    "skill",
+    "step-rotating-model"
   ],
   "identities": [
     {

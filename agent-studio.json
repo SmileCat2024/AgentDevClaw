@@ -20,8 +20,8 @@
         ]
       },
       "verification": {
-        "lastVerifiedRunId": "run-1787200089920-qaxh",
-        "verifiedAt": "2026-08-20T04:28:25.901Z",
+        "lastVerifiedRunId": "run-1787755453066-gl0j",
+        "verifiedAt": "2026-08-26T14:44:22.563Z",
         "coverage": {
           "tools": [],
           "hooks": [
@@ -30,13 +30,13 @@
           ],
           "deniedTools": []
         },
-        "sourceDigest": "sha256:e0ca4bd63411092b65431a07c8f70690e8480d0e13bb89c9fb36a8cb0cb1d2b9"
+        "sourceDigest": "sha256:c2f52681efd469ba2fed3d6e5f9a47876a962a886ba17bcb4b668eb88f06e6b1"
       }
     },
     {
       "name": "tickets-build-flow",
       "modulePath": "D:\\code\\AgentDevClaw\\features\\tickets-build-flow\\dist\\index.js",
-      "status": "snapshotted",
+      "status": "verified",
       "package": "@agentdevjs/tickets-build-flow",
       "source": {
         "kind": "project",
@@ -49,8 +49,8 @@
         ]
       },
       "verification": {
-        "lastVerifiedRunId": "run-1787200089920-qaxh",
-        "verifiedAt": "2026-08-20T04:28:25.901Z",
+        "lastVerifiedRunId": "run-1787755453066-gl0j",
+        "verifiedAt": "2026-08-26T14:44:22.563Z",
         "coverage": {
           "tools": [
             "tickets_flow_skill"
@@ -58,7 +58,36 @@
           "hooks": [],
           "deniedTools": []
         },
-        "sourceDigest": "sha256:07e8bd3c031e298e0bb15a9ab28bbbe0a3cef52cb8905fb53474889f2a27331f"
+        "sourceDigest": "sha256:885f4088cd22320ace24426ecc6a1862421be18b07dc623013e24bb93a49f00c"
+      }
+    },
+    {
+      "name": "step-rotating-model",
+      "modulePath": "D:\\code\\AgentDevClaw\\features\\step-rotating-model\\dist\\index.js",
+      "status": "verified",
+      "package": "@agentdev/step-rotating-model",
+      "source": {
+        "kind": "project",
+        "projectDir": "D:\\code\\AgentDevClaw\\features\\step-rotating-model",
+        "entry": "D:\\code\\AgentDevClaw\\features\\step-rotating-model\\dist\\index.js",
+        "buildCommand": [
+          "npm",
+          "run",
+          "build"
+        ]
+      },
+      "verification": {
+        "lastVerifiedRunId": "run-1787755453066-gl0j",
+        "verifiedAt": "2026-08-26T14:44:22.563Z",
+        "coverage": {
+          "tools": [],
+          "hooks": [
+            "CallStart:onCallStart",
+            "StepStart:onStepStart"
+          ],
+          "deniedTools": []
+        },
+        "sourceDigest": "sha256:259ed926af7452d8c90378ad0ed54c27a873a3270c0deceb9d2583fdf7734620"
       }
     }
   ],
@@ -171,8 +200,36 @@
       "enabled": true,
       "createdAt": "2026-08-20T04:27:39.097Z",
       "updatedAt": "2026-08-20T04:27:39.097Z"
+    },
+    {
+      "id": "rotation-phase-observed",
+      "title": "模型轮转 Feature 观察 call 与 step 相位推进",
+      "input": "请调用 tickets_flow_skill 工具，参数 skill=tdd，读取 TDD 规范全文，然后用一句话概括 red 阶段要做什么。",
+      "sessionPolicy": "fresh",
+      "assertions": [
+        {
+          "kind": "hook-observed",
+          "lifecycle": "CallStart",
+          "feature": "step-rotating-model",
+          "method": "onCallStart"
+        },
+        {
+          "kind": "hook-observed",
+          "lifecycle": "StepStart",
+          "feature": "step-rotating-model",
+          "method": "onStepStart"
+        },
+        {
+          "kind": "tool-executed",
+          "tool": "tickets_flow_skill"
+        }
+      ],
+      "enabled": true,
+      "createdAt": "2026-08-26T13:05:22.982Z",
+      "updatedAt": "2026-08-26T13:07:17.813Z",
+      "description": "验证轮转 Feature 挂载与相位逻辑执行：CallStart 观察钩子触发；StepStart 至少 2 次（工具 step + 总结 step，多步场景相位推进）；tickets_flow_skill 真实执行构造多 step 前提。零工具 Feature：切换真实性由 ADR-0009 框架回归测试背书，本断言锁定钩子证据归属。"
     }
   ],
   "createdAt": "2026-08-19T04:22:48.571Z",
-  "updatedAt": "2026-08-20T04:31:20.686Z"
+  "updatedAt": "2026-08-26T14:44:22.563Z"
 }

@@ -1,0 +1,35 @@
+{
+  "name": "@agentdevjs/step-rotating-model",
+  "version": "0.1.0",
+  "description": "step-rotating-model feature for AgentDev: step 级模型轮转实验（ADR-0009 setModel 官方链路）",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "agentdev-feature.json"
+  ],
+  "scripts": {
+    "build": "tsup && npm run copy-assets",
+    "dev": "tsup --watch",
+    "copy-assets": "node scripts/copy-assets.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@agentdevjs/core": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@agentdevjs/core": "^0.1.0",
+    "@types/node": "^20.11.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.3.3"
+  },
+  "keywords": [
+    "agentdev",
+    "feature",
+    "step-rotating-model",
+    "model-rotation"
+  ],
+  "license": "MIT"
+}
