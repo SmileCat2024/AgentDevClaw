@@ -119,12 +119,16 @@ function isRuntimeItemActive(runtimeId) {
   const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
   if (normalizedRuntimeId === '') return false;
   const normalizedCurrent = normalizeAgentIdentity(currentRuntimeAgentId);
+  // 停在 workspace surface 时无选中运行时。此时不做兜底比较：本地条目
+  // resolveRuntimeRef 未命中返回 undefined，归一化后的空串会与空
+  // currentRuntimeAgentId 对称相等，导致所有运行中会话被误判为选中态。
+  if (normalizedCurrent === '') return false;
   if (normalizedCurrent === normalizedRuntimeId) return true;
   // 远程分组条目以命名空间运行时引用渲染，而 currentRuntimeAgentId 持有同一
   // 引用的解析结果（switchAgent 解析后是裸运行时 id）。两者归一化后比较；
   // 反向解析（裸 id → 命名空间引用）不可靠，直接比较原始值即可覆盖。
   const resolved = window.RemoteConnections?.resolveRuntimeRef?.(normalizedRuntimeId);
-  return normalizeAgentIdentity(resolved) === normalizedCurrent;
+  return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 }
 
 function toEpochMs(value) {
