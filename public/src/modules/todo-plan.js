@@ -283,7 +283,7 @@ async function sendTodoControl(taskId) {
     await fetch('/protoclaw/todo_control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: getLogicalAgentId(getCurrentAgentRecord()), runtimeId, sessionId, taskId }),
+      body: JSON.stringify({ agentId: getCurrentControlAgentId(), runtimeId, sessionId, taskId }),
     });
   } catch (e) {
     console.error('[TodoControl] request failed:', e);
@@ -301,7 +301,7 @@ async function sendTodoForceContinue(enabled, { attempt = 0 } = {}) {
       // runtimeId 是主定位 id：与轮询数据源 /api/agents/:id/todo 的 :id 相同，
       // 开关显示哪个 runtime 的快照，控制就发往哪个 runtime，天然一致。
       // sessionId 仅作 runtimeId 失效时的 fallback。
-      body: JSON.stringify({ agentId: getLogicalAgentId(getCurrentAgentRecord()), runtimeId, sessionId, forceContinue: enabled }),
+      body: JSON.stringify({ agentId: getCurrentControlAgentId(), runtimeId, sessionId, forceContinue: enabled }),
     });
     const payload = await response.json().catch(() => null);
     if (response.ok && payload?.ok === true) return true;
