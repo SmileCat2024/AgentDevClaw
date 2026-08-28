@@ -28,17 +28,46 @@ async function loadFeatureTemplateMap() {
 
 // 加载单个 agent 的详情数据（workspace_data / sessions / state）
 const loadedAgentDetailIds = new Set();
+// Host 载荷缓存：远程会话不在 allAgents，agent_detail 载荷在此按 agentId 留档，
+// 供后续工单的富元数据消费方读取。
+const _agentDetailPayloadCache = new Map();
+function getAgentDetailPayload(agentId) {
+  const key = String(agentId || '').trim();
+  return _agentDetailPayloadCache.get(key) || null;
+}
+function extractSessionMetaFromDetail(detail) {
+  const sessions = detail?.workspace_sessions;
+  const activeSessionId = String(sessions?.activeSessionId || '').trim();
+  const list = Array.isArray(sessions?.sessions) ? sessions.sessions : [];
+  const activeSession = list.find((item) => String(item?.id || '').trim() === activeSessionId);
+  if (!activeSession) return null;
+  return {
+    sessionId: activeSessionId,
+    sessionType: String(activeSession.sessionType || 'main').trim() || 'main',
+    createdAt: String(activeSession.createdAt || '').trim(),
+    updatedAt: String(activeSession.updatedAt || '').trim(),
+    openDirectory: String(
+      activeSession.openDirectory || detail?.workspace_state?.openDirectory || '',
+    ).trim(),
+    messageCount: Number.isFinite(activeSession.messageCount) ? activeSession.messageCount : 0,
+  };
+}
 async function loadAgentDetail(agentId) {
   if (!agentId || loadedAgentDetailIds.has(agentId)) return;
   loadedAgentDetailIds.add(agentId);
   const sidebarSnapshotToken = typeof captureSidebarSnapshotToken === 'function'
     ? captureSidebarSnapshotToken()
     : null;
+  const sessionViewToken = typeof captureSessionViewToken === 'function'
+    ? captureSessionViewToken()
+    : null;
   let loaded = false;
   try {
     const res = await fetch('/protoclaw/agent_detail?agentId=' + encodeURIComponent(agentId));
     if (!res.ok) return;
     const detail = await res.json();
+    // 载荷无论本地远程都留档；失败路径（!res.ok / 抛错）不触碰缓存。
+    _agentDetailPayloadCache.set(String(agentId).trim(), detail);
     const agent = allAgents.find((a) => a.id === agentId);
     if (agent) {
       const { workspace_sessions: freshSessions, ...otherDetail } = detail || {};
@@ -53,6 +82,17 @@ async function loadAgentDetail(agentId) {
         && !isSidebarSnapshotTokenCurrent(sidebarSnapshotToken)) {
         console.info('[SIDEBAR_OPERATION]', { operation: 'agent_detail', phase: 'stale_snapshot_merged', agentId });
       }
+    }
+    // 选中会话的富元数据收敛到 session-view-state：仅当载荷属于当前焦点 agent
+    // 且正处于会话浏览态时提交；无活跃会话记录时保留现有 slot 值。
+    const isFocusedAgent = String(agentId || '').trim() === String(focusedAgentId || '').trim();
+    const sessionMeta = isFocusedAgent && currentRuntimeAgentId
+      ? extractSessionMetaFromDetail(detail)
+      : null;
+    if (sessionMeta
+      && sessionViewToken
+      && typeof commitSessionViewPatch === 'function') {
+      commitSessionViewPatch(sessionViewToken, { sessionMeta });
     }
     loaded = true;
   } catch (e) {
@@ -946,6 +986,7 @@ function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(ag
     todoPlanSignature: typeof currentTodoPlanSignature !== 'undefined'
       ? currentTodoPlanSignature
       : getRuntimeCacheTodoPlanSignature(cachedTodoPlan),
+    sessionMeta: viewState.sessionMeta,
     connected: viewState.connected,
     followLatest: followLatestEnabled,
     scrollTop: container ? container.scrollTop : 0,
@@ -977,6 +1018,7 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
         ? getEmptyTodoPlan()
         : getRuntimeCacheTodoPlanFallback()
     ),
+    sessionMeta: cached.sessionMeta,
     connected: cached.connected,
   });
   followLatestEnabled = cached.followLatest !== undefined ? cached.followLatest : true;
