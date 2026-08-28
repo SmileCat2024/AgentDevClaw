@@ -634,12 +634,19 @@ describe('ACP list — GET /protoclaw/acp/coder/sessions', () => {
   });
 
   it('filters by cwd (case-insensitive) via ?cwd=', async () => {
+    // 跨平台可移植：acpPathKey（分隔符 + 小写归一化）是 cwd 比较语义，
+    // 不依赖文件系统大小写不敏感。请求 cwd 经 validateAcpCwd 必须真实
+    // 存在；记录侧 openDirectory 是持久化数据，不做存在性校验。把大小写
+    // 差异放在数据侧（记录 openDirectory 变体），请求侧用真实存在目录。
+    const lowerDir = join(validCwd(), 'projalower');
+    mkdirSync(lowerDir, { recursive: true });
     const { app } = setupAcpHarness({
       threads: buildThreads(),
-      sessionRecords: sessionRecords(),
+      sessionRecords: {
+        'sess-a': { id: 'sess-a', openDirectory: lowerDir.toUpperCase(), title: '会话标题 A' },
+      },
     });
-    // Windows 大小写不敏感：小写路径也应命中
-    const res = await callList(app, { cwd: projADir.toLowerCase() });
+    const res = await callList(app, { cwd: lowerDir });
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.body.threads.map((t) => t.threadId), ['thread-A']);
   });
@@ -761,14 +768,17 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
     assert.equal(res.body.code, 'cwd_mismatch');
   });
 
-  it('accepts a case-insensitive cwd match (Windows)', async () => {
+  it('accepts a case-insensitive cwd match', async () => {
+    // 跨平台可移植：请求 cwd 经 validateAcpCwd 必须真实存在；大小写差异
+    // 放在持久化数据侧（记录 openDirectory 变体），验证 acpPathKey 归一化
+    // 比较（不依赖文件系统大小写不敏感）。
     seedRuntime({ sessionId: 'sess-h', viewerAgentId: 'viewer-h' });
     const { app } = setupAcpHarness({
       findThreadResult: { threadId: 'thread-K', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'open' },
       // 持久化记录与请求 cwd 仅大小写不同：应命中
       sessionRecords: { 'sess-y': { id: 'sess-y', openDirectory: validCwd().toUpperCase() } },
     });
-    const res = await callResume(app, 'sess-y', { cwd: validCwd().toLowerCase() });
+    const res = await callResume(app, 'sess-y', { cwd: validCwd() });
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.clawSessionId, 'sess-h');
   });

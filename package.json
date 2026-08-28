@@ -31,7 +31,7 @@
     "@agentdevjs/audio-feedback-feature": "^0.1.0",
     "@agentdevjs/audit-feature": "^0.1.0",
     "@agentdevjs/create-feature": "^0.1.0",
-    "@agentdevjs/core": "^0.1.0",
+    "@agentdevjs/core": "file:../AgentDev/packages/core",
     "@agentdevjs/feishu-bot": "^0.1.0",
     "@agentdevjs/image-reader-feature": "^0.1.0",
     "@agentdevjs/llm": "^0.1.0",

@@ -3,14 +3,19 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const sidebarSource = fs.readFileSync(
+// 行尾归一化：源文件是 LF，提取标记不能依赖 CRLF（跨平台可移植）
+function toLf(source) {
+  return source.replace(/\r\n/g, '\n');
+}
+
+const sidebarSource = toLf(fs.readFileSync(
   new URL('../public/src/modules/sidebar-render.js', import.meta.url),
   'utf8',
-);
-const contextMenuSource = fs.readFileSync(
+));
+const contextMenuSource = toLf(fs.readFileSync(
   new URL('../public/src/modules/ctx-menu-handlers.js', import.meta.url),
   'utf8',
-);
+));
 
 function extractFunction(source, signature, nextMarker) {
   const start = source.indexOf(signature);
@@ -31,8 +36,8 @@ function createFocusSandbox(storage = {}) {
   };
   vm.createContext(sandbox);
   vm.runInContext(
-    `${extractFunction(sidebarSource, 'function resolveFocusedAgentAfterRefresh(', '\r\n\r\nasync function loadAgents')}`
-      + `${extractFunction(contextMenuSource, 'function isDeletedAgentFocused(', '\r\n\r\ndeleteAgentAction')}`
+    `${extractFunction(sidebarSource, 'function resolveFocusedAgentAfterRefresh(', '\n\nasync function loadAgents')}`
+      + `${extractFunction(contextMenuSource, 'function isDeletedAgentFocused(', '\n\ndeleteAgentAction')}`
       + '\nglobalThis.__restoreFocus = resolveFocusedAgentAfterRefresh;'
       + '\nglobalThis.__isDeletedAgentFocused = isDeletedAgentFocused;',
     sandbox,
