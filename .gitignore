@@ -5,6 +5,9 @@ node_modules/
 /.agentdev/
 .playwright-mcp/
 *docs/
+!docs/
+docs/*
+!docs/adr/
 config/
 
 # Agent Studio runtime records (runs.json / runtime-sessions)
