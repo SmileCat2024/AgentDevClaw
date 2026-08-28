@@ -242,9 +242,12 @@ function threadFormat(args, fallback = 'text') {
 
 function printThreadText(thread) {
   console.log(`Thread ${thread.threadId || '(unknown)'}`);
+  if (thread.title) console.log(`  title: ${thread.title}`);
   if (thread.agentId) console.log(`  agent: ${thread.agentId}`);
   if (thread.workspaceId) console.log(`  workspace: ${thread.workspaceId}`);
   if (thread.status) console.log(`  status: ${thread.status}`);
+  if (thread.lifeState) console.log(`  lifeState: ${thread.lifeState}`);
+  if (thread.failed !== undefined) console.log(`  failed: ${thread.failed}`);
   if (thread.mode) console.log(`  mode: ${thread.mode}`);
   if (thread.rootSessionId) console.log(`  root: ${thread.rootSessionId}`);
   if (thread.headSessionId) console.log(`  head: ${thread.headSessionId}`);
@@ -266,6 +269,7 @@ function printThreadsHelp() {
   console.log('  claw threads show <thread-id> [--format text|json]');
   console.log('  claw threads events <thread-id> [--after N] [--format text|json|jsonl]');
   console.log('  claw threads send <thread-id> --text TEXT [--kind K] [--source S] [--idempotency-key K]');
+  console.log('  claw threads watch <thread-id> [--interval S] [--timeout S]   阻塞监控至落定/失败/超时（退出码 0/3/2/1）');
   console.log('  claw threads deliver <thread-id> [--format text|json]');
   console.log('  claw threads advance <thread-id> --to-session ID --from-session ID [--expected-revision N] [--end-kind K]');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S] [--error E]');
@@ -284,7 +288,9 @@ function writeThreadPayload(payload, format = 'text') {
     const threads = payload.threads;
     console.log(`Threads (${threads.length}):`);
     for (const thread of threads) {
-      console.log(`  ${thread.threadId}  [${thread.status || 'unknown'}]  agent=${thread.agentId || '?'}  head=${thread.headSessionId || 'none'}`);
+      const life = thread.lifeState ? `|${thread.lifeState}` : '';
+      const title = thread.title ? `  "${thread.title}"` : '';
+      console.log(`  ${thread.threadId}  [${thread.status || 'unknown'}${life}]  agent=${thread.agentId || '?'}  head=${thread.headSessionId || 'none'}${title}`);
     }
     return;
   }
@@ -336,7 +342,7 @@ async function handleThreads(args = []) {
   }
 
   if (!threadId) {
-    throw new Error('用法: claw threads <list|create|show|events|send|deliver|advance|handoff-failed|resume|close> ...');
+    throw new Error('用法: claw threads <list|create|show|events|send|watch|deliver|advance|handoff-failed|resume|close> ...');
   }
 
   if (subcommand === 'show') {
@@ -387,7 +393,31 @@ async function handleThreads(args = []) {
         console.error(`等待 ${waitSeconds}s 内未观察到 turn.started（lifeState=${started.lifeState || 'unknown'}）；指令已投递，可用 claw threads events 复核`);
       }
     }
-    writeThreadPayload(payload, format);
+    if (format === 'json' || format === 'jsonl') {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+    // 紧凑输出：只给调度判断所需字段，不回显工单全文（长文本会迫使调用方
+    // 截断输出，进而丢失其他字段——真实派遣复盘中踩过）。
+    const command = payload.command || {};
+    const delivered = payload.delivery?.delivered;
+    console.log(`sent ${command.commandId || '(unknown)'}  kind=${command.kind || 'user_message'}  duplicate=${payload.duplicate === true}${delivered !== undefined ? `  delivered=${delivered}` : ''}`);
+    if (payload.started !== undefined || payload.lifeState) {
+      console.log(`  started=${payload.started}  lifeState=${payload.lifeState || 'unknown'}`);
+    }
+    return;
+  }
+
+  if (subcommand === 'watch') {
+    const interval = Math.max(0.2, Number(optionValue(args, '--interval')) || 10);
+    const timeout = Math.min(590, Math.max(0.5, Number(optionValue(args, '--timeout')) || 540));
+    const jsonl = format === 'jsonl' || format === 'json';
+    const result = await watchThread(threadId, { interval, timeout, jsonl });
+    const summary = `watch done: ${result.reason} | life=${result.lifeState} failed=${result.failed} | newEvents=${result.newEvents} | elapsed=${result.elapsed}s`;
+    if (jsonl) console.log(JSON.stringify({ watch: 'done', ...result }));
+    else console.log(summary);
+    if (result.detail && !jsonl) console.log(`  detail: ${result.detail}`);
+    process.exitCode = result.exitCode;
     return;
   }
 
@@ -453,7 +483,7 @@ async function handleThreads(args = []) {
     return;
   }
 
-  throw new Error(`未知 threads 子命令: ${subcommand || '(空)'}（可用: list / create / show / events / send / deliver / advance / handoff-failed / resume / close / archive / unarchive）`);
+  throw new Error(`未知 threads 子命令: ${subcommand || '(空)'}（可用: list / create / show / events / send / watch / deliver / advance / handoff-failed / resume / close / archive / unarchive）`);
 }
 
 // 轮询线程 lifeState 直到 executing（head runtime 开始处理投递指令）或超时。
@@ -474,6 +504,78 @@ async function waitForTurnStarted(threadId, maxSeconds) {
     }
   }
   return { started: false, lifeState: lastLifeState };
+}
+
+// 单调用监控：内部轮询 lifeState + 事件游标，新事件即时透传，线程落定/
+// 失败/终态/超时时返回——把"90 秒固定频率手工巡检"折叠成一次阻塞调用。
+// 退出码：0=落定或线程终态；2=超时（继续 watch 同一命令即可续挂）；
+// 3=failed=true（需按故障表介入）；1=线程/server 连续不可达。
+async function watchThread(threadId, { interval, timeout, jsonl }) {
+  const startedAt = Date.now();
+  const deadline = startedAt + timeout * 1000;
+  let cursor = 0;
+  let newEvents = 0;
+  let lifeState = 'unknown';
+  let failed = false;
+  let idleRounds = 0;
+  let errors = 0;
+  let turnSettled = false; // 跨轮记忆：turn.completed 与 lifeState 离开 executing 常在不同轮次到达
+  // 基线：只取游标不回放历史事件，watch 期间的新事件才透传。
+  try {
+    const base = await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events`);
+    cursor = base.cursor ?? 0;
+  } catch { /* 事件端点瞬时不可用不阻断监控 */ }
+  while (Date.now() < deadline) {
+    await sleep(Math.min(interval * 1000, Math.max(1, deadline - Date.now())));
+    let thread;
+    try {
+      thread = (await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`))?.thread;
+      errors = 0;
+    } catch (error) {
+      errors += 1;
+      if (errors >= 3) {
+        return { reason: 'unreachable', detail: String(error?.message || error), lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 1 };
+      }
+      continue;
+    }
+    lifeState = thread?.lifeState || 'unknown';
+    failed = thread?.failed === true;
+    let events = [];
+    try {
+      const payload = await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events?after=${cursor}`);
+      events = payload.events || [];
+      if (payload.cursor !== undefined) cursor = payload.cursor;
+    } catch { /* 瞬时失败下轮再取 */ }
+    for (const event of events) {
+      newEvents += 1;
+      if (jsonl) console.log(JSON.stringify(event));
+      else {
+        const itemType = event.item?.type ? ` item=${event.item.type}` : '';
+        console.log(`  event: ${event.type || 'event'}${event.turn !== undefined ? ` turn=${event.turn}` : ''}${itemType}`);
+      }
+    }
+    if (failed) {
+      return { reason: 'failed', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 3 };
+    }
+    if (['archived', 'closed'].includes(thread?.status)) {
+      return { reason: `thread ${thread.status}`, lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
+    }
+    const pending = Array.isArray(thread?.commands) ? thread.commands.filter((command) => command.status === 'pending').length : 0;
+    if (events.some((event) => event.type === 'turn.completed')) turnSettled = true;
+    if (events.some((event) => event.type === 'turn.started')) turnSettled = false; // 链式多轮：新一轮已接棒
+    if (turnSettled && lifeState !== 'executing') {
+      return { reason: 'turn.completed', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
+    }
+    if (lifeState !== 'executing' && pending === 0) {
+      idleRounds += 1;
+      if (idleRounds >= 2) {
+        return { reason: 'idle-no-pending', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
+      }
+    } else {
+      idleRounds = 0;
+    }
+  }
+  return { reason: 'timeout', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 2 };
 }
 
 // ── Session dispatch（coder 派遣入口，替代裸 curl）──────────────

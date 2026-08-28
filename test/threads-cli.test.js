@@ -23,6 +23,7 @@ after(async () => {
 
 function startFakeClawServer() {
   const requests = [];
+  const watchState = { showCalls: 0 };
   const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
@@ -30,7 +31,7 @@ function startFakeClawServer() {
 
     let payload = { ok: true };
     if (req.url === '/protoclaw/threads?agentId=coder') {
-      payload = { ok: true, threads: [{ threadId: 'wt-1', agentId: 'coder', status: 'idle', headSessionId: 's-1' }] };
+      payload = { ok: true, threads: [{ threadId: 'wt-1', agentId: 'coder', status: 'idle', lifeState: 'executing', title: '工单025', headSessionId: 's-1' }] };
     } else if (req.url === '/protoclaw/threads' && req.method === 'POST') {
       payload = { ok: true, thread: { threadId: 'wt-new', agentId: 'coder', status: 'idle', headSessionId: 's-1' } };
     } else if (req.url === '/protoclaw/prebuilt_sessions' && req.method === 'POST') {
@@ -41,7 +42,7 @@ function startFakeClawServer() {
         targetSessionId: 'session-new',
       };
     } else if (req.url === '/protoclaw/threads/wt-1' && req.method === 'GET') {
-      payload = { ok: true, thread: { threadId: 'wt-1', lifeState: 'executing' } };
+      payload = { ok: true, thread: { threadId: 'wt-1', lifeState: 'executing', failed: false } };
     } else if (req.url === '/protoclaw/threads/wt-idle' && req.method === 'GET') {
       payload = { ok: true, thread: { threadId: 'wt-idle', lifeState: 'idle' } };
     } else if (req.url === '/protoclaw/threads/wt-idle/commands') {
@@ -49,9 +50,22 @@ function startFakeClawServer() {
     } else if (req.url === '/protoclaw/threads/wt-1/events?after=2') {
       payload = { ok: true, events: [{ type: 'turn.completed', turn: 1 }], cursor: 3 };
     } else if (req.url === '/protoclaw/threads/wt-1/commands') {
-      payload = { ok: true, command: { commandId: 'cmd-1', status: 'pending' }, duplicate: false };
+      payload = { ok: true, command: { commandId: 'cmd-1', status: 'pending', kind: 'user_message' }, duplicate: false, delivery: { delivered: true } };
     } else if (req.url === '/protoclaw/threads/wt-1/head') {
       payload = { ok: true, thread: { threadId: 'wt-1', status: 'idle', headSessionId: 's-2' } };
+    } else if (req.url === '/protoclaw/threads/wt-watch' && req.method === 'GET') {
+      watchState.showCalls += 1;
+      // 首查 executing（在办），之后 idle + 无 pending → 配合事件游标落定
+      const executing = watchState.showCalls === 1;
+      payload = { ok: true, thread: { threadId: 'wt-watch', status: 'open', lifeState: executing ? 'executing' : 'idle', failed: false, commands: [] } };
+    } else if (req.url === '/protoclaw/threads/wt-watch/events') {
+      payload = { ok: true, events: [], cursor: 1 };
+    } else if (req.url === '/protoclaw/threads/wt-watch/events?after=1') {
+      payload = { ok: true, events: [{ type: 'turn.completed', turn: 1 }], cursor: 2 };
+    } else if (req.url === '/protoclaw/threads/wt-stuck' && req.method === 'GET') {
+      payload = { ok: true, thread: { threadId: 'wt-stuck', status: 'open', lifeState: 'executing', failed: false, commands: [] } };
+    } else if (req.url === '/protoclaw/threads/wt-stuck/events') {
+      payload = { ok: true, events: [], cursor: 0 };
     }
 
     res.setHeader('Content-Type', 'application/json');
@@ -86,7 +100,7 @@ test('claw threads maps generic commands to Thread HTTP routes', async () => {
   const listed = await runCli(fake.port, ['threads', 'list', '--agent', 'coder', '--format', 'json']);
   assert.equal(listed.code, 0, listed.stderr);
   assert.deepEqual(JSON.parse(listed.stdout).threads[0], {
-    threadId: 'wt-1', agentId: 'coder', status: 'idle', headSessionId: 's-1',
+    threadId: 'wt-1', agentId: 'coder', status: 'idle', lifeState: 'executing', title: '工单025', headSessionId: 's-1',
   });
 
   const created = await runCli(fake.port, [
@@ -183,4 +197,40 @@ test('claw threads help is available without a server', async () => {
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /claw threads list/);
   assert.match(result.stdout, /claw threads close/);
+});
+
+test('threads text output is compact and exposes dispatch-critical fields', async () => {
+  const fake = await startFakeClawServer();
+
+  const listed = await runCli(fake.port, ['threads', 'list', '--agent', 'coder']);
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.match(listed.stdout, /wt-1\s+\[idle\|executing\]/);
+  assert.match(listed.stdout, /"工单025"/);
+
+  const shown = await runCli(fake.port, ['threads', 'show', 'wt-1']);
+  assert.equal(shown.code, 0, shown.stderr);
+  assert.match(shown.stdout, /lifeState: executing/);
+  assert.match(shown.stdout, /failed: false/);
+
+  const sent = await runCli(fake.port, ['threads', 'send', 'wt-1', '--text', 'X'.repeat(5000)]);
+  assert.equal(sent.code, 0, sent.stderr);
+  assert.match(sent.stdout, /sent cmd-1\s+kind=user_message\s+duplicate=false\s+delivered=true/);
+  assert.ok(!sent.stdout.includes('X'.repeat(100)), 'text 输出不得回显工单全文');
+});
+
+test('threads watch settles on turn.completed and reports timeout via exit code', async () => {
+  const fake = await startFakeClawServer();
+
+  const settled = await runCli(fake.port, [
+    'threads', 'watch', 'wt-watch', '--interval', '0.3', '--timeout', '5',
+  ]);
+  assert.equal(settled.code, 0, settled.stderr);
+  assert.match(settled.stdout, /event: turn\.completed turn=1/);
+  assert.match(settled.stdout, /watch done: turn\.completed \| life=idle failed=false/);
+
+  const timedOut = await runCli(fake.port, [
+    'threads', 'watch', 'wt-stuck', '--interval', '0.3', '--timeout', '1',
+  ]);
+  assert.equal(timedOut.code, 2, timedOut.stderr);
+  assert.match(timedOut.stdout, /watch done: timeout \| life=executing failed=false/);
 });

@@ -632,8 +632,10 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       protocolVersion: 2,
       operationId: trace.operationId,
       revision: committedIndex.revision,
-      session,
+      // threadId 放在 session 全量对象之前：调用方截断输出（head -c 等）时
+      // 调度句柄仍然可见，不需要再从 threads list 反查。
       threadId: createdThread?.threadId || null,
+      session,
       sessionDelta: {
         revision: committedIndex.revision,
         activeSessionId: committedIndex.activeSessionId,
