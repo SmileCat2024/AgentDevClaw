@@ -241,6 +241,9 @@ function compareEntries(left, right) {
 export class CatalogAggregator {
   constructor({
     fetch: fetchImpl = globalThis.fetch?.bind(globalThis),
+    // 出站请求统一入口（装配层注入认证 fetch）：远程开启访问保护时由它附加
+    // 会话凭据；未注入时直连 fetch，行为与无认证部署一致。
+    remoteFetch = null,
     listConnections = null,
     getStatus = null,
     timeoutMs = REMOTE_HANDSHAKE_TIMEOUT_MS,
@@ -262,7 +265,11 @@ export class CatalogAggregator {
     if (!Number.isInteger(snapshotTtlMs) || snapshotTtlMs < 0) {
       throw new RangeError('snapshotTtlMs 必须是非负整数毫秒值');
     }
+    if (remoteFetch !== null && typeof remoteFetch !== 'function') {
+      throw new TypeError('remoteFetch 必须是 (connection, url, init) => Promise<Response> 函数');
+    }
     this.fetch = fetchImpl;
+    this.remoteFetch = remoteFetch;
     this.listConnections = listConnections;
     this.getStatus = getStatus;
     this.timeoutMs = timeoutMs;
@@ -390,10 +397,15 @@ export class CatalogAggregator {
 
     const read = async (pathname) => {
       try {
-        const response = await this.fetch(`${originFor(connection)}${pathname}`, {
+        const url = `${originFor(connection)}${pathname}`;
+        const requestInit = {
           signal: controller.signal,
           headers: { Accept: 'application/json' },
-        });
+        };
+        const doFetch = this.remoteFetch
+          ? () => this.remoteFetch(connection, url, requestInit)
+          : () => this.fetch(url, requestInit);
+        const response = await doFetch();
         if (!response?.ok) {
           throw new CatalogRequestError(`远程 ${pathname} 返回 HTTP ${response?.status}`);
         }

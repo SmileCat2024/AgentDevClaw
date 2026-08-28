@@ -1185,6 +1185,7 @@ void connectionStore.load()
   });
 
 const remoteCatalogAggregator = createCatalogAggregator({
+  remoteFetch: (connection, url, init) => remoteAuthSessions.fetchWithAuth(connection, url, init),
   listConnections: async () => {
     await connectionStore.ensureLoaded();
     const connections = connectionStore.listConnections();

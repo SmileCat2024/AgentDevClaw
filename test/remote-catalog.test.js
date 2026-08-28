@@ -49,6 +49,7 @@ function createHarness({
   healthByConnection = { 'server-a': { state: 'connected' } },
   timeoutMs = 200,
   snapshotTtlMs = 0,
+  remoteFetch = null,
 } = {}) {
   const calls = [];
   const fetchImpl = async (url, options) => {
@@ -59,6 +60,7 @@ function createHarness({
   };
   const aggregator = createCatalogAggregator({
     fetch: fetchImpl,
+    remoteFetch,
     listConnections: async () => connections,
     getStatus: (id) => healthByConnection[id] || null,
     timeoutMs,
@@ -539,5 +541,52 @@ describe('disabled 连接与空列表', () => {
   it('无连接时返回空列表', async () => {
     const { aggregator } = createHarness({ connections: [] });
     assert.deepEqual(await aggregator.aggregate(), { connections: [] });
+  });
+});
+
+describe('目录拉取经认证出站通道', () => {
+  it('注入 remoteFetch 时目录端点经它发出，并携带连接（含凭据）与超时 signal', async () => {
+    const seen = [];
+    const routes = remoteRoutes({ port: 22101, connected: [childRuntime()] });
+    const remoteFetch = async (conn, url, init) => {
+      seen.push({ connectionId: conn.id, authPassword: conn.auth?.password, url: String(url), signal: init?.signal });
+      const handler = routes[String(url)];
+      if (!handler) throw new Error(`unexpected url: ${url}`);
+      return handler(new URL(String(url)), init);
+    };
+    const { aggregator, calls } = createHarness({
+      connections: [connection({ auth: { password: 'secret' } })],
+      routes,
+      remoteFetch,
+    });
+
+    const section = sectionOf(await aggregator.aggregate(), 'server-a');
+
+    assert.equal(section.status, 'connected');
+    assert.equal(section.workspaces.length, 1);
+    // 底层 fetch 未被使用：全部请求经认证通道。
+    assert.equal(calls.length, 0);
+    assert.deepEqual(seen.map((item) => new URL(item.url).pathname).sort(), [
+      '/api/agents',
+      '/protoclaw/get_connected_agents',
+    ]);
+    assert.ok(seen.every((item) => item.connectionId === 'server-a'));
+    assert.ok(seen.every((item) => item.authPassword === 'secret'));
+    assert.ok(seen.every((item) => item.signal instanceof AbortSignal));
+  });
+
+  it('remoteFetch 抛错时该连接降级返回，不阻塞聚合', async () => {
+    const { aggregator } = createHarness({
+      routes: remoteRoutes({ port: 22101 }),
+      remoteFetch: async () => {
+        throw new Error('auth_invalid_credentials: 远程访问密码不正确或已更改');
+      },
+    });
+
+    const section = sectionOf(await aggregator.aggregate(), 'server-a');
+    assert.equal(section.status, 'degraded');
+    assert.deepEqual(section.workspaces, []);
+    assert.equal(section.error.code, 'operation_rejected');
+    assert.ok(section.error.message.includes('远程访问密码不正确'));
   });
 });
