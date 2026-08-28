@@ -24,6 +24,7 @@ import {
 } from './server/runtime-call-envelope.js';
 import { renderConversationHtml } from './server/conversation-renderer.js';
 import { setupUsageRoutes } from './server/usage-ledger.js';
+import { authMiddleware, registerAuthRoutes, getInternalAuthToken } from './server/auth.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
 import {
@@ -147,6 +148,12 @@ const tunnelManager = createTunnelManager();
 let remoteClawConnector = null;
 let remoteClawContext = null;
 const PROJECT_REMOTE_CLAW_CONFIG_PATH = path.join(PROJECT_ROOT, '.agentdev', 'remote-claw.json');
+
+// Authentication routes are public only for status/login; every existing
+// API/control endpoint is protected by the middleware below. Internal runtime
+// calls use the process-scoped bearer token injected into child processes.
+app.use(authMiddleware);
+registerAuthRoutes(app, express);
 
 // ── Agent discovery + identity extracted to server/routes/agent-discovery.js ──
 // sessionApi is a mutable reference filled after session-helpers is created,

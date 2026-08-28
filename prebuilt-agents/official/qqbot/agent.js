@@ -21,6 +21,7 @@ import { ClawDispatchFeature } from '../../../local-features/dist/dispatch/src/i
 import { ConversationExportFeature } from '../../../local-features/dist/conversation-export/src/index.js';
 import { getIMChannelLabel } from '../../../server/shared/im-channels.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
+import { internalAuthHeaders } from '../../../server/shared/internal-auth.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -143,7 +144,7 @@ class IMOperatorFeature {
         },
         execute: async () => {
           try {
-            const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_routable_targets`);
+            const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_routable_targets`, { headers: internalAuthHeaders() });
             if (!resp.ok) return { error: `服务端返回 ${resp.status}` };
             const data = await resp.json();
             const lines = data.lines || [];
@@ -209,7 +210,7 @@ class IMOperatorFeature {
         },
         execute: async () => {
           try {
-            const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_routable_targets`);
+            const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_routable_targets`, { headers: internalAuthHeaders() });
             if (!resp.ok) return { error: `服务端返回 ${resp.status}` };
             const data = await resp.json();
             const workspaces = data.workspaces || [];
@@ -303,7 +304,7 @@ class IMOperatorFeature {
             return { error: '参数不完整，需要 lineId、agentId、sessionId。' };
           }
           try {
-            const targetsResp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_routable_targets`);
+            const targetsResp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_routable_targets`, { headers: internalAuthHeaders() });
             if (!targetsResp.ok) return { error: `查询线路状态失败: ${targetsResp.status}` };
             const targets = await targetsResp.json();
             const line = (targets.lines || []).find(l => l.id === lineId);
@@ -312,7 +313,7 @@ class IMOperatorFeature {
 
             const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_line_transfer`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({ lineId, carrier: line.carrier, agentId, sessionId }),
             });
             const result = await resp.json();
@@ -341,7 +342,7 @@ class IMOperatorFeature {
           try {
             const resp = await fetch(`${SERVER_ORIGIN}/protoclaw/im_line_disconnect`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({ lineId }),
             });
             const result = await resp.json();

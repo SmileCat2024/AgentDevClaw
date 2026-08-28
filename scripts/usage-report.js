@@ -1,3 +1,5 @@
+import { internalAuthHeaders } from '../server/shared/internal-auth.js';
+
 export function buildModelUsageMeta(resolvedModel, roleFallback = '') {
   return {
     modelName: resolvedModel?.modelName || resolvedModel?.llm?.modelName || '',
@@ -82,7 +84,7 @@ export async function reportUsageEvent(serverOrigin, event) {
   try {
     const response = await fetch(`${serverOrigin}/protoclaw/usage/events`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ ...event, usage }),
     });
     if (!response.ok) {

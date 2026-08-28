@@ -25,6 +25,7 @@ import { handleCapabilityIPC } from './capability-ipc.js';
 import { createSummaryHandlers } from './runtime-summary.js';
 import { createPassiveMailboxLoop } from './runtime-passive-mailbox.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
+import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 
 // Inject DebugHub into the extracted CallArbiter module
 setDebugHubClass(DebugHub);
@@ -310,9 +311,9 @@ const sessions = new Map();
 async function postJson(pathname, payload) {
   const response = await fetch(`${SERVER_ORIGIN}${pathname}`, {
     method: 'POST',
-    headers: {
+    headers: internalAuthHeaders({
       'content-type': 'application/json',
-    },
+    }),
     body: JSON.stringify(payload),
   });
   const bodyText = await response.text();
@@ -978,7 +979,7 @@ SessionLifecycle.prototype.start = async function () {
         }
         await fetch(`${SERVER_ORIGIN}/protoclaw/session_meta_sync`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             agentId,
             sessionId: self.sessionId,

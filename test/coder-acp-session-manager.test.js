@@ -767,8 +767,14 @@ describe('claw-client request assembly (HTTP layer)', () => {
     const sent = [];
     const claw = createClawClient({
       baseUrl: 'http://127.0.0.1:1',
+      internalToken: 'test-internal-token',
       fetchImpl: async (url, init) => {
-        sent.push({ url: String(url), method: init?.method, body: init?.body ? JSON.parse(init.body) : null });
+        sent.push({
+          url: String(url),
+          method: init?.method,
+          body: init?.body ? JSON.parse(init.body) : null,
+          authorization: init?.headers?.Authorization,
+        });
         return new Response(JSON.stringify({ ok: true }), { status: 201, headers: { 'content-type': 'application/json' } });
       },
     });
@@ -780,16 +786,19 @@ describe('claw-client request assembly (HTTP layer)', () => {
       url: 'http://127.0.0.1:1/protoclaw/acp/coder/sessions',
       method: 'POST',
       body: { agentId: 'coder', cwd: 'C:/work' },
+      authorization: 'Bearer test-internal-token',
     });
     assert.deepEqual(sent[1], {
       url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/commands',
       method: 'POST',
       body: { kind: 'user_message', text: 'hi', source: 'acp', idempotencyKey: 'acp-x' },
+      authorization: 'Bearer test-internal-token',
     });
     assert.deepEqual(sent[2], {
       url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/archive',
       method: 'POST',
       body: null,
+      authorization: 'Bearer test-internal-token',
     });
   });
 });

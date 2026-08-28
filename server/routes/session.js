@@ -33,6 +33,7 @@ import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
+import { getInternalAuthToken } from '../auth.js';
 
 // server.js lives at project root; this module is at server/routes/session.js
 const __filename = fileURLToPath(import.meta.url);
@@ -739,7 +740,7 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
       cwd: __dirname,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      env: childProcessEnv(),
+      env: { ...childProcessEnv(), PROTOCLAW_INTERNAL_TOKEN: getInternalAuthToken() },
     });
 
     let stderr = '';
@@ -849,7 +850,7 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
       cwd: __dirname,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      env: childProcessEnv(),
+      env: { ...childProcessEnv(), PROTOCLAW_INTERNAL_TOKEN: getInternalAuthToken() },
     });
 
     let stderr = '';

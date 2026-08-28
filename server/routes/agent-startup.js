@@ -23,6 +23,7 @@ import {
   readSessionIndex, getPrebuiltSessionFilePath, updateSessionIndex,
 } from '../shared/session-access.js';
 import { notifyRuntimeReady } from '../shared/runtime-hooks.js';
+import { getInternalAuthToken } from '../auth.js';
 import {
   PROCESS_MODE_ISOLATED,
   PROCESS_MODE_SHARED_BY_PROJECT,
@@ -357,6 +358,7 @@ export function createAgentStartupFns(deps) {
         AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
         AGENTDEV_UDS_PATH: resolveInstanceUdsPath(),
         PROTOCLAW_SERVER_ORIGIN: APP_ORIGIN,
+        PROTOCLAW_INTERNAL_TOKEN: getInternalAuthToken(),
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
         PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
         ...(runtimeOptions?.extraEnv && typeof runtimeOptions.extraEnv === 'object' ? runtimeOptions.extraEnv : {}),
@@ -526,6 +528,7 @@ export function createAgentStartupFns(deps) {
         AGENTDEV_VIEWER_PORT: String(VIEWER_PORT),
         AGENTDEV_UDS_PATH: resolveInstanceUdsPath(),
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
+        PROTOCLAW_INTERNAL_TOKEN: getInternalAuthToken(),
         PROTOCLAW_PREBUILT_SESSION_ID: normalizedSessionId,
         PROTOCLAW_ASSEMBLY_RUNTIME: '1',
         PROTOCLAW_ASSEMBLY_WORKSPACE: runtimeWorkdir,

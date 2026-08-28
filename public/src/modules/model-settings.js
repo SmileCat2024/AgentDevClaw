@@ -104,22 +104,20 @@ function renderSettingsOverlay() {
       }).join('')
     : '<div style="padding:16px;text-align:center;color:var(--text-secondary);font-size:13px;">' + (isZh ? '暂无预设，点击下方按钮添加' : 'No presets yet. Click the button below to add one') + '</div>';
 
-  // ── Tab bar ──
+  // ── Tab content: split into fixed banner + scrollable content ──
   const tabText = activeTab === 'text';
   const tabBar = [
     '<div class="settings-tab-bar">',
     '<button class="settings-tab' + (tabText ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'text\')">',
-    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>',
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 2 0 0 1 2 2z"></path></svg>',
     (isZh ? '文本模型' : 'Text Model'),
     '</button>',
-    '<button class="settings-tab' + (!tabText ? ' active' : '') + '" type="button" onclick="switchSettingsTab(\'speech\')">',
+    '<button class="settings-tab' + (!tabText ? ' active' : '') + '" type="button" data-settings-tab="speech" onclick="switchSettingsTab(this.dataset.settingsTab)">',
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>',
     (isZh ? '语音模型' : 'Speech Model'),
     '</button>',
     '</div>',
   ].join('');
-
-  // ── Tab content: split into fixed banner + scrollable content ──
   let fixedBanner = '';
   let scrollContent = '';
 
@@ -186,9 +184,6 @@ function renderSettingsOverlay() {
     }
   }
 
-  // 编辑具体预设时不显示文本/语音切换标签
-  var inEditMode = tabText ? (editing !== null) : (window.ClawFW._speechEditing != null);
-
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;">',
@@ -200,7 +195,7 @@ function renderSettingsOverlay() {
     '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeSettings()">×</button>',
     '</div>',
 
-    inEditMode ? '' : tabBar,
+    editing === null && window.ClawFW._speechEditing == null ? tabBar : '',
     fixedBanner ? '<div style="flex-shrink:0;">' + fixedBanner + '</div>' : '',
     '<div class="settings-tab-content">',
     scrollContent,
@@ -289,11 +284,6 @@ window.onProviderChangeUpdateThinking = function() {
   const selectedValue = select.value || '';
   select.dataset.current = selectedValue;
   if (typeof window.populateThinkingEffortOptions === 'function') window.populateThinkingEffortOptions();
-};
-
-window.switchSettingsTab = function(tab) {
-  window.ClawFW.settingsTab = tab;
-  renderSettingsOverlay();
 };
 
 const OPENCODE_ZEN_BASE_URL = 'https://opencode.ai/zen/v1';

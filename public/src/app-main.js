@@ -1297,6 +1297,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 (async () => {
+  await window.__clawAuthReady;
   await waitForViewerReady();
   const success = await loadFeatureTemplateMap();
   await loadAgents();

@@ -76,7 +76,8 @@
     }
   </script>
   <script src="./src/tauri-bridge.js"></script>
-  <link rel="stylesheet" href="./styles/base.css?v=1785050000">
+  <script src="./src/modules/auth-client.js?v=20260828b"></script>
+  <link rel="stylesheet" href="./styles/base.css?v=20260828d">
   <link rel="stylesheet" href="./styles/layout.css?v=20260826b">
   <link rel="stylesheet" href="./styles/components.css?v=20260827b">
   <link rel="stylesheet" href="./styles/coder-threads.css?v=20260820a">
@@ -346,6 +347,7 @@
         </button>
         <div class="settings-flyout-menu" id="settings-flyout-menu">
           <button class="context-menu-item" id="settings-flyout-config" type="button">模型配置</button>
+          <button class="context-menu-item" id="settings-flyout-auth" type="button">访问保护</button>
           <button class="context-menu-item" id="settings-flyout-feature-config" type="button">全局 Feature 设置</button>
           <button class="context-menu-item" id="settings-flyout-proxy" type="button">网络代理</button>
           <button class="context-menu-item" id="settings-flyout-remote" type="button">远程连接</button>
@@ -502,7 +504,7 @@
   <script src="./src/modules/speech-settings.js?v=1785090000"></script>
   <script src="./src/modules/oauth-flow.js?v=20260823a"></script>
   <script src="./src/modules/proxy-overlay.js?v=20260823a"></script>
-  <script src="./src/modules/model-settings.js?v=20260823a"></script>
+  <script src="./src/modules/model-settings.js?v=20260828a"></script>
   <script src="./src/modules/mcp-gateway-ui.js?v=20260806a"></script>
   <script src="./src/modules/remote-claw-settings.js?v=1783960000"></script>
   <script src="./src/modules/remote-connections.js?v=20260827a"></script>
@@ -536,7 +538,7 @@
   <script src="./src/modules/git-graph.js?v=20260824g"></script>
   <script src="./src/modules/git-panel.js?v=20260824i"></script>
   <script src="./src/modules/session-controls-panel.js?v=20260827b"></script>
-  <script src="./src/app-ui.js?v=20260824b"></script>
+  <script src="./src/app-ui.js?v=20260828a"></script>
   <script src="./src/modules/resources-viewer.js?v=1783960000"></script>
   <script src="./src/modules/session-ui.js?v=1784480000"></script>
   <script src="./src/modules/session-list-render.js?v=20260824d"></script>

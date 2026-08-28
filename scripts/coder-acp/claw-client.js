@@ -20,6 +20,11 @@
  * 由调用方（session-manager）映射到 ACP 错误 taxonomy。
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { resolveUserDataDir } from '../../server/shared/constants.js';
+
 export class ClawUnreachableError extends Error {
   constructor(cause) {
     super(`cannot reach Claw server: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -42,6 +47,21 @@ export class ClawHttpError extends Error {
 }
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const AUTH_CONFIG_FILENAME = 'auth.json';
+
+function readInternalToken() {
+  const configured = typeof process.env.PROTOCLAW_INTERNAL_TOKEN === 'string'
+    ? process.env.PROTOCLAW_INTERNAL_TOKEN.trim()
+    : '';
+  if (configured) return configured;
+  try {
+    const configPath = join(resolveUserDataDir(), AUTH_CONFIG_FILENAME);
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    return typeof config?.serviceToken === 'string' ? config.serviceToken.trim() : '';
+  } catch {
+    return '';
+  }
+}
 
 function errorFields(error) {
   return {
@@ -60,6 +80,7 @@ export function createClawClient(options = {}) {
   const baseUrl = (options.baseUrl ?? process.env.CLAW_ACP_BASE_URL ?? 'http://127.0.0.1:1420').replace(/\/+$/, '');
   const fetchImpl = options.fetchImpl ?? fetch;
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const internalToken = options.internalToken ?? readInternalToken();
   const trace = options.trace;
 
   const describeBody = (body) => {
@@ -88,7 +109,10 @@ export function createClawClient(options = {}) {
     try {
       response = await fetchImpl(`${baseUrl}${path}`, {
         method,
-        headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
+        headers: {
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+          ...(internalToken ? { Authorization: `Bearer ${internalToken}` } : {}),
+        },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(requestTimeoutMs),
       });

@@ -269,3 +269,82 @@ body {
   overflow: hidden;
 }
 
+#claw-auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg-color);
+}
+
+.claw-auth-card {
+  width: min(100%, 400px);
+  box-sizing: border-box;
+  padding: 32px;
+  border: 1px solid var(--input-card-border);
+  border-radius: 16px;
+  background: var(--input-card-bg);
+  box-shadow: 0 18px 50px var(--shadow-strong);
+}
+
+.claw-auth-brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 20px;
+  border-radius: 12px;
+  background: var(--accent-color);
+  color: var(--bg-color);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+.claw-auth-title {
+  color: var(--text-primary);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.claw-auth-subtitle {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.claw-auth-prompt {
+  margin: 28px 0 18px;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.claw-auth-card form { display: grid; gap: 10px; }
+.claw-auth-label { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.claw-auth-card input { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid var(--input-card-border); border-radius: 9px; background: var(--bg-color); color: var(--text-primary); font: inherit; outline: none; }
+.claw-auth-card input:focus { border-color: var(--code-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--code-accent) 16%, transparent); }
+.claw-auth-card button.settings-btn-primary {
+  width: 100%;
+  margin-top: 6px;
+  background: #fff;
+  color: #111;
+  border-color: #fff;
+}
+.claw-auth-card button.settings-btn-primary:hover {
+  background: #e8e8e8;
+  border-color: #e8e8e8;
+}
+.claw-auth-card button:disabled { opacity: .6; cursor: wait; }
+.claw-auth-error { min-height: 18px; color: var(--error-color); font-size: 12px; }
+.settings-auth-warning { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warning-color) 35%, var(--border-color)); border-radius: 6px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.settings-auth-status { color: var(--text-secondary); font-size: 12px; margin-top: 12px; }
+.auth-settings-window { width: min(100%, 520px); max-height: min(100%, 560px); overflow: hidden; }
+.auth-settings-content { overflow: auto; }
+.auth-settings-checkbox { margin: 16px 0; }
+

@@ -12,6 +12,7 @@
  */
 
 import { getIMSourceValues, getIMChannel } from '../server/shared/im-channels.js';
+import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 
 const IM_REPLY_POLICY = {
   /**
@@ -156,7 +157,7 @@ export function createIMBridge(ctx) {
       let feature;
       if (ch.configEnv === null) {
         // QQ loads config from server API
-        const cfgResp = await fetch(`${ctx.SERVER_ORIGIN}/protoclaw/qqbot_config`);
+        const cfgResp = await fetch(`${ctx.SERVER_ORIGIN}/protoclaw/qqbot_config`, { headers: internalAuthHeaders() });
         const qqCfg = cfgResp.ok ? await cfgResp.json() : {};
         feature = new CarrierClass({
           appId: qqCfg?.appId || '',
@@ -240,7 +241,7 @@ export function createIMBridge(ctx) {
     if (!ctx.sessionId) return;
 
     try {
-      const resp = await fetch(`${ctx.SERVER_ORIGIN}/protoclaw/im_line_binding?agentId=${ctx.agentId}&sessionId=${ctx.sessionId}`);
+      const resp = await fetch(`${ctx.SERVER_ORIGIN}/protoclaw/im_line_binding?agentId=${ctx.agentId}&sessionId=${ctx.sessionId}`, { headers: internalAuthHeaders() });
       if (!resp.ok) return;
       const binding = await resp.json();
       if (!binding?.carrier) return;

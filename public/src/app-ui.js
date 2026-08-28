@@ -1680,10 +1680,20 @@ settingsToggle.addEventListener('click', (e) => {
 
 document.getElementById('settings-flyout-config').addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
+  if (typeof window.closeAuthSettings === 'function') window.closeAuthSettings();
+  window.ClawFW.settingsTab = 'text';
   if (window.ClawFW.settingsOpen) {
-    closeSettings();
+    renderSettingsOverlay();
   } else {
     openSettings();
+  }
+});
+
+document.getElementById('settings-flyout-auth')?.addEventListener('click', () => {
+  settingsFlyout.classList.remove('open');
+  if (typeof window.closeSettings === 'function' && window.ClawFW?.settingsOpen) window.closeSettings();
+  if (typeof window.openAuthSettings === 'function') {
+    window.openAuthSettings();
   }
 });
 
