@@ -11,8 +11,12 @@
  * promises remain runtime resources owned by the poll coordinator.
  *
  * `sessionMeta` carries the selected session's rich metadata (session id,
- * title, model name). It is written as a whole replacement snapshot by the
- * data-load / switch paths and is read-only for consumers.
+ * type, timestamps, working directory, message count, cumulative token
+ * usage). Volatile display fields (title, model name) deliberately stay out:
+ * they resolve through live sources (catalog accessor / overview snapshot)
+ * so renames and model swaps surface without waiting for a detail reload.
+ * It is written as a whole replacement snapshot by the data-load / switch
+ * paths and is read-only for consumers.
  */
 
 function normalizeSessionViewRuntimeId(value) {
@@ -21,18 +25,34 @@ function normalizeSessionViewRuntimeId(value) {
 
 const EMPTY_SESSION_META = Object.freeze({
   sessionId: '',
-  sessionTitle: '',
-  modelName: '',
+  sessionType: '',
+  createdAt: '',
+  updatedAt: '',
+  openDirectory: '',
+  messageCount: 0,
+  totalTokens: 0,
 });
+
+function normalizeSessionMetaField(value) {
+  return String(value ?? '').trim();
+}
+
+function normalizeSessionMetaCount(value) {
+  return Number.isFinite(value) ? value : 0;
+}
 
 function normalizeSessionMeta(value) {
   if (!value || typeof value !== 'object') {
     return EMPTY_SESSION_META;
   }
   return Object.freeze({
-    sessionId: String(value.sessionId ?? '').trim(),
-    sessionTitle: String(value.sessionTitle ?? '').trim(),
-    modelName: String(value.modelName ?? '').trim(),
+    sessionId: normalizeSessionMetaField(value.sessionId),
+    sessionType: normalizeSessionMetaField(value.sessionType),
+    createdAt: normalizeSessionMetaField(value.createdAt),
+    updatedAt: normalizeSessionMetaField(value.updatedAt),
+    openDirectory: normalizeSessionMetaField(value.openDirectory),
+    messageCount: normalizeSessionMetaCount(value.messageCount),
+    totalTokens: normalizeSessionMetaCount(value.totalTokens),
   });
 }
 
