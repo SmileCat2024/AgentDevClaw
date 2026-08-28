@@ -142,6 +142,9 @@ function _findViewportTopRowIdx(rows) {
 //    SPANNING the viewport top fold too, re-anchoring the viewport onto
 //    the stub (see _foldRowIfOutside). Incremental arrivals keep their
 //    state — they only ever run the conservative scan.
+//    Drag release additionally pins a release anchor (see _onScrollStop):
+//    reveals above the first real row would otherwise displace the whole
+//    reading frame in that same single paint.
 //
 // 3. Background patches (streaming append / updateLastMessage) —
 //    conservative scan only. Settle powers here would fold and re-anchor
@@ -315,9 +318,51 @@ function _onScrollStop() {
     // then fold in the SAME task so reveal + collapse land in one paint
     // (no delayed shift after the user has already stopped).
     _largeDeltaPending = false;
+    // Release anchor: the first already-real row (never a cv-hidden stub)
+    // whose top edge sits at or below the viewport top. Rows above it may
+    // reveal and grow during the settle; pinning this row at its
+    // release-time viewport offset keeps the reading frame stable — the
+    // stub zone above resolves into content around a fixed reference
+    // instead of shoving everything the user is looking at downward.
+    // Rows classified "fully above the viewport" by _applyWindow's
+    // compensation alone cannot express this: a stub 170px INTO the view
+    // is not compensated, yet its reveal displaces the anchor by its full
+    // growth (the release jump).
+    let releaseAnchor = null;
+    let releaseAnchorIdx = -1;
+    let releaseAnchorOffset = 0;
+    if (!followLatestEnabled && container) {
+      const relRows = _cachedRows || container.querySelectorAll('.message-row');
+      const relTop = container.scrollTop;
+      for (let ri = 0; ri < relRows.length; ri++) {
+        const relRow = relRows[ri];
+        if (relRow.classList.contains('process-cv-hidden')) continue;
+        if (relRow.offsetTop >= relTop) {
+          releaseAnchor = relRow;
+          releaseAnchorIdx = ri;
+          releaseAnchorOffset = relRow.offsetTop - relTop;
+          break;
+        }
+      }
+    }
     _lastWindowStart = -1; // force fresh windowing
     _applyWindow();
     _runCollapseScan(true);
+    // A render between the last scroll event and this timer rebuilds the DOM;
+    // only pin when the captured row is still the live row at the same index
+    // (a detached node would report offsetTop 0 and slam the viewport to the
+    // top). _applyWindow guarantees _cachedRows is current at this point.
+    const liveAnchorRows = _cachedRows;
+    if (releaseAnchor && liveAnchorRows && liveAnchorRows[releaseAnchorIdx] === releaseAnchor
+        && !releaseAnchor.classList.contains('process-cv-hidden')) {
+      const pinnedTop = Math.max(0, releaseAnchor.offsetTop - releaseAnchorOffset);
+      if (container.scrollTop !== pinnedTop) {
+        container.scrollTop = pinnedTop;
+        // Keep the delta tracker in sync so the synthetic scroll event fired
+        // by this write is not misread as another large user jump.
+        _lastScrollTop = container.scrollTop;
+      }
+    }
     return;
   }
 

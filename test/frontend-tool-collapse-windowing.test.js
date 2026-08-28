@@ -153,7 +153,12 @@ function installLayout(container) {
   });
   container.querySelectorAll = (sel) => {
     if (sel === '.message-row') {
-      layout();
+      // No layout() here: in a real browser querySelectorAll does not force
+      // layout, and applyProcessDistance queries rows BEFORE the cv-hidden
+      // classes land — far rows must never get a full-height layout pass, or
+      // their remembered height (contain-intrinsic-size: auto) would erase
+      // the placeholder snap this suite is testing. Row offsetTop/offsetHeight
+      // reads trigger layout lazily.
       return container._entries.map((e) => e.row);
     }
     return [];
@@ -527,4 +532,84 @@ test('windowing: follow mode skips the reveal compensation (bottom-lock settleme
   const writes = h.container._scrollWrites.slice(writesBefore);
   const positiveWrites = writes.filter((w) => w.to > w.from);
   assert.equal(positiveWrites.length, 0, 'no upward compensation writes may happen in follow mode');
+});
+
+test('scrollbar drag release: settle pins the release anchor so the reading frame does not jump', () => {
+  const h = createHarness();
+  h.sandbox.showChatProcess = true;
+  h.sandbox.followLatestEnabled = false;
+
+  // Interleaved transcript: user rows are always real (never cv-hidden), tool
+  // rows above the landing window are 150px stubs vs 600px real. Any release
+  // viewport then contains the bug geometry: stub(s) above a real row.
+  // applyProcessDistance MUST run before any layout read: rows hidden before
+  // their first layout keep the 150px placeholder (contain-intrinsic-size has
+  // nothing remembered) — reading scrollHeight first would lay every row out
+  // at 600px and the remembered height would erase the reveal snap.
+  for (let i = 0; i < 300; i++) {
+    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
+    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
+  }
+  vm.runInContext('applyProcessDistance(container)', h.sandbox);
+  h.container.scrollTop = h.container.scrollHeight;
+  vm.runInContext('_onScrollForWindowing()', h.sandbox);
+  h.flushTimers();
+
+  // Scrollbar drag: two events with deltas far above the large-delta
+  // threshold, landing ~20% into the document (deep in stub territory,
+  // well above the landing window) → windowing must stay fully silent
+  // until release.
+  const dragTarget = Math.max(0, Math.round(h.container.scrollTop * 0.2));
+  const heightDuringDrag = [];
+  for (let e = 0; e < 2; e++) {
+    const step = Math.round((h.container.scrollTop - dragTarget) / (2 - e));
+    h.container.scrollTop = h.container.scrollTop - step;
+    vm.runInContext('_onScrollForWindowing()', h.sandbox);
+    h.pumpFrame();
+    heightDuringDrag.push(h.container.scrollHeight);
+  }
+  assert.ok(heightDuringDrag.every((x) => x === heightDuringDrag[0]),
+    'windowing must not reflow while the drag is in motion');
+
+  // Park the viewport inside stub territory such that the release anchor —
+  // the first REAL row at or below the viewport top (the capture rule in
+  // _onScrollStop) — has at least one cv-hidden stub above it within the
+  // view. Revealing that stub is the displacement the pin must absorb.
+  const rowsNow = () => h.container.querySelectorAll('.message-row');
+  const findRelease = (st) => {
+    const rows = rowsNow();
+    const real = rows.find((r) => !r.classList.contains('process-cv-hidden') && r.offsetTop >= st);
+    if (!real || real.offsetTop >= st + VIEW_H) return null;
+    const hasStubAbove = rows.some((r) => {
+      const rec = h.layout().tops.get(r);
+      return r.classList.contains('process-cv-hidden') && rec
+        && rec.top >= st && rec.top < real.offsetTop;
+    });
+    return hasStubAbove ? { st, real } : null;
+  };
+  let release = null;
+  for (let st = h.container.scrollTop; st > 0 && !release; st -= 40) {
+    h.container.scrollTop = st;
+    release = findRelease(st);
+  }
+  assert.ok(release, 'must find a release point with a stub above the release anchor in view');
+  h.container.scrollTop = release.st;
+  vm.runInContext('_onScrollForWindowing()', h.sandbox); // large delta → silent until release
+  h.pumpFrame();
+
+  const anchor = release.real;
+  const offsetBefore = anchor.offsetTop - h.container.scrollTop;
+  const scrollTopAtRelease = h.container.scrollTop;
+
+  // Release: the 150ms scroll-stop settle runs reveal + collapse + pin in
+  // one task. The anchor must stay at its release-time viewport offset —
+  // the stub zone above it resolves into content around a fixed frame.
+  h.flushTimers();
+
+  assert.ok(!anchor.classList.contains('process-cv-hidden'), 'anchor row must be revealed after settle');
+  assert.ok(h.container._scrollWrites.some((w) => w.to > w.from && w.from >= scrollTopAtRelease),
+    'settle must have re-anchored scrollTop (reveal growth above the viewport top)');
+  const offsetAfter = anchor.offsetTop - h.container.scrollTop;
+  assert.ok(Math.abs(offsetAfter - offsetBefore) <= 1,
+    `release anchor must keep its viewport offset (before=${Math.round(offsetBefore)}, after=${Math.round(offsetAfter)})`);
 });
