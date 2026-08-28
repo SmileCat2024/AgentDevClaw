@@ -224,9 +224,10 @@ export function createClawClient(options = {}) {
     },
 
     /**
-     * session/close：归档 thread（archive 路由，线程层标记收纳语义；
-     * 运行中会被 409 thread_busy 拒绝——adapter 层已先拒绝 in-flight
-     * prompt，正常路径不会触发）。
+     * session/close 的归档调用（archive 路由，线程层标记收纳语义）。
+     * 生产归档不做 busy 检查：executing 线程归档 = server 侧 interrupt
+     * head 后收纳；adapter 层 close 已先行取消 in-flight prompt（见
+     * session-manager closeSession），正常路径不触及执行中的轮次。
      */
     async archiveThread(threadId, context = {}) {
       const { body } = await requestJson(

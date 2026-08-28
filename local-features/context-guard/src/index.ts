@@ -252,8 +252,19 @@ export class ContextGuardFeature implements AgentFeature {
  * 过界时打断当前轮并上报 /protoclaw/context_guard_event，由服务端
  * thread-rotation 执行 trim+摘要接力。装配即确定，无配置——它的存在本身
  * 就是「该工作空间的上下文管理方式是自动接力」这一装配决策的表达。
- * 触发一次性锁定：接力成功后旧 runtime 被退役；上报失败由服务端不可达
- * 场景兜底（此时一切托管机制均已失效）。
+ *
+ * triggered 一次性锁定是设计语义而非缺陷，逐场景论证（不要当 bug「修」成
+ * 自动重武装）：
+ *   - begin 被 thread_held 拒绝 → 归档窗口，线程即将终局，重试无对象；
+ *   - 被 handoff_in_progress / head_mismatch 拒绝 → 竞争者正在/已完成接力，
+ *     successor 换代后是全新 runtime + 全新 feature 实例（triggered 天然复位）；
+ *   - 存储失败 → server 侧问题，立即重试同样失败；
+ *   - apply/compact 失败 → 旧 runtime 已退役，触发器随 runtime 终止；
+ *   - 上报 fetch 失败 → server 不可达，此刻一切托管机制均已失效。
+ * 若改为按轮重置，上下文持续超阈时每一轮都会被打断去重试一次注定失败的
+ * 接力（每轮打断的 UX 代价远大于残留风险）。唯一残留：非归档的手动
+ * setHold 解冻后旧 head 不再有自动接力——行政冻结本就是宿主亲自手续，
+ * 善后责任在宿主；批次三 R2 恢复管线落地后由恢复管线接管死活判定。
  */
 export class ContextRotationTriggerFeature implements AgentFeature {
 

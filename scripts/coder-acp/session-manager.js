@@ -548,6 +548,12 @@ export function createSessionManager(options = {}) {
         return await returnCancelled();
       }
 
+      // 每条 prompt 一个全新随机幂等键是设计语义而非偷懒：每条 ACP prompt
+      // 都是新意图（用户重发相同文本 = 合法重发，必须重新入箱执行）。
+      // 重复提交由 Inbox 的 idempotencyKey 去重兜底（adapter 无自动重试，
+      // 不存在同键二次提交）；投递面双发（K7 崩溃窗口）由 R4 容忍契约兜底。
+      // 禁止改为内容派生键——Inbox 去重覆盖 pending/delivered 保留窗口，
+      // 内容键会误杀「已执行完成后故意重发相同文本」的合法意图。
       const idempotencyKey = `acp-${randomUUID()}`;
       try {
         const delivery = await clawClient.appendUserMessage(session.threadId, { text, idempotencyKey }, {

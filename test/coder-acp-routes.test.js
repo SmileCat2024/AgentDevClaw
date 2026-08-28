@@ -738,6 +738,19 @@ describe('ACP resume — POST /protoclaw/acp/coder/sessions/:clawSessionId/resum
     assert.equal(res.body.ok, false);
   });
 
+  it('rejects a closed thread (409, hard terminal) without touching runtimes', async () => {
+    const { ctx, app } = setupAcpHarness({
+      findThreadResult: { threadId: 'thread-CLS', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'closed' },
+      sessionRecords: { 'sess-c': { id: 'sess-c', openDirectory: validCwd() } },
+    });
+    const res = await callResume(app, 'sess-c');
+    assert.equal(res.statusCode, 409);
+    assert.equal(res.body.code, 'thread_closed');
+    assert.equal(res.body.ok, false);
+    // 零副作用：未启动任何 runtime
+    assert.equal(ctx._calls.startManagedAgent, undefined);
+  });
+
   it('rejects a cwd mismatch against the persisted session record (403)', async () => {
     const { app } = setupAcpHarness({
       findThreadResult: { threadId: 'thread-M', agentId: 'programming-helper', headSessionId: 'sess-h', status: 'open' },

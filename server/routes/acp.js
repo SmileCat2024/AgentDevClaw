@@ -388,6 +388,12 @@ export function setupAcpRoutes(app, express, ctx) {
         throw acpError(archiveRejection.status, archiveRejection.code, `thread ${threadRecord.threadId} is archived; unarchive it first`);
       }
 
+      // closed 为硬终态（框架无 unclose）：与 archived 同为「线程域禁入」
+      // 的客观事实；成员会话历史仍可经 session/load 只读回放，续接不可达
+      if (threadRecord.status === 'closed') {
+        throw acpError(409, 'thread_closed', `thread ${threadRecord.threadId} is closed`);
+      }
+
       // 急切挂载：runtime 已运行则幂等复用，否则启动并等 READY（错误前置，
       // 不把失败拖到第一次 prompt）
       let agent;
