@@ -48,6 +48,7 @@ function createHarness({
   routes = {},
   healthByConnection = { 'server-a': { state: 'connected' } },
   timeoutMs = 200,
+  snapshotTtlMs = 0,
 } = {}) {
   const calls = [];
   const fetchImpl = async (url, options) => {
@@ -61,6 +62,7 @@ function createHarness({
     listConnections: async () => connections,
     getStatus: (id) => healthByConnection[id] || null,
     timeoutMs,
+    snapshotTtlMs,
     logger: silentLogger,
   });
   return { aggregator, calls };
@@ -454,6 +456,71 @@ describe('不缓存远程目录数据', () => {
     const second = await aggregator.aggregate();
     assert.equal(calls.length, 4);
     assert.deepEqual(second, first);
+  });
+});
+
+describe('TTL 快照模式（装配层显式启用）', () => {
+  it('TTL 内复用快照，不重发远程请求', async () => {
+    const { aggregator, calls } = createHarness({
+      routes: remoteRoutes({ port: 22101, connected: [childRuntime()] }),
+      snapshotTtlMs: 200,
+    });
+
+    const first = await aggregator.aggregate();
+    assert.equal(calls.length, 2);
+
+    const second = await aggregator.aggregate();
+    assert.equal(calls.length, 2, 'TTL 内不应重拉');
+    assert.equal(second, first, 'TTL 内返回同一快照引用');
+  });
+
+  it('invalidate 后立即透传重拉', async () => {
+    const { aggregator, calls } = createHarness({
+      routes: remoteRoutes({ port: 22101, connected: [childRuntime()] }),
+      snapshotTtlMs: 200,
+    });
+
+    await aggregator.aggregate();
+    assert.equal(calls.length, 2);
+
+    aggregator.invalidate();
+    await aggregator.aggregate();
+    assert.equal(calls.length, 4, 'invalidate 后应重拉');
+  });
+
+  it('并发调用共享同一次在途拉取', async () => {
+    const { aggregator, calls } = createHarness({
+      routes: remoteRoutes({ port: 22101, connected: [childRuntime()] }),
+      snapshotTtlMs: 200,
+    });
+
+    const [first, second] = await Promise.all([aggregator.aggregate(), aggregator.aggregate()]);
+    assert.equal(calls.length, 2, '并发调用不应重复拉取');
+    assert.equal(second, first);
+  });
+
+  it('在途拉取期间 invalidate：旧结果不回写快照，后续调用重新拉取', async () => {
+    let releaseFetch;
+    let markEntered;
+    const entered = new Promise((resolve) => { markEntered = resolve; });
+    const gate = new Promise((resolve) => { releaseFetch = resolve; });
+    const { aggregator, calls } = createHarness({
+      routes: remoteRoutes({
+        port: 22101,
+        connected: async () => { markEntered(); await gate; return [childRuntime()]; },
+      }),
+      timeoutMs: 2000,
+      snapshotTtlMs: 10000,
+    });
+
+    const inFlight = aggregator.aggregate();
+    await entered;
+    aggregator.invalidate();
+    releaseFetch();
+    await inFlight;
+
+    await aggregator.aggregate();
+    assert.equal(calls.length, 4, '失效后的快照不得来自已作废的在途结果');
   });
 });
 

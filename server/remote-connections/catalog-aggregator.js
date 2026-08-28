@@ -24,7 +24,8 @@ import { originFor } from './tunnel-manager.js';
 //   - connected → 经其 origin 拉取 get_connected_agents（主源）；该端点不可用时以
 //     /api/agents 的在线 runtime 兜底（无目录信息 → 直属会话）。
 // 远程返回的 ID 一律加 remote:<connId>: 前缀（复用 REMOTE_NAMESPACE_PREFIX）后再
-// 返回，前端只处理不透明 ID。不缓存：每次聚合都透传拉取远程真值。每连接独立超时，
+// 返回，前端只处理不透明 ID。默认不缓存（snapshotTtlMs=0 透传拉取）；装配层启用
+// TTL 后按 aggregate() 的注释语义复用快照。每连接独立超时，
 // 一条连接挂起不阻塞整体响应（该连接降级返回）。
 
 const CONNECTED_AGENTS_PATH = '/protoclaw/get_connected_agents';
@@ -243,6 +244,7 @@ export class CatalogAggregator {
     listConnections = null,
     getStatus = null,
     timeoutMs = REMOTE_HANDSHAKE_TIMEOUT_MS,
+    snapshotTtlMs = 0,
     logger = createClawLogger('remote-catalog'),
     setTimeoutFn = setTimeout,
     clearTimeoutFn = clearTimeout,
@@ -257,17 +259,56 @@ export class CatalogAggregator {
       throw new TypeError('CatalogAggregator 需要注入健康状态函数 getStatus');
     }
     assertPositiveInt(timeoutMs, 'timeoutMs');
+    if (!Number.isInteger(snapshotTtlMs) || snapshotTtlMs < 0) {
+      throw new RangeError('snapshotTtlMs 必须是非负整数毫秒值');
+    }
     this.fetch = fetchImpl;
     this.listConnections = listConnections;
     this.getStatus = getStatus;
     this.timeoutMs = timeoutMs;
+    this.snapshotTtlMs = snapshotTtlMs;
     this.logger = logger;
     this.setTimeout = setTimeoutFn;
     this.clearTimeout = clearTimeoutFn;
+    this._snapshot = null;
+    this._snapshotAt = 0;
+    this._snapshotInFlight = null;
+    this._snapshotEpoch = 0;
   }
 
-  // 每次调用都透传拉取远程真值，不缓存任何目录数据。
+  // 默认（snapshotTtlMs=0）每次调用都透传拉取远程真值；装配层传入正 TTL 后，
+  // TTL 内复用最近一次成功快照（并发调用共享同一次在途拉取），供高频消费方
+  // （get_connected_agents 轮询）读取而不放大远程请求。快照对象为共享只读。
   async aggregate() {
+    const now = Date.now();
+    if (this.snapshotTtlMs > 0 && this._snapshot && now - this._snapshotAt < this.snapshotTtlMs) {
+      return this._snapshot;
+    }
+    if (this._snapshotInFlight) return this._snapshotInFlight;
+    const epoch = this._snapshotEpoch;
+    this._snapshotInFlight = this.fetchAggregate().then((snapshot) => {
+      // invalidate() 若发生在拉取期间，本结果已作废：只为发起时的调用方返回，
+      // 不回写快照（否则旧数据会以新时间戳重新占据整个 TTL 窗口）。
+      if (epoch === this._snapshotEpoch) {
+        this._snapshot = snapshot;
+        this._snapshotAt = Date.now();
+      }
+      return snapshot;
+    }).finally(() => {
+      this._snapshotInFlight = null;
+    });
+    return this._snapshotInFlight;
+  }
+
+  // 连接配置或健康状态变更后调用：下一轮 aggregate 立即透传拉取真值。
+  // 递增纪元使在途拉取的结果失效（不回写快照）。
+  invalidate() {
+    this._snapshot = null;
+    this._snapshotAt = 0;
+    this._snapshotEpoch += 1;
+  }
+
+  async fetchAggregate() {
     const connections = (await this.listConnections()) || [];
     const enabled = (Array.isArray(connections) ? connections : [])
       .filter((connection) => connection?.id && connection.enabled === true);

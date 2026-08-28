@@ -5,6 +5,7 @@ import {
 import {
   sanitizeSessionFragment, cleanSessionText,
 } from '../shared/string-helpers.js';
+import { parseRemoteNamespace } from '../shared/request-target.js';
 import { getGroupChatsForSidebar } from './group-chat.js';
 import { collectSidebarIdentityEntries } from './agent-discovery.js';
 
@@ -21,7 +22,33 @@ export function createConnectedAgentsQuery(deps) {
     readViewerJson,
     getPendingInputCount,
     resolveAgentModelPresets,
+    readRemoteCatalog = null,
   } = deps;
+
+  // 在线远程连接中属于本地宿主的存活身份（"宿主Id sessionType"集合）。
+  // coder 等投影身份只在远程主机运行时，投影条目由此获得存在依据；
+  // 身份判定与本地路径同构（宿主归属 + sessionType），不引入新概念。
+  async function collectRemoteLiveIdentities() {
+    if (typeof readRemoteCatalog !== 'function') return new Set();
+    const catalog = await readRemoteCatalog().catch(() => null);
+    const identities = new Set();
+    const sections = Array.isArray(catalog?.connections) ? catalog.connections : [];
+    for (const section of sections) {
+      if (section?.status !== 'connected') continue;
+      const workspaces = Array.isArray(section.workspaces) ? section.workspaces : [];
+      for (const workspace of workspaces) {
+        const entries = Array.isArray(workspace?.entries) ? workspace.entries : [];
+        for (const entry of entries) {
+          const owner = entry?.agentId
+            ? parseRemoteNamespace(String(entry.agentId))?.agentId || ''
+            : '';
+          const sessionType = String(entry?.sessionType || '').trim();
+          if (owner && sessionType) identities.add(`${owner} ${sessionType}`);
+        }
+      }
+    }
+    return identities;
+  }
 
   async function getConnectedAgents() {
     const prebuiltAgents = await getAgentsLight();
@@ -291,6 +318,7 @@ export function createConnectedAgentsQuery(deps) {
     // message_count 等）不继承：那是宿主 main 会话的内容，继承会在投影条目
     // 下合成出 main 会话的镜像。coder 的运行信号来自线程 lifeState，
     // coder 会话 runtime 由 sessionType 路由到投影条目下。
+    const remoteLiveIdentities = await collectRemoteLiveIdentities();
     const projectionsByHostId = new Map();
     for (const light of prebuiltAgents) {
       const identities = collectSidebarIdentityEntries(light);
@@ -305,6 +333,8 @@ export function createConnectedAgentsQuery(deps) {
         // managedAgents, so the projection does not vanish for the whole
         // startup stretch. The spawn-time sessionType snapshot is
         // authoritative here — coder runtimes always carry it.
+        // 第三来源：远程主机上存活的同身份会话。coder 只在远程运行时，本地无
+        // runtime 也无 managed 进程，投影条目由远程 catalog 快照支撑。
         const hasLiveSession = connectedAgents.some((a) => a.source === 'child'
           && a.parent_id === host.id
           && a.sessionType === identitySessionType)
@@ -315,7 +345,8 @@ export function createConnectedAgentsQuery(deps) {
             && !runtime.stopped
             && !runtime.stopping
             && (runtime.sessionType || 'main') === identitySessionType
-          ));
+          ))
+          || remoteLiveIdentities.has(`${host.id} ${identitySessionType}`);
         if (!hasLiveSession) return null;
         const {
           workspace_sessions: _ws,

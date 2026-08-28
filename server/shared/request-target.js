@@ -82,7 +82,7 @@ function readIdentity(input, fieldName) {
  * ConnectionStore charset forbids them), so the second colon is an
  * unambiguous separator; the original agent id keeps everything after it.
  */
-function parseRemoteNamespace(agentId) {
+export function parseRemoteNamespace(agentId) {
   if (!agentId.startsWith(REMOTE_NAMESPACE_PREFIX)) return null;
 
   const rest = agentId.slice(REMOTE_NAMESPACE_PREFIX.length);

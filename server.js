@@ -176,6 +176,9 @@ const agentLifecycle = createAgentLifecycleModule({
   resolveRuntimeDisplayName,
   readActiveWorkspaceSessionMeta, readWorkspaceSessionMeta,
   readViewerJson, getPendingInputCount, resolveAgentModelPresets,
+  // 惰性引用：remoteCatalogAggregator 在模块尾部装配，此处只传闭包，
+  // 首次调用发生在请求期（届时早已初始化）。读取失败按无远程数据降级。
+  readRemoteCatalog: () => remoteCatalogAggregator.aggregate().catch(() => null),
 });
 const {
   getConnectedAgents, waitForProcessExit,
@@ -1169,6 +1172,10 @@ const remoteCatalogAggregator = createCatalogAggregator({
     return connections;
   },
   getStatus: (connectionId) => connectionHealth.getStatus(connectionId),
+  // 短 TTL 快照：get_connected_agents 高频轮询读取目录支撑投影条目合成，
+  // 不放大远程拉取；前端 remote_catalog 拉取（4s 节流）基本命中重拉边界，
+  // 新鲜度无感知差异。
+  snapshotTtlMs: 3000,
 });
 
 app.get('/protoclaw/remote_catalog', async (_req, res, next) => {
@@ -1212,6 +1219,7 @@ app.post('/protoclaw/remote_connections', express.json(), async (req, res, next)
   try {
     const connection = await connectionStore.upsertConnection(req.body || {});
     await syncRemoteConnectionInfrastructure(connectionStore.listConnections());
+    remoteCatalogAggregator.invalidate();
     res.json({ ok: true, connection });
   } catch (error) {
     if (error instanceof ConnectionConfigError) {
@@ -1226,6 +1234,7 @@ app.delete('/protoclaw/remote_connections/:id', async (req, res, next) => {
   try {
     const removed = await connectionStore.deleteConnection(req.params.id);
     await syncRemoteConnectionInfrastructure(connectionStore.listConnections());
+    remoteCatalogAggregator.invalidate();
     res.json({ ok: true, removed });
   } catch (error) {
     if (error instanceof ConnectionConfigError) {
@@ -1244,6 +1253,7 @@ app.post('/protoclaw/remote_connections/:id/handshake', async (req, res, next) =
       return;
     }
     const status = await connectionHealth.runHandshake(req.params.id);
+    remoteCatalogAggregator.invalidate();
     res.json({ ok: true, status });
   } catch (error) {
     next(error);
