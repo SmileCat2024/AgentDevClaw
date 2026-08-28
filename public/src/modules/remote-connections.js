@@ -282,8 +282,9 @@ function getEntrySessionTitle(namespacedId) {
   return '';
 }
 
-// 目录条目 → 会话 id（服务端 sessionId）。仅当为非空字符串时返回，否则空串，
-// 调用方以空串视为不可寻址。
+// 目录条目 → 命名空间化会话 id（如 'remote:server-a:session-x'，与 aggregator
+// 的 namespaceId 产物一致）。仅当为非空字符串时返回，否则空串；调用方以空串
+// 视为不可寻址，与远程裸 sessionId 直接比较前需先在服务端还原。
 function getEntryRuntimeSessionId(namespacedId) {
   const wanted = typeof namespacedId === 'string' ? namespacedId : '';
   if (!wanted) return '';

@@ -11,10 +11,10 @@
  * promises remain runtime resources owned by the poll coordinator.
  *
  * `sessionMeta` carries the selected session's rich metadata (session id,
- * type, timestamps, working directory, message count, cumulative token
- * usage). Volatile display fields (title, model name) deliberately stay out:
- * they resolve through live sources (catalog accessor / overview snapshot)
- * so renames and model swaps surface without waiting for a detail reload.
+ * type, timestamps, working directory, message count). Volatile display
+ * fields (title, model name, live usage) deliberately stay out: they
+ * resolve through live sources (catalog accessor / overview snapshot) so
+ * renames and model swaps surface without waiting for a detail reload.
  * It is written as a whole replacement snapshot by the data-load / switch
  * paths and is read-only for consumers.
  */
@@ -30,7 +30,6 @@ const EMPTY_SESSION_META = Object.freeze({
   updatedAt: '',
   openDirectory: '',
   messageCount: 0,
-  totalTokens: 0,
 });
 
 function normalizeSessionMetaField(value) {
@@ -52,11 +51,10 @@ function normalizeSessionMeta(value) {
     updatedAt: normalizeSessionMetaField(value.updatedAt),
     openDirectory: normalizeSessionMetaField(value.openDirectory),
     messageCount: normalizeSessionMetaCount(value.messageCount),
-    totalTokens: normalizeSessionMetaCount(value.totalTokens),
   });
 }
 
-const state = { sessionMeta: EMPTY_SESSION_META };
+let _sessionMeta = EMPTY_SESSION_META;
 
 function captureSessionViewToken(runtimeId = currentRuntimeAgentId) {
   return Object.freeze({
@@ -109,7 +107,7 @@ function readCurrentSessionViewState() {
     hookInspector: currentHookInspector,
     overview: currentOverviewSnapshot,
     todoPlan: currentTodoPlan,
-    sessionMeta: state.sessionMeta,
+    sessionMeta: _sessionMeta,
     connected: currentRuntimeConnected,
   });
 }
@@ -146,7 +144,7 @@ function applySessionViewPatch(patch) {
     setCurrentTodoPlan(patch.todoPlan);
   }
   if (has('sessionMeta')) {
-    state.sessionMeta = normalizeSessionMeta(patch.sessionMeta);
+    _sessionMeta = normalizeSessionMeta(patch.sessionMeta);
   }
   if (has('connected')) {
     currentRuntimeConnected = patch.connected !== false;
