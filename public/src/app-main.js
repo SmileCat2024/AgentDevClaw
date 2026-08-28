@@ -40,6 +40,21 @@ function getCurrentVisualAgentTitle() {
       || hostRecord?.name
       || currentRuntimeAgentId;
   }
+  // 远程回退（T21-E）：本地 record 链全部落空且焦点是远程命名空间身份时，
+  // 标题取目录条目回退链（sessionTitle → name），再落空回退 sessionMeta
+  // 留档字段（存在才用），最后回退现有 currentRuntimeAgentId。标题跟随由
+  // catalog 4s 轮询（refreshRemoteCatalog → renderAgentList →
+  // updateCurrentAgentChrome）自然带动，不新增轮询。
+  const focusedId = normalizeAgentIdentity(focusedAgentId) || normalizeAgentIdentity(currentRuntimeAgentId);
+  if (typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(focusedId)) {
+    const catalogTitle = window.RemoteConnections?.getEntrySessionTitle?.(focusedId) || '';
+    if (catalogTitle) return catalogTitle;
+    const sessionMeta = readCurrentSessionViewState().sessionMeta;
+    if (sessionMeta && typeof sessionMeta.sessionTitle === 'string' && sessionMeta.sessionTitle) {
+      return sessionMeta.sessionTitle;
+    }
+    if (normalizeAgentIdentity(currentRuntimeAgentId)) return currentRuntimeAgentId;
+  }
   return hostRecord?.name || t('page_title');
 }
 
@@ -59,7 +74,23 @@ function updateCurrentAgentChrome() {
     return;
   }
   const runtimeRecord = getCurrentRuntimeRecord();
-  const connected = runtimeRecord ? runtimeRecord.connected !== false : true;
+  let connected = runtimeRecord ? runtimeRecord.connected !== false : true;
+  // 远程焦点（T21-E）：远程会话不在 allAgents，runtimeRecord 恒为 null，
+  // 上面默认 true 的兜底会掩盖断线，且 catalog 轮询的代同步
+  // （ingestRemoteCatalog → setConnectionStatus）会被本函数随后覆盖，两边打架。
+  // 此处从目录推导连接态：条目在目录中（任意连接态）时以 resolveRuntimeRef
+  // （仅遍历 connected section）判定；目录未命中（未轮询到/条目消失）时保持现状。
+  if (!runtimeRecord
+    && typeof isRemoteNamespaceAgentId === 'function'
+    && (isRemoteNamespaceAgentId(normalizeAgentIdentity(focusedAgentId))
+      || isRemoteNamespaceAgentId(normalizeAgentIdentity(currentRuntimeAgentId)))) {
+    const rc = typeof window !== 'undefined' ? window.RemoteConnections : null;
+    const runtimeRef = normalizeAgentIdentity(currentRuntimeAgentId);
+    if (rc?.getEntryHostNamespaceId && rc?.resolveRuntimeRef && runtimeRef
+      && rc.getEntryHostNamespaceId(runtimeRef) !== null) {
+      connected = rc.resolveRuntimeRef(runtimeRef) !== null;
+    }
+  }
   statusBadge.textContent = connected ? t('status_connected') : t('status_disconnected');
   statusBadge.classList.toggle('disconnected', !connected);
 }

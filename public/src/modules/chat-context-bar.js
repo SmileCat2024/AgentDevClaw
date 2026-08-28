@@ -10,7 +10,7 @@
  *   - shouldRenderWorkspaceSurface, isChatSurfaceActive (app-ui.js 域 A)
  *   - notifyChatViewportMutation (app-ui.js 域 N)
  *   - getRuntimeAwareAgentRecord (app-ui.js 域 B)
- *   - getCurrentRuntimeRecord, getCurrentHostAgentRecord (app-main.js)
+ *   - getCurrentHostAgentRecord (app-main.js)
  *   - escapeHtml (app-ui.js 域 O)
  *   - formatRelativeTime, formatWorkspaceDate (app-core.js)
  *   - readCurrentSessionViewState (session-view-state.js)
@@ -40,26 +40,16 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   }
   bar.classList.remove('hidden');
 
+  // Gate 与数据源解耦（T21-E）：agent record 缺失（远程会话不在 allAgents）
+  // 不再清空整条 bar——overview 活源数据已进 viewState，模型名/用量应照常
+  // 渲染。是否真无数据的判定推迟到渲染前：仅当模型名、用量全空且
+  // contextLength 为 0 时才维持空态呈现。
   let agent = getRuntimeAwareAgentRecord();
-  if (!agent) {
-    bar.innerHTML = '';
-    if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
-        notifyChatViewportMutation({
-          reason: 'context-bar',
-          shouldFollow: followLatestEnabled && isChatSurfaceActive(),
-          preserveTop: followLatestEnabled ? null : container.scrollTop,
-          forceSnap: false,
-          allowChase: false,
-          preferSmooth: false,
-        });
-    }
-    return;
-  }
 
-  // 找到当前活跃会话
-  let sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
-  let activeId = (agent.workspace_sessions && agent.workspace_sessions.activeSessionId)
-    || agent.active_workspace_session_id;
+  // 找到当前活跃会话（agent 可能为 null——远程会话不在 allAgents，读取需 null 安全）
+  let sessions = agent && agent.workspace_sessions && agent.workspace_sessions.sessions || [];
+  let activeId = (agent && agent.workspace_sessions && agent.workspace_sessions.activeSessionId)
+    || (agent && agent.active_workspace_session_id);
   let activeSession = activeId
     ? sessions.find(function(s) { return s.id === activeId; })
     : (sessions[0] || null);
@@ -72,24 +62,21 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   // 会在 poll 周期间波动，导致用量在两个值之间反复跳动。
   let used = 0;
   let isLastRequest = false;
-  let runtimeRecord = typeof getCurrentRuntimeRecord === 'function' ? getCurrentRuntimeRecord() : null;
   let overview = viewState && viewState.overview || {};
 
-  // 模型名：有 runtime 时优先从 overview 实时取，回退到 session 元数据
+  // 模型名：overview 实时优先，回退到 session 元数据
   let modelName = '';
-  if (runtimeRecord && overview.modelName) {
+  if (overview.modelName) {
     modelName = overview.modelName;
   }
   if (!modelName && activeSession) {
     modelName = activeSession.modelName || '';
   }
 
-  if (runtimeRecord) {
-    let liveUsage = overview.usageStats && overview.usageStats.lastRequestUsage;
-    if (liveUsage && liveUsage.inputTokens) {
-      used = liveUsage.inputTokens;
-      isLastRequest = true;
-    }
+  let liveUsage = overview.usageStats && overview.usageStats.lastRequestUsage;
+  if (liveUsage && liveUsage.inputTokens) {
+    used = liveUsage.inputTokens;
+    isLastRequest = true;
   }
   if (!used && activeSession && activeSession.tokenUsage) {
     let lr = activeSession.tokenUsage.lastRequestUsage;
@@ -138,10 +125,7 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   // 存储详细数据供 hover popup 使用
   let detailData = { modelName: modelName || '', used: used, contextLength: contextLength, compressRatio: compressRatio, isLastRequest: isLastRequest };
   let totalUsage = (overview.usageStats && overview.usageStats.totalUsage) || {};
-  let lastReq = null;
-  if (runtimeRecord) {
-    lastReq = overview.usageStats && overview.usageStats.lastRequestUsage;
-  }
+  let lastReq = overview.usageStats && overview.usageStats.lastRequestUsage || null;
   if (!lastReq && activeSession && activeSession.tokenUsage) {
     lastReq = activeSession.tokenUsage.lastRequestUsage || null;
   }
@@ -157,6 +141,23 @@ function updateChatContextBar(viewState = readCurrentSessionViewState()) {
   // 检查阈限压力等级，在等级跨越时触发 Toast 提醒
   if (activeId) {
     _checkContextPressureToast(activeId, thresholdPct);
+  }
+
+  // 真·空数据 gate（T21-E）：模型名与用量全空且 contextLength 为 0 才清空
+  // bar（与既有空态呈现一致）；否则 overview 活源已足够渲染。
+  if (!modelName && !used && contextLength === 0) {
+    bar.innerHTML = '';
+    if ((prevHtml !== bar.innerHTML || wasHidden !== bar.classList.contains('hidden')) && typeof notifyChatViewportMutation === 'function') {
+        notifyChatViewportMutation({
+          reason: 'context-bar',
+          shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+          preserveTop: followLatestEnabled ? null : container.scrollTop,
+          forceSnap: false,
+          allowChase: false,
+          preferSmooth: false,
+        });
+    }
+    return;
   }
 
   bar.innerHTML = html;
@@ -575,25 +576,65 @@ function _collectActiveSessionMeta() {
   let agent = typeof getRuntimeAwareAgentRecord === 'function'
     ? getRuntimeAwareAgentRecord()
     : (typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null);
-  if (!agent) return null;
+  if (agent) {
+    let activeSessionId = String(
+      agent.active_workspace_session_id
+      || agent.workspace_sessions?.activeSessionId
+      || ''
+    ).trim();
 
-  let activeSessionId = String(
-    agent.active_workspace_session_id
-    || agent.workspace_sessions?.activeSessionId
-    || ''
-  ).trim();
+    let sessions = Array.isArray(agent.workspace_sessions?.sessions)
+      ? agent.workspace_sessions.sessions
+      : [];
 
-  let sessions = Array.isArray(agent.workspace_sessions?.sessions)
-    ? agent.workspace_sessions.sessions
-    : [];
+    let session = activeSessionId
+      ? sessions.find(function (s) { return s && s.id === activeSessionId; }) || null
+      : null;
 
-  let session = activeSessionId
-    ? sessions.find(function (s) { return s && s.id === activeSessionId; }) || null
+    return {
+      session: session,
+      agent: agent,
+      activeSessionId: activeSessionId,
+    };
+  }
+
+  // 远程分支（T21-E）：agent record 落空（远程会话不在 allAgents）时，
+  // 从远程目录 accessor 与 sessionMeta 留档组装弹窗元数据。返回结构与本地
+  // 分支保持一致（session / agent / activeSessionId 三键），_buildTitlePopupHtml
+  // 无感知差异；agent 槽位用标题回退链值做最小呈现，不伪造在线状态字段。
+  let runtimeRef = typeof currentRuntimeAgentId !== 'undefined' ? currentRuntimeAgentId : '';
+  if (!runtimeRef) return null;
+  let rc = typeof window !== 'undefined' ? window.RemoteConnections : null;
+  if (!rc) return null;
+
+  let activeSessionId = typeof rc.getEntryRuntimeSessionId === 'function'
+    ? rc.getEntryRuntimeSessionId(runtimeRef)
+    : '';
+  let title = typeof rc.getEntrySessionTitle === 'function'
+    ? rc.getEntrySessionTitle(runtimeRef)
+    : '';
+
+  let viewState = typeof readCurrentSessionViewState === 'function'
+    ? readCurrentSessionViewState()
     : null;
+  let sessionMeta = viewState && viewState.sessionMeta || {};
+
+  let session = {};
+  if (sessionMeta.createdAt) session.createdAt = sessionMeta.createdAt;
+  if (sessionMeta.updatedAt) session.updatedAt = sessionMeta.updatedAt;
+  if (sessionMeta.openDirectory) session.openDirectory = sessionMeta.openDirectory;
+  if (sessionMeta.messageCount) session.messageCount = sessionMeta.messageCount;
+  if (sessionMeta.sessionType) session.sessionType = sessionMeta.sessionType;
+  if (title) session.title = title;
+
+  let agentShim = { name: title };
+  if (activeSessionId) {
+    agentShim.active_workspace_session_id = activeSessionId;
+  }
 
   return {
     session: session,
-    agent: agent,
+    agent: agentShim,
     activeSessionId: activeSessionId,
   };
 }
