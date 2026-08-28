@@ -41,19 +41,18 @@ function getCurrentVisualAgentTitle() {
       || currentRuntimeAgentId;
   }
   // 远程回退（T21-E）：本地 record 链全部落空且焦点是远程命名空间身份时，
-  // 标题取目录条目回退链（sessionTitle → name），再落空回退 sessionMeta
-  // 留档字段（存在才用），最后回退现有 currentRuntimeAgentId。标题跟随由
-  // catalog 4s 轮询（refreshRemoteCatalog → renderAgentList →
-  // updateCurrentAgentChrome）自然带动，不新增轮询。
+  // 标题取目录条目回退链（sessionTitle → name）。按运行时引用查询（R3 裁决）：
+  // 目录条目身份挂在 entry.runtimeId / entry.id 上，运行时引用才是条目匹配键，
+  // 与 title popup 的查询键保持同源。标题跟随由 catalog 4s 轮询
+  // （refreshRemoteCatalog → renderAgentList → updateCurrentAgentChrome）
+  // 自然带动，不新增轮询。
   const focusedId = normalizeAgentIdentity(focusedAgentId) || normalizeAgentIdentity(currentRuntimeAgentId);
   if (typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(focusedId)) {
-    const catalogTitle = window.RemoteConnections?.getEntrySessionTitle?.(focusedId) || '';
-    if (catalogTitle) return catalogTitle;
-    const sessionMeta = readCurrentSessionViewState().sessionMeta;
-    if (sessionMeta && typeof sessionMeta.sessionTitle === 'string' && sessionMeta.sessionTitle) {
-      return sessionMeta.sessionTitle;
-    }
-    if (normalizeAgentIdentity(currentRuntimeAgentId)) return currentRuntimeAgentId;
+    const runtimeRef = normalizeAgentIdentity(currentRuntimeAgentId);
+    const runtimeTitle = runtimeRef
+      ? (window.RemoteConnections?.getEntrySessionTitle?.(runtimeRef) || '')
+      : '';
+    if (runtimeTitle) return runtimeTitle;
   }
   return hostRecord?.name || t('page_title');
 }
