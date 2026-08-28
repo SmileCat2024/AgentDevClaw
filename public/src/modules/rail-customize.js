@@ -51,7 +51,7 @@
     git:       { zh: 'Git 状态与操作',   en: 'Git status and actions' },
     hooks:     { zh: 'Feature 功能面板', en: 'Feature panel' },
     inspector: { zh: 'Hook 检查器',      en: 'Hook inspector' },
-    'session-controls': { zh: '自动接续与上下文拦截', en: 'Auto-resume and context intercept' },
+    'session-controls': { zh: '自动接续、上下文保护与模型轮转', en: 'Auto-resume, context protection and model rotation' },
     logs:      { zh: '运行日志',         en: 'Runtime logs' },
     mcp:       { zh: 'MCP 服务端',       en: 'MCP servers' },
     genui:     { zh: 'UI 交互页面',      en: 'Interactive UI pages' },

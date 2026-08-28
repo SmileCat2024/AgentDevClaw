@@ -14,6 +14,17 @@ function panelSandbox(overrides = {}) {
     getRuntimeWorkspaceSessionId: () => 'session-a',
     getActiveWorkspaceSessionId: () => 'session-a',
     renderFeaturePanel() {},
+    // 面板的显隐判据是当前会话 runtime 实际挂载的 Feature 名单
+    // （inspector 快照）；缺省给全量三件套。
+    currentHookInspector: {
+      lifecycleOrder: [],
+      features: [
+        { name: 'force-continuation' },
+        { name: 'context-guard' },
+        { name: 'step-rotating-model' },
+      ],
+      hooks: [],
+    },
     fetch: async (url, options = {}) => {
       fetchCalls.push({ url, options });
       return {
@@ -186,16 +197,80 @@ describe('SessionControlsPanel', () => {
     assert.match(html, /data-force-continuation-limit[^>]*value=\"8\"/);
   });
 
-  it('keeps the control unavailable for agents without the features mounted', () => {
-    const { ctx } = panelSandbox({ focusedAgentId: 'qqbot', currentRuntimeAgentId: null });
+  it('keeps the control unavailable when none of the controlled features is mounted', async () => {
+    const { ctx } = panelSandbox({
+      focusedAgentId: 'qqbot',
+      currentRuntimeAgentId: 'runtime-qqbot',
+      currentHookInspector: {
+        lifecycleOrder: [],
+        features: [{ name: 'im-operator' }, { name: 'qqbot-gateway' }],
+        hooks: [],
+      },
+    });
+    const first = ctx.run('window.SessionControlsPanel.render()');
+    // 名单里没有受控 feature：先探测确证「确实没挂载」，再下结论
+    assert.match(first, /正在读取本会话的控制能力/);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const html = ctx.run('window.SessionControlsPanel.render()');
 
     // 不可用时返回与 hooks 面板一致的通用空态（无开关控件）
     assert.match(html, /feature-panel-empty/);
-    assert.match(html, /feature-panel-section-title/);
+    assert.match(html, /此控制在当前工作空间不可用/);
     assert.doesNotMatch(html, /data-force-continuation-toggle/);
     assert.doesNotMatch(html, /data-guard-armed/);
-    assert.match(html, /此控制在当前工作空间不可用/);
+  });
+
+  it('hides guard and rotation sections when the runtime only mounts force-continuation', () => {
+    const { ctx } = panelSandbox({
+      // coder 会话形态：只有 ForceContinuation，没有 guard / rotation
+      currentHookInspector: {
+        lifecycleOrder: [],
+        features: [{ name: 'force-continuation' }],
+        hooks: [],
+      },
+    });
+    const html = ctx.run('window.SessionControlsPanel.render()');
+
+    assert.match(html, /data-force-continuation-toggle/);
+    assert.doesNotMatch(html, /data-guard-armed/);
+    assert.doesNotMatch(html, /data-rotation-enabled/);
+    // 底部说明只覆盖已显示的 section
+    assert.match(html, /手动停止与服务错误不会触发自动接续/);
+    assert.doesNotMatch(html, /超阈值打断触发后自动关闭/);
+  });
+
+  it('probes the inspector snapshot once when no capability is known yet', async () => {
+    let probeCount = 0;
+    const { ctx } = panelSandbox({
+      currentHookInspector: { lifecycleOrder: [], features: [], hooks: [] },
+      fetch: async (url) => {
+        if (String(url).includes('/api/agents/runtime-a/hooks')) {
+          probeCount += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ lifecycleOrder: [], features: [{ name: 'force-continuation' }], hooks: [] }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, status: { enabled: true, triggers: {} } }),
+        };
+      },
+    });
+
+    const first = ctx.run('window.SessionControlsPanel.render()');
+    // 快照未决：先给等待态，不误判为「工作空间不支持」
+    assert.match(first, /正在读取本会话的控制能力/);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const html = ctx.run('window.SessionControlsPanel.render()');
+
+    assert.match(html, /data-force-continuation-toggle/);
+    assert.doesNotMatch(html, /data-guard-armed/);
+    assert.equal(probeCount, 1); // 结果按 runtime 缓存，不再重复探测
   });
 
   it('serves the panel for the agent-studio workspace', async () => {

@@ -91,7 +91,7 @@ async function runTitleGeneration({ agentDir, agentId, sessionId }) {
   }
 
   logPhase(`using model preset role=${modelRole} model=${resolvedModel.modelName}`);
-  tuneMirrorLLM(resolvedModel.llm, 2048);
+  tuneMirrorLLM(resolvedModel.llm, 2048, { protocol: resolvedModel.protocol });
 
   const workspaceDir = resolveWorkspaceCwd(agentId, PROTOCLAW_ROOT, sessionId);
   const agent = createTextOnlyMirrorAgent({

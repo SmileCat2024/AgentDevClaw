@@ -218,6 +218,9 @@ function createHandoffHarness({ cache = {} } = {}) {
     bumpNavigationGuard: () => {},
     closeAgentContextMenu: () => {},
     findAgentByIdentity: () => null,
+    // switchAgent's remote read-only branch (ADR-0008 Phase 1) consults this
+    // namespace check when no local record matches the requested id.
+    isRemoteNamespaceAgentId: (value) => String(value || '').startsWith('remote:'),
     getLogicalAgentId: (agent) => agent?.parent_id || agent?.id || null,
     isWorkspaceSurfaceUnit: () => false,
     isWorkspaceHostUnit: () => false,

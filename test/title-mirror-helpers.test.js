@@ -202,6 +202,21 @@ describe('tuneTitleLLM', () => {
     assert.deepEqual(llm.providerOptions, { temperature: 0 });
   });
 
+  it('disables thinking explicitly for anthropic-protocol mirrors', () => {
+    const llm = { thinkingEffort: 'high', maxTokens: 4096 };
+    tuneMirrorLLM(llm, 16000, { forceMaxTokens: true, protocol: 'anthropic' });
+    assert.equal(llm.thinkingEffort, 'none');
+    assert.equal(llm.maxTokens, 16000);
+  });
+
+  it('keeps vendor-default thinking for non-anthropic protocols', () => {
+    for (const protocol of ['openai', 'responses', undefined]) {
+      const llm = { thinkingEffort: 'high', maxTokens: 4096 };
+      tuneMirrorLLM(llm, 1024, { protocol });
+      assert.equal(llm.thinkingEffort, undefined, `protocol=${String(protocol)}`);
+    }
+  });
+
   it('does nothing for null or non-object input', () => {
     assert.doesNotThrow(() => tuneMirrorLLM(null, 1024));
     assert.doesNotThrow(() => tuneMirrorLLM(undefined, 1024));

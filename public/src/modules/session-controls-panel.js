@@ -1,10 +1,15 @@
 /**
  * session-controls-panel.js — 会话控制面板（session-local control plane）
  *
- * 两个 section，均以 runtime 内 Feature 为权威状态持有者，浏览器只是
- * 乐观 UI 缓存（请求-应答式 IPC，经 /protoclaw/*_status / *_control 路由）：
- *   - 自动接续：ForceContinuation Feature 的开关 / 触发条件 / 上限
+ * 三个 section 对应三个可能挂载的 Feature，均以 runtime 内 Feature 为权威
+ * 状态持有者，浏览器只是乐观 UI 缓存（请求-应答式 IPC，经 /protoclaw/*_status
+ * / *_control 或 capability_invoke 路由）：
+ *   - 保持任务继续：ForceContinuation 的开关 / 触发条件 / 上限
  *   - 上下文保护：ContextGuardFeature 的超阈值打断开关
+ *   - 模型轮转：StepRotatingModel 的强/省模型配置
+ *
+ * 显示条件 = 当前会话 runtime 实际挂载的 Feature 名单（inspector 快照，
+ * 与 Features 面板同源）；未挂载的 section 不渲染。
  *
  * 开关的实时性：它会被 runtime 内真实的超阈值事件消耗，面板打开期间
  * 每 3s 静默刷新一次，保证「用掉了立刻显示为关闭」。
@@ -24,15 +29,64 @@
       : String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
 
-  /** Agents whose runtime mounts ForceContinuation + ContextGuard. */
-  const SUPPORTED_AGENTS = ['programming-helper', 'agent-studio'];
+  // ── 挂载探测：面板按当前会话实际挂载的 Feature 收敛显示 ──────────
+  // 权威信号是 inspector 快照（/api/agents/<runtimeId>/hooks）里的 feature
+  // 名单。同步路径直接读 currentHookInspector；三项都未命中时才补发一次
+  // 探测，区分「快照还没到」与「确实没挂载」，结果按 runtime 缓存。
+  const CONTROLLED_FEATURE_NAMES = {
+    fc: 'force-continuation',
+    guard: 'context-guard',
+    rot: 'step-rotating-model',
+  };
 
-  function isSupportedAgent() {
-    return SUPPORTED_AGENTS.includes(String(focusedAgentId || ''));
+  function namesToCaps(names) {
+    const set = new Set(names.map((name) => String(name || '').trim()).filter(Boolean));
+    return {
+      fc: set.has(CONTROLLED_FEATURE_NAMES.fc),
+      guard: set.has(CONTROLLED_FEATURE_NAMES.guard),
+      rot: set.has(CONTROLLED_FEATURE_NAMES.rot),
+    };
   }
 
-  function isGuardAvailable() {
-    return isSupportedAgent();
+  function capsFromInspector() {
+    const raw = typeof currentHookInspector === 'object' ? currentHookInspector : null;
+    const list = raw && Array.isArray(raw.features) ? raw.features : [];
+    return namesToCaps(list.map((feature) => feature?.name));
+  }
+
+  // 已探明的挂载集；无法确定时返回 null（调用方触发探测或按未决处理）。
+  function resolveCaps(key = runtimeKey()) {
+    if (!key) return null;
+    const cached = getState(key).caps;
+    if (cached) return cached;
+    const caps = capsFromInspector();
+    if (caps.fc || caps.guard || caps.rot) return caps;
+    return null;
+  }
+
+  async function probeCapabilities() {
+    if (!currentRuntimeAgentId || !currentSessionId()) return null;
+    const key = runtimeKey();
+    const item = getState(key);
+    if (item.caps || item.capsProbing) return item.caps;
+    if (item.capsFailedAt && Date.now() - item.capsFailedAt < 2000) return null;
+
+    setState({ capsProbing: true }, key);
+    try {
+      const response = await fetch(`/api/agents/${encodeURIComponent(currentRuntimeAgentId)}/hooks`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const snapshot = await response.json().catch(() => null);
+      const list = snapshot && Array.isArray(snapshot.features) ? snapshot.features : [];
+      setState({
+        capsProbing: false,
+        capsFailedAt: 0,
+        caps: namesToCaps(list.map((feature) => feature?.name)),
+      }, key);
+    } catch {
+      setState({ capsProbing: false, capsFailedAt: Date.now() }, key);
+    }
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    return getState(key).caps;
   }
 
   function currentSessionId() {
@@ -60,6 +114,9 @@
       guardPending: false,
       guardInitialized: false,
       guardError: '',
+      caps: null,
+      capsProbing: false,
+      capsFailedAt: 0,
       updatedAt: 0,
     };
   }
@@ -210,33 +267,11 @@
       + '</div></div>';
   }
 
-  function render() {
-    const zh = currentLanguage !== 'en';
-    const sessionId = currentSessionId();
-    const item = getState();
-
-    if (!isSupportedAgent() || !currentRuntimeAgentId || !sessionId) {
-      const message = !isSupportedAgent()
-        ? (zh ? '此控制在当前工作空间不可用。' : 'This control is not available in the current workspace.')
-        : (zh ? '请先打开并连接一个会话。' : 'Open and connect a session first.');
-      return renderEmpty(message, zh);
-    }
-
-    if (!item.initialized && !item.refreshing && !item.pending) {
-      // Read the authoritative session Feature state rather than treating this
-      // browser cache as a source of truth (important after reopen/reload).
-      void refreshStatus({ renderWhenDone: true });
-    }
-    if (!item.guardInitialized && !item.guardRefreshing && !item.guardPending) {
-      void refreshGuardStatus({ renderWhenDone: true });
-    }
-    ensureGuardPolling();
-
+  function renderAutoResumeSection({ item, zh }) {
     const disabled = item.pending;
     const triggers = getTriggers(item);
 
     return [
-      '<div class="force-continuation-panel session-controls-panel">',
       '<section class="force-continuation-master">',
       '<div class="force-continuation-master-main">',
       '<div class="force-continuation-master-label">', zh ? '保持任务继续' : 'Keep task moving', '</div>',
@@ -275,11 +310,69 @@
         zh,
       }),
       '</section>',
-      renderGuardSection({ item, zh }),
-      renderRotationSection({ zh }),
-      '<div class="force-continuation-note">', zh
-        ? '手动停止与服务错误不会触发自动接续；自动接续次数受上限约束；超阈值打断触发后自动关闭。'
-        : 'Manual stops and service errors never trigger auto-resume; auto-resume is capped; the threshold intercept disarms after one trip.', '</div>',
+    ].join('');
+  }
+
+  function render() {
+    const zh = currentLanguage !== 'en';
+    const sessionId = currentSessionId();
+
+    // 心跳承担 guard 实时刷新与挂载探测的重试兜底；自身对所有
+    // 未就绪状态（面板关闭、会话断开、feature 未挂载）均 no-op。
+    ensureGuardPolling();
+
+    if (!currentRuntimeAgentId || !sessionId) {
+      return renderEmpty(
+        zh ? '请先打开并连接一个会话。' : 'Open and connect a session first.',
+        zh,
+      );
+    }
+
+    // 先确认本会话实际挂载了哪些受控 Feature；快照未决时探测一次再决定
+    // 显隐，避免把「数据还没到」误判成「工作空间不支持」。
+    const caps = resolveCaps();
+    if (!caps) {
+      void probeCapabilities();
+      return renderEmpty(
+        zh ? '正在读取本会话的控制能力…' : "Loading this session's controls…",
+        zh,
+      );
+    }
+    if (!caps.fc && !caps.guard && !caps.rot) {
+      return renderEmpty(
+        zh ? '此控制在当前工作空间不可用。' : 'This control is not available in the current workspace.',
+        zh,
+      );
+    }
+
+    const item = getState();
+
+    if (caps.fc && !item.initialized && !item.refreshing && !item.pending) {
+      // Read the authoritative session Feature state rather than treating this
+      // browser cache as a source of truth (important after reopen/reload).
+      void refreshStatus({ renderWhenDone: true });
+    }
+    if (caps.guard && !item.guardInitialized && !item.guardRefreshing && !item.guardPending) {
+      void refreshGuardStatus({ renderWhenDone: true });
+    }
+
+    const sections = [];
+    if (caps.fc) sections.push(renderAutoResumeSection({ item, zh }));
+    if (caps.guard) sections.push(renderGuardSection({ item, zh }));
+    if (caps.rot) sections.push(renderRotationSection({ zh }));
+
+    const notes = [];
+    if (caps.fc) notes.push(zh
+      ? '手动停止与服务错误不会触发自动接续；自动接续次数受上限约束。'
+      : 'Manual stops and service errors never trigger auto-resume; auto-resume is capped.');
+    if (caps.guard) notes.push(zh
+      ? '超阈值打断触发后自动关闭。'
+      : 'The threshold intercept disarms after one trip.');
+
+    return [
+      '<div class="force-continuation-panel session-controls-panel">',
+      ...sections,
+      notes.length ? '<div class="force-continuation-note">' + esc(notes.join(zh ? '' : ' ')) + '</div>' : '',
       '</div>',
     ].join('');
   }
@@ -289,7 +382,7 @@
   }
 
   async function refreshStatus({ renderWhenDone = true } = {}) {
-    if (!isSupportedAgent()) return null;
+    if (!resolveCaps()?.fc) return null;
     const sessionId = currentSessionId();
     const key = runtimeKey();
     if (!sessionId || !focusedAgentId || !key) return null;
@@ -314,7 +407,7 @@
   }
 
   async function updateControl(patch) {
-    if (!isSupportedAgent()) return;
+    if (!resolveCaps()?.fc) return;
     const sessionId = currentSessionId();
     const key = runtimeKey();
     if (!sessionId || !focusedAgentId || !key) return;
@@ -361,7 +454,7 @@
   // ── 上下文保护（超阈值打断开关）────────────────────────────────
 
   async function refreshGuardStatus({ renderWhenDone = true, silent = false } = {}) {
-    if (!isGuardAvailable()) return null;
+    if (!resolveCaps()?.guard) return null;
     const sessionId = currentSessionId();
     const key = runtimeKey();
     if (!sessionId || !focusedAgentId || !key) return null;
@@ -404,7 +497,7 @@
   }
 
   async function updateGuardArmed(armed) {
-    if (!isGuardAvailable()) return;
+    if (!resolveCaps()?.guard) return;
     const sessionId = currentSessionId();
     const key = runtimeKey();
     if (!sessionId || !focusedAgentId || !key) return;
@@ -435,14 +528,22 @@
   }
 
   // 面板打开期间的开关实时刷新：开关会被 runtime 内真实的超阈值事件
-  // 消耗，轮询保证「用掉了立刻显示为关闭」。tick 在面板关闭时 no-op。
+  // 消耗，轮询保证「用掉了立刻显示为关闭」。tick 在面板关闭时 no-op；
+  // 挂载探测失败时也由它兜底重试（session-controls 打开期间主轮询不
+  // 刷新本面板，停留状态下没有其他重渲染驱动）。
   let _guardPollTimer = null;
 
   function ensureGuardPolling() {
     if (_guardPollTimer || typeof setInterval !== 'function') return;
     const timer = setInterval(() => {
       if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'session-controls') return;
-      if (!isGuardAvailable() || !currentRuntimeAgentId || !currentSessionId()) return;
+      if (!currentRuntimeAgentId || !currentSessionId()) return;
+      const caps = resolveCaps();
+      if (!caps) {
+        void probeCapabilities();
+        return;
+      }
+      if (!caps.guard) return;
       void refreshGuardStatus({ renderWhenDone: true, silent: true });
     }, 3000);
     if (typeof timer?.unref === 'function') timer.unref();
@@ -486,13 +587,13 @@
   window.addEventListener('claw:capability-invoked', (event) => {
     const detail = event.detail || {};
     if (detail.ref === 'step-rotating-model.configure') {
-      if (isSupportedAgent() && detail.agentId === focusedAgentId && detail.sessionId === currentSessionId()) {
+      if (resolveCaps()?.rot && detail.agentId === focusedAgentId && detail.sessionId === currentSessionId()) {
         void refreshRotationStatus({ renderWhenDone: true });
       }
       return;
     }
     if (detail.ref !== 'force-continuation.configure') return;
-    if (!isSupportedAgent() || detail.agentId !== focusedAgentId || detail.sessionId !== currentSessionId()) return;
+    if (!resolveCaps()?.fc || detail.agentId !== focusedAgentId || detail.sessionId !== currentSessionId()) return;
     void refreshStatus({ renderWhenDone: true });
   });
 
@@ -562,7 +663,7 @@
   }
 
   async function refreshRotationStatus({ renderWhenDone = true, silent = false } = {}) {
-    if (!isSupportedAgent() || !currentRuntimeAgentId || !currentSessionId()) return null;
+    if (!resolveCaps()?.rot || !currentRuntimeAgentId || !currentSessionId()) return null;
     const r = getRotation();
     if (r.refreshing || r.pending) return null;
     r.refreshing = true;
@@ -583,7 +684,7 @@
   }
 
   async function updateRotationConfig(partial) {
-    if (!isSupportedAgent()) return;
+    if (!resolveCaps()?.rot) return;
     const r = getRotation();
     if (r.pending) return;
     r.pending = true;
@@ -604,7 +705,7 @@
     if (_rotationPollTimer || typeof setInterval !== 'function') return;
     const timer = setInterval(() => {
       if (typeof activeFeaturePanel === 'undefined' || activeFeaturePanel !== 'session-controls') return;
-      if (!isSupportedAgent() || !currentRuntimeAgentId || !currentSessionId()) return;
+      if (!resolveCaps()?.rot || !currentRuntimeAgentId || !currentSessionId()) return;
       void refreshRotationStatus({ renderWhenDone: true, silent: true });
     }, 3000);
     if (typeof timer?.unref === 'function') timer.unref();
@@ -823,7 +924,12 @@
     refreshRotationStatus,
     updateRotationConfig,
     updateGuardArmed,
-    isAvailable: () => isSupportedAgent(),
-    isGuardAvailable,
+    // 消费方（如 runtime-status 前置 guard 状态拉取）按已探明的挂载集决定
+    // 是否发请求；探测未决时返回 false，避免对不支持的 runtime 打出 503。
+    isAvailable: () => {
+      const caps = resolveCaps();
+      return !!(caps && (caps.fc || caps.guard || caps.rot));
+    },
+    isGuardAvailable: () => resolveCaps()?.guard === true,
   };
 }());

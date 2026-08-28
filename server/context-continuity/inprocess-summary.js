@@ -76,7 +76,7 @@ export function resolveSummaryLLM({
     throw new Error(`No model preset resolved for in-process summary (agentDir=${agentRelativeDir}, role=${modelPresetRole}) — configure model presets for this agent`);
   }
   console.log(`[inprocess_summary] using model preset role=${modelPresetRole} model=${resolvedModel.modelName} agent=${agentId} session=${sessionId}`);
-  tuneMirrorLLM(resolvedModel.llm, SUMMARY_MAX_TOKENS, { forceMaxTokens: true });
+  tuneMirrorLLM(resolvedModel.llm, SUMMARY_MAX_TOKENS, { forceMaxTokens: true, protocol: resolvedModel.protocol });
   return { llm: resolvedModel.llm, modelName: resolvedModel.modelName };
 }
 
