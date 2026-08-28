@@ -18,6 +18,7 @@
    - 0007 Capability Registry as the Unified Control Plane
    - 0008 远程 Claw 连接架构
    - 0009 模型热切换框架 API：资产归应用层，状态由 agent 自持
+   - 0010 侧栏统一投影：工作空间 → 项目目录 → 运行中会话，连接不产生侧栏层级
 
 实现层真实入口：
 
@@ -204,6 +205,19 @@ Inspector 数据流：Agent `buildHookInspectorSnapshot()` → IPC → ViewerWor
 1. `getRuntimeContextKey` 不稳定（依赖异步更新的 `allAgents`），只能作 cache key，不能作 stale check；stale check 只用同步设置的 `currentRuntimeAgentId`
 2. 切换不依赖服务端 current 状态：`switchAgent` 先乐观渲染再 `loadAgentData`，所有 URL 用显式 `agentId`；焦点只持久化到 `localStorage`
 3. 前端 → agent 控制 IPC 优先用 `runtimeId` 定位；`allAgents` 缓存派生的 sessionId 会暂态错位，只能 fallback，且 server 禁止跨 session fallback 投递；前端必须检查 `payload.ok` 并回滚乐观态（参考 `todo_control`、`swap_model`）
+
+## 侧栏统一投影（远程连接不可见）
+
+侧栏唯一渲染模型：`工作空间 → 项目目录 → 运行中会话`（[ADR-0010](docs/adr/0010-sidebar-unified-projection.md)）。本地会话与远程会话在 `renderSidebarChildItems` 汇合成统一条目流（远程经 [modules/remote-connections.js](public/src/modules/remote-connections.js) 的 `getRemoteSidebarProjection`）；连接本身只作为寻址与状态元数据，不产生任何 UI 层级。
+
+易错：
+
+- 叶子 = 存活的 child runtime；prebuilt 历史会话索引不是叶子来源
+- 身份归属由 `sidebar_entry_id` / `sessionType` 元数据推导（main → 宿主，其余 → `parent_id:sessionType`），禁止 Agent 类型硬编码
+- 数据源优先级：connected child 是主源；远程 `/api/agents` viewer 条目只补充不存在的 runtime，禁止覆盖身份/目录字段
+- 组身份与折叠状态用 `projectKey`，`projectName` 只是呈现（远程为 `主机名：目录名`）
+- 无选中运行时（停在 workspace surface）时高亮谓词直接判非；"解析归一化再比较"的兜底两侧都可能为空，空对空对称相等会全量误高亮（历史 bug，见 frontend-rendering-patterns.md §12a）
+- 往返测试 `test/remote-sidebar-projection.test.js` 用真实聚合输出驱动真实前端投影，字段断链在测试层暴露
 
 ## 工具注册时序与同名覆盖
 
