@@ -9,6 +9,7 @@ import {
   REMOTE_HANDSHAKE_TIMEOUT_MS,
 } from '../shared/constants.js';
 import { originFor } from './tunnel-manager.js';
+import { RemoteAuthError } from './remote-auth.js';
 
 // R1-03：连接握手与健康状态机（ADR-0008 第 6、7 条）。
 // 握手三步全部复用远程现有端点（远程零改动）：
@@ -177,7 +178,8 @@ function materiallyChanged(entry, connection) {
   return previous.mode !== connection.mode
     || previous.localPort !== connection.localPort
     || previous.baseUrl !== connection.baseUrl
-    || JSON.stringify(previous.remote) !== JSON.stringify(connection.remote);
+    || JSON.stringify(previous.remote) !== JSON.stringify(connection.remote)
+    || JSON.stringify(previous.auth ?? null) !== JSON.stringify(connection.auth ?? null);
 }
 
 function statusOf(entry) {
@@ -203,6 +205,7 @@ export class ConnectionHealth {
   constructor({
     fetch: fetchImpl = globalThis.fetch?.bind(globalThis),
     tunnelManager = null,
+    authSessions = null,
     localAppInfo = undefined,
     intervalMs = REMOTE_HANDSHAKE_INTERVAL_MS,
     timeoutMs = REMOTE_HANDSHAKE_TIMEOUT_MS,
@@ -217,6 +220,7 @@ export class ConnectionHealth {
     assertPositiveInt(timeoutMs, 'timeoutMs');
     this.fetch = fetchImpl;
     this.tunnelManager = tunnelManager;
+    this.authSessions = authSessions;
     // undefined = 惰性读本端 package.json；显式传 null 关闭版本比较。
     this.localAppInfo = localAppInfo;
     this.intervalMs = intervalMs;
@@ -255,6 +259,9 @@ export class ConnectionHealth {
       const changed = materiallyChanged(entry, connection);
       entry.connection = connection;
       if (changed) {
+        // 寻址或凭据变化：丢弃旧握手状态与旧登录会话（含密码错误的失败缓存，
+        // 让新密码立即生效），重走完整握手。
+        this.authSessions?.forget(connection.id);
         this.clearEntryTimer(entry);
         resetEntry(entry);
         this.scheduleProbe(entry, 0);
@@ -409,13 +416,19 @@ export class ConnectionHealth {
     const url = `${originFor(entry.connection)}${pathname}`;
     const controller = new AbortController();
     const timer = this.setTimeout(() => controller.abort(), this.timeoutMs);
+    const send = this.authSessions
+      ? (requestInit) => this.authSessions.fetchWithAuth(entry.connection, url, requestInit)
+      : (requestInit) => this.fetch(url, requestInit);
     try {
-      const response = await this.fetch(url, {
+      const response = await send({
         signal: controller.signal,
         headers: { Accept: 'application/json' },
       });
       if (!response?.ok) {
-        throw new HandshakeProtocolError(`远程 ${step} 返回 HTTP ${response?.status}`, {
+        const hint = response?.status === 401
+          ? '（远程开启了访问保护：请在连接配置中填写访问密码）'
+          : '';
+        throw new HandshakeProtocolError(`远程 ${step} 返回 HTTP ${response?.status}${hint}`, {
           step,
           status: response?.status ?? null,
         });
@@ -431,6 +444,12 @@ export class ConnectionHealth {
         throw new HandshakeTimeoutError(`远程 ${step} 超过 ${this.timeoutMs}ms 未响应`, { step });
       }
       if (error instanceof HandshakeProtocolError) throw error;
+      // 认证失败（密码错误 / 限流 / 登录不可达）：message 已由 RemoteAuthError
+      // 给出可操作描述；step 用 'auth' 与端点协议失败区分开（health 步骤的
+      // 协议失败会被归类为 target_not_found，而这里远程明确在且拒绝认证）。
+      if (error instanceof RemoteAuthError) {
+        throw new HandshakeProtocolError(error.message, { step: 'auth' });
+      }
       throw new HandshakeRequestError(error, step);
     } finally {
       this.clearTimeout(timer);

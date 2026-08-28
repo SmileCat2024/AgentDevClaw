@@ -486,6 +486,7 @@ function showManagerForm(record) {
       </label>
       <label class="rcm-url-field">${escapeHtml(t('rcon_field_base_url'))}<input name="baseUrl" type="url" placeholder="https://claw.example.com" value="${escapeHtml(record?.baseUrl || '')}"></label>
       <label class="rcm-local-port-field">${escapeHtml(t('rcon_field_local_port'))}<input name="localPort" type="number" min="1" max="65535" value="${escapeHtml(String(record?.localPort ?? ''))}"></label>
+      <label class="rcm-auth-field">${escapeHtml(t('rcon_field_auth_password'))}<input name="authPassword" type="password" autocomplete="new-password" placeholder="${escapeHtml(record?.auth?.configured ? t('rcon_field_auth_keep') : t('rcon_field_auth_hint'))}"></label>
     </div>
     <fieldset class="rcm-managed-fields">
       <legend>${escapeHtml(t('rcon_mode_managed'))}</legend>
@@ -544,6 +545,10 @@ async function submitManagerForm(event, form) {
     if (!idField) return reportManagerError(errorBox, t('rcon_mgr_error_id_required'));
     payload.id = idField;
   }
+
+  // 访问密码：填写则更新；编辑时留空 = 不提交 auth 字段 = 服务端保持现有密码。
+  const authPassword = form.elements.authPassword.value;
+  if (authPassword) payload.auth = { password: authPassword };
 
   if (mode === 'url') {
     const baseUrl = form.elements.baseUrl.value.trim().replace(/\/+$/, '');
@@ -664,7 +669,7 @@ function managerItemHtml(connection, status, tunnels) {
         </div>
         <div class="rcm-item-meta">
           <code>${escapeHtml(connId)}</code> · ${escapeHtml(modeLabel(connection.mode))}${addressInfo}
-          · ${handshakeInfo}
+          · ${handshakeInfo}${connection.auth?.configured ? ` · ${escapeHtml(t('rcon_auth_configured'))}` : ''}
         </div>
         ${versionWarning}
         ${connection.mode === 'managed' ? tunnelDiagHtml(connId, tunnels) : ''}
@@ -680,11 +685,12 @@ function managerItemHtml(connection, status, tunnels) {
 
 function applyRecordShapeForEdit(connection) {
   // server 端存储形如 { id,name,enabled,mode,localPort,ssh:{...},remote:{...} }
-  // 前端表单展示需要逐字段平铺的映射。
+  // 前端表单展示需要逐字段平铺的映射；auth 只回传 configured 标记，不回显明文。
   return {
     ...connection,
     ssh: connection.ssh || {},
     remote: connection.remote || {},
+    auth: connection.auth || {},
   };
 }
 

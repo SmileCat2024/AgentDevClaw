@@ -98,6 +98,19 @@ export function getProxyConnectionLookup() {
   return _connectionLookup;
 }
 
+// ── Remote auth sessions（远程单密码访问保护）────────────────────────────
+// 宿主装配 RemoteAuthSessions 单例：远程目标请求经它附加登录会话凭据。
+// 未装配或连接未配置密码时行为与从前一致（直通，不登录）。
+let _remoteAuthSessions = null;
+
+export function setProxyRemoteAuthSessions(authSessions) {
+  _remoteAuthSessions = authSessions || null;
+}
+
+export function getProxyRemoteAuthSessions() {
+  return _remoteAuthSessions;
+}
+
 // Template-map and static-asset requests address the agent through a query
 // parameter instead of a route segment. The accepted keys are the canonical
 // agent-addressing family rewriteProxyUrl restores (request-target's
@@ -170,6 +183,24 @@ async function readRewrittenTemplateMap(response, target) {
   }
   const rewritten = rewriteTemplateMapUrls(body, target);
   return rewritten ? Buffer.from(JSON.stringify(rewritten)) : null;
+}
+
+function readConnectionFromLookup(findConnection, connectionId) {
+  if (!findConnection) return null;
+  if (typeof findConnection === 'function') return findConnection(connectionId);
+  return findConnection.getConnection?.(connectionId) ?? null;
+}
+
+// 远程目标请求经 RemoteAuthSessions 附加登录会话凭据（远程开启访问保护时
+// 必需）；本地目标与未装配/未配置密码的连接保持直通，行为不变。连接查找与
+// target 解析同源（per-call 注入优先），避免两条解析路径分叉。
+async function remoteFetch(target, findConnection, url, init) {
+  if (!target || target.scope !== 'remote' || !_remoteAuthSessions) {
+    return fetch(url, init);
+  }
+  const connection = readConnectionFromLookup(findConnection || _connectionLookup, target.connectionId);
+  if (!connection) return fetch(url, init);
+  return _remoteAuthSessions.fetchWithAuth(connection, url, init);
 }
 
 export async function proxyToViewer(req, res, options = {}) {
@@ -251,7 +282,7 @@ export async function proxyToViewer(req, res, options = {}) {
 
   let response;
   try {
-    response = await fetch(targetUrl, init);
+    response = await remoteFetch(target, resolveOptions.findConnection, targetUrl, init);
   } catch (error) {
     const isRemote = Boolean(target && target.scope === 'remote');
     const failure = buildLocalFailureResponse({

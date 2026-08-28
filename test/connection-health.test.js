@@ -2,6 +2,7 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createConnectionHealth, versionMismatch } from '../server/remote-connections/connection-health.js';
+import { createRemoteAuthSessions, REMOTE_SESSION_COOKIE } from '../server/remote-connections/remote-auth.js';
 import {
   REMOTE_HANDSHAKE_INTERVAL_MS,
   REMOTE_HANDSHAKE_TIMEOUT_MS,
@@ -78,6 +79,7 @@ function createHarness({
   handler = healthyRoutes(),
   localAppInfo = LOCAL_APP_INFO,
   tunnelManager = null,
+  authSessions = null,
   intervalMs = 60000,
   timeoutMs = 200,
 } = {}) {
@@ -89,6 +91,7 @@ function createHarness({
   const health = createConnectionHealth({
     fetch: fetchImpl,
     tunnelManager,
+    authSessions,
     localAppInfo,
     intervalMs,
     timeoutMs,
@@ -96,7 +99,7 @@ function createHarness({
   });
   health.syncConnections(connections);
   instances.push(health);
-  return { health, calls };
+  return { health, calls, fetchImpl };
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -269,6 +272,77 @@ describe('failure classification against the phase 0 error contract', () => {
 
     assert.equal(status.state, 'degraded');
     assert.equal(status.error.code, 'target_not_found');
+  });
+
+  it('hints at the access password when the protected remote rejects the handshake (401)', async () => {
+    const { health } = createHarness({
+      connections: [connection({ auth: null })],
+      handler: healthyRoutes({
+        '/protoclaw/health': () => jsonResponse({ ok: false, code: 'AUTH_REQUIRED' }, 401),
+      }),
+    });
+
+    const status = await health.runHandshake('server-a');
+
+    assert.equal(status.state, 'degraded');
+    assert.match(status.error.message, /访问密码/);
+  });
+
+  it('completes the handshake with credentials when the remote requires login', async () => {
+    const seenCookies = [];
+    const handler = (url, options) => {
+      if (url.pathname === '/protoclaw/auth/login') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers([['Set-Cookie', `${REMOTE_SESSION_COOKIE}=token-7; Path=/`]]),
+          json: async () => ({ ok: true, authenticated: true }),
+        };
+      }
+      seenCookies.push(options.headers.get('Cookie'));
+      return healthyRoutes()(url, options);
+    };
+    const fetchImpl = async (url, options) => handler(new URL(String(url)), options);
+    const authSessions = createRemoteAuthSessions({ fetch: fetchImpl, logger: silentLogger });
+    const { health } = createHarness({
+      connections: [connection({ auth: { password: 'hunter2' } })],
+      handler,
+      authSessions,
+    });
+
+    const status = await health.runHandshake('server-a');
+
+    assert.equal(status.state, 'connected');
+    assert.deepEqual(seenCookies, [
+      `${REMOTE_SESSION_COOKIE}=token-7`,
+      `${REMOTE_SESSION_COOKIE}=token-7`,
+      `${REMOTE_SESSION_COOKIE}=token-7`,
+    ]);
+  });
+
+  it('surfaces auth failures as a degraded state with an actionable message', async () => {
+    const fetchImpl = async (url) => {
+      if (new URL(String(url)).pathname === '/protoclaw/auth/login') {
+        return jsonResponse({ ok: false, code: 'AUTH_INVALID_CREDENTIALS' }, 401);
+      }
+      return healthyRoutes()(new URL(String(url)));
+    };
+    const authSessions = createRemoteAuthSessions({ fetch: fetchImpl, logger: silentLogger });
+    const { health } = createHarness({
+      connections: [connection({ auth: { password: 'wrong' } })],
+      handler: healthyRoutes({
+        '/protoclaw/health': () => {
+          throw new Error('handshake must fail at login before reaching health');
+        },
+      }),
+      authSessions,
+    });
+
+    const status = await health.runHandshake('server-a');
+
+    assert.equal(status.state, 'degraded');
+    assert.equal(status.error.code, 'operation_rejected');
+    assert.match(status.error.message, /密码/);
   });
 });
 

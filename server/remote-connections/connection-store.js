@@ -9,9 +9,10 @@ import {
 } from '../shared/constants.js';
 
 const CONFIG_SCHEMA_VERSION = 1;
-const CONNECTION_KEYS = new Set(['id', 'name', 'enabled', 'mode', 'localPort', 'baseUrl', 'ssh', 'remote']);
+const CONNECTION_KEYS = new Set(['id', 'name', 'enabled', 'mode', 'localPort', 'baseUrl', 'ssh', 'remote', 'auth']);
 const SSH_KEYS = new Set(['host', 'user', 'port', 'hostAlias']);
 const REMOTE_KEYS = new Set(['appPort']);
+const AUTH_KEYS = new Set(['password']);
 const MODES = new Set(['manual', 'managed', 'url']);
 const SECRET_KEY_PATTERN = /password|private[-_]?key|passphrase/i;
 
@@ -35,6 +36,9 @@ function assertNoSecrets(value, location = '配置') {
   }
   if (!isPlainObject(value)) return;
   for (const [key, child] of Object.entries(value)) {
+    // auth 是唯一的机密例外：远程访问密码必须在本地可还原明文才能登录，
+    // 其结构与取值由 normalizeAuth 专项校验；其余位置维持机密禁令。
+    if (key === 'auth') continue;
     if (SECRET_KEY_PATTERN.test(key)) {
       throw new ConnectionConfigError(`禁止在远程连接配置中存储机密字段：${location}.${key}`);
     }
@@ -120,6 +124,23 @@ function normalizeRemote(value, mode) {
   return { appPort };
 }
 
+// 远程访问凭据：远程实例开启单密码访问保护时，本地用该密码向
+// /protoclaw/auth/login 换取会话 cookie（remote-auth.js）。密码不做 trim——
+// 空格可以是密码的有效组成部分。空对象 / 空 password 视为清除凭据。
+function normalizeAuth(value, id) {
+  if (value === undefined || value === null) return null;
+  if (!isPlainObject(value)) {
+    throw new ConnectionConfigError(`连接 ${id} 的 auth 必须是对象`);
+  }
+  assertKnownKeys(value, AUTH_KEYS, `连接 ${id} 的 auth`);
+  const password = value.password;
+  if (password === undefined || password === null || password === '') return null;
+  if (typeof password !== 'string') {
+    throw new ConnectionConfigError(`连接 ${id} 的 auth.password 必须是字符串`);
+  }
+  return { password };
+}
+
 // url 直连模式只接受源（origin）形态：转发层把请求路径直接拼在它后面，
 // 携带路径/查询/锚点会让拼接结果偏离用户预期。
 function normalizeBaseUrl(value, label) {
@@ -152,6 +173,7 @@ function normalizeConnection(value) {
   if (typeof enabled !== 'boolean') {
     throw new ConnectionConfigError(`连接 ${id} 的 enabled 必须是布尔值`);
   }
+  const auth = normalizeAuth(value.auth, id);
   const mode = value.mode;
   if (!MODES.has(mode)) {
     throw new ConnectionConfigError(`连接 ${id} 的 mode 只能是 manual、managed 或 url`);
@@ -163,7 +185,7 @@ function normalizeConnection(value) {
     const baseUrl = normalizeBaseUrl(value.baseUrl, `连接 ${id} 的 baseUrl`);
     const ssh = normalizeSsh(value.ssh, mode);
     const remote = normalizeRemote(value.remote, mode);
-    return { id, name, enabled, mode, localPort: null, baseUrl, ssh, remote };
+    return { id, name, enabled, mode, localPort: null, baseUrl, ssh, remote, auth };
   }
   const localPort = value.localPort;
   if (!Number.isInteger(localPort)) {
@@ -171,12 +193,13 @@ function normalizeConnection(value) {
   }
   const ssh = normalizeSsh(value.ssh, mode);
   const remote = normalizeRemote(value.remote, mode);
-  return { id, name, enabled, mode, localPort, ssh, remote };
+  return { id, name, enabled, mode, localPort, ssh, remote, auth };
 }
 
 function freezeConnection(connection) {
   if (connection.ssh) Object.freeze(connection.ssh);
   if (connection.remote) Object.freeze(connection.remote);
+  if (connection.auth) Object.freeze(connection.auth);
   return Object.freeze(connection);
 }
 
@@ -273,6 +296,7 @@ export class ConnectionStore {
         ...connection,
         ssh: connection.ssh ? { ...connection.ssh } : null,
         remote: connection.remote ? { ...connection.remote } : null,
+        auth: connection.auth ? { ...connection.auth } : null,
       })));
   }
 
@@ -283,12 +307,18 @@ export class ConnectionStore {
       ...connection,
       ssh: connection.ssh ? { ...connection.ssh } : null,
       remote: connection.remote ? { ...connection.remote } : null,
+      auth: connection.auth ? { ...connection.auth } : null,
     });
   }
 
   async upsertConnection(value) {
     await this.ensureLoaded();
     const connection = normalizeConnection(value);
+    // auth 缺省表示"保持现有凭据"：编辑表单不回显密码，留空提交不应清掉它。
+    if (value.auth === undefined) {
+      const existing = this.connections.get(connection.id);
+      connection.auth = existing?.auth ? { ...existing.auth } : null;
+    }
     const next = new Map(this.connections);
     next.set(connection.id, connection);
     this.assertPortConflicts(next);
@@ -330,6 +360,7 @@ export class ConnectionStore {
       ...connection,
       ssh: connection.ssh ? { ...connection.ssh } : null,
       remote: connection.remote ? { ...connection.remote } : null,
+      auth: connection.auth ? { ...connection.auth } : null,
     });
   }
 

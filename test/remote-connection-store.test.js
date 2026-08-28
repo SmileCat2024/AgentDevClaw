@@ -634,3 +634,83 @@ describe('connection store url direct mode schema', () => {
     }
   });
 });
+
+// ── Auth credentials（远程访问密码）────────────────────────────────
+
+describe('connection auth credentials schema', () => {
+  it('accepts auth.password on every mode and round-trips it', async () => {
+    const store = createStore();
+    await store.upsertConnection(validManualConnection({ auth: { password: 'hunter2' } }));
+    await store.upsertConnection(validUrlConnection({ auth: { password: '带 空格 的密码' } }));
+    const manual = store.getConnection('server-a');
+    const direct = store.getConnection('server-url');
+    assert.equal(manual.auth.password, 'hunter2');
+    // 密码不做 trim：空格可以是密码的有效组成部分。
+    assert.equal(direct.auth.password, '带 空格 的密码');
+  });
+
+  it('rejects unknown keys and non-object shapes inside auth', async () => {
+    const store = createStore();
+    await assert.rejects(() => store.upsertConnection(validManualConnection({ auth: { password: 'x', token: 'y' } })));
+    await assert.rejects(() => store.upsertConnection(validManualConnection({ auth: 'hunter2' })));
+    await assert.rejects(() => store.upsertConnection(validManualConnection({ auth: { password: 42 } })));
+  });
+
+  it('normalizes empty auth shapes to null (no credentials)', async () => {
+    const store = createStore();
+    await store.upsertConnection(validManualConnection({ auth: {} }));
+    await store.upsertConnection(validUrlConnection({ auth: { password: '' } }));
+    await store.upsertConnection(validManualConnection({ id: 'server-n', localPort: 22105, auth: null }));
+    assert.equal(store.getConnection('server-a').auth, null);
+    assert.equal(store.getConnection('server-url').auth, null);
+    assert.equal(store.getConnection('server-n').auth, null);
+  });
+
+  it('keeps the existing password when an edit omits the auth field', async () => {
+    const store = createStore();
+    await store.upsertConnection(validManualConnection({ auth: { password: 'hunter2' } }));
+    // 编辑表单不回显密码，留空提交 = 不带 auth 字段 = 保持现有凭据。
+    await store.upsertConnection(validManualConnection({ name: '改名' }));
+    assert.equal(store.getConnection('server-a').auth.password, 'hunter2');
+  });
+
+  it('clears credentials only when auth is explicitly provided as empty', async () => {
+    const store = createStore();
+    await store.upsertConnection(validManualConnection({ auth: { password: 'hunter2' } }));
+    await store.upsertConnection(validManualConnection({ auth: {} }));
+    assert.equal(store.getConnection('server-a').auth, null);
+  });
+
+  it('round-trips auth through the config file', async () => {
+    const store = createStore();
+    await store.upsertConnection(validUrlConnection({ auth: { password: 'hunter2' } }));
+    const second = createStore();
+    const loaded = await second.load();
+    assert.equal(loaded[0].auth.password, 'hunter2');
+  });
+
+  it('keeps the secret ban everywhere outside the auth block', async () => {
+    const store = createStore();
+    await assert.rejects(
+      () => store.upsertConnection(validManualConnection({ password: 'hunter2' })),
+      /机密/,
+    );
+    // auth 只允许出现在连接根上；嵌套到 ssh/remote 内会被严格 schema 拒绝，
+    // auth 内部也只放行 password 一个键。
+    await assert.rejects(
+      () => store.upsertConnection(validManagedConnection({ ssh: { host: 'h', auth: { password: 'x' } } })),
+      /未知字段/,
+    );
+    await assert.rejects(
+      () => store.upsertConnection(validManualConnection({ auth: { privateKey: 'x' } })),
+      /未知字段/,
+    );
+  });
+
+  it('returns frozen auth objects to callers', async () => {
+    const store = createStore();
+    await store.upsertConnection(validManualConnection({ auth: { password: 'hunter2' } }));
+    const conn = store.getConnection('server-a');
+    assert.ok(Object.isFrozen(conn.auth));
+  });
+});

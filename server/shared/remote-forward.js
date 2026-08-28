@@ -1,5 +1,5 @@
 import { parseRemoteNamespace, resolveHostTarget } from './request-target.js';
-import { getProxyConnectionLookup } from './proxy.js';
+import { getProxyConnectionLookup, getProxyRemoteAuthSessions } from './proxy.js';
 import { buildLocalFailureResponse } from './operation-contract.js';
 
 // ADR-0011：protoclaw 域远程适配的共享取用。转发基址、裸 id、命名空间 →
@@ -48,20 +48,33 @@ export function readForwardTargetError(error) {
   return Number(error?.status) || 400;
 }
 
+function readConnection(lookup, connectionId) {
+  if (!lookup) return null;
+  if (typeof lookup === 'function') return lookup(connectionId);
+  return lookup.getConnection?.(connectionId) ?? null;
+}
+
 /**
- * 转发 protoclaw 域请求到远程同名路由，远程响应原文返回。传输失败 /
- * 不可解析响应按 operation 契约三分类呈现（ADR-0011）。
+ * 转发 protoclaw 域请求到远程同名路由，远程响应原文返回。请求经认证会话
+ * 附加凭据（远程开启访问保护时必需），传输失败 / 不可解析响应按 operation
+ * 契约三分类呈现（ADR-0011）。
  */
 export async function forwardProtoclawRoute(res, hostTarget, pathname, { method = 'GET', body = undefined } = {}) {
+  const url = `${hostTarget.origin}${pathname}`;
+  const requestInit = {
+    method,
+    ...(body !== undefined ? {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    } : {}),
+  };
+  const authSessions = getProxyRemoteAuthSessions();
+  const connection = authSessions ? readConnection(getProxyConnectionLookup(), hostTarget.connectionId) : null;
   let response;
   try {
-    response = await fetch(`${hostTarget.origin}${pathname}`, {
-      method,
-      ...(body !== undefined ? {
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      } : {}),
-    });
+    response = connection
+      ? await authSessions.fetchWithAuth(connection, url, requestInit)
+      : await fetch(url, requestInit);
   } catch (error) {
     return res.status(503).json(buildLocalFailureResponse({
       code: 'transport_unavailable',

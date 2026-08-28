@@ -63,7 +63,7 @@ import {
   buildSessionTitle, normalizeSessionMetadata, readSessionIndexSync,
 } from './server/shared/session-access.js';
 import { sendIPCtoSession } from './server/shared/ipc.js';
-import { proxyToViewer, setProxyConnectionLookup } from './server/shared/proxy.js';
+import { proxyToViewer, setProxyConnectionLookup, setProxyRemoteAuthSessions } from './server/shared/proxy.js';
 import { resolveRuntimeObservationTarget } from './server/shared/operation-target.js';
 import { buildLocalFailureResponse, readOperationMetadata } from './server/shared/operation-contract.js';
 import {
@@ -135,6 +135,7 @@ import { startEmbeddedRemoteClawConnector } from './server/remote-claw/embedded-
 import { createTunnelManager } from './server/remote-connections/tunnel-manager.js';
 import { createConnectionStore, ConnectionConfigError } from './server/remote-connections/connection-store.js';
 import { createConnectionHealth } from './server/remote-connections/connection-health.js';
+import { createRemoteAuthSessions } from './server/remote-connections/remote-auth.js';
 import { createCatalogAggregator } from './server/remote-connections/catalog-aggregator.js';
 import { PH_STYLE_WORKSPACE_AGENT_IDS } from './server/shared/constants.js';
 
@@ -1155,8 +1156,20 @@ app.delete('/protoclaw/remote_claw/registration', async (_req, res, next) => {
 // ── ADR-0008 远程连接：工作空间目录聚合（R1-05）──
 const connectionStore = createConnectionStore();
 setProxyConnectionLookup(connectionStore);
-const connectionHealth = createConnectionHealth({ tunnelManager });
+// 远程开启单密码访问保护时，握手与转发经该会话表自动登录（凭据见连接配置
+// 的 auth 字段）；未配置密码的连接不受影响。
+const remoteAuthSessions = createRemoteAuthSessions();
+setProxyRemoteAuthSessions(remoteAuthSessions);
+const connectionHealth = createConnectionHealth({ tunnelManager, authSessions: remoteAuthSessions });
 connectionHealth.start();
+
+// 密码不出服务进程：连接管理 API 只回传 configured 形态，明文仅用于出站登录。
+function redactConnectionAuth(connection) {
+  return {
+    ...connection,
+    auth: connection?.auth?.password ? { configured: true } : null,
+  };
+}
 
 // 健康探测与托管隧道共用同一份连接真值：幂等 diff 同步，增删改 / enable
 // 开关即时生效（managed 隧道随 enabled 自动起停，R1-02 生命周期接线）。
@@ -1213,7 +1226,7 @@ app.get('/protoclaw/remote_connections', async (_req, res, next) => {
     }
     res.json({
       ok: true,
-      connections,
+      connections: connections.map(redactConnectionAuth),
       statuses: connectionHealth.listStatuses(),
       tunnels,
     });
@@ -1227,7 +1240,7 @@ app.post('/protoclaw/remote_connections', express.json(), async (req, res, next)
     const connection = await connectionStore.upsertConnection(req.body || {});
     await syncRemoteConnectionInfrastructure(connectionStore.listConnections());
     remoteCatalogAggregator.invalidate();
-    res.json({ ok: true, connection });
+    res.json({ ok: true, connection: redactConnectionAuth(connection) });
   } catch (error) {
     if (error instanceof ConnectionConfigError) {
       sendRemoteConnectionFailure(res, req, error, 400);
@@ -1240,6 +1253,7 @@ app.post('/protoclaw/remote_connections', express.json(), async (req, res, next)
 app.delete('/protoclaw/remote_connections/:id', async (req, res, next) => {
   try {
     const removed = await connectionStore.deleteConnection(req.params.id);
+    remoteAuthSessions.forget(removed.id);
     await syncRemoteConnectionInfrastructure(connectionStore.listConnections());
     remoteCatalogAggregator.invalidate();
     res.json({ ok: true, removed });
