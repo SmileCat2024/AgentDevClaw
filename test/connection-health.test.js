@@ -125,6 +125,8 @@ describe('three-step handshake and appInfo cache', () => {
       name: 'AgentDevClaw',
       clawVersion: '0.2.0',
       frameworkVersion: '0.1.0',
+      // Legacy app_info without capabilities → write defaults to false (ADR-0011).
+      capabilities: { write: false },
       checkedAt: status.appInfo.checkedAt,
     });
     assert.ok(status.lastConnectedAt);

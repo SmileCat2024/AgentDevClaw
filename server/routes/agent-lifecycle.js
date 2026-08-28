@@ -56,6 +56,11 @@ export function createAgentLifecycleModule(ctx) {
             name: '@agentdevjs/core',
             version: corePkg?.version || null,
           },
+          // ADR-0011：本版本 Claw 支持被远程写透传（幂等闸在连接侧强制）。
+          // 旧远程读不到此字段，握手侧视为不可写。
+          capabilities: {
+            write: true,
+          },
           repos: {
             app: 'https://github.com/SmileCat2024/AgentDevClaw',
             framework: 'https://github.com/SmileCat2024/AgentDev',

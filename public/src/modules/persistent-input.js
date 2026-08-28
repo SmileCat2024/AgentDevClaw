@@ -591,7 +591,7 @@ async function submitQueuedInput() {
     capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
     const res = await fetch(`/api/agents/${targetRuntimeId}/user-turn`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         text: text || ' ',
         images: images.length > 0 ? images : undefined,
@@ -764,7 +764,7 @@ async function interruptAgent() {
   try {
     const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/interrupt`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
     });
     const data = await res.json().catch(() => ({}));
     console.log(`[Interrupt] response:`, res.status, data);

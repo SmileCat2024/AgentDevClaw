@@ -35,6 +35,17 @@
  *   applySessionViewPatch, readCurrentSessionViewState
  */
 
+// ── 幂等键（ADR-0011）──────────────────────────────────────────────
+// 所有写类提交统一携带（本地忽略、远程强制）：服务端代理闸要求远程写请求
+// 必须带幂等键，无键直接 400。只有一条提交路径，不存在 if(remote) 分支。
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function syncRollbackActionButtons() {
   const allowRollback = !!getRollbackInputRequest();
   const rows = container.querySelectorAll('.message-row');
@@ -139,7 +150,7 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   try {
     const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         requestId,
         input,
@@ -468,7 +479,7 @@ async function submitInputAction(requestId, actionId, payload = {}, boundRuntime
     if (!targetRuntimeId) return;
     const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         requestId,
         input: '',

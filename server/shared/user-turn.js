@@ -1,5 +1,7 @@
 import { VIEWER_ORIGIN } from './constants.js';
 import { RequestTargetError, resolveRuntimeTarget } from './request-target.js';
+import { forwardBase } from './remote-forward.js';
+import { getProxyConnectionLookup } from './proxy.js';
 import {
   LocalOperationError,
   createOperationMetadata,
@@ -59,12 +61,15 @@ export async function submitUserTurn({
   traceId,
 }, {
   viewerOrigin = VIEWER_ORIGIN,
+  // 远程命名空间 id 需要 ConnectionStore 才能解析出隧道 origin；默认复用
+  // 宿主经 proxy.js 注册的同一张连接表，测试可注入替身（ADR-0011）。
+  findConnection = getProxyConnectionLookup(),
   fetchImpl = fetch,
 } = {}) {
   const metadata = createOperationMetadata({ operationId, requestId, sourceRef, idempotencyKey, traceId }, { prefix: 'user-turn' });
   let target;
   try {
-    target = resolveRuntimeTarget({ agentId }, { viewerOrigin });
+    target = resolveRuntimeTarget({ agentId }, { viewerOrigin, findConnection });
   } catch (error) {
     if (error instanceof RequestTargetError) {
       throw new UserTurnDeliveryError(error.message, {
@@ -88,11 +93,18 @@ export async function submitUserTurn({
 
   let response;
   try {
+    // 远程 target 的转发基址是隧道 origin（远程 target 上 viewerOrigin 为
+    // undefined，直接拼接会产生 "undefined/…" URL，ADR-0011）；target.agentId
+    // 已由 resolveRuntimeTarget 还原为裸 id。
     response = await fetchImpl(
-      `${target.viewerOrigin}/api/agents/${encodeURIComponent(target.agentId)}/user-turn`,
+      `${forwardBase(target)}/api/agents/${encodeURIComponent(target.agentId)}/user-turn`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // 幂等键透传：远程端与本地代理闸共用同一套 operation 元数据头。
+          ...(metadata.idempotencyKey ? { 'x-idempotency-key': metadata.idempotencyKey } : {}),
+        },
         body: JSON.stringify({
           text,
           ...(Array.isArray(images) && images.length > 0 ? { images } : {}),

@@ -371,6 +371,9 @@ export class ConnectionHealth {
       name: typeof appInfo.name === 'string' ? appInfo.name : null,
       clawVersion: typeof appInfo.version === 'string' ? appInfo.version : null,
       frameworkVersion: typeof appInfo.framework?.version === 'string' ? appInfo.framework.version : null,
+      // 写能力门控（ADR-0011）：旧远程无 capabilities 字段视为不可写；
+      // 每次握手重算，断线重连后随握手刷新。
+      capabilities: { write: appInfo?.capabilities?.write === true },
       checkedAt,
     };
 

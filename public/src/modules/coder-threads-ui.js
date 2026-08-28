@@ -326,7 +326,7 @@ window.CoderThreadsUI = (() => {
     try {
       const thread = getThread(threadId);
       if (!thread?.headViewerAgentId) throw new Error(isZh() ? 'head 会话 runtime 未运行' : 'head runtime is not running');
-      const response = await fetch('/api/agents/' + encodeURIComponent(thread.headViewerAgentId) + '/interrupt', { method: 'POST' });
+      const response = await fetch('/api/agents/' + encodeURIComponent(thread.headViewerAgentId) + '/interrupt', { method: 'POST', headers: { 'x-idempotency-key': newIdempotencyKey() } });
       if (!response.ok) throw new Error(isZh() ? `中断请求失败 (${response.status})` : `interrupt failed (${response.status})`);
       await refresh();
     } catch (error) {

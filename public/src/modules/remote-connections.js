@@ -7,7 +7,8 @@
  *    内部寻址与状态，不单独占用用户可见层级。
  *  - 连接管理面板：走 /protoclaw/remote_connections 增删改与握手（server 同步
  *    健康探测 / 托管隧道生命周期，全程不重启生效）。
- *  - 远程条目进入只读主视图（switchAgent 按 remote: 命名空间强制 readOnlyMode）；
+ *  - 远程条目按握手 capability 门控（ADR-0011）：具备 capabilities.write 的
+ *    连接体验与本地一致；无写能力（旧远程/断开）进入只读主视图；
  *    断开连接的条目整体停用并明示原因。
  *
  * Exported globals:
@@ -37,6 +38,9 @@ const _rcVisibleSections = new Map();
 // 最后已知身份（connId -> { name, workspaces }）：连接断开时保留上次成功聚合
 // 的分组内容（ADR-0008 第 2 条：身份由前端持有，不伪造在线数据）。
 const _rcMemoryByConnection = new Map();
+// 写能力表（connId -> boolean）：随 catalog 携带的握手 capability 刷新
+// （ADR-0011）。断开态 section 不携带 capability → false，重连握手后恢复。
+const _rcWriteByConnection = new Map();
 
 // ── Namespace helpers ──────────────────────────────────────────────────────
 
@@ -50,6 +54,14 @@ function splitRemoteNamespaceId(agentId) {
   const sep = rest.indexOf(':');
   if (sep <= 0) return null;
   return { connectionId: rest.slice(0, sep), innerId: rest.slice(sep + 1) };
+}
+
+// 写能力门控（ADR-0011）：远程且具备 capabilities.write 才可写；本地身份
+// 永不因此进入只读。未知连接（尚未出现在 catalog）按不可写处理。
+function isRemoteWriteEnabled(agentId) {
+  const split = splitRemoteNamespaceId(agentId);
+  if (!split) return true;
+  return _rcWriteByConnection.get(split.connectionId) === true;
 }
 
 function rcStatusClass(state) {
@@ -75,9 +87,10 @@ function shouldRenderRemoteCatalog(payload) {
 
 function ingestRemoteCatalog(payload) {
   if (!shouldRenderRemoteCatalog(payload)) {
-    // 404 / 空目录 / 失败响应：不保留任何远程 UI（默认关闭）。
+    // 404 / 空目录 / 失败响应：不保留任何远程 UI（默认关闭语义）。
     _rcVisibleSections.clear();
     _rcMemoryByConnection.clear();
+    _rcWriteByConnection.clear();
     return;
   }
 
@@ -86,6 +99,10 @@ function ingestRemoteCatalog(payload) {
     const connId = typeof raw?.connectionId === 'string' ? raw.connectionId : '';
     if (!connId || connId.includes(':')) continue;
     seenIds.add(connId);
+
+    // 写能力随 section 刷新（ADR-0011）：connected 态携带握手 capability，
+    // 断开态缺失 → false。未知字段缺失同样视为不可写。
+    _rcWriteByConnection.set(connId, raw?.capabilities?.write === true);
 
     const connected = raw.status === 'connected';
     const workspaces = connected && Array.isArray(raw.workspaces)
@@ -130,6 +147,7 @@ function ingestRemoteCatalog(payload) {
   for (const connId of Array.from(_rcVisibleSections.keys())) {
     if (!seenIds.has(connId)) {
       _rcVisibleSections.delete(connId);
+      _rcWriteByConnection.delete(connId);
       if (!_rcAllConnectionIds.has(connId)) _rcMemoryByConnection.delete(connId);
     }
   }
@@ -662,4 +680,5 @@ window.RemoteConnections = {
   refresh: refreshRemoteCatalog,
   openManager: openRemoteConnectionsManager,
   resolveRuntimeRef,
+  isRemoteWriteEnabled,
 };

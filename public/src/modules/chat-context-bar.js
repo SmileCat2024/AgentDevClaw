@@ -396,6 +396,28 @@ function _getCurrentDefaultPresetName() {
   return (defaultCfg && defaultCfg.primary) || '';
 }
 
+// preset 列表按会话命名空间拉取（ADR-0011）：agentId 始终携带当前会话身份，
+// 远程会话返回远程自己的 preset 列表；缓存按会话身份失效，防切换串列表。
+function _presetCacheMatchesCurrentSession() {
+  let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
+  return typeof window.ClawFW === 'object' && window.ClawFW
+    && Array.isArray(window.ClawFW._modelPresets)
+    && window.ClawFW._modelPresets.length > 0
+    && window.ClawFW._modelPresetsRuntimeId === runtimeId;
+}
+
+async function _fetchPresetsForCurrentSession() {
+  let runtimeId = (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '';
+  const resp = await fetch('/protoclaw/model_config' + (runtimeId ? '?agentId=' + encodeURIComponent(runtimeId) : ''));
+  const data = await resp.json();
+  const presets = Array.isArray(data && data.presets) ? data.presets : [];
+  if (typeof window.ClawFW === 'object' && window.ClawFW) {
+    window.ClawFW._modelPresets = presets;
+    window.ClawFW._modelPresetsRuntimeId = runtimeId;
+  }
+  return presets;
+}
+
 async function _toggleModelDropdown() {
   // If already open, close
   if (_modelDropdown) {
@@ -410,13 +432,10 @@ async function _toggleModelDropdown() {
   if (!agentId) return;
 
   // Fetch presets
-  let presets = window.ClawFW?._modelPresets || [];
+  let presets = _presetCacheMatchesCurrentSession() ? window.ClawFW._modelPresets : [];
   if (!presets.length) {
     try {
-      const resp = await fetch('/protoclaw/model_config');
-      const data = await resp.json();
-      presets = Array.isArray(data?.presets) ? data.presets : [];
-      if (window.ClawFW) window.ClawFW._modelPresets = presets;
+      presets = await _fetchPresetsForCurrentSession();
     } catch (e) {
       console.error('[ModelDropdown] Failed to load presets:', e);
       return;

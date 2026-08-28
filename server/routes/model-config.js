@@ -8,6 +8,8 @@ import { readJson, readJsonSafe, ensureDir } from '../shared/fs-helpers.js';
 import { requestRuntimeAck } from '../shared/ipc.js';
 import { getRuntimeByViewerAgentId, getAgentRuntime } from '../shared/agent-access.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
+import { bareId, resolveForwardHostTarget } from '../shared/remote-forward.js';
+import { buildLocalFailureResponse } from '../shared/operation-contract.js';
 import { normalizeProgrammingHelperProcessMode, GLOBAL_SHARED_AGENT_ID } from '../shared/process-mode.js';
 import { resolveOpenCodeBaseUrl, parseZenModelsResponse } from '../zen-helpers.js';
 
@@ -420,9 +422,60 @@ export async function readAgentModelPresets(agentId, rootDir = PROJECT_ROOT) {
   };
 }
 
+// ── Remote namespace adaptation (ADR-0011) ─────────────────────────
+// protoclaw 族不走代理闸：路由内识别 remote: 命名空间，经共享 helper 转发远程
+// 同名路由（裸 id），远程响应原文返回；失败按 operation 契约三分类呈现。
+// 本地分支不经过此函数，保持既有 IPC / 文件读取路径字节级不动。
+
+function readForwardTargetError(error) {
+  return Number(error?.status) || 400;
+}
+
+async function forwardProtoclawRoute(res, hostTarget, pathname, { method = 'GET', body = undefined } = {}) {
+  let response;
+  try {
+    response = await fetch(`${hostTarget.origin}${pathname}`, {
+      method,
+      ...(body !== undefined ? {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      } : {}),
+    });
+  } catch (error) {
+    return res.status(503).json(buildLocalFailureResponse({
+      code: 'transport_unavailable',
+      status: 503,
+      retryable: true,
+      message: 'Remote connection transport is unavailable',
+    }));
+  }
+  const payload = await response.json().catch(() => null);
+  if (payload === null) {
+    return res.status(502).json(buildLocalFailureResponse({
+      code: 'operation_rejected',
+      status: 502,
+      retryable: false,
+      message: `Remote ${pathname} returned an unparseable response body (HTTP ${response.status})`,
+    }));
+  }
+  return res.status(response.status).json(payload);
+}
+
 export function setupModelConfigRoutes(app, express) {
-  app.get('/protoclaw/model_config', async (_req, res, next) => {
+  app.get('/protoclaw/model_config', async (req, res, next) => {
     try {
+      // ADR-0011：host 域默认本地；调用方携带会话命名空间（remote:<connId>:…）
+      // 时显式派生 connectionId 转发远程同名路由，返回远程自己的 config/preset
+      // 列表。本地调用（无命名空间）行为不变。
+      let hostTarget;
+      try {
+        hostTarget = resolveForwardHostTarget(typeof req.query.agentId === 'string' ? req.query.agentId : '');
+      } catch (error) {
+        return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+      }
+      if (hostTarget.scope === 'remote') {
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/model_config');
+      }
       const config = await readModelConfig();
       const presets = flattenModelPresets(await readModelPresets());
       res.json({ config, presets, configPath: MODEL_CONFIG_PATH });
@@ -673,6 +726,24 @@ export function setupModelConfigRoutes(app, express) {
         return res.status(error.status || 400).json({ error: error.message, code: error.code });
       }
       const { agentId, sessionId, runtimeId } = target;
+      // ADR-0011：远程命名空间身份 → 转发远程同名 swap 路由（裸 id，远程端做
+      // 自己的 IPC）；本地身份走下方既有 IPC 查表路径，行为字节级不动。
+      try {
+        const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
+        if (hostTarget.scope === 'remote') {
+          return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/swap_thinking_effort', {
+            method: 'POST',
+            body: {
+              ...(req.body || {}),
+              agentId: bareId(agentId),
+              runtimeId: bareId(runtimeId),
+              sessionId: bareId(sessionId),
+            },
+          });
+        }
+      } catch (error) {
+        return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+      }
       // thinkingEffort is null (clear → vendor default) or a non-empty string
       const normalized = thinkingEffort === null
         ? null
@@ -720,6 +791,24 @@ export function setupModelConfigRoutes(app, express) {
         return res.status(error.status || 400).json({ error: error.message, code: error.code });
       }
       const { agentId, sessionId, runtimeId } = target;
+      // ADR-0011：远程命名空间身份 → 转发远程同名 swap 路由（裸 id，远程端做
+      // 自己的 IPC）；本地身份走下方既有 IPC 查表路径，行为字节级不动。
+      try {
+        const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
+        if (hostTarget.scope === 'remote') {
+          return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/swap_model', {
+            method: 'POST',
+            body: {
+              ...(req.body || {}),
+              agentId: bareId(agentId),
+              runtimeId: bareId(runtimeId),
+              sessionId: bareId(sessionId),
+            },
+          });
+        }
+      } catch (error) {
+        return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+      }
       if (!presetName || typeof presetName !== 'string') {
         return res.status(400).json({ error: 'presetName is required' });
       }

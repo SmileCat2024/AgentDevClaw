@@ -619,12 +619,16 @@ window.switchAgent = async (newAgentId) => {
     );
     _recentlyFinishedRuntimes.delete(runtimeAgentId);
     // 沙盒等不接受外部输入的 runtime（input_accepted=false）以只读视图打开；
-    // 远程条目按用户点击的命名空间 id 判定只读（runtimeAgentId 可能已被
-    // resolveRuntimeRef 解析为裸运行时 id，丢失 remote: 前缀——远程面无写路径，
-    // 解析成功后同样必须只读）。
-    readOnlyMode = targetAgent
-      ? targetAgent.input_accepted === false
-      : (isRemoteNamespaceAgentId(newAgentId) || isRemoteNamespaceAgentId(runtimeAgentId));
+    // 远程条目按握手 capability 门控（ADR-0011）：具备 capabilities.write 的
+    // 连接与本地体验一致（runtimeAgentId 可能已被 resolveRuntimeRef 解析为裸
+    // 运行时 id，按用户点击的命名空间 id 判定能力），无写能力才只读。
+    if (targetAgent) {
+      readOnlyMode = targetAgent.input_accepted === false;
+    } else {
+      const targetsRemote = isRemoteNamespaceAgentId(newAgentId) || isRemoteNamespaceAgentId(runtimeAgentId);
+      readOnlyMode = targetsRemote
+        && window.RemoteConnections?.isRemoteWriteEnabled?.(newAgentId) !== true;
+    }
     currentWorkspaceArtifactDetail = null;
     currentWorkspaceDocsetDetail = null;
     currentProjectDocsetOpen = false;

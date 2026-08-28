@@ -333,6 +333,11 @@ export class CatalogAggregator {
       }
       return section;
     }
+    // 写能力随握手流动（ADR-0011）：capability 属于连接元数据，只在 connected
+    // 态透传；断开态不携带，前端按不可写处理。
+    if (health?.appInfo?.capabilities && typeof health.appInfo.capabilities === 'object') {
+      section.capabilities = { ...health.appInfo.capabilities };
+    }
 
     let sources;
     try {

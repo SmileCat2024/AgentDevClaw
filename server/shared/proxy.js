@@ -38,9 +38,20 @@ const REMOTE_READ_RESOURCES = new Set([
   'todo',
   'notification',
   'input-requests',
+  // Phase 2 写放行的读半边：排队气泡 UI 依赖 GET 队列余量（ADR-0011）。
+  'queued-inputs',
   'running',
   // R1-07 只读主视图：轮询循环按 runtime 周期读取连接状态。
   'connection',
+]);
+
+// Phase 2 写透传白名单（ADR-0011）：命中资源且携带幂等键的写请求与读同语义
+// 转发；之外的写维持 remote_write_disabled。资源名以 ViewerWorker 实际路由为准。
+const REMOTE_WRITE_RESOURCES = new Set([
+  'input',
+  'queued-inputs',
+  'interrupt',
+  'user-turn',
 ]);
 
 // Template mount assets live under /tpl/{mountId}/… — the mount layout also
@@ -63,6 +74,11 @@ function isRemoteReadWhitelisted(method, pathname) {
   return isStaticAssetPath(pathname);
 }
 
+function isRemoteWriteWhitelisted(pathname) {
+  const match = pathname.match(/^\/api\/agents\/[^/]+\/([^/]+)$/);
+  return Boolean(match && REMOTE_WRITE_RESOURCES.has(match[1]));
+}
+
 // ── Connection-table injection (R1-01 ConnectionStore → proxy) ────────────
 // The host plane wires its ConnectionStore lookup here (per-call options take
 // precedence). Until wired, remote namespaces fail explicitly with
@@ -74,6 +90,12 @@ export function setProxyConnectionLookup(findConnection) {
     && (typeof findConnection === 'function' || typeof findConnection.getConnection === 'function')
     ? findConnection
     : null;
+}
+
+// 共享读取宿主装配的连接查找（remote-forward 等 ADR-0011 消费方复用同一张
+// ConnectionStore，server.js 仍只注册一次）。
+export function getProxyConnectionLookup() {
+  return _connectionLookup;
 }
 
 // Template-map and static-asset requests address the agent through a query
@@ -169,22 +191,37 @@ export async function proxyToViewer(req, res, options = {}) {
   const pathname = String(req.originalUrl || '').split(/[?#]/, 1)[0];
 
   if (target && target.scope === 'remote' && !isRemoteReadWhitelisted(method, pathname)) {
-    // Phase 1 remote surface is read-only: whitelisted reads forward to the
-    // remote origin, everything else is rejected locally — writes never
-    // leave this process, so the remote stays unaware of them.
     const isWrite = method !== 'GET' && method !== 'HEAD';
-    const failure = isWrite
-      ? buildRemoteFailure(
-        'remote_write_disabled',
-        'Remote connections are read-only; write operations are disabled',
+    const writeWhitelisted = isWrite && isRemoteWriteWhitelisted(pathname);
+    if (!writeWhitelisted) {
+      // Whitelisted reads forward to the remote origin. Everything else is
+      // rejected locally: non-whitelisted writes keep the Phase 1
+      // remote_write_disabled code, so the remote stays unaware of them.
+      const failure = isWrite
+        ? buildRemoteFailure(
+          'remote_write_disabled',
+          'Remote connections are read-only; write operations are disabled',
+          metadata,
+        )
+        : buildLocalFailureResponse({
+          status: 403,
+          message: `Remote read path is not whitelisted: ${method} ${pathname}`,
+        }, metadata);
+      res.status(403).json(failure);
+      return;
+    }
+    // Idempotency gate (ADR-0011): a remote write without an idempotency key
+    // is rejected before it can cross the tunnel. Keys arrive via header or
+    // query — the body has not been buffered at gate time.
+    if (!metadata.idempotencyKey) {
+      res.status(400).json(buildRemoteFailure(
+        'idempotency_key_required',
+        'Remote write operations require an idempotency key (x-idempotency-key)',
         metadata,
-      )
-      : buildLocalFailureResponse({
-        status: 403,
-        message: `Remote read path is not whitelisted: ${method} ${pathname}`,
-      }, metadata);
-    res.status(403).json(failure);
-    return;
+      ));
+      return;
+    }
+    // Fall through: forward like a read (tunnel origin + rewritten ids).
   }
 
   const headers = new Headers();

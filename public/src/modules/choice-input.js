@@ -253,7 +253,7 @@ window.rejectChoiceRequest = async function(requestId) {
   try {
     const response = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/interrupt`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
     });
     if (!response.ok) {
       console.error('[Choice] interrupt request failed:', response.status);
@@ -383,7 +383,7 @@ window.confirmChoiceQuestion = async function(requestId) {
     if (!targetRuntimeId) return;
     const res = await fetch(`/api/agents/${encodeURIComponent(targetRuntimeId)}/input`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         requestId,
         input: summary,

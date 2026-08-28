@@ -272,12 +272,37 @@ test('leaves remote message bodies byte-identical, including internal references
   }
 });
 
-test('rejects remote write methods locally with remote_write_disabled and never forwards', async () => {
+test('Phase 2: keyless writes to pass-through resources hit the idempotency gate locally', async () => {
   const fetchMock = mockFetch();
   try {
     const writes = [
       { method: 'POST', url: `/api/agents/${ENCODED_NAMESPACE}/input`, body: '{"text":"hello"}' },
       { method: 'POST', url: `/api/agents/${ENCODED_NAMESPACE}/interrupt`, body: '{}' },
+    ];
+    for (const { method, url, body } of writes) {
+      const res = makeRes();
+      await proxyToViewer(
+        makeReq(url, { method, body, headers: { 'x-operation-id': 'op-write' } }),
+        res,
+        { findConnection: FIND_CONNECTION },
+      );
+      assert.equal(res.statusCode, 400, `${method} ${url} status`);
+      assert.equal(res.jsonPayload.ok, false);
+      assert.equal(res.jsonPayload.code, 'idempotency_key_required');
+      assert.equal(res.jsonPayload.retryable, false);
+      assert.equal(res.jsonPayload.operationId, 'op-write');
+    }
+    assert.equal(fetchMock.calls.length, 0, 'keyless writes must not reach the remote');
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test('rejects remote write methods locally with remote_write_disabled and never forwards', async () => {
+  const fetchMock = mockFetch();
+  try {
+    const writes = [
+      // Not a pass-through resource (and a typo'd one at that).
       { method: 'POST', url: `/api/agents/${ENCODED_NAMESPACE}/queue-input`, body: '{"text":"hi"}' },
       { method: 'DELETE', url: `/api/agents/${ENCODED_NAMESPACE}` },
       { method: 'PUT', url: `/api/agents/${ENCODED_NAMESPACE}/todo`, body: '{}' },
@@ -285,7 +310,7 @@ test('rejects remote write methods locally with remote_write_disabled and never 
     for (const { method, url, body } of writes) {
       const res = makeRes();
       await proxyToViewer(
-        makeReq(url, { method, body, headers: { 'x-operation-id': 'op-write' } }),
+        makeReq(url, { method, body, headers: { 'x-operation-id': 'op-write', 'x-idempotency-key': 'idem-x' } }),
         res,
         { findConnection: FIND_CONNECTION },
       );
@@ -305,7 +330,9 @@ test('rejects remote write methods locally with remote_write_disabled and never 
 test('rejects remote reads outside the whitelist locally without forwarding', async () => {
   const fetchMock = mockFetch();
   try {
-    for (const url of [`/api/agents/${ENCODED_NAMESPACE}/queued-inputs`, `/api/logs?agentId=${ENCODED_NAMESPACE}`]) {
+    // queued-inputs moved to the Phase 2 pass-through surface; /api/logs stays
+    // outside the whitelist.
+    for (const url of [`/api/logs?agentId=${ENCODED_NAMESPACE}`]) {
       const res = makeRes();
       await proxyToViewer(makeReq(url), res, { findConnection: FIND_CONNECTION });
       assert.equal(res.statusCode, 403);
