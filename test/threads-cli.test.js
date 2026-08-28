@@ -33,6 +33,19 @@ function startFakeClawServer() {
       payload = { ok: true, threads: [{ threadId: 'wt-1', agentId: 'coder', status: 'idle', headSessionId: 's-1' }] };
     } else if (req.url === '/protoclaw/threads' && req.method === 'POST') {
       payload = { ok: true, thread: { threadId: 'wt-new', agentId: 'coder', status: 'idle', headSessionId: 's-1' } };
+    } else if (req.url === '/protoclaw/prebuilt_sessions' && req.method === 'POST') {
+      payload = {
+        ok: true,
+        session: { id: 'session-new', title: '工单025' },
+        threadId: 'wt-new-thread',
+        targetSessionId: 'session-new',
+      };
+    } else if (req.url === '/protoclaw/threads/wt-1' && req.method === 'GET') {
+      payload = { ok: true, thread: { threadId: 'wt-1', lifeState: 'executing' } };
+    } else if (req.url === '/protoclaw/threads/wt-idle' && req.method === 'GET') {
+      payload = { ok: true, thread: { threadId: 'wt-idle', lifeState: 'idle' } };
+    } else if (req.url === '/protoclaw/threads/wt-idle/commands') {
+      payload = { ok: true, command: { commandId: 'cmd-idle', status: 'pending' }, duplicate: false };
     } else if (req.url === '/protoclaw/threads/wt-1/events?after=2') {
       payload = { ok: true, events: [{ type: 'turn.completed', turn: 1 }], cursor: 3 };
     } else if (req.url === '/protoclaw/threads/wt-1/commands') {
@@ -109,6 +122,42 @@ test('claw threads maps generic commands to Thread HTTP routes', async () => {
   assert.deepEqual(advanceRequest.body, {
     toSessionId: 's-2', fromSessionId: 's-1', expectedRevision: 7, endKind: 'context_rotation',
   });
+});
+
+test('claw sessions create maps to prebuilt session API and prints thread handle', async () => {
+  const fake = await startFakeClawServer();
+
+  const result = await runCli(fake.port, [
+    'sessions', 'create', '--agent', 'programming-helper', '--session-type', 'coder',
+    '--title', '工单025', '--dir', 'D:/code/AgentDevClaw', '--format', 'json',
+  ]);
+  assert.equal(result.code, 0, result.stderr);
+  const createRequest = fake.requests.find((request) => request.url === '/protoclaw/prebuilt_sessions');
+  assert.deepEqual(createRequest.body, {
+    agentId: 'programming-helper', sessionType: 'coder', title: '工单025', openDirectory: 'D:/code/AgentDevClaw',
+  });
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.threadId, 'wt-new-thread');
+  assert.equal(parsed.session.id, 'session-new');
+});
+
+test('threads send --wait-started reports turn start and timeout via lifeState polling', async () => {
+  const fake = await startFakeClawServer();
+
+  const started = await runCli(fake.port, [
+    'threads', 'send', 'wt-1', '--text', '开工', '--wait-started', '5', '--format', 'json',
+  ]);
+  assert.equal(started.code, 0, started.stderr);
+  const startedPayload = JSON.parse(started.stdout);
+  assert.equal(startedPayload.started, true);
+  assert.equal(startedPayload.lifeState, 'executing');
+
+  const timedOut = await runCli(fake.port, [
+    'threads', 'send', 'wt-idle', '--text', '开工', '--wait-started', '1', '--format', 'json',
+  ]);
+  assert.equal(timedOut.code, 0, timedOut.stderr);
+  const timedOutPayload = JSON.parse(timedOut.stdout);
+  assert.equal(timedOutPayload.started, false);
 });
 
 test('claw threads validates required options without contacting the server', async () => {

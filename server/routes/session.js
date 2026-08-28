@@ -13,6 +13,7 @@ import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
 import {
   cleanSessionText,
+  containsReplacementChar,
   childProcessEnv,
 } from '../shared/string-helpers.js';
 import {
@@ -600,8 +601,16 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       res.status(400).json({ error: `unsupported sessionType: ${requestedSessionType}` });
       return;
     }
+    // 标题随创建写入（线程标题自动跟随 session.title），免去创建后单独 PUT；
+    // 拒绝编码损坏的文本（原生 curl 按 ANSI 代码页转码的典型产物）。
+    const requestedTitle = cleanSessionText(req.body?.title);
+    if (containsReplacementChar(requestedTitle)) {
+      res.status(400).json({ error: 'title 含无效编码字符（U+FFFD），通常由控制台代码页转码（如原生 curl）造成；请改用 claw CLI 传参' });
+      return;
+    }
     const session = await createPrebuiltSession(agent.id, {
       returnSummary: false,
+      title: requestedTitle || undefined,
       sessionType: requestedSessionType || undefined,
       sourceSessionId: req.body.sourceSessionId,
       formId: req.body.formId,
@@ -616,13 +625,15 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
     const status = await startManagedAgent(agent, session.id);
     trace.mark('target_runtime_started');
     // 线程宿主工作空间（coder）：新会话自动成为一条新线程的初始 head。
-    // 非 host 工作空间为 no-op；失败不阻断会话创建。
-    await getThreadIntegration().onSessionCreated(agent.id, session);
+    // 非 host 工作空间为 no-op；失败不阻断会话创建。返回值带 threadId
+    // 供调度方直接投递，省去创建后从列表反查。
+    const createdThread = await getThreadIntegration().onSessionCreated(agent.id, session);
     res.json({
       protocolVersion: 2,
       operationId: trace.operationId,
       revision: committedIndex.revision,
       session,
+      threadId: createdThread?.threadId || null,
       sessionDelta: {
         revision: committedIndex.revision,
         activeSessionId: committedIndex.activeSessionId,
@@ -655,6 +666,9 @@ app.put('/protoclaw/prebuilt_sessions/:sessionId/title', express.json(), async (
     }
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'title is required and must be non-empty' });
+    }
+    if (containsReplacementChar(title)) {
+      return res.status(400).json({ error: 'title 含无效编码字符（U+FFFD），通常由控制台代码页转码（如原生 curl）造成；请改用 claw CLI 传参' });
     }
 
     const updatedIndex = await updateSessionIndex(agentId, (index) => {

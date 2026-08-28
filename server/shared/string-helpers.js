@@ -15,6 +15,18 @@ export function cleanSessionText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * 检测文本中是否含 Unicode 替换字符（U+FFFD）。正常用户输入几乎不会
+ * 有意包含它；出现即意味着字节在某处经历了错误的编码转换——典型场景：
+ * 原生 exe（如 curl.exe）在非 UTF-8 代码页（zh-CN Windows 为 GBK）的
+ * 控制台下被 MSYS bash 按 ANSI 转码参数后提交的文本。此类内容入库即
+ * 是脏数据（部分 GBK 字节对恰好构成合法 UTF-8 双字节序列，混入异形
+ * 字符），在入口直接拒绝。
+ */
+export function containsReplacementChar(value) {
+  return typeof value === 'string' && value.includes('\uFFFD');
+}
+
 export function isWorkspaceSessionAgent(agentId) {
   return WORKSPACE_SESSION_AGENT_IDS.has(sanitizeSessionFragment(agentId));
 }

@@ -374,6 +374,19 @@ async function handleThreads(args = []) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    // --wait-started [秒]：投递后等待 turn 真正开始（delivered ≠ started），
+    // 判据是线程 lifeState 翻到 executing。适用于向 idle 线程派遣的标准
+    // 流程；向执行中线程追加指令时此等待会立即通过，需以 events 复核。
+    if (args.includes('--wait-started')) {
+      const raw = optionValue(args, '--wait-started');
+      const waitSeconds = raw === '' ? 15 : Math.min(60, Math.max(1, Number(raw) || 15));
+      const started = await waitForTurnStarted(threadId, waitSeconds);
+      payload.started = started.started;
+      if (started.lifeState) payload.lifeState = started.lifeState;
+      if (!started.started && format === 'text') {
+        console.error(`等待 ${waitSeconds}s 内未观察到 turn.started（lifeState=${started.lifeState || 'unknown'}）；指令已投递，可用 claw threads events 复核`);
+      }
+    }
     writeThreadPayload(payload, format);
     return;
   }
@@ -443,6 +456,76 @@ async function handleThreads(args = []) {
   throw new Error(`未知 threads 子命令: ${subcommand || '(空)'}（可用: list / create / show / events / send / deliver / advance / handoff-failed / resume / close / archive / unarchive）`);
 }
 
+// 轮询线程 lifeState 直到 executing（head runtime 开始处理投递指令）或超时。
+async function waitForTurnStarted(threadId, maxSeconds) {
+  const deadline = Date.now() + maxSeconds * 1000;
+  let lastLifeState = '';
+  while (Date.now() < deadline) {
+    await sleep(250);
+    let thread;
+    try {
+      thread = (await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`))?.thread;
+    } catch {
+      continue; // server 短暂不可达不打断等待窗口
+    }
+    lastLifeState = thread?.lifeState || '';
+    if (lastLifeState === 'executing') {
+      return { started: true, lifeState: lastLifeState };
+    }
+  }
+  return { started: false, lifeState: lastLifeState };
+}
+
+// ── Session dispatch（coder 派遣入口，替代裸 curl）──────────────
+// node argv 走 GetCommandLineW（UTF-16），中文标题无损；
+// 原生 curl.exe 在非 UTF-8 代码页控制台下会被按 ANSI 转码产生乱码，
+// 服务端对 U+FFFD 标题直接 400。
+
+function printSessionsHelp() {
+  console.log('用法:');
+  console.log('  claw sessions create --agent ID [--session-type main|coder] [--title T] [--dir D] [--format text|json]');
+  console.log('');
+  console.log('创建预制工作空间会话。线程宿主工作空间（sessionType=coder）的响应');
+  console.log('带 threadId（自动建立的线程），可直接用于 claw threads send。');
+}
+
+async function handleSessions(args = []) {
+  const [subcommand] = args;
+  if (!subcommand || subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
+    printSessionsHelp();
+    return;
+  }
+  if (subcommand !== 'create') {
+    throw new Error(`未知 sessions 子命令: ${subcommand}（可用: create）`);
+  }
+  const format = threadFormat(args);
+  const body = {
+    agentId: requireOption(args, '--agent'),
+  };
+  const sessionType = optionValue(args, '--session-type');
+  if (sessionType) body.sessionType = sessionType;
+  const title = optionValue(args, '--title');
+  if (title) body.title = title;
+  const dir = optionValue(args, '--dir');
+  if (dir) body.openDirectory = dir;
+  const payload = await clawServerFetch('/protoclaw/prebuilt_sessions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (format === 'json') {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  console.log(`Session ${payload.session?.id || payload.targetSessionId || '(unknown)'}`);
+  if (payload.session?.title) console.log(`  title: ${payload.session.title}`);
+  if (payload.threadId) {
+    console.log(`  thread: ${payload.threadId}`);
+  } else {
+    console.log('  thread: (未自动建立——非线程宿主工作空间或钩子失败，可用 claw threads list 核对)');
+  }
+}
+
 const LEGACY_ALIASES = {
   'new-session': 'create_session',
   'new-chat': 'create_session',
@@ -497,6 +580,11 @@ async function main() {
     return;
   }
 
+  if (command === 'sessions') {
+    await handleSessions(args.slice(1));
+    return;
+  }
+
   if (LEGACY_ALIASES[command]) {
     await handleLegacy(defaultWs, LEGACY_ALIASES[command], args.slice(1));
     return;
@@ -532,7 +620,7 @@ function printHelp() {
   console.log('  claw threads create --agent ID --session ID [--title T] [--mode MODE]');
   console.log('  claw threads show <thread-id>           Show a persisted thread');
   console.log('  claw threads events <thread-id> [--after N] [--format jsonl]');
-  console.log('  claw threads send <thread-id> --text TEXT [--idempotency-key KEY]');
+  console.log('  claw threads send <thread-id> --text TEXT [--idempotency-key KEY] [--wait-started [秒]]');
   console.log('  claw threads deliver <thread-id>         Retry pending command delivery');
   console.log('  claw threads advance <thread-id> --to-session ID --from-session ID');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S]');
@@ -540,6 +628,8 @@ function printHelp() {
   console.log('  claw threads close <thread-id> [--reason R]');
   console.log('  claw threads archive <thread-id>');
   console.log('  claw threads unarchive <thread-id>');
+  console.log('  claw sessions create --agent ID [--session-type coder] [--title T] [--dir D]');
+  console.log('                                         Create a workspace session; coder 响应带自动建立的 threadId');
   console.log('  claw run <name> --goal "..." [...]     Run a plain agent (viewer-observable; --debug uses Studio source overrides)');
   console.log('  claw acp coder                         Start the coder ACP stdio adapter');
   console.log('');
