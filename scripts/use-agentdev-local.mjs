@@ -78,6 +78,7 @@ for (const name of PACKAGES) {
 }
 
 console.log(`[agentdev:local] 完成：${linked}/${PACKAGES.length} 个包已链接。`);
+console.log('[agentdev:local] 提示：已在运行的 Claw 服务与 agent runtime 仍持有旧模块，重启整个服务后生效。');
 
 // 框架 dist 缺失时自动构建（切换即就绪，不把 require 失败留到运行期）。
 const missingDist = PACKAGES.filter((name) => {

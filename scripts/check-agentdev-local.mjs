@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 // prestart 预检：node_modules/@agentdevjs/*（4 框架包 + 14 生态包）必须是"可用构建"
 // （dist 存在且含所需导出）。
-// 背景：@agentdevjs/* 包尚未发布 npm，依赖经 package.json 的 file:../AgentDev/packages/*
-// 以 junction 形式提供。npm install 可能冲掉/未重建链接，本脚本把失败提前为一条
-// 可执行的修复指引；若当前链接不可用而相邻 AgentDev 仓库构建可用，则自动重建。
+// 开发态额外强制"本地链接不变量"：@agentdevjs/core 声明为 file: 时，node_modules 中的
+// 包必须是指向相邻框架仓库对应包的链接（junction/symlink）。实体拷贝、失效链接、指向
+// 其他目标的链接一律不可用——快照必然与框架仓库脱节，缺失的新 API 只会在运行期以
+// "framework too old" 一类错误暴露（模型热切换事故的根因）。
+// 背景：依赖经 package.json 的 file:../AgentDev/packages/* 以 junction 形式提供
+// （发布态为 npm 正式包，自带 dist，无链接概念，链接校验自动跳过）。npm install 可能
+// 冲掉/未重建链接，本脚本把失败提前为一条可执行的修复指引；若相邻 AgentDev 仓库构建
+// 可用，则自动重建全部链接。
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
 
 const projectRoot = resolve(import.meta.dirname, '..');
 const scopeDir = join(projectRoot, 'node_modules', '@agentdevjs');
@@ -53,13 +59,39 @@ function isFeaturePackage(name) {
   return !(name in REQUIRED_EXPORTS);
 }
 
-// 探测单个包：框架包严格校验导出名；生态包校验 dist 入口存在。
-function probe(path, name) {
+// 与 is-dev-mode.mjs 同一判定语义（@agentdevjs/core 声明为 file: 即开发态）。
+function isDevForm() {
+  try {
+    const dep = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8')).dependencies?.['@agentdevjs/core'];
+    return typeof dep === 'string' && dep.startsWith('file:');
+  } catch {
+    return false;
+  }
+}
+
+// 探测单个包。expectLink（开发态 node_modules 探测）时强制本地链接不变量：
+// 实体目录 / 失效链接 / 指向 expectedReal 之外目标的链接均判 unlinked。
+// expectedReal 为相邻仓库对应包的 realpath，null 表示跳过目标比对（相邻包缺失时）。
+function probe(path, name, expectLink = false, expectedReal = null) {
   let st;
   try {
     st = lstatSync(path);
   } catch {
     return { status: 'missing' };
+  }
+  if (expectLink) {
+    if (!st.isSymbolicLink()) {
+      return { status: 'unlinked', why: '是实体目录而非本地链接' };
+    }
+    let real;
+    try {
+      real = realpathSync(path);
+    } catch {
+      return { status: 'unlinked', why: '链接已失效' };
+    }
+    if (expectedReal && real !== expectedReal) {
+      return { status: 'unlinked', why: `链接指向了 ${real} 而非相邻框架仓库对应包` };
+    }
   }
   const isFeat = isFeaturePackage(name);
   if (isFeat) {
@@ -86,6 +118,9 @@ function reason(state) {
   if (state.status === 'missing') {
     return '不存在（仓库根目录还没执行过 npm install，或链接被移除）';
   }
+  if (state.status === 'unlinked') {
+    return `${state.why || '未链接到相邻框架仓库'}；开发态要求 node_modules/@agentdevjs/* 为指向相邻仓库的本地链接，实体快照会与框架仓库脱节（新 API 缺失，运行期报 "framework too old"）`;
+  }
   if (state.status === 'no-dist') {
     if (state.missingFiles) {
       return `缺少构建产物 ${state.missingFiles.join(', ')}（框架仓库未构建，或构建被中断）`;
@@ -95,65 +130,87 @@ function reason(state) {
   return `缺少导出 ${state.missing.join(', ')}（构建产物过期，需重新构建框架仓库）`;
 }
 
-const states = new Map();
-for (const name of PACKAGES) {
-  states.set(name, probe(join(scopeDir, name), name));
-}
+function main() {
+  const isDev = isDevForm();
+  const sibling = siblingAgentdevPath();
+  const hasSibling = existsSync(join(sibling, 'package.json'));
 
-const allOk = [...states.values()].every((s) => s.status === 'ok');
-if (allOk) {
+  // 相邻仓库对应包的 realpath，供开发态链接目标比对
+  const expectedReals = new Map();
   for (const name of PACKAGES) {
-    const state = states.get(name);
-    const where = state.isLink ? `本地链接 -> ${realpathSync(join(scopeDir, name))}` : 'npm 安装';
-    console.log(`[agentdev:check] @agentdevjs/${name} 可用（${where}）`);
-  }
-  process.exit(0);
-}
-
-// 存在不可用的包：若相邻 AgentDev 仓库对应包构建都可用，自动重建全部链接
-const sibling = siblingAgentdevPath();
-const hasSibling = existsSync(join(sibling, 'package.json'));
-const siblingStates = new Map();
-for (const name of PACKAGES) {
-  const dir = PACKAGE_MAP[name];
-  siblingStates.set(name, hasSibling ? probe(join(sibling, 'packages', dir), name) : { status: 'missing' });
-}
-const siblingAllOk = [...siblingStates.values()].every((s) => s.status === 'ok');
-
-if (hasSibling && siblingAllOk) {
-  for (const name of PACKAGES) {
-    if (states.get(name).status !== 'ok') {
-      console.warn(`[agentdev:check] 当前 @agentdevjs/${name} 不可用：${reason(states.get(name))}`);
+    const p = join(sibling, 'packages', PACKAGE_MAP[name]);
+    try {
+      expectedReals.set(name, hasSibling && existsSync(p) ? realpathSync(p) : null);
+    } catch {
+      expectedReals.set(name, null);
     }
   }
-  console.warn(`[agentdev:check] 尝试重建本地链接 -> ${sibling}`);
-  const link = spawnSync(process.execPath, [linkScript, sibling], { stdio: 'inherit' });
-  let repaired = true;
+
+  const states = new Map();
   for (const name of PACKAGES) {
-    if (probe(join(scopeDir, name), name).status !== 'ok') repaired = false;
+    states.set(name, probe(join(scopeDir, name), name, isDev, expectedReals.get(name)));
   }
-  if (link.status === 0 && repaired) {
-    console.log('[agentdev:check] 已修复：本地链接重建成功');
+
+  const allOk = [...states.values()].every((s) => s.status === 'ok');
+  if (allOk) {
+    for (const name of PACKAGES) {
+      const state = states.get(name);
+      const where = state.isLink ? `本地链接 -> ${realpathSync(join(scopeDir, name))}` : 'npm 安装';
+      console.log(`[agentdev:check] @agentdevjs/${name} 可用（${where}）`);
+    }
     process.exit(0);
   }
-  console.error('[agentdev:check] 自动修复失败，请手动执行 npm run agentdev:local');
-  process.exit(1);
-}
 
-for (const name of PACKAGES) {
-  const state = states.get(name);
-  if (state.status !== 'ok') {
-    console.error(`[agentdev:check] @agentdevjs/${name} 不可用：${reason(state)}`);
-    if (hasSibling && siblingStates.get(name).status !== 'ok') {
-      console.error(`[agentdev:check] 相邻框架仓库对应包也不可用：${reason(siblingStates.get(name))}`);
+  // 存在不可用的包：若相邻 AgentDev 仓库对应包构建都可用，自动重建全部链接
+  const siblingStates = new Map();
+  for (const name of PACKAGES) {
+    const dir = PACKAGE_MAP[name];
+    siblingStates.set(name, hasSibling ? probe(join(sibling, 'packages', dir), name) : { status: 'missing' });
+  }
+  const siblingAllOk = [...siblingStates.values()].every((s) => s.status === 'ok');
+
+  if (hasSibling && siblingAllOk) {
+    for (const name of PACKAGES) {
+      if (states.get(name).status !== 'ok') {
+        console.warn(`[agentdev:check] 当前 @agentdevjs/${name} 不可用：${reason(states.get(name))}`);
+      }
+    }
+    console.warn(`[agentdev:check] 尝试重建本地链接 -> ${sibling}`);
+    const link = spawnSync(process.execPath, [linkScript, sibling], { stdio: 'inherit' });
+    let repaired = true;
+    for (const name of PACKAGES) {
+      if (probe(join(scopeDir, name), name, isDev, expectedReals.get(name)).status !== 'ok') repaired = false;
+    }
+    if (link.status === 0 && repaired) {
+      console.log('[agentdev:check] 已修复：本地链接重建成功');
+      process.exit(0);
+    }
+    console.error('[agentdev:check] 自动修复失败，请手动执行 npm run agentdev:local');
+    process.exit(1);
+  }
+
+  for (const name of PACKAGES) {
+    const state = states.get(name);
+    if (state.status !== 'ok') {
+      console.error(`[agentdev:check] @agentdevjs/${name} 不可用：${reason(state)}`);
+      if (hasSibling && siblingStates.get(name).status !== 'ok') {
+        console.error(`[agentdev:check] 相邻框架仓库对应包也不可用：${reason(siblingStates.get(name))}`);
+      }
     }
   }
-}
-if (!hasSibling) {
-  console.error(`[agentdev:check] 未找到相邻框架仓库 ${sibling}`);
-}
-console.error(`开发模式需要本地构建的 AgentDev 框架仓库：
+  if (!hasSibling) {
+    console.error(`[agentdev:check] 未找到相邻框架仓库 ${sibling}`);
+  }
+  console.error(`开发模式需要本地构建的 AgentDev 框架仓库：
   1. 在相邻目录放置 AgentDev 源码仓库并构建：cd <AgentDev> && npm install && npm run build
   2. node scripts/use-agentdev-local.mjs <AgentDev 路径>   （或设置 AGENTDEV_LOCAL_PATH 后直接 npm start）
   3. npm start`);
-process.exit(1);
+  process.exit(1);
+}
+
+// CLI 守卫：仅直接执行时运行主流程；被测试 import 时只暴露 probe / reason。
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main();
+}
+
+export { PACKAGE_MAP, REQUIRED_EXPORTS, probe, reason, isDevForm, siblingAgentdevPath };

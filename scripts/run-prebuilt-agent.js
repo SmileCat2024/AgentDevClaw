@@ -605,7 +605,11 @@ class SessionLifecycle {
     };
 
     if (typeof this.agent?.setModel !== 'function') {
-      reply({ ok: false, error: 'agent.setModel not available (framework too old)' });
+      reply({
+        ok: false,
+        error: 'agent.setModel 不可用：runtime 加载的 @agentdevjs/core 缺少该 API。'
+          + '开发模式请运行 npm run agentdev:local 重建链接后重启服务；发布模式请升级 @agentdevjs/core。',
+      });
       return;
     }
 
@@ -626,7 +630,11 @@ class SessionLifecycle {
         detail = msg.presetName;
       } else {
         if (typeof this.agent.setThinkingEffort !== 'function') {
-          reply({ ok: false, error: 'agent.setThinkingEffort not available (framework too old)' });
+          reply({
+            ok: false,
+            error: 'agent.setThinkingEffort 不可用：runtime 加载的 @agentdevjs/core 缺少该 API。'
+              + '开发模式请运行 npm run agentdev:local 重建链接后重启服务；发布模式请升级 @agentdevjs/core。',
+          });
           return;
         }
         swapped = this.agent.setThinkingEffort(msg.thinkingEffort ?? null, { source: 'user' });
