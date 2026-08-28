@@ -153,13 +153,22 @@ function _findViewportTopRowIdx(rows) {
 // release: the window is frozen at the drag start (arrival rows are
 // cv-hidden — fold attempts are guarded no-ops), and a fold+compensation
 // write mid-drag would shift the scrollbar thumb under the user's hand.
-function _runCollapseScan(settleContext) {
+function _runCollapseScan(settleContext, focusScrollTop) {
   if (!showChatProcess || !container) return;
   if (typeof syncRowCollapseState !== 'function') return;
   var rows = _cachedRows;
   if (!rows || rows.length === 0) return;
 
-  var scrollTop = container.scrollTop;
+  // focusScrollTop: landing scans run BEFORE the follow-mode settlement has
+  // locked the viewport to its final position (container.scrollTop still
+  // holds the pre-toggle / pre-render reading position). Scanning around the
+  // stale position folds the wrong rows and leaves the incoming viewport
+  // expanded until the scroll-stop settle folds it ~150ms later — the
+  // "blocks appear, then collapse after a delay" jolt. Callers pass the
+  // post-lock position so the scan covers the viewport the user will see.
+  var scrollTop = typeof focusScrollTop === 'number'
+    ? focusScrollTop
+    : container.scrollTop;
   var viewBottom = scrollTop + (container.clientHeight || 1);
 
   // Rows are in document order (offsetTop monotonic): binary search for the
@@ -179,7 +188,7 @@ function _runCollapseScan(settleContext) {
     // before `first` are fully above by construction (binary search), so
     // they can only hit the compensated above-branch.
     var backStart = Math.max(0, first - 5);
-    for (var b = backStart; b < first; b++) _foldRowIfOutside(rows[b]);
+    for (var b = backStart; b < first; b++) _foldRowIfOutside(rows[b], settleContext, scrollTop);
     // Walk intersecting rows plus a few fully-below rows (they are the next
     // to enter when scrolling down — fold them before they become visible).
     var belowRun = 0;
@@ -188,13 +197,15 @@ function _runCollapseScan(settleContext) {
       if (row.offsetTop >= viewBottom) {
         if (++belowRun > 4) break;
       }
-      _foldRowIfOutside(row, settleContext);
+      _foldRowIfOutside(row, settleContext, scrollTop);
     }
   }, 300);
 }
 
-function _foldRowIfOutside(row, settleContext) {
-  var scrollTop = container.scrollTop;
+function _foldRowIfOutside(row, settleContext, focusScrollTop) {
+  var scrollTop = typeof focusScrollTop === 'number'
+    ? focusScrollTop
+    : container.scrollTop;
   var viewBottom = scrollTop + (container.clientHeight || 1);
   var rowTop = row.offsetTop;
   var rowBottom = rowTop + row.offsetHeight;
@@ -389,9 +400,28 @@ function _applyWindow() {
     return;
   }
 
-  // Phase 1: CSS writes — toggle cv-hidden
-  // NO layout reads, NO scrollTop compensation needed.
-  // cv-hidden preserves element height, so the scrollbar stays accurate.
+  // Phase 1: CSS writes — toggle cv-hidden.
+  // NO layout reads inside the write pass, NO scrollTop compensation needed
+  // for hiding: cv-hidden preserves the remembered real height, so the
+  // scrollbar stays accurate.
+  //
+  // Reveal is different: the placeholder height (contain-intrinsic-size
+  // estimate) differs from the real height, and the snap displaces every
+  // row below the revealed one. For rows fully above the viewport that
+  // displacement moves the visible content — the viewport jitter felt while
+  // scrolling upward. Capture placeholder heights before the writes,
+  // re-measure after, and compensate scrollTop by the delta of above-viewport
+  // rows. Reads are batched around the write pass: exactly two layouts
+  // regardless of how many rows change state. Follow mode skips the
+  // compensation — the bottom-lock settlement absorbs height changes there
+  // (same rule as the fold compensation in _foldRowIfOutside).
+  var revealPlaceholders = null;
+  if (toReveal.length > 0 && !followLatestEnabled) {
+    revealPlaceholders = new Array(toReveal.length);
+    for (var p = 0; p < toReveal.length; p++) {
+      revealPlaceholders[p] = { row: toReveal[p], top: toReveal[p].offsetTop, hBefore: toReveal[p].offsetHeight };
+    }
+  }
   runWithSuppressedChatViewportObservers(function() {
     for (var j = 0; j < toHide.length; j++) {
       _setRowCvVisible(toHide[j], false);
@@ -400,6 +430,26 @@ function _applyWindow() {
       _setRowCvVisible(toReveal[k], true);
     }
   }, 500);
+
+  if (revealPlaceholders) {
+    var compensate = 0;
+    for (var q = 0; q < revealPlaceholders.length; q++) {
+      var ph = revealPlaceholders[q];
+      var hAfter = ph.row.offsetHeight;
+      // Only rows fully above the viewport displace visible content; fully
+      // below rows shift nothing the user sees. top/hBefore were captured
+      // pre-reveal, so the position test reflects the pre-snap layout.
+      if (hAfter !== ph.hBefore && ph.top + Math.min(ph.hBefore, hAfter) <= scrollTop) {
+        compensate += hAfter - ph.hBefore;
+      }
+    }
+    if (compensate !== 0) {
+      container.scrollTop += compensate;
+      // Keep the delta tracker in sync so the synthetic scroll event fired
+      // by this write is not misread as another large user jump.
+      _lastScrollTop = container.scrollTop;
+    }
+  }
 
   // Update pixel bounds after CSS changes
   _updatePixBounds(rows, windowStart, windowEnd);
@@ -418,6 +468,14 @@ function _updatePixBounds(rows, windowStart, windowEnd) {
 }
 
 /* ── public API ── */
+
+// Landing collapse scan with settle powers (spanning rows may fold and
+// re-anchor). Used by render() after it locks the viewport to its final
+// position: the scan inside applyProcessDistance runs before that lock and
+// therefore scans a stale scrollTop.
+function runLandingCollapseScan() {
+  _runCollapseScan(true);
+}
 
 function applyProcessDistance(root) {
   root = root || container;
@@ -473,10 +531,21 @@ function applyProcessDistance(root) {
 
   // Landing settle: comprehensive fold in the same task as the reveal, so
   // the first paint already shows stubs (folding 200ms later caused a
-  // visible jump every time a session opened). Background patches run the
-  // conservative scan only — see the collapse timing contract above.
-  if (isLanding) _runCollapseScan(true);
-  else _runCollapseScan(false);
+  // visible jump every time a session opened). In follow mode the viewport
+  // is about to be locked to the bottom by the settlement — scan THAT
+  // position, not the stale pre-lock scrollTop, or the incoming viewport
+  // stays expanded until the scroll-stop settle folds it ~150ms later.
+  // Background patches run the conservative scan only — see the collapse
+  // timing contract above.
+  if (isLanding) {
+    var focusTop = -1;
+    if (followLatestEnabled) {
+      focusTop = Math.max(0, container.scrollHeight - (container.clientHeight || 1));
+    }
+    _runCollapseScan(true, focusTop);
+  } else {
+    _runCollapseScan(false);
+  }
 }
 
 function clearProcessDistance(root) {

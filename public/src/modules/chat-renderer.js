@@ -742,6 +742,19 @@ function render(messages) {
 
   updateRollbackActionVisibility();
   applyConversationProcessState(container);
+  // Show-process mode + follow: the landing collapse scan inside
+  // applyProcessDistance runs against the pre-lock scrollTop, so it scans a
+  // stale position (rows that are still cv-hidden there) instead of the
+  // viewport the user is about to see. Locking to the bottom here — before
+  // the first paint — puts the viewport at its final position and lets the
+  // landing scan fold the visible rows in the same task. Without this, the
+  // first frame paints expanded tool blocks and they fold only after the
+  // scroll-stop settle (~150ms later): the flash-then-collapse seen when a
+  // session renders. The viewport settlement below re-locks idempotently.
+  if (shouldFollowAfterMutation && showChatProcess && typeof lockChatViewportToBottomNow === 'function') {
+    lockChatViewportToBottomNow();
+    if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
+  }
   restoreUserCollapseState(container);
   updateFollowLatestButton();
   if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
