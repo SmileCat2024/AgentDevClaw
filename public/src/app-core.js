@@ -804,6 +804,22 @@ function getRuntimeId(record) {
   return null;
 }
 
+/**
+ * 控制类请求（tool_state / swap 系）的宿主身份收敛点。本地会话取 allAgents
+ * 记录的逻辑 id；远程会话不在 allAgents（ADR-0010 统一投影），宿主身份取自
+ * 远程目录条目，避免请求体缺 agentId 被服务端 400 拒绝。
+ */
+function getCurrentControlAgentId() {
+  const record = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+  const logical = getLogicalAgentId(record);
+  if (logical) return logical;
+  if (typeof window !== 'undefined' && window.RemoteConnections?.getEntryHostAgentId) {
+    const runtimeRef = typeof currentRuntimeAgentId !== 'undefined' ? currentRuntimeAgentId : '';
+    if (runtimeRef) return window.RemoteConnections.getEntryHostAgentId(runtimeRef);
+  }
+  return null;
+}
+
 function getActiveSessionId(record = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
   // workspace_sessions.activeSessionId is the current canonical nested field;
   // the top-level fields are legacy/API aliases and are only consulted when

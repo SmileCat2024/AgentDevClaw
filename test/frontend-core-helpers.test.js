@@ -28,6 +28,46 @@ function createCoreSandbox(overrides = {}) {
   return ctx;
 }
 
+// ── getCurrentControlAgentId ──
+
+describe('app-core: getCurrentControlAgentId', () => {
+  // createCoreSandbox 的 overrides 循环用 JSON.stringify 注入值，函数值会被
+  // 置为 undefined；函数替身一律直接挂 context 属性（app-core 未用 let 声明
+  // 这些名字，属性不会被遮蔽）。currentRuntimeAgentId 在沙箱内有 let 绑定，
+  // 必须经 ctx.run 赋值才会被脚本看到。
+  function coreWithControlId() {
+    return createCoreSandbox();
+  }
+
+  it('prefers the logical id of the current local agent record', () => {
+    const ctx = coreWithControlId();
+    ctx.getCurrentAgentRecord = () => ({ source: 'prebuilt', id: 'programming-helper' });
+    assert.equal(ctx.run('getCurrentControlAgentId()'), 'programming-helper');
+  });
+
+  it('falls back to the remote catalog entry host for remote sessions', () => {
+    const ctx = coreWithControlId();
+    ctx.getCurrentAgentRecord = () => null;
+    ctx.run('currentRuntimeAgentId = "remote:server-a:rt-1"');
+    ctx.window.RemoteConnections = {
+      getEntryHostAgentId: (ref) => (ref === 'remote:server-a:rt-1' ? 'programming-helper' : null),
+    };
+    assert.equal(ctx.run('getCurrentControlAgentId()'), 'programming-helper');
+  });
+
+  it('returns null for local ids without a record and without RemoteConnections', () => {
+    const ctx = coreWithControlId();
+    ctx.getCurrentAgentRecord = () => null;
+    ctx.run('currentRuntimeAgentId = "plain-agent"');
+    assert.equal(ctx.run('getCurrentControlAgentId()'), null);
+
+    const noModule = coreWithControlId();
+    noModule.getCurrentAgentRecord = () => null;
+    noModule.run('currentRuntimeAgentId = "remote:server-a:rt-1"');
+    assert.equal(noModule.run('getCurrentControlAgentId()'), null);
+  });
+});
+
 // ── getFeatureStatus ──
 
 describe('app-core: getFeatureStatus', () => {

@@ -776,3 +776,129 @@ describe('state-control remote namespace branches', () => {
     }
   });
 });
+
+// ── 8. agent_detail remote forward (read path) ──────────────────────────
+
+describe('agent_detail remote namespace branch', () => {
+  const silentRes = () => ({
+    statusCode: null,
+    jsonPayload: null,
+    status(code) { this.statusCode = code; return this; },
+    json(payload) { this.jsonPayload = payload; },
+  });
+
+  it('forwards a namespaced agentId to the remote route with a bare id in the query', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const handler = (() => {
+      let captured = null;
+      const mod = createAgentLifecycleModule({
+        sessionApi: {},
+        getAgents: async () => [],
+        getAgentsLight: async () => [],
+        enrichAgent: async (agent) => agent,
+        requireAgentLight: async (id) => ({ id, relativeDir: 'test', name: id }),
+        resolveRuntimeDisplayName: async (agent) => agent?.name || 'test-agent',
+        readViewerJson: async () => ({ agents: [], currentAgentId: null }),
+        getPendingInputCount: async () => 0,
+        resolveAgentModelPresets: async () => null,
+      });
+      mod.setupRoutes(
+        { get: (routePath, ...rest) => { if (routePath === '/protoclaw/agent_detail') captured = rest[rest.length - 1]; }, post: () => {}, put: () => {}, delete: () => {} },
+        { json: () => (req, res, next) => next() },
+      );
+      return captured;
+    })();
+    const fetchMock = mockFetch(() => ({
+      status: 200,
+      body: JSON.stringify({ workspace_sessions: { activeSessionId: 's1', sessions: [] }, workspace_data: {}, workspace_state: { openDirectory: 'D:/remote' } }),
+    }));
+    try {
+      const res = silentRes();
+      await handler(
+        { query: { agentId: NAMESPACE } },
+        res,
+        (error) => { throw error; },
+      );
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.jsonPayload.workspace_state.openDirectory, 'D:/remote');
+      assert.equal(fetchMock.calls.length, 1);
+      assert.equal(fetchMock.calls[0].url, `${REMOTE_ORIGIN}/protoclaw/agent_detail?agentId=agent-9`);
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('keeps the local branch off the wire: local agentId stays a local table lookup', async () => {
+    let handler = null;
+    const mod = createAgentLifecycleModule({
+      sessionApi: {},
+      getAgents: async () => [],
+      getAgentsLight: async () => [{ id: 'local-agent', name: 'local' }],
+      enrichAgent: async (agent) => agent,
+      requireAgentLight: async (id) => ({ id, relativeDir: 'test', name: id }),
+      resolveRuntimeDisplayName: async (agent) => agent?.name || 'test-agent',
+      readViewerJson: async () => ({ agents: [], currentAgentId: null }),
+      getPendingInputCount: async () => 0,
+      resolveAgentModelPresets: async () => null,
+    });
+    mod.setupRoutes(
+      { get: (routePath, ...rest) => { if (routePath === '/protoclaw/agent_detail') handler = rest[rest.length - 1]; }, post: () => {}, put: () => {}, delete: () => {} },
+      { json: () => (req, res, next) => next() },
+    );
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const fetchMock = mockFetch();
+    try {
+      const res = silentRes();
+      await handler(
+        { query: { agentId: 'local-agent' } },
+        res,
+        (error) => { throw error; },
+      );
+      assert.equal(res.statusCode, null, 'local success responds via plain res.json');
+      assert.equal(res.jsonPayload.workspace_sessions.activeSessionId, null, 'empty light fixture still yields the local payload shape');
+      assert.equal(typeof res.jsonPayload.workspace_data, 'object');
+      assert.equal(fetchMock.calls.length, 0, 'local agent_detail must never produce an HTTP forward');
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+});
+
+// ── 9. frontend host identity from the catalog (tool_state 400 fix) ─────
+
+describe('frontend getEntryHostAgentId', () => {
+  function catalogWithEntry() {
+    return {
+      connections: [{
+        connectionId: 'server-a',
+        name: 'Lab-B',
+        status: 'connected',
+        workspaces: [{
+          projectKey: 'k1',
+          entries: [{
+            id: 'remote:server-a:rt-1',
+            runtimeId: 'remote:server-a:rt-1',
+            agentId: 'remote:server-a:programming-helper',
+            source: 'child',
+          }],
+        }],
+      }],
+    };
+  }
+
+  it('resolves the owning host logical id from a namespaced runtime reference', async () => {
+    const ctx = loadRemoteModule(catalogWithEntry());
+    await ctx.window.RemoteConnections.refresh();
+    assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId('remote:server-a:rt-1'), 'programming-helper');
+  });
+
+  it('returns null for unknown references and non-namespaced ids instead of guessing', async () => {
+    const ctx = loadRemoteModule(catalogWithEntry());
+    await ctx.window.RemoteConnections.refresh();
+    assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId('remote:ghost:rt-9'), null);
+    assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId('plain-agent'), null);
+    assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId(''), null);
+  });
+});

@@ -358,6 +358,21 @@ export function createAgentLifecycleModule(ctx) {
           res.status(400).json({ error: 'agentId is required' });
           return;
         }
+        // ADR-0011：远程命名空间身份 → 转发远程同名 agent_detail（GET 读路径，
+        // 返回远程端自己的 workspace 会话与状态数据）；本地身份走下方既有查表
+        // 路径，行为字节级不动。
+        try {
+          const hostTarget = resolveForwardHostTarget(agentId);
+          if (hostTarget.scope === 'remote') {
+            return await forwardProtoclawRoute(
+              res,
+              hostTarget,
+              '/protoclaw/agent_detail?agentId=' + encodeURIComponent(bareId(agentId)),
+            );
+          }
+        } catch (error) {
+          return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+        }
         const lightAgents = await getAgentsLight();
         const agent = lightAgents.find((item) => item.id === agentId);
         if (!agent) {

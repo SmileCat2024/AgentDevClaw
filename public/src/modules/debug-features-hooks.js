@@ -128,7 +128,7 @@ window.toggleToolSchema = toggleToolSchema;
  */
 async function toggleToolState(scope, name, checkbox) {
   const action = checkbox.checked ? 'enable' : 'disable';
-  const body = { agentId: getLogicalAgentId(getCurrentAgentRecord()), scope, name, action };
+  const body = { agentId: getCurrentControlAgentId(), scope, name, action };
   const runtimeId = getRuntimeId(currentRuntimeAgentId);
   if (runtimeId) body.runtimeId = runtimeId;
   try {
@@ -158,7 +158,7 @@ window.toggleToolState = toggleToolState;
  */
 async function toggleHookState(lifecycle, featureName, methodName, checkbox) {
   const action = checkbox.checked ? 'enable' : 'disable';
-  const body = { agentId: getLogicalAgentId(getCurrentAgentRecord()), scope: 'hook', lifecycle, featureName, methodName, action };
+  const body = { agentId: getCurrentControlAgentId(), scope: 'hook', lifecycle, featureName, methodName, action };
   const runtimeId = getRuntimeId(currentRuntimeAgentId);
   if (runtimeId) body.runtimeId = runtimeId;
   try {

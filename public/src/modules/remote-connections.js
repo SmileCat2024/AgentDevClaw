@@ -226,6 +226,24 @@ function resolveRuntimeRef(logicalAgentId) {
   return null;
 }
 
+// 命名空间运行时引用 → 目录条目宿主的逻辑 agent id（如 'programming-helper'）。
+// 控制类请求（tool_state / swap 系）在远程会话下用它在 allAgents 之外解析宿主
+// 身份；非目录条目（本地 id / 未知引用）返回 null，调用方显式失败不猜目标。
+function getEntryHostAgentId(namespacedId) {
+  const wanted = typeof namespacedId === 'string' ? namespacedId : '';
+  if (!wanted) return null;
+  for (const section of _rcVisibleSections.values()) {
+    for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+      for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
+        if (entry.runtimeId === wanted || entry.id === wanted) {
+          return splitRemoteNamespaceId(entry.agentId)?.innerId || null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function tryRestoreRemoteFocus() {
   if (_rcBootstrapSeen) return;
   _rcBootstrapSeen = true;
@@ -680,5 +698,6 @@ window.RemoteConnections = {
   refresh: refreshRemoteCatalog,
   openManager: openRemoteConnectionsManager,
   resolveRuntimeRef,
+  getEntryHostAgentId,
   isRemoteWriteEnabled,
 };
