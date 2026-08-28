@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 // 构建 features/ 下被预制 agent 按源码路径引用的 feature 包。
 // 这些包的 dist 不入库（gitignore），也不在 local-features/tsconfig.json 覆盖范围内，
-// 必须在 prestart 现场构建；新增此类 feature 时把目录名加进 FEATURE_DIRS。
-import { existsSync } from 'fs';
+// 必须在 prestart 现场构建；新增此类 feature 时把目录名登记进 prebuilt-feature-dirs.mjs。
+//
+// 依赖形态：子包对 @agentdevjs/core 的声明固定为 semver（形态无关）。
+// 构建时按"相邻框架仓库可用性"自动分流（与声明形态无关，覆盖 file: 开发态
+// 与 agentdev:local 调试态）：相邻 core 已检出且已构建（dist 存在）时，把
+// install 得到的 registry 副本替换为指向它的 junction（与 agentdev:local 同一
+// 模式），使构建解析到本地最新类型——使用未发布框架 API 的 feature 因此可以
+// 直接运行。无可用的相邻仓库时保持 registry 版本；此时依赖未发布 API 的
+// feature 构建失败属预期（等待框架发版）。
+import { existsSync, realpathSync, rmSync, symlinkSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
+import { FEATURE_DIRS } from './prebuilt-feature-dirs.mjs';
 
-const FEATURE_DIRS = ['force-continuation', 'tickets-build-flow'];
 const root = resolve(import.meta.dirname, '..');
 const IS_WIN = process.platform === 'win32';
 
@@ -18,23 +26,49 @@ function runNpm(args, cwd) {
     : spawnSync('npm', args, { cwd, stdio: 'inherit' });
 }
 
+function runStep(name, dir, label, args) {
+  console.log(`[build:features] features/${name}: ${label}`);
+  const r = runNpm(args, dir);
+  if (r.error || r.status !== 0) {
+    console.error(`[build:features] features/${name} ${label} 失败${r.error ? `: ${r.error.message}` : ''}`);
+    process.exit(r.status ?? 1);
+  }
+}
+
+// 相邻框架 core 的可用性分流（与声明形态无关，覆盖 file: 开发态与 agentdev:local 调试态）：
+//   已检出且已构建（dist/index.d.ts 存在）-> 把子包 install 得到的 registry 版 core
+//     替换为指向它的 junction（与 agentdev:local 同一模式），构建解析到本地最新类型，
+//     使用未发布框架 API 的 feature 因此可以直接运行；
+//   已检出但未构建 -> 先在框架仓库自动编译 core（仅 core，够子包类型解析即可）；
+//   未检出（纯发布环境）-> 保持 registry 版本，依赖未发布 API 的 feature 构建失败属预期。
+const LOCAL_CORE_DIR = join(root, '..', 'AgentDev', 'packages', 'core');
+
+function linkLocalCore(name, featureDir) {
+  const dest = join(featureDir, 'node_modules', '@agentdevjs', 'core');
+  if (!existsSync(LOCAL_CORE_DIR)) {
+    console.log(`[build:features] features/${name}: 未检出相邻框架仓库，@agentdevjs/core 使用 registry 版`);
+    return;
+  }
+  if (!existsSync(join(LOCAL_CORE_DIR, 'dist', 'index.d.ts'))) {
+    console.log(`[build:features] features/${name}: 相邻框架 core 未构建，自动编译 AgentDev @agentdevjs/core ...`);
+    runStep(name, LOCAL_CORE_DIR, '构建框架 core', ['run', 'build', '-w', '@agentdevjs/core']);
+  }
+  try {
+    if (existsSync(dest) && realpathSync(dest) === realpathSync(LOCAL_CORE_DIR)) return; // 已是本地链接
+  } catch { /* dest 异常，重建 */ }
+  rmSync(dest, { recursive: true, force: true });
+  symlinkSync(LOCAL_CORE_DIR, dest, IS_WIN ? 'junction' : 'dir');
+  console.log(`[build:features] features/${name}: @agentdevjs/core -> 本地框架仓库`);
+}
+
 for (const name of FEATURE_DIRS) {
   const dir = join(root, 'features', name);
   if (!existsSync(join(dir, 'package.json'))) {
     console.error(`[build:features] 未找到 features/${name}/package.json`);
     process.exit(1);
   }
-  const steps = [
-    ['npm install', ['install', '--no-audit', '--no-fund']],
-    ['npm run build', ['run', 'build']],
-  ];
-  for (const [label, args] of steps) {
-    console.log(`[build:features] features/${name}: ${label}`);
-    const r = runNpm(args, dir);
-    if (r.error || r.status !== 0) {
-      console.error(`[build:features] features/${name} ${label} 失败${r.error ? `: ${r.error.message}` : ''}`);
-      process.exit(r.status ?? 1);
-    }
-  }
+  runStep(name, dir, 'npm install', ['install', '--no-audit', '--no-fund']);
+  linkLocalCore(name, dir);
+  runStep(name, dir, 'npm run build', ['run', 'build']);
 }
 console.log('[build:features] 完成');

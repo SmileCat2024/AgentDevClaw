@@ -52,10 +52,12 @@
 | 开发态 | `file:../AgentDev/packages/<name>` | npm install 物化为 junction，指向相邻框架仓库 | 校验/修复链接 → 构建框架仓库（若相邻存在）→ local-features → features |
 | 发布态 | semver（如 `^0.1.0`） | npm registry 正式包，自带 dist | 跳过链接与框架构建，只做 local-features → features |
 
-两个切换脚本语义不对称（易错）：
+两个切换脚本均为"切换即就绪"（改声明 / 链接后自动完成 install + build），语义不对称（易错）：
 
-- `npm run agentdev:published` — 改写依赖声明（`file:` → semver）并 install，是形态切换的正向通道。
-- `npm run agentdev:local` — **不改声明**，只把相邻 AgentDev 仓库的包以 junction 链接进 `node_modules/@agentdevjs/`。用于发布态下临时调试本地框架源码；之后的 `npm install` 会把链接冲回 registry 版。
+- `npm run agentdev:published` — 改写依赖声明（`file:` → semver），并同步 features/ 子包的 core devDependency 到框架版本，随后自动 install + build。版本更新后跑一次即可整体对齐。
+- `npm run agentdev:local` — **不改声明**，只把相邻 AgentDev 仓库的包以 junction 链接进 `node_modules/@agentdevjs/`，并自动补建缺失的框架 dist。用于发布态下临时调试本地框架源码；之后的 `npm install` 会把链接冲回 registry 版。
+
+features/ 下被预制 agent 源码引用的子包（清单在 `scripts/prebuilt-feature-dirs.mjs`，build:features 与 prestart 过时检测共用）对 core 的声明固定为 semver；构建时若相邻框架 core 可用（`dist/index.d.ts` 存在，缺失会自动编译）则自动替换为本地 junction，因此**使用未发布框架 API 的子包在本地模式下直接可构建**，发布态下失败属预期（等发版）。不要手动改子包声明来切换形态。
 
 默认端口：Web UI `1420`，ViewerWorker `2026`（`PORT` / `AGENTDEV_VIEWER_PORT` 可覆盖）。
 

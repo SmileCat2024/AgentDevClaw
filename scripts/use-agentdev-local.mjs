@@ -8,9 +8,13 @@
 //   1. 相邻仓库不在默认位置（../AgentDev）时手动指定路径；
 //   2. npm install 后个别 junction 异常时的手工修复。
 //
+// 切换即就绪：链接完成后检查各包 dist，缺失时自动在框架仓库执行构建
+// （framework dist 缺失会导致运行时 require 失败，不能留到启动期才暴露）。
+//
 // 注意：package.json/package-lock.json 不被修改；发布依赖语义不变。
 import { existsSync, lstatSync, rmSync, symlinkSync, readFileSync } from 'fs';
 import { resolve, join } from 'path';
+import { spawnSync } from 'child_process';
 
 // @agentdevjs 包名 -> AgentDev/packages/ 下的目录名（唯一例外：rokid-bot -> rokid-feature）
 const PACKAGE_MAP = {
@@ -74,3 +78,20 @@ for (const name of PACKAGES) {
 }
 
 console.log(`[agentdev:local] 完成：${linked}/${PACKAGES.length} 个包已链接。`);
+
+// 框架 dist 缺失时自动构建（切换即就绪，不把 require 失败留到运行期）。
+const missingDist = PACKAGES.filter((name) => {
+  const dir = PACKAGE_MAP[name];
+  return existsSync(join(target, 'packages', dir)) && !existsSync(join(target, 'packages', dir, 'dist', 'index.js'));
+});
+if (missingDist.length > 0) {
+  console.log(`[agentdev:local] 框架 dist 缺失（${missingDist.length} 个包），自动构建 AgentDev ...`);
+  const isWin = process.platform === 'win32';
+  const r = isWin
+    ? spawnSync('npm run build', { cwd: target, stdio: 'inherit', shell: true })
+    : spawnSync('npm', ['run', 'build'], { cwd: target, stdio: 'inherit' });
+  if (r.error || r.status !== 0) {
+    console.error('[agentdev:local] 框架构建失败，请进入 AgentDev 仓库手动执行 npm run build 排查。');
+    process.exit(r.status ?? 1);
+  }
+}

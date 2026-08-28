@@ -15,6 +15,7 @@
 import { existsSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
+import { FEATURE_DIRS } from './prebuilt-feature-dirs.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const IS_WIN = process.platform === 'win32';
@@ -68,7 +69,7 @@ const builtLf = ensure(
 );
 const builtFeat = ensure(
   'features/*/dist',
-  () => ['force-continuation', 'tickets-build-flow'].some((n) =>
+  () => FEATURE_DIRS.some((n) =>
     isStale(join(root, 'features', n), join(root, 'features', n, 'dist'))
   ),
   'build:features'
