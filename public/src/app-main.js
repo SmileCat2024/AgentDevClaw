@@ -608,7 +608,12 @@ window.switchAgent = async (newAgentId) => {
     // This lets the user see cached data without waiting for a network round trip.
     focusedAgentId = targetAgent
       ? (getLogicalAgentId(targetAgent) || runtimeAgentId)
-      : (isRemoteNamespaceAgentId(newAgentId) ? newAgentId : runtimeAgentId);
+      : (isRemoteNamespaceAgentId(newAgentId)
+        // 远程条目：焦点收敛到宿主级命名空间 id（如 'remote:server-a:programming-helper'），
+        // 与本地远程同构——控制类请求的 agentId 粒度、agent_detail / swap 寻址均按宿主身份。
+        // 目录未含该条目时保持运行时引用原值，让请求显式失败，不静默换目标。
+        ? (window.RemoteConnections?.getEntryHostNamespaceId?.(runtimeAgentId) || newAgentId)
+        : runtimeAgentId);
     currentRuntimeAgentId = runtimeAgentId;
     // 用户主动切换：立即冻结 viewer 侧会话身份。必须在此之前用 allAgents
     // 派生值（此时绑定尚未写入，读到的是用户点击时刻列表展示的会话），
@@ -675,6 +680,8 @@ window.switchAgent = async (newAgentId) => {
         messages: [],
         overview: getEmptyOverviewSnapshot(),
         todoPlan: getEmptyTodoPlan(),
+        // 与 messages 同步清空上一会话的元数据，防止残留渲染到新会话顶部。
+        sessionMeta: undefined,
       });
       renderCurrentMainView();
       setFollowLatest(true);
