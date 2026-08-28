@@ -9,10 +9,10 @@ import {
 } from '../shared/constants.js';
 
 const CONFIG_SCHEMA_VERSION = 1;
-const CONNECTION_KEYS = new Set(['id', 'name', 'enabled', 'mode', 'localPort', 'ssh', 'remote']);
+const CONNECTION_KEYS = new Set(['id', 'name', 'enabled', 'mode', 'localPort', 'baseUrl', 'ssh', 'remote']);
 const SSH_KEYS = new Set(['host', 'user', 'port', 'hostAlias']);
 const REMOTE_KEYS = new Set(['appPort']);
-const MODES = new Set(['manual', 'managed']);
+const MODES = new Set(['manual', 'managed', 'url']);
 const SECRET_KEY_PATTERN = /password|private[-_]?key|passphrase/i;
 
 export class ConnectionConfigError extends Error {
@@ -87,6 +87,9 @@ function normalizeSsh(value, mode) {
     }
     return null;
   }
+  if (mode === 'url') {
+    throw new ConnectionConfigError('url 模式不使用 ssh，请移除该字段');
+  }
   if (!isPlainObject(value)) {
     throw new ConnectionConfigError('ssh 必须是对象');
   }
@@ -101,14 +104,39 @@ function normalizeSsh(value, mode) {
   return { host, ...(user ? { user } : {}), port, hostAlias };
 }
 
-function normalizeRemote(value) {
-  if (value === undefined) return { appPort: 1420 };
+function normalizeRemote(value, mode) {
+  if (value === undefined || value === null) {
+    if (mode === 'url') return null;
+    return { appPort: 1420 };
+  }
+  if (mode === 'url') {
+    throw new ConnectionConfigError('url 模式不使用 remote，请移除该字段');
+  }
   if (!isPlainObject(value)) {
     throw new ConnectionConfigError('remote 必须是对象');
   }
   assertKnownKeys(value, REMOTE_KEYS, 'remote');
   const appPort = value.appPort === undefined ? 1420 : assertPort(value.appPort, 'remote.appPort');
   return { appPort };
+}
+
+// url 直连模式只接受源（origin）形态：转发层把请求路径直接拼在它后面，
+// 携带路径/查询/锚点会让拼接结果偏离用户预期。
+function normalizeBaseUrl(value, label) {
+  const raw = assertNonBlankString(value, label);
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new ConnectionConfigError(`${label} 不是合法的 URL：${raw}`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new ConnectionConfigError(`${label} 必须是 http(s) 地址：${raw}`);
+  }
+  if ((parsed.pathname !== '/' && parsed.pathname !== '') || parsed.search || parsed.hash) {
+    throw new ConnectionConfigError(`${label} 只接受源（origin）形态，不得携带路径、查询或锚点：${raw}`);
+  }
+  return parsed.origin;
 }
 
 function normalizeConnection(value) {
@@ -126,20 +154,29 @@ function normalizeConnection(value) {
   }
   const mode = value.mode;
   if (!MODES.has(mode)) {
-    throw new ConnectionConfigError(`连接 ${id} 的 mode 只能是 manual 或 managed`);
+    throw new ConnectionConfigError(`连接 ${id} 的 mode 只能是 manual、managed 或 url`);
+  }
+  if (mode === 'url') {
+    if (value.localPort !== undefined && value.localPort !== null) {
+      throw new ConnectionConfigError(`连接 ${id} 的 url 模式不使用 localPort，请移除该字段`);
+    }
+    const baseUrl = normalizeBaseUrl(value.baseUrl, `连接 ${id} 的 baseUrl`);
+    const ssh = normalizeSsh(value.ssh, mode);
+    const remote = normalizeRemote(value.remote, mode);
+    return { id, name, enabled, mode, localPort: null, baseUrl, ssh, remote };
   }
   const localPort = value.localPort;
   if (!Number.isInteger(localPort)) {
     throw new ConnectionConfigError(`连接 ${id} 的 localPort 必须是整数端口`);
   }
   const ssh = normalizeSsh(value.ssh, mode);
-  const remote = normalizeRemote(value.remote);
+  const remote = normalizeRemote(value.remote, mode);
   return { id, name, enabled, mode, localPort, ssh, remote };
 }
 
 function freezeConnection(connection) {
   if (connection.ssh) Object.freeze(connection.ssh);
-  Object.freeze(connection.remote);
+  if (connection.remote) Object.freeze(connection.remote);
   return Object.freeze(connection);
 }
 
@@ -235,7 +272,7 @@ export class ConnectionStore {
       .map((connection) => ({
         ...connection,
         ssh: connection.ssh ? { ...connection.ssh } : null,
-        remote: { ...connection.remote },
+        remote: connection.remote ? { ...connection.remote } : null,
       })));
   }
 
@@ -245,7 +282,7 @@ export class ConnectionStore {
     return freezeConnection({
       ...connection,
       ssh: connection.ssh ? { ...connection.ssh } : null,
-      remote: { ...connection.remote },
+      remote: connection.remote ? { ...connection.remote } : null,
     });
   }
 
@@ -292,7 +329,7 @@ export class ConnectionStore {
     return freezeConnection({
       ...connection,
       ssh: connection.ssh ? { ...connection.ssh } : null,
-      remote: { ...connection.remote },
+      remote: connection.remote ? { ...connection.remote } : null,
     });
   }
 
@@ -300,6 +337,8 @@ export class ConnectionStore {
     const ports = new Map();
     for (const connection of connections.values()) {
       const { localPort } = connection;
+      // url 直连没有本地回环端口，不参与端口分配与冲突检查。
+      if (localPort === null || localPort === undefined) continue;
       if (localPort < REMOTE_CONNECTION_PORT_RANGE.min || localPort > REMOTE_CONNECTION_PORT_RANGE.max) {
         throw new ConnectionConfigError(
           `连接 ${connection.id} 的 localPort 必须在 ${REMOTE_CONNECTION_PORT_RANGE.min}-${REMOTE_CONNECTION_PORT_RANGE.max} 范围内`,

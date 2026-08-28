@@ -40,6 +40,7 @@ const CONNECTIONS = [
   { id: 'server-a', name: 'Server A', enabled: true, mode: 'manual', localPort: 22101, ssh: null, remote: { appPort: 1420 } },
   { id: 'server-b', name: 'Server B', enabled: false, mode: 'managed', localPort: 22102, ssh: { host: 'b.example' }, remote: { appPort: 1420 } },
   { id: 'server-c', name: 'Server C', enabled: true, mode: 'manual', localPort: 22103, ssh: null, remote: { appPort: 1420 } },
+  { id: 'server-url', name: 'Server URL', enabled: true, mode: 'url', localPort: null, baseUrl: 'https://claw.example.com', ssh: null, remote: null },
 ];
 
 function createFindConnection() {
@@ -128,6 +129,18 @@ test('accepts a store-like connection lookup exposing getConnection', () => {
   assert.equal(target.scope, 'remote');
   assert.equal(target.connectionId, 'server-a');
   assert.equal(target.origin, 'http://127.0.0.1:22101');
+});
+
+test('resolves url direct connections against the remote origin itself', () => {
+  const options = { findConnection: createFindConnection() };
+  assert.equal(
+    resolveRuntimeTarget({ agentId: 'remote:server-url:agent-1' }, options).origin,
+    'https://claw.example.com',
+  );
+  assert.equal(
+    resolveHostTarget({ connectionId: 'server-url' }, options).origin,
+    'https://claw.example.com',
+  );
 });
 
 test('maps remote routing failures onto the operation error contract', () => {

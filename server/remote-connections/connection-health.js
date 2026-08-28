@@ -176,6 +176,7 @@ function materiallyChanged(entry, connection) {
   const previous = entry.connection;
   return previous.mode !== connection.mode
     || previous.localPort !== connection.localPort
+    || previous.baseUrl !== connection.baseUrl
     || JSON.stringify(previous.remote) !== JSON.stringify(connection.remote);
 }
 
@@ -436,9 +437,11 @@ export class ConnectionHealth {
     }
   }
 
-  // 状态由握手推导；tunnel 状态只用于细分“隧道不通”与“隧道通但远程未启动”。
-  // manual 模式隧道用户自备，非 ECONNREFUSED 的网络错误视为“端口有应答”。
+  // 状态由握手推导；tunnel 状态只用于细分“传输不通”与“对端未启动”。
+  // manual 模式隧道用户自备，非 ECONNREFUSED 的网络错误视为“端口有应答”；
+  // url 直连没有本地端口，任何网络错误都意味着远程地址本身不可达。
   isTunnelUp(entry) {
+    if (entry.connection.mode === 'url') return false;
     if (entry.connection.mode !== 'managed') return true;
     const status = this.tunnelManager?.getStatus?.(entry.connection.id);
     return status ? status.tunnel === 'up' : true;

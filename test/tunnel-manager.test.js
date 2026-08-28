@@ -127,6 +127,46 @@ afterEach(async () => {
     assert.equal(status.tunnel, 'down');
     assert.equal(status.pid, null);
   });
+
+  it('treats url direct mode as process-free with the remote origin', async () => {
+    const calls = [];
+    const manager = createTunnelManager({ spawn: (...args) => calls.push(args) });
+
+    const status = await manager.startConnection(connection({
+      mode: 'url',
+      localPort: null,
+      baseUrl: 'https://claw.example.com',
+      ssh: null,
+      remote: null,
+    }));
+
+    assert.equal(calls.length, 0, 'url mode never spawns an ssh process');
+    assert.equal(manager.getOrigin('server-a'), 'https://claw.example.com');
+    assert.equal(status.tunnel, 'up');
+    assert.equal(status.origin, 'https://claw.example.com');
+    assert.equal(status.pid, null);
+  });
+
+  it('restarts a url connection when its baseUrl changes', async () => {
+    const urlConnection = connection({
+      mode: 'url',
+      localPort: null,
+      baseUrl: 'https://claw.example.com',
+      ssh: null,
+      remote: null,
+    });
+    await harness.manager.startConnection(urlConnection);
+
+    await harness.manager.syncConnections([connection({
+      ...urlConnection,
+      baseUrl: 'https://moved.example.com',
+    })]);
+
+    // origin 直接来自运行时持有的 connection：origin 已更新即证明连接被重建。
+    const status = harness.manager.getStatus('server-a');
+    assert.equal(status.origin, 'https://moved.example.com');
+    assert.equal(status.tunnel, 'up');
+  });
 });
 
 describe('managed tunnel reconnect lifecycle', () => {

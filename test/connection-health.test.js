@@ -471,6 +471,59 @@ describe('per-connection isolation and connection sync', () => {
   });
 });
 
+describe('url direct mode', () => {
+  const urlConnection = {
+    id: 'server-url',
+    name: '直连服务器',
+    enabled: true,
+    mode: 'url',
+    localPort: null,
+    baseUrl: 'https://claw.example.com',
+    ssh: null,
+    remote: null,
+  };
+
+  it('handshakes directly against the remote origin without a local port', async () => {
+    const { health, calls } = createHarness({ connections: [urlConnection] });
+
+    const status = await health.runHandshake('server-url');
+
+    assert.equal(status.state, 'connected');
+    assert.equal(status.origin, 'https://claw.example.com');
+    assert.deepEqual(calls.map((call) => call.url), [
+      'https://claw.example.com/protoclaw/health',
+      'https://claw.example.com/protoclaw/app_info',
+      'https://claw.example.com/api/agents',
+    ]);
+  });
+
+  it('classifies every network error as transport unavailable (no tunnel to blame)', async () => {
+    const { health } = createHarness({
+      connections: [urlConnection],
+      handler: healthyRoutes({ '/protoclaw/health': networkFailure('ENOTFOUND') }),
+    });
+
+    const status = await health.runHandshake('server-url');
+
+    assert.equal(status.state, 'disconnected');
+    assert.equal(status.error.code, 'transport_unavailable');
+    assert.equal(status.error.retryable, true);
+  });
+
+  it('resets state when the baseUrl changes', async () => {
+    const { health } = createHarness({ connections: [urlConnection] });
+    await health.runHandshake('server-url');
+    assert.equal(health.getStatus('server-url').state, 'connected');
+
+    health.syncConnections([{ ...urlConnection, baseUrl: 'https://moved.example.com' }]);
+
+    const status = health.getStatus('server-url');
+    assert.equal(status.state, 'configured');
+    assert.equal(status.appInfo, null);
+    assert.equal(status.origin, 'https://moved.example.com');
+  });
+});
+
 describe('periodic probing lifecycle', () => {
   it('probes on start, recovers automatically, and stops cleanly', async () => {
     let phase = 'down';

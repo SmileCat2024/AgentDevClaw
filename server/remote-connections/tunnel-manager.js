@@ -10,6 +10,7 @@ import {
 const TUNNEL_STATES = new Set(['up', 'down', 'starting', 'stopped']);
 
 function originFor(connection) {
+  if (connection.mode === 'url') return connection.baseUrl;
   return `http://127.0.0.1:${connection.localPort}`;
 }
 
@@ -111,6 +112,13 @@ export class TunnelManager {
       runtime.tunnel = 'down';
       return statusOf(runtime);
     }
+    if (connection.mode === 'url') {
+      // url 直连没有隧道进程：可达性由 ConnectionHealth 对远程地址的
+      // 周期握手判定，这里恒定视为已就绪。
+      runtime.tunnel = 'up';
+      runtime.startedAt = new Date().toISOString();
+      return statusOf(runtime);
+    }
     this.startManaged(runtime);
     return statusOf(runtime);
   }
@@ -130,6 +138,7 @@ export class TunnelManager {
         || current.stopped
         || current.connection.mode !== connection.mode
         || current.connection.localPort !== connection.localPort
+        || current.connection.baseUrl !== connection.baseUrl
         || JSON.stringify(current.connection.ssh) !== JSON.stringify(connection.ssh)
         || JSON.stringify(current.connection.remote) !== JSON.stringify(connection.remote);
       if (changed) await this.startConnection(connection);

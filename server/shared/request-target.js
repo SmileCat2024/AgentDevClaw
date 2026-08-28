@@ -126,6 +126,9 @@ function resolveRemoteConnection(connectionId, findConnection) {
 }
 
 function remoteOrigin(connection) {
+  // url 直连的 origin 就是远程地址本身；隧道模式停在本地回环端口
+  // （ADR-0008 #3）：端口/地址背后是 SSH 还是公网反代，路由层不感知。
+  if (connection.mode === 'url') return connection.baseUrl;
   return `http://127.0.0.1:${connection.localPort}`;
 }
 

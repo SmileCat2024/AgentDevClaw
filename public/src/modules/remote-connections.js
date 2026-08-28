@@ -470,7 +470,7 @@ function hideManagerForm() {
 function showManagerForm(record) {
   const form = _rcManagerEl.querySelector('.rcm-form');
   _rcManagerEditingId = record?.id || null;
-  const managed = record?.mode === 'managed';
+  const mode = record?.mode || 'manual';
   form.innerHTML = `
     <div class="rcm-form-grid">
       <label>${escapeHtml(t('rcon_field_name'))}<input name="name" required value="${escapeHtml(record?.name || '')}"></label>
@@ -479,11 +479,13 @@ function showManagerForm(record) {
         <span>${escapeHtml(t('rcon_field_enabled'))}</span></label>
       <label>${escapeHtml(t('rcon_field_mode'))}
         <select name="mode">
-          <option value="manual" ${!managed ? 'selected' : ''}>${escapeHtml(t('rcon_mode_manual'))}</option>
-          <option value="managed" ${managed ? 'selected' : ''}>${escapeHtml(t('rcon_mode_managed'))}</option>
+          <option value="url" ${mode === 'url' ? 'selected' : ''}>${escapeHtml(t('rcon_mode_url'))}</option>
+          <option value="manual" ${mode === 'manual' ? 'selected' : ''}>${escapeHtml(t('rcon_mode_manual'))}</option>
+          <option value="managed" ${mode === 'managed' ? 'selected' : ''}>${escapeHtml(t('rcon_mode_managed'))}</option>
         </select>
       </label>
-      <label>${escapeHtml(t('rcon_field_local_port'))}<input name="localPort" type="number" min="1" max="65535" value="${escapeHtml(String(record?.localPort ?? ''))}"></label>
+      <label class="rcm-url-field">${escapeHtml(t('rcon_field_base_url'))}<input name="baseUrl" type="url" placeholder="https://claw.example.com" value="${escapeHtml(record?.baseUrl || '')}"></label>
+      <label class="rcm-local-port-field">${escapeHtml(t('rcon_field_local_port'))}<input name="localPort" type="number" min="1" max="65535" value="${escapeHtml(String(record?.localPort ?? ''))}"></label>
     </div>
     <fieldset class="rcm-managed-fields">
       <legend>${escapeHtml(t('rcon_mode_managed'))}</legend>
@@ -495,6 +497,7 @@ function showManagerForm(record) {
         <label>${escapeHtml(t('rcon_field_app_port'))}<input name="appPort" type="number" min="1" max="65535" value="${escapeHtml(String(record?.remote?.appPort ?? ''))}"></label>
       </div>
     </fieldset>
+    <div class="rcm-url-hint"><strong>${escapeHtml(t('rcon_url_hint_title'))}</strong><span>${escapeHtml(t('rcon_url_hint_body'))}</span></div>
     <div class="rcm-manual-hint"><strong>${escapeHtml(t('rcon_mgr_manual_hint_title'))}</strong><span>${escapeHtml(t('rcon_mgr_manual_hint_body'))}</span></div>
     <div class="rcm-form-error" style="display:none;"></div>
     <div class="rcm-form-actions">
@@ -503,14 +506,16 @@ function showManagerForm(record) {
     </div>
   `;
   form.style.display = '';
-  const syncManagedVisibility = () => {
-    form.querySelector('.rcm-managed-fields').style.display =
-      form.elements.mode.value === 'managed' ? '' : 'none';
-    form.querySelector('.rcm-manual-hint').style.display =
-      form.elements.mode.value === 'manual' ? '' : 'none';
+  const syncModeVisibility = () => {
+    const value = form.elements.mode.value;
+    form.querySelector('.rcm-managed-fields').style.display = value === 'managed' ? '' : 'none';
+    form.querySelector('.rcm-url-field').style.display = value === 'url' ? '' : 'none';
+    form.querySelector('.rcm-local-port-field').style.display = value === 'url' ? 'none' : '';
+    form.querySelector('.rcm-url-hint').style.display = value === 'url' ? '' : 'none';
+    form.querySelector('.rcm-manual-hint').style.display = value === 'manual' ? '' : 'none';
   };
-  syncManagedVisibility();
-  form.elements.mode.addEventListener('change', syncManagedVisibility);
+  syncModeVisibility();
+  form.elements.mode.addEventListener('change', syncModeVisibility);
   form.querySelector('[data-action="cancel"]').addEventListener('click', hideManagerForm);
   form.onsubmit = (event) => submitManagerForm(event, form);
 }
@@ -532,7 +537,6 @@ async function submitManagerForm(event, form) {
   const name = form.elements.name.value.trim();
   const mode = form.elements.mode.value;
   const enabled = form.elements.enabled.checked;
-  const localPort = readOptionalInt(form.elements.localPort.value);
   const payload = { name, enabled, mode };
 
   if (!editingId) {
@@ -540,26 +544,37 @@ async function submitManagerForm(event, form) {
     if (!idField) return reportManagerError(errorBox, t('rcon_mgr_error_id_required'));
     payload.id = idField;
   }
-  // localPort 是本地回环转发/探测入口，ConnectionStore 对所有模式都要求整数
-  if (localPort === undefined || Number.isNaN(localPort)) {
-    return reportManagerError(errorBox, t('rcon_mgr_error_port_required'));
-  }
-  payload.localPort = localPort;
 
-  if (mode === 'managed') {
-    const host = form.elements.sshHost.value.trim();
-    if (!host) return reportManagerError(errorBox, t('rcon_mgr_error_ssh_host'));
-    const port = readOptionalInt(form.elements.sshPort.value);
-    if (Number.isNaN(port)) return reportManagerError(errorBox, t('rcon_mgr_error_port_invalid'));
-    const appPort = readOptionalInt(form.elements.appPort.value);
-    if (Number.isNaN(appPort)) return reportManagerError(errorBox, t('rcon_mgr_error_port_invalid'));
-    payload.ssh = {
-      host,
-      user: form.elements.sshUser.value.trim(),
-      ...(Number.isInteger(port) ? { port } : {}),
-      ...(form.elements.hostAlias.value.trim() ? { hostAlias: form.elements.hostAlias.value.trim() } : {}),
-    };
-    payload.remote = { ...(Number.isInteger(appPort) ? { appPort } : {}) };
+  if (mode === 'url') {
+    const baseUrl = form.elements.baseUrl.value.trim().replace(/\/+$/, '');
+    if (!baseUrl) return reportManagerError(errorBox, t('rcon_mgr_error_base_url_required'));
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      return reportManagerError(errorBox, t('rcon_mgr_error_base_url_invalid'));
+    }
+    payload.baseUrl = baseUrl;
+  } else {
+    const localPort = readOptionalInt(form.elements.localPort.value);
+    // localPort 是本地回环转发/探测入口，隧道模式下必填
+    if (localPort === undefined || Number.isNaN(localPort)) {
+      return reportManagerError(errorBox, t('rcon_mgr_error_port_required'));
+    }
+    payload.localPort = localPort;
+
+    if (mode === 'managed') {
+      const host = form.elements.sshHost.value.trim();
+      if (!host) return reportManagerError(errorBox, t('rcon_mgr_error_ssh_host'));
+      const port = readOptionalInt(form.elements.sshPort.value);
+      if (Number.isNaN(port)) return reportManagerError(errorBox, t('rcon_mgr_error_port_invalid'));
+      const appPort = readOptionalInt(form.elements.appPort.value);
+      if (Number.isNaN(appPort)) return reportManagerError(errorBox, t('rcon_mgr_error_port_invalid'));
+      payload.ssh = {
+        host,
+        user: form.elements.sshUser.value.trim(),
+        ...(Number.isInteger(port) ? { port } : {}),
+        ...(form.elements.hostAlias.value.trim() ? { hostAlias: form.elements.hostAlias.value.trim() } : {}),
+      };
+      payload.remote = { ...(Number.isInteger(appPort) ? { appPort } : {}) };
+    }
   }
 
   try {
@@ -618,6 +633,10 @@ function tunnelDiagHtml(connId, tunnels) {
   `;
 }
 
+function modeLabel(mode) {
+  return t(mode === 'managed' ? 'rcon_mode_managed' : mode === 'url' ? 'rcon_mode_url' : 'rcon_mode_manual');
+}
+
 function managerItemHtml(connection, status, tunnels) {
   const connId = connection.id;
   const state = status?.state || 'configured';
@@ -630,6 +649,9 @@ function managerItemHtml(connection, status, tunnels) {
          ⚠ ${escapeHtml(t('rcon_mgr_version_warn'))}${status.versionWarning.message ? ` — ${escapeHtml(status.versionWarning.message)}` : ''}
        </div>`
     : '';
+  const addressInfo = connection.mode === 'url'
+    ? ` · <code>${escapeHtml(connection.baseUrl || '')}</code>`
+    : '';
   return `
     <div class="rcm-item" data-conn-id="${escapeHtml(connId)}">
       <div class="rcm-item-main">
@@ -641,7 +663,7 @@ function managerItemHtml(connection, status, tunnels) {
           </label>
         </div>
         <div class="rcm-item-meta">
-          <code>${escapeHtml(connId)}</code> · ${escapeHtml(t(connection.mode === 'managed' ? 'rcon_mode_managed' : 'rcon_mode_manual'))}
+          <code>${escapeHtml(connId)}</code> · ${escapeHtml(modeLabel(connection.mode))}${addressInfo}
           · ${handshakeInfo}
         </div>
         ${versionWarning}

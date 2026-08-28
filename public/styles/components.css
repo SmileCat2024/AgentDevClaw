@@ -11425,7 +11425,7 @@ body[data-theme="light"] .session-controls-rotation-trigger:hover { background: 
 .rcm-inline-check { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 5px; }
 .rcm-managed-fields { border: 1px solid var(--border-color); border-radius: 8px; padding: 8px 12px; margin: 0; }
 .rcm-managed-fields legend { font-size: 12px; color: var(--text-secondary); padding: 0 6px; }
-.rcm-manual-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.55; display: flex; flex-direction: column; gap: 2px; }
+.rcm-manual-hint, .rcm-url-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.55; display: flex; flex-direction: column; gap: 2px; }
 .rcm-form-error { font-size: 12.5px; color: var(--error-color); }
 .rcm-form-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
@@ -11434,6 +11434,7 @@ body[data-theme="light"] .rcm-form-grid select {
   border-color: rgba(0,0,0,0.16); background: rgba(0,0,0,0.03);
 }
 body[data-theme="light"] .rcm-manual-hint,
+body[data-theme="light"] .rcm-url-hint,
 body[data-theme="light"] .rcm-item-meta,
 body[data-theme="light"] .rcm-subtitle,
 body[data-theme="light"] .rcm-tunnel-diag summary { color: var(--text-secondary); }

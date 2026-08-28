@@ -527,3 +527,110 @@ describe('connection port allocation', () => {
     assert.throws(() => store.allocateLocalPort(), /端口|port/i);
   });
 });
+
+// ── URL direct mode ────────────────────────────────────────────────
+
+function validUrlConnection(overrides = {}) {
+  return {
+    id: 'server-url',
+    name: '直连服务器',
+    mode: 'url',
+    enabled: true,
+    baseUrl: 'https://claw.example.com',
+    ...overrides,
+  };
+}
+
+describe('connection store url direct mode schema', () => {
+  it('accepts a url connection and normalizes the origin form', async () => {
+    const store = createStore();
+    const connection = await store.upsertConnection(
+      validUrlConnection({ baseUrl: 'https://claw.example.com/' }),
+    );
+    assert.equal(connection.mode, 'url');
+    assert.equal(connection.baseUrl, 'https://claw.example.com');
+    assert.equal(connection.localPort, null);
+    assert.equal(connection.ssh, null);
+    assert.equal(connection.remote, null);
+  });
+
+  it('strips nothing but trailing slashes — origin stays verbatim', async () => {
+    const store = createStore();
+    const connection = await store.upsertConnection(
+      validUrlConnection({ baseUrl: 'http://10.0.0.8:1420' }),
+    );
+    assert.equal(connection.baseUrl, 'http://10.0.0.8:1420');
+  });
+
+  it('round-trips a url connection through the config file', async () => {
+    const store = createStore();
+    await store.upsertConnection(validUrlConnection());
+    const second = createStore();
+    const loaded = await second.load();
+    assert.equal(loaded.length, 1);
+    assert.equal(loaded[0].mode, 'url');
+    assert.equal(loaded[0].baseUrl, 'https://claw.example.com');
+    assert.equal(loaded[0].localPort, null);
+  });
+
+  it('requires baseUrl in url mode', async () => {
+    const store = createStore();
+    await assert.rejects(
+      () => store.upsertConnection(validUrlConnection({ baseUrl: undefined })),
+      /baseUrl/,
+    );
+    await assert.rejects(
+      () => store.upsertConnection(validUrlConnection({ baseUrl: '   ' })),
+      /baseUrl/,
+    );
+  });
+
+  it('rejects non-http(s) schemes and non-origin forms', async () => {
+    const store = createStore();
+    for (const baseUrl of [
+      'ftp://claw.example.com',
+      'claw.example.com',
+      'https://claw.example.com/base/path',
+      'https://claw.example.com/?x=1',
+      'not a url',
+    ]) {
+      await assert.rejects(
+        () => store.upsertConnection(validUrlConnection({ baseUrl })),
+        /baseUrl.*(URL|http|源|origin)/i,
+      );
+    }
+  });
+
+  it('rejects tunnel-only fields (localPort / ssh / remote) in url mode', async () => {
+    const store = createStore();
+    await assert.rejects(
+      () => store.upsertConnection(validUrlConnection({ localPort: 22103 })),
+      /localPort/,
+    );
+    await assert.rejects(
+      () => store.upsertConnection(validUrlConnection({ ssh: { host: 'dev.example.com' } })),
+      /ssh/,
+    );
+    await assert.rejects(
+      () => store.upsertConnection(validUrlConnection({ remote: { appPort: 1420 } })),
+      /remote/,
+    );
+  });
+
+  it('does not treat two url connections as a local-port conflict', async () => {
+    const store = createStore();
+    await store.upsertConnection(validUrlConnection({ id: 'url-a' }));
+    await store.upsertConnection(validUrlConnection({ id: 'url-b', baseUrl: 'https://other.example.com' }));
+    assert.equal(store.listConnections().length, 2);
+  });
+
+  it('keeps null remote frozen-safe through list/get round-trips', async () => {
+    const store = createStore();
+    await store.upsertConnection(validUrlConnection());
+    for (const connection of [...store.listConnections(), store.getConnection('server-url')]) {
+      assert.equal(connection.remote, null);
+      assert.equal(connection.ssh, null);
+      assert.ok(Object.isFrozen(connection));
+    }
+  });
+});
