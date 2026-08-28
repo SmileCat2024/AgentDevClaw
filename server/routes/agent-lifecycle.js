@@ -15,6 +15,8 @@ import { createAgentStartupFns } from './agent-startup.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
+import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
+import { buildLocalFailureResponse } from '../shared/operation-contract.js';
 
 // ── Agent Lifecycle (orchestration layer) ────────────────────────
 // This module wires together three concerns:
@@ -632,6 +634,25 @@ export function createAgentLifecycleModule(ctx) {
           return res.status(error.status || 400).json({ error: error.message, code: error.code });
         }
         const { agentId, sessionId, runtimeId } = target;
+        // ADR-0011：远程命名空间身份 → 转发远程同名 todo_control 路由（裸 id，
+        // 远程端做自己的 IPC 与 body 校验）；本地身份走下方既有 IPC 路径，行为
+        // 字节级不动。
+        try {
+          const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
+          if (hostTarget.scope === 'remote') {
+            return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/todo_control', {
+              method: 'POST',
+              body: {
+                ...(req.body || {}),
+                agentId: bareId(agentId),
+                runtimeId: bareId(runtimeId),
+                sessionId: bareId(sessionId),
+              },
+            });
+          }
+        } catch (error) {
+          return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+        }
         if (taskId !== undefined && typeof taskId !== 'string' && taskId !== null) {
           return res.status(400).json({ error: 'taskId must be a string or null' });
         }

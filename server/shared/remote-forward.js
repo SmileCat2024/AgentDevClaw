@@ -1,5 +1,6 @@
 import { parseRemoteNamespace, resolveHostTarget } from './request-target.js';
 import { getProxyConnectionLookup } from './proxy.js';
+import { buildLocalFailureResponse } from './operation-contract.js';
 
 // ADR-0011：protoclaw 域远程适配的共享取用。转发基址、裸 id、命名空间 →
 // 显式 host target，供路由内远程分支复用。连接查找复用宿主装配进 proxy.js
@@ -40,4 +41,43 @@ export function resolveForwardHostTarget(...identities) {
     );
   }
   return { scope: 'local' };
+}
+
+/** 转发目标错误的 HTTP 状态（request-target 契约：error.status 或 400）。 */
+export function readForwardTargetError(error) {
+  return Number(error?.status) || 400;
+}
+
+/**
+ * 转发 protoclaw 域请求到远程同名路由，远程响应原文返回。传输失败 /
+ * 不可解析响应按 operation 契约三分类呈现（ADR-0011）。
+ */
+export async function forwardProtoclawRoute(res, hostTarget, pathname, { method = 'GET', body = undefined } = {}) {
+  let response;
+  try {
+    response = await fetch(`${hostTarget.origin}${pathname}`, {
+      method,
+      ...(body !== undefined ? {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      } : {}),
+    });
+  } catch (error) {
+    return res.status(503).json(buildLocalFailureResponse({
+      code: 'transport_unavailable',
+      status: 503,
+      retryable: true,
+      message: 'Remote connection transport is unavailable',
+    }));
+  }
+  const payload = await response.json().catch(() => null);
+  if (payload === null) {
+    return res.status(502).json(buildLocalFailureResponse({
+      code: 'operation_rejected',
+      status: 502,
+      retryable: false,
+      message: `Remote ${pathname} returned an unparseable response body (HTTP ${response.status})`,
+    }));
+  }
+  return res.status(response.status).json(payload);
 }

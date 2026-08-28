@@ -6,6 +6,8 @@ import express from 'express';
 import { proxyToViewer, setProxyConnectionLookup } from '../server/shared/proxy.js';
 import { submitUserTurn } from '../server/shared/user-turn.js';
 import { setupModelConfigRoutes } from '../server/routes/model-config.js';
+import { createAgentLifecycleModule } from '../server/routes/agent-lifecycle.js';
+import { setupToolStateRoutes } from '../server/routes/tool-state.js';
 import { createConnectionHealth } from '../server/remote-connections/connection-health.js';
 import { createCatalogAggregator } from '../server/remote-connections/catalog-aggregator.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
@@ -342,7 +344,6 @@ describe('handshake capability capture', () => {
 });
 
 function aggregatorHarness(getStatus) {
-  const origin = REMOTE_ORIGIN;
   return createCatalogAggregator({
     fetch: async (url) => {
       const pathname = new URL(String(url)).pathname;
@@ -627,6 +628,151 @@ describe('model-config remote namespace branches', () => {
       assert.equal(res.body.code, 'target_not_found');
     } finally {
       setProxyConnectionLookup(FIND_CONNECTION);
+    }
+  });
+});
+
+// ── 7. state-control remote branches (todo_control / tool_state) ────────
+
+describe('state-control remote namespace branches', () => {
+  const silentRes = () => ({
+    statusCode: null,
+    jsonPayload: null,
+    status(code) { this.statusCode = code; return this; },
+    json(payload) { this.jsonPayload = payload; },
+  });
+
+  function captureLifecycleHandler(path) {
+    let handler = null;
+    const mod = createAgentLifecycleModule({
+      sessionApi: {},
+      getAgents: async () => [],
+      getAgentsLight: async () => [],
+      enrichAgent: async (agent) => agent,
+      requireAgentLight: async (id) => ({ id, relativeDir: 'test', name: id }),
+      resolveRuntimeDisplayName: async (agent) => agent?.name || 'test-agent',
+      readViewerJson: async () => ({ agents: [], currentAgentId: null }),
+      getPendingInputCount: async () => 0,
+      resolveAgentModelPresets: async () => null,
+    });
+    mod.setupRoutes(
+      { get: () => {}, post: (routePath, ...rest) => { if (routePath === path) handler = rest[rest.length - 1]; }, put: () => {}, delete: () => {} },
+      { json: () => (req, res, next) => next() },
+    );
+    return handler;
+  }
+
+  it('forwards todo_control with a remote runtimeId to the remote route with bare ids', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const fetchMock = mockFetch(() => ({ status: 200, body: JSON.stringify({ ok: true, via: 'remote' }) }));
+    try {
+      const handler = captureLifecycleHandler('/protoclaw/todo_control');
+      const res = silentRes();
+      await handler(
+        { body: { agentId: NAMESPACE, runtimeId: 'remote:server-a:rt-1', taskId: '3', forceContinue: true } },
+        res,
+        (error) => { throw error; },
+      );
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.jsonPayload, { ok: true, via: 'remote' });
+      assert.equal(fetchMock.calls.length, 1);
+      assert.equal(fetchMock.calls[0].url, `${REMOTE_ORIGIN}/protoclaw/todo_control`);
+      const forwarded = JSON.parse(fetchMock.calls[0].init.body);
+      assert.equal(forwarded.runtimeId, 'rt-1');
+      assert.equal(forwarded.agentId, 'agent-9');
+      assert.equal(forwarded.taskId, '3');
+      assert.equal(forwarded.forceContinue, true);
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('forwards tool_state with a remote runtimeId and passes the control payload through', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    let handler = null;
+    setupToolStateRoutes({
+      post: (path, ...rest) => { if (path === '/protoclaw/agent/tool_state') handler = rest[rest.length - 1]; },
+    });
+    const fetchMock = mockFetch(() => ({ status: 200, body: JSON.stringify({ ok: true, delivered: 1 }) }));
+    try {
+      const res = silentRes();
+      await handler(
+        { body: { agentId: NAMESPACE, runtimeId: 'remote:server-a:rt-1', scope: 'tool', name: 'shell', action: 'disable' } },
+        res,
+        (error) => { throw error; },
+      );
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.jsonPayload, { ok: true, delivered: 1 });
+      assert.equal(fetchMock.calls.length, 1);
+      assert.equal(fetchMock.calls[0].url, `${REMOTE_ORIGIN}/protoclaw/agent/tool_state`);
+      const forwarded = JSON.parse(fetchMock.calls[0].init.body);
+      assert.equal(forwarded.runtimeId, 'rt-1');
+      assert.equal(forwarded.agentId, 'agent-9');
+      assert.equal(forwarded.scope, 'tool');
+      assert.equal(forwarded.name, 'shell');
+      assert.equal(forwarded.action, 'disable');
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('maps unknown remote connections onto the operation contract for state controls too', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    let handler = null;
+    setupToolStateRoutes({
+      post: (path, ...rest) => { if (path === '/protoclaw/agent/tool_state') handler = rest[rest.length - 1]; },
+    });
+    const fetchMock = mockFetch();
+    try {
+      const res = silentRes();
+      await handler(
+        { body: { agentId: 'remote:ghost:agent-9', runtimeId: 'remote:ghost:rt-1', scope: 'tool', name: 'shell', action: 'disable' } },
+        res,
+        (error) => { throw error; },
+      );
+      assert.equal(res.statusCode, 404);
+      assert.equal(res.jsonPayload.ok, false);
+      assert.equal(res.jsonPayload.code, 'target_not_found');
+      assert.equal(fetchMock.calls.length, 0);
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('keeps local state-control branches off the wire: no namespace → local IPC lookup, no fetch', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const fetchMock = mockFetch();
+    try {
+      // todo_control local: runtime table empty in the test process → { ok:false }, no HTTP.
+      const todoHandler = captureLifecycleHandler('/protoclaw/todo_control');
+      const todoRes = silentRes();
+      await todoHandler(
+        { body: { agentId: 'local-agent', runtimeId: 'local-agent', taskId: '1' } },
+        todoRes,
+        (error) => { throw error; },
+      );
+      assert.deepEqual(todoRes.jsonPayload, { ok: false });
+
+      // tool_state local: no running runtime → 503, no HTTP.
+      let toolHandler = null;
+      setupToolStateRoutes({
+        post: (path, ...rest) => { if (path === '/protoclaw/agent/tool_state') toolHandler = rest[rest.length - 1]; },
+      });
+      const toolRes = silentRes();
+      await toolHandler(
+        { body: { agentId: 'local-agent', runtimeId: 'local-agent', scope: 'tool', name: 'shell', action: 'enable' } },
+        toolRes,
+        (error) => { throw error; },
+      );
+      assert.equal(toolRes.statusCode, 503);
+
+      assert.equal(fetchMock.calls.length, 0, 'local state controls must never produce an HTTP forward');
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
     }
   });
 });
