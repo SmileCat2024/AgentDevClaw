@@ -25,7 +25,7 @@ import {
   normalizeTestCase,
   normalizeSessionPolicy,
 } from './assertions.js';
-import type { AgentStudioProject, WorkspaceState, StudioFeatureEntry } from './project-store.js';
+import type { StudioFeatureEntry } from './project-store.js';
 import {
   cleanValue,
   normalizeProject,
@@ -33,8 +33,6 @@ import {
   readRuns,
   appendRun,
 } from './project-store.js';
-import type { TestRuntimeStatus } from './project-store.js';
-import type { RuntimeHandle } from './runtime-process.js';
 import type { AgentStudioFeature } from './index.js';
 import {
   SYNC_TIMEOUT_MS,
@@ -157,7 +155,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         await runProjectCommand(parentDir, process.execPath, [cliPath, name]);
         const featureProjectDir = join(parentDir, name);
         await runProjectCommand(featureProjectDir, 'npm', ['install', '--no-fund', '--no-audit']);
-        const entry = await readFeatureProjectEntry(featureProjectDir, projectDir);
+        const entry = await readFeatureProjectEntry(featureProjectDir);
         const timestamp = new Date().toISOString();
         const features = [...project.features.filter((item) => item.name !== entry.name), entry];
         await feature.writeProject(projectDir, { ...project, features, updatedAt: timestamp });
@@ -180,7 +178,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         const sourceProjectDir = cleanValue(args.projectDir);
         let entry: StudioFeatureEntry;
         if (sourceProjectDir) {
-          entry = await readFeatureProjectEntry(resolve(projectDir, sourceProjectDir), projectDir);
+          entry = await readFeatureProjectEntry(resolve(projectDir, sourceProjectDir));
         } else {
           const name = cleanValue(args.name);
           const rawModulePath = cleanValue(args.modulePath);
@@ -370,7 +368,7 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
             ? (args.assertions as unknown[]).map((item) => normalizeAssertion(item))
             : [];
         } catch (error) {
-          throw new Error(`测试 ${testId} 的断言定义不合法：${error instanceof Error ? error.message : String(error)}`);
+          throw new Error(`测试 ${testId} 的断言定义不合法：${error instanceof Error ? error.message : String(error)}`, { cause: error });
         }
         const sessionPolicy = normalizeSessionPolicy(args.sessionPolicy);
         const checkpoint = cleanValue(args.checkpoint);
@@ -489,7 +487,6 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
         let sessionPolicy: SessionPolicy;
         let checkpoint: string;
         let recordedTestId = testId;
-        let title = cleanValue(args.title);
         if (testId) {
           const defined = project.tests.find((item) => item.id === testId);
           if (!defined) throw new Error(`测试 ${testId} 不存在。请先调用 studio_define_test 定义。`);
@@ -499,7 +496,6 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
             : defined.assertions;
           sessionPolicy = args.sessionPolicy ? normalizeSessionPolicy(args.sessionPolicy) : defined.sessionPolicy;
           checkpoint = cleanValue(args.checkpoint) || defined.checkpoint || '';
-          title = title || defined.title;
         } else {
           if (!testInput) throw new Error('请提供 testId（运行已定义测试）或 input（临时测试）。');
           recordedTestId = 'ad-hoc';
@@ -508,7 +504,6 @@ export function buildStudioTools(feature: AgentStudioFeature): Tool[] {
             : [];
           sessionPolicy = normalizeSessionPolicy(args.sessionPolicy);
           checkpoint = cleanValue(args.checkpoint);
-          title = title || 'ad-hoc';
         }
         if (sessionPolicy === 'checkpointed' && !checkpoint) {
           throw new Error('checkpointed 策略需要 checkpoint 名称（先用 studio_save_checkpoint 保存）。');

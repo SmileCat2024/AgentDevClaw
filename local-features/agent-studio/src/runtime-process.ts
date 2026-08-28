@@ -238,7 +238,7 @@ export async function runFeatureBuild(feature: StudioFeatureEntry): Promise<void
   await runProjectCommand(feature.source.projectDir, command, args);
 }
 
-export async function readFeatureProjectEntry(projectDir: string, studioProjectDir: string): Promise<StudioFeatureEntry> {
+export async function readFeatureProjectEntry(projectDir: string): Promise<StudioFeatureEntry> {
   const packageJson = JSON.parse(await fs.readFile(join(projectDir, 'package.json'), 'utf8')) as Record<string, unknown>;
   const packageName = cleanValue(packageJson.name);
   const main = cleanValue(packageJson.main) || 'dist/index.js';

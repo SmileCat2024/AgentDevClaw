@@ -6,8 +6,8 @@
 import os from 'os';
 import { promises as fs } from 'fs';
 import { join, resolve } from 'path';
-import type { StudioFeatureVerification, StudioTestCase, StudioRunRecord, SessionPolicy } from './assertions.js';
-import { normalizeAssertion, normalizeTestCase, ASSERTION_KINDS, type AssertionKind, type StudioAssertion, type StudioFeatureCoverage } from './assertions.js';
+import type { StudioFeatureVerification, StudioTestCase, StudioRunRecord } from './assertions.js';
+import { normalizeTestCase, type StudioFeatureCoverage } from './assertions.js';
 
 export type TestRuntimeStatus = 'not-provisioned' | 'running' | 'stopped';
 
