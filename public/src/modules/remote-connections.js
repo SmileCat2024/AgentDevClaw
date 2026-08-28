@@ -244,6 +244,62 @@ function getEntryHostAgentId(namespacedId) {
   return null;
 }
 
+// 目录条目 → 宿主级命名空间 id（如 'remote:server-a:programming-helper'）。
+// focusedAgentId 收敛（T21-A）用它把远程运行时引用归并到宿主 agent 身份；
+// 非目录条目（本地 id / 未知引用）返回 null，调用方显式失败不猜目标。
+function getEntryHostNamespaceId(namespacedId) {
+  const wanted = typeof namespacedId === 'string' ? namespacedId : '';
+  if (!wanted) return null;
+  for (const section of _rcVisibleSections.values()) {
+    for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+      for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
+        if (entry.runtimeId === wanted || entry.id === wanted) {
+          if (typeof entry.agentId === 'string' && entry.agentId) return entry.agentId;
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// 目录条目 → 会话标题回退链（sessionTitle → name → 空串）。header 标题回退
+// （T21-E）用它兜底远程会话顶部标题；未命中返回空串由调用方继续回退。
+function getEntrySessionTitle(namespacedId) {
+  const wanted = typeof namespacedId === 'string' ? namespacedId : '';
+  if (!wanted) return '';
+  for (const section of _rcVisibleSections.values()) {
+    for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+      for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
+        if (entry.runtimeId === wanted || entry.id === wanted) {
+          if (typeof entry.sessionTitle === 'string' && entry.sessionTitle) return entry.sessionTitle;
+          if (typeof entry.name === 'string' && entry.name) return entry.name;
+          return '';
+        }
+      }
+    }
+  }
+  return '';
+}
+
+// 目录条目 → 会话 id（服务端 sessionId）。仅当为非空字符串时返回，否则空串，
+// 调用方以空串视为不可寻址。
+function getEntryRuntimeSessionId(namespacedId) {
+  const wanted = typeof namespacedId === 'string' ? namespacedId : '';
+  if (!wanted) return '';
+  for (const section of _rcVisibleSections.values()) {
+    for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+      for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
+        if (entry.runtimeId === wanted || entry.id === wanted) {
+          if (typeof entry.sessionId === 'string' && entry.sessionId) return entry.sessionId;
+          return '';
+        }
+      }
+    }
+  }
+  return '';
+}
+
 function tryRestoreRemoteFocus() {
   if (_rcBootstrapSeen) return;
   _rcBootstrapSeen = true;
@@ -699,5 +755,8 @@ window.RemoteConnections = {
   openManager: openRemoteConnectionsManager,
   resolveRuntimeRef,
   getEntryHostAgentId,
+  getEntryHostNamespaceId,
+  getEntrySessionTitle,
+  getEntryRuntimeSessionId,
   isRemoteWriteEnabled,
 };
