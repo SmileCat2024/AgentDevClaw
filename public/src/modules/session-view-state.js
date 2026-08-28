@@ -9,11 +9,34 @@
  *
  * This module owns only commit eligibility. The poll timer and in-flight
  * promises remain runtime resources owned by the poll coordinator.
+ *
+ * `sessionMeta` carries the selected session's rich metadata (session id,
+ * title, model name). It is written as a whole replacement snapshot by the
+ * data-load / switch paths and is read-only for consumers.
  */
 
 function normalizeSessionViewRuntimeId(value) {
   return String(value || '').trim();
 }
+
+const EMPTY_SESSION_META = Object.freeze({
+  sessionId: '',
+  sessionTitle: '',
+  modelName: '',
+});
+
+function normalizeSessionMeta(value) {
+  if (!value || typeof value !== 'object') {
+    return EMPTY_SESSION_META;
+  }
+  return Object.freeze({
+    sessionId: String(value.sessionId ?? '').trim(),
+    sessionTitle: String(value.sessionTitle ?? '').trim(),
+    modelName: String(value.modelName ?? '').trim(),
+  });
+}
+
+const state = { sessionMeta: EMPTY_SESSION_META };
 
 function captureSessionViewToken(runtimeId = currentRuntimeAgentId) {
   return Object.freeze({
@@ -66,6 +89,7 @@ function readCurrentSessionViewState() {
     hookInspector: currentHookInspector,
     overview: currentOverviewSnapshot,
     todoPlan: currentTodoPlan,
+    sessionMeta: state.sessionMeta,
     connected: currentRuntimeConnected,
   });
 }
@@ -100,6 +124,9 @@ function applySessionViewPatch(patch) {
   }
   if (has('todoPlan')) {
     setCurrentTodoPlan(patch.todoPlan);
+  }
+  if (has('sessionMeta')) {
+    state.sessionMeta = normalizeSessionMeta(patch.sessionMeta);
   }
   if (has('connected')) {
     currentRuntimeConnected = patch.connected !== false;
