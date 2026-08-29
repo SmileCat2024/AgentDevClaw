@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, after } from 'node:test';
 
-import { hashPassword, verifyPassword } from '../server/auth.js';
+import { hashPassword, verifyPassword, sessionExpired, SESSION_IDLE_TTL_MS, SESSION_TTL_MS } from '../server/auth.js';
 
 const CHILD_SOURCE = String.raw`
   process.env.AGENTDEV_DATA_DIR = process.argv[1];
@@ -54,6 +54,19 @@ async function request(baseUrl, path, init = {}) {
   return fetch(`${baseUrl}${path}`, init);
 }
 
+async function waitForFile(filePath, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      await access(filePath);
+      return;
+    } catch {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${filePath}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+}
+
 describe('authentication primitives', () => {
   it('hashes and verifies passwords without storing the password', () => {
     const password = 'correct horse battery staple';
@@ -62,6 +75,26 @@ describe('authentication primitives', () => {
     assert.notEqual(result.salt, password);
     assert.equal(verifyPassword(password, result.salt, result.hash), true);
     assert.equal(verifyPassword('wrong password', result.salt, result.hash), false);
+  });
+});
+
+describe('session expiry policy', () => {
+  const now = 1_000_000_000_000;
+  const record = { absoluteExpiresAt: now + SESSION_TTL_MS, lastActiveAt: now };
+
+  it('keeps a fresh session valid', () => {
+    assert.equal(sessionExpired(record, now), false);
+  });
+
+  it('expires a session idle for 3 days even inside the 7-day window', () => {
+    assert.equal(sessionExpired({ ...record }, now + SESSION_IDLE_TTL_MS - 1), false);
+    assert.equal(sessionExpired({ ...record }, now + SESSION_IDLE_TTL_MS), true);
+  });
+
+  it('extends the idle window on activity but caps at the absolute 7-day expiry', () => {
+    const active = { absoluteExpiresAt: now + SESSION_TTL_MS, lastActiveAt: now + SESSION_TTL_MS - 1000 };
+    assert.equal(sessionExpired(active, now + SESSION_TTL_MS - 500), false);
+    assert.equal(sessionExpired(active, now + SESSION_TTL_MS), true);
   });
 });
 
@@ -134,11 +167,22 @@ describe('authentication HTTP boundary', () => {
     assert.equal(rateLimited.status, 429);
     assert.ok(rateLimited.headers.get('retry-after'));
 
+    const touched = await request(baseUrl, '/api/protected', {
+      headers: { cookie: sessionCookie },
+    });
+    assert.equal(touched.status, 200);
+    await waitForFile(join(dataDir, 'auth-sessions.json'));
+
     authServer.child.kill('SIGTERM');
     await new Promise((resolve) => authServer.child.once('exit', resolve));
     authServer = startAuthServer(dataDir);
     ({ port, token } = await authServer.ready);
     baseUrl = `http://127.0.0.1:${port}`;
+
+    const survived = await request(baseUrl, '/api/protected', {
+      headers: { cookie: sessionCookie },
+    });
+    assert.equal(survived.status, 200);
 
     const login = await request(baseUrl, '/protoclaw/auth/login', {
       method: 'POST',

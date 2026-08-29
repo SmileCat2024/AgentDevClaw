@@ -10,14 +10,18 @@ import {
 import { USER_DATA_ROOT } from './shared/constants.js';
 
 const AUTH_CONFIG_PATH = path.join(USER_DATA_ROOT, 'auth.json');
+const SESSIONS_PATH = path.join(USER_DATA_ROOT, 'auth-sessions.json');
 const SESSION_COOKIE = 'claw_session';
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// 闲置 3 天不活跃即要求重新登录；自登录起算最长 7 天，不随活动延长。
+export const SESSION_IDLE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_FLUSH_DELAY_MS = 250;
 const PASSWORD_MIN_LENGTH = 8;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILURES = 10;
 const LOGIN_RETRY_AFTER_SEC = 60;
 
-const sessions = new Map();
+const sessions = loadSessions();
 const loginFailures = new Map();
 
 function cleanText(value) {
@@ -77,6 +81,56 @@ function persistState() {
   return writeChain;
 }
 
+// 会话持久化：重启后已登录会话保留。活动刷新走短防抖落盘，避免每请求写盘；
+// 不依赖 exit 钩子刷盘（Windows 上 SIGTERM 不保证触发）。
+let sessionWriteChain = Promise.resolve();
+let sessionFlushTimer = null;
+
+function scheduleSessionFlush() {
+  if (sessionFlushTimer) return;
+  sessionFlushTimer = setTimeout(() => {
+    sessionFlushTimer = null;
+    sessionWriteChain = sessionWriteChain.then(flushSessions).catch(() => {});
+  }, SESSION_FLUSH_DELAY_MS);
+  sessionFlushTimer.unref?.();
+}
+
+async function flushSessions() {
+  pruneExpiredSessions();
+  const payload = `${JSON.stringify({ sessions: Object.fromEntries(sessions) }, null, 2)}\n`;
+  await fs.mkdir(USER_DATA_ROOT, { recursive: true });
+  const tempPath = `${SESSIONS_PATH}.${process.pid}.tmp`;
+  await fs.writeFile(tempPath, payload, { encoding: 'utf8', mode: 0o600 });
+  try {
+    await fs.chmod(tempPath, 0o600);
+  } catch {
+    // Windows does not expose Unix file modes.
+  }
+  await fs.rename(tempPath, SESSIONS_PATH);
+}
+
+function loadSessions() {
+  const map = new Map();
+  if (!existsSync(SESSIONS_PATH)) return map;
+  try {
+    const raw = JSON.parse(readFileSync(SESSIONS_PATH, 'utf8'));
+    const entries = raw && typeof raw === 'object' ? raw.sessions : null;
+    if (entries && typeof entries === 'object') {
+      for (const [id, record] of Object.entries(entries)) {
+        if (!/^[a-f0-9]{64}$/.test(id) || !record || typeof record !== 'object') continue;
+        const absoluteExpiresAt = Number(record.absoluteExpiresAt);
+        const lastActiveAt = Number(record.lastActiveAt);
+        if (!Number.isFinite(absoluteExpiresAt) || !Number.isFinite(lastActiveAt)) continue;
+        map.set(id, { absoluteExpiresAt, lastActiveAt });
+      }
+    }
+  } catch {
+    // 损坏的会话文件按无会话处理，重新登录即可恢复。
+  }
+  pruneExpiredSessions(map);
+  return map;
+}
+
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
   const normalized = typeof password === 'string' ? password : '';
   return {
@@ -98,13 +152,19 @@ export function verifyPassword(password, salt, expectedHash) {
 
 function createSession() {
   const id = randomBytes(32).toString('hex');
-  sessions.set(id, Date.now() + SESSION_TTL_MS);
+  sessions.set(id, { absoluteExpiresAt: Date.now() + SESSION_TTL_MS, lastActiveAt: Date.now() });
+  scheduleSessionFlush();
   return id;
 }
 
-function deleteExpiredSessions(now = Date.now()) {
-  for (const [id, expiresAt] of sessions) {
-    if (expiresAt <= now) sessions.delete(id);
+export function sessionExpired(record, now = Date.now()) {
+  return now >= record.absoluteExpiresAt
+    || now - record.lastActiveAt >= SESSION_IDLE_TTL_MS;
+}
+
+function pruneExpiredSessions(target = sessions, now = Date.now()) {
+  for (const [id, record] of target) {
+    if (sessionExpired(record, now)) target.delete(id);
   }
 }
 
@@ -170,15 +230,17 @@ export function clearSessionCookie(res, req) {
 }
 
 function authenticateSession(req) {
-  deleteExpiredSessions();
   const id = readCookies(req.headers.cookie)[SESSION_COOKIE];
   if (!id) return null;
-  const expiresAt = sessions.get(id);
-  if (!expiresAt || expiresAt <= Date.now()) {
+  const record = sessions.get(id);
+  if (!record) return null;
+  if (sessionExpired(record)) {
     sessions.delete(id);
+    scheduleSessionFlush();
     return null;
   }
-  sessions.set(id, Date.now() + SESSION_TTL_MS);
+  record.lastActiveAt = Date.now();
+  scheduleSessionFlush();
   return { kind: 'session', id };
 }
 
@@ -284,6 +346,7 @@ export function registerAuthRoutes(app, express) {
     }
     const id = readCookies(req.headers.cookie)[SESSION_COOKIE];
     if (id) sessions.delete(id);
+    scheduleSessionFlush();
     clearSessionCookie(res, req);
     res.json({ ok: true });
   });
@@ -320,6 +383,9 @@ export function registerAuthRoutes(app, express) {
         const hashed = hashPassword(password);
         state.passwordSalt = hashed.salt;
         state.passwordHash = hashed.hash;
+        // 密码变更后作废全部旧会话，防止旧登录态继续使用。
+        sessions.clear();
+        scheduleSessionFlush();
       }
       if (!enabled && !password && !state.passwordHash) {
         state.passwordSalt = '';
@@ -328,6 +394,10 @@ export function registerAuthRoutes(app, express) {
       if (enabled && !state.passwordHash) {
         res.status(400).json({ ok: false, error: 'A password is required before enabling protection', code: 'AUTH_PASSWORD_REQUIRED' });
         return;
+      }
+      if (!enabled) {
+        sessions.clear();
+        scheduleSessionFlush();
       }
       state.enabled = enabled;
       await persistState();
