@@ -467,10 +467,15 @@ function hideManagerForm() {
   if (_rcManagerEl) _rcManagerEl.querySelector('.rcm-form').style.display = 'none';
 }
 
+// 服务端不回传密码明文，已配置时表单回显掩码表示"已保存"；
+// 掩码提交按保持现有凭据处理，不作为新密码写入。
+const AUTH_MASK = '************';
+
 function showManagerForm(record) {
   const form = _rcManagerEl.querySelector('.rcm-form');
   _rcManagerEditingId = record?.id || null;
   const mode = record?.mode || 'manual';
+
   form.innerHTML = `
     <div class="rcm-form-grid">
       <label>${escapeHtml(t('rcon_field_name'))}<input name="name" required value="${escapeHtml(record?.name || '')}"></label>
@@ -486,7 +491,7 @@ function showManagerForm(record) {
       </label>
       <label class="rcm-url-field">${escapeHtml(t('rcon_field_base_url'))}<input name="baseUrl" type="url" placeholder="https://claw.example.com" value="${escapeHtml(record?.baseUrl || '')}"></label>
       <label class="rcm-local-port-field">${escapeHtml(t('rcon_field_local_port'))}<input name="localPort" type="number" min="1" max="65535" value="${escapeHtml(String(record?.localPort ?? ''))}"></label>
-      <label class="rcm-auth-field">${escapeHtml(t('rcon_field_auth_password'))}<input name="authPassword" type="password" autocomplete="new-password" placeholder="${escapeHtml(record?.auth?.configured ? t('rcon_field_auth_keep') : t('rcon_field_auth_hint'))}"></label>
+      <label class="rcm-auth-field">${escapeHtml(t('rcon_field_auth_password'))}<input name="authPassword" type="password" autocomplete="new-password" value="${record?.auth?.configured ? AUTH_MASK : ''}" placeholder="${escapeHtml(record?.auth?.configured ? t('rcon_field_auth_keep') : t('rcon_field_auth_hint'))}"></label>
     </div>
     <fieldset class="rcm-managed-fields">
       <legend>${escapeHtml(t('rcon_mode_managed'))}</legend>
@@ -546,9 +551,9 @@ async function submitManagerForm(event, form) {
     payload.id = idField;
   }
 
-  // 访问密码：填写则更新；编辑时留空 = 不提交 auth 字段 = 服务端保持现有密码。
+  // 访问密码：回显掩码 = 已保存（保持现有凭据）；输入新值则更新；留空同样保持不变。
   const authPassword = form.elements.authPassword.value;
-  if (authPassword) payload.auth = { password: authPassword };
+  if (authPassword && authPassword !== AUTH_MASK) payload.auth = { password: authPassword };
 
   if (mode === 'url') {
     const baseUrl = form.elements.baseUrl.value.trim().replace(/\/+$/, '');

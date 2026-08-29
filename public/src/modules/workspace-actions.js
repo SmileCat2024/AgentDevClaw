@@ -661,6 +661,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       markSessionLoading(activeAgent.id, action.sessionId);
     }
     if (triggerButton) markActionLoading(triggerButton);
+    // Declared outside try so the catch block can still settle the operation.
+    let sidebarOperation = null;
     try {
       prebuiltSessionSwitchInFlight = true;
       const sessionAction = action.type === 'open_session'
@@ -675,7 +677,6 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             openDirectory: action.openDirectory,
             targetDir: action.targetDir,
       };
-      let sidebarOperation = null;
       const runSessionOpen = async () => {
         const _navGuard = _navigationGuardEpoch;
         const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
