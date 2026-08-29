@@ -44,8 +44,9 @@ import {
   getAgentRuntime,
   listAgentRuntimes,
   isManagedRuntimeRunning,
+  getRuntimeByViewerAgentId,
 } from '../shared/agent-access.js';
-import { sanitizeSessionFragment } from '../shared/string-helpers.js';
+import { sanitizeSessionFragment, cleanSessionText } from '../shared/string-helpers.js';
 
 /** 对外契约 ID：ACP adapter 请求体仍传 agentId="coder"。 */
 export const ACP_AGENT_ID = 'coder';
@@ -658,15 +659,26 @@ export function setupAcpRoutes(app, express, ctx) {
   // ── 精确停止（session/close 的数据面；控制面与取消状态机在 adapter）──
 
   app.post('/protoclaw/acp/coder/sessions/:clawSessionId/stop', express.json(), async (req, res) => {
-    const clawSessionId = sanitizeSessionFragment(req.params.clawSessionId);
+    const clawSessionId = cleanSessionText(req.params.clawSessionId);
     try {
       if (!clawSessionId) {
         throw acpError(400, 'invalid_params', 'clawSessionId is required');
       }
-      // 与 interrupt 同一寻址语义：精确 session，绝不回退 primary runtime。
-      // 停止的是该会话的 runtime（进程或共享进程内的 session 释放）；thread /
-      // session 持久数据不动——归档是 Claw 管理面的动作，不经此层。
-      await stopManagedAgent(ACP_WORKSPACE_AGENT_ID, clawSessionId);
+      // 与 interrupt 同一寻址语义：resolveSessionViewerAgentId 含
+      // selectedSessionId 扫描兜底（shared 进程注册键漂移 / 线程接力后 head
+      // 换代时注册键上没有新 head 条目，selectedSessionId 才是绑定事实）。
+      // 找不到 viewer 说明该会话确无运行中 runtime —— 幂等成功。
+      // 命中则按条目的注册键停（getAgentRuntime 只按注册键查找；shared 模式
+      // remove-session 也依赖条目自身状态）。thread / session 持久数据不动
+      // ——归档是 Claw 管理面的动作，不经此层。
+      const viewerAgentId = resolveSessionViewerAgentId(ACP_WORKSPACE_AGENT_ID, clawSessionId);
+      if (viewerAgentId) {
+        const runtimeEntry = getRuntimeByViewerAgentId(viewerAgentId);
+        await stopManagedAgent(
+          ACP_WORKSPACE_AGENT_ID,
+          runtimeEntry?.selectedSessionId || clawSessionId,
+        );
+      }
       res.json({ ok: true, clawSessionId });
     } catch (error) {
       res.status(Number(error?.statusCode) || 500).json({

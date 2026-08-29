@@ -738,6 +738,20 @@ describe('session/close', () => {
     await assert.rejects(manager.closeSession(sessionId), (error) => error.code === ERROR_CODES.CLAW_ERROR);
     assert.equal(manager.size, 1);
   });
+
+  it('rejects a new prompt while close is settling (runtime already stopping)', async () => {
+    const claw = makeMockClawClient({
+      stopError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'x' }),
+    });
+    const { manager, sessionId } = await makeSession(claw);
+    // stop 失败：closing 已置位、映射保留，收敛窗口覆盖整个 stop 往返
+    await assert.rejects(manager.closeSession(sessionId), () => true);
+    await assert.rejects(
+      manager.runPrompt(sessionId, 'late', { onUpdate: () => {} }),
+      (error) => error.code === ERROR_CODES.SESSION_BUSY,
+    );
+    assert.equal(manager.size, 1);
+  });
 });
 
 describe('dispose (design §5 / Q12)', () => {

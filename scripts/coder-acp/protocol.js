@@ -91,12 +91,15 @@ export function clawServerError(status, body) {
  * session/new 参数校验（设计 §4.2）。
  *
  * cwd：必填字符串，原样交 server 校验（存在且为目录由 server 判定）；
+ * model：可选字符串（_meta.claw.model 透传），指定启动模型预设——server
+ *        按 preset name → model 字段顺序消歧，歧义/未命中返回 -32003，
+ *        错误体携带候选列表；
  * mcpServers：非空一律拒绝（SDK schema 缺省时填 []，协议语义等价于显式空数组）；
  * additionalDirectories：非空拒绝。
  * sessionModes 不在 ACP v1 正式版 NewSessionRequest schema 中，SDK zod 会
  * strip 掉该字段——由 `guardSessionModesMessage` 在消息层拦截（见下）。
  *
- * @returns {{ cwd: string }}
+ * @returns {{ cwd: string, model?: string }}
  */
 export function validateNewSessionParams(params) {
   const cwd = params?.cwd;
@@ -115,7 +118,16 @@ export function validateNewSessionParams(params) {
       'additionalDirectories must be empty; additional directories are not supported',
     );
   }
-  return { cwd };
+  // 启动模型：经 _meta.claw.model 传递（顶层未知字段会被 SDK zod strip，
+  // _meta 是 schema 保留透传通道）。非字符串一律 -32602；空串视为未指定。
+  const metaModel = params?._meta?.claw?.model;
+  if (metaModel !== undefined && typeof metaModel !== 'string') {
+    throw invalidParamsError('model', '_meta.claw.model must be a string when provided');
+  }
+  return {
+    cwd,
+    ...(typeof metaModel === 'string' && metaModel.trim() ? { model: metaModel.trim() } : {}),
+  };
 }
 
 /**

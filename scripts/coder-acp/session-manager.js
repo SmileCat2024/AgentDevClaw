@@ -192,6 +192,11 @@ export function createSessionManager(options = {}) {
     });
   }
 
+  /** 无中断方的固定间隔等待。 */
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   /** 基线捕获（设计 §9.3 主判定）：已知 eventId 集合。 */
   async function captureBaseline(session, context = {}) {
     const after = session.eventCursor ?? 0;
@@ -221,6 +226,7 @@ export function createSessionManager(options = {}) {
         eventCursor: 0,
         activePrompt: null,
         cancelGeneration: 0,
+        closing: false, // closeSession 收敛标记：拒绝收敛窗口内的新 prompt
       };
       threadStates.set(threadId, state);
     } else if (!state.clawSessionId && clawSessionId) {
@@ -475,6 +481,10 @@ export function createSessionManager(options = {}) {
     }
     if (session.activePrompt) {
       throw sessionBusyError(session.activePrompt.generation);
+    }
+    // close 收敛中：runtime 正在停止，受理新 prompt 只会挂起到超时
+    if (session.closing) {
+      throw sessionBusyError(session.cancelGeneration);
     }
 
     // activePrompt 在任何 await 之前登记：cancel 可能在基线捕获 / 命令投递
@@ -800,9 +810,12 @@ export function createSessionManager(options = {}) {
       // 等 prompt 彻底退出轮询（interrupt 送达 + finally 清 activePrompt），
       // 避免停 runtime 与事件轮询并发收敛。
       while (session.activePrompt === prompt) {
-        await interruptibleSleep(pollIntervalMs, new AbortController().signal);
+        await sleep(pollIntervalMs);
       }
     }
+    // 收敛后到清映射前的窗口内拒绝新 prompt：此时 runtime 即将/已被 stop，
+    // 新 prompt 会入箱到无投递触发的线程上挂起到超时。
+    session.closing = true;
     try {
       await clawClient.stopCoderSession(session.clawSessionId, {
         method: 'session/close',

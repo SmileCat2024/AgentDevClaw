@@ -210,6 +210,14 @@ async function callStop(app, clawSessionId) {
   return res;
 }
 
+async function callStopInvalid(app) {
+  const handlers = app._routes['POST /protoclaw/acp/coder/sessions/:clawSessionId/stop'];
+  const main = handlers[handlers.length - 1];
+  const res = makeMockRes();
+  await main({ params: { clawSessionId: ' ' }, body: {} }, res);
+  return res;
+}
+
 async function callList(app, query = {}) {
   const handlers = app._routes['GET /protoclaw/acp/coder/sessions'];
   const res = makeMockRes();
@@ -610,13 +618,34 @@ describe('ACP stop', () => {
     assert.equal(ctx._calls.closeThread, undefined);
   });
 
-  it('is idempotent when no runtime is bound to the session', async () => {
+  it('resolves drifted registration keys via selectedSessionId scan (thread rotation drift)', async () => {
+    // 接力后 head 换代：注册键仍是旧 id，selectedSessionId 已指向新 head。
+    // close 携带新 head id，必须经扫描兜底定位条目，并传条目上当前绑定的
+    // selectedSessionId（注册键 === selectedSessionId 键，真实 stopManagedAgent
+    // 才能查到条目）。
+    seedRuntime({ sessionId: 'sess-old', viewerAgentId: 'viewer-A' });
+    managedAgents.get('programming-helper::sess-old').selectedSessionId = 'sess-new';
+    const { ctx, app } = setupAcpHarness();
+    const res = await callStop(app, 'sess-new');
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'programming-helper', sessionId: 'sess-new' }]);
+  });
+
+  it('is idempotent when no runtime is bound to the session (no stop call)', async () => {
     const { ctx, app } = setupAcpHarness();
     const res = await callStop(app, 'sess-unknown');
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.body, { ok: true, clawSessionId: 'sess-unknown' });
-    // stopManagedAgent 仍被调用：其内部对未知 runtime 是幂等清理
-    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'programming-helper', sessionId: 'sess-unknown' }]);
+    // 扫描兜底也找不到运行中 runtime → 确实无 runtime，无需调用 stop
+    assert.equal(ctx._calls.stopManagedAgent, undefined);
+  });
+
+  it('rejects an empty clawSessionId with 400 (no runtime touched)', async () => {
+    const { ctx, app } = setupAcpHarness();
+    const res = await callStopInvalid(app);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.code, 'invalid_params');
+    assert.equal(ctx._calls.stopManagedAgent, undefined);
   });
 
   it('surfaces stopManagedAgent failures as 500 with code', async () => {
