@@ -246,12 +246,14 @@ export function createSessionManager(options = {}) {
 
   /**
    * session/new：调 018 原子路由建立 Claw session + thread，登记内存映射。
+   * @param {string} cwd
+   * @param {{ model?: string }} [options] 可选启动模型预设（server 消歧解析）
    * @returns {{ sessionId: string }} ACP 响应（协议标识不外泄 Claw ID）
    */
-  async function createSession(cwd) {
+  async function createSession(cwd, options = {}) {
     let body;
     try {
-      body = await clawClient.createCoderSession(cwd, { method: 'session/new' });
+      body = await clawClient.createCoderSession(cwd, { method: 'session/new' }, { model: options.model });
     } catch (error) {
       throw toAcpError(error);
     }
@@ -773,12 +775,12 @@ export function createSessionManager(options = {}) {
   }
 
   /**
-   * session/close（协议 v1 正式方法）：ACP 要求 close 时必须先像
-   * session/cancel 一样取消进行中的工作（再释放资源）。当前实现：有
-   * in-flight prompt 时先走同一取消状态机（interrupt 恰好一次 + 唤醒），
-   * 等待其 settle 后再归档 thread；thread 已消失或已归档视为幂等成功。
-   * adapter 断开不触发本方法（dispose 只清内存）——归档只在 client
-   * 显式请求时发生。
+   * session/close（协议 v1 正式方法）：ACP §9.8 close = cancel + 释放资源。
+   * 有 in-flight prompt 时先走同一取消状态机（interrupt 恰好一次 + 唤醒），
+   * 等待其 settle；随后精确停掉该会话的 runtime（stop 路由，未运行时幂等
+   * 成功）并释放 adapter 侧映射。thread / session 持久数据不动——归档是
+   * Claw 管理面的动作，不在 ACP 协议面内；adapter 断开不触发本方法
+   * （dispose 只清内存），释放只在 client 显式请求时发生。
    */
   async function closeSession(acpSessionId) {
     const session = resolveSession(acpSessionId);
@@ -795,24 +797,27 @@ export function createSessionManager(options = {}) {
         threadId: session.threadId,
         promptGeneration: prompt.generation,
       });
-      // 等 prompt 彻底退出轮询（interrupt 送达 + finally 清 activePrompt）。
-      // 归档事务在 server 侧本身会 interrupt/stop runtime，这里只需等本地
-      // 消费状态收敛，避免归档后仍继续 GET events。
+      // 等 prompt 彻底退出轮询（interrupt 送达 + finally 清 activePrompt），
+      // 避免停 runtime 与事件轮询并发收敛。
       while (session.activePrompt === prompt) {
         await interruptibleSleep(pollIntervalMs, new AbortController().signal);
       }
     }
     try {
-      await clawClient.archiveThread(session.threadId, {
+      await clawClient.stopCoderSession(session.clawSessionId, {
         method: 'session/close',
         acpSessionId,
         clawSessionId: session.clawSessionId,
       });
     } catch (error) {
-      const alreadyGone = error instanceof ClawHttpError
-        && (error.status === 404
-          || error.body?.code === 'thread_not_found');
-      if (!alreadyGone) throw toAcpError(error);
+      trace?.record('acp.session.stop_failed', {
+        acpSessionId,
+        clawSessionId: session.clawSessionId,
+        threadId: session.threadId,
+        errorCode: error instanceof ClawHttpError ? (error.body?.code ?? error.status) : error?.code,
+        errorMessage: error?.message,
+      }, { level: 'error' });
+      throw toAcpError(error);
     }
     removeThreadState(session);
     trace?.record('acp.session.closed', {
@@ -825,8 +830,8 @@ export function createSessionManager(options = {}) {
 
   /**
    * 断开清理：仅释放内存映射（设计 §5 / Q12）。Claw session / thread /
-   * runtime 按 Claw 自身持久化机制保留；显式归档走 closeSession
-   * （session/close），不与断开挂钩。
+   * runtime 按 Claw 自身持久化机制保留；显式释放（停 runtime + 清映射）
+   * 走 closeSession（session/close），不与断开挂钩。
    */
   function dispose() {
     threadStates.clear();

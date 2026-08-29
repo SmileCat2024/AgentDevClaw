@@ -24,7 +24,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'path';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 
 import {
@@ -32,6 +32,7 @@ import {
   validateAcpCwd,
   resolveSessionViewerAgentId,
   resolveAcpReadyTimeoutMs,
+  resolveAcpModelPreset,
   ACP_READY_TIMEOUT_DEFAULT_MS,
 } from '../server/routes/acp.js';
 import { setupThreadRoutes } from '../server/thread-control/thread-routes.js';
@@ -169,6 +170,8 @@ function setupAcpHarness(overrides = {}) {
   const app = makeMockApp();
   setupAcpRoutes(app, makeMockExpress(), {
     ...ctx,
+    acpPresetsPath: overrides.acpPresetsPath,
+    acpModelConfigPath: overrides.acpModelConfigPath,
     threadControl: {
       ...ctx.threadControl,
       archive: {
@@ -193,6 +196,14 @@ async function callCreate(app, body) {
 
 async function callInterrupt(app, clawSessionId) {
   const handlers = app._routes['POST /protoclaw/acp/coder/sessions/:clawSessionId/interrupt'];
+  const main = handlers[handlers.length - 1];
+  const res = makeMockRes();
+  await main({ params: { clawSessionId }, body: {} }, res);
+  return res;
+}
+
+async function callStop(app, clawSessionId) {
+  const handlers = app._routes['POST /protoclaw/acp/coder/sessions/:clawSessionId/stop'];
   const main = handlers[handlers.length - 1];
   const res = makeMockRes();
   await main({ params: { clawSessionId }, body: {} }, res);
@@ -268,10 +279,11 @@ afterEach(() => {
 // ── Route registration ────────────────────────────────────────────
 
 describe('ACP routes — registration', () => {
-  it('registers the create + interrupt endpoints', () => {
+  it('registers the create + interrupt + stop endpoints', () => {
     const { app } = setupAcpHarness();
     assert.ok(app._routes['POST /protoclaw/acp/coder/sessions']);
     assert.ok(app._routes['POST /protoclaw/acp/coder/sessions/:clawSessionId/interrupt']);
+    assert.ok(app._routes['POST /protoclaw/acp/coder/sessions/:clawSessionId/stop']);
   });
 });
 
@@ -581,6 +593,40 @@ describe('ACP interrupt', () => {
       selectedSessionId: 'sess-a',
     });
     assert.equal(resolveSessionViewerAgentId('programming-helper', 'sess-a'), 'viewer-drifted');
+  });
+});
+
+// ── stop（session/close 的数据面）─────────────────────────────────
+
+describe('ACP stop', () => {
+  it('stops the exact session runtime and touches no thread state', async () => {
+    seedRuntime({ sessionId: 'sess-a', viewerAgentId: 'viewer-A' });
+    const { ctx, app } = setupAcpHarness();
+    const res = await callStop(app, 'sess-a');
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body, { ok: true, clawSessionId: 'sess-a' });
+    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'programming-helper', sessionId: 'sess-a' }]);
+    // stop 不归档：归档是管理面动作，不经此层
+    assert.equal(ctx._calls.closeThread, undefined);
+  });
+
+  it('is idempotent when no runtime is bound to the session', async () => {
+    const { ctx, app } = setupAcpHarness();
+    const res = await callStop(app, 'sess-unknown');
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body, { ok: true, clawSessionId: 'sess-unknown' });
+    // stopManagedAgent 仍被调用：其内部对未知 runtime 是幂等清理
+    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'programming-helper', sessionId: 'sess-unknown' }]);
+  });
+
+  it('surfaces stopManagedAgent failures as 500 with code', async () => {
+    seedRuntime({ sessionId: 'sess-a', viewerAgentId: 'viewer-A' });
+    const { app } = setupAcpHarness({ stopManagedAgentThrow: 'kill failed' });
+    const res = await callStop(app, 'sess-a');
+    assert.equal(res.statusCode, 500);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.code, 'acp_stop_failed');
+    assert.match(res.body.message, /kill failed/);
   });
 });
 
@@ -989,6 +1035,158 @@ describe('server wiring contract for ACP routes', () => {
     assert.throws(
       () => setupAcpRoutes(makeMockApp(), makeMockExpress(), {}),
       /missing required ctx dependency "requirePrebuiltSessionRecord"/,
+    );
+  });
+});
+
+// ── session/new model 参数：预设消歧解析 + coder 配置持久化 ──────────
+// 对外字段名是 model，真实索引是预设的 name（display name）与 model 字段；
+// 匹配规则「唯一即用、歧义即报错」，解析成功即写入 coder.json（持久化）。
+
+describe('ACP create — model preset resolution', () => {
+  let fixtureDir;
+  let presetsPath;
+  let configPath;
+
+  beforeEach(() => {
+    fixtureDir = mkdtempSync(join(tmpdir(), 'coder-acp-model-'));
+    presetsPath = join(fixtureDir, 'presets.json');
+    configPath = join(fixtureDir, 'coder.json');
+    writeFileSync(presetsPath, JSON.stringify({
+      providers: [{ name: 'Fixture Provider', apiKey: 'k', endpoints: { anthropic: 'https://fixture.example/api' } }],
+      presets: [
+        { name: '智谱 GLM-5.3-Flash', providerName: 'Fixture Provider', protocol: 'anthropic', model: 'glm-5.3-flash' },
+        { name: '牛来', providerName: 'Fixture Provider', protocol: 'anthropic', model: 'glm-5.3-flash' },
+        { name: 'DeepSeek Local', providerName: 'Fixture Provider', protocol: 'anthropic', model: 'deepseek-v4-flash' },
+      ],
+    }));
+  });
+
+  afterEach(() => {
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  function harness() {
+    seedRuntime({ sessionId: 'sess-acp-1', viewerAgentId: 'viewer-acp-1' });
+    const { ctx, app } = setupAcpHarness({ acpPresetsPath: presetsPath, acpModelConfigPath: configPath });
+    return { ctx, app };
+  }
+
+  it('rejects non-string model with 400 and zero side effects', async () => {
+    const { ctx, app } = harness();
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 123 });
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.code, 'invalid_model');
+    assert.equal(ctx._calls.createPrebuiltSession, undefined);
+  });
+
+  it('rejects unknown model with the full preset list (400, zero side effects)', async () => {
+    const { ctx, app } = harness();
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'no-such-model' });
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.code, 'model_preset_not_found');
+    assert.match(res.body.message, /智谱 GLM-5.3-Flash/);
+    assert.match(res.body.message, /牛来/);
+    assert.equal(ctx._calls.createPrebuiltSession, undefined);
+  });
+
+  it('rejects ambiguous model name listing all matching presets', async () => {
+    const { ctx, app } = harness();
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'glm-5.3-flash' });
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.code, 'ambiguous_model');
+    assert.match(res.body.message, /matches 2 presets/);
+    assert.match(res.body.message, /智谱 GLM-5.3-Flash/);
+    assert.match(res.body.message, /牛来/);
+    assert.equal(ctx._calls.createPrebuiltSession, undefined);
+  });
+
+  it('resolves a unique model field hit and persists the preset name to the coder config', async () => {
+    const { app } = harness();
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'deepseek-v4-flash' });
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.modelPreset, 'DeepSeek Local');
+
+    const saved = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.equal(saved.modelPresets.default, 'DeepSeek Local');
+  });
+
+  it('resolves a preset name (display name with spaces) exactly', async () => {
+    const { app } = harness();
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: '智谱 GLM-5.3-Flash' });
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.modelPreset, '智谱 GLM-5.3-Flash');
+    const saved = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.equal(saved.modelPresets.default, '智谱 GLM-5.3-Flash');
+  });
+
+  it('resolves a case-insensitive preset name when unique', async () => {
+    const { app } = harness();
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'deepseek local' });
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.modelPreset, 'DeepSeek Local');
+  });
+
+  it('omits modelPreset when model is not provided', async () => {
+    const { app } = harness();
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd() });
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.modelPreset, undefined);
+    assert.equal(existsSync(configPath), false);
+  });
+
+  it('rejects empty presets table', async () => {
+    writeFileSync(presetsPath, JSON.stringify({ providers: [], presets: [] }));
+    const { ctx, app } = harness();
+    const res = await callCreate(app, { agentId: 'coder', cwd: validCwd(), model: 'anything' });
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.code, 'model_preset_unavailable');
+    assert.equal(ctx._calls.createPrebuiltSession, undefined);
+  });
+});
+
+describe('resolveAcpModelPreset — unit', () => {
+  let fixtureDir;
+  let presetsPath;
+
+  beforeEach(() => {
+    fixtureDir = mkdtempSync(join(tmpdir(), 'coder-acp-model-unit-'));
+    presetsPath = join(fixtureDir, 'presets.json');
+  });
+
+  afterEach(() => {
+    rmSync(fixtureDir, { recursive: true, force: true });
+  });
+
+  function writePresets(presets) {
+    writeFileSync(presetsPath, JSON.stringify({ providers: [], presets }));
+  }
+
+  it('returns null for empty/missing input', async () => {
+    writePresets([]);
+    assert.equal(await resolveAcpModelPreset(undefined, { presetsPath }), null);
+    assert.equal(await resolveAcpModelPreset('', { presetsPath }), null);
+    assert.equal(await resolveAcpModelPreset('   ', { presetsPath }), null);
+  });
+
+  it('name exact match wins over model field collision', async () => {
+    // "alpha" 既是 preset A 的 name，也是多个预设的 model 名——name 精确优先
+    writePresets([
+      { name: 'alpha', model: 'other-model' },
+      { name: 'b', model: 'alpha' },
+      { name: 'c', model: 'alpha' },
+    ]);
+    assert.equal(await resolveAcpModelPreset('alpha', { presetsPath }), 'alpha');
+  });
+
+  it('duplicate exact names are rejected as ambiguous', async () => {
+    writePresets([
+      { name: 'dup', model: 'm1' },
+      { name: 'dup', model: 'm2' },
+    ]);
+    await assert.rejects(
+      resolveAcpModelPreset('dup', { presetsPath }),
+      (error) => error?.code === 'ambiguous_model',
     );
   });
 });

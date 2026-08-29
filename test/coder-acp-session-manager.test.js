@@ -43,7 +43,7 @@ import {
 // ── mock claw client（脚本式：pages 逐页消费） ─────────────────────
 
 function makeMockClawClient(overrides = {}) {
-  const calls = { createSessions: [], commands: [], events: [], interrupts: [], archives: [] };
+  const calls = { createSessions: [], commands: [], events: [], interrupts: [], stops: [] };
   const state = {
     sessionResponse: {
       ok: true,
@@ -56,7 +56,7 @@ function makeMockClawClient(overrides = {}) {
     commandError: null,
     eventsError: null,
     interruptError: null,
-    closeError: null,
+    stopError: null,
     /** 每次 getThreadEvents 弹出一页；耗尽后回落 defaultPage（空轮询） */
     pages: [],
     defaultPage: { events: [], cursor: 0 },
@@ -116,10 +116,10 @@ function makeMockClawClient(overrides = {}) {
       if (state.interruptError) throw state.interruptError;
       return { ok: true, clawSessionId };
     },
-    async archiveThread(threadId) {
-      calls.archives.push(threadId);
-      if (state.archiveError) throw state.archiveError;
-      return { ok: true, threadId, archivedAt: 1 };
+    async stopCoderSession(clawSessionId) {
+      calls.stops.push(clawSessionId);
+      if (state.stopError) throw state.stopError;
+      return { ok: true, clawSessionId };
     },
   };
 }
@@ -169,6 +169,15 @@ describe('session mapping', () => {
     assert.equal(internal.clawSessionId, 'claw-s1');
     assert.equal(internal.threadId, 'thread-1');
     assert.equal(internal.viewerAgentId, 'viewer-1');
+  });
+
+  it('forwards the optional model to createCoderSession only when specified', async () => {
+    const claw = makeMockClawClient();
+    const { manager } = makeManager(claw);
+    await manager.createSession('C:/work', { model: '智谱 GLM-5.3-Flash' });
+    await manager.createSession('C:/work');
+    // 两次创建都发生（model 透传的 body 形状在 HTTP 层用例断言）
+    assert.equal(claw.calls.createSessions.length, 2);
   });
 
   it('maps creation HTTP failure to -32003 with the server error body', async () => {
@@ -681,11 +690,13 @@ describe('poll failure mapping', () => {
 });
 
 describe('session/close', () => {
-  it('forwards thread archive to Claw, removes the mapping, returns {}', async () => {
+  it('stops the session runtime via the stop route, removes the mapping, returns {}', async () => {
     const claw = makeMockClawClient();
     const { manager, sessionId } = await makeSession(claw);
     assert.deepEqual(await manager.closeSession(sessionId), {});
-    assert.deepEqual(claw.calls.archives, ['thread-1']);
+    // close 不归档：归档是 Claw 管理面动作；释放对象是该会话的 runtime
+    assert.deepEqual(claw.calls.stops, ['claw-s1']);
+    assert.equal(claw.calls.archives, undefined);
     assert.equal(manager.getSession(sessionId), null);
     assert.equal(manager.size, 0);
   });
@@ -700,7 +711,7 @@ describe('session/close', () => {
     });
   });
 
-  it('close with an in-flight prompt cancels it first (ACP §9.8: cancel + free), then archives', async () => {
+  it('close with an in-flight prompt cancels it first (ACP §9.8: cancel + free), then stops the runtime', async () => {
     const claw = makeMockClawClient();
     const { manager, sessionId } = await makeSession(claw);
     const promptPromise = manager.runPrompt(sessionId, 'x', { onUpdate: () => {} });
@@ -713,26 +724,15 @@ describe('session/close', () => {
     assert.deepEqual(claw.calls.interrupts, ['claw-s1']);
     const prompt = await promptPromise;
     assert.deepEqual(prompt, { stopReason: 'cancelled' });
-    // 先取消后归档：两者都发生，且归档在 prompt 收敛之后
-    assert.deepEqual(claw.calls.archives, ['thread-1']);
+    // 先取消后停 runtime：两者都发生，且 stop 在 prompt 收敛之后
+    assert.deepEqual(claw.calls.stops, ['claw-s1']);
     assert.equal(manager.size, 0);
     assert.equal(manager.getSession(sessionId), null);
   });
 
-  it('already-gone thread (404) is idempotent success', async () => {
-    for (const archiveError of [
-      new ClawHttpError(404, { ok: false, code: 'thread_not_found' }),
-    ]) {
-      const claw = makeMockClawClient({ archiveError });
-      const { manager, sessionId } = await makeSession(claw);
-      assert.deepEqual(await manager.closeSession(sessionId), {});
-      assert.equal(manager.size, 0);
-    }
-  });
-
-  it('other archive failures map to -32003 and keep the mapping', async () => {
+  it('stop failures map to -32003 and keep the mapping', async () => {
     const claw = makeMockClawClient({
-      archiveError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'x' }),
+      stopError: new ClawHttpError(500, { ok: false, code: 'internal_error', message: 'x' }),
     });
     const { manager, sessionId } = await makeSession(claw);
     await assert.rejects(manager.closeSession(sessionId), (error) => error.code === ERROR_CODES.CLAW_ERROR);
@@ -779,8 +779,9 @@ describe('claw-client request assembly (HTTP layer)', () => {
       },
     });
     await claw.createCoderSession('C:/work');
+    await claw.createCoderSession('C:/work', {}, { model: '智谱 GLM-5.3-Flash' });
     await claw.appendUserMessage('thread-1', { text: 'hi', idempotencyKey: 'acp-x' });
-    await claw.archiveThread('thread-1');
+    await claw.stopCoderSession('claw-s1');
 
     assert.deepEqual(sent[0], {
       url: 'http://127.0.0.1:1/protoclaw/acp/coder/sessions',
@@ -789,13 +790,19 @@ describe('claw-client request assembly (HTTP layer)', () => {
       authorization: 'Bearer test-internal-token',
     });
     assert.deepEqual(sent[1], {
+      url: 'http://127.0.0.1:1/protoclaw/acp/coder/sessions',
+      method: 'POST',
+      body: { agentId: 'coder', cwd: 'C:/work', model: '智谱 GLM-5.3-Flash' },
+      authorization: 'Bearer test-internal-token',
+    });
+    assert.deepEqual(sent[2], {
       url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/commands',
       method: 'POST',
       body: { kind: 'user_message', text: 'hi', source: 'acp', idempotencyKey: 'acp-x' },
       authorization: 'Bearer test-internal-token',
     });
-    assert.deepEqual(sent[2], {
-      url: 'http://127.0.0.1:1/protoclaw/threads/thread-1/archive',
+    assert.deepEqual(sent[3], {
+      url: 'http://127.0.0.1:1/protoclaw/acp/coder/sessions/claw-s1/stop',
       method: 'POST',
       body: null,
       authorization: 'Bearer test-internal-token',
@@ -807,6 +814,34 @@ describe('protocol.js request validation', () => {
   it('validateNewSessionParams accepts minimal params and returns cwd', () => {
     assert.deepEqual(validateNewSessionParams({ cwd: 'C:/work', mcpServers: [] }), { cwd: 'C:/work' });
     assert.deepEqual(validateNewSessionParams({ cwd: 'C:/work' }), { cwd: 'C:/work' });
+  });
+
+  it('validateNewSessionParams extracts _meta.claw.model (trimmed); empty/blank means unspecified', () => {
+    assert.deepEqual(
+      validateNewSessionParams({ cwd: 'C:/work', _meta: { claw: { model: '智谱 GLM-5.3-Flash' } } }),
+      { cwd: 'C:/work', model: '智谱 GLM-5.3-Flash' },
+    );
+    assert.deepEqual(
+      validateNewSessionParams({ cwd: 'C:/work', _meta: { claw: { model: '  glm  ' } } }),
+      { cwd: 'C:/work', model: 'glm' },
+    );
+    // 空串 / 纯空白 / _meta 缺失 → 不带 model 字段（未指定）
+    assert.deepEqual(
+      validateNewSessionParams({ cwd: 'C:/work', _meta: { claw: { model: '' } } }),
+      { cwd: 'C:/work' },
+    );
+    assert.deepEqual(
+      validateNewSessionParams({ cwd: 'C:/work', _meta: { claw: { model: '   ' } } }),
+      { cwd: 'C:/work' },
+    );
+    assert.deepEqual(validateNewSessionParams({ cwd: 'C:/work', _meta: {} }), { cwd: 'C:/work' });
+  });
+
+  it('validateNewSessionParams rejects non-string _meta.claw.model', () => {
+    assert.throws(
+      () => validateNewSessionParams({ cwd: 'C:/work', _meta: { claw: { model: 42 } } }),
+      (e) => e.code === ERROR_CODES.INVALID_PARAMS && e.data.field === 'model',
+    );
   });
 
   it('validateNewSessionParams rejects bad cwd / non-empty mcpServers / additionalDirectories', () => {

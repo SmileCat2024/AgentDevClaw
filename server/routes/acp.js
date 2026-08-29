@@ -6,7 +6,12 @@
  * thread，且需要理解 viewerAgentId 等 ViewerWorker 内部概念，见 ADR-0004 决策 3）：
  *
  *   POST /protoclaw/acp/coder/sessions
- *     （原子创建，见下）
+ *     （原子创建，见下；可选 body.model 指定启动模型预设，见
+ *     resolveAcpModelPreset —— 解析成功即持久化写入 coder 配置）
+ *
+ * 测试缝（ctx 注入，production callers omit）：
+ *   ctx.acpPresetsPath      resolveAcpModelPreset 的 presets.json 路径覆盖
+ *   ctx.acpModelConfigPath  applyAcpModelPreset 的 coder.json 路径覆盖
  *
  *   GET  /protoclaw/acp/coder/sessions?cwd=...
  *     线程视角会话发现：每个活跃（未归档）线程出一条，以 head 会话为视角。
@@ -20,6 +25,10 @@
  *   POST /protoclaw/acp/coder/sessions/:clawSessionId/interrupt
  *     （精确中断，见下）
  *
+ *   POST /protoclaw/acp/coder/sessions/:clawSessionId/stop
+ *     精确停止该会话的 coder runtime（session/close 的数据面）。
+ *     runtime 未运行时幂等成功；thread / session 数据不动，归档不经此层。
+ *
  * 外部契约仍以 agentId="coder" 调用（编辑器集成零感知）；coder 已并入
  * programming-helper 工作空间，内部实现落在该工作空间的 coder 会话身份
  * 上（sessionType='coder'，线程宿主）。
@@ -28,6 +37,8 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 
+import { PROJECT_ROOT } from '../shared/constants.js';
+import { readJsonSafe } from '../shared/fs-helpers.js';
 import { VIEWER_ORIGIN } from '../shared/constants.js';
 import {
   getAgentRuntime,
@@ -81,8 +92,97 @@ export function resolveSessionViewerAgentId(agentId, sessionId) {
 }
 
 /**
+ * 按 ACP session/new 的 model 参数解析模型预设（profile）。
+ *
+ * 对外字段名是 model，但真实索引是 config/presets.json 的预设：name
+ * （display name）与 model（模型名）两个候选字段。两层都不能假设唯一
+ * ——系统不强制 preset name 去重，同一 model 名也允许挂多个预设（不同
+ * 连接配置）。因此匹配规则是「唯一即用、歧义即报错」：
+ *
+ *   1. name 精确 → 2. name 大小写不敏感 → 3. model 精确 → 4. model 不敏感
+ *
+ * 任一层命中多条 → 抛 400 并列出全部候选（name + model）。绝不静默挑选
+ * ——同 model 名的预设差异在连接层（baseUrl/apiKey），选错会把请求打到
+ * 完全不同的服务上。
+ *
+ * @param {string} rawModel session/new 请求的 model 参数（原样字符串）
+ * @param {{ presetsPath?: string }} [options] 测试缝——production callers omit
+ * @returns {Promise<string|null>} 命中的预设 name（写回 coder 配置用）；
+ *   参数缺失 / 空串返回 null（未指定，沿用现有配置）
+ */
+export async function resolveAcpModelPreset(rawModel, options = {}) {
+  const requested = typeof rawModel === 'string' ? rawModel.trim() : '';
+  if (!requested) return null;
+
+  const presetsPath = options.presetsPath || path.join(PROJECT_ROOT, 'config', 'presets.json');
+  const presetsRaw = await readJsonSafe(presetsPath, null);
+  const presets = Array.isArray(presetsRaw?.presets) ? presetsRaw.presets : [];
+  if (presets.length === 0) {
+    throw acpError(400, 'model_preset_unavailable', `no model presets configured (config/presets.json is empty or missing); cannot resolve model "${requested}"`);
+  }
+
+  const requestedKey = requested.toLowerCase();
+  const listCandidates = (matches) => matches
+    .map((preset) => `  - ${preset.name || '(unnamed)'} (model: ${preset.model || '?'})`)
+    .join('\n');
+
+  // 层 1/2：preset name（display name）——主键语义，优先匹配
+  const byExactName = presets.filter((preset) => preset.name === requested);
+  if (byExactName.length === 1) return byExactName[0].name;
+  if (byExactName.length > 1) {
+    throw acpError(400, 'ambiguous_model', `model "${requested}" matches ${byExactName.length} presets with the same name:\n${listCandidates(byExactName)}\nremove the duplicate preset first`);
+  }
+  const byNameCi = presets.filter((preset) => typeof preset.name === 'string' && preset.name.toLowerCase() === requestedKey);
+  if (byNameCi.length === 1) return byNameCi[0].name;
+  if (byNameCi.length > 1) {
+    throw acpError(400, 'ambiguous_model', `model "${requested}" matches ${byNameCi.length} presets (case-insensitive name):\n${listCandidates(byNameCi)}\nspecify one of the preset names above`);
+  }
+
+  // 层 3/4：model 字段——便利入口，无歧义才放行
+  const byModel = presets.filter((preset) => preset.model === requested);
+  if (byModel.length === 1) return byModel[0].name;
+  if (byModel.length > 1) {
+    throw acpError(400, 'ambiguous_model', `model "${requested}" matches ${byModel.length} presets:\n${listCandidates(byModel)}\nspecify one of the preset names above`);
+  }
+  const byModelCi = presets.filter((preset) => typeof preset.model === 'string' && preset.model.toLowerCase() === requestedKey);
+  if (byModelCi.length === 1) return byModelCi[0].name;
+  if (byModelCi.length > 1) {
+    throw acpError(400, 'ambiguous_model', `model "${requested}" matches ${byModelCi.length} presets (case-insensitive):\n${listCandidates(byModelCi)}\nspecify one of the preset names above`);
+  }
+
+  throw acpError(400, 'model_preset_not_found', `no preset matches "${requested}". Available presets:\n${listCandidates(presets)}`);
+}
+
+/**
+ * 把解析出的预设 name 写入 coder 的启动配置
+ * （.agentdev/agent-configs/coder.json 的 modelPresets.default）。
+ *
+ * 写盘而非本次启动参数：coder runtime 的 spawn 链路固定从该文件解析启动
+ * 模型（run-prebuilt-agent.js 的 coder 分支），写盘后 spawn 自然读到新值，
+ * 无需给 runtime 加启动参数。持久化是显式行为——ACP 指定的模型成为该
+ * coder 身份的后续默认。
+ *
+ * @param {string} presetName 已解析的预设 name
+ * @param {{ configPath?: string }} [options] 测试缝——production callers omit
+ */
+export async function applyAcpModelPreset(presetName, options = {}) {
+  const configPath = options.configPath || path.join(PROJECT_ROOT, '.agentdev', 'agent-configs', 'coder.json');
+  const configDir = path.dirname(configPath);
+  const existingConfig = await readJsonSafe(configPath, {}) || {};
+  existingConfig.modelPresets = {
+    ...(existingConfig.modelPresets && typeof existingConfig.modelPresets === 'object' ? existingConfig.modelPresets : {}),
+    default: presetName,
+  };
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(existingConfig, null, 2), 'utf8');
+  return existingConfig;
+}
+
+/**
  * 校验 ACP cwd：必须是绝对路径、且已存在并为目录。
  * 拒绝隐式创建 / 回退（不存在、是文件、相对路径一律 400）。
+ * @param {string} rawCwd
+ * @param {{ cwd?: string }} [options] 测试缝
  */
 export async function validateAcpCwd(rawCwd) {
   if (typeof rawCwd !== 'string' || !rawCwd.trim()) {
@@ -210,6 +310,18 @@ export function setupAcpRoutes(app, express, ctx) {
 
       const cwd = await validateAcpCwd(req.body?.cwd);
 
+      // 可选 model 参数：解析为预设 name 并写入 coder 启动配置（持久化），
+      // 随后 createPrebuiltSession → spawn 从该配置解析启动模型。解析失败
+      // （歧义 / 未命中）在创建任何对象之前抛出，零副作用。
+      const requestedModel = req.body?.model;
+      if (requestedModel !== undefined && (typeof requestedModel !== 'string' || !requestedModel.trim())) {
+        throw acpError(400, 'invalid_model', 'model must be a non-empty string when provided');
+      }
+      const presetName = await resolveAcpModelPreset(requestedModel, { presetsPath: ctx.acpPresetsPath });
+      if (presetName) {
+        await applyAcpModelPreset(presetName, { configPath: ctx.acpModelConfigPath });
+      }
+
       let agent;
       try {
         agent = await requireAgentLight(ACP_WORKSPACE_AGENT_ID);
@@ -261,6 +373,7 @@ export function setupAcpRoutes(app, express, ctx) {
           threadId: threadRecord.threadId,
           viewerAgentId,
           cwd,
+          ...(presetName ? { modelPreset: presetName } : {}),
         });
       } catch (error) {
         const rollback = await rollbackAcpCreation(agent.id, state);
@@ -537,6 +650,28 @@ export function setupAcpRoutes(app, express, ctx) {
       res.status(Number(error?.statusCode) || 500).json({
         ok: false,
         code: error?.code || 'acp_interrupt_failed',
+        message: String(error?.message || error),
+      });
+    }
+  });
+
+  // ── 精确停止（session/close 的数据面；控制面与取消状态机在 adapter）──
+
+  app.post('/protoclaw/acp/coder/sessions/:clawSessionId/stop', express.json(), async (req, res) => {
+    const clawSessionId = sanitizeSessionFragment(req.params.clawSessionId);
+    try {
+      if (!clawSessionId) {
+        throw acpError(400, 'invalid_params', 'clawSessionId is required');
+      }
+      // 与 interrupt 同一寻址语义：精确 session，绝不回退 primary runtime。
+      // 停止的是该会话的 runtime（进程或共享进程内的 session 释放）；thread /
+      // session 持久数据不动——归档是 Claw 管理面的动作，不经此层。
+      await stopManagedAgent(ACP_WORKSPACE_AGENT_ID, clawSessionId);
+      res.json({ ok: true, clawSessionId });
+    } catch (error) {
+      res.status(Number(error?.statusCode) || 500).json({
+        ok: false,
+        code: error?.code || 'acp_stop_failed',
         message: String(error?.message || error),
       });
     }

@@ -124,8 +124,8 @@ function startMockClawServer() {
         send(200, { ok: true, clawSessionId: 'claw-wire-1', viewerAgentId: 'vw-1' });
         return;
       }
-      if (req.method === 'POST' && req.url === '/protoclaw/threads/thread-wire/archive') {
-        send(200, { ok: true, threadId: 'thread-wire', archivedAt: 1 });
+      if (req.method === 'POST' && req.url === '/protoclaw/acp/coder/sessions/claw-wire-1/stop') {
+        send(200, { ok: true, clawSessionId: 'claw-wire-1' });
         return;
       }
       send(404, { ok: false, code: 'not_found', message: req.url });
@@ -305,15 +305,16 @@ describe('coder ACP adapter wire protocol', () => {
       assert.equal(prompt.error, undefined);
       assert.equal(prompt.result.stopReason, 'end_turn');
 
-      // session/close：转发 Claw 归档 thread，响应 {}
+      // session/close：转发 Claw 停 runtime，响应 {}
       const closed = await adapter.request({
         jsonrpc: '2.0', id: 4, method: 'session/close',
         params: { sessionId: created.result.sessionId },
       });
       assert.equal(closed.error, undefined);
       assert.deepEqual(closed.result, {});
-      const closeReq = claw.record.requests.find((r) => r.url === '/protoclaw/threads/thread-wire/archive');
-      assert.ok(closeReq, 'archive request missing');
+      const closeReq = claw.record.requests.find((r) => r.url === '/protoclaw/acp/coder/sessions/claw-wire-1/stop');
+      assert.ok(closeReq, 'stop request missing');
+      assert.ok(!claw.record.requests.some((r) => r.url?.endsWith('/archive')), 'close must not archive');
 
       // stdout 纯度：每行都是 JSON-RPC 帧（jsonrpc === '2.0'），无日志混入
       assert.deepEqual(adapter.parseFailures, []);

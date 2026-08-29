@@ -12,7 +12,7 @@
  *   POST /protoclaw/acp/coder/sessions/:id/interrupt      018 精确中断
  *   POST /protoclaw/threads/:threadId/commands            prompt 投递（现有）
  *   GET  /protoclaw/threads/:threadId/events?after=N      事件增量读取（现有）
- *   POST /protoclaw/threads/:threadId/archive              session/close 归档
+ *   POST /protoclaw/acp/coder/sessions/:id/stop           session/close 停 runtime
  *
  * 错误归一为两种：
  *   ClawUnreachableError — 网络层失败（server 未启动 / 连接被拒）
@@ -156,10 +156,13 @@ export function createClawClient(options = {}) {
     baseUrl,
 
     /** 018 原子创建：{ clawSessionId, threadId, viewerAgentId, cwd } */
-    async createCoderSession(cwd, context = {}) {
+    async createCoderSession(cwd, context = {}, options = {}) {
       const { body } = await requestJson('POST', '/protoclaw/acp/coder/sessions', {
         agentId: 'coder',
         cwd,
+        // 可选启动模型（对外语义为 model name；server 按
+        // preset name → model 字段的顺序消歧解析并持久化）
+        ...(options.model ? { model: options.model } : {}),
       }, { ...context, cwd });
       return body;
     },
@@ -248,17 +251,16 @@ export function createClawClient(options = {}) {
     },
 
     /**
-     * session/close 的归档调用（archive 路由，线程层标记收纳语义）。
-     * 生产归档不做 busy 检查：executing 线程归档 = server 侧 interrupt
-     * head 后收纳；adapter 层 close 已先行取消 in-flight prompt（见
-     * session-manager closeSession），正常路径不触及执行中的轮次。
+     * session/close 的停止调用（stop 路由，精确停掉该会话的 runtime）。
+     * close = cancel + 释放资源（ACP §9.8）：释放对象是 runtime 与 adapter
+     * 消费状态；thread / session 持久数据不动，归档不在 ACP 协议面内。
      */
-    async archiveThread(threadId, context = {}) {
+    async stopCoderSession(clawSessionId, context = {}) {
       const { body } = await requestJson(
         'POST',
-        `/protoclaw/threads/${encodeURIComponent(threadId)}/archive`,
+        `/protoclaw/acp/coder/sessions/${encodeURIComponent(clawSessionId)}/stop`,
         undefined,
-        { ...context, threadId },
+        { ...context, clawSessionId },
       );
       return body;
     },

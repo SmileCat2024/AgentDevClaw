@@ -12,7 +12,8 @@
  *   session/prompt  仅 text block；管线见 session-manager；受理后先回显
  *                   user_message_chunk（client 转录完整性）
  *   session/cancel  notification，与 ctx.signal 汇入同一取消状态机
- *   session/close   转发 Claw 归档 thread；断开不触发（dispose 只清内存）
+ *   session/close   cancel + 精确停 runtime + 清映射（不归档，归档是 Claw
+ *                   管理面动作）；断开不触发（dispose 只清内存）
  * 出站通知：session/update（event-mapper 产物）
  *
  * stdout 纪律：本模块不向 stdout 写任何内容；SDK 的 ndJsonStream 是唯一
@@ -93,8 +94,9 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
 
   agent.onRequest(acp.methods.agent.session.new, async (ctx) => {
     trace?.record('acp.session.new.validate', { method: 'session/new' });
-    const { cwd } = validateNewSessionParams(ctx.params);
-    const result = await sessionManager.createSession(cwd);
+    const { cwd, model } = validateNewSessionParams(ctx.params);
+    trace?.record('acp.session.new.request', { method: 'session/new', ...(model ? { model } : {}) });
+    const result = await sessionManager.createSession(cwd, { model });
     trace?.record('acp.session.new.response', { method: 'session/new', acpSessionId: result.sessionId });
     return result;
   });
@@ -112,7 +114,7 @@ export function createAcpAgent({ sessionManager, log, version, trace }) {
         ...(thread.updatedAt ? { updatedAt: thread.updatedAt } : {}),
         _meta: {
           claw: {
-            // 线程锚点 ID：prompt 投递 / 归档 / 中断都以此为目标；不参与
+            // 线程锚点 ID：prompt 投递 / 中断都以此为目标；不参与
             // ACP 协议寻址，仅供诊断与 Claw 侧关联查询。
             threadId: thread.threadId,
           },
