@@ -668,16 +668,16 @@ export function setupAcpRoutes(app, express, ctx) {
       // selectedSessionId 扫描兜底（shared 进程注册键漂移 / 线程接力后 head
       // 换代时注册键上没有新 head 条目，selectedSessionId 才是绑定事实）。
       // 找不到 viewer 说明该会话确无运行中 runtime —— 幂等成功。
-      // 命中则按条目的注册键停（getAgentRuntime 只按注册键查找；shared 模式
-      // remove-session 也依赖条目自身状态）。thread / session 持久数据不动
-      // ——归档是 Claw 管理面的动作，不经此层。
+      // 命中则用条目自身的注册键分量停（runtimeEntry.key 即
+      // agentId::selectedSessionId，getAgentRuntime 只按注册键查找，与
+      // shared 模式 remove-session 依赖条目自身状态一致）。thread / session
+      // 持久数据不动——归档是 Claw 管理面的动作，不经此层。
       const viewerAgentId = resolveSessionViewerAgentId(ACP_WORKSPACE_AGENT_ID, clawSessionId);
       if (viewerAgentId) {
         const runtimeEntry = getRuntimeByViewerAgentId(viewerAgentId);
-        await stopManagedAgent(
-          ACP_WORKSPACE_AGENT_ID,
-          runtimeEntry?.selectedSessionId || clawSessionId,
-        );
+        const entryKey = String(runtimeEntry?.key || '');
+        const entrySessionId = entryKey.includes('::') ? entryKey.split('::').slice(1).join('::') : '';
+        await stopManagedAgent(ACP_WORKSPACE_AGENT_ID, entrySessionId || clawSessionId);
       }
       res.json({ ok: true, clawSessionId });
     } catch (error) {

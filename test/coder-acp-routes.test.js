@@ -618,17 +618,17 @@ describe('ACP stop', () => {
     assert.equal(ctx._calls.closeThread, undefined);
   });
 
-  it('resolves drifted registration keys via selectedSessionId scan (thread rotation drift)', async () => {
-    // 接力后 head 换代：注册键仍是旧 id，selectedSessionId 已指向新 head。
-    // close 携带新 head id，必须经扫描兜底定位条目，并传条目上当前绑定的
-    // selectedSessionId（注册键 === selectedSessionId 键，真实 stopManagedAgent
-    // 才能查到条目）。
+  it('resolves drifted registration keys via selectedSessionId scan and stops by the entry key', async () => {
+    // shared 进程注册键漂移：selectedSessionId 是当前绑定事实，注册键可能
+    // 漂移。close 携带请求 id 经扫描兜底定位条目后，按条目自身的注册键分量
+    // 停（getAgentRuntime 只按注册键查找；即便 key≠selectedSessionId 的
+    // 防御态出现也仍闭环）。
     seedRuntime({ sessionId: 'sess-old', viewerAgentId: 'viewer-A' });
     managedAgents.get('programming-helper::sess-old').selectedSessionId = 'sess-new';
     const { ctx, app } = setupAcpHarness();
     const res = await callStop(app, 'sess-new');
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'programming-helper', sessionId: 'sess-new' }]);
+    assert.deepEqual(ctx._calls.stopManagedAgent, [{ agentId: 'programming-helper', sessionId: 'sess-old' }]);
   });
 
   it('is idempotent when no runtime is bound to the session (no stop call)', async () => {
