@@ -792,6 +792,42 @@ function schedulePoll(delayMs = POLL_FAST_INTERVAL_MS) {
   }, Math.max(0, Number(delayMs) || 0));
 }
 
+// ── dev 计量（ADR-0012，默认关闭）──────────────────────────────────────────
+// URL 带 ?msg_metrics=1 时，每次消息刷新输出 actualBytes（本周期 /messages
+// 数据序列化字节，未发请求为 0）/ fakeFullBytes（假想全量字节，随 probe 下发）/
+// savedRatio / changeKind / downgraded。这份数据是将来评估 SSE 的依据。
+
+function isMsgMetricsEnabled() {
+  try {
+    const search = String((window.location && window.location.search) || '');
+    return new URLSearchParams(search).get('msg_metrics') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function computeSerializedBytes(data) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(data)).length;
+  } catch {
+    return 0;
+  }
+}
+
+function emitMsgMetrics(metrics) {
+  if (!isMsgMetricsEnabled()) return;
+  const savedRatio = metrics.fakeFullBytes > 0
+    ? Math.max(0, 1 - metrics.actualBytes / metrics.fakeFullBytes)
+    : null;
+  console.debug('[msg-metrics]', {
+    actualBytes: metrics.actualBytes,
+    fakeFullBytes: metrics.fakeFullBytes,
+    savedRatio,
+    changeKind: metrics.changeKind,
+    downgraded: metrics.downgraded,
+  });
+}
+
 async function poll() {
   if (_pollCycleInFlight) {
     _pollImmediateRequested = true;
@@ -909,8 +945,9 @@ async function runPollCycle() {
     const pollRuntimeId = pollToken.runtimeId;
     const statusTask = refreshCurrentRuntimeStatus(pollRuntimeId, pollToken);
 
-    const [msgsRes, inputRes, overviewRes, todoRes] = await Promise.all([
-      fetch(`/api/agents/${pollRuntimeId}/messages`),
+    // 消息增量探测（ADR-0012）：probe 随本周期 overview 响应下发，/messages
+    // 必须等 probe 决定取数方式后再发，因此不再进入第一波并行请求。
+    const [inputRes, overviewRes, todoRes] = await Promise.all([
       fetch(`/api/agents/${pollRuntimeId}/input-requests`),
       fetch(`/api/agents/${pollRuntimeId}/overview`),
       fetch(`/api/agents/${pollRuntimeId}/todo`),
@@ -922,8 +959,9 @@ async function runPollCycle() {
       return;
     }
 
-    const coreResponses = [msgsRes, inputRes, overviewRes];
-    if (coreResponses.some(res => res.status === 404)) {
+    // Core runtime disappeared. /messages can also 404 after the probe step
+    // (runtime died between the two waves), so the branch is shared.
+    const handleCoreResponsesNotFound = async () => {
       // In-session partial compact doesn't create a new session, so if we get 404
       // while compact is in flight, just clear the flag and fall through to normal handling
       if (_partialCompactInFlight && normalizeAgentIdentity(pollRuntimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)) {
@@ -966,15 +1004,122 @@ async function runPollCycle() {
       }
       await loadAgents();
       schedulePoll(POLL_INTERVAL_MS);
+    };
+
+    const coreResponses = [inputRes, overviewRes];
+    if (coreResponses.some(res => res.status === 404)) {
+      await handleCoreResponsesNotFound();
       return;
     }
 
-    const data = await msgsRes.json();
+    // ── Messages incremental probe fetch (ADR-0012 probe + tail) ──────────
+    // The probe rides this cycle's overview response, so it is same-generation
+    // with the /messages fetch below (one shared pollToken timeline).
+    const overviewJson = await overviewRes.json();
     if (!isSessionViewTokenCurrent(pollToken)) {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
-    const messages = data.messages || [];
+
+    // extractMessagesProbe lives in overview-data.js (script order in
+    // index.html); absence (tests / older shell) degrades to the legacy full
+    // fetch, which is exactly the "probe unavailable" path below.
+    const msgProbe = typeof extractMessagesProbe === 'function'
+      ? extractMessagesProbe(overviewJson)
+      : null;
+    const prevKnownMessages = Array.isArray(currentMessages) ? currentMessages : [];
+    const prevKnownCount = prevKnownMessages.length;
+    const msgMetrics = {
+      actualBytes: 0,
+      fakeFullBytes: msgProbe ? msgProbe.fakeFullBytes : 0,
+      changeKind: msgProbe ? msgProbe.changeKind : null,
+      downgraded: false,
+    };
+
+    const fetchMessagesJson = async (query) => {
+      const res = await fetch(`/api/agents/${pollRuntimeId}/messages${query}`);
+      if (res.status === 404) {
+        await handleCoreResponsesNotFound();
+        return { handled404: true };
+      }
+      const data = await res.json();
+      return { data };
+    };
+
+    let messages;
+    if (!msgProbe || msgProbe.count < prevKnownCount || (msgProbe.count > 0 && prevKnownCount === 0)) {
+      // 探测不可用（probe 缺省 / 首次加载 / 拼接基线缺失），或 probe.count 回退
+      // （Worker 重启 / 修剪）→ 全量拉一次重建基线，下周期恢复探测。
+      if (msgProbe && msgProbe.count < prevKnownCount) msgMetrics.downgraded = true;
+      const result = await fetchMessagesJson('');
+      if (result.handled404) return;
+      if (!isSessionViewTokenCurrent(pollToken)) {
+        schedulePoll(POLL_FAST_INTERVAL_MS);
+        return;
+      }
+      messages = result.data.messages || [];
+      msgMetrics.actualBytes += computeSerializedBytes(result.data);
+    } else if (msgProbe.changeKind === null) {
+      // 未变化：跳过 /messages 请求，复用现有消息数组（本周期零消息请求）
+      messages = prevKnownMessages;
+    } else if (msgProbe.changeKind === 'append') {
+      const since = prevKnownCount;
+      const result = await fetchMessagesJson(`?since=${since}`);
+      if (result.handled404) return;
+      if (!isSessionViewTokenCurrent(pollToken)) {
+        schedulePoll(POLL_FAST_INTERVAL_MS);
+        return;
+      }
+      const delta = Array.isArray(result.data.messages) ? result.data.messages : [];
+      if (delta.length === msgProbe.count - since) {
+        messages = [...prevKnownMessages.slice(0, since), ...delta];
+      } else {
+        // 校验失败（让服务端分类 bug 显形并保正确性）→ 降级全量重建基线
+        msgMetrics.downgraded = true;
+        const full = await fetchMessagesJson('');
+        if (full.handled404) return;
+        if (!isSessionViewTokenCurrent(pollToken)) {
+          schedulePoll(POLL_FAST_INTERVAL_MS);
+          return;
+        }
+        messages = full.data.messages || [];
+        msgMetrics.actualBytes += computeSerializedBytes(full.data);
+      }
+      msgMetrics.actualBytes += computeSerializedBytes(result.data);
+    } else if (msgProbe.changeKind === 'tail') {
+      const result = await fetchMessagesJson('?tail=1');
+      if (result.handled404) return;
+      if (!isSessionViewTokenCurrent(pollToken)) {
+        schedulePoll(POLL_FAST_INTERVAL_MS);
+        return;
+      }
+      const tail = Array.isArray(result.data.messages) ? result.data.messages : [];
+      if (tail.length === 1 && msgProbe.count === prevKnownCount && prevKnownCount > 0) {
+        messages = [...prevKnownMessages.slice(0, -1), tail[0]];
+      } else {
+        // 校验失败 → 降级全量重建基线
+        msgMetrics.downgraded = true;
+        const full = await fetchMessagesJson('');
+        if (full.handled404) return;
+        if (!isSessionViewTokenCurrent(pollToken)) {
+          schedulePoll(POLL_FAST_INTERVAL_MS);
+          return;
+        }
+        messages = full.data.messages || [];
+        msgMetrics.actualBytes += computeSerializedBytes(full.data);
+      }
+      msgMetrics.actualBytes += computeSerializedBytes(result.data);
+    } else {
+      // rewrite（中段替换 / 条数减少：rollback、compact、修剪）→ 全量拉
+      const result = await fetchMessagesJson('');
+      if (result.handled404) return;
+      if (!isSessionViewTokenCurrent(pollToken)) {
+        schedulePoll(POLL_FAST_INTERVAL_MS);
+        return;
+      }
+      messages = result.data.messages || [];
+      msgMetrics.actualBytes += computeSerializedBytes(result.data);
+    }
 
     const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
       // Clear session loading indicator once messages are available
@@ -1016,6 +1161,7 @@ async function runPollCycle() {
       schedulePoll(POLL_FAST_INTERVAL_MS);
       return;
     }
+    emitMsgMetrics(msgMetrics);
 
     await statusTask;
     await refreshAgentCallStates(allAgents);
@@ -1031,12 +1177,13 @@ async function runPollCycle() {
     // Parse the lightweight view metadata together and publish it in one
     // synchronous transaction. The transcript remains latency-first above,
     // while usage/todo/input UI never paints a mixed poll generation.
-    const [overviewRaw, todoRaw, inputRequestsRaw] = await Promise.all([
-      overviewRes.json(),
+    // overviewJson was already consumed by the probe step above — same body,
+    // same generation.
+    const [todoRaw, inputRequestsRaw] = await Promise.all([
       todoRes.ok ? todoRes.json() : Promise.resolve(null),
       inputRes.json(),
     ]);
-    const nextOverview = normalizeOverviewSnapshot(overviewRaw);
+    const nextOverview = normalizeOverviewSnapshot(overviewJson);
     const nextOverviewSignature = getOverviewSignature(nextOverview);
     const nextTodoPlan = todoRaw === null ? null : normalizeTodoPlan(todoRaw);
     const nextTodoSignature = nextTodoPlan === null ? null : getTodoPlanSignature(nextTodoPlan);

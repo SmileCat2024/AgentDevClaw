@@ -6,6 +6,7 @@
  *   - FULL_HOOK_LIFECYCLE_ORDER: hook 生命周期顺序常量
  *   - getHookInspectorSignature / getOverviewSignature: JSON 签名（去重用）
  *   - getEmptyOverviewSnapshot: 空 overview 模板
+ *   - extractMessagesProbe: 提取 /overview 响应上的消息增量探测字段（ADR-0012）
  *   - normalizeRuntimeSnapshot / normalizeOverviewSnapshot: runtime & overview 快照规范化
  *   - normalizeHookInspector: hook inspector 快照规范化
  *   - setCurrentHookInspector / setCurrentOverviewSnapshot / setCurrentLogs: 全局状态 setter
@@ -108,6 +109,42 @@ function normalizeRuntimeSnapshot(snapshot) {
   };
 }
 
+// ADR-0012：消息增量探测的合法变更分类。ViewerWorker 在推送时刻算好挂在
+// /overview 响应上，前端按分类决定取数方式（零请求 / ?since / ?tail=1 / 全量）。
+const MESSAGE_PROBE_CHANGE_KINDS = new Set(['append', 'tail', 'rewrite']);
+
+/**
+ * Extract the messages probe (ADR-0012) from a raw /overview response body.
+ *
+ * The probe never travels through normalizeOverviewSnapshot — it is read
+ * separately here by the poll data path and stays out of the view snapshot.
+ * Returns null when the probe is absent or malformed (poll falls back to a
+ * full /messages fetch in that case).
+ */
+function extractMessagesProbe(snapshot) {
+  const raw = snapshot && typeof snapshot === 'object' ? snapshot._messagesProbe : null;
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  if (!Number.isInteger(raw.count) || raw.count < 0) {
+    return null;
+  }
+  if (raw.changeKind !== null && !MESSAGE_PROBE_CHANGE_KINDS.has(raw.changeKind)) {
+    return null;
+  }
+  return {
+    count: raw.count,
+    changeKind: raw.changeKind,
+    sinceIndex: Number.isInteger(raw.sinceIndex) && raw.sinceIndex >= 0 ? raw.sinceIndex : null,
+    fakeFullBytes: typeof raw.fakeFullBytes === 'number' && raw.fakeFullBytes >= 0 ? raw.fakeFullBytes : 0,
+  };
+}
+
+// normalizeOverviewSnapshot builds the view snapshot field by field, so
+// unknown payload keys such as _messagesProbe are dropped by construction:
+// the probe is extracted separately via extractMessagesProbe() at the poll
+// data-fetch site and never enters the view snapshot — which also keeps
+// getOverviewSignature() identical with and without the probe attached.
 function normalizeOverviewSnapshot(snapshot) {
   const empty = getEmptyOverviewSnapshot();
   if (!snapshot || typeof snapshot !== 'object') {
