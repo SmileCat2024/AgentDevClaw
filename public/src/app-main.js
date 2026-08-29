@@ -781,6 +781,11 @@ window.switchAgent = async (newAgentId) => {
 let _pollTimerId = null;
 let _pollCycleInFlight = null;
 let _pollImmediateRequested = false;
+// 消息同步版本号对账（ADR-0012 v2）：记录每个 runtime 已应用到最后一次
+// 取数的 probe.seq。count 相等且 seq 未前进 → 零请求跳过。会话切换时不
+// 清理——viewer 的 seq 是 per-session 单调计数，runtime 不变则 seq 语义
+// 不变；runtime 消失后条目随 Map 上限自然淘汰。
+const _appliedMessagesSeq = new Map();
 
 function schedulePoll(delayMs = POLL_FAST_INTERVAL_MS) {
   if (_pollTimerId !== null) {
@@ -1047,6 +1052,17 @@ async function runPollCycle() {
     };
 
     let messages;
+    // ── seq 对账（ADR-0012 v2）──────────────────────────────────────────
+    // probe.seq 是同步版本号（真实变更时单调递增），changeKind 只是最近一
+    // 次真实变更的取数策略提示。对账矩阵：
+    //   count 回退 / probe 缺省 / 基线缺失 → 全量重建基线
+    //   count > prevKnown                  → 有新消息（append 路径）
+    //   count 相等 + seq 前进              → 内容有变（tail/rewrite 路径）
+    //   count 相等 + seq 未前进            → 真正未变化，零请求
+    // seq 语义消除了"no-op 推送覆盖未消费变更"的丢更新竞态（首条 user
+    // 消息延迟显示的根因）。
+    const appliedSeq = _appliedMessagesSeq.get(pollRuntimeId) || 0;
+    const seqAdvanced = msgProbe ? msgProbe.seq > appliedSeq : true;
     if (!msgProbe || msgProbe.count < prevKnownCount || (msgProbe.count > 0 && prevKnownCount === 0)) {
       // 探测不可用（probe 缺省 / 首次加载 / 拼接基线缺失），或 probe.count 回退
       // （Worker 重启 / 修剪）→ 全量拉一次重建基线，下周期恢复探测。
@@ -1059,10 +1075,10 @@ async function runPollCycle() {
       }
       messages = result.data.messages || [];
       msgMetrics.actualBytes += computeSerializedBytes(result.data);
-    } else if (msgProbe.changeKind === null) {
+    } else if (!seqAdvanced) {
       // 未变化：跳过 /messages 请求，复用现有消息数组（本周期零消息请求）
       messages = prevKnownMessages;
-    } else if (msgProbe.changeKind === 'append') {
+    } else if (msgProbe.count > prevKnownCount || msgProbe.changeKind === 'append') {
       const since = prevKnownCount;
       const result = await fetchMessagesJson(`?since=${since}`);
       if (result.handled404) return;
@@ -1120,6 +1136,11 @@ async function runPollCycle() {
       messages = result.data.messages || [];
       msgMetrics.actualBytes += computeSerializedBytes(result.data);
     }
+
+    // 取数成功（含降级）→ 记录已应用的 seq。放 commit 之后会让"commit 被
+    // stale check 拒绝"的周期丢失 seq 进度，但那些周期本来就已放弃本次
+    // 渲染，下周期 count 对账仍会兜底；这里先记，避免同 seq 被重复取数。
+    _appliedMessagesSeq.set(pollRuntimeId, msgProbe ? msgProbe.seq : 0);
 
     const messagesCommitted = commitSessionViewPatch(pollToken, { messages }, ({ previous, current }) => {
       // Clear session loading indicator once messages are available

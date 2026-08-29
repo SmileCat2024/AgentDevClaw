@@ -133,6 +133,10 @@ function extractMessagesProbe(snapshot) {
     return null;
   }
   return {
+    // seq（ADR-0012 v2）：同步版本号，真实变更时单调递增。前端与已应用
+    // 的 seq 对账决定是否取数——缺失（旧 viewer）按 0 处理，行为退化为
+    // "count 变化才取数"，仍是安全的。
+    seq: Number.isInteger(raw.seq) && raw.seq >= 0 ? raw.seq : 0,
     count: raw.count,
     changeKind: raw.changeKind,
     sinceIndex: Number.isInteger(raw.sinceIndex) && raw.sinceIndex >= 0 ? raw.sinceIndex : null,

@@ -233,7 +233,7 @@ test('append fetches ?since=<known count> and splices onto the known prefix', as
     initialMessages: [msg('m1'), msg('m2')],
     overview: {
       modelName: 'model-a',
-      _messagesProbe: { count: 3, changeKind: 'append', sinceIndex: 2, fakeFullBytes: 600 },
+      _messagesProbe: { seq: 1, count: 3, changeKind: 'append', sinceIndex: 2, fakeFullBytes: 600 },
     },
     messagesResponder: (path) => {
       assert.ok(path.endsWith('/messages?since=2'), `unexpected messages url: ${path}`);
@@ -256,7 +256,7 @@ test('tail fetches ?tail=1 and replaces only the last entry', async () => {
     initialMessages: [msg('m1'), msg('m2-streaming')],
     overview: {
       modelName: 'model-a',
-      _messagesProbe: { count: 2, changeKind: 'tail', sinceIndex: 1, fakeFullBytes: 700 },
+      _messagesProbe: { seq: 1, count: 2, changeKind: 'tail', sinceIndex: 1, fakeFullBytes: 700 },
     },
     messagesResponder: (path) => {
       assert.ok(path.endsWith('/messages?tail=1'), `unexpected messages url: ${path}`);
@@ -279,7 +279,7 @@ test('rewrite falls back to a full fetch and rebuilds the array', async () => {
     initialMessages: [msg('m1'), msg('m2'), msg('m3')],
     overview: {
       modelName: 'model-a',
-      _messagesProbe: { count: 2, changeKind: 'rewrite', sinceIndex: 0, fakeFullBytes: 800 },
+      _messagesProbe: { seq: 1, count: 2, changeKind: 'rewrite', sinceIndex: 0, fakeFullBytes: 800 },
     },
     messagesResponder: (path) => {
       assert.ok(path.endsWith('/messages'), `rewrite must fetch without query: ${path}`);
@@ -302,7 +302,7 @@ test('append delta length mismatch degrades to a full fetch and rebuilds the bas
     initialMessages: [msg('m1'), msg('m2')],
     overview: {
       modelName: 'model-a',
-      _messagesProbe: { count: 4, changeKind: 'append', sinceIndex: 2, fakeFullBytes: 900 },
+      _messagesProbe: { seq: 1, count: 4, changeKind: 'append', sinceIndex: 2, fakeFullBytes: 900 },
     },
     messagesResponder: (path) => {
       if (path.endsWith('/messages?since=2')) {
@@ -330,7 +330,7 @@ test('probe.count regression skips the delta fetch and rebuilds the baseline', a
     initialMessages: [msg('m1'), msg('m2'), msg('m3')],
     overview: {
       modelName: 'model-a',
-      _messagesProbe: { count: 1, changeKind: 'append', sinceIndex: 0, fakeFullBytes: 100 },
+      _messagesProbe: { seq: 1, count: 1, changeKind: 'append', sinceIndex: 0, fakeFullBytes: 100 },
     },
     messagesResponder: (path) => {
       assert.ok(path.endsWith('/messages'), `count regression must fetch full directly: ${path}`);
@@ -371,7 +371,7 @@ test('probe fields are stripped from the snapshot and do not change the signatur
   const base = { modelName: 'model-a', updatedAt: 1, context: { messageCount: 3 } };
   const withProbe = {
     ...base,
-    _messagesProbe: { count: 3, changeKind: 'tail', sinceIndex: 2, fakeFullBytes: 4321 },
+    _messagesProbe: { seq: 2, count: 3, changeKind: 'tail', sinceIndex: 2, fakeFullBytes: 4321 },
   };
 
   const sigWithout = vm.runInContext(
@@ -402,13 +402,15 @@ test('extractMessagesProbe validates fields and returns null when unusable', () 
 
   const run = (expr) => vm.runInContext(expr, sandbox);
 
-  assert.deepEqual(plain(run('extractMessagesProbe({ _messagesProbe: { count: 3, changeKind: "tail", sinceIndex: 2, fakeFullBytes: 12 } })')), {
+  assert.deepEqual(plain(run('extractMessagesProbe({ _messagesProbe: { seq: 5, count: 3, changeKind: "tail", sinceIndex: 2, fakeFullBytes: 12 } })')), {
+    seq: 5,
     count: 3,
     changeKind: 'tail',
     sinceIndex: 2,
     fakeFullBytes: 12,
   });
-  assert.deepEqual(plain(run('extractMessagesProbe({ _messagesProbe: { count: 0, changeKind: null, fakeFullBytes: 0 } })')), {
+  assert.deepEqual(plain(run('extractMessagesProbe({ _messagesProbe: { seq: 0, count: 0, changeKind: null, fakeFullBytes: 0 } })')), {
+    seq: 0,
     count: 0,
     changeKind: null,
     sinceIndex: null,
@@ -468,7 +470,7 @@ test('metrics record a downgraded cycle with accumulated bytes from both fetches
     initialMessages: [msg('m1'), msg('m2')],
     overview: {
       modelName: 'model-a',
-      _messagesProbe: { count: 4, changeKind: 'append', sinceIndex: 2, fakeFullBytes: 1000 },
+      _messagesProbe: { seq: 1, count: 4, changeKind: 'append', sinceIndex: 2, fakeFullBytes: 1000 },
     },
     search: '?msg_metrics=1',
     messagesResponder: (path) => {
@@ -487,4 +489,118 @@ test('metrics record a downgraded cycle with accumulated bytes from both fetches
   assert.equal(payload.changeKind, 'append');
   assert.ok(payload.actualBytes > 0, 'bytes from both the delta and the full fetch must be counted');
   assert.ok(payload.savedRatio < 1, 'a downgraded cycle cannot claim savings');
+});
+
+// ── Seq reconciliation (ADR-0012 v2) ──────────────────────────
+// probe.seq is the sync version number; changeKind is only a fetch-strategy
+// hint for the LAST real change. These tests lock the fix for the
+// first-message-delay regression: a no-op push after the user message enters
+// the transcript must NOT hide the pending change from the frontend.
+
+test('seq advance triggers the delta fetch even when changeKind is null', async () => {
+  // Regression shape: user message landed (append, seq=1), then a no-op push
+  // (old viewer cleared changeKind to null). The seq gate must still see the
+  // pending change because count advanced past the known baseline.
+  const m3 = msg('m3');
+  const harness = createSandbox({
+    initialMessages: [msg('m1'), msg('m2')],
+    overview: {
+      modelName: 'model-a',
+      // changeKind null = the no-op push overwrote the classification hint
+      _messagesProbe: { seq: 1, count: 3, changeKind: null, sinceIndex: 3, fakeFullBytes: 600 },
+    },
+    messagesResponder: (path) => {
+      assert.ok(path.endsWith('/messages?since=2'), `unexpected messages url: ${path}`);
+      return { status: 200, body: { messages: [m3], baseCount: 2 } };
+    },
+  });
+
+  await harness.sandbox.__poll();
+
+  assert.equal(messageCalls(harness.fetchCalls).length, 1, 'count advance with stale hint must still fetch');
+  assert.deepEqual(plain(harness.sandbox.currentMessages), [msg('m1'), msg('m2'), m3]);
+  assert.deepEqual(plain(harness.renders.append), [[m3]]);
+});
+
+test('same count with equal seq skips the fetch even when changeKind lingers', async () => {
+  // changeKind is a last-real-change hint, not a sync signal: an applied
+  // append (seq already consumed) must not re-fetch on every cycle.
+  const harness = createSandbox({
+    initialMessages: [msg('m1'), msg('m2')],
+    overview: {
+      modelName: 'model-a',
+      _messagesProbe: { seq: 1, count: 2, changeKind: 'append', sinceIndex: 1, fakeFullBytes: 500 },
+    },
+  });
+
+  // First cycle: baseline never applied for this seq → full fetch is expected
+  // via the prevKnownCount===0 gate? No — initialMessages pre-populates the
+  // array, and this harness starts with no applied seq, so the first cycle
+  // sees seq advance (0 → 1) with equal count and changeKind append. The
+  // since-fetch validation (delta.length === count - since) fails → full.
+  await harness.sandbox.__poll();
+  const firstCycleCalls = messageCalls(harness.fetchCalls).length;
+  assert.ok(firstCycleCalls >= 1, 'first cycle must reconcile the unseen seq');
+
+  // Second cycle: seq already applied → zero /messages requests.
+  harness.fetchCalls.length = 0;
+  await harness.sandbox.__poll();
+  assert.equal(messageCalls(harness.fetchCalls).length, 0,
+    'applied seq with unchanged count must skip /messages entirely');
+});
+
+test('same count with advanced seq and tail hint takes the tail path once', async () => {
+  // rewrite/tail with unchanged count: the seq gate ensures the change is
+  // applied exactly once, then subsequent cycles skip.
+  const m2v2 = msg('m2-streamed');
+  let tailServed = 0;
+  const harness = createSandbox({
+    initialMessages: [msg('m1'), msg('m2-streaming')],
+    overview: {
+      modelName: 'model-a',
+      _messagesProbe: { seq: 1, count: 2, changeKind: 'tail', sinceIndex: 1, fakeFullBytes: 700 },
+    },
+    messagesResponder: (path) => {
+      assert.ok(path.endsWith('/messages?tail=1'), `unexpected messages url: ${path}`);
+      tailServed += 1;
+      return { status: 200, body: { messages: [m2v2] } };
+    },
+  });
+
+  await harness.sandbox.__poll();
+  assert.equal(tailServed, 1);
+  assert.deepEqual(plain(harness.sandbox.currentMessages), [msg('m1'), m2v2]);
+
+  // Next cycle: seq consumed → no fetch, applied tail stays.
+  harness.fetchCalls.length = 0;
+  await harness.sandbox.__poll();
+  assert.equal(messageCalls(harness.fetchCalls).length, 0, 'applied tail must not refetch');
+  assert.deepEqual(plain(harness.sandbox.currentMessages), [msg('m1'), m2v2]);
+});
+
+test('count equal but seq advanced without a usable hint degrades to full once', async () => {
+  // count unchanged, seq advanced, changeKind null (hint overwritten by a
+  // no-op): content changed somewhere unknown → full fetch to stay correct.
+  const full = [msg('m1'), msg('m2-REPLACED')];
+  const harness = createSandbox({
+    initialMessages: [msg('m1'), msg('m2')],
+    overview: {
+      modelName: 'model-a',
+      _messagesProbe: { seq: 1, count: 2, changeKind: null, sinceIndex: 2, fakeFullBytes: 500 },
+    },
+    messagesResponder: (path) => {
+      assert.ok(path.endsWith('/messages'), `unknown-content change must fetch full: ${path}`);
+      return { status: 200, body: { messages: full } };
+    },
+  });
+
+  await harness.sandbox.__poll();
+
+  assert.deepEqual(messageCalls(harness.fetchCalls), ['/api/agents/rt/messages']);
+  assert.deepEqual(plain(harness.sandbox.currentMessages), full);
+
+  // Applied → subsequent cycles skip.
+  harness.fetchCalls.length = 0;
+  await harness.sandbox.__poll();
+  assert.equal(messageCalls(harness.fetchCalls).length, 0);
 });
