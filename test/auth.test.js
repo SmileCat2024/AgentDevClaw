@@ -9,6 +9,7 @@ import { hashPassword, verifyPassword, sessionExpired, SESSION_IDLE_TTL_MS, SESS
 
 const CHILD_SOURCE = String.raw`
   process.env.AGENTDEV_DATA_DIR = process.argv[1];
+  process.env.AGENTDEV_TRUSTED_ORIGINS = 'https://trusted.example.net';
   const express = (await import('express')).default;
   const { authMiddleware, registerAuthRoutes, getInternalAuthToken } = await import('./server/auth.js');
   const app = express();
@@ -209,6 +210,41 @@ describe('authentication HTTP boundary', () => {
     });
     assert.equal(csrfRejected.status, 403);
     assert.equal((await csrfRejected.json()).code, 'CSRF_ORIGIN_REJECTED');
+
+    const proxySameHost = await request(baseUrl, '/protoclaw/auth/config', {
+      method: 'PUT',
+      headers: {
+        cookie: loginCookie,
+        origin: 'https://claw.example.com',
+        'x-forwarded-host': 'claw.example.com',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(proxySameHost.status, 200);
+
+    const trustedOrigin = await request(baseUrl, '/protoclaw/auth/config', {
+      method: 'PUT',
+      headers: {
+        cookie: loginCookie,
+        origin: 'https://trusted.example.net',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(trustedOrigin.status, 200);
+
+    const rewrittenHost = await request(baseUrl, '/protoclaw/auth/config', {
+      method: 'PUT',
+      headers: {
+        cookie: loginCookie,
+        origin: 'https://rewrite.example.org',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(rewrittenHost.status, 403);
+    assert.equal((await rewrittenHost.json()).code, 'CSRF_ORIGIN_REJECTED');
 
     const configRead = await request(baseUrl, '/protoclaw/auth/config', {
       headers: { cookie: loginCookie },

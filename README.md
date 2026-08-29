@@ -41,6 +41,16 @@ AgentDevClaw 支持在设置中的“访问保护”页面配置单密码保护�
 
 这是访问控制，不是传输加密。服务器部署仍应使用 HTTPS 反向代理、VPN 或 SSH 隧道；不要直接将 1420 或 2026 暴露到公网。2026 是内部 ViewerWorker 端口，只应保持本机可访问。
 
+反向代理（Nginx 等）需要透传站点主机信息，否则已登录的写请求会被同源校验（CSRF 防护）拒绝：
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Host $host;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+若代理会改写 Host 且无法调整，可设置环境变量 `AGENTDEV_TRUSTED_ORIGINS`（逗号分隔的完整来源，如 `https://claw.example.com`）显式放行。服务端拒绝时会输出 `[auth] CSRF origin rejected` 日志并附上被拒来源与站点主机，便于定位代理配置。
+
 > 如果 1420 端口被 Windows 保留，可以直接指定 Web UI 端口启动：`advclaw --port 1600`
 
 ### 全局命令 `advclaw`（推荐）

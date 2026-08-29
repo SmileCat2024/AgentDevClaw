@@ -271,19 +271,41 @@ function isAuthPublicPath(pathname) {
   return pathname === '/protoclaw/auth/status' || pathname === '/protoclaw/auth/login';
 }
 
+// AGENTDEV_TRUSTED_ORIGINS：反向代理改写 Host 且无法透传时的显式受信来源
+// （逗号分隔的完整来源，如 https://claw.example.com）。
+const trustedOrigins = cleanText(process.env.AGENTDEV_TRUSTED_ORIGINS)
+  .toLowerCase()
+  .split(',')
+  .map((item) => item.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+function firstForwardedValue(value) {
+  return String(Array.isArray(value) ? value[0] : (value ?? '')).split(',')[0].trim();
+}
+
+function normalizedHost(host, protocol) {
+  const value = String(host || '').toLowerCase().trim();
+  if (!value) return '';
+  // 归一化显式默认端口，使 example.com 与 example.com:443/:80 视为一致。
+  if (protocol === 'https:' && value.endsWith(':443')) return value.slice(0, -4);
+  if (protocol === 'http:' && value.endsWith(':80')) return value.slice(0, -3);
+  return value;
+}
+
 function requestHasSameOrigin(req) {
-  const protocol = cleanText(req.headers['x-forwarded-proto']).split(',')[0] || (req.socket?.encrypted ? 'https' : 'http');
-  const host = cleanText(req.headers['x-forwarded-host']) || cleanText(req.headers.host);
-  const origin = cleanText(req.headers.origin);
-  const referer = cleanText(req.headers.referer);
-  const candidate = origin || referer;
+  const candidate = cleanText(req.headers.origin) || cleanText(req.headers.referer);
   if (!candidate) return false;
+  let url;
   try {
-    const url = new URL(candidate);
-    return url.protocol === `${protocol}:` && url.host === host;
+    url = new URL(candidate);
   } catch {
     return false;
   }
+  if (trustedOrigins.includes(`${url.protocol}//${url.host}`)) return true;
+  // 反向代理链下 TLS 已在代理终止，X-Forwarded-Proto 可能缺失，因此不比较
+  // 协议：跨站页面的 Origin 主机不可能恰好等于站点主机，主机一致即可信。
+  const expectedHost = firstForwardedValue(req.headers['x-forwarded-host']) || cleanText(req.headers.host);
+  return normalizedHost(url.host, url.protocol) === normalizedHost(expectedHost, url.protocol);
 }
 
 export function authMiddleware(req, res, next) {
@@ -300,6 +322,9 @@ export function authMiddleware(req, res, next) {
   }
 
   if (identity.kind === 'session' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !requestHasSameOrigin(req)) {
+    const candidate = cleanText(req.headers.origin) || cleanText(req.headers.referer) || '(none)';
+    const siteHost = firstForwardedValue(req.headers['x-forwarded-host']) || cleanText(req.headers.host) || '(none)';
+    console.warn(`[auth] CSRF origin rejected: origin=${candidate} site=${siteHost} (check proxy Host/X-Forwarded headers or set AGENTDEV_TRUSTED_ORIGINS)`);
     res.status(403).json({ ok: false, error: 'Cross-origin request denied', code: 'CSRF_ORIGIN_REJECTED' });
     return;
   }
