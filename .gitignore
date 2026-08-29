@@ -8,6 +8,7 @@ node_modules/
 !docs/
 docs/*
 !docs/adr/
+!docs/tickets/
 config/
 
 # Agent Studio runtime records (runs.json / runtime-sessions)
