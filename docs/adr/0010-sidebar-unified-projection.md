@@ -69,6 +69,6 @@ Workspace（工作空间入口）
 ## Consequences
 
 - **产品语义边界被刻意抹平**：本机与远程的边界感下降（早期产品的取舍，用户明示接受）。未来要恢复边界（来源徽标、远程目录筛选、按来源区分交互）时，只改投影策略与条目元数据的呈现层，不动数据契约与点击链路。
-- **已知缺口（未建）**：并列身份（coder）只在远程运行、本地无运行实例时，本地没有承载它的身份入口。数据与身份字段已正确到达（见往返测试），缺的是"远程声明的 sidebar identity → 本地虚拟身份入口"这一通用投影。修复方向是通用身份投影元数据，不是 coder 特判。
-- **只读判定依赖命名空间 id**：`switchAgent` 解析成功后 `currentRuntimeAgentId` 可能丢失 `remote:` 前缀，只读判定必须按用户点击的原始命名空间 id 做（ADR-0008 Phase 2 开放写路径前需重新审视）。
+- **远程独有并列身份已由服务端合成承载**（Phase 1.5）：并列身份（如 coder）只在远程运行、本地无运行实例时，聚合器把远程 catalog 快照中该宿主的存活 sessionType 并入身份投影判定（`hasLiveSession` = 本地存活 ∨ 远程 catalog 存活），本地照常合成身份入口。catalog 快照带短 TTL 缓存（server.js 装配点决策，聚合器默认仍透传），连接 CRUD / 握手后即时失效；失效与在途拉取的竞态由纪元计数器守卫。合成判定与本地路径同构（宿主归属 + sessionType），无 agent 类型分支。
+- **只读判定依赖命名空间 id**：`switchAgent` 解析成功后 `currentRuntimeAgentId` 可能丢失 `remote:` 前缀，只读判定必须按用户点击的原始命名空间 id 做。Phase 2 起该判定演化为 capability 门控（远程且握手 `capabilities.write` 为 false 才只读），但"解析后丢前缀"的陷阱依然约束所有按命名空间寻址的调用点。
 - **往返测试是硬约束**：`test/remote-sidebar-projection.test.js` 用真实聚合输出直接驱动真实前端投影函数（非手写 fixture），字段改名、分流规则变化、数据形状断链都会在测试层暴露。

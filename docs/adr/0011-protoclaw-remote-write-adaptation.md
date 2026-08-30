@@ -55,6 +55,15 @@ protoclaw 族（路由内命名空间分支，不走代理闸）：路由识别 
 | `GET /protoclaw/model_config` | protoclaw（host 域） | 会话命名空间 → `resolveHostTarget` 显式转发，远程返回自己的 preset 列表 |
 | `GET /protoclaw/app_info` + 握手 | capability | 生产 `capabilities.write`；握手采集；catalog 透传；前端门控 |
 
+### 扩展轨迹（Phase 2 第二刀起，同一套路持续接入）
+
+| 批次 | 端点 / 位置 | 远程适配 |
+|---|---|---|
+| Phase 2 第二刀 | `POST /protoclaw/todo_control`、`/protoclaw/tool_state` | 路由内命名空间分支 → 转发（helper 提升至 shared，model-config 私有实现上收） |
+| 同上 | `GET /protoclaw/agent_detail` | host 作用域读端点转发；前端 `focusedAgentId` 收敛为宿主级命名空间 id 后粒度自动正确 |
+| Phase 3（R2-01/R2-02） | session 路由族十六端点（历史列表/搜索/记录/activate/归档/改名/AI 标题/branch/trim/compact/summary/创建/删除/token 刷新等） | 逐路由薄分支照本套路接入；幂等闸扩至全部远程写端点；`POST /protoclaw/prebuilt_sessions`（远程创建会话）强制幂等键 |
+| Phase 3 补遗 | `POST /protoclaw/stop_agent`、`/protoclaw/restart_agent` | runtime 生命周期操作转发；agentId/sessionId 剥命名空间；qqbot 渠道校验等宿主端逻辑由远程端自身路由执行 |
+
 ## Consequences
 
 - 写路径与读路径共用同一条隧道与同一套失败契约；远程写故障的表现形态与本地一致，不再有独立通道需要独立排查。

@@ -65,6 +65,7 @@ function loadCtxMenuItems(overrides = {}) {
     loadAgents: () => {},
     requestSwitch: () => {},
     invoke: () => ({}),
+    isRemoteNamespaceAgentId: (id) => typeof id === 'string' && id.startsWith('remote:'),
   };
 
   const ctx = createFrontendSandbox({ ...defaults, ...overrides });
@@ -321,5 +322,91 @@ describe('ctx-menu-items: dispatchCtxAction (edge cases)', () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('activate', null)`);
     assert.equal(calls.length, 0);
+  });
+});
+
+// ── remote runtime leaves: same menu, namespaced addressing ──
+
+const REMOTE_NS = 'remote:lab-b:programming-helper';
+
+describe('ctx-menu-items: remote runtime leaf menu parity', () => {
+  it('remote runtime leaf under an ops-allowed host gets the full local menu', () => {
+    const { ctx } = loadCtxMenuItems();
+    const items = ctx.run(`getCtxMenuItems('runtime', '${REMOTE_NS}', 'remote', 'remote:lab-b:rt-1')`);
+    // Menu structure must be identical to the local runtime menu: the remote
+    // leaf keeps restart / stop / archive-and-stop (forwarded server-side),
+    // with no degraded variant.
+    const actions = items.map((item) => item.action);
+    assert.ok(actions.includes('restart'), 'remote leaf keeps Restart');
+    assert.ok(actions.includes('stop'), 'remote leaf keeps Stop');
+    assert.ok(actions.includes('archive-and-stop'), 'remote leaf keeps Archive & Stop');
+    assert.ok(actions.includes('delete-session-runtime'));
+    assert.ok(actions.includes('rename'));
+    assert.ok(actions.includes('generate-title'));
+    assert.equal(items.filter((item) => item.type === 'separator').length, 1);
+  });
+
+  it('remote runtime leaf under an unknown host still gets no menu', () => {
+    const { ctx } = loadCtxMenuItems();
+    const items = ctx.run(`getCtxMenuItems('runtime', 'remote:lab-b:unknown-agent', 'remote', 'remote:lab-b:rt-1')`);
+    assert.equal(items.length, 0);
+  });
+});
+
+describe('ctx-menu-items: dispatchCtxAction remote variants', () => {
+  function loadRemoteHarness() {
+    const { ctx, calls } = loadCtxMenuItems({
+      invoke: (command, payload) => {
+        calls.push({ fn: 'invoke', args: [command, payload] });
+        return {};
+      },
+      loadAgents: () => {
+        calls.push({ fn: 'loadAgents' });
+      },
+      requestSwitch: (id) => {
+        calls.push({ fn: 'requestSwitch', args: [id] });
+      },
+    });
+    ctx.window.RemoteConnections = {
+      refresh: () => { calls.push({ fn: 'RemoteConnections.refresh' }); },
+      waitForRuntimeForSession: async (sessionId) => {
+        calls.push({ fn: 'waitForRuntimeForSession', args: [sessionId] });
+        return 'remote:lab-b:rt-new';
+      },
+      getEntryHostAgentId: () => 'programming-helper',
+    };
+    return { ctx, calls };
+  }
+
+  async function settle(ctx) {
+    await ctx.run(`new Promise((resolve) => setTimeout(resolve, 10))`);
+  }
+
+  it('restart on a remote leaf invokes restart_agent with the host namespace id and re-locates the new runtime', async () => {
+    const { ctx, calls } = loadRemoteHarness();
+    ctx.run(`dispatchCtxAction('restart', { ns: '${REMOTE_NS}', id: 'remote:lab-b:rt-1', sessionId: 'remote:lab-b:sess-1', variant: 'remote' })`);
+    await settle(ctx);
+    const invokeCall = calls.find((c) => c.fn === 'invoke');
+    assert.ok(invokeCall, 'restart_agent must go through invoke');
+    assert.equal(invokeCall.args[0], 'restart_agent');
+    assert.equal(invokeCall.args[1].agentId, REMOTE_NS, 'agentId must be the host namespace id');
+    assert.equal(invokeCall.args[1].sessionId, 'remote:lab-b:sess-1');
+    assert.ok(calls.some((c) => c.fn === 'RemoteConnections.refresh'), 'catalog must refresh after restart');
+    assert.ok(calls.some((c) => c.fn === 'loadAgents'));
+    const located = calls.find((c) => c.fn === 'waitForRuntimeForSession');
+    assert.equal(located.args[0], 'remote:lab-b:sess-1', 'new runtime is located via the session');
+    const switched = calls.find((c) => c.fn === 'requestSwitch');
+    assert.equal(switched.args[0], 'remote:lab-b:rt-new');
+  });
+
+  it('stop on a remote leaf invokes stop_agent with the host namespace id', async () => {
+    const { ctx, calls } = loadRemoteHarness();
+    ctx.run(`dispatchCtxAction('stop', { ns: '${REMOTE_NS}', id: 'remote:lab-b:rt-1', sessionId: 'remote:lab-b:sess-1', variant: 'remote' })`);
+    await settle(ctx);
+    const invokeCall = calls.find((c) => c.fn === 'invoke');
+    assert.ok(invokeCall, 'stop_agent must go through invoke');
+    assert.equal(invokeCall.args[0], 'stop_agent');
+    assert.equal(invokeCall.args[1].agentId, REMOTE_NS);
+    assert.equal(invokeCall.args[1].sessionId, 'remote:lab-b:sess-1');
   });
 });
