@@ -53,12 +53,17 @@ const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio', 'c
 
 // 远程宿主命名空间 ns（remote:<connId>:<hostId>）的菜单放行：连接 id 不含
 // 冒号（request-target 不变量），第二个冒号之后即宿主 agent id，须在本集合
-// 内才与本地同一放行口径。远程运行时叶子（ADR-0012）经 data-ctx-ns 携带它。
+// 内才与本地同一放行口径；远程叶子另受握手能力位 sessionOps 门控（ADR-0011
+// 扩展：旧远程缺位时菜单降级隐藏）。
 function ctxSessionOpsAllowed(ns) {
   if (CTX_SESSION_OPS_AGENTS.has(ns)) return true;
   if (typeof isRemoteNamespaceAgentId !== 'function' || !isRemoteNamespaceAgentId(ns)) return false;
   const innerId = String(ns).split(':').slice(2).join(':');
-  return CTX_SESSION_OPS_AGENTS.has(innerId);
+  if (!CTX_SESSION_OPS_AGENTS.has(innerId)) return false;
+  if (typeof window !== 'undefined' && window.RemoteConnections && typeof window.RemoteConnections.capabilityFor === 'function') {
+    return window.RemoteConnections.capabilityFor(ns, 'sessionOps') === true;
+  }
+  return true;
 }
 
 function getCtxMenuItems(role, ns, variant, id) {

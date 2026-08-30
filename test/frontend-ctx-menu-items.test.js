@@ -410,3 +410,34 @@ describe('ctx-menu-items: dispatchCtxAction remote variants', () => {
     assert.equal(invokeCall.args[1].sessionId, 'remote:lab-b:sess-1');
   });
 });
+
+// ── D1 regression: sessionOps capability gates the remote ops menu ──
+
+describe('ctx-menu-items: sessionOps capability gating (merged integration)', () => {
+  function loadWithCapability(sessionOps) {
+    const { ctx } = loadCtxMenuItems();
+    ctx.window.RemoteConnections = {
+      capabilityFor: (agentId, action) => (action === 'sessionOps' ? sessionOps : true),
+    };
+    return ctx;
+  }
+
+  it('remote leaf with sessionOps capability keeps the full ops menu', () => {
+    const ctx = loadWithCapability(true);
+    const items = ctx.run(`getCtxMenuItems('runtime', '${REMOTE_NS}', 'remote', 'remote:lab-b:rt-1')`);
+    const actions = items.map((item) => item.action);
+    assert.ok(actions.includes('restart') && actions.includes('stop') && actions.includes('archive-and-stop'));
+  });
+
+  it('remote leaf without sessionOps capability (legacy remote) degrades to no menu', () => {
+    const ctx = loadWithCapability(false);
+    const items = ctx.run(`getCtxMenuItems('runtime', '${REMOTE_NS}', 'remote', 'remote:lab-b:rt-1')`);
+    assert.equal(items.length, 0);
+  });
+
+  it('local agent menu is unaffected by the capability lookup', () => {
+    const ctx = loadWithCapability(false);
+    const items = ctx.run(`getCtxMenuItems('runtime', 'programming-helper', 'managed-runtime', 'rt-1')`);
+    assert.equal(items.length, 10, 'local runtime menu unchanged');
+  });
+});
