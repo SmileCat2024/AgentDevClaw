@@ -512,9 +512,13 @@ Phase 2 已落地的 remote-forward 共享 helper 与 6 端点接入模式、
 
 | 票 | 内容 | 状态 |
 |----|------|------|
-| [R1-09](remote-access/R1-09-header-info-convergence.md) | 远程会话顶部信息收敛（sessionMeta 权威模型 + focusedAgentId host 级收敛） | 施工项 A–E 已合入（T21 系列），剩 F 项测试 |
-| [R2-01](remote-access/R2-01-session-history-open-manage.md) | 远程会话历史：发现、打开与管理（十端点转发 + 幂等闸补齐 + 前端列表统一） | 已立项未派发 |
-| [R2-02](remote-access/R2-02-session-write-workflows.md) | 远程会话写工作流：分支与上下文精简（六端点转发 + checkpoint 验收） | 已立项未派发（依赖 R2-01） |
+| [R1-09](remote-access/R1-09-header-info-convergence.md) | 远程会话顶部信息收敛（sessionMeta 权威模型 + focusedAgentId host 级收敛） | 已合入（A–E: 87cf825 等；F 项测试 cb80eb1）；双机冒烟待执行 |
+| [R2-01](remote-access/R2-01-session-history-open-manage.md) | 远程会话历史：发现、打开与管理（十端点转发 + 幂等闸补齐 + 前端列表统一） | 已合入（36ad806，实际 12 端点含 create 补齐）；跟进：M2 无 runtime 时历史不可见 / M3 前端搜索未接远程 |
+| [R2-02](remote-access/R2-02-session-write-workflows.md) | 远程会话写工作流：分支与上下文精简（六端点转发 + checkpoint 验收） | 已合入（e0933a3）；审核 M1 文案回归已修（0b51489） |
+
+2026-08-30 施工与独立审核记录：三票经 worktree 并行/串行施工合入（cb80eb1 / 36ad806 / 40f896d / e0933a3），
+独立审核判定"有条件收口"，M1 已修复（0b51489）；M2（无运行中 runtime 时远程历史不可见，设计层缺口）、
+M3（前端搜索未接远程转发，服务端已就绪）记跟进票；双机冒烟待人工执行后回填。
 
 ### 术语区分
 
