@@ -24,6 +24,33 @@
 
 // ── Workspace Session List ───────────────────────────────────────
 
+// ── 视图能力查询（R2-03）──────────────────────────────────────────
+// UI 守卫统一经 window.RemoteConnections.capabilityFor 契约查询：
+// ('write' | 'sessionOps' | 'workspaceCreate') → boolean；本地身份恒 true、
+// 远程按握手能力、缺省 false。视图身份：本地 agent 用其 id；remoteOnly 项目
+// 桶用会话数据层携带的宿主级命名空间 id（ADR-0012：身份来自数据层）。
+// capabilityFor 未挂载（集成窗口）时退回命名空间判定——本地身份保持可见、
+// 远程身份按缺省 false 隐藏；不引入伪能力位。
+function viewCapabilityEnabled(identity, action) {
+  const id = String(identity || '').trim();
+  if (!id) return false;
+  const capabilityFor = window.RemoteConnections?.capabilityFor;
+  if (typeof capabilityFor === 'function') {
+    return capabilityFor(id, action) === true;
+  }
+  return !isRemoteNamespaceAgentId(id);
+}
+
+// remoteOnly 项目桶的视图身份 = 桶内会话数据层携带的宿主级命名空间 id；
+// 本地项目视图身份 = agent id。
+function projectViewIdentity(agent, project) {
+  if (project?.remoteOnly) {
+    const sessions = Array.isArray(project.sessions) ? project.sessions : [];
+    return String(sessions.find((session) => session?.remoteHostNsId)?.remoteHostNsId || '').trim();
+  }
+  return String(agent?.id || '').trim();
+}
+
 function renderWorkspaceSessionList(agent, block) {
   const sessionFilters = block?.sessionList || {};
   const allowedFormIds = Array.isArray(sessionFilters.formIds)
@@ -122,7 +149,7 @@ function _renderFeatureCreatorSessionList(agent, block, ctx) {
           '</div>',
           '<div class="feature-project-side">',
           '<div class="feature-project-head-actions">',
-          '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>',
+          (viewCapabilityEnabled(agent.id, 'workspaceCreate') ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>' : ''),
           '</div>',
           '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',
           '</div>',
@@ -215,7 +242,7 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
           '</div>',
           '<div class="feature-project-side">',
           '<div class="feature-project-head-actions">',
-          '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>',
+          (viewCapabilityEnabled(agent.id, 'workspaceCreate') ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button>' : ''),
           '</div>',
           '<div class="feature-project-toggle" data-label-collapsed="' + escapeHtml(t('workspace_expand_records')) + '" data-label-expanded="' + escapeHtml(t('workspace_collapse_records')) + '" aria-hidden="true"><span class="feature-project-count">' + escapeHtml(String(project.conversationCount || 0)) + '</span></div>',
           '</div>',
@@ -363,23 +390,29 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const modelDisplayName = getModelDisplayName(primaryModel);
   const hasSecondary = !!secondaryModel;
 
-  // 模型显示组件 - 简洁设计，无图标（remoteOnly 项目为远程目录视图，
-  // 模型预设属本地 agent 配置，不在此呈现）
-  const modelSwitchHtml = currentProject && !currentProject.remoteOnly && modelDisplayName ? [
+  // 模型显示组件 - 简洁设计，无图标（模型预设属本地 agent 配置；远程视图按
+  // 宿主 write 能力决定呈现，不可写宿主不在此呈现模型切换）。
+  const viewIdentity = projectViewIdentity(agent, currentProject);
+  const canWorkspaceCreate = viewCapabilityEnabled(viewIdentity, 'workspaceCreate');
+  const modelSwitchHtml = currentProject && viewCapabilityEnabled(viewIdentity, 'write') && modelDisplayName ? [
     '<div class="ph-model-switch' + (hasSecondary ? ' has-secondary' : '') + '" onclick="window.phToggleModelSlot()" title="' + escapeHtml(isZh ? (hasSecondary ? '点击切换到: ' + secondaryModel : '点击配置备选模型') : (hasSecondary ? 'Click to switch to: ' + secondaryModel : 'Click to configure secondary model')) + '">',
     '<span class="ph-model-switch-name">' + escapeHtml(modelDisplayName) + '</span>',
     (hasSecondary ? '<svg class="ph-model-switch-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3l4 4-4 4"/><line x1="20" y1="7" x2="8" y2="7"/><path d="M8 21l-4-4 4-4"/><line x1="4" y1="17" x2="16" y2="17"/></svg>' : ''),
     '</div>',
   ].join('') : '';
 
+    // 新对话动作（R2-03）：remoteOnly 视图携带宿主级命名空间 agentId，服务端
+    // 按命名空间分支转发到远程宿主创建；本地动作形状不变。
     const newChatAction = escapeHtml(JSON.stringify({
       type: 'create_session',
       openDirectory: currentProject?.openDirectory || '',
+      ...((currentProject?.remoteOnly && viewIdentity) ? { agentId: viewIdentity } : {}),
     }));
 
     // 目录设置按钮（共享配置编辑器，编辑当前目录的目录层）；
     // 目录由当前项目显式传入，避免运行时二次查询 workspace_state 失效。
-    // remoteOnly 项目为远程目录，本地目录配置不适用。
+    // 目录配置编辑的是本地 agent 的目录层配置，属真本地语义：remoteOnly
+    // 项目保持隐藏，不随远程能力放开（无对应远程能力位，不引入伪能力）。
     const dirConfigBtn = (currentProject && !currentProject.remoteOnly && typeof phDirConfigButtonHtml === 'function')
       ? phDirConfigButtonHtml(agent, currentProject.openDirectory) : '';
 
@@ -391,8 +424,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-project-bar-right">',
       modelSwitchHtml,
       dirConfigBtn,
-      // remoteOnly 项目不支持本地新建会话（openDirectory 在远程主机上）。
-      (currentProject && !currentProject.remoteOnly ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
+      // 新对话渲染查 workspaceCreate 能力（远程目录经服务端转发创建）。
+      (currentProject && canWorkspaceCreate ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
       '</div>',
       '</div>',
     ].join('');
@@ -475,8 +508,9 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   let sessionsHtml = '';
   if (needsTabs) {
     const tabId = 'ph-tab-' + escapeHtml(agent.id) + '-' + escapeHtml(currentProject.id);
-    // remoteOnly 项目不支持本地新建会话（openDirectory 在远程主机上）。
-    const newChatBtnHtml = currentProject.remoteOnly ? '' : '<div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
+    // 新对话渲染查 workspaceCreate 能力（R2-03）：remoteOnly 视图按宿主握手
+    // 能力放开，本地视图恒渲染。
+    const newChatBtnHtml = canWorkspaceCreate ? '<div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>' : '';
     const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>' + newChatBtnHtml;
     const isSearching = phSearchQuery.trim().length > 0;
     const coderCount = (typeof window.CoderThreadsUI?.countFor === 'function') ? window.CoderThreadsUI.countFor(currentProject.openDirectory) : 0;
@@ -579,7 +613,7 @@ function _renderGenericSessionList(agent, block, ctx) {
         (allowCompactedResume
           ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + compactedResumeAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_light_resume')) + '</button>'
           : ''),
-        (isFeatureCreator
+        (isFeatureCreator && viewCapabilityEnabled(agent.id, 'workspaceCreate')
           ? '<button class="workspace-action secondary" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_new_chat')) + '</button>'
           : ''),
         '</div>',

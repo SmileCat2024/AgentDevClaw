@@ -92,6 +92,16 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     return;
   }
 
+  if (action.type === 'create_session'
+    && typeof isRemoteNamespaceAgentId === 'function'
+    && isRemoteNamespaceAgentId(action.agentId)) {
+    // 远程目录新建会话（R2-03，ADR-0012）：action 来自 remoteOnly 项目视图，
+    // 本地 allAgents 无宿主记录——agentId 即数据层携带的宿主级命名空间 id，
+    // 创建经服务端命名空间分支转发到远程宿主（远程分支强制幂等闸）。
+    await window._createRemoteWorkspaceSession(action.agentId, action, triggerButton);
+    return;
+  }
+
   const activeAgent = getCurrentAgentRecord();
   if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
     saveCurrentWorkspaceSurfaceScroll();
@@ -961,6 +971,95 @@ window._activateRemoteHistorySession = async function(hostNsId, sessionId, trigg
       if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
     }
   } catch (error) {
+    window.alert(`Session failed: ${error && error.message ? error.message : error}`);
+  } finally {
+    if (triggerButton) triggerButton.classList.remove('action-loading');
+  }
+};
+
+// ── Remote workspace session creation (R2-03, ADR-0012 决策 2) ──────────────
+// remoteOnly 项目视图的"新对话"：本地无宿主 agent 记录，创建请求携带宿主级
+// 命名空间 id，经服务端命名空间分支转发到远程宿主（远程端启动 runtime）。
+// 响应中的裸会话 id 经 namespaceMutationResult 命名空间化（宿主 id 自带
+// connectionId，可直接作为归一化基准），随后与 R2-01 activate 同链路：轮询
+// 远程目录条目出现后切换焦点。断线/失败按 ADR-0011 三分类显式呈现，无静默重试。
+window._createRemoteWorkspaceSession = async function(hostNsId, action, triggerButton) {
+  if (triggerButton) markActionLoading(triggerButton);
+  const openDirectory = String(action.openDirectory || '').trim();
+  let sidebarOperation = null;
+  try {
+    if (!hostNsId || !openDirectory) {
+      // 无目录身份无法在远程定位创建目标：显式失败，不猜测。
+      throw new Error(currentLanguage === 'zh'
+        ? '缺少创建会话所需的项目目录'
+        : 'Missing project directory for session creation');
+    }
+    sidebarOperation = beginSidebarOperation({
+      type: 'create',
+      kind: 'create',
+      phase: 'committing',
+      agentId: hostNsId,
+      sourceSessionId: '',
+      sourceRuntimeId: '',
+      projectDir: openDirectory,
+      projectName: getPathLeaf(openDirectory),
+      title: action.agentName || action.featureName || '',
+    });
+    const response = await fetch('/protoclaw/prebuilt_sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+      body: JSON.stringify({
+        agentId: hostNsId,
+        openDirectory,
+        responseMode: 'delta',
+        operationId: sidebarOperation.operationId,
+      }),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      // 契约失败形态（三分类）显式呈现，不静默排队、不伪装成功。
+      throw new Error(result?.message || result?.error || (await response.text().catch(() => `HTTP ${response.status}`)));
+    }
+    const namespaced = typeof window.RemoteConnections?.namespaceMutationResult === 'function'
+      ? window.RemoteConnections.namespaceMutationResult(hostNsId, result)
+      : result;
+    const targetSessionId = String(
+      namespaced?.session?.id || namespaced?.targetSessionId || namespaced?.newSessionId || '',
+    ).trim();
+    updateSidebarOperation(sidebarOperation.operationId, {
+      phase: 'target-starting',
+      targetSessionId,
+      projectDir: namespaced?.session?.openDirectory || openDirectory,
+      projectName: getPathLeaf(namespaced?.session?.openDirectory || openDirectory),
+      title: namespaced?.session?.title || sidebarOperation.title,
+      serverRevision: namespaced?.revision ?? null,
+    });
+    window.ClawToast?.show?.({
+      id: `remote-create-${targetSessionId || sidebarOperation.operationId}`,
+      status: 'success',
+      title: currentLanguage === 'zh' ? '远程会话已创建' : 'Remote session created',
+      description: namespaced?.session?.title || '',
+    });
+    if (typeof window.refreshThreads === 'function') {
+      window.refreshThreads(true).catch(() => {});
+    }
+    // 远程 runtime 经 Phase 1.5 统一投影自动进入侧栏；轮询目录条目出现后切换，
+    // 未及时出现时留给 catalog 轮询自然带出，不伪装失败。
+    const runtimeRef = targetSessionId
+      ? await _waitForRemoteRuntimeForSession(targetSessionId, 50)
+      : null;
+    if (runtimeRef) {
+      updateSidebarOperation(sidebarOperation.operationId, { phase: 'target-ready', targetRuntimeId: runtimeRef });
+      await requestSwitch(runtimeRef, 'remote-session-create');
+    } else {
+      void loadAgents();
+    }
+    finishSidebarOperation(sidebarOperation.operationId, 'settled');
+  } catch (error) {
+    console.error('Failed to create remote session:', error);
+    if (sidebarOperation?.operationId) {
+      finishSidebarOperation(sidebarOperation.operationId, 'failed', { errorCode: 'session_create_failed' });
+    }
     window.alert(`Session failed: ${error && error.message ? error.message : error}`);
   } finally {
     if (triggerButton) triggerButton.classList.remove('action-loading');
