@@ -134,6 +134,10 @@ export function createAgentStartupFns(deps) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const runtime = getAgentRuntime(agentId, sessionId);
+      // 进程已退出（构造期崩溃等）：ready 不会再到来，立即返回而不是干等满窗口
+      if (runtime?.stopped && !isManagedRuntimeRunning(runtime)) {
+        return null;
+      }
       const status = buildStatus(agentId, sessionId);
       if (status.viewerAgentId && runtime?.ready) {
         const agents = await getConnectedAgents();

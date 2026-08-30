@@ -237,6 +237,100 @@ describe('commands 端点 — head runtime 就绪闸', () => {
   });
 });
 
+describe('deliver 端点 — runtime_not_accepting 恢复闸', () => {
+  // deliver 是裸投递动作；历史上撞上 runtime_not_accepting 只会重复报错，
+  // 调用方（按旧流程用 deliver 的 agent）容易在死胡同里循环。加装与 send
+  // 同源的就绪闸：not_accepting 时唤起 head runtime 后重投一次。
+  function setupDeliverApp({ deliverResults, ensureHeadRuntime, thread }) {
+    const app = makeMockApp();
+    const results = deliverResults;
+    let deliverCalls = 0;
+    const core = {
+      getThread: async () => thread || ({
+        threadId: 'wt-test', agentId: 'programming-helper', headSessionId: 'sess-head', status: 'open', commands: [],
+      }),
+      deliverPendingCommands: async () => {
+        deliverCalls += 1;
+        return results[Math.min(deliverCalls, results.length) - 1];
+      },
+    };
+    setupThreadRoutes(app, makeMockExpress(), {
+      control: { core, board: {}, archive: { resolveCommandRejection: async () => null } },
+      lifecycle: { archiveThread: async () => ({}), unarchiveThread: async () => ({}) },
+      ensureHeadRuntime,
+      resolveSessionOpenDirectory: async () => null,
+    });
+    return { app, getDeliverCalls: () => deliverCalls };
+  }
+
+  async function callDeliver(app) {
+    const handlers = app._routes['POST /protoclaw/threads/:threadId/deliver'];
+    const res = makeMockRes();
+    await handlers[handlers.length - 1]({ params: { threadId: 'wt-test' }, body: {} }, res);
+    return res;
+  }
+
+  test('not_accepting → 唤起成功 → 重投并返回新结果（不带 runtimeWake）', async () => {
+    const wakeCalls = [];
+    const first = { attempted: 1, delivered: 0, reason: 'runtime_not_accepting', results: [{ accepted: false, reason: 'runtime_not_accepting', retryable: true }] };
+    const second = { attempted: 1, delivered: 1, results: [{ accepted: true }] };
+    const { app, getDeliverCalls } = setupDeliverApp({
+      deliverResults: [first, second],
+      ensureHeadRuntime: async () => ({ ok: true }),
+    });
+    const handlers = app._routes['POST /protoclaw/threads/:threadId/deliver'];
+    const res = makeMockRes();
+    await handlers[handlers.length - 1]({ params: { threadId: 'wt-test' }, body: {} }, res);
+    assert.equal(getDeliverCalls(), 2, '唤起成功后应重投一次');
+    assert.equal(res.body.attempted, 1);
+    assert.equal(res.body.delivered, 1, '重投后指令被接收');
+    assert.equal(res.body.results[0].accepted, true);
+    assert.equal(res.body.runtimeWake, undefined, '唤起成功时响应与旧版同形');
+  });
+
+  test('唤起失败 → 保留首次 not_accepting 结果 + runtimeWake 事实', async () => {
+    const { app, getDeliverCalls } = setupDeliverApp({
+      deliverResults: [{ attempted: 1, delivered: 0, reason: 'runtime_not_accepting', results: [{ accepted: false, reason: 'runtime_not_accepting', retryable: true }] }],
+      ensureHeadRuntime: async () => ({ ok: false, code: 'head_session_missing', message: 'gone' }),
+    });
+    const handlers = app._routes['POST /protoclaw/threads/:threadId/deliver'];
+    const res = makeMockRes();
+    await handlers[handlers.length - 1]({ params: { threadId: 'wt-test' }, body: {} }, res);
+    assert.equal(getDeliverCalls(), 1, '唤起失败不重投');
+    assert.equal(res.body.reason, 'runtime_not_accepting');
+    assert.equal(res.body.runtimeWake.ok, false);
+    assert.equal(res.body.runtimeWake.code, 'head_session_missing');
+  });
+
+  test('投递成功（无 not_accepting）→ 不触发唤起，行为与旧版一致', async () => {
+    const wakeCalls = [];
+    const { app, getDeliverCalls } = setupDeliverApp({
+      deliverResults: [{ attempted: 1, delivered: 1, results: [{ accepted: true }] }],
+      ensureHeadRuntime: async () => { throw new Error('should not be called'); },
+    });
+    const handlers = app._routes['POST /protoclaw/threads/:threadId/deliver'];
+    const res = makeMockRes();
+    await handlers[handlers.length - 1]({ params: { threadId: 'wt-test' }, body: {} }, res);
+    assert.equal(getDeliverCalls(), 1);
+    assert.equal(res.body.delivered, 1);
+    assert.equal(res.body.attempted, 1);
+    assert.equal(res.body.runtimeWake, undefined);
+  });
+
+  test('闸未注入（旧调用方）→ not_accepting 时保持裸投递行为', async () => {
+    const { app, getDeliverCalls } = setupDeliverApp({
+      deliverResults: [{ attempted: 1, delivered: 0, reason: 'runtime_not_accepting', results: [{ accepted: false, reason: 'runtime_not_accepting', retryable: true }] }],
+      ensureHeadRuntime: undefined,
+    });
+    const handlers = app._routes['POST /protoclaw/threads/:threadId/deliver'];
+    const res = makeMockRes();
+    await handlers[handlers.length - 1]({ params: { threadId: 'wt-test' }, body: {} }, res);
+    assert.equal(getDeliverCalls(), 1);
+    assert.equal(res.body.reason, 'runtime_not_accepting');
+    assert.equal(res.body.runtimeWake, undefined);
+  });
+});
+
 describe('cleanupEmptySessions — 线程收口钩子', () => {
   // cleanupEmptySessions 直接 fs.rm 删文件，历史上绕过 onSessionDeleted，
   // 制造过孤儿线程（head 已删、线程 open、pending 指令永久滞留）。

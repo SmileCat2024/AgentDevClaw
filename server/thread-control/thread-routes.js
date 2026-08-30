@@ -281,8 +281,28 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
   app.post('/protoclaw/threads/:threadId/deliver', jsonMiddleware, async (req, res) => {
     try {
       await _assertNotArchived(req.params.threadId);
-      const result = await core.deliverPendingCommands(req.params.threadId);
-      res.json({ ok: true, ...result });
+      let result = await core.deliverPendingCommands(req.params.threadId);
+      // 与 send 同源的恢复闸：裸投递撞上 runtime_not_accepting（head runtime
+      // 不在）时先唤起再重投一次，deliver 从"只会重复报错的手动动作"变成
+      // 与 send 一致的恢复路径。唤起失败时保留首次结果并附 runtimeWake 事实。
+      let runtimeWake = null;
+      const notAccepting = result?.reason === 'runtime_not_accepting' || (result?.results || []).some((r) => r.reason === 'runtime_not_accepting');
+      if (notAccepting && typeof ensureHeadRuntime === 'function') {
+        const thread = await core.getThread(req.params.threadId);
+        if (thread?.headSessionId && thread?.status === 'open') {
+          const wake = await ensureHeadRuntime(thread.agentId, thread.headSessionId).catch((error) => ({
+            ok: false,
+            code: 'runtime_wake_failed',
+            message: String(error?.message || error),
+          }));
+          if (wake?.ok) {
+            result = await core.deliverPendingCommands(req.params.threadId);
+          } else {
+            runtimeWake = { ok: false, code: wake?.code || 'runtime_wake_failed', message: wake?.message || 'head runtime not available' };
+          }
+        }
+      }
+      res.json({ ok: true, ...result, ...(runtimeWake ? { runtimeWake } : {}) });
     } catch (err) {
       _errorResponse(res, err);
     }

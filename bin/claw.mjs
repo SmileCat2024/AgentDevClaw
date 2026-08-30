@@ -439,6 +439,13 @@ async function handleThreads(args = []) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
+    // 恢复闸唤起失败：与 send 同语义显式提示（指令在箱、无承接 runtime）
+    if (payload?.runtimeWake?.ok === false) {
+      if (format === 'text') {
+        console.error(`runtime 唤起失败（${payload.runtimeWake.code}）：${payload.runtimeWake.message}；指令保持 pending，不重复 deliver`);
+      }
+      process.exitCode = 4;
+    }
     writeThreadPayload(payload, format);
     return;
   }
