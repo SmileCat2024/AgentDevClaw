@@ -307,6 +307,9 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
   // 远程历史会话混入（R2-01，ADR-0012 决策 1）：与本地会话在同一项目桶内
   // 混合排序，无来源分区、无远程徽标。目录本地不存在时创建 remoteOnly 桶：
   // 仅用于 surface 视图呈现，不参与本地工作区切换语义（phSwitchProject）。
+  // 标记是「该桶无本地目录」的数据事实（保留，不做 UI 门控）：消费端经
+  // getProjectLocalHostAgentId 解析本地宿主身份后查询能力矩阵
+  // （window.RemoteConnections.capabilityFor）做门控判定。
   if (typeof getRemoteHistoryProjectBuckets === 'function') {
     for (const bucket of getRemoteHistoryProjectBuckets()) {
       const dirId = `dir:${String(bucket.openDirectory).replace(/\\/g, '/').toLowerCase()}`;
@@ -335,6 +338,15 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
 function getProgrammingHelperProjectDisplayName(project) {
   const directoryName = getPathLeaf(project?.openDirectory);
   return directoryName || 'UntitledProject';
+}
+
+// 项目桶的本地宿主身份（能力门控寻址用，ADR-0012 决策 1）：本地目录桶归
+// 本地工作区身份；remoteOnly 桶的目录仅存在于远程主机，没有本地宿主，返回
+// 空串——本地工作区切换等真本地动作对该类桶不可用（这是真本地事实而非
+// 能力位，不造伪能力位），由消费端按「动作不可用」路由到视图呈现。
+function getProjectLocalHostAgentId(project, localAgentId) {
+  if (!project || project.remoteOnly) return '';
+  return String(localAgentId || '');
 }
 
 function hasWorkspaceSessions(agent = getCurrentAgentRecord()) {

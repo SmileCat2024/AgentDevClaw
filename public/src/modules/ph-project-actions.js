@@ -198,10 +198,21 @@ window.phSwitchProject = async (projectId) => {
 
   // 远程独有项目（ADR-0012 决策 1）：仅切换 surface 视图，不改变本地工作区
   // 目录——本地 ph_project/switch 会把工作区切到远程路径，属错误语义。
-  const remoteOnlyProject = (typeof getProgrammingHelperProjects === 'function'
+  // 守卫迁移（能力驱动）：门控问题从「这是远程桶吗」改为「本地工作区切换
+  // 这个动作的能力可用吗」——按项目本地宿主身份查询能力矩阵（本地身份恒
+  // 可用；能力不可用即保持视图切换路由）。remoteOnly 桶的目录仅存在于
+  // 远程主机、没有本地宿主：这是真本地事实而非能力位（原则：不造伪能力
+  // 位），桶标记仅作数据描述保留，经数据层 getProjectLocalHostAgentId
+  // 解析（见 project-data.js），与能力不可用同样走视图切换。
+  // 视图覆盖标记（phSurfaceViewProjectId）属纯视图逻辑，不属能力语义，照旧设置。
+  const projects = (typeof getProgrammingHelperProjects === 'function'
     ? getProgrammingHelperProjects(currentAgent)
-    : []).find((p) => p.id === projectId && p.remoteOnly);
-  if (remoteOnlyProject) {
+    : []);
+  const targetProject = projects.find((p) => p.id === projectId) || null;
+  const localHostAgentId = getProjectLocalHostAgentId(targetProject, currentAgent.id);
+  const canSwitchLocalWorkspace = localHostAgentId !== ''
+    && window.RemoteConnections?.capabilityFor?.(localHostAgentId, 'write') !== false;
+  if (targetProject && !canSwitchLocalWorkspace) {
     window.ClawFW = window.ClawFW || {};
     window.ClawFW.phSurfaceViewProjectId = projectId;
     phSearchQuery = '';
