@@ -148,8 +148,17 @@ function ingestRemoteCatalog(payload) {
     if (!seenIds.has(connId)) {
       _rcVisibleSections.delete(connId);
       _rcWriteByConnection.delete(connId);
-      if (!_rcAllConnectionIds.has(connId)) _rcMemoryByConnection.delete(connId);
+      if (!_rcAllConnectionIds.has(connId)) {
+        _rcMemoryByConnection.delete(connId);
+        // 连接删除：历史缓存一并清除（最后已知身份只覆盖侧栏记忆，不覆盖历史列表）。
+        _rcHistoryByConnection.delete(connId);
+      }
     }
+  }
+  // 历史桶随 catalog 聚合重建：删除已消失连接的缓存，目录集合变化由下轮
+  // refreshRemoteHistory 按新 workspace 集重建。
+  for (const connId of Array.from(_rcHistoryByConnection.keys())) {
+    if (!seenIds.has(connId)) _rcHistoryByConnection.delete(connId);
   }
 }
 
@@ -326,6 +335,129 @@ function tryRestoreRemoteFocus() {
 // Remote catalog is a data source, not a second sidebar tree. The renderer asks
 // for the projection belonging to one local workspace and renders it with the
 // same project-group/runtime components as local sessions.
+function getRemoteSidebarProjectionVersion() {
+  return _rcSidebarProjectionVersion;
+}
+
+// ── Remote session history (ADR-0012 决策 1) ───────────────────────────────
+// workspace surface 的会话列表混入远程历史会话：每条 connected 连接按目录
+// workspace 拉取宿主级命名空间 id 的转发列表（GET /protoclaw/prebuilt_sessions
+// 经命名空间分支转发到远程），按 projectDir 对齐分桶。拉取是传输细节，列表
+// 语义与本地完全一致——混合排序、无来源分区、无远程徽标。断线保留最后已知
+// 历史目录，连接删除时一并清除（与 _rcMemoryByConnection 同生命周期）。
+
+const _rcHistoryByConnection = new Map(); // connId -> { byDir: Map<normDir, sessions[]>, fetchedAt }
+const RC_HISTORY_REFRESH_MS = 8000;
+let _rcHistoryInFlight = false;
+let _rcLastHistoryFetchAt = 0;
+
+function _normalizeHistoryDir(value) {
+  return String(value || '').replace(/\\/g, '/').toLowerCase().trim();
+}
+
+// 每轮聚合重建目录桶：以 workspace.projectDir 为键（目录身份来自 catalog，
+// 不来自历史数据本身——断线重连后桶随 workspace 集合重建）。
+function buildHistoryBuckets(section) {
+  const byDir = new Map();
+  for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+    const dir = String(workspace.projectDir || '').trim();
+    if (!dir) continue;
+    const key = _normalizeHistoryDir(dir);
+    if (!byDir.has(key)) byDir.set(key, []);
+  }
+  return byDir;
+}
+
+function remoteNamespaceId(connectionId, id) {
+  return `${REMOTE_NS}${connectionId}:${id}`;
+}
+
+// 拉取一条 connected 连接的全部远程历史会话（目录分桶）。宿主身份从目录
+// workspace 条目的 agentId（宿主级命名空间 id）派生；无目录会话不并入列表
+// （对齐 ADR-0010「无目录 runtime 不制造伪项目组」）。
+async function _fetchHistoryForConnection(section) {
+  const connId = section.connectionId;
+  const byDir = buildHistoryBuckets(section);
+  const hosts = new Set();
+  for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+    for (const entry of (Array.isArray(workspace.entries) ? workspace.entries : [])) {
+      const hostNsId = typeof entry.agentId === 'string' ? entry.agentId : '';
+      if (hostNsId) hosts.add(hostNsId);
+    }
+  }
+  for (const hostNsId of hosts) {
+    try {
+      const res = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(hostNsId));
+      if (!res.ok) continue;
+      const data = await res.json().catch(() => null);
+      const sessions = Array.isArray(data?.sessions) ? data.sessions : [];
+      for (const session of sessions) {
+        // 宿主级 / IM 门户类无目录会话不并入列表（对齐 ADR-0010）。
+        const dir = String(session.openDirectory || '').trim();
+        if (!dir) continue;
+        byDir.get(_normalizeHistoryDir(dir))?.push({
+          ...session,
+          id: `${REMOTE_NS}${connId}:${session.id}`,
+          remoteHostNsId: hostNsId,
+          remoteConnectionId: connId,
+        });
+      }
+    } catch {
+      // 单宿主拉取失败不拖垮其它宿主；该宿主目录历史按缺失处理。
+    }
+  }
+  return { byDir, fetchedAt: Date.now() };
+}
+
+// 远程历史会话查询（ADR-0012 决策 1）：返回与 openDirectory 匹配的命名空间化
+// 历史会话。运行中的会话由侧栏投影呈现，历史索引重复渲染由调用方
+// （mergeRemoteHistorySessions）按运行中 sessionId 排除。未连接 / 未知
+// 目录时为空。
+function getRemoteHistorySessions(openDirectory) {
+  const wantedDir = _normalizeHistoryDir(openDirectory);
+  if (!wantedDir) return [];
+  const merged = [];
+  for (const [connId, entry] of _rcHistoryByConnection.entries()) {
+    const section = _rcVisibleSections.get(connId);
+    if (!section || section.status !== 'connected') continue;
+    const bucket = entry?.byDir?.get(wantedDir);
+    if (Array.isArray(bucket)) merged.push(...bucket);
+  }
+  return merged;
+}
+
+// 供 poll 循环驱动（复用 maybeRefreshRemoteCatalog 的调度位置）：按节流窗口
+// 拉取远程历史会话；本轮实际拉到数据时重渲染 workspace surface 使新历史
+// 条目出现（无数据变化的轮次跳过渲染，不打扰输入框焦点）。
+async function maybeRefreshRemoteHistory() {
+  const now = Date.now();
+  if (_rcHistoryInFlight || now - _rcLastHistoryFetchAt < RC_HISTORY_REFRESH_MS) return;
+  if (_rcVisibleSections.size === 0) return;
+  _rcHistoryInFlight = true;
+  try {
+    let changed = false;
+    for (const section of _rcVisibleSections.values()) {
+      if (section.status !== 'connected') continue;
+      try {
+        const next = await _fetchHistoryForConnection(section);
+        const prev = _rcHistoryByConnection.get(section.connectionId);
+        if (!prev || JSON.stringify([...prev.byDir]) !== JSON.stringify([...next.byDir])) {
+          changed = true;
+        }
+        _rcHistoryByConnection.set(section.connectionId, next);
+      } catch {
+        // 拉取失败保留上次结果（ADR-0008：不伪造在线数据，也不清除旧身份）。
+      }
+    }
+    if (changed && typeof renderCurrentMainView === 'function') {
+      renderCurrentMainView();
+    }
+  } finally {
+    _rcHistoryInFlight = false;
+    _rcLastHistoryFetchAt = Date.now();
+  }
+}
+
 function getRemoteSidebarProjection(workspaceAgentId, sidebarEntryId = workspaceAgentId) {
   const localAgentId = String(workspaceAgentId || '').trim();
   const expectedSidebarEntryId = String(sidebarEntryId || localAgentId).trim();
@@ -382,10 +514,6 @@ function getRemoteSidebarProjection(workspaceAgentId, sidebarEntryId = workspace
         projectKey: groupKey,
       } : {}),
     })));
-}
-
-function getRemoteSidebarProjectionVersion() {
-  return _rcSidebarProjectionVersion;
 }
 
 // 断开条目点击：capture 阶段提示原因并阻断通用委托的静默 return。
@@ -801,4 +929,6 @@ window.RemoteConnections = {
   getEntrySessionTitle,
   getEntryRuntimeSessionId,
   isRemoteWriteEnabled,
+  getRemoteHistorySessions,
+  maybeRefreshRemoteHistory,
 };

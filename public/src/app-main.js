@@ -882,6 +882,11 @@ async function runPollCycle() {
     if (typeof maybeRefreshRemoteCatalog === 'function') {
       maybeRefreshRemoteCatalog();
     }
+    // 远程历史会话混入（R2-01，ADR-0012）：同样复用 poll 调度（内部时间窗节流），
+    // 拉取完成后轻量重渲染 workspace surface 使新历史条目出现。
+    if (typeof maybeRefreshRemoteHistory === 'function') {
+      maybeRefreshRemoteHistory();
+    }
 
     // 定期检查并重新加载 Feature 模板映射（如果为空）
     if (Object.keys(FEATURE_TEMPLATE_MAP).length === 0 && Date.now() - lastFeatureTemplateReloadAt > 3000) {

@@ -19,6 +19,15 @@
  *   _autoTitlePending
  */
 
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 // ── Auto session title generation ──────────────────────────────────────────
 const _autoTitlePending = new Set();
 // 衍生会话（trim/summary/branch）基线 assistant 数量。
@@ -319,7 +328,7 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
     try {
       const response = await fetch('/protoclaw/generate_session_title', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
         body: JSON.stringify({ agentId: agentId, sessionId: sessionId }),
         signal: controller.signal,
       });

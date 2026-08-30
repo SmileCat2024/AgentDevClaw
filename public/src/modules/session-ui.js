@@ -19,6 +19,15 @@
  * 注意: renderWorkspaceSessionList 已迁移到 session-list-render.js
  */
 
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 // ── Session Helpers ──────────────────────────────────────────────
 function getWorkspaceSessions(agent = getCurrentAgentRecord()) {
   return Array.isArray(agent?.workspace_sessions?.sessions) ? agent.workspace_sessions.sessions : [];
@@ -292,7 +301,7 @@ window.generateSessionTitle = async function(sessionId, btnElement) {
 
     let response = await fetch('/protoclaw/generate_session_title', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({ agentId, sessionId }),
     });
 
@@ -405,7 +414,7 @@ window.handleSessionTitleDoubleClick = function(event) {
     try {
       const resp = await fetch('/protoclaw/prebuilt_sessions/' + encodeURIComponent(sessionId) + '/title', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
         body: JSON.stringify({ agentId, title: newTitle }),
       });
       const result = await resp.json();
