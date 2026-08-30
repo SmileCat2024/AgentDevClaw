@@ -195,3 +195,67 @@ describe('remote sidebar catalog round-trip', () => {
     assert.equal(projection[0].projectKey, undefined);
   });
 });
+
+// ── header accessor 契约（R1-09 F 项钉住） ─────────────────────────────────
+
+describe('remote catalog header accessors', () => {
+  it('getEntrySessionTitle falls back sessionTitle → name → empty string', async () => {
+    const payload = {
+      connections: [{
+        connectionId: 'server-a',
+        name: 'Lab-B',
+        status: 'connected',
+        workspaces: [{
+          projectKey: 'k1',
+          entries: [
+            {
+              id: 'remote:server-a:rt-titled',
+              runtimeId: 'remote:server-a:rt-titled',
+              agentId: 'remote:server-a:programming-helper',
+              sessionTitle: '会话标题',
+              name: '条目名',
+            },
+            {
+              id: 'remote:server-a:rt-named',
+              runtimeId: 'remote:server-a:rt-named',
+              agentId: 'remote:server-a:programming-helper',
+              name: '条目名兜底',
+            },
+            {
+              id: 'remote:server-a:rt-bare',
+              runtimeId: 'remote:server-a:rt-bare',
+              agentId: 'remote:server-a:programming-helper',
+            },
+          ],
+        }],
+      }],
+    };
+    const { ctx } = loadRemoteModule(payload);
+    await ctx.window.RemoteConnections.refresh();
+
+    // sessionTitle 优先
+    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle('remote:server-a:rt-titled'), '会话标题');
+    // 无 sessionTitle → 回退 name
+    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle('remote:server-a:rt-named'), '条目名兜底');
+    // 两者皆无 → 空串（调用方继续回退），未知引用同样空串
+    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle('remote:server-a:rt-bare'), '');
+    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle('remote:ghost:rt-9'), '');
+    assert.equal(ctx.window.RemoteConnections.getEntrySessionTitle(''), '');
+  });
+
+  it('getEntryRuntimeSessionId returns the namespaced session id, not the bare id', async () => {
+    const { ctx } = loadRemoteModule(connectedCatalog());
+    await ctx.window.RemoteConnections.refresh();
+
+    // 已定契约（a5d54c0 复审裁决）：返回命名空间化会话 id（remote:<conn>:<sid>），
+    // 不是裸 id——命名空间剥离在服务端完成，前端不做裸化。
+    assert.equal(
+      ctx.window.RemoteConnections.getEntryRuntimeSessionId('remote:server-a:runtime-main'),
+      'remote:server-a:session-main',
+    );
+    assert.equal(ctx.window.RemoteConnections.getEntryRuntimeSessionId('remote:server-a:runtime-coder'), 'remote:server-a:session-coder');
+    // 未命中条目 / 空 id → 空串（调用方以空串视为不可寻址）
+    assert.equal(ctx.window.RemoteConnections.getEntryRuntimeSessionId('remote:ghost:rt-9'), '');
+    assert.equal(ctx.window.RemoteConnections.getEntryRuntimeSessionId(''), '');
+  });
+});
