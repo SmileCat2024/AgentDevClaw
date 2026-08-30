@@ -28,9 +28,35 @@ function _currentSessionContext() {
     || (typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '');
   const record = (typeof getCurrentRuntimeRecord === 'function' && getCurrentRuntimeRecord())
     || (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null);
-  const agentId = record ? (getLogicalAgentId(record) || record.id || '') : '';
-  const sessionId = (runtimeId && getRuntimeWorkspaceSessionId(runtimeId))
+  let agentId = record ? (getLogicalAgentId(record) || record.id || '') : '';
+  let sessionId = (runtimeId && getRuntimeWorkspaceSessionId(runtimeId))
     || (record ? getActiveWorkspaceSessionId(record) : null);
+  // 远程会话（R2-02，ADR-0012）：远程条目不在 allAgents，record 链落空。
+  // 身份从远程目录解析：sessionId 用目录条目值（命名空间化），agentId 收敛
+  // 宿主级命名空间 id（数据层身份纪律，ADR-0012）。目录未含条目时显式失败。
+  if ((!agentId || !sessionId)
+    && typeof isRemoteNamespaceAgentId === 'function'
+    && (isRemoteNamespaceAgentId(runtimeId)
+      || (typeof focusedAgentId === 'string' && isRemoteNamespaceAgentId(focusedAgentId)))) {
+    const rc = typeof window !== 'undefined' ? window.RemoteConnections : null;
+    const dirSessionId = (typeof rc?.getEntryRuntimeSessionId === 'function' && runtimeId)
+      ? rc.getEntryRuntimeSessionId(runtimeId)
+      : '';
+    const hostNsId = (typeof rc?.getEntryHostNamespaceId === 'function' && runtimeId)
+      ? rc.getEntryHostNamespaceId(runtimeId)
+      : '';
+    if (dirSessionId && hostNsId) {
+      return { agentId: hostNsId, sessionId: dirSessionId };
+    }
+    // 目录条目已消失（连接断开）：显式失败，不猜测目标。
+    window.ClawToast?.show?.({
+      id: 'slash-no-session',
+      status: 'error',
+      title: currentLanguage === 'zh' ? '远程连接不可用，无法操作该会话' : 'Remote connection is unavailable for this session',
+      autoDismiss: 5000,
+    });
+    return null;
+  }
   if (!agentId || !sessionId) {
     window.ClawToast?.show?.({
       id: 'slash-no-session',

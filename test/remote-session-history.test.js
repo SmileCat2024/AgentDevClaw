@@ -273,3 +273,218 @@ describe('remote session history merge (R2-01)', () => {
     assert.equal(requests.filter((r) => String(r.url).includes('activate')).length, 0, 'no request when host unresolvable');
   });
 });
+
+// ── R2-02: session write workflows (branch / compact / summary) ──────────
+//
+// Covers (vm sandbox, no real network):
+//   1. RemoteConnections accessors: getHostNamespaceIdForSession /
+//      namespaceMutationResult / waitForRuntimeForSession
+//   2. submitBranch request shape for a remote session: host-namespace
+//      agentId + namespaced sourceSessionId + idempotency key
+//
+// Identity discipline (ADR-0011/0012): the write body carries the
+// host-level namespace id; bare ids appear only after the server strips
+// the namespace before forwarding.
+
+describe('remote session write identity helpers (R2-02)', () => {
+  it('getHostNamespaceIdForSession resolves the host namespace from a catalog entry', async () => {
+    const { ctx } = historySandbox();
+    await ctx.window.RemoteConnections.refresh();
+    const hostNsId = ctx.run(
+      `window.RemoteConnections.getHostNamespaceIdForSession('remote:server-a:session-running', 'programming-helper')`,
+    );
+    assert.equal(hostNsId, 'remote:server-a:programming-helper');
+  });
+
+  it('namespaceMutationResult prefixes bare ids in branch/compact responses and leaves local payloads untouched', () => {
+    const { ctx } = historySandbox();
+    const branchResult = JSON.parse(ctx.run(`JSON.stringify(
+      window.RemoteConnections.namespaceMutationResult('remote:server-a:session-1', {
+        ok: true,
+        newSessionId: 'session-b1',
+        session: { id: 'session-b1', title: '（分支）x' },
+        sessionDelta: {
+          revision: 4,
+          activeSessionId: 'session-b1',
+          upsert: [{ id: 'session-b1', title: '（分支）x' }],
+          remove: [],
+        },
+        archive: { requested: true, succeeded: true, error: null },
+      }),
+    )`));
+    assert.equal(branchResult.newSessionId, 'remote:server-a:session-b1');
+    assert.equal(branchResult.session.id, 'remote:server-a:session-b1');
+    assert.equal(branchResult.sessionDelta.activeSessionId, 'remote:server-a:session-b1');
+    assert.deepEqual(branchResult.sessionDelta.upsert.map((s) => s.id), ['remote:server-a:session-b1']);
+    // archive 等非身份字段原样保留。
+    assert.deepEqual(branchResult.archive, { requested: true, succeeded: true, error: null });
+
+    // compact 响应形状（session.id / targetSessionId / sessionDelta）。
+    const compactResult = JSON.parse(ctx.run(`JSON.stringify(
+      window.RemoteConnections.namespaceMutationResult('remote:server-a:session-1', {
+        session: { id: 'session-c2' },
+        targetSessionId: 'session-c2',
+        sessionDelta: { revision: 2, activeSessionId: 'session-c2', upsert: [{ id: 'session-c2' }], remove: [] },
+      }),
+    )`));
+    assert.equal(compactResult.session.id, 'remote:server-a:session-c2');
+    assert.equal(compactResult.targetSessionId, 'remote:server-a:session-c2');
+    assert.equal(compactResult.sessionDelta.activeSessionId, 'remote:server-a:session-c2');
+
+    // 本地载荷（裸 sessionId）原样返回，零转换。
+    assert.equal(ctx.run(`window.RemoteConnections.namespaceMutationResult('session-local', 'sentinel')`), 'sentinel');
+    assert.deepEqual(
+      JSON.parse(ctx.run(`JSON.stringify(
+        window.RemoteConnections.namespaceMutationResult('session-local', { newSessionId: 's1', sessionDelta: { activeSessionId: null, upsert: [] } }),
+      )`)),
+      { newSessionId: 's1', sessionDelta: { activeSessionId: null, upsert: [] } },
+    );
+  });
+
+  it('waitForRuntimeForSession resolves the namespaced runtime ref once it appears in the catalog', async () => {
+    const { ctx } = historySandbox();
+    await ctx.window.RemoteConnections.refresh();
+    const ref = await ctx.run(
+      `window.RemoteConnections.waitForRuntimeForSession('remote:server-a:runtime-main', 2)`,
+    );
+    assert.equal(ref, 'remote:server-a:runtime-main');
+  });
+
+  it('waitForRuntimeForSession returns null after exhausting attempts for an absent runtime', async () => {
+    const { ctx } = historySandbox({ catalog: { connections: [{ connectionId: 'server-a', name: 'Lab-B', status: 'connected', workspaces: [] }] } });
+    await ctx.window.RemoteConnections.refresh();
+    const ref = await ctx.run(`window.RemoteConnections.waitForRuntimeForSession('remote:server-a:session-ghost', 1)`);
+    assert.equal(ref, null);
+  });
+});
+
+// ── R2-02: frontend write request shapes ─────────────────────────────────
+
+// session-dialogs.js 在模块顶层解析对话框 DOM 元素并注册事件监听器；沙箱
+// DOM stub 需提供带 classList/style/addEventListener 的元素替身。写提交
+// （submitBranch）在本地路径依赖触达前走远程分支，其余依赖以最小替身注入。
+function dialogsSandbox({ requests = [] } = {}) {
+  const ctx = createFrontendSandbox({
+    fetch: async (url, init) => {
+      requests.push({ url: String(url), init });
+      const path = String(url).split('?')[0];
+      if (path === '/protoclaw/remote_catalog') {
+        return { ok: true, status: 200, json: async () => CATALOG };
+      }
+      if (path === '/protoclaw/session_trim_preview') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ rounds: [{ msgIndexEnd: 5, turnStart: 1, charPercent: 0.2, cumulativePercent: 0.8 }], preamblePercent: 0.1 }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          newSessionId: 'session-b1',
+          branchTitle: '（分支）远程会话',
+          session: { id: 'session-b1', title: '（分支）远程会话' },
+          revision: 4,
+          sessionDelta: {
+            revision: 4,
+            activeSessionId: 'session-b1',
+            upsert: [{ id: 'session-b1', title: '（分支）远程会话' }],
+            remove: [],
+          },
+          archive: { requested: true, succeeded: true, error: null },
+        }),
+      };
+    },
+    t: (key) => key,
+    escapeHtml: (value) => String(value ?? ''),
+    isRemoteNamespaceAgentId: (value) => String(value || '').startsWith('remote:'),
+    currentRuntimeAgentId: null,
+    allAgents: [],
+  });
+  ctx.run(`
+    var __dialogElement = {
+      style: {},
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+      addEventListener() {},
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+      innerHTML: '',
+      textContent: '',
+      disabled: false,
+    };
+    document.getElementById = function () { return { ...__dialogElement, classList: __dialogElement.classList }; };
+  `);
+  ctx.run(`
+    var bumpNavigationGuard = function () {};
+    var _navigationGuardEpoch = 0;
+    var allAgents = [];
+    var currentLanguage = 'zh';
+    var currentRuntimeAgentId = null;
+    var lastRenderedWorkspaceHtml = '';
+    var isRemoteNamespaceAgentId = function (value) { return String(value || '').startsWith('remote:'); };
+    var closeCompactMenu = function () {};
+    var renderCurrentMainView = function () {};
+    var getCurrentAgentRecord = function () { return null; };
+    var getWorkspaceSessionById = function () { return null; };
+    var getPathLeaf = function (value) { return String(value || ''); };
+    var beginSidebarOperation = function () { return { operationId: 'op-branch' }; };
+    var getSidebarOperation = function () { return null; };
+    var finishSidebarOperation = function () {};
+    var updateSidebarOperation = function () {};
+    var applySessionMutationDelta = function () {};
+    var applySidebarMutationDeltaWithDiagnostics = function () {};
+    var upsertConnectedAgent = function (agent) { return agent; };
+    var setPreferredUnitMode = function () {};
+    var markSessionLoading = function () {};
+    var clearSessionLoading = function () {};
+    var markSessionArchivedForMutation = null;
+    var beginChatLoadingSession = function () {};
+    var clearChatLoadingSession = function () {};
+    var requestSwitch = async function () {};
+    var requestArchivedSourceRuntimeCleanup = function () {};
+    var loadAgents = async function () {};
+    var createSidebarOperationId = function (kind) { return 'op-' + kind; };
+    var escapeHtml = function (value) { return String(value ?? ''); };
+  `);
+  // 远程目录 accessor（getHostNamespaceIdForSession 等）从 remote-connections.js
+  // 加载；catalog 身份来自上方 mock 的 remote_catalog 响应。
+  ctx.loadSource('public/src/modules/remote-connections.js');
+  ctx.loadSource('public/src/modules/session-dialogs.js');
+  return { ctx, requests };
+}
+
+describe('frontend session write request shapes (R2-02)', () => {
+  it('submitBranch posts a namespaced host agentId and idempotency key for a remote session', async () => {
+    const requests = [];
+    const { ctx } = dialogsSandbox({ requests });
+    await ctx.window.RemoteConnections.refresh();
+    ctx.run(`
+      window.RemoteConnections.waitForRuntimeForSession = async function () { return null; };
+      window.switchAgent = async function () {};
+    `);
+    // openBranchDialog 预览 GET 写入 branchDialogState（rounds 来自 mock fetch）。
+    await ctx.run(`window.openBranchDialog('programming-helper', 'remote:server-a:session-7', true)`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 模拟轮次选中（selectedIdx=0，msgIndexEnd=5）后提交。
+    await ctx.run(`
+      branchDialogState.selectedIdx = 0;
+      window.submitBranch();
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const branchCalls = requests.filter((r) => r.url === '/protoclaw/sessions/branch');
+    assert.equal(branchCalls.length, 1, 'exactly one branch call');
+    const call = branchCalls[0];
+    assert.equal(call.init.method, 'POST');
+    assert.ok(String(call.init.headers['x-idempotency-key'] || ''), 'branch carries an idempotency key');
+    assert.deepEqual(JSON.parse(call.init.body), {
+      agentId: 'remote:server-a:programming-helper',
+      sourceSessionId: 'remote:server-a:session-7',
+      cutMsgIndexEnd: 5,
+      archiveOriginal: true,
+      responseMode: 'delta',
+      operationId: 'op-branch',
+    });
+  });
+});

@@ -263,7 +263,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // The server has already committed the session and performed the bounded
       // runtime startup observation. Do not block the UI on a second readiness
       // poll; a missing immediate runtime is a delayed startup, not a failure.
-      const readyAgent = result?.agent || null;
+      // 远程目标（R2-02）：响应中的 agent 是远程端 runtime 形态（裸 id），不进
+      // 入本地 allAgents——切换走远程目录轮询（与 R2-01 activate 同链路）。
+      const _isRemoteSession = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.sessionId);
+      const readyAgent = (_isRemoteSession ? null : result?.agent) || null;
       const targetStopped = false;
       const managedReadyAgent = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
       const nextRuntimeId = managedReadyAgent?.runtime_session_id
@@ -276,6 +279,17 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           setPreferredUnitMode('chat', managedReadyAgent);
           beginChatLoadingSession();
           await requestSwitch(nextRuntimeId, 'compact-resume');
+        }
+        finishSidebarOperation(compactOperation.operationId, 'settled');
+      } else if (_isRemoteSession && targetSessionId && _navGuard === _navigationGuardEpoch) {
+        // 远程轻量继续：等待远程目录投影带出新 runtime 后按命名空间引用切换；
+        // 目录未及时出现时留给 catalog 轮询自然带出，不伪装失败。
+        const remoteRuntimeRef = await window.RemoteConnections?.waitForRuntimeForSession?.(targetSessionId, 50);
+        if (remoteRuntimeRef && _navGuard === _navigationGuardEpoch) {
+          await window.switchAgent(remoteRuntimeRef);
+        } else {
+          void loadAgents();
+          if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
         }
         finishSidebarOperation(compactOperation.operationId, 'settled');
       } else {
@@ -415,7 +429,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // The response is authoritative for the committed session. Runtime
       // readiness may arrive after this response; never block or downgrade the
       // completed summary merely because it is not present yet.
-      const _csReadyAgent = result?.agent || null;
+      // 远程目标（R2-02）：响应中的 agent 是远程端 runtime 形态（裸 id），不进
+      // 入本地 allAgents——切换走远程目录轮询（与 R2-01 activate 同链路）。
+      const _csIsRemote = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.sessionId);
+      const _csReadyAgent = (_csIsRemote ? null : result?.agent) || null;
       const _csTargetStopped = false;
       const _csConnectedTarget = _csReadyAgent ? (upsertConnectedAgent(_csReadyAgent) || _csReadyAgent) : null;
       const nextRuntimeId = _csConnectedTarget?.runtime_session_id
@@ -439,7 +456,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           status: 'success',
           title: _csDoneTitle,
         });
-        if (action.archiveOriginal && archiveSucceeded) {
+        if (action.archiveOriginal && archiveSucceeded && !_csIsRemote) {
           requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
         }
         if (!action.archiveOriginal && nextRuntimeId) finishSidebarOperation(_csOperation?.operationId, 'settled');
@@ -451,6 +468,17 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-summary');
         if (!action.archiveOriginal) finishSidebarOperation(_csOperation?.operationId, 'settled');
+      } else if (_csIsRemote && targetSessionId && _csNavGuard === _navigationGuardEpoch) {
+        // 远程总结/精简：等待远程目录投影带出新 runtime 后按命名空间引用切换；
+        // 目录未及时出现时留给 catalog 轮询自然带出，不伪装失败。
+        const _csRemoteRuntimeRef = await window.RemoteConnections?.waitForRuntimeForSession?.(targetSessionId, 50);
+        if (_csRemoteRuntimeRef && _csNavGuard === _navigationGuardEpoch) {
+          await window.switchAgent(_csRemoteRuntimeRef);
+          if (!action.archiveOriginal) finishSidebarOperation(_csOperation?.operationId, 'settled');
+        } else {
+          lastRenderedWorkspaceHtml = '';
+          renderCurrentMainView();
+        }
       } else {
         lastRenderedWorkspaceHtml = '';
         renderCurrentMainView();
@@ -460,7 +488,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         title: _csDoneTitle,
       });
       if (action.archiveOriginal && archiveSucceeded) {
-        requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
+        // 远程归档发生在远程端，本地不做 runtime 清理（无本地 runtime 可停）。
+        if (!_csIsRemote) requestArchivedSourceRuntimeCleanup(_csAgent.id, action.sessionId, _csOldRuntimeId);
       }
       loadAgents().catch(e => console.warn(e));
       if (action.archiveOriginal && !archiveSucceeded) {
@@ -907,7 +936,11 @@ window._activateRemoteHistorySession = async function(hostNsId, sessionId, trigg
 
 // 轮询远程目录直到目标会话的 runtime 出现（远程 activate 启动 runtime 的
 // 就绪观察）。目录身份：entry.sessionId 命名空间化匹配目标会话。
+// R2-02 起逻辑收敛到 RemoteConnections.waitForRuntimeForSession。
 async function _waitForRemoteRuntimeForSession(namespacedSessionId, attempts = 50) {
+  if (typeof window.RemoteConnections?.waitForRuntimeForSession === 'function') {
+    return window.RemoteConnections.waitForRuntimeForSession(namespacedSessionId, attempts);
+  }
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (typeof window.RemoteConnections?.resolveRuntimeRef === 'function') {
       const runtimeRef = window.RemoteConnections.resolveRuntimeRef(namespacedSessionId);

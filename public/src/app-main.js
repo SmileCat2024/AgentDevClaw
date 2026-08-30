@@ -324,6 +324,15 @@ function applyOptimisticWorkspaceSession(agentId, session) {
   });
 }
 
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 async function createCompactedResumeSession(agentId, sessionId, strategy = 'summarized-nine-section', keepRecentTurns = null, fullPreserveFromTurn = null, extraPolicy = null, options = {}) {
   const currentAgent = getCurrentAgentRecord();
   const activeSessionId = String(getActiveSessionId(currentAgent) || '').trim();
@@ -338,6 +347,13 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
   if (extraPolicy && typeof extraPolicy === 'object') {
     Object.assign(policy, extraPolicy);
   }
+  // R2-02（ADR-0011）：远程会话的写提交收敛 host 级命名空间 id（数据层身份）；
+  // sessionId 保持命名空间形态由服务端命名空间分支剥壳转发。本地身份原样。
+  const isRemoteTarget = typeof isRemoteNamespaceAgentId === 'function'
+    && (isRemoteNamespaceAgentId(sessionId) || isRemoteNamespaceAgentId(agentId));
+  const requestAgentId = isRemoteTarget
+    ? (window.RemoteConnections?.getHostNamespaceIdForSession?.(sessionId, agentId) || agentId)
+    : agentId;
   const operationId = options.operationId || createSidebarOperationId(options.reason === 'trim' ? 'trim' : 'summary');
   const requestStartedAt = sidebarDiagnosticNow();
   const stopMainThreadObservation = beginSidebarOperationMainThreadObservation(operationId);
@@ -345,9 +361,9 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
   try {
     const resumeResponse = await fetch('/protoclaw/context_handoffs/compact_and_resume', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
-        agentId,
+        agentId: requestAgentId,
         sessionId,
         detached: false,
         policy,
@@ -370,6 +386,11 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
     }
 
     const result = await resumeResponse.json();
+    // 远程目标：响应中的裸会话 id 在数据入口命名空间化（ADR-0012），新会话
+    // 以命名空间 id 进入既有列表刷新链，呈现层无远程分支。
+    const namespacedResult = isRemoteTarget
+      ? (window.RemoteConnections?.namespaceMutationResult?.(sessionId, result) || result)
+      : result;
     recordSidebarOperationCheckpoint(operationId, 'response_body_parsed', {
       bodyParseMs: sidebarDiagnosticNow() - headersReceivedAt,
       responseBytes,
@@ -379,7 +400,7 @@ async function createCompactedResumeSession(agentId, sessionId, strategy = 'summ
     if (typeof window.refreshThreads === 'function') {
       window.refreshThreads(true).catch(() => {});
     }
-    return result;
+    return namespacedResult;
   } finally {
     stopMainThreadObservation();
   }

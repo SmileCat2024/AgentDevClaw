@@ -309,6 +309,21 @@ app.get('/protoclaw/session_trim_preview', async (req, res, next) => {
       res.status(400).json({ error: 'agentId and sessionId are required' });
       return;
     }
+    // ADR-0011：远程命名空间身份 → 转发远程同名 trim 预览路由（裸 id，预览
+    // 的消息读取与轮次切分全部发生在远程端）；本地身份走下方既有预览路径，
+    // 行为字节级不动。GET 只读，无幂等闸。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        const params = new URLSearchParams({
+          agentId: bareId(agentId),
+          sessionId: bareId(sessionId),
+        });
+        return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/session_trim_preview?${params.toString()}`);
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
     const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
     const raw = await fs.readFile(sessionPath, 'utf8');
     const parsed = JSON.parse(raw);
@@ -352,6 +367,28 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     if (typeof cutMsgIndexEnd !== 'number' || !Number.isFinite(cutMsgIndexEnd)) {
       res.status(400).json({ error: 'cutMsgIndexEnd must be a finite number' });
       return;
+    }
+
+    // ADR-0011：远程命名空间身份 → 转发远程同名分支路由（裸 id，新会话文件、
+    // checkpoint 提取与索引落盘全部发生在远程端；本地身份走下方既有分支路径，
+    // 行为字节级不动）。远程写强制幂等键（本地路径保持现状不强制）。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sourceSessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res, trace)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/sessions/branch', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(agentId),
+            sourceSessionId: bareId(sourceSessionId),
+          },
+        });
+      }
+    } catch (error) {
+      attachOperationMetadata(error, requestMetadata);
+      trace.mark('failed', { errorCode: error?.code || 'branch_failed' });
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error, requestMetadata));
     }
 
     const sourcePath = getPrebuiltSessionFilePath(agentId, sourceSessionId);
@@ -574,6 +611,21 @@ app.get('/protoclaw/session_summary', async (req, res, next) => {
       res.status(400).json({ error: 'agentId and sessionId are required' });
       return;
     }
+    // ADR-0011：远程命名空间身份 → 转发远程同名摘要查询路由（裸 id，摘要的
+    // 查找与读取全部发生在远程端）；本地身份走下方既有查询路径，行为字节级
+    // 不动。GET 只读，无幂等闸。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        const params = new URLSearchParams({
+          agentId: bareId(agentId),
+          sessionId: bareId(sessionId),
+        });
+        return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/session_summary?${params.toString()}`);
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
     const handoff = await findSessionSummary(agentId, sessionId);
     if (!handoff) {
       res.status(404).json({ error: 'No summary found for this session' });
@@ -599,6 +651,25 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
     if (!agentId || !sessionId) {
       res.status(400).json({ error: 'agentId and sessionId are required' });
       return;
+    }
+    // ADR-0011：远程命名空间身份 → 转发远程同名摘要生成路由（裸 id，LLM 调用
+    // 与 handoff 落盘全部发生在远程端）；本地身份走下方既有生成路径，行为字节
+    // 级不动。远程写强制幂等键（本地路径保持现状不强制）。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/session_generate_summary', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(agentId),
+            sessionId: bareId(sessionId),
+          },
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
     const force = !!req.body?.force;
     const existingSummary = await findSessionSummary(agentId, sessionId);
@@ -1069,6 +1140,30 @@ app.post('/protoclaw/context_handoffs/compacted_resume', express.json(), async (
       return;
     }
 
+    // ADR-0011：远程命名空间身份 → 转发远程同名压缩产物续聊路由（裸 id，
+    // handoff 查找、新会话创建与续聊启动全部发生在远程端）；本地身份走下方
+    // 既有路径，行为字节级不动。远程写强制幂等键。
+    // 注意：handoffPath 是远程端磁盘路径，不能被本地路径解析误用——远程分支
+    // 必须在 createCompactedResumeFromHandoff 之前短路。
+    try {
+      const hostTarget = resolveForwardHostTarget(req.body?.agentId, handoffId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res)) return;
+        const forwardedBody = {
+          ...(req.body || {}),
+          agentId: bareId(req.body?.agentId || ''),
+        };
+        if (handoffId) forwardedBody.handoffId = bareId(handoffId);
+        if (handoffPath) forwardedBody.handoffPath = handoffPath;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/context_handoffs/compacted_resume', {
+          method: 'POST',
+          body: forwardedBody,
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
+
     // A handoff path carries its own source identity. Handoff-id lookup is
     // still explicitly scoped by agentId; page focus is never consulted.
     const preferredAgentId = resolveAgentTarget(req.body).agentId;
@@ -1145,6 +1240,28 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
   let onClientClosed = null;
   try {
     const { agentId: preferredAgentId, sessionId } = target;
+
+    // ADR-0011：远程命名空间身份 → 转发远程同名压缩续聊路由（裸 id，压缩、
+    // 新会话创建与激活全部发生在远程端）；本地身份走下方既有路径，行为字节级
+    // 不动。远程写强制幂等键（本地路径保持现状不强制）。
+    try {
+      const hostTarget = resolveForwardHostTarget(preferredAgentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res, trace)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/context_handoffs/compact_and_resume', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(preferredAgentId),
+            sessionId: bareId(sessionId),
+          },
+        });
+      }
+    } catch (error) {
+      attachOperationMetadata(error, requestMetadata);
+      trace.mark('failed', { errorCode: error?.code || 'compact_failed' });
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error, requestMetadata));
+    }
 
     const detached = req.body?.detached !== false;
     const policy = req.body?.policy || {};

@@ -34,6 +34,24 @@ const _summaryGenGuard = new Map();
 
 let featureUploadFile = null;
 
+// ── 写提交幂等键（ADR-0011，R2-02）：远程强制、本地忽略 ──────────────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+// R2-02（ADR-0011）：远程命名空间 sessionId → 写请求身份收敛宿主级命名空间
+// id（数据层身份，服务端命名空间分支剥壳转发）；本地身份原样返回。
+function _summaryRequestAgentId(agentId, sessionId) {
+  const isRemote = typeof isRemoteNamespaceAgentId === 'function'
+    && (isRemoteNamespaceAgentId(sessionId) || isRemoteNamespaceAgentId(agentId));
+  if (!isRemote) return agentId;
+  return window.RemoteConnections?.getHostNamespaceIdForSession?.(sessionId, agentId) || agentId;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Summary 弹窗
 // ═══════════════════════════════════════════════════════════════
@@ -131,11 +149,12 @@ function updateSummaryOverlayDOM(data) {
 function openSummaryPopup(agentId, sessionId) {
   const _isZh = currentLanguage === 'zh';
   const _toastId = 'summary-' + sessionId;
+  const _requestAgentId = _summaryRequestAgentId(agentId, sessionId);
   const _token = {};
   _summaryGenGuard.set(sessionId, _token);
   summaryPopupData = { agentId, sessionId, loading: true, generating: false, data: null, error: null };
   updateSummaryOverlayDOM(summaryPopupData);
-  fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId))
+  fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(_requestAgentId) + '&sessionId=' + encodeURIComponent(sessionId))
     .then(r => {
       if (r.status === 404) {
         if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {
@@ -149,13 +168,13 @@ function openSummaryPopup(agentId, sessionId) {
         });
         return fetch('/protoclaw/session_generate_summary', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agentId, sessionId }),
+          headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+          body: JSON.stringify({ agentId: _requestAgentId, sessionId }),
         }).then(r2 => {
           if (!r2.ok) throw new Error('Generation failed');
           return r2.json();
         }).then(() => {
-          return fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId));
+          return fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(_requestAgentId) + '&sessionId=' + encodeURIComponent(sessionId));
         }).then(r3 => {
           if (!r3.ok) throw new Error('Summary not found after generation');
           return r3.json();
@@ -210,6 +229,7 @@ function regenerateSummary() {
   const { agentId, sessionId } = summaryPopupData;
   const _isZh = currentLanguage === 'zh';
   const _toastId = 'summary-regen-' + sessionId;
+  const _requestAgentId = _summaryRequestAgentId(agentId, sessionId);
   summaryPopupData = { agentId, sessionId, loading: true, generating: true, data: null, error: null };
   updateSummaryOverlayDOM(summaryPopupData);
   ClawToast.show({
@@ -219,11 +239,11 @@ function regenerateSummary() {
   });
   fetch('/protoclaw/session_generate_summary', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agentId, sessionId, force: true }),
+    headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+    body: JSON.stringify({ agentId: _requestAgentId, sessionId, force: true }),
   })
     .then(r => { if (!r.ok) throw new Error('Generation failed'); return r.json(); })
-    .then(() => fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(agentId) + '&sessionId=' + encodeURIComponent(sessionId)))
+    .then(() => fetch('/protoclaw/session_summary?agentId=' + encodeURIComponent(_requestAgentId) + '&sessionId=' + encodeURIComponent(sessionId)))
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(data => {
       if (summaryPopupData && summaryPopupData.agentId === agentId && summaryPopupData.sessionId === sessionId) {

@@ -920,6 +920,75 @@ async function reloadManagerData() {
   }
 }
 
+// ── Session write addressing (R2-02) ───────────────────────────────────────
+// 写工作流（branch / compact / summary）的远程寻址 accessor：从命名空间
+// sessionId 解析宿主级命名空间 id；目录未含该会话时用调用方提供的宿主身份
+// 兜底拼接（新分支会话尚未进入 catalog 的窗口期）。非命名空间输入返回
+// null，调用方保持本地路径（ADR-0011 #1：本地身份永不进远程分支）。
+function getHostNamespaceIdForSession(namespacedSessionId, hostAgentId = '') {
+  const split = splitRemoteNamespaceId(namespacedSessionId);
+  if (!split) return null;
+  for (const section of _rcVisibleSections.values()) {
+    for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+      for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
+        if (splitRemoteNamespaceId(entry.sessionId)?.innerId === split.innerId) {
+          if (typeof entry.agentId === 'string' && entry.agentId) return entry.agentId;
+        }
+      }
+    }
+  }
+  const bare = typeof hostAgentId === 'string' ? hostAgentId.trim() : '';
+  if (bare) {
+    if (bare.startsWith(REMOTE_NS)) {
+      const hostSplit = splitRemoteNamespaceId(bare);
+      if (hostSplit && hostSplit.connectionId === split.connectionId) return bare;
+      return bare;
+    }
+    if (bare) return `${REMOTE_NS}${split.connectionId}:${bare}`;
+  }
+  return null;
+}
+
+// 远程写响应中的裸会话 id → 命名空间 id（ADR-0012 数据层命名空间纪律）：
+// 远程分支/压缩产生的新会话以命名空间 id 进入既有列表刷新链，呈现层无
+// 远程特判。就地浅拷贝转换已知 id 字段；本地调用（split 失败）原样返回。
+function namespaceMutationResult(namespacedSessionId, result) {
+  const split = splitRemoteNamespaceId(namespacedSessionId);
+  if (!split || !result || typeof result !== 'object') return result;
+  const prefix = `${REMOTE_NS}${split.connectionId}:`;
+  const nsId = (value) => {
+    const id = typeof value === 'string' ? value.trim() : '';
+    return id && !id.startsWith(REMOTE_NS) ? prefix + id : value;
+  };
+  const next = { ...result };
+  if (typeof next.newSessionId === 'string' && next.newSessionId) next.newSessionId = nsId(next.newSessionId);
+  if (typeof next.targetSessionId === 'string' && next.targetSessionId) next.targetSessionId = nsId(next.targetSessionId);
+  if (next.session && typeof next.session === 'object' && next.session.id) {
+    next.session = { ...next.session, id: nsId(next.session.id) };
+  }
+  if (next.sessionDelta && typeof next.sessionDelta === 'object') {
+    next.sessionDelta = {
+      ...next.sessionDelta,
+      activeSessionId: nsId(next.sessionDelta.activeSessionId),
+      upsert: Array.isArray(next.sessionDelta.upsert)
+        ? next.sessionDelta.upsert.map((s) => (s && typeof s === 'object' && s.id ? { ...s, id: nsId(s.id) } : s))
+        : next.sessionDelta.upsert,
+    };
+  }
+  return next;
+}
+
+// 轮询远程目录直到目标会话的 runtime 投影出现（远程写链路的就绪观察，
+// 与 R2-01 activate 的等待语义一致）。attempts × 400ms 内未出现返回 null。
+async function waitForRuntimeForSession(namespacedSessionId, attempts = 50) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const runtimeRef = resolveRuntimeRef(namespacedSessionId);
+    if (runtimeRef) return runtimeRef;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return null;
+}
+
 window.RemoteConnections = {
   refresh: refreshRemoteCatalog,
   openManager: openRemoteConnectionsManager,
@@ -928,6 +997,9 @@ window.RemoteConnections = {
   getEntryHostNamespaceId,
   getEntrySessionTitle,
   getEntryRuntimeSessionId,
+  getHostNamespaceIdForSession,
+  namespaceMutationResult,
+  waitForRuntimeForSession,
   isRemoteWriteEnabled,
   getRemoteHistorySessions,
   maybeRefreshRemoteHistory,

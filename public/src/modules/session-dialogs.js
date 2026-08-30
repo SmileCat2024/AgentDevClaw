@@ -288,7 +288,10 @@ window.submitTrimCompact = async () => {
     });
     // The server has already committed the trimmed session and observed startup.
     // Delayed Viewer registration must not block or downgrade this operation.
-    const readyAgent = result?.agent || null;
+    // 远程目标：响应中的 agent 是远程端 runtime 形态（裸 id），不进入本地
+    // allAgents——切换走远程目录轮询（见下方 isRemoteSession 分支）。
+    const isRemoteTrim = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(sessionId);
+    const readyAgent = (isRemoteTrim ? null : result?.agent) || null;
     const targetStopped = false;
     const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
     const nextRuntimeId = connectedTarget?.runtime_session_id
@@ -308,14 +311,29 @@ window.submitTrimCompact = async () => {
       finishSidebarOperation(trimOperation?.operationId, 'settled');
     }
     if (_navGuard !== _navigationGuardEpoch) {
-      if (archiveAfter && archiveSucceeded) {
+      if (archiveAfter && archiveSucceeded && !isRemoteTrim) {
         requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
       }
       if (!archiveAfter && nextRuntimeId) finishSidebarOperation(trimOperation?.operationId, 'settled');
       archiveRollback = null;
       return;
     }
-    if (nextRuntimeId) {
+    if (isRemoteTrim) {
+      // 远程精简（ADR-0011/0012）：新会话与 runtime 都在远程端，等待远程目录
+      // 投影带出新 runtime 后按命名空间引用切换（与 R2-01 activate 同链路）。
+      const remoteRuntimeRef = typeof window.RemoteConnections?.waitForRuntimeForSession === 'function'
+        ? await window.RemoteConnections.waitForRuntimeForSession(targetSessionId, 50)
+        : null;
+      if (remoteRuntimeRef && _navGuard === _navigationGuardEpoch) {
+        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+        beginChatLoadingSession();
+        await requestSwitch(remoteRuntimeRef, 'trim');
+        if (!archiveAfter) finishSidebarOperation(trimOperation?.operationId, 'settled');
+      } else {
+        lastRenderedWorkspaceHtml = '';
+        renderCurrentMainView();
+      }
+    } else if (nextRuntimeId) {
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
       beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'trim');
@@ -326,7 +344,8 @@ window.submitTrimCompact = async () => {
     }
     // The archive already committed. Resource cleanup must not alter the
     // completed trim operation if this old runtime releases slowly.
-    if (archiveAfter && archiveSucceeded) {
+    // 远程归档发生在远程端，本地不做 runtime 清理（无本地 runtime 可停）。
+    if (archiveAfter && archiveSucceeded && !isRemoteTrim) {
       requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
     }
     if (archiveAfter && !archiveSucceeded) {
@@ -358,6 +377,15 @@ let branchDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercen
 const branchDialog = document.getElementById('branch-dialog');
 const branchRoundList = document.getElementById('branch-round-list');
 const branchFooterInfo = document.getElementById('branch-footer-info');
+
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
   branchDialogState = { agentId, sessionId, rounds: [], preamblePercent: 0, selectedIdx: -1, archiveAfter };
@@ -507,11 +535,18 @@ window.submitBranch = async () => {
       });
 
   try {
+    // R2-02（ADR-0011）：远程命名空间 sessionId → 请求身份收敛为宿主级命名
+    // 空间 id，服务端命名空间分支转发远程（新会话文件、checkpoint 提取全部
+    // 发生在远程端）；本地身份原样。远程写强制幂等键（本地忽略）。
+    const isRemoteSession = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(sessionId);
+    const requestAgentId = isRemoteSession
+      ? (window.RemoteConnections?.getHostNamespaceIdForSession?.(sessionId, agentId) || agentId)
+      : agentId;
     const res = await fetch('/protoclaw/sessions/branch', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
-        agentId,
+        agentId: requestAgentId,
         sourceSessionId: sessionId,
         cutMsgIndexEnd,
         archiveOriginal: archiveAfter,
@@ -520,7 +555,11 @@ window.submitBranch = async () => {
       }),
     });
     if (!res.ok) throw new Error(await res.text().catch(() => 'failed'));
-    const result = await res.json();
+    let result = await res.json();
+    if (isRemoteSession) {
+      // 远程响应中的裸新会话 id 数据层命名空间化（ADR-0012）。
+      result = window.RemoteConnections?.namespaceMutationResult?.(sessionId, result) || result;
+    }
     if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
     const archiveSucceeded = !archiveAfter || result?.archive?.succeeded === true;
     if (!archiveSucceeded && archiveRollback) {
@@ -538,7 +577,9 @@ window.submitBranch = async () => {
     });
     // The server has already committed the branch and observed startup. Delayed
     // Viewer registration must not block or downgrade the branch operation.
-    const readyAgent = result?.agent || null;
+    // 远程目标：响应中的 agent 是远程端 runtime 形态（裸 id），不进入本地
+    // allAgents——切换走目录轮询（R2-01 activate 同链路）。
+    const readyAgent = (isRemoteSession ? null : result?.agent) || null;
     const targetStopped = false;
     const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
     const nextRuntimeId = connectedTarget?.runtime_session_id
@@ -557,14 +598,30 @@ window.submitBranch = async () => {
       finishSidebarOperation(branchOperation?.operationId, 'settled');
     }
     if (_navGuard !== _navigationGuardEpoch) {
-      if (archiveAfter && archiveSucceeded) {
+      if (archiveAfter && archiveSucceeded && !isRemoteSession) {
         requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
       }
       if (!archiveAfter && nextRuntimeId) finishSidebarOperation(branchOperation?.operationId, 'settled');
       archiveRollback = null;
       return;
     }
-    if (nextRuntimeId) {
+    if (isRemoteSession) {
+      // 远程分支（ADR-0011/0012）：新会话与 runtime 都在远程端，等待远程
+      // 目录投影带出新 runtime 后按命名空间引用切换（与 R2-01 activate 同
+      // 链路）；请求失败由 sessionDelta/operation 契约呈现，不伪装成功。
+      const runtimeRef = typeof window.RemoteConnections?.waitForRuntimeForSession === 'function'
+        ? await window.RemoteConnections.waitForRuntimeForSession(targetSessionId, 50)
+        : null;
+      if (runtimeRef && _navGuard === _navigationGuardEpoch) {
+        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+        beginChatLoadingSession();
+        await requestSwitch(runtimeRef, 'branch');
+        if (!archiveAfter) finishSidebarOperation(branchOperation?.operationId, 'settled');
+      } else {
+        lastRenderedWorkspaceHtml = '';
+        renderCurrentMainView();
+      }
+    } else if (nextRuntimeId) {
       setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
       beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'branch');
@@ -574,7 +631,8 @@ window.submitBranch = async () => {
       renderCurrentMainView();
     }
     if (archiveAfter && archiveSucceeded) {
-      requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
+      // 远程归档发生在远程端，本地不做 runtime 清理（无本地 runtime 可停）。
+      if (!isRemoteSession) requestArchivedSourceRuntimeCleanup(agentId, sessionId, _oldRuntimeId);
     }
     if (archiveAfter && !archiveSucceeded) {
       window.alert((currentLanguage === 'zh' ? '新分支已创建，但原会话归档失败：' : 'The branch was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
