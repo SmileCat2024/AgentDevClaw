@@ -206,9 +206,16 @@ async function handleConfigGroups(args = []) {
 const CLAW_SERVER_BASE = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
 async function clawServerFetch(pathname, options = {}) {
+  // 单密码认证开启时，runtime 环境自带的内部服务令牌等价于已认证会话
+  // （server/auth.js authenticateInternal）；未设置则维持匿名语义。
+  const internalToken = String(process.env.PROTOCLAW_INTERNAL_TOKEN || '').trim();
+  const headers = { ...(options.headers || {}) };
+  if (internalToken && !headers.Authorization) {
+    headers.Authorization = `Bearer ${internalToken}`;
+  }
   let response;
   try {
-    response = await fetch(`${CLAW_SERVER_BASE}${pathname}`, options);
+    response = await fetch(`${CLAW_SERVER_BASE}${pathname}`, { ...options, headers });
   } catch {
     throw new Error(`Claw server not reachable at ${CLAW_SERVER_BASE} — start it with \`npm start\` first`);
   }
