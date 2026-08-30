@@ -51,6 +51,7 @@ import {
   managedAgents, assemblyRuntimeProcesses,
   getManagedRuntimeKey, listAgentRuntimes, pickPrimaryAgentRuntime,
   getAgentRuntime, getAssemblyRuntime, stopAssemblyRuntime, buildStatus,
+  isManagedRuntimeRunning,
 } from './server/shared/agent-access.js';
 import {
   getPrebuiltAgentSessionDir, getPrebuiltSessionFilePath, getPrebuiltSessionIndexPath,
@@ -249,6 +250,10 @@ const sessionHelpers = createSessionHelpers({
   enrichAgent,
   startManagedAgent,
   waitForManagedRuntimeReady,
+  // 启动期空会话清理的线程收口：head 会话被清理时关闭其线程（与 delete
+  // 路由的 onSessionDeleted 同一事实；thread-integration 内部判定非 head /
+  // 无线程为 no-op，纯会话零影响）
+  onSessionDeleted: (agentId, sessionId) => getThreadIntegration().onSessionDeleted(agentId, sessionId),
 });
 const {
   buildFeatureSessionTitle, buildNamedSessionTitle, getNextNewSessionTitle,
@@ -500,6 +505,34 @@ setupThreadRoutes(app, express, {
   lifecycle: threadLifecycle,
   // commands 端点的即时投递走 integration 的 consumer 消费面（退避 / 水位同源）
   tryDeliver: (threadId) => threadIntegration.tryDeliver(threadId),
+  // head runtime 就绪闸：head runtime 消失（进程退出 / server 重启清表）后，
+  // 既有投递触发点（append / succession / runtime-ready）全部依赖"runtime
+  // 会 ready"的事件，而进程死亡后不会再有该事件——指令只会永久滞留。
+  // commands 入箱前经此唤起 head runtime（复用 startManagedAgent 链路），
+  // runtime-ready 钩子随后自动补投；调用方无需知道"要先激活会话"。
+  ensureHeadRuntime: async (agentId, sessionId) => {
+    if (isManagedRuntimeRunning(getAgentRuntime(agentId, sessionId))) {
+      return { ok: true };
+    }
+    const record = await requirePrebuiltSessionRecord(agentId, sessionId).catch(() => null);
+    if (!record) {
+      return {
+        ok: false,
+        code: 'head_session_missing',
+        message: `head session ${sessionId} not found in session index`,
+      };
+    }
+    await startManagedAgent(await requireAgentLight(agentId), sessionId);
+    const ready = await waitForManagedRuntimeReady(agentId, 20000, sessionId);
+    if (!ready) {
+      return {
+        ok: false,
+        code: 'runtime_ready_timeout',
+        message: `head runtime not READY after wake (session=${sessionId})`,
+      };
+    }
+    return { ok: true };
+  },
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null
   resolveSessionOpenDirectory: async (agentId, sessionId) => {
     const record = await requirePrebuiltSessionRecord(agentId, sessionId);

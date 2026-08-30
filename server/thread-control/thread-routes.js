@@ -19,9 +19,17 @@ import { synthesizeThreadLifeState } from './thread-life-state.js';
  * @param {object} options
  * @param {{ core: import('@agentdevjs/core').WorkThread, board: import('@agentdevjs/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
  * @param {{ archiveThread: Function, unarchiveThread: Function }} options.lifecycle
+ * @param {import('express').Express} app
+ * @param {typeof import('express').json} express
+ * @param {object} options
+ * @param {{ core: import('@agentdevjs/core').WorkThread, board: import('@agentdevjs/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
+ * @param {{ archiveThread: Function, unarchiveThread: Function }} options.lifecycle
  * @param {Function} [options.tryDeliver] 指令追加后的即时投递（经 delivery-consumer 消费面；不传则只入箱不投递）
+ * @param {Function} [options.ensureHeadRuntime] head runtime 就绪闸：head runtime 不在时
+ *   由宿主唤起（startManagedAgent + ready 等待）；返回 { ok: true } 或 { ok: false, code, message }。
+ *   就绪闸失败时指令仍入箱（等下一次触发点），但响应带 runtimeWake 失败事实。
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, resolveSessionOpenDirectory, tryDeliver } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, resolveSessionOpenDirectory, tryDeliver, ensureHeadRuntime } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -204,6 +212,26 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
     try {
       const { kind, text, source, idempotencyKey } = req.body || {};
       await _assertNotArchived(req.params.threadId);
+      const thread = await core.getThread(req.params.threadId);
+      if (!thread) {
+        return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
+      }
+      // head runtime 就绪闸：runtime 消失（进程退出 / server 重启清空）后
+      // 指令入箱只会滞留——投递触发点全部依赖"runtime 会 ready"的事件，
+      // 而进程死亡后不会再有该事件。入箱前先经宿主唤起 head runtime；
+      // 唤起失败时指令仍入箱（幂等键保留），响应携带失败事实供调用方
+      // 区分"已投递"与"滞留无承接"，不再静默等待一个不会来的 ready。
+      let runtimeWake = null;
+      if (typeof ensureHeadRuntime === 'function' && thread.headSessionId) {
+        const wake = await ensureHeadRuntime(thread.agentId, thread.headSessionId).catch((error) => ({
+          ok: false,
+          code: 'runtime_wake_failed',
+          message: String(error?.message || error),
+        }));
+        if (!wake?.ok) {
+          runtimeWake = { ok: false, code: wake?.code || 'runtime_wake_failed', message: wake?.message || 'head runtime not available' };
+        }
+      }
       const result = await core.appendCommand({
         threadId: req.params.threadId,
         kind,
@@ -219,7 +247,12 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
       if (!result.duplicate && typeof tryDeliver === 'function') {
         delivery = await tryDeliver(req.params.threadId);
       }
-      res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result, delivery });
+      res.status(result.duplicate ? 200 : 201).json({
+        ok: true,
+        ...result,
+        delivery,
+        ...(runtimeWake ? { runtimeWake } : {}),
+      });
     } catch (err) {
       _errorResponse(res, err);
     }

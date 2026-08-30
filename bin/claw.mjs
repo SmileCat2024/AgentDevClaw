@@ -409,6 +409,12 @@ async function handleThreads(args = []) {
     const command = payload.command || {};
     const delivered = payload.delivery?.delivered;
     console.log(`sent ${command.commandId || '(unknown)'}  kind=${command.kind || 'user_message'}  duplicate=${payload.duplicate === true}${delivered !== undefined ? `  delivered=${delivered}` : ''}`);
+    if (payload.runtimeWake && payload.runtimeWake.ok === false) {
+      // head runtime 唤起失败：指令虽入箱但当前无承接进程，属于需要调度的
+      // 明确故障（head_session_missing / runtime_ready_timeout），不是正常暂存。
+      console.log(`  runtimeWake=failed (${payload.runtimeWake.code}): ${payload.runtimeWake.message}`);
+      process.exitCode = 4;
+    }
     if (payload.started !== undefined || payload.lifeState) {
       console.log(`  started=${payload.started}  lifeState=${payload.lifeState || 'unknown'}`);
     }
