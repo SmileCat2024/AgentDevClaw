@@ -13,8 +13,7 @@ import { setTimeout as sleep } from 'timers/promises';
 import { join, resolve } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import process from 'process';
-
-import { fileURLToPath } from 'url';
+import { pathToFileURL, fileURLToPath } from 'url';
 import {
   loadProviders, listProviders, getProvider, getDefaultWorkspaceId,
   dispatch, cleanText, truncate, formatDate,
@@ -901,7 +900,12 @@ function formatLegacyOutput(opName, result, params) {
   }
 }
 
-main().catch(err => {
-  console.error(err?.message || err);
-  process.exit(1);
-});
+// CLI 守卫：仅直接执行时运行主流程；被测试 import 时只暴露 clawServerFetch。
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch(err => {
+    console.error(err?.message || err);
+    process.exit(1);
+  });
+}
+
+export { clawServerFetch };
