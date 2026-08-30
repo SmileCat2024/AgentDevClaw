@@ -344,7 +344,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const _csIsZh2 = currentLanguage === 'zh';
     if (!isTrimAll) {
       const confirmMsg = action.archiveOriginal
-        ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？原会话将被自动归档。' : 'Summarize session history and create a new session?The original session will be archived.')
+        ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？\n\n原会话将被自动归档。' : 'Summarize session history and create a new session?\n\nThe original session will be archived.')
         : t('workspace_compact_summary_confirm');
       if (!window.confirm(confirmMsg)) {
         return;
