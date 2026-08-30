@@ -3,7 +3,7 @@ import { describe, it, before, after, afterEach } from 'node:test';
 import http from 'node:http';
 import express from 'express';
 
-import { proxyToViewer, setProxyConnectionLookup } from '../server/shared/proxy.js';
+import { proxyToViewer, setProxyConnectionLookup, setProxyRemoteAuthSessions } from '../server/shared/proxy.js';
 import { submitUserTurn } from '../server/shared/user-turn.js';
 import { setupModelConfigRoutes } from '../server/routes/model-config.js';
 import { createAgentLifecycleModule } from '../server/routes/agent-lifecycle.js';
@@ -274,6 +274,59 @@ describe('user-turn remote forward base', () => {
       (error) => error.code === 'target_not_found' && error.status === 404,
     );
   });
+
+  it('sends remote turns through the host auth sessions so protected remotes accept them', async () => {
+    // 回归：裸 fetch 转发不带远程会话凭据，远程开启访问保护时被 401 拒绝
+    // （前端表现为发消息报 Authentication required）。远程 target 必须经
+    // fetchWithAuth 附加会话 cookie 与 same-origin Origin。
+    const forwarded = [];
+    setProxyRemoteAuthSessions({
+      async fetchWithAuth(connection, url, init) {
+        forwarded.push({ connection, url: String(url), init });
+        return { ok: true, status: 200, json: async () => ({ success: true, delivery: 'delivered' }) };
+      },
+    });
+    try {
+      const fetchImpl = async () => {
+        throw new Error('remote turns must not bypass the auth sessions');
+      };
+      const result = await submitUserTurn(
+        { agentId: NAMESPACE, text: 'hi', idempotencyKey: 'idem-auth' },
+        { findConnection: FIND_CONNECTION, fetchImpl },
+      );
+      assert.equal(result.delivery, 'delivered');
+      assert.equal(forwarded.length, 1);
+      assert.equal(forwarded[0].connection.id, 'server-a');
+      assert.equal(forwarded[0].url, `${REMOTE_ORIGIN}/api/agents/agent-9/user-turn`);
+      assert.equal(forwarded[0].init.method, 'POST');
+      assert.equal(forwarded[0].init.headers['x-idempotency-key'], 'idem-auth');
+    } finally {
+      setProxyRemoteAuthSessions(null);
+    }
+  });
+
+  it('keeps local turns on the injected fetch even when auth sessions are mounted', async () => {
+    const calls = [];
+    setProxyRemoteAuthSessions({
+      async fetchWithAuth() {
+        throw new Error('local turns must not consult the auth sessions');
+      },
+    });
+    try {
+      const fetchImpl = async (url, init) => {
+        calls.push({ url: String(url), init });
+        return { ok: true, status: 200, json: async () => ({ success: true, delivery: 'delivered' }) };
+      };
+      await submitUserTurn(
+        { agentId: 'agent-9', text: 'hi' },
+        { viewerOrigin: 'http://127.0.0.1:2026', fetchImpl },
+      );
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, 'http://127.0.0.1:2026/api/agents/agent-9/user-turn');
+    } finally {
+      setProxyRemoteAuthSessions(null);
+    }
+  });
 });
 
 // ── 3. capability matrix: handshake → catalog → frontend gate ───────────
@@ -425,6 +478,35 @@ describe('frontend write gate', () => {
     });
     await disconnected.window.RemoteConnections.refresh();
     assert.equal(disconnected.window.RemoteConnections.isRemoteWriteEnabled('remote:server-a:runtime-main'), false);
+  });
+});
+
+// ── 5. connection manager toggle upsert payload ──────────────────────────
+
+describe('connection manager toggle upsert payload', () => {
+  // 回归：列表 record.auth 是服务端脱敏形态（{configured:true}，无密码明文），
+  // toggle 曾把整个 record 原样回传，被服务端未知字段校验拒绝（400），导致
+  // 启用开关切换失败。契约：省略 auth = 服务端保持现有凭据。
+  it('strips the redacted auth marker and applies the new enabled state', () => {
+    const ctx = loadRemoteModule(connectedCatalog({ write: true }));
+    const record = {
+      id: 'wxyteam',
+      name: 'wxyteam',
+      enabled: false,
+      mode: 'url',
+      localPort: null,
+      baseUrl: 'https://claw.example.com',
+      ssh: null,
+      remote: null,
+      auth: { configured: true },
+    };
+    // JSON 往返规避 VM realm 与测试 realm 的原型差异。
+    const payload = JSON.parse(ctx.run(
+      `JSON.stringify(buildToggleUpsertPayload(${JSON.stringify(record)}, true))`,
+    ));
+    const { auth: _redacted, ...expected } = record;
+    expected.enabled = true;
+    assert.deepStrictEqual(payload, expected);
   });
 });
 

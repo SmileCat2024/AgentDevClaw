@@ -22,6 +22,20 @@
     }
   }
 
+  // 远程命名空间请求（/api/agents/remote:<connId>:… /…）的 401 来自远程实例
+  // 的访问保护，与本机会话无关：输入本机密码解决不了，弹登录框只会误导。
+  // 这类失败由调用方按业务错误呈现（如消息发送失败的 toast）。
+  function isRemoteNamespaceRequest(input) {
+    const raw = typeof input === 'string' ? input : input?.url || '';
+    try {
+      const { pathname } = new URL(raw, window.location.href);
+      if (!pathname.startsWith('/api/agents/')) return false;
+      return decodeURIComponent(pathname.split('/')[3] || '').startsWith('remote:');
+    } catch {
+      return false;
+    }
+  }
+
   function text(zh, en) {
     return (localStorage.getItem('agentdev-language') || 'zh') === 'zh' ? zh : en;
   }
@@ -89,7 +103,7 @@
   }
 
   function handleUnauthorized(input) {
-    if (isAuthPath(input)) return;
+    if (isAuthPath(input) || isRemoteNamespaceRequest(input)) return;
     authState.authenticated = false;
     showLogin();
   }

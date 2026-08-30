@@ -1,11 +1,17 @@
 import { VIEWER_ORIGIN } from './constants.js';
 import { RequestTargetError, resolveRuntimeTarget } from './request-target.js';
 import { forwardBase } from './remote-forward.js';
-import { getProxyConnectionLookup } from './proxy.js';
+import { getProxyConnectionLookup, getProxyRemoteAuthSessions } from './proxy.js';
 import {
   LocalOperationError,
   createOperationMetadata,
 } from './operation-contract.js';
+
+function readConnection(lookup, connectionId) {
+  if (!lookup) return null;
+  if (typeof lookup === 'function') return lookup(connectionId);
+  return lookup.getConnection?.(connectionId) ?? null;
+}
 
 /**
  * Thin Claw-side client for AgentDev's atomic user-turn contract.
@@ -96,26 +102,34 @@ export async function submitUserTurn({
     // 远程 target 的转发基址是隧道 origin（远程 target 上 viewerOrigin 为
     // undefined，直接拼接会产生 "undefined/…" URL，ADR-0011）；target.agentId
     // 已由 resolveRuntimeTarget 还原为裸 id。
-    response = await fetchImpl(
-      `${forwardBase(target)}/api/agents/${encodeURIComponent(target.agentId)}/user-turn`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // 幂等键透传：远程端与本地代理闸共用同一套 operation 元数据头。
-          ...(metadata.idempotencyKey ? { 'x-idempotency-key': metadata.idempotencyKey } : {}),
-        },
-        body: JSON.stringify({
-          text,
-          ...(Array.isArray(images) && images.length > 0 ? { images } : {}),
-          ...(source ? { source } : {}),
-          ...(sourceRef ? { sourceRef } : {}),
-          ...(Array.isArray(capabilityActivations) && capabilityActivations.length > 0
-            ? { capabilityActivations }
-            : {}),
-        }),
+    const url = `${forwardBase(target)}/api/agents/${encodeURIComponent(target.agentId)}/user-turn`;
+    const init = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // 幂等键透传：远程端与本地代理闸共用同一套 operation 元数据头。
+        ...(metadata.idempotencyKey ? { 'x-idempotency-key': metadata.idempotencyKey } : {}),
       },
-    );
+      body: JSON.stringify({
+        text,
+        ...(Array.isArray(images) && images.length > 0 ? { images } : {}),
+        ...(source ? { source } : {}),
+        ...(sourceRef ? { sourceRef } : {}),
+        ...(Array.isArray(capabilityActivations) && capabilityActivations.length > 0
+          ? { capabilityActivations }
+          : {}),
+      }),
+    };
+    // 远程 target 经认证会话出站：远程开启单密码访问保护时请求必须携带
+    // 登录会话（fetchWithAuth 附加 cookie 与 same-origin Origin，401 时
+    // 重登录重试一次），与 proxy.js 的 remoteFetch 同构。裸转发会被远程
+    // authMiddleware 以 401 拒绝。本地 target 与未装配认证会话的测试注入
+    // 保持原有 fetchImpl 路径。
+    const authSessions = target.scope === 'remote' ? getProxyRemoteAuthSessions() : null;
+    const connection = authSessions ? readConnection(findConnection, target.connectionId) : null;
+    response = connection
+      ? await authSessions.fetchWithAuth(connection, url, init)
+      : await fetchImpl(url, init);
   } catch (cause) {
     throw new UserTurnDeliveryError('Agent runtime delivery service is unavailable', {
       code: 'delivery_unavailable',
