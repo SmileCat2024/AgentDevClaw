@@ -24,6 +24,16 @@
  *   currentLanguage, suppressSidebarRerender
  */
 
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+
 window.openAgentActions = (event, agentId) => {
   event.preventDefault();
   const agent = allAgents.find(item => item.id === agentId);
@@ -276,7 +286,7 @@ deleteSessionAction.addEventListener('click', async () => {
   try {
     const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         agentId: pendingAgentId,
         sessionId: pendingSessionId,
@@ -438,7 +448,7 @@ deleteProjectAction.addEventListener('click', () => {
           for (const run of relatedRuns) {
             await fetch('/protoclaw/prebuilt_sessions/delete', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
               body: JSON.stringify({ agentId: pendingAgentId, sessionId: run.id, responseMode: 'delta' }),
             }).catch(e => console.warn(e));
           }

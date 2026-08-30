@@ -37,6 +37,15 @@
    Generic ctx-menu: declaration table + dispatcher
    ══════════════════════════════════════ */
 
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 // Agents whose session items get the full session-ops ctx menu
 // (summary / trim / branch). Server routes are agentId-parameterized;
 // this list only gates the frontend menu surface.
@@ -319,7 +328,7 @@ async function ctxArchiveAndStopRuntime(target) {
   try {
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         agentId,
         sessionId,
@@ -409,7 +418,7 @@ async function ctxGenerateTitle(target) {
   try {
     const response = await fetch('/protoclaw/generate_session_title', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({ agentId: ns, sessionId }),
     });
     if (!response.ok) {
@@ -507,7 +516,7 @@ function ctxRenameSession(target) {
     try {
       const resp = await fetch('/protoclaw/prebuilt_sessions/' + encodeURIComponent(sessionId) + '/title', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
         body: JSON.stringify({ agentId, title: newTitle }),
       });
       const result = await resp.json();
@@ -582,7 +591,7 @@ async function ctxArchiveSession(target) {
   try {
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         agentId,
         sessionId,
@@ -651,7 +660,7 @@ async function ctxTodoSession(target) {
   try {
     const response = await fetch('/protoclaw/prebuilt_sessions/todo', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({ agentId, sessionId, todo: nextTodo, responseMode: 'delta' }),
     });
     if (!response.ok) {

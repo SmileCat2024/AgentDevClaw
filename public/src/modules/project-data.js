@@ -304,6 +304,17 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
       }
     });
 
+  // 远程历史会话混入（R2-01，ADR-0012 决策 1）：与本地会话在同一项目桶内
+  // 混合排序，无来源分区、无远程徽标。
+  if (typeof getRemoteHistorySessions === 'function') {
+    for (const project of projects.values()) {
+      for (const session of getRemoteHistorySessions(project.openDirectory)) {
+        if (project.sessions.some((item) => item.id === session.id)) continue;
+        project.sessions.push(session);
+      }
+    }
+  }
+
   return Array.from(projects.values())
     .map((project) => ({
       ...project,

@@ -28,7 +28,13 @@ import { renderConversationHtml } from '../conversation-renderer.js';
 import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
 import { createOperationTrace } from '../shared/operation-trace.js';
 import { resolveAgentTarget, resolveSessionTarget } from '../shared/operation-target.js';
-import { attachOperationMetadata, readOperationMetadata } from '../shared/operation-contract.js';
+import {
+  bareId,
+  resolveForwardHostTarget,
+  forwardProtoclawRoute,
+  readForwardTargetError,
+} from '../shared/remote-forward.js';
+import { attachOperationMetadata, readOperationMetadata, buildLocalFailureResponse } from '../shared/operation-contract.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { META_VERSION } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
@@ -39,6 +45,21 @@ import { getInternalAuthToken } from '../auth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+
+// ADR-0011：远程写幂等闸。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；
+// 本地路径保持现状不强制（proxy.js:244-250 同族契约）。
+function requireRemoteIdempotencyKey(req, res, metadata = {}) {
+  if (readOperationMetadata(req).idempotencyKey) return true;
+  res.status(400).json({
+    ok: false,
+    code: 'idempotency_key_required',
+    retryable: false,
+    operationId: metadata.operationId || null,
+    message: 'Remote write operations require an idempotency key (x-idempotency-key)',
+    error: 'Remote write operations require an idempotency key (x-idempotency-key)',
+  });
+  return false;
+}
 
 /**
  * Session-scoped routes. Every session file/index mutation must name both the
@@ -115,6 +136,20 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
       res.status(400).json({ error: 'agentId is required' });
       return;
     }
+    // ADR-0011：远程命名空间 agentId → 转发远程同名会话列表（裸 id）；本地
+    // 身份走下方既有读取路径，行为字节级不动。
+    try {
+      const hostTarget = resolveForwardHostTarget(req.query.agentId);
+      if (hostTarget.scope === 'remote') {
+        return await forwardProtoclawRoute(
+          res,
+          hostTarget,
+          '/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(bareId(req.query.agentId)),
+        );
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
     const sessions = await listPrebuiltSessions(req.query.agentId);
     res.json(sessions);
     void recordSidebarDiagnosticEvent({
@@ -151,6 +186,21 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
       res.status(400).json({ error: 'agentId is required' });
       return;
     }
+    // ADR-0011：远程命名空间身份 → 转发远程同名搜索路由（裸 id + 原始 q /
+    // openDirectory）；本地身份走下方既有索引扫描路径，行为字节级不动。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId);
+      if (hostTarget.scope === 'remote') {
+        const params = new URLSearchParams({
+          agentId: bareId(agentId),
+          q: query,
+          ...(openDirectory ? { openDirectory } : {}),
+        });
+        return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/search_sessions?${params.toString()}`);
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
     if (!query) {
       res.json({ query: '', results: [], total: 0, indexed: 0 });
       return;
@@ -169,6 +219,20 @@ app.get('/protoclaw/session_record', async (req, res, next) => {
     if (!agentId || !sessionId) {
       res.status(400).json({ error: 'agentId and sessionId are required' });
       return;
+    }
+    // ADR-0011：远程命名空间身份 → 转发远程同名会话记录路由（裸 id）；本地
+    // 身份走下方既有文件读取路径，行为字节级不动。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        const params = new URLSearchParams({
+          agentId: bareId(agentId),
+          sessionId: bareId(sessionId),
+        });
+        return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/session_record?${params.toString()}`);
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
     const sessionPath = getPrebuiltSessionFilePath(agentId, sessionId);
     const raw = await fs.readFile(sessionPath, 'utf8');
@@ -594,6 +658,25 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
   trace.mark('server_received');
   try {
     const { agentId } = resolveAgentTarget(req.body);
+    // ADR-0011：远程命名空间身份 → 转发远程同名创建路由（裸 id，远程端启动
+    // 自己的 runtime）；本地身份走下方既有创建路径，行为字节级不动。远程写
+    // 强制幂等键（本地路径保持现状不强制）。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res, trace)) return;
+        const {
+          agentId: _agentId,
+          ...createFields
+        } = req.body || {};
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/prebuilt_sessions', {
+          method: 'POST',
+          body: { ...createFields, agentId: bareId(agentId) },
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
     const agent = await requireAgentLight(agentId);
     // sessionType 限定已知值：main 是用户会话缺省形态；coder 是线程宿主
     // 会话，仅由调度面（ACP / dispatch / CLI）显式创建，前端不传此字段。
@@ -670,6 +753,26 @@ app.put('/protoclaw/prebuilt_sessions/:sessionId/title', express.json(), async (
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'title is required and must be non-empty' });
     }
+    // ADR-0011：远程命名空间身份 → 转发远程同名改名路由（裸 id，远程端做
+    // 自己的索引更新）；本地身份走下方既有索引更新路径，行为字节级不动。
+    // 远程写强制幂等键（本地路径保持现状不强制）。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res)) return;
+        return await forwardProtoclawRoute(
+          res,
+          hostTarget,
+          `/protoclaw/prebuilt_sessions/${encodeURIComponent(bareId(sessionId))}/title`,
+          {
+            method: 'PUT',
+            body: { agentId: bareId(agentId), title: title.trim() },
+          },
+        );
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
     if (containsReplacementChar(title)) {
       return res.status(400).json({ error: 'title 含无效编码字符（U+FFFD），通常由控制台代码页转码（如原生 curl）造成；请改用 claw CLI 传参' });
     }
@@ -709,6 +812,25 @@ app.post('/protoclaw/generate_session_title', express.json(), async (req, res, n
     const sessionId = cleanSessionText(req.body?.sessionId);
     if (!agentId || !sessionId) {
       return res.status(400).json({ error: 'agentId and sessionId are required' });
+    }
+    // ADR-0011：远程命名空间身份 → 转发远程同名 AI 标题路由（裸 id，LLM 调用
+    // 与索引更新都发生在远程端，用远程模型配置）；本地身份走下方既有 title
+    // mirror 路径，行为字节级不动。远程写强制幂等键。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/generate_session_title', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(agentId),
+            sessionId: bareId(sessionId),
+          },
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
 
     const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, agentId);
@@ -828,6 +950,25 @@ app.post('/protoclaw/generate_recap', express.json(), async (req, res, next) => 
     const sessionId = cleanSessionText(req.body?.sessionId);
     if (!agentId || !sessionId) {
       return res.status(400).json({ error: 'agentId and sessionId are required' });
+    }
+    // ADR-0011：远程命名空间身份 → 转发远程同名 AI recap 路由（裸 id，LLM
+    // 调用发生在远程端）；本地身份走下方既有 recap mirror 路径，行为字节级
+    // 不动。远程写强制幂等键。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/generate_recap', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(agentId),
+            sessionId: bareId(sessionId),
+          },
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
 
     const ownerAgentId = await resolvePrebuiltSessionOwner(sessionId, agentId);
@@ -1254,6 +1395,27 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
   trace.mark('server_received');
   try {
     const { agentId, sessionId } = resolveSessionTarget(req.body);
+    // ADR-0011：远程命名空间身份 → 转发远程同名 activate 路由（裸 id，远程端
+    // startManagedAgent 启动 runtime，经 Phase 1.5 投影自动回到本地侧栏）；
+    // 本地身份走下方既有激活路径，行为字节级不动。远程写强制幂等键。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res, trace)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/prebuilt_sessions/activate', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(agentId),
+            sessionId: bareId(sessionId),
+          },
+        });
+      }
+    } catch (error) {
+      attachOperationMetadata(error, requestMetadata);
+      trace.mark('failed', { errorCode: error?.code || 'activate_failed' });
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error, requestMetadata));
+    }
     const agent = await requireAgentLight(agentId);
     const session = await activatePrebuiltSession(agent.id, sessionId, { returnSummary: false });
     const committedIndex = await readSessionIndex(agent.id);
@@ -1297,6 +1459,27 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
   trace.mark('server_received');
   try {
     const { agentId, sessionId } = resolveSessionTarget(req.body);
+    // ADR-0011：远程命名空间身份 → 转发远程同名删除路由（裸 id，远程端做
+    // 自己的收口与索引删除）；本地身份走下方既有删除路径，行为字节级不动。
+    // 远程写强制幂等键。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res, trace)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/prebuilt_sessions/delete', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(agentId),
+            sessionId: bareId(sessionId),
+          },
+        });
+      }
+    } catch (error) {
+      attachOperationMetadata(error, requestMetadata);
+      trace.mark('failed', { errorCode: error?.code || 'delete_failed' });
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error, requestMetadata));
+    }
     const agent = await requireAgentLight(agentId);
 
     let assemblyRuntime = null;
@@ -1365,6 +1548,27 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
   trace.mark('server_received');
   try {
     const { agentId, sessionId } = resolveSessionTarget(req.body);
+    // ADR-0011：远程命名空间身份 → 转发远程同名归档路由（裸 id，coder 线程
+    // 收口等生命周期语义由远程端裁决）；本地身份走下方既有归档路径，行为
+    // 字节级不动。远程写强制幂等键。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res, trace)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/prebuilt_sessions/archive', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(agentId),
+            sessionId: bareId(sessionId),
+          },
+        });
+      }
+    } catch (error) {
+      attachOperationMetadata(error, requestMetadata);
+      trace.mark('failed', { errorCode: error?.code || 'archive_failed' });
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error, requestMetadata));
+    }
     const agent = await requireAgentLight(agentId);
     const sessionRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
     const archived = req.body.archived !== false;
@@ -1432,6 +1636,25 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
 app.post('/protoclaw/prebuilt_sessions/todo', express.json(), async (req, res, next) => {
   try {
     const { agentId, sessionId } = resolveSessionTarget(req.body);
+    // ADR-0011：远程命名空间身份 → 转发远程同名 todo 设置路由（裸 id）；本地
+    // 身份走下方既有索引标记路径，行为字节级不动。远程写强制幂等键（本地
+    // 路径保持现状不强制）。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId, sessionId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(req, res)) return;
+        return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/prebuilt_sessions/todo', {
+          method: 'POST',
+          body: {
+            ...(req.body || {}),
+            agentId: bareId(agentId),
+            sessionId: bareId(sessionId),
+          },
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
     const agent = await requireAgentLight(agentId);
     const todo = req.body.todo !== false;
     const result = await tagPrebuiltSessionTodo(agent.id, sessionId, todo, {

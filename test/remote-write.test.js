@@ -8,6 +8,7 @@ import { submitUserTurn } from '../server/shared/user-turn.js';
 import { setupModelConfigRoutes } from '../server/routes/model-config.js';
 import { createAgentLifecycleModule } from '../server/routes/agent-lifecycle.js';
 import { setupToolStateRoutes } from '../server/routes/tool-state.js';
+import { setupSessionRoutes } from '../server/routes/session.js';
 import { createConnectionHealth } from '../server/remote-connections/connection-health.js';
 import { createCatalogAggregator } from '../server/remote-connections/catalog-aggregator.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
@@ -982,5 +983,299 @@ describe('frontend getEntryHostAgentId', () => {
     assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId('remote:ghost:rt-9'), null);
     assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId('plain-agent'), null);
     assert.equal(ctx.window.RemoteConnections.getEntryHostAgentId(''), null);
+  });
+});
+
+// ── 10. session history remote branches (R2-01) ──────────────────────────
+
+// setupSessionRoutes 的 ctx 依赖面很大，但远程分支全部在本地 helper 之前短路；
+// 本地路径不触发（远程用例被转发 mock 拦截），依赖以最小替身注入。
+// 同一 path 存在 GET/POST 双路由（如 /protoclaw/prebuilt_sessions），按 method
+// 分别捕获，避免后注册者覆盖先注册者。
+function captureSessionHandler(path, method = 'get') {
+  let handler = null;
+  const noop = () => {};
+  const capture = (wantMethod) => (routePath, ...rest) => {
+    if (routePath === path && wantMethod === method) handler = rest[rest.length - 1];
+  };
+  setupSessionRoutes(
+    {
+      get: capture('get'),
+      post: capture('post'),
+      put: capture('put'),
+      delete: noop,
+    },
+    { json: () => (req, res, next) => next() },
+    {
+      listPrebuiltSessions: async () => { throw new Error('local list must not run for remote ids'); },
+      searchSessionsContent: async () => { throw new Error('local search must not run for remote ids'); },
+      getPrebuiltSessionFilePath: () => { throw new Error('local file access must not run for remote ids'); },
+      resolvePrebuiltSessionType: async () => null,
+      resolvePrebuiltSessionOwner: async () => null,
+      requirePrebuiltSessionRecord: async () => { throw new Error('local record lookup must not run for remote ids'); },
+      // requireAgentLight 替身模拟生产查找语义：查无此 agent 抛 404
+      // Unknown agent（本地分支回归用），命中则返回 light 形态。
+      requireAgentLight: async (id) => {
+        if (id === 'local-agent') {
+          const error = new Error(`Unknown agent: ${id}`);
+          error.statusCode = 404;
+          throw error;
+        }
+        return { id, relativeDir: 'test', name: id };
+      },
+      requirePrebuiltAgentForRuntime: async (id) => ({ id, relativeDir: 'test' }),
+      activatePrebuiltSession: async () => { throw new Error('local activate must not run for remote ids'); },
+      deletePrebuiltSession: async () => { throw new Error('local delete must not run for remote ids'); },
+      archivePrebuiltSession: async () => { throw new Error('local archive must not run for remote ids'); },
+      tagPrebuiltSessionTodo: async () => { throw new Error('local todo must not run for remote ids'); },
+      startManagedAgent: async () => { throw new Error('startManagedAgent must not run for remote ids'); },
+      readSessionIndex: async () => ({ revision: 0, activeSessionId: null, sessions: [] }),
+      updateSessionIndex: async () => { throw new Error('local index update must not run for remote ids'); },
+    },
+  );
+  return handler;
+}
+
+describe('session routes remote namespace branches (R2-01)', () => {
+  const silentRes = () => ({
+    statusCode: null,
+    jsonPayload: null,
+    status(code) { this.statusCode = code; return this; },
+    json(payload) { this.jsonPayload = payload; },
+  });
+  // 十端点转发形状矩阵：{ name, method, path, handler, body, assertForwarded }
+  const remoteCases = [
+    {
+      name: 'GET /protoclaw/prebuilt_sessions',
+      path: '/protoclaw/prebuilt_sessions',
+      handler: () => captureSessionHandler('/protoclaw/prebuilt_sessions', 'get'),
+      run: (handler, res) => handler({ query: { agentId: NAMESPACE } }, res, (e) => { throw e; }),
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/prebuilt_sessions?agentId=agent-9`,
+    },
+    {
+      name: 'GET /protoclaw/search_sessions',
+      path: '/protoclaw/search_sessions',
+      handler: () => captureSessionHandler('/protoclaw/search_sessions'),
+      run: (handler, res) => handler({ query: { agentId: NAMESPACE, q: 'fix bug', openDirectory: 'D:/remote' } }, res, (e) => { throw e; }),
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/search_sessions?agentId=agent-9&q=fix+bug&openDirectory=D%3A%2Fremote`,
+    },
+    {
+      name: 'GET /protoclaw/session_record',
+      path: '/protoclaw/session_record',
+      handler: () => captureSessionHandler('/protoclaw/session_record'),
+      run: (handler, res) => handler({ query: { agentId: NAMESPACE, sessionId: 'remote:server-a:session-1' } }, res, (e) => { throw e; }),
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/session_record?agentId=agent-9&sessionId=session-1`,
+    },
+    {
+      name: 'POST /protoclaw/prebuilt_sessions/activate',
+      path: '/protoclaw/prebuilt_sessions/activate',
+      method: 'post',
+      body: { agentId: NAMESPACE, sessionId: 'remote:server-a:session-7', idempotencyKey: 'idem-activate' },
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/prebuilt_sessions/activate`,
+      expectForwarded: { agentId: 'agent-9', sessionId: 'session-7', idempotencyKey: 'idem-activate' },
+    },
+    {
+      name: 'POST /protoclaw/prebuilt_sessions/delete',
+      path: '/protoclaw/prebuilt_sessions/delete',
+      method: 'post',
+      body: { agentId: NAMESPACE, sessionId: 'remote:server-a:session-7', idempotencyKey: 'idem-del' },
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/prebuilt_sessions/delete`,
+      expectForwarded: { agentId: 'agent-9', sessionId: 'session-7', idempotencyKey: 'idem-del' },
+    },
+    {
+      name: 'POST /protoclaw/prebuilt_sessions/archive',
+      path: '/protoclaw/prebuilt_sessions/archive',
+      method: 'post',
+      body: { agentId: NAMESPACE, sessionId: 'remote:server-a:session-7', archived: false, idempotencyKey: 'idem-arch' },
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/prebuilt_sessions/archive`,
+      expectForwarded: { agentId: 'agent-9', sessionId: 'session-7', archived: false, idempotencyKey: 'idem-arch' },
+    },
+    {
+      name: 'POST /protoclaw/prebuilt_sessions/todo',
+      path: '/protoclaw/prebuilt_sessions/todo',
+      method: 'post',
+      body: { agentId: NAMESPACE, sessionId: 'remote:server-a:session-7', todo: true, idempotencyKey: 'idem-todo' },
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/prebuilt_sessions/todo`,
+      expectForwarded: { agentId: 'agent-9', sessionId: 'session-7', todo: true, idempotencyKey: 'idem-todo' },
+    },
+    {
+      name: 'POST /protoclaw/generate_session_title',
+      path: '/protoclaw/generate_session_title',
+      method: 'post',
+      body: { agentId: NAMESPACE, sessionId: 'remote:server-a:session-7', idempotencyKey: 'idem-title' },
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/generate_session_title`,
+      expectForwarded: { agentId: 'agent-9', sessionId: 'session-7', idempotencyKey: 'idem-title' },
+    },
+    {
+      name: 'POST /protoclaw/generate_recap',
+      path: '/protoclaw/generate_recap',
+      method: 'post',
+      body: { agentId: NAMESPACE, sessionId: 'remote:server-a:session-7', idempotencyKey: 'idem-recap' },
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/generate_recap`,
+      expectForwarded: { agentId: 'agent-9', sessionId: 'session-7', idempotencyKey: 'idem-recap' },
+    },
+    {
+      name: 'POST /protoclaw/prebuilt_sessions (create)',
+      path: '/protoclaw/prebuilt_sessions',
+      method: 'post',
+      handler: () => captureSessionHandler('/protoclaw/prebuilt_sessions', 'post'),
+      body: { agentId: NAMESPACE, title: 'New remote session', idempotencyKey: 'idem-create' },
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/prebuilt_sessions`,
+      expectForwarded: { agentId: 'agent-9', title: 'New remote session', idempotencyKey: 'idem-create' },
+    },
+    {
+      name: 'PUT /protoclaw/prebuilt_sessions/:sessionId/title',
+      path: '/protoclaw/prebuilt_sessions/session-7/title',
+      handler: () => captureSessionHandler('/protoclaw/prebuilt_sessions/:sessionId/title', 'put'),
+      run: (handler, res) => handler(
+        { params: { sessionId: 'remote:server-a:session-7' }, body: { agentId: NAMESPACE, title: '  Renamed  ' }, headers: { 'x-idempotency-key': 'idem-title-put' } },
+        res,
+        (e) => { throw e; },
+      ),
+      expectForwarded: { agentId: 'agent-9', title: 'Renamed' },
+      expectUrl: `${REMOTE_ORIGIN}/protoclaw/prebuilt_sessions/session-7/title`,
+      expectMethod: 'PUT',
+    },
+  ];
+
+  for (const spec of remoteCases) {
+    it(`forwards ${spec.name} with bare ids over the tunnel`, async () => {
+      setProxyConnectionLookup(FIND_CONNECTION);
+      const fetchMock = mockFetch(() => ({ status: 200, body: JSON.stringify({ ok: true, via: 'remote' }) }));
+      try {
+        const handler = spec.handler
+          ? spec.handler()
+          : captureSessionHandler(spec.path, spec.name.startsWith('GET') ? 'get' : 'post');
+        const res = silentRes();
+        const body = spec.body ? { ...spec.body, idempotencyKey: spec.body.idempotencyKey || 'idem-forward' } : undefined;
+        if (spec.run) {
+          await spec.run(handler, res, body);
+        } else {
+          await handler({ body, headers: {} }, res, (e) => { throw e; });
+        }
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(res.jsonPayload, { ok: true, via: 'remote' });
+        assert.equal(fetchMock.calls.length, 1, `${spec.name} must produce exactly one forward`);
+        const forwarded = fetchMock.calls[0];
+        assert.equal(forwarded.url, spec.expectUrl, `${spec.name} forwarded url`);
+        if (spec.expectMethod) assert.equal(forwarded.init.method, spec.expectMethod);
+        if (spec.expectForwarded) {
+          assert.deepEqual(JSON.parse(forwarded.init.body), spec.expectForwarded, `${spec.name} forwarded body`);
+        }
+      } finally {
+        fetchMock.restore();
+        setProxyConnectionLookup(null);
+      }
+    });
+  }
+
+  it('requires an idempotency key for every remote session write and never crosses the tunnel', async () => {
+    const fetchMock = mockFetch();
+    try {
+      setProxyConnectionLookup(FIND_CONNECTION);
+      const writes = [
+        { path: '/protoclaw/prebuilt_sessions', body: { agentId: NAMESPACE } },
+        { path: '/protoclaw/prebuilt_sessions/activate', body: { agentId: NAMESPACE, sessionId: 'remote:server-a:s1' } },
+        { path: '/protoclaw/prebuilt_sessions/delete', body: { agentId: NAMESPACE, sessionId: 'remote:server-a:s1' } },
+        { path: '/protoclaw/prebuilt_sessions/archive', body: { agentId: NAMESPACE, sessionId: 'remote:server-a:s1' } },
+        { path: '/protoclaw/prebuilt_sessions/todo', body: { agentId: NAMESPACE, sessionId: 'remote:server-a:s1' } },
+        { path: '/protoclaw/generate_session_title', body: { agentId: NAMESPACE, sessionId: 'remote:server-a:s1' } },
+        { path: '/protoclaw/generate_recap', body: { agentId: NAMESPACE, sessionId: 'remote:server-a:s1' } },
+      ];
+      for (const { path, body } of writes) {
+        const handler = captureSessionHandler(path, 'post');
+        const res = silentRes();
+        await handler({ body, headers: {} }, res, (e) => { throw e; });
+        assert.equal(res.statusCode, 400, `POST ${path} status`);
+        assert.equal(res.jsonPayload.ok, false);
+        assert.equal(res.jsonPayload.code, 'idempotency_key_required');
+        assert.equal(res.jsonPayload.retryable, false);
+      }
+      // PUT title 同一闸（键在 header 而非 body 也识别）。
+      const titleHandler = captureSessionHandler('/protoclaw/prebuilt_sessions/:sessionId/title', 'put');
+      const titleRes = silentRes();
+      await titleHandler(
+        { params: { sessionId: 'remote:server-a:s1' }, body: { agentId: NAMESPACE, title: 'x' } },
+        titleRes,
+        (e) => { throw e; },
+      );
+      assert.equal(titleRes.statusCode, 400);
+      assert.equal(titleRes.jsonPayload.code, 'idempotency_key_required');
+
+      assert.equal(fetchMock.calls.length, 0, 'keyless remote writes must not cross the tunnel');
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('still enforces basic body validation before forwarding remote writes', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const fetchMock = mockFetch();
+    try {
+      // 缺 sessionId 的 activate：身份校验先于转发分支抛出（next(error)），
+      // 无网络副作用。
+      const handler = captureSessionHandler('/protoclaw/prebuilt_sessions/activate', 'post');
+      const res = silentRes();
+      let nextError = null;
+      await handler({ body: { agentId: NAMESPACE } }, res, (e) => { nextError = e; });
+      assert.equal(res.statusCode, null, 'identity validation must short-circuit before the forward branch');
+      assert.equal(nextError.status, 400);
+      assert.equal(nextError.message, 'sessionId is required');
+      assert.equal(fetchMock.calls.length, 0);
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('maps unknown remote connections onto the operation contract for session routes too', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const fetchMock = mockFetch();
+    try {
+      const handler = captureSessionHandler('/protoclaw/prebuilt_sessions/activate', 'post');
+      const res = silentRes();
+      await handler(
+        { body: { agentId: 'remote:ghost:agent-9', sessionId: 'remote:ghost:s1', idempotencyKey: 'idem-ghost' } },
+        res,
+        (error) => { throw error; },
+      );
+      assert.equal(res.statusCode, 404);
+      assert.equal(res.jsonPayload.ok, false);
+      assert.equal(res.jsonPayload.code, 'target_not_found');
+      assert.equal(fetchMock.calls.length, 0);
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('keeps local session branches off the wire: plain ids run the local lookup path', async () => {
+    const fetchMock = mockFetch();
+    try {
+      setProxyConnectionLookup(FIND_CONNECTION);
+      // activate 本地：requireAgentLight 查无此 agent → next(error)，绝不发 HTTP。
+      const activateHandler = captureSessionHandler('/protoclaw/prebuilt_sessions/activate', 'post');
+      const activateRes = silentRes();
+      await assert.rejects(
+        activateHandler(
+          { body: { agentId: 'local-agent', sessionId: 'session-1' }, headers: {} },
+          activateRes,
+          (error) => { throw error; },
+        ),
+        /Unknown agent/,
+      );
+      assert.equal(fetchMock.calls.length, 0, 'local session operations must never produce an HTTP forward');
+
+      // title 本地：agentId 缺失走本地 400。
+      const titleHandler = captureSessionHandler('/protoclaw/prebuilt_sessions/:sessionId/title', 'put');
+      const titleRes = silentRes();
+      await titleHandler({ params: { sessionId: 's1' }, body: {} }, titleRes, (e) => { throw e; });
+      assert.equal(titleRes.statusCode, 400);
+      assert.equal(fetchMock.calls.length, 0);
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
   });
 });

@@ -39,6 +39,16 @@
  *   - context-menu.js: openCompactMenu
  */
 
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+
 'use strict';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -821,7 +831,7 @@ window.deleteAssemblySessionRecord = async (sessionId) => {
     const deletedWasActive = sessionId === (agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null);
     const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
         agentId: agent.id,
         sessionId,

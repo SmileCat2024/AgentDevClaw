@@ -53,6 +53,16 @@
  *   onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)"
  */
 
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+
 window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   bumpNavigationGuard();
   let action = rawAction || {};
@@ -62,6 +72,24 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     } catch {
       action = {};
     }
+  }
+
+  if (action.type === 'open_session' && isRemoteNamespaceAgentId(action.sessionId)) {
+    // 远程历史会话激活（R2-01，ADR-0012 决策 2）：与本地同一动作入口，
+    // 身份来自列表项数据层（host 级命名空间 id + 命名空间 sessionId），
+    // activate 经服务端命名空间分支转发到远程。
+    const hostNsId = typeof window.RemoteConnections?.getEntryHostNamespaceId === 'function'
+      ? (window.RemoteConnections.getEntryHostNamespaceId(action.sessionId) || '')
+      : '';
+    if (!hostNsId) {
+      // 目录未含该会话（连接断开/条目消失）：显式失败，不猜测宿主。
+      window.alert(currentLanguage === 'zh'
+        ? '远程连接不可用，无法打开该会话'
+        : 'Remote connection is unavailable for this session');
+      return;
+    }
+    await window._activateRemoteHistorySession(hostNsId, action.sessionId, triggerButton);
+    return;
   }
 
   const activeAgent = getCurrentAgentRecord();
@@ -302,7 +330,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const _csIsZh2 = currentLanguage === 'zh';
     if (!isTrimAll) {
       const confirmMsg = action.archiveOriginal
-        ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？\n\n原会话将被自动归档。' : 'Summarize session history and create a new session?\n\nThe original session will be archived.')
+        ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？原会话将被自动归档。' : 'Summarize session history and create a new session?The original session will be archived.')
         : t('workspace_compact_summary_confirm');
       if (!window.confirm(confirmMsg)) {
         return;
@@ -582,7 +610,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     try {
       const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
         body: JSON.stringify({
           agentId: activeAgent.id,
           sessionId: action.sessionId,
@@ -831,3 +859,61 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   }
   renderCurrentMainView();
 };
+
+
+// ── Remote history session activation (R2-01, ADR-0012 决策 2) ──────────────
+// 点击远程历史会话 = 与本地完全相同的激活语义（activate → 目标宿主启动
+// runtime），无确认层、无远程特判 UI。激活后远程 catalog 出现运行中 runtime，
+// Phase 1.5 统一投影自动带出（零新代码）；此处轮询目录条目出现后切换焦点。
+// 断线/远程不可达按 ADR-0011 三分类由 operation 契约显式呈现。
+window._activateRemoteHistorySession = async function(hostNsId, sessionId, triggerButton) {
+  if (triggerButton) markActionLoading(triggerButton);
+  try {
+    const response = await fetch('/protoclaw/prebuilt_sessions/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+      body: JSON.stringify({
+        agentId: hostNsId,
+        sessionId,
+        responseMode: 'delta',
+      }),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      // 契约失败形态（三分类）显式呈现，不静默排队、不伪装成功。
+      throw new Error(result?.message || result?.error || (await response.text().catch(() => `HTTP ${response.status}`)));
+    }
+    window.ClawToast?.show?.({
+      id: `remote-activate-${result?.session?.id || sessionId}`,
+      status: 'success',
+      title: currentLanguage === 'zh' ? '远程会话已启动' : 'Remote session started',
+      description: result?.session?.title || '',
+    });
+    // 远程 runtime 经 Phase 1.5 投影自动进入侧栏；等待目录条目出现后切换。
+    const runtimeRef = await _waitForRemoteRuntimeForSession(sessionId, 50);
+    if (runtimeRef) {
+      await window.switchAgent(runtimeRef);
+    } else {
+      // 会话已在远程激活；runtime 就绪有延迟时留给 catalog 轮询自然带出。
+      void loadAgents();
+      if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+    }
+  } catch (error) {
+    window.alert(`Session failed: ${error && error.message ? error.message : error}`);
+  } finally {
+    if (triggerButton) triggerButton.classList.remove('action-loading');
+  }
+};
+
+// 轮询远程目录直到目标会话的 runtime 出现（远程 activate 启动 runtime 的
+// 就绪观察）。目录身份：entry.sessionId 命名空间化匹配目标会话。
+async function _waitForRemoteRuntimeForSession(namespacedSessionId, attempts = 50) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (typeof window.RemoteConnections?.resolveRuntimeRef === 'function') {
+      const runtimeRef = window.RemoteConnections.resolveRuntimeRef(namespacedSessionId);
+      if (runtimeRef) return runtimeRef;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  return null;
+}

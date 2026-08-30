@@ -5,6 +5,15 @@
  * session 血缘与任务。血缘头部、群聊当前路由、运行时与归档状态彼此独立。
  */
 
+// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 const WG_THREADS_REFRESH_INTERVAL = 15000;
 
 const _threadsState = {
@@ -574,7 +583,7 @@ async function _setThreadArchived(thread, archived, button = null) {
 
     const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({ agentId: thread.workspaceId, sessionId, archived, responseMode: 'delta' }),
     });
     if (!response.ok) {
