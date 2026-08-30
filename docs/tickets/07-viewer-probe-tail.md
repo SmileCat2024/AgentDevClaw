@@ -1,6 +1,6 @@
 # Ticket 07 — ViewerWorker 增量取数能力（?since / ?tail / changeKind / probe）
 
-> 依赖：无（本批工单的起点）。权威设计读 `docs/adr/0012-message-poll-probe-tail.md`。
+> 依赖：无（本批工单的起点）。权威设计读 `docs/adr/0013-message-poll-probe-tail.md`。
 > 仓库：AgentDev（框架）。涉及：`packages/viewer/src/viewer-worker.ts`、
 > `packages/viewer/test/`。本票**只加能力，不改任何现有行为**——不带参数的
 > `/messages` 响应必须逐字节不变。

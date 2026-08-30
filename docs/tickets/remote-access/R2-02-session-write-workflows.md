@@ -3,8 +3,8 @@
 - **仓库**：AgentDevClaw
 - **决策依据**：ADR-0011、ADR-0012
 - **类型**：protoclaw 域远程转发（重操作）
-- **前置**：R2-01 合入（转发模式、幂等闸、前端身份来源已定型）
-- **状态**：已立项未派发
+- **前置**：R2-01 合入（转发模式、幂等闸、前端身份来源已定型；`session.js` 幂等闸由 R2-01 落地）
+- **状态**：已立项未派发（依赖 R2-01 完成后调度）
 
 ## 范围（已批准切片）
 
@@ -30,7 +30,8 @@
 
 ## 前端改动
 
-- 调用点锚点：`app-main.js:346`（compact_and_resume）、`session-dialogs.js:510`（branch 分支对话框）。
+- 调用点锚点：`app-main.js:346`（compact_and_resume，经 `createCompactedResumeSession`）、`session-dialogs.js:510`（branch 分支对话框）。
+- 其余端点前端消费方（grep 复核）：trim_preview → `session-dialogs.js:90/381`、`slash-commands.js:67`；session_summary / session_generate_summary → `debug-summary-upload.js:138/150/158/220/226`（调试面板）。**`compacted_resume` 端点（`session.js:922`）前端无直接调用方**——前端"轻量继续"统一走 `createCompactedResumeSession` → `compact_and_resume`；施工前先确认该端点的实际消费方（疑似外部/ACP 链路），确认无消费方则只做转发分支 + 测试，不虚构前端入口。
 - 身份来源同 R2-01 纪律：host 级命名空间 id，逐调用点核对。
 - 分支/压缩完成后的 UI 收敛：响应中的新会话以命名空间 id 进入既有列表刷新链（无远程特判）。
 

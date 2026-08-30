@@ -1,4 +1,7 @@
-# 消息轮询的增量探测：probe + tail
+# ADR-0013 — 消息轮询的增量探测：probe + tail
+
+- 状态：Accepted（已实施，d2a2658 / 414a046）
+- 日期：2026-08-28
 
 Claw 前端对选中 agent 的 `/messages` 轮询是全量重拉：每 300ms（忙碌态）把整个
 转录（上限 10k 条 / 50MB）重新传输、重新 `JSON.parse`、逐条 diff。会话越长

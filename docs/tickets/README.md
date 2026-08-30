@@ -510,11 +510,11 @@ Phase 2 已落地的 remote-forward 共享 helper 与 6 端点接入模式、
 
 执行顺序：**R1-09 → R2-01 → R2-02** 严格串行（R1-09 施工项 A 是 R2-01 寻址前置；R2-01 定型模式与幂等闸是 R2-02 前置）。
 
-| 票 | 内容 |
-|----|------|
-| [R1-09](remote-access/R1-09-header-info-convergence.md) | 远程会话顶部信息收敛（sessionMeta 权威模型 + focusedAgentId host 级收敛） |
-| [R2-01](remote-access/R2-01-session-history-open-manage.md) | 远程会话历史：发现、打开与管理（十端点转发 + 幂等闸补齐 + 前端列表统一） |
-| [R2-02](remote-access/R2-02-session-write-workflows.md) | 远程会话写工作流：分支与上下文精简（六端点转发 + checkpoint 验收） |
+| 票 | 内容 | 状态 |
+|----|------|------|
+| [R1-09](remote-access/R1-09-header-info-convergence.md) | 远程会话顶部信息收敛（sessionMeta 权威模型 + focusedAgentId host 级收敛） | 施工项 A–E 已合入（T21 系列），剩 F 项测试 |
+| [R2-01](remote-access/R2-01-session-history-open-manage.md) | 远程会话历史：发现、打开与管理（十端点转发 + 幂等闸补齐 + 前端列表统一） | 已立项未派发 |
+| [R2-02](remote-access/R2-02-session-write-workflows.md) | 远程会话写工作流：分支与上下文精简（六端点转发 + checkpoint 验收） | 已立项未派发（依赖 R2-01） |
 
 ### 术语区分
 

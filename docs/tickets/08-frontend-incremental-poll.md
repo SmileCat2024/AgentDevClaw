@@ -6,7 +6,7 @@
 
 ## 背景
 
-ADR-0012（`docs/adr/0012-message-poll-probe-tail.md`）已定契约。本票把
+ADR-0013（`docs/adr/0013-message-poll-probe-tail.md`）已定契约。本票把
 poll 循环中 `/messages` 的"无条件全量拉"改为"探测 → 按分类取增量 → 拼回
 全量 → 校验 → 走原提交路径"。**渲染状态机一行不动**：
 `commitSessionViewPatch` + `findFirstChangedMessageIndex` + 三分支

@@ -3,7 +3,7 @@
 - **仓库**：AgentDevClaw
 - **决策依据**：ADR-0011（protoclaw 适配套路）、ADR-0012（统一呈现与激活语义）
 - **类型**：protoclaw 域远程转发 + 前端会话列表统一
-- **前置**：**R1-09 全部合入**（`focusedAgentId` host 级收敛 + `getCurrentControlAgentId` 收敛点 + `getEntryHostAgentId` accessor 是本票寻址的前提）
+- **前置**：**R1-09 全部合入**（`focusedAgentId` host 级收敛 + `getCurrentControlAgentId` 收敛点 + accessor 是本票寻址的前提；R1-09 的 A–E 已合入，F 项测试合入即视为前置满足）
 - **状态**：已立项未派发
 
 ## 范围（已批准切片）
@@ -52,8 +52,14 @@ if (hostTarget.scope !== 'local') {
 ### 会话列表统一（ADR-0012 决策 1）
 
 - workspace surface 的会话列表来源从"仅本地 `prebuilt_sessions`"扩展为"本地 + 各 connected 连接的转发列表"，**混合排序、无来源分区、无远程徽标**。
-- 调用点锚点：`app-main.js:903/1328`、`session-ui.js`（3s 刷新）、`home-dashboard.js:60`、`dispatch-actions.js:161/199`、`external-runtime.js:93`、`ph-project-actions.js:122`、`model-settings.js:720/755`。
+- 调用点锚点（2026-08-30 grep 复核，覆盖全部 `/protoclaw/prebuilt_sessions` 读消费方；施工时以当时 grep 为准逐个核对）：
+  - 列表拉取：`app-main.js:903/1328`、`session-ui.js`（3s 刷新）、`home-dashboard.js:60`、`dispatch-actions.js:161/199`、`external-runtime.js:93`、`ph-project-actions.js:122`、`model-settings.js:720/755`、`ctx-menu-handlers.js:447`
+  - 搜索：`ph-session-list.js:150`（`/protoclaw/search_sessions`）
+  - 会话记录：`workspace-actions.js:481`（`session_record`）
+  - 同链路旁证（不属本票转发范围，但受列表/身份链影响，施工时核对）：session_summary / session_generate_summary → `debug-summary-upload.js:138/150/158/220/226`；trim_preview 前端 `slash-commands.js:67`、`session-dialogs.js:90/381`（属 R2-02 范围）。
 - 远程列表的拉取经转发端点（agentId 用 host 级命名空间 id），或复用 `remote_catalog` 聚合（以实现时更省的为准，两案皆符合套路——拉取方式是传输细节，不改变列表语义）。
+- 混入过滤：远程目录的转发列表只并入与当前打开 workspace 目录匹配的条目（按目录路径对齐）；宿主级 / IM 门户类无目录会话不并入列表（对齐 ADR-0010 "无目录 runtime 不制造伪项目组"）。
+- 混入过滤：远程目录的转发列表只并入与当前打开 workspace 目录匹配的条目（按目录路径对齐），宿主级/IM 门户类无目录会话不并入列表。
 
 ### 激活流程（ADR-0012 决策 2）
 
@@ -64,7 +70,8 @@ if (hostTarget.scope !== 'local') {
 ### 管理操作（ADR-0012 / Q6 批复）
 
 - 上下文菜单（归档/删除/改名/todo 设置）在远程历史会话项上可用，delete 复用既有二次确认 UI。
-- 调用点锚点：`ctx-menu-items.js:250/320/508/583/652`、`ctx-menu-handlers.js:277/439/447`、`workspace-actions.js:583`、`assembly-actions.js:822`、`session-mutation.js:192`、`wg-threads-panel.js:575`、`session-ui.js:406`。
+- 调用点锚点（2026-08-30 grep 复核）：`ctx-menu-items.js:250/320/508/583/652`（archive/title/todo）、`ctx-menu-handlers.js:277/439/447`（delete/列表）、`workspace-actions.js:583`（delete）、`assembly-actions.js:822`（delete）、`session-mutation.js:192`（archive）、`wg-threads-panel.js:575`（archive）、`session-ui.js:293/406`（generate_session_title / title）、`auto-title.js:320`（generate_session_title）。
+- AI 标题消费方补充：`session-ui.js:293` 与 `auto-title.js:320` 均调 `generate_session_title`，远程路径需确认身份来源走 host 级命名空间 id（LLM 调用发生在远程端，用远程模型配置）。
 - **身份来源统一**：所有调用点的 agentId 改用 host 级命名空间 id（`getCurrentControlAgentId()` / `getEntryHostAgentId()`），杜绝 Phase 2 实测过的 `getCurrentAgentRecord()` → null → 400 同族问题（tool_state 400 / agent_detail 404 的教训）。每个调用点施工时逐个核对，这是本票最大的回归面。
 
 ## 测试
