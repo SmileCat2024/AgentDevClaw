@@ -305,10 +305,16 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
     });
 
   // 远程历史会话混入（R2-01，ADR-0012 决策 1）：与本地会话在同一项目桶内
-  // 混合排序，无来源分区、无远程徽标。
-  if (typeof getRemoteHistorySessions === 'function') {
-    for (const project of projects.values()) {
-      for (const session of getRemoteHistorySessions(project.openDirectory)) {
+  // 混合排序，无来源分区、无远程徽标。目录本地不存在时创建 remoteOnly 桶：
+  // 仅用于 surface 视图呈现，不参与本地工作区切换语义（phSwitchProject）。
+  if (typeof getRemoteHistoryProjectBuckets === 'function') {
+    for (const bucket of getRemoteHistoryProjectBuckets()) {
+      const dirId = `dir:${String(bucket.openDirectory).replace(/\\/g, '/').toLowerCase()}`;
+      const isRemoteOnly = !projects.has(dirId);
+      const project = upsertProject({ openDirectory: bucket.openDirectory });
+      if (!project) continue;
+      if (isRemoteOnly) project.remoteOnly = true;
+      for (const session of bucket.sessions) {
         if (project.sessions.some((item) => item.id === session.id)) continue;
         project.sessions.push(session);
       }

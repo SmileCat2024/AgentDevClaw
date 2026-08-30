@@ -258,9 +258,21 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   // because workspace_state.openDirectory and project.openDirectory may use
   // different path separators (backslash vs forward slash) or case.
   let normCurrentDir = currentOpenDir.replace(/\\/g, '/').toLowerCase();
-  const currentProject = currentOpenDir
+  let currentProject = currentOpenDir
     ? projects.find(p => p.id === ('dir:' + normCurrentDir)) || null
     : (projects.length > 0 ? projects[0] : null);
+
+  // 远程独有项目视图覆盖（ADR-0012 决策 1）：view-only 选中优先于工作区目录；
+  // 项目消失（断线 / 目录历史清空）时自动回落到工作区目录并清除覆盖。
+  const overrideProjectId = (typeof window !== 'undefined' && window.ClawFW?.phSurfaceViewProjectId) || '';
+  if (overrideProjectId && overrideProjectId !== currentProject?.id) {
+    const overrideProject = projects.find((p) => p.id === overrideProjectId && p.remoteOnly);
+    if (overrideProject) {
+      currentProject = overrideProject;
+    } else if (typeof window !== 'undefined' && window.ClawFW) {
+      window.ClawFW.phSurfaceViewProjectId = null;
+    }
+  }
 
   // Project header avatar
   const headerAvatar = currentProject
@@ -351,8 +363,9 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const modelDisplayName = getModelDisplayName(primaryModel);
   const hasSecondary = !!secondaryModel;
 
-  // 模型显示组件 - 简洁设计，无图标
-  const modelSwitchHtml = currentProject && modelDisplayName ? [
+  // 模型显示组件 - 简洁设计，无图标（remoteOnly 项目为远程目录视图，
+  // 模型预设属本地 agent 配置，不在此呈现）
+  const modelSwitchHtml = currentProject && !currentProject.remoteOnly && modelDisplayName ? [
     '<div class="ph-model-switch' + (hasSecondary ? ' has-secondary' : '') + '" onclick="window.phToggleModelSlot()" title="' + escapeHtml(isZh ? (hasSecondary ? '点击切换到: ' + secondaryModel : '点击配置备选模型') : (hasSecondary ? 'Click to switch to: ' + secondaryModel : 'Click to configure secondary model')) + '">',
     '<span class="ph-model-switch-name">' + escapeHtml(modelDisplayName) + '</span>',
     (hasSecondary ? '<svg class="ph-model-switch-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3l4 4-4 4"/><line x1="20" y1="7" x2="8" y2="7"/><path d="M8 21l-4-4 4-4"/><line x1="4" y1="17" x2="16" y2="17"/></svg>' : ''),
@@ -365,8 +378,9 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     }));
 
     // 目录设置按钮（共享配置编辑器，编辑当前目录的目录层）；
-    // 目录由当前项目显式传入，避免运行时二次查询 workspace_state 失效
-    const dirConfigBtn = (currentProject && typeof phDirConfigButtonHtml === 'function')
+    // 目录由当前项目显式传入，避免运行时二次查询 workspace_state 失效。
+    // remoteOnly 项目为远程目录，本地目录配置不适用。
+    const dirConfigBtn = (currentProject && !currentProject.remoteOnly && typeof phDirConfigButtonHtml === 'function')
       ? phDirConfigButtonHtml(agent, currentProject.openDirectory) : '';
 
     const headerBar = [
@@ -377,7 +391,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       '<div class="ph-project-bar-right">',
       modelSwitchHtml,
       dirConfigBtn,
-      (currentProject ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
+      // remoteOnly 项目不支持本地新建会话（openDirectory 在远程主机上）。
+      (currentProject && !currentProject.remoteOnly ? '<button class="ph-banner-btn" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + (isZh ? '新对话' : 'New Chat') + '</button>' : ''),
       '</div>',
       '</div>',
     ].join('');
@@ -403,10 +418,13 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
 
   const renderPhSessionItem = (session, type) => {
     const sType = type || session.sessionType || 'main';
+    // 远程历史会话（ADR-0012 决策 1）：操作寻址用宿主级命名空间 id——
+    // 服务端会话端点按命名空间 agentId 解析远程目标并转发（裸 id）。
+    const sessionNsId = session.remoteHostNsId || agent.id;
     // Primary action button + ⋯ more menu button (equivalent to right-click ctx-menu)
     const openAction = escapeHtml(JSON.stringify({ type: 'open_session', sessionId: session.id }));
     const primaryBtn = '<button class="workspace-action" type="button" data-workspace-action="' + openAction + '" onclick="window.runWorkspaceAction(this.dataset.workspaceAction, this)">' + escapeHtml(t('workspace_open_chat')) + '</button>';
-    const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" onclick="window.phShowSessionCtxMenu(event, this, \'' + escapeHtml(agent.id) + '\', \'' + escapeHtml(session.id) + '\', \'' + escapeHtml(sType) + '\')"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
+    const moreBtn = '<button class="workspace-action secondary session-more-btn" type="button" onclick="window.phShowSessionCtxMenu(event, this, \'' + escapeHtml(sessionNsId) + '\', \'' + escapeHtml(session.id) + '\', \'' + escapeHtml(sType) + '\')"><svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><circle cx="3" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11" cy="7" r="1.3"/></svg></button>';
     const buttonsHtml = [primaryBtn, moreBtn].join('');
     // Build compact time indicator for title-row left side (only within this week)
     let shortTime = getSessionShortTime(session.updatedAt);
@@ -415,7 +433,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       ? '<span class="session-time-indicator ' + recencyCls + '"><span class="session-time-dot"></span><span class="session-time-label">' + escapeHtml(shortTime) + '</span></span>'
       : '';
     return [
-      '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '">',
+      '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(sessionNsId) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-session-type="' + escapeHtml(sType) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(sessionNsId) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(sType) + '">',
       '<div class="workspace-history-main">',
       '<div class="workspace-history-title-row">',
       indicatorHtml,
@@ -457,7 +475,9 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   let sessionsHtml = '';
   if (needsTabs) {
     const tabId = 'ph-tab-' + escapeHtml(agent.id) + '-' + escapeHtml(currentProject.id);
-    const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div><div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
+    // remoteOnly 项目不支持本地新建会话（openDirectory 在远程主机上）。
+    const newChatBtnHtml = currentProject.remoteOnly ? '' : '<div class="feature-project-empty-actions"><button class="workspace-action" type="button" data-workspace-action="' + newChatAction + '" onclick="window.runWorkspaceActionFromEvent(event, this.dataset.workspaceAction)">' + escapeHtml(t('workspace_new_chat')) + '</button></div>';
+    const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>' + newChatBtnHtml;
     const isSearching = phSearchQuery.trim().length > 0;
     const coderCount = (typeof window.CoderThreadsUI?.countFor === 'function') ? window.CoderThreadsUI.countFor(currentProject.openDirectory) : 0;
     sessionsHtml += '<div class="ph-session-tabs' + (isSearching ? ' searching' : '') + '" data-tab-group="' + tabId + '">';

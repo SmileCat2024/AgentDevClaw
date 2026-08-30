@@ -137,7 +137,11 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
     const collapsed = _collapsedProjectGroups.has(projectKey);
     const enterLabel = currentLanguage === 'zh' ? '进入' : 'Enter';
     const isWorkGroup = ownerAgentId === 'work-group';
-    const canEnter = group.items.some((entry) => entry.source !== 'remote');
+    // ph 组一律可进入（ADR-0012 决策 1）：远程目录组进入后以 remoteOnly
+    // 视图呈现其历史会话（见 phSwitchProject）；work-group 仍按本地会话判定。
+    const canEnter = isWorkGroup
+      ? group.items.some((entry) => entry.source !== 'remote')
+      : group.items.length > 0;
     // For work-group: enter navigates to the group chat by chatId.
     // For programming-helper: enter navigates to the workspace surface and
     // scrolls to / expands the corresponding project card.

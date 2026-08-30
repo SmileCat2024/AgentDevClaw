@@ -196,6 +196,24 @@ window.phSwitchProject = async (projectId) => {
     return;
   }
 
+  // 远程独有项目（ADR-0012 决策 1）：仅切换 surface 视图，不改变本地工作区
+  // 目录——本地 ph_project/switch 会把工作区切到远程路径，属错误语义。
+  const remoteOnlyProject = (typeof getProgrammingHelperProjects === 'function'
+    ? getProgrammingHelperProjects(currentAgent)
+    : []).find((p) => p.id === projectId && p.remoteOnly);
+  if (remoteOnlyProject) {
+    window.ClawFW = window.ClawFW || {};
+    window.ClawFW.phSurfaceViewProjectId = projectId;
+    phSearchQuery = '';
+    phSearchResults = null;
+    phSearchLoading = false;
+    if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+    return;
+  }
+  if (window.ClawFW) window.ClawFW.phSurfaceViewProjectId = null;
+
   try {
     const switchRes = await fetch('/protoclaw/ph_project/switch', {
       method: 'POST',

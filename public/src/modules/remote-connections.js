@@ -426,6 +426,24 @@ function getRemoteHistorySessions(openDirectory) {
   return merged;
 }
 
+// 远程历史项目桶（ADR-0012 决策 1）：全部已连接连接的历史目录聚合，供
+// workspace surface 为本地不存在的目录创建 remoteOnly 项目桶。同目录多连接
+// 时返回多组，由消费方按项目 id 去重合并。
+function getRemoteHistoryProjectBuckets() {
+  const buckets = [];
+  for (const [connId, entry] of _rcHistoryByConnection.entries()) {
+    const section = _rcVisibleSections.get(connId);
+    if (!section || section.status !== 'connected') continue;
+    for (const bucket of (entry?.byDir?.values() || [])) {
+      if (!Array.isArray(bucket) || bucket.length === 0) continue;
+      const openDirectory = String(bucket[0].openDirectory || '').trim();
+      if (!openDirectory) continue;
+      buckets.push({ openDirectory, sessions: bucket.slice() });
+    }
+  }
+  return buckets;
+}
+
 // 供 poll 循环驱动（复用 maybeRefreshRemoteCatalog 的调度位置）：按节流窗口
 // 拉取远程历史会话；本轮实际拉到数据时重渲染 workspace surface 使新历史
 // 条目出现（无数据变化的轮次跳过渲染，不打扰输入框焦点）。
@@ -1002,5 +1020,6 @@ window.RemoteConnections = {
   waitForRuntimeForSession,
   isRemoteWriteEnabled,
   getRemoteHistorySessions,
+  getRemoteHistoryProjectBuckets,
   maybeRefreshRemoteHistory,
 };
