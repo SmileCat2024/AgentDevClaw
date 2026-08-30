@@ -51,8 +51,21 @@ function newIdempotencyKey() {
 // this list only gates the frontend menu surface.
 const CTX_SESSION_OPS_AGENTS = new Set(['programming-helper', 'agent-studio', 'coder']);
 
+// 远程宿主命名空间 ns（remote:<connId>:<hostId>）的菜单放行：连接 id 不含
+// 冒号（request-target 不变量），第二个冒号之后即宿主 agent id，须在本集合
+// 内才与本地同一放行口径。远程运行时叶子（ADR-0012）经 data-ctx-ns 携带它。
+function ctxSessionOpsAllowed(ns) {
+  if (CTX_SESSION_OPS_AGENTS.has(ns)) return true;
+  if (typeof isRemoteNamespaceAgentId !== 'function' || !isRemoteNamespaceAgentId(ns)) return false;
+  const innerId = String(ns).split(':').slice(2).join(':');
+  return CTX_SESSION_OPS_AGENTS.has(innerId);
+}
+
 function getCtxMenuItems(role, ns, variant, id) {
-  if (role === 'runtime' && CTX_SESSION_OPS_AGENTS.has(ns)) {
+  if (role === 'runtime' && ctxSessionOpsAllowed(ns)) {
+    // 远程运行时叶子：allAgents 无记录，操作经宿主命名空间 id 转发；
+    // restart / stop 是本地 runtime IPC，无远程路由，不出菜单。
+    const isRemoteRuntime = !CTX_SESSION_OPS_AGENTS.has(ns);
     const isZh = currentLanguage === 'zh';
     const agent = allAgents.find((item) => item.id === ns) || null;
     const activeSessionId = agent?.workspace_sessions?.activeSessionId;
@@ -79,13 +92,17 @@ function getCtxMenuItems(role, ns, variant, id) {
       { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
       ...historyItems,
       { type: 'separator' },
-      { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive Session'), action: 'archive-and-stop' },
-      { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
-      { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
+      // 远程叶子用 archive-session（纯会话归档，经远程转发）；archive-and-stop
+      // 的关停段是本地 runtime IPC。
+      { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive Session'), action: isRemoteRuntime ? 'archive-session' : 'archive-and-stop' },
+      ...(isRemoteRuntime ? [] : [
+        { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
+        { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
+      ]),
       { label: isZh ? '删除会话' : 'Delete Session', action: 'delete-session-runtime', danger: true },
     ];
   }
-  if (role === 'session' && CTX_SESSION_OPS_AGENTS.has(ns)) {
+  if (role === 'session' && ctxSessionOpsAllowed(ns)) {
     const agent = allAgents.find((item) => item.id === ns) || null;
     const session = getWorkspaceSessionById(agent, id);
     const sType = variant || 'main';

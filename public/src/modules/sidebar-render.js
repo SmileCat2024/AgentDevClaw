@@ -84,7 +84,7 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
         data-agent-disabled="${replacementPending || operationPending || deleting || remoteDisabled ? 'true' : 'false'}"
         data-agent-prebuilt="false"
         data-agent-context-menu="${entry.contextMenuEnabled ? 'true' : 'false'}"
-        data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
+        data-ctx-role="runtime" data-ctx-ns="${escapeHtml(entry.hostNamespaceId || entry.ownerId || '')}" data-ctx-id="${escapeHtml(entry.runtimeId)}" data-ctx-variant="${escapeHtml(entry.source || '')}" data-ctx-session-id="${escapeHtml(entry.sessionId || '')}"
       >
         <div class="agent-line">
           <span class="agent-status-dot"></span>

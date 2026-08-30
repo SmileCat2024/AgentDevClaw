@@ -328,7 +328,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   if (action.type === 'compact_session_menu') {
     // Target agent may differ from the currently active one when triggered
     // from another agent's sidebar runtime ctx-menu — prefer explicit agentId.
-    const _csAgent = (action.agentId && allAgents.find((a) => a.id === action.agentId)) || activeAgent;
+    // 远程宿主命名空间 id 不在 allAgents：以最小 agent 形状承载流程，
+    // 网络层由 createCompactedResumeSession 的远程分支收敛转发目标。
+    const _csRemoteHostId = (action.agentId && typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.agentId))
+      ? action.agentId
+      : '';
+    const _csAgent = _csRemoteHostId
+      ? { id: _csRemoteHostId }
+      : ((action.agentId && allAgents.find((a) => a.id === action.agentId)) || activeAgent);
     if (!_csAgent?.id || !action.sessionId) return;
     const compactType = action.compactType || 'summary';
 
@@ -570,6 +577,32 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   }
 
   if (action.type === 'delete_session') {
+    // 远程会话（sessionId 命名空间化）：确认后经远程转发删除并刷新远程
+    // catalog；不进入本地会话记录手术（远程会话不在 allAgents）。
+    const _delIsRemote = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.sessionId);
+    if (_delIsRemote) {
+      if (!action.sessionId) return;
+      const _delHostNs = window.RemoteConnections?.getHostNamespaceIdForSession?.(action.sessionId, '');
+      if (!_delHostNs) return;
+      const _delConfirm = window.confirm(t('workspace_session_delete_confirm').replace('{{id}}', action.sessionId));
+      if (!_delConfirm) return;
+      const _delToastId = 'remote-delete-' + action.sessionId;
+      try {
+        const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+          body: JSON.stringify({ agentId: _delHostNs, sessionId: action.sessionId, responseMode: 'delta' }),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text().catch(() => 'delete session failed'));
+        }
+        ClawToast.show({ id: _delToastId, title: currentLanguage === 'zh' ? '会话已删除' : 'Session deleted', status: 'success' });
+        window.RemoteConnections?.refresh?.();
+      } catch (e) {
+        ClawToast.show({ id: _delToastId, title: (currentLanguage === 'zh' ? '删除失败：' : 'Delete failed: ') + (e?.message || e), status: 'error' });
+      }
+      return;
+    }
     if (!activeAgent?.id || !action.sessionId) return;
     const sessionTitle = action.sessionId;
     const confirmMsg = t('workspace_session_delete_confirm').replace('{{id}}', sessionTitle);

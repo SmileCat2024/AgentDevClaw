@@ -504,9 +504,12 @@ function getRemoteSidebarProjection(workspaceAgentId, sidebarEntryId = workspace
         group.entries.push({
           ...rawEntry,
           ownerId: localAgentId,
+          // 宿主级命名空间 id（remote:<connId>:<hostId>）：侧栏叶子 ctx 菜单
+          // 的寻址键（data-ctx-ns），服务端会话路由按它解析远程转发目标。
+          hostNamespaceId: String(rawEntry.agentId || '') || null,
           sidebarEntryId: entrySidebarId,
           source: 'remote',
-          contextMenuEnabled: false,
+          contextMenuEnabled: true,
           status: online ? 'connected' : 'disconnected',
           ...(projectName ? {
             projectName,
