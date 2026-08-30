@@ -613,3 +613,82 @@ test('scrollbar drag release: settle pins the release anchor so the reading fram
   assert.ok(Math.abs(offsetAfter - offsetBefore) <= 1,
     `release anchor must keep its viewport offset (before=${Math.round(offsetBefore)}, after=${Math.round(offsetAfter)})`);
 });
+
+// Fold compensation near the bottom of the document: when a fold shrinks
+// scrollHeight past the current scrollTop, the browser clamps the read-back
+// (scrollTop getter returns maxScroll). Compensation must base on the
+// PRE-fold scrollTop, otherwise the clamp poisons the baseline and the
+// visible content jumps — the "sticky wheel" jolt felt while scrolling up
+// from the bottom of a long show-process transcript.
+test('windowing: fold compensation is clamp-safe when the collapse crosses maxScroll', () => {
+  const h = createHarness();
+  h.sandbox.showChatProcess = true;
+  h.sandbox.followLatestEnabled = false;
+
+  // Tool rows above, a short real tail below: the viewport parked at the
+  // bottom sits just above the fold candidates, so the first fold's
+  // shrinkage crosses maxScroll (the clamp boundary scenario).
+  for (let i = 0; i < 200; i++) {
+    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-t${i}` }));
+  }
+  for (let i = 0; i < 10; i++) {
+    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
+  }
+  vm.runInContext('applyProcessDistance(container)', h.sandbox);
+  h.flushTimers();
+  h.container.scrollTop = h.container.scrollHeight;
+  vm.runInContext('_onScrollForWindowing()', h.sandbox);
+  h.flushTimers();
+
+  // Wheel up from the bottom: the first motion frame collapses the first
+  // fully-above row. Compensation must move scrollTop by exactly the fold
+  // delta minus the wheel step — never short (clamp-poisoned baseline) and
+  // never skipped (self-defeating guard).
+  let anchor = h.viewportTopEntry();
+  assert.ok(anchor, 'need anchor');
+  const viewOffsetOf = (entry) => {
+    h.layout();
+    const rec = h.layout().tops.get(entry.row);
+    return rec ? rec.top - h.container.scrollTop : null;
+  };
+  let pendingIn = viewOffsetOf(anchor);
+  let measured = 0, joltFrames = 0, maxJolt = 0, folds = 0;
+  for (let frame = 0; frame < 300; frame++) {
+    if (h.container.scrollTop <= 0) break;
+    h.container.scrollTop -= 53; // compositor wheel step
+    vm.runInContext('_onScrollForWindowing()', h.sandbox);
+    h.flushTimers();
+    h.pumpFrame();
+    h.flushTimers();
+    if (h.container.scrollTop <= 0) break;
+
+    const hidden = anchor.row.classList.contains('process-hidden')
+      || anchor.row.classList.contains('process-cv-hidden')
+      || (anchor.row._processChildren || []).some((c) => c.classList.contains('process-cv-hidden'));
+    h.layout();
+    const rec = h.layout().tops.get(anchor.row);
+    if (hidden || !rec || rec.top + rec.h <= h.container.scrollTop) {
+      const next = h.viewportTopEntry();
+      if (!next) break;
+      anchor = next;
+      pendingIn = viewOffsetOf(anchor);
+      continue;
+    }
+    const inNow = rec.top - h.container.scrollTop;
+    const jolt = (inNow - pendingIn) - 53;
+    if (Math.abs(jolt) > 2) {
+      joltFrames++;
+      maxJolt = Math.max(maxJolt, Math.abs(jolt));
+    }
+    pendingIn = inNow;
+  }
+  folds = vm.runInContext(
+    '(function(){var n=0;var rows=container.querySelectorAll(".message-row");' +
+    'for(var i=0;i<rows.length;i++){if(rows[i].querySelector(".message-content")' +
+    '&&rows[i].querySelector(".message-content").classList.contains("collapsed"))n++;}return n;})()',
+    h.sandbox);
+
+  assert.ok(folds > 5, `compensation scenario requires folds to happen (got ${folds})`);
+  assert.ok(h.container.scrollTop < h.totalHeight() * 0.95, 'should have scrolled upward');
+  assert.equal(joltFrames, 0, 'fold compensation must keep the content anchor pixel-stable near the clamp boundary');
+});

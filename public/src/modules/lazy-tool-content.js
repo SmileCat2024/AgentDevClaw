@@ -217,11 +217,26 @@ function _foldRowIfOutside(row, settleContext, focusScrollTop) {
     // Fully above the viewport. Folding shrinks the content above the view;
     // compensate scrollTop by the height delta so the visible content stays
     // pixel-identical (classic scroll anchoring).
+    //
+    // Compensate from a PRE-fold scrollTop snapshot, not a post-fold read:
+    // the fold itself may shrink scrollHeight past the current scrollTop
+    // (low on the page, where maxScroll sits right above the viewport), and
+    // the clamped read-back would poison the baseline — the compensation
+    // then lands short of the fold delta and the visible content jumps.
+    // The snapshot is read before syncRowCollapseState touches layout, so
+    // it is clamp-free; snapshot - delta always lands within the new max
+    // because the fold removes exactly delta of content above the viewport.
+    // Unconditional (the old guard `container.scrollTop === scrollTop` was
+    // self-defeating): when the same clamp crossed the guard read, the
+    // guard skipped the compensation entirely — same jolt, worse. Within
+    // one synchronous scan no user scroll can interleave, so per-fold live
+    // snapshots keep back-to-back folds in one batch correct.
+    var liveTop = container.scrollTop;
     var before = row.offsetHeight;
     syncRowCollapseState(row);
     var delta = before - row.offsetHeight;
-    if (delta !== 0 && !followLatestEnabled && container.scrollTop === scrollTop) {
-      container.scrollTop = scrollTop - delta;
+    if (delta !== 0 && !followLatestEnabled) {
+      container.scrollTop = Math.max(0, liveTop - delta);
       // Keep the delta tracker in sync so the synthetic scroll event fired
       // by this write is not misread as another large user jump.
       _lastScrollTop = container.scrollTop;
