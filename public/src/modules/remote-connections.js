@@ -699,6 +699,14 @@ function applyRecordShapeForEdit(connection) {
   };
 }
 
+// toggle 的 upsert 请求体：列表 record.auth 是服务端脱敏形态（只有 configured
+// 标记，无密码明文），原样回传会被 upsert 的未知字段校验拒绝；省略 auth 即
+// 保持现有凭据，与编辑表单留空密码的语义一致。
+function buildToggleUpsertPayload(record, enabled) {
+  const { auth: _redactedAuth, ...rest } = record;
+  return { ...rest, enabled };
+}
+
 function bindManagerListEvents(root) {
   const list = root.querySelector('.rcm-list');
   list.addEventListener('click', async (event) => {
@@ -737,7 +745,7 @@ function bindManagerListEvents(root) {
       const res = await fetch('/protoclaw/remote_connections', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...applyRecordShapeForEdit(record), enabled: event.target.checked }),
+        body: JSON.stringify(buildToggleUpsertPayload(record, event.target.checked)),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) throw new Error(data?.message || `HTTP ${res.status}`);
