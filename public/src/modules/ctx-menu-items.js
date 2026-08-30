@@ -63,9 +63,7 @@ function ctxSessionOpsAllowed(ns) {
 
 function getCtxMenuItems(role, ns, variant, id) {
   if (role === 'runtime' && ctxSessionOpsAllowed(ns)) {
-    // 远程运行时叶子：allAgents 无记录，操作经宿主命名空间 id 转发；
-    // restart / stop 是本地 runtime IPC，无远程路由，不出菜单。
-    const isRemoteRuntime = !CTX_SESSION_OPS_AGENTS.has(ns);
+    // 远程运行时叶子：allAgents 无记录，操作经宿主命名空间 id 转发。
     const isZh = currentLanguage === 'zh';
     const agent = allAgents.find((item) => item.id === ns) || null;
     const activeSessionId = agent?.workspace_sessions?.activeSessionId;
@@ -92,13 +90,11 @@ function getCtxMenuItems(role, ns, variant, id) {
       { label: isZh ? 'AI 生成标题' : 'AI Generate Title', action: 'generate-title' },
       ...historyItems,
       { type: 'separator' },
-      // 远程叶子用 archive-session（纯会话归档，经远程转发）；archive-and-stop
-      // 的关停段是本地 runtime IPC。
-      { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive Session'), action: isRemoteRuntime ? 'archive-session' : 'archive-and-stop' },
-      ...(isRemoteRuntime ? [] : [
-        { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
-        { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
-      ]),
+      // restart / stop / archive-and-stop 对远程叶子同样可用：服务端按
+      // ADR-0011 转发远程同名路由（agentId 用宿主命名空间 id）。
+      { label: isArchived ? (isZh ? '取消归档' : 'Unarchive') : (isZh ? '归档会话' : 'Archive'), action: 'archive-and-stop' },
+      { label: isZh ? '重启 Agent' : 'Restart Agent', action: 'restart' },
+      { label: isZh ? '关闭 Agent' : 'Stop Agent', action: 'stop', danger: true },
       { label: isZh ? '删除会话' : 'Delete Session', action: 'delete-session-runtime', danger: true },
     ];
   }
@@ -181,6 +177,29 @@ async function ctxRestartAgent(target) {
     renderAgentList();
 
     let result = null;
+    if (variant === 'remote') {
+      // 远程运行时：agentId 用宿主命名空间 id，服务端按 ADR-0011 转发到远程
+      // 同名路由。重启保留会话、更换 runtime，刷新 catalog 后按会话定位新
+      // runtime 再切换。
+      restartingRuntimeIds.add(domId);
+      suppressSidebarRerender = true;
+      renderAgentList();
+      try {
+        await invoke('restart_agent', { agentId: ns, sessionId: sessionId || null });
+        await window.RemoteConnections?.refresh?.();
+      } finally {
+        restartingRuntimeIds.delete(domId);
+        suppressSidebarRerender = false;
+      }
+      await loadAgents();
+      const nextRuntimeRef = window.RemoteConnections?.waitForRuntimeForSession && sessionId
+        ? await window.RemoteConnections.waitForRuntimeForSession(sessionId)
+        : null;
+      if (nextRuntimeRef && _navGuard === _navigationGuardEpoch) {
+        await requestSwitch(nextRuntimeRef, 'ctx-restart');
+      }
+      return;
+    }
     if (variant === 'external') {
       result = await restartSidebarExternalRuntime(agent);
     } else if (variant === 'child') {
@@ -227,10 +246,9 @@ async function ctxStopAgent(target) {
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (variant === 'external') {
       await closeSidebarExternalRuntime(agent);
-    } else if (variant === 'child') {
-      const hostId = agent?.parent_id || serverAgentId;
-      const sId = agent?.active_workspace_session_id || null;
-      await invoke('stop_agent', { agentId: hostId, sessionId: sId });
+    } else if (variant === 'remote') {
+      // 远程运行时：agentId 用宿主命名空间 id，服务端按 ADR-0011 转发。
+      await invoke('stop_agent', { agentId: ns, sessionId: sessionId || null });
     } else {
       // managed-runtime / prebuilt: pass sessionId to stop only the targeted runtime
       const sId = sessionId || agent?.active_workspace_session_id || null;
@@ -238,9 +256,11 @@ async function ctxStopAgent(target) {
     }
     await refreshSidebarRuntimeAfterMutation(500);
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-      const fallbackTarget = (variant === 'external' || variant === 'child')
-        ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
-        : resolveWorkspaceFallbackAgentId(agent);
+      const fallbackTarget = variant === 'remote'
+        ? (window.RemoteConnections?.getEntryHostAgentId?.(id) || null)
+        : ((variant === 'external' || variant === 'child')
+          ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
+          : resolveWorkspaceFallbackAgentId(agent));
       if (fallbackTarget) {
         selectWorkspaceSurface(fallbackTarget);
       }
@@ -400,6 +420,9 @@ async function ctxArchiveAndStopRuntime(target) {
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (variant === 'external') {
       await closeSidebarExternalRuntime(externalAgent);
+    } else if (variant === 'remote') {
+      // 远程运行时：关停经宿主命名空间 id 转发（与归档转发同套路）。
+      await invoke('stop_agent', { agentId, sessionId: sessionId || null });
     } else if (variant === 'child') {
       const hostId = externalAgent?.parent_id || serverAgentId;
       const sId = sessionId || externalAgent?.active_workspace_session_id || null;

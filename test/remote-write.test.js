@@ -1358,3 +1358,146 @@ describe('session routes remote namespace branches (R2-01)', () => {
     }
   });
 });
+
+// ── 10. stop_agent / restart_agent remote forward (runtime lifecycle) ────
+
+describe('stop_agent / restart_agent remote namespace branch', () => {
+  const silentRes = () => ({
+    statusCode: null,
+    jsonPayload: null,
+    status(code) { this.statusCode = code; return this; },
+    json(payload) { this.jsonPayload = payload; },
+  });
+
+  function capturePostHandler(routePath) {
+    let captured = null;
+    const mod = createAgentLifecycleModule({
+      sessionApi: {},
+      getAgents: async () => [],
+      getAgentsLight: async () => [],
+      enrichAgent: async (agent) => agent,
+      requireAgentLight: async (id) => ({ id, relativeDir: 'test', name: id }),
+      resolveRuntimeDisplayName: async (agent) => agent?.name || 'test-agent',
+      readViewerJson: async () => ({ agents: [], currentAgentId: null }),
+      getPendingInputCount: async () => 0,
+      resolveAgentModelPresets: async () => null,
+    });
+    mod.setupRoutes(
+      { get: () => {}, post: (p, ...rest) => { if (p === routePath) captured = rest[rest.length - 1]; }, put: () => {}, delete: () => {} },
+      { json: () => (req, res, next) => next() },
+    );
+    return captured;
+  }
+
+  it('stop_agent forwards namespaced agentId and sessionId as bare ids', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const handler = capturePostHandler('/protoclaw/stop_agent');
+    const fetchMock = mockFetch(() => ({ status: 200, body: JSON.stringify({ agentId: 'agent-9', status: 'stopped' }) }));
+    try {
+      const res = silentRes();
+      await handler(
+        { body: { agentId: NAMESPACE, sessionId: 'remote:server-a:sess-9' } },
+        res,
+        (error) => { throw error; },
+      );
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.jsonPayload.status, 'stopped');
+      assert.equal(fetchMock.calls.length, 1);
+      assert.equal(fetchMock.calls[0].url, `${REMOTE_ORIGIN}/protoclaw/stop_agent`);
+      assert.equal(fetchMock.calls[0].init.method, 'POST');
+      const sentBody = JSON.parse(fetchMock.calls[0].init.body);
+      assert.equal(sentBody.agentId, 'agent-9');
+      assert.equal(sentBody.sessionId, 'sess-9');
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('stop_agent keeps a null sessionId null across the forward', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const handler = capturePostHandler('/protoclaw/stop_agent');
+    const fetchMock = mockFetch(() => ({ status: 200, body: JSON.stringify({ agentId: 'agent-9', status: 'stopped' }) }));
+    try {
+      const res = silentRes();
+      await handler({ body: { agentId: NAMESPACE } }, res, (error) => { throw error; });
+      assert.equal(res.statusCode, 200);
+      const sentBody = JSON.parse(fetchMock.calls[0].init.body);
+      assert.equal(sentBody.agentId, 'agent-9');
+      assert.equal(sentBody.sessionId, null);
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('restart_agent forwards namespaced identities and the remote route owns host-side checks', async () => {
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const handler = capturePostHandler('/protoclaw/restart_agent');
+    const fetchMock = mockFetch(() => ({ status: 200, body: JSON.stringify({ status: 'running', agent: { runtime_session_id: 'rt-new' } }) }));
+    try {
+      const res = silentRes();
+      await handler(
+        { body: { agentId: NAMESPACE, sessionId: 'remote:server-a:sess-9' } },
+        res,
+        (error) => { throw error; },
+      );
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.jsonPayload.agent.runtime_session_id, 'rt-new');
+      const sentBody = JSON.parse(fetchMock.calls[0].init.body);
+      assert.equal(sentBody.agentId, 'agent-9');
+      assert.equal(sentBody.sessionId, 'sess-9');
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('local stop_agent never touches the wire and answers via the local status path', async () => {
+    let handler = null;
+    const mod = createAgentLifecycleModule({
+      sessionApi: {},
+      getAgents: async () => [],
+      getAgentsLight: async () => [],
+      enrichAgent: async (agent) => agent,
+      requireAgentLight: async (id) => ({ id, relativeDir: 'test', name: id }),
+      resolveRuntimeDisplayName: async (agent) => agent?.name || 'test-agent',
+      readViewerJson: async () => ({ agents: [], currentAgentId: null }),
+      getPendingInputCount: async () => 0,
+      resolveAgentModelPresets: async () => null,
+    });
+    mod.setupRoutes(
+      { get: () => {}, post: (p, ...rest) => { if (p === '/protoclaw/stop_agent') handler = rest[rest.length - 1]; }, put: () => {}, delete: () => {} },
+      { json: () => (req, res, next) => next() },
+    );
+    setProxyConnectionLookup(FIND_CONNECTION);
+    const fetchMock = mockFetch();
+    try {
+      const res = silentRes();
+      await handler({ body: { agentId: 'local-agent' } }, res, (error) => { throw error; });
+      assert.equal(res.statusCode, null, 'local success responds via plain res.json');
+      assert.equal(res.jsonPayload.id, 'local-agent', 'buildStatus payload shape');
+      assert.equal(res.jsonPayload.status, 'stopped');
+      assert.equal(fetchMock.calls.length, 0, 'local stop must never produce an HTTP forward');
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+
+  it('unknown remote connection surfaces the contract failure shape', async () => {
+    setProxyConnectionLookup(() => null);
+    const handler = capturePostHandler('/protoclaw/stop_agent');
+    const fetchMock = mockFetch();
+    try {
+      const res = silentRes();
+      await handler({ body: { agentId: NAMESPACE } }, res, () => {});
+      assert.equal(res.statusCode, 404, 'unknown connection maps to 404 per the request-target contract');
+      assert.ok(res.jsonPayload && res.jsonPayload.error, 'failure payload carries an error field');
+      assert.equal(fetchMock.calls.length, 0);
+    } finally {
+      fetchMock.restore();
+      setProxyConnectionLookup(null);
+    }
+  });
+});

@@ -441,6 +441,23 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/stop_agent', express.json(), async (req, res, next) => {
       try {
+        // ADR-0011：远程命名空间身份 → 转发远程同名 stop 路由（agentId / sessionId
+        // 均剥命名空间）。本地身份走下方既有路径，行为字节级不动。
+        try {
+          const hostTarget = resolveForwardHostTarget(req.body.agentId);
+          if (hostTarget.scope === 'remote') {
+            const rawSessionId = req.body.sessionId ? String(req.body.sessionId) : null;
+            return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/stop_agent', {
+              method: 'POST',
+              body: {
+                agentId: bareId(String(req.body.agentId)),
+                sessionId: rawSessionId ? bareId(rawSessionId) : null,
+              },
+            });
+          }
+        } catch (error) {
+          return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+        }
         const status = await stopManagedAgent(req.body.agentId, req.body.sessionId);
         res.json(status);
       } catch (error) {
@@ -450,6 +467,23 @@ export function createAgentLifecycleModule(ctx) {
 
     app.post('/protoclaw/restart_agent', express.json(), async (req, res, next) => {
       try {
+        // ADR-0011：远程命名空间身份 → 转发远程同名 restart 路由。qqbot 渠道
+        // 校验等宿主端逻辑由远程端自己的路由执行。本地身份行为字节级不动。
+        try {
+          const hostTarget = resolveForwardHostTarget(req.body.agentId);
+          if (hostTarget.scope === 'remote') {
+            const rawSessionId = req.body.sessionId ? String(req.body.sessionId) : null;
+            return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/restart_agent', {
+              method: 'POST',
+              body: {
+                agentId: bareId(String(req.body.agentId)),
+                sessionId: rawSessionId ? bareId(rawSessionId) : null,
+              },
+            });
+          }
+        } catch (error) {
+          return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+        }
         const agent = await requireAgentLight(req.body.agentId);
         // Block qqbot from restarting when no IM channel is selected
         if (sanitizeSessionFragment(agent.id) === 'qqbot') {
