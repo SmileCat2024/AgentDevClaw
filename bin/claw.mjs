@@ -275,7 +275,7 @@ function printThreadsHelp() {
   console.log('  claw threads show <thread-id> [--format text|json]');
   console.log('  claw threads events <thread-id> [--after N] [--format text|json|jsonl]');
   console.log('  claw threads send <thread-id> --text TEXT [--kind K] [--source S] [--idempotency-key K]');
-  console.log('  claw threads watch <thread-id> [--interval S] [--timeout S]   阻塞监控至落定/失败/超时（退出码 0/3/2/1）');
+  console.log('  claw threads watch <thread-id>... [--interval S] [--timeout S] [--with-result]   阻塞监控至落定/失败/超时（退出码 0/3/2/1），--with-result 附带末轮回复；多个 thread-id 时任一落定即返回（any-settle）');
   console.log('  claw threads deliver <thread-id> [--format text|json]');
   console.log('  claw threads advance <thread-id> --to-session ID --from-session ID [--expected-revision N] [--end-kind K]');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S] [--error E]');
@@ -424,12 +424,33 @@ async function handleThreads(args = []) {
     const interval = Math.max(0.2, Number(optionValue(args, '--interval')) || 10);
     const timeout = Math.min(590, Math.max(0.5, Number(optionValue(args, '--timeout')) || 540));
     const jsonl = format === 'jsonl' || format === 'json';
-    const result = await watchThread(threadId, { interval, timeout, jsonl });
-    const summary = `watch done: ${result.reason} | life=${result.lifeState} failed=${result.failed} | newEvents=${result.newEvents} | elapsed=${result.elapsed}s`;
-    if (jsonl) console.log(JSON.stringify({ watch: 'done', ...result }));
+    // 多线程 any-settle：watch 可接受多个 thread-id，任一线程落定/失败/终态
+    // 即整条调用返回（并发跑多个单线程 watch，第一个 settle 的胜出）。
+    // 单线程路径行为不变（结果不带 threadId 前缀）。
+    const watchTargets = [threadId, ...args.filter((a) => a.startsWith('wt-') && a !== threadId)];
+    if (watchTargets.length === 1) {
+      const result = await watchThread(threadId, { interval, timeout, jsonl });
+      const summary = `watch done: ${result.reason} | life=${result.lifeState} failed=${result.failed} | newEvents=${result.newEvents} | elapsed=${result.elapsed}s`;
+      if (jsonl) console.log(JSON.stringify({ watch: 'done', ...result }));
+      else console.log(summary);
+      if (result.detail && !jsonl) console.log(`  detail: ${result.detail}`);
+      process.exitCode = result.exitCode;
+      return;
+    }
+    // any-settle：并发单线程监视，quiet 模式下事件不透传（避免多线程交错
+    // 难以归属），第一个 settle 的胜出，其余监视被放弃（进程即将退出）。
+    const settled = await new Promise((resolve) => {
+      let pending = watchTargets.length;
+      for (const id of watchTargets) {
+        watchThread(id, { interval, timeout, jsonl, quiet: true }).then((result) => {
+          if (pending > 0) { pending = 0; resolve({ threadId: id, ...result }); }
+        });
+      }
+    });
+    const summary = `watch done: ${settled.reason} | thread=${settled.threadId} | life=${settled.lifeState} failed=${settled.failed} | newEvents=${settled.newEvents} | elapsed=${settled.elapsed}s`;
+    if (jsonl) console.log(JSON.stringify({ watch: 'done', ...settled }));
     else console.log(summary);
-    if (result.detail && !jsonl) console.log(`  detail: ${result.detail}`);
-    process.exitCode = result.exitCode;
+    process.exitCode = settled.exitCode;
     return;
   }
 
@@ -529,7 +550,10 @@ async function waitForTurnStarted(threadId, maxSeconds) {
 // 失败/终态/超时时返回——把"90 秒固定频率手工巡检"折叠成一次阻塞调用。
 // 退出码：0=落定或线程终态；2=超时（继续 watch 同一命令即可续挂）；
 // 3=failed=true（需按故障表介入）；1=线程/server 连续不可达。
-async function watchThread(threadId, { interval, timeout, jsonl }) {
+//
+// quiet（多线程 any-settle 复用）：不透传事件流——多个线程的事件交错输出
+// 无法归属，any-settle 模式下只等结果，胜出线程的信息由摘要行标注。
+async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
   const startedAt = Date.now();
   const deadline = startedAt + timeout * 1000;
   let cursor = 0;
@@ -567,6 +591,7 @@ async function watchThread(threadId, { interval, timeout, jsonl }) {
     } catch { /* 瞬时失败下轮再取 */ }
     for (const event of events) {
       newEvents += 1;
+      if (quiet) continue; // any-settle 模式：事件流不透传，避免多线程交错
       if (jsonl) console.log(JSON.stringify(event));
       else {
         const itemType = event.item?.type ? ` item=${event.item.type}` : '';
