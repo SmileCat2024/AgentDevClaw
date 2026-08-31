@@ -1,7 +1,7 @@
 /**
  * Generative UI Catalog 契约测试
  *
- * 验证：组件完备性（33个）、分类正确、JSON Schema 描述生成稳定、
+ * 验证：组件完备性（35个）、分类正确、JSON Schema 描述生成稳定、
  * helper 函数行为正确。
  */
 
@@ -19,9 +19,9 @@ import {
 describe('Catalog', () => {
 
   describe('组件完备性', () => {
-    it('包含全部 33 个 V1 组件', () => {
+    it('包含全部 35 个 V1 组件', () => {
       const types = getComponentTypes();
-      assert.equal(types.length, 33);
+      assert.equal(types.length, 35);
     });
 
     it('包含所有布局组件', () => {
@@ -31,7 +31,7 @@ describe('Catalog', () => {
     });
 
     it('包含所有展示组件', () => {
-      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip']) {
+      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip', 'Chart', 'Sparkline']) {
         assert.ok(isKnownComponent(name), `Missing display component: ${name}`);
       }
     });
@@ -47,7 +47,9 @@ describe('Catalog', () => {
     });
 
     it('不包含 V1 排除的组件', () => {
-      for (const name of ['Markdown', 'HTML', 'FileInput', 'PasswordInput', 'Chart', 'iframe']) {
+      // Markdown / HTML / iframe 有脚本注入面，FileInput / PasswordInput 涉及敏感输入，
+      // 均不在 Catalog 中。Chart 曾在此清单，后以纯 SVG DOM 渲染实现并通过用户需求转正。
+      for (const name of ['Markdown', 'HTML', 'FileInput', 'PasswordInput', 'iframe']) {
         assert.ok(!isKnownComponent(name), `Should not have component: ${name}`);
       }
     });
@@ -61,7 +63,7 @@ describe('Catalog', () => {
     });
 
     it('展示组件都是 display 类', () => {
-      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip']) {
+      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip', 'Chart', 'Sparkline']) {
         assert.equal(getComponentSchema(name)!.category, 'display');
       }
     });
@@ -89,7 +91,7 @@ describe('Catalog', () => {
     });
 
     it('展示组件不接受 children', () => {
-      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip']) {
+      for (const name of ['Text', 'Badge', 'Table', 'Alert', 'Progress', 'CodeBlock', 'Steps', 'Spinner', 'Image', 'Avatar', 'Link', 'Stat', 'Skeleton', 'Tooltip', 'Chart', 'Sparkline']) {
         assert.ok(!acceptsChildren(name), `${name} should not accept children`);
       }
     });

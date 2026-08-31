@@ -1054,6 +1054,337 @@ function _renderTooltip(def) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Chart components (inline SVG, no innerHTML)
+// ═══════════════════════════════════════════════════════════════
+
+const _SVG_NS = 'http://www.w3.org/2000/svg';
+
+// 与 generative-ui.css 的 tone 色板同源（accent 与 Progress/Alert 色值一致）。
+const _CHART_TONES = [
+  { name: 'default', color: '#6391ff' },
+  { name: 'success', color: '#22a06b' },
+  { name: 'warning', color: '#d98100' },
+  { name: 'danger',  color: '#d9363e' },
+  { name: 'info',    color: '#356ad2' },
+];
+
+function _svgEl(tag, attrs) {
+  const el = document.createElementNS(_SVG_NS, tag);
+  if (attrs) {
+    for (const key of Object.keys(attrs)) el.setAttribute(key, String(attrs[key]));
+  }
+  return el;
+}
+
+function _svgText(parent, x, y, className, content, anchor) {
+  const t = _svgEl('text', { x: x, y: y, 'text-anchor': anchor || 'start', 'class': className });
+  t.textContent = content;
+  parent.appendChild(t);
+}
+
+function _chartToneColor(tone, index) {
+  const named = _CHART_TONES.find((t) => t.name === tone);
+  return named ? named.color : _CHART_TONES[index % _CHART_TONES.length].color;
+}
+
+/** 1/2/5 × 10^n 的"好看"刻度步长。 */
+function _niceStep(range) {
+  const raw = range / 4;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(Math.abs(raw) || 1)));
+  const normalized = raw / magnitude;
+  const factor = normalized <= 1.5 ? 1 : normalized <= 3 ? 2 : normalized <= 7 ? 5 : 10;
+  return factor * magnitude;
+}
+
+function _chartTicks(min, max) {
+  if (!(max > min)) return [min];
+  const step = _niceStep(max - min);
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-9; v += step) {
+    ticks.push(Math.round(v * 1e9) / 1e9);
+  }
+  return ticks;
+}
+
+function _formatChartNumber(v) {
+  if (Math.abs(v) >= 1e7 || (Math.abs(v) > 0 && Math.abs(v) < 1e-3)) return v.toExponential(1);
+  if (Number.isInteger(v)) return Math.abs(v) >= 10000 ? v.toLocaleString('en-US') : String(v);
+  return String(Math.round(v * 100) / 100);
+}
+
+// 渐变 id 需在整份文档内唯一（同页多面板、同面板重绘都会叠加），用模块级计数器。
+let _guiChartGradSeq = 0;
+
+function _renderChart(def) {
+  const p = def.props || {};
+  const chartType = p.chartType === 'bar' ? 'bar' : 'line';
+  const seriesIn = Array.isArray(p.series) ? p.series : [];
+  const labels = Array.isArray(p.labels) ? p.labels.map(String) : [];
+  const unit = p.unit ? String(p.unit) : '';
+
+  const el = document.createElement('div');
+  el.className = 'gen-ui-chart';
+
+  if (seriesIn.length === 0 || labels.length === 0) {
+    el.classList.add('gen-ui-error');
+    el.textContent = 'Chart requires series and labels';
+    return el;
+  }
+
+  // 未声明 tone 的系列按目录色板顺序取色，保证多系列默认可区分。
+  const series = seriesIn.map((s, i) => ({
+    label: s && typeof s.label === 'string' ? s.label : 'Series ' + (i + 1),
+    values: s && Array.isArray(s.values) ? s.values : [],
+    color: _chartToneColor(s && typeof s.tone === 'string' ? s.tone : undefined, i),
+  }));
+
+  const n = labels.length;
+  const showLegend = p.showLegend !== undefined ? p.showLegend === true : series.length > 1;
+  const height = Math.max(120, Math.min(600, Number(p.height) || 220));
+
+  // viewBox 宽度 = 容器真实像素宽（首次渲染未知，先用 400 兜底，挂载后重绘），
+  // SVG 文字因此恒为真实像素字号，不随容器宽度等比放大。
+  const state = { width: 0 };
+
+  const draw = () => {
+    const VB_W = Math.min(1000, Math.max(280, Math.round(state.width) || 400));
+    const padT = 10, padB = 20, padR = 8;
+
+    // y 域默认包含 0，避免截断坐标轴夸大波动；数据全负时上界取 0。
+    let dataMin = Infinity, dataMax = -Infinity;
+    for (const s of series) {
+      for (const v of s.values) {
+        if (typeof v === 'number' && isFinite(v)) {
+          if (v < dataMin) dataMin = v;
+          if (v > dataMax) dataMax = v;
+        }
+      }
+    }
+    if (!isFinite(dataMin)) { dataMin = 0; dataMax = 1; }
+    let yMin = typeof p.yMin === 'number' ? p.yMin : Math.min(0, dataMin);
+    let yMax = typeof p.yMax === 'number' ? p.yMax : Math.max(0, dataMax);
+    if (!(yMax > yMin)) yMax = yMin + 1;
+    const ticks = _chartTicks(yMin, yMax);
+
+    // padL 容纳最长的 y 轴刻度文本，长数字不用挤占绘图区。
+    const tickTexts = ticks.map(_formatChartNumber);
+    const longestTick = tickTexts.reduce((a, b) => (b.length > a.length ? b : a), '');
+    const padL = Math.min(76, Math.max(38, Math.round(longestTick.length * 6.4) + 14));
+    const plotW = VB_W - padL - padR;
+    const plotH = height - padT - padB;
+    const xToPx = (i) => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+    const yToPx = (v) => padT + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+    el.textContent = '';
+
+    // 头部行：图例 + 单位（HTML 层，字号不参与 SVG 缩放）。
+    if (showLegend || unit) {
+      const head = document.createElement('div');
+      head.className = 'gen-ui-chart-head';
+      if (showLegend) {
+        const legend = document.createElement('div');
+        legend.className = 'gen-ui-chart-legend';
+        for (const s of series) {
+          const item = document.createElement('span');
+          item.className = 'gen-ui-chart-legend-item';
+          const dot = document.createElement('span');
+          dot.className = 'gen-ui-chart-legend-dot';
+          dot.style.background = s.color;
+          item.appendChild(dot);
+          item.appendChild(document.createTextNode(s.label));
+          legend.appendChild(item);
+        }
+        head.appendChild(legend);
+      }
+      if (unit) {
+        const unitLabel = document.createElement('span');
+        unitLabel.className = 'gen-ui-chart-unit';
+        unitLabel.textContent = unit;
+        head.appendChild(unitLabel);
+      }
+      el.appendChild(head);
+    }
+
+    const svg = _svgEl('svg', {
+      viewBox: `0 0 ${VB_W} ${height}`,
+      'class': 'gen-ui-chart-svg',
+      role: 'img',
+      'aria-label': series.map((s) => s.label).join(', ') + ' ' + chartType + ' chart',
+    });
+
+    if (p.showGrid !== false) {
+      const step = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
+      for (let i = 0; i < ticks.length; i++) {
+        const tick = ticks[i];
+        if (tick < yMin || tick > yMax) continue;
+        const y = yToPx(tick);
+        const isZero = Math.abs(tick) < step * 1e-6;
+        svg.appendChild(_svgEl('line', {
+          x1: padL, y1: y, x2: VB_W - padR, y2: y,
+          'class': isZero || tick === yMin ? 'gen-ui-chart-baseline' : 'gen-ui-chart-grid-line',
+        }));
+        _svgText(svg, padL - 6, y + 3.5, 'gen-ui-chart-tick', tickTexts[i], 'end');
+      }
+    }
+
+    // x 轴标签抽稀到至多 8 个，避免窄面板重叠。
+    const labelEvery = Math.max(1, Math.ceil(n / 8));
+    for (let i = 0; i < n; i += labelEvery) {
+      let text = labels[i];
+      if (text.length > 8) text = text.slice(0, 7) + '…';
+      const anchor = n === 1 ? 'middle' : (i === 0 ? 'start' : (i + labelEvery >= n ? 'end' : 'middle'));
+      _svgText(svg, xToPx(i), height - 6, 'gen-ui-chart-xlabel', text, anchor);
+    }
+
+    if (chartType === 'bar') {
+      const groupW = plotW / n;
+      const innerPad = Math.min(6, groupW * 0.12);
+      // 柱宽封顶避免少分组时柱体笨重，封顶后的组内柱排居中。
+      const avail = groupW - innerPad * 2;
+      const barW = Math.min(avail / series.length, 28);
+      const rowOffset = (avail - barW * series.length) / 2;
+      const radius = Math.min(3, barW / 3);
+      const baselineY = yToPx(Math.max(0, yMin));
+      // 同色系垂直微渐变：柱顶全色、柱底渐淡，比纯色填充更有层次且跨主题自然。
+      const gradId = 'gen-ui-chart-grad-' + (++_guiChartGradSeq);
+      const defs = _svgEl('defs');
+      series.forEach((s, gi) => {
+        const grad = _svgEl('linearGradient', {
+          id: gradId + '-' + gi, x1: 0, y1: 0, x2: 0, y2: 1,
+        });
+        grad.appendChild(_svgEl('stop', { offset: '0%', 'stop-color': s.color, 'stop-opacity': 1 }));
+        grad.appendChild(_svgEl('stop', { offset: '100%', 'stop-color': s.color, 'stop-opacity': 0.6 }));
+        defs.appendChild(grad);
+      });
+      svg.appendChild(defs);
+      for (let si = 0; si < series.length; si++) {
+        const s = series[si];
+        for (let i = 0; i < n; i++) {
+          const v = s.values[i];
+          if (typeof v !== 'number' || !isFinite(v)) continue;
+          const valueY = yToPx(v);
+          const x = padL + groupW * i + innerPad + rowOffset + barW * si;
+          const bar = _svgEl('rect', {
+            x: x, y: Math.min(baselineY, valueY),
+            width: barW, height: Math.max(1, Math.abs(valueY - baselineY)),
+            rx: radius, fill: 'url(#' + gradId + '-' + si + ')', 'class': 'gen-ui-chart-bar',
+          });
+          const title = _svgEl('title');
+          title.textContent = `${labels[i]} · ${s.label}: ${_formatChartNumber(v)}${unit ? ' ' + unit : ''}`;
+          bar.appendChild(title);
+          svg.appendChild(bar);
+          if (p.showValues === true && series.length === 1 && n <= 12) {
+            _svgText(svg, x + barW / 2, Math.min(baselineY, valueY) - 3, 'gen-ui-chart-value-label', _formatChartNumber(v), 'middle');
+          }
+        }
+      }
+    } else {
+      for (const s of series) {
+        const points = [];
+        for (let i = 0; i < n; i++) {
+          const v = s.values[i];
+          if (typeof v !== 'number' || !isFinite(v)) continue;
+          points.push([xToPx(i), yToPx(v), i]);
+        }
+        if (points.length > 1) {
+          svg.appendChild(_svgEl('polyline', {
+            points: points.map((pt) => pt[0].toFixed(1) + ',' + pt[1].toFixed(1)).join(' '),
+            fill: 'none', stroke: s.color,
+            'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+          }));
+        }
+        for (const point of points) {
+          const dot = _svgEl('circle', { cx: point[0], cy: point[1], r: 2.4, fill: s.color, 'class': 'gen-ui-chart-point' });
+          const title = _svgEl('title');
+          title.textContent = `${labels[point[2]]} · ${s.label}: ${_formatChartNumber(s.values[point[2]])}${unit ? ' ' + unit : ''}`;
+          dot.appendChild(title);
+          svg.appendChild(dot);
+        }
+      }
+    }
+
+    el.appendChild(svg);
+  };
+
+  draw();
+
+  // 挂载后按容器真实宽度重绘；ResizeObserver 持续跟随面板宽度变化。
+  // 沙箱/老环境缺 API 时保留首版 400 兜底绘制。
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries && entries[0] && entries[0].contentRect;
+      const w = rect && rect.width > 0 ? rect.width : 0;
+      if (w > 0 && Math.abs(w - state.width) > 1) {
+        state.width = w;
+        draw();
+      }
+    });
+    observer.observe(el);
+  } else if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      const w = el.clientWidth;
+      if (w > 0) {
+        state.width = w;
+        draw();
+      }
+    });
+  }
+  return el;
+}
+
+function _renderSparkline(def) {
+  const p = def.props || {};
+  const values = Array.isArray(p.values) ? p.values.filter((v) => typeof v === 'number' && isFinite(v)) : [];
+  const width = Math.max(40, Math.min(2000, Number(p.width) || 120));
+  const height = Math.max(16, Math.min(96, Number(p.height) || 32));
+  const color = _chartToneColor(typeof p.tone === 'string' ? p.tone : undefined, 0);
+
+  const el = document.createElement('span');
+  el.className = 'gen-ui-sparkline';
+
+  const svg = _svgEl('svg', {
+    viewBox: `0 0 ${width} ${height}`, width: width, height: height,
+    'class': 'gen-ui-sparkline-svg', role: 'img',
+    'aria-label': `Sparkline, ${values.length} points, last ${values.length ? _formatChartNumber(values[values.length - 1]) : 'n/a'}`,
+  });
+  el.appendChild(svg);
+
+  if (values.length < 2) {
+    // 少于两个点无法构成趋势，保留占位尺寸不渲染线条。
+    return el;
+  }
+
+  const min = Math.min.apply(null, values);
+  const max = Math.max.apply(null, values);
+  const span = max > min ? max - min : 1;
+  const pad = 2;
+  const points = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (width - pad * 2);
+    const y = pad + (1 - (v - min) / span) * (height - pad * 2);
+    return [x, y];
+  });
+  const line = points.map((pt) => pt[0].toFixed(1) + ',' + pt[1].toFixed(1)).join(' ');
+
+  if (p.showArea !== false) {
+    svg.appendChild(_svgEl('path', {
+      d: `M${points[0][0].toFixed(1)},${height} L${line.replace(/ /g, ' L')} L${points[points.length - 1][0].toFixed(1)},${height} Z`,
+      fill: color, 'fill-opacity': 0.13, stroke: 'none',
+    }));
+  }
+  svg.appendChild(_svgEl('polyline', {
+    points: line, fill: 'none', stroke: color,
+    'stroke-width': 1.5, 'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+  }));
+  const last = points[points.length - 1];
+  const dot = _svgEl('circle', { cx: last[0], cy: last[1], r: 2, fill: color });
+  const title = _svgEl('title');
+  title.textContent = `min ${_formatChartNumber(min)} / max ${_formatChartNumber(max)} / last ${_formatChartNumber(values[values.length - 1])}`;
+  dot.appendChild(title);
+  svg.appendChild(dot);
+  return el;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Action component
 // ═══════════════════════════════════════════════════════════════
 
@@ -1186,6 +1517,8 @@ const _COMPONENT_HANDLERS = {
   Skeleton:    _renderSkeleton,
   Carousel:    _renderCarousel,
   Tooltip:     _renderTooltip,
+  Chart:       _renderChart,
+  Sparkline:   _renderSparkline,
 };
 
 // ═══════════════════════════════════════════════════════════════

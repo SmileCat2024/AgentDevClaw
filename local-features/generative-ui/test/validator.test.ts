@@ -441,6 +441,138 @@ describe('validateGenerativeUISpec', () => {
     });
   });
 
+  describe('Chart / Sparkline', () => {
+    function specWith(elementId: string, type: string, props: Record<string, unknown>): GenerativeUISpecV1 {
+      return {
+        schemaVersion: 1,
+        catalogVersion: 'v1',
+        title: 'Charts',
+        root: 'root',
+        elements: {
+          root: { type: 'Stack', props: {}, children: [elementId] },
+          [elementId]: { type, props, children: [] },
+        },
+      };
+    }
+
+    const validChartProps = {
+      chartType: 'line',
+      labels: ['W31', 'W32', 'W33'],
+      series: [
+        { label: 'Claw', values: [48, 20, 137] },
+        { label: 'Adv', values: [11, 9, 68], tone: 'success' },
+      ],
+      unit: 'commits',
+      height: 200,
+    };
+
+    it('合法折线图通过', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', validChartProps));
+      expectValid(result);
+    });
+
+    it('合法柱状图（含 yMin/yMax）通过', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', {
+        chartType: 'bar',
+        labels: ['a', 'b'],
+        series: [{ label: 'S', values: [1, 2] }],
+        yMin: 0,
+        yMax: 10,
+        showValues: true,
+      }));
+      expectValid(result);
+    });
+
+    it('values 长度与 labels 不一致被拒', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', {
+        chartType: 'line',
+        labels: ['a', 'b', 'c'],
+        series: [{ label: 'S', values: [1, 2] }],
+      }));
+      expectInvalid(result);
+      expectErrorContains(result, 'must match labels length');
+    });
+
+    it('series 为空数组被拒', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', {
+        chartType: 'bar', labels: ['a'], series: [],
+      }));
+      expectInvalid(result);
+      expectErrorContains(result, 'non-empty array');
+    });
+
+    it('series 超过 5 组被拒', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', {
+        chartType: 'line',
+        labels: ['a'],
+        series: Array.from({ length: 6 }, (_, i) => ({ label: `S${i}`, values: [1] })),
+      }));
+      expectInvalid(result);
+      expectErrorContains(result, 'too many series');
+    });
+
+    it('values 含非有限数字被拒', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', {
+        chartType: 'line',
+        labels: ['a', 'b'],
+        series: [{ label: 'S', values: [1, 'oops'] }],
+      }));
+      expectInvalid(result);
+      expectErrorContains(result, 'must be a finite number');
+    });
+
+    it('series tone 非法被拒', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', {
+        chartType: 'line',
+        labels: ['a'],
+        series: [{ label: 'S', values: [1], tone: 'muted' }],
+      }));
+      expectInvalid(result);
+      expectErrorContains(result, 'series[0].tone');
+    });
+
+    it('yMin >= yMax 被拒', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', {
+        chartType: 'line', labels: ['a'], series: [{ label: 'S', values: [1] }], yMin: 5, yMax: 5,
+      }));
+      expectInvalid(result);
+      expectErrorContains(result, 'yMin to be less than yMax');
+    });
+
+    it('Chart 未知 prop 被拒', () => {
+      const result = validateGenerativeUISpec(specWith('c', 'Chart', {
+        ...validChartProps,
+        legend: true,
+      }));
+      expectInvalid(result);
+      expectErrorContains(result, 'unknown prop "legend"');
+    });
+
+    it('合法 Sparkline 通过', () => {
+      const result = validateGenerativeUISpec(specWith('s', 'Sparkline', {
+        values: [1, 3, 2, 5, 4],
+        tone: 'info',
+        width: 140,
+        height: 32,
+      }));
+      expectValid(result);
+    });
+
+    it('Sparkline values 少于 2 个被拒', () => {
+      const result = validateGenerativeUISpec(specWith('s', 'Sparkline', { values: [1] }));
+      expectInvalid(result);
+      expectErrorContains(result, 'at least 2');
+    });
+
+    it('Sparkline values 超过 100 个被拒', () => {
+      const result = validateGenerativeUISpec(specWith('s', 'Sparkline', {
+        values: Array.from({ length: 101 }, (_, i) => i),
+      }));
+      expectInvalid(result);
+      expectErrorContains(result, 'too many numbers');
+    });
+  });
+
   describe('边界 — 完全空/非法输入', () => {
     it('null 被拒', () => {
       expectInvalid(validateGenerativeUISpec(null));

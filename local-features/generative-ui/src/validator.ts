@@ -435,6 +435,82 @@ function validateComponentConstraints(
     }
   }
 
+  if (type === 'Chart') {
+    errors.push(...validateChartSeries(elementId, props));
+    if (typeof props.yMin === 'number' && typeof props.yMax === 'number' && props.yMin >= props.yMax) {
+      errors.push(`Element "${elementId}" (Chart) requires yMin to be less than yMax.`);
+    }
+  }
+
+  if (type === 'Sparkline') {
+    errors.push(...validateNumberArray(elementId, 'Sparkline', 'values', props.values, 2, 100));
+  }
+
+  return errors;
+}
+
+/** Chart 系列 / 标签 / 值数组之间的数量与类型关系。 */
+function validateChartSeries(elementId: string, props: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const series = props.series;
+  const labels = props.labels;
+
+  if (!Array.isArray(series) || series.length === 0) {
+    errors.push(`Element "${elementId}" (Chart) series must be a non-empty array.`);
+  } else if (series.length > 5) {
+    errors.push(`Element "${elementId}" (Chart) has too many series (${series.length}, max 5).`);
+  }
+  if (!Array.isArray(labels) || labels.length === 0) {
+    errors.push(`Element "${elementId}" (Chart) labels must be a non-empty array.`);
+  } else if (labels.length > 60) {
+    errors.push(`Element "${elementId}" (Chart) has too many labels (${labels.length}, max 60).`);
+  }
+
+  if (Array.isArray(series)) {
+    for (let i = 0; i < series.length; i++) {
+      const s = series[i] as Record<string, unknown> | null | undefined;
+      if (!s || typeof s !== 'object' || Array.isArray(s)) continue;
+      errors.push(...validateNumberArray(elementId, 'Chart', `series[${i}].values`, s.values, 1, 60, Array.isArray(labels) ? labels.length : undefined));
+      const tone = s.tone;
+      if (tone !== undefined && (typeof tone !== 'string' || !['default', 'success', 'warning', 'danger', 'info'].includes(tone))) {
+        errors.push(`Element "${elementId}" (Chart) series[${i}].tone has invalid value "${String(tone)}" (allowed: default, success, warning, danger, info).`);
+      }
+    }
+  }
+
+  return errors;
+}
+
+/** 校验数字数组：元素必须是有限数字，长度在 [min, max] 内，可选与期望长度一致。 */
+function validateNumberArray(
+  elementId: string,
+  type: string,
+  label: string,
+  value: unknown,
+  minLength: number,
+  maxLength: number,
+  expectedLength?: number,
+): string[] {
+  const errors: string[] = [];
+  const path = `Element "${elementId}" (${type}) ${label}`;
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array of numbers.`);
+    return errors;
+  }
+  if (value.length < minLength) {
+    errors.push(`${path} needs at least ${minLength} numbers, got ${value.length}.`);
+  }
+  if (value.length > maxLength) {
+    errors.push(`${path} has too many numbers (${value.length}, max ${maxLength}).`);
+  }
+  if (expectedLength !== undefined && value.length !== expectedLength) {
+    errors.push(`${path} length (${value.length}) must match labels length (${expectedLength}).`);
+  }
+  for (let i = 0; i < value.length; i++) {
+    if (typeof value[i] !== 'number' || !isFinite(value[i] as number)) {
+      errors.push(`${path}[${i}] must be a finite number.`);
+    }
+  }
   return errors;
 }
 

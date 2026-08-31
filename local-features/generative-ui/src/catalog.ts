@@ -516,6 +516,47 @@ export const CATALOG: Record<string, ComponentSchema> = {
     },
   },
 
+  Chart: {
+    type: 'Chart',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Read-only line or bar chart rendered as inline SVG. Prefer this over Image/SVG data URIs for data visualization.',
+    props: {
+      chartType: { type: 'enum', enumValues: ['line', 'bar'] as const, required: true, description: 'Chart type.' },
+      series: {
+        type: 'array',
+        required: true,
+        description: 'Data series (1-5). Every series must provide a values array whose length matches labels. Tones default to the catalog palette order when omitted.',
+        itemSchema: {
+          label: { type: 'string', maxLength: 100, required: true },
+          tone: { type: 'enum', enumValues: ['default', 'success', 'warning', 'danger', 'info'] as const },
+        },
+      },
+      labels: { type: 'array', required: true, description: 'X-axis category labels (1-60 strings), one per data point.' },
+      unit: { type: 'string', maxLength: 50, description: 'Optional unit suffix shown beside y-axis ticks and in hover titles.' },
+      showLegend: { type: 'boolean', description: 'Show the series legend. Defaults to true when there is more than one series.' },
+      showGrid: { type: 'boolean', description: 'Show horizontal grid lines. Defaults to true.' },
+      showValues: { type: 'boolean', description: 'Bar chart only: print each value above its bar. Defaults to false.' },
+      height: { type: 'number', min: 120, max: 600, description: 'Chart height in CSS pixels. Defaults to 220.' },
+      yMin: { type: 'number', description: 'Optional fixed y-axis lower bound.' },
+      yMax: { type: 'number', description: 'Optional fixed y-axis upper bound.' },
+    },
+  },
+
+  Sparkline: {
+    type: 'Sparkline',
+    category: 'display',
+    acceptsChildren: false,
+    description: 'Tiny inline trend line for embedding beside text or inside Stat cards.',
+    props: {
+      values: { type: 'array', required: true, description: 'Data points (2-100 finite numbers).' },
+      tone: { type: 'enum', enumValues: ['default', 'success', 'warning', 'danger', 'info'] as const },
+      width: { type: 'number', min: 40, max: 2000, description: 'Width in CSS pixels. Defaults to 120.' },
+      height: { type: 'number', min: 16, max: 96, description: 'Height in CSS pixels. Defaults to 32.' },
+      showArea: { type: 'boolean', description: 'Fill the area under the line with a translucent tint. Defaults to true.' },
+    },
+  },
+
   // ── 操作 ──
 
   Button: {

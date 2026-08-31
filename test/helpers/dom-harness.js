@@ -118,6 +118,9 @@ export function createDomHarness() {
 
     setAttribute(name, value) {
       this.attributes[name] = String(value);
+      // SVG nodes set classes via attributes; keep className in sync so class
+      // selectors keep working for chart rendering.
+      if (name === 'class') this.className = String(value);
     }
 
     dispatch(type) {
@@ -145,7 +148,8 @@ export function createDomHarness() {
 
   const document = {
     createElement(tagName) { return new TestElement(tagName); },
-    createTextNode(text) { return { textContent: String(text) }; },
+    createElementNS(_namespace, tagName) { return new TestElement(tagName); },
+    createTextNode(text) { return { textContent: String(text), children: [] }; },
     getElementById(id) { return elementsById.get(id) || null; },
     querySelector(selector) {
       return this.body.querySelector(selector) || this.head.querySelector(selector);

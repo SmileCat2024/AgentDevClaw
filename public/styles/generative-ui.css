@@ -757,15 +757,23 @@ body[data-theme="light"] .gen-ui-avatar.avatar-initials { background: color-mix(
    Stat
    ═══════════════════════════════════════════════════════════════ */
 .gen-ui-stat {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 12px 14px; border-radius: 10px;
+  display: flex; min-width: 0; flex-direction: column; gap: 4px;
+  overflow: hidden; padding: 12px 14px; border-radius: 10px;
+  /* 容器查询上下文：value 字号随卡片实际宽度收缩，窄卡不再溢出。 */
+  container-type: inline-size;
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.06);
 }
 body[data-theme="light"] .gen-ui-stat { background: rgba(0,0,0,0.02); border-color: rgba(0,0,0,0.05); }
-.gen-ui-stat-label { font-size: 11px; font-weight: 500; color: var(--text-secondary, #667085); text-transform: uppercase; letter-spacing: 0.03em; }
-.gen-ui-stat-value-row { display: flex; align-items: baseline; gap: 3px; }
-.gen-ui-stat-value { font-size: 24px; font-weight: 750; line-height: 1.2; color: var(--text-primary, #1f2329); }
+.gen-ui-stat-label {
+  min-width: 0; overflow-wrap: anywhere;
+  font-size: 11px; font-weight: 500; color: var(--text-secondary, #667085); text-transform: uppercase; letter-spacing: 0.03em;
+}
+.gen-ui-stat-value-row { display: flex; min-width: 0; align-items: baseline; gap: 3px; }
+.gen-ui-stat-value {
+  min-width: 0; overflow-wrap: anywhere;
+  font-size: clamp(15px, 16cqw, 24px); font-weight: 750; line-height: 1.2; color: var(--text-primary, #1f2329);
+}
 .gen-ui-stat-unit { font-size: 13px; font-weight: 500; color: var(--text-secondary, #667085); }
 .gen-ui-stat.stat-success .gen-ui-stat-value { color: var(--color-success, #22a06b); }
 .gen-ui-stat.stat-warning .gen-ui-stat-value { color: var(--color-warning, #e8b500); }
@@ -854,3 +862,33 @@ body[data-theme="light"] .gen-ui-carousel-btn { border-color: rgba(0,0,0,0.1); b
 body[data-theme="light"] .gen-ui-tooltip-content { background: rgba(30,30,30,0.95); color: #f0f0f0; }
 .gen-ui-tooltip:hover .gen-ui-tooltip-content,
 .gen-ui-tooltip:focus-within .gen-ui-tooltip-content { opacity: 1; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Chart / Sparkline
+   ═══════════════════════════════════════════════════════════════ */
+.gen-ui-chart { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.gen-ui-chart-head {
+  display: flex; min-width: 0; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 4px 12px;
+}
+.gen-ui-chart-unit { flex: 0 0 auto; color: var(--text-muted, #98a2b3); font-size: 10.5px; font-variant-numeric: tabular-nums; line-height: 16px; }
+.gen-ui-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.gen-ui-chart-legend-item {
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--text-secondary, #667085); font-size: 12px; line-height: 18px;
+}
+.gen-ui-chart-legend-dot { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 2px; }
+.gen-ui-chart-svg { display: block; width: 100%; height: auto; font-family: inherit; }
+.gen-ui-chart-svg text { font-variant-numeric: tabular-nums; }
+.gen-ui-chart-grid-line { stroke: rgba(255,255,255,0.07); stroke-width: 1; }
+body[data-theme="light"] .gen-ui-chart-grid-line { stroke: rgba(0,0,0,0.08); }
+.gen-ui-chart-baseline { stroke: rgba(255,255,255,0.16); stroke-width: 1; }
+body[data-theme="light"] .gen-ui-chart-baseline { stroke: rgba(0,0,0,0.14); }
+.gen-ui-chart-tick { fill: var(--text-muted, #98a2b3); font-size: 10.5px; }
+.gen-ui-chart-xlabel { fill: var(--text-secondary, #667085); font-size: 10.5px; }
+.gen-ui-chart-value-label { fill: var(--text-secondary, #667085); font-size: 10px; font-weight: 550; }
+.gen-ui-chart-bar { transition: filter 140ms ease; }
+.gen-ui-chart-bar:hover { filter: brightness(1.12); }
+
+.gen-ui-sparkline { display: inline-block; vertical-align: middle; line-height: 0; }
+.gen-ui-sparkline-svg { display: block; max-width: 100%; }

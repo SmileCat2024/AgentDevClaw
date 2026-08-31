@@ -210,6 +210,51 @@
 | text | `string` | 是 | 可见的行内文本 |
 | content | `string` | 是 | 悬浮时显示的提示内容 |
 
+### Chart
+只读折线/柱状图，渲染为内联 SVG。**数据可视化一律用 Chart，不要用 SVG data URI 拼 Image。** 柱与数据点自带原生 hover 提示（label · 系列：值）。
+
+| Prop | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| chartType | `line\|bar` | 是 | 图表类型 |
+| series | `Array<{label, values, tone?}>` | 是 | 数据系列，1-5 组。每个 `values` 长度必须与 `labels` 一致，全为有限数字 |
+| labels | `string[]` | 是 | X 轴类目标签，1-60 项，与数据点一一对应 |
+| unit | `string` | 否 | 单位，显示在 y 轴左上角与 hover 提示中 |
+| showLegend | `boolean` | 否 | 图例开关。默认：多系列时显示 |
+| showGrid | `boolean` | 否 | 水平网格线，默认 true |
+| showValues | `boolean` | 否 | 仅柱状图：单系列且 ≤12 组时在柱顶打印数值，默认 false |
+| height | `number` | 否 | 图表高度 CSS 像素（120-600），默认 220 |
+| yMin / yMax | `number` | 否 | 固定 y 轴范围。默认自动包含 0（避免截断坐标轴夸大波动） |
+
+- 系列 `tone` 取值 `default|success|warning|danger|info`，省略时按目录色板顺序自动分配，多系列天然可区分
+- y 轴刻度自动取 1/2/5×10^n 的"好看"步长；x 轴标签超过 8 个自动抽稀
+
+```json
+{ "type": "Chart", "props": {
+  "chartType": "bar",
+  "labels": ["W31", "W32", "W33", "W34"],
+  "series": [
+    { "label": "AgentDevClaw", "values": [48, 20, 137, 165] },
+    { "label": "AgentDev", "values": [11, 9, 68, 43], "tone": "success" }
+  ],
+  "unit": "commits", "height": 200
+}, "children": [] }
+```
+
+### Sparkline
+迷你趋势线，适合嵌在文本旁或 Stat 卡片中展示走势。
+
+| Prop | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| values | `number[]` | 是 | 数据点，2-100 个有限数字 |
+| tone | `default\|success\|warning\|danger\|info` | 否 | 线条色调，默认 default |
+| width | `number` | 否 | 宽度 CSS 像素（40-2000），默认 120 |
+| height | `number` | 否 | 高度 CSS 像素（16-96），默认 32 |
+| showArea | `boolean` | 否 | 线下渐变填充，默认 true |
+
+```json
+{ "type": "Sparkline", "props": { "values": [34654, 98185, 157151, 214533], "tone": "info" }, "children": [] }
+```
+
 ---
 
 ## 输入类

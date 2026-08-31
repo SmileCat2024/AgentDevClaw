@@ -1,6 +1,6 @@
 ---
 name: generative-ui
-description: AgentDevClaw 内置可视化交互面板的完整参考。当你需要向用户呈现结构化选项（按钮选择）、收集表单输入、展示数据表格或状态面板时，先读本技能获取 Spec 格式、组件目录和使用示例。
+description: AgentDevClaw 内置可视化交互面板的完整参考。当你需要向用户呈现结构化选项（按钮选择）、收集表单输入、展示数据表格、图表或状态面板时，先读本技能获取 Spec 格式、组件目录和使用示例。
 ---
 
 # Generative UI — 交互式面板参考手册
@@ -143,19 +143,21 @@ Spec 提交后会经过严格的运行时校验。以下规则**违反任何一�
 | **Skeleton / Image** | `width` / `height` 为数字类型（CSS 像素），范围 1-2000，不接受字符串 |
 | **Tabs** | `items` 中每项必须有 `label` 和 `value`；`children` 数量应与 `items` 数量一致 |
 | **Accordion** | `items` 中每项必须有 `title`；`children` 数量应与 `items` 数量一致 |
+| **Chart** | `series` 1-5 组；`labels` 1-60 项；每个系列的 `values` 长度必须与 `labels` 一致且全为有限数字；`yMin` 必须小于 `yMax` |
+| **Sparkline** | `values` 为 2-100 个有限数字的数组 |
 
 ### tone / variant 兼容矩阵
 
 不同组件支持的 `tone` 值不同，混用会报错。**写 tone 前务必对照下表**：
 
-| tone 值 | Text | Badge | Progress | Stat |
-|---------|:----:|:-----:|:--------:|:----:|
-| `default` | OK | OK | OK | OK |
-| `muted` | OK | — | — | — |
-| `success` | OK | OK | OK | OK |
-| `warning` | OK | OK | OK | OK |
-| `danger` | OK | OK | OK | OK |
-| `info` | OK | OK | **FAIL** | OK |
+| tone 值 | Text | Badge | Progress | Stat | Chart (series) | Sparkline |
+|---------|:----:|:-----:|:--------:|:----:|:--------------:|:---------:|
+| `default` | OK | OK | OK | OK | OK | OK |
+| `muted` | OK | — | — | — | — | — |
+| `success` | OK | OK | OK | OK | OK | OK |
+| `warning` | OK | OK | OK | OK | OK | OK |
+| `danger` | OK | OK | OK | OK | OK | OK |
+| `info` | OK | OK | **FAIL** | OK | OK | OK |
 
 - **Text** 是唯一支持 `muted` 的组件
 - **Progress** 不支持 `info`（只有 `default/success/warning/danger`）
@@ -163,6 +165,8 @@ Spec 提交后会经过严格的运行时校验。以下规则**违反任何一�
 - **Badge** 不使用 `tone`，也使用 `variant`（`default/success/warning/danger/info`）
 
 ### Image data URI 陷阱
+
+> **数据可视化优先用 `Chart` / `Sparkline` 组件**：直接传数据点数组，无需编码、自动生成坐标轴与图例、hover 可看数值。SVG data URI 只用于 Logo、插画等静态图形。
 
 使用 SVG data URI 作为 Image 的 `src` 时，**所有 `#` 字符必须 URL 编码为 `%23`**。
 
@@ -182,7 +186,7 @@ src: "data:image/svg+xml,...<text>%236366f1</text>..."
 
 ## 组件速查表（catalogVersion: v1）
 
-共 31 个组件。下表标注了类型、是否可包含子元素、必填 props。**完整属性表和用法约定见同目录 `COMPONENT-REFERENCE.md`。**
+共 35 个组件。下表标注了类型、是否可包含子元素、必填 props。**完整属性表和用法约定见同目录 `COMPONENT-REFERENCE.md`。**
 
 ### 布局类
 
@@ -215,6 +219,8 @@ src: "data:image/svg+xml,...<text>%236366f1</text>..."
 | **Stat** | `label`, `value` | KPI 指标卡片。tone: `default\|success\|warning\|danger\|info`（无 muted） |
 | **Skeleton** | — | 骨架屏。variant, width, height, rounded |
 | **Tooltip** | `text`, `content` | 行内文本 + 悬浮提示 |
+| **Chart** | `chartType`, `series`, `labels` | 折线/柱状图（内联 SVG，直接传数据点数组）。unit, showLegend, showGrid, showValues, height, yMin, yMax。**数据可视化一律用 Chart，不要用 SVG data URI 拼 Image** |
+| **Sparkline** | `values` | 迷你趋势线，适合嵌在文本或 Stat 旁。tone, width, height, showArea |
 
 ### 输入类（均为叶子，通过 name 提交值）
 
@@ -387,6 +393,12 @@ src: "data:image/svg+xml,...<text>%236366f1</text>..."
 **原因**：验证器不强制 children 数量 = items 数量，但渲染器按索引对应。
 
 **规避**：确保 `children` 数组长度与 `items` 数组长度严格一致，第 N 个 child 就是第 N 个 tab/section 的内容。
+
+### 12. Chart 的 values 数量与 labels 不一致
+
+**错误**：`Element "c" (Chart) series[0].values length (5) must match labels length (4).`
+
+**规避**：每个系列的 `values` 数组长度必须与 `labels` 完全一致。`series` 1-5 组、`labels` 1-60 项，值必须是有限数字（不能是字符串或 null）。
 
 ---
 
