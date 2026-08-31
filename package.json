@@ -30,8 +30,8 @@
     "@agentclientprotocol/sdk": "1.4.0",
     "@agentdevjs/audio-feedback-feature": "^0.1.0",
     "@agentdevjs/audit-feature": "^0.1.0",
-    "@agentdevjs/create-feature": "^0.1.0",
     "@agentdevjs/core": "file:../AgentDev/packages/core",
+    "@agentdevjs/create-feature": "^0.1.0",
     "@agentdevjs/feishu-bot": "^0.1.0",
     "@agentdevjs/image-reader-feature": "^0.1.0",
     "@agentdevjs/llm": "^0.1.0",
@@ -54,6 +54,7 @@
     "marked": "^18.0.4",
     "multer": "^2.1.1",
     "openai": "^6.45.0",
+    "shell-quote": "^1.10.0",
     "typescript": "^5.3.3",
     "undici": "^7.25.0",
     "zod": "^4.4.3"
@@ -68,6 +69,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^20.11.0",
+    "@types/shell-quote": "^1.7.5",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
     "typescript-eslint": "^8.65.0"

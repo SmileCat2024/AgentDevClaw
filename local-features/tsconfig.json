@@ -35,6 +35,8 @@
     "./group-admin/test/**/*.ts",
     "./generative-ui/src/**/*.ts",
     "./generative-ui/test/**/*.ts",
-    "./github/src/**/*.ts"
+    "./github/src/**/*.ts",
+    "./capability-shell/src/**/*.ts",
+    "./capability-shell/test/**/*.ts"
   ]
 }
