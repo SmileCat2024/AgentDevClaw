@@ -65,7 +65,7 @@ function flattenModelPresets(data) {
     const name = cleanSessionText(provider?.name);
     if (name) providersByName.set(name, provider);
   });
-  return normalized.presets.map((preset, index) => {
+  const mapped = normalized.presets.map((preset, index) => {
     const protocol = cleanSessionText(preset?.protocol || preset?.provider) || 'anthropic';
     const providerName = cleanSessionText(preset?.providerName);
     const provider = providerName ? providersByName.get(providerName) : null;
@@ -81,6 +81,7 @@ function flattenModelPresets(data) {
       clientId: cleanSessionText(provider?.clientId || preset?.clientId) || '',
       apiSurface: resolvePresetApiSurface(protocol, authType, preset?.apiSurface),
       vision: preset?.vision === true,
+      starred: preset?.starred === true,
       thinkingEffort: typeof preset?.thinkingEffort === 'string' && preset.thinkingEffort ? preset.thinkingEffort : null,
       thinkingBudgetTokens: Number.isFinite(Number(preset?.thinkingBudgetTokens)) ? Number(preset.thinkingBudgetTokens) : null,
       maxTokens: Number.isFinite(Number(preset?.maxTokens)) ? Number(preset.maxTokens) : null,
@@ -91,6 +92,9 @@ function flattenModelPresets(data) {
       customHeaders: Array.isArray(preset?.customHeaders) ? preset.customHeaders.filter(h => h && typeof h === 'object') : [],
     };
   });
+  // Starred presets float to the top (stable within each group) so every
+  // consumer of the preset list — UI lists and dropdowns alike — shows them first.
+  return mapped.sort((a, b) => (b.starred === true) - (a.starred === true));
 }
 
 function makeUniqueProviderName(baseName, usedNames) {
@@ -168,6 +172,7 @@ function buildStructuredModelPresets(flatPresets, existingData = null) {
       protocol,
       apiSurface: resolvePresetApiSurface(protocol, authType, rawPreset.apiSurface),
       vision: rawPreset?.vision === true,
+      starred: rawPreset?.starred === true,
       model,
       thinkingEffort: typeof rawPreset?.thinkingEffort === 'string' && rawPreset.thinkingEffort ? rawPreset.thinkingEffort : null,
       thinkingBudgetTokens: Number.isFinite(Number(rawPreset.thinkingBudgetTokens)) ? Number(rawPreset.thinkingBudgetTokens) : null,

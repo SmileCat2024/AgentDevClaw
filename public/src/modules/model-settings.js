@@ -92,6 +92,9 @@ function renderSettingsOverlay() {
             + '</div>',
           '</div>',
           '<div class="settings-preset-actions">',
+          '<button class="settings-icon-btn star-btn' + (p.starred ? ' starred' : '') + '" type="button" title="' + (isZh ? (p.starred ? '取消星标' : '设为星标') : (p.starred ? 'Unstar' : 'Star')) + '" onclick="event.stopPropagation();toggleSettingsPresetStar(' + idx + ')">',
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="' + (p.starred ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+          '</button>',
           '<button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();editSettingsPreset(' + idx + ')">',
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
           '</button>',
@@ -513,6 +516,7 @@ function addSettingsPreset() {
     maxTokens: null,
     temperature: null,
     vision: false,
+    starred: false,
     contextLength: 200000,
     compressRatio: 80,
     customHeaders: [],
@@ -544,6 +548,15 @@ async function deleteSettingsPreset(idx) {
   presets.splice(idx, 1);
   window.ClawFW.settingsData.presets = presets;
   window.ClawFW.settingsEditing = null;
+  await saveSettingsConfig();
+}
+
+async function toggleSettingsPresetStar(idx) {
+  const presets = window.ClawFW.settingsData?.presets || [];
+  const preset = presets[idx];
+  if (!preset) return;
+  preset.starred = preset.starred !== true;
+  window.ClawFW.settingsData.presets = presets;
   await saveSettingsConfig();
 }
 
@@ -643,6 +656,7 @@ async function saveSettingsPreset(idx, opts) {
     maxTokens: maxTokensRaw !== '' ? parseInt(maxTokensRaw, 10) || null : null,
     temperature: tempRaw !== '' ? parseFloat(tempRaw) || null : null,
     vision: el('settings-preset-vision')?.checked === true,
+    starred: presets[idx]?.starred === true,
     contextLength: contextLengthRaw !== '' ? parseInt(contextLengthRaw, 10) || null : null,
     compressRatio: compressRatioRaw !== '' ? Math.max(1, Math.min(100, parseInt(compressRatioRaw, 10) || 80)) : 80,
     countTokenPath: countTokenPathRaw || null,
@@ -768,6 +782,7 @@ window.closeSettings = closeSettings;
 window.addSettingsPreset = addSettingsPreset;
 window.editSettingsPreset = editSettingsPreset;
 window.deleteSettingsPreset = deleteSettingsPreset;
+window.toggleSettingsPresetStar = toggleSettingsPresetStar;
 window.saveSettingsPreset = saveSettingsPreset;
 window.applySettingsPreset = applySettingsPreset;
 window.cancelSettingsEdit = cancelSettingsEdit;
