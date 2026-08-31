@@ -137,13 +137,8 @@ export function createThreadRotationService({
           error: commit.error || 'succession commit was not applied',
         };
       }
-      await threadCore.appendCommand({
-        threadId: thread.threadId,
-        kind: 'system_continuation',
-        text: ROTATION_RESUME_INSTRUCTION,
-        source: 'thread-context-rotation',
-        idempotencyKey: `thread-context-rotation-${thread.threadId}-${nextSessionId}`,
-      });
+      // 恢复指令由框架 beginSessionHandoff 在 begin 时同笔播种（R3），
+      // 提交点只负责推进 head 与补投递，不再二次追加。
       await threadIntegration.tryDeliver(thread.threadId);
       return { applied: true, threadId: thread.threadId, headSessionId: nextSessionId };
     } catch (error) {

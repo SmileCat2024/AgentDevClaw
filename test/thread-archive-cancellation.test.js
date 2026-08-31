@@ -36,7 +36,7 @@ import { createThreadRotationService } from '../server/thread-control/thread-rot
 import { setupThreadRoutes } from '../server/thread-control/thread-routes.js';
 import { deliverUserInput, UserTurnDeliveryError } from '../server/thread-control/input-gateway.js';
 import { managedAgents } from '../server/shared/agent-access.js';
-import { ThreadCommandStatus } from '../server/thread-control/thread-inbox.js';
+import { WorkThreadCommandStatus as ThreadCommandStatus } from '@agentdevjs/core';
 
 // ─── 夹具 ─────────────────────────────────────────────────────────
 
@@ -333,7 +333,8 @@ describe('T004: 归档与接力并发的冲突响应', () => {
     assert.equal(old.status, ThreadCommandStatus.CANCELLED);
     // 旧 Inbox 未被消费：没有任何投递发生
     assert.equal(turns.length, 0);
-    assert.equal(archiveResult.cleanup.commandsCancelled, 1);
+    // R3 播种的恢复指令随 begin 挡板进入 pending，归档 seal 一并取消
+    assert.equal(archiveResult.cleanup.commandsCancelled, 2);
     // 失败的 successor runtime 被退役
     assert.ok(env.stopped.some((s) => s.kind === 'succession' && s.sessionId === 's2'));
   });
@@ -412,7 +413,8 @@ describe('T004: 归档与接力并发的冲突响应', () => {
     let delivered = record.commands.filter((c) => c.status === ThreadCommandStatus.DELIVERED);
     let pending = record.commands.filter((c) => c.status === ThreadCommandStatus.PENDING);
     assert.equal(delivered.length, 1);
-    assert.equal(pending.length, 1);
+    // R3 播种的恢复指令 + 交接期剩余指令留在 pending，落进归档 seal 的取消范围
+    assert.equal(pending.length, 2);
     const leftoverCommandId = pending[0].commandId;
 
     // 随后归档：seal 取消剩余 pending，已开始（delivered）的进入 drain
@@ -420,7 +422,7 @@ describe('T004: 归档与接力并发的冲突响应', () => {
     record = await env.core.getThread(thread.threadId);
     const leftover = record.commands.find((c) => c.commandId === leftoverCommandId);
     assert.equal(leftover.status, ThreadCommandStatus.CANCELLED);
-    assert.equal(archiveResult.cleanup.commandsCancelled, 1);
+    assert.equal(archiveResult.cleanup.commandsCancelled, 2);
     assert.equal(archiveResult.cleanup.inflightDrain.count, 1);
     assert.ok(archiveResult.cleanup.inflightDrain.commandIds.includes(delivered[0].commandId));
 
@@ -430,7 +432,13 @@ describe('T004: 归档与接力并发的冲突响应', () => {
     assert.equal(readyDelivery.delivery.reason, 'thread_held');
     const explicit = await env.integration.tryDeliver(thread.threadId);
     assert.equal(explicit.delivered, 0);
-    assert.equal(explicit.reason, 'thread_held');
+    // commit 投递循环的失败会进入线程级退避冷却（delivery-consumer），
+    // 冷却窗口内 tryDeliver 先报 delivery_backoff，冷却过后才是 thread_held；
+    // 两者都保证「归档后零投递」。
+    assert.ok(
+      explicit.reason === 'thread_held' || explicit.reason === 'delivery_backoff',
+      `归档后显式投递被挡（reason=${explicit.reason}）`,
+    );
     // 归档后零新增投递
     assert.equal(turns.length, 1);
   });

@@ -115,10 +115,13 @@ describe('T002: 接力成功（提交点原子完成）', () => {
       });
 
       assert.equal(outcome.applied, true);
-      assert.equal(outcome.delivery.delivered, 1, '接力期间积累的 command 进入补投递');
-      assert.equal(turns.length, 1);
-      assert.equal(turns[0].agentId, 'viewer-s2', '投递给新 head 的 runtime');
-      assert.equal(turns[0].text, '接力期间积累的指令');
+      // R3：恢复指令随 begin 挡板由框架原子播种，与交接期积累指令一起补投递
+      assert.equal(outcome.delivery.delivered, 2);
+      assert.equal(turns.length, 2);
+      for (const turn of turns) {
+        assert.equal(turn.agentId, 'viewer-s2', '投递给新 head 的 runtime');
+      }
+      assert.ok(turns.some((t) => t.text === '接力期间积累的指令'), '积累指令进入补投递');
 
       // 原子四件套
       const record = await env.core.getThread(thread.threadId);
@@ -155,14 +158,15 @@ describe('T002: 接力成功（提交点原子完成）', () => {
         reason: 'summary',
         successorReady: true,
       });
-      assert.equal(turns.length, 1);
+      // R3：播种恢复指令 + 交接期指令各投一次
+      assert.equal(turns.length, 2);
 
       // 提交后再触发投递（runtime-ready 钩子 / 手动 deliver）：
       // terminal 指令不再进入投递集
       const again = await env.core.deliverPendingCommands(thread.threadId);
       assert.equal(again.delivered, 0);
       assert.equal(again.attempted, 0);
-      assert.equal(turns.length, 1, '成功接力不会重复投递');
+      assert.equal(turns.length, 2, '成功接力不会重复投递');
 
       const record = await env.core.getThread(thread.threadId);
       assert.equal(record.commands[0].attempts, 1);
@@ -265,9 +269,12 @@ describe('T002: 提交点 READY 门禁（successor 未 READY 不得成为 head�
 
       // 挡板已收敛：旧 head 的 runtime 就绪时 pending 照常投递
       // （若仍靠 5 分钟 TTL 惰性清除，这里会被 handoff_in_progress 挡住）
+      // R3：播种恢复指令随挡板在 pending 里，与交接期指令一起投向旧 head
       const delivery = await env.core.deliverPendingCommands(thread.threadId);
-      assert.equal(delivery.delivered, 1);
-      assert.equal(turns[0].agentId, 'viewer-s1', 'pending 投向仍有效的旧 head，不投向未知目标');
+      assert.equal(delivery.delivered, 2);
+      for (const turn of turns) {
+        assert.equal(turn.agentId, 'viewer-s1', 'pending 投向仍有效的旧 head，不投向未知目标');
+      }
     } finally {
       await fs.rm(env.root, { recursive: true, force: true });
     }
@@ -553,8 +560,12 @@ describe('T002: compact / summary / trim 共享入口（不各自实现继承逻
     assert.ok(commitCalls >= 2, `detached 与同步分支都经 commitSuccession（实际 ${commitCalls} 处）`);
     // READY 门禁证据：successorReady 来自 compact 流程的 ready 结果
     assert.match(route, /successorReady:\s*result\?\.agent\s*!=\s*null/);
-    // 生成阶段失败（detached catch + 同步外层 catch）都收敛挡板
-    assert.ok((route.split('failSuccession({').length - 1) >= 2, '两分支失败路径都经共享失败收敛');
+    // 生成阶段失败（detached catch + 同步外层 catch）都收敛挡板：
+    // detached 走服务层 failSuccession，同步 catch 直走 integration 的
+    // failSessionSuccession（failSuccession 的底层，规避 catch 引用 try
+    // 作用域标识）
+    assert.ok(route.includes('failSuccession({'), 'detached 失败路径经共享失败收敛');
+    assert.ok(route.includes('failSessionSuccession({'), '同步失败路径经共享失败收敛');
   });
 
   test('context guard rotation commits through the shared commit point', () => {

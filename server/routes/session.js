@@ -1345,8 +1345,6 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
 
     // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
     // 投向即将退役的旧 head。公共入口一处标记，detached / 同步分支共用；
-    // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
-    // 投向即将退役的旧 head。公共入口一处标记，detached / 同步分支共用；
     // 提交点（thread-succession）推进 head 时原子清除。非线程宿主 no-op。
     // 挡板写入失败即中断：放行会让交接窗口内的新指令直投即将退役的旧
     // head 并随其退役丢失——显式失败优于静默丢失。

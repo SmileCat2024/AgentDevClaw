@@ -21,7 +21,7 @@ import { WorkThreadRuntimeBridge } from '@agentdevjs/core';
 import { createThreadControl } from '../server/thread-control/thread-controller.js';
 import { createThreadIntegration } from '../server/thread-control/thread-integration.js';
 import { createThreadLifecycleService } from '../server/thread-control/thread-lifecycle.js';
-import { ThreadCommandStatus } from '../server/thread-control/thread-inbox.js';
+import { WorkThreadCommandStatus as ThreadCommandStatus } from '@agentdevjs/core';
 
 let base = null;
 let counter = 0;
@@ -89,7 +89,8 @@ describe('ThreadLifecycle archive (T004 cancellation semantics)', () => {
     const result = await env.service.archiveThread(thread.threadId, { reason: 'user_archive' });
 
     assert.equal(result.cleanup.status, 'complete');
-    assert.equal(result.cleanup.commandsCancelled, 1);
+    // R3 播种的恢复指令随 begin 挡板进入 pending，归档时与交接期指令一并取消
+    assert.equal(result.cleanup.commandsCancelled, 2);
     // 已开始调用进入 inflight drain 清单，不被取消
     assert.equal(result.cleanup.inflightDrain.count, 1);
     assert.deepEqual(result.cleanup.inflightDrain.commandIds, ['cmd-inflight']);

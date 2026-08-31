@@ -24,7 +24,7 @@ import { WorkThreadRuntimeBridge } from '@agentdevjs/core';
 
 import { createThreadControl } from '../server/thread-control/thread-controller.js';
 import { createThreadIntegration } from '../server/thread-control/thread-integration.js';
-import { ThreadCommandStatus } from '../server/thread-control/thread-inbox.js';
+import { WorkThreadCommandStatus as ThreadCommandStatus } from '@agentdevjs/core';
 
 import { makeThreadEnv, startCoderThread } from './t007-helpers.js';
 

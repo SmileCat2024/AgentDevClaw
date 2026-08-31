@@ -50,7 +50,7 @@ describe('Thread delivery consumer (R6 收编)', () => {
 
   it('delivers pending commands in FIFO order', async () => {
     const turns = [];
-    const control = createThreadControl({ rootDir: env.root, bridge: makeTurnsBridge(turns) });
+    const control = createThreadControl({ rootDir: env.root, bridge: makeTurnsBridge(turns), identitySource: async () => 'coder' });
     const thread = await control.core.start({ sessionRef: { agentId: 'coder', sessionId: 'fifo-s1' } });
     await control.core.appendCommand({ threadId: thread.threadId, text: 'one' });
     await control.core.appendCommand({ threadId: thread.threadId, text: 'two' });
@@ -66,7 +66,7 @@ describe('Thread delivery consumer (R6 收编)', () => {
 
   it('backs off after a failed delivery and retries after the window', async () => {
     const turns = [];
-    const control = createThreadControl({ rootDir: env.root, bridge: makeTurnsBridge(turns, { failFirst: true }) });
+    const control = createThreadControl({ rootDir: env.root, bridge: makeTurnsBridge(turns, { failFirst: true }), identitySource: async () => 'coder' });
     const thread = await control.core.start({ sessionRef: { agentId: 'coder', sessionId: 'backoff-s1' } });
     await control.core.advanceHead({
       threadId: thread.threadId, toSessionId: 'backoff-s2', fromSessionId: 'backoff-s1', endKind: 'trim',
@@ -134,7 +134,7 @@ describe('Thread delivery consumer (R6 收编)', () => {
 
   it('does not back off on gated no-op results (handoff window is waiting, not failure)', async () => {
     const turns = [];
-    const control = createThreadControl({ rootDir: env.root, bridge: makeTurnsBridge(turns) });
+    const control = createThreadControl({ rootDir: env.root, bridge: makeTurnsBridge(turns), identitySource: async () => 'coder' });
     const thread = await control.core.start({ sessionRef: { agentId: 'coder', sessionId: 'gate-s1' } });
     await control.core.beginSessionHandoff({ threadId: thread.threadId, fromSessionId: 'gate-s1', reason: 'trim' });
     await control.core.appendCommand({ threadId: thread.threadId, text: 'during handoff' });

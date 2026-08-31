@@ -13,8 +13,9 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 
-const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const AGENT_MODULE = path.join(REPO_ROOT, 'prebuilt-agents', 'official', 'programming-helper', 'agent.js');
 
 // HOME 隔离必须发生在 import agent.js 之前：server/shared/constants.js 的
@@ -27,7 +28,7 @@ const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claw-t007-probe-ws-'
 const fakeLlm = { modelName: 't007-probe', chat: async () => { throw new Error('no llm in probe'); } };
 
 async function probeIdentity(sessionType) {
-  const agentModule = await import(AGENT_MODULE);
+  const agentModule = await import(pathToFileURL(AGENT_MODULE).href);
   const AgentClass = agentModule.resolveAgentClass({ runtime: { sessionType } });
   const agent = new AgentClass({
     name: sessionType,

@@ -94,10 +94,10 @@ describe('T007 真实运行链：coder 身份装配（提示词 + 工具未退�
         assert.ok(mainToolSet.has(name), `main 应有交互工具 ${name}（fixture 前提）`);
         assert.ok(!coderTools.has(name), `coder 不得装配 main 交互工具 ${name}（无人值守场景会永久 pending）`);
       }
-      // MCP 工具：main 装配（头部占据 tools 数组），coder 刻意不挂
-      const mcpInMain = mainTools.filter((n) => n.startsWith('mcp_'));
+      // MCP：coder 刻意不挂 MCPFeature（无人值守），无论环境如何都成立。
+      // main 侧挂载 MCPFeature，但 mcp_* 工具需真实 MCP server 配置才注册，
+      // probe HOME 隔离环境没有，故不对 main 做环境依赖的硬断言。
       const mcpInCoder = coder.tools.filter((n) => n.startsWith('mcp_'));
-      assert.ok(mcpInMain.length > 0, 'main 装配了 MCP 工具（fixture 前提）');
       assert.equal(mcpInCoder.length, 0, 'coder 不装配 MCP 工具');
 
       // coder 专属：tickets-build-flow 构建流程规范（implement / tdd / code-review）

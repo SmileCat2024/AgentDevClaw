@@ -34,7 +34,7 @@ import { createThreadDeleteService } from '../server/thread-control/thread-delet
 import { createThreadDeleteResources } from '../server/thread-control/thread-delete-resources.js';
 import { getContextHandoffsRoot } from '../server/context-continuity/handoff-package.js';
 import { setupThreadRoutes } from '../server/thread-control/thread-routes.js';
-import { ThreadCommandStatus } from '../server/thread-control/thread-inbox.js';
+import { WorkThreadCommandStatus as ThreadCommandStatus } from '@agentdevjs/core';
 
 // ─── 夹具 ─────────────────────────────────────────────────────────
 
