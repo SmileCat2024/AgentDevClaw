@@ -7747,27 +7747,16 @@ body[data-theme="light"] .git-file-action:hover {
   display: block;
 }
 
-.git-edge {
-  stroke-width: 1.5;
-  opacity: 0.85;
-}
-
-.git-edge-trunc {
-  opacity: 0.3;
-  stroke-dasharray: 2 3;
-}
-
-.git-dot {
-  stroke: var(--glass-bg, #1e2227);
-  stroke-width: 1.5;
-}
-
+/* 泳道连线与节点的颜色、线宽全部由 SVG inline style 承载（含主题底色
+   变量 --git-node-bg），此处只保留布局职责。 */
 .git-history-row {
   display: flex;
   align-items: center;
   gap: 10px;
   height: 26px;                /* 与 git-graph.js ROW_H 严格对齐 */
-  padding-left: var(--git-canvas-w, 36px);
+  /* 文本列偏移 = 该行自身泳道宽度（--git-row-w 由面板按行内联写入，
+     VS Code 同款：浅行靠左、深行右移）；缺省退化为整图画布宽 */
+  padding-left: var(--git-row-w, var(--git-canvas-w, 36px));
   padding-right: 4px;
   margin: 0 -4px;
   border-radius: 5px;
@@ -7787,15 +7776,20 @@ body[data-theme="light"] .git-history-row:hover {
   font-weight: 600;
 }
 
+/* 文本列：主题在前可截断，分支胶囊在后始终可见（VS Code 同款布局） */
 .git-history-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   font-size: 12.5px;
 }
 
 .git-history-subject {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -7803,7 +7797,10 @@ body[data-theme="light"] .git-history-row:hover {
 /* 分支/标签胶囊 */
 .git-ref {
   display: inline-block;
-  margin-right: 5px;
+  flex: none;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 0 7px;
   border-radius: 999px;
   font-size: 10.5px;
@@ -7853,22 +7850,10 @@ body[data-theme="light"] .git-ref.is-tag {
   gap: 8px;
   height: 26px;
   margin: 1px -4px 1px 0;
-  padding-left: var(--git-canvas-w, 36px);
+  padding-left: var(--git-row-w, var(--git-canvas-w, 36px));
   font-size: 11.5px;
   color: var(--text-secondary);
   white-space: nowrap;
-}
-
-.git-outgoing-ring {
-  width: 9px;
-  height: 9px;
-  flex: none;
-  border-radius: 999px;
-  border: 2px dashed rgba(255,255,255,0.4);
-}
-
-body[data-theme="light"] .git-outgoing-ring {
-  border-color: rgba(0,0,0,0.4);
 }
 
 .git-outgoing-label {

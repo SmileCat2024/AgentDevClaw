@@ -1,9 +1,13 @@
 /**
  * git-graph.js 泳道算法测试
  *
- * 用 frontend-vm 沙箱加载 public/src/modules/git-graph.js，
- * 验证 computeLanes 在线性 / 分叉 / 合并 / 截断窗口四种拓扑下的
- * 泳道分配与连线，以及 buildGraphSvg 的输出尺寸。
+ * 用 frontend-vm 沙箱加载 public/src/modules/git-graph.js，验证复刻 VS Code
+ * SCM 图形视图（scmHistory.ts）后的槽位模型与 SVG 输出：
+ *   - 槽位逐行传递：第一父继承被消费槽位的位置与颜色，其余父追加到行尾
+ *   - 重复槽位（merge 的第二父已被追踪）存在一行后随消费归并
+ *   - 父在窗口外时槽位保留到最后（无"截断线"概念）
+ *   - 颜色：refs 配色表（当前分支主色/上游副色）+ 轮转色板
+ *   - SVG：HEAD 空心环、merge 双环、全无虚线、rowTops 偏移
  */
 
 import { describe, it, before } from 'node:test';
@@ -28,141 +32,92 @@ function constants() {
   return run('window.GitGraph.constants');
 }
 
-describe('computeLanes topology', () => {
-  it('linear history stays on lane 0', () => {
+describe('computeLanes swimlane model', () => {
+  it('linear history keeps a single slot on column 0', () => {
     const r = run(`window.GitGraph.computeLanes([
       {hash:'a',parents:['b']}, {hash:'b',parents:['c']}, {hash:'c',parents:[]}
     ])`);
+    assert.equal(r.rows.length, 3);
+    assert.deepEqual(r.rows.map((row) => row.circleIndex), [0, 0, 0]);
+    // 首行出列追踪 b；根提交（无父）出列为空
+    assert.deepEqual(r.rows[0].outputSwimlanes.map((s) => s.id), ['b']);
+    assert.deepEqual(r.rows[2].outputSwimlanes, []);
     assert.equal(r.laneCount, 1);
-    assert.deepEqual(r.commits.map((c) => c.lane), [0, 0, 0]);
-    assert.equal(r.edges.length, 2);
-    assert.deepEqual(r.edges[0], { row: 0, fromLane: 0, toLane: 0, toRow: 1 });
   });
 
-  it('fork assigns the second child a new lane, both merge back to base', () => {
-    const r = run(`window.GitGraph.computeLanes([
-      {hash:'x',parents:['b']}, {hash:'y',parents:['b']}, {hash:'b',parents:[]}
-    ])`);
-    assert.equal(r.laneCount, 2);
-    assert.deepEqual(r.commits.map((c) => c.lane), [0, 1, 0]);
-    // x(lane0)->b 直线；y(lane1)->b 跨泳道曲线
-    assert.deepEqual(r.edges[0], { row: 0, fromLane: 0, toLane: 0, toRow: 2 });
-    assert.deepEqual(r.edges[1], { row: 1, fromLane: 1, toLane: 0, toRow: 2 });
-  });
-
-  it('merge commit draws curve to the already-tracked second parent', () => {
+  it('merge: second parent appends a slot; duplicate slot lives one row then merges', () => {
     const r = run(`window.GitGraph.computeLanes([
       {hash:'m',parents:['x','y']},
       {hash:'x',parents:['b']},
       {hash:'y',parents:['b']},
       {hash:'b',parents:[]}
     ])`);
-    // m 消费 lane0（追踪 x）；第二父 y 已被 lane1 追踪 → 合并曲线 0→1
-    assert.deepEqual(r.commits.map((c) => c.lane), [0, 0, 1, 0]);
-    const mergeEdge = r.edges.find((e) => e.row === 0 && e.fromLane === 0 && e.toLane === 1);
-    assert.ok(mergeEdge, 'merge edge 0->1 exists');
-    assert.equal(mergeEdge.toRow, 2);
-    // x、y 各自连到 b（row 3, lane0）
-    assert.equal(r.edges.filter((e) => e.toRow === 3).length, 2);
+    // m 行：出列 [x, y]——第二父 y 追加到末尾
+    assert.deepEqual(r.rows[0].outputSwimlanes.map((s) => s.id), ['x', 'y']);
+    // x 行：第一父 b 继承位置 0，y 槽位原位保留
+    assert.deepEqual(r.rows[1].outputSwimlanes.map((s) => s.id), ['b', 'y']);
+    // y 行：圆在第 1 列；第二父 b 已被追踪 → 重复槽位
+    assert.equal(r.rows[2].circleIndex, 1);
+    assert.deepEqual(r.rows[2].outputSwimlanes.map((s) => s.id), ['b', 'b']);
+    // b 行：一次性消费两个同 id 槽位（circleIndex 取首个），只留一份第一父
+    assert.deepEqual(r.rows[3].inputSwimlanes.map((s) => s.id), ['b', 'b']);
+    assert.equal(r.rows[3].circleIndex, 0);
+    assert.deepEqual(r.rows[3].outputSwimlanes, []);
   });
 
-  it('parent outside the window produces a truncation edge (toRow null)', () => {
+  it('fork (two children of one base): second child sits in its own column', () => {
+    const r = run(`window.GitGraph.computeLanes([
+      {hash:'x',parents:['b']},
+      {hash:'y',parents:['b']},
+      {hash:'b',parents:[]}
+    ])`);
+    // y 不在任何槽位 → 圆放在入列末尾（新列）；第一父 b 追加产生重复槽位
+    assert.equal(r.rows[1].circleIndex, 1);
+    assert.deepEqual(r.rows[1].outputSwimlanes.map((s) => s.id), ['b', 'b']);
+    assert.deepEqual(r.rows[2].inputSwimlanes.map((s) => s.id), ['b', 'b']);
+  });
+
+  it('parent outside the window: slot persists to the last row (no truncation concept)', () => {
     const r = run(`window.GitGraph.computeLanes([{hash:'h',parents:['GONE']}])`);
-    assert.equal(r.edges.length, 1);
-    assert.equal(r.edges[0].toRow, null);
+    assert.equal(r.rows.length, 1);
+    // 槽位保留在出列中（渲染为延伸到已加载内容末尾的普通竖线）
+    assert.deepEqual(r.rows[0].outputSwimlanes.map((s) => s.id), ['GONE']);
   });
 
-  it('octopus merge (three parents) opens two extra lanes', () => {
+  it('octopus merge (three parents) appends two extra slots', () => {
     const r = run(`window.GitGraph.computeLanes([
       {hash:'o',parents:['p1','p2','p3']},
       {hash:'p1',parents:[]}, {hash:'p2',parents:[]}, {hash:'p3',parents:[]}
     ])`);
+    assert.deepEqual(r.rows[0].outputSwimlanes.map((s) => s.id), ['p1', 'p2', 'p3']);
+    // 根提交无父 → 出列为空，后续行的入列为空、圆落在第 0 列
+    assert.deepEqual(r.rows.map((row) => row.circleIndex), [0, 0, 0, 0]);
     assert.equal(r.laneCount, 3);
-    // p2、p3 各占新泳道
-    assert.equal(r.commits[2].lane, 1);
-    assert.equal(r.commits[3].lane, 2);
   });
 
-  it('lane is reused after its chain ends', () => {
-    // 侧链结束后，后续分叉应复用释放的泳道而非无限扩容
+  it('slot positions are stable across interleaved side branches', () => {
     const r = run(`window.GitGraph.computeLanes([
-      {hash:'a',parents:['base']},
-      {hash:'side1',parents:['base']},
-      {hash:'base',parents:[]},
-      {hash:'main2',parents:['base2']},
-      {hash:'side2',parents:['base2']},
-      {hash:'base2',parents:[]}
+      {hash:'m1',parents:['m2','s1']},
+      {hash:'s1',parents:['m2']},
+      {hash:'m2',parents:['m3','s2']},
+      {hash:'s2',parents:['m3']},
+      {hash:'m3',parents:[]}
     ])`);
-    // 注意：base 之后的提交在 log 中更旧，窗口里 lane1 已释放
-    // side2 应复用 lane1 而非开 lane2
-    assert.equal(r.commits[4].lane, 1);
-    assert.equal(r.laneCount, 2);
-  });
-});
-
-describe('buildGraphSvg', () => {
-  it('produces svg sized to rows and lanes', () => {
-    const out = run(`(function(){
-      const lanes = window.GitGraph.computeLanes([{hash:'a',parents:['b']},{hash:'b',parents:[]}]);
-      return window.GitGraph.buildGraphSvg(lanes, 0);
-    })()`);
-    const C = constants();
-    assert.ok(out.svg.startsWith('<svg'));
-    assert.ok(out.svg.includes('circle'));
-    assert.equal(out.height, 2 * C.ROW_H);
-    assert.equal(out.width, 8 * 2 + 1 * C.LANE_W); // PAD_X*2 + laneCount*LANE_W
+    // s1 行：主线槽位 0 原位保留，s1 槽位 1 被第一父 m2 原位替换
+    assert.deepEqual(r.rows[1].outputSwimlanes.map((s) => s.id), ['m2', 'm2']);
+    // m2 行：消费两个 m2 槽位 → [m3, s2]
+    assert.deepEqual(r.rows[2].outputSwimlanes.map((s) => s.id), ['m3', 's2']);
+    // s2 行：[m3, m3]
+    assert.deepEqual(r.rows[3].outputSwimlanes.map((s) => s.id), ['m3', 'm3']);
+    // 主线（m 链）圆恒在第 0 列
+    for (const row of r.rows) {
+      if (row.hash.startsWith('m')) assert.equal(row.circleIndex, 0);
+    }
   });
 
-  it('HEAD row gets the bullseye node and merge commits render hollow', () => {
-    const out = run(`(function(){
-      const lanes = window.GitGraph.computeLanes([
-        {hash:'h',parents:['m']},
-        {hash:'m',parents:['a','b']},
-        {hash:'a',parents:[]},
-        {hash:'b',parents:[]}
-      ]);
-      return window.GitGraph.buildGraphSvg(lanes, 0);
-    })()`);
-    // HEAD：加大空心环 + 中心实心点
-    assert.ok(out.svg.includes('git-dot-head"'));
-    assert.ok(out.svg.includes('git-dot-head-core'));
-    // merge 提交：空心圆（fill 为面板底色变量）
-    assert.ok(out.svg.includes('git-dot-merge'));
-    assert.ok(out.svg.includes('var(--git-node-bg'));
-  });
-
-  it('ahead (unpushed) commits render as dashed rings, pushed ones solid', () => {
-    // Set 必须在 VM 同一 realm 内创建（跨 realm 的 instanceof Set 会为 false）
-    const out = run(`(function(){
-      const commits = [
-        {hash:'head1',parents:['mid1'],refs:[]},
-        {hash:'mid1',parents:['base1'],refs:[]},
-        {hash:'base1',parents:[],refs:[]}
-      ];
-      const ahead = new Set(['head1','mid1']);
-      const lanes = window.GitGraph.computeLanes(commits);
-      return window.GitGraph.buildGraphSvg(lanes, 0, ahead);
-    })()`);
-    // ahead 的 HEAD + 普通提交 → 虚线空心圈；base1 已推送 → 实心小圆
-    assert.ok(out.svg.includes('stroke-dasharray="2.5 2.5"'));
-    // 两个 ahead 节点都带虚线
-    assert.equal((out.svg.match(/stroke-dasharray="2.5 2.5"/g) || []).length, 2);
-    // base1 为已推送普通提交 —— 实心（git-dot 无 dasharray 且非 merge/head）
-    assert.ok(out.svg.includes('git-dot git-dot"') === false); // 无该形态，普通节点 class 为 git-dot
-  });
-
-  it('no ahead set (or non-Set) falls back to solid nodes', () => {
-    const out = run(`(function(){
-      const commits = [{hash:'a',parents:[]}];
-      const lanes = window.GitGraph.computeLanes(commits);
-      return window.GitGraph.buildGraphSvg(lanes, 0, undefined);
-    })()`);
-    assert.ok(!out.svg.includes('stroke-dasharray'));
-  });
-
-  // 回归：服务端 hash 与 parents 统一为 12 位短哈希后，边的 toRow 必须能
-  // 命中行号（历史上 40 位 parents 匹配 12 位 hash 失败，全图退化为截断线）
-  it('edges resolve toRow for 12-char short-hash form (server payload shape)', () => {
+  // 回归：服务端 hash 与 parents 统一为 12 位短哈希，槽位 id 匹配依赖
+  // 哈希等值（历史上长度不一致导致全图匹配失败）
+  it('resolves slots for the 12-char short-hash server payload', () => {
     const h = (n) => String(n).padStart(12, '0');
     const r = run(`(function(){
       return window.GitGraph.computeLanes([
@@ -173,37 +128,105 @@ describe('buildGraphSvg', () => {
         {hash:'${h(5)}',parents:[]}
       ]);
     })()`);
-    assert.equal(r.edges.length, 5);
-    for (const e of r.edges) {
-      assert.notEqual(e.toRow, null, 'edge must resolve to a row, got truncation');
-    }
-    // 第二提交是 merge：应有跨泳道曲线边
-    assert.ok(r.edges.some((e) => e.fromLane !== e.toLane));
+    assert.equal(r.rows.length, 5);
+    // h3 行：第一父 h5 替换自身槽位，h4 槽位原位保留（单父无重复追加）
+    assert.deepEqual(r.rows[2].outputSwimlanes.map((s) => s.id), [h(5), h(4)]);
+    // h4 行：第一父 h5 已在槽位 0 → 替换后产生重复槽位 [h5, h5]
+    assert.deepEqual(r.rows[3].outputSwimlanes.map((s) => s.id), [h(5), h(5)]);
+    assert.deepEqual(r.rows[4].outputSwimlanes, []);
+  });
+});
+
+describe('computeLanes colors', () => {
+  it('current branch ref paints the main line; tracking ref repaints it downstream', () => {
+    const C = constants();
+    const r = run(`window.GitGraph.computeLanes([
+      {hash:'a',parents:['b'],refs:[{type:'head',name:'main'},{type:'local',name:'main'}]},
+      {hash:'b',parents:['c'],refs:[{type:'remote',name:'origin/main'}]},
+      {hash:'c',parents:[],refs:[]}
+    ], {currentBranch:'main', trackingBranch:'origin/main'})`);
+    // HEAD（main）= 主色
+    assert.equal(r.rows[0].circleColor, C.CURRENT_COLOR);
+    // b 带 origin/main → 副色；第一父槽位随之换色（主线在此"转紫"）
+    assert.equal(r.rows[1].circleColor, C.REMOTE_COLOR);
+    assert.equal(r.rows[1].outputSwimlanes[0].color, C.REMOTE_COLOR);
   });
 
-  // merge 提交节点色应取「被合并进来」分支（非第一父所在泳道）的颜色，
-  // 而不是 merge 提交自身延续的主线泳道色。
-  it('merge node color follows the merged-in branch lane', () => {
+  it('side branches rotate the palette; merge circle inherits the first-parent slot color', () => {
     const C = constants();
+    const r = run(`window.GitGraph.computeLanes([
+      {hash:'m',parents:['x','y']},
+      {hash:'x',parents:['b']},
+      {hash:'y',parents:['b']},
+      {hash:'b',parents:[]}
+    ])`);
+    // 首行 m 无 refs：第一父 x 取色板第 1 色，第二父 y 取第 2 色
+    assert.deepEqual(r.rows[0].outputSwimlanes.map((s) => s.color),
+      [C.PALETTE[0], C.PALETTE[1]]);
+    // merge 圆色 = 圆心槽位色（第一父方向），而非被并入分支色
+    assert.equal(r.rows[0].circleColor, C.PALETTE[0]);
+  });
+});
+
+describe('buildGraphSvg', () => {
+  it('sizes to rows and lane count', () => {
+    const out = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([{hash:'a',parents:['b']},{hash:'b',parents:[]}]);
+      return window.GitGraph.buildGraphSvg(lanes);
+    })()`);
+    const C = constants();
+    assert.ok(out.svg.startsWith('<svg'));
+    // 总高 = 顶部半行（圆心居中于首行）+ rows*ROW_H；逐行几何每行画到行底
+    assert.equal(out.height, C.ROW_H / 2 + 2 * C.ROW_H);
+    assert.equal(out.width, 16 + 2 * C.LANE_W); // PAD_X*2 + (laneCount+1)*LANE_W
+  });
+
+  it('HEAD renders a hollow ring; merge renders a double ring', () => {
     const out = run(`(function(){
       const lanes = window.GitGraph.computeLanes([
-        {hash:'o',parents:['p1','p2']},
-        {hash:'p1',parents:[]},
-        {hash:'p2',parents:[]}
+        {hash:'h',parents:['m'],refs:[{type:'head',name:'main'}]},
+        {hash:'m',parents:['a','b']},
+        {hash:'a',parents:[]},
+        {hash:'b',parents:[]}
       ]);
-      return { commit: lanes.commits[0], svg: window.GitGraph.buildGraphSvg(lanes, 3).svg };
+      return window.GitGraph.buildGraphSvg(lanes);
     })()`);
-    // o 自身在 lane0；被合并进来的 p2 占 lane1 → mergeInLane 应为 1
-    assert.equal(out.commit.lane, 0);
-    assert.equal(out.commit.mergeInLane, 1);
-    // merge 节点 stroke 用 lane1 的颜色而非 lane0
-    const lane1Color = C.PALETTE[1 % C.PALETTE.length];
-    const mergeDot = out.svg.match(/<circle[^>]*git-dot-merge[^>]*>/)?.[0] || '';
-    assert.ok(mergeDot.includes('stroke="' + lane1Color + '"'), 'merge node should use merged-in branch color');
+    // HEAD：r7 外环 + r4 底色中心孔
+    assert.ok(out.svg.includes('r="7"'), 'HEAD outer ring');
+    assert.ok(out.svg.includes('r="4"'), 'HEAD core hole');
+    // merge：r6 外环 + r3 内环（双环）
+    assert.ok(out.svg.includes('r="6"'), 'merge outer ring');
+    assert.ok(out.svg.includes('r="3"'), 'merge inner ring');
+    assert.ok(out.svg.includes('git-dot-merge'));
   });
 
-  // 展开提交详情后泳道必须跟随文字下移：rowTops 传入后节点 y 应整体偏移
-  it('rowTops shifts nodes down to leave room for expanded details', () => {
+  it('no dashed strokes anywhere (no truncation lines, no ahead rings)', () => {
+    const out = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([{hash:'h',parents:['GONE']}]);
+      return window.GitGraph.buildGraphSvg(lanes);
+    })()`);
+    assert.ok(!out.svg.includes('stroke-dasharray'));
+    // 窗口外父 = 普通竖线延伸（git-edge）
+    assert.ok(out.svg.includes('git-edge'));
+  });
+
+  it('merge fork arc and duplicate-slot merge arc both render', () => {
+    const out = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([
+        {hash:'m',parents:['x','y']},
+        {hash:'x',parents:['b']},
+        {hash:'y',parents:['b']},
+        {hash:'b',parents:[]}
+      ]);
+      return window.GitGraph.buildGraphSvg(lanes);
+    })()`);
+    // y 行：重复槽位的合并弧（行顶 A 弧 + 横线）；m 行：第二父分叉弧
+    const arcs = out.svg.match(/<path[^>]*git-edge[^>]*>/g) || [];
+    assert.ok(arcs.length >= 2, 'merge and fork arcs exist');
+    assert.ok(out.svg.includes('A 12 12'), 'arc radius equals lane width');
+  });
+
+  it('rowTops shifts rows down to leave room for expanded details', () => {
     const { ROW_H } = constants();
     const top3 = 14 + ROW_H * 2 + 40;
     const out = run(`(function(){
@@ -214,11 +237,88 @@ describe('buildGraphSvg', () => {
       ];
       const lanes = window.GitGraph.computeLanes(commits);
       const tops = [14, 14 + ${ROW_H}, ${top3}];
-      return window.GitGraph.buildGraphSvg(lanes, 0, undefined, tops);
+      return window.GitGraph.buildGraphSvg(lanes, tops);
     })()`);
-    // 第三行圆心应等于 rowTops[2]（因上方详情被推下 40px）
-    assert.ok(out.svg.includes('cy="' + top3 + '"'), 'third node shifted down by expanded height');
-    // 总高 = 最后一行圆心 + DOT_R（4）
-    assert.equal(out.height, top3 + 4);
+    // 第三行圆心 y = rowTops[2] + ROW_H/2
+    assert.ok(out.svg.includes('cy="' + (top3 + ROW_H / 2) + '"'), 'third node shifted down');
+    assert.equal(out.height, top3 + ROW_H);
+  });
+
+  it('expanded row: lower vline spans through the detail region to the next row top', () => {
+    const { ROW_H } = constants();
+    const nextTop = ROW_H + 40; // 行 0 下方有 40px 详情，行 1 行顶被推到 66
+    const out = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([
+        {hash:'a',parents:['b']},
+        {hash:'b',parents:[]}
+      ]);
+      return window.GitGraph.buildGraphSvg(lanes, [0, ${nextTop}]);
+    })()`);
+    // 圆心仍对齐 26px 文本行中心，不下沉到展开区中央
+    assert.ok(out.svg.includes('cy="' + ROW_H / 2 + '"'), 'dot stays on the text line');
+    // 行 0 的下竖线贯通详情区，一直画到行 1 行顶（无缝衔接）
+    assert.ok(out.svg.includes('V ' + nextTop), 'lower vline reaches next row top');
+    assert.equal(out.height, nextTop + ROW_H);
+  });
+
+  it('expanded merge row: fork arc lands inside the standard pitch, then a vline continues down', () => {
+    const { ROW_H } = constants();
+    const nextTop = ROW_H + 40;
+    const out = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([
+        {hash:'m',parents:['x','y']},
+        {hash:'x',parents:[]}
+      ]);
+      return window.GitGraph.buildGraphSvg(lanes, [0, ${nextTop}]);
+    })()`);
+    // 弧仍在标准行距内落地（半径不随行距拉伸），落地后竖直贯通
+    assert.ok(out.svg.includes('A 12 12 0 0 1 32 ' + ROW_H), 'arc lands at standard pitch');
+    assert.ok(out.svg.includes('M 32 ' + ROW_H + ' V ' + nextTop), 'continuation vline through detail region');
+  });
+
+  it('rowWidth follows each row’s own swimlane count (per-row text offset)', () => {
+    const { LANE_W } = constants();
+    const r = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([
+        {hash:'a',parents:['b']},
+        {hash:'m',parents:['x','y']},
+        {hash:'x',parents:['b']},
+        {hash:'y',parents:['b']},
+        {hash:'b',parents:[]}
+      ]);
+      return [0,1,2,3,4].map((row) => window.GitGraph.rowWidth(lanes, row));
+    })()`);
+    // m 不在入列槽位中：b 穿透保留，x/y 追加 → 泳道数 3
+    assert.deepEqual(r, [
+      16 + 2 * LANE_W,
+      16 + 4 * LANE_W,
+      16 + 4 * LANE_W,
+      16 + 4 * LANE_W,
+      16 + 4 * LANE_W,
+    ]);
+  });
+
+  it('outgoing mark: dashed node sits in the top band; main line joins the first row dot', () => {
+    const { ROW_H, LANE_W } = constants();
+    const cx = 8 + LANE_W; // xOf(0)
+    const out = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([
+        {hash:'a',parents:['b']},{hash:'b',parents:[]}
+      ]);
+      return window.GitGraph.buildGraphSvg(lanes, [${ROW_H}, ${ROW_H * 2}], {outgoing:true});
+    })()`);
+    assert.ok(out.svg.includes('stroke-dasharray:4,2'), 'dashed ring rendered');
+    assert.ok(out.svg.includes('cy="' + ROW_H / 2 + '"'), 'node centered in the separator band');
+    assert.ok(out.svg.includes('M ' + cx + ' ' + ROW_H / 2 + ' V ' + ROW_H),
+      'main line runs from the node down to the first row top');
+  });
+
+  it('no outgoing mark: nothing drawn above the first row', () => {
+    const out = run(`(function(){
+      const lanes = window.GitGraph.computeLanes([{hash:'a',parents:['b']}]);
+      return window.GitGraph.buildGraphSvg(lanes, [0, 26]);
+    })()`);
+    assert.ok(!out.svg.includes('git-dot-outgoing'));
+    assert.ok(!out.svg.includes('stroke-dasharray'));
   });
 });

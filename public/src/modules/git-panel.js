@@ -534,15 +534,16 @@
   // 这里在渲染前按"每行 ROW_H + 展开详情高度"算出每行圆心的绝对 y。
   const DATASET_ROW_H = 26;  // 与 git-graph.js ROW_H 严格一致
   const FILE_LINE_H = 23;     // 与 CSS .git-commit-file 行高一致
-  const DETAIL_FLOW_V = 8;   // 详情容器垂直留白（padding-top 2 + padding-bottom 6）
+  const DETAIL_FLOW_V = 14;   // 详情容器垂直留白（padding 2+6 + margin-bottom 6）
   function commitDetailHeight(hash) {
     const files = state.commitFiles[hash];
     const n = Array.isArray(files) ? files.length : 0;
     return DETAIL_FLOW_V + Math.max(1, n) * FILE_LINE_H;
   }
-  function computeRowTops(commits) {
+  function computeRowTops(commits, leading) {
     const tops = [];
-    let cursor = 0;
+    // 顶部「传出的更改」标签行占一个行高（估算值，度量重绘会修正）
+    let cursor = leading ? DATASET_ROW_H : 0;
     commits.forEach((c) => {
       tops.push(cursor);
       cursor += DATASET_ROW_H;
@@ -551,53 +552,86 @@
     return tops;
   }
 
+  // DOM 度量重绘：上面的行高是估算值，而「传出的更改」分隔行、展开详情
+  // 的真实高度只有布局后才知道——估算与真实 DOM 一旦有出入，下方所有
+  // 泳道点整体错位（历史缺陷：展开详情后图形中间断裂）。挂载后实测每行
+  // offsetTop 重绘 SVG（单一真相 = 真实 DOM），任何流式内容变化都自愈。
+  let graphModel = null; // 最近一次成功计算的泳道模型（度量重绘复用）
+  function scheduleGraphSync() {
+    if (typeof requestAnimationFrame !== 'function') return;
+    requestAnimationFrame(() => {
+      try {
+        syncGraphGeometry();
+      } catch (_) { /* 度量失败保留估算版图形 */ }
+    });
+  }
+  function syncGraphGeometry() {
+    if (!graphModel || typeof document === 'undefined') return;
+    const root = document.querySelector('.git-history');
+    const rowEls = document.querySelectorAll('.git-history-row');
+    if (!root || !rowEls.length) return;
+    const tops = [];
+    for (let i = 0; i < rowEls.length; i++) tops.push(rowEls[i].offsetTop);
+    const svg = window.GitGraph.buildGraphSvg(graphModel.lanes, tops, graphModel.marks);
+    const canvas = root.querySelector('.git-history-canvas');
+    if (canvas) canvas.innerHTML = svg.svg;
+  }
+
   function renderGraphBody() {
     const commits = state.graph;
     if (state.errors.graph) {
+      graphModel = null;
       return '<div class="git-empty-desc">' + esc(zh('历史加载失败：', 'Failed to load history: ')) + esc(state.errors.graph) + '</div>';
     }
     if (!commits.length) {
+      graphModel = null;
       return '<div class="git-empty-desc">' + esc(zh('暂无提交', 'No commits yet')) + '</div>';
     }
 
-    // 「传出的更改」虚线节点仅在查看当前分支（branch 未过滤）时有意义
-    const aheadSet = state.branch ? new Set() : new Set(state.aheadHashes);
+    // 「传出的更改」（VS Code outgoing-changes 节点）：存在未推送提交时
+    // 置于列表顶部，虚线环节点由 SVG 画在主线泳道上（marks.outgoing）；
+    // 仅在查看当前分支（branch 未过滤）时有意义
+    const showOutgoing = !state.branch && state.aheadHashes.length > 0;
 
     // 泳道算法与 SVG 构建受保护：任何异常都降级为错误提示，绝不让整个
     // 面板空白（刷新/展开等场景偶发异常不应清空视图）。
     let lanes;
     let svg;
     try {
-      lanes = window.GitGraph.computeLanes(commits);
-      const rowTops = computeRowTops(commits);
-      svg = window.GitGraph.buildGraphSvg(lanes, 0, aheadSet, rowTops);
+      // refs 配色表：当前分支=主色、上游跟踪分支=副色（VS Code 同款叙事）
+      lanes = window.GitGraph.computeLanes(commits, {
+        currentBranch: state.status?.current || '',
+        trackingBranch: state.status?.tracking || '',
+      });
+      const rowTops = computeRowTops(commits, showOutgoing);
+      svg = window.GitGraph.buildGraphSvg(lanes, rowTops, { outgoing: showOutgoing });
+      graphModel = { lanes: lanes, marks: { outgoing: showOutgoing } };
+      scheduleGraphSync();
     } catch (err) {
+      graphModel = null;
       return '<div class="git-empty-desc">' + esc(zh('历史渲染失败：', 'Failed to render history: ')) + esc(String(err?.message || err)) + '</div>';
     }
-    const headRow = 0; // log 新→旧，第一行即所选分支顶端
 
-    // 头部区段里第一个「已推送」提交的行号（传出的更改分组行的插入点）
-    let outgoingEnd = 0;
-    while (outgoingEnd < commits.length && aheadSet.has(commits[outgoingEnd].hash)) outgoingEnd++;
-    const hasOutgoing = outgoingEnd > 0 && outgoingEnd < commits.length;
+    // 标签行文本列偏移跟随首行；节点图形由 SVG 承载，行内只有文字
+    const outgoingRow = showOutgoing
+      ? '<div class="git-outgoing-row" style="--git-row-w:' + window.GitGraph.rowWidth(lanes, 0) + 'px">'
+        + '<span class="git-outgoing-label">' + esc(zh('传出的更改', 'Outgoing Changes')) + '</span>'
+        + '<span class="git-outgoing-branch">' + esc(state.status?.current || '') + '</span></div>'
+      : '';
 
-    const rows = commits.map((c, row) => {
-      const isHead = row === headRow;
+    const rows = outgoingRow + commits.map((c, row) => {
+      const isHead = row === 0; // log 新→旧，第一行即所选分支顶端
       const refs = (c.refs || []).map(refLabel).join('');
-      const outgoingRow = hasOutgoing && row === outgoingEnd
-        ? '<div class="git-outgoing-row"><span class="git-outgoing-ring"></span>'
-          + '<span class="git-outgoing-label">' + esc(zh('传出的更改', 'Outgoing Changes')) + '</span>'
-          + '<span class="git-outgoing-branch">' + esc(state.status?.current || '') + '</span></div>'
-        : '';
+      // 每行文本列偏移 = 该行自身泳道宽度（VS Code 同款：浅行靠左，深行右移）
+      const rowW = window.GitGraph.rowWidth(lanes, row);
       const files = state.expandedCommit === c.hash
         ? renderCommitFiles(c.hash)
         : '';
       return [
-        outgoingRow,
-        '<div class="git-history-row' + (isHead ? ' is-head' : '') + (state.expandedCommit === c.hash ? ' is-expanded' : '') + '" data-gp-commit="' + esc(c.hash) + '" title="' + esc(c.author + ' · ' + c.relTime) + '">',
+        '<div class="git-history-row' + (isHead ? ' is-head' : '') + (state.expandedCommit === c.hash ? ' is-expanded' : '') + '" style="--git-row-w:' + rowW + 'px" data-gp-commit="' + esc(c.hash) + '" title="' + esc(c.author + ' · ' + c.relTime) + '">',
         '<span class="git-history-text">',
-        refs,
         '<span class="git-history-subject">' + esc(c.subject) + '</span>',
+        refs,
         '</span>',
         '</div>',
         files,
