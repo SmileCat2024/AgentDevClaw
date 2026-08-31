@@ -543,3 +543,54 @@ M3（前端搜索未接远程转发，服务端已就绪）记跟进票；双机
 - 服务端转发测试照 `test/remote-write.test.js` harness；前端 vm 沙箱测试照 `frontend-core-helpers.test.js` 模式（overrides 经 `ctx.run` 赋值）。
 - 双机冒烟是各票验收的一部分（本地双实例可替代）；mock 测试不能替代物理链路验收。
 - 远程端必须运行同等代码版本（R2-01 之后 = 两端都含 Phase 2 + 对应票改动），版本漂移走既有握手告警。
+
+## 批次 10：Capability-Scoped Shell（033–034）（2026-08-31）
+
+来源：2026-08-31 grill 会话（设计树两轮全部确认）。上游调研：Capability-Scoped
+Shell 技术选型（sh-syntax AST 残缺弃用、bwrap 移出 v1、execa 不引入）与
+coder 子代理散装 bash 调度的收编需求。定位裁决：**非沙箱**——无环境隔离，
+边界 = 解析验收 + 动词白名单 + 参数校验的确定性拒绝；claw CLI 为对外契约
+原样保留，内部 agent 调度走内部链路。
+
+### 已确认决策
+
+| # | 决策 | 结论 |
+|---|------|------|
+| Q1 | v1 范围 | 基座 + coder_shell；github_shell 属 v2 |
+| Q2 | 工具形态 | 每 shell 一个 bash 形态工具，保留 pipeline 表达；动词发现靠拒绝报文 |
+| Q3 | 挂载 | 仅 main 身份；coder 不自派工单 |
+| Q4 | 策略存放 | TS 声明式常量 + manifest 启停覆盖；变更走代码 + 测试 |
+| Q5 | 读写分级 | 全放行 + 分级标注 + 全量审计；确认闸 manifest 开关默认关 |
+| Q6 | 阻塞语义 | 阻塞 = adapter 实现语义；CLI 时间 flag 阉割；超时归框架 Tool.timeout |
+| Q7 | 动词表 | create/send/watch/list/show/archive/unarchive/deliver；advance/resume 不入表 |
+| Q8 | 技能处置 | 重写 workspace-coder-dispatch 内部示例，纪律不变量保留 |
+| Q9 | bash 旁路 | 不拦截；收口靠技能不再喂旧链路，不打运行时补丁 |
+| Q10 | 审计深度 | v1 落统一日志契约（capability 命名空间），Web UI v2，字段按可呈现设计 |
+| Q11 | 验收线 | main 经 coder_shell 走完真实调度循环；CLI 对外回归不受影响 |
+
+### 本批 tickets
+
+执行顺序：**033 → 034 线性串行**（034 挂载 033 基座，033 未合入 034 不得开工）。
+
+| 票 | 仓库 | 内容 |
+|----|------|------|
+| [033](033-claw-capability-shell-foundation.md) | AgentDevClaw | capability-shell 基座：管线四道检查点 + 领域策略声明类型 |
+| [034](034-claw-coder-shell-verbs-and-skill.md) | AgentDevClaw | coder_shell 动词表 + threads adapter + 调度技能重写 |
+
+### 明确暂缓项（决策树已关闭的分支及重开条件）
+
+| 项 | 暂缓理由 | 重开条件 |
+|----|---------|---------|
+| bwrap 受限执行段 | 定位裁决：非沙箱，边界靠管线；第二领域 shell（github_shell）真实引入 jq/grep 时再评估 | github_shell 立项 |
+| sh-syntax 完整 AST | 实测其 JS AST 残缺（仅位置信息）；fork Go 映射层需维护 Go 工具链 | 需要命令改写/自动补全等完整 AST 场景 |
+| Web UI 判定明细呈现 | v1 落结构化事件即可，UI 呈现有前端管线成本 | v2 随 github_shell 立项 |
+| 变更动词确认闸默认开 | 无人值守派发流程被打断，验收环节已有人盯 | 误派发真实发生 |
+| OpenTelemetry | 统一日志契约 + DebugHub 已覆盖 v1 审计需求 | 跨进程链路分析真实需求出现 |
+| advance/resume 动词 | 高风险低频，rotation_failed 人工介入符合技能故障表 | 内部链路稳定运行后按需评估 |
+
+### 验收与发布注意（全批次通用）
+
+- 两票均为 Claw 侧改动（local-features + 预制 agent 装配 + 技能文档）。
+- 033/034 测试进 local-features 体系（node:test + assert/strict，纯函数管线 +
+  动词判定用例锁死）；改 local-features/dist 后重启对应 agent 即生效。
+- 端到端验收需整服重启后真实调度循环（034 验收标准）。
