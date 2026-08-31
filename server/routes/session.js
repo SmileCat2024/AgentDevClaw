@@ -40,6 +40,7 @@ import { META_VERSION } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 import { getInternalAuthToken } from '../auth.js';
+import { resolveLifecycleTarget, resolveTransformationTarget, isBrowseOnlyMount } from '../thread-control/target-resolution.js';
 
 // server.js lives at project root; this module is at server/routes/session.js
 const __filename = fileURLToPath(import.meta.url);
@@ -103,7 +104,29 @@ export function setupSessionRoutes(app, express, ctx) {
     clearUISurfaces,
     threadRotation,
     threadLifecycle,
+    threadSuccession,
+    threadDelete,
   } = ctx;
+
+  // T003：统一目标解析的成员归属真相源——经 threadLifecycle.findThreadBySession
+  // 绑定框架 WorkThread 的会话链记录（同源：input-gateway / acp），
+  // 所有 Session 路由共用同一解析结果，杜绝「按 sessionType 特判」的分叉。
+  const _memberLookup = async (agentId, sessionId) => {
+    if (typeof threadLifecycle?.findThreadBySession !== 'function') return null;
+    return threadLifecycle.findThreadBySession(agentId, sessionId).catch(() => null);
+  };
+
+  // T003：统一目标描述符 → 路由响应附加块（请求目标 + 实际生效对象 + 归属），
+  // 让调用方不会误以为「Session 成功、Thread 未变化」。
+  const _targetShape = (target) => ({
+    target: {
+      request: target.request,
+      actual: target.actual,
+      membership: target.membership,
+      threadId: target.threadId ?? null,
+      headSessionId: target.headSessionId ?? null,
+    },
+  });
 
 // Automation trigger from thread-host runtimes (ContextRotationTriggerFeature):
 // the event is ephemeral and thread-rotation is its only consumer. Interactive
@@ -672,6 +695,21 @@ app.post('/protoclaw/session_generate_summary', express.json(), async (req, res,
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
     const force = !!req.body?.force;
+    // T003：summary 只能作用于 Thread 当前 head；历史 Session 返回
+    // stale_session（附 Thread ID 与当前 head），不静默改写目标。
+    const transformTarget = await resolveTransformationTarget({
+      agentId, sessionId, memberLookup: _memberLookup,
+    });
+    if (!transformTarget.ok && transformTarget.code === 'stale_session') {
+      // 直接以 409 统一形状返回（不经全局错误处理器——那里会丢弃 target 附加块）。
+      res.status(409).json({
+        ok: false,
+        code: 'stale_session',
+        message: transformTarget.message,
+        ..._targetShape(transformTarget),
+      });
+      return;
+    }
     const existingSummary = await findSessionSummary(agentId, sessionId);
     if (existingSummary && !force) {
       await setSessionHasSummary(agentId, sessionId, true);
@@ -1263,6 +1301,28 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error, requestMetadata));
     }
 
+    // T003：上下文变换只能作用于 Thread 当前 head。目标是 Thread 历史 Session 时
+    // 返回明确的 stale_session 过期目标错误（附 Thread ID 与当前 head），不静默
+    // 改写成 head、不启动接力。非 Thread Session（standalone）保持原 Session 语义。
+    const transformTarget = await resolveTransformationTarget({
+      agentId: preferredAgentId,
+      sessionId,
+      memberLookup: _memberLookup,
+    });
+    if (!transformTarget.ok && transformTarget.code === 'stale_session') {
+      // 直接以 409 统一形状返回（不经全局错误处理器——那里会丢弃 target 附加块）：
+      // 调用方拿到 Thread ID 与当前 head，可据此重定向到当前 head 发起变换。
+      trace.mark('failed', { errorCode: 'stale_session' });
+      res.status(409).json({
+        ok: false,
+        code: 'stale_session',
+        message: transformTarget.message,
+        ..._targetShape(transformTarget),
+        operationId: trace.operationId,
+      });
+      return;
+    }
+
     const detached = req.body?.detached !== false;
     const policy = req.body?.policy || {};
     const archiveOriginal = req.body?.archiveOriginal === true;
@@ -1285,16 +1345,18 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
 
     // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
     // 投向即将退役的旧 head。公共入口一处标记，detached / 同步分支共用；
-    // applySessionSuccession 推进 head 时原子清除。非线程宿主 no-op。
+    // 线程交接意图（coder 宿主）：接力期间 inbox 指令保持 pending，不被
+    // 投向即将退役的旧 head。公共入口一处标记，detached / 同步分支共用；
+    // 提交点（thread-succession）推进 head 时原子清除。非线程宿主 no-op。
     // 挡板写入失败即中断：放行会让交接窗口内的新指令直投即将退役的旧
     // head 并随其退役丢失——显式失败优于静默丢失。
-    const successionGate = await getThreadIntegration().beginSessionSuccession({
+    const successionBegun = await getThreadIntegration().beginSessionSuccession({
       agentId: preferredAgentId,
       sessionId,
       reason: lineageReason,
     });
-    if (isSuccessionGateFailure(successionGate)) {
-      const error = new Error(`Thread handoff gate write failed for session=${sessionId}: ${successionGate.error || 'unknown error'}`);
+    if (isSuccessionGateFailure(successionBegun)) {
+      const error = new Error(`Thread handoff gate write failed for session=${sessionId}: ${successionBegun.error || 'unknown error'}`);
       error.code = 'thread_handoff_gate_failed';
       error.status = 500;
       throw error;
@@ -1315,7 +1377,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     // 文件，不先 stop/flush 会基于过期快照生成失真摘要，successor 接线也
     // 不该与旧 runtime 并存。只在挡板立起后执行（纯 session 的手动 compact
     // 不得被动停 runtime）；失败不阻断，与 rotation 的 stop 语义一致。
-    if (successionGate.applied) {
+    if (successionBegun.applied) {
       await stopManagedAgent(preferredAgentId, sessionId).catch((err) => {
         console.warn(`[compact_and_resume] failed to retire pre-compact runtime for session=${sessionId}:`, err?.message || err);
       });
@@ -1337,16 +1399,30 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
             jobId,
           });
           console.log(`[compact_and_resume] job ${jobId} completed for session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
-          // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）
-          const threadSuccession = await getThreadIntegration().applySessionSuccession({
-            agentId: preferredAgentId,
-            fromSessionId: sessionId,
-            toSessionId: result?.session?.id,
-            reason: lineageReason,
-          });
-          // R8：推进失败时线程仍指向原会话，归档会挖掉线程的 head——跳过
-          const successionBlocked = threadSuccession?.applied === false
-            && threadSuccession?.reason === 'handoff_failed';
+          // 线程接力（coder 宿主）：共享提交点（thread-succession）——
+          // successor READY 且身份一致才推进 head + 投递暂存指令（no-op for
+          // others）；未 READY / 身份失败记录阶段与原因，旧 head 保持有效。
+          const commit = threadSuccession
+            ? await threadSuccession.commitSuccession({
+              agentId: preferredAgentId,
+              fromSessionId: sessionId,
+              toSessionId: result?.session?.id,
+              reason: lineageReason,
+              successorReady: result?.agent != null,
+            })
+            : await getThreadIntegration().applySessionSuccession({
+              agentId: preferredAgentId,
+              fromSessionId: sessionId,
+              toSessionId: result?.session?.id,
+              reason: lineageReason,
+            });
+          if (!commit.applied && !['no_thread_for_session', 'thread_not_found', 'invalid_succession'].includes(commit.reason)) {
+            console.warn(`[compact_and_resume] job ${jobId} thread succession not committed for session=${sessionId}: ${commit.reason} (${commit.stage || ''})`);
+          }
+          // R8：推进失败（applied=false + handoff_failed）时线程仍指向原会话，
+          // 归档会挖掉线程的 head——跳过归档。
+          const successionBlocked = commit?.applied === false
+            && commit?.reason === 'handoff_failed';
           // 服务端归档原会话
           let didArchive = false;
           if (archiveOriginal && preferredAgentId && !successionBlocked) {
@@ -1369,18 +1445,32 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
             errorMessage: error instanceof Error ? error.message : String(error),
             jobId,
           });
-          // K2：detached job 失败必须把交接停在 rotation_failed——挡板留在
-          // 盘上只会滞留至 stale（5 分钟），期间线程域输入全部积压且用户
-          // 无感知。挡板未立的场景（begin 失败已被守卫拦成 no-op）。
-          await getThreadIntegration().failSessionSuccession({
-            agentId: preferredAgentId,
-            sessionId,
-            reason: 'manual_compact_failed',
-            stage: 'compact_or_successor',
-            error: error instanceof Error ? error.message : String(error),
-          }).catch((failure) => {
-            console.error('[compact_and_resume] failed to persist rotation_failed:', failure?.message || failure);
-          });
+          // T002：detached 生成失败也要收敛线程交接——记录失败阶段（错误
+          // code，生成阶段缺省 compact_or_successor）+ 收敛挡板；旧 head
+          // 保持有效。共享提交点缺席时走 integration 兜底（K3 守卫下对
+          // 未立挡板场景 no-op）。非线程宿主 no-op。
+          const failureDetail = error instanceof Error ? error.message : String(error);
+          if (threadSuccession && typeof threadSuccession.failSuccession === 'function') {
+            threadSuccession.failSuccession({
+              agentId: preferredAgentId,
+              fromSessionId: sessionId,
+              reason: 'compact_failed',
+              stage: error?.code || 'compact_or_successor',
+              error: failureDetail,
+            }).catch((failure) => {
+              console.error('[compact_and_resume] failed to persist succession failure:', failure?.message || failure);
+            });
+          } else {
+            await getThreadIntegration().failSessionSuccession({
+              agentId: preferredAgentId,
+              sessionId,
+              reason: 'compact_failed',
+              stage: error?.code || 'compact_or_successor',
+              error: failureDetail,
+            }).catch((failure) => {
+              console.error('[compact_and_resume] failed to persist rotation_failed:', failure?.message || failure);
+            });
+          }
         });
       }, 10);
 
@@ -1408,19 +1498,29 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
     trace.mark('resume_completed', { targetSessionId: result?.session?.id || '' });
     console.log(`[compact_and_resume] completed session=${sessionId} newSession=${result?.session?.id || 'unknown'}`);
 
-    // 线程接力（coder 宿主）：head 推进 + 暂存指令投递（no-op for others）。
-    // 放在响应前：前端拿到响应即导航到新会话并刷新线程状态，需保证
-    // head 已推进，避免徽标短暂指向旧会话。
-    const threadSuccession = await getThreadIntegration().applySessionSuccession({
-      agentId: preferredAgentId,
-      fromSessionId: sessionId,
-      toSessionId: result?.session?.id,
-      reason: lineageReason,
-    });
+    // 线程接力（coder 宿主）：共享提交点（thread-succession）——successor
+    // READY 且身份一致才推进 head + 投递暂存指令（no-op for others）；
+    // 未 READY / 身份失败记录阶段与原因，旧 head 保持有效。放在响应前：
+    // 前端拿到响应即导航到新会话并刷新线程状态，需保证 head 已推进（或
+    // 失败已收敛），避免徽标短暂指向旧会话。
+    const successionOutcome = threadSuccession
+      ? await threadSuccession.commitSuccession({
+        agentId: preferredAgentId,
+        fromSessionId: sessionId,
+        toSessionId: result?.session?.id,
+        reason: lineageReason,
+        successorReady: result?.agent != null,
+      })
+      : await getThreadIntegration().applySessionSuccession({
+        agentId: preferredAgentId,
+        fromSessionId: sessionId,
+        toSessionId: result?.session?.id,
+        reason: lineageReason,
+      });
     // R8：推进失败（applied=false + handoff_failed）时线程仍指向原会话，
     // 归档会挖掉线程的 head——跳过归档并写明原因。
-    const successionBlocked = threadSuccession?.applied === false
-      && threadSuccession?.reason === 'handoff_failed';
+    const successionBlocked = successionOutcome?.applied === false
+      && successionOutcome?.reason === 'handoff_failed';
 
     // 服务端归档原会话
     let didArchive = false;
@@ -1454,7 +1554,7 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       operationId: trace.operationId,
       revision: finalRevision,
       ...result,
-      threadSuccession,
+      threadSuccession: successionOutcome,
       sessionDelta: {
         revision: finalRevision,
         activeSessionId: finalIndex?.activeSessionId || targetSessionId || null,
@@ -1480,13 +1580,16 @@ app.post('/protoclaw/context_handoffs/compact_and_resume', express.json(), async
       errorCode: error?.code || 'compact_failed',
       errorMessage: error instanceof Error ? error.message : String(error),
     });
-    // K2：同步分支失败同样落 rotation_failed（begin 已立挡板的场景；
-    // 挡板未立时 failSessionSuccession 在 K3 守卫下 no-op）
+    // T002：生成阶段抛错（handoff 导出 / successor 创建失败）且挡板已写入时
+    // 收敛交接——记录失败阶段 + 清除挡板，旧 head 保持有效。failSuccession
+    // 底层即 integration 的 failSessionSuccession，此处直接走 integration
+    // 兜底：K3 守卫对未立挡板场景 no-op；target 在 try 外声明，catch 内
+    // 不引用 try 作用域标识。detached 分支的生成失败在各自 catch 内收敛。
     await getThreadIntegration().failSessionSuccession({
       agentId: target?.agentId || '',
       sessionId: target?.sessionId || '',
-      reason: 'manual_compact_failed',
-      stage: 'compact_or_successor',
+      reason: 'compact_failed',
+      stage: error?.code || 'compact_or_successor',
       error: error instanceof Error ? error.message : String(error),
     }).catch((failure) => {
       console.error('[compact_and_resume] failed to persist rotation_failed:', failure?.message || failure);
@@ -1534,6 +1637,16 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error, requestMetadata));
     }
     const agent = await requireAgentLight(agentId);
+    // T003：历史 Session 的 activate 只允许浏览 / 挂载视角，不改变 head。
+    // 解析目标归属：Thread 成员时附统一目标形状（实际对象 = Thread）；
+    // 历史成员标记 browseOnly=true——挂载运行以便只读查看，但绝不推进
+    // Thread head（head 只由上下文变换的接力提交点推进，见 thread-succession）。
+    const activateTarget = await resolveLifecycleTarget({
+      agentId: agent.id,
+      sessionId,
+      memberLookup: _memberLookup,
+    });
+    const browseOnly = activateTarget.ok && isBrowseOnlyMount(activateTarget);
     const session = await activatePrebuiltSession(agent.id, sessionId, { returnSummary: false });
     const committedIndex = await readSessionIndex(agent.id);
     trace.mark('index_committed', { revision: committedIndex.revision });
@@ -1555,6 +1668,8 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
       targetSessionId: session.id,
       targetStatus: status,
       agent: null,
+      browseOnly: browseOnly || null,
+      ..._targetShape(activateTarget),
     });
     trace.mark('response_sent');
   } catch (error) {
@@ -1604,11 +1719,49 @@ app.post('/protoclaw/prebuilt_sessions/delete', express.json(), async (req, res,
       assemblyRuntime = await stopAssemblyRuntime(sessionId);
     }
     const deletedRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
-    if (deletedRecord.sessionType === 'coder') {
-      const error = new Error('Coder sessions are managed by their thread and cannot be deleted individually');
-      error.statusCode = 409;
-      error.code = 'coder_session_delete_forbidden';
-      throw error;
+    // T005：删除按 Thread 成员关系解析（统一入口，复用 T003 的
+    // resolveLifecycleTarget）。Thread 成员（root / historical / head）不能
+    // 单独删除 Session——删除的是工作容器本身（级联清理其 Session / handoff /
+    // Inbox / 执行记录 / record）；独立 Session（如 main）保持原删除语义。
+    const lifecycleTarget = await resolveLifecycleTarget({
+      agentId: agent.id,
+      sessionId,
+      memberLookup: _memberLookup,
+    });
+    if (lifecycleTarget.ok && lifecycleTarget.actual.type === 'thread') {
+      if (!threadDelete || typeof threadDelete.deleteThread !== 'function') {
+        trace.mark('failed', { errorCode: 'thread_delete_not_wired' });
+        res.status(503).json({
+          ok: false,
+          code: 'thread_delete_not_wired',
+          message: 'Thread delete is not wired on this server; thread members cannot be deleted individually',
+          ..._targetShape(lifecycleTarget),
+          operationId: trace.operationId,
+        });
+        return;
+      }
+      // 历史 Session 发起删除 → 实际对象是所属 Thread（响应以 Thread 为主体，
+      // 保留原请求目标，调用方不会误以为「Session 成功、Thread 未变化」）。
+      // 部分失败返回结构化残留（cleanup.failures），不伪装成功。
+      const deleteResult = await threadDelete.deleteThread(lifecycleTarget.actual.id, {
+        reason: 'session_delete_redirect',
+      });
+      trace.mark('thread_delete_complete', { status: deleteResult.status });
+      res.json({
+        ok: deleteResult.status === 'complete',
+        code: deleteResult.status === 'complete' ? 'thread_deleted' : 'thread_delete_partial',
+        deleted: deleteResult.deleted,
+        idempotent: deleteResult.idempotent === true,
+        threadId: deleteResult.threadId,
+        status: deleteResult.status,
+        cleanup: deleteResult.cleanup,
+        failures: deleteResult.cleanup?.failures || [],
+        ..._targetShape(lifecycleTarget),
+        deletedSessionId: sessionId,
+        operationId: trace.operationId,
+      });
+      trace.mark('response_sent');
+      return;
     }
     const deletedRuntime = getAgentRuntime(agent.id, sessionId);
     const deleted = await deletePrebuiltSession(agent.id, sessionId, {
@@ -1689,18 +1842,20 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
     const agent = await requireAgentLight(agentId);
     const sessionRecord = await requirePrebuiltSessionRecord(agent.id, sessionId);
     const archived = req.body.archived !== false;
-    if (sessionRecord.sessionType === 'coder' && threadLifecycle) {
-      const thread = await threadLifecycle.findThreadBySession(agent.id, sessionId);
-      if (!thread) {
-        const error = new Error('Coder session is not attached to a thread');
-        error.statusCode = 409;
-        error.code = 'coder_thread_missing';
-        throw error;
-      }
+    // T003：目标按 Thread 成员关系解析（统一入口），不再按 sessionType 特判——
+    // Thread 成员（head / 历史）的归档 / 恢复定位所属 Thread 执行 Thread 语义；
+    // 独立 Session 保持原语义。响应附统一目标形状，主体为实际生效对象。
+    const lifecycleTarget = await resolveLifecycleTarget({
+      agentId: agent.id,
+      sessionId,
+      memberLookup: _memberLookup,
+    });
+    if (lifecycleTarget.ok && lifecycleTarget.actual.type === 'thread') {
       if (archived) {
-        const threadResult = await threadLifecycle.archiveThread(thread.threadId, { reason: 'session_archive_redirect' });
+        const threadResult = await threadLifecycle.archiveThread(lifecycleTarget.actual.id, { reason: 'session_archive_redirect' });
         res.json({
           ...threadResult,
+          ..._targetShape(lifecycleTarget),
           archivedSessionId: sessionId,
           archived: true,
           operationId: trace.operationId,
@@ -1708,9 +1863,10 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
         trace.mark('response_sent');
         return;
       }
-      const threadResult = await threadLifecycle.unarchiveThread(thread.threadId);
+      const threadResult = await threadLifecycle.unarchiveThread(lifecycleTarget.actual.id);
       res.json({
         ...threadResult,
+        ..._targetShape(lifecycleTarget),
         archivedSessionId: sessionId,
         archived: false,
         operationId: trace.operationId,
@@ -1736,7 +1892,7 @@ app.post('/protoclaw/prebuilt_sessions/archive', express.json(), async (req, res
         targetStartupError = String(error?.message || error);
       }
     }
-    res.json({ ...result, targetSessionId, targetStatus, targetStartupError, operationId: trace.operationId });
+    res.json({ ...result, ..._targetShape(lifecycleTarget), targetSessionId, targetStatus, targetStartupError, operationId: trace.operationId });
     trace.mark('response_sent');
 
     // 归档状态变化通知关联群聊；线程投影仍以 session index 的实时状态为准。

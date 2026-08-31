@@ -19,17 +19,13 @@ import { synthesizeThreadLifeState } from './thread-life-state.js';
  * @param {object} options
  * @param {{ core: import('@agentdevjs/core').WorkThread, board: import('@agentdevjs/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
  * @param {{ archiveThread: Function, unarchiveThread: Function }} options.lifecycle
- * @param {import('express').Express} app
- * @param {typeof import('express').json} express
- * @param {object} options
- * @param {{ core: import('@agentdevjs/core').WorkThread, board: import('@agentdevjs/core').WorkThreadBoard, archive: import('./thread-archive.js').ThreadArchiveIndex }} options.control
- * @param {{ archiveThread: Function, unarchiveThread: Function }} options.lifecycle
  * @param {Function} [options.tryDeliver] 指令追加后的即时投递（经 delivery-consumer 消费面；不传则只入箱不投递）
  * @param {Function} [options.ensureHeadRuntime] head runtime 就绪闸：head runtime 不在时
  *   由宿主唤起（startManagedAgent + ready 等待）；返回 { ok: true } 或 { ok: false, code, message }。
  *   就绪闸失败时指令仍入箱（等下一次触发点），但响应带 runtimeWake 失败事实。
+ * @param {{ deleteThread: Function }} [options.threadDelete] - T005 删除级联服务
  */
-export function setupThreadRoutes(app, express, { control, lifecycle, resolveSessionOpenDirectory, tryDeliver, ensureHeadRuntime } = {}) {
+export function setupThreadRoutes(app, express, { control, lifecycle, threadDelete, resolveSessionOpenDirectory, tryDeliver, ensureHeadRuntime } = {}) {
   if (!control?.core || !control?.board || !control?.archive) {
     throw new Error('setupThreadRoutes requires a control ({core, board, archive})');
   }
@@ -74,6 +70,42 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
       const err = new Error('线程已归档，拒绝新投递（如需继续请新建线程或先取消归档）');
       err.status = rejection.status;
       err.code = rejection.code;
+      throw err;
+    }
+  };
+
+  // T005：删除 seal 把线程置为 closed（terminal）但 record 尚未删（含 partial
+  // 失败残留窗口）。框架 appendCommand 不检查 terminal 状态——路由层必须
+  // 显式拒绝向 closed 线程追加新指令（与 deliverPendingCommands 的
+  // thread_closed 语义对齐），否则删除期间新 command 会写进正在销毁的 Inbox。
+  const _assertNotClosed = async (threadId) => {
+    const thread = await core.getThread(threadId);
+    if (!thread) {
+      const err = new Error('Thread not found');
+      err.status = 404;
+      err.code = 'thread_not_found';
+      throw err;
+    }
+    if (thread.status === 'closed') {
+      const err = new Error('线程已关闭，拒绝新指令写入（删除 / 关闭后的线程不再接受派发）');
+      err.status = 409;
+      err.code = 'thread_closed';
+      throw err;
+    }
+  };
+
+  // T005：删除 begin 事务（hold + deleting 标记）后、seal（closed）前的窗口，
+  // 线程未 closed（看板事件需照常收敛，自然收尾才可达），框架 appendCommand /
+  // deliverPendingCommands 不拒绝 deleting 线程——入口层必须显式停止新写入与
+  // 派发（实施要求 2：删除前停止新的 command 写入和自动投递）。与
+  // _assertNotClosed 互补：deleting 窗口（begin 后 / seal 前）由本守卫拦，
+  // seal 后（closed）由 _assertNotClosed 拦，record 删除后返回 404。
+  const _assertNotDeleting = async (threadId) => {
+    const thread = await core.getThread(threadId);
+    if (thread && thread.deleting === true) {
+      const err = new Error('线程正在删除中，拒绝新指令写入与投递');
+      err.status = 409;
+      err.code = 'thread_deleting';
       throw err;
     }
   };
@@ -212,6 +244,8 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
     try {
       const { kind, text, source, idempotencyKey } = req.body || {};
       await _assertNotArchived(req.params.threadId);
+      await _assertNotDeleting(req.params.threadId);
+      await _assertNotClosed(req.params.threadId);
       const thread = await core.getThread(req.params.threadId);
       if (!thread) {
         return res.status(404).json({ ok: false, code: 'thread_not_found', message: 'Thread not found' });
@@ -281,6 +315,8 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
   app.post('/protoclaw/threads/:threadId/deliver', jsonMiddleware, async (req, res) => {
     try {
       await _assertNotArchived(req.params.threadId);
+      await _assertNotDeleting(req.params.threadId);
+      await _assertNotClosed(req.params.threadId);
       let result = await core.deliverPendingCommands(req.params.threadId);
       // 与 send 同源的恢复闸：裸投递撞上 runtime_not_accepting（head runtime
       // 不在）时先唤起再重投一次，deliver 从"只会重复报错的手动动作"变成
@@ -349,6 +385,26 @@ export function setupThreadRoutes(app, express, { control, lifecycle, resolveSes
     try {
       const result = await lifecycleService.unarchiveThread(req.params.threadId);
       res.json({ ok: true, ...result });
+    } catch (err) {
+      _errorResponse(res, err);
+    }
+  });
+
+  // ── 删除（T005：直接级联清理，带确认的破坏性操作，服务端是最终安全边界）──
+  app.post('/protoclaw/threads/:threadId/delete', jsonMiddleware, async (req, res) => {
+    try {
+      if (!threadDelete || typeof threadDelete.deleteThread !== 'function') {
+        throw Object.assign(new Error('Thread delete is not wired on this server'), {
+          code: 'delete_not_available',
+          status: 503,
+        });
+      }
+      const result = await threadDelete.deleteThread(req.params.threadId, {
+        forceWaitMs: Number.isFinite(Number(req.body?.forceWaitMs)) ? Number(req.body?.forceWaitMs) : undefined,
+        reason: typeof req.body?.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim() : 'user_delete',
+      });
+      // partial（存在结构化残留）不伪装成功；ok 仅当清理完全收敛。
+      res.json({ ok: result.status === 'complete', ...result });
     } catch (err) {
       _errorResponse(res, err);
     }

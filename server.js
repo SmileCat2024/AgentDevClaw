@@ -102,9 +102,16 @@ import { getThreadIntegration } from './server/thread-control/thread-integration
 import { onRuntimeReady } from './server/shared/runtime-hooks.js';
 import { setupThreadRoutes } from './server/thread-control/thread-routes.js';
 import { createThreadLifecycleService } from './server/thread-control/thread-lifecycle.js';
+import { createThreadDeleteService } from './server/thread-control/thread-delete.js';
+import { createThreadDeleteResources } from './server/thread-control/thread-delete-resources.js';
 import { setupAcpRoutes } from './server/routes/acp.js';
 import { deliverUserInput } from './server/thread-control/input-gateway.js';
 import { createThreadRotationService } from './server/thread-control/thread-rotation.js';
+import {
+  createThreadSuccessionService,
+  createThreadRecoveryService,
+} from './server/thread-control/thread-succession.js';
+import { resolveSessionIdentity } from './server/thread-control/thread-identity.js';
 import { applyProxy } from './server/shared/proxy-manager.js';
 import {
   setupFeatureRepositoryRoutes,
@@ -282,23 +289,41 @@ Object.assign(sessionApi, {
 
 const threadControl = getThreadControl();
 const threadIntegration = getThreadIntegration();
+// T002：接力共享提交点（compact / summary / trim / rotation 共用）——
+// successor READY 门禁 + T001 身份门 + 失败收敛 + 重启恢复。
+const threadSuccession = createThreadSuccessionService({
+  threadControl,
+  threadIntegration,
+  stopManagedAgent,
+});
+const threadRecovery = createThreadRecoveryService({
+  threadControl,
+  identitySource: resolveSessionIdentity,
+});
 const threadLifecycle = createThreadLifecycleService({
   control: threadControl,
-  interruptSession: async (agentId, sessionId) => {
-    const runtime = getAgentRuntime(agentId, sessionId);
-    const viewerAgentId = runtime?.viewerAgentId;
-    if (!viewerAgentId) return { status: 'not_running' };
-    const response = await fetch(`${VIEWER_ORIGIN}/api/agents/${encodeURIComponent(viewerAgentId)}/interrupt`, { method: 'POST' });
-    if (!response.ok) throw new Error(`Viewer interrupt returned ${response.status}`);
-    return { status: 'interrupted', viewerAgentId };
-  },
+  // T004：归档不再预先 interrupt head——已经开始的调用允许自然完成
+  // （inflight drain），runtime 经 stopSession graceful 退役（remove-session
+  // / SIGTERM → agent dispose 收敛），由归档的 hold 保证收尾后不再消费
+  // 下一条 Inbox command。
   stopSession: stopManagedAgent,
+});
+// T005：线程直接删除与级联清理（带确认的破坏性操作，服务端是最终安全边界）。
+// 运行中调用判定 = 锚点 in_flight 命令 + 看板 running（runtime turn 事件流
+// 的真相，turn.completed 回写 idle）；调用收尾后成员 runtime 无条件经
+// stopManagedAgent 幂等收敛（remove-session / SIGTERM，长活进程不绑已删会话）。
+const threadDelete = createThreadDeleteService({
+  control: threadControl,
+  locateBySession: (agentId, sessionId) => threadLifecycle.findThreadBySession(agentId, sessionId),
+  stopSession: stopManagedAgent,
+  ...createThreadDeleteResources(),
 });
 const threadRotation = createThreadRotationService({
   sessionApi: sessionHelpers,
   stopManagedAgent,
   threadIntegration,
   threadControl,
+  threadSuccession,
 });
 
 // ── Identity Registry API → server/routes/agent-discovery.js (setupRoutes) ──
@@ -405,6 +430,8 @@ setupSessionRoutes(app, express, {
   clearUISurfaces: (viewerAgentId) => getUISurfaceStore().clearAgent(viewerAgentId),
   threadRotation,
   threadLifecycle,
+  threadSuccession,
+  threadDelete,
 });
 
 // ── Open Sessions Recovery → open-sessions-tracker ──────────────────────────
@@ -533,6 +560,7 @@ setupThreadRoutes(app, express, {
     }
     return { ok: true };
   },
+  threadDelete,
   // head 会话 → 项目目录（PH 项目卡片 coder tab 的线程归属）；会话不存在时返回 null
   resolveSessionOpenDirectory: async (agentId, sessionId) => {
     const record = await requirePrebuiltSessionRecord(agentId, sessionId);
@@ -1503,6 +1531,21 @@ async function main() {
     } catch (err) {
       console.warn(`[open-sessions] initRecoveryCache failed for ${agentId}:`, err.message);
     }
+  }
+
+  // T002 接力恢复：按落盘状态收敛上次进程崩溃时被打断的交接
+  // （pendingSuccession 非空 = prepare 完成、commit 未完成）。状态判定，
+  // 不依赖时间（TTL）；无残留时 no-op。
+  try {
+    const convergence = await threadRecovery.convergeInterruptedSuccessions();
+    if (convergence.converged.length > 0) {
+      console.log(`[thread-recovery] converged ${convergence.converged.length} interrupted succession(s):`, convergence.converged);
+    }
+    if (convergence.skipped.length > 0) {
+      console.warn(`[thread-recovery] ${convergence.skipped.length} thread(s) left unconverged:`, convergence.skipped);
+    }
+  } catch (err) {
+    console.warn('[thread-recovery] startup convergence failed:', err.message);
   }
 
   // Apply global proxy before listening (affects all fetch + child processes)

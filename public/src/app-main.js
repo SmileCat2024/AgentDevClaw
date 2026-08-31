@@ -685,6 +685,11 @@ window.switchAgent = async (newAgentId) => {
       readOnlyMode = targetsRemote
         && window.RemoteConnections?.isRemoteWriteEnabled?.(newAgentId) !== true;
     }
+    // T006：Thread 历史成员只读挂载（browseOnly=true）同样保持只读——服务端
+    // 不推进 head、不投递指令，前端不以可写入口误导（ADR-001 历史=只读事实）。
+    if (window.ClawThreads?.browseOnly === true) {
+      readOnlyMode = true;
+    }
     currentWorkspaceArtifactDetail = null;
     currentWorkspaceDocsetDetail = null;
     currentProjectDocsetOpen = false;

@@ -695,6 +695,12 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       }
       const result = await response.json();
       if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
+      // T006 / T005：Session 删除入口返回实际对象是 Thread（target shape，
+      // 响应带 threadId + cleanup 级联清理事实）时，UI 刷新 Thread 而不是
+      // 只刷新 Session——线程视图（coder 入口）立即反映删除/成员归并。
+      if (result?.threadId || result?.target?.actual?.type === 'thread') {
+        if (typeof window.refreshThreads === 'function') window.refreshThreads(true).catch(() => {});
+      }
       if (result?.deleted?.sessions) {
         updateAgentRecord(activeAgent.id, {
           workspace_sessions: result.deleted.sessions,
@@ -803,6 +809,19 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId, activeAgent));
         }
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
+        // T006 / T003：activate 响应按 Thread 成员关系解析目标（target shape）。
+        // 历史成员返回 browseOnly=true——挂载只读、绝不推进 head；登记只读
+        // 事实（顶栏「只读 · 前往当前 head」+ 输入守卫）并强制 readOnlyMode，
+        // 历史会话不显示写入入口；实际生效对象是 Thread 时刷新 Thread 而不是
+        // 只刷 Session。
+        const _activateBrowseOnly = result?.browseOnly === true;
+        if (typeof window.registerSessionActivateTarget === 'function') {
+          window.registerSessionActivateTarget(result);
+        }
+        if (_activateBrowseOnly) {
+          readOnlyMode = true;
+          lastRenderedInputSignature = '';
+        }
         // 线程宿主（coder）：新会话在服务端已建线程，刷新使徽标立即可见
         if (typeof window.refreshThreads === 'function') {
           window.refreshThreads(true).catch(() => {});

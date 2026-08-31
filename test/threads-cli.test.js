@@ -66,6 +66,14 @@ function startFakeClawServer() {
       payload = { ok: true, thread: { threadId: 'wt-stuck', status: 'open', lifeState: 'executing', failed: false, commands: [] } };
     } else if (req.url === '/protoclaw/threads/wt-stuck/events') {
       payload = { ok: true, events: [], cursor: 0 };
+    } else if (req.url === '/protoclaw/threads/wt-1/archive') {
+      payload = { ok: true, threadId: 'wt-1', cleanup: { status: 'complete', commandsCancelled: 1, inflightDrain: { count: 0, commandIds: [] }, handoffConverged: false } };
+    } else if (req.url === '/protoclaw/threads/wt-1/unarchive') {
+      payload = { ok: true, threadId: 'wt-1' };
+    } else if (req.url === '/protoclaw/threads/wt-1/close') {
+      payload = { ok: true, thread: { threadId: 'wt-1', status: 'closed', closeReason: 'cli' } };
+    } else if (req.url === '/protoclaw/threads/wt-1/resume') {
+      payload = { ok: true, board: { status: 'idle' } };
     }
 
     res.setHeader('Content-Type', 'application/json');
@@ -172,6 +180,31 @@ test('threads send --wait-started reports turn start and timeout via lifeState p
   assert.equal(timedOut.code, 0, timedOut.stderr);
   const timedOutPayload = JSON.parse(timedOut.stdout);
   assert.equal(timedOutPayload.started, false);
+});
+
+test('claw threads maps lifecycle subcommands (archive/unarchive/close/resume) to Thread HTTP routes', async () => {
+  const fake = await startFakeClawServer();
+
+  const archived = await runCli(fake.port, ['threads', 'archive', 'wt-1', '--format', 'json']);
+  assert.equal(archived.code, 0, archived.stderr);
+  const archiveRequest = fake.requests.find((r) => r.url === '/protoclaw/threads/wt-1/archive' && r.method === 'POST');
+  assert.ok(archiveRequest, 'archive → POST /threads/:id/archive（整 Thread 语义，响应含 cleanup 事实）');
+  const archivedPayload = JSON.parse(archived.stdout);
+  assert.equal(archivedPayload.cleanup.commandsCancelled, 1, '归档响应以实际 Thread 为主体（取消事实透传）');
+
+  const unarchived = await runCli(fake.port, ['threads', 'unarchive', 'wt-1', '--format', 'json']);
+  assert.equal(unarchived.code, 0, unarchived.stderr);
+  assert.ok(fake.requests.some((r) => r.url === '/protoclaw/threads/wt-1/unarchive' && r.method === 'POST'));
+
+  const resumed = await runCli(fake.port, ['threads', 'resume', 'wt-1', '--source', 't007', '--format', 'json']);
+  assert.equal(resumed.code, 0, resumed.stderr);
+  const resumeRequest = fake.requests.find((r) => r.url === '/protoclaw/threads/wt-1/resume');
+  assert.deepEqual(resumeRequest.body, { source: 't007' });
+
+  const closed = await runCli(fake.port, ['threads', 'close', 'wt-1', '--reason', 't007', '--format', 'json']);
+  assert.equal(closed.code, 0, closed.stderr);
+  const closeRequest = fake.requests.find((r) => r.url === '/protoclaw/threads/wt-1/close');
+  assert.deepEqual(closeRequest.body, { reason: 't007' });
 });
 
 test('claw threads validates required options without contacting the server', async () => {

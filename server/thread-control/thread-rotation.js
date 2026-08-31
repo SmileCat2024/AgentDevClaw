@@ -9,9 +9,12 @@
  *   2. 退役旧 head runtime：remove-session 会让 runtime 把最新会话状态
  *      flush 落盘——摘要 mirror 读的是 session 文件，若不先 flush，
  *      会基于过期快照生成「没有实质性工作」的失真摘要；
- *   3. compactAndResumeCurrentSession：trim-transcript + 摘要 + 启动 successor；
- *   4. applySessionSuccession：推进线程 head 并投递暂存指令（含 1 播种
- *      的恢复指令）。
+ *   3. compactAndResumeCurrentSession：trim-transcript + 摘要 + 启动 successor
+ *      （compact / summary / trim 共享的 successor 创建入口）；
+ *   4. commitSuccession：接力提交点（thread-succession.js）——successor
+ *      READY 才推进线程 head 并投递暂存指令，READY 失败落
+ *      successor_runtime_not_ready；
+ *   5. 追加接力恢复指令并投递给新 head。
  *
  * 判定基准：被触发的会话是否为某活跃线程的 head（findThreadByHeadSession）。
  * 处于线程环境（thread）则触发接力；纯 session 会话无线程，天然 no-op。
@@ -24,12 +27,14 @@
  * applied:false 已由 integration 侧落 rotation_failed（K3 守卫拦截迟到失败），
  * 此处只退役旧 runtime（触发器已一次性消耗）并如实上报。
  *
- * 失败路径：退役旧 runtime、线程标记 rotation_failed，
- * 由线程恢复入口收拾残局（不重放原始指令）。
+ * 失败路径（T002）：退役旧 runtime，线程标记 rotation_failed 并落失败
+ * 阶段（compact_or_successor / successor_runtime_not_ready 等）+ 挡板
+ * 显式收敛；旧 head 保持有效，pending 工作归属不丢失，不重放原始指令。
  *
  * 依赖由 server.js 注入（sessionApi / stopManagedAgent）；线程侧只依赖
- * threadControl（core + board 装配，见 thread-controller.js）与
- * threadIntegration，不含任何上层产品语义。
+ * threadControl（core + board 装配，见 thread-controller.js）、
+ * threadIntegration 与 threadSuccession（共享提交点），
+ * 不含任何上层产品语义。
  */
 
 import { isSuccessionGateFailure } from './thread-integration.js';
@@ -40,6 +45,7 @@ export function createThreadRotationService({
   stopManagedAgent,
   threadIntegration,
   threadControl,
+  threadSuccession,
 } = {}) {
   if (!sessionApi || typeof sessionApi.updateSessionIndex !== 'function'
     || typeof sessionApi.compactAndResumeCurrentSession !== 'function'
@@ -47,6 +53,14 @@ export function createThreadRotationService({
     throw new Error('createThreadRotationService requires session and thread dependencies');
   }
   const threadCore = threadControl.core;
+  // T002：commit 走共享提交点；未注入（旧装配/测试 stub）时保持既有
+  // apply/fail 路径，行为不变。
+  const commitHead = threadSuccession && typeof threadSuccession.commitSuccession === 'function'
+    ? threadSuccession.commitSuccession.bind(threadSuccession)
+    : null;
+  const failHandoff = threadSuccession && typeof threadSuccession.failSuccession === 'function'
+    ? threadSuccession.failSuccession.bind(threadSuccession)
+    : null;
 
   /** 同一 session 的接力防重入（guard 事件可能随 call 结束多次上报） */
   const inflight = new Map();
@@ -54,6 +68,11 @@ export function createThreadRotationService({
   async function rotate(agentId, sessionId) {
     const thread = await threadCore.findThreadByHeadSession(agentId, sessionId);
     if (!thread || thread.status === 'closed') return null;
+    // T005：删除中的线程不启动接力（与 integration.beginSessionSuccession /
+    // succession.commitSuccession 的 thread_deleting 预检同源）。deleting
+    // 窗口（begin 后 / seal 前）线程未 closed，若此处放行会启动接力并
+    // 产生孤儿 successor。
+    if (thread.deleting === true) return null;
 
     const begun = await threadIntegration.beginSessionSuccession({ agentId, sessionId, reason: 'trim' });
     if (!begun?.applied) {
@@ -82,35 +101,74 @@ export function createThreadRotationService({
         startRuntime: true,
       });
       const nextSessionId = cleanSessionText(result?.session?.id);
-      if (!nextSessionId) throw new Error('Trim compaction did not create a successor session');
-      const applied = await threadIntegration.applySessionSuccession({
-        agentId,
-        fromSessionId: sessionId,
-        toSessionId: nextSessionId,
-        reason: 'trim',
-      });
-      if (!applied?.applied) {
-        // advanceHead 失败 / head 已被并发推进：integration 侧已按 K3 守卫
-        // 语义落 rotation_failed（迟到失败 no-op），此处不重复写，只退役
-        // 旧 runtime 并如实上报。
-        await stopManagedAgent(agentId, sessionId).catch(() => {});
-        return { applied: false, reason: 'apply_failed', error: applied?.error || applied?.reason || 'unknown' };
+      if (!nextSessionId) {
+        throw Object.assign(
+          new Error('Trim compaction did not create a successor session'),
+          { code: 'compact_or_successor' },
+        );
       }
-      // 投递兜底：apply 内部已尝试过一次（integration），此处幂等重试覆盖
-      // 「apply 时 runtime 未 ready、此刻已 ready」的窗口。
+      // T002 接力提交点：successor READY（result.agent 为 ready 证据）
+      // 之前不得成为有效 head；失败由提交点落阶段与原因。
+      const commit = commitHead
+        ? await commitHead({
+          agentId,
+          fromSessionId: sessionId,
+          toSessionId: nextSessionId,
+          reason: 'trim',
+          successorReady: result?.agent != null,
+        })
+        : await threadIntegration.applySessionSuccession({
+          agentId,
+          fromSessionId: sessionId,
+          toSessionId: nextSessionId,
+          reason: 'trim',
+        });
+      if (!commit.applied) {
+        // 提交失败（未 READY / 身份门 / 并发 void）：线程未推进，本棒
+        // 不追加恢复指令、不做补投递——pending 工作归属留在旧 head。
+        // 旧 runtime 上下文已过阈值（且触发器已一次性消耗），同样退役：
+        // 与生成阶段失败同语义，留着只会接收注定超限的后续投递。
+        await stopManagedAgent(agentId, sessionId).catch(() => {});
+        return {
+          applied: false,
+          threadId: thread.threadId,
+          reason: commit.reason || 'handoff_failed',
+          stage: commit.stage,
+          error: commit.error || 'succession commit was not applied',
+        };
+      }
+      await threadCore.appendCommand({
+        threadId: thread.threadId,
+        kind: 'system_continuation',
+        text: ROTATION_RESUME_INSTRUCTION,
+        source: 'thread-context-rotation',
+        idempotencyKey: `thread-context-rotation-${thread.threadId}-${nextSessionId}`,
+      });
       await threadIntegration.tryDeliver(thread.threadId);
       return { applied: true, threadId: thread.threadId, headSessionId: nextSessionId };
     } catch (error) {
       // 接力失败时同样退役旧 runtime：其上下文已过阈值且触发器已一次性
       // 消耗，留着只会接收注定超限的后续投递。
       await stopManagedAgent(agentId, sessionId).catch(() => {});
-      await threadIntegration.failSessionSuccession({
-        agentId,
-        sessionId,
-        reason: 'context_rotation_failed',
-        stage: 'compact_or_successor',
-        error: error instanceof Error ? error.message : String(error),
-      }).catch((failure) => {
+      // T002：失败阶段取错误 code（生成阶段 compact_or_successor 等），
+      // 经共享失败收敛落盘并收敛挡板。
+      const stage = error.code || 'compact_or_successor';
+      const failCall = failHandoff
+        ? failHandoff({
+          agentId,
+          fromSessionId: sessionId,
+          reason: 'context_rotation_failed',
+          stage,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        : threadIntegration.failSessionSuccession({
+          agentId,
+          sessionId,
+          reason: 'context_rotation_failed',
+          stage,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      await failCall.catch((failure) => {
         console.error('[thread-rotation] failed to persist rotation_failed:', failure?.message || failure);
       });
       return { applied: false, error: error instanceof Error ? error.message : String(error) };

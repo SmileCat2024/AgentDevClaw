@@ -12,12 +12,15 @@
  * 字段（不再读写，看板事件自 boards/ 目录重新累积）——已知语义变化。
  */
 
+import fsp from 'node:fs/promises';
+import path from 'node:path';
 import {
   WorkThreadStore,
   WorkThreadNotFoundError,
   WorkThreadRevisionConflictError,
   generateWorkThreadId,
 } from '@agentdevjs/core';
+import { sanitizeSessionFragment } from '../shared/string-helpers.js';
 
 export { WorkThreadNotFoundError as ThreadNotFoundError };
 export { WorkThreadRevisionConflictError as ThreadRevisionConflictError };
@@ -39,5 +42,58 @@ export class ThreadStore extends WorkThreadStore {
       record.status = CLAW_LEGACY_STATUS_MAP[record.status];
     }
     return record;
+  }
+
+  /**
+   * T005 删除级联：移除 Thread record 文件 + index 条目（框架 store 无删除原语，
+   * 本壳补齐）。幂等：文件 / 条目不存在时视为成功。走 per-thread 串行锁，与
+   * update / create 互斥；index 条目移除复用框架的 index 原子写（经私有
+   * readIndex / writeIndex，布局与 updateIndexEntry 一致，只读改后整写）。
+   *
+   * @param {string} threadId
+   * @returns {Promise<{removed: boolean, alreadyAbsent: boolean}>}
+   */
+  async remove(threadId) {
+    const normalizedThreadId = String(threadId || '').trim();
+    if (!normalizedThreadId) throw new WorkThreadNotFoundError(threadId);
+
+    const prev = this._threadLocks.get(normalizedThreadId) || Promise.resolve();
+    let release;
+    const next = new Promise((r) => { release = r; });
+    this._threadLocks.set(normalizedThreadId, next);
+    await prev.catch(() => {});
+    try {
+      const record = await super.get(normalizedThreadId);
+      if (!record) return { removed: false, alreadyAbsent: true };
+
+      const filePath = path.join(this.threadsDir, `${sanitizeSessionFragment(normalizedThreadId)}.json`);
+      await fsp.rm(filePath, { force: true });
+
+      // index 条目移除：框架 index 结构 { revision, threads: [...] }，
+      // 与 updateIndexEntry 同布局。读-改-整写必须走框架的 _indexLock
+      // 串行链（updateIndexEntry 在同一链上），否则并发创建 / 更新其它
+      // 线程时双方各自的旧 index 快照会互相覆盖、丢失对方的条目。
+      const indexPrev = this._indexLock;
+      let indexRelease;
+      const indexNext = new Promise((r) => { indexRelease = r; });
+      this._indexLock = indexNext;
+      try {
+        await indexPrev.catch(() => {});
+        const index = await this.readIndex();
+        if ((index.threads || []).some((entry) => entry?.threadId === normalizedThreadId)) {
+          index.threads = index.threads.filter(
+            (entry) => entry?.threadId !== normalizedThreadId,
+          );
+          index.revision = (Number(index.revision) || 0) + 1;
+          await this.writeIndex(index);
+        }
+      } finally {
+        indexRelease();
+      }
+      return { removed: true, alreadyAbsent: false };
+    } finally {
+      release();
+      if (this._threadLocks.get(normalizedThreadId) === next) this._threadLocks.delete(normalizedThreadId);
+    }
   }
 }
