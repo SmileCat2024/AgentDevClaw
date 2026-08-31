@@ -445,8 +445,9 @@ async function loadAgents() {
       });
     }
 
-    // 清理已断开 agent 的 call 状态
-    const activeRuntimeIds = new Set(allAgents.filter((a) => a.connected).map((a) => getAgentRuntimeId(a)).filter(Boolean));
+    // 清理已断开 agent 的 call 状态（含在线远程条目：remote: 命名空间 key
+    // 必须视为存活，否则每轮 poll 被当孤儿清除，见 collectActiveCallRuntimeIds）
+    const activeRuntimeIds = new Set(collectActiveCallRuntimeIds(allAgents));
     for (const key of _agentCallActive.keys()) {
       if (!activeRuntimeIds.has(key)) _agentCallActive.delete(key);
     }
@@ -519,6 +520,24 @@ async function loadAgents() {
 
 // Desktop notification -> modules/desktop-notify.js
 
+// call 状态链路的 runtime 全集：本地已连接 runtime + 在线远程条目（仅在线，
+// 断开条目不参与轮询，其残留键由清理循环回收）。轮询与清理共用同一集合——
+// 远程 key 不入集会被每轮 poll 当孤儿清掉，与聚焦会话的 chat 轮询写键形成
+// 拉锯（远程会话发送按钮横跳、侧栏缺转圈动画的根因）。
+function collectActiveCallRuntimeIds(agents) {
+  const runtimeIds = (Array.isArray(agents) ? agents : [])
+    .filter((agent) => agent?.connected)
+    .map((agent) => getAgentRuntimeId(agent))
+    .filter(Boolean);
+  const remoteEntries = typeof getVisibleRemoteEntries === 'function'
+    ? getVisibleRemoteEntries()
+    : [];
+  for (const entry of remoteEntries) {
+    if (entry.status === 'connected' && entry.runtimeId) runtimeIds.push(entry.runtimeId);
+  }
+  return Array.from(new Set(runtimeIds));
+}
+
 let _callStatesRefreshInProgress = false;
 async function refreshAgentCallStates(agents = allAgents, options = {}) {
   const { force = false } = options;
@@ -531,12 +550,9 @@ async function refreshAgentCallStates(agents = allAgents, options = {}) {
   _callStatesRefreshInProgress = true;
   lastCallStateRefreshAt = now;
   try {
-    const runtimeIds = Array.from(new Set(
-      (Array.isArray(agents) ? agents : [])
-        .filter((agent) => agent?.connected)
-        .map((agent) => getAgentRuntimeId(agent))
-        .filter(Boolean)
-    ));
+    // 本地已连接 runtime 与在线远程条目合并后再判空：仅剩远程条目时同样
+    // 走完整轮询，不会误入"全清"提前返回分支。
+    const runtimeIds = collectActiveCallRuntimeIds(agents);
     if (runtimeIds.length === 0) {
       let changed = false;
       for (const key of Array.from(_agentCallActive.keys())) {
@@ -645,6 +661,16 @@ function getAgentListRenderSignature() {
     sessionReplacements: typeof listSidebarOperations === 'function'
       ? listSidebarOperations().map((item) => ({ ...item }))
       : [],
+    // 远程条目不在 allAgents，本地 agents 字段覆盖不到；calling 变化必须
+    // 独立进签名，否则 renderAgentList 因签名不变提前返回，远程会话的
+    // 转圈动画不会出现。
+    remoteCalling: (typeof getVisibleRemoteEntries === 'function'
+      ? getVisibleRemoteEntries()
+      : []
+    ).map((entry) => ({
+      runtimeId: entry.runtimeId,
+      calling: _agentCallActive.get(entry.runtimeId) === true,
+    })),
     agents: (Array.isArray(allAgents) ? allAgents : []).map((agent) => {
       const rid = normalizeAgentIdentity(getAgentRuntimeId(agent));
       return {

@@ -328,6 +328,27 @@ function getEntryRuntimeSessionId(namespacedId) {
   return '';
 }
 
+// 所有可见远程条目的调用状态投影（[{ runtimeId, status }]）。runtimeId 即
+// remote:<connId>:<runtimeId> 命名空间 id，与 _agentCallActive 的 key 同形；
+// status 随连接在线态取 'connected' | 'disconnected'。调用状态轮询、清理循环
+// 与侧栏渲染签名以它把远程条目并入本地同一条状态链路（无来源分支）。
+function getVisibleRemoteEntries() {
+  const entries = [];
+  const seen = new Set();
+  for (const section of _rcVisibleSections.values()) {
+    const status = section.status === 'connected' ? 'connected' : 'disconnected';
+    for (const workspace of (Array.isArray(section.workspaces) ? section.workspaces : [])) {
+      for (const entry of (Array.isArray(workspace?.entries) ? workspace.entries : [])) {
+        const runtimeId = typeof entry?.runtimeId === 'string' ? entry.runtimeId : '';
+        if (!runtimeId || seen.has(runtimeId)) continue;
+        seen.add(runtimeId);
+        entries.push({ runtimeId, status });
+      }
+    }
+  }
+  return entries;
+}
+
 function tryRestoreRemoteFocus() {
   if (_rcBootstrapSeen) return;
   _rcBootstrapSeen = true;
@@ -1036,6 +1057,7 @@ window.RemoteConnections = {
   getEntryHostNamespaceId,
   getEntrySessionTitle,
   getEntryRuntimeSessionId,
+  getVisibleRemoteEntries,
   getHostNamespaceIdForSession,
   namespaceMutationResult,
   waitForRuntimeForSession,
