@@ -1,8 +1,10 @@
 /**
- * 第二道检查点 — 结构分段与 v1 拒绝特征（ticket 033）
+ * 第二道检查点 — 结构分段与 v1 拒绝特征（ticket 033；glob 引号语义 ticket 035）
  *
- * shell-quote 切段 + 管道拆分；命中 v1 拒绝特征（命令替换、变量、进程替换、
- * glob、heredoc、后台）即终态拒绝。只放行：字面量参数 + 管道 | + 重定向 > >> <。
+ * 原文级预扫描（shell-quote 解析前）：命令替换、变量、进程替换、glob、
+ * heredoc、后台命中即终态拒绝。glob 为引号区域感知：仅拒绝引号外的
+ * * ? 与词首 [（引号内是 bash 字面量）。随后 shell-quote 切段 + 管道拆分，
+ * 只放行：字面量参数 + 管道 | + 重定向 > >> <。
  *
  * 本道为纯函数。
  */
@@ -44,6 +46,11 @@ function rejectRawFeatures(cmd: string): string | null {
   if (containsDollarOutsideSingleQuotes(cmd)) {
     return '变量引用 $x 不被允许。';
   }
+  // glob 通配：引号外出现 * ?（任意位置）或词首 [ 才拒绝；引号内全是
+  // 字面量（工单 035：单引号内 markdown **bold** 曾被 token 级检查误杀）。
+  if (containsGlobOutsideQuotes(cmd)) {
+    return 'glob 通配符（* ? [ ]）不被允许；引号内的字符是字面量，需要通配语义时换个写法。';
+  }
   return null;
 }
 
@@ -70,15 +77,50 @@ export function containsDollarOutsideSingleQuotes(cmd: string): boolean {
   return false;
 }
 
-/** glob 通配检测：未引用的 * ? 与段首 [...] 字符类 */
-export function containsGlob(token: string): boolean {
-  // * 与 ? 在字面量参数中几乎必为 glob（工单 v1 一律拒绝）
-  if (/[*?]/.test(token)) return true;
-  // [...] 字符类：仅在 token 以 [ 开头时判定为 glob（bash `ls [abc]` 形态）。
-  // jq 过滤器等工具语法（如 '.[:5]'）中段出现的 [ ] 是字面量，放行 ——
-  // shell-quote 不保留引号信息，无法区分引用内外；`$()` 等注入形态已由
-  // 原文扫描拦截，此处收窄是为避免误伤工具过滤表达式（工单验收用例）。
-  return token.startsWith('[');
+/**
+ * 引号外是否出现 glob 字符（工单 035：bash 语义里引号内的 * ? [ ] 是字面量）。
+ *
+ * 逐字符扫描（containsDollarOutsideSingleQuotes 同款模式）跟踪单引号与双引号
+ * 区域：单引号内无任何展开、双引号内 bash 不做 glob，且双引号内的变量展开
+ * 已由原文扫描道拦截，引号内的 * ? [ ] 是字面量，放行。
+ *
+ * 引号外规则与原 token 级 containsGlob 等价：
+ * - * ? 任意位置拒绝（引号外几乎必为 glob）；`'a'*` 拼接后 unquoted 部分仍触发 glob；
+ * - [ 仅在词首拒绝（bash `ls [abc]` 形态）；词中 [（jq 过滤器 `.[:5]`、
+ *   `--flag=[a]` 等）是工具语法，放行——引号本身不算词字符，`''[abc]`
+ *   与裸 `[abc]` 同判；
+ * - 转义形态 `\*` 视为字面量放行（与 \$ 先例一致）。
+ */
+export function containsGlobOutsideQuotes(cmd: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  /** 当前词内是否已见实质字符（引号本身不计；词首 [ 判定用）。 */
+  let tokenStarted = false;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue; // 引号本身不算词字符
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (inSingle) { tokenStarted = true; continue; } // 单引号内无转义无嵌套，全是字面量
+    if (inDouble) {
+      if (ch === '\\') { i++; tokenStarted = true; continue; } // 双引号内转义跳过下一字符
+      tokenStarted = true;
+      continue;
+    }
+    if (/\s/.test(ch)) { tokenStarted = false; continue; }
+    if (ch === '\\') { i++; tokenStarted = true; continue; } // 引号外转义：下一字符是字面量
+    if (ch === '*' || ch === '?') return true;
+    // 词首 [：bash `ls [abc]` 形态的字符类 glob；词中 [ 是工具语法字面量
+    // （jq 过滤器等），与原 token 级 startsWith('[') 规则对齐。
+    if (ch === '[' && !tokenStarted) return true;
+    tokenStarted = true;
+  }
+  return false;
 }
 
 /**
@@ -171,7 +213,7 @@ export function checkStructure(command: string): StructureCheckResult {
 
   if (current) segments.push(current);
 
-  // 段校验：每段必须有动词；token 级拒绝特征（变量展开 / glob）
+  // 段校验：每段必须有动词（glob / 变量等拒绝特征已在原文级预扫描道处理）
   if (segments.length === 0) {
     return { ok: false, code: 'structure_rejected', message: '命令缺少动词。' + REJECTED_FEATURES_TEXT };
   }
@@ -179,16 +221,6 @@ export function checkStructure(command: string): StructureCheckResult {
     const seg = segments[i];
     if (!seg.verb) {
       return { ok: false, code: 'structure_rejected', message: '管道段缺少命令。' + REJECTED_FEATURES_TEXT };
-    }
-    for (const arg of [seg.verb, ...seg.args]) {
-      if (containsGlob(arg)) {
-        return {
-          ok: false,
-          code: 'structure_rejected',
-          message: `参数 “${arg}” 含 glob 通配符（* ? [ ]），不被允许。` + REJECTED_FEATURES_TEXT,
-          segmentIndex: i,
-        };
-      }
     }
   }
 

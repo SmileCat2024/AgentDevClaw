@@ -1,13 +1,21 @@
 /**
- * coder 领域 shell — threads adapter + 策略声明（ticket 034）
+ * coder 领域 shell — threads adapter + 策略声明（ticket 034；ticket 035）
  *
  * 在 033 基座上落地第一个领域 shell：`coder_shell({ command })`。动词表
- * 8 个（create / send / watch / list / show / archive / unarchive / deliver），
- * adapter 用 Node fetch 直调 Claw server 的 `/protoclaw/threads*` 控制面
+ * 9 个（new-session / create / send / watch / list / show / archive /
+ * unarchive / deliver），adapter 用 Node fetch 直调 Claw server 的
+ * `/protoclaw/threads*` 与 `/protoclaw/prebuilt_sessions` 控制面
  * （同机回环；单密码认证开启时经 PROTOCLAW_INTERNAL_TOKEN 携带内部服务令牌，
  * 与 bin/claw.mjs 的 clawServerFetch 同一契约）。请求形态与参数参照
- * `bin/claw.mjs` threads 子命令；serverOrigin 解析参照
+ * `bin/claw.mjs` threads / sessions 子命令；serverOrigin 解析参照
  * local-features/dispatch 的 runtimeIdentity 模式（默认 http://127.0.0.1:1420）。
+ *
+ * new-session 直调 POST /protoclaw/prebuilt_sessions（sessionType=coder，
+ * 契约参照 bin/claw.mjs handleSessions：--dir 映射 openDirectory，本动词 v1
+ * 不暴露目录参数，会话绑定 agent 工作空间目录）；响应 threadId 在 session
+ * 对象之前（服务端为截断安全特意如此排列）。会话自动建线是标准路径，
+ * create 仅用于给已存在会话加挂线程（建线前预校验会话存在且归属匹配，
+ * 消灭 head_session_missing 僵尸线程，ticket 035B）。
  *
  * send 阻塞语义：POST commands 后在本 adapter 内轮询 GET events 直到本轮
  * 落定（判定字段语义参照 bin/claw.mjs watchThread：turn.completed 且
@@ -56,7 +64,7 @@ export function createThreadsAdapters(deps: {
   sleep?: (ms: number) => Promise<void>;
 }): Record<string, ThreadAdapter> {
   const adapter = createThreadsAdapter(deps).threads;
-  const verbs = ['create', 'send', 'watch', 'list', 'show', 'archive', 'unarchive', 'deliver'] as const;
+  const verbs = ['new-session', 'create', 'send', 'watch', 'list', 'show', 'archive', 'unarchive', 'deliver'] as const;
   const map: Record<string, ThreadAdapter> = {};
   for (const verb of verbs) {
     map[`threads:${verb}`] = async (args, context) => {
@@ -285,10 +293,54 @@ export function createThreadsAdapter(deps: {
   const adapter: ThreadAdapter = async (args, context) => {
     const [verb, ...rest] = args;
     switch (verb) {
-      // create <agentId> <sessionId> [title]：建线程（Coder 会话的
-      // 自动建线语义在 server 侧；这里直调 threads 控制面的创建端点）
+      // new-session <agentId> [title]：创建 Coder 会话（sessionType=coder），
+      // 线程宿主工作空间自动建线（标准路径；create 仅用于已存在会话加挂线程）。
+      // 契约参照 bin/claw.mjs handleSessions（sessionType=coder 响应带 threadId）。
+      case 'new-session': {
+        const [agentId, title] = rest;
+        const body: Record<string, unknown> = { agentId, sessionType: 'coder' };
+        if (title) body.title = title;
+        const payload = await clawFetch('/protoclaw/prebuilt_sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        // threadId 在响应的 session 全量对象之前（服务端为截断安全特意如此排列）
+        const sessionId = payload?.session?.id || payload?.targetSessionId || '(unknown)';
+        const threadId = payload?.threadId ?? null;
+        return [
+          `sessionId=${sessionId}`,
+          threadId
+            ? `threadId=${threadId}`
+            : `threadId=null（未自动建线——非线程宿主或钩子失败；用 create ${agentId} ${sessionId} 手动建线）`,
+        ].join('\n');
+      }
+
+      // create <agentId> <sessionId> [title]：为已存在的 Coder 会话建线程。
+      // 预校验（ticket 035B）：建线前 GET 会话列表确认会话存在且归属该
+      // agent，杜绝 head_session_missing 僵尸线程；列表按 agentId 查询，
+      // 目标会话不在列表 = 不存在或不属于该 agent，同样拒绝。
       case 'create': {
         const [agentId, sessionId, title] = rest;
+        let sessionNote = '';
+        try {
+          const sessionsPayload = await clawFetch(
+            `/protoclaw/prebuilt_sessions?agentId=${encodeURIComponent(agentId)}`,
+          );
+          const sessions = (sessionsPayload?.sessions as Array<Record<string, any>>) || [];
+          if (!sessions.some((session) => session?.id === sessionId)) {
+            throw new Error(
+              `create 拒绝：会话 ${sessionId} 在 agent ${agentId} 名下不存在（或不属于该 agent），未建线程。`
+              + ` 无可用 Coder 会话时先用 new-session ${agentId} 创建（自动建线），不要对不存在的会话建线程。`,
+            );
+          }
+        } catch (error) {
+          // 结构化拒绝（会话不存在）原样上抛；查询失败（server 瞬时不可达等）
+          // 不阻塞建线：网络错误不放大成功能缺失，按原逻辑继续建线，
+          // 但响应注明会话未验证
+          if (error instanceof Error && error.message.startsWith('create 拒绝')) throw error;
+          sessionNote = '注意：建线前会话预校验未完成（查询失败），会话存在性未验证。';
+        }
         const body: Record<string, unknown> = { agentId, sessionId };
         if (title) body.title = title;
         const payload = await clawFetch('/protoclaw/threads', {
@@ -296,7 +348,8 @@ export function createThreadsAdapter(deps: {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        return threadLine(payload?.thread ?? payload ?? {});
+        const line = threadLine(payload?.thread ?? payload ?? {});
+        return sessionNote ? `${line}\n${sessionNote}` : line;
       }
 
       // send <threadId> <idempotencyKey> <text>：派发 + 阻塞等本轮落定

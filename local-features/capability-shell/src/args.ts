@@ -1,8 +1,9 @@
 /**
- * 第四道检查点 — 参数校验（ticket 033）
+ * 第四道检查点 — 参数校验（ticket 033；可选尾参 ticket 035）
  *
- * 按动词声明的参数约束逐段校验：参数个数（超缺均拒绝）、字面量枚举、
- * 路径边界（workspace 相对路径内，拒绝 .. 逃逸与绝对路径）。
+ * 按动词声明的参数约束逐段校验：参数个数（超过声明数拒绝、不足必填数拒绝，
+ * required: false 的尾参可缺省）、字面量枚举、路径边界（workspace 相对路径内，
+ * 拒绝 .. 逃逸与绝对路径）。
  *
  * 本道为纯函数。
  */
@@ -23,7 +24,8 @@ export interface ParamCheckResult {
  * 第四道检查点：参数校验。
  *
  * 按动词声明的参数约束逐段校验：
- * - 参数个数：声明长度即期望个数（超缺均拒绝）
+ * - 参数个数：超过声明长度拒绝；不足必填数（required !== false 的前缀参数）
+ *   拒绝，声明了可选尾参时报文案为「必填~上限」区间
  * - kind=path：拒绝绝对路径与 `..` 逃逸（workspace 相对路径内）
  * - kind=literal：enum 白名单（若声明）
  */
@@ -36,11 +38,21 @@ export function checkArgs(
     const decl = verbs[seg.verb];
     if (!decl) continue; // 动词道已拦截，此处防御性跳过
 
-    if (seg.args.length !== decl.params.length) {
+    // 必填数 = required !== false 的前缀参数（可选参只允许尾随，此处按
+    // 必填前缀长度计：首个 required !== false 之后全部视为可选）
+    let minRequired = decl.params.length;
+    for (let j = decl.params.length - 1; j >= 0; j--) {
+      if (decl.params[j].required !== false) break;
+      minRequired = j;
+    }
+    if (seg.args.length > decl.params.length || seg.args.length < minRequired) {
+      const expected = minRequired === decl.params.length
+        ? `${decl.params.length}`
+        : `${minRequired}~${decl.params.length}`;
       return {
         ok: false,
         code: 'arg_rejected',
-        message: `“${seg.verb}” 期望 ${decl.params.length} 个参数，实际 ${seg.args.length} 个。` +
+        message: `“${seg.verb}” 期望 ${expected} 个参数，实际 ${seg.args.length} 个。` +
           (decl.usage ? ` 用法：${decl.usage}` : ''),
         segmentIndex: i,
       };

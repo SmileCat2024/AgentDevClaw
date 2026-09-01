@@ -1,8 +1,9 @@
 /**
- * coder_shell 策略声明（ticket 034）
+ * coder_shell 策略声明（ticket 034；new-session 动词 ticket 035）
  *
  * 领域 shell = 033 基座的一CapabilityShellPolicy + adapter map。
- * v1 动词表 8 个，adapter 直调 /protoclaw/threads*（无鉴权层，同机回环）。
+ * v1 动词表 9 个，adapter 直调 /protoclaw/threads* 与 /protoclaw/prebuilt_sessions
+ * （无鉴权层，同机回环）。
  *
  * advance / resume 不入表：rotation_failed 场景输出结构化指引，人工介入
  * （与技能故障表一致）。watch 是只读续挂监视（send 已内置阻塞等落定，
@@ -22,7 +23,7 @@ export const CODER_SHELL_DESCRIPTION = [
 ].join('\n');
 
 /**
- * 动词表（v1）。send 的幂等键为必填位置参数（缺失在参数校验道拒绝）；
+ * 动词表（v1，9 个）。send 的幂等键为必填位置参数（缺失在参数校验道拒绝）；
  * 超时唯一闸门 = Tool.timeout 契约，动词表不承载任何时间 flag。
  */
 export function createCoderShellPolicy(): CapabilityShellPolicy {
@@ -30,12 +31,21 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
     name: CODER_SHELL_NAME,
     description: CODER_SHELL_DESCRIPTION,
     verbs: {
+      'new-session': {
+        description: '创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId）',
+        params: [
+          { name: 'agentId', kind: 'literal' },
+          { name: 'title', kind: 'literal', required: false },
+        ],
+        usage: "new-session <agentId> ['标题']",
+        adapter: { key: 'threads:new-session' },
+      },
       'create': {
-        description: '创建 coder 工作线程（建会话+线程，返回 threadId）',
+        description: '为已存在的 Coder 会话创建工作线程（返回 threadId；无可用会话时先用 new-session）',
         params: [
           { name: 'agentId', kind: 'literal' },
           { name: 'sessionId', kind: 'literal' },
-          { name: 'title', kind: 'literal' },
+          { name: 'title', kind: 'literal', required: false },
         ],
         usage: "create <agentId> <sessionId> ['标题']",
         adapter: { key: 'threads:create' },

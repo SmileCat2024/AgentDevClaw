@@ -39,11 +39,11 @@ function runCapabilityShellPolicy(command: string) {
   });
 }
 
-describe('coder_shell 动词表（ticket 034）', () => {
-  it('v1 动词表恰为 8 个：create/send/watch/list/show/archive/unarchive/deliver', () => {
+describe('coder_shell 动词表（ticket 034/035）', () => {
+  it('v1 动词表恰为 9 个：new-session/create/send/watch/list/show/archive/unarchive/deliver', () => {
     assert.deepEqual(
       Object.keys(POLICY.verbs).sort(),
-      ['archive', 'create', 'deliver', 'list', 'send', 'show', 'unarchive', 'watch'],
+      ['archive', 'create', 'deliver', 'list', 'new-session', 'send', 'show', 'unarchive', 'watch'],
     );
   });
 
@@ -171,5 +171,140 @@ describe('coder_shell 动词表（ticket 034）', () => {
     });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('done reason=turn.completed'), r.output);
+  });
+});
+
+describe('coder_shell new-session 动词（ticket 035A）', () => {
+  /** 记录请求的 fetch stub：按 URL 谓词返回预设 payload，同时捕获请求。 */
+  function recordingFetch(routes: Array<{ match: (url: string, init?: RequestInit) => boolean; body: any }>) {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      requests.push({ url, init });
+      const route = routes.find((r) => r.match(url, init));
+      if (!route) {
+        return { ok: false, status: 404, json: async () => ({ ok: false, error: `no route: ${url}` }) };
+      }
+      return { ok: true, status: 200, json: async () => route.body };
+    };
+    return { fetchImpl, requests };
+  }
+
+  it('契约映射：POST /protoclaw/prebuilt_sessions，body 含 sessionType=coder 与 title', async () => {
+    const { fetchImpl, requests } = recordingFetch([
+      {
+        match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
+        // threadId 在 session 对象之前（服务端为截断安全特意如此排列）
+        body: { protocolVersion: 2, threadId: 'wt-new', session: { id: 'session-abc', title: 'T' }, targetSessionId: 'session-abc' },
+      },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, "new-session programming-helper '工单035 标题'", {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.equal(requests.length, 1, '应恰好发出一次 POST');
+    const body = JSON.parse(String(requests[0].init?.body));
+    assert.equal(body.agentId, 'programming-helper');
+    assert.equal(body.sessionType, 'coder', 'body 必含 sessionType=coder（线程宿主自动建线）');
+    assert.equal(body.title, '工单035 标题');
+    assert.ok(!('openDirectory' in body), 'v1 不暴露目录参数');
+    // 响应解析：threadId 在 session 对象之前，输出两行
+    assert.ok(r.output.includes('sessionId=session-abc'), r.output);
+    assert.ok(r.output.includes('threadId=wt-new'), r.output);
+  });
+
+  it('响应解析：threadId 前置（session 缺失也能解析），null threadId 附手动建线提示', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.endsWith('/protoclaw/prebuilt_sessions'),
+          body: { threadId: null, session: { id: 'session-null' }, targetSessionId: 'session-null' },
+        },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'new-session programming-helper', {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('sessionId=session-null'), r.output);
+    assert.ok(r.output.includes('threadId=null'), r.output);
+    assert.ok(r.output.includes('create'), '提示应含手动建线指引');
+  });
+
+  it('new-session 缺 agentId → 参数校验道拒绝（title 可选，1 参可过个数道）', async () => {
+    // 0 参数：agentId 必填缺失
+    const r0 = await runCapabilityShellPipeline(POLICY, 'new-session', { adapters: {}, bashPath: null });
+    assert.equal(r0.ok, false);
+    assert.equal(r0.rejection?.code, 'arg_rejected');
+    assert.ok(r0.output.includes('new-session <agentId>'), r0.output);
+    // 3 个参数（超限）同样拒绝
+    const r3 = await runCapabilityShellPipeline(POLICY, 'new-session a b c', { adapters: {}, bashPath: null });
+    assert.equal(r3.ok, false);
+    assert.equal(r3.rejection?.code, 'arg_rejected');
+  });
+});
+
+describe('coder_shell create 会话预校验（ticket 035B）', () => {
+  /** 组装带请求记录的 adapters。 */
+  function makeAdapters(routes: Array<{ match: (url: string, init?: RequestInit) => boolean; body: any }>) {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      requests.push({ url, init });
+      const route = routes.find((r) => r.match(url, init));
+      if (!route) {
+        return { ok: false, status: 404, json: async () => ({ ok: false, error: `no route: ${url}` }) };
+      }
+      return { ok: true, status: 200, json: async () => route.body };
+    };
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    return { adapters, requests };
+  }
+
+  it('会话不存在 → 结构化拒绝，不产生任何 POST /protoclaw/threads 请求', async () => {
+    const { adapters, requests } = makeAdapters([
+      // 会话列表：目标 sessionId 不在列表
+      { match: (u) => u.includes('/protoclaw/prebuilt_sessions?agentId='), body: { sessions: [{ id: 'session-other' }] } },
+    ]);
+    const r = await runCapabilityShellPipeline(POLICY, "create programming-helper session-missing '工单'", {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, false, r.output);
+    assert.equal(r.rejection?.code, 'dispatch_failed');
+    assert.ok(r.output.includes('session-missing'), r.output);
+    assert.ok(r.output.includes('new-session'), '拒绝文案应指引先用 new-session');
+    assert.ok(
+      !requests.some((req) => req.url.endsWith('/protoclaw/threads')),
+      '拒绝路径不得发出建线 POST（无僵尸线程）',
+    );
+  });
+
+  it('会话存在 → 预校验通过，正常建线', async () => {
+    const { adapters, requests } = makeAdapters([
+      { match: (u) => u.includes('/protoclaw/prebuilt_sessions?agentId=programming-helper'), body: { sessions: [{ id: 'session-ok', agentId: 'programming-helper' }] } },
+      { match: (u, init) => u.endsWith('/protoclaw/threads') && init?.method === 'POST', body: { thread: { threadId: 'wt-1', lifeState: 'idle', status: 'open', failed: false } } },
+    ]);
+    const r = await runCapabilityShellPipeline(POLICY, 'create programming-helper session-ok', {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('threadId=wt-1'), r.output);
+    assert.equal(requests.filter((req) => req.url.endsWith('/protoclaw/threads')).length, 1);
+  });
+
+  it('会话查询失败（server 错误）不阻塞建线，响应注明会话未验证', async () => {
+    const { adapters, requests } = makeAdapters([
+      // 列表查询 500：不阻塞建线
+      { match: (u) => u.includes('/protoclaw/prebuilt_sessions?'), body: { ok: false, error: 'internal error' } },
+      { match: (u, init) => u.endsWith('/protoclaw/threads') && init?.method === 'POST', body: { thread: { threadId: 'wt-2', lifeState: 'idle', status: 'open', failed: false } } },
+    ]);
+    const r = await runCapabilityShellPipeline(POLICY, 'create programming-helper session-ok', {
+      adapters, bashPath: null,
+    });
+    assert.ok(r.output.includes('threadId=wt-2'), '查询失败不阻塞建线');
+    assert.ok(r.output.includes('未验证'), `响应应注明会话未验证: ${r.output}`);
+    // 列表 GET（1 次，失败）+ 建线 POST 都发出
+    const postThreads = requests.filter((req) => req.url.endsWith('/protoclaw/threads') && req.init?.method === 'POST');
+    assert.equal(postThreads.length, 1, '查询失败不阻塞建线 POST');
   });
 });

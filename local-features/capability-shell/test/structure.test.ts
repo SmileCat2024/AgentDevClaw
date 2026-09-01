@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   checkStructure,
-  containsGlob,
+  containsGlobOutsideQuotes,
   containsDollarOutsideSingleQuotes,
 } from '../src/structure.js';
 
@@ -59,18 +59,48 @@ describe('capability-shell checkStructure', () => {
     assert.equal(checkStructure('tee >(wc -l)').ok, false);
   });
 
-  it('拒绝：glob 通配符（未引用）', () => {
-    for (const cmd of ['ls *', 'cat *.txt', 'ls file?.txt', 'ls [abc]']) {
+  it('拒绝：glob 通配符（引号外 * ? 任意位置、引号外词首 [）', () => {
+    for (const cmd of ['ls *', 'cat *.txt', 'ls file?.txt', 'ls [abc]', 'ls a*', 'cat x?y']) {
       const r = checkStructure(cmd);
       assert.equal(r.ok, false, `应拒绝: ${cmd}`);
     }
   });
 
-  it('引用内的 glob/变量字面量（shell-quote 剥引号后不含元字符）放行', () => {
-    // 单引号内 * 被 shell-quote 剥成字面量 *？—— shell-quote 保留引号内内容；
-    // 剥引号后 token 为 '*'，仍是 glob 形态，v1 一律拒绝（保守语义）
-    const r = checkStructure("echo '*'");
+  it('放行：引号内的 * ? [ ] 是 bash 字面量（ticket 035 修复）', () => {
+    // 单引号内 bash 不做 glob：markdown 加粗、jq 过滤器、glob 形态字面量全放行
+    for (const cmd of [
+      "send wt-x key '工单 **LAND** 判决'",
+      "grep '*' file",
+      "echo '*'",
+      "jq '.[:5]'",
+      'echo "**bold**"',
+      'echo "[abc]"',
+    ]) {
+      const r = checkStructure(cmd);
+      assert.equal(r.ok, true, `应放行: ${cmd} → ${r.message ?? ''}`);
+    }
+  });
+
+  it('放行：引号外词中 [（工具语法字面量）', () => {
+    // jq 过滤器裸用（[ 非词首）：与原 token 级 startsWith('[') 规则对齐
+    assert.equal(checkStructure('jq .[:5]').ok, true);
+    assert.equal(checkStructure('echo a[bc]').ok, true);
+  });
+
+  it('拒绝：转义 glob \\*（shell-quote 解析为 glob op，落 op 白名单拒绝）', () => {
+    // shell-quote 把 \* 解析为 { op: 'glob' } token，落入"其余 op 拒绝"分支；
+    // 保守语义（宁严勿漏），与 033 起的既有行为一致
+    const r = checkStructure('ls \\*');
     assert.equal(r.ok, false);
+    assert.equal(r.code, 'structure_rejected');
+  });
+
+  it('拒绝：引号外裸 glob 仍拒绝（既有语义不回归，断言稳定错误码）', () => {
+    for (const cmd of ['ls *', 'cat *.txt', 'ls file?.txt', 'ls [abc]']) {
+      const r = checkStructure(cmd);
+      assert.equal(r.ok, false, `应拒绝: ${cmd}`);
+      assert.equal(r.code, 'structure_rejected');
+    }
   });
 
   it('拒绝：heredoc', () => {
@@ -130,11 +160,25 @@ describe('capability-shell token 检测', () => {
     assert.equal(containsDollarOutsideSingleQuotes('literal'), false);
   });
 
-  it('containsGlob', () => {
-    assert.equal(containsGlob('*.txt'), true);
-    assert.equal(containsGlob('file?'), true);
-    assert.equal(containsGlob('[abc]'), true);
-    assert.equal(containsGlob('.[:5]'), false); // jq 过滤器（[ 非段首）
-    assert.equal(containsGlob('literal'), false);
+  it('containsGlobOutsideQuotes：引号外 * ? / 词首 [ 拒绝，引号内与转义放行', () => {
+    // 引号外拒绝
+    assert.equal(containsGlobOutsideQuotes('ls *'), true);
+    assert.equal(containsGlobOutsideQuotes('cat *.txt'), true);
+    assert.equal(containsGlobOutsideQuotes('rm file?'), true);
+    assert.equal(containsGlobOutsideQuotes('ls [abc]'), true);
+    // 引号内字面量放行
+    assert.equal(containsGlobOutsideQuotes("echo '*'"), false);
+    assert.equal(containsGlobOutsideQuotes("echo '**bold**'"), false);
+    assert.equal(containsGlobOutsideQuotes("jq '.[:5]'"), false);
+    assert.equal(containsGlobOutsideQuotes('echo "[abc]"'), false); // 双引号内不 glob
+    // 词中 [ 与转义字面量放行
+    assert.equal(containsGlobOutsideQuotes('jq .[:5]'), false);
+    assert.equal(containsGlobOutsideQuotes('echo a[bc]'), false);
+    assert.equal(containsGlobOutsideQuotes('ls \\*'), false); // 转义字面量
+    // 引号本身不算词字符：''[abc] 与裸 [abc] 同判（词首 → 拒）
+    assert.equal(containsGlobOutsideQuotes("ls ''[abc]"), true);
+    // 引号刚闭合后紧跟的 unquoted * 仍触发 glob
+    assert.equal(containsGlobOutsideQuotes("echo 'a'*"), true);
+    assert.equal(containsGlobOutsideQuotes('literal'), false);
   });
 });

@@ -125,6 +125,28 @@ describe('capability-shell checkArgs', () => {
     assert.equal(r.ok, false);
     assert.ok(r.message!.includes('用法'));
   });
+
+  it('可选尾参（ticket 035）：可缺省、可提供；必填数不足仍拒绝', () => {
+    const optionalTail: ShellVerbDecl = {
+      description: '',
+      params: [
+        { name: 'agentId', kind: 'literal' },
+        { name: 'title', kind: 'literal', required: false },
+      ],
+      usage: "v <agentId> ['title']",
+      adapter: { key: 'k' },
+    };
+    // 只有必填参数：放行
+    assert.equal(checkArgs([seg('v', ['a'])], decls({ v: optionalTail })).ok, true);
+    // 必填 + 可选：放行
+    assert.equal(checkArgs([seg('v', ['a', 't'])], decls({ v: optionalTail })).ok, true);
+    // 超过声明长度：拒绝
+    assert.equal(checkArgs([seg('v', ['a', 'b', 'c'])], decls({ v: optionalTail })).ok, false);
+    // 必填数不足（0 个参数）仍拒绝，文案含区间
+    const r0 = checkArgs([seg('v', [])], decls({ v: optionalTail }));
+    assert.equal(r0.ok, false);
+    assert.ok(r0.message!.includes('1~2 个参数'), r0.message);
+  });
 });
 
 describe('capability-shell 路径检测', () => {

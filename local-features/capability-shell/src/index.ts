@@ -25,7 +25,7 @@ export type { SyntaxCheckOptions, SyntaxCheckResult } from './syntax.js';
 // 第二道：结构分段 + v1 拒绝特征
 export {
   checkStructure,
-  containsGlob,
+  containsGlobOutsideQuotes,
   containsDollarOutsideSingleQuotes,
 } from './structure.js';
 export type { StructureCheckResult } from './structure.js';

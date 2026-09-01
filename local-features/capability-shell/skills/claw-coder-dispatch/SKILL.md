@@ -15,15 +15,16 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 ## 适用范围与限制（先读）
 
 - **仅限领域内使用**：coder_shell 只做一件事——调度智能编码工作空间中的 Coder 智能体（建线程、派发工单、监视、收口）。它不是通用 bash：文件操作用 read/write/edit 工具，代码搜索用 glob/grep 工具，一律不要塞进这个 shell。
-- **工具受限**：只认识下表 8 个动词；语法只放行**字面量参数、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
+- **工具受限**：只认识下表 9 个动词；语法只放行**字面量参数、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
 
 ## coder_shell 用法
 
-全部调度经 `coder_shell({ command })` 完成，command 是一条管道命令字符串。可用动词（8 个）：
+全部调度经 `coder_shell({ command })` 完成，command 是一条管道命令字符串。可用动词（9 个）：
 
 | 动词 | 语义 |
 |---|---|
-| `create <agentId> <sessionId> ['标题']` | 创建线程，返回 threadId |
+| `new-session <agentId> ['标题']` | 创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId） |
+| `create <agentId> <sessionId> ['标题']` | 给已存在的会话加挂线程，返回 threadId |
 | `send <threadId> <idempotencyKey> '<指令文本>'` | 派发并**阻塞**等本轮落定 |
 | `watch <threadId>` | 续挂监视，落定即返 |
 | `list [agentId]` | 线程列表 |
@@ -94,15 +95,23 @@ planned
 → pushed
 ```
 
-### 2. 创建 coder 会话（一步返回 threadId）
+### 2. 创建 coder 会话并建线（标准第一步）
+
+```text
+coder_shell command="new-session programming-helper '工单025 工具进度UI'"
+```
+
+输出两行：`sessionId=...` 与 `threadId=...`，threadId 直接用于 `send` 派发。线程列表用 `list programming-helper` 核对。
+
+`new-session` 是标准第一步：创建会话时线程宿主工作空间会自动建线，不需要再单独 create。threadId 为 null（未自动建线）时，按报文提示用 `create` 手动建线。
+
+`create` 仅用于给**已存在**的 Coder 会话加挂线程（例如会话已存在但线程丢失的补建场景）。给不存在的 sessionId 调 `create` 会被拒绝——先用 `new-session` 创建会话再派发。
 
 ```text
 coder_shell command="create programming-helper <session-id> '工单025 工具进度UI'"
 ```
 
-返回单行 `threadId=... lifeState=... status=... head=...`。
-
-`create` 的 `sessionId` 是已存在的 Coder 会话（会话由调度面预先创建，本工具不创建会话）。标题在创建时一次写入，线程标题自动跟随会话标题。线程列表用 `list programming-helper` 核对。
+返回单行 `threadId=... lifeState=... status=... head=...`。标题在创建/建线时一次写入，线程标题自动跟随会话标题。线程列表用 `list programming-helper` 核对。
 
 ### 3. 依赖满足后发送开工指令（send 阻塞等落定）
 
@@ -280,7 +289,7 @@ coder_shell command="unarchive wt-xxx"
 | `delivered=0` | thread `status`、`pendingTexts`、head session | runtime 无承接：重新 `send`（幂等键防重）即可，send/deliver 的恢复闸会自动唤起 head runtime 再投；仅 `runtimeWake` 失败时按上面两行处置 |
 | `failed=true` / `status=rotation_failed` | 事件尾部 `handoff_failed`、pending commands | 接力失败：残局需人工介入——报告用户恢复；恢复前不要重发施工指令 |
 | 执行中误归档 | 事件尾部 turn 是否被打断 | 归档即打断收纳是预期行为；翻查后 `unarchive` 恢复，重新投递指令唤醒 runtime |
-| `runtimeWake` 失败（`head_session_missing`） | 会话索引、线程 head | head 会话已被删除，线程无法恢复：取消 pending 指令后归档线程，重新建线程派发 |
+| `runtimeWake` 失败（`head_session_missing`） | 会话索引、线程 head | head 会话已被删除，线程无法恢复：取消 pending 指令后归档线程，重新建线程派发；若环境无可用 Coder 会话，先 `new-session` 再派发 |
 | `runtimeWake` 失败（`runtime_ready_timeout`） | server 日志、agent 装配 | 唤起已尝试但 runtime 未 READY：查启动失败原因（如 worktree 缺 config），修复后重新 send（幂等键防重） |
 | send/watch 返回 `done reason=timeout` | 线程 lifeState | 指令仍在执行，属正常续挂信号：用 `watch` 续挂，不重复派发 |
 | 只有 `delivered=1` 无开工迹象 | 线程事件、agent 连接状态 | 保持 dispatched，查 runtime，不重复派发（send 已自动唤起 runtime；此态多为唤起超时） |
