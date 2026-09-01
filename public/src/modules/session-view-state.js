@@ -123,6 +123,12 @@ function applySessionViewPatch(patch) {
   if (has('inputRequests')) {
     currentInputRequests = Array.isArray(patch.inputRequests) ? patch.inputRequests : [];
     window.lastInputRequests = currentInputRequests;
+    // 工单 037：inputRequests 的规范写入点即输入面的唯一变更声明通道——
+    // 写入本身就触发输入面渲染，调用方不再手动 reset 签名 + 调 render。
+    // 渲染器未加载时（部分测试沙箱 / 早期启动）声明为 no-op。
+    if (typeof notifyInputSurfaceChanged === 'function') {
+      notifyInputSurfaceChanged(currentInputRequests);
+    }
   }
   if (has('toolRenderConfigs')) {
     toolRenderConfigs = patch.toolRenderConfigs && typeof patch.toolRenderConfigs === 'object'

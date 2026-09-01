@@ -18,7 +18,7 @@
  *
  * 依赖全局状态（定义在 app-core.js）:
  *   container, currentMessages, currentInputRequests, currentRuntimeAgentId,
- *   _agentCallActive, lastRenderedInputSignature, showChatProcess,
+ *   _agentCallActive, showChatProcess,
  *   chatProcessToggle, CHAT_PROCESS_VISIBILITY_KEY, followLatestEnabled
  * 依赖 voice-input.js:
  *   _voiceTranscribing, _voiceRecording, _voicePendingSend, stopVoiceRecording,
@@ -30,7 +30,9 @@
  * 依赖 app-ui.js:
  *   isChatSurfaceActive, shouldRenderWorkspaceSurface
  * 依赖 app-main.js:
- *   poll, renderInputRequests, syncCollapseStates
+ *   poll, syncCollapseStates
+ * 依赖 input-render.js:
+ *   notifyInputSurfaceChanged（工单 037：patch 写入即声明，手动 render 配对退役）
  * 依赖 session-view-state.js:
  *   applySessionViewPatch, readCurrentSessionViewState
  */
@@ -185,9 +187,9 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
       if (currentRuntimeAgentId === targetRuntimeId) {
         beginFollowLatestEntryWindow();
         requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+        // patch 写入即声明（工单 037）：乐观清空 inputRequests 自动触发
+        // 输入面恢复渲染，无需手动 reset 签名 + 调 render。
         applySessionViewPatch({ inputRequests: [] });
-        lastRenderedInputSignature = '';
-        renderInputRequests([]);
       }
       // 乐观标记 agent 进入 calling 状态，使 action button 立即切换为 stop
       if (currentRuntimeAgentId === targetRuntimeId) {
@@ -503,9 +505,8 @@ async function submitInputAction(requestId, actionId, payload = {}, boundRuntime
       if (currentRuntimeAgentId === targetRuntimeId) {
         beginFollowLatestEntryWindow();
         requestFollowLatest({ forceEnable: true, behavior: 'auto' });
+        // 乐观清空即声明（工单 037）：渲染由 patch hook 同步触发，不等 poll。
         applySessionViewPatch({ inputRequests: [] });
-        lastRenderedInputSignature = '';
-        renderInputRequests([]);
         clearInterruptSuppression(targetRuntimeId);
         _markAgentCallStartedForNotify(targetRuntimeId);
         _agentCallActive.set(targetRuntimeId, true);

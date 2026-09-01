@@ -424,7 +424,9 @@ test('main render boundary consumes one captured session view', () => {
   );
 
   assert.match(renderBlock, /viewState\s*=\s*readCurrentSessionViewState\(\)/);
-  assert.match(renderBlock, /renderInputRequests\(viewState\.inputRequests\)/);
+  // 工单 037：结构性时机保留显式调用，但必须走唯一声明入口。
+  assert.match(renderBlock, /notifyInputSurfaceChanged\(viewState\.inputRequests\)/);
+  assert.doesNotMatch(renderBlock, /\brenderInputRequests\(/);
   assert.match(renderBlock, /render\(viewState\.messages\)/);
   assert.match(renderBlock, /updateChatContextBar\(viewState\)/);
   assert.doesNotMatch(renderBlock, /\bcurrentMessages\b|\bcurrentInputRequests\b/);

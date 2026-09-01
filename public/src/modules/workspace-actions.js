@@ -21,8 +21,7 @@
  *   _navigationGuardEpoch, prebuiltSessionSwitchInFlight,
  *   shouldAnimateWorkspaceSurface, currentWorkspaceArtifactDetail,
  *   currentWorkspaceDocsetDetail, readOnlyMode, currentMessages,
- *   currentInputRequests, lastRenderedInputSignature,
- *   lastRenderedWorkspaceHtml
+ *   currentInputRequests, lastRenderedWorkspaceHtml
  * 依赖全局函数:
  *   bumpNavigationGuard, t, escapeHtml, invoke (app-core.js)
  *   applySessionViewPatch (session-view-state.js)
@@ -563,7 +562,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         })),
         inputRequests: [],
       });
-      lastRenderedInputSignature = '';
+      // patch 写入即声明（工单 037），此处结构性渲染由 renderCurrentMainView 承担。
       setPreferredUnitMode('chat', allAgents.find(a => a.id === agentId) || activeAgent);
       renderCurrentMainView();
     } catch (error) {
@@ -820,7 +819,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         }
         if (_activateBrowseOnly) {
           readOnlyMode = true;
-          lastRenderedInputSignature = '';
+          // 工单 037：手动 reset 退役——readOnlyMode 已入渲染签名，
+          // 后续 loadAgentData / 主视图渲染按签名差异展示只读面。
         }
         // 线程宿主（coder）：新会话在服务端已建线程，刷新使徽标立即可见
         if (typeof window.refreshThreads === 'function') {

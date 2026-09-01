@@ -9,11 +9,13 @@
  *
  * 依赖（全局，由 app-core.js / app-main.js / 已有模块提供）：
  * - t, escapeHtml, currentLanguage (app-core.js)
- * - currentMessages, currentRuntimeAgentId, currentInputRequests,
- *   lastRenderedInputSignature, lastRenderedInputMode, _agentCallActive,
- *   isInterruptSuppressed, clearInterruptSuppression (app-core.js / app-main.js)
- * - normalizeAgentIdentity, toEpochMs, renderAgentList, renderInputRequests,
- *   getInputSurfaceMode (app-main.js)
+ * - currentMessages, currentRuntimeAgentId, _agentCallActive,
+ *   _agentCallActive, isInterruptSuppressed, clearInterruptSuppression
+ *   (app-core.js / app-main.js)
+ * - normalizeAgentIdentity, toEpochMs, renderAgentList (app-main.js)
+ *   工单 037：calling 翻转不再手动戳输入面——calling 不进入显示模式矩阵，
+ *   模式翻转由真正的状态写入（patch / 队列同步）声明，此前的三处
+ *   reset+render 配对为死路径，已删除。
  * - _tryNotifyAgentFinished (desktop-notify.js)
  * - _recapPendingTrigger, _maybeFetchRecap (recap-hint.js)
  * - _syncPersistentActionButton, _syncQueueFromBackend, _syncPersistentInputUi,
@@ -1065,10 +1067,6 @@ function updateNotificationStatus(notifData) {
       _syncQueueFromBackend();
     }
     if (!payload.state) {
-      if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
-        lastRenderedInputSignature = '';
-        renderInputRequests(currentInputRequests || []);
-      }
       ensureChatRuntimeIndicator();
       return;
     }
@@ -1087,10 +1085,6 @@ function updateNotificationStatus(notifData) {
   const { type, data } = actionSource || {};
 
   if (!type) {
-    if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
-      lastRenderedInputSignature = '';
-      renderInputRequests(currentInputRequests || []);
-    }
     ensureChatRuntimeIndicator();
     return;
   }
@@ -1170,10 +1164,9 @@ function updateNotificationStatus(notifData) {
     _syncPersistentActionButton();
   }
 
-  if (callingStateChanged && getInputSurfaceMode(currentInputRequests || []) !== lastRenderedInputMode) {
-    lastRenderedInputSignature = '';
-    renderInputRequests(currentInputRequests || []);
-  }
+  // calling 翻转不触发输入面渲染（工单 037）：calling 不进入显示模式矩阵
+  // （§3 级 8 calling/idle 同为 persistent），三态按钮由 _syncPersistentActionButton
+  // 同步；模式翻转由真正的状态写入方声明。
 
   // 同步对话区域临时状态块
   ensureChatRuntimeIndicator();

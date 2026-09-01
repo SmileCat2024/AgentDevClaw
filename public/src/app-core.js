@@ -696,8 +696,8 @@ let chatViewportFollowTransition = 'locked';
 let prebuiltSessionSwitchInFlight = false;
 let pendingSwitchTarget = null;   // { runtimeId, serial, source, navEpoch }
 let pendingSwitchSerial = 0;      // monotonically increasing
-let lastRenderedInputSignature = '';
-let lastRenderedInputMode = null;
+// 工单 037：lastRenderedInputSignature / lastRenderedInputMode 已内化到
+// input-render.js（渲染器私有去重状态），手动 reset 协议退役。
 let unitModePreferences = {};
 let lastRenderedWorkspaceHtml = '';
 let lastRenderedWorkspaceScrollKey = '';
@@ -1006,6 +1006,9 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
     return false;
   }
   activateUserCollapseStateForContext(contextKey);
+  // followLatestEnabled 先于 patch 写入：applySessionViewPatch 写入
+  // inputRequests 即声明输入面渲染（工单 037），视口通知须读取恢复后的值。
+  followLatestEnabled = cached.followLatest !== undefined ? cached.followLatest : true;
   applySessionViewPatch({
     messages: cached.messages,
     inputRequests: cached.inputRequests,
@@ -1021,7 +1024,6 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
     sessionMeta: cached.sessionMeta,
     connected: cached.connected,
   });
-  followLatestEnabled = cached.followLatest !== undefined ? cached.followLatest : true;
   _restoredScrollTop = typeof cached.scrollTop === 'number' ? cached.scrollTop : null;
   if (typeof updatePlanBadge === 'function') updatePlanBadge();
   return true;

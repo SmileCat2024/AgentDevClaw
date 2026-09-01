@@ -10,11 +10,13 @@
  *
  * 依赖（全局，由 app-core.js / app-main.js / 已有模块提供）：
  * - t, escapeHtml, currentLanguage (app-core.js)
- * - currentRuntimeAgentId, currentInputRequests, lastRenderedInputSignature,
- *   lastRenderedInputMode, _agentCallActive, _interruptSuppression,
- *   markInterruptPending, isInterruptSuppressed (app-core.js / app-main.js)
+ * - currentRuntimeAgentId, currentInputRequests, _agentCallActive,
+ *   _interruptSuppression, markInterruptPending, isInterruptSuppressed
+ *   (app-core.js / app-main.js)
  * - isRuntimeCalling (runtime-status.js)
- * - renderAgentList, renderInputRequests, getInputSurfaceMode (app-main.js)
+ * - renderAgentList (app-main.js)
+ *   工单 037：模式翻转不再手动戳渲染——提交/队列同步声明
+ *   notifyInputSurfaceChanged (input-render.js)，签名去重由渲染器统一处理。
  * - isChatSurfaceActive, shouldRenderWorkspaceSurface (app-ui.js)
  * - autoResize (input-helpers.js)
  * - _voiceRecording, _voiceStopping, _voiceTranscribing, _voicePendingSend, stopVoiceRecording,
@@ -608,11 +610,9 @@ async function submitQueuedInput() {
         _syncPersistentActionButton();
         renderAgentList();
       }
-      const nextMode = getInputSurfaceMode(currentInputRequests || []);
-      if (nextMode !== lastRenderedInputMode) {
-        lastRenderedInputSignature = '';
-        renderInputRequests(currentInputRequests || []);
-      }
+      // 排队乐观态/提交完成后的模式可能翻转（工单 037）：声明变更即可，
+      // 渲染器按签名差异决定是否重建。
+      notifyInputSurfaceChanged(currentInputRequests || []);
     } else {
       const error = await res.json().catch(() => ({}));
       throw new Error(error.error || `HTTP ${res.status}`);
@@ -647,7 +647,6 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
   // Always update model switcher regardless of queue/runtime state
   updateInputModelSwitcher();
   updateThinkingEffortSwitcher();
-  const prevMode = getInputSurfaceMode(currentInputRequests || []);
   const prevQueueSignature = JSON.stringify(_queuedTexts);
   try {
     if (!runtimeId) {
@@ -687,11 +686,9 @@ async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
   } finally {
     _persistentUiSyncInFlight = false;
   }
-  const nextMode = getInputSurfaceMode(currentInputRequests || []);
-  if (nextMode !== prevMode) {
-    lastRenderedInputSignature = '';
-    renderInputRequests(currentInputRequests || []);
-  }
+  // 队列同步可能翻转显示模式（排空 → 请求卡恢复，工单 037）：声明变更即可，
+  // 渲染器按签名差异决定是否重建；无翻转时是幂等 no-op。
+  notifyInputSurfaceChanged(currentInputRequests || []);
 }
 
 async function interruptAgent() {

@@ -1006,7 +1006,6 @@ async function runPollCycle() {
             focusedAgentId = null;
             currentWorkspaceTab = null;
             renderCurrentMainView();
-            renderInputRequests(current.inputRequests);
           }
         },
       );
@@ -1286,7 +1285,8 @@ async function runPollCycle() {
         clearPartialCompactState();
       }
       if (inputChanged) {
-        renderInputRequests(current.inputRequests);
+        // patch 写入即声明（工单 037）：metadata commit 阶段 hook 已同步
+        // 渲染输入面，这里只保留随输入变化的重构动作。
         updateRollbackActionVisibility();
       } else if (isChatSurfaceActive()) {
         _syncPersistentInputUi(pollRuntimeId);
@@ -1449,7 +1449,7 @@ async function runPollCycle() {
 
 // ── Voice Input / ASR → modules/voice-input.js (Phase A-1, 2026-07-03) ──
 
-// _getSessionInputCacheKey retained here — shared by many domains (poll, renderInputRequests, etc.)
+// _getSessionInputCacheKey retained here — shared by many domains (poll, input-render, etc.)
 // Use the same immutable runtime-context identity as rendering and optimistic data.
 function _getSessionInputCacheKey() {
   return getRuntimeContextKey();

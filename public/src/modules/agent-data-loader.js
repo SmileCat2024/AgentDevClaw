@@ -137,7 +137,8 @@ async function loadAgentData(agentId) {
       // The poll loop will clear it once real messages appear, and the 10s
       // timeout in beginChatLoadingSession is the ultimate fallback.
       if (current.messages.length > 0) clearChatLoadingSession();
-      renderInputRequests(current.inputRequests);
+      // 结构性时机（会话加载）：保留显式调用，但必须走唯一声明入口（工单 037）。
+      notifyInputSurfaceChanged(current.inputRequests);
       updateRollbackActionVisibility();
       renderCurrentMainView(current);
     });

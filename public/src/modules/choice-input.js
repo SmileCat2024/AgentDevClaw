@@ -4,17 +4,17 @@
  * 拆出日期：2026-07-03
  *
  * 依赖全局状态（定义在 app-core.js）:
- *   currentInputRequests, choiceInputState, currentRuntimeAgentId,
- *   lastRenderedInputSignature
+ *   currentInputRequests, choiceInputState, currentRuntimeAgentId
  * 依赖全局函数:
- *   renderInputRequests (app-main.js)
+ *   notifyInputSurfaceChanged (input-render.js，工单 037 唯一渲染声明入口)
  *   poll (app-main.js)
  *   autoResize (app-main.js)
  *   escapeHtml (app-core.js)
  * 导出全局函数:
  *   isChoiceInputRequest, getChoiceRequestById, getChoiceState,
  *   getChoiceOptionCount, buildChoiceAnswer, rememberCurrentChoice,
- *   renderChoiceInputRequest, rerenderChoiceRequest, collapsePrimaryChoiceRequest
+ *   renderChoiceInputRequest, rerenderChoiceRequest, collapsePrimaryChoiceRequest,
+ *   getChoiceInteractionSignature
  * window 函数:
  *   selectChoiceOption, collapseChoiceRequest, expandChoiceRequest,
  *   updateChoiceCustomText, handleChoiceKey, handleChoiceCustomKey,
@@ -64,6 +64,21 @@ function getChoiceState(requestId) {
 function getChoiceOptionCount(question) {
   const optionCount = Array.isArray(question?.options) ? Math.min(question.options.length, 4) : 0;
   return optionCount + (question?.allowCustom ? 1 : 0);
+}
+
+// 选择卡交互状态签名（工单 037）：选项、题号、折叠与上下文展开决定卡片
+// 显示内容，入渲染签名后交互写入经声明入口即可触发重建。customTextByQuestion
+// 刻意不入签名——自定义文本打字不得触发整卡重建（保焦点、保光标）。
+function getChoiceInteractionSignature(requestId) {
+  const state = choiceInputState[requestId];
+  if (!state) return 'new';
+  return JSON.stringify([
+    state.questionIndex || 0,
+    state.selectedIndex || 0,
+    !!state.collapsed,
+    !!state.contextExpanded,
+    state.selectedIndexByQuestion || {},
+  ]);
 }
 
 function buildChoiceAnswer(req, state, questionIndex) {
@@ -211,10 +226,11 @@ function renderChoiceInputRequest(container, req) {
 }
 
 function rerenderChoiceRequest(requestId) {
-  lastRenderedInputSignature = '';
+  // 工单 037：choice 交互状态（选项/题号/折叠/上下文）已入渲染签名，
+  // 状态写入后经声明入口触发选择卡重建，无需手动 reset 签名。
   const container = document.getElementById('user-input-container');
   if (!container) return;
-  renderInputRequests(currentInputRequests || []);
+  notifyInputSurfaceChanged(currentInputRequests || []);
 }
 
 window.selectChoiceOption = function(requestId, optionIndex) {
@@ -238,10 +254,9 @@ window.rejectChoiceRequest = async function(requestId) {
   _rejectedRequests.add(requestId);
   const card = document.querySelector(`.user-choice-card[data-request-id="${requestId}"]`);
   if (card) card.classList.add('is-rejecting');
-  // Force immediate re-render: isChoiceInputRejected now returns true,
-  // so hasChoiceRequest is false → overlay removed → normal input restored.
-  lastRenderedInputSignature = null;
-  renderInputRequests();
+  // 声明变更即恢复普通输入面：isChoiceInputRejected 现在返回 true，
+  // hasChoiceRequest 为 false → 选择卡移除 → 普通输入面恢复（不等网络）。
+  notifyInputSurfaceChanged();
   // Send interrupt in the background.
   const targetRuntimeId = String(getChoiceState(requestId).runtimeId || currentRuntimeAgentId || '').trim();
   if (!targetRuntimeId) {

@@ -10,7 +10,14 @@
  * itself is never destroyed by this renderer anymore.
  *
  * Exported global functions:
- *   getInputRenderSignature, renderInputRequests
+ *   getInputRenderSignature, notifyInputSurfaceChanged, renderInputRequests
+ *
+ * Ticket 037: the input surface has a single render-trigger channel. State
+ * writers declare changes through notifyInputSurfaceChanged (or reach it
+ * automatically via the inputRequests write inside applySessionViewPatch);
+ * the manual reset-signature + render pairing protocol is gone. The dedup
+ * signature lives inside this module now (lastRenderedInputSignature /
+ * lastRenderedInputMode are no longer poked from the outside).
  *
  * Dependencies (global state from app-core.js):
  *   currentRuntimeAgentId, currentLanguage, readOnlyMode, followLatestEnabled
@@ -24,6 +31,11 @@
  *   isChoiceInputRequest, isChoiceInputRejected (choice-input.js)
  *   runWithSuppressedChatViewportObservers, notifyChatViewportMutation (chat-viewport.js)
  */
+
+// 渲染去重签名（渲染器内部状态）：声明式入口下由本模块统一维护，
+// 外部不再手动 reset（工单 037 退役 lastRenderedInputSignature 的手动协议）。
+let lastRenderedInputSignature = '';
+let lastRenderedInputMode = null;
 
 // 渲染输入请求
 function getInputRenderSignature(requests, renderMode) {
@@ -39,16 +51,30 @@ function getInputRenderSignature(requests, renderMode) {
     const lease = Array.isArray(requests) && requests.length > 0 ? requests[0] : null;
     return `requests|${contextKey}|${JSON.stringify(lease || null)}`;
   }
+  // choice 模式：显示内容由 lease 身份 + 交互状态（选项/题号/折叠/上下文展开）
+  // 共同决定（工单 037）。交互状态入签名后，choice 域的状态写入经声明入口
+  // 即可重建选择卡，无需外部 reset。
+  if (renderMode === 'choice' && typeof getChoiceInteractionSignature === 'function') {
+    const contextKey = getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
+    const lease = Array.isArray(requests) && requests.length > 0 ? requests[0] : null;
+    const interaction = lease ? getChoiceInteractionSignature(lease.requestId) : 'new';
+    return `choice|${contextKey}|${lease ? lease.requestId : ''}|${interaction}`;
+  }
   return `${renderMode}|${runtimeId}`;
+}
+
+// 输入面唯一的渲染触发通道（工单 037）：所有域（patch 写入方、calling 翻转、
+// 队列同步、choice 交互、回退对话框关闭）在相关状态变更后调用本入口声明
+// 变更；渲染是同步、幂等的属性级更新（036 已具备），签名去重保证同轮多次
+// 声明无副作用。session-view-state.js 的 inputRequests 写入路径经 typeof
+// 解析到本函数，自动触发渲染。
+function notifyInputSurfaceChanged(requests = readCurrentSessionViewState().inputRequests) {
+  renderInputRequests(requests);
 }
 
 function renderInputRequests(requests = readCurrentSessionViewState().inputRequests) {
   const inputContainer = document.getElementById('user-input-container');
   if (!inputContainer) return;
-
-  // Don't re-render while the rollback action dialog is open
-  // （契约 §3 级 3：回退对话框接管期间输入面重渲染 no-op）
-  if (_rollbackDialogOpen) return;
 
   const chatViewportTopBefore = inputContainer.scrollTop;
   const chatActive = isChatSurfaceActive();
@@ -59,13 +85,13 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
   // turn into several independent answer portals for one chat surface.
   const inputLease = Array.isArray(requests) && requests.length > 0 ? requests[0] : null;
 
-  // 签名机制已退化为"模式变更检测"：同一会话同模式的重复调用（19 处调用方
-  // 手动 reset 签名后再 render）命中幂等属性更新，不再整块重建。
-  if (signature === lastRenderedInputSignature && renderMode === lastRenderedInputMode) {
-    return;
-  }
+  const unchanged = signature === lastRenderedInputSignature && renderMode === lastRenderedInputMode;
+  // 签名/模式照常记录（声明式入口下由渲染器统一去重）；回退对话框接管期间
+  // 不触碰 DOM（契约 §3 级 3），但签名已同步冻结态——关闭对话框后的下一次
+  // 声明因签名差异自然触发恢复渲染，不再依赖外部手动 reset。
   lastRenderedInputSignature = signature;
   lastRenderedInputMode = renderMode;
+  if (unchanged || _rollbackDialogOpen) return;
 
   // 会话切换草稿迁移（契约 §7）：composer 常驻后不再有"销毁前抢救"，
   // key 变化时在此保存旧会话草稿并恢复新会话草稿；同 key 幂等 no-op。

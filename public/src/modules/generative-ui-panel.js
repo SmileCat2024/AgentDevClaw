@@ -545,10 +545,9 @@
 
       // Direct delivery consumes the idle loop's pending input request. Clear
       // the stale request optimistically so it cannot be submitted a second time.
+      // patch 写入即声明（工单 037）：输入面渲染由 hook 自动触发。
       if (result.delivery === 'input' && typeof applySessionViewPatch === 'function') {
         applySessionViewPatch({ inputRequests: [] });
-        if (typeof lastRenderedInputSignature !== 'undefined') lastRenderedInputSignature = '';
-        if (typeof renderInputRequests === 'function') renderInputRequests([]);
       }
 
       if (typeof clearInterruptSuppression === 'function') clearInterruptSuppression(agentId);

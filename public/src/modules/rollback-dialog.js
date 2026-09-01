@@ -4,12 +4,11 @@
  * 拆出日期：2026-07-03
  *
  * 依赖全局状态（定义在 app-core.js）:
- *   currentRuntimeAgentId, currentLanguage, currentMessages,
- *   currentInputRequests, lastRenderedInputSignature
+ *   currentRuntimeAgentId, currentLanguage, currentMessages, currentInputRequests
  * 依赖全局函数:
  *   _getSessionInputCacheKey (app-main.js)
  *   getRollbackInputRequest (app-main.js)
- *   renderInputRequests (app-main.js)
+ *   notifyInputSurfaceChanged (input-render.js，工单 037 唯一渲染声明入口)
  *   submitInputAction (app-main.js)
  *   applySessionViewPatch (session-view-state.js)
  *   escapeHtml (app-core.js)
@@ -76,7 +75,9 @@ function clearPartialCompactState(contextKey = _partialCompactContextKey || _get
     _compactTimerInterval = null;
   }
   clearPartialCompactStartedAt(contextKey);
-  lastRenderedInputSignature = '';
+  // 压缩状态清除即声明输入面变更（工单 037）：模式由 compacting 翻回，
+  // 渲染器按签名差异自动恢复输入面。
+  notifyInputSurfaceChanged();
 }
 
 window.requestRollbackEdit = async function(messageIndex) {
@@ -153,8 +154,9 @@ function showRollbackActionDialog(request, callIndex, msg) {
   const close = () => {
     _rollbackDialogOpen = false;
     container.classList.remove('choice-input-active', 'choice-collapsed');
-    lastRenderedInputSignature = '';
-    renderInputRequests(currentInputRequests || []);
+    // 工单 037：接管标志写入即声明——签名在冻结期间已被记录为 frozen，
+    // 关闭后的声明因模式差异自然恢复输入面。
+    notifyInputSurfaceChanged();
   };
 
   card.querySelector('[data-mode="cancel"]').addEventListener('click', close);
@@ -180,9 +182,8 @@ function showRollbackActionDialog(request, callIndex, msg) {
     _partialCompactRuntimeId = boundRuntimeId;
     _partialCompactContextKey = boundContextKey;
     writePartialCompactStartedAt(Date.now(), _partialCompactContextKey);
+    // 压缩标志先置、patch 写入即声明（工单 037）：渲染读取到 compacting 模式。
     applySessionViewPatch({ inputRequests: [] });
-    lastRenderedInputSignature = '';
-    renderInputRequests([]);
     await submitInputAction(request.requestId, 'compact_from_call', {
       callIndex,
     }, boundRuntimeId);

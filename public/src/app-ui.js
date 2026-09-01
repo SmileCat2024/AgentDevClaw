@@ -1257,7 +1257,8 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   }
   ensureChatViewportObservers();
   renderWorkspaceTabs(agent);
-  renderInputRequests(viewState.inputRequests);
+  // 结构性时机（主视图渲染）：保留显式调用，但必须走唯一声明入口（工单 037）。
+  notifyInputSurfaceChanged(viewState.inputRequests);
   if (shouldRenderWorkspaceSurface(agent)) {
     cancelChatScrollSettlement();
     // Capture before renderWorkspaceSurface consumes and resets it
@@ -1365,6 +1366,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
 //     updateAssemblySideRailPosition
 
 function resetRuntimeBackedSurfaceState() {
+  // patch 写入即声明（工单 037）：inputRequests 清空自动触发输入面渲染。
   applySessionViewPatch({
     messages: [],
     inputRequests: [],
@@ -1372,7 +1374,6 @@ function resetRuntimeBackedSurfaceState() {
     overview: getEmptyOverviewSnapshot(),
     todoPlan: getEmptyTodoPlan(),
   });
-  renderInputRequests([]);
   setCurrentLogs([]);
   setConnectionStatus(false);
   // 传 null（而非 {}）：updateNotificationStatus 只对 falsy 入参清空
