@@ -25,20 +25,24 @@ export interface VerbCheckResult {
  * 第三道检查点：逐段动词校验。
  *
  * 每个管道段的首词必须在动词表内。未命中 → 终态拒绝并列出可用动词清单
- * （稳定排序），模型可自我纠正。
+ * （稳定排序），模型可自我纠正。策略声明了 unknownVerbHints 时，被排除
+ * 动词的拒绝报文附加其结构化指引（如 rotation_failed 需人工介入）。
  */
 export function checkVerbs(
   shellName: string,
   segments: ShellSegment[],
   verbs: Record<string, unknown>,
+  unknownVerbHints: Record<string, string> = {},
 ): VerbCheckResult {
   for (let i = 0; i < segments.length; i++) {
     const verb = segments[i].verb;
     if (!(verb in verbs)) {
+      const hint = unknownVerbHints?.[verb];
       return {
         ok: false,
         code: 'unknown_verb',
-        message: `“${verb}” 不是 ${shellName} 的可用动词。可用动词：${listVerbs(verbs)}。`,
+        message: `“${verb}” 不是 ${shellName} 的可用动词。可用动词：${listVerbs(verbs)}。` +
+          (hint ? `\n${hint}` : ''),
         segmentIndex: i,
         verb,
       };

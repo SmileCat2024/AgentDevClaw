@@ -63,3 +63,19 @@ export {
   runCapabilityShellPipeline,
 } from './tool-factory.js';
 export type { CapabilityShellRunResult, CapabilityShellToolOptions } from './tool-factory.js';
+
+// coder 领域 shell（ticket 034）：动词表 + threads adapter + feature 挂载
+export {
+  createThreadsAdapter,
+  createThreadsAdapters,
+} from './coder-shell.js';
+export type { ThreadAdapter, ThreadAdapterContext, FetchLike } from './coder-shell.js';
+export {
+  CODER_SHELL_NAME,
+  CODER_SHELL_DESCRIPTION,
+  createCoderShellPolicy,
+} from './coder-policy.js';
+export {
+  CapabilityShellFeature,
+} from './coder-shell-feature.js';
+export type { CapabilityShellFeatureConfig } from './coder-shell-feature.js';

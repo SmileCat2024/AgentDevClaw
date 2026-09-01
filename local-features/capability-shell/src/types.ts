@@ -37,6 +37,13 @@ export interface CapabilityShellPolicy {
   description: string;
   /** 动词表：首词 → 动词声明 */
   verbs: Record<string, ShellVerbDecl>;
+  /**
+   * 可选：显式排除动词的结构化指引（ticket 034）。
+   * 动词道对这里的键返回 unknown_verb 时，报文附加对应指引文本——
+   * 用于 advance / resume 等需人工介入的操作（与技能故障表一致），
+   * 让模型得到结构化指引而不是泛化的动词清单。
+   */
+  unknownVerbHints?: Record<string, string>;
 }
 
 /** 单个动词的声明：参数约束 + 分派去向。 */

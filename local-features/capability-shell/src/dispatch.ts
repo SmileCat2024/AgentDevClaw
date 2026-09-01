@@ -14,7 +14,16 @@
 import { spawn } from 'child_process';
 
 /** 进程内 adapter：接收校验后参数；有上游管道数据时经 ctx.stdin 接收。 */
-export type InProcessAdapter = (args: string[], context?: { stdin: string }) => Promise<string>;
+export type InProcessAdapter = (
+  args: string[],
+  context?: {
+    stdin: string;
+    /** 框架终止原因（'timeout' | 'user' | null）；仅声明 timeout 的工具注入（ticket 034） */
+    termination?: () => 'timeout' | 'user' | null;
+    /** 框架合并 signal（Tool.timeout / 用户打断共用，ADR-0005） */
+    signal?: AbortSignal;
+  },
+) => Promise<string>;
 
 /** adapter map：adapter 键 → 进程内实现。由工具工厂注入以便测试。 */
 export type AdapterMap = Record<string, InProcessAdapter>;
@@ -45,6 +54,8 @@ export interface DispatchOptions {
   signal?: AbortSignal;
   /** spawn 工作目录 */
   workdir?: string;
+  /** 框架终止原因查询（timeout / user / null），透传给进程内 adapter（ticket 034） */
+  termination?: () => 'timeout' | 'user' | null;
 }
 
 /**
@@ -71,8 +82,12 @@ export async function dispatchPipeline(
     for (const seg of segments) {
       const fn = adapters[seg.adapterKey];
       if (typeof fn === 'function') {
-        // 进程内函数：接收校验后参数；上游管道数据经 ctx.stdin 传入
-        const result = await fn(seg.args.slice(), { stdin: upstream ?? '' });
+        // 进程内函数：接收校验后参数；上游管道数据、终止原因与合并 signal 经 ctx 传入
+        const result = await fn(seg.args.slice(), {
+          stdin: upstream ?? '',
+          termination: () => options.termination?.() ?? null,
+          signal: options.signal,
+        });
         upstream = typeof result === 'string' ? result : String(result ?? '');
       } else {
         // spawn 段：adapterKey 即可执行名；上游输出写 stdin

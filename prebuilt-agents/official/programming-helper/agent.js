@@ -25,6 +25,7 @@ import { GroupChatBridgeFeature } from '../../../local-features/dist/group-admin
 import { ContextGuardFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
+import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import {
   readGlobalLayer,
   readAgentLayer,
@@ -174,6 +175,11 @@ export class ProgrammingHelperAgent extends BasicAgent {
     this.use(new UserInputFeature());
     this.use(new GenerativeUISurfaceFeature());
     this.use(new GitHubFeature());
+
+    // coder 领域 shell（ticket 034）：线程调度收编为受管线约束的 feature 工具。
+    // 仅 main 身份挂载；CoderAgent 不挂（不自派工单，避免递归调度）。
+    // runtimeIdentity 模式同 ClawDispatchFeature（serverOrigin 三级解析）。
+    this.use(new CapabilityShellFeature({ serverOrigin: runtimeIdentity.serverOrigin }));
   }
 
   async onInitiate(ctx) {

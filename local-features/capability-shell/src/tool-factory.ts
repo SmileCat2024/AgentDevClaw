@@ -76,10 +76,12 @@ export function createCapabilityShellTool(
     },
     render: { call: 'bash', result: 'bash' },
     // 超时唯一闸门 = 框架 Tool.timeout 契约（defaultMs/maxMs/fromArg）；
-    // CLI 风格时间 flag 不进动词表
+    // CLI 风格时间 flag 不进动词表。timeout 参数由框架 fromArg 读取并
+    // clamp 到 [1, maxMs]；CLI 风格时间 flag 不进动词表。
     timeout: {
-      defaultMs: 120_000,
-      maxMs: 600_000,
+      defaultMs: options?.timeoutMs ?? 120_000,
+      maxMs: options?.maxTimeoutMs ?? 600_000,
+      fromArg: 'timeout',
     },
     execute: async (args, context) => {
       const command = typeof args.command === 'string' ? args.command : '';
@@ -88,6 +90,7 @@ export function createCapabilityShellTool(
         signal: context?.signal,
         workdir: options?.workdir,
         bashPath: options?.bashPath,
+        termination: context?.termination,
       });
       return result.output;
     },
@@ -120,6 +123,8 @@ export async function runCapabilityShellPipeline(
     signal?: AbortSignal;
     workdir?: string;
     bashPath?: string | null;
+    /** 框架终止原因查询（timeout / user / null），透传给进程内 adapter（ticket 034） */
+    termination?: () => 'timeout' | 'user' | null;
   } = {},
 ): Promise<CapabilityShellRunResult> {
   const audit: CapabilityShellAuditEvent = {
@@ -175,7 +180,7 @@ export async function runCapabilityShellPipeline(
   const segments = structure.segments ?? [];
 
   // 第三道：逐段动词校验
-  const verbResult = checkVerbs(policy.name, segments, policy.verbs);
+  const verbResult = checkVerbs(policy.name, segments, policy.verbs, policy.unknownVerbHints);
   if (!verbResult.ok) {
     log.warn('capability shell unknown verb', {
       shell: policy.name,
@@ -231,6 +236,7 @@ export async function runCapabilityShellPipeline(
     adapters: options.adapters,
     signal: options.signal,
     workdir: options.workdir,
+    termination: options.termination,
   });
 
   // 审计事件（capability 命名空间；本票只落日志）
