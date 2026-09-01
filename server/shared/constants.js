@@ -89,6 +89,7 @@ export const TUNNEL_RECONNECT_MAX_MS     = 30000;   // managed SSH 重连退避�
 export const TUNNEL_STDERR_TAIL_LINES   = 20;      // managed SSH stderr 诊断尾部
 export const REMOTE_HANDSHAKE_INTERVAL_MS = 5000;  // 远程连接周期握手间隔（秒级，对齐前端轮询量级）
 export const REMOTE_HANDSHAKE_TIMEOUT_MS  = 3000;  // 握手单请求超时（间隔+超时 < 10s 收敛预算）
+export const REMOTE_CONNECTION_FAILURE_THRESHOLD = 2;  // 慢断快收：连续可重试失败达此次数才呈现断线（握手状态机与目录聚合共用）
 export const IM_IPC_MOUNT_RETRY_MS      = 1500;    // IM carrier IPC mount 重试延迟
 export const WORKSPACE_CACHE_TTL_MS     = 5000;    // workspace 数据内存缓存 TTL
 export const REQ_TIMEOUT_BUFFER_MS      = 10000;   // req.setTimeout 的额外 buffer

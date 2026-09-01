@@ -429,6 +429,76 @@ describe('catalog capability pass-through', () => {
   });
 });
 
+// ── 慢断快收：目录拉取失败迟滞（与握手状态机共用阈值）──────────────────────
+
+describe('catalog fetch failure hysteresis', () => {
+  function failingFetchHarness(getFetch) {
+    return createCatalogAggregator({
+      fetch: async (url) => getFetch()(new URL(String(url))),
+      listConnections: async () => [{ id: 'server-a', name: 'Lab-B', enabled: true, localPort: 22101 }],
+      getStatus: () => ({ state: 'connected', appInfo: { capabilities: { write: true } } }),
+      logger: silentLogger,
+    });
+  }
+
+  const healthyFetch = () => async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, agents: [{ id: 'runtime-1', source: 'child', status: 'running' }] }),
+  });
+
+  it('reuses the previous connected section on the first fetch failure', async () => {
+    let mode = 'healthy';
+    const aggregator = failingFetchHarness(() => {
+      if (mode === 'fail') return () => Promise.reject(new Error('fetch failed'));
+      return healthyFetch();
+    });
+
+    const first = await aggregator.aggregate();
+    assert.equal(first.connections[0].status, 'connected');
+
+    mode = 'fail';
+    const second = await aggregator.aggregate();
+
+    assert.equal(second.connections[0].status, 'connected', 'single fetch failure keeps the online presentation');
+    assert.equal(second.connections[0].error, undefined);
+  });
+
+  it('degrades to degraded after consecutive failures reach the threshold', async () => {
+    let mode = 'healthy';
+    const aggregator = failingFetchHarness(() => {
+      if (mode === 'fail') return () => Promise.reject(new Error('fetch failed'));
+      return healthyFetch();
+    });
+
+    await aggregator.aggregate();
+    mode = 'fail';
+    await aggregator.aggregate();
+    const second = await aggregator.aggregate();
+
+    assert.equal(second.connections[0].status, 'degraded');
+    assert.equal(second.connections[0].error.code, 'operation_rejected');
+  });
+
+  it('a successful fetch resets the failure counter', async () => {
+    let mode = 'healthy';
+    const aggregator = failingFetchHarness(() => {
+      if (mode === 'fail') return () => Promise.reject(new Error('fetch failed'));
+      return healthyFetch();
+    });
+
+    await aggregator.aggregate();
+    mode = 'fail';
+    await aggregator.aggregate();
+    mode = 'healthy';
+    await aggregator.aggregate();
+    mode = 'fail';
+    const fourth = await aggregator.aggregate();
+
+    assert.equal(fourth.connections[0].status, 'connected', 'counter restarted after a successful fetch');
+  });
+});
+
 // ── 4. frontend gate ─────────────────────────────────────────────────────
 
 function loadRemoteModule(catalogPayload) {

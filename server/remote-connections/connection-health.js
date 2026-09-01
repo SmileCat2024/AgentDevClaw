@@ -7,6 +7,7 @@ import {
   PROJECT_ROOT,
   REMOTE_HANDSHAKE_INTERVAL_MS,
   REMOTE_HANDSHAKE_TIMEOUT_MS,
+  REMOTE_CONNECTION_FAILURE_THRESHOLD,
 } from '../shared/constants.js';
 import { originFor } from './tunnel-manager.js';
 import { RemoteAuthError } from './remote-auth.js';
@@ -157,6 +158,8 @@ function createEntry(connection) {
     lastHandshakeAt: null,
     lastConnectedAt: null,
     lastFailureKey: null,
+    // 慢断快收：connected 态下连续可重试失败计数（成功握手清零）。
+    consecutiveRetryableFailures: 0,
     timer: null,
     inFlight: false,
     stopped: false,
@@ -171,6 +174,7 @@ function resetEntry(entry) {
   entry.lastHandshakeAt = null;
   entry.lastConnectedAt = null;
   entry.lastFailureKey = null;
+  entry.consecutiveRetryableFailures = 0;
 }
 
 function materiallyChanged(entry, connection) {
@@ -346,6 +350,22 @@ export class ConnectionHealth {
         ...(failure.step ? { step: failure.step } : {}),
       };
       entry.lastHandshakeAt = new Date().toISOString();
+      // 慢断快收（REMOTE_CONNECTION_FAILURE_THRESHOLD）：connected 态下的
+      // 可重试失败（传输断 / 超时）单次多为网络抖动噪声，采样周期 5s 内
+      // 不构成断线事实，保持上一状态不置位；连续达阈值才呈现断线。确定性
+      // 失败（远端明确拒绝 / 协议异常）无噪声属性，立即呈现。从未连通过
+      // （configured / connecting）与恢复探测（reconnecting 及之后）本就
+      // 处在非在线呈现，直接置位。
+      if (entry.state === 'connected' && failure.retryable) {
+        entry.consecutiveRetryableFailures += 1;
+        if (entry.consecutiveRetryableFailures < REMOTE_CONNECTION_FAILURE_THRESHOLD) {
+          this.logger.debug(`远程连接 ${entry.connection.id} 探测失败（${entry.consecutiveRetryableFailures}/${REMOTE_CONNECTION_FAILURE_THRESHOLD}），保持在线呈现`, {
+            code: entry.error?.code,
+            message: entry.error?.message,
+          });
+          return;
+        }
+      }
       this.transition(entry, failure.state);
     } finally {
       entry.inFlight = false;
@@ -379,9 +399,13 @@ export class ConnectionHealth {
       name: typeof appInfo.name === 'string' ? appInfo.name : null,
       clawVersion: typeof appInfo.version === 'string' ? appInfo.version : null,
       frameworkVersion: typeof appInfo.framework?.version === 'string' ? appInfo.framework.version : null,
-      // 写能力门控（ADR-0011）：旧远程无 capabilities 字段视为不可写；
-      // 每次握手重算，断线重连后随握手刷新。
-      capabilities: { write: appInfo?.capabilities?.write === true },
+      // 能力门控（ADR-0011 能力矩阵）：握手透传远端上报的已知能力位，
+      // 缺位视为该位不可用（旧远程兼容）。每次握手重算，断线重连后刷新。
+      capabilities: {
+        write: appInfo?.capabilities?.write === true,
+        sessionOps: appInfo?.capabilities?.sessionOps === true,
+        workspaceCreate: appInfo?.capabilities?.workspaceCreate === true,
+      },
       checkedAt,
     };
 
@@ -401,6 +425,7 @@ export class ConnectionHealth {
     entry.versionWarning = versionWarning;
     entry.error = null;
     entry.lastFailureKey = null;
+    entry.consecutiveRetryableFailures = 0;
     entry.lastHandshakeAt = checkedAt;
     entry.lastConnectedAt = checkedAt;
     this.transition(entry, 'connected');

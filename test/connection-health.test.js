@@ -128,12 +128,36 @@ describe('three-step handshake and appInfo cache', () => {
       name: 'AgentDevClaw',
       clawVersion: '0.2.0',
       frameworkVersion: '0.1.0',
-      // Legacy app_info without capabilities → write defaults to false (ADR-0011).
-      capabilities: { write: false },
+      // Legacy app_info without capabilities → all bits default to false (ADR-0011).
+      capabilities: { write: false, sessionOps: false, workspaceCreate: false },
       checkedAt: status.appInfo.checkedAt,
     });
     assert.ok(status.lastConnectedAt);
     assert.equal(status.lastHandshakeAt, status.lastConnectedAt);
+  });
+
+  it('passes through the full capability set advertised by the remote app_info', async () => {
+    const { health } = createHarness({
+      handler: healthyRoutes({
+        '/protoclaw/app_info': () => jsonResponse({
+          ok: true,
+          name: 'AgentDevClaw',
+          version: '0.2.0',
+          framework: { name: '@agentdevjs/core', version: '0.1.0' },
+          capabilities: { write: true, sessionOps: true, workspaceCreate: true },
+        }),
+      }),
+    });
+
+    const status = await health.runHandshake('server-a');
+
+    // 回归钉：能力位在握手消费层逐位透传（2026-08-31 曾被过滤为 write 单位，
+    // 远程叶子右键菜单 / 远程新对话按钮随门控整体消失）。未知位不透传。
+    assert.deepEqual(status.appInfo.capabilities, {
+      write: true,
+      sessionOps: true,
+      workspaceCreate: true,
+    });
   });
 
   it('starts in configured and shows connecting while the handshake is pending', async () => {
@@ -637,5 +661,91 @@ describe('periodic probing lifecycle', () => {
     assert.ok(REMOTE_HANDSHAKE_INTERVAL_MS > 0);
     assert.ok(REMOTE_HANDSHAKE_TIMEOUT_MS > 0);
     assert.ok(REMOTE_HANDSHAKE_INTERVAL_MS + REMOTE_HANDSHAKE_TIMEOUT_MS < 10000);
+  });
+});
+
+// ── 慢断快收（REMOTE_CONNECTION_FAILURE_THRESHOLD）────────────────────────
+// connected 态下的可重试失败（传输断 / 超时）是网络抖动噪声的高发形态，
+// 单次不置位；连续达阈值才呈现断线。确定性失败（远端明确拒绝）与从未
+// 连通过的首轮探测无闪烁问题，保持立即置位。
+
+describe('slow-break fast-recover failure hysteresis', () => {
+  function phaseHarness(getPhase) {
+    const healthy = healthyRoutes();
+    return createHarness({
+      handler: (url, options) => {
+        const phase = getPhase();
+        if (phase === 'refused') return networkFailure('ECONNREFUSED')();
+        if (phase === 'health500') {
+          if (url.pathname === '/protoclaw/health') return jsonResponse({ ok: false }, 500);
+          return healthy(url, options);
+        }
+        return healthy(url, options);
+      },
+    });
+  }
+
+  it('a single retryable failure keeps connected with the error recorded', async () => {
+    let phase = 'healthy';
+    const { health } = phaseHarness(() => phase);
+    assert.equal((await health.runHandshake('server-a')).state, 'connected');
+
+    phase = 'refused';
+    const status = await health.runHandshake('server-a');
+
+    assert.equal(status.state, 'connected', 'single retryable failure must not flip the state');
+    assert.equal(status.error.code, 'transport_unavailable');
+    assert.ok(status.appInfo, 'connected presentation keeps appInfo (capabilities intact)');
+  });
+
+  it('consecutive retryable failures reach the threshold and disconnect', async () => {
+    let phase = 'healthy';
+    const { health } = phaseHarness(() => phase);
+    await health.runHandshake('server-a');
+
+    phase = 'refused';
+    await health.runHandshake('server-a');
+    assert.equal(health.getStatus('server-a').state, 'connected');
+
+    const status = await health.runHandshake('server-a');
+    assert.equal(status.state, 'disconnected');
+    assert.equal(status.error.code, 'transport_unavailable');
+  });
+
+  it('a successful handshake resets the failure counter', async () => {
+    let phase = 'healthy';
+    const { health } = phaseHarness(() => phase);
+    await health.runHandshake('server-a');
+
+    phase = 'refused';
+    await health.runHandshake('server-a');
+    phase = 'healthy';
+    assert.equal((await health.runHandshake('server-a')).state, 'connected');
+
+    phase = 'refused';
+    const status = await health.runHandshake('server-a');
+    assert.equal(status.state, 'connected', 'counter restarted from zero after recovery');
+  });
+
+  it('a definitive failure (target rejected) transitions immediately without hysteresis', async () => {
+    let phase = 'healthy';
+    const { health } = phaseHarness(() => phase);
+    await health.runHandshake('server-a');
+
+    phase = 'health500';
+    const status = await health.runHandshake('server-a');
+
+    assert.equal(status.state, 'degraded', 'non-retryable failures are facts, not noise');
+    assert.equal(status.error.retryable, false);
+  });
+
+  it('the very first probe cycle has no hysteresis (never was connected)', async () => {
+    const { health } = createHarness({
+      handler: networkFailure('ECONNREFUSED'),
+    });
+
+    const status = await health.runHandshake('server-a');
+
+    assert.equal(status.state, 'disconnected', 'initial connect failures surface immediately');
   });
 });

@@ -977,3 +977,28 @@ describe('agent-lifecycle', () => {
     });
   });
 });
+
+// ── /protoclaw/app_info handshake capabilities ────────────────────────────
+// ADR-0011 能力矩阵回归钉：握手能力位是前端远程门控（远程叶子右键菜单
+// sessionOps、远程目录新对话 workspaceCreate）的唯一数据源。位漏报时这些
+// 界面对真实远程整体消失（2026-08-31 fcdf770 引入门控当天即发生），
+// mock 载荷驱动的连接侧测试抓不到，必须在路由真值层钉住。
+
+describe('agent-lifecycle: app_info advertises the full remote capability set', () => {
+  it('reports write / sessionOps / workspaceCreate as true', async () => {
+    const mod = createAgentLifecycleModule(createMockCtx());
+    let handler = null;
+    const app = { get: (path, fn) => { if (path === '/protoclaw/app_info') handler = fn; }, post: () => {} };
+    mod.setupRoutes(app, { json: () => (_req, _res, next) => next() });
+
+    let responseData = null;
+    await handler({}, { json: (data) => { responseData = data; } });
+
+    assert.equal(responseData.ok, true);
+    assert.deepEqual(responseData.capabilities, {
+      write: true,
+      sessionOps: true,
+      workspaceCreate: true,
+    });
+  });
+});

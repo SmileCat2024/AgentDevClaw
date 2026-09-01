@@ -54,6 +54,8 @@ Runtime Plane（消息/工具/Todo）、Session Plane（会话/分支/精简）�
 
 断开的连接在列表中保留身份并显示断开状态；写操作默认禁用；不伪造成功；不做隐式离线队列。读操作可自动重试，写操作必须有幂等键（复用既有 operationId / idempotencyKey 体系，不另造平行概念）。
 
+> 修订（2026-09-01）：断线的**判定时机**细化——"显示断开状态"以连续失败确认为准，不以单次采样失败为准。握手周期 5s，单次可重试失败（`transport_unavailable` / `request_timeout`）多为网络抖动噪声，不构成断线事实；connected 态下连续达阈值（`REMOTE_CONNECTION_FAILURE_THRESHOLD = 2`，约 10s）才置 disconnected/degraded，恢复保持单次成功即回 connected（慢断快收）。确定性失败（`target_not_found` / `operation_rejected`，如远端明确拒绝认证）无噪声属性，仍立即呈现；从未连通过的首轮探测同理。目录聚合的拉取失败（整体超时或端点均无数据）共用同一阈值：窗口内复用上一轮 connected section，避免侧栏在抖动期间闪变红态（虚化、禁用、能力缓存清空会连锁触发菜单/按钮消失）。取舍：真断线的 UI 呈现最多延迟一个阈值窗口，期间用户操作直接失败并由既有 toast 呈现原因。
+
 ### 8. 分阶段交付，聚合单位 = 工作空间
 
 - **Phase 1**：连接基础 + 只读远程视图——远程工作空间以 `服务器名：项目` 出现在左侧列表，消息流/Todo/Hook/模板只读可用，输入区显式禁用。

@@ -1,6 +1,6 @@
 import { createClawLogger } from '../shared/claw-logger.js';
 import { LOCAL_OPERATION_ERROR_CODES } from '../shared/operation-contract.js';
-import { REMOTE_HANDSHAKE_TIMEOUT_MS } from '../shared/constants.js';
+import { REMOTE_HANDSHAKE_TIMEOUT_MS, REMOTE_CONNECTION_FAILURE_THRESHOLD } from '../shared/constants.js';
 import { REMOTE_NAMESPACE_PREFIX } from '../shared/request-target.js';
 import { originFor } from './tunnel-manager.js';
 
@@ -281,6 +281,8 @@ export class CatalogAggregator {
     this._snapshotAt = 0;
     this._snapshotInFlight = null;
     this._snapshotEpoch = 0;
+    // 慢断快收：每连接连续目录拉取失败计数（成功清零）。
+    this._fetchFailures = new Map();
   }
 
   // 默认（snapshotTtlMs=0）每次调用都透传拉取远程真值；装配层传入正 TTL 后，
@@ -319,11 +321,23 @@ export class CatalogAggregator {
     const connections = (await this.listConnections()) || [];
     const enabled = (Array.isArray(connections) ? connections : [])
       .filter((connection) => connection?.id && connection.enabled === true);
-    const sections = await Promise.all(enabled.map((connection) => this.buildConnectionSection(connection)));
+    // 失败计数只对当前 enabled 连接有意义：已删除/禁用连接的残留计数
+    // 一并清理（同 id 重建连接不从旧计数起步）。
+    for (const id of this._fetchFailures.keys()) {
+      if (!enabled.some((connection) => connection.id === id)) this._fetchFailures.delete(id);
+    }
+    // 慢断快收回退源：拉取前的上一轮快照（可能为 null）。目录拉取失败时，
+    // 在阈值窗口内复用上一轮 connected section，短暂抖动不触发侧栏断线闪变。
+    const previousSections = new Map(
+      (this._snapshot?.connections || [])
+        .map((section) => [section.connectionId, section]),
+    );
+    const sections = await Promise.all(enabled.map((connection) => this
+      .buildConnectionSection(connection, previousSections.get(connection.id))));
     return { connections: sections };
   }
 
-  async buildConnectionSection(connection) {
+  async buildConnectionSection(connection, previousSection = null) {
     const section = {
       connectionId: connection.id,
       name: connection.name,
@@ -350,15 +364,10 @@ export class CatalogAggregator {
     try {
       sources = await this.fetchConnectionSources(connection);
     } catch (error) {
-      // 整体超时/失败：该连接降级返回，不阻塞其他连接。
-      this.logger.warn(`远程连接 ${connection.id} 目录聚合失败`, {
-        message: error?.message,
-      });
-      return {
-        ...section,
-        status: 'degraded',
-        error: classifyCatalogFailure(error, this.timeoutMs),
-      };
+      // 整体超时/失败：该连接降级返回，不阻塞其他连接。慢断快收（与握手状态机
+      // 共用 REMOTE_CONNECTION_FAILURE_THRESHOLD）：单次失败多为抖动噪声，上一轮
+      // 是 connected 且未达阈值时复用其数据保持在线呈现；连续达阈值才降级。
+      return this.degradeOrReusePrevious(connection, previousSection, error, section);
     }
 
     const usable = {
@@ -367,17 +376,19 @@ export class CatalogAggregator {
     };
     const failed = sources.errors.map((error) => error.message).join('；');
     if (!usable.connected && !usable.viewer) {
-      this.logger.warn(`远程连接 ${connection.id} 目录端点均未返回可用数据`, { failed });
-      return {
-        ...section,
-        status: 'degraded',
-        error: {
-          code: LOCAL_OPERATION_ERROR_CODES.OPERATION_REJECTED,
-          retryable: false,
-          message: `远程目录端点均未返回可用数据：${failed}`,
-        },
-      };
+      // 端点均不可用与整体超时一样多为同一链路上的抖动噪声，同样受慢断
+      // 快收阈值约束。分类落在 operation_rejected，与该路径原先直接返回的
+      // error 形态一致。此路径不清理失败计数（fetchConnectionSources 因
+      // readTolerant 容忍单端点失败而正常返回，清零只能发生在真正产出数据时）。
+      return this.degradeOrReusePrevious(
+        connection,
+        previousSection,
+        new CatalogRequestError(`远程目录端点均未返回可用数据：${failed}`),
+        section,
+      );
     }
+    this._fetchFailures.delete(connection.id);
+
     if (failed) {
       // 部分端点失败：以远程实际返回继续组合，不降级整条连接。
       this.logger.debug(`远程连接 ${connection.id} 部分目录端点失败，按其余返回组合`, { failed });
@@ -385,6 +396,28 @@ export class CatalogAggregator {
     return {
       ...section,
       workspaces: composeWorkspaces(connection.id, connection.name, usable),
+    };
+  }
+
+  // 慢断快收回退：目录拉取失败（整体异常或端点均无数据）时，上一轮是
+  // connected 且连续失败未达 REMOTE_CONNECTION_FAILURE_THRESHOLD 则复用上一轮
+  // section 保持在线呈现；连续达阈值才降级 degraded。
+  degradeOrReusePrevious(connection, previousSection, error, section) {
+    const failures = (this._fetchFailures.get(connection.id) || 0) + 1;
+    this._fetchFailures.set(connection.id, failures);
+    if (previousSection?.status === 'connected' && failures < REMOTE_CONNECTION_FAILURE_THRESHOLD) {
+      this.logger.debug(`远程连接 ${connection.id} 目录拉取失败（${failures}/${REMOTE_CONNECTION_FAILURE_THRESHOLD}），复用上一轮目录`, {
+        message: error?.message,
+      });
+      return previousSection;
+    }
+    this.logger.warn(`远程连接 ${connection.id} 目录聚合失败`, {
+      message: error?.message,
+    });
+    return {
+      ...section,
+      status: 'degraded',
+      error: classifyCatalogFailure(error, this.timeoutMs),
     };
   }
 
