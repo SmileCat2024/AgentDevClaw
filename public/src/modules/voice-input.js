@@ -11,16 +11,16 @@
  *   submitQueuedInput (app-main.js)
  *   submitInput (app-main.js)
  *   getRuntimeContextKey (app-core.js)
+ *   _cacheSessionInput / _restoreSessionInputDraft / _storeSessionInputDraft /
+ *   _storeVisibleSessionInputDraft, _sessionInputCache (input-composer.js, 工单 036)
  * 导出全局函数:
  *   toggleVoiceRecording, startVoiceRecording, stopVoiceRecording,
  *   _cancelVoiceRecording, _playVoiceSound, _updateVoiceUI,
- *   sendAudioToASR, insertTextAtCursor,
- *   _cacheSessionInput, _restoreSessionInputDraft, _storeSessionInputDraft,
- *   _storeVisibleSessionInputDraft, _injectPendingVoiceResult
+ *   sendAudioToASR, insertTextAtCursor, _injectPendingVoiceResult
  * 导出全局变量:
  *   _voiceRecording, _voiceStopping, _voiceTranscribing, _voiceMediaRecorder, _voiceAudioChunks,
  *   _voiceTargetBtn, _voiceTargetId, _voiceCancelled, _voicePendingSend, _voiceAgentId,
- *   _voiceCacheKey, _pendingVoiceResults, _sessionInputCache
+ *   _voiceCacheKey, _pendingVoiceResults
  * HTML onclick 引用:
  *   onclick="toggleVoiceRecording(...)"
  *   oninput="_cacheSessionInput(this)"
@@ -40,7 +40,8 @@ let _voicePendingSend = false;      // 录音期间点了发送：停止录音�
 let _voiceAgentId = null;           // 录音发起时的 runtime agent ID（用于 API 调用）
 let _voiceCacheKey = null;          // 录音发起时的 session cache key（用于检测会话切换）
 let _pendingVoiceResults = {};      // { agentId: text } — ASR 结果在会话切换后暂存，待切回时注入
-let _sessionInputCache = {};        // { cacheKey: text } — 每个会话 persistent 输入框内容缓存
+// 会话草稿缓存（_sessionInputCache）已迁至 input-composer.js（工单 036）：
+// 纯 composer 状态归还 composer 域；本模块只按原全局符号继续消费。
 
 // ── Low-latency audio cue via Web Audio API ──────────────────────────────────
 // Replaces `new Audio(url).play()` which creates a new HTMLAudioElement each
@@ -141,7 +142,12 @@ function _updateVoiceUI() {
 
 function _shouldPreserveVoiceInputForRender(renderMode, cacheKey) {
   const hasOwnedVoiceOperation = _voiceRecording || _voiceStopping || _voiceTranscribing;
-  const isInteractiveInput = renderMode === 'persistent' || renderMode === 'requests';
+  // 交互面 = composer 可见且可交互的模式（含压缩状态卡：录音与压缩互不依赖，
+  // 转写结果按 sessionKey 注入）；hidden/readonly/冻结（回退对话框）视为离开。
+  const isInteractiveInput = renderMode === 'persistent'
+    || renderMode === 'requests'
+    || renderMode === 'choice'
+    || renderMode === 'compacting';
   return hasOwnedVoiceOperation
     && isInteractiveInput
     && Boolean(_voiceCacheKey)
@@ -485,39 +491,11 @@ function insertTextAtCursor(textarea, text) {
   textarea.setSelectionRange(newPos, newPos);
 }
 
-// Real-time cache shared by persistent and request text inputs per session.
-function _cacheSessionInput(textarea) {
-  const key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
-  if (!key) return;
-  _sessionInputCache[key] = textarea.value || '';
-}
-
-function _restoreSessionInputDraft(textarea, key = textarea?.dataset?.sessionKey || _getSessionInputCacheKey()) {
-  if (!textarea || !key) return false;
-  if (!Object.prototype.hasOwnProperty.call(_sessionInputCache, key)) return false;
-  const cached = _sessionInputCache[key];
-  if (typeof cached !== 'string') return false;
-  textarea.value = cached;
-  autoResize(textarea);
-  return true;
-}
-
-function _storeSessionInputDraft(textarea) {
-  if (!textarea) return;
-  const key = textarea.dataset?.sessionKey || _getSessionInputCacheKey();
-  if (!key) return;
-  _sessionInputCache[key] = textarea.value || '';
-}
-
-function _storeVisibleSessionInputDraft(root = document) {
-  const textareas = root.querySelectorAll
-    ? Array.from(root.querySelectorAll('.user-input-textarea:not([disabled])'))
-    : [];
-  if (textareas.length === 0) return;
-  const focused = textareas.find((textarea) => textarea === document.activeElement);
-  const populated = textareas.find((textarea) => textarea.value);
-  _storeSessionInputDraft(focused || populated || textareas[0]);
-}
+// 会话草稿缓存四个函数（_cacheSessionInput / _restoreSessionInputDraft /
+// _storeSessionInputDraft / _storeVisibleSessionInputDraft）已迁至
+// input-composer.js（工单 036）。普通脚本共享全局词法作用域，本模块
+// onstop 自动发送等路径对 _sessionInputCache 的既有引用按原全局符号
+// 继续解析到 composer 模块绑定，零行为变化。
 
 // Inject pending voice ASR result for the current session into whichever textarea is visible
 function _injectPendingVoiceResult() {

@@ -544,7 +544,11 @@
   <script src="./src/modules/session-list-render.js?v=20260824d"></script>
   <script src="./src/modules/desktop-notify.js?v=1783960000"></script>
   <!-- ↓↓↓ Phase A: 零风险子系统（自包含，无被 app-ui.js 调用的函数） ↓↓↓ -->
-  <script src="./src/modules/voice-input.js?v=1785930001"></script>
+  <!-- 工单 036：常驻 composer（草稿缓存 + 模式判定 + 组件本体）。必须先于
+       voice-input.js（消费其草稿符号）与 input-render.js/persistent-input.js
+       （依赖其组件函数）加载。 -->
+  <script src="./src/modules/input-composer.js?v=20260901a"></script>
+  <script src="./src/modules/voice-input.js?v=20260901a"></script>
   <script src="./src/modules/choice-input.js?v=1783960000"></script>
   <script src="./src/modules/auto-title.js?v=1784480000"></script>
   <script src="./src/modules/ph-project-actions.js?v=20260824d"></script>
@@ -557,10 +561,10 @@
   <script src="./src/modules/ctx-menu-items.js?v=20260820a"></script>
   <script src="./src/modules/runtime-status.js?v=20260824a"></script>
   <script src="./src/modules/tool-progress.js?v=20260823a"></script>
-  <script src="./src/modules/input-helpers.js?v=20260820c"></script>
-  <script src="./src/modules/input-render.js?v=20260819a"></script>
+  <script src="./src/modules/input-helpers.js?v=20260901a"></script>
+  <script src="./src/modules/input-render.js?v=20260901a"></script>
   <script src="./src/modules/input-model-switcher.js?v=20260823a"></script>
-  <script src="./src/modules/persistent-input.js?v=20260823a"></script>
+  <script src="./src/modules/persistent-input.js?v=20260901a"></script>
   <script src="./src/modules/slash-menu.js?v=20260825j"></script>
   <script src="./src/modules/slash-commands.js?v=20260825c"></script>
   <!-- ↓↓↓ Phase C: assembly 生命周期操作 ↓↓↓ -->
@@ -574,6 +578,6 @@
   <script src="./src/modules/ctx-menu-handlers.js?v=20260819a"></script>
   <script src="./src/modules/chat-nav-timeline.js?v=20260821a"></script>
   <script src="./src/modules/thread-store.js?v=20260824a"></script>
-  <script src="./src/app-main.js?v=20260824a"></script>
+  <script src="./src/app-main.js?v=20260901a"></script>
 </body>
 </html>

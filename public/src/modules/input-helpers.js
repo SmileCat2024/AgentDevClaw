@@ -165,10 +165,14 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
       }),
     });
     if (res.ok) {
-      // await 期间输入面可能重建，提交前抓取的 textarea 可能已脱离 DOM；
-      // 清空 live 元素，避免已提交文本经重建前的草稿写回"复活"。
-      const liveTextarea = document.getElementById(`input-${requestId}`);
-      if (liveTextarea) {
+      // composer 常驻后 await 期间不再整块重建，但端点可能翻转（textarea id
+      // 随模式切换）。优先按原请求端点定位，端点已切换时回落到容器内唯一
+      // composer 输入框；校验仍属同一会话——提交过程中切换了会话，绝不能
+      // 把旧 session 的成功清空/写回作用到新 session 的输入视图。
+      const liveTextarea = document.getElementById(`input-${requestId}`)
+        || document.querySelector('.user-input-textarea:not([disabled])');
+      if (liveTextarea
+        && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
         liveTextarea.value = '';
         autoResize(liveTextarea);
       }
@@ -250,10 +254,15 @@ async function _submitInputViaThread(thread, { input, textarea, targetCacheKey, 
     ...(capabilityActivations?.length ? { capabilityActivations } : {}),
   });
   const delivered = result?.delivery?.delivered > 0;
-  // 清空输入（复用槽位路径的清理语义）
-  if (textarea) {
-    textarea.value = '';
-    autoResize(textarea);
+  // 清空输入（复用槽位路径的清理语义）：composer 常驻后 await 期间可能切换
+  // 会话/端点，校验仍属同一会话再清空，防止清掉新会话的草稿。
+  const liveTextarea = (textarea && textarea.isConnected)
+    ? textarea
+    : document.querySelector('.user-input-textarea:not([disabled])');
+  if (liveTextarea
+    && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
+    liveTextarea.value = '';
+    autoResize(liveTextarea);
   }
   if (typeof clearPendingInputImages === 'function') {
     clearPendingInputImages();

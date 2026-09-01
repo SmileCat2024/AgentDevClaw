@@ -313,54 +313,15 @@ window.removePendingImage = function(idx) {
 
 // ── 渲染常驻输入框 ────────────────────────────────────────────────
 
+// Composer 卡常驻 DOM（input-composer.js）：persistent 端点只是模式属性，
+// 这里做幂等的"确保挂载 + 属性级更新 + 会话重绑"，不再每次新建元素。
 function renderPersistentInput(container) {
   // 先渲染队列气泡
   _renderQueueBubbles(container);
 
-  const card = document.createElement('div');
-  card.className = 'user-input-card persistent-input';
-  card.innerHTML = `
-    <div class="persistent-attachment-preview" id="attachment-preview" data-attachment-preview style="display:none;"></div>
-    <div class="persistent-input-body">
-      <div class="persistent-input-textarea-area">
-        <textarea class="user-input-textarea" rows="1" id="input-persistent"\n        onkeydown="handlePersistentInputKey(event)"\n        oninput="autoResize(this); _cacheSessionInput(this)"\n        onpaste="handleInputPaste(event)"\n        placeholder="${escapeHtml(t('input_placeholder'))}"></textarea>
-      </div>
-      <div class="persistent-input-toolbar">
-        <div class="persistent-input-toolbar-left">
-          <input type="file" id="image-file-input" accept="image/*" multiple style="display:none;" onchange="onImageFilesSelected(this)">
-          <button class="persistent-icon-btn" id="attach-image-btn" onclick="document.getElementById('image-file-input').click()" title="${currentLanguage === 'zh' ? '添加图片' : 'Attach Image'}">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-          </button>
-        </div>
-        <div class="persistent-input-toolbar-right">
-          <button class="input-model-switch-btn" id="input-model-switch-btn" onclick="toggleInputModelDropdown(event)">
-            <span class="input-model-name">${currentLanguage === 'zh' ? '模型' : 'Model'}</span>
-            <svg class="input-model-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          </button>
-          <button class="input-thinking-btn" id="input-thinking-btn" onclick="toggleThinkingEffortDropdown(event)">
-            <svg class="input-thinking-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"></path></svg>
-            <span class="input-thinking-name">${currentLanguage === 'zh' ? '思考强度' : 'Thinking'}</span>
-            <svg class="input-thinking-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          </button>
-          <button class="voice-input-btn" data-target="input-persistent" onclick="toggleVoiceRecording(this)" title="${currentLanguage === 'zh' ? '语音输入' : 'Voice Input'}">
-            <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
-          </button>
-          <button class="persistent-action-btn" id="persistent-action-btn" onclick="onPersistentBtnClick()">
-            <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-            <svg class="icon-stop" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="4" y="4" width="16" height="16" rx="3"></rect></svg>
-          </button>
-        </div>
-      </div>
-    </div>
-  `;
-  container.appendChild(card);
-  // 在 textarea 上标记所属会话，供销毁前 save 使用（不依赖全局 currentRuntimeAgentId 时序）
-  const ta = document.getElementById('input-persistent');
-  if (ta) {
-    const cacheKey = _getSessionInputCacheKey();
-    ta.dataset.sessionKey = cacheKey || '';
-    _restoreSessionInputDraft(ta, cacheKey);
-  }
+  const card = showPersistentComposerCard(container);
+  applyComposerMode(card, 'persistent');
+  syncPersistentComposerSessionCard(container);
   _syncPersistentInputUi();
   // Restore attachment preview if there are pending images (e.g. after re-render)
   _renderAttachmentPreview();
@@ -569,7 +530,12 @@ async function submitQueuedInput() {
       await window.submitThreadCommand(threadRoute.thread.threadId, text, {
         ...(capabilityActivations?.length ? { capabilityActivations } : {}),
       });
-      const liveTextarea0 = document.getElementById('input-persistent');
+      // await 期间 composer 端点可能翻转（textarea id 随模式切换），但节点
+      // 常驻不重建。定位当前 live textarea（优先 persistent 端点，端点已切换
+      // 时回落到容器内唯一 composer 输入框），并校验仍属同一会话：否则已发送
+      // 文本残留，且会话切换前的草稿写回会让它"复活"。
+      const liveTextarea0 = document.getElementById('input-persistent')
+        || document.querySelector('.user-input-textarea:not([disabled])');
       if (liveTextarea0
         && (liveTextarea0.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
         liveTextarea0.value = '';
@@ -602,10 +568,11 @@ async function submitQueuedInput() {
     });
     if (res.ok) {
       const delivery = await res.json().catch(() => ({}));
-      // await 期间输入面可能整块重建，提交前抓取的 textarea 可能已脱离
-      // DOM。必须清空当前 live 元素（校验仍属同一会话）：否则已发送文本
-      // 残留在输入框，且后续重建前的草稿写回会让它作为暂存"复活"。
-      const liveTextarea = document.getElementById('input-persistent');
+      // await 期间输入面不再整块重建，但 composer 端点可能翻转：定位当前
+      // live textarea（端点已切换时回落到容器内唯一 composer 输入框），并校验
+      // 仍属同一会话——已发送文本不得残留或经草稿写回"复活"。
+      const liveTextarea = document.getElementById('input-persistent')
+        || document.querySelector('.user-input-textarea:not([disabled])');
       if (liveTextarea
         && (liveTextarea.dataset?.sessionKey || _getSessionInputCacheKey()) === targetCacheKey) {
         liveTextarea.value = '';

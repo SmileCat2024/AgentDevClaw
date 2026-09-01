@@ -169,33 +169,9 @@ function toEpochMs(value) {
 }
 
 function getInputSurfaceMode(requests = readCurrentSessionViewState().inputRequests) {
-  const chatActive = isChatSurfaceActive();
-  if (!chatActive) return 'hidden';
-  if (readOnlyMode) return 'readonly';
-
-  const hasRuntimeSelected = !!currentRuntimeAgentId;
-  const hasRequests = Array.isArray(requests) && requests.some(req => !isChoiceInputRejected(req.requestId));
-  const hasChoiceRequest = hasRequests && requests.some(req => isChoiceInputRequest(req) && !isChoiceInputRejected(req.requestId));
-  if (hasChoiceRequest) {
-    return 'requests';
-  }
-
-  const hasLocalQueuedInput = hasRuntimeSelected
-    && (_localQueuedInputPending || _pendingQueuedCount > 0 || _queuedTexts.length > 0);
-
-  if (hasLocalQueuedInput && hasRuntimeSelected) {
-    return 'persistent';
-  }
-  if (hasRequests) {
-    return 'requests';
-  }
-  if (hasRuntimeSelected && isRuntimeCalling(currentRuntimeAgentId)) {
-    return 'persistent';
-  }
-  if (hasRuntimeSelected) {
-    return 'persistent';
-  }
-  return 'hidden';
+  // 九级优先级矩阵的唯一实现在 input-composer.js 的 resolveInputSurfaceMode
+  // （纯函数，行为契约 §3）；此处只负责组装当前全局状态。
+  return resolveInputSurfaceMode(readInputSurfaceModeState(requests, isChatSurfaceActive()));
 }
 
 // ── Sidebar rendering & agent list → modules/sidebar-render.js ──

@@ -5,7 +5,6 @@ import vm from 'node:vm';
 
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 const i18nSource = fs.readFileSync(new URL('../public/src/i18n.js', import.meta.url), 'utf8');
-const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const inputRenderSource = fs.readFileSync(
   new URL('../public/src/modules/input-render.js', import.meta.url),
   'utf8',
@@ -19,7 +18,11 @@ const chatContextBarSource = fs.readFileSync(
   new URL('../public/src/modules/chat-context-bar.js', import.meta.url),
   'utf8',
 );
-const voiceInputSource = fs.readFileSync(new URL('../public/src/modules/voice-input.js', import.meta.url), 'utf8');
+// 工单 036：会话草稿缓存已从 voice-input.js 迁至 input-composer.js
+const inputComposerSource = fs.readFileSync(
+  new URL('../public/src/modules/input-composer.js', import.meta.url),
+  'utf8',
+);
 const chatRendererSource = fs.readFileSync(new URL('../public/src/modules/chat-renderer.js', import.meta.url), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
@@ -205,10 +208,11 @@ test('detached textarea writes back to its frozen session key', () => {
     _getSessionInputCacheKey: () => 'session-b',
   };
   vm.createContext(context);
+  // 草稿函数迁至 input-composer.js（工单 036）；提取区间含四个草稿函数
   const inputCacheBlock = sourceBetween(
-    voiceInputSource,
+    inputComposerSource,
     'function _cacheSessionInput',
-    '\n// Inject pending voice ASR result',
+    '\n// ── 显示模式判定',
   );
   vm.runInContext(`${inputCacheBlock}\nglobalThis.__cacheSessionInput = _cacheSessionInput;
 globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;
@@ -237,10 +241,11 @@ test('cached session draft restores into request textarea', () => {
     },
   };
   vm.createContext(context);
+  // 草稿函数迁至 input-composer.js（工单 036）
   const inputCacheBlock = sourceBetween(
-    voiceInputSource,
+    inputComposerSource,
     'function _cacheSessionInput',
-    '\n// Inject pending voice ASR result',
+    '\n// ── 显示模式判定',
   );
   vm.runInContext(`${inputCacheBlock}
 globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;`, context);
@@ -264,10 +269,11 @@ test('empty cached session draft restores as an intentional blank', () => {
     },
   };
   vm.createContext(context);
+  // 草稿函数迁至 input-composer.js（工单 036）
   const inputCacheBlock = sourceBetween(
-    voiceInputSource,
+    inputComposerSource,
     'function _cacheSessionInput',
-    '\n// Inject pending voice ASR result',
+    '\n// ── 显示模式判定',
   );
   vm.runInContext(`${inputCacheBlock}
 globalThis.__restoreSessionInputDraft = _restoreSessionInputDraft;`, context);
@@ -399,10 +405,15 @@ test('input renderer is a read-only consumer of session view state', () => {
 });
 
 test('request input controls keep the runtime they were rendered for', () => {
-  assert.ok(inputRenderSource.includes("submitInput('${req.requestId}', '${escapeHtml(boundRuntimeId)}')"));
-  assert.ok(inputRenderSource.includes('submitInputAction(\\\''));
-  assert.match(inputRenderSource, /visibleActions\.map[\s\S]*?escapeHtml\(boundRuntimeId\)/);
-  assert.ok(inputRenderSource.includes("handleInputKey(event, '${req.requestId}', '${escapeHtml(boundRuntimeId)}')"));
+  // 工单 036：双模板合一后请求卡端点在 composer 组件上切换，绑定渲染时
+  // runtime 的契约不变（keydown/发送按钮为 JS 属性绑定，footer 动作仍 inline）。
+  assert.ok(inputComposerSource.includes(
+    'function(event) { handleInputKey(event, requestId, boundRuntimeId); }',
+  ));
+  assert.ok(inputComposerSource.includes(
+    'function() { submitInput(requestId, boundRuntimeId); }',
+  ));
+  assert.match(inputComposerSource, /visibleActions\.map[\s\S]*?escapeHtml\(boundRuntimeId\)/);
 });
 
 test('main render boundary consumes one captured session view', () => {
