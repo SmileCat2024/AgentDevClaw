@@ -60,6 +60,8 @@ export function createCapabilityShellTool(
   return createTool({
     name: policy.name,
     description,
+    // 并行性由策略声明（领域决策）；未声明时按框架默认串行
+    parallelizable: policy.parallelizable === true,
     parameters: {
       type: 'object',
       properties: {

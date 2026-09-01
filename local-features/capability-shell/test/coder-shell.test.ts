@@ -52,6 +52,11 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
     assert.ok(!('resume' in POLICY.verbs));
   });
 
+  it('工具声明 parallelizable：派发语义批次可并发（同线程冲突由服务端 409 仲裁）', () => {
+    const tool = createCapabilityShellTool(POLICY, {}, { bashPath: null });
+    assert.equal(tool.parallelizable, true);
+  });
+
   it('list 的 agentId 可选（ticket 035 审查修正）：裸 list 与 list <agentId> 均过参数道', async () => {
     const adapters = createThreadsAdapters({
       serverOrigin: 'http://test',

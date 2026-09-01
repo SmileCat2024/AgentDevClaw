@@ -189,6 +189,8 @@ describe('capability-shell 工具工厂', () => {
     assert.ok(tool.description.includes('pr_list'));
     assert.ok(tool.timeout); // 超时唯一闸门 = 框架 Tool.timeout 契约
     assert.deepEqual(tool.parameters?.required, ['command']);
+    // 策略未声明 parallelizable → 不透传（按框架默认串行）
+    assert.equal(tool.parallelizable, undefined);
   });
 
   it('工具 execute：拒绝文案经返回值给模型', async () => {

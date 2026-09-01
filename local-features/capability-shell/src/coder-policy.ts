@@ -107,6 +107,11 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'threads:deliver' },
       },
     },
+    // 派发语义可并行：一个批次内对多个无交集线程派发/监视（send 阻塞等落定），
+    // 并发执行把总耗时从"各次落定之和"降为"最慢一次"。副作用是线程作用域的
+    // 服务端操作，不同线程无冲突；同线程乱序由服务端结构化拒绝仲裁
+    // （409 thread_busy / thread_archived / duplicate），不会静默串数据。
+    parallelizable: true,
     // 显式排除动词的结构化指引（rotation_failed 残局需人工介入，与技能故障表一致）
     unknownVerbHints: {
       'advance': 'advance / resume 不在 coder_shell 动词表内：会话接力（head 推进）失败'

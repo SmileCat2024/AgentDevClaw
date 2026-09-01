@@ -44,6 +44,12 @@ export interface CapabilityShellPolicy {
    * 让模型得到结构化指引而不是泛化的动词清单。
    */
   unknownVerbHints?: Record<string, string>;
+  /**
+   * 可选：该 shell 是否可并行（透传框架 Tool.parallelizable，react-loop 按
+   * 工具粒度并发同批次调用）。是否声明是领域决策：副作用为线程作用域、
+   * 同线程冲突由服务端结构化拒绝仲裁的派发型 shell 才声明。
+   */
+  parallelizable?: boolean;
 }
 
 /** 单个动词的声明：参数约束 + 分派去向。 */
