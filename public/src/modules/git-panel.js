@@ -625,7 +625,7 @@
       // 每行文本列偏移 = 该行自身泳道宽度（VS Code 同款：浅行靠左，深行右移）
       const rowW = window.GitGraph.rowWidth(lanes, row);
       const files = state.expandedCommit === c.hash
-        ? renderCommitFiles(c.hash)
+        ? renderCommitFiles(c.hash, rowW)
         : '';
       return [
         '<div class="git-history-row' + (isHead ? ' is-head' : '') + (state.expandedCommit === c.hash ? ' is-expanded' : '') + '" style="--git-row-w:' + rowW + 'px" data-gp-commit="' + esc(c.hash) + '" title="' + esc(c.author + ' · ' + c.relTime) + '">',
@@ -651,16 +651,17 @@
     ].join('');
   }
 
-  function renderCommitFiles(hash) {
+  function renderCommitFiles(hash, rowW) {
     const cached = state.commitFiles[hash];
+    const rowStyle = Number.isFinite(rowW) ? ' style="--git-row-w:' + rowW + 'px"' : '';
     if (!cached) {
-      return '<div class="git-commit-files"><div class="git-commit-files-loading">' + esc(zh('加载中…', 'Loading…')) + '</div></div>';
+      return '<div class="git-commit-files"' + rowStyle + '><div class="git-commit-files-loading">' + esc(zh('加载中…', 'Loading…')) + '</div></div>';
     }
     if (!cached.length) {
-      return '<div class="git-commit-files"><div class="git-commit-files-loading">' + esc(zh('无文件变更', 'No file changes')) + '</div></div>';
+      return '<div class="git-commit-files"' + rowStyle + '><div class="git-commit-files-loading">' + esc(zh('无文件变更', 'No file changes')) + '</div></div>';
     }
     return [
-      '<div class="git-commit-files">',
+      '<div class="git-commit-files"' + rowStyle + '>',
       cached.map((f) => [
         '<div class="git-commit-file" title="' + esc(f.path) + '">',
         '<span class="git-commit-file-path">' + esc(f.path) + '</span>',

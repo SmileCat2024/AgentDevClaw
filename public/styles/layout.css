@@ -7729,7 +7729,7 @@ body[data-theme="light"] .git-file-action:hover {
 }
 
 .git-graph-scroll {
-  padding: 4px var(--git-edge) 12px 8px;
+  padding: 4px var(--git-edge) 0 8px;
 }
 
 .git-history {
@@ -7741,6 +7741,8 @@ body[data-theme="light"] .git-file-action:hover {
   left: 0;
   top: 0;
   z-index: 0;
+  /* SVG 只负责绘制泳道，不能遮住行文本的展开点击区域。 */
+  pointer-events: none;
 }
 
 .git-history-canvas svg {
@@ -7749,6 +7751,11 @@ body[data-theme="light"] .git-file-action:hover {
 
 /* 泳道连线与节点的颜色、线宽全部由 SVG inline style 承载（含主题底色
    变量 --git-node-bg），此处只保留布局职责。 */
+.git-history-rows {
+  position: relative;
+  z-index: 1;
+}
+
 .git-history-row {
   display: flex;
   align-items: center;
@@ -7899,7 +7906,7 @@ body[data-theme="light"] .git-ref.is-tag {
 
 .git-commit-files {
   position: relative;
-  margin: 0 0 6px calc(var(--git-canvas-w, 36px) + 8px);
+  margin: 0 0 6px calc(var(--git-row-w, var(--git-canvas-w, 36px)) + 8px);
   padding: 2px 0 6px 6px;
   border-left: 2px solid rgba(255,255,255,0.14);
 }
