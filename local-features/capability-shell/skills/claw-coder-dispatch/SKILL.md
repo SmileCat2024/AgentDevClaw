@@ -49,7 +49,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 
 ## 前置检查
 
-调度前确认 Claw server 可访问（`coder_shell` 直连 `http://127.0.0.1:1420`，可被 `PROTOCLAW_SERVER_ORIGIN` 覆盖），并确认目标仓库工作区：
+调度前先确认线程面可达：
 
 ```text
 coder_shell: list programming-helper
@@ -100,13 +100,9 @@ planned
 coder_shell command="create programming-helper <session-id> '工单025 工具进度UI'"
 ```
 
-返回单行 `threadId=... lifeState=... status=... head=...`。Coder 会话会自动建立线程——标准路径是先经调度面创建 Coder 会话，响应带 `threadId`，无需再调 `create`。只有确认自动建线未发生（响应 `threadId` 为 null）时才手动建线：
+返回单行 `threadId=... lifeState=... status=... head=...`。
 
-```text
-coder_shell command="create programming-helper <session-id> '工单025 工具进度UI'"
-```
-
-`create` 的 `sessionId` 来自已创建的 coder 会话；标题在创建时一次写入，线程标题自动跟随会话标题。线程列表用 `list programming-helper` 核对。
+`create` 的 `sessionId` 是已存在的 Coder 会话（会话由调度面预先创建，本工具不创建会话）。标题在创建时一次写入，线程标题自动跟随会话标题。线程列表用 `list programming-helper` 核对。
 
 ### 3. 依赖满足后发送开工指令（send 阻塞等落定）
 
@@ -270,7 +266,7 @@ coder_shell command="archive wt-xxx"
 coder_shell command="unarchive wt-xxx"
 ```
 
-规则（归档即打断收纳语义，2026-08 K17 裁决）：
+规则：
 
 - 归档不做 busy 检查：线程执行中归档会**直接打断当前轮并收纳**（interrupt head → 停全链 runtime → 拒收新指令），不会返回 409。建议确认最后一个 turn 已结束再归档，但系统不强制。
 - 已归档线程拒绝 `send` / `deliver` 新指令；要继续工作就开新线程。
@@ -282,13 +278,13 @@ coder_shell command="unarchive wt-xxx"
 |---|---|---|
 | server 不可达 | `npm start` / `PORT` | 启动或确认端口，不重复发送命令 |
 | `delivered=0` | thread `status`、`pendingTexts`、head session | runtime 无承接：重新 `send`（幂等键防重）即可，send/deliver 的恢复闸会自动唤起 head runtime 再投；仅 `runtimeWake` 失败时按上面两行处置 |
-| `failed=true` / `status=rotation_failed` | 事件尾部 `handoff_failed`、pending commands | 接力失败：`advance` / `resume` 不在 coder_shell 动词表内，残局需人工介入——人工按 head CAS 语义恢复或重走手动 compact；恢复前不要重发施工指令 |
+| `failed=true` / `status=rotation_failed` | 事件尾部 `handoff_failed`、pending commands | 接力失败：残局需人工介入——报告用户恢复；恢复前不要重发施工指令 |
 | 执行中误归档 | 事件尾部 turn 是否被打断 | 归档即打断收纳是预期行为；翻查后 `unarchive` 恢复，重新投递指令唤醒 runtime |
 | `runtimeWake` 失败（`head_session_missing`） | 会话索引、线程 head | head 会话已被删除，线程无法恢复：取消 pending 指令后归档线程，重新建线程派发 |
 | `runtimeWake` 失败（`runtime_ready_timeout`） | server 日志、agent 装配 | 唤起已尝试但 runtime 未 READY：查启动失败原因（如 worktree 缺 config），修复后重新 send（幂等键防重） |
 | send/watch 返回 `done reason=timeout` | 线程 lifeState | 指令仍在执行，属正常续挂信号：用 `watch` 续挂，不重复派发 |
 | 只有 `delivered=1` 无开工迹象 | 线程事件、agent 连接状态 | 保持 dispatched，查 runtime，不重复派发（send 已自动唤起 runtime；此态多为唤起超时） |
-| 600 秒工具 timeout | 事件尾、最新日志和进程状态 | 指令仍在执行：`watch` 续挂；长指令改成分段/定向命令，避免重复无界命令 |
+| 单次调用超时（done reason=timeout） | 事件尾、最新日志和进程状态 | 指令仍在执行：`watch` 续挂；长指令改成分段/定向命令，避免重复无界命令 |
 | 文件突然变干净 | `git log`、agent 最终报告 | 先确认是否自行 commit |
 | agent 接力 | `headSessionId`、`sessionIds`、新 agent 日志 | 通常继续监控，不立即重派 |
 | 线程长期无新事件 | show、agent lastActive、pending commands | 发一次明确恢复指令；仍无响应再 deliver / 人工介入 |
