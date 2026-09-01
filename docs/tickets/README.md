@@ -596,3 +596,32 @@ coder 子代理散装 bash 调度的收编需求。定位裁决：**非沙箱**�
 - 033/034 测试进 local-features 体系（node:test + assert/strict，纯函数管线 +
   动词判定用例锁死）；改 local-features/dist 后重启对应 agent 即生效。
 - 端到端验收需整服重启后真实调度循环（034 验收标准）。
+
+---
+
+## 批次 11：输入区 Composer 常驻化（036）（2026-09-01）
+
+来源：输入区现状调查（19 处重建触发点、四层对抗性补丁、双模板重复）
++ 行为契约反推。行为契约文档 [input-area-behavioral-contract.md](../input-area-behavioral-contract.md)
+为唯一验收基线。
+
+### 本批 tickets
+
+| 票 | 仓库 | 内容 |
+|----|------|------|
+| [036](036-claw-input-composer-persistent-dom.md) | AgentDevClaw | Composer 常驻 DOM（同会话模式翻转不重建）+ 双模板合一 + 草稿缓存迁移出 voice-input + 失效 hack 清理 |
+
+执行顺序：036 单票；触发权收敛（19 调用点）为后续票。
+
+### 明确暂缓项
+
+| 项 | 暂缓理由 | 重开条件 |
+|----|---------|---------|
+| 19 处 renderInputRequests 调用点收敛 | 036 保持外部 API 不变，收敛是独立重构 | 036 合入且浏览器冒烟通过 |
+| choice 卡 / 回退对话框重写 | 内部实现未受重建模型伤害 | 036 合入后冒烟暴露问题 |
+| meta bar（计时胶囊/压力 chip）迁出 persistent-input | 展示域耦合，行为无痛点 | composer 常驻化稳定后 |
+
+### 验收与发布注意
+
+- 改动全在 public/src 静态文件 → 整服重启生效。
+- vm 沙箱测试照既有 frontend-* 模式；浏览器手工冒烟在合入后执行。
