@@ -52,6 +52,22 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
     assert.ok(!('resume' in POLICY.verbs));
   });
 
+  it('list 的 agentId 可选（ticket 035 审查修正）：裸 list 与 list <agentId> 均过参数道', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.endsWith('/protoclaw/threads') || u.includes('/protoclaw/threads?agentId='),
+          body: { threads: [{ threadId: 'wt-1', status: 'open', lifeState: 'idle', failed: false }] },
+        },
+      ]),
+    });
+    for (const cmd of ['list', 'list programming-helper']) {
+      const r = await runCapabilityShellPipeline(POLICY, cmd, { adapters, bashPath: null });
+      assert.equal(r.ok, true, `应放行: ${cmd} → ${r.output}`);
+    }
+  });
+
   it('send 幂等键必填：缺失在参数校验道拒绝', async () => {
     // 缺幂等键：只有 threadId + text 两个参数（期望 3 个）
     const result = await runCapabilityShellPipeline(POLICY, "send wt-1 'do work'", {

@@ -69,7 +69,7 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
       'list': {
         description: '列出工作线程',
         params: [
-          { name: 'agentId', kind: 'literal' },
+          { name: 'agentId', kind: 'literal', required: false },
         ],
         usage: 'list [agentId]',
         adapter: { key: 'threads:list' },
