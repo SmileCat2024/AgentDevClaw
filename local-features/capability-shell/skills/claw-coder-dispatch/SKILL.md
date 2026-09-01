@@ -1,6 +1,6 @@
 ---
-name: workspace-coder-dispatch
-description: "调度和监控编程小助手工作空间中的 coder 身份（sessionType=coder 的线程宿主会话）。用于按工单创建线程、用 coder_shell 工具派发指令（阻塞等本轮落定）、续挂监视、处理超时/接力/待投递命令，并在完成后按仓库和板块收口。不要用于 plain agent 的 claw run coder。"
+name: claw-coder-dispatch
+description: "Claw coder 智能体调度（claw-coder-dispatch feature 内嵌技能）：用 coder_shell 工具创建 coder 工作线程、派发工单并阻塞等落定、监视执行、处理超时/接力/待投递命令，完成后按仓库和板块收口。仅适用于 Claw 编程小助手工作空间的 coder 身份（sessionType=coder）；不要用于 plain agent 的 claw run coder。"
 ---
 
 # Workspace Coder 调度 Skill

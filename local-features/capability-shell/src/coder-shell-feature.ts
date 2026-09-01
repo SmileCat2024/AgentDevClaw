@@ -27,9 +27,9 @@ export interface CapabilityShellFeatureConfig {
 }
 
 export class CapabilityShellFeature implements AgentFeature {
-  readonly name = 'capability-shell';
+  readonly name = 'claw-coder-dispatch';
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = 'coder 领域 shell：受管线约束的线程调度工具（coder_shell）';
+  readonly description = 'Claw coder 智能体调度：经受控命令管线创建 WorkThread、派发工单、监视落定与收口（coder_shell 工具）';
 
   private readonly serverOrigin: string;
   private readonly options: { timeoutMs?: number; maxTimeoutMs?: number };
