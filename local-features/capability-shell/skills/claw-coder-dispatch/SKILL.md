@@ -5,7 +5,12 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 
 # Coder 智能体调度 Skill
 
-本 Skill 调度**智能编码工作空间**中的 **Coder 智能体**（自主编码的子代理）：
+本 Skill 调度**智能编码工作空间**中的 **Coder 智能体**（自主编码的子代理）。
+
+**本 Skill 是 `coder_shell` 工具的权威用法手册**：全部动词用法、参数约束、
+语法限制（只放行字面量参数、管道、少量重定向）与调度纪律都在本文；
+工具的拒绝报文（`unknown_verb` / `arg_rejected` 等）会引用本文的处置方式。
+派发 Coder 智能体干活前先读完本文，再使用 `coder_shell`。
 
 - 工作空间 agent ID：`programming-helper`
 - Coder 智能体的会话由调度面（本 Skill / ACP / 调度面）创建；用户在 Web UI 中不能创建
