@@ -1,16 +1,15 @@
 ---
 name: claw-coder-dispatch
-description: "Claw coder 智能体调度（claw-coder-dispatch feature 内嵌技能）：用 coder_shell 工具创建 coder 工作线程、派发工单并阻塞等落定、监视执行、处理超时/接力/待投递命令，完成后按仓库和板块收口。仅适用于 Claw 编程小助手工作空间的 coder 身份（sessionType=coder）；不要用于 plain agent 的 claw run coder。"
+description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技能）：用 coder_shell 工具创建 Coder 工作线程、派发工单并阻塞等落定、监视执行、处理超时/接力/待投递命令，完成后按仓库和板块收口。仅适用于智能编码工作空间中的 Coder 智能体；不要用于 plain agent 的 claw run coder。"
 ---
 
-# Workspace Coder 调度 Skill
+# Coder 智能体调度 Skill
 
-本 Skill 只管理**编程小助手工作空间**中的 `coder` 身份：
+本 Skill 调度**智能编码工作空间**中的 **Coder 智能体**（自主编码的子代理）：
 
-- 工作空间 agent ID：`programming-helper`（coder 不再是独立工作空间）
-- coder 会话：`sessionType = "coder"`（由本 Skill / ACP / 调度面创建；用户在 Web UI 中不能创建 coder 会话）
-- 线程宿主判定：会话级（agent `programming-helper` + sessionType `coder` 自动建线程）
-- 调度入口：`coder_shell` 工具（受 capability shell 管线约束，全程审计）——调度控制面是 Claw server 的 `/protoclaw/threads*`
+- 工作空间 agent ID：`programming-helper`
+- Coder 智能体的会话由调度面（本 Skill / ACP / 调度面）创建；用户在 Web UI 中不能创建
+- 调度入口：`coder_shell` 工具（受控命令管线，全程审计）——调度控制面是 Claw server 的 `/protoclaw/threads*`
 - 会话和线程在 Web UI 左侧「coder」入口下可见，可发生 WorkThread head 接力
 - 归档：线程级操作（执行中归档会直接打断收纳；已归档线程拒绝新指令）
 - 线程生命周期语义（接力、投递、归档的权威定义）：`docs/work-thread-lifecycle.md`——本文只写调度方视角的操作要点，与其冲突时以该文档为准
@@ -110,7 +109,7 @@ planned
 coder_shell command="create programming-helper <session-id> '工单025 工具进度UI'"
 ```
 
-返回单行 `threadId=... lifeState=... status=... head=...`。线程宿主会话（sessionType=coder）的新会话会自动建立线程——标准路径是先用调度面创建 coder 会话（ACP / `claw threads` CLI / dispatch），响应带 `threadId`，无需再调 `create`。只有确认自动建线未发生（响应 `threadId` 为 null）时才手动建线：
+返回单行 `threadId=... lifeState=... status=... head=...`。Coder 会话会自动建立线程——标准路径是先经调度面创建 Coder 会话，响应带 `threadId`，无需再调 `create`。只有确认自动建线未发生（响应 `threadId` 为 null）时才手动建线：
 
 ```text
 coder_shell command="create programming-helper <session-id> '工单025 工具进度UI'"

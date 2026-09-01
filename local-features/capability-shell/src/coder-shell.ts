@@ -285,7 +285,7 @@ export function createThreadsAdapter(deps: {
   const adapter: ThreadAdapter = async (args, context) => {
     const [verb, ...rest] = args;
     switch (verb) {
-      // create <agentId> <sessionId> [title]：建线程（线程宿主会话的
+      // create <agentId> <sessionId> [title]：建线程（Coder 会话的
       // 自动建线语义在 server 侧；这里直调 threads 控制面的创建端点）
       case 'create': {
         const [agentId, sessionId, title] = rest;

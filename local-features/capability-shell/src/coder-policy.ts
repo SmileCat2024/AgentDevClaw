@@ -14,7 +14,7 @@ import type { CapabilityShellPolicy } from './types.js';
 export const CODER_SHELL_NAME = 'coder_shell';
 
 export const CODER_SHELL_DESCRIPTION = [
-  '调度编程小助手工作空间的 coder 身份（sessionType=coder 线程宿主会话）：',
+  '调度智能编码工作空间中的 Coder 智能体（自主编码的子代理）：',
   '按工单创建线程、派发指令（阻塞等本轮落定）、监视执行、处理超时/待投递命令、收口归档。',
   '核心不变量：一个工单一个线程；有文件交集的工单串行；发送成功不等于执行开始；',
   '以证据判定完成；绝不覆盖其他会话的工作（禁 reset/clean/checkout 覆盖）；默认不让 coder 自行 push。',
