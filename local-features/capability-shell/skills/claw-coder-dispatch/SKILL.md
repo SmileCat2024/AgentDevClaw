@@ -30,6 +30,11 @@ claw run coder --goal "..."
 
 工作空间 coder 必须先创建预制 workspace session，再通过对应 WorkThread 投递指令。不要用 `claw spawn`、`claw resume` 或 plain `claw run coder` 替代线程调度。
 
+## 适用范围与限制（先读）
+
+- **仅限领域内使用**：coder_shell 只做一件事——调度智能编码工作空间中的 Coder 智能体（建线程、派发工单、监视、收口）。它不是通用 bash：文件操作用 read/write/edit 工具，代码搜索用 glob/grep 工具，一律不要塞进这个 shell。
+- **工具受限**：只认识下表 8 个动词；语法只放行**字面量参数、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
+
 ## coder_shell 用法
 
 全部调度经 `coder_shell({ command })` 完成，command 是一条管道命令字符串。可用动词（8 个）：
