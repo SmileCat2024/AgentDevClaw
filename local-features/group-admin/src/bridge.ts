@@ -13,6 +13,7 @@
 import type { AgentFeature } from '@agentdevjs/core';
 import { CoreLifecycle } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
+import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
 interface GcMessage {
   id: string;
@@ -240,6 +241,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
         if (sessionId) params.set('sessionId', sessionId);
         const url = `${serverOrigin}/protoclaw/gc/inbox?${params.toString()}`;
         const response = await fetch(url, {
+          headers: internalAuthHeaders(),
           signal: this.abortController.signal,
         });
 
@@ -401,7 +403,7 @@ export class GroupChatBridgeFeature implements AgentFeature {
     }
     await fetch(`${serverOrigin}/protoclaw/gc/writeback`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     }).catch((err) => {
       console.error('[GroupChatBridge] failed to post writeback:', err);

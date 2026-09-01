@@ -12,6 +12,7 @@ import type {
   CloseResult,
   SurfaceTransport,
 } from './types.js';
+import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -34,6 +35,7 @@ export class HttpSurfaceTransport implements SurfaceTransport {
     try {
       return await fetch(`${this.origin}${path}`, {
         ...init,
+        headers: internalAuthHeaders((init.headers as Record<string, string>) || {}),
         signal: controller.signal,
       });
     } finally {

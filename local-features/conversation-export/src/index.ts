@@ -9,6 +9,7 @@
  */
 
 import type { AgentFeature, Tool } from '@agentdevjs/core';
+import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
 export class ConversationExportFeature implements AgentFeature {
   readonly name = 'conversation-export';
@@ -56,7 +57,7 @@ export class ConversationExportFeature implements AgentFeature {
 
             const resp = await fetch(`${serverOrigin}/protoclaw/render_conversation`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify(body),
             });
 

@@ -14,6 +14,7 @@
 import type { AgentFeature } from '@agentdevjs/core';
 import { CoreLifecycle } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
+import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
 interface DispatchMessage {
   id: string;
@@ -164,6 +165,7 @@ export class ClawDispatchFeature implements AgentFeature {
         if (sessionId) params.set('sessionId', sessionId);
         const url = `${serverOrigin}/protoclaw/dispatch/poll?${params.toString()}`;
         const response = await fetch(url, {
+          headers: internalAuthHeaders(),
           signal: this.abortController.signal,
         });
 
@@ -281,7 +283,7 @@ export class ClawDispatchFeature implements AgentFeature {
     }
     await fetch(`${serverOrigin}/protoclaw/dispatch/respond`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     }).catch((err) => {
       console.error('[ClawDispatch] failed to post response:', err);
@@ -297,7 +299,7 @@ export class ClawDispatchFeature implements AgentFeature {
     if (!agentId) return;
     await fetch(`${serverOrigin}/protoclaw/dispatch/agent_status`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ agentId, sessionId: sessionId || null, status }),
     }).catch(e => console.warn(e));
   }

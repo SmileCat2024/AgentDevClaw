@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import type { AgentFeature, Tool, DecisionResult } from '@agentdevjs/core';
 import { CoreLifecycle, Decision } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
+import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
 const SERVER_ORIGIN = process.env.PROTOCLAW_SERVER_ORIGIN || `http://127.0.0.1:${process.env.PORT || 1420}`;
 const COORDINATOR_REMINDER_CALL_INTERVAL = 2;
@@ -129,7 +130,7 @@ export class GroupAdminFeature implements AgentFeature {
   }
 
   private async apiGet(path: string): Promise<any> {
-    const res = await fetch(`${SERVER_ORIGIN}${path}`);
+    const res = await fetch(`${SERVER_ORIGIN}${path}`, { headers: internalAuthHeaders() });
     if (!res.ok) throw new Error(`API ${path} failed: ${res.status}`);
     return res.json();
   }
@@ -137,7 +138,7 @@ export class GroupAdminFeature implements AgentFeature {
   private async apiPost(path: string, body: any): Promise<any> {
     const res = await fetch(`${SERVER_ORIGIN}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -150,7 +151,7 @@ export class GroupAdminFeature implements AgentFeature {
   private async apiPut(path: string, body: any): Promise<any> {
     const res = await fetch(`${SERVER_ORIGIN}${path}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`API ${path} failed: ${res.status}`);

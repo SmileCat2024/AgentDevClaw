@@ -2,6 +2,7 @@ import { fileURLToPath } from 'url';
 import type { AgentFeature, FeatureInitContext, FeatureManifestDefinition, PackageInfo } from '@agentdevjs/core';
 import { CoreLifecycle, getPackageInfoFromSource } from '@agentdevjs/core';
 import type { HookDeclarations } from '@agentdevjs/core';
+import { internalAuthHeaders } from '../../shared/src/internal-auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -364,7 +365,7 @@ export class ContextRotationTriggerFeature implements AgentFeature {
     if (!this.serverOrigin || !this.agentId || !this.sessionId || typeof fetch !== 'function') return;
     void fetch(`${this.serverOrigin}/protoclaw/context_guard_event`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         agentId: this.agentId,
         sessionId: this.sessionId,
