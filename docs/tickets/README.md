@@ -570,12 +570,14 @@ coder 子代理散装 bash 调度的收编需求。定位裁决：**非沙箱**�
 
 ### 本批 tickets
 
-执行顺序：**033 → 034 线性串行**（034 挂载 033 基座，033 未合入 034 不得开工）。
+执行顺序：**033 → 034 线性串行**（034 挂载 033 基座，033 未合入 034 不得开工）；
+035 为 034 的事故驱动跟进票（真实派发暴露的会话断层与 glob 误伤）。
 
 | 票 | 仓库 | 内容 |
 |----|------|------|
 | [033](033-claw-capability-shell-foundation.md) | AgentDevClaw | capability-shell 基座：管线四道检查点 + 领域策略声明类型 |
 | [034](034-claw-coder-shell-verbs-and-skill.md) | AgentDevClaw | coder_shell 动词表 + threads adapter + 调度技能重写 |
+| [035](035-coder-shell-session-verb-and-quoted-glob.md) | AgentDevClaw | new-session 动词（补会话创建断层）+ create 会话预校验 + 引号内 glob 放行 |
 
 ### 明确暂缓项（决策树已关闭的分支及重开条件）
 
