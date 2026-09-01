@@ -610,14 +610,15 @@ coder 子代理散装 bash 调度的收编需求。定位裁决：**非沙箱**�
 | 票 | 仓库 | 内容 |
 |----|------|------|
 | [036](036-claw-input-composer-persistent-dom.md) | AgentDevClaw | Composer 常驻 DOM（同会话模式翻转不重建）+ 双模板合一 + 草稿缓存迁移出 voice-input + 失效 hack 清理 |
+| [037](037-claw-input-trigger-convergence.md) | AgentDevClaw | 触发权收敛：19 处手动调用点 → 单一状态驱动渲染，行为契约 §8 映射不变 |
 
-执行顺序：036 单票；触发权收敛（19 调用点）为后续票。
+执行顺序：036 → 037（037 依赖 036 合入后的常驻 composer 与幂等渲染基础）。
 
 ### 明确暂缓项
 
 | 项 | 暂缓理由 | 重开条件 |
 |----|---------|---------|
-| 19 处 renderInputRequests 调用点收敛 | 036 保持外部 API 不变，收敛是独立重构 | 036 合入且浏览器冒烟通过 |
+| 19 处 renderInputRequests 调用点收敛 | 036 保持外部 API 不变，收敛是独立重构 | 036/037 合入且浏览器冒烟通过 |
 | choice 卡 / 回退对话框重写 | 内部实现未受重建模型伤害 | 036 合入后冒烟暴露问题 |
 | meta bar（计时胶囊/压力 chip）迁出 persistent-input | 展示域耦合，行为无痛点 | composer 常驻化稳定后 |
 
