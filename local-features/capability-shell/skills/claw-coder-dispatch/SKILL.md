@@ -1,6 +1,6 @@
 ---
 name: claw-coder-dispatch
-description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技能）：用 coder_shell 工具创建 Coder 工作线程、派发工单并阻塞等落定、监视执行、处理超时/接力/待投递命令，完成后按仓库和板块收口。仅适用于智能编码工作空间中的 Coder 智能体；不要用于 plain agent 的 claw run coder。"
+description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技能）：用 coder_shell 工具创建 Coder 工作线程、派发工单并阻塞等落定、监视执行、处理超时/接力/待投递命令，完成后按仓库和板块收口。仅适用于智能编码工作空间中的 Coder 智能体。"
 ---
 
 # Coder 智能体调度 Skill
@@ -13,22 +13,11 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 派发 Coder 智能体干活前先读完本文，再使用 `coder_shell`。
 
 - 工作空间 agent ID：`programming-helper`
-- Coder 智能体的会话由调度面（本 Skill / ACP / 调度面）创建；用户在 Web UI 中不能创建
+- Coder 智能体的会话由调度面创建；用户在 Web UI 中不能直接创建
 - 调度入口：`coder_shell` 工具（受控命令管线，全程审计）——调度控制面是 Claw server 的 `/protoclaw/threads*`
 - 会话和线程在 Web UI 左侧「coder」入口下可见，可发生 WorkThread head 接力
 - 归档：线程级操作（执行中归档会直接打断收纳；已归档线程拒绝新指令）
 - 线程生命周期语义（接力、投递、归档的权威定义）：`docs/work-thread-lifecycle.md`——本文只写调度方视角的操作要点，与其冲突时以该文档为准
-- `claw` CLI 对外部调用方（第三方 agent / ACP / 脚本 / 人工）仍可用；内部调度不再走 CLI，统一经 `coder_shell`
-
-## 不要混淆的路径
-
-以下命令是 plain agent，不是本 Skill 的目标：
-
-```text
-claw run coder --goal "..."
-```
-
-工作空间 coder 必须先创建预制 workspace session，再通过对应 WorkThread 投递指令。不要用 `claw spawn`、`claw resume` 或 plain `claw run coder` 替代线程调度。
 
 ## 适用范围与限制（先读）
 
@@ -64,7 +53,6 @@ claw run coder --goal "..."
 7. **默认不让 coder 自行 push。** commit、push、分支操作由调度方在验收后执行，除非工单明确授权。
 8. **幂等键是防重发保险。** `send` 必填唯一幂等键（服务端按键去重）；**不要**故意重发同键指令去"验证去重是否生效"。
 
-> `claw` CLI 对外部调用方（第三方 agent / ACP / 脚本 / 人工）仍可用；内部调度不再走 CLI，统一走 `coder_shell`。
 
 ## 前置检查
 
