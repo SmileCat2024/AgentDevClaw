@@ -7,17 +7,10 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 
 本 Skill 调度**智能编码工作空间**中的 **Coder 智能体**（自主编码的子代理）。
 
-**本 Skill 是 `coder_shell` 工具的权威用法手册**：全部动词用法、参数约束、
-语法限制（只放行字面量参数、管道、少量重定向）与调度纪律都在本文；
-工具的拒绝报文（`unknown_verb` / `arg_rejected` 等）会引用本文的处置方式。
 派发 Coder 智能体干活前先读完本文，再使用 `coder_shell`。
 
-- 工作空间 agent ID：`programming-helper`
-- Coder 智能体的会话由调度面创建；用户在 Web UI 中不能直接创建
-- 调度入口：`coder_shell` 工具（受控命令管线，全程审计）——调度控制面是 Claw server 的 `/protoclaw/threads*`
-- 会话和线程在 Web UI 左侧「coder」入口下可见，可发生 WorkThread head 接力
-- 归档：线程级操作（执行中归档会直接打断收纳；已归档线程拒绝新指令）
-- 线程生命周期语义（接力、投递、归档的权威定义）：`docs/work-thread-lifecycle.md`——本文只写调度方视角的操作要点，与其冲突时以该文档为准
+- 会话和线程在 Web UI 左侧「coder」入口下可见，可发生接力
+- 归档是线程级操作：执行中归档会直接打断当前轮，已归档线程拒绝新指令
 
 ## 适用范围与限制（先读）
 
