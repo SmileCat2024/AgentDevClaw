@@ -9,6 +9,7 @@
 
 import { createLogger, createTool } from '@agentdevjs/core';
 import type { Tool } from '@agentdevjs/core';
+import { processOutputWithPersistence } from '@agentdevjs/shell-feature';
 import { checkSyntax, findBashPath } from './syntax.js';
 import { checkStructure } from './structure.js';
 import { checkVerbs, listVerbs } from './verbs.js';
@@ -94,7 +95,17 @@ export function createCapabilityShellTool(
         bashPath: options?.bashPath,
         termination: context?.termination,
       });
-      return result.output;
+      // 超长输出自动落盘，与 bash 工具同实现同语义（@agentdevjs/shell-feature
+      // 的共享函数）：完整内容写 <workdir>/.agentdev/temp/<shell>-output-*.log，
+      // 返回头尾截断版 + 落盘路径；两链路行为收拢一致，阈值 30k 字符。
+      const [output] = await processOutputWithPersistence(
+        result.output,
+        options?.workdir ?? process.cwd(),
+        undefined,
+        false,
+        `${policy.name}-output`,
+      );
+      return output;
     },
   });
 }
@@ -111,6 +122,23 @@ export interface CapabilityShellRunResult {
     message: string;
     segmentIndex?: number;
   };
+}
+
+/** help 输出：从策略声明生成动词表用法（usage + description 逐动词列出）。 */
+export function formatShellHelp(policy: CapabilityShellPolicy): string {
+  const verbs = Object.keys(policy.verbs).sort();
+  return [
+    `${policy.name} — ${policy.description}`,
+    '',
+    `可用动词（${verbs.length} 个）：`,
+    ...verbs.map((verb) => {
+      const decl = policy.verbs[verb];
+      return `  ${decl.usage || verb}  — ${decl.description}`;
+    }),
+    '',
+    'v1 语法白名单：字面量参数 + 管道 | + 重定向 > >> <；命令替换、变量、进程替换、glob、heredoc、后台一律拒绝。',
+    '详细用法与调度纪律：invoke_skill 激活对应领域技能。',
+  ].join('\n');
 }
 
 /**
@@ -180,6 +208,13 @@ export async function runCapabilityShellPipeline(
   }
 
   const segments = structure.segments ?? [];
+
+  // help 命令（管线级，所有领域 shell 通用）：裸 help 输出动词表用法。
+  // 在动词道之前拦截——help 不是领域动词，不占动词表，模型无需激活技能
+  // 即可自我发现动词面；文本从策略声明生成（单一事实源，不随实现漂移）。
+  if (segments.length === 1 && segments[0].verb === 'help' && segments[0].args.length === 0) {
+    return { ok: true, output: formatShellHelp(policy) };
+  }
 
   // 第三道：逐段动词校验
   const verbResult = checkVerbs(policy.name, segments, policy.verbs, policy.unknownVerbHints);

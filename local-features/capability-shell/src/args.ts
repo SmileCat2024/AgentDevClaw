@@ -2,8 +2,8 @@
  * 第四道检查点 — 参数校验（ticket 033；可选尾参 ticket 035）
  *
  * 按动词声明的参数约束逐段校验：参数个数（超过声明数拒绝、不足必填数拒绝，
- * required: false 的尾参可缺省）、字面量枚举、路径边界（workspace 相对路径内，
- * 拒绝 .. 逃逸与绝对路径）。
+ * required: false 的尾参可缺省、variadic: true 的尾参可重复）、字面量枚举、
+ * 路径边界（workspace 相对路径内，拒绝 .. 逃逸与绝对路径）。
  *
  * 本道为纯函数。
  */
@@ -38,6 +38,17 @@ export function checkArgs(
     const decl = verbs[seg.verb];
     if (!decl) continue; // 动词道已拦截，此处防御性跳过
 
+    // 尾随声明 flag 剥离：不占位置参数个数（只在尾部识别；未声明的
+    // `--` 前缀参数不剥离，仍按位置参数校验）
+    const declaredFlags = decl.flags ?? [];
+    const positional = [...seg.args];
+    while (
+      positional.length > 0 &&
+      declaredFlags.includes(positional[positional.length - 1])
+    ) {
+      positional.pop();
+    }
+
     // 必填数 = required !== false 的前缀参数（可选参只允许尾随，此处按
     // 必填前缀长度计：首个 required !== false 之后全部视为可选）
     let minRequired = decl.params.length;
@@ -45,21 +56,27 @@ export function checkArgs(
       if (decl.params[j].required !== false) break;
       minRequired = j;
     }
-    if (seg.args.length > decl.params.length || seg.args.length < minRequired) {
-      const expected = minRequired === decl.params.length
-        ? `${decl.params.length}`
-        : `${minRequired}~${decl.params.length}`;
+    // 尾参 variadic：末位声明可重复，超过声明个数不拒绝（可变部分的值
+    // 仍按末位约束逐个校验）
+    const variadicTail = decl.params[decl.params.length - 1]?.variadic === true;
+    if ((!variadicTail && positional.length > decl.params.length) || positional.length < minRequired) {
+      const expected = variadicTail
+        ? `${minRequired}+`
+        : minRequired === decl.params.length
+          ? `${decl.params.length}`
+          : `${minRequired}~${decl.params.length}`;
       return {
         ok: false,
         code: 'arg_rejected',
-        message: `“${seg.verb}” 期望 ${expected} 个参数，实际 ${seg.args.length} 个。` +
+        message: `“${seg.verb}” 期望 ${expected} 个参数，实际 ${positional.length} 个。` +
           (decl.usage ? ` 用法：${decl.usage}` : ''),
         segmentIndex: i,
       };
     }
 
-    for (let j = 0; j < seg.args.length; j++) {
-      const rejected = validateParamValue(seg.args[j], decl.params[j]);
+    for (let j = 0; j < positional.length; j++) {
+      const constraint = decl.params[Math.min(j, decl.params.length - 1)];
+      const rejected = validateParamValue(positional[j], constraint);
       if (rejected) {
         return {
           ok: false,

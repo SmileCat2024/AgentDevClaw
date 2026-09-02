@@ -24,6 +24,10 @@
  * 终止信号到达后 adapter 在 settle 窗口内返回结构化 done reason=timeout
  * （非错误），模型自然续挂 watch。
  *
+ * watch 多线程 any-settle（bin/claw.mjs threads watch 同语义）：并发单线程
+ * 监视，任一线程落定/失败/终态即整条返回，第一个 settle 的胜出；其余停挂
+ * 并在报文尾附最后已知状态，模型用一条 watch 续挂剩余线程。
+ *
  * advance / resume 不入动词表（rotation_failed 残局需人工介入，与技能
  * 故障表一致）：模型调用时得到 unknown_verb + 结构化指引。
  */
@@ -32,6 +36,8 @@
 const MAX_CONSECUTIVE_FETCH_ERRORS = 3;
 /** 落定报文附带的事件尾条数（取证用，防长文本撑爆上下文）。 */
 const TAIL_EVENT_COUNT = 5;
+/** result 末轮回复的输出上限（超长截断并注明全文长度）。 */
+const MAX_RESULT_CHARS = 4_000;
 
 /** fetch 注入形态（测试用最小面）。 */
 export type FetchLike = (
@@ -64,7 +70,7 @@ export function createThreadsAdapters(deps: {
   sleep?: (ms: number) => Promise<void>;
 }): Record<string, ThreadAdapter> {
   const adapter = createThreadsAdapter(deps).threads;
-  const verbs = ['new-session', 'create', 'send', 'watch', 'list', 'show', 'archive', 'unarchive', 'deliver'] as const;
+  const verbs = ['new-session', 'create', 'send', 'watch', 'result', 'list', 'show', 'archive', 'unarchive', 'deliver'] as const;
   const map: Record<string, ThreadAdapter> = {};
   for (const verb of verbs) {
     map[`threads:${verb}`] = async (args, context) => {
@@ -288,6 +294,11 @@ export function createThreadsAdapter(deps: {
     ].join('\n');
   }
 
+  /** waitForTurnSettled 按契约不 reject；此兜底仅防意外异常中断 any-settle 竞速。 */
+  function unreachableOutcome(): SettleOutcome {
+    return { reason: 'unreachable', lifeState: 'unknown', failed: false, newEvents: 0, tailEvents: [] };
+  }
+
   // ── 动词实现（参数已过 033 参数校验道；位置语义见策略声明）──────
 
   const adapter: ThreadAdapter = async (args, context) => {
@@ -352,10 +363,14 @@ export function createThreadsAdapter(deps: {
         return sessionNote ? `${line}\n${sessionNote}` : line;
       }
 
-      // send <threadId> <idempotencyKey> <text>：派发 + 阻塞等本轮落定
-      // （幂等键必填，缺失在参数校验道拒绝——复用 threads API 既有字段）
+      // send <threadId> <idempotencyKey> <text> [--no-wait]：派发 + 阻塞等
+      // 本轮落定（幂等键必填，缺失在参数校验道拒绝——复用 threads API 既有
+      // 字段）。--no-wait 尾随 flag：只确认投递即返回，不进落定等待——
+      // 并行派发多条长任务时逐条阻塞会烧满工具超时，落定确认交给 watch。
       case 'send': {
-        const [threadId, idempotencyKey, text] = rest;
+        const noWait = rest[rest.length - 1] === '--no-wait';
+        const positional = noWait ? rest.slice(0, -1) : rest;
+        const [threadId, idempotencyKey, text] = positional;
         const payload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/commands`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -372,6 +387,12 @@ export function createThreadsAdapter(deps: {
           ].join('\n');
         }
         const sentLine = `sent ${payload?.command?.commandId || '(unknown)'} duplicate=${payload?.duplicate === true} delivered=${payload?.delivery?.delivered ?? '(unknown)'}`;
+        if (noWait) {
+          return [
+            sentLine,
+            `dispatched --no-wait：投递已确认，未等落定。用 watch ${threadId} 续挂等落定，不要重发同键指令。`,
+          ].join('\n');
+        }
         const outcome = await waitForTurnSettled(threadId, {
           signal: context?.signal,
           termination: context?.termination,
@@ -386,17 +407,114 @@ export function createThreadsAdapter(deps: {
         return formatSettled(threadId, outcome, sentLine);
       }
 
-      // watch <threadId>：续挂监视，落定即返（超时同 send：结构化 done）
+      // watch <threadId> [threadId...]：续挂监视，落定即返（超时同 send：
+      // 结构化 done）。多线程 any-settle 与 bin/claw.mjs threads watch 同
+      // 语义：并发单线程监视，任一线程落定/失败/终态即整条返回，第一个
+      // settle 的胜出；其余停挂并附最后已知状态，模型用一条 watch 续挂。
       case 'watch': {
-        const [threadId] = rest;
-        const outcome = await waitForTurnSettled(threadId, {
-          signal: context?.signal,
-          termination: context?.termination,
-        });
-        if (outcome.reason === 'timeout' || outcome.reason === 'interrupted') {
-          return formatTimeoutDone(threadId, outcome);
+        if (rest.length === 1) {
+          const outcome = await waitForTurnSettled(rest[0], {
+            signal: context?.signal,
+            termination: context?.termination,
+          });
+          if (outcome.reason === 'timeout' || outcome.reason === 'interrupted') {
+            return formatTimeoutDone(rest[0], outcome);
+          }
+          return formatSettled(rest[0], outcome);
         }
-        return formatSettled(threadId, outcome);
+        const watchTargets = rest;
+        // 每线程独立中止闸：胜出即停挂其余监视；context 终止（Tool.timeout /
+        // 用户打断）级联到全部线程
+        const controllers = watchTargets.map(() => new AbortController());
+        const contextSignal = context?.signal;
+        const abortAll = () => {
+          for (const controller of controllers) controller.abort();
+        };
+        if (contextSignal) {
+          if (contextSignal.aborted) abortAll();
+          else contextSignal.addEventListener('abort', abortAll, { once: true });
+        }
+        const attempts = watchTargets.map((threadId, index) =>
+          waitForTurnSettled(threadId, {
+            signal: controllers[index].signal,
+            termination: context?.termination,
+          })
+            .then((outcome) => ({ threadId, outcome }))
+            .catch(() => ({ threadId, outcome: unreachableOutcome() })),
+        );
+        try {
+          const first = await Promise.race(attempts.map(async (attempt) => {
+            const { threadId, outcome } = await attempt;
+            // timeout/interrupted 是整条调用的终止信号（context 级联产生），
+            // 不算单线程胜出
+            return {
+              threadId,
+              outcome,
+              settled: outcome.reason !== 'timeout' && outcome.reason !== 'interrupted',
+            };
+          }));
+          if (!first.settled) {
+            // 整条调用终止：逐线程附最后已知状态，模型用一条 watch 全部续挂
+            const results = await Promise.all(attempts);
+            return [
+              ...results.map(({ threadId, outcome }) =>
+                `done reason=timeout  threadId=${threadId}  life=${outcome.lifeState}  failed=${outcome.failed}  newEvents=${outcome.newEvents}`),
+              `工具调用超时（Tool.timeout 契约），指令仍在执行：用 watch ${watchTargets.join(' ')} 续挂监视，不要重复派发同键指令。`,
+            ].join('\n');
+          }
+          // 胜出：停挂其余监视并收集最后已知状态（进程内不弃管，防轮询泄漏）
+          abortAll();
+          const results = await Promise.all(attempts);
+          const losers = results.filter(({ threadId }) => threadId !== first.threadId);
+          const stillPending = losers.filter(({ outcome }) =>
+            outcome.reason === 'timeout' || outcome.reason === 'interrupted');
+          const coSettled = losers.filter(({ outcome }) =>
+            outcome.reason !== 'timeout' && outcome.reason !== 'interrupted');
+          return [
+            formatSettled(first.threadId, first.outcome),
+            ...(losers.length > 0 ? [
+              '其余监视线程（已停挂）：',
+              ...stillPending.map(({ threadId, outcome }) =>
+                `  ${threadId}  life=${outcome.lifeState}  failed=${outcome.failed}`),
+              ...coSettled.map(({ threadId, outcome }) =>
+                `  ${threadId}  done reason=${outcome.reason}  life=${outcome.lifeState}  failed=${outcome.failed}`),
+              ...(stillPending.length > 0
+                ? [`继续监视：watch ${stillPending.map(({ threadId }) => threadId).join(' ')}`]
+                : []),
+            ] : []),
+          ].join('\n');
+        } finally {
+          contextSignal?.removeEventListener('abort', abortAll);
+        }
+      }
+
+      // result <threadId>：取末轮回复（coder 的最终报告）。事件流里
+      // item.completed 且 item.type=agent_message 携带回复全文；send/watch
+      // 落定后取证用（对应 CLI watch --with-result 的能力，可独立调用）。
+      case 'result': {
+        const [threadId] = rest;
+        const payload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events`);
+        const events = (payload?.events as Array<Record<string, any>>) || [];
+        let last: Record<string, any> | null = null;
+        for (let i = events.length - 1; i >= 0; i--) {
+          const event = events[i];
+          if (event?.type === 'item.completed' && event?.item?.type === 'agent_message') {
+            last = event;
+            break;
+          }
+        }
+        if (!last) {
+          return `result: 线程 ${threadId} 尚无 agent_message 事件（无末轮回复可取）`;
+        }
+        const text = String(last.item.text || '');
+        const turn = last.item.turn !== undefined ? ` turn=${last.item.turn}` : '';
+        const body = text.length > MAX_RESULT_CHARS
+          ? `${text.slice(0, MAX_RESULT_CHARS)}\n…（截断，全文 ${text.length} 字符）`
+          : text;
+        return [
+          `result threadId=${threadId}${turn}  chars=${text.length}`,
+          body,
+        ].join('\n');
       }
 
       // list [agentId]：线程列表
@@ -408,7 +526,7 @@ export function createThreadsAdapter(deps: {
         return [`Threads (${threads.length}):`, ...threads.map(threadLine)].join('\n');
       }
 
-      // show <threadId>：线程详情 + 事件尾摘要
+      // show <threadId>：线程详情 + pending 指令数 + 事件尾摘要
       case 'show': {
         const [threadId] = rest;
         const payload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`);
@@ -417,8 +535,11 @@ export function createThreadsAdapter(deps: {
           .catch(() => null);
         const tail = ((eventsPayload?.events as Array<Record<string, any>>) || [])
           .slice(-TAIL_EVENT_COUNT);
+        const commands = Array.isArray(thread.commands) ? thread.commands : [];
+        const pendingCount = commands.filter((command: any) => command?.status === 'pending').length;
         return [
           threadLine(thread),
+          ...(commands.length > 0 ? [`commands=${commands.length} (${pendingCount} pending)`] : []),
           ...(tail.length > 0 ? ['事件尾：', ...tail.map(eventLine)] : []),
         ].join('\n');
       }

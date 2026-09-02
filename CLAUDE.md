@@ -112,7 +112,7 @@ app-core.js 全局状态纪律：全局状态区只减不增。新增前端状�
 入口 `prebuilt-agents/official/programming-helper/`。一个工作空间、两个会话身份，runtime 按 `sessionType` 分派：
 
 - **main（缺省）**：用户交互式编程 Agent。Shell / LSP / Web 搜索 / MCP 完整工具链，会话分支、trim / compact / summary 精简、checkpoint / rollback、AI 标题、语音输入。
-- **coder（`sessionType=coder`）**：无人值守自主编码身份，装配 [coder-agent.js](prebuilt-agents/official/programming-helper/coder-agent.js)，配置独立于主身份（`.agentdev/agent-configs/coder.json`）。关键行为：线程宿主（自动建 WorkThread，trim / 摘要后自动接力）；只能由调度面创建（ACP / `claw threads` / workspace-coder-dispatch 技能），用户不能在 UI 创建；Web UI 左侧 coder 入口是同一工作空间的线程列表投影；线程归档是生命周期事务（先中断再归档，已归档拒绝新指令）。
+- **coder（`sessionType=coder`）**：无人值守自主编码身份，装配 [coder-agent.js](prebuilt-agents/official/programming-helper/coder-agent.js)，配置独立于主身份（`.agentdev/agent-configs/coder.json`）。关键行为：线程宿主（自动建 WorkThread，trim / 摘要后自动接力）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），用户不能在 UI 创建；Web UI 左侧 coder 入口是同一工作空间的线程列表投影；线程归档是生命周期事务（先中断再归档，已归档拒绝新指令）。
 
 ### Agent Studio（agent-studio）★
 

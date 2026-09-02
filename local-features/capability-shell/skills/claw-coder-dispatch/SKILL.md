@@ -15,37 +15,38 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 ## 适用范围与限制（先读）
 
 - **仅限领域内使用**：coder_shell 只做一件事——调度智能编码工作空间中的 Coder 智能体（建线程、派发工单、监视、收口）。它不是通用 bash：文件操作用 read/write/edit 工具，代码搜索用 glob/grep 工具，一律不要塞进这个 shell。
-- **工具受限**：只认识下表 9 个动词；语法只放行**字面量参数、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
+- **工具受限**：只认识下表动词；语法只放行**字面量参数、尾随声明 flag（如 `--no-wait`）、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
 
 ## coder_shell 用法
 
-全部调度经 `coder_shell({ command })` 完成，command 是一条管道命令字符串。可用动词（9 个）：
+全部调度经 `coder_shell({ command })` 完成，command 是一条管道命令字符串。可用动词（10 个）：
 
 | 动词 | 语义 |
 |---|---|
 | `new-session <agentId> ['标题']` | 创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId） |
 | `create <agentId> <sessionId> ['标题']` | 给已存在的会话加挂线程，返回 threadId |
-| `send <threadId> <idempotencyKey> '<指令文本>'` | 派发并**阻塞**等本轮落定 |
-| `watch <threadId>` | 续挂监视，落定即返 |
+| `send <threadId> <idempotencyKey> '<指令文本>' [--no-wait]` | 派发并**阻塞**等本轮落定；`--no-wait` 只确认投递即返回（并行派发用），落定交给 `watch` |
+| `watch <threadId> [threadId...]` | 续挂监视（可多线程 any-settle），任一线程落定即整条返回 |
+| `result <threadId>` | 取线程末轮回复全文（coder 的最终报告，落定后取证用） |
 | `list [agentId]` | 线程列表 |
-| `show <threadId>` | 线程详情（含事件尾摘要） |
+| `show <threadId>` | 线程详情（pending 指令数 + 事件尾摘要） |
 | `archive <threadId>` / `unarchive <threadId>` | 归档/恢复 |
 | `deliver <threadId>` | 恢复闸重投 pending 指令 |
 
-`advance` / `resume` **不在动词表**：调用会得到 unknown_verb 和结构化指引——rotation_failed 残局需人工介入（见故障表），不要在 shell 内重试。`rm`、`curl` 等其他动词同样被拒并附可用动词清单。
+裸 `help` 输出动词表用法（管线级，不占动词表）；`advance` / `resume` **不在动词表**：调用会得到 unknown_verb 和结构化指引——rotation_failed 残局需人工介入（见故障表），不要在 shell 内重试。`rm`、`curl` 等其他动词同样被拒并附可用动词清单。
 
-超时唯一闸门是工具自身的 timeout 契约：超时返回结构化 `done reason=timeout`（不是错误），指令仍在执行，用 `watch <threadId>` 续挂即可。不要试图给动词加时间参数。
+超时唯一闸门是工具自身的 timeout 契约：超时返回结构化 `done reason=timeout`（不是错误），指令仍在执行，用 `watch` 续挂即可（可一条挂多线程）。不要试图给动词加时间参数。
 
 ## 核心不变量
 
 1. **依赖由调度方控制，不由 coder 自主轮询。** 前置工单未完成时，可以创建线程但不要发送施工指令。
 2. **一个工单一个线程。** 不要把多个互不相关工单塞进同一条线程。
 3. **有文件交集的工单必须串行。** 无交集且不共享构建产物的工单才可以并行。
-4. **发送成功不等于执行开始。** `send` 在同一次调用内阻塞等待本轮落定，返回的 `done reason=...` 字段判定落定；超时返回 `done reason=timeout`（正常续挂信号），用 `watch` 续挂，不要靠再查一遍 events 人工确认。
+4. **发送成功不等于执行开始。** `send` 在同一次调用内阻塞等待本轮落定，返回的 `done reason=...` 字段判定落定；超时返回 `done reason=timeout`（正常续挂信号），用 `watch` 续挂，不要靠再查一遍 events 人工确认。并行派发多条长任务时用 `send --no-wait`（投递确认即返回），落定统一交给一条多线程 `watch`，不要逐条阻塞烧满超时。
 5. **以证据判定完成。** 最终报告、文件 diff、测试输出、构建产物和 git 状态必须相互吻合。
 6. **绝不覆盖其他会话的工作。** 禁止使用 `git reset --hard`、`git clean`、`git checkout -- .` 清理未知改动。
 7. **默认不让 coder 自行 push。** commit、push、分支操作由调度方在验收后执行，除非工单明确授权。
-8. **幂等键是防重发保险。** `send` 必填唯一幂等键（服务端按键去重）；**不要**故意重发同键指令去"验证去重是否生效"。
+8. **幂等键是防重发保险。** `send` 必填唯一幂等键（服务端按键去重，同键重发三种结局见下文"幂等键语义"）；**不要**故意重发同键指令去"验证去重是否生效"。
 
 
 ## 前置检查
@@ -128,6 +129,24 @@ coder_shell command="send wt-xxx ticket-025-dispatch '<指令全文>'"
 
 `done reason=timeout` 不是错误：指令仍在执行，用 `watch` 续挂。幂等键是防重发保险，缺失时参数校验道直接拒绝（`arg_rejected`）。
 
+**并行派发用 `--no-wait`**：一次派发多条长任务时，逐条阻塞等落定会把每条 `send` 都烧满工具超时。尾随 `--no-wait` 让 send 只确认投递（`sent ... delivered=...`）即返回，落定统一交给一条多线程 watch：
+
+```text
+coder_shell command="send wt-aaa ticket-a '<指令A>' --no-wait"
+coder_shell command="send wt-bbb ticket-b '<指令B>' --no-wait"
+coder_shell command="watch wt-aaa wt-bbb"
+```
+
+**幂等键语义（同键重发的三种结局，服务端真实契约）**：
+
+| 场景 | 服务端行为 | 调度方该做什么 |
+|---|---|---|
+| 新键 | 指令入箱，runtime 就绪即内联投递（HTTP 201） | 等 `send` 落定或 `watch` |
+| 同键，指令尚在（pending/滞留） | `duplicate=true`，**不重复入箱、不做内联投递**；但每次 POST 都会先尝试唤起 head runtime，唤起成功后由投递消费者异步拾取 pending 指令 | 唤起失败的显式重投用 `deliver`；不要换新键重发同一指令 |
+| 同键，指令已执行 | `duplicate=true`，不会重新执行 | 修正/追加指令必须用**新键** |
+
+即：同键重发是"唤醒 + 等消费者"的恢复动作，不是再执行；想真正再跑一遍就换新键。`delivered=0` 时优先 `deliver`（恢复闸语义更直接）。
+
 开工指令必须包含：
 
 - 工单号和工单路径
@@ -143,6 +162,14 @@ coder_shell command="send wt-xxx ticket-025-dispatch '<指令全文>'"
 
 **标准路径**：`send` 自带阻塞等落定，一次调用完成派发到落定，无需单独 watch。返回 `done reason=timeout` 时改用 `watch` 续挂。
 
+**多线程并行监视（any-settle）**：并发多条工单时，一条 `watch` 挂全部线程：
+
+```text
+coder_shell command="watch wt-aaa wt-bbb wt-ccc"
+```
+
+任一线程落定/失败/终态即整条返回：报文含胜者的 done 摘要，其余线程附最后已知状态（`life=...`）与一条续挂指引（`watch wt-...`）——用一条 watch 把剩余线程续挂上即可，无需逐条轮询。超时时逐线程给 `done reason=timeout` 行，同样一条 watch 全部续挂。
+
 **续挂监控**（指令仍在执行 / 分轮盯进度）：
 
 ```text
@@ -150,6 +177,12 @@ coder_shell command="watch wt-xxx"
 ```
 
 **纯监视已运行线程**（不派发任何指令，只挂到一条正在执行的线程上等它干完）：同一条 `watch` 命令——不派发、不修改线程状态，可安全挂在任何执行中的线程上。
+
+**取末轮回复**：线程落定后用 `result` 取 coder 的最终报告全文（验收证据的第一手材料）：
+
+```text
+coder_shell command="result wt-xxx"
+```
 
 watch / send 的落定摘要行为一致：
 
@@ -162,11 +195,11 @@ watch / send 的落定摘要行为一致：
 
 **Debugger agent 活动**：用 debugger MCP 查目标 agent 最新日志（取最新 offset 或按时间过滤，旧窗口不代表当前状态），重点看最近的 `Step started`、工具成败、`command timed out`、是否发生接力。
 
-**两个仓库的工作区**：
+**两个仓库的工作区**（路径按实际环境替换，本机开发仓通常为 `D:/code/AgentDevClaw` 与 `D:/code/AgentDev`）：
 
 ```bash
-cd /home/dev/AgentDevClaw && git status --short && git diff --stat && git log -5 --oneline
-cd /home/dev/AgentDev && git status --short && git diff --stat && git log -5 --oneline
+cd <AgentDevClaw 仓库根目录> && git status --short && git diff --stat && git log -5 --oneline
+cd <AgentDev 仓库根目录> && git status --short && git diff --stat && git log -5 --oneline
 ```
 
 状态解释：
@@ -245,7 +278,7 @@ WorkThread 可能出现：
 
 ## 完成验收
 
-coder 报告完成后，调度方必须自己核验：
+coder 报告完成后（`result wt-xxx` 取末轮回复全文），调度方必须自己核验：
 
 1. 工单要求的新文件和修改文件存在。
 2. 被迁代码无残留，加载顺序和依赖关系正确。

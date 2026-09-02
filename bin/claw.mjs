@@ -430,16 +430,21 @@ async function handleThreads(args = []) {
     const interval = Math.max(0.2, Number(optionValue(args, '--interval')) || 10);
     const timeout = Math.min(590, Math.max(0.5, Number(optionValue(args, '--timeout')) || 540));
     const jsonl = format === 'jsonl' || format === 'json';
+    const withResult = args.includes('--with-result');
     // 多线程 any-settle：watch 可接受多个 thread-id，任一线程落定/失败/终态
     // 即整条调用返回（并发跑多个单线程 watch，第一个 settle 的胜出）。
     // 单线程路径行为不变（结果不带 threadId 前缀）。
     const watchTargets = [threadId, ...args.filter((a) => a.startsWith('wt-') && a !== threadId)];
     if (watchTargets.length === 1) {
       const result = await watchThread(threadId, { interval, timeout, jsonl });
+      const reply = withResult ? await fetchLastReply(threadId).catch(() => null) : null;
       const summary = `watch done: ${result.reason} | life=${result.lifeState} failed=${result.failed} | newEvents=${result.newEvents} | elapsed=${result.elapsed}s`;
-      if (jsonl) console.log(JSON.stringify({ watch: 'done', ...result }));
-      else console.log(summary);
-      if (result.detail && !jsonl) console.log(`  detail: ${result.detail}`);
+      if (jsonl) console.log(JSON.stringify({ watch: 'done', ...result, ...(reply ? { lastReply: reply } : {}) }));
+      else {
+        console.log(summary);
+        if (result.detail) console.log(`  detail: ${result.detail}`);
+        if (reply) printLastReply(reply);
+      }
       process.exitCode = result.exitCode;
       return;
     }
@@ -453,9 +458,13 @@ async function handleThreads(args = []) {
         });
       }
     });
+    const reply = withResult ? await fetchLastReply(settled.threadId).catch(() => null) : null;
     const summary = `watch done: ${settled.reason} | thread=${settled.threadId} | life=${settled.lifeState} failed=${settled.failed} | newEvents=${settled.newEvents} | elapsed=${settled.elapsed}s`;
-    if (jsonl) console.log(JSON.stringify({ watch: 'done', ...settled }));
-    else console.log(summary);
+    if (jsonl) console.log(JSON.stringify({ watch: 'done', ...settled, ...(reply ? { lastReply: reply } : {}) }));
+    else {
+      console.log(summary);
+      if (reply) printLastReply(reply);
+    }
     process.exitCode = settled.exitCode;
     return;
   }
@@ -626,6 +635,26 @@ async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
     }
   }
   return { reason: 'timeout', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 2 };
+}
+
+// 末轮回复（--with-result）：事件流里最后一个 agent_message item 的全文，
+// 即 coder 的最终报告。落定后 item 事件已完整上报，直接取流末尾即可。
+async function fetchLastReply(threadId) {
+  const payload = await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/events`);
+  const events = payload?.events || [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event?.type === 'item.completed' && event?.item?.type === 'agent_message') {
+      return { turn: event.item.turn, text: String(event.item.text || '') };
+    }
+  }
+  return null;
+}
+
+function printLastReply(reply) {
+  const turn = reply?.turn !== undefined ? ` (turn=${reply.turn})` : '';
+  console.log(`  末轮回复${turn}:`);
+  for (const line of String(reply?.text || '').split('\n')) console.log(`    ${line}`);
 }
 
 // ── Session dispatch（coder 派遣入口，替代裸 curl）──────────────

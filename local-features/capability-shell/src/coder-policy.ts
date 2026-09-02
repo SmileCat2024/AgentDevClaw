@@ -7,7 +7,8 @@
  *
  * advance / resume 不入表：rotation_failed 场景输出结构化指引，人工介入
  * （与技能故障表一致）。watch 是只读续挂监视（send 已内置阻塞等落定，
- * watch 用于超时续挂与纯监视已运行线程）。
+ * watch 用于超时续挂与纯监视已运行线程），可一条同时挂多条线程
+ * （any-settle，与 bin/claw.mjs threads watch 同语义）。
  */
 
 import type { CapabilityShellPolicy } from './types.js';
@@ -23,7 +24,7 @@ export const CODER_SHELL_DESCRIPTION = [
 ].join('\n');
 
 /**
- * 动词表（v1，9 个）。send 的幂等键为必填位置参数（缺失在参数校验道拒绝）；
+ * 动词表（v1，10 个）。send 的幂等键为必填位置参数（缺失在参数校验道拒绝）；
  * 超时唯一闸门 = Tool.timeout 契约，动词表不承载任何时间 flag。
  */
 export function createCoderShellPolicy(): CapabilityShellPolicy {
@@ -51,20 +52,27 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'threads:create' },
       },
       'send': {
-        description: '向线程派发指令并阻塞等本轮落定（幂等键必填）',
+        description: '向线程派发指令并阻塞等本轮落定；--no-wait 只确认投递即返回，落定确认交给 watch（幂等键必填）',
         params: [
           { name: 'threadId', kind: 'literal' },
           { name: 'idempotencyKey', kind: 'literal' },
           { name: 'text', kind: 'literal' },
         ],
-        usage: "send <threadId> <idempotencyKey> '<指令文本>'",
+        flags: ['--no-wait'],
+        usage: "send <threadId> <idempotencyKey> '<指令文本>' [--no-wait]",
         adapter: { key: 'threads:send' },
       },
       'watch': {
-        description: '续挂监视线程，本轮落定即返（超时返回结构化 done reason=timeout）',
-        params: [{ name: 'threadId', kind: 'literal' }],
-        usage: 'watch <threadId>',
+        description: '续挂监视线程（可多个，any-settle）：任一线程落定/失败/终态即整条返回，报文附其余线程状态（超时返回结构化 done reason=timeout）',
+        params: [{ name: 'threadId', kind: 'literal', variadic: true }],
+        usage: 'watch <threadId> [threadId...]',
         adapter: { key: 'threads:watch' },
+      },
+      'result': {
+        description: '取线程末轮回复文本（coder 的最终报告；send/watch 落定后取证用）',
+        params: [{ name: 'threadId', kind: 'literal' }],
+        usage: 'result <threadId>',
+        adapter: { key: 'threads:result' },
       },
       'list': {
         description: '列出工作线程',

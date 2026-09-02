@@ -12,6 +12,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { createCoderShellPolicy } from '../src/coder-policy.js';
 import { createThreadsAdapters } from '../src/coder-shell.js';
 import { runCapabilityShellPipeline, createCapabilityShellTool } from '../src/tool-factory.js';
@@ -40,10 +43,10 @@ function runCapabilityShellPolicy(command: string) {
 }
 
 describe('coder_shell 动词表（ticket 034/035）', () => {
-  it('v1 动词表恰为 9 个：new-session/create/send/watch/list/show/archive/unarchive/deliver', () => {
+  it('v1 动词表恰为 10 个：new-session/create/send/watch/result/list/show/archive/unarchive/deliver', () => {
     assert.deepEqual(
       Object.keys(POLICY.verbs).sort(),
-      ['archive', 'create', 'deliver', 'list', 'new-session', 'send', 'show', 'unarchive', 'watch'],
+      ['archive', 'create', 'deliver', 'list', 'new-session', 'result', 'send', 'show', 'unarchive', 'watch'],
     );
   });
 
@@ -193,6 +196,175 @@ describe('coder_shell 动词表（ticket 034/035）', () => {
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('done reason=turn.completed'), r.output);
   });
+
+  it('show：pending 指令数随详情透出（commands=N (M pending)）', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.endsWith('/threads/wt-1') && !u.includes('/events'),
+          body: {
+            ok: true,
+            thread: {
+              threadId: 'wt-1', lifeState: 'idle', status: 'open', failed: false,
+              commands: [{ status: 'pending' }, { status: 'pending' }, { status: 'delivered' }],
+            },
+          },
+        },
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 0 } },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'show wt-1', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('commands=3 (2 pending)'), r.output);
+  });
+
+  it('help：裸 help 输出策略声明的动词表用法（管线级，不占动词表）', async () => {
+    const r = await runCapabilityShellPipeline(POLICY, 'help', { adapters: {}, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('coder_shell'), r.output);
+    assert.ok(r.output.includes('watch <threadId> [threadId...]'), r.output);
+    assert.ok(r.output.includes('result <threadId>'), r.output);
+    assert.ok(r.output.includes('new-session'), r.output);
+  });
+});
+
+describe('coder_shell watch 多线程 any-settle', () => {
+  it('多 threadId 过参数道（尾参可变），单线程语义保持不变', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: stubFetch([
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 10 } },
+        { match: (u) => u.includes('/threads/'), body: { ok: true, thread: { threadId: 'wt-x', lifeState: 'idle', status: 'open', failed: false, commands: [] } } },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'watch wt-1 wt-2', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('threadId=wt-'), r.output);
+  });
+
+  it('watch 0 个 threadId → 参数道拒绝（1+ 个参数）', async () => {
+    const r = await runCapabilityShellPipeline(POLICY, 'watch', { adapters: {}, bashPath: null });
+    assert.equal(r.ok, false);
+    assert.equal(r.rejection?.code, 'arg_rejected');
+    assert.ok(r.output.includes('1+ 个参数'), r.output);
+  });
+
+  it('any-settle：先落定的线程胜出，报文附其余线程最后已知状态与续挂指引', async () => {
+    let fastPolls = 0;
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: (async (url: string) => {
+        if (url.includes('/events') && !url.includes('after=')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, events: [], cursor: 10 }) };
+        }
+        if (url.includes('/events?after=10')) {
+          const isFast = url.includes('/threads/wt-fast/');
+          return { ok: true, status: 200, json: async () => ({ ok: true, events: isFast ? [{ type: 'turn.completed', turn: 1 }] : [], cursor: 11 }) };
+        }
+        if (url.endsWith('/threads/wt-fast')) {
+          const lifeState = fastPolls === 0 ? 'executing' : 'idle';
+          fastPolls += 1;
+          return { ok: true, status: 200, json: async () => ({ ok: true, thread: { threadId: 'wt-fast', lifeState, status: 'open', failed: false, commands: [] } }) };
+        }
+        if (url.endsWith('/threads/wt-slow')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, thread: { threadId: 'wt-slow', lifeState: 'executing', status: 'open', failed: false, commands: [] } }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ ok: false, error: `no route: ${url}` }) };
+      }) as unknown as FetchLike,
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'watch wt-slow wt-fast', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('done reason=turn.completed  threadId=wt-fast'), r.output);
+    assert.ok(r.output.includes('wt-slow  life=executing'), `应附其余线程状态: ${r.output}`);
+    assert.ok(r.output.includes('watch wt-slow'), `应含续挂指引: ${r.output}`);
+  });
+
+  it('any-settle 超时：逐线程 done reason=timeout 行 + 一条整体续挂指引（非错误）', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: stubFetch([
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 10 } },
+        { match: (u) => u.endsWith('/threads/wt-1'), body: { ok: true, thread: { threadId: 'wt-1', lifeState: 'executing', status: 'open', failed: false, commands: [] } } },
+        { match: (u) => u.endsWith('/threads/wt-2'), body: { ok: true, thread: { threadId: 'wt-2', lifeState: 'executing', status: 'open', failed: false, commands: [] } } },
+      ]),
+    });
+    const tool = createCapabilityShellTool(POLICY, adapters, {
+      bashPath: null,
+      timeoutMs: 50,
+      maxTimeoutMs: 50,
+    });
+    const out = await tool.execute(
+      { command: 'watch wt-1 wt-2' },
+      {
+        signal: AbortSignal.timeout(50),
+        termination: () => 'timeout',
+      } as any,
+    );
+    const text = String(out);
+    assert.ok(text.includes('done reason=timeout  threadId=wt-1'), text);
+    assert.ok(text.includes('done reason=timeout  threadId=wt-2'), text);
+    assert.ok(text.includes('watch wt-1 wt-2'), `续挂指引应含全部线程: ${text}`);
+  });
+});
+
+describe('coder_shell result 末轮回复', () => {
+  it('取最后一个 agent_message 的全文，带 turn 与 chars', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.endsWith('/threads/wt-1/events'),
+          body: {
+            ok: true,
+            events: [
+              { type: 'item.completed', item: { type: 'reasoning', text: 'thinking' } },
+              { type: 'item.completed', item: { type: 'agent_message', turn: 1, text: '第一轮回复' } },
+              { type: 'item.completed', item: { type: 'agent_message', turn: 2, text: '最终报告：全部通过' } },
+            ],
+            cursor: 30,
+          },
+        },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('turn=2'), r.output);
+    assert.ok(r.output.includes('chars='), r.output);
+    assert.ok(r.output.includes('最终报告：全部通过'), r.output);
+    assert.ok(!r.output.includes('第一轮回复'), '只取末轮，不回放历史回复');
+  });
+
+  it('无 agent_message 事件 → 结构化提示（非错误）', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 0 } },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('无末轮回复'), r.output);
+  });
+
+  it('超长回复截断并注明全文长度', async () => {
+    const longText = 'x'.repeat(5_000);
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        {
+          match: (u) => u.includes('/events'),
+          body: { ok: true, events: [{ type: 'item.completed', item: { type: 'agent_message', turn: 1, text: longText } }], cursor: 1 },
+        },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'result wt-1', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('截断，全文 5000 字符'), r.output);
+  });
 });
 
 describe('coder_shell new-session 动词（ticket 035A）', () => {
@@ -327,5 +499,103 @@ describe('coder_shell create 会话预校验（ticket 035B）', () => {
     // 列表 GET（1 次，失败）+ 建线 POST 都发出
     const postThreads = requests.filter((req) => req.url.endsWith('/protoclaw/threads') && req.init?.method === 'POST');
     assert.equal(postThreads.length, 1, '查询失败不阻塞建线 POST');
+  });
+});
+
+describe('coder_shell send --no-wait（只派发不等落定）', () => {
+  function recordingFetch(routes: Array<{ match: (url: string, init?: RequestInit) => boolean; body: any }>) {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      requests.push({ url, init });
+      const route = routes.find((r) => r.match(url, init));
+      if (!route) {
+        return { ok: false, status: 404, json: async () => ({ ok: false, error: `no route: ${url}` }) };
+      }
+      return { ok: true, status: 200, json: async () => route.body };
+    };
+    return { fetchImpl, requests };
+  }
+
+  it('--no-wait：投递确认即返回，不进落定轮询（无 events/thread 轮询请求）', async () => {
+    const { fetchImpl, requests } = recordingFetch([
+      { match: (u) => u.endsWith('/threads/wt-1/commands'), body: { ok: true, command: { commandId: 'cmd-9' }, duplicate: false, delivery: { delivered: 1 } } },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, "send wt-1 ticket-9 'long work' --no-wait", {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('sent cmd-9'), r.output);
+    assert.ok(r.output.includes('dispatched --no-wait'), r.output);
+    assert.ok(r.output.includes('watch wt-1'), '应指引 watch 续挂');
+    assert.equal(requests.length, 1, '--no-wait 只发一次 POST，不得进入落定轮询');
+  });
+
+  it('--no-wait + runtimeWake 失败：如实透出唤起失败，不进落定等待', async () => {
+    const { fetchImpl } = recordingFetch([
+      {
+        match: (u) => u.endsWith('/threads/wt-1/commands'),
+        body: { ok: true, command: { commandId: 'cmd-x' }, duplicate: false, delivery: { delivered: 0 }, runtimeWake: { ok: false, code: 'head_session_missing', message: 'head session gone' } },
+      },
+    ]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    const r = await runCapabilityShellPipeline(POLICY, "send wt-1 ticket-x 'work' --no-wait", {
+      adapters, bashPath: null,
+    });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('runtimeWake=failed (head_session_missing)'), r.output);
+  });
+
+  it('未声明的尾随 flag 按位置参数计数 → 参数道拒绝', async () => {
+    const r = await runCapabilityShellPipeline(POLICY, "send wt-1 k 'text' --async", {
+      adapters: {}, bashPath: null,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.rejection?.code, 'arg_rejected');
+    assert.ok(r.output.includes('--no-wait'), '拒绝文案应含正确用法');
+  });
+
+  it('help 报文含 send [--no-wait] 用法', async () => {
+    const r = await runCapabilityShellPipeline(POLICY, 'help', { adapters: {}, bashPath: null });
+    assert.ok(r.output.includes("[--no-wait]"), r.output);
+  });
+});
+
+describe('coder_shell 超长输出自动落盘（与 bash 工具同实现）', () => {
+  it('超过 30k 字符：完整内容落盘 <workdir>/.agentdev/temp/，返回头尾截断 + 落盘路径', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'capshell-'));
+    try {
+      const long = 'y'.repeat(40_000);
+      const policy = createCoderShellPolicy();
+      // 借 list 动词回放长输出：adapter 直接返回长文本
+      const adapters: Record<string, unknown> = { 'threads:list': async () => long };
+      const tool = createCapabilityShellTool(policy, adapters as any, { bashPath: null, workdir: tmp });
+      const out = await tool.execute({ command: 'list' }, {} as any);
+      const text = String(out);
+      assert.ok(text.includes('saved to:'), `应含落盘路径提示: ${text.slice(0, 200)}`);
+      assert.ok(text.includes('[truncated: omitted'), '应含截断标记');
+      const match = /saved to: (.+?)[\]\r\n]/.exec(text);
+      assert.ok(match, '落盘路径可解析');
+      const savedPath = match![1].trim();
+      assert.ok(existsSync(savedPath), `完整输出应已落盘: ${savedPath}`);
+      assert.equal(readFileSync(savedPath, 'utf-8').length, 40_000, '落盘内容为完整输出');
+      assert.ok(basename(savedPath).startsWith('coder_shell-output-'), '文件名带 shell 前缀便于溯源');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('短输出原样返回，不落盘', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'capshell-'));
+    try {
+      const policy = createCoderShellPolicy();
+      const adapters: Record<string, unknown> = { 'threads:list': async () => 'short output' };
+      const tool = createCapabilityShellTool(policy, adapters as any, { bashPath: null, workdir: tmp });
+      const out = await tool.execute({ command: 'list' }, {} as any);
+      assert.equal(String(out), 'short output');
+      assert.ok(!existsSync(join(tmp, '.agentdev', 'temp')), '短输出不产生落盘文件');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

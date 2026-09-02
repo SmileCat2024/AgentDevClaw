@@ -61,6 +61,13 @@ export interface ShellVerbDecl {
   /** 可选：给模型的一句话用法提示（参数个数不符时附在报错里） */
   usage?: string;
   /**
+   * 可选：尾随 flag 白名单（如 ['--no-wait']）。只在参数尾部识别，
+   * 参数校验前从位置参数中剥离、不计入参数个数；未声明的 `--` 前缀
+   * 参数仍按位置参数校验（防误吞指令文本中的连字符词）。adapter 收到
+   * 的仍是原始参数数组（含尾部 flag），按本声明自行剥离。
+   */
+  flags?: string[];
+  /**
    * 分派去向：
    * - 进程内函数：直接调用，args 为校验后的参数数组
    * - 文本工具：数组 spawn（每元素一个管道段；管道前段 stdout 写后段 stdin）
@@ -89,6 +96,12 @@ export interface ShellParamDecl {
   kind: ShellParamKind;
   /** 必填（缺省时该参数必须出现） */
   required?: boolean;
+  /**
+   * 尾参可变：true 时末位参数声明可重复出现，参数个数上限不再受声明个数
+   * 约束（仅对末位参数有意义，如 watch <threadId> [threadId...]）。
+   * 可变部分的每个值仍按末位声明的约束逐个校验。
+   */
+  variadic?: boolean;
   /**
    * kind=literal 的字面量白名单（枚举参数用）。
    * 未提供则只校验「是字面量」（由前道检查点保证）。

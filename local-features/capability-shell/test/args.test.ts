@@ -147,6 +147,34 @@ describe('capability-shell checkArgs', () => {
     assert.equal(r0.ok, false);
     assert.ok(r0.message!.includes('1~2 个参数'), r0.message);
   });
+
+  it('可变尾参（variadic）：末位声明可重复，超声明个数不拒绝，逐值按末位约束校验', () => {
+    const variadicVerb: ShellVerbDecl = {
+      description: '',
+      params: [{ name: 'id', kind: 'literal', variadic: true }],
+      usage: 'v <id> [id...]',
+      adapter: { key: 'k' },
+    };
+    // 声明个数（1 个）：放行
+    assert.equal(checkArgs([seg('v', ['a'])], decls({ v: variadicVerb })).ok, true);
+    // 超过声明个数：放行
+    assert.equal(checkArgs([seg('v', ['a', 'b', 'c'])], decls({ v: variadicVerb })).ok, true);
+    // 0 个：仍拒绝，文案为下限
+    const r0 = checkArgs([seg('v', [])], decls({ v: variadicVerb }));
+    assert.equal(r0.ok, false);
+    assert.ok(r0.message!.includes('1+ 个参数'), r0.message);
+
+    // 可变部分逐值校验：enum 约束对每个可变值生效
+    const enumVariadic: ShellVerbDecl = {
+      description: '',
+      params: [{ name: 'state', kind: 'literal', variadic: true, enum: ['open', 'closed'] }],
+      adapter: { key: 'k' },
+    };
+    assert.equal(checkArgs([seg('v', ['open', 'closed'])], decls({ v: enumVariadic })).ok, true);
+    const rBad = checkArgs([seg('v', ['open', 'bogus'])], decls({ v: enumVariadic }));
+    assert.equal(rBad.ok, false);
+    assert.ok(rBad.message!.includes('bogus'), rBad.message);
+  });
 });
 
 describe('capability-shell 路径检测', () => {
@@ -171,5 +199,39 @@ describe('capability-shell 路径检测', () => {
     assert.ok(validateParamValue('../out', { name: 'f', kind: 'path' }) !== null);
     assert.equal(validateParamValue('open', { name: 's', kind: 'literal', enum: ['open'] }), null);
     assert.ok(validateParamValue('x', { name: 'e', kind: 'literal', enum: ['open'] }) !== null);
+  });
+});
+
+describe('capability-shell 尾随 flag（ShellVerbDecl.flags）', () => {
+  function flagDecl(): ShellVerbDecl {
+    return {
+      description: '',
+      params: [{ name: 'a', kind: 'literal' }, { name: 'b', kind: 'literal' }],
+      flags: ['--no-wait'],
+      adapter: { key: 'k' },
+    };
+  }
+
+  it('放行：尾随声明 flag 剥离后按位置参数校验（不计入个数）', () => {
+    const r = checkArgs([seg('send', ['wt-1', 'key', '--no-wait'])], decls({ send: flagDecl() }));
+    assert.equal(r.ok, true);
+  });
+
+  it('拒绝：未声明的 -- 前缀尾参不剥离，按位置参数计数（防误吞指令文本）', () => {
+    const r = checkArgs([seg('send', ['wt-1', 'key', '--other'])], decls({ send: flagDecl() }));
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'arg_rejected');
+    assert.ok(r.message!.includes('实际 3 个'), `报文应按 3 个位置参数计数: ${r.message}`);
+  });
+
+  it('拒绝：flag 前参数缺失时仍按必填数拒绝', () => {
+    const r = checkArgs([seg('send', ['wt-1', '--no-wait'])], decls({ send: flagDecl() }));
+    assert.equal(r.ok, false);
+    assert.ok(r.message!.includes('2 个参数'));
+  });
+
+  it('未声明 flags 的动词行为不变（尾参 --x 按位置参数计数）', () => {
+    const r = checkArgs([seg('v', ['a', 'b', '--x'])], decls({ v: twoParams() }));
+    assert.equal(r.ok, false);
   });
 });
