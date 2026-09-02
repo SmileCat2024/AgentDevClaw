@@ -26,15 +26,23 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 
 const agentdevRoot = resolve(projectRoot, '..', 'AgentDev');
 const flagIdx = process.argv.indexOf('--version');
-const fallback = flagIdx >= 0 ? process.argv[flagIdx + 1] : '0.1.1';
+const explicitVersion = flagIdx >= 0 ? process.argv[flagIdx + 1] : null;
 
-// 目标版本：优先相邻框架仓库实际版本，缺失时用 fallback（精确版本，无 range 前缀）
-function versionOf(dir) {
+// 包名 ≠ 目录名的特例（npm 包名与 packages/ 目录不一致）
+const PACKAGE_DIR_OVERRIDES = { '@agentdevjs/rokid-bot': 'rokid-feature' };
+
+// 目标版本：显式 --version 优先；否则读相邻仓库对应包的 version。
+// 无法解析（目录缺失 / 无 version 字段）时返回 null，调用方保留原声明——
+// 绝不写出一个未经确认的猜测版本。
+function versionOf(name) {
+  if (explicitVersion) return explicitVersion;
+  const dir = PACKAGE_DIR_OVERRIDES[name] ?? name.slice('@agentdevjs/'.length);
   const localPkg = join(agentdevRoot, 'packages', dir, 'package.json');
   if (existsSync(localPkg)) {
-    return String(JSON.parse(readFileSync(localPkg, 'utf8')).version);
+    const v = JSON.parse(readFileSync(localPkg, 'utf8')).version;
+    if (typeof v === 'string') return v;
   }
-  return fallback;
+  return null;
 }
 
 const IS_WIN = process.platform === 'win32';
@@ -49,29 +57,45 @@ function runNpm(args, cwd = projectRoot) {
   }
 }
 
-const fileDeps = Object.entries(pkg.dependencies || {}).filter(
-  ([, spec]) => String(spec).startsWith('file:../AgentDev/packages/')
-);
+// 全部 @agentdevjs/* 依赖：声明一律改写为相邻仓库对应包的精确版本。
+// 包名去掉 scope 即 packages/ 目录名。框架锁步包四包同版本；生态包不参与
+// 锁步、各自独立版本，逐包读取即可对齐——未重发的包写 exact 旧版本，
+// 与 registry 一致，无副作用。exact 声明同时强制 lock 重解析：升级批次的
+// 包（如 0.1.0 → 0.1.1）在 pull + npm install 后必然生效，不会停留在
+// lock 钉住的旧版。
+const AGENTDEV_DEPS = Object.keys(pkg.dependencies || {}).filter((name) => name.startsWith('@agentdevjs/'));
 
 let changed = 0;
-for (const [name] of fileDeps) {
-  // file:../AgentDev/packages/<dir> 的目录名从原 spec 中取
-  const dir = pkg.dependencies[name].slice('file:../AgentDev/packages/'.length);
-  const version = versionOf(dir);
+const skipped = [];
+for (const name of AGENTDEV_DEPS) {
+  const spec = pkg.dependencies[name];
+  const version = versionOf(name);
+  if (version === null) {
+    skipped.push(`${name}=${spec ?? '(缺声明)'}`);
+    continue;
+  }
+  if (spec === version) continue;
+  console.log(`[agentdev:published] ${name}: ${spec} -> ${version}`);
   pkg.dependencies[name] = version;
-  console.log(`[agentdev:published] ${name}: file:../AgentDev/packages/${dir} -> ${version}`);
   changed += 1;
 }
 if (changed > 0) writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 else console.log('[agentdev:published] 根声明已是发布态（semver）。');
+if (skipped.length) {
+  console.log(`[agentdev:published] 相邻仓库无法解析版本，保留原声明：${skipped.join(', ')}`);
+}
 
 // features/ 子包的 core devDep 对齐框架版本
-const coreVersion = versionOf('core');
+const coreVersion = versionOf('@agentdevjs/core');
 for (const name of FEATURE_DIRS) {
   const subPkgPath = join(projectRoot, 'features', name, 'package.json');
   if (!existsSync(subPkgPath)) continue;
   const subPkg = JSON.parse(readFileSync(subPkgPath, 'utf8'));
   const spec = subPkg.devDependencies?.['@agentdevjs/core'];
+  if (coreVersion === null) {
+    console.log(`[agentdev:published] features/${name}: 无法解析 core 目标版本，保留 ${spec ?? '(缺声明)'}`);
+    continue;
+  }
   if (typeof spec === 'string' && spec !== coreVersion) {
     console.log(`[agentdev:published] features/${name}: @agentdevjs/core ${spec} -> ${coreVersion}`);
     subPkg.devDependencies['@agentdevjs/core'] = coreVersion;
