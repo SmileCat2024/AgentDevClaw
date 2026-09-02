@@ -86,3 +86,34 @@ describe('check-agentdev-local probe（开发态本地链接不变量）', () =>
     assert.equal(probe(join(root, 'nope'), 'core', true, null).status, 'missing');
   });
 });
+
+describe('check-agentdev-local probe（发布态 registry 安装不变量）', () => {
+  it('本地链接判为 linked，reason 指引 agentdev:published', () => {
+    const target = pkgDir('pub-sibling-core');
+    const installed = join(root, 'pub-linked-core');
+    link(target, installed);
+    const state = probe(installed, 'core', false, null, true);
+    assert.equal(state.status, 'linked');
+    assert.match(reason(state), /agentdev:published/);
+  });
+
+  it('失效链接同样判为 linked', () => {
+    const target = pkgDir('pub-doomed-core');
+    const installed = join(root, 'pub-dangling-core');
+    link(target, installed);
+    rmSync(target, { recursive: true, force: true });
+    const state = probe(installed, 'core', false, null, true);
+    assert.equal(state.status, 'linked');
+    assert.match(reason(state), /发布态/);
+  });
+
+  it('registry 实体目录在 rejectLink 下仍判 ok', () => {
+    const copy = pkgDir('pub-registry-copy');
+    const state = probe(copy, 'core', false, null, true);
+    assert.equal(state.status, 'ok');
+  });
+
+  it('包缺失在发布态判为 missing（沿用语义）', () => {
+    assert.equal(probe(join(root, 'pub-nope'), 'core', false, null, true).status, 'missing');
+  });
+});

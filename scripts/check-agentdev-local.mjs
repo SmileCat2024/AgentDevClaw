@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 // prestart 预检：node_modules/@agentdevjs/*（4 框架包 + 14 生态包）必须是"可用构建"
-// （dist 存在且含所需导出）。
-// 开发态额外强制"本地链接不变量"：@agentdevjs/core 声明为 file: 时，node_modules 中的
+// （dist 存在且含所需导出），且安装形态必须与声明形态一致。
+// 开发态强制"本地链接不变量"：@agentdevjs/core 声明为 file: 时，node_modules 中的
 // 包必须是指向相邻框架仓库对应包的链接（junction/symlink）。实体拷贝、失效链接、指向
 // 其他目标的链接一律不可用——快照必然与框架仓库脱节，缺失的新 API 只会在运行期以
 // "framework too old" 一类错误暴露（模型热切换事故的根因）。
+// 发布态强制"registry 安装不变量"：声明为 semver 时，node_modules 中不允许出现
+// 本地链接——npm install 不会替换恰好满足声明的链接，残留链接会让服务静默跑在
+// 与声明脱节的框架版本上。发布态发现任何不一致只报错并指引 agentdev:published，
+// 绝不自动改链（registry 安装被偷偷换成相邻仓库链接 = 另一类静默漂移）。
 // 背景：依赖经 package.json 的 file:../AgentDev/packages/* 以 junction 形式提供
-// （发布态为 npm 正式包，自带 dist，无链接概念，链接校验自动跳过）。npm install 可能
-// 冲掉/未重建链接，本脚本把失败提前为一条可执行的修复指引；若相邻 AgentDev 仓库构建
-// 可用，则自动重建全部链接。
+// （发布态为 npm 正式包，自带 dist）。开发态下 npm install 可能冲掉/未重建链接，
+// 本脚本把失败提前为一条可执行的修复指引；若相邻 AgentDev 仓库构建可用，则自动
+// 重建全部链接。
 import { existsSync, lstatSync, readFileSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawnSync } from 'child_process';
@@ -72,7 +76,9 @@ function isDevForm() {
 // 探测单个包。expectLink（开发态 node_modules 探测）时强制本地链接不变量：
 // 实体目录 / 失效链接 / 指向 expectedReal 之外目标的链接均判 unlinked。
 // expectedReal 为相邻仓库对应包的 realpath，null 表示跳过目标比对（相邻包缺失时）。
-function probe(path, name, expectLink = false, expectedReal = null) {
+// rejectLink（发布态 node_modules 探测）时强制 registry 安装不变量：
+// 本地链接判为 linked（与声明形态不一致），实体目录正常参与 dist/导出校验。
+function probe(path, name, expectLink = false, expectedReal = null, rejectLink = false) {
   let st;
   try {
     st = lstatSync(path);
@@ -92,6 +98,15 @@ function probe(path, name, expectLink = false, expectedReal = null) {
     if (expectedReal && real !== expectedReal) {
       return { status: 'unlinked', why: `链接指向了 ${real} 而非相邻框架仓库对应包` };
     }
+  }
+  if (rejectLink && st.isSymbolicLink()) {
+    let real;
+    try {
+      real = realpathSync(path);
+    } catch {
+      real = '目标已失效';
+    }
+    return { status: 'linked', why: real };
   }
   const isFeat = isFeaturePackage(name);
   if (isFeat) {
@@ -121,6 +136,9 @@ function reason(state) {
   if (state.status === 'unlinked') {
     return `${state.why || '未链接到相邻框架仓库'}；开发态要求 node_modules/@agentdevjs/* 为指向相邻仓库的本地链接，实体快照会与框架仓库脱节（新 API 缺失，运行期报 "framework too old"）`;
   }
+  if (state.status === 'linked') {
+    return `是本地链接 -> ${state.why}；发布态要求 npm registry 安装，本地链接会绕过发布版本、与根声明脱节；执行 npm run agentdev:published 摘除链接并安装 registry 最新版`;
+  }
   if (state.status === 'no-dist') {
     if (state.missingFiles) {
       return `缺少构建产物 ${state.missingFiles.join(', ')}（框架仓库未构建，或构建被中断）`;
@@ -148,7 +166,7 @@ function main() {
 
   const states = new Map();
   for (const name of PACKAGES) {
-    states.set(name, probe(join(scopeDir, name), name, isDev, expectedReals.get(name)));
+    states.set(name, probe(join(scopeDir, name), name, isDev, expectedReals.get(name), !isDev));
   }
 
   const allOk = [...states.values()].every((s) => s.status === 'ok');
@@ -159,6 +177,21 @@ function main() {
       console.log(`[agentdev:check] @agentdevjs/${name} 可用（${where}）`);
     }
     process.exit(0);
+  }
+
+  // 发布态：只报错 + 给出修复路径，绝不自动修复——把 registry 安装偷偷改链到
+  // 相邻仓库，等于制造另一类与声明脱节的静默漂移。
+  if (!isDev) {
+    for (const name of PACKAGES) {
+      const state = states.get(name);
+      if (state.status !== 'ok') {
+        console.error(`[agentdev:check] @agentdevjs/${name} 不可用：${reason(state)}`);
+      }
+    }
+    console.error(`[agentdev:check] 发布态要求 @agentdevjs/* 为 npm registry 安装：
+  1. 包缺失 / dist 缺失 / 导出过期 -> npm install
+  2. 存在本地链接 -> npm run agentdev:published   （摘除链接并安装 registry 最新版）`);
+    process.exit(1);
   }
 
   // 存在不可用的包：若相邻 AgentDev 仓库对应包构建都可用，自动重建全部链接
