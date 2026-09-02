@@ -9,7 +9,9 @@
 //     发布态下临时调试本地源码（npm install 会将其冲回 registry 版）。
 //
 // 版本来源：优先读相邻 AgentDev 仓库各包的 version（即刚发布的内容）；
-// 相邻仓库不在时用 --version 显式指定，或采用默认 ^0.1.0。
+// 相邻仓库不在时用 --version 显式指定。声明一律写精确版本（exact pin，
+// 不带 range 前缀）：框架锁步包永远同版本同批发布，消费端只取确定存在的
+// 版本，杜绝 range 漂移解析出错位组合。
 // features/ 下被预制 agent 源码引用的子包（见 prebuilt-feature-dirs.mjs）
 // 对 @agentdevjs/core 的 devDependency 同步对齐到目标版本，避免框架发版后
 // 子包构建类型停留在旧版。
@@ -24,13 +26,13 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 
 const agentdevRoot = resolve(projectRoot, '..', 'AgentDev');
 const flagIdx = process.argv.indexOf('--version');
-const fallback = flagIdx >= 0 ? process.argv[flagIdx + 1] : '^0.1.0';
+const fallback = flagIdx >= 0 ? process.argv[flagIdx + 1] : '0.1.1';
 
-// 目标版本：优先相邻框架仓库实际版本，缺失时用 fallback
+// 目标版本：优先相邻框架仓库实际版本，缺失时用 fallback（精确版本，无 range 前缀）
 function versionOf(dir) {
   const localPkg = join(agentdevRoot, 'packages', dir, 'package.json');
   if (existsSync(localPkg)) {
-    return `^${JSON.parse(readFileSync(localPkg, 'utf8')).version}`;
+    return String(JSON.parse(readFileSync(localPkg, 'utf8')).version);
   }
   return fallback;
 }
@@ -70,12 +72,24 @@ for (const name of FEATURE_DIRS) {
   if (!existsSync(subPkgPath)) continue;
   const subPkg = JSON.parse(readFileSync(subPkgPath, 'utf8'));
   const spec = subPkg.devDependencies?.['@agentdevjs/core'];
-  if (typeof spec === 'string' && spec.startsWith('^') && spec !== coreVersion) {
+  if (typeof spec === 'string' && spec !== coreVersion) {
     console.log(`[agentdev:published] features/${name}: @agentdevjs/core ${spec} -> ${coreVersion}`);
     subPkg.devDependencies['@agentdevjs/core'] = coreVersion;
     writeFileSync(subPkgPath, JSON.stringify(subPkg, null, 2) + '\n');
   }
 }
+
+// 发布态自检：四个框架包必须是同一精确版本（exact pin），否则切换不算完成
+const FRAMEWORK_PKGS = ['@agentdevjs/core', '@agentdevjs/llm', '@agentdevjs/viewer', '@agentdevjs/mcp'];
+const declared = FRAMEWORK_PKGS.map((name) => pkg.dependencies?.[name]);
+if (declared.some((spec) => typeof spec !== 'string') || new Set(declared).size !== 1) {
+  console.error(
+    `[agentdev:published] 框架包声明不是统一精确版本：` +
+      FRAMEWORK_PKGS.map((name, i) => `${name}=${declared[i] ?? '(缺声明)'}`).join(', ')
+  );
+  process.exit(1);
+}
+console.log(`[agentdev:published] 框架包声明自检通过：${declared[0]}`);
 
 runNpm(['install', '--no-audit', '--no-fund']);
 runNpm(['run', 'build']);

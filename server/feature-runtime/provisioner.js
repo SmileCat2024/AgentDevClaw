@@ -1,9 +1,10 @@
 import crypto from 'crypto';
 import path from 'path';
 import process from 'process';
-import { existsSync, promises as fs } from 'fs';
+import { existsSync, promises as fs, readFileSync } from 'fs';
 
-import { AGENTDEV_ROOT, AGENT_RUNTIME_ENVS_ROOT } from '../shared/constants.js';
+import { AGENTDEV_ROOT, PROJECT_ROOT, AGENT_RUNTIME_ENVS_ROOT } from '../shared/constants.js';
+import { isExactSemver } from './schemas.js';
 
 function npmCommand() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -20,6 +21,41 @@ function npmInstallSpawnSpec() {
 
 function toFileDependencySpec(targetPath) {
   return `file:${path.resolve(targetPath).replace(/\\/g, '/')}`;
+}
+
+/**
+ * 框架包（@agentdevjs/core|llm|viewer|mcp）依赖来源：
+ * - 开发态（相邻框架仓库存在）：以本地源码目录满足生态包 peer，改动即生效；
+ * - 发布态：相邻仓库不存在，file: 会指向失效路径，改从宿主根声明读取
+ *   确切版本走 registry。锁步包 exact pin 保证任一时刻只有一个版本语义。
+ */
+function frameworkDependencySpecs() {
+  const localCorePkg = path.join(AGENTDEV_ROOT, 'packages', 'core', 'package.json');
+  if (existsSync(localCorePkg)) {
+    return {
+      '@agentdevjs/core': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'core')),
+      '@agentdevjs/llm': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'llm')),
+      '@agentdevjs/viewer': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'viewer')),
+      '@agentdevjs/mcp': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'mcp')),
+    };
+  }
+  const rootPkg = JSON.parse(readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
+  const spec = (name) => {
+    const declared = rootPkg.dependencies?.[name];
+    if (typeof declared !== 'string' || !isExactSemver(declared)) {
+      throw new Error(
+        `发布态运行环境无法解析 ${name}：宿主根声明缺失或不是精确版本` +
+          `（当前值：${declared ?? '(缺声明)'}）。请先执行 npm run agentdev:published 切换到发布态。`
+      );
+    }
+    return declared;
+  };
+  return {
+    '@agentdevjs/core': spec('@agentdevjs/core'),
+    '@agentdevjs/llm': spec('@agentdevjs/llm'),
+    '@agentdevjs/viewer': spec('@agentdevjs/viewer'),
+    '@agentdevjs/mcp': spec('@agentdevjs/mcp'),
+  };
 }
 
 function stableJson(value) {
@@ -43,6 +79,9 @@ function dependencyEntries(plan) {
 export function computeRuntimeDependencyHash(plan) {
   const payload = {
     agentdevRoot: path.resolve(AGENTDEV_ROOT),
+    // 框架依赖来源参与 hash：发布态下框架版本升级会改变该字段，触发环境重建，
+    // 避免「升级了框架但旧环境继续跑旧快照」；开发态下 file: 路径固定，hash 稳定。
+    frameworkSpecs: frameworkDependencySpecs(),
     dependencies: dependencyEntries(plan),
   };
   return crypto.createHash('sha256').update(stableJson(payload)).digest('hex').slice(0, 24);
@@ -100,17 +139,18 @@ async function provisionAgentSource(plan, environmentDir) {
 export async function provisionRuntimeEnvironment({ plan, root } = {}) {
   if (!plan?.agent?.id) throw new Error('Runtime plan 缺少 agent.id。');
   const dependencyHash = computeRuntimeDependencyHash(plan);
+  const frameworkSpecs = frameworkDependencySpecs();
   const environmentDir = getRuntimeEnvironmentRoot(plan.agent.id, dependencyHash, root);
   const packageJsonPath = path.join(environmentDir, 'package.json');
   const lockPath = path.join(environmentDir, 'runtime-lock.json');
   const dependencies = {
-    // 拆分后（ADR-0003 / 票 011/012）框架以 @agentdevjs/core|llm|viewer|mcp 四包提供，
-    // 尚未发布 npm，宿主 env 以本地源码目录满足生态包 peer，保证 core 单例。
-    '@agentdevjs/core': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'core')),
-    '@agentdevjs/llm': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'llm')),
-    '@agentdevjs/viewer': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'viewer')),
+    // 框架四包来源见 frameworkDependencySpecs()：开发态 file: 本地源码，
+    // 发布态从宿主根声明确切版本解析，保证 core 单例语义。
+    '@agentdevjs/core': frameworkSpecs['@agentdevjs/core'],
+    '@agentdevjs/llm': frameworkSpecs['@agentdevjs/llm'],
+    '@agentdevjs/viewer': frameworkSpecs['@agentdevjs/viewer'],
     ...(plan.features.some((f) => f.package === '@agentdevjs/websearch-feature')
-      ? { '@agentdevjs/mcp': toFileDependencySpec(path.join(AGENTDEV_ROOT, 'packages', 'mcp')) }
+      ? { '@agentdevjs/mcp': frameworkSpecs['@agentdevjs/mcp'] }
       : {}),
     ...Object.fromEntries(dependencyEntries(plan).map((entry) => [entry.package, toFileDependencySpec(entry.archivePath)])),
   };
