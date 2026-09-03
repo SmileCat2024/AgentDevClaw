@@ -6,6 +6,14 @@
  * commit / discard / branch 简单操作与图形化提交历史（SVG 泳道，
  * 算法在 git-graph.js）。
  *
+ * 远程会话适配（R2-06，ADR-0008 #5 / ADR-0011）：请求体携带宿主级命名空间
+ * 身份字段（agentId，当前焦点会话派生；本地身份原样带，服务端忽略），服务端
+ * 识别 remote: 前缀后把请求转发到远程同名路由——dir 原样透传（远程会话目录
+ * 取 catalog projectDir 同源的 sessionMeta 留档，是远程机本地路径），远程端
+ * 自己 validateDir/resolveGitRoot。写操作携带幂等键（x-idempotency-key，
+ * 既有 operationId 体系）；远程会话无 write 能力位时面板降级禁写（照能力
+ * 矩阵既有形态），写能力齐备则与本地一致、不出现远程标识。
+ *
  * 布局（上下双区，均可独立折叠 + 中间分隔条拖拽调高）：
  *   ┌────────────────────────────┐
  *   │ 更改与暂存  [概况条] [⟳]   │ ← 上区：概况（目录/远程关系/总数）
@@ -29,6 +37,7 @@
 
   const state = {
     dir: '',            // 当前会话绑定目录（面板视图身份）
+    agentId: '',        // 宿主级命名空间身份（请求时派生，与 dir 联动重置）
     root: '',           // 仓库根（服务端 rev-parse 解析）
     isRepo: true,
     repoMiss: 0,        // isRepo=false 的连续确认计数（防偶发误判）
@@ -100,13 +109,64 @@
 
   function currentSessionDir() {
     const sid = currentSessionId();
-    if (!sid) return '';
-    const agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
-    const sessions = Array.isArray(agent?.workspace_sessions?.sessions)
-      ? agent.workspace_sessions.sessions
-      : [];
-    const session = sessions.find((s) => String(s?.id || '').trim() === sid);
-    return String(session?.openDirectory || '').trim();
+    if (sid) {
+      const agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+      const sessions = Array.isArray(agent?.workspace_sessions?.sessions)
+        ? agent.workspace_sessions.sessions
+        : [];
+      const session = sessions.find((s) => String(s?.id || '').trim() === sid);
+      const dir = String(session?.openDirectory || '').trim();
+      if (dir) return dir;
+    }
+    // 远程会话（R2-06）：远程条目不在 allAgents（无 workspace_sessions 记录），
+    // 目录取当前会话富元数据留档——agent_detail 经服务端命名空间分支转发返回
+    // 的 openDirectory（远程机本地路径，与 catalog projectDir 同源）。非远程
+    // 焦点不进入该兜底（本地空目录语义字节级不动）。
+    if (isRemoteFocus()) {
+      const viewState = typeof readCurrentSessionViewState === 'function' ? readCurrentSessionViewState() : null;
+      return String(viewState?.sessionMeta?.openDirectory || '').trim();
+    }
+    return '';
+  }
+
+  // ── 远程适配（R2-06，ADR-0008 #5 / ADR-0011 能力矩阵）──────────────
+
+  function isRemoteNamespaceId(agentId) {
+    return typeof agentId === 'string' && agentId.startsWith('remote:');
+  }
+
+  function isRemoteFocus() {
+    // 远程焦点：目录条目命名空间身份。focusedAgentId 是 switchAgent 收敛后的
+    // 宿主级命名空间 id（如 remote:conn:host）；currentRuntimeAgentId 是命名
+    // 空间运行时引用，两者任一携带 remote: 前缀即远程会话视图。
+    const focused = typeof focusedAgentId === 'string' ? focusedAgentId : '';
+    const runtimeId = typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '';
+    return isRemoteNamespaceId(focused) || isRemoteNamespaceId(runtimeId);
+  }
+
+  /**
+   * 宿主级命名空间身份字段（ADR-0008 #5）：远程会话 = switchAgent 已收敛的
+   * 宿主级命名空间 id（remote:<connId>:<hostId>），服务端据此解析连接并转发；
+   * 本地会话原样带宿主 agentId——服务端只识别 remote: 前缀，非命名空间身份
+   * 被忽略，本地分支字节级不动。
+   */
+  function currentHostAgentId() {
+    return typeof focusedAgentId === 'string' ? focusedAgentId.trim() : '';
+  }
+
+  /**
+   * 能力门控（ADR-0011 能力矩阵）：git 写操作属 host 写能力。远程会话 write
+   * 能力位为 false（旧远程/断开）时禁写；写能力齐备则与本地一致、不出现
+   * 远程标识。本地身份恒可写。capabilityFor 未挂载（测试沙箱/集成窗）时按
+   * 身份判定：本地默认可写，远程命名空间保守禁写。
+   */
+  function canWriteGit() {
+    const agentId = currentHostAgentId();
+    if (isRemoteNamespaceId(agentId)) {
+      const capabilityFor = (typeof window !== 'undefined' && window.RemoteConnections?.capabilityFor) || null;
+      return typeof capabilityFor === 'function' ? capabilityFor(agentId, 'write') === true : false;
+    }
+    return true;
   }
 
   // ── 服务端调用 ────────────────────────────────────────────────────
@@ -115,21 +175,40 @@
   // 后续刷新全部被守卫吞掉，表现为"狂点刷新没反应"）
   const TIMEOUT_MS = { graph: 20000, default: 10000 };
 
+  // 写端点集合（幂等键强制；读端点 status/graph/branches/commit_files 不带）
+  const WRITE_OPS = new Set(['stage', 'unstage', 'commit', 'discard', 'branch', 'stash']);
+
+  // 幂等键（ADR-0011，既有 operationId 体系）：写类提交统一携带
+  // x-idempotency-key（本地忽略、远程强制）；与各模块同款本地实现。
+  function newIdempotencyKey() {
+    const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+    if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+      return cryptoObj.randomUUID();
+    }
+    return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
   async function api(op, body) {
+    // R2-06：请求体补宿主级命名空间身份字段（当前会话派生；本地身份原样带，
+    // 服务端忽略非命名空间身份）；写操作补幂等键（既有 operationId 体系，
+    // 经 x-idempotency-key 头传递，本地忽略、远程强制）。
+    const payload = { ...(body || {}), agentId: currentHostAgentId() };
+    const headers = { 'Content-Type': 'application/json' };
+    if (WRITE_OPS.has(op)) headers['x-idempotency-key'] = newIdempotencyKey();
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS[op] || TIMEOUT_MS.default);
     try {
       const res = await fetch('/protoclaw/git/' + op, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        headers,
+        body: JSON.stringify(payload),
         signal: ctrl.signal,
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || data.ok !== true) {
-        const detail = String(data?.error || ('HTTP ' + res.status));
+        const detail = String(data?.message || data?.error || ('HTTP ' + res.status));
         // 失败留痕：UI 呈现之外，Console 同步记录便于定位环境问题
-        console.warn('[GitPanel] ' + op + ' failed: ' + detail + ' (dir=' + String(body?.dir || '') + ')');
+        console.warn('[GitPanel] ' + op + ' failed: ' + detail + ' (dir=' + String(payload?.dir || '') + ')');
         throw new Error(detail);
       }
       return data;
@@ -313,8 +392,15 @@
    */
   function watchDir() {
     const dir = currentSessionDir();
-    if (!dir || dir === state.dir) return;
+    if (!dir) return;
+    // 视图身份 =（目录，宿主级命名空间身份）：目录来自目录数据源（本地
+    // workspace_sessions / 远程 sessionMeta 留档），身份随焦点会话派生。
+    // 身份变化（如跨连接同路径目录）同样切换视图身份，否则面板会拿旧连接
+    // 的仓库数据冒充新会话状态。
+    const agentId = currentHostAgentId();
+    if (dir === state.dir && agentId === state.agentId) return;
     state.dir = dir;
+    state.agentId = agentId;
     state.loadTried = false;
     state.ensureAttempts = 0;
     state.root = '';
@@ -395,11 +481,13 @@
     const dir = slash >= 0 ? path.slice(0, slash) : '';
     const icon = fileTypeIcon(path);
     // 行内操作：悬停显隐的图标按钮（+ 暂存 / − 取消暂存 / ↺ 丢弃）
+    // 能力门控（ADR-0011）：无写能力（远程 write 位 false）时禁用写按钮
+    const writable = canWriteGit();
     const actions = inConflict ? '' : [
       group === 'staged'
-        ? '<button class="git-file-action" data-gp-action="unstage" data-gp-file="' + esc(file.path) + '" title="' + esc(zh('取消暂存', 'Unstage')) + '">&#8722;</button>'
-        : '<button class="git-file-action" data-gp-action="stage" data-gp-file="' + esc(file.path) + '" title="' + esc(zh('暂存', 'Stage')) + '">+</button>',
-      '<button class="git-file-action is-danger" data-gp-action="discard" data-gp-file="' + esc(file.path) + '" title="' + esc(zh('丢弃改动（不可恢复）', 'Discard changes (cannot be undone)')) + '">&#8634;</button>',
+        ? '<button class="git-file-action" data-gp-action="unstage" data-gp-file="' + esc(file.path) + '"' + (writable ? '' : ' disabled') + ' title="' + esc(zh('取消暂存', 'Unstage')) + '">&#8722;</button>'
+        : '<button class="git-file-action" data-gp-action="stage" data-gp-file="' + esc(file.path) + '"' + (writable ? '' : ' disabled') + ' title="' + esc(zh('暂存', 'Stage')) + '">+</button>',
+      '<button class="git-file-action is-danger" data-gp-action="discard" data-gp-file="' + esc(file.path) + '"' + (writable ? '' : ' disabled') + ' title="' + esc(zh('丢弃改动（不可恢复）', 'Discard changes (cannot be undone)')) + '">&#8634;</button>',
     ].join('');
     return [
       '<div class="git-file' + (inConflict ? ' is-conflict' : '') + '" title="' + esc(path) + '">',
@@ -473,7 +561,7 @@
   }
 
   function renderCommitBox(stagedCount) {
-    const disabled = stagedCount === 0 || state.busy;
+    const disabled = stagedCount === 0 || state.busy || !canWriteGit();
     const branch = state.status?.current || '';
     const placeholder = branch
       ? zh('提交信息 (Ctrl+Enter 在 "' + branch + '" 上提交)', 'Commit message (Ctrl+Enter to commit on "' + branch + '")')
@@ -778,6 +866,11 @@
 
     const status = state.status || { files: [] };
     const { staged, changes, conflicts } = splitGroups(status.files || []);
+    // 能力门控（ADR-0011）：无写能力时组级写动作一并禁用（照能力矩阵既有
+    // 形态），只读查看不受影响
+    const writable = canWriteGit();
+
+    // ── 上区：更改与暂存 ──
 
     // ── 上区：更改与暂存 ──
     const refreshBtn = '<button class="git-zone-btn' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="'
@@ -790,13 +883,13 @@
       renderCommitBox(staged.length),
       subSection('staged', zh('暂存的更改', 'Staged Changes'), staged.length,
         renderFilesList(staged, 'staged'),
-        staged.length ? '<button class="git-group-action" data-gp-action="unstage-all">' + esc(zh('全部取消', 'Unstage All')) + '</button>' : '',
+        staged.length ? '<button class="git-group-action" data-gp-action="unstage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部取消', 'Unstage All')) + '</button>' : '',
         state.subFold.staged),
       conflicts.length ? subSection('conflict', zh('合并冲突', 'Merge Conflicts'), conflicts.length,
         renderFilesList(conflicts, 'conflict'), '', state.subFold.conflict) : '',
       subSection('changes', zh('更改', 'Changes'), changes.length,
         renderFilesList(changes, 'changes'),
-        changes.length ? '<button class="git-group-action" data-gp-action="stage-all">' + esc(zh('全部暂存', 'Stage All')) + '</button>' : '',
+        changes.length ? '<button class="git-group-action" data-gp-action="stage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部暂存', 'Stage All')) + '</button>' : '',
         state.subFold.changes),
     ].join('');
 
@@ -863,6 +956,14 @@
 
   async function runAction(fn) {
     if (state.busy) return;
+    // 能力门控兜底（ADR-0011）：无写能力时写操作在提交前拦截，显式报错
+    // 不静默；主渲染门控在按钮 disabled（renderFileRow / renderCommitBox /
+    // stage-all / unstage-all）。
+    if (!canWriteGit()) {
+      state.error = zh('远程连接未启用写能力，无法执行该操作', 'Remote connection has no write capability; operation is disabled');
+      repaint();
+      return;
+    }
     state.busy = true;
     state.notice = '';
     repaint();
