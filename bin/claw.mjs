@@ -204,6 +204,11 @@ async function handleConfigGroups(args = []) {
 
 const CLAW_SERVER_BASE = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
+// 事件停滞判定阈值：孤儿执行态（runtime 死亡后看板残留 running，turn.completed
+// 永不收敛）唯一可观测的死亡事实是事件停滞——活跃执行中 runtime 事件持续刷新
+// lastEventAt，超阈值零事件按停滞处置（调度方查日志/介入），不再无限续挂。
+const STALE_WATCH_MS = 300_000;
+
 async function clawServerFetch(pathname, options = {}) {
   // 单密码认证开启时，runtime 环境自带的内部服务令牌等价于已认证会话
   // （server/auth.js authenticateInternal）；未设置则维持匿名语义。
@@ -220,7 +225,12 @@ async function clawServerFetch(pathname, options = {}) {
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
+    const error = new Error(payload.error || payload.message || `HTTP ${response.status}`);
+    // 状态与错误码挂到异常上：watch 等轮询方据此区分「线程已删（404，
+    // 确定终态）」与「server 不可达（连续错误才终态）」
+    error.status = response.status;
+    error.code = payload.code;
+    throw error;
   }
   return payload;
 }
@@ -276,7 +286,7 @@ function printThreadsHelp() {
   console.log('  claw threads show <thread-id> [--format text|json]');
   console.log('  claw threads events <thread-id> [--after N] [--format text|json|jsonl]');
   console.log('  claw threads send <thread-id> --text TEXT [--kind K] [--source S] [--idempotency-key K]');
-  console.log('  claw threads watch <thread-id>... [--interval S] [--timeout S] [--with-result]   阻塞监控至落定/失败/超时（退出码 0/3/2/1），--with-result 附带末轮回复；多个 thread-id 时任一落定即返回（any-settle）');
+  console.log('  claw threads watch <thread-id>... [--interval S] [--timeout S] [--with-result]   阻塞监控至落定/失败/终态/超时/停滞（退出码 0/3/2/1），--with-result 附带末轮回复；多个 thread-id 时任一落定即返回（any-settle）');
   console.log('  claw threads deliver <thread-id> [--format text|json]');
   console.log('  claw threads advance <thread-id> --to-session ID --from-session ID [--expected-revision N] [--end-kind K]');
   console.log('  claw threads handoff-failed <thread-id> [--reason R] [--stage S] [--error E]');
@@ -463,6 +473,7 @@ async function handleThreads(args = []) {
     if (jsonl) console.log(JSON.stringify({ watch: 'done', ...settled, ...(reply ? { lastReply: reply } : {}) }));
     else {
       console.log(summary);
+      if (settled.detail) console.log(`  detail: ${settled.detail}`);
       if (reply) printLastReply(reply);
     }
     process.exitCode = settled.exitCode;
@@ -563,8 +574,9 @@ async function waitForTurnStarted(threadId, maxSeconds) {
 
 // 单调用监控：内部轮询 lifeState + 事件游标，新事件即时透传，线程落定/
 // 失败/终态/超时时返回——把"90 秒固定频率手工巡检"折叠成一次阻塞调用。
-// 退出码：0=落定或线程终态；2=超时（继续 watch 同一命令即可续挂）；
-// 3=failed=true（需按故障表介入）；1=线程/server 连续不可达。
+// 退出码：0=落定或线程终态（含归档/关闭/已删除）；2=超时（继续 watch 同一
+// 命令即可续挂）；3=failed=true 或事件停滞（需按故障表介入）；
+// 1=线程/server 连续不可达。
 //
 // quiet（多线程 any-settle 复用）：不透传事件流——多个线程的事件交错输出
 // 无法归属，any-settle 模式下只等结果，胜出线程的信息由摘要行标注。
@@ -590,6 +602,11 @@ async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
       thread = (await clawServerFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`))?.thread;
       errors = 0;
     } catch (error) {
+      // 线程已删除（record 移除后 404 thread_not_found）：确定终态，续挂无
+      // 意义，立即退出——不与 server 不可达混同（那需要连续错误确认）。
+      if (error?.code === 'thread_not_found' || error?.status === 404) {
+        return { reason: 'thread not found', detail: String(error?.message || error), lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
+      }
       errors += 1;
       if (errors >= 3) {
         return { reason: 'unreachable', detail: String(error?.message || error), lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 1 };
@@ -616,10 +633,19 @@ async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
     if (failed) {
       return { reason: 'failed', lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 3 };
     }
-    if (['archived', 'closed'].includes(thread?.status)) {
-      return { reason: `thread ${thread.status}`, lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
+    // 终态判定用合成 lifeState：归档是宿主层标记（archive-index），record
+    // status 恒为 'open'，按 status 判 archived 永不命中
+    if (['archived', 'closed'].includes(lifeState)) {
+      return { reason: `thread ${lifeState}`, lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 0 };
     }
     const pending = Array.isArray(thread?.commands) ? thread.commands.filter((command) => command.status === 'pending').length : 0;
+    // 孤儿执行/滞留：lifeState 卡在 executing（runtime 死亡后看板残留 running）
+    // 或 pending-commands（runtime 永不承接）且事件长期停滞——继续挂只会等来
+    // 永不出现的 turn.completed，按停滞终态处置。
+    const lastEventAt = Number(thread?.lastEventAt) || 0;
+    if (!failed && ['executing', 'pending-commands'].includes(lifeState) && lastEventAt && Date.now() - lastEventAt > STALE_WATCH_MS) {
+      return { reason: 'stalled', detail: `lifeState=${lifeState} 事件停滞 ${Math.round((Date.now() - lastEventAt) / 1000)}s——runtime 可能已死亡，查 agent 日志后再决定介入方式`, lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 3 };
+    }
     if (events.some((event) => event.type === 'turn.completed')) turnSettled = true;
     if (events.some((event) => event.type === 'turn.started')) turnSettled = false; // 链式多轮：新一轮已接棒
     if (turnSettled && lifeState !== 'executing') {

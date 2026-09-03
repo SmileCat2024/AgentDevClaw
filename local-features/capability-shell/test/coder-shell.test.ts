@@ -311,6 +311,61 @@ describe('coder_shell watch 多线程 any-settle', () => {
   });
 });
 
+describe('coder_shell watch 状态矩阵（生命周期终态与停滞）', () => {
+  it('归档线程：lifeState=archived 即终态 done reason=thread archived（record status 恒 open）', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: stubFetch([
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 10 } },
+        // 归档快照的真实形态：status='open'（archive-index 独立标记），lifeState='archived'
+        { match: (u) => u.endsWith('/threads/wt-arch'), body: { ok: true, thread: { threadId: 'wt-arch', lifeState: 'archived', status: 'open', failed: false, archivedAt: 1, commands: [] } } },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'watch wt-arch', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('done reason=thread archived'), r.output);
+  });
+
+  it('已删除线程（404 thread_not_found）：确定终态立即返回，不与 server 不可达混同', async () => {
+    let threadFetches = 0;
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: (async (url: string) => {
+        if (url.includes('/events')) {
+          return { ok: true, status: 200, json: async () => ({ ok: true, events: [], cursor: 0 }) };
+        }
+        if (url.endsWith('/threads/wt-gone')) {
+          threadFetches += 1;
+          return { ok: false, status: 404, json: async () => ({ ok: false, code: 'thread_not_found', error: 'Thread not found' }) };
+        }
+        return { ok: false, status: 404, json: async () => ({ ok: false, error: `no route: ${url}` }) };
+      }) as unknown as FetchLike,
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'watch wt-gone', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('done reason=thread not found'), r.output);
+    assert.ok(r.output.includes('thread_not_found'), `detail 应含错误码: ${r.output}`);
+    assert.equal(threadFetches, 1, '404 是确定终态，不应累计 3 次连续错误');
+  });
+
+  it('孤儿执行：executing 且事件停滞 → done reason=stalled（runtime 死亡后看板残留 running）', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: stubFetch([
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 10 } },
+        { match: (u) => u.endsWith('/threads/wt-orphan'), body: { ok: true, thread: { threadId: 'wt-orphan', lifeState: 'executing', status: 'open', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000 } } },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'watch wt-orphan', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('done reason=stalled'), r.output);
+    assert.ok(r.output.includes('事件停滞'), r.output);
+  });
+});
+
 describe('coder_shell result 末轮回复', () => {
   it('取最后一个 agent_message 的全文，带 turn 与 chars', async () => {
     const adapters = createThreadsAdapters({

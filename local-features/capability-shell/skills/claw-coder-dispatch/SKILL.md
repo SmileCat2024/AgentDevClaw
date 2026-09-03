@@ -125,7 +125,7 @@ coder_shell command="send wt-xxx ticket-025-dispatch '<指令全文>'"
 `send` 一次调用完成"派发 + 确认开工 + 等干完"：投递后 adapter 内部轮询线程事件，直到**本轮落定**（turn.completed 且 lifeState 离开 executing，链式多轮自动跟随）才返回。输出：
 
 - `sent <commandId> duplicate=... delivered=...`（投递确认）
-- `done reason=turn.completed | failed | idle-no-pending | timeout | unreachable  life=... failed=... newEvents=...`（落定摘要）+ 事件尾
+- `done reason=turn.completed | failed | idle-no-pending | thread archived | thread closed | thread not found | stalled | timeout | unreachable  life=... failed=... newEvents=...`（落定摘要）+ 事件尾
 
 `done reason=timeout` 不是错误：指令仍在执行，用 `watch` 续挂。幂等键是防重发保险，缺失时参数校验道直接拒绝（`arg_rejected`）。
 
@@ -186,7 +186,7 @@ coder_shell command="result wt-xxx"
 
 watch / send 的落定摘要行为一致：
 
-- `done reason=...`：`turn.completed` 本轮落定（链式多轮自动跟随）；`idle-no-pending` 线程空闲无 pending；`failed` failed=true（按故障表介入）；`timeout` 工具超时（正常续挂信号，续挂 `watch` 即可）；`unreachable` 线程/server 连续不可达
+- `done reason=...`：`turn.completed` 本轮落定（链式多轮自动跟随）；`idle-no-pending` 线程空闲无 pending；`thread archived` / `thread closed` 线程已归档/已关闭（确定终态，勿续挂——继续工作开新线程）；`thread not found` 线程已删除（确定终态，勿续挂）；`stalled` 线程卡在 executing/pending-commands 且事件长期停滞（runtime 可能已死亡，按故障表介入）；`failed` failed=true（按故障表介入）；`timeout` 工具超时（正常续挂信号，续挂 `watch` 即可）；`unreachable` server 连续不可达
 - 摘要附事件尾（`turn.started` / `turn.completed` / `item.*` 等）供快速取证
 
 超时不需要做别的——`watch` 续挂之间不需要 sleep、不需要查 git status；事件流停滞或摘要异常时才取证。
@@ -325,11 +325,14 @@ coder_shell command="unarchive wt-xxx"
 | `runtimeWake` 失败（`head_session_missing`） | 会话索引、线程 head | head 会话已被删除，线程无法恢复：取消 pending 指令后归档线程，重新建线程派发；若环境无可用 Coder 会话，先 `new-session` 再派发 |
 | `runtimeWake` 失败（`runtime_ready_timeout`） | server 日志、agent 装配 | 唤起已尝试但 runtime 未 READY：查启动失败原因（如 worktree 缺 config），修复后重新 send（幂等键防重） |
 | send/watch 返回 `done reason=timeout` | 线程 lifeState | 指令仍在执行，属正常续挂信号：用 `watch` 续挂，不重复派发 |
+| watch 返回 `done reason=thread archived` / `thread closed` | `show` 确认归档者 | 确定终态：正常收口或按需开新线程；勿续挂、勿重发指令 |
+| watch 返回 `done reason=thread not found` | `list` 核对线程 | 线程已删除（用户或删除级联）：确定终态，勿续挂；未收口的工作用 `new-session` 重建线程派发 |
+| watch 返回 `done reason=stalled` | Debugger 最新日志、事件尾 | 线程卡在 executing/pending-commands 且事件长期停滞（runtime 可能已死亡）：查日志确认后走恢复路径（恢复指令 / deliver / 人工介入），确认死亡则归档重建 |
 | 只有 `delivered=1` 无开工迹象 | 线程事件、agent 连接状态 | 保持 dispatched，查 runtime，不重复派发（send 已自动唤起 runtime；此态多为唤起超时） |
 | 单次调用超时（done reason=timeout） | 事件尾、最新日志和进程状态 | 指令仍在执行：`watch` 续挂；长指令改成分段/定向命令，避免重复无界命令 |
 | 文件突然变干净 | `git log`、agent 最终报告 | 先确认是否自行 commit |
 | agent 接力 | `headSessionId`、`sessionIds`、新 agent 日志 | 通常继续监控，不立即重派 |
-| 线程长期无新事件 | show、agent lastActive、pending commands | 发一次明确恢复指令；仍无响应再 deliver / 人工介入 |
+| 线程长期无新事件 | show、agent lastActive、pending commands | watch 会以 `stalled` 终态返回（见上行）；未触发前可发一次明确恢复指令；仍无响应再 deliver / 人工介入 |
 | 修改了不相关文件 | git diff、文件时间、其他 agent | 分离归属，禁止 reset 覆盖 |
 | 测试失败 | 失败文件、是否基线失败 | 区分本票回归、环境失败、既有失败，报告真实边界 |
 

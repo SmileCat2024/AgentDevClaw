@@ -24,7 +24,9 @@ after(async () => {
 function startFakeClawServer() {
   const requests = [];
   const watchState = { showCalls: 0 };
+  let status = 200;
   const server = http.createServer(async (req, res) => {
+    status = 200;
     let body = '';
     for await (const chunk of req) body += chunk;
     requests.push({ method: req.method, url: req.url, body: body ? JSON.parse(body) : null });
@@ -66,6 +68,23 @@ function startFakeClawServer() {
       payload = { ok: true, thread: { threadId: 'wt-stuck', status: 'open', lifeState: 'executing', failed: false, commands: [] } };
     } else if (req.url === '/protoclaw/threads/wt-stuck/events') {
       payload = { ok: true, events: [], cursor: 0 };
+    } else if (req.url === '/protoclaw/threads/wt-archived' && req.method === 'GET') {
+      // 归档快照的真实形态：归档是宿主层标记，record status 仍 open，
+      // 合成 lifeState=archived（thread-routes _attachLifeState）
+      payload = { ok: true, thread: { threadId: 'wt-archived', status: 'open', lifeState: 'archived', failed: false, commands: [] } };
+    } else if (req.url === '/protoclaw/threads/wt-archived/events') {
+      payload = { ok: true, events: [], cursor: 0 };
+    } else if (req.url === '/protoclaw/threads/wt-deleted' && req.method === 'GET') {
+      status = 404;
+      payload = { ok: false, code: 'thread_not_found', message: 'Thread not found' };
+    } else if (req.url === '/protoclaw/threads/wt-deleted/events') {
+      // 删除后 events 端点返回 200 空事件（board 状态缺失 → 空窗口）
+      payload = { ok: true, events: [], cursor: 0 };
+    } else if (req.url === '/protoclaw/threads/wt-orphan' && req.method === 'GET') {
+      // 孤儿执行：runtime 死亡后看板残留 running，事件停滞
+      payload = { ok: true, thread: { threadId: 'wt-orphan', status: 'open', lifeState: 'executing', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000 } };
+    } else if (req.url === '/protoclaw/threads/wt-orphan/events') {
+      payload = { ok: true, events: [], cursor: 0 };
     } else if (req.url === '/protoclaw/threads/wt-1/archive') {
       payload = { ok: true, threadId: 'wt-1', cleanup: { status: 'complete', commandsCancelled: 1, inflightDrain: { count: 0, commandIds: [] }, handoffConverged: false } };
     } else if (req.url === '/protoclaw/threads/wt-1/unarchive') {
@@ -77,6 +96,7 @@ function startFakeClawServer() {
     }
 
     res.setHeader('Content-Type', 'application/json');
+    res.statusCode = status;
     res.end(JSON.stringify(payload));
   });
   servers.push(server);
@@ -266,4 +286,33 @@ test('threads watch settles on turn.completed and reports timeout via exit code'
   ]);
   assert.equal(timedOut.code, 2, timedOut.stderr);
   assert.match(timedOut.stdout, /watch done: timeout \| life=executing failed=false/);
+});
+
+test('threads watch 状态矩阵：归档/关闭终态按 lifeState 判定，删除即终态，孤儿执行停滞报 stalled', async () => {
+  const fake = await startFakeClawServer();
+
+  // 归档线程：lifeState=archived（record status 仍 open）→ 立即终态，
+  // 不再靠 idle-no-pending 兜底退出（那会让调度方把归档误读为空闲落定）
+  const archived = await runCli(fake.port, [
+    'threads', 'watch', 'wt-archived', '--interval', '0.3', '--timeout', '5',
+  ]);
+  assert.equal(archived.code, 0, archived.stderr);
+  assert.match(archived.stdout, /watch done: thread archived \| life=archived failed=false/);
+
+  // 已删除：404 thread_not_found = 确定终态，立即返回，不与 server 不可达混同
+  const deleted = await runCli(fake.port, [
+    'threads', 'watch', 'wt-deleted', '--interval', '0.3', '--timeout', '5',
+  ]);
+  assert.equal(deleted.code, 0, deleted.stderr);
+  assert.match(deleted.stdout, /watch done: thread not found \| life=unknown/);
+  const threadGets = fake.requests.filter((r) => r.method === 'GET' && r.url === '/protoclaw/threads/wt-deleted');
+  assert.equal(threadGets.length, 1, '404 是确定终态，不应累计 3 次重试');
+
+  // 孤儿执行：executing 且事件停滞 → stalled（exit 3），不烧满 timeout
+  const stalled = await runCli(fake.port, [
+    'threads', 'watch', 'wt-orphan', '--interval', '0.3', '--timeout', '5',
+  ]);
+  assert.equal(stalled.code, 3, stalled.stderr);
+  assert.match(stalled.stdout, /watch done: stalled \| life=executing failed=false/);
+  assert.match(stalled.stdout, /detail: lifeState=executing 事件停滞/);
 });

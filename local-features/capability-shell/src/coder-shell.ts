@@ -34,6 +34,13 @@
 
 /** 线程/server 连续不可达上限（bin/claw.mjs watchThread 同款语义）。 */
 const MAX_CONSECUTIVE_FETCH_ERRORS = 3;
+/**
+ * 事件停滞判定阈值（bin/claw.mjs watchThread 同款语义）：孤儿执行
+ * （runtime 死亡后看板残留 running）或 pending 永不承接时，turn.completed
+ * 永不收敛；活跃执行中 runtime 事件持续刷新 lastEventAt，超阈值零事件按
+ * 停滞处置，不再无限等待 Tool.timeout。
+ */
+const STALE_THREAD_MS = 300_000;
 /** 落定报文附带的事件尾条数（取证用，防长文本撑爆上下文）。 */
 const TAIL_EVENT_COUNT = 5;
 /** result 末轮回复的输出上限（超长截断并注明全文长度）。 */
@@ -138,7 +145,12 @@ export function createThreadsAdapter(deps: {
     const payload = (await response.json().catch(() => ({}))) as Record<string, any>;
     if (!response.ok || payload?.ok === false) {
       const detail = payload?.error || payload?.message || `HTTP ${response.status}`;
-      throw new Error((payload as any)?.code ? `${detail} [${(payload as any).code}]` : String(detail));
+      const error = new Error((payload as any)?.code ? `${detail} [${(payload as any).code}]` : String(detail));
+      // 状态与错误码挂到异常上：watch 轮询方据此区分「线程已删（404，
+      // 确定终态）」与「server 不可达（连续错误才终态）」
+      (error as any).status = response.status;
+      (error as any).code = (payload as any)?.code;
+      throw error;
     }
     return payload;
   }
@@ -203,6 +215,18 @@ export function createThreadsAdapter(deps: {
         thread = (await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}`))?.thread ?? null;
         consecutiveFetchErrors = 0;
       } catch (error) {
+        // 线程已删除（record 移除后 404 thread_not_found）：确定终态，续挂
+        // 无意义，立即退出——不与 server 不可达混同（那需要连续错误确认）
+        if ((error as any)?.code === 'thread_not_found' || (error as any)?.status === 404) {
+          return {
+            reason: 'thread not found',
+            lifeState,
+            failed,
+            newEvents,
+            detail: String((error as Error)?.message || error),
+            tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
+          };
+        }
         consecutiveFetchErrors += 1;
         if (consecutiveFetchErrors >= MAX_CONSECUTIVE_FETCH_ERRORS) {
           return {
@@ -238,12 +262,30 @@ export function createThreadsAdapter(deps: {
       if (failed) {
         return { reason: 'failed', lifeState, failed, newEvents, tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT) };
       }
-      if (['archived', 'closed'].includes(String(thread?.status || ''))) {
+      // 终态判定用合成 lifeState：归档是宿主层标记（archive-index），
+      // record status 恒为 'open'，按 status 判 archived 永不命中
+      const terminalLifeState = String(lifeState || '');
+      if (['archived', 'closed'].includes(terminalLifeState)) {
         return {
-          reason: `thread ${thread?.status}`,
+          reason: `thread ${terminalLifeState}`,
           lifeState,
           failed,
           newEvents,
+          tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
+        };
+      }
+      // 孤儿执行/滞留：lifeState 卡在 executing（runtime 死亡后看板残留
+      // running）或 pending-commands（runtime 永不承接）且事件长期停滞，
+      // turn.completed 永不收敛——按停滞终态处置，不烧满 Tool.timeout。
+      const lastEventAt = Number(thread?.lastEventAt) || 0;
+      if (['executing', 'pending-commands'].includes(lifeState) && lastEventAt
+        && Date.now() - lastEventAt > STALE_THREAD_MS) {
+        return {
+          reason: 'stalled',
+          lifeState,
+          failed,
+          newEvents,
+          detail: `事件停滞 ${Math.round((Date.now() - lastEventAt) / 1000)}s——runtime 可能已死亡，查 Debugger 日志后再决定介入方式`,
           tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
         };
       }
@@ -276,7 +318,8 @@ export function createThreadsAdapter(deps: {
       sentLine,
       `done reason=${outcome.reason}  threadId=${threadId}  life=${outcome.lifeState}  failed=${outcome.failed}  newEvents=${outcome.newEvents}`,
     ];
-    if (outcome.reason === 'unreachable' && outcome.detail) {
+    // unreachable / thread not found / stalled 等终态附诊断 detail
+    if (outcome.detail) {
       lines.push(`detail: ${outcome.detail}`);
     }
     if (outcome.tailEvents.length > 0) {
