@@ -330,9 +330,10 @@ test('rejects remote write methods locally with remote_write_disabled and never 
 test('rejects remote reads outside the whitelist locally without forwarding', async () => {
   const fetchMock = mockFetch();
   try {
-    // queued-inputs moved to the Phase 2 pass-through surface; /api/logs stays
-    // outside the whitelist.
-    for (const url of [`/api/logs?agentId=${ENCODED_NAMESPACE}`]) {
+    // queued-inputs moved to the Phase 2 pass-through surface; /api/logs and
+    // /api/mcp-info joined the whitelist in R2-05, so a viewer read that is
+    // still outside it fails here.
+    for (const url of [`/api/agents/${ENCODED_NAMESPACE}/unknown-resource`]) {
       const res = makeRes();
       await proxyToViewer(makeReq(url), res, { findConnection: FIND_CONNECTION });
       assert.equal(res.statusCode, 403);
