@@ -183,6 +183,29 @@ test('claw sessions create maps to prebuilt session API and prints thread handle
   assert.equal(parsed.session.id, 'session-new');
 });
 
+test('claw sessions create sessionType=coder 无 --dir → 本地拒绝，不触网（目录必填）', async () => {
+  const fake = await startFakeClawServer();
+
+  const rejected = await runCli(fake.port, [
+    'sessions', 'create', '--agent', 'programming-helper', '--session-type', 'coder',
+  ]);
+  assert.equal(rejected.code, 1, rejected.stdout);
+  assert.ok(rejected.stderr.includes('--dir 必填'), rejected.stderr);
+  assert.ok(
+    !fake.requests.some((request) => request.url === '/protoclaw/prebuilt_sessions'),
+    '前置校验失败不得发出创建请求（fail-fast）',
+  );
+
+  // 显式 --dir 时正常放行
+  const ok = await runCli(fake.port, [
+    'sessions', 'create', '--agent', 'programming-helper', '--session-type', 'coder',
+    '--dir', 'D:/code/AgentDevClaw', '--format', 'json',
+  ]);
+  assert.equal(ok.code, 0, ok.stderr);
+  const createRequest = fake.requests.find((request) => request.url === '/protoclaw/prebuilt_sessions');
+  assert.equal(createRequest.body.openDirectory, 'D:/code/AgentDevClaw');
+});
+
 test('threads send --wait-started reports turn start and timeout via lifeState polling', async () => {
   const fake = await startFakeClawServer();
 

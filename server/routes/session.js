@@ -794,6 +794,31 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       res.status(400).json({ error: `unsupported sessionType: ${requestedSessionType}` });
       return;
     }
+    // coder 是无人值守身份，目录绑定错的代价是在错误的项目里施工：禁止裸
+    // 创建——缺目录时 createPrebuiltSession 会回退到 workspace state 的最近
+    // 目录（随上次目录切换/会话创建漂移，几乎必然绑错）。调度面（coder_shell
+    // / claw CLI）必须显式指定已存在的绝对路径；successor 派生路径
+    // （sourceSessionId 继承来源身份与目录）不受此闸门约束。
+    if (requestedSessionType === 'coder' && !req.body?.sourceSessionId) {
+      const rawDirectory = typeof req.body?.openDirectory === 'string' ? req.body.openDirectory.trim() : '';
+      if (!rawDirectory) {
+        res.status(400).json({
+          error: 'coder 会话必须显式指定 openDirectory（目标工作目录），不接受目录回退默认'
+            + '（缺省时会绑定到 workspace 最近目录，几乎必然绑错项目）。'
+            + '调度面请用 coder_shell new-session <agentId> <目录> 或 claw sessions create --session-type coder --dir <目录> 显式指定。',
+        });
+        return;
+      }
+      if (!path.isAbsolute(rawDirectory)) {
+        res.status(400).json({ error: `openDirectory 必须是绝对路径: ${rawDirectory}` });
+        return;
+      }
+      const directoryStat = await fs.stat(rawDirectory).catch(() => null);
+      if (!directoryStat?.isDirectory()) {
+        res.status(400).json({ error: `openDirectory 不存在或不是目录: ${rawDirectory}` });
+        return;
+      }
+    }
     // 标题随创建写入（线程标题自动跟随 session.title），免去创建后单独 PUT；
     // 拒绝编码损坏的文本（原生 curl 按 ANSI 代码页转码的典型产物）。
     const requestedTitle = cleanSessionText(req.body?.title);

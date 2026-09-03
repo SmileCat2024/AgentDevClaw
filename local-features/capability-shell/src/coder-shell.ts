@@ -11,8 +11,9 @@
  * local-features/dispatch 的 runtimeIdentity 模式（默认 http://127.0.0.1:1420）。
  *
  * new-session 直调 POST /protoclaw/prebuilt_sessions（sessionType=coder，
- * 契约参照 bin/claw.mjs handleSessions：--dir 映射 openDirectory，本动词 v1
- * 不暴露目录参数，会话绑定 agent 工作空间目录）；响应 threadId 在 session
+ * 契约参照 bin/claw.mjs handleSessions：--dir 映射 openDirectory；目录必填，
+ * 服务端拒绝目录回退默认——coder 绑错项目的代价是在错误仓库施工）；
+ * 响应 threadId 在 session
  * 对象之前（服务端为截断安全特意如此排列）。会话自动建线是标准路径，
  * create 仅用于给已存在会话加挂线程（建线前预校验会话存在且归属匹配，
  * 消灭 head_session_missing 僵尸线程，ticket 035B）。
@@ -31,6 +32,9 @@
  * advance / resume 不入动词表（rotation_failed 残局需人工介入，与技能
  * 故障表一致）：模型调用时得到 unknown_verb + 结构化指引。
  */
+
+import { stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 
 /** 线程/server 连续不可达上限（bin/claw.mjs watchThread 同款语义）。 */
 const MAX_CONSECUTIVE_FETCH_ERRORS = 3;
@@ -347,12 +351,29 @@ export function createThreadsAdapter(deps: {
   const adapter: ThreadAdapter = async (args, context) => {
     const [verb, ...rest] = args;
     switch (verb) {
-      // new-session <agentId> [title]：创建 Coder 会话（sessionType=coder），
+      // new-session <agentId> <目录> [title]：创建 Coder 会话（sessionType=coder），
       // 线程宿主工作空间自动建线（标准路径；create 仅用于已存在会话加挂线程）。
-      // 契约参照 bin/claw.mjs handleSessions（sessionType=coder 响应带 threadId）。
+      // 目录必填（服务端已禁止目录回退默认——workspace 最近目录随上次切换
+      // 漂移，裸创建几乎必然绑错项目），本地先校验绝对路径与存在性，
+      // 错误在派发侧即出，不等 server 400。
+      // 契约参照 bin/claw.mjs handleSessions（--dir 映射 openDirectory；
+      // sessionType=coder 响应带 threadId）。
       case 'new-session': {
-        const [agentId, title] = rest;
-        const body: Record<string, unknown> = { agentId, sessionType: 'coder' };
+        const [agentId, directory, title] = rest;
+        if (!directory) {
+          throw new Error(
+            `new-session 拒绝：必须显式指定目标工作目录（coder 会话不接受目录回退默认，缺省时服务端会绑定到 workspace 最近目录）。`
+            + ` 用法：new-session <agentId> <目标工作目录> [标题]`,
+          );
+        }
+        if (!isAbsolute(directory)) {
+          throw new Error(`new-session 拒绝：目录必须是绝对路径: ${directory}`);
+        }
+        const directoryStat = await stat(directory).catch(() => null);
+        if (!directoryStat?.isDirectory()) {
+          throw new Error(`new-session 拒绝：目标工作目录不存在或不是目录: ${directory}`);
+        }
+        const body: Record<string, unknown> = { agentId, sessionType: 'coder', openDirectory: directory };
         if (title) body.title = title;
         const payload = await clawFetch('/protoclaw/prebuilt_sessions', {
           method: 'POST',

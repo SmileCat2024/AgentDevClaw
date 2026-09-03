@@ -33,12 +33,13 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
     description: CODER_SHELL_DESCRIPTION,
     verbs: {
       'new-session': {
-        description: '创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId）',
+        description: '创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId）；目标工作目录必填（服务端禁止目录回退默认）',
         params: [
           { name: 'agentId', kind: 'literal' },
+          { name: 'directory', kind: 'literal' },
           { name: 'title', kind: 'literal', required: false },
         ],
-        usage: "new-session <agentId> ['标题']",
+        usage: "new-session <agentId> <目标工作目录> ['标题']",
         adapter: { key: 'threads:new-session' },
       },
       'create': {

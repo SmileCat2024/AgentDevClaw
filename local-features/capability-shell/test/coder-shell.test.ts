@@ -437,7 +437,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     return { fetchImpl, requests };
   }
 
-  it('契约映射：POST /protoclaw/prebuilt_sessions，body 含 sessionType=coder 与 title', async () => {
+  it('契约映射：POST /protoclaw/prebuilt_sessions，body 含 sessionType=coder、openDirectory 与 title', async () => {
     const { fetchImpl, requests } = recordingFetch([
       {
         match: (u, init) => u.endsWith('/protoclaw/prebuilt_sessions') && init?.method === 'POST',
@@ -446,7 +446,8 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
       },
     ]);
     const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
-    const r = await runCapabilityShellPipeline(POLICY, "new-session programming-helper '工单035 标题'", {
+    const targetDir = tmpdir();
+    const r = await runCapabilityShellPipeline(POLICY, `new-session programming-helper ${targetDir} '工单035 标题'`, {
       adapters, bashPath: null,
     });
     assert.equal(r.ok, true, r.output);
@@ -454,11 +455,34 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     const body = JSON.parse(String(requests[0].init?.body));
     assert.equal(body.agentId, 'programming-helper');
     assert.equal(body.sessionType, 'coder', 'body 必含 sessionType=coder（线程宿主自动建线）');
+    assert.equal(body.openDirectory, targetDir, 'body 必透传显式目录（服务端禁止目录回退默认）');
     assert.equal(body.title, '工单035 标题');
-    assert.ok(!('openDirectory' in body), 'v1 不暴露目录参数');
     // 响应解析：threadId 在 session 对象之前，输出两行
     assert.ok(r.output.includes('sessionId=session-abc'), r.output);
     assert.ok(r.output.includes('threadId=wt-new'), r.output);
+  });
+
+  it('目录缺失 / 不存在 / 相对路径 → 本地结构化拒绝，不发出任何请求', async () => {
+    const { fetchImpl, requests } = recordingFetch([]);
+    const adapters = createThreadsAdapters({ serverOrigin: 'http://test', fetchImpl });
+    // 缺目录参数
+    const rMissing = await runCapabilityShellPipeline(POLICY, 'new-session programming-helper', {
+      adapters, bashPath: null,
+    });
+    assert.equal(rMissing.ok, false, rMissing.output);
+    assert.ok(rMissing.output.includes('目标工作目录'), rMissing.output);
+    // 目录不存在
+    const rGhost = await runCapabilityShellPipeline(POLICY, 'new-session programming-helper /nonexistent/dir-xyz', {
+      adapters, bashPath: null,
+    });
+    assert.equal(rGhost.ok, false, rGhost.output);
+    // 相对路径（存在目录但非绝对路径）
+    const rRelative = await runCapabilityShellPipeline(POLICY, `new-session programming-helper ${basename(tmpdir())}`, {
+      adapters, bashPath: null,
+    });
+    assert.equal(rRelative.ok, false, rRelative.output);
+    assert.ok(rRelative.output.includes('绝对路径'), rRelative.output);
+    assert.equal(requests.length, 0, '本地校验拒绝不得发出任何 HTTP 请求');
   });
 
   it('响应解析：threadId 前置（session 缺失也能解析），null threadId 附手动建线提示', async () => {
@@ -471,7 +495,7 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
         },
       ]),
     });
-    const r = await runCapabilityShellPipeline(POLICY, 'new-session programming-helper', {
+    const r = await runCapabilityShellPipeline(POLICY, `new-session programming-helper ${tmpdir()}`, {
       adapters, bashPath: null,
     });
     assert.equal(r.ok, true, r.output);
@@ -480,16 +504,16 @@ describe('coder_shell new-session 动词（ticket 035A）', () => {
     assert.ok(r.output.includes('create'), '提示应含手动建线指引');
   });
 
-  it('new-session 缺 agentId → 参数校验道拒绝（title 可选，1 参可过个数道）', async () => {
+  it('new-session 缺 agentId → 参数校验道拒绝（title 可选，2 参可过个数道）', async () => {
     // 0 参数：agentId 必填缺失
     const r0 = await runCapabilityShellPipeline(POLICY, 'new-session', { adapters: {}, bashPath: null });
     assert.equal(r0.ok, false);
     assert.equal(r0.rejection?.code, 'arg_rejected');
     assert.ok(r0.output.includes('new-session <agentId>'), r0.output);
-    // 3 个参数（超限）同样拒绝
-    const r3 = await runCapabilityShellPipeline(POLICY, 'new-session a b c', { adapters: {}, bashPath: null });
-    assert.equal(r3.ok, false);
-    assert.equal(r3.rejection?.code, 'arg_rejected');
+    // 4 个参数（超限）同样拒绝
+    const r4 = await runCapabilityShellPipeline(POLICY, 'new-session a b c d', { adapters: {}, bashPath: null });
+    assert.equal(r4.ok, false);
+    assert.equal(r4.rejection?.code, 'arg_rejected');
   });
 });
 

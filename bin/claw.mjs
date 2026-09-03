@@ -694,6 +694,8 @@ function printSessionsHelp() {
   console.log('');
   console.log('创建预制工作空间会话。线程宿主工作空间（sessionType=coder）的响应');
   console.log('带 threadId（自动建立的线程），可直接用于 claw threads send。');
+  console.log('sessionType=coder 时 --dir 必填（已存在的绝对路径，目标工作目录）：');
+  console.log('服务端拒绝目录回退默认（缺省会绑定 workspace 最近目录，几乎必然绑错项目）。');
 }
 
 async function handleSessions(args = []) {
@@ -715,6 +717,11 @@ async function handleSessions(args = []) {
   if (title) body.title = title;
   const dir = optionValue(args, '--dir');
   if (dir) body.openDirectory = dir;
+  // coder 目录必填的本地前置校验（服务端是最终闸门）：fail-fast 给出可操作的
+  // 错误文案，不等 server 400。
+  if ((sessionType || 'main') === 'coder' && !dir) {
+    throw new Error('sessionType=coder 时 --dir 必填（已存在的绝对路径）：服务端拒绝目录回退默认——缺省会绑定 workspace 最近目录，几乎必然绑错项目');
+  }
   const payload = await clawServerFetch('/protoclaw/prebuilt_sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -835,8 +842,8 @@ function printHelp() {
   console.log('  claw threads close <thread-id> [--reason R]');
   console.log('  claw threads archive <thread-id>');
   console.log('  claw threads unarchive <thread-id>');
-  console.log('  claw sessions create --agent ID [--session-type coder] [--title T] [--dir D]');
-  console.log('                                         Create a workspace session; coder 响应带自动建立的 threadId');
+  console.log('  claw sessions create --agent ID [--session-type coder] --dir D [--title T]');
+  console.log('                                         Create a workspace session; coder 响应带自动建立的 threadId（coder 必须显式 --dir）');
   console.log('  claw run <name> --goal "..." [...]     Run a plain agent (viewer-observable; --debug uses Studio source overrides)');
   console.log('  claw acp coder                         Start the coder ACP stdio adapter');
   console.log('');

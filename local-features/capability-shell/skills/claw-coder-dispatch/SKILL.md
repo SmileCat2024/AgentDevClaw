@@ -23,7 +23,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 
 | 动词 | 语义 |
 |---|---|
-| `new-session <agentId> ['标题']` | 创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId） |
+| `new-session <agentId> <目标工作目录> ['标题']` | 创建 Coder 会话并自动建线（标准第一步，返回 sessionId + threadId）；**目标工作目录必填**（已存在的绝对路径，服务端拒绝目录回退默认） |
 | `create <agentId> <sessionId> ['标题']` | 给已存在的会话加挂线程，返回 threadId |
 | `send <threadId> <idempotencyKey> '<指令文本>' [--no-wait]` | 派发并**阻塞**等本轮落定；`--no-wait` 只确认投递即返回（并行派发用），落定交给 `watch` |
 | `watch <threadId> [threadId...]` | 续挂监视（可多线程 any-settle），任一线程落定即整条返回 |
@@ -57,7 +57,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 coder_shell: list programming-helper
 ```
 
-同时用文件工具确认目标仓库和工作区状态（git status / branch）。如果已有未提交改动，先按文件和时间线判断归属，不要直接清理。
+同时用文件工具确认目标仓库和工作区状态（git status / branch）。如果已有未提交改动，先按文件和时间线判断归属，不要直接清理。目标项目目录在这里一并确认（创建 coder 会话时必须显式指定该目录）。
 
 ## 调度流程
 
@@ -99,12 +99,14 @@ planned
 ### 2. 创建 coder 会话并建线（标准第一步）
 
 ```text
-coder_shell command="new-session programming-helper '工单025 工具进度UI'"
+coder_shell command="new-session programming-helper /home/dev/AgentDevClaw '工单025 工具进度UI'"
 ```
 
 输出两行：`sessionId=...` 与 `threadId=...`，threadId 直接用于 `send` 派发。线程列表用 `list programming-helper` 核对。
 
 `new-session` 是标准第一步：创建会话时线程宿主工作空间会自动建线，不需要再单独 create。threadId 为 null（未自动建线）时，按报文提示用 `create` 手动建线。
+
+**目标工作目录必须显式指定且不可省略**（第二个位置参数）：coder 会话绑定到该目录开工，目录选错 = 在错误的项目里施工。服务端拒绝目录回退默认（缺省会绑定 workspace 最近目录，几乎必然绑错项目），本地也会校验目录存在与绝对路径。目录必须是工单对应的目标仓库根目录，从工单内容确认，不要沿用上次派发的目录。
 
 `create` 仅用于给**已存在**的 Coder 会话加挂线程（例如会话已存在但线程丢失的补建场景）。给不存在的 sessionId 调 `create` 会被拒绝——先用 `new-session` 创建会话再派发。
 
