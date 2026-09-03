@@ -16,7 +16,23 @@ import { releaseRuntimeState } from '../runtime-call-envelope.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
 import { resolveRuntimeControlTarget } from '../shared/operation-target.js';
 import { bareId, resolveForwardHostTarget, forwardProtoclawRoute, readForwardTargetError } from '../shared/remote-forward.js';
-import { buildLocalFailureResponse } from '../shared/operation-contract.js';
+import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
+
+// ADR-0011：远程写幂等闸。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；
+// 本地路径保持现状不强制（session.js 同族契约）。
+function requireRemoteIdempotencyKey(req, res, metadata = {}) {
+  const requestMetadata = readOperationMetadata(req);
+  if (requestMetadata.idempotencyKey) return true;
+  res.status(400).json({
+    ok: false,
+    code: 'idempotency_key_required',
+    retryable: false,
+    operationId: requestMetadata.operationId || metadata.operationId || null,
+    message: 'Remote write operations require an idempotency key (x-idempotency-key)',
+    error: 'Remote write operations require an idempotency key (x-idempotency-key)',
+  });
+  return false;
+}
 
 // ── Agent Lifecycle (orchestration layer) ────────────────────────
 // This module wires together three concerns:
@@ -567,9 +583,25 @@ export function createAgentLifecycleModule(ctx) {
         } catch (error) {
           return res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code });
         }
-        const { agentId, sessionId } = target;
+        const { agentId, runtimeId, sessionId } = target;
         if (!sessionId) {
           return res.status(400).json({ ok: false, error: 'sessionId is required' });
+        }
+        // ADR-0011：远程命名空间身份 → 转发远程同名状态路由（query 裸 id，
+        // 远程端自己走它的 runtime IPC）；本地身份走下方既有 IPC 路径，行为
+        // 字节级不动。GET 只读，无幂等闸。
+        try {
+          const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
+          if (hostTarget.scope === 'remote') {
+            const params = new URLSearchParams({
+              agentId: bareId(agentId),
+              sessionId: bareId(sessionId),
+              ...(runtimeId ? { runtimeId: bareId(runtimeId) } : {}),
+            });
+            return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/force_continuation_status?${params.toString()}`);
+          }
+        } catch (error) {
+          return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
         const result = await requestForceContinuationState(agentId, sessionId, { type: 'force-continuation-status' });
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
@@ -588,9 +620,29 @@ export function createAgentLifecycleModule(ctx) {
         } catch (error) {
           return res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code });
         }
-        const { agentId, sessionId } = target;
+        const { agentId, runtimeId, sessionId } = target;
         if (!sessionId) {
           return res.status(400).json({ ok: false, error: 'sessionId is required' });
+        }
+        // ADR-0011：远程命名空间身份 → 转发远程同名控制路由（裸 id，远程端做
+        // 自己的 IPC 与 body 校验）；本地身份走下方既有 IPC 路径，行为字节级
+        // 不动。远程写强制幂等键（本地路径保持现状不强制）。
+        try {
+          const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
+          if (hostTarget.scope === 'remote') {
+            if (!requireRemoteIdempotencyKey(req, res)) return;
+            return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/force_continuation_control', {
+              method: 'POST',
+              body: {
+                ...(req.body || {}),
+                agentId: bareId(agentId),
+                runtimeId: bareId(runtimeId),
+                sessionId: bareId(sessionId),
+              },
+            });
+          }
+        } catch (error) {
+          return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
         if (enabled !== undefined && typeof enabled !== 'boolean') {
           return res.status(400).json({ ok: false, error: 'enabled must be a boolean' });
@@ -637,9 +689,25 @@ export function createAgentLifecycleModule(ctx) {
         } catch (error) {
           return res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code });
         }
-        const { agentId, sessionId } = target;
+        const { agentId, runtimeId, sessionId } = target;
         if (!sessionId) {
           return res.status(400).json({ ok: false, error: 'sessionId is required' });
+        }
+        // ADR-0011：远程命名空间身份 → 转发远程同名状态路由（query 裸 id，
+        // 远程端自己走它的 runtime IPC）；本地身份走下方既有 IPC 路径，行为
+        // 字节级不动。GET 只读，无幂等闸。
+        try {
+          const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
+          if (hostTarget.scope === 'remote') {
+            const params = new URLSearchParams({
+              agentId: bareId(agentId),
+              sessionId: bareId(sessionId),
+              ...(runtimeId ? { runtimeId: bareId(runtimeId) } : {}),
+            });
+            return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/context_guard_status?${params.toString()}`);
+          }
+        } catch (error) {
+          return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
         const result = await requestSessionRuntimeState(agentId, sessionId, { type: 'context-guard-status' }, 'context-guard-result');
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
@@ -661,9 +729,29 @@ export function createAgentLifecycleModule(ctx) {
         } catch (error) {
           return res.status(error.status || 400).json({ ok: false, error: error.message, code: error.code });
         }
-        const { agentId, sessionId } = target;
+        const { agentId, runtimeId, sessionId } = target;
         if (!sessionId) {
           return res.status(400).json({ ok: false, error: 'sessionId is required' });
+        }
+        // ADR-0011：远程命名空间身份 → 转发远程同名控制路由（裸 id，远程端
+        // 做自己的 IPC 与 body 校验）；本地身份走下方既有 IPC 路径，行为字节
+        // 级不动。远程写强制幂等键（本地路径保持现状不强制）。
+        try {
+          const hostTarget = resolveForwardHostTarget(runtimeId, agentId, sessionId);
+          if (hostTarget.scope === 'remote') {
+            if (!requireRemoteIdempotencyKey(req, res)) return;
+            return await forwardProtoclawRoute(res, hostTarget, '/protoclaw/context_guard_control', {
+              method: 'POST',
+              body: {
+                ...(req.body || {}),
+                agentId: bareId(agentId),
+                runtimeId: bareId(runtimeId),
+                sessionId: bareId(sessionId),
+              },
+            });
+          }
+        } catch (error) {
+          return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
         }
         const result = await requestSessionRuntimeState(agentId, sessionId, {
           type: 'context-guard-control',
