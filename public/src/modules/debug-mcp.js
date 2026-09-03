@@ -97,7 +97,15 @@ function renderMcpPanel() {
 // ── loadMcpInfo (from app-main.js) ──
 async function loadMcpInfo(forceRender = false) {
   try {
-    const res = await fetch('/api/mcp-info');
+    // 带当前会话 agentId（远程会话为命名空间 id，经代理闸还原裸 id 后转发）。
+    // viewer 端 mcp-info 是全局端点，本地身份也带此参数但被服务端忽略，行为不变。
+    const params = new URLSearchParams();
+    const runtimeId = getRuntimeId(currentRuntimeAgentId);
+    if (runtimeId) {
+      params.set('agentId', runtimeId);
+    }
+    const query = params.toString();
+    const res = await fetch('/api/mcp-info' + (query ? `?${query}` : ''));
     if (!res.ok) {
       setCurrentMcpInfo(null);
       return;

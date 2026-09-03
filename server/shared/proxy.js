@@ -69,6 +69,10 @@ function isRemoteReadWhitelisted(method, pathname) {
   if (method !== 'GET') return false;
   if (pathname === '/api/templates/feature') return true;
   if (pathname === '/protoclaw/agent_detail') return true;
+  // R2-05 面板资源扩列：日志 / MCP 面板的 viewer 平面读端点（viewer-worker
+  // 全局 GET），身份经 query agentId 解析，转发前由 rewriteProxyUrl 还原裸 id。
+  if (pathname === '/api/logs') return true;
+  if (pathname === '/api/mcp-info') return true;
   const match = pathname.match(/^\/api\/agents\/[^/]+\/([^/]+)$/);
   if (match && REMOTE_READ_RESOURCES.has(match[1])) return true;
   return isStaticAssetPath(pathname);
