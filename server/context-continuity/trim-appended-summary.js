@@ -31,7 +31,7 @@ import {
  * @param {object} [params.policy] - trim 策略面（调用方负责 continuity 装饰，如 applyContinuityToolPolicy）
  * @param {object|null} [params.llm] - 显式注入的 LLM 基座；缺省走模型预设解析（system 角色）
  * @param {number} [params.maxAttempts=3] - 变换失败时的重试次数
- * @param {number} [params.timeoutMs=SESSION_TRANSFORMATION_TIMEOUT_MS] - 整体超时；超时会取消底层 LLM 调用
+ * @param {number} [params.timeoutMs=SESSION_TRANSFORMATION_TIMEOUT_MS] - 单次 attempt 的超时；超时只中止当前 attempt（对标 react-loop 每步 LLM 调用各自持有完整 deadline），重试预算不被已失败的 attempt 侵占
  * @returns {Promise<import('@agentdevjs/core').SuccessorSeed>}
  */
 export async function runTrimTranscriptWithSummary({
@@ -72,49 +72,43 @@ export async function runTrimTranscriptWithSummary({
     signal.addEventListener('abort', abortFromCaller, { once: true });
   }
 
-  const work = (async () => {
+  try {
     let lastFailure = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       if (controller.signal.aborted) {
         throw controller.signal.reason || new DOMException('Aborted', 'AbortError');
       }
+      // 每次 attempt 独立 deadline：超时只中止当前 attempt 的底层 LLM 调用，
+      // 不剥夺后续 attempt 的预算。整体时长上限 = attempts × timeoutMs +
+      // 本地 trim 开销；caller 级 signal 仍然立即中止全部 attempt。
+      const attemptSignal = new AbortController();
+      const abortAttemptFromCaller = () => attemptSignal.abort(controller.signal.reason);
+      controller.signal.addEventListener('abort', abortAttemptFromCaller, { once: true });
+      const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+          attemptSignal.abort(new Error(`Trim-with-summary attempt ${attempt}/${attempts} timed out after ${timeoutMs}ms`));
+        }, timeoutMs)
+        : null;
       try {
         const seed = await transformation.transform(
           { sourceSnapshot: snapshot, policy },
-          { llm: resolvedLLM, signal: controller.signal },
+          { llm: resolvedLLM, signal: attemptSignal.signal },
         );
         console.log(`[trim_with_summary] done agent=${agentId} session=${sessionId} attempt=${attempt}`);
         return seed;
       } catch (error) {
+        // caller 级中止（归档/会话删除等）直接传播；attempt 自身超时
+        // 属于本次尝试失败，进入重试。
         if (controller.signal.aborted) throw error;
         lastFailure = error;
         console.warn(`[trim_with_summary] attempt ${attempt}/${attempts} failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        if (timer) clearTimeout(timer);
+        controller.signal.removeEventListener('abort', abortAttemptFromCaller);
       }
     }
     throw lastFailure instanceof Error ? lastFailure : new Error(String(lastFailure || 'Unknown trim-with-summary failure'));
-  })();
-
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    try {
-      return await work;
-    } finally {
-      signal?.removeEventListener('abort', abortFromCaller);
-    }
-  }
-
-  let timer = null;
-  try {
-    return await Promise.race([
-      work,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          controller.abort(new Error(`Trim-with-summary timed out after ${timeoutMs}ms`));
-          reject(new Error(`Trim-with-summary timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
   } finally {
-    if (timer) clearTimeout(timer);
     signal?.removeEventListener('abort', abortFromCaller);
   }
 }

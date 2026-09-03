@@ -92,7 +92,7 @@ export function resolveSummaryLLM({
  * @param {boolean} [params.trimAppended] - true 时用 trim-appended 提示词
  * @param {number} [params.maxAttempts=3] - 空摘要/调用失败时的重试次数
  * @param {string} [params.additionalInstructions]
- * @param {number} [params.timeoutMs=SESSION_TRANSFORMATION_TIMEOUT_MS] - 整体超时；超时会取消底层 LLM 调用
+ * @param {number} [params.timeoutMs=SESSION_TRANSFORMATION_TIMEOUT_MS] - 单次 attempt 的超时；超时只中止当前 attempt（对标 react-loop 每步 LLM 调用各自持有完整 deadline），重试预算不被已失败的 attempt 侵占
  * @returns {Promise<{summaryText: string, attemptCount: number, importantFiles: string[], importantSkills: string[], fileRanges: Object}>}
  */
 export async function runInProcessSummary({
@@ -131,14 +131,25 @@ export async function runInProcessSummary({
     signal.addEventListener('abort', abortFromCaller, { once: true });
   }
 
-  const work = (async () => {
+  try {
     let lastFailure = null;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       if (controller.signal.aborted) {
         throw controller.signal.reason || new DOMException('Aborted', 'AbortError');
       }
+      // 每次 attempt 独立 deadline（对标 react-loop 每步 LLM 调用各自持有完整
+      // deadline）：超时只中止当前 attempt 的底层 LLM 调用，不剥夺后续
+      // attempt 的预算；caller 级 signal 仍然立即中止全部 attempt。
+      const attemptSignal = new AbortController();
+      const abortAttemptFromCaller = () => attemptSignal.abort(controller.signal.reason);
+      controller.signal.addEventListener('abort', abortAttemptFromCaller, { once: true });
+      const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+          attemptSignal.abort(new Error(`In-process summary attempt ${attempt}/${attempts} timed out after ${timeoutMs}ms`));
+        }, timeoutMs)
+        : null;
       try {
-        const summaryText = await generateSummaryText({ llm, signal: controller.signal }, snapshot, prompt);
+        const summaryText = await generateSummaryText({ llm, signal: attemptSignal.signal }, snapshot, prompt);
         const scanned = scanFilesAndSkills(messages);
         return {
           summaryText,
@@ -148,35 +159,17 @@ export async function runInProcessSummary({
           fileRanges: scanned.fileRanges,
         };
       } catch (error) {
+        // caller 级中止直接传播；attempt 自身超时属于本次尝试失败，进入重试。
         if (controller.signal.aborted) throw error;
         lastFailure = error;
         console.warn(`[inprocess_summary] attempt ${attempt}/${attempts} failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        if (timer) clearTimeout(timer);
+        controller.signal.removeEventListener('abort', abortAttemptFromCaller);
       }
     }
     throw lastFailure instanceof Error ? lastFailure : new Error(String(lastFailure || 'Unknown in-process summary failure'));
-  })();
-
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    try {
-      return await work;
-    } finally {
-      signal?.removeEventListener('abort', abortFromCaller);
-    }
-  }
-
-  let timer = null;
-  try {
-    return await Promise.race([
-      work,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          controller.abort(new Error(`In-process summary timed out after ${timeoutMs}ms`));
-          reject(new Error(`In-process summary timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
   } finally {
-    if (timer) clearTimeout(timer);
     signal?.removeEventListener('abort', abortFromCaller);
   }
 }

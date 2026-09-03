@@ -102,6 +102,51 @@ describe('runTrimTranscriptWithSummary', () => {
     assert.equal(aborted, true);
   });
 
+  it('a timed-out attempt does not consume later attempts (per-attempt deadline)', async () => {
+    const abortedFlags = [];
+    let call = 0;
+    const firstCallHangs = {
+      chat: async (_messages, _tools, options) => new Promise((resolve, reject) => {
+        call += 1;
+        const idx = abortedFlags.push(false) - 1;
+        options?.signal?.addEventListener('abort', () => {
+          abortedFlags[idx] = true;
+          reject(options.signal.reason || new Error('aborted'));
+        }, { once: true });
+        // 第一次调用挂起，直到 attempt deadline 中止；第二次直接成功
+        if (call >= 2) resolve({ content: 'RETRY_SUMMARY' });
+      }),
+    };
+    const seed = await runWith(buildSnapshot(), { llm: firstCallHangs, maxAttempts: 2, timeoutMs: 20 });
+
+    assert.equal(seed.meta.summaryText, 'RETRY_SUMMARY');
+    assert.equal(abortedFlags.length, 2);
+    assert.equal(abortedFlags[0], true, 'first attempt should be aborted by its own deadline');
+    assert.equal(abortedFlags[1], false, 'second attempt should get a fresh deadline');
+  });
+
+  it('propagates a caller-level abort without spending retries', async () => {
+    let calls = 0;
+    const external = new AbortController();
+    const hanging = {
+      chat: async (_messages, _tools, options) => new Promise((_, reject) => {
+        calls += 1;
+        if (calls === 1) external.abort(new Error('caller aborted'));
+        // 对齐 fetch 语义：信号已中止时立即拒绝，不再等 abort 事件
+        if (options?.signal?.aborted) {
+          reject(options.signal.reason || new Error('aborted'));
+          return;
+        }
+        options?.signal?.addEventListener('abort', () => reject(options.signal.reason || new Error('aborted')), { once: true });
+      }),
+    };
+    await assert.rejects(
+      runWith(buildSnapshot(), { llm: hanging, maxAttempts: 3, timeoutMs: 5000, signal: external.signal }),
+      /caller aborted/,
+    );
+    assert.equal(calls, 1, 'caller abort must not trigger a retry attempt');
+  });
+
   it('fails overall after exhausting retries', async () => {
     let calls = 0;
     const failing = {

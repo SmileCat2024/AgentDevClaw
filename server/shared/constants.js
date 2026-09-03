@@ -75,7 +75,7 @@ export const APP_ORIGIN = `http://127.0.0.1:${APP_PORT}`;
 
 // ── Timeout / Wait (ms) ──────────────────────────────────────────
 export const MIRROR_SCRIPT_TIMEOUT_MS   = 120000;   // title / recap mirror 进程超时
-export const SESSION_TRANSFORMATION_TIMEOUT_MS = 300000; // in-process summary / trim+summary overall timeout
+export const SESSION_TRANSFORMATION_TIMEOUT_MS = 600000; // in-process summary / trim+summary 单次 attempt 超时（对齐 client 单次模型调用 deadline；超时只中止当前 attempt，不吞掉后续重试预算）
 export const SPAWN_AGENT_TIMEOUT_MS     = 300000;   // spawn one-shot / resume sub-agent 默认超时
 export const CALL_EXECUTION_TIMEOUT_MS  = 300000;   // call 执行默认超时
 export const SHELL_DEFAULT_TIMEOUT_MS   = 5 * 60 * 1000; // Shell 命令默认超时
