@@ -529,7 +529,7 @@ async function submitQueuedInput() {
       }
       if (!text) throw new Error('empty input');
       capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
-      await window.submitThreadCommand(threadRoute.thread.threadId, text, {
+      const threadResult = await window.submitThreadCommand(threadRoute.thread.threadId, text, {
         ...(capabilityActivations?.length ? { capabilityActivations } : {}),
       });
       // await 期间 composer 端点可能翻转（textarea id 随模式切换），但节点
@@ -547,12 +547,23 @@ async function submitQueuedInput() {
       _clearRecapForNewMessage();
       window.refreshThreads?.(true);
       updateQueueIndicator();
-      window.ClawToast?.show?.({
-        id: `thread-staged-${threadRoute.thread.threadId}`,
-        status: 'info',
-        title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
-        autoDismiss: 5000,
-      });
+      // 入箱后服务端会做即时投递尝试：已送达当前承接会话时如实反馈，
+      // 仅真滞留（交接挡板 / runtime 未就绪）才提示已暂存等接续。
+      if (Number(threadResult?.delivery?.delivered) > 0) {
+        window.ClawToast?.show?.({
+          id: `thread-delivered-${threadRoute.thread.threadId}`,
+          status: 'success',
+          title: currentLanguage === 'zh' ? '已投递到线程当前会话' : 'Delivered to the current thread session',
+          autoDismiss: 3200,
+        });
+      } else {
+        window.ClawToast?.show?.({
+          id: `thread-staged-${threadRoute.thread.threadId}`,
+          status: 'info',
+          title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
+          autoDismiss: 5000,
+        });
+      }
       return;
     }
 
@@ -588,16 +599,29 @@ async function submitQueuedInput() {
       // 只有当 agent 正在 calling 时才显示排队气泡。
       // agent 空闲时后端会立即消费输入，不需要排队指示。
       if (delivery.delivery === 'thread_queued') {
-        // 服务端网关兜底拦截（快路径未命中但交接已开始）：输入已进
-        // Thread Inbox，刷新线程数据即可渲染暂存气泡
+        // 网关域判定（R6）：线程 head 的输入一律先入 Thread Inbox 再做
+        // 即时投递尝试。deliveryAttempt.delivered > 0 表示已当场送达
+        // 运行中的 head 会话，反馈对齐直投成功路径；仅真滞留（交接挡板
+        // / hold / runtime 未就绪）才提示已暂存。刷新线程数据以同步
+        // pendingTexts（真滞留时渲染暂存气泡）。
         window.refreshThreads?.(true);
         updateQueueIndicator();
-        window.ClawToast?.show?.({
-          id: `thread-staged-gw-${targetRuntimeId}`,
-          status: 'info',
-          title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
-          autoDismiss: 5000,
-        });
+        if (Number(delivery.deliveryAttempt?.delivered) > 0) {
+          if (targetRuntimeId) {
+            clearInterruptSuppression(targetRuntimeId);
+            _markAgentCallStartedForNotify(targetRuntimeId);
+            _agentCallActive.set(targetRuntimeId, true);
+            _syncPersistentActionButton();
+            renderAgentList();
+          }
+        } else {
+          window.ClawToast?.show?.({
+            id: `thread-staged-gw-${targetRuntimeId}`,
+            status: 'info',
+            title: currentLanguage === 'zh' ? '已暂存 · 新会话就绪后自动继续' : 'Staged · will continue in the successor session',
+            autoDismiss: 5000,
+          });
+        }
       } else if (delivery.delivery === 'queued') {
         _localQueuedInputPending = true;
         _pendingQueuedCount++;
