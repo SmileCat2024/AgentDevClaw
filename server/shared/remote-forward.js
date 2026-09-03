@@ -94,3 +94,50 @@ export async function forwardProtoclawRoute(res, hostTarget, pathname, { method 
   }
   return res.status(response.status).json(payload);
 }
+
+/**
+ * 透传变体（R2-03）：转发带 ETag/304 协商的读端点（ui-surfaces registry 轮询）。
+ * forwardProtoclawRoute 的 JSON 归一化会把 304 空体误判为不可解析响应（502），
+ * 也不透传 ETag；本 helper 在其契约上叠加：请求头按调用方给定透传（如
+ * If-None-Match 协商），304 空体与 ETag 头原样透传，其余响应仍按 JSON 原文
+ * 返回并携带远程 ETag。传输失败 / 不可解析响应同 forwardProtoclawRoute 三分类。
+ */
+export async function forwardProtoclawRoutePassThrough(res, hostTarget, pathname, { method = 'GET', headers = undefined } = {}) {
+  const url = `${hostTarget.origin}${pathname}`;
+  const requestInit = {
+    method,
+    ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+  };
+  const authSessions = getProxyRemoteAuthSessions();
+  const connection = authSessions ? readConnection(getProxyConnectionLookup(), hostTarget.connectionId) : null;
+  let response;
+  try {
+    response = connection
+      ? await authSessions.fetchWithAuth(connection, url, requestInit)
+      : await fetch(url, requestInit);
+  } catch (error) {
+    return res.status(503).json(buildLocalFailureResponse({
+      code: 'transport_unavailable',
+      status: 503,
+      retryable: true,
+      message: 'Remote connection transport is unavailable',
+    }));
+  }
+  // 304 协商命中：空体原样透传（JSON 归一化会把协商命中误判为不可解析响应）。
+  const etag = response.headers?.get?.('etag') || null;
+  if (response.status === 304) {
+    if (etag) res.set('ETag', etag);
+    return res.status(304).end();
+  }
+  const payload = await response.json().catch(() => null);
+  if (payload === null) {
+    return res.status(502).json(buildLocalFailureResponse({
+      code: 'operation_rejected',
+      status: 502,
+      retryable: false,
+      message: `Remote ${pathname} returned an unparseable response body (HTTP ${response.status})`,
+    }));
+  }
+  if (etag) res.set('ETag', etag);
+  return res.status(response.status).json(payload);
+}

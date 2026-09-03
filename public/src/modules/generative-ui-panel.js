@@ -68,6 +68,37 @@
   const _submissionsInFlight = new Set();
 
   // ═══════════════════════════════════════════════════════════════
+  // Remote write discipline (ADR-0011 / R2-03)
+  // ═══════════════════════════════════════════════════════════════
+
+  // 写类提交统一携带幂等键（本地忽略、远程强制，ADR-0011 前端纪律）。
+  function newIdempotencyKey() {
+    const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+    if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+      return cryptoObj.randomUUID();
+    }
+    return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  // 动作提交门控（ADR-0011 能力矩阵）：本地身份恒可写；远程会话按
+  // capabilityFor(agentId, 'write') 判定，缺位（旧远程/断开/未知连接）降级为
+  // 只读。capabilityFor 未挂载（集成窗口）时退回命名空间判定——本地恒可写、
+  // 远程禁用；不引入伪能力位（session-list-render viewCapabilityEnabled 同形）。
+  function actionSubmitEnabled(agentId) {
+    if (typeof agentId !== 'string' || !agentId) return false;
+    if (!agentId.startsWith('remote:')) return true;
+    const capabilityFor = window.RemoteConnections && window.RemoteConnections.capabilityFor;
+    if (typeof capabilityFor === 'function') {
+      return capabilityFor(agentId, 'write') === true;
+    }
+    return false;
+  }
+
+  function getCurrentAgentId() {
+    return (typeof currentRuntimeAgentId !== 'undefined') ? currentRuntimeAgentId : null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // Panel lifecycle
   // ═══════════════════════════════════════════════════════════════
 
@@ -411,6 +442,14 @@
       const rendered = renderGenUISpec(cached.spec, viewState, callbacks);
       content.appendChild(rendered);
       _enhanceSurfaceSelects(content);
+      // 写门控（R2-03）：远程会话且无 write 能力位时提交按钮禁用。renderer
+      // 不暴露 intent，动作按钮统一置灰；提交适配器内另有同谓词守卫，兜住
+      // 能力缓存刷新晚于渲染的窗口。本地身份恒可写。
+      if (!actionSubmitEnabled(getCurrentAgentId())) {
+        for (const btn of content.querySelectorAll('button.gen-ui-button')) {
+          btn.disabled = true;
+        }
+      }
     } catch (e) {
       const errEl = document.createElement('div');
       errEl.className = 'gen-ui-error';
@@ -497,9 +536,16 @@
   // ═══════════════════════════════════════════════════════════════
 
   async function _submitAction(surfaceId, actionId, action, fields) {
-    const agentId = (typeof currentRuntimeAgentId !== 'undefined') ? currentRuntimeAgentId : null;
+    const agentId = getCurrentAgentId();
     if (!agentId) {
       console.error('[GenUI] No currentRuntimeAgentId');
+      return;
+    }
+
+    // 写门控（R2-03）：远程会话且无 write 能力位时拒绝提交（远程 server 有
+    // 同款幂等闸兜底，这里先行禁用以免发出注定被闸的请求）。本地身份恒可写。
+    if (!actionSubmitEnabled(agentId)) {
+      console.warn('[GenUI] Action submit blocked: remote session without write capability');
       return;
     }
 
@@ -526,7 +572,12 @@
     try {
       const res = await fetch(actionUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // 幂等键（ADR-0011）：eventId 即面板动作的幂等凭证——本地 server
+          // 忽略，远程分支以 body.eventId 为闸键（两处同值）。
+          'x-idempotency-key': eventId,
+        },
         body: JSON.stringify({
           eventId,
           surfaceRevision: cached.revision,
@@ -585,12 +636,13 @@
   }
 
   async function _closeSurface(surfaceId) {
-    const agentId = (typeof currentRuntimeAgentId !== 'undefined') ? currentRuntimeAgentId : null;
+    const agentId = getCurrentAgentId();
     if (!agentId) return;
 
     try {
       await fetch(`/protoclaw/agents/${agentId}/ui-surfaces/${surfaceId}`, {
         method: 'DELETE',
+        headers: { 'x-idempotency-key': newIdempotencyKey() },
       });
     } catch (e) {
       console.error('[GenUI] Close error:', e);
@@ -627,6 +679,8 @@
       _mergeViewState,
       _enhanceSurfaceSelects,
       _showActionConfirmation,
+      actionSubmitEnabled,
+      newIdempotencyKey,
       _resetState() {
         _registry.clear();
         _viewStates.clear();

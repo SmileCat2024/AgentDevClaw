@@ -11,6 +11,13 @@
 import { UISurfaceStore } from '../ui-surface-store.js';
 import { deliverUserInput, UserTurnDeliveryError } from '../thread-control/input-gateway.js';
 import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
+import {
+  bareId,
+  resolveForwardHostTarget,
+  forwardProtoclawRoute,
+  forwardProtoclawRoutePassThrough,
+  readForwardTargetError,
+} from '../shared/remote-forward.js';
 import { validateGenerativeUISpec } from '../../local-features/dist/generative-ui/src/validator.js';
 import { UI_LIMITS } from '../../local-features/dist/generative-ui/src/types.js';
 
@@ -19,6 +26,24 @@ const store = new UISurfaceStore({ maxSurfaces: UI_LIMITS.maxSurfacesPerAgent })
 
 export function getUISurfaceStore() {
   return store;
+}
+
+// ADR-0011：远程写幂等闸（session.js prebuilt_sessions POST / proxy.js 同族
+// 契约）。远程目标 + 无幂等键 → 400 idempotency_key_required，请求不过隧道；
+// 本地路径保持现状不强制。POST action 的幂等凭证是 body.eventId（R2-03 票面
+// 契约）；DELETE / PUT 无 body 凭证，按 R2 系列既定闸形态读 x-idempotency-key
+// 头（或 query / body 的 idempotencyKey）。
+function requireRemoteIdempotencyKey(res, key, message) {
+  if (key) return true;
+  res.status(400).json({
+    ok: false,
+    code: 'idempotency_key_required',
+    retryable: false,
+    operationId: null,
+    message,
+    error: message,
+  });
+  return false;
 }
 
 /**
@@ -32,6 +57,26 @@ export function setupUISurfaceRoutes(app, express) {
 
   app.put('/protoclaw/agents/:agentId/ui-surfaces/:surfaceId', express.json({ limit: '512kb' }), async (req, res) => {
     const { agentId, surfaceId } = req.params;
+
+    // ADR-0011：远程命名空间身份 → 转发远程同名 upsert 路由（裸 id，远程端做
+    // 自己的 spec 校验与 store upsert）；本地身份走下方既有校验 + store 路径，
+    // 行为字节级不动。浏览器不发 PUT（本地 agent feature 调本机 server，远程
+    // agent feature 调远程 server），此分支统一补齐只为守住命名空间纪律
+    // （ADR-0008 #1：远程身份永不 fallback 本地执行——否则命名空间键会静默
+    // 落进本地 store）。远程写强制幂等键（R2 系列既定闸形态）。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(res, readOperationMetadata(req).idempotencyKey, 'Remote write operations require an idempotency key (x-idempotency-key)')) return;
+        return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/agents/${encodeURIComponent(bareId(agentId))}/ui-surfaces/${encodeURIComponent(bareId(surfaceId))}`, {
+          method: 'PUT',
+          body: req.body || {},
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
+
     const body = req.body || {};
 
     // 基本参数检查
@@ -112,8 +157,33 @@ export function setupUISurfaceRoutes(app, express) {
   // GET — registry (Feature / Web)
   // ═══════════════════════════════════════════════════════════════
 
-  app.get('/protoclaw/agents/:agentId/ui-surfaces', (req, res) => {
+  app.get('/protoclaw/agents/:agentId/ui-surfaces', async (req, res) => {
     const { agentId } = req.params;
+
+    // ADR-0011：远程命名空间身份 → 透传远程 registry（裸 id，远程端返回自己
+    // store 的真值；本地不镜像远程业务状态，ADR-0008 #2）。轮询走 ETag/304
+    // 协商：If-None-Match 随请求转发，远程 304 空体与 ETag 原样透传
+    // （forwardProtoclawRoute 的 JSON 归一化会把协商命中误判为不可解析响应，
+    // 故走 PassThrough 变体）。本地身份走下方既有 store 路径，行为字节级不动。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId);
+      if (hostTarget.scope === 'remote') {
+        const params = new URLSearchParams();
+        if (req.query.includeClosed === 'true') params.set('includeClosed', 'true');
+        if (req.query.includeSpec === 'true') params.set('includeSpec', 'true');
+        const qs = params.toString();
+        const ifNoneMatch = req.headers['if-none-match'];
+        return await forwardProtoclawRoutePassThrough(
+          res,
+          hostTarget,
+          `/protoclaw/agents/${encodeURIComponent(bareId(agentId))}/ui-surfaces${qs ? `?${qs}` : ''}`,
+          ifNoneMatch ? { headers: { 'If-None-Match': ifNoneMatch } } : undefined,
+        );
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
+
     const includeClosed = req.query.includeClosed === 'true';
     const includeSpec = req.query.includeSpec === 'true';
 
@@ -144,8 +214,20 @@ export function setupUISurfaceRoutes(app, express) {
   // GET — single surface (Feature)
   // ═══════════════════════════════════════════════════════════════
 
-  app.get('/protoclaw/agents/:agentId/ui-surfaces/:surfaceId', (req, res) => {
+  app.get('/protoclaw/agents/:agentId/ui-surfaces/:surfaceId', async (req, res) => {
     const { agentId, surfaceId } = req.params;
+
+    // ADR-0011：远程命名空间身份 → 转发远程单 surface 读取（裸 id，远程端做
+    // 自己的 not_found 判定）；本地身份走下方既有 store 路径，行为字节级不动。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId);
+      if (hostTarget.scope === 'remote') {
+        return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/agents/${encodeURIComponent(bareId(agentId))}/ui-surfaces/${encodeURIComponent(bareId(surfaceId))}`);
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
+
     const record = store.get(agentId, surfaceId);
 
     if (!record) {
@@ -168,8 +250,28 @@ export function setupUISurfaceRoutes(app, express) {
   // DELETE — close (Feature)
   // ═══════════════════════════════════════════════════════════════
 
-  app.delete('/protoclaw/agents/:agentId/ui-surfaces/:surfaceId', (req, res) => {
+  app.delete('/protoclaw/agents/:agentId/ui-surfaces/:surfaceId', async (req, res) => {
     const { agentId, surfaceId } = req.params;
+
+    // ADR-0011：远程命名空间身份 → 转发远程同名 close 路由（裸 id，远程端做
+    // 自己的 close 幂等与 revision 冲突判定；本地分支不重复做 event/状态去重）。
+    // 本地身份走下方既有 store 路径，行为字节级不动。远程写强制幂等键
+    // （DELETE 无 body，读 x-idempotency-key 头 / query，R2 系列既定闸形态）。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(res, readOperationMetadata(req).idempotencyKey, 'Remote write operations require an idempotency key (x-idempotency-key)')) return;
+        const params = new URLSearchParams();
+        if (req.query.expectedRevision !== undefined) params.set('expectedRevision', String(req.query.expectedRevision));
+        const qs = params.toString();
+        return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/agents/${encodeURIComponent(bareId(agentId))}/ui-surfaces/${encodeURIComponent(bareId(surfaceId))}${qs ? `?${qs}` : ''}`, {
+          method: 'DELETE',
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
+
     const expectedRevision = req.query.expectedRevision ? Number(req.query.expectedRevision) : undefined;
 
     const result = store.close(agentId, surfaceId, {
@@ -191,6 +293,25 @@ export function setupUISurfaceRoutes(app, express) {
     const { agentId, surfaceId, actionId } = req.params;
     const body = req.body || {};
     const { eventId, surfaceRevision, values } = body;
+
+    // ADR-0011：远程命名空间身份 → 转发远程同名 action 路由（裸 id，远程端走
+    // 它自己的 action 校验、eventId 去重与 deliverUserInput/input-gateway
+    // 投递；本地分支在远程身份前短路，不重复做同构校验）。远程写强制幂等键：
+    // 幂等凭证 = body.eventId（面板动作的事件标识，远程端以其去重），缺者
+    // 400 idempotency_key_required 且请求不过隧道。本地身份走下方既有校验 +
+    // 投递路径，行为字节级不动。
+    try {
+      const hostTarget = resolveForwardHostTarget(agentId);
+      if (hostTarget.scope === 'remote') {
+        if (!requireRemoteIdempotencyKey(res, typeof eventId === 'string' && eventId ? eventId : null, 'Remote write operations require an idempotency key (body.eventId)')) return;
+        return await forwardProtoclawRoute(res, hostTarget, `/protoclaw/agents/${encodeURIComponent(bareId(agentId))}/ui-surfaces/${encodeURIComponent(bareId(surfaceId))}/actions/${encodeURIComponent(actionId)}`, {
+          method: 'POST',
+          body,
+        });
+      }
+    } catch (error) {
+      return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    }
 
     // eventId 必填
     if (!eventId || typeof eventId !== 'string' || eventId.length > 512) {
