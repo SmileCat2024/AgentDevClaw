@@ -11,6 +11,11 @@
  * 显示条件 = 当前会话 runtime 实际挂载的 Feature 名单（inspector 快照，
  * 与 Features 面板同源）；未挂载的 section 不渲染。
  *
+ * 远程会话（R2-04，ADR-0011）：状态与控制经命名空间身份转发到远程同名路由
+ * 执行（feature 状态真值在远程 runtime 内）；agentId 用焦点收敛的宿主级命名
+ * 空间 id（panelAgentId），sessionId 用目录条目的命名空间值；写操作统一携带
+ * 幂等键，连接能力矩阵 write 缺位时面板降级为只读（无远程标识）。
+ *
  * 开关的实时性：它会被 runtime 内真实的超阈值事件消耗，面板打开期间
  * 每 3s 静默刷新一次，保证「用掉了立刻显示为关闭」。
  *
@@ -90,10 +95,65 @@
   }
 
   function currentSessionId() {
-    return typeof getRuntimeWorkspaceSessionId === 'function' && currentRuntimeAgentId
+    const local = typeof getRuntimeWorkspaceSessionId === 'function' && currentRuntimeAgentId
       ? getRuntimeWorkspaceSessionId(currentRuntimeAgentId)
         || (typeof getActiveWorkspaceSessionId === 'function' ? getActiveWorkspaceSessionId() : '')
       : '';
+    if (local) return local;
+    // 远程会话（R2-04，ADR-0012）：远程条目不在 allAgents，viewer 绑定与
+    // record 链落空——会话身份从远程目录解析（命名空间化条目值）。目录未含
+    // 条目（连接断开）返回空串，调用方按「无会话」降级，与本地空态同形。
+    const runtimeRef = currentRuntimeAgentId || '';
+    if (typeof isRemoteNamespaceAgentId !== 'function'
+      || (!isRemoteNamespaceAgentId(runtimeRef)
+        && !(typeof focusedAgentId === 'string' && isRemoteNamespaceAgentId(focusedAgentId)))) {
+      return '';
+    }
+    const rc = typeof window !== 'undefined' ? window.RemoteConnections : null;
+    return (typeof rc?.getEntryRuntimeSessionId === 'function' && runtimeRef)
+      ? rc.getEntryRuntimeSessionId(runtimeRef)
+      : '';
+  }
+
+  // ── 远程身份与写门控（R2-04，ADR-0011/0012）─────────────────────
+  // 面板调用点的宿主身份纪律：本地会话 = 焦点宿主逻辑 id（现状不变）；远程
+  // 会话 = 焦点收敛产物（switchAgent 已把 focusedAgentId 收敛为宿主级命名
+  // 空间 id），目录未含条目（focusedAgentId 仍是运行时引用，如断开窗口）时
+  // 从目录解析，仍无则空串——调用方显式失败，不猜目标（对齐
+  // slash-commands.js _currentSessionContext 身份纪律）。
+  function panelAgentId() {
+    const focused = typeof focusedAgentId === 'string' ? focusedAgentId : '';
+    const runtimeRef = currentRuntimeAgentId || '';
+    const isRemote = typeof isRemoteNamespaceAgentId === 'function'
+      && (isRemoteNamespaceAgentId(focused) || isRemoteNamespaceAgentId(runtimeRef));
+    if (!isRemote) return focused;
+    if (focused && isRemoteNamespaceAgentId(focused)) return focused;
+    const rc = typeof window !== 'undefined' ? window.RemoteConnections : null;
+    return (typeof rc?.getEntryHostNamespaceId === 'function' && runtimeRef)
+      ? (rc.getEntryHostNamespaceId(runtimeRef) || '')
+      : '';
+  }
+
+  // 写能力门控（ADR-0011 能力矩阵）：面板三项均为 runtime 控制写，远程会话
+  // 按连接能力矩阵 write 位判定（capabilityFor），本地恒可写。缺位（旧远程 /
+  // 断开）降级为只读呈现，不出现远程标识（ADR-0011 #5）。
+  function panelWriteEnabled() {
+    if (typeof isRemoteNamespaceAgentId !== 'function') return true;
+    const focused = typeof focusedAgentId === 'string' ? focusedAgentId : '';
+    if (!isRemoteNamespaceAgentId(focused) && !isRemoteNamespaceAgentId(currentRuntimeAgentId || '')) {
+      return true;
+    }
+    const rc = typeof window !== 'undefined' ? window.RemoteConnections : null;
+    return rc?.capabilityFor?.(panelAgentId(), 'write') === true;
+  }
+
+  // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）──────
+  function newIdempotencyKey() {
+    const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+    if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+      return cryptoObj.randomUUID();
+    }
+    return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
   function runtimeKey() {
@@ -210,8 +270,8 @@
     return String(Math.round(n));
   }
 
-  function renderGuardSection({ item, zh }) {
-    const disabled = item.guardPending;
+  function renderGuardSection({ item, zh, writeEnabled = true }) {
+    const disabled = item.guardPending || !writeEnabled;
     const armed = item.guardArmed === true;
     const trip = item.guardTrip;
     const threshold = item.guardThresholdTokens;
@@ -267,8 +327,8 @@
       + '</div></div>';
   }
 
-  function renderAutoResumeSection({ item, zh }) {
-    const disabled = item.pending;
+  function renderAutoResumeSection({ item, zh, writeEnabled = true }) {
+    const disabled = item.pending || !writeEnabled;
     const triggers = getTriggers(item);
 
     return [
@@ -346,6 +406,10 @@
     }
 
     const item = getState();
+    // 写能力门控（ADR-0011 能力矩阵）：远程会话按连接能力矩阵 write 位判定；
+    // 缺位（旧远程/断开）降级为只读呈现（开关禁用，状态仍展示远程真实值），
+    // 不出现任何远程标识。本地会话恒可写（本地身份 capabilityFor 恒真）。
+    const writeEnabled = panelWriteEnabled();
 
     if (caps.fc && !item.initialized && !item.refreshing && !item.pending) {
       // Read the authoritative session Feature state rather than treating this
@@ -357,9 +421,9 @@
     }
 
     const sections = [];
-    if (caps.fc) sections.push(renderAutoResumeSection({ item, zh }));
-    if (caps.guard) sections.push(renderGuardSection({ item, zh }));
-    if (caps.rot) sections.push(renderRotationSection({ zh }));
+    if (caps.fc) sections.push(renderAutoResumeSection({ item, zh, writeEnabled: writeEnabled }));
+    if (caps.guard) sections.push(renderGuardSection({ item, zh, writeEnabled }));
+    if (caps.rot) sections.push(renderRotationSection({ zh, writeEnabled }));
 
     const notes = [];
     if (caps.fc) notes.push(zh
@@ -391,7 +455,7 @@
 
     setState({ refreshing: true, error: '' }, key);
     try {
-      const params = new URLSearchParams({ agentId: focusedAgentId, sessionId });
+      const params = new URLSearchParams({ agentId: panelAgentId(), sessionId });
       const response = await fetch(`/protoclaw/force_continuation_status?${params.toString()}`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
@@ -407,7 +471,7 @@
   }
 
   async function updateControl(patch) {
-    if (!resolveCaps()?.fc) return;
+    if (!resolveCaps()?.fc || !panelWriteEnabled()) return;
     const sessionId = currentSessionId();
     const key = runtimeKey();
     if (!sessionId || !focusedAgentId || !key) return;
@@ -416,8 +480,8 @@
     try {
       const response = await fetch('/protoclaw/force_continuation_control', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: focusedAgentId, sessionId, ...patch }),
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+        body: JSON.stringify({ agentId: panelAgentId(), sessionId, ...patch }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
@@ -463,7 +527,7 @@
 
     setState({ guardRefreshing: true, guardError: '' }, key);
     try {
-      const params = new URLSearchParams({ agentId: focusedAgentId, sessionId });
+      const params = new URLSearchParams({ agentId: panelAgentId(), sessionId });
       const response = await fetch(`/protoclaw/context_guard_status?${params.toString()}`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
@@ -497,7 +561,7 @@
   }
 
   async function updateGuardArmed(armed) {
-    if (!resolveCaps()?.guard) return;
+    if (!resolveCaps()?.guard || !panelWriteEnabled()) return;
     const sessionId = currentSessionId();
     const key = runtimeKey();
     if (!sessionId || !focusedAgentId || !key) return;
@@ -506,8 +570,8 @@
     try {
       const response = await fetch('/protoclaw/context_guard_control', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: focusedAgentId, sessionId, armed: armed === true }),
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+        body: JSON.stringify({ agentId: panelAgentId(), sessionId, armed: armed === true }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
@@ -648,9 +712,9 @@
     if (!sessionId || !focusedAgentId) throw new Error('session not connected');
     const resp = await fetch('/protoclaw/capability_invoke', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({
-        agentId: focusedAgentId,
+        agentId: panelAgentId(),
         sessionId,
         runtimeId: currentRuntimeAgentId || undefined,
         ref: ROTATION_REF,
@@ -684,7 +748,7 @@
   }
 
   async function updateRotationConfig(partial) {
-    if (!resolveCaps()?.rot) return;
+    if (!resolveCaps()?.rot || !panelWriteEnabled()) return;
     const r = getRotation();
     if (r.pending) return;
     r.pending = true;
@@ -855,14 +919,14 @@
     ].join('');
   }
 
-  function renderRotationSection({ zh }) {
+  function renderRotationSection({ zh, writeEnabled = true }) {
     const r = getRotation();
     if (!r.initialized && !r.refreshing && !r.pending) {
       void refreshRotationStatus({ renderWhenDone: true });
     }
     ensureRotationPolling();
     const st = r.status || {};
-    const disabled = r.pending;
+    const disabled = r.pending || !writeEnabled;
 
     const facts = [];
     if (st.currentPreset) facts.push((zh ? '当前 ' : 'now ') + String(st.currentPreset));
