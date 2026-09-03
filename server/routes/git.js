@@ -7,6 +7,16 @@
  * POST /protoclaw/git/commit   body: { dir, message }   → 提交暂存区
  * POST /protoclaw/git/discard  body: { dir, files: [] } → 丢弃工作区/暂存区改动（不可逆）
  *
+ * ── 远程命名空间分支（ADR-0011）──────────────────────────────
+ * 全部端点均按同一套路接入远程命名空间分支：请求体 agentId 携带宿主级
+ * 命名空间身份（remote:<connId>:<hostId>）→ resolveForwardHostTarget 派生
+ * 连接 → forwardProtoclawRoute 转发远程同名路由，body 原样转发（dir 是远程
+ * 机本地路径，远程端自己 validateDir/resolveGitRoot），身份字段 bareId 展开。
+ * 写端点（stage/unstage/commit/discard/branch/stash）远程分支强制幂等键
+ * （400 idempotency_key_required）；读端点（status/graph/branches/
+ * commit_files）不强制。本地身份（无 agentId 或非命名空间）走既有本地
+ * git 执行路径，字节级不动。
+ *
  * ── 实现来源声明 ──────────────────────────────────────────────
  * status porcelain 解析器（FileStatusSummary / StatusSummary /
  * parseStatusSummary / splitLine / LineParser / parseStringResponse /
@@ -25,6 +35,13 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { runCommand } from './fs-operations.js';
+import {
+  bareId,
+  resolveForwardHostTarget,
+  forwardProtoclawRoute,
+  readForwardTargetError,
+} from '../shared/remote-forward.js';
+import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
 
 // ═══════════════════════════════════════════════════════════════
 // 移植自 simple-git：utils（util.ts / argument-filters.ts / line-parser.ts / task-parser.ts）
@@ -469,9 +486,72 @@ function routeError(res, error) {
   res.status(status).json({ error: String(error?.message || error || 'git operation failed') });
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 远程命名空间分支（ADR-0011 protoclaw 域适配套路，ADR-0008 #5：host 默认
+// 本地、远程必须显式）
+//
+// git 端点是 host-plane 目录寻址操作（body.dir = 执行 git 的目录）。远程会话
+// 的目录（catalog projectDir）是远程机本地路径，本地无法校验——身份必须显式
+// 携带：请求体 agentId 为 remote: 命名空间 id → resolveForwardHostTarget 派生
+// 连接 → forwardProtoclawRoute 转发远程同名路由。body 原样转发（dir 是远程机
+// 本地路径，远程端自己 validateDir/resolveGitRoot，本地不复刻任何 git 逻辑），
+// 身份字段 bareId 展开。本地身份（无 agentId 或非命名空间）走既有本地路径，
+// 字节级不动（agentId 被本地分支忽略）；远程身份也永不 fallback 到本地执行
+// （ADR-0008 #1），未知/停用连接按 RequestTargetError 契约（404 / 503
+// retryable）呈现。
+// ═══════════════════════════════════════════════════════════════
+
+// ADR-0011：远程写幂等闸（写端点集合；status/graph/branches/commit_files 读
+// 端点不强制）。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；本地路径
+// 保持现状不强制（session.js / proxy.js 同族契约）。
+const GIT_WRITE_OPS = new Set(['stage', 'unstage', 'commit', 'discard', 'branch', 'stash']);
+
+function requireRemoteGitIdempotencyKey(req, res) {
+  const metadata = readOperationMetadata(req);
+  if (metadata.idempotencyKey) return true;
+  res.status(400).json({
+    ok: false,
+    code: 'idempotency_key_required',
+    retryable: false,
+    operationId: metadata.operationId || null,
+    message: 'Remote write operations require an idempotency key (x-idempotency-key)',
+    error: 'Remote write operations require an idempotency key (x-idempotency-key)',
+  });
+  return false;
+}
+
+/**
+ * 识别 body 命名空间身份（agentId，宿主级命名空间 id）：`remote:` 前缀 →
+ * resolveForwardHostTarget 派生连接 → forwardProtoclawRoute 转发远程同名 git
+ * 路由，返回远程响应原文。body 原样转发（dir 是远程机本地路径，远程端自己
+ * validateDir/resolveGitRoot，本地不复刻任何 git 逻辑），仅身份字段 bareId
+ * 展开。本地分支返回 false（零网络、不改写请求）；远程分支处理后返回 true。
+ * 写端点远程分支强制幂等键（400 idempotency_key_required，请求不过隧道），
+ * 读端点不强制。
+ */
+async function forwardRemoteGitIfNamespaced(req, res, op) {
+  try {
+    const hostTarget = resolveForwardHostTarget(req.body?.agentId);
+    if (hostTarget.scope !== 'remote') return false;
+    if (GIT_WRITE_OPS.has(op) && !requireRemoteGitIdempotencyKey(req, res)) return true;
+    await forwardProtoclawRoute(res, hostTarget, `/protoclaw/git/${op}`, {
+      method: 'POST',
+      // dir 原样转发：它是远程机的合法路径，远程端自己 validateDir/resolveGitRoot
+      body: { ...(req.body || {}), agentId: bareId(req.body?.agentId) },
+    });
+    return true;
+  } catch (error) {
+    res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
+    return true;
+  }
+}
+
 export function setupGitRoutes(app, express) {
   app.post('/protoclaw/git/status', express.json(), async (req, res) => {
     try {
+      // 远程命名空间身份 → 转发远程同名路由（dir 原样，远程端自己校验）；
+      // 本地身份走下方既有路径，行为字节级不动。读端点，无幂等闸。
+      if (await forwardRemoteGitIfNamespaced(req, res, 'status')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -487,6 +567,9 @@ export function setupGitRoutes(app, express) {
 
   app.post('/protoclaw/git/stage', express.json(), async (req, res) => {
     try {
+      // 远程命名空间身份 → 转发远程同名路由；本地身份字节级不动。写端点，
+      // 远程分支强制幂等键（见 forwardRemoteGitIfNamespaced）。
+      if (await forwardRemoteGitIfNamespaced(req, res, 'stage')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -504,6 +587,7 @@ export function setupGitRoutes(app, express) {
 
   app.post('/protoclaw/git/unstage', express.json(), async (req, res) => {
     try {
+      if (await forwardRemoteGitIfNamespaced(req, res, 'unstage')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -521,6 +605,7 @@ export function setupGitRoutes(app, express) {
 
   app.post('/protoclaw/git/commit', express.json(), async (req, res) => {
     try {
+      if (await forwardRemoteGitIfNamespaced(req, res, 'commit')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -545,6 +630,9 @@ export function setupGitRoutes(app, express) {
 
   app.post('/protoclaw/git/discard', express.json(), async (req, res) => {
     try {
+      // discard 是破坏性写：远程分支照常转发（前端既有确认流不新增层），
+      // 远程分支强制幂等键。
+      if (await forwardRemoteGitIfNamespaced(req, res, 'discard')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -625,6 +713,7 @@ export function setupGitRoutes(app, express) {
   // 本地/远程分支、HEAD、tag。解析用 NUL 分隔，避免 subject 含空格/引号问题。
   app.post('/protoclaw/git/graph', express.json(), async (req, res) => {
     try {
+      if (await forwardRemoteGitIfNamespaced(req, res, 'graph')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -689,6 +778,7 @@ export function setupGitRoutes(app, express) {
   // ── 某次提交改了哪些文件（点节点展开）────────────────────────────
   app.post('/protoclaw/git/commit_files', express.json(), async (req, res) => {
     try {
+      if (await forwardRemoteGitIfNamespaced(req, res, 'commit_files')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -721,6 +811,7 @@ export function setupGitRoutes(app, express) {
   // ── 分支列表（本地 / 远程 / HEAD）──────────────────────────────
   app.post('/protoclaw/git/branches', express.json(), async (req, res) => {
     try {
+      if (await forwardRemoteGitIfNamespaced(req, res, 'branches')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -742,6 +833,7 @@ export function setupGitRoutes(app, express) {
   // ── 分支操作：create / switch / delete ─────────────────────────
   app.post('/protoclaw/git/branch', express.json(), async (req, res) => {
     try {
+      if (await forwardRemoteGitIfNamespaced(req, res, 'branch')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
@@ -786,6 +878,9 @@ export function setupGitRoutes(app, express) {
   // ── 贮藏 stash：save / pop / drop / list ───────────────────────
   app.post('/protoclaw/git/stash', express.json(), async (req, res) => {
     try {
+      // 工单读写分类把 stash 端点整体归写（save/pop/drop 写、list 读），
+      // 幂等闸按端点粒度强制——与 session.js 逐端点口径一致。
+      if (await forwardRemoteGitIfNamespaced(req, res, 'stash')) return;
       const dir = await validateDir(req.body?.dir);
       const root = await resolveGitRoot(dir);
       if (!root) {
