@@ -202,16 +202,19 @@ test('rewrites the remote template map so follow-up urls route back through the 
     // The stale remote content-length must not survive a rewritten body.
     assert.equal(res.headers.has('content-length'), false);
     assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
+    // Urls nest under the /r/<connectionId> path prefix: module-relative
+    // imports (shared chunks) keep routing to the same connection, while a
+    // query-carried identity would be dropped by URL-relative resolution.
     assert.deepEqual(JSON.parse(res.body.toString('utf8')), {
-      'tool.render': `/tpl/0123456789ab/dist/features/foo/templates/tool.render.js?agentId=${ENCODED_NAMESPACE}`,
-      'other.render': `/npm/shell-feature/features/shell/render.js?agentId=${ENCODED_NAMESPACE}`,
+      'tool.render': '/r/server-a/tpl/0123456789ab/dist/features/foo/templates/tool.render.js',
+      'other.render': '/r/server-a/npm/shell-feature/features/shell/render.js',
     });
   } finally {
     fetchMock.restore();
   }
 });
 
-test('template url rewrite round-trips: namespaced request restores the remote form', async () => {
+test('template url rewrite round-trips: asset route request forwards the remote form', async () => {
   const fetchMock = mockFetch();
   try {
     // Remote answers the map request with plain urls.
@@ -232,18 +235,107 @@ test('template url rewrite round-trips: namespaced request restores the remote f
       { findConnection: FIND_CONNECTION },
     );
     const frontendUrl = JSON.parse(mapRes.body.toString('utf8'))['tool.render'];
-    assert.equal(frontendUrl, `/tpl/0123456789ab/tpl/tool.render.js?agentId=${ENCODED_NAMESPACE}`);
+    assert.equal(frontendUrl, '/r/server-a/tpl/0123456789ab/tpl/tool.render.js');
 
-    // The frontend then fetches that url; the proxy restores the remote form.
+    // The frontend then fetches that url; the proxy strips the route prefix
+    // and forwards the asset path verbatim.
     const assetRes = makeRes();
     await proxyToViewer(makeReq(frontendUrl), assetRes, { findConnection: FIND_CONNECTION });
     assert.equal(
       fetchMock.calls[1].url,
-      `${REMOTE_ORIGIN}/tpl/0123456789ab/tpl/tool.render.js?agentId=agent-3-22040`,
+      `${REMOTE_ORIGIN}/tpl/0123456789ab/tpl/tool.render.js`,
     );
   } finally {
     fetchMock.restore();
   }
+});
+
+test('asset route forwards relative chunk imports without any query identity', async () => {
+  // The regression shape: a template module's `import "../../../chunk-X.js"`
+  // resolves against the module path, drops the query, and only the /r/
+  // path prefix keeps the request on the remote connection.
+  const fetchMock = mockFetch(() => ({
+    status: 200,
+    headers: { 'content-type': 'application/javascript; charset=utf-8' },
+    body: 'export const x = 1;',
+  }));
+  try {
+    const res = makeRes();
+    await proxyToViewer(
+      makeReq('/r/server-a/tpl/0123456789ab/dist/chunk-DGUM43GV.js'),
+      res,
+      { findConnection: FIND_CONNECTION },
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(
+      fetchMock.calls[0].url,
+      `${REMOTE_ORIGIN}/tpl/0123456789ab/dist/chunk-DGUM43GV.js`,
+    );
+
+    // The remote's query string, when present, survives the prefix strip.
+    const queryRes = makeRes();
+    await proxyToViewer(
+      makeReq('/r/server-a/npm/shell-feature/render.js?v=2'),
+      queryRes,
+      { findConnection: FIND_CONNECTION },
+    );
+    assert.equal(
+      fetchMock.calls[1].url,
+      `${REMOTE_ORIGIN}/npm/shell-feature/render.js?v=2`,
+    );
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test('asset route rejects non-asset paths and non-GET methods locally', async () => {
+  const fetchMock = mockFetch();
+  try {
+    // API paths never ride the asset route.
+    const apiRes = makeRes();
+    await proxyToViewer(
+      makeReq('/r/server-a/api/agents/agent-3-22040/messages'),
+      apiRes,
+      { findConnection: FIND_CONNECTION },
+    );
+    assert.equal(apiRes.statusCode, 403);
+    assert.equal(apiRes.jsonPayload.ok, false);
+
+    // Writes are rejected before the method check orders them — POST to a
+    // valid asset path is still refused.
+    const postRes = makeRes();
+    await proxyToViewer(
+      makeReq('/r/server-a/tpl/0123456789ab/tpl/tool.render.js', { method: 'POST' }),
+      postRes,
+      { findConnection: FIND_CONNECTION },
+    );
+    assert.equal(postRes.statusCode, 403);
+
+    assert.equal(fetchMock.calls.length, 0, 'rejected asset-route requests never reach the remote');
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test('asset route resolves the connection through the same failure contract', async () => {
+  await assert.rejects(
+    proxyToViewer(
+      makeReq('/r/ghost/tpl/0123456789ab/tpl/tool.render.js'),
+      makeRes(),
+      { findConnection: FIND_CONNECTION },
+    ),
+    (error) => error.code === 'target_not_found' && error.status === 404,
+    'unknown connection',
+  );
+  await assert.rejects(
+    proxyToViewer(
+      makeReq('/r/server-b/tpl/0123456789ab/tpl/tool.render.js'),
+      makeRes(),
+      { findConnection: FIND_CONNECTION },
+    ),
+    (error) => error.code === 'transport_unavailable' && error.status === 503 && error.retryable === true,
+    'disabled connection',
+  );
 });
 
 test('leaves remote message bodies byte-identical, including internal references', async () => {

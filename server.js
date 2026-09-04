@@ -952,7 +952,8 @@ app.get('/protoclaw/choice_alerts', async (_req, res, next) => {
 });
 
 // ViewerWorker 代理：API 接口 + /tpl/ 模板装载资产（URL 由 worker 从注册事实生成）
-app.get(/^\/(api|tpl)(\/.*)?$/, (req, res, next) => {
+// + /r/<connId>/ 远程静态资产前缀路由（proxy.js 内解析转发）
+app.get(/^\/(api|tpl|r)(\/.*)?$/, (req, res, next) => {
   proxyToViewer(req, res).catch(next);
 });
 

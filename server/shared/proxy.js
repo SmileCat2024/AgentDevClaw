@@ -1,7 +1,7 @@
 import { VIEWER_ORIGIN } from './constants.js';
 import {
-  REMOTE_NAMESPACE_PREFIX,
   RequestTargetError,
+  resolveHostTarget,
   resolveProxyTarget,
   resolveRuntimeTarget,
   rewriteProxyUrl,
@@ -63,6 +63,25 @@ const REMOTE_STATIC_PREFIXES = ['/tpl/', '/template/', '/features/', '/npm/'];
 function isStaticAssetPath(pathname) {
   return REMOTE_STATIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))
     || pathname.startsWith('/chunk-');
+}
+
+// Remote static assets are addressed as /r/<connectionId><asset-path>.
+// Identity-in-query (?agentId=remote:…) is not inherited by a module's
+// relative imports — tsup shared chunks (`import "../../../chunk-X.js"`)
+// resolve against the module path and drop the query, so chunk sub-requests
+// lost their routing identity and fell through to the local ViewerWorker
+// (unknown mountId → 404 → the whole template module failed to import). A
+// path prefix survives relative resolution, so chunk sub-requests stay on the
+// same connection automatically. Connection ids are URL-safe by store
+// charset, so the segment needs no decoding.
+const REMOTE_ASSET_ROUTE_PREFIX = '/r/';
+
+function parseRemoteAssetRoute(pathname) {
+  if (!pathname.startsWith(REMOTE_ASSET_ROUTE_PREFIX)) return null;
+  const rest = pathname.slice(REMOTE_ASSET_ROUTE_PREFIX.length);
+  const separator = rest.indexOf('/');
+  if (separator <= 0) return null;
+  return { connectionId: rest.slice(0, separator), assetPath: rest.slice(separator) };
 }
 
 function isRemoteReadWhitelisted(method, pathname) {
@@ -156,23 +175,24 @@ function buildRemoteFailure(code, message, metadata) {
 }
 
 // /api/templates/feature responds with { templateName: url } where each url
-// addresses the remote's own template mounts. Appending the namespaced
-// agentId makes the frontend's follow-up requests route back through this
-// proxy to the remote origin (the proxy restores the plain id on forward).
-// Only these follow-up URL fields are rewritten; data references inside
-// message bodies keep the remote's original ids untouched.
+// addresses the remote's own template mounts. The rewrite nests every url
+// under /r/<connectionId> so the frontend's follow-up requests — including
+// relative chunk imports inside the template modules — route back through
+// this proxy to the remote origin (the prefix is preserved by URL-relative
+// resolution; the query form is not, see REMOTE_ASSET_ROUTE_PREFIX). Only
+// these follow-up URL fields are rewritten; data references inside message
+// bodies keep the remote's original ids untouched.
 function rewriteTemplateMapUrls(body, target) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
 
-  const agentParam = `agentId=${encodeURIComponent(
-    `${REMOTE_NAMESPACE_PREFIX}${target.connectionId}:${target.agentId}`
-  )}`;
+  const prefix = `${REMOTE_ASSET_ROUTE_PREFIX}${target.connectionId}`;
   let rewritten = null;
   for (const [name, url] of Object.entries(body)) {
     if (typeof url !== 'string' || !isStaticAssetPath(url.split('?')[0])) continue;
+    // Urls that already carry an explicit agent identity are left untouched.
     if (/[?&]agentId=/.test(url)) continue;
     if (!rewritten) rewritten = { ...body };
-    rewritten[name] = url.includes('?') ? `${url}&${agentParam}` : `${url}?${agentParam}`;
+    rewritten[name] = `${prefix}${url}`;
   }
   return rewritten;
 }
@@ -214,18 +234,56 @@ export async function proxyToViewer(req, res, options = {}) {
     findConnection: options.findConnection || _connectionLookup,
   };
 
+  const method = req.method.toUpperCase();
+  const originalUrl = String(req.originalUrl || '');
+  const pathname = originalUrl.split(/[?#]/, 1)[0];
+
+  // /r/<connectionId><asset-path> carries its target in the path itself; it
+  // bypasses the query/route identity resolution and the read whitelist,
+  // which it subsumes (GET + static asset prefixes + enabled connection).
+  const remoteAssetRoute = parseRemoteAssetRoute(pathname);
+  if (remoteAssetRoute) {
+    if (method !== 'GET') {
+      res.status(403).json(buildLocalFailureResponse({
+        status: 403,
+        message: `Remote asset route is read-only: ${method} ${pathname}`,
+      }, metadata));
+      return;
+    }
+    if (!isStaticAssetPath(remoteAssetRoute.assetPath)) {
+      res.status(403).json(buildLocalFailureResponse({
+        status: 403,
+        message: `Remote asset route only serves static asset paths: ${method} ${pathname}`,
+      }, metadata));
+      return;
+    }
+  }
+
   let target = resolveProxyTarget(req, resolveOptions);
   if (!target) {
-    const queryAgentId = readAgentQueryIdentity(req.originalUrl);
+    const queryAgentId = readAgentQueryIdentity(originalUrl);
     if (queryAgentId !== null) {
       target = resolveRuntimeTarget({ agentId: queryAgentId }, resolveOptions);
     }
   }
 
-  const method = req.method.toUpperCase();
-  const pathname = String(req.originalUrl || '').split(/[?#]/, 1)[0];
+  if (remoteAssetRoute) {
+    // resolveHostTarget applies the same failure contract as runtime targets:
+    // unknown connection → target_not_found, disabled → transport_unavailable.
+    const hostTarget = resolveHostTarget({ connectionId: remoteAssetRoute.connectionId }, {
+      findConnection: resolveOptions.findConnection,
+    });
+    target = {
+      scope: 'remote',
+      connectionId: remoteAssetRoute.connectionId,
+      agentId: null,
+      sessionId: null,
+      runtimeId: null,
+      origin: hostTarget.origin,
+    };
+  }
 
-  if (target && target.scope === 'remote' && !isRemoteReadWhitelisted(method, pathname)) {
+  if (target && target.scope === 'remote' && !remoteAssetRoute && !isRemoteReadWhitelisted(method, pathname)) {
     const isWrite = method !== 'GET' && method !== 'HEAD';
     const writeWhitelisted = isWrite && isRemoteWriteWhitelisted(pathname);
     if (!writeWhitelisted) {
@@ -279,10 +337,13 @@ export async function proxyToViewer(req, res, options = {}) {
 
   // Remote forwards restore the remote's original resource ids in the
   // request URL; rewriteProxyUrl is a no-op for local targets, which keep
-  // byte-identical forwarding.
-  const targetUrl = target && target.scope === 'remote'
-    ? `${target.origin}${rewriteProxyUrl(req.originalUrl, target)}`
-    : `${target?.viewerOrigin || VIEWER_ORIGIN}${req.originalUrl}`;
+  // byte-identical forwarding. Asset-route forwards strip the /r/<connId>
+  // prefix — the asset path (query included) is forwarded verbatim.
+  const targetUrl = remoteAssetRoute
+    ? `${target.origin}${remoteAssetRoute.assetPath}${originalUrl.slice(pathname.length)}`
+    : target && target.scope === 'remote'
+      ? `${target.origin}${rewriteProxyUrl(originalUrl, target)}`
+      : `${target?.viewerOrigin || VIEWER_ORIGIN}${originalUrl}`;
 
   let response;
   try {

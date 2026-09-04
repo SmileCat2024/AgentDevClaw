@@ -30,6 +30,8 @@ Runtime Plane（消息/工具/Todo）、Session Plane（会话/分支/精简）�
 
 远程 ViewerWorker (2026) 永不直接暴露，所有请求经远程 Claw Server (1420) 的既有代理路径。连接以 `mode` 区分三种传输形态，路由层不可见：`resolveViewerOrigin` / `remoteOrigin` 只返回一个 origin——隧道模式（`manual` / `managed`）为 `http://127.0.0.1:<localPort>`，直连模式（`url`）为用户配置的远程 http(s) 源地址，路由层不知道也不需要知道 origin 背后是 SSH、公网反代还是别的。未来新增传输形态 = 映射为一个 origin，路由零改动。
 
+> 修订（2026-09-03）：远程**静态资产**（模板 mount、共享 chunk 等）的路由身份从 `?agentId=remote:…` query 改为 `/r/<connectionId>/` path 前缀。模板模块经 tsup code splitting 产生的相对 import（`import "../../../chunk-X.js"`）按 URL 相对解析，不继承 query——chunk 子请求会丢失身份、回落本地 ViewerWorker（mountId 未注册 → 404 → 整个模板模块 import 失败，表现为远程会话的工具调用全部回退 JSON 渲染）。path 前缀被相对解析天然保留，子请求自动留在同一连接上。前缀路由独立于读白名单自行校验（GET + 静态前缀 + enabled 连接，失败契约复用 target_not_found / transport_unavailable）。
+
 > 修订（2026-08-28）：原决策为"SSH 本地端口转发是唯一传输"。实际部署形态中存在"远程实例无 SSH 入站、仅经 HTTPS 反代可达"的服务器（内网穿透 / 容器托管常见），为它要求用户自建 SSH 隧道违背产品化目标。据此新增 `url` 直连模式：连接只存 `baseUrl`（源形态，无路径），健康探测与代理转发直接以 fetch 打远程地址，无本地端口、无 SSH 进程；`localPort` 为 null，不参与端口分配。安全的公网暴露面（认证 / TLS）由部署方的反代层负责，与隧道模式中 SSH 承担的角色等价。
 
 > 修订（2026-08-28）：远程实例启用 Claw 内建单密码访问保护时，握手与转发请求会被远程 401 拒绝。连接配置新增 `auth.password`（三种传输模式通用）：本地按连接向远程 `/protoclaw/auth/login` 换取会话 cookie，握手、代理转发与 protoclaw 域转发统一携带，cookie 失效自动重登录，密码错误走失败缓存（不触发远程登录限流）。凭据必须明文落盘（登录需要可还原明文，哈希不可用），与 `auth.json` 的 serviceToken 同一威胁模型，配置文件置于用户数据目录；连接管理 API 只回传 `configured` 形态，明文不出服务进程。session 身份的远程写请求受 CSRF same-origin 检查约束，转发层为携带会话 cookie 的写请求补目标 origin 头——服务端持凭据转发本就在浏览器 CSRF 威胁模型之外，持有密码即可自行构造同源请求，不构成防护削弱。
