@@ -99,5 +99,20 @@ function applyTheme(theme) {
   currentTheme = theme === 'light' ? 'light' : 'dark';
   document.body.dataset.theme = currentTheme;
   localStorage.setItem('agentdev-theme', currentTheme);
+  // 代码高亮 token 配色与 markdown 基础样式随主题切换（同 CDN 同版本）
+  // 注意：cdnjs 上 highlight.js 亮色主题的文件名是 github.min.css（无 github-light）
+  setThemeStylesheet('hljs-theme-css', currentTheme === 'light'
+    ? 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css'
+    : 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css');
+  setThemeStylesheet('github-markdown-css', currentTheme === 'light'
+    ? 'https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-light.min.css'
+    : 'https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-dark.min.css');
   renderThemeToggle();
+}
+
+function setThemeStylesheet(id, href) {
+  const link = document.getElementById(id);
+  if (link && link.getAttribute('href') !== href) {
+    link.setAttribute('href', href);
+  }
 }

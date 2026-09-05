@@ -38,25 +38,26 @@
 }
 
 body[data-theme="light"] {
-  --bg-color: #fafafa;
-  --sidebar-bg: #f0f0f2;
-  --header-bg: #f0f0f2;
-  --panel-bg: #f4f4f6;
-  --border-color: #d8d8d8;
+  --bg-color: #f0f0f2;
+  --sidebar-bg: #e8e8ec;
+  --header-bg: #e8e8ec;
+  --panel-bg: #f7f7f9;
+  --border-color: #d4d4d8;
   --text-primary: #121212;
   --text-secondary: #666;
   --text-muted: #8a8a8a;
   --accent-color: #121212;
-  --user-msg-bg: #efefef;
-  --assistant-msg-bg: #fafafa;
-  --tool-msg-bg: #f1f1f1;
-  --hover-bg: #eaeaea;
-  --active-bg: #e2e2e2;
+  --code-accent: #0969da;
+  --user-msg-bg: #e4e4e8;
+  --assistant-msg-bg: #f7f7f9;
+  --tool-msg-bg: #ececef;
+  --hover-bg: #e2e2e6;
+  --active-bg: #d8d8dd;
   --bg-secondary: var(--hover-bg);
-  --scrollbar-thumb: #c0c0c0;
-  --scrollbar-thumb-hover: #a7a7a7;
-  --input-card-bg: #ffffff;
-  --input-card-border: #d8d8d8;
+  --scrollbar-thumb: #b8b8bd;
+  --scrollbar-thumb-hover: #9d9da3;
+  --input-card-bg: #fbfbfc;
+  --input-card-border: #d4d4d8;
   --shadow-color: rgba(0, 0, 0, 0.08);
   --shadow-strong: rgba(0, 0, 0, 0.14);
   /* ── glass variables (light) ── */

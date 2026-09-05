@@ -448,6 +448,10 @@ body[data-theme="light"] .markdown-body blockquote {
   border-left-color: rgba(0, 0, 0, 0.16);
 }
 .markdown-body pre { background-color: #111 !important; border-radius: 6px; }
+body[data-theme="light"] .markdown-body pre {
+  background-color: #eceef1 !important;
+  border: 1px solid rgba(31, 35, 40, 0.12);
+}
 .markdown-body .katex {
   font-size: var(--md-inline-math-scale);
 }
