@@ -495,7 +495,12 @@ window.handleSessionTitleDoubleClick = function(event) {
  */
 let _phOpenSessionsCache = { sig: null, html: '' };
 
+// 屏蔽"上次未关闭的会话"恢复卡片：置为 true 后入口函数直接返回，卡片不再渲染；
+// 代码全部保留，恢复显示时改回 false 即可。
+const PH_OPEN_SESSIONS_CARD_DISABLED = true;
+
 window.phLoadOpenSessionsCard = async function(agentId, openDirectory) {
+  if (PH_OPEN_SESSIONS_CARD_DISABLED) return;
   const container = document.getElementById('ph-open-sessions-container');
   if (!container) return;
 
