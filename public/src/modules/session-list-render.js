@@ -514,11 +514,23 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     const mainEmptyNote = '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>' + newChatBtnHtml;
     const isSearching = phSearchQuery.trim().length > 0;
     const coderCount = (typeof window.CoderThreadsUI?.countFor === 'function') ? window.CoderThreadsUI.countFor(currentProject.openDirectory) : 0;
+    // 分页徽标：服务端切片携带当前项目 main/archived 真实总数（远程旧版
+    // 无此字段时回退已加载数）。加载更多按整体切片进度（sessionTotal vs
+    // 已加载条数），两个 tab 共用同一条追加流。
+    const wsMeta = agent?.workspace_sessions || {};
+    const loadedCount = Array.isArray(wsMeta.sessions) ? wsMeta.sessions.length : 0;
+    const sessionTotal = Number(wsMeta.sessionTotal);
+    const mainTabCount = Number.isFinite(Number(wsMeta.mainTotal)) ? Number(wsMeta.mainTotal) : mainSessions.length;
+    const archivedTabCount = Number.isFinite(Number(wsMeta.archivedTotal)) ? Number(wsMeta.archivedTotal) : archivedSessions.length;
+    const hasMore = Number.isFinite(sessionTotal) && loadedCount < sessionTotal;
+    const loadMoreBtnHtml = hasMore
+      ? '<div class="ph-load-more-wrap"><button class="workspace-action secondary ph-load-more-btn" type="button" onclick="window.phLoadMoreSessions()">' + escapeHtml(isZh ? '加载更多（已显示 ' + loadedCount + ' / ' + sessionTotal + '）' : 'Load more (' + loadedCount + ' / ' + sessionTotal + ')') + '</button></div>'
+      : '';
     sessionsHtml += '<div class="ph-session-tabs' + (isSearching ? ' searching' : '') + '" data-tab-group="' + tabId + '">';
     sessionsHtml += '<div class="ph-session-tab-bar">';
     sessionsHtml += '<div class="ph-session-tabs-row">';
-    sessionsHtml += '<button class="ph-session-tab' + (isSearching ? '' : ' active') + '" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainSessions.length)) + '</span></button>';
-    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedSessions.length)) + '</span></button>';
+    sessionsHtml += '<button class="ph-session-tab' + (isSearching ? '' : ' active') + '" data-ph-tab="main" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainTabCount)) + '</span></button>';
+    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" onclick="window.switchPhSessionTab(this)">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedTabCount)) + '</span></button>';
     sessionsHtml += '<button class="ph-session-tab" data-ph-tab="coder" onclick="window.switchPhSessionTab(this)">Coder <span class="ph-tab-count">' + escapeHtml(String(coderCount)) + '</span></button>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-toolbar">';
@@ -531,8 +543,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '</div>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-tab-panels">';
-    sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? renderPhSessionsWithGroups(mainSessions, 'main') : mainEmptyNote) + '</div></div>';
-    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="archived"><div class="feature-project-session-list">' + (archivedSessions.length > 0 ? renderPhSessionsWithGroups(archivedSessions, 'archived') : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>') + '</div></div>';
+    sessionsHtml += '<div class="ph-session-tab-panel active" data-ph-panel="main"><div class="feature-project-session-list">' + (mainSessions.length > 0 ? renderPhSessionsWithGroups(mainSessions, 'main') + loadMoreBtnHtml : mainEmptyNote) + '</div></div>';
+    sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="archived"><div class="feature-project-session-list">' + (archivedSessions.length > 0 ? renderPhSessionsWithGroups(archivedSessions, 'archived') + loadMoreBtnHtml : '<div class="feature-project-empty-note">' + escapeHtml(t('workspace_feature_no_sessions')) + '</div>' + (hasMore ? loadMoreBtnHtml : '')) + '</div></div>';
     const coderPanelHtml = (typeof window.CoderThreadsUI?.render === 'function')
       ? window.CoderThreadsUI.render({ projectDir: currentProject.openDirectory })
       : '';

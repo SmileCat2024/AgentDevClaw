@@ -259,6 +259,107 @@ describe('sidebar operation state machine', () => {
     assert.deepEqual(Array.from(settled.sessions, (session) => session.id), ['old', 'new']);
   });
 
+  it('appends a deeper page slice without dropping already-loaded entries', () => {
+    const ctx = loadSidebarOperations();
+    const merged = ctx.run(`mergeWorkspaceSessionSnapshots(
+      {
+        revision: 5,
+        sessionTotal: 4,
+        sessionOffset: 0,
+        sessionProjectDir: 'D:/code/Alpha',
+        sessions: [{ id: 'a' }, { id: 'b' }]
+      },
+      {
+        revision: 5,
+        sessionTotal: 4,
+        sessionOffset: 2,
+        sessionProjectDir: 'D:/code/Alpha',
+        sessions: [{ id: 'a', title: 'patched' }, { id: 'c' }, { id: 'd' }]
+      },
+      'programming-helper'
+    )`);
+    // 追加段不是 membership 权威：已加载 a/b 保留，重复 id 丢弃新段副本
+    assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['a', 'b', 'c', 'd']);
+    assert.equal(merged.sessionOffset, 2);
+    assert.equal(merged.sessionTotal, 4);
+    // 同 id 条目仍取 fresh 字段（服务端数据较新）
+    assert.equal(merged.sessions.find((session) => session.id === 'a').title, 'patched');
+  });
+
+  it('keeps the deeper loaded tail when a first-page refresh races a reload', () => {
+    const ctx = loadSidebarOperations();
+    const merged = ctx.run(`mergeWorkspaceSessionSnapshots(
+      {
+        revision: 7,
+        sessionTotal: 4,
+        sessionOffset: 0,
+        sessions: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
+      },
+      {
+        revision: 7,
+        sessionTotal: 4,
+        sessionOffset: 0,
+        sessions: [{ id: 'a' }, { id: 'b' }]
+      },
+      'programming-helper'
+    )`);
+    // revision 未变：首屏切片（agent_detail 重聚焦）不应截断已加载的深层段
+    assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['a', 'b', 'c', 'd']);
+  });
+
+  it('keeps the deeper loaded tail when a first-page slice arrives with a bumped revision', () => {
+    const ctx = loadSidebarOperations();
+    // revision 由一切会话变更推进（含每轮对话的 meta 同步），首屏切片携带更新的
+    // revision 落地是常态而非竞态——尾部保护不能依赖 revision 相等，否则深层段
+    // 被 60 条首屏截断后范围 poll 无法自愈（loadedCount 已随截断缩回）。
+    const merged = ctx.run(`mergeWorkspaceSessionSnapshots(
+      {
+        revision: 7,
+        sessionTotal: 4,
+        sessionOffset: 0,
+        sessions: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
+      },
+      {
+        revision: 8,
+        sessionTotal: 4,
+        sessionOffset: 0,
+        sessions: [{ id: 'a' }, { id: 'b' }]
+      },
+      'programming-helper'
+    )`);
+    assert.equal(merged.revision, 8);
+    assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['a', 'b', 'c', 'd']);
+  });
+
+  it('adjusts pagination totals optimistically when a delta adds or removes sessions', () => {
+    const ctx = loadSidebarOperations();
+    ctx.run(`allAgents = [{
+      id: 'programming-helper',
+      workspace_sessions: {
+        revision: 4,
+        activeSessionId: null,
+        sessionTotal: 10,
+        mainTotal: 8,
+        archivedTotal: 2,
+        sessions: [{ id: 'x', archived: true }, { id: 'y' }]
+      }
+    }];`);
+    ctx.run(`applySessionMutationDelta('programming-helper', {
+      revision: 5,
+      sessionDelta: { revision: 5, upsert: [{ id: 'new', title: 'New' }] }
+    })`);
+    let ws = ctx.run(`allAgents[0].workspace_sessions`);
+    assert.deepEqual([ws.sessionTotal, ws.mainTotal, ws.archivedTotal], [11, 9, 2]);
+
+    ctx.run(`applySessionMutationDelta('programming-helper', {
+      revision: 6,
+      sessionDelta: { revision: 6, remove: ['x'] }
+    })`);
+    ws = ctx.run(`allAgents[0].workspace_sessions`);
+    // 移除已归档会话：total 与 archived 同步递减
+    assert.deepEqual([ws.sessionTotal, ws.mainTotal, ws.archivedTotal], [10, 9, 1]);
+  });
+
   it('keeps source-runtime observation out of session operation settlement', () => {
     const ctx = loadSidebarOperations();
     assert.equal(ctx.run("typeof settleSidebarSourceOperation"), 'undefined');

@@ -390,6 +390,82 @@ export function sortSidebarSessions(sessions = []) {
   });
 }
 
+// ── Wire 投影（分页 + 字段裁剪）─────────────────────────────────────
+// 列表响应只回传前端消费的字段：path（服务端绝对路径）前端零消费，
+// metadata 仅 resumeMode 被读取（compacted resume 徽标）。服务端内部
+// 消费（active 会话解析、summarize 等）继续使用完整投影，裁剪只发生
+// 在响应组装层。
+
+const WIRE_SESSION_PAGE_MAX_LIMIT = 500;
+
+function normalizeProjectDirForCompare(dir) {
+  return String(dir || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+export function trimSessionRecordForWire(record) {
+  if (!record || typeof record !== 'object') return record;
+  const resumeMode = String(record?.metadata?.resumeMode || '').trim();
+  const next = { ...record };
+  delete next.path;
+  next.metadata = resumeMode ? { resumeMode } : {};
+  return next;
+}
+
+/**
+ * 按分页/过滤参数从已排序的全量 light records 产出响应切片。
+ *
+ * 过滤顺序与语义：
+ *   - projectDir: 归一化目录相等（反斜杠→斜杠、忽略大小写、去尾斜杠），
+ *     与前端项目桶 id 的归一化规则一致
+ *   - archived: 'main'（archived !== true）| 'archived'（=== true）| 缺省全部
+ *   - query: title / openDirectory 子串（大小写不敏感）
+ *
+ * 返回 { slice, total, mainTotal, archivedTotal }；total 为过滤后未切片
+ * 总数，main/archived 计数不受过滤影响（前端 tab 徽标需要真实总数）。
+ */
+export function sliceSessionsForWire(sessions, options = {}) {
+  const source = Array.isArray(sessions) ? sessions : [];
+  const projectDir = String(options.projectDir || '').trim();
+  const normalizedProject = projectDir ? normalizeProjectDirForCompare(projectDir) : '';
+  const query = String(options.query || '').trim().toLowerCase();
+  const archivedFilter = options.archived === 'main' || options.archived === 'archived'
+    ? options.archived
+    : null;
+  // 前端项目桶按身份分流（coder 会话归线程视图，不进主列表）；服务端切片
+  // 必须同口径排除，否则 total 与已加载数永不相等，加载更多无法收敛。
+  const excludeSessionTypes = Array.isArray(options.excludeSessionTypes)
+    ? new Set(options.excludeSessionTypes.map((type) => String(type || '').trim()))
+    : null;
+
+  let mainTotal = 0;
+  let archivedTotal = 0;
+  const filtered = [];
+  for (const session of source) {
+    if (excludeSessionTypes && excludeSessionTypes.has(String(session?.sessionType || 'main'))) continue;
+    if (normalizedProject
+      && normalizeProjectDirForCompare(session?.openDirectory) !== normalizedProject) continue;
+    // 徽标计数：当前项目内 main/archived 真实总数，不受 tab/query 过滤影响
+    if (session?.archived === true) archivedTotal += 1; else mainTotal += 1;
+    if (archivedFilter === 'main' && session?.archived === true) continue;
+    if (archivedFilter === 'archived' && session?.archived !== true) continue;
+    if (query) {
+      const title = String(session?.title || '').toLowerCase();
+      const directory = String(session?.openDirectory || '').toLowerCase();
+      if (!title.includes(query) && !directory.includes(query)) continue;
+    }
+    filtered.push(session);
+  }
+
+  const total = filtered.length;
+  const offset = Number.isFinite(Number(options.offset)) && Number(options.offset) > 0
+    ? Math.floor(Number(options.offset))
+    : 0;
+  const rawLimit = Number.isFinite(Number(options.limit)) ? Math.floor(Number(options.limit)) : 0;
+  const limit = rawLimit > 0 ? Math.min(rawLimit, WIRE_SESSION_PAGE_MAX_LIMIT) : 0;
+  const slice = limit > 0 ? filtered.slice(offset, offset + limit) : filtered.slice(offset);
+  return { slice, total, mainTotal, archivedTotal, offset };
+}
+
 const SIDEBAR_READ_MODEL_FIELDS = [
   'title', 'featureName', 'agentName', 'taskTitle', 'sessionType', 'status',
   'archived', 'todo', 'formId', 'openDirectory', 'createdAt', 'updatedAt',

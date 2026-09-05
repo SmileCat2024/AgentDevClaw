@@ -1330,6 +1330,10 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
           }
         });
       });
+      // 会话列表分页哨兵随 innerHTML 替换失效：重挂滚动自动加载观察器
+      if (typeof window.phSetupLoadMoreAutoScroll === 'function') {
+        window.phSetupLoadMoreAutoScroll();
+      }
     }
     updateProjectDocsetChrome(agent);
     updateChatContextBar(viewState);

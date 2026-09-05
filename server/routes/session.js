@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import {
   MIRROR_SCRIPT_TIMEOUT_MS,
   SESSION_TRANSFORMATION_TIMEOUT_MS,
+  PH_STYLE_WORKSPACE_AGENT_IDS,
 } from '../shared/constants.js';
 import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { consumeRecoverySession } from '../shared/open-sessions-tracker.js';
@@ -15,6 +16,7 @@ import {
   cleanSessionText,
   containsReplacementChar,
   childProcessEnv,
+  sanitizeSessionFragment,
 } from '../shared/string-helpers.js';
 import {
   readSessionIndex,
@@ -25,6 +27,7 @@ import {
 } from '../shared/session-access.js';
 import { getAgentRuntime, stopAssemblyRuntime } from '../shared/agent-access.js';
 import { renderConversationHtml } from '../conversation-renderer.js';
+import { readWorkspaceState } from './workspace.js';
 import { runInProcessSummary } from '../context-continuity/inprocess-summary.js';
 import { createOperationTrace } from '../shared/operation-trace.js';
 import { resolveAgentTarget, resolveSessionTarget } from '../shared/operation-target.js';
@@ -160,14 +163,21 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
       return;
     }
     // ADR-0011：远程命名空间 agentId → 转发远程同名会话列表（裸 id）；本地
-    // 身份走下方既有读取路径，行为字节级不动。
+    // 身份走下方既有读取路径，行为字节级不动。查询参数（分页/条件刷新）
+    // 原样透传，远程同版本服务端按相同参数返回切片。
     try {
       const hostTarget = resolveForwardHostTarget(req.query.agentId);
       if (hostTarget.scope === 'remote') {
+        const passthrough = new URLSearchParams({ agentId: bareId(req.query.agentId) });
+        for (const key of ['sinceRevision', 'projectDir', 'query', 'archived', 'offset', 'limit']) {
+          if (typeof req.query[key] === 'string' && req.query[key] !== '') {
+            passthrough.set(key, req.query[key]);
+          }
+        }
         return await forwardProtoclawRoute(
           res,
           hostTarget,
-          '/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(bareId(req.query.agentId)),
+          '/protoclaw/prebuilt_sessions?' + passthrough.toString(),
         );
       }
     } catch (error) {
@@ -199,7 +209,30 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
         return;
       }
     }
-    const sessions = await listPrebuiltSessions(req.query.agentId);
+    // 分页读取（PH 类工作空间）：projectDir 缺省时自解析为工作区当前项目
+    // （workspace_state.openDirectory），前端切换项目/滚动加载都经此参数。
+    // 非 PH agent 的会话量小，忽略分页参数保持全量。
+    const listOptions = {};
+    const isPhWorkspace = PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(req.query.agentId));
+    if (isPhWorkspace) {
+      listOptions.wireTrim = true;
+      let projectDir = typeof req.query.projectDir === 'string' ? req.query.projectDir.trim() : '';
+      if (!projectDir) {
+        try {
+          const wsState = await readWorkspaceState(req.query.agentId);
+          projectDir = String(wsState?.openDirectory || '').trim();
+        } catch { /* workspace state read failure falls back to unpaged */ }
+      }
+      if (projectDir) listOptions.sessionProjectDir = projectDir;
+      listOptions.sessionExcludeSessionTypes = ['coder'];
+      if (typeof req.query.query === 'string' && req.query.query.trim()) listOptions.sessionQuery = req.query.query.trim();
+      if (req.query.archived === 'main' || req.query.archived === 'archived') listOptions.sessionArchived = req.query.archived;
+      const offset = Number(req.query.offset);
+      if (Number.isFinite(offset) && offset > 0) listOptions.sessionOffset = offset;
+      const limit = Number(req.query.limit);
+      if (Number.isFinite(limit) && limit > 0) listOptions.sessionLimit = limit;
+    }
+    const sessions = await listPrebuiltSessions(req.query.agentId, listOptions);
     res.json(sessions);
     void recordSidebarDiagnosticEvent({
       kind: 'read_perf',

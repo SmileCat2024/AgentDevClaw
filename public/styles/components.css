@@ -1721,6 +1721,17 @@ body[data-theme="light"] .workspace-docset-row {
   padding-top: 4px;
 }
 
+/* ── 分页加载更多（PH 会话列表，服务端项目切片）── */
+.ph-load-more-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 4px;
+}
+
+.ph-load-more-wrap .workspace-action {
+  min-width: 180px;
+}
+
 .feature-project-card {
   display: flex;
   flex-direction: column;

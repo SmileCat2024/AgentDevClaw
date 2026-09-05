@@ -809,10 +809,27 @@ const _appliedMessagesSeq = new Map();
 // 前进，下一次 poll 自然 miss 走全量刷新，无需主动失效。
 const _wsSessionsRevisionByHost = new Map();
 
-async function fetchWorkspaceSessionsForPoll(agentId) {
+async function fetchWorkspaceSessionsForPoll(agentId, agentRecord = null) {
   const knownRevision = _wsSessionsRevisionByHost.get(agentId);
   const params = new URLSearchParams({ agentId });
   if (Number.isFinite(knownRevision)) params.set('sinceRevision', String(knownRevision));
+  // PH 类工作空间：请求当前项目的已加载范围（范围刷新）。服务端按
+  // projectDir 过滤后返回 0..limit 切片，merge 仍以该范围为 membership
+  // 权威；limit 取已加载数（滚动加载推进后的全量范围），下限 60。
+  const hostRecord = agentRecord
+    || (Array.isArray(allAgents) ? allAgents.find((item) => item?.id === agentId) : null);
+  if (hostRecord && typeof isPhStyleWorkspaceAgent === 'function' && isPhStyleWorkspaceAgent(hostRecord)) {
+    const projectDir = String(
+      (typeof getAgentWorkspaceState === 'function' ? getAgentWorkspaceState(hostRecord)?.openDirectory : '')
+      || '',
+    ).trim();
+    if (projectDir) params.set('projectDir', projectDir);
+    const loadedCount = Array.isArray(hostRecord?.workspace_sessions?.sessions)
+      ? hostRecord.workspace_sessions.sessions.length
+      : 0;
+    params.set('offset', '0');
+    params.set('limit', String(Math.max(loadedCount, 60)));
+  }
   const response = await fetch('/protoclaw/prebuilt_sessions?' + params.toString());
   if (!response.ok) return null;
   const data = await response.json();
@@ -940,7 +957,7 @@ async function runPollCycle() {
         if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
           window._lastWsSessionRefreshAt = Date.now();
           try {
-            const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id);
+            const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id, wsHostAgent);
             if (freshSessions) {
               // Preserve optimistic archived state (same logic as runtime-connected path)
               const currentWs = wsHostAgent.workspace_sessions;
@@ -1364,7 +1381,7 @@ async function runPollCycle() {
       if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
         window._lastWsSessionRefreshAt = Date.now();
         try {
-          const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id);
+          const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id, wsHostAgent);
           if (freshSessions) {
             if (!isSessionViewTokenCurrent(pollToken)) {
               schedulePoll(POLL_FAST_INTERVAL_MS);

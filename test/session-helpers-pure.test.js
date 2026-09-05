@@ -19,6 +19,8 @@ import {
   SIDEBAR_SESSION_META_VERSION,
   isSidebarSessionReadModelReady,
   sortSidebarSessions,
+  trimSessionRecordForWire,
+  sliceSessionsForWire,
 } from '../server/routes/session-helpers-pure.js';
 
 // ── extractToolCallLabel ──────────────────────────────────────────
@@ -502,5 +504,105 @@ describe('sidebar production read model', () => {
     assert.equal(result.archived, true);
     assert.equal(result.todo, true);
     assert.equal(result.hasSummary, true);
+  });
+});
+
+describe('wire session projection', () => {
+  const record = (id, overrides = {}) => ({
+    id,
+    title: `Session ${id}`,
+    openDirectory: 'D:\\code\\Alpha',
+    archived: false,
+    metadata: { resumeMode: 'compacted', source: 'legacy', foo: 'bar' },
+    path: `C:/data/sessions/${id}.json`,
+    tokenUsage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    ...overrides,
+  });
+
+  it('trims path and reduces metadata to resumeMode only', () => {
+    const trimmed = trimSessionRecordForWire(record('s1'));
+    assert.equal('path' in trimmed, false);
+    assert.deepEqual(trimmed.metadata, { resumeMode: 'compacted' });
+    assert.deepEqual(trimmed.tokenUsage, { inputTokens: 1, outputTokens: 2, totalTokens: 3 });
+    // 输入不可变：原记录保持原样
+    const original = record('s1');
+    trimSessionRecordForWire(original);
+    assert.equal(original.path, 'C:/data/sessions/s1.json');
+    assert.equal(original.metadata.source, 'legacy');
+  });
+
+  it('drops metadata entirely when resumeMode is absent', () => {
+    const trimmed = trimSessionRecordForWire(record('s2', { metadata: { source: 'x' } }));
+    assert.deepEqual(trimmed.metadata, {});
+  });
+
+  it('filters by project directory with separator and case normalization', () => {
+    const sessions = [
+      record('a', { openDirectory: 'D:\\code\\Alpha' }),
+      record('b', { openDirectory: 'd:/CODE/alpha/' }),
+      record('c', { openDirectory: 'D:\\code\\Beta' }),
+    ];
+    const page = sliceSessionsForWire(sessions, { projectDir: 'D:/code/alpha' });
+    assert.deepEqual(page.slice.map((s) => s.id), ['a', 'b']);
+    assert.equal(page.total, 2);
+  });
+
+  it('applies archived filter while keeping true main/archived totals', () => {
+    const sessions = [
+      record('a'),
+      record('b', { archived: true }),
+      record('c', { archived: true }),
+    ];
+    const mainPage = sliceSessionsForWire(sessions, { archived: 'main' });
+    assert.deepEqual(mainPage.slice.map((s) => s.id), ['a']);
+    assert.deepEqual([mainPage.mainTotal, mainPage.archivedTotal], [1, 2]);
+    const archivedPage = sliceSessionsForWire(sessions, { archived: 'archived' });
+    assert.deepEqual(archivedPage.slice.map((s) => s.id), ['b', 'c']);
+    // 总数不受 archived 过滤影响
+    assert.deepEqual([archivedPage.mainTotal, archivedPage.archivedTotal], [1, 2]);
+  });
+
+  it('matches query against title and directory, case-insensitive', () => {
+    const sessions = [
+      record('a', { title: 'Fix login bug' }),
+      record('b', { title: 'Other', openDirectory: 'D:\\code\\LoginFeature' }),
+      record('c', { title: 'Unrelated' }),
+    ];
+    const page = sliceSessionsForWire(sessions, { query: 'login' });
+    assert.deepEqual(page.slice.map((s) => s.id), ['a', 'b']);
+  });
+
+  it('slices by offset and limit and reports totals', () => {
+    const sessions = ['a', 'b', 'c', 'd', 'e'].map((id) => record(id));
+    const page = sliceSessionsForWire(sessions, { offset: 2, limit: 2 });
+    assert.deepEqual(page.slice.map((s) => s.id), ['c', 'd']);
+    assert.equal(page.total, 5);
+    assert.equal(page.offset, 2);
+    // 无 limit 时从 offset 返回到末尾
+    const tail = sliceSessionsForWire(sessions, { offset: 3 });
+    assert.deepEqual(tail.slice.map((s) => s.id), ['d', 'e']);
+    // 无分页参数 → 全量
+    const all = sliceSessionsForWire(sessions, {});
+    assert.equal(all.total, 5);
+    assert.equal(all.slice.length, 5);
+  });
+
+  it('excludes session types and scopes badge totals to the project', () => {
+    const sessions = [
+      record('a', { openDirectory: 'D:\\code\\Alpha' }),
+      record('b', { openDirectory: 'D:\\code\\Alpha', sessionType: 'coder' }),
+      record('c', { openDirectory: 'D:\\code\\Alpha', archived: true }),
+      record('d', { openDirectory: 'D:\\code\\Beta' }),
+    ];
+    const page = sliceSessionsForWire(sessions, {
+      projectDir: 'D:/code/alpha',
+      excludeSessionTypes: ['coder'],
+    });
+    // coder 不进切片；其他项目不计入徽标
+    assert.deepEqual(page.slice.map((s) => s.id), ['a', 'c']);
+    assert.equal(page.total, 2);
+    assert.deepEqual([page.mainTotal, page.archivedTotal], [1, 1]);
   });
 });

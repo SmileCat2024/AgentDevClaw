@@ -416,14 +416,56 @@ function mergeWorkspaceSessionSnapshots(previous = {}, fresh = {}, agentId = '')
     return previous;
   }
 
+  // 追加段（sessionOffset > 0）：fresh 是列表更深处的切片（加载更多），
+  // 不是 membership 权威——不能据此清理已加载条目。重复 id 意味着排序
+  // 位移：已加载条目取 fresh 字段 patch（服务端较新），新条目按 id 去重
+  // 后拼接。
+  const freshOffset = Number(fresh?.sessionOffset);
+  if (Number.isFinite(freshOffset) && freshOffset > 0) {
+    const removals = getPendingSessionRemovalIds(agentId);
+    const freshById = new Map(freshSessions.map((session) => [String(session?.id || ''), session]));
+    const patchedPrevious = previousSessions
+      .filter((session) => !removals.has(String(session?.id || '')))
+      .map((session) => {
+        const patch = freshById.get(String(session?.id || ''));
+        return patch ? { ...session, ...patch } : session;
+      });
+    const previousIds = new Set(previousSessions.map((session) => String(session?.id || '')));
+    const appended = freshSessions
+      .filter((session) => !previousIds.has(String(session?.id || '')))
+      .filter((session) => !removals.has(String(session?.id || '')));
+    return {
+      ...previous,
+      ...fresh,
+      revision: Math.max(previousRevision, freshRevision),
+      sessions: [...patchedPrevious, ...appended],
+    };
+  }
+
   const previousById = new Map(previousSessions.map((session) => [String(session?.id || ''), session]));
   const removals = getPendingSessionRemovalIds(agentId);
-  const sessions = freshSessions
+  let sessions = freshSessions
     .filter((session) => !removals.has(String(session?.id || '')))
     .map((session) => {
       const prior = previousById.get(String(session?.id || '')) || null;
       return prior ? { ...prior, ...session } : session;
     });
+
+  // 尾部保护：fresh 是 offset=0 的首屏切片（loadAgentDetail 重聚焦 / get_connected_agents
+  // 每轮 poll），而已加载深层段（加载更多推进的）不应被截断。不能要求 revision 相等——
+  // revision 被一切会话变更推进（含每轮对话的 meta 同步），活跃使用中几乎总在前进，相等
+  // 条件会让本保护形同虚设。语义：fresh 声明 0..limit 范围权威，0..limit 段按 id patch，
+  // 超出段去重后保留拼接；深层段的 membership 修正由范围 poll（limit=loadedCount，3s 周期）
+  // 全域重授权兜底。
+  if (Number.isFinite(Number(fresh?.sessionTotal))
+    && Number(fresh?.sessionOffset) === 0
+    && previousSessions.length > freshSessions.length) {
+    const freshIds = new Set(sessions.map((session) => String(session?.id || '')));
+    const tail = previousSessions
+      .slice(freshSessions.length)
+      .filter((session) => !freshIds.has(String(session?.id || '')) && !removals.has(String(session?.id || '')));
+    sessions = [...sessions, ...tail];
+  }
 
   return {
     ...previous,
@@ -458,12 +500,29 @@ function applySessionMutationDelta(agentId, payload) {
     });
   for (const session of upsertById.values()) sessions.unshift(session);
 
+  // 分页计数同步：新会话入列 / 会话移除时调整服务端总数投影，避免
+  // “加载更多”在 poll 校正前（≤3s）按过期 total 重复拉取或提前收敛。
+  // 仅乐观调整已存在的字段；下一次范围刷新会以服务端计数覆盖。
+  let mainDelta = 0;
+  let archivedDelta = 0;
+  for (const session of upsertById.values()) {
+    if (session?.archived === true) archivedDelta += 1; else mainDelta += 1;
+  }
+  const existingById = new Map(existing.map((session) => [String(session?.id || ''), session]));
+  for (const id of removeIds) {
+    const removed = existingById.get(id);
+    if (removed?.archived === true) archivedDelta -= 1; else if (removed) mainDelta -= 1;
+  }
+  const netDelta = upsertById.size - removeIds.size;
   updateAgentRecord(agentId, {
     workspace_sessions: {
       ...current,
       sessions,
       activeSessionId: Object.hasOwn(delta, 'activeSessionId') ? delta.activeSessionId : current.activeSessionId,
       revision: Number.isSafeInteger(nextRevision) ? nextRevision : currentRevision,
+      ...(Number.isFinite(Number(current.sessionTotal)) ? { sessionTotal: Number(current.sessionTotal) + netDelta } : {}),
+      ...(Number.isFinite(Number(current.mainTotal)) ? { mainTotal: Number(current.mainTotal) + mainDelta } : {}),
+      ...(Number.isFinite(Number(current.archivedTotal)) ? { archivedTotal: Number(current.archivedTotal) + archivedDelta } : {}),
     },
     active_workspace_session_id: Object.hasOwn(delta, 'activeSessionId')
       ? delta.activeSessionId

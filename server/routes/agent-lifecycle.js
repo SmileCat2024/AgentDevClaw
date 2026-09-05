@@ -10,7 +10,8 @@ import {
 import { readProjectIMWorkspaceConfig } from './im.js';
 import { sendIPCtoSession, sendIPCToRuntime } from '../shared/ipc.js';
 import { removeOpenSession } from '../shared/open-sessions-tracker.js';
-import { createConnectedAgentsQuery } from './agent-connected.js';
+import { createConnectedAgentsQuery, buildPhProjectScopedSnapshot, buildWireSessionsSnapshot } from './agent-connected.js';
+import { PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { createAgentStartupFns } from './agent-startup.js';
 import { releaseRuntimeState } from '../runtime-call-envelope.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
@@ -232,7 +233,7 @@ export function createAgentLifecycleModule(ctx) {
         //（dispatch 下拉等）直接用作会话创建的 agentId，投影 id
         //（host:identity）不是合法工作空间；投影只属于 sidebar 数据源
         //（agent-connected 的 get_connected_agents）。
-        const entries = agents.map((agent) => ({
+        const entries = await Promise.all(agents.map(async (agent) => ({
           id: agent.id,
           name: agent.name,
           description: agent.description,
@@ -244,13 +245,17 @@ export function createAgentLifecycleModule(ctx) {
           ui: agent.ui || null,
           features: agent.features || [],
           workspace: agent.workspace || null,
-          workspace_sessions: agent.workspace_sessions || { activeSessionId: null, sessions: [] },
+          // 与 get_connected_agents / agent_detail 同一 wire 投影（PH 当前
+          // 项目切片 + 字段裁剪），消费方（dispatch 下拉）不读 sessions 明细。
+          workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agent.id))
+            ? await buildPhProjectScopedSnapshot(agent.id, agent.workspace_sessions)
+            : buildWireSessionsSnapshot(agent.id, agent.workspace_sessions),
           workspace_data: agent.workspace_data || {},
           workspace_state: agent.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
           active_workspace_session_id: agent.workspace_sessions?.activeSessionId || null,
           modelPresets: agent.modelPresets || null,
           entry_point: agent.relativeDir,
-        }));
+        })));
         res.json(entries);
       } catch (error) {
         next(error);
@@ -400,7 +405,12 @@ export function createAgentLifecycleModule(ctx) {
         }
         const enriched = await enrichAgent(agent);
         res.json({
-          workspace_sessions: enriched.workspace_sessions || { activeSessionId: null, sessions: [] },
+          // workspace_sessions 响应投影与 get_connected_agents 一致：PH 类
+          // 只回当前项目首屏切片（服务端自解析 workspace_state.openDirectory），
+          // 其余 agent 全量走 wire 裁剪。
+          workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))
+            ? await buildPhProjectScopedSnapshot(agentId, enriched.workspace_sessions)
+            : buildWireSessionsSnapshot(agentId, enriched.workspace_sessions),
           workspace_data: enriched.workspace_data || {},
           workspace_state: enriched.workspace_state || { forms: {}, openDirectory: '', updatedAt: null },
         });

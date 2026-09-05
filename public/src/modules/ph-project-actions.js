@@ -180,8 +180,12 @@ window.phOpenProject = async () => {
     const freshState = openResult.state || await (await fetch('/protoclaw/workspace_state?agentId=' + encodeURIComponent(currentAgent.id))).json();
     updateAgentWorkspaceState(currentAgent.id, freshState);
 
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    // 新项目会话列表首屏（按项目切片拉取）
+    const loaded = await phLoadProjectSessions(chosenPath);
+    if (!loaded) {
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
+    }
   } catch (error) {
     console.error('Failed to open project:', error);
     window.alert((currentLanguage === 'zh' ? '打开项目失败：' : 'Failed to open project: ') + (error?.message || error));
@@ -250,12 +254,113 @@ window.phSwitchProject = async (projectId) => {
     phSearchLoading = false;
     if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
 
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    // 会话列表按项目分页：切换后拉取新项目首屏（替换旧项目切片）
+    const switched = await phLoadProjectSessions(targetProject?.openDirectory || freshState?.openDirectory || '');
+    if (!switched) {
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
+    }
   } catch (error) {
     console.error('Failed to switch project:', error);
     window.alert((currentLanguage === 'zh' ? '切换项目失败：' : 'Failed to switch project: ') + (error?.message || error));
   }
+};
+
+// ── 会话列表分页加载（项目切片）────────────────────────────────────
+// 服务端按 projectDir 过滤返回切片（B 方案：列表传输按需分页）。此处
+// 负责两个动作：phLoadProjectSessions —— 项目切换/打开后替换首屏；
+// window.phLoadMoreSessions —— 列表尾部“加载更多”，追加下一段（merge
+// 按 sessionOffset>0 走追加语义，不做 membership 清理）。
+// 滚动自动加载：window.phSetupLoadMoreAutoScroll 用 IntersectionObserver
+// 观察加载哨兵（load-more wrapper），进入视口即触发下一段；workspace
+// surface 每次 innerHTML 全量替换后由 app-ui.js 重挂。按钮保留为显式
+// fallback（IntersectionObserver 不可用时仍可点击）。
+
+async function phFetchSessionsPage(agentId, { projectDir = '', offset = 0, limit = 60 } = {}) {
+  const params = new URLSearchParams({
+    agentId,
+    offset: String(offset),
+    limit: String(limit),
+  });
+  if (projectDir) params.set('projectDir', projectDir);
+  const response = await fetch('/protoclaw/prebuilt_sessions?' + params.toString());
+  if (!response.ok) throw new Error('session page request failed: ' + response.status);
+  return await response.json();
+}
+
+async function phLoadProjectSessions(projectDir) {
+  const agent = getCurrentAgentRecord();
+  if (!agent || typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return false;
+  try {
+    const fresh = await phFetchSessionsPage(agent.id, { projectDir, offset: 0, limit: 60 });
+    if (fresh && fresh.unchanged !== true) {
+      // 项目切换 = membership 全量替换：不保留旧项目的乐观条目与已加载段
+      updateAgentRecord(agent.id, {
+        workspace_sessions: fresh,
+        active_workspace_session_id: fresh?.activeSessionId || null,
+      });
+    }
+    lastRenderedWorkspaceHtml = '';
+    renderCurrentMainView();
+    return true;
+  } catch (error) {
+    console.error('Failed to load project sessions:', error);
+    return false;
+  }
+}
+
+let _phLoadingMoreSessions = false;
+
+window.phLoadMoreSessions = async () => {
+  if (_phLoadingMoreSessions) return;
+  const agent = getCurrentAgentRecord();
+  if (!agent || typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return;
+  const ws = agent.workspace_sessions;
+  const loadedCount = Array.isArray(ws?.sessions) ? ws.sessions.length : 0;
+  const total = Number(ws?.sessionTotal);
+  if (Number.isFinite(total) && loadedCount >= total) return;
+  _phLoadingMoreSessions = true;
+  const loadBtns = document.querySelectorAll('.ph-load-more-btn');
+  const isZh = currentLanguage === 'zh';
+  loadBtns.forEach((btn) => {
+    btn.disabled = true;
+    btn.textContent = isZh ? '加载中…' : 'Loading…';
+  });
+  try {
+    const fresh = await phFetchSessionsPage(agent.id, { offset: loadedCount, limit: 60 });
+    if (fresh && fresh.unchanged !== true) {
+      const merged = typeof mergeWorkspaceSessionSnapshots === 'function'
+        ? mergeWorkspaceSessionSnapshots(ws, fresh, agent.id)
+        : { ...ws, ...fresh, sessions: [...(ws?.sessions || []), ...(fresh.sessions || [])] };
+      updateAgentRecord(agent.id, { workspace_sessions: merged });
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
+    }
+  } catch (error) {
+    console.error('Failed to load more sessions:', error);
+  } finally {
+    _phLoadingMoreSessions = false;
+  }
+};
+
+let _phLoadMoreObserver = null;
+
+window.phSetupLoadMoreAutoScroll = () => {
+  if (typeof IntersectionObserver === 'undefined') return;
+  if (_phLoadMoreObserver) {
+    _phLoadMoreObserver.disconnect();
+    _phLoadMoreObserver = null;
+  }
+  const sentinels = document.querySelectorAll('.ph-load-more-wrap');
+  if (sentinels.length === 0) return;
+  _phLoadMoreObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      window.phLoadMoreSessions();
+      break;
+    }
+  }, { rootMargin: '160px 0px' });
+  sentinels.forEach((el) => _phLoadMoreObserver.observe(el));
 };
 
 window.phToggleProjectDropdown = (event) => {

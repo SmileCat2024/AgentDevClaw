@@ -40,6 +40,8 @@ import {
   SIDEBAR_SESSION_META_VERSION,
   isSidebarSessionReadModelReady,
   sortSidebarSessions,
+  trimSessionRecordForWire,
+  sliceSessionsForWire,
 } from './session-helpers-pure.js';
 
 import {
@@ -70,6 +72,8 @@ export {
   SIDEBAR_SESSION_META_VERSION,
   isSidebarSessionReadModelReady,
   sortSidebarSessions,
+  trimSessionRecordForWire,
+  sliceSessionsForWire,
 };
 
 // 归档/删除 active 会话后的后继选择。无 ctx 依赖，提为模块级纯函数以便单测。
@@ -478,7 +482,7 @@ async function cleanupEmptySessions(agentId) {
   return toDelete.length;
 }
 
-async function listPrebuiltSessionsRich(agentId) {
+async function listPrebuiltSessionsRich(agentId, options = {}) {
   const startedAt = Date.now();
   const index = await readSessionIndex(agentId);
   const indexLoadedAt = Date.now();
@@ -564,12 +568,52 @@ async function listPrebuiltSessionsRich(agentId) {
     result: 'success',
   };
   void recordSidebarDiagnosticEvent(perfEvent, { source: 'server' });
+  // 降级读模型的响应面与索引读模型保持同一 wire 口径（coder 排除、分页切片、
+  // 字段裁剪）：30s 降级窗口内分页请求若返回全量富列表，前端会看到 coder 混入
+  // 与计数漂移。activeSessionId 取过滤前的 sessions[0]（active 会话与列表
+  // 过滤无关）。
+  const richPageOptions = {
+    projectDir: options.sessionProjectDir,
+    query: options.sessionQuery,
+    archived: options.sessionArchived,
+    offset: options.sessionOffset,
+    limit: options.sessionLimit,
+    excludeSessionTypes: options.sessionExcludeSessionTypes,
+  };
+  const richPageActive = options.sessionProjectDir !== undefined
+    || options.sessionQuery !== undefined
+    || options.sessionArchived !== undefined
+    || options.sessionOffset !== undefined
+    || options.sessionLimit !== undefined
+    || options.sessionExcludeSessionTypes !== undefined;
+  let wireSessions = sessions;
+  let richPageMeta = {};
+  if (richPageActive) {
+    const page = sliceSessionsForWire(sessions, richPageOptions);
+    wireSessions = page.slice;
+    richPageMeta = {
+      sessionTotal: page.total,
+      sessionOffset: page.offset,
+      sessionHasMore: page.offset + page.slice.length < page.total,
+      sessionProjectDir: String(options.sessionProjectDir || '') || null,
+      mainTotal: page.mainTotal,
+      archivedTotal: page.archivedTotal,
+    };
+  }
+  if (options.wireTrim === true) {
+    wireSessions = wireSessions.map(trimSessionRecordForWire);
+    if (!richPageActive) {
+      const counts = sliceSessionsForWire(sessions, { excludeSessionTypes: options.sessionExcludeSessionTypes });
+      richPageMeta = { mainTotal: counts.mainTotal, archivedTotal: counts.archivedTotal };
+    }
+  }
   return {
     revision: Number(index.revision) || 0,
     activeSessionId: index.activeSessionId || (sessions[0]?.id ?? null),
     contextLength: defaultModelInfo.contextLength || null,
     compressRatio: defaultModelInfo.compressRatio || 80,
-    sessions,
+    ...richPageMeta,
+    sessions: wireSessions,
   };
 }
 
@@ -698,13 +742,54 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
     ? null
     : await resolveSessionModelInfo(agentId);
   const readModelMs = Date.now() - readModelStartedAt;
+
+  // Wire 投影：分页（projectDir/query/archived/offset/limit 任一提供即激活）
+  // 与字段裁剪（wireTrim）。分页激活时 sessions 为切片并携带 total/hasMore
+  // 元信息；裁剪只在响应面发生，内部消费（active 会话解析等）使用上面的
+  // 完整投影。
+  const pageOptions = {
+    projectDir: options.sessionProjectDir,
+    query: options.sessionQuery,
+    archived: options.sessionArchived,
+    offset: options.sessionOffset,
+    limit: options.sessionLimit,
+    excludeSessionTypes: options.sessionExcludeSessionTypes,
+  };
+  const pageActive = options.sessionProjectDir !== undefined
+    || options.sessionQuery !== undefined
+    || options.sessionArchived !== undefined
+    || options.sessionOffset !== undefined
+    || options.sessionLimit !== undefined
+    || options.sessionExcludeSessionTypes !== undefined;
+  let wireSessions = sessions;
+  let pageMeta = {};
+  if (pageActive) {
+    const page = sliceSessionsForWire(sessions, pageOptions);
+    wireSessions = page.slice;
+    pageMeta = {
+      sessionTotal: page.total,
+      sessionOffset: page.offset,
+      sessionHasMore: page.offset + page.slice.length < page.total,
+      sessionProjectDir: String(options.sessionProjectDir || '') || null,
+      mainTotal: page.mainTotal,
+      archivedTotal: page.archivedTotal,
+    };
+  }
+  if (options.wireTrim === true) {
+    wireSessions = wireSessions.map(trimSessionRecordForWire);
+    if (!pageActive) {
+      const counts = sliceSessionsForWire(sessions, { excludeSessionTypes: options.sessionExcludeSessionTypes });
+      pageMeta = { mainTotal: counts.mainTotal, archivedTotal: counts.archivedTotal };
+    }
+  }
+
   if (options.recordDiagnostics !== false) {
     void recordSidebarDiagnosticEvent({
       kind: 'list_perf',
       operation: 'list_sessions_index',
       phase: 'completed',
       agentId: String(agentId || '').slice(0, 128),
-      sessionCount: sessions.length,
+      sessionCount: wireSessions.length,
       writebackCount: migratedCount,
       indexMs: indexLoadedAt - startedAt,
       handoffMs: 0,
@@ -722,16 +807,17 @@ async function listPrebuiltSessionsFromIndex(agentId, options = {}) {
       contextLength: defaultModelInfo.contextLength || null,
       compressRatio: defaultModelInfo.compressRatio || 80,
     } : {}),
-    sessions,
+    ...pageMeta,
+    sessions: wireSessions,
   };
 }
 
 async function listPrebuiltSessions(agentId, options = {}) {
   const useIndexReadModel = PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))
     && options.forceRich !== true;
-  if (!useIndexReadModel) return listPrebuiltSessionsRich(agentId);
+  if (!useIndexReadModel) return listPrebuiltSessionsRich(agentId, options);
   const retryAfter = Number(sidebarReadModelRetryAfter.get(agentId)) || 0;
-  if (retryAfter > Date.now()) return listPrebuiltSessionsRich(agentId);
+  if (retryAfter > Date.now()) return listPrebuiltSessionsRich(agentId, options);
   try {
     const result = await listPrebuiltSessionsFromIndex(agentId, options);
     sidebarReadModelRetryAfter.delete(agentId);
@@ -749,7 +835,7 @@ async function listPrebuiltSessions(agentId, options = {}) {
       result: 'degraded',
       errorCode: error?.code || 'sidebar_read_model_failed',
     }, { source: 'server' });
-    return listPrebuiltSessionsRich(agentId);
+    return listPrebuiltSessionsRich(agentId, options);
   }
 }
 

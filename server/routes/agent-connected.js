@@ -5,14 +5,73 @@ import {
 import {
   sanitizeSessionFragment, cleanSessionText,
 } from '../shared/string-helpers.js';
+import { PH_STYLE_WORKSPACE_AGENT_IDS } from '../shared/constants.js';
 import { parseRemoteNamespace } from '../shared/request-target.js';
 import { getGroupChatsForSidebar } from './group-chat.js';
 import { collectSidebarIdentityEntries } from './agent-discovery.js';
+import { readWorkspaceState } from './workspace.js';
+import {
+  trimSessionRecordForWire,
+  sliceSessionsForWire,
+} from './session-helpers-pure.js';
 
 // ── Connected Agents Query ───────────────────────────────────────
 // Pure query logic: assembles the full connected-agents list from
 // prebuilt agents metadata, ViewerWorker runtime data, and managed
 // runtime processes. No side effects, no process spawning.
+//
+// workspace_sessions 响应投影：PH 类工作空间只内嵌当前项目的首屏切片
+// （会话规模可达千级，全量内嵌曾使该 3s poll 响应膨胀至 MB 级）；其余
+// agent 全量但走 wire 字段裁剪。服务端内部消费（sessionType 索引、active
+// 会话解析）在组装前使用完整快照，不受裁剪影响。
+const CONNECTED_PAGE_LIMIT = 60;
+
+export function buildWireSessionsSnapshot(agentId, workspaceSessions) {
+  const sessions = Array.isArray(workspaceSessions?.sessions) ? workspaceSessions.sessions : [];
+  const trimmed = sessions.map(trimSessionRecordForWire);
+  if (!PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agentId))) {
+    return { ...workspaceSessions, sessions: trimmed };
+  }
+  // PH 回退（workspace_state 不可读）：仍带分页元信息（全量已加载），
+  // 前端据 sessionTotal 字段存在性判定分页语义，不因缺字段回退混乱。
+  // coder 排除口径与正常路径（buildPhProjectScopedSnapshot）一致。
+  const counts = sliceSessionsForWire(sessions, { excludeSessionTypes: ['coder'] });
+  return {
+    ...workspaceSessions,
+    sessionProjectDir: null,
+    sessionTotal: trimmed.length,
+    sessionOffset: 0,
+    sessionHasMore: false,
+    mainTotal: counts.mainTotal,
+    archivedTotal: counts.archivedTotal,
+    sessions: trimmed,
+  };
+}
+
+export async function buildPhProjectScopedSnapshot(agentId, workspaceSessions) {
+  const sessions = Array.isArray(workspaceSessions?.sessions) ? workspaceSessions.sessions : [];
+  let projectDir = '';
+  try {
+    const wsState = await readWorkspaceState(agentId);
+    projectDir = String(wsState?.openDirectory || '').trim();
+  } catch { /* workspace state unavailable → unpaged trim */ }
+  if (!projectDir) return buildWireSessionsSnapshot(agentId, workspaceSessions);
+  const page = sliceSessionsForWire(sessions, {
+    projectDir,
+    limit: CONNECTED_PAGE_LIMIT,
+    excludeSessionTypes: ['coder'],
+  });
+  return {
+    ...workspaceSessions,
+    sessionProjectDir: projectDir,
+    sessionTotal: page.total,
+    sessionOffset: 0,
+    sessionHasMore: page.slice.length < page.total,
+    mainTotal: page.mainTotal,
+    archivedTotal: page.archivedTotal,
+    sessions: page.slice.map(trimSessionRecordForWire),
+  };
+}
 
 export function createConnectedAgentsQuery(deps) {
   const {
@@ -94,7 +153,9 @@ export function createConnectedAgentsQuery(deps) {
         processMode: agent.processMode || 'isolated',
         ui: agent.ui || null,
         workspace: agent.workspace || null,
-        workspace_sessions: workspaceSessions,
+        workspace_sessions: PH_STYLE_WORKSPACE_AGENT_IDS.has(sanitizeSessionFragment(agent.id))
+          ? await buildPhProjectScopedSnapshot(agent.id, workspaceSessions)
+          : buildWireSessionsSnapshot(agent.id, workspaceSessions),
         workspace_data: {},
         workspace_state: isWorkGroup
           ? { forms: {}, openDirectory: '', updatedAt: null, gcChats }
