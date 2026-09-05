@@ -692,3 +692,70 @@ test('windowing: fold compensation is clamp-safe when the collapse crosses maxSc
   assert.ok(h.container.scrollTop < h.totalHeight() * 0.95, 'should have scrolled upward');
   assert.equal(joltFrames, 0, 'fold compensation must keep the content anchor pixel-stable near the clamp boundary');
 });
+
+test('panel drag: freezeProcessWindowing silences the scroll chain during the drag; unfreeze settles once', () => {
+  const h = createHarness();
+  h.sandbox.showChatProcess = true;
+  h.sandbox.followLatestEnabled = false;
+
+  for (let i = 0; i < 300; i++) {
+    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
+    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
+  }
+  vm.runInContext('applyProcessDistance(container)', h.sandbox);
+
+  // Park mid-document: the windowing window settles around this position so
+  // the drag below has stub territory ahead (rows to reveal) — the geometry
+  // where a live scroll chain would fight the drag anchor.
+  h.container.scrollTop = Math.round(h.container.scrollHeight * 0.5);
+  vm.runInContext('_onScrollForWindowing()', h.sandbox);
+  h.pumpFrame();
+  h.flushTimers();
+
+  // Drag starts: windowing frozen.
+  vm.runInContext('freezeProcessWindowing()', h.sandbox);
+
+  // Drag frames: the panel-drag anchor writes scrollTop in small steps every
+  // frame (well below the large-delta threshold — these would normally run
+  // the rAF window update + reveal compensation mid-drag).
+  const heightAtFreeze = h.container.scrollHeight;
+  const cvStatesAtFreeze = h.container.querySelectorAll('.message-row')
+    .map((r) => r.classList.contains('process-cv-hidden'));
+  for (let e = 0; e < 6; e++) {
+    h.container.scrollTop += 30;
+    vm.runInContext('_onScrollForWindowing()', h.sandbox);
+    h.pumpFrame();
+  }
+  assert.equal(h.container.scrollHeight, heightAtFreeze,
+    'frozen windowing must not reveal/reflow during the drag');
+  assert.deepEqual(
+    h.container.querySelectorAll('.message-row').map((r) => r.classList.contains('process-cv-hidden')),
+    cvStatesAtFreeze,
+    'frozen windowing must not touch row visibility during the drag');
+
+  // Release: unfreeze runs ONE comprehensive settle (fresh window + collapse,
+  // same semantics as a scrollbar-drag release). Rows near the final viewport
+  // must be revealed.
+  vm.runInContext('unfreezeProcessWindowing()', h.sandbox);
+  const rows = h.container.querySelectorAll('.message-row');
+  const topIdx = rows.findIndex((r) => r.offsetTop + r.offsetHeight > h.container.scrollTop);
+  const nearTool = rows.slice(topIdx, topIdx + 6).find((r) => r.classList.contains('tool'));
+  assert.ok(nearTool && !nearTool.classList.contains('process-cv-hidden'),
+    'unfreeze settle must reveal rows near the final viewport');
+
+  // After unfreeze the normal chain serves scrolls again: a scrollbar-style
+  // jump lands silently (large-delta deferral) and the 150ms settle reveals
+  // the arrival viewport — the same semantics as a drag release.
+  assert.equal(vm.runInContext('_windowingFrozen', h.sandbox), false,
+    'unfreeze must clear the frozen flag');
+  const farRow = rows.find((r) => r.classList.contains('tool')
+    && r.classList.contains('process-cv-hidden')
+    && r.offsetTop > h.container.scrollTop + 5000);
+  assert.ok(farRow, 'need a far hidden tool row for the recovery check');
+  h.container.scrollTop = farRow.offsetTop - 10; // single large jump
+  vm.runInContext('_onScrollForWindowing()', h.sandbox);
+  h.pumpFrame(); // rAF stays silent (large-delta deferral)
+  h.flushTimers(); // scroll-stop settle: fresh window + reveal + collapse
+  assert.ok(!farRow.classList.contains('process-cv-hidden'),
+    'post-unfreeze jump settle must reveal the arrival viewport (chain recovered)');
+});

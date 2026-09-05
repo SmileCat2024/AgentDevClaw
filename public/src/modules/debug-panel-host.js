@@ -213,6 +213,12 @@ function toggleFeaturePanel(panelId) {
   activeFeaturePanel = wasOpen ? null : panelId;
   renderFeaturePanel({ deferBody: shouldDeferBody });
 
+  // 面板打开使中央区低于阈值时做级联适配（收左栏 → 缩右栏）。
+  // 纯动作：复用 toggle 开头捕获的 _anchor，在下方 rAF 中一并恢复滚动。
+  if (typeof _cascadeCentralWidth === 'function') {
+    _cascadeCentralWidth();
+  }
+
   // Lifecycle: open new panel
   if (!wasOpen && panelId === 'genui' && window.GenUIPanel) {
     window.GenUIPanel.onOpen();

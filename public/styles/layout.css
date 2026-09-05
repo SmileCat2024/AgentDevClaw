@@ -6287,6 +6287,15 @@ body[data-theme="light"] .project-docset-detail-empty {
   bottom: 168px;
 }
 
+/* 窄屏避让由主内容区实际宽度驱动：窗口缩放、左侧栏拖宽与面板打开
+   一样会把 main-content 挤窄（输入卡 min(85%, 800px) 居中，按钮与
+   输入卡的水平重叠临界约 1064px），容器查询统一覆盖全部变窄来源。 */
+@container main-content (max-width: 1100px) {
+  .follow-latest-btn {
+    bottom: 168px;
+  }
+}
+
 .follow-latest-dot {
   width: 8px;
   height: 8px;
@@ -6603,25 +6612,12 @@ body[data-theme="light"] .preset-tag-opencode {
   position: relative;
 }
 
-/* ── Breakpoint 1: ≤1100px — feature panel floats over content ── */
+/* ── Breakpoint 1: ≤1100px — 紧凑化 header。
+   注意：feature panel 不再在此断点浮层化（曾为 position:absolute 覆盖内容）。
+   三栏（sidebar / main-content / feature-panel）在桌面全宽度范围保持 flex
+   平铺；空间不足由 JS 级联适配保证（收左栏 → 缩右栏 → 收右栏，见 app-ui.js
+   _cascadeCentralWidth），避免中央区被面板盖住。 */
 @media (max-width: 1100px) {
-  .feature-panel.open {
-    position: absolute;
-    right: 56px;
-    top: 0;
-    bottom: 0;
-    z-index: 50;
-    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
-    max-width: calc(100vw - 56px - 32px);
-    width: min(var(--feature-panel-width, 500px), calc(100vw - 56px - 32px));
-  }
-
-  .feature-panel-header,
-  .feature-panel-body {
-    min-width: 0;
-    width: min(var(--feature-panel-width, 500px), calc(100vw - 56px - 32px));
-  }
-
   /* Header: reduce gaps at medium-narrow */
   header { gap: 8px; padding: 0 12px; }
 }

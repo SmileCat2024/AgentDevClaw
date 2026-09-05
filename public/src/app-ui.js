@@ -1537,6 +1537,7 @@ sidebarToggle.addEventListener('click', () => {
     _updateSidebarBackdrop();
   }
 });
+let _centralAdaptRaf = 0;
 window.addEventListener('resize', () => {
   if (!_isNarrowScreen()) {
     // Wide screen: hide backdrop, ensure sidebar visible
@@ -1544,7 +1545,120 @@ window.addEventListener('resize', () => {
   } else {
     _updateSidebarBackdrop();
   }
+  // 中央区宽度级联适配（rAF 节流）。窗口 resize 的逐帧 reflow 漂移不锚定
+  // （见 ensureCentralMinWidth 注释）；仅在级联动作实际发生时锚定一次。
+  if (!_centralAdaptRaf) {
+    _centralAdaptRaf = requestAnimationFrame(() => {
+      _centralAdaptRaf = 0;
+      ensureCentralMinWidth();
+    });
+  }
 });
+
+/* ── 中央区宽度级联适配 ──
+   布局：sidebar(--sidebar-width) + resizer(4) + main-content(flex:1)
+        + feature-panel(--feature-panel-width) + rail(56)。
+   三栏全程 flex 平铺（panel ≤1100px 浮层断点已移除，避免中央区被面板
+   盖住）；≤860px 时 sidebar 转抽屉不占布局宽度。空间不足时级联顺序：
+   1) 优先收起左栏（复用 sidebar.collapsed 链路）
+   2) 仍不足 → 右栏自动收窄（复用 --feature-panel-width 链路，下限与
+      手动拖动一致），并同步 featurePanelWidth 全局变量
+   3) 仍不足 → 收起右栏（复用 activeFeaturePanel=null + renderFeaturePanel）
+   面板/侧栏宽度均无 transition，动作为同步突变；触发处负责滚动锚定。 */
+const CENTRAL_MIN_WIDTH = 480;
+
+function _getSidebarOccupiedWidth() {
+  if (sidebar.classList.contains('collapsed')) return 0;
+  if (_isNarrowScreen()) return 0;
+  const w = parseInt(document.documentElement.style.getPropertyValue('--sidebar-width'), 10) || 280;
+  return w + 4; // + sidebar-resizer
+}
+
+function _getPanelOccupiedWidth() {
+  if (!featurePanel.classList.contains('open')) return 0;
+  return featurePanelWidth;
+}
+
+function _centralAvailableWidth() {
+  return window.innerWidth - _getSidebarOccupiedWidth() - _getPanelOccupiedWidth() - 56;
+}
+
+/** 纯适配动作（不做滚动锚定），供 resize 包装与 panel 打开链路共用。
+ *  @returns {boolean} 是否实际发生了级联动作（收侧栏/收窄面板/收面板） */
+function _cascadeCentralWidth() {
+  let changed = false;
+  let central = _centralAvailableWidth();
+  if (central >= CENTRAL_MIN_WIDTH) return changed;
+
+  // 1) 收起左栏
+  if (central < CENTRAL_MIN_WIDTH
+      && !sidebar.classList.contains('collapsed') && !_isNarrowScreen()) {
+    sidebar.classList.add('collapsed');
+    _updateSidebarBackdrop();
+    changed = true;
+    central = _centralAvailableWidth();
+  }
+
+  // 2) 右栏自动收窄（下限与手动拖动一致）
+  if (central < CENTRAL_MIN_WIDTH && _getPanelOccupiedWidth() > 0) {
+    const minWidth = window.innerWidth <= 1100 ? 300 : 400;
+    const nextWidth = Math.max(minWidth, featurePanelWidth - (CENTRAL_MIN_WIDTH - central));
+    if (nextWidth !== featurePanelWidth) {
+      featurePanelWidth = nextWidth;
+      featurePanel.style.setProperty('--feature-panel-width', nextWidth + 'px');
+      changed = true;
+    }
+    central = _centralAvailableWidth();
+  }
+
+  // 3) 收起右栏（极窄窗口 + 右栏已到下限时可达）
+  if (central < CENTRAL_MIN_WIDTH && featurePanel.classList.contains('open')) {
+    activeFeaturePanel = null;
+    renderFeaturePanel();
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * 中央区宽度适配 + 滚动锚定。
+ * 仅在级联动作实际发生（大幅宽度突变）时锚定一次校正阅读位置；窗口
+ * resize 引起的逐帧 reflow 漂移不做锚定——跨 rAF 的锚定写入每帧产生
+ * 一帧相位差，是窗口缩到内容列实际收缩后的抖动来源（分割条拖动同理，
+ * 见 featurePanelResizer）。reflow 漂移由自然行为保持：scrollTop 不变，
+ * 视口顶部内容钉住。
+ */
+function ensureCentralMinWidth() {
+  if (_centralAvailableWidth() >= CENTRAL_MIN_WIDTH) return;
+
+  // 宽度突变前捕获滚动位置；配合 applyChatViewportAnchor 保持阅读位置
+  const anchor = (typeof captureChatViewportAnchor === 'function')
+    ? captureChatViewportAnchor() : null;
+  let suppressApplied = false;
+  if (anchor && typeof suppressChatViewportObservers === 'function') {
+    suppressChatViewportObservers(500);
+    suppressApplied = true;
+  }
+
+  const cascadeChanged = _cascadeCentralWidth();
+
+  if (!cascadeChanged) {
+    if (suppressApplied && typeof resumeChatViewportObservers === 'function') {
+      resumeChatViewportObservers();
+    }
+    return;
+  }
+  if (!anchor) return;
+  requestAnimationFrame(() => {
+    if (typeof applyChatViewportAnchor === 'function') applyChatViewportAnchor(anchor);
+    if (suppressApplied && typeof resumeChatViewportObservers === 'function') {
+      resumeChatViewportObservers();
+    }
+    if (anchor.mode === 'follow' && typeof scheduleFollowLatestSettlePass === 'function') {
+      scheduleFollowLatestSettlePass();
+    }
+  });
+}
 
 // Sidebar Resize
 (function initSidebarResizer() {
@@ -1757,13 +1871,22 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
     featurePanelCollapseHint.querySelector('.feature-panel-collapse-hint-title').textContent = t('panel_collapse_hint_title');
   }
 
-  // ── 拖动期间滚动位置保持 ──
-  // 宽度变化时用行级锚定保持阅读位置（跟随模式锁底），实现见 chat-viewport.js。
-  // 时序关键：mousemove 只记录目标 clientX；改宽度样式 → forced layout 读
-  // offsetTop → 设 scrollTop 收敛进同一个 rAF 回调，paint 时布局与滚动一致。
-  // 拖动期间抑制 viewport observers，防止 settlement 的 preserveTop 与锚定打架。
+  // ── 拖动期间滚动位置策略 ──
+  // 拖动中不做每帧行级锚定：锚定只能钉住单行，锚定行上方行高逐帧变化时
+  // scrollTop 每帧跳 ±一行高，视口其余内容随之换血——这是残余闪抖的来源。
+  // 业界做法（VS Code 拖分割条）：拖动期间不写 scrollTop，视口顶部内容
+  // 自然钉住，reflow 以平滑阶梯式进行；松手时一次性锚定校正阅读位置。
+  // 拖动期间抑制 viewport observers（settlement 的 preserveTop 会被动写
+  // scrollTop）；冻结 tool windowing（suppress 管不到它的 scroll 监听链）：
+  // reveal 补偿 / settle 折叠会再写 scrollTop，形成抖动循环。
+  if (typeof freezeProcessWindowing === 'function') freezeProcessWindowing();
   const _anchor = (typeof captureChatViewportAnchor === 'function')
     ? captureChatViewportAnchor() : null;
+  // reflow 漂移不触发 scroll 事件（scrollTop 未被写入），因此拖动中任何
+  // scroll 事件都意味着用户主动滚动（wheel/触摸板），松手时放弃锚定校正。
+  let _userScrolledDuringDrag = false;
+  const _markUserScroll = () => { _userScrolledDuringDrag = true; };
+  container.addEventListener('scroll', _markUserScroll, { passive: true });
   let _suppressApplied = false;
   if (_anchor && typeof suppressChatViewportObservers === 'function') {
     suppressChatViewportObservers(120000);
@@ -1806,11 +1929,8 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
       featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
     }
 
-    // 2) 同步锚定：样式已 dirty，读 offsetTop 触发 forced layout 拿到新宽度
-    //    下的位置，立即设 scrollTop，同帧 paint 一致。
-    if (_anchor && typeof applyChatViewportAnchor === 'function') {
-      applyChatViewportAnchor(_anchor);
-    }
+    // 不做每帧滚动补偿（见 mousedown 注释）：保持 scrollTop 不变，视口
+    // 顶部内容自然钉住，阅读位置的校正推迟到松手时一次完成。
   };
 
   const handleMouseMove = (moveEvent) => {
@@ -1822,19 +1942,31 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
   const handleMouseUp = () => {
     window.removeEventListener('mousemove', handleMouseMove);
     window.removeEventListener('mouseup', handleMouseUp);
+    container.removeEventListener('scroll', _markUserScroll);
     if (_dragRaf) { cancelAnimationFrame(_dragRaf); _dragRaf = 0; }
     featurePanel.classList.remove('drag-collapsing');
-    if (_suppressApplied && typeof resumeChatViewportObservers === 'function') {
-      resumeChatViewportObservers();
-    }
-    if (_anchor && _anchor.mode === 'follow' &&
-        typeof scheduleFollowLatestSettlePass === 'function') {
-      scheduleFollowLatestSettlePass();
-    }
     if (shouldCollapse) {
       activeFeaturePanel = null;
       renderFeaturePanel();
     }
+
+    // 收尾统一在下一帧：宽度突变（含收回面板）先在本帧落定，下一帧一次
+    // 性锚定阅读位置（用户拖动期间主动滚动过则放弃校正），再做 windowing
+    // settle 与 observer 恢复——settle 的 fresh window 以最终位置为基准。
+    requestAnimationFrame(() => {
+      if (_anchor && !_userScrolledDuringDrag &&
+          typeof applyChatViewportAnchor === 'function') {
+        applyChatViewportAnchor(_anchor);
+      }
+      if (typeof unfreezeProcessWindowing === 'function') unfreezeProcessWindowing();
+      if (_suppressApplied && typeof resumeChatViewportObservers === 'function') {
+        resumeChatViewportObservers();
+      }
+      if (_anchor && _anchor.mode === 'follow' &&
+          typeof scheduleFollowLatestSettlePass === 'function') {
+        scheduleFollowLatestSettlePass();
+      }
+    });
   };
 
   window.addEventListener('mousemove', handleMouseMove);

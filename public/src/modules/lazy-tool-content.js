@@ -40,6 +40,7 @@ var _rowIdxMap = null;
 var _scrollStopTimer = null;
 var _lastScrollTop = 0;
 var _largeDeltaPending = false;
+var _windowingFrozen = false;
 
 /* ── cache ── */
 
@@ -299,6 +300,12 @@ function _onScrollForWindowing() {
   var delta = Math.abs(currentScrollTop - _lastScrollTop);
   _lastScrollTop = currentScrollTop;
 
+  // 面板拖动（程序化宽度变化 + 拖动锚定每帧写 scrollTop）期间冻结：
+  // 锚定写入会让 reveal 补偿 / settle 折叠重锚定把 scrollTop 纠向另一个
+  // 位置，两个写入者交替"纠正"对方 = 拖动中的持续上下抖动。见
+  // freezeProcessWindowing。
+  if (_windowingFrozen) return;
+
   if (!_cachedClientHeight) _cachedClientHeight = container.clientHeight;
 
   // Large delta (scrollbar drag / fast flick) — switch to deferral mode:
@@ -528,6 +535,30 @@ function _updatePixBounds(rows, windowStart, windowEnd) {
 }
 
 /* ── public API ── */
+
+// 面板拖动期间的 windowing 冻结协议。拖动锚定（applyChatViewportAnchor）
+// 每帧写 scrollTop，会驱动本模块的 scroll 链：reveal 补偿、settle 折叠
+// 重锚定、释放钉扎都会再写 scrollTop——与拖动锚定交替纠正，形成拖动中
+// 持续上下抖动的反馈循环。suppressChatViewportObservers 只静默
+// chat-viewport.js 的 observers，管不到本模块的 scroll 监听，因此需要
+// 显式冻结。解冻时以"大跳释放"同语义做一次完整 settle（fresh window +
+// settle 折叠 + 释放钉扎），一次性收敛到最终布局。
+function freezeProcessWindowing() {
+  _windowingFrozen = true;
+  if (_scrollStopTimer) {
+    clearTimeout(_scrollStopTimer);
+    _scrollStopTimer = null;
+  }
+}
+
+function unfreezeProcessWindowing() {
+  if (!_windowingFrozen) return;
+  _windowingFrozen = false;
+  if (!showChatProcess || !container) return;
+  _lastScrollTop = container.scrollTop;
+  _largeDeltaPending = true; // 复用滚动大跳释放语义收敛布局
+  _onScrollStop();
+}
 
 // Landing collapse scan with settle powers (spanning rows may fold and
 // re-anchor). Used by render() after it locks the viewport to its final
