@@ -18,7 +18,7 @@
  *   _cancelVoiceRecording, _playVoiceSound, _updateVoiceUI,
  *   sendAudioToASR, insertTextAtCursor, _injectPendingVoiceResult
  * 导出全局变量:
- *   _voiceRecording, _voiceStopping, _voiceTranscribing, _voiceMediaRecorder, _voiceAudioChunks,
+ *   _voiceRecording, _voiceStarting, _voiceStopping, _voiceTranscribing, _voiceMediaRecorder, _voiceAudioChunks,
  *   _voiceTargetBtn, _voiceTargetId, _voiceCancelled, _voicePendingSend, _voiceAgentId,
  *   _voiceCacheKey, _pendingVoiceResults
  * HTML onclick 引用:
@@ -29,6 +29,7 @@
 // ── Voice Input / ASR ──────────────────────────────────────────────────────
 
 let _voiceRecording = false;
+let _voiceStarting = false;         // startVoiceRecording 进行中（含 mic 等待期），防连点重入
 let _voiceStopping = false;
 let _voiceTranscribing = false;
 let _voiceMediaRecorder = null;
@@ -52,17 +53,35 @@ let _pendingVoiceResults = {};      // { agentId: text } — ASR 结果在会话
 // from the local filesystem via PowerShell MediaPlayer.
 //
 // Lifecycle:
-//   1. Page load: prefetch raw ArrayBuffer for both sounds (no user gesture
-//      needed for fetch).
-//   2. First user gesture (toggleVoiceRecording click): create AudioContext
-//      (must be within gesture for autoplay policy) and decode prefetched
-//      data into AudioBuffers.
-//   3. Subsequent plays: instant via AudioBufferSourceNode.
-//   4. First play (buffers not yet decoded): falls back to new Audio().
+//   1. Page load: prefetch raw ArrayBuffer, create the AudioContext (creation
+//      doesn't need a gesture — it just starts suspended) and decode into
+//      AudioBuffers, so the very first click can take the fast path.
+//   2. First user gesture (toggleVoiceRecording click): resume the suspended
+//      context (autoplay policy) — the only step that requires the gesture.
+//   3. Playback: instant via AudioBufferSourceNode.
+//   4. Fallback (buffers not decoded yet): new Audio().
 
 let _audioCueCtx = null;
 let _audioCueBuffers = {};   // { start: AudioBuffer, stop: AudioBuffer }
 let _audioCueRawData = {};   // { start: ArrayBuffer, stop: ArrayBuffer } — prefetched, pre-decode
+
+function _createAudioCueContext() {
+  if (_audioCueCtx) return _audioCueCtx;
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor) return null;
+  _audioCueCtx = new Ctor();
+  return _audioCueCtx;
+}
+
+function _decodeAudioCue(type) {
+  if (_audioCueBuffers[type]) return;
+  const raw = _audioCueRawData[type];
+  if (!raw || !_audioCueCtx) return;
+  _audioCueRawData[type] = null;
+  _audioCueCtx.decodeAudioData(raw).then(function(buf) {
+    _audioCueBuffers[type] = buf;
+  }).catch(function() { /* decode failed, will fall back to new Audio() */ });
+}
 
 (function _prefetchAudioCueRaw() {
   for (const type of ['start', 'stop']) {
@@ -71,33 +90,24 @@ let _audioCueRawData = {};   // { start: ArrayBuffer, stop: ArrayBuffer } — pr
       : '/sounds/voice-recording-stop.mp3';
     fetch(url)
       .then(function(r) { return r.arrayBuffer(); })
-      .then(function(buf) { _audioCueRawData[type] = buf; })
+      .then(function(buf) {
+        _audioCueRawData[type] = buf;
+        if (_createAudioCueContext()) _decodeAudioCue(type);
+      })
       .catch(function() { /* prefetch is best-effort */ });
   }
 })();
 
-// Must be called within a user gesture for AudioContext creation/resume.
+// Must be called within a user gesture for AudioContext resume (autoplay policy).
 function _initAudioCues() {
-  if (!_audioCueCtx) {
-    let Ctor = window.AudioContext || window.webkitAudioContext;
-    if (!Ctor) return;
-    _audioCueCtx = new Ctor();
+  const ctx = _createAudioCueContext();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(e => console.warn(e));
   }
-  if (_audioCueCtx.state === 'suspended') {
-    _audioCueCtx.resume().catch(e => console.warn(e));
-  }
-  // Decode any prefetched raw data (async, non-blocking)
-  for (let _i = 0, _types = ['start', 'stop']; _i < _types.length; _i++) {
-    (function(type) {
-      if (_audioCueBuffers[type]) return;
-      let raw = _audioCueRawData[type];
-      if (!raw) return;
-      _audioCueRawData[type] = null;
-      _audioCueCtx.decodeAudioData(raw).then(function(buf) {
-        _audioCueBuffers[type] = buf;
-      }).catch(function() { /* decode failed, will fall back to new Audio() */ });
-    })(_types[_i]);
-  }
+  // Decode any prefetched-but-undecoded data (async, non-blocking)
+  _decodeAudioCue('start');
+  _decodeAudioCue('stop');
 }
 
 // Play short audio cue for voice recording start/stop.
@@ -183,8 +193,13 @@ async function toggleVoiceRecording(btn) {
 
   if (_voiceRecording) {
     stopVoiceRecording();
-  } else if (!_voiceStopping && !_voiceTranscribing) {
-    await startVoiceRecording(btn);
+  } else if (!_voiceStarting && !_voiceStopping && !_voiceTranscribing) {
+    _voiceStarting = true;
+    try {
+      await startVoiceRecording(btn);
+    } finally {
+      _voiceStarting = false;
+    }
   }
 }
 
@@ -192,194 +207,222 @@ async function startVoiceRecording(btn) {
   const recordingAgentId = currentRuntimeAgentId;
   const recordingCacheKey = _getSessionInputCacheKey();
   const recordingTargetId = btn?.dataset?.target || '';
-  // Check speech config
-  let speechConfig = window.ClawFW?._speechModelConfig;
-  if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
-    try {
-      const resp = await fetch('/protoclaw/speech_model_config');
-      const data = await resp.json();
-      speechConfig = data?.speechModel;
-      if (window.ClawFW) window.ClawFW._speechModelConfig = speechConfig;
-    } catch (e) { /* ignore */ }
-  }
-  if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
-    alert(currentLanguage === 'zh' ? '语音模型未配置，请在设置中配置 ASR 模型' : 'Speech model not configured. Please configure it in Settings.');
-    return;
-  }
 
-  try {
+  // Immediate click feedback — play before any async setup instead of after
+  // mic acquisition. Playing before the recorder starts also keeps the cue
+  // out of the captured audio.
+  _playVoiceSound('start');
+
+  // Mic acquisition dominates start latency (driver init, permission
+  // prompt). Kick it off up front, in parallel with the speech-config
+  // check, instead of after a serial config fetch.
+  const micReady = (async () => {
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
       const isSecure = window.isSecureContext;
-      const hint = currentLanguage === 'zh'
+      throw new Error(currentLanguage === 'zh'
         ? (isSecure
           ? '当前浏览器不支持麦克风访问（mediaDevices API 不可用）。'
           : '麦克风功能仅在安全上下文下可用。请通过 https:// 访问，或使用 SSH 端口转发后在 localhost 上打开。')
         : (isSecure
           ? 'Microphone access is not supported in this browser (mediaDevices API unavailable).'
-          : 'Microphone requires a secure context. Please use https://, or access via localhost through SSH port forwarding.');
-      throw new Error(hint);
+          : 'Microphone requires a secure context. Please use https://, or access via localhost through SSH port forwarding.'));
     }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    // Permission prompts are asynchronous. If the user changed session while
-    // the browser prompt was open, the old DOM button no longer owns a valid
-    // recording target; release the acquired microphone immediately.
-    if (_getSessionInputCacheKey() !== recordingCacheKey) {
-      stream.getTracks().forEach(t => t.stop());
+    return navigator.mediaDevices.getUserMedia({ audio: true });
+  })();
+
+  const configReady = (async () => {
+    const cached = window.ClawFW?._speechModelConfig;
+    if (cached && cached.baseUrl && cached.apiKey) return cached;
+    try {
+      const resp = await fetch('/protoclaw/speech_model_config');
+      const data = await resp.json();
+      const speechConfig = data?.speechModel;
+      if (window.ClawFW) window.ClawFW._speechModelConfig = speechConfig;
+      return speechConfig;
+    } catch (e) { /* ignore */ }
+    return null;
+  })();
+
+  let stream;
+  let speechConfig;
+  try {
+    [stream, speechConfig] = await Promise.all([micReady, configReady]);
+  } catch (err) {
+    _playVoiceSound('stop');
+    console.error('[VoiceInput] Failed to start recording:', err);
+    alert(currentLanguage === 'zh' ? '无法访问麦克风：' + err.message : 'Cannot access microphone: ' + err.message);
+    return;
+  }
+  if (!speechConfig || !speechConfig.baseUrl || !speechConfig.apiKey) {
+    stream.getTracks().forEach(t => t.stop());
+    _playVoiceSound('stop');
+    alert(currentLanguage === 'zh' ? '语音模型未配置，请在设置中配置 ASR 模型' : 'Speech model not configured. Please configure it in Settings.');
+    return;
+  }
+
+  // Permission prompts are asynchronous. If the user changed session while
+  // the browser prompt was open, the old DOM button no longer owns a valid
+  // recording target; release the acquired microphone immediately.
+  if (_getSessionInputCacheKey() !== recordingCacheKey) {
+    stream.getTracks().forEach(t => t.stop());
+    return;
+  }
+  _voiceTargetBtn = btn;
+  _voiceTargetId = recordingTargetId;
+  _voiceAudioChunks = [];
+  _voiceAgentId = recordingAgentId;
+  _voiceCacheKey = recordingCacheKey;
+  _voicePendingSend = false;
+  _voiceStopping = false;
+  _voiceCancelled = false;
+
+  // Determine best supported MIME type
+  const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
+  let selectedMime = '';
+  for (const mt of mimeTypes) {
+    if (!mt || MediaRecorder.isTypeSupported(mt)) {
+      selectedMime = mt;
+      break;
+    }
+  }
+
+  const options = selectedMime ? { mimeType: selectedMime } : {};
+  try {
+    _voiceMediaRecorder = new MediaRecorder(stream, options);
+  } catch (err) {
+    stream.getTracks().forEach(t => t.stop());
+    _playVoiceSound('stop');
+    console.error('[VoiceInput] Failed to start recording:', err);
+    alert(currentLanguage === 'zh' ? '无法访问麦克风：' + err.message : 'Cannot access microphone: ' + err.message);
+    return;
+  }
+
+  _voiceMediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) {
+      _voiceAudioChunks.push(e.data);
+    }
+  };
+
+  _voiceMediaRecorder.onstop = async () => {
+    // Stop all tracks
+    stream.getTracks().forEach(t => t.stop());
+    btn.classList.remove('recording');
+    if (_voiceTargetBtn && _voiceTargetBtn !== btn) {
+      _voiceTargetBtn.classList.remove('recording');
+    }
+    _voiceRecording = false;
+    _voiceStopping = false;
+    _playVoiceSound('stop');
+
+    if (_voiceCancelled) {
+      _voiceCancelled = false;
+      _voiceAudioChunks = [];
+      _updateVoiceUI();
+      _voiceTargetBtn = null;
+      _voiceTargetId = null;
       return;
     }
-    _voiceTargetBtn = btn;
-    _voiceTargetId = recordingTargetId;
-    _voiceAudioChunks = [];
-    _voiceAgentId = recordingAgentId;
-    _voiceCacheKey = recordingCacheKey;
-    _voicePendingSend = false;
-    _voiceStopping = false;
-    _voiceCancelled = false;
 
-    // Determine best supported MIME type
-    const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', ''];
-    let selectedMime = '';
-    for (const mt of mimeTypes) {
-      if (!mt || MediaRecorder.isTypeSupported(mt)) {
-        selectedMime = mt;
-        break;
-      }
+    if (_voiceAudioChunks.length === 0) {
+      _updateVoiceUI();
+      _voiceTargetBtn = null;
+      _voiceTargetId = null;
+      return;
     }
 
-    const options = selectedMime ? { mimeType: selectedMime } : {};
-    _voiceMediaRecorder = new MediaRecorder(stream, options);
+    const mimeType = _voiceMediaRecorder.mimeType || 'audio/webm';
+    const blob = new Blob(_voiceAudioChunks, { type: mimeType });
+    _voiceAudioChunks = [];
 
-    _voiceMediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) {
-        _voiceAudioChunks.push(e.data);
-      }
-    };
-
-    _voiceMediaRecorder.onstop = async () => {
-      // Stop all tracks
-      stream.getTracks().forEach(t => t.stop());
-      btn.classList.remove('recording');
-      if (_voiceTargetBtn && _voiceTargetBtn !== btn) {
-        _voiceTargetBtn.classList.remove('recording');
-      }
-      _voiceRecording = false;
-      _voiceStopping = false;
-      _playVoiceSound('stop');
-
-      if (_voiceCancelled) {
-        _voiceCancelled = false;
-        _voiceAudioChunks = [];
-        _updateVoiceUI();
-        _voiceTargetBtn = null;
-        _voiceTargetId = null;
-        return;
-      }
-
-      if (_voiceAudioChunks.length === 0) {
-        _updateVoiceUI();
-        _voiceTargetBtn = null;
-        _voiceTargetId = null;
-        return;
-      }
-
-      const mimeType = _voiceMediaRecorder.mimeType || 'audio/webm';
-      const blob = new Blob(_voiceAudioChunks, { type: mimeType });
-      _voiceAudioChunks = [];
-
-      _voiceTranscribing = true;
+    _voiceTranscribing = true;
+    _updateVoiceUI();
+    try {
+      await sendAudioToASR(blob, _voiceTargetId || recordingTargetId);
+    } finally {
+      _voiceTranscribing = false;
       _updateVoiceUI();
-      try {
-        await sendAudioToASR(blob, _voiceTargetId || recordingTargetId);
-      } finally {
-        _voiceTranscribing = false;
-        _updateVoiceUI();
-      }
+    }
 
-      // Auto-send if user pressed send while recording
-      if (_voicePendingSend) {
-        _voicePendingSend = false;
-        const targetId = _voiceTargetId || recordingTargetId;
-        if (targetId === 'input-persistent') {
-          const _currentCacheKey = _getSessionInputCacheKey();
-          if (_currentCacheKey === _voiceCacheKey) {
-            // Same session — text already in textarea, submit normally
-            submitQueuedInput();
-          } else {
-            // Session switched — auto-submit directly to original agent
-            const originalCacheKey = _voiceCacheKey;
-            const originalAgentId = _voiceAgentId;
-            let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
-            delete _pendingVoiceResults[_voiceCacheKey];
-            // Also include any cached typed text from the original session
-            const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
-            delete _sessionInputCache[_voiceCacheKey];
-            fullText = cachedInput + fullText;
-            if (fullText.trim()) {
-              fetch(`/api/agents/${originalAgentId}/user-turn`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: fullText, source: 'voice-input' })
-              }).then(async res => {
-                if (!res.ok) {
-                  const error = await res.json().catch(() => ({}));
-                  _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
-                } else {
-                  _markVoiceAutoSendAccepted(originalAgentId);
-                }
-              }).catch(e => {
-                _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
-              });
-            }
+    // Auto-send if user pressed send while recording
+    if (_voicePendingSend) {
+      _voicePendingSend = false;
+      const targetId = _voiceTargetId || recordingTargetId;
+      if (targetId === 'input-persistent') {
+        const _currentCacheKey = _getSessionInputCacheKey();
+        if (_currentCacheKey === _voiceCacheKey) {
+          // Same session — text already in textarea, submit normally
+          submitQueuedInput();
+        } else {
+          // Session switched — auto-submit directly to original agent
+          const originalCacheKey = _voiceCacheKey;
+          const originalAgentId = _voiceAgentId;
+          let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
+          delete _pendingVoiceResults[_voiceCacheKey];
+          // Also include any cached typed text from the original session
+          const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
+          delete _sessionInputCache[_voiceCacheKey];
+          fullText = cachedInput + fullText;
+          if (fullText.trim()) {
+            fetch(`/api/agents/${originalAgentId}/user-turn`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: fullText, source: 'voice-input' })
+            }).then(async res => {
+              if (!res.ok) {
+                const error = await res.json().catch(() => ({}));
+                _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
+              } else {
+                _markVoiceAutoSendAccepted(originalAgentId);
+              }
+            }).catch(e => {
+              _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
+            });
           }
-        } else if (targetId.startsWith('input-')) {
-          const requestId = targetId.slice('input-'.length);
-          if (_getSessionInputCacheKey() === _voiceCacheKey) {
-            submitInput(requestId, _voiceAgentId || currentRuntimeAgentId);
-          } else {
-            // Session switched — auto-submit to original agent's input request
-            const originalCacheKey = _voiceCacheKey;
-            const originalAgentId = _voiceAgentId;
-            let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
-            delete _pendingVoiceResults[_voiceCacheKey];
-            const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
-            delete _sessionInputCache[_voiceCacheKey];
-            fullText = cachedInput + fullText;
-            if (fullText.trim()) {
-              fetch(`/api/agents/${originalAgentId}/input`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  requestId,
-                  input: fullText,
-                  response: { kind: 'text', text: fullText },
-                })
-              }).then(async res => {
-                if (!res.ok) {
-                  const error = await res.json().catch(() => ({}));
-                  _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
-                } else {
-                  _markVoiceAutoSendAccepted(originalAgentId);
-                }
-              }).catch(e => {
-                _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
-              });
-            }
+        }
+      } else if (targetId.startsWith('input-')) {
+        const requestId = targetId.slice('input-'.length);
+        if (_getSessionInputCacheKey() === _voiceCacheKey) {
+          submitInput(requestId, _voiceAgentId || currentRuntimeAgentId);
+        } else {
+          // Session switched — auto-submit to original agent's input request
+          const originalCacheKey = _voiceCacheKey;
+          const originalAgentId = _voiceAgentId;
+          let fullText = _pendingVoiceResults[_voiceCacheKey] || '';
+          delete _pendingVoiceResults[_voiceCacheKey];
+          const cachedInput = _sessionInputCache[_voiceCacheKey] || '';
+          delete _sessionInputCache[_voiceCacheKey];
+          fullText = cachedInput + fullText;
+          if (fullText.trim()) {
+            fetch(`/api/agents/${originalAgentId}/input`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                requestId,
+                input: fullText,
+                response: { kind: 'text', text: fullText },
+              })
+            }).then(async res => {
+              if (!res.ok) {
+                const error = await res.json().catch(() => ({}));
+                _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, error.error || error.message || `HTTP ${res.status}`);
+              } else {
+                _markVoiceAutoSendAccepted(originalAgentId);
+              }
+            }).catch(e => {
+              _restoreCrossSessionVoiceInput(originalCacheKey, fullText, originalAgentId, e?.message || String(e));
+            });
           }
         }
       }
-      _voiceTargetBtn = null;
-      _voiceTargetId = null;
-    };
+    }
+    _voiceTargetBtn = null;
+    _voiceTargetId = null;
+  };
 
-    _voiceMediaRecorder.start(1000); // collect chunks every 1s
-    _voiceRecording = true;
-    btn.classList.add('recording');
-    _playVoiceSound('start');
-    _updateVoiceUI();
-  } catch (err) {
-    console.error('[VoiceInput] Failed to start recording:', err);
-    alert(currentLanguage === 'zh' ? '无法访问麦克风：' + err.message : 'Cannot access microphone: ' + err.message);
-  }
+  _voiceMediaRecorder.start(1000); // collect chunks every 1s
+  _voiceRecording = true;
+  btn.classList.add('recording');
+  _updateVoiceUI();
 }
 
 function _restoreCrossSessionVoiceInput(cacheKey, text, agentId, errorMessage) {
