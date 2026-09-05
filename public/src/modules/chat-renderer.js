@@ -725,12 +725,27 @@ function render(messages) {
     `;
   }).join('');
 
-  // Prefer a pending switch-restore value over the live scrollTop: during
-  // switchAgent the container still holds the outgoing session's DOM, so the
-  // live value may be a browser-clamped remainder of the intended restore.
-  const savedScrollTop = consumePendingChatScrollRestore() ?? container.scrollTop;
+  const chatContextKey = typeof getChatScrollContextKey === 'function'
+    ? getChatScrollContextKey() : null;
+  const savedScrollAnchor = typeof consumePendingChatViewportAnchor === 'function'
+    ? consumePendingChatViewportAnchor()
+    : null;
+  const outgoingDomIsSameContext = !!chatContextKey
+    && container.dataset
+    && container.dataset.chatRenderContext === chatContextKey
+    && !!container.querySelector('.message-row');
+  const rebuildAnchor = !shouldFollowAfterMutation && !savedScrollAnchor
+    && outgoingDomIsSameContext
+    && typeof captureChatViewportAnchor === 'function'
+    ? captureChatViewportAnchor()
+    : null;
+  const renderAnchor = savedScrollAnchor || rebuildAnchor;
+  const legacyScrollTop = consumePendingChatScrollRestore() ?? container.scrollTop;
   runWithSuppressedChatViewportObservers(() => {
     container.innerHTML = html;
+    if (container.dataset && chatContextKey) {
+      container.dataset.chatRenderContext = chatContextKey;
+    }
     // Pre-hide ALL process elements before any layout read.
     // Without this, the browser sees 134K visible nodes and freezes on layout.
     // applyProcessDistance (called next) will reveal ~70 near-viewport rows.
@@ -756,12 +771,22 @@ function render(messages) {
     if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
   }
   restoreUserCollapseState(container);
+  if (!shouldFollowAfterMutation && rebuildAnchor
+      && typeof applyChatViewportAnchor === 'function') {
+    applyChatViewportAnchor(rebuildAnchor);
+  } else if (!shouldFollowAfterMutation && savedScrollAnchor
+      && typeof applyChatViewportAnchor === 'function') {
+    applyChatViewportAnchor(savedScrollAnchor);
+  }
   updateFollowLatestButton();
   if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
   notifyChatViewportMutation({
     reason: 'render-full',
     shouldFollow: shouldFollowAfterMutation,
-    preserveTop: shouldFollowAfterMutation ? null : savedScrollTop,
+    preserveAnchor: renderAnchor,
+    preserveTop: shouldFollowAfterMutation
+      ? null
+      : (renderAnchor ? container.scrollTop : legacyScrollTop),
     forceSnap: shouldFollowAfterMutation,
     allowChase: false,
   });

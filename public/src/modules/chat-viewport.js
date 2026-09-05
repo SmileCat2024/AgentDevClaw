@@ -372,6 +372,76 @@ function consumePendingChatScrollRestore() {
   return value;
 }
 
+// Persist the existing semantic viewport anchor across chat DOM rebuilds.
+// Only rowIdx/offset are retained: DOM nodes cannot survive innerHTML replacement.
+const chatViewportAnchorByContext = new Map();
+let pendingChatViewportAnchor = null;
+
+function serializeChatViewportAnchor(anchor) {
+  if (!anchor || typeof anchor !== 'object') return null;
+  if (anchor.mode === 'follow') return { mode: 'follow' };
+  if (anchor.mode !== 'anchor') {
+    return Number.isFinite(anchor.scrollTop)
+      ? { mode: 'pixel', scrollTop: anchor.scrollTop }
+      : null;
+  }
+  return {
+    mode: 'anchor',
+    rowIdx: Number.isInteger(anchor.rowIdx) ? anchor.rowIdx : 0,
+    offset: Number.isFinite(anchor.offset) ? anchor.offset : 0,
+    scrollTop: Number.isFinite(anchor.scrollTop) ? anchor.scrollTop : 0,
+  };
+}
+
+function setPendingChatViewportAnchor(anchor) {
+  pendingChatViewportAnchor = anchor && typeof anchor === 'object' ? anchor : null;
+}
+
+function consumePendingChatViewportAnchor() {
+  const anchor = pendingChatViewportAnchor;
+  pendingChatViewportAnchor = null;
+  return anchor;
+}
+
+function getChatViewportContextKey() {
+  if (!currentRuntimeAgentId || typeof getRuntimeContextKey !== 'function') return null;
+  return getRuntimeContextKey(currentRuntimeAgentId);
+}
+
+// Alias used by the renderer and runtime-cache boundary. Keep context identity
+// in this module so all viewport persistence paths use the same key.
+function getChatScrollContextKey() {
+  return getChatViewportContextKey();
+}
+
+function rememberChatViewportAnchorForContext(contextKey = getChatViewportContextKey()) {
+  if (!contextKey) return null;
+  const anchor = captureChatViewportAnchor();
+  const serialized = serializeChatViewportAnchor(anchor);
+  if (serialized && serialized.mode !== 'follow') {
+    chatViewportAnchorByContext.set(contextKey, serialized);
+    return serialized;
+  }
+  // A session switch can save while the workspace surface is currently mounted;
+  // keep the last semantic anchor instead of replacing it with a null snapshot.
+  return chatViewportAnchorByContext.get(contextKey) || null;
+}
+
+function getRememberedChatViewportAnchorForContext(contextKey = getChatViewportContextKey()) {
+  if (!contextKey) return null;
+  return chatViewportAnchorByContext.get(contextKey) || null;
+}
+
+// The existing chat-scroll module already owns scroll behavior. This listener
+// only keeps the semantic anchor current for tab/session switches.
+container.addEventListener('scroll', () => {
+  if (typeof isChatSurfaceActive !== 'function' || !isChatSurfaceActive()
+    || (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface())) {
+    return;
+  }
+  rememberChatViewportAnchorForContext();
+}, { passive: true });
+
 function notifyChatViewportMutation(options = {}) {
   ensureChatViewportObservers();
 
@@ -385,6 +455,7 @@ function notifyChatViewportMutation(options = {}) {
     reasons: new Set(),
     shouldFollow: false,
     preserveTop: null,
+    preserveAnchor: null,
     forceSnap: false,
     allowChase: false,
     preferSmooth: false,
@@ -405,6 +476,9 @@ function notifyChatViewportMutation(options = {}) {
   context.allowChase = context.allowChase || options.allowChase === true;
   context.preferSmooth = context.preferSmooth || options.preferSmooth === true;
 
+  if (!context.shouldFollow && options.preserveAnchor) {
+    context.preserveAnchor = options.preserveAnchor;
+  }
   if (!context.shouldFollow && Number.isFinite(options.preserveTop)) {
     context.preserveTop = options.preserveTop;
   }
@@ -500,7 +574,10 @@ function notifyChatViewportMutation(options = {}) {
       return;
     }
 
-    if (activeContext.preserveTop != null) {
+    if (activeContext.preserveAnchor && !hasRecentManualScrollIntent()) {
+      cancelFollowLatestAnimation();
+      applyChatViewportAnchor(activeContext.preserveAnchor);
+    } else if (activeContext.preserveTop != null && !hasRecentManualScrollIntent()) {
       cancelFollowLatestAnimation();
       setChatViewportTop(activeContext.preserveTop);
     }
@@ -667,23 +744,25 @@ function applyChatViewportAnchor(anchor) {
   }
 
   if (anchor.mode === 'anchor') {
-    if (anchor.row && document.body.contains(anchor.row) && _isChatAnchorRowVisible(anchor.row)) {
-      const target = Math.max(0, anchor.row.offsetTop + anchor.offset);
+    let row = anchor.row;
+    if (!(row && document.body.contains(row) && _isChatAnchorRowVisible(row))) {
+      // A serialized anchor has no DOM node. Resolve it against the freshly
+      // rendered message rows, preserving the same semantic row and offset.
+      const rows = container.querySelectorAll('.message-row');
+      for (let i = Math.max(0, anchor.rowIdx || 0); i < rows.length; i++) {
+        if (_isChatAnchorRowVisible(rows[i])) {
+          row = rows[i];
+          break;
+        }
+      }
+    }
+    if (row && _isChatAnchorRowVisible(row)) {
+      const target = Math.max(0, row.offsetTop + anchor.offset);
       if (container.scrollTop !== target) {
         container.scrollTop = target;
         _debugChatAnchor('apply anchor → scrollTop=', target,
-          'rowIdx=', anchor.rowIdx, 'rowTop=', anchor.row.offsetTop);
+          'rowIdx=', anchor.rowIdx, 'rowTop=', row.offsetTop);
       }
-      return;
-    }
-    // 锚点行失效（被隐藏 / DOM 重建），顺延到其后第一个可见行
-    _debugChatAnchor('anchor row stale, walking forward');
-    const rows = container.querySelectorAll('.message-row');
-    for (let i = (anchor.rowIdx || 0); i < rows.length; i++) {
-      const row = rows[i];
-      if (!_isChatAnchorRowVisible(row)) continue;
-      container.scrollTop = Math.max(0, row.offsetTop + anchor.offset);
-      _debugChatAnchor('apply stale→ idx=', i, 'rowTop=', row.offsetTop);
       return;
     }
     return;

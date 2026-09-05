@@ -1031,6 +1031,15 @@ function saveCurrentRuntimeToCache(agentId, contextKey = getRuntimeContextKey(ag
     sessionMeta: viewState.sessionMeta,
     connected: viewState.connected,
     followLatest: followLatestEnabled,
+    scrollAnchor: typeof rememberChatViewportAnchorForContext === 'function'
+      && typeof getChatViewportContextKey === 'function'
+      && getChatViewportContextKey() === contextKey
+      ? rememberChatViewportAnchorForContext(contextKey)
+      : (typeof getRememberedChatViewportAnchorForContext === 'function'
+        ? getRememberedChatViewportAnchorForContext(contextKey)
+        : null),
+    // Keep the legacy pixel value for old cache readers; new restoration uses
+    // the semantic anchor above.
     scrollTop: container ? container.scrollTop : 0,
   });
 }
@@ -1067,6 +1076,9 @@ function restoreRuntimeFromCache(agentId, contextKey = getRuntimeContextKey(agen
     connected: cached.connected,
   });
   _restoredScrollTop = typeof cached.scrollTop === 'number' ? cached.scrollTop : null;
+  if (cached.scrollAnchor && typeof setPendingChatViewportAnchor === 'function') {
+    setPendingChatViewportAnchor(cached.scrollAnchor);
+  }
   if (typeof updatePlanBadge === 'function') updatePlanBadge();
   return true;
 }

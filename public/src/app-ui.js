@@ -71,6 +71,15 @@ function getPreferredUnitMode(agent = getCurrentAgentRecord()) {
 }
 
 function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
+  if (mode !== 'chat' && currentWorkspaceTab === 'chat'
+      && typeof rememberChatViewportAnchorForContext === 'function') {
+    rememberChatViewportAnchorForContext();
+  }
+  if (mode === 'chat' && currentWorkspaceTab !== 'chat'
+      && typeof setPendingChatViewportAnchor === 'function'
+      && typeof getRememberedChatViewportAnchorForContext === 'function') {
+    setPendingChatViewportAnchor(getRememberedChatViewportAnchorForContext());
+  }
   const key = getUnitPreferenceKey(agent);
   if (!key) {
     currentWorkspaceTab = mode;

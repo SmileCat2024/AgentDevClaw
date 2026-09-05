@@ -683,6 +683,7 @@ window.switchAgent = async (newAgentId) => {
     // A pending scroll restore is only valid within the switch that set it;
     // clear any stale one from an earlier switch that never reached a full render.
     setPendingChatScrollRestore(null);
+    if (typeof setPendingChatViewportAnchor === 'function') setPendingChatViewportAnchor(null);
     // Reset process visibility: every session entry starts in hidden-process mode
     showChatProcess = false;
     // 立即清空上一会话的运行状态显示（顶栏 + 对话区指示块）。
