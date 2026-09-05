@@ -257,6 +257,13 @@ async function ctxStopAgent(target) {
     } else if (variant === 'remote') {
       // 远程运行时：agentId 用宿主命名空间 id，服务端按 ADR-0011 转发。
       await invoke('stop_agent', { agentId: ns, sessionId: sessionId || null });
+    } else if (variant === 'child') {
+      // 侧栏统一投影的 child 叶子：id 是 runtime id，服务端 stop_agent 按
+      // (宿主 agentId, sessionId) 寻址——必须经 parent_id 解析宿主，直接用
+      // runtime id 会被服务端静默 no-op（找不到 runtime 也不报错）。
+      const hostId = agent?.parent_id || serverAgentId;
+      const sId = sessionId || agent?.active_workspace_session_id || null;
+      await invoke('stop_agent', { agentId: hostId, sessionId: sId });
     } else {
       // managed-runtime / prebuilt: pass sessionId to stop only the targeted runtime
       const sId = sessionId || agent?.active_workspace_session_id || null;

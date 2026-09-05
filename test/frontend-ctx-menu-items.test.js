@@ -411,6 +411,36 @@ describe('ctx-menu-items: dispatchCtxAction remote variants', () => {
   });
 });
 
+// ── child leaf: stop must address the host, not the runtime id ──
+
+describe('ctx-menu-items: dispatchCtxAction child leaf stop addressing', () => {
+  it('stop on a child leaf resolves the host id via parent_id (runtime id would be a silent no-op)', async () => {
+    const childAgent = {
+      id: 'rt-9',
+      source: 'child',
+      parent_id: 'programming-helper',
+      active_workspace_session_id: 'sess-9',
+    };
+    const { ctx, calls } = loadCtxMenuItems({
+      allAgents: [TEST_AGENT, childAgent],
+      getExternalRuntimeAgent: (id) => [TEST_AGENT, childAgent].find((a) => a.id === id) || null,
+      invoke: (command, payload) => {
+        calls.push({ fn: 'invoke', args: [command, payload] });
+        return {};
+      },
+      refreshSidebarRuntimeAfterMutation: () => Promise.resolve(),
+    });
+    ctx.run(`dispatchCtxAction('stop', { ns: 'programming-helper', id: 'rt-9', sessionId: 'sess-9', variant: 'child' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const invokeCall = calls.find((c) => c.fn === 'invoke');
+    assert.ok(invokeCall, 'stop_agent must go through invoke');
+    assert.equal(invokeCall.args[0], 'stop_agent');
+    assert.equal(invokeCall.args[1].agentId, 'programming-helper',
+      'agentId must resolve to the host via parent_id — sending the runtime id is a server-side silent no-op');
+    assert.equal(invokeCall.args[1].sessionId, 'sess-9');
+  });
+});
+
 // ── D1 regression: sessionOps capability gates the remote ops menu ──
 
 describe('ctx-menu-items: sessionOps capability gating (merged integration)', () => {
