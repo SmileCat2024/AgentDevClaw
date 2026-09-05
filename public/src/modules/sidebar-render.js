@@ -294,29 +294,18 @@ async function waitForPrebuiltRuntimeSession(agentId, attempts = 20, options = {
 }
 
 async function waitForTargetRuntimeSession(agentId, sessionId, attempts = 50, options = {}) {
-  const operationId = String(options.operationId || '').trim();
-  // This is a bounded navigation wait, not an operation-success verdict. The
-  // session mutation has already committed before callers enter this function.
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      const params = new URLSearchParams({ agentId, sessionId });
-      if (operationId) params.set('operationId', operationId);
-      const response = await fetch('/protoclaw/runtime_status?' + params.toString());
-      if (response.ok) {
-        const result = await response.json();
-        if (result?.ready === true && result?.agent) return result.agent;
-        if (result?.lifecycle === 'stopped' || result?.lifecycle === 'missing') {
-          const error = new Error(`Runtime ${result.lifecycle} before becoming ready: ${agentId}/${sessionId}`);
-          error.code = 'target_runtime_stopped';
-          throw error;
-        }
-      }
-    } catch {
-      // A polling transport error is neither a session-mutation nor startup failure.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+  // ADR-0014 Phase 1：就绪探测实现收敛到 navigation-core（轻量 runtime_status
+  // 端点轮询）。此处保留签名兼容既有调用方（session-mutation、
+  // sidebar-operations 的 waitForSidebarTargetRuntime）。
+  if (typeof window.NavigationCore?.waitForRuntimeReady !== 'function') {
+    throw new Error('NavigationCore runtime readiness helper is unavailable');
   }
-  return null;
+  return window.NavigationCore.waitForRuntimeReady({
+    agentId,
+    sessionId,
+    attempts,
+    operationId: String(options.operationId || '').trim(),
+  });
 }
 
 function resolveFocusedAgentAfterRefresh(agents = allAgents) {

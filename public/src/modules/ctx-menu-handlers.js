@@ -80,22 +80,16 @@ restartAgentAction.addEventListener('click', async () => {
       closeAgentContextMenu();
       result = await invoke('restart_agent', { agentId: contextMenuAgentId, sessionId });
     }
+    // Server already waits for runtime readiness (up to 10s) before responding,
+    // same contract as the generic ctx-menu restart (ctxRestartAgent). No extra
+    // polling — the former 20×500ms get_connected_agents loop here was both
+    // redundant and the heaviest possible probe (full agent list per attempt).
     const nextRuntimeId =
       result?.runtime?.id
       || result?.runtime?.viewerAgentId
       || result?.agent?.runtime_session_id
       || result?.agent?.runtimeSessionId
       || null;
-    if (nextRuntimeId) {
-      for (let attempt = 0; attempt < 20; attempt++) {
-        await new Promise((r) => setTimeout(r, 500));
-        try {
-          const agents = await invoke('get_connected_agents');
-          const found = agents.find((a) => a.runtime_session_id === nextRuntimeId || a.id === nextRuntimeId);
-          if (found && found.connected !== false) break;
-        } catch (_) { /* ignore */ }
-      }
-    }
     suppressSidebarRerender = false;
     await loadAgents();
     if (nextRuntimeId && _restartNavGuard === _navigationGuardEpoch) {
