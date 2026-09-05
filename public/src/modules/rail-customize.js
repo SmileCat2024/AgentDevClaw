@@ -26,7 +26,7 @@
   /** 可自定义的面板 ID（顺序 = 默认顺序） */
   var CUSTOMIZABLE_IDS = [
     'workspace', 'monitor', 'plan', 'git', 'hooks',
-    'inspector', 'session-controls', 'force-continuation', 'logs', 'mcp', 'genui',
+    'inspector', 'session-controls', 'logs', 'mcp', 'genui',
   ];
 
   /** 面板名称（i18n） */
