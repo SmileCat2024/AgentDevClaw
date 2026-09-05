@@ -188,7 +188,9 @@ export function setupTokenRefreshRoute(app, express) {
         sessionData.modelName = modelName;
         sessionData.updatedAt = new Date().toISOString();
 
-        await fs.writeFile(sessionPath, JSON.stringify(sessionData, null, 2));
+        // 紧凑序列化：与会话文件 v2.1 格式保持一致（v1/v2 原样保留 version 字段，
+        // 仅去掉缩进空白；JSON.parse 对空白不敏感，读取端兼容）
+        await fs.writeFile(sessionPath, JSON.stringify(sessionData));
 
         res.json({
           success: true,
