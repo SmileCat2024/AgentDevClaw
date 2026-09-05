@@ -1,8 +1,8 @@
 /**
- * app-info.js — 左上角品牌版本标签 + 悬停名片
+ * app-info.js — 左上角品牌版本标签 + 点击名片
  * 从 /protoclaw/app_info 拉取版本与仓库信息：
  *   - 标题右侧版本 chip（数据就绪后才显示）
- *   - 悬停 sidebar-header 展开名片（版本 / 框架 / GitHub 仓库）
+ *   - 点击 sidebar 标题展开名片（版本 / 框架 / GitHub 仓库），点击外部或 Esc 关闭
  *
  * 依赖全局状态（定义在 app-core.js）:
  *   currentLanguage
@@ -78,6 +78,30 @@ async function _initAppInfo() {
   } catch {
     // 接口不可用时保持 chip 与名片隐藏，不影响其余 UI
   }
+}
+
+/* 名片触发：点击 brand-area 切换（原为悬停展开，滑过标题即误触）。
+   点击卡片内部不关闭（便于复制版本号、点仓库链接）；点击外部或 Esc 关闭。 */
+const _brandArea = document.querySelector('.brand-area');
+const _brandCard = document.getElementById('brand-card');
+
+function _setBrandCardOpen(open) {
+  if (_brandCard) _brandCard.classList.toggle('open', open);
+}
+
+if (_brandArea && _brandCard) {
+  _brandArea.addEventListener('click', (event) => {
+    event.stopPropagation();
+    _setBrandCardOpen(!_brandCard.classList.contains('open'));
+  });
+  document.addEventListener('click', (event) => {
+    if (!_brandCard.classList.contains('open')) return;
+    if (_brandCard.contains(event.target)) return;
+    _setBrandCardOpen(false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') _setBrandCardOpen(false);
+  });
 }
 
 _initAppInfo();

@@ -117,6 +117,7 @@ body[data-theme="light"] .sidebar-resizer.dragging::after {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  cursor: pointer;
 }
 
 .brand-version-chip {
@@ -134,11 +135,11 @@ body[data-theme="light"] .sidebar-resizer.dragging::after {
   transition: filter 0.15s ease;
 }
 
-.sidebar-header:hover .brand-version-chip {
+.brand-area:hover .brand-version-chip {
   filter: brightness(1.2);
 }
 
-/* 名片紧贴 header 底部（不留间隙，保证 hover 从标题移入卡片不中断）；
+/* 名片由点击 brand-area 切换（app-info.js 加减 .open；原悬停展开误触率高）；
    left/right 收在 sidebar 内，避免被 .sidebar 的 overflow:hidden 裁剪 */
 .brand-card {
   position: absolute;
@@ -161,7 +162,7 @@ body[data-theme="light"] .sidebar-resizer.dragging::after {
   transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
 }
 
-.sidebar-header:hover .brand-card:not([hidden]) {
+.brand-card.open:not([hidden]) {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
