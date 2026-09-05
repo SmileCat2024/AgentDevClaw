@@ -282,6 +282,10 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     ? String(prebuiltAgent.sessionType || '').trim() || 'main'
     : null;
   const childRuntimeIds = new Set();
+  // Session ids already presented by a live child runtime. A pending
+  // sidebar operation for the same target session hands over to that
+  // child entry in place instead of rendering a second placeholder.
+  const childCoveredSessionIds = new Set();
   const expectedSidebarEntryId = String(prebuiltAgent?.id || '').trim();
   agents
     .filter((agent) => {
@@ -298,6 +302,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     .forEach((agent) => {
       const runtimeId = String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
       if (runtimeId) childRuntimeIds.add(runtimeId);
+      const coveredSessionId = String(agent.active_workspace_session_id || '').trim();
+      if (coveredSessionId) childCoveredSessionIds.add(coveredSessionId);
       addEntry(buildChildRuntimeEntry(agent));
     });
 
@@ -390,6 +396,11 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
 
     const pendingPhase = ['requested', 'committing', 'generating', 'target-starting'].includes(operation.phase);
     if (!pendingPhase) continue;
+    // In-place handover: a live child runtime already presenting the target
+    // session replaces the placeholder. Without this check the echo frame
+    // renders both entries; with an early settle it renders neither.
+    const coveredTargetSessionId = String(operation.targetSessionId || '').trim();
+    if (coveredTargetSessionId && childCoveredSessionIds.has(coveredTargetSessionId)) continue;
     const isReplacement = operation.type === 'replacement';
     const pendingName = getSidebarOperationPendingName(operation);
     addEntry({

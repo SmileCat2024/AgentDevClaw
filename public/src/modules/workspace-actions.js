@@ -923,8 +923,12 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         // The session is committed and its startup has been requested. Keep the
         // operation settled, but continue the user-initiated navigation as soon
         // as the exact target runtime appears instead of leaving the workspace
-        // surface selected indefinitely.
-        finishSidebarOperation(sidebarOperation.operationId, 'settled');
+        // surface selected indefinitely. The operation stays pending until
+        // that navigation settles: its placeholder entry is the only sidebar
+        // presentation of the target until the runtime echoes back in a
+        // snapshot, and the aggregation layer hands over to the child entry
+        // in place once it does.
+        const settleManagedOperation = () => finishSidebarOperation(sidebarOperation.operationId, 'settled');
         if (targetSessionId && _navGuard === _navigationGuardEpoch) {
           // The sourceRuntime guard in navigateToSessionMutationTarget asserts
           // "the user is still viewing this runtime". For create/open the user
@@ -940,6 +944,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             targetSessionId,
             operationId: sidebarOperation.operationId,
           }, navigationSourceRuntimeId).then((navigated) => {
+            // Settle unconditionally: the operation is a data-mutation state,
+            // not a view state. Leaving it pending after a failed startup (or
+            // after the user navigated away) would pin a stale placeholder.
+            settleManagedOperation();
             // A committed session can outlive a failed runtime startup, but a
             // failed navigation must not leave the chat spinner or tabless
             // workspace in an unusable intermediate state. Do not touch the
@@ -951,7 +959,17 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             if (!navigated) {
               console.warn('Session committed but its runtime did not become ready:', targetSessionId);
             }
+          }).catch((error) => {
+            settleManagedOperation();
+            console.warn('Session navigation failed after commit:', error);
+            if (_navGuard === _navigationGuardEpoch) {
+              clearPendingSessionNavigation();
+              clearChatLoadingSession();
+              renderCurrentMainView();
+            }
           });
+        } else {
+          settleManagedOperation();
         }
         loadAgents().catch((error) => console.error('Failed to refresh agents after starting prebuilt runtime:', error));
       };

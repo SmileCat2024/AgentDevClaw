@@ -320,6 +320,68 @@ describe('runtime-status: sidebar operation identity routing', () => {
     })()`);
     assert.equal(sessionType, 'coder');
   });
+
+  it('keeps the placeholder while no live child runtime presents the target session', () => {
+    const ctx = loadRuntimeStatus();
+    const entries = ctx.run(`(() => {
+      ${PH_HOST}
+      beginSidebarOperation({
+        operationId: 'create:handover-none', type: 'create', kind: 'create', phase: 'target-starting',
+        agentId: 'programming-helper', targetSessionId: 'session-new',
+        projectDir: 'D:\\\\\\\\code\\\\\\\\project-a', projectName: 'project-a'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, []);
+    })()`);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].source, 'operation-pending');
+    assert.equal(entries[0].sessionId, 'session-new');
+  });
+
+  it('hands the placeholder over in place once a child runtime echoes the target session', () => {
+    const ctx = loadRuntimeStatus();
+    const entries = ctx.run(`(() => {
+      ${PH_HOST}
+      const child = {
+        id: 'agent-new', source: 'child', parent_id: 'programming-helper',
+        sessionType: 'main', sidebar_entry_id: 'programming-helper',
+        runtime_session_id: 'agent-new', active_workspace_session_id: 'session-new',
+        active_workspace_display_name: '新对话', connected: true
+      };
+      beginSidebarOperation({
+        operationId: 'create:handover-cover', type: 'create', kind: 'create', phase: 'target-starting',
+        agentId: 'programming-helper', targetSessionId: 'session-new',
+        projectDir: 'D:\\\\\\\\code\\\\\\\\project-a', projectName: 'project-a'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, [child]);
+    })()`);
+    // 原位交接：child 条目接管展示，占位不再重复渲染
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].source, 'child');
+    assert.equal(entries[0].runtimeId, 'agent-new');
+  });
+
+  it('does not hand over to a sibling runtime bound to a different session', () => {
+    const ctx = loadRuntimeStatus();
+    const entries = ctx.run(`(() => {
+      ${PH_HOST}
+      const sibling = {
+        id: 'agent-sibling', source: 'child', parent_id: 'programming-helper',
+        sessionType: 'main', sidebar_entry_id: 'programming-helper',
+        runtime_session_id: 'agent-sibling', active_workspace_session_id: 'session-old',
+        active_workspace_display_name: '旧会话', connected: true
+      };
+      beginSidebarOperation({
+        operationId: 'create:handover-sibling', type: 'create', kind: 'create', phase: 'target-starting',
+        agentId: 'programming-helper', targetSessionId: 'session-new',
+        projectDir: 'D:\\\\\\\\code\\\\\\\\project-a', projectName: 'project-a'
+      });
+      return collectRuntimeEntriesForPrebuilt(host, [sibling]);
+    })()`);
+    // sibling runtime 绑定的是别的会话：它自身照常渲染，占位也不受影响
+    assert.equal(entries.length, 2);
+    assert.ok(entries.some((entry) => entry.source === 'child'));
+    assert.ok(entries.some((entry) => entry.source === 'operation-pending'));
+  });
 });
 
 // ── coder projection project directory fallback ────────────────
