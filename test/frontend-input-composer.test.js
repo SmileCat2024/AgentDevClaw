@@ -235,6 +235,7 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     isChoiceInputRequest: (req) => !!req && req.mode === 'choices'
       && Array.isArray(req.questions) && req.questions.length > 0,
     isChoiceInputRejected: () => false,
+    isChoiceInputConsumed: () => false,
     renderChoiceInputRequest: () => {},
     collapsePrimaryChoiceRequest: () => {},
     handlePersistentInputKey: () => {},

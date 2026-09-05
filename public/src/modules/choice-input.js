@@ -16,9 +16,10 @@
  *   renderChoiceInputRequest, rerenderChoiceRequest, collapsePrimaryChoiceRequest,
  *   getChoiceInteractionSignature
  * window 函数:
- *   selectChoiceOption, collapseChoiceRequest, expandChoiceRequest,
- *   updateChoiceCustomText, handleChoiceKey, handleChoiceCustomKey,
- *   confirmChoiceQuestion, toggleChoiceContext, rejectChoiceRequest
+ *   isChoiceInputConsumed, selectChoiceOption, collapseChoiceRequest,
+ *   expandChoiceRequest, updateChoiceCustomText, handleChoiceKey,
+ *   handleChoiceCustomKey, confirmChoiceQuestion, toggleChoiceContext,
+ *   rejectChoiceRequest
  * HTML onclick 引用:
  *   onclick="selectChoiceOption(...)"
  *   onclick="collapseChoiceRequest(...)"
@@ -32,14 +33,18 @@
  */
 
 const _rejectedRequests = new Set();
+// 已成功提交答案的请求。提交 POST 返回后，poll 管道中的陈旧快照仍可能
+// 短暂带回该 lease；已提交的 lease 在模式判定与渲染中都必须视为不存在，
+// 否则交互状态已清理的选择卡会以初始题号重建（闪回第一题）。
+const _submittedRequests = new Set();
 
 function isChoiceInputRequest(req) {
   return !!req && req.mode === 'choices' && Array.isArray(req.questions) && req.questions.length > 0;
 }
 
-/** Globally accessible — used by renderInputRequests and getInputSurfaceMode */
-window.isChoiceInputRejected = function(requestId) {
-  return _rejectedRequests.has(requestId);
+/** Globally accessible — used by readInputSurfaceModeState and renderChoiceInputRequest */
+window.isChoiceInputConsumed = function(requestId) {
+  return _rejectedRequests.has(requestId) || _submittedRequests.has(requestId);
 };
 
 function getChoiceRequestById(requestId) {
@@ -105,7 +110,7 @@ function rememberCurrentChoice(req, state) {
 }
 
 function renderChoiceInputRequest(container, req) {
-  if (_rejectedRequests.has(req.requestId)) return;
+  if (isChoiceInputConsumed(req.requestId)) return;
   const state = getChoiceState(req.requestId);
   // The card is an answer to a specific runtime lease, not to whichever chat
   // happens to be selected when its asynchronous submit finishes.
@@ -254,7 +259,7 @@ window.rejectChoiceRequest = async function(requestId) {
   _rejectedRequests.add(requestId);
   const card = document.querySelector(`.user-choice-card[data-request-id="${requestId}"]`);
   if (card) card.classList.add('is-rejecting');
-  // 声明变更即恢复普通输入面：isChoiceInputRejected 现在返回 true，
+  // 声明变更即恢复普通输入面：isChoiceInputConsumed 现在返回 true，
   // hasChoiceRequest 为 false → 选择卡移除 → 普通输入面恢复（不等网络）。
   notifyInputSurfaceChanged();
   // Send interrupt in the background.
@@ -410,6 +415,9 @@ window.confirmChoiceQuestion = async function(requestId) {
       }),
     });
     if (res.ok) {
+      // 先登记再触发渲染：poll 管道中的陈旧快照仍可能带回该 lease，
+      // consumed 判定保证它不会再以初始题号重建（闪回第一题）。
+      _submittedRequests.add(requestId);
       delete choiceInputState[requestId];
       poll();
     }

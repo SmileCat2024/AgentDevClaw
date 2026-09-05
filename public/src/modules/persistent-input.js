@@ -118,6 +118,18 @@ function _renderLastCallElapsed() {
   if (!container) return;
 
   let el = container.querySelector('.call-elapsed-capsule');
+
+  // 选择卡接管输入面期间不显示运行时长胶囊（否则悬在选择卡上方）。
+  // 本函数由每秒 tick 驱动，必须在这里统一拦截，否则胶囊会被重新插回。
+  // 不重置 _runCapsuleStartAt：选择卡结束后回到运行态时计时应继续。
+  if (container.classList.contains('choice-input-active')) {
+    if (el) {
+      el.remove();
+      _cleanupInputMetaBar(container);
+    }
+    return;
+  }
+
   const calling = isRuntimeCalling(currentRuntimeAgentId);
 
   if ((!calling && !_lastCallFinishTime) || !isChatSurfaceActive()) {

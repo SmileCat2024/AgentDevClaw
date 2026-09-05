@@ -39,7 +39,7 @@
  *   runWithSuppressedChatViewportObservers (chat-viewport.js)
  *   handleInputPaste (persistent-input.js)
  *   toggleVoiceRecording (voice-input.js)
- *   isChoiceInputRequest, isChoiceInputRejected (choice-input.js)
+ *   isChoiceInputRequest, isChoiceInputConsumed (choice-input.js)
  *   _rollbackDialogOpen, _partialCompactInFlight, _partialCompactRuntimeId,
  *   _compactTimerInterval (rollback-dialog.js)
  */
@@ -111,9 +111,9 @@ function readInputSurfaceModeState(requests, chatActive) {
       && currentRuntimeAgentId === _partialCompactRuntimeId,
     hasRuntimeSelected,
     hasRequests: Array.isArray(requests)
-      && requests.some(req => req && !isChoiceInputRejected(req.requestId)),
+      && requests.some(req => req && !isChoiceInputConsumed(req.requestId)),
     hasChoiceRequest: Array.isArray(requests)
-      && requests.some(req => isChoiceInputRequest(req) && !isChoiceInputRejected(req.requestId)),
+      && requests.some(req => isChoiceInputRequest(req) && !isChoiceInputConsumed(req.requestId)),
     hasLocalQueuedInput: hasRuntimeSelected
       && (_localQueuedInputPending || _pendingQueuedCount > 0 || _queuedTexts.length > 0),
   };

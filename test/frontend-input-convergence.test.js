@@ -284,11 +284,12 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
     var _lastQueueBubbleSignature = '';
     var _switchEpoch = 0;
     // choice 域替身（choice-input.js 未加载时的中性实现）；
-    // choice 用例加载真实模块后由 window.isChoiceInputRejected 重新接管。
+    // choice 用例加载真实模块后由 window.* 实现重新接管。
     function isChoiceInputRequest(req) {
       return !!req && req.mode === 'choices' && Array.isArray(req.questions) && req.questions.length > 0;
     }
     function isChoiceInputRejected() { return false; }
+    function isChoiceInputConsumed() { return false; }
     function setCurrentHookInspector(value) {
       currentHookInspector = value;
       currentHookInspectorSignature = JSON.stringify(value);
@@ -495,9 +496,12 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
       function newIdempotencyKey() { return 'k'; }
     `);
     ctx.loadSource('public/src/modules/choice-input.js');
-    // 真实模块以 window.* 注册 rejected 判定；vm 沙箱的 bare-name 解析走
+    // 真实模块以 window.* 注册 choice 判定；vm 沙箱的 bare-name 解析走
     // 上下文全局，这里把真实实现接管回来（浏览器里 window 即全局）。
-    ctx.run('isChoiceInputRejected = window.isChoiceInputRejected');
+    ctx.run(`
+      isChoiceInputRejected = window.isChoiceInputRejected;
+      isChoiceInputConsumed = window.isChoiceInputConsumed;
+    `);
     ctx.run(`
       applySessionViewPatch({ inputRequests: [{
         requestId: 'choice-1', mode: 'choices',
@@ -525,6 +529,47 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     assert.equal(ctx.run(
       "document.getElementById('user-input-container').querySelector('[data-persistent-composer]') !== null",
     ), true, 'reject restores the persistent composer immediately');
+  });
+
+  it('§8 选择卡提交成功：consumed lease 在陈旧快照中不再重建（防闪回第一题）', async () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run('renderInputRequests([])');
+    ctx.run(`
+      var choiceInputState = {};
+      function poll() {}
+      function newIdempotencyKey() { return 'k'; }
+    `);
+    ctx.loadSource('public/src/modules/choice-input.js');
+    ctx.run(`
+      isChoiceInputRejected = window.isChoiceInputRejected;
+      isChoiceInputConsumed = window.isChoiceInputConsumed;
+    `);
+    ctx.run(`
+      applySessionViewPatch({ inputRequests: [{
+        requestId: 'choice-2', mode: 'choices',
+        questions: [{ id: 'q1', question: 'How?', options: [{ id: 'a' }, { id: 'b' }] }],
+      }] });
+    `);
+    assert.equal(ctx.run(`choiceInputState['choice-2'].questionIndex`), 0);
+
+    // 提交答案（单题即最后一题）：POST 成功后交互状态清理、lease 登记 consumed。
+    ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
+    await ctx.run(`window.confirmChoiceQuestion('choice-2')`);
+    assert.equal(ctx.run(`choiceInputState['choice-2']`), undefined, 'interaction state cleared on submit');
+    assert.equal(ctx.run(`window.isChoiceInputConsumed('choice-2')`), true, 'submitted lease registered as consumed');
+
+    // 陈旧快照仍带回该 lease：模式判定与渲染都必须视其为不存在，
+    // 直接落回 persistent composer，而不是以初始题号重建选择卡。
+    ctx.run(`
+      applySessionViewPatch({ inputRequests: [{
+        requestId: 'choice-2', mode: 'choices',
+        questions: [{ id: 'q1', question: 'How?', options: [{ id: 'a' }, { id: 'b' }] }],
+      }] });
+    `);
+    assert.equal(composerMode(ctx), 'persistent', 'stale consumed lease must not flip the surface back to choice');
+    assert.equal(ctx.run(
+      "document.getElementById('user-input-container').querySelector('.user-choice-card')",
+    ), null, 'stale consumed lease must not rebuild the choice card');
   });
 
   it('§8 排队同步：level-6 optimistic queue pins persistent over a pending lease', () => {

@@ -26,9 +26,10 @@
  *   detachTransientInputContent, syncPersistentComposerSessionCard, applyComposerMode,
  *   insertTransientInputCard, _restoreSessionInputDraft, _sessionInputCache
  *   (input-composer.js)
- *   renderPersistentInput, _renderLastCallElapsed (persistent-input.js)
+ *   renderPersistentInput, _renderLastCallElapsed, _cleanupInputMetaBar
+ *   (persistent-input.js)
  *   renderChoiceInputRequest, collapsePrimaryChoiceRequest,
- *   isChoiceInputRequest, isChoiceInputRejected (choice-input.js)
+ *   isChoiceInputRequest, isChoiceInputConsumed (choice-input.js)
  *   runWithSuppressedChatViewportObservers, notifyChatViewportMutation (chat-viewport.js)
  */
 
@@ -208,6 +209,13 @@ function renderInputRequests(requests = readCurrentSessionViewState().inputReque
       hidePersistentComposerCard();
       inputContainer.classList.add('choice-input-active');
       inputContainer.classList.remove('choice-collapsed');
+      // 运行时长胶囊不适用于选择卡：渲染前先清一次避免切换瞬间残留；
+      // 后续每秒 tick 由 _renderLastCallElapsed 的 choice-active 拦截抑制。
+      const staleCapsule = inputContainer.querySelector('.call-elapsed-capsule');
+      if (staleCapsule) {
+        staleCapsule.remove();
+        _cleanupInputMetaBar(inputContainer);
+      }
       inputContainer.onclick = function(event) {
         if (event.target === inputContainer) {
           collapsePrimaryChoiceRequest();
