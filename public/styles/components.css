@@ -5233,13 +5233,44 @@ body[data-theme="light"] #user-input-container.choice-input-active {
   width: min(100%, 520px);
   max-height: min(100%, 720px);
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)),
-    var(--input-card-bg);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 28px 70px rgba(0, 0, 0, 0.38);
+  position: relative;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.4);
+}
+
+/* 左上角氛围光晕，与 feature-detail-window / usage-info-window 同款；
+   半径用百分比（设置窗口 480px/432px ≈ 111%、300px/350px ≈ 86%），
+   随裁剪盒缩放，窄卡上渐变在盒内自然淡出，不出现截断边 */
+.user-choice-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 60%;
+  height: 50%;
+  pointer-events: none;
+  border-radius: 20px 0 80px 0;
+  background: radial-gradient(ellipse 111% 86% at 15% 0%,
+              rgba(35, 110, 230, 0.12) 0%, transparent 70%);
+  z-index: 0;
+}
+
+.user-choice-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+body[data-theme="light"] .user-choice-card {
+  border-color: #e0e0e0;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+}
+
+body[data-theme="light"] .user-choice-card::before {
+  background: radial-gradient(ellipse 111% 86% at 15% 0%,
+              rgba(80, 130, 220, 0.06) 0%, transparent 70%);
 }
 
 .user-choice-card.context-open {
@@ -5249,10 +5280,14 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 .user-choice-card:focus,
 .user-choice-card:focus-within {
   outline: none;
-  border-color: rgba(255, 255, 255, 0.12);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 28px 70px rgba(0, 0, 0, 0.38);
+  border-color: var(--glass-border);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.4);
+}
+
+body[data-theme="light"] .user-choice-card:focus,
+body[data-theme="light"] .user-choice-card:focus-within {
+  border-color: #e0e0e0;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
 }
 
 .user-choice-card.is-rejecting {
@@ -5564,17 +5599,36 @@ body[data-theme="light"] #user-input-container.choice-input-active {
 }
 
 .user-choice-submit {
-  border: 1px solid var(--text-primary);
-  background: var(--text-primary);
-  color: var(--bg-color);
-  border-radius: 999px;
-  padding: 7px 16px;
-  font-size: 12px;
+  border: 1px solid #fff;
+  background: #fff;
+  color: #111;
+  border-radius: 10px;
+  padding: 9px 22px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: pointer;
   font-family: inherit;
   outline: none;
   -webkit-tap-highlight-color: transparent;
   flex-shrink: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+  transition: background 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.user-choice-submit:hover {
+  background: #f2f4f8;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.user-choice-submit:active {
+  background: #e8ebf1;
+  transform: translateY(1px);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.2);
+}
+
+.user-choice-submit:focus-visible {
+  box-shadow: 0 0 0 3px rgba(99, 145, 255, 0.35);
 }
 
 /* ── legacy: rollback-dialog flat layout ── */
