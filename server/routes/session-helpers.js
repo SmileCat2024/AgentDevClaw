@@ -890,6 +890,9 @@ async function createPrebuiltSession(agentId, options = {}) {
       sessions: [record, ...index.sessions.filter((session) => session.id !== sessionId)],
     };
   });
+  // updateSessionIndex 返回的 index 已含推进后的 revision；透传给调用方，
+  // 省去路由层随后的 readSessionIndex 重复读取。
+  const committedRevision = Number(nextIndex.revision) || 0;
 
   if (normalizedAgentId === 'feature-creator') {
     const featureName = nextFeatureName || cleanSessionText(startupForm.feature_name);
@@ -969,13 +972,13 @@ async function createPrebuiltSession(agentId, options = {}) {
   }
 
   if (options.returnSummary === false) {
-    return buildLightPrebuiltSessionRecord(agentId, record);
+    return Object.assign(buildLightPrebuiltSessionRecord(agentId, record), { indexRevision: committedRevision });
   }
-  return summarizePrebuiltSession(agentId, record);
+  return Object.assign(await summarizePrebuiltSession(agentId, record), { indexRevision: committedRevision });
 }
 
 async function activatePrebuiltSession(agentId, sessionId, options = {}) {
-  await updateSessionIndex(agentId, (index) => {
+  const updatedIndex = await updateSessionIndex(agentId, (index) => {
     const session = index.sessions.find((s) => s.id === sessionId);
     if (!session) {
       const error = new Error(`Unknown prebuilt session: ${sessionId}`);
@@ -985,8 +988,7 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
     return { ...index, activeSessionId: sessionId };
   });
 
-  const index = await readSessionIndex(agentId);
-  const existing = index.sessions.find((s) => s.id === sessionId);
+  const existing = updatedIndex.sessions.find((s) => s.id === sessionId);
 
   if (sanitizeSessionFragment(agentId) === 'feature-creator') {
     const currentState = await readWorkspaceState(agentId);
@@ -1077,9 +1079,9 @@ async function activatePrebuiltSession(agentId, sessionId, options = {}) {
   }
 
   if (options?.returnSummary === false) {
-    return buildLightPrebuiltSessionRecord(agentId, existing);
+    return Object.assign(buildLightPrebuiltSessionRecord(agentId, existing), { indexRevision: Number(updatedIndex.revision) || 0 });
   }
-  return summarizePrebuiltSession(agentId, existing);
+  return Object.assign(await summarizePrebuiltSession(agentId, existing), { indexRevision: Number(updatedIndex.revision) || 0 });
 }
 
 async function deletePrebuiltSession(agentId, sessionId, options = {}) {

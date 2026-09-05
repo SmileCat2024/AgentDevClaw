@@ -233,6 +233,12 @@ export function createAgentDiscoveryModule(ctx) {
     if (!requestedSessionId) {
       return fallbackName;
     }
+    // 只有 agent-creator 的 assembly 会话使用 summarize 结果命名 runtime；
+    // 其他 agent（如 programming-helper）读 index + summarize 只为最终回落
+    // fallbackName，纯浪费——在进入读路径前早退。
+    if (sanitizeSessionFragment(agent?.id) !== 'agent-creator') {
+      return fallbackName;
+    }
 
     try {
       const sessionIndex = await readSessionIndex(agent.id);

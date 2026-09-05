@@ -803,6 +803,25 @@ let _pollImmediateRequested = false;
 // 不变；runtime 消失后条目随 Map 上限自然淘汰。
 const _appliedMessagesSeq = new Map();
 
+// workspace 会话列表条件刷新：记录每个 host 最近一次完整响应携带的 index
+// revision。poll 请求带上 sinceRevision，服务端 revision 一致时返回
+// unchanged 短路响应（跳过全量投影与 MB 级序列化）。mutation 之后 revision
+// 前进，下一次 poll 自然 miss 走全量刷新，无需主动失效。
+const _wsSessionsRevisionByHost = new Map();
+
+async function fetchWorkspaceSessionsForPoll(agentId) {
+  const knownRevision = _wsSessionsRevisionByHost.get(agentId);
+  const params = new URLSearchParams({ agentId });
+  if (Number.isFinite(knownRevision)) params.set('sinceRevision', String(knownRevision));
+  const response = await fetch('/protoclaw/prebuilt_sessions?' + params.toString());
+  if (!response.ok) return null;
+  const data = await response.json();
+  if (!data || data.unchanged === true) return null;
+  const revision = Number(data.revision);
+  if (Number.isFinite(revision)) _wsSessionsRevisionByHost.set(agentId, revision);
+  return data;
+}
+
 function schedulePoll(delayMs = POLL_FAST_INTERVAL_MS) {
   if (_pollTimerId !== null) {
     clearTimeout(_pollTimerId);
@@ -921,9 +940,8 @@ async function runPollCycle() {
         if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
           window._lastWsSessionRefreshAt = Date.now();
           try {
-            const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(wsHostAgent.id));
-            if (freshRes.ok) {
-              const freshSessions = await freshRes.json();
+            const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id);
+            if (freshSessions) {
               // Preserve optimistic archived state (same logic as runtime-connected path)
               const currentWs = wsHostAgent.workspace_sessions;
               if (currentWs && Array.isArray(currentWs.sessions) && Array.isArray(freshSessions.sessions)) {
@@ -1346,9 +1364,8 @@ async function runPollCycle() {
       if (wsHostAgent && loadedAgentDetailIds.has(wsHostAgent.id)) {
         window._lastWsSessionRefreshAt = Date.now();
         try {
-          const freshRes = await fetch('/protoclaw/prebuilt_sessions?agentId=' + encodeURIComponent(wsHostAgent.id));
-          if (freshRes.ok) {
-            const freshSessions = await freshRes.json();
+          const freshSessions = await fetchWorkspaceSessionsForPoll(wsHostAgent.id);
+          if (freshSessions) {
             if (!isSessionViewTokenCurrent(pollToken)) {
               schedulePoll(POLL_FAST_INTERVAL_MS);
               return;

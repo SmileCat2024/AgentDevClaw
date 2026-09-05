@@ -173,6 +173,32 @@ app.get('/protoclaw/prebuilt_sessions', async (req, res, next) => {
     } catch (error) {
       return res.status(readForwardTargetError(error)).json(buildLocalFailureResponse(error));
     }
+    // 条件刷新（poll 高频路径）：调用方带 sinceRevision 且 index revision 一致时
+    // 返回 unchanged 短路响应，跳过全量投影与 MB 级序列化。session 的一切变更
+    // （create/activate/delete/archive/meta sync）都经 updateSessionIndex 推进
+    // revision，因此 revision 相同即列表数据相同，短路安全。
+    const sinceRevision = Number(req.query.sinceRevision);
+    if (Number.isFinite(sinceRevision) && sinceRevision >= 0) {
+      const index = await readSessionIndex(req.query.agentId);
+      if ((Number(index.revision) || 0) === sinceRevision) {
+        res.json({
+          agentId: req.query.agentId,
+          revision: Number(index.revision) || 0,
+          unchanged: true,
+          sessions: [],
+          activeSessionId: index.activeSessionId || null,
+        });
+        void recordSidebarDiagnosticEvent({
+          kind: 'read_perf',
+          operation: 'prebuilt_sessions_response',
+          phase: 'completed',
+          agentId: req.query.agentId,
+          durationMs: Date.now() - startedAt,
+          result: 'success',
+        }, { source: 'server' });
+        return;
+      }
+    }
     const sessions = await listPrebuiltSessions(req.query.agentId);
     res.json(sessions);
     void recordSidebarDiagnosticEvent({
@@ -838,8 +864,12 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
       openDirectory: req.body.openDirectory,
       targetDir: req.body.targetDir,
     });
-    const committedIndex = await readSessionIndex(agent.id);
-    trace.mark('index_committed', { revision: committedIndex.revision, sessionCount: committedIndex.sessions.length });
+    // createPrebuiltSession 透传 commit 后的 index revision，免去紧随其后的
+    // readSessionIndex 全量读取。
+    const committedRevision = Number.isFinite(Number(session.indexRevision))
+      ? Number(session.indexRevision)
+      : Number((await readSessionIndex(agent.id)).revision) || 0;
+    trace.mark('index_committed', { revision: committedRevision });
     const status = await startManagedAgent(agent, session.id);
     trace.mark('target_runtime_started');
     // 线程宿主工作空间（coder）：新会话自动成为一条新线程的初始 head。
@@ -849,14 +879,14 @@ app.post('/protoclaw/prebuilt_sessions', express.json(), async (req, res, next) 
     res.json({
       protocolVersion: 2,
       operationId: trace.operationId,
-      revision: committedIndex.revision,
+      revision: committedRevision,
       // threadId 放在 session 全量对象之前：调用方截断输出（head -c 等）时
       // 调度句柄仍然可见，不需要再从 threads list 反查。
       threadId: createdThread?.threadId || null,
       session,
       sessionDelta: {
-        revision: committedIndex.revision,
-        activeSessionId: committedIndex.activeSessionId,
+        revision: committedRevision,
+        activeSessionId: session.id,
         upsert: [session],
         remove: [],
       },
@@ -1671,19 +1701,24 @@ app.post('/protoclaw/prebuilt_sessions/activate', express.json(), async (req, re
     });
     const browseOnly = activateTarget.ok && isBrowseOnlyMount(activateTarget);
     const session = await activatePrebuiltSession(agent.id, sessionId, { returnSummary: false });
-    const committedIndex = await readSessionIndex(agent.id);
-    trace.mark('index_committed', { revision: committedIndex.revision });
+    // activatePrebuiltSession 透传 commit 后的 index revision（无实际变更时为
+    // 当前 revision），免去紧随其后的 readSessionIndex 全量读取。activeSessionId
+    // 由 activate 语义确定为 session.id。
+    const committedRevision = Number.isFinite(Number(session.indexRevision))
+      ? Number(session.indexRevision)
+      : Number((await readSessionIndex(agent.id)).revision) || 0;
+    trace.mark('index_committed', { revision: committedRevision });
     const status = await startManagedAgent(agent, session.id);
     trace.mark('target_runtime_started');
     consumeRecoverySession(agent.id, session.id);
     res.json({
       protocolVersion: 2,
       operationId: trace.operationId,
-      revision: committedIndex.revision,
+      revision: committedRevision,
       session,
       sessionDelta: {
-        revision: committedIndex.revision,
-        activeSessionId: committedIndex.activeSessionId,
+        revision: committedRevision,
+        activeSessionId: session.id,
         upsert: [session],
         remove: [],
       },
