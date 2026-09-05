@@ -278,10 +278,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       const readyAgent = (_isRemoteSession ? null : result?.agent) || null;
       const targetStopped = false;
       const managedReadyAgent = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
-      const nextRuntimeId = managedReadyAgent?.runtime_session_id
-        || managedReadyAgent?.runtimeSessionId
-        || managedReadyAgent?.id
-        || null;
+      const nextRuntimeId = managedReadyAgent ? (getRuntimeId(managedReadyAgent) || null) : null;
       if (nextRuntimeId) {
         updateSidebarOperation(compactOperation.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
         if (_navGuard === _navigationGuardEpoch) {
@@ -451,10 +448,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       const _csReadyAgent = (_csIsRemote ? null : result?.agent) || null;
       const _csTargetStopped = false;
       const _csConnectedTarget = _csReadyAgent ? (upsertConnectedAgent(_csReadyAgent) || _csReadyAgent) : null;
-      const nextRuntimeId = _csConnectedTarget?.runtime_session_id
-        || _csConnectedTarget?.runtimeSessionId
-        || _csConnectedTarget?.id
-        || null;
+      const nextRuntimeId = _csConnectedTarget ? (getRuntimeId(_csConnectedTarget) || null) : null;
       if (action.archiveOriginal && archiveSucceeded) {
         // The successor and archive were committed by the server. Completing
         // source-runtime disposal later must not turn this summary into a

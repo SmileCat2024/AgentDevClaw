@@ -81,6 +81,9 @@ function loadCtxMenuItems(overrides = {}) {
 
   ctx.loadSource('public/src/modules/sidebar-operations.js');
   ctx.loadSource('public/src/modules/session-mutation.js');
+  // ctx-menu-items.js 的 restart/stop/archive 动作经 NavigationCore 解析宿主
+  // 身份与 runtime 引用（ADR-0014 Phase 2）——缺失会 TypeError。
+  ctx.loadSource('public/src/modules/navigation-core.js');
   // ctx-menu-items.js 依赖 assembly-data.js 的 isAssemblySession（见该文件
   // 头部「依赖 assembly-data.js」注释）——缺失会导致 getCtxMenuItems 抛
   // ReferenceError: isAssemblySession is not defined。

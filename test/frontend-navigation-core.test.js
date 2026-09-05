@@ -163,3 +163,78 @@ describe('navigation-core: waitForRemoteRuntimeRef', () => {
     assert.equal(ref, null);
   });
 });
+
+describe('navigation-core: identity helpers (ADR-0014 Phase 2)', () => {
+  it('resolveHostAgentId maps child entries to their host via parent_id', () => {
+    const ctx = createNavigationSandbox();
+    const { resolveHostAgentId } = ctx.window.NavigationCore;
+    // child 条目：parent_id 是宿主；解析失败回退 fallbackId（2026-09-06
+    // stop 事故契约：直接把 runtime id 发给服务端会被静默 no-op）。
+    assert.equal(resolveHostAgentId({ parent_id: 'programming-helper', id: 'agent-1' }, 'agent-1'), 'programming-helper');
+    assert.equal(resolveHostAgentId({ id: 'agent-1' }, 'programming-helper'), 'programming-helper');
+    assert.equal(resolveHostAgentId(null, 'fallback-host'), 'fallback-host');
+    assert.equal(resolveHostAgentId({}, ''), '');
+  });
+
+  it('extractRuntimeId unwraps restart responses (runtime wrapper first)', () => {
+    const ctx = createNavigationSandbox();
+    const { extractRuntimeId } = ctx.window.NavigationCore;
+    assert.equal(
+      extractRuntimeId({ runtime: { id: 'rt-new' }, agent: { runtime_session_id: 'rt-other' } }),
+      'rt-new',
+    );
+    assert.equal(
+      extractRuntimeId({ runtime: { viewerAgentId: 'rt-v' } }),
+      'rt-v',
+    );
+  });
+
+  it('extractRuntimeId falls through to the agent entry alias chain', () => {
+    const ctx = createNavigationSandbox();
+    const { extractRuntimeId } = ctx.window.NavigationCore;
+    assert.equal(
+      extractRuntimeId({ agent: { runtime_session_id: 'rt-a', id: 'rt-a' } }),
+      'rt-a',
+    );
+    assert.equal(
+      extractRuntimeId({ agent: { runtimeSessionId: 'rt-b', id: 'rt-b' } }),
+      'rt-b',
+    );
+    // 裸条目（沙箱无 getRuntimeId 时的 fallback 链）：id 兜底。
+    assert.equal(extractRuntimeId({ runtime_session_id: '', id: 'rt-bare' }), 'rt-bare');
+    assert.equal(extractRuntimeId(null), '');
+    assert.equal(extractRuntimeId({}), '');
+  });
+
+  it('extractRuntimeId delegates to getRuntimeId when available (host records yield no runtime)', () => {
+    const ctx = createNavigationSandbox();
+    // 注入严格版 getRuntimeId（函数体内裸标识符在每次调用时解析，晚注入生效）：
+    // 宿主条目（无 child 标记）不误取自身 id 当 runtime——这是委托权威实现
+    // 相比旧手写链的语义收紧。
+    ctx.getRuntimeId = (record) => (record?.source === 'child' ? String(record.id) : null);
+    assert.equal(
+      ctx.window.NavigationCore.extractRuntimeId({ agent: { source: 'prebuilt', id: 'host-1' } }),
+      '',
+    );
+    assert.equal(
+      ctx.window.NavigationCore.extractRuntimeId({ agent: { source: 'child', id: 'rt-child' } }),
+      'rt-child',
+    );
+  });
+
+  it('resolveStoppedRuntimeFallback prefers the host entry, then the workspace fallback resolver', () => {
+    const ctx = createNavigationSandbox();
+    const { resolveStoppedRuntimeFallback } = ctx.window.NavigationCore;
+    const resolver = (entry) => `ws-fallback:${entry?.id || 'none'}`;
+    assert.equal(
+      resolveStoppedRuntimeFallback({ parent_id: 'programming-helper', id: 'agent-1' }, resolver),
+      'programming-helper',
+    );
+    assert.equal(
+      resolveStoppedRuntimeFallback({ id: 'agent-1' }, resolver),
+      'ws-fallback:agent-1',
+    );
+    assert.equal(resolveStoppedRuntimeFallback(null, resolver), 'ws-fallback:none');
+    assert.equal(resolveStoppedRuntimeFallback({ parent_id: 'host' }, null), 'host');
+  });
+});

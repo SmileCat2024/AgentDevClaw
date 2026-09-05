@@ -99,5 +99,60 @@ window.NavigationCore = (() => {
     return null;
   }
 
-  return { waitForRuntimeReady, waitForRemoteRuntimeRef };
+  // ── 身份解析（ADR-0014 Phase 2）────────────────────────────────────────
+  // 侧栏统一投影后，child 叶子的 id 是 runtime id，而服务端写类接口
+  //（stop_agent / restart_agent / archive）按（宿主 agentId, sessionId）寻址。
+  // 历史上各 ctx-menu 动作各自手写 parent_id 回退，2026-09-06 的"关闭会话
+  // 无反应"事故正是三处手写漏了一处（服务端收到 runtime id 静默 no-op）。
+  // 以下三个函数是这些解析的唯一权威实现。
+
+  /**
+   * 条目 → 服务端寻址宿主 id。child 条目经 parent_id 解析；无 parent_id
+   * （prebuilt / 解析失败）回退 fallbackId（通常是条目自身 id 或调用上下文
+   * 的宿主 id）。
+   */
+  function resolveHostAgentId(entry, fallbackId = '') {
+    return String(entry?.parent_id || fallbackId || '').trim();
+  }
+
+  /**
+   * 从响应包装提取 runtime 引用，接受三种形态：
+   *   - start/restart 响应：{ runtime: { id | viewerAgentId }, agent: {...} }
+   *   - mutation 响应：{ agent: <child 条目> }
+   *   - 裸 agent 条目：直接解析
+   * 剥壳后的条目解析委托 getRuntimeId（app-core 权威实现：alias 链 + source
+   * 判定，宿主条目不误取自身 id 当 runtime）；此函数只补响应包装的剥壳层。
+   * 无 getRuntimeId 的环境（单测沙箱）回退到裸 alias 链。
+   */
+  function extractRuntimeId(source) {
+    if (!source || typeof source !== 'object') return '';
+    if (source.runtime && typeof source.runtime === 'object') {
+      const fromRuntime = String(source.runtime.id || source.runtime.viewerAgentId || '').trim();
+      if (fromRuntime) return fromRuntime;
+    }
+    const agent = source.agent && typeof source.agent === 'object' ? source.agent : source;
+    if (typeof getRuntimeId === 'function') {
+      return getRuntimeId(agent) || '';
+    }
+    return String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
+  }
+
+  /**
+   * 停止正在查看的 runtime 后的视图落点：条目所属宿主入口优先（child/external
+   * 条目带 parent_id），否则交给 fallbackResolver（resolveWorkspaceFallbackAgentId）。
+   * prebuilt/managed 条目无 parent_id，结果与直接调 resolver 等价。
+   */
+  function resolveStoppedRuntimeFallback(entry, fallbackResolver) {
+    const hostId = String(entry?.parent_id || '').trim();
+    if (hostId) return hostId;
+    return typeof fallbackResolver === 'function' ? (fallbackResolver(entry) || '') : '';
+  }
+
+  return {
+    waitForRuntimeReady,
+    waitForRemoteRuntimeRef,
+    resolveHostAgentId,
+    extractRuntimeId,
+    resolveStoppedRuntimeFallback,
+  };
 })();

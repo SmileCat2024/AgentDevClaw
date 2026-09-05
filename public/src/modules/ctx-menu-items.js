@@ -211,7 +211,7 @@ async function ctxRestartAgent(target) {
     if (variant === 'external') {
       result = await restartSidebarExternalRuntime(agent);
     } else if (variant === 'child') {
-      const hostId = agent?.parent_id || serverAgentId;
+      const hostId = window.NavigationCore.resolveHostAgentId(agent, serverAgentId);
       const sId = agent?.active_workspace_session_id || null;
       result = await invoke('restart_agent', { agentId: hostId, sessionId: sId });
     } else {
@@ -222,12 +222,7 @@ async function ctxRestartAgent(target) {
 
     // Server already waits for runtime readiness (up to 10s), so the
     // returned result contains the connected agent. No extra polling needed.
-    const nextRuntimeId =
-      result?.runtime?.id
-      || result?.runtime?.viewerAgentId
-      || result?.agent?.runtime_session_id
-      || result?.agent?.runtimeSessionId
-      || null;
+    const nextRuntimeId = window.NavigationCore.extractRuntimeId(result) || null;
 
     restartingRuntimeIds.delete(domId);
     suppressSidebarRerender = false;
@@ -249,7 +244,7 @@ async function ctxStopAgent(target) {
   try {
     const serverAgentId = (variant === 'managed-runtime') ? ns : id;
     const agent = getExternalRuntimeAgent(serverAgentId);
-    const affectedRuntimeId = id || agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id || null;
+    const affectedRuntimeId = id || getRuntimeId(agent) || null;
     // Clear cached data — runtime is being stopped
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (variant === 'external') {
@@ -259,9 +254,9 @@ async function ctxStopAgent(target) {
       await invoke('stop_agent', { agentId: ns, sessionId: sessionId || null });
     } else if (variant === 'child') {
       // 侧栏统一投影的 child 叶子：id 是 runtime id，服务端 stop_agent 按
-      // (宿主 agentId, sessionId) 寻址——必须经 parent_id 解析宿主，直接用
-      // runtime id 会被服务端静默 no-op（找不到 runtime 也不报错）。
-      const hostId = agent?.parent_id || serverAgentId;
+      // (宿主 agentId, sessionId) 寻址——必须经 resolveHostAgentId 解析宿主，
+      // 直接用 runtime id 会被服务端静默 no-op（找不到 runtime 也不报错）。
+      const hostId = window.NavigationCore.resolveHostAgentId(agent, serverAgentId);
       const sId = sessionId || agent?.active_workspace_session_id || null;
       await invoke('stop_agent', { agentId: hostId, sessionId: sId });
     } else {
@@ -274,7 +269,7 @@ async function ctxStopAgent(target) {
       const fallbackTarget = variant === 'remote'
         ? (window.RemoteConnections?.getEntryHostAgentId?.(id) || null)
         : ((variant === 'external' || variant === 'child')
-          ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
+          ? window.NavigationCore.resolveStoppedRuntimeFallback(agent, resolveWorkspaceFallbackAgentId)
           : resolveWorkspaceFallbackAgentId(agent));
       if (fallbackTarget) {
         selectWorkspaceSurface(fallbackTarget);
@@ -430,7 +425,7 @@ async function ctxArchiveAndStopRuntime(target) {
   // 2. Stop the agent runtime (same logic as ctxStopAgent)
   const serverAgentId = (variant === 'managed-runtime') ? agentId : runtimeId;
   const externalAgent = getExternalRuntimeAgent(serverAgentId);
-  const affectedRuntimeId = runtimeId || externalAgent?.runtime_session_id || externalAgent?.runtimeSessionId || externalAgent?.id || null;
+  const affectedRuntimeId = runtimeId || getRuntimeId(externalAgent) || null;
   try {
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (variant === 'external') {
@@ -439,7 +434,7 @@ async function ctxArchiveAndStopRuntime(target) {
       // 远程运行时：关停经宿主命名空间 id 转发（与归档转发同套路）。
       await invoke('stop_agent', { agentId, sessionId: sessionId || null });
     } else if (variant === 'child') {
-      const hostId = externalAgent?.parent_id || serverAgentId;
+      const hostId = window.NavigationCore.resolveHostAgentId(externalAgent, serverAgentId);
       const sId = sessionId || externalAgent?.active_workspace_session_id || null;
       await invoke('stop_agent', { agentId: hostId, sessionId: sId });
     } else {

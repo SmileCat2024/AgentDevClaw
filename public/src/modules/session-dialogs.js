@@ -294,10 +294,7 @@ window.submitTrimCompact = async () => {
     const readyAgent = (isRemoteTrim ? null : result?.agent) || null;
     const targetStopped = false;
     const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
-    const nextRuntimeId = connectedTarget?.runtime_session_id
-      || connectedTarget?.runtimeSessionId
-      || connectedTarget?.id
-      || null;
+    const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
     if (archiveAfter && archiveSucceeded) {
       // The server has committed both the successor and source archive. This is
       // the replacement operation's terminal success boundary; source runtime
@@ -582,10 +579,7 @@ window.submitBranch = async () => {
     const readyAgent = (isRemoteSession ? null : result?.agent) || null;
     const targetStopped = false;
     const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
-    const nextRuntimeId = connectedTarget?.runtime_session_id
-      || connectedTarget?.runtimeSessionId
-      || connectedTarget?.id
-      || null;
+    const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
     if (archiveAfter && archiveSucceeded) {
       // The branch and source archive are committed together. Do not keep the
       // successful branch operation open for unrelated source cleanup.

@@ -71,7 +71,7 @@ restartAgentAction.addEventListener('click', async () => {
       closeAgentContextMenu();
       result = await restartSidebarExternalRuntime(agent);
     } else if (contextMenuAgentMode === 'child-runtime') {
-      const hostId = agent?.parent_id || contextMenuAgentId;
+      const hostId = window.NavigationCore.resolveHostAgentId(agent, contextMenuAgentId);
       const sessionId = agent?.active_workspace_session_id || null;
       closeAgentContextMenu();
       result = await invoke('restart_agent', { agentId: hostId, sessionId });
@@ -84,12 +84,7 @@ restartAgentAction.addEventListener('click', async () => {
     // same contract as the generic ctx-menu restart (ctxRestartAgent). No extra
     // polling — the former 20×500ms get_connected_agents loop here was both
     // redundant and the heaviest possible probe (full agent list per attempt).
-    const nextRuntimeId =
-      result?.runtime?.id
-      || result?.runtime?.viewerAgentId
-      || result?.agent?.runtime_session_id
-      || result?.agent?.runtimeSessionId
-      || null;
+    const nextRuntimeId = window.NavigationCore.extractRuntimeId(result) || null;
     suppressSidebarRerender = false;
     await loadAgents();
     if (nextRuntimeId && _restartNavGuard === _navigationGuardEpoch) {
@@ -107,13 +102,13 @@ stopAgentAction.addEventListener('click', async () => {
 
   try {
     const agent = getExternalRuntimeAgent(contextMenuAgentId);
-    const affectedRuntimeId = agent?.runtime_session_id || agent?.runtimeSessionId || agent?.id || null;
+    const affectedRuntimeId = getRuntimeId(agent) || null;
     // Clear cached data — runtime is being stopped
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (contextMenuAgentMode === 'external-runtime') {
       await closeSidebarExternalRuntime(agent);
     } else if (contextMenuAgentMode === 'child-runtime') {
-      const hostId = agent?.parent_id || contextMenuAgentId;
+      const hostId = window.NavigationCore.resolveHostAgentId(agent, contextMenuAgentId);
       const sessionId = agent?.active_workspace_session_id || null;
       await invoke('stop_agent', { agentId: hostId, sessionId });
     } else {
@@ -122,11 +117,10 @@ stopAgentAction.addEventListener('click', async () => {
     closeAgentContextMenu();
     await refreshSidebarRuntimeAfterMutation(500);
     if (affectedRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
-      const fallbackTarget = contextMenuAgentMode === 'external-runtime'
-        ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
-        : contextMenuAgentMode === 'child-runtime'
-          ? (agent?.parent_id || resolveWorkspaceFallbackAgentId(agent))
-          : resolveWorkspaceFallbackAgentId(agent);
+      const viaHostEntry = contextMenuAgentMode === 'external-runtime' || contextMenuAgentMode === 'child-runtime';
+      const fallbackTarget = viaHostEntry
+        ? window.NavigationCore.resolveStoppedRuntimeFallback(agent, resolveWorkspaceFallbackAgentId)
+        : resolveWorkspaceFallbackAgentId(agent);
       if (fallbackTarget) {
         selectWorkspaceSurface(fallbackTarget);
       }
