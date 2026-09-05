@@ -6245,7 +6245,7 @@ body[data-theme="light"] .project-docset-detail-empty {
 .follow-latest-btn {
   position: absolute;
   right: 32px;
-  bottom: 132px;
+  bottom: var(--follow-latest-bottom, 132px);
   z-index: 20;
   display: inline-flex;
   align-items: center;
@@ -6282,19 +6282,9 @@ body[data-theme="light"] .project-docset-detail-empty {
   transform: translateY(8px);
 }
 
-/* 面板打开时，按钮上移至输入框右上角方位，避免窄区域碰撞 */
-.main-content.panel-open .follow-latest-btn {
-  bottom: 168px;
-}
-
-/* 窄屏避让由主内容区实际宽度驱动：窗口缩放、左侧栏拖宽与面板打开
-   一样会把 main-content 挤窄（输入卡 min(85%, 800px) 居中，按钮与
-   输入卡的水平重叠临界约 1064px），容器查询统一覆盖全部变窄来源。 */
-@container main-content (max-width: 1100px) {
-  .follow-latest-btn {
-    bottom: 168px;
-  }
-}
+/* 避让位置（面板打开 / 窄屏）不再用固定像素：由 chat-viewport.js 实时
+   测量输入容器写入 --follow-latest-bottom，输入卡高度变化（输入行数、
+   窄屏换行）随之跟踪，断点交界也不会回落遮挡（见该模块注释）。 */
 
 .follow-latest-dot {
   width: 8px;
@@ -6312,11 +6302,7 @@ body[data-theme="light"] .project-docset-detail-empty {
 @media (max-width: 768px) {
   .follow-latest-btn {
     right: 24px;
-    bottom: 116px;
     padding: 9px 12px;
-  }
-  .main-content.panel-open .follow-latest-btn {
-    bottom: 148px;
   }
 }
 
@@ -6683,9 +6669,8 @@ body[data-theme="light"] .preset-tag-opencode {
   .feature-panel-header { height: 48px; }
   .feature-panel::before { top: 48px; }
 
-  /* Follow-latest button: reposition */
-  .follow-latest-btn { right: 16px; bottom: 120px; }
-  .main-content.panel-open .follow-latest-btn { bottom: 140px; }
+  /* Follow-latest button: compact offset only（bottom 由 JS 动态避让） */
+  .follow-latest-btn { right: 16px; }
 
   /* Input area: full width */
   .user-input-card,
@@ -6717,7 +6702,7 @@ body[data-theme="light"] .preset-tag-opencode {
     width: calc(100vw - 56px);
   }
 
-  .follow-latest-btn { right: 12px; bottom: 110px; }
+  .follow-latest-btn { right: 12px; }
 }
 
 /* ── MCP Gateway UI ────────────────────────────────────────────── */

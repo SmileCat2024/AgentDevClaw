@@ -99,6 +99,7 @@ function isNearBottom() {
 
 function updateFollowLatestButton() {
   if (!followLatestButton) return;
+  ensureFollowLatestAvoidObserver();
   const hasMessages = currentMessages.length > 0 && isChatSurfaceActive();
   followLatestButton.classList.toggle('hidden', !hasMessages);
   followLatestButton.classList.toggle('active', followLatestEnabled);
@@ -106,6 +107,63 @@ function updateFollowLatestButton() {
     '<span class="follow-latest-dot"></span><span>' +
     escapeHtml(t(followLatestEnabled ? 'follow_latest_on' : 'follow_latest_off')) +
     '</span>';
+}
+
+/* ── 跟随按钮动态避让 ──
+   需要避让输入卡时（中央区变窄或面板打开，与原容器查询同条件），按钮
+   bottom 不用固定像素断点：输入卡高度随输入行数与换行动态变化，固定值
+   要么侵入输入卡、要么在输入变多后失去跟踪，且多断点叠加会在断点交界
+   回落（曾于 ≤768px 从避让位掉回遮挡位）。改为实时测量输入卡顶边到主
+   区底边的距离，经 --follow-latest-bottom 写入布局；ResizeObserver 跟
+   踪主区与输入容器尺寸——窗口缩放、侧栏拖宽、面板开关、输入框增/缩高
+   都汇于此，单一驱动源。 */
+const FOLLOW_LATEST_AVOID_MAX_WIDTH = 1100;
+const FOLLOW_LATEST_AVOID_GAP = 10;
+let _followLatestPosRaf = 0;
+let _followLatestAvoidObserver = null;
+
+function updateFollowLatestButtonPosition() {
+  if (!followLatestButton) return;
+  const main = followLatestButton.closest('.main-content');
+  const inputHost = document.getElementById('user-input-container');
+  if (!main || !inputHost) return;
+
+  // 严格贴输入卡顶边：容器还包裹运行时长胶囊等更高元素，按容器测会使
+  // 按钮悬空在输入卡上方一个胶囊的高度。
+  const inputCard =
+    inputHost.querySelector('.user-input-card.persistent-input') || inputHost;
+  const inputRect = inputCard.getBoundingClientRect();
+  const needsAvoid = main.classList.contains('panel-open')
+    || main.clientWidth <= FOLLOW_LATEST_AVOID_MAX_WIDTH;
+  if (!needsAvoid || !inputRect.height) {
+    followLatestButton.style.removeProperty('--follow-latest-bottom');
+    return;
+  }
+  const dist = main.getBoundingClientRect().bottom - inputRect.top;
+  followLatestButton.style.setProperty(
+    '--follow-latest-bottom', Math.round(dist + FOLLOW_LATEST_AVOID_GAP) + 'px');
+}
+
+/** 惰性建立尺寸跟踪（observe 的首次回调即完成初始定位）。沙箱测试等
+ *  缺少 ResizeObserver / DOM 查询的宿主下保持空操作，与 viewport observers
+ *  的 ensure 模式一致。 */
+function ensureFollowLatestAvoidObserver() {
+  if (_followLatestAvoidObserver) return;
+  if (typeof ResizeObserver !== 'function'
+      || typeof document === 'undefined'
+      || typeof document.querySelector !== 'function') return;
+  const main = document.querySelector('.main-content');
+  const inputHost = document.getElementById('user-input-container');
+  if (!main || !inputHost) return;
+  _followLatestAvoidObserver = new ResizeObserver(() => {
+    if (_followLatestPosRaf) return;
+    _followLatestPosRaf = requestAnimationFrame(() => {
+      _followLatestPosRaf = 0;
+      updateFollowLatestButtonPosition();
+    });
+  });
+  _followLatestAvoidObserver.observe(main);
+  _followLatestAvoidObserver.observe(inputHost);
 }
 
 function markManualScrollIntent() {
