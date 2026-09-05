@@ -1549,15 +1549,32 @@ sidebarToggle.addEventListener('click', () => {
     _ensureSidebarBackdrop();
     _updateSidebarBackdrop();
   }
+  // 展开左栏可能挤压中央区：与 resize 链路同一级联，代价由右栏承担
+  // （keepSidebarOpen 避免刚展开的左栏被级联第 1 步立即收回）
+  if (!sidebar.classList.contains('collapsed')) {
+    ensureCentralMinWidth({ keepSidebarOpen: true });
+  }
 });
 let _centralAdaptRaf = 0;
+// 抽屉模式（≤860px，含 DPI/缩放导致的 CSS 视口收窄）下 sidebar 是浮层，
+// 残留的展开态会盖住中央区——遮挡与中央区最小宽度同级，是第一优先级。
+// 宽→窄跨入瞬间自动收起；窄屏内用户主动点汉堡展开不受 resize 干扰。
+let _lastNarrowScreen = _isNarrowScreen();
+if (_lastNarrowScreen && !sidebar.classList.contains('collapsed')) {
+  sidebar.classList.add('collapsed');
+}
 window.addEventListener('resize', () => {
-  if (!_isNarrowScreen()) {
+  const narrow = _isNarrowScreen();
+  if (!narrow) {
     // Wide screen: hide backdrop, ensure sidebar visible
     if (_sidebarBackdrop) _sidebarBackdrop.classList.remove('visible');
   } else {
+    if (!_lastNarrowScreen && !sidebar.classList.contains('collapsed')) {
+      sidebar.classList.add('collapsed');
+    }
     _updateSidebarBackdrop();
   }
+  _lastNarrowScreen = narrow;
   // 中央区宽度级联适配（rAF 节流）。窗口 resize 的逐帧 reflow 漂移不锚定
   // （见 ensureCentralMinWidth 注释）；仅在级联动作实际发生时锚定一次。
   if (!_centralAdaptRaf) {
@@ -1579,6 +1596,8 @@ window.addEventListener('resize', () => {
    3) 仍不足 → 收起右栏（复用 activeFeaturePanel=null + renderFeaturePanel）
    面板/侧栏宽度均无 transition，动作为同步突变；触发处负责滚动锚定。 */
 const CENTRAL_MIN_WIDTH = 480;
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 480;
 
 function _getSidebarOccupiedWidth() {
   if (sidebar.classList.contains('collapsed')) return 0;
@@ -1596,15 +1615,31 @@ function _centralAvailableWidth() {
   return window.innerWidth - _getSidebarOccupiedWidth() - _getPanelOccupiedWidth() - 56;
 }
 
+/** 中央区保底 CENTRAL_MIN_WIDTH 前提下的分割条拖动上限：手动加宽任一侧栏
+ *  都不允许把中央区挤到下限以下——与 resize 级联 _cascadeCentralWidth 同一
+ *  约束，布局合法态只有一种定义（窗口突变与手动拖动闭环）。
+ *  60 = sidebar-resizer(4) + rail(56)。 */
+function _sidebarDragCeiling() {
+  if (_isNarrowScreen()) return SIDEBAR_MAX_WIDTH; // 抽屉模式左栏不占布局宽度
+  return window.innerWidth - _getPanelOccupiedWidth() - 60 - CENTRAL_MIN_WIDTH;
+}
+
+function _panelDragCeiling() {
+  return window.innerWidth - _getSidebarOccupiedWidth() - 56 - CENTRAL_MIN_WIDTH;
+}
+
 /** 纯适配动作（不做滚动锚定），供 resize 包装与 panel 打开链路共用。
+ *  keepSidebarOpen：左栏刚被用户主动展开时置真——此时收起左栏等于展开
+ *  无效，级联跳过第 1 步，空间代价由右栏承担（收窄到下限、再收起）。
  *  @returns {boolean} 是否实际发生了级联动作（收侧栏/收窄面板/收面板） */
-function _cascadeCentralWidth() {
+function _cascadeCentralWidth({ keepSidebarOpen = false } = {}) {
   let changed = false;
   let central = _centralAvailableWidth();
   if (central >= CENTRAL_MIN_WIDTH) return changed;
 
   // 1) 收起左栏
   if (central < CENTRAL_MIN_WIDTH
+      && !keepSidebarOpen
       && !sidebar.classList.contains('collapsed') && !_isNarrowScreen()) {
     sidebar.classList.add('collapsed');
     _updateSidebarBackdrop();
@@ -1641,7 +1676,7 @@ function _cascadeCentralWidth() {
  * 见 featurePanelResizer）。reflow 漂移由自然行为保持：scrollTop 不变，
  * 视口顶部内容钉住。
  */
-function ensureCentralMinWidth() {
+function ensureCentralMinWidth(opts) {
   if (_centralAvailableWidth() >= CENTRAL_MIN_WIDTH) return;
 
   // 宽度突变前捕获滚动位置；配合 applyChatViewportAnchor 保持阅读位置
@@ -1653,7 +1688,7 @@ function ensureCentralMinWidth() {
     suppressApplied = true;
   }
 
-  const cascadeChanged = _cascadeCentralWidth();
+  const cascadeChanged = _cascadeCentralWidth(opts);
 
   if (!cascadeChanged) {
     if (suppressApplied && typeof resumeChatViewportObservers === 'function') {
@@ -1675,8 +1710,6 @@ function ensureCentralMinWidth() {
 
 // Sidebar Resize
 (function initSidebarResizer() {
-  const SIDEBAR_MIN = 200;
-  const SIDEBAR_MAX = 480;
   // 收回区硬下限：保证"松开以收起面板"提示单行显示，不被挤压换行（与右侧面板一致）
   const SIDEBAR_COLLAPSE_FLOOR = 180;
   const STORAGE_KEY = 'agentdev-sidebar-width';
@@ -1684,7 +1717,7 @@ function ensureCentralMinWidth() {
   // Restore saved width
   try {
     const saved = parseInt(localStorage.getItem(STORAGE_KEY));
-    if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) {
+    if (saved >= SIDEBAR_MIN_WIDTH && saved <= SIDEBAR_MAX_WIDTH) {
       document.documentElement.style.setProperty('--sidebar-width', saved + 'px');
     }
   } catch (_) { /* ignore */ }
@@ -1701,14 +1734,14 @@ function ensureCentralMinWidth() {
     }
 
     // 记录拖拽开始时的正常宽度：松手收起后恢复，避免重新展开时宽度异常
-    let lastStableWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX,
+    let lastStableWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH,
       parseInt(getComputedStyle(sidebar).width) || 280));
     let shouldCollapse = false;
     let inCollapseZone = false;
 
     const handleMouseMove = (ev) => {
-      const enterThreshold = SIDEBAR_MIN - 60;
-      const exitThreshold = SIDEBAR_MIN - 10;
+      const enterThreshold = SIDEBAR_MIN_WIDTH - 60;
+      const exitThreshold = SIDEBAR_MIN_WIDTH - 10;
 
       // Hysteresis: 用不同阈值进出收回区，避免边界抖动（与右侧面板机制一致）
       if (!inCollapseZone && ev.clientX < enterThreshold) {
@@ -1725,7 +1758,10 @@ function ensureCentralMinWidth() {
       } else {
         shouldCollapse = false;
         sidebar.classList.remove('drag-collapsing');
-        const w = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, ev.clientX));
+        // 上限同时受 SIDEBAR_MAX_WIDTH 与中央区最小宽度约束：左栏加宽
+        // 不可把中央区挤到 480px 以下（与 resize 级联同一约束）
+        const w = Math.max(SIDEBAR_MIN_WIDTH,
+          Math.min(SIDEBAR_MAX_WIDTH, ev.clientX, _sidebarDragCeiling()));
         lastStableWidth = w;
         document.documentElement.style.setProperty('--sidebar-width', w + 'px');
       }
@@ -1938,7 +1974,10 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
     } else {
       shouldCollapse = false;
       featurePanel.classList.remove('drag-collapsing');
-      featurePanelWidth = Math.max(minWidth, Math.min(750, nextWidth));
+      // 上限同时受 750 与中央区最小宽度约束：右栏加宽不可把中央区挤到
+      // 480px 以下（与 resize 级联同一约束，见 CENTRAL_MIN_WIDTH）
+      const ceiling = window.innerWidth - _getSidebarOccupiedWidth() - 56 - CENTRAL_MIN_WIDTH;
+      featurePanelWidth = Math.max(minWidth, Math.min(750, nextWidth, ceiling));
       featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
     }
 
