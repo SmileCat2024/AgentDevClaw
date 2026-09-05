@@ -38,6 +38,7 @@ function selectWorkspaceSurface(agentId, options = {}) {
   shouldAnimateWorkspaceSurface = (prevAgentId !== agentId);
   setFollowLatest(true);
   resetRuntimeBackedSurfaceState();
+  clearPendingSessionNavigation();
   renderAgentList();
   renderCurrentMainView();
   if (!options.skipFeaturePanel) {
@@ -136,7 +137,7 @@ function ensureUnitMode(agent = getCurrentAgentRecord()) {
   }
 
   if (isTablessHostSurface(agent)) {
-    currentWorkspaceTab = (readOnlyMode || currentRuntimeAgentId)
+    currentWorkspaceTab = (readOnlyMode || currentRuntimeAgentId || hasPendingSessionNavigation(agent))
       ? 'chat'
       : getPassiveWorkspaceSurfaceMode(agent);
     return currentWorkspaceTab;
@@ -321,7 +322,7 @@ function shouldRenderWorkspaceSurface(agent = getCurrentAgentRecord()) {
   }
 
   if (isTablessHostSurface(agent)) {
-    return !(readOnlyMode || currentRuntimeAgentId);
+    return !(readOnlyMode || currentRuntimeAgentId || hasPendingSessionNavigation(agent));
   }
 
   const mode = ensureUnitMode(agent);
@@ -332,7 +333,7 @@ function isChatSurfaceActive(agent = getCurrentAgentRecord()) {
   const ui = getCurrentUnitUi(agent);
   if (!ui) return true;
   if (isTablessHostSurface(agent)) {
-    return !!(readOnlyMode || currentRuntimeAgentId);
+    return !!(readOnlyMode || currentRuntimeAgentId || hasPendingSessionNavigation(agent));
   }
   return ensureUnitMode(agent) === 'chat';
 }

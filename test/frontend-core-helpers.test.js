@@ -205,6 +205,28 @@ describe('app-core: formatWorkspaceDate', () => {
 
 // ── isUiOnlyAgentId ──
 
+describe('app-core: pending session navigation', () => {
+  it('keeps a pending target scoped to the current navigation epoch and workspace', () => {
+    const ctx = createCoreSandbox();
+    assert.equal(ctx.run('beginPendingSessionNavigation("programming-helper", "session-new")').sessionId, 'session-new');
+    assert.equal(ctx.run('hasPendingSessionNavigation({ id: "programming-helper" })'), true);
+    assert.equal(ctx.run('hasPendingSessionNavigation({ id: "other-workspace" })'), false);
+    ctx.run('bumpNavigationGuard()');
+    assert.equal(ctx.run('hasPendingSessionNavigation({ id: "programming-helper" })'), false);
+  });
+
+  it('updates the committed target without losing its navigation scope', () => {
+    const ctx = createCoreSandbox();
+    ctx.run('beginPendingSessionNavigation("programming-helper")');
+    assert.equal(ctx.run('updatePendingSessionNavigation("session-new", "starting-runtime").phase'), 'starting-runtime');
+    assert.equal(ctx.run('hasPendingSessionNavigation({ id: "programming-helper" })'), true);
+    ctx.run('clearPendingSessionNavigation()');
+    assert.equal(ctx.run('hasPendingSessionNavigation({ id: "programming-helper" })'), false);
+  });
+});
+
+// ── isUiOnlyAgentId ──
+
 describe('app-core: isUiOnlyAgentId', () => {
   it('returns true for known UI-only agent IDs', () => {
     const ctx = createCoreSandbox({

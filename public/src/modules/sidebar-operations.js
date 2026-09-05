@@ -371,6 +371,40 @@ function getPendingSessionRemovalIds(agentId) {
   )).map((operation) => operation.sourceSessionId));
 }
 
+// Server snapshots (light snapshot / agent_detail) can lag behind a committed
+// mutation: the create/activate sessionDelta already confirms the commit, but
+// the next refresh payload may still omit the new session. Merging with the
+// fresh list as the base would drop that entry — the sidebar shows the new
+// session appear, vanish, then come back once the server catches up. Upserts
+// registered here survive the merge until the fresh list echoes the id; a 60s
+// TTL bounds the protection if the server never confirms.
+const _pendingSessionUpserts = new Map();
+
+function markPendingSessionUpsert(agentId, session) {
+  if (!agentId || !session?.id) return;
+  _pendingSessionUpserts.set(`${agentId}::${session.id}`, {
+    agentId: String(agentId),
+    sessionId: String(session.id),
+    session,
+    at: Date.now(),
+  });
+}
+
+function retainPendingSessionUpserts(agentId, sessions) {
+  if (_pendingSessionUpserts.size === 0) return sessions;
+  const presentIds = new Set(sessions.map((session) => String(session?.id || '')));
+  const retained = [];
+  for (const [key, entry] of Array.from(_pendingSessionUpserts.entries())) {
+    if (entry.agentId !== String(agentId || '')) continue;
+    if (presentIds.has(entry.sessionId) || Date.now() - entry.at > 60000) {
+      _pendingSessionUpserts.delete(key);
+      continue;
+    }
+    retained.push(entry.session);
+  }
+  return retained.length > 0 ? [...retained, ...sessions] : sessions;
+}
+
 function mergeWorkspaceSessionSnapshots(previous = {}, fresh = {}, agentId = '') {
   const previousRevision = getWorkspaceRevision(previous);
   const freshRevision = getWorkspaceRevision(fresh);
@@ -395,7 +429,7 @@ function mergeWorkspaceSessionSnapshots(previous = {}, fresh = {}, agentId = '')
     ...previous,
     ...fresh,
     revision: Math.max(previousRevision, freshRevision),
-    sessions,
+    sessions: retainPendingSessionUpserts(agentId, sessions),
   };
 }
 
@@ -411,6 +445,7 @@ function applySessionMutationDelta(agentId, payload) {
 
   const removeIds = new Set(Array.isArray(delta.remove) ? delta.remove.map(String) : []);
   const upserts = Array.isArray(delta.upsert) ? delta.upsert.filter((session) => session?.id) : [];
+  upserts.forEach((session) => markPendingSessionUpsert(agentId, session));
   const upsertById = new Map(upserts.map((session) => [String(session.id), session]));
   const existing = Array.isArray(current.sessions) ? current.sessions : [];
   const sessions = existing

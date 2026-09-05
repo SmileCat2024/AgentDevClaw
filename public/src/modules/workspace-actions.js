@@ -21,7 +21,7 @@
  *   _navigationGuardEpoch, prebuiltSessionSwitchInFlight,
  *   shouldAnimateWorkspaceSurface, currentWorkspaceArtifactDetail,
  *   currentWorkspaceDocsetDetail, readOnlyMode, currentMessages,
- *   currentInputRequests, lastRenderedWorkspaceHtml
+ *   currentInputRequests, lastRenderedWorkspaceHtml, _pendingSessionNavigation
  * 依赖全局函数:
  *   bumpNavigationGuard, t, escapeHtml, invoke (app-core.js)
  *   applySessionViewPatch (session-view-state.js)
@@ -761,13 +761,31 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     );
 
   if (needsManagedSession) {
-    beginChatLoadingSession();
+    // A session becomes the user's navigation target as soon as the operation
+    // starts. Its runtime may still be absent, so keep the target intent
+    // separate from currentRuntimeAgentId and render the chat loading surface
+    // immediately instead of leaving the workspace home visible. Do not replace
+    // an already-mounted runtime view until the server identifies the target;
+    // that path still needs the existing same-runtime switch safeguards.
+    const showPendingChatSurface = !currentRuntimeAgentId;
+    if (showPendingChatSurface) {
+      beginPendingSessionNavigation(activeAgent.id, action.sessionId || '', 'committing');
+      resetRuntimeBackedSurfaceState();
+      currentWorkspaceTab = 'chat';
+      beginChatLoadingSession();
+      lastRenderedWorkspaceHtml = '';
+      renderCurrentMainView();
+    }
+    else {
+      beginPendingSessionNavigation(activeAgent.id, action.sessionId || '', 'committing');
+    }
     if (action.type === 'open_session' && action.sessionId) {
       markSessionLoading(activeAgent.id, action.sessionId);
     }
     if (triggerButton) markActionLoading(triggerButton);
     // Declared outside try so the catch block can still settle the operation.
     let sidebarOperation = null;
+    const managedNavigationEpoch = _navigationGuardEpoch;
     try {
       prebuiltSessionSwitchInFlight = true;
       const sessionAction = action.type === 'open_session'
@@ -804,8 +822,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         });
         sessionAction.operationId = sidebarOperation.operationId;
         _storeVisibleSessionInputDraft();
-        if (previousRuntimeId) {
-          saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId, activeAgent));
+        // Cache handoff is only meaningful for a runtime the user is actually
+        // leaving. The host record's runtime_session_id can point at a sibling
+        // session's live runtime while the user sits on the workspace home;
+        // saving the (already-cleared) view state there would clobber that
+        // runtime's valid cache with an empty snapshot.
+        const departingRuntimeId = normalizeAgentIdentity(currentRuntimeAgentId);
+        if (departingRuntimeId) {
+          saveCurrentRuntimeToCache(departingRuntimeId, getRuntimeContextKey(departingRuntimeId, activeAgent));
         }
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
         // T006 / T003：activate 响应按 Thread 成员关系解析目标（target shape）。
@@ -831,6 +855,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           ? (applyOptimisticWorkspaceSession(activeAgent.id, result.session) || activeAgent)
           : activeAgent;
         const targetSessionId = String(result?.session?.id || sessionAction.sessionId || '').trim();
+        updatePendingSessionNavigation(targetSessionId, 'starting-runtime');
         updateSidebarOperation(sidebarOperation.operationId, {
           phase: 'target-starting',
           targetSessionId,
@@ -880,10 +905,16 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           }
           setPreferredUnitMode('chat', nextAgent);
           if (nextRuntimeId === currentRuntimeAgentId) {
+            clearPendingSessionNavigation();
+            clearChatLoadingSession();
             beginFollowLatestEntryWindow();
             renderCurrentMainView();
           } else {
             await requestSwitch(nextRuntimeId, 'session-open');
+          }
+          if (managedNavigationEpoch === _navigationGuardEpoch) {
+            clearPendingSessionNavigation();
+            clearChatLoadingSession();
           }
           finishSidebarOperation(sidebarOperation.operationId, 'settled');
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
@@ -895,10 +926,32 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         // surface selected indefinitely.
         finishSidebarOperation(sidebarOperation.operationId, 'settled');
         if (targetSessionId && _navGuard === _navigationGuardEpoch) {
+          // The sourceRuntime guard in navigateToSessionMutationTarget asserts
+          // "the user is still viewing this runtime". For create/open the user
+          // often starts from the workspace home (currentRuntimeAgentId empty);
+          // previousRuntimeId comes from the host record and can point at ANY
+          // live runtime of this host (a sibling session's), which made the
+          // guard reject every navigation whenever another session was running.
+          // Pass the runtime the user is actually viewing — empty from the
+          // home surface skips the guard; the nav-guard epoch still protects
+          // the "user navigated away meanwhile" case.
+          const navigationSourceRuntimeId = normalizeAgentIdentity(currentRuntimeAgentId);
           void navigateToSessionMutationTarget(activeAgent.id, {
             targetSessionId,
             operationId: sidebarOperation.operationId,
-          }, previousRuntimeId);
+          }, navigationSourceRuntimeId).then((navigated) => {
+            // A committed session can outlive a failed runtime startup, but a
+            // failed navigation must not leave the chat spinner or tabless
+            // workspace in an unusable intermediate state. Do not touch the
+            // view after a newer user navigation has taken ownership.
+            if (_navGuard !== _navigationGuardEpoch) return;
+            clearPendingSessionNavigation();
+            clearChatLoadingSession();
+            renderCurrentMainView();
+            if (!navigated) {
+              console.warn('Session committed but its runtime did not become ready:', targetSessionId);
+            }
+          });
         }
         loadAgents().catch((error) => console.error('Failed to refresh agents after starting prebuilt runtime:', error));
       };
@@ -918,6 +971,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       }
     } catch (error) {
       console.error('Failed to open prebuilt session:', error);
+      if (managedNavigationEpoch === _navigationGuardEpoch) {
+        clearPendingSessionNavigation();
+      }
       if (sidebarOperation?.operationId) {
         finishSidebarOperation(sidebarOperation.operationId, 'failed', { errorCode: 'session_open_failed' });
       }
@@ -925,10 +981,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       return;
     } finally {
       prebuiltSessionSwitchInFlight = false;
-      // For create_session, the new session legitimately has 0 messages.
-      // loadAgentData only clears loading when messages arrive, so clear
-      // it here to avoid a 10s spinner on an intentionally empty session.
-      if (action.type === 'create_session' || action.type === 'create_session_from_session') {
+      // Keep the target chat surface mounted while a newly committed session is
+      // still waiting for its runtime. The pending navigation is cleared by
+      // switchAgent on successful runtime binding (or by a newer user
+      // navigation); clearing it here would flash the workspace welcome state
+      // between session commit and runtime readiness.
+      if (shouldMarkLoading
+        && managedNavigationEpoch === _navigationGuardEpoch
+        && !hasPendingSessionNavigation(activeAgent)) {
         clearChatLoadingSession();
         renderCurrentMainView();
       }

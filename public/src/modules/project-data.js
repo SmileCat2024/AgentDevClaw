@@ -357,6 +357,11 @@ function canEnterWorkspaceChat(agent = getCurrentAgentRecord()) {
   const ui = getCurrentUnitUi(agent);
   if (!ui) return true;
   if (isUiOnlyUnit(agent)) return false;
+  // A newly committed session is a valid chat target before its runtime is
+  // connected. Allow the caller to keep the chat surface mounted while startup
+  // finishes instead of falling back to the workspace home because the session
+  // list has not been refreshed yet.
+  if (typeof hasPendingSessionNavigation === 'function' && hasPendingSessionNavigation(agent)) return true;
   return hasWorkspaceSessions(agent);
 }
 

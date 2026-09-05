@@ -90,7 +90,9 @@ function requestArchivedSourceRuntimeCleanup(agentId, sessionId, sourceRuntimeId
 
 async function navigateToSessionMutationTarget(agentId, result, sourceRuntimeId) {
   const targetSessionId = String(result?.targetSessionId || '').trim();
-  if (!agentId || !targetSessionId || (sourceRuntimeId && currentRuntimeAgentId !== sourceRuntimeId)) return false;
+  if (!agentId || !targetSessionId || (sourceRuntimeId && currentRuntimeAgentId !== sourceRuntimeId)) {
+    return false;
+  }
 
   const navigationEpoch = _navigationGuardEpoch;
   const targetAgent = await waitForTargetRuntimeSession(agentId, targetSessionId, 50, {
@@ -102,7 +104,9 @@ async function navigateToSessionMutationTarget(agentId, result, sourceRuntimeId)
 
   const connectedTarget = upsertConnectedAgent(targetAgent) || targetAgent;
   const targetRuntimeId = getRuntimeId(connectedTarget);
-  if (!targetRuntimeId) return false;
+  if (!targetRuntimeId) {
+    return false;
+  }
 
   setPreferredUnitMode('chat', connectedTarget);
   beginChatLoadingSession();

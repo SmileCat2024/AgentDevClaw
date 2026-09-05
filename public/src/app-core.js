@@ -709,6 +709,45 @@ let _chatLoadingSession = false;  // true while waiting for a just-opened sessio
 let _chatLoadingTimeout = null;   // safety timeout to clear _chatLoadingSession
 let _switchEpoch = 0;             // monotonically increasing; used to guard stale async work from rapid switches
 
+// A committed session can be the user's navigation target before its runtime
+// exists. Keep that intent separate from currentRuntimeAgentId so the tabless
+// workspace can show the chat loading surface without inventing a sidebar leaf.
+let _pendingSessionNavigation = null;
+
+function beginPendingSessionNavigation(agentId, sessionId = '', phase = 'committing') {
+  const normalizedAgentId = String(agentId || '').trim();
+  if (!normalizedAgentId) return null;
+  _pendingSessionNavigation = {
+    agentId: normalizedAgentId,
+    sessionId: String(sessionId || '').trim(),
+    phase: String(phase || 'committing'),
+    navigationEpoch: _navigationGuardEpoch,
+  };
+  return _pendingSessionNavigation;
+}
+
+function updatePendingSessionNavigation(sessionId, phase = 'starting-runtime') {
+  if (!_pendingSessionNavigation) return null;
+  _pendingSessionNavigation = {
+    ..._pendingSessionNavigation,
+    sessionId: String(sessionId || _pendingSessionNavigation.sessionId || '').trim(),
+    phase: String(phase || _pendingSessionNavigation.phase || 'committing'),
+  };
+  return _pendingSessionNavigation;
+}
+
+function clearPendingSessionNavigation() {
+  _pendingSessionNavigation = null;
+}
+
+function hasPendingSessionNavigation(agent = null) {
+  if (!_pendingSessionNavigation || _pendingSessionNavigation.navigationEpoch !== _navigationGuardEpoch) {
+    return false;
+  }
+  if (!agent) return true;
+  return String(agent.id || '').trim() === _pendingSessionNavigation.agentId;
+}
+
 // ── Navigation Guard ──────────────────────────────────────────────────────
 // Every user-initiated navigation (workspace switch, session switch, opening
 // a new session, etc.) bumps this epoch.  Async operations that will
@@ -720,6 +759,9 @@ let _navigationGuardEpoch = 0;
 
 function bumpNavigationGuard() {
   _navigationGuardEpoch++;
+  if (_pendingSessionNavigation) {
+    _pendingSessionNavigation = null;
+  }
 }
 let phSessionSortMode = 'updatedAt'; // 'updatedAt' | 'createdAt' — programming-helper session list sort preference
 let phSearchQuery = '';              // current search query for session list

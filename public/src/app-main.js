@@ -594,7 +594,13 @@ function requestSwitch(runtimeId, source) {
 }
 
 window.switchAgent = async (newAgentId) => {
-  // A-class (direct) calls cancel any pending deferred switch.
+  // A-class (direct) calls cancel any pending deferred switch. The pending
+  // session navigation ends with this runtime binding; its chat loading
+  // surface stays mounted until loadAgentData lands below, so an empty
+  // freshly-created session resolves straight into its welcome terminal
+  // state instead of dropping the spinner before the data fetch.
+  const hadPendingSessionNavigation = typeof hasPendingSessionNavigation === 'function'
+    && hasPendingSessionNavigation();
   bumpNavigationGuard();
   pendingSwitchTarget = null;
   const epoch = ++_switchEpoch;
@@ -762,6 +768,14 @@ window.switchAgent = async (newAgentId) => {
     // wrong agent via the loadAgents() initialization path.
     if (epoch === _switchEpoch) {
       loadAgents().catch((error) => console.error('Failed to refresh agents after switch:', error));
+    }
+    // The first completed data load is the terminal state for a
+    // pending-navigation switch even when the new session has zero messages:
+    // clear the chat loading surface here (not at switch entry) so the
+    // spinner covers the whole runtime-binding + data-fetch window.
+    if (hadPendingSessionNavigation && epoch === _switchEpoch) {
+      clearChatLoadingSession();
+      renderCurrentMainView();
     }
   } catch (e) {
     console.error('Failed to switch agent:', e);

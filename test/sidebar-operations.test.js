@@ -221,6 +221,44 @@ describe('sidebar operation state machine', () => {
     assert.deepEqual(Array.from(merged.sessions, (session) => session.id), ['new']);
   });
 
+  it('retains a committed upsert across lagging snapshots until the server echoes it', () => {
+    const ctx = loadSidebarOperations();
+    ctx.run(`allAgents = [{
+      id: 'programming-helper',
+      workspace_sessions: { revision: 4, activeSessionId: 'old', sessions: [{ id: 'old' }] }
+    }];
+    applySessionMutationDelta('programming-helper', {
+      revision: 5,
+      sessionDelta: { revision: 5, activeSessionId: 'new', upsert: [{ id: 'new', title: 'New' }] }
+    })`);
+
+    // Light snapshot / agent_detail that still lacks the committed session must
+    // not drop it from the merged list (placeholder vanishing then reappearing).
+    const lagging = ctx.run(`mergeWorkspaceSessionSnapshots(
+      allAgents[0].workspace_sessions,
+      { revision: 5, activeSessionId: 'old', sessions: [{ id: 'old' }] },
+      'programming-helper'
+    )`);
+    assert.deepEqual(Array.from(lagging.sessions, (session) => session.id), ['new', 'old']);
+
+    // Once the server echoes the id, fresh fields win and the entry leaves the
+    // pending registry (no duplicate retention on later merges).
+    const echoed = ctx.run(`mergeWorkspaceSessionSnapshots(
+      allAgents[0].workspace_sessions,
+      { revision: 5, activeSessionId: 'new', sessions: [{ id: 'old' }, { id: 'new', title: 'New (server)' }] },
+      'programming-helper'
+    )`);
+    assert.deepEqual(Array.from(echoed.sessions, (session) => session.id), ['old', 'new']);
+    assert.equal(echoed.sessions.find((session) => session.id === 'new').title, 'New (server)');
+
+    const settled = ctx.run(`mergeWorkspaceSessionSnapshots(
+      allAgents[0].workspace_sessions,
+      { revision: 6, activeSessionId: 'new', sessions: [{ id: 'old' }, { id: 'new', title: 'New (server)' }] },
+      'programming-helper'
+    )`);
+    assert.deepEqual(Array.from(settled.sessions, (session) => session.id), ['old', 'new']);
+  });
+
   it('keeps source-runtime observation out of session operation settlement', () => {
     const ctx = loadSidebarOperations();
     assert.equal(ctx.run("typeof settleSidebarSourceOperation"), 'undefined');
