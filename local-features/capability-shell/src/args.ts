@@ -39,14 +39,24 @@ export function checkArgs(
     if (!decl) continue; // 动词道已拦截，此处防御性跳过
 
     // 尾随声明 flag 剥离：不占位置参数个数（只在尾部识别；未声明的
-    // `--` 前缀参数不剥离，仍按位置参数校验）
+    // `--` 前缀参数不剥离，仍按位置参数校验）。声明以 `=` 结尾的 flag
+    // （如 `--browser=`）放行 `--browser=<值>` 等号赋值形态。
     const declaredFlags = decl.flags ?? [];
+    const valueFlags = declaredFlags.filter((f) => f.endsWith('='));
+    const plainFlags = declaredFlags.filter((f) => !f.endsWith('='));
     const positional = [...seg.args];
-    while (
-      positional.length > 0 &&
-      declaredFlags.includes(positional[positional.length - 1])
-    ) {
-      positional.pop();
+    while (positional.length > 0) {
+      const last = positional[positional.length - 1];
+      if (plainFlags.includes(last)) {
+        positional.pop();
+        continue;
+      }
+      const valued = valueFlags.find((f) => last.startsWith(f) && last.length > f.length);
+      if (valued) {
+        positional.pop();
+        continue;
+      }
+      break;
     }
 
     // 必填数 = required !== false 的前缀参数（可选参只允许尾随，此处按
@@ -101,6 +111,15 @@ export function validateParamValue(
     }
     if (escapesWorkspace(value)) {
       return `路径 “${constraint.name}” 含 “..”，逃逸 workspace 边界，拒绝。`;
+    }
+  }
+  if (constraint.kind === 'ref') {
+    // refs 形态：snapshot 输出的元素引用（e37 / f3e949 等）。只允许点击/
+    // 填写 snapshot 里出现过的 ref——这是防注入的核心约束（模型不能凭空
+    // 构造 CSS 选择器操作任意 DOM）。
+    if (!/^[a-z]+\d+(e\d+)?$/i.test(value)) {
+      return `参数 “${constraint.name}” 必须是 snapshot 输出里的元素 ref（如 e37、f3e949），` +
+        `拒绝 “${value}”。先运行 snapshot 或 find 获取 refs。`;
     }
   }
   if (constraint.enum && !constraint.enum.includes(value)) {

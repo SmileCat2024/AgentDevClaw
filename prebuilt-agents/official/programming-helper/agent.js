@@ -26,6 +26,7 @@ import { ContextGuardFeature } from '../../../local-features/dist/context-guard/
 import { GenerativeUISurfaceFeature } from '../../../local-features/dist/generative-ui/src/index.js';
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
 import { CapabilityShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
+import { PlaywrightShellFeature } from '../../../local-features/dist/capability-shell/src/index.js';
 import {
   readGlobalLayer,
   readAgentLayer,
@@ -180,6 +181,13 @@ export class ProgrammingHelperAgent extends BasicAgent {
     // 仅 main 身份挂载；CoderAgent 不挂（不自派工单，避免递归调度）。
     // runtimeIdentity 模式同 ClawDispatchFeature（serverOrigin 三级解析）。
     this.use(new CapabilityShellFeature({ serverOrigin: runtimeIdentity.serverOrigin }));
+
+    // playwright 领域 shell（ticket 036）：浏览器页面取证收编为受管线约束的
+    // feature 工具（screenshot / pdf / har 产物动词 + env 资产盘点）。
+    // 仅 main 身份挂载；后端 playwright 包与浏览器资产由 shell 管理（env 动词
+    // 报告状态），产物强制 workspace 内。CLI 资产目录默认
+    // ~/.agentdev/assets/playwright-shell/browsers（config.browsersPath 可覆盖）。
+    this.use(new PlaywrightShellFeature({ workdir: workspaceDir }));
   }
 
   async onInitiate(ctx) {

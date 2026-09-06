@@ -88,7 +88,7 @@ export interface CapabilityAdapterRef {
   argPrefix?: string[];
 }
 
-export type ShellParamKind = 'literal' | 'path';
+export type ShellParamKind = 'literal' | 'path' | 'ref';
 
 export interface ShellParamDecl {
   /** 参数名（报错文案用，如 'repo'） */

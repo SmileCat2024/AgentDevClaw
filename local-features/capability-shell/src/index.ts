@@ -79,3 +79,19 @@ export {
   CapabilityShellFeature,
 } from './coder-shell-feature.js';
 export type { CapabilityShellFeatureConfig } from './coder-shell-feature.js';
+
+// playwright 领域 shell（ticket 036）：动词表 + CLI adapter + feature 挂载
+export {
+  createPlaywrightAdapters,
+} from './playwright-shell.js';
+export type { PlaywrightAdaptersDeps, PlaywrightAdapterContext, BackendRunResult } from './playwright-shell.js';
+export {
+  PLAYWRIGHT_SHELL_NAME,
+  PLAYWRIGHT_SHELL_DESCRIPTION,
+  PLAYWRIGHT_ENV_FIX_GUIDANCE,
+  createPlaywrightShellPolicy,
+} from './playwright-policy.js';
+export {
+  PlaywrightShellFeature,
+} from './playwright-shell-feature.js';
+export type { PlaywrightShellFeatureConfig } from './playwright-shell-feature.js';
