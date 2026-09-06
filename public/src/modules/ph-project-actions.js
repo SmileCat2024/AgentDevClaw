@@ -378,14 +378,28 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Open-in-folder 按钮经事件委托接线（目录在 data-open-dir 属性上）。
+// 必须用捕获阶段：按钮嵌在下拉项内部，下拉项的内联 onclick 负责切换项目，
+// 只有捕获阶段先执行 stopPropagation，才能避免点"打开"时误触发项目切换。
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.ph-dropdown-open-folder');
+  if (!btn) return;
+  e.stopPropagation();
+  window.phOpenInExplorer(btn.getAttribute('data-open-dir') || '');
+}, true);
+
 window.phOpenInExplorer = async (dirPath) => {
   if (!dirPath) return;
   try {
-    await fetch('/protoclaw/ph_project/open_in_explorer', {
+    const res = await fetch('/protoclaw/ph_project/open_in_explorer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: dirPath }),
     });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      console.error('Open in explorer failed:', payload?.error || ('HTTP ' + res.status), dirPath);
+    }
   } catch (e) {
     console.error('Failed to open in explorer:', e);
   }
