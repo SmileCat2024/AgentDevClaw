@@ -56,6 +56,11 @@ export interface DispatchOptions {
   workdir?: string;
   /** 框架终止原因查询（timeout / user / null），透传给进程内 adapter（ticket 034） */
   termination?: () => 'timeout' | 'user' | null;
+  /**
+   * spawn 段透传的额外环境变量（ticket 036 扩展点：CLI 后端需经 env 注入
+   * 资产目录重定向等）。与 process.env 合并（本表优先）。
+   */
+  spawnEnv?: Record<string, string>;
 }
 
 /**
@@ -95,6 +100,7 @@ export async function dispatchPipeline(
           input: upstream,
           signal: options.signal,
           workdir: options.workdir,
+          env: options.spawnEnv,
         });
         if (!run.ok) {
           return {
@@ -137,7 +143,7 @@ export interface SpawnRunResult {
 export async function runCollectedSpawn(
   command: string,
   args: string[],
-  options: { input?: string | null; signal?: AbortSignal; workdir?: string } = {},
+  options: { input?: string | null; signal?: AbortSignal; workdir?: string; env?: Record<string, string> } = {},
 ): Promise<SpawnRunResult> {
   return new Promise<SpawnRunResult>((resolve) => {
     let stdout = '';
@@ -146,6 +152,7 @@ export async function runCollectedSpawn(
 
     const child = spawn(command, args, {
       cwd: options.workdir,
+      env: options.env ? { ...process.env, ...options.env } : undefined,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       // POSIX 下独立进程组，abort 时可整组 kill（shell-feature 同款语义）
@@ -162,18 +169,26 @@ export async function runCollectedSpawn(
       } catch { /* 已退出 */ }
     };
 
-    const timer = setTimeout(() => {
-      // 兜底：kill 后等 close 事件收尾（正常 abort 路径不走这里）
-      if (!settled) {
-        settled = true;
-        cleanup();
-        resolve({ ok: false, stdout, stderr, exitCode: null, terminated: true });
-      }
-    }, SPAWN_KILL_FALLBACK_MS);
-    timer.unref?.();
+    // 兜底计时器只在「已 kill、还需等 close 释放句柄」的场景启动
+    // （ticket 036 修复：原实现自 spawn 起无条件计时，1s 后把任何慢命令
+    // 误判为 terminated 且不 kill——coder 段全是快命令未暴露，浏览器渲染
+    // 类秒级命令直接触发）。正常路径等真实 close；abort 路径 kill 后
+    // 立即 resolve（中断即结果），无需计时。
+    let killFallbackTimer: NodeJS.Timeout | null = null;
+    const armKillFallback = () => {
+      if (killFallbackTimer) return;
+      killFallbackTimer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          resolve({ ok: false, stdout, stderr, exitCode: null, terminated: true });
+        }
+      }, SPAWN_KILL_FALLBACK_MS);
+      killFallbackTimer.unref?.();
+    };
 
     const cleanup = () => {
-      clearTimeout(timer);
+      if (killFallbackTimer) clearTimeout(killFallbackTimer);
       options.signal?.removeEventListener('abort', onAbort);
     };
 
@@ -189,12 +204,21 @@ export async function runCollectedSpawn(
     if (options.signal) {
       if (options.signal.aborted) {
         // 执行前已中断：kill 刚 spawn 的进程，等 close 释放句柄后以终止态收尾
-        // （spawn 已发生，必须 kill 防止 detached 子进程泄漏）
-        settled = true;
+        // （spawn 已发生，必须 kill 防止 detached 子进程泄漏）。本分支自管
+        // resolve：close 或兜底计时二者先到者收尾（不与后续 settled 检查竞争）。
+        let settledHere = false;
+        const settleTerminated = () => {
+          if (settledHere) return;
+          settledHere = true;
+          cleanup();
+          resolve({ ok: true, stdout: '', stderr: '', exitCode: null, terminated: true });
+        };
         killChild();
+        const timer = setTimeout(settleTerminated, SPAWN_KILL_FALLBACK_MS);
+        timer.unref?.();
         child.once('close', () => {
           clearTimeout(timer);
-          resolve({ ok: true, stdout: '', stderr: '', exitCode: null, terminated: true });
+          settleTerminated();
         });
         return;
       }

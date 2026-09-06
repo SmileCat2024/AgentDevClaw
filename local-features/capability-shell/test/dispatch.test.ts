@@ -152,6 +152,18 @@ describe('capability-shell runCollectedSpawn', () => {
     assert.equal(r.stdout, '');
   });
 
+  it('慢命令（>SPAWN_KILL_FALLBACK_MS）无 abort：正常等待 close，不被兜底计时误杀（ticket 036）', async () => {
+    const r = await runCollectedSpawn(
+      process.execPath,
+      ['-e', 'setTimeout(()=>console.log("done"), 1500)'],
+      {},
+    );
+    assert.equal(r.ok, true);
+    assert.equal(r.terminated, undefined);
+    assert.equal(r.stdout, 'done\n');
+    assert.equal(r.exitCode, 0);
+  });
+
   it('执行中 abort → kill 并收集部分输出（ADR-0005 中断即结果）', async () => {
     const ac = new AbortController();
     // 子进程：先输出一行，然后每 50ms 持续输出
