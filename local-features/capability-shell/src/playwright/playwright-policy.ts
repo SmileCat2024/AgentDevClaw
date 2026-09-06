@@ -5,15 +5,18 @@
  *
  * 动词表 v2 = one-shot 产物动词（screenshot / pdf / har / env，不变）
  * + 会话动词（open / goto / snapshot / find / fill / press / click /
- * tab-list / tab-select / close）：会话动词转发官方会话型 CLI
- * （@playwright/cli）的 daemon 子命令，跨调用共享同一页面，refs 机制
- * （click/fill 只接受 snapshot 输出里出现过的元素引用）是防注入核心。
+ * tab-list / tab-select / close）+ profile-list（登录档案清单）：
+ * 会话动词转发官方会话型 CLI（@playwright/cli）的 daemon 子命令，跨调用
+ * 共享同一页面，refs 机制（click/fill 只接受 snapshot 输出里出现过的元素
+ * 引用）是防注入核心。
  *
- * 双模式：open 默认 headless；--headed 需要显示环境（宿主桌面 DISPLAY
- * 或外部 xvfb-run 包裹），本 shell 不自动拉起 X server。
- * 动词表从领域需求反推，不等于后端 CLI 子命令面：任意 JS 执行（eval /
- * run-code）、用例录制（codegen）、storage/cookie 操作、GUI 查看器等
- * 不入表（unknownVerbHints 给结构化指引）。
+ * 双模式：open 默认 headless；--headed 在 Windows/macOS 使用系统桌面，
+ * Linux 需要 DISPLAY/WAYLAND_DISPLAY 或外部 xvfb-run，本 shell 不自动拉起 X server。
+ * 登录态留存：open --profile=<名称> 使用持久化档案目录（用户数据目录语义，
+ * 登录态跨会话有效），profile 名称走白名单校验；state/cookie 细粒度操作
+ * 仍不入表。动词表从领域需求反推，不等于后端 CLI 子命令面：任意 JS 执行
+ * （eval / run-code）、用例录制（codegen）、GUI 查看器等不入表
+ * （unknownVerbHints 给结构化指引）。
  *
  * adapter 后端 v2 = 双后端：one-shot CLI（playwright npm 包，产物动词）
  * + 会话 daemon（@playwright/cli，会话动词）。CLI 是实现细节，报文不出现
@@ -33,6 +36,8 @@ export const PLAYWRIGHT_SHELL_DESCRIPTION = [
   '(1) 一次性产物取证：screenshot / pdf / har 把 URL 渲染成可留存文件（渲染即退出，浏览器不驻留）；',
   '(2) 受控会话交互：open / goto / snapshot / find / fill / press / click / tab-list / tab-select / close，',
   '跨调用共享同一页面会话（多步导航、输入、点击、读取页面内容），close 显式收尾。',
+  '持久化登录档案：open --profile=<名称> 让登录态与站点数据跨会话留存',
+  '（首次可加 --headed 人工登录，之后 headless 复用）；profile-list 列出已有档案。',
   '会话动词里的 click/fill 只接受 snapshot/find 输出里的元素 ref（如 e37、f3e949）——',
   '不能凭空构造选择器；URL 参数必须整体加引号；含查询分隔符 & 的 URL 不支持（确定拒绝）。',
   '产物动词（v1）强制产物落在 workspace 内，成功报文 = 路径 + 字节数；会话动词直接回页面状态文本。',
@@ -91,12 +96,12 @@ export function createPlaywrightShellPolicy(): CapabilityShellPolicy {
       },
       // ===== v2 会话动词（转发官方会话型 CLI daemon；refs 防注入） =====
       'open': {
-        description: '启动受控页面会话并导航到 URL（默认 headless；--headed 需要显示环境：宿主桌面或外部 xvfb，本 shell 不自动拉起 X server）。已有会话时先用 close 收尾再开',
+        description: '启动受控页面会话并导航到 URL（默认 headless；--headed 需要显示环境：宿主桌面或外部 xvfb，本 shell 不自动拉起 X server）。--profile=<名称> 使用持久化登录档案：首次自动创建，之后登录态/站点数据跨会话留存。已有会话时先用 close 收尾再开',
         params: [
           { name: 'url', kind: 'literal' },
         ],
-        flags: ['--headed', '--browser='],
-        usage: "open '<url>' [--headed] [--browser=chrome|firefox|webkit|msedge]",
+        flags: ['--headed', '--browser=', '--profile='],
+        usage: "open '<url>' [--headed] [--browser=chrome|firefox|webkit|msedge] [--profile=<名称>]",
         adapter: { key: 'playwright:open' },
       },
       'goto': {
@@ -161,16 +166,22 @@ export function createPlaywrightShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'playwright:tab-select' },
       },
       'close': {
-        description: '结束当前会话并回收浏览器进程（多步会话用完必须收尾；未开会话时幂等）',
+        description: '结束当前会话并回收浏览器进程（多步会话用完必须收尾；未开会话时幂等）。--profile 档案目录不受 close 影响，登录态留存',
         params: [],
         usage: 'close',
         adapter: { key: 'playwright:close' },
+      },
+      'profile-list': {
+        description: '列出已有的持久化登录档案及各自用过的站点（→ 后为站点域名）。任务涉及登录站点时先跑本动词，按站点自动匹配档案',
+        params: [],
+        usage: 'profile-list',
+        adapter: { key: 'playwright:profile-list' },
       },
     },
     // 双模式并行性：产物动词各自独立起浏览器（无共享态），会话动词共享
     // daemon 会话——都必须串行。未声明 parallelizable，串行由基座默认承担。
     // 显式排除动词的结构化指引（v2：open/goto/click/fill/snapshot/find/press/
-    // tab-*/close 已入表；其余官方会话命令面维持排除，模型可自我纠正）。
+    // tab-*/close/profile-list 已入表；其余官方会话命令面维持排除，模型可自我纠正）。
     unknownVerbHints: {
       'hover': 'hover 是会话型交互命令，不入本 shell 动词表（v2 会话动词不含 hover）；需要悬停触发的场景请人工在终端用官方会话 CLI。',
       'type': 'type 逐键输入不入本 shell；输入文本用 fill（配 press Enter 提交）。',
@@ -178,8 +189,8 @@ export function createPlaywrightShellPolicy(): CapabilityShellPolicy {
       'select': 'select 下拉选择不入本 shell 动词表；本 shell 会话交互面为 snapshot/find/fill/press/click。',
       'eval': 'eval 允许执行任意页面 JS，被本 shell 显式排除（注入面不可控）；读页面内容用 snapshot/find。',
       'codegen': 'codegen 是交互式用例录制器（打开录制窗），不入本 shell；需人工在终端执行。',
-      'state-save': 'state-save 保存登录态/存储快照，不入本 shell（会话无凭据留存）。需要带登录态取证时人工在终端操作官方 CLI。',
-      'state-load': 'state-load 加载登录态，不入本 shell（会话无凭据留存）。',
+      'state-save': 'state-save 保存存储快照，不入本 shell；登录态留存用 open --profile=<名称>（持久化档案，跨会话有效），profile-list 可查已有档案。',
+      'state-load': 'state-load 加载存储快照，不入本 shell；登录态留存用 open --profile=<名称>（持久化档案，跨会话有效）。',
       'route': 'route 是请求 mock/拦截，不入本 shell 动词表（取证场景不做请求改写）。',
       'console': 'console 是会话 DevTools 输出查看，不入本 shell；页面内容观察用 snapshot/find。',
       'requests': 'requests 列网络请求，不入本 shell 动词表；网络活动留存用 har 动词（产物文件）。',
@@ -190,7 +201,7 @@ export function createPlaywrightShellPolicy(): CapabilityShellPolicy {
       'delete-data': 'delete-data 清理会话用户数据，不入本 shell；会话数据由 close 收尾回收。',
       'kill-all': 'kill-all 是内部兜底命令，不对模型暴露；会话收尾用 close。',
       'close-all': 'close-all 批量收尾由内部生命周期管理承担，动词面只提供 close（单会话收尾）。',
-      'list': 'list 是会话清单查询（内部管理用），动词面不透出；会话状态随动词报文给出。',
+      'list': 'list 是会话清单查询（内部管理用），动词面不透出；要查持久化登录档案用 profile-list。',
       'install': 'install 不入动词表：浏览器资产下载安装属装配期/人工动作。先运行 env 查看资产状态，'
         + '缺失时按报文与技能 playwright-shell「故障处置」表由人工安装，完成后再调用产物动词。',
       'install-browser': 'install-browser 不入动词表：浏览器资产下载属装配期/人工动作（见 install 指引）。',

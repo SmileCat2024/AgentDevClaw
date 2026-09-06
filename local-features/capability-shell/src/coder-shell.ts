@@ -34,7 +34,7 @@
  */
 
 import { stat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, normalize } from 'node:path';
 
 /** 线程/server 连续不可达上限（bin/claw.mjs watchThread 同款语义）。 */
 const MAX_CONSECUTIVE_FETCH_ERRORS = 3;
@@ -366,14 +366,19 @@ export function createThreadsAdapter(deps: {
             + ` 用法：new-session <agentId> <目标工作目录> [标题]`,
           );
         }
-        if (!isAbsolute(directory)) {
+        const normalizedDirectory = normalize(directory);
+        if (!isAbsolute(normalizedDirectory)) {
           throw new Error(`new-session 拒绝：目录必须是绝对路径: ${directory}`);
         }
-        const directoryStat = await stat(directory).catch(() => null);
+        const directoryStat = await stat(normalizedDirectory).catch(() => null);
         if (!directoryStat?.isDirectory()) {
           throw new Error(`new-session 拒绝：目标工作目录不存在或不是目录: ${directory}`);
         }
-        const body: Record<string, unknown> = { agentId, sessionType: 'coder', openDirectory: directory };
+        const body: Record<string, unknown> = {
+          agentId,
+          sessionType: 'coder',
+          openDirectory: normalizedDirectory,
+        };
         if (title) body.title = title;
         const payload = await clawFetch('/protoclaw/prebuilt_sessions', {
           method: 'POST',

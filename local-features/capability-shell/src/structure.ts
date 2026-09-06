@@ -129,8 +129,57 @@ export function containsGlobOutsideQuotes(cmd: string): boolean {
  * shell-quote 把 `|` 解析为 { op: '|' }；重定向 `>` `>>` `<` 同为 op。
  * 每段首词为动词，其余为参数；段间数据只经管道传递。
  */
+/**
+ * shell-quote treats backslashes as escape characters, which is correct for
+ * shell syntax but loses the separators in Windows drive paths (for example
+ * `C:\\Users\\name`). Normalize only drive-qualified absolute paths before
+ * parsing so a literal Windows path remains a literal argument. Forward
+ * slashes are accepted by Windows filesystem APIs and avoid changing any
+ * other shell escaping semantics.
+ */
+export function normalizeWindowsAbsolutePaths(command: string): string {
+  let result = '';
+  let i = 0;
+  let quote: string | null = null;
+  const isBoundary = (value: string | undefined) =>
+    value === undefined || /\s/.test(value) || '|;&<>'.includes(value) || value === '\"' || value === "'";
+
+  while (i < command.length) {
+    const ch = command[i];
+    if ((ch === '\"' || ch === "'") && !quote) {
+      quote = ch;
+      result += ch;
+      i += 1;
+      continue;
+    }
+    if (quote && ch === quote) {
+      quote = null;
+      result += ch;
+      i += 1;
+      continue;
+    }
+
+    if (/[A-Za-z]/.test(ch) && command[i + 1] === ':' && command[i + 2] === '\\'
+      && isBoundary(command[i - 1])) {
+      result += `${ch}:/`;
+      i += 3;
+      while (i < command.length) {
+        const next = command[i];
+        if (quote ? next === quote : /\s/.test(next) || '|;&<>'.includes(next)) break;
+        result += next === '\\' ? '/' : next;
+        i += 1;
+      }
+      continue;
+    }
+
+    result += ch;
+    i += 1;
+  }
+  return result;
+}
+
 export function checkStructure(command: string): StructureCheckResult {
-  const trimmed = command.trim();
+  const trimmed = normalizeWindowsAbsolutePaths(command.trim());
   if (!trimmed) {
     return { ok: false, code: 'structure_rejected', message: '命令为空。' + REJECTED_FEATURES_TEXT };
   }

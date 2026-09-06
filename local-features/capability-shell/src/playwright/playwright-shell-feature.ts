@@ -17,6 +17,11 @@
  *   缺省 ~/.agentdev/assets/playwright-shell/browsers），安装属装配期人工动作；
  * - env 动词报告存在性/版本/匹配，缺失时给人工修复指引（不裸抛）。
  * - 会话 daemon 跨调用存活：close 动词显式收尾；onDestroy 兜底 kill-all。
+ * - headed 模式按宿主平台判断显示环境：Windows/macOS 不依赖 DISPLAY，Linux
+ *   检查 DISPLAY/WAYLAND_DISPLAY。
+ * - 登录态留存：open --profile=<名称> 使用持久化档案目录（缺省
+ *   ~/.agentdev/AgentDevClaw/playwright-shell/profiles），首次 --headed 人工
+ *   登录后，后续会话（含 headless）复用登录态；close 不清除档案。
  */
 
 import { spawn } from 'child_process';
@@ -40,6 +45,8 @@ export interface PlaywrightShellFeatureConfig {
   sessionCliEntry?: string;
   /** 浏览器资产目录（PLAYWRIGHT_BROWSERS_PATH 注入值）；缺省 ~/.agentdev/assets/playwright-shell/browsers */
   browsersPath?: string;
+  /** 持久化登录档案根目录；缺省 ~/.agentdev/AgentDevClaw/playwright-shell/profiles */
+  profilesPath?: string;
   /** spawn 工作目录与产物路径解析基准；缺省 process.cwd() */
   workdir?: string;
   /** 覆盖工具默认超时（毫秒；超时唯一闸门 = Tool.timeout 契约） */
@@ -88,6 +95,7 @@ export class PlaywrightShellFeature implements AgentFeature {
       cliEntry: this.config.cliEntry,
       sessionCliEntry: this.config.sessionCliEntry,
       browsersPath: this.config.browsersPath,
+      profilesPath: this.config.profilesPath,
       workdir: this.config.workdir,
     });
     return [

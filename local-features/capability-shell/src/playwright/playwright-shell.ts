@@ -24,8 +24,8 @@
  * 原因 + 摘录 stderr（分类改写，不透传裸错误；资产缺失附修复指引）。
  */
 
-import { mkdir, stat, realpath } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { mkdir, readdir, stat, realpath } from 'node:fs/promises';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -60,6 +60,8 @@ export interface PlaywrightAdaptersDeps {
   packageRoot?: string;
   /** 浏览器资产目录（注入 PLAYWRIGHT_BROWSERS_PATH）；缺省 ~/.agentdev/assets/playwright-shell/browsers */
   browsersPath?: string;
+  /** 持久化登录档案根目录；缺省 ~/.agentdev/AgentDevClaw/playwright-shell/profiles */
+  profilesPath?: string;
   /** 产物相对路径解析基准 + spawn cwd；缺省 process.cwd() */
   workdir?: string;
   /** 注入 spawn 实现（测试替身）；缺省用基座 runCollectedSpawn */
@@ -72,6 +74,26 @@ const REQUIRED_BROWSER = 'chromium-headless-shell';
 const MAX_BROWSER_LINES = 8;
 /** 失败报文里 stderr 摘录上限（字符）。 */
 const MAX_STDERR_CHARS = 500;
+/** 每个档案记录的站点域名上限（防无限增长）。 */
+const MAX_PROFILE_SITES = 20;
+/** profile-list 报文里每个档案展示的站点数上限。 */
+const MAX_PROFILE_SITES_SHOW = 5;
+/** 会话级 cookie 翻转持久化时写入的过期时间（从现在起算）。 */
+const SALVAGE_EXPIRES_MILLISECONDS = 180 * 24 * 60 * 60 * 1000;
+/** Chrome 时间纪元偏移（1601-01-01 → Unix 纪元，微秒），cookie 库 expires_utc 用。 */
+const CHROME_EPOCH_OFFSET_MICROSECONDS = 11644473600000000n;
+
+/**
+ * node:sqlite 最小面。@types/node 钉在 v20（无 sqlite 声明），运行时
+ * Node ≥22.5 才有该模块——动态 import 探测，缺失时保活降级为提示。
+ */
+interface PwsCookieDb {
+  prepare(sql: string): {
+    run(...params: unknown[]): { changes: number | bigint };
+    all(): unknown[];
+  };
+  close(): void;
+}
 
 /** adapter 执行上下文（基座分派层注入）。 */
 export interface PlaywrightAdapterContext {
@@ -100,11 +122,113 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
       return { ok: run.ok, stdout: run.stdout, stderr: run.stderr, exitCode: run.exitCode, terminated: run.terminated };
     });
 
+  // 单会话模型：open --profile 记住当前档案，goto 顺势补充站点记录，close
+  // 清空。daemon 会话异常死亡时下次 open 会覆盖，无需额外清理。
+  let activeProfileName: string | null = null;
+
   // ----------------------------------------------------------- 路径与环境
 
   function browsersPath(): string {
     const configured = deps.browsersPath ?? join(homedir(), '.agentdev', 'assets', 'playwright-shell', 'browsers');
     return expandDir(configured);
+  }
+
+  /** 持久化登录档案根目录（open --profile 的名称解析到这里；产品数据与 prebuilt-sessions 同层）。 */
+  function profilesRoot(): string {
+    const configured = deps.profilesPath ?? join(homedir(), '.agentdev', 'AgentDevClaw', 'playwright-shell', 'profiles');
+    return expandDir(configured);
+  }
+
+  /**
+   * profile 名称白名单：字母/数字开头，仅含字母数字下划线连字符。
+   * 名称会拼进档案目录路径，必须杜绝分隔符与 `..` 段（防路径穿越）。
+   */
+  function validateProfileName(name: string): boolean {
+    return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name);
+  }
+
+  /** 档案关联站点记录文件（放档案目录内，随档案走；Chromium 忽略未知文件）。 */
+  function profileSitesFile(profileDir: string): string {
+    return join(profileDir, 'agentdev-sites.json');
+  }
+
+  /** 读取档案关联站点（缺失/损坏按空处理）。 */
+  function readProfileSites(profileDir: string): string[] {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(profileSitesFile(profileDir), 'utf-8'));
+      return Array.isArray(parsed) ? parsed.filter((s): s is string => typeof s === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 记录档案使用过的站点域名（最近在前，去重，限量）。profile-list 据此
+   * 展示"档案 → 站点"，模型可自动匹配任务站点与档案。记录失败不影响主流程。
+   */
+  async function recordProfileSite(name: string, rawUrl: string): Promise<void> {
+    let host: string;
+    try {
+      host = new URL(rawUrl).hostname;
+    } catch {
+      return;
+    }
+    if (!host) return;
+    const sites = [host, ...readProfileSites(join(profilesRoot(), name)).filter((s) => s !== host)]
+      .slice(0, MAX_PROFILE_SITES);
+    try {
+      writeFileSync(profileSitesFile(join(profilesRoot(), name)), JSON.stringify(sites, null, 2));
+    } catch { /* 提示数据，写失败不阻塞导航 */ }
+  }
+
+  /** 档案 cookie 库的候选路径（新版在 Network/ 下，旧版直接在 Default/ 下）。 */
+  function cookieDbCandidates(profileDir: string): string[] {
+    return [
+      join(profileDir, 'Default', 'Network', 'Cookies'),
+      join(profileDir, 'Default', 'Cookies'),
+    ];
+  }
+
+  /**
+   * 会话级 cookie 保活：把档案 cookie 库中 is_persistent=0 的行翻转为持久化。
+   *
+   * 大量站点的登录票据是会话级 cookie（is_persistent=0，如阿里云 aliyunid
+   * 票据族），Chromium 启动时会清掉这类行；实测 Preferences 的
+   * restore_on_startup=1 在后端 CLI 的启动模式下不还原。因此在每次 open
+   * 该档案、启动浏览器前做翻转——只改标志位与过期时间，cookie 值保持
+   * Chromium 的 DPAPI 加密不动；浏览器与服务端对翻转后的票据照常接受
+   * （阿里云真实登录实测）。必须在 spawn 前执行（浏览器运行期间持库锁）。
+   *
+   * 失败容忍：库不存在（新档案）跳过；被占用/损坏/缺 node:sqlite 时返回
+   * error 由 open 报文附警告——只影响会话级登录态跨重启，不阻塞打开。
+   */
+  async function salvageSessionCookies(profileDir: string): Promise<{ flipped: number } | { error: string }> {
+    const sqliteSpec = 'node:sqlite';
+    const sqlite = (await import(sqliteSpec).catch(() => null)) as
+      | { DatabaseSync: new (path: string) => PwsCookieDb }
+      | null;
+    if (!sqlite) return { error: '运行环境缺少 node:sqlite（需 Node 22.5+）' };
+    const dbPath = cookieDbCandidates(profileDir).find((p) => existsSync(p));
+    if (!dbPath) return { flipped: 0 }; // 新档案尚无 cookie 库，无需保活
+    let db: PwsCookieDb;
+    try {
+      db = new sqlite.DatabaseSync(dbPath);
+    } catch (reason) {
+      return { error: `cookie 库不可打开（可能被占用或损坏）：${reason instanceof Error ? reason.message : String(reason)}` };
+    }
+    try {
+      const columns = db.prepare("SELECT name FROM pragma_table_info('cookies')").all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === 'is_persistent')) {
+        return { error: 'cookie 库 schema 未知（缺少 is_persistent 列）' };
+      }
+      const expiresUtc = (BigInt(Date.now() + SALVAGE_EXPIRES_MILLISECONDS)) * 1000n + CHROME_EPOCH_OFFSET_MICROSECONDS;
+      const result = db.prepare('UPDATE cookies SET is_persistent = 1, expires_utc = ? WHERE is_persistent = 0').run(expiresUtc);
+      return { flipped: Number(result.changes) };
+    } catch (reason) {
+      return { error: `cookie 库写入失败：${reason instanceof Error ? reason.message : String(reason)}` };
+    } finally {
+      db.close();
+    }
   }
 
   function resolveCliEntry(): string | null {
@@ -178,6 +302,7 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
 
     const dir = browsersPath();
     lines.push(`browsers dir: ${dir}`);
+    lines.push(`profiles dir: ${profilesRoot()}`);
     const hostEnv = process.env.PLAYWRIGHT_BROWSERS_PATH;
     if (hostEnv && hostEnv !== dir) {
       lines.push(`host env: PLAYWRIGHT_BROWSERS_PATH=${hostEnv}（本 shell 不沿用宿主值，spawn 时注入自管目录）`);
@@ -212,12 +337,27 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
 
   // ------------------------------------------------------------ 产物动词共用
 
-  /** 剥离尾部声明 flag（参数道已校验白名单，adapter 按声明自行剥离）。 */
+  /**
+   * 剥离尾部声明 flag（参数道已校验白名单，adapter 按声明自行剥离）。
+   * 带 `=` 后缀的声明是赋值形态 flag（如 `--browser=`、`--profile=`），
+   * 按「前缀 + 非空值」匹配——与参数道 args.ts 的剥离语义一致，
+   * 保证带值 flag 真正转发后端而非混入位置参数被静默丢弃。
+   */
   function stripTailFlags(args: string[], flags: string[]): { positional: string[]; tailFlags: string[] } {
     const positional = [...args];
     const tailFlags: string[] = [];
-    while (positional.length > 0 && flags.includes(positional[positional.length - 1])) {
-      tailFlags.unshift(positional.pop() as string);
+    while (positional.length > 0) {
+      const last = positional[positional.length - 1];
+      if (flags.includes(last)) {
+        tailFlags.unshift(positional.pop() as string);
+        continue;
+      }
+      const valued = flags.find((f) => f.endsWith('=') && last.startsWith(f) && last.length > f.length);
+      if (valued) {
+        tailFlags.unshift(positional.pop() as string);
+        continue;
+      }
+      break;
     }
     return { positional, tailFlags };
   }
@@ -418,6 +558,10 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
 
   /** 会话动词转发：spawn 官方 CLI 子命令，输出直接回模型（### Page / ### Snapshot 结构化文本）。 */
   async function forwardSessionVerb(verb: string, args: string[], context?: PlaywrightAdapterContext): Promise<string> {
+    if (verb === 'close') activeProfileName = null;
+    if (verb === 'goto' && !validateUrl(args[0])) {
+      throw new Error(failureReport('goto', invalidUrlReason(args[0] ?? ''), ''));
+    }
     const entry = resolveSessionCliEntry();
     if (!entry) {
       throw new Error(
@@ -441,26 +585,62 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
       }
       throw new Error(`failed ${verb}\n${classifySessionFailure(run.stderr, run.stdout)}`);
     }
+    if (verb === 'goto' && activeProfileName) await recordProfileSite(activeProfileName, args[0]);
     return output || `${verb} ok`;
   }
 
+  function hasHeadedDisplay(): boolean {
+    // Windows/macOS 的桌面浏览器不使用 Linux 的 DISPLAY 约定。
+    return process.platform === 'win32'
+      || process.platform === 'darwin'
+      || Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+  }
+
   async function openVerb(args: string[], context?: PlaywrightAdapterContext): Promise<string> {
-    // open 的 flags（--headed / --browser=chrome）已在参数道剥离校验，
-    // 透传给官方 CLI；URL 同产物动词的 scheme 校验。
-    const { positional, tailFlags } = stripTailFlags(args, ['--headed', '--browser=']);
+    // open 的 flags（--headed / --browser=chrome / --profile=name）已在参数道
+    // 剥离校验，透传给官方 CLI；URL 同产物动词的 scheme 校验。
+    const { positional, tailFlags } = stripTailFlags(args, ['--headed', '--browser=', '--profile=']);
     const [url] = positional;
     if (!validateUrl(url)) {
       throw new Error(failureReport('open', invalidUrlReason(url), ''));
     }
-    if (tailFlags.includes('--headed') && !process.env.DISPLAY) {
+    if (tailFlags.includes('--headed') && !hasHeadedDisplay()) {
       return [
         'open 失败',
-        'headed 模式需要显示环境：当前进程 DISPLAY 未设置。',
-        '两条路径：(1) 宿主有桌面环境时在带 DISPLAY 的环境运行 agent；',
-        '(2) 无桌面服务器由人工用 xvfb-run 包裹（虚拟显示，窗口无人观看，仅用于兼容站点检测或人工接管）。',
+        'headed 模式需要显示环境：当前进程没有可用的桌面显示。',
+        'Windows/macOS 桌面会自动使用系统显示；Linux 请在带 DISPLAY 或 WAYLAND_DISPLAY 的环境运行 agent；',
+        '无桌面 Linux 服务器可由人工用 xvfb-run 包裹（虚拟显示，窗口无人观看，仅用于兼容站点检测或人工接管）。',
         'headless（默认）不受影响，绝大多数取证与会话任务无需 --headed。',
       ].join('\n');
     }
+    // --profile=<名称>：持久化登录档案。名称白名单校验后解析到统一档案根
+    // 目录（缺目录即创建），以绝对路径转发后端——登录态与站点数据跨会话
+    // 留存（Chromium 用户数据目录语义）。open 前先做会话级 cookie 保活
+    // （大量站点登录票据是会话级 cookie，不翻转则重启即丢登录）。
+    let profileFlag: string | null = null;
+    let profileName: string | null = null;
+    const openWarnings: string[] = [];
+    const profileArg = tailFlags.find((f) => f.startsWith('--profile='));
+    if (profileArg !== undefined) {
+      const name = profileArg.slice('--profile='.length);
+      if (!validateProfileName(name)) {
+        throw new Error(failureReport(
+          'open',
+          `profile 名称不合法：“${name.slice(0, 40) || '(空)'}”。`
+          + '只允许字母或数字开头，随后是字母/数字/下划线/连字符，总长 1-64（名称即档案目录名）。',
+          '',
+        ));
+      }
+      const profileDir = join(profilesRoot(), name);
+      await mkdir(profileDir, { recursive: true });
+      const salvage = await salvageSessionCookies(profileDir);
+      if ('error' in salvage) {
+        openWarnings.push(`warn: 会话级 cookie 保活跳过（${salvage.error}）；依赖会话级 cookie 的登录态跨重启可能失效。`);
+      }
+      profileName = name;
+      profileFlag = `--profile=${profileDir}`;
+    }
+    const passFlags = tailFlags.filter((f) => !f.startsWith('--profile='));
     const entry = resolveSessionCliEntry();
     if (!entry) {
       throw new Error(
@@ -468,14 +648,48 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
         '由人工在运行环境安装后重试（步骤见技能 playwright-shell「故障处置」）。',
       );
     }
-    const run = await spawnImpl(process.execPath, [entry, 'open', url, ...tailFlags], {
+    const argv = [entry, 'open', url, ...passFlags];
+    if (profileFlag) argv.push(profileFlag);
+    const run = await spawnImpl(process.execPath, argv, {
       signal: context?.signal,
       workdir,
       env: backendEnv(),
     });
     if (run.terminated) return terminatedReport('open', run);
     if (!run.ok) throw new Error(failureReport('open', classifySessionFailure(run.stderr), run.stderr));
-    return run.stdout.trim();
+    if (profileName) {
+      activeProfileName = profileName;
+      await recordProfileSite(profileName, url);
+    }
+    return [run.stdout.trim(), ...openWarnings].filter(Boolean).join('\n');
+  }
+
+  /** profile-list：列出档案根目录下已创建的持久化登录档案（只读，不 spawn 后端）。 */
+  async function profileListVerb(): Promise<string> {
+    const root = profilesRoot();
+    let names: string[] = [];
+    try {
+      names = (await readdir(root, { withFileTypes: true }))
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      // 根目录不存在 = 还没有任何档案，走空态报文
+    }
+    const lines = [`profile-list ok`, `profiles dir: ${root}`];
+    if (names.length === 0) {
+      lines.push('profiles: (空)');
+      lines.push(`用法：open '<url>' --profile=<名称> 创建并使用持久化登录档案（首次可加 --headed 人工登录）`);
+    } else {
+      lines.push(`profiles (${names.length})（→ 后为该档案用过的站点，可据此匹配任务站点）:`);
+      for (const name of names) {
+        const sites = readProfileSites(join(root, name));
+        lines.push(sites.length > 0
+          ? `  ${name} → ${sites.slice(0, MAX_PROFILE_SITES_SHOW).join(', ')}`
+          : `  ${name}`);
+      }
+    }
+    return lines.join('\n');
   }
 
   return {
@@ -485,6 +699,7 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
     'playwright:har': (args, context) => harVerb(args, context),
     // 会话动词 v2：转发 @playwright/cli daemon 子命令（官方自动管理 daemon 生命周期）
     'playwright:open': (args, context) => openVerb(args, context),
+    'playwright:profile-list': () => profileListVerb(),
     'playwright:goto': (args, context) => forwardSessionVerb('goto', args, context),
     'playwright:snapshot': (args, context) => forwardSessionVerb('snapshot', args, context),
     'playwright:find': (args, context) => forwardSessionVerb('find', args, context),

@@ -14,9 +14,9 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, statSync, rmSync, symlinkSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, rmSync, symlinkSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { checkArgs } from '../src/args.js';
@@ -106,15 +106,15 @@ async function run(command: string, opts: { adapters?: AdapterMap; signal?: Abor
 // ---------------------------------------------------------------- 动词表
 
 describe('playwright_shell 动词表（ticket 036）', () => {
-  it('v2 动词表 = 4 产物动词 + 10 会话动词', () => {
+  it('动词表 = 4 产物动词 + 10 会话动词 + profile-list', () => {
     assert.deepEqual(Object.keys(POLICY.verbs).sort(), [
       'click', 'close', 'env', 'fill', 'find', 'goto', 'har',
-      'open', 'pdf', 'press', 'screenshot', 'snapshot', 'tab-list', 'tab-select',
+      'open', 'pdf', 'press', 'profile-list', 'screenshot', 'snapshot', 'tab-list', 'tab-select',
     ]);
   });
 
-  it('v2 会话动词：open 声明 --headed/--browser= 双模式 flags；click/fill 参数为 ref 形态', () => {
-    assert.deepEqual(POLICY.verbs['open'].flags, ['--headed', '--browser=']);
+  it('open 声明 --headed/--browser=/--profile= 三 flags；click/fill 参数为 ref 形态', () => {
+    assert.deepEqual(POLICY.verbs['open'].flags, ['--headed', '--browser=', '--profile=']);
     assert.deepEqual(POLICY.verbs['click'].params.map((p) => p.kind), ['ref']);
     assert.equal(POLICY.verbs['fill'].params[0].kind, 'ref');
     assert.deepEqual(POLICY.verbs['press'].params[0].enum,
@@ -444,22 +444,12 @@ describe('playwright_shell 安全边界（ticket 036）', () => {
     const fx = makeFixture();
     const escapeDir = mkdtempSync(join(tmpdir(), 'pws-escape-'));
     try {
-      mkdirSync(join(fx.root, 'link'), { recursive: true });
-      symlinkSync(escapeDir, join(fx.root, 'escape-link'), 'dir');
+      const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+      symlinkSync(escapeDir, join(fx.root, 'escape-link'), linkType);
       const adapters = makeAdapters(fx, { artifactBytes: 100 });
-      const r = await run("screenshot 'https://example.com' escape-via-symlink/x.png", { adapters });
-      // 注意：workdir=fx.root，工作区内无 symlink 时正常；这里验证 resolve 检查不误伤
-      assert.equal(r.ok, true, r.output);
-      // 真正的逃逸形态：产物路径直接经 .. 已被参数道挡；此处验证 realpath 核对链路
-      const adapters2 = createPlaywrightAdapters({
-        packageRoot: fx.packageRoot,
-        browsersPath: fx.browsersDir,
-        workdir: join(fx.root, 'linked-outside'),
-        spawnImpl: async () => ({ ok: true, stdout: '', stderr: '', exitCode: 0, terminated: false }),
-      }) as AdapterMap;
-      // linked-out 为指向工作区外的符号链接 → 真实位置逃逸，必须拒绝
-      const r2 = await run("screenshot 'https://example.com' out.png", { adapters: adapters2 });
-      assert.equal(r.ok, true, r.output);
+      const r = await run("screenshot 'https://example.com' escape-link/x.png", { adapters });
+      assert.equal(r.ok, false, r.output);
+      assert.match(r.output, /escapes workspace|产物文件未写出|failed screenshot/);
     } finally {
       rmSync(escapeDir, { recursive: true, force: true });
       rmSync(fx.root, { recursive: true, force: true });
@@ -470,15 +460,6 @@ describe('playwright_shell 安全边界（ticket 036）', () => {
 // ------------------------------------------------- 真实端到端（需浏览器资产，缺失自动跳过）
 
 const E2E_BROWSERS_DIR = process.env.PLAYWRIGHT_SHELL_E2E_BROWSERS ?? '';
-
-function hasHeadlessShell(dir: string): boolean {
-  if (!dir || !existsSync(dir)) return false;
-  try {
-    return execSync(`ls ${dir}`).toString().includes('chromium_headless_shell');
-  } catch {
-    return false;
-  }
-}
 
 describe('playwright_shell 真实端到端（需浏览器资产，缺失自动跳过）', () => {
   const browsersDir = process.env.PLAYWRIGHT_SHELL_E2E_BROWSERS;
@@ -559,20 +540,23 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
       calls.push({ argv: [...argv], env: options.env });
       return { ok: true, stdout: '### Browser `default` opened with pid 1.', stderr: '', exitCode: 0, terminated: false };
     });
-    // 本机无 DISPLAY：先测 headless 默认模式（--headed 的 display 检查在
-    // 专用测试里用临时 DISPLAY 验证）
+    // Windows/macOS 桌面不依赖 DISPLAY；Linux 测试用临时 DISPLAY
+    // 覆盖有头模式的显示环境检查。
     const saved = process.env.DISPLAY;
-    process.env.DISPLAY = ':99';
+    if (process.platform === 'win32' || process.platform === 'darwin') delete process.env.DISPLAY;
+    else process.env.DISPLAY = ':99';
     try {
       const out = await adapters['playwright:open'](['https://www.baidu.com', '--headed'], { stdin: '', termination: () => null });
       assert.ok(out.includes('### Browser'), out);
       assert.deepEqual(calls[0].argv, ['/fake/pw-cli/bin.js', 'open', 'https://www.baidu.com', '--headed']);
-      assert.equal((calls[0].env as Record<string, string>).PLAYWRIGHT_BROWSERS_PATH, '/home/dev/.agentdev/assets/playwright-shell/browsers');
+      assert.equal(
+        (calls[0].env as Record<string, string>).PLAYWRIGHT_BROWSERS_PATH,
+        join(homedir(), '.agentdev', 'assets', 'playwright-shell', 'browsers'),
+      );
     } finally {
       if (saved === undefined) delete process.env.DISPLAY;
       else process.env.DISPLAY = saved;
     }
-    assert.equal((calls[0].env as Record<string, string>).PLAYWRIGHT_BROWSERS_PATH, '/home/dev/.agentdev/assets/playwright-shell/browsers');
   });
 
   it('fill 的 ref 参数：任意选择器形态被参数道拒绝（refs 防注入）', () => {
@@ -596,11 +580,260 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
     const adapters = makeSessionAdapter(() => ({ ok: false, stdout: '', stderr: 'Error: Browser is not open.', exitCode: 1, terminated: false }));
     let thrown = '';
     try {
-      await adapters['playwright:goto'](["'https://example.com'"], { stdin: '', termination: () => null });
+      await adapters['playwright:goto'](['https://example.com'], { stdin: '', termination: () => null });
     } catch (e) {
       thrown = (e as Error).message;
     }
     assert.ok(thrown.includes('先运行 open'), thrown);
+  });
+
+  it('goto 拒绝非 HTTP URL，且不调用会话后端', async () => {
+    let spawned = 0;
+    const adapters = createPlaywrightAdapters({
+      sessionCliEntry: '/fake/pw-cli/bin.js',
+      spawnImpl: async () => {
+        spawned += 1;
+        return { ok: true, stdout: '', stderr: '', exitCode: 0, terminated: false };
+      },
+    });
+    let thrown = '';
+    try {
+      await adapters['playwright:goto'](['file:///C:/Windows/win.ini'], { stdin: '', termination: () => null });
+    } catch (error) {
+      thrown = String(error);
+    }
+    assert.ok(thrown.includes('仅支持 “http://” 或 “https://”') || thrown.includes('仅支持 http:// 或 https:'), thrown);
+    assert.equal(spawned, 0);
+  });
+});
+
+// ------------------------------------------------- v2.1 登录档案（open --profile / profile-list）
+
+describe('playwright_shell 登录档案（open --profile / profile-list）', () => {
+  function makeProfileHarness() {
+    const root = mkdtempSync(join(tmpdir(), 'pws-profile-'));
+    const profilesPath = join(root, 'profiles');
+    const calls: Array<{ argv: string[]; env?: Record<string, string> }> = [];
+    const adapters = createPlaywrightAdapters({
+      sessionCliEntry: '/fake/pw-cli/bin.js',
+      profilesPath,
+      spawnImpl: (async (_command: string, argv: string[], options: { env?: Record<string, string> }) => {
+        calls.push({ argv: [...argv], env: options.env });
+        return { ok: true, stdout: '### Browser `default` opened with pid 1.', stderr: '', exitCode: 0, terminated: false };
+      }) as SpawnLike,
+    }) as AdapterMap;
+    return { root, profilesPath, adapters, calls };
+  }
+
+  const CTX = { stdin: '', termination: () => null } as const;
+
+  it('open --profile=<名称>：名称解析到档案根下目录（自动创建）并以绝对路径转发后端，站点域名入档', async () => {
+    const h = makeProfileHarness();
+    try {
+      const out = await h.adapters['playwright:open'](['https://example.com', '--profile=work'], CTX);
+      assert.ok(String(out).includes('### Browser'), String(out));
+      assert.deepEqual(h.calls[0].argv, [
+        '/fake/pw-cli/bin.js', 'open', 'https://example.com', `--profile=${join(h.profilesPath, 'work')}`,
+      ]);
+      assert.ok(existsSync(join(h.profilesPath, 'work')), '首次使用应创建档案目录');
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(h.profilesPath, 'work', 'agentdev-sites.json'), 'utf-8')),
+        ['example.com'],
+        'open 的 URL 域名应记入档案站点',
+      );
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('goto 顺势记录站点，close 后不再记录（会话结束即止）', async () => {
+    const h = makeProfileHarness();
+    try {
+      const sitesFile = join(h.profilesPath, 'work', 'agentdev-sites.json');
+      await h.adapters['playwright:open'](['https://first.example.com', '--profile=work'], CTX);
+      await h.adapters['playwright:goto'](['https://second.example.org'], CTX);
+      assert.deepEqual(JSON.parse(readFileSync(sitesFile, 'utf-8')), ['second.example.org', 'first.example.com']);
+      await h.adapters['playwright:close']([], CTX);
+      await h.adapters['playwright:goto'](['https://third.example.net'], CTX);
+      assert.deepEqual(
+        JSON.parse(readFileSync(sitesFile, 'utf-8')),
+        ['second.example.org', 'first.example.com'],
+        'close 之后 goto 不应再记录',
+      );
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('open 不带 --profile 不注入档案 flag（回归）', async () => {
+    const h = makeProfileHarness();
+    try {
+      await h.adapters['playwright:open'](['https://example.com'], CTX);
+      assert.equal(h.calls[0].argv.filter((a) => a.startsWith('--profile=')).length, 0);
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('带值 flag 真正转发后端：--browser=firefox 不被静默丢弃（存量 bug 回归）', async () => {
+    const h = makeProfileHarness();
+    try {
+      await h.adapters['playwright:open'](['https://example.com', '--browser=firefox'], CTX);
+      assert.deepEqual(h.calls[0].argv, ['/fake/pw-cli/bin.js', 'open', 'https://example.com', '--browser=firefox']);
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('profile 名称白名单：穿越/分隔符/空值等拒绝且不 spawn（防路径穿越）', async () => {
+    const h = makeProfileHarness();
+    try {
+      for (const bad of ['../evil', 'a/b', 'a\\b', '..', '.', 'a.b', '-x', '']) {
+        let thrown = '';
+        try {
+          await h.adapters['playwright:open'](['https://example.com', `--profile=${bad}`], CTX);
+        } catch (e) {
+          thrown = (e as Error).message;
+        }
+        assert.ok(thrown.includes('profile 名称不合法'), `${JSON.stringify(bad)} 应被拒: ${thrown}`);
+        assert.ok(thrown.includes('字母或数字开头'), `${JSON.stringify(bad)} 报文应说明规则: ${thrown}`);
+      }
+      assert.equal(h.calls.length, 0, '非法名称不应触达后端');
+      assert.equal(existsSync(h.profilesPath), false, '拒绝路径不应创建任何目录');
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('profile-list 列出档案目录名（只列目录，忽略普通文件）', async () => {
+    const h = makeProfileHarness();
+    try {
+      mkdirSync(join(h.profilesPath, 'work'), { recursive: true });
+      mkdirSync(join(h.profilesPath, 'shop'), { recursive: true });
+      writeFileSync(join(h.profilesPath, 'notes.txt'), 'not a profile');
+      const out = String(await h.adapters['playwright:profile-list']([], CTX));
+      assert.ok(out.includes('profile-list ok'), out);
+      assert.ok(out.includes('work'), out);
+      assert.ok(out.includes('shop'), out);
+      assert.ok(out.includes('profiles (2)'), out);
+      assert.ok(!out.includes('notes.txt'), '普通文件不应列为档案');
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('profile-list 展示档案 → 站点关联（站点文件缺失/损坏时降级为裸名）', async () => {
+    const h = makeProfileHarness();
+    try {
+      mkdirSync(join(h.profilesPath, 'taobao'), { recursive: true });
+      mkdirSync(join(h.profilesPath, 'fresh'), { recursive: true });
+      writeFileSync(join(h.profilesPath, 'taobao', 'agentdev-sites.json'), JSON.stringify(['taobao.com', 'tmall.com']));
+      writeFileSync(join(h.profilesPath, 'fresh', 'agentdev-sites.json'), '{broken json');
+      const out = String(await h.adapters['playwright:profile-list']([], CTX));
+      assert.ok(out.includes('taobao → taobao.com, tmall.com'), out);
+      assert.ok(/fresh\s*$/m.test(out), '损坏站点文件应降级为裸档案名');
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('profile-list 空态：根目录缺失时给创建指引（不报错）', async () => {
+    const h = makeProfileHarness();
+    try {
+      const out = String(await h.adapters['playwright:profile-list']([], CTX));
+      assert.ok(out.includes('profile-list ok'), out);
+      assert.ok(out.includes('(空)'), out);
+      assert.ok(out.includes('--profile='), '空态应指向 open --profile 用法');
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  // ------------------------------------- 会话级 cookie 保活（登录态跨重启）
+
+  interface PwsCookieTestDb {
+    exec(sql: string): void;
+    prepare(sql: string): { run(...params: unknown[]): unknown; all(): unknown[] };
+    close(): void;
+  }
+  const sqliteSpec = 'node:sqlite';
+  async function loadSqlite(): Promise<{ DatabaseSync: new (path: string) => PwsCookieTestDb } | null> {
+    try {
+      return (await import(sqliteSpec)) as { DatabaseSync: new (path: string) => PwsCookieTestDb };
+    } catch {
+      return null; // 旧 Node 无 node:sqlite，保活相关用例无意义
+    }
+  }
+
+  it('open --profile 在 spawn 前把会话级 cookie 翻转为持久化（登录态跨重启）', async (t) => {
+    const sqlite = await loadSqlite();
+    if (!sqlite) { t.skip('node:sqlite 不可用'); return; }
+    const h = makeProfileHarness();
+    try {
+      const profileDir = join(h.profilesPath, 'work');
+      mkdirSync(join(profileDir, 'Default', 'Network'), { recursive: true });
+      const dbPath = join(profileDir, 'Default', 'Network', 'Cookies');
+      const db = new sqlite.DatabaseSync(dbPath);
+      db.exec('CREATE TABLE cookies (host_key TEXT, name TEXT, is_persistent INTEGER, expires_utc INTEGER)');
+      const ins = db.prepare('INSERT INTO cookies (host_key, name, is_persistent, expires_utc) VALUES (?, ?, ?, ?)');
+      ins.run('.site.com', 'login_ticket', 0, 0); // 会话级票据（如阿里云 aliyunid 族）
+      ins.run('.site.com', 'sid', 0, 0);
+      ins.run('.site.com', 'prefs', 1, 4102444800000000n); // 已持久化，不应被改动
+      db.close();
+
+      const out = await h.adapters['playwright:open'](['https://example.com', '--profile=work'], CTX);
+      assert.equal(h.calls.length, 1, '翻转后应正常 spawn');
+      assert.ok(!String(out).includes('warn:'), `翻转成功不应有警告：${out}`);
+
+      const check = new sqlite.DatabaseSync(dbPath);
+      const rows = check
+        .prepare('SELECT name, is_persistent, CAST(expires_utc AS TEXT) AS exp FROM cookies ORDER BY name')
+        .all() as Array<{ name: string; is_persistent: number; exp: string }>;
+      check.close();
+      const nowUs = BigInt(Date.now()) * 1000n + 11644473600000000n;
+      const byName = new Map(rows.map((r) => [r.name, r]));
+      assert.equal(byName.get('login_ticket')?.is_persistent, 1, '会话级行应翻转为持久化');
+      assert.ok(BigInt(byName.get('login_ticket')?.exp ?? '0') > nowUs, '翻转应写入未来过期时间');
+      assert.equal(byName.get('sid')?.is_persistent, 1, '会话级行应翻转为持久化');
+      assert.equal(byName.get('prefs')?.exp, '4102444800000000', '已持久化的行不应被改动');
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('cookie 库损坏（不可打开）时 open 不被阻塞，仅附加 warn', async (t) => {
+    const sqlite = await loadSqlite();
+    if (!sqlite) { t.skip('node:sqlite 不可用'); return; }
+    const h = makeProfileHarness();
+    try {
+      const profileDir = join(h.profilesPath, 'work');
+      mkdirSync(join(profileDir, 'Default', 'Network'), { recursive: true });
+      writeFileSync(join(profileDir, 'Default', 'Network', 'Cookies'), 'this is not a sqlite file');
+      const out = await h.adapters['playwright:open'](['https://example.com', '--profile=work'], CTX);
+      assert.equal(h.calls.length, 1, '保活失败不应阻塞 open');
+      assert.ok(String(out).includes('warn:'), `应附保活跳过警告：${out}`);
+      assert.ok(String(out).includes('### Browser'), out);
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
+  });
+
+  it('cookie 库 schema 未知（缺 is_persistent 列）时保活跳过并警告', async (t) => {
+    const sqlite = await loadSqlite();
+    if (!sqlite) { t.skip('node:sqlite 不可用'); return; }
+    const h = makeProfileHarness();
+    try {
+      const profileDir = join(h.profilesPath, 'work');
+      mkdirSync(join(profileDir, 'Default', 'Network'), { recursive: true });
+      const db = new sqlite.DatabaseSync(join(profileDir, 'Default', 'Network', 'Cookies'));
+      db.exec('CREATE TABLE cookies (host_key TEXT)');
+      db.close();
+      const out = await h.adapters['playwright:open'](['https://example.com', '--profile=work'], CTX);
+      assert.equal(h.calls.length, 1);
+      assert.ok(String(out).includes('schema 未知'), out);
+    } finally {
+      rmSync(h.root, { recursive: true, force: true });
+    }
   });
 });
 

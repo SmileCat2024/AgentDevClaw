@@ -1,6 +1,6 @@
 ---
 name: playwright-shell
-description: "浏览器页面取证与受控会话（playwright-shell feature 内嵌技能）：用 playwright_shell 工具完成单次渲染取证（截图/PDF/HAR）与多步页面交互（导航/输入/点击/读取内容）；含动词用法、refs 纪律、URL 引号纪律、资产缺失修复、会话收尾与超时纪律。适用于对网页做取证留存或按步骤完成页面任务。"
+description: "浏览器页面取证与受控会话（playwright-shell feature 内嵌技能）：用 playwright_shell 工具完成单次渲染取证（截图/PDF/HAR）与多步页面交互（导航/输入/点击/读取内容），并支持持久化登录档案（open --profile，登录态跨会话留存）；含动词用法、refs 纪律、URL 引号纪律、资产缺失修复、会话收尾与超时纪律。适用于对网页做取证留存或按步骤完成页面任务。"
 ---
 
 # 浏览器页面取证与会话 Skill
@@ -34,15 +34,16 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 
 | 动词 | 用法 |
 |---|---|
-| `open '<url>' [--headed] [--browser=chrome]` | 启动/重启受控会话并导航（默认 headless；--headed 需显示环境） |
+| `open '<url>' [--headed] [--browser=chrome] [--profile=<名称>]` | 启动/重启受控会话并导航（默认 headless；--headed 需显示环境；--profile 使用持久化登录档案） |
 | `goto '<url>'` | 当前会话内导航 |
-| `snapshot [--depth=N]` | 输出页面完整可交互树（含 ref 编号与可见文本）——**交互前必看** |
+| `snapshot` | 输出页面完整可交互树（含 ref 编号与可见文本）——**交互前必看**（不接受参数） |
 | `find '<text>'` | 页面内搜索元素，返回匹配节点与 refs |
 | `fill <ref> '<text>'` | 往输入框填字面量文本 |
 | `press <key>` | 按键（Enter/Tab/Escape/方向键等白名单） |
 | `click <ref>` | 点击元素（链接/按钮；target=_blank 的链接会开新 tab） |
 | `tab-list` / `tab-select <n>` | 列出/切换标签页（点击开新 tab 后先 tab-list 再 select） |
-| `close` | 收尾会话并回收浏览器进程（**多步会话用完必须 close**） |
+| `close` | 收尾会话并回收浏览器进程（**多步会话用完必须 close**；--profile 档案不受影响） |
+| `profile-list` | 列出已有的持久化登录档案及各自用过的站点（`→` 后为站点域名，据此自动匹配任务站点与档案，无需用户指名） |
 
 会话一次只持有一个 default 会话；open 已开会话前先 close。会话浏览器进程由 daemon 管理，close 后整组回收。
 
@@ -54,10 +55,22 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 4. **用完 close**：多步会话结束必须 close（否则浏览器驻留占资源；异常退出时 feature 销毁会兜底回收，但不要依赖兜底）。
 5. **读取内容用 snapshot 输出**：页面正文（含标题/段落）在 snapshot 树里可直接读；超长输出会自动落盘（报文给完整文件路径，可分段查看）。
 6. **超时唯一闸门是工具 timeout 契约**；会话命令是快命令（转发给常驻 daemon），超时一般只影响当前一步。
+7. **要登录态就带 profile**：任务涉及已登录站点时用 `open '<url>' --profile=<名称>`，不要裸开。先用 profile-list 查已有档案——输出里 `→` 后是该档案用过的站点域名，按任务站点自动匹配；对不上号再问用户。
+
+## 登录态与 profile（持久化档案）
+
+- `open '<url>' --profile=<名称>` 使用持久化登录档案：档案目录在用户数据目录下（报文与 `env` 输出给出根目录位置），浏览器在该目录里保留 cookie、localStorage 等站点数据——**登录态跨会话有效**。名称只允许字母/数字开头，含字母/数字/下划线/连字符，长度 1-64。
+- 会话级登录票据也跨重启保留：每次带档案 open 时，shell 会自动把档案 cookie 库中的会话级 cookie 翻转为持久化（阿里云等把登录票据设为会话级 cookie 的站点因此无需每次重登）。报文出现 `warn: 会话级 cookie 保活跳过` 时，该轮重启周期内此类登录态可能丢失。
+- 首次使用：加 `--headed` 起有头窗口，由人工完成登录（含人机验证），`close` 收尾后登录态已留在档案里。
+- 之后复用：`open '<url>' --profile=<名称>`（默认 headless 即可），直接以已登录身份操作。
+- close 不清除档案；要"忘记"某站点登录态需人工删除对应档案目录。
+- 档案自动匹配：open/goto 访问过的域名会记入档案（最近在前，限量 20 个），profile-list 展示 `档案 → 站点`。给任务选档案时优先按站点匹配，而不是档案名语义。
+- 同一档案同时只能被一个浏览器使用：用 `--profile=<名称>` 开新会话前，先 close 旧会话。
+- 档案即活凭据：不要把档案目录指向真实浏览器的用户数据目录；档案名按用途命名（如 `work`、`shop-a`）。
 
 ## headless 与 headed
 
-- 默认 headless（全自动取证）。`open --headed` 开有头窗口（需要显示环境：宿主桌面 DISPLAY，或人工用 `xvfb-run` 包裹）。
+- 默认 headless（全自动取证）。`open --headed` 开有头窗口：Windows/macOS 使用系统桌面；Linux 需要 `DISPLAY` 或 `WAYLAND_DISPLAY`，无桌面时由人工用 `xvfb-run` 包裹。
 - **headed 的用途**：人工可接管（如站点人机验证）、人工演示。无人值守的 agent 会话用默认 headless。
 - 部分站点对 headless 有反自动化检测（如百度搜索触发安全验证页）：这是站点策略不是故障；headed + 人工接管是合法路径，headless 下换等效入口（如站内搜索）或如实报告卡点。
 
@@ -69,6 +82,8 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 | `verdict: 浏览器资产缺失` | 人工以资产目录为 `PLAYWRIGHT_BROWSERS_PATH` 执行 `npx playwright install chromium-headless-shell`；版本与 env 报文里的后端版本匹配 |
 | 会话后端缺失（open 等报文） | @playwright/cli npm 包未安装：人工在运行环境 `npm install --save-exact @playwright/cli@<pin>`（v2 会话后端）；装完重试 |
 | `当前没有已开启的会话` | 先 open 再交互；close 后的会话要重新 open |
+| open 带 --profile 失败且报文提到档案/用户数据目录 | 该档案可能仍被占用：先 close 旧会话再重开；仍失败则换档案名或人工核查档案目录锁 |
+| 站点要求重新登录（明明带过 profile） | 服务端会话可能已失效（过期/2FA/风控踢下线）：加 --headed 人工重登一次，档案会记住新登录态 |
 | 站点弹出人机验证（如百度安全验证） | 反自动化策略，不是故障：headed 模式人工接管过验证；或换等效入口（如站内搜索）。不要反复重试同形请求 |
 | `click` 后页面没动 | 链接可能开了新 tab：tab-list + tab-select 切换 |
 | snapshot 输出过大被截断 | 报文含完整落盘路径，分段读取文件 |
@@ -77,7 +92,7 @@ description: "浏览器页面取证与受控会话（playwright-shell feature �
 
 ## 边界（先读）
 
-- 本 shell 的会话是**单会话受控模型**：一个 shell 实例一个 default 会话；不支持多会话并行、不支持连接外部浏览器（attach）、不支持登录态留存（state-save/load 不入表）。
+- 本 shell 的会话是**单会话受控模型**：一个 shell 实例一个 default 会话；不支持多会话并行、不支持连接外部浏览器（attach）。登录态留存只经 `open --profile` 持久化档案进入动词面；state-save/load 快照与 cookie 细粒度操作不入表。
 - 任意 JS 执行（eval/run-code）、请求改写（route）、用例录制（codegen）、录屏（video）等官方能力不收编——需要时人工在终端用官方工具。
 - 浏览器资产下载安装属装配期人工动作（env 报文给修复指引）。
 

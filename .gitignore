@@ -4,6 +4,7 @@ node_modules/
 # Session data (user data, should not be in repo)
 /.agentdev/
 .playwright-mcp/
+.playwright-cli/
 *docs/
 !docs/
 docs/*
