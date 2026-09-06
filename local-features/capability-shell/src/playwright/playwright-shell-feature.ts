@@ -25,7 +25,7 @@ import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { AgentFeature, Tool } from '@agentdevjs/core';
-import { createCapabilityShellTool } from './tool-factory.js';
+import { createCapabilityShellTool } from '../tool-factory.js';
 import { createPlaywrightAdapters } from './playwright-shell.js';
 import { createPlaywrightShellPolicy } from './playwright-policy.js';
 

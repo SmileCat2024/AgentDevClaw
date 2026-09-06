@@ -14,17 +14,17 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, statSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, statSync, rmSync, symlinkSync, readdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { checkArgs } from '../src/args.js';
-import { createPlaywrightShellPolicy, PLAYWRIGHT_ENV_FIX_GUIDANCE } from '../src/playwright-policy.js';
+import { createPlaywrightShellPolicy, PLAYWRIGHT_ENV_FIX_GUIDANCE } from '../src/playwright/playwright-policy.js';
 import type { ShellSegment } from '../src/types.js';
-import { createPlaywrightAdapters } from '../src/playwright-shell.js';
+import { createPlaywrightAdapters } from '../src/playwright/playwright-shell.js';
 import { createCapabilityShellTool, runCapabilityShellPipeline } from '../src/tool-factory.js';
-import type { SpawnLike } from '../src/playwright-shell.js';
+import type { SpawnLike } from '../src/playwright/playwright-shell.js';
 import type { AdapterMap } from '../src/dispatch.js';
 
 const POLICY = createPlaywrightShellPolicy();
@@ -601,5 +601,30 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
       thrown = (e as Error).message;
     }
     assert.ok(thrown.includes('先运行 open'), thrown);
+  });
+});
+
+// ------------------------------------------------- v2 布局契约（skills 发现不重复）
+
+describe('playwright_shell v2 布局契约（ticket 036 v2 修复）', () => {
+  it('同包多 feature 的 skills 目录互不相交（框架按 dirname(source)/skills 逐 feature 扫描）', async () => {
+    // 回归背景：coder 与 playwright feature 曾同住 src 根，同一 skills/ 目录被
+    // 逐 feature 扫描两次 → SkillFeature 里同一 skill 注册两次 → capability
+    // registry 抛 duplicate capability ref（Windows 用户 pull 后新建会话即炸）。
+    const { CapabilityShellFeature } = await import('../src/coder-shell-feature.js');
+    const { PlaywrightShellFeature } = await import('../src/playwright/playwright-shell-feature.js');
+    const coder = new CapabilityShellFeature({});
+    const pw = new PlaywrightShellFeature({});
+
+    const skillsOf = (feature: { source: string }) => {
+      const dir = join(dirname(feature.source), 'skills');
+      if (!existsSync(dir)) return [];
+      return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+    };
+    const coderSkills = skillsOf(coder);
+    const playwrightSkills = skillsOf(new PlaywrightShellFeature({}));
+    assert.ok(coderSkills.includes('claw-coder-dispatch'), `coder feature 应发现自身 skill，实得 ${coderSkills}`);
+    assert.ok(!coderSkills.includes('playwright-shell'), 'coder 的 skills 目录不得含 playwright 技能（防重复注册）');
+    assert.deepEqual(playwrightSkills, ['playwright-shell'], 'playwright feature 的 skills 目录应只含自身技能');
   });
 });

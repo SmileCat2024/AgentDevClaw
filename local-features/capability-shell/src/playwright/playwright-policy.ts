@@ -24,7 +24,7 @@
  * 技能文档写明该边界，模型可自我纠正（去掉查询串或改写任务）。
  */
 
-import type { CapabilityShellPolicy } from './types.js';
+import type { CapabilityShellPolicy } from '../types.js';
 
 export const PLAYWRIGHT_SHELL_NAME = 'playwright_shell';
 

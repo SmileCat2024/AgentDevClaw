@@ -30,7 +30,7 @@ import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { runCollectedSpawn } from './dispatch.js';
+import { runCollectedSpawn } from '../dispatch.js';
 import { PLAYWRIGHT_ENV_FIX_GUIDANCE } from './playwright-policy.js';
 
 const __filename = fileURLToPath(import.meta.url);
