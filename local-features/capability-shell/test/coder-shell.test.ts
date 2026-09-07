@@ -350,19 +350,59 @@ describe('coder_shell watch 状态矩阵（生命周期终态与停滞）', () =
     assert.equal(threadFetches, 1, '404 是确定终态，不应累计 3 次连续错误');
   });
 
-  it('孤儿执行：executing 且事件停滞 → done reason=stalled（runtime 死亡后看板残留 running）', async () => {
+  it('孤儿执行：executing 且事件停滞且进程不在 → done reason=stalled（runtime 死亡后看板残留 running）', async () => {
     const adapters = createThreadsAdapters({
       serverOrigin: 'http://test',
       pollIntervalMs: 1,
       fetchImpl: stubFetch([
         { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 10 } },
-        { match: (u) => u.endsWith('/threads/wt-orphan'), body: { ok: true, thread: { threadId: 'wt-orphan', lifeState: 'executing', status: 'open', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000 } } },
+        { match: (u) => u.endsWith('/threads/wt-orphan'), body: { ok: true, thread: { threadId: 'wt-orphan', lifeState: 'executing', status: 'open', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000, headRuntimeRunning: false } } },
       ]),
     });
     const r = await runCapabilityShellPipeline(POLICY, 'watch wt-orphan', { adapters, bashPath: null });
     assert.equal(r.ok, true, r.output);
     assert.ok(r.output.includes('done reason=stalled'), r.output);
     assert.ok(r.output.includes('事件停滞'), r.output);
+    assert.ok(r.output.includes('head runtime 进程已不在'), r.output);
+  });
+
+  it('长工具调用豁免：executing 且事件停滞但 head runtime 进程存活 → 不报 stalled，挂到工具超时', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: stubFetch([
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 10 } },
+        // 长命令执行中的真实形态：turn.started 后事件停滞，但 runtime 进程在跑
+        { match: (u) => u.endsWith('/threads/wt-long'), body: { ok: true, thread: { threadId: 'wt-long', lifeState: 'executing', status: 'open', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000, headRuntimeRunning: true } } },
+      ]),
+    });
+    const tool = createCapabilityShellTool(POLICY, adapters, {
+      bashPath: null,
+      timeoutMs: 50,
+      maxTimeoutMs: 50,
+    });
+    const out = await tool.execute(
+      { command: 'watch wt-long' },
+      { signal: AbortSignal.timeout(50), termination: () => 'timeout' } as any,
+    );
+    const text = String(out);
+    assert.ok(text.includes('done reason=timeout'), `存活豁免应挂到工具超时而非 stalled: ${text}`);
+    assert.ok(!text.includes('done reason=stalled'), text);
+  });
+
+  it('老 server 无 headRuntimeRunning 字段：事件停滞维持保守停滞终态', async () => {
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      pollIntervalMs: 1,
+      fetchImpl: stubFetch([
+        { match: (u) => u.includes('/events'), body: { ok: true, events: [], cursor: 10 } },
+        { match: (u) => u.endsWith('/threads/wt-legacy'), body: { ok: true, thread: { threadId: 'wt-legacy', lifeState: 'executing', status: 'open', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000 } } },
+      ]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'watch wt-legacy', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('done reason=stalled'), r.output);
+    assert.ok(r.output.includes('runtime 可能已死亡'), r.output);
   });
 });
 
