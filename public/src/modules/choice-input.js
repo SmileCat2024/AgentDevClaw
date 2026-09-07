@@ -419,6 +419,12 @@ window.confirmChoiceQuestion = async function(requestId) {
       // consumed 判定保证它不会再以初始题号重建（闪回第一题）。
       _submittedRequests.add(requestId);
       delete choiceInputState[requestId];
+      // 立即恢复普通输入面，不等待下一轮 poll 才移除选择卡。
+      // 当前 inputRequests 可能仍是陈旧快照，但 consumed 标记会让模式判定
+      // 将该 lease 视为已消费，因此可以安全地乐观切回 persistent。
+      if (typeof notifyInputSurfaceChanged === 'function') {
+        notifyInputSurfaceChanged(currentInputRequests || []);
+      }
       poll();
     }
   } catch (e) {

@@ -443,6 +443,15 @@ function _syncPersistentActionButton() {
 }
 
 function _renderQueueBubbles(container) {
+  // 选择卡接管输入面期间，暂存/排队气泡不能出现在选择卡上方。
+  // updateQueueIndicator() 可能与选择卡状态变更交错调用，因此这里也要做
+  // 最后一道 DOM 侧守卫，而不能只依赖 input-render 的互斥清理。
+  if (container.classList.contains('choice-input-active')) {
+    container.querySelectorAll('.queue-bubbles-stack').forEach(el => el.remove());
+    _lastQueueBubbleSignature = '';
+    return;
+  }
+
   // 线程暂存（Thread Inbox pending）与 viewer 排队同栈渲染：
   // 前者意图归属是「工作」（交接窗口/非 head 暂存，新会话就绪后投递），
   // 后者归属是「runtime」（call 间排队）。样式变体区分，语义不混。

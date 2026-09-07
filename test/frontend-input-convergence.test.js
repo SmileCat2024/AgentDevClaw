@@ -557,6 +557,10 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     await ctx.run(`window.confirmChoiceQuestion('choice-2')`);
     assert.equal(ctx.run(`choiceInputState['choice-2']`), undefined, 'interaction state cleared on submit');
     assert.equal(ctx.run(`window.isChoiceInputConsumed('choice-2')`), true, 'submitted lease registered as consumed');
+    assert.equal(composerMode(ctx), 'persistent', 'choice card closes immediately after submit success');
+    assert.equal(ctx.run(
+      `document.getElementById('user-input-container').querySelector('.user-choice-card')`,
+    ), null, 'choice card is removed without waiting for poll');
 
     // 陈旧快照仍带回该 lease：模式判定与渲染都必须视其为不存在，
     // 直接落回 persistent composer，而不是以初始题号重建选择卡。
@@ -570,6 +574,29 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     assert.equal(ctx.run(
       "document.getElementById('user-input-container').querySelector('.user-choice-card')",
     ), null, 'stale consumed lease must not rebuild the choice card');
+  });
+
+  it('choice takeover removes staged queue bubbles', () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run(`
+      var _queuedTexts = ['queued text'];
+      var _lastQueueBubbleSignature = '';
+      window.getThreadPendingTexts = () => ['staged text'];
+    `);
+    const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+    const queueStart = persistentSource.indexOf('function _renderQueueBubbles(container) {');
+    const queueEnd = persistentSource.indexOf('\n// 查询后端真实队列余量', queueStart);
+    ctx.run(persistentSource.slice(queueStart, queueEnd));
+    ctx.run(`
+      const stack = document.createElement('div');
+      stack.className = 'queue-bubbles-stack';
+      document.getElementById('user-input-container').appendChild(stack);
+      document.getElementById('user-input-container').classList.add('choice-input-active');
+      _renderQueueBubbles(document.getElementById('user-input-container'));
+    `);
+    assert.equal(ctx.run(
+      `document.getElementById('user-input-container').querySelector('.queue-bubbles-stack')`,
+    ), null, 'choice takeover removes both queued and thread-staged bubbles');
   });
 
   it('§8 排队同步：level-6 optimistic queue pins persistent over a pending lease', () => {
