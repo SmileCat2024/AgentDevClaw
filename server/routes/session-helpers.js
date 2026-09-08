@@ -1440,7 +1440,6 @@ async function resolveContextLength(agentId) {
     waitForManagedRuntimeReady,
     resolvePrebuiltSessionOwner,
     requirePrebuiltSessionRecord,
-    summarizePrebuiltSession,
     requirePrebuiltAgentForRuntime,
     createPrebuiltSession,
     readSessionSnapshotForContinuity,

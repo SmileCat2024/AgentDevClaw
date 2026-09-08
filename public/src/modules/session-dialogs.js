@@ -572,22 +572,25 @@ window.submitBranch = async () => {
       title: result?.branchTitle || branchOperation?.title || '',
       serverRevision: result?.revision ?? null,
     });
-    // The server has already committed the branch and observed startup. Delayed
-    // Viewer registration must not block or downgrade the branch operation.
     // 远程目标：响应中的 agent 是远程端 runtime 形态（裸 id），不进入本地
     // allAgents——切换走目录轮询（R2-01 activate 同链路）。
     const readyAgent = (isRemoteSession ? null : result?.agent) || null;
-    const targetStopped = false;
     const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
     const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
+    // 服务端早响应（runtimeStart: 'async'）：本地分支的 runtime 在服务端后台
+    // 启动，响应不含 agent。侧栏 operation 占位持续呈现"启动中"，就绪后由
+    // 本任务接管导航——与 replacement 流程同一条 waitForRuntimeReady 管道。
+    const backgroundRuntimeWait = (!readyAgent && !isRemoteSession && targetSessionId)
+      ? waitForSidebarTargetRuntime(branchOperation?.operationId, agentId, targetSessionId, result, 300)
+      : null;
     if (archiveAfter && archiveSucceeded) {
-      // The branch and source archive are committed together. Do not keep the
-      // successful branch operation open for unrelated source cleanup.
-      finishSidebarOperation(branchOperation?.operationId, 'settled');
+      // 归档与分支已共同提交；操作收尾只等 runtime 就绪接管导航，不因无关的
+      // 源会话清理保持开启。
+      if (!backgroundRuntimeWait) finishSidebarOperation(branchOperation?.operationId, 'settled');
     } else if (nextRuntimeId) {
       updateSidebarOperation(branchOperation?.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
-    } else if (targetStopped) {
-      updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
+    } else if (backgroundRuntimeWait) {
+      // 保留 target-starting 占位，导航在 runtime 就绪后接管（下方 async 分支）。
     } else {
       finishSidebarOperation(branchOperation?.operationId, 'settled');
     }
@@ -620,6 +623,37 @@ window.submitBranch = async () => {
       beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'branch');
       if (!archiveAfter) finishSidebarOperation(branchOperation?.operationId, 'settled');
+    } else if (backgroundRuntimeWait) {
+      // 本地分支 + runtime 后台启动中：等待就绪（轻量 runtime_status 轮询，
+      // attempts=300 × 200ms 覆盖最慢的共享进程恢复场景），期间对话框已关闭、
+      // 占位常驻，用户可继续其他操作。就绪即接管导航；超时/停止降级呈现。
+      const navigationEpoch = _navigationGuardEpoch;
+      backgroundRuntimeWait.then((targetAgent) => {
+        if (navigationEpoch !== _navigationGuardEpoch) {
+          // 用户已在等待期间发起其他导航：不降级也不抢焦点，runtime 叶子
+          // 由侧栏轮询自然带出，操作静默收尾。
+          finishSidebarOperation(branchOperation?.operationId, 'settled');
+          return;
+        }
+        if (!targetAgent) {
+          updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
+          return;
+        }
+        const runtimeTarget = upsertConnectedAgent(targetAgent) || targetAgent;
+        const runtimeId = getRuntimeId(runtimeTarget) || '';
+        if (!runtimeId) {
+          updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
+          return;
+        }
+        updateSidebarOperation(branchOperation?.operationId, { phase: 'target-ready', targetRuntimeId: runtimeId });
+        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+        beginChatLoadingSession();
+        return requestSwitch(runtimeId, 'branch').then(() => {
+          finishSidebarOperation(branchOperation?.operationId, 'settled');
+        });
+      }).catch(() => {
+        updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
+      });
     } else {
       lastRenderedWorkspaceHtml = '';
       renderCurrentMainView();

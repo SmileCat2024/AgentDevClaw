@@ -623,13 +623,8 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
     // 一条独立线程的 root 与初始 head；非宿主工作空间 no-op，失败不阻断。
     await getThreadIntegration().onSessionCreated(agentId, branchRecord);
 
-    const agent = await requirePrebuiltAgentForRuntime(agentId);
-    await startManagedAgent(agent, newSessionId);
-    trace.mark('target_runtime_started');
-    const connected = await waitForManagedRuntimeReady(agent.id, 10000, newSessionId);
-    trace.mark(connected ? 'target_runtime_ready' : 'target_runtime_timeout');
-
-    // 服务端归档原会话（如果请求要求）
+    // 服务端归档原会话（如果请求要求）。归档只动索引与记录，必须在响应前
+    // 完成——响应契约包含 archive 结果。
     let branchArchived = false;
     let branchArchiveError = '';
     let branchArchiveResult = null;
@@ -649,6 +644,23 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       deltaUpserts.push(branchArchiveResult.sessionDelta.upsert[0]);
     }
 
+    // runtime 启动转后台：add-session 在共享进程内要恢复全量上下文（MB 级快照
+    // 解析 + 全量 push 到 viewer），真实会话下耗时数秒到数十秒。会话文件与索引
+    // 已落盘，响应不应被它闸住——前端经侧栏 operation 占位呈现"启动中"，
+    // runtime 就绪后由既有轮询（NavigationCore.waitForRuntimeReady）接管导航。
+    const agent = await requirePrebuiltAgentForRuntime(agentId);
+    void (async () => {
+      try {
+        await startManagedAgent(agent, newSessionId);
+        trace.mark('target_runtime_started');
+        const connected = await waitForManagedRuntimeReady(agent.id, 10000, newSessionId);
+        trace.mark(connected ? 'target_runtime_ready' : 'target_runtime_timeout');
+      } catch (err) {
+        console.error('[branch] background runtime start failed:', err);
+        trace.mark('target_runtime_error', { error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+
     res.json({
       protocolVersion: 2,
       operationId: trace.operationId,
@@ -658,7 +670,8 @@ app.post('/protoclaw/sessions/branch', express.json(), async (req, res, next) =>
       branchTitle,
       keptMessages: branchMessages.length,
       totalMessages: rawMessages.length,
-      agent: connected,
+      agent: null,
+      runtimeStart: 'async',
       sessionDelta: {
         revision: finalRevision,
         activeSessionId: newSessionId,

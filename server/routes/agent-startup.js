@@ -109,7 +109,6 @@ export function resolveManagedProcessPlacement(agent, sessionRecord) {
 export function createAgentStartupFns(deps) {
   const {
     sessionApi,
-    getConnectedAgents,
     requireAgentLight,
     resolveRuntimeDisplayName,
     readViewerJson,
@@ -140,7 +139,11 @@ export function createAgentStartupFns(deps) {
       }
       const status = buildStatus(agentId, sessionId);
       if (status.viewerAgentId && runtime?.ready) {
-        const agents = await getConnectedAgents();
+        // 轻量 viewer 列表探测（与 waitForAssemblyRuntimeReady 同模式）：
+        // getConnectedAgents 每次调用都要重建富会话投影（百 ms 级），
+        // 这里只确认 viewer 是否已列出该 agent，200ms 轮询不应反复支付该成本。
+        const viewerData = await readViewerJson('/api/agents').catch(() => ({ agents: [] }));
+        const agents = Array.isArray(viewerData?.agents) ? viewerData.agents : [];
         const viewerAgentId = cleanSessionText(status.viewerAgentId);
         const connected = agents.find((agent) => cleanSessionText(agent.id) === viewerAgentId || cleanSessionText(agent.runtime_session_id || agent.runtimeSessionId) === viewerAgentId);
         if (connected) {

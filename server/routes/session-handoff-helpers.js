@@ -32,7 +32,6 @@ export function createSessionHandoffHelpers(deps) {
     waitForManagedRuntimeReady,
     resolvePrebuiltSessionOwner,
     requirePrebuiltSessionRecord,
-    summarizePrebuiltSession,
     requirePrebuiltAgentForRuntime,
     createPrebuiltSession,
     readSessionSnapshotForContinuity,
@@ -48,13 +47,17 @@ export function createSessionHandoffHelpers(deps) {
     }
 
     const record = await requirePrebuiltSessionRecord(ownerAgentId, sessionId);
-    const summary = await summarizePrebuiltSession(ownerAgentId, record);
-    if (!summary.exists) {
+    // 存在性检查走 stat。此前用 summarizePrebuiltSession 会为了一次 exists 判定
+    // 把整个会话快照读入并 JSON.parse（MB 级文件，真实数据下每秒级成本），
+    // 且返回值除 exists 外全部弃置。
+    const sessionPath = getPrebuiltSessionFilePath(ownerAgentId, sessionId);
+    try {
+      await fs.stat(sessionPath);
+    } catch {
       const error = new Error(`Session snapshot not found for handoff export: ${sessionId}`);
       error.statusCode = 409;
       throw error;
     }
-    const sessionPath = getPrebuiltSessionFilePath(ownerAgentId, sessionId);
     const normalizedStrategy = typeof policy?.strategy === 'string' ? policy.strategy.trim() : '';
     const appendSummary = !!options.appendSummary;
     if (normalizedStrategy === 'summarized-nine-section') {

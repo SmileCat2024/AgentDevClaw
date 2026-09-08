@@ -157,7 +157,6 @@ export function createAgentLifecycleModule(ctx) {
     startAssemblyRuntime,
   } = createAgentStartupFns({
     sessionApi,
-    getConnectedAgents,
     requireAgentLight,
     resolveRuntimeDisplayName,
     readViewerJson,
