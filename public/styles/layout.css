@@ -7119,16 +7119,36 @@ body[data-theme="light"] .gateway-detail-row {
    ═══════════════════════════════════════════════════════════════ */
 
 .git-panel {
-  height: 100%;
+  /* 抵消宿主 padding:24px（.feature-panel-body）：负 margin 拉出 padding 区，
+     高度补回上下两个 24px 才能贴满面板底边（否则底部空 48px） */
+  height: calc(100% + 48px);
   display: flex;
   flex-direction: column;
-  /* 抵消宿主 padding:24px（.feature-panel-body），内部改用自有边距 */
   margin: -24px;
+  position: relative;
   font-size: 13px;
   color: var(--text-primary);
   /* 上区默认按内容自适应（auto），max-height 封顶让图形区最大化 */
   --git-top-h: auto;
   --git-edge: 16px;
+}
+
+/* 底部渐变遮罩（同 .feature-panel::after 配方）：面板滚动发生在内部
+   .git-zone-body，宿主的 scrollable 溢出检测恒为假，遮罩由面板自带，
+   让图形区滚到底部时平滑渐隐。 */
+.git-panel::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, transparent 0%, var(--glass-bg) 90%);
+  pointer-events: none;
+  z-index: 5;
+}
+body[data-theme="light"] .git-panel::after {
+  background: linear-gradient(to bottom, transparent 0%, rgba(240, 240, 242, 0.9) 90%);
 }
 
 /* ── 大区骨架：上区像素高（分隔条拖改写 --git-top-h），下区吃满剩余 ── */
