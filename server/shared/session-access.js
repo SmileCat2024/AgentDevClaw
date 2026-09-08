@@ -68,49 +68,71 @@ export function getWorkspaceArtifactPath(agentId, artifactId) {
 
 // ── Session index read/write ──────────────────────────────────────
 
+// readSessionIndex 进程内缓存。侧栏轮询（get_connected_agents / prebuilt_sessions
+// 条件刷新，每标签每 3s）与各路由都会反复读同一份索引；PH 工作空间的索引可累积
+// 到数 MB / 数千条会话，无缓存的重复 磁盘读+JSON.parse+全量归一化 是主进程事件
+// 循环停顿的主要来源（CPU profile 实测 readJson 占 self-time ~27%）。缓存以
+// mtime+size 失效保持对 CLI 等外部写者的正确性；writeSessionIndex 落盘后主动
+// 失效兜底同刻写入。命中返回 structuredClone，调用方可安全突变返回值。
+const _indexCache = new Map(); // indexPath → { mtimeMs, size, value }
+
+function normalizeSessionIndexData(data) {
+  const sessions = Array.isArray(data.sessions)
+    ? data.sessions
+      .filter((session) => session && session.id && session.id !== 'legacy')
+      .map((session) => ({
+        ...session,
+        id: String(session.id),
+        title: cleanSessionText(session.title),
+        featureName: cleanSessionText(session.featureName),
+        agentName: cleanSessionText(session.agentName),
+        taskTitle: cleanSessionText(session.taskTitle),
+        taskType: cleanSessionText(session.taskType),
+        goal: cleanSessionText(session.goal),
+        constraints: cleanSessionText(session.constraints),
+        expectedOutput: cleanSessionText(session.expectedOutput),
+        targetFiles: cleanSessionText(session.targetFiles),
+        referenceMaterials: cleanSessionText(session.referenceMaterials),
+        openDirectory: cleanSessionText(session.openDirectory),
+        sessionType: cleanSessionText(session.sessionType) || 'main',
+        archived: session.archived === true,
+        todo: session.todo === true,
+        metadata: normalizeSessionMetadata(session.metadata),
+      }))
+    : [];
+  return {
+    revision: Number.isSafeInteger(Number(data.revision)) && Number(data.revision) >= 0
+      ? Number(data.revision)
+      : 0,
+    activeSessionId: sessions.some((session) => session.id === data.activeSessionId) ? data.activeSessionId : null,
+    sessions,
+  };
+}
+
 export async function readSessionIndex(agentId) {
   const dirPath = getPrebuiltAgentSessionDir(agentId);
   const indexPath = getPrebuiltSessionIndexPath(agentId);
   await ensureDir(dirPath);
 
+  let stat = null;
   try {
-    const data = await readJson(indexPath);
-    const sessions = Array.isArray(data.sessions)
-      ? data.sessions
-        .filter((session) => session && session.id && session.id !== 'legacy')
-        .map((session) => ({
-          ...session,
-          id: String(session.id),
-          title: cleanSessionText(session.title),
-          featureName: cleanSessionText(session.featureName),
-          agentName: cleanSessionText(session.agentName),
-          taskTitle: cleanSessionText(session.taskTitle),
-          taskType: cleanSessionText(session.taskType),
-          goal: cleanSessionText(session.goal),
-          constraints: cleanSessionText(session.constraints),
-          expectedOutput: cleanSessionText(session.expectedOutput),
-          targetFiles: cleanSessionText(session.targetFiles),
-          referenceMaterials: cleanSessionText(session.referenceMaterials),
-          openDirectory: cleanSessionText(session.openDirectory),
-          sessionType: cleanSessionText(session.sessionType) || 'main',
-          archived: session.archived === true,
-          todo: session.todo === true,
-          metadata: normalizeSessionMetadata(session.metadata),
-        }))
-      : [];
-    return {
-      revision: Number.isSafeInteger(Number(data.revision)) && Number(data.revision) >= 0
-        ? Number(data.revision)
-        : 0,
-      activeSessionId: sessions.some((session) => session.id === data.activeSessionId) ? data.activeSessionId : null,
-      sessions,
-    };
+    stat = await fs.stat(indexPath);
+  } catch { /* 索引文件不存在：走空索引语义 */ }
+  if (!stat) {
+    return { revision: 0, activeSessionId: null, sessions: [] };
+  }
+  const cached = _indexCache.get(indexPath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return structuredClone(cached.value);
+  }
+  try {
+    const value = normalizeSessionIndexData(await readJson(indexPath));
+    _indexCache.set(indexPath, { mtimeMs: stat.mtimeMs, size: stat.size, value });
+    return structuredClone(value);
   } catch {
-    return {
-      revision: 0,
-      activeSessionId: null,
-      sessions: [],
-    };
+    // 索引损坏：与无缓存时的行为一致返回空索引，并清掉旧缓存避免下次命中陈旧值
+    _indexCache.delete(indexPath);
+    return { revision: 0, activeSessionId: null, sessions: [] };
   }
 }
 
@@ -162,6 +184,8 @@ export async function writeSessionIndex(agentId, index) {
       throw err;
     }
   }
+  // 同刻写入（mtime 粒度内）时 mtime+size 可能不变，主动失效兜底
+  _indexCache.delete(indexPath);
 }
 
 export function sessionIndexContentSignature(index = {}) {
