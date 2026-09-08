@@ -15,7 +15,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 ## 适用范围与限制（先读）
 
 - **仅限领域内使用**：coder_shell 只做一件事——调度智能编码工作空间中的 Coder 智能体（建线程、派发工单、监视、收口）。它不是通用 bash：文件操作用 read/write/edit 工具，代码搜索用 glob/grep 工具，一律不要塞进这个 shell。
-- **工具受限**：只认识下表动词；语法只放行**字面量参数、尾随声明 flag（如 `--no-wait`）、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
+- **工具受限**：只认识下表动词；语法只放行**字面量参数、声明 flag（如 `--no-wait`、`--status=executing`，`=` 赋值 flag 可出现在参数任意位置）、管道 `|`、重定向 `> >> <`**。命令替换 `$()`/反引号、变量 `$x`、进程替换、glob 通配、heredoc、后台 `&` 一律拒绝；`rm`、`curl`、`git` 等不在动词表内的动词直接拒绝并附可用动词清单。拒绝是终态，换正确的动词重试，不要绕。
 
 ## coder_shell 用法
 
@@ -28,7 +28,7 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 | `send <threadId> <idempotencyKey> '<指令文本>' [--no-wait]` | 派发并**阻塞**等本轮落定；`--no-wait` 只确认投递即返回（并行派发用），落定交给 `watch` |
 | `watch <threadId> [threadId...]` | 续挂监视（可多线程 any-settle），任一线程落定即整条返回 |
 | `result <threadId>` | 取线程末轮回复全文（coder 的最终报告，落定后取证用） |
-| `list [agentId]` | 线程列表 |
+| `list [agentId] [过滤flag]` | 线程列表（默认按最近活动倒序取 10 条非终态线程；支持状态/目录/标题检索，见下文「线程检索」） |
 | `show <threadId>` | 线程详情（pending 指令数 + 事件尾摘要） |
 | `archive <threadId>` / `unarchive <threadId>` | 归档/恢复 |
 | `deliver <threadId>` | 恢复闸重投 pending 指令 |
@@ -36,6 +36,24 @@ description: "Claw Coder 智能体调度（claw-coder-dispatch feature 内嵌技
 裸 `help` 输出动词表用法（管线级，不占动词表）；`advance` / `resume` **不在动词表**：调用会得到 unknown_verb 和结构化指引——rotation_failed 残局需人工介入（见故障表），不要在 shell 内重试。`rm`、`curl` 等其他动词同样被拒并附可用动词清单。
 
 超时唯一闸门是工具自身的 timeout 契约：超时返回结构化 `done reason=timeout`（不是错误），指令仍在执行，用 `watch` 续挂即可（可一条挂多线程）。不要试图给动词加时间参数。
+
+### 线程检索（list）
+
+默认行为：按**最近活动倒序**取 **10 条**非终态线程（已归档/已关闭不出现，隐藏量在尾部附提示行）；每行含 threadId / lifeState / failed（异常才打印）/ status≠open（异常才打印）/ pending 指令数 / title / dir（head 会话项目目录）/ created / upd。检索语法（valued flag 一律 `=` 赋值形态，可出现在参数任意位置）：
+
+```text
+list programming-helper                                  # 某 agent 的线程
+list --status=executing,pending-commands                 # 只看执行中 / 有待投递指令的
+list --dir=/home/dev/AgentDevClaw                        # 按项目目录检索（含子目录归属）
+list --title=工单025                                     # 按标题关键字检索
+list --failed                                            # 只看 failed=true（接力失败 / 看板失败）
+list --all                                               # 含已归档/已关闭（翻查历史工单用）
+list -n=0                                                # 不限条数；-n=50 显式指定条数
+```
+
+- 过滤可叠加（如 `list --dir=/home/dev/AgentDevClaw --status=executing`）；`--dir` 匹配相等或子目录（大小写与 `\` / `/` 归一）
+- 检索返回空且无终态隐藏时是真空结果；翻查归档线程用 `--all`
+- `list` 是轻量核对入口：核对建线结果、按仓库收口归档时按目录检索，不要逐条 `show` 烧上下文
 
 ## 核心不变量
 

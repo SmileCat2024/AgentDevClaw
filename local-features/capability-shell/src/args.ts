@@ -38,26 +38,17 @@ export function checkArgs(
     const decl = verbs[seg.verb];
     if (!decl) continue; // 动词道已拦截，此处防御性跳过
 
-    // 尾随声明 flag 剥离：不占位置参数个数（只在尾部识别；未声明的
-    // `--` 前缀参数不剥离，仍按位置参数校验）。声明以 `=` 结尾的 flag
-    // （如 `--browser=`）放行 `--browser=<值>` 等号赋值形态。
+    // 声明 flag 剥离：不占位置参数个数。plain flag（如 --no-wait）任意位置
+    // 出现即剥离；valued flag（声明以 = 结尾，如 --status=）只按等号赋值形态
+    // 识别（--status=a 整体剥离），不吃裸 --key 后跟值的写法——后者会被留给
+    // 位置参数计数拒绝，避免把下一个字面量吞成 flag 值产生歧义。
     const declaredFlags = decl.flags ?? [];
     const valueFlags = declaredFlags.filter((f) => f.endsWith('='));
     const plainFlags = declaredFlags.filter((f) => !f.endsWith('='));
-    const positional = [...seg.args];
-    while (positional.length > 0) {
-      const last = positional[positional.length - 1];
-      if (plainFlags.includes(last)) {
-        positional.pop();
-        continue;
-      }
-      const valued = valueFlags.find((f) => last.startsWith(f) && last.length > f.length);
-      if (valued) {
-        positional.pop();
-        continue;
-      }
-      break;
-    }
+    const isDeclaredFlag = (token: string) =>
+      plainFlags.includes(token)
+      || valueFlags.some((f) => token.startsWith(f) && token.length > f.length);
+    const positional = seg.args.filter((token) => !isDeclaredFlag(token));
 
     // 必填数 = required !== false 的前缀参数（可选参只允许尾随，此处按
     // 必填前缀长度计：首个 required !== false 之后全部视为可选）

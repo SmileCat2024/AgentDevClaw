@@ -718,3 +718,162 @@ describe('coder_shell 超长输出自动落盘（与 bash 工具同实现）', (
     }
   });
 });
+
+describe('coder_shell list 检索语法（默认 10 条 + 过滤 flag）', () => {
+  /** 造一条列表线程快照（字段形态 = server 列表响应）。 */
+  function thread(overrides: Record<string, any> = {}) {
+    return {
+      threadId: 'wt-x',
+      title: '工单025 工具进度UI',
+      status: 'open',
+      lifeState: 'idle',
+      failed: false,
+      headSessionId: 'session-x',
+      headProjectDir: '/repo/a',
+      lastEventAt: 1_000,
+      createdAt: 900,
+      commands: [],
+      ...overrides,
+    };
+  }
+
+  function listAdapters(threads: any[]) {
+    return createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([{ match: () => true, body: { threads } }]),
+    });
+  }
+
+  it('默认只显示最近 10 条非终态线程（最近活动倒序 + 总量与截断提示）', async () => {
+    const threads = Array.from({ length: 15 }, (_, i) => thread({
+      threadId: `wt-${i}`,
+      lastEventAt: i + 1, // wt-14 最新 … wt-0 最旧
+      createdAt: i,
+    }));
+    threads.push(thread({ threadId: 'wt-arch', lifeState: 'archived' }));
+    const adapters = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([{ match: () => true, body: { threads } }]),
+    });
+    const r = await runCapabilityShellPipeline(POLICY, 'list', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    const rows = r.output.split('\n').filter((line) => line.includes('threadId=wt-'));
+    assert.equal(rows.length, 10, `默认只显示 10 行: ${r.output}`);
+    assert.ok(r.output.startsWith('Threads (10/15)'), `总量=非终态数 15: ${r.output.split('\n')[0]}`);
+    assert.ok(r.output.includes('threadId=wt-14'), '最新线程应排最前');
+    assert.ok(!r.output.includes('wt-4 '), '第 11 新（wt-4）应被截断');
+    assert.ok(r.output.includes('-n=0'), '截断时附 -n=0 指引');
+    assert.ok(r.output.includes('已归档/已关闭'), '终态隐藏量应透明');
+  });
+
+  it('行信息全面：标题 / 目录 / 创建与最近活动时间 / pending 指令数；异常标记按需出现', async () => {
+    const adapters = listAdapters([
+      thread({ threadId: 'wt-a', title: '审查远程图片修复', lifeState: 'executing', headProjectDir: '/home/dev/AgentDevClaw', lastEventAt: 86_400_000, createdAt: 3_600_000 }),
+      thread({ threadId: 'wt-b', title: '', lifeState: 'pending-commands', failed: true, status: 'rotation_failed', commands: [{ status: 'pending' }] }),
+    ]);
+    const r = await runCapabilityShellPipeline(POLICY, 'list', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('title=审查远程图片修复'), r.output);
+    assert.ok(r.output.includes('title=(无标题)'), r.output);
+    assert.ok(r.output.includes('dir=/home/dev/AgentDevClaw'), r.output);
+    assert.ok(r.output.includes('created='), '应含创建时间');
+    assert.ok(r.output.includes('upd='), '应含最近活动时间');
+    assert.ok(r.output.includes('pending=1'), 'pending>0 应可见');
+    assert.ok(r.output.includes('failed=true'), '失败标记应透出');
+    assert.ok(r.output.includes('status=rotation_failed'), '非 open 状态应透出');
+    assert.ok(!r.output.includes('failed=false'), '正常行不打印 failed 标记');
+  });
+
+  it('--status 过滤；点名终态覆盖默认隐藏；未知值派发侧拒绝', async () => {
+    const adapters = listAdapters([
+      thread({ threadId: 'wt-run', lifeState: 'executing' }),
+      thread({ threadId: 'wt-arch', lifeState: 'archived' }),
+    ]);
+    const onlyRunning = await runCapabilityShellPipeline(POLICY, 'list --status=executing', { adapters, bashPath: null });
+    assert.equal(onlyRunning.ok, true, onlyRunning.output);
+    assert.ok(onlyRunning.output.includes('wt-run'), '应只剩 executing 线程');
+    assert.ok(!onlyRunning.output.includes('wt-arch'), '非 executing 不应出现');
+    // 显式点名终态：覆盖默认隐藏
+    const archivedOnly = await runCapabilityShellPipeline(POLICY, 'list --status=archived', { adapters, bashPath: null });
+    assert.equal(archivedOnly.ok, true, archivedOnly.output);
+    assert.ok(archivedOnly.output.includes('wt-arch'), archivedOnly.output);
+    // 未知 lifeState → 派发侧结构化拒绝（附可用值）
+    const bad = await runCapabilityShellPipeline(POLICY, 'list --status=running', { adapters, bashPath: null });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.rejection?.code, 'dispatch_failed');
+    assert.ok(bad.output.includes('executing,pending-commands'), bad.output);
+  });
+
+  it('--dir 目录归属过滤：相等或子目录命中；大小写与反斜杠归一', async () => {
+    const adapters = listAdapters([
+      thread({ threadId: 'wt-in', headProjectDir: '/Home/Dev/AgentDevClaw' }),
+      thread({ threadId: 'wt-sub', headProjectDir: '\\home\\dev\\AgentDevClaw\\sub' }),
+      thread({ threadId: 'wt-out', headProjectDir: '/home/dev/other' }),
+      thread({ threadId: 'wt-nodir', headProjectDir: null }),
+    ]);
+    const r = await runCapabilityShellPipeline(POLICY, 'list --dir=/home/dev/agentdevclaw', { adapters, bashPath: null });
+    assert.equal(r.ok, true, r.output);
+    assert.ok(r.output.includes('wt-in'), r.output);
+    assert.ok(r.output.includes('wt-sub'), '子目录线程应归属命中');
+    assert.ok(!r.output.includes('wt-out'), '无关目录不应命中');
+    assert.ok(!r.output.includes('wt-nodir'), '无目录线程不命中 dir 过滤');
+  });
+
+  it('--title 大小写不敏感子串匹配；--failed 只看失败线程', async () => {
+    const adapters = listAdapters([
+      thread({ threadId: 'wt-hit', title: 'Ticket-025 工具进度UI' }),
+      thread({ threadId: 'wt-miss', title: '无关工单' }),
+      thread({ threadId: 'wt-failed', title: '工单 999', lifeState: 'executing', failed: true }),
+    ]);
+    const byTitle = await runCapabilityShellPipeline(POLICY, 'list --title=TICKET-025', { adapters, bashPath: null });
+    assert.equal(byTitle.ok, true, byTitle.output);
+    assert.ok(byTitle.output.includes('wt-hit'), byTitle.output);
+    assert.ok(!byTitle.output.includes('wt-miss'), '不匹配标题应被过滤');
+    const failedOnly = await runCapabilityShellPipeline(POLICY, 'list --failed', { adapters, bashPath: null });
+    assert.equal(failedOnly.ok, true, failedOnly.output);
+    assert.ok(failedOnly.output.includes('wt-failed'), failedOnly.output);
+    assert.ok(!failedOnly.output.includes('wt-hit'), '非失败线程应被过滤');
+  });
+
+  it('-n 覆盖默认条数，-n=0 不限制；截断时附 -n=0 指引', async () => {
+    const many = Array.from({ length: 6 }, (_, i) => thread({ threadId: `wt-${i}`, lastEventAt: i, createdAt: i }));
+    const adapters = listAdapters(many);
+    const two = await runCapabilityShellPipeline(POLICY, 'list -n=2', { adapters, bashPath: null });
+    assert.equal(two.ok, true, two.output);
+    assert.ok(two.output.includes('Threads (2/6)'), two.output);
+    assert.ok(two.output.includes('只显示最近 2 条'), two.output);
+    const unlimited = await runCapabilityShellPipeline(POLICY, 'list -n=0', { adapters, bashPath: null });
+    assert.equal(unlimited.ok, true, unlimited.output);
+    assert.ok(unlimited.output.includes('Threads (6/6)'), unlimited.output);
+  });
+
+  it('flag 任意位置识别；--all 含终态线程且无隐藏提示', async () => {
+    const adapters = listAdapters([
+      thread({ threadId: 'wt-arch', lifeState: 'archived' }),
+      thread({ threadId: 'wt-live', lifeState: 'idle' }),
+    ]);
+    const withAll = await runCapabilityShellPipeline(POLICY, 'list --all', { adapters, bashPath: null });
+    assert.equal(withAll.ok, true, withAll.output);
+    assert.ok(withAll.output.includes('wt-arch'), '--all 应含归档线程');
+    assert.ok(!withAll.output.includes('另有'), '--all 下无隐藏终态提示');
+    // flag 与位置参数混排：flag 任意位置剥离，agentId 仍过参数道与 URL 转发
+    const adaptersWithAgent = createThreadsAdapters({
+      serverOrigin: 'http://test',
+      fetchImpl: stubFetch([
+        { match: (u) => u.includes('agentId=programming-helper'), body: { threads: [thread({ threadId: 'wt-ph' })] } },
+      ]),
+    });
+    const anywhere = await runCapabilityShellPipeline(POLICY, 'list --all programming-helper', { adapters: adaptersWithAgent, bashPath: null });
+    assert.equal(anywhere.ok, true, anywhere.output);
+    assert.ok(anywhere.output.includes('wt-ph'), anywhere.output);
+  });
+
+  it('未知 flag（= 形态）派发侧拒绝；裸 --dir 在参数道拒绝', async () => {
+    const unknown = await runCapabilityShellPipeline(POLICY, 'list --nope=1', { adapters: listAdapters([]), bashPath: null });
+    assert.equal(unknown.ok, false);
+    assert.ok(unknown.output.includes('--nope'), unknown.output);
+    const bareFlag = await runCapabilityShellPipeline(POLICY, 'list --dir /some/path', { adapters: {}, bashPath: null });
+    assert.equal(bareFlag.ok, false);
+    assert.equal(bareFlag.rejection?.code, 'arg_rejected', `裸 --dir 应在参数道拒绝: ${bareFlag.rejection?.code}`);
+  });
+});

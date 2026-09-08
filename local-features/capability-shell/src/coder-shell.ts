@@ -50,6 +50,13 @@ const STALE_THREAD_MS = 300_000;
 const TAIL_EVENT_COUNT = 5;
 /** result 末轮回复的输出上限（超长截断并注明全文长度）。 */
 const MAX_RESULT_CHARS = 4_000;
+/** list 行内标题的显示上限（工单全文标题会撑爆行宽）。 */
+const MAX_TITLE_CHARS = 40;
+/** 超长文本省略展示（标题等短字段用）。 */
+function ellipsize(text: string, max = MAX_TITLE_CHARS): string {
+  const clean = String(text || '').trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
 
 /** fetch 注入形态（测试用最小面）。 */
 export type FetchLike = (
@@ -171,6 +178,140 @@ export function createThreadsAdapter(deps: {
     if (thread?.title) parts.push(`title=${thread.title}`);
     if (thread?.headSessionId) parts.push(`head=${thread.headSessionId}`);
     return parts.join('  ');
+  }
+
+  /**
+   * list 行摘要（信息面比 threadLine 全，调度一屏可读）：
+   * 标题 + 项目目录 + 创建/最近活动时间 + pending 指令数；异常标记按需
+   * 出现（failed=true / status≠open 时才打印，pending>0 才打印），行短且
+   * 异常线程一眼可辨。head 会话 id 不进 list 行（show 有），避免撑宽。
+   */
+  function listThreadLine(thread: Record<string, any>): string {
+    const parts = [
+      `threadId=${thread?.threadId || '(unknown)'}`,
+      `lifeState=${thread?.lifeState || 'unknown'}`,
+    ];
+    if (thread?.failed === true) parts.push('failed=true');
+    const status = String(thread?.status || 'open');
+    if (status && status !== 'open') parts.push(`status=${status}`);
+    const commands = Array.isArray(thread?.commands) ? thread.commands : [];
+    const pendingCount = commands.filter((command: any) => command?.status === 'pending').length;
+    if (pendingCount > 0) parts.push(`pending=${pendingCount}`);
+    parts.push(`title=${thread?.title ? ellipsize(String(thread.title)) : '(无标题)'}`);
+    if (thread?.headProjectDir) parts.push(`dir=${thread.headProjectDir}`);
+    parts.push(`created=${formatThreadTime(thread?.createdAt)}`);
+    parts.push(`upd=${formatThreadTime(thread?.lastEventAt ?? thread?.updatedAt)}`);
+    return parts.join('  ');
+  }
+
+  /** 线程最近活动时间 → 紧凑本地时间（MM-dd HH:mm）。 */
+  function formatThreadTime(value: unknown): string {
+    const ts = Number(value) || 0;
+    if (!ts) return 'unknown';
+    const d = new Date(ts);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  // ── list 检索语法 ─────────────────────────────────────────────────
+  //
+  // CLI 常见用法（= 赋值 flag，任意位置）：位置参数只剩 agentId，其余
+  // 条件全走 flag。默认按最近活动倒序取 10 条非终态线程；过滤在 adapter
+  // 侧完成——server 列表端点只认 agentId，其余条件（lifeState / 目录 /
+  // 标题 / failed）的权威字段都在列表响应上，本地过滤不产生第二事实源。
+
+  /** list 默认显示条数（-n 可覆盖，0 = 不限制）。 */
+  const DEFAULT_LIST_LIMIT = 10;
+
+  /** lifeState 合法取值（thread-life-state.js 四态 + closed 终态）。 */
+  const LIST_LIFE_STATES = ['executing', 'pending-commands', 'idle', 'archived', 'closed'] as const;
+
+  interface ListFilters {
+    agentId?: string;
+    statuses: string[];
+    failedOnly: boolean;
+    dirPrefix?: string;
+    title?: string;
+    /** null = 不限量（-n=0）；number = 最多显示条数 */
+    limit: number | null;
+    all: boolean;
+  }
+
+  /**
+   * list 参数解析：位置参数首项 = agentId，其余为声明 flag（--key=<值>）。
+   * 未声明 flag / 裸 --key / 非法枚举 / 非法数值在派发侧即拒绝（报文带用法），
+   * 不等 server 或静默忽略——静默忽略过滤条件会让检索结果 silently 失真。
+   */
+  function parseListArgs(rest: string[]): ListFilters {
+    const filters: ListFilters = { statuses: [], failedOnly: false, all: false, limit: DEFAULT_LIST_LIMIT };
+    const positional: string[] = [];
+    for (const token of rest) {
+      const assigned = /^(--status|--dir|--title|-n|--limit)=(.*)$/.exec(token);
+      if (assigned) {
+        const key = assigned[1];
+        if (key === '--status') {
+          for (const state of assigned[2].split(',')) {
+            const life = String(state.trim());
+            if (!LIST_LIFE_STATES.includes(life as (typeof LIST_LIFE_STATES)[number])) {
+              throw new Error(`list 拒绝：--status 的值 “${assigned[2]}” 含未知状态，可用: ${LIST_LIFE_STATES.join(',')}`);
+            }
+            filters.statuses.push(life);
+          }
+        } else if (key === '--dir') {
+          if (!assigned[2]) throw new Error('list 拒绝：--dir 需要目录值，如 --dir=/home/dev/AgentDevClaw');
+          filters.dirPrefix = assigned[2];
+        } else if (key === '--title') {
+          if (!assigned[2]) throw new Error('list 拒绝：--title 需要关键字值');
+          filters.title = assigned[2];
+        } else {
+          const raw = assigned[2];
+          const limit = Number(raw);
+          if (raw === '' || !Number.isSafeInteger(limit) || limit < 0) {
+            throw new Error('list 拒绝：-n/--limit 必须是非负整数（0 = 不限条数）');
+          }
+          filters.limit = limit === 0 ? null : limit;
+        }
+        continue;
+      }
+      if (token === '--all') {
+        filters.all = true;
+        continue;
+      }
+      if (token === '--failed') {
+        filters.failedOnly = true;
+        continue;
+      }
+      if (token.startsWith('--') || token === '-n') {
+        throw new Error(`list 拒绝：未知或写法不支持的参数 “${token}”。用法：list [agentId] [--status=...] [--dir=/目录] [--title=关键字] [-n=条数] [--all] [--failed]（valued flag 必须用 = 赋值形态）`);
+      }
+      positional.push(token);
+    }
+    if (filters.statuses.length > 0) filters.statuses = [...new Set(filters.statuses)];
+    if (filters.agentId === undefined && positional.length > 0) {
+      const agentId = positional[0];
+      if (positional.length > 1) {
+        throw new Error('list 最多接受 1 个位置参数（agentId）。用法：list [agentId] [--status=...] [--dir=/目录] [--title=关键字] [-n=条数] [--all] [--failed]');
+      }
+      filters.agentId = agentId;
+    }
+    return filters;
+  }
+
+  /** 目录比较键：反斜杠归一 + 去尾分隔符 + 小写（跨平台路径语义）。 */
+  function normalizeDirKey(rawPath: string): string {
+    return String(rawPath || '').trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  }
+
+  /** 目录归属判定：thread 目录与过滤前缀相等，或位于其子目录下。 */
+  function dirUnder(threadDir: string, prefixKey: string): boolean {
+    const threadKey = normalizeDirKey(threadDir);
+    if (!threadKey || !prefixKey) return false;
+    return threadKey === prefixKey || threadKey.startsWith(`${prefixKey}/`);
+  }
+
+  /** 排序锚点：最近活动时间（缺失时回退 updatedAt / createdAt）。 */
+  function recencyOf(thread: Record<string, any>): number {
+    return Number(thread?.lastEventAt) || Number(thread?.updatedAt) || Number(thread?.createdAt) || 0;
   }
 
   /** 事件压缩为一行（取证用）。 */
@@ -443,11 +584,12 @@ export function createThreadsAdapter(deps: {
 
       // send <threadId> <idempotencyKey> <text> [--no-wait]：派发 + 阻塞等
       // 本轮落定（幂等键必填，缺失在参数校验道拒绝——复用 threads API 既有
-      // 字段）。--no-wait 尾随 flag：只确认投递即返回，不进落定等待——
-      // 并行派发多条长任务时逐条阻塞会烧满工具超时，落定确认交给 watch。
+      // 字段）。--no-wait：只确认投递即返回，不进落定等待——并行派发多条
+      // 长任务时逐条阻塞会烧满工具超时，落定确认交给 watch。flag 按声明
+      // 全位置剥离（与参数校验道同语义），位置不影响识别。
       case 'send': {
-        const noWait = rest[rest.length - 1] === '--no-wait';
-        const positional = noWait ? rest.slice(0, -1) : rest;
+        const positional = rest.filter((token) => token !== '--no-wait');
+        const noWait = positional.length !== rest.length;
         const [threadId, idempotencyKey, text] = positional;
         const payload = await clawFetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/commands`, {
           method: 'POST',
@@ -595,13 +737,61 @@ export function createThreadsAdapter(deps: {
         ].join('\n');
       }
 
-      // list [agentId]：线程列表
+      // list [agentId] [--status=...] [--dir=...] [--title=...] [-n=N] [--all] [--failed]
+      // 检索控制（CLI 常见用法：= 赋值 flag，任意位置）。默认按最近活动
+      // （lastEventAt）倒序取 10 条非终态线程；过滤在 adapter 侧完成——
+      // server 列表端点只认 agentId，其余条件（lifeState / 目录 / 标题 /
+      // failed）的权威字段都在列表响应上，本地过滤不产生第二事实源。
       case 'list': {
-        const [agentId] = rest;
-        const query = agentId ? `?agentId=${encodeURIComponent(agentId)}` : '';
-        const payload = await clawFetch(`/protoclaw/threads${query}`);
-        const threads = (payload?.threads as Array<Record<string, any>>) || [];
-        return [`Threads (${threads.length}):`, ...threads.map(threadLine)].join('\n');
+        const filters = parseListArgs(rest);
+        const payload = await clawFetch(`/protoclaw/threads${filters.agentId ? `?agentId=${encodeURIComponent(filters.agentId)}` : ''}`);
+        const all = (payload?.threads as Array<Record<string, any>>) || [];
+        // 终态（归档/关闭）默认隐藏：是收纳残迹，混在活跃线程里稀释检索
+        // 信号；--all 是显式翻查语义，隐藏量附一行，翻查入口可见。显式
+        // --status 点名终态时覆盖默认隐藏（点名即所选）。
+        const terminal = (thread: Record<string, any>) =>
+          ['archived', 'closed'].includes(String(thread?.lifeState || ''));
+        const explicitStatus = filters.statuses.length > 0;
+        let matched = filters.all || explicitStatus
+          ? [...all]
+          : all.filter((thread) => !terminal(thread));
+        const hiddenTerminal = filters.all || explicitStatus
+          ? 0
+          : all.filter(terminal).length;
+        if (explicitStatus) {
+          matched = matched.filter((thread) => filters.statuses.includes(String(thread?.lifeState || '')));
+        }
+        if (filters.failedOnly) {
+          matched = matched.filter((thread) => thread?.failed === true);
+        }
+        if (filters.dirPrefix) {
+          const prefix = normalizeDirKey(filters.dirPrefix);
+          matched = matched.filter((thread) => dirUnder(String(thread?.headProjectDir || ''), prefix));
+        }
+        if (filters.title) {
+          const needle = filters.title.toLowerCase();
+          matched = matched.filter((thread) => String(thread?.title || '').toLowerCase().includes(needle));
+        }
+        // 最近活动优先：调度方最关心刚派发/正在执行的线程
+        matched.sort((left, right) => recencyOf(right) - recencyOf(left));
+        const matchedTotal = matched.length;
+        if (typeof filters.limit === 'number' && matched.length > filters.limit) {
+          matched = matched.slice(0, filters.limit);
+        }
+        const lines = [
+          `Threads (${matched.length}/${matchedTotal})`,
+          ...matched.map(listThreadLine),
+        ];
+        if (hiddenTerminal > 0) {
+          lines.push(`（另有 ${hiddenTerminal} 条已归档/已关闭线程未显示：--all 查看）`);
+        }
+        if (matched.length < matchedTotal) {
+          lines.push(`（只显示最近 ${filters.limit ?? DEFAULT_LIST_LIMIT} 条，-n=0 查看全部）`);
+        }
+        if (matched.length === 0 && hiddenTerminal === 0) {
+          lines.push('（无线程——用 new-session 创建 Coder 会话并建线）');
+        }
+        return lines.join('\n');
       }
 
       // show <threadId>：线程详情 + pending 指令数 + 事件尾摘要

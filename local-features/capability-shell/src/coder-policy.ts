@@ -76,11 +76,12 @@ export function createCoderShellPolicy(): CapabilityShellPolicy {
         adapter: { key: 'threads:result' },
       },
       'list': {
-        description: '列出工作线程',
+        description: '列出工作线程：默认按最近活动倒序取 10 条非终态线程（归档/关闭不出现在默认结果）；--status / --dir / --title / --failed 过滤，-n 调整条数（0=不限），--all 含终态线程',
         params: [
           { name: 'agentId', kind: 'literal', required: false },
         ],
-        usage: 'list [agentId]',
+        flags: ['--all', '--failed', '--status=', '--dir=', '--title=', '-n=', '--limit='],
+        usage: "list [agentId] [--status=executing,pending-commands,idle,archived,closed] [--dir=/项目目录] [--title=关键字] [-n=条数] [--all] [--failed]",
         adapter: { key: 'threads:list' },
       },
       'show': {
