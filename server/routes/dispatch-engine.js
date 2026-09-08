@@ -107,12 +107,16 @@ async function fireSingleTarget(s, target) {
       if (adapter) {
         let projectConfig = null;
         if (projectId) {
-          projectConfig = adapter.getProjectConfig(projectId);
+          // resolveProjectConfig 还原真实大小写目录（id 是小写比较键，不能反推）；
+          // 旧式测试/自定义适配器仅实现 getProjectConfig 时保持原行为。
+          projectConfig = typeof adapter.resolveProjectConfig === 'function'
+            ? await adapter.resolveProjectConfig(projectId)
+            : adapter.getProjectConfig(projectId);
           console.log(`[Dispatch] using specified project ${projectId} for ${agentId}`);
         } else {
           const currentProject = await adapter.getCurrentProject();
           if (currentProject) {
-            projectConfig = adapter.getProjectConfig(currentProject.id);
+            projectConfig = currentProject.config;
             console.log(`[Dispatch] using current project ${currentProject.id} for ${agentId}`);
           }
         }

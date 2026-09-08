@@ -38,6 +38,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { ContextRotationTriggerFeature } from '../../../local-features/dist/context-guard/src/index.js';
 import { GitHubFeature } from '../../../local-features/dist/github/src/index.js';
+import { SessionReferenceFeature } from '../../../local-features/dist/session-reference/src/index.js';
 import {
   readGlobalLayer,
   readLayerFile,
@@ -134,6 +135,13 @@ export class CoderAgent extends BasicAgent {
     this.use(new LspFeature({ workdir: workspaceDir }));
 
     this.use(new GitHubFeature());
+
+    // 会话内容分级读取（发现 → trim 概览 → 某轮全量）：coder 可参考其他
+    // 会话（如主线会话的任务上下文）；纯视图不落盘。
+    this.use(new SessionReferenceFeature({
+      agentId: runtimeIdentity.agentId,
+      serverOrigin: runtimeIdentity.serverOrigin,
+    }));
   }
 
   async onInitiate(ctx) {

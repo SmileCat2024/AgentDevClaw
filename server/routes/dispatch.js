@@ -21,6 +21,7 @@ import {
 import { USER_DATA_ROOT, LONG_POLL_DEFAULT_SEC, LONG_POLL_MAX_SEC, DISPATCH_IDLE_THRESHOLD_DEFAULT_SEC, DISPATCH_IDLE_POLL_MIN_MS } from '../shared/constants.js';
 import { getDefaultIMChannelId } from '../shared/im-channels.js';
 import { sanitizeSessionFragment } from '../shared/string-helpers.js';
+import { normalizePathCasing } from '../shared/fs-helpers.js';
 import { resolveSessionTarget } from '../shared/operation-target.js';
 import {
   getManagedRuntimeKey,
@@ -67,12 +68,18 @@ function getProjectAdapter(agentId) {
 class ProgrammingHelperProjectAdapter {
   constructor() {
     this.workspaceId = 'programming-helper';
+    // projectId 是小写比较键（dir:<归一化路径>），绝不能反向当作真实路径
+    // 使用——大小写信息只在项目/会话记录上。此表在每次观察到真实目录时
+    // 填充（extractProjectId），供 getProjectConfig 还原真实大小写。
+    this.observedDirs = new Map();
   }
 
   extractProjectId(session) {
     const openDirectory = session?.openDirectory;
     if (!openDirectory) return null;
-    return `dir:${String(openDirectory).replace(/\\/g, '/').toLowerCase()}`;
+    const id = `dir:${String(openDirectory).replace(/\\/g, '/').toLowerCase()}`;
+    this.observedDirs.set(id, String(openDirectory).trim());
+    return id;
   }
 
   async getCurrentProject() {
@@ -105,8 +112,31 @@ class ProgrammingHelperProjectAdapter {
     if (!projectId || !projectId.startsWith('dir:')) {
       return {};
     }
-    const openDirectory = projectId.slice(4); // Remove 'dir:' prefix
-    return { openDirectory };
+    // 同步上下文用：id 本身是小写键，这里只允许从观察缓存还原真实目录。
+    // 进程内未观察过该 id 时（如重启后直接 fire），走异步 resolveProjectConfig。
+    const observed = this.observedDirs.get(projectId);
+    return { openDirectory: observed || projectId.slice(4) };
+  }
+
+  /**
+   * 解析 projectId 对应的真实目录（异步完整解析，fire 新会话用）。
+   * 观察缓存 → workspace phProjects 记录 → id 片段（小写，仅作最后回退，
+   * 经 normalizePathCasing 修正大小写后仍不存在则由会话创建校验兜底）。
+   */
+  async resolveProjectConfig(projectId) {
+    if (!projectId || !projectId.startsWith('dir:')) {
+      return {};
+    }
+    const observed = this.observedDirs.get(projectId);
+    if (observed) return { openDirectory: observed };
+    try {
+      const workspaceState = await _ctx.readWorkspaceState(this.workspaceId);
+      const stored = Array.isArray(workspaceState?.phProjects)
+        ? workspaceState.phProjects.find((project) => project?.id === projectId)
+        : null;
+      if (stored?.openDirectory) return { openDirectory: stored.openDirectory };
+    } catch { /* state 读取失败时回退 id 片段 */ }
+    return { openDirectory: await normalizePathCasing(projectId.slice(4)) };
   }
 
   async listProjects() {
@@ -115,7 +145,7 @@ class ProgrammingHelperProjectAdapter {
   }
 
   async activateProject(projectId) {
-    const config = this.getProjectConfig(projectId);
+    const config = await this.resolveProjectConfig(projectId);
     if (!config.openDirectory) {
       throw new Error(`Invalid project ID: ${projectId}`);
     }

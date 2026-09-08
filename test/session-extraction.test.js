@@ -200,6 +200,7 @@ describe('session mutation target boundary', () => {
 const EXPECTED_ROUTES = [
   'GET /protoclaw/prebuilt_sessions',
   'GET /protoclaw/search_sessions',
+  'GET /protoclaw/session_directory',
   'GET /protoclaw/session_record',
   'POST /protoclaw/render_conversation',
   'GET /protoclaw/session_trim_preview',

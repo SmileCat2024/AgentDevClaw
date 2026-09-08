@@ -529,3 +529,43 @@ export function compareSidebarSessionReadModels(lightSessions = [], authoritativ
   };
 }
 
+/**
+ * 跨 agent 会话目录聚合（/protoclaw/session_directory 数据面）。
+ *
+ * 只消费各 agent 的 session index 元数据（readSessionIndex 的输出），
+ * 不读会话文件本体。供 session-reference feature 的发现工具消费。
+ * 纯函数：过滤 archived、按 updatedAt 倒序、limit 截断。
+ *
+ * @param {Array<{agentId: string, agentName?: string, sessions: Array<object>}>} agentIndexEntries
+ * @param {{limit?: number, includeArchived?: boolean}} [options]
+ */
+export function buildSessionDirectoryEntries(agentIndexEntries, options = {}) {
+  const includeArchived = options?.includeArchived === true;
+  const entries = [];
+  for (const entry of Array.isArray(agentIndexEntries) ? agentIndexEntries : []) {
+    const agentId = cleanSessionText(entry?.agentId);
+    if (!agentId) continue;
+    const agentName = cleanSessionText(entry?.agentName);
+    for (const record of Array.isArray(entry?.sessions) ? entry.sessions : []) {
+      if (!record?.id) continue;
+      if (record.archived === true && !includeArchived) continue;
+      const createdAt = cleanSessionText(record?.createdAt);
+      entries.push({
+        agentId,
+        agentName,
+        sessionId: cleanSessionText(record.id),
+        title: cleanSessionText(record.title),
+        preview: cleanSessionText(record.preview),
+        openDirectory: cleanSessionText(record.openDirectory),
+        sessionType: cleanSessionText(record.sessionType) || 'main',
+        createdAt,
+        updatedAt: cleanSessionText(record?.updatedAt) || createdAt,
+        messageCount: typeof record.messageCount === 'number' ? record.messageCount : 0,
+      });
+    }
+  }
+  entries.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  const limit = Number(options?.limit);
+  return Number.isFinite(limit) && limit > 0 ? entries.slice(0, limit) : entries;
+}
+

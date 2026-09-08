@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
 import {
+  AGENTS_ROOT,
   MIRROR_SCRIPT_TIMEOUT_MS,
   SESSION_TRANSFORMATION_TIMEOUT_MS,
   PH_STYLE_WORKSPACE_AGENT_IDS,
@@ -39,7 +40,7 @@ import {
 } from '../shared/remote-forward.js';
 import { attachOperationMetadata, readOperationMetadata, buildLocalFailureResponse } from '../shared/operation-contract.js';
 import { recordSidebarDiagnosticEvent } from '../shared/sidebar-diagnostics.js';
-import { META_VERSION } from './session-helpers.js';
+import { META_VERSION, buildSessionDirectoryEntries } from './session-helpers.js';
 import { setupTokenRefreshRoute } from './session-token-refresh.js';
 import { getThreadIntegration, isSuccessionGateFailure } from '../thread-control/thread-integration.js';
 import { getInternalAuthToken } from '../auth.js';
@@ -99,6 +100,7 @@ export function setupSessionRoutes(app, express, ctx) {
     setSessionHasSummary,
     tagPrebuiltSessionTodo,
     requireAgentLight,
+    discoverAgents,
     startManagedAgent,
     stopManagedAgent,
     waitForManagedRuntimeReady,
@@ -289,6 +291,33 @@ app.get('/protoclaw/search_sessions', async (req, res, next) => {
     }
     const result = await searchSessionsContent(agentId, query, openDirectory);
     res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// 跨 agent 会话目录（session-reference feature 的发现数据面）：聚合全部
+// 已发现 prebuilt agent 的 session index 元数据，只读索引不读会话本体。
+// 临时 runtime 目录（agent-N-xxx）无 metadata.json，天然不进目录。
+app.get('/protoclaw/session_directory', async (req, res, next) => {
+  try {
+    const agents = await discoverAgents(AGENTS_ROOT);
+    const entries = await Promise.all(agents.map(async (agent) => {
+      const agentId = sanitizeSessionFragment(agent.id);
+      const index = await readSessionIndex(agentId);
+      return {
+        agentId,
+        agentName: cleanSessionText(agent.name) || agentId,
+        sessions: index.sessions,
+      };
+    }));
+    const includeArchived = req.query.includeArchived === '1' || req.query.includeArchived === 'true';
+    const limit = Number(req.query.limit);
+    const sessions = buildSessionDirectoryEntries(entries, {
+      includeArchived,
+      limit: Number.isFinite(limit) && limit > 0 ? limit : 50,
+    });
+    res.json({ sessions, total: sessions.length });
   } catch (error) {
     next(error);
   }

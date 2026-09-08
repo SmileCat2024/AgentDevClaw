@@ -8,6 +8,7 @@ export { ClawDispatchFeature } from './dispatch/src/index.js';
 export { CheckpointFeature } from './checkpoint/src/index.js';
 export { GenerativeUISurfaceFeature } from './generative-ui/src/index.js';
 export { GitHubFeature } from './github/src/index.js';
+export { SessionReferenceFeature } from './session-reference/src/index.js';
 export {
   createCapabilityShellTool,
   runCapabilityShellPipeline,
