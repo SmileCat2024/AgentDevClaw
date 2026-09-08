@@ -48,6 +48,45 @@ function _ensureGatewayHost() {
     host.id = 'mcp-gateway-overlay-host';
     document.body.appendChild(host);
   }
+  if (!host._gatewayInteractionsBound) {
+    host._gatewayInteractionsBound = true;
+    host.addEventListener('click', (event) => {
+      const controlEl = event.target.closest('.gateway-control');
+      const target = event.target.closest('[data-gateway-action]');
+      // 点击落在开关/按钮组内时，仅当命中的 action 元素也属于该控件区才继续；
+      // 否则（如滑块 span 本身无 action）交由 change 事件处理，不触发列表项 view-detail
+      if (controlEl && !(target && controlEl.contains(target))) return;
+      if (!target || !host.contains(target)) return;
+      const action = target.dataset.gatewayAction;
+      const serverId = target.dataset.serverId;
+      if (action === 'view-detail') return window._gatewayViewDetail(serverId);
+      if (action === 'restart') return window._gatewayRestart(serverId);
+      if (action === 'restart-detail') {
+        window._gatewayRestart(serverId).then(() => window._gatewayRefreshDetail());
+        return;
+      }
+      if (action === 'edit') return window._gatewayEdit(serverId);
+      if (action === 'delete') return window._gatewayDelete(serverId);
+      if (action === 'add') return window._gatewayAdd();
+      if (action === 'cancel-edit') return window._gatewayCancelEdit();
+      if (action === 'save-edit') return window._gatewaySaveEdit();
+      if (action === 'refresh') return window._loadGatewayData();
+      if (action === 'refresh-detail') return window._gatewayRefreshDetail();
+      if (action === 'back') return window._gatewayBackToList();
+      if (action === 'close') return window.closeMcpGateway();
+      if (action === 'toggle-schema') return window._toggleGatewaySchema(target.dataset.toolKey);
+      if (action === 'transport-change') return window._gatewayTransportChange();
+    });
+    host.addEventListener('change', (event) => {
+      const target = event.target.closest('[data-gateway-action]');
+      if (!target || !host.contains(target)) return;
+      if (target.dataset.gatewayAction === 'toggle-system') {
+        window._gatewayToggleSystem(target.dataset.serverId, target);
+      } else if (target.dataset.gatewayAction === 'toggle-custom') {
+        window._gatewayToggleCustom(target.dataset.serverId, target);
+      }
+    });
+  }
   return host;
 }
 
@@ -194,7 +233,7 @@ window._gatewaySaveEdit = async function() {
   if (!id) { alert(isZh ? '服务器 ID 不能为空' : 'Server ID is required'); return; }
 
   const transport = document.getElementById('gateway-edit-transport')?.value || 'stdio';
-  const config = { transport };
+  const config = { transport, enabled: _editing?.config?.enabled !== false };
 
   if (transport === 'stdio') {
     config.command = (document.getElementById('gateway-edit-command')?.value || '').trim();
@@ -251,6 +290,38 @@ window._gatewayTransportChange = function() {
   dynamicFields.innerHTML = _renderEditFields(transport, _editing?.config || {});
 };
 
+async function _toggleGatewayServer(serverId, checkbox) {
+  const enabled = checkbox.checked;
+  try {
+    const res = await fetch(`/protoclaw/mcp-gateway/custom/${encodeURIComponent(serverId)}/toggle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      const errorBody = contentType.includes('application/json')
+        ? await res.json()
+        : { error: `HTTP ${res.status}` };
+      throw new Error(errorBody.error || `HTTP ${res.status}`);
+    }
+    const result = await res.json();
+    if (!result.ok) throw new Error(result.error || 'Toggle was not applied');
+    _gatewayConfig.servers[serverId].enabled = enabled;
+    const s = _gatewayData?.servers?.find(x => x.id === serverId);
+    if (s) s.enabled = enabled;
+    if (_view === 'detail') {
+      _view = 'list';
+      _detail = null;
+    }
+    renderGatewayOverlay();
+    setTimeout(() => _loadGatewayData(), 800);
+  } catch (e) {
+    checkbox.checked = !enabled;
+    alert('Failed to toggle: ' + e.message);
+  }
+}
+
 window._gatewayToggleSystem = async function(serverId, checkbox) {
   try {
     await fetch(`/protoclaw/mcp-gateway/system/${encodeURIComponent(serverId)}/toggle`, {
@@ -267,6 +338,8 @@ window._gatewayToggleSystem = async function(serverId, checkbox) {
     alert('Failed to toggle: ' + e.message);
   }
 };
+
+window._gatewayToggleCustom = _toggleGatewayServer;
 
 // ── Detail view ───────────────────────────────────────────────────
 
@@ -366,12 +439,12 @@ function _fmtTime(ts) {
 // ── List rendering ────────────────────────────────────────────────
 
 function _renderSystemItem(s, isZh) {
-  const checked = s.enabled !== false ? 'checked' : '';
+  const checked = s.enabled !== false ? ' checked' : '';
   const toolText = s.toolCount > 0
     ? '<span class="gateway-dot-sep">·</span><span>' + s.toolCount + (isZh ? ' 个工具' : ' tools') + '</span>'
     : '';
   return [
-    '<div class="gateway-list-item clickable" onclick="_gatewayViewDetail(\'' + escapeHtml(s.id) + '\')">',
+    '<div class="gateway-list-item clickable" data-gateway-action="view-detail" data-server-id="' + escapeHtml(s.id) + '">',
     '  <div class="gateway-list-row">',
     '    <div class="gateway-item-left">',
     '      <div class="gateway-item-icon">' + SVG_SERVER + '</div>',
@@ -379,19 +452,19 @@ function _renderSystemItem(s, isZh) {
     '        <div class="gateway-item-name">' + escapeHtml(s.name || s.id) + '</div>',
     '        <div class="gateway-item-detail">',
     '          <span>' + escapeHtml(s.transport) + '</span>',
-    '          toolText',
+    '          ' + toolText,
     '        </div>',
     '      </div>',
     '    </div>',
-    '    <div class="gateway-item-right">',
-    '      <label class="proxy-switch" title="' + (isZh ? '启用/禁用' : 'Enable/Disable') + '" onclick="event.stopPropagation()">',
-    '      <input type="checkbox" ' + checked + ' onchange="_gatewayToggleSystem(\'' + escapeHtml(s.id) + '\', this)" />',
+    '    <div class="gateway-item-right gateway-control">',
+    '      <label class="proxy-switch" title="' + (isZh ? '启用/禁用' : 'Enable/Disable') + '">',
+    '        <input type="checkbox" data-gateway-action="toggle-system" data-server-id="' + escapeHtml(s.id) + '"' + checked + ' />',
     '        <span class="proxy-switch-slider"></span>',
     '      </label>',
     '    </div>',
     '  </div>',
     '</div>',
-  ].join('').replace('toolText', toolText);
+  ].join('');
 }
 
 function _renderCustomItem(s, isZh) {
@@ -410,7 +483,7 @@ function _renderCustomItem(s, isZh) {
     : '';
 
   return [
-    '<div class="gateway-list-item clickable" onclick="_gatewayViewDetail(\'' + escapeHtml(s.id) + '\')">',
+    '<div class="gateway-list-item clickable" data-gateway-action="view-detail" data-server-id="' + escapeHtml(s.id) + '">',
     '  <div class="gateway-list-row">',
     '    <div class="gateway-item-left">',
     '      <div class="gateway-item-text">',
@@ -419,10 +492,16 @@ function _renderCustomItem(s, isZh) {
     '      </div>',
     '    </div>',
     '    <div class="gateway-item-right">',
-    '      ' + _statusBadge(s.status, isZh),
-    '      <button class="settings-icon-btn" type="button" title="' + (isZh ? '重启' : 'Restart') + '" onclick="event.stopPropagation();_gatewayRestart(\'' + escapeHtml(s.id) + '\')">' + SVG_REFRESH + '</button>',
-    '      <button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" onclick="event.stopPropagation();_gatewayEdit(\'' + escapeHtml(s.id) + '\')">' + SVG_EDIT + '</button>',
-    '      <button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" onclick="event.stopPropagation();_gatewayDelete(\'' + escapeHtml(s.id) + '\')">' + SVG_DELETE + '</button>',
+    '      <span class="gateway-status-slot">' + _statusBadge(s.status, isZh) + '</span>',
+    '      <div class="gateway-actions gateway-control">',
+    '        <button class="settings-icon-btn" type="button" title="' + (isZh ? '重启' : 'Restart') + '" data-gateway-action="restart" data-server-id="' + escapeHtml(s.id) + '">' + SVG_REFRESH + '</button>',
+    '        <button class="settings-icon-btn" type="button" title="' + (isZh ? '编辑' : 'Edit') + '" data-gateway-action="edit" data-server-id="' + escapeHtml(s.id) + '">' + SVG_EDIT + '</button>',
+    '        <button class="settings-icon-btn danger" type="button" title="' + (isZh ? '删除' : 'Delete') + '" data-gateway-action="delete" data-server-id="' + escapeHtml(s.id) + '">' + SVG_DELETE + '</button>',
+    '      </div>',
+    '      <label class="proxy-switch gateway-control" title="' + (isZh ? '启用/禁用' : 'Enable/Disable') + '">',
+    '        <input type="checkbox" data-gateway-action="toggle-custom" data-server-id="' + escapeHtml(s.id) + '"' + (s.enabled !== false ? ' checked' : '') + ' />',
+    '        <span class="proxy-switch-slider"></span>',
+    '      </label>',
     '    </div>',
     '  </div>',
     errorHtml,
@@ -474,7 +553,7 @@ function _renderToolCard(tool, isZh) {
   const isExpanded = _expandedSchemas.has(toolKey);
   const schemaLabel = isZh ? (isExpanded ? '收起 Schema' : '查看 Schema') : (isExpanded ? 'Hide schema' : 'View schema');
   const toggleHtml = hasSchema
-    ? '<div class="fdetail-schema-toggle" onclick="event.stopPropagation();_toggleGatewaySchema(&quot;' + escapeHtml(toolKey) + '&quot;)">'
+    ? '<div class="fdetail-schema-toggle" data-gateway-action="toggle-schema" data-tool-key="' + escapeHtml(toolKey) + '">'
       + (isExpanded ? '▾ ' : '▸ ') + escapeHtml(schemaLabel) + '</div>'
     : '';
   const schemaHtml = (hasSchema && isExpanded)
@@ -532,7 +611,7 @@ function _renderDetailView(isZh) {
   // Action buttons for custom servers
   let actionButtons = '';
   if (!d.isSystem && d.status === 'error') {
-    actionButtons = '<button class="settings-btn settings-btn-secondary" type="button" onclick="_gatewayRestart(\'' + escapeHtml(d.id) + '\');_gatewayRefreshDetail()">' + SVG_REFRESH + (isZh ? ' 重试连接' : ' Retry') + '</button>';
+    actionButtons = '<button class="settings-btn settings-btn-secondary" type="button" data-gateway-action="restart-detail" data-server-id="' + escapeHtml(d.id) + '">' + SVG_REFRESH + (isZh ? ' 重试连接' : ' Retry') + '</button>';
   }
 
   return [
@@ -594,7 +673,7 @@ function _renderEditForm(isZh) {
     '  </div>',
     '  <div class="settings-field">',
     '    <label>' + (isZh ? '传输类型' : 'Transport') + '</label>',
-    '    <select id="gateway-edit-transport" class="settings-input" onchange="_gatewayTransportChange()">',
+    '    <select id="gateway-edit-transport" class="settings-input" data-gateway-action="transport-change">',
     '      <option value="stdio"' + (transport === 'stdio' ? ' selected' : '') + '>stdio</option>',
     '      <option value="http"' + (transport === 'http' ? ' selected' : '') + '>HTTP (StreamableHTTP)</option>',
     '      <option value="sse"' + (transport === 'sse' ? ' selected' : '') + '>SSE</option>',
@@ -635,8 +714,8 @@ function renderGatewayOverlay() {
     scrollContent = _renderDetailView(isZh);
     footerButtons = [
       '<div class="settings-actions">',
-      '  <button class="settings-btn settings-btn-secondary" type="button" onclick="_gatewayRefreshDetail()">' + SVG_REFRESH + (isZh ? ' 刷新' : ' Refresh') + '</button>',
-      '  <button class="settings-btn settings-btn-primary" type="button" onclick="_gatewayBackToList()">' + (isZh ? '返回列表' : 'Back to List') + '</button>',
+      '  <button class="settings-btn settings-btn-secondary" type="button" data-gateway-action="refresh-detail">' + SVG_REFRESH + (isZh ? ' 刷新' : ' Refresh') + '</button>',
+      '  <button class="settings-btn settings-btn-primary" type="button" data-gateway-action="back">' + (isZh ? '返回列表' : 'Back to List') + '</button>',
       '</div>',
     ].join('');
 
@@ -647,8 +726,8 @@ function renderGatewayOverlay() {
     scrollContent = _renderEditForm(isZh);
     footerButtons = [
       '<div class="settings-actions">',
-      '  <button class="settings-btn settings-btn-secondary" type="button" onclick="_gatewayCancelEdit()">' + (isZh ? '取消' : 'Cancel') + '</button>',
-      '  <button class="settings-btn settings-btn-primary" type="button" onclick="_gatewaySaveEdit()">' + (isZh ? '保存' : 'Save') + '</button>',
+      '  <button class="settings-btn settings-btn-secondary" type="button" data-gateway-action="cancel-edit">' + (isZh ? '取消' : 'Cancel') + '</button>',
+      '  <button class="settings-btn settings-btn-primary" type="button" data-gateway-action="save-edit">' + (isZh ? '保存' : 'Save') + '</button>',
       '</div>',
     ].join('');
 
@@ -658,8 +737,8 @@ function renderGatewayOverlay() {
     subtitle = isZh ? '集中托管共享 MCP 服务器，所有会话复用同一连接' : 'Centrally hosted MCP servers, shared across all sessions';
     footerButtons = [
       '<div class="settings-actions">',
-      '  <button class="settings-btn settings-btn-secondary" type="button" onclick="_loadGatewayData()">' + SVG_REFRESH + (isZh ? ' 刷新' : ' Refresh') + '</button>',
-      '  <button class="settings-btn settings-btn-primary" type="button" onclick="_gatewayAdd()">+ ' + (isZh ? '添加服务器' : 'Add Server') + '</button>',
+      '  <button class="settings-btn settings-btn-secondary" type="button" data-gateway-action="refresh">' + SVG_REFRESH + (isZh ? ' 刷新' : ' Refresh') + '</button>',
+      '  <button class="settings-btn settings-btn-primary" type="button" data-gateway-action="add">+ ' + (isZh ? '添加服务器' : 'Add Server') + '</button>',
       '</div>',
     ].join('');
 
@@ -676,7 +755,7 @@ function renderGatewayOverlay() {
   // Header with optional back button
   let headerLeft = '';
   if (_view === 'detail' || _view === 'edit') {
-    headerLeft = '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" onclick="' + (_view === 'detail' ? '_gatewayBackToList()' : '_gatewayCancelEdit()') + '" style="margin-right:8px;font-size:16px;">' + SVG_BACK + '</button>';
+    headerLeft = '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" data-gateway-action="' + (_view === 'detail' ? 'back' : 'cancel-edit') + '" style="margin-right:8px;font-size:16px;">' + SVG_BACK + '</button>';
   }
 
   host.innerHTML = [
@@ -690,7 +769,7 @@ function renderGatewayOverlay() {
     subtitle ? '          <div class="feature-detail-subtitle">' + escapeHtml(subtitle) + '</div>' : '',
     '        </div>',
     '      </div>',
-    '      <button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeMcpGateway()">×</button>',
+    '      <button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" data-gateway-action="close">×</button>',
     '    </div>',
     '    <div class="settings-tab-content">',
     scrollContent,

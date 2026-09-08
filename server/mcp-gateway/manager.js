@@ -127,14 +127,16 @@ class GatewayConnection {
   }
 
   getSummary() {
+    const enabled = this.config.enabled !== false;
     return {
       id: this.id,
       transport: this.config.transport || 'stdio',
-      status: this.status,
-      toolCount: this.tools.length,
-      toolNames: this.tools.map(t => t.name),
-      connectedAt: this.connectedAt,
-      lastError: this.error,
+      status: enabled ? this.status : 'disconnected',
+      toolCount: enabled ? this.tools.length : 0,
+      toolNames: enabled ? this.tools.map(t => t.name) : [],
+      connectedAt: enabled ? this.connectedAt : null,
+      lastError: enabled ? this.error : null,
+      enabled,
     };
   }
 }
@@ -142,7 +144,8 @@ class GatewayConnection {
 // ── MCPGatewayManager ─────────────────────────────────────────────
 
 class MCPGatewayManager {
-  constructor() {
+  constructor({ configPath = MCP_GATEWAY_CONFIG_PATH } = {}) {
+    this.configPath = configPath;
     this.connections = new Map();
     this.config = { servers: {}, systemServers: {} };
     this._loaded = false;
@@ -152,7 +155,7 @@ class MCPGatewayManager {
    * Load (or reload) config from disk and reconcile connection entries.
    */
   async loadConfig() {
-    const loaded = await readJsonSafe(MCP_GATEWAY_CONFIG_PATH, { servers: {}, systemServers: {} });
+    const loaded = await readJsonSafe(this.configPath, { servers: {}, systemServers: {} });
     this.config = {
       servers: loaded.servers || {},
       systemServers: loaded.systemServers || {},
@@ -191,6 +194,9 @@ class MCPGatewayManager {
       throw new Error(`Unknown gateway server: ${serverId}`);
     }
     const conn = this.connections.get(serverId);
+    if (conn.config.enabled === false) {
+      throw new Error(`Gateway server "${serverId}" is disabled`);
+    }
     // Reconnect if disconnected or errored (lazy reconnect)
     if (conn.status === 'disconnected' || conn.status === 'error' || !conn.client) {
       await conn.connect();
@@ -200,7 +206,6 @@ class MCPGatewayManager {
     }
     return conn;
   }
-
   /**
    * Handle an incoming MCP HTTP request by proxying to the upstream server.
    * Creates a per-request proxy McpServer (stateless, same pattern as debugger-mcp).
@@ -293,9 +298,9 @@ class MCPGatewayManager {
       });
     }
 
-    // Custom proxied servers — only if connected with tools
+    // Custom proxied servers — only if enabled and connected with tools
     for (const conn of this.connections.values()) {
-      if (conn.status === 'connected' && conn.tools.length > 0) {
+      if (conn.config.enabled !== false && conn.status === 'connected' && conn.tools.length > 0) {
         result.push({
           id: conn.id,
           transport: conn.config.transport || 'stdio',
@@ -403,10 +408,11 @@ class MCPGatewayManager {
       isSystem: false,
       transport: conn.config.transport || 'stdio',
       config: conn.config,
-      status: conn.status,
-      connectedAt: conn.connectedAt,
+      status: conn.config.enabled === false ? 'disconnected' : conn.status,
+      enabled: conn.config.enabled !== false,
+      connectedAt: conn.config.enabled === false ? null : conn.connectedAt,
       lastError: conn.error,
-      tools: conn.tools.map(t => ({
+      tools: conn.config.enabled === false ? [] : conn.tools.map(t => ({
         name: t.name,
         description: t.description || '',
         inputSchema: t.inputSchema,
@@ -424,6 +430,24 @@ class MCPGatewayManager {
   }
 
   /**
+   * Toggle a custom MCP server's enabled state.
+   */
+  async toggleServer(serverId, enabled) {
+    const conn = this.connections.get(serverId);
+    if (!conn) throw new Error(`Unknown gateway server: ${serverId}`);
+
+    conn.config.enabled = enabled;
+    if (!enabled) {
+      await conn.disconnect();
+    } else {
+      void conn.connect();
+    }
+
+    this.config.servers[serverId] = { ...conn.config };
+    await this._persistConfig();
+  }
+
+  /**
    * Get raw config (for UI display).
    */
   getConfig() {
@@ -434,9 +458,9 @@ class MCPGatewayManager {
    * Write current config to disk.
    */
   async _persistConfig() {
-    const dir = path.dirname(MCP_GATEWAY_CONFIG_PATH);
+    const dir = path.dirname(this.configPath);
     await ensureDir(dir);
-    await fs.writeFile(MCP_GATEWAY_CONFIG_PATH, JSON.stringify(this.config, null, 2), 'utf8');
+    await fs.writeFile(this.configPath, JSON.stringify(this.config, null, 2), 'utf8');
   }
 
   /**
@@ -490,7 +514,7 @@ class MCPGatewayManager {
   async connectAll() {
     const promises = [];
     for (const conn of this.connections.values()) {
-      if (conn.status === 'disconnected') {
+      if (conn.config.enabled !== false && conn.status === 'disconnected') {
         promises.push(conn.connect());
       }
     }

@@ -6,8 +6,9 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
+import { writeFileSync, readFileSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { createServer } from 'http';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
@@ -67,18 +68,19 @@ function handle(msg) {
 }
 `;
 
-const TMP_DIR = join(process.cwd(), '.test-tmp-gateway');
+const TMP_DIR = mkdtempSync(join(tmpdir(), 'claw-mcp-gateway-'));
 const MOCK_SERVER_PATH = join(TMP_DIR, 'mock-mcp-server.cjs');
+const CONFIG_PATH = join(TMP_DIR, 'config', 'mcp-gateway.json');
 
 let _manager = null;
 let _httpServer = null;
 let _httpPort = 0;
 
 before(async () => {
-  mkdirSync(TMP_DIR, { recursive: true });
   writeFileSync(MOCK_SERVER_PATH, MOCK_SERVER_CODE);
 
-  _manager = new MCPGatewayManager();
+  // Exercise real persistence without touching the project's gateway configuration.
+  _manager = new MCPGatewayManager({ configPath: CONFIG_PATH });
   _manager.config = {
     servers: {
       'mock-stdio': {
@@ -177,7 +179,45 @@ describe('MCP Gateway Manager', () => {
     const custom = status.servers.filter(s => s.id === 'mock-stdio');
     assert.equal(custom.length, 1);
     assert.equal(custom[0].status, 'connected');
+    assert.equal(custom[0].enabled, true);
     assert.ok(custom[0].toolCount > 0);
     assert.ok(custom[0].toolNames.includes('echo'));
+  });
+
+  it('disabled custom server disconnects and is excluded from discovery', async () => {
+    await _manager.toggleServer('mock-stdio', false);
+    const status = _manager.getStatus();
+    const custom = status.servers.find(s => s.id === 'mock-stdio');
+    assert.equal(custom.enabled, false);
+    assert.equal(custom.status, 'disconnected');
+    assert.equal(custom.toolCount, 0);
+    assert.equal(_manager.getDiscoveryInfo().some(s => s.id === 'mock-stdio'), false);
+
+    const persisted = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+    assert.equal(persisted.servers['mock-stdio'].enabled, false);
+    assert.deepEqual(persisted.servers['mock-stdio'].args, [MOCK_SERVER_PATH]);
+
+    const reloaded = new MCPGatewayManager({ configPath: CONFIG_PATH });
+    try {
+      await reloaded.loadConfig();
+      assert.deepEqual(reloaded.config.servers, persisted.servers);
+      assert.equal(reloaded.connections.get('mock-stdio').config.enabled, false);
+    } finally {
+      await reloaded.dispose();
+    }
+
+    const conn = _manager.connections.get('mock-stdio');
+    const connect = conn.connect.bind(conn);
+    let reconnect;
+    conn.connect = () => (reconnect = connect());
+    try {
+      await _manager.toggleServer('mock-stdio', true);
+      await reconnect;
+      assert.equal(conn.config.enabled, true);
+      assert.equal(conn.status, 'connected');
+      assert.equal(JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).servers['mock-stdio'].enabled, true);
+    } finally {
+      conn.connect = connect;
+    }
   });
 });

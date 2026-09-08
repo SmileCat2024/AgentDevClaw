@@ -12,7 +12,6 @@
 
 import express from 'express';
 import { getGatewayManager } from './manager.js';
-import { APP_ORIGIN } from '../shared/constants.js';
 
 function setCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -108,6 +107,19 @@ export function registerMCPGatewayRoutes(app) {
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Management: toggle custom server ───────────────────────────
+  app.post('/protoclaw/mcp-gateway/custom/:serverId/toggle', express.json(), async (req, res) => {
+    setCORS(res);
+    try {
+      const enabled = req.body?.enabled === true;
+      await manager.toggleServer(req.params.serverId, enabled);
+      res.json({ ok: true });
+    } catch (err) {
+      const status = err.message?.startsWith('Unknown gateway server') ? 404 : 500;
+      res.status(status).json({ error: err.message });
     }
   });
 

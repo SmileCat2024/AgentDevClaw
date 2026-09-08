@@ -6820,8 +6820,26 @@ body[data-theme="light"] .gateway-item-detail code {
 .gateway-item-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 10px;
   flex-shrink: 0;
+  min-width: 236px;
+}
+
+.gateway-status-slot {
+  min-width: 76px;
+  display: inline-flex;
+  justify-content: flex-start;
+}
+
+.gateway-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.gateway-item-right > .gateway-control:last-child {
+  margin-left: 4px;
 }
 
 .gateway-dot-sep {
