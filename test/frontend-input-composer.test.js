@@ -495,8 +495,7 @@ describe('composer session draft isolation (ticket 036)', () => {
     };
     // await 期间的依赖 stub
     ctx.run(`
-      async function _awaitPendingImageUploads() {}
-      function getPendingInputImages() { return []; }
+      async function _resolvePendingImagesForTarget() { return { images: [], failedCount: 0 }; }
       function clearPendingInputImages() {}
       function _requestNotifyPermission() {}
       function _clearRecapForNewMessage() {}
@@ -598,3 +597,68 @@ function sourceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
+
+describe('pending image removal race during await (remote image review S1)', () => {
+  function loadImageResolverSandbox() {
+    const ctx = createInputSandbox();
+    loadInputModules(ctx);
+    ctx.run(`
+      let _pendingImages = [];
+      function _imageHostKey() { return 'host-a'; }
+      // 模拟转存：传输 await 期间用户点击移除（removePendingImage → splice）
+      window.__transferEntry = null;
+      async function _uploadImageEntryTo(entry) {
+        if (entry.source === 'removed') {
+          const idx = _pendingImages.indexOf(entry);
+          _pendingImages.splice(idx, 1);
+        }
+        entry.path = '/images/' + entry.source + '.png';
+      }
+    `);
+    // 真实实现（persistent-input.js 中 _resolvePendingImagesForTarget 片段）
+    const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+    ctx.run(sourceBetween(source, 'async function _resolvePendingImagesForTarget', 'function clearPendingInputImages'));
+    return ctx;
+  }
+
+  it('drop removal during the transfer await: removed entry never sent, kept entry always sent', async () => {
+    const ctx = loadImageResolverSandbox();
+    const outcome = await ctx.run(`
+      (async () => {
+        const removed = { source: 'removed', path: null, mediaType: 'image/png' };
+        const kept = { source: 'kept', path: null, mediaType: 'image/png' };
+        _pendingImages.push(removed, kept);
+        return _resolvePendingImagesForTarget('agent-1');
+      })()
+    `);
+    // 已移除：不随消息发出（S1 方向 a）；未移除者必发送（S1 方向 b）。
+    // 断言经 String 归一（沙箱 vm 与测试主上下文原型域不同）。
+    const paths = (outcome.images || []).map((img) => String(img.path));
+    assert.deepEqual([...paths], ['/images/kept.png'], 'await 期间被移除的附件不得随消息发送');
+    assert.equal(outcome.failedCount, 0, '用户主动移除不算上传失败');
+  });
+
+  it('removal racing a failed transfer: user-removed entry is not counted as failure (review R1)', async () => {
+    const ctx = loadImageResolverSandbox();
+    const outcome = await ctx.run(`
+      (async () => {
+        const removed = { source: 'removed', path: null, mediaType: 'image/png' };
+        const kept = { source: 'kept', path: null, mediaType: 'image/png' };
+        _pendingImages.push(removed, kept);
+        // 转存失败与移除同窗口：移除者不计失败，剩余附件照常发送
+        async function _uploadImageEntryTo(entry) {
+          if (entry.source === 'removed') {
+            const idx = _pendingImages.indexOf(entry);
+            _pendingImages.splice(idx, 1);
+            throw new Error('tunnel reset after removal');
+          }
+          entry.path = '/images/' + entry.source + '.png';
+        }
+        return _resolvePendingImagesForTarget('agent-1');
+      })()
+    `);
+    const paths = (outcome.images || []).map((img) => String(img.path));
+    assert.deepEqual([...paths], ['/images/kept.png'], '失败与移除同窗口时，移除者不发送、保留者照常发送');
+    assert.equal(outcome.failedCount, 0, '已移除附件的转存失败不得计入 failedCount');
+  });
+});

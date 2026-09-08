@@ -58,6 +58,14 @@ function splitRemoteNamespaceId(agentId) {
   return { connectionId: rest.slice(0, sep), innerId: rest.slice(sep + 1) };
 }
 
+// 远程静态资产的寻址前缀（/r/<connectionId>，经本机代理转发到连接对端）。
+// 图片这类宿主机落盘的附件资源，远程会话的预览与历史渲染共用该前缀；
+// 本地身份返回空串（本地同名路由，行为不变）。
+function getRemoteAssetPrefix(agentId) {
+  const split = splitRemoteNamespaceId(agentId);
+  return split ? `/r/${split.connectionId}` : '';
+}
+
 // 能力矩阵合法 action（ADR-0011）：write = 输入/中断/swap/todo/tool_state；
 // sessionOps = 会话管理族 + stop/restart 生命周期；workspaceCreate = 创建会话。
 const RC_CAPABILITY_ACTIONS = new Set(['write', 'sessionOps', 'workspaceCreate']);
@@ -1053,6 +1061,8 @@ window.RemoteConnections = {
   refresh: refreshRemoteCatalog,
   openManager: openRemoteConnectionsManager,
   resolveRuntimeRef,
+  splitNamespaceId: splitRemoteNamespaceId,
+  getRemoteAssetPrefix,
   getEntryHostAgentId,
   getEntryHostNamespaceId,
   getEntrySessionTitle,

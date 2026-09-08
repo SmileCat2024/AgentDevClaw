@@ -1,10 +1,10 @@
 import express from 'express';
 import { execFile } from 'child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, createReadStream, promises as fs } from 'fs';
+import { existsSync, readFileSync, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import process from 'process';
-import { randomUUID, createHash } from 'crypto';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { ViewerWorker } from '@agentdevjs/viewer';
@@ -96,6 +96,7 @@ import { setupCapabilityRoutes } from './server/routes/capability.js';
 import { setupOAuthCodexRoutes } from './server/routes/oauth-codex.js';
 import { setupProxyConfigRoutes } from './server/routes/proxy-config.js';
 import { setupToolStateRoutes } from './server/routes/tool-state.js';
+import { setupImageRoutes } from './server/routes/images.js';
 import { getUISurfaceStore, setupUISurfaceRoutes } from './server/routes/ui-surfaces.js';
 import { getThreadControl } from './server/thread-control/thread-controller.js';
 import { getThreadIntegration } from './server/thread-control/thread-integration.js';
@@ -703,6 +704,27 @@ app.post('/protoclaw/assembly_runtime/stop', express.json(), async (req, res, ne
 });
 
 
+/**
+ * PH 项目目录入参收敛：绝对化 + 真实大小写还原 + 存在性校验。
+ *
+ * 大小写还原（normalizePathCasing）只在 Windows 生效——Linux 上文件系统
+ * 大小写敏感，错误大小写的路径本就不存在，因此这里的存在性校验同时
+ * 充当大小写闸门：拼写大小写与磁盘不符的目录在此被拒绝，而不是被照单
+ * 全收生成幽灵项目、再由 runtime spawn 撑出一个错误大小写的真实目录
+ * （历史事故：bookscanning/BookScanning 双目录）。
+ */
+async function resolvePhProjectDirectory(rawDirectory) {
+  const trimmed = typeof rawDirectory === 'string' ? rawDirectory.trim() : '';
+  const resolved = trimmed ? path.resolve(trimmed) : '';
+  const stat = resolved ? await fs.stat(resolved).catch(() => null) : null;
+  if (!stat || !stat.isDirectory()) {
+    const error = new Error(`openDirectory does not exist or is not a directory: ${trimmed || '(empty)'}`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return normalizePathCasing(resolved);
+}
+
 app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) => {
   try {
     const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim() : 'programming-helper';
@@ -715,7 +737,7 @@ app.post('/protoclaw/ph_project/open', express.json(), async (req, res, next) =>
     }
     // Resolve actual filesystem casing so display matches the real directory name.
     // On Windows the directory picker may return a lowercased path.
-    const openDirectory = await normalizePathCasing(rawDirectory);
+    const openDirectory = await resolvePhProjectDirectory(rawDirectory);
     const timestamp = new Date().toISOString();
     const state = await readWorkspaceState(agentId);
     // Add to phProjects if not already there
@@ -748,8 +770,10 @@ app.post('/protoclaw/ph_project/switch', express.json(), async (req, res, next) 
       ? state.phProjects.find((p) => p?.id === projectId)
       : null;
     let openDirectory = stored?.openDirectory || rawDirectory;
-    // Resolve actual filesystem casing for paths that were stored lowercased.
-    openDirectory = await normalizePathCasing(openDirectory);
+    // Resolve actual filesystem casing for paths that were stored lowercased;
+    // reject paths that no longer exist (the switch fallback is id-derived and
+    // lowercased — never invent a project directory that is not on disk).
+    openDirectory = await resolvePhProjectDirectory(openDirectory);
     // Ensure the project exists in phProjects
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
     nextState.openDirectory = openDirectory;
@@ -770,7 +794,7 @@ app.post('/protoclaw/ph_project/add', express.json(), async (req, res, next) => 
     if (!rawDirectory) {
       return res.status(400).json({ error: 'openDirectory is required' });
     }
-    const openDirectory = await normalizePathCasing(rawDirectory);
+    const openDirectory = await resolvePhProjectDirectory(rawDirectory);
     const timestamp = new Date().toISOString();
     const state = await readWorkspaceState(agentId);
     const nextState = upsertWorkspacePhProject(state, { openDirectory }, timestamp);
@@ -1007,105 +1031,9 @@ app.delete('/api/agents/:agentId', (req, res, next) => {
 
 // ── Image attachment storage ───────────────────────────────────────
 // Host-scoped global resource: images are persisted under the local user data
-// root and never selected by page focus or an Agent identity.
-// Images are persisted to ~/.agentdev/AgentDevClaw/images/ and referenced by
-// absolute path in messages. This avoids bloating session JSON with inline base64.
-const IMAGES_DIR = path.join(USER_DATA_ROOT, 'images');
-
-const MIME_TO_EXT = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/gif': 'gif',
-  'image/webp': 'webp',
-  'image/bmp': 'bmp',
-  'image/svg+xml': 'svg',
-};
-
-// Content-hash → resolved path cache (in-process dedup)
-const _imageHashCache = new Map();
-
-app.post('/protoclaw/images/upload', async (req, res) => {
-  let body = '';
-  req.on('data', (chunk) => { body += chunk; });
-  req.on('end', async () => {
-    try {
-      const { base64, mediaType, source } = JSON.parse(body);
-      if (!base64 || typeof base64 !== 'string') {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'Missing or invalid base64' }));
-        return;
-      }
-
-      const mime = mediaType || 'image/png';
-      const ext = MIME_TO_EXT[mime] || 'png';
-
-      // Dedup by content hash — but verify the file still exists on disk
-      const hash = createHash('sha256').update(base64).digest('hex').slice(0, 32);
-
-      if (_imageHashCache.has(hash)) {
-        const cached = _imageHashCache.get(hash);
-        if (existsSync(cached.path)) {
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({
-            path: cached.path,
-            mediaType: mime,
-            source: source || `image.${ext}`,
-            size: cached.size,
-            url: `/protoclaw/images/${cached.filename}`,
-          }));
-          return;
-        }
-        // File was deleted externally — purge stale cache entry, fall through to re-write
-        _imageHashCache.delete(hash);
-      }
-
-      mkdirSync(IMAGES_DIR, { recursive: true });
-      const filename = `${hash}.${ext}`;
-      const filePath = path.join(IMAGES_DIR, filename);
-
-      if (!existsSync(filePath)) {
-        writeFileSync(filePath, Buffer.from(base64, 'base64'));
-      }
-
-      const size = statSync(filePath).size;
-      _imageHashCache.set(hash, { path: filePath, size, filename });
-
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({
-        path: filePath,
-        mediaType: mime,
-        source: source || `image.${ext}`,
-        size,
-        url: `/protoclaw/images/${filename}`,
-      }));
-    } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: err.message || 'Upload failed' }));
-    }
-  });
-});
-
-// Serve stored images for frontend preview
-app.get('/protoclaw/images/:filename', (req, res) => {
-  const filename = path.basename(req.params.filename);
-  // Prevent path traversal
-  if (filename !== req.params.filename || filename.includes('..')) {
-    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: 'Invalid filename' }));
-    return;
-  }
-  const filePath = path.join(IMAGES_DIR, filename);
-  if (!existsSync(filePath)) {
-    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: 'Image not found' }));
-    return;
-  }
-  const ext = path.extname(filename).slice(1);
-  const mimeEntry = Object.entries(MIME_TO_EXT).find(([, e]) => e === ext);
-  const mime = mimeEntry ? mimeEntry[0] : 'application/octet-stream';
-  res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' });
-  createReadStream(filePath).pipe(res);
-});
+// root and never selected by page focus or an Agent identity. Remote-namespace
+// uploads are forwarded to the remote host's own store (routes/images.js).
+setupImageRoutes(app, { imagesDir: path.join(USER_DATA_ROOT, 'images') });
 
 app.get('/protoclaw/remote_claw/config', async (_req, res) => {
   const config = await readRemoteClawConfig();

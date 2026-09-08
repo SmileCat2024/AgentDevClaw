@@ -977,11 +977,20 @@ window.toggleReasoning = function(id) {
 
 // ── Image rendering ──────────────────────────────────────────────
 
+// 图片资源按宿主机落盘寻址（ADR-0006/0011）：本地会话的附件取自本机
+// IMAGES_DIR，远程会话的附件在连接对端主机的同名存储里，经 /r/<connId>
+// 资产路由由本机代理转发取回。url 与 path 都是上传宿主机上的引用。
 function imageUrlFromImage(img) {
-  if (img.url) return window.__PROTOCLAW_APP_URL__?.(img.url) || img.url;
-  if (img.path) {
-    let parts = img.path.replace(/\\/g, '/').split('/');
-    let path = '/protoclaw/images/' + encodeURIComponent(parts[parts.length - 1]);
+  if (img.url || img.path) {
+    let path = img.url
+      || ('/protoclaw/images/' + encodeURIComponent(img.path.replace(/\\/g, '/').split('/').pop()));
+    const remotePrefix = (typeof window.RemoteConnections?.getRemoteAssetPrefix === 'function'
+      && typeof currentRuntimeAgentId === 'string')
+      ? window.RemoteConnections.getRemoteAssetPrefix(currentRuntimeAgentId)
+      : '';
+    if (remotePrefix && path.startsWith('/protoclaw/images/')) {
+      path = remotePrefix + path;
+    }
     return window.__PROTOCLAW_APP_URL__?.(path) || path;
   }
   if (img.base64) {

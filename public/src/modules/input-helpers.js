@@ -118,11 +118,28 @@ async function submitInput(requestId, boundRuntimeId = currentRuntimeAgentId) {
   const textarea = document.getElementById(`input-${requestId}`);
   const input = textarea ? textarea.value : '';
   const targetCacheKey = textarea?.dataset?.sessionKey || _getSessionInputCacheKey();
-  // Wait for background image uploads before reading pending images
-  if (typeof _awaitPendingImageUploads === 'function') {
-    await _awaitPendingImageUploads();
+  // 图片就绪：等待后台上传，并把宿主与发送目标不一致的附件转存过去。
+  // 任何附件失败都显式中止（输入与预览保留，供用户重试），绝不静默丢弃
+  // 附件——与 Thread Inbox 的图片拒绝语义一致。
+  let images = [];
+  if (typeof _resolvePendingImagesForTarget === 'function') {
+    const resolved = await _resolvePendingImagesForTarget(targetRuntimeId);
+    if (resolved.failedCount > 0) {
+      if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+        ClawToast.show({
+          id: `slot-img-upload-failed-${requestId}`,
+          status: 'error',
+          title: currentLanguage === 'zh' ? '消息未发送' : 'Message not sent',
+          description: currentLanguage === 'zh'
+            ? '部分图片上传失败：请重试或移除失败的附件'
+            : 'Some image uploads failed: retry or remove the failed attachments',
+          autoDismiss: 6000,
+        });
+      }
+      return;
+    }
+    images = resolved.images;
   }
-  const images = typeof getPendingInputImages === 'function' ? getPendingInputImages() : [];
 
   // ── 线程路由守卫（coder 工作空间）─────────────────────────────
   // 当前会话已被 successor 接续（非线程 head）时，槽位提交会「成功但

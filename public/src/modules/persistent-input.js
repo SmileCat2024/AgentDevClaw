@@ -184,10 +184,20 @@ function _renderLastCallElapsed() {
 
 const _MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
 
+// 图片按宿主机落盘寻址（ADR-0006/0011）：消息里的 path 由 agent 所在机器的
+// runtime 读取，附件必须落在发送目标同一台主机上。本地会话 'local'，远程
+// 会话按连接维度（remote:<connectionId>）——同一连接内的会话切换无需转存。
+function _imageHostKey(agentId) {
+  const split = (typeof window.RemoteConnections?.splitNamespaceId === 'function')
+    ? window.RemoteConnections.splitNamespaceId(agentId)
+    : null;
+  return split ? `remote:${split.connectionId}` : 'local';
+}
+
 /**
- * Read a File, show preview instantly via local data URL,
- * and kick off a silent background upload to get a server-side path.
- * The user never sees any upload state — the preview is immediate.
+ * Read a File, show preview instantly via local data URL, and kick off a
+ * silent background upload to get a server-side path on the host the composer
+ * is currently addressing. The user never sees any upload state.
  */
 function _addImageFile(file) {
   if (!file || !file.type || !file.type.startsWith('image/')) return;
@@ -198,43 +208,55 @@ function _addImageFile(file) {
   const reader = new FileReader();
   reader.onload = function() {
     const dataUrl = reader.result;
-    const base64 = dataUrl.split(',')[1];
 
     // Entry with instant local preview; path is filled when upload completes
     const entry = {
       mediaType: file.type,
       source: file.name || '(pasted image)',
       _previewUrl: dataUrl,
+      _base64: dataUrl.split(',')[1],
       _uploadPromise: null,
+      _hostKey: null,
       path: null,
     };
 
-    // Silent background upload — no UI feedback needed
-    entry._uploadPromise = fetch('/protoclaw/images/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        base64,
-        mediaType: file.type,
-        source: entry.source,
-      }),
-    }).then(function(res) {
-      if (!res.ok) throw new Error('Upload failed: ' + res.status);
-      return res.json();
-    }).then(function(data) {
-      entry.path = data.path;
-      entry.mediaType = data.mediaType || file.type;
-      entry._previewUrl = data.url;
-      return entry;
-    }).catch(function(err) {
+    entry._uploadPromise = _uploadImageEntryTo(entry, currentRuntimeAgentId);
+    // 上传失败在发送前的就绪解析里显式报告；此处兜底记录，避免悬挂拒绝。
+    entry._uploadPromise.catch(function(err) {
       console.error('[Image Attach] Background upload failed:', err);
-      throw err;
     });
 
     _pendingImages.push(entry);
     _renderAttachmentPreview();
   };
   reader.readAsDataURL(file);
+}
+
+function _uploadImageEntryTo(entry, targetAgentId) {
+  // 发送目标身份随请求携带：服务端据此决定落盘本机还是转发远程同名路由
+  // （ADR-0011，远程会话的 path 必须在 agent 所在主机可解析）。
+  // agentId 只用于寻址，转发时不进入远程请求体。
+  entry._hostKey = _imageHostKey(targetAgentId);
+  entry.path = null;
+  entry._uploadPromise = fetch('/protoclaw/images/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      base64: entry._base64,
+      mediaType: entry.mediaType,
+      source: entry.source,
+      agentId: targetAgentId || '',
+    }),
+  }).then(function(res) {
+    if (!res.ok) throw new Error('Upload failed: ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    entry.path = data.path;
+    entry.mediaType = data.mediaType || entry.mediaType;
+    entry._previewUrl = data.url;
+    return entry;
+  });
+  return entry._uploadPromise;
 }
 
 function _getAttachmentPreviewTargets() {
@@ -271,22 +293,46 @@ function _renderAttachmentPreview() {
 }
 
 /**
- * Wait for all pending background uploads to finish.
- * Called before sending so the message carries path references.
+ * 发送前的附件就绪解析：等待后台上传收尾，并把宿主与发送目标不一致（或
+ * 上传尚未成功）的附件转存到目标主机（同一连接内会话切换零成本复用）。
+ * 返回可直接随消息发送的 images；failedCount > 0 时调用方必须显式中止——
+ * 附件绝不静默丢弃。
  */
-async function _awaitPendingImageUploads() {
-  let promises = _pendingImages
-    .filter(function(img) { return img._uploadPromise; })
-    .map(function(img) { return img._uploadPromise.catch(function() { return null; }); });
-  await Promise.all(promises);
-}
-
-function getPendingInputImages() {
-  return _pendingImages
-    .filter(function(img) { return img.path; })
-    .map(function(img) {
-      return { path: img.path, mediaType: img.mediaType, source: img.source };
-    });
+async function _resolvePendingImagesForTarget(targetAgentId) {
+  let failedCount = 0;
+  const images = [];
+  const targetHostKey = _imageHostKey(targetAgentId);
+  // await 期间用户可能移除附件（splice 移动索引）：快照迭代 + push 前
+  // 成员校验，已移除者既不发送也不计入失败。
+  const snapshot = _pendingImages.slice();
+  for (const entry of snapshot) {
+    try {
+      if (!_pendingImages.includes(entry)) {
+        continue; // await 期间被用户移除：不转存、不随消息发送
+      }
+      // 先收尾挂起的后台上传（失败则按目标重新上传拿结论），再做宿主一致性转存
+      if (!entry.path && entry._uploadPromise) {
+        await entry._uploadPromise.catch(function() { /* 视为未成功，下方重传 */ });
+      }
+      if (!_pendingImages.includes(entry)) {
+        continue; // await 期间被移除：不发送、不算失败
+      }
+      if (!entry.path || entry._hostKey !== targetHostKey) {
+        await _uploadImageEntryTo(entry, targetAgentId);
+      }
+      if (!_pendingImages.includes(entry)) {
+        continue; // 转存 await 期间被移除：已转存副本留在远端无副作用，但不随消息发送
+      }
+      images.push({ path: entry.path, mediaType: entry.mediaType, source: entry.source });
+    } catch (err) {
+      if (!_pendingImages.includes(entry)) {
+        continue; // 转存失败与移除同窗口：用户已移除的附件不算失败，剩余附件照常发送
+      }
+      console.error('[Image Attach] upload for target failed:', err);
+      failedCount += 1;
+    }
+  }
+  return { images, failedCount };
 }
 
 function clearPendingInputImages() {
@@ -530,12 +576,18 @@ async function submitQueuedInput() {
   // _submitInFlight 守卫确保此期间点击不会触发 interruptAgent。
   _setActionBtnStop();
 
-  // Build images payload — wait for background uploads to finish first
-  await _awaitPendingImageUploads();
-  const images = getPendingInputImages();
-
   let capabilityActivations = null;
   try {
+    // 图片就绪：等待后台上传，并把宿主与发送目标不一致的附件转存过去。
+    // 任何附件失败都显式中止（输入与预览保留，供用户重试），绝不静默丢弃。
+    const resolved = await _resolvePendingImagesForTarget(targetRuntimeId);
+    if (resolved.failedCount > 0) {
+      throw new Error(currentLanguage === 'zh'
+        ? '部分图片上传失败：请重试或移除失败的附件'
+        : 'Some image uploads failed: retry or remove the failed attachments');
+    }
+    const images = resolved.images;
+
     // 线程路由快路径（coder 宿主）：交接窗口 / 非 head 会话时输入改走
     // Thread Inbox（服务端 input-gateway 是兜底真相，此处拦截只为即时
     // 暂存气泡反馈）。viewer 排队语义只对健康 runtime 有意义，不适用。

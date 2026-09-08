@@ -58,7 +58,10 @@ const REMOTE_WRITE_RESOURCES = new Set([
 // carries tsup shared chunks and sourcemaps. The remaining prefixes cover the
 // standalone URL forms (npm-workspace roots, bare chunk files, legacy
 // /template/ paths) so every whitelist-shaped asset stays routable.
-const REMOTE_STATIC_PREFIXES = ['/tpl/', '/template/', '/features/', '/npm/'];
+// /protoclaw/images/ additionally carries remote message attachments: the
+// bytes live in the remote host's image store, so history rendering and
+// attachment previews must fetch them through the same connection.
+const REMOTE_STATIC_PREFIXES = ['/tpl/', '/template/', '/features/', '/npm/', '/protoclaw/images/'];
 
 function isStaticAssetPath(pathname) {
   return REMOTE_STATIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))
@@ -74,7 +77,7 @@ function isStaticAssetPath(pathname) {
 // path prefix survives relative resolution, so chunk sub-requests stay on the
 // same connection automatically. Connection ids are URL-safe by store
 // charset, so the segment needs no decoding.
-const REMOTE_ASSET_ROUTE_PREFIX = '/r/';
+export const REMOTE_ASSET_ROUTE_PREFIX = '/r/';
 
 function parseRemoteAssetRoute(pathname) {
   if (!pathname.startsWith(REMOTE_ASSET_ROUTE_PREFIX)) return null;
