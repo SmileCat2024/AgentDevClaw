@@ -190,11 +190,16 @@ async function _testProxy() {
   let isZh = currentLanguage === 'zh';
   _proxyStatus('loading', isZh ? '正在测试...' : 'Testing...');
 
+  // Test the address currently in the input box (saved or not)
+  let proxyUrl = '';
+  let urlInput = document.getElementById('settings-proxy-url');
+  if (urlInput) proxyUrl = urlInput.value.trim();
+
   try {
     let res = await fetch('/protoclaw/proxy_test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify(proxyUrl ? { url: proxyUrl } : {}),
     });
     let data = await res.json();
     if (data.ok) {
