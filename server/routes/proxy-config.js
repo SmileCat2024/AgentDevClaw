@@ -3,7 +3,7 @@
  *
  *   GET  /protoclaw/proxy_config   — current config + detected system proxy + active state
  *   PUT  /protoclaw/proxy_config   — save config, apply globally
- *   POST /protoclaw/proxy_test     — test connectivity through active proxy
+ *   POST /protoclaw/proxy_test     — test connectivity through a proxy address
  */
 
 import {
@@ -67,10 +67,16 @@ export function setupProxyConfigRoutes(app, express) {
   // ── Test proxy connectivity ──────────────────────────────────
 
   app.post('/protoclaw/proxy_test', express.json(), async (req, res) => {
-    const testUrl = (typeof req.body?.url === 'string' && req.body.url.trim())
+    const testUrl = (typeof req.body?.testUrl === 'string' && req.body.testUrl.trim())
       || 'https://chatgpt.com/backend-api/codex/responses';
 
-    const result = await testProxyConnectivity(testUrl);
+    // Test what the user asked to test: the draft URL from the panel input.
+    // Fall back to the active proxy, then direct.
+    const proxyUrl = (typeof req.body?.url === 'string' && req.body.url.trim())
+      || getActiveProxyUrl()
+      || null;
+
+    const result = await testProxyConnectivity(testUrl, proxyUrl);
     res.json(result);
   });
 }

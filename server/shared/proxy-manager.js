@@ -250,16 +250,27 @@ export function getActiveProxyUrl() {
 
 /**
  * Test proxy connectivity by making a request through it.
+ *
+ * Pass proxyUrl to test a specific proxy address (e.g. the draft URL in the
+ * settings panel before it has been saved/applied). When omitted, the request
+ * goes through the active global proxy (or direct if none is active).
+ *
  * @param {string} testUrl - URL to fetch through the proxy
+ * @param {string|null} proxyUrl - proxy address to test through
  * @returns {{ ok: boolean, statusCode: number, durationMs: number, error: string|null }}
  */
-export async function testProxyConnectivity(testUrl = 'https://chatgpt.com/backend-api/codex/responses') {
+export async function testProxyConnectivity(testUrl = 'https://chatgpt.com/backend-api/codex/responses', proxyUrl = null) {
   const start = Date.now();
+  const dispatcher = proxyUrl ? createProxyDispatcher(proxyUrl) : null;
   try {
-    const resp = await fetch(testUrl, {
-      method: 'GET',
-      signal: AbortSignal.timeout(12000),
-    });
+    const fetchOptions = { method: 'GET', signal: AbortSignal.timeout(12000) };
+    if (dispatcher) {
+      fetchOptions.dispatcher = dispatcher;
+    }
+    // undici.fetch so the one-off dispatcher is honoured regardless of the
+    // Node version's handling of the dispatcher option on global fetch.
+    const doFetch = dispatcher ? _undici.fetch : fetch;
+    const resp = await doFetch(testUrl, fetchOptions);
     return {
       ok: resp.status < 500,
       statusCode: resp.status,
@@ -277,5 +288,7 @@ export async function testProxyConnectivity(testUrl = 'https://chatgpt.com/backe
         ? 'response_headers'
         : (err?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT' ? 'connect' : 'request'),
     };
+  } finally {
+    closeManagedDispatcher(dispatcher);
   }
 }

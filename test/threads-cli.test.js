@@ -81,9 +81,15 @@ function startFakeClawServer() {
       // 删除后 events 端点返回 200 空事件（board 状态缺失 → 空窗口）
       payload = { ok: true, events: [], cursor: 0 };
     } else if (req.url === '/protoclaw/threads/wt-orphan' && req.method === 'GET') {
-      // 孤儿执行：runtime 死亡后看板残留 running，事件停滞
-      payload = { ok: true, thread: { threadId: 'wt-orphan', status: 'open', lifeState: 'executing', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000 } };
+      // 孤儿执行：runtime 死亡后看板残留 running，事件停滞，进程不在
+      payload = { ok: true, thread: { threadId: 'wt-orphan', status: 'open', lifeState: 'executing', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000, headRuntimeRunning: false } };
     } else if (req.url === '/protoclaw/threads/wt-orphan/events') {
+      payload = { ok: true, events: [], cursor: 0 };
+    } else if (req.url === '/protoclaw/threads/wt-long' && req.method === 'GET') {
+      // 长工具调用：turn.started 后事件停滞但 head runtime 进程存活——
+      // 不报 stalled，watch 挂到工具超时（豁免用例）
+      payload = { ok: true, thread: { threadId: 'wt-long', status: 'open', lifeState: 'executing', failed: false, commands: [], lastEventAt: Date.now() - 10 * 60_000, headRuntimeRunning: true } };
+    } else if (req.url === '/protoclaw/threads/wt-long/events') {
       payload = { ok: true, events: [], cursor: 0 };
     } else if (req.url === '/protoclaw/threads/wt-1/archive') {
       payload = { ok: true, threadId: 'wt-1', cleanup: { status: 'complete', commandsCancelled: 1, inflightDrain: { count: 0, commandIds: [] }, handoffConverged: false } };
@@ -331,11 +337,20 @@ test('threads watch 状态矩阵：归档/关闭终态按 lifeState 判定，删
   const threadGets = fake.requests.filter((r) => r.method === 'GET' && r.url === '/protoclaw/threads/wt-deleted');
   assert.equal(threadGets.length, 1, '404 是确定终态，不应累计 3 次重试');
 
-  // 孤儿执行：executing 且事件停滞 → stalled（exit 3），不烧满 timeout
+  // 孤儿执行：executing 且事件停滞且进程不在 → stalled（exit 3），不烧满 timeout
   const stalled = await runCli(fake.port, [
     'threads', 'watch', 'wt-orphan', '--interval', '0.3', '--timeout', '5',
   ]);
   assert.equal(stalled.code, 3, stalled.stderr);
   assert.match(stalled.stdout, /watch done: stalled \| life=executing failed=false/);
   assert.match(stalled.stdout, /detail: lifeState=executing 事件停滞/);
+  assert.match(stalled.stdout, /head runtime 进程已不在/);
+
+  // 长工具调用豁免：事件停滞但 head runtime 进程存活 → 不报 stalled，
+  // watch 挂到工具超时（exit 2，正常续挂信号）
+  const longRunning = await runCli(fake.port, [
+    'threads', 'watch', 'wt-long', '--interval', '0.3', '--timeout', '1',
+  ]);
+  assert.equal(longRunning.code, 2, longRunning.stderr);
+  assert.match(longRunning.stdout, /watch done: timeout \| life=executing failed=false/);
 });

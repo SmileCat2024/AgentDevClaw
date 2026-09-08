@@ -205,8 +205,9 @@ async function handleConfigGroups(args = []) {
 const CLAW_SERVER_BASE = `http://127.0.0.1:${process.env.PORT || 1420}`;
 
 // 事件停滞判定阈值：孤儿执行态（runtime 死亡后看板残留 running，turn.completed
-// 永不收敛）唯一可观测的死亡事实是事件停滞——活跃执行中 runtime 事件持续刷新
-// lastEventAt，超阈值零事件按停滞处置（调度方查日志/介入），不再无限续挂。
+// 永不收敛）按停滞终态处置（调度方查日志/介入），不再无限续挂。事件粒度是
+// turn/item 级，长工具调用期间不产生新事件——单凭事件停滞误杀正常长任务，
+// 需叠加 server 详情响应附带的 head runtime 进程存活事实（headRuntimeRunning）。
 const STALE_WATCH_MS = 300_000;
 
 async function clawServerFetch(pathname, options = {}) {
@@ -641,10 +642,18 @@ async function watchThread(threadId, { interval, timeout, jsonl, quiet }) {
     const pending = Array.isArray(thread?.commands) ? thread.commands.filter((command) => command.status === 'pending').length : 0;
     // 孤儿执行/滞留：lifeState 卡在 executing（runtime 死亡后看板残留 running）
     // 或 pending-commands（runtime 永不承接）且事件长期停滞——继续挂只会等来
-    // 永不出现的 turn.completed，按停滞终态处置。
+    // 永不出现的 turn.completed，按停滞终态处置。事件粒度是 turn/item 级，
+    // 长工具调用期间同样停滞：headRuntimeRunning === true（head runtime 进程
+    // 存活，server 详情响应附带）时豁免，继续挂等落定；字段缺失（老 server）
+    // 维持保守停滞终态。
     const lastEventAt = Number(thread?.lastEventAt) || 0;
-    if (!failed && ['executing', 'pending-commands'].includes(lifeState) && lastEventAt && Date.now() - lastEventAt > STALE_WATCH_MS) {
-      return { reason: 'stalled', detail: `lifeState=${lifeState} 事件停滞 ${Math.round((Date.now() - lastEventAt) / 1000)}s——runtime 可能已死亡，查 agent 日志后再决定介入方式`, lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 3 };
+    if (!failed && ['executing', 'pending-commands'].includes(lifeState) && lastEventAt
+      && Date.now() - lastEventAt > STALE_WATCH_MS && thread?.headRuntimeRunning !== true) {
+      const staleSec = Math.round((Date.now() - lastEventAt) / 1000);
+      const detail = thread?.headRuntimeRunning === false
+        ? `lifeState=${lifeState} 事件停滞 ${staleSec}s 且 head runtime 进程已不在——孤儿执行，查 agent 日志后走恢复路径`
+        : `lifeState=${lifeState} 事件停滞 ${staleSec}s——runtime 可能已死亡，查 agent 日志后再决定介入方式`;
+      return { reason: 'stalled', detail, lifeState, failed, newEvents, elapsed: Math.round((Date.now() - startedAt) / 1000), exitCode: 3 };
     }
     if (events.some((event) => event.type === 'turn.completed')) turnSettled = true;
     if (events.some((event) => event.type === 'turn.started')) turnSettled = false; // 链式多轮：新一轮已接棒

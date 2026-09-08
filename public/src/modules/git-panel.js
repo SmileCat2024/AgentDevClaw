@@ -30,7 +30,8 @@
  * 依赖（全局，声明于 app-core.js / app-main.js / debug-panel-host.js / git-graph.js）：
  *   - featurePanelBody, activeFeaturePanel, currentRuntimeAgentId, currentLanguage
  *   - renderFeaturePanel, escapeHtml, GitGraph
- *   - getRuntimeWorkspaceSessionId, getActiveWorkspaceSessionId, getCurrentAgentRecord
+ *   - getRuntimeWorkspaceSessionId, getActiveWorkspaceSessionId, getCurrentAgentRecord,
+ *     getCurrentRuntimeRecord
  */
 (function () {
   'use strict';
@@ -117,6 +118,23 @@
       const session = sessions.find((s) => String(s?.id || '').trim() === sid);
       const dir = String(session?.openDirectory || '').trim();
       if (dir) return dir;
+      // PH 类 wire 投影把 sessions 按"workspace 当前打开的项目目录"切片
+      // （首屏 60 条），当前查看的会话可能不在切片里（属于其他项目 /
+      // 排名超出首屏）——落空时按会话身份从 record 上的活跃会话目录兜底：
+      //   - 焦点 runtime 条目的 open_directory（服务端按该 runtime 的
+      //     selectedSession 从索引解析，per-runtime 真源）
+      //   - 宿主 record 的 active_workspace_session_dir（宿主活跃会话目录，
+      //     同样取自会话记录）。两者都只在会话 id 与查询的 sid 一致时
+      //     采信，避免把别的会话的目录套给当前会话。
+      const runtimeRecord = typeof getCurrentRuntimeRecord === 'function' ? getCurrentRuntimeRecord() : null;
+      if (runtimeRecord && String(runtimeRecord.active_workspace_session_id || '').trim() === sid) {
+        const runtimeDir = String(runtimeRecord?.open_directory || '').trim();
+        if (runtimeDir) return runtimeDir;
+      }
+      if (String(agent?.active_workspace_session_id || '').trim() === sid) {
+        const hostDir = String(agent?.active_workspace_session_dir || '').trim();
+        if (hostDir) return hostDir;
+      }
     }
     // 远程会话（R2-06）：远程条目不在 allAgents（无 workspace_sessions 记录），
     // 目录取当前会话富元数据留档——agent_detail 经服务端命名空间分支转发返回

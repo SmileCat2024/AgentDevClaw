@@ -58,7 +58,14 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
       boardState,
       archiveEntry: archiveEntries?.[thread.threadId] || null,
     });
-    return { ...thread, ...life };
+    // head runtime 进程存活事实（managed runtimes 扫描：运行中且当前绑定
+    // head 会话）：watch 侧 stalled 判定的直接死亡证据。事件停滞只说明
+    // 无新 turn/item 事件，长工具调用（跑实验 / 构建，可达小时级）期间
+    // 同样停滞——进程不在才是孤儿执行的直接事实。
+    const headRuntimeRunning = typeof control.resolveSessionViewerId === 'function'
+      ? control.resolveSessionViewerId(thread.agentId, thread.headSessionId) !== null
+      : undefined;
+    return { ...thread, ...life, headRuntimeRunning };
   };
 
   const _getArchiveEntries = () => archive.list().catch(() => ({}));

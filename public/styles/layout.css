@@ -6490,8 +6490,7 @@ body[data-theme="light"] .preset-tag-opencode {
   flex-direction: column;
   justify-content: safe center;
   align-items: stretch;
-  gap: var(--nav-gap, 4px);
-  padding: 6px 0 140px 0;
+  padding: 36px 0 140px 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
   overflow: hidden;
@@ -6502,11 +6501,30 @@ body[data-theme="light"] .preset-tag-opencode {
   pointer-events: none;
 }
 
-/* slot：大命中区域，处理鼠标事件，高度固定提供间距 */
+/* 感应带：条带外侧的隐形滚动触发区，不覆盖白条——点击窗口内条目不会误触发滚动。
+   方向判定由容器级 mousemove 统一处理，这里只提供命中区域。 */
+.chat-nav-edge-band {
+  position: absolute;
+  left: 0;
+  width: 50px;
+  height: 36px;
+  pointer-events: auto;
+}
+
+.chat-nav-edge-band-top {
+  top: 0;
+}
+
+.chat-nav-edge-band-bottom {
+  bottom: 140px;
+}
+
+/* slot：大命中区域，处理鼠标事件。间距并入 slot 自身高度（gap 为 0），
+   鼠标在条与条之间移动时不脱靶；--nav-gap 调节视觉密度 */
 .chat-nav-slot {
   display: flex;
   align-items: center;
-  min-height: 10px;
+  min-height: calc(10px + var(--nav-gap, 4px));
   padding-left: 8px;
   padding-right: 40px;
   cursor: pointer;
@@ -7142,16 +7160,36 @@ body[data-theme="light"] .gateway-detail-row {
    ═══════════════════════════════════════════════════════════════ */
 
 .git-panel {
-  height: 100%;
+  /* 抵消宿主 padding:24px（.feature-panel-body）：负 margin 拉出 padding 区，
+     高度补回上下两个 24px 才能贴满面板底边（否则底部空 48px） */
+  height: calc(100% + 48px);
   display: flex;
   flex-direction: column;
-  /* 抵消宿主 padding:24px（.feature-panel-body），内部改用自有边距 */
   margin: -24px;
+  position: relative;
   font-size: 13px;
   color: var(--text-primary);
   /* 上区默认按内容自适应（auto），max-height 封顶让图形区最大化 */
   --git-top-h: auto;
   --git-edge: 16px;
+}
+
+/* 底部渐变遮罩（同 .feature-panel::after 配方）：面板滚动发生在内部
+   .git-zone-body，宿主的 scrollable 溢出检测恒为假，遮罩由面板自带，
+   让图形区滚到底部时平滑渐隐。 */
+.git-panel::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  background: linear-gradient(to bottom, transparent 0%, var(--glass-bg) 90%);
+  pointer-events: none;
+  z-index: 5;
+}
+body[data-theme="light"] .git-panel::after {
+  background: linear-gradient(to bottom, transparent 0%, rgba(240, 240, 242, 0.9) 90%);
 }
 
 /* ── 大区骨架：上区像素高（分隔条拖改写 --git-top-h），下区吃满剩余 ── */

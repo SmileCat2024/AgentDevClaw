@@ -41,8 +41,9 @@ const MAX_CONSECUTIVE_FETCH_ERRORS = 3;
 /**
  * 事件停滞判定阈值（bin/claw.mjs watchThread 同款语义）：孤儿执行
  * （runtime 死亡后看板残留 running）或 pending 永不承接时，turn.completed
- * 永不收敛；活跃执行中 runtime 事件持续刷新 lastEventAt，超阈值零事件按
- * 停滞处置，不再无限等待 Tool.timeout。
+ * 永不收敛。事件粒度是 turn/item 级，长工具调用期间不产生新事件——单凭
+ * 事件停滞误杀正常长任务，需叠加 server 附带的 head runtime 进程存活
+ * 事实（headRuntimeRunning）才按停滞终态处置。
  */
 const STALE_THREAD_MS = 300_000;
 /** 落定报文附带的事件尾条数（取证用，防长文本撑爆上下文）。 */
@@ -281,15 +282,23 @@ export function createThreadsAdapter(deps: {
       // 孤儿执行/滞留：lifeState 卡在 executing（runtime 死亡后看板残留
       // running）或 pending-commands（runtime 永不承接）且事件长期停滞，
       // turn.completed 永不收敛——按停滞终态处置，不烧满 Tool.timeout。
+      // 事件停滞不是死亡的充分证据：coder 执行长工具调用（跑实验 / 构建，
+      // 可达小时级）期间不产生新 turn/item 事件，事件停滞同样发生；
+      // 死亡判定需叠加 head runtime 进程存活事实（server 详情响应附带）。
+      // 老版本 server 缺该字段时维持停滞终态，保守行为不变。
       const lastEventAt = Number(thread?.lastEventAt) || 0;
       if (['executing', 'pending-commands'].includes(lifeState) && lastEventAt
-        && Date.now() - lastEventAt > STALE_THREAD_MS) {
+        && Date.now() - lastEventAt > STALE_THREAD_MS
+        && thread?.headRuntimeRunning !== true) {
+        const staleSec = Math.round((Date.now() - lastEventAt) / 1000);
         return {
           reason: 'stalled',
           lifeState,
           failed,
           newEvents,
-          detail: `事件停滞 ${Math.round((Date.now() - lastEventAt) / 1000)}s——runtime 可能已死亡，查 Debugger 日志后再决定介入方式`,
+          detail: thread?.headRuntimeRunning === false
+            ? `事件停滞 ${staleSec}s 且 head runtime 进程已不在——孤儿执行，查 Debugger 日志后走恢复路径`
+            : `事件停滞 ${staleSec}s——runtime 可能已死亡，查 Debugger 日志后再决定介入方式`,
           tailEvents: tailEvents.slice(-TAIL_EVENT_COUNT),
         };
       }
