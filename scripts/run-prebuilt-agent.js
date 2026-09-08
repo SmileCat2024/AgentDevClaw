@@ -1107,15 +1107,21 @@ SessionLifecycle.prototype.start = async function () {
 SessionLifecycle.prototype.runInputLoop = async function (userInput) {
   this.inputLoopRunning = true;
 
+  // 输入动作（如回退）处理失败时，失败原因经下一轮输入请求的 placeholder
+  // 呈现给用户；不带回显，失败只进日志，用户侧表现为"点击无反应"。
+  // 提示只跟随下一次弹出的输入框，请求建立后即恢复常规提示。
+  let inputPrompt = INPUT_PROMPT;
+
   while (this.inputLoopRunning) {
     let response;
     try {
-      response = await userInput.getUserInputEvent(INPUT_PROMPT, undefined, this.getNextTurnActions());
+      response = await userInput.getUserInputEvent(inputPrompt, undefined, this.getNextTurnActions());
     } catch (error) {
       console.error('[ProtoClaw Runtime] 等待用户输入失败，稍后重试:', error);
       await sleep(500);
       continue;
     }
+    inputPrompt = INPUT_PROMPT;
 
     let handled;
     try {
@@ -1123,6 +1129,13 @@ SessionLifecycle.prototype.runInputLoop = async function (userInput) {
     } catch (error) {
       console.error('[ProtoClaw Runtime] 处理输入动作失败，已忽略本次请求:', error);
       console.error(error?.stack || error);
+      // 回退失败时恢复用户在回退对话框中编辑的草稿（成功路径由
+      // rollbackToCallAndSave 内部回填，失败路径走不到那里）。
+      if (response?.kind === 'action' && response?.actionId === 'rollback_to_call'
+        && typeof response?.payload?.draftInput === 'string') {
+        userInput.setNextDraftInput(response.payload.draftInput);
+      }
+      inputPrompt = `上次操作失败: ${String(error?.message || error).slice(0, 160)}。可直接重试或继续输入: `;
       continue;
     }
 

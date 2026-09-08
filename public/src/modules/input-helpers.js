@@ -484,6 +484,28 @@ window.toggleChatProcessVisibility = function() {
   });
 };
 
+/**
+ * 输入动作提交失败的用户可见反馈：输入卡未被乐观清空（清空只在
+ * res.ok 后发生），toast 告知后用户可直接重试。
+ */
+function _notifyActionSubmitFailed(actionId) {
+  const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  if (typeof ClawToast === 'undefined' || !ClawToast?.show) return;
+  const actionLabel = actionId === 'rollback_to_call'
+    ? (isZh ? '回退' : 'rollback')
+    : actionId === 'compact_from_call'
+      ? (isZh ? '精简' : 'compact')
+      : (isZh ? '操作' : 'action');
+  ClawToast.show({
+    id: `input-action-failed-${actionId}-${Date.now()}`,
+    title: isZh
+      ? `${actionLabel}请求提交失败，请重试`
+      : `Failed to submit ${actionLabel} request, please retry`,
+    status: 'error',
+    autoDismiss: 5000,
+  });
+}
+
 async function submitInputAction(requestId, actionId, payload = {}, boundRuntimeId = currentRuntimeAgentId) {
   try {
     const targetRuntimeId = String(boundRuntimeId || '').trim();
@@ -508,14 +530,22 @@ async function submitInputAction(requestId, actionId, payload = {}, boundRuntime
         // 乐观清空即声明（工单 037）：渲染由 patch hook 同步触发，不等 poll。
         applySessionViewPatch({ inputRequests: [] });
         clearInterruptSuppression(targetRuntimeId);
-        _markAgentCallStartedForNotify(targetRuntimeId);
-        _agentCallActive.set(targetRuntimeId, true);
+        // rollback_to_call 只做本地回退 + 草稿回填 + 重弹输入框，不触发模型
+        // 调用；乐观 calling 会造成最长一个 poll 周期的假"处理中"。compact_
+        // from_call 走摘要 LLM，仍按调用处理。
+        if (actionId !== 'rollback_to_call') {
+          _markAgentCallStartedForNotify(targetRuntimeId);
+          _agentCallActive.set(targetRuntimeId, true);
+        }
         _syncPersistentActionButton();
         renderAgentList();
       }
       poll();
+    } else {
+      _notifyActionSubmitFailed(actionId);
     }
   } catch (e) {
     console.error('提交动作失败:', e);
+    _notifyActionSubmitFailed(actionId);
   }
 }
