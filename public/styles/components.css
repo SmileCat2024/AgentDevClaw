@@ -590,31 +590,13 @@ body[data-theme="light"] .markdown-body pre {
 .empty-state.empty-welcome {
   position: relative;
   gap: 20px;
-  overflow: clip; /* 裁掉装饰光晕的横向溢出，杜绝欢迎页横向滚动条 */
-  animation: empty-welcome-in 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-/* Large ambient glow behind text — blue-leaning radial */
-.empty-welcome-glow {
-  position: absolute;
-  top: 48%;
-  left: 50%;
-  width: min(960px, 100%);
-  height: 600px;
-  transform: translate(-50%, -50%);
-  background: radial-gradient(ellipse at center,
+  /* 光晕直接作为容器背景：closest-side 让渐变在容器边缘归零，任何窗口尺寸下都不会被裁出矩形硬边 */
+  background: radial-gradient(ellipse closest-side at center,
     rgba(75, 141, 255, 0.14) 0%,
-    rgba(75, 141, 255, 0.08) 30%,
-    rgba(60, 100, 200, 0.03) 55%,
+    rgba(75, 141, 255, 0.08) 35%,
+    rgba(60, 100, 200, 0.03) 65%,
     transparent 100%);
-  filter: blur(50px);
-  pointer-events: none;
-  z-index: 0;
-}
-.empty-welcome-glow ~ .empty-welcome-title,
-.empty-welcome-glow ~ .empty-welcome-deco,
-.empty-welcome-glow ~ .empty-welcome-hint {
-  position: relative;
-  z-index: 1;
+  animation: empty-welcome-in 0.45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 @keyframes empty-welcome-in {
   from { opacity: 0; transform: translateY(8px); }
