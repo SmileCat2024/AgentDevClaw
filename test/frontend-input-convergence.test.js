@@ -692,9 +692,11 @@ function composerQuery(ctx) {
 }
 
 function sourceBetween(source, startMarker, endMarker) {
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start);
+  // 工作区可能以 CRLF 检出（core.autocrlf=true），标记含裸 \n 字面量，先归一化。
+  const normalized = source.replace(/\r\n/g, '\n');
+  const start = normalized.indexOf(startMarker);
+  const end = normalized.indexOf(endMarker, start);
   if (start === -1) throw new Error(`Missing start marker: ${startMarker}`);
   if (end === -1) throw new Error(`Missing end marker: ${endMarker}`);
-  return source.slice(start, end);
+  return normalized.slice(start, end);
 }

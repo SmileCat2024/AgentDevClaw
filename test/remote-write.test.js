@@ -987,7 +987,7 @@ describe('agent_detail remote namespace branch', () => {
     const mod = createAgentLifecycleModule({
       sessionApi: {},
       getAgents: async () => [],
-      getAgentsLight: async () => [{ id: 'local-agent', name: 'local' }],
+      getAgentsLight: async () => [{ id: 'local-agent', name: 'local', workspace_sessions: { activeSessionId: null, sessions: [] } }],
       enrichAgent: async (agent) => agent,
       requireAgentLight: async (id) => ({ id, relativeDir: 'test', name: id }),
       resolveRuntimeDisplayName: async (agent) => agent?.name || 'test-agent',

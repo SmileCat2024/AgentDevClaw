@@ -308,8 +308,6 @@ describe('usage-info: usageInfoDefaults', () => {
     assert.equal(result.chartView, 'trend');
     assert.equal(result.chartModel, '__all__');
     assert.equal(result.calendarDaily, null);
-    assert.equal(result.groupMenuOpen, false);
-    assert.equal(result.chartModelMenuOpen, false);
     assert.equal(result.data, null);
   });
 

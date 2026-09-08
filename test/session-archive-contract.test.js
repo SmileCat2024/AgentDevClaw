@@ -9,6 +9,7 @@ const sessionDialogs = fs.readFileSync(new URL('../public/src/modules/session-di
 const sessionMutation = fs.readFileSync(new URL('../public/src/modules/session-mutation.js', import.meta.url), 'utf8');
 const sidebarOperations = fs.readFileSync(new URL('../public/src/modules/sidebar-operations.js', import.meta.url), 'utf8');
 const sidebarRender = fs.readFileSync(new URL('../public/src/modules/sidebar-render.js', import.meta.url), 'utf8');
+const navigationCore = fs.readFileSync(new URL('../public/src/modules/navigation-core.js', import.meta.url), 'utf8');
 
 describe('archive-and-replace contract', () => {
   it('branches raw message objects so image attachments before the cut remain intact', () => {
@@ -116,12 +117,20 @@ describe('archive-and-replace contract', () => {
   });
 
   it('keeps readiness observation bounded and separate from session-operation settlement', () => {
-    const start = sidebarRender.indexOf('async function waitForTargetRuntimeSession');
-    const end = sidebarRender.indexOf('\nasync function loadAgents()', start);
-    const readinessWait = sidebarRender.slice(start, end);
+    // ADR-0014 Phase 1：有界就绪轮询收敛到 navigation-core 的
+    // waitForRuntimeReady；sidebar-render 的 waitForTargetRuntimeSession 仅保留
+    // 签名兼容的委托入口，不得回长内联轮询。
+    const navStart = navigationCore.indexOf('async function waitForRuntimeReady');
+    const navEnd = navigationCore.indexOf('\n  /**', navStart);
+    const readinessWait = navigationCore.slice(navStart, navEnd);
     assert.match(readinessWait, /attempt < attempts/);
     assert.match(readinessWait, /return null;/);
     assert.doesNotMatch(readinessWait, /for \(;;\)/);
+    const delegateStart = sidebarRender.indexOf('async function waitForTargetRuntimeSession');
+    const delegateEnd = sidebarRender.indexOf('\nasync function loadAgents()', delegateStart);
+    const delegate = sidebarRender.slice(delegateStart, delegateEnd);
+    assert.match(delegate, /window\.NavigationCore\?\.waitForRuntimeReady/);
+    assert.doesNotMatch(delegate, /attempt < attempts/);
   });
 
   it('settles a committed replacement before independently cleaning up its source runtime', () => {
