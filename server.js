@@ -422,6 +422,11 @@ setupSessionRoutes(app, express, {
   ...sessionHelpers,
   // Agent lifecycle
   requireAgentLight,
+  // session_directory 数据面（session-reference feature 的发现入口）：
+  // 消费端在 session.js ctx 解构中，此注参缺失只在运行期以
+  // "discoverAgents is not a function" 暴露（历史事故：S3 摘注后 24f18ba
+  // 接回消费端），务必保持两侧成对
+  discoverAgents,
   startManagedAgent,
   stopManagedAgent,
   waitForManagedRuntimeReady,
