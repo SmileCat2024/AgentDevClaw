@@ -1987,9 +1987,14 @@ body[data-theme="light"] .settings-input.invalid:focus {
 
 .usage-info-toolbar {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
   align-items: center;
+  gap: 12px;
+}
+
+.usage-info-range-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .usage-info-segment {
@@ -2091,10 +2096,11 @@ body[data-theme="light"] .settings-input.invalid:focus {
   color: var(--text-secondary);
 }
 
+/* 2×2：左列=选中范围内的明细列表（排行/事件），右列=图形视角（趋势随范围/日历固定全年） */
 .usage-info-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: minmax(260px, 0.84fr) minmax(0, 1.16fr);
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.42fr);
+  grid-template-rows: minmax(0, 1.18fr) minmax(0, 1fr);
   gap: 12px;
   flex: 1;
   min-height: 0;
@@ -2118,11 +2124,6 @@ body[data-theme="light"] .settings-input.invalid:focus {
   gap: 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12),
               inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-.usage-info-chart-section {
-  grid-column: 1 / -1;
-  min-height: 0;
 }
 
 .usage-info-list-section {
@@ -2171,13 +2172,16 @@ body[data-theme="light"] .settings-input.invalid:focus {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 10px;
 }
 
+/* viewBox 720×190，按容器宽度等比缩放，避免窄列下被拉伸 letterbox */
 .usage-info-trend-svg {
-  flex: 1;
+  flex: 0 0 auto;
   width: 100%;
-  min-height: 205px;
+  height: auto;
+  aspect-ratio: 720 / 190;
   overflow: visible;
 }
 
@@ -2306,126 +2310,120 @@ body[data-theme="light"] .settings-input.invalid:focus {
 }
 
 .usage-info-group-controls {
-  flex: 0 1 380px;
+  flex: 1 1 auto;
+  min-width: 0;
   justify-content: flex-end;
 }
 
 .usage-info-group-controls .usage-info-search {
-  width: min(100%, 220px);
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 0;
 }
 
-.usage-info-dropdown {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.usage-info-dropdown-trigger {
-  height: 32px;
-  min-width: 112px;
+/* 触发按钮：透明底 + chevron，配 .usage-info-menu 弹层（同输入框模型切换配方） */
+.usage-info-model-trigger {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  border-radius: 9px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(255,255,255,0.04);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  color: var(--text-primary);
-  padding: 0 10px 0 12px;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.usage-info-dropdown-trigger:hover,
-.usage-info-dropdown-trigger:focus {
-  border-color: rgba(99, 145, 255, 0.5);
-  box-shadow: 0 0 0 3px rgba(99, 145, 255, 0.12);
-}
-
-.usage-info-dropdown-arrow {
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.usage-info-dropdown-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  z-index: 10;
-  min-width: 132px;
-  padding: 6px;
-  border-radius: 8px;
-  border: 1px solid var(--border-color);
-  background: var(--panel-bg);
-  box-shadow: 0 10px 30px var(--shadow-color);
-  display: none;
-}
-
-.usage-info-dropdown-menu.open {
-  display: grid;
-  gap: 2px;
-}
-
-.usage-info-dropdown-menu button {
-  width: 100%;
+  gap: 4px;
+  height: 28px;
+  max-width: 200px;
+  padding: 0 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-primary);
-  padding: 8px 9px;
-  text-align: left;
-  font: inherit;
   font-size: 13px;
+  font-family: inherit;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.usage-info-dropdown-menu button:hover {
+.usage-info-model-trigger:hover {
   background: var(--hover-bg);
 }
 
-.usage-info-dropdown-menu button.active {
-  background: rgba(99, 145, 255, 0.9);
-  color: #fff;
-}
-
-.usage-info-calendar {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.usage-info-model-trigger-name {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.usage-info-calendar-head {
+.usage-info-model-trigger-chevron {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.usage-info-model-trigger:hover .usage-info-model-trigger-chevron {
+  opacity: 1;
+}
+
+/* 弹层菜单（挂 body，fixed 定位，与 ccb-model-dropdown 同配方） */
+.usage-info-menu {
+  position: fixed;
+  z-index: 9100;
+  min-width: 160px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--dropdown-shadow);
+  scrollbar-width: thin;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s, visibility 0.15s;
+}
+
+.usage-info-menu.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.usage-info-menu::-webkit-scrollbar {
+  width: 6px;
+}
+
+.usage-info-menu::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  border-right: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+body[data-theme="light"] .usage-info-menu {
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.15);
+}
+
+.usage-info-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  color: var(--text-primary);
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
   font-size: 13px;
-  font-weight: 700;
-}
-
-.usage-info-calendar-head div {
-  display: inline-flex;
-  gap: 14px;
-}
-
-.usage-info-calendar-head button {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  padding: 0;
-}
-
-.usage-info-calendar-head button.active {
   color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.usage-info-menu-item:hover {
+  background: var(--hover-bg);
+}
+
+.usage-info-menu-item.active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.usage-info-menu-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .usage-info-calendar-scroll {
@@ -2445,18 +2443,18 @@ body[data-theme="light"] .settings-input.invalid:focus {
 .usage-info-calendar-grid {
   display: grid;
   grid-auto-flow: column;
-  grid-template-rows: repeat(7, 13px);
-  grid-auto-columns: 13px;
-  gap: 6px;
+  grid-template-rows: repeat(7, 10px);
+  grid-auto-columns: 10px;
+  gap: 4px;
   align-content: center;
   width: max-content;
   min-width: 100%;
 }
 
 .usage-info-calendar-cell {
-  width: 13px;
-  height: 13px;
-  border-radius: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
   background: rgba(255,255,255,0.055);
   cursor: default;
 }
@@ -2485,8 +2483,8 @@ body[data-theme="light"] .settings-input.invalid:focus {
 .usage-info-calendar-months {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 13px;
-  gap: 6px;
+  grid-auto-columns: 10px;
+  gap: 4px;
   width: max-content;
   min-width: 100%;
   color: var(--text-secondary);
@@ -2676,15 +2674,6 @@ body[data-theme="light"] .usage-info-chart-controls button.active {
   background: #fff;
 }
 
-body[data-theme="light"] .usage-info-dropdown-trigger {
-  border-color: #d0d5dd;
-  background: #fff;
-}
-
-body[data-theme="light"] .usage-info-dropdown-menu button:hover {
-  background: var(--hover-bg);
-}
-
 body[data-theme="light"] .usage-info-calendar-cell {
   border-color: rgba(0,0,0,0.04);
 }
@@ -2756,6 +2745,22 @@ body[data-theme="light"] .usage-info-tooltip {
   .usage-info-layout {
     grid-template-rows: auto;
     overflow-y: auto;
+  }
+
+  .usage-info-section {
+    overflow: visible;
+  }
+
+  .usage-info-section-head {
+    flex-wrap: wrap;
+  }
+
+  .usage-info-trend-svg {
+    min-height: 170px;
+  }
+
+  .usage-info-calendar-scroll {
+    min-height: 140px;
   }
 
   .usage-info-segment {

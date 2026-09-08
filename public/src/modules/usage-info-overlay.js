@@ -52,8 +52,6 @@ function usageInfoDefaults() {
     chartView: 'trend',
     chartModel: '__all__',
     calendarDaily: null,
-    groupMenuOpen: false,
-    chartModelMenuOpen: false,
     from: today,
     to: today,
     data: null,
@@ -101,6 +99,7 @@ async function openUsageInfo() {
 }
 
 function closeUsageInfo() {
+  closeUsageInfoMenu();
   const host = document.getElementById('usage-info-overlay-host');
   if (host) host.innerHTML = '';
   window.ClawFW.usageInfo = usageInfoDefaults();
@@ -492,6 +491,7 @@ function renderUsageInfoBars(daily, from, to, events) {
   ].join('');
 }
 
+// 全年日历热力：固定渲染近一年，独立于上方时间范围选择器（数据由 loadUsageInfoCalendarData 单独加载）
 function renderUsageInfoCalendar() {
   const isZh = currentLanguage === 'zh';
   const state = getUsageInfoState();
@@ -515,10 +515,6 @@ function renderUsageInfoCalendar() {
     }
   });
   return [
-    '<div class="usage-info-calendar">',
-    '<div class="usage-info-calendar-head">',
-    '<span>' + (isZh ? 'Token 活动' : 'Token activity') + '</span>',
-    '</div>',
     '<div class="usage-info-calendar-scroll">',
     '<div class="usage-info-calendar-grid">',
     padded.map((item) => {
@@ -532,15 +528,12 @@ function renderUsageInfoCalendar() {
     monthLabels.map((item) => '<span style="grid-column:' + item.column + '">' + Number(item.month) + (isZh ? '月' : '') + '</span>').join(''),
     '</div>',
     '</div>',
-    '</div>',
   ].join('');
 }
 
 function renderUsageInfoMainChart(daily, from, to, events) {
   const state = getUsageInfoState();
   if (state.chartModel === '__all__' && state.chartView === 'bar') state.chartView = 'trend';
-  if (state.chartModel !== '__all__' && state.chartView === 'calendar') state.chartView = 'trend';
-  if (state.chartView === 'calendar') return renderUsageInfoCalendar();
   if (state.chartView === 'bar') return renderUsageInfoBars(daily, from, to, events);
   return renderUsageInfoTrend(daily, from, to, events);
 }
@@ -548,13 +541,10 @@ function renderUsageInfoMainChart(daily, from, to, events) {
 function renderUsageInfoChartControls(events) {
   const isZh = currentLanguage === 'zh';
   const state = getUsageInfoState();
-  const models = usageInfoModelOptions(events).slice(0, 12);
   const selectedLabel = state.chartModel === '__all__' ? (isZh ? '全部模型' : 'All models') : state.chartModel;
+  // 全部模型时仅有趋势视图；选中具体模型后可切换到构成详情柱状图
   const chartViewOptions = state.chartModel === '__all__'
-    ? [
-        ['trend', isZh ? '趋势' : 'Trend'],
-        ['calendar', isZh ? '日历' : 'Calendar'],
-      ]
+    ? []
     : [
         ['trend', isZh ? '趋势' : 'Trend'],
         ['bar', isZh ? '详情' : 'Detail'],
@@ -562,15 +552,10 @@ function renderUsageInfoChartControls(events) {
   return [
     '<div class="usage-info-chart-controls">',
     chartViewOptions.map(([value, label]) => '<button class="' + (state.chartView === value ? 'active' : '') + '" type="button" onclick="setUsageInfoChartView(\'' + value + '\')">' + escapeHtml(label) + '</button>').join(''),
-    '<div class="usage-info-dropdown usage-info-chart-model-dropdown">',
-    '<button class="usage-info-dropdown-trigger" type="button" onclick="toggleUsageInfoChartModelMenu(event)">',
-    '<span>' + escapeHtml(selectedLabel) + '</span><span class="usage-info-dropdown-arrow">⌄</span>',
+    '<button class="usage-info-model-trigger" type="button" onclick="toggleUsageInfoChartModelMenu(event)">',
+    '<span class="usage-info-model-trigger-name">' + escapeHtml(selectedLabel) + '</span>',
+    USAGE_INFO_CHEVRON_SVG,
     '</button>',
-    '<div class="usage-info-dropdown-menu' + (state.chartModelMenuOpen ? ' open' : '') + '">',
-    '<button class="' + (state.chartModel === '__all__' ? 'active' : '') + '" type="button" data-model="__all__" onclick="setUsageInfoChartModelFromButton(this)">' + (isZh ? '全部模型' : 'All models') + '</button>',
-    models.map(([model]) => '<button class="' + (state.chartModel === model ? 'active' : '') + '" type="button" data-model="' + escapeHtml(model) + '" onclick="setUsageInfoChartModelFromButton(this)">' + escapeHtml(model) + '</button>').join(''),
-    '</div>',
-    '</div>',
     '</div>',
   ].join('');
 }
@@ -648,17 +633,13 @@ function renderUsageInfoEvents(events) {
   ].join('');
 }
 
-function renderUsageInfoGroupControls(groupOptions, state, isZh) {
+function renderUsageInfoGroupControls(state, isZh) {
   return [
     '<div class="usage-info-group-controls">',
-    '<div class="usage-info-dropdown">',
-    '<button class="usage-info-dropdown-trigger" type="button" onclick="toggleUsageInfoGroupMenu(event)">',
-    '<span>' + escapeHtml(usageInfoLabel(state.groupBy)) + '</span><span class="usage-info-dropdown-arrow">⌄</span>',
+    '<button class="usage-info-model-trigger" type="button" onclick="toggleUsageInfoGroupMenu(event)">',
+    '<span class="usage-info-model-trigger-name">' + escapeHtml(usageInfoLabel(state.groupBy)) + '</span>',
+    USAGE_INFO_CHEVRON_SVG,
     '</button>',
-    '<div class="usage-info-dropdown-menu' + (state.groupMenuOpen ? ' open' : '') + '">',
-    groupOptions.map((value) => '<button class="' + (state.groupBy === value ? 'active' : '') + '" type="button" onclick="setUsageInfoGroupBy(\'' + value + '\')">' + escapeHtml(usageInfoLabel(value)) + '</button>').join(''),
-    '</div>',
-    '</div>',
     '<input class="settings-input usage-info-search" value="' + escapeHtml(state.search || '') + '" placeholder="' + (isZh ? '搜索分组' : 'Search breakdown') + '" oninput="queueUsageInfoSearch(this.value)" onblur="setUsageInfoSearch(this.value)" onkeydown="if(event.key===\'Enter\') setUsageInfoSearch(this.value)">',
     '</div>',
   ].join('');
@@ -671,6 +652,7 @@ function renderUsageInfoOverlay() {
     host.innerHTML = '';
     return;
   }
+  closeUsageInfoMenu();
   const isZh = currentLanguage === 'zh';
   const data = state.data || {};
   const totals = data.totals || {};
@@ -682,21 +664,15 @@ function renderUsageInfoOverlay() {
     ['7d', isZh ? '近 7 天' : '7 days'],
     ['30d', isZh ? '近 30 天' : '30 days'],
   ];
-  const groupOptions = ['model', 'preset', 'agent', 'source', 'date'];
-  const chartTitle = state.chartView === 'calendar'
-    ? (isZh ? '日期热力' : 'Date heat')
-    : state.chartView === 'bar'
-      ? (isZh ? '模型详情' : 'Model detail')
-      : (isZh ? '用量趋势' : 'Usage trend');
+  const chartTitle = state.chartView === 'bar'
+    ? (isZh ? '模型详情' : 'Model detail')
+    : (isZh ? '用量趋势' : 'Usage trend');
 
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window usage-info-window">',
     '<div class="feature-detail-head">',
-    '<div>',
     '<div class="feature-detail-title">' + (isZh ? '用量信息' : 'Usage') + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml((state.from || '') + ' ~ ' + (state.to || '')) + '</div>',
-    '</div>',
     '<button class="feature-detail-close" type="button" title="' + (isZh ? '关闭' : 'Close') + '" onclick="closeUsageInfo()">×</button>',
     '</div>',
 
@@ -706,6 +682,7 @@ function renderUsageInfoOverlay() {
       '<button class="' + (state.range === value ? 'active' : '') + '" type="button" onclick="setUsageInfoRange(\'' + value + '\')">' + escapeHtml(label) + '</button>'
     )).join(''),
     '</div>',
+    '<span class="usage-info-range-label">' + escapeHtml((state.from || '') + ' ~ ' + (state.to || '')) + '</span>',
     '</div>',
 
     state.error ? '<div class="usage-info-error">' + escapeHtml(state.error) + '</div>' : '',
@@ -718,21 +695,29 @@ function renderUsageInfoOverlay() {
     '</div>',
 
     '<div class="usage-info-layout">',
-    '<section class="usage-info-section usage-info-chart-section">',
-    '<div class="usage-info-section-head usage-info-section-head-controls"><span>' + chartTitle + '</span>' + renderUsageInfoChartControls(data.events) + '</div>',
-    renderUsageInfoMainChart(data.daily, state.from, state.to, data.events),
-    '</section>',
+    // 左上：分组排行（随时间范围联动）
     '<section class="usage-info-section usage-info-list-section">',
-    '<div class="usage-info-section-head usage-info-section-head-controls"><span>' + (isZh ? '分组排行' : 'Breakdown') + '</span>' + renderUsageInfoGroupControls(groupOptions, state, isZh) + '</div>',
+    '<div class="usage-info-section-head usage-info-section-head-controls"><span>' + (isZh ? '分组排行' : 'Breakdown') + '</span>' + renderUsageInfoGroupControls(state, isZh) + '</div>',
     '<div class="usage-info-list-body">',
     renderUsageInfoGroups(data.groups, totals),
     '</div>',
     '</section>',
+    // 右上：用量趋势（随时间范围联动）
+    '<section class="usage-info-section usage-info-chart-section">',
+    '<div class="usage-info-section-head usage-info-section-head-controls"><span>' + chartTitle + '</span>' + renderUsageInfoChartControls(data.events) + '</div>',
+    renderUsageInfoMainChart(data.daily, state.from, state.to, data.events),
+    '</section>',
+    // 左下：最近事件（随时间范围联动）
     '<section class="usage-info-section usage-info-list-section">',
     '<div class="usage-info-section-head"><span>' + (isZh ? '最近事件' : 'Recent events') + '</span><small>' + (isZh ? '增量记录' : 'incremental') + '</small></div>',
     '<div class="usage-info-list-body">',
     renderUsageInfoEvents(data.recentEvents),
     '</div>',
+    '</section>',
+    // 右下：全年活动（固定近一年，不随时间范围）
+    '<section class="usage-info-section usage-info-calendar-section">',
+    '<div class="usage-info-section-head"><span>' + (isZh ? 'Token 活动' : 'Token activity') + '</span><small>' + (isZh ? '近一年' : 'Past year') + '</small></div>',
+    renderUsageInfoCalendar(),
     '</section>',
     '<div id="usage-info-tooltip" class="usage-info-tooltip"></div>',
     '</div>',
@@ -749,18 +734,102 @@ window.setUsageInfoRange = async function(range) {
   await loadUsageInfoData();
 };
 
-window.setUsageInfoGroupBy = async function(groupBy) {
+// ── body 挂载式下拉（同输入框模型切换配方：透明触发钮 + fixed 弹层，参照 git 分支下拉） ──
+
+const USAGE_INFO_CHEVRON_SVG = '<svg class="usage-info-model-trigger-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+
+let _usageInfoMenu = null;
+let _usageInfoMenuCleanup = null;
+
+function closeUsageInfoMenu() {
+  if (_usageInfoMenuCleanup) {
+    _usageInfoMenuCleanup();
+    _usageInfoMenuCleanup = null;
+  }
+  if (_usageInfoMenu) {
+    _usageInfoMenu.remove();
+    _usageInfoMenu = null;
+  }
+}
+
+// items: [{ value, label, active }]；弹层默认在触发钮下方展开，下方放不下时向上翻
+function openUsageInfoMenu(anchor, items, onPick) {
+  closeUsageInfoMenu();
+  const menu = document.createElement('div');
+  menu.className = 'usage-info-menu';
+  menu.innerHTML = items.map((item) =>
+    '<div class="usage-info-menu-item' + (item.active ? ' active' : '') + '" data-value="' + escapeHtml(item.value) + '">'
+    + '<span class="usage-info-menu-name">' + escapeHtml(item.label) + '</span>'
+    + '</div>'
+  ).join('');
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  let top = rect.bottom + 4;
+  if (top + menu.offsetHeight > window.innerHeight - 8 && rect.top > window.innerHeight - rect.bottom) {
+    top = Math.max(8, rect.top - menu.offsetHeight - 4);
+  }
+  menu.style.top = top + 'px';
+  menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+
+  menu.addEventListener('click', (event) => {
+    const item = event.target.closest('.usage-info-menu-item');
+    if (!item) return;
+    closeUsageInfoMenu();
+    onPick(item.dataset.value);
+  });
+
+  const onOutside = (event) => {
+    if (!menu.isConnected) return;
+    if (!menu.contains(event.target) && !anchor.contains(event.target)) {
+      closeUsageInfoMenu();
+    } else {
+      document.addEventListener('click', onOutside, { once: true });
+    }
+  };
+  setTimeout(() => document.addEventListener('click', onOutside, { once: true }), 0);
+  _usageInfoMenu = menu;
+  _usageInfoMenuCleanup = () => document.removeEventListener('click', onOutside);
+  requestAnimationFrame(() => menu.classList.add('visible'));
+}
+
+window.toggleUsageInfoChartModelMenu = function(event) {
+  if (event) event.stopPropagation();
+  if (_usageInfoMenu) {
+    closeUsageInfoMenu();
+    return;
+  }
+  const anchor = event?.currentTarget;
+  if (!anchor) return;
   const state = getUsageInfoState();
-  state.groupBy = groupBy;
-  state.groupMenuOpen = false;
-  await loadUsageInfoData();
+  const isZh = currentLanguage === 'zh';
+  const models = usageInfoModelOptions(state.data?.events).slice(0, 12);
+  const items = [{ value: '__all__', label: isZh ? '全部模型' : 'All models', active: state.chartModel === '__all__' }]
+    .concat(models.map(([model]) => ({ value: model, label: model, active: state.chartModel === model })));
+  openUsageInfoMenu(anchor, items, (value) => {
+    state.chartModel = value;
+    if (value === '__all__' && state.chartView === 'bar') state.chartView = 'trend';
+    renderUsageInfoOverlay();
+  });
 };
 
 window.toggleUsageInfoGroupMenu = function(event) {
   if (event) event.stopPropagation();
+  if (_usageInfoMenu) {
+    closeUsageInfoMenu();
+    return;
+  }
+  const anchor = event?.currentTarget;
+  if (!anchor) return;
   const state = getUsageInfoState();
-  state.groupMenuOpen = !state.groupMenuOpen;
-  renderUsageInfoOverlay();
+  const items = ['model', 'preset', 'agent', 'source', 'date'].map((value) => ({
+    value,
+    label: usageInfoLabel(value),
+    active: state.groupBy === value,
+  }));
+  openUsageInfoMenu(anchor, items, (value) => {
+    state.groupBy = value;
+    loadUsageInfoData();
+  });
 };
 
 window.setUsageInfoSearch = async function(search) {
@@ -818,22 +887,6 @@ function moveUsageInfoTooltip(event, tooltip) {
 window.setUsageInfoChartView = function(chartView) {
   const state = getUsageInfoState();
   state.chartView = chartView;
-  renderUsageInfoOverlay();
-};
-
-window.toggleUsageInfoChartModelMenu = function(event) {
-  if (event) event.stopPropagation();
-  const state = getUsageInfoState();
-  state.chartModelMenuOpen = !state.chartModelMenuOpen;
-  renderUsageInfoOverlay();
-};
-
-window.setUsageInfoChartModelFromButton = function(button) {
-  const state = getUsageInfoState();
-  state.chartModel = button?.dataset?.model || '__all__';
-  if (state.chartModel === '__all__' && state.chartView === 'bar') state.chartView = 'trend';
-  if (state.chartModel !== '__all__' && state.chartView === 'calendar') state.chartView = 'trend';
-  state.chartModelMenuOpen = false;
   renderUsageInfoOverlay();
 };
 
