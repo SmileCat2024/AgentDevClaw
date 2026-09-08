@@ -165,6 +165,7 @@ export function createConnectedAgentsQuery(deps) {
         active_workspace_session_title: sessionMeta.active_workspace_session_title,
         active_workspace_agent_name: sessionMeta.active_workspace_agent_name,
         active_workspace_display_name: sessionMeta.active_workspace_display_name,
+        active_workspace_session_dir: sessionMeta.active_workspace_session_dir || '',
         status: 'stopped',
         source: 'prebuilt',
         parent_id: null,

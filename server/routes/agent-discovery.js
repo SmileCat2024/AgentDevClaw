@@ -287,6 +287,7 @@ export function createAgentDiscoveryModule(ctx) {
           active_workspace_session_title: '',
           active_workspace_agent_name: '',
           active_workspace_display_name: noSessionDisplayName,
+          active_workspace_session_dir: '',
         },
       };
     }
@@ -297,6 +298,7 @@ export function createAgentDiscoveryModule(ctx) {
     let title = cleanSessionText(matched?.title);
     let agentName = cleanSessionText(matched?.agentName);
     let formId = cleanSessionText(matched?.formId);
+    let openDirectory = cleanSessionText(matched?.openDirectory);
 
     if (!matched) {
       try {
@@ -307,6 +309,7 @@ export function createAgentDiscoveryModule(ctx) {
         title = cleanSessionText(record?.title);
         agentName = cleanSessionText(record?.agentName);
         formId = cleanSessionText(record?.formId);
+        openDirectory = cleanSessionText(record?.openDirectory);
       } catch {}
     }
 
@@ -331,6 +334,12 @@ export function createAgentDiscoveryModule(ctx) {
         active_workspace_session_title: title,
         active_workspace_agent_name: agentName,
         active_workspace_display_name: displayName,
+        // 活跃会话目录取自会话记录（会话级真源）。PH 类 wire 投影按
+        // workspace_state.openDirectory 切片，活跃会话可能不在切片里
+        // （属于其他项目 / 排名超出首屏），消费方（git 面板目录解析）
+        // 依赖该字段兜底，不得回退到 workspace_state.openDirectory——
+        // 那是"workspace 当前打开的项目"，与当前会话无绑定关系。
+        active_workspace_session_dir: openDirectory,
       },
     };
   }
