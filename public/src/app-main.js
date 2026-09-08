@@ -850,6 +850,14 @@ function schedulePoll(delayMs = POLL_FAST_INTERVAL_MS) {
   }, Math.max(0, Number(delayMs) || 0));
 }
 
+// 发送成功等交互关键路径请求立即取数：poll() 自带 in-flight 合并（周期
+// 在飞时记 _pollImmediateRequested，结束后 schedulePoll(0) 兜底），直接调
+// 用即可，不会产生第二条递归定时链。
+window.ClawFW = window.ClawFW || {};
+window.ClawFW.requestImmediatePoll = function () {
+  poll();
+};
+
 // ── dev 计量（ADR-0012，默认关闭）──────────────────────────────────────────
 // URL 带 ?msg_metrics=1 时，每次消息刷新输出 actualBytes（本周期 /messages
 // 数据序列化字节，未发请求为 0）/ fakeFullBytes（假想全量字节，随 probe 下发）/
@@ -1232,6 +1240,10 @@ async function runPollCycle() {
             updateLastMessage(nextMessages[nextMessages.length - 1]);
           }
         }
+      }
+      // 乐观回显对账：真实消息上屏后再移除覆盖层，视觉上无缝替换
+      if (typeof window.ClawFW?.reconcileOptimisticUserEchoes === 'function') {
+        window.ClawFW.reconcileOptimisticUserEchoes(nextMessages);
       }
     });
     if (!messagesCommitted) {

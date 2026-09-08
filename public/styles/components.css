@@ -179,6 +179,9 @@
 .message-row.user { align-items: flex-end; }
 .message-row.user .message-meta { justify-content: flex-end; }
 
+/* 乐观回显（提交成功、真实消息尚未回流 transcript 的过渡气泡） */
+.message-row.user.optimistic-user-echo { opacity: 0.6; }
+
 .message-row.assistant .message-content {
   background-color: transparent;
   padding: 0;

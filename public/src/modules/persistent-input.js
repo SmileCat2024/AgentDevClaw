@@ -649,6 +649,9 @@ async function submitQueuedInput() {
         _queuedTexts.push(text || (images && images.length ? '🖼' : '') || ' ');
         updateQueueIndicator();
       } else if (targetRuntimeId) {
+        // 空闲直投（lease / 即时消费）：乐观回显先上屏，真实消息经
+        // poll 回流后由对账无缝替换；排队路径走上方气泡，不回显
+        window.ClawFW?.pushOptimisticUserEcho?.({ text, images });
         clearInterruptSuppression(targetRuntimeId);
         _markAgentCallStartedForNotify(targetRuntimeId);
         _agentCallActive.set(targetRuntimeId, true);
@@ -658,6 +661,8 @@ async function submitQueuedInput() {
       // 排队乐观态/提交完成后的模式可能翻转（工单 037）：声明变更即可，
       // 渲染器按签名差异决定是否重建。
       notifyInputSurfaceChanged(currentInputRequests || []);
+      // 削掉 0–300ms 轮询相位：立即取一轮状态/消息（in-flight 自守卫）
+      window.ClawFW?.requestImmediatePoll?.();
     } else {
       const error = await res.json().catch(() => ({}));
       throw new Error(error.error || `HTTP ${res.status}`);

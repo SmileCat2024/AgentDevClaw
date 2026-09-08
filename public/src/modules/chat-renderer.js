@@ -316,6 +316,66 @@ function appendNewMessages(newMessages, startIndex) {
   });
 }
 
+// ── Optimistic user echo（空闲直投路径的本地回显）─────────────────
+// delivery:'input' 提交成功后，真实消息要经 agent 消费、push 回 viewer、
+// 再等下一轮 poll 才上屏（实测 ~0.1–0.5s）。这里在提交瞬间先在 transcript
+// 末尾插入一条 DOM 覆盖层气泡：不进 currentMessages（避开 probe/seq 对账
+// 状态机），消息 commit 时按文本尾部对账移除；任何全量重建（render / 会话
+// 切换 / 404 清理）会重写 container，覆盖层随 DOM 消失，由 reconcile 的
+// isConnected 清理兜底。排队路径（queued）已有排队气泡，不走回显。
+let _optimisticEchoes = []; // { text, el }
+
+function pushOptimisticUserEcho({ text, images } = {}) {
+  if (typeof isChatSurfaceActive !== 'function' || !isChatSurfaceActive() || !container) return;
+  const echoText = (typeof text === 'string' && text.length > 0) ? text : ' ';
+  const row = document.createElement('div');
+  row.className = 'message-row user optimistic-user-echo';
+  row.innerHTML =
+    '<div class="message-meta"><div class="role-badge">user</div></div>'
+    + '<div class="message-content markdown-body">' + renderMarkdown(echoText) + '</div>'
+    + renderUserImages(images);
+  runWithSuppressedChatViewportObservers(() => {
+    const emptyState = container.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+    container.appendChild(row);
+    enhanceMathInElement(row);
+  });
+  _optimisticEchoes.push({ text: echoText, el: row });
+  updateFollowLatestButton();
+  notifyChatViewportMutation({
+    reason: 'append',
+    shouldFollow: followLatestEnabled && isChatSurfaceActive(),
+    preserveTop: null,
+    allowChase: false,
+    preferSmooth: false,
+    forceSnap: false,
+  });
+}
+
+function reconcileOptimisticUserEchoes(messages) {
+  if (_optimisticEchoes.length === 0) return;
+  // 全量重建后会话 DOM 已被重写，失效记录随 isConnected 清理
+  _optimisticEchoes = _optimisticEchoes.filter(e => e.el && e.el.isConnected);
+  if (_optimisticEchoes.length === 0) return;
+  // 回显生命周期只有几个 poll 周期，只对 transcript 尾部对账
+  const scanWindow = 12;
+  const tail = Array.isArray(messages) ? messages.slice(-scanWindow) : [];
+  const consumed = new Set();
+  for (const echo of _optimisticEchoes) {
+    for (let i = tail.length - 1; i >= 0; i--) {
+      if (consumed.has(i)) continue;
+      const m = tail[i];
+      if (m && m.role === 'user' && m.content === echo.text) {
+        consumed.add(i);
+        echo.el.remove();
+        echo.el = null;
+        break;
+      }
+    }
+  }
+  _optimisticEchoes = _optimisticEchoes.filter(e => e.el);
+}
+
 // 更新最后一条消息
 function updateLastMessage(msg) {
   // If the welcome page should be showing, do a full render instead of
@@ -958,3 +1018,12 @@ window.openImageZoom = function(src) {
 
   document.body.appendChild(overlay);
 };
+
+// 跨模块 API 走 window.ClawFW 命名空间（app-core 全局状态纪律）。
+// 注意：本文件源码块会被前端 vm 测试按函数标记切取执行，导出语句必须放在
+// 文件末尾，避免落入 appendNewMessages…getCollapseThresholdForRow 等切取区间。
+window.ClawFW = window.ClawFW || {};
+Object.assign(window.ClawFW, {
+  pushOptimisticUserEcho,
+  reconcileOptimisticUserEchoes,
+});
