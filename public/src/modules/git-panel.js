@@ -3,7 +3,7 @@
  *
  * feature 无关的产品 Chrome 层面板：跟随当前查看的 workspace 会话的项目
  * 目录，经 /protoclaw/git/* 路由展示 git 状态，并提供 stage / unstage /
- * commit / discard / branch 简单操作与图形化提交历史（SVG 泳道，
+ * discard / branch 简单操作与图形化提交历史（SVG 泳道，
  * 算法在 git-graph.js）。
  *
  * 远程会话适配（R2-06，ADR-0008 #5 / ADR-0011）：请求体携带宿主级命名空间
@@ -16,10 +16,9 @@
  *
  * 布局（上下双区，均可独立折叠 + 中间分隔条拖拽调高）：
  *   ┌────────────────────────────┐
- *   │ 更改与暂存  [概况条] [⟳]   │ ← 上区：概况（目录/远程关系/总数）
- *   │  提交框 + 可折叠分区        │    （暂存的更改 / 更改 / 冲突 / 分支）
+ *   │ 更改与暂存  [⟳]            │ ← 上区：可折叠分区（暂存的更改 / 更改）
  *   ├───── ⟂ 可拖拽分隔条 ───────┤
- *   │ 图形  [分支选择▾] [加载更多]│ ← 下区：SVG 提交历史（分支过滤）
+ *   │ 图形  [分支选择▾] [⟳]      │ ← 下区：SVG 提交历史（分支过滤）
  *   └────────────────────────────┘
  *
  * 刷新时机 = 进入面板 / 会话目录就绪（含重试，修复首次切入不加载）/
@@ -39,7 +38,6 @@
   const state = {
     dir: '',            // 当前会话绑定目录（面板视图身份）
     agentId: '',        // 宿主级命名空间身份（请求时派生，与 dir 联动重置）
-    root: '',           // 仓库根（服务端 rev-parse 解析）
     isRepo: true,
     repoMiss: 0,        // isRepo=false 的连续确认计数（防偶发误判）
     status: null,       // 序列化后的 StatusResult
@@ -48,20 +46,18 @@
     branches: null,     // { locals, remotes, current }
     stash: [],          // [{ ref, desc }]（Stash 已从 UI 移除，保留字段以兼容旧布局缓存）
     error: '',
-    errors: {},         // 分端点错误：{ graph, branches, stash }——失败必须可见，禁止静默
-    notice: '',         // 上一次操作的成功提示（如提交哈希）
+    errors: {},         // 分端点错误：{ status, graph, branches }——失败必须可见，禁止静默
     loading: false,
     busy: false,
     loadTried: false,     // 当前目录身份是否已发起过加载（防 render 周期兜底自激励）
     ensureAttempts: 0,    // 目录就绪重试累计（render 周期调用不重置）
-    commitMessage: '',
     expandedCommit: '', // 展开文件清单的提交 hash
     commitFiles: {},    // hash -> [{path, added, removed}] 懒加载缓存
     branch: '',         // 图形区分支过滤（'' = 当前分支）
     graphLimit: 120,    // 图形区加载条数（「加载更多」递增）
     // 布局状态（localStorage 持久化）
     zoneFold: { changes: false, graph: false },
-    subFold: { staged: true, changes: true, conflict: false, stash: false, branches: false },
+    subFold: { staged: true, changes: true },
     topH: 0,            // 上区像素高度（0 = 默认比例）
     changesScroll: 0,
     graphScroll: 0,
@@ -280,7 +276,6 @@
           state.repoMiss = 0;
           state.isRepo = true;
         }
-        state.root = status.root || state.root;
         state.status = status.status || state.status;
       }
       // 端点本次失败（null）时保留上次成功值，避免刷新一次失败就把记录图/状态清空
@@ -338,7 +333,6 @@
         state.isRepo = true;
       }
       state.status = status.status || state.status;
-      state.root = status.root || state.root;
       // 错误自愈：status 恢复成功即清除顶部错误与 status 分区错误，
       // 瞬时故障的提示最多挂一个轮询周期（~5s），无需手动刷新
       if (state.error) state.error = '';
@@ -421,7 +415,6 @@
     state.agentId = agentId;
     state.loadTried = false;
     state.ensureAttempts = 0;
-    state.root = '';
     state.status = null;
     state.graph = [];
     state.aheadHashes = [];
@@ -429,10 +422,8 @@
     state.stash = [];
     state.error = '';
     state.errors = {};
-    state.notice = '';
     state.isRepo = true;
     state.repoMiss = 0;
-    state.commitMessage = '';
     state.expandedCommit = '';
     state.commitFiles = {};
     state.branch = '';
@@ -441,31 +432,28 @@
   }
 
   // ── 更改分组与徽标 ────────────────────────────────────────────────
-  // VS Code SCM 模型：文件按「暂存的更改 / 更改 / 合并冲突」三组展示。
-  // 重命名（R）属于暂存侧；未跟踪（??）归入更改组，徽标显示 U。
+  // 简化模型：文件按「暂存的更改 / 更改」两组展示。重命名（R）属于暂存侧；
+  // 未跟踪（??）与合并冲突（含 U / AA / DD 状态）归入更改组，徽标显示 U。
 
   function splitGroups(files) {
     const staged = [];
     const changes = [];
-    const conflicts = [];
     for (const f of files) {
       const x = String(f?.index || '');
       const y = String(f?.working_dir || '');
-      if (x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D')) {
-        conflicts.push(f);
-      } else if (x !== ' ' && x !== '?') {
+      if (x !== ' ' && x !== '?') {
         staged.push(f);
       } else {
+        // U / AA / DD 等冲突状态文件同样并入更改组，保持可见
         changes.push(f);
       }
     }
-    return { staged, changes, conflicts };
+    return { staged, changes };
   }
 
   function badgeFor(file, group) {
     const x = String(file?.index || '');
     const y = String(file?.working_dir || '');
-    if (group === 'conflict') return { letter: 'C', cls: 'C' };
     if (group === 'staged') return { letter: x || 'M', cls: x || 'M' };
     if (y === 'M' || y === 'D') return { letter: y, cls: y };
     if (x === 'R') return { letter: 'R', cls: 'R' };
@@ -493,7 +481,6 @@
   function renderFileRow(file, group) {
     const badge = badgeFor(file, group);
     const path = displayPath(file);
-    const inConflict = group === 'conflict';
     const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
     const name = slash >= 0 ? path.slice(slash + 1) : path;
     const dir = slash >= 0 ? path.slice(0, slash) : '';
@@ -501,14 +488,14 @@
     // 行内操作：悬停显隐的图标按钮（+ 暂存 / − 取消暂存 / ↺ 丢弃）
     // 能力门控（ADR-0011）：无写能力（远程 write 位 false）时禁用写按钮
     const writable = canWriteGit();
-    const actions = inConflict ? '' : [
+    const actions = [
       group === 'staged'
         ? '<button class="git-file-action" data-gp-action="unstage" data-gp-file="' + esc(file.path) + '"' + (writable ? '' : ' disabled') + ' title="' + esc(zh('取消暂存', 'Unstage')) + '">&#8722;</button>'
         : '<button class="git-file-action" data-gp-action="stage" data-gp-file="' + esc(file.path) + '"' + (writable ? '' : ' disabled') + ' title="' + esc(zh('暂存', 'Stage')) + '">+</button>',
       '<button class="git-file-action is-danger" data-gp-action="discard" data-gp-file="' + esc(file.path) + '"' + (writable ? '' : ' disabled') + ' title="' + esc(zh('丢弃改动（不可恢复）', 'Discard changes (cannot be undone)')) + '">&#8634;</button>',
     ].join('');
     return [
-      '<div class="git-file' + (inConflict ? ' is-conflict' : '') + '" title="' + esc(path) + '">',
+      '<div class="git-file" title="' + esc(path) + '">',
       '<span class="git-file-icon">' + esc(icon.label) + '</span>',
       '<span class="git-file-name">' + esc(name) + '</span>',
       (dir ? '<span class="git-file-dir">' + esc(dir) + '</span>' : ''),
@@ -537,73 +524,11 @@
     ].join('');
   }
 
-  // ── 渲染：概况条（目录 / 总体 / 远程关系）─────────────────────────
-
-  function renderOverview(status) {
-    const files = status?.files || [];
-    const { staged, changes, conflicts } = splitGroups(files);
-    const rootLeaf = state.root ? state.root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
-    const branch = status?.detached ? zh('分离头指针', 'detached') : (status?.current || '—');
-    // 远程关系：ahead/behind + 跟踪分支；无跟踪时明示
-    let sync;
-    if (status?.tracking) {
-      const parts = [];
-      if (status.ahead > 0) parts.push('↑' + status.ahead);
-      if (status.behind > 0) parts.push('↓' + status.behind);
-      sync = parts.length
-        ? '<span class="git-ov-sync is-dirty">' + esc(parts.join(' ')) + '</span>'
-        : '<span class="git-ov-sync is-clean">' + esc(zh('与远程一致', 'in sync')) + '</span>';
-    } else {
-      sync = '<span class="git-ov-sync is-none">' + esc(zh('无远程跟踪', 'no upstream')) + '</span>';
-    }
-    const dirtyCount = changes.length + conflicts.length;
-    const summary = files.length === 0
-      ? '<span class="git-ov-count is-clean">' + esc(zh('工作区干净', 'clean')) + '</span>'
-      : '<span class="git-ov-count">' + esc(
-        zh(
-          (staged.length ? staged.length + ' 暂存' : '')
-          + (staged.length && dirtyCount ? ' · ' : '')
-          + (dirtyCount ? dirtyCount + ' 更改' : ''),
-          (staged.length ? staged.length + ' staged' : '')
-          + (staged.length && dirtyCount ? ' · ' : '')
-          + (dirtyCount ? dirtyCount + ' changed' : '')
-        )) + '</span>';
-    return [
-      '<div class="git-overview">',
-      '<span class="git-ov-dir" title="' + esc(state.root || state.dir) + '">' + esc(rootLeaf || '—') + '</span>',
-      '<span class="git-ov-branch" title="' + esc(status?.tracking ? branch + ' · ' + status.tracking : branch) + '">&#10262; ' + esc(branch) + '</span>',
-      sync,
-      summary,
-      '</div>',
-    ].join('');
-  }
-
-  function renderCommitBox(stagedCount) {
-    const disabled = stagedCount === 0 || state.busy || !canWriteGit();
-    const branch = state.status?.current || '';
-    const placeholder = branch
-      ? zh('提交信息 (Ctrl+Enter 在 "' + branch + '" 上提交)', 'Commit message (Ctrl+Enter to commit on "' + branch + '")')
-      : zh('提交信息', 'Commit message');
-    const label = stagedCount > 0
-      ? '&#10003; ' + esc(zh('提交', 'Commit')) + ' (' + stagedCount + ')'
-      : '&#10003; ' + esc(zh('提交', 'Commit'));
-    return [
-      '<div class="git-commit-box">',
-      '<textarea id="git-commit-message" class="git-commit-input" data-gp-message rows="2" placeholder="'
-        + esc(placeholder) + '">' + esc(state.commitMessage) + '</textarea>',
-      '<button class="git-commit-btn" data-gp-action="commit" ' + (disabled ? 'disabled' : '') + '>' + label + '<span class="git-commit-kbd">Ctrl+&#9166;</span></button>',
-      '</div>',
-    ].join('');
-  }
+  // ── 渲染：消息条（操作错误反馈）──────────────────────────────────
 
   function renderMessage() {
-    if (state.error) {
-      return '<div class="git-msg is-error">' + esc(state.error) + '</div>';
-    }
-    if (state.notice) {
-      return '<div class="git-msg is-notice">' + esc(state.notice) + '</div>';
-    }
-    return '';
+    if (!state.error) return '';
+    return '<div class="git-msg is-error">' + esc(state.error) + '</div>';
   }
 
   // ── 渲染：图形区（SVG 泳道 + 行文本叠加 + 分支过滤）───────────────
@@ -883,12 +808,10 @@
     }
 
     const status = state.status || { files: [] };
-    const { staged, changes, conflicts } = splitGroups(status.files || []);
+    const { staged, changes } = splitGroups(status.files || []);
     // 能力门控（ADR-0011）：无写能力时组级写动作一并禁用（照能力矩阵既有
     // 形态），只读查看不受影响
     const writable = canWriteGit();
-
-    // ── 上区：更改与暂存 ──
 
     // ── 上区：更改与暂存 ──
     const refreshBtn = '<button class="git-zone-btn' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="'
@@ -897,14 +820,10 @@
 
     const changesBodyHtml = [
       renderMessage(),
-      renderOverview(status),
-      renderCommitBox(staged.length),
       subSection('staged', zh('暂存的更改', 'Staged Changes'), staged.length,
         renderFilesList(staged, 'staged'),
         staged.length ? '<button class="git-group-action" data-gp-action="unstage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部取消', 'Unstage All')) + '</button>' : '',
         state.subFold.staged),
-      conflicts.length ? subSection('conflict', zh('合并冲突', 'Merge Conflicts'), conflicts.length,
-        renderFilesList(conflicts, 'conflict'), '', state.subFold.conflict) : '',
       subSection('changes', zh('更改', 'Changes'), changes.length,
         renderFilesList(changes, 'changes'),
         changes.length ? '<button class="git-group-action" data-gp-action="stage-all"' + (writable ? '' : ' disabled') + '>' + esc(zh('全部暂存', 'Stage All')) + '</button>' : '',
@@ -966,24 +885,17 @@
 
   // ── 操作 ─────────────────────────────────────────────────────────
 
-  function readCommitMessage() {
-    const el = document.getElementById('git-commit-message');
-    if (el) state.commitMessage = el.value;
-    return String(state.commitMessage || '').trim();
-  }
-
   async function runAction(fn) {
     if (state.busy) return;
     // 能力门控兜底（ADR-0011）：无写能力时写操作在提交前拦截，显式报错
-    // 不静默；主渲染门控在按钮 disabled（renderFileRow / renderCommitBox /
-    // stage-all / unstage-all）。
+    // 不静默；主渲染门控在按钮 disabled（renderFileRow / stage-all /
+    // unstage-all）。
     if (!canWriteGit()) {
       state.error = zh('远程连接未启用写能力，无法执行该操作', 'Remote connection has no write capability; operation is disabled');
       repaint();
       return;
     }
     state.busy = true;
-    state.notice = '';
     repaint();
     try {
       await fn();
@@ -1005,28 +917,6 @@
   async function doUnstage(files) {
     await runAction(async () => {
       await api('unstage', files ? { dir: state.dir, files } : { dir: state.dir });
-      await loadAll();
-    });
-  }
-
-  async function doCommit() {
-    const message = readCommitMessage();
-    if (!message) {
-      state.error = zh('请填写提交信息', 'Commit message is required');
-      repaint();
-      return;
-    }
-    const stagedCount = (state.status?.files || []).filter((f) => f.index !== ' ' && f.index !== '?'
-      && !(f.index === 'U' || f.working_dir === 'U' || (f.index === 'A' && f.working_dir === 'A') || (f.index === 'D' && f.working_dir === 'D'))).length;
-    const confirmed = window.confirm(
-      zh('提交 ' + stagedCount + ' 个已暂存文件？\n\n' + message, 'Commit ' + stagedCount + ' staged files?\n\n' + message)
-    );
-    if (!confirmed) return;
-    await runAction(async () => {
-      const data = await api('commit', { dir: state.dir, message });
-      state.commitMessage = '';
-      const hash = String(data?.commit?.commit || '').slice(0, 8);
-      state.notice = hash ? zh('已提交 ' + hash, 'Committed ' + hash) : zh('已提交', 'Committed');
       await loadAll();
     });
   }
@@ -1118,7 +1008,6 @@
     const file = btn.dataset.gpFile || '';
     if (action === 'refresh') {
       state.error = '';
-      state.notice = '';
       loadAll();
     } else if (action === 'load-more') {
       state.graphLimit += 120;
@@ -1131,8 +1020,6 @@
       doUnstage([file]);
     } else if (action === 'unstage-all') {
       doUnstage(null);
-    } else if (action === 'commit') {
-      doCommit();
     } else if (action === 'discard') {
       doDiscard(file);
     } else if (action === 'branch-menu') {
@@ -1151,20 +1038,6 @@
     state.expandedCommit = '';
     closeBranchMenu();
     loadAll();
-  });
-
-  featurePanelBody.addEventListener('input', (e) => {
-    const ta = e.target.closest('textarea[data-gp-message]');
-    if (!ta) return;
-    state.commitMessage = ta.value;
-  });
-
-  // Ctrl+Enter 快捷提交（VS Code SCM 同款）
-  featurePanelBody.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && e.target.closest('textarea[data-gp-message]')) {
-      e.preventDefault();
-      doCommit();
-    }
   });
 
   window.GitPanel = {
