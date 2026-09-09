@@ -319,10 +319,11 @@ test('switching back to a longer session preserves the cached reading position',
   assert.equal(harness.calls.renderMainView.at(-1), 'B');
 });
 
-test('switching back with follow enabled waits for data and lands once', async () => {
-  // [F3 决策] 跟随切回：不落缓存底部（否则增长数据到达要二次跳），空态等待，
-  // loadAgentData 首次渲染一次性锁到新底部。缓存 20 行（底 1600），新数据 40 行
-  // （底 3600）—— 若仍乐观落缓存底，将出现 1600 → 3600 的中间跳变。
+test('switching back with follow enabled lands on the cached bottom, then the new bottom', async () => {
+  // 跟随切回与阅读模式同走乐观渲染：缓存消息立即呈现并由 forceSnap 锁到缓存
+  // 底部，loadAgentData 到达后签名未变则 dedup 跳过（零跳动），有增长才重
+  // 渲染落新底部 —— 与跟随模式正常收新消息同形。缓存 20 行（底 1600），新
+  // 数据 40 行（底 3600）：中间态是缓存底而非空态，增长数据到达后落新底。
   const harness = createHandoffHarness({
     cache: { B: { followLatest: true, scrollTop: 100, messages: Array.from({ length: 20 }) } },
   });
@@ -332,15 +333,19 @@ test('switching back with follow enabled waits for data and lands once', async (
 
   assert.equal(
     harness.calls.applySessionViewPatch.length,
-    1,
-    'follow switch-back should clear messages to the empty state',
+    0,
+    'follow switch-back must keep the cached messages instead of clearing to the empty state',
   );
   assert.equal(
     harness.container.scrollHeight,
-    harness.container.clientHeight,
-    'chat should render empty while waiting for fresh data',
+    2000,
+    'chat should render the cached messages optimistically',
   );
-  assert.equal(harness.container.scrollTop, 0, 'must not land on the cached bottom');
+  assert.equal(
+    harness.container.scrollTop,
+    1600,
+    'optimistic render locks to the cached bottom before fresh data arrives',
+  );
 
   // loadAgentData delivers the grown message list (20 → 40 rows).
   harness.sandbox.currentMessages = Array.from({ length: 40 });

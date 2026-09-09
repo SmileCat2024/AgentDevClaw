@@ -695,22 +695,16 @@ window.switchAgent = async (newAgentId) => {
     const _restored = restoreRuntimeFromCache(runtimeAgentId);
     if (_restored) {
       lastRenderedWorkspaceHtml = '';
-      if (followLatestEnabled) {
-        // [F3 决策 2026-08-19] 跟随模式切回：不乐观渲染缓存消息、不落缓存底部 ——
-        // 离开期间有增长时 loadAgentData 到达后要二次跳到新底部（切回闪跳主因）。
-        // 清空消息渲染空态，等首次全量渲染直接锁到新底部，一步到位。
-        // render() 的空态分支不 notify / 不锁底，不会产生中间落位。
-        applySessionViewPatch({ messages: [] });
-        renderCurrentMainView();
-      } else {
-        // 阅读模式切回：乐观渲染缓存内容并恢复阅读位置（F2 修复）。恢复值经
-        // pending 通道交给渲染器作为 preserveTop，不直接写容器 —— 此刻容器仍是
-        // 旧会话 DOM，直接写会被浏览器钳制，短→长会话切换时阅读位置被销毁。
-        if (_restoredScrollTop != null) {
-          setPendingChatScrollRestore(_restoredScrollTop);
-        }
-        renderCurrentMainView();
+      // 跟随模式切回同样乐观渲染缓存消息：render-full 按 followLatest 锁到
+      // 缓存底部；loadAgentData 到达后签名未变则 render() dedup 跳过重建
+      // （视口已在最终位置，零跳动），有增长才重渲染并锁到新底部——与跟随
+      // 模式正常收新消息同形。阅读模式切回：滚动恢复值经 pending 通道交给
+      // 渲染器作 preserveTop，不直接写容器 —— 此刻容器仍是旧会话 DOM，直接
+      // 写会被浏览器钳制，短→长会话切换时阅读位置被销毁。
+      if (!followLatestEnabled && _restoredScrollTop != null) {
+        setPendingChatScrollRestore(_restoredScrollTop);
       }
+      renderCurrentMainView();
       _restoredScrollTop = null;
       renderFeaturePanel();
     } else {
