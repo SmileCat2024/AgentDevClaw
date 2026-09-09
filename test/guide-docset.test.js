@@ -3,7 +3,7 @@
  *   - sanitizeGuideRelativePath（路径穿越防护）
  *   - resolveGuideFileWithinRoot（realpath 越界与缺失文件行为）
  *   - stripGuideFrontmatter / extractGuideTitle / extractGuideHeadings
- *   - buildGuideTree（目录树扫描、md 过滤、空目录剔除、数字前缀排序）
+ *   - buildGuideTree（目录树扫描、md 过滤、空目录剔除、数字前缀排序、.order 索引文件排序）
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -20,6 +20,7 @@ import {
   extractGuideHeadings,
   buildGuideTree,
   guideNameCompare,
+  parseGuideOrderFile,
 } from '../server/routes/guide.js';
 
 const tmpDirs = [];
@@ -256,5 +257,100 @@ describe('guide: guideNameCompare (numeric prefix ordering)', () => {
     assert.ok(guideNameCompare('01-快速上手.md', '02-基础.md') < 0);
     assert.ok(guideNameCompare('02-基础.md', '10-进阶.md') < 0);
     assert.ok(guideNameCompare('9-临时.md', '10-附录.md') < 0);
+  });
+});
+
+describe('guide: parseGuideOrderFile', () => {
+  it('parses names, strips .md suffix, keeps order', () => {
+    assert.deepEqual(parseGuideOrderFile('index.md\n快速上手\n进阶用法.md'), ['index', '快速上手', '进阶用法']);
+  });
+
+  it('skips blank lines and # comments, trims whitespace', () => {
+    assert.deepEqual(parseGuideOrderFile('\n# 注释\n  a.md  \n\n  # 另一条注释\nb\n'), ['a', 'b']);
+  });
+
+  it('strips a UTF-8 BOM (Notepad-saved files)', () => {
+    assert.deepEqual(parseGuideOrderFile('\uFEFF首页.md\n指南'), ['首页', '指南']);
+  });
+
+  it('deduplicates entries after suffix normalization', () => {
+    assert.deepEqual(parseGuideOrderFile('a\na.md\nb'), ['a', 'b']);
+  });
+
+  it('returns an empty list for empty or missing content', () => {
+    assert.deepEqual(parseGuideOrderFile(''), []);
+    assert.deepEqual(parseGuideOrderFile(null), []);
+    assert.deepEqual(parseGuideOrderFile('# 只有注释'), []);
+  });
+});
+
+describe('guide: buildGuideTree with .order index files', () => {
+  before(() => {
+    // 独立根目录，避免与其他夹具互相污染
+    tmpRoot = makeTmpDir();
+    tmpDirs.push(tmpRoot);
+    write('index.md', '# 首页');
+    write('01-基础概念.md', '# 基础概念');
+    write('02-快速上手.md', '# 快速上手旧文');
+    write('进阶用法/03-会话与上下文.md', '# 会话与上下文');
+    write('快速上手/01-配置模型.md', '# 配置模型');
+    write('快速上手/模型配置.md', '# 模型配置');
+    // dir 与 doc 交错排序；未列出的 02-快速上手 回退默认规则排在最后；
+    // 「不存在的文档」被忽略；doc 条目带 .md 后缀、目录条目不带
+    write('.order', [
+      '# 每行一个条目名（.md 可省略）',
+      'index.md',
+      '快速上手',
+      '01-基础概念',
+      '不存在的文档.md',
+      '进阶用法',
+    ].join('\n'));
+    // 子目录的 .order 只作用于本级，且 doc 条目不带后缀
+    write('快速上手/.order', '模型配置\n');
+  });
+
+  function collectChildren(nodes) {
+    return nodes.map((node) => `${node.type}:${node.name}`);
+  }
+
+  it('follows .order verbatim with dir/doc interleaved, unlisted entries last', async () => {
+    const tree = await buildGuideTree(tmpRoot);
+    assert.deepEqual(collectChildren(tree.children), [
+      'doc:index',
+      'dir:快速上手',
+      'doc:01-基础概念',
+      'dir:进阶用法',
+      'doc:02-快速上手', // 未在 .order 中列出 → 排在已列出条目之后
+    ]);
+  });
+
+  it('applies each directory .order independently', async () => {
+    const tree = await buildGuideTree(tmpRoot);
+    const subDir = tree.children.find((node) => node.name === '快速上手');
+    assert.deepEqual(collectChildren(subDir.children), [
+      'doc:模型配置',
+      'doc:01-配置模型',
+    ]);
+  });
+
+  it('falls back to default ordering when no .order exists', async () => {
+    const tree = await buildGuideTree(tmpRoot);
+    const subDir = tree.children.find((node) => node.name === '进阶用法');
+    assert.deepEqual(collectChildren(subDir.children), ['doc:03-会话与上下文']);
+    // 无 .order 的目录树（复用首个夹具）仍按默认规则：dir 优先 + 名称排序
+    const plainRoot = makeTmpDir();
+    tmpDirs.push(plainRoot);
+    const prevRoot = tmpRoot;
+    tmpRoot = plainRoot;
+    try {
+      write('b.md', '# b');
+      write('a/c.md', '# c');
+      write('a/d.md', '# d');
+      const plainTree = await buildGuideTree(plainRoot);
+      assert.deepEqual(collectChildren(plainTree.children), ['dir:a', 'doc:b']);
+      assert.deepEqual(collectChildren(plainTree.children[0].children), ['doc:c', 'doc:d']);
+    } finally {
+      tmpRoot = prevRoot;
+    }
   });
 });

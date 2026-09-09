@@ -3,6 +3,7 @@
 // 职责：
 //   - 扫描指南根目录（默认仓库顶层 guide/，可在 metadata block.guideDocset.path 配置）
 //     生成目录树（仅含含 md 文档的目录），供 workspace_data 聚合给前端。
+//   - 目录内可选 `.order` 索引文件（每行一个条目名）强制指定子项展示顺序
 //   - GET /protoclaw/guide_doc   读取单个 md 文档（剥离 frontmatter，回传标题与正文）
 //   - GET /protoclaw/guide_asset 按相对路径提供图片等静态资源（白名单扩展名）
 //
@@ -195,17 +196,83 @@ export function guideNameCompare(left, right) {
   return String(left || '').localeCompare(String(right || ''), 'zh-CN', { numeric: true, sensitivity: 'base' });
 }
 
+// ── .order index file ────────────────────────────────────────────────────────
+
+const GUIDE_ORDER_FILE = '.order';
+
+/**
+ * Parse an `.order` index file: one child name per line (dir name, or doc name
+ * with optional `.md` suffix); `#` comments and blank lines are allowed and a
+ * UTF-8 BOM is stripped so Notepad-saved files work. Returns normalized names
+ * in file order, deduplicated.
+ */
+export function parseGuideOrderFile(source) {
+  const text = String(source || '').replace(/^\uFEFF/, '');
+  const names = [];
+  const seen = new Set();
+  for (const line of text.split(/\r?\n/)) {
+    let name = line.trim();
+    if (!name || name.startsWith('#')) continue;
+    name = name.replace(/\.md$/i, '');
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
+async function readGuideOrderFile(absDir) {
+  try {
+    const source = await fs.readFile(path.join(absDir, GUIDE_ORDER_FILE), 'utf8');
+    return parseGuideOrderFile(source);
+  } catch {
+    return [];
+  }
+}
+
+function defaultGuideChildCompare(left, right) {
+  if (left.type !== right.type) return left.type === 'dir' ? -1 : 1;
+  return guideNameCompare(left.name, right.name);
+}
+
+/**
+ * Sort children of one guide directory. With an `.order` index file, listed
+ * entries follow the file's order verbatim (dirs and docs may interleave);
+ * unlisted entries keep the default rule and come after all listed ones.
+ * Names in the file that do not match any child are ignored.
+ */
+function sortGuideChildren(children, orderEntries) {
+  const rank = new Map((orderEntries || []).map((name, index) => [name, index]));
+  if (rank.size === 0) {
+    children.sort(defaultGuideChildCompare);
+    return;
+  }
+  children.sort((left, right) => {
+    const leftRank = rank.get(left.name);
+    const rightRank = rank.get(right.name);
+    if (leftRank !== undefined || rightRank !== undefined) {
+      if (leftRank === undefined) return 1;
+      if (rightRank === undefined) return -1;
+      return leftRank - rightRank;
+    }
+    return defaultGuideChildCompare(left, right);
+  });
+}
+
 /**
  * Build the guide tree. Only directories containing at least one md
  * descendant are included; non-md files never appear (they are assets).
+ * Each directory may carry an `.order` index file to force its children's
+ * display order.
  */
 export async function buildGuideTree(rootAbs) {
   const visit = async (relative) => {
     const absolute = relative ? path.join(rootAbs, relative) : rootAbs;
-    let entries;
-    try {
-      entries = await fs.readdir(absolute, { withFileTypes: true });
-    } catch {
+    const [entries, orderEntries] = await Promise.all([
+      fs.readdir(absolute, { withFileTypes: true }).catch(() => null),
+      readGuideOrderFile(absolute),
+    ]);
+    if (!entries) {
       return { children: [], updatedAt: null, docCount: 0 };
     }
 
@@ -250,10 +317,7 @@ export async function buildGuideTree(rootAbs) {
       }
     }
 
-    children.sort((left, right) => {
-      if (left.type !== right.type) return left.type === 'dir' ? -1 : 1;
-      return guideNameCompare(left.name, right.name);
-    });
+    sortGuideChildren(children, orderEntries);
 
     return { children, updatedAt, docCount };
   };
