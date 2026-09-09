@@ -1193,6 +1193,7 @@ function renderWorkspaceBlock(agent, block) {
   if (block.type === 'feature-repository') return renderFeatureRepositoryBlock(agent, block);
   if (block.type === 'workspace-artifacts') return renderWorkspaceArtifactsBlock(agent, block);
   if (block.type === 'project-docset') return renderProjectDocsetBlock(agent, block);
+  if (block.type === 'guide-docset') return renderGuideDocsetBlock(agent, block);
   if (block.type === 'config-editor') return isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : '';
   if (block.type === 'flow-editor') return renderFlowEditorBlock(agent, block);
   if (block.type === 'work-group-chat') return renderWorkGroupChatBlock(agent, block);

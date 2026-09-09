@@ -12,6 +12,7 @@ import {
 } from '../shared/session-access.js';
 import { syncWorkspaceProjectDocset, summarizeProjectDocset } from './project-docset.js';
 import { summarizeFeatureRepository, mergeFeatureRepositoryPackages } from './feature-repository.js';
+import { summarizeGuideDocset } from './guide.js';
 
 import {
   buildFeatureCreatorDraftArtifact,
@@ -339,6 +340,10 @@ export async function resolveWorkspaceData(agent) {
         ...block.projectDocset,
         currentSessionId: agent?.workspace_sessions?.activeSessionId || agent?.active_workspace_session_id || '',
       }));
+    }
+
+    if (block.guideDocset) {
+      Object.assign(data, await summarizeGuideDocset(block.guideDocset));
     }
 
     if (block.installDefaults?.type === 'feature-creator') {

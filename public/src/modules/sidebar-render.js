@@ -160,6 +160,7 @@ function renderSidebarChildItems(entries, ownerAgentId, workspaceAgentId = owner
 
 const AGENT_ICONS = {
   'home': 'home.svg',
+  'claw-guide': 'claw-guide.svg',
   'flow-workspace': 'flow-workspace.svg',
   'feature-repository': 'feature-repository.svg',
   'feature-creator': 'feature-creator.svg',

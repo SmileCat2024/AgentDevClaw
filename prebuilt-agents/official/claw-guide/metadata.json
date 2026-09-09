@@ -1,0 +1,40 @@
+{
+  "id": "claw-guide",
+  "kind": "workspace",
+  "launchMode": "ui-only",
+  "name": "AgentDevClaw 指南",
+  "sortOrder": 12,
+  "description": "AgentDevClaw 用户手册：阅读指南目录与文档正文",
+  "version": "1.0.0",
+  "icon": "book",
+  "category": "workspace",
+  "enabled": true,
+  "features": [],
+  "ui": {
+    "entry": "home",
+    "tabs": [
+      {
+        "id": "home",
+        "label": {
+          "zh": "指南",
+          "en": "Guide"
+        }
+      }
+    ],
+    "home": {
+      "blocks": [
+        {
+          "id": "guide",
+          "type": "guide-docset",
+          "title": {
+            "zh": "AgentDevClaw 指南",
+            "en": "AgentDevClaw Guide"
+          },
+          "guideDocset": {
+            "path": "guide"
+          }
+        }
+      ]
+    }
+  }
+}

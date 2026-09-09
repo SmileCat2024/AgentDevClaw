@@ -27,6 +27,10 @@ renderer.html = function(token) {
   ) {
     return raw;
   }
+  // 指南工作空间图片 token（与 claw-display-math 同款占位技法，见 guide-docset.js）
+  if (/^<claw-guide-img data-token="guide-img-\d+">(?:<\/claw-guide-img>)?$/.test(raw) || raw === '</claw-guide-img>') {
+    return raw;
+  }
   return escapeHtml(raw);
 };
 

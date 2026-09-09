@@ -137,6 +137,7 @@ import {
   resolveWorkspaceData,
   upsertWorkspacePhProject,
 } from './server/routes/workspace.js';
+import { setupGuideRoutes } from './server/routes/guide.js';
 import { setupWorkspaceCreatorRoutes } from './server/routes/workspace-creators.js';
 import { createAgentDiscoveryModule } from './server/routes/agent-discovery.js';
 import { createAgentLifecycleModule } from './server/routes/agent-lifecycle.js';
@@ -503,6 +504,9 @@ app.post('/protoclaw/open_sessions/dismiss', express.json(), (req, res) => {
 setupWorkspaceRoutes(app, express);
 
 setupProjectDocsetRoutes(app, express);
+
+// ── AgentDevClaw 指南 → server/routes/guide.js ────────────────────────────────
+setupGuideRoutes(app, express);
 
 // ── IM Workspace → server/routes/im.js ────────────────────────────────────────
 setupIMRoutes(app, express, {
