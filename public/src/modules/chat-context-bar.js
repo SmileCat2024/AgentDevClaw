@@ -725,11 +725,17 @@ function _buildTitlePopupHtml(meta) {
       + escapeHtml(openDir) + '">' + escapeHtml(openDir) + '</span></div>');
   }
 
-  // Session ID (compact)
+  // Session ID (compact) + copy full id
   if (meta.activeSessionId) {
+    let copyLabel = isZh ? '复制完整 ID' : 'Copy full ID';
     statRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">'
       + (isZh ? '会话 ID' : 'Session')
-      + '</span><span class="ccb-popup-value ccb-popup-mono">' + escapeHtml(meta.activeSessionId.slice(-12)) + '</span></div>');
+      + '</span><span class="ccb-popup-value ccb-popup-mono ccb-popup-id-value" title="'
+      + escapeHtml(meta.activeSessionId) + '">'
+      + escapeHtml(meta.activeSessionId.slice(-12))
+      + '<button type="button" class="ccb-popup-copy-btn" data-session-id="' + escapeHtml(meta.activeSessionId)
+      + '" title="' + copyLabel + '" aria-label="' + copyLabel + '">'
+      + _CCB_ICON_COPY + '</button></span></div>');
   }
 
   if (timeRows.length) {
@@ -742,6 +748,52 @@ function _buildTitlePopupHtml(meta) {
 
   if (!sections.length) return '';
   return '<div class="ccb-popup-inner">' + sections.join('') + '</div>';
+}
+
+let _CCB_ICON_COPY =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
+  + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+let _CCB_ICON_CHECK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">'
+  + '<polyline points="20 6 9 17 4 12"/></svg>';
+
+async function _copyPopupSessionId(btn) {
+  let sessionId = btn?.dataset?.sessionId || '';
+  if (!sessionId) return;
+  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let ok = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(sessionId); ok = true; } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    // Fallback for non-secure contexts (e.g. accessing the UI via a LAN IP)
+    try {
+      let ta = document.createElement('textarea');
+      ta.value = sessionId;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch (e) { ok = false; }
+  }
+  if (!ok) {
+    if (typeof ClawToast !== 'undefined') {
+      ClawToast.show({ id: 'ccb-copy-session-id', status: 'error', title: isZh ? '复制会话 ID 失败' : 'Failed to copy session ID' });
+    }
+    return;
+  }
+  btn.innerHTML = _CCB_ICON_CHECK;
+  btn.classList.add('ccb-popup-copy-done');
+  if (btn._copyResetTimer) clearTimeout(btn._copyResetTimer);
+  btn._copyResetTimer = setTimeout(function () {
+    btn.innerHTML = _CCB_ICON_COPY;
+    btn.classList.remove('ccb-popup-copy-done');
+    btn._copyResetTimer = null;
+  }, 1200);
 }
 
 function _showTitlePopup() {
@@ -759,6 +811,10 @@ function _showTitlePopup() {
     });
     _titlePopup.addEventListener('mouseleave', function () {
       _scheduleHideTitlePopup();
+    });
+    _titlePopup.addEventListener('click', function (e) {
+      let btn = e.target && e.target.closest ? e.target.closest('.ccb-popup-copy-btn') : null;
+      if (btn) _copyPopupSessionId(btn);
     });
     document.body.appendChild(_titlePopup);
   }
