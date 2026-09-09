@@ -34,6 +34,22 @@ featurePanelBody.addEventListener('scroll', () => {
 // ClawSelect 增强层与输入焦点（防打断的关键）。
 const _panelBodyHtmlCache = new Map();
 
+/**
+ * 面板自行原地更新了 body 内的部分内容（不经 renderFeaturePanel 全量替换）
+ * 之后调用：重新求值当前面板的 render() 并记入签名缓存，使下一次
+ * renderFeaturePanel 的内容签名对比视为"未变"而跳过 innerHTML 替换——
+ * 否则滞后一拍的签名会让轮询 repaint 把面板整体重建（打断滚动/焦点）。
+ * 面板未打开或 body 已归属其他面板时不做任何事。
+ */
+function syncPanelBodyHtmlCache() {
+  const panelId = activeFeaturePanel;
+  const panel = panelId && featurePanels[panelId];
+  if (!panel || featurePanelBody.dataset.panel !== panelId) return;
+  try {
+    _panelBodyHtmlCache.set(panelId, panel.render());
+  } catch (_) { /* 求值失败保留旧签名，下一次 repaint 全量替换自愈 */ }
+}
+
 function runAfterPanelOpenFrame(callback) {
   const raf = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
     ? window.requestAnimationFrame.bind(window)

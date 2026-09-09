@@ -68,6 +68,8 @@ describe('git status parsing', () => {
       assert.equal(data.ok, true);
       assert.equal(data.isRepo, true);
       assert.equal(data.root, path.resolve(dir));
+      // head：前端图形区新鲜度探测依赖（rev-parse HEAD 完整哈希）
+      assert.match(data.head, /^[0-9a-f]{40}$/);
       assert.equal(data.status.isClean, false);
       assert.deepEqual(data.status.modified, ['tracked.txt']);
       assert.deepEqual(data.status.not_added, ['new.txt']);
@@ -92,6 +94,7 @@ describe('git status parsing', () => {
       assert.equal(r0.code, 200);
       assert.equal(r0.data.status.current, 'master');
       assert.deepEqual(r0.data.status.not_added, []);
+      assert.equal(r0.data.head, '', '无提交时 head 为空串');
 
       await fs.writeFile(path.join(repo.dir, 'a.txt'), 'x');
       repo.git('add -A');

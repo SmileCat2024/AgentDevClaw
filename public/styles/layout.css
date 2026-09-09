@@ -7808,34 +7808,6 @@ body[data-theme="light"] .git-ref.is-tag {
   color: var(--text-primary);
 }
 
-/* 加载更多 */
-.git-load-more {
-  display: flex;
-  justify-content: center;
-  padding: 8px 0 4px;
-}
-
-.git-load-more-btn {
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  padding: 5px 14px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.git-load-more-btn:hover:not(:disabled) {
-  background: var(--hover-bg);
-  color: var(--text-primary);
-}
-
-.git-load-more-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
 /* 提交文件清单（展开浮层，绝对定位避免推挤泳道行） */
 .git-history-row.is-expanded {
   background: rgba(255,255,255,0.04);

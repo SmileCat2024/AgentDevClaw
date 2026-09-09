@@ -559,7 +559,14 @@ export function setupGitRoutes(app, express) {
         return;
       }
       const text = await runGit(['status', '--porcelain', '-b', '-u', '--null'], root);
-      res.json({ ok: true, isRepo: true, root, status: serializeStatus(parseStatusSummary(text)) });
+      // head：当前 HEAD 完整哈希。前端静默轮询拿它与图形区顶端提交比对，
+      // 只在 HEAD 变化（面板外提交/checkout 等）时才补拉较重的 graph。
+      // 空仓库（尚无提交）等 rev-parse 失败场景置空串，前端以空串为基准。
+      let head = '';
+      try {
+        head = (await runGit(['rev-parse', 'HEAD'], root)).trim();
+      } catch (_) { /* 尚无提交等：head 保持空串 */ }
+      res.json({ ok: true, isRepo: true, root, head, status: serializeStatus(parseStatusSummary(text)) });
     } catch (error) {
       routeError(res, error);
     }

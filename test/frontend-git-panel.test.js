@@ -22,10 +22,15 @@ const record = { workspace_sessions: { sessions: [{ id: 'sess-1', openDirectory:
 
 function makeSandbox({ fetchImpl, agentRecord = record } = {}) {
   const timers = new Set();
+  const bodyListeners = {};
+  let autoTickFn = null;
   const trackedSetTimeout = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
-  const trackedSetInterval = (fn, ms) => { const t = setInterval(fn, ms); timers.add(t); return t; };
+  const trackedSetInterval = (fn, ms) => { autoTickFn = fn; const t = setInterval(fn, ms); timers.add(t); return t; };
   const trackedClear = (t) => { clearTimeout(t); clearInterval(t); timers.delete(t); };
-  const body = { addEventListener() {}, querySelector: () => null };
+  const body = {
+    addEventListener(type, fn) { (bodyListeners[type] = bodyListeners[type] || []).push(fn); },
+    querySelector: () => null,
+  };
 
   const ctx = createFrontendSandbox({
     fetch: fetchImpl,
@@ -44,6 +49,8 @@ function makeSandbox({ fetchImpl, agentRecord = record } = {}) {
     renderFeaturePanel: () => { ctx.__dom = ctx.window.GitPanel.render(); },
   });
   ctx.__disposeTimers = () => { for (const t of timers) trackedClear(t); timers.clear(); };
+  ctx.__autoTick = () => { if (autoTickFn) autoTickFn(); };
+  ctx.__fireBody = (type, event) => (bodyListeners[type] || []).forEach((fn) => fn(event));
   ctx.loadSource('public/src/modules/git-graph.js');
   ctx.loadSource('public/src/modules/git-panel.js');
   return ctx;
@@ -187,6 +194,87 @@ describe('git-panel 刷新链路稳定性', () => {
       html = ctx.window.GitPanel.render();
       assert.ok(!html.includes('rev-parse'), '恢复后顶部错误清除');
       assert.ok(html.includes('git-panel'), '面板正常');
+    } finally {
+      ctx.__disposeTimers();
+    }
+  });
+
+  it('HEAD 变化时静默轮询补拉图形，未变化不重复拉', async () => {
+    const headA = '1111111111111111111111111111111111111111';
+    const headB = '2222222222222222222222222222222222222222';
+    let head = headA;
+    let graphCalls = 0;
+    const fetchImpl = async (url) => {
+      const op = url.split('/').pop();
+      if (op === 'graph') {
+        graphCalls++;
+        return { ok: true, json: async () => ({ ok: true, commits: [{ ...okGraph.commits[0], fullHash: head }], aheadHashes: [] }) };
+      }
+      // 状态体 ahead 与图形 aheadHashes 一致（0/空），隔离出纯 HEAD 探测变量
+      const body = { ...okStatus('/repo'), head };
+      body.status = { ...body.status, ahead: 0 };
+      return { ok: true, json: async () => ({ status: body, branches: okBranches }[op]) };
+    };
+    const ctx = makeSandbox({ fetchImpl });
+    try {
+      ctx.window.GitPanel.onOpen();
+      await tick(); await tick();
+      const afterLoad = graphCalls; // onOpen 首轮 loadAll 含 graph
+      assert.equal(afterLoad, 1, '预置：首轮已拉取图形');
+
+      ctx.__autoTick(); // HEAD 未变：探测一致，不补拉
+      await tick(); await tick();
+      assert.equal(graphCalls, afterLoad, 'HEAD 未变化不补拉');
+
+      head = headB; // 面板外提交：HEAD 前进
+      ctx.__autoTick();
+      await tick(); await tick();
+      assert.equal(graphCalls, afterLoad + 1, 'HEAD 变化触发补拉');
+      assert.ok(ctx.window.GitPanel.render().includes('git-panel'), '补拉后面板正常');
+    } finally {
+      ctx.__disposeTimers();
+    }
+  });
+
+  it('图形区滚动到底自动加载更早提交，未接近底部不触发', async () => {
+    let graphCalls = 0;
+    const fetchImpl = async (url) => {
+      const op = url.split('/').pop();
+      if (op === 'graph') {
+        graphCalls++;
+        const commits = [];
+        for (let i = 0; i < 120; i++) {
+          commits.push({ hash: 'h' + i, fullHash: 'f' + i, parents: [], author: 'x', relTime: '1d', refs: [], subject: 'c' + i });
+        }
+        return { ok: true, json: async () => ({ ok: true, commits, aheadHashes: [] }) };
+      }
+      return { ok: true, json: async () => ({ status: okStatus('/repo'), branches: okBranches }[op]) };
+    };
+    const ctx = makeSandbox({ fetchImpl });
+    try {
+      ctx.window.GitPanel.onOpen();
+      await tick(); await tick();
+      assert.equal(graphCalls, 1, '预置：首轮已拉图形');
+      // mock 恒返回 120 条 = limit 上限，即"还有更早内容"形态
+      const scroll = (top) => ctx.__fireBody('scroll', {
+        target: {
+          classList: { contains: (c) => c === 'git-graph-scroll' },
+          scrollTop: top, clientHeight: 500, scrollHeight: 1600,
+        },
+      });
+      scroll(100); // 距底 1000+，未接近底部
+      await tick();
+      assert.equal(graphCalls, 1, '未接近底部不加载');
+
+      scroll(1480); // 距底 120 内
+      await tick(); await tick();
+      assert.equal(graphCalls, 2, '接近底部自动补拉一批');
+
+      // 补拉后 graphLimit 递增（120→240），mock 仍返回 120 条 < limit：
+      // 已到仓库底部，继续滚到底不再触发
+      scroll(1480);
+      await tick(); await tick();
+      assert.equal(graphCalls, 2, '返回条数少于 limit 后不再加载');
     } finally {
       ctx.__disposeTimers();
     }

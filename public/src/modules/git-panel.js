@@ -18,11 +18,14 @@
  *   ┌────────────────────────────┐
  *   │ 更改与暂存  [⟳]            │ ← 上区：可折叠分区（暂存的更改 / 更改）
  *   ├───── ⟂ 可拖拽分隔条 ───────┤
- *   │ 图形  [分支选择▾] [⟳]      │ ← 下区：SVG 提交历史（分支过滤）
+ *   │ 图形  [分支选择▾] [⟳]      │ ← 下区：SVG 提交历史（分支过滤，
+ *   │                            │    滚动到底自动加载更早提交）
  *   └────────────────────────────┘
  *
  * 刷新时机 = 进入面板 / 会话目录就绪（含重试，修复首次切入不加载）/
- * 会话目录变化 / 手动刷新 / 任一写操作后（统一 loadAll 单点拉取）。
+ * 会话目录变化 / 手动刷新 / 任一写操作后 / 图形区滚动到底（统一 loadAll
+ * 单点拉取）；面板打开期间还有周期静默刷新（status/branches 常驻，
+ * graph 探测到 HEAD 变化才补拉）。
  *
  * 交互模式对齐 todo-plan.js：featurePanelBody 事件委托 + data-gp-* 属性。
  *
@@ -306,9 +309,13 @@
 
   /**
    * 静默自动刷新：面板打开期间周期性地轻量重拉 status + branches（graph
-   * 较重且只在写操作后变化，不纳入常规轮询）。不触碰 loading/busy/错误态，
-   * 不打断输入；数据未变时 renderFeaturePanel 的 HTML 签名缓存会跳过 DOM
-   * 替换，无闪烁。
+   * 较重，不做无条件轮询）。不触碰 loading/busy/错误态，不打断输入；数据
+   * 未变时 renderFeaturePanel 的 HTML 签名缓存会跳过 DOM 替换，无闪烁。
+   *
+   * graph 新鲜度探测：status 带 head（当前 HEAD 完整哈希），与图形顶端提交
+   * 不一致（面板外提交 / checkout / push 后 ahead 归零）才补拉 graph，否则
+   * 图形区在面板外变化后永远停留旧图。分支过滤视图的顶端不等于 HEAD，不
+   * 参与探测；对端响应无 head 字段（旧版远程）时同样跳过，行为同旧版。
    *
    * graph 自愈：上次 graph 端点失败（errors.graph 粘滞）时，本轮顺带重拉
    * graph，失败提示最多挂一个轮询周期后自动恢复，不再常驻。
@@ -337,6 +344,22 @@
       // 瞬时故障的提示最多挂一个轮询周期（~5s），无需手动刷新
       if (state.error) state.error = '';
       if (state.errors.status) delete state.errors.status;
+      // 图形区新鲜度探测（见函数注释）：graph 空时以空串为基准，仓库从空
+      // 变为有提交同样被捕捉；graph 请求失败的自愈走 errors.graph 粘滞路径
+      const headHash = typeof status.head === 'string' ? status.head : null;
+      if (!state.branch && !state.errors.graph && headHash !== null) {
+        const known = state.graph.length ? state.graph[0].fullHash : '';
+        if (known !== headHash
+          || (known !== '' && state.aheadHashes.length !== Number(status.status?.ahead ?? 0))) {
+          const g = await autoOk(api('graph', { dir, limit: state.graphLimit, branch: state.branch }));
+          if (state.dir !== dir || state.loading) return;
+          if (g && g.ok) {
+            state.graph = Array.isArray(g.commits) ? g.commits : [];
+            state.aheadHashes = Array.isArray(g.aheadHashes) ? g.aheadHashes : [];
+            delete state.errors.graph;
+          }
+        }
+      }
     }
     if (branches && branches.ok) {
       state.branches = branches;
@@ -669,15 +692,10 @@
       ].join('');
     }).join('');
 
-    const loadMore = commits.length >= state.graphLimit
-      ? '<div class="git-load-more"><button class="git-load-more-btn" data-gp-action="load-more" '
-        + (state.loading ? 'disabled' : '') + '>' + esc(zh('加载更早的提交', 'Load older commits')) + '</button></div>'
-      : '';
-
     return [
       '<div class="git-history" style="--git-canvas-w:' + svg.width + 'px">',
       '<div class="git-history-canvas">' + svg.svg + '</div>',
-      '<div class="git-history-rows">' + rows + loadMore + '</div>',
+      '<div class="git-history-rows">' + rows + '</div>',
       '</div>',
     ].join('');
   }
@@ -971,6 +989,61 @@
 
   featurePanelBody.addEventListener('mousedown', onSplitterDown);
 
+  // 图形区滚动到底自动加载更早提交（无限滚动）。scroll 不冒泡，用捕获阶段
+  // 委托；面板 DOM 每次 repaint 重建，监听必须挂在宿主上而非滚动容器。
+  // "还有更早内容"的判定与历史行为一致：返回条数达到 limit 上限才可能
+  // 有更多（少于 limit = 已到仓库底部）。
+  function onGraphScroll(e) {
+    const el = e.target;
+    if (!el.classList || !el.classList.contains('git-graph-scroll')) return;
+    if (loadingMore || state.loading || state.busy) return;
+    if (!state.graph.length || state.graph.length < state.graphLimit) return;
+    if (el.scrollTop + el.clientHeight < el.scrollHeight - 120) return;
+    doLoadMore();
+  }
+
+  // ── 滚动加载：原地追加，不打断滚轮 ───────────────────────────────
+  // 追加更早提交不走 repaint 全量重建——面板 DOM 整体替换会打断进行中的
+  // 滚轮滚动（动量随旧 DOM 一起丢失，表现为"加载后必须重新滚动"）。这里
+  // 只拉 graph 端点，成功后原地替换图形区内容（滚动容器本身不动），并同步
+  // 宿主的 HTML 签名缓存，使下一次 repaint 的签名对比视为未变而跳过替换。
+  let loadingMore = false;
+  async function doLoadMore() {
+    if (loadingMore || state.loading || state.busy) return;
+    if (!state.graph.length || state.graph.length < state.graphLimit) return;
+    const dir = state.dir;
+    const seq = loadSeq; // 期间发起 loadAll（手动刷新/写操作）则本次响应作废
+    loadingMore = true;
+    state.graphLimit += 120;
+    try {
+      const data = await api('graph', { dir, limit: state.graphLimit, branch: state.branch });
+      if (seq !== loadSeq || state.dir !== dir) return;
+      if (Array.isArray(data?.commits)) {
+        state.graph = data.commits;
+        state.aheadHashes = Array.isArray(data.aheadHashes) ? data.aheadHashes : [];
+        delete state.errors.graph;
+      }
+      patchGraphZone();
+    } catch (e) {
+      // 失败可见（图形区内提示），不留静默；自愈走 silentRefresh 的
+      // errors.graph 粘滞重拉路径，无需滚动重试
+      state.errors.graph = String(e?.message || e || 'graph failed');
+      patchGraphZone();
+    } finally {
+      loadingMore = false;
+    }
+  }
+
+  /** 原地替换图形区内容：滚动容器不重建，滚轮动量保持。 */
+  function patchGraphZone() {
+    const zone = document.querySelector('.git-zone-body[data-zone-body="graph"]');
+    if (!zone) return; // 面板已切走/折叠：state 已更新，下次全量渲染自然呈现
+    zone.innerHTML = renderGraphBody();
+    if (typeof syncPanelBodyHtmlCache === 'function') syncPanelBodyHtmlCache();
+  }
+
+  featurePanelBody.addEventListener('scroll', onGraphScroll, true);
+
   featurePanelBody.addEventListener('click', (e) => {
     // 分区头折叠（自管状态，不经原生 details）
     const subHead = e.target.closest('.git-sub-head');
@@ -1008,9 +1081,6 @@
     const file = btn.dataset.gpFile || '';
     if (action === 'refresh') {
       state.error = '';
-      loadAll();
-    } else if (action === 'load-more') {
-      state.graphLimit += 120;
       loadAll();
     } else if (action === 'stage') {
       doStage([file]);
