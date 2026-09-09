@@ -182,8 +182,6 @@ function _renderLastCallElapsed() {
 
 // ── 图片附件管理 ──────────────────────────────────────────────────
 
-const _MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
-
 // 图片按宿主机落盘寻址（ADR-0006/0011）：消息里的 path 由 agent 所在机器的
 // runtime 读取，附件必须落在发送目标同一台主机上。本地会话 'local'，远程
 // 会话按连接维度（remote:<connectionId>）——同一连接内的会话切换无需转存。
@@ -201,10 +199,6 @@ function _imageHostKey(agentId) {
  */
 function _addImageFile(file) {
   if (!file || !file.type || !file.type.startsWith('image/')) return;
-  if (file.size > _MAX_IMAGE_SIZE) {
-    console.warn('[Image Attach] File too large, skipping:', file.name, file.size);
-    return;
-  }
   const reader = new FileReader();
   reader.onload = function() {
     const dataUrl = reader.result;
