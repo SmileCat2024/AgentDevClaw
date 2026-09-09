@@ -1018,12 +1018,29 @@ window.openImageZoom = function(src) {
   let overlay = document.createElement('div');
   overlay.id = 'image-zoom-overlay';
   overlay.className = 'image-zoom-overlay';
-  overlay.onclick = function() { overlay.remove(); };
 
   let img = document.createElement('img');
   img.src = src;
   img.onclick = function(e) { e.stopPropagation(); };
   overlay.appendChild(img);
+
+  // 滚轮缩放：1x 即适配尺寸，向上放大、向下缩小，下限 0.2x 上限 8x
+  let scale = 1;
+  overlay.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    scale = Math.min(8, Math.max(0.2, scale * (e.deltaY < 0 ? 1.1 : 0.9)));
+    img.style.transform = 'scale(' + scale + ')';
+  }, { passive: false });
+
+  let onKey = function(e) {
+    if (e.key === 'Escape') close();
+  };
+  let close = function() {
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+  };
+  overlay.onclick = close;
+  document.addEventListener('keydown', onKey);
 
   document.body.appendChild(overlay);
 };

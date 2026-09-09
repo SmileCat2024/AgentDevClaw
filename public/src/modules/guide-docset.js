@@ -5,7 +5,7 @@
  * 正文复用对话页渲染管线（renderMarkdown：marked + hljs + katex），
  * 其上叠加：
  *   - Typora 兼容图片语法（![alt](src =WxH align) 与原生 <img style="zoom:..">），
- *     相对路径统一改写为指南资产接口 URL，点击图片打开灯箱（缩放/适应）。
+ *     相对路径统一改写为指南资产接口 URL，点击图片复用对话页的图片缩放层（openImageZoom）。
  *   - md 之间相对链接（含锚点）在阅读器内跳转，联动目录高亮。
  *   - 页内大纲（h2/h3）、上/下篇导航、阅读位置记忆（localStorage）。
  *
@@ -44,7 +44,6 @@ function guideText(key) {
     loadFailed: '文档加载失败',
     noDocs: '指南目录里还没有 md 文档。把手册文件放进指南文件夹即可自动出现在目录里。',
     noRoot: '还没有找到指南目录。',
-    fit: '适应',
     unresolved: '图片无法解析',
     emptyDoc: '这份文档还没有内容。',
   };
@@ -53,7 +52,6 @@ function guideText(key) {
     loadFailed: 'Failed to load document',
     noDocs: 'No markdown documents in the guide folder yet.',
     noRoot: 'Guide root not found.',
-    fit: 'Fit',
     unresolved: 'Unresolved image',
     emptyDoc: 'This document is empty.',
   };
@@ -585,8 +583,6 @@ function guideRenderPager(shell) {
 }
 
 let guideDelegated = false;
-let guideLightboxRoot = null;
-let guideLightboxImg = null;
 
 function guideEnsureDelegated() {
   if (guideDelegated) return;
@@ -624,7 +620,7 @@ function guideEnsureDelegated() {
     const image = target.closest('.guide-image-block img[data-guide-src]');
     if (image) {
       event.preventDefault();
-      window.guideOpenLightbox(image.dataset.guideSrc || '', image.getAttribute('alt') || '');
+      window.openImageZoom(image.dataset.guideSrc || '');
     }
   });
 
@@ -635,16 +631,6 @@ function guideEnsureDelegated() {
     if (!guideState.currentDoc) return;
     guideState.scrollMemory.set(guideState.currentDoc, target.scrollTop || 0);
   }, { capture: true, passive: true });
-
-  guideEnsureLightbox();
-
-  document.addEventListener('keydown', (event) => {
-    if (!guideLightboxRoot?.classList.contains('open')) return;
-    if (event.key === 'Escape') window.guideCloseLightbox();
-    else if (event.key === '+' || event.key === '=') window.guideLightboxZoom(1);
-    else if (event.key === '-') window.guideLightboxZoom(-1);
-    else if (event.key === '0') window.guideLightboxZoom(0, 100);
-  });
 }
 
 /** 页内锚点定位：按标题文本匹配（跨文档锚点在装饰期转为本 data 属性）。 */
@@ -660,107 +646,6 @@ function guideScrollToHeading(shell, anchorText) {
     }
   }
 }
-
-// ── 图片灯箱：点击正文图片进入，支持缩放/适应宽度，Esc 关闭 ──
-
-const GUIDE_LIGHTBOX_ZOOM_STEPS = [15, 25, 33, 50, 67, 75, 100, 125, 150, 200, 300, 500];
-
-function guideEnsureLightbox() {
-  if (guideLightboxRoot) return;
-  guideLightboxRoot = document.createElement('div');
-  guideLightboxRoot.className = 'guide-lightbox';
-  guideLightboxRoot.innerHTML = [
-    '<div class="guide-lightbox-backdrop"></div>',
-    '<div class="guide-lightbox-toolbar">',
-    '<button type="button" class="guide-lightbox-btn" data-lb-action="out" title="-">−</button>',
-    '<span class="guide-lightbox-pct">100%</span>',
-    '<button type="button" class="guide-lightbox-btn" data-lb-action="in" title="+">＋</button>',
-    `<button type="button" class="guide-lightbox-btn" data-lb-action="reset">1:1</button>`,
-    `<button type="button" class="guide-lightbox-btn" data-lb-action="fit">${escapeHtml(guideText('fit'))}</button>`,
-    `<button type="button" class="guide-lightbox-btn guide-lightbox-close" data-lb-action="close">${escapeHtml(currentLanguage === 'en' ? 'Close' : '关闭')}</button>`,
-    '</div>',
-    '<div class="guide-lightbox-stage"><img class="guide-lightbox-img" alt="" draggable="false"></div>',
-  ].join('');
-  document.body.appendChild(guideLightboxRoot);
-  guideLightboxImg = guideLightboxRoot.querySelector('.guide-lightbox-img');
-
-  guideLightboxRoot.addEventListener('click', (event) => {
-    const actionTarget = event.target instanceof Element ? event.target.closest('[data-lb-action]') : null;
-    if (actionTarget) {
-      const action = actionTarget.dataset.lbAction;
-      if (action === 'in') window.guideLightboxZoom(1);
-      else if (action === 'out') window.guideLightboxZoom(-1);
-      else if (action === 'reset') window.guideLightboxZoom(0, 100);
-      else if (action === 'fit') window.guideLightboxFit();
-      else if (action === 'close') window.guideCloseLightbox();
-      return;
-    }
-    if (event.target === guideLightboxRoot || event.target.classList.contains('guide-lightbox-backdrop')) {
-      window.guideCloseLightbox();
-    }
-  });
-
-  // wheel 上要 preventDefault 阻止背景页滚动，必须非 passive 注册
-  guideLightboxRoot.addEventListener('wheel', (event) => {
-    if (!guideLightboxRoot.classList.contains('open')) return;
-    event.preventDefault();
-    window.guideLightboxZoom(event.deltaY < 0 ? 1 : -1);
-  }, { passive: false });
-}
-
-function guideApplyLightboxZoom() {
-  if (!guideLightboxRoot || !guideLightboxImg) return;
-  const pctLabel = guideLightboxRoot.querySelector('.guide-lightbox-pct');
-  if (pctLabel) pctLabel.textContent = `${guideState.lightboxZoom}%`;
-  if (guideLightboxImg.naturalWidth) {
-    guideLightboxImg.style.width = `${Math.round(guideLightboxImg.naturalWidth * guideState.lightboxZoom / 100)}px`;
-  }
-  guideLightboxImg.style.maxWidth = guideState.lightboxZoom === 100 ? '' : 'none';
-}
-
-window.guideOpenLightbox = (src, alt) => {
-  guideEnsureLightbox();
-  if (!guideLightboxRoot || !src) return;
-  guideState.lightboxZoom = 100;
-  guideLightboxImg.style.width = '';
-  guideLightboxImg.style.maxWidth = '';
-  guideLightboxImg.alt = String(alt || '');
-  guideLightboxImg.src = String(src || '');
-  guideLightboxRoot.classList.add('open');
-  requestAnimationFrame(guideApplyLightboxZoom);
-};
-
-window.guideCloseLightbox = () => {
-  if (!guideLightboxRoot) return;
-  guideLightboxRoot.classList.remove('open');
-  guideLightboxImg.src = '';
-  guideLightboxImg.style.width = '';
-};
-
-window.guideLightboxZoom = (direction, absolute) => {
-  if (!guideLightboxImg) return;
-  if (typeof absolute === 'number') {
-    guideState.lightboxZoom = Math.max(10, Math.min(500, Math.round(absolute)));
-  } else {
-    const current = guideState.lightboxZoom;
-    const candidates = direction > 0
-      ? GUIDE_LIGHTBOX_ZOOM_STEPS.filter((step) => step > current)
-      : [...GUIDE_LIGHTBOX_ZOOM_STEPS].reverse().filter((step) => step < current);
-    guideState.lightboxZoom = candidates.length
-      ? candidates[0]
-      : Math.max(10, Math.min(500, Math.round(current * (direction > 0 ? 1.25 : 0.8))));
-  }
-  guideApplyLightboxZoom();
-};
-
-window.guideLightboxFit = () => {
-  if (!guideLightboxRoot || !guideLightboxImg) return;
-  const stage = guideLightboxRoot.querySelector('.guide-lightbox-stage');
-  const naturalWidth = guideLightboxImg.naturalWidth || 0;
-  if (!stage || !naturalWidth) return;
-  const fit = Math.floor(((stage.clientWidth - 32) / naturalWidth) * 100);
-  window.guideLightboxZoom(0, Math.max(10, fit));
-};
 
 /**
  * 文档渲染后装饰链接：
