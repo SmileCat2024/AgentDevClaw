@@ -262,9 +262,6 @@ plain agent 的运行时配置走配置队列模型（[tickets 00](../docs/ticke
 - **全局层**：`~/.agentdev/AgentDevClaw/feature-setup.json`
 - **配置组**：`~/.agentdev/AgentDevClaw/workspaces/<agentId>/feature-config/groups/<name>.json`，
   组名即文件名，每组一个稀疏 FeatureConfig（顶层按 featureName 分桶，只写显式覆盖字段）
-- **全局层**：`~/.agentdev/AgentDevClaw/feature-setup.json`
-- **配置组**：`~/.agentdev/AgentDevClaw/workspaces/<agentId>/feature-config/groups/<name>.json`，
-  组名即文件名，每组一个稀疏 FeatureConfig（顶层按 featureName 分桶，只写显式覆盖字段）
 - **选中状态约定**：CLI `--config-group <name>`（临时覆盖）>
   `feature-config/selected.json` 的 `{"group": "<name>"}`（持久）> 无组层。
   两条路径都只是约定——组层文件的读取与合并是 agent 侧装配职责（agent.js

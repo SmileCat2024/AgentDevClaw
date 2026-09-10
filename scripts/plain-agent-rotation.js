@@ -50,9 +50,10 @@ function newPlainSessionId() {
 
 export { newPlainSessionId };
 
-function failureResult({ sessionId, initialSessionId, successions, outcome, error, status }) {
+function failureResult({ sessionId, initialSessionId, successions, outcome, error, status, saveError, indexError }) {
   // initialSessionId 由调用点显式传入（所有失败收敛路径都必须携带，
-  // 与成功返回的契约一致）。
+  // 与成功返回的契约一致）；sessionId 必须是已落盘会话（persistedHead），
+  // result 的消费者要能据 sessionId 加载会话文件。
   return {
     ok: false,
     status: status || 'failed',
@@ -62,6 +63,8 @@ function failureResult({ sessionId, initialSessionId, successions, outcome, erro
     successions,
     error,
     callOutcome: outcome,
+    ...(saveError ? { saveError } : {}),
+    ...(indexError ? { indexError } : {}),
   };
 }
 
@@ -103,8 +106,10 @@ export async function executePlainCallWithRotation({
   let prompt = initialGoal;
   let handoff = null;
   let successions = 0;
-  let persistedHead = initialSessionId; // 最后一个已落盘的会话（失败收敛用它报告，不指向未落盘的 successor）
-  let saveError = null; // 最后一轮 saveSession 失败事实（result 携带，接力将基于磁盘旧快照）
+  let persistedHead = initialSessionId; // 最后一个已落盘的会话（所有收敛路径都报它，不指向未落盘的 successor）
+  let registeredHead = initialSessionId; // index 登记推进到的会话（successor 首次落盘成功后才登记）
+  let saveError = null; // 首次 saveSession 失败事实（该轮内容已不可逆缺席 seed；后续轮成功不重置）
+  let indexError = null; // 发现层（index.json）写失败事实——不阻断执行，随 result 携带
   let outcome = null;
   let callError = null;
 
@@ -122,19 +127,11 @@ export async function executePlainCallWithRotation({
       return failureResult({ sessionId: persistedHead, initialSessionId, successions, outcome, error: `agent build failed: ${message}`, status: 'failed' });
     }
 
-    // successor 构建成功：接力计数与 index 登记都在此刻成立（trim 成功
-    // 不先入索引——build 失败不会留下指向不存在会话文件的孤儿记录）。
+    // successor 构建成功：接力计数在此刻成立（build 失败不计入——不存在
+    // 的 successor 不算一次接力）。index 登记不在此处——登记必须以
+    // "会话文件已落盘"为前提（见下方 saveSession 成功分支）。
     if (handoff) {
       successions += 1;
-      await upsertIndex?.({
-        id: sessionId,
-        goal: initialGoal,
-        sessionType: 'plain',
-        source: 'cli',
-        resumeMode: 'auto-rotation',
-        parentSessionId: handoff?.sourceSessionId || persistedHead,
-        rotationRound: successions,
-      });
     }
     outcome = null;
     callError = null;
@@ -154,12 +151,35 @@ export async function executePlainCallWithRotation({
     try {
       await currentAgent.saveSession(sessionId, sessionStore);
       persistedHead = sessionId;
-      saveError = null;
+      // index 登记在首次落盘成功后——登记必须以"会话文件存在"为前提，
+      // build 失败 / save 失败都不会留下指向不存在会话文件的孤儿记录。
+      // upsertIndex 属发现层：写失败不阻断执行（接力语义不受影响），
+      // 事实随 result 携带。
+      if (handoff && registeredHead !== sessionId) {
+        registeredHead = sessionId;
+        try {
+          await upsertIndex?.({
+            id: sessionId,
+            goal: initialGoal,
+            sessionType: 'plain',
+            source: 'cli',
+            resumeMode: 'auto-rotation',
+            parentSessionId: handoff?.sourceSessionId || persistedHead,
+            rotationRound: successions,
+          });
+        } catch (err) {
+          indexError = err instanceof Error ? err.message : String(err);
+          log(`[PlainRotation] index 登记失败（发现层，不阻断执行）: ${indexError}`);
+        }
+      }
     } catch (err) {
       // 接力仍会进行，但基于磁盘上的旧快照——最新一轮内容缺席 successor
       // seed（不可逆），事实随 result 携带（saveError），不只留日志。
-      saveError = err instanceof Error ? err.message : String(err);
-      log(`[PlainRotation] saveSession 失败（snapshot 可能落后于最新一轮）: ${saveError}`);
+      // 首次失败为准：后续轮 save 成功不重置（更早轮的内容损失已是事实）。
+      if (!saveError) {
+        saveError = err instanceof Error ? err.message : String(err);
+        log(`[PlainRotation] saveSession 失败（snapshot 可能落后于最新一轮）: ${saveError}`);
+      }
     }
 
     // 正常完成（或不可接力场景）即收敛；过界打断才进入接力。
@@ -173,48 +193,55 @@ export async function executePlainCallWithRotation({
         ok: !callError && outcome?.status === 'completed',
         status: callError ? 'failed' : (outcome?.status || 'completed'),
         response: outcome?.response || null,
-        sessionId,
+        sessionId: persistedHead,
         initialSessionId,
         successions,
         error: callError,
         callOutcome: outcome,
         ...(saveError ? { saveError } : {}),
+        ...(indexError ? { indexError } : {}),
       };
     }
 
     // ── 过界 → 进程内接力 ──────────────────────────────────────────
     if (successions >= maxSuccessions) {
       return failureResult({
-        sessionId,
+        sessionId: persistedHead,
         initialSessionId,
         successions,
         outcome,
         error: `context rotation limit reached (${maxSuccessions} successions)`,
+        saveError,
+        indexError,
       });
     }
 
     let snapshot = null;
     try {
-      snapshot = await sessionStore.load(sessionId);
+      snapshot = await sessionStore.load(persistedHead);
     } catch (err) {
       return failureResult({
-        sessionId,
+        sessionId: persistedHead,
         initialSessionId,
         successions,
         outcome,
         error: `rotation aborted: source session snapshot unavailable (${err?.message || err})`,
+        saveError,
+        indexError,
       });
     }
 
     const messages = snapshot?.runtime?.context?.messages;
     if (!Array.isArray(messages) || messages.length === 0) {
       return failureResult({
-        sessionId,
+        sessionId: persistedHead,
         initialSessionId,
         successions,
         outcome,
         error: 'rotation aborted: source session has no messages to trim',
         status: outcome?.status || 'failed',
+        saveError,
+        indexError,
       });
     }
 
@@ -224,7 +251,7 @@ export async function executePlainCallWithRotation({
         agentRelativeDir: trimSource.agentRelativeDir,
         projectRoot: trimSource.projectRoot,
         agentId: trimSource.agentId,
-        sessionId,
+        sessionId: persistedHead, // 快照真身：save 失败窗口内与 sessionId 可能不同
         sourceSessionSnapshot: snapshot,
         // 摘要 LLM 由 runner 以工厂注入（每轮新实例，OAuth 凭证不冻结在
         // 启动时刻）；缺省时 runTrim 落回 agentDir 预设解析。continuity
@@ -234,11 +261,13 @@ export async function executePlainCallWithRotation({
       });
     } catch (err) {
       return failureResult({
-        sessionId,
+        sessionId: persistedHead,
         initialSessionId,
         successions,
         outcome,
         error: `context rotation failed: ${err instanceof Error ? err.message : String(err)}`,
+        saveError,
+        indexError,
       });
     }
 

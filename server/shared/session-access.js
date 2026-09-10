@@ -185,6 +185,10 @@ async function writeIndexFileAt(indexPath, index) {
       throw err;
     }
   }
+  // 同刻写入（mtime 粒度内）时 mtime+size 可能不变，主动失效兜底——
+  // 所有写路径（writeSessionIndex / upsertSessionIndexAt）经此核心，
+  // 缓存失效不再依赖各写方自觉。
+  _indexCache.delete(indexPath);
 }
 
 export async function writeSessionIndex(agentId, index) {
@@ -192,8 +196,6 @@ export async function writeSessionIndex(agentId, index) {
   const indexPath = getPrebuiltSessionIndexPath(agentId);
   await ensureDir(dirPath);
   await writeIndexFileAt(indexPath, index);
-  // 同刻写入（mtime 粒度内）时 mtime+size 可能不变，主动失效兜底
-  _indexCache.delete(indexPath);
 }
 
 export function sessionIndexContentSignature(index = {}) {
@@ -245,17 +247,23 @@ export async function upsertSessionIndexAt(indexPath, record, { lockKey = indexP
     const index = await readSessionIndexAt(indexPath);
     const existing = index.sessions.findIndex(s => s?.id === record.id);
     if (existing >= 0) {
-      index.sessions[existing] = { ...index.sessions[existing], ...record };
+      // createdAt 登记后不可变：续接 / 终态 / 轮换登记都不得重置原始
+      // 创建时间（record 携带 createdAt 仅对新建记录生效）。
+      index.sessions[existing] = {
+        ...index.sessions[existing],
+        ...record,
+        createdAt: index.sessions[existing].createdAt ?? record.createdAt,
+      };
     } else {
       index.sessions.push(record);
     }
     index.activeSessionId = record.id;
-    const newIndex = {
+    const mergedIndex = {
       ...index,
       revision: Math.max(0, Number(index.revision) || 0) + 1,
     };
-    await writeIndexFileAt(indexPath, newIndex);
-    return newIndex;
+    await writeIndexFileAt(indexPath, mergedIndex);
+    return mergedIndex;
   } finally {
     release();
     if (_indexLocks.get(lockKey) === next) _indexLocks.delete(lockKey);

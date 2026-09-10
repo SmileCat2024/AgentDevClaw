@@ -25,6 +25,20 @@ const {
 } = await import('../server/shared/session-access.js');
 
 const AGENT_ID = 'cache-test-agent';
+const CREATED_AT = '2026-01-01T00:00:00.000Z';
+
+function makeUpsertRecord(overrides = {}) {
+  return {
+    id: 'p1',
+    goal: 'g',
+    sessionType: 'plain',
+    source: 'cli',
+    openDirectory: '/tmp/work',
+    createdAt: CREATED_AT,
+    updatedAt: CREATED_AT,
+    ...overrides,
+  };
+}
 
 function makeIndex(revision, sessionOverrides = {}) {
   return {
@@ -156,5 +170,26 @@ describe('upsertSessionIndexAt（plain agent 显式路径 upsert）', () => {
     const raw = JSON.parse(readFileSync(UPSERT_PATH, 'utf8'));
     assert.equal(raw.sessions.some(s => s.id === 'c1'), true);
     assert.equal(raw.sessions.find(s => s.id === 'c2') !== undefined, true);
+  });
+
+  test('createdAt 登记后不可变：续接/终态 upsert 不得重置原始创建时间', async () => {
+    // 首次登记（新建）→ createdAt 生效
+    await upsertSessionIndexAt(UPSERT_PATH, makeUpsertRecord({ id: 'p-created' }));
+    // 续接（--session）/ 终态 upsert 传入新的 createdAt → 被合并规则拒绝
+    await upsertSessionIndexAt(UPSERT_PATH, makeUpsertRecord({
+      id: 'p-created',
+      createdAt: '2026-09-10T00:00:00.000Z',
+      updatedAt: '2026-09-10T00:00:00.000Z',
+      lastError: 'x',
+    }));
+    const raw = JSON.parse(readFileSync(UPSERT_PATH, 'utf8'));
+    const record = raw.sessions.find(s => s.id === 'p-created');
+    assert.equal(record.createdAt, CREATED_AT); // 原始创建时间保留
+    assert.equal(record.updatedAt, '2026-09-10T00:00:00.000Z'); // updatedAt 正常推进
+    assert.equal(record.createdAt, CREATED_AT); // 原始创建时间保留
+    assert.equal(record.updatedAt, '2026-09-10T00:00:00.000Z'); // updatedAt 正常推进
+    assert.equal(record.lastError, 'x'); // 新字段正常合并
+    assert.equal(raw.activeSessionId, 'p-created');
+    assert.equal(raw.activeSessionId, 'p-created');
   });
 });

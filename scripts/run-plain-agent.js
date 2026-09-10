@@ -459,7 +459,6 @@ async function main() {
       sessionEventOutput?.setThreadId?.(record.id);
       await upsertSessionIndex(definition.id, {
         openDirectory: workspaceCwd,
-        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         ...record,
       });
@@ -481,19 +480,25 @@ async function main() {
     console.error(`[PlainAgent] call 未完成: status=${status} reason=${callOutcome?.reason || ''} ${error}`);
   }
 
-  // 7. 更新索引（各轮会话已由接力控制器逐轮落盘并记录失败日志）。
-  // createdAt 不随终态 upsert 覆盖——轮换 successor 的 createdAt 由轮换
-  // 时刻登记，非运行起点。
-  await upsertSessionIndex(definition.id, {
-    id: rotation.sessionId,
-    goal,
-    sessionType: 'plain',
-    source: 'cli',
-    openDirectory: workspaceCwd,
-    updatedAt: new Date().toISOString(),
-    lastError: error || undefined,
-    ...(rotation.successions > 0 ? { successions: rotation.successions } : {}),
-  });
+  // 7. 更新索引（各轮会话已由接力控制器逐轮落盘并记录失败日志；成功
+  // 落盘的轮次已带接力链路字段）。发现层写失败不吞执行结果——事实随
+  // result 携带，exit code 与 response 保持真实。
+  let indexError = rotation.indexError || null;
+  try {
+    await upsertSessionIndex(definition.id, {
+      id: rotation.sessionId,
+      goal,
+      sessionType: 'plain',
+      source: 'cli',
+      openDirectory: workspaceCwd,
+      updatedAt: new Date().toISOString(),
+      lastError: error || undefined,
+      ...(rotation.successions > 0 ? { successions: rotation.successions } : {}),
+    });
+  } catch (err) {
+    indexError = err instanceof Error ? err.message : String(err);
+    console.error(`[PlainAgent] 终态 index 登记失败（发现层）: ${indexError}`);
+  }
 
   const finalResult = {
     ok: rotation.ok,
@@ -503,6 +508,8 @@ async function main() {
     error: error || null,
     ...(callOutcome?.error ? { errorDetail: callOutcome.error } : {}),
     ...(rotation.successions > 0 ? { successions: rotation.successions } : {}),
+    ...(rotation.saveError ? { saveError: rotation.saveError } : {}),
+    ...(indexError ? { indexError } : {}),
     agentId: definition.id,
     sessionId: rotation.sessionId,
     durationMs,

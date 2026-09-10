@@ -226,6 +226,181 @@ describe('plain agent 进程内上下文自接力', () => {
     assert.equal(upserts[0].resumeMode, 'auto-rotation');
   });
 
+  test('saveSession 失败：接力继续，首次失败事实保留不重置', async () => {
+    let round = 0;
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async () => baseSnapshot() },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      buildAgent: async ({ onContextTrip }) => {
+        const roundIndex = round;
+        round += 1;
+        return {
+          onCallDetailed: async () => {
+            if (roundIndex === 0) {
+              onContextTrip();
+              return { status: 'cancelled', response: null };
+            }
+            return { status: 'completed', response: 'done' };
+          },
+          saveSession: async () => { if (roundIndex === 0) throw new Error('disk full'); },
+          dispose: async () => {},
+        };
+      },
+      runTrim: async () => ({
+        schemaVersion: 1,
+        seedMessages: [{ role: 'user', content: 'x', turn: 0 }],
+        meta: { summaryText: 's', mode: 'trim-transcript-with-summary' },
+      }),
+    });
+    // 中间轮落盘失败：接力成功收敛，但首次失败事实随 result 携带（L2）
+    assert.equal(result.ok, true);
+    assert.equal(result.successions, 1);
+    assert.equal(result.saveError, 'disk full');
+  });
+
+  test('save 失败窗口：trim 失败收敛指向 persistedHead，无孤儿 index 登记', async () => {
+    let round = 0;
+    let trimCalls = 0;
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async (id) => {
+        if (id !== 's0') throw new Error('session not found'); // successor 未落盘
+        return baseSnapshot();
+      } },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      buildAgent: async ({ sessionId, onContextTrip }) => ({
+        onCallDetailed: async () => {
+          onContextTrip();
+          return { status: 'cancelled', response: null };
+        },
+        saveSession: async (id) => {
+          if (id !== 's0') throw new Error('disk full'); // successor 轮落盘失败
+        },
+        dispose: async () => {},
+      }),
+      runTrim: async () => {
+        trimCalls += 1;
+        if (trimCalls === 1) {
+          // 首次轮换成功 → successor 进入执行
+          return {
+            schemaVersion: 1,
+            seedMessages: [{ role: 'user', content: 'x', turn: 0 }],
+            meta: { summaryText: 's', mode: 'trim-transcript-with-summary' },
+          };
+        }
+        throw new Error('LLM summary failed'); // successor 轮过界后的第二次轮换失败
+      },
+      upsertIndex: () => { throw new Error('orphan record must not happen'); },
+    });
+    // M1 回归：result 指向已落盘的 persistedHead（非未落盘 successor）；
+    // upsertIndex 全程未被调用（save 失败的 successor 不入索引）
+    assert.equal(result.ok, false);
+    assert.equal(result.sessionId, 's0');
+    assert.match(result.error, /context rotation failed/);
+    assert.equal(result.saveError, 'disk full');
+    assert.equal(result.successions, 1);
+  });
+
+  test('upsertIndex 抛错不击穿执行：indexError 随 result 携带', async () => {
+    let round = 0;
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async () => baseSnapshot() },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      buildAgent: async ({ sessionId, onContextTrip }) => {
+        const roundIndex = round;
+        round += 1;
+        return {
+          onCallDetailed: async () => {
+            if (roundIndex === 0) {
+              onContextTrip();
+              return { status: 'cancelled', response: null };
+            }
+            return { status: 'completed', response: 'done' };
+          },
+          saveSession: async () => {},
+          dispose: async () => {},
+        };
+      },
+      runTrim: async () => ({
+        schemaVersion: 1,
+        seedMessages: [{ role: 'user', content: 'x', turn: 0 }],
+        meta: { summaryText: 's', mode: 'trim-transcript-with-summary' },
+      }),
+      upsertIndex: () => { throw new Error('index.json on read-only fs'); },
+    });
+    assert.equal(result.ok, true); // 发现层写失败不吞执行结果
+    assert.equal(result.successions, 1);
+    assert.match(result.indexError, /read-only/);
+  });
+
+  test('onCall 兼容路径（无 onCallDetailed）：response 按 completed 归一', async () => {
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async () => { throw new Error('should not load'); } },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      buildAgent: async () => ({
+        onCall: async () => 'legacy response',
+        saveSession: async () => {},
+        dispose: async () => {},
+      }),
+      runTrim: async () => { throw new Error('should not trim'); },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'completed');
+    assert.equal(result.response, 'legacy response');
+  });
+
+  test('callError 单独（无过界）：按 failed 收敛不轮换', async () => {
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async () => { throw new Error('should not load'); } },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      buildAgent: async () => ({
+        onCallDetailed: async () => { throw new Error('model blew up'); },
+        saveSession: async () => {},
+        dispose: async () => {},
+      }),
+      runTrim: async () => { throw new Error('should not trim'); },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 'failed');
+    assert.match(result.error, /model blew up/);
+    assert.equal(result.sessionId, 's0');
+  });
+
+  test('callError 与 tripped 同轮：tripped 优先进入接力', async () => {
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async () => baseSnapshot() },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      maxSuccessions: 1,
+      buildAgent: async ({ onContextTrip }) => ({
+        onCallDetailed: async () => {
+          onContextTrip();
+          throw new Error('guard interrupt');
+        },
+        saveSession: async () => {},
+        dispose: async () => {},
+      }),
+      runTrim: async () => ({
+        schemaVersion: 1,
+        seedMessages: [{ role: 'user', content: 'x', turn: 0 }],
+        meta: { summaryText: 's', mode: 'trim-transcript-with-summary' },
+      }),
+    });
+    // tripped 优先：不按 callError 直接失败收敛，而是尝试接力（上限到达后失败收敛）
+    assert.equal(result.successions, 1);
+    assert.match(result.error, /rotation limit/);
+  });
+
   test('tripped + completed 竞态：按 completed 收敛不轮换', async () => {
     const result = await executePlainCallWithRotation({
       initialGoal: 'g',
