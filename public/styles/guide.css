@@ -202,6 +202,35 @@
   opacity: 0.7;
 }
 
+/* ── 正文内阅读器跳转链接 ──────────────────────────────────── */
+
+/* 文档间跳转与页内锚点链接在装饰期被摘除 href（改走 data 属性 + 事件委托），
+   浏览器默认链接外观随之失效，这里手动补回可点击外观：
+   accent 链接色 + 虚线下划线，hover 变实线 */
+.guide-article-body a.guide-doc-link,
+.guide-article-body a.guide-anchor-link {
+  color: var(--accent-text);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent-text) 55%, transparent);
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+/* 文档间跳转链接带方向箭头，与页内锚点、外部链接区分 */
+.guide-article-body a.guide-doc-link::before {
+  content: '▸';
+  margin-right: 3px;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+.guide-article-body a.guide-doc-link:hover,
+.guide-article-body a.guide-anchor-link:hover {
+  color: var(--text-primary);
+  border-bottom-style: solid;
+  border-bottom-color: var(--accent-text);
+}
+
 /* ── 上下篇 ───────────────────────────────────────────────── */
 
 /* 上下篇在正文滚动流末尾（随内容滚动，不悬底），与正文同宽对齐 */
@@ -262,6 +291,52 @@
   max-width: 100%;
 }
 
+/* ── 提示块（callout）：`> [!TYPE 颜色? 标题?]` 语法 ─────────── */
+
+/* 主题色经 --callout-color 注入（类型默认色或语法参数覆盖），边框/底色/正文
+   色调全部 color-mix 派生，浅/深主题自动适配 */
+.guide-callout {
+  display: flex;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 14px 20px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--callout-color) 30%, transparent);
+  background: color-mix(in srgb, var(--callout-color) 9%, transparent);
+}
+
+.guide-callout-icon {
+  flex: none;
+  width: 18px;
+  margin-top: 3px;
+  color: var(--callout-color);
+}
+
+.guide-callout-icon svg {
+  display: block;
+}
+
+.guide-callout-content {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.92em;
+  /* 正文带主题色调：与浅色文本混合≈深色变体、与深色文本混合≈亮色变体 */
+  color: color-mix(in srgb, var(--callout-color) 62%, var(--text-primary));
+}
+
+.guide-callout-content > :first-child {
+  margin-top: 0 !important;
+}
+
+.guide-callout-content > :last-child {
+  margin-bottom: 0 !important;
+}
+
+.guide-callout-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
 /* ── 图片块（缩放/对齐） ──────────────────────────────────── */
 
 /* 正文内所有图片的溢出兜底（token 图片另有块级布局） */
@@ -290,6 +365,20 @@
   border-radius: 10px;
   cursor: zoom-in;
   box-shadow: 0 2px 14px rgba(0, 0, 0, 0.22);
+}
+
+/* 同一行多图自动并排（行级分组由 guide-docset.js 的 imgrow token 承载） */
+.guide-image-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 18px 0;
+}
+
+.guide-image-row .guide-image-block {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
 }
 
 .guide-image-missing {

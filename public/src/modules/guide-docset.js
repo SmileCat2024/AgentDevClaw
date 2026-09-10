@@ -46,6 +46,8 @@ function guideText(key) {
     noRoot: '还没有找到指南目录。',
     unresolved: '图片无法解析',
     emptyDoc: '这份文档还没有内容。',
+    prev: '上一篇',
+    next: '下一篇',
   };
   const en = {
     loading: 'Loading…',
@@ -54,6 +56,8 @@ function guideText(key) {
     noRoot: 'Guide root not found.',
     unresolved: 'Unresolved image',
     emptyDoc: 'This document is empty.',
+    prev: 'Previous',
+    next: 'Next',
   };
   return (currentLanguage === 'en' ? en : zh)[key] || zh[key] || key;
 }
@@ -137,9 +141,18 @@ function parseGuideImgAttrs(rawTag) {
  * 返回 { path, anchor }；path 为 '' 表示页内锚点；null 表示外部地址或越界。
  */
 function resolveGuideHref(href, docPath) {
-  const raw = String(href || '').trim().replace(/\\/g, '/');
+  let raw = String(href || '').trim().replace(/\\/g, '/');
   if (!raw) return null;
   if (/^(https?:|mailto:|data:|javascript:)/i.test(raw)) return null;
+
+  // marked 等渲染器会把非 ASCII 路径输出为 percent-encoding，而目录树的文档 id
+  // 与文件系统都是原文——先整体解码归一（字面 % 文件名解码失败时回退原文；
+  // 已解码文本二次解码无变化，幂等）
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    // 保留原文继续解析
+  }
 
   let anchor = '';
   let target = raw;
@@ -172,6 +185,137 @@ function resolveGuideHref(href, docPath) {
   return { path: parts.join('/'), anchor };
 }
 
+/**
+ * GitHub/Typora 风格锚点 slug：小写、去标点、每个空格转一个连字符
+ * （标点删除留下的连续空格保留为连续连字符，与 GitHub slugger 一致）。
+ * unicode 字母数字保留（中文标题 slug 即原文），供锚点与标题文本做归一化比较。
+ */
+function guideSlugify(text) {
+  return String(text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/<[^>]*>/g, '')
+    .replace(/[^\p{L}\p{N} -]/gu, '')
+    .replace(/ /g, '-');
+}
+
+// ══════════════════════════════════════════════════════════════
+//  提示块（callout）：blockquote 首行标记语法
+//  ──────────────────────────────────────────────────────────────
+//  形态参考智谱开放平台文档站的 callout 控件（图标 + 主题色边框/底色）。
+//  语法（GitHub alerts 兼容 + 颜色参数 + 可选标题）：
+//    > [!TIP]
+//    > 正文支持完整 markdown。
+//    > [!NOTE #4f46e5] 自定义颜色与标题
+//    > ……
+//  类型：note / tip / important / warning / caution（info→note、danger→caution）。
+// ══════════════════════════════════════════════════════════════
+
+const GUIDE_CALLOUT_TYPES = {
+  note:      { color: '#3b82f6' },
+  tip:       { color: '#10b981' },
+  important: { color: '#8b5cf6' },
+  warning:   { color: '#d97706' },
+  caution:   { color: '#dc2626' },
+};
+
+const GUIDE_CALLOUT_ALIASES = { info: 'note', hint: 'tip', danger: 'caution' };
+
+// 颜色只接受 hex 与有限关键字（内联进 style 变量，白名单防 CSS 注入）
+const GUIDE_CALLOUT_COLOR_KEYWORDS = {
+  red: '#dc2626', orange: '#ea580c', amber: '#d97706', yellow: '#ca8a04',
+  lime: '#65a30d', green: '#16a34a', emerald: '#10b981', teal: '#0d9488',
+  cyan: '#0891b2', sky: '#0284c7', blue: '#2563eb', indigo: '#4f46e5',
+  violet: '#7c3aed', purple: '#9333ea', fuchsia: '#c026d3', pink: '#db2777',
+  rose: '#e11d48', brown: '#92400e', gray: '#6b7280', grey: '#6b7280',
+};
+
+/** 校验单个标记参数是否为合法颜色，返回归一 hex 或 ''。 */
+function guideReadCalloutColor(token) {
+  const raw = String(token || '').toLowerCase();
+  if (/^#[0-9a-f]{3,8}$/.test(raw)) return raw;
+  return GUIDE_CALLOUT_COLOR_KEYWORDS[raw] || '';
+}
+
+/**
+ * 解析 blockquote 首行标记：`[!TYPE]`、`[!TYPE #hex]`、`[!TYPE keyword]`，
+ * 标题可写在括号内（`[!NOTE indigo 标题]`）或标记后（`[!NOTE] 标题`）。
+ * 返回 { type, color, title }；非标记行或未知类型返回 null（当普通引用渲染）。
+ */
+function parseGuideCalloutMarker(text) {
+  const match = String(text || '').trim().match(/^\[!\s*([a-zA-Z][a-zA-Z0-9_-]*)(?:\s+([^\]]*?))?\s*\]\s*(.*)$/);
+  if (!match) return null;
+  const raw = match[1].toLowerCase();
+  const type = GUIDE_CALLOUT_TYPES[raw] ? raw : (GUIDE_CALLOUT_ALIASES[raw] || '');
+  if (!type) return null;
+  const tokens = String(match[2] || '').split(/\s+/).filter(Boolean);
+  const colorToken = tokens.find((token) => guideReadCalloutColor(token));
+  const title = [
+    tokens.filter((token) => token !== colorToken).join(' '),
+    String(match[3] || '').trim(),
+  ].filter(Boolean).join(' ');
+  return { type, color: colorToken ? guideReadCalloutColor(colorToken) : '', title };
+}
+
+/**
+ * 从 markdown 提取 callout blockquote，替换为受控 token（与图片 token 同款
+ * 占位技法，代码围栏内不动）。callout 内容行剥离 `> ` 前缀后保留原文交给
+ * renderMarkdown（内容中的图片 token 已在前置的全量图片提取中生成，回填
+ * 阶段会一并替换）。
+ */
+function collectGuideCallouts(md) {
+  const callouts = [];
+  const markdown = splitGuideFenceSegments(md)
+    .map((segment, index) => {
+      if (index % 2 === 1 || !segment) return segment;
+      return segment.replace(/(^|\n)((?:[ \t]*>[^\n]*(?:\n|$))+)/g, (whole, lead, quote) => {
+        const lines = quote.split(/\n/).map((line) => line.replace(/^[ \t]*>[ \t]?/, ''));
+        const firstIdx = lines.findIndex((line) => line.trim() !== '');
+        if (firstIdx === -1) return whole;
+        const marker = parseGuideCalloutMarker(lines[firstIdx]);
+        if (!marker) return whole;
+        const token = `guide-callout-${callouts.length}`;
+        callouts.push({
+          token,
+          type: marker.type,
+          color: marker.color,
+          title: marker.title,
+          content: lines.slice(firstIdx + 1).join('\n').trim(),
+        });
+        return `${lead}\n\n<claw-guide-callout data-token="${token}"></claw-guide-callout>\n\n`;
+      });
+    })
+    .join('');
+  return { markdown, callouts };
+}
+
+// 18x18 线性图标：tip 复用智谱文档站的灯泡（fill），其余为 stroke 几何
+const GUIDE_CALLOUT_ICONS = {
+  tip: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M 4.0216 15.9727 C 4.0216 16.1941 4.0855 16.4101 4.2074 16.5947 L 4.81 17.4979 C 4.9946 17.7747 5.4137 18 5.7467 18 H 7.9149 C 8.2468 18 8.6659 17.775 8.8505 17.4979 L 9.451 16.5951 C 9.5543 16.439 9.6391 16.1601 9.6391 15.9727 L 9.6436 14.5945 H 4.0181 L 4.0216 15.9727 Z M 6.8308 0 C 3.2453 0.0113 0.6429 2.9171 0.6429 6.1563 C 0.6429 7.7167 1.2209 9.1392 2.1744 10.2278 C 2.7556 10.8901 3.663 12.2751 4.0104 13.443 C 4.0115 13.4518 4.0137 13.4612 4.0148 13.4706 H 9.6473 C 9.6483 13.4612 9.6505 13.4524 9.6517 13.443 C 9.9988 12.2751 10.9065 10.8901 11.4877 10.2278 C 12.4422 9.1695 13.0189 7.749 13.0189 6.1563 C 13.0189 2.7705 10.2483 0.0001 6.8308 0 Z M 10.2202 9.1449 C 9.6696 9.7724 8.9882 10.7727 8.4956 11.8131 H 5.1692 C 4.6766 10.7727 3.9953 9.7724 3.445 9.1452 C 2.7257 8.3257 2.3305 7.2463 2.3305 6.1563 C 2.3305 3.9835 4.0216 1.6964 6.7992 1.6876 C 9.3131 1.6876 11.3312 3.7058 11.3312 6.1563 C 11.3312 7.2463 10.9374 8.3257 10.2202 9.1449 Z M 6.2683 2.8127 C 4.7178 2.8127 3.4556 4.0749 3.4556 5.6254 C 3.4556 5.9364 3.7072 6.188 4.0181 6.188 C 4.3291 6.188 4.5807 5.9348 4.5807 5.6254 C 4.5807 4.6948 5.3376 3.9378 6.2683 3.9378 C 6.5792 3.9378 6.8308 3.6865 6.8308 3.3756 C 6.8308 3.0647 6.5777 2.8127 6.2683 2.8127 Z"/></svg>',
+  note: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="9" r="7.25"/><path d="M9 8.4v3.9"/><path d="M9 5.7v.05"/></svg>',
+  important: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.5 4.5a2 2 0 0 0-2-2h-9a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2H8l3 3v-3h2.5a2 2 0 0 0 2-2z"/></svg>',
+  warning: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.75 16 14.75H2z"/><path d="M9 7.5v3"/><path d="M9 12.9v.05"/></svg>',
+  caution: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 1.75h6l4.25 4.25v6L12 16.25H6L1.75 12V6z"/><path d="M9 5.5v4"/><path d="M9 12.4v.05"/></svg>',
+};
+
+/** 生成 callout 最终 HTML：主题色经 CSS 变量注入，外壳布局与配色由 guide.css 承担。 */
+function buildGuideCalloutHtml(callout) {
+  const color = callout.color || GUIDE_CALLOUT_TYPES[callout.type].color;
+  const icon = GUIDE_CALLOUT_ICONS[callout.type] || GUIDE_CALLOUT_ICONS.note;
+  const titleHtml = callout.title
+    ? `<div class="guide-callout-title">${escapeHtml(callout.title)}</div>`
+    : '';
+  return [
+    `<div class="guide-callout" data-callout-type="${escapeHtml(callout.type)}" style="--callout-color:${escapeHtml(color)}">`,
+    `<div class="guide-callout-icon">${icon}</div>`,
+    '<div class="guide-callout-content">',
+    titleHtml,
+    renderMarkdown(callout.content || ''),
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
 // ══════════════════════════════════════════════════════════════
 //  图片提取与渲染
 // ══════════════════════════════════════════════════════════════
@@ -180,58 +324,85 @@ function resolveGuideHref(href, docPath) {
  * 从 markdown 源文本提取图片（md 语法 + 原生 <img>），改写为受控 token，
  * 避免 marked 转义；代码围栏内的内容不动。
  * images[i] = { token, src, alt, width, height, zoom, align }
+ * 同一物理行内出现 ≥2 张图片时整行归为一个并排组（rows），
+ * 行内各图仍逐张提取，由回填阶段包进 .guide-image-row。
  */
 function collectGuideImages(md) {
   const images = [];
+  const rows = [];
+
+  const extractImgTag = (raw) => {
+    const attrs = parseGuideImgAttrs(raw);
+    if (!attrs.src) return raw;
+    const styleSpec = parseGuideImgStyle(attrs.style);
+    const token = `guide-img-${images.length}`;
+    images.push({
+      token,
+      src: attrs.src || '',
+      alt: attrs.alt || '',
+      width: styleSpec.width || attrs.width || '',
+      height: styleSpec.height || attrs.height || '',
+      zoom: styleSpec.zoom || '',
+      align: styleSpec.align || attrs.align || '',
+    });
+    return `\n\n<claw-guide-img data-token="${token}"></claw-guide-img>\n\n`;
+  };
+
+  const extractMdImage = (match, alt, inner) => {
+    const pieces = String(inner).split(/\s+/).filter(Boolean);
+    if (pieces.length === 0) return match;
+    const src = pieces[0].replace(/^["'<]+|["'>]+$/g, '');
+    if (!src) return match;
+    const spec = parseGuideImageTokens(pieces.slice(1));
+    const token = `guide-img-${images.length}`;
+    images.push({
+      token,
+      src,
+      alt: String(alt || ''),
+      width: spec.width,
+      height: spec.height,
+      zoom: '',
+      align: spec.align,
+    });
+    return `\n\n<claw-guide-img data-token="${token}"></claw-guide-img>\n\n`;
+  };
+
+  const countLineImages = (line) => (
+    (line.match(/!\[[^\]]*\]\([^()\n]+\)/g) || []).length
+    + (line.match(/<img\s[^>]*>/gi) || []).length
+  );
+
   const markdown = splitGuideFenceSegments(md)
     .map((segment, index) => {
       if (index % 2 === 1 || !segment) return segment;
 
       let result = segment;
 
-      // 1) 原生 <img> 标签（Typora 粘贴产物）
-      result = result.replace(/<img\s[^>]*>/gi, (raw) => {
-        const attrs = parseGuideImgAttrs(raw);
-        if (!attrs.src) return raw;
-        const styleSpec = parseGuideImgStyle(attrs.style);
-        const token = `guide-img-${images.length}`;
-        images.push({
-          token,
-          src: attrs.src || '',
-          alt: attrs.alt || '',
-          width: styleSpec.width || attrs.width || '',
-          height: styleSpec.height || attrs.height || '',
-          zoom: styleSpec.zoom || '',
-          align: styleSpec.align || attrs.align || '',
-        });
-        return `\n\n<claw-guide-img data-token="${token}"></claw-guide-img>\n\n`;
+      // 1) 行级并排组：先于单图替换（单图替换会插空行破坏行结构）
+      result = result.replace(/^[^\n]*$/gm, (line) => {
+        if (countLineImages(line) < 2) return line;
+        const rowLine = line
+          .replace(/<img\s[^>]*>/gi, extractImgTag)
+          .replace(/!\[([^\]]*)\]\(([^()\n]+)\)/g, extractMdImage);
+        const rowTokens = [...rowLine.matchAll(/<claw-guide-img data-token="(guide-img-\d+)">/g)]
+          .map((match) => match[1]);
+        if (rowTokens.length < 2) return line;
+        const token = `guide-imgrow-${rows.length}`;
+        rows.push({ token, images: rowTokens });
+        return `<claw-guide-imgrow data-token="${token}"></claw-guide-imgrow>`;
       });
 
-      // 2) md 图片语法 ![alt](src =WxH align)
-      result = result.replace(/!\[([^\]]*)\]\(([^()\n]+)\)/g, (match, alt, inner) => {
-        const pieces = String(inner).split(/\s+/).filter(Boolean);
-        if (pieces.length === 0) return match;
-        const src = pieces[0].replace(/^["'<]+|["'>]+$/g, '');
-        if (!src) return match;
-        const spec = parseGuideImageTokens(pieces.slice(1));
-        const token = `guide-img-${images.length}`;
-        images.push({
-          token,
-          src,
-          alt: String(alt || ''),
-          width: spec.width,
-          height: spec.height,
-          zoom: '',
-          align: spec.align,
-        });
-        return `\n\n<claw-guide-img data-token="${token}"></claw-guide-img>\n\n`;
-      });
+      // 2) 原生 <img> 标签（Typora 粘贴产物）
+      result = result.replace(/<img\s[^>]*>/gi, extractImgTag);
+
+      // 3) md 图片语法 ![alt](src =WxH align)
+      result = result.replace(/!\[([^\]]*)\]\(([^()\n]+)\)/g, extractMdImage);
 
       return result;
     })
     .join('');
 
-  return { markdown, images };
+  return { markdown, images, rows };
 }
 
 function guideImageStyleAttr(image) {
@@ -281,12 +452,35 @@ function guideIsExternalSrc(src) {
 }
 
 /**
- * 文档正文渲染入口：图片语法 → 受控 token → 共享 renderMarkdown（marked+hljs+katex）→
- * token 回填为最终图片 HTML。占用与 markdown-utils 的公式提取同一技法，代码块不动。
+ * 文档正文渲染入口：图片语法 → 受控 token → callout blockquote → 受控 token →
+ * 共享 renderMarkdown（marked+hljs+katex）→ callout / 并排图组 / 图片 token 逐层回填。
+ * 回填顺序：callout 先（其内容里的图片 token 随全文一起被后续层替换），
+ * 并排图组次之（内部直接生成最终 img HTML），散图最后兜底。
+ * 占位与 markdown-utils 的公式提取同一技法，代码块不动。
  */
 function buildGuideArticleHtml(doc, agentId) {
-  const { markdown, images } = collectGuideImages(doc?.content || '');
+  const { markdown: withImages, images, rows } = collectGuideImages(doc?.content || '');
+  const { markdown, callouts } = collectGuideCallouts(withImages);
   let html = renderMarkdown(markdown);
+  callouts.forEach((callout) => {
+    const rendered = buildGuideCalloutHtml(callout);
+    const tokenTag = `<claw-guide-callout data-token="${callout.token}"></claw-guide-callout>`;
+    html = html
+      .replace(new RegExp(`<p>\\s*${tokenTag}\\s*</p>`, 'g'), rendered)
+      .replace(new RegExp(tokenTag, 'g'), rendered);
+  });
+  rows.forEach((row) => {
+    const inner = row.images
+      .map((token) => images.find((image) => image.token === token))
+      .filter(Boolean)
+      .map((image) => buildGuideImageHtml(image, doc.path, agentId))
+      .join('');
+    const rendered = `<div class="guide-image-row">${inner}</div>`;
+    const tokenTag = `<claw-guide-imgrow data-token="${row.token}"></claw-guide-imgrow>`;
+    html = html
+      .replace(new RegExp(`<p>\\s*${tokenTag}\\s*</p>`, 'g'), rendered)
+      .replace(new RegExp(tokenTag, 'g'), rendered);
+  });
   images.forEach((image) => {
     const rendered = buildGuideImageHtml(image, doc.path, agentId);
     const tokenTag = `<claw-guide-img data-token="${image.token}"></claw-guide-img>`;
@@ -633,14 +827,33 @@ function guideEnsureDelegated() {
   }, { capture: true, passive: true });
 }
 
-/** 页内锚点定位：按标题文本匹配（跨文档锚点在装饰期转为本 data 属性）。 */
+/**
+ * 页内锚点定位。文档锚点通常复制自 GitHub/Typora 预览（slug 形式：小写、
+ * 空格转连字符、去标点，重复标题带 -1/-2 计数），与标题文本全等比较必然
+ * 失配，故按两级匹配：文本全等 → GitHub slugger 语义（重复标题计数后缀）。
+ */
 function guideScrollToHeading(shell, anchorText) {
   const article = shell?.querySelector('.guide-article-body');
   if (!article || !anchorText) return;
   const target = String(anchorText).trim().toLowerCase();
+  const targetSlug = guideSlugify(anchorText);
   const headings = article.querySelectorAll('h1, h2, h3, h4, h5, h6');
+
   for (const heading of headings) {
     if ((heading.textContent || '').trim().toLowerCase() === target) {
+      heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+  }
+
+  const seen = new Map();
+  for (const heading of headings) {
+    let slug = guideSlugify(heading.textContent || '');
+    if (!slug) continue;
+    const count = seen.get(slug) || 0;
+    seen.set(slug, count + 1);
+    if (count > 0) slug = `${slug}-${count}`;
+    if (slug === targetSlug) {
       heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }

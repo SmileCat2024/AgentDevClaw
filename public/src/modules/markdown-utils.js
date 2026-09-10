@@ -27,8 +27,14 @@ renderer.html = function(token) {
   ) {
     return raw;
   }
-  // 指南工作空间图片 token（与 claw-display-math 同款占位技法，见 guide-docset.js）
+  // 指南工作空间占位 token（与 claw-display-math 同款占位技法，见 guide-docset.js）
   if (/^<claw-guide-img data-token="guide-img-\d+">(?:<\/claw-guide-img>)?$/.test(raw) || raw === '</claw-guide-img>') {
+    return raw;
+  }
+  if (/^<claw-guide-callout data-token="guide-callout-\d+">(?:<\/claw-guide-callout>)?$/.test(raw) || raw === '</claw-guide-callout>') {
+    return raw;
+  }
+  if (/^<claw-guide-imgrow data-token="guide-imgrow-\d+">(?:<\/claw-guide-imgrow>)?$/.test(raw) || raw === '</claw-guide-imgrow>') {
     return raw;
   }
   return escapeHtml(raw);
