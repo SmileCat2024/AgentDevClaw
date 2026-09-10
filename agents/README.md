@@ -215,13 +215,14 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
 `claw run` 装配时默认挂载与 workspace coder 同源的执行底座（agent.js 自行
 挂载的同名 feature 不覆盖）：
 
-- `opencode-basic`（continuity-aware 包装版）：文件工具 + 先读后写保护
 - `output-guard`：工具输出截断安全网
 - `context-rotation-trigger`：上下文过界打断，经本地回调触发进程内接力
   （不向 server 上报——plain 接力在本进程内完成）
 
-todo / shell / memory 等执行纪律与工具不进底座，由 agent 经
-`metadata.features`（tgz 精确版本）或自身 `use()` 装配。
+通用文件读写工具不进底座，需要文件工具的 plain agent 由 agent.js 自行
+`use()` 或经 `metadata.features` 装配；todo / shell / memory 等执行纪律
+与工具同样由 agent 经 `metadata.features`（tgz 精确版本）或自身 `use()`
+装配。
 
 **上下文过界自接力**（与 coder 线程的 thread-rotation 同语义的单进程镜像）：
 压缩阈值过界打断当前轮后，逐轮 `saveSession` → 框架权威组合变换
@@ -248,8 +249,8 @@ todo / shell / memory 等执行纪律与工具不进底座，由 agent 经
   `contextLength` 为 null、压缩阈值失效——自接力静默不触发（与 workspace
   语义一致），需要接力能力的 plain agent 应显式配置带 `contextLength` 的
   preset
-- metadata.features 不得声明与底座同名的包（`opencode-basic` /
-  `output-guard` / `context-rotation-trigger`）——底座先于 plan mount，
+- metadata.features 不得声明与底座同名的包（`output-guard` /
+  `context-rotation-trigger`）——底座先于 plan mount，
   同名会在 loader 硬抛名称冲突
 
 ## 配置组（ticket 04 约定）
