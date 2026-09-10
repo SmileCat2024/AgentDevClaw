@@ -93,7 +93,7 @@ describe('headless-session-renderer', () => {
     let detach;
 
     afterEach(() => {
-      detach?.();
+      detach?.unsubscribe?.();
       detach = null;
     });
 
@@ -131,7 +131,7 @@ describe('headless-session-renderer', () => {
         streams: { stdout: out.stream, stderr: capture().stream },
       });
       const before = out.lines().length;
-      detach();
+      detach?.unsubscribe?.();
       detach = null;
       emitFatalSessionError('ignored');
       assert.equal(out.lines().length, before);

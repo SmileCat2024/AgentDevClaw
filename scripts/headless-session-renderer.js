@@ -56,6 +56,10 @@ function truncateEventForJsonl(event) {
 export function attachSessionEventOutput({ format, threadId, streams }) {
   const stdout = streams?.stdout ?? process.stdout;
   const stderr = streams?.stderr ?? process.stderr;
+  // 轮换（进程内接力）推进 head 会话后，thread 标识随之更新——turn/item
+  // 事件标注与最终 result 的 sessionId 保持一致（threadId 是公告标注，
+  // 不随事件携带，用闭包承接更新）。
+  let currentThreadId = threadId;
 
   const writeJsonl = (event) => {
     stdout.write(JSON.stringify(truncateEventForJsonl(event)) + '\n');
@@ -78,7 +82,16 @@ export function attachSessionEventOutput({ format, threadId, streams }) {
     stderr.write(`session: ${threadId}\n`);
   }
 
-  return unsubscribe;
+  return {
+    unsubscribe,
+    /** head 会话推进（进程内接力）后更新后续事件的 thread 标注。 */
+    setThreadId(nextThreadId) {
+      if (!nextThreadId || nextThreadId === currentThreadId) return;
+      currentThreadId = nextThreadId;
+      emitSessionEvent({ type: 'thread.started', threadId: nextThreadId });
+      stderr.write(`session: ${nextThreadId}\n`);
+    },
+  };
 }
 
 /**

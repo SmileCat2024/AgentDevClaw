@@ -19,6 +19,7 @@ my-agent/
 
 1. `.agentdev/agent-configs/<name>.json` 的 `modelPresets`（推荐，不入库）
 2. `agents/<name>/metadata.json` 的 `modelPresets`
+3. 无 preset 时回退全局默认模型（`config/default.json` 的 `defaultModel`，与 prebuilt agent 同一兜底链）
 
 ## 使用
 
@@ -184,7 +185,7 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
 ### 其他约定
 
 - `--keep-alive` 下会话已先落盘，Ctrl+C 优雅退出，之后可用 `--session <id>` 续接
-- 模型配置：`metadata.json` 的 `modelPresets`，推荐用 `.agentdev/agent-configs/<id>.json` 覆盖（不入库）
+- 模型配置：`metadata.json` 的 `modelPresets`，推荐用 `.agentdev/agent-configs/<id>.json` 覆盖（不入库）；无 preset 时回退全局默认模型
 - 现代独立 Agent 的 `metadata.json` 必须提供 `id`、相对 `entry`、`deployment.kind: "standalone"`；正式运行的 `features[]` 每项必须是精确版本的包名。
 - `claw run` 为现代 Agent 在 `~/.agentdev/AgentDevClaw/runtime-envs/<id>/<dependency-hash>/` 准备隔离依赖环境。Agent 源码不被修改；现代 metadata Agent 会复制到该生成环境，以便其 ESM import 与 Feature 包解析同一份 `node_modules`。
 - `--debug` 只接受与 Studio 项目关联的注册 Agent，且只将 Studio 中同包名的标准 Feature 项目覆盖为源码 `dist`；未覆盖依赖仍使用仓库 tgz。
@@ -198,6 +199,32 @@ CLI 通过 `stdio: inherit` 直通适配器的 stdin/stdout/stderr，不在 JSON
   index.json          # 会话索引（与 server 侧格式对齐）
   <sessionId>.json    # 会话文件
 ```
+
+## 执行底座与上下文自接力
+
+`claw run` 装配时默认挂载与 workspace coder 同源的执行底座（agent.js 自行
+挂载的同名 feature 不覆盖）：
+
+- `opencode-basic`（continuity-aware 包装版）：文件工具 + 先读后写保护
+- `output-guard`：工具输出截断安全网
+- `context-rotation-trigger`：上下文过界打断，经本地回调触发进程内接力
+  （不向 server 上报——plain 接力在本进程内完成）
+
+todo / shell / memory 等执行纪律与工具不进底座，由 agent 经
+`metadata.features`（tgz 精确版本）或自身 `use()` 装配。
+
+**上下文过界自接力**（与 coder 线程的 thread-rotation 同语义的单进程镜像）：
+压缩阈值过界打断当前轮后，逐轮 `saveSession` → 框架权威组合变换
+（trim-transcript-with-summary）产出 seed → successor 会话（全新 agent 实例，
+熔丝随实例重建）以框架 R3 恢复指令语义续跑原目标。不落 handoff 包文件
+（进程内接力无跨进程传输需求）；continuity feature 状态经
+`importFeatureContinuity` 恢复。收敛语义：trim 失败 / 8 轮上限 / build 失败
+显式失败收敛（`ok:false`），不静默降级；源会话与 index 链完整保留可回查。
+
+- index.json 接力链路字段：`resumeMode: 'auto-rotation'`、`parentSessionId`、
+  `rotationRound`、`successions`（结果行的 `successions` 同义）
+- jsonl 事件流的 `thread.started` 标注随轮换重新公告（head 会话 id）；
+  最终 result 的 `sessionId` 始终是 head 会话
 
 ## 配置组（ticket 04 约定）
 

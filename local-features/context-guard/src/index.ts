@@ -34,6 +34,13 @@ export interface ContextRotationTriggerConfig {
   agentId?: string;
   sessionId?: string | null;
   serverOrigin?: string;
+  /**
+   * 进程内承接回调（plain agent 宿主模式）：过界事实同步交给宿主，
+   * 由宿主在进程内执行 trim+摘要接力。与 HTTP 上报通道并存——
+   * serverOrigin 等字段齐备时两者都会发生（如 plain agent 运行期同时
+   * 连着 Claw server 的场景）；两者互不依赖，回调失败不影响上报。
+   */
+  onTrip?: (trip: { at: number; thresholdTokens: number; inputTokens: number; reason: string }) => void;
 }
 
 interface ThresholdCrossing {
@@ -281,6 +288,7 @@ export class ContextRotationTriggerFeature implements AgentFeature {
   private readonly agentId: string;
   private readonly sessionId: string;
   private readonly serverOrigin: string;
+  private readonly onTrip: ContextRotationTriggerConfig['onTrip'];
   private triggered = false;
   private logger?: FeatureInitContext['logger'];
   private packageInfo: PackageInfo | null = null;
@@ -294,6 +302,7 @@ export class ContextRotationTriggerFeature implements AgentFeature {
     this.serverOrigin = typeof config.serverOrigin === 'string'
       ? config.serverOrigin.replace(/\/$/, '')
       : '';
+    this.onTrip = typeof config.onTrip === 'function' ? config.onTrip : undefined;
   }
 
   getPackageInfo(): PackageInfo | null {
@@ -356,6 +365,14 @@ export class ContextRotationTriggerFeature implements AgentFeature {
     this.callArbiter?.interruptActive?.(reason);
     if (typeof agent?.interrupt === 'function') {
       agent.interrupt();
+    }
+    // 进程内承接（plain agent 宿主模式）：回调失败不吞掉 HTTP 上报。
+    try {
+      this.onTrip?.({ at: Date.now(), thresholdTokens: crossing.thresholdTokens, inputTokens: crossing.inputTokens, reason });
+    } catch (error) {
+      this.logger?.warn?.('Context rotation onTrip callback failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
     this.reportRotationEvent(crossing, reason);
     return true;

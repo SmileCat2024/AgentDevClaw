@@ -35,14 +35,18 @@ import './headless-log-preamble.js';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
-import { FileSessionStore } from '@agentdevjs/core';
-import { resolveAgentModelLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
+import { FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
+import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
+import { tuneMirrorLLM } from '../server/shared/llm-tuning.js';
 import { normalizeAgentMetadata } from '../server/feature-runtime/schemas.js';
 import { scanFeatureCatalog } from '../server/feature-runtime/catalog.js';
 import { resolveAgentRuntimePlan } from '../server/feature-runtime/resolver.js';
 import { provisionRuntimeEnvironment } from '../server/feature-runtime/provisioner.js';
 import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 import { getRegisteredAgent } from '../server/feature-runtime/agent-registry.js';
+import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
+import { executePlainCallWithRotation, newPlainSessionId } from './plain-agent-rotation.js';
+import { mountPlainAgentBase } from './plain-agent-base.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { resolveUserDataDir } from '../server/shared/constants.js';
 
@@ -203,7 +207,7 @@ const sessionStore = new FileSessionStore(sessionDir);
 
 const sessionId = args.session
   ? sanitizeFragment(args.session)
-  : `plain-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  : newPlainSessionId();
 
 // quiet 模式在结果输出前独占 stdout：把 process.stdout.write 整体重定向到 stderr，
 // 拦截框架 logger / MCP SDK 等绕过 console 的直写；结果经 originalStdoutWrite 走真 stdout
@@ -257,23 +261,40 @@ async function main() {
   console.error(`[PlainAgent] goal="${goal.slice(0, 80)}"`);
 
   // 会话事件流输出：jsonl 模式写 stdout（codex exec --json 形态），
-  // 其余模式渲染 human 可读行到 stderr（codex exec 默认形态）
-  attachSessionEventOutput({
+  // 其余模式渲染 human 可读行到 stderr（codex exec 默认形态）。
+  // 轮换推进 head 会话后经 setThreadId 更新标注（见下方 upsertIndex）。
+  const sessionEventOutput = attachSessionEventOutput({
     format: args.format === 'jsonl' ? 'jsonl' : 'human',
     threadId: sessionId,
   });
 
-  // 1. 解析模型（metadata.json 的 modelPresets，可被 .agentdev/agent-configs/<id>.json 覆盖）
+  // 1. 解析模型（metadata.json 的 modelPresets，可被 .agentdev/agent-configs/<id>.json 覆盖；
+  //    与摘要轮共用同一解析链——见下方 resolveMainModel）
   const modelPresetRole = cleanValue(process.env.PROTOCLAW_MODEL_PRESET_ROLE) || 'default';
-  const resolved = resolveAgentModelLLM(agentDir, modelPresetRole, {
+  const resolveMainModel = () => resolveAgentModelLLM(agentDir, modelPresetRole, {
     userConfigPath: join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${definition.id}.json`),
-  });
+  })
+    // 无 preset 兜底链（与 prebuilt agent 同源）：config/default.json 的
+    // defaultModel（内联完整配置），无 preset 的 plain agent 借此完成构造。
+    || resolveGlobalDefaultLLM();
+  const resolved = resolveMainModel();
   if (!resolved) {
-    console.error(`[PlainAgent] 未解析到模型 preset。请配置 ${definition.metadataPath} 的 modelPresets.default，`);
-    console.error(`[PlainAgent] 或 .agentdev/agent-configs/${agentId}.json（推荐，不入库）。`);
+    console.error(`[PlainAgent] 未解析到模型 preset，且无全局默认模型兜底。请配置 ${definition.metadataPath} 的 modelPresets.default，`);
+    console.error(`[PlainAgent] 或 .agentdev/agent-configs/${agentId}.json（推荐，不入库），或 config/default.json 的 defaultModel。`);
     process.exit(1);
   }
   console.error(`[PlainAgent] model preset => ${resolved.modelName}`);
+
+  // 摘要轮 LLM：与主链路同一解析链（同 userConfigPath + 全局默认兜底），
+  // 按 inprocess-summary 的装配约定调优（关 thinking、限 16000）。controller
+  // 逐轮注入 runTrim；无 preset 的 plain agent 过界接力因此与主链路同生共死，
+  // 不会在 trim 阶段因独立解析链缺兜底而必死。
+  const summaryLLM = (() => {
+    const resolved = resolveMainModel();
+    if (!resolved) return null;
+    tuneMirrorLLM(resolved.llm, 16000, { forceMaxTokens: true, protocol: resolved.protocol });
+    return resolved.llm;
+  })();
 
   // 2. 现代 metadata Agent 先解析并 provision Feature；遗留内建 Agent 保持静态装配。
   let runtimePlan = null;
@@ -299,52 +320,118 @@ async function main() {
   if (!AgentClass) {
     throw new Error(`无法在 ${runtimeAgentPath} 中找到唯一 Agent 类导出`);
   }
-  const agent = new AgentClass({
-    name: definition.id,
-    projectRoot: definition.agentDir,
-    workspaceDir: workspaceCwd,
-    llm: resolved.llm,
-    // 配置组临时覆盖（ticket 04）：--config-group <name>，仅本次运行生效；
-    // 不支持的 agent 忽略该字段（构造函数只读取自己认识的 config 键）。
-    ...(args.configGroup ? { configGroup: args.configGroup } : {}),
-    features: runtimePlan ? Object.fromEntries(runtimePlan.features.map((feature) => [feature.runtimeName || feature.package, feature.config || {}])) : undefined,
-    runtime: {
-      agentId: definition.id,
-      sessionId,
-      sessionType: 'plain',
-      modelPresetRole,
-      ...(runtimeEnvironment ? { runtimeEnvironment: runtimeEnvironment.environmentDir } : {}),
-    },
-    // 装配同一批 Feature：运行时模型切换（agent.setModel）与主宿主同源
-    modelResolver: modelPresetResolver,
-  });
-  if (runtimePlan) {
-    await mountResolvedFeatures(agent, runtimePlan, { environmentDir: runtimeEnvironment.environmentDir });
-    console.error(`[PlainAgent] runtime plan=${runtimePlan.mode} features=${runtimePlan.features.length} env=${runtimeEnvironment.environmentDir}`);
-  }
 
-  // 3. 连接 ViewerWorker（被监视；失败降级为 headless 继续）
-  if (!headless) {
-    try {
-      await agent.withViewer(definition.id, VIEWER_PORT, false, {
-        projectRoot: definition.agentDir,
-        inputPolicy: 'none',
+  // 2.5 每 agent 轮次独立构造：接力 successor 是全新实例（新 LLM 客户端 +
+  //     重新挂载底座与 metadata features），handoff 非空时注入接续 seed。
+  let lastAgent = null;
+  const buildAgent = async ({ sessionId: roundSessionId, handoff, onContextTrip }) => {
+    const roundResolved = resolveMainModel();
+    if (!roundResolved) {
+      throw new Error(`未解析到模型 preset（round sessionId=${roundSessionId}）`);
+    }
+    const agent = new AgentClass({
+      name: definition.id,
+      projectRoot: definition.agentDir,
+      workspaceDir: workspaceCwd,
+      llm: roundResolved.llm,
+      // 配置组临时覆盖（ticket 04）：--config-group <name>，仅本次运行生效；
+      // 不支持的 agent 忽略该字段（构造函数只读取自己认识的 config 键）。
+      ...(args.configGroup ? { configGroup: args.configGroup } : {}),
+      features: runtimePlan ? Object.fromEntries(runtimePlan.features.map((feature) => [feature.runtimeName || feature.package, feature.config || {}])) : undefined,
+      runtime: {
+        agentId: definition.id,
+        sessionId: roundSessionId,
+        sessionType: 'plain',
+        modelPresetRole,
+        ...(runtimeEnvironment ? { runtimeEnvironment: runtimeEnvironment.environmentDir } : {}),
+      },
+      // 装配同一批 Feature：运行时模型切换（agent.setModel）与主宿主同源
+      modelResolver: modelPresetResolver,
+    });
+
+    // 启动预设贴 live meta 标（与 prebuilt runtime 的 'boot' 注入同源）：
+    // 上下文触发器的压缩阈值锚定 getLLMMeta() 的活元数据，构造期只传
+    // llm 实例不带 meta 会让触发器阈值保持 null、接力永不触发。
+    if (typeof agent.setLLM === 'function') {
+      agent.setLLM(roundResolved.llm, {
+        modelName: roundResolved.modelName,
+        contextLength: roundResolved.contextLength,
+        compressRatio: roundResolved.compressRatio,
+        presetName: roundResolved.presetName,
+        thinkingEffort: roundResolved.thinkingEffort || null,
+        ...(roundResolved.provider ? { provider: roundResolved.provider } : {}),
+        source: 'boot',
       });
-      console.error(`[PlainAgent] ✓ 已连接 ViewerWorker (port ${VIEWER_PORT})，可在 Claw 面板监视`);
-    } catch (err) {
-      console.warn(`[PlainAgent] ViewerWorker 连接失败 (${err?.message || err})，降级为 headless 执行`);
     }
-  }
 
-  // 4. 恢复会话（--session 续接时）
-  if (args.session) {
-    try {
-      await agent.loadSession(sessionId, sessionStore);
-      console.error(`[PlainAgent] ✓ 已恢复会话: ${sessionId}`);
-    } catch {
-      console.error(`[PlainAgent] 会话 ${sessionId} 不存在，将新建`);
+    // 底座（与 workspace coder 同源的安全网，按 feature 名去重）
+    const mountedBase = mountPlainAgentBase(agent, {
+      workspaceDir: workspaceCwd,
+      agentId: definition.id,
+      sessionId: roundSessionId,
+      onContextTrip,
+    });
+    if (mountedBase.length > 0) {
+      console.error(`[PlainAgent] base features: ${mountedBase.join(', ')}`);
     }
-  }
+
+    if (runtimePlan) {
+      await mountResolvedFeatures(agent, runtimePlan, { environmentDir: runtimeEnvironment.environmentDir });
+      console.error(`[PlainAgent] runtime plan=${runtimePlan.mode} features=${runtimePlan.features.length} env=${runtimeEnvironment.environmentDir}`);
+      // plan 与底座同名时显式装配优先（dedup 是设计语义），但
+      // context-rotation-trigger 被覆盖意味着进程内自接力对轮换静默失效——
+      // 覆盖事实必须可见。
+      if (mountedBase.includes('context-rotation-trigger')) {
+        console.error('[PlainAgent] 警告: runtime plan 覆盖了底座的 context-rotation-trigger，进程内自接力对本 agent 失效');
+      }
+    }
+
+    // 接力 successor：注入 handoff seed（首 CallStart 精确注入一次），
+    // continuity feature 状态随后经 importFeatureContinuity 恢复。
+    if (handoff && (handoff.seedMessages?.length || handoff.sourceSummary)) {
+      agent.use(new HandoffSeedFeature({ handoff }));
+      console.error(`[PlainAgent] ✓ 已挂载 handoff seed (source=${handoff.sourceSessionId})`);
+    }
+
+    // 连接 ViewerWorker（被监视；失败降级为 headless 继续）
+    if (!headless) {
+      try {
+        await agent.withViewer(definition.id, VIEWER_PORT, false, {
+          projectRoot: definition.agentDir,
+          inputPolicy: 'none',
+        });
+        console.error(`[PlainAgent] ✓ 已连接 ViewerWorker (port ${VIEWER_PORT})，可在 Claw 面板监视`);
+      } catch (err) {
+        console.warn(`[PlainAgent] ViewerWorker 连接失败 (${err?.message || err})，降级为 headless 执行`);
+      }
+    }
+
+    if (args.session && !handoff) {
+      try {
+        await agent.loadSession(sessionId, sessionStore);
+        console.error(`[PlainAgent] ✓ 已恢复会话: ${sessionId}`);
+      } catch {
+        console.error(`[PlainAgent] 会话 ${sessionId} 不存在，将新建`);
+      }
+    } else if (handoff?.featureContinuity?.states?.length) {
+      // 与 prebuilt runtime 的 handoff 接线一致：continuity 状态在首个
+      // CallStart 前导入（protocol 匹配校验由 importFeatureContinuity 把关）。
+      try {
+        const imported = await importFeatureContinuity(agent, handoff.featureContinuity, {
+          sourceSessionId: handoff.sourceSessionId,
+        });
+        if (imported.length > 0) {
+          await agent.saveSession(roundSessionId, sessionStore);
+          console.error(`[PlainAgent] ✓ 已导入 continuity feature state: ${imported.join(', ')}`);
+        }
+      } catch (err) {
+        console.warn(`[PlainAgent] continuity feature state 导入失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    lastAgent = agent;
+    return agent;
+  };
 
   // 5. 索引登记（运行前先入索引，面板/后续查询能看到进行中的痕迹）
   const now = new Date().toISOString();
@@ -358,24 +445,35 @@ async function main() {
     updatedAt: now,
   });
 
-  // 6. 执行单次 onCall
+  // 6. 执行（带底座装配 + 上下文过界进程内自接力）
   const startTime = Date.now();
-  let response = null;
-  let error = null;
-  let callOutcome = null;
-  try {
-    console.error('[PlainAgent] 开始执行 agent.onCall()...');
-    if (typeof agent.onCallDetailed === 'function') {
-      callOutcome = await agent.onCallDetailed(goal);
-      response = callOutcome.response;
-    } else {
-      response = await agent.onCall(goal);
-    }
-    console.error(`[PlainAgent] agent.onCall() 完成，响应长度=${(response || '').length}`);
-  } catch (err) {
-    error = err instanceof Error ? err.message : String(err);
-    console.error(`[PlainAgent] agent.onCall() 失败: ${error}`);
-  }
+  console.error('[PlainAgent] 开始执行 agent.onCall()...');
+  const rotation = await executePlainCallWithRotation({
+    initialGoal: goal,
+    initialSessionId: sessionId,
+    sessionStore,
+    trimSource: {
+      agentRelativeDir: agentDir,
+      projectRoot: PROJECT_ROOT,
+      agentId: definition.id,
+      llm: summaryLLM,
+    },
+    buildAgent,
+    upsertIndex: (record) => {
+      // 事件流标注推进到 head 会话，与 result.sessionId 保持一致
+      sessionEventOutput?.setThreadId?.(record.id);
+      upsertSessionIndex(definition.id, {
+        openDirectory: workspaceCwd,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...record,
+      });
+    },
+    log: console.error,
+  });
+  let response = rotation.response;
+  let error = rotation.error;
+  let callOutcome = rotation.callOutcome;
   const durationMs = Date.now() - startTime;
 
   // 终态判定：CLI 成功 == call outcome.status === 'completed'。
@@ -388,33 +486,28 @@ async function main() {
     console.error(`[PlainAgent] call 未完成: status=${status} reason=${callOutcome?.reason || ''} ${error}`);
   }
 
-  // 7. 落盘 + 更新索引
-  try {
-    await agent.saveSession(sessionId, sessionStore);
-    upsertSessionIndex(definition.id, {
-      id: sessionId,
-      goal,
-      sessionType: 'plain',
-      source: 'cli',
-      openDirectory: workspaceCwd,
-      createdAt: now,
-      updatedAt: new Date().toISOString(),
-      lastError: error || undefined,
-    });
-    console.error(`[PlainAgent] ✓ 会话已保存: ${sessionId}`);
-  } catch (err) {
-    console.error('[PlainAgent] saveSession 失败:', err?.message || err);
-  }
+  // 7. 更新索引（各轮会话已由接力控制器逐轮落盘并记录失败日志）
+  upsertSessionIndex(definition.id, {
+    id: rotation.sessionId,
+    goal,
+    sessionType: 'plain',
+    source: 'cli',
+    openDirectory: workspaceCwd,
+    createdAt: now,
+    updatedAt: new Date().toISOString(),
+    lastError: error || undefined,
+    ...(rotation.successions > 0 ? { successions: rotation.successions } : {}),
+  });
 
   const finalResult = {
-    ok: status === 'completed',
-    status,
+    ok: rotation.ok,
+    status: error ? 'failed' : (rotation.status || 'completed'),
     ...(callOutcome?.reason ? { reason: callOutcome.reason } : {}),
     response: response || null,
     error: error || null,
     ...(callOutcome?.error ? { errorDetail: callOutcome.error } : {}),
     agentId: definition.id,
-    sessionId,
+    sessionId: rotation.sessionId,
     durationMs,
     timestamp: new Date().toISOString(),
   };
@@ -423,7 +516,7 @@ async function main() {
 
   // --keep-alive：不 dispose 不退出，保持 agent 与 viewer 连接供面板事后查看，
   // Ctrl+C 时再释放资源退出（会话已落盘，随时可 --session 续接）
-  if (args.keepAlive && status === 'completed') {
+  if (args.keepAlive && rotation.ok) {
     console.error(`[PlainAgent] --keep-alive：agent 保持运行（viewer 连接不断开），按 Ctrl+C 结束`);
     // 显式保活：不依赖 audio/audit 等隐式句柄，事件循环空了进程也不退出
     const keepAliveTimer = setInterval(() => {}, 1 << 30);
@@ -434,7 +527,7 @@ async function main() {
       console.error(`[PlainAgent] 收到 ${signal}，释放资源并退出...`);
       clearInterval(keepAliveTimer);
       try {
-        await agent.dispose();
+        await lastAgent?.dispose();
       } catch (err) {
         console.error('[PlainAgent] dispose 失败:', err?.message || err);
       }
@@ -448,7 +541,7 @@ async function main() {
 
   // 8. 释放资源（含 viewer 连接）
   try {
-    await agent.dispose();
+    await lastAgent?.dispose();
   } catch (err) {
     console.error('[PlainAgent] dispose 失败:', err?.message || err);
   }

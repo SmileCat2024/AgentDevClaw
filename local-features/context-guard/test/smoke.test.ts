@@ -161,4 +161,44 @@ describe('ContextRotationTriggerFeature (automation shell)', () => {
     await feature.installUsageObserver({ agent });
     assert.equal(feature.observeUsage({ inputTokens: 300 }, agent), true);
   });
+
+  it('invokes the local onTrip callback without breaking the HTTP report', async () => {
+    const trips: Array<{ inputTokens: number, reason: string }> = [];
+    const feature = new ContextRotationTriggerFeature({
+      contextLength: 1000,
+      compressRatio: 80,
+      agentId: 'plain-agent',
+      sessionId: 's1',
+      serverOrigin: 'http://127.0.0.1:1420',
+      onTrip: (trip) => {
+        trips.push({ inputTokens: trip.inputTokens, reason: trip.reason });
+      },
+    });
+    const agent = makeAgent();
+    feature.setCallArbiter(makeArbiter());
+
+    assert.equal(feature.observeUsage({ inputTokens: 900 }, agent), true);
+    assert.equal(trips.length, 1);
+    assert.equal(trips[0].inputTokens, 900);
+    assert.match(trips[0].reason, /Context threshold reached/);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(posted.length, 1);
+
+    // 回调抛错不影响一次性锁与 HTTP 上报
+    const throwing = new ContextRotationTriggerFeature({
+      contextLength: 1000,
+      compressRatio: 80,
+      agentId: 'plain-agent',
+      sessionId: 's1',
+      serverOrigin: 'http://127.0.0.1:1420',
+      onTrip: () => {
+        throw new Error('host failure');
+      },
+    });
+    const agent2 = makeAgent();
+    assert.equal(throwing.observeUsage({ inputTokens: 900 }, agent2), true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(posted.length, 2);
+  });
 });
