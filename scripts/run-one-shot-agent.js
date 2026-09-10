@@ -25,6 +25,7 @@ import { FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir } from '../server/shared/constants.js';
+import { parseHandoffContent } from '../server/shared/handoff-payload.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,81 +42,12 @@ function cleanValue(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function parseHandoffContent(raw, sourceLabel) {
-  const text = cleanValue(raw);
-  if (!text) return null;
-
-  try {
-    const parsed = JSON.parse(text);
-    if (typeof parsed === 'string') {
-      return { sourceSummary: parsed, seedMessages: [] };
-    }
-    if (parsed && typeof parsed === 'object') {
-      const seedMessages = Array.isArray(parsed.seedMessages)
-        ? parsed.seedMessages
-            .map((message) => {
-              const mapped = {
-                role: cleanValue(message?.role),
-                content: cleanValue(message?.content),
-                turn: Number.isFinite(message?.turn) ? Number(message.turn) : null,
-              };
-              // Preserve toolCalls and toolCallId for conversation fidelity
-              if (Array.isArray(message?.toolCalls) && message.toolCalls.length > 0) {
-                mapped.toolCalls = message.toolCalls;
-              }
-              if (message?.toolCallId) {
-                mapped.toolCallId = cleanValue(message.toolCallId);
-              }
-              return mapped;
-            })
-            .filter((message) => message.role && (message.content || message.toolCalls || message.toolCallId))
-        : [];
-      const sourceSummary = cleanValue(
-        parsed.sourceSummary
-        || parsed.summaryText
-        || parsed.summary
-        || parsed.handoffSummary
-        || parsed.text,
-      );
-      if (seedMessages.length === 0 && !sourceSummary) {
-        throw new Error('missing seedMessages/sourceSummary');
-      }
-      return {
-        packageId: cleanValue(parsed.packageId || parsed.handoffId),
-        sourceSessionId: cleanValue(parsed.sourceSessionId),
-        sourceSummary,
-        seedMessages,
-        mode: cleanValue(parsed.mode),
-        policy: parsed.policy && typeof parsed.policy === 'object' ? parsed.policy : {},
-        importantFiles: Array.isArray(parsed.compactOutput?.importantFiles)
-          ? parsed.compactOutput.importantFiles.filter(f => typeof f === 'string')
-          : [],
-        importantSkills: Array.isArray(parsed.compactOutput?.importantSkills)
-          ? parsed.compactOutput.importantSkills.filter(s => typeof s === 'string')
-          : [],
-        fileRanges: typeof parsed.compactOutput?.fileRanges === 'object' && parsed.compactOutput.fileRanges !== null
-          ? parsed.compactOutput.fileRanges
-          : {},
-      };
-    }
-  } catch (error) {
-    if (sourceLabel === HANDOFF_PAYLOAD_ENV) {
-      return { sourceSummary: text, seedMessages: [] };
-    }
-    if (text.startsWith('{') || text.startsWith('[')) {
-      throw new Error(`解析 handoff 内容失败 (${sourceLabel}): ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  return { sourceSummary: text, seedMessages: [] };
-}
-
 function loadRuntimeHandoff() {
   const payloadText = cleanValue(process.env[HANDOFF_PAYLOAD_ENV]);
   if (payloadText) {
     return {
       source: HANDOFF_PAYLOAD_ENV,
-      handoff: parseHandoffContent(payloadText, HANDOFF_PAYLOAD_ENV),
+      handoff: parseHandoffContent(payloadText, HANDOFF_PAYLOAD_ENV, { rawTextFallback: true }),
     };
   }
 

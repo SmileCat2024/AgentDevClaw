@@ -165,11 +165,12 @@ export async function resolvePrebuiltSessionType(agentId, sessionId) {
 
 const _indexLocks = new Map();
 
-export async function writeSessionIndex(agentId, index) {
-  const dirPath = getPrebuiltAgentSessionDir(agentId);
-  const indexPath = getPrebuiltSessionIndexPath(agentId);
-  await ensureDir(dirPath);
-  const tmpPath = indexPath + '.tmp';
+// 原子写核心（writeSessionIndex 与显式路径变体共用）：唯一临时名 + rename，
+// EPERM/EXDEV 兜底。临时名带 pid+随机——同 agent 并发进程写同一索引时，
+// 固定 .tmp 名会让两个进程互相吞掉对方的 tmp 文件。
+async function writeIndexFileAt(indexPath, index) {
+  await ensureDir(path.dirname(indexPath));
+  const tmpPath = `${indexPath}.${process.pid}-${Math.random().toString(36).slice(2, 8)}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(index, null, 2), 'utf8');
   try {
     await fs.rename(tmpPath, indexPath);
@@ -184,6 +185,13 @@ export async function writeSessionIndex(agentId, index) {
       throw err;
     }
   }
+}
+
+export async function writeSessionIndex(agentId, index) {
+  const dirPath = getPrebuiltAgentSessionDir(agentId);
+  const indexPath = getPrebuiltSessionIndexPath(agentId);
+  await ensureDir(dirPath);
+  await writeIndexFileAt(indexPath, index);
   // 同刻写入（mtime 粒度内）时 mtime+size 可能不变，主动失效兜底
   _indexCache.delete(indexPath);
 }
@@ -193,6 +201,65 @@ export function sessionIndexContentSignature(index = {}) {
     activeSessionId: index?.activeSessionId || null,
     sessions: Array.isArray(index?.sessions) ? index.sessions : [],
   });
+}
+
+// ── 显式路径变体（plain agent 数据根等非 workspace 消费方）────────────
+//
+// plain agent 的会话索引在 AGENTS_DATA_ROOT/agents/<id>/sessions/index.json，
+// 不在 getPrebuiltAgentSessionDir 的寻址范围内；此前 CLI 侧私搭了一份
+// read-modify-write（无 revision、无锁），与 server 侧格式漂移。这里提供
+// 显式路径变体复用同一套锁 + revision + 原子写语义。注意：进程内锁不跨
+// 进程，跨进程互斥由 writeIndexFileAt 的唯一临时名 + rename 原子性兜底
+// （后写者基于自己读到的快照合并，极端并发下仍可能后写覆盖——索引是
+// 发现层，会话文件本体不受影响）。
+
+async function readSessionIndexAt(indexPath) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(indexPath, 'utf8'));
+    if (parsed && typeof parsed === 'object') {
+      return {
+        ...parsed,
+        revision: Number.isSafeInteger(Number(parsed.revision)) && Number(parsed.revision) >= 0
+          ? Number(parsed.revision)
+          : 0,
+        activeSessionId: parsed.activeSessionId || null,
+        sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+      };
+    }
+  } catch { /* 索引不存在或损坏：空索引语义（与 readSessionIndex 一致） */ }
+  return { revision: 0, activeSessionId: null, sessions: [] };
+}
+
+/**
+ * 显式路径的 session index upsert：与 updateSessionIndex 同语义
+ * （per-key 进程内锁 + revision 自增 + 原子写），供 plain agent runner
+ * 等非 workspace 数据根消费方使用，不再各自私搭读写。
+ */
+export async function upsertSessionIndexAt(indexPath, record, { lockKey = indexPath } = {}) {
+  const prev = _indexLocks.get(lockKey) || Promise.resolve();
+  let release;
+  const next = new Promise(r => release = r);
+  _indexLocks.set(lockKey, next);
+  try {
+    await prev;
+    const index = await readSessionIndexAt(indexPath);
+    const existing = index.sessions.findIndex(s => s?.id === record.id);
+    if (existing >= 0) {
+      index.sessions[existing] = { ...index.sessions[existing], ...record };
+    } else {
+      index.sessions.push(record);
+    }
+    index.activeSessionId = record.id;
+    const newIndex = {
+      ...index,
+      revision: Math.max(0, Number(index.revision) || 0) + 1,
+    };
+    await writeIndexFileAt(indexPath, newIndex);
+    return newIndex;
+  } finally {
+    release();
+    if (_indexLocks.get(lockKey) === next) _indexLocks.delete(lockKey);
+  }
 }
 
 export async function updateSessionIndex(agentId, fn) {

@@ -7,7 +7,8 @@
 ```
 agents/<name>/
   agent.js        # 必须：export default 一个 Agent 类（extends BasicAgent）
-  metadata.json   # 可选：name / description / modelPresets
+  metadata.json   # 可选：name / description / modelPresets（内建目录不读 features[]，
+                  # feature 装配靠 agent.js 自身 use()——与注册制不同，见下）
 
 # 或者：任意 Agent 项目目录（通过注册表接入）
 my-agent/
@@ -65,6 +66,15 @@ claw run my-agent --goal "..."
 # 只对带 --studio 注册的 Agent：开发中 Feature 从 Studio 构建产物加载
 claw run my-agent --goal "..." --debug
 ```
+
+环境变量（可在不改命令行的情况下调整行为）：
+
+| 变量 | 作用 |
+|---|---|
+| `AGENTDEV_VIEWER_PORT` | ViewerWorker 端口（默认 2026） |
+| `PROTOCLAW_HEADLESS=1` | 纯 headless，跳过 viewer 连接（等效 `--headless`） |
+| `PROTOCLAW_AGENT_CWD` | agent 工作目录（默认当前目录；`--cwd` 优先） |
+| `PROTOCLAW_MODEL_PRESET_ROLE` | 模型角色（默认 `default`；摘要轮固定 `system`，缺省回退 default preset） |
 
 ### 监视模式 vs 无头模式
 
@@ -216,10 +226,19 @@ todo / shell / memory 等执行纪律与工具不进底座，由 agent 经
 **上下文过界自接力**（与 coder 线程的 thread-rotation 同语义的单进程镜像）：
 压缩阈值过界打断当前轮后，逐轮 `saveSession` → 框架权威组合变换
 （trim-transcript-with-summary）产出 seed → successor 会话（全新 agent 实例，
-熔丝随实例重建）以框架 R3 恢复指令语义续跑原目标。不落 handoff 包文件
-（进程内接力无跨进程传输需求）；continuity feature 状态经
-`importFeatureContinuity` 恢复。收敛语义：trim 失败 / 8 轮上限 / build 失败
-显式失败收敛（`ok:false`），不静默降级；源会话与 index 链完整保留可回查。
+熔丝随实例重建）以框架 R3 恢复指令语义续跑原目标。与 coder 线程链路的差异：
+
+- 不落 handoff 包文件、不产生 `context-handoffs` 审计产物（进程内接力无
+  跨进程传输需求）；continuity feature 状态经 `importFeatureContinuity`
+  恢复，seed 随 successor 会话落盘可回查
+- index 登记发生在 successor 构建成功之后——build 失败不会留下指向不
+  存在会话文件的孤儿记录
+- 执行中 Ctrl+C 是硬杀（SIGINT handler 仅在 `--keep-alive` 收敛路径），
+  当前轮内容丢失；接力只在轮边界 saveSession。无人值守长任务建议依赖
+  轮换链路的逐轮落盘，勿依赖运行中中断
+
+收敛语义：trim 失败 / 8 轮上限 / build 失败显式失败收敛（`ok:false`），
+不静默降级；源会话与 index 链完整保留可回查。
 
 - index.json 接力链路字段：`resumeMode: 'auto-rotation'`、`parentSessionId`、
   `rotationRound`、`successions`（结果行的 `successions` 同义）
@@ -232,8 +251,6 @@ todo / shell / memory 等执行纪律与工具不进底座，由 agent 经
 - metadata.features 不得声明与底座同名的包（`opencode-basic` /
   `output-guard` / `context-rotation-trigger`）——底座先于 plan mount，
   同名会在 loader 硬抛名称冲突
-- jsonl 事件流的 `thread.started` 标注随轮换重新公告（head 会话 id）；
-  最终 result 的 `sessionId` 始终是 head 会话
 
 ## 配置组（ticket 04 约定）
 
@@ -245,9 +262,15 @@ plain agent 的运行时配置走配置队列模型（[tickets 00](../docs/ticke
 - **全局层**：`~/.agentdev/AgentDevClaw/feature-setup.json`
 - **配置组**：`~/.agentdev/AgentDevClaw/workspaces/<agentId>/feature-config/groups/<name>.json`，
   组名即文件名，每组一个稀疏 FeatureConfig（顶层按 featureName 分桶，只写显式覆盖字段）
-- **选中状态优先级**：CLI `--config-group <name>`（临时覆盖）>
-  `feature-config/selected.json` 的 `{"group": "<name>"}`（持久）> 无组层
-- 组名不存在时报错退出（不静默回退）；无组 / 无 selected.json 时行为与仅全局层一致
+- **全局层**：`~/.agentdev/AgentDevClaw/feature-setup.json`
+- **配置组**：`~/.agentdev/AgentDevClaw/workspaces/<agentId>/feature-config/groups/<name>.json`，
+  组名即文件名，每组一个稀疏 FeatureConfig（顶层按 featureName 分桶，只写显式覆盖字段）
+- **选中状态约定**：CLI `--config-group <name>`（临时覆盖）>
+  `feature-config/selected.json` 的 `{"group": "<name>"}`（持久）> 无组层。
+  两条路径都只是约定——组层文件的读取与合并是 agent 侧装配职责（agent.js
+  构造配置队列时自行实现），当前没有内置的持久选中消费方
+- CLI 层拼写守卫：`--config-group` 指定的组文件不存在时报错退出（不静默
+  回退，避免拼写错误被吞）；无组时行为与仅全局层一致
 - 列出可用组：`claw config-groups <agent-id>`（只读；增删改靠直接管理文件）
 
 ## 与 prebuilt agent 的区别

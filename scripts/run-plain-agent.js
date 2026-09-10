@@ -34,7 +34,7 @@
 import './headless-log-preamble.js';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join, resolve } from 'path';
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync } from 'fs';
 import { FileSessionStore, HandoffSeedFeature } from '@agentdevjs/core';
 import { resolveAgentModelLLM, resolveGlobalDefaultLLM, modelPresetResolver } from '../server/model-preset-resolver.js';
 import { tuneMirrorLLM } from '../server/shared/llm-tuning.js';
@@ -50,6 +50,7 @@ import { executePlainCallWithRotation, newPlainSessionId } from './plain-agent-r
 import { mountPlainAgentBase } from './plain-agent-base.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
 import { resolveUserDataDir } from '../server/shared/constants.js';
+import { upsertSessionIndexAt } from '../server/shared/session-access.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -130,8 +131,13 @@ async function resolvePlainAgentDefinition(requestedId) {
 function getStudioSourceOverrides(studioProjectDir) {
   const project = readJsonIfPresent(join(studioProjectDir, 'agent-studio.json'));
   const features = Array.isArray(project?.features) ? project.features : [];
+  // 语义与 studio 侧 prepareAgentDebugPlan 对齐（runtime-process.ts）：
+  // legacy 模块（无 source）硬抛错，不静默回退仓库 tgz——debug 模式的
+  // 意图就是用开发源码覆盖，静默回退会掩盖"没测到想测的东西"。
   return features.map((feature) => {
-    if (!feature?.package || feature?.source?.kind !== 'project') return null;
+    if (!feature?.package || feature?.source?.kind !== 'project') {
+      throw new Error(`--debug 只支持标准 Feature 项目；${feature?.name || '(未命名)'} 仍是 legacy 模块。`);
+    }
     return {
       package: String(feature.package),
       runtimeName: String(feature.name || ''),
@@ -142,48 +148,23 @@ function getStudioSourceOverrides(studioProjectDir) {
         entry: String(feature.source.entry || ''),
       },
     };
-  }).filter(Boolean);
+  });
 }
 
 // ── Session index（与 server 侧 index.json 格式对齐的文件协议）─────────
+// 读写统一走 session-access 的显式路径变体（per-key 进程内锁 + revision
+// 自增 + 唯一临时名原子写），不再私搭弱化实现。
 
 function getSessionDir(agentId) {
   return join(AGENTS_DATA_ROOT, sanitizeFragment(agentId), 'sessions');
 }
 
-function readSessionIndex(agentId) {
-  const indexPath = join(getSessionDir(agentId), 'index.json');
-  if (!existsSync(indexPath)) return { activeSessionId: null, sessions: [] };
-  try {
-    const parsed = JSON.parse(readFileSync(indexPath, 'utf8'));
-    return {
-      activeSessionId: parsed.activeSessionId || null,
-      sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
-    };
-  } catch {
-    return { activeSessionId: null, sessions: [] };
-  }
+function getSessionIndexPath(agentId) {
+  return join(getSessionDir(agentId), 'index.json');
 }
 
-function writeSessionIndexAtomic(agentId, index) {
-  const dir = getSessionDir(agentId);
-  mkdirSync(dir, { recursive: true });
-  const indexPath = join(dir, 'index.json');
-  const tmpPath = join(dir, `.index-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`);
-  writeFileSync(tmpPath, JSON.stringify(index, null, 2), 'utf8');
-  renameSync(tmpPath, indexPath);
-}
-
-function upsertSessionIndex(agentId, record) {
-  const index = readSessionIndex(agentId);
-  const existing = index.sessions.findIndex(s => s.id === record.id);
-  if (existing >= 0) {
-    index.sessions[existing] = { ...index.sessions[existing], ...record };
-  } else {
-    index.sessions.push(record);
-  }
-  index.activeSessionId = record.id;
-  writeSessionIndexAtomic(agentId, index);
+async function upsertSessionIndex(agentId, record) {
+  await upsertSessionIndexAt(getSessionIndexPath(agentId), record);
 }
 
 // ── Main ────────────────────────────────────────────────────────────
@@ -261,6 +242,19 @@ async function main() {
   console.error(`[PlainAgent] agent=${definition.id} source=${definition.source} session=${sessionId} cwd=${workspaceCwd} headless=${headless} debug=${args.debug}`);
   console.error(`[PlainAgent] goal="${goal.slice(0, 80)}"`);
 
+  // 配置组存在性校验（ticket 04 验收标准：组名不存在时报错清晰，不静默
+  // 回退无组——避免拼写错误被静默吞掉）。组层内容的读取是 agent 侧装配
+  // 职责（agent.js 构造队列时自行合并），runner 只做拼写守卫与透传。
+  if (args.configGroup) {
+    const groupPath = join(resolveUserDataDir(), 'workspaces', sanitizeFragment(definition.id), 'feature-config', 'groups', `${sanitizeFragment(args.configGroup)}.json`);
+    if (!existsSync(groupPath)) {
+      console.error(`[PlainAgent] 配置组不存在: ${args.configGroup}（期望 ${groupPath}）`);
+      console.error('[PlainAgent] 可用组列表: claw config-groups ' + definition.id);
+      process.exit(1);
+    }
+    console.error(`[PlainAgent] config-group => ${args.configGroup}`);
+  }
+
   // 会话事件流输出：jsonl 模式写 stdout（codex exec --json 形态），
   // 其余模式渲染 human 可读行到 stderr（codex exec 默认形态）。
   // 轮换推进 head 会话后经 setThreadId 更新标注（见下方 upsertIndex）。
@@ -286,13 +280,15 @@ async function main() {
   }
   console.error(`[PlainAgent] model preset => ${resolved.modelName}`);
 
-  // 摘要轮 LLM：与主链路同一解析链（同 userConfigPath + 全局默认兜底），
-  // 按 inprocess-summary 的装配约定调优（关 thinking、限 SUMMARY_TUNE_MAX_TOKENS）。
-  // 工厂形态逐轮调用：无 preset 的 plain agent 过界接力与主链路同生共死
-  // （不会在 trim 阶段因独立解析链缺兜底而必死）；每次接力新实例，OAuth
-  // 凭证不冻结在启动时刻。
+  // 摘要轮 LLM：与 server 摘要链同角色语义（resolveSummaryLLM 固定
+  // role='system'，缺省在 resolver 内回退 default preset），共享同一
+  // userConfigPath 与调优约定；无 preset 的 plain agent 落回主链兜底
+  // （全局默认模型），保证过界接力与主链路同生共死。工厂形态逐轮调用：
+  // 每次接力新实例，OAuth 凭证不冻结在启动时刻。
   const summaryLLMFactory = () => {
-    const resolved = resolveMainModel();
+    const resolved = resolveAgentModelLLM(agentDir, 'system', {
+      userConfigPath: join(PROJECT_ROOT, '.agentdev', 'agent-configs', `${definition.id}.json`),
+    }) || resolveMainModel();
     if (!resolved) return null;
     tuneMirrorLLM(resolved.llm, SUMMARY_TUNE_MAX_TOKENS, { forceMaxTokens: true, protocol: resolved.protocol });
     return resolved.llm;
@@ -434,7 +430,7 @@ async function main() {
 
   // 5. 索引登记（运行前先入索引，面板/后续查询能看到进行中的痕迹）
   const now = new Date().toISOString();
-  upsertSessionIndex(definition.id, {
+  await upsertSessionIndex(definition.id, {
     id: sessionId,
     goal,
     sessionType: 'plain',
@@ -458,10 +454,10 @@ async function main() {
       llm: summaryLLMFactory,
     },
     buildAgent,
-    upsertIndex: (record) => {
+    upsertIndex: async (record) => {
       // 事件流标注推进到 head 会话，与 result.sessionId 保持一致
       sessionEventOutput?.setThreadId?.(record.id);
-      upsertSessionIndex(definition.id, {
+      await upsertSessionIndex(definition.id, {
         openDirectory: workspaceCwd,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -488,7 +484,7 @@ async function main() {
   // 7. 更新索引（各轮会话已由接力控制器逐轮落盘并记录失败日志）。
   // createdAt 不随终态 upsert 覆盖——轮换 successor 的 createdAt 由轮换
   // 时刻登记，非运行起点。
-  upsertSessionIndex(definition.id, {
+  await upsertSessionIndex(definition.id, {
     id: rotation.sessionId,
     goal,
     sessionType: 'plain',

@@ -21,6 +21,7 @@ const {
   getPrebuiltSessionIndexPath,
   readSessionIndex,
   writeSessionIndex,
+  upsertSessionIndexAt,
 } = await import('../server/shared/session-access.js');
 
 const AGENT_ID = 'cache-test-agent';
@@ -114,5 +115,46 @@ describe('readSessionIndex 缓存', () => {
     writeFileSync(indexPath, JSON.stringify(makeIndex(8)), 'utf8');
     const idx = await readSessionIndex(AGENT_ID);
     assert.equal(idx.revision, 8);
+  });
+});
+
+describe('upsertSessionIndexAt（plain agent 显式路径 upsert）', () => {
+  const UPSERT_PATH = join(DATA_ROOT, 'agents', 'upsert-agent', 'sessions', 'index.json');
+
+  test('新建记录：revision 自增、activeSessionId 推进、未知字段保留', async () => {
+    await upsertSessionIndexAt(UPSERT_PATH, { id: 'p1', goal: 'g1', sessionType: 'plain', customField: 'keep-me' });
+    const raw = JSON.parse(readFileSync(UPSERT_PATH, 'utf8'));
+    assert.equal(raw.revision, 1);
+    assert.equal(raw.activeSessionId, 'p1');
+    assert.equal(raw.sessions.length, 1);
+    assert.equal(raw.sessions[0].sessionType, 'plain');
+    assert.equal(raw.sessions[0].unknownCustomField, undefined);
+    assert.equal(raw.sessions[0].keepMerged, undefined);
+    // record 未声明字段不裁剪（merge spread 语义），id 为判重键
+    assert.equal(raw.sessions[0].id, 'p1');
+  });
+
+  test('重复 upsert：按 id 合并不重复插入，revision 持续自增', async () => {
+    await upsertSessionIndexAt(UPSERT_PATH, { id: 'p1', goal: 'g1-updated', updatedAt: 'T2' });
+    await upsertSessionIndexAt(UPSERT_PATH, { id: 'p2', goal: 'g2' });
+    const raw = JSON.parse(readFileSync(UPSERT_PATH, 'utf8'));
+    assert.equal(raw.revision, 3);
+    assert.equal(raw.sessions.length, 2);
+    const p1 = raw.sessions.find(s => s.id === 'p1');
+    assert.equal(p1.goal, 'g1-updated');       // 覆盖更新
+    assert.equal(p1.sessionType, 'plain');     // 未覆盖字段保留
+    assert.equal(p1.keepMe, undefined);
+    assert.equal(raw.activeSessionId, 'p2');   // 最后写入者成为 active
+  });
+
+  test('并发 upsert 串行化：重叠调用全部落盘', async () => {
+    const [a, b] = await Promise.all([
+      upsertSessionIndexAt(UPSERT_PATH, { id: 'c1', goal: 'x' }),
+      upsertSessionIndexAt(UPSERT_PATH, { id: 'c2', goal: 'y' }),
+    ]);
+    assert.ok(a && b);
+    const raw = JSON.parse(readFileSync(UPSERT_PATH, 'utf8'));
+    assert.equal(raw.sessions.some(s => s.id === 'c1'), true);
+    assert.equal(raw.sessions.find(s => s.id === 'c2') !== undefined, true);
   });
 });

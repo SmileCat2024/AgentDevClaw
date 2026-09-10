@@ -139,6 +139,7 @@ describe('plain agent 进程内上下文自接力', () => {
   test('build 失败收敛报告已落盘的 persistedHead，不指向幽灵 successor', async () => {
     const store = new Map();
     let round = 0;
+    const upserts = [];
 
     const result = await executePlainCallWithRotation({
       initialGoal: 'g',
@@ -167,6 +168,7 @@ describe('plain agent 进程内上下文自接力', () => {
         seedMessages: [{ role: 'user', content: 'x', turn: 0 }],
         meta: { summaryText: 's', mode: 'trim-transcript-with-summary' },
       }),
+      upsertIndex: (record) => { upserts.push(record); },
     });
     // build 失败：报告已落盘的源会话，而非未构建的 successor id
     assert.equal(result.ok, false);
@@ -174,6 +176,54 @@ describe('plain agent 进程内上下文自接力', () => {
     assert.equal(result.initialSessionId, 's0');
     assert.equal(result.successions, 0); // 未计数（successor 未建成）
     assert.match(result.error, /agent build failed/);
+    // M1 回归：接力 index 登记只发生在 successor 构建成功之后——build 失败
+    // 不得留下指向不存在会话文件的孤儿记录（与线程 commit/READY 门禁同语义）。
+    assert.equal(upserts.length, 0);
+  });
+
+  test('接力成功：index 登记恰一次，字段完整', async () => {
+    const store = new Map();
+    let round = 0;
+    const upserts = [];
+
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async (id) => {
+        if (!store.has(id)) throw new Error(`session not found: ${id}`);
+        return store.get(id);
+      } },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      buildAgent: async ({ sessionId, handoff, onContextTrip }) => {
+        const roundIndex = round;
+        round += 1;
+        return {
+          onCallDetailed: async () => {
+            if (roundIndex === 0) {
+              onContextTrip();
+              return { status: 'cancelled', response: null };
+            }
+            return { status: 'completed', response: 'done' };
+          },
+          saveSession: async () => { store.set(sessionId, baseSnapshot()); },
+          dispose: async () => {},
+        };
+      },
+      runTrim: async () => ({
+        schemaVersion: 1,
+        seedMessages: [{ role: 'user', content: 'x', turn: 0 }],
+        meta: { summaryText: 's', mode: 'trim-transcript-with-summary' },
+      }),
+      upsertIndex: (record) => { upserts.push(record); },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.successions, 1);
+    // 登记恰一次（build 成功后），不含 trim 时点的先行登记
+    assert.equal(upserts.length, 1);
+    assert.equal(upserts[0].id, result.sessionId);
+    assert.equal(upserts[0].parentSessionId, 's0');
+    assert.equal(upserts[0].rotationRound, 1);
+    assert.equal(upserts[0].resumeMode, 'auto-rotation');
   });
 
   test('tripped + completed 竞态：按 completed 收敛不轮换', async () => {

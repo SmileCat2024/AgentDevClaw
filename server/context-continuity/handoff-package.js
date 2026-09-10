@@ -165,6 +165,33 @@ export async function exportHistoryOnlyHandoffPackage({
  * exportHistoryOnlyHandoffPackage 保持同构，消费方（compacted resume、
  * HandoffSeedFeature）不感知差异。
  */
+/**
+ * SuccessorSeed → handoff 字段提取（写侧唯一权威）。
+ *
+ * 落盘写侧（writeTrimWithSummaryHandoffPackage）与 plain 进程内接力
+ * （组装 HandoffSeedPayload）共用同一条回退链：appendedSummary 优先、
+ * seed 顶层兜底。框架 payload 增字段只改这里，消费方不再平行手拼。
+ */
+export function buildTrimWithSummarySeedFields(seed) {
+  const meta = seed?.meta ?? {};
+  const appended = meta.appendedSummary ?? {};
+  return {
+    seedMessages: Array.isArray(seed?.seedMessages) ? seed.seedMessages : [],
+    summaryText: appended.summaryText ?? meta.summaryText ?? '',
+    importantFiles: appended.importantFiles ?? seed.importantFiles ?? [],
+    importantSkills: appended.importantSkills ?? seed.importantSkills ?? [],
+    fileRanges: appended.fileRanges ?? seed.fileRanges ?? {},
+  };
+}
+
+/**
+ * 落盘框架 trim-transcript-with-summary 组合变换的产物（SuccessorSeed）。
+ *
+ * 组合语义（裁剪 + 摘要追加）由框架 TrimTranscriptWithSummaryTransformation
+ * 产出；本函数只做 Claw 落盘格式化（handoff JSON v1），字段与
+ * exportHistoryOnlyHandoffPackage 保持同构，消费方（compacted resume、
+ * HandoffSeedFeature）不感知差异。
+ */
 export async function writeTrimWithSummaryHandoffPackage({
   userDataRoot,
   agentId,
@@ -174,8 +201,8 @@ export async function writeTrimWithSummaryHandoffPackage({
   sessionSnapshot,
   seed,
 }) {
+  const seedFields = buildTrimWithSummarySeedFields(seed);
   const meta = seed?.meta ?? {};
-  const appended = meta.appendedSummary ?? {};
   const handoffId = `handoff-${Date.now()}-${randomUUID().slice(0, 8)}`;
 
   const handoff = {
@@ -193,13 +220,13 @@ export async function writeTrimWithSummaryHandoffPackage({
     stats: meta.trimStats ?? {},
     featureContinuity: exportFeatureContinuity(sessionSnapshot, { mode: 'trim-transcript' }),
     sourceSummary: buildCompactOverview(sourceRecord),
-    seedMessages: seed.seedMessages,
+    seedMessages: seedFields.seedMessages,
     appendedSummary: {
-      summaryText: appended.summaryText ?? meta.summaryText ?? '',
-      importantFiles: appended.importantFiles ?? seed.importantFiles ?? [],
-      importantSkills: appended.importantSkills ?? seed.importantSkills ?? [],
+      summaryText: seedFields.summaryText,
+      importantFiles: seedFields.importantFiles,
+      importantSkills: seedFields.importantSkills,
       sessionTitle: '',
-      fileRanges: appended.fileRanges ?? seed.fileRanges ?? {},
+      fileRanges: seedFields.fileRanges,
     },
   };
 

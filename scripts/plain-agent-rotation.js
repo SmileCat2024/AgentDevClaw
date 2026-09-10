@@ -23,6 +23,7 @@
  */
 
 import { runTrimTranscriptWithSummary } from '../server/context-continuity/trim-appended-summary.js';
+import { buildTrimWithSummarySeedFields } from '../server/context-continuity/handoff-package.js';
 import { applyContinuityToolPolicy, exportFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
 
 /**
@@ -121,12 +122,11 @@ export async function executePlainCallWithRotation({
       return failureResult({ sessionId: persistedHead, initialSessionId, successions, outcome, error: `agent build failed: ${message}`, status: 'failed' });
     }
 
-    // successor 构建成功：接力计数在此刻成立（build 失败不计入——不存在
-    // 的 successor 不算一次接力），随后登记接力链路（轮换时刻不先入索引
-    // ——build 失败不会留下指向不存在会话文件的记录）。
+    // successor 构建成功：接力计数与 index 登记都在此刻成立（trim 成功
+    // 不先入索引——build 失败不会留下指向不存在会话文件的孤儿记录）。
     if (handoff) {
       successions += 1;
-      upsertIndex?.({
+      await upsertIndex?.({
         id: sessionId,
         goal: initialGoal,
         sessionType: 'plain',
@@ -243,28 +243,23 @@ export async function executePlainCallWithRotation({
     }
 
     const successorId = newPlainSessionId();
+    // SuccessorSeed → HandoffSeedPayload 字段提取与 server 落盘写侧
+    // （writeTrimWithSummaryHandoffPackage）共用同一构建器：框架 payload
+    // 增字段只改一处回退链，不再平行手拼。
+    const seedFields = buildTrimWithSummarySeedFields(seed);
     handoff = {
       packageId: `plain-handoff-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       sourceSessionId: sessionId,
       mode: 'trim-transcript-with-summary',
-      sourceSummary: typeof seed.meta?.summaryText === 'string' ? seed.meta.summaryText : '',
-      seedMessages: seed.seedMessages,
-      importantFiles: seed.importantFiles ?? [],
-      importantSkills: seed.importantSkills ?? [],
-      fileRanges: seed.fileRanges ?? {},
+      sourceSummary: seedFields.summaryText,
+      seedMessages: seedFields.seedMessages,
+      importantFiles: seedFields.importantFiles,
+      importantSkills: seedFields.importantSkills,
+      fileRanges: seedFields.fileRanges,
       featureContinuity: exportFeatureContinuity(snapshot, { mode: 'trim-transcript' }),
     };
 
-    log(`[PlainRotation] context tripped — rotating round ${successions + 1}: ${sessionId} -> ${successorId} (seed=${seed.seedMessages?.length ?? 0} messages)`);
-    upsertIndex?.({
-      id: successorId,
-      goal: initialGoal,
-      sessionType: 'plain',
-      source: 'cli',
-      resumeMode: 'auto-rotation',
-      parentSessionId: sessionId,
-      rotationRound: successions + 1,
-    });
+    log(`[PlainRotation] context tripped — rotating round ${successions + 1}: ${sessionId} -> ${successorId} (seed=${seedFields.seedMessages?.length ?? 0} messages)`);
 
     try { await currentAgent.dispose(); } catch { /* 旧实例释放失败不阻断接力 */ }
 
