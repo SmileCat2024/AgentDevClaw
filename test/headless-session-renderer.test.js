@@ -123,6 +123,25 @@ describe('headless-session-renderer', () => {
       assert.equal(out.lines().length, 0);
     });
 
+    it('setThreadId 重新公告 head 会话，后续事件标注随之更新', () => {
+      const out = capture();
+      const err = capture();
+      detach = attachSessionEventOutput({
+        format: 'jsonl',
+        threadId: 's1',
+        streams: { stdout: out.stream, stderr: err.stream },
+      });
+      // 轮换推进 head：重新公告 thread.started（stdout），session 行写 stderr
+      detach.setThreadId('s2');
+      assert.deepEqual(JSON.parse(out.lines()[1]), { type: 'thread.started', threadId: 's2' });
+      assert.deepEqual(err.lines().slice(-1), ['session: s2']);
+
+      emitFatalSessionError('marked');
+      const last = JSON.parse(out.lines().at(-1));
+      assert.equal(last.type, 'error'); // 订阅仍有效，事件流继续（标注由消费方按公告对齐）
+      assert.equal(err.lines().at(-1), 'session: s2');
+    });
+
     it('退订后不再接收事件', () => {
       const out = capture();
       detach = attachSessionEventOutput({

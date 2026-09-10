@@ -62,7 +62,9 @@ describe('plain agent 进程内上下文自接力', () => {
     const store = new Map();
     const disposed = [];
     const builds = [];
+    const trimCalls = [];
     let round = 0;
+    const injectedLLM = { modelName: 'stub-llm' };
 
     const result = await executePlainCallWithRotation({
       initialGoal: '长任务',
@@ -71,7 +73,12 @@ describe('plain agent 进程内上下文自接力', () => {
         if (!store.has(id)) throw new Error(`session not found: ${id}`);
         return store.get(id);
       } },
-      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'plain-x' },
+      trimSource: {
+        agentRelativeDir: '/a',
+        projectRoot: '/p',
+        agentId: 'plain-x',
+        llm: () => injectedLLM, // 工厂：每次接力新实例
+      },
       buildAgent: async ({ sessionId, handoff, onContextTrip }) => {
         const roundIndex = round;
         round += 1;
@@ -89,7 +96,10 @@ describe('plain agent 进程内上下文自接力', () => {
         };
       },
       runTrim: async (params) => {
+        trimCalls.push(params);
         assert.equal(params.sourceSessionSnapshot.runtime.context.messages.length, 2);
+        assert.equal(params.llm, injectedLLM);                       // 工厂产物逐轮注入
+        assert.ok(Array.isArray(params.policy?.preserveToolNames));  // continuity 工具装饰同参
         return {
           schemaVersion: 1,
           seedMessages: [{ role: 'user', content: '裁剪后的历史', turn: 0 }],
@@ -101,13 +111,15 @@ describe('plain agent 进程内上下文自接力', () => {
       },
     });
 
+    // continuity 状态随 seed 转移（opencode-basic 先读后写授权）
+    assert.equal(Array.isArray(builds[1].handoff.featureContinuity?.states), true);
+    assert.equal(trimCalls.length, 1);
     assert.equal(result.ok, true);
     assert.notEqual(result.sessionId, 's0');
     assert.match(result.sessionId, /^plain-/);          // controller 生成 successor id
     assert.equal(result.successions, 1);
     assert.equal(result.response, 'done');
     assert.equal(disposed.includes('s0'), true);
-    // successor 构造期注入 seed
     assert.equal(builds.length, 2);
     assert.equal(builds[0].sessionId, 's0');
     assert.equal(builds[0].handoff, null);
@@ -118,6 +130,72 @@ describe('plain agent 进程内上下文自接力', () => {
     assert.equal(Array.isArray(builds[1].handoff.seedMessages), true);
     // continuity 状态随 seed 转移（opencode-basic 先读后写授权）
     assert.equal(Array.isArray(builds[1].handoff.featureContinuity?.states), true);
+    // llm 工厂与 continuity policy 装饰随 runTrim 调用注入
+    assert.equal(trimCalls[0].llm, injectedLLM);
+    assert.ok(Array.isArray(trimCalls[0].policy?.preserveToolNames));
+    assert.equal(trimCalls.length, 1);
+  });
+
+  test('build 失败收敛报告已落盘的 persistedHead，不指向幽灵 successor', async () => {
+    const store = new Map();
+    let round = 0;
+
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async (id) => {
+        if (!store.has(id)) throw new Error(`session not found: ${id}`);
+        return store.get(id);
+      } },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      buildAgent: async ({ sessionId, onContextTrip }) => {
+        if (round === 0) {
+          round += 1;
+          return {
+            onCallDetailed: async () => {
+              onContextTrip();
+              return { status: 'cancelled', response: null };
+            },
+            saveSession: async () => { store.set(sessionId, baseSnapshot()); },
+            dispose: async () => {},
+          };
+        }
+        throw new Error('successor assembly exploded');
+      },
+      runTrim: async () => ({
+        schemaVersion: 1,
+        seedMessages: [{ role: 'user', content: 'x', turn: 0 }],
+        meta: { summaryText: 's', mode: 'trim-transcript-with-summary' },
+      }),
+    });
+    // build 失败：报告已落盘的源会话，而非未构建的 successor id
+    assert.equal(result.ok, false);
+    assert.equal(result.sessionId, 's0');
+    assert.equal(result.initialSessionId, 's0');
+    assert.equal(result.successions, 0); // 未计数（successor 未建成）
+    assert.match(result.error, /agent build failed/);
+  });
+
+  test('tripped + completed 竞态：按 completed 收敛不轮换', async () => {
+    const result = await executePlainCallWithRotation({
+      initialGoal: 'g',
+      initialSessionId: 's0',
+      sessionStore: { load: async () => baseSnapshot() },
+      trimSource: { agentRelativeDir: '/a', projectRoot: '/p', agentId: 'a' },
+      buildAgent: async ({ onContextTrip }) => ({
+        onCallDetailed: async () => {
+          onContextTrip(); // 观测在响应返回后：同轮既完成又过线
+          return { status: 'completed', response: '刚好完成' };
+        },
+        saveSession: async () => {},
+        dispose: async () => {},
+      }),
+      runTrim: async () => { throw new Error('should not trim'); },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'completed');
+    assert.equal(result.sessionId, 's0');
+    assert.equal(result.successions, 0);
   });
 
   test('接力上限到达按失败收敛', async () => {

@@ -45,6 +45,7 @@ import { provisionRuntimeEnvironment } from '../server/feature-runtime/provision
 import { mountResolvedFeatures } from '../server/feature-runtime/loader.js';
 import { getRegisteredAgent } from '../server/feature-runtime/agent-registry.js';
 import { importFeatureContinuity } from '../server/context-continuity/feature-continuity.js';
+import { SUMMARY_TUNE_MAX_TOKENS } from '../server/context-continuity/inprocess-summary.js';
 import { executePlainCallWithRotation, newPlainSessionId } from './plain-agent-rotation.js';
 import { mountPlainAgentBase } from './plain-agent-base.js';
 import { attachSessionEventOutput, emitFatalSessionError } from './headless-session-renderer.js';
@@ -280,21 +281,22 @@ async function main() {
   const resolved = resolveMainModel();
   if (!resolved) {
     console.error(`[PlainAgent] 未解析到模型 preset，且无全局默认模型兜底。请配置 ${definition.metadataPath} 的 modelPresets.default，`);
-    console.error(`[PlainAgent] 或 .agentdev/agent-configs/${agentId}.json（推荐，不入库），或 config/default.json 的 defaultModel。`);
+    console.error(`[PlainAgent] 或 .agentdev/agent-configs/${definition.id}.json（推荐，不入库），或 config/default.json 的 defaultModel。`);
     process.exit(1);
   }
   console.error(`[PlainAgent] model preset => ${resolved.modelName}`);
 
   // 摘要轮 LLM：与主链路同一解析链（同 userConfigPath + 全局默认兜底），
-  // 按 inprocess-summary 的装配约定调优（关 thinking、限 16000）。controller
-  // 逐轮注入 runTrim；无 preset 的 plain agent 过界接力因此与主链路同生共死，
-  // 不会在 trim 阶段因独立解析链缺兜底而必死。
-  const summaryLLM = (() => {
+  // 按 inprocess-summary 的装配约定调优（关 thinking、限 SUMMARY_TUNE_MAX_TOKENS）。
+  // 工厂形态逐轮调用：无 preset 的 plain agent 过界接力与主链路同生共死
+  // （不会在 trim 阶段因独立解析链缺兜底而必死）；每次接力新实例，OAuth
+  // 凭证不冻结在启动时刻。
+  const summaryLLMFactory = () => {
     const resolved = resolveMainModel();
     if (!resolved) return null;
-    tuneMirrorLLM(resolved.llm, 16000, { forceMaxTokens: true, protocol: resolved.protocol });
+    tuneMirrorLLM(resolved.llm, SUMMARY_TUNE_MAX_TOKENS, { forceMaxTokens: true, protocol: resolved.protocol });
     return resolved.llm;
-  })();
+  };
 
   // 2. 现代 metadata Agent 先解析并 provision Feature；遗留内建 Agent 保持静态装配。
   let runtimePlan = null;
@@ -376,14 +378,11 @@ async function main() {
     }
 
     if (runtimePlan) {
+      // plan 与底座同名会在 loader 硬抛「动态装配 Feature 名称冲突」
+      // （feature-runtime/loader.js：底座先于 plan mount，无静默覆盖通路）；
+      // catalog 当前无同名包，属潜伏回归面，无需运行期告警。
       await mountResolvedFeatures(agent, runtimePlan, { environmentDir: runtimeEnvironment.environmentDir });
       console.error(`[PlainAgent] runtime plan=${runtimePlan.mode} features=${runtimePlan.features.length} env=${runtimeEnvironment.environmentDir}`);
-      // plan 与底座同名时显式装配优先（dedup 是设计语义），但
-      // context-rotation-trigger 被覆盖意味着进程内自接力对轮换静默失效——
-      // 覆盖事实必须可见。
-      if (mountedBase.includes('context-rotation-trigger')) {
-        console.error('[PlainAgent] 警告: runtime plan 覆盖了底座的 context-rotation-trigger，进程内自接力对本 agent 失效');
-      }
     }
 
     // 接力 successor：注入 handoff seed（首 CallStart 精确注入一次），
@@ -456,7 +455,7 @@ async function main() {
       agentRelativeDir: agentDir,
       projectRoot: PROJECT_ROOT,
       agentId: definition.id,
-      llm: summaryLLM,
+      llm: summaryLLMFactory,
     },
     buildAgent,
     upsertIndex: (record) => {
@@ -486,14 +485,15 @@ async function main() {
     console.error(`[PlainAgent] call 未完成: status=${status} reason=${callOutcome?.reason || ''} ${error}`);
   }
 
-  // 7. 更新索引（各轮会话已由接力控制器逐轮落盘并记录失败日志）
+  // 7. 更新索引（各轮会话已由接力控制器逐轮落盘并记录失败日志）。
+  // createdAt 不随终态 upsert 覆盖——轮换 successor 的 createdAt 由轮换
+  // 时刻登记，非运行起点。
   upsertSessionIndex(definition.id, {
     id: rotation.sessionId,
     goal,
     sessionType: 'plain',
     source: 'cli',
     openDirectory: workspaceCwd,
-    createdAt: now,
     updatedAt: new Date().toISOString(),
     lastError: error || undefined,
     ...(rotation.successions > 0 ? { successions: rotation.successions } : {}),
@@ -506,6 +506,7 @@ async function main() {
     response: response || null,
     error: error || null,
     ...(callOutcome?.error ? { errorDetail: callOutcome.error } : {}),
+    ...(rotation.successions > 0 ? { successions: rotation.successions } : {}),
     agentId: definition.id,
     sessionId: rotation.sessionId,
     durationMs,

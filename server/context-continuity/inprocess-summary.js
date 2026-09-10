@@ -27,6 +27,9 @@ import { SESSION_TRANSFORMATION_TIMEOUT_MS } from '../shared/constants.js';
 
 const SUMMARY_MAX_TOKENS = 16000;
 
+/** 摘要类调用的 maxTokens 装配约定（与 inprocess-summary / trim 装配层共用）。 */
+export const SUMMARY_TUNE_MAX_TOKENS = SUMMARY_MAX_TOKENS;
+
 export function buildSummaryPromptForSession({ trimAppended, additionalInstructions }) {
   return buildSummaryPrompt({
     additionalInstructions,

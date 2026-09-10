@@ -225,6 +225,15 @@ todo / shell / memory 等执行纪律与工具不进底座，由 agent 经
   `rotationRound`、`successions`（结果行的 `successions` 同义）
 - jsonl 事件流的 `thread.started` 标注随轮换重新公告（head 会话 id）；
   最终 result 的 `sessionId` 始终是 head 会话
+- 依赖全局默认兜底（无 preset）的 agent：若 presets 表中无同名模型条目，
+  `contextLength` 为 null、压缩阈值失效——自接力静默不触发（与 workspace
+  语义一致），需要接力能力的 plain agent 应显式配置带 `contextLength` 的
+  preset
+- metadata.features 不得声明与底座同名的包（`opencode-basic` /
+  `output-guard` / `context-rotation-trigger`）——底座先于 plan mount，
+  同名会在 loader 硬抛名称冲突
+- jsonl 事件流的 `thread.started` 标注随轮换重新公告（head 会话 id）；
+  最终 result 的 `sessionId` 始终是 head 会话
 
 ## 配置组（ticket 04 约定）
 

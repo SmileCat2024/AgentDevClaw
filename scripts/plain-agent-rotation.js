@@ -33,15 +33,14 @@ import { applyContinuityToolPolicy, exportFeatureContinuity } from '../server/co
  * 指令暂存面，原目标需要显式随行。
  */
 function composeSuccessionInstruction(initialGoal) {
-  const lines = [
+  // R3 段落逐字对齐框架（core/workthread/core.ts join('') 连接）；plain
+  // 场景无指令 Inbox，原目标以独立段落显式随行。
+  const instruction = [
     '上下文已精简接力。先检查当前工作树、已有变更、测试结果和上一棒摘要，',
     '确认哪些步骤已经完成；不要重复可能已有副作用的操作，然后继续当前任务。',
     '需要人工决策或无法安全判断时，明确说明原因。',
-  ];
-  if (initialGoal) {
-    lines.push('', `本次运行的原始任务：${initialGoal}`);
-  }
-  return lines.join('\n');
+  ].join('');
+  return initialGoal ? `${instruction}\n\n本次运行的原始任务：${initialGoal}` : instruction;
 }
 
 function newPlainSessionId() {
@@ -51,11 +50,14 @@ function newPlainSessionId() {
 export { newPlainSessionId };
 
 function failureResult({ sessionId, initialSessionId, successions, outcome, error, status }) {
+  // initialSessionId 由调用点显式传入（所有失败收敛路径都必须携带，
+  // 与成功返回的契约一致）。
   return {
     ok: false,
     status: status || 'failed',
     response: outcome?.response || null,
     sessionId,
+    initialSessionId,
     successions,
     error,
     callOutcome: outcome,
@@ -101,6 +103,7 @@ export async function executePlainCallWithRotation({
   let handoff = null;
   let successions = 0;
   let persistedHead = initialSessionId; // 最后一个已落盘的会话（失败收敛用它报告，不指向未落盘的 successor）
+  let saveError = null; // 最后一轮 saveSession 失败事实（result 携带，接力将基于磁盘旧快照）
   let outcome = null;
   let callError = null;
 
@@ -115,11 +118,24 @@ export async function executePlainCallWithRotation({
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // 报告 persistedHead：successor 尚未构建成功、从未落盘，不应作为
-      // 结果/索引的 head 出现。
-      return failureResult({ sessionId: persistedHead, successions, outcome, error: `agent build failed: ${message}`, status: 'failed' });
+      return failureResult({ sessionId: persistedHead, initialSessionId, successions, outcome, error: `agent build failed: ${message}`, status: 'failed' });
     }
 
+    // successor 构建成功：接力计数在此刻成立（build 失败不计入——不存在
+    // 的 successor 不算一次接力），随后登记接力链路（轮换时刻不先入索引
+    // ——build 失败不会留下指向不存在会话文件的记录）。
+    if (handoff) {
+      successions += 1;
+      upsertIndex?.({
+        id: sessionId,
+        goal: initialGoal,
+        sessionType: 'plain',
+        source: 'cli',
+        resumeMode: 'auto-rotation',
+        parentSessionId: handoff?.sourceSessionId || persistedHead,
+        rotationRound: successions,
+      });
+    }
     outcome = null;
     callError = null;
     try {
@@ -138,13 +154,20 @@ export async function executePlainCallWithRotation({
     try {
       await currentAgent.saveSession(sessionId, sessionStore);
       persistedHead = sessionId;
+      saveError = null;
     } catch (err) {
-      log(`[PlainRotation] saveSession 失败（snapshot 可能落后于最新一轮）: ${err?.message || err}`);
+      // 接力仍会进行，但基于磁盘上的旧快照——最新一轮内容缺席 successor
+      // seed（不可逆），事实随 result 携带（saveError），不只留日志。
+      saveError = err instanceof Error ? err.message : String(err);
+      log(`[PlainRotation] saveSession 失败（snapshot 可能落后于最新一轮）: ${saveError}`);
     }
 
     // 正常完成（或不可接力场景）即收敛；过界打断才进入接力。
-    // 过界观测发生在响应返回之后（chat observer），与自然完成存在竞态
-    // （最后一轮刚好完成且过线）——按 completed 收敛，目标已达成不轮换。
+    // 两个竞态分支一并说明：
+    //   - completed 竞态：过界观测在响应返回之后，最后一轮刚好完成且过线
+    //     → 按 completed 收敛，目标已达成不轮换；
+    //   - callError 与过界同轮：打断本身引起异常是主路径（guard interrupt），
+    //     语义按 tripped 优先——异常事实随 callError 停留在 stderr/日志。
     if (!tripped || (outcome?.status === 'completed' && !callError)) {
       return {
         ok: !callError && outcome?.status === 'completed',
@@ -155,6 +178,7 @@ export async function executePlainCallWithRotation({
         successions,
         error: callError,
         callOutcome: outcome,
+        ...(saveError ? { saveError } : {}),
       };
     }
 
@@ -162,6 +186,7 @@ export async function executePlainCallWithRotation({
     if (successions >= maxSuccessions) {
       return failureResult({
         sessionId,
+        initialSessionId,
         successions,
         outcome,
         error: `context rotation limit reached (${maxSuccessions} successions)`,
@@ -174,6 +199,7 @@ export async function executePlainCallWithRotation({
     } catch (err) {
       return failureResult({
         sessionId,
+        initialSessionId,
         successions,
         outcome,
         error: `rotation aborted: source session snapshot unavailable (${err?.message || err})`,
@@ -184,6 +210,7 @@ export async function executePlainCallWithRotation({
     if (!Array.isArray(messages) || messages.length === 0) {
       return failureResult({
         sessionId,
+        initialSessionId,
         successions,
         outcome,
         error: 'rotation aborted: source session has no messages to trim',
@@ -199,15 +226,16 @@ export async function executePlainCallWithRotation({
         agentId: trimSource.agentId,
         sessionId,
         sourceSessionSnapshot: snapshot,
-        // 摘要 LLM 由 runner 显式注入（与主链路同一解析链，含全局默认
-        // 兜底）；缺省时 runTrim 落回 agentDir 预设解析。continuity 工具
-        // 装饰与工作区 compact 路径同参（runTrim docstring 的调用方契约）。
-        ...(trimSource.llm ? { llm: trimSource.llm } : {}),
+        // 摘要 LLM 由 runner 以工厂注入（每轮新实例，OAuth 凭证不冻结在
+        // 启动时刻）；缺省时 runTrim 落回 agentDir 预设解析。continuity
+        // 工具装饰与工作区 compact 路径同参（runTrim docstring 的调用方契约）。
+        ...(typeof trimSource.llm === 'function' ? { llm: trimSource.llm() } : {}),
         policy: applyContinuityToolPolicy({}),
       });
     } catch (err) {
       return failureResult({
         sessionId,
+        initialSessionId,
         successions,
         outcome,
         error: `context rotation failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -242,6 +270,5 @@ export async function executePlainCallWithRotation({
 
     sessionId = successorId;
     prompt = composeSuccessionInstruction(initialGoal);
-    successions += 1;
   }
 }
