@@ -11,7 +11,7 @@
 import { spawn } from 'child_process';
 import { setTimeout as sleep } from 'timers/promises';
 import { join, resolve } from 'path';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'fs';
 import process from 'process';
 import { pathToFileURL, fileURLToPath } from 'url';
 import {
@@ -1016,7 +1016,19 @@ function formatLegacyOutput(opName, result, params) {
 }
 
 // CLI 守卫：仅直接执行时运行主流程；被测试 import 时只暴露 clawServerFetch。
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// argv[1] 可能是符号链接（npm link / 全局 bin 链接到本文件），而 Node 对入口
+// 模块按 realpath 解析 import.meta.url——直接比较字符串路径时链接调用永不
+// 命中，主流程静默跳过且退出码为 0。守卫两侧都取 realpath 再比较。
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  try {
+    return pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution()) {
   main().catch(err => {
     console.error(err?.message || err);
     process.exit(1);
