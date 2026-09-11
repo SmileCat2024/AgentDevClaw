@@ -25,6 +25,7 @@ import {
 import { renderConversationHtml } from './server/conversation-renderer.js';
 import { setupUsageRoutes } from './server/usage-ledger.js';
 import { authMiddleware, registerAuthRoutes, getInternalAuthToken } from './server/auth.js';
+import { securityHeadersMiddleware } from './server/shared/security-headers.js';
 
 // ── Phase 0: shared infrastructure ────────────────────────────────
 import {
@@ -153,6 +154,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+// 不暴露 Express 指纹；所有响应统一携带安全头（含 CSP / 点击劫持防护）。
+app.disable('x-powered-by');
+app.use(securityHeadersMiddleware);
 const viewerWorker = new ViewerWorker(VIEWER_PORT, false, resolveInstanceUdsPath());
 const clawMcp = new ClawMCPServer();
 const tunnelManager = createTunnelManager();
@@ -1290,7 +1294,15 @@ const staticCacheHeaders = {
     }
   },
 };
-app.use('/vendor', express.static(path.join(__dirname, 'node_modules'), staticCacheHeaders));
+// /vendor 白名单：仅暴露前端实际引用的包目录（精确到子目录，避免整包
+// 的 README/bin/package.json 一并可读），防止整个 node_modules 未登录可读。
+// 前端新增 vendor 引用时在此同步登记。
+const vendorMounts = {
+  '/vendor/marked/lib': 'marked/lib',
+};
+for (const [urlPath, packagePath] of Object.entries(vendorMounts)) {
+  app.use(urlPath, express.static(path.join(__dirname, 'node_modules', packagePath), staticCacheHeaders));
+}
 app.use(express.static(path.join(__dirname, 'public'), staticCacheHeaders));
 
 app.use((error, req, res, _next) => {
