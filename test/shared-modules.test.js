@@ -58,6 +58,8 @@ describe('constants', () => {
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('agent-creator'));
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('feature-creator'));
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('flow-test'));
+    assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('flow-workspace'));
+    assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('dispatch-console'));
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('work-group'));
     assert.ok(!HIDDEN_PREBUILT_AGENT_IDS.has('qqbot'));
   });
