@@ -1281,14 +1281,17 @@ app.post('/protoclaw/remote_connections/:id/handshake', async (req, res, next) =
   }
 });
 
-app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));
-app.use(express.static(path.join(__dirname, 'public'), {
+// no-cache（而非 no-store）：仍强制每次使用前协商，ETag 未变返回 304，
+// 杜绝陈旧内容的同时避免每次刷新全量重拉静态资源。
+const staticCacheHeaders = {
   setHeaders(res, filePath) {
     if (/\.(?:html|css|js)$/i.test(filePath)) {
-      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Cache-Control', 'no-cache');
     }
   },
-}));
+};
+app.use('/vendor', express.static(path.join(__dirname, 'node_modules'), staticCacheHeaders));
+app.use(express.static(path.join(__dirname, 'public'), staticCacheHeaders));
 
 app.use((error, req, res, _next) => {
   // Local failures expose a stable machine contract while retaining `error` for
