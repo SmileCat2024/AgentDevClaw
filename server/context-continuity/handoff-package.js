@@ -109,6 +109,24 @@ function buildCompactOverview(sourceRecord = {}) {
   return lines.join('\n');
 }
 
+/**
+ * 精简注解种子消息（history-only trim 专用，追加在裁剪产物末尾）。
+ *
+ * 不带 turn 字段：HandoffSeedFeature 重放时按 fallbackTurn + index 顺延，
+ * 数组末尾的注解消息因此天然落在全部保留消息之后（上下文最后一条）。
+ */
+function buildTrimNoticeSeedMessage({ sourceSessionId, trimmedAt }) {
+  return {
+    role: 'system',
+    content: [
+      `上下文积累到此处时被精简，会话 id 已更新，上一段会话 id：${sanitizeFragment(sourceSessionId)}`,
+      `精简发生时间：${trimmedAt}`,
+      '',
+      '继续工作前，请先审视当前任务状态：重新阅读仍然涉及的关键文件以确认其最新内容，回顾上文中的关键结论、约定与未完成事项，核对进度后再决定下一步动作。',
+    ].join('\n'),
+  };
+}
+
 export async function exportHistoryOnlyHandoffPackage({
   userDataRoot,
   agentId,
@@ -126,6 +144,12 @@ export async function exportHistoryOnlyHandoffPackage({
 
   const { seedMessages, stats } = buildTrimmedSeedMessages(rawMessages, policy);
   const createdAt = new Date().toISOString();
+  // 不带摘要的精简也在上下文末尾注入一条注解（与带摘要版本的摘要消息同位），
+  // 让续接 agent 明确感知会话 id 已变更并重新审视任务状态。
+  seedMessages.push(buildTrimNoticeSeedMessage({
+    sourceSessionId: sessionId,
+    trimmedAt: createdAt,
+  }));
   const handoffId = `handoff-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const sourceSummary = buildCompactOverview(sourceRecord);
 
