@@ -1542,6 +1542,36 @@ body[data-theme="light"] .feature-card:hover {
   min-width: 0;
 }
 
+/* 卡片右上角徽章区（provenance pill + 状态徽章） */
+.feature-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* provenance 来源徽章，样式对齐 .feature-tool-pill；
+   p-<provenance> 类名预留后续配色扩展 */
+.feature-prov-badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+body[data-theme="light"] .feature-prov-badge {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+/* 详情弹窗标题内的机器 id 附注 */
+.feature-detail-id {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
 .feature-card-dot {
   width: 8px;
   height: 8px;
@@ -4356,6 +4386,62 @@ body[data-theme="light"] .rh-group {
 
 .rh-group[open] .rh-chev {
   transform: rotate(90deg);
+}
+
+/* ── Features 面板分类分组（视觉对齐 .rh-group）────────────────── */
+
+.feature-group {
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.015);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+body[data-theme="light"] .feature-group {
+  background: #ffffff;
+}
+
+.feature-group-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  background: var(--bg-secondary);
+}
+
+.feature-group-head::-webkit-details-marker {
+  display: none;
+}
+
+.feature-group-head:hover {
+  background: var(--active-bg);
+}
+
+.feature-group-name {
+  font-weight: 700;
+  font-size: 14.5px;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.feature-group-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.feature-group[open] .rh-chev {
+  transform: rotate(90deg);
+}
+
+.feature-group .feature-grid {
+  padding: 12px;
+  gap: 12px;
+  border-top: 1px solid var(--border-color);
 }
 
 /* 时间线条目：序号点 + 竖向连线，无边框无背景 */

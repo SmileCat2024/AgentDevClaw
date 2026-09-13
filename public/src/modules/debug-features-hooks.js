@@ -19,26 +19,61 @@
 // Features / Reverse Hooks 面板
 // ═══════════════════════════════════════════════════════════════
 
+// 分组展开偏好（跨轮询重渲染保持状态；对齐 _lifecycleOpenPref 模式）。
+// 未操作过的组按 catalog 携带的 defaultOpen。
+const _featureGroupOpenPref = new Map();
+
+/**
+ * 分组 details ontoggle 回调：用户操作过的组按其偏好恢复。
+ */
+function featureGroupToggled(category, open) {
+  _featureGroupOpenPref.set(category, open);
+}
+window.featureGroupToggled = featureGroupToggled;
+
+// 分类 id → i18n key（_unmapped 双下划线特殊处理）
+function featureCategoryLabel(category) {
+  return t(category === '_unmapped' ? 'feature_cat_unmapped' : 'feature_cat_' + category);
+}
+
 function renderFeaturesPanel() {
   if (currentHookInspector.features.length === 0) {
     return '<div class="feature-panel-empty"><div class="feature-panel-section"><div class="feature-panel-section-title">' + escapeHtml(t('panel_no_features')) + '</div><div>' + escapeHtml(t('panel_no_feature_data')) + '</div></div></div>';
   }
 
-  const selectedFeature = currentHookInspector.features.find(feature => feature.name === selectedFeatureName) || null;
-  const featureCards = currentHookInspector.features
-    .map(feature => {
-      const status = getFeatureStatus(feature);
-      return [
-      '<div class="feature-card" role="button" tabindex="0" onclick="window.openFeatureDetails(&quot;' + escapeHtml(feature.name) + '&quot;)" title="' + escapeHtml(t('feature_open_details')) + '">',
+  // catalog 低频拉取：首帧未就绪时全部落 _unmapped 组，
+  // loadFeatureCatalog resolve 后主动触发一帧刷新修正（见 feature-catalog.js）。
+  const fc = window.ClawFW && window.ClawFW.featureCatalog;
+  if (fc) fc.loadFeatureCatalog().catch(err => console.warn('[feature-catalog] load failed:', err));
+  const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
+  const groups = fc
+    ? fc.groupFeaturesByCategory(currentHookInspector.features, catalog)
+    : [{ category: '_unmapped', defaultOpen: true, features: currentHookInspector.features }];
+
+  const allEnriched = groups.flatMap(g => g.features);
+  const selectedFeature = allEnriched.find(feature => feature.name === selectedFeatureName) || null;
+
+  const buildFeatureCard = (feature) => {
+    const status = getFeatureStatus(feature);
+    const displayName = fc ? fc.resolveDisplayName(feature, currentLanguage) : feature.name;
+    const provKey = fc && feature.provenance ? fc.provenanceI18nKey(feature.provenance, catalog && catalog.provenances) : null;
+    const provBadge = feature.provenance
+      ? '<span class="feature-prov-badge p-' + escapeHtml(feature.provenance) + '">' + escapeHtml(provKey ? t(provKey) : feature.provenance) + '</span>'
+      : '';
+    return [
+      '<div class="feature-card" role="button" tabindex="0" onclick="window.openFeatureDetails(&quot;' + escapeHtml(feature.name) + '&quot;)" title="' + escapeHtml(feature.name) + '">',
       '<div class="feature-card-top">',
       '<div class="feature-card-main">',
       '<span class="feature-card-dot"></span>',
       '<div style="min-width:0;">',
-      '<div class="feature-card-name">' + escapeHtml(feature.name) + '</div>',
+      '<div class="feature-card-name">' + escapeHtml(displayName) + '</div>',
       '<div class="feature-card-file">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + '</div>',
       '</div>',
       '</div>',
+      '<div class="feature-card-badges">',
+      provBadge,
       '<div class="' + getStatusBadgeClass(status) + '">' + escapeHtml(getFeatureStatusLabel(status)) + '</div>',
+      '</div>',
       '</div>',
       '<div class="feature-card-detail">',
       '<span>' + String(feature.hookCount) + ' ' + escapeHtml(t('feature_hooks')) + '</span>',
@@ -47,8 +82,25 @@ function renderFeaturesPanel() {
       '</div>',
       '</div>',
     ].join('');
-    })
-    .join('');
+  };
+
+  const groupsHtml = groups.map(group => {
+    // 用户操作过的组按偏好恢复；未操作过的按词表 defaultOpen（protocol/mcp 默认折叠降噪）
+    const isOpen = _featureGroupOpenPref.has(group.category)
+      ? _featureGroupOpenPref.get(group.category)
+      : group.defaultOpen !== false;
+    return [
+      '<details class="feature-group"' + (isOpen ? ' open' : '')
+        + ' ontoggle="window.featureGroupToggled(&quot;' + escapeHtml(group.category) + '&quot;, this.open)">',
+      '<summary class="feature-group-head">',
+      '<span class="feature-group-name">' + escapeHtml(featureCategoryLabel(group.category)) + '</span>',
+      '<span class="feature-group-count">' + String(group.features.length) + '</span>',
+      '<span class="rh-chev">▸</span>',
+      '</summary>',
+      '<div class="feature-grid">' + group.features.map(buildFeatureCard).join('') + '</div>',
+      '</details>',
+    ].join('');
+  }).join('');
 
   // 弹窗通过独立 portal 渲染到 document.body，不嵌入 panel body（避免 transform 降级 fixed）
   renderFeatureDetailOverlay(selectedFeature);
@@ -82,7 +134,7 @@ function renderFeaturesPanel() {
     '<div class="hooks-panel feature-detail-shell">',
     '<section class="hooks-section">',
     '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(t('panel_all_features')) + '</div><div class="hooks-section-meta">' + String(currentHookInspector.features.length) + ' ' + escapeHtml(t('panel_registered')) + '</div></div>',
-    '<div class="feature-grid">' + featureCards + '</div>',
+    groupsHtml,
     '</section>',
     standaloneSection,
     '</div>',
@@ -228,12 +280,17 @@ function renderFeatureDetailOverlay(feature) {
     return;
   }
 
-  // 计算签名：feature 名 + 工具数据 + 展开状态 + 语言
+  // 计算签名：feature 名 + 工具数据 + 展开状态 + 语言 + catalog 派生 displayName
+  // （catalog 后到时 signature 变化，弹窗标题随 displayName 修正）
   // 如果签名未变则跳过 innerHTML 替换，避免轮询导致的滚动卡顿
+  const displayName = (window.ClawFW && window.ClawFW.featureCatalog && feature.mapped)
+    ? window.ClawFW.featureCatalog.resolveDisplayName(feature, currentLanguage)
+    : feature.name;
   const signature = feature.name + '|'
     + (feature.tools || []).map(t => t.name + ':' + t.state + ':' + (t.enabled ? 1 : 0)).join(',')
     + '|exp:' + Array.from(_expandedToolNames).sort().join(',')
-    + '|lang:' + currentLanguage;
+    + '|lang:' + currentLanguage
+    + '|dn:' + displayName;
   if (signature === _lastDetailSignature && portal.innerHTML) return;
   _lastDetailSignature = signature;
 
@@ -283,12 +340,16 @@ function renderFeatureDetailOverlay(feature) {
   const prevScroll = portal.querySelector('.settings-tab-content');
   const savedScroll = prevScroll ? prevScroll.scrollTop : 0;
 
+  const showNameId = feature.mapped && displayName !== feature.name;
+
   portal.innerHTML = [
     '<div class="feature-detail-overlay" onclick="window.closeFeatureDetails()">',
     '<div class="feature-detail-window" onclick="event.stopPropagation()" style="width:min(100%,600px);height:min(100%,660px);overflow:hidden;display:flex;flex-direction:column;">',
     '<div class="feature-detail-head">',
     '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(feature.name) + '</div>',
+    '<div class="feature-detail-title">' + escapeHtml(displayName)
+      + (showNameId ? ' <span class="feature-detail-id">' + escapeHtml(feature.name) + '</span>' : '')
+      + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(feature.description || '') + '</div>',
     '</div>',
     '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" onclick="window.closeFeatureDetails()">×</button>',
