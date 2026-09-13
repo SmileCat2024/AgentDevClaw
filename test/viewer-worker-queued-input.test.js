@@ -21,6 +21,10 @@ import assert from 'node:assert/strict';
 // ── Pick a random port to avoid collisions ──
 const TEST_PORT = 18000 + Math.floor(Math.random() * 1000);
 const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
+// 独立 UDS 路径：不传 udsPath 会 fallback 到默认 /tmp/agentdev-viewer.sock，
+// 测试启动即 unlink 正在运行的 Claw 主实例 sock，结束时 stop() 又删除——
+// 两者都会让主实例与 runtime 的 IPC 通道永久失联（历史 DX 事故根因）。
+const TEST_UDS_PATH = `/tmp/agentdev-viewer-test-queued-input-${process.pid}.sock`;
 const AGENT_ID = 'test-queued-input-agent';
 const CLIENT_ID = 'fake-client-id';
 
@@ -48,7 +52,7 @@ async function queueViaUserTurn(text, images) {
 describe('ViewerWorker user-turn queued mailbox', () => {
   before(async () => {
     const { ViewerWorker } = await import('@agentdevjs/viewer');
-    viewerWorker = new ViewerWorker(TEST_PORT, false);
+    viewerWorker = new ViewerWorker(TEST_PORT, false, TEST_UDS_PATH);
     await viewerWorker.start();
 
     // Register a fake agent session directly so user-turn/dequeue routes find

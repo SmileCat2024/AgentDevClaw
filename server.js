@@ -1521,7 +1521,10 @@ async function main() {
   });
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
   log('server', error.stack || error.message, 'error');
-  process.exit(1);
+  // 启动失败同样要走资源清理：viewerWorker 可能已 bind 了 UDS（如 HTTP 端口
+  // 冲突前），直接退出会在路径上留下无 listener 的死 sock，令既有实例与
+  // runtime 的 IPC 通道永久失联。
+  await shutdown(1);
 });
