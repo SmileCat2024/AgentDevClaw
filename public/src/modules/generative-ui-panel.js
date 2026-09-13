@@ -337,7 +337,12 @@
       empty.className = 'gen-ui-empty';
       const icon = document.createElement('div');
       icon.className = 'gen-ui-empty-icon';
-      icon.textContent = '✦';
+      // 图形取自右侧 rail「交互页面」按钮（index.html），currentColor 随图标块着色
+      icon.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'
+        + '<rect x="3" y="3" width="18" height="18" rx="2"></rect>'
+        + '<path d="M3 9h18"></path>'
+        + '<path d="M9 21V9"></path>'
+        + '</svg>';
       empty.appendChild(icon);
       const title = document.createElement('div');
       title.className = 'gen-ui-empty-title';
