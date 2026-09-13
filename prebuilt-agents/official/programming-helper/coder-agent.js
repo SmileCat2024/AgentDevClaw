@@ -53,6 +53,9 @@ const SYSTEM_PROMPT_PATH = join(PROMPTS_DIR, 'system.md');
 const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 // 数据根同源解析（server/shared/constants.js），支持 AGENTDEV_DATA_DIR 多实例隔离
 const IMAGE_STORAGE_DIR = join(resolveUserDataDir(), 'images');
+// LSP 二进制缓存收敛进数据根（框架默认值在 ~/.agentdev/lsp-bin，绕过数据根）。
+// feature 持久资产统一归数据根 assets/<feature>/ 分区（见 ADR-0015）。
+const LSP_BIN_DIR = join(resolveUserDataDir(), 'assets', 'lsp', 'bin');
 
 /**
  * 自动化编码智能体（coder）Agent
@@ -132,7 +135,7 @@ export class CoderAgent extends BasicAgent {
     this.use(new ShellFeature({ workspaceDir }));
     this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
 
-    this.use(new LspFeature({ workdir: workspaceDir }));
+    this.use(new LspFeature({ workdir: workspaceDir, binDir: LSP_BIN_DIR }));
 
     this.use(new GitHubFeature());
 

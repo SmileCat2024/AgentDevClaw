@@ -29,7 +29,6 @@ const PACKAGE_MAP = {
   viewer: 'viewer',
   mcp: 'mcp',
   'audio-feedback-feature': 'audio-feedback-feature',
-  'audit-feature': 'audit-feature',
   'feishu-bot': 'feishu-bot',
   'image-reader-feature': 'image-reader-feature',
   'memory-feature': 'memory-feature',

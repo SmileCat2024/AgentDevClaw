@@ -88,7 +88,6 @@ npx agentdev-server 2026 false
 | `@agentdevjs/visual-feature` | 视觉理解（需 Python） | `npm install @agentdevjs/visual-feature` |
 | `@agentdevjs/websearch-feature` | 网页抓取、crawl4ai | `npm install @agentdevjs/websearch-feature` |
 | `@agentdevjs/audio-feedback-feature` | 音频反馈通知 | `npm install @agentdevjs/audio-feedback-feature` |
-| `@agentdevjs/audit-feature` | 工具使用审计追踪 | `npm install @agentdevjs/audit-feature` |
 | `@agentdevjs/memory-feature` | CLAUDE.md 自动注入 | `npm install @agentdevjs/memory-feature` |
 | `@agentdevjs/plugin-compat-feature` | OpenClaw 插件兼容 | `npm install @agentdevjs/plugin-compat-feature` |
 | `@agentdevjs/tts-feature` | 文本朗读 | `npm install @agentdevjs/tts-feature` |

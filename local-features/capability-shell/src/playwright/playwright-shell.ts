@@ -25,7 +25,7 @@
  */
 
 import { mkdir, readdir, stat, realpath } from 'node:fs/promises';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -58,7 +58,7 @@ export interface PlaywrightAdaptersDeps {
   sessionCliEntry?: string;
   /** playwright 包根（env 盘点用）；缺省取 cliEntry 所在目录 */
   packageRoot?: string;
-  /** 浏览器资产目录（注入 PLAYWRIGHT_BROWSERS_PATH）；缺省 ~/.agentdev/assets/playwright-shell/browsers */
+  /** 浏览器资产目录（注入 PLAYWRIGHT_BROWSERS_PATH）；缺省 ~/.agentdev/AgentDevClaw/assets/playwright-shell/browsers */
   browsersPath?: string;
   /** 持久化登录档案根目录；缺省 ~/.agentdev/AgentDevClaw/playwright-shell/profiles */
   profilesPath?: string;
@@ -109,6 +109,23 @@ function expandDir(p: string): string {
   return p;
 }
 
+/**
+ * 旧布局浏览器资产根迁移：历史版本直接放在 ~/.agentdev/assets/ 下（绕过
+ * 数据根，AGENTDEV_DATA_DIR 隔离对它无效），收敛进数据根。新根已存在（迁移
+ * 过/已安装）或旧根不存在时跳过；rename 失败（跨设备等）保持新根不动——
+ * 缺浏览器时 env 动词给出安装指引，比静默回退旧布局更可诊断。
+ */
+export function migrateLegacyBrowsersRoot(nextRoot: string, legacyRoot: string): boolean {
+  if (existsSync(nextRoot) || !existsSync(legacyRoot)) return false;
+  try {
+    mkdirSync(dirname(nextRoot), { recursive: true });
+    renameSync(legacyRoot, nextRoot);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<string, (args: string[], context?: PlaywrightAdapterContext) => Promise<string>> {
   const workdir = expandDir(deps.workdir ?? process.cwd());
   const spawnImpl: SpawnLike = deps.spawnImpl
@@ -128,9 +145,19 @@ export function createPlaywrightAdapters(deps: PlaywrightAdaptersDeps): Record<s
 
   // ----------------------------------------------------------- 路径与环境
 
+  /** 缺省浏览器资产根的进程内缓存（迁移只做一次）。 */
+  let defaultBrowsersRoot: string | null = null;
+
   function browsersPath(): string {
-    const configured = deps.browsersPath ?? join(homedir(), '.agentdev', 'assets', 'playwright-shell', 'browsers');
-    return expandDir(configured);
+    if (deps.browsersPath) return expandDir(deps.browsersPath);
+    if (!defaultBrowsersRoot) {
+      defaultBrowsersRoot = join(homedir(), '.agentdev', 'AgentDevClaw', 'assets', 'playwright-shell', 'browsers');
+      migrateLegacyBrowsersRoot(
+        defaultBrowsersRoot,
+        join(homedir(), '.agentdev', 'assets', 'playwright-shell', 'browsers'),
+      );
+    }
+    return defaultBrowsersRoot;
   }
 
   /** 持久化登录档案根目录（open --profile 的名称解析到这里；产品数据与 prebuilt-sessions 同层）。 */

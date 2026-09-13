@@ -22,7 +22,7 @@ import { execSync } from 'node:child_process';
 import { checkArgs } from '../src/args.js';
 import { createPlaywrightShellPolicy, PLAYWRIGHT_ENV_FIX_GUIDANCE } from '../src/playwright/playwright-policy.js';
 import type { ShellSegment } from '../src/types.js';
-import { createPlaywrightAdapters } from '../src/playwright/playwright-shell.js';
+import { createPlaywrightAdapters, migrateLegacyBrowsersRoot } from '../src/playwright/playwright-shell.js';
 import { createCapabilityShellTool, runCapabilityShellPipeline } from '../src/tool-factory.js';
 import type { SpawnLike } from '../src/playwright/playwright-shell.js';
 import type { AdapterMap } from '../src/dispatch.js';
@@ -551,12 +551,37 @@ describe('playwright_shell v2 会话动词（daemon 转发）', () => {
       assert.deepEqual(calls[0].argv, ['/fake/pw-cli/bin.js', 'open', 'https://www.baidu.com', '--headed']);
       assert.equal(
         (calls[0].env as Record<string, string>).PLAYWRIGHT_BROWSERS_PATH,
-        join(homedir(), '.agentdev', 'assets', 'playwright-shell', 'browsers'),
+        join(homedir(), '.agentdev', 'AgentDevClaw', 'assets', 'playwright-shell', 'browsers'),
       );
     } finally {
       if (saved === undefined) delete process.env.DISPLAY;
       else process.env.DISPLAY = saved;
     }
+  });
+
+  it('旧布局浏览器资产一次性迁移到数据根（新根已存在/旧根缺失时跳过）', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pws-migrate-'));
+    const nextRoot = join(root, 'data-root', 'assets', 'playwright-shell', 'browsers');
+    const legacyRoot = join(root, 'legacy', 'playwright-shell', 'browsers');
+    mkdirSync(legacyRoot, { recursive: true });
+    writeFileSync(join(legacyRoot, 'marker.txt'), 'x');
+
+    // 旧根存在、新根不存在 → rename 迁移
+    assert.equal(migrateLegacyBrowsersRoot(nextRoot, legacyRoot), true);
+    assert.ok(existsSync(join(nextRoot, 'marker.txt')));
+    assert.ok(!existsSync(legacyRoot));
+
+    // 新根已存在 → 跳过（不抛错、不动文件）
+    mkdirSync(legacyRoot, { recursive: true });
+    writeFileSync(join(legacyRoot, 'marker2.txt'), 'y');
+    assert.equal(migrateLegacyBrowsersRoot(nextRoot, legacyRoot), false);
+    assert.ok(existsSync(join(legacyRoot, 'marker2.txt')));
+
+    // 旧根不存在 → 跳过
+    rmSync(legacyRoot, { recursive: true, force: true });
+    assert.equal(migrateLegacyBrowsersRoot(join(root, 'other', 'browsers'), legacyRoot), false);
+    assert.ok(!existsSync(join(root, 'other', 'browsers')));
+    rmSync(root, { recursive: true, force: true });
   });
 
   it('fill 的 ref 参数：任意选择器形态被参数道拒绝（refs 防注入）', () => {

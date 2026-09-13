@@ -78,7 +78,6 @@ describe('buildAgentWorkspacePackageJson', () => {
   it('includes core agent dependencies', () => {
     const pkg = buildAgentWorkspacePackageJson('test-bot');
     assert.ok(pkg.dependencies.agentdev, 'should depend on agentdev');
-    assert.ok(pkg.dependencies['@agentdevjs/audit-feature']);
     assert.ok(pkg.dependencies['@agentdevjs/shell-feature']);
     assert.ok(pkg.dependencies['@agentdevjs/websearch-feature']);
   });
@@ -106,7 +105,7 @@ describe('buildAgentWorkspaceMetadata', () => {
 
   it('includes all default features', () => {
     const meta = buildAgentWorkspaceMetadata('test', 'goal');
-    const expectedFeatures = ['todo', 'audit', 'shell', 'websearch', 'user-input', 'mcp', 'skill'];
+    const expectedFeatures = ['todo', 'shell', 'websearch', 'user-input', 'mcp', 'skill'];
     assert.deepStrictEqual(meta.features, expectedFeatures);
   });
 
@@ -162,7 +161,6 @@ describe('buildAgentWorkspaceAgentSource', () => {
   it('includes all required imports', () => {
     const src = buildAgentWorkspaceAgentSource('test', 'goal');
     assert.ok(src.includes("from '@agentdevjs/core'"), 'should import from @agentdevjs/core');
-    assert.ok(src.includes("from '@agentdevjs/audit-feature'"));
     assert.ok(src.includes("from '@agentdevjs/shell-feature'"));
     assert.ok(src.includes("from '@agentdevjs/websearch-feature'"));
     assert.ok(src.includes('BasicAgent'));
@@ -182,7 +180,6 @@ describe('buildAgentWorkspaceAgentSource', () => {
   it('instantiates all features in constructor', () => {
     const src = buildAgentWorkspaceAgentSource('test', 'goal');
     assert.ok(src.includes('new TodoFeature'));
-    assert.ok(src.includes('new AuditFeature'));
     assert.ok(src.includes('new WebSearchFeature'));
     assert.ok(src.includes('new ShellFeature'));
     assert.ok(src.includes('new UserInputFeature'));
@@ -313,7 +310,7 @@ describe('initializeAgentCreatorWorkspace', () => {
     assert.strictEqual(meta.id, 'meta-test');
     assert.strictEqual(meta.name, 'MetaTest');
     assert.strictEqual(meta.description, 'Special goal');
-    assert.deepStrictEqual(meta.features, ['todo', 'audit', 'shell', 'websearch', 'user-input', 'mcp', 'skill']);
+    assert.deepStrictEqual(meta.features, ['todo', 'shell', 'websearch', 'user-input', 'mcp', 'skill']);
   });
 
   it('writes agent.js with correct class name', async () => {

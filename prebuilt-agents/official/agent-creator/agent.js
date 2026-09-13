@@ -1,6 +1,5 @@
 import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdevjs/core';
 import { ShellFeature } from '@agentdevjs/shell-feature';
-import { AuditFeature } from '@agentdevjs/audit-feature';
 import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
@@ -186,7 +185,6 @@ export class AgentCreatorAgent extends BasicAgent {
         reminderThresholdWithTasks: config.reminderThresholdWithTasks,
         reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
       }));
-      this.use(new AuditFeature({ workspaceDir: resolvedWorkspaceDir }));
       this.use(new WebSearchFeature({ workspaceDir: resolvedWorkspaceDir }));
       this.use(new ShellFeature({
         workspaceDir: resolvedWorkspaceDir,

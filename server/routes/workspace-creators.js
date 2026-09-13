@@ -83,7 +83,6 @@ export function buildAgentWorkspacePackageJson(agentName) {
     },
     dependencies: {
       agentdev: '^0.1.0',
-      '@agentdevjs/audit-feature': '^0.1.0',
       '@agentdevjs/shell-feature': '^0.1.0',
       '@agentdevjs/websearch-feature': '^0.1.0',
     },
@@ -105,7 +104,7 @@ export function buildAgentWorkspaceMetadata(agentName, goal) {
     icon: 'bot',
     category: 'custom',
     enabled: true,
-    features: ['todo', 'audit', 'shell', 'websearch', 'user-input', 'mcp', 'skill'],
+    features: ['todo', 'shell', 'websearch', 'user-input', 'mcp', 'skill'],
     ui: {
       entry: 'home',
       tabs: [
@@ -161,7 +160,6 @@ export function buildAgentWorkspaceAgentSource(agentName, goal) {
   const className = `${buildGeneratedAgentClassName(agentName)}Agent`;
 
   return `import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature } from '@agentdevjs/core';
-import { AuditFeature } from '@agentdevjs/audit-feature';
 import { ShellFeature } from '@agentdevjs/shell-feature';
 import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { fileURLToPath } from 'url';
@@ -180,7 +178,6 @@ export class ${className} extends BasicAgent {
       reminderThresholdWithTasks: config.reminderThresholdWithTasks,
       reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
     }));
-    this.use(new AuditFeature());
     this.use(new WebSearchFeature());
     this.use(new ShellFeature());
     this.use(new UserInputFeature());

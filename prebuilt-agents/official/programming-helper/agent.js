@@ -11,7 +11,6 @@ import { ControlledTodoFeature, ContinuityAwareOpencodeBasic } from '../../../lo
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 import { StepRotatingModel } from '../../../features/step-rotating-model/dist/index.js';
 import { AudioFeedbackFeature } from '@agentdevjs/audio-feedback-feature';
-import { AuditFeature } from '@agentdevjs/audit-feature';
 import { MemoryFeature } from '@agentdevjs/memory-feature';
 import { ShellFeature } from '@agentdevjs/shell-feature';
 import { WebSearchFeature } from '@agentdevjs/websearch-feature';
@@ -46,6 +45,9 @@ const TODO_REMINDER_PROMPT_PATH = join(PROMPTS_DIR, 'reminder-update-todo.md');
 const USER_DATA_ROOT = resolveUserDataDir();
 const WORKSPACE_STATE_PATH = join(USER_DATA_ROOT, 'workspaces', 'programming-helper', 'state.json');
 const IMAGE_STORAGE_DIR = join(USER_DATA_ROOT, 'images');
+// LSP 二进制缓存收敛进数据根（框架默认值在 ~/.agentdev/lsp-bin，绕过数据根）。
+// feature 持久资产统一归数据根 assets/<feature>/ 分区（见 ADR-0015）。
+const LSP_BIN_DIR = join(USER_DATA_ROOT, 'assets', 'lsp', 'bin');
 
 // Audio feedback is presentation-only. Awaiting the OS media process inside
 // the CallFinish hook delays AgentDev's authoritative call.finish event and
@@ -165,14 +167,13 @@ export class ProgrammingHelperAgent extends BasicAgent {
       ...(config.features?.['step-rotating-model'] && typeof config.features['step-rotating-model'] === 'object'
         ? config.features['step-rotating-model'] : {}),
     }));
-    this.use(new AuditFeature());
     this.use(new NonBlockingAudioFeedbackFeature());
     this.use(new WebSearchFeature());
     this.use(new MemoryFeature({ workspaceDir }));
     this.use(new ShellFeature({ workspaceDir }));
     this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
 
-    this.use(new LspFeature({ workdir: workspaceDir }));
+    this.use(new LspFeature({ workdir: workspaceDir, binDir: LSP_BIN_DIR }));
 
     this.use(new UserInputFeature());
     this.use(new GenerativeUISurfaceFeature());

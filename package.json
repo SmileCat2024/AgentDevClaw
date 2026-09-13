@@ -29,7 +29,6 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
     "@agentdevjs/audio-feedback-feature": "0.1.0",
-    "@agentdevjs/audit-feature": "0.1.0",
     "@agentdevjs/core": "0.1.1",
     "@agentdevjs/create-feature": "0.1.0",
     "@agentdevjs/feishu-bot": "0.1.0",

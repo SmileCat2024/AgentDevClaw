@@ -498,14 +498,14 @@ function getAssemblyPresetDescription(value) {
 }
 
 const ASSEMBLY_PRESET_FEATURES = {
-  'general-chatbot': ['websearch-feature', 'audit-feature', 'memory-feature'],
+  'general-chatbot': ['websearch-feature', 'memory-feature'],
   'tool-operator': ['shell-feature', 'lsp-feature', 'websearch-feature'],
-  'workflow-assistant': ['memory-feature', 'audit-feature', 'plugin-compat-feature'],
+  'workflow-assistant': ['memory-feature', 'plugin-compat-feature'],
 };
 
 const ASSEMBLY_BUNDLE_FEATURES = {
-  'web-retrieval': ['websearch-feature', 'visual-feature', 'audit-feature'],
-  'memory-copilot': ['memory-feature', 'audit-feature'],
+  'web-retrieval': ['websearch-feature', 'visual-feature'],
+  'memory-copilot': ['memory-feature'],
   'dev-operator': ['shell-feature', 'lsp-feature', 'websearch-feature'],
 };
 

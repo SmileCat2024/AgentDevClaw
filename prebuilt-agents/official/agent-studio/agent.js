@@ -1,6 +1,5 @@
 import { BasicAgent, TemplateComposer, TodoFeature, UserInputFeature, SkillFeature } from '@agentdevjs/core';
 import { ShellFeature } from '@agentdevjs/shell-feature';
-import { AuditFeature } from '@agentdevjs/audit-feature';
 import { WebSearchFeature } from '@agentdevjs/websearch-feature';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -66,7 +65,6 @@ export class AgentStudioAgent extends BasicAgent {
       ...(config.contextGuard && typeof config.contextGuard === 'object'
         ? config.contextGuard : {}),
     }));
-    this.use(new AuditFeature({ workspaceDir }));
     this.use(new WebSearchFeature({ workspaceDir }));
     this.use(new ShellFeature({ workspaceDir, resourceRoot: projectRoot }));
     this.use(new AgentStudioFeature({ workspaceDir }));

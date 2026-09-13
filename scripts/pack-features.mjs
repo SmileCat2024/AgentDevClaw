@@ -19,7 +19,6 @@ const outDir = join(projectRoot, 'resources', 'features');
 // 声明一一对应；rokid-bot 包的目录名是 rokid-feature（包名 @agentdevjs/rokid-bot）。
 const ECO_PACKAGES = [
   'audio-feedback-feature',
-  'audit-feature',
   'feishu-bot',
   'image-reader-feature',
   'memory-feature',
