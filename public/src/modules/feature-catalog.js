@@ -20,7 +20,7 @@ async function fetchFeatureCatalog() {
   const resp = await fetch('/api/feature-catalog');
   if (!resp.ok) throw new Error('/api/feature-catalog ' + resp.status);
   const data = await resp.json();
-  if (!data || !Array.isArray(data.categories) || !Array.isArray(data.features)) {
+  if (!data || !Array.isArray(data.provenances) || !Array.isArray(data.features)) {
     throw new Error('feature-catalog: malformed response');
   }
   return data;

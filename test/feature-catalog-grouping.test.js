@@ -161,3 +161,36 @@ describe('feature-catalog: provenanceI18nKey', () => {
     assert.equal(fn(`window.ClawFW.featureCatalog.provenanceI18nKey(undefined, ${vocab})`), null);
   });
 });
+
+// ── fetchFeatureCatalog response contract ─────────────────────────
+// 回归：响应校验字段曾与 server 契约脱节（categories vs provenances），
+// 导致 catalog 永远加载失败、面板全部落 _unmapped——纯函数用例拦不住，这里钉死。
+
+describe('feature-catalog: response contract', () => {
+  it('accepts current contract (provenances + features) and caches snapshot', async () => {
+    const calls = [];
+    const ctx = createFrontendSandbox({
+      fetch: async (url) => { calls.push(url); return { ok: true, json: async () => CATALOG }; },
+    });
+    ctx.loadSource('public/src/modules/feature-catalog.js');
+    await ctx.run('window.ClawFW.featureCatalog.loadFeatureCatalog(true)');
+    const snap = ctx.run('window.ClawFW.featureCatalog.getFeatureCatalogSnapshot()');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0], '/api/feature-catalog');
+    assert.ok(Array.isArray(snap.provenances));
+    assert.ok(Array.isArray(snap.features));
+  });
+
+  it('rejects responses missing provenances instead of half-loading', async () => {
+    const ctx = createFrontendSandbox({
+      fetch: async () => ({ ok: true, json: async () => ({ features: CATALOG.features }) }),
+    });
+    ctx.loadSource('public/src/modules/feature-catalog.js');
+    await assert.rejects(
+      ctx.run('window.ClawFW.featureCatalog.loadFeatureCatalog(true)'),
+      /malformed/
+    );
+    const snap = ctx.run('window.ClawFW.featureCatalog.getFeatureCatalogSnapshot()');
+    assert.equal(snap, null);
+  });
+});
