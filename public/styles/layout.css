@@ -4403,7 +4403,7 @@ body[data-theme="light"] .feature-group {
   align-items: center;
   gap: 8px;
   min-height: 36px;
-  padding: 4px 14px;
+  padding: 4px 0;
   cursor: pointer;
   user-select: none;
   list-style: none;
@@ -4448,7 +4448,7 @@ body[data-theme="light"] .feature-group-chev {
 }
 
 .feature-group .feature-grid {
-  padding: 12px 14px;
+  padding: 12px 0;
   gap: 12px;
 }
 
