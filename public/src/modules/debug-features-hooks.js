@@ -56,10 +56,6 @@ function renderFeaturesPanel() {
   const buildFeatureCard = (feature) => {
     const status = getFeatureStatus(feature);
     const displayName = fc ? fc.resolveDisplayName(feature, currentLanguage) : feature.name;
-    const provKey = fc && feature.provenance ? fc.provenanceI18nKey(feature.provenance, catalog && catalog.provenances) : null;
-    const provBadge = feature.provenance
-      ? '<span class="feature-prov-badge p-' + escapeHtml(feature.provenance) + '">' + escapeHtml(provKey ? t(provKey) : feature.provenance) + '</span>'
-      : '';
     return [
       '<div class="feature-card" role="button" tabindex="0" onclick="window.openFeatureDetails(&quot;' + escapeHtml(feature.name) + '&quot;)" title="' + escapeHtml(feature.name) + '">',
       '<div class="feature-card-top">',
@@ -70,10 +66,7 @@ function renderFeaturesPanel() {
       '<div class="feature-card-file">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + '</div>',
       '</div>',
       '</div>',
-      '<div class="feature-card-badges">',
-      provBadge,
       '<div class="' + getStatusBadgeClass(status) + '">' + escapeHtml(getFeatureStatusLabel(status)) + '</div>',
-      '</div>',
       '</div>',
       '<div class="feature-card-detail">',
       '<span>' + String(feature.hookCount) + ' ' + escapeHtml(t('feature_hooks')) + '</span>',
@@ -280,8 +273,13 @@ function renderFeatureDetailOverlay(feature) {
     return;
   }
 
-  // 计算签名：feature 名 + 工具数据 + 展开状态 + 语言 + catalog 派生 displayName
-  // （catalog 后到时 signature 变化，弹窗标题随 displayName 修正）
+  // 来源标签：provenance 词表由 catalog 响应携带，词表外不展示
+  const fc = window.ClawFW && window.ClawFW.featureCatalog;
+  const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
+  const provKey = fc && feature.provenance ? fc.provenanceI18nKey(feature.provenance, catalog && catalog.provenances) : null;
+
+  // 计算签名：feature 名 + 工具数据 + 展开状态 + 语言 + catalog 派生 displayName/provenance
+  // （catalog 后到时 signature 变化，弹窗标题与来源标签随之修正）
   // 如果签名未变则跳过 innerHTML 替换，避免轮询导致的滚动卡顿
   const displayName = (window.ClawFW && window.ClawFW.featureCatalog && feature.mapped)
     ? window.ClawFW.featureCatalog.resolveDisplayName(feature, currentLanguage)
@@ -290,9 +288,14 @@ function renderFeatureDetailOverlay(feature) {
     + (feature.tools || []).map(t => t.name + ':' + t.state + ':' + (t.enabled ? 1 : 0)).join(',')
     + '|exp:' + Array.from(_expandedToolNames).sort().join(',')
     + '|lang:' + currentLanguage
-    + '|dn:' + displayName;
+    + '|dn:' + displayName
+    + '|pv:' + (provKey || '');
   if (signature === _lastDetailSignature && portal.innerHTML) return;
   _lastDetailSignature = signature;
+
+  const provHtml = provKey
+    ? '<span class="feature-prov-badge">' + escapeHtml(t(provKey)) + '</span>'
+    : '';
 
   const toolRowsHtml = (feature.tools && feature.tools.length > 0)
     ? '<div class="gateway-tool-grid">' + feature.tools.map(tool => {
@@ -360,7 +363,7 @@ function renderFeatureDetailOverlay(feature) {
     '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_active_tools')) + '</div><div class="feature-detail-stat-value">' + String(feature.enabledToolCount) + '/' + String(feature.toolCount) + '</div></div>',
     '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(feature))) + '</div></div>',
     '</div>',
-    '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + '</div>',
+    '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + provHtml + '</div>',
     '<div class="settings-section">',
     '<div class="settings-section-title">' + escapeHtml(t('panel_loaded_tools')) + ' (' + String(feature.tools?.length || 0) + ')</div>',
     toolRowsHtml,

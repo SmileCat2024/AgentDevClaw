@@ -3990,6 +3990,10 @@ body[data-theme="light"] .feature-detail-close:hover {
   line-height: 1.5;
 }
 
+.feature-detail-source .feature-prov-badge {
+  margin-left: 8px;
+}
+
 .feature-detail-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4411,10 +4415,6 @@ body[data-theme="light"] .feature-group {
 
 .feature-group-bar::-webkit-details-marker {
   display: none;
-}
-
-.feature-group-bar:hover {
-  background: var(--active-bg);
 }
 
 .feature-group-chev {
