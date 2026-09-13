@@ -2,11 +2,12 @@
  * Tests for public/src/modules/feature-catalog.js (P1 panel visibility)
  *
  * Covers pure grouping/enrichment helpers:
- *   - groupFeaturesByCategory: order 排序、空组剔除、兜底进 _unmapped
- *   - enrichFeatureEntry: seed 命中/未命中、原字段保留
+ *   - groupFeaturesByProvenance: 按 provenance 词表顺序分组、空组剔除、兜底进 _unmapped
+ *   - enrichFeatureEntry: seed 命中/未命中、原字段保留、多值 capabilities
  *   - resolveDisplayName: {zh,en} / string / 缺失回退 name 三态
- *   - provenanceI18nKey: 已知词表 / 未知值
+ *   - provenanceI18nKey: 响应携带词表内 / 词表外
  *
+ * 能力标签（tools/policy/mcp…）是多值属性，不作分组因素（ADR 0017 决策 2 修订）。
  * 方案：docs/plans/2026-09-13-feature-registry-p1-panel-visibility.md
  */
 
@@ -22,16 +23,13 @@ function loadModule() {
 
 const CATALOG = {
   schemaVersion: 1,
-  categories: [
-    { id: 'tools', order: 1, defaultOpen: true },
-    { id: 'gateway', order: 5, defaultOpen: true },
-    { id: 'protocol', order: 7, defaultOpen: false },
-    { id: '_unmapped', order: 8, defaultOpen: true },
-  ],
+  capabilities: [{ id: 'tools' }, { id: 'policy' }, { id: 'gateway' }, { id: 'mcp' }, { id: 'protocol' }],
+  provenances: ['ecosystem', 'local', 'builtin', 'inline', 'packaged'],
   features: [
-    { name: 'shell', displayName: { zh: 'Shell 执行', en: 'Shell' }, category: 'tools', provenance: 'ecosystem' },
-    { name: 'qqbot', displayName: { zh: 'QQ 渠道', en: 'QQ Channel' }, category: 'gateway', provenance: 'ecosystem' },
-    { name: 'claw-dispatch', displayName: '调度', category: 'protocol', provenance: 'local' },
+    { name: 'shell', displayName: { zh: 'Shell 执行', en: 'Shell' }, capabilities: ['tools', 'policy'], provenance: 'ecosystem' },
+    { name: 'todo', displayName: '任务清单', capabilities: ['tools'], provenance: 'local' },
+    { name: 'lsp', displayName: { zh: '语言服务', en: 'Language Server' }, capabilities: ['tools'], provenance: 'builtin' },
+    { name: 'im-operator', displayName: { zh: 'IM 接线员', en: 'IM Operator' }, capabilities: ['gateway', 'tools'], provenance: 'inline' },
   ],
 };
 
@@ -39,30 +37,30 @@ function inspectorFeature(name, extra = {}) {
   return { name, source: 'src/' + name + '.ts', description: 'd', hookCount: 1, enabledToolCount: 2, toolCount: 3, ...extra };
 }
 
-// ── groupFeaturesByCategory ────────────────────────────────────────
+// ── groupFeaturesByProvenance ──────────────────────────────────────
 
-describe('feature-catalog: groupFeaturesByCategory', () => {
+describe('feature-catalog: groupFeaturesByProvenance', () => {
   const ctx = loadModule();
   const fn = ctx.run;
 
-  it('groups by category, sorted by order, empty groups dropped', () => {
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByCategory(
-      [ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('qqbot'))}, ${JSON.stringify(inspectorFeature('claw-dispatch'))} ],
+  it('groups by provenance in vocabulary order, empty groups dropped', () => {
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByProvenance(
+      [ ${JSON.stringify(inspectorFeature('lsp'))}, ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('todo'))}, ${JSON.stringify(inspectorFeature('im-operator'))} ],
       ${JSON.stringify(CATALOG)}
     )`);
-    assert.equal(JSON.stringify(groups.map(g => g.category)), JSON.stringify(['tools', 'gateway', 'protocol']));
+    assert.equal(JSON.stringify(groups.map(g => g.provenance)), JSON.stringify(['ecosystem', 'local', 'builtin', 'inline']));
     assert.equal(groups[0].features.length, 1);
-    assert.equal(groups[0].defaultOpen, true);
-    assert.equal(groups[2].defaultOpen, false);
+    assert.equal(groups[0].features[0].name, 'shell');
+    assert.equal(groups[3].features[0].name, 'im-operator');
   });
 
-  it('unmapped features land in _unmapped with mapped:false', () => {
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByCategory(
+  it('unmapped features land in _unmapped (always last) with mapped:false', () => {
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByProvenance(
       [ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('brand-new-feature'))} ],
       ${JSON.stringify(CATALOG)}
     )`);
-    const unmapped = groups.find(g => g.category === '_unmapped');
-    assert.ok(unmapped, 'unmapped group present');
+    assert.equal(JSON.stringify(groups.map(g => g.provenance)), JSON.stringify(['ecosystem', '_unmapped']));
+    const unmapped = groups[1];
     assert.equal(unmapped.features.length, 1);
     assert.equal(unmapped.features[0].name, 'brand-new-feature');
     assert.equal(unmapped.features[0].mapped, false);
@@ -70,45 +68,19 @@ describe('feature-catalog: groupFeaturesByCategory', () => {
   });
 
   it('null catalog sends all features to _unmapped', () => {
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByCategory(
-      [ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('qqbot'))} ], null
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByProvenance(
+      [ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('todo'))} ], null
     )`);
     assert.equal(groups.length, 1);
-    assert.equal(groups[0].category, '_unmapped');
+    assert.equal(groups[0].provenance, '_unmapped');
     assert.equal(groups[0].features.length, 2);
     assert.equal(groups[0].features.every(f => f.mapped === false), true);
   });
 
   it('empty features input returns empty group array', () => {
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByCategory([], ${JSON.stringify(CATALOG)})`);
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByProvenance([], ${JSON.stringify(CATALOG)})`);
     assert.equal(groups.length, 0);
-    assert.equal(fn('window.ClawFW.featureCatalog.groupFeaturesByCategory(undefined, null)').length, 0);
-  });
-
-  it('seed category outside the response vocabulary lands in _unmapped (never hidden)', () => {
-    const drifted = {
-      ...CATALOG,
-      features: [{ name: 'drift', displayName: 'D', category: 'no-such-cat', provenance: 'ecosystem' }],
-    };
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByCategory(
-      [ ${JSON.stringify(inspectorFeature('drift'))} ], ${JSON.stringify(drifted)}
-    )`);
-    assert.equal(groups.length, 1);
-    assert.equal(groups[0].category, '_unmapped');
-    assert.equal(groups[0].features[0].name, 'drift');
-    assert.equal(groups[0].features[0].mapped, true);
-  });
-
-  it('categories are sorted by order even if the catalog lists them unordered', () => {
-    const shuffled = {
-      ...CATALOG,
-      categories: [...CATALOG.categories].sort((a, b) => b.order - a.order),
-    };
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByCategory(
-      [ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('qqbot'))} ],
-      ${JSON.stringify(shuffled)}
-    )`);
-    assert.equal(JSON.stringify(groups.map(g => g.category)), JSON.stringify(['tools', 'gateway']));
+    assert.equal(fn('window.ClawFW.featureCatalog.groupFeaturesByProvenance(undefined, null)').length, 0);
   });
 });
 
@@ -118,27 +90,27 @@ describe('feature-catalog: enrichFeatureEntry', () => {
   const ctx = loadModule();
   const fn = ctx.run;
 
-  it('mapped entry carries seed metadata and keeps original fields', () => {
+  it('mapped entry carries seed metadata (multi-value capabilities) and keeps original fields', () => {
     const entry = fn(`window.ClawFW.featureCatalog.enrichFeatureEntry(
       ${JSON.stringify(inspectorFeature('shell', { hookCount: 7 }))}, ${JSON.stringify(CATALOG)}
     )`);
     assert.equal(entry.mapped, true);
-    assert.equal(entry.category, 'tools');
+    // 多值能力：shell 同时提供工具与生命周期守卫
+    assert.equal(JSON.stringify(entry.capabilities), JSON.stringify(['tools', 'policy']));
     assert.equal(entry.provenance, 'ecosystem');
-    // 逐字段断言：VM 跨 realm 对象与主 realm prototype 不同，deepStrictEqual 不适用
     assert.equal(entry.displayName.zh, 'Shell 执行');
     assert.equal(entry.displayName.en, 'Shell');
     assert.equal(entry.hookCount, 7, 'original inspector fields preserved');
     assert.equal(entry.source, 'src/shell.ts');
   });
 
-  it('unmatched feature falls back to _unmapped with displayName undefined', () => {
+  it('unmatched feature falls back with empty capabilities and provenance null', () => {
     const entry = fn(`window.ClawFW.featureCatalog.enrichFeatureEntry(
       ${JSON.stringify(inspectorFeature('ghost'))}, ${JSON.stringify(CATALOG)}
     )`);
     assert.equal(entry.mapped, false);
-    assert.equal(entry.category, '_unmapped');
     assert.equal(entry.provenance, null);
+    assert.equal(JSON.stringify(entry.capabilities), JSON.stringify([]));
     assert.equal(entry.displayName, undefined);
   });
 });

@@ -54,11 +54,11 @@ function getFeatureCatalogSnapshot() {
 // ── 纯函数（join / 分组 / 展示）────────────────────────────────────
 
 /** catalog 缺失时的兜底分组词表（仅 _unmapped）。 */
-const FALLBACK_CATEGORIES = [{ id: '_unmapped', order: 0, defaultOpen: true }];
+const FALLBACK_GROUPS = [{ id: '_unmapped' }];
 
 /**
  * inspector feature 条目 + catalog → enriched 条目。
- * seed 未命中时 mapped:false，category='_unmapped'，provenance=null——
+ * seed 未命中时 mapped:false，provenance=null，capabilities:[]——
  * 兜底组正常显示，不隐藏（新 feature 上线即出现在兜底组，是 seed 补录的可见信号）。
  */
 function enrichFeatureEntry(feature, catalog) {
@@ -66,42 +66,38 @@ function enrichFeatureEntry(feature, catalog) {
     ? catalog.features.find(seed => seed.name === feature.name)
     : null;
   if (!entry) {
-    return { ...feature, displayName: undefined, category: '_unmapped', provenance: null, mapped: false };
+    return { ...feature, displayName: undefined, capabilities: [], provenance: null, mapped: false };
   }
   return {
     ...feature,
     displayName: entry.displayName,
-    category: entry.category,
+    capabilities: Array.isArray(entry.capabilities) ? entry.capabilities : [],
     provenance: entry.provenance,
     mapped: true,
   };
 }
 
 /**
- * enriched 分组：按 catalog.categories 的 order 排序，空组剔除。
- * seed 里的 category 不在响应词表内（契约漂移）时归入 _unmapped，
- * 保证条目永远可见、不因元数据异常被隐藏。
+ * 按来源（provenance，单值正交）分组——这是面板主分组轴：
+ * 能力标签（tools/policy/mcp…）是多值属性，不做分组因素。
+ * 分组顺序 = 响应携带的 provenances 词表顺序，_unmapped 恒在最后；空组剔除。
  * catalog 为 null 时全部进 _unmapped。features 为空返回 []。
  */
-function groupFeaturesByCategory(features, catalog) {
+function groupFeaturesByProvenance(features, catalog) {
   if (!Array.isArray(features) || features.length === 0) return [];
-  const categories = (catalog && Array.isArray(catalog.categories) && catalog.categories.length > 0)
-    ? [...catalog.categories].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    : FALLBACK_CATEGORIES;
-  const categoryIds = new Set(categories.map(c => c.id));
-  const buckets = new Map(categories.map(c => [c.id, []]));
+  const provenances = (catalog && Array.isArray(catalog.provenances) && catalog.provenances.length > 0)
+    ? catalog.provenances
+    : [];
+  const order = [...provenances, '_unmapped'];
+  const buckets = new Map(order.map(id => [id, []]));
   for (const feature of features) {
     const enriched = enrichFeatureEntry(feature, catalog);
-    const bucketId = categoryIds.has(enriched.category) ? enriched.category : '_unmapped';
-    buckets.get(bucketId).push(bucketId === enriched.category ? enriched : { ...enriched, category: '_unmapped' });
+    const key = enriched.provenance && buckets.has(enriched.provenance) ? enriched.provenance : '_unmapped';
+    buckets.get(key).push(enriched);
   }
-  return categories
-    .filter(c => (buckets.get(c.id) || []).length > 0)
-    .map(c => ({
-      category: c.id,
-      defaultOpen: c.defaultOpen !== false,
-      features: buckets.get(c.id),
-    }));
+  return order
+    .filter(id => (buckets.get(id) || []).length > 0)
+    .map(id => ({ provenance: id, features: buckets.get(id) }));
 }
 
 /**
@@ -131,7 +127,7 @@ window.ClawFW.featureCatalog = {
   loadFeatureCatalog,
   getFeatureCatalogSnapshot,
   enrichFeatureEntry,
-  groupFeaturesByCategory,
+  groupFeaturesByProvenance,
   resolveDisplayName,
   provenanceI18nKey,
 };

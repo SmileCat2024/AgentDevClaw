@@ -31,7 +31,7 @@ Feature 的元信息现状是三套平行体系互相不认识：
     "schemaVersion": 2,
     "id": "shell",                        // 与运行时 AgentFeature.name 对齐
     "displayName": { "zh": "Shell 执行", "en": "Shell" },
-    "category": "tools",                  // 受控词表，单值
+    "capabilities": ["tools", "policy"],  // ★ 多值能力标签（受控词表，见决策 2）
     "provides": {                         // 细粒度形态清单（tools/skills/commands 支持 glob）
       "tools": ["bash", "read", "edit", "trash_*"],
       "skills": [], "commands": [],
@@ -55,24 +55,30 @@ Feature 的元信息现状是三套平行体系互相不认识：
 - 存量清理：4 个含 v1 manifest 的官方 tgz 在权威源补 v2 后需清理包内残留并修复 `dist/` 泄漏；`enrich:features` 脚本退役时同步清理其历史产物。
 - v2 校验规则增加一致性检查：打包时 `agentdev` 字段的 version 必须与 package.json 顶层 version 一致（weixin-bot 的实际漂移即此类缺陷）。
 
-### 2. 分类词表以实现形态为主轴，七类受控
+### 2. 实现形态是多值能力标签，不作面板主分组轴；主分组轴为来源
 
-分类描述"Feature 以什么方式工作"，可从 `provides` 静态推导，不依赖主观能力域概括：
+**修订（P1 实施中推翻初版裁决）**：初版把实现形态定为单值 `category` 并直接作面板主分组，实施后被推翻——tools / commands / mcp 这些词描述的是**能力**，而一个 feature 天然可同时具备多种能力（shell 既提供工具又挂守卫钩子；IM 接线员既是渠道又提供工具）。单值归类迫使做"主要供给形态"的主观裁决，正是应当避免的漂移源。
 
-| category | 形态语义 | 面板默认态 |
-|---|---|---|
-| `tools` | 以工具集为主要供给（getTools / getAsyncTools） | 展开 |
-| `policy` | 以生命周期钩子 / 守卫为主要供给，无工具 | 展开 |
-| `commands` | 以 capability 命令 / 配置面为主要供给 | 展开 |
-| `skills` | 以注入技能 / 知识为主要供给 | 展开 |
-| `gateway` | 长驻外部连接 + 消息路由（IM 渠道包） | 展开 |
-| `protocol` | 宿主协议参与（continuity、dispatch 等给体系看的） | 折叠 |
-| `mcp` | MCP server 挂载 | 折叠 |
+修正后的模型：
 
-- `category` 是**单值**主分类（分组 UI 需要）；完整形态看 `provides` 清单，进详情层。
-- 缺省推导规则（静态、可复现，写入规范）：`gateway > mcp > tools > commands > skills > policy`。v1 的包名正则推断仅保留在迁移工具里，运行时不得回退到猜包名。此推导序是**分类裁决优先级**，与面板展示顺序（tools 在前、protocol 折叠靠后）是两个不同用途的排序。
-- 个案裁决须记录理由（供 P2 自动推导实现参照）：如 `SkillFeature` 归 `protocol` 而非 `skills`——它是宿主的技能加载机制，不是内容供给；`skills` 类留给以注入技能内容为主要供给的 feature。
-- v1 `featureTypes`（tools/mcp/hooks/control/rollback 五值多选）由 `provides` + `category` 取代；`compatibility.rollback` 独立保留。
+- **能力标签 `capabilities`：多值数组**（受控词表，可从 `provides` 静态推导），描述 feature 具备哪些形态的能力；在详情层展示，不作分组因素。
+- **面板主分组轴 = `provenance`（来源）**：单值、正交、天然互斥（一个 feature 只有一个来源），且直接回应原始诉求"区分官方与自己加的"。
+
+能力词表（七类，受控）：
+
+| capability | 形态语义 |
+|---|---|
+| `tools` | 提供可调用工具（getTools / getAsyncTools） |
+| `policy` | 挂生命周期钩子做观察 / 守卫 / 改写 |
+| `commands` | 提供 capability 命令 / 配置面 |
+| `skills` | 注入技能 / 知识内容 |
+| `gateway` | 长驻外部连接 + 消息路由 |
+| `mcp` | 挂载 MCP server |
+| `protocol` | 宿主协议参与（continuity、dispatch、技能加载机制等给体系看的） |
+
+- 缺省推导规则（静态、可复现，写入规范）：由 `provides` 清单逐项映射，如 `hooks: true → policy`、`mcp: true → mcp`。v1 的包名正则推断仅保留在迁移工具里，运行时不得回退到猜包名。
+- 个案裁决须记录理由：如 `SkillFeature` 标 `protocol` 而非 `skills`——它是宿主的技能加载机制，不是内容供给；`skills` 留给以注入技能内容为主要供给的 feature。
+- v1 `featureTypes`（tools/mcp/hooks/control/rollback 五值多选）由 `capabilities` 取代——初版 `provides` + 单值 `category` 的组合废弃；`compatibility.rollback` 独立保留。
 
 ### 3. displayName 与机器 id 分离，支持 i18n
 
@@ -125,7 +131,7 @@ manifest 不携带 provenance 字段——feature 作者无法正确申报自己
 
 | 期 | 内容 |
 |---|---|
-| P1 面板可见性 | 宿主映射表（seed）注入 provenance / displayName / category；面板分组折叠。不依赖 v2 规范，不动框架 |
+| P1 面板可见性 | 宿主映射表（seed）注入 provenance / displayName / capabilities；面板按来源分组折叠。不依赖 v2 规范，不动框架 |
 | P2 规范落地 | manifest v2 定义 + 校验 + 存量迁移 + feature-repository 页升级展示 |
 | P3 统一 Registry | 聚合层 + 冲突显式化 + 编程小助手装配级挂载入口 |
 | P4 制造端对齐 | Studio 脚手架产出 v2；agent-creator / flow 遗产按新语义重新设计 |
@@ -141,7 +147,7 @@ manifest 不携带 provenance 字段——feature 作者无法正确申报自己
 ## 不变量
 
 - Feature 静态元信息的唯一载体是 package.json 的 `agentdev` 命名空间字段（+ `engines.agentdev`）；不再引入第二份清单文件。
-- `category` 取值只能来自受控词表；运行时不得以包名正则推断分类。
+- `capabilities` 取值只能来自受控词表；运行时不得以包名正则推断。
 - provenance 只能由宿主（装配层 / Registry）判定，feature 声明不参与。
 - 映射表 / Registry 中未命中的 feature 必须可见（兜底分组），不得因元数据缺失而隐藏。
 - tgz 仓库同版本不可变纪律不变；已废弃 feature 不得出现在任何装配面。

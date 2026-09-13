@@ -3994,6 +3994,26 @@ body[data-theme="light"] .feature-detail-close:hover {
   margin-left: 8px;
 }
 
+/* 详情弹窗能力标签行（多值：一个 feature 可同时具备多种能力形态） */
+.feature-detail-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feature-cap-badge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+body[data-theme="light"] .feature-cap-badge {
+  background: rgba(0, 0, 0, 0.02);
+}
+
 .feature-detail-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

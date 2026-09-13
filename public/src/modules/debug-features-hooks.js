@@ -20,20 +20,19 @@
 // ═══════════════════════════════════════════════════════════════
 
 // 分组展开偏好（跨轮询重渲染保持状态；对齐 _lifecycleOpenPref 模式）。
-// 未操作过的组按 catalog 携带的 defaultOpen。
 const _featureGroupOpenPref = new Map();
 
 /**
  * 分组 details ontoggle 回调：用户操作过的组按其偏好恢复。
  */
-function featureGroupToggled(category, open) {
-  _featureGroupOpenPref.set(category, open);
+function featureGroupToggled(provenance, open) {
+  _featureGroupOpenPref.set(provenance, open);
 }
 window.featureGroupToggled = featureGroupToggled;
 
-// 分类 id → i18n key（_unmapped 双下划线特殊处理）
-function featureCategoryLabel(category) {
-  return t(category === '_unmapped' ? 'feature_cat_unmapped' : 'feature_cat_' + category);
+// 来源分组头文案（复用 provenance 词表；兜底组独立 key）
+function featureGroupLabel(provenance) {
+  return t(provenance === '_unmapped' ? 'feature_cat_unmapped' : 'feature_prov_' + provenance);
 }
 
 function renderFeaturesPanel() {
@@ -47,8 +46,8 @@ function renderFeaturesPanel() {
   if (fc) fc.loadFeatureCatalog().catch(err => console.warn('[feature-catalog] load failed:', err));
   const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
   const groups = fc
-    ? fc.groupFeaturesByCategory(currentHookInspector.features, catalog)
-    : [{ category: '_unmapped', defaultOpen: true, features: currentHookInspector.features }];
+    ? fc.groupFeaturesByProvenance(currentHookInspector.features, catalog)
+    : [{ provenance: '_unmapped', features: currentHookInspector.features }];
 
   const allEnriched = groups.flatMap(g => g.features);
   const selectedFeature = allEnriched.find(feature => feature.name === selectedFeatureName) || null;
@@ -78,16 +77,16 @@ function renderFeaturesPanel() {
   };
 
   const groupsHtml = groups.map(group => {
-    // 用户操作过的组按偏好恢复；未操作过的按词表 defaultOpen（protocol/mcp 默认折叠降噪）
-    const isOpen = _featureGroupOpenPref.has(group.category)
-      ? _featureGroupOpenPref.get(group.category)
-      : group.defaultOpen !== false;
+    // 用户操作过的组按偏好恢复；未操作过的默认展开
+    const isOpen = _featureGroupOpenPref.has(group.provenance)
+      ? _featureGroupOpenPref.get(group.provenance)
+      : true;
     return [
       '<details class="feature-group"' + (isOpen ? ' open' : '')
-        + ' ontoggle="window.featureGroupToggled(&quot;' + escapeHtml(group.category) + '&quot;, this.open)">',
+        + ' ontoggle="window.featureGroupToggled(&quot;' + escapeHtml(group.provenance) + '&quot;, this.open)">',
       '<summary class="feature-group-bar">',
       '<span class="feature-group-chev" aria-hidden="true"></span>',
-      '<span class="feature-group-title">' + escapeHtml(featureCategoryLabel(group.category)) + '</span>',
+      '<span class="feature-group-title">' + escapeHtml(featureGroupLabel(group.provenance)) + '</span>',
       '<span class="feature-group-count">' + String(group.features.length) + '</span>',
       '</summary>',
       '<div class="feature-grid">' + group.features.map(buildFeatureCard).join('') + '</div>',
@@ -273,29 +272,36 @@ function renderFeatureDetailOverlay(feature) {
     return;
   }
 
-  // 来源标签：provenance 词表由 catalog 响应携带，词表外不展示
+  // 来源标签 + 能力标签：均由 catalog 响应携带，词表外不展示
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
   const provKey = fc && feature.provenance ? fc.provenanceI18nKey(feature.provenance, catalog && catalog.provenances) : null;
+  const capsHtml = (fc && Array.isArray(feature.capabilities) && catalog && Array.isArray(catalog.capabilities))
+    ? feature.capabilities
+      .filter(cap => catalog.capabilities.some(c => c.id === cap))
+      .map(cap => '<span class="feature-cap-badge">' + escapeHtml(t('feature_cap_' + cap)) + '</span>')
+      .join('')
+    : '';
+  const capsBlock = capsHtml
+    ? '<div class="feature-detail-caps">' + capsHtml + '</div>'
+    : '';
+  const provHtml = provKey
+    ? '<span class="feature-prov-badge">' + escapeHtml(t(provKey)) + '</span>'
+    : '';
 
-  // 计算签名：feature 名 + 工具数据 + 展开状态 + 语言 + catalog 派生 displayName/provenance
-  // （catalog 后到时 signature 变化，弹窗标题与来源标签随之修正）
+  // 计算签名：feature 名 + 工具数据 + 展开状态 + 语言 + catalog 派生 displayName/provenance/capabilities
+  // （catalog 后到时 signature 变化，弹窗标题与标签随之修正）
   // 如果签名未变则跳过 innerHTML 替换，避免轮询导致的滚动卡顿
-  const displayName = (window.ClawFW && window.ClawFW.featureCatalog && feature.mapped)
-    ? window.ClawFW.featureCatalog.resolveDisplayName(feature, currentLanguage)
-    : feature.name;
+  const displayName = (fc && feature.mapped) ? fc.resolveDisplayName(feature, currentLanguage) : feature.name;
   const signature = feature.name + '|'
     + (feature.tools || []).map(t => t.name + ':' + t.state + ':' + (t.enabled ? 1 : 0)).join(',')
     + '|exp:' + Array.from(_expandedToolNames).sort().join(',')
     + '|lang:' + currentLanguage
     + '|dn:' + displayName
-    + '|pv:' + (provKey || '');
+    + '|pv:' + (provKey || '')
+    + '|caps:' + (Array.isArray(feature.capabilities) ? feature.capabilities.join(',') : '');
   if (signature === _lastDetailSignature && portal.innerHTML) return;
   _lastDetailSignature = signature;
-
-  const provHtml = provKey
-    ? '<span class="feature-prov-badge">' + escapeHtml(t(provKey)) + '</span>'
-    : '';
 
   const toolRowsHtml = (feature.tools && feature.tools.length > 0)
     ? '<div class="gateway-tool-grid">' + feature.tools.map(tool => {
@@ -364,6 +370,7 @@ function renderFeatureDetailOverlay(feature) {
     '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(feature))) + '</div></div>',
     '</div>',
     '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + provHtml + '</div>',
+    capsBlock,
     '<div class="settings-section">',
     '<div class="settings-section-title">' + escapeHtml(t('panel_loaded_tools')) + ' (' + String(feature.tools?.length || 0) + ')</div>',
     toolRowsHtml,

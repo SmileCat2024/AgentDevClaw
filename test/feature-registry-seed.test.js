@@ -1,7 +1,7 @@
 /**
  * Tests for server/shared/feature-registry.js (seed loading & validation)
  *
- * - 真实 seed 通过校验（含 categories / provenances 词表回传）
+ * - 真实 seed 通过校验（含 capabilities / provenances 词表回传）
  * - 各校验分支对坏 seed 显式 throw（不静默回退）
  *
  * 坏 seed 写入临时目录，不触碰真实用户数据。
@@ -32,9 +32,9 @@ describe('feature-registry: loadFeatureRegistry', () => {
     const registry = loadFeatureRegistry();
     assert.equal(registry.schemaVersion, 1);
     assert.ok(registry.features.length > 0);
-    assert.ok(registry.categories.some(c => c.id === '_unmapped'));
-    assert.deepEqual(registry.provenances, ['builtin', 'ecosystem', 'local', 'inline', 'packaged']);
-    assert.ok(registry.features.every(f => f.displayName && f.category && f.provenance));
+    assert.ok(registry.capabilities.some(c => c.id === 'tools'));
+    assert.deepEqual(registry.provenances, ['ecosystem', 'local', 'builtin', 'inline', 'packaged']);
+    assert.ok(registry.features.every(f => f.displayName && Array.isArray(f.capabilities) && f.provenance));
   });
 
   it('rejects wrong schemaVersion', () => {
@@ -49,32 +49,32 @@ describe('feature-registry: loadFeatureRegistry', () => {
 
   it('rejects malformed names (non-kebab or trailing/double dash)', () => {
     for (const bad of ['Foo', 'foo-', 'foo--bar', 'foo_bar', '']) {
-      const p = writeSeed({ schemaVersion: 1, features: [{ name: bad, displayName: 'X', category: 'tools', provenance: 'local' }] });
+      const p = writeSeed({ schemaVersion: 1, features: [{ name: bad, displayName: 'X', capabilities: ['tools'], provenance: 'local' }] });
       assert.throws(() => loadFeatureRegistry(p), /name/, 'name=' + bad);
     }
   });
 
   it('rejects duplicate names', () => {
-    const entry = { name: 'dup', displayName: 'X', category: 'tools', provenance: 'local' };
+    const entry = { name: 'dup', displayName: 'X', capabilities: ['tools'], provenance: 'local' };
     const p = writeSeed({ schemaVersion: 1, features: [entry, entry] });
     assert.throws(() => loadFeatureRegistry(p), /duplicate/);
   });
 
-  it('rejects unknown category and _unmapped in seed', () => {
-    for (const cat of ['no-such-cat', '_unmapped']) {
-      const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', category: cat, provenance: 'local' }] });
-      assert.throws(() => loadFeatureRegistry(p), /category/, 'category=' + cat);
+  it('rejects missing, empty, or unknown capabilities', () => {
+    for (const caps of [undefined, [], ['no-such-cap'], 'tools']) {
+      const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', capabilities: caps, provenance: 'local' }] });
+      assert.throws(() => loadFeatureRegistry(p), /capabilities/, 'capabilities=' + JSON.stringify(caps));
     }
   });
 
   it('rejects unknown provenance', () => {
-    const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', category: 'tools', provenance: 'mystery' }] });
+    const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', capabilities: ['tools'], provenance: 'mystery' }] });
     assert.throws(() => loadFeatureRegistry(p), /provenance/);
   });
 
   it('rejects missing or malformed displayName', () => {
     for (const dn of [undefined, '', '   ', { zh: '只中文' }, 42]) {
-      const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: dn, category: 'tools', provenance: 'local' }] });
+      const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: dn, capabilities: ['tools'], provenance: 'local' }] });
       assert.throws(() => loadFeatureRegistry(p), /displayName/);
     }
   });

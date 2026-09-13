@@ -19,24 +19,25 @@ const SEED_PATH = path.join(__dirname, 'feature-registry-seed.json');
 export const FEATURE_REGISTRY_SEED_PATH = SEED_PATH;
 
 /**
- * 分类词表（ADR 0017 决策 2，实现形态主轴）。
- * 此 order 是面板展示顺序；与缺省推导序（分类裁决优先级）是两个不同用途。
- * 权威只在 server 一处，随 API 响应携带，前端零硬编码。
+ * 能力标签词表（ADR 0017 决策 2，实现形态轴）。
+ * 能力是多值属性：一个 feature 可同时提供多种能力（工具 + 钩子 + 命令…），
+ * 因此标签不作为面板主分组轴——主分组轴是 provenance（来源，单值正交）。
+ * 词表权威只在 server 一处，随 API 响应携带，前端零硬编码。
+ * 数组顺序即详情弹窗的能力标签展示顺序。
  */
-export const FEATURE_CATEGORIES = [
-  { id: 'tools', order: 1, defaultOpen: true },
-  { id: 'policy', order: 2, defaultOpen: true },
-  { id: 'commands', order: 3, defaultOpen: true },
-  { id: 'skills', order: 4, defaultOpen: true },
-  { id: 'gateway', order: 5, defaultOpen: true },
-  { id: 'mcp', order: 6, defaultOpen: false },
-  { id: 'protocol', order: 7, defaultOpen: false },
-  { id: '_unmapped', order: 8, defaultOpen: true },
+export const FEATURE_CAPABILITIES = [
+  { id: 'tools' },
+  { id: 'policy' },
+  { id: 'commands' },
+  { id: 'skills' },
+  { id: 'gateway' },
+  { id: 'mcp' },
+  { id: 'protocol' },
 ];
 
-export const FEATURE_PROVENANCES = ['builtin', 'ecosystem', 'local', 'inline', 'packaged'];
+export const FEATURE_PROVENANCES = ['ecosystem', 'local', 'builtin', 'inline', 'packaged'];
 
-const CATEGORY_IDS = new Set(FEATURE_CATEGORIES.map(c => c.id));
+const CAPABILITY_IDS = new Set(FEATURE_CAPABILITIES.map(c => c.id));
 const PROVENANCE_IDS = new Set(FEATURE_PROVENANCES);
 
 function isValidDisplayName(value) {
@@ -69,8 +70,9 @@ export function loadFeatureRegistry(seedPath = SEED_PATH) {
       throw new Error(`${label}: duplicate name "${entry.name}"`);
     }
     seen.add(entry.name);
-    if (!CATEGORY_IDS.has(entry.category) || entry.category === '_unmapped') {
-      throw new Error(`${label}: unknown category "${entry.category}" (allowed: ${[...CATEGORY_IDS].filter(id => id !== '_unmapped').join(', ')})`);
+    if (!Array.isArray(entry.capabilities) || entry.capabilities.length === 0
+      || !entry.capabilities.every(cap => CAPABILITY_IDS.has(cap))) {
+      throw new Error(`${label}: "capabilities" must be a non-empty array of ${[...CAPABILITY_IDS].join(', ')}`);
     }
     if (!PROVENANCE_IDS.has(entry.provenance)) {
       throw new Error(`${label}: unknown provenance "${entry.provenance}" (allowed: ${FEATURE_PROVENANCES.join(', ')})`);
@@ -81,7 +83,7 @@ export function loadFeatureRegistry(seedPath = SEED_PATH) {
   }
   return {
     schemaVersion: raw.schemaVersion,
-    categories: FEATURE_CATEGORIES,
+    capabilities: FEATURE_CAPABILITIES,
     provenances: FEATURE_PROVENANCES,
     features: raw.features,
   };
