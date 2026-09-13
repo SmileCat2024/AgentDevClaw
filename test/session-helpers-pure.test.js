@@ -96,11 +96,11 @@ describe('buildSessionTrimPreview', () => {
     assert.equal(rounds.length, 2);
     assert.equal(rounds[0].userPreview, 'Hello');
     assert.equal(rounds[0].assistantPreview, 'Hi there');
-    assert.equal(rounds[0].suggestedTrim, false); // only 2 rounds → nothing trimmed
-    assert.equal(rounds[1].suggestedTrim, false);
+    assert.equal(rounds[0].suggestedTrim, true); // default: every round checked
+    assert.equal(rounds[1].suggestedTrim, true);
   });
 
-  it('marks older rounds as suggestedTrim when there are more than 2', () => {
+  it('marks all rounds as suggestedTrim by default', () => {
     const messages = [
       { role: 'user', content: 'Round 1', turn: 1 },
       { role: 'assistant', content: 'Reply 1', turn: 1 },
@@ -111,9 +111,9 @@ describe('buildSessionTrimPreview', () => {
     ];
     const rounds = buildSessionTrimPreview(messages);
     assert.equal(rounds.length, 3);
-    assert.equal(rounds[0].suggestedTrim, true);  // oldest → trim
-    assert.equal(rounds[1].suggestedTrim, false); // recent 2 → keep
-    assert.equal(rounds[2].suggestedTrim, false);
+    assert.equal(rounds[0].suggestedTrim, true);
+    assert.equal(rounds[1].suggestedTrim, true);
+    assert.equal(rounds[2].suggestedTrim, true);
   });
 
   it('returns empty array for empty messages', () => {

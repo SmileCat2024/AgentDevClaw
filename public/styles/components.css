@@ -6708,6 +6708,7 @@ body[data-theme="light"] .trim-footer {
   font-size: 13px;
   color: var(--text-secondary);
   line-height: 1.4;
+  min-width: 0;
 }
 .trim-footer-pct {
   font-weight: 650;
@@ -6716,8 +6717,38 @@ body[data-theme="light"] .trim-footer {
 }
 .trim-footer-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+.trim-footer-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+.trim-footer-option:hover {
+  color: var(--text-primary);
+}
+.trim-footer-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #58a6ff;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.trim-footer-divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(255,255,255,0.14);
+  flex-shrink: 0;
+}
+body[data-theme="light"] .trim-footer-divider {
+  background: rgba(0,0,0,0.12);
 }
 .trim-loading {
   display: flex;

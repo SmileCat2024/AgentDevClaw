@@ -100,6 +100,10 @@ window.openTrimDialog = async (agentId, sessionId, archiveAfter = false) => {
     }
     document.getElementById('trim-submit').disabled = false;
     renderTrimRoundList();
+    // 列表按时间正序排列，默认视图对齐最新一轮：滚动区（.trim-body）置于底部。
+    // #trim-round-list 自身无溢出约束，必须在滚动的祖先容器上设置 scrollTop。
+    const trimScrollBody = trimRoundList.closest('.trim-body');
+    if (trimScrollBody) trimScrollBody.scrollTop = trimScrollBody.scrollHeight;
   } catch (err) {
     trimRoundList.innerHTML = '<div class="trim-loading">加载失败：' + escapeHtml(err.message || err) + '</div>';
     trimFooterInfo.textContent = '';

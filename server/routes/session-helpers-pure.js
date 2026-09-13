@@ -226,7 +226,8 @@ export function estimatePreambleCharCount(messages) {
 
 /**
  * Build a trim preview of session messages, grouping them into user→assistant rounds.
- * The most recent 2 rounds are marked suggestedTrim=false.
+ * All rounds are marked suggestedTrim=true — the trim dialog opens with every
+ * round checked; users uncheck the ones they want to keep.
  *
  * Each round includes charCount (estimated characters), cumulativeCharCount
  * (running total from the first round), charPercent (fraction of total), and
@@ -297,9 +298,8 @@ export function buildSessionTrimPreview(messages) {
     r.cumulativePercent = totalCharCount > 0 ? cumulative / totalCharCount : 0;
   }
 
-  const recentCount = 2;
-  for (let i = 0; i < rounds.length; i++) {
-    rounds[i].suggestedTrim = i < rounds.length - recentCount;
+  for (const r of rounds) {
+    r.suggestedTrim = true;
   }
 
   return rounds;

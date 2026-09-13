@@ -410,12 +410,6 @@
             <button type="button" class="trim-stepper-btn" id="trim-keep-skill-inc">+</button>
           </div>
         </div>
-        <div class="trim-advanced-row">
-          <label class="trim-advanced-toggle">
-            <input type="checkbox" id="trim-append-summary-toggle" />
-            <span>同时生成摘要并追加</span>
-          </label>
-        </div>
       </div>
       <div class="trim-body">
         <div class="trim-list" id="trim-round-list"></div>
@@ -423,6 +417,11 @@
       <div class="trim-footer">
         <div class="trim-footer-info" id="trim-footer-info"></div>
         <div class="trim-footer-actions">
+          <label class="trim-footer-option" title="对被精简的轮次生成一份摘要，附加到新会话的保留轮次之后，延续任务上下文">
+            <input type="checkbox" id="trim-append-summary-toggle" />
+            <span>生成额外摘要</span>
+          </label>
+          <span class="trim-footer-divider" aria-hidden="true"></span>
           <button class="workspace-action secondary" type="button" onclick="window.closeTrimDialog()">取消</button>
           <button class="workspace-action" type="button" id="trim-submit" onclick="window.submitTrimCompact()">确认精简</button>
         </div>
