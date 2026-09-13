@@ -43,6 +43,20 @@
     agentId: '',        // 宿主级命名空间身份（请求时派生，与 dir 联动重置）
     isRepo: true,
     repoMiss: 0,        // isRepo=false 的连续确认计数（防偶发误判）
+    // 会话目录非仓库时的仓库发现（discover 端点）：repos=null 表示尚未
+    // 扫描；activeRepoRoot 非空表示正在查看某个子仓库（所有 git 请求的
+    // dir 改用它，视图身份仍是会话目录 + agentId）。自动选中规则：持久化
+    // 默认仓库优先（服务端 workspace state），失效或无记录时取列表第一个；
+    // 用户在下拉中主动选择时写回服务端持久化
+    repos: null,
+    reposLoading: false,
+    reposError: '',
+    discoverFailedAt: 0, // discover 失败时刻（失败冷却计时基准）
+    activeRepoRoot: '',
+    // 本轮会话身份内被 status 双确认否决过的仓库根（discover 认、status
+    // 不认的半损坏形态）：自动选中时跳过，防止"选中→否决→重扫→再选中"
+    // 的无限振荡；用户主动选择会清除否决（给一次重试机会，真坏会再加回）
+    rejectedRoots: new Set(),
     status: null,       // 序列化后的 StatusResult
     graph: [],          // 提交历史（新→旧，含 lane）
     aheadHashes: [],    // 未推送提交哈希集合（「传出的更改」分组依据）
@@ -192,8 +206,10 @@
   // 后续刷新全部被守卫吞掉，表现为"狂点刷新没反应"）
   const TIMEOUT_MS = { graph: 20000, default: 10000 };
 
-  // 写端点集合（幂等键强制；读端点 status/graph/branches/commit_files 不带）
-  const WRITE_OPS = new Set(['stage', 'unstage', 'commit', 'discard', 'branch', 'stash']);
+  // 写端点集合（幂等键强制；读端点 status/graph/branches/commit_files/discover 不带）。
+  // default_repo 是偏好写（非仓库内容写），但服务端将其归入写幂等键契约，
+  // 前端集合必须同步，否则远程会话下持久化请求被 400 拒绝且静默失败
+  const WRITE_OPS = new Set(['stage', 'unstage', 'commit', 'discard', 'branch', 'stash', 'default_repo']);
 
   // 幂等键（ADR-0011，既有 operationId 体系）：写类提交统一携带
   // x-idempotency-key（本地忽略、远程强制）；与各模块同款本地实现。
@@ -250,6 +266,14 @@
    * isRepo 粘性：true→false 需连续两次确认，防止 rev-parse 偶发失败
    * 把仓库误判成"不是 git 仓库"闪空态。
    */
+  /**
+   * 当前视图操作的目录：查看子仓库时用选中仓库根，否则用会话目录。
+   * 所有 git 请求与 stale check 都经它——服务端按目录自行解析仓库根。
+   */
+  function activeDir() {
+    return state.activeRepoRoot || state.dir;
+  }
+
   let loadSeq = 0;
   let pendingLoad = false;
   async function loadAll() {
@@ -258,6 +282,7 @@
     if (state.loading) { pendingLoad = true; return; }
     state.loadTried = true;
     const seq = ++loadSeq;
+    const view = activeDir();
     state.loading = true;
     state.error = '';
     try {
@@ -265,16 +290,15 @@
       const errors = {};
       const safe = (key, p) => p.catch((e) => { errors[key] = String(e?.message || e); return null; });
       const [status, graph, branches] = await Promise.all([
-        safe('status', api('status', { dir })),
-        safe('graph', api('graph', { dir, limit: state.graphLimit, branch: state.branch })),
-        safe('branches', api('branches', { dir })),
+        safe('status', api('status', { dir: view })),
+        safe('graph', api('graph', { dir: view, limit: state.graphLimit, branch: state.branch })),
+        safe('branches', api('branches', { dir: view })),
       ]);
       // 过期响应丢弃：会话已切走或又有更新的加载发起时，不应用本次结果
-      if (seq !== loadSeq || (state.dir || currentSessionDir()) !== dir) return;
+      if (seq !== loadSeq || (state.dir || currentSessionDir()) !== dir || activeDir() !== view) return;
       if (status) {
         if (status.isRepo === false) {
-          state.repoMiss = (state.repoMiss || 0) + 1;
-          if (state.repoMiss >= 2) state.isRepo = false;
+          handleRepoMiss();
         } else {
           state.repoMiss = 0;
           state.isRepo = true;
@@ -292,6 +316,8 @@
       state.expandedCommit = state.expandedCommit
         && state.graph.some((c) => c.hash === state.expandedCommit)
         ? state.expandedCommit : '';
+      // 确认非仓库（未选中子仓库时）→ 发起子目录仓库发现
+      ensureDiscover();
     } catch (e) {
       state.error = String(e?.message || e || 'status failed');
     } finally {
@@ -306,6 +332,133 @@
   }
 
   const refresh = loadAll;
+
+  /**
+   * status 返回 isRepo:false 的收敛处理（loadAll / silentRefresh 共用）：
+   * 连续两次才确认；确认后若正处于子仓库视图，说明选中仓库已失效
+   * （点击后被删 / .git 损坏）——退出选中态并强制重扫：discover 响应会
+   * 重新自动选中（持久化默认仓库若还在列表中则回到它，否则第一个）。
+   */
+  function handleRepoMiss() {
+    state.repoMiss = (state.repoMiss || 0) + 1;
+    if (state.repoMiss < 2) return;
+    state.isRepo = false;
+    if (state.activeRepoRoot) {
+      // 记忆否决：重扫结果若仍含该仓库（discover 只看 .git 存在，status
+      // 的 rev-parse 不认半损坏形态），自动选中必须跳过它，否则振荡
+      state.rejectedRoots.add(state.activeRepoRoot);
+      state.activeRepoRoot = '';
+      state.repos = null;
+      state.status = null;
+      state.graph = [];
+      state.aheadHashes = [];
+      state.branches = null;
+      state.error = '';
+      state.errors = {};
+      discoverRepos(true);
+    }
+  }
+
+  // ── 子目录仓库发现与切换（会话目录非仓库时的降级路径）─────────────
+
+  // discover 失败冷却：持续失败场景（旧版远程无该路由等）下静默轮询的
+  // ensureDiscover 不得每周期重试打转；手动「重新扫描」不受冷却限制
+  const DISCOVER_RETRY_COOLDOWN_MS = 60 * 1000;
+
+  /** 确认非仓库且尚未扫描过时发起发现（loadAll / silentRefresh 收敛点） */
+  function ensureDiscover() {
+    if (state.isRepo || state.activeRepoRoot || state.repos != null
+      || state.reposLoading || !state.dir) return;
+    if (state.reposError && Date.now() - (state.discoverFailedAt || 0) < DISCOVER_RETRY_COOLDOWN_MS) return;
+    discoverRepos();
+  }
+
+  async function discoverRepos(force) {
+    if (state.reposLoading) return;
+    const dir = state.dir;
+    const agentId = currentHostAgentId();
+    state.reposLoading = true;
+    state.reposError = '';
+    if (force) state.repos = null; // 手动重扫：立即回到扫描中视图
+    repaint();
+    try {
+      const data = await api('discover', { dir, force: force === true });
+      // 会话已切走（目录或命名空间身份变化，watchDir 已重置过状态）则丢弃
+      if (state.dir !== dir || currentHostAgentId() !== agentId) return;
+      state.repos = Array.isArray(data.repos) ? data.repos : [];
+      state.discoverFailedAt = 0;
+      pickInitialRepo(data.defaultRepo);
+    } catch (e) {
+      if (state.dir === dir && currentHostAgentId() === agentId) {
+        state.reposError = String(e?.message || e);
+        state.discoverFailedAt = Date.now();
+      }
+    } finally {
+      if (state.dir === dir && currentHostAgentId() === agentId) state.reposLoading = false;
+      repaint();
+    }
+  }
+
+  /**
+   * 扫描完成后的自动选中：持久化默认仓库优先（仍在列表中且未被否决才
+   * 采信），失效或无记录时取列表第一个（按 relPath 排序，服务端已保证
+   * 稳定序）。自动选中不回写偏好——用户上次的显式选择不应被 fallback
+   * 覆盖。列表全被否决时不选中，由空态呈现。
+   */
+  function pickInitialRepo(defaultRepo) {
+    const repos = (state.repos || []).filter((r) => !state.rejectedRoots.has(r.root));
+    if (!repos.length) return;
+    const preferred = defaultRepo && repos.some((r) => r.root === defaultRepo)
+      ? defaultRepo
+      : repos[0].root;
+    selectRepo(preferred, { persist: false });
+  }
+
+  /** 仓库的显示名：优先发现结果里的相对路径，回退目录名 */
+  function repoLabel(root) {
+    if (!root) return '';
+    const hit = (state.repos || []).find((r) => r.root === root);
+    if (hit) return hit.relPath || '.';
+    const parts = String(root).split(/[\\/]/).filter(Boolean);
+    return parts[parts.length - 1] || root;
+  }
+
+  /**
+   * 切换到某个子仓库视图：重置视图数据后按选中目录全量加载。
+   * isRepo 乐观置 true（发现结果已确认是仓库），status 响应会再确认。
+   * persist=true（用户下拉主动选择）时写回服务端默认仓库偏好；写失败
+   * 只留 Console 痕迹，不打断 UI——偏好持久化失败不是可操作的错误态。
+   */
+  function selectRepo(root, options) {
+    if (!root || root === state.activeRepoRoot) return;
+    state.activeRepoRoot = root;
+    // 用户显式选择：清除否决记忆（半损坏可能是暂态，给一次重试机会）
+    if (options && options.persist) state.rejectedRoots.delete(root);
+    state.loadTried = false;
+    state.ensureAttempts = 0;
+    state.status = null;
+    state.graph = [];
+    state.aheadHashes = [];
+    state.branches = null;
+    state.stash = [];
+    state.error = '';
+    state.errors = {};
+    state.isRepo = true;
+    state.repoMiss = 0;
+    state.expandedCommit = '';
+    state.commitFiles = {};
+    state.branch = '';
+    state.graphLimit = 120;
+    if (options && options.persist) {
+      // 远程 write 能力位为 false 时不发注定失败的写请求；本地身份恒可写。
+      // 偏好写失败本身无害（catch 静默），此门控只为避免无谓请求与噪音
+      if (canWriteGit()) {
+        api('default_repo', { dir: state.dir, repoRoot: root })
+          .catch((e) => console.warn('[GitPanel] persist default repo failed: ' + (e?.message || e)));
+      }
+    }
+    loadAll();
+  }
 
   /**
    * 静默自动刷新：面板打开期间周期性地轻量重拉 status + branches（graph
@@ -326,19 +479,20 @@
   async function silentRefresh() {
     const dir = currentSessionDir();
     if (!dir || state.loading || state.busy || state.dir !== dir) return;
+    const view = activeDir();
     const wantGraph = Boolean(state.errors.graph) && state.graph.length > 0;
-    const jobs = [autoOk(api('status', { dir })), autoOk(api('branches', { dir }))];
-    if (wantGraph) jobs.push(autoOk(api('graph', { dir, limit: state.graphLimit, branch: state.branch })));
+    const jobs = [autoOk(api('status', { dir: view })), autoOk(api('branches', { dir: view }))];
+    if (wantGraph) jobs.push(autoOk(api('graph', { dir: view, limit: state.graphLimit, branch: state.branch })));
     const [status, branches, graph] = await Promise.all(jobs);
-    if (state.dir !== dir || state.loading) return;
+    if (state.dir !== dir || state.loading || activeDir() !== view) return;
     if (status && status.ok) {
       if (status.isRepo === false) {
-        state.repoMiss = (state.repoMiss || 0) + 1;
-        if (state.repoMiss >= 2) state.isRepo = false;
+        handleRepoMiss();
       } else {
         state.repoMiss = 0;
         state.isRepo = true;
       }
+      ensureDiscover();
       state.status = status.status || state.status;
       // 错误自愈：status 恢复成功即清除顶部错误与 status 分区错误，
       // 瞬时故障的提示最多挂一个轮询周期（~5s），无需手动刷新
@@ -351,8 +505,8 @@
         const known = state.graph.length ? state.graph[0].fullHash : '';
         if (known !== headHash
           || (known !== '' && state.aheadHashes.length !== Number(status.status?.ahead ?? 0))) {
-          const g = await autoOk(api('graph', { dir, limit: state.graphLimit, branch: state.branch }));
-          if (state.dir !== dir || state.loading) return;
+          const g = await autoOk(api('graph', { dir: view, limit: state.graphLimit, branch: state.branch }));
+          if (state.dir !== dir || state.loading || activeDir() !== view) return;
           if (g && g.ok) {
             state.graph = Array.isArray(g.commits) ? g.commits : [];
             state.aheadHashes = Array.isArray(g.aheadHashes) ? g.aheadHashes : [];
@@ -447,6 +601,11 @@
     state.errors = {};
     state.isRepo = true;
     state.repoMiss = 0;
+    state.repos = null;
+    state.reposLoading = false;
+    state.reposError = '';
+    state.activeRepoRoot = '';
+    state.rejectedRoots = new Set();
     state.expandedCommit = '';
     state.commitFiles = {};
     state.branch = '';
@@ -574,7 +733,7 @@
   async function ensureCommitFiles(hash) {
     if (state.commitFiles[hash]) return;
     try {
-      const data = await api('commit_files', { dir: state.dir, hash });
+      const data = await api('commit_files', { dir: activeDir(), hash });
       state.commitFiles[hash] = Array.isArray(data.files) ? data.files : [];
       repaint();
     } catch (e) {
@@ -704,7 +863,7 @@
     const cached = state.commitFiles[hash];
     const rowStyle = Number.isFinite(rowW) ? ' style="--git-row-w:' + rowW + 'px"' : '';
     if (!cached) {
-      return '<div class="git-commit-files"' + rowStyle + '><div class="git-commit-files-loading">' + esc(zh('加载中…', 'Loading…')) + '</div></div>';
+      return '<div class="git-commit-files"' + rowStyle + '><div class="git-commit-files-loading"><span class="git-spinner git-spinner-sm" aria-hidden="true"></span>' + esc(zh('加载中', 'Loading')) + '</div></div>';
     }
     if (!cached.length) {
       return '<div class="git-commit-files"' + rowStyle + '><div class="git-commit-files-loading">' + esc(zh('无文件变更', 'No file changes')) + '</div></div>';
@@ -792,6 +951,59 @@
     document.addEventListener('mousedown', onBranchMenuOutside, true);
   }
 
+  // ── 仓库切换下拉（会话目录非仓库、查看子仓库时）──────────────────
+  // 与分支下拉同一视觉配方（输入框模型切换同款）；用户主动选择经
+  // selectRepo({persist:true}) 写回服务端默认仓库偏好
+  function renderRepoTrigger() {
+    const repos = state.repos || [];
+    if (!state.activeRepoRoot || !repos.length) return '';
+    return [
+      '<button class="git-repo-trigger" data-gp-action="repo-menu" title="' + esc(zh('切换仓库', 'Switch repository')) + '">',
+      '<span class="git-repo-trigger-name">' + esc(repoLabel(state.activeRepoRoot)) + '</span>',
+      '<svg class="git-repo-trigger-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>',
+      '</button>',
+    ].join('');
+  }
+
+  function renderRepoMenu() {
+    const items = (state.repos || []).map((r) => [
+      '<div class="git-rm-item' + (r.root === state.activeRepoRoot ? ' active' : '') + '" data-gp-root="' + esc(r.root) + '" title="' + esc(r.root) + '">',
+      '<span class="git-rm-left"><span class="git-rm-name">' + esc(r.relPath || '.') + '</span></span>',
+      '</div>',
+    ].join(''));
+    return '<div class="git-bm-group-title">' + esc(zh('仓库', 'Repositories')) + '</div>' + items.join('');
+  }
+
+  function closeRepoMenu() {
+    const menu = document.getElementById('git-repo-menu');
+    if (menu) menu.remove();
+    document.removeEventListener('mousedown', onRepoMenuOutside, true);
+  }
+
+  function onRepoMenuOutside(e) {
+    const menu = document.getElementById('git-repo-menu');
+    if (menu && !menu.contains(e.target)
+      && !(e.target.closest && e.target.closest('[data-gp-action="repo-menu"]'))) {
+      closeRepoMenu();
+    }
+  }
+
+  function toggleRepoMenu(e) {
+    const btn = e.target.closest('[data-gp-action="repo-menu"]');
+    if (!btn) return;
+    e.stopPropagation();
+    if (document.getElementById('git-repo-menu')) { closeRepoMenu(); return; }
+    const rect = btn.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.id = 'git-repo-menu';
+    menu.className = 'git-repo-menu';
+    menu.innerHTML = renderRepoMenu();
+    menu.style.left = Math.max(8, rect.left) + 'px';
+    menu.style.top = (rect.bottom + 6) + 'px';
+    document.body.appendChild(menu);
+    document.addEventListener('mousedown', onRepoMenuOutside, true);
+  }
+
   // ── 渲染：双区骨架 ────────────────────────────────────────────────
 
   function zoneBar(zone, titleHtml, toolsHtml, folded) {
@@ -804,8 +1016,59 @@
     ].join('');
   }
 
-  function renderEmpty(title, desc) {
-    return '<div class="feature-panel-empty"><div>' + esc(title) + '</div>' + (desc ? '<div class="git-empty-desc">' + esc(desc) + '</div>' : '') + '</div>';
+  // 面板级空态/加载态卡片：取「交互页面」空态（.gen-ui-empty）同款视觉配方
+  // （虚线卡片 + 图标块 + 标题 + 描述）。opts.loading 用旋转环替代图标块，
+  // opts.extra 追加卡片内动作按钮（如重试 / 重新扫描）。
+  function renderEmpty(title, desc, opts) {
+    const o = opts || {};
+    return [
+      '<div class="git-empty-card">',
+      o.loading
+        ? '<div class="git-spinner git-empty-spinner" role="status" aria-label="' + esc(title) + '"></div>'
+        : '<div class="git-empty-icon" aria-hidden="true">'
+          // 图形取自右侧 rail「Source Control」按钮（index.html），currentColor 随图标块着色
+          + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">'
+          + '<circle cx="6" cy="6" r="2.6"></circle>'
+          + '<circle cx="6" cy="18" r="2.6"></circle>'
+          + '<circle cx="18" cy="8" r="2.6"></circle>'
+          + '<path d="M6 8.6v6.8"></path>'
+          + '<path d="M18 10.6c0 4-4.5 3.4-8 4.5"></path>'
+          + '</svg></div>',
+      '<div class="git-empty-title">' + esc(title) + '</div>',
+      desc ? '<div class="git-empty-desc">' + esc(desc) + '</div>' : '',
+      o.extra || '',
+      '</div>',
+    ].join('');
+  }
+
+  /**
+   * 会话目录非仓库且尚无选中仓库时的过渡视图：扫描中 / 扫描失败（可重试）/
+   * 无仓库（空态文案）。扫出仓库后 pickInitialRepo 直接进入仓库视图，
+   * 不再有中间列表页。
+   */
+  function renderRepoFallback() {
+    if (state.reposLoading) {
+      return renderEmpty(zh('正在扫描子目录仓库', 'Scanning subdirectories for repositories'));
+    }
+    if (state.reposError) {
+      return renderEmpty(state.reposError, null, {
+        extra: '<button class="git-zone-btn" data-gp-action="rediscover">' + esc(zh('重试', 'Retry')) + '</button>',
+      });
+    }
+    const usable = (state.repos || []).filter((r) => !state.rejectedRoots.has(r.root));
+    if (!usable.length && (state.repos || []).length) {
+      return renderEmpty(
+        zh('子目录仓库不可用', 'Subdirectory repositories unavailable'),
+        zh('发现的子目录仓库均无法读取（可能已损坏），可尝试重新扫描。', 'The discovered subdirectory repositories cannot be read (possibly corrupted). Try rescanning.'),
+        {
+          extra: '<button class="git-zone-btn" data-gp-action="rediscover">' + esc(zh('重新扫描', 'Rescan')) + '</button>',
+        }
+      );
+    }
+    return renderEmpty(
+      zh('不是 git 仓库', 'Not a git repository'),
+      zh('当前会话目录未纳入 git 管理，其下也未发现子目录仓库。', 'The current session directory is not under git, and no repository was found in its subdirectories.')
+    );
   }
 
   function buildHtml() {
@@ -815,14 +1078,11 @@
         zh('打开一个绑定了项目目录的会话后，这里会显示它的 git 状态。', 'Open a session bound to a project directory to see its git status here.')
       );
     }
-    if (!state.isRepo) {
-      return renderEmpty(
-        zh('不是 git 仓库', 'Not a git repository'),
-        zh('当前会话目录未纳入 git 管理。', 'The current session directory is not under git.')
-      );
+    if (!state.isRepo && !state.activeRepoRoot) {
+      return renderRepoFallback();
     }
     if (!state.status && !state.error) {
-      return renderEmpty(zh('读取中…', 'Loading…'));
+      return renderEmpty(zh('正在读取 Git 状态', 'Loading Git status'), null, { loading: true });
     }
 
     const status = state.status || { files: [] };
@@ -832,9 +1092,11 @@
     const writable = canWriteGit();
 
     // ── 上区：更改与暂存 ──
+    // 查看子仓库时，标题后跟仓库切换下拉（多仓库场景的位置指示与切换入口）
     const refreshBtn = '<button class="git-zone-btn' + (state.loading ? ' is-loading' : '') + '" data-gp-action="refresh" title="'
       + esc(zh('刷新', 'Refresh')) + '" ' + (state.loading || state.busy ? 'disabled' : '') + '>&#8635;</button>';
-    const changesTools = refreshBtn;
+    const changesTools = renderRepoTrigger() + refreshBtn;
+    const changesTitle = esc(zh('更改与暂存', 'Changes'));
 
     const changesBodyHtml = [
       renderMessage(),
@@ -859,7 +1121,7 @@
     return [
       '<div class="git-panel" style="' + (state.topH ? '--git-top-h:' + state.topH + 'px' : '') + '">',
       '<section class="git-zone' + (topFolded ? ' is-folded' : '') + '" data-zone="changes">',
-      zoneBar('changes', esc(zh('更改与暂存', 'Changes')), changesTools, topFolded),
+      zoneBar('changes', changesTitle, changesTools, topFolded),
       topFolded ? '' : '<div class="git-zone-body" data-zone-body="changes">' + changesBodyHtml + '</div>',
       '</section>',
       topFolded || graphFolded ? '' : '<div class="git-splitter" data-gp-splitter title="' + esc(zh('拖拽调整高度', 'Drag to resize')) + '"></div>',
@@ -927,14 +1189,14 @@
 
   async function doStage(files) {
     await runAction(async () => {
-      await api('stage', files ? { dir: state.dir, files } : { dir: state.dir });
+      await api('stage', files ? { dir: activeDir(), files } : { dir: activeDir() });
       await loadAll();
     });
   }
 
   async function doUnstage(files) {
     await runAction(async () => {
-      await api('unstage', files ? { dir: state.dir, files } : { dir: state.dir });
+      await api('unstage', files ? { dir: activeDir(), files } : { dir: activeDir() });
       await loadAll();
     });
   }
@@ -945,7 +1207,7 @@
     );
     if (!confirmed) return;
     await runAction(async () => {
-      await api('discard', { dir: state.dir, files: [path] });
+      await api('discard', { dir: activeDir(), files: [path] });
       await loadAll();
     });
   }
@@ -1011,13 +1273,13 @@
   async function doLoadMore() {
     if (loadingMore || state.loading || state.busy) return;
     if (!state.graph.length || state.graph.length < state.graphLimit) return;
-    const dir = state.dir;
+    const view = activeDir();
     const seq = loadSeq; // 期间发起 loadAll（手动刷新/写操作）则本次响应作废
     loadingMore = true;
     state.graphLimit += 120;
     try {
-      const data = await api('graph', { dir, limit: state.graphLimit, branch: state.branch });
-      if (seq !== loadSeq || state.dir !== dir) return;
+      const data = await api('graph', { dir: view, limit: state.graphLimit, branch: state.branch });
+      if (seq !== loadSeq || activeDir() !== view) return;
       if (Array.isArray(data?.commits)) {
         state.graph = data.commits;
         state.aheadHashes = Array.isArray(data.aheadHashes) ? data.aheadHashes : [];
@@ -1094,6 +1356,11 @@
       doDiscard(file);
     } else if (action === 'branch-menu') {
       toggleBranchMenu(e);
+    } else if (action === 'repo-menu') {
+      toggleRepoMenu(e);
+    } else if (action === 'rediscover') {
+      state.rejectedRoots.clear(); // 用户显式重扫：清否决记忆，坏仓库给重试机会
+      discoverRepos(true);
     }
   });
 
@@ -1108,6 +1375,16 @@
     state.expandedCommit = '';
     closeBranchMenu();
     loadAll();
+  });
+
+  // 仓库弹层菜单项点击（同上，body 级独立监听）；主动选择写回默认仓库偏好
+  document.body.addEventListener('click', (e) => {
+    const item = e.target.closest('#git-repo-menu [data-gp-root]');
+    if (!item) return;
+    e.preventDefault();
+    const root = item.dataset.gpRoot || '';
+    closeRepoMenu();
+    if (root) selectRepo(root, { persist: true });
   });
 
   window.GitPanel = {

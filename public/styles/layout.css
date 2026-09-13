@@ -7296,6 +7296,105 @@ body[data-theme="light"] .git-sub-chev {
   to { transform: rotate(360deg); }
 }
 
+/* ── 仓库切换下拉（会话目录非仓库、查看子仓库时）──
+   与分支下拉（.git-branch-trigger × .git-branch-menu）同一视觉配方：
+   输入框模型切换同款触发按钮 + 弹层。 */
+.git-repo-trigger {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  max-width: 180px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.git-repo-trigger:hover {
+  background: var(--hover-bg);
+}
+
+.git-repo-trigger-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-repo-trigger-chevron {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.git-repo-trigger:hover .git-repo-trigger-chevron {
+  opacity: 1;
+}
+
+/* 弹层菜单（挂 body，fixed 定位，与 ccb-model-dropdown 同配方） */
+.git-repo-menu {
+  position: fixed;
+  z-index: 9100;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--dropdown-shadow);
+  scrollbar-width: thin;
+}
+
+.git-repo-menu::-webkit-scrollbar { width: 6px; }
+.git-repo-menu::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  border-right: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.git-rm-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.git-rm-item:hover {
+  background: var(--hover-bg);
+}
+
+.git-rm-item.active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.git-rm-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.git-rm-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .git-zone-body {
   flex: 1;
   min-height: 0;
@@ -7535,11 +7634,81 @@ body[data-theme="light"] .git-file-action:hover {
   color: #73c991;
 }
 
-.git-empty-desc {
-  padding: 6px 2px;
-  font-size: 12px;
+/* ── 空态/加载态 ──
+   取「交互页面」空态（.gen-ui-empty）同款视觉配方：虚线卡片 + 图标块 +
+   标题 + 描述；加载态以旋转环（.git-spinner）替代图标块。 */
+.git-empty-card {
+  display: flex;
+  min-height: 176px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  border: 1px dashed var(--border-color, rgba(128, 128, 128, 0.28));
+  border-radius: 12px;
+  background: linear-gradient(145deg, var(--bg-subtle, rgba(100, 130, 240, 0.045)), transparent);
   color: var(--text-secondary);
-  line-height: 1.5;
+  text-align: center;
+}
+
+.git-empty-card .git-zone-btn {
+  margin-top: 14px;
+}
+
+.git-empty-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 10px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent, #6391ff) 24%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent, #6391ff) 10%, transparent);
+  color: var(--accent, #6391ff);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.git-empty-title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.git-empty-desc {
+  max-width: 260px;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.git-spinner {
+  flex: none;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--accent, #6391ff) 25%, transparent);
+  border-top-color: var(--accent, #6391ff);
+  border-radius: 50%;
+  animation: git-spin 0.8s linear infinite;
+}
+
+.git-empty-spinner {
+  width: 18px;
+  height: 18px;
+  margin-bottom: 12px;
+}
+
+.git-spinner-sm {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  border-width: 1.5px;
+}
+
+@keyframes git-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ── 图形区 ──

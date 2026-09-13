@@ -132,9 +132,30 @@ export function normalizeWorkspaceState(raw = {}) {
     featureProjects,
     agentProjects,
     phProjects,
+    gitDefaultRepos: normalizeGitDefaultRepos(raw?.gitDefaultRepos),
     openDirectory: typeof raw.openDirectory === 'string' ? raw.openDirectory.trim() : '',
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
   };
+}
+
+/**
+ * git 面板默认仓库偏好（会话目录 → 默认查看的子仓库根）。
+ * 键为归一化目录（小写、\\ → /），与项目目录的其余归一化约定一致；
+ * 值为绝对路径原样保留大小写（git 命令与展示都要用原路径）。
+ */
+export function normalizeGitDefaultRepos(rawRepos) {
+  if (!rawRepos || typeof rawRepos !== 'object' || Array.isArray(rawRepos)) return {};
+  const result = {};
+  for (const [dir, repoRoot] of Object.entries(rawRepos)) {
+    const key = normalizeGitDefaultReposKey(dir);
+    const value = typeof repoRoot === 'string' ? repoRoot.trim() : '';
+    if (key && value) result[key] = value;
+  }
+  return result;
+}
+
+export function normalizeGitDefaultReposKey(dir) {
+  return String(dir || '').trim().toLowerCase().replace(/\\/g, '/');
 }
 
 // ── Read / write core ────────────────────────────────────────────────────────

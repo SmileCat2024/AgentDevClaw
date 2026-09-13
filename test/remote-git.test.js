@@ -119,8 +119,8 @@ describe('git route remote namespace branches (R2-06)', () => {
   }
 
   // 端点清点（工单表：以 server/routes/git.js 实际注册为准，逐个接入）
-  const READ_OPS = ['status', 'graph', 'branches', 'commit_files'];
-  const WRITE_OPS = ['stage', 'unstage', 'commit', 'discard', 'branch', 'stash'];
+  const READ_OPS = ['status', 'graph', 'branches', 'commit_files', 'discover'];
+  const WRITE_OPS = ['stage', 'unstage', 'commit', 'discard', 'branch', 'stash', 'default_repo'];
 
   const baseBody = (extra = {}) => ({ dir: REMOTE_DIR, agentId: HOST_NS, ...extra });
 
@@ -132,6 +132,7 @@ describe('git route remote namespace branches (R2-06)', () => {
       { op: 'graph', body: { dir: REMOTE_DIR, limit: 50, branch: 'main' } },
       { op: 'branches', body: { dir: REMOTE_DIR } },
       { op: 'commit_files', body: { dir: REMOTE_DIR, hash: 'abc123' } },
+      { op: 'discover', body: { dir: REMOTE_DIR } },
     ];
     for (const { op, body } of cases) {
       const res = await request('POST', `/protoclaw/git/${op}`, baseBody(body));
@@ -156,6 +157,7 @@ describe('git route remote namespace branches (R2-06)', () => {
         ...(op === 'discard' ? { files: ['a.txt'] } : {}),
         ...(op === 'branch' ? { op: 'switch', name: 'main' } : {}),
         ...(op === 'stash' ? { op: 'save', message: 'wip' } : {}),
+        ...(op === 'default_repo' ? { repoRoot: '/remote/repo-a' } : {}),
         idempotencyKey: `idem-${op}`,
       });
       const res = await request('POST', `/protoclaw/git/${op}`, body);

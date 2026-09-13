@@ -132,14 +132,15 @@ describe('Route registration smoke test', () => {
     assert.ok(postRoutes.some(r => r.path === '/protoclaw/validate_empty_directory'));
   });
 
-  it('setupGitRoutes should register 10 git endpoints', async () => {
+  it('setupGitRoutes should register 12 git endpoints', async () => {
     const { setupGitRoutes } = await import('../server/routes/git.js');
     const { app, routes } = createMockApp();
     setupGitRoutes(app, expressFactory());
-
     const postRoutes = routes.filter(r => r.method === 'post');
-    assert.equal(postRoutes.length, 10);
+    assert.equal(postRoutes.length, 12);
     assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/status'));
+    assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/discover'));
+    assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/default_repo'));
     assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/stage'));
     assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/unstage'));
     assert.ok(postRoutes.some(r => r.path === '/protoclaw/git/commit'));

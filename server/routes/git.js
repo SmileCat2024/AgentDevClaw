@@ -6,6 +6,8 @@
  * POST /protoclaw/git/unstage  body: { dir, files? }    → 取消暂存（缺省 = 全部取消）
  * POST /protoclaw/git/commit   body: { dir, message }   → 提交暂存区
  * POST /protoclaw/git/discard  body: { dir, files: [] } → 丢弃工作区/暂存区改动（不可逆）
+ * POST /protoclaw/git/discover      body: { dir, agentId? } → 子目录仓库发现（含持久化默认仓库）
+ * POST /protoclaw/git/default_repo  body: { dir, agentId, repoRoot? } → 记住/清除目录的默认仓库
  *
  * ── 远程命名空间分支（ADR-0011）──────────────────────────────
  * 全部端点均按同一套路接入远程命名空间分支：请求体 agentId 携带宿主级
@@ -42,6 +44,11 @@ import {
   readForwardTargetError,
 } from '../shared/remote-forward.js';
 import { buildLocalFailureResponse, readOperationMetadata } from '../shared/operation-contract.js';
+import {
+  readWorkspaceState,
+  writeWorkspaceState,
+  normalizeGitDefaultReposKey,
+} from './workspace.js';
 
 // ═══════════════════════════════════════════════════════════════
 // 移植自 simple-git：utils（util.ts / argument-filters.ts / line-parser.ts / task-parser.ts）
@@ -419,6 +426,88 @@ async function resolveGitRoot(dir) {
   return root;
 }
 
+/**
+ * 子目录仓库发现（根目录本身不是仓库时，扫出其下的独立仓库）。
+ *
+ * BFS 遍历，深度上限 4 层（相对根目录）。剪枝规则：
+ *   - 命中仓库（目录下存在 .git，目录或文件——worktree/submodule 下是文件）
+ *     即记录并不再深入该目录（不扫仓库内部）
+ *   - 不跟随符号链接（防循环）；隐藏目录（. 开头）与 node_modules 等
+ *     重型目录不深入
+ * 防御上限（服务端常量，客户端不可指定）：访问目录总数、单目录子项数。
+ * 上限经 options 可注入，仅供测试截断语义；端点使用默认值。
+ */
+const DISCOVER_MAX_DEPTH = 4;       // 相对根目录的最大扫描层级
+const DISCOVER_MAX_VISIT = 2000;    // 访问目录总数上限（防大目录树爆炸）
+const DISCOVER_MAX_CHILDREN = 500;  // 单目录子项数上限（超出截断）
+const DISCOVER_SKIP_DIRS = new Set([
+  'node_modules', 'vendor', 'dist', 'build', 'out', 'target', 'coverage', '__pycache__',
+]);
+
+async function discoverGitReposUncached(root, options) {
+  const maxDepth = options.maxDepth ?? DISCOVER_MAX_DEPTH;
+  const maxVisit = options.maxVisit ?? DISCOVER_MAX_VISIT;
+  const maxChildren = options.maxChildren ?? DISCOVER_MAX_CHILDREN;
+  const repos = [];
+  const queue = [{ dir: root, depth: 0 }];
+  let visited = 0;
+  while (queue.length > 0 && visited < maxVisit) {
+    const { dir, depth } = queue.shift();
+    visited++;
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (_) {
+      continue; // 无权限 / 已消失等：跳过该目录
+    }
+    const children = [];
+    let isRepo = false;
+    for (const ent of entries) {
+      if (ent.name === '.git') {
+        // 目录（普通仓库）或文件（worktree/submodule）都算仓库标记；
+        // 符号链接等罕见形态不算，继续检查其余子目录
+        if (ent.isDirectory() || ent.isFile()) {
+          isRepo = true;
+          break;
+        }
+        continue;
+      }
+      if (!ent.isDirectory() || ent.isSymbolicLink()) continue;
+      if (ent.name.startsWith('.') || DISCOVER_SKIP_DIRS.has(ent.name)) continue;
+      children.push(ent.name);
+    }
+    if (isRepo) {
+      const rel = path.relative(root, dir).split(path.sep).join('/');
+      repos.push({ root: dir, relPath: rel });
+      continue; // 仓库内部不再深入
+    }
+    if (depth >= maxDepth) continue;
+    for (const name of children.slice(0, maxChildren)) {
+      queue.push({ dir: path.join(dir, name), depth: depth + 1 });
+    }
+  }
+  repos.sort((a, b) => a.relPath.localeCompare(b.relPath));
+  return repos;
+}
+
+// 结果缓存对齐 rootCache 模式：正结果低频变化长 TTL，空结果短 TTL 不阻碍
+// 新仓库被识别；force 重扫绕过缓存但回写。
+const discoverCache = new Map(); // dir → { repos, at }
+const DISCOVER_TTL_MS = 10 * 60 * 1000;
+const DISCOVER_NEG_TTL_MS = 30 * 1000;
+
+async function discoverGitRepos(dir, options = {}) {
+  const now = Date.now();
+  const hit = discoverCache.get(dir);
+  if (hit && !options.force) {
+    const ttl = hit.repos.length === 0 ? DISCOVER_NEG_TTL_MS : DISCOVER_TTL_MS;
+    if (now - hit.at < ttl) return hit.repos;
+  }
+  const repos = await discoverGitReposUncached(dir, options);
+  discoverCache.set(dir, { repos, at: now });
+  return repos;
+}
+
 /** 校验请求目录并归一化；非法时抛 statusCode=400 错误 */
 async function validateDir(input) {
   const raw = String(input || '').trim();
@@ -504,7 +593,7 @@ function routeError(res, error) {
 // ADR-0011：远程写幂等闸（写端点集合；status/graph/branches/commit_files 读
 // 端点不强制）。远程目标 + 无 idempotencyKey → 400 且请求不过隧道；本地路径
 // 保持现状不强制（session.js / proxy.js 同族契约）。
-const GIT_WRITE_OPS = new Set(['stage', 'unstage', 'commit', 'discard', 'branch', 'stash']);
+const GIT_WRITE_OPS = new Set(['stage', 'unstage', 'commit', 'discard', 'branch', 'stash', 'default_repo']);
 
 function requireRemoteGitIdempotencyKey(req, res) {
   const metadata = readOperationMetadata(req);
@@ -546,6 +635,8 @@ async function forwardRemoteGitIfNamespaced(req, res, op) {
   }
 }
 
+export { discoverGitRepos };
+
 export function setupGitRoutes(app, express) {
   app.post('/protoclaw/git/status', express.json(), async (req, res) => {
     try {
@@ -567,6 +658,70 @@ export function setupGitRoutes(app, express) {
         head = (await runGit(['rev-parse', 'HEAD'], root)).trim();
       } catch (_) { /* 尚无提交等：head 保持空串 */ }
       res.json({ ok: true, isRepo: true, root, head, status: serializeStatus(parseStatusSummary(text)) });
+    } catch (error) {
+      routeError(res, error);
+    }
+  });
+
+  // ── 子目录仓库发现（读端点：根目录非仓库时列出其下的独立仓库）──
+  app.post('/protoclaw/git/discover', express.json(), async (req, res) => {
+    try {
+      // 远程命名空间身份 → 转发远程同名路由（dir 是远程机本地路径，
+      // 远程端自己扫描）；本地身份走本地扫描。读端点，无幂等闸。
+      if (await forwardRemoteGitIfNamespaced(req, res, 'discover')) return;
+      const dir = await validateDir(req.body?.dir);
+      const repos = await discoverGitRepos(dir, { force: req.body?.force === true });
+      // 顺带下发该目录的持久化默认仓库：列表与默认值一次请求对齐，
+      // 前端首次进入即知道该自动展开哪个仓库
+      let defaultRepo = '';
+      const agentId = String(req.body?.agentId || '').trim();
+      if (agentId) {
+        const state = await readWorkspaceState(agentId).catch(() => null);
+        defaultRepo = state?.gitDefaultRepos?.[normalizeGitDefaultReposKey(dir)] || '';
+      }
+      res.json({ ok: true, repos, defaultRepo });
+    } catch (error) {
+      routeError(res, error);
+    }
+  });
+
+  // ── 默认仓库偏好（写端点：目录 → 默认查看的子仓库，存 workspace state）──
+  app.post('/protoclaw/git/default_repo', express.json(), async (req, res) => {
+    try {
+      // 远程命名空间身份 → 转发远程同名路由（远程端的 workspace state 由
+      // 远程服务端自持）。写端点，远程分支强制幂等键。
+      if (await forwardRemoteGitIfNamespaced(req, res, 'default_repo')) return;
+      const agentId = String(req.body?.agentId || '').trim();
+      if (!agentId) {
+        res.status(400).json({ error: 'agentId is required' });
+        return;
+      }
+      const dir = await validateDir(req.body?.dir);
+      // repoRoot 缺省/空串 = 清除该目录的偏好；非空时必须是 dir 之下的
+      // git 仓库（防把偏好指到任意无关路径）
+      let repoRoot = '';
+      const rawRoot = String(req.body?.repoRoot || '').trim();
+      if (rawRoot) {
+        const resolved = path.resolve(rawRoot);
+        const rel = path.relative(dir, resolved);
+        if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+          res.status(400).json({ error: 'repoRoot must be a subdirectory of dir' });
+          return;
+        }
+        const gitStat = await fs.stat(path.join(resolved, '.git')).catch(() => null);
+        if (!gitStat) {
+          res.status(400).json({ error: 'repoRoot is not a git repository' });
+          return;
+        }
+        repoRoot = resolved;
+      }
+      const state = await readWorkspaceState(agentId);
+      const map = { ...state.gitDefaultRepos };
+      const key = normalizeGitDefaultReposKey(dir);
+      if (repoRoot) map[key] = repoRoot;
+      else delete map[key];
+      await writeWorkspaceState(agentId, { gitDefaultRepos: map });
+      res.json({ ok: true, repoRoot });
     } catch (error) {
       routeError(res, error);
     }
