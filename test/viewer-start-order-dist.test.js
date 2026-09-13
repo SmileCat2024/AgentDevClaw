@@ -87,6 +87,9 @@ describe('ViewerWorker dist integration (sock path preservation)', () => {
     workers.push(second);
     await assert.rejects(() => second.start(), /端口|EADDRINUSE/);
 
+    // 失败实例的 stop() 同样不得删除路径上属于他人的 sock 文件
+    await second.stop();
+
     assert.ok(existsSync(udsPath), 'sock file must survive the failed second start');
     assert.equal(await canConnect(udsPath), true, 'primary listener must remain reachable');
   });
