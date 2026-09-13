@@ -9,7 +9,6 @@
   "enabled": true,
   "features": [
     "todo",
-    "audit",
     "websearch",
     "shell",
     "agent-dev",

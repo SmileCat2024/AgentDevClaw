@@ -11,7 +11,6 @@
   "features": [
     "todo",
     "force-continuation",
-    "audit",
     "audio-feedback",
     "user-input",
     "websearch",
