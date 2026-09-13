@@ -421,11 +421,11 @@ describe('git-panel remote adaptation (R2-06)', () => {
       // 读视图照常渲染（降级只禁写），无任何远程连接标识（面板不加远程徽标，
       // 呈现与本地会话同一套语言）
       assert.ok(ctx.__dom.includes('git-panel'), 'panel renders');
-      // 写按钮禁用：stage-all / unstage-all / commit 与行内 stage / discard
+      // 写按钮禁用：stage-all / unstage-all 与行内 stage / discard
+      // （commit 框已随面板简化移除，写门控覆盖现存全部写控件）
       assert.ok(ctx.__dom.includes('data-gp-action="stage-all" disabled'), 'stage-all disabled');
       assert.ok(ctx.__dom.includes('data-gp-action="unstage-all" disabled'), 'unstage-all disabled');
       assert.ok(ctx.__dom.includes('data-gp-action="discard" data-gp-file="staged.txt" disabled'), 'per-file actions disabled');
-      assert.ok(ctx.__dom.includes('data-gp-action="commit"') && ctx.__dom.includes('disabled'), 'commit disabled');
       // runAction 守卫兜底：委托层点击不产生写请求，显式错误呈现
       ctx.__click('stage-all');
       await tick(); await tick();
