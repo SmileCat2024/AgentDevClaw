@@ -4388,60 +4388,68 @@ body[data-theme="light"] .rh-group {
   transform: rotate(90deg);
 }
 
-/* ── Features 面板分类分组（视觉对齐 .rh-group）────────────────── */
+/* ── Features 面板分类分组 — bar 式折叠头（视觉对齐 .git-zone-bar，无卡片容器）── */
 
 .feature-group {
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.015);
-  overflow: hidden;
-  margin-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 body[data-theme="light"] .feature-group {
-  background: #ffffff;
+  border-bottom-color: rgba(0, 0, 0, 0.08);
 }
 
-.feature-group-head {
+.feature-group-bar {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 11px 13px;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 14px;
   cursor: pointer;
   user-select: none;
   list-style: none;
-  background: var(--bg-secondary);
 }
 
-.feature-group-head::-webkit-details-marker {
+.feature-group-bar::-webkit-details-marker {
   display: none;
 }
 
-.feature-group-head:hover {
+.feature-group-bar:hover {
   background: var(--active-bg);
 }
 
-.feature-group-name {
-  font-weight: 700;
-  font-size: 14.5px;
-  letter-spacing: -0.01em;
+.feature-group-chev {
+  width: 0;
+  height: 0;
+  border-left: 4px solid rgba(255, 255, 255, 0.4);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.12s ease;
+  flex: none;
+}
+
+body[data-theme="light"] .feature-group-chev {
+  border-left-color: rgba(0, 0, 0, 0.4);
+}
+
+.feature-group[open] > .feature-group-bar .feature-group-chev {
+  transform: rotate(90deg);
+}
+
+.feature-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
   color: var(--text-primary);
 }
 
 .feature-group-count {
-  margin-left: auto;
   font-size: 11px;
   color: var(--text-secondary);
 }
 
-.feature-group[open] .rh-chev {
-  transform: rotate(90deg);
-}
-
 .feature-group .feature-grid {
-  padding: 12px;
+  padding: 12px 14px;
   gap: 12px;
-  border-top: 1px solid var(--border-color);
 }
 
 /* 时间线条目：序号点 + 竖向连线，无边框无背景 */

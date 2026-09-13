@@ -92,10 +92,10 @@ function renderFeaturesPanel() {
     return [
       '<details class="feature-group"' + (isOpen ? ' open' : '')
         + ' ontoggle="window.featureGroupToggled(&quot;' + escapeHtml(group.category) + '&quot;, this.open)">',
-      '<summary class="feature-group-head">',
-      '<span class="feature-group-name">' + escapeHtml(featureCategoryLabel(group.category)) + '</span>',
+      '<summary class="feature-group-bar">',
+      '<span class="feature-group-chev" aria-hidden="true"></span>',
+      '<span class="feature-group-title">' + escapeHtml(featureCategoryLabel(group.category)) + '</span>',
       '<span class="feature-group-count">' + String(group.features.length) + '</span>',
-      '<span class="rh-chev">▸</span>',
       '</summary>',
       '<div class="feature-grid">' + group.features.map(buildFeatureCard).join('') + '</div>',
       '</details>',
