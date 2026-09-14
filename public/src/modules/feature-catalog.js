@@ -29,8 +29,9 @@ async function fetchFeatureCatalog() {
 
 /**
  * 拉取（或复用进行中/已完成的）catalog。
- * 首次成功后主动触发一帧 inspector 刷新——renderFeaturesPanel 是同步渲染，
+ * 首次成功后主动触发一帧面板重渲染——renderFeaturesPanel 是同步渲染，
  * catalog 未就绪的首帧 feature 全落 _unmapped，靠本回调修正而非等轮询周期。
+ * 与筛选切换一致走 renderFeaturePanel 直渲染（乐观、无 poll 往返迟滞）。
  */
 async function loadFeatureCatalog(force = false) {
   if (_catalogPromise && !force) return _catalogPromise;
@@ -38,7 +39,10 @@ async function loadFeatureCatalog(force = false) {
     const data = await fetchFeatureCatalog();
     const firstLoad = !_catalog;
     _catalog = data;
-    if (firstLoad && window._scheduleInspectorRefresh) window._scheduleInspectorRefresh(0);
+    if (firstLoad && typeof activeFeaturePanel !== 'undefined'
+      && activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
+      renderFeaturePanel();
+    }
     return data;
   })().catch(err => {
     _catalogPromise = null;

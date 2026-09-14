@@ -10767,6 +10767,11 @@ body[data-theme="light"] .claw-select-trigger:focus-visible {
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
+/* no-scroll 变体（data-claw-no-scroll）：选项少的下拉放开高度限制 */
+.claw-select-panel.no-scroll .claw-select-panel-inner {
+  max-height: none;
+}
+
 .claw-select-panel-inner::-webkit-scrollbar {
   width: 6px;
 }

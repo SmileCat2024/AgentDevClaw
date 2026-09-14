@@ -62,7 +62,13 @@ function _persistPanelFilters() {
 }
 
 function _refreshPanelAfterFilterChange() {
-  if (window._scheduleInspectorRefresh) window._scheduleInspectorRefresh(0);
+  // 乐观渲染：筛选是纯本地状态（数据已在 currentHookInspector 内存中），
+  // 同步重渲染面板立即生效——经 _scheduleInspectorRefresh 走完整 poll
+  // 周期会引入一轮网络往返的迟滞。面板未打开时无需渲染，状态已持久化，
+  // 下次打开按新筛选渲染。
+  if (activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
+    renderFeaturePanel();
+  }
 }
 
 window.setFeaturePanelFilter = function (filter) {
@@ -80,14 +86,16 @@ window.setFeaturePanelCapFilter = function (cap) {
 };
 
 /**
- * 来源分页器（usage-info-segment 同款视觉配方，面板小号适配）。
+ * 来源分页器（usage-info-segment 同款视觉配方，面板小号适配），
+ * 末尾附带已挂载总数小字。
  * onpointerdown 为主路径：面板 body 随轮询全量 innerHTML 替换，click
  * 序列（mousedown→mouseup→click）跨过替换边界时目标已脱离 DOM、
  * onclick 属性不再执行——历史上表现为"必须双击才能切换"。pointerdown
  * 在按下瞬间同步完成切换，不受替换影响；onclick 保留键盘触发路径，
  * setter 的同值短路保证两路径幂等。
+ * @param {number} totalCount 已挂载 feature 总数（不随筛选变化）
  */
-function buildFeatureFilterSegment() {
+function buildFeatureFilterSegment(totalCount) {
   const keys = { all: 'feature_filter_all', bundled: 'feature_filter_bundled', installed: 'feature_filter_installed' };
   return '<div class="usage-info-segment feature-src-seg" role="tablist">'
     + FEATURE_FILTERS.map(f => [
@@ -96,6 +104,7 @@ function buildFeatureFilterSegment() {
         + ' onclick="window.setFeaturePanelFilter(\'' + f + '\')">'
         + escapeHtml(t(keys[f])) + '</button>',
     ].join('')).join('')
+    + '<span class="feature-src-count">' + String(totalCount) + '</span>'
     + '</div>';
 }
 
@@ -104,7 +113,8 @@ function buildFeatureFilterSegment() {
  * capabilities 词表驱动，label 复用详情弹窗的 feature_cap_* 词条
  * （弹窗与下拉措辞一致，用户不会看到两套叫法）。
  * data-claw-select + compact：debug-panel-host 渲染后自动做 ClawSelect
- * 增强（git 仓库/分支下拉同款视觉）。
+ * 增强（git 仓库/分支下拉同款视觉）；data-claw-no-scroll：选项少，
+ * 弹出面板放开 max-height 不出滚动条。
  * catalog 未就绪时返回空串（首帧不渲染，catalog 到位后的刷新帧补上）。
  */
 function buildFeatureCapSelect(catalog) {
@@ -112,7 +122,7 @@ function buildFeatureCapSelect(catalog) {
   if (!fc || !catalog || !Array.isArray(catalog.capabilities) || catalog.capabilities.length === 0) return '';
   const current = fc.normalizeCapFilter(_featurePanelCapFilter, catalog);
   const options = ['all'].concat(catalog.capabilities.map(c => (typeof c === 'string' ? c : c.id)));
-  return '<select class="feature-cap-select" data-claw-select data-claw-compact="true"'
+  return '<select class="feature-cap-select" data-claw-select data-claw-compact="true" data-claw-no-scroll="true"'
     + ' onchange="window.setFeaturePanelCapFilter(this.value)">'
     + options.map(id => '<option value="' + escapeHtml(id) + '"' + (id === current ? ' selected' : '') + '>'
       + escapeHtml(t(id === 'all' ? 'feature_filter_all' : 'feature_cap_' + id)) + '</option>').join('')
@@ -223,14 +233,8 @@ function renderFeaturesPanel() {
     '<div class="hooks-panel feature-detail-shell">',
     '<section class="hooks-section">',
     '<div class="hooks-section-header feature-panel-head">',
-    '<div class="feature-panel-head-main">',
-    '<span class="hooks-section-title">' + escapeHtml(t('feature_mounted_title')) + '</span>',
-    '<span class="feature-panel-head-count">' + String(currentHookInspector.features.length) + '</span>',
-    '</div>',
-    '<div class="feature-panel-head-actions">',
+    buildFeatureFilterSegment(currentHookInspector.features.length),
     buildFeatureCapSelect(catalog),
-    buildFeatureFilterSegment(),
-    '</div>',
     '</div>',
     groupsHtml,
     '</section>',

@@ -70,6 +70,12 @@
       panel.classList.add('accent');
     }
 
+    // 继承 no-scroll 变体：选项少、展示高度足够的下拉不限制面板高度
+    //（默认 max-height 280px 会在恰好溢出几像素时出现多余滚动条）
+    if (select.dataset.clawNoScroll === 'true') {
+      panel.classList.add('no-scroll');
+    }
+
     var inner = document.createElement('div');
     inner.className = 'claw-select-panel-inner';
 
