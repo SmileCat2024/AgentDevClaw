@@ -25,13 +25,21 @@ const CATALOG = {
   schemaVersion: 1,
   capabilities: [{ id: 'tools' }, { id: 'policy' }, { id: 'gateway' }, { id: 'mcp' }, { id: 'protocol' }],
   provenances: ['ecosystem', 'local', 'builtin', 'inline', 'packaged'],
+  types: [
+    { id: 'ability', collapsed: false },
+    { id: 'governance', collapsed: false },
+    { id: 'interface', collapsed: false },
+    { id: 'system', collapsed: true },
+  ],
   groups: ['installed', 'bundled'],
   features: [
-    { name: 'shell', displayName: { zh: 'Shell 执行', en: 'Shell' }, capabilities: ['tools', 'policy'], provenance: 'ecosystem', group: 'bundled' },
-    { name: 'todo', displayName: '任务清单', capabilities: ['tools'], provenance: 'local', group: 'bundled' },
-    { name: 'lsp', displayName: { zh: '语言服务', en: 'Language Server' }, capabilities: ['tools'], provenance: 'builtin', group: 'bundled' },
-    { name: 'im-operator', displayName: { zh: 'IM 接线员', en: 'IM Operator' }, capabilities: ['gateway', 'tools'], provenance: 'inline', group: 'bundled' },
-    { name: 'user-tool', displayName: { zh: '用户工具', en: 'User Tool' }, capabilities: ['tools'], provenance: 'packaged', group: 'installed' },
+    { name: 'shell', displayName: { zh: 'Shell 执行', en: 'Shell' }, type: 'ability', capabilities: ['tools', 'policy'], provenance: 'ecosystem', group: 'bundled' },
+    { name: 'todo', displayName: '任务清单', type: 'ability', capabilities: ['tools'], provenance: 'local', group: 'bundled' },
+    { name: 'lsp', displayName: { zh: '语言服务', en: 'Language Server' }, type: 'ability', capabilities: ['tools'], provenance: 'builtin', group: 'bundled' },
+    { name: 'context-guard', displayName: { zh: '上下文守卫', en: 'Context Guard' }, type: 'governance', capabilities: ['policy'], provenance: 'local', group: 'bundled' },
+    { name: 'im-operator', displayName: { zh: 'IM 接线员', en: 'IM Operator' }, type: 'interface', capabilities: ['gateway', 'tools'], provenance: 'inline', group: 'bundled' },
+    { name: 'user-input', displayName: { zh: '用户输入', en: 'User Input' }, type: 'system', capabilities: ['tools'], provenance: 'builtin', group: 'bundled' },
+    { name: 'user-tool', displayName: { zh: '用户工具', en: 'User Tool' }, type: 'ability', capabilities: ['tools'], provenance: 'packaged', group: 'installed' },
   ],
 };
 
@@ -41,38 +49,56 @@ function inspectorFeature(name, extra = {}) {
 
 // ── groupFeaturesByDisplayGroup ────────────────────────────────────
 
-describe('feature-catalog: groupFeaturesByDisplayGroup', () => {
+describe('feature-catalog: groupFeaturesByType', () => {
   const ctx = loadModule();
   const fn = ctx.run;
 
-  it('groups by display vocabulary order (installed first), empty groups dropped', () => {
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByDisplayGroup(
-      [ ${JSON.stringify(inspectorFeature('lsp'))}, ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('todo'))}, ${JSON.stringify(inspectorFeature('im-operator'))}, ${JSON.stringify(inspectorFeature('user-tool'))} ],
+  it('groups by type vocabulary order, empty groups dropped', () => {
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(
+      [ ${JSON.stringify(inspectorFeature('lsp'))}, ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('context-guard'))}, ${JSON.stringify(inspectorFeature('im-operator'))}, ${JSON.stringify(inspectorFeature('user-input'))}, ${JSON.stringify(inspectorFeature('user-tool'))} ],
       ${JSON.stringify(CATALOG)}
     )`);
-    // 展示层只分两组：细粒度 provenance（ecosystem/local/builtin/inline）归并进 bundled
-    assert.equal(JSON.stringify(groups.map(g => g.id)), JSON.stringify(['installed', 'bundled']));
-    assert.equal(groups[0].features.length, 1);
-    assert.equal(groups[0].features[0].name, 'user-tool');
-    assert.equal(groups[1].features.length, 4);
+    assert.equal(JSON.stringify(groups.map(g => g.id)), JSON.stringify(['ability', 'governance', 'interface', 'system']));
+    // user-tool 是 installed 来源但功能类型是 ability——分组轴与过滤器正交，不产生独立 installed 组
+    assert.equal(groups[0].features.length, 3);
+    assert.equal(groups[1].features[0].name, 'context-guard');
+    assert.equal(groups[3].features[0].name, 'user-input');
+  });
+
+  it('filter=bundled keeps only bundled entries; filter=installed keeps only installed', () => {
+    const input = `[ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('user-tool'))} ]`;
+    const bundled = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'bundled')`);
+    assert.equal(JSON.stringify(bundled.map(g => g.id)), JSON.stringify(['ability']));
+    assert.equal(bundled[0].features.length, 1);
+    const installed = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'installed')`);
+    assert.equal(JSON.stringify(installed.map(g => g.id)), JSON.stringify(['ability']));
+    assert.equal(installed[0].features[0].name, 'user-tool');
+  });
+
+  it('filter=installed with no installed features returns empty group array', () => {
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(
+      [ ${JSON.stringify(inspectorFeature('shell'))} ], ${JSON.stringify(CATALOG)}, 'installed'
+    )`);
+    assert.equal(groups.length, 0);
   });
 
   it('unmapped features land in _unmapped (always last) with mapped:false', () => {
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByDisplayGroup(
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(
       [ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('brand-new-feature'))} ],
       ${JSON.stringify(CATALOG)}
     )`);
-    assert.equal(JSON.stringify(groups.map(g => g.id)), JSON.stringify(['bundled', '_unmapped']));
+    assert.equal(JSON.stringify(groups.map(g => g.id)), JSON.stringify(['ability', '_unmapped']));
     const unmapped = groups[1];
     assert.equal(unmapped.features.length, 1);
     assert.equal(unmapped.features[0].name, 'brand-new-feature');
     assert.equal(unmapped.features[0].mapped, false);
     assert.equal(unmapped.features[0].provenance, null);
     assert.equal(unmapped.features[0].group, null);
+    assert.equal(unmapped.features[0].type, null);
   });
 
   it('null catalog sends all features to _unmapped', () => {
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByDisplayGroup(
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(
       [ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('todo'))} ], null
     )`);
     assert.equal(groups.length, 1);
@@ -82,9 +108,17 @@ describe('feature-catalog: groupFeaturesByDisplayGroup', () => {
   });
 
   it('empty features input returns empty group array', () => {
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByDisplayGroup([], ${JSON.stringify(CATALOG)})`);
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType([], ${JSON.stringify(CATALOG)})`);
     assert.equal(groups.length, 0);
-    assert.equal(fn('window.ClawFW.featureCatalog.groupFeaturesByDisplayGroup(undefined, null)').length, 0);
+    assert.equal(fn('window.ClawFW.featureCatalog.groupFeaturesByType(undefined, null)').length, 0);
+  });
+
+  it('typeCollapsedByDefault follows vocabulary flags (system folds)', () => {
+    const call = (id) => fn(`window.ClawFW.featureCatalog.typeCollapsedByDefault('${id}', ${JSON.stringify(CATALOG)})`);
+    assert.equal(call('system'), true);
+    assert.equal(call('ability'), false);
+    assert.equal(call('governance'), false);
+    assert.equal(call('nonexistent'), false);
   });
 });
 

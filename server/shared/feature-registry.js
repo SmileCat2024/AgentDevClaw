@@ -38,8 +38,22 @@ export const FEATURE_CAPABILITIES = [
 export const FEATURE_PROVENANCES = ['ecosystem', 'local', 'builtin', 'inline', 'packaged'];
 
 /**
- * 展示分组（用户视角）。provenance 是数据层概念（仓库边界，开发者视角，
- * 供 Registry 管理与弹窗细粒度来源展示）；面板分组的粒度以用户为准：
+ * 功能类型词表（面板主分组轴，ADR 0017 决策 2 三次修订）。
+ * 轴 = 用户安装意图（"装它是为了什么"），单值；语义上回答三个问题：
+ * 它让 agent 会了什么 / 它怎么管 agent / 它怎么连 agent。
+ * system 是宿主运转件（给体系看的），默认折叠。
+ * 来源（官方内置 bundled / 已安装 installed）不作分组轴——是面板右上角的过滤器。
+ */
+export const FEATURE_TYPES = [
+  { id: 'ability', collapsed: false },
+  { id: 'governance', collapsed: false },
+  { id: 'interface', collapsed: false },
+  { id: 'system', collapsed: true },
+];
+
+/**
+ * 来源过滤器（用户视角）。provenance 是数据层概念（仓库边界，开发者视角，
+ * 供 Registry 管理与弹窗细粒度来源展示）；过滤粒度以用户为准：
  * 官方内置（随软件发行的一切）vs 已安装（用户经 tgz 仓库装入的）。
  * 映射权威在 server，前端只消费响应中的 group 字段。
  */
@@ -61,6 +75,7 @@ for (const p of FEATURE_PROVENANCES) {
 
 const CAPABILITY_IDS = new Set(FEATURE_CAPABILITIES.map(c => c.id));
 const PROVENANCE_IDS = new Set(FEATURE_PROVENANCES);
+const TYPE_IDS = new Set(FEATURE_TYPES.map(t => t.id));
 
 function isValidDisplayName(value) {
   if (typeof value === 'string') return value.trim().length > 0;
@@ -99,6 +114,9 @@ export function loadFeatureRegistry(seedPath = SEED_PATH) {
     if (!PROVENANCE_IDS.has(entry.provenance)) {
       throw new Error(`${label}: unknown provenance "${entry.provenance}" (allowed: ${FEATURE_PROVENANCES.join(', ')})`);
     }
+    if (!TYPE_IDS.has(entry.type)) {
+      throw new Error(`${label}: unknown type "${entry.type}" (allowed: ${[...TYPE_IDS].join(', ')})`);
+    }
     if (!isValidDisplayName(entry.displayName)) {
       throw new Error(`${label}: "displayName" must be a non-empty string or { zh, en } object`);
     }
@@ -107,6 +125,7 @@ export function loadFeatureRegistry(seedPath = SEED_PATH) {
     schemaVersion: raw.schemaVersion,
     capabilities: FEATURE_CAPABILITIES,
     provenances: FEATURE_PROVENANCES,
+    types: FEATURE_TYPES,
     groups: FEATURE_DISPLAY_GROUPS.map(g => g.id),
     features: raw.features.map(entry => ({ ...entry, group: PROVENANCE_TO_GROUP.get(entry.provenance) })),
   };

@@ -34,7 +34,16 @@ describe('feature-registry: loadFeatureRegistry', () => {
     assert.ok(registry.features.length > 0);
     assert.ok(registry.capabilities.some(c => c.id === 'tools'));
     assert.deepEqual(registry.provenances, ['ecosystem', 'local', 'builtin', 'inline', 'packaged']);
-    // 展示分组：细粒度 provenance 全部映射到 bundled/installed，词表顺序 installed 在前
+    // 功能类型词表（面板主分组轴）：四类有序，system 默认折叠
+    assert.deepEqual(registry.types, [
+      { id: 'ability', collapsed: false },
+      { id: 'governance', collapsed: false },
+      { id: 'interface', collapsed: false },
+      { id: 'system', collapsed: true },
+    ]);
+    assert.ok(registry.features.every(f => registry.types.some(t => t.id === f.type)),
+      'every entry carries a known type');
+    // 来源过滤器：细粒度 provenance 全部映射到 bundled/installed，词表顺序 installed 在前
     assert.deepEqual(registry.groups, ['installed', 'bundled']);
     assert.ok(registry.features.every(f => f.group === 'bundled' || f.group === 'installed'),
       'every entry carries a display group');
@@ -63,7 +72,7 @@ describe('feature-registry: loadFeatureRegistry', () => {
   });
 
   it('rejects duplicate names', () => {
-    const entry = { name: 'dup', displayName: 'X', capabilities: ['tools'], provenance: 'local' };
+    const entry = { name: 'dup', displayName: 'X', type: 'ability', capabilities: ['tools'], provenance: 'local' };
     const p = writeSeed({ schemaVersion: 1, features: [entry, entry] });
     assert.throws(() => loadFeatureRegistry(p), /duplicate/);
   });
@@ -76,13 +85,18 @@ describe('feature-registry: loadFeatureRegistry', () => {
   });
 
   it('rejects unknown provenance', () => {
-    const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', capabilities: ['tools'], provenance: 'mystery' }] });
-    assert.throws(() => loadFeatureRegistry(p), /provenance/);
+    const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', type: 'ability', capabilities: ['tools'], provenance: 'wat' }] });
+    assert.throws(() => loadFeatureRegistry(p), /unknown provenance/);
+  });
+
+  it('rejects unknown type', () => {
+    const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', type: 'wat', capabilities: ['tools'], provenance: 'local' }] });
+    assert.throws(() => loadFeatureRegistry(p), /unknown type/);
   });
 
   it('rejects missing or malformed displayName', () => {
     for (const dn of [undefined, '', '   ', { zh: '只中文' }, 42]) {
-      const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: dn, capabilities: ['tools'], provenance: 'local' }] });
+      const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: dn, type: 'ability', capabilities: ['tools'], provenance: 'local' }] });
       assert.throws(() => loadFeatureRegistry(p), /displayName/);
     }
   });

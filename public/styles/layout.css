@@ -4422,6 +4422,47 @@ body[data-theme="light"] .feature-group {
   border-bottom-color: rgba(0, 0, 0, 0.08);
 }
 
+/* ── Features 面板：来源过滤器（分段控件，标题行右侧） ── */
+
+.feature-filter-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.feature-filter-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #888);
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.feature-filter-btn:hover {
+  color: var(--text-primary, inherit);
+}
+
+.feature-filter-btn.active {
+  background: rgba(127, 127, 127, 0.22);
+  color: var(--text-primary, inherit);
+}
+
+.feature-filter-empty {
+  padding: 18px 4px;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  text-align: center;
+}
+
 .feature-group-bar {
   display: flex;
   align-items: center;

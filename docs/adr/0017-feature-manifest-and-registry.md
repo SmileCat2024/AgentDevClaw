@@ -69,6 +69,25 @@ Feature 的元信息现状是三套平行体系互相不认识：
 - **数据层**：provenance 五值保留（单值正交、机器可判定），供 Registry 管理、冲突审计与详情弹窗的细粒度来源展示；
 - **展示层**：`builtin / ecosystem / local / inline → bundled`，`packaged → installed`，映射权威在 server，随 catalog 响应携带；单一非兜底分组时面板不渲染组头（当下无自装件即整体平铺，装入首个 feature 后"已安装"组自动出现）。
 
+**三次修订（同日终版）**：二次修订的 bundled/installed 仍作分组轴，实施后再被推翻——**来源回答的是"谁提供的"，不是"这是干什么用的"，作分组轴没有组织信息量**（22 个官方件挤一组）。终版三维正交模型：
+
+| 维度 | 回答的问题 | 值形态 | 用途 |
+|---|---|---|---|
+| **功能类型 `type`** | 用户装它是为了什么？ | 单值 | 面板主分组轴 |
+| **来源** | 谁提供的？ | 单值 | 面板右上角过滤器（全部 / 官方内置 / 已安装） |
+| **能力 `capabilities`** | 以什么形态工作？ | 多值 | 详情弹窗标签 |
+
+功能类型词表（四类，受控；轴 = 用户安装意图，语义上回答"它让 agent 会了什么 / 它怎么管 agent / 它怎么连 agent"）：
+
+| type | 语义 | 成员示例 | 默认态 |
+|---|---|---|---|
+| `ability` | agent 会什么新东西 | shell、lsp、github、websearch、memory、mcp、todo | 展开 |
+| `governance` | agent 怎么管理自己的上下文与运转 | checkpoint、context-guard、output-guard、step-rotating-model | 展开 |
+| `interface` | 用户从哪进、怎么看到 agent | IM 渠道、generative-ui、audio-feedback | 展开 |
+| `system` | 宿主运转件（给体系看的） | capability-shell、dispatch、user-input、技能加载 | 折叠 |
+
+"安装意图"天然单值（装 github 就是为了 GitHub 集成），因此功能类型作单值分组不重蹈初版"能力多值强行单选"的覆辙。词表治理：新增类型须过讨论，参考上限 6±2 类；个案裁决记录理由。
+
 能力词表（七类，受控）：
 
 | capability | 形态语义 |

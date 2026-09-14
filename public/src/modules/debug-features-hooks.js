@@ -25,14 +25,43 @@ const _featureGroupOpenPref = new Map();
 /**
  * 分组 details ontoggle 回调：用户操作过的组按其偏好恢复。
  */
-function featureGroupToggled(groupId, open) {
-  _featureGroupOpenPref.set(groupId, open);
+function featureGroupToggled(typeId, open) {
+  _featureGroupOpenPref.set(typeId, open);
 }
 window.featureGroupToggled = featureGroupToggled;
 
-// 展示分组头文案（官方内置 / 已安装；兜底组独立 key）
-function featureGroupLabel(groupId) {
-  return t(groupId === '_unmapped' ? 'feature_cat_unmapped' : 'feature_group_' + groupId);
+// 功能类型分组头文案（能力/会话与行为/渠道与交互/系统组件；兜底组独立 key）
+function featureGroupLabel(typeId) {
+  return t(typeId === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + typeId);
+}
+
+// ── 来源过滤器（全部 / 官方内置 / 已安装）─────────────────────────
+
+const FEATURE_FILTERS = ['all', 'bundled', 'installed'];
+const FEATURE_FILTER_STORAGE_KEY = 'claw_feature_panel_filter';
+let _featurePanelFilter = 'all';
+try {
+  const saved = localStorage.getItem(FEATURE_FILTER_STORAGE_KEY);
+  if (FEATURE_FILTERS.includes(saved)) _featurePanelFilter = saved;
+} catch (e) { /* localStorage 不可用时保持默认 */ }
+
+window.setFeaturePanelFilter = function (filter) {
+  if (!FEATURE_FILTERS.includes(filter) || filter === _featurePanelFilter) return;
+  _featurePanelFilter = filter;
+  try { localStorage.setItem(FEATURE_FILTER_STORAGE_KEY, filter); } catch (e) { /* 同上 */ }
+  if (window._scheduleInspectorRefresh) window._scheduleInspectorRefresh(0);
+};
+
+function buildFeatureFilterSegment() {
+  const keys = { all: 'feature_filter_all', bundled: 'feature_filter_bundled', installed: 'feature_filter_installed' };
+  return '<div class="feature-filter-seg" role="tablist">'
+    + FEATURE_FILTERS.map(f => [
+      '<button type="button" role="tab" class="feature-filter-btn'
+        + (f === _featurePanelFilter ? ' active' : '') + '"'
+        + ' onclick="window.setFeaturePanelFilter(\'' + f + '\')">'
+        + escapeHtml(t(keys[f])) + '</button>',
+    ].join('')).join('')
+    + '</div>';
 }
 
 function renderFeaturesPanel() {
@@ -46,14 +75,14 @@ function renderFeaturesPanel() {
   if (fc) fc.loadFeatureCatalog().catch(err => console.warn('[feature-catalog] load failed:', err));
   const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
   const groups = fc
-    ? fc.groupFeaturesByDisplayGroup(currentHookInspector.features, catalog)
+    ? fc.groupFeaturesByType(currentHookInspector.features, catalog, _featurePanelFilter)
     : [{ id: '_unmapped', features: currentHookInspector.features }];
 
   const allEnriched = groups.flatMap(g => g.features);
   const selectedFeature = allEnriched.find(feature => feature.name === selectedFeatureName) || null;
 
-  // 单一非兜底组时不渲染组头（当下全是官方内置、无自装件，组头无信息量）；
-  // 出现第二个组（用户装入首个 feature）或兜底组（seed 缺口信号）时组头自动出现。
+  // 单一非兜底组时不渲染组头（组头无信息量）；
+  // 出现第二个组或兜底组（seed 缺口信号）时组头自动出现。
   const suppressHeaders = groups.length === 1 && groups[0].id !== '_unmapped';
 
   const buildFeatureCard = (feature) => {
@@ -83,10 +112,10 @@ function renderFeaturesPanel() {
   const buildGroup = (group) => {
     const grid = '<div class="feature-grid">' + group.features.map(buildFeatureCard).join('') + '</div>';
     if (suppressHeaders) return grid;
-    // 用户操作过的组按偏好恢复；未操作过的默认展开
+    // 用户操作过的组按偏好恢复；未操作过的按词表默认折叠态（system 折叠，其余展开）
     const isOpen = _featureGroupOpenPref.has(group.id)
       ? _featureGroupOpenPref.get(group.id)
-      : true;
+      : !(fc && fc.typeCollapsedByDefault(group.id, catalog));
     return [
       '<details class="feature-group"' + (isOpen ? ' open' : '')
         + ' ontoggle="window.featureGroupToggled(&quot;' + escapeHtml(group.id) + '&quot;, this.open)">',
@@ -100,7 +129,10 @@ function renderFeaturesPanel() {
     ].join('');
   };
 
-  const groupsHtml = groups.map(buildGroup).join('');
+  const groupsHtml = groups.map(buildGroup).join('')
+    || '<div class="feature-filter-empty">' + escapeHtml(t(
+      _featurePanelFilter === 'installed' ? 'feature_filter_empty_installed' : 'feature_filter_empty'
+    )) + '</div>';
 
   // 弹窗通过独立 portal 渲染到 document.body，不嵌入 panel body（避免 transform 降级 fixed）
   renderFeatureDetailOverlay(selectedFeature);
@@ -133,7 +165,7 @@ function renderFeaturesPanel() {
   return [
     '<div class="hooks-panel feature-detail-shell">',
     '<section class="hooks-section">',
-    '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(t('panel_all_features')) + '</div><div class="hooks-section-meta">' + String(currentHookInspector.features.length) + ' ' + escapeHtml(t('panel_registered')) + '</div></div>',
+    '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(t('panel_all_features')) + '</div><div class="hooks-section-tools">' + buildFeatureFilterSegment() + '</div><div class="hooks-section-meta">' + String(currentHookInspector.features.length) + ' ' + escapeHtml(t('panel_registered')) + '</div></div>',
     groupsHtml,
     '</section>',
     standaloneSection,

@@ -20,7 +20,7 @@ async function fetchFeatureCatalog() {
   const resp = await fetch('/api/feature-catalog');
   if (!resp.ok) throw new Error('/api/feature-catalog ' + resp.status);
   const data = await resp.json();
-  if (!data || !Array.isArray(data.provenances) || !Array.isArray(data.groups)
+  if (!data || !Array.isArray(data.provenances) || !Array.isArray(data.types)
     || !Array.isArray(data.features)) {
     throw new Error('feature-catalog: malformed response');
   }
@@ -67,7 +67,7 @@ function enrichFeatureEntry(feature, catalog) {
     ? catalog.features.find(seed => seed.name === feature.name)
     : null;
   if (!entry) {
-    return { ...feature, displayName: undefined, capabilities: [], provenance: null, group: null, mapped: false };
+    return { ...feature, displayName: undefined, capabilities: [], provenance: null, group: null, type: null, mapped: false };
   }
   return {
     ...feature,
@@ -75,32 +75,48 @@ function enrichFeatureEntry(feature, catalog) {
     capabilities: Array.isArray(entry.capabilities) ? entry.capabilities : [],
     provenance: entry.provenance,
     group: entry.group,
+    type: entry.type,
     mapped: true,
   };
 }
 
 /**
- * 按展示分组（用户视角：官方内置 bundled / 已安装 installed）分组。
- * 细粒度 provenance（仓库边界，开发者视角）是数据层概念，
- * 只用于弹窗来源标签，不作面板分组轴。
- * 分组顺序 = 响应携带的 groups 词表顺序，_unmapped 恒在最后；空组剔除。
+ * 按功能类型分组（面板主分组轴，ADR 0017 决策 2 三次修订）：
+ * ability（让 agent 会什么）/ governance（怎么管 agent）/
+ * interface（怎么连 agent）/ system（宿主运转件，默认折叠）。
+ * 来源（bundled/installed）是过滤器不作分组轴。
+ *
+ * filter: 'all' 不过滤；'bundled' | 'installed' 按 entry.group 筛选。
+ * 分组顺序 = 响应携带的 types 词表顺序，_unmapped 恒在最后；空组剔除。
  * catalog 为 null 时全部进 _unmapped。features 为空返回 []。
  */
-function groupFeaturesByDisplayGroup(features, catalog) {
+function groupFeaturesByType(features, catalog, filter = 'all') {
   if (!Array.isArray(features) || features.length === 0) return [];
-  const groups = (catalog && Array.isArray(catalog.groups) && catalog.groups.length > 0)
-    ? catalog.groups
+  const types = (catalog && Array.isArray(catalog.types) && catalog.types.length > 0)
+    ? catalog.types.map(t => (typeof t === 'string' ? t : t.id))
     : [];
-  const order = [...groups, '_unmapped'];
+  const order = [...types, '_unmapped'];
   const buckets = new Map(order.map(id => [id, []]));
   for (const feature of features) {
     const enriched = enrichFeatureEntry(feature, catalog);
-    const key = enriched.group && buckets.has(enriched.group) ? enriched.group : '_unmapped';
+    if (filter !== 'all' && enriched.group !== filter) continue;
+    const key = enriched.type && buckets.has(enriched.type) ? enriched.type : '_unmapped';
     buckets.get(key).push(enriched);
   }
   return order
     .filter(id => (buckets.get(id) || []).length > 0)
     .map(id => ({ id, features: buckets.get(id) }));
+}
+
+/**
+ * type → 默认折叠态。词表由响应携带（[{ id, collapsed }]）；
+ * 未声明 collapsed 或词表缺失视为展开。
+ */
+function typeCollapsedByDefault(typeId, catalog) {
+  const t = catalog && Array.isArray(catalog.types)
+    ? catalog.types.find(x => (typeof x === 'string' ? x : x.id) === typeId)
+    : null;
+  return Boolean(t && typeof t === 'object' && t.collapsed);
 }
 
 /**
@@ -130,7 +146,8 @@ window.ClawFW.featureCatalog = {
   loadFeatureCatalog,
   getFeatureCatalogSnapshot,
   enrichFeatureEntry,
-  groupFeaturesByDisplayGroup,
+  groupFeaturesByType,
+  typeCollapsedByDefault,
   resolveDisplayName,
   provenanceI18nKey,
 };
