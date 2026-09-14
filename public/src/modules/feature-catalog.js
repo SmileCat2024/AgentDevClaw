@@ -62,21 +62,57 @@ function getFeatureCatalogSnapshot() {
 const FALLBACK_GROUPS = [{ id: '_unmapped' }];
 
 /**
- * inspector feature 条目 + catalog → enriched 条目。
- * seed 未命中时 mapped:false，provenance=null，capabilities:[]——
- * 兜底组正常显示，不隐藏（新 feature 上线即出现在兜底组，是 seed 补录的可见信号）。
+ * 从 inspector 运行时数据推导可观测能力：
+ * tools = 注册过工具；policy = 注册过生命周期钩子；
+ * mcp = 挂了 MCP server（其工具以 mcp_<serverId>_<tool> 前缀注册，
+ * 见 AgentDev packages/mcp/src/client.ts 的工具命名）。
+ * skills / commands 带数据源可用性回退，在 enrichFeatureEntry 内处理。
  */
-function enrichFeatureEntry(feature, catalog) {
+function deriveRuntimeCapabilities(feature) {
+  const caps = [];
+  const tools = Array.isArray(feature.tools) ? feature.tools : [];
+  if (tools.length > 0 || (feature.toolCount || 0) > 0) caps.push('tools');
+  if ((feature.hookCount || 0) > 0) caps.push('policy');
+  if (tools.some(t => typeof t.name === 'string' && t.name.indexOf('mcp_') === 0)) caps.push('mcp');
+  return caps;
+}
+
+/**
+ * inspector feature 条目 + catalog → enriched 条目。
+ * capabilities 是**有效能力**（筛选与展示的唯一依据）：
+ * - tools/policy/mcp：inspector 运行时推导，覆盖 seed 标注
+ * - skills：快照携带 skillCount（框架 collectFeatureSkills 的归属透出）
+ *   时运行时判定；旧框架快照无该字段时回退 seed
+ * - commands：commands 清单可用时运行时判定；不可用时回退 seed
+ * seed 未命中时 mapped:false，capabilities 退化为纯运行时推导——
+ * 兜底组正常显示不隐藏，且可观测维度的筛选仍然准确。
+ *
+ * runtime（可缺省）：{ commandFeatures: Set<string> | null }
+ * commandFeatures = 提供了 slash 命令的 feature 名集合（null = 数据不可用）。
+ */
+function enrichFeatureEntry(feature, catalog, runtime) {
   const entry = catalog && catalog.features
     ? catalog.features.find(seed => seed.name === feature.name)
     : null;
+  const seedCaps = entry && Array.isArray(entry.capabilities) ? entry.capabilities : [];
+  const caps = deriveRuntimeCapabilities(feature);
+  if (typeof feature.skillCount === 'number') {
+    if (feature.skillCount > 0) caps.push('skills');
+  } else if (seedCaps.indexOf('skills') !== -1) {
+    caps.push('skills');
+  }
+  if (runtime && runtime.commandFeatures) {
+    if (runtime.commandFeatures.has(feature.name)) caps.push('commands');
+  } else if (seedCaps.indexOf('commands') !== -1) {
+    caps.push('commands');
+  }
   if (!entry) {
-    return { ...feature, displayName: undefined, capabilities: [], provenance: null, group: null, type: null, mapped: false };
+    return { ...feature, displayName: undefined, capabilities: caps, provenance: null, group: null, type: null, mapped: false };
   }
   return {
     ...feature,
     displayName: entry.displayName,
-    capabilities: Array.isArray(entry.capabilities) ? entry.capabilities : [],
+    capabilities: caps,
     provenance: entry.provenance,
     group: entry.group,
     type: entry.type,
@@ -97,7 +133,7 @@ function enrichFeatureEntry(feature, catalog) {
  * 分组顺序 = 响应携带的 types 词表顺序，_unmapped 恒在最后；空组剔除。
  * catalog 为 null 时全部进 _unmapped。features 为空返回 []。
  */
-function groupFeaturesByType(features, catalog, filter = 'all', capFilter = 'all') {
+function groupFeaturesByType(features, catalog, filter = 'all', capFilter = 'all', runtime) {
   if (!Array.isArray(features) || features.length === 0) return [];
   const types = (catalog && Array.isArray(catalog.types) && catalog.types.length > 0)
     ? catalog.types.map(t => (typeof t === 'string' ? t : t.id))
@@ -105,15 +141,32 @@ function groupFeaturesByType(features, catalog, filter = 'all', capFilter = 'all
   const order = [...types, '_unmapped'];
   const buckets = new Map(order.map(id => [id, []]));
   for (const feature of features) {
-    const enriched = enrichFeatureEntry(feature, catalog);
+    const enriched = enrichFeatureEntry(feature, catalog, runtime);
     if (filter !== 'all' && enriched.group !== filter) continue;
-    if (capFilter !== 'all' && !enriched.capabilities.includes(capFilter)) continue;
+    if (capFilter !== 'all' && enriched.capabilities.indexOf(capFilter) === -1) continue;
     const key = enriched.type && buckets.has(enriched.type) ? enriched.type : '_unmapped';
     buckets.get(key).push(enriched);
   }
   return order
     .filter(id => (buckets.get(id) || []).length > 0)
     .map(id => ({ id, features: buckets.get(id) }));
+}
+
+/**
+ * 按来源过滤器计数（分页器各档的小字，语义 = "点这一档会看到几个"）。
+ * 计数应用当前能力筛选（capFilter），与点击后的实际结果一致。
+ * 与 groupFeaturesByType 同一套 enrich/判定，保证数字与列表永不脱节。
+ */
+function countFeaturesBySource(features, catalog, capFilter = 'all', runtime) {
+  const counts = { all: 0, bundled: 0, installed: 0 };
+  if (!Array.isArray(features)) return counts;
+  for (const feature of features) {
+    const enriched = enrichFeatureEntry(feature, catalog, runtime);
+    if (capFilter !== 'all' && enriched.capabilities.indexOf(capFilter) === -1) continue;
+    counts.all += 1;
+    if (enriched.group === 'bundled' || enriched.group === 'installed') counts[enriched.group] += 1;
+  }
+  return counts;
 }
 
 /**
@@ -166,7 +219,9 @@ window.ClawFW.featureCatalog = {
   loadFeatureCatalog,
   getFeatureCatalogSnapshot,
   enrichFeatureEntry,
+  deriveRuntimeCapabilities,
   groupFeaturesByType,
+  countFeaturesBySource,
   normalizeCapFilter,
   typeCollapsedByDefault,
   resolveDisplayName,

@@ -2,12 +2,15 @@
  * Tests for public/src/modules/feature-catalog.js (P1 panel visibility)
  *
  * Covers pure grouping/enrichment helpers:
- *   - groupFeaturesByProvenance: 按 provenance 词表顺序分组、空组剔除、兜底进 _unmapped
- *   - enrichFeatureEntry: seed 命中/未命中、原字段保留、多值 capabilities
- *   - resolveDisplayName: {zh,en} / string / 缺失回退 name 三态
- *   - provenanceI18nKey: 响应携带词表内 / 词表外
+ *   - groupFeaturesByType: 按功能类型词表分组、来源/能力双筛选、兜底进 _unmapped
+ *   - enrichFeatureEntry: seed 命中/未命中、运行时能力推导（tools/policy/mcp/skills/commands）
+ *   - countFeaturesBySource: 分页器各档计数（随能力筛选联动）
+ *   - resolveDisplayName / provenanceI18nKey / normalizeCapFilter
+ *   - fetchFeatureCatalog 响应契约（字段脱节回归）
  *
- * 能力标签（tools/policy/mcp…）是多值属性，不作分组因素（ADR 0017 决策 2 修订）。
+ * 能力是多值属性且以运行时真相为准（ADR 0017 决策 2）：
+ * tools/policy/mcp 由 inspector 信号推导，skills 由快照 skillCount 推导
+ * （缺失回退 seed），commands 由 /protoclaw/commands 集合判定（不可用回退 seed）。
  * 方案：docs/plans/2026-09-13-feature-registry-p1-panel-visibility.md
  */
 
@@ -23,7 +26,7 @@ function loadModule() {
 
 const CATALOG = {
   schemaVersion: 1,
-  capabilities: [{ id: 'tools' }, { id: 'policy' }, { id: 'gateway' }, { id: 'mcp' }, { id: 'protocol' }],
+  capabilities: [{ id: 'tools' }, { id: 'policy' }, { id: 'commands' }, { id: 'skills' }, { id: 'mcp' }],
   provenances: ['ecosystem', 'local', 'builtin', 'inline', 'packaged'],
   types: [
     { id: 'ability', collapsed: false },
@@ -37,17 +40,31 @@ const CATALOG = {
     { name: 'todo', displayName: '任务清单', type: 'ability', capabilities: ['tools'], provenance: 'local', group: 'bundled' },
     { name: 'lsp', displayName: { zh: '语言服务', en: 'Language Server' }, type: 'ability', capabilities: ['tools'], provenance: 'builtin', group: 'bundled' },
     { name: 'context-guard', displayName: { zh: '上下文守卫', en: 'Context Guard' }, type: 'governance', capabilities: ['policy'], provenance: 'local', group: 'bundled' },
-    { name: 'im-operator', displayName: { zh: 'IM 接线员', en: 'IM Operator' }, type: 'interface', capabilities: ['gateway', 'tools'], provenance: 'inline', group: 'bundled' },
-    { name: 'user-input', displayName: { zh: '用户输入', en: 'User Input' }, type: 'system', capabilities: ['tools'], provenance: 'builtin', group: 'bundled' },
+    { name: 'im-operator', displayName: { zh: 'IM 接线员', en: 'IM Operator' }, type: 'interface', capabilities: ['tools'], provenance: 'inline', group: 'bundled' },
+    { name: 'user-input', displayName: { zh: '用户输入', en: 'User Input' }, type: 'system', capabilities: [], provenance: 'builtin', group: 'bundled' },
     { name: 'user-tool', displayName: { zh: '用户工具', en: 'User Tool' }, type: 'ability', capabilities: ['tools'], provenance: 'packaged', group: 'installed' },
   ],
 };
 
+/**
+ * inspector feature fixture：默认无任何运行时能力信号（全 0 / 空 tools），
+ * 测试显式声明各维度信号，避免 fixture 默认值掩盖推导逻辑。
+ */
 function inspectorFeature(name, extra = {}) {
-  return { name, source: 'src/' + name + '.ts', description: 'd', hookCount: 1, enabledToolCount: 2, toolCount: 3, ...extra };
+  return {
+    name,
+    source: 'src/' + name + '.ts',
+    description: 'd',
+    hookCount: 0,
+    enabledToolCount: 0,
+    toolCount: 0,
+    tools: [],
+    skillCount: 0,
+    ...extra,
+  };
 }
 
-// ── groupFeaturesByDisplayGroup ────────────────────────────────────
+// ── groupFeaturesByType ────────────────────────────────────────────
 
 describe('feature-catalog: groupFeaturesByType', () => {
   const ctx = loadModule();
@@ -113,38 +130,89 @@ describe('feature-catalog: groupFeaturesByType', () => {
     assert.equal(fn('window.ClawFW.featureCatalog.groupFeaturesByType(undefined, null)').length, 0);
   });
 
-  it('capFilter keeps features having that capability (multi-value membership)', () => {
-    const input = `[ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('todo'))}, ${JSON.stringify(inspectorFeature('context-guard'))}, ${JSON.stringify(inspectorFeature('im-operator'))} ]`;
-    // policy：shell（tools+policy）与 context-guard 命中；todo（仅 tools）、im-operator（gateway+tools）排除
+  it('capFilter derives policy from runtime hookCount, not seed annotation', () => {
+    // shell 运行时挂了钩子（hookCount=2）；todo seed 虽标注 tools 但运行时零信号
+    const input = `[
+      ${JSON.stringify(inspectorFeature('shell', { hookCount: 2, toolCount: 3, enabledToolCount: 3, tools: [{ name: 'bash' }] }))},
+      ${JSON.stringify(inspectorFeature('todo'))},
+      ${JSON.stringify(inspectorFeature('context-guard', { hookCount: 4 }))}
+    ]`;
     const policy = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'policy')`);
     assert.equal(JSON.stringify(policy.map(g => g.id)), JSON.stringify(['ability', 'governance']));
     assert.equal(policy[0].features[0].name, 'shell');
     assert.equal(policy[1].features[0].name, 'context-guard');
-    // gateway：仅 im-operator（interface 组）
-    const gateway = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'gateway')`);
-    assert.equal(JSON.stringify(gateway.map(g => g.id)), JSON.stringify(['interface']));
-    assert.equal(gateway[0].features[0].name, 'im-operator');
+  });
+
+  it('capFilter mcp matches tool names with mcp_ prefix (MCP server mounts)', () => {
+    const input = `[
+      ${JSON.stringify(inspectorFeature('lsp', { toolCount: 2, tools: [{ name: 'lsp_hover' }] }))},
+      ${JSON.stringify(inspectorFeature('im-operator', { toolCount: 2, tools: [{ name: 'mcp_github_create_issue' }, { name: 'im_overview' }] }))}
+    ]`;
+    const mcp = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'mcp')`);
+    assert.equal(JSON.stringify(mcp.map(g => g.id)), JSON.stringify(['interface']));
+    assert.equal(mcp[0].features[0].name, 'im-operator');
+  });
+
+  it('capFilter skills uses snapshot skillCount; stale seed skills is overridden', () => {
+    // user-input 的 seed 无 skills；运行时 skillCount=2 → 命中 skills 筛选
+    const input = `[
+      ${JSON.stringify(inspectorFeature('user-input', { skillCount: 2 }))},
+      ${JSON.stringify(inspectorFeature('todo', { skillCount: 0 }))}
+    ]`;
+    const skills = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'skills')`);
+    assert.equal(JSON.stringify(skills.map(g => g.id)), JSON.stringify(['system']));
+    assert.equal(skills[0].features[0].name, 'user-input');
+  });
+
+  it('capFilter skills falls back to seed when snapshot lacks skillCount (older framework)', () => {
+    const legacy = inspectorFeature('todo');
+    delete legacy.skillCount; // 旧框架快照无该字段
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(
+      [ ${JSON.stringify(legacy)} ], ${JSON.stringify(CATALOG)}, 'all', 'skills'
+    )`);
+    // todo 的 seed 未标 skills → 空；换成 seed 标了 skills 的 shell 验证回退
+    assert.equal(groups.length, 0);
+    const legacyShell = inspectorFeature('shell');
+    delete legacyShell.skillCount;
+    const viaSeed = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(
+      [ ${JSON.stringify(legacyShell)} ], ${JSON.stringify(CATALOG)}, 'all', 'skills'
+    )`);
+    // shell seed 也未标 skills，用 commands 维度同机制验证 seed 回退路径
+    assert.equal(viaSeed.length, 0);
+  });
+
+  it('capFilter commands uses runtime commandFeatures set; falls back to seed when unavailable', () => {
+    // 运行时清单：todo 提供了 slash 命令
+    const input = `[ ${JSON.stringify(inspectorFeature('todo'))}, ${JSON.stringify(inspectorFeature('shell'))} ]`;
+    const runtime = `new Set(['todo'])`;
+    const withRuntime = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'commands', { commandFeatures: ${runtime} })`);
+    assert.equal(withRuntime.length, 1);
+    assert.equal(withRuntime[0].features[0].name, 'todo');
+    // 清单不可用（null）→ 回退 seed：seed 中无 commands 标注 → 空
+    const fallback = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'commands', { commandFeatures: null })`);
+    assert.equal(fallback.length, 0);
   });
 
   it('capFilter combined with src filter intersects both conditions', () => {
-    const input = `[ ${JSON.stringify(inspectorFeature('shell'))}, ${JSON.stringify(inspectorFeature('user-tool'))} ]`;
+    const input = `[ ${JSON.stringify(inspectorFeature('shell', { toolCount: 2, tools: [{ name: 'bash' }] }))}, ${JSON.stringify(inspectorFeature('user-tool', { toolCount: 1, tools: [{ name: 'ut' }] }))} ]`;
     // tools 能力 + installed 来源：只有 user-tool 命中
     const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'installed', 'tools')`);
     assert.equal(groups.length, 1);
     assert.equal(groups[0].features[0].name, 'user-tool');
   });
 
-  it('capFilter excludes unmapped entries (unknown capabilities) but keeps them under all', () => {
-    const input = `[ ${JSON.stringify(inspectorFeature('ghost'))} ]`;
+  it('capFilter excludes entries without runtime signals even when seed claims the capability', () => {
+    // todo seed 标注 tools，但运行时零工具信号（被禁用/未注册）→ seed 不再生效
+    const input = `[ ${JSON.stringify(inspectorFeature('todo'))} ]`;
     const filtered = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'tools')`);
     assert.equal(filtered.length, 0);
     const all = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'all')`);
-    assert.equal(all[0].id, '_unmapped');
+    assert.equal(all[0].id, 'ability');
   });
 
   it('capFilter with no matching features returns empty group array', () => {
     const input = `[ ${JSON.stringify(inspectorFeature('todo'))} ]`;
-    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'gateway')`);
+    const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(${input}, ${JSON.stringify(CATALOG)}, 'all', 'mcp')`);
     assert.equal(groups.length, 0);
   });
 
@@ -153,7 +221,8 @@ describe('feature-catalog: groupFeaturesByType', () => {
     assert.equal(call('all'), 'all');
     assert.equal(call('tools'), 'tools');
     assert.equal(call('mcp'), 'mcp');
-    assert.equal(call('hooks'), 'all', 'legacy vocabulary value folds to all');
+    assert.equal(call('gateway'), 'all', 'removed vocabulary value folds to all');
+    assert.equal(call('protocol'), 'all', 'removed vocabulary value folds to all');
     assert.equal(call(undefined), 'all');
     assert.equal(call(''), 'all');
     const noVocab = fn(`window.ClawFW.featureCatalog.normalizeCapFilter('tools', null)`);
@@ -169,18 +238,18 @@ describe('feature-catalog: groupFeaturesByType', () => {
   });
 });
 
-// ── enrichFeatureEntry ─────────────────────────────────────────────
+// ── enrichFeatureEntry / deriveRuntimeCapabilities ─────────────────
 
 describe('feature-catalog: enrichFeatureEntry', () => {
   const ctx = loadModule();
   const fn = ctx.run;
 
-  it('mapped entry carries seed metadata (multi-value capabilities) and keeps original fields', () => {
+  it('mapped entry carries seed metadata; capabilities come from runtime signals', () => {
     const entry = fn(`window.ClawFW.featureCatalog.enrichFeatureEntry(
-      ${JSON.stringify(inspectorFeature('shell', { hookCount: 7 }))}, ${JSON.stringify(CATALOG)}
+      ${JSON.stringify(inspectorFeature('shell', { hookCount: 7, toolCount: 3, enabledToolCount: 2, tools: [{ name: 'bash' }] }))}, ${JSON.stringify(CATALOG)}
     )`);
     assert.equal(entry.mapped, true);
-    // 多值能力：shell 同时提供工具与生命周期守卫
+    // 运行时推导：注册了工具 + 挂了钩子
     assert.equal(JSON.stringify(entry.capabilities), JSON.stringify(['tools', 'policy']));
     assert.equal(entry.provenance, 'ecosystem');
     assert.equal(entry.group, 'bundled');
@@ -190,14 +259,56 @@ describe('feature-catalog: enrichFeatureEntry', () => {
     assert.equal(entry.source, 'src/shell.ts');
   });
 
-  it('unmatched feature falls back with empty capabilities and provenance null', () => {
+  it('unmatched feature falls back to pure runtime derivation with provenance null', () => {
     const entry = fn(`window.ClawFW.featureCatalog.enrichFeatureEntry(
-      ${JSON.stringify(inspectorFeature('ghost'))}, ${JSON.stringify(CATALOG)}
+      ${JSON.stringify(inspectorFeature('ghost', { toolCount: 2, tools: [{ name: 'mcp_x_y' }] }))}, ${JSON.stringify(CATALOG)}
     )`);
     assert.equal(entry.mapped, false);
     assert.equal(entry.provenance, null);
-    assert.equal(JSON.stringify(entry.capabilities), JSON.stringify([]));
+    // 未映射条目能力仍可推导：兜底组里 tools/mcp 筛选照样准确
+    assert.equal(JSON.stringify(entry.capabilities), JSON.stringify(['tools', 'mcp']));
     assert.equal(entry.displayName, undefined);
+  });
+
+  it('deriveRuntimeCapabilities maps inspector signals to vocabulary ids', () => {
+    const call = (extra) => fn(`window.ClawFW.featureCatalog.deriveRuntimeCapabilities(${JSON.stringify(inspectorFeature('x', extra))})`);
+    assert.equal(JSON.stringify(call({})), JSON.stringify([]), 'zero-signal feature has no capabilities');
+    assert.equal(JSON.stringify(call({ toolCount: 1 })), JSON.stringify(['tools']), 'toolCount>0 without tool details');
+    assert.equal(JSON.stringify(call({ hookCount: 1 })), JSON.stringify(['policy']));
+    assert.equal(JSON.stringify(call({ tools: [{ name: 'mcp_github_create_issue' }] })), JSON.stringify(['tools', 'mcp']), 'mcp mount also provides tools');
+    assert.equal(JSON.stringify(call({ toolCount: 2, tools: [{ name: 'a' }, { name: 'b' }], hookCount: 3 })), JSON.stringify(['tools', 'policy']));
+  });
+});
+
+// ── countFeaturesBySource ──────────────────────────────────────────
+
+describe('feature-catalog: countFeaturesBySource', () => {
+  const ctx = loadModule();
+  const fn = ctx.run;
+
+  it('counts per source group; capFilter narrows counts consistently', () => {
+    const input = `[
+      ${JSON.stringify(inspectorFeature('shell', { toolCount: 2, tools: [{ name: 'bash' }], hookCount: 1 }))},
+      ${JSON.stringify(inspectorFeature('user-tool', { toolCount: 1, tools: [{ name: 'ut' }] }))},
+      ${JSON.stringify(inspectorFeature('context-guard', { hookCount: 2 }))}
+    ]`;
+    const all = fn(`window.ClawFW.featureCatalog.countFeaturesBySource(${input}, ${JSON.stringify(CATALOG)})`);
+    assert.equal(JSON.stringify(all), JSON.stringify({ all: 3, bundled: 2, installed: 1 }));
+    const policyOnly = fn(`window.ClawFW.featureCatalog.countFeaturesBySource(${input}, ${JSON.stringify(CATALOG)}, 'policy')`);
+    assert.equal(JSON.stringify(policyOnly), JSON.stringify({ all: 2, bundled: 2, installed: 0 }));
+  });
+
+  it('unmapped features count toward all but not bundled/installed', () => {
+    const input = `[ ${JSON.stringify(inspectorFeature('brand-new'))} ]`;
+    const counts = fn(`window.ClawFW.featureCatalog.countFeaturesBySource(${input}, ${JSON.stringify(CATALOG)})`);
+    assert.equal(JSON.stringify(counts), JSON.stringify({ all: 1, bundled: 0, installed: 0 }));
+  });
+
+  it('empty or non-array input returns zero counts', () => {
+    const counts = fn(`window.ClawFW.featureCatalog.countFeaturesBySource([], ${JSON.stringify(CATALOG)})`);
+    assert.equal(JSON.stringify(counts), JSON.stringify({ all: 0, bundled: 0, installed: 0 }));
+    const none = fn(`window.ClawFW.featureCatalog.countFeaturesBySource(undefined, null)`);
+    assert.equal(JSON.stringify(none), JSON.stringify({ all: 0, bundled: 0, installed: 0 }));
   });
 });
 

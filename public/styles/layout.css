@@ -4462,16 +4462,12 @@ body[data-theme="light"] .feature-group {
   white-space: nowrap;
 }
 
-/* 分页器内的已挂载总数小字：与按钮以细分隔线区隔，弱化为元信息 */
-.feature-src-count {
-  align-self: center;
-  margin-left: 5px;
-  padding-left: 9px;
-  border-left: 1px solid rgba(127, 127, 127, 0.25);
+/* 分页器各档按钮内的计数小字：紧随标签，弱化为元信息（语义 = 点这档看到几个） */
+.feature-src-seg button .feature-src-n {
+  margin-left: 4px;
   font-size: 10px;
   font-weight: 500;
   color: var(--text-secondary, #888);
-  white-space: nowrap;
 }
 
 .feature-filter-empty {

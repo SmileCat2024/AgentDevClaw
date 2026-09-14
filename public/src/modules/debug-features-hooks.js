@@ -85,26 +85,71 @@ window.setFeaturePanelCapFilter = function (cap) {
   _refreshPanelAfterFilterChange();
 };
 
+// ── commands 运行时信号：提供 slash 命令的 feature 名集合 ──────────
+// /protoclaw/commands 的 ref 格式为 feature.command（registry 平面寻址），
+// 按当前控制目标（agentId + runtimeId）拉取，键随目标变化自动失效。
+// 首次到位后触发一帧面板重渲染（与 catalog 首载同模式）；不可用时
+// enrichFeatureEntry 对 commands 维度回退 seed 标注。
+
+let _commandFeatures = null;          // Set<string> | null（null = 数据不可用）
+let _commandFeaturesKey = null;
+
+function _ensureCommandFeatures() {
+  if (typeof getCurrentControlAgentId !== 'function' || typeof getRuntimeId !== 'function') return;
+  const agentId = getCurrentControlAgentId();
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
+  if (!agentId || !runtimeId) return;
+  const key = agentId + '::' + runtimeId;
+  if (key === _commandFeaturesKey) return;
+  _commandFeaturesKey = key;
+  fetch('/protoclaw/commands?agentId=' + encodeURIComponent(agentId)
+    + '&runtimeId=' + encodeURIComponent(runtimeId))
+    .then(res => (res.ok ? res.json() : null))
+    .then(data => {
+      if (!data || data.ok !== true) throw new Error('commands unavailable');
+      const set = new Set();
+      for (const cmd of (Array.isArray(data.commands) ? data.commands : [])) {
+        const ref = typeof cmd.ref === 'string' ? cmd.ref : (typeof cmd.name === 'string' ? cmd.name : '');
+        const feature = ref.split('.')[0];
+        if (feature) set.add(feature);
+      }
+      _commandFeatures = set;
+      // 数据就位后修正面板（commands 筛选维度从 seed 回退切换到运行时真值）
+      if (activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
+        renderFeaturePanel();
+      }
+    })
+    .catch(() => {
+      // 失败不缓存：保持 null（seed 回退），下次渲染重试
+      if (_commandFeaturesKey === key) _commandFeaturesKey = null;
+    });
+}
+
+function _runtimeSignals() {
+  return { commandFeatures: _commandFeatures };
+}
+
 /**
- * 来源分页器（usage-info-segment 同款视觉配方，面板小号适配），
- * 末尾附带已挂载总数小字。
+ * 来源分页器（usage-info-segment 同款视觉配方，面板小号适配）；
+ * 每档按钮附各自计数小字（语义 = "点这一档会看到几个"，随能力筛选联动）。
  * onpointerdown 为主路径：面板 body 随轮询全量 innerHTML 替换，click
  * 序列（mousedown→mouseup→click）跨过替换边界时目标已脱离 DOM、
  * onclick 属性不再执行——历史上表现为"必须双击才能切换"。pointerdown
  * 在按下瞬间同步完成切换，不受替换影响；onclick 保留键盘触发路径，
  * setter 的同值短路保证两路径幂等。
- * @param {number} totalCount 已挂载 feature 总数（不随筛选变化）
+ * @param {{all:number,bundled:number,installed:number}} counts 各档计数
  */
-function buildFeatureFilterSegment(totalCount) {
+function buildFeatureFilterSegment(counts) {
   const keys = { all: 'feature_filter_all', bundled: 'feature_filter_bundled', installed: 'feature_filter_installed' };
   return '<div class="usage-info-segment feature-src-seg" role="tablist">'
     + FEATURE_FILTERS.map(f => [
       '<button type="button" role="tab" class="' + (f === _featurePanelFilter ? 'active' : '') + '"'
         + ' onpointerdown="window.setFeaturePanelFilter(\'' + f + '\')"'
         + ' onclick="window.setFeaturePanelFilter(\'' + f + '\')">'
-        + escapeHtml(t(keys[f])) + '</button>',
+        + escapeHtml(t(keys[f]))
+        + '<span class="feature-src-n">' + String(counts ? counts[f] : 0) + '</span>'
+        + '</button>',
     ].join('')).join('')
-    + '<span class="feature-src-count">' + String(totalCount) + '</span>'
     + '</div>';
 }
 
@@ -136,12 +181,18 @@ function renderFeaturesPanel() {
 
   // catalog 低频拉取：首帧未就绪时全部落 _unmapped 组，
   // loadFeatureCatalog resolve 后主动触发一帧刷新修正（见 feature-catalog.js）。
+  // commands 信号同模式（见 _ensureCommandFeatures）。
+  _ensureCommandFeatures();
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   if (fc) fc.loadFeatureCatalog().catch(err => console.warn('[feature-catalog] load failed:', err));
   const catalog = fc ? fc.getFeatureCatalogSnapshot() : null;
+  const runtime = _runtimeSignals();
   const capFilter = fc ? fc.normalizeCapFilter(_featurePanelCapFilter, catalog) : 'all';
+  const srcCounts = fc
+    ? fc.countFeaturesBySource(currentHookInspector.features, catalog, capFilter, runtime)
+    : { all: currentHookInspector.features.length, bundled: 0, installed: 0 };
   const groups = fc
-    ? fc.groupFeaturesByType(currentHookInspector.features, catalog, _featurePanelFilter, capFilter)
+    ? fc.groupFeaturesByType(currentHookInspector.features, catalog, _featurePanelFilter, capFilter, runtime)
     : [{ id: '_unmapped', features: currentHookInspector.features }];
 
   const allEnriched = groups.flatMap(g => g.features);
@@ -233,7 +284,7 @@ function renderFeaturesPanel() {
     '<div class="hooks-panel feature-detail-shell">',
     '<section class="hooks-section">',
     '<div class="hooks-section-header feature-panel-head">',
-    buildFeatureFilterSegment(currentHookInspector.features.length),
+    buildFeatureFilterSegment(srcCounts),
     buildFeatureCapSelect(catalog),
     '</div>',
     groupsHtml,

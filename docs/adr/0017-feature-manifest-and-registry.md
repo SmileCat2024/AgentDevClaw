@@ -35,7 +35,7 @@ Feature 的元信息现状是三套平行体系互相不认识：
     "provides": {                         // 细粒度形态清单（tools/skills/commands 支持 glob）
       "tools": ["bash", "read", "edit", "trash_*"],
       "skills": [], "commands": [],
-      "hooks": false, "mcp": false, "gateway": false
+      "hooks": false, "mcp": false
     },
     "depends": [{ "id": "memory", "range": "*" }],  // 对应 static inject + 版本范围
     "requirements": { "external": ["system-shell"] },  // 沿袭 v1 摘要语义
@@ -88,20 +88,18 @@ Feature 的元信息现状是三套平行体系互相不认识：
 
 "安装意图"天然单值（装 github 就是为了 GitHub 集成），因此功能类型作单值分组不重蹈初版"能力多值强行单选"的覆辙。词表治理：新增类型须过讨论，参考上限 6±2 类；个案裁决记录理由。
 
-能力词表（七类，受控）：
+能力词表（五类，受控；P1 落地修订：`gateway`/`protocol` 移除——实现形态概念已由功能类型轴 interface/system 覆盖，作为能力维度是冗余；纯网关/协议件 capabilities 允许为空）：
 
-| capability | 形态语义 |
-|---|---|
-| `tools` | 提供可调用工具（getTools / getAsyncTools） |
-| `policy` | 挂生命周期钩子做观察 / 守卫 / 改写 |
-| `commands` | 提供 capability 命令 / 配置面 |
-| `skills` | 注入技能 / 知识内容 |
-| `gateway` | 长驻外部连接 + 消息路由 |
-| `mcp` | 挂载 MCP server |
-| `protocol` | 宿主协议参与（continuity、dispatch、技能加载机制等给体系看的） |
+| capability | 形态语义 | P1 运行时判定源 |
+|---|---|---|
+| `tools` | 提供可调用工具（getTools / getAsyncTools） | inspector `toolCount > 0` |
+| `policy` | 挂生命周期钩子做观察 / 守卫 / 改写 | inspector `hookCount > 0` |
+| `commands` | 提供 capability 命令 / 配置面 | `/protoclaw/commands`（ref 前缀 = feature 名） |
+| `skills` | 注入技能 / 知识内容 | inspector `skillCount`（框架 collectFeatureSkills 归属透出，缺失回退 seed） |
+| `mcp` | 挂载 MCP server | inspector 工具名 `mcp_` 前缀 |
 
-- 缺省推导规则（静态、可复现，写入规范）：由 `provides` 清单逐项映射，如 `hooks: true → policy`、`mcp: true → mcp`。v1 的包名正则推断仅保留在迁移工具里，运行时不得回退到猜包名。
-- 个案裁决须记录理由：如 `SkillFeature` 标 `protocol` 而非 `skills`——它是宿主的技能加载机制，不是内容供给；`skills` 留给以注入技能内容为主要供给的 feature。
+- **P1 落地原则：能力以运行时真相为准**。可观测维度（全部五类）的推导值覆盖 seed 静态标注；seed capabilities 仅在对应运行时源不可用时回退（如旧框架快照无 `skillCount`、commands 拉取失败）。seed 标注了 tools 但运行时零工具信号的 feature 不再命中 tools 筛选——筛选语义是"现在实际提供了什么"。
+- 缺省推导规则（静态、可复现，写入规范）：manifest v2 由 `provides` 清单逐项映射，如 `hooks: true → policy`、`mcp: true → mcp`。v1 的包名正则推断仅保留在迁移工具里，运行时不得回退到猜包名。
 - v1 `featureTypes`（tools/mcp/hooks/control/rollback 五值多选）由 `capabilities` 取代——初版 `provides` + 单值 `category` 的组合废弃；`compatibility.rollback` 独立保留。
 
 ### 3. displayName 与机器 id 分离，支持 i18n

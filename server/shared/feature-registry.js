@@ -19,20 +19,20 @@ const SEED_PATH = path.join(__dirname, 'feature-registry-seed.json');
 export const FEATURE_REGISTRY_SEED_PATH = SEED_PATH;
 
 /**
- * 能力标签词表（ADR 0017 决策 2，实现形态轴）。
- * 能力是多值属性：一个 feature 可同时提供多种能力（工具 + 钩子 + 命令…），
- * 因此标签不作为面板主分组轴——主分组轴是 provenance（来源，单值正交）。
+ * 能力标签词表（ADR 0017 决策 2）：feature 向 agent 供给的能力形态，多值。
+ * 仅收录运行时可观测或经命令清单可判定的维度（tools/policy/mcp 来自
+ * inspector 快照，commands 来自 /protoclaw/commands，skills 来自快照
+ * skillCount）；gateway/protocol 一类实现形态概念由功能类型轴（interface/
+ * system）覆盖，不作能力维度。
  * 词表权威只在 server 一处，随 API 响应携带，前端零硬编码。
- * 数组顺序即详情弹窗的能力标签展示顺序。
+ * 数组顺序即下拉与详情弹窗的能力标签展示顺序。
  */
 export const FEATURE_CAPABILITIES = [
   { id: 'tools' },
   { id: 'policy' },
   { id: 'commands' },
   { id: 'skills' },
-  { id: 'gateway' },
   { id: 'mcp' },
-  { id: 'protocol' },
 ];
 
 export const FEATURE_PROVENANCES = ['ecosystem', 'local', 'builtin', 'inline', 'packaged'];
@@ -107,9 +107,9 @@ export function loadFeatureRegistry(seedPath = SEED_PATH) {
       throw new Error(`${label}: duplicate name "${entry.name}"`);
     }
     seen.add(entry.name);
-    if (!Array.isArray(entry.capabilities) || entry.capabilities.length === 0
+    if (!Array.isArray(entry.capabilities)
       || !entry.capabilities.every(cap => CAPABILITY_IDS.has(cap))) {
-      throw new Error(`${label}: "capabilities" must be a non-empty array of ${[...CAPABILITY_IDS].join(', ')}`);
+      throw new Error(`${label}: "capabilities" must be an array of ${[...CAPABILITY_IDS].join(', ')} (empty allowed for pure-runtime features)`);
     }
     if (!PROVENANCE_IDS.has(entry.provenance)) {
       throw new Error(`${label}: unknown provenance "${entry.provenance}" (allowed: ${FEATURE_PROVENANCES.join(', ')})`);

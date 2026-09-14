@@ -77,8 +77,11 @@ describe('feature-registry: loadFeatureRegistry', () => {
     assert.throws(() => loadFeatureRegistry(p), /duplicate/);
   });
 
-  it('rejects missing, empty, or unknown capabilities', () => {
-    for (const caps of [undefined, [], ['no-such-cap'], 'tools']) {
+  it('rejects missing or unknown capabilities; empty array is allowed (pure-runtime features)', () => {
+    // 空 capabilities 合法：纯网关/协议件可观测维度全由运行时推导，seed 无可标注项
+    const emptyOk = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', type: 'interface', capabilities: [], provenance: 'local' }] });
+    assert.doesNotThrow(() => loadFeatureRegistry(emptyOk));
+    for (const caps of [undefined, ['no-such-cap'], ['gateway'], ['protocol'], 'tools']) {
       const p = writeSeed({ schemaVersion: 1, features: [{ name: 'x', displayName: 'X', capabilities: caps, provenance: 'local' }] });
       assert.throws(() => loadFeatureRegistry(p), /capabilities/, 'capabilities=' + JSON.stringify(caps));
     }
